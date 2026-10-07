@@ -212,6 +212,34 @@ for (const name of ['metering-digest', 'notification-mailer', 'stock-reservation
   });
 }
 
+test('la topología de publicación: el exchange del servicio y una cola por canal, enlazada con la routing key de cada evento', async () => {
+  const { tree, model } = emitted('stock-reservation');
+  const { PUBLISHED_CHANNELS, assertTopology } = await tree.load(RABBIT_TOPOLOGY_TS);
+  assert.deepEqual(
+    PUBLISHED_CHANNELS.map((entry) => entry.channel),
+    model.messaging.publishChannels,
+    'una cola por canal publicado, nombrada como el canal: de ahí lee el arnés'
+  );
+  const calls = [];
+  const channel = {
+    assertExchange: async (...args) => calls.push(['exchange', ...args]),
+    assertQueue: async (...args) => calls.push(['queue', ...args]),
+    bindQueue: async (...args) => calls.push(['bind', ...args])
+  };
+  const routingKeys = Object.fromEntries(model.events.map((event) => [event.name, event.routingKeyDefault]));
+  const destination = model.messaging.destinationDefault;
+  await assertTopology(channel, { destination, routingKeys });
+  assert.ok(calls.some((call) => call[0] === 'exchange' && call[1] === destination && call[2] === 'topic'), 'el exchange del servicio');
+  for (const entry of PUBLISHED_CHANNELS) {
+    assert.ok(calls.some((call) => call[0] === 'queue' && call[1] === entry.channel));
+    for (const event of entry.events) {
+      assert.ok(calls.some((call) => call[0] === 'bind' && call[1] === entry.channel && call[2] === destination && call[3] === routingKeys[event]), `${entry.channel} ← ${event}`);
+    }
+  }
+  // Sin una routing key para un evento publicado, no arranca: publicaría a un binding inexistente.
+  await assert.rejects(() => assertTopology(channel, { destination, routingKeys: {} }), /Sin routing key/);
+});
+
 test('el reintento del listener: la curva del diseño, y sin reintento el rechazo de negocio ni el contrato incumplido', async () => {
   const { tree, model } = emitted('notification-mailer');
   const { LISTENER_RETRY, listenerAttempts, listenerBackoffMs, isRetryable } = await tree.load(RABBIT_TOPOLOGY_TS);

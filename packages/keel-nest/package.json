@@ -12,7 +12,8 @@
     "db-check": "node scripts/db-check.js",
     "matrix": "node scripts/support-matrix.js",
     "harness-check": "node scripts/harness-check.js",
-    "security-check": "node scripts/security-check.js"
+    "security-check": "node scripts/security-check.js",
+    "broker-check": "node scripts/broker-check.js"
   },
   "files": [
     "src",

@@ -24,6 +24,7 @@ import { usesApi } from './rest-support.js';
 import { usesRelational, engineOf } from './persistence-entities.js';
 import { tsString } from './render.js';
 import { closingCredential, identitySection, usesIdentityHarness } from './identity-harness.js';
+import { messagingHarnessImports, messagingHarnessSection, usesMessagingHarness } from './messaging-harness.js';
 
 /** Dónde escribe Vitest el XML JUnit de la suite de integración: lo lee score-scenarios.sh. */
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
@@ -108,6 +109,7 @@ function flowSupportTs(model) {
   const api = usesApi(model);
   const reset = hasResetScript(model);
   const probe = dbProbe(model);
+  const messaging = usesMessagingHarness(model);
   return `/**
  * Base de las pruebas de flujo (\`test/integration/<flujo>.test.ts\`) que ejecutan los escenarios FL-*
  * de specs/validation-scenarios.md contra el servidor REAL —escuchando en un puerto libre, bajo el
@@ -144,7 +146,7 @@ import { NestFactory } from '@nestjs/core';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from '../../../src/app.module.js';
 import { loadConfiguration } from '../../../src/infrastructure/config/configuration.js';
-import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from '../../../src/infrastructure/http/http-platform.js';
+import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from '../../../src/infrastructure/http/http-platform.js';${messagingHarnessImports(model)}
 ${api ? `
 /** Prefijo de todas las rutas del servicio (basePath del diseño + versión). */
 export const ROUTE_BASE = ${tsString(model.api.routeBase)};
@@ -245,6 +247,9 @@ function flowName(file: string | undefined): string {
 
 // ── Servidor ─────────────────────────────────────────────────────────────────
 
+/** El servidor del flujo en curso: lo usan los helpers que preguntan al propio servicio (mensajería). */
+let currentApp: NestFastifyApplication | null = null;
+
 /**
  * Registra el ciclo de vida de un flujo y devuelve con qué hablarle al servidor. Se llama UNA vez,
  * dentro del \`describe\` del archivo:
@@ -266,9 +271,13 @@ export function useFlow(): Flow {
   beforeAll(async ({}, suite) => {
     try {
       app = await startServer();
+      currentApp = app;
       const address = app.getHttpServer().address() as AddressInfo;
       baseUrl = \`http://127.0.0.1:\${address.port}\`;${reset ? `
-      resetState();` : ''}
+      resetState();` : ''}${messaging ? `
+      // El broker arriba (un flujo anterior pudo dejarlo parado) y la conexión del servicio hecha, con su
+      // topología: sin ella, la primera entrega del flujo no encontraría cola.
+      await prepareMessaging();` : ''}
     } catch (error) {
       const file = flowName(suite.file?.name);
       dumpFailure(\`\${file}-init\`, suite.name, file, 'beforeAll', error);
@@ -278,6 +287,7 @@ export function useFlow(): Flow {
 
   afterAll(async () => {
     await app?.close();
+    currentApp = null;
   });
 
   beforeEach((context) => {
@@ -365,8 +375,8 @@ function parseJson(text: string, status: number, exact: boolean): any {
  * lanza nombrando sus últimas líneas si sale mal. Argumentos siempre como lista, nunca concatenados
  * en una cadena para un shell: en Windows el cliente de contenedores reinterpreta las comillas.
  */
-export function run(command: string, args: readonly string[], hint = ''): string {
-  const result = spawnSync(command, args, { encoding: 'utf8' });
+export function run(command: string, args: readonly string[], hint = '', input?: string): string {
+  const result = spawnSync(command, args, { encoding: 'utf8', input });
   const output = \`\${result.stdout ?? ''}\${result.stderr ?? ''}\${result.error ? String(result.error) : ''}\`;
   lastProbe = { command: [command, ...args].join(' '), exitCode: result.status, output };
   if (result.status !== 0) {
@@ -425,7 +435,7 @@ const DB_QUERY_ARGV: readonly string[] = ${JSON.stringify(probe.argv)};
 export function db(sql: string): string {
   return run(containerRuntime(), ['exec', DB_CONTAINER, ...DB_QUERY_ARGV, sql], '¿Está la base arriba (bash infra/up.sh)?');
 }
-` : ''}${identitySection(model)}
+` : ''}${identitySection(model)}${messagingHarnessSection(model)}
 
 /** Espera hasta que \`condition\` se cumpla o se agote \`timeoutMs\`; lanza con \`message\` si no llega. */
 export async function eventually(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, message = 'la condición no se cumplió a tiempo'): Promise<void> {

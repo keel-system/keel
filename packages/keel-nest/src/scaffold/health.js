@@ -44,7 +44,7 @@ export class HealthController {
 }
 
 function shutdownTs() {
-  return `import { Inject, Injectable, Logger, type BeforeApplicationShutdown } from '@nestjs/common';
+  return `import { Inject, Injectable, Logger, type BeforeApplicationShutdown, type OnApplicationShutdown } from '@nestjs/common';
 import { CONFIGURATION, type Configuration } from '../config/configuration.js';
 
 /**
@@ -54,9 +54,10 @@ import { CONFIGURATION, type Configuration } from '../config/configuration.js';
  * termina nunca bloquea el despliegue siguiente.
  */
 @Injectable()
-export class GracefulShutdown implements BeforeApplicationShutdown {
+export class GracefulShutdown implements BeforeApplicationShutdown, OnApplicationShutdown {
   private readonly logger = new Logger(GracefulShutdown.name);
   private drainingSince: number | null = null;
+  private deadline: NodeJS.Timeout | null = null;
 
   constructor(@Inject(CONFIGURATION) private readonly configuration: Configuration) {}
 
@@ -73,12 +74,22 @@ export class GracefulShutdown implements BeforeApplicationShutdown {
     this.startDraining();
     const timeoutMs = this.configuration.server.shutdownTimeoutMs;
     this.logger.log(\`Apagado ordenado (\${signal ?? 'cierre'}): margen de \${timeoutMs} ms para las peticiones en vuelo\`);
-    const deadline = setTimeout(() => {
+    this.deadline = setTimeout(() => {
       this.logger.error(\`El apagado superó \${timeoutMs} ms: se fuerza la salida\`);
       process.exit(1);
     }, timeoutMs);
     // El temporizador no mantiene vivo el proceso: si todo termina antes, sale sin esperarlo.
-    deadline.unref();
+    this.deadline.unref();
+  }
+
+  /**
+   * El apagado terminó a tiempo: el tope ya no tiene nada que forzar. Sin cancelarlo, en un proceso que
+   * sigue vivo tras cerrar la aplicación —la suite de integración, que arranca y cierra un servidor por
+   * flujo— dispararía su process.exit(1) en mitad de otro flujo.
+   */
+  onApplicationShutdown(): void {
+    if (this.deadline != null) clearTimeout(this.deadline);
+    this.deadline = null;
   }
 }
 `;

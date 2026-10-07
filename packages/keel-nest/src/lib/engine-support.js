@@ -25,6 +25,8 @@ export const NETS = {
   'ts-check': 'npm run ts-check — compila con strict las 13 fixtures, ejecuta sus pruebas y ARRANCA el servidor contra PostgreSQL',
   'harness-check':
     'npm run harness-check [-- --database=mysql] — levanta infra/ con sus propios scripts, puntúa flujos sonda con score-scenarios.sh (cada código de salida y su evidencia) y exporta, aplica y verifica el baseline de migraciones',
+  'broker-check':
+    'npm run broker-check — la mensajería contra un RabbitMQ real de infra/: la topología, el consumo con reintento y DLQ, el relay del outbox con el broker caído y los helpers del arnés',
   ninguna: 'nadie lo ejecuta'
 };
 
@@ -41,7 +43,7 @@ export const MECHANISMS = {
         engines: ['postgresql', 'mysql'],
         falsified: true,
         why:
-          'la tabla outbox_event es la de keel-spring (schema-parity contra OutboxEventJpa) y los parámetros del relay, los de keel-core (messaging.test.js contra el messaging.yaml de keel-spring; el backoff, contra la referencia ejecutable). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla contra el catálogo del motor, el puente escribiendo la fila en la transacción del cambio (y nada si revierte), el reclamo en orden y con su lote, el lease, SKIP LOCKED sin esperar a la fila retenida por otra réplica, el backoff de un fallo, la rendición al alcanzar el máximo y su cuenta, y que ni la publicada ni la rendida vuelven. Falsado el 2026-10-07 quitando el lease (cae su comprobación y solo esa) y quitando SKIP LOCKED (el reclamo espera a la fila retenida hasta el tope). Lo que no mide: el bucle del relay con un dispatcher real contra el broker (llega con el arnés, 9c) y la purga (incremento 10)'
+          'la tabla outbox_event es la de keel-spring (schema-parity contra OutboxEventJpa) y los parámetros del relay, los de keel-core (messaging.test.js contra el messaging.yaml de keel-spring; el backoff, contra la referencia ejecutable). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla contra el catálogo del motor, el puente escribiendo la fila en la transacción del cambio (y nada si revierte), el reclamo en orden y con su lote, el lease, SKIP LOCKED sin esperar a la fila retenida por otra réplica, el backoff de un fallo, la rendición al alcanzar el máximo y su cuenta, y que ni la publicada ni la rendida vuelven. Falsado el 2026-10-07 quitando el lease (cae su comprobación y solo esa) y quitando SKIP LOCKED (el reclamo espera a la fila retenida hasta el tope). Y broker-check, contra RabbitMQ real: el relay con un dispatcher sobre RabbitConnection.publish entrega la fila al canal con su envoltura y su tipo, no da por publicado lo que no tenía cola (mandatory), espera con el broker caído y sale al volver sin rendirse, y un evento abandonado no sale y se cuenta (falsado publicando sin mandatory: cae ese flujo y solo ese). Lo que no mide: la purga (incremento 10)'
       },
       document: { pending: 'incremento 12 (persistencia documental)' }
     }

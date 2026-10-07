@@ -38,6 +38,7 @@ import {
   MC_BINARY_URL,
   selectedInfra,
   brokerContainer,
+  devtoolsContainer,
   storageContainer
 } from './infra-catalog.js';
 
@@ -184,7 +185,7 @@ export function devtoolsService(selected, service, platform) {
     // directorio `docker/` ya acota qué imagen es: el sufijo no aportaba nada.
     build: { context: './docker' },
     image: `${service.name}-devtools:${devtoolsImageTag(selected, platform)}`,
-    container_name: `${service.name}-devtools`,
+    container_name: devtoolsContainer(service.name),
     command: 'sleep infinity',
     // Siempre, no solo con broker snssqs: el mismo toolbox sirve al storage
     // (MinIO habla S3) y son credenciales dummy sin efecto fuera de la infra local.
@@ -204,7 +205,7 @@ export function validateInfraScript(selected, service, model, platform) {
   const checks = selected
     .filter((s) => s.entry.cliValidateCmd)
     .map((s) => {
-      const container = s.cliVia === 'dbcontainer' ? `${service.name}-db` : `${service.name}-devtools`;
+      const container = s.cliVia === 'dbcontainer' ? `${service.name}-db` : devtoolsContainer(service.name);
       const label = `${s.entry.label} (${s.serviceKey})`;
       return `check ${sq(label)} ${sq(container)} ${sq(concreteCmd(s.entry, dbName, s.entry.cliValidateCmd, platform))}`;
     });
@@ -213,12 +214,12 @@ export function validateInfraScript(selected, service, model, platform) {
   // topics y colas EXISTAN: el check del catálogo da verde con la lista vacía, que es justo el
   // estado roto).
   for (const { label, cmd } of platform.extraChecks?.(model ?? {}) ?? []) {
-    checks.push(`check ${sq(label)} ${sq(`${service.name}-devtools`)} ${sq(cmd)}`);
+    checks.push(`check ${sq(label)} ${sq(devtoolsContainer(service.name))} ${sq(cmd)}`);
   }
   // Alcance por recurso: el claim llega en el token de cada usuario acotado. Sin esto, un
   // atributo escrito en el usuario equivocado pasaba la validación en verde.
   for (const { label, cmd } of model ? scopingClaimChecks(model) : []) {
-    checks.push(`check ${sq(label)} ${sq(`${service.name}-devtools`)} ${sq(cmd)}`);
+    checks.push(`check ${sq(label)} ${sq(devtoolsContainer(service.name))} ${sq(cmd)}`);
   }
   const stray = platform.strayProcess;
 
@@ -297,7 +298,7 @@ echo "Infraestructura OK."
 function bucketChecks(selected, service, model) {
   if (!selected.some((s) => s.id === 'minio')) return [];
   const buckets = declaredBuckets(model ?? {});
-  const container = `${service.name}-devtools`;
+  const container = devtoolsContainer(service.name);
   const alias = 'mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null';
   return buckets.map((bucket) => {
     const object = '.keel-anon-probe';
@@ -376,7 +377,7 @@ export function resetDbScript(selected, service, model, platform) {
   const steps = [];
 
   if (db) {
-    const container = db.cliVia === 'dbcontainer' ? `${service.name}-db` : `${service.name}-devtools`;
+    const container = db.cliVia === 'dbcontainer' ? `${service.name}-db` : devtoolsContainer(service.name);
     const cmd = concreteCmd(db.entry, dbName, db.entry.cliResetCmd, platform);
     // --schema: además de los datos, se lleva por delante la ESTRUCTURA. En relacional,
     // porque el modo de iterar del ORM nunca elimina una columna obsoleta ni afloja un NOT
@@ -410,7 +411,7 @@ fi`);
   if (cache) {
     const host = cache.entry.serviceKey;
     const flush = cacheFlushCmd(cache.entry, service);
-    steps.push(`if $RUNTIME exec ${sq(`${service.name}-devtools`)} sh -c ${sq(flush)}; then
+    steps.push(`if $RUNTIME exec ${sq(devtoolsContainer(service.name))} sh -c ${sq(flush)}; then
   echo "Caché vaciada (${cache.entry.label}: claves ${service.artifactId}:*)."
 else
   echo "FALLO al vaciar la caché. ¿Está '${host}' arriba?" >&2
@@ -423,7 +424,7 @@ fi`);
   // estado sucio, y abortar el reset por eso bloquearía la suite entera.
   for (const destination of purges) {
     const cmd = broker.entry.cliPurgeCmd.replaceAll('{destination}', destination);
-    steps.push(`if $RUNTIME exec ${sq(`${service.name}-devtools`)} sh -c ${sq(cmd)}; then
+    steps.push(`if $RUNTIME exec ${sq(devtoolsContainer(service.name))} sh -c ${sq(cmd)}; then
   echo "Canal purgado (${broker.entry.label}: ${destination})."
 else
   echo "AVISO: no se pudo purgar '${destination}' (¿la cola/topic aún no existe?). Continúo." >&2
@@ -437,7 +438,7 @@ fi`);
   for (const bucket of buckets) {
     const alias = 'mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null';
     const cmd = `${alias} && mc rm --recursive --force --quiet local/${bucket.physicalName} >/dev/null`;
-    steps.push(`if $RUNTIME exec ${sq(`${service.name}-devtools`)} sh -c ${sq(cmd)}; then
+    steps.push(`if $RUNTIME exec ${sq(devtoolsContainer(service.name))} sh -c ${sq(cmd)}; then
   echo "Bucket vaciado (${bucket.physicalName})."
 else
   echo "AVISO: no se pudo vaciar el bucket '${bucket.physicalName}' (¿aún no existe?). Continúo." >&2
@@ -449,7 +450,7 @@ fi`);
   // tests. Tolerante a fallo como las purgas: que el stub no esté arriba no
   // ensucia nada, y abortar aquí bloquearía flujos que no lo usan.
   if (httpStub) {
-    steps.push(`if $RUNTIME exec ${sq(`${service.name}-devtools`)} sh -c ${sq(httpStub.entry.cliResetCmd)}; then
+    steps.push(`if $RUNTIME exec ${sq(devtoolsContainer(service.name))} sh -c ${sq(httpStub.entry.cliResetCmd)}; then
   echo "Stub de proveedores reiniciado (${httpStub.entry.label}: mappings y log de peticiones)."
 else
   echo "AVISO: no se pudo reiniciar el stub HTTP (¿está 'wiremock' arriba?). Continúo." >&2
@@ -460,7 +461,7 @@ fi`);
   // siguiente afirmaría sobre el correo equivocado —el mismo fallo que la purga de
   // los canales evita en el broker—. Tolerante a fallo como las demás purgas.
   if (mailSink) {
-    steps.push(`if $RUNTIME exec ${sq(`${service.name}-devtools`)} sh -c ${sq(mailSink.entry.cliResetCmd)}; then
+    steps.push(`if $RUNTIME exec ${sq(devtoolsContainer(service.name))} sh -c ${sq(mailSink.entry.cliResetCmd)}; then
   echo "Buzón de correo vaciado (${mailSink.entry.label})."
 else
   echo "AVISO: no se pudo vaciar el buzón de correo (¿está 'mailpit' arriba?). Continúo." >&2

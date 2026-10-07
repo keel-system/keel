@@ -465,6 +465,14 @@ function mongoHealthcheck(db) {
  * por su cuenta, el día que cambie el patrón el arnés detendría un contenedor que
  * no existe y el fallo saldría como un timeout, muy lejos de su causa.
  */
+/**
+ * Nombre del contenedor de herramientas (devtools) de infra/: desde él hablan con el broker y la base
+ * los scripts de infra/ y el arnés de integración de cada generador. Fuente única de todos.
+ */
+export function devtoolsContainer(serviceName) {
+  return `${serviceName}-devtools`;
+}
+
 export function brokerContainer(serviceName, broker) {
   return `${serviceName}-${broker.serviceKey}`;
 }

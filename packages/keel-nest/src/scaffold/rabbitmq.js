@@ -22,7 +22,7 @@
 import { deadLetterName, rabbitListenerRetry, subscriptionDestination } from 'keel-core/gen';
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
-import { MESSAGE_CONTRACT_TS, RABBIT_CONNECTION_TS, RABBIT_TOPOLOGY_TS, usesRabbitMq } from './messaging.js';
+import { MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, RABBIT_CONNECTION_TS, RABBIT_TOPOLOGY_TS, usesRabbitMq } from './messaging.js';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -61,11 +61,18 @@ export function rabbitTopology(model) {
   return [...queues.values()];
 }
 
+/** Los canales en los que publica el servicio, con sus eventos (messaging.publishChannels del modelo). */
+export function publishedChannels(model) {
+  const byChannel = model.messaging?.eventTypesByChannel ?? {};
+  return (model.messaging?.publishChannels ?? []).map((channel) => ({ channel, events: byChannel[channel] ?? [] }));
+}
+
 // ─── La topología y el reintento (TypeScript puro) ───────────────────────────
 
 function topologyFile(model) {
   const topology = rabbitTopology(model);
   const retry = rabbitListenerRetry(model);
+  const published = publishedChannels(model);
   const entries = topology
     .map(
       (entry) => `  {
@@ -105,6 +112,30 @@ export const RABBIT_TOPOLOGY: readonly QueueTopology[] = [
 ${entries}
 ];
 
+/** Un canal del diseño en el que este servicio publica, con los eventos que viajan por él. */
+export interface PublishedChannel {
+  readonly channel: string;
+  readonly events: readonly string[];
+}
+
+/**
+ * Lo que este servicio PUBLICA: por canal, sus eventos. De aquí sale la topología de publicación —el
+ * exchange del servicio (messaging.publishing.destination) y una cola durable por canal, nombrada como el
+ * canal y enlazada con la routing key de cada uno de sus eventos—, la misma que la skill keel-spring-rabbitmq
+ * le pide escribir al agente en el servidor de keel-spring. En keel-nest la declara build: sin una cola
+ * enlazada, un exchange topic descarta en silencio lo publicado, y con \`mandatory\` la publicación falla y
+ * el outbox reintenta hasta rendirse. Es también la cola de la que el arnés lee lo publicado.
+ */
+export const PUBLISHED_CHANNELS: readonly PublishedChannel[] = [
+${published.map((entry) => `  { channel: ${tsString(entry.channel)}, events: [${entry.events.map(tsString).join(', ')}] }`).join(',\n')}
+];
+
+/** Los nombres de la publicación del perfil activo: el destino y la routing key de cada evento. */
+export interface PublishingNames {
+  readonly destination: string;
+  readonly routingKeys: Readonly<Record<string, string>>;
+}
+
 /** Lo que una declaración de topología necesita del canal (lo cumple el Channel de amqplib). */
 export interface TopologyChannel {
   assertExchange(exchange: string, type: string, options?: { durable?: boolean; autoDelete?: boolean }): Promise<unknown>;
@@ -112,8 +143,27 @@ export interface TopologyChannel {
   bindQueue(queue: string, source: string, pattern: string): Promise<unknown>;
 }
 
-/** Declara la topología: idempotente, se repite en cada (re)conexión. */
-export async function assertTopology(channel: TopologyChannel, topology: readonly QueueTopology[] = RABBIT_TOPOLOGY): Promise<void> {
+/**
+ * Declara la topología: la de consumo y, con \`publishing\`, la de publicación. Idempotente: se repite en
+ * cada (re)conexión.
+ */
+export async function assertTopology(
+  channel: TopologyChannel,
+  publishing: PublishingNames | null = null,
+  topology: readonly QueueTopology[] = RABBIT_TOPOLOGY,
+  published: readonly PublishedChannel[] = PUBLISHED_CHANNELS
+): Promise<void> {
+  if (publishing != null && published.length > 0) {
+    await channel.assertExchange(publishing.destination, 'topic', { durable: true, autoDelete: false });
+    for (const entry of published) {
+      await channel.assertQueue(entry.channel, { durable: true, arguments: {} });
+      for (const event of entry.events) {
+        const routingKey = publishing.routingKeys[event];
+        if (routingKey == null) throw new Error(\`Sin routing key para el evento \${event} en la configuración de mensajería\`);
+        await channel.bindQueue(entry.channel, publishing.destination, routingKey);
+      }
+    }
+  }
   for (const entry of topology) {
     await channel.assertExchange(entry.source, 'topic', { durable: true, autoDelete: false });
     if (entry.deadLetter != null) await channel.assertQueue(entry.deadLetter, { durable: true });
@@ -207,6 +257,13 @@ function positive(value: unknown, fallback: number): number {
   return parsed;
 }
 
+/** Cuánto espera el apagado a que la conexión se cierre. */
+const CLOSE_TIMEOUT_MS = 5000;
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Lo que un listener hace con un mensaje. Lanzar es fallar: se reintenta o va al descarte. */
 export type MessageHandler = (message: ConsumeMessage) => Promise<void>;
 
@@ -238,10 +295,14 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
   private readonly consumers: Array<{ readonly queue: string; readonly handler: MessageHandler }> = [];
   private connection: RecoveringChannelModel | null = null;
   private live: ChannelModel | null = null;
-  private confirm: Promise<ConfirmChannel> | null = null;
+  /** El canal de confirmaciones de la conexión viva; se abre al publicar y se olvida al cerrarse. */
+  private confirm: ConfirmChannel | null = null;
   private stopping = false;
 
-  constructor(@Inject(RABBITMQ_SETTINGS) private readonly settings: RabbitMqSettings) {}
+  constructor(
+    @Inject(RABBITMQ_SETTINGS) private readonly settings: RabbitMqSettings,
+    @Inject(MESSAGING_SETTINGS) private readonly messaging: MessagingSettings
+  ) {}
 
   /** ¿Hay conexión ahora mismo? */
   get connected(): boolean {
@@ -268,15 +329,24 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
       .catch((error: unknown) => this.logger.error(\`RabbitMQ: no se pudo conectar: \${error instanceof Error ? error.message : String(error)}\`));
   }
 
+  /**
+   * Cierra la conexión y para la reconexión. Con un tope: un broker que no contesta al cierre no puede
+   * retener el apagado del servicio, que tiene su propio margen (server.shutdown-timeout).
+   */
   async beforeApplicationShutdown(): Promise<void> {
     this.stopping = true;
-    await this.connection?.close().catch(() => undefined);
+    const closing = this.connection?.close().catch(() => undefined) ?? Promise.resolve();
+    await Promise.race([closing, new Promise((resolve) => setTimeout(resolve, CLOSE_TIMEOUT_MS).unref())]);
   }
 
   /** Registra el consumidor de \`queue\`: arranca con la conexión y tras cada reconexión. */
   consume(queue: string, handler: MessageHandler): void {
     this.consumers.push({ queue, handler });
-    if (this.live != null) void this.startConsumer(this.live, queue, handler);
+    if (this.live != null) {
+      this.startConsumer(this.live, queue, handler).catch((error: unknown) =>
+        this.logger.error(\`RabbitMQ: no se pudo arrancar el consumidor de \${queue}: \${describe(error)}\`)
+      );
+    }
   }
 
   /**
@@ -285,8 +355,7 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
    * broker confirma; lanza BrokerUnavailableError si no salió.
    */
   async publish(exchange: string, routingKey: string, payload: string, type: string, headers: Record<string, unknown> = {}): Promise<void> {
-    if (this.live == null || this.confirm == null) throw new BrokerUnavailableError('RabbitMQ no está conectado');
-    const channel = await this.confirm;
+    const channel = await this.confirmChannel();
     const messageId = randomUUID();
     await new Promise<void>((resolve, reject) => {
       let returned = false;
@@ -321,20 +390,42 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
     });
   }
 
-  private async onConnected(model: ChannelModel): Promise<void> {
-    const channel = await model.createChannel();
+  /**
+   * El canal de confirmaciones de la conexión viva, abierto bajo demanda. Se abre aquí y no al conectar
+   * porque un canal que el broker cierra (una publicación a un exchange que no existe lo hace, y también
+   * su apagado) tiene que reabrirse en la publicación siguiente — y reabrirlo desde su evento de cierre
+   * lo intentaba sobre una conexión que se estaba muriendo: una promesa rechazada que nadie esperaba, y
+   * en Node un rechazo sin manejar tumba el proceso.
+   */
+  private async confirmChannel(): Promise<ConfirmChannel> {
+    const model = this.live;
+    if (model == null || this.stopping) throw new BrokerUnavailableError('RabbitMQ no está conectado');
+    if (this.confirm != null) return this.confirm;
+    let channel: ConfirmChannel;
     try {
-      await assertTopology(channel);
+      channel = await model.createConfirmChannel();
+    } catch (error) {
+      throw new BrokerUnavailableError(\`RabbitMQ no abrió el canal de confirmaciones: \${describe(error)}\`);
+    }
+    channel.on('error', (error: Error) => this.logger.warn(\`RabbitMQ: el canal de confirmaciones falló: \${error.message}\`));
+    channel.on('close', () => {
+      if (this.confirm === channel) this.confirm = null;
+    });
+    if (this.live === model) this.confirm = channel;
+    return channel;
+  }
+
+  private async onConnected(model: ChannelModel): Promise<void> {
+    // Los errores de la conexión los gestiona la recuperación de amqplib: aquí solo se registran, porque
+    // un evento 'error' sin oyente es una excepción que tumba el proceso.
+    model.on('error', (error: Error) => this.logger.warn(\`RabbitMQ: \${error.message}\`));
+    const channel = await model.createChannel();
+    channel.on('error', () => undefined);
+    try {
+      await assertTopology(channel, { destination: this.messaging.destination, routingKeys: this.messaging.routingKeys });
     } finally {
       await channel.close().catch(() => undefined);
     }
-    this.live = model;
-    this.confirm = model.createConfirmChannel();
-    // Un canal que el broker cierra (una publicación a un exchange que no existe lo hace) se reabre en la
-    // siguiente publicación, no se queda muerto hasta la próxima reconexión.
-    void this.confirm.then((confirm) => confirm.on('close', () => {
-      if (this.live === model && !this.stopping) this.confirm = model.createConfirmChannel();
-    }));
     model.on('close', () => {
       if (this.live === model) {
         this.live = null;
@@ -342,15 +433,30 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
       }
     });
     for (const { queue, handler } of this.consumers) await this.startConsumer(model, queue, handler);
+    this.live = model;
     this.logger.log('RabbitMQ: conectado, topología declarada');
   }
 
   private async startConsumer(model: ChannelModel, queue: string, handler: MessageHandler): Promise<void> {
     const channel = await model.createChannel();
+    channel.on('error', (error: Error) => this.logger.warn(\`RabbitMQ: el canal de \${queue} falló: \${error.message}\`));
     await channel.prefetch(${RABBIT_PREFETCH});
     await channel.consume(queue, (message) => {
-      if (message != null) void this.deliver(channel, message, handler);
+      if (message == null) return;
+      this.deliver(channel, message, handler).catch((error: unknown) =>
+        this.logger.error(\`RabbitMQ: la entrega de \${queue} falló sin desenlace: \${describe(error)}\`)
+      );
     });
+  }
+
+  /** Confirma o rechaza; con el canal ya cerrado (el broker se fue) no hay a quién: el broker lo reentregará. */
+  private settle(channel: Channel, message: ConsumeMessage, accept: boolean): void {
+    try {
+      if (accept) channel.ack(message);
+      else channel.nack(message, false, false);
+    } catch (error) {
+      this.logger.warn(\`RabbitMQ: no se pudo \${accept ? 'confirmar' : 'rechazar'} un mensaje (canal cerrado): \${describe(error)}\`);
+    }
   }
 
   /** Lo que hace el contenedor de listeners de Spring con cada entrega. */
@@ -359,14 +465,14 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
     for (let attempt = 1; ; attempt++) {
       try {
         await handler(message);
-        channel.ack(message);
+        this.settle(channel, message, true);
         return;
       } catch (error) {
         const reason = error instanceof Error ? \`\${error.name}: \${error.message}\` : String(error);
         if (!isRetryable(error) || attempt >= attempts) {
           // Rechazo SIN reencolar: con DLQ declarada, el broker lo lleva al descarte.
           this.logger.error(\`RabbitMQ: mensaje de \${message.fields.routingKey} descartado tras \${attempt} intento(s): \${reason}\`);
-          channel.nack(message, false, false);
+          this.settle(channel, message, false);
           return;
         }
         this.logger.warn(\`RabbitMQ: fallo procesando un mensaje (intento \${attempt}): \${reason}\`);
@@ -393,6 +499,8 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
       { symbol: 'randomUUID', from: 'node:crypto' },
       { symbol: 'Configuration', from: CONFIG_TS, type: true },
       { symbol: 'assertTopology', from: RABBIT_TOPOLOGY_TS },
+      { symbol: 'MESSAGING_SETTINGS', from: MESSAGING_SETTINGS_TS },
+      { symbol: 'MessagingSettings', from: MESSAGING_SETTINGS_TS, type: true },
       { symbol: 'isRetryable', from: RABBIT_TOPOLOGY_TS },
       { symbol: 'listenerAttempts', from: RABBIT_TOPOLOGY_TS },
       { symbol: 'listenerBackoffMs', from: RABBIT_TOPOLOGY_TS }

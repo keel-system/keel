@@ -228,9 +228,12 @@ adaptadores de repositorio ya entregan los eventos al guardar, la clase del mens
 (`subscriptions/<evento>-message.ts`, con `fromWire` y `requireContract()`), el **outbox** con su relay
 (`outbox/`, la tabla `outbox_event`), el registro de mensajes procesados (`IdempotencyGuard`, la tabla
 `processed_event`), la configuración (`config/parameters/<perfil>/messaging.yaml` y `rabbitmq.yaml`) y, con
-RabbitMQ, la conexión (`rabbitmq/rabbit-connection.ts`) y la topología de consumo
-(`rabbitmq/rabbit-topology.ts`: exchange del canal, cola propia y DLQ). **No declares topología ni escribas
-otra conexión.**
+RabbitMQ, la conexión (`rabbitmq/rabbit-connection.ts`) y la topología entera (`rabbitmq/rabbit-topology.ts`):
+la de consumo —exchange del canal de origen, cola propia y DLQ— y la de publicación —el exchange del servicio
+y una cola por canal publicado, enlazada con la routing key de cada evento, que es también la que lee el
+arnés—. **No declares topología ni escribas otra conexión.** El dispatcher es una línea:
+`this.connection.publish(destination, routingKey, payload, eventType)`, que resuelve cuando el broker
+confirma y lanza si no hubo cola (`mandatory`) o no hay conexión.
 
 | Diseño | Código | Quién |
 |---|---|---|

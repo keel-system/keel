@@ -365,6 +365,7 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
   private timer: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
   private stopped = false;
+  private paused = false;
 
   constructor(
     @Inject(OutboxRelayStore) private readonly store: OutboxRelayStore,
@@ -392,6 +393,10 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
     const { maxAttempts, batchSize, claimTimeoutMs, backoffInitialMs, backoffMaxMs } = this.settings;
     const claimed = await this.store.claimBatch(maxAttempts, batchSize, claimTimeoutMs);
     for (const row of claimed) {
+      // Apagándose, no se empieza otra publicación: las filas que quedan conservan su lease y otra pasada
+      // (de esta réplica al volver o de otra) las recoge cuando caduca. Esperar a todo el lote retendría el
+      // apagado una latencia del broker por fila.
+      if (this.stopped) break;
       try {
         await this.dispatcher.dispatch(row.destination, row.routingKey, row.eventType, row.payload);
         await this.store.markPublished(row.id);
@@ -410,6 +415,20 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
     return claimed.length;
   }
 
+  /**
+   * Suspende las pasadas, esperando a la que esté en vuelo. Es para el arnés de integración, que fabrica
+   * así la precondición de un escenario del outbox (una fila pendiente que nadie entrega todavía).
+   */
+  async pause(): Promise<void> {
+    this.paused = true;
+    await this.inFlight;
+  }
+
+  /** Reanuda las pasadas suspendidas con pause(). */
+  resume(): void {
+    this.paused = false;
+  }
+
   /** Las filas rendidas ahora mismo: la señal de que el outbox perdió algo (la mide el arnés). */
   countDeadLettered(): Promise<number> {
     return this.store.countDeadLettered(this.settings.maxAttempts);
@@ -418,6 +437,10 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
   private schedule(): void {
     if (this.stopped) return;
     this.timer = setTimeout(() => {
+      if (this.paused) {
+        this.schedule();
+        return;
+      }
       this.inFlight = this.relayOnce()
         .then(() => undefined)
         .catch((error: unknown) => {

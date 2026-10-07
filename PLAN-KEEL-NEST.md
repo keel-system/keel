@@ -799,6 +799,38 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     retiene todas las filas recorridas (lo hacía la sonda, no el relay).
   - **Sin medir todavía**: nada habla con un RabbitMQ real (la conexión, `publish` con confirmación, el
     consumo con reintento y DLQ): es el 9c (arnés y `broker-check`). Las purgas, con el incremento 10.
+- **9c — hecho (2026-10-07)**: el arnés de integración con la mensajería y `broker-check`.
+  - **Arnés** (`src/scaffold/messaging-harness.js`, en `flow.ts`): `deliver<Suscripción>` (la envoltura y las
+    cabeceras que declara el contrato; la Keel, COMPLETA, como la publica cualquier servicio Keel —el arnés
+    de keel-spring solo manda `eventId` y `eventType` y Jackson tolera el resto—), `deliverMessage`,
+    `publishedMessages` (con la espera al drenaje del outbox), `deadLetterMessages`, `purgeMessages`,
+    `stopBroker`/`startBroker` (que espera a que la conexión del servicio vuelva), `deadLetteredEvents`,
+    `abandonOutboxEvent`/`clearAbandonedOutboxEvents` y `pauseOutboxRelay`/`resumeOutboxRelay`. Los
+    comandos salen de `keel-core/gen/broker-probes.js` por el contenedor devtools (`devtoolsContainer()`,
+    nuevo y neutral: se componía a mano en cuatro sitios de `infra-scripts.js`). Lo que el arnés de keel-nest
+    puede y el de keel-spring no: el servidor corre en el mismo proceso, así que lo rendido y la pausa se
+    le piden al relay, y la conexión recuperada, a la conexión. Cada flujo arranca con el broker arriba y la
+    conexión hecha.
+  - **La topología de PUBLICACIÓN pasa a build** (el exchange del servicio y una cola por canal, con el
+    binding de cada routing key): en keel-spring la escribe el agente siguiendo su skill, que insiste en que
+    sin ella toda aserción de mensajería falla y, con `mandatory`, el outbox se rinde. Mismos nombres: el
+    servidor es el mismo.
+  - **`broker-check` (nuevo) 18/18** contra RabbitMQ real sobre `stock-reservation`, con un dispatcher y un
+    listener sonda registrados en `broker-bindings.ts` como lo haría el agente y flujos que usan SOLO los
+    helpers del arnés: entrega y proceso, reentrega absorbida, fallo transitorio reintentado 5 veces → DLQ,
+    rechazo de negocio y contrato incumplido → DLQ sin reintento, evento ajeno confirmado sin efecto, la
+    fila del outbox publicada con su tipo, lo que no tiene cola no se da por publicado, el broker caído y
+    vuelto sin rendición, el evento abandonado contado y la purga. Falsado haciendo reintentable el rechazo
+    de negocio y quitando `mandatory`: cae cada uno en su flujo y solo ahí.
+  - **Tres defectos que destapó**, los tres invisibles sin un broker que se cae: (1) la conexión reabría el
+    canal de confirmaciones desde su evento de cierre sobre una conexión que se estaba muriendo — rechazos
+    sin manejar, que en Node tumban el proceso, y un `ack` sobre un canal cerrado también; ahora el canal se
+    abre bajo demanda al publicar, todo canal y toda promesa tienen su manejador, el cierre tiene tope y el
+    relay deja de recorrer el lote al apagarse; (2) `GracefulShutdown` no cancelaba su tope de 30 s tras un
+    apagado correcto: en la suite de integración (un servidor por flujo en el mismo proceso) disparaba un
+    `process.exit(1)` en mitad de otro flujo — no se había visto porque ningún flujo duraba tanto; (3) el
+    lector del JUnit de `broker-check` contaba como verdes los `<error>` de Vitest (los errores sin
+    manejar), y así salió un primer «21/21» falso.
   - **Fixture de la corrida, por decidir antes del 9e**: `inspection-reports` es **documental** y keel-nest
     no genera Mongo hasta el incremento 12. Las relacionales con outbox arrastran capas fuera de la
     frontera: `notification-mailer` (mail, inc. 13), `payment-checkout` (payments, 13), `stock-reservation` y
