@@ -852,6 +852,31 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     `catalog-extended` (http-clients, 11; storage, 13). `metering-digest` es relacional pero best-effort y
     sin API. Opciones: una fixture nueva relacional (outbox + suscripción con envoltura Keel + API), o una
     variante de una existente sin las capas ajenas, como hacen los tests con `NEST_READY_DESIGN`.
+- **Orden de lo que queda (decidido el 2026-10-07)**: la corrida con RabbitMQ (9e) **antes** que Kafka (9f) y
+  SNS/SQS (9g), para medir de punta a punta lo construido antes de multiplicarlo por tres brokers: si la
+  corrida destapa un defecto de las piezas comunes, se arregla una vez. El desglose inicial (9a–9e) solo
+  desglosaba RabbitMQ; Kafka y SNS/SQS siguen siendo parte de este incremento.
+- **9e — preparada (2026-10-07), pendiente de ejecutar**: la fixture `stock-reservation-events` v1.0.0, la
+  variante de `stock-reservation` sin `http-clients`, `dependencies` ni la reconciliación por reloj (otra
+  silueta y otros incrementos), con `security` declarada abierta (`protocol: none`, API interna) en vez de
+  ausente. Llevada a **`--ready` 11/11**: escenarios reescritos (fuera los de clúster y reconciliación,
+  que necesitan réplica y barrido; dos `Then` que prometían «sin reintentos» quedan en lo observable —que no
+  hay descarte—; `FL-RES-004` cubre `RESERVATION_NOT_FOUND` por las dos puertas), registro estructural de
+  siete secciones, revisión, barrido de las 12 clases (corrigió un comentario falso sobre la carrera
+  rechazo/confirmación y dejó sin cota el motivo del rechazo, ahora 255), careo en dos pasadas (cuatro
+  `Given` que se apoyaban en otro flujo, corregidos) y `DESIGN.md`. El careo lo hizo quien preparaba la
+  corrida, no un `keel-flow-review` de contexto limpio: se puede repetir con él. Entra en `READY_FIXTURES`;
+  `compile-check` del `main` en verde (rabbitmq, postgresql y mysql). Workspaces en
+  `spring-live-test/corrida-stock-reservation-events-{nest,spring}/`, con el proyecto generado por `build`
+  sobre PostgreSQL y RabbitMQ (estampado `ready: true`, 176 y 220 archivos).
+- **9f — Kafka**: elegir el cliente de Node (`@confluentinc/kafka-javascript` frente a `kafkajs`,
+  documentación al día), la conexión con productor que espera el acuse y consumidores por `group-id`, el
+  reintento y la publicación en la `.DLT` de las suscripciones que la declaran (`DeadLetterConfig` de
+  keel-spring), la rama del arnés con lectura por offset y marca por flujo (`broker-probes`), su
+  `broker-check` y la skill `keel-nest-kafka`.
+- **9g — SNS/SQS**: los clientes de AWS, la publicación con atributos (`eventType` para la FilterPolicy), el
+  consumo por sondeo con visibilidad y el descarte por `maxReceiveCount`, la siembra de `init-messaging.sh`
+  (neutral), la rama SQS del arnés, su `broker-check` y la skill `keel-nest-snssqs`.
 
 ### Inc. 10 — Idempotencia, compensación, reconciliación y barridos
 

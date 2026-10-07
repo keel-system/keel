@@ -1,0 +1,69 @@
+types:
+  ReservationStatus:
+    description: Estados por los que pasa una reserva de stock.
+    # `awaitingStock` es el estado de ESPERA: el encargo se publicó y el desenlace llega por un
+    # evento del almacén.
+    values: [pending, awaitingStock, confirmed, released]
+
+entities:
+  Reservation:
+    description: Reserva de stock de un artículo para un pedido.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      orderId:
+        type: uuid
+        required: true
+        unique: true
+        description: Pedido al que pertenece la reserva; uno por pedido.
+      sku:
+        type: string
+        required: true
+        constraints: { maxLength: 32 }
+      quantity:
+        type: int
+        required: true
+        constraints: { min: 1 }
+      status:
+        type: ReservationStatus
+        required: true
+        default: pending
+      releaseReason:
+        type: string
+        constraints: { maxLength: 255 }
+        description: Por qué se liberó la reserva; lo escribe la compensación.
+      lastCountedQuantity:
+        type: int
+        description: >-
+          Última cantidad que el almacén dice tener bloqueada para este pedido. La escribe
+          `noteStockCount` desde la suscripción, sin mover el estado: un recuento no es un
+          desenlace del encargo, es una corrección de lo ya encargado.
+      adjustmentCount:
+        type: int
+        required: true
+        default: 0
+        description: >-
+          Cuántas correcciones de recuento ha recibido la reserva. Es un CONTADOR, y por eso
+          `noteStockCount` no es idempotente por naturaleza: aplicarla dos veces se ve. Es lo
+          que hace observable la única guarda que le queda a una suscripción sin transición
+          de lifecycle — el registro de procesados.
+      createdAt:
+        type: timestamp
+        generated: true
+    lifecycle:
+      field: status
+      transitions:
+        # `released` es terminal y no aparece en ningún `from`: es lo que hace IRREPETIBLE la
+        # compensación por construcción — aplicarla dos veces la rechaza el propio agregado, sin
+        # depender de ninguna guarda del borde. Y una reserva pendiente no tiene stock encargado
+        # todavía: no hay nada que compensar, así que tampoco hay arista pending → released.
+        pending: [awaitingStock]
+        # Desde la espera se sale por dos sitios: el almacén confirma (confirmed) o rechaza
+        # (released). Si el almacén no responde nunca, la reserva se queda aquí: esta variante
+        # no reconcilia por reloj (eso es `stock-reservation`), y lo acepta por escrito en
+        # decisions.yaml.
+        awaitingStock: [confirmed, released]
+        confirmed: [released]
+        released: []

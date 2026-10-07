@@ -1,0 +1,145 @@
+operations:
+  createReservation:
+    description: Registra la intención de reservar stock para un pedido.
+    kind: command
+    input:
+      fields:
+        orderId:
+          type: uuid
+          required: true
+        # Las constraints se repiten aquí y no solo en la entidad a propósito: el generador emite
+        # la validación desde el INPUT, así que una restricción que solo vive en `domain` no se
+        # comprueba en la frontera. Declararla en los dos sitios es lo que hace que el rechazo
+        # sea contrato público (VALIDATION_ERROR) y no un accidente del dominio.
+        sku:
+          type: string
+          required: true
+          constraints: { maxLength: 32 }
+        quantity:
+          type: int
+          required: true
+          constraints: { min: 1 }
+    output:
+      entity: Reservation
+    errors:
+      - code: RESERVATION_ALREADY_EXISTS
+        when: Ya existe una reserva para ese pedido.
+        http: 409
+    # El eje de repetición del LLAMANTE: un cliente con timeout reintenta el POST y no puede
+    # acabar con dos reservas del mismo pedido. La clave la genera él.
+    idempotency:
+      keySource: client-key
+      ttlSeconds: 3600
+
+  confirmReservation:
+    description: Encarga al almacén el bloqueo del stock y deja la reserva esperando.
+    kind: command
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output:
+      entity: Reservation
+    errors:
+      - code: RESERVATION_NOT_FOUND
+        when: No existe una reserva con ese id.
+        http: 404
+    # El encargo viaja PUBLICADO, así que esta operación no conoce el desenlace: deja la reserva
+    # esperándolo. Con `reliability: outbox`, el evento y el cambio de estado confirman o
+    # revierten juntos.
+    emits: [StockReservationRequested]
+    transitions:
+      - entity: Reservation
+        from: [pending]
+        to: awaitingStock
+
+  applyStockReserved:
+    description: Confirma la reserva cuando el almacén avisa de que bloqueó el stock.
+    kind: command
+    # El desenlace BUENO del encargo asíncrono: sin esta operación la reserva no saldría nunca
+    # de la espera.
+    internal: true
+    input:
+      fields:
+        orderId:
+          type: uuid
+          required: true
+    output: "void"
+    errors:
+      - code: RESERVATION_NOT_FOUND
+        when: No existe una reserva para ese pedido.
+        http: 404
+    transitions:
+      - entity: Reservation
+        from: [awaitingStock]
+        to: confirmed
+
+  noteStockCount:
+    description: Anota la corrección de recuento que el almacén comunica sobre un pedido.
+    kind: command
+    # Interna: la dispara solo la suscripción.
+    internal: true
+    # La OTRA mitad de la idempotencia de consumo: esta operación NO declara `transitions`. Sin
+    # transición de lifecycle no hay guarda de dominio que rechace la segunda aplicación, así que
+    # el generador elige el otro orden del IdempotencyGuard —`tryRecord`: marcar ANTES de
+    # procesar—, que cierra la ventana del duplicado a cambio de perder el mensaje si el handler
+    # falla. Su efecto es observable en caja negra —un contador—: aplicarla dos veces se ve en la
+    # API.
+    input:
+      fields:
+        orderId:
+          type: uuid
+          required: true
+        countedQuantity:
+          type: int
+          required: true
+    output: "void"
+    errors:
+      - code: RESERVATION_NOT_FOUND
+        when: No existe una reserva para ese pedido.
+        http: 404
+
+  getReservation:
+    description: Consulta el estado de una reserva.
+    kind: query
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output:
+      entity: Reservation
+    errors:
+      - code: RESERVATION_NOT_FOUND
+        when: No existe una reserva con ese id.
+        http: 404
+
+  releaseReservation:
+    description: Libera la reserva cuando el almacén rechaza el bloqueo a posteriori.
+    kind: command
+    # Interna: solo la dispara la suscripción. Exponerla por HTTP abriría un segundo camino que
+    # la deduplicación del listener no cubre.
+    internal: true
+    input:
+      fields:
+        orderId:
+          type: uuid
+          required: true
+        reason:
+          type: string
+          required: true
+          constraints: { maxLength: 255 }
+    output: "void"
+    errors:
+      - code: RESERVATION_NOT_FOUND
+        when: No existe una reserva para ese pedido.
+        http: 404
+    # Los dos `from` no son laxitud: entre que se publica el encargo y que el almacén responde no
+    # hay orden garantizado, así que el rechazo puede llegar con la reserva todavía esperando
+    # (awaitingStock) o ya confirmada (confirmed). Ninguno de los dos vuelve a `released` desde
+    # `released`, que es lo que la mantiene irrepetible.
+    transitions:
+      - entity: Reservation
+        from: [awaitingStock, confirmed]
+        to: released

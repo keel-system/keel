@@ -1,0 +1,82 @@
+# El encargo ASÍNCRONO: se publica la petición, la reserva se queda esperando, y el desenlace llega
+# por un evento del almacén. Lo que sale (publishing), lo que entra bien (StockReserved), la
+# corrección (StockCountAdjusted) y lo que entra mal (StockRejected).
+channels:
+  stockEvents:
+    description: Canal por el que este servicio encarga stock y el almacén responde.
+
+publishing:
+  # El encargo viaja publicado, así que la garantía de que sale no la da publicar: la
+  # da el outbox. Con `best-effort`, un broker caído en el instante del commit perdería
+  # el encargo sin dejar rastro, y no hay compensación posible de un trabajo que nunca
+  # se pidió.
+  reliability: outbox
+  events:
+    StockReservationRequested:
+      channel: stockEvents
+      description: Petición de bloqueo de stock dirigida al almacén.
+      payload:
+        orderId: { type: uuid, required: true }
+        sku:     { type: string, required: true }
+        quantity: { type: int, required: true }
+
+subscriptions:
+  StockReserved:
+    description: El almacén confirma que bloqueó el stock del pedido.
+    source: inventory
+    channel: stockEvents
+    payload:
+      orderId: { type: uuid, required: true }
+    contract:
+      envelope: keel
+    triggers: applyStockReserved
+    input:
+      orderId: orderId
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 15000 }
+      deadLetter: true
+
+  StockCountAdjusted:
+    description: El almacén corrige la cantidad que tiene bloqueada para el pedido.
+    source: inventory
+    channel: stockEvents
+    payload:
+      orderId:         { type: uuid, required: true }
+      countedQuantity: { type: int, required: true }
+    contract:
+      envelope: keel
+    # Ni desenlace ni compensación: una corrección. `noteStockCount` no declara transiciones,
+    # así que aquí la deduplicación NO tiene detrás ninguna guarda de dominio y es lo único
+    # que impide que una reentrega vuelva a sumar en el contador. Es la rama `tryRecord`.
+    triggers: noteStockCount
+    input:
+      orderId: orderId
+      countedQuantity: countedQuantity
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 15000 }
+      deadLetter: true
+
+  StockRejected:
+    description: El almacén rechaza el bloqueo de stock del pedido.
+    source: inventory
+    channel: stockEvents
+    payload:
+      orderId: { type: uuid, required: true }
+      reason:  { type: string, required: true, constraints: { maxLength: 255 } }
+    contract:
+      # Sin `messageId`: la fuente es otro servicio Keel, así que la identidad del mensaje
+      # ya es `metadata.eventId` de la envoltura —estampado una vez en el `raise` y viaje
+      # intacto hasta el cable—, y es lo que alimenta `processed_event`. Declarar uno
+      # propio apuntaría a un metadato nativo del broker que ningún emisor Keel escribe.
+      envelope: keel
+    triggers: releaseReservation
+    input:
+      orderId: orderId
+      reason: reason
+    # El rechazo puede llegar ANTES o DESPUÉS de la confirmación del almacén: no hay orden
+    # garantizado entre los dos avisos. Esa carrera no la absorben los reintentos —un rechazo de
+    # transición es de negocio y no se reintenta— sino los dos `from` de releaseReservation. Los
+    # reintentos son para el fallo pasajero; la DLQ, para lo que no se puede procesar.
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 15000 }
+      deadLetter: true

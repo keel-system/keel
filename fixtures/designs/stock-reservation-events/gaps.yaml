@@ -1,0 +1,212 @@
+# El análisis de huecos de este diseño (gap-analysis.md), hecho al preparar la corrida del incremento 9 de
+# keel-nest (2026-10-07) por quien la preparaba, unidad a unidad, por delegación del diseñador («según tu
+# recomendación»): las decisiones van como decididas en el artefacto que las sostiene, y las de la clase 16
+# como riesgo aceptado, que es lo que la doctrina pide cuando el diseñador dijo «lo que recomiendes».
+reviewedBy: keel-gap-sweep
+reviewedAt: 1.0.0
+
+coverage:
+  - class: 1
+    units: [ Reservation ]
+    result: findings
+  - class: 2
+    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, releaseReservation ]
+    result: findings
+  - class: 3
+    units: [ Reservation ]
+    result: clean
+  - class: 4
+    # createReservation: la clave natural (orderId) más el registro de la clave, y su carrera (FL-RES-001-C).
+    # noteStockCount: lee y escribe un contador; dos recuentos DISTINTOS a la vez chocan en el bloqueo
+    # optimista (optimisticLocking all), y el perdedor se reintenta: ninguno se pierde.
+    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, releaseReservation ]
+    result: findings
+  - class: 5
+    units: [ getReservation ]
+    result: clean
+  - class: 7
+    units: [ publishing.StockReservationRequested, subscriptions.StockReserved, subscriptions.StockCountAdjusted, subscriptions.StockRejected ]
+    result: findings
+  - class: 8
+    units: [ subscriptions.StockReserved, subscriptions.StockCountAdjusted, subscriptions.StockRejected ]
+    result: findings
+  - class: 9
+    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, getReservation, releaseReservation ]
+    result: findings
+  - class: 12
+    units: [ service ]
+    result: findings
+  - class: 14
+    units: [ Reservation ]
+    result: findings
+  - class: 15
+    units: [ createReservation, confirmReservation, getReservation ]
+    result: findings
+  - class: 16
+    units: [ '3.1', '3.2', '3.3', '3.5', '3.7', '3.9', '3.9b' ]
+    result: findings
+
+findings:
+  # --- Clase 1 ---
+  - class: 1
+    unit: Reservation
+    what: >-
+      StockReserved puede llegar con la reserva ya liberada (el almacén confirma un bloqueo que antes
+      rechazó): la transición awaitingStock → confirmed ya no aplica.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: la transición se rechaza con el 409 INVALID_STATE_TRANSITION del catálogo, que es un
+      rechazo de negocio y va al descarte de StockReserved sin reintentos. Es una incoherencia del emisor, y
+      el descarte es donde el almacén la ve; la reserva liberada no se resucita."
+
+  # --- Clase 2 ---
+  - class: 2
+    unit: confirmReservation
+    what: >-
+      Confirmar una reserva que ya no está en pending: el diseño no declara su error.
+    severity: risk
+    state: decided
+    reason: "Decidido: el 409 INVALID_STATE_TRANSITION del catálogo de framework (framework-errors.md); no
+      hace falta un code propio, el cliente solo necesita saber que la reserva ya se encargó."
+
+  # --- Clase 4 ---
+  - class: 4
+    unit: releaseReservation
+    what: >-
+      Dos copias simultáneas del mismo StockRejected: la perdedora puede chocar con el bloqueo optimista o
+      encontrar la reserva ya en released.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: optimisticLocking all y FL-CMP-001-C, que exige el efecto una vez y
+      ninguna copia en el descarte. La perdedora es la carrera resuelta, no un fallo (skill del broker)."
+
+  # --- Clase 7 ---
+  - class: 7
+    unit: subscriptions.StockReserved
+    what: >-
+      Un aviso del almacén sobre un pedido sin reserva no se va a poder procesar nunca.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: RESERVATION_NOT_FOUND es un rechazo de negocio y va al descarte sin agotar
+      reintentos (deadLetter true en las tres suscripciones). FL-RES-004 lo afirma."
+  - class: 7
+    unit: subscriptions.StockRejected
+    what: >-
+      El motivo del rechazo no tenía cota: uno más largo que la columna reventaría al escribir.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: maxLength 255 en el payload, en el input de releaseReservation y en
+      releaseReason; uno más largo incumple el contrato y va al descarte."
+
+  # --- Clase 8 ---
+  - class: 8
+    unit: subscriptions.StockReserved
+    what: >-
+      Si el almacén no responde nunca (ni StockReserved ni StockRejected), la reserva se queda en
+      awaitingStock para siempre y nadie lo detecta.
+    severity: risk
+    state: accepted
+    reason: "Aceptado en v1.0.0: esta variante no reconcilia por reloj; la reconciliación es la silueta de
+      stock-reservation, y aquí se mide la mensajería. La reserva en espera es visible en getReservation."
+
+  # --- Clase 9 ---
+  - class: 9
+    unit: createReservation
+    what: >-
+      La API no tiene autenticación: cualquiera que llegue a ella crea, confirma y consulta reservas.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: security con protocol none y access public, a propósito. La API es interna
+      y la llama solo el sistema de pedidos; la frontera de confianza la pone su red. Vale para las seis
+      operaciones (las internas no tienen otra puerta que su suscripción)."
+
+  # --- Clase 12 ---
+  - class: 12
+    unit: service
+    what: >-
+      Ausencia vs nulo: releaseReason y lastCountedQuantity sin valor, ¿viajan como null o no viajan?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: conventions.nulls include en el manifiesto; viajan como null. FL-RES-001
+      lo afirma."
+  - class: 12
+    unit: service
+    what: >-
+      Texto: el diseño no decía si sku y el motivo del rechazo se normalizan.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: se guardan tal cual llegan; sku no participa en ninguna unicidad ni
+      búsqueda (la clave es orderId, un uuid). Instantes en UTC con milisegundos (convenciones de
+      validation-scenarios.md)."
+
+  # --- Clase 14 ---
+  - class: 14
+    unit: Reservation
+    what: >-
+      Las reservas no se borran nunca: no hay retención ni archivado.
+    severity: risk
+    state: accepted
+    reason: "Aceptado en v1.0.0: una reserva liberada sigue siendo el registro de lo que pasó con el pedido;
+      la retención entra con su versión y su operación, no como efecto de otra."
+
+  # --- Clase 15 ---
+  - class: 15
+    unit: confirmReservation
+    what: >-
+      Confirmar es un POST que no crea recurso: ¿201 o 200?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: successStatus 200 (api.keel.yaml); cambia el estado de una reserva que ya
+      existe."
+  - class: 15
+    unit: getReservation
+    what: >-
+      ¿Llama un navegador directamente a esta API? Sin cors declarado, una SPA no podría.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: la llama el backend del sistema de pedidos; sin cors, el servicio no
+      acepta peticiones cross-origin."
+
+  # --- Clase 16 ---
+  - class: 16
+    unit: '3.1'
+    what: reliability outbox, decidido por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: perder el encargo con el broker caído dejaría la reserva esperando para siempre (registro estructural)."
+  - class: 16
+    unit: '3.2'
+    what: Idempotencia solo en createReservation, decidido por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: confirmReservation la frena su transición (registro estructural)."
+  - class: 16
+    unit: '3.3'
+    what: Sin caché en getReservation, decidido por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: el estado cambia por eventos en cualquier momento (registro estructural)."
+  - class: 16
+    unit: '3.5'
+    what: Retry y deadLetter de las tres suscripciones, decididos por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: el pasajero se reintenta y lo imposible va al descarte (registro estructural)."
+  - class: 16
+    unit: '3.7'
+    what: Frontera per-operation, decidida por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: confirmar escribe la reserva y el outbox juntos (registro estructural)."
+  - class: 16
+    unit: '3.9'
+    what: optimisticLocking all, decidido por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: la doble entrega simultánea de la compensación (registro estructural)."
+  - class: 16
+    unit: '3.9b'
+    what: Auditoría declared y sin autoría, decidida por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: createdAt es contrato y no hay usuarios (registro estructural)."

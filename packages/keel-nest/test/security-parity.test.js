@@ -71,6 +71,16 @@ for (const name of secured) {
         assert.equal(rulesFile, undefined, 'keel-spring no protege la API y keel-nest sí');
         return;
       }
+      // Con `protocol: none` keel-nest no emite ningún hook (la API queda abierta sin código) y keel-spring
+      // una SecurityConfig que lo abre todo: la misma API. Sin hook en keel-nest, keel-spring no puede
+      // exigir nada en ninguna ruta.
+      if (!rulesFile) {
+        for (const chain of spring) {
+          assert.deepEqual(chain.rules.filter((rule) => rule.requirement.kind !== 'public'), [], 'keel-spring exige algo y keel-nest no tiene hook');
+          assert.equal(chain.fallback?.kind, 'public', 'keel-spring cierra la API y keel-nest la deja abierta');
+        }
+        return;
+      }
       const { load } = transpileTree(nest.files);
       const { CHAINS } = await load('src/infrastructure/security/access-rules.ts');
       assert.equal(CHAINS.length, spring.length, 'número de cadenas');

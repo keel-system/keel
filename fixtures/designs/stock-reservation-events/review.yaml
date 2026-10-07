@@ -1,0 +1,40 @@
+# Revisión semántica (review-checklist.md), hecha al preparar la corrida del incremento 9 de keel-nest
+# (2026-10-07) por quien la preparaba, siguiendo la checklist de /keel-validate id a id, por delegación
+# del diseñador. Los veredictos que no son `ok` llevan su porqué.
+reviewedBy: keel-design-review
+reviewedAt: 1.0.0
+findings:
+  - id: REV-DOMAIN-PROMISED-STATE
+    scope: domain.entities.Reservation
+    verdict: ok
+    note: >-
+      Todo lo que la prosa promete se representa: la espera (awaitingStock), sus dos desenlaces
+      (confirmed, released con releaseReason) y la corrección de recuento (lastCountedQuantity y
+      adjustmentCount), que no mueve el estado.
+  - id: REV-USECASES-INTERNAL-REPEAT
+    scope: use-cases
+    verdict: accepted
+    note: >-
+      confirmReservation no declara idempotency a propósito: repetirla la rechaza la transición
+      pending → awaitingStock, así que no publica un segundo encargo (registro estructural § 3.2).
+      applyStockReserved y releaseReservation los frena su transición. noteStockCount no tiene guarda de
+      dominio y escribe un contador: lo único que frena la reentrega es el registro de procesados de su
+      suscripción (tryRecord). Se acepta: es la rama que la fixture existe para medir (FL-CNT-001-B), y
+      la operación es interna, sin otra puerta que la suscripción.
+  - id: REV-MSG-MISSING-CHANNEL
+    scope: messaging
+    verdict: ok
+    note: El evento publicado y las tres suscripciones declaran el canal stockEvents.
+  - id: REV-MSG-DEDUPE-WINDOW
+    scope: messaging.subscriptions.StockCountAdjusted
+    verdict: accepted
+    note: >-
+      La ventana es processed-event.purge.retention-days (14 días por defecto): pasada, una reentrega
+      del mismo recuento sumaría otra vez. Se acepta porque la reentrega de un broker ocurre en minutos,
+      no en semanas. StockReserved y StockRejected no dependen de la ventana: los frena el lifecycle.
+  - id: REV-PERSIST-MISSING-INDEX
+    scope: persistence.entities.Reservation
+    verdict: ok
+    note: >-
+      getReservation busca por id (la clave primaria) y las tres operaciones internas por orderId, que
+      es la naturalKey (índice único). No hay listados.

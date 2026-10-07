@@ -1,0 +1,74 @@
+# Careo de flujos (flow-walkthrough.md) de stock-reservation-events, hecho al preparar la corrida del
+# incremento 9 de keel-nest (2026-10-07) por quien la preparaba, NO por un keel-flow-review de contexto
+# limpio (esta sesión no lo tenía a mano): se puede repetir con él antes de la corrida. Pasada 1 completa
+# (cuatro Given entre flujos, corregidos en los escenarios) y pasada 2 completa, porque la corrección
+# añadió una convención de determinación: limpia. Las decisiones (resolution) son del diseñador, por
+# delegación.
+reviewedAt: 1.0.0
+passes: 2
+scenariosSha256: a6e2b01af5a80b1c000e67c176104a14b804849e61fd2d232c41cd17c5425bf9
+conventionsSha256: 6b23dbfa40b7d1df18e47cb65b1d6aa42e1b652926001d74e9c03a0fb2f86ada
+flows:
+  - { id: FL-RES-001, sha256: b26005bf6a1271a41e1d3201819c8edf11fea9644472b3045f0a4828257b8407 }
+  - { id: FL-RES-001-B, sha256: daf9378d76e9806a292f16a259ec40b15d38507f80262141b802c72f1b86b1de }
+  - { id: FL-RES-001-C, sha256: 711bfb68169f628f9a931af1f0f14ac37f017eeb7dc703c93f3d68f51e535a8f }
+  - { id: FL-RES-001-D, sha256: 9c121712b280e2a35016dd3738f1c3a9a23302ff7854e86eefead857badeb1cc }
+  - { id: FL-RES-002, sha256: ef2210590c673ce6f1ab28db11899f19c3dff8a5d0144d07a52ca8dfff98e3e9 }
+  - { id: FL-OBX-001, sha256: 78a9da4742380a939892900d1e50b69f39ccd4143ce3b5ed3ad710955c1eeba8 }
+  - { id: FL-RES-003, sha256: b60880843db433b33c45b1936728f46374605a1f4f4ea152a9d2014b40ef70ee }
+  - { id: FL-RES-003-B, sha256: f79c1da800b8e689126e13a294bf3e2539978f7259af9cff558480625819e6a2 }
+  - { id: FL-RES-004, sha256: 88dbe817b88e07787c08581a3ea2bdaf139d8e13dc00b1e265f8b66d363613f3 }
+  - { id: FL-CMP-001, sha256: efc74a802363b24f75f94fca1cdc893c4b1a7cc1929ef93282fd6bb53020876c }
+  - { id: FL-CMP-001-B, sha256: a8af586ab11077bda254ff6150eee3526e42d851491b8dc1e38af3bc42dce533 }
+  - { id: FL-CMP-001-C, sha256: 5679bcbef0f73989d54fe9c3c0af093af56f57ef99d3b8598317a441435933cb }
+  - { id: FL-CNT-001, sha256: 8f6c57ac65ea69105daede99b24838514bb6e7beba55e0dc1567e8d4ad2e8b3e }
+  - { id: FL-CNT-001-B, sha256: fd07866940fcd166cc20e6b0764f7d623f2b1f456eae2e338bc9def32217e688 }
+findings:
+  - flow: FL-RES-002
+    step: "Given"
+    kind: cross-flow
+    artifact: FL-RES-001
+    evidence: >-
+      Pasada 1. El Given se apoya en la reserva que dejó otro flujo (FL-RES-001), y el arnés deja el
+      estado como recién arrancado al empezar cada flujo: la reserva no existe cuando este flujo empieza.
+    proposal: >-
+      Que el Given fabrique su propia reserva por el camino declarado, y escribir la regla del estado
+      entre flujos en las convenciones de determinación.
+    resolution: scenario
+    reason: "Corregido en el escenario: el Given crea su reserva por el camino declarado, y la convención «Estado entre flujos» lo deja escrito para todos."
+  - flow: FL-RES-003
+    step: "Given"
+    kind: cross-flow
+    artifact: FL-RES-002
+    evidence: >-
+      Pasada 1. El Given se apoya en la reserva que dejó otro flujo (FL-RES-002), y el arnés deja el
+      estado como recién arrancado al empezar cada flujo: la reserva no existe cuando este flujo empieza.
+    proposal: >-
+      Que el Given fabrique su propia reserva por el camino declarado, y escribir la regla del estado
+      entre flujos en las convenciones de determinación.
+    resolution: scenario
+    reason: "Corregido en el escenario: el Given crea su reserva por el camino declarado, y la convención «Estado entre flujos» lo deja escrito para todos."
+  - flow: FL-CMP-001
+    step: "Given"
+    kind: cross-flow
+    artifact: FL-RES-003
+    evidence: >-
+      Pasada 1. El Given se apoya en la reserva que dejó otro flujo (FL-RES-003), y el arnés deja el
+      estado como recién arrancado al empezar cada flujo: la reserva no existe cuando este flujo empieza.
+    proposal: >-
+      Que el Given fabrique su propia reserva por el camino declarado, y escribir la regla del estado
+      entre flujos en las convenciones de determinación.
+    resolution: scenario
+    reason: "Corregido en el escenario: el Given crea su reserva por el camino declarado, y la convención «Estado entre flujos» lo deja escrito para todos."
+  - flow: FL-CNT-001
+    step: "Given"
+    kind: cross-flow
+    artifact: FL-RES-001-D
+    evidence: >-
+      Pasada 1. El Given se apoya en la reserva que dejó otro flujo (FL-RES-001-D), y el arnés deja el
+      estado como recién arrancado al empezar cada flujo: la reserva no existe cuando este flujo empieza.
+    proposal: >-
+      Que el Given fabrique su propia reserva por el camino declarado, y escribir la regla del estado
+      entre flujos en las convenciones de determinación.
+    resolution: scenario
+    reason: "Corregido en el escenario: el Given crea su reserva por el camino declarado, y la convención «Estado entre flujos» lo deja escrito para todos."

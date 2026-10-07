@@ -1,0 +1,20 @@
+default:
+  model: relational
+entities:
+  Reservation:
+    # Un pedido, una reserva: es la clave con la que el llamante identifica el caso, y la que hace
+    # que un duplicado que se cuele por debajo de la idempotencia HTTP choque contra la base de
+    # datos en vez de crear una segunda fila.
+    naturalKey: [orderId]
+audit:
+  timestamps: declared
+  # Sin autoría: no hay usuarios (la API es interna y abierta) y el único autor de los cambios de
+  # estado es el propio servicio, por la API del sistema de pedidos o por un evento del almacén.
+  authorship: none
+consistency:
+  transactionalBoundary: per-operation
+  # `all`, no `none`: la compensación llega por un canal at-least-once y puede entregarse dos
+  # veces A LA VEZ. Sin versión en la raíz, los dos hilos leen la reserva en `confirmed`, los dos
+  # pasan la transición —que mira el estado que leyeron, no el que hay— y los dos escriben
+  # `released`. El bloqueo optimista es lo que convierte esa carrera en un conflicto observable.
+  optimisticLocking: all

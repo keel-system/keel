@@ -41,7 +41,9 @@ const COMPILAN = [
   'payout-runs',
   'product-catalog',
   'profile-directory',
-  'stock-reservation'
+  'stock-reservation',
+  // La variante de mensajería (incremento 9e de keel-nest): compile-check con rabbitmq, postgresql y mysql.
+  'stock-reservation-events'
 ];
 
 for (const fixture of COMPILAN) {
