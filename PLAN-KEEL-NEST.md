@@ -612,8 +612,12 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     `ts-check` 11/11.
   - **Sin cubrir todavía**: la purga de las claves caducadas (necesita el scheduling del inc. 10; `find`
     ya las ignora y `save` las sustituye), el gate estático `check-idempotency.sh` (familia
-    `commandIdempotency`, inc. 10) y la corrida que lo mida: repetir `product-catalog` con keel-nest,
-    donde la huella debería bajar de 12 reescritos a 6, como la de keel-spring.
+    `commandIdempotency`, inc. 10).
+  - **Corrida v2 (2026-10-06)**: `product-catalog` con keel-nest, **23/23 a la primera** y huella de **7
+    reescritos** (12 en la v1; keel-spring, 6): los handlers, el agregado y la guía de despliegue del
+    README. Ningún archivo de infraestructura de build tocado y el handler idempotente con el algoritmo
+    prescrito (`docs/corridas/2026-10-06-product-catalog-nest-v2.md`). Con esto el servidor de keel-nest
+    del diseño es equivalente al de keel-spring también en el registro de idempotencia.
 
 ### Inc. 8 — Seguridad
 
