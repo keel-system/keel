@@ -4,6 +4,9 @@ service:
   version: 1.0.0
   description: Ficha de contacto del titular de un token, consultada y editada por él mismo en /me.
   domain: identity
+conventions:
+  # Un campo sin valor viaja como null (displayName de una ficha sin nombre): el default, escrito.
+  nulls: include
 layers:
   domain: domain.keel.yaml
   use-cases: use-cases.keel.yaml

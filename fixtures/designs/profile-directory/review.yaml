@@ -1,0 +1,27 @@
+reviewedBy: keel-design-review
+reviewedAt: 1.0.0
+findings:
+  - id: REV-DOMAIN-PROMISED-STATE
+    scope: domain.entities.ContactCard
+    verdict: ok
+  - id: REV-USECASES-INTERNAL-REPEAT
+    scope: use-cases.operations.saveMyCard
+    verdict: accepted
+    note: >-
+      saveMyCard se reintenta sin idempotency a propósito: reemplaza la ficha entera del titular,
+      identificada por su naturalKey (subject), así que una repetición deja el mismo estado y devuelve
+      la misma ficha. Registro estructural § 3.2.
+  - id: REV-USECASES-GUARD-ORDER
+    scope: use-cases.operations.saveMyCard
+    verdict: ok
+  - id: REV-SEC-RESOURCE-SCOPE
+    scope: security.authentication.callerIdentity
+    verdict: ok
+    note: >-
+      El alcance no se da por hecho en prosa: cada titular opera sobre SU ficha porque la identidad la
+      estampa el servidor desde el claim sub (callerIdentity) y la ficha se busca por ese subject. No
+      hay recursos de otros a los que acotar. FL-CRD-002 lo afirma.
+  - id: REV-PERSIST-MISSING-INDEX
+    scope: persistence.entities.ContactCard
+    verdict: ok
+    note: Las dos operaciones buscan por subject, que es la naturalKey (índice único).

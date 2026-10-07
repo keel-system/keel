@@ -1,0 +1,161 @@
+# El análisis de huecos de este diseño (gap-analysis.md), hecho al preparar la corrida del incremento 8
+# de keel-nest (2026-10-07). Las decisiones las tomó quien preparaba la corrida por delegación del
+# diseñador: van como decididas en el artefacto que las sostiene, y las de la clase 16 como riesgo
+# aceptado, que es lo que la doctrina pide cuando el diseñador dijo «lo que recomiendes».
+reviewedBy: keel-gap-sweep
+reviewedAt: 1.0.0
+
+coverage:
+  - class: 2
+    units: [ saveMyCard ]
+    result: findings
+  - class: 3
+    units: [ ContactCard ]
+    result: findings
+  - class: 4
+    units: [ saveMyCard ]
+    result: findings
+  - class: 5
+    units: [ getMyCard ]
+    result: clean
+  - class: 9
+    units: [ getMyCard, saveMyCard ]
+    result: clean
+  - class: 12
+    units: [ service ]
+    result: findings
+  - class: 14
+    units: [ ContactCard ]
+    result: findings
+  - class: 15
+    units: [ getMyCard, saveMyCard ]
+    result: findings
+  - class: 16
+    units: [ '3.2', '3.3', '3.7', '3.9', '3.9b' ]
+    result: findings
+
+findings:
+  # --- Clase 2 ---
+  - class: 2
+    unit: saveMyCard
+    what: >-
+      El command no declara ningún error: el diseño no dice qué ve el titular cuando su escritura no se
+      puede hacer (forma del cuerpo, permiso, choque de la primera escritura).
+    severity: risk
+    state: accepted
+    reason: "Aceptado (CHK-USECASES-COMMAND-NO-ERRORS en decisions.yaml): la forma del cuerpo la rechaza
+      el borde con 400 VALIDATION_ERROR, el permiso la regla de acceso con 401/403, y el choque de la
+      primera escritura es el 409 de la clave natural (clase 4). No hay un desenlace de negocio propio
+      que nombrar."
+
+  # --- Clase 3 ---
+  - class: 3
+    unit: ContactCard
+    what: >-
+      saveMyCard puede llegar sin displayName: el diseño no decía si omitirlo conserva el nombre
+      anterior o lo borra.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: el reemplazo es ENTERO y un displayName que no llega deja la ficha con
+      null (rule de saveMyCard). FL-CRD-001-E lo afirma."
+
+  # --- Clase 4 ---
+  - class: 4
+    unit: saveMyCard
+    what: >-
+      Dos primeras escrituras simultáneas del mismo titular buscan su ficha, no la encuentran y las dos
+      intentan crearla: la clave natural (subject) deja pasar una.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: la que pierde recibe 409 CONTACT_CARD_SUBJECT_ALREADY_EXISTS (el code de framework
+      de la clave natural) y, como el PUT reemplaza, reintentarla da el resultado esperado. Solo ocurre
+      con el mismo titular guardando dos veces a la vez antes de tener ficha; no compensa un mecanismo."
+  - class: 4
+    unit: saveMyCard
+    what: >-
+      Dos reemplazos simultáneos de la misma ficha: el diseño no decía si gana el último o hay conflicto.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: gana el último (persistence.consistency.optimisticLocking: none, registro
+      estructural § 3.9). Solo puede ser el mismo titular escribiendo dos veces su propia ficha."
+
+  # --- Clase 12 ---
+  - class: 12
+    unit: service
+    what: >-
+      Ausencia vs nulo: una ficha sin nombre, ¿trae displayName: null o no trae la clave?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: conventions.nulls: include en el manifiesto; viaja como null. FL-CRD-001-E
+      lo afirma."
+  - class: 12
+    unit: service
+    what: >-
+      Texto: el diseño no decía si displayName se normaliza (recorte de espacios, mayúsculas) ni si
+      subject distingue mayúsculas.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: displayName se guarda tal cual llega, y subject es el sub del token, un
+      identificador opaco que se compara exacto (no participa en ninguna búsqueda ni lo escribe nadie más
+      que el servidor). Convenciones de determinación de validation-scenarios.md."
+
+  # --- Clase 14 ---
+  - class: 14
+    unit: ContactCard
+    what: >-
+      No hay operación para borrar la propia ficha: una vez creada, se conserva para siempre.
+    severity: risk
+    state: accepted
+    reason: "Aceptado en v1.0.0: el titular puede dejarla sin nombre (saveMyCard con {}), y el borrado a
+      petición del interesado entra en una versión con su operación propia, no como efecto de otra."
+
+  # --- Clase 15 ---
+  - class: 15
+    unit: saveMyCard
+    what: >-
+      El primer guardado CREA la ficha y responde 200, no 201: el cliente no distingue creación de
+      reemplazo, y no hay cabecera Location.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: successStatus 200 en los dos casos (api.keel.yaml). El recurso es siempre
+      /me/card, así que no hay ubicación nueva que anunciar, y al cliente le basta la ficha devuelta."
+  - class: 15
+    unit: getMyCard
+    what: >-
+      ¿Llama un navegador directamente a esta API? Sin cors declarado, una SPA no podría.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: la consumen aplicaciones con su propio backend; sin cors, el servicio no
+      acepta peticiones cross-origin. Si un navegador la llamara, cors entra con su versión."
+
+  # --- Clase 16 ---
+  - class: 16
+    unit: '3.2'
+    what: Sin idempotency en saveMyCard, decidido por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: el PUT reemplaza, así que repetirlo no produce un segundo efecto (registro estructural)."
+  - class: 16
+    unit: '3.3'
+    what: Sin caché en getMyCard, decidido por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: el titular lee lo que acaba de guardar; una respuesta cacheada le mentiría."
+  - class: 16
+    unit: '3.7'
+    what: transactionalBoundary per-aggregate, decidido por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: cada operación toca una sola raíz y no publica nada."
+  - class: 16
+    unit: '3.9'
+    what: optimisticLocking none, decidido por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: solo el titular escribe su ficha, y el reemplazo entero hace que gane lo último que vio."
+  - class: 16
+    unit: '3.9b'
+    what: audit timestamps y authorship none, decididos por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: nadie lee el rastro y el autor es siempre el titular (subject)."

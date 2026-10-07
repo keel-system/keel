@@ -1,0 +1,37 @@
+# Careo de flujos (flow-walkthrough.md), pasada 1. Lo hizo quien escribió los escenarios al preparar la
+# corrida del incremento 8 de keel-nest (2026-10-07), NO un agente de contexto limpio: recarearlo con
+# keel-flow-review es lo que le daría la independencia que el método pide.
+reviewedAt: 1.0.0
+passes: 1
+scenariosSha256: d6ce975d041d61e66db2c8ba3fff1877645d0dacf1eaf0e83b9a63d4409fbcb5
+conventionsSha256: 0952b068e22b26ec0dfe7a4dad5a2736e41188d7fdb394dcadad81eea88b599b
+flows:
+  - { id: FL-CRD-001, sha256: 04180943c4f83024258406e2b6e0ee189a396ccd8f330720593915aa590b71a8 }
+  - { id: FL-CRD-001-B, sha256: 9f08e5afcd657726ae368705d204c45639709d39c29f5de53d18526229c4e765 }
+  - { id: FL-CRD-001-C, sha256: 8c979a983d42489919e777855844e9db8edbc065c3bc28222f8247d5667192ff }
+  - { id: FL-CRD-001-D, sha256: c702c01288cb69745d2b3139699a317174efefbf2b53c2aaf2044db5496e28d9 }
+  - { id: FL-CRD-001-E, sha256: 6f0b0f0a9461ec39a1f9207f4e310f5072b8dec41b1a6bae3e97f3897cf2c659 }
+  - { id: FL-CRD-001-F, sha256: 6a36d1656d5292de2c3f53207be8646adb8d74b5bd4d496e84254d328aadcf0b }
+  - { id: FL-CRD-002, sha256: 2badee3ff85a0d47ebad2fb782df9b7ac95d2b10fce38d56dbf94161a9caf684 }
+  - { id: FL-CRD-002-B, sha256: b9aee32d51d799bbe6b22f5f87ea146c5430e7b8f6cbdd088c271c92b8106923 }
+  - { id: FL-CRD-002-C, sha256: ba1381a3dd32d95d74c3e1d962e530c053710cb6496a997881fb8e37c0612bed }
+  - { id: FL-CRD-003, sha256: c7616dfaef44df1effa9b8c00b91bf9cfa40a4fc3dd160e9ede7350f6b940ccf }
+  - { id: FL-CRD-003-B, sha256: 4c6e817809d24268b144b124e728003a70f272a9524df8058f24c99e3f545cc6 }
+  - { id: FL-CRD-003-C, sha256: 049a9b102cbc9555670f8fa14fc7e7f629ae5859730ed2f57f4dda46368ea703 }
+  - { id: FL-CRD-003-D, sha256: 11295aabc689a14b56da1d83b6a12c056da35c50bc720c38c5ecada96c13cf1e }
+findings:
+  - flow: FL-CRD-003-D
+    step: "When"
+    kind: unreachable-given
+    artifact: security.roles
+    evidence: >-
+      El When usa «el token de un usuario autenticado sin ningún rol». security declara un solo rol
+      (card-holder) y ninguna identidad sin rol: nada en el diseño garantiza que exista un sujeto
+      autenticado que no lo tenga.
+    proposal: >-
+      Aceptarlo apoyándose en el proveedor de prueba (el realm siembra siempre un usuario sin roles, y
+      es lo que hace observable el 403), o declarar en security un rol sin permisos solo para ejercitarlo.
+    resolution: accepted
+    reason: "Aceptado: «autenticado sin el permiso» es la ausencia de un rol, no una identidad de negocio
+      que haya que declarar. El realm de prueba de los dos generadores siembra un usuario sin roles
+      (no-role) precisamente para este 403, y un rol vacío en el diseño sería ruido en el catálogo."

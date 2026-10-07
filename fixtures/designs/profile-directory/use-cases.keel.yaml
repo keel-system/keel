@@ -20,3 +20,4 @@ operations:
     output: { entity: ContactCard }
     rules:
       - "La ficha se identifica por subject = callerSubject: la primera vez se crea y después se reemplaza."
+      - "Reemplaza la ficha ENTERA: un displayName que no llega deja la ficha sin nombre (null), no conserva el anterior."

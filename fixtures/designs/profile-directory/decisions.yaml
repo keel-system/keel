@@ -5,3 +5,59 @@ decisions:
       Reemplazar la propia ficha no tiene desenlace de negocio que rechazar: la forma del cuerpo
       la valida el borde (400) y la autorización la decide access. No hay code que declarar.
     since: 1.0.0
+
+# Registro de decisiones estructurales (structural-decisions.md § 3). Tomadas al preparar la corrida del
+# incremento 8 de keel-nest (2026-10-07), por delegación del diseñador.
+structural:
+  - section: '3.2'
+    chosen: >-
+      sin idempotency en saveMyCard: es un PUT que REEMPLAZA la ficha del titular, así que repetirlo
+      deja el mismo estado y devuelve la misma ficha
+    discarded: idempotency con keySource client-key
+    reason: >-
+      Un reintento tras un timeout no puede producir un segundo efecto: la ficha se identifica por el
+      sub del token (naturalKey subject), y escribir dos veces el mismo contenido es escribirlo una. La
+      única ventana es la de la PRIMERA escritura simultánea, que la clave natural rechaza (gaps.yaml,
+      clase 4). Un registro de claves no añadiría nada que el titular pueda observar.
+    since: 1.0.0
+  - section: '3.3'
+    chosen: sin caché en getMyCard
+    discarded: cache con ttlSeconds e invalidatedBy saveMyCard
+    reason: >-
+      El titular lee su ficha justo después de guardarla y espera ver lo que guardó: una respuesta
+      cacheada le mentiría. Es una lectura por clave natural única; la caché no ahorraría nada que
+      valga su invalidación.
+    since: 1.0.0
+  - section: '3.7'
+    scope: persistence.consistency.transactionalBoundary
+    chosen: per-aggregate
+    discarded: per-operation
+    reason: >-
+      Cada operación toca una sola raíz (la ficha del titular) y no publica nada: no hay dos escrituras
+      que tengan que confirmar juntas.
+    since: 1.0.0
+  - section: '3.9'
+    scope: persistence.consistency.optimisticLocking
+    chosen: none
+    discarded: all
+    reason: >-
+      Las únicas escrituras concurrentes posibles son del MISMO titular sobre su propia ficha (dos
+      pestañas guardando a la vez), y el reemplazo es entero: gana el último, que es lo que el titular
+      vio por última vez. Un 409 le obligaría a reintentar para conseguir exactamente eso.
+    since: 1.0.0
+  - section: '3.9b'
+    scope: persistence.audit.timestamps
+    chosen: none
+    discarded: all
+    reason: >-
+      Nadie pregunta cuándo se escribió una ficha de contacto: no hay operación que lo lea ni soporte que
+      lo necesite, y la ficha la escribe siempre su propio titular.
+    since: 1.0.0
+  - section: '3.9b'
+    scope: persistence.audit.authorship
+    chosen: none
+    discarded: all
+    reason: >-
+      El autor de cada escritura es, por construcción, el titular de la ficha (subject): un createdBy
+      repetiría el mismo sub con peor nombre.
+    since: 1.0.0

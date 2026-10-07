@@ -663,9 +663,14 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   - **Regresión ajena destapada**: `harness-check` estaba en rojo desde 7d — `product-catalog` trae ya
     su `validation-scenarios.md`, que entra en el sello `specs.sha256`, y el check lo sustituía por su
     documento sonda (el sello lo cazaba bien: salida 2). Ahora retira esa línea del sello: 25/25.
-  - **Pendiente**: la corrida. `profile-directory` (la única fixture con seguridad cuyas demás capas
-    genera keel-nest) no tiene `validation-scenarios.md`: hay que escribirlos y llevarla a `--ready`
-    antes de correr `/keel-generate-nest` (y la misma en keel-spring).
+  - **Preparación de la corrida (2026-10-07)**: `profile-directory` v1.0.0 llevada a `--ready` 11/11
+    (entra en `READY_FIXTURES`): 13 escenarios en tres flujos (FL-CRD-001 alta, lectura y reemplazo
+    entero; FL-CRD-002 dos titulares que no se ven ni se pisan, y la identidad ignorada en el cuerpo;
+    FL-CRD-003 401 y 403), registro estructural, barrido de huecos, revisión, careo y `DESIGN.md`. El
+    diseño gana `conventions.nulls: include` y la regla del reemplazo entero. Las decisiones las tomó
+    quien preparaba la corrida, por delegación, y el careo **no lo hizo un agente de contexto limpio**:
+    recarearlo con `keel-flow-review` antes de la corrida le daría la independencia que el método pide.
+  - **Pendiente**: la corrida, `/keel-generate-nest` sobre `profile-directory` y la misma en keel-spring.
 
 ### Inc. 9 — Mensajería y outbox
 
