@@ -1,0 +1,188 @@
+# El análisis de huecos de este diseño (gap-analysis.md), hecho al preparar la corrida del incremento 10
+# de keel-nest (2026-10-07) por quien la preparaba, unidad a unidad, por delegación del diseñador
+# («prepara las corridas»): las decisiones van como decididas en el artefacto que las sostiene, y lo que
+# se deja a sabiendas, como riesgo aceptado con su porqué.
+reviewedBy: keel-gap-sweep
+reviewedAt: 1.0.0
+
+coverage:
+  - class: 1
+    units: [ Job ]
+    result: findings
+  - class: 2
+    units: [ enqueueJob, completeJob, dispatchJobs ]
+    result: findings
+  - class: 3
+    units: [ Job ]
+    result: clean
+  - class: 4
+    # enqueueJob: la clave natural (reference) y su carrera, que choca en la constraint. completeJob frente
+    # al rescate: el bloqueo optimista. dispatchJobs frente a otra réplica: el reclamo.
+    units: [ enqueueJob, completeJob, dispatchJobs ]
+    result: findings
+  - class: 5
+    units: [ getJob ]
+    result: clean
+  - class: 9
+    units: [ enqueueJob, getJob, completeJob, dispatchJobs ]
+    result: findings
+  - class: 12
+    units: [ service ]
+    result: findings
+  - class: 13
+    units: [ dispatchJobs ]
+    result: findings
+  - class: 14
+    units: [ Job ]
+    result: findings
+  - class: 15
+    units: [ enqueueJob, getJob, completeJob ]
+    result: findings
+  - class: 16
+    units: [ '3.2', '3.3', '3.7', '3.9', '3.9b' ]
+    result: clean
+
+findings:
+  # --- Clase 1 ---
+  - class: 1
+    unit: Job
+    what: >-
+      La confirmación del ejecutor puede llegar después de que el rescate diera el trabajo por abandonado
+      (el ejecutor tardó más que abandonAfterMinutes): running → done ya no aplica.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: abandoned es terminal y la confirmación tardía se rechaza con 409
+      JOB_NOT_RUNNING; el trabajo no se resucita. Quien lo confirmó tarde consulta el trabajo y ve su
+      desenlace. Lo afirma FL-RSC-001-B."
+  - class: 1
+    unit: Job
+    what: >-
+      ¿Cómo sabe el ejecutor que un trabajo le ha sido entregado? El diseño no tiene un canal de entrega.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: entregar es pasar a running con runningSince (regla de dispatchJobs); el
+      ejecutor conoce el id que encoló y consulta getJob. Sin capa de mensajería ni cliente saliente a
+      propósito: lo que se mide es el reloj."
+
+  # --- Clase 2 ---
+  - class: 2
+    unit: dispatchJobs
+    what: >-
+      dispatchJobs no declara errores.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: es un barrido interno, sin cliente que espere respuesta. Lo que falle en una fila no
+      revierte las demás (cada reclamo y cada desenlace confirman por su cuenta) y se vuelve a intentar en
+      la pasada siguiente."
+  - class: 2
+    unit: completeJob
+    what: >-
+      Orden de las guardas: existencia y después estado.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: JOB_NOT_FOUND (404) antes que JOB_NOT_RUNNING (409), el orden de errors;
+      FL-JOB-003-C y FL-JOB-003-B los provocan por separado."
+
+  # --- Clase 4 ---
+  - class: 4
+    unit: enqueueJob
+    what: >-
+      Dos peticiones con la misma referencia a la vez: las dos pasan la comprobación de existencia.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: la clave natural (reference) es una constraint única; la segunda choca en
+      la base y sale con el mismo 409 JOB_ALREADY_ENQUEUED que el duplicado secuencial."
+  - class: 4
+    unit: completeJob
+    what: >-
+      La confirmación y el rescate pueden escribir el mismo trabajo a la vez.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: optimisticLocking all; gana una escritura y la otra es 409
+      CONCURRENT_MODIFICATION (aceptado el code canónico en decisions.yaml)."
+  - class: 4
+    unit: dispatchJobs
+    what: >-
+      El barrido corre en todas las réplicas: dos podrían tomar el mismo trabajo.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: regla «un trabajo lo toma un solo ciclo». Los generadores la sostienen con
+      el reclamo (escritura condicional por fila); no hay escenario de caja negra con dos réplicas: lo
+      miden los checks de los generadores contra el motor."
+
+  # --- Clase 9 ---
+  - class: 9
+    unit: service
+    what: >-
+      Sin autenticación: cualquiera que alcance la API encola, consulta y confirma cualquier trabajo.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: security con protocol none y access public, a propósito. La API es interna
+      y la llaman el sistema que encola y el ejecutor; la frontera de confianza la pone su red. Vale para
+      las cuatro operaciones (dispatchJobs no tiene otra puerta que el reloj)."
+
+  # --- Clase 12 ---
+  - class: 12
+    unit: service
+    what: >-
+      Ausencia vs nulo: runningSince, completedAt y abandonedAt sin valor.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: conventions.nulls include; viajan como null. FL-JOB-001 lo afirma."
+  - class: 12
+    unit: service
+    what: >-
+      Texto: ¿la unicidad de reference distingue mayúsculas?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: la referencia se guarda tal cual y la unicidad distingue mayúsculas
+      (JOB-1 y job-1 son dos trabajos); FL-JOB-001-D lo afirma. Instantes en UTC con milisegundos
+      (convenciones de validation-scenarios.md)."
+
+  # --- Clase 13 ---
+  - class: 13
+    unit: dispatchJobs
+    what: >-
+      Solapamiento, recuperación tras una parada y cota por pasada.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: una pasada no se solapa consigo misma (el tick que llega con la anterior en
+      curso se salta); tras una parada, lo encolado sigue en queued y la siguiente pasada lo toma; la cota
+      del lote es capacidad del generador (sweep.dispatch-jobs.batch-size), no del diseño."
+  - class: 13
+    unit: dispatchJobs
+    what: >-
+      ¿Es verificable? Su umbral es abandonAfterMinutes (5 minutos), más de lo que una suite espera.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: el efecto se afirma por la API (running tras un ciclo; abandoned tras el
+      rescate) y la precondición del rescate se fabrica con el arnés (stallInFlight: la fila en running con
+      el reloj rancio), no esperando el plazo. FL-DSP-001 y FL-RSC-001."
+
+  # --- Clase 14 ---
+  - class: 14
+    unit: Job
+    what: >-
+      Los trabajos no se borran nunca: no hay retención ni archivado.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: el volumen esperado es bajo y la consulta es siempre por id. Una retención se
+      diseñaría con su propia operación programada cuando haga falta."
+
+  # --- Clase 15 ---
+  - class: 15
+    unit: completeJob
+    what: >-
+      Ruta y status de la confirmación.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: POST /api/jobs/{id}/completion con 200 y el trabajo en el cuerpo (el
+      ejecutor ve completedAt). enqueueJob es 201 con el id en el cuerpo."
+  - class: 15
+    unit: getJob
+    what: >-
+      Sin versión en la ruta (/api, no /api/v1).
+    severity: risk
+    state: accepted
+    reason: "Aceptado: los dos llamantes son internos y se despliegan con el servicio; un cambio
+      incompatible se coordinaría con ellos."

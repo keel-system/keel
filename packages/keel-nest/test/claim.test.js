@@ -21,7 +21,7 @@ import { adapterPath, portPath } from '../src/scaffold/repositories.js';
 
 const STACK = { database: 'postgresql', broker: 'rabbitmq' };
 const content = (files, suffix) => files.find((file) => file.path.endsWith(suffix))?.content;
-const SWEEPING = ['job-dispatch', 'payout-runs', 'notification-mailer'];
+const SWEEPING = ['job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer'];
 
 function spring(name) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
@@ -83,4 +83,19 @@ test('el handler del barrido dice que el reclamo ya está generado y cómo se us
 test('sin barridos con reclamo no hay configuración de barridos', () => {
   const { files } = planFixture('product-catalog', { stack: STACK });
   assert.ok(!files.some((file) => file.path === SWEEP_SETTINGS_TS || file.path.endsWith('/sweep.yaml')));
+});
+
+// Preparación de la corrida 10e: con una operación EXPUESTA que también saca la fila de `running` (el
+// ejecutor que confirma), el modelo tomaba `running` por una «espera con plazo» aunque la transición del
+// barrido declara `stalledAfter`. Resultado: el rescate sin plazo (todo lo que estuviera en running, al
+// minuto) y la cola con el predicado del índice sobre filas sin reloj (no tomaba ninguna). Nada avisaba.
+test('job-dispatch-cycles: con stalledAfter es un RESCATE aunque una operación expuesta saque la fila del estado', () => {
+  const { model } = planFixture('job-dispatch-cycles', { stack: STACK });
+  const [queue, rescue] = sweepClaims(model).map(({ claim }) => claim);
+  assert.deepEqual(queue.from, ['queued']);
+  assert.equal(queue.due, undefined, 'la cola se vacía por estado, sin predicado de plazo');
+  assert.equal(queue.stamps?.field, 'runningSince', 'y estampa el reloj que vigila el rescate');
+  assert.equal(rescue.stalled?.state, 'running');
+  assert.equal(rescue.stalled?.parameter?.name, 'abandonAfterMinutes');
+  assert.equal(rescue.due, undefined);
 });

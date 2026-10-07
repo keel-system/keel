@@ -1,0 +1,36 @@
+# Careo de flujos (flow-walkthrough.md) de job-dispatch-cycles, hecho al preparar la corrida del
+# incremento 10 de keel-nest (2026-10-07) por quien la preparaba, NO por un keel-flow-review de contexto
+# limpio: se puede repetir con él antes de la corrida. Pasada 1 completa, sobre los doce flujos: cada Given
+# fabrica su trabajo por la API, cada code está declarado en su operación y cada campo afirmado está en el
+# output (Job entero). Un hallazgo, aceptado. Las decisiones (resolution) son del diseñador, por delegación.
+reviewedAt: 1.0.0
+passes: 1
+scenariosSha256: 61dac0006483a9078e27de39f03266a352325fbdc817876128f7f7d8eb8b9ed2
+conventionsSha256: c7c84f1536f770725286378c130538fb87caddd2ddaf5ac2a437cdb2c5b6acff
+flows:
+  - { id: FL-JOB-001, sha256: 1d8403b329f7a19675172319cbc00ee1c81a3c16c18e3368be2762e097ea6d8d }
+  - { id: FL-JOB-001-B, sha256: 9ecbb7eeaf0acfa80bebb59273b4da5473ba007c0ce49e649dfaf220606d33af }
+  - { id: FL-JOB-001-C, sha256: ad7588e97a6cccae00a8fec8e32e31ced13de98f764f35257d591ada02671549 }
+  - { id: FL-JOB-001-D, sha256: 2832fa5bc8f1fa304abe24a4d1ed5a63ae7ce1b819831901713770f0df2449c1 }
+  - { id: FL-JOB-002, sha256: b03f157fc15fc33f3c18b1b2dff3183f318d874ab90ac157316f30d99d37949c }
+  - { id: FL-DSP-001, sha256: 4bb5543b1548a0b743e178a450f37ec52fceb1b6725ecc5ef2982625a3789d16 }
+  - { id: FL-JOB-003, sha256: a1f88e3ab780665001d82a16178e23e1b68a4056e47be801fd59e83098a70f7f }
+  - { id: FL-JOB-003-B, sha256: 37d180c70365ec4f92172ba680e94eb08acf23f7e1b7708bf66a00cdae9a1fd5 }
+  - { id: FL-JOB-003-C, sha256: 2d202604bfc557fedd8f90914158dfc68852d37fa4a0add9b57f885b8af9f353 }
+  - { id: FL-RSC-001, sha256: a9c518125f32f3c737e1cbe1e539f85e29d972de3428abad55bc5e8599c01354 }
+  - { id: FL-RSC-001-B, sha256: 392b9618ae0aba860ef480f9f74e1b9eb119f65701f539f474ba87d89e21f135 }
+  - { id: FL-RSC-002, sha256: d2c0c6f58855a5b4654485cbb1490ce839b95718ae5411cda189bc3187feb469 }
+findings:
+  - flow: FL-RSC-001
+    step: "Given"
+    kind: carried-state
+    artifact: use-cases.operations.dispatchJobs
+    evidence: >-
+      El Given encola el trabajo y lo deja en running con el reloj rancio. Entre las dos cosas puede pasar
+      un ciclo de dispatchJobs (cada minuto) y llevárselo de queued a running con runningSince = ahora;
+      FL-RSC-002 tiene la misma ventana con putInFlight.
+    proposal: >-
+      No hace falta cambiar nada: stallInFlight y putInFlight fijan el estado Y el reloj, así que pisan lo
+      que hubiera hecho el ciclo. Dejarlo dicho para quien escriba la prueba.
+    resolution: accepted
+    reason: "Aceptado: el helper del arnés escribe estado y reloj juntos, así que el resultado es el mismo pase o no el ciclo antes; en FL-RSC-002 el ciclo pondría el reloj a ahora, que es justo lo que el Given pide."

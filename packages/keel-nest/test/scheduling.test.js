@@ -23,7 +23,7 @@ import { BATCHED_PURGE_TS, TABLE_PURGES_TS, tablePurges } from '../src/scaffold/
 import { SCHEDULING_MODULE_TS, SCHEDULING_TS, scheduledServices, schedulerPath } from '../src/scaffold/scheduling.js';
 
 const STACK = { database: 'postgresql', broker: 'rabbitmq' };
-const SCHEDULED = ['payout-runs', 'job-dispatch', 'metering-digest'];
+const SCHEDULED = ['payout-runs', 'job-dispatch', 'job-dispatch-cycles', 'metering-digest'];
 
 function spring(name) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));

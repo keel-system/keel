@@ -1,0 +1,40 @@
+keel: "2.19"
+# Variante de `job-dispatch` hecha para medir el RELOJ de los dos generadores con el mismo diseño
+# (incremento 10 de PLAN-KEEL-NEST.md): un barrido por cron que reclama la cola, rescata lo que una
+# réplica dejó a medias y lee su plazo de un parámetro de despliegue.
+#
+# `job-dispatch` es una SILUETA para los comprobadores (lo que un trabajo hace después de `running`
+# no estaba diseñado: solo el rescate lo sacaba de ahí, y a `done`, como si hubiera terminado bien).
+# Aquí el ciclo de vida está completo: el ejecutor confirma el fin (`completeJob`) y el rescate cierra
+# en `abandoned`, distinguible de un éxito.
+#
+#   - RELOJ                 → `dispatchJobs`, cada minuto, sin transacción abarcadora (reclama)
+#   - RECLAMO DE COLA       → queued → running, con el reloj del rescate estampado en el mismo UPDATE
+#   - RESCATE               → running → abandoned pasado `abandonAfterMinutes`, arrendando la fila
+#   - PARÁMETRO DESPLIEGUE  → `abandonAfterMinutes`
+service:
+  name: job-dispatch-cycles
+  version: 1.0.0
+  description: Encola trabajos, los despacha por ciclos al ejecutor y da por abandonados los que una réplica dejó a medias.
+  domain: operations
+conventions:
+  # Un campo sin valor viaja como null (runningSince, completedAt y abandonedAt hasta que algo los
+  # escribe): el default, escrito.
+  nulls: include
+parameters:
+  # El plazo del rescate de dispatchJobs (transitions[].stalledAfter, DSL 2.18): pasado este tiempo
+  # en running sin que el ejecutor confirme, el trabajo se da por abandonado. Es una consecuencia de
+  # negocio —el llamante ve `abandoned`—, no la caducidad mecánica de un reclamo.
+  abandonAfterMinutes:
+    type: int
+    description: "Minutos que un trabajo puede llevar en running sin confirmarse antes de darlo por abandonado."
+    constraints: { min: 1 }
+    default: 5
+    testValue: 5
+    requiredInProduction: false
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  api: api.keel.yaml
+  persistence: persistence.keel.yaml
+  security: security.keel.yaml

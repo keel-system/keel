@@ -69,7 +69,7 @@ const keep = args.includes('--keep');
 const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'payout-runs', 'notification-mailer', 'catalog-extended'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended'];
 const results = [];
 
 function step(name, ok, detail = '') {

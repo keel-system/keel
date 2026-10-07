@@ -1038,6 +1038,28 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     puede reclamar salía VERDE recién generado. La reserva por párrafos solo se usa ya en archivos sin bloques que
     casen. Y en keel-nest el `save` generado también es una escritura condicional (la versión del bloqueo
     optimista): va en el `deny`, o el mismo barrido salía verde.
+- **10e — corrida, preparada (2026-10-07)**. Ni `job-dispatch` ni `payout-runs` servían: son SILUETAS para los
+  comprobadores (en `job-dispatch` un trabajo solo salía de `running` por el rescate, y a `done`, como un éxito;
+  en `payout-runs` nadie llega a `settled`). Fixture nueva, `job-dispatch-cycles` v1.0.0: la cola con despacho
+  por ciclos (`dispatchJobs` cada minuto), la confirmación del ejecutor (`completeJob`, POST
+  `/jobs/{id}/completion`) y el rescate a `abandoned` pasado `abandonAfterMinutes` (parámetro de despliegue);
+  bloqueo optimista para la carrera confirmación/rescate y API interna abierta. Llevada a **`--ready` 11/11**:
+  decisiones (registro estructural de cinco secciones y el code canónico de concurrencia aceptado), revisión
+  (6 ids), barrido de las 11 clases, 12 escenarios con matriz (el reloj se espera con techo de 90 s; la
+  precondición del rescate se fabrica con `stallInFlight`/`putInFlight`), careo de una pasada hecho por quien
+  preparaba la corrida (un hallazgo aceptado) y `DESIGN.md`. Entra en `READY_FIXTURES`, en el `COMPILAN` de
+  `main-compilable` y en `db-check`.
+  - **Defecto del MODELO NEUTRAL destapado al prepararla** (los dos generadores): con una operación EXPUESTA que
+    también saca la fila de `running` (el ejecutor que confirma), `classifyClaims` tomaba `running` por una
+    «espera con plazo» aunque la transición del barrido declara `stalledAfter`, y con dos transiciones
+    «seleccionando» les ponía a las dos el predicado del índice `[status, runningSince]`: el rescate sin plazo
+    (todo lo que estuviera en running, al minuto) y la cola exigiendo `runningSince <= ahora` sobre filas sin
+    reloj (no tomaba NINGUNA). Ni `keel validate` ni los dos `check` avisaban; lo vio leer los reclamos que
+    salían. Una transición con `stalledAfter` es ahora siempre un rescate; regresión en `claim.test.js`
+    (falsada deshaciendo el arreglo). La línea base de keel-spring solo cambia en la fixture nueva.
+  - Workspaces en `spring-live-test/corrida-job-dispatch-cycles-{nest,spring}/`, con el proyecto generado por
+    `build` sobre PostgreSQL (estampado `ready: true`; 148 y 177 archivos). El gate `check-idempotency.sh` de los
+    dos nace ROJO en `sweepClaim`, como debe.
 
 ### Inc. 11 — Clientes HTTP salientes y dependencias
 

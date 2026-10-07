@@ -1,0 +1,62 @@
+# Decisiones de job-dispatch-cycles, tomadas al preparar la corrida del incremento 10 de keel-nest
+# (2026-10-07) por quien la preparaba, por delegación del diseñador («prepara las corridas»).
+# Ver docs/design-obligations.md — el «aceptado» del análisis de huecos, por escrito.
+decisions:
+  - id: OBL-CONCURRENCY-CODE
+    scope: persistence
+    reason: >
+      La confirmación del ejecutor y el rescate pueden escribir a la vez el mismo trabajo: la que pierde
+      sale con el canónico 409 CONCURRENT_MODIFICATION. Ninguna operación necesita un code propio para
+      ese choque; el ejecutor que lo recibe consulta el trabajo y ve su desenlace.
+    since: 1.0.0
+
+structural:
+  - section: '3.2'
+    chosen: sin idempotency declarada; la repetición de enqueueJob la frena la clave natural (reference)
+    discarded: idempotency client-key en enqueueJob; idempotency en completeJob
+    reason: >-
+      enqueueJob lleva una referencia única que pone el llamante: repetirla es un 409 JOB_ALREADY_ENQUEUED,
+      que es el contrato que el llamante espera (sabe qué encoló). completeJob es una transición running →
+      done: repetirla la rechaza el agregado (JOB_NOT_RUNNING), sin efecto doble.
+    since: 1.0.0
+  - section: '3.3'
+    chosen: sin caché en getJob
+    discarded: cache con ttlSeconds e invalidación por las operaciones que mueven el estado
+    reason: >-
+      El ejecutor consulta getJob precisamente para ver el cambio que hace el despachador (queued →
+      running): una respuesta cacheada retrasaría la entrega del trabajo. Es una lectura por id.
+    since: 1.0.0
+  - section: '3.7'
+    scope: persistence.consistency.transactionalBoundary
+    chosen: per-operation
+    discarded: per-aggregate
+    reason: >-
+      Cada operación toca un solo trabajo. El barrido no corre en una transacción abarcadora (reclama:
+      cada reclamo y cada desenlace confirman por su cuenta), y eso lo decide el generador por la forma
+      del barrido, no esta frontera.
+    since: 1.0.0
+  - section: '3.9'
+    scope: persistence.consistency.optimisticLocking
+    chosen: all
+    discarded: none
+    reason: >-
+      El rescate y la confirmación pueden coincidir sobre el mismo trabajo en running: sin versión, los dos
+      leen running, los dos pasan su transición y el último en escribir decide si el trabajo acaba done o
+      abandoned. Con versión gana uno y el otro es un conflicto.
+    since: 1.0.0
+  - section: '3.9b'
+    scope: persistence.audit.timestamps
+    chosen: declared
+    discarded: all o none
+    reason: >-
+      createdAt es contrato (el llamante lo lee en la respuesta), y los instantes de cada desenlace son
+      campos propios del dominio (runningSince, completedAt, abandonedAt). updatedAt no aporta nada.
+    since: 1.0.0
+  - section: '3.9b'
+    scope: persistence.audit.authorship
+    chosen: none
+    discarded: all
+    reason: >-
+      No hay usuarios: la API es interna y abierta, y el autor de cada cambio lo dice la propia
+      transición (el llamante encola, el ejecutor confirma, el despachador entrega y abandona).
+    since: 1.0.0

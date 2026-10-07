@@ -1,0 +1,45 @@
+# Revisión semántica (review-checklist.md), hecha al preparar la corrida del incremento 10 de keel-nest
+# (2026-10-07) por quien la preparaba, siguiendo la checklist de /keel-validate id a id, por delegación
+# del diseñador. Los veredictos que no son `ok` llevan su porqué.
+reviewedBy: keel-design-review
+reviewedAt: 1.0.0
+findings:
+  - id: REV-DOMAIN-VAGUE-INVARIANT
+    scope: domain.entities.Job
+    verdict: ok
+    note: >-
+      Las dos invariantes son verificables sobre la fila: running implica runningSince no nulo; done implica
+      completedAt, y abandoned, abandonedAt.
+  - id: REV-DOMAIN-INVARIANT-IS-TRANSITION
+    scope: domain.entities.Job
+    verdict: ok
+    note: >-
+      Ninguna invariante describe un cambio de estado: dicen qué campo acompaña a cada estado. Los cambios
+      están en el lifecycle (queued → running → done | abandoned).
+  - id: REV-DOMAIN-PROMISED-STATE
+    scope: domain.entities.Job
+    verdict: ok
+    note: >-
+      Lo que la prosa promete se representa: «entregar al ejecutor» es running con runningSince, «el
+      ejecutor confirma» es done con completedAt y «se da por abandonado» es abandoned con abandonedAt,
+      distinguible de un éxito.
+  - id: REV-USECASES-INTERNAL-REPEAT
+    scope: use-cases
+    verdict: ok
+    note: >-
+      completeJob repetida la rechaza su transición (running → done ya no aplica: JOB_NOT_RUNNING), sin
+      efecto doble. enqueueJob repetida choca con la clave natural (JOB_ALREADY_ENQUEUED). dispatchJobs
+      reclama sus filas: una pasada repetida no vuelve a tomar lo que ya tomó.
+  - id: REV-USECASES-GUARD-ORDER
+    scope: use-cases.operations.completeJob
+    verdict: ok
+    note: >-
+      Primero la existencia (JOB_NOT_FOUND) y después el estado (JOB_NOT_RUNNING): el estado solo se puede
+      mirar sobre un trabajo que existe. enqueueJob tiene una sola guarda.
+  - id: REV-PERSIST-MISSING-INDEX
+    scope: persistence.entities.Job
+    verdict: ok
+    note: >-
+      getJob y completeJob buscan por id (clave primaria); enqueueJob por reference (naturalKey, índice
+      único). El barrido filtra por status (el lote de la cola) y por status + runningSince (el del
+      rescate): los dos índices están declarados.

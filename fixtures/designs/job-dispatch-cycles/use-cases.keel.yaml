@@ -1,0 +1,73 @@
+operations:
+
+  enqueueJob:
+    description: Encola un trabajo para que lo tome el siguiente ciclo del despachador.
+    kind: command
+    input:
+      fields:
+        reference: { type: string, required: true, constraints: { maxLength: 64 } }
+        priority:  { type: JobPriority, required: true }
+        payload:   { type: text }
+    output: { entity: Job }
+    preconditions:
+      - No hay ya un trabajo con esa misma referencia.
+    rules:
+      - "El trabajo nace en queued, sin runningSince, completedAt ni abandonedAt: nadie lo ha tomado todavía."
+    errors:
+      - { code: JOB_ALREADY_ENQUEUED, when: Ya existe un trabajo con esa referencia., http: 409 }
+
+  getJob:
+    description: Consulta el estado de un trabajo por su identificador.
+    kind: query
+    input:
+      fields:
+        id: { type: uuid, required: true }
+    output: { entity: Job }
+    errors:
+      - { code: JOB_NOT_FOUND, when: No existe un trabajo con ese identificador., http: 404 }
+
+  completeJob:
+    description: El ejecutor confirma que terminó un trabajo que el despachador le entregó.
+    kind: command
+    input:
+      fields:
+        id: { type: uuid, required: true }
+    output: { entity: Job }
+    transitions:
+      - entity: Job
+        from: [running]
+        to: done
+    rules:
+      - "Se estampa completedAt con el instante de la confirmación."
+      - "Solo se confirma un trabajo en running: uno encolado no se ha entregado todavía, y uno terminado o abandonado ya tiene su desenlace."
+    errors:
+      - { code: JOB_NOT_FOUND, when: No existe un trabajo con ese identificador., http: 404 }
+      - { code: JOB_NOT_RUNNING, when: "El trabajo no está en running: encolado, terminado o abandonado.", http: 409 }
+
+  # El barrido. Declara las DOS transiciones, y de ahí salen los dos reclamos:
+  #   · queued → running    · `queued` es una COLA: se toma el lote, y como su destino es el estado que
+  #                           el rescate vigila, el reclamo estampa runningSince en el MISMO UPDATE.
+  #   · running → abandoned · `running` está EN VUELO: el reclamo lleva una cota temporal sobre
+  #                           runningSince, el plazo del parámetro abandonAfterMinutes. Es el RESCATE.
+  dispatchJobs:
+    description: Entrega al ejecutor los trabajos encolados y da por abandonados los que llevan demasiado en running.
+    kind: command
+    internal: true
+    input: "void"
+    output: "void"
+    schedule:
+      cron: "* * * * *"
+      description: Cada minuto, sobre el lote que quepa en una pasada.
+    transitions:
+      - entity: Job
+        from: [queued]
+        to: running
+      - entity: Job
+        from: [running]
+        to: abandoned
+        stalledAfter: { parameter: abandonAfterMinutes, unit: minutes }
+    rules:
+      - Un trabajo lo toma un solo ciclo, aunque el despachador corra en varias réplicas.
+      - "Despachar un trabajo es entregárselo al ejecutor: pasa a running con runningSince, que es lo que el ejecutor consulta para recogerlo."
+      - Un trabajo que lleva en running más de abandonAfterMinutes sin confirmarse se da por abandonado y se estampa abandonedAt.
+      - "Un trabajo recién tomado no se rescata: el ejecutor puede estar trabajando en él."

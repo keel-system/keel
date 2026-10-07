@@ -1174,6 +1174,8 @@ function classifyClaims(services, entities, layers, warnings, serviceMeta = null
       const selecting = transitions.filter((transition) => {
         const lifecycle = byName.get(transition.entity)?.lifecycle;
         if (!lifecycle) return false;
+        // Un rescate declarado (`stalledAfter`) tampoco selecciona: ver `waits` abajo.
+        if (transition.stalledAfter) return false;
         const reachedHere = new Set((lifecycle.transitions ?? []).flatMap((t) => t.to ?? []));
         return (transition.from ?? []).some(
           (state) => !reachedHere.has(screamingSnake(state)) || exposedExits.has(`${transition.entity}::${state}`)
@@ -1198,9 +1200,20 @@ function classifyClaims(services, entities, layers, warnings, serviceMeta = null
         // alguien de fuera, no una réplica nuestra a medias. Pedirle un reloj de rescate la
         // confundía con trabajo abandonado (WaitlistEntry.offered, room-booking R8): lo que
         // necesita es el predicado de su plazo, igual que una cola.
-        const waits = (transition.from ?? []).filter(
-          (state) => reached.has(screamingSnake(state)) && exposedExits.has(`${transition.entity}::${state}`)
-        );
+        //
+        // Y salvo que el diseño haya DICHO que es un rescate: una transición con `stalledAfter`
+        // (DSL 2.18) declara que la fila se da por abandonada pasado un plazo medido desde que
+        // entró en el estado. Que además una operación expuesta la saque de ahí —el ejecutor que
+        // confirma— no la convierte en una espera: es justo el trabajo que alguien de fuera no
+        // terminó. Tratarla como espera la dejaba con el predicado del índice [estado, reloj]
+        // —«el reloj ya pasó», o sea siempre— y sin plazo: el rescate se lo llevaba todo al minuto
+        // y, con dos transiciones «seleccionando», la cola heredaba el mismo predicado sobre filas
+        // sin reloj y no tomaba ninguna (job-dispatch-cycles, preparación de la corrida 10e).
+        const waits = transition.stalledAfter
+          ? []
+          : (transition.from ?? []).filter(
+              (state) => reached.has(screamingSnake(state)) && exposedExits.has(`${transition.entity}::${state}`)
+            );
         const queues = (transition.from ?? []).filter((state) => !reached.has(screamingSnake(state)));
         const inFlight = (transition.from ?? []).filter(
           (state) => reached.has(screamingSnake(state)) && !waits.includes(state)

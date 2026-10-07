@@ -1,0 +1,60 @@
+# El lifecycle decide qué reclamo genera cada generador: `queued` es una COLA (ninguna transición llega
+# a él) y `running` está EN VUELO (se llega desde queued), con su reloj `runningSince`.
+
+types:
+  JobPriority:
+    description: Urgencia con la que se atiende el trabajo encolado.
+    values: [normal, high]
+
+  JobStatus:
+    description: En qué punto del ciclo de despacho está el trabajo.
+    values: [queued, running, done, abandoned]
+
+entities:
+  Job:
+    description: Trabajo encolado que un ciclo del despachador entrega al ejecutor, y que termina cuando este lo confirma o cuando se da por abandonado.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      reference:
+        type: string
+        required: true
+        constraints: { maxLength: 64 }
+        description: Referencia con la que el llamante identifica el trabajo; única.
+      priority:
+        type: JobPriority
+        required: true
+        default: normal
+      payload:
+        type: text
+        description: Cuerpo opaco que el ejecutor recibe tal cual.
+      status:
+        type: JobStatus
+        required: true
+        default: queued
+      runningSince:
+        type: timestamp
+        description: >-
+          Cuándo tomó este trabajo el ciclo que lo despachó. Lo estampa el propio reclamo al pasar a
+          running, en el mismo UPDATE, y es el reloj sobre el que mide el rescate.
+      completedAt:
+        type: timestamp
+        description: Cuándo confirmó el ejecutor que el trabajo terminó.
+      abandonedAt:
+        type: timestamp
+        description: Cuándo se dio el trabajo por abandonado.
+      createdAt:
+        type: timestamp
+        generated: true
+    lifecycle:
+      field: status
+      transitions:
+        queued: [running]
+        running: [done, abandoned]
+        done: []
+        abandoned: []
+    invariants:
+      - Un trabajo en running tiene siempre runningSince estampado.
+      - Un trabajo en done tiene completedAt, y uno en abandoned tiene abandonedAt.

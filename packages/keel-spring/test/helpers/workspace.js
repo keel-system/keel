@@ -23,7 +23,7 @@ export const FIXTURE_DOCS_DIR = path.join(repoRoot, 'fixtures', 'design-docs');
  * verde en `keel validate --ready` (test/mvp-ready.test.js). Las demás son sujetos parciales a propósito, y `build` solo las genera
  * con `acceptUnready` (fase 2 de la puerta).
  */
-export const READY_FIXTURES = ['notification-mailer', 'notification-mailer-mongo', 'payment-checkout', 'profile-directory', 'stock-reservation-events'];
+export const READY_FIXTURES = ['notification-mailer', 'notification-mailer-mongo', 'payment-checkout', 'profile-directory', 'stock-reservation-events', 'job-dispatch-cycles'];
 
 /** Copia la fixture `name` (y su DESIGN.md si lo tiene) al workspace `root`. Devuelve `specs/<n>`. */
 export function mountDesign(root, name) {

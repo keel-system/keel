@@ -1,0 +1,14 @@
+style: rest
+basePath: /api
+endpoints:
+  enqueueJob:
+    method: POST
+    path: /jobs
+    successStatus: 201
+  getJob:
+    method: GET
+    path: /jobs/{id}
+  completeJob:
+    method: POST
+    path: /jobs/{id}/completion
+    successStatus: 200

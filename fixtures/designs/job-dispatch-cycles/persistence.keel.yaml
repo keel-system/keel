@@ -1,0 +1,25 @@
+default:
+  model: relational
+
+entities:
+  Job:
+    persisted: true
+    naturalKey: [reference]
+    indexes:
+      # El predicado de las dos mitades del barrido: el lote de la cola y, con el reloj, el del rescate.
+      - [status]
+      - [status, runningSince]
+
+audit:
+  timestamps: declared
+  # Sin autoría: no hay usuarios (la API es interna y abierta), y el autor de cada cambio es el
+  # llamante que encola, el ejecutor que confirma o el propio despachador.
+  authorship: none
+
+consistency:
+  transactionalBoundary: per-operation
+  # `all`: la confirmación del ejecutor y el rescate pueden coincidir sobre el mismo trabajo en running.
+  # El rescate arrienda la fila (renueva runningSince) y el handler la cierra; si a la vez llega la
+  # confirmación, la versión hace que gane una sola y la otra salga como conflicto, en vez de que el
+  # trabajo acabe done o abandoned según quién escribiera el último.
+  optimisticLocking: all

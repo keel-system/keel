@@ -33,6 +33,8 @@ const COMPILAN = [
   'asset-vault',
   'inspection-reports',
   'job-dispatch',
+  // La variante del reloj (incremento 10e de keel-nest): el barrido con reclamo, rescate y parámetro.
+  'job-dispatch-cycles',
   'job-dispatch-mongo',
   'metering-digest',
   'notification-mailer',
