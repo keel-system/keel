@@ -28,7 +28,7 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Lo que tr
 | `response.json()` | el cuerpo como objeto; **los números pasan por `number`** |
 | `response.jsonExact()` | el cuerpo con **cada número como su texto exacto** (`2.50` → `'2.50'`): para afirmar la escala de un decimal o un `long` |
 | `ROUTE_BASE` | el prefijo de todas las rutas (basePath + versión) |
-| `UUID_SHAPE`, `INSTANT_SHAPE` | matchers de forma para lo generado por el servidor |
+| `UUID_SHAPE`, `INSTANT_SHAPE` | matchers de forma para lo generado por el servidor. Son comparadores de `expect`, **no RegExp**: van dentro de `toEqual`/`toStrictEqual` (`{ id: UUID_SHAPE }`, o `expect(body.id).toEqual(UUID_SHAPE)`), nunca en `toMatch`, que los compara como texto y falla con un valor correcto |
 | `db(sql)` | una sentencia contra la base de prueba (solo con persistencia): para lo que no se ve por HTTP |
 | `resetState()` | el reset, a mano (useFlow ya lo hace al empezar cada flujo) |
 | `eventually(cond, ms, msg)` | espera a que algo asíncrono se cumpla |

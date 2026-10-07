@@ -1060,6 +1060,20 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   - Workspaces en `spring-live-test/corrida-job-dispatch-cycles-{nest,spring}/`, con el proyecto generado por
     `build` sobre PostgreSQL (estampado `ready: true`; 148 y 177 archivos). El gate `check-idempotency.sh` de los
     dos nace ROJO en `sweepClaim`, como debe.
+- **10e — corridas ejecutadas y registradas (2026-10-07)** en
+  `docs/corridas/2026-10-07-job-dispatch-cycles-{nest,spring}.md`. Las dos **12/12**: keel-nest con una ronda de
+  arbitraje (dos rojos de la prueba, `toMatch` con un comparador de forma) y huella **6**; keel-spring sin arbitraje y
+  huella **5**. En las dos, nada del reloj, del reclamo, de la persistencia ni del arnés tocado: los handlers usan los
+  dos reclamos generados y `check-idempotency.sh` sale verde sobre el proyecto terminado. Contrastando los informes
+  con los proyectos: (1) **los dos servidores** traducían la carrera de la clave natural a un code que el diseño no
+  declara (`JOB_REFERENCE_ALREADY_EXISTS`) — hueco de la fixture, que no nombraba `naturalKeyError`, y agujero de la
+  puerta; el informe de keel-spring no lo vio; (2) los escenarios usaban `/api/jobs` cuando el DSL sirve `/api/v1`
+  (agujero de la puerta: nada contrasta las rutas de los escenarios); (3) la regex de `inFlightWithoutClock` (10c)
+  perdía su barra dentro de la plantilla — arreglada con su test falsado; (4) `integration-tests.md` advierte ya que
+  `UUID_SHAPE` no es una RegExp. La fixture pasa a **v1.0.1** (`naturalKeyError: JOB_ALREADY_ENQUEUED`, rutas
+  servidas, careo en dos pasadas), de nuevo 11/11. Quedan como candidatos a id `natural-key-error-unnamed` (un `CHK-*`)
+  y `route-version-implicit` (un `CHK-SCEN-*`). **Con esto el incremento 10 queda cerrado en su alcance** (la
+  reconciliación, la compensación y `lastKnown`, en el 11).
 
 ### Inc. 11 — Clientes HTTP salientes y dependencias
 

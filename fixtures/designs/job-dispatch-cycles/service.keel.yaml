@@ -14,7 +14,7 @@ keel: "2.19"
 #   - PARÁMETRO DESPLIEGUE  → `abandonAfterMinutes`
 service:
   name: job-dispatch-cycles
-  version: 1.0.0
+  version: 1.0.1
   description: Encola trabajos, los despacha por ciclos al ejecutor y da por abandonados los que una réplica dejó a medias.
   domain: operations
 conventions:

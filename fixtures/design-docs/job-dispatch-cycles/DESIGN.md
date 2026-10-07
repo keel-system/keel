@@ -1,6 +1,6 @@
 # job-dispatch-cycles — Documento de diseño
 
-> specs/job-dispatch-cycles v1.0.0. Diseño cerrado al preparar la corrida del incremento 10 de keel-nest
+> specs/job-dispatch-cycles v1.0.1. Diseño cerrado al preparar la corrida del incremento 10 de keel-nest
 > (2026-10-07); las decisiones las tomó quien la preparaba, por delegación del diseñador.
 
 ## 1. Propósito y alcance
@@ -36,9 +36,9 @@ desenlaces son terminales.
 
 | Operación | Puerta | Éxito | Errores |
 |---|---|---|---|
-| `enqueueJob` | `POST /api/jobs` | `201` con el trabajo en `queued` | `409 JOB_ALREADY_ENQUEUED`, `400 VALIDATION_ERROR` |
-| `getJob` | `GET /api/jobs/{id}` | `200` con el trabajo | `404 JOB_NOT_FOUND` |
-| `completeJob` | `POST /api/jobs/{id}/completion` | `200`, trabajo en `done` | `404 JOB_NOT_FOUND`, `409 JOB_NOT_RUNNING` |
+| `enqueueJob` | `POST /api/v1/jobs` | `201` con el trabajo en `queued` | `409 JOB_ALREADY_ENQUEUED`, `400 VALIDATION_ERROR` |
+| `getJob` | `GET /api/v1/jobs/{id}` | `200` con el trabajo | `404 JOB_NOT_FOUND` |
+| `completeJob` | `POST /api/v1/jobs/{id}/completion` | `200`, trabajo en `done` | `404 JOB_NOT_FOUND`, `409 JOB_NOT_RUNNING` |
 | `dispatchJobs` | reloj, cada minuto | entrega lo encolado y abandona lo atascado | — |
 
 ## 5. Fronteras e integraciones

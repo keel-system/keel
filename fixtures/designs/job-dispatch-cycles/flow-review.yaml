@@ -1,25 +1,26 @@
 # Careo de flujos (flow-walkthrough.md) de job-dispatch-cycles, hecho al preparar la corrida del
 # incremento 10 de keel-nest (2026-10-07) por quien la preparaba, NO por un keel-flow-review de contexto
-# limpio: se puede repetir con él antes de la corrida. Pasada 1 completa, sobre los doce flujos: cada Given
-# fabrica su trabajo por la API, cada code está declarado en su operación y cada campo afirmado está en el
-# output (Job entero). Un hallazgo, aceptado. Las decisiones (resolution) son del diseñador, por delegación.
-reviewedAt: 1.0.0
-passes: 1
-scenariosSha256: 61dac0006483a9078e27de39f03266a352325fbdc817876128f7f7d8eb8b9ed2
+# limpio: se puede repetir con él. Pasada 1 (v1.0.0) completa sobre los doce flujos, con un hallazgo aceptado.
+# Pasada 2 (v1.0.1), tras la corrida: los escenarios nombraban rutas sin la versión que el generador añade al
+# basePath (docs/dsl/api.md) y la pasada 1 no lo vio; corregido en los doce flujos. Las decisiones
+# (resolution) son del diseñador, por delegación.
+reviewedAt: 1.0.1
+passes: 2
+scenariosSha256: a27c9323fbe33a3ee97c4ffbc531751ccce56099d652dfa33eee3ac4ac73749d
 conventionsSha256: c7c84f1536f770725286378c130538fb87caddd2ddaf5ac2a437cdb2c5b6acff
 flows:
-  - { id: FL-JOB-001, sha256: 1d8403b329f7a19675172319cbc00ee1c81a3c16c18e3368be2762e097ea6d8d }
-  - { id: FL-JOB-001-B, sha256: 9ecbb7eeaf0acfa80bebb59273b4da5473ba007c0ce49e649dfaf220606d33af }
-  - { id: FL-JOB-001-C, sha256: ad7588e97a6cccae00a8fec8e32e31ced13de98f764f35257d591ada02671549 }
-  - { id: FL-JOB-001-D, sha256: 2832fa5bc8f1fa304abe24a4d1ed5a63ae7ce1b819831901713770f0df2449c1 }
-  - { id: FL-JOB-002, sha256: b03f157fc15fc33f3c18b1b2dff3183f318d874ab90ac157316f30d99d37949c }
-  - { id: FL-DSP-001, sha256: 4bb5543b1548a0b743e178a450f37ec52fceb1b6725ecc5ef2982625a3789d16 }
-  - { id: FL-JOB-003, sha256: a1f88e3ab780665001d82a16178e23e1b68a4056e47be801fd59e83098a70f7f }
-  - { id: FL-JOB-003-B, sha256: 37d180c70365ec4f92172ba680e94eb08acf23f7e1b7708bf66a00cdae9a1fd5 }
-  - { id: FL-JOB-003-C, sha256: 2d202604bfc557fedd8f90914158dfc68852d37fa4a0add9b57f885b8af9f353 }
-  - { id: FL-RSC-001, sha256: a9c518125f32f3c737e1cbe1e539f85e29d972de3428abad55bc5e8599c01354 }
-  - { id: FL-RSC-001-B, sha256: 392b9618ae0aba860ef480f9f74e1b9eb119f65701f539f474ba87d89e21f135 }
-  - { id: FL-RSC-002, sha256: d2c0c6f58855a5b4654485cbb1490ce839b95718ae5411cda189bc3187feb469 }
+  - { id: FL-JOB-001, sha256: 1f724bd757dcc28b7323a06af569c84589bab49bc6ef8518044ba750323c3a7b }
+  - { id: FL-JOB-001-B, sha256: 9c960c14aa277aa9c87da2e1e2234aec4905ab8773e7c2e3142ae233d7bd8b0b }
+  - { id: FL-JOB-001-C, sha256: a03650616e364737dbd2bb39d19e29a1caba8c9582f3c652c29fdc9798725dba }
+  - { id: FL-JOB-001-D, sha256: a7ac1d707ccbe41a8436a00c75cee8770aa9a69c154dc9f15bf0980bf4f9a97b }
+  - { id: FL-JOB-002, sha256: 29ec9f8298d26caa534ceb4e250a6d9b6b70debb0fa6d91681acca882edd670d }
+  - { id: FL-DSP-001, sha256: 494d0920d3341b34fd3f623c9895c06550ad5587415f1b1a737c40b9eb039507 }
+  - { id: FL-JOB-003, sha256: 17c7734800a6a4751c980d8cf4c7cb317696f405281532c9f7c3a47dd5184964 }
+  - { id: FL-JOB-003-B, sha256: 7ae52f7aec89b3a72844368f21a755c49040cd9c71106b9565c8a6f8bf254ca1 }
+  - { id: FL-JOB-003-C, sha256: 4e682b1df980b620a3790110adaf1be78d0a68bd40612a51fe015c42ea230818 }
+  - { id: FL-RSC-001, sha256: c2a4d9cec3f2bbb9da40f15934634632d4830393a486effc95b80f65f930422b }
+  - { id: FL-RSC-001-B, sha256: 22b18af50a24f5300f9b4d4808339510690a5d63d85d4d0f375056f7f6f6ba40 }
+  - { id: FL-RSC-002, sha256: fb01d6ee968aab11a142d4dea0a15d1893b5a3514a9e8d4ecd3a42b8cf59b621 }
 findings:
   - flow: FL-RSC-001
     step: "Given"
@@ -34,3 +35,15 @@ findings:
       que hubiera hecho el ciclo. Dejarlo dicho para quien escriba la prueba.
     resolution: accepted
     reason: "Aceptado: el helper del arnés escribe estado y reloj juntos, así que el resultado es el mismo pase o no el ciclo antes; en FL-RSC-002 el ciclo pondría el reloj a ahora, que es justo lo que el Given pide."
+  - flow: FL-JOB-001
+    step: "When"
+    kind: other
+    artifact: api.basePath
+    evidence: >-
+      Pasada 2. Los escenarios llamaban a /api/jobs, y api.keel.yaml declara basePath /api sin versión: según
+      docs/dsl/api.md el generador añade /v1, así que la ruta servida es /api/v1/jobs. Los dos agentes de
+      la corrida usaron la servida; el documento describía un contrato que no existe.
+    proposal: >-
+      Escribir en los escenarios la ruta servida (/api/v1/jobs) en los doce flujos.
+    resolution: scenario
+    reason: "Corregido en el escenario: las veinte rutas del documento llevan /api/v1."

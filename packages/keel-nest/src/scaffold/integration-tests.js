@@ -851,7 +851,7 @@ export function putInFlight(operation: string, id: string): void {
  */
 export function inFlightWithoutClock(operation: string): number {
   const output = db(rescueOf(operation).missing).trim();
-  const count = Number(output.split(/\s+/).pop());
+  const count = Number(output.split(/\\s+/).pop());
   if (!Number.isInteger(count)) throw new Error(\`La cuenta de filas sin reloj no es un número: '\${output}'\`);
   return count;
 }

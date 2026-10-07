@@ -99,3 +99,12 @@ test('job-dispatch-cycles: con stalledAfter es un RESCATE aunque una operación 
   assert.equal(rescue.stalled?.parameter?.name, 'abandonAfterMinutes');
   assert.equal(rescue.due, undefined);
 });
+
+// Corrida job-dispatch-cycles (2026-10-07): dentro de la plantilla, la barra de `\s` se perdía y el arnés
+// emitía `split(/s+/)`, que parte por la letra «s». Pasaba porque psql devuelve el número solo.
+test('el arnés del rescate parte la salida del motor por espacios, no por la letra s', async () => {
+  const { files } = planFixture('job-dispatch-cycles', { stack: STACK });
+  const flow = content(files, 'test/integration/support/flow.ts');
+  assert.ok(flow.includes(String.raw`split(/\s+/).pop()`), 'la expresión con su barra');
+  assert.ok(!flow.includes('split(/s+/)'));
+});

@@ -5,6 +5,10 @@ entities:
   Job:
     persisted: true
     naturalKey: [reference]
+    # La colisión de la clave natural ES el duplicado de enqueueJob: sin nombrarlo, los generadores ponen el
+    # code canónico de la familia y la carrera de dos encolados salía con un code que no es el del diseño
+    # (corrida 10e, natural-key-error-unnamed).
+    naturalKeyError: JOB_ALREADY_ENQUEUED
     indexes:
       # El predicado de las dos mitades del barrido: el lote de la cola y, con el reloj, el del rescate.
       - [status]

@@ -176,12 +176,12 @@ findings:
       Ruta y status de la confirmación.
     severity: gap
     state: decided
-    reason: "Decidido en v1.0.0: POST /api/jobs/{id}/completion con 200 y el trabajo en el cuerpo (el
+    reason: "Decidido en v1.0.0: POST /api/v1/jobs/{id}/completion con 200 y el trabajo en el cuerpo (el
       ejecutor ve completedAt). enqueueJob es 201 con el id en el cuerpo."
   - class: 15
     unit: getJob
     what: >-
-      Sin versión en la ruta (/api, no /api/v1).
+      La versión de la ruta: basePath /api sin versión, así que el generador sirve /api/v1 (docs/dsl/api.md).
     severity: risk
     state: accepted
     reason: "Aceptado: los dos llamantes son internos y se despliegan con el servicio; un cambio
