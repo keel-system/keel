@@ -668,8 +668,10 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     entero; FL-CRD-002 dos titulares que no se ven ni se pisan, y la identidad ignorada en el cuerpo;
     FL-CRD-003 401 y 403), registro estructural, barrido de huecos, revisión, careo y `DESIGN.md`. El
     diseño gana `conventions.nulls: include` y la regla del reemplazo entero. Las decisiones las tomó
-    quien preparaba la corrida, por delegación, y el careo **no lo hizo un agente de contexto limpio**:
-    recarearlo con `keel-flow-review` antes de la corrida le daría la independencia que el método pide.
+    quien preparaba la corrida, por delegación. El careo lo rehizo después `keel-flow-review` con contexto
+    limpio: la pasada 2 encontró que `getMyCard` no declaraba cómo encuentra la ficha (solo lo decía una
+    regla de `saveMyCard`; cerrado en el diseño) y el 403 de un usuario sin roles (aceptado), y la
+    pasada 3, completa, salió limpia.
   - **Pendiente**: la corrida, `/keel-generate-nest` sobre `profile-directory` y la misma en keel-spring.
 
 ### Inc. 9 — Mensajería y outbox
