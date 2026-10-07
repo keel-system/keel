@@ -24,6 +24,7 @@ import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
 import { usesRelational } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { usesCallerScope } from './security.js';
+import { usesMessaging } from './messaging.js';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
@@ -113,8 +114,12 @@ function useCasesTest(model) {
   // El alcance por recurso (global) también es dependencia de los handlers que lo declaran.
   const scope = usesCallerScope(model);
   const scopeImport = scope ? "\nimport { SecurityModule } from '../src/infrastructure/security/security-module.js';" : '';
+  // Con mensajería, los adaptadores de repositorio entregan al puente de eventos: también es dependencia.
+  const messaging = persistence && usesMessaging(model);
+  const messagingImport = messaging ? "\nimport { MessagingModule } from '../src/infrastructure/messaging/messaging-module.js';" : '';
   const modules = [
     persistence ? "PersistenceModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
+    messaging ? "MessagingModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     scope ? 'SecurityModule' : null,
     'UseCaseModule'
   ]
@@ -127,7 +132,7 @@ import { UseCaseModule } from '../src/infrastructure/usecase/use-case-module.js'
 import { UseCaseMediator } from '../src/infrastructure/usecase/use-case-mediator.js';
 import { UseCaseContainer } from '../src/infrastructure/usecase/use-case-container.js';
 import { Handles } from '../src/application/annotations/application-component.js';
-import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${scopeImport}
+import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}
 ${imports}
 
 const OPERATIONS = [

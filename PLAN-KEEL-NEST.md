@@ -754,6 +754,51 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     `scaffold.test.js` que fijaba lo contrario está invertido. La línea base cambia SOLO en los
     `messaging.yaml` relacionales y en el README (que lista `OUTBOX_RELAY_CLAIM_TIMEOUT_MS`): ningún
     archivo Java, ninguna fixture documental.
+- **9b — hecho (2026-10-07)**: keel-nest emite la mensajería sobre RabbitMQ y persistencia relacional
+  (la frontera acepta la capa; rechaza `kafka` y `snssqs` en el stack, la mensajería sin persistencia y la
+  identidad del emisor con `resolvedBy`).
+  - **Contratos** (`src/scaffold/messaging.js`): `EventEnvelope` (con `parse` para la entrante, que deja
+    `data` sin leer hasta filtrar por tipo), un `<Evento>IntegrationEvent` por evento con la metadata NO
+    enumerable (no viaja en `data`), el puente `<Servicio>DomainEventBridge` —los adaptadores de repositorio
+    ya le entregan `pullDomainEvents()` dentro de la transacción; con outbox escribe la fila, con
+    best-effort publica tras el commit por el puerto `<Evento>Publisher` (stub que avisa)—, la clase del
+    mensaje de cada suscripción (`fromWire` con los nombres de la fuente y `requireContract()` con la
+    presencia y las cotas, con las frases de keel-spring) y la envoltura propia de una fuente `wrapped`;
+    `MessageContractViolation` es el `IllegalArgumentException` de keel-spring (no se reintenta). Los
+    mensajes reutilizan el lector del cable y las reglas de la API (`request-reading.ts`), que ahora se
+    emiten también sin API; la correlación, igual.
+  - **Almacenes** (`src/scaffold/messaging-stores.js`, sobre los datos del 9a): las entidades TypeORM de
+    `outbox_event` y `processed_event`, el relay en tres pasos (`OutboxRelayStore`: reclamo con SKIP
+    LOCKED y lease, en READ COMMITTED en MySQL; publicación fuera de transacción; desenlace con backoff y
+    rendición) con un bucle de retardo fijo propio, el respaldo del dispatcher que no deja arrancar fuera
+    de local/test, y `IdempotencyGuard` (`alreadyProcessed`/`record`/`tryRecord`, en transacción propia).
+    `TransactionContext` gana `afterCommit`, `inNewTransaction` (el REQUIRES_NEW) y la opción `isolation`.
+  - **RabbitMQ** (`src/scaffold/rabbitmq.js`): la topología de consumo como datos (la de
+    `RabbitTopologyConfig`) y la política de reintento del listener —la reconciliación de
+    `onFailure.retry` pasó a `keel-core/gen/dead-letter.js` (`rabbitListenerRetry`), con keel-spring en su
+    línea base idéntica—; y la CONEXIÓN con amqplib 2.2 (reconexión con `setup` que vuelve a declarar la
+    topología y a arrancar los consumidores; `publish` con confirmación y `mandatory`; `consume` que hace lo
+    del contenedor de Spring: ack al terminar, reintento en memoria salvo `DomainException` y
+    `MessageContractViolation`, y rechazo sin reencolar → DLQ). Configuración con las variables de
+    keel-spring (`RABBITMQ_*`, `RABBITMQ_LISTENER_RECOVERY_INTERVAL_MS`) más
+    `RABBITMQ_PUBLISHER_CONFIRM_TIMEOUT_MS` (10 s), propia de keel-nest: en keel-spring ese plazo lo pone el
+    dispatcher del agente.
+  - **Lo del agente** entra por UN archivo, `broker-bindings.ts` (`BROKER_ADAPTERS`: el dispatcher o los
+    publishers, que sustituyen al respaldo por token; `MESSAGE_LISTENERS`, en un módulo que importa el de
+    casos de uso): es el component-scan de Spring. `mapping.md` gana la sección `messaging`; la skill
+    `keel-nest-rabbitmq` es el 9d.
+  - **Puerta medida**: `test/messaging.test.js` (17) EJECUTA lo emitido: la envoltura en el cable, la
+    lectura y su rechazo, los mensajes con wireName, contrato y cotas, la envoltura `wrapped`, el backoff
+    contra la referencia de keel-core, la topología contra la `RabbitTopologyConfig` que EMITE keel-spring en
+    cuatro fixtures, el reintento, y `messaging.yaml`/`rabbitmq.yaml` contra los de keel-spring (falsado con
+    cuatro roturas: cada una tumba su test). `schema-parity` cubre las dos tablas. `ts-check` 12/12 (las 13
+    fixtures, ahora con RabbitMQ donde hay mensajería). `db-check` **20/20** en PostgreSQL y MySQL con los
+    almacenes (falsado quitando el lease, quitando SKIP LOCKED y sacando el registro de su transacción).
+    Dos cosas que destapó: `db-check` no compilaba `notification-mailer` desde el incremento 8 (no instalaba
+    `jose`) y nadie lo había relanzado; y en MySQL, un bloqueo con un predicado sin índice en REPEATABLE READ
+    retiene todas las filas recorridas (lo hacía la sonda, no el relay).
+  - **Sin medir todavía**: nada habla con un RabbitMQ real (la conexión, `publish` con confirmación, el
+    consumo con reintento y DLQ): es el 9c (arnés y `broker-check`). Las purgas, con el incremento 10.
   - **Fixture de la corrida, por decidir antes del 9e**: `inspection-reports` es **documental** y keel-nest
     no genera Mongo hasta el incremento 12. Las relacionales con outbox arrastran capas fuera de la
     frontera: `notification-mailer` (mail, inc. 13), `payment-checkout` (payments, 13), `stock-reservation` y

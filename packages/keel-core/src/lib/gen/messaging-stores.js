@@ -62,7 +62,7 @@ export const OUTBOX_EVENT = Object.freeze({
     { name: 'payload', base: 'text', nullable: false },
     { name: 'created_at', base: 'timestamp', nullable: false },
     { name: 'published_at', base: 'timestamp', nullable: true },
-    { name: 'attempts', base: 'integer', nullable: false },
+    { name: 'attempts', base: 'int', nullable: false },
     { name: 'next_attempt_at', base: 'timestamp', nullable: true },
     { name: 'claimed_at', base: 'timestamp', nullable: true, onlyIn: 'document' },
     { name: 'last_error', base: 'string', length: 1024, nullable: true }

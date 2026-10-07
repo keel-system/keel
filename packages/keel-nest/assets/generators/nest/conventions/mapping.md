@@ -2,8 +2,9 @@
 
 Qué produce cada construcción del diseño y qué queda para el agente. Se sigue **estrictamente**: lo que
 aquí se fija es lo que hace que este servidor sea equivalente al de keel-spring del mismo diseño. Las
-capas que keel-nest aún no genera (seguridad, mensajería, clientes HTTP, storage, correo, pagos) las
-rechaza `keel-nest build`: si estás aquí, el diseño no las declara.
+capas que keel-nest aún no genera (clientes HTTP, dependencias, storage, correo, pagos, la persistencia
+documental, y la mensajería sobre un broker que no sea RabbitMQ) las rechaza `keel-nest build`: si estás
+aquí, el diseño no las declara.
 
 ## `domain` — domain.keel.yaml
 
@@ -217,6 +218,36 @@ if (!this.callerScope.covers(command.applicationCode)) throw new ApplicationForb
 
 Las credenciales de los escenarios salen del arnés (`tokenFor`, `serviceCredential`, `tokenAs`), que
 lee `infra/test-credentials.env`: ver la skill del proveedor (`keel-nest-keycloak`, `keel-nest-cognito`).
+
+## `messaging` — messaging.keel.yaml
+
+Lo transversal al broker es de build, con la misma forma que el servidor de keel-spring del diseño: la
+`EventEnvelope` (`infrastructure/messaging/event-envelope.ts`, con `EventEnvelope.parse` para leer una
+entrante), un `<Evento>IntegrationEvent` por evento, el puente `<Servicio>DomainEventBridge` al que los
+adaptadores de repositorio ya entregan los eventos al guardar, la clase del mensaje de cada suscripción
+(`subscriptions/<evento>-message.ts`, con `fromWire` y `requireContract()`), el **outbox** con su relay
+(`outbox/`, la tabla `outbox_event`), el registro de mensajes procesados (`IdempotencyGuard`, la tabla
+`processed_event`), la configuración (`config/parameters/<perfil>/messaging.yaml` y `rabbitmq.yaml`) y, con
+RabbitMQ, la conexión (`rabbitmq/rabbit-connection.ts`) y la topología de consumo
+(`rabbitmq/rabbit-topology.ts`: exchange del canal, cola propia y DLQ). **No declares topología ni escribas
+otra conexión.**
+
+| Diseño | Código | Quién |
+|---|---|---|
+| `publishing.events.E` | `<E>IntegrationEvent` y su rama en el puente | build |
+| `reliability: outbox` | la fila en la transacción del cambio, el relay (reclamo con lease, backoff, rendición) y el puerto `OutboxDispatcher` | build; **la implementación del puerto, el agente** (`RabbitConnection.publish`) |
+| `reliability: best-effort` | el puerto `<E>Publisher` (dominio), invocado tras el commit, con un stub que solo avisa | build; **la implementación, el agente** |
+| `subscriptions.E` | `<E>Message` con su lector y su contrato; la cola en `messaging.subscriptions.<e>.queue` | build; **el listener, el agente** (`RabbitConnection.consume`) |
+| `onFailure.retry` / `deadLetter` | el reintento del consumo (sin reintentar `DomainException` ni `MessageContractViolation`) y la DLQ | build |
+
+Lo que escribe el agente se registra en **un solo archivo**, `infrastructure/messaging/broker-bindings.ts`:
+los adaptadores en `BROKER_ADAPTERS` (`{ provide: OutboxDispatcher, useClass: … }`, que sustituye al
+respaldo de build) y los listeners en `MESSAGE_LISTENERS`. Un listener se registra en la conexión al
+arrancar y hace, en este orden, lo que dice la clase del mensaje de su suscripción: leer la envoltura,
+descartar SIN lanzar lo que no es suyo, `fromWire` y `requireContract()`, deduplicar con `IdempotencyGuard`
+en el orden que esa clase prescribe, y despachar por el `UseCaseMediator` dentro de
+`CorrelationContext.runWith(metadata.correlationId, …)`. Lo que lanza se reintenta o va al descarte; lo que
+retorna se confirma.
 
 ## Cobertura funcional (criterio de «generación terminada»)
 

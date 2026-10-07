@@ -17,6 +17,7 @@
 // juzga el esquema contra un motor real es `npm run ts-check` de keel-nest, que levanta uno.
 
 import { MIGRATIONS_TABLE } from './infra.js';
+import { storeEntities } from './messaging-stores.js';
 import {
   usesRequestIdempotency,
   IDEMPOTENCY_RECORD_ORM_TS,
@@ -140,6 +141,8 @@ function dataSourceOptionsFile(model) {
   }
   // El registro de la idempotencia de petición: una tabla más del esquema, la misma que en keel-spring.
   if (usesRequestIdempotency(model)) entities.push({ symbol: 'IdempotencyRecordOrm', from: IDEMPOTENCY_RECORD_ORM_TS });
+  // Las tablas de la mensajería: el outbox y los mensajes procesados, las mismas que en keel-spring.
+  entities.push(...storeEntities(model));
   const driverOptions =
     engine === 'postgresql'
       ? `    type: 'postgres',
@@ -262,7 +265,7 @@ function transactionContextFile(model) {
     await runner.query(\`SET SESSION innodb_lock_wait_timeout = \${seconds}\`);
     await runner.query(\`SET SESSION max_execution_time = \${this.settings.transactionTimeoutMs}\`);
     await runner.query(readOnly ? 'SET TRANSACTION READ ONLY' : 'SET TRANSACTION READ WRITE');`;
-  const open = engine === 'postgresql' ? `    await runner.startTransaction();\n${prepare}` : `${prepare}\n    await runner.startTransaction();`;
+  const open = engine === 'postgresql' ? `    await runner.startTransaction(options.isolation);\n${prepare}` : `${prepare}\n    await runner.startTransaction(options.isolation);`;
   const body = `/** Token del DataSource de TypeORM (null en el perfil test, que no tiene base de datos). */
 export const DATA_SOURCE = Symbol('DATA_SOURCE');
 
@@ -271,6 +274,18 @@ export const DATABASE_SETTINGS = Symbol('DATABASE_SETTINGS');
 
 export interface TransactionOptions {
   readonly readOnly?: boolean;
+  /**
+   * El aislamiento, cuando el default del motor no sirve. Hoy solo lo pide el reclamo de lotes en MySQL:
+   * en REPEATABLE READ una lectura con bloqueo toma también los HUECOS entre claves, y frena los INSERT
+   * de filas nuevas hasta el lock wait timeout.
+   */
+  readonly isolation?: 'READ COMMITTED';
+}
+
+/** Lo que sigue a una transacción abierta: su EntityManager y lo que espera a su commit. */
+interface TransactionFrame {
+  readonly manager: EntityManager;
+  readonly afterCommit: Array<() => unknown>;
 }
 
 /**
@@ -280,7 +295,8 @@ export interface TransactionOptions {
  */
 @Injectable()
 export class TransactionContext {
-  private readonly storage = new AsyncLocalStorage<EntityManager>();
+  private readonly storage = new AsyncLocalStorage<TransactionFrame>();
+  private readonly logger = new Logger('TransactionContext');
 
   constructor(
     @Inject(DATA_SOURCE) private readonly dataSource: DataSource | null,
@@ -294,7 +310,7 @@ export class TransactionContext {
 
   /** El EntityManager de la transacción en curso; fuera de ella, el del DataSource (sentencia suelta). */
   manager(): EntityManager {
-    return this.storage.getStore() ?? this.source().manager;
+    return this.storage.getStore()?.manager ?? this.source().manager;
   }
 
   /**
@@ -303,16 +319,17 @@ export class TransactionContext {
    */
   async inTransaction<T>(work: (manager: EntityManager) => Promise<T>, options: TransactionOptions = {}): Promise<T> {
     const current = this.storage.getStore();
-    if (current) return work(current);
+    if (current) return work(current.manager);
     const readOnly = options.readOnly === true;
     const runner = this.source().createQueryRunner();
+    const frame: TransactionFrame = { manager: runner.manager, afterCommit: [] };
+    let result: T;
     await runner.connect();
     try {
 ${open.replace(/^/gm, '  ')}
       try {
-        const result = await this.storage.run(runner.manager, () => work(runner.manager));
+        result = await this.storage.run(frame, () => work(runner.manager));
         await runner.commitTransaction();
-        return result;
       } catch (error) {
         if (runner.isTransactionActive) await runner.rollbackTransaction();
         throw error;
@@ -320,6 +337,39 @@ ${open.replace(/^/gm, '  ')}
     } finally {
       await runner.release();
     }
+    // Ya confirmada y con la conexión devuelta al pool: lo que sale del proceso (publicar un evento
+    // best-effort) no retiene ninguna. Es el AFTER_COMMIT de Spring: lo que falla aquí se registra y no
+    // deshace nada, porque la transacción ya no existe.
+    for (const callback of frame.afterCommit) {
+      try {
+        await callback();
+      } catch (error) {
+        this.logger.error(\`Fallo en una acción tras el commit: \${error instanceof Error ? error.message : String(error)}\`);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Ejecuta \`work\` en una transacción NUEVA aunque haya otra abierta (el REQUIRES_NEW de Spring): se
+   * confirma o revierte por su cuenta, y la del llamante sigue intacta. Es la del registro de mensajes
+   * procesados, que tiene que sobrevivir al rollback del handler.
+   */
+  inNewTransaction<T>(work: (manager: EntityManager) => Promise<T>, options: TransactionOptions = {}): Promise<T> {
+    return this.storage.exit(() => this.inTransaction(work, options));
+  }
+
+  /**
+   * Programa \`callback\` para DESPUÉS del commit de la transacción en curso; si revierte, no se ejecuta
+   * nunca. Sin transacción abierta no hay commit que esperar y se ejecuta ya.
+   */
+  async afterCommit(callback: () => unknown): Promise<void> {
+    const current = this.storage.getStore();
+    if (current) {
+      current.afterCommit.push(callback);
+      return;
+    }
+    await callback();
   }
 
   private source(): DataSource {
@@ -335,6 +385,7 @@ ${open.replace(/^/gm, '  ')}
       { symbol: 'AsyncLocalStorage', from: 'node:async_hooks' },
       { symbol: 'Inject', from: '@nestjs/common' },
       { symbol: 'Injectable', from: '@nestjs/common' },
+      { symbol: 'Logger', from: '@nestjs/common' },
       { symbol: 'DataSource', from: 'typeorm', type: true },
       { symbol: 'EntityManager', from: 'typeorm', type: true },
       { symbol: 'DatabaseSettings', from: DATA_SOURCE_OPTIONS_TS, type: true }

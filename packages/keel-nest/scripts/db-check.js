@@ -18,7 +18,10 @@
 //   versión      guardar dos veces la MISMA lectura: la segunda es un conflicto de concurrencia;
 //   unicidad     un segundo agregado con la misma clave natural sale como el error que el diseño
 //                declara para ella (translatePersistenceError);
-//   página       list(pageable) con su total; deleteById borra el grafo.
+//   página       list(pageable) con su total; deleteById borra el grafo;
+//   mensajería   el puente escribe el outbox en la transacción del cambio; el reclamo del relay (orden,
+//                lote, lease, SKIP LOCKED), el backoff y la rendición; el registro de procesados (la
+//                repetición, la transacción propia y la carrera). Lo que en keel-spring mide store-check.
 //
 //   node packages/keel-nest/scripts/db-check.js [--database=postgresql|mysql] [--keep]
 //   npm run db-check --workspace packages/keel-nest
@@ -36,12 +39,24 @@ import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startDatabase } from './lib/database-container.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
+import { AMQPLIB_VERSION, JOSE_VERSION } from '../src/lib/assets.js';
 import { domainMembers } from '../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
 import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders } from '../src/scaffold/repositories.js';
 import { ormPath, ormClass, unidirectionalParents } from '../src/scaffold/persistence-entities.js';
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_IMPL_TS, IDEMPOTENCY_CONFLICT_TS } from '../src/scaffold/request-idempotency.js';
 import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
+import { OUTBOX_EVENT, PROCESSED_EVENT } from 'keel-core/gen/messaging-stores';
+import {
+  usesNestOutbox,
+  usesProcessedEvents,
+  bridgeClass,
+  bridgePath,
+  MESSAGING_SETTINGS_TS,
+  OUTBOX_ORM_TS,
+  OUTBOX_RELAY_STORE_TS,
+  IDEMPOTENCY_GUARD_TS
+} from '../src/scaffold/messaging.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { effectiveErrorCode } from 'keel-core/gen';
 
@@ -343,6 +358,8 @@ function probeScript(model, engine, db, expected) {
   const roots = repositoryRoots(model);
   const ctx = { imports: new Set(), unsampled: [] };
   const blocks = roots.map((root, index) => rootBlock(model, engine, root, index, ctx));
+  // Antes de listar los imports: sus valores de muestra también añaden alguno.
+  const messagingCode = messagingBlock(model, engine, ctx);
   const imports = [...ctx.imports].map((entry) => {
     const [symbol, file] = entry.split('|');
     return `import { ${symbol} } from '${distOf(file)}';`;
@@ -383,6 +400,9 @@ const settings = databaseSettings({ get: (key) => values[key], application: { na
 const dataSource = await new DataSource(settings.options).initialize();
 await dataSource.synchronize(true);
 const tx = new TransactionContext(dataSource, settings);
+// Los adaptadores de una raíz que emite eventos los entregan al puente: aquí se miden la persistencia y
+// sus tablas, así que reciben un sumidero; el puente de verdad lo mide el bloque de mensajería.
+const eventSink = { publish: async () => {} };
 
 // ── Esquema: el catálogo del motor contra lo que promete el esquema neutral.
 const expected = ${JSON.stringify([...expected.entries()].map(([name, t]) => [name, { columns: [...t.columns.entries()], uniques: [...t.uniques], indexes: [...t.indexes], fks: [...t.fks] }]))};
@@ -429,6 +449,7 @@ try {
 ${blocks.join('\n')}
 ${concurrencyBlock(model, engine, roots[0], ctx)}
 ${idempotencyBlock(model, engine)}
+${messagingCode}
 
 await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -512,7 +533,7 @@ function rootBlock(model, engine, root, index, ctx) {
   return `
 // ═══ ${name} ═══
 {
-  const repository = new ${adapterClass(root)}(tx);
+  const repository = new ${adapterClass(root)}(tx, eventSink);
   const original = ${first};
   await repository.save(original);
   const loaded = await repository.findById(original.id);
@@ -567,7 +588,7 @@ function concurrencyBlock(model, engine, root, ctx) {
   return `
 // ═══ Concurrencia: interbloqueo y tope de transacción ═══
 {
-  const repository = new ${adapterClass(root)}(tx);
+  const repository = new ${adapterClass(root)}(tx, eventSink);
   const a = ${sampleEntity(model, root, ctx, 'xa')};
   const b = ${sampleEntity(model, root, ctx, 'xb')};
   await repository.save(a);
@@ -661,6 +682,139 @@ function idempotencyBlock(model, engine) {
   const lost = outcomes.filter((outcome) => outcome.status === 'rejected').map((outcome) => outcome.reason);
   check('idempotencia: en una carrera gana UNA', lost.length === 1, outcomes.map((outcome) => outcome.status).join(', '));
   check('idempotencia: la que pierde la carrera sale como el conflicto de clave en curso', lost.length === 1 && lost[0] instanceof IdempotencyConflictException && lost[0].code === '${race.code}', lost[0]?.code ?? lost[0]?.message);
+}`;
+}
+
+/**
+ * Los ALMACENES DE LA MENSAJERÍA contra el motor (incremento 9), lo que en keel-spring mide store-check:
+ *   · las tablas outbox_event y processed_event son las de keel-core/gen/messaging-stores.js;
+ *   · el puente escribe la fila del outbox DENTRO de la transacción del cambio: si revierte, no queda;
+ *   · el reclamo del relay: en orden de llegada, con su tamaño de lote, sin las filas que el lease retiró,
+ *     SIN ESPERAR a una fila bloqueada por otra transacción (SKIP LOCKED), sin las publicadas;
+ *   · el desenlace: el backoff aplaza la fila, la rendición la retira y la cuenta countDeadLettered;
+ *   · el registro de procesados: la repetición y la carrera las arbitra la clave primaria, el registro
+ *     sobrevive al rollback del handler (su transacción es propia) y dos consumidores no se pisan.
+ */
+function messagingBlock(model, engine, ctx) {
+  const outbox = usesNestOutbox(model);
+  const processed = usesProcessedEvents(model);
+  if (!outbox && !processed) return '';
+  const schema = engine === 'postgresql' ? "'public'" : `'${DB_NAME}'`;
+  const columnsQuery = engine === 'postgresql'
+    ? 'SELECT column_name AS name, is_nullable AS nullable, character_maximum_length AS length FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2'
+    : 'SELECT COLUMN_NAME AS name, IS_NULLABLE AS nullable, CHARACTER_MAXIMUM_LENGTH AS length FROM information_schema.columns WHERE table_schema = ? AND table_name = ?';
+  const indexQuery = engine === 'postgresql'
+    ? 'SELECT indexname AS name FROM pg_indexes WHERE schemaname = $1 AND tablename = $2'
+    : 'SELECT DISTINCT INDEX_NAME AS name FROM information_schema.statistics WHERE table_schema = ? AND table_name = ?';
+  const tables = [outbox ? OUTBOX_EVENT : null, processed ? PROCESSED_EVENT : null].filter(Boolean);
+  const schemaChecks = `
+  for (const spec of ${JSON.stringify(tables)}) {
+    const columns = await dataSource.query(${JSON.stringify(columnsQuery)}, [${schema}, spec.table]);
+    for (const want of spec.columns.filter((column) => !column.onlyIn || column.onlyIn === 'relational')) {
+      const got = columns.find((column) => (column.name ?? column.NAME) === want.name);
+      const length = got?.length ?? got?.LENGTH;
+      const nullable = (got?.nullable ?? got?.NULLABLE) === 'YES';
+      check(\`\${spec.table}.\${want.name} es la columna de keel-core\`, got != null && nullable === want.nullable && (want.length == null || Number(length) === want.length), JSON.stringify(got));
+    }
+    check(\`\${spec.table} no tiene columnas de más\`, columns.length === spec.columns.filter((column) => !column.onlyIn || column.onlyIn === 'relational').length, columns.map((column) => column.name ?? column.NAME).join(', '));
+    const indexes = (await dataSource.query(${JSON.stringify(indexQuery)}, [${schema}, spec.table])).map((row) => row.name ?? row.NAME);
+    for (const index of spec.indexes) check(\`\${spec.table}: índice \${index.name}\`, indexes.includes(index.name), indexes.join(', '));
+  }`;
+  let bridge = '';
+  if (outbox) {
+    const event = model.events[0];
+    const args = event.fields.map((field) => (field.list ? '[]' : sampleValue(model, field, ctx, 'ev') ?? 'null'));
+    bridge = `
+  // ── El puente: la fila del outbox en la transacción del cambio.
+  const { ${bridgeClass(model)}: Bridge } = await import('${distOf(bridgePath(model))}');
+  const { ${event.className}: DomainEventClass } = await import('${distOf(classPath(DIRS.events, event.className))}');
+  const { messagingSettings } = await import('${distOf(MESSAGING_SETTINGS_TS)}');
+  const messaging = messagingSettings({ get: () => undefined });
+  const bridge = new Bridge(tx, messaging);
+  const kept = DomainEventClass.of(${args.join(', ')});
+  await tx.inTransaction(() => bridge.publish([kept]));
+  const rows = await dataSource.getRepository(OutboxEventOrm).find();
+  const row = rows.find((candidate) => JSON.parse(candidate.payload).metadata.eventId === kept.metadata.eventId);
+  check('outbox: el puente escribe la fila del evento', row != null, rows.length);
+  check('outbox: la fila lleva el destino, la routing key y el NOMBRE del evento', row?.destination === messaging.destination && row?.routingKey === messaging.routingKeys[${JSON.stringify(event.name)}] && row?.eventType === ${JSON.stringify(event.name)}, JSON.stringify(row && { destination: row.destination, routingKey: row.routingKey, eventType: row.eventType }));
+  check('outbox: el payload es la envoltura (metadata + data)', row != null && JSON.stringify(Object.keys(JSON.parse(row.payload))) === '["metadata","data"]', row?.payload);
+  const lost = DomainEventClass.of(${args.join(', ')});
+  await tx.inTransaction(async () => { await bridge.publish([lost]); throw new Error('el cambio revierte'); }).catch(() => null);
+  const after = await dataSource.getRepository(OutboxEventOrm).find();
+  check('outbox: si el cambio revierte, la fila tampoco queda', !after.some((candidate) => JSON.parse(candidate.payload).metadata.eventId === lost.metadata.eventId), after.length);`;
+  }
+  const relay = outbox
+    ? `
+  // ── El reclamo del relay.
+  const { OutboxRelayStore } = await import('${distOf(OUTBOX_RELAY_STORE_TS)}');
+  const store = new OutboxRelayStore(tx);
+  await dataSource.getRepository(OutboxEventOrm).clear();
+  const base = Date.now() - 60_000;
+  const ids = [];
+  for (let i = 0; i < 4; i++) {
+    const id = randomUUID();
+    ids.push(id);
+    await dataSource.getRepository(OutboxEventOrm).insert({ id, destination: 'd', routingKey: 'k', eventType: 'E', payload: '{}', createdAt: new Date(base + i * 1000), publishedAt: null, attempts: 0, nextAttemptAt: null, lastError: null });
+  }
+  const first = await store.claimBatch(10, 2, 60_000);
+  check('relay: reclama en orden de llegada y con su tamaño de lote', JSON.stringify(first.map((r) => r.id)) === JSON.stringify(ids.slice(0, 2)), JSON.stringify(first.map((r) => r.id)));
+  const second = await store.claimBatch(10, 10, 60_000);
+  check('relay: el lease retira las reclamadas de la pasada siguiente', JSON.stringify(second.map((r) => r.id)) === JSON.stringify(ids.slice(2)), JSON.stringify(second.map((r) => r.id)));
+  // SKIP LOCKED: con una fila bloqueada por OTRA transacción, el reclamo sigue sin ella y sin esperar.
+  await dataSource.createQueryBuilder().update(OutboxEventOrm).set({ nextAttemptAt: null }).where('1 = 1').execute();
+  const holder = new TransactionContext(dataSource, settings);
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  // Como la retendría otra réplica: UNA fila por su id y en READ COMMITTED. Con un predicado sin índice en
+  // REPEATABLE READ, InnoDB bloquea todas las filas que recorre, y eso no lo hace ningún relay.
+  const locking = holder.inTransaction(async (manager) => {
+    await manager.findOne(OutboxEventOrm, { where: { id: ids[0] }, lock: { mode: 'pessimistic_write' } });
+    await held;
+  }, { isolation: 'READ COMMITTED' });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const started = Date.now();
+  const skipping = await store.claimBatch(10, 10, 60_000);
+  const waited = Date.now() - started;
+  release();
+  await locking;
+  check('relay: no espera a una fila bloqueada por otra réplica (SKIP LOCKED)', waited < 5_000 && skipping.length === 3 && !skipping.some((r) => r.id === ids[0]), \`\${skipping.length} filas en \${waited} ms\`);
+  // El desenlace.
+  await dataSource.createQueryBuilder().update(OutboxEventOrm).set({ nextAttemptAt: null }).where('1 = 1').execute();
+  await store.markPublished(ids[0]);
+  const failedOnce = await store.markFailed(ids[1], 'broker caído', 3, 1000, 60_000);
+  const delayed = await dataSource.getRepository(OutboxEventOrm).findOneBy({ id: ids[1] });
+  const delay = delayed.nextAttemptAt.getTime() - Date.now();
+  check('relay: un fallo cuenta el intento y aplaza la fila según el backoff', failedOnce.attempts === 1 && !failedOnce.deadLettered && delay > 500 && delay <= 1_000 && delayed.lastError === 'broker caído', \`\${JSON.stringify(failedOnce)} \${delay} ms\`);
+  await store.markFailed(ids[2], 'x', 2, 1000, 60_000);
+  const surrendered = await store.markFailed(ids[2], 'x', 2, 1000, 60_000);
+  check('relay: al alcanzar el máximo la fila se rinde', surrendered.deadLettered && surrendered.attempts === 2, JSON.stringify(surrendered));
+  check('relay: countDeadLettered la cuenta', (await store.countDeadLettered(2)) === 1);
+  await dataSource.getRepository(OutboxEventOrm).update({ id: ids[1] }, { nextAttemptAt: null });
+  const remaining = await store.claimBatch(2, 10, 60_000);
+  check('relay: ni la publicada ni la rendida vuelven a reclamarse', JSON.stringify(remaining.map((r) => r.id).sort()) === JSON.stringify([ids[1], ids[3]].sort()), JSON.stringify(remaining.map((r) => r.id)));`
+    : '';
+  const guard = processed
+    ? `
+  // ── El registro de mensajes procesados.
+  const { IdempotencyGuard } = await import('${distOf(IDEMPOTENCY_GUARD_TS)}');
+  const guard = new IdempotencyGuard(tx);
+  const eventId = randomUUID();
+  check('consumo: un mensaje nuevo no está procesado', !(await guard.alreadyProcessed('ListenerA', eventId)));
+  check('consumo: record lo registra', await guard.record('ListenerA', eventId));
+  check('consumo: la repetición la arbitra la clave (record da false)', !(await guard.record('ListenerA', eventId)));
+  check('consumo: alreadyProcessed lo ve', await guard.alreadyProcessed('ListenerA', eventId));
+  check('consumo: otro consumidor del mismo mensaje no se pisa', await guard.tryRecord('ListenerB', eventId));
+  const survivor = randomUUID();
+  await tx.inTransaction(async () => { await guard.record('ListenerA', survivor); throw new Error('el handler falla'); }).catch(() => null);
+  check('consumo: el registro sobrevive al rollback del handler (su transacción es propia)', await guard.alreadyProcessed('ListenerA', survivor));
+  const contested = randomUUID();
+  const outcomes = await Promise.all([guard.record('ListenerC', contested), new IdempotencyGuard(new TransactionContext(dataSource, settings)).record('ListenerC', contested)]);
+  check('consumo: en una carrera registra UNA entrega', outcomes.filter(Boolean).length === 1, JSON.stringify(outcomes));
+  check('consumo: handler_id admite ${PROCESSED_EVENT.columns[0].length} caracteres y event_id ${PROCESSED_EVENT.columns[1].length}', await guard.record('h'.repeat(${PROCESSED_EVENT.columns[0].length}), 'e'.repeat(${PROCESSED_EVENT.columns[1].length})));`
+    : '';
+  return `
+// ═══ Mensajería: el outbox y el registro de procesados ═══
+{${outbox ? `\n  const { OutboxEventOrm } = await import('${distOf(OUTBOX_ORM_TS)}');` : ''}${schemaChecks}${bridge}${relay}${guard}
 }`;
 }
 
@@ -810,7 +964,7 @@ mountDesign(workspace, NEST_READY_DESIGN.name, NEST_READY_DESIGN);
 const generated = await runCommand(workspace, build, `specs/${NEST_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
 const projectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
 if (!step('build genera el proyecto de referencia', generated.exitCode === undefined, generated.output.slice(0, 400))) process.exit(1);
-const install = run('npm', ['install', '--no-audit', '--no-fund', 'mysql2', 'pg'], { cwd: projectDir });
+const install = run('npm', ['install', '--no-audit', '--no-fund', 'mysql2', 'pg', `amqplib@${AMQPLIB_VERSION}`, `jose@${JOSE_VERSION}`], { cwd: projectDir });
 if (!step('npm install (TypeORM y los drivers)', install.status === 0, install.status === 0 ? '' : install.stderr.slice(-800))) process.exit(1);
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');
 
@@ -826,7 +980,8 @@ for (const engine of ENGINES) {
   try {
     for (const subject of SUBJECTS) {
       const { manifest, layers } = loadService(path.join(FIXTURES_DIR, subject));
-      const { files, model } = planService({ manifest, layers, workspace, stack: { database: engine } });
+      // Con mensajería, sobre RabbitMQ: el broker que keel-nest genera.
+      const { files, model } = planService({ manifest, layers, workspace, stack: { database: engine, ...(layers.messaging ? { broker: 'rabbitmq' } : {}) } });
       if (repositoryRoots(model).length === 0) continue;
       const dir = path.join(workspace, 'db-check', engine, subject);
       for (const file of files) {

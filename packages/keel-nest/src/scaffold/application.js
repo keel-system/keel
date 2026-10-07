@@ -20,11 +20,12 @@ import { relativeSpecifier } from './render.js';
 import { usesRelational } from './persistence-entities.js';
 import { usesIdempotencyHeader } from './request-idempotency.js';
 import { usesHttpSecurity, usesCallerScope } from './security.js';
+import { usesMessaging } from './messaging.js';
 
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs() },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesRelational(model), usesCallerScope(model)) },
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesRelational(model), usesCallerScope(model), usesMessaging(model) && usesRelational(model)) },
     { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model)) }
   ];
 }
@@ -51,18 +52,26 @@ await app.listen(configuration.server.port, configuration.server.address);
 `;
 }
 
-function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false) {
+function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false) {
   // Los casos de uso del diseño entran por su módulo (infrastructure/usecase), que es el único que
   // cablea handlers y mappers; los controladores REST los despachan por el mediator que exporta. La
   // persistencia y el alcance por recurso (globales) van antes: son dependencias de los handlers.
   const useCaseImport =
     (withPersistence ? "\nimport { PersistenceModule } from './infrastructure/persistence/persistence-module.js';" : '') +
+    (withMessaging
+      ? "\nimport { MessagingModule } from './infrastructure/messaging/messaging-module.js';" +
+        "\nimport { MessageListenersModule } from './infrastructure/messaging/message-listeners-module.js';"
+      : '') +
     (withCallerScope ? "\nimport { SecurityModule } from './infrastructure/security/security-module.js';" : '') +
     (withUseCases ? "\nimport { UseCaseModule } from './infrastructure/usecase/use-case-module.js';" : '');
   const modules = [
     withPersistence ? 'PersistenceModule.register(configuration)' : null,
+    // La mensajería (global, como la persistencia): el puente lo usan los adaptadores de repositorio.
+    withMessaging ? 'MessagingModule.register(configuration)' : null,
     withCallerScope ? 'SecurityModule' : null,
-    withUseCases ? 'UseCaseModule' : null
+    withUseCases ? 'UseCaseModule' : null,
+    // Los listeners del agente despachan por el mediator: van después de los casos de uso.
+    withMessaging ? 'MessageListenersModule' : null
   ].filter(Boolean);
   const useCaseModule = modules.length > 0 ? `\n      imports: [${modules.join(', ')}],` : '';
   const controllerImports = controllers

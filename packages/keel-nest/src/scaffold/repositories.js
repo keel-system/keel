@@ -16,6 +16,7 @@
 
 import { persistedMembers, collectInternalEntities, orderingFieldOf, partialUniqueIndexes, LOCK_VERSION } from 'keel-core/gen';
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
+import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
 import {
   usesRelational,
@@ -318,9 +319,7 @@ function renderAdapter(model, entity) {
  */
 @Injectable()
 export class ${adapterClass(entity)} extends ${portClass(entity)} {
-  constructor(@Inject(TransactionContext) private readonly transactions: TransactionContext) {
-    super();
-  }
+${constructorOf(model, entity, imports)}
 
   private get manager(): EntityManager {
     return this.transactions.manager();
@@ -378,6 +377,30 @@ function withStableOrder(pageable: Pageable): FindOptionsOrder<${ormClass(entity
 `;
 }
 
+/**
+ * El constructor del adaptador: la transacción y, si la raíz emite eventos y hay mensajería, el puente
+ * de integración al que los entrega.
+ */
+function constructorOf(model, entity, imports) {
+  if (!emitsDomainEvents(model, entity)) {
+    return `  constructor(@Inject(TransactionContext) private readonly transactions: TransactionContext) {
+    super();
+  }`;
+  }
+  imports.push({ symbol: bridgeClass(model), from: bridgePath(model) });
+  return `  constructor(
+    @Inject(TransactionContext) private readonly transactions: TransactionContext,
+    @Inject(${bridgeClass(model)}) private readonly events: ${bridgeClass(model)}
+  ) {
+    super();
+  }`;
+}
+
+/** ¿La raíz emite eventos que salen por el puente? */
+function emitsDomainEvents(model, entity) {
+  return usesBridge(model) && (model.events ?? []).some((event) => event.aggregates.includes(entity.name));
+}
+
 function saveMethod(model, entity, imports) {
   const versioned = entity.usesOptimisticLocking;
   const versionProp = entity.declaresLockVersion ? 'lockVersion' : LOCK_VERSION.field;
@@ -412,7 +435,14 @@ function saveMethod(model, entity, imports) {
   // incremento 9), pero se vacían igual para que el buffer no crezca con cada escritura.
   const emitsEvents = (model.events ?? []).some((event) => event.aggregates.includes(entity.name));
   lines.push(`      const saved = await manager.save(${ormClass(entity.name)}, orm);`);
-  if (emitsEvents) lines.push('      // TODO (incremento 9): publicar por el puente de integración; hasta entonces nadie los escucha.', '      entity.pullDomainEvents();');
+  if (emitsEvents && usesBridge(model)) {
+    // Los eventos que la raíz acumuló salen por el puente DENTRO de esta transacción: con outbox, la fila
+    // y el cambio confirman o revierten juntos; con best-effort, se publican tras el commit.
+    lines.push('      await this.events.publish(entity.pullDomainEvents());');
+  } else if (emitsEvents) {
+    // Sin capa de mensajería nadie los escucha, pero se vacían igual para que el buffer no crezca.
+    lines.push('      entity.pullDomainEvents();');
+  }
   lines.push(`      return toDomain${entity.name}(saved);`);
   return `  async save(entity: ${entity.name}): Promise<${entity.name}> {
     return this.transactions.inTransaction(async (manager) => {

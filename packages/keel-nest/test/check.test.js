@@ -45,7 +45,7 @@ test('una capa fuera de la frontera sale en rojo sin construir nada', async () =
   const before = treeDigest(workspace);
   const { exitCode, output } = await runCommand(workspace, check, 'specs/inspection-reports', {});
   assert.equal(exitCode, 1);
-  assert.match(output, /capa messaging/);
+  assert.match(output, /persistence.default.model: document/);
   assert.equal(treeDigest(workspace), before);
 });
 

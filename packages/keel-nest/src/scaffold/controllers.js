@@ -141,7 +141,7 @@ function nestPath(path) {
 // ─── Lectores de valores ────────────────────────────────────────────────────
 
 /** Expresión del lector de un campo, en modo `json` (cuerpo) o `text` (ruta y query). */
-function readerOf(field, mode) {
+export function readerOf(field, mode) {
   let element;
   if (field.kind === 'enum') element = `${mode}.enumOf(${field.elementTsType})`;
   else if (field.kind === 'composite') element = mode === 'json' ? `read${field.elementTsType}` : 'unreadableAsText';
@@ -153,13 +153,13 @@ function readerOf(field, mode) {
 }
 
 /** Imports que necesita leer un campo: su tipo (enum, value object) y su lector de value object. */
-function readerImports(model, field) {
+export function readerImports(model, field) {
   const imports = fieldImports(model, field);
   if (field.kind === 'composite') imports.push({ symbol: `read${field.elementTsType}`, from: VALUE_READERS_TS });
   return imports;
 }
 
-function valueReaders(model) {
+export function valueReaders(model) {
   const imports = [
     { symbol: 'json', from: REQUEST_READING_TS },
     { symbol: 'valueObject', from: REQUEST_READING_TS }

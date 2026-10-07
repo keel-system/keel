@@ -9,7 +9,7 @@ import { checkSupportedFeatures, checkSupportedStack } from '../src/lib/supporte
 const manifestWith = (...layers) => ({ layers: Object.fromEntries(layers.map((layer) => [layer, `${layer}.keel.yaml`])) });
 const layersWith = (...layers) => Object.fromEntries(layers.map((layer) => [layer, {}]));
 
-for (const layer of ['messaging', 'http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
+for (const layer of ['http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);
@@ -26,6 +26,36 @@ test('capa security (incremento 8): se genera, salvo la identidad resuelta por v
   const { errors } = checkSupportedFeatures(manifest, resolved);
   assert.equal(errors.length, 1);
   assert.match(errors[0], /callerIdentity.from.resolvedBy/);
+});
+
+test('capa messaging (incremento 9): se genera sobre la persistencia relacional, y no sin ella', () => {
+  const withPersistence = manifestWith('domain', 'use-cases', 'persistence', 'messaging');
+  assert.deepEqual(checkSupportedFeatures(withPersistence, layersWith('domain', 'use-cases', 'persistence', 'messaging')), { errors: [], warnings: [] });
+  const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'messaging'), layersWith('domain', 'use-cases', 'messaging'));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /messaging sin persistence/);
+});
+
+test('messaging: la identidad del emisor resuelta por varias credenciales se rechaza', () => {
+  const manifest = manifestWith('domain', 'use-cases', 'persistence', 'messaging');
+  const layers = {
+    ...layersWith('domain', 'use-cases', 'persistence'),
+    messaging: { subscriptions: { Requested: { identity: { field: 'app', from: { location: 'field', name: 'metadata.source' }, resolvedBy: 'Application.keys' } } } }
+  };
+  const { errors } = checkSupportedFeatures(manifest, layers);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /messaging\.subscriptions\.Requested\.identity: .*resolvedBy/);
+  delete layers.messaging.subscriptions.Requested.identity.resolvedBy;
+  assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, []);
+});
+
+test('el broker: RabbitMQ se genera; Kafka y SNS/SQS se rechazan hasta su tramo', () => {
+  assert.deepEqual(checkSupportedStack({ broker: 'rabbitmq' }).errors, []);
+  for (const broker of ['kafka', 'snssqs']) {
+    const { errors } = checkSupportedStack({ broker });
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], new RegExp(`broker: ${broker} — .*rabbitmq`));
+  }
 });
 
 test('dominio, casos de uso y API se generan sin aviso', () => {

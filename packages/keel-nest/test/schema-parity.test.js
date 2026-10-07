@@ -46,7 +46,10 @@ function springSchema(files) {
   }
   // Las entidades del diseño y las de los mecanismos de build que tienen tabla (el registro de la
   // idempotencia de petición vive en persistence/idempotency).
-  const jpa = files.filter((f) => /\/infrastructure\/persistence\/(entities|idempotency)\//.test(f.path) && f.path.endsWith('.java'));
+  // Y los almacenes de la mensajería: el outbox y el registro de procesados (messaging/outbox e idempotency).
+  const jpa = files.filter(
+    (f) => /\/infrastructure\/(persistence\/(entities|idempotency)|messaging\/(outbox|idempotency))\//.test(f.path) && f.path.endsWith('.java')
+  );
   const classes = new Map();
   for (const file of jpa) {
     const name = /public (?:abstract )?class (\w+)/.exec(file.content)?.[1];
@@ -92,6 +95,9 @@ function springSchema(files) {
         t.names.add(join[3]);
         continue;
       }
+      // Un @Id sin @Column (el del outbox): la columna se llama como el campo.
+      const bareId = /@Id\s+private \w+ (\w+);/.exec(block);
+      if (bareId) t.columns.set(bareId[1].replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`), { nullable: false, length: null, scale: null });
       for (const [name, spec] of columnsOf(block)) t.columns.set(name, spec);
     }
   }

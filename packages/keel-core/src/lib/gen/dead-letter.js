@@ -143,3 +143,51 @@ export function usesDeadLetter(model) {
 export function deadLetterSubscriptions(model) {
   return (model.subscriptions ?? []).filter((sub) => sub.deadLetter);
 }
+
+// ─── El reintento del consumidor (`onFailure.retry`) ─────────────────────────
+//
+// Varias suscripciones pueden declarar políticas distintas y el contenedor de listeners (o el error
+// handler) es UNO: gana la más paciente, porque quedarse corto pierde mensajes de la que más esperaba.
+// Es la reconciliación de keel-spring, y la misma tiene que hacer cualquier otro generador: el mismo
+// diseño espera lo mismo en los dos servidores.
+
+/** Los intentos (el primero incluido): el mayor declarado; sin `retry`, uno solo. */
+export function retryMaxAttempts(subs) {
+  return Math.max(...subs.map((sub) => sub.retry?.maxAttempts ?? 1));
+}
+
+/** El primer intervalo: el mayor declarado (1 s si ninguna lo declara). */
+export function retryInitialDelayMs(subs) {
+  return Math.max(...subs.map((sub) => sub.retry?.initialDelayMs ?? 1000));
+}
+
+/**
+ * El techo del intervalo: el mayor de las que lo declaran, o null si ninguna (solo tiene sentido con
+ * curva; con `fixed` no hay nada que acotar).
+ */
+export function retryMaxDelayMs(subs) {
+  const declared = subs.map((sub) => sub.retry?.maxDelayMs).filter((value) => typeof value === 'number');
+  return declared.length > 0 ? Math.max(...declared) : null;
+}
+
+/**
+ * El reintento del listener de RabbitMQ, derivado de `onFailure.retry`, o `null` si ninguna suscripción
+ * lo declara. Sobre TODAS las suscripciones y no solo las que tienen descarte: en RabbitMQ el reintento
+ * no depende de la DLQ.
+ *
+ * El multiplicador no está en el DSL: con `exponential` es 1.5 (el de `ExponentialBackOff` de Spring,
+ * para que la curva no dependa del broker ni del generador); con `fixed`, 1.0. Sin `maxDelayMs`
+ * declarado, el techo es 30 s.
+ */
+export function rabbitListenerRetry(model) {
+  const subs = (model.subscriptions ?? []).filter((sub) => sub.retry);
+  if (subs.length === 0) return null;
+  const exponential = subs.some((sub) => (sub.retry.backoff ?? 'exponential') === 'exponential');
+  return {
+    attempts: retryMaxAttempts(subs),
+    initialMs: retryInitialDelayMs(subs),
+    multiplier: exponential ? 1.5 : 1.0,
+    maxDelayMs: exponential ? retryMaxDelayMs(subs) ?? 30000 : null,
+    subscriptions: subs.map((sub) => sub.name)
+  };
+}

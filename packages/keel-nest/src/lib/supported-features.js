@@ -13,7 +13,6 @@
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  messaging: 'incremento 9',
   'http-clients': 'incremento 11',
   dependencies: 'incremento 11',
   storage: 'incremento 13',
@@ -29,6 +28,9 @@ const ACCEPTED_NOT_EMITTED = {};
  * demás del catálogo los genera keel-spring y llegan aquí cuando se midan.
  */
 export const SUPPORTED_DATABASES = ['postgresql', 'mysql'];
+
+/** Los brokers que keel-nest genera: RabbitMQ (incremento 9). Kafka y SNS/SQS, en su tramo. */
+export const SUPPORTED_BROKERS = ['rabbitmq'];
 
 /**
  * Lo que una operación de `use-cases` puede declarar y keel-nest todavía no genera. El dominio y la
@@ -83,6 +85,25 @@ export function checkSupportedFeatures(manifest, layers) {
         '(el finder por elemento de la colección). Genera este diseño con keel-spring, o declara la correspondencia 1:1.'
     );
   }
+  // La mensajería (incremento 9) se genera sobre la persistencia RELACIONAL: el outbox y el registro de
+  // mensajes procesados se confirman en la misma transacción que el efecto, y los listeners se cablean
+  // con ella. Un servicio de solo mensajería no tendría dónde.
+  if (declared.includes('messaging') && !declared.includes('persistence')) {
+    errors.push(
+      'messaging sin persistence: keel-nest genera la mensajería sobre la persistencia relacional (el outbox y el registro de mensajes procesados). ' +
+        'Genera este diseño con keel-spring, o declara la persistencia.'
+    );
+  }
+  // La identidad del emisor resuelta contra VARIAS credenciales (`identity.from.resolvedBy`) necesita el
+  // finder por elemento de colección, que keel-nest aún no emite (como la de la puerta HTTP).
+  for (const [name, subscription] of Object.entries(layers?.messaging?.subscriptions ?? {})) {
+    if (subscription?.identity?.from?.resolvedBy || subscription?.identity?.resolvedBy) {
+      errors.push(
+        `messaging.subscriptions.${name}.identity: keel-nest todavía no genera la resolución de una credencial a su recurso ` +
+          '(resolvedBy, el finder por elemento de la colección). Genera este diseño con keel-spring, o declara la correspondencia 1:1.'
+      );
+    }
+  }
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   // La idempotencia de petición se genera (el registro idempotency_record, como keel-spring) cuando hay
   // persistencia donde registrar la clave en la misma transacción que el efecto. Sin persistencia no hay
@@ -113,6 +134,14 @@ export function checkSupportedStack(stack) {
   if (stack?.database && !SUPPORTED_DATABASES.includes(stack.database)) {
     errors.push(
       `database: ${stack.database} — keel-nest genera la persistencia relacional sobre ${SUPPORTED_DATABASES.join(' y ')} (incremento 6 de PLAN-KEEL-NEST.md). ` +
+        'Elige uno de ellos, o genera este diseño con keel-spring.'
+    );
+  }
+  // RabbitMQ primero (incremento 9): Kafka y SNS/SQS llegan en su tramo, y hasta entonces se rechazan en
+  // vez de generar un proyecto cuyo broker nadie conecta.
+  if (stack?.broker && !SUPPORTED_BROKERS.includes(stack.broker)) {
+    errors.push(
+      `broker: ${stack.broker} — keel-nest genera la mensajería sobre ${SUPPORTED_BROKERS.join(', ')} (incremento 9 de PLAN-KEEL-NEST.md). ` +
         'Elige uno de ellos, o genera este diseño con keel-spring.'
     );
   }

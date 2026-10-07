@@ -62,7 +62,8 @@ test('una capa fuera de la frontera se rechaza nombrando keel-nest, antes de esc
   const { exitCode, output } = await runCommand(workspace, build, 'specs/inspection-reports', { defaults: true, acceptUnready: true });
   assert.equal(exitCode, 1);
   assert.match(output, /capacidades que keel-nest no genera/);
-  assert.match(output, /capa messaging: keel-nest todavía no la genera/);
+  // Documental: la mensajería ya se genera (incremento 9), la persistencia documental todavía no.
+  assert.match(output, /persistence.default.model: document — keel-nest todavía no genera/);
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 

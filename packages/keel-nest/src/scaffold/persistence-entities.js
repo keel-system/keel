@@ -133,7 +133,7 @@ function withCollation(column, spec) {
 }
 
 /** Las opciones de @Column como literal TypeScript, en un orden fijo. */
-function optionsLiteral(options) {
+export function optionsLiteral(options) {
   const order = ['name', 'type', 'length', 'precision', 'scale', 'collation', 'nullable', 'update', 'transformer'];
   const entries = order
     .filter((key) => options[key] !== undefined)

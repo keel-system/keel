@@ -21,7 +21,7 @@ export { MECHANISM_CATALOG, STATES };
 /** Las redes de keel-nest que EJECUTAN algo. */
 export const NETS = {
   'db-check':
-    'npm run db-check — la persistencia contra PostgreSQL y MySQL reales: esquema contra el catálogo del motor, cotas, ida y vuelta por el adaptador generado, fila en crudo, versión, unicidad (también la condicionada), página y borrado',
+    'npm run db-check — la persistencia contra PostgreSQL y MySQL reales: esquema contra el catálogo del motor, cotas, ida y vuelta por el adaptador generado, fila en crudo, versión, unicidad (también la condicionada), página y borrado; y los almacenes de la mensajería (el outbox con su reclamo, y el registro de procesados)',
   'ts-check': 'npm run ts-check — compila con strict las 13 fixtures, ejecuta sus pruebas y ARRANCA el servidor contra PostgreSQL',
   'harness-check':
     'npm run harness-check [-- --database=mysql] — levanta infra/ con sus propios scripts, puntúa flujos sonda con score-scenarios.sh (cada código de salida y su evidencia) y exporta, aplica y verifica el baseline de migraciones',
@@ -32,7 +32,20 @@ export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
   'runtime-panel': { pending: 'incremento 14 (telemetría)' },
-  'outbox-relay': { pending: 'incremento 9 (mensajería y outbox)' },
+  'outbox-relay': {
+    emitter: 'src/scaffold/messaging-stores.js (sobre OUTBOX_EVENT y OUTBOX_RELAY de keel-core/gen/messaging-stores.js) · el puente de src/scaffold/messaging.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'la tabla outbox_event es la de keel-spring (schema-parity contra OutboxEventJpa) y los parámetros del relay, los de keel-core (messaging.test.js contra el messaging.yaml de keel-spring; el backoff, contra la referencia ejecutable). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla contra el catálogo del motor, el puente escribiendo la fila en la transacción del cambio (y nada si revierte), el reclamo en orden y con su lote, el lease, SKIP LOCKED sin esperar a la fila retenida por otra réplica, el backoff de un fallo, la rendición al alcanzar el máximo y su cuenta, y que ni la publicada ni la rendida vuelven. Falsado el 2026-10-07 quitando el lease (cae su comprobación y solo esa) y quitando SKIP LOCKED (el reclamo espera a la fila retenida hasta el tope). Lo que no mide: el bucle del relay con un dispatcher real contra el broker (llega con el arnés, 9c) y la purga (incremento 10)'
+      },
+      document: { pending: 'incremento 12 (persistencia documental)' }
+    }
+  },
   'idempotency-request': {
     emitter: 'src/scaffold/request-idempotency.js (sobre IDEMPOTENCY_RECORD de keel-core/gen/request-idempotency.js)',
     coverage: {
@@ -47,7 +60,20 @@ export const MECHANISMS = {
       document: { pending: 'incremento 12 (persistencia documental)' }
     }
   },
-  'idempotency-consume': { pending: 'incremento 9 (suscripciones con deduplicación)' },
+  'idempotency-consume': {
+    emitter: 'src/scaffold/messaging-stores.js (IdempotencyGuard, sobre PROCESSED_EVENT de keel-core/gen/messaging-stores.js)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'la tabla processed_event es la de keel-spring (schema-parity contra ProcessedEventJpa). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla y sus cotas contra el catálogo del motor, la repetición arbitrada por la clave primaria, dos consumidores del mismo mensaje sin pisarse, el registro que sobrevive al rollback del handler (su transacción es propia) y la carrera de dos entregas, de la que registra UNA. Falsado el 2026-10-07 haciendo que el registro use la transacción del llamante: cae «sobrevive al rollback» y solo esa. Lo que no mide: el ORDEN en el listener (alreadyProcessed/record o tryRecord), que escribe el agente y vigilará el gate de idempotencia (incremento 10)'
+      },
+      document: { pending: 'incremento 12 (persistencia documental)' }
+    }
+  },
   'reconciliation-claim': { pending: 'incremento 10 (reconciliación)' },
   'sweep-claim-queue': { pending: 'incremento 10 (barridos)' },
   'sweep-claim-rescue': { pending: 'incremento 10 (barridos)' },

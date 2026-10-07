@@ -25,7 +25,11 @@ export {
   publishedDestination,
   deadLetterDestination,
   usesDeadLetter,
-  deadLetterSubscriptions
+  deadLetterSubscriptions,
+  retryMaxAttempts,
+  retryInitialDelayMs,
+  retryMaxDelayMs,
+  rabbitListenerRetry
 } from './dead-letter.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export {

@@ -19,6 +19,7 @@ import { tsModule } from './render.js';
 import { DOMAIN_EXCEPTION_TS, BASE_SUBCLASSES } from './exceptions.js';
 import { usesRelational } from './persistence-entities.js';
 import { PERSISTENCE_ERRORS_TS } from './repositories.js';
+import { usesMessaging, usesSubscriptionMessages } from './messaging.js';
 
 export const CORRELATION_TS = 'src/infrastructure/correlation/correlation-context.ts';
 export const ERROR_RESPONSE_TS = 'src/infrastructure/rest/error-response.ts';
@@ -35,28 +36,28 @@ export function usesApi(model) {
   return Boolean(model.layersPresent?.api) && (model.services ?? []).some((service) => (service.operations ?? []).some((op) => op.route));
 }
 
+/**
+ * ¿Hace falta la correlación sin API? Sí con mensajería: los eventos la llevan en su metadata y los
+ * listeners la abren con lo que trae cada mensaje.
+ */
+function usesCorrelation(model) {
+  return usesApi(model) || usesMessaging(model);
+}
+
 export function generate(model) {
-  if (!usesApi(model)) return [];
+  if (!usesApi(model)) {
+    // Sin API, solo lo que la mensajería comparte con ella: la correlación y la lectura de valores del
+    // cable (los mensajes de las suscripciones se leen con los mismos lectores y las mismas reglas).
+    const files = [];
+    if (usesCorrelation(model)) files.push(correlationFile());
+    if (usesSubscriptionMessages(model)) files.push(requestErrorsFile(), requestReadingFile());
+    return files;
+  }
   return [
-    { path: CORRELATION_TS, content: tsModule(CORRELATION_TS, [
-      { symbol: 'AsyncLocalStorage', from: 'node:async_hooks' },
-      { symbol: 'randomUUID', from: 'node:crypto' }
-    ], correlationBody()) },
+    correlationFile(),
     { path: ERROR_RESPONSE_TS, content: tsModule(ERROR_RESPONSE_TS, [{ symbol: 'CorrelationContext', from: CORRELATION_TS }], errorResponseBody()) },
-    { path: REQUEST_ERRORS_TS, content: tsModule(REQUEST_ERRORS_TS, [], requestErrorsBody()) },
-    { path: REQUEST_READING_TS, content: tsModule(REQUEST_READING_TS, [
-      { symbol: 'Decimal', from: DECIMAL_TS },
-      { symbol: 'RawJson', from: RAW_JSON_TS },
-      { symbol: 'toDecimal', from: WIRE_TS },
-      { symbol: 'toInt', from: WIRE_TS },
-      { symbol: 'toLong', from: WIRE_TS },
-      { symbol: 'toTimestamp', from: WIRE_TS },
-      { symbol: 'toDate', from: WIRE_TS },
-      { symbol: 'toJson', from: WIRE_TS },
-      { symbol: 'MalformedRequestError', from: REQUEST_ERRORS_TS },
-      { symbol: 'MissingParameterError', from: REQUEST_ERRORS_TS },
-      { symbol: 'RequestValidationError', from: REQUEST_ERRORS_TS }
-    ], requestReadingBody()) },
+    requestErrorsFile(),
+    requestReadingFile(),
     {
       path: EXCEPTION_FILTER_TS,
       content: tsModule(
@@ -75,6 +76,36 @@ export function generate(model) {
       )
     }
   ];
+}
+
+function correlationFile() {
+  return {
+    path: CORRELATION_TS,
+    content: tsModule(CORRELATION_TS, [
+      { symbol: 'AsyncLocalStorage', from: 'node:async_hooks' },
+      { symbol: 'randomUUID', from: 'node:crypto' }
+    ], correlationBody())
+  };
+}
+
+function requestErrorsFile() {
+  return { path: REQUEST_ERRORS_TS, content: tsModule(REQUEST_ERRORS_TS, [], requestErrorsBody()) };
+}
+
+function requestReadingFile() {
+  return { path: REQUEST_READING_TS, content: tsModule(REQUEST_READING_TS, [
+      { symbol: 'Decimal', from: DECIMAL_TS },
+      { symbol: 'RawJson', from: RAW_JSON_TS },
+      { symbol: 'toDecimal', from: WIRE_TS },
+      { symbol: 'toInt', from: WIRE_TS },
+      { symbol: 'toLong', from: WIRE_TS },
+      { symbol: 'toTimestamp', from: WIRE_TS },
+      { symbol: 'toDate', from: WIRE_TS },
+      { symbol: 'toJson', from: WIRE_TS },
+      { symbol: 'MalformedRequestError', from: REQUEST_ERRORS_TS },
+      { symbol: 'MissingParameterError', from: REQUEST_ERRORS_TS },
+      { symbol: 'RequestValidationError', from: REQUEST_ERRORS_TS }
+    ], requestReadingBody()) };
 }
 
 function correlationBody() {

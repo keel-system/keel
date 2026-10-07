@@ -99,7 +99,10 @@ for (const name of fs.readdirSync(FIXTURES_DIR)) {
     if (operations.length === 0 || !nest.model.layersPresent.api) {
       // Sin API (un consumidor puro): la paridad es que ninguno de los dos expone rutas.
       assert.equal(springTable.size, 0);
-      assert.ok(!nest.files.some((file) => file.path.startsWith('src/infrastructure/rest/')));
+      // Los mensajes de sus suscripciones se leen con el lector del cable y las reglas de la API
+      // (request-reading y request-errors), pero no hay controladores ni rutas.
+      const shared = new Set(['src/infrastructure/rest/request-reading.ts', 'src/infrastructure/rest/request-errors.ts']);
+      assert.deepEqual(nest.files.filter((file) => file.path.startsWith('src/infrastructure/rest/') && !shared.has(file.path)).map((file) => file.path), []);
       return;
     }
     const tree = transpileTree(nest.files);

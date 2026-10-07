@@ -57,6 +57,9 @@ export const MYSQL2_VERSION = '^3.24.5';
 // contra el JWKS del proveedor (firma, caducidad, emisor). Sin dependencias y sin Passport: la regla
 // de cada ruta la evalúa un hook de la entrada HTTP con el plan neutral de keel-core.
 export const JOSE_VERSION = '^6.2.12';
+// Mensajería (incremento 9), verificada el 2026-10-07 contra el registro de npm y su documentación: amqplib 2
+// trae sus tipos y la reconexión con `setup` (que vuelve a declarar la topología en cada reconexión).
+export const AMQPLIB_VERSION = '^2.2.0';
 
 export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;

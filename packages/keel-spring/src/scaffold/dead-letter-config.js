@@ -10,7 +10,15 @@
 // destino sale de `lib/dead-letter.js`, que es el mismo sitio del que lo lee el arnés.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { deadLetterName, deadLetterSubscriptions, subscriptionDestination } from 'keel-core/gen';
+import {
+  deadLetterName,
+  deadLetterSubscriptions,
+  subscriptionDestination,
+  rabbitListenerRetry,
+  retryMaxAttempts,
+  retryInitialDelayMs,
+  retryMaxDelayMs
+} from 'keel-core/gen';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
 
@@ -361,51 +369,12 @@ ${beans}${retryBean}
   };
 }
 
-// El backoff y los intentos son del diseño (`onFailure.retry`). Si varias suscripciones
-// declaran distintos, gana el mayor: el error handler es uno solo para el factory, y
-// quedarse corto pierde mensajes de la que más paciencia pedía.
-// Sin `retry` declarado, un solo intento: el diseño dice «sin reintentos» (antes eran 3).
-const maxAttempts = (subs) => Math.max(...subs.map((sub) => sub.retry?.maxAttempts ?? 1));
-const backoffMs = (subs) => Math.max(...subs.map((sub) => sub.retry?.initialDelayMs ?? 1000));
-
-// `maxDelayMs` solo tiene sentido con curva: con `fixed` no hay nada que acotar. Se toma
-// el mayor de las que lo declaran, y `null` si ninguna lo hace (ahí manda el default de
-// Spring, 30 s, y ponerle un número sería inventarlo).
-function maxDelayMs(subs) {
-  const declared = subs.map((sub) => sub.retry?.maxDelayMs).filter((value) => typeof value === 'number');
-  return declared.length > 0 ? Math.max(...declared) : null;
-}
-
-/**
- * El reintento del listener de RabbitMQ, derivado de `onFailure.retry`, o `null` si ninguna
- * suscripción lo declara.
- *
- * Es la misma reconciliación que la de Kafka —un contenedor compartido, gana el más paciente—,
- * pero sobre TODAS las suscripciones y no solo las que tienen descarte: en RabbitMQ el reintento
- * no depende de la DLQ, y una suscripción sin descarte que pide reintentos también los necesita.
- * Lo consumen dos sitios que tienen que decir lo mismo: `spring.rabbitmq.listener.simple.retry`
- * en `parameters/` (config.js) y el customizer de `RabbitTopologyConfig`, que marca lo que no se
- * reintenta. Hasta la corrida `notification-mailer` v2.0.0 las dos piezas las escribía el agente,
- * y la primera vez reintentó también los rechazos de negocio.
- *
- * El multiplicador no está en el DSL: con `exponential` se toma 1.5, el mismo que la rama de
- * Kafka hereda de `ExponentialBackOff`, para que la curva no dependa del broker. Con `fixed`, 1.0.
- */
-export function rabbitListenerRetry(model) {
-  const subs = (model.subscriptions ?? []).filter((sub) => sub.retry);
-  if (subs.length === 0) return null;
-  const exponential = subs.some((sub) => (sub.retry.backoff ?? 'exponential') === 'exponential');
-  return {
-    attempts: maxAttempts(subs),
-    initialMs: backoffMs(subs),
-    multiplier: exponential ? 1.5 : 1.0,
-    // Sin `maxDelayMs` declarado, el techo es 30 s: el de `ExponentialBackOff` en la rama de
-    // Kafka. El default de Boot para el listener de RabbitMQ es 10 s, y dejarlo haría que el
-    // mismo diseño esperase distinto según el broker.
-    maxDelayMs: exponential ? maxDelayMs(subs) ?? 30000 : null,
-    subscriptions: subs.map((sub) => sub.name)
-  };
-}
+// El backoff, los intentos y su reconciliación entre suscripciones son neutrales
+// (keel-core/gen/dead-letter.js): el servidor de keel-nest del diseño espera lo mismo.
+const maxAttempts = retryMaxAttempts;
+const backoffMs = retryInitialDelayMs;
+const maxDelayMs = retryMaxDelayMs;
+export { rabbitListenerRetry };
 
 /**
  * El `BackOff` del error handler, derivado de `onFailure.retry.backoff`.
