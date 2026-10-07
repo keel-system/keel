@@ -17,6 +17,7 @@ import { assetsDir, SKILL } from '../lib/assets.js';
 import { usesRelational } from './persistence-entities.js';
 import { usesJwt } from './security.js';
 import { usesSchemaBaseline } from './schema-baseline.js';
+import { usesRabbitMq } from './messaging.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'nest');
 const agentsSourceDir = path.join(assetsDir, 'agents');
@@ -40,10 +41,11 @@ export const CONVENTIONS = [
 /** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
 export const AGENTS = ['keel-nest-code.md', 'keel-nest-infra.md', 'keel-nest-tests.md', 'keel-nest-validate.md', 'keel-nest-quality.md'];
 
-/** Skills por tecnología aplicables al servicio: la de la base relacional y la del proveedor de identidad. */
+/** Skills por tecnología aplicables al servicio: la de la base relacional, la del proveedor de identidad y la del broker. */
 export function stackSkills(model) {
   const skills = usesRelational(model) ? ['keel-nest-database'] : [];
   if (usesJwt(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-nest-${model.stack.auth}`);
+  if (usesRabbitMq(model)) skills.push('keel-nest-rabbitmq');
   return skills;
 }
 

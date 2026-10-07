@@ -36,6 +36,13 @@ Eres el **agente de código** de keel-nest. Recibes en el prompt la ruta raíz d
      inyectado. Tú escribes el uso en el handler, con el algoritmo de la nota del stub y de `mapping.md` §
      La idempotencia de petición (reclamar PRIMERO, reproducir la respuesta sin re-ejecutar). No escribas
      otro registro ni toques el mediator o el controlador para esto.
+   - **La mensajería**, si el diseño la declara: lee el SKILL.md de `{{keel:skills}}/keel-nest-<broker>/`
+     (el broker de `keel-stack.json`). Escribes el envío —la implementación de `OutboxDispatcher` con
+     `reliability: outbox`, o de cada `<Evento>Publisher` con `best-effort`— y un listener por COLA, en
+     `src/infrastructure/messaging/rabbitmq/`, y los registras en `src/infrastructure/messaging/broker-bindings.ts`.
+     La conexión, la topología, el reintento, la DLQ, el puente, el relay y el registro de procesados **ya
+     están generados**: no declares topología ni escribas otro mecanismo. El comentario de cada
+     `subscriptions/<evento>-message.ts` dice el orden del guard y el mapeo al comando.
    - **Los mappers**: los `todo('…')` que build dejó donde no supo derivar un campo.
    - **Los puertos**: lo que pidan las `preconditions` y `rules` (un `existsBy…`, un contador) se añade
      al puerto de `src/domain/repository/` **y** a su adaptador de `src/infrastructure/persistence/

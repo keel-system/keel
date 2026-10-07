@@ -831,6 +831,21 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     `process.exit(1)` en mitad de otro flujo — no se había visto porque ningún flujo duraba tanto; (3) el
     lector del JUnit de `broker-check` contaba como verdes los `<error>` de Vitest (los errores sin
     manejar), y así salió un primer «21/21» falso.
+- **9d — hecho (2026-10-07)**: la skill `keel-nest-rabbitmq` (`SKILL.md` + `references/listeners.md` y
+  `troubleshooting.md`), instalada solo con RabbitMQ en el stack. Mucho más corta que la de keel-spring: lo
+  que allí es código del agente —confirmaciones con `CorrelationData`, deadline por encima del
+  recovery-interval, reset con cooldown, el configurer del contenedor, el customizer del reintento, la
+  topología de publicación— aquí lo hace build, y la skill solo enseña el envío (una línea sobre
+  `RabbitConnection.publish`), los publishers best-effort, un listener por COLA y dónde se registra todo
+  (`broker-bindings.ts`). Las lecciones que sí se trasladan, con su porqué: lo ajeno con `return` y lo
+  propio roto con `throw`, el orden del guard lo dicta el diseño (y el reintento en memoria no es una
+  reentrega), la carrera ya resuelta no es un fallo, la identidad del emisor resuelta antes del comando.
+  El agente de código gana el paso de la mensajería; `mapping.md` e `integration-tests.md` ya lo
+  documentaban desde 9b/9c. Puerta: `generator-docs.test.js` ata la skill al código emitido —se instala en
+  los dos harnesses solo con el broker, cada ruta `src/…` que cita existe en lo que build emite (falsado
+  cambiando una), y las firmas que enseña (`publish`, `consume`, `EventEnvelope.parse`, el guard,
+  `broker-bindings`) son las de verdad—. El dispatcher de la skill es el mismo que `broker-check` ejecuta
+  contra RabbitMQ real.
   - **Fixture de la corrida, por decidir antes del 9e**: `inspection-reports` es **documental** y keel-nest
     no genera Mongo hasta el incremento 12. Las relacionales con outbox arrastran capas fuera de la
     frontera: `notification-mailer` (mail, inc. 13), `payment-checkout` (payments, 13), `stock-reservation` y
