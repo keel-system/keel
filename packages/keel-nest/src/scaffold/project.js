@@ -30,11 +30,12 @@ import {
   PG_VERSION,
   MYSQL2_VERSION,
   JOSE_VERSION,
-  AMQPLIB_VERSION
+  AMQPLIB_VERSION,
+  KAFKA_JAVASCRIPT_VERSION
 } from '../lib/assets.js';
 import { usesJwt } from './security.js';
 import { usesRelational, engineOf } from './persistence-entities.js';
-import { usesRabbitMq } from './messaging.js';
+import { usesKafka, usesRabbitMq } from './messaging.js';
 
 export function generate(model) {
   return [
@@ -76,6 +77,7 @@ function packageJson(model) {
       '@nestjs/platform-fastify': NEST_VERSION,
       // El cliente de RabbitMQ del broker del stack (incremento 9).
       ...(usesRabbitMq(model) ? { amqplib: AMQPLIB_VERSION } : {}),
+      ...(usesKafka(model) ? { '@confluentinc/kafka-javascript': KAFKA_JAVASCRIPT_VERSION } : {}),
       'decimal.js': DECIMAL_JS_VERSION,
       fastify: FASTIFY_VERSION,
       // La validación del JWT de la capa security contra el JWKS del proveedor.

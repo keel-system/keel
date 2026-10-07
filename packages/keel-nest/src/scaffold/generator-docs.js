@@ -17,7 +17,7 @@ import { assetsDir, SKILL } from '../lib/assets.js';
 import { usesRelational } from './persistence-entities.js';
 import { usesJwt } from './security.js';
 import { usesSchemaBaseline } from './schema-baseline.js';
-import { usesRabbitMq } from './messaging.js';
+import { usesKafka, usesRabbitMq } from './messaging.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'nest');
 const agentsSourceDir = path.join(assetsDir, 'agents');
@@ -46,6 +46,7 @@ export function stackSkills(model) {
   const skills = usesRelational(model) ? ['keel-nest-database'] : [];
   if (usesJwt(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-nest-${model.stack.auth}`);
   if (usesRabbitMq(model)) skills.push('keel-nest-rabbitmq');
+  if (usesKafka(model)) skills.push('keel-nest-kafka');
   return skills;
 }
 

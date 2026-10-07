@@ -39,10 +39,10 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Lo que tr
 | `scopedResource()` | el recurso al que alcanzan los usuarios no exentos del alcance por recurso |
 | `apiKey()` | la clave del perfil local con `protocol: api-key` |
 | `deliver<Suscripción>(messageId, payloadJson)` | entrega un mensaje en el canal real de esa suscripción, con la envoltura y las cabeceras que declara su contrato (con identidad del emisor, `deliver<S>(messageId, source, payloadJson)`); el **mismo** `messageId` dos veces es la reentrega |
-| `deliverMessage(exchange, key, body, cabeceras?)` | un mensaje crudo (un evento ajeno del canal, un cuerpo que incumple el contrato); falla si RabbitMQ no lo enruta |
+| `deliverMessage(destino, key, body, cabeceras?)` | un mensaje crudo (un evento ajeno del canal, un cuerpo que incumple el contrato) en el exchange (RabbitMQ: falla si no lo enruta) o el topic (Kafka) de la fuente |
 | `await publishedMessages(canal, n?)` | lo publicado en un canal del diseño desde el reset, como `{ routingKey, properties, body, payload }` (`payload.metadata.eventType`, `payload.data`); con outbox espera antes a que el relay entregue |
 | `deadLetterMessages(suscripción, n?)` | lo que acabó en el descarte de esa suscripción; también para la aserción NEGATIVA (un duplicado absorbido no acaba ahí) |
-| `await purgeMessages(canal)` | vacía un canal justo antes de la acción cuyo Then afirma que no se publica nada |
+| `await purgeMessages(canal)` | vacía un canal justo antes de la acción cuyo Then afirma que no se publica nada (con Kafka, que no borra, mueve la marca de lectura) |
 | `await stopBroker()` / `await startBroker()` | el canal indisponible; `startBroker` espera a que la conexión del servicio vuelva |
 | `await deadLetteredEvents()` | cuántos eventos se rindió el outbox: el Then natural de un escenario del outbox es que siga en 0 |
 | `await abandonOutboxEvent(evento)`, `clearAbandonedOutboxEvents()` | agota los reintentos de un evento pendiente (la rendición, sin esperar 40 intentos) y lo retira después |

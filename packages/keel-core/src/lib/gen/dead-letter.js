@@ -191,3 +191,33 @@ export function rabbitListenerRetry(model) {
     subscriptions: subs.map((sub) => sub.name)
   };
 }
+
+/**
+ * El reintento del consumidor de KAFKA, derivado de `onFailure.retry` de las suscripciones con descarte.
+ *
+ * En keel-spring el error handler es UNO para todo el contenedor (`DeadLetterConfig`), y build solo lo
+ * genera si alguna suscripción declara `onFailure.deadLetter`: entonces su curva sale de ESAS
+ * suscripciones —no de todas, a diferencia de RabbitMQ— y se aplica a todos los topics, aunque solo los
+ * de `deadLettered` publiquen en su `.DLT`. Sin ninguna, rige el `DefaultErrorHandler` de Spring Kafka
+ * por defecto: diez intentos seguidos, sin espera, y después se registra y se confirma. Cualquier otro
+ * generador tiene que reintentar igual, o el mismo diseño tardaría distinto en descartar en los dos.
+ *
+ * Mismo multiplicador que `rabbitListenerRetry` (1.5 con `exponential`, el de `ExponentialBackOff`), y el
+ * mismo techo por defecto (30 s).
+ */
+export function kafkaListenerRetry(model) {
+  const subs = deadLetterSubscriptions(model);
+  if (subs.length === 0) {
+    return { attempts: 10, initialMs: 0, multiplier: 1.0, maxDelayMs: null, deadLetteredTopics: [] };
+  }
+  const exponential = subs.some((sub) => (sub.retry?.backoff ?? 'exponential') === 'exponential');
+  return {
+    attempts: retryMaxAttempts(subs),
+    initialMs: retryInitialDelayMs(subs),
+    multiplier: exponential ? 1.5 : 1.0,
+    maxDelayMs: exponential ? retryMaxDelayMs(subs) ?? 30000 : null,
+    // El descarte es por TOPIC: dos suscripciones de la misma fuente comparten topic, y basta con que una
+    // lo declare (es el `DEAD_LETTERED` de `DeadLetterConfig`).
+    deadLetteredTopics: [...new Set(subs.map((sub) => subscriptionDestination('kafka', model, sub)))]
+  };
+}

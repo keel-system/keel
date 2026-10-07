@@ -38,10 +38,11 @@ Eres el **agente de código** de keel-nest. Recibes en el prompt la ruta raíz d
      otro registro ni toques el mediator o el controlador para esto.
    - **La mensajería**, si el diseño la declara: lee el SKILL.md de `{{keel:skills}}/keel-nest-<broker>/`
      (el broker de `keel-stack.json`). Escribes el envío —la implementación de `OutboxDispatcher` con
-     `reliability: outbox`, o de cada `<Evento>Publisher` con `best-effort`— y un listener por COLA, en
-     `src/infrastructure/messaging/rabbitmq/`, y los registras en `src/infrastructure/messaging/broker-bindings.ts`.
-     La conexión, la topología, el reintento, la DLQ, el puente, el relay y el registro de procesados **ya
-     están generados**: no declares topología ni escribas otro mecanismo. El comentario de cada
+     `reliability: outbox`, o de cada `<Evento>Publisher` con `best-effort`— y los listeners (con RabbitMQ, uno
+     por COLA, en `src/infrastructure/messaging/rabbitmq/`; con Kafka, uno por SUSCRIPCIÓN, en
+     `src/infrastructure/messaging/kafka/`), y los registras en `src/infrastructure/messaging/broker-bindings.ts`.
+     La conexión, la topología o los consumer groups, el reintento, el descarte, el puente, el relay y el
+     registro de procesados **ya están generados**: no declares topología ni escribas otro mecanismo. El comentario de cada
      `subscriptions/<evento>-message.ts` dice el orden del guard y el mapeo al comando.
    - **Los mappers**: los `todo('…')` que build dejó donde no supo derivar un campo.
    - **Los puertos**: lo que pidan las `preconditions` y `rules` (un `existsBy…`, un contador) se añade

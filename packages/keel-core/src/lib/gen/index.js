@@ -29,7 +29,8 @@ export {
   retryMaxAttempts,
   retryInitialDelayMs,
   retryMaxDelayMs,
-  rabbitListenerRetry
+  rabbitListenerRetry,
+  kafkaListenerRetry
 } from './dead-letter.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export {

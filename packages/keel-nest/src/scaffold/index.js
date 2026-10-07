@@ -34,6 +34,7 @@ import * as requestIdempotency from './request-idempotency.js';
 import * as messaging from './messaging.js';
 import * as messagingStores from './messaging-stores.js';
 import * as rabbitmq from './rabbitmq.js';
+import * as kafka from './kafka.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as architecture from './architecture.js';
 import * as restSupport from './rest-support.js';
@@ -77,10 +78,11 @@ const GENERATORS = [
   // La idempotencia de petición: el registro, su firma y su contexto (la misma tabla que keel-spring).
   requestIdempotency,
   // La mensajería (incremento 9): la envoltura, los eventos de integración, el puente, los mensajes de
-  // suscripción, el outbox con su relay, el registro de procesados y la conexión con RabbitMQ.
+  // suscripción, el outbox con su relay, el registro de procesados y la conexión con el broker (RabbitMQ o Kafka).
   messaging,
   messagingStores,
   rabbitmq,
+  kafka,
   // El baseline de migraciones: cómo se exporta y cómo se demuestra (lo usa el pase de calidad).
   schemaBaseline,
   { generate: (model) => mediator.generate(model, { mappers: mappers.mapperClasses(model) }) },

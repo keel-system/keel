@@ -16,6 +16,7 @@ import { usesOutbox } from './outbox.js';
 import { rabbitListenerRetry } from './dead-letter-config.js';
 import { usesIdempotency } from './idempotency.js';
 import { OUTBOX_PURGE, OUTBOX_RELAY, PROCESSED_EVENT_PURGE, parameterValue } from 'keel-core/gen/messaging-stores';
+import { KAFKA_PRODUCER_TIMEOUTS } from 'keel-core/gen/infra-catalog';
 import { usesHttpIdempotency } from './http-idempotency.js';
 import { usesCorrelation } from './correlation.js';
 import { instrumentationFor, usesTelemetry } from './telemetry.js';
@@ -851,22 +852,23 @@ function rabbitListenerLines(model) {
  * el evento y levanta el broker dentro de esa ventana, así que el envío pendiente se completaba y
  * el evento abandonado SALÍA. Fuera de `local` rige el default de Kafka, y las variables lo exponen.
  */
-export const KAFKA_LOCAL_PRODUCER_TIMEOUTS = { deliveryMs: 15000, requestMs: 5000, maxBlockMs: 5000 };
+export const KAFKA_LOCAL_PRODUCER_TIMEOUTS = {
+  deliveryMs: KAFKA_PRODUCER_TIMEOUTS.delivery.local,
+  requestMs: KAFKA_PRODUCER_TIMEOUTS.request.local,
+  maxBlockMs: KAFKA_PRODUCER_TIMEOUTS.maxBlock.local
+};
 
 function kafkaProducerTimeoutLines(profile) {
   const local = profile === 'local';
   const value = (name, localValue, kafkaDefault) =>
     local ? String(localValue) : `\${${name}:${kafkaDefault}}`;
-  const t = KAFKA_LOCAL_PRODUCER_TIMEOUTS;
   return [
     '      properties:',
     '        # Cuánto espera un envío sin confirmar antes de fallar. Kafka exige',
     '        # delivery.timeout.ms >= linger.ms + request.timeout.ms. El join() del',
     '        # dispatcher del outbox no espera más que esto, así que un broker caído',
     '        # cuenta como intento fallido en este plazo y no se queda el envío en vuelo.',
-    `        delivery.timeout.ms: ${value('KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS', t.deliveryMs, 120000)}`,
-    `        request.timeout.ms: ${value('KAFKA_PRODUCER_REQUEST_TIMEOUT_MS', t.requestMs, 30000)}`,
-    `        max.block.ms: ${value('KAFKA_PRODUCER_MAX_BLOCK_MS', t.maxBlockMs, 60000)}`
+    ...Object.values(KAFKA_PRODUCER_TIMEOUTS).map((p) => `        ${p.key}: ${value(p.env, p.local, p.default)}`)
   ];
 }
 

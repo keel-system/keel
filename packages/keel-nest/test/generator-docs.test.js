@@ -97,3 +97,40 @@ test('las firmas que enseña la skill de RabbitMQ son las del código emitido', 
   for (const method of ['alreadyProcessed', 'record', 'tryRecord']) assert.ok(guard.includes(`${method}(handlerId: string, eventId: string)`), method);
   for (const source of skillSources) assert.doesNotMatch(fs.readFileSync(source, 'utf8'), /\.claude\/|\.opencode\//, path.basename(source));
 });
+
+// La de Kafka (incremento 9f), con las mismas dos comprobaciones: lo que cita existe y sus firmas son las de verdad.
+const kafka = byPath(planFixture('stock-reservation', { stack: { broker: 'kafka', database: 'postgresql' } }).files);
+const kafkaSkillDir = path.join(assets, 'generators', 'nest', 'skills', 'keel-nest-kafka');
+const kafkaSkillSources = [
+  path.join(kafkaSkillDir, 'SKILL.md'),
+  ...fs.readdirSync(path.join(kafkaSkillDir, 'references')).map((name) => path.join(kafkaSkillDir, 'references', name))
+];
+
+test('la skill de Kafka se instala en cada harness con el broker, y la de RabbitMQ no', () => {
+  for (const harness of HARNESSES) {
+    assert.ok(harness.skillPath('keel-nest-kafka', 'SKILL.md') in kafka, `${harness.id}: keel-nest-kafka`);
+    assert.ok(harness.skillPath('keel-nest-kafka', 'references/listeners.md') in kafka, `${harness.id}: sus referencias`);
+  }
+  assert.ok(!Object.keys(kafka).some((file) => file.includes('keel-nest-rabbitmq')), 'con Kafka no se instala la de RabbitMQ');
+  assert.ok(!Object.keys(rabbit).some((file) => file.includes('keel-nest-kafka')), 'con RabbitMQ no se instala la de Kafka');
+});
+
+test('cada ruta src/… que cita la skill de Kafka existe en lo que emite build', () => {
+  const emitted = new Set(Object.keys(kafka));
+  for (const source of kafkaSkillSources) {
+    const text = fs.readFileSync(source, 'utf8');
+    for (const [cited] of text.matchAll(/src\/[\w/.-]+\.ts/g)) {
+      assert.ok(emitted.has(cited), `${path.basename(source)} cita ${cited}, que build no emite`);
+    }
+  }
+});
+
+test('las firmas que enseña la skill de Kafka son las del código emitido', () => {
+  const connection = kafka['src/infrastructure/messaging/kafka/kafka-connection.ts'];
+  assert.match(connection, /async publish\(topic: string, key: string \| null, payload: string \| Buffer/);
+  assert.match(connection, /consume\(subscription: string, handler: MessageHandler\): void/);
+  assert.match(connection, /export interface InboundMessage \{[\s\S]*readonly value: string;/);
+  const settings = kafka['src/infrastructure/messaging/messaging-settings.ts'];
+  assert.match(settings, /readonly groupId: string \| null;/);
+  for (const source of kafkaSkillSources) assert.doesNotMatch(fs.readFileSync(source, 'utf8'), /\.claude\/|\.opencode\//, path.basename(source));
+});

@@ -195,7 +195,7 @@ export function releaseParts(broker, { destination, receiptHandle, base }) {
   ];
 }
 
-export function readParts(broker, { destination, offset, count, bodyFile, base, hideSeconds }) {
+export function readParts(broker, { destination, offset, count, bodyFile, base, hideSeconds, format }) {
   if (broker === 'rabbitmq') {
     return [
       'curl', '-sf', '-u', ENDPOINTS.rabbitmq.credentials, '-H', 'content-type: application/json',
@@ -210,7 +210,9 @@ export function readParts(broker, { destination, offset, count, bodyFile, base, 
       '--visibility-timeout', hideSeconds ?? '0'
     ].concat(hideSeconds ? ['--wait-time-seconds', '1'] : []);
   }
-  return ['kcat', '-C', '-b', ENDPOINTS.kafka.bootstrap, '-t', destination, '-o', offset, '-e', '-q'];
+  const parts = ['kcat', '-C', '-b', ENDPOINTS.kafka.bootstrap, '-t', destination, '-o', offset, '-e', '-q'];
+  // Sin formato, kcat escribe solo el valor de cada registro (lo que lee el arnés de keel-spring).
+  return format ? parts.concat(['-f', format]) : parts;
 }
 
 /**
@@ -231,6 +233,13 @@ export const UNKNOWN_TOPIC = 'Unknown topic or partition';
  * los dos acaba con el escapado del template en vez de con el del formato.
  */
 export const OFFSET_FORMAT = String.raw`%o\n`;
+
+/**
+ * Formato de kcat para leer un registro ENTERO en una línea: la clave, los headers (`k=v,k2=v2`) y el valor,
+ * separados por tabuladores. Lo usa el arnés que quiere afirmar sobre la clave (la routing key) y no solo
+ * sobre el cuerpo; los escapes son DE KCAT, como en `OFFSET_FORMAT`.
+ */
+export const RECORD_FORMAT = String.raw`%k\t%h\t%s\n`;
 
 /** Offsets existentes del topic (`-f %o`), base de la marca de aislamiento. Solo Kafka. */
 export function offsetsParts({ destination, format = OFFSET_FORMAT }) {

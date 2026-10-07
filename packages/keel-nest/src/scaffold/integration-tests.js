@@ -36,7 +36,7 @@ export const CHECK_FLOWS_SH = 'infra/check-flows.sh';
 
 export function generate(model) {
   return [
-    { path: INTEGRATION_CONFIG, content: integrationConfig() },
+    { path: INTEGRATION_CONFIG, content: integrationConfig(model) },
     { path: FLOW_SUPPORT_TS, content: flowSupportTs(model) },
     { path: HARNESS_SMOKE_TS, content: harnessSmokeTs(model) },
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
@@ -65,7 +65,11 @@ function dbProbe(model) {
 
 // ─── vitest.integration.config.ts ───────────────────────────────────────────
 
-function integrationConfig() {
+function integrationConfig(model) {
+  // Con mensajería, un caso puede parar y levantar el broker (stopBroker/startBroker): con Kafka eso solo ya pasa
+  // de 30 s —cada consulta al broker parado tarda varios segundos en rendirse, y la reconexión y el reenvío del
+  // outbox suman otros tantos— sin que nada vaya mal (broker-check, 2026-10-07). Spring no pone plazo por caso.
+  const testTimeout = usesMessagingHarness(model) ? '120_000' : '30_000';
   return `import { defineConfig } from 'vitest/config';
 
 // La suite de integración: los flujos FL-* contra el servidor real y la infraestructura de infra/.
@@ -81,7 +85,7 @@ export default defineConfig({
     // Los flujos comparten la base, el broker y la caché: en serie, nunca a la vez. El reset es por
     // flujo (archivo), y dos flujos simultáneos se borrarían el Given el uno al otro.
     fileParallelism: false,
-    testTimeout: 30_000,
+    testTimeout: ${testTimeout},
     // Arrancar el servidor y resetear la infraestructura cuesta más que un caso.
     hookTimeout: 120_000,
     reporters: [

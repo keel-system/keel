@@ -3,7 +3,7 @@
 Qué produce cada construcción del diseño y qué queda para el agente. Se sigue **estrictamente**: lo que
 aquí se fija es lo que hace que este servidor sea equivalente al de keel-spring del mismo diseño. Las
 capas que keel-nest aún no genera (clientes HTTP, dependencias, storage, correo, pagos, la persistencia
-documental, y la mensajería sobre un broker que no sea RabbitMQ) las rechaza `keel-nest build`: si estás
+documental, y la mensajería sobre SNS/SQS) las rechaza `keel-nest build`: si estás
 aquí, el diseño no las declara.
 
 ## `domain` — domain.keel.yaml
@@ -227,21 +227,29 @@ entrante), un `<Evento>IntegrationEvent` por evento, el puente `<Servicio>Domain
 adaptadores de repositorio ya entregan los eventos al guardar, la clase del mensaje de cada suscripción
 (`subscriptions/<evento>-message.ts`, con `fromWire` y `requireContract()`), el **outbox** con su relay
 (`outbox/`, la tabla `outbox_event`), el registro de mensajes procesados (`IdempotencyGuard`, la tabla
-`processed_event`), la configuración (`config/parameters/<perfil>/messaging.yaml` y `rabbitmq.yaml`) y, con
-RabbitMQ, la conexión (`rabbitmq/rabbit-connection.ts`) y la topología entera (`rabbitmq/rabbit-topology.ts`):
-la de consumo —exchange del canal de origen, cola propia y DLQ— y la de publicación —el exchange del servicio
-y una cola por canal publicado, enlazada con la routing key de cada evento, que es también la que lee el
-arnés—. **No declares topología ni escribas otra conexión.** El dispatcher es una línea:
-`this.connection.publish(destination, routingKey, payload, eventType)`, que resuelve cuando el broker
-confirma y lanza si no hubo cola (`mandatory`) o no hay conexión.
+`processed_event`), la configuración (`config/parameters/<perfil>/messaging.yaml` y la del broker) y la
+conexión con el broker de `keel-stack.json`:
+
+- **RabbitMQ** — `rabbitmq/rabbit-connection.ts` y la topología entera (`rabbitmq/rabbit-topology.ts`): la de
+  consumo —exchange del canal de origen, cola propia y DLQ— y la de publicación —el exchange del servicio y una
+  cola por canal publicado, enlazada con la routing key de cada evento, que es también la que lee el arnés—. El
+  dispatcher es una línea: `this.connection.publish(destination, routingKey, payload, eventType)`, que resuelve
+  cuando el broker confirma y lanza si no hubo cola (`mandatory`) o no hay conexión.
+- **Kafka** — `kafka/kafka-connection.ts` y el consumo (`kafka/kafka-consumption.ts`): un consumer group por
+  suscripción (`messaging.subscriptions.<e>.group-id`), el reintento y el descarte en `<topic>.DLT`. Los topics
+  no los crea la aplicación. El dispatcher es una línea: `this.connection.publish(destination, routingKey,
+  payload)`, con la routing key como clave del registro.
+
+**No declares topología ni escribas otra conexión.** Lo que cambia de un broker a otro está en su skill
+(`keel-nest-<broker>`).
 
 | Diseño | Código | Quién |
 |---|---|---|
 | `publishing.events.E` | `<E>IntegrationEvent` y su rama en el puente | build |
-| `reliability: outbox` | la fila en la transacción del cambio, el relay (reclamo con lease, backoff, rendición) y el puerto `OutboxDispatcher` | build; **la implementación del puerto, el agente** (`RabbitConnection.publish`) |
+| `reliability: outbox` | la fila en la transacción del cambio, el relay (reclamo con lease, backoff, rendición) y el puerto `OutboxDispatcher` | build; **la implementación del puerto, el agente** (`publish` de la conexión del broker) |
 | `reliability: best-effort` | el puerto `<E>Publisher` (dominio), invocado tras el commit, con un stub que solo avisa | build; **la implementación, el agente** |
-| `subscriptions.E` | `<E>Message` con su lector y su contrato; la cola en `messaging.subscriptions.<e>.queue` | build; **el listener, el agente** (`RabbitConnection.consume`) |
-| `onFailure.retry` / `deadLetter` | el reintento del consumo (sin reintentar `DomainException` ni `MessageContractViolation`) y la DLQ | build |
+| `subscriptions.E` | `<E>Message` con su lector y su contrato; la cola (RabbitMQ, `messaging.subscriptions.<e>.queue`) o el consumer group (Kafka, `…<e>.group-id`) | build; **el listener, el agente** (`consume` de la conexión del broker: uno por cola en RabbitMQ, uno por suscripción en Kafka) |
+| `onFailure.retry` / `deadLetter` | el reintento del consumo (sin reintentar `DomainException` ni `MessageContractViolation`) y el descarte (la DLQ de la cola, o `<topic>.DLT`) | build |
 
 Lo que escribe el agente se registra en **un solo archivo**, `infrastructure/messaging/broker-bindings.ts`:
 los adaptadores en `BROKER_ADAPTERS` (`{ provide: OutboxDispatcher, useClass: … }`, que sustituye al

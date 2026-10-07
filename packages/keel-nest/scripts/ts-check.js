@@ -30,7 +30,7 @@ import { planService } from '../src/scaffold/index.js';
 import { loadService } from 'keel-core';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { resolveRuntime, startDatabase, stopDatabase } from './lib/database-container.js';
-import { JOSE_VERSION, AMQPLIB_VERSION } from '../src/lib/assets.js';
+import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION } from '../src/lib/assets.js';
 
 const keep = process.argv.includes('--keep');
 const isWindows = process.platform === 'win32';
@@ -107,18 +107,31 @@ for (const [name, args] of [
 
 // Las dependencias que el diseño de referencia no pide y alguna silueta sí (la seguridad: jose), sin
 // tocar su package.json: el node_modules se comparte con todas.
-const extra = npm(projectDir, ['install', '--no-save', '--no-audit', '--no-fund', `jose@${JOSE_VERSION}`, `amqplib@${AMQPLIB_VERSION}`]);
-if (!step('dependencias de las demás siluetas (jose, amqplib)', extra.ok)) console.error(extra.output);
+const extra = npm(projectDir, [
+  'install',
+  '--no-save',
+  '--no-audit',
+  '--no-fund',
+  `jose@${JOSE_VERSION}`,
+  `amqplib@${AMQPLIB_VERSION}`,
+  `@confluentinc/kafka-javascript@${KAFKA_JAVASCRIPT_VERSION}`
+]);
+if (!step('dependencias de las demás siluetas (jose, amqplib, kafka)', extra.ok)) console.error(extra.output);
 
 // Las trece siluetas: cada fixture entera, renderizada al lado y compilada con el mismo node_modules.
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');
 const vitest = path.join(projectDir, 'node_modules', 'vitest', 'vitest.mjs');
 const failedFixtures = [];
 const failedTests = [];
-for (const name of fs.readdirSync(FIXTURES_DIR)) {
-  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
-  // Con mensajería, sobre RabbitMQ: es el broker que keel-nest genera (el resto, la frontera lo rechaza).
-  const { files } = planService({ manifest, layers, workspace: workspace, stack: layers.messaging ? { broker: 'rabbitmq' } : null });
+const silhouettes = fs.readdirSync(FIXTURES_DIR).flatMap((name) => {
+  const { layers } = loadService(path.join(FIXTURES_DIR, name));
+  // Con mensajería, sobre cada broker que keel-nest genera (SNS/SQS, la frontera lo rechaza todavía).
+  return layers.messaging ? [{ name, broker: 'rabbitmq' }, { name, broker: 'kafka' }] : [{ name, broker: null }];
+});
+for (const { name: fixture, broker } of silhouettes) {
+  const name = broker ? `${fixture}-${broker}` : fixture;
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
+  const { files } = planService({ manifest, layers, workspace: workspace, stack: broker ? { broker } : null });
   const dir = path.join(workspace, 'fixtures-tsc', name);
   for (const file of files) {
     const out = path.join(dir, file.path);
@@ -142,7 +155,7 @@ for (const name of fs.readdirSync(FIXTURES_DIR)) {
 step(
   'dominio, aplicación y API de TODAS las fixtures compilan con strict',
   failedFixtures.length === 0,
-  failedFixtures.length > 0 ? `en rojo: ${failedFixtures.join(', ')}` : `${fs.readdirSync(FIXTURES_DIR).length} fixtures`
+  failedFixtures.length > 0 ? `en rojo: ${failedFixtures.join(', ')}` : `${silhouettes.length} siluetas (fixture × broker)`
 );
 step(
   'las pruebas emitidas de TODAS las fixtures pasan (arranque, casos de uso y API)',

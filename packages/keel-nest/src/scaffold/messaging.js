@@ -19,12 +19,12 @@
 // OutboxDispatcher (outbox) o de <Evento>Publisher (best-effort) y los listeners. Los escribe el agente
 // siguiendo la skill keel-nest-<broker>, y los registra en UN solo archivo, `broker-bindings.ts`: es lo
 // que en Spring hace el component-scan. La conexión con el broker y su topología de consumo sí son de
-// build (`rabbitmq.js`), porque en Spring las pone Boot.
+// build (`rabbitmq.js`, `kafka.js`), porque en Spring las pone Boot.
 //
 // Solo con persistencia RELACIONAL o sin persistencia: la documental llega con el incremento 12, y ahí
 // el puente y el outbox son otra rama entera.
 
-import { subscriptionDestination as destinationOf } from 'keel-core/gen';
+import { subscriptionDestination as destinationOf, subscriptionGroupId } from 'keel-core/gen';
 import { OUTBOX_RELAY, parameterValue } from 'keel-core/gen/messaging-stores';
 import { DIRS, classPath, fieldImports, tsModule, tsString, decapitalize } from './render.js';
 import { DOMAIN_EVENT_TS, EVENT_METADATA_TS } from './events.js';
@@ -78,9 +78,14 @@ export function usesSubscriptionMessages(model) {
   return usesMessaging(model) && (model.subscriptions ?? []).length > 0;
 }
 
-/** ¿El stack es RabbitMQ? Es el único broker que keel-nest genera hoy (los demás, en su tramo). */
+/** ¿El stack es RabbitMQ? */
 export function usesRabbitMq(model) {
   return usesMessaging(model) && model.stack?.broker === 'rabbitmq';
+}
+
+/** ¿El stack es Kafka (incremento 9f)? */
+export function usesKafka(model) {
+  return usesMessaging(model) && model.stack?.broker === 'kafka';
 }
 
 export const bridgeClass = (model) => `${model.service.className}DomainEventBridge`;
@@ -101,6 +106,8 @@ export const OUTBOX_BACKOFF_TS = classPath(OUTBOX_DIR, 'OutboxBackoff');
 export const IDEMPOTENCY_GUARD_TS = classPath(IDEMPOTENCY_DIR, 'IdempotencyGuard');
 export const RABBIT_TOPOLOGY_TS = `src/${MESSAGING_DIR}/rabbitmq/rabbit-topology.ts`;
 export const RABBIT_CONNECTION_TS = `src/${MESSAGING_DIR}/rabbitmq/rabbit-connection.ts`;
+export const KAFKA_CONSUMPTION_TS = `src/${MESSAGING_DIR}/kafka/kafka-consumption.ts`;
+export const KAFKA_CONNECTION_TS = `src/${MESSAGING_DIR}/kafka/kafka-connection.ts`;
 
 export function generate(model) {
   if (!usesMessaging(model)) return [];
@@ -588,18 +595,31 @@ ${
 }
 
 /**
- * Las colas de las que consume el servicio, con las suscripciones que comparten cada una. Con RabbitMQ la
- * cola sale de la fuente (keel-core/gen/dead-letter.js) y varias suscripciones pueden compartirla; con los
- * demás brokers, una por suscripción hasta que su tramo lo decida.
+ * Los CONSUMIDORES del servicio, que es a lo que corresponde un listener, con las suscripciones de cada uno.
+ * No es lo mismo en los dos brokers, y confundirlos pierde mensajes:
+ *
+ *   · RabbitMQ — un consumidor por COLA. La cola sale de la fuente (keel-core/gen/dead-letter.js) y varias
+ *     suscripciones la comparten: dos consumidores de la misma cola competirían y cada mensaje llegaría a
+ *     uno solo, así que el listener es uno y enruta por el tipo.
+ *   · Kafka — un consumidor por SUSCRIPCIÓN, cada uno con su consumer group (`<servicio>-<evento>`). Cada
+ *     grupo recibe el topic ENTERO: dos suscripciones de la misma fuente leen el mismo topic y cada una
+ *     descarta lo que no es suyo. Con un solo grupo, Kafka les repartiría las particiones.
  */
-export function consumerQueues(model) {
-  const queues = new Map();
+export function consumerUnits(model) {
+  const units = new Map();
   for (const sub of model.subscriptions ?? []) {
-    const queue = model.stack?.broker === 'rabbitmq' ? destinationOf('rabbitmq', model, sub) : sub.name;
-    if (!queues.has(queue)) queues.set(queue, { queue, subscriptions: [] });
-    queues.get(queue).subscriptions.push(sub.name);
+    let unit;
+    if (model.stack?.broker === 'kafka') {
+      const group = subscriptionGroupId(model, sub);
+      unit = { key: group, label: `el consumer group ${group} sobre ${sub.topicDefault}`, group, topic: sub.topicDefault };
+    } else {
+      const queue = model.stack?.broker === 'rabbitmq' ? destinationOf('rabbitmq', model, sub) : sub.name;
+      unit = { key: queue, label: `la cola ${queue}`, queue };
+    }
+    if (!units.has(unit.key)) units.set(unit.key, { ...unit, subscriptions: [] });
+    units.get(unit.key).subscriptions.push(sub.name);
   }
-  return [...queues.values()];
+  return [...units.values()];
 }
 
 // El contrato de recepción, escrito donde lo va a leer el agente al escribir el listener. Es el de
@@ -668,16 +688,21 @@ function contractDoc(model, sub) {
     if (sub.triggerHasDomainGuard) lines.push('Esa rama termina igualmente en IdempotencyGuard.record(...): el mensaje quedó atendido, por el otro camino.');
   }
   if (sub.deadLetter) {
-    lines.push(`Con onFailure.deadLetter: tras agotar los reintentos el broker lo mueve al descarte de su cola. La topología la genera build — NO la declares tú.`);
+    lines.push(
+      model.stack?.broker === 'kafka'
+        ? `Con onFailure.deadLetter: tras agotar los reintentos —o al primer fallo no reintentable— la conexión de build lo publica en ${sub.topicDefault}.DLT con su clave, su valor y sus headers. NO lo publiques tú ni crees otra cadena de reintento.`
+        : `Con onFailure.deadLetter: tras agotar los reintentos el broker lo mueve al descarte de su cola. La topología la genera build — NO la declares tú.`
+    );
   }
-  // El listener es el de su COLA, no uno por suscripción: con la cola compartida, dos consumidores
-  // competirían por cada mensaje (lo vio la corrida stock-reservation-events, donde este texto decía
-  // «Lo consume StockReservedListener» y las tres suscripciones comparten cola).
-  const shared = consumerQueues(model).find((entry) => entry.subscriptions.includes(sub.name));
-  const consumer =
-    shared && shared.subscriptions.length > 1
-      ? `el listener de la cola ${shared.queue}, que comparte con ${shared.subscriptions.filter((name) => name !== sub.name).join(', ')} y enruta por el tipo del mensaje`
-      : `el listener de su cola${shared ? ` (${shared.queue})` : ''}`;
+  // El listener es el de su CONSUMIDOR (consumerUnits): en RabbitMQ la cola, que pueden compartir varias
+  // suscripciones; en Kafka el consumer group de la suscripción. La corrida stock-reservation-events vio
+  // este texto decir «Lo consume StockReservedListener» con tres suscripciones en una sola cola.
+  const unit = consumerUnits(model).find((entry) => entry.subscriptions.includes(sub.name));
+  let consumer;
+  if (unit?.group) consumer = `el listener de su consumer group (${unit.group}), que recibe el topic ${unit.topic} entero`;
+  else if (unit && unit.subscriptions.length > 1)
+    consumer = `el listener de la cola ${unit.queue}, que comparte con ${unit.subscriptions.filter((name) => name !== sub.name).join(', ')} y enruta por el tipo del mensaje`;
+  else consumer = `el listener de su cola${unit ? ` (${unit.queue})` : ''}`;
   if (sub.trigger) {
     const argument = (a) =>
       a.from === 'envelope' ? `envelope.metadata.${a.source}` : a.from === 'identity' ? 'la identidad resuelta' : a.source ? `payload.${a.source}` : 'TODO (agente)';
@@ -704,6 +729,7 @@ export const routingKeyName = (event) => event.routingKeyProperty.split('.').pop
 export const subscriptionKey = (sub) => sub.topicProperty.split('.').slice(-2)[0];
 const topicEnv = (sub) => sub.topicProperty.toUpperCase().replace(/[.-]/g, '_');
 const queueEnv = (sub) => `${topicEnv(sub).replace(/_TOPIC$/, '')}_QUEUE`;
+const groupEnv = (sub) => `${topicEnv(sub).replace(/_TOPIC$/, '')}_GROUP_ID`;
 
 
 /** El mismo `messaging.yaml` que keel-spring, con las claves del relay de keel-core/gen/messaging-stores.js. */
@@ -723,6 +749,10 @@ export function messagingYaml(model, profile) {
       // su nombre lo declara aquí build, el mismo que crea la topología y al que entrega el arnés.
       if (model.stack?.broker === 'rabbitmq') {
         lines.push(`      queue: ${envWithDefault(profile, queueEnv(sub), destinationOf('rabbitmq', model, sub))}`);
+      }
+      // Con Kafka, el consumer group de la suscripción: la misma clave y el mismo default que keel-spring.
+      if (model.stack?.broker === 'kafka') {
+        lines.push(`      group-id: ${envWithDefault(profile, groupEnv(sub), subscriptionGroupId(model, sub))}`);
       }
     }
   }
@@ -765,6 +795,8 @@ export interface SubscriptionSettings {
   readonly topic: string;
   /** La cola propia de la que consume este servicio (RabbitMQ); null en un broker que consume del topic. */
   readonly queue: string | null;
+  /** El consumer group de la suscripción (Kafka); null en los demás brokers. */
+  readonly groupId: string | null;
 }
 
 export interface OutboxRelaySettings {
@@ -804,7 +836,8 @@ ${subscriptions
   .map(
     (sub) => `      ${tsString(sub.name)}: {
         topic: text(configuration, ${tsString(`messaging.subscriptions.${subscriptionKey(sub)}.topic`)}, ${tsString(sub.topicDefault)}),
-        queue: ${model.stack?.broker === 'rabbitmq' ? `text(configuration, ${tsString(`messaging.subscriptions.${subscriptionKey(sub)}.queue`)}, ${tsString(destinationOf('rabbitmq', model, sub))})` : 'null'}
+        queue: ${model.stack?.broker === 'rabbitmq' ? `text(configuration, ${tsString(`messaging.subscriptions.${subscriptionKey(sub)}.queue`)}, ${tsString(destinationOf('rabbitmq', model, sub))})` : 'null'},
+        groupId: ${model.stack?.broker === 'kafka' ? `text(configuration, ${tsString(`messaging.subscriptions.${subscriptionKey(sub)}.group-id`)}, ${tsString(subscriptionGroupId(model, sub))})` : 'null'}
       }`
   )
   .join(',\n')}
@@ -835,8 +868,17 @@ function bindingsFile(model) {
   const ports = [];
   if (outbox) ports.push('OutboxDispatcher (el envío de cada fila del outbox al broker)');
   if (usesBridge(model) && !outbox) for (const event of model.events) ports.push(`${event.publisherClass} (best-effort)`);
-  const queues = consumerQueues(model);
-  const listeners = queues.map(({ queue, subscriptions }) => `uno para la cola ${queue} (${subscriptions.join(', ')})`);
+  const kafka = model.stack?.broker === 'kafka';
+  const listeners = consumerUnits(model).map((unit) =>
+    unit.group ? `uno para ${unit.subscriptions[0]} (consumer group ${unit.group})` : `uno para la cola ${unit.queue} (${unit.subscriptions.join(', ')})`
+  );
+  const listenerRule = kafka
+    ? ` * Cada suscripción tiene su consumer group, que recibe el topic entero: dos de la misma fuente leen el mismo
+ * topic y cada una descarta lo que no es suyo por el tipo del mensaje. Cada clase se registra a sí misma en la
+ * conexión al arrancar. Viven en un módulo que importa el de casos de uso, porque despachan por el UseCaseMediator.`
+    : ` * Dos consumidores de la misma cola compiten y cada mensaje llega a uno solo: el de una cola compartida
+ * enruta por el tipo del mensaje. Cada clase se registra a sí misma en la conexión al arrancar. Viven en un
+ * módulo que importa el de casos de uso, porque despachan por el UseCaseMediator.`;
   return tsModule(
     BROKER_BINDINGS_TS,
     [{ symbol: 'Provider', from: '@nestjs/common', type: true }],
@@ -852,10 +894,8 @@ function bindingsFile(model) {
 export const BROKER_ADAPTERS: Provider[] = [];
 
 /**
- * Los listeners de las suscripciones, UNO POR COLA y no uno por suscripción${listeners.length > 0 ? `:\n *   · ${listeners.join('\n *   · ')}` : ' (este diseño no consume nada)'}.
- * Dos consumidores de la misma cola compiten y cada mensaje llega a uno solo: el de una cola compartida
- * enruta por el tipo del mensaje. Cada clase se registra a sí misma en la conexión al arrancar. Viven en un
- * módulo que importa el de casos de uso, porque despachan por el UseCaseMediator.
+ * Los listeners de las suscripciones, ${kafka ? 'UNO POR SUSCRIPCIÓN' : 'UNO POR COLA y no uno por suscripción'}${listeners.length > 0 ? `:\n *   · ${listeners.join('\n *   · ')}` : ' (este diseño no consume nada)'}.
+${listenerRule}
  */
 export const MESSAGE_LISTENERS: Provider[] = [];`
   );
@@ -866,6 +906,7 @@ function moduleFile(model) {
   const bridge = usesBridge(model);
   const processed = usesProcessedEvents(model);
   const rabbit = usesRabbitMq(model);
+  const kafka = usesKafka(model);
   const imports = [
     { symbol: 'Global', from: '@nestjs/common' },
     { symbol: 'Module', from: '@nestjs/common' },
@@ -913,8 +954,13 @@ function moduleFile(model) {
     providers.push('{ provide: RABBITMQ_SETTINGS, useValue: rabbitMqSettings(configuration) }', 'RabbitConnection');
     exportsList.push('RabbitConnection');
   }
+  if (kafka) {
+    imports.push({ symbol: 'KAFKA_SETTINGS', from: KAFKA_CONNECTION_TS }, { symbol: 'kafkaSettings', from: KAFKA_CONNECTION_TS }, { symbol: 'KafkaConnection', from: KAFKA_CONNECTION_TS });
+    providers.push('{ provide: KAFKA_SETTINGS, useValue: kafkaSettings(configuration) }', 'KafkaConnection');
+    exportsList.push('KafkaConnection');
+  }
   const body = `/**
- * La mensajería: la configuración del perfil, el puente de eventos${outbox ? ', el outbox con su relay' : ''}${processed ? ', el registro de mensajes procesados' : ''}${rabbit ? ' y la conexión con RabbitMQ' : ''}.
+ * La mensajería: la configuración del perfil, el puente de eventos${outbox ? ', el outbox con su relay' : ''}${processed ? ', el registro de mensajes procesados' : ''}${rabbit ? ' y la conexión con RabbitMQ' : ''}${kafka ? ' y la conexión con Kafka' : ''}.
  * Global: los adaptadores de repositorio entregan al puente sin importarla.
  *
  * Lo que escribe el agente para el broker entra por BROKER_ADAPTERS (broker-bindings.ts), DESPUÉS de los

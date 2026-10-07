@@ -487,6 +487,25 @@ export function storageContainer(serviceName, storage) {
   return `${serviceName}-${storage.serviceKey}`;
 }
 
+/**
+ * Los plazos del productor de Kafka: cuánto puede retener un envío sin confirmar. Cortos en el perfil
+ * `local` —el de los escenarios— y el default de Kafka en el resto, por variable de entorno; las mismas
+ * variables en los dos generadores.
+ *
+ * Por qué existen (K2, corridas payment-checkout 2026-10-02): el dispatcher del outbox espera el ack, y con
+ * el broker caído ese envío espera en el buffer del productor hasta `delivery.timeout.ms`, que por defecto
+ * es de 120 s. El escenario del relay que se rinde abandona el evento y levanta el broker dentro de esa
+ * ventana, así que el envío pendiente se completaba y el evento abandonado SALÍA.
+ *
+ * `maxBlock` es del cliente de Java (`max.block.ms`, lo que `send()` puede bloquear esperando metadatos);
+ * librdkafka no lo tiene: encola sin bloquear, y lo acota `delivery`.
+ */
+export const KAFKA_PRODUCER_TIMEOUTS = {
+  delivery: { key: 'delivery.timeout.ms', env: 'KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS', local: 15000, default: 120000 },
+  request: { key: 'request.timeout.ms', env: 'KAFKA_PRODUCER_REQUEST_TIMEOUT_MS', local: 5000, default: 30000 },
+  maxBlock: { key: 'max.block.ms', env: 'KAFKA_PRODUCER_MAX_BLOCK_MS', local: 5000, default: 60000 }
+};
+
 export const BROKERS = {
   kafka: {
     id: 'kafka',

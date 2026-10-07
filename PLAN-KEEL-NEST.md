@@ -876,11 +876,33 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `compile-check` del `main` en verde (rabbitmq, postgresql y mysql). Workspaces en
   `spring-live-test/corrida-stock-reservation-events-{nest,spring}/`, con el proyecto generado por `build`
   sobre PostgreSQL y RabbitMQ (estampado `ready: true`, 176 y 220 archivos).
-- **9f — Kafka**: elegir el cliente de Node (`@confluentinc/kafka-javascript` frente a `kafkajs`,
-  documentación al día), la conexión con productor que espera el acuse y consumidores por `group-id`, el
-  reintento y la publicación en la `.DLT` de las suscripciones que la declaran (`DeadLetterConfig` de
-  keel-spring), la rama del arnés con lectura por offset y marca por flujo (`broker-probes`), su
-  `broker-check` y la skill `keel-nest-kafka`.
+- **9f — Kafka, hecho (2026-10-07)**: el cliente es `@confluentinc/kafka-javascript` 1.10 (librdkafka con API
+  compatible con KafkaJS y binarios precompilados, también para Windows): `kafkajs` no publica desde 2023 y
+  `@platformatic/kafka` exige Node ≥ 22.22, por encima del 22.12 del proyecto generado. Antes de escribir nada
+  se midió el cliente contra un Kafka real, y salieron tres cosas: `connect()` sin broker rechaza a los 30 s
+  (la conexión va en un bucle en segundo plano, el servicio arranca sin broker); un `eachMessage` que lanza hace
+  que el cliente reentregue el MISMO mensaje (así que el reintento y el descarte los resuelve la conexión, y
+  lanzar queda para cuando no hay desenlace: el `.DLT` no se pudo escribir); y un consumidor suscrito a un topic
+  que aún no existe no lo ve hasta el siguiente refresco de metadatos, 5 min por defecto (el perfil `local`
+  refresca cada 2 s: el mensaje llega en medio segundo). **Neutral nuevo** en keel-core: `kafkaListenerRetry`
+  (la curva sale de las suscripciones con descarte, como `DeadLetterConfig`; sin ninguna, diez intentos sin
+  espera, el `DefaultErrorHandler` por defecto) y `KAFKA_PRODUCER_TIMEOUTS` (keel-spring los toma de ahí, golden
+  idéntico), más `RECORD_FORMAT` y el `format` opcional de la lectura de Kafka en `broker-probes`. **keel-nest**:
+  `src/scaffold/kafka.js` (consumo como datos, la conexión con productor `acks: -1` idempotente, un consumidor
+  por suscripción con su grupo `<servicio>-<evento>`, reintento en memoria y descarte en `<topic>.DLT` con los
+  headers de Spring Kafka, partición y offset en binario), `group-id` en `messaging.yaml` (paridad con
+  keel-spring), `consumerUnits` (los textos para el agente nombran un listener por suscripción con su grupo), la
+  rama Kafka del arnés (marca de offset por canal y por descarte al abrir el flujo, lectura con clave y headers,
+  entrega por `kcat -P`, espera a que cada consumidor cuyo topic existe tenga particiones), y la skill
+  `keel-nest-kafka`. `broker-check` recorre los dos brokers: **36/36** (Kafka 18, RabbitMQ 18), con
+  `FL-BRK-001-G` propio de Kafka (el descarte conserva la clave y lleva `kafka_dlt-original-topic` y
+  `kafka_dlt-exception-message`). Falsado haciendo que la conexión olvide qué topics descartan (`deadLetter: false` al
+  registrar la suscripción, que compila igual): caen `FL-BRK-001-C`, `-D`, `-E` y `-G`, los cuatro que esperan algo
+  en la `.DLT`, y solo esos. Lo que destapó la primera pasada: dos casos del outbox con el broker parado y
+  vuelto morían en el plazo de 30 s por caso de Vitest, sin nada roto (cada `kcat -L` contra el broker parado
+  tarda 5,6 s y cada `podman exec` 1,5 s en Windows): con mensajería, el plazo es de 120 s; y
+  `awaitOutboxDrained` esperaba también a la fila ya rendida, agotando sus 15 s en cada lectura (con los dos
+  brokers). `ts-syntax` y `ts-check` juzgan cada fixture con mensajería sobre los dos brokers.
 - **9g — SNS/SQS**: los clientes de AWS, la publicación con atributos (`eventType` para la FilterPolicy), el
   consumo por sondeo con visibilidad y el descarte por `maxReceiveCount`, la siembra de `init-messaging.sh`
   (neutral), la rama SQS del arnés, su `broker-check` y la skill `keel-nest-snssqs`.

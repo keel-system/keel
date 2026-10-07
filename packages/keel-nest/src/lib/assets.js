@@ -60,6 +60,10 @@ export const JOSE_VERSION = '^6.2.12';
 // Mensajería (incremento 9), verificada el 2026-10-07 contra el registro de npm y su documentación: amqplib 2
 // trae sus tipos y la reconexión con `setup` (que vuelve a declarar la topología en cada reconexión).
 export const AMQPLIB_VERSION = '^2.2.0';
+// Kafka (incremento 9f), verificado el 2026-10-07: el cliente de Confluent sobre librdkafka, con API compatible
+// con KafkaJS y binarios precompilados (también para Windows). kafkajs no publica desde 2023, y
+// @platformatic/kafka exige Node >= 22.22, por encima del 22.12 que promete el proyecto generado.
+export const KAFKA_JAVASCRIPT_VERSION = '^1.10.1';
 
 export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;

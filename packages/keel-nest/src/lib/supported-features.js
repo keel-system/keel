@@ -29,8 +29,8 @@ const ACCEPTED_NOT_EMITTED = {};
  */
 export const SUPPORTED_DATABASES = ['postgresql', 'mysql'];
 
-/** Los brokers que keel-nest genera: RabbitMQ (incremento 9). Kafka y SNS/SQS, en su tramo. */
-export const SUPPORTED_BROKERS = ['rabbitmq'];
+/** Los brokers que keel-nest genera: RabbitMQ (incremento 9) y Kafka (9f). SNS/SQS, en su tramo (9g). */
+export const SUPPORTED_BROKERS = ['rabbitmq', 'kafka'];
 
 /**
  * Lo que una operación de `use-cases` puede declarar y keel-nest todavía no genera. El dominio y la
@@ -137,7 +137,7 @@ export function checkSupportedStack(stack) {
         'Elige uno de ellos, o genera este diseño con keel-spring.'
     );
   }
-  // RabbitMQ primero (incremento 9): Kafka y SNS/SQS llegan en su tramo, y hasta entonces se rechazan en
+  // RabbitMQ y Kafka (incremento 9): SNS/SQS llega en su tramo (9g), y hasta entonces se rechaza en
   // vez de generar un proyecto cuyo broker nadie conecta.
   if (stack?.broker && !SUPPORTED_BROKERS.includes(stack.broker)) {
     errors.push(

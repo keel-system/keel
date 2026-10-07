@@ -49,13 +49,12 @@ test('messaging: la identidad del emisor resuelta por varias credenciales se rec
   assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, []);
 });
 
-test('el broker: RabbitMQ se genera; Kafka y SNS/SQS se rechazan hasta su tramo', () => {
+test('el broker: RabbitMQ y Kafka se generan; SNS/SQS se rechaza hasta su tramo', () => {
   assert.deepEqual(checkSupportedStack({ broker: 'rabbitmq' }).errors, []);
-  for (const broker of ['kafka', 'snssqs']) {
-    const { errors } = checkSupportedStack({ broker });
-    assert.equal(errors.length, 1);
-    assert.match(errors[0], new RegExp(`broker: ${broker} — .*rabbitmq`));
-  }
+  assert.deepEqual(checkSupportedStack({ broker: 'kafka' }).errors, []);
+  const { errors } = checkSupportedStack({ broker: 'snssqs' });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /broker: snssqs — .*rabbitmq, kafka/);
 });
 
 test('dominio, casos de uso y API se generan sin aviso', () => {
