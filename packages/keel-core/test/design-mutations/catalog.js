@@ -1053,6 +1053,27 @@ export const MUTATIONS = [
     expect: ['CHK-PERSIST-UNIQUE-ERROR-UNDECLARED', 'CHK-PERSIST-UNIQUE-ERROR-UNDECLARED']
   },
   {
+    id: 'M-PERSIST-NATURAL-KEY-ERROR-UNNAMED',
+    title: 'la única unicidad sin nombrar su error, con un 409 de la entidad que no tiene la forma deducible',
+    mutate: (d) => {
+      // La corrida job-dispatch-cycles: el duplicado declarado con otra forma (JOB_ALREADY_ENQUEUED).
+      d.layers.persistence.entities.Queue.naturalKey = ['name'];
+      // Un 409 que la entidad ya tiene cubierto por escenarios (QUEUE_NOT_FOUND, aquí como 409): un code nuevo
+      // dispararía además su falta de escenario, y la mutación tiene que medir solo esta regla.
+      ops(d).archiveQueue.errors[0].http = 409;
+    },
+    expect: ['CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED']
+  },
+  {
+    id: 'M-SCEN-ROUTE-UNSERVED',
+    title: 'un escenario llama a la ruta sin la versión que el generador añade al basePath',
+    mutate: (d) => {
+      // La corrida job-dispatch-cycles: basePath /api y el documento escrito con /api/jobs.
+      replaceIn(d, '**When** se llama a `getTicket`.', '**When** `GET /api/tickets/{id}`.');
+    },
+    expect: ['CHK-SCEN-ROUTE-UNSERVED']
+  },
+  {
     id: 'M-PERSIST-UNIQUE-ERROR-UNKNOWN',
     title: 'un índice único que nombra un error que ninguna operación declara',
     mutate: (d) => {

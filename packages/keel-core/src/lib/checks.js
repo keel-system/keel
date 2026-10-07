@@ -654,6 +654,13 @@ export const CHECKS = {
     title: 'una unicidad de una entidad con varias que no nombra su error ni se deja deducir por sus campos',
     closes: 'declarar `naturalKeyError` o `error` en el índice, o aceptar por escrito el code canónico del framework'
   },
+  'CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED': {
+    layer: 'persistence',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'la única unicidad (la naturalKey) no nombra su error y ninguno de los 409 de la entidad se deja deducir',
+    closes: 'declarar `naturalKeyError` con el 409 que significa la colisión, o aceptar por escrito el code canónico del framework'
+  },
   'CHK-PERSIST-UNIQUE-ERROR-UNKNOWN': {
     layer: 'persistence',
     severity: 'error',
@@ -858,6 +865,13 @@ export const CHECKS = {
     nature: 'incoherence',
     title: 'una fila de la matriz no cita ningún flujo',
     closes: 'citar los FL- que la ejercitan, o escribir el flujo que falta'
+  },
+  'CHK-SCEN-ROUTE-UNSERVED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'un escenario llama a una ruta que no es la que se sirve (p. ej. sin la versión que el generador añade al basePath)',
+    closes: 'escribir en el escenario la ruta servida, o versionar el basePath en api.keel.yaml'
   },
   'CHK-SCEN-ERROR-UNCOVERED': {
     layer: 'validation-scenarios',

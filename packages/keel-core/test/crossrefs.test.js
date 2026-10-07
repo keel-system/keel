@@ -7053,3 +7053,56 @@ test('payments: off-session en las dos direcciones', () => {
     'la capacidad sin savePaymentMethod ni charge.source.saved'
   );
 });
+
+test('CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED: con UNA sola unicidad, un 409 de la entidad que no se deja deducir avisa', () => {
+  // La forma de job-dispatch-cycles v1.0.0 (corrida 10e): el duplicado declarado como JOB_ALREADY_ENQUEUED.
+  const domain = {
+    entities: {
+      Job: { fields: { id: { type: 'uuid', id: true, generated: true }, reference: { type: 'string', required: true } } }
+    }
+  };
+  const run = (spec, errors) =>
+    checkCrossRefs({
+      layers: {
+        domain,
+        'use-cases': { operations: { enqueueJob: { input: 'void', output: { entity: 'Job' }, errors } } },
+        persistence: { entities: { Job: spec } }
+      }
+    });
+  const conflict = (code) => [{ code, when: 'x', http: 409 }];
+
+  const unnamed = idsOf(run({ naturalKey: ['reference'] }, conflict('JOB_ALREADY_ENQUEUED')), 'CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED');
+  assert.deepEqual(unnamed.map((f) => f.scope), ['persistence.entities.Job.naturalKey']);
+  assert.match(unnamed[0].message, /JOB_REFERENCE_ALREADY_EXISTS/);
+
+  // Nombrarlo lo cierra; y lo que el generador sí deduce (por los campos o por el único *_ALREADY_EXISTS), no avisa.
+  assert.deepEqual(idsOf(run({ naturalKey: ['reference'], naturalKeyError: 'JOB_ALREADY_ENQUEUED' }, conflict('JOB_ALREADY_ENQUEUED')), 'CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED'), []);
+  assert.deepEqual(idsOf(run({ naturalKey: ['reference'] }, conflict('JOB_REFERENCE_ALREADY_EXISTS')), 'CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED'), []);
+  assert.deepEqual(idsOf(run({ naturalKey: ['reference'] }, conflict('JOB_ALREADY_EXISTS')), 'CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED'), []);
+  // Sin 409 declarados el canónico es el default seguro; y los 409 de otro mecanismo (idempotencia,
+  // concurrencia, transición) no pueden ser esta colisión.
+  assert.deepEqual(idsOf(run({ naturalKey: ['reference'] }, []), 'CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED'), []);
+  assert.deepEqual(idsOf(run({ naturalKey: ['reference'] }, conflict('IDEMPOTENCY_KEY_IN_PROGRESS')), 'CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED'), []);
+});
+
+test('CHK-SCEN-ROUTE-UNSERVED: la ruta del escenario tiene que llevar el prefijo que se sirve', () => {
+  const layers = (basePath) => ({
+    domain: { entities: { Job: { fields: { id: { type: 'uuid', id: true, generated: true } } } } },
+    'use-cases': { operations: { getJob: { kind: 'query', input: { fields: { id: { type: 'uuid', required: true } } }, output: { entity: 'Job' } } } },
+    api: { basePath, endpoints: { getJob: { method: 'GET', path: '/jobs/{id}' } } }
+  });
+  const doc = (route) => `# x\n\n## Flujos\n\n### FL-JOB-001: se consulta\n\n**When**: \`GET ${route}\`.\n**Then**:\n1. Status \`200\`.\n`;
+  const run = (basePath, route) =>
+    idsOf(checkCrossRefs({ layers: layers(basePath), scenarios: doc(route), manifest: { service: { name: 'jobs' } } }), 'CHK-SCEN-ROUTE-UNSERVED');
+
+  // basePath sin versión: el generador sirve /api/v1 (docs/dsl/api.md).
+  const unserved = run('/api', '/api/jobs/{id}');
+  assert.equal(unserved.length, 1);
+  assert.match(unserved[0].message, /\/api\/v1\/jobs\/\{id\}/);
+  assert.deepEqual(run('/api', '/api/v1/jobs/{id}'), []);
+  // Un basePath ya versionado se respeta tal cual.
+  assert.deepEqual(run('/api/v2', '/api/v2/jobs/{id}'), []);
+  assert.equal(run('/api/v2', '/api/v1/jobs/{id}').length, 1);
+  // Lo que no es una ruta del diseño no se juzga.
+  assert.deepEqual(run('/api', '/health'), []);
+});

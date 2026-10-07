@@ -4,6 +4,7 @@ import { checkFor } from './checks.js';
 import { FAILURE_REASONS } from './payment-vocabulary.js';
 import { implicitDefaults } from './structural-defaults.js';
 import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, parseCoverageMatrix, conventionsText } from './scenario-blocks.js';
+import { versionedRouteBase } from './gen/model.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -4499,6 +4500,36 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       }
     }
 
+    // (1b) La RUTA que un escenario llama tiene que ser la que se sirve. Con un basePath sin versión
+    // (`/api`) el generador añade `/v1` (docs/dsl/api.md), y un documento escrito con `/api/jobs`
+    // describe un contrato que no existe: los dos agentes de la corrida job-dispatch-cycles
+    // (2026-10-07) usaron la ruta servida sin decirlo, y nadie lo vio hasta leer sus informes.
+    // Se compara por el FINAL —el endpoint— y se exige el prefijo servido delante; con `auto`, las
+    // rutas no son del diseño y no se mira.
+    if (api && api.auto !== true && (api.basePath || manifest?.service?.name)) {
+      const served = versionedRouteBase(api.basePath ? String(api.basePath).replace(/\/$/, '') : null, manifest?.service?.name ?? '');
+      for (const { id, given, when, then } of sections) {
+        const text = [given, when, then].join('\n');
+        for (const call of text.matchAll(/\b(GET|POST|PUT|PATCH|DELETE)\s+`?(\/[^\s`?]*)/g)) {
+          const target = call[2].replace(/\/$/, '');
+          const hit = endpointRoutes.find((route) => route.method === call[1] && route.re.test(target));
+          if (!hit) continue;
+          const endpointPath = String(api.endpoints?.[hit.opName]?.path ?? '');
+          const expected = `${served}${endpointPath.startsWith('/') ? '' : '/'}${endpointPath}`;
+          const prefixLength = target.length - (target.match(hit.re)?.[0] ?? '').replace(/^\//, '').length;
+          const prefix = target.slice(0, prefixLength).replace(/\/$/, '');
+          if (prefix === served) continue;
+          warn(
+            'CHK-SCEN-ROUTE-UNSERVED',
+            `validation-scenarios.md: ${id} llama a ${call[1]} ${call[2]} y la ruta que se sirve es ${expected} ` +
+              `(basePath ${api.basePath ?? '(por defecto)'}${served !== String(api.basePath ?? '').replace(/\/$/, '') ? ', con la versión que añade el generador' : ''}) — ` +
+              `quien traduzca el escenario tendrá que elegir entre el documento y el servidor. Escribe la ruta servida`
+          );
+          break;
+        }
+      }
+    }
+
     // (2) Un `Then` que enumera un payload se lee como EXHAUSTIVO en cuanto el documento
     // tiene la convención «un Then que enumera el cuerpo da por ausentes los campos que no
     // nombra». Dejarse uno es afirmar que no viaja, y el servidor —que sigue a `messaging`—
@@ -4796,6 +4827,50 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         ([fieldName, field]) => field?.unique && !(naturalKey.length === 1 && naturalKey[0] === fieldName)
       );
       const total = (naturalKey.length > 0 ? 1 : 0) + uniqueIndexes.length + uniqueFields.length;
+
+      // Con UNA sola unicidad —la naturalKey— el generador también deduce: por los campos
+      // (`<CAMPOS>_ALREADY_EXISTS`) o por el único 409 de «ya existe» de quien escribe la entidad.
+      // Si las operaciones de la entidad declaran 409 y NINGUNO encaja en esa deducción, el choque
+      // sale con el code canónico, que no es ninguno de los declarados: la corrida job-dispatch-cycles
+      // (2026-10-07) declaraba JOB_ALREADY_ENQUEUED para el duplicado y los DOS servidores
+      // devolvían JOB_REFERENCE_ALREADY_EXISTS en la carrera. Sin 409 declarados, el canónico es el
+      // default seguro y no se avisa.
+      if (total === 1 && naturalKey.length > 0 && !spec?.naturalKeyError) {
+        const own = Object.entries(operations).filter(
+          ([, op]) =>
+            op?.output?.entity === entityName ||
+            op?.input?.entity === entityName ||
+            (op?.transitions ?? []).some((transition) => transition?.entity === entityName)
+        );
+        // Los 409 que son de OTRO mecanismo del framework (la carrera y la reutilización de una clave
+        // de idempotencia, el bloqueo optimista, una transición inválida) no pueden ser esta colisión.
+        const otherMechanism = [
+          FRAMEWORK_ERRORS.idempotencyRace.family,
+          FRAMEWORK_ERRORS.idempotencyReuse.family,
+          FRAMEWORK_ERRORS.concurrency.family,
+          FRAMEWORK_ERRORS.invalidTransition.family
+        ];
+        const ownConflicts = [
+          ...new Set(
+            own.flatMap(([, op]) => (op?.errors ?? []).filter((e) => (e?.http ?? 409) === 409).map((e) => String(e?.code ?? '')))
+          )
+        ].filter((code) => !otherMechanism.some((family) => family.test(code)));
+        const family = FRAMEWORK_ERRORS.uniqueness.familyFor(naturalKey.map(snake).join('_'));
+        const deduced =
+          ownConflicts.filter((code) => family.test(code)).length === 1 ||
+          ownConflicts.filter((code) => /(^|_)ALREADY_EXISTS$/.test(code)).length === 1;
+        if (ownConflicts.length > 0 && !deduced) {
+          const canonical = `${snake(entityName)}_${naturalKey.map(snake).join('_')}_ALREADY_EXISTS`;
+          warnIn(
+            `persistence.entities.${entityName}.naturalKey`,
+            'CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED',
+            `persistence: entities.${entityName}.naturalKey: la clave natural [${naturalKey.join(', ')}] no nombra su error y ` +
+              `ninguno de los 409 que declaran las operaciones de ${entityName} (${ownConflicts.join(', ')}) tiene la forma que el ` +
+              `generador deduce — el choque (la carrera de dos altas con la misma clave) saldrá como ${canonical}, que no es ninguno ` +
+              `de ellos. Si uno es el de esta colisión, nómbralo en naturalKeyError; si el canónico vale, acéptalo en decisions.yaml`
+          );
+        }
+      }
       if (total < 2) continue;
 
       // Solo las que el generador tiene que deducir por los CAMPOS: la condicionada y la acotada

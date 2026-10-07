@@ -5,6 +5,9 @@ entities:
   Job:
     persisted: true
     naturalKey: [reference]
+    # El duplicado que declara la operación de alta: sin nombrarlo, la carrera salía con el code
+    # canónico (CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED, corrida job-dispatch-cycles).
+    naturalKeyError: JOB_ALREADY_ENQUEUED
     indexes:
       # El predicado de las dos mitades del barrido: el lote de la cola y, con el reloj,
       # el del rescate.

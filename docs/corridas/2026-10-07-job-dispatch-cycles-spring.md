@@ -10,7 +10,7 @@
 | Huella del agente | 177 archivos registrados por `build`, 0 adoptados, **5 reescritos**, 0 borrados |
 | Huecos del diseño | 2 que no reportó nadie (`natural-key-error-unnamed`, `route-version-implicit`) |
 | Huecos del generador | 0 |
-| Convertidos en id | |
+| Convertidos en id | `CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED`, `CHK-SCEN-ROUTE-UNSERVED` |
 | Clasificación de la huella | 5 TODO · 0 consulta · 0 generador · 0 diseño · 0 puerta |
 | Agujeros de la puerta | 2 |
 | Coste del diseño | careo 1; barrido 15; revisión 6; 4 aceptadas / 12 cerradas |

@@ -10,7 +10,7 @@
 | Huella del agente | 148 archivos registrados por `build`, 0 adoptados, **6 reescritos**, 0 borrados |
 | Huecos del diseño | 2 que la puerta debía haber cazado (`natural-key-error-unnamed`, `route-version-implicit`) + 1 en design-gaps.yaml, descartado |
 | Huecos del generador | 1 (la regex de `inFlightWithoutClock`, ver § Arreglos) |
-| Convertidos en id | |
+| Convertidos en id | `CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED`, `CHK-SCEN-ROUTE-UNSERVED` |
 | Clasificación de la huella | 6 TODO · 0 consulta · 0 generador · 0 diseño · 0 puerta |
 | Agujeros de la puerta | 2 |
 | Coste del diseño | careo 1; barrido 15; revisión 6; 4 aceptadas / 12 cerradas |

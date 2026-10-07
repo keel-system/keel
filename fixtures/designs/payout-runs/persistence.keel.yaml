@@ -5,6 +5,9 @@ entities:
   Payout:
     persisted: true
     naturalKey: [reference]
+    # El duplicado que declara la operación de alta: sin nombrarlo, la carrera salía con el code
+    # canónico (CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED, corrida job-dispatch-cycles).
+    naturalKeyError: PAYOUT_ALREADY_REQUESTED
     indexes:
       # El predicado del barrido reclamable, y los dos relojes que el barrido PENDIENTE
       # tendría que mirar —uno por estado en vuelo, que es justo lo que impide que haya
