@@ -692,6 +692,50 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `subscriptionDestination()`. Orden: RabbitMQ → Kafka → SNS/SQS.
 - **Puerta**: `broker-check` sobre el proyecto nest (sondas neutrales), `store-check` (relay),
   corridas rabbit y kafka del mismo diseño (serie como la de keel-spring).
+- **Preparación (2026-10-07, sin código todavía)**. Lo averiguado, para empezar sin releerlo todo:
+  - **Fixtures objetivo**: `inspection-reports` (outbox + suscripción con envoltura Keel + API; la
+    corrida natural del incremento) y `metering-digest` (best-effort + suscripciones de una fuente ajena
+    `wrapped`, con `wireName`, discriminador y `messageId` en cabecera, `retry` y `deadLetter`; sin API).
+  - **Lo que ya existe en keel-nest**: `EventMetadata`, `DomainEvent`, un `<Evento>Event` por evento con
+    `of(...)`, y `raise`/`pullDomainEvents()` en la raíz. El adaptador de repositorio drena y **descarta**
+    los eventos (`repositories.js`, `TODO (incremento 9)`): ahí entra el puente.
+  - **Lo neutral que ya existe en keel-core/gen**: `WIRE_SHAPES.eventEnvelope`/`eventMetadata` (wire.js),
+    destinos y descarte (`dead-letter.js`: `subscriptionDestination`, `publishedDestination`,
+    `deadLetterName`), sondas de broker (`broker-probes.js`), y en el modelo `events[]` (destino, routing
+    key, canal), `messaging.reliability` y `subscriptions[]` con su contrato (`envelope`, `payloadPath`,
+    `discriminator`, `messageId`, `wireName`, `unknownFields`, `trigger`, `triggerArguments`,
+    `triggerHasDomainGuard`, `deadLetter`, `queueDefault`/`topicDefault`).
+  - **Qué emite keel-spring y keel-nest tiene que igualar** (`messaging.js`, `outbox.js`,
+    `idempotency.js`, `dead-letter-config.js`, `config.js` § `brokerYaml`/`messagingYaml`):
+    `EventEnvelope.of(metadata, data, correlationId)`; `<Evento>IntegrationEvent` (la metadata NO se
+    serializa en `data`); el puente (outbox → escribe la fila en la transacción; best-effort → publica
+    tras el commit por un puerto `<Evento>Publisher` con un stub que solo avisa); tabla `outbox_event`
+    (`id, destination, routing_key, event_type, payload text, created_at, published_at, attempts,
+    next_attempt_at, last_error(1024)`, índice `ix_outbox_event_pending (published_at, created_at)`);
+    relay en tres pasos (reclamo corto con SKIP LOCKED + lease en `next_attempt_at`, publicación fuera de
+    transacción, desenlace corto con backoff `initial·2^(n-1)` con tope) y puerto `OutboxDispatcher` cuyo
+    respaldo FALLA al arrancar fuera de `local`/`test`; `processed_event` con PK `(handler_id(128),
+    event_id(255))` e índice `ix_processed_event_processed_at`, y `IdempotencyGuard` con
+    `alreadyProcessed`/`record` (con guarda de dominio) y `tryRecord` (sin ella), la carrera resuelta en
+    la clave; la clase del mensaje de cada suscripción con `requireContract()` (llamado DESPUÉS de filtrar
+    por `eventType`; un incumplimiento no se reintenta). Mismas claves y variables de entorno:
+    `RABBITMQ_HOST/PORT/USERNAME/PASSWORD`, `MESSAGING_DESTINATION`, `messaging.subscriptions.<clave>.topic`
+    y `.queue` (RabbitMQ/SNS) o `.group-id` (Kafka), `OUTBOX_RELAY_*` (en `local`, 40 intentos y tope de
+    backoff 2 s), `PROCESSED_EVENT_PURGE_*`.
+  - **RabbitMQ**: build declara la topología de consumo (exchange topic del canal de origen, cola propia
+    `queueDefault` enlazada con `#`, y la DLQ `<cola>-dlq` por argumentos `x-dead-letter-*`), y el
+    reintento del listener con `onFailure.retry` sin reintentar `DomainException`. Lo publicado se lee en
+    una cola por canal nombrada como el canal (la declara el agente, skill del broker).
+  - **Decisiones tomadas**: (1) `TransactionContext` necesita `afterCommit(callback)` para best-effort;
+    (2) el relay va con un bucle propio de retardo fijo; el scheduling (`@nestjs/schedule`) y las purgas
+    de `outbox_event` y `processed_event` llegan con el incremento 10, como la de `idempotency_record`;
+    (3) orden RabbitMQ primero: la frontera rechaza `kafka` y `snssqs` hasta su tramo; (4) tablas como
+    DATOS en keel-core (como `IDEMPOTENCY_RECORD`), con `schema-parity` contra keel-spring.
+  - **Tramos propuestos**: 9a tablas y parámetros del relay neutrales en keel-core; 9b keel-nest emite
+    envoltura, eventos de integración, puente, outbox con relay, `processed_event` y guard, mensajes de
+    suscripción y la topología RabbitMQ; 9c arnés (`flow.ts`: entregar a una suscripción, leer lo
+    publicado y la DLQ con `broker-probes`) y `broker-check`; 9d skill `keel-nest-rabbitmq` y
+    convenciones; 9e corrida de `inspection-reports` con RabbitMQ en los dos generadores.
 
 ### Inc. 10 — Idempotencia, compensación, reconciliación y barridos
 
