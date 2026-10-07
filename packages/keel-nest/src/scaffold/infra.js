@@ -4,6 +4,7 @@
 // sus herramientas y la tabla de historial de sus migraciones.
 
 import { infraFiles } from 'keel-core/gen/infra-scripts';
+import { identityProvisioningFiles } from 'keel-core/gen/identity-provisioning';
 
 /**
  * La tabla de historial de las migraciones de TypeORM. Explícita (`migrationsTableName` del
@@ -15,6 +16,9 @@ export const MIGRATIONS_TABLE = 'typeorm_migrations';
 
 export const NEST_INFRA = {
   generator: 'keel-nest',
+  // El proveedor de identidad de prueba (keel-core/gen/identity-provisioning.js): quién consume
+  // test-credentials.env y qué skill documenta los clientes de prueba.
+  identity: { harness: 'test/integration/support/flow.ts', skill: 'keel-nest-keycloak' },
   historyTable: MIGRATIONS_TABLE,
   strayProcess: {
     comment: `# Procesos ajenos a la validación que comparten esta infraestructura. Un
@@ -44,7 +48,9 @@ export const NEST_INFRA = {
 };
 
 export function generate(model) {
-  return infraFiles(model, NEST_INFRA);
+  // La infraestructura de prueba y, con capa security sobre un token, el realm del proveedor de
+  // identidad: el mismo que prueba el servidor de keel-spring del mismo diseño.
+  return [...infraFiles(model, NEST_INFRA), ...identityProvisioningFiles(model, NEST_INFRA)];
 }
 
 // Lo emite infra-scripts.js solo con integraciones salientes, que keel-nest genera desde el

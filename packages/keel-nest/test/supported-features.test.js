@@ -9,13 +9,24 @@ import { checkSupportedFeatures, checkSupportedStack } from '../src/lib/supporte
 const manifestWith = (...layers) => ({ layers: Object.fromEntries(layers.map((layer) => [layer, `${layer}.keel.yaml`])) });
 const layersWith = (...layers) => Object.fromEntries(layers.map((layer) => [layer, {}]));
 
-for (const layer of ['security', 'messaging', 'http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
+for (const layer of ['messaging', 'http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);
     assert.match(errors[0], new RegExp(`capa ${layer}: .*incremento \\d+`));
   });
 }
+
+test('capa security (incremento 8): se genera, salvo la identidad resuelta por varias credenciales', () => {
+  const manifest = manifestWith('domain', 'use-cases', 'api', 'security');
+  const plain = { ...layersWith('domain', 'use-cases', 'api'), security: { authentication: { protocol: 'oidc', callerIdentity: { field: 'tenant', from: { source: 'claim', name: 'sub' } } } } };
+  assert.deepEqual(checkSupportedFeatures(manifest, plain), { errors: [], warnings: [] });
+  const resolved = structuredClone(plain);
+  resolved.security.authentication.callerIdentity.from = { source: 'serviceClient', resolvedBy: 'Application.credentialKeys' };
+  const { errors } = checkSupportedFeatures(manifest, resolved);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /callerIdentity.from.resolvedBy/);
+});
 
 test('dominio, casos de uso y API se generan sin aviso', () => {
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api'), layersWith('domain', 'use-cases', 'api'));

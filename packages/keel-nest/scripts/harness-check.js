@@ -195,11 +195,17 @@ describe('FL-PROBE-003 · sonda que no arranca', () => {
   );
 
   // Un documento de escenarios con un flujo que ninguna prueba ejercita: tiene que salir NO_EJERC.
-  // (No rompe el sello: specs.sha256 vigila los archivos que lista, y este no estaba.)
+  // Sustituye al del diseño (product-catalog trae el suyo desde el incremento 7d), así que su línea sale
+  // del sello: specs.sha256 vigila lo que lista, y el documento sonda no lo escribió build.
   fs.writeFileSync(
     path.join(projectDir, 'specs', 'validation-scenarios.md'),
     ['FL-PROBE-001', 'FL-PROBE-002', 'FL-PROBE-003', 'FL-PROBE-004'].map((id) => `#### ${id} — sonda\n`).join('\n')
   );
+  const seal = path.join(projectDir, 'specs.sha256');
+  if (fs.existsSync(seal)) {
+    const kept = fs.readFileSync(seal, 'utf8').split('\n').filter((line) => !line.endsWith('specs/validation-scenarios.md'));
+    fs.writeFileSync(seal, kept.join('\n'));
+  }
 
   const evidence = path.join(projectDir, 'build', 'keel-failures');
   const run1 = bash(projectDir, 'infra/score-scenarios.sh');

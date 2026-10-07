@@ -30,6 +30,7 @@ import { planService } from '../src/scaffold/index.js';
 import { loadService } from 'keel-core';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { resolveRuntime, startDatabase, stopDatabase } from './lib/database-container.js';
+import { JOSE_VERSION } from '../src/lib/assets.js';
 
 const keep = process.argv.includes('--keep');
 const isWindows = process.platform === 'win32';
@@ -103,6 +104,11 @@ for (const [name, args] of [
   const run = npm(projectDir, args);
   if (!step(name, run.ok)) console.error(run.output);
 }
+
+// Las dependencias que el diseño de referencia no pide y alguna silueta sí (la seguridad: jose), sin
+// tocar su package.json: el node_modules se comparte con todas.
+const extra = npm(projectDir, ['install', '--no-save', '--no-audit', '--no-fund', `jose@${JOSE_VERSION}`]);
+if (!step('dependencias de las demás siluetas (jose)', extra.ok)) console.error(extra.output);
 
 // Las trece siluetas: cada fixture entera, renderizada al lado y compilada con el mismo node_modules.
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');

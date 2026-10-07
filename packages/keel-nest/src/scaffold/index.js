@@ -35,6 +35,8 @@ import * as domainGuardsCheck from './domain-guards-check.js';
 import * as architecture from './architecture.js';
 import * as restSupport from './rest-support.js';
 import * as controllers from './controllers.js';
+import * as security from './security.js';
+import * as testCredential from './test-credential.js';
 import * as apiTests from './api-tests.js';
 import * as health from './health.js';
 import * as appTests from './app-tests.js';
@@ -78,6 +80,11 @@ const GENERATORS = [
   // un controlador por grupo.
   restSupport,
   controllers,
+  // La seguridad (incremento 8): el hook de la entrada HTTP con el plan de acceso neutral, el JWT, las
+  // claves, CORS, la identidad del llamante y el alcance por recurso.
+  security,
+  // La credencial con la que las pruebas del perfil test pasan la autorización.
+  testCredential,
   domainGuardsCheck,
   appTests,
   apiTests,

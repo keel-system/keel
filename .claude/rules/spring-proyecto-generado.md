@@ -5,6 +5,8 @@ paths:
   - "packages/keel-spring/src/scaffold/deploy.js"
   - "packages/keel-spring/src/scaffold/auth-provisioning.js"
   - "packages/keel-core/src/lib/gen/identity-realm.js"
+  - "packages/keel-core/src/lib/gen/identity-provisioning.js"
+  - "packages/keel-core/src/lib/gen/access-plan.js"
   - "packages/keel-spring/src/scaffold/generator-docs.js"
   - "packages/keel-spring/src/scaffold/context-md.js"
   - "packages/keel-spring/src/scaffold/evolution.js"
@@ -45,7 +47,7 @@ El índice de una línea por caso sigue en `CLAUDE.md` § Dónde se añade cada 
 
 ## Cambio en el aprovisionamiento del proveedor de identidad
 
-`keel-core/src/lib/gen/identity-realm.js` (`realmSpec()` es la fuente, neutral: el mismo realm para cualquier generador) + `keel-spring/src/scaffold/auth-provisioning.js` (su renderizado; `keycloakScript()` y el `realmExport()` de `deploy.js` son **dos proyecciones**, y hay test de paridad). Si tocas el **bash**, el gate no es `includes(...)`: es `test/keycloak-script-runs.test.js`, que lo EJECUTA con un stub de kcadm. Ese test existe porque `run()` prometía en su comentario tolerar el 409 y bajo `set -e` moría antes de llegar a la tolerancia — la suite de cadenas seguía verde sobre líneas inalcanzables. Regla de bash: **nunca** `out=$(...); rc=$?` bajo `set -e`; el código de salida se captura en la MISMA sentencia (`&& rc=0 || rc=$?`), y todo pipeline que termine en `grep`/`tail` lleva `\|\| true` con su `require_id` detrás — morir es correcto, morir callado no
+`keel-core/src/lib/gen/identity-realm.js` (`realmSpec()` es la fuente, neutral: el mismo realm para cualquier generador) + `keel-core/src/lib/gen/identity-provisioning.js` (su renderizado a `infra/`, también neutral desde el incremento 8 de keel-nest: `keel-spring/src/scaffold/auth-provisioning.js` solo pone los textos de su plataforma; `keycloakScript()` y el `realmExport()` de `deploy.js` son **dos proyecciones**, y hay test de paridad). Si tocas el **bash**, el gate no es `includes(...)`: es `test/keycloak-script-runs.test.js`, que lo EJECUTA con un stub de kcadm. Ese test existe porque `run()` prometía en su comentario tolerar el 409 y bajo `set -e` moría antes de llegar a la tolerancia — la suite de cadenas seguía verde sobre líneas inalcanzables. Regla de bash: **nunca** `out=$(...); rc=$?` bajo `set -e`; el código de salida se captura en la MISMA sentencia (`&& rc=0 || rc=$?`), y todo pipeline que termine en `grep`/`tail` lleva `\|\| true` con su `require_id` detrás — morir es correcto, morir callado no
 
 ## Propagar un arreglo del generador a un proyecto YA generado
 

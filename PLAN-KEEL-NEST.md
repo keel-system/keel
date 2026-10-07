@@ -627,6 +627,45 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `realmSpec()` neutral → script kcadm y `realm-export.json`.
 - **Puerta**: `caller-identity`, `auth-scoping`, `keycloak-script-runs` (ejecuta el bash con el
   stub); corrida con `security` (asset-vault o profile-directory).
+- **Estado: hecho (2026-10-07), salvo la corrida**, en dos commits:
+  - **8a — neutral en `keel-core/gen`** (keel-spring con su línea base idéntica, 42 combinaciones y
+    10 457 archivos, falsada cambiando el texto de su arnés): `identity-provisioning.js` (el realm de
+    prueba, `test-credentials.env` y el emulador de Cognito; cada generador pone sus textos en
+    `platform.identity`) y `access-plan.js`: lo que exige cada regla (`accessRequirement`, atado a la
+    traducción de Spring por test), qué rutas comprueban la audiencia, las cadenas en su orden de
+    evaluación y los claims de cada proveedor (`TOKEN_CLAIMS`). keel-spring toma de ahí sus predicados.
+  - **8b — keel-nest** (`src/scaffold/security.js`): la autorización es un **hook `onRequest`, no un
+    Guard** — Spring Security decide antes de enrutar, así que sin credencial un camino que no existe es
+    401 (no 404), y un Guard solo corre cuando una ruta casa. Las reglas son DATOS (`access-rules.ts`)
+    comparados con la `SecurityConfig` que emite keel-spring en las 5 fixtures con seguridad × Keycloak y
+    Cognito (`test/security-parity.test.js`, falsado quitando una authority: caen 10 de 10). JWT con
+    `jose` (discovery del `issuer-uri` perezoso: arranca sin el proveedor, y un proveedor caído es 500,
+    no 401), 60 s de margen, un bearer inválido es 401 también en una ruta abierta; claves de API en
+    tiempo constante; CORS con la semántica del `DefaultCorsProcessor` dentro del mismo hook y antes de
+    autenticar (con `@fastify/cors` el 401 salía sin cabeceras CORS: sus hooks se cargan después);
+    `CallerIdentity` como punto único y `CallerScope` (puerto en `application/support`, inyectado en los
+    handlers que declaran el error del alcance). Configuración con las MISMAS variables que keel-spring
+    (`OAUTH2_ISSUER_URI`, `SECURITY_AUDIENCE`, `SECURITY_API_KEY`, `API_KEY_<CLIENTE>`,
+    `SECURITY_CORS_ALLOWED_ORIGINS`). El perfil `test` solo acepta tokens de la clave que la prueba
+    publica en `SECURITY_TEST_JWKS` (`test/support/test-credential.ts`): ninguna clave en el repo. El
+    arnés gana `tokenFor`, `serviceCredential`, `tokenAs` (personas por `sub`), `scopedResource` y
+    `bearer`, y el humo SMOKE-5; skills `keel-nest-keycloak` y `keel-nest-cognito`. La frontera ya no
+    rechaza la capa; sí `callerIdentity.from.resolvedBy` (el finder por elemento de colección).
+  - **Puerta medida**: `test/security.test.js` EJECUTA reglas, autenticador (tokens reales firmados con
+    jose: caducado, otra clave, margen de reloj, roleGrants, Cognito), identidad y alcance; la prueba
+    emitida de la API trae los casos de seguridad (falsada con un `verdict` que siempre concede: caen
+    el 401 y el 403). `ts-check`: las 13 fixtures compilan y sus pruebas pasan. **`npm run
+    security-check` (nuevo) 20/20** contra PostgreSQL y Keycloak reales: `init-keycloak.sh` siembra y
+    es idempotente, y nueve sondas (401 sin credencial y con token inválido, 403 sin el permiso, el `sub`
+    del token llega al handler, `tokenAs` con su `sub` y sus claims, la identidad no se acepta del
+    cuerpo, 401/404 de un camino inexistente, 401 con el token de otro emisor); falsado rebajando la
+    regla emitida de la ruta (sale FALLO la sonda del 403).
+  - **Regresión ajena destapada**: `harness-check` estaba en rojo desde 7d — `product-catalog` trae ya
+    su `validation-scenarios.md`, que entra en el sello `specs.sha256`, y el check lo sustituía por su
+    documento sonda (el sello lo cazaba bien: salida 2). Ahora retira esa línea del sello: 25/25.
+  - **Pendiente**: la corrida. `profile-directory` (la única fixture con seguridad cuyas demás capas
+    genera keel-nest) no tiene `validation-scenarios.md`: hay que escribirlos y llevarla a `--ready`
+    antes de correr `/keel-generate-nest` (y la misma en keel-spring).
 
 ### Inc. 9 — Mensajería y outbox
 

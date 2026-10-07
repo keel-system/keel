@@ -15,6 +15,7 @@ import { requestShape } from 'keel-core/gen/api-contract';
 import { usesApi } from './rest-support.js';
 import { messageComponents } from './services.js';
 import { tsString } from './render.js';
+import { securityPlan, usesJwt } from './security.js';
 
 export const API_TEST = 'test/api.test.ts';
 const SAMPLE_UUID = '0192f1d2-0000-7000-8000-000000000001';
@@ -101,19 +102,28 @@ export function apiCases(model) {
   return cases;
 }
 
-function request(entry, extra = '') {
-  return `{ method: ${tsString(entry.method)}, url: ${tsString(entry.url)}${extra} }`;
+/**
+ * Las opciones de app.inject() para un caso: con seguridad, la credencial que satisface toda regla del
+ * diseño (CREDENTIAL, la firma la propia prueba) — el caso mide la API, no la autorización.
+ */
+function request(entry, { json = null, secured = false } = {}) {
+  const headers = [secured ? '...CREDENTIAL' : null, json != null ? "'content-type': 'application/json'" : null].filter(Boolean);
+  return `{ method: ${tsString(entry.method)}, url: ${tsString(entry.url)}${headers.length > 0 ? `, headers: { ${headers.join(', ')} }` : ''}${
+    json != null ? `, payload: ${tsString(json)}` : ''
+  } }`;
 }
 
 function apiTest(model) {
   const cases = apiCases(model);
+  const security = securityCases(model);
+  const secured = security != null;
   const validation = FRAMEWORK_ERRORS.validation.code;
   const tests = [];
   if (cases.reachesHandler) {
     // No afirma QUÉ responde el handler, solo que la ruta llega a él: así sigue en verde cuando el
     // agente lo implementa (en el perfil test no hay base, y un handler que la use sale como 500).
     tests.push(`  it('una operación llega a su handler: ni el 404 de una ruta que no existe ni el 405', async () => {
-    const response = await app.inject(${request(cases.reachesHandler)});
+    const response = await app.inject(${request(cases.reachesHandler, { secured })});
     expect(response.statusCode).not.toBe(405);
     if (response.statusCode >= 400) {
       const parsed = body(response);
@@ -124,27 +134,27 @@ function apiTest(model) {
   }
   if (cases.malformedBody) {
     tests.push(`  it('un cuerpo que no es JSON es 400 «Petición malformada», sin details', async () => {
-    const response = await app.inject(${request(cases.malformedBody, ", headers: { 'content-type': 'application/json' }, payload: '{\"roto\":'")});
+    const response = await app.inject(${request(cases.malformedBody, { json: '{"roto":', secured })});
     expectError(response, 400, 'Bad Request', '${validation}', 'Petición malformada');
     expect(body(response).details).toBeNull();
   });`);
   }
   if (cases.invalidBody) {
     tests.push(`  it('un cuerpo que incumple lo declarado es 400 Validation Error, con el campo en details', async () => {
-    const response = await app.inject(${request(cases.invalidBody, ", headers: { 'content-type': 'application/json' }, payload: '{}'")});
+    const response = await app.inject(${request(cases.invalidBody, { json: '{}', secured })});
     expectError(response, 400, 'Validation Error', '${validation}', 'La petición no supera las validaciones');
     expect(body(response).details).toContain(${tsString(`${cases.invalidBody.field} ${cases.invalidBody.message}`)});
   });`);
   }
   if (cases.malformedPath) {
     tests.push(`  it('un uuid de ruta mal formado es 400 «Petición malformada»', async () => {
-    const response = await app.inject(${request(cases.malformedPath, ", headers: { 'content-type': 'application/json' }, payload: '{}'")});
+    const response = await app.inject(${request(cases.malformedPath, { json: '{}', secured })});
     expectError(response, 400, 'Bad Request', '${validation}', 'Petición malformada');
   });`);
   }
   if (cases.wrongMethod) {
     tests.push(`  it('un camino que existe con otro método es 405', async () => {
-    const response = await app.inject(${request(cases.wrongMethod)});
+    const response = await app.inject(${request(cases.wrongMethod, { secured })});
     expectError(response, 405, 'Method Not Allowed', null, 'Método HTTP no soportado');
   });`);
   }
@@ -154,7 +164,7 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { loadConfiguration } from '../src/infrastructure/config/configuration.js';
-import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from '../src/infrastructure/http/http-platform.js';
+import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from '../src/infrastructure/http/http-platform.js';${security ? security.header : ''}
 
 /** El orden de las claves de ErrorResponse: el del cable (keel-core, WIRE_SHAPES.errorResponse). */
 const ERROR_SHAPE = ${JSON.stringify(WIRE_SHAPES.errorResponse)};
@@ -182,7 +192,7 @@ describe('API', () => {
   let app: NestFastifyApplication;
 
   beforeAll(async () => {
-    const configuration = loadConfiguration({ ...process.env, PROFILE: 'test' });
+${security ? security.setup : "    const configuration = loadConfiguration({ ...process.env, PROFILE: 'test' });"}
     const moduleRef = await Test.createTestingModule({ imports: [AppModule.register(configuration)] }).compile();
     app = moduleRef.createNestApplication<NestFastifyApplication>(createHttpAdapter(), HTTP_APPLICATION_OPTIONS);
     configureHttp(app);
@@ -195,7 +205,7 @@ describe('API', () => {
   });
 
   it('una ruta que no existe es 404 con ErrorResponse', async () => {
-    const response = await app.inject({ method: 'GET', url: ${tsString(`${model.api.routeBase}/keel-ruta-que-no-existe`)} });
+    const response = await app.inject({ method: 'GET', url: ${tsString(`${model.api.routeBase}/keel-ruta-que-no-existe`)}${secured ? ', headers: CREDENTIAL' : ''} });
     expectError(response, 404, 'Not Found', null, 'Recurso no encontrado');
   });
 
@@ -208,7 +218,90 @@ describe('API', () => {
     expect(generated.headers['x-correlation-id']).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-${tests.join('\n\n')}
+${[...tests, ...(security?.tests ?? [])].join('\n\n')}
 });
 `;
+}
+
+// ─── La seguridad, cuando el diseño la declara ───────────────────────────────
+
+const REJECTED_401 = `'Unauthorized', '${FRAMEWORK_ERRORS.unauthenticated.code}', 'Credenciales ausentes o no válidas'`;
+const REJECTED_403 = `'Forbidden', '${FRAMEWORK_ERRORS.accessDenied.code}', 'La credencial no autoriza esta operación'`;
+
+/** El token del caso como cabecera, escrito en el TypeScript emitido. */
+const bearer = (expression) => `{ authorization: \`Bearer \${${expression}}\` }`;
+
+/**
+ * Lo que la prueba de la API necesita de la seguridad: la credencial con la que pasa toda regla (para
+ * que los demás casos midan la API y no la autorización, de test/support/test-credential.ts) y los
+ * casos propios de la seguridad: el 401 antes de enrutar, el token que no valida, el caducado, el de otra
+ * clave y el 403 de una regla.
+ */
+function securityCases(model) {
+  const plan = securityPlan(model);
+  if (!plan || plan.open) return null;
+  const main = plan.chains[plan.chains.length - 1];
+  const notFound = fullPath(model, '/keel-ruta-que-no-existe');
+  const tests = [];
+  if (main.fallback.kind !== 'public') {
+    tests.push(`  it('sin credencial, un camino protegido es 401, exista o no (Spring Security decide antes de enrutar)', async () => {
+    const response = await app.inject({ method: 'GET', url: ${tsString(notFound)} });
+    expectError(response, 401, ${REJECTED_401});
+  });`);
+  }
+
+  // La credencial de las pruebas del perfil test: test/support/test-credential.ts.
+  const jwt = usesJwt(model);
+  const header = `
+import { testCredential, type TestCredential${jwt ? ', FULL_ACCESS, KEY_ID' : ''} } from './support/test-credential.js';${
+    jwt ? "\nimport { SignJWT, generateKeyPair } from 'jose';" : ''
+  }
+
+/** La credencial de la prueba: el perfil test acepta sus tokens (test/support/test-credential.ts). */
+let credential: TestCredential;
+/** La cabecera con la que los casos de la API pasan la autorización. */
+let CREDENTIAL: Readonly<Record<string, string>> = {};`;
+  const setup = `    credential = await testCredential();
+    const configuration = loadConfiguration({ ...process.env, PROFILE: 'test', ...credential.env });
+    CREDENTIAL = credential.headers;`;
+
+  if (!jwt) {
+    tests.push(`  it('una clave de API que no es la configurada no autentica: 401', async () => {
+    const response = await app.inject({ method: 'GET', url: ${tsString(notFound)}, headers: { 'x-api-key': 'no-es-la-clave' } });
+    expectError(response, 401, ${REJECTED_401});
+  });`);
+    return { header, setup, tests };
+  }
+
+  tests.push(`  it('un token que no valida es 401, también en una ruta abierta (como el resource server de Spring)', async () => {
+    const response = await app.inject({ method: 'GET', url: '/livez', headers: { authorization: 'Bearer no.es-un.token' } });
+    expectError(response, 401, ${REJECTED_401});
+  });`);
+  tests.push(`  it('un token caducado es 401', async () => {
+    const expired = await credential.tokenWith(FULL_ACCESS, Math.floor(Date.now() / 1000) - 300);
+    const response = await app.inject({ method: 'GET', url: ${tsString(notFound)}, headers: ${bearer('expired')} });
+    expectError(response, 401, ${REJECTED_401});
+  });`);
+  tests.push(`  it('un token firmado con otra clave es 401', async () => {
+    const stranger = await generateKeyPair('RS256');
+    const forged = await new SignJWT(FULL_ACCESS).setProtectedHeader({ alg: 'RS256', kid: KEY_ID }).setExpirationTime('5m').sign(stranger.privateKey);
+    const response = await app.inject({ method: 'GET', url: ${tsString(notFound)}, headers: ${bearer('forged')} });
+    expectError(response, 401, ${REJECTED_401});
+  });`);
+  // El 403: la primera regla que exige algo, sobre una ruta de la que hay una URL concreta.
+  const routed = (model.services ?? []).flatMap((service) => service.operations ?? []).filter((op) => op.route);
+  for (const rule of plan.chains.flatMap((chain) => chain.rules)) {
+    if (rule.requirement.kind !== 'anyOf' || !rule.method) continue;
+    const operation = routed.find((op) => op.route.method === rule.method && fullPath(model, op.route.path) === rule.path);
+    const url = operation ? concrete(model, operation) : null;
+    if (!url) continue;
+    tests.push(`  it(${tsString(`una credencial válida sin lo que exige la regla (${rule.requirement.authorities.join(' o ')}) es 403`)}, async () => {
+    const bare = await credential.tokenWith({ sub: 'keel-sin-permisos' });
+    const response = await app.inject({ method: ${tsString(rule.method)}, url: ${tsString(url)}, headers: ${bearer('bare')} });
+    expectError(response, 403, ${REJECTED_403});
+  });`);
+    break;
+  }
+
+  return { header, setup, tests };
 }

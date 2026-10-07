@@ -19,12 +19,13 @@ import { controllerClasses } from './controllers.js';
 import { relativeSpecifier } from './render.js';
 import { usesRelational } from './persistence-entities.js';
 import { usesIdempotencyHeader } from './request-idempotency.js';
+import { usesHttpSecurity, usesCallerScope } from './security.js';
 
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs() },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesRelational(model)) },
-    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model)) }
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesRelational(model), usesCallerScope(model)) },
+    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model)) }
   ];
 }
 
@@ -50,14 +51,19 @@ await app.listen(configuration.server.port, configuration.server.address);
 `;
 }
 
-function appModuleTs(withUseCases, controllers, withPersistence) {
+function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false) {
   // Los casos de uso del diseño entran por su módulo (infrastructure/usecase), que es el único que
   // cablea handlers y mappers; los controladores REST los despachan por el mediator que exporta. La
-  // persistencia (global) va antes: sus puertos son dependencias de los handlers.
+  // persistencia y el alcance por recurso (globales) van antes: son dependencias de los handlers.
   const useCaseImport =
     (withPersistence ? "\nimport { PersistenceModule } from './infrastructure/persistence/persistence-module.js';" : '') +
+    (withCallerScope ? "\nimport { SecurityModule } from './infrastructure/security/security-module.js';" : '') +
     (withUseCases ? "\nimport { UseCaseModule } from './infrastructure/usecase/use-case-module.js';" : '');
-  const modules = [withPersistence ? 'PersistenceModule.register(configuration)' : null, withUseCases ? 'UseCaseModule' : null].filter(Boolean);
+  const modules = [
+    withPersistence ? 'PersistenceModule.register(configuration)' : null,
+    withCallerScope ? 'SecurityModule' : null,
+    withUseCases ? 'UseCaseModule' : null
+  ].filter(Boolean);
   const useCaseModule = modules.length > 0 ? `\n      imports: [${modules.join(', ')}],` : '';
   const controllerImports = controllers
     .map((controller) => `\nimport { ${controller.symbol} } from '${relativeSpecifier('src/app.module.ts', controller.from)}';`)
@@ -81,7 +87,7 @@ export class AppModule {
 `;
 }
 
-function httpPlatformTs(withApi, withIdempotencyHeader = false) {
+function httpPlatformTs(withApi, withIdempotencyHeader = false, withSecurity = false) {
   // Con API, la entrada HTTP abre además la correlación de la petición y todo fallo sale por el
   // filtro de errores del contrato (ErrorResponse). Sin API no hay nada que correlacionar ni traducir.
   const apiImports = withApi
@@ -89,6 +95,10 @@ function httpPlatformTs(withApi, withIdempotencyHeader = false) {
 import { ApiExceptionFilter } from '../rest/api-exception-filter.js';
 import { CORRELATION_HEADER, CorrelationContext } from '../correlation/correlation-context.js';${
       withIdempotencyHeader ? "\nimport { IDEMPOTENCY_HEADER, IdempotencyContext } from '../../application/support/idempotency-context.js';" : ''
+    }${
+      withSecurity
+        ? "\nimport { CONFIGURATION, type Configuration } from '../config/configuration.js';\nimport { installSecurity } from '../security/http-security.js';"
+        : ''
     }`
     : '';
   const apiSetup = withApi
@@ -106,7 +116,14 @@ import { CORRELATION_HEADER, CorrelationContext } from '../correlation/correlati
     CorrelationContext.runWith(correlationId, () => IdempotencyContext.runWith(idempotencyKey, done));`
         : 'CorrelationContext.runWith(correlationId, done);'
     }
-  });
+  });${
+    withSecurity
+      ? `
+  // La seguridad (capa security): quién llama y qué puede pedir, decidido ANTES de enrutar y después
+  // de abrir la correlación, para que un 401 o un 403 lleven su correlationId.
+  installSecurity(fastify, app.get<Configuration>(CONFIGURATION));`
+      : ''
+  }
   // Todo fallo, también los de lectura de la petición y las rutas que no existen, sale como ErrorResponse.
   app.useGlobalFilters(new ApiExceptionFilter());`
     : '';

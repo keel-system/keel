@@ -10,14 +10,20 @@
 // No sustituyen a los escenarios `FL-*` (llegan en el incremento 7): dicen que el servidor arranca
 // y se configura como el de keel-spring del mismo diseño.
 
-export function generate() {
+import { usesTestCredential } from './test-credential.js';
+
+export function generate(model) {
   return [
-    { path: 'test/application.test.ts', content: applicationTestTs() },
+    { path: 'test/application.test.ts', content: applicationTestTs(usesTestCredential(model)) },
     { path: 'test/configuration.test.ts', content: configurationTestTs() }
   ];
 }
 
-function applicationTestTs() {
+function applicationTestTs(secured = false) {
+  // Con seguridad, las sondas del cable llevan la credencial de la prueba: sin ella serían un 401 y
+  // medirían la autorización en vez del contrato del cable.
+  const credentialImport = secured ? "\nimport { testCredential } from './support/test-credential.js';" : '';
+  const probeHeaders = secured ? '...CREDENTIAL, ' : '';
   return `import 'reflect-metadata';
 import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -28,7 +34,7 @@ import { GracefulShutdown } from '../src/infrastructure/health/graceful-shutdown
 import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from '../src/infrastructure/http/http-platform.js';
 import { Decimal } from '../src/domain/support/decimal.js';
 import { RawJson } from '../src/domain/support/raw-json.js';
-import { toDecimal, toLong } from '../src/application/support/wire.js';
+import { toDecimal, toLong } from '../src/application/support/wire.js';${credentialImport}
 
 /**
  * Sonda del contrato del cable a través del servidor REAL: si Fastify no usara el lector y el
@@ -54,10 +60,16 @@ class WireProbeController {
 }
 
 describe('aplicación', () => {
-  let app: NestFastifyApplication;
+  let app: NestFastifyApplication;${secured ? '\n  let CREDENTIAL: Readonly<Record<string, string>> = {};' : ''}
 
   beforeAll(async () => {
-    const configuration = loadConfiguration({ ...process.env, PROFILE: 'test' });
+${
+      secured
+        ? `    const credential = await testCredential();
+    CREDENTIAL = credential.headers;
+    const configuration = loadConfiguration({ ...process.env, PROFILE: 'test', ...credential.env });`
+        : "    const configuration = loadConfiguration({ ...process.env, PROFILE: 'test' });"
+    }
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
       controllers: [WireProbeController]
@@ -85,7 +97,7 @@ describe('aplicación', () => {
   });
 
   it('las respuestas salen con el contrato del cable', async () => {
-    const response = await app.inject({ method: 'GET', url: '/wire-probe' });
+    const response = await app.inject({ method: 'GET', url: '/wire-probe'${secured ? ', headers: CREDENTIAL' : ''} });
     expect(response.payload).toBe('{"amount":2.50,"big":9007199254740993,"at":"2026-03-14T09:21:07.482Z","doc":{"a":[1,2]}}');
   });
 
@@ -93,7 +105,7 @@ describe('aplicación', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/wire-probe',
-      headers: { 'content-type': 'application/json' },
+      headers: { ${probeHeaders}'content-type': 'application/json' },
       payload: '{"amount":2.50,"big":9007199254740993}'
     });
     expect(response.statusCode).toBe(200);
@@ -104,7 +116,7 @@ describe('aplicación', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/wire-probe',
-      headers: { 'content-type': 'application/json' },
+      headers: { ${probeHeaders}'content-type': 'application/json' },
       payload: '{"amount":'
     });
     expect(response.statusCode).toBe(400);

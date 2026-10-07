@@ -28,8 +28,10 @@ import {
   FASTIFY_VERSION,
   TYPEORM_VERSION,
   PG_VERSION,
-  MYSQL2_VERSION
+  MYSQL2_VERSION,
+  JOSE_VERSION
 } from '../lib/assets.js';
+import { usesJwt } from './security.js';
 import { usesRelational, engineOf } from './persistence-entities.js';
 
 export function generate(model) {
@@ -72,6 +74,8 @@ function packageJson(model) {
       '@nestjs/platform-fastify': NEST_VERSION,
       'decimal.js': DECIMAL_JS_VERSION,
       fastify: FASTIFY_VERSION,
+      // La validación del JWT de la capa security contra el JWKS del proveedor.
+      ...(usesJwt(model) ? { jose: JOSE_VERSION } : {}),
       'reflect-metadata': REFLECT_METADATA_VERSION,
       rxjs: RXJS_VERSION,
       yaml: YAML_VERSION,

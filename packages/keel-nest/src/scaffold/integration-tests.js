@@ -23,6 +23,7 @@ import { NEST_INFRA } from './infra.js';
 import { usesApi } from './rest-support.js';
 import { usesRelational, engineOf } from './persistence-entities.js';
 import { tsString } from './render.js';
+import { closingCredential, identitySection, usesIdentityHarness } from './identity-harness.js';
 
 /** Dónde escribe Vitest el XML JUnit de la suite de integración: lo lee score-scenarios.sh. */
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
@@ -424,7 +425,8 @@ const DB_QUERY_ARGV: readonly string[] = ${JSON.stringify(probe.argv)};
 export function db(sql: string): string {
   return run(containerRuntime(), ['exec', DB_CONTAINER, ...DB_QUERY_ARGV, sql], '¿Está la base arriba (bash infra/up.sh)?');
 }
-` : ''}
+` : ''}${identitySection(model)}
+
 /** Espera hasta que \`condition\` se cumpla o se agote \`timeoutMs\`; lanza con \`message\` si no llega. */
 export async function eventually(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, message = 'la condición no se cumplió a tiempo'): Promise<void> {
   const until = Date.now() + timeoutMs;
@@ -443,7 +445,15 @@ function harnessSmokeTs(model) {
   const api = usesApi(model);
   const reset = hasResetScript(model);
   const probe = dbProbe(model);
-  const imports = ['useFlow', api ? 'ROUTE_BASE' : null, reset ? 'resetState' : null, probe ? 'db' : null].filter(Boolean);
+  const credential = api ? closingCredential(model) : null;
+  const identity = usesIdentityHarness(model) ? smokeCredentials(model) : null;
+  const imports = [
+    'useFlow',
+    api ? 'ROUTE_BASE' : null,
+    reset ? 'resetState' : null,
+    probe ? 'db' : null,
+    ...['bearer', 'tokenFor', 'serviceCredential', 'apiKey'].filter((name) => `${credential ?? ''}${identity ?? ''}`.includes(`${name}(`))
+  ].filter(Boolean);
   const cases = [];
   if (reset) {
     cases.push(`  it('SMOKE-1: el reset de estado se ejecuta sin error', () => {
@@ -463,12 +473,15 @@ function harnessSmokeTs(model) {
   }
   if (api) {
     cases.push(`  it('SMOKE-4: la API responde con ErrorResponse y correlación', async () => {
-    const response = await flow.get(\`\${ROUTE_BASE}/keel-smoke-ruta-inexistente\`, { 'X-Correlation-Id': 'keel-smoke' });
+    // Con seguridad, con la credencial que satisface la regla de cierre: sin ella, un camino que no
+    // existe es 401 (se decide antes de enrutar), y el humo mediría la autorización.
+    const response = await flow.get(\`\${ROUTE_BASE}/keel-smoke-ruta-inexistente\`, { ${credential && credential !== '{}' ? `...${credential}, ` : ''}'X-Correlation-Id': 'keel-smoke' });
     expect(response.status, response.body).toBe(404);
     expect(response.json().status).toBe(404);
     expect(response.header('x-correlation-id')).toBe('keel-smoke');
   });`);
   }
+  if (identity) cases.push(identity);
   return `// Humo del arnés: la fontanería de la que dependen TODOS los flujos (servidor vivo${reset ? ', reset' : ''}${
     probe ? ', base de prueba' : ''
   }${api ? ', API' : ''}).
@@ -736,4 +749,22 @@ fi
 [ "$fail" -eq 0 ] && echo "Pruebas de flujo: compilan y respetan la caja negra."
 exit "$fail"
 `;
+}
+
+/** SMOKE-5: el proveedor de identidad emite las credenciales con las que van a llamar los flujos. */
+function smokeCredentials(model) {
+  const sec = model.security;
+  if (sec.protocol !== 'oidc' && sec.protocol !== 'jwt') return null;
+  const checks = [];
+  const role = sec.roles?.[0];
+  const client = sec.serviceClients?.[0]?.name;
+  if (role) checks.push(`    expect(await tokenFor(${tsString(role)}), ${tsString(`el proveedor no devolvió token para el rol '${role}'`)}).not.toBe('');`);
+  if (client && sec.serviceAuth && sec.serviceAuth.protocol !== 'api-key') {
+    checks.push(`    expect(await serviceCredential(${tsString(client)}), ${tsString(`no hay credencial de máquina para '${client}': revisa infra/test-credentials.env`)}).not.toBe('');`);
+  }
+  if (checks.length === 0) return null;
+  return `  it('SMOKE-5: el proveedor de identidad emite credenciales', async () => {
+    // Sin ellas, cada flujo autenticado fallaría con un 401 que parece de negocio. ¿Se ejecutó infra/init-keycloak.sh?
+${checks.join('\n')}
+  });`;
 }

@@ -19,6 +19,7 @@ import { MEDIATOR_TS } from './mediator.js';
 import { messageComponents, messagePath, returnTypeOf, isPartialUpdate } from './services.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
+import { CALLER_IDENTITY_TS } from './security.js';
 
 export const VALUE_READERS_TS = 'src/infrastructure/rest/value-readers.ts';
 export const PAGEABLE_READING_TS = 'src/infrastructure/rest/pageable-reading.ts';
@@ -332,8 +333,10 @@ function renderReader(model, operation, name, imports) {
   for (const component of components) {
     let value;
     if (component.resolvedIdentity) {
-      value = `unsupported('la identidad del llamante la resuelve la seguridad (incremento 8 de keel-nest)')`;
-      use('unsupported');
+      // La estampa el servidor desde la credencial (security.authentication.callerIdentity), nunca el
+      // cuerpo: quien hace la petición no elige en nombre de quién actúa.
+      value = 'CallerIdentity.resolve()';
+      imports.push({ symbol: 'CallerIdentity', from: CALLER_IDENTITY_TS });
     } else if (component.file) {
       value = `unsupported('la subida multipart llega con la capa storage (incremento 13 de keel-nest)')`;
       use('unsupported');

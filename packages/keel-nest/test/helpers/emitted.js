@@ -19,14 +19,14 @@ import { tmpDir } from './tmp.js';
 const require = createRequire(import.meta.url);
 
 /** Carga una fixture; `mutate(layers)` permite derivar de ella una variante en memoria. */
-export function planFixture(name, { mutate = null, withoutLayers = [] } = {}) {
+export function planFixture(name, { mutate = null, withoutLayers = [], stack = null } = {}) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
   for (const layer of withoutLayers) {
     delete manifest.layers[layer];
     delete layers[layer];
   }
   if (mutate) mutate(layers);
-  return planService({ manifest, layers, workspace: FIXTURES_DIR });
+  return planService({ manifest, layers, workspace: FIXTURES_DIR, stack });
 }
 
 /**
@@ -36,10 +36,13 @@ export function planFixture(name, { mutate = null, withoutLayers = [] } = {}) {
 export function transpileTree(files) {
   const root = tmpDir('keel-nest-emitted-');
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}\n');
-  // Los paquetes del modelo (decimal.js) se resuelven desde el node_modules del monorepo.
-  const decimalJs = path.dirname(require.resolve('decimal.js/package.json'));
+  // Los paquetes que importa el código emitido sin Nest (decimal.js del dominio, jose de la seguridad) se
+  // resuelven desde el node_modules del monorepo.
   fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
-  fs.symlinkSync(decimalJs, path.join(root, 'node_modules', 'decimal.js'), 'junction');
+  for (const dependency of ['decimal.js', 'jose']) {
+    const dir = path.dirname(require.resolve(`${dependency}/package.json`));
+    fs.symlinkSync(dir, path.join(root, 'node_modules', dependency), 'junction');
+  }
   for (const file of files) {
     if (!file.path.startsWith('src/') || !file.path.endsWith('.ts') || file.path.endsWith('.d.ts')) continue;
     const { outputText } = ts.transpileModule(file.content, {

@@ -53,6 +53,10 @@ export const DEPENDENCY_CRUISER_VERSION = '^18.5.0';
 export const TYPEORM_VERSION = '^1.1.1';
 export const PG_VERSION = '^8.23.1';
 export const MYSQL2_VERSION = '^3.24.5';
+// Seguridad (incremento 8), verificada el 2026-10-06 contra el registro de npm: la validación del JWT
+// contra el JWKS del proveedor (firma, caducidad, emisor). Sin dependencias y sin Passport: la regla
+// de cada ruta la evalúa un hook de la entrada HTTP con el plan neutral de keel-core.
+export const JOSE_VERSION = '^6.2.12';
 
 export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;

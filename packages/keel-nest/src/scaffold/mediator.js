@@ -23,6 +23,7 @@ import { DIRS, classPath, tsModule } from './render.js';
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
 import { usesRelational } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
+import { usesCallerScope } from './security.js';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
@@ -109,7 +110,16 @@ function useCasesTest(model) {
   const persistenceImports = persistence
     ? "\nimport { PersistenceModule } from '../src/infrastructure/persistence/persistence-module.js';\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';"
     : '';
-  const modules = persistence ? "PersistenceModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' })), UseCaseModule" : 'UseCaseModule';
+  // El alcance por recurso (global) también es dependencia de los handlers que lo declaran.
+  const scope = usesCallerScope(model);
+  const scopeImport = scope ? "\nimport { SecurityModule } from '../src/infrastructure/security/security-module.js';" : '';
+  const modules = [
+    persistence ? "PersistenceModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
+    scope ? 'SecurityModule' : null,
+    'UseCaseModule'
+  ]
+    .filter(Boolean)
+    .join(', ');
   return `import 'reflect-metadata';
 import { Test } from '@nestjs/testing';
 import { describe, expect, it, beforeAll } from 'vitest';
@@ -117,7 +127,7 @@ import { UseCaseModule } from '../src/infrastructure/usecase/use-case-module.js'
 import { UseCaseMediator } from '../src/infrastructure/usecase/use-case-mediator.js';
 import { UseCaseContainer } from '../src/infrastructure/usecase/use-case-container.js';
 import { Handles } from '../src/application/annotations/application-component.js';
-import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}
+import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${scopeImport}
 ${imports}
 
 const OPERATIONS = [

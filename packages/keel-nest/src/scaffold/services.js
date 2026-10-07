@@ -23,6 +23,7 @@ import { relievingOperations, effectiveErrorCode } from 'keel-core/gen';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
+import { CALLER_SCOPE_TS, scopedOperation } from './security.js';
 
 export function generate(model) {
   const files = [];
@@ -215,6 +216,12 @@ function renderHandler(model, operation) {
     imports.push({ symbol: 'IdempotencyStore', from: IDEMPOTENCY_STORE_TS });
     dependencies.push({ type: 'IdempotencyStore', name: 'idempotencyStore' });
   }
+  // El alcance por recurso: el puerto ya está generado con su adaptador; el handler lo usa donde lo digan
+  // las reglas (la nota de abajo).
+  if (scopedOperation(model, operation)) {
+    imports.push({ symbol: 'CallerScope', from: CALLER_SCOPE_TS });
+    dependencies.push({ type: 'CallerScope', name: 'callerScope' });
+  }
   if (operation.responseDto?.entity && model.entities.some((e) => e.name === operation.responseDto.entity)) {
     const mapper = `${operation.responseDto.entity}ApplicationMapper`;
     imports.push({ symbol: mapper, from: classPath(DIRS.mappers, mapper) });
@@ -278,6 +285,15 @@ function handlerNotes(model, operation) {
     notes.push(
       `Error: lanzar ${error?.exceptionClass ?? code} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}` +
         (error ? ` — ${classPath(DIRS.errors, error.exceptionClass)}` : '')
+    );
+  }
+  const scoping = model.security?.scoping;
+  if (scopedOperation(model, operation)) {
+    notes.push(
+      `Alcance (security.authentication.scoping): this.callerScope ya está inyectado; comprueba ` +
+        `this.callerScope.covers(<${scoping.over} del recurso>) donde lo digan las reglas; fuera del alcance, ${scoping.error}. ` +
+        `Exentos: ${scoping.exemptRoles.join(', ') || 'ninguno'}. En un listado, filtra por this.callerScope.scopedValues() con un ` +
+        'finder acotado que escribes tú'
     );
   }
   for (const transition of operation.transitions ?? []) {

@@ -28,6 +28,20 @@ docker exec <servicio>-devtools sh -c "PGPASSWORD=changeme psql -h db -U <base> 
 Si el efecto es correcto y el check falla, el sondeo del generador está desalineado: es un defecto del
 **generador** (`validateInfra: FALSO-NEGATIVO`), no se parchea `validate-infra.sh` en el proyecto.
 
+## El proveedor de identidad (capa `security` con Keycloak)
+
+`infra/init-keycloak.sh` siembra el realm de prueba con los valores de `infra/test-credentials.env` —el
+mismo archivo del que el arnés lee cliente, contraseña y secretos—: un solo productor y un solo
+consumidor. Se ejecuta tras `up.sh` y antes de los flujos; es idempotente. Con Cognito no hay nada que
+sembrar: el emulador arranca con `infra/cognito/mock-oauth2-config.json`. Detalle en la skill del
+proveedor (`keel-nest-keycloak`, `keel-nest-cognito`).
+
+```bash
+bash infra/init-keycloak.sh
+curl -s -d 'grant_type=password&client_id=<servicio>-nest-test&username=<rol>&password=password' \
+  http://localhost:8180/realms/<servicio>/protocol/openid-connect/token
+```
+
 ## Reset entre flujos (`infra/reset-db.sh`)
 
 Deja el estado como recién arrancado: **vacía los datos** de la base, preservando el esquema y la tabla

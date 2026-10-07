@@ -15,6 +15,7 @@ import { HARNESSES, applyTokens, emitHarnessFiles } from 'keel-core';
 import { describeStack } from 'keel-core/gen/stack';
 import { assetsDir, SKILL } from '../lib/assets.js';
 import { usesRelational } from './persistence-entities.js';
+import { usesJwt } from './security.js';
 import { usesSchemaBaseline } from './schema-baseline.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'nest');
@@ -39,9 +40,11 @@ export const CONVENTIONS = [
 /** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
 export const AGENTS = ['keel-nest-code.md', 'keel-nest-infra.md', 'keel-nest-tests.md', 'keel-nest-validate.md', 'keel-nest-quality.md'];
 
-/** Skills por tecnología aplicables al servicio. Hoy, la de la base relacional. */
+/** Skills por tecnología aplicables al servicio: la de la base relacional y la del proveedor de identidad. */
 export function stackSkills(model) {
-  return usesRelational(model) ? ['keel-nest-database'] : [];
+  const skills = usesRelational(model) ? ['keel-nest-database'] : [];
+  if (usesJwt(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-nest-${model.stack.auth}`);
+  return skills;
 }
 
 export function generate(model) {

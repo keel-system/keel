@@ -32,6 +32,16 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Lo que tr
 | `db(sql)` | una sentencia contra la base de prueba (solo con persistencia): para lo que no se ve por HTTP |
 | `resetState()` | el reset, a mano (useFlow ya lo hace al empezar cada flujo) |
 | `eventually(cond, ms, msg)` | espera a que algo asíncrono se cumpla |
+| `bearer(token)` | la cabecera `Authorization` de un token (solo con capa `security`) |
+| `tokenFor(rol, n?)` | token de usuario del rol; `n = 2` es el segundo usuario del mismo rol (titularidad) y `tokenFor('no-role')` el autenticado sin roles |
+| `serviceCredential(cliente)` | token `client_credentials` de un cliente del diseño o de la matriz `test-m2m-*`; con `serviceAuth: api-key`, su clave |
+| `tokenAs(sub, claims?, rol?)` | una persona con el `sub` exacto del escenario y sus claims (`null` quita uno); solo cuando la identidad del llamante es el claim `sub`, con Keycloak |
+| `scopedResource()` | el recurso al que alcanzan los usuarios no exentos del alcance por recurso |
+| `apiKey()` | la clave del perfil local con `protocol: api-key` |
+
+Las credenciales salen de `infra/test-credentials.env` (lo escribe build junto a `init-keycloak.sh`):
+**no escribas ningún secreto, cliente ni usuario a mano**. Y pide el token **en cada petición**
+(`bearer(await tokenFor('editor'))`): dura cinco minutos y la caché lo renueva solo si se le pregunta.
 
 ## Una prueba por flujo
 

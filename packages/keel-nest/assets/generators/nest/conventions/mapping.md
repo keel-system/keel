@@ -190,6 +190,34 @@ una consulta por elemento dentro de un bucle sobre una página (N+1).
 El esquema de `develop` y `production` lo crean las migraciones de `src/migrations/`; el baseline lo
 produce el pase de calidad (`src/migrations/README.md`).
 
+## `security` — security.keel.yaml
+
+Entera de build, con la misma autorización que el servidor de keel-spring (el plan de acceso lo decide
+keel-core): un hook de la entrada HTTP (`infrastructure/security/http-security.ts`) que evalúa las reglas
+de `access-rules.ts` **antes de enrutar** —sin credencial, un camino que no existe es 401, no 404—, la
+validación del JWT (`jwt-authenticator.ts`, contra el JWKS del proveedor), las claves de API, CORS, los
+rechazos 401/403 con su `code` del catálogo (`UNAUTHENTICATED`, `ACCESS_DENIED`) y la configuración por
+perfil (`config/parameters/<perfil>/security.yaml`). **No escribas Guards ni decoradores de rol**: la
+autorización del diseño ya está entera, y una segunda capa diría otra cosa en cuanto el diseño cambie.
+
+Lo que toca a un handler:
+
+- **La identidad del llamante** (`authentication.callerIdentity`) llega YA resuelta en su campo del
+  mensaje: la estampa el controlador desde la credencial (`CallerIdentity.resolve()`), nunca del cuerpo.
+  El handler la usa como cualquier otro campo; no mira el token.
+- **El alcance por recurso** (`authentication.scoping`): el handler de una operación que declara el
+  error del alcance recibe `CallerScope` inyectado. Comprueba `this.callerScope.covers(valor)` donde lo
+  digan las reglas y lanza el error del diseño si no lo cubre; en un listado, filtra en la consulta con
+  `this.callerScope.scopedValues()` (un finder acotado en el puerto), nunca cargando todo y filtrando.
+
+```ts
+const application = await this.applicationRepository.findByCode(command.applicationCode);
+if (!this.callerScope.covers(command.applicationCode)) throw new ApplicationForbiddenError();
+```
+
+Las credenciales de los escenarios salen del arnés (`tokenFor`, `serviceCredential`, `tokenAs`), que
+lee `infra/test-credentials.env`: ver la skill del proveedor (`keel-nest-keycloak`, `keel-nest-cognito`).
+
 ## Cobertura funcional (criterio de «generación terminada»)
 
 `npm run build` en verde, `npm run check:architecture` en verde, los gates estáticos en verde y el 100%

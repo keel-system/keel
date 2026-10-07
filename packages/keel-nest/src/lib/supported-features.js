@@ -13,7 +13,6 @@
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  security: 'incremento 8',
   messaging: 'incremento 9',
   'http-clients': 'incremento 11',
   dependencies: 'incremento 11',
@@ -73,6 +72,15 @@ export function checkSupportedFeatures(manifest, layers) {
     errors.push(
       'persistence.default.model: document — keel-nest todavía no genera la persistencia documental (llega en el incremento 12 de PLAN-KEEL-NEST.md). ' +
         'Genera este diseño con keel-spring, o espera a que keel-nest la cubra.'
+    );
+  }
+  // La identidad del llamante con VARIAS credenciales por recurso (`from.resolvedBy`) necesita el finder
+  // por elemento de una colección en el repositorio, que keel-nest aún no emite. Sin él, el valor del
+  // token llegaría en crudo al campo que el diseño define como la clave natural: 403 en el camino feliz.
+  if (layers?.security?.authentication?.callerIdentity?.from?.resolvedBy) {
+    errors.push(
+      `security.authentication.callerIdentity.from.resolvedBy: keel-nest todavía no genera la resolución de una credencial a su recurso ` +
+        '(el finder por elemento de la colección). Genera este diseño con keel-spring, o declara la correspondencia 1:1.'
     );
   }
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
