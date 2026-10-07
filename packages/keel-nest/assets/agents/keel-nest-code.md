@@ -54,7 +54,11 @@ Eres el **agente de código** de keel-nest. Recibes en el prompt la ruta raíz d
    - `npm run build` en verde (compilación de `src/`);
    - `npm run check:architecture` en verde (la frontera hexagonal: dominio y aplicación sin framework);
    - `bash infra/check-domain-guards.sh` en verde (si existe): todo campo con formato declarado tiene
-     quien lo haga cumplir.
+     quien lo haga cumplir;
+   - `bash infra/check-idempotency.sh` en verde (si existe): cada listener usa la guarda en el orden que
+     dicta el diseño, cada handler idempotente usa el registro, cada barrido reclama su lote, cada evento
+     se emite desde su agregado y el dispatcher del outbox está registrado. Nace ROJO a propósito: es tu
+     trabajo el que lo pone verde, y cada hallazgo dice qué falta y por qué.
    No ejecutes `bash infra/up.sh`, `npm start` ni escenarios: de eso se encargan otros agentes. Esto vale
    íntegro en la **primera pasada** (fase 1), en paralelo con la infraestructura y con las pruebas.
 5. Con la compilación en verde, la **revisión mecánica final** de `flow-fidelity.md` (ningún `number`
@@ -103,6 +107,7 @@ status: OK | KO              # OK solo con build y check:architecture en verde y
 compiles: true | false       # npm run build
 architecture: OK | KO        # npm run check:architecture
 domainGuards: OK | KO | N/A  # bash infra/check-domain-guards.sh (N/A si no existe)
+idempotency: OK | KO | N/A   # bash infra/check-idempotency.sh (N/A si no existe)
 failures: [...]              # errores: archivo:línea y causa; relanzado, qué corregiste de cada fallo
 verifiedFiles:               # solo relanzado desde la fase 2. Verde aquí NO aprueba el escenario
   - { file: test/integration/product-creation.test.ts, result: OK | KO }

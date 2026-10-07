@@ -40,6 +40,7 @@ import * as snssqs from './snssqs.js';
 import * as scheduling from './scheduling.js';
 import * as purge from './purge.js';
 import * as claim from './claim.js';
+import * as idempotencyCheck from './idempotency-check.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as architecture from './architecture.js';
 import * as restSupport from './rest-support.js';
@@ -98,6 +99,8 @@ const GENERATORS = [
   // Los reclamos de barrido (incremento 10c): la configuración de los lotes y los plazos; los métodos van en
   // el puerto y el adaptador de cada raíz (repositories.js).
   claim,
+  // El gate de idempotencia y compensación (incremento 10d): infra/check-idempotency.sh, con el motor de keel-core.
+  idempotencyCheck,
   // El baseline de migraciones: cómo se exporta y cómo se demuestra (lo usa el pase de calidad).
   schemaBaseline,
   { generate: (model) => mediator.generate(model, { mappers: mappers.mapperClasses(model) }) },

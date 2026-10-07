@@ -1009,6 +1009,35 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   - **Sin medir**: las sondas del arnés no están falsadas por mutación, y el barrido que build NO puede reclamar
     (`payout-runs.closePayoutRuns`, dos estados en vuelo) queda para el agente con el aviso del modelo y el gate
     de 10d (familia `sweepClaim`).
+- **10d — el gate `check-idempotency.sh`, hecho (2026-10-07)**.
+  - **El motor pasa a keel-core** (`gen/idempotency-gate.js`): las tres clases de comprobación (`unit`, `impl`,
+    `claim`), el recorte por bloque y la salida por familia, con lo que cambia entre lenguajes en `platform`
+    (carpeta de fuentes, extensión, archivos de mensajes). Extraído del de keel-spring copiando su texto exacto
+    (los escapes del bash no se reescriben a mano) y neutralizando la prosa; su `check-idempotency.sh` cambia
+    solo en esa prosa y en dos arreglos del motor (abajo), con los 220 tests que lo EJECUTAN en verde.
+  - **keel-nest** (`src/scaffold/idempotency-check.js`): la MATRIZ con patrones de TypeScript, con las mismas
+    familias y sujetos que keel-spring para el mismo diseño (`dedupe`, `payloadContract`, `commandIdempotency`,
+    `domainEvent`, `sweepClaim`, `outboxDelivery`), salvo `conditionalUniqueness` —en TypeORM cada save escribe al
+    momento: no hay volcado diferido que ordenar— y la escritura de los registros, que es la misma promesa con
+    otra forma (`insert` y no `save`, que en TypeORM es un upsert). El listener no tiene nombre fijo en keel-nest:
+    se localiza por contenido (los mensajes que nombra y la guarda). El dispatcher del outbox se exige registrado
+    en `broker-bindings.ts`. Los agentes de código y de calidad lo ejecutan y lo reportan (`idempotency:`).
+  - **Medido**: `test/idempotency-check.test.js` (17) compara familias y sujetos con keel-spring en 5 fixtures × 3
+    brokers, y EJECUTA el gate: rojo recién generado en las cinco familias de `stock-reservation-events` y en las
+    dos de `payout-runs`; verde con el uso correcto; rojo otra vez leyendo el lote con un finder. **Contra las
+    corridas reales de keel-nest** (copiadas, sin tocar): `stock-reservation-events` **verde** en sus cinco
+    familias; `product-catalog` v2 **verde**; y `product-catalog` v1 —la corrida en la que el agente escribió su
+    propio registro con otra tabla, el defecto que motivó el 10a— **roja**. Falsado sobre la copia de
+    `stock-reservation-events` con cinco sabotajes que conservan la forma (`record` renombrado, `requireContract`
+    quitado, la firma a mano, el `raise` quitado, el dispatcher sin registrar): cada uno tumba su familia y solo esa.
+  - **Dos defectos del MOTOR que destapó keel-nest**, invisibles en keel-spring porque allí el reclamo generado vive
+    en otro archivo (el repositorio declarativo): (1) con `scope: method`, el recorte se quedaba con el PRIMER bloque
+    que casaba y, si era el de build (`deny`), abandonaba el archivo entero sin mirar el del agente; ahora salta los
+    bloques denegados y sigue; (2) cuando todos los bloques con llaves eran de build, la reserva por párrafos partía
+    uno de ellos por una línea en blanco y su trozo ya no nombraba lo que el `deny` busca: el barrido que build no
+    puede reclamar salía VERDE recién generado. La reserva por párrafos solo se usa ya en archivos sin bloques que
+    casen. Y en keel-nest el `save` generado también es una escritura condicional (la versión del bloqueo
+    optimista): va en el `deny`, o el mismo barrido salía verde.
 
 ### Inc. 11 — Clientes HTTP salientes y dependencias
 
