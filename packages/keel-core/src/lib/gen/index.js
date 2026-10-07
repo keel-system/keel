@@ -34,6 +34,17 @@ export {
 } from './dead-letter.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export {
+  scheduledOperations,
+  hasScheduledOperations,
+  scheduleSeconds,
+  scheduleCron,
+  feedsGuardedEffect,
+  scheduleDispatch,
+  BATCHED_PURGE,
+  batchedPurgeParameters,
+  batchedPurgeReference
+} from './scheduling.js';
+export {
   FORMAT_TEXT_BASES,
   numericConstraints,
   inheritedTypePattern,

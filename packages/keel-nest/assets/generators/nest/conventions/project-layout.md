@@ -76,6 +76,7 @@ La URL de la base admite la JDBC de keel-spring tal cual (`jdbc:postgresql://hos
 | Handlers | firma, dependencias y notas del diseño, terminando en `throw new Error('TODO: …')` | la lógica |
 | API REST, filtro de errores, paginación | entera | — |
 | Persistencia: entidades, adaptadores, transacción, traducción de constraints | entera | ampliar el adaptador cuando se amplía el puerto |
+| Reloj: el disparo de cada operación con `schedule` y las purgas de las tablas del generador | entero | el trabajo del barrido en su handler |
 | Baseline de migraciones | el mecanismo (`infra/export-schema.sh`, `infra/verify-baseline.sh`) | el pase de calidad lo exporta, revisa, copia y verifica |
 | Pruebas de flujo | el arnés y el humo | una por flujo |
 

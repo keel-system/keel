@@ -40,7 +40,7 @@ export function usesApi(model) {
  * ¿Hace falta la correlación sin API? Sí con mensajería: los eventos la llevan en su metadata y los
  * listeners la abren con lo que trae cada mensaje.
  */
-function usesCorrelation(model) {
+export function usesCorrelation(model) {
   return usesApi(model) || usesMessaging(model);
 }
 

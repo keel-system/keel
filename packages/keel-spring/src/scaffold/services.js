@@ -5,9 +5,14 @@
 // donde el agente implementa la lógica. Los handlers dependen del PUERTO de
 // dominio (domain/repository) y del mapper de aplicación, nunca del JPA.
 
-import { callsPaymentGateway } from '../lib/payments-model.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
-import { effectiveErrorCode, declaredUniquenessErrorFor } from 'keel-core/gen';
+import {
+  effectiveErrorCode,
+  declaredUniquenessErrorFor,
+  hasScheduledOperations,
+  scheduleSeconds,
+  scheduleDispatch
+} from 'keel-core/gen';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { kebabCase } from '../lib/naming.js';
 import { INTERFACES_PKG, ANNOTATIONS_PKG, MEDIATOR_PKG } from './mediator.js';
@@ -61,50 +66,12 @@ export function returnTypeImports(model, operation, imports) {
   else if (operation.returnsList) imports.add('java.util.List');
 }
 
-/**
- * ¿El diseño declara alguna operación disparada por reloj?
- *
- * Lo consume application.js: sin @EnableScheduling, el <Servicio>Scheduler se genera
- * con sus @Scheduled y no se dispara nunca — un barrido de reconciliación que
- * simplemente no ocurre, sin que nada lo delate.
- */
-export function hasScheduledOperations(model) {
-  return (model.services ?? []).some((service) =>
-    (service.operations ?? []).some((operation) => operation.schedule)
-  );
-}
-
-// El segundo de arranque de cada @Scheduled, repartido dentro del minuto.
-//
-// El DSL declara un cron de CINCO campos y Spring quiere seis: el de segundos lo pone
-// build. Ponerlo a 0 en todos hacía que varios barridos que comparten cadencia —y
-// compartirla es lo natural, "cada cinco minutos" es la declaración obvia— arrancaran
-// en el mismo instante, y en todas las réplicas a la vez. Lo que se amontona ahí no es
-// la base de datos (el reclamo es un UPDATE corto) sino las LLAMADAS SALIENTES: todos
-// los barridos empujando a sus proveedores en el mismo segundo.
-//
-// Repartir la fase no cambia nada de lo que el diseño declara: la cadencia sigue siendo
-// la de su cron, solo cambia en qué segundo del minuto cae. Y es la misma decisión que
-// build ya tiene tomada a mano para sus purgas (outbox a las 3:00, processed_event a
-// las 4:00, idempotency_record a las 4:30), aplicada donde no se aplicaba.
-//
-// El reparto es por ÍNDICE, no por hash del nombre: lo que se busca es que NO coincidan,
-// y solo el índice lo garantiza —un hash reparte igual de bien en promedio y colisiona—.
-// El precio es que añadir un barrido corre la fase de los demás, y en un archivo que
-// build reescribe entero eso no cuesta nada.
-//
-// Es una mitigación, no una garantía: reparte el ARRANQUE. Dos barridos que duren más
-// que su separación se solapan igual, y contra eso el segundo inicial no puede nada.
-export function scheduleSeconds(model) {
-  const scheduled = (model.services ?? []).flatMap((service) =>
-    (service.operations ?? []).filter((operation) => operation.schedule)
-  );
-  const seconds = new Map();
-  scheduled.forEach((operation, index) => {
-    seconds.set(operation.name, Math.round((index * 60) / scheduled.length) % 60);
-  });
-  return seconds;
-}
+// Si el diseño declara operaciones por reloj, el segundo de arranque de cada una y cómo se
+// despacha (con la transacción del caso de uso o sin ella) son decisiones NEUTRALES: el servidor de
+// keel-nest del mismo diseño dispara en el mismo segundo y despacha igual (keel-core/gen/scheduling.js).
+// `hasScheduledOperations` lo consume application.js: sin @EnableScheduling, el <Servicio>Scheduler se
+// genera con sus @Scheduled y no se dispara nunca.
+export { hasScheduledOperations, scheduleSeconds };
 
 export function generate(model) {
   const files = [];
@@ -889,35 +856,6 @@ function activationNote(depId, activation, sweep = false) {
   return `Activación ${depId}.${activation.name}: ${activation.effect} — invoca ${decap(activation.http.clientClass)}.${activation.http.call}(...). ${awaits} ${failure ?? ''}`.trim();
 }
 
-/**
- * ¿El lote que este barrido reclama va a parar a una operación con GUARDA de efecto irreversible?
- *
- * El enlace es mecánico y no hace falta leer ninguna prosa: el reclamo del barrido deja las filas
- * en un estado (`accepted → queued`) y la guarda las toma de ESE estado (`queued → sending`),
- * sobre la MISMA entidad. Eso es el diseño diciendo «el barrido alimenta al que manda el correo».
- *
- * Importa porque decide cómo se despacha, y equivocarse aquí anula la guarda entera. Con la
- * transacción abarcadora del lote, el reclamo por fila NO confirma hasta el final: ninguna otra
- * réplica lo ve, el envío cae dentro de la transacción, y el estado intermedio no llega a existir
- * para nadie —con lo que una caída revierte la marca y el ciclo siguiente manda un SEGUNDO correo
- * real a una persona—. Que es exactamente lo que la guarda existe para impedir.
- *
- * Hasta ahora esto solo se derivaba de `reconciles`, y un barrido que delega su trabajo por
- * elemento en otra operación se despachaba transaccional. Lo arreglaba a mano el agente en cada
- * corrida, así que volvía a aparecer en cuanto se regeneraba.
- */
-function feedsGuardedEffect(model, operation) {
-  const guards = (model.services ?? [])
-    .flatMap((service) => service.operations ?? [])
-    .map((candidate) => candidate.guardClaim)
-    .filter(Boolean);
-  if (guards.length === 0) return false;
-
-  return (operation.claim ?? []).some((claim) =>
-    guards.some((guard) => guard.entity === claim.entity && (guard.from ?? []).includes(claim.to))
-  );
-}
-
 function renderScheduler(model, service, scheduled, seconds) {
   const className = service.className.replace(/Service$/, 'Scheduler');
   // La correlación existe si el servicio tiene por dónde propagarla (api o messaging), que
@@ -943,15 +881,13 @@ function renderScheduler(model, service, scheduled, seconds) {
     // (REQUIRES_NEW) antes de devolver el lote, así que envolver el lote entero en una
     // transacción única hace que un conflicto en una fila revierta el trabajo de todas y
     // las deje reclamadas a medias. La corrida room-booking (R8) lo tuvo que cambiar a mano.
-    const claimed = (operation.claim ?? []).length > 0;
-    const gatewaySweep = callsPaymentGateway(model, operation.name);
-    const sweep = (operation.reconciles ?? []).length > 0 || feedsGuardedEffect(model, operation) || claimed || gatewaySweep;
-    const efectoExterno =
-      (operation.reconciles ?? []).length > 0 || gatewaySweep
-        ? 'llama al proveedor'
-        : feedsGuardedEffect(model, operation)
-          ? 'produce un efecto que no se deshace'
-          : 'confirma cada reclamo en su propia transacción y actúa sobre las filas una a una';
+    const dispatchMode = scheduleDispatch(model, operation);
+    const sweep = dispatchMode.withoutTransaction;
+    const efectoExterno = {
+      provider: 'llama al proveedor',
+      irreversible: 'produce un efecto que no se deshace',
+      claimed: 'confirma cada reclamo en su propia transacción y actúa sobre las filas una a una'
+    }[dispatchMode.reason];
     const sweepNote = sweep
       ? `${operation.schedule.description ? '<p>' : ''}Despachado <b>sin transacción abarcadora</b> a propósito: este barrido ${efectoExterno}
 EN MEDIO de su trabajo, así que su garantía es un orden de commits —reclamar y confirmar, actuar

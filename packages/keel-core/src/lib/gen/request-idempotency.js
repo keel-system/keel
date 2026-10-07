@@ -70,3 +70,12 @@ export const IDEMPOTENCY_RECORD = Object.freeze({
   ]),
   indexes: Object.freeze([{ name: 'ix_idempotency_record_expires_at', columns: ['expires_at'] }])
 });
+
+/**
+ * La purga de las claves caducadas. La retención no se parametriza: cada fila lleva su propia
+ * caducidad (`expires_at`), calculada con el `ttlSeconds` que el diseño declara para su operación; la
+ * purga solo decide CUÁNDO se borra lo que ya no protege nada.
+ */
+export const IDEMPOTENCY_RECORD_PURGE = Object.freeze({
+  cron: Object.freeze({ key: 'idempotency-record.purge.cron', env: 'IDEMPOTENCY_PURGE_CRON', default: '0 30 4 * * *', cron: true })
+});

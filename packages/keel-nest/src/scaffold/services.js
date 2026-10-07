@@ -19,11 +19,12 @@ import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } 
 import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { repositoryRoots, portClass, portPath, occupantFinders, PAGE_TS } from './repositories.js';
-import { relievingOperations, effectiveErrorCode } from 'keel-core/gen';
+import { relievingOperations, effectiveErrorCode, scheduleDispatch } from 'keel-core/gen';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_SCOPE_TS, scopedOperation } from './security.js';
+import { schedulerPath } from './scheduling.js';
 
 export function generate(model) {
   const files = [];
@@ -173,7 +174,7 @@ function componentNotes(model, component, fromPath) {
 
 /**
  * El ÁMBITO de la clave de idempotencia, ya compuesto (DSL 2.17, `idempotency.partitionBy`): la
- * misma decisión que keel-spring. El almacén que lo usa llega con el incremento 10.
+ * misma decisión que keel-spring. Lo usa el registro de idempotencia (request-idempotency.js).
  */
 function idempotencyScope(operation) {
   const idempotency = operation.idempotency;
@@ -276,6 +277,7 @@ function handlerNotes(model, operation) {
         'el índice: es el invariante que el diseño declaró.'
     );
   }
+  for (const note of scheduleNotes(model, operation)) notes.push(note);
   for (const note of idempotencyNotes(model, operation)) notes.push(note);
   for (const note of textFilterNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
@@ -312,6 +314,28 @@ function handlerNotes(model, operation) {
     );
   }
   return notes.flatMap((note) => wrap(note));
+}
+
+/**
+ * La nota de una operación disparada por reloj: cómo la despacha su scheduler (keel-core/gen/scheduling.js,
+ * la misma decisión que keel-spring) y lo que eso le cambia al handler.
+ */
+function scheduleNotes(model, operation) {
+  if (!operation.schedule) return [];
+  const mode = scheduleDispatch(model, operation);
+  const where = `${schedulerPath(model.services.find((service) => service.operations.includes(operation)))}`;
+  const notes = [
+    `Por reloj (cron ${operation.schedule.cron}): la dispara ${where} en TODAS las réplicas a la vez. Lo que ` +
+      'actúa sobre lo que encuentra tiene que RECLAMARLO (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo.'
+  ];
+  notes.push(
+    mode.withoutTransaction
+      ? 'SIN TRANSACCIÓN ABARCADORA: el scheduler la despacha con dispatchWithoutTransaction, así que cada llamada al adaptador de ' +
+          'repositorio confirma la SUYA. El orden es el de los commits: reclamar y confirmar, actuar fuera de toda transacción, ' +
+          'confirmar el desenlace. Un fallo en una fila no puede revertir las demás.'
+      : 'Corre en UNA transacción, la del caso de uso: no llama a nadie en medio de su trabajo, así que todo o nada.'
+  );
+  return notes;
 }
 
 /** Notas de los filtros de TEXTO de una query que declaran `match` o `compare` (DSL 2.14). */

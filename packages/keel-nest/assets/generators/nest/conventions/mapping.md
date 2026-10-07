@@ -112,6 +112,31 @@ async handle(command: CreateProductCommand): Promise<CreateProductResponseDto> {
 - La clave reutilizada con otro contenido es `IdempotencyReuseException` (409 `IDEMPOTENCY_KEY_REUSED`
   o el del diseño): no reutilices el error de la carrera ni inventes un `code`.
 
+### Las operaciones por reloj: el disparo ya está, el trabajo es tuyo
+
+Una operación con `schedule` tiene **ya generado** su disparador: `<Grupo>Scheduler`
+(`src/infrastructure/scheduling/`) la registra en el reloj del servicio (`Scheduling`, sobre `cron`) con
+un cron de **seis** campos —build añade el segundo de arranque, repartido para que dos barridos con la
+misma cadencia no salgan a la vez— y la despacha por el mediator. Es el mismo segundo y el mismo despacho
+que el `@Scheduled` del servidor de keel-spring. **No escribas otro disparador, otro `setInterval` ni un
+`@Cron` de @nestjs/schedule, y no cambies el segundo a 0.**
+
+- Corre en **todas las réplicas** a la vez. Lo que actúa sobre lo que encuentra tiene que **reclamarlo**
+  (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo.
+- Cómo se despacha lo dice el diseño, y la nota del handler lo repite: un barrido que reclama su lote (o
+  llama a un proveedor en medio) va **sin transacción abarcadora** (`dispatchWithoutTransaction`): cada
+  llamada al adaptador confirma la suya, y el orden es reclamar y confirmar, actuar fuera de toda
+  transacción, confirmar el desenlace. Lo demás (un cierre diario) va en la transacción del caso de uso.
+- Un tick que llega con la pasada anterior en curso **se salta**: el barrido no se solapa consigo mismo.
+  Al apagar, el reloj espera a la pasada en vuelo antes de cerrar el pool.
+- El perfil `test` no tiene base de datos y el reloj no corre (`scheduling.enabled: false`); en los demás
+  lo conmuta `SCHEDULING_ENABLED`.
+
+Las **purgas** de las tablas del generador (`outbox_event`, `processed_event`, `idempotency_record`) son
+también de build (`src/infrastructure/persistence/purge/`): por lotes, cada lote en su transacción, con
+la cadencia y la retención de `config/parameters/<perfil>/` (las mismas claves y variables que keel-spring).
+No las toques ni escribas otra.
+
 ### Normalización antes que validación de formato
 
 Si una regla del diseño normaliza un campo (mayúsculas, recorte, slug), se normaliza **antes** de

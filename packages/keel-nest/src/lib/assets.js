@@ -66,6 +66,11 @@ export const AMQPLIB_VERSION = '^2.2.0';
 export const KAFKA_JAVASCRIPT_VERSION = '^1.10.1';
 // SNS/SQS (incremento 9g), verificado el 2026-10-07: el SDK v3 de AWS, un paquete por servicio (Node >= 20).
 export const AWS_SDK_VERSION = '^3.1147.0';
+// El reloj (incremento 10b), verificado el 2026-10-07: `cron` 4.4, el que usa por dentro @nestjs/schedule, a
+// pelo. Las expresiones salen de la configuración en el arranque y no de un decorador, así que el registro de
+// @nestjs/schedule no aporta nada; `waitForCompletion` es la semántica del @Scheduled de Spring (no se solapa
+// consigo mismo) y `stop()` espera a la pasada en vuelo, que es lo que pide el apagado ordenado.
+export const CRON_VERSION = '^4.4.0';
 
 export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;

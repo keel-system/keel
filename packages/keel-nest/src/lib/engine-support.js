@@ -43,7 +43,7 @@ export const MECHANISMS = {
         engines: ['postgresql', 'mysql'],
         falsified: true,
         why:
-          'la tabla outbox_event es la de keel-spring (schema-parity contra OutboxEventJpa) y los parámetros del relay, los de keel-core (messaging.test.js contra el messaging.yaml de keel-spring; el backoff, contra la referencia ejecutable). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla contra el catálogo del motor, el puente escribiendo la fila en la transacción del cambio (y nada si revierte), el reclamo en orden y con su lote, el lease, SKIP LOCKED sin esperar a la fila retenida por otra réplica, el backoff de un fallo, la rendición al alcanzar el máximo y su cuenta, y que ni la publicada ni la rendida vuelven. Falsado el 2026-10-07 quitando el lease (cae su comprobación y solo esa) y quitando SKIP LOCKED (el reclamo espera a la fila retenida hasta el tope). Y broker-check, contra RabbitMQ real: el relay con un dispatcher sobre RabbitConnection.publish entrega la fila al canal con su envoltura y su tipo, no da por publicado lo que no tenía cola (mandatory), espera con el broker caído y sale al volver sin rendirse, y un evento abandonado no sale y se cuenta (falsado publicando sin mandatory: cae ese flujo y solo ese). Y contra Kafka real (9f): el mismo relay con un dispatcher sobre KafkaConnection.publish entrega la fila con la routing key como clave, espera con el broker caído y sale al volver, y el abandonado no sale. Y contra LocalStack (9g): con un dispatcher sobre SnsSqsConnection.publish, lo mismo, más que una fila cuyo topic no existe no se da por publicada (la conexión no crea el topic), y que tras levantar el broker la topología se resiembra y la fila sale. Lo que no mide: la purga (incremento 10)'
+          'la tabla outbox_event es la de keel-spring (schema-parity contra OutboxEventJpa) y los parámetros del relay, los de keel-core (messaging.test.js contra el messaging.yaml de keel-spring; el backoff, contra la referencia ejecutable). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla contra el catálogo del motor, el puente escribiendo la fila en la transacción del cambio (y nada si revierte), el reclamo en orden y con su lote, el lease, SKIP LOCKED sin esperar a la fila retenida por otra réplica, el backoff de un fallo, la rendición al alcanzar el máximo y su cuenta, y que ni la publicada ni la rendida vuelven. Falsado el 2026-10-07 quitando el lease (cae su comprobación y solo esa) y quitando SKIP LOCKED (el reclamo espera a la fila retenida hasta el tope). Y broker-check, contra RabbitMQ real: el relay con un dispatcher sobre RabbitConnection.publish entrega la fila al canal con su envoltura y su tipo, no da por publicado lo que no tenía cola (mandatory), espera con el broker caído y sale al volver sin rendirse, y un evento abandonado no sale y se cuenta (falsado publicando sin mandatory: cae ese flujo y solo ese). Y contra Kafka real (9f): el mismo relay con un dispatcher sobre KafkaConnection.publish entrega la fila con la routing key como clave, espera con el broker caído y sale al volver, y el abandonado no sale. Y contra LocalStack (9g): con un dispatcher sobre SnsSqsConnection.publish, lo mismo, más que una fila cuyo topic no existe no se da por publicada (la conexión no crea el topic), y que tras levantar el broker la topología se resiembra y la fila sale. Y la purga por lotes (10b), en db-check: lo publicado y caducado sale en lotes de dos con instantes repetidos en la frontera, con el tope alcanzado la pasada siguiente lo termina, y lo vigente y lo PENDIENTE no se tocan (falsado cortando por created_at: caen esas tres y solo esas)'
       },
       document: { pending: 'incremento 12 (persistencia documental)' }
     }
@@ -57,7 +57,7 @@ export const MECHANISMS = {
         engines: ['postgresql', 'mysql'],
         falsified: true,
         why:
-          'la tabla idempotency_record es la de keel-spring (schema-parity la compara con IdempotencyRecordJpa, falsado con una cota distinta: caen las 4 fixtures con idempotencia). db-check, en los dos motores y en las 3 fixtures relacionales que la declaran: la tabla contra el catálogo del motor, guardar y encontrar, el ámbito dentro de la clave, la clave repetida y la CARRERA de dos transacciones como el conflicto con su code (el del diseño si lo declara), la clave caducada sustituible y el rollback del registro con su comando. Falsado el 2026-10-06 quitando la traducción de la violación: caen exactamente esas dos comprobaciones en las tres. Lo que no ejecuta ninguna red: la purga de las caducadas (llega con el scheduling, incremento 10) y el USO en el handler, que escribe el agente'
+          'la tabla idempotency_record es la de keel-spring (schema-parity la compara con IdempotencyRecordJpa, falsado con una cota distinta: caen las 4 fixtures con idempotencia). db-check, en los dos motores y en las 3 fixtures relacionales que la declaran: la tabla contra el catálogo del motor, guardar y encontrar, el ámbito dentro de la clave, la clave repetida y la CARRERA de dos transacciones como el conflicto con su code (el del diseño si lo declara), la clave caducada sustituible y el rollback del registro con su comando. Falsado el 2026-10-06 quitando la traducción de la violación: caen exactamente esas dos comprobaciones en las tres. La purga de las caducadas (10b), en db-check: por lotes, con tope y pasada siguiente, sin tocar las vigentes. Lo que no ejecuta ninguna red: el USO en el handler, que escribe el agente'
       },
       document: { pending: 'incremento 12 (persistencia documental)' }
     }
@@ -71,16 +71,16 @@ export const MECHANISMS = {
         engines: ['postgresql', 'mysql'],
         falsified: true,
         why:
-          'la tabla processed_event es la de keel-spring (schema-parity contra ProcessedEventJpa). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla y sus cotas contra el catálogo del motor, la repetición arbitrada por la clave primaria, dos consumidores del mismo mensaje sin pisarse, el registro que sobrevive al rollback del handler (su transacción es propia) y la carrera de dos entregas, de la que registra UNA. Falsado el 2026-10-07 haciendo que el registro use la transacción del llamante: cae «sobrevive al rollback» y solo esa. Lo que no mide: el ORDEN en el listener (alreadyProcessed/record o tryRecord), que escribe el agente y vigilará el gate de idempotencia (incremento 10)'
+          'la tabla processed_event es la de keel-spring (schema-parity contra ProcessedEventJpa). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla y sus cotas contra el catálogo del motor, la repetición arbitrada por la clave primaria, dos consumidores del mismo mensaje sin pisarse, el registro que sobrevive al rollback del handler (su transacción es propia) y la carrera de dos entregas, de la que registra UNA. Falsado el 2026-10-07 haciendo que el registro use la transacción del llamante: cae «sobrevive al rollback» y solo esa. Y la purga por retención (10b), en db-check. Lo que no mide: el ORDEN en el listener (alreadyProcessed/record o tryRecord), que escribe el agente y vigilará el gate de idempotencia (incremento 10d)'
       },
       document: { pending: 'incremento 12 (persistencia documental)' }
     }
   },
-  'reconciliation-claim': { pending: 'incremento 10 (reconciliación)' },
-  'sweep-claim-queue': { pending: 'incremento 10 (barridos)' },
-  'sweep-claim-rescue': { pending: 'incremento 10 (barridos)' },
-  'guard-claim': { pending: 'incremento 10 (guarda de fila)' },
-  'harness-db-probes': { pending: 'incremento 10 (las sondas que fabrican la precondición de un barrido)' },
+  'reconciliation-claim': { pending: 'incremento 11 (la reconciliación cuelga de dependencies)' },
+  'sweep-claim-queue': { pending: 'incremento 10c (reclamos de barrido)' },
+  'sweep-claim-rescue': { pending: 'incremento 10c (rescate de stalledAfter)' },
+  'guard-claim': { pending: 'incremento 13 (la guarda de efecto irreversible solo la declara el correo)' },
+  'harness-db-probes': { pending: 'incremento 10c (las sondas que fabrican la precondición de un barrido)' },
   'schema-baseline': {
     emitter: 'src/scaffold/schema-baseline.js (schema-baseline.ts, infra/export-schema.sh e infra/verify-baseline.sh)',
     coverage: {
@@ -141,8 +141,8 @@ export const MECHANISMS = {
       }
     }
   },
-  'claim-dialect': { pending: 'incremento 10 (reclamos con SKIP LOCKED)' },
-  'harness-sql-literals': { pending: 'incremento 10 (los literales por motor de las sondas del arnés)' },
+  'claim-dialect': { pending: 'incremento 10c (reclamos con SKIP LOCKED)' },
+  'harness-sql-literals': { pending: 'incremento 10c (los literales por motor de las sondas del arnés)' },
   'telemetry-store-spans': { pending: 'incremento 14 (telemetría)' },
   'folded-text': {
     emitter: 'src/scaffold/persistence-entities.js (la columna sombra) · src/scaffold/repositories.js (TextFold al guardar)',

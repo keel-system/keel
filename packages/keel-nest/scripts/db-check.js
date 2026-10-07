@@ -47,6 +47,8 @@ import { ormPath, ormClass, unidirectionalParents } from '../src/scaffold/persis
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_IMPL_TS, IDEMPOTENCY_CONFLICT_TS } from '../src/scaffold/request-idempotency.js';
 import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
 import { OUTBOX_EVENT, PROCESSED_EVENT } from 'keel-core/gen/messaging-stores';
+import { TABLE_PURGES_TS, tablePurges } from '../src/scaffold/purge.js';
+import { IDEMPOTENCY_RECORD_ORM_TS } from '../src/scaffold/request-idempotency.js';
 import {
   usesNestOutbox,
   usesProcessedEvents,
@@ -54,6 +56,7 @@ import {
   bridgePath,
   MESSAGING_SETTINGS_TS,
   OUTBOX_ORM_TS,
+  PROCESSED_EVENT_ORM_TS,
   OUTBOX_RELAY_STORE_TS,
   IDEMPOTENCY_GUARD_TS
 } from '../src/scaffold/messaging.js';
@@ -450,6 +453,7 @@ ${blocks.join('\n')}
 ${concurrencyBlock(model, engine, roots[0], ctx)}
 ${idempotencyBlock(model, engine)}
 ${messagingCode}
+${purgeBlock(model)}
 
 await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -815,6 +819,83 @@ function messagingBlock(model, engine, ctx) {
   return `
 // ═══ Mensajería: el outbox y el registro de procesados ═══
 {${outbox ? `\n  const { OutboxEventOrm } = await import('${distOf(OUTBOX_ORM_TS)}');` : ''}${schemaChecks}${bridge}${relay}${guard}
+}`;
+}
+
+/**
+ * Las PURGAS por lotes de las tablas del generador (incremento 10b), lo que en keel-spring mide store-check
+ * con BatchedPurge: borran lo caducado y solo eso (lo pendiente del outbox nunca), en lotes —con lotes de
+ * DOS filas e instantes repetidos en la frontera—, y con el tope alcanzado dejan el resto a la pasada
+ * siguiente, que lo termina.
+ */
+function purgeBlock(model) {
+  const purges = tablePurges(model);
+  if (purges.length === 0) return '';
+  const ORM = {
+    outbox_event: ['OutboxEventOrm', OUTBOX_ORM_TS],
+    processed_event: ['ProcessedEventOrm', PROCESSED_EVENT_ORM_TS],
+    idempotency_record: ['IdempotencyRecordOrm', IDEMPOTENCY_RECORD_ORM_TS]
+  };
+  // Cada tabla: cómo es una fila caducada, una vigente y (en el outbox) una pendiente antigua.
+  const ROWS = {
+    outbox_event: {
+      expired: "(at) => ({ id: randomUUID(), destination: 'd', routingKey: 'k', eventType: 'E', payload: '{}', createdAt: at, publishedAt: at, attempts: 1, nextAttemptAt: null, lastError: null })",
+      kept: "(at) => ({ id: randomUUID(), destination: 'd', routingKey: 'k', eventType: 'E', payload: '{}', createdAt: at, publishedAt: at, attempts: 1, nextAttemptAt: null, lastError: null })",
+      pending: "(at) => ({ id: randomUUID(), destination: 'd', routingKey: 'k', eventType: 'E', payload: '{}', createdAt: at, publishedAt: null, attempts: 3, nextAttemptAt: null, lastError: 'x' })",
+      old: 'old(8)',
+      recent: 'old(1)'
+    },
+    processed_event: {
+      expired: "(at) => ({ handlerId: 'H', eventId: randomUUID(), processedAt: at })",
+      kept: "(at) => ({ handlerId: 'H', eventId: randomUUID(), processedAt: at })",
+      old: 'old(15)',
+      recent: 'old(1)'
+    },
+    idempotency_record: {
+      expired: "(at) => ({ operationScope: 'op', idempotencyKey: randomUUID(), signature: 's', resourceId: null, createdAt: old(2), expiresAt: at })",
+      kept: "(at) => ({ operationScope: 'op', idempotencyKey: randomUUID(), signature: 's', resourceId: null, createdAt: now, expiresAt: at })",
+      old: 'old(1)',
+      recent: 'new Date(now.getTime() + 3_600_000)'
+    }
+  };
+  const imports = purges.map((purge) => `  const { ${ORM[purge.table][0]} } = await import('${distOf(ORM[purge.table][1])}');`).join('\n');
+  const checks = purges
+    .map((purge) => {
+      const rows = ROWS[purge.table];
+      const orm = ORM[purge.table][0];
+      return `
+  {
+    const repository = dataSource.getRepository(${orm});
+    await repository.clear();
+    const at = ${rows.old};
+    // Cinco caducadas, tres con el MISMO instante (caen en el mismo lote), y dos vigentes${rows.pending ? '; y dos pendientes antiguas' : ''}.
+    const expired = [at, at, at, new Date(at.getTime() - 1000), new Date(at.getTime() - 2000)].map(${rows.expired});
+    const kept = [${rows.recent}, ${rows.recent}].map(${rows.kept});
+    ${rows.pending ? `const pending = [old(30), old(30)].map(${rows.pending});
+    await repository.insert([...expired, ...kept, ...pending]);` : 'await repository.insert([...expired, ...kept]);'}
+    const capped = new TablePurges(scheduling, settings({ batchSize: 2, maxBatches: 1 }), dataSource, tx);
+    const first = await capped.${purge.method}(now);
+    check('${purge.what}: con el tope alcanzado, la pasada borra un lote y deja el resto', first >= 2 && first < 5 && (await repository.count()) === ${rows.pending ? 9 : 7} - first, \`\${first} borradas\`);
+    const purger = new TablePurges(scheduling, settings({ batchSize: 2, maxBatches: 100 }), dataSource, tx);
+    const second = await purger.${purge.method}(now);
+    check('${purge.what}: la pasada siguiente borra lo que quedaba, en lotes', first + second === 5, \`\${first} + \${second}\`);
+    check('${purge.what}: lo vigente no se toca', (await repository.count()) === ${rows.pending ? 4 : 2}, await repository.count());${rows.pending ? `
+    check('outbox_event: lo PENDIENTE no se toca nunca, por antiguo que sea', (await repository.countBy({ publishedAt: IsNull() })) === 2);` : ''}
+    check('${purge.what}: sin nada caducado, la purga no borra nada', (await purger.${purge.method}(now)) === 0);
+  }`;
+    })
+    .join('');
+  return `
+// ═══ Purgas por lotes: ${purges.map((purge) => purge.what).join(', ')} ═══
+{
+  const { TablePurges } = await import('${distOf(TABLE_PURGES_TS)}');
+  const { IsNull } = await import('typeorm');
+${imports}
+  // El reloj no corre aquí: la sonda llama a las purgas a mano, con el mismo DataSource y la misma transacción.
+  const scheduling = { register: () => {} };
+  const settings = (batch) => ({ outbox: { cron: 'x', retentionDays: 7, ...batch }, processedEvent: { cron: 'x', retentionDays: 14, ...batch }, idempotencyRecord: { cron: 'x', ...batch } });
+  const now = new Date();
+  const old = (days) => new Date(now.getTime() - days * 86_400_000);${checks}
 }`;
 }
 

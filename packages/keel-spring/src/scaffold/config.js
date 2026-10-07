@@ -16,6 +16,7 @@ import { usesOutbox } from './outbox.js';
 import { rabbitListenerRetry } from './dead-letter-config.js';
 import { usesIdempotency } from './idempotency.js';
 import { OUTBOX_PURGE, OUTBOX_RELAY, PROCESSED_EVENT_PURGE, parameterValue } from 'keel-core/gen/messaging-stores';
+import { IDEMPOTENCY_RECORD_PURGE } from 'keel-core/gen/request-idempotency';
 import { KAFKA_PRODUCER_TIMEOUTS } from 'keel-core/gen/infra-catalog';
 import { usesHttpIdempotency } from './http-idempotency.js';
 import { usesCorrelation } from './correlation.js';
@@ -1100,7 +1101,7 @@ function idempotencyYaml(profile) {
     '  purge:',
     '    # Borrado de las claves ya caducadas; la ventana de deduplicación la fija',
     '    # el ttlSeconds del diseño, no esta cadencia.',
-    `    cron: ${cronWithDefault(profile, 'IDEMPOTENCY_PURGE_CRON', '0 30 4 * * *')}`
+    parameterLine(profile, IDEMPOTENCY_RECORD_PURGE.cron)
   ].join('\n') + '\n';
 }
 

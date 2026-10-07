@@ -20,6 +20,7 @@
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
 import { declaredErrorFor } from 'keel-core/gen';
+import { IDEMPOTENCY_RECORD_PURGE } from 'keel-core/gen/request-idempotency';
 import { javaFile, javaPath, subPackage } from './render.js';
 
 const PORT_PKG = 'domain.idempotency';
@@ -793,7 +794,7 @@ ${purgeSettings('idempotency-record.purge')}
     /**
      * Por lotes y SIN transacción propia: cada lote confirma en la suya (ver BatchedPurge).
      */
-    @Scheduled(cron = "\${idempotency-record.purge.cron:0 30 4 * * *}")
+    @Scheduled(cron = "\${${IDEMPOTENCY_RECORD_PURGE.cron.key}:${IDEMPOTENCY_RECORD_PURGE.cron.default}}")
     public void purge() {
         Instant cutoff = Instant.now();
         long deleted = ${purgeCall({ what: 'idempotency_record', repository: 'repository', deleteMethod: 'deleteExpiredBefore' })};
@@ -1053,7 +1054,7 @@ public class MongoIdempotencyStore implements IdempotencyStore {
         }
     }
 
-    @Scheduled(cron = "\${idempotency-record.purge.cron:0 30 4 * * *}")
+    @Scheduled(cron = "\${${IDEMPOTENCY_RECORD_PURGE.cron.key}:${IDEMPOTENCY_RECORD_PURGE.cron.default}}")
     public void purge() {
         long deleted = repository.deleteByExpiresAtBefore(Instant.now());
         if (deleted > 0) {

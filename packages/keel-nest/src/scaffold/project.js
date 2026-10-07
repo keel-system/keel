@@ -32,11 +32,13 @@ import {
   JOSE_VERSION,
   AMQPLIB_VERSION,
   KAFKA_JAVASCRIPT_VERSION,
-  AWS_SDK_VERSION
+  AWS_SDK_VERSION,
+  CRON_VERSION
 } from '../lib/assets.js';
 import { usesJwt } from './security.js';
 import { usesRelational, engineOf } from './persistence-entities.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
+import { usesScheduling } from './scheduling.js';
 
 export function generate(model) {
   return [
@@ -80,6 +82,8 @@ function packageJson(model) {
       ...(usesRabbitMq(model) ? { amqplib: AMQPLIB_VERSION } : {}),
       ...(usesKafka(model) ? { '@confluentinc/kafka-javascript': KAFKA_JAVASCRIPT_VERSION } : {}),
       ...(usesSnsSqs(model) ? { '@aws-sdk/client-sns': AWS_SDK_VERSION, '@aws-sdk/client-sqs': AWS_SDK_VERSION } : {}),
+      // El reloj: los barridos del diseño y las purgas de las tablas del generador (incremento 10b).
+      ...(usesScheduling(model) ? { cron: CRON_VERSION } : {}),
       'decimal.js': DECIMAL_JS_VERSION,
       fastify: FASTIFY_VERSION,
       // La validación del JWT de la capa security contra el JWKS del proveedor.

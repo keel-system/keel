@@ -17,7 +17,7 @@
 // `static readonly inject = [...]` con sus dependencias en el orden del constructor, y el módulo de
 // infraestructura construye cada una con un factory provider. Con persistencia relacional el despacho
 // abre la transacción del caso de uso (incremento 6); sin ella `dispatchWithoutTransaction` es el
-// mismo despacho, y existe igual para que el scheduler (incremento 10) no pregunte por la capa.
+// mismo despacho, y existe igual para que el scheduler (scheduling.js) no pregunte por la capa.
 
 import { DIRS, classPath, tsModule } from './render.js';
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';

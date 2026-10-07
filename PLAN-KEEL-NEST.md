@@ -936,6 +936,47 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
 - **Puerta**: `claim-check` y `store-check` portados (postgres, mysql); medición por mutación
   (romper cada mecanismo conservando su forma ⇒ algún `FL-*` rojo); corrida de
   `customer-refunds`/`stock-reservation`.
+- **Evaluación al abrirlo (2026-10-07)**. Lo que ya existe: la idempotencia de petición (10a) y la
+  deduplicación de mensajes (`processed_event` + `IdempotencyGuard`, 9b). Lo que el modelo neutral ya
+  decide: `schedule` de cada operación, los reclamos de un barrido (`operation.claim[]`, con `stalled`
+  para el rescate de `stalledAfter`), la guarda de efecto irreversible (`guardClaim`) y la
+  reconciliación (`reconciles[]`). Qué fixtures de la frontera actual lo pisan: `metering-digest`
+  (cierre diario sin reclamo), `payout-runs` (un barrido con reclamo y uno de cierre sin él) y
+  `job-dispatch` (reclamo más rescate por `stalledAfter`). **La reconciliación, la compensación y
+  `lastKnown` se mudan al incremento 11**: las tres cuelgan de `dependencies`/`http-clients` (ninguna
+  fixture las declara sin esas capas), y la guarda de efecto irreversible solo la declara
+  `notification-mailer`, que espera al correo (13).
+- **Tramos**: **10b** scheduler de las operaciones con `schedule` (el reparto del segundo y la decisión
+  de despachar sin transacción pasan a keel-core) y las purgas por lotes de `outbox_event`,
+  `processed_event` e `idempotency_record`, con su configuración paritaria; **10c** reclamos de barrido y
+  rescate (`claim.js`) con la parte del arnés (`stallInFlight`/`putInFlight`/`inFlightWithoutClock`) y su
+  medición contra los motores (`db-check`); **10d** el gate `check-idempotency` portado; **10e** corrida
+  (`payout-runs` o `job-dispatch`) en los dos generadores.
+- **10b — reloj y purgas, hecho (2026-10-07)**. **Neutral nuevo**, `keel-core/gen/scheduling.js`: el
+  segundo de arranque repartido (`scheduleSeconds`/`scheduleCron`), cómo se despacha cada operación por reloj
+  (`scheduleDispatch`: sin transacción abarcadora si reconcilia, llama a la pasarela, alimenta una guarda
+  irreversible o reclama su lote; con ella, lo demás), y la purga por lotes (`BATCHED_PURGE`, sus claves y
+  `batchedPurgeReference`, la referencia ejecutable); más `IDEMPOTENCY_RECORD_PURGE` en
+  `request-idempotency.js`. keel-spring los toma de ahí con su golden **idéntico** (43 combinaciones).
+  **keel-nest**: `src/scaffold/scheduling.js` (`Scheduling` sobre `cron` 4.4 a pelo —no @nestjs/schedule: las
+  expresiones de las purgas salen de la configuración—, con `waitForCompletion` como el `@Scheduled` de Spring,
+  parada que espera a la pasada en vuelo, `scheduling.enabled` apagado en `test`; un `<Grupo>Scheduler` por
+  grupo con operaciones por reloj, con correlación nueva por pasada) y `src/scaffold/purge.js` (el bucle sin
+  framework y `TablePurges`, cada lote en una transacción nueva, con las claves, variables y defaults de
+  keel-spring en `messaging.yaml` e `idempotency.yaml`). La nota del handler dice cómo lo despacha su
+  scheduler; `mapping.md` lo enseña. La frontera deja de avisar del `schedule` y avisa del **reclamo** de un
+  barrido con transiciones (10c). Puerta: `test/scheduling.test.js` (11) compara segundo y despacho con el
+  `Scheduler.java` que emite keel-spring en las tres fixtures, ejecuta el bucle contra la referencia de keel-core
+  (con repetidos en la frontera y con tope) y la configuración contra la de keel-spring; falsado poniendo el
+  segundo a 0 (cae `payout-runs`, la única con dos barridos) y quitando el último lote del bucle (cae ese test).
+  `db-check` **20/20** con las purgas contra los dos motores en las cuatro fixtures (lotes de dos con instantes
+  repetidos, el tope y la pasada siguiente, lo vigente y lo pendiente del outbox intactos), falsado cortando el
+  outbox por `created_at`: caen esas tres comprobaciones en las dos fixtures con outbox, y solo esas. El primer
+  sabotaje —quitar `published_at IS NOT NULL`— no falsaba nada: con la columna nula, `published_at < :cutoff`
+  ya es falso en SQL, así que la condición es redundante (se conserva por paridad e intención). `ts-check`
+  12/12 (las 32 siluetas compilan con `strict` y el servidor arranca con el reloj). Lo que no mide ninguna red:
+  que un tick dispare de verdad el handler (lo medirá la corrida del 10e) y el apagado con una pasada en vuelo
+  (en Windows SIGTERM no ejecuta los hooks).
 
 ### Inc. 11 — Clientes HTTP salientes y dependencias
 

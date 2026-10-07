@@ -15,8 +15,8 @@
 //     filas que nunca salieron;
 //   · el registro de procesados en su PROPIA transacción, y la carrera arbitrada por la clave primaria.
 //
-// Sin @nestjs/schedule todavía: el relay es un bucle de retardo fijo propio (el scheduling y las purgas
-// llegan con el incremento 10).
+// El relay es un bucle de retardo FIJO propio, no una tarea del reloj (scheduling.js): su cadencia es un
+// retardo entre pasadas, no un cron. Las purgas de outbox_event y processed_event sí van por el reloj (purge.js).
 
 import {
   OUTBOX_EVENT,

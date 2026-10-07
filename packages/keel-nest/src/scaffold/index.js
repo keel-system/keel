@@ -36,6 +36,8 @@ import * as messagingStores from './messaging-stores.js';
 import * as rabbitmq from './rabbitmq.js';
 import * as kafka from './kafka.js';
 import * as snssqs from './snssqs.js';
+import * as scheduling from './scheduling.js';
+import * as purge from './purge.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as architecture from './architecture.js';
 import * as restSupport from './rest-support.js';
@@ -85,6 +87,10 @@ const GENERATORS = [
   rabbitmq,
   kafka,
   snssqs,
+  // El reloj (incremento 10b): los schedulers de las operaciones con `schedule` y las purgas por lotes de las
+  // tablas del generador.
+  scheduling,
+  purge,
   // El baseline de migraciones: cómo se exporta y cómo se demuestra (lo usa el pase de calidad).
   schemaBaseline,
   { generate: (model) => mediator.generate(model, { mappers: mappers.mapperClasses(model) }) },

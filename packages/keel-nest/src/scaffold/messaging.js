@@ -25,7 +25,7 @@
 // el puente y el outbox son otra rama entera.
 
 import { deadLetterDestination, subscriptionDestination as destinationOf, subscriptionGroupId } from 'keel-core/gen';
-import { OUTBOX_RELAY, parameterValue } from 'keel-core/gen/messaging-stores';
+import { OUTBOX_PURGE, OUTBOX_RELAY, PROCESSED_EVENT_PURGE, parameterValue } from 'keel-core/gen/messaging-stores';
 import { DIRS, classPath, fieldImports, tsModule, tsString, decapitalize } from './render.js';
 import { DOMAIN_EVENT_TS, EVENT_METADATA_TS } from './events.js';
 import { usesRelational } from './persistence-entities.js';
@@ -675,7 +675,7 @@ function contractDoc(model, sub) {
         : 'Orden: IdempotencyGuard.tryRecord(...) antes de despachar — la operación no declara ninguna guarda de dominio que frene la repetición, así que la ventana se cierra reclamando antes. Un fallo del handler deja el mensaje marcado y perdido; si eso no es tolerable, lo que falta es la guarda de dominio en el diseño.'
     );
     lines.push(
-      'La deduplicación tiene VENTANA: el registro se purgará a los processed-event.purge.retention-days (default 14; la purga llega con el incremento 10), así que una reentrega posterior se procesa como nueva.' +
+      'La deduplicación tiene VENTANA: el registro se purgará a los processed-event.purge.retention-days (default 14; la purga es de build, por lotes), así que una reentrega posterior se procesa como nueva.' +
         (sub.triggerHasDomainGuard ? ' Aquí es inocuo: la guarda de dominio sigue rechazándola, y esa no caduca.' : ' Aquí NO es inocuo: sin guarda de dominio, pasada la retención el efecto se vuelve a aplicar.')
     );
   }
@@ -766,13 +766,24 @@ export function messagingYaml(model, profile) {
       }
     }
   }
+  // La línea de un parámetro del catálogo neutral: la hoja de su clave con el gradiente de su variable. Un
+  // cron va entrecomillado ENTERO (empieza por dígito y lleva `*`), con el default desnudo dentro.
+  const line = (parameter, comment) => {
+    const leaf = parameter.key.split('.');
+    const out = comment ? [`${'  '.repeat(leaf.length - 1)}# ${comment}`] : [];
+    const value = envWithDefault(profile, parameter.env, parameterValue(parameter, profile));
+    out.push(`${'  '.repeat(leaf.length - 1)}${leaf.at(-1)}: ${parameter.cron ? `"${value}"` : value}`);
+    return out;
+  };
+  if (usesProcessedEvents(model)) {
+    lines.push(
+      'processed-event:',
+      '  purge:',
+      ...line(PROCESSED_EVENT_PURGE.cron, 'Borrado del registro de mensajes procesados; la retención solo tiene que cubrir la ventana de reentrega del broker.'),
+      ...line(PROCESSED_EVENT_PURGE.retentionDays)
+    );
+  }
   if (usesNestOutbox(model)) {
-    const line = (parameter, comment) => {
-      const leaf = parameter.key.split('.');
-      const out = comment ? [`${'  '.repeat(leaf.length - 1)}# ${comment}`] : [];
-      out.push(`${'  '.repeat(leaf.length - 1)}${leaf.at(-1)}: ${envWithDefault(profile, parameter.env, parameterValue(parameter, profile))}`);
-      return out;
-    };
     lines.push(
       'outbox:',
       '  relay:',
@@ -782,7 +793,10 @@ export function messagingYaml(model, profile) {
       '    backoff:',
       ...line(OUTBOX_RELAY.backoffInitialMs, 'Backoff exponencial entre reintentos de una fila (initial·2^(n-1), con tope max-ms).'),
       ...line(OUTBOX_RELAY.backoffMaxMs),
-      ...line(OUTBOX_RELAY.claimTimeoutMs, 'Lease de una fila reclamada mientras su publicación está en vuelo; si la réplica muere, caduca.')
+      ...line(OUTBOX_RELAY.claimTimeoutMs, 'Lease de una fila reclamada mientras su publicación está en vuelo; si la réplica muere, caduca.'),
+      '  purge:',
+      ...line(OUTBOX_PURGE.cron, 'Borrado diario de lo ya publicado (lo pendiente no se toca nunca); la tabla no es un histórico.'),
+      ...line(OUTBOX_PURGE.retentionDays)
     );
   }
   return `${lines.join('\n')}\n`;

@@ -16,6 +16,7 @@
 // La rama documental no pasa por aquí, y no es asimetría: el `deleteMany` de Mongo no abre
 // transacción, va documento a documento y no retiene bloqueos que escalen.
 
+import { BATCHED_PURGE } from 'keel-core/gen';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
@@ -25,14 +26,9 @@ import { reconciliationClaims } from './reconciliation-claim.js';
 export const PURGE_PKG = 'infrastructure.persistence.purge';
 export const PURGE_CLASS = 'BatchedPurge';
 
-/** Filas por lote. Lo bastante pequeño para que un lote quepa holgado en el timeout de transacción. */
-export const PURGE_BATCH_SIZE = 1000;
-/**
- * Lotes por pasada: medio millón de filas al día como mucho. Con el tope alcanzado la purga lo
- * dice (WARN) y la siguiente pasada sigue; sin tope, un atraso enorme haría de una pasada nocturna
- * un proceso de horas compitiendo con el tráfico de la mañana.
- */
-export const PURGE_MAX_BATCHES = 500;
+/** Filas por lote y lotes por pasada: los mismos que la purga de keel-nest (keel-core/gen/scheduling.js). */
+export const PURGE_BATCH_SIZE = BATCHED_PURGE.batchSize;
+export const PURGE_MAX_BATCHES = BATCHED_PURGE.maxBatches;
 
 /** ¿Hay alguna purga relacional en este servicio? */
 export function usesBatchedPurge(model) {

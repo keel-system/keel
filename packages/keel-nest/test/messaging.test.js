@@ -268,8 +268,9 @@ for (const name of ['notification-mailer', 'metering-digest']) {
       const ours = parseYaml(content(nest, `config/parameters/${profile}/messaging.yaml`));
       const reference = parseYaml(content(theirs, `parameters/${profile}/messaging.yaml`));
       assert.deepEqual(ours.messaging, reference.messaging, `${profile}: publicación y suscripciones`);
-      // El relay; las purgas llegan con el scheduling (incremento 10).
-      assert.deepEqual(ours.outbox?.relay, reference.outbox?.relay, `${profile}: el relay del outbox`);
+      // El relay y su purga, y la del registro de mensajes procesados (incremento 10b).
+      assert.deepEqual(ours.outbox, reference.outbox, `${profile}: el relay y la purga del outbox`);
+      assert.deepEqual(ours['processed-event'], reference['processed-event'], `${profile}: la purga de processed_event`);
     }
   });
 }
