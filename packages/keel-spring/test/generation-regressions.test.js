@@ -610,9 +610,9 @@ test('la violación de unicidad usa el error declarado del diseño cuando lo hay
   assert.ok(handler.includes('new SkuAlreadyExistsError('));
   assert.ok(!handler.includes('PRODUCT_SKU_ALREADY_EXISTS'));
   assert.ok(handler.includes('import com.commerce.catalog.domain.errors.SkuAlreadyExistsError;'));
-  // Sin error declarado (unicidad de Category.slug) sigue el fallback con TODO.
+  // Sin error declarado (unicidad de Category.slug), el code canónico de su familia.
   assert.ok(handler.includes('"CATEGORY_SLUG_ALREADY_EXISTS"'));
-  assert.ok(handler.includes('TODO (agente)'));
+  assert.ok(handler.includes('Unicidad de Category.slug: el diseño no nombra un error para ella'));
 });
 
 test('storage: el formato se comprueba por la FIRMA del binario, no solo por el tipo declarado', () => {
@@ -1555,10 +1555,10 @@ test('§2 informe: la unicidad se resuelve con el error de SU entidad, no con el
 
   // Product SÍ declara el suyo, y lo declara la operación que escribe Product.
   assert.ok(entryFor('uk_products_natural').includes('SkuAlreadyExistsError'));
-  // SupplierPrice no declara ninguno: TODO, no el error de otra entidad.
+  // SupplierPrice no declara ninguno: el canónico de su familia, no el error de otra entidad.
   const supplier = entryFor('uk_supplier_prices_natural');
   assert.ok(!supplier.includes('SkuAlreadyExistsError'), supplier);
-  assert.ok(handler.includes('para la unicidad de SupplierPrice.sku'));
+  assert.ok(handler.includes('Unicidad de SupplierPrice.sku: el diseño no nombra un error para ella'));
 });
 
 test('§2 informe: el error handler de Kafka no reintenta un error de negocio', () => {

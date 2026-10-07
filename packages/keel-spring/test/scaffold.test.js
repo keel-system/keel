@@ -3471,8 +3471,10 @@ test('unique: constraint nombrada en la tabla y traducida al error de negocio', 
   assert.ok(handler.includes('CONSTRAINT_TO_ERROR'));
   assert.ok(handler.includes('Map.entry("uk_products_slug"'));
   assert.ok(handler.includes('"PRODUCT_SLUG_ALREADY_EXISTS"'));
-  // El diseño no liga campo → code: la asociación exacta la cierra el agente.
-  assert.ok(handler.includes('TODO (agente)'));
+  // El diseño no nombra el error: sale el code CANÓNICO de la familia uniqueness, dicho como tal (no
+  // como un TODO, que hacía que el agente lo reportara como hueco del diseño: corrida profile-directory).
+  assert.ok(handler.includes('code CANÓNICO de la familia uniqueness'));
+  assert.ok(!handler.includes('convención del'));
 });
 
 test('unique sobre campo computed con bloqueo optimista: es carrera, no "ya existe"', () => {

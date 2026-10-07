@@ -395,7 +395,7 @@ function persistenceErrorsFile(model) {
           ? `Unicidad de ${entry.entity}.${entry.fields.join(', ')}: solo una carrera la rompe, así que es conflicto de concurrencia.`
           : entry.declared
             ? `Unicidad de ${entry.entity}.${entry.fields.join(', ')}: el error que el diseño declara para ella.`
-            : `Unicidad de ${entry.entity}.${entry.fields.join(', ')}. TODO (agente): el diseño no declara su error; este code es una convención del scaffolding, no el contrato.`;
+            : `Unicidad de ${entry.entity}.${entry.fields.join(', ')}: el diseño no nombra un error para ella, así que sale con el code CANÓNICO de la familia uniqueness (docs/framework-errors.md). No es un hueco que reportar: para cambiarlo, decláralo en los errors de la operación que escribe, con 409 y un code de su familia.`;
     return `  // ${why}\n  [${tsString(entry.constraint.toLowerCase())}, () => ${build}]`;
   });
   const body = `/**

@@ -45,8 +45,8 @@ misma que la de keel-spring en esta corrida descontando su `SecurityConfig`.
 - El informe anota también un `TODO` en `persistence-errors.ts` («el diseño no declara su error; este code
   es una convención del scaffolding»). El texto es engañoso: `CONTACT_CARD_SUBJECT_ALREADY_EXISTS` es el
   `code` canónico de la familia `uniqueness` de `framework-errors.md`, no una convención. Lo escriben igual
-  los dos generadores, y en keel-spring hizo que su agente lo reportara como `designGap`. **Pendiente**:
-  reescribir ese comentario en los dos.
+  los dos generadores, y en keel-spring hizo que su agente lo reportara como `designGap`. Reescrito en los
+  dos: ahora dice que es el `code` canónico y cómo se sustituye.
 
 ## designGaps
 

@@ -552,9 +552,11 @@ function constraintMapConstant(constraints) {
             Map.entry("${constraint}", () -> new ConflictException(
                     "${message}", "${code}", 409, null))`;
       }
-      return `            // TODO (agente): el diseño no declara (o declara de forma ambigua) un error
-            // para la unicidad de ${entity}.${label}; este code es una convención del
-            // scaffolding, no el contrato. Si el diseño lo declara, sustitúyelo.
+      return `            // Unicidad de ${entity}.${label}: el diseño no nombra un error para ella, así
+            // que sale con el code CANÓNICO de la familia uniqueness (docs/framework-errors.md).
+            // No es una invención del scaffolding ni un hueco que reportar: es el contrato de
+            // este mecanismo cuando el diseño no declara uno propio. Para cambiarlo, decláralo
+            // en los errors de la operación que escribe, con 409 y un code de su familia.
             Map.entry("${constraint}", () -> new ConflictException(
                     "${message}", "${code}", 409, null))`;
     })

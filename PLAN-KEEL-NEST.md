@@ -678,9 +678,9 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     `--accept-unready`: es la primera corrida de cualquier generador que entra por la puerta de `--ready`.
     La equivalencia cazó un **defecto de keel-spring**: un bearer inválido salía como 401 sin cuerpo
     (el entry point de `oauth2ResourceServer` pisaba al del contrato), que keel-nest cumplía desde el
-    principio; arreglado y falsado. Pendiente menor: el comentario del scaffolding que llama
-    «convención» al `code` canónico de la clave natural, en los dos generadores (provocó un `designGap`
-    falso en keel-spring).
+    principio; arreglado y falsado. Y el comentario del scaffolding que llamaba «convención» al `code`
+    canónico de la clave natural (provocó un `designGap` falso en keel-spring) dice ya, en los dos
+    generadores, que es el de la familia `uniqueness` de `framework-errors.md`.
 
 ### Inc. 9 — Mensajería y outbox
 
