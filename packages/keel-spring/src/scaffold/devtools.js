@@ -9,6 +9,9 @@ import { messagingProvisioning, messagingTopologyChecks } from './messaging-prov
 
 export const SPRING_INFRA = {
   generator: 'keel-spring',
+  // El proveedor de identidad de prueba: quién consume test-credentials.env y qué skill documenta
+  // los clientes de prueba (keel-core/gen/identity-provisioning.js).
+  identity: { harness: 'AbstractFlowIT', skill: 'keel-spring-keycloak' },
   // El historial de migraciones de Flyway: el reset de datos lo respeta (ver infra-catalog.js).
   historyTable: 'flyway_schema_history',
   strayProcess: {

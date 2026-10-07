@@ -2,9 +2,9 @@
 //
 // NEUTRAL: el realm, sus usuarios, sus clientes y sus credenciales son los mismos para cualquier
 // generador del mismo diseño —el servicio de keel-spring y el de keel-nest se prueban contra el
-// mismo realm—. Cada generador renderiza desde aquí sus artefactos (en keel-spring,
-// `src/scaffold/auth-provisioning.js`: el script de kcadm, `test-credentials.env` y la
-// configuración del emulador de Cognito). Lo de abajo cuenta cómo lo consume keel-spring, que es
+// mismo realm—. Sus artefactos de infra/ (el script de kcadm, `test-credentials.env` y la
+// configuración del emulador de Cognito) también son neutrales: identity-provisioning.js, con los
+// textos de la plataforma de cada generador. Lo de abajo cuenta cómo lo consume keel-spring, que es
 // la implementación de referencia.
 //
 // Existe porque el realm, el cliente de test, los usuarios y los secretos M2M son

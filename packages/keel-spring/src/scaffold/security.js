@@ -9,6 +9,14 @@
 
 import { PAYMENT_NOTICE_PATH } from './payments.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import {
+  audienceOf,
+  checksAudience,
+  TOKEN_CLAIMS,
+  tokenClaims,
+  serviceMatchers as serviceMatchersOf,
+  usesServiceApiKeys as needsServiceApiKeyFilter
+} from 'keel-core/gen/access-plan';
 import { camelCase } from '../lib/naming.js';
 import { credentialFinderName } from './repositories.js';
 import { javaFile, javaPath, subPackage } from './render.js';
@@ -16,17 +24,11 @@ import { METRICS_TRANSPORT, usesTelemetry } from '../lib/telemetry-probes.js';
 
 const SECURITY_PKG = 'infrastructure.configurations.security';
 
-// Claims por proveedor del stack; el default (proveedor genérico) usa claims
-// planos habituales. keycloak anida los roles en realm_access.roles.
-export const AUTH_PROVIDERS = {
-  keycloak: { type: 'nested', rolesParent: 'realm_access', rolesField: 'roles', permissionsClaim: 'permissions', principalClaim: 'preferred_username' },
-  cognito: { type: 'flat', rolesClaim: 'cognito:groups', permissionsClaim: 'permissions', principalClaim: 'username' }
-};
+// Claims por proveedor del stack (neutral: keel-core/gen/access-plan.js, TOKEN_CLAIMS).
+export const AUTH_PROVIDERS = TOKEN_CLAIMS;
 
 function providerMeta(model) {
-  return (
-    AUTH_PROVIDERS[model.stack.auth] ?? { type: 'flat', rolesClaim: 'roles', permissionsClaim: 'permissions', principalClaim: 'sub' }
-  );
+  return tokenClaims(model.stack.auth);
 }
 
 // Spring Security acaba en el classpath sin que el diseño lo pida: el starter
@@ -207,22 +209,6 @@ public class JwtCallerScope implements CallerScope {
   ];
 }
 
-// serviceAuth por api-key sobre un protocolo principal basado en token: los
-// clientes máquina del catálogo serviceClients se autentican con clave propia.
-// (Con protocolo principal api-key basta el ApiKeyAuthFilter clásico.)
-function needsServiceApiKeyFilter(sec) {
-  return (
-    sec.serviceAuth?.protocol === 'api-key' &&
-    sec.protocol !== 'api-key' &&
-    (sec.serviceClients?.length ?? 0) > 0
-  );
-}
-
-// Audiencia efectiva: la del diseño o, por defecto, el nombre del servicio.
-function audienceOf(model, sec) {
-  return sec.serviceAuth?.audience ?? model.service.artifactId;
-}
-
 // Bloque authorizeHttpRequests: endpoints técnicos permitidos (solo en la cadena
 // que cubre todo), un matcher por regla de operación (antes del anyRequest) y la
 // autoridad de cierre como anyRequest.
@@ -262,22 +248,6 @@ function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true, pe
   }
   lines.push(`                    .anyRequest().${defaultAuthority})`);
   return lines.join('\n');
-}
-
-// Rutas de audiencia 'services' (clientes máquina). Las 'both' quedan fuera a
-// propósito: las sirve también un usuario, cuyo token no lleva la audiencia del
-// servicio, así que no pueden caer en la cadena que la valida.
-function serviceMatchersOf(sec) {
-  return sec.matchers.filter((m) => m.audience === 'services');
-}
-
-// La audiencia solo se comprueba donde hay rutas `audience: services`. Sin ninguna, las
-// rutas `both` y las de usuarios no la comprueban (mapping.md § Audiencia), y colgar el
-// filtro de la cadena única rechazaba con 403 todo token de usuario, cuya audiencia es la
-// del IdP (`aud: account` en Keycloak). Lo vio dos veces seguidas la corrida asset-vault (R8).
-function checksAudience(sec) {
-  const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
-  return jwt && sec.serviceAuth?.validateAudience === true && !needsServiceApiKeyFilter(sec) && serviceMatchersOf(sec).length > 0;
 }
 
 // Patrones (sin método) para el securityMatcher de la cadena M2M, deduplicados.

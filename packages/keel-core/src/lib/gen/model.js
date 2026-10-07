@@ -1836,6 +1836,8 @@ function collectSecurity(layers, services, routeBase, warnings) {
       method: route.method,
       path: `${routeBase}${route.path}`,
       authority: accessAuthority(rule),
+      // La regla sin traducir: lo que cada generador escribe con su mecanismo (gen/access-plan.js).
+      access: rule,
       audience: route.audience ?? 'users'
     });
   }
