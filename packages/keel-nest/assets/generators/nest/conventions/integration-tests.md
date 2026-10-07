@@ -152,6 +152,30 @@ excepcionalmente para una precondición que ninguna operación puede fabricar �
 Al aislar una guarda tardía, las anteriores se satisfacen con datos **válidos**: un cuerpo `{}` muere en
 otra guarda, con otro `code`, y el escenario mide lo que no es suyo.
 
+### El rescate: la fila que otra réplica dejó a medias
+
+Es la excepción documentada: ninguna operación fabrica «una réplica murió con esta fila en la mano». Cuando
+un barrido rescata un estado EN VUELO, `flow.ts` trae tres helpers (y nada más se usa para esto):
+
+| | |
+|---|---|
+| `stallInFlight(<barrido>, id)` | deja la fila en vuelo con el reloj **infinitamente rancio** |
+| `putInFlight(<barrido>, id)` | lo mismo con el reloj **a ahora** |
+| `inFlightWithoutClock(<barrido>)` | cuántas filas quedaron en vuelo **sin reloj** (vale cero siempre) |
+
+```ts
+const id = await createByApi();
+stallInFlight('dispatchJobs', id);                     // como si su réplica hubiera muerto
+await eventually(async () => (await statusOf(id)) === 'done', 90_000);
+expect(inFlightWithoutClock('dispatchJobs')).toBe(0);
+```
+
+- Se mueve una fila **creada por la API**; el helper solo cambia el estado y el reloj.
+- La cota es obligatoria y es otro escenario: con `putInFlight` se comprueba que lo recién entrado en vuelo
+  **no se toca**. Un rescate sin cota pasa el primero y falla aquí.
+- El techo de la espera supera el periodo del barrido (su cron, más el segundo de arranque que build
+  reparte) y el plazo del rescate: más corto, el escenario sale verde o rojo según la fase del minuto.
+
 ## Checklist antes de cerrar
 
 1. Toda ruta usada existe en `api.keel.yaml` y su verbo coincide.

@@ -1,3 +1,6 @@
+import { claimOrderField, rescueShape, stallSql, missingClockCountSql } from 'keel-core/gen';
+// Las sentencias del rescate son neutrales: las lanza también el arnés de keel-nest.
+export { rescueShape, stallSql, missingClockCountSql };
 // El Java con el que `claim-check` ejercita el reclamo, y de dónde salen sus nombres.
 //
 // Misma regla que `broker-probes.js`, `mail-probes.js` y `mongo-probes.js`: lo que el runner
@@ -95,14 +98,6 @@ export function rescueTiming(rescue) {
   return { property: `"${parameter.property}=${units}"`, seconds: units * parameter.unitSeconds };
 }
 
-export function rescueShape(entity, claim) {
-  return {
-    table: entity.tableName,
-    stateColumn: snakeCase(entity.lifecycle.field),
-    state: screamingSnake(claim.stalled.state),
-    clockColumn: snakeCase(claim.stalled.stampField)
-  };
-}
 
 /**
  * El orden del lote de un reclamo. Lo que no puede es quedarse sin ORDER BY: sin él el motor
@@ -117,32 +112,7 @@ export function rescueShape(entity, claim) {
  * siquiera compilaba—. Una segunda copia de esta regla es una copia que se separa.
  */
 export function orderFieldOf(entity, claim) {
-  // En un rescate el orden sale del propio reloj de la cota: el que más lleva atascado,
-  // primero. Cualquier otro campo haría que una tanda con más atascados que batchSize
-  // volviera a mirar siempre las mismas filas y las más viejas no se rescataran nunca.
-  if (claim?.stalled) return claim.stalled.stampField;
-  for (const candidate of ['createdAt', 'requestedAt', 'updatedAt']) {
-    if (entity.fields.some((field) => field.name === candidate)) return candidate;
-  }
-  return 'id';
-}
-
-/**
- * Deja una fila EN VUELO con el reloj que se le pase. Devuelve el prefijo: el llamante le
- * concatena el literal del id, porque su forma depende del motor (`uuidLiteral`).
- */
-export function stallSql({ table, stateColumn, state, clockColumn, clockSql }) {
-  return `UPDATE ${table} SET ${stateColumn} = '${state}', ${clockColumn} = ${clockSql} WHERE id = `;
-}
-
-/**
- * Cuántas filas quedaron en un estado con el reloj SIN estampar.
- *
- * Tiene que discriminar de verdad: un predicado que devolviera siempre cero pasaría el
- * escenario del rescate sin ver el defecto para el que existe.
- */
-export function missingClockCountSql({ table, stateColumn, state, clockColumn }) {
-  return `SELECT COUNT(*) FROM ${table} WHERE ${stateColumn} = '${state}' AND ${clockColumn} IS NULL`;
+  return claimOrderField(entity, claim);
 }
 
 /**

@@ -137,6 +137,43 @@ también de build (`src/infrastructure/persistence/purge/`): por lotes, cada lot
 la cadencia y la retención de `config/parameters/<perfil>/` (las mismas claves y variables que keel-spring).
 No las toques ni escribas otra.
 
+### El reclamo de un barrido: ya está en el puerto, úsalo
+
+Un barrido que saca filas de un estado (`schedule` + `transitions`) tiene **ya generado** su reclamo en el
+puerto del repositorio: `claimFor<…>()`, con su adaptador. Es el mismo mecanismo que el del servidor de
+keel-spring: los candidatos con `FOR UPDATE SKIP LOCKED` (cada réplica recibe filas distintas) y un UPDATE
+condicional por fila (`… WHERE id = :id AND estado IN :desde`: una fila afectada = es tuya), en su propia
+transacción, con el lote de `sweep.<barrido>.batch-size`. Devuelve **solo** lo que esta réplica se llevó.
+
+```ts
+async handle(_command: DispatchJobsCommand): Promise<void> {
+  for (const job of await this.jobRepository.claimForDispatchJobsRunning()) {   // ya en running
+    // … el trabajo de cada fila, y su desenlace guardado: un fallo en una no revierte las demás
+  }
+  for (const job of await this.jobRepository.claimForStalledDispatchJobsDone()) { // SIGUE en running
+    job.finish();                                   // la transición la hace el dominio
+    await this.jobRepository.save(job);
+  }
+}
+```
+
+- **No escribas otro reclamo**: ni un finder por estado, ni un lock, ni una marca propia. Leer el lote y
+  marcarlo después pasa con una réplica y se lo da entero a todas en producción.
+- El **rescate** (`claimForStalled…`) solo se lleva lo ABANDONADO —el reloj del estado más viejo que su
+  plazo— y **no cambia el estado: lo arrienda** renovando el reloj. La transición la haces tú con el
+  método del agregado, que fija los campos que el estado de destino exige.
+- Si la cola estampa el reloj que el rescate vigila (`runningSince`), viene **ya estampado**: no lo
+  vuelvas a poner, una segunda escritura abre la ventana en la que la fila queda sin reloj para siempre.
+
+### Los parámetros de despliegue
+
+Los `parameters` del manifiesto llegan en un value object de dominio, `<Servicio>Parameters`
+(`src/domain/parameters/`), que valida sus cotas al construirse —un valor fuera de rango no deja
+arrancar— y que un handler recibe declarándolo en su `inject`, como cualquier puerto. Lo puebla
+`ServiceParametersModule` desde `<artifactId>.<clave>` de `config/parameters/<perfil>/`, con la misma
+variable de entorno y el mismo gradiente que keel-spring. **No leas la configuración desde application**
+ni escribas el valor como constante.
+
 ### Normalización antes que validación de formato
 
 Si una regla del diseño normaliza un campo (mayúsculas, recorte, slug), se normaliza **antes** de

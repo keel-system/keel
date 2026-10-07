@@ -335,6 +335,20 @@ function scheduleNotes(model, operation) {
           'confirmar el desenlace. Un fallo en una fila no puede revertir las demás.'
       : 'Corre en UNA transacción, la del caso de uso: no llama a nadie en medio de su trabajo, así que todo o nada.'
   );
+  const repository = (claim) => `${claim.entity}Repository`;
+  for (const claim of operation.claim ?? []) {
+    notes.push(
+      claim.stalled
+        ? `EL RESCATE YA ESTÁ GENERADO: this.${decap(repository(claim))}.${claim.method}() devuelve los ${claim.entity} que llevan atascados en ` +
+            `${claim.stalled.state} más que su plazo y que ESTA réplica se llevó, SIGUIENDO en ${claim.stalled.state} con ${claim.stalled.stampField} ` +
+            `renovado. La transición a ${claim.to} la haces TÚ con el método del agregado (fija los campos que ${claim.to} exige) y la guardas. ` +
+            'No escribas otro rescate, ni un finder por estado, ni una cota propia.'
+        : `EL RECLAMO YA ESTÁ GENERADO: toma el lote con this.${decap(repository(claim))}.${claim.method}(), que devuelve SOLO los ${claim.entity} ` +
+            `que ESTA réplica se llevó, ya en ${claim.to}${claim.stamps ? ` y con ${claim.stamps.field} estampado` : ''}. El tamaño del lote no se pasa: ` +
+            `lo acota el adaptador con sweep.${claim.sweepKey}.batch-size. No escribas otro reclamo (ni un finder por estado ni un lock): ` +
+            'un segundo mecanismo en paralelo no reclama nada. Actúa sobre cada fila y guárdala: un fallo en una no revierte las demás.'
+    );
+  }
   return notes;
 }
 

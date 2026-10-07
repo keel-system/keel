@@ -18,6 +18,7 @@ import { persistedMembers, collectInternalEntities, orderingFieldOf, partialUniq
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
+import { adapterClaimMethods, claimDependencies, portClaimMethods } from './claim.js';
 import {
   usesRelational,
   ormClass,
@@ -194,6 +195,8 @@ function renderPort(model, entity) {
     imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true });
     methods.push(`  /** Una página de agregados, en el orden pedido y con el id como desempate. */\n  abstract list(pageable: Pageable): Promise<Page<${entity.name}>>;`);
   }
+  // Los reclamos de los barridos que sacan filas de esta raíz (incremento 10c).
+  methods.push(...portClaimMethods(model, entity));
   methods.push(
     `  /**\n   * Guarda el agregado entero (sus entidades internas y sus listas) y devuelve lo guardado. Con\n   * bloqueo optimista, una versión obsoleta sale como conflicto de concurrencia.\n   */\n  abstract save(entity: ${entity.name}): Promise<${entity.name}>;`,
     `  abstract deleteById(${id?.name ?? 'id'}: ${idType}): Promise<void>;`
@@ -303,6 +306,7 @@ function renderAdapter(model, entity) {
   }`);
   }
 
+  methods.push(...adapterClaimMethods(model, entity, imports, findOptions));
   methods.push(saveMethod(model, entity, imports));
   methods.push(`  async deleteById(${idName}: ${idType}): Promise<void> {
     await this.transactions.inTransaction(async (manager) => {
@@ -378,26 +382,34 @@ function withStableOrder(pageable: Pageable): FindOptionsOrder<${ormClass(entity
 }
 
 /**
- * El constructor del adaptador: la transacción y, si la raíz emite eventos y hay mensajería, el puente
- * de integración al que los entrega.
+ * El constructor del adaptador: la transacción; si la raíz emite eventos y hay mensajería, el puente de
+ * integración al que los entrega; y si algún barrido la reclama, la configuración de los barridos (y los
+ * parámetros del servicio, si un rescate lee de ellos su plazo).
  */
 function constructorOf(model, entity, imports) {
-  if (!emitsDomainEvents(model, entity)) {
+  const deps = [{ token: 'TransactionContext', name: 'transactions', type: 'TransactionContext' }];
+  if (emitsDomainEvents(model, entity)) {
+    imports.push({ symbol: bridgeClass(model), from: bridgePath(model) });
+    deps.push({ token: bridgeClass(model), name: 'events', type: bridgeClass(model) });
+  }
+  for (const dep of claimDependencies(model, entity)) {
+    imports.push(...dep.imports);
+    deps.push(dep);
+  }
+  if (deps.length === 1) {
     return `  constructor(@Inject(TransactionContext) private readonly transactions: TransactionContext) {
     super();
   }`;
   }
-  imports.push({ symbol: bridgeClass(model), from: bridgePath(model) });
   return `  constructor(
-    @Inject(TransactionContext) private readonly transactions: TransactionContext,
-    @Inject(${bridgeClass(model)}) private readonly events: ${bridgeClass(model)}
+${deps.map((dep) => `    @Inject(${dep.token}) private readonly ${dep.name}: ${dep.type}`).join(',\n')}
   ) {
     super();
   }`;
 }
 
 /** ¿La raíz emite eventos que salen por el puente? */
-function emitsDomainEvents(model, entity) {
+export function emitsDomainEvents(model, entity) {
   return usesBridge(model) && (model.events ?? []).some((event) => event.aggregates.includes(entity.name));
 }
 

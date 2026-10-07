@@ -17,12 +17,13 @@ import { rabbitListenerRetry } from './dead-letter-config.js';
 import { usesIdempotency } from './idempotency.js';
 import { OUTBOX_PURGE, OUTBOX_RELAY, PROCESSED_EVENT_PURGE, parameterValue } from 'keel-core/gen/messaging-stores';
 import { IDEMPOTENCY_RECORD_PURGE } from 'keel-core/gen/request-idempotency';
+import { parameterProfileValue } from 'keel-core/gen/service-parameters';
 import { KAFKA_PRODUCER_TIMEOUTS } from 'keel-core/gen/infra-catalog';
 import { usesHttpIdempotency } from './http-idempotency.js';
 import { usesCorrelation } from './correlation.js';
 import { instrumentationFor, usesTelemetry } from './telemetry.js';
 import { METRICS_TRANSPORT, OBSERVATIONS } from '../lib/telemetry-probes.js';
-import { SWEEP_BATCH_DEFAULT } from './claim.js';
+import { sweepClaims, sweepConfig } from 'keel-core/gen';
 import { reconciliationClaimTimeoutMs, RECONCILIATION_BATCH_SIZE } from '../lib/model.js';
 import { collectionBatchSize } from './persistence-entities.js';
 
@@ -167,7 +168,7 @@ export function generate(model) {
     }
     // La cota de cada barrido y el plazo de cada rescate. Basta con que haya UN reclamo: un
     // barrido sin rescate no tiene plazo que fijar, pero su lote se acota igual.
-    if (sweepBatchKeys(model).length > 0 || stalledClaims(model).length > 0) {
+    if (sweepClaims(model).length > 0) {
       fragments.push(fragment(profile, 'sweep', sweepYaml(model, profile)));
     }
 
@@ -1341,13 +1342,8 @@ function paymentsYaml(model, profile) {
 function serviceParametersYaml(model, profile) {
   const lines = [`${model.service.artifactId}:`];
   for (const parameter of model.service.parameters) {
-    const literal = parameter.testValue ?? parameter.default;
-    const value =
-      profile === 'local' || profile === 'test'
-        ? String(literal ?? `\${${parameter.envVar}}`)
-        : profile === 'production' && parameter.requiredInProduction && parameter.default === null
-          ? `\${${parameter.envVar}}`
-          : `\${${parameter.envVar}:${literal ?? ''}}`;
+    // El gradiente es neutral: el servidor de keel-nest del mismo diseño escribe el mismo.
+    const value = parameterProfileValue(parameter, profile);
     lines.push(`  # ${parameter.description}`);
     lines.push(`  ${parameter.key}: ${value}`);
   }
@@ -1878,68 +1874,33 @@ function sweepYaml(model, profile) {
   // dos veces en el mapa, y SnakeYAML rechaza el documento entero: la aplicación no arrancaba
   // (corrida notifications, 2026-09-30, `dispatch-queued-messages`). Por eso se agrupa por clave
   // y cada bloque lleva las propiedades que le tocan.
-  const blocks = new Map();
-  const block = (key) => {
-    if (!blocks.has(key)) blocks.set(key, []);
-    return blocks.get(key);
-  };
-  for (const key of sweepBatchKeys(model)) {
-    block(key).push(
-      '    # Cota del lote por pasada: sin ella, una tanda con 50.000 filas atrasadas se procesa',
-      '    # entera de una vez. Del generador, no del diseño: es capacidad, y se ajusta con datos',
-      '    # de producción delante. Misma familia que outbox.relay.batch-size.',
-      `    batch-size: ${envWithDefault(profile, `SWEEP_${screamingSnake(key)}_BATCH_SIZE`, SWEEP_BATCH_DEFAULT)}`
-    );
+  // Qué claves y en qué bloque lo decide keel-core (`sweepConfig`): el servidor de keel-nest del mismo
+  // diseño lee el lote y el plazo de las mismas. Aquí solo el YAML y sus comentarios.
+  for (const { key, entries } of sweepConfig(model)) {
+    lines.push(`  ${key}:`);
+    for (const entry of entries) {
+      if (entry.kind === 'batch') {
+        lines.push(
+          '    # Cota del lote por pasada: sin ella, una tanda con 50.000 filas atrasadas se procesa',
+          '    # entera de una vez. Del generador, no del diseño: es capacidad, y se ajusta con datos',
+          '    # de producción delante. Misma familia que outbox.relay.batch-size.',
+          `    batch-size: ${envWithDefault(profile, entry.env, entry.default)}`
+        );
+      } else {
+        // Un rescate enlazado a un parámetro del diseño (DSL 2.18) no llega aquí: el plazo ya tiene su
+        // propiedad, y emitir también esta dejaría dos plazos para el mismo rescate, uno de ellos sin leer.
+        const { operation, claim } = entry;
+        lines.push(
+          `    # ${operation.name}: un ${claim.entity} lleva más de esto en ${claim.stalled.state} —medido sobre`,
+          `    # ${claim.stalled.stampField}— y se da por abandonado, así que otra réplica lo rescata.`,
+          '    # Del generador, no del diseño. Tiene que quedar POR ENCIMA de lo que tarda un ciclo',
+          '    # completo: por debajo, el rescate le arranca el trabajo a quien lo está haciendo.',
+          `    stalled-after-seconds: ${envWithDefault(profile, entry.env, entry.default)}`
+        );
+      }
+    }
   }
-  for (const { operation, claim } of stalledClaims(model)) {
-    // Enlazado a un parámetro del diseño (DSL 2.18): el plazo ya tiene su propiedad, y emitir
-    // también esta dejaría dos plazos para el mismo rescate, uno de ellos sin leer.
-    if (claim.stalled.parameter) continue;
-    block(claim.stalled.configKey).push(
-      `    # ${operation.name}: un ${claim.entity} lleva más de esto en ${claim.stalled.state} —medido sobre`,
-      `    # ${claim.stalled.stampField}— y se da por abandonado, así que otra réplica lo rescata.`,
-      '    # Del generador, no del diseño. Tiene que quedar POR ENCIMA de lo que tarda un ciclo',
-      '    # completo: por debajo, el rescate le arranca el trabajo a quien lo está haciendo.',
-      `    stalled-after-seconds: ${envWithDefault(
-        profile,
-        `SWEEP_${screamingSnake(claim.suffix)}_STALLED_AFTER_SECONDS`,
-        claim.stalled.defaultSeconds
-      )}`
-    );
-  }
-  for (const [key, body] of blocks) lines.push(`  ${key}:`, ...body);
   return lines.join('\n') + '\n';
-}
-
-/** Los rescates que build generó, con la operación que los dispara. */
-/**
- * Las operaciones de barrido que tienen algún reclamo, en orden y sin repetir.
- *
- * No coincide con `stalledClaims`: un barrido puede tener solo reclamo de COLA, sin rescate
- * —no todo estado de trabajo es un estado en vuelo con reloj—, y ese también acota su lote.
- */
-function sweepBatchKeys(model) {
-  const keys = [];
-  for (const service of model.services ?? []) {
-    for (const operation of service.operations ?? []) {
-      for (const claim of operation.claim ?? []) {
-        if (claim.sweepKey && !keys.includes(claim.sweepKey)) keys.push(claim.sweepKey);
-      }
-    }
-  }
-  return keys;
-}
-
-function stalledClaims(model) {
-  const found = [];
-  for (const service of model.services ?? []) {
-    for (const operation of service.operations ?? []) {
-      for (const claim of operation.claim ?? []) {
-        if (claim.stalled) found.push({ operation, claim });
-      }
-    }
-  }
-  return found;
 }
 
 /** Activaciones con barrido declarado, que son las que tienen parámetros que emitir. */

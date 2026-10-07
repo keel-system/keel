@@ -25,6 +25,7 @@ import { usesRelational } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { usesCallerScope } from './security.js';
 import { usesMessaging } from './messaging.js';
+import { usesServiceParameters } from './service-parameters.js';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
@@ -117,7 +118,14 @@ function useCasesTest(model) {
   // Con mensajería, los adaptadores de repositorio entregan al puente de eventos: también es dependencia.
   const messaging = persistence && usesMessaging(model);
   const messagingImport = messaging ? "\nimport { MessagingModule } from '../src/infrastructure/messaging/messaging-module.js';" : '';
+  // Los parámetros de despliegue (globales): los inyectan los adaptadores y los handlers que los leen.
+  const parameters = usesServiceParameters(model);
+  const parametersImport = parameters
+    ? "\nimport { ServiceParametersModule } from '../src/infrastructure/config/service-parameters-module.js';" +
+      (persistence ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
+    : '';
   const modules = [
+    parameters ? "ServiceParametersModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     persistence ? "PersistenceModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     messaging ? "MessagingModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     scope ? 'SecurityModule' : null,
@@ -132,7 +140,7 @@ import { UseCaseModule } from '../src/infrastructure/usecase/use-case-module.js'
 import { UseCaseMediator } from '../src/infrastructure/usecase/use-case-mediator.js';
 import { UseCaseContainer } from '../src/infrastructure/usecase/use-case-container.js';
 import { Handles } from '../src/application/annotations/application-component.js';
-import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}
+import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}
 ${imports}
 
 const OPERATIONS = [

@@ -977,6 +977,38 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   12/12 (las 32 siluetas compilan con `strict` y el servidor arranca con el reloj). Lo que no mide ninguna red:
   que un tick dispare de verdad el handler (lo medirá la corrida del 10e) y el apagado con una pasada en vuelo
   (en Windows SIGTERM no ejecuta los hooks).
+- **10c — reclamos de barrido, rescate y parámetros de despliegue, hecho (2026-10-07)**.
+  - **Hueco de frontera destapado al abrirlo**: keel-nest **ignoraba en silencio** los parámetros de despliegue
+    (`service.parameters`, DSL 2.15) —ni código ni aviso—, y el rescate de `job-dispatch` lee su plazo de uno.
+    Ahora se generan (`src/scaffold/service-parameters.js`): el value object de dominio con las guardas de
+    keel-spring (con sus mensajes), un módulo global que lo puebla desde `<artifactId>.<clave>`, y el fragmento
+    por perfil con el gradiente, que pasa a keel-core (`gen/service-parameters.js`, `parameterProfileValue`).
+    `test/service-parameters.test.js` compara los fragmentos con los de keel-spring en las tres fixtures que los
+    declaran y EJECUTA las guardas.
+  - **Neutral nuevo** en `keel-core/gen/scheduling.js`: el orden de los candidatos (`claimOrderField`), las
+    claves de `sweep.*` agrupadas por bloque (`sweepConfig`), y las sentencias con las que el arnés fabrica la
+    precondición del rescate (`rescueProbes`, `stallSql`, `missingClockCountSql`). keel-spring los toma de ahí con
+    su golden idéntico. **Y el golden ya no depende del fin de línea**: los assets se copian tal como están en la
+    copia de trabajo, y normalizarla a LF (tras unos archivos que las ediciones habían dejado en CRLF) movía 504
+    huellas sin que build cambiara nada; la línea base se regeneró sobre el commit anterior, sin el cambio.
+  - **keel-nest** (`src/scaffold/claim.js`): un método por reclamo en el puerto y en el adaptador —candidatos con
+    `FOR UPDATE SKIP LOCKED` y un UPDATE condicional por fila, en transacción propia y en READ COMMITTED en
+    MySQL; la cola estampa el reloj del rescate en el mismo UPDATE; el rescate solo se lleva lo más viejo que su
+    plazo (de `sweep.*` o del parámetro del diseño) y ARRIENDA sin cambiar el estado—, `sweep.yaml` paritario, la
+    nota del handler («el reclamo ya está generado»), y en el arnés `stallInFlight`/`putInFlight`/
+    `inFlightWithoutClock` por la misma CLI que `db()`. La frontera deja de avisar del barrido.
+  - **Puerta medida**: `test/claim.test.js` (9) y `keel-core/test/scheduling.test.js` (7). `db-check` **24/24** con
+    `payout-runs` como sujeto nuevo: la cola (orden, lote, destino, reloj estampado, la pasada siguiente), dos
+    réplicas a la vez, SKIP LOCKED, el rescate (solo lo abandonado, arrienda, renueva, no toca lo fresco) y las
+    MISMAS sentencias del arnés contra el motor. **Falsado por capas**: sin el bloqueo cae solo SKIP LOCKED; sin
+    el bloqueo ni la condición del UPDATE cae además la carrera; sin la cota temporal caen las tres del rescate.
+    Quitar solo la condición no pone nada rojo, y es correcto: con SKIP LOCKED dos réplicas nunca seleccionan la
+    misma fila, y la condición es la segunda defensa (la que sostiene el reclamo en un motor sin SKIP LOCKED).
+    `ts-check` 12/12; destapó que la prueba de casos de uso emitida montaba sus módulos a mano sin el de
+    parámetros.
+  - **Sin medir**: las sondas del arnés no están falsadas por mutación, y el barrido que build NO puede reclamar
+    (`payout-runs.closePayoutRuns`, dos estados en vuelo) queda para el agente con el aviso del modelo y el gate
+    de 10d (familia `sweepClaim`).
 
 ### Inc. 11 — Clientes HTTP salientes y dependencias
 

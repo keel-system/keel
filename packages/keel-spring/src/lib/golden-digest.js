@@ -97,7 +97,11 @@ export function digestCombo({ fixture, stack }, fixturesDir = FIXTURES_DIR) {
   for (const entry of files) {
     const rel = entry.path.split(path.sep).join('/');
     if (rel in digests) throw new Error(`${comboKey({ fixture, stack })}: ruta emitida dos veces: ${rel}`);
-    const bytes = entry.sourceFile ? fs.readFileSync(entry.sourceFile) : Buffer.from(entry.content ?? '', 'utf8');
+    const raw = entry.sourceFile ? fs.readFileSync(entry.sourceFile) : Buffer.from(entry.content ?? '', 'utf8');
+    // El fin de línea NO entra en la huella: los assets se copian tal como están en la copia de trabajo, y
+    // una copia en CRLF (Windows) frente a otra en LF ponía roja la línea base sin que build cambiara nada.
+    // El repositorio los guarda en LF (.gitattributes); esto mide lo que build emite, no cómo se clonó.
+    const bytes = Buffer.from(raw.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
     // 64 bits bastan para detectar un cambio y dividen el archivo de la línea base por dos.
     const digest = crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 16);
     digests[rel] = entry.executable ? `x:${digest}` : digest;

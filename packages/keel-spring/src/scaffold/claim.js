@@ -42,6 +42,7 @@
 // destino la hace el dominio, que es quien fija los campos que ese estado exige. Moverla
 // aquí dejaba `failed` sin `failureReason` ni `failedAt` (corrida notifications, 2026-09-30).
 
+import { SWEEP_BATCH_DEFAULT } from 'keel-core/gen';
 import { subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
 import { claimSelectionSnippet, claimTransaction, supportsSkipLocked, unsupportedClaimWarning } from '../lib/claim-sql.js';
@@ -72,8 +73,8 @@ const batchField = (claim) => `${camelCase(claim.sweepKey)}BatchSize`;
 /** `dispatch-queued-orders` → `dispatchQueuedOrders`. */
 const camelCase = (kebab) => kebab.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
 
-/** Cota por defecto de una pasada de barrido, si nadie la ajusta por entorno. */
-export const SWEEP_BATCH_DEFAULT = 100;
+/** Cota por defecto de una pasada de barrido, si nadie la ajusta por entorno: la de keel-core, la misma de keel-nest. */
+export { SWEEP_BATCH_DEFAULT };
 
 /**
  * El plazo de cada rescate, leído de `parameters/<perfil>/sweep.yaml` que config.js

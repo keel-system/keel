@@ -18,6 +18,7 @@
 
 import { MIGRATIONS_TABLE } from './infra.js';
 import { storeEntities } from './messaging-stores.js';
+import { SWEEP_SETTINGS_TS, usesSweepClaims } from './claim.js';
 import {
   usesRequestIdempotency,
   IDEMPOTENCY_RECORD_ORM_TS,
@@ -572,6 +573,11 @@ function persistenceModuleFile(model) {
   }
   const bindings = roots.map((entity) => `    { provide: ${portClass(entity)}, useClass: ${adapterClass(entity)} }`);
   const ports = roots.map((entity) => portClass(entity));
+  // La configuración de los barridos (el lote y el plazo de cada reclamo): la leen los adaptadores.
+  if (usesSweepClaims(model)) {
+    imports.push({ symbol: 'SWEEP_SETTINGS', from: SWEEP_SETTINGS_TS }, { symbol: 'sweepSettings', from: SWEEP_SETTINGS_TS });
+    bindings.push('    { provide: SWEEP_SETTINGS, useValue: sweepSettings(configuration) }');
+  }
   // El puerto del registro de idempotencia: lo inyectan los handlers de las operaciones que lo usan.
   if (usesRequestIdempotency(model)) {
     imports.push({ symbol: 'IdempotencyStore', from: IDEMPOTENCY_STORE_TS }, { symbol: 'IdempotencyStoreImpl', from: IDEMPOTENCY_STORE_IMPL_TS });

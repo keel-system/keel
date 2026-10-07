@@ -114,19 +114,6 @@ export function checkSupportedFeatures(manifest, layers) {
       );
     }
   }
-  // El reloj se genera (incremento 10b): el scheduler despacha cada operación con `schedule`. Lo que todavía
-  // no: el RECLAMO de un barrido que saca filas de un estado (`schedule` + `transitions`), que en keel-spring
-  // build genera en el puerto del repositorio. Sin el aviso, el agente escribiría el suyo sin saber que llega.
-  const sweeps = operations
-    .filter(([, operation]) => operation?.schedule != null && (operation?.transitions ?? []).length > 0)
-    .map(([name]) => name);
-  if (sweeps.length > 0) {
-    warnings.push(
-      `use-cases: ${sweeps.join(', ')} ${sweeps.length === 1 ? 'es un barrido' : 'son barridos'} con transiciones; keel-nest genera el scheduler que ` +
-        'lo dispara (sin transacción abarcadora si reclama), pero no todavía el método de reclamo ni el rescate de stalledAfter ' +
-        '(llegan en el incremento 10c de PLAN-KEEL-NEST.md).'
-    );
-  }
   for (const feature of PENDING_OPERATION_FEATURES) {
     const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
     if (names.length === 0) continue;

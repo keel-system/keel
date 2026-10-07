@@ -14,6 +14,7 @@ import { packageVersion } from '../lib/assets.js';
 import { TS_PROJECTION } from '../lib/ts-projection.js';
 import * as project from './project.js';
 import * as config from './config.js';
+import * as serviceParameters from './service-parameters.js';
 import * as wire from './wire.js';
 import * as application from './application.js';
 import * as enums from './enums.js';
@@ -38,6 +39,7 @@ import * as kafka from './kafka.js';
 import * as snssqs from './snssqs.js';
 import * as scheduling from './scheduling.js';
 import * as purge from './purge.js';
+import * as claim from './claim.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as architecture from './architecture.js';
 import * as restSupport from './rest-support.js';
@@ -58,6 +60,8 @@ const GENERATORS = [
   // La frontera hexagonal, como regla ejecutable (npm run check:architecture).
   architecture,
   config,
+  // Los parámetros de despliegue del servicio (service.parameters): el value object y su módulo.
+  serviceParameters,
   wire,
   application,
   health,
@@ -91,6 +95,9 @@ const GENERATORS = [
   // tablas del generador.
   scheduling,
   purge,
+  // Los reclamos de barrido (incremento 10c): la configuración de los lotes y los plazos; los métodos van en
+  // el puerto y el adaptador de cada raíz (repositories.js).
+  claim,
   // El baseline de migraciones: cómo se exporta y cómo se demuestra (lo usa el pase de calidad).
   schemaBaseline,
   { generate: (model) => mediator.generate(model, { mappers: mappers.mapperClasses(model) }) },

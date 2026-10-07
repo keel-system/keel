@@ -42,7 +42,16 @@ export {
   scheduleDispatch,
   BATCHED_PURGE,
   batchedPurgeParameters,
-  batchedPurgeReference
+  batchedPurgeReference,
+  SWEEP_BATCH_DEFAULT,
+  sweepClaims,
+  claimsForEntity,
+  claimOrderField,
+  sweepConfig,
+  rescueShape,
+  stallSql,
+  missingClockCountSql,
+  rescueProbes
 } from './scheduling.js';
 export {
   FORMAT_TEXT_BASES,

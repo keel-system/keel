@@ -69,7 +69,6 @@ test('lo que una operación declara y cuelga de un incremento futuro se avisa, n
       operations: {
         createOrder: { idempotency: { keySource: 'client-key' } },
         purgeOld: { schedule: { cron: '0 3 * * *' } },
-        sweepOrders: { schedule: { cron: '* * * * *' }, transitions: [{ entity: 'Order', from: ['placed'], to: 'queued' }] },
         getOrder: { cache: { ttlSeconds: 60 } },
         listOrders: {}
       }
@@ -77,14 +76,12 @@ test('lo que una operación declara y cuelga de un incremento futuro se avisa, n
   };
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases'), layers);
   assert.deepEqual(errors, []);
-  // Sin persistencia, la idempotencia no tiene dónde registrar la clave: se dice. El reloj se genera (10b),
-  // así que un schedule a secas no avisa; el reclamo de un barrido con transiciones, sí (10c). La caché
-  // cuelga de su incremento.
-  assert.equal(warnings.length, 3);
+  // Sin persistencia, la idempotencia no tiene dónde registrar la clave: se dice. El reloj y los reclamos se
+  // generan (10b, 10c), así que un schedule no avisa. La caché cuelga de su incremento.
+  assert.equal(warnings.length, 2);
   assert.match(warnings[0], /createOrder declara idempotency, pero el diseño no tiene persistencia/);
-  assert.match(warnings[1], /sweepOrders es un barrido con transiciones.*incremento 10c/);
   assert.ok(!warnings.join(' ').includes('purgeOld'));
-  assert.match(warnings[2], /getOrder declara cache .*incremento 13/);
+  assert.match(warnings[1], /getOrder declara cache .*incremento 13/);
   assert.ok(!warnings.join('\n').includes('listOrders'));
 });
 

@@ -19,6 +19,7 @@ import path from 'node:path';
 import { DATABASES, selectedInfra } from 'keel-core/gen/infra-catalog';
 import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, specsSealCheck } from 'keel-core/gen/junit-scoring';
 import { resetDbScript } from 'keel-core/gen/infra-scripts';
+import { missingClockCountSql, rescueProbes, stallSql } from 'keel-core/gen';
 import { NEST_INFRA } from './infra.js';
 import { usesApi } from './rest-support.js';
 import { usesRelational, engineOf } from './persistence-entities.js';
@@ -439,7 +440,7 @@ const DB_QUERY_ARGV: readonly string[] = ${JSON.stringify(probe.argv)};
 export function db(sql: string): string {
   return run(containerRuntime(), ['exec', DB_CONTAINER, ...DB_QUERY_ARGV, sql], '¿Está la base arriba (bash infra/up.sh)?');
 }
-` : ''}${identitySection(model)}${messagingHarnessSection(model)}
+${rescueSection(model)}` : ''}${identitySection(model)}${messagingHarnessSection(model)}
 
 /** Espera hasta que \`condition\` se cumpla o se agote \`timeoutMs\`; lanza con \`message\` si no llega. */
 export async function eventually(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, message = 'la condición no se cumplió a tiempo'): Promise<void> {
@@ -781,4 +782,78 @@ function smokeCredentials(model) {
     // Sin ellas, cada flujo autenticado fallaría con un 401 que parece de negocio. ¿Se ejecutó infra/init-keycloak.sh?
 ${checks.join('\n')}
   });`;
+}
+
+// ─── El rescate de un barrido (incremento 10c) ───────────────────────────────
+
+/**
+ * Los helpers con los que un flujo fabrica la precondición del RESCATE: una fila en vuelo que una réplica
+ * muerta dejó a medias (`stallInFlight`), la misma recién entrada en vuelo, que el rescate NO debe tocar
+ * (`putInFlight`), y cuántas quedaron en vuelo sin reloj (`inFlightWithoutClock`, que vale cero siempre).
+ * Los mismos que el AbstractFlowIT de keel-spring, con las mismas sentencias (keel-core/gen/scheduling.js) y
+ * los literales del motor de su catálogo. Sin un motor que declare esos literales no se emiten: un UPDATE
+ * que no casa dejaría el escenario verde sin haber atascado nada.
+ */
+function rescueSection(model) {
+  const entry = DATABASES[engineOf(model)];
+  if (!entry?.staleTimestamp || !entry?.uuidLiteral) return '';
+  const probes = rescueProbes(model);
+  if (probes.length === 0) return '';
+  const now = entry.nowTimestamp ?? 'CURRENT_TIMESTAMP';
+  const rows = probes
+    .map(
+      (probe) => `  ${tsString(probe.operation)}: {
+    stall: ${tsString(stallSql({ ...probe, clockSql: entry.staleTimestamp }))},
+    put: ${tsString(stallSql({ ...probe, clockSql: now }))},
+    missing: ${tsString(missingClockCountSql(probe))}
+  }`
+    )
+    .join(',\n');
+  const known = probes.map((probe) => probe.operation).join(', ');
+  return `
+/** Las sentencias del rescate de cada barrido que lo tiene: ${known}. */
+const RESCUES: Readonly<Record<string, { readonly stall: string; readonly put: string; readonly missing: string }>> = {
+${rows}
+};
+
+function rescueOf(operation: string): { readonly stall: string; readonly put: string; readonly missing: string } {
+  const rescue = RESCUES[operation];
+  if (rescue == null) throw new Error(\`No hay rescate para el barrido '\${operation}'. Los que lo tienen: ${known}\`);
+  return rescue;
+}
+
+function idLiteral(id: string): string {
+  if (!/^[0-9a-fA-F-]{36}$/.test(id)) throw new Error(\`No es un id: '\${id}'\`);
+  return ${tsString(entry.uuidLiteral.prefix)} + id + ${tsString(entry.uuidLiteral.suffix)};
+}
+
+/**
+ * Deja la fila \`id\` EN VUELO con el reloj infinitamente rancio: el estado exacto en el que queda una réplica
+ * que murió con ella en la mano, que es lo que el rescate busca. No dispara el barrido —lo dispara su cron,
+ * como en producción— y no siembra la fila: mueve una creada por la API.
+ */
+export function stallInFlight(operation: string, id: string): void {
+  db(rescueOf(operation).stall + idLiteral(id));
+}
+
+/**
+ * Lo mismo con el reloj a AHORA: la fila acaba de entrar en vuelo y hay alguien trabajando en ella. Es la mitad
+ * que separa rescatar de robarle el trabajo a quien lo está haciendo: un rescate sin cota temporal pasa el
+ * escenario del rescate y falla aquí.
+ */
+export function putInFlight(operation: string, id: string): void {
+  db(rescueOf(operation).put + idLiteral(id));
+}
+
+/**
+ * Cuántas filas quedaron EN VUELO con el reloj sin estampar. Tiene que valer cero siempre: si el reclamo mueve el
+ * estado sin estampar la marca en el MISMO UPDATE, la fila que caiga en esa ventana queda irrescatable.
+ */
+export function inFlightWithoutClock(operation: string): number {
+  const output = db(rescueOf(operation).missing).trim();
+  const count = Number(output.split(/\s+/).pop());
+  if (!Number.isInteger(count)) throw new Error(\`La cuenta de filas sin reloj no es un número: '\${output}'\`);
+  return count;
+}
+`;
 }

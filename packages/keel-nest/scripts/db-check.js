@@ -42,7 +42,8 @@ import { build } from '../src/commands/build.js';
 import { AMQPLIB_VERSION, JOSE_VERSION } from '../src/lib/assets.js';
 import { domainMembers } from '../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
-import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders } from '../src/scaffold/repositories.js';
+import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, emitsDomainEvents } from '../src/scaffold/repositories.js';
+import { claimsForEntity, claimOrderField, screamingSnake, rescueProbes, stallSql, missingClockCountSql } from 'keel-core/gen';
 import { ormPath, ormClass, unidirectionalParents } from '../src/scaffold/persistence-entities.js';
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_IMPL_TS, IDEMPOTENCY_CONFLICT_TS } from '../src/scaffold/request-idempotency.js';
 import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
@@ -68,7 +69,7 @@ const keep = args.includes('--keep');
 const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'notification-mailer', 'catalog-extended'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'payout-runs', 'notification-mailer', 'catalog-extended'];
 const results = [];
 
 function step(name, ok, detail = '') {
@@ -363,6 +364,7 @@ function probeScript(model, engine, db, expected) {
   const blocks = roots.map((root, index) => rootBlock(model, engine, root, index, ctx));
   // Antes de listar los imports: sus valores de muestra también añaden alguno.
   const messagingCode = messagingBlock(model, engine, ctx);
+  const claimCode = claimBlock(model, engine, ctx);
   const imports = [...ctx.imports].map((entry) => {
     const [symbol, file] = entry.split('|');
     return `import { ${symbol} } from '${distOf(file)}';`;
@@ -453,6 +455,7 @@ ${blocks.join('\n')}
 ${concurrencyBlock(model, engine, roots[0], ctx)}
 ${idempotencyBlock(model, engine)}
 ${messagingCode}
+${claimCode}
 ${purgeBlock(model)}
 
 await dataSource.destroy();
@@ -820,6 +823,176 @@ function messagingBlock(model, engine, ctx) {
 // ═══ Mensajería: el outbox y el registro de procesados ═══
 {${outbox ? `\n  const { OutboxEventOrm } = await import('${distOf(OUTBOX_ORM_TS)}');` : ''}${schemaChecks}${bridge}${relay}${guard}
 }`;
+}
+
+/**
+ * Los RECLAMOS de barrido (incremento 10c) contra el motor, lo que en keel-spring mide claim-check:
+ *   · la COLA: el lote sale del más antiguo al más nuevo, con su tamaño, ya en el estado de destino (y con el
+ *     reloj estampado si un rescate lo lee); la pasada siguiente se lleva el resto y nada más;
+ *   · SKIP LOCKED: una fila bloqueada por otra réplica no se espera, se salta;
+ *   · la CARRERA: dos réplicas a la vez se reparten el lote sin llevarse ninguna fila dos veces;
+ *   · el RESCATE: solo lo abandonado (más viejo que su plazo), sin cambiarle el estado y renovando el reloj,
+ *     así que la pasada siguiente ya no lo ve; lo recién entrado en vuelo no se toca.
+ * Antes de cada caso se aparcan las filas de la tabla en un estado que ningún reclamo lee.
+ */
+function claimBlock(model, engine, ctx) {
+  const blocks = [];
+  for (const root of repositoryRoots(model)) {
+    const claims = claimsForEntity(model, root.name);
+    if (claims.length === 0) continue;
+    const { enumType, field } = root.lifecycle;
+    const enumDef = model.enums.find((candidate) => candidate.name === enumType);
+    const read = new Set(claims.flatMap((claim) => claim.from));
+    const parked = enumDef.values.find((value) => !read.has(value.literal));
+    if (!parked) continue;
+    ctx.imports.add(`${enumType}|${classPath(DIRS.enums, enumType)}`);
+    ctx.imports.add(`${ormClass(root.name)}|${ormPath(root.name)}`);
+    const orm = ormClass(root.name);
+    const samples = Array.from({ length: 24 }, (_, i) => `() => ${sampleEntity(model, root, ctx, `claim${i}`)}`);
+    const stalledParameters = claims.filter((claim) => claim.stalled?.parameter).map((claim) => claim.stalled.parameter.name);
+    // Los argumentos del constructor, en su orden: la transacción, el puente si la raíz emite, la
+    // configuración de los barridos y los parámetros si un rescate lee de ellos su plazo. Plazo de un minuto.
+    const args = ['context', emitsDomainEvents(model, root) ? 'eventSink' : null, 'sweeps(batch)', stalledParameters.length > 0 ? `{ ${stalledParameters.map((name) => `${name}: 1`).join(', ')} }` : null].filter(Boolean);
+    const stalledSettings = claims.filter((claim) => claim.stalled && !claim.stalled.parameter).map((claim) => `${JSON.stringify(claim.stalled.configKey)}: 60`);
+    const batchKeys = [...new Set(claims.map((claim) => claim.sweepKey))];
+    // Las sentencias con las que el ARNÉS fabrica la precondición del rescate (stallInFlight, putInFlight,
+    // inFlightWithoutClock), con los literales del motor: tienen que CASAR, o el escenario del rescate sale
+    // verde sin haber atascado nada.
+    const harnessProbe = (claim) => {
+      const entry = DATABASES[engine];
+      const probe = rescueProbes(model).find((candidate) => candidate.table === root.tableName && candidate.state === screamingSnake(claim.stalled.state));
+      if (!probe || !entry?.staleTimestamp || !entry?.uuidLiteral) return '';
+      const label = `${root.name}.${claim.method}`;
+      const stall = JSON.stringify(stallSql({ ...probe, clockSql: entry.staleTimestamp }));
+      const put = JSON.stringify(stallSql({ ...probe, clockSql: entry.nowTimestamp ?? 'CURRENT_TIMESTAMP' }));
+      const literal = (id) => `${JSON.stringify(entry.uuidLiteral.prefix)} + ${id} + ${JSON.stringify(entry.uuidLiteral.suffix)}`;
+      return `
+
+    // El arnés: stallInFlight y putInFlight sobre dos filas creadas por el adaptador, aparcadas fuera de vuelo.
+    await park();
+    const [stalledRow, currentRow] = await seed(2, ${enumType}.${screamingSnake(parked.literal)}, () => ({}));
+    await dataSource.query(${stall} + ${literal('stalledRow')});
+    await dataSource.query(${put} + ${literal('currentRow')});
+    const viaHarness = await adapter(10).${claim.method}();
+    check('${label}: stallInFlight deja una fila que el rescate se lleva, y putInFlight una que no', same(viaHarness.map((e) => e.id), [stalledRow]), JSON.stringify(viaHarness.map((e) => e.id)));
+    const withoutClock = async () => Number(Object.values((await dataSource.query(${JSON.stringify(missingClockCountSql(probe))}))[0])[0]);
+    check('${label}: inFlightWithoutClock cuenta cero con todo el reloj estampado', (await withoutClock()) === 0);
+    await dataSource.createQueryBuilder().update(${orm}).set({ ${claim.stalled.stampField}: null }).where({ id: currentRow }).execute();
+    check('${label}: inFlightWithoutClock ve la fila en vuelo sin reloj', (await withoutClock()) === 1);`;
+    };
+    const cases = claims.map((claim) => {
+      const label = `${root.name}.${claim.method}`;
+      if (claim.stalled) {
+        const stamp = claim.stalled.stampField;
+        return `
+  {
+    await park();
+    const state = ${enumType}.${screamingSnake(claim.stalled.state)};
+    const stale = await seed(3, state, (i) => ({ ${stamp}: new Date(Date.now() - 7_200_000 - i * 1000) }));
+    const fresh = await seed(2, state, () => ({ ${stamp}: new Date(Date.now() - 5_000) }));
+    const before = new Date(Date.now() - 1_000);
+    const rescued = await adapter(10).${claim.method}();
+    check('${label}: el rescate se lleva SOLO lo abandonado', same(rescued.map((e) => e.id), stale), JSON.stringify(rescued.map((e) => e.id)));
+    check('${label}: no cambia el estado: lo arrienda', rescued.every((e) => e.${field} === state), rescued.map((e) => e.${field}).join(','));
+    check('${label}: y renueva el reloj en el mismo UPDATE', rescued.every((e) => e.${stamp} != null && e.${stamp}.getTime() >= before.getTime()), rescued.map((e) => e.${stamp}?.toISOString()).join(','));
+    check('${label}: la pasada siguiente ya no lo ve (el reloj renovado no está atascado)', (await adapter(10).${claim.method}()).length === 0);
+    const untouched = await dataSource.getRepository(${orm}).findBy(fresh.map((id) => ({ id })));
+    check('${label}: lo recién entrado en vuelo no se toca', untouched.length === 2 && untouched.every((row) => Date.now() - row.${stamp}.getTime() >= 4_000), untouched.map((row) => row.${stamp}?.toISOString()).join(','));${harnessProbe(claim)}
+  }`;
+      }
+      const order = claimOrderField(root, claim);
+      const ordered = order !== 'id';
+      return `
+  {
+    await park();
+    const from = ${enumType}.${screamingSnake(claim.from[0])};
+    // Instantes al revés del orden de inserción: el más antiguo es el último insertado.
+    const ids = await seed(5, from, (i) => (${ordered ? `{ ${order}: new Date(Date.now() - 60_000 - i * 1000) }` : '{}'}));
+    const before = new Date(Date.now() - 1_000);
+    const first = await adapter(2).${claim.method}();
+    ${ordered ? `check('${label}: el lote sale del más antiguo al más nuevo, con su tamaño', JSON.stringify(first.map((e) => e.id)) === JSON.stringify([ids[4], ids[3]]), JSON.stringify({ got: first.map((e) => e.id), ids, at: (await dataSource.getRepository(${orm}).findBy(ids.map((id) => ({ id })))).map((row) => [row.id, row.${order}]) }));` : `check('${label}: el lote tiene su tamaño', first.length === 2, first.length);`}
+    check('${label}: lo reclamado sale ya en ${claim.to}', first.every((e) => e.${field} === ${enumType}.${screamingSnake(claim.to)}), first.map((e) => e.${field}).join(','));${claim.stamps ? `
+    check('${label}: con ${claim.stamps.field} estampado en el mismo UPDATE', first.every((e) => e.${claim.stamps.field} != null && e.${claim.stamps.field}.getTime() >= before.getTime()), first.map((e) => e.${claim.stamps.field}?.toISOString()).join(','));` : ''}
+    const rest = await adapter(10).${claim.method}();
+    check('${label}: la pasada siguiente se lleva el resto', same(rest.map((e) => e.id), ids.slice(0, 3)), JSON.stringify(rest.map((e) => e.id)));
+    check('${label}: y la tercera, nada', (await adapter(10).${claim.method}()).length === 0);
+
+    // La CARRERA: dos réplicas reclaman a la vez; ninguna fila sale dos veces y ninguna se queda.
+    await park();
+    const raced = await seed(6, from, () => ({}));
+    const replica = () => new ${adapterClass(root)}(${args.map((arg) => (arg === 'context' ? 'new TransactionContext(dataSource, settings)' : arg)).join(', ').replace('sweeps(batch)', 'sweeps(6)')});
+    const [a, b] = await Promise.all([replica().${claim.method}(), replica().${claim.method}()]);
+    const both = [...a, ...b].map((e) => e.id);
+    check('${label}: dos réplicas a la vez no se llevan la misma fila', new Set(both).size === both.length && same(both, raced), \`\${a.length} + \${b.length}\`);
+
+    // SKIP LOCKED: con una fila bloqueada por otra réplica, el reclamo sigue sin ella y sin esperar.
+    await park();
+    const locked = await seed(3, from, () => ({}));
+    const holder = new TransactionContext(dataSource, settings);
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    const locking = holder.inTransaction(async (manager) => {
+      await manager.findOne(${orm}, { where: { id: locked[0] }, lock: { mode: 'pessimistic_write' } });
+      await held;
+    }, { isolation: 'READ COMMITTED' });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const started = Date.now();
+    // Sin SKIP LOCKED el reclamo se queda esperando a esa fila hasta el tope de la transacción: es un fallo
+    // de esta comprobación, no de la sonda.
+    const skipping = await adapter(10).${claim.method}().catch((error) => ({ error }));
+    const waited = Date.now() - started;
+    release();
+    await locking;
+    check('${label}: no espera a una fila bloqueada por otra réplica (SKIP LOCKED)', waited < 5_000 && Array.isArray(skipping) && same(skipping.map((e) => e.id), locked.slice(1)), skipping.error ? skipping.error.message : \`\${skipping.length} filas en \${waited} ms\`);
+  }`;
+    });
+    blocks.push(`
+// ═══ Reclamos de barrido: ${root.name} ═══
+{
+  const SAMPLES = [
+    ${samples.join(',\n    ')}
+  ];
+  let next = 0;
+  const context = tx;
+  const sweeps = (batch) => ({ batchSize: { ${batchKeys.map((key) => `${JSON.stringify(key)}: batch`).join(', ')} }, stalledAfterSeconds: { ${stalledSettings.join(', ')} } });
+  const adapter = (batch) => new ${adapterClass(root)}(${args.join(', ')});
+  const same = (got, want) => got.length === want.length && [...got].sort().join() === [...want].sort().join();
+  // Aparca toda fila de la tabla en un estado que ningún reclamo lee: cada caso empieza sin candidatos.
+  const park = () => dataSource.createQueryBuilder().update(${orm}).set({ ${field}: ${enumType}.${screamingSnake(parked.literal)} }).where('1 = 1').execute();
+  // Los instantes se escriben en SQL crudo: una columna como created_at es update: false (el updatable =
+  // false de JPA) y el ORM la salta en silencio. Tabla, columnas, marcadores y el id, desde los metadatos.
+  const meta = dataSource.getMetadata(${orm});
+  const rawSet = async (id, values) => {
+    const entries = Object.entries(values);
+    if (entries.length === 0) return;
+    const idColumn = meta.primaryColumns[0];
+    const params = { id: idColumn.transformer ? idColumn.transformer.to(id) : id };
+    const sets = entries.map(([property, value], i) => {
+      params[\`v\${i}\`] = value;
+      return \`\${dataSource.driver.escape(meta.findColumnWithPropertyName(property).databaseName)} = :v\${i}\`;
+    });
+    const [sql, bound] = dataSource.driver.escapeQueryWithParameters(
+      \`UPDATE \${dataSource.driver.escape(meta.tableName)} SET \${sets.join(', ')} WHERE \${dataSource.driver.escape(idColumn.databaseName)} = :id\`,
+      params,
+      {}
+    );
+    await dataSource.query(sql, bound);
+  };
+  // Crea filas por el adaptador (como las crearía un caso de uso) y las pone en el estado y con los
+  // instantes del caso. Cada muestra se usa una sola vez: la clave natural es única.
+  const seed = async (count, state, at) => {
+    const ids = [];
+    for (let i = 0; i < count; i++) {
+      const saved = await adapter(10).save(SAMPLES[next++]());
+      await dataSource.createQueryBuilder().update(${orm}).set({ ${field}: state }).where({ id: saved.id }).execute();
+      await rawSet(saved.id, at(i));
+      ids.push(saved.id);
+    }
+    return ids;
+  };${cases.join('')}
+}`);
+  }
+  return blocks.join('\n');
 }
 
 /**

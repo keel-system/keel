@@ -77,10 +77,49 @@ export const MECHANISMS = {
     }
   },
   'reconciliation-claim': { pending: 'incremento 11 (la reconciliación cuelga de dependencies)' },
-  'sweep-claim-queue': { pending: 'incremento 10c (reclamos de barrido)' },
-  'sweep-claim-rescue': { pending: 'incremento 10c (rescate de stalledAfter)' },
+  'sweep-claim-queue': {
+    emitter: 'src/scaffold/claim.js (sobre operation.claim[], claimOrderField y sweepConfig de keel-core/gen) · el puerto y el adaptador de repositories.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'db-check, en los dos motores, sobre job-dispatch (cola que estampa el reloj del rescate), payout-runs y notification-mailer: el lote del más antiguo al más nuevo y con su tamaño, ya en el estado de destino y con el reloj estampado en el MISMO UPDATE, la pasada siguiente con el resto, dos réplicas a la vez sin llevarse ninguna fila dos veces, y la fila bloqueada por otra réplica saltada sin esperar. sweep.yaml es el de keel-spring (claim.test.js). Falsado el 2026-10-07 por capas: sin el bloqueo cae SOLO el caso de SKIP LOCKED (la condición del UPDATE sigue impidiendo el doble reclamo); sin el bloqueo ni la condición cae también la carrera. Quitar solo la condición no pone nada rojo: con SKIP LOCKED dos réplicas nunca seleccionan la misma fila, y la condición es la segunda defensa'
+      },
+      document: { pending: 'incremento 12 (persistencia documental)' }
+    }
+  },
+  'sweep-claim-rescue': {
+    emitter: 'src/scaffold/claim.js (claim.stalled de keel-core/gen/model.js) · el plazo desde service.parameters (src/scaffold/service-parameters.js) o sweep.<x>.stalled-after-seconds',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'db-check sobre job-dispatch (plazo enlazado al parámetro abandonAfterMinutes, DSL 2.18): se lleva solo lo abandonado, no cambia el estado (lo arrienda), renueva el reloj en el mismo UPDATE, la pasada siguiente ya no lo ve, y lo recién entrado en vuelo no se toca. Falsado el 2026-10-07 quitando la cota temporal: caen esas tres comprobaciones y solo esas'
+      },
+      document: { pending: 'incremento 12 (persistencia documental)' }
+    }
+  },
   'guard-claim': { pending: 'incremento 13 (la guarda de efecto irreversible solo la declara el correo)' },
-  'harness-db-probes': { pending: 'incremento 10c (las sondas que fabrican la precondición de un barrido)' },
+  'harness-db-probes': {
+    emitter: 'src/scaffold/integration-tests.js (rescueSection: stallInFlight, putInFlight, inFlightWithoutClock, sobre rescueProbes de keel-core/gen) · src/scaffold/messaging-harness.js (abandonOutboxEvent)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: false,
+        why:
+          'las MISMAS sentencias del arnés, con los literales del motor, ejecutadas por db-check contra PostgreSQL y MySQL: la fila que deja stallInFlight la rescata el reclamo generado y la de putInFlight no, e inFlightWithoutClock cuenta cero y ve la fila sin reloj. Sin falsar por mutación'
+      },
+      document: { pending: 'incremento 12 (persistencia documental)' }
+    }
+  },
   'schema-baseline': {
     emitter: 'src/scaffold/schema-baseline.js (schema-baseline.ts, infra/export-schema.sh e infra/verify-baseline.sh)',
     coverage: {
@@ -141,8 +180,30 @@ export const MECHANISMS = {
       }
     }
   },
-  'claim-dialect': { pending: 'incremento 10c (reclamos con SKIP LOCKED)' },
-  'harness-sql-literals': { pending: 'incremento 10c (los literales por motor de las sondas del arnés)' },
+  'claim-dialect': {
+    emitter: 'src/scaffold/claim.js y messaging-stores.js (setLock pessimistic_write + setOnLocked skip_locked; READ COMMITTED en MySQL)',
+    coverage: {
+      postgresql: {
+        state: 'verificado',
+        net: 'db-check',
+        falsified: true,
+        why: 'FOR UPDATE SKIP LOCKED: la fila bloqueada por otra transacción se salta sin esperar (el reclamo de barrido y el del outbox). Falsado quitando el bloqueo: el reclamo espera a la fila hasta el tope'
+      },
+      mysql: {
+        state: 'verificado',
+        net: 'db-check',
+        falsified: true,
+        why: 'FOR UPDATE SKIP LOCKED en READ COMMITTED (en REPEATABLE READ bloquearía también los huecos entre claves y frenaría las altas). Mismo caso y misma falsación que en PostgreSQL'
+      }
+    }
+  },
+  'harness-sql-literals': {
+    emitter: 'src/scaffold/integration-tests.js (staleTimestamp, nowTimestamp y uuidLiteral de DATABASES en keel-core/gen/infra-catalog.js)',
+    coverage: {
+      postgresql: { state: 'verificado', net: 'db-check', falsified: false, why: "TIMESTAMP '1970-01-01 00:00:00' y el uuid entre comillas CASAN: la fila atascada por la sentencia del arnés la rescata el reclamo generado" },
+      mysql: { state: 'verificado', net: 'db-check', falsified: false, why: "el mismo instante sobre datetime(6) y UUID_TO_BIN('…') sobre la columna binary(16): la fila atascada la rescata el reclamo generado" }
+    }
+  },
   'telemetry-store-spans': { pending: 'incremento 14 (telemetría)' },
   'folded-text': {
     emitter: 'src/scaffold/persistence-entities.js (la columna sombra) · src/scaffold/repositories.js (TextFold al guardar)',
