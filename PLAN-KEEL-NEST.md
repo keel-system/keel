@@ -672,7 +672,15 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     limpio: la pasada 2 encontró que `getMyCard` no declaraba cómo encuentra la ficha (solo lo decía una
     regla de `saveMyCard`; cerrado en el diseño) y el 403 de un usuario sin roles (aceptado), y la
     pasada 3, completa, salió limpia.
-  - **Pendiente**: la corrida, `/keel-generate-nest` sobre `profile-directory` y la misma en keel-spring.
+  - **Corrida (2026-10-07): keel-nest 13/13 a la primera, huella 4** (los dos handlers, el agregado y el
+    README; ningún archivo de seguridad tocado), y la gemela de **keel-spring 14/14** tras un ciclo, también
+    con huella 4 (`docs/corridas/2026-10-07-profile-directory-{nest,spring}.md`). Las dos sin
+    `--accept-unready`: es la primera corrida de cualquier generador que entra por la puerta de `--ready`.
+    La equivalencia cazó un **defecto de keel-spring**: un bearer inválido salía como 401 sin cuerpo
+    (el entry point de `oauth2ResourceServer` pisaba al del contrato), que keel-nest cumplía desde el
+    principio; arreglado y falsado. Pendiente menor: el comentario del scaffolding que llama
+    «convención» al `code` canónico de la clave natural, en los dos generadores (provocó un `designGap`
+    falso en keel-spring).
 
 ### Inc. 9 — Mensajería y outbox
 
