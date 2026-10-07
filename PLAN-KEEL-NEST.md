@@ -856,7 +856,14 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   SNS/SQS (9g), para medir de punta a punta lo construido antes de multiplicarlo por tres brokers: si la
   corrida destapa un defecto de las piezas comunes, se arregla una vez. El desglose inicial (9a–9e) solo
   desglosaba RabbitMQ; Kafka y SNS/SQS siguen siendo parte de este incremento.
-- **9e — preparada (2026-10-07), pendiente de ejecutar**: la fixture `stock-reservation-events` v1.0.0, la
+- **9e — hecho (2026-10-07)**: corridas ejecutadas y registradas en
+  `docs/corridas/2026-10-07-stock-reservation-events-{nest,spring}.md`. keel-nest **18/18** a la primera con
+  huella **9** (todo TODO legítimo; el de más frente a los 8 de keel-spring es `broker-bindings.ts`), sin
+  `harnessPatches` ni archivos de mensajería de build tocados; keel-spring 14/14. Un hueco del generador: los
+  comentarios nombraban un listener por suscripción con la cola compartida (ahora uno por cola,
+  `consumerQueues`). Un hueco del diseño que no reportó nadie (`late-outcome-after-release`): el `gaps.yaml`
+  mandaba al descarte un `StockReserved` tardío que los dos servidores confirman sin efecto; corregido.
+  Preparación: la fixture `stock-reservation-events` v1.0.0, la
   variante de `stock-reservation` sin `http-clients`, `dependencies` ni la reconciliación por reloj (otra
   silueta y otros incrementos), con `security` declarada abierta (`protocol: none`, API interna) en vez de
   ausente. Llevada a **`--ready` 11/11**: escenarios reescritos (fuera los de clúster y reconciliación,

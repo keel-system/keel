@@ -55,9 +55,11 @@ findings:
       rechazó): la transición awaitingStock → confirmed ya no aplica.
     severity: risk
     state: accepted
-    reason: "Aceptado: la transición se rechaza con el 409 INVALID_STATE_TRANSITION del catálogo, que es un
-      rechazo de negocio y va al descarte de StockReserved sin reintentos. Es una incoherencia del emisor, y
-      el descarte es donde el almacén la ve; la reserva liberada no se resucita."
+    reason: "Aceptado: es la carrera resuelta —otro camino (StockRejected) ya sacó la reserva de la espera—,
+      así que el aviso se confirma SIN efecto y sin ir al descarte, igual que la doble entrega de FL-CMP-001-C;
+      la reserva liberada no se resucita. Corregido tras la corrida del 2026-10-07: este hallazgo decía que
+      iba al descarte, y los dos generadores (keel-nest y keel-spring) lo confirman sin efecto siguiendo la
+      regla de la carrera de sus skills. Ningún escenario lo fija; candidato a uno en la próxima minor."
 
   # --- Clase 2 ---
   - class: 2

@@ -291,3 +291,19 @@ test('rabbitmq.yaml usa las mismas variables que keel-spring y apaga la conexió
   }
   assert.equal(parseYaml(content(nest, 'config/parameters/test/rabbitmq.yaml')).rabbitmq.enabled, false);
 });
+
+// Corrida stock-reservation-events (2026-10-07): el comentario de broker-bindings.ts y el de cada mensaje
+// nombraban un listener POR SUSCRIPCIÓN, y las tres comparten cola: tres consumidores competirían por
+// cada mensaje. El agente acertó a pesar del texto; el texto no puede empujar al error.
+test('los listeners se nombran por COLA: con la cola compartida, uno que enruta por el tipo', () => {
+  const { files, model } = planFixture('stock-reservation-events', { stack: RABBIT });
+  const bindings = content(files, 'src/infrastructure/messaging/broker-bindings.ts');
+  const queue = 'stock-reservation-events.inventory';
+  assert.ok(bindings.includes(`uno para la cola ${queue} (StockReserved, StockCountAdjusted, StockRejected)`), bindings);
+  for (const sub of model.subscriptions) {
+    assert.ok(!bindings.includes(sub.listenerClass), `broker-bindings no nombra ${sub.listenerClass}`);
+    const message = content(files, `subscriptions/${sub.messageRecord.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()}.ts`);
+    assert.ok(!message.includes(sub.listenerClass), `${sub.messageRecord} no nombra ${sub.listenerClass}`);
+    assert.match(message, /el listener de la cola stock-reservation-events\.inventory, que comparte con/);
+  }
+});

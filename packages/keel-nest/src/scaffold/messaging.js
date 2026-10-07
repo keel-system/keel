@@ -587,6 +587,21 @@ ${
   );
 }
 
+/**
+ * Las colas de las que consume el servicio, con las suscripciones que comparten cada una. Con RabbitMQ la
+ * cola sale de la fuente (keel-core/gen/dead-letter.js) y varias suscripciones pueden compartirla; con los
+ * demás brokers, una por suscripción hasta que su tramo lo decida.
+ */
+export function consumerQueues(model) {
+  const queues = new Map();
+  for (const sub of model.subscriptions ?? []) {
+    const queue = model.stack?.broker === 'rabbitmq' ? destinationOf('rabbitmq', model, sub) : sub.name;
+    if (!queues.has(queue)) queues.set(queue, { queue, subscriptions: [] });
+    queues.get(queue).subscriptions.push(sub.name);
+  }
+  return [...queues.values()];
+}
+
 // El contrato de recepción, escrito donde lo va a leer el agente al escribir el listener. Es el de
 // keel-spring (`contractJavadoc`), con los nombres de keel-nest.
 function contractDoc(model, sub) {
@@ -655,15 +670,23 @@ function contractDoc(model, sub) {
   if (sub.deadLetter) {
     lines.push(`Con onFailure.deadLetter: tras agotar los reintentos el broker lo mueve al descarte de su cola. La topología la genera build — NO la declares tú.`);
   }
+  // El listener es el de su COLA, no uno por suscripción: con la cola compartida, dos consumidores
+  // competirían por cada mensaje (lo vio la corrida stock-reservation-events, donde este texto decía
+  // «Lo consume StockReservedListener» y las tres suscripciones comparten cola).
+  const shared = consumerQueues(model).find((entry) => entry.subscriptions.includes(sub.name));
+  const consumer =
+    shared && shared.subscriptions.length > 1
+      ? `el listener de la cola ${shared.queue}, que comparte con ${shared.subscriptions.filter((name) => name !== sub.name).join(', ')} y enruta por el tipo del mensaje`
+      : `el listener de su cola${shared ? ` (${shared.queue})` : ''}`;
   if (sub.trigger) {
     const argument = (a) =>
       a.from === 'envelope' ? `envelope.metadata.${a.source}` : a.from === 'identity' ? 'la identidad resuelta' : a.source ? `payload.${a.source}` : 'TODO (agente)';
     const args = sub.triggerArguments.map((a) => `${a.component} = ${argument(a)}`).join(', ');
     lines.push(
-      `Lo consume ${sub.listenerClass} (listener del broker del stack; lo escribe el agente y lo registra en broker-bindings.ts) despachando ${sub.triggerMessageClass ?? sub.trigger}${args ? `(${args})` : ''} por el UseCaseMediator.`
+      `Lo consume ${consumer} (lo escribe el agente y lo registra en broker-bindings.ts), despachando ${sub.triggerMessageClass ?? sub.trigger}${args ? `(${args})` : ''} por el UseCaseMediator.`
     );
   } else {
-    lines.push(`Lo consume ${sub.listenerClass} (listener del broker del stack; lo escribe el agente y lo registra en broker-bindings.ts).`);
+    lines.push(`Lo consume ${consumer} (lo escribe el agente y lo registra en broker-bindings.ts).`);
   }
   return lines.map((line) => ` * ${line}\n`).join('');
 }
@@ -812,7 +835,8 @@ function bindingsFile(model) {
   const ports = [];
   if (outbox) ports.push('OutboxDispatcher (el envío de cada fila del outbox al broker)');
   if (usesBridge(model) && !outbox) for (const event of model.events) ports.push(`${event.publisherClass} (best-effort)`);
-  const listeners = (model.subscriptions ?? []).map((sub) => sub.listenerClass);
+  const queues = consumerQueues(model);
+  const listeners = queues.map(({ queue, subscriptions }) => `uno para la cola ${queue} (${subscriptions.join(', ')})`);
   return tsModule(
     BROKER_BINDINGS_TS,
     [{ symbol: 'Provider', from: '@nestjs/common', type: true }],
@@ -828,9 +852,10 @@ function bindingsFile(model) {
 export const BROKER_ADAPTERS: Provider[] = [];
 
 /**
- * Los listeners de las suscripciones${listeners.length > 0 ? ` (${listeners.join(', ')})` : ' (este diseño no consume nada)'}: cada clase
- * se registra a sí misma en la conexión al arrancar. Viven en un módulo que importa el de casos de uso,
- * porque despachan por el UseCaseMediator.
+ * Los listeners de las suscripciones, UNO POR COLA y no uno por suscripción${listeners.length > 0 ? `:\n *   · ${listeners.join('\n *   · ')}` : ' (este diseño no consume nada)'}.
+ * Dos consumidores de la misma cola compiten y cada mensaje llega a uno solo: el de una cola compartida
+ * enruta por el tipo del mensaje. Cada clase se registra a sí misma en la conexión al arrancar. Viven en un
+ * módulo que importa el de casos de uso, porque despachan por el UseCaseMediator.
  */
 export const MESSAGE_LISTENERS: Provider[] = [];`
   );
