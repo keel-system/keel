@@ -1105,6 +1105,28 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     (reclamo con marca persistida, purga, notas del handler) y el gate `reconciliation` en `check-idempotency.sh`;
     11d arnés (`stubSequence` y el proveedor de prueba, `ageForReconciliation`) y skill `keel-nest-httpclient`; 11e
     `stock-reservation` a `--ready` y corrida en los dos generadores.
+- **11a — lo neutral, hecho (2026-10-07)**. Dos módulos nuevos en `keel-core/gen`, extraídos de keel-spring sin cambiar
+  un byte de lo que emite (`golden-digest --check`: 44 combinaciones, 10 854 archivos idénticos):
+  - `outbound-resilience.js`: los seis fallos del proveedor por `kind` (`transport`, `server-error`, `unknown-status`,
+    `client-error`, `circuit-open`, `auth-grant`) con lo que decide cada uno —si entra al fallback, si cuenta para el
+    circuito, si es un rechazo—, lo que reintenta el retry desde `retryOn` (nunca el 4xx), `resiliencePolicy(call)` con
+    los defaults que keel-spring aplicaba con `??` sueltos en `config.js`, y `retryWaitMs` como referencia ejecutable
+    de la espera. keel-spring queda con la proyección `kind` → excepción (`src/lib/outbound-failures.js`).
+  - `reconciliation-stores.js`: la tabla `reconciliation_claim` como datos (y el `_id` aplanado del documental), su
+    purga (`RECONCILIATION_PURGE`, ahora con variable de entorno), `reconciliationParameters` —clave, variable y
+    default de los tres números de un barrido—, `reconciledActivations`/`reconciliationClaims`, y la referencia del
+    reclamo (`reconciliationWindow`, `reconciliationClaimReference`: el mismo `<=` que el UPDATE condicional). El
+    descriptor del reclamo del modelo lleva sus `parameters`, y el `@Value` del lote deja de repetir un `50` a mano.
+  - **Medido**: `keel-core/test/{outbound-resilience,reconciliation-stores}.test.js` (los invariantes: el fallback
+    atiende siempre dos o más, todo lo que cuenta el circuito lo atiende el fallback, el 4xx no se reintenta nunca) y
+    `keel-spring/test/outbound-parity.test.js`, que ata el YAML de resilience4j, la entidad JPA, el documento y el
+    YAML y los `@Value` del barrido a los datos neutrales en `stock-reservation` (relacional) y `asset-vault`
+    (documental). Falsado cambiando en keel-core la cota de `activation` y el separador del `_id`: cae cada una su
+    prueba y solo esa.
+  - **Para 11b**: keel-spring no aplica el `timeoutMs` por llamada sino el MAYOR de las llamadas del cliente como
+    timeout de lectura (`client.readTimeoutMs`), con 5 s de conexión fijos. keel-nest puede aplicarlo por llamada
+    (`cockatiel`), pero entonces los dos servidores cortarían en instantes distintos: decidir al abrir 11b si se
+    iguala keel-nest a keel-spring o se corrige keel-spring.
 
 ### Inc. 12 — Persistencia documental (MongoDB)
 

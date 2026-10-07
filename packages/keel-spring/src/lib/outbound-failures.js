@@ -1,154 +1,79 @@
 /**
- * Qué significa «el proveedor no está» en una llamada saliente.
+ * Qué significa «el proveedor no está» en una llamada saliente, en Java.
  *
- * Es UNA pregunta que se contesta en DOS sitios —las sobrecargas del fallback que
- * emite `scaffold/http-clients.js` y el `record-exceptions` del circuito que emite
- * `scaffold/config.js`—, así que la tabla vive aquí y no duplicada en cada emisor.
- * Si divergieran, el circuito se abriría por excepciones que el fallback ya no ve
- * (o al revés), y las dos mitades dirían cosas distintas del mismo suceso.
- *
- * El criterio de la tabla, que es lo que este módulo defiende: al fallback solo
- * llega lo que el proveedor ha hecho —no responder, responder mal, rechazarnos—.
- * Un bug NUESTRO —un NPE, un cast, un cuerpo que no deserializa— NO tiene
- * sobrecarga: resilience4j relanza el original cuando ninguna casa, así que se
- * propaga con su traza en vez de disfrazarse de caída ajena. Ese disfraz es el que
- * mantuvo un defecto de código meses sin diagnosticar (INFORME-CORRIDA-OUTBOX.md,
- * punto 7).
- *
- * Las dos columnas NO son la misma lista, y la asimetría es deliberada: «esto lo
- * atiende la política del diseño» y «esto describe la salud del proveedor» son
- * preguntas distintas. Un 4xx entra al fallback (el proveedor contestó: hay que
- * decidir qué hacer) y no cuenta para el circuito (contestar no es estar caído: un
- * 401 por credencial caducada abriría el circuito culpándole de lo nuestro). El
- * circuito abierto entra al fallback y tampoco cuenta, porque lo lanza el propio
- * circuito y contarlo lo realimentaría consigo mismo.
- *
- * Es el mismo criterio que `retry` ya aplicaba en su `retry-exceptions` /
- * `ignore-exceptions`: aquí solo se unifica y se extiende al circuito y al fallback.
+ * Es UNA pregunta que se contesta en DOS sitios —las sobrecargas del fallback que emite
+ * `scaffold/http-clients.js` y el `record-exceptions` del circuito que emite `scaffold/config.js`—,
+ * más el `retry-exceptions`/`ignore-exceptions` del retry. La TABLA y su criterio (al fallback solo
+ * llega lo que el proveedor ha hecho; un bug nuestro se propaga con su traza; un 4xx entra al
+ * fallback y no cuenta para el circuito) son neutrales y viven en keel-core
+ * (`gen/outbound-resilience.js`), porque el servidor de keel-nest del mismo diseño tiene que decir
+ * lo mismo. Aquí queda solo la proyección de cada fallo a su excepción de Spring.
  */
+
+import { fallbackFailures, neverRetriedFailures, recordedFailures as recordedFailureKinds, retriedFailures } from 'keel-core/gen/outbound-resilience';
 
 /**
- * Fallo del transporte: connect/read timeout, conexión rechazada, socket roto.
- * Es la señal más limpia de «no hay nadie al otro lado».
+ * El nombre Java de cada fallo del proveedor. QUÉ fallos atiende el fallback, cuáles cuenta el
+ * circuito y cuáles reintenta el retry lo decide keel-core (`gen/outbound-resilience.js`), igual
+ * para keel-nest; aquí solo la excepción que lo realiza en Spring.
+ *
+ *   · transport — `ResourceAccessException`: conexión rechazada, timeout de lectura, DNS.
+ *   · client-error — `HttpClientErrorException`: no se propaga como un bug, aunque a menudo lo
+ *     sea, porque un rechazo tiene significado; traducirlo con `.onStatus(...)` es del agente.
+ *   · circuit-open — `CallNotPermittedException`: resilience4j ya la excluye de su ventana.
+ *   · auth-grant — el padre (`OAuth2AuthorizationException`) y no la
+ *     `ClientAuthorizationException` que lanza el `OAuth2ClientHttpRequestInterceptor`: cubre las
+ *     dos y no depende de por cuál de los dos caminos falló la autorización.
  */
-const RESOURCE_ACCESS = {
-  fqn: 'org.springframework.web.client.ResourceAccessException',
-  simple: 'ResourceAccessException',
-  reason: 'Fallo de transporte: conexión rechazada, timeout de lectura, DNS.',
-  recorded: true
+const JAVA_EXCEPTIONS = {
+  transport: 'org.springframework.web.client.ResourceAccessException',
+  'server-error': 'org.springframework.web.client.HttpServerErrorException',
+  'unknown-status': 'org.springframework.web.client.UnknownHttpStatusCodeException',
+  'client-error': 'org.springframework.web.client.HttpClientErrorException',
+  'circuit-open': 'io.github.resilience4j.circuitbreaker.CallNotPermittedException',
+  'auth-grant': 'org.springframework.security.oauth2.core.OAuth2AuthorizationException'
 };
 
-/** 5xx: el proveedor contesta, y lo que contesta es que él está roto. */
-const SERVER_ERROR = {
-  fqn: 'org.springframework.web.client.HttpServerErrorException',
-  simple: 'HttpServerErrorException',
-  reason: 'El proveedor contestó 5xx.',
-  recorded: true
-};
+/** El FQN de la excepción que realiza un fallo neutral. */
+export function exceptionFor(kind) {
+  const fqn = JAVA_EXCEPTIONS[kind];
+  if (!fqn) throw new Error(`outbound-failures: fallo del proveedor sin excepción Java: ${kind}`);
+  return fqn;
+}
 
-/**
- * Status fuera del catálogo estándar. No es un 5xx, pero tampoco es una respuesta
- * que ningún contrato pueda declarar: el proveedor está devolviendo cualquier cosa.
- */
-const UNKNOWN_STATUS = {
-  fqn: 'org.springframework.web.client.UnknownHttpStatusCodeException',
-  simple: 'UnknownHttpStatusCodeException',
-  reason: 'El proveedor contestó un status que no existe en el estándar.',
-  recorded: true
-};
-
-/**
- * 4xx: el proveedor RECHAZA la petición. Entra al fallback —hay que decidir qué
- * hacer y esa decisión es la del diseño— pero NO cuenta para el circuito: contestar
- * no es estar caído, y un 4xx sistemático (una credencial caducada) es nuestro.
- *
- * No se propaga como un bug, aunque a menudo lo sea, porque un rechazo tiene
- * significado: un 404 es «no existe» y un 409 un conflicto suyo. Traducir eso a la
- * excepción de dominio que dicte el diseño es trabajo del agente con `.onStatus(...)`
- * en el adaptador, y adelantarlo aquí sería inventar contrato.
- */
-const CLIENT_ERROR = {
-  fqn: 'org.springframework.web.client.HttpClientErrorException',
-  simple: 'HttpClientErrorException',
-  reason: 'El proveedor RECHAZA la petición (4xx): contestó, no está caído.',
-  // Registra su propia línea antes de delegar: llamarlo «no disponible» a secas sería
-  // el mismo error de diagnóstico, más pequeño, que el que esta tabla corrige.
-  rejection: true,
-  recorded: false
-};
-
-/**
- * Circuito abierto. Va al fallback pero NO a `record-exceptions`: resilience4j ya
- * la excluye de su propia ventana (contarla realimentaría el circuito consigo
- * mismo). Sin esta sobrecarga, abrir el circuito le estampa al llamante una
- * excepción cruda de resilience4j en vez de la política que declaró el diseño.
- */
-const CALL_NOT_PERMITTED = {
-  fqn: 'io.github.resilience4j.circuitbreaker.CallNotPermittedException',
-  simple: 'CallNotPermittedException',
-  reason: 'El circuito está abierto: la llamada ni se intentó.',
-  recorded: false
-};
-
-/**
- * La concesión del token no se pudo obtener (`oauth2-client-credentials`). Es el
- * único fallo de esta tabla que ocurre ANTES de que salga la petición: lo lanza el
- * `OAuth2ClientHttpRequestInterceptor` al intentar autorizar, así que ninguna de
- * las otras sobrecargas —todas del transporte o de la respuesta— llega a verlo.
- * Sin ella, un proveedor de identidad caído sale como 500 sin traducir aunque el
- * resto del fallback funcione, y el `onFailure` que declaró el diseño no se aplica.
- *
- * Se declara el padre (`OAuth2AuthorizationException`) y no la
- * `ClientAuthorizationException` que lanza el interceptor: cubre las dos y no
- * depende de por cuál de los dos caminos falló la autorización.
- *
- * `recorded: false`, por el mismo criterio que el 4xx: quien no contesta es el
- * emisor del token, no el proveedor de negocio. Abrir SU circuito por una caída
- * ajena le acusaría de algo que no ha hecho, y mantendría las llamadas cortadas
- * durante toda la ventana después de que la identidad ya hubiera vuelto.
- *
- * Lo destapó `FL-AUT-004` en la corrida de autenticación saliente: el escenario
- * existía justamente para mirar este camino, y era el único que lo miraba.
- */
-const OAUTH2_AUTHORIZATION = {
-  fqn: 'org.springframework.security.oauth2.core.OAuth2AuthorizationException',
-  simple: 'OAuth2AuthorizationException',
-  reason: 'No se pudo obtener el token: el proveedor de identidad no responde o nos rechaza.',
-  recorded: false
-};
-
-/**
- * Excepciones que el fallback de una llamada debe atender, en el orden en que se
- * emiten las sobrecargas.
- *
- * `circuitBreaker` gobierna si entra `CallNotPermittedException`: sin circuito no
- * puede lanzarse, y declararla dejaría un import de resilience4j sin motivo. Igual
- * `oauth2` con `OAuth2AuthorizationException`: sin esa auth el tipo ni está en el
- * classpath (el starter solo se añade cuando algún cliente la declara).
- *
- * SIEMPRE devuelve dos o más. No es casual y no debe «optimizarse» a una:
- * resilience4j comprueba el tipo del último parámetro solo cuando hay VARIOS
- * métodos de fallback; con uno solo lo invoca sea cual sea la excepción, que es
- * exactamente el embudo que esta tabla existe para cerrar.
- */
-export function providerFailures({ circuitBreaker = false, oauth2 = false } = {}) {
-  const failures = [RESOURCE_ACCESS, SERVER_ERROR, UNKNOWN_STATUS, CLIENT_ERROR];
-  if (oauth2) failures.push(OAUTH2_AUTHORIZATION);
-  return circuitBreaker ? [CALL_NOT_PERMITTED, ...failures] : failures;
+function project(failure) {
+  const fqn = exceptionFor(failure.kind);
+  return { ...failure, fqn, simple: fqn.slice(fqn.lastIndexOf('.') + 1) };
 }
 
 /**
- * FQN que llenan la ventana del circuito (`resilience4j.circuitbreaker.instances.
- * <x>.record-exceptions`).
+ * Excepciones que el fallback de una llamada debe atender, en el orden en que se emiten las
+ * sobrecargas. `circuitBreaker` gobierna si entra `CallNotPermittedException` (sin circuito
+ * declararla dejaría un import de resilience4j sin motivo) y `oauth2` si entra
+ * `OAuth2AuthorizationException` (sin esa auth el tipo ni está en el classpath).
  *
- * Es una whitelist a propósito: la pregunta es «qué cuenta como fallo del
- * proveedor», y esa lista es cerrada, mientras que la de los bugs posibles no lo
- * es. La contrapartida de `record-exceptions` es que lo NO listado cuenta como
- * éxito —un NPE recurrente no abre el circuito—, y es aceptable justo porque ese
- * NPE ya no se lo traga nadie: sin sobrecarga en el fallback, propaga y se ve.
+ * SIEMPRE devuelve dos o más. No es casual y no debe «optimizarse» a una: resilience4j comprueba
+ * el tipo del último parámetro solo cuando hay VARIOS métodos de fallback; con uno solo lo invoca
+ * sea cual sea la excepción, que es exactamente el embudo que esta tabla existe para cerrar.
+ */
+export function providerFailures(options = {}) {
+  return fallbackFailures(options).map(project);
+}
+
+/**
+ * FQN que llenan la ventana del circuito (`resilience4j.circuitbreaker.instances.<x>.record-exceptions`).
+ * Es una whitelist a propósito; la contrapartida es que lo NO listado cuenta como éxito.
  */
 export function recordedFailures() {
-  return providerFailures({ circuitBreaker: true })
-    .filter((failure) => failure.recorded)
-    .map((failure) => failure.fqn);
+  return recordedFailureKinds().map((failure) => exceptionFor(failure.kind));
+}
+
+/** FQN que reintenta el retry de una llamada (`retry-exceptions`), desde su `retryOn`. */
+export function retriedExceptions(retryOn) {
+  return retriedFailures(retryOn).map((failure) => exceptionFor(failure.kind));
+}
+
+/** FQN que el retry nunca reintenta (`ignore-exceptions`): el 4xx. */
+export function ignoredExceptions() {
+  return neverRetriedFailures().map((failure) => exceptionFor(failure.kind));
 }

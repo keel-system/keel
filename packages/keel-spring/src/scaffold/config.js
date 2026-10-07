@@ -11,7 +11,9 @@ import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
 import { physicalBucketName } from 'keel-core/gen';
 import { kebabCase, screamingSnake } from '../lib/naming.js';
 import { subscriptionDestination, subscriptionGroupId } from 'keel-core/gen';
-import { recordedFailures } from '../lib/outbound-failures.js';
+import { exceptionFor, ignoredExceptions } from '../lib/outbound-failures.js';
+import { resiliencePolicy } from 'keel-core/gen/outbound-resilience';
+import { reconciledActivations, reconciliationParameters } from 'keel-core/gen/reconciliation-stores';
 import { usesOutbox } from './outbox.js';
 import { rabbitListenerRetry } from './dead-letter-config.js';
 import { usesIdempotency } from './idempotency.js';
@@ -24,7 +26,6 @@ import { usesCorrelation } from './correlation.js';
 import { instrumentationFor, usesTelemetry } from './telemetry.js';
 import { METRICS_TRANSPORT, OBSERVATIONS } from '../lib/telemetry-probes.js';
 import { sweepClaims, sweepConfig } from 'keel-core/gen';
-import { reconciliationClaimTimeoutMs, RECONCILIATION_BATCH_SIZE } from '../lib/model.js';
 import { collectionBatchSize } from './persistence-entities.js';
 
 const PROFILES = ['local', 'develop', 'production'];
@@ -1556,54 +1557,52 @@ function httpClientsYaml(model, profile) {
   if (retryCalls.length === 0 && cbCalls.length === 0) return lines.join('\n') + '\n';
 
   lines.push('resilience4j:');
+  // Los números y QUÉ reintenta o cuenta cada mecanismo los decide keel-core (`resiliencePolicy`, la
+  // misma política que aplica el servidor de keel-nest del mismo diseño); aquí solo su YAML.
   if (retryCalls.length > 0) {
     lines.push('  retry:', '    instances:');
     for (const call of retryCalls) {
-      const retry = call.retry;
+      const { retry } = resiliencePolicy(call);
       lines.push(
         `      ${call.instanceName}:`,
         `        max-attempts: ${retry.maxAttempts}`,
-        `        wait-duration: ${retry.initialDelayMs ?? 500}ms`
+        `        wait-duration: ${retry.initialDelayMs}ms`
       );
-      if ((retry.backoff ?? 'exponential') === 'exponential') {
-        lines.push('        enable-exponential-backoff: true', '        exponential-backoff-multiplier: 2');
+      if (retry.multiplier) {
+        lines.push('        enable-exponential-backoff: true', `        exponential-backoff-multiplier: ${retry.multiplier}`);
         // Techo de la espera declarado por el diseño: sin él el backoff exponencial
         // crece sin cota y el último reintento puede caer muy lejos del timeout.
         if (retry.maxDelayMs != null) {
           lines.push(`        exponential-max-wait-duration: ${retry.maxDelayMs}ms`);
         }
       }
-      const retryOn = retry.retryOn ?? ['timeout', '5xx', 'connection'];
-      const exceptions = new Set();
-      if (retryOn.includes('5xx')) exceptions.add('org.springframework.web.client.HttpServerErrorException');
-      if (retryOn.includes('timeout') || retryOn.includes('connection')) {
-        exceptions.add('org.springframework.web.client.ResourceAccessException');
-      }
-      if (exceptions.size > 0) {
+      const exceptions = retry.retries.map(exceptionFor);
+      if (exceptions.length > 0) {
         lines.push('        retry-exceptions:');
         for (const ex of exceptions) lines.push(`          - ${ex}`);
       }
       // Nunca reintentar 4xx (regla del DSL http-clients).
-      lines.push('        ignore-exceptions:', '          - org.springframework.web.client.HttpClientErrorException');
+      lines.push('        ignore-exceptions:');
+      for (const ex of ignoredExceptions()) lines.push(`          - ${ex}`);
     }
   }
   if (cbCalls.length > 0) {
     lines.push('  circuitbreaker:', '    instances:');
     for (const call of cbCalls) {
-      const cb = call.circuitBreaker;
+      const { circuitBreaker: cb } = resiliencePolicy(call);
       lines.push(
         `      ${call.instanceName}:`,
-        `        failure-rate-threshold: ${cb.failureRateThreshold ?? 50}`,
-        `        sliding-window-size: ${cb.slidingWindowSize ?? 20}`,
-        `        wait-duration-in-open-state: ${cb.waitDurationMs ?? 30000}ms`
+        `        failure-rate-threshold: ${cb.failureRateThreshold}`,
+        `        sliding-window-size: ${cb.slidingWindowSize}`,
+        `        wait-duration-in-open-state: ${cb.waitDurationMs}ms`
       );
       // Qué llena la ventana. Sin esta lista el default de resilience4j cuenta TODA
       // excepción, así que un 4xx —que el retry de arriba sí excluye— o un bug del
       // adaptador abrían el circuito y dejaban al proveedor acusado de una caída que
       // no era suya. Misma tabla que las sobrecargas del fallback del adaptador
-      // (src/lib/outbound-failures.js): son la misma pregunta y no pueden divergir.
+      // (keel-core/gen/outbound-resilience.js): son la misma pregunta y no pueden divergir.
       lines.push('        record-exceptions:');
-      for (const fqn of recordedFailures()) lines.push(`          - ${fqn}`);
+      for (const fqn of cb.records.map(exceptionFor)) lines.push(`          - ${fqn}`);
     }
   }
   return lines.join('\n') + '\n';
@@ -1817,33 +1816,22 @@ function testProfileFiles(model) {
 // declarase mecánica en vez de decisiones.
 function reconciliationYaml(model, profile) {
   const lines = ['reconciliation:'];
-  for (const { dependency, activation } of reconciledActivations(model)) {
-    const key = kebabCase(activation.name);
-    const sweeper = (model.services ?? []).flatMap((service) => service.operations).find((op) => op.name === activation.reconciledBy);
+  // Las claves, las variables y los defaults los decide keel-core (`reconciliationParameters`): el
+  // adaptador del reclamo pone los mismos en sus @Value, y el servidor de keel-nest lee los mismos.
+  for (const { dependency, activation, sweeper } of reconciledActivations(model)) {
+    const parameters = reconciliationParameters(activation, sweeper);
     lines.push(
-      `  ${key}:`,
+      `  ${kebabCase(activation.name)}:`,
       `    # Encargos a ${dependency} sin desenlace pasado este tiempo: candidatos del barrido.`,
       '    # Lo declara el DISEÑO; aquí solo se parametriza para poder moverlo por entorno.',
-      `    unanswered-after-seconds: ${envWithDefault(
-        profile,
-        `RECONCILIATION_${screamingSnake(activation.name)}_UNANSWERED_AFTER_SECONDS`,
-        activation.unansweredAfterSeconds ?? 3600
-      )}`,
+      `    unanswered-after-seconds: ${envWithDefault(profile, parameters.unansweredAfterSeconds.env, parameters.unansweredAfterSeconds.default)}`,
       '    # Caducidad del reclamo: una réplica que muere con el lote en vuelo retiene sus',
       '    # candidatos hasta que pasa esto. Del generador, no del diseño: cubre el lote entero',
       '    # (lote × timeout de la llamada con sus reintentos) y al menos dos ticks del cron.',
-      `    claim-timeout-ms: ${envWithDefault(
-        profile,
-        `RECONCILIATION_${screamingSnake(activation.name)}_CLAIM_TIMEOUT_MS`,
-        reconciliationClaimTimeoutMs(activation, sweeper)
-      )}`,
+      `    claim-timeout-ms: ${envWithDefault(profile, parameters.claimTimeoutMs.env, parameters.claimTimeoutMs.default)}`,
       '    # Cota del lote por pasada: sin ella, una tanda con 50.000 atascados son 50.000',
       '    # llamadas al proveedor de una vez. Del generador, no del diseño.',
-      `    batch-size: ${envWithDefault(
-        profile,
-        `RECONCILIATION_${screamingSnake(activation.name)}_BATCH_SIZE`,
-        RECONCILIATION_BATCH_SIZE
-      )}`
+      `    batch-size: ${envWithDefault(profile, parameters.batchSize.env, parameters.batchSize.default)}`
     );
   }
   return lines.join('\n') + '\n';
@@ -1903,13 +1891,3 @@ function sweepYaml(model, profile) {
   return lines.join('\n') + '\n';
 }
 
-/** Activaciones con barrido declarado, que son las que tienen parámetros que emitir. */
-function reconciledActivations(model) {
-  const found = [];
-  for (const dependency of model.dependencies ?? []) {
-    for (const activation of dependency.activations ?? []) {
-      if (activation.reconciledBy) found.push({ dependency: dependency.id, activation });
-    }
-  }
-  return found;
-}

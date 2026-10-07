@@ -25,18 +25,13 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
 import { claimSelectionSnippet, claimTransaction } from '../lib/claim-sql.js';
+import { reconciliationClaims, RECONCILIATION_PURGE } from 'keel-core/gen/reconciliation-stores';
 import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
 
 const CLAIM_PKG = 'infrastructure.persistence.reconciliation';
 
-/** Todos los reclamos de reconciliación que build pudo generar en este diseño. */
-export function reconciliationClaims(model) {
-  return (model.services ?? [])
-    .flatMap((service) => service.operations ?? [])
-    .flatMap((operation) => operation.reconciles ?? [])
-    .map((reconcile) => reconcile.claim)
-    .filter(Boolean);
-}
+/** Todos los reclamos de reconciliación que build pudo generar en este diseño (los decide keel-core). */
+export { reconciliationClaims };
 
 /** Los que apuntan a esta entidad, que son los que le añaden métodos a su repositorio. */
 export function claimsFor(model, entityName) {
@@ -62,15 +57,17 @@ export function adapterCollaborator(model, entity) {
  * en cuanto faltase el fichero.
  */
 export function adapterValueFields(model, entity) {
-  return claimsFor(model, entity.name).flatMap((claim) => [
+  // Clave y default de cada uno: los de keel-core (`reconciliationParameters`), los mismos que config.js.
+  const value = ({ key, default: fallback }) => `@Value("\${${key}:${fallback}}")`;
+  return claimsFor(model, entity.name).flatMap(({ parameters, ...claim }) => [
     `    /** Umbral de silencio del proveedor: lo declara el diseño (${claim.dependency}.${claim.activation}). */
-    @Value("\${reconciliation.${claim.configKey}.unanswered-after-seconds:${claim.unansweredAfterSeconds}}")
+    ${value(parameters.unansweredAfterSeconds)}
     private long ${claim.activation}UnansweredAfterSeconds;`,
     `    /** Caducidad del reclamo: lo que retiene un candidato la réplica que muera con él en vuelo. */
-    @Value("\${reconciliation.${claim.configKey}.claim-timeout-ms:${claim.claimTimeoutMs}}")
+    ${value(parameters.claimTimeoutMs)}
     private long ${claim.activation}ClaimTimeoutMs;`,
     `    /** Cota del lote: sin ella, una tanda con 50.000 atascados son 50.000 llamadas al proveedor. */
-    @Value("\${reconciliation.${claim.configKey}.batch-size:50}")
+    ${value(parameters.batchSize)}
     private int ${claim.activation}BatchSize;
 `
   ]);
@@ -553,7 +550,7 @@ public class ReconciliationClaimPurge {
 
     private final ReconciliationClaimJpaRepository repository;
 
-    @Value("\${reconciliation.purge.retention-days:7}")
+    @Value("\${${RECONCILIATION_PURGE.retentionDays.key}:${RECONCILIATION_PURGE.retentionDays.default}}")
     private int retentionDays;
 
 ${purgeSettings('reconciliation.purge')}
@@ -562,7 +559,7 @@ ${purgeSettings('reconciliation.purge')}
         this.repository = repository;
     }
 
-    @Scheduled(cron = "\${reconciliation.purge.cron:0 45 4 * * *}")
+    @Scheduled(cron = "\${${RECONCILIATION_PURGE.cron.key}:${RECONCILIATION_PURGE.cron.default}}")
     public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
         long deleted = ${purgeCall({ what: 'reconciliation_claim', repository: 'repository', deleteMethod: 'deleteClaimedBefore' })};
@@ -768,14 +765,14 @@ public class ReconciliationClaimPurge {
 
     private final ReconciliationClaimMongoRepository repository;
 
-    @Value("\${reconciliation.purge.retention-days:7}")
+    @Value("\${${RECONCILIATION_PURGE.retentionDays.key}:${RECONCILIATION_PURGE.retentionDays.default}}")
     private int retentionDays;
 
     ReconciliationClaimPurge(ReconciliationClaimMongoRepository repository) {
         this.repository = repository;
     }
 
-    @Scheduled(cron = "\${reconciliation.purge.cron:0 45 4 * * *}")
+    @Scheduled(cron = "\${${RECONCILIATION_PURGE.cron.key}:${RECONCILIATION_PURGE.cron.default}}")
     public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
         long deleted = repository.deleteByClaimedAtBefore(cutoff);

@@ -34,6 +34,30 @@ export {
 } from './dead-letter.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export {
+  PROVIDER_FAILURES,
+  fallbackFailures,
+  recordedFailures,
+  retriedFailures,
+  neverRetriedFailures,
+  DEFAULT_RETRY_ON,
+  RESILIENCE_DEFAULTS,
+  resiliencePolicy,
+  retryWaitMs
+} from './outbound-resilience.js';
+export {
+  RECONCILIATION_CLAIM,
+  RECONCILIATION_PURGE,
+  reconciliationClaimDocumentId,
+  DEFAULT_UNANSWERED_AFTER_SECONDS,
+  RECONCILIATION_BATCH_SIZE,
+  reconciliationClaimTimeoutMs,
+  reconciliationParameters,
+  reconciledActivations,
+  reconciliationClaims,
+  reconciliationWindow,
+  reconciliationClaimReference
+} from './reconciliation-stores.js';
+export {
   scheduledOperations,
   hasScheduledOperations,
   scheduleSeconds,

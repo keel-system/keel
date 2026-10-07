@@ -22,7 +22,12 @@ import {
 import { resolveType, isTextual } from './types.js';
 import { FORMAT_TEXT_BASES } from './constraints.js';
 import { DATABASES, caseSensitiveCollationFor } from './infra-catalog.js';
-import { cronPeriodSeconds } from './cron-period.js';
+import {
+  DEFAULT_UNANSWERED_AFTER_SECONDS,
+  RECONCILIATION_BATCH_SIZE,
+  reconciliationClaimTimeoutMs,
+  reconciliationParameters
+} from './reconciliation-stores.js';
 import { assertProjection } from './projection.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
@@ -2308,33 +2313,21 @@ function reconciliationClaim({ depId, activation, sweeper, waitingByEntity, enti
     // @Value del adaptador: el valor vive en parameters/<perfil>/reconciliation.yaml, y
     // el default tiene que ser el mismo número o el diseño diría una cosa y el binario
     // otra en cuanto falte el fichero.
-    unansweredAfterSeconds: activation.unansweredAfterSeconds ?? 3600,
+    unansweredAfterSeconds: activation.unansweredAfterSeconds ?? DEFAULT_UNANSWERED_AFTER_SECONDS,
     suffix,
     method: `claimFor${suffix}`,
     // La rama de `parameters/<perfil>/reconciliation.yaml` que config.js ya emite para
     // esta activación: umbral del diseño, caducidad del reclamo y cota del lote.
     configKey: kebabCase(activation.name),
-    claimTimeoutMs: reconciliationClaimTimeoutMs(activation, sweeper)
+    claimTimeoutMs: reconciliationClaimTimeoutMs(activation, sweeper),
+    // Los tres con su clave, su variable y su default: lo que el adaptador de cada generador lee.
+    parameters: reconciliationParameters(activation, sweeper)
   };
 }
 
-// Lote por pasada del barrido de reconciliación: el mismo default que emite config.js.
-export const RECONCILIATION_BATCH_SIZE = 50;
-
-/**
- * Cuánto retiene un candidato la réplica que lo reclamó. Tiene que cubrir la pasada ENTERA
- * —el lote por lo que tarda cada llamada con sus reintentos— o una réplica viva ve caducar su
- * propio reclamo a mitad de lote y otra repite la llamada; y al menos dos ticks del cron, para
- * que el siguiente no lo recoja mientras la primera sigue. Era un 60000 fijo, igual a la
- * cadencia de un barrido por minuto (asset-vault, R8). Una sola fuente para el YAML y el @Value.
- */
-export function reconciliationClaimTimeoutMs(activation, sweeper) {
-  const call = activation?.http?.callRef;
-  const attempts = call?.retry?.maxAttempts ?? 1;
-  const perCallMs = (call?.timeoutMs ?? 5000) * attempts;
-  const cadenceMs = (cronPeriodSeconds(sweeper?.schedule?.cron) ?? 60) * 1000;
-  return Math.max(2 * cadenceMs, RECONCILIATION_BATCH_SIZE * perCallMs + 10000);
-}
+// El lote y la caducidad del reclamo de la reconciliación viven con su tabla (reconciliation-stores.js);
+// se reexportan aquí porque keel-spring los importa del modelo.
+export { RECONCILIATION_BATCH_SIZE, reconciliationClaimTimeoutMs };
 
 function collectDependencies(layers, entities, httpClients, subscriptions, errors, events, services, warnings) {
   const declared = layers.dependencies?.dependencies;
