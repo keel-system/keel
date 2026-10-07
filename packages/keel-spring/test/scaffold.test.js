@@ -2575,10 +2575,13 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
       'max-ms: ${OUTBOX_RELAY_BACKOFF_MAX_MS:60000}'
     )
   );
-  // Y NO la caducidad del reclamo: aquí el lote se reclama con un lock de fila, que la
-  // conexión suelta al caer la réplica. Emitir el parámetro sería ofrecer una palanca
-  // que no está conectada a nada.
-  assert.ok(!messagingYaml.includes('claim-timeout-ms'));
+  // Y TAMBIÉN la caducidad del reclamo. Esto afirmó lo contrario mientras el relay
+  // relacional sostenía el lock de fila durante el despacho; desde que publica fuera de
+  // la transacción, el reclamo es un LEASE sobre next_attempt_at y OutboxRelay lee
+  // `claim-timeout-ms` para fijarlo. Sin la línea, la palanca existía en el código pero
+  // ninguna variable de entorno la movía (lo destapó el incremento 9a de keel-nest).
+  assert.ok(messagingYaml.includes('claim-timeout-ms: 60000'));
+  assert.match(relay, /@Value\("\$\{outbox\.relay\.claim-timeout-ms:60000\}"\)/);
 
   // La palanca que hace observable el outbox en caja negra. Sin ella el único
   // escenario posible —«el evento acaba llegando»— lo pasa igual un servidor que

@@ -15,6 +15,7 @@ import { recordedFailures } from '../lib/outbound-failures.js';
 import { usesOutbox } from './outbox.js';
 import { rabbitListenerRetry } from './dead-letter-config.js';
 import { usesIdempotency } from './idempotency.js';
+import { OUTBOX_PURGE, OUTBOX_RELAY, PROCESSED_EVENT_PURGE, parameterValue } from 'keel-core/gen/messaging-stores';
 import { usesHttpIdempotency } from './http-idempotency.js';
 import { usesCorrelation } from './correlation.js';
 import { instrumentationFor, usesTelemetry } from './telemetry.js';
@@ -72,6 +73,18 @@ function envWithDefault(profile, varName, localValue) {
 // se entrecomilla el escalar entero y el default va desnudo.
 function cronWithDefault(profile, varName, cron) {
   return profile === 'local' ? `"${cron}"` : `"\${${varName}:${cron}}"`;
+}
+
+// La línea YAML de un parámetro del catálogo neutral (keel-core/gen/messaging-stores.js): la hoja
+// de su clave con el gradiente de su variable y el valor de ESTE perfil. La sangría sale de la
+// profundidad de la clave, así que la línea cae bajo su padre sin escribirla a mano.
+function parameterLine(profile, parameter) {
+  const segments = parameter.key.split('.');
+  const value = parameterValue(parameter, profile);
+  const rendered = parameter.cron
+    ? cronWithDefault(profile, parameter.env, value)
+    : envWithDefault(profile, parameter.env, value);
+  return `${'  '.repeat(segments.length - 1)}${segments.at(-1)}: ${rendered}`;
 }
 
 // Variante para valores que NO tienen un default razonable fuera de local (el
@@ -1005,17 +1018,19 @@ function messagingYaml(model, profile) {
       '  purge:',
       '    # Borrado del registro de idempotencia; la retención solo tiene que',
       '    # cubrir la ventana en la que el broker puede reentregar un mensaje.',
-      `    cron: ${cronWithDefault(profile, 'PROCESSED_EVENT_PURGE_CRON', '0 0 4 * * *')}`,
-      `    retention-days: ${envWithDefault(profile, 'PROCESSED_EVENT_PURGE_RETENTION_DAYS', 14)}`
+      parameterLine(profile, PROCESSED_EVENT_PURGE.cron),
+      parameterLine(profile, PROCESSED_EVENT_PURGE.retentionDays)
     );
   }
   if (usesOutbox(model)) {
+    // Claves, variables y defaults salen de keel-core/gen/messaging-stores.js: son los del
+    // servidor de keel-nest del mismo diseño, y los que OutboxRelay pone en sus @Value.
     lines.push(
       'outbox:',
       '  relay:',
       '    # Cada cuánto el relay busca filas pendientes y las entrega al broker.',
-      `    fixed-delay-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_DELAY_MS', 1000)}`,
-      `    batch-size: ${envWithDefault(profile, 'OUTBOX_RELAY_BATCH_SIZE', 100)}`,
+      parameterLine(profile, OUTBOX_RELAY.fixedDelayMs),
+      parameterLine(profile, OUTBOX_RELAY.batchSize),
       '    # Tras agotar los reintentos, la fila queda como dead-letter (no se',
       '    # reintenta más ni se borra); se reporta a ERROR para inspección.',
       // Y en `local` son MÁS, no por tolerancia sino por PRESUPUESTO: ahí el broker
@@ -1028,11 +1043,11 @@ function messagingYaml(model, profile) {
       // LATENCIA de la reentrega tras la recuperación y el producto de ambas es el
       // presupuesto—, así que igualar los topes entre perfiles «para que no difieran»
       // arregla el presupuesto rompiendo la latencia.
-      `    max-attempts: ${envWithDefault(profile, 'OUTBOX_RELAY_MAX_ATTEMPTS', profile === 'local' ? 40 : 10)}`,
+      parameterLine(profile, OUTBOX_RELAY.maxAttempts),
       '    # Backoff exponencial entre reintentos de una misma fila (initial·2^(n-1),',
       '    # con tope max-ms): evita el hot-looping si el broker está caído.',
       '    backoff:',
-      `      initial-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_BACKOFF_INITIAL_MS', 1000)}`,
+      parameterLine(profile, OUTBOX_RELAY.backoffInitialMs),
       // El tope se acorta en `local` —el perfil con el que corre la suite de
       // integración— porque ahí el broker caído no es una avería sino un PASO del
       // escenario de outbox: el flujo lo detiene, comprueba que la API responde igual
@@ -1041,26 +1056,34 @@ function messagingYaml(model, profile) {
       // segundos después: el escenario tendría que esperar más de lo que ninguna
       // suite tolera, o saldría intermitente. En los demás perfiles el broker caído
       // sí es una avería, y ahí el tope largo es exactamente lo que se quiere.
-      `      max-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_BACKOFF_MAX_MS', profile === 'local' ? 2000 : 60000)}`
+      parameterLine(profile, OUTBOX_RELAY.backoffMaxMs)
     );
-    // Solo el modelo documental: ahí el reclamo del lote es una marca en la fila
+    // En los DOS modelos. En el documental el reclamo del lote es una marca en la fila
     // (claimed_at), no un lock, así que una réplica que muere la retendría para
-    // siempre. Esta ventana es lo que la libera — y por debajo de la latencia peor
-    // del broker, dos réplicas entregan la misma fila. En el relacional no existe:
-    // el lock lo suelta la conexión al caer.
-    if (model.persistenceKind === 'document') {
-      lines.push(
-        '    # Caducidad del reclamo de una fila: una réplica que muere con el lote en',
-        '    # vuelo lo retiene hasta que pasa este tiempo. Debe superar con holgura la',
-        '    # latencia peor del broker; por debajo, dos réplicas entregan lo mismo.',
-        `    claim-timeout-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_CLAIM_TIMEOUT_MS', 60000)}`
-      );
-    }
+    // siempre: esta ventana es lo que la libera. En el relacional es el LEASE sobre
+    // next_attempt_at que retira la fila reclamada mientras su publicación va FUERA de
+    // la transacción del reclamo (OutboxRelayStore). Hasta el 2026-10-07 solo se
+    // emitía en el documental, con un comentario de cuando el relay relacional
+    // sostenía el lock durante el despacho: OutboxRelay lo leía igual, pero con el
+    // default de su @Value y sin variable de entorno que lo moviera. Lo destapó llevar
+    // los parámetros del relay a keel-core para keel-nest. Por debajo de la latencia
+    // peor del broker, en los dos, dos réplicas entregan la misma fila.
     lines.push(
+      ...(model.persistenceKind === 'document'
+        ? [
+            '    # Caducidad del reclamo de una fila: una réplica que muere con el lote en',
+            '    # vuelo lo retiene hasta que pasa este tiempo. Debe superar con holgura la'
+          ]
+        : [
+            '    # Lease de una fila reclamada mientras su publicación está en vuelo: si la',
+            '    # réplica muere, caduca y otra pasada la recoge. Debe superar con holgura la'
+          ]),
+      '    # latencia peor del broker; por debajo, dos réplicas entregan lo mismo.',
+      parameterLine(profile, OUTBOX_RELAY.claimTimeoutMs),
       '  purge:',
       '    # Borrado diario de lo ya publicado; la tabla no es un histórico.',
-      `    cron: ${cronWithDefault(profile, 'OUTBOX_PURGE_CRON', '0 0 3 * * *')}`,
-      `    retention-days: ${envWithDefault(profile, 'OUTBOX_PURGE_RETENTION_DAYS', 7)}`
+      parameterLine(profile, OUTBOX_PURGE.cron),
+      parameterLine(profile, OUTBOX_PURGE.retentionDays)
     );
   }
   return lines.join('\n') + '\n';

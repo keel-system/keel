@@ -9,16 +9,14 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
+import { PROCESSED_EVENT_PURGE, usesMessageDeduplication } from 'keel-core/gen/messaging-stores';
 
 const IDEMPOTENCY_PKG = 'infrastructure.messaging.idempotency';
 
 // Sin suscripciones no hay consumo que deduplicar; sin persistencia no hay
-// dónde registrar lo ya procesado de forma atómica.
-export function usesIdempotency(model) {
-  return Boolean(
-    model.layersPresent.messaging && model.layersPresent.persistence && (model.subscriptions?.length ?? 0) > 0
-  );
-}
+// dónde registrar lo ya procesado de forma atómica. La pregunta es neutral (la
+// misma para keel-nest), igual que la tabla processed_event y su purga.
+export const usesIdempotency = usesMessageDeduplication;
 
 /** Nombres del espejo persistido del registro de procesados, por modelo. */
 export function processedEventNames(model) {
@@ -507,7 +505,7 @@ public class IdempotencyGuard {
 
     private final ${repository} ${field};
 
-    @Value("\${processed-event.purge.retention-days:14}")
+    @Value("\${${PROCESSED_EVENT_PURGE.retentionDays.key}:${PROCESSED_EVENT_PURGE.retentionDays.default}}")
     private int retentionDays;
 ${relational ? `
 ${purgeSettings('processed-event.purge')}
@@ -582,7 +580,7 @@ ${purgeSettings('processed-event.purge')}
         return record(handlerId, eventId);
     }
 
-    @Scheduled(cron = "\${processed-event.purge.cron:0 0 4 * * *}")${relational ? '' : '\n    @Transactional'}
+    @Scheduled(cron = "\${${PROCESSED_EVENT_PURGE.cron.key}:${PROCESSED_EVENT_PURGE.cron.default}}")${relational ? '' : '\n    @Transactional'}
     public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
         ${purgeStatement}

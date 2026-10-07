@@ -735,7 +735,31 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     envoltura, eventos de integración, puente, outbox con relay, `processed_event` y guard, mensajes de
     suscripción y la topología RabbitMQ; 9c arnés (`flow.ts`: entregar a una suscripción, leer lo
     publicado y la DLQ con `broker-probes`) y `broker-check`; 9d skill `keel-nest-rabbitmq` y
-    convenciones; 9e corrida de `inspection-reports` con RabbitMQ en los dos generadores.
+    convenciones; 9e corrida con RabbitMQ en los dos generadores.
+- **9a — hecho (2026-10-07)**: `keel-core/gen/messaging-stores.js`, los dos almacenes y sus parámetros como
+  DATOS. `usesOutbox` y `usesMessageDeduplication` (keel-spring los reexporta como `usesOutbox` y
+  `usesIdempotency`); `OUTBOX_EVENT` y `PROCESSED_EVENT` (columnas con tipo del DSL, cota, nulabilidad,
+  clave e índice; las de texto sin cota en JPA llevan el 255 que Hibernate les pone, y `claimed_at` va
+  marcada `onlyIn: 'document'`); `OUTBOX_RELAY`, `OUTBOX_PURGE` y `PROCESSED_EVENT_PURGE` (clave, variable
+  y default, con el valor propio de `local` donde difiere) con `parameterValue(param, perfil)`; y la
+  referencia ejecutable de `outboxBackoffMs` y `outboxDeadLettered`, contra la que se probará lo que emita
+  keel-nest. keel-spring toma de ahí el YAML de `messaging.yaml` (`parameterLine`) y el respaldo de sus
+  `@Value`; las entidades JPA siguen escritas a mano y `test/messaging-stores-parity.test.js` las compara
+  con los datos en el par del MVP (las dos ramas), más el YAML de cada perfil y los `@Value` (falsado: una
+  cota cambiada en los datos tumba la tabla; quitar la línea del YAML tumba el perfil).
+  - **Defecto de keel-spring destapado**: en el modelo RELACIONAL `outbox.relay.claim-timeout-ms` no salía
+    en el YAML —con un comentario de cuando el relay sostenía el lock durante el despacho—, pero desde que
+    publica fuera de la transacción el reclamo es un lease sobre `next_attempt_at` y `OutboxRelay` lo lee:
+    la palanca existía y ninguna variable la movía. Ahora sale en los dos modelos; el test de
+    `scaffold.test.js` que fijaba lo contrario está invertido. La línea base cambia SOLO en los
+    `messaging.yaml` relacionales y en el README (que lista `OUTBOX_RELAY_CLAIM_TIMEOUT_MS`): ningún
+    archivo Java, ninguna fixture documental.
+  - **Fixture de la corrida, por decidir antes del 9e**: `inspection-reports` es **documental** y keel-nest
+    no genera Mongo hasta el incremento 12. Las relacionales con outbox arrastran capas fuera de la
+    frontera: `notification-mailer` (mail, inc. 13), `payment-checkout` (payments, 13), `stock-reservation` y
+    `catalog-extended` (http-clients, 11; storage, 13). `metering-digest` es relacional pero best-effort y
+    sin API. Opciones: una fixture nueva relacional (outbox + suscripción con envoltura Keel + API), o una
+    variante de una existente sin las capas ajenas, como hacen los tests con `NEST_READY_DESIGN`.
 
 ### Inc. 10 — Idempotencia, compensación, reconciliación y barridos
 

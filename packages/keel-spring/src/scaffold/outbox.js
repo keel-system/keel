@@ -12,6 +12,12 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { claimSelectionSnippet, claimTransaction, supportsSkipLocked } from '../lib/claim-sql.js';
 import { usesTelemetry, tracedDispatch, messageTracingImport, TRACED_DISPATCH_IMPORTS } from './telemetry.js';
 import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
+import {
+  OUTBOX_LAST_ERROR_LENGTH,
+  OUTBOX_PURGE,
+  OUTBOX_RELAY,
+  usesOutbox
+} from 'keel-core/gen/messaging-stores';
 
 const OUTBOX_PKG = 'infrastructure.messaging.outbox';
 
@@ -34,15 +40,9 @@ export function outboxRelayBeanName() {
 }
 
 // El outbox necesita una transacción de BD que compartir con el cambio del
-// agregado: sin capa persistence no hay nada que hacer atómico.
-export function usesOutbox(model) {
-  return Boolean(
-    model.layersPresent.messaging &&
-      model.layersPresent.persistence &&
-      model.messaging?.reliability === 'outbox' &&
-      model.events.length > 0
-  );
-}
+// agregado: sin capa persistence no hay nada que hacer atómico. La pregunta es
+// neutral (la misma para keel-nest), igual que la tabla y los parámetros del relay.
+export { usesOutbox };
 
 /**
  * Nombres del espejo persistido del outbox, que cambian con el modelo pero no su
@@ -559,23 +559,23 @@ public class OutboxRelay {
     private final OutboxDispatcher dispatcher;
     private final MeterRegistry meterRegistry;
 
-    @Value("\${outbox.relay.batch-size:100}")
+    @Value("\${${OUTBOX_RELAY.batchSize.key}:${OUTBOX_RELAY.batchSize.default}}")
     private int batchSize;
 
-    @Value("\${outbox.relay.max-attempts:10}")
+    @Value("\${${OUTBOX_RELAY.maxAttempts.key}:${OUTBOX_RELAY.maxAttempts.default}}")
     private int maxAttempts;
 
-    @Value("\${outbox.relay.backoff.initial-ms:1000}")
+    @Value("\${${OUTBOX_RELAY.backoffInitialMs.key}:${OUTBOX_RELAY.backoffInitialMs.default}}")
     private long backoffInitialMs;
 
-    @Value("\${outbox.relay.backoff.max-ms:60000}")
+    @Value("\${${OUTBOX_RELAY.backoffMaxMs.key}:${OUTBOX_RELAY.backoffMaxMs.default}}")
     private long backoffMaxMs;
 
     /** Cuánto retiene un reclamo antes de que la fila vuelva a ser elegible. */
-    @Value("\${outbox.relay.claim-timeout-ms:60000}")
+    @Value("\${${OUTBOX_RELAY.claimTimeoutMs.key}:${OUTBOX_RELAY.claimTimeoutMs.default}}")
     private long claimTimeoutMs;
 
-    @Value("\${outbox.purge.retention-days:7}")
+    @Value("\${${OUTBOX_PURGE.retentionDays.key}:${OUTBOX_PURGE.retentionDays.default}}")
     private int retentionDays;
 
     public OutboxRelay(
@@ -610,7 +610,7 @@ public class OutboxRelay {
                 OutboxEventDocument.class);
     }
 
-    @Scheduled(fixedDelayString = "\${outbox.relay.fixed-delay-ms:1000}")
+    @Scheduled(fixedDelayString = "\${${OUTBOX_RELAY.fixedDelayMs.key}:${OUTBOX_RELAY.fixedDelayMs.default}}")
     public void relay() {
         for (OutboxEventDocument row : claimPending()) {
             try {
@@ -692,7 +692,7 @@ public class OutboxRelay {
         return delay;
     }
 
-    @Scheduled(cron = "\${outbox.purge.cron:0 0 3 * * *}")
+    @Scheduled(cron = "\${${OUTBOX_PURGE.cron.key}:${OUTBOX_PURGE.cron.default}}")
     public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
         long deleted = outboxRepository.deletePublishedBefore(cutoff);
@@ -705,7 +705,7 @@ public class OutboxRelay {
         if (message == null) {
             return null;
         }
-        return message.length() <= 1024 ? message : message.substring(0, 1024);
+        return message.length() <= ${OUTBOX_LAST_ERROR_LENGTH} ? message : message.substring(0, ${OUTBOX_LAST_ERROR_LENGTH});
     }
 }`;
 
@@ -884,16 +884,16 @@ public class OutboxRelay {
     private final OutboxDispatcher dispatcher;
     private final MeterRegistry meterRegistry;
 
-    @Value("\${outbox.relay.batch-size:100}")
+    @Value("\${${OUTBOX_RELAY.batchSize.key}:${OUTBOX_RELAY.batchSize.default}}")
     private int batchSize;
 
-    @Value("\${outbox.relay.max-attempts:10}")
+    @Value("\${${OUTBOX_RELAY.maxAttempts.key}:${OUTBOX_RELAY.maxAttempts.default}}")
     private int maxAttempts;
 
-    @Value("\${outbox.relay.backoff.initial-ms:1000}")
+    @Value("\${${OUTBOX_RELAY.backoffInitialMs.key}:${OUTBOX_RELAY.backoffInitialMs.default}}")
     private long backoffInitialMs;
 
-    @Value("\${outbox.relay.backoff.max-ms:60000}")
+    @Value("\${${OUTBOX_RELAY.backoffMaxMs.key}:${OUTBOX_RELAY.backoffMaxMs.default}}")
     private long backoffMaxMs;
 
     /**
@@ -903,10 +903,10 @@ public class OutboxRelay {
      * dos veces (lo absorbe su deduplicación, pero es trabajo de más). Si una réplica muere
      * con la fila en vuelo, el lease caduca y la siguiente pasada la recoge.
      */
-    @Value("\${outbox.relay.claim-timeout-ms:60000}")
+    @Value("\${${OUTBOX_RELAY.claimTimeoutMs.key}:${OUTBOX_RELAY.claimTimeoutMs.default}}")
     private long claimTimeoutMs;
 
-    @Value("\${outbox.purge.retention-days:7}")
+    @Value("\${${OUTBOX_PURGE.retentionDays.key}:${OUTBOX_PURGE.retentionDays.default}}")
     private int retentionDays;
 
 ${purgeSettings('outbox.purge')}
@@ -940,7 +940,7 @@ ${purgeSettings('outbox.purge')}
                 .register(meterRegistry);
     }
 
-    @Scheduled(fixedDelayString = "\${outbox.relay.fixed-delay-ms:1000}")
+    @Scheduled(fixedDelayString = "\${${OUTBOX_RELAY.fixedDelayMs.key}:${OUTBOX_RELAY.fixedDelayMs.default}}")
     public void relay() {
         // (1) Reclamo: transacción corta, solo base de datos.
         List<ClaimedOutboxEvent> claimed = store.claimBatch(maxAttempts, batchSize, claimTimeoutMs);
@@ -974,7 +974,7 @@ ${purgeSettings('outbox.purge')}
      * Por lotes y SIN transacción propia: cada lote confirma en la suya (ver BatchedPurge). Una
      * sola transacción alrededor de todo volvería a ser el DELETE único que esto sustituye.
      */
-    @Scheduled(cron = "\${outbox.purge.cron:0 0 3 * * *}")
+    @Scheduled(cron = "\${${OUTBOX_PURGE.cron.key}:${OUTBOX_PURGE.cron.default}}")
     public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
         long deleted = ${purgeCall({ what: 'Outbox', repository: 'outboxRepository', deleteMethod: 'deletePublishedBefore' })};
@@ -987,7 +987,7 @@ ${purgeSettings('outbox.purge')}
         if (message == null) {
             return null;
         }
-        return message.length() <= 1024 ? message : message.substring(0, 1024);
+        return message.length() <= ${OUTBOX_LAST_ERROR_LENGTH} ? message : message.substring(0, ${OUTBOX_LAST_ERROR_LENGTH});
     }
 }`;
 
