@@ -7,6 +7,8 @@ operations:
       fields:
         callerSubject: { type: string, required: true, description: "Claim sub del token." }
     output: { entity: ContactCard }
+    rules:
+      - "La ficha se busca por subject = callerSubject; si no hay ninguna, CARD_NOT_FOUND."
     errors:
       - { code: CARD_NOT_FOUND, when: El titular todavía no tiene ficha., http: 404 }
 

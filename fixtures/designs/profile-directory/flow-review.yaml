@@ -1,8 +1,9 @@
-# Careo de flujos (flow-walkthrough.md), pasada 1. Lo hizo quien escribió los escenarios al preparar la
-# corrida del incremento 8 de keel-nest (2026-10-07), NO un agente de contexto limpio: recarearlo con
-# keel-flow-review es lo que le daría la independencia que el método pide.
+# Careo de flujos (flow-walkthrough.md), pasada 3, completa (la última del presupuesto). La hizo
+# keel-flow-review con contexto limpio sobre el manifiesto, las capas y validation-scenarios.md, tras
+# cerrarse FL-CRD-002-B con resolution: design (getMyCard declara su regla de búsqueda). Las
+# decisiones (resolution) son del diseñador.
 reviewedAt: 1.0.0
-passes: 1
+passes: 3
 scenariosSha256: d6ce975d041d61e66db2c8ba3fff1877645d0dacf1eaf0e83b9a63d4409fbcb5
 conventionsSha256: 0952b068e22b26ec0dfe7a4dad5a2736e41188d7fdb394dcadad81eea88b599b
 flows:
@@ -25,13 +26,17 @@ findings:
     kind: unreachable-given
     artifact: security.roles
     evidence: >-
-      El When usa «el token de un usuario autenticado sin ningún rol». security declara un solo rol
-      (card-holder) y ninguna identidad sin rol: nada en el diseño garantiza que exista un sujeto
-      autenticado que no lo tenga.
+      Mismo hallazgo que la pasada 1, al que se llega por separado. El When usa «el token de un usuario
+      autenticado sin ningún rol»; security declara un único rol (card-holder) y ninguna identidad
+      autenticada sin rol. validation-scenarios.md (§ superficies, Auth) pide que las identidades que
+      nombran los escenarios sean las que declara el diseño —«se nombran los de security.roles, o no
+      hay token que emitir. Si el escenario necesita una identidad que el diseño no tiene […] lo que
+      falta es declararla»—. CHK-SCEN-UNDECLARED-ROLE no salta porque el escenario no nombra ningún
+      rol, sino su ausencia, así que el hueco queda fuera de la comprobación mecánica. Que el proveedor
+      de prueba siembre un usuario sin roles es una convención del generador que el diseño no fija.
     proposal: >-
-      Aceptarlo apoyándose en el proveedor de prueba (el realm siembra siempre un usuario sin roles, y
-      es lo que hace observable el 403), o declarar en security un rol sin permisos solo para ejercitarlo.
+      Aceptarlo apoyándose en que el realm de prueba de los generadores siembra un usuario sin roles
+      (y citarlo en las Convenciones de determinación, junto a los 401/403), o declarar en security un
+      rol sin permisos solo para ejercitar el 403 y nombrarlo en el escenario.
     resolution: accepted
-    reason: "Aceptado: «autenticado sin el permiso» es la ausencia de un rol, no una identidad de negocio
-      que haya que declarar. El realm de prueba de los dos generadores siembra un usuario sin roles
-      (no-role) precisamente para este 403, y un rol vacío en el diseño sería ruido en el catálogo."
+    reason: "Aceptado: «autenticado sin el permiso» es la ausencia de un rol, no una identidad de negocio. El realm de prueba de los dos generadores siembra un usuario sin roles (no-role) precisamente para este 403, y un rol vacío en el diseño sería ruido en el catálogo."
