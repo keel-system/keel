@@ -44,7 +44,8 @@ export function generate(model) {
     const entity = model.entities.find((e) => e.name === entityName);
     if (entity) files.push(renderMapper(model, entity, [...dtos.values()]));
   }
-  if (files.length > 0) files.push({ path: TODO_TS, content: tsModule(TODO_TS, [], todoBody()) });
+  // El helper solo si algún mapper lo usa: sin uso es código muerto en el proyecto (corrida profile-directory).
+  if (files.some((file) => file.content.includes('support/todo.js'))) files.push({ path: TODO_TS, content: tsModule(TODO_TS, [], todoBody()) });
   return files;
 }
 

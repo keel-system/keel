@@ -1696,7 +1696,7 @@ test('capa security (oidc): SecurityFilterChain con matchers por ruta + JwtAuthC
   assert.ok(config.includes('.requestMatchers(HttpMethod.POST, "/api/v1/products").hasAnyRole("catalog-admin")'));
   assert.ok(config.includes('.requestMatchers(HttpMethod.POST, "/api/v1/products/{id}/retire").hasAnyAuthority("product:write")'));
   assert.ok(config.includes('.anyRequest().authenticated()'));
-  assert.ok(config.includes('.oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthConverter())))'));
+  assert.ok(config.includes('.oauth2ResourceServer(oauth2 -> oauth2.authenticationEntryPoint(securityErrorHandlers).accessDeniedHandler(securityErrorHandlers).jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthConverter())))'));
 
   // JwtAuthConverter consciente del proveedor (keycloak → claim anidado).
   const converter = read(workspace, `${securityDir}/JwtAuthConverter.java`);

@@ -250,6 +250,19 @@ function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true, pe
   return lines.join('\n');
 }
 
+// El resource server JWT de una cadena, con los MISMOS manejadores de error que la cadena entera.
+//
+// oauth2ResourceServer() registra su propio BearerTokenAuthenticationEntryPoint, y es el que atiende un
+// token presente pero que no vale (mal formado, caducado, de otra firma): sin decirle cuál usar, ese
+// 401 sale SIN cuerpo —solo la cabecera WWW-Authenticate— en vez del ErrorResponse con UNAUTHENTICATED.
+// El exceptionHandling() de la cadena solo cubre la petición SIN token. Lo destapó la corrida
+// profile-directory (2026-10-07, FL-CRD-003-C), y no la vio ninguna antes porque ningún escenario
+// mandaba un token roto: todos los 401 eran sin credencial.
+function resourceServer(withConverter) {
+  const jwt = withConverter ? 'jwt -> jwt.jwtAuthenticationConverter(jwtAuthConverter())' : 'Customizer.withDefaults()';
+  return `.oauth2ResourceServer(oauth2 -> oauth2.authenticationEntryPoint(securityErrorHandlers).accessDeniedHandler(securityErrorHandlers).jwt(${jwt}))`;
+}
+
 // Patrones (sin método) para el securityMatcher de la cadena M2M, deduplicados.
 function securityMatcherPatterns(matchers) {
   return [...new Set(matchers.map((m) => m.path))];
@@ -330,7 +343,7 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
     // issuer-uri: la audiencia ya no es asunto de la autenticación.
     if (sec.usesAuthorities) {
       chain.push(
-        '            .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthConverter())))'
+        `            ${resourceServer(true)}`
       );
       converterBean = `
 
@@ -340,7 +353,7 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
     }`;
     } else {
       imports.add('org.springframework.security.config.Customizer');
-      chain.push('            .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))');
+      chain.push(`            ${resourceServer(false)}`);
     }
     // Sin cadenas separadas y con rutas services, TODAS lo son: la comprobación de
     // audiencia va en la única cadena que hay. Sin ninguna ruta services no se comprueba.
@@ -394,9 +407,7 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
     const patterns = securityMatcherPatterns(serviceMatchers)
       .map((p) => JSON.stringify(p))
       .join(', ');
-    const resourceServer = sec.usesAuthorities
-      ? '.oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthConverter())))'
-      : '.oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))';
+    const serviceResourceServer = resourceServer(sec.usesAuthorities);
     if (!sec.usesAuthorities) imports.add('org.springframework.security.config.Customizer');
     imports.add('org.springframework.security.web.access.intercept.AuthorizationFilter');
     serviceChainBean = `
@@ -414,7 +425,7 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
 ${corsLine}            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 ${exceptionHandling}
 ${authorizeBlock(serviceMatchers, { defaultAuthority: 'authenticated()', permitTechnical: false })}
-            ${resourceServer}
+            ${serviceResourceServer}
             .addFilterBefore(new AudienceAuthorizationFilter(audience), AuthorizationFilter.class);
         return http.build();
     }`;

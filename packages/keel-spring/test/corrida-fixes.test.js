@@ -2280,3 +2280,26 @@ test('con Kafka, el envío en vuelo caduca antes de que el arnés devuelva un ev
   const sqsAbandon = sqs.slice(sqs.indexOf('protected static void abandonOutboxEvent('), sqs.indexOf('protected static void clearAbandonedOutboxEvents('));
   assert.ok(!sqsAbandon.includes('Thread.sleep'));
 });
+
+// Corrida profile-directory (2026-10-07, FL-CRD-003-C): un bearer presente que no vale salía como 401
+// SIN cuerpo. oauth2ResourceServer() trae su propio entry point y pisa al de exceptionHandling(), que
+// solo cubre la petición sin token. Cada cadena tiene que darle los manejadores del contrato.
+test('cada oauth2ResourceServer registra el entry point y el manejador de acceso del contrato (token inválido → ErrorResponse)', () => {
+  let chains = 0;
+  for (const name of fs.readdirSync(fixturesDir)) {
+    const { manifest, layers } = loadService(path.join(fixturesDir, name));
+    const protocol = layers.security?.authentication?.protocol;
+    if (protocol !== 'oidc' && protocol !== 'jwt') continue;
+    for (const auth of ['keycloak', 'cognito']) {
+      const { files } = planService({ manifest, layers, workspace: fixturesDir, stack: { auth } });
+      const config = files.find((file) => file.path.endsWith('/SecurityConfig.java')).content;
+      const servers = config.match(/\.oauth2ResourceServer\(oauth2 -> oauth2[^\n]*/g) ?? [];
+      assert.ok(servers.length > 0, `${name} (${auth}): sin resource server`);
+      for (const server of servers) {
+        assert.match(server, /\.authenticationEntryPoint\(securityErrorHandlers\)\.accessDeniedHandler\(securityErrorHandlers\)\.jwt\(/, `${name} (${auth})`);
+      }
+      chains += servers.length;
+    }
+  }
+  assert.ok(chains >= 10, `solo ${chains} cadenas: el test no mira lo que cree`);
+});
