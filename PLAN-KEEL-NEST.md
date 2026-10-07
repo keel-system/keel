@@ -1083,6 +1083,28 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   circuito), idempotencia saliente, auth saliente por config, `replica` + `onMiss`,
   `onUnavailable: lastKnown` con `maxAgeSeconds`; stub HTTP del arnés (`stubSequence`).
 - **Puerta**: `stub-sequence`, tests de rasgo, corrida con `http-clients`.
+- **Evaluación al abrirlo (2026-10-07, sin código todavía)**. Lo que se suma del incremento 10: la
+  **reconciliación** (`reconciledBy`, tabla `reconciliation_claim`, `reconciliation-claim.js` de keel-spring, 804
+  líneas), la **compensación** (`dependencies.compensations`) y `lastKnown`. Lo de keel-spring a portar:
+  `http-clients.js` (907: puerto `<Cliente>Client` + records `<Llamada>Result` en dominio; adaptador, DTOs wire y mapper
+  ACL en infraestructura; auth saliente por configuración; `OutboundIdempotency`), `dependencies.js` (294: proyector y
+  lector de réplicas), `ref-resolvers.js` (151), `last-known.js` (146) y `lib/outbound-failures.js` (154: las sobrecargas
+  del fallback estrecho, candidato a neutral), más la skill `keel-spring-httpclient`.
+  - **Sujeto**: `stock-reservation` (relacional, RabbitMQ, `http-clients` + `dependencies`): una llamada saliente
+    (`inventory.cancelStock`, DELETE con idempotencia `payload-hash`, retry exponencial, circuit breaker y fallback), un
+    encargo publicado (`reserveStock` por outbox) con su reconciliación por reloj (`reconcileReservations`,
+    `unansweredAfterSeconds` 1800, `awaitingSince`) y una compensación por evento (`StockRejected`). **No está lista**:
+    `--ready` 3/11 (le faltan decisiones de avisos e incoherencias, registro estructural, revisión, huecos, matriz,
+    careo y `DESIGN.md`); llevarla a 11/11 es parte del incremento, como en 9e y 10e.
+  - **Sin sujeto en la frontera**: `needs` con réplica y `onUnavailable: lastKnown` solo los declaran `asset-vault`
+    (documental, incremento 12) y `catalog-extended` (storage, incremento 13). Propuesta: que la frontera los siga
+    rechazando nombrando ese motivo, y se generen cuando haya fixture que los mida.
+  - **Tramos propuestos**: 11a lo neutral (fallos del proveedor, política de resiliencia como datos, la tabla
+    `reconciliation_claim` y sus parámetros); 11b clientes HTTP (puerto, adaptador sobre `fetch` con `cockatiel`,
+    fallback estrecho, idempotencia y auth salientes) con paridad contra keel-spring; 11c reconciliación y compensación
+    (reclamo con marca persistida, purga, notas del handler) y el gate `reconciliation` en `check-idempotency.sh`;
+    11d arnés (`stubSequence` y el proveedor de prueba, `ageForReconciliation`) y skill `keel-nest-httpclient`; 11e
+    `stock-reservation` a `--ready` y corrida en los dos generadores.
 
 ### Inc. 12 — Persistencia documental (MongoDB)
 
