@@ -64,6 +64,8 @@ export const AMQPLIB_VERSION = '^2.2.0';
 // con KafkaJS y binarios precompilados (también para Windows). kafkajs no publica desde 2023, y
 // @platformatic/kafka exige Node >= 22.22, por encima del 22.12 que promete el proyecto generado.
 export const KAFKA_JAVASCRIPT_VERSION = '^1.10.1';
+// SNS/SQS (incremento 9g), verificado el 2026-10-07: el SDK v3 de AWS, un paquete por servicio (Node >= 20).
+export const AWS_SDK_VERSION = '^3.1147.0';
 
 export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;

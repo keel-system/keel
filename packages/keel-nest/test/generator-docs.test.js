@@ -134,3 +134,38 @@ test('las firmas que enseña la skill de Kafka son las del código emitido', () 
   assert.match(settings, /readonly groupId: string \| null;/);
   for (const source of kafkaSkillSources) assert.doesNotMatch(fs.readFileSync(source, 'utf8'), /\.claude\/|\.opencode\//, path.basename(source));
 });
+
+// La de SNS/SQS (incremento 9g), con las mismas dos comprobaciones.
+const snssqs = byPath(planFixture('stock-reservation', { stack: { broker: 'snssqs', database: 'postgresql' } }).files);
+const snssqsSkillDir = path.join(assets, 'generators', 'nest', 'skills', 'keel-nest-snssqs');
+const snssqsSkillSources = [
+  path.join(snssqsSkillDir, 'SKILL.md'),
+  ...fs.readdirSync(path.join(snssqsSkillDir, 'references')).map((name) => path.join(snssqsSkillDir, 'references', name))
+];
+
+test('la skill de SNS/SQS se instala en cada harness con el broker, y ninguna de las otras dos', () => {
+  for (const harness of HARNESSES) {
+    assert.ok(harness.skillPath('keel-nest-snssqs', 'SKILL.md') in snssqs, `${harness.id}: keel-nest-snssqs`);
+    assert.ok(harness.skillPath('keel-nest-snssqs', 'references/listeners.md') in snssqs, `${harness.id}: sus referencias`);
+  }
+  assert.ok(!Object.keys(snssqs).some((file) => file.includes('keel-nest-rabbitmq') || file.includes('keel-nest-kafka')));
+});
+
+test('cada ruta src/… que cita la skill de SNS/SQS existe en lo que emite build', () => {
+  const emitted = new Set(Object.keys(snssqs));
+  for (const source of snssqsSkillSources) {
+    const text = fs.readFileSync(source, 'utf8');
+    for (const [cited] of text.matchAll(/src\/[\w/.-]+\.ts/g)) {
+      assert.ok(emitted.has(cited), `${path.basename(source)} cita ${cited}, que build no emite`);
+    }
+  }
+  assert.ok('infra/init-messaging.sh' in snssqs, 'la skill cita infra/init-messaging.sh');
+});
+
+test('las firmas que enseña la skill de SNS/SQS son las del código emitido', () => {
+  const connection = snssqs['src/infrastructure/messaging/snssqs/snssqs-connection.ts'];
+  assert.match(connection, /async publish\(topic: string, payload: string, attributes: Readonly<Record<string, string>>\)/);
+  assert.match(connection, /consume\(subscription: string, handler: MessageHandler\): void/);
+  assert.match(connection, /export interface InboundMessage \{[\s\S]*readonly body: string;/);
+  for (const source of snssqsSkillSources) assert.doesNotMatch(fs.readFileSync(source, 'utf8'), /\.claude\/|\.opencode\//, path.basename(source));
+});

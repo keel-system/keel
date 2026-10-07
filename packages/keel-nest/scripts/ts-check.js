@@ -30,7 +30,7 @@ import { planService } from '../src/scaffold/index.js';
 import { loadService } from 'keel-core';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { resolveRuntime, startDatabase, stopDatabase } from './lib/database-container.js';
-import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION } from '../src/lib/assets.js';
+import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION, AWS_SDK_VERSION } from '../src/lib/assets.js';
 
 const keep = process.argv.includes('--keep');
 const isWindows = process.platform === 'win32';
@@ -114,9 +114,11 @@ const extra = npm(projectDir, [
   '--no-fund',
   `jose@${JOSE_VERSION}`,
   `amqplib@${AMQPLIB_VERSION}`,
-  `@confluentinc/kafka-javascript@${KAFKA_JAVASCRIPT_VERSION}`
+  `@confluentinc/kafka-javascript@${KAFKA_JAVASCRIPT_VERSION}`,
+  `@aws-sdk/client-sns@${AWS_SDK_VERSION}`,
+  `@aws-sdk/client-sqs@${AWS_SDK_VERSION}`
 ]);
-if (!step('dependencias de las demás siluetas (jose, amqplib, kafka)', extra.ok)) console.error(extra.output);
+if (!step('dependencias de las demás siluetas (jose, amqplib, kafka, aws)', extra.ok)) console.error(extra.output);
 
 // Las trece siluetas: cada fixture entera, renderizada al lado y compilada con el mismo node_modules.
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');
@@ -125,8 +127,8 @@ const failedFixtures = [];
 const failedTests = [];
 const silhouettes = fs.readdirSync(FIXTURES_DIR).flatMap((name) => {
   const { layers } = loadService(path.join(FIXTURES_DIR, name));
-  // Con mensajería, sobre cada broker que keel-nest genera (SNS/SQS, la frontera lo rechaza todavía).
-  return layers.messaging ? [{ name, broker: 'rabbitmq' }, { name, broker: 'kafka' }] : [{ name, broker: null }];
+  // Con mensajería, sobre cada broker que keel-nest genera.
+  return layers.messaging ? ['rabbitmq', 'kafka', 'snssqs'].map((broker) => ({ name, broker })) : [{ name, broker: null }];
 });
 for (const { name: fixture, broker } of silhouettes) {
   const name = broker ? `${fixture}-${broker}` : fixture;

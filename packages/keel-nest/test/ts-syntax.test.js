@@ -98,8 +98,8 @@ test('el comprobador detecta TypeScript roto (autocomprobación)', () => {
 
 for (const name of fs.readdirSync(FIXTURES_DIR)) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
-  // Con mensajería, sobre cada broker que keel-nest genera (SNS/SQS, la frontera lo rechaza todavía).
-  for (const broker of layers.messaging ? ['rabbitmq', 'kafka'] : [null]) {
+  // Con mensajería, sobre cada broker que keel-nest genera.
+  for (const broker of layers.messaging ? ['rabbitmq', 'kafka', 'snssqs'] : [null]) {
     test(`${name}${broker ? ` (${broker})` : ''}: el TypeScript emitido parsea y sus imports llevan a lo que exportan`, () => {
       const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: broker ? { broker } : null });
       assert.deepEqual(checkTree(files), []);

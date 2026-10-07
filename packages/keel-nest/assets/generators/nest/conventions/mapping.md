@@ -3,7 +3,7 @@
 Qué produce cada construcción del diseño y qué queda para el agente. Se sigue **estrictamente**: lo que
 aquí se fija es lo que hace que este servidor sea equivalente al de keel-spring del mismo diseño. Las
 capas que keel-nest aún no genera (clientes HTTP, dependencias, storage, correo, pagos, la persistencia
-documental, y la mensajería sobre SNS/SQS) las rechaza `keel-nest build`: si estás
+documental) las rechaza `keel-nest build`: si estás
 aquí, el diseño no las declara.
 
 ## `domain` — domain.keel.yaml
@@ -239,6 +239,11 @@ conexión con el broker de `keel-stack.json`:
   suscripción (`messaging.subscriptions.<e>.group-id`), el reintento y el descarte en `<topic>.DLT`. Los topics
   no los crea la aplicación. El dispatcher es una línea: `this.connection.publish(destination, routingKey,
   payload)`, con la routing key como clave del registro.
+- **SNS/SQS** — `snssqs/snssqs-connection.ts` y el consumo (`snssqs/snssqs-consumption.ts`): una cola por
+  suscripción (`messaging.subscriptions.<e>.queue`) con su DLQ y su `maxReceiveCount`, la curva del reintento
+  aplicada a la visibilidad del mensaje, y lo no reintentable directo a la DLQ. La topología la siembra
+  `infra/init-messaging.sh`. El dispatcher es una línea: `this.connection.publish(destination, payload, {
+  eventType, routingKey })`, con el tipo como message attribute (sobre él filtran las suscripciones).
 
 **No declares topología ni escribas otra conexión.** Lo que cambia de un broker a otro está en su skill
 (`keel-nest-<broker>`).
@@ -248,8 +253,8 @@ conexión con el broker de `keel-stack.json`:
 | `publishing.events.E` | `<E>IntegrationEvent` y su rama en el puente | build |
 | `reliability: outbox` | la fila en la transacción del cambio, el relay (reclamo con lease, backoff, rendición) y el puerto `OutboxDispatcher` | build; **la implementación del puerto, el agente** (`publish` de la conexión del broker) |
 | `reliability: best-effort` | el puerto `<E>Publisher` (dominio), invocado tras el commit, con un stub que solo avisa | build; **la implementación, el agente** |
-| `subscriptions.E` | `<E>Message` con su lector y su contrato; la cola (RabbitMQ, `messaging.subscriptions.<e>.queue`) o el consumer group (Kafka, `…<e>.group-id`) | build; **el listener, el agente** (`consume` de la conexión del broker: uno por cola en RabbitMQ, uno por suscripción en Kafka) |
-| `onFailure.retry` / `deadLetter` | el reintento del consumo (sin reintentar `DomainException` ni `MessageContractViolation`) y el descarte (la DLQ de la cola, o `<topic>.DLT`) | build |
+| `subscriptions.E` | `<E>Message` con su lector y su contrato; la cola (RabbitMQ, `messaging.subscriptions.<e>.queue`) o el consumer group (Kafka, `…<e>.group-id`) | build; **el listener, el agente** (`consume` de la conexión del broker: uno por cola en RabbitMQ, uno por suscripción en Kafka y en SNS/SQS) |
+| `onFailure.retry` / `deadLetter` | el reintento del consumo (sin reintentar `DomainException` ni `MessageContractViolation`) y el descarte (la DLQ de la cola, o `<topic>.DLT`) | build (en SNS/SQS, la topología con su RedrivePolicy la siembra `infra/init-messaging.sh`) |
 
 Lo que escribe el agente se registra en **un solo archivo**, `infrastructure/messaging/broker-bindings.ts`:
 los adaptadores en `BROKER_ADAPTERS` (`{ provide: OutboxDispatcher, useClass: … }`, que sustituye al

@@ -5,11 +5,12 @@
 //
 // Por qué no está en `npm test`: necesita red (npm instala el proyecto), podman o docker, y minutos.
 //
-//   node packages/keel-nest/scripts/broker-check.js [--broker=rabbitmq,kafka] [--keep]
+//   node packages/keel-nest/scripts/broker-check.js [--broker=rabbitmq,kafka,snssqs] [--keep]
 //   npm run broker-check --workspace packages/keel-nest
 //
 // El sujeto es stock-reservation: outbox, y tres suscripciones Keel de la misma fuente con reintento y descarte
-// (en RabbitMQ comparten cola; en Kafka cada una tiene su consumer group sobre el mismo topic). Lo que en el
+// (en RabbitMQ comparten cola; en Kafka cada una tiene su consumer group sobre el mismo topic; en SNS/SQS cada
+// una su cola, suscrita al topic de la fuente con filtro por eventType). Lo que en el
 // proyecto escribiría el agente se escribe aquí como SONDA, registrado donde lo registraría él
 // (broker-bindings.ts): un dispatcher del outbox sobre la conexión del broker y un listener cuyo comportamiento
 // lo decide el eventId del mensaje. Los flujos sonda usan SOLO los helpers que el arnés emite
@@ -29,7 +30,7 @@ import { resolveRuntime } from './lib/database-container.js';
 const SUBJECT = 'stock-reservation';
 const keep = process.argv.includes('--keep');
 const brokerArg = process.argv.find((arg) => arg.startsWith('--broker='));
-const BROKERS = brokerArg ? brokerArg.slice('--broker='.length).split(',') : ['rabbitmq', 'kafka'];
+const BROKERS = brokerArg ? brokerArg.slice('--broker='.length).split(',') : ['rabbitmq', 'kafka', 'snssqs'];
 const isWindows = process.platform === 'win32';
 const results = [];
 
@@ -69,16 +70,25 @@ const npm = (dir, args) => {
 const kebab = (name) => name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
 
 // ── Lo del agente, como sonda: lo único que cambia de un broker a otro es la conexión ──
+const CONNECTIONS = {
+  rabbitmq: { dir: 'rabbitmq', connection: 'RabbitConnection', file: 'rabbit-connection' },
+  kafka: { dir: 'kafka', connection: 'KafkaConnection', file: 'kafka-connection' },
+  snssqs: { dir: 'snssqs', connection: 'SnsSqsConnection', file: 'snssqs-connection' }
+};
+
 function probes(broker, sub) {
   const rabbit = broker === 'rabbitmq';
-  const dir = rabbit ? 'rabbitmq' : 'kafka';
-  const connection = rabbit ? 'RabbitConnection' : 'KafkaConnection';
-  const connectionFile = rabbit ? 'rabbit-connection' : 'kafka-connection';
+  const { dir, connection, file: connectionFile } = CONNECTIONS[broker];
+  const publishCall = {
+    rabbitmq: 'this.connection.publish(destination, routingKey, payload, eventType)',
+    kafka: 'this.connection.publish(destination, routingKey, payload)',
+    snssqs: 'this.connection.publish(destination, payload, { eventType, routingKey })'
+  }[broker];
   const dispatcher = `import { Inject, Injectable } from '@nestjs/common';
 import { OutboxDispatcher } from '../outbox/outbox-dispatcher.js';
 import { ${connection} } from './${connectionFile}.js';
 
-/** Sonda del dispatcher que escribiría el agente: la fila tal cual${rabbit ? ', con su tipo,' : ', con la routing key como clave,'} y espera la confirmación. */
+/** Sonda del dispatcher que escribiría el agente: la fila tal cual, con lo que su broker necesita, y espera la confirmación. */
 @Injectable()
 export class ProbeOutboxDispatcher extends OutboxDispatcher {
   constructor(@Inject(${connection}) private readonly connection: ${connection}) {
@@ -86,11 +96,14 @@ export class ProbeOutboxDispatcher extends OutboxDispatcher {
   }
 
   dispatch(destination: string, routingKey: string, eventType: string, payload: string): Promise<void> {
-    return ${rabbit ? 'this.connection.publish(destination, routingKey, payload, eventType)' : 'this.connection.publish(destination, routingKey, payload)'};
+    return ${publishCall};
   }
 }
 `;
-  const register = rabbit
+  const register = broker === 'snssqs'
+    ? `this.connection.consume('${sub.name}', async (message) => {
+      const envelope = EventEnvelope.parse(message.body);`
+    : rabbit
     ? `const queue = this.settings.subscriptions['${sub.name}']!.queue!;
     this.connection.consume(queue, async (message) => {
       const envelope = EventEnvelope.parse(message.content.toString('utf8'));`
@@ -159,11 +172,11 @@ function flows(broker, model) {
   const sub = model.subscriptions.find((candidate) => candidate.name === 'StockReserved');
   const event = model.events[0];
   const channel = model.messaging.publishChannels[0];
-  const attempts = (rabbit ? rabbitListenerRetry(model) : kafkaListenerRetry(model)).attempts;
+  const attempts = { rabbitmq: () => rabbitListenerRetry(model).attempts, kafka: () => kafkaListenerRetry(model).attempts, snssqs: () => sub.retry?.maxAttempts ?? 1 }[broker]();
   const routingKey = event.routingKeyDefault;
   const destination = model.messaging.destinationDefault;
   const orderId = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b';
-  // Con Kafka el arranque tras levantar el broker suma el reparto del grupo: más margen para salir.
+  // Con Kafka el arranque tras levantar el broker suma el reparto del grupo, y con SNS/SQS la resiembra: más margen.
   const recoveryMs = rabbit ? 30_000 : 90_000;
   const envelopeOf = (eventId) =>
     JSON.stringify({
@@ -174,22 +187,38 @@ function flows(broker, model) {
 
   // Lo propio de cada broker. RabbitMQ: el tipo nativo y `mandatory` (lo que no tiene cola no se da por
   // publicado). Kafka: la clave del registro es la routing key, y el descarte lleva los headers de Spring Kafka.
-  const publishedShape = rabbit
-    ? `expect(message.routingKey).toBe('${routingKey}');
-    expect(message.properties.type).toBe('${event.name}');`
-    : `expect(message.routingKey).toBe('${routingKey}');`;
-  const brokerSpecific = rabbit
+  // SNS/SQS: no hay clave de mensaje (el tipo viaja como message attribute, y si no casara con el filtro la cola
+  // de arnés no lo recibiría), y una fila cuyo topic no existe no se da por publicada.
+  const publishedShape = {
+    rabbitmq: `expect(message.routingKey).toBe('${routingKey}');
+    expect(message.properties.type).toBe('${event.name}');`,
+    kafka: `expect(message.routingKey).toBe('${routingKey}');`,
+    snssqs: `expect(message.payload.metadata.eventType).toBe('${event.name}');`
+  }[broker];
+  const brokerSpecific = broker === 'snssqs'
+    ? `
+  it('FL-BRK-002-B: una fila cuyo topic no existe no se da por publicada (la conexión no lo crea)', async () => {
+    const id = randomUUID();
+    db(\`INSERT INTO outbox_event (id, destination, routing_key, event_type, payload, created_at, attempts) VALUES ('\${id}', 'keel-sin-topic', '${routingKey}', '${event.name}', '{}', now(), 0)\`);
+    // Hasta que el relay la intente o la dé por publicada: lo segundo es el fallo que se mide, y tiene que decirlo.
+    await eventually(() => db(\`SELECT COUNT(*) FROM outbox_event WHERE id = '\${id}' AND (attempts >= 1 OR published_at IS NOT NULL)\`).trim() === '1', 20_000, 'el relay no lo intentó');
+    expect(db(\`SELECT COUNT(*) FROM outbox_event WHERE id = '\${id}' AND published_at IS NULL\`).trim(), 'se dio por publicada').toBe('1');
+    db(\`DELETE FROM outbox_event WHERE id = '\${id}'\`);
+  });
+`
+    : rabbit
     ? `
   it('FL-BRK-002-B: lo que no tiene cola (mandatory) no se da por publicado', async () => {
     const id = randomUUID();
     outboxRow(id, 'keel.sin-ruta', envelope(randomUUID()));
-    await eventually(() => Number(db(\`SELECT attempts FROM outbox_event WHERE id = '\${id}'\`).trim()) >= 1, 20_000, 'el relay no lo intentó');
-    expect(db(\`SELECT COUNT(*) FROM outbox_event WHERE id = '\${id}' AND published_at IS NULL\`).trim()).toBe('1');
+    // Hasta que el relay la intente o la dé por publicada: lo segundo es el fallo que se mide, y tiene que decirlo.
+    await eventually(() => db(\`SELECT COUNT(*) FROM outbox_event WHERE id = '\${id}' AND (attempts >= 1 OR published_at IS NOT NULL)\`).trim() === '1', 20_000, 'el relay no lo intentó');
+    expect(db(\`SELECT COUNT(*) FROM outbox_event WHERE id = '\${id}' AND published_at IS NULL\`).trim(), 'se dio por publicada').toBe('1');
     db(\`DELETE FROM outbox_event WHERE id = '\${id}'\`);
   });
 `
     : '';
-  const deadLetterShape = rabbit
+  const deadLetterShape = broker !== 'kafka'
     ? ''
     : `
 
@@ -219,7 +248,7 @@ import {
   stopBroker,
   useFlow
 } from './support/flow.js';
-import { ATTEMPTS } from '../../src/infrastructure/messaging/${rabbit ? 'rabbitmq' : 'kafka'}/probe-listener.js';
+import { ATTEMPTS } from '../../src/infrastructure/messaging/${CONNECTIONS[broker].dir}/probe-listener.js';
 
 const ORDER = ${JSON.stringify(JSON.stringify({ orderId }))};
 const processed = (eventId: string) => Number(db(\`SELECT COUNT(*) FROM processed_event WHERE handler_id = 'ProbeListener' AND event_id = '\${eventId}'\`).trim());
@@ -330,7 +359,7 @@ ${brokerSpecific}
 }
 
 function checkBroker(broker) {
-  const label = broker === 'rabbitmq' ? 'RabbitMQ' : 'Kafka';
+  const label = { rabbitmq: 'RabbitMQ', kafka: 'Kafka', snssqs: 'SNS/SQS' }[broker];
   console.log(`\n── ${label} ──`);
   // ── El proyecto: lo que build emite para el sujeto con el broker y PostgreSQL ──
   const workspace = makeWorkspace(`keel-nest-broker-check-${broker}-`);
@@ -362,6 +391,12 @@ function checkBroker(broker) {
   const up = bash(projectDir, 'infra/up.sh');
   if (!step(`${label}: bash infra/up.sh`, up.status === 0, up.status === 0 ? '' : up.output.slice(-1500))) return;
   try {
+    // La topología de SNS/SQS no la crea la aplicación: la siembra init-messaging.sh, que en una corrida ejecuta el
+    // agente de infraestructura.
+    if (fs.existsSync(path.join(projectDir, 'infra', 'init-messaging.sh'))) {
+      const seed = bash(projectDir, 'infra/init-messaging.sh');
+      step(`${label}: bash infra/init-messaging.sh`, seed.status === 0, seed.status === 0 ? '' : seed.output.slice(-1500));
+    }
     const validate = bash(projectDir, 'infra/validate-infra.sh');
     step(`${label}: bash infra/validate-infra.sh (el broker incluido)`, validate.status === 0, validate.status === 0 ? '' : validate.output.slice(-1500));
     const vitest = path.join(projectDir, 'node_modules', 'vitest', 'vitest.mjs');

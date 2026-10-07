@@ -7,7 +7,7 @@
 // Los comandos con los que se habla con el broker NO se escriben aquí: salen de keel-core/gen/
 // broker-probes.js —los mismos que ejecuta el arnés de keel-spring y los que ejecuta `broker-check`—, y
 // se renderizan a TypeScript con `renderParts`/`spliceBody`. Viajan por el contenedor devtools de infra/,
-// que está en la red del compose. RabbitMQ y Kafka (9f): la frontera rechaza SNS/SQS hasta su tramo.
+// que está en la red del compose. Los tres brokers: RabbitMQ, Kafka (9f) y SNS/SQS (9g).
 //
 // Kafka no tiene purga (kcat no borra registros): el aislamiento entre flujos es una MARCA DE OFFSET por canal
 // y por topic de descarte, que se fija al abrir cada flujo — la misma que el AbstractFlowIT de keel-spring.
@@ -29,34 +29,46 @@ import {
   rabbitProbeBody,
   rabbitPublishBody,
   readParts,
+  releaseParts,
+  READ_BATCH_LIMIT,
+  SQS_SWEEP_VISIBILITY,
+  prefix,
   renderParts,
   spliceBody,
   expr
 } from 'keel-core/gen/broker-probes';
 import { BROKERS, brokerContainer, devtoolsContainer } from 'keel-core/gen/infra-catalog';
 import { deadLetterDestination, subscriptionDestination } from 'keel-core/gen';
+import { harnessQueueName } from 'keel-core/gen/messaging-provisioning';
 import { tsString } from './render.js';
 import { publishedChannels } from './rabbitmq.js';
 import { kafkaConsumption } from './kafka.js';
+import { snsSqsConsumption } from './snssqs.js';
 import {
   usesKafka,
   usesNestOutbox,
   usesRabbitMq,
+  usesSnsSqs,
   KAFKA_CONNECTION_TS,
+  SNSSQS_CONNECTION_TS,
   MESSAGING_SETTINGS_TS,
   OUTBOX_RELAY_TS,
   RABBIT_CONNECTION_TS
 } from './messaging.js';
 
-/** ¿Lleva el arnés la mensajería? Con los brokers que keel-nest genera: RabbitMQ y Kafka. */
+/** ¿Lleva el arnés la mensajería? Con los tres brokers que keel-nest genera. */
 export function usesMessagingHarness(model) {
-  return usesRabbitMq(model) || usesKafka(model);
+  return usesRabbitMq(model) || usesKafka(model) || usesSnsSqs(model);
 }
 
 /** Los imports del servidor que necesita la sección (flow.ts es la única excepción de la caja negra). */
 export function messagingHarnessImports(model) {
   if (!usesMessagingHarness(model)) return '';
-  const [connection, file] = usesKafka(model) ? ['KafkaConnection', KAFKA_CONNECTION_TS] : ['RabbitConnection', RABBIT_CONNECTION_TS];
+  const [connection, file] = usesKafka(model)
+    ? ['KafkaConnection', KAFKA_CONNECTION_TS]
+    : usesSnsSqs(model)
+      ? ['SnsSqsConnection', SNSSQS_CONNECTION_TS]
+      : ['RabbitConnection', RABBIT_CONNECTION_TS];
   const lines = [`import { ${connection} } from '../../../${file.replace(/\.ts$/, '.js')}';`];
   if (usesNestOutbox(model)) {
     lines.push(
@@ -72,7 +84,9 @@ const ts = (parts) => renderParts(parts, tsString);
 
 export function messagingHarnessSection(model) {
   if (!usesMessagingHarness(model)) return '';
-  return usesKafka(model) ? kafkaSection(model) : rabbitSection(model);
+  if (usesKafka(model)) return kafkaSection(model);
+  if (usesSnsSqs(model)) return snsSqsSection(model);
+  return rabbitSection(model);
 }
 
 function rabbitSection(model) {
@@ -244,7 +258,7 @@ function copyToDevtools(content: string, file: string): void {
 }`;
 }
 
-function brokerControl(broker, recovered) {
+function brokerControl(broker, recovered, beforeRelease = '') {
   return `
 /** Detiene el broker (el escenario del canal indisponible). Las lecturas devuelven vacío mientras tanto. */
 export async function stopBroker(): Promise<void> {
@@ -256,7 +270,7 @@ export async function stopBroker(): Promise<void> {
 /** Lo vuelve a levantar y espera a que la conexión del servicio se recupere ${recovered}. */
 export async function startBroker(): Promise<void> {
   run(containerRuntime(), ['start', BROKER_CONTAINER]);
-  await eventually(() => brokerAccepts(), BROKER_TIMEOUT_MS, 'el broker no volvió a aceptar conexiones');
+  await eventually(() => brokerAccepts(), BROKER_TIMEOUT_MS, 'el broker no volvió a aceptar conexiones');${beforeRelease}
   brokerStopped = false;
   await awaitBrokerConnection();
 }
@@ -522,6 +536,277 @@ async function prepareMessaging(): Promise<void> {
   markChannels();
 }
 ${outboxSection}`;
+}
+
+// ── SNS/SQS ─────────────────────────────────────────────────────────────────
+//
+// El servicio publica en UN topic (messaging.publishing.destination) con el tipo como message attribute
+// `eventType`; de un topic no se lee, así que el aprovisionamiento cuelga de él una COLA DE ARNÉS por canal,
+// llamada como el canal y filtrada por sus eventos. Cada suscripción consume de su cola propia, suscrita al topic
+// de la fuente, y su DLQ cuelga de ella por RedrivePolicy. LocalStack sirve la topología de MEMORIA: levantar el
+// broker exige resembrarla (infra/init-messaging.sh) y confirmar que la suscripción entrega antes de seguir.
+function snsSqsSection(model) {
+  const broker = BROKERS.snssqs;
+  const service = model.service.name;
+  const published = publishedChannels(model).map((entry) => entry.channel);
+  const subscriptions = model.subscriptions ?? [];
+  const consumption = snsSqsConsumption(model);
+  const outbox = usesNestOutbox(model);
+  const queueEnv = (sub) => `${sub.topicProperty.toUpperCase().replace(/[.-]/g, '_').replace(/_TOPIC$/, '')}_QUEUE`;
+  const base = expr('QUEUE_URL');
+  const read = readParts('snssqs', { destination: expr('queue'), count: expr('String(size)'), base });
+  // El barrido es OTRO comando: oculta lo que devuelve para poder avanzar más allá del primer lote, y lo suelta
+  // al terminar (el porqué, en SQS_SWEEP_VISIBILITY de keel-core/gen/broker-probes.js).
+  const sweep = readParts('snssqs', { destination: expr('queue'), count: expr('String(size)'), base, hideSeconds: SQS_SWEEP_VISIBILITY });
+  const release = releaseParts('snssqs', { destination: expr('queue'), receiptHandle: expr('handle'), base });
+  const purge = purgeParts('snssqs', { destination: expr('queue'), base });
+  const remove = ['sqs', 'delete-message', '--queue-url', expr('QUEUE_URL + queue'), '--receipt-handle', expr('handle')];
+  const deliver = deliverParts('snssqs', {
+    destination: expr('topic'),
+    bodyFile: expr('DELIVER_BODY'),
+    attrsFile: expr('DELIVER_ATTRS'),
+    base: expr('TOPIC_ARN'),
+    withAttributes: true
+  });
+  // La sonda de la resiembra: el primer evento publicado y la cola de arnés de SU canal (la que lo admite).
+  const probe = (model.events ?? [])[0];
+  const probeChannel = probe
+    ? Object.entries(model.messaging?.eventTypesByChannel ?? {}).find(([, events]) => (events ?? []).includes(probe.name))?.[0]
+    : null;
+  const probeLines = probe && probeChannel ? topologyProbe(probe.name, harnessQueueName(probeChannel)) : '';
+
+  const reseed = `
+
+/**
+ * Vuelve a sembrar la topología tras levantar LocalStack, que la sirve de memoria: sin esto el escenario fallaría
+ * por «cola inexistente» y no por lo que prueba. ${outbox ? 'Con el relay del outbox EN PAUSA: si publicara en el hueco entre el topic recreado y su suscripción, SNS aceptaría el mensaje y lo descartaría sin error.' : ''}
+ */
+async function reseedTopology(): Promise<void> {${outbox ? `
+  const relay = currentApp ? outboxRelay() : null;
+  await relay?.pause();` : ''}
+  try {
+    run(bashExecutable(), ['infra/init-messaging.sh'], '¿Está la infraestructura arriba (bash infra/up.sh)?');${probeLines ? `
+    await awaitTopologyWired();` : ''}
+  } finally {${outbox ? `
+    relay?.resume();` : ''}
+  }
+}`;
+
+  const outboxSection = outbox ? outboxHarness() : noOutboxDrain(model);
+  const deliveries = subscriptions.map((sub) => deliverMethod(sub)).join('');
+  return `
+// ── Mensajería (SNS/SQS) ─────────────────────────────────────────────────────
+//
+// Los comandos salen de keel-core/gen/broker-probes.js: los mismos que usa el arnés de keel-spring y los
+// que ejecuta broker-check. Viajan por el contenedor devtools, que ve LocalStack por la red del compose.
+
+${containerConstants(service, broker)}
+const DELIVER_BODY = '/tmp/keel-deliver.json';
+const DELIVER_ATTRS = '/tmp/keel-deliver-attrs.json';
+const BROKER_TIMEOUT_MS = 90_000;
+const QUEUE_URL = ${tsString(ENDPOINTS.snssqs.queueUrlPrefix)};
+const TOPIC_ARN = ${tsString(ENDPOINTS.snssqs.topicArnPrefix)};
+const AWS: readonly string[] = [${prefix('snssqs').map(tsString).join(', ')}];
+/** SQS no devuelve más de diez mensajes por llamada. */
+const READ_BATCH_LIMIT = ${READ_BATCH_LIMIT.snssqs};
+
+/** Los canales que publica este servicio. */
+const PUBLISHED_CHANNELS: readonly string[] = [${published.map(tsString).join(', ')}];
+
+/** Canal → la cola de ARNÉS de la que se lee lo publicado (init-messaging.sh: se llama como el canal). */
+const HARNESS_QUEUE_OF: Readonly<Record<string, string>> = {
+${published.map((channel) => `  ${tsString(channel)}: ${tsString(harnessQueueName(channel))}`).join(',\n')}
+};
+
+/** Suscripción → su cola propia (la del perfil: la variable si está). */
+const QUEUE_OF: Readonly<Record<string, string>> = {
+${consumption.map((entry, index) => `  ${tsString(entry.subscription)}: process.env[${tsString(queueEnv(subscriptions[index]))}] ?? ${tsString(entry.queue)}`).join(',\n')}
+};
+
+/** Suscripción → su DLQ (las que declaran onFailure.deadLetter). */
+const DEAD_LETTER_OF: Readonly<Record<string, string>> = {
+${consumption.filter((entry) => entry.deadLetterQueue).map((entry) => `  ${tsString(entry.subscription)}: ${tsString(entry.deadLetterQueue)}`).join(',\n')}
+};
+
+${brokerMessageAndDevtools('su cuerpo (los message attributes no se leen: el MessageId de SQS cambia en cada reenvío)')}
+
+function aws(args: readonly string[]): string {
+  return devtools([...AWS, ...args]);
+}
+
+interface ReceivedMessage {
+  readonly MessageId?: string;
+  readonly ReceiptHandle?: string;
+  readonly Body?: string;
+}
+
+/** La lista Messages de una respuesta de receive-message; una cola agotada puede no devolver ni un {}. */
+function received(raw: string): ReceivedMessage[] {
+  if (raw.trim() === '') return [];
+  return (JSON.parse(raw) as { Messages?: ReceivedMessage[] }).Messages ?? [];
+}
+
+function toBrokerMessage(message: ReceivedMessage): BrokerMessage {
+  const body = message.Body ?? '';
+  let payload: unknown = body;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    payload = body;
+  }
+  return { routingKey: '', properties: {}, body, payload };
+}
+
+/**
+ * Lee una cola sin consumirla (hasta \`count\`). SQS da como mucho diez por llamada y, con la lectura en peek,
+ * lo devuelto vuelve a estar visible al instante: pedir más de diez es un BARRIDO que oculta lo leído para
+ * avanzar y lo SUELTA al final, así que la cola queda como estaba. Se deduplica por MessageId, que es estable
+ * entre relecturas del mismo mensaje — y NO por el cuerpo: la reentrega de un escenario de idempotencia
+ * comparte cuerpo con la primera entrega, y deduplicarla dejaría ese escenario verde sin probar nada.
+ */
+function readQueue(queue: string, count: number): BrokerMessage[] {
+  const wanted = Math.max(count, 1);
+  const sweeping = wanted > READ_BATCH_LIMIT;
+  const seen = new Map<string, BrokerMessage>();
+  const hidden: string[] = [];
+  // Cota de llamadas: una cola que solo puede repescar lo ya visto no deja el bucle sondeando para siempre.
+  const maxAttempts = Math.ceil(wanted / READ_BATCH_LIMIT) + 5;
+  try {
+    for (let attempt = 0; attempt < maxAttempts && seen.size < wanted; attempt++) {
+      const size = Math.min(wanted - seen.size, READ_BATCH_LIMIT);
+      const messages = received(sweeping ? aws([${ts(sweep)}]) : aws([${ts(read)}]));
+      if (messages.length === 0) break;
+      for (const message of messages) {
+        if (sweeping && message.ReceiptHandle) hidden.push(message.ReceiptHandle);
+        const id = message.MessageId ?? message.ReceiptHandle ?? String(seen.size);
+        if (!seen.has(id)) seen.set(id, toBrokerMessage(message));
+      }
+      // Barriendo, un lote corto no prueba nada (lo devuelto quedó oculto); sin barrer, sí es el final.
+      if (!sweeping && messages.length < size) break;
+    }
+  } catch (error) {
+    // Con el broker parado POR EL ESCENARIO, «no hay mensajes» es la lectura correcta.
+    if (brokerStopped) return [];
+    throw error;
+  } finally {
+    for (const handle of hidden) {
+      try {
+        aws([${ts(release)}]);
+      } catch {
+        // Soltar es de mejor esfuerzo: el plazo de ocultación vence solo.
+      }
+    }
+  }
+  return [...seen.values()];
+}
+
+/**
+ * Lo publicado en un canal del diseño desde el último reset (hasta \`count\`). Con outbox, espera antes a
+ * que el relay entregue lo que tenga pendiente: si no, lo que se lee depende de la fase del relay.
+ */
+export async function publishedMessages(channel: string, count = 50): Promise<BrokerMessage[]> {
+  const queue = HARNESS_QUEUE_OF[channel];
+  if (queue == null) {
+    throw new Error(\`'\${channel}' no es un canal que este servicio publique. Publicados: \${PUBLISHED_CHANNELS.join(', ') || '(ninguno)'}\`);
+  }
+  await awaitOutboxDrained(channel);
+  return readQueue(queue, count);
+}
+
+/**
+ * Lo que acabó en la DLQ de una suscripción desde el último reset. Úsalo también —y sobre todo— para la aserción
+ * NEGATIVA: un duplicado absorbido se confirma SIN acabar aquí.
+ */
+export function deadLetterMessages(subscription: string, count = 50): BrokerMessage[] {
+  const queue = DEAD_LETTER_OF[subscription];
+  if (queue == null) {
+    throw new Error(\`La suscripción '\${subscription}' no declara onFailure.deadLetter: no hay descarte. Declaradas: \${Object.keys(DEAD_LETTER_OF).join(', ') || '(ninguna)'}\`);
+  }
+  return readQueue(queue, count);
+}
+
+/**
+ * Vacía la cola de un canal publicado, la de una suscripción o su DLQ (por su nombre). El reset ya lo hace al
+ * abrir el flujo; repítelo justo antes de la acción cuyo Then afirma que NO se publica nada.
+ */
+export async function purgeMessages(channelOrSubscription: string): Promise<void> {
+  const queue = HARNESS_QUEUE_OF[channelOrSubscription] ?? QUEUE_OF[channelOrSubscription] ?? DEAD_LETTER_OF[channelOrSubscription] ?? channelOrSubscription;
+  await awaitOutboxDrained(channelOrSubscription);
+  // PurgeQueue está limitada a una vez cada 60 s por cola en AWS real; LocalStack no aplica esa cuota.
+  aws([${ts(purge)}]);
+}
+
+/**
+ * Publica un mensaje crudo en el TOPIC de una fuente —no en la cola—, que es como llega uno de verdad: por la
+ * suscripción SNS→SQS con su filtro por \`eventType\`. Sin ese header en \`headers\`, el filtro lo deja fuera de
+ * la cola sin ningún error. \`key\` no viaja: SNS no tiene clave de mensaje.
+ */
+export function deliverMessage(topic: string, key: string, body: string, headers: Readonly<Record<string, string>> = {}): void {
+  void key;
+  copyToDevtools(body, DELIVER_BODY);
+  const args = [${ts(deliver)}];
+  if (Object.keys(headers).length === 0) {
+    aws(args.slice(0, -2));
+    return;
+  }
+  const attributes: Record<string, { DataType: string; StringValue: string }> = {};
+  for (const [name, value] of Object.entries(headers)) attributes[name] = { DataType: 'String', StringValue: value };
+  copyToDevtools(JSON.stringify(attributes), DELIVER_ATTRS);
+  aws(args);
+}
+${deliveries}${brokerControl(broker, 'con su topología resembrada', `
+  await reseedTopology();`)}${reseed}${probeLines}
+
+/** Espera a que cada consumidor del servicio vuelva a sondear su cola. */
+async function awaitBrokerConnection(): Promise<void> {
+  const connection = currentApp?.get(SnsSqsConnection);
+  if (connection == null) return;
+  await eventually(() => connection.connected, BROKER_TIMEOUT_MS, 'los consumidores del servicio no volvieron a sondear sus colas');
+}
+
+/** Al abrir cada flujo: el broker arriba (con su topología) y los consumidores sondeando. */
+async function prepareMessaging(): Promise<void> {
+  if (!brokerAccepts()) await startBroker();
+  brokerStopped = false;
+  await awaitBrokerConnection();
+}
+${outboxSection}`;
+
+  function topologyProbe(eventType, queue) {
+    return `
+
+const TOPOLOGY_PROBE_QUEUE = ${tsString(queue)};
+const TOPOLOGY_PROBE_EVENT_TOPIC = process.env['MESSAGING_DESTINATION'] ?? ${tsString(model.messaging?.destinationDefault ?? '')};
+
+/**
+ * Confirma que la suscripción SNS→SQS resembrada ENTREGA, no solo que existe: SNS acepta un publish contra un
+ * topic recién creado aunque su suscripción aún no esté lista, y sin suscriptor el mensaje se descarta sin error.
+ * Publica una sonda y la espera en la cola de arnés de su canal (y la borra); una sonda perdida no es un fallo, es
+ * la señal de reintentar.
+ */
+async function awaitTopologyWired(): Promise<void> {
+  const deadline = Date.now() + BROKER_TIMEOUT_MS;
+  for (;;) {
+    const probeId = \`keel-topology-probe-\${Date.now()}-\${Math.random().toString(36).slice(2)}\`;
+    deliverMessage(TOPOLOGY_PROBE_EVENT_TOPIC, probeId, JSON.stringify({ metadata: { eventId: probeId, eventType: ${tsString(eventType)} }, data: {} }), { eventType: ${tsString(eventType)} });
+    const attemptDeadline = Date.now() + 5000;
+    while (Date.now() < attemptDeadline) {
+      const raw = aws(['sqs', 'receive-message', '--queue-url', QUEUE_URL + TOPOLOGY_PROBE_QUEUE, '--max-number-of-messages', '10', '--visibility-timeout', '0']);
+      const found = received(raw).find((message) => (message.Body ?? '').includes(probeId));
+      if (found?.ReceiptHandle) {
+        const queue = TOPOLOGY_PROBE_QUEUE;
+        const handle = found.ReceiptHandle;
+        aws([${ts(remove)}]);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (Date.now() > deadline) {
+      throw new Error(\`La suscripción SNS→SQS de '\${TOPOLOGY_PROBE_EVENT_TOPIC}' → '\${TOPOLOGY_PROBE_QUEUE}' no entregó la sonda tras resembrar la topología\`);
+    }
+  }
+}`;
+  }
 }
 
 // Un método por suscripción: el escenario no tiene que saber en qué canal vive el evento, cómo lo envuelve

@@ -24,7 +24,7 @@
 // Solo con persistencia RELACIONAL o sin persistencia: la documental llega con el incremento 12, y ahí
 // el puente y el outbox son otra rama entera.
 
-import { subscriptionDestination as destinationOf, subscriptionGroupId } from 'keel-core/gen';
+import { deadLetterDestination, subscriptionDestination as destinationOf, subscriptionGroupId } from 'keel-core/gen';
 import { OUTBOX_RELAY, parameterValue } from 'keel-core/gen/messaging-stores';
 import { DIRS, classPath, fieldImports, tsModule, tsString, decapitalize } from './render.js';
 import { DOMAIN_EVENT_TS, EVENT_METADATA_TS } from './events.js';
@@ -88,6 +88,14 @@ export function usesKafka(model) {
   return usesMessaging(model) && model.stack?.broker === 'kafka';
 }
 
+/** ¿El stack es SNS/SQS (incremento 9g)? */
+export function usesSnsSqs(model) {
+  return usesMessaging(model) && model.stack?.broker === 'snssqs';
+}
+
+/** ¿Consume el servicio de una COLA propia? RabbitMQ (cuelga del exchange de la fuente) y SNS/SQS (del topic). */
+const consumesFromQueue = (model) => model.stack?.broker === 'rabbitmq' || model.stack?.broker === 'snssqs';
+
 export const bridgeClass = (model) => `${model.service.className}DomainEventBridge`;
 export const bridgePath = (model) => classPath(MESSAGING_DIR, bridgeClass(model));
 export const integrationPath = (event) => classPath(`${MESSAGING_DIR}/events`, event.integrationClass);
@@ -108,6 +116,8 @@ export const RABBIT_TOPOLOGY_TS = `src/${MESSAGING_DIR}/rabbitmq/rabbit-topology
 export const RABBIT_CONNECTION_TS = `src/${MESSAGING_DIR}/rabbitmq/rabbit-connection.ts`;
 export const KAFKA_CONSUMPTION_TS = `src/${MESSAGING_DIR}/kafka/kafka-consumption.ts`;
 export const KAFKA_CONNECTION_TS = `src/${MESSAGING_DIR}/kafka/kafka-connection.ts`;
+export const SNSSQS_CONSUMPTION_TS = `src/${MESSAGING_DIR}/snssqs/snssqs-consumption.ts`;
+export const SNSSQS_CONNECTION_TS = `src/${MESSAGING_DIR}/snssqs/snssqs-connection.ts`;
 
 export function generate(model) {
   if (!usesMessaging(model)) return [];
@@ -613,7 +623,7 @@ export function consumerUnits(model) {
       const group = subscriptionGroupId(model, sub);
       unit = { key: group, label: `el consumer group ${group} sobre ${sub.topicDefault}`, group, topic: sub.topicDefault };
     } else {
-      const queue = model.stack?.broker === 'rabbitmq' ? destinationOf('rabbitmq', model, sub) : sub.name;
+      const queue = consumesFromQueue(model) ? destinationOf(model.stack.broker, model, sub) : sub.name;
       unit = { key: queue, label: `la cola ${queue}`, queue };
     }
     if (!units.has(unit.key)) units.set(unit.key, { ...unit, subscriptions: [] });
@@ -688,11 +698,11 @@ function contractDoc(model, sub) {
     if (sub.triggerHasDomainGuard) lines.push('Esa rama termina igualmente en IdempotencyGuard.record(...): el mensaje quedó atendido, por el otro camino.');
   }
   if (sub.deadLetter) {
-    lines.push(
-      model.stack?.broker === 'kafka'
-        ? `Con onFailure.deadLetter: tras agotar los reintentos —o al primer fallo no reintentable— la conexión de build lo publica en ${sub.topicDefault}.DLT con su clave, su valor y sus headers. NO lo publiques tú ni crees otra cadena de reintento.`
-        : `Con onFailure.deadLetter: tras agotar los reintentos el broker lo mueve al descarte de su cola. La topología la genera build — NO la declares tú.`
-    );
+    const deadLetterText = {
+      kafka: `Con onFailure.deadLetter: tras agotar los reintentos —o al primer fallo no reintentable— la conexión de build lo publica en ${sub.topicDefault}.DLT con su clave, su valor y sus headers. NO lo publiques tú ni crees otra cadena de reintento.`,
+      snssqs: `Con onFailure.deadLetter: al agotar sus recepciones (maxReceiveCount) SQS lo mueve a ${deadLetterDestination('snssqs', model, sub)} por la RedrivePolicy de infra/init-messaging.sh, y lo no reintentable lo lleva ahí la conexión de build al primer fallo. La curva del reintento (la visibilidad) también es de build: NO la apliques tú ni crees colas.`
+    }[model.stack?.broker];
+    lines.push(deadLetterText ?? `Con onFailure.deadLetter: tras agotar los reintentos el broker lo mueve al descarte de su cola. La topología la genera build — NO la declares tú.`);
   }
   // El listener es el de su CONSUMIDOR (consumerUnits): en RabbitMQ la cola, que pueden compartir varias
   // suscripciones; en Kafka el consumer group de la suscripción. La corrida stock-reservation-events vio
@@ -747,8 +757,8 @@ export function messagingYaml(model, profile) {
       lines.push(`    ${subscriptionKey(sub)}:`, `      topic: ${envWithDefault(profile, topicEnv(sub), sub.topicDefault)}`);
       // Con RabbitMQ se consume de una COLA propia de este servicio que cuelga del exchange del canal:
       // su nombre lo declara aquí build, el mismo que crea la topología y al que entrega el arnés.
-      if (model.stack?.broker === 'rabbitmq') {
-        lines.push(`      queue: ${envWithDefault(profile, queueEnv(sub), destinationOf('rabbitmq', model, sub))}`);
+      if (consumesFromQueue(model)) {
+        lines.push(`      queue: ${envWithDefault(profile, queueEnv(sub), destinationOf(model.stack.broker, model, sub))}`);
       }
       // Con Kafka, el consumer group de la suscripción: la misma clave y el mismo default que keel-spring.
       if (model.stack?.broker === 'kafka') {
@@ -793,7 +803,7 @@ export const MESSAGING_SETTINGS = Symbol('MESSAGING_SETTINGS');
 export interface SubscriptionSettings {
   /** El canal (exchange o topic) de la fuente. */
   readonly topic: string;
-  /** La cola propia de la que consume este servicio (RabbitMQ); null en un broker que consume del topic. */
+  /** La cola propia de la que consume este servicio (RabbitMQ, SNS/SQS); null en Kafka, que consume del topic. */
   readonly queue: string | null;
   /** El consumer group de la suscripción (Kafka); null en los demás brokers. */
   readonly groupId: string | null;
@@ -836,7 +846,7 @@ ${subscriptions
   .map(
     (sub) => `      ${tsString(sub.name)}: {
         topic: text(configuration, ${tsString(`messaging.subscriptions.${subscriptionKey(sub)}.topic`)}, ${tsString(sub.topicDefault)}),
-        queue: ${model.stack?.broker === 'rabbitmq' ? `text(configuration, ${tsString(`messaging.subscriptions.${subscriptionKey(sub)}.queue`)}, ${tsString(destinationOf('rabbitmq', model, sub))})` : 'null'},
+        queue: ${consumesFromQueue(model) ? `text(configuration, ${tsString(`messaging.subscriptions.${subscriptionKey(sub)}.queue`)}, ${tsString(destinationOf(model.stack.broker, model, sub))})` : 'null'},
         groupId: ${model.stack?.broker === 'kafka' ? `text(configuration, ${tsString(`messaging.subscriptions.${subscriptionKey(sub)}.group-id`)}, ${tsString(subscriptionGroupId(model, sub))})` : 'null'}
       }`
   )
@@ -907,6 +917,7 @@ function moduleFile(model) {
   const processed = usesProcessedEvents(model);
   const rabbit = usesRabbitMq(model);
   const kafka = usesKafka(model);
+  const snssqs = usesSnsSqs(model);
   const imports = [
     { symbol: 'Global', from: '@nestjs/common' },
     { symbol: 'Module', from: '@nestjs/common' },
@@ -959,8 +970,13 @@ function moduleFile(model) {
     providers.push('{ provide: KAFKA_SETTINGS, useValue: kafkaSettings(configuration) }', 'KafkaConnection');
     exportsList.push('KafkaConnection');
   }
+  if (snssqs) {
+    imports.push({ symbol: 'SNSSQS_SETTINGS', from: SNSSQS_CONNECTION_TS }, { symbol: 'snsSqsSettings', from: SNSSQS_CONNECTION_TS }, { symbol: 'SnsSqsConnection', from: SNSSQS_CONNECTION_TS });
+    providers.push('{ provide: SNSSQS_SETTINGS, useValue: snsSqsSettings(configuration) }', 'SnsSqsConnection');
+    exportsList.push('SnsSqsConnection');
+  }
   const body = `/**
- * La mensajería: la configuración del perfil, el puente de eventos${outbox ? ', el outbox con su relay' : ''}${processed ? ', el registro de mensajes procesados' : ''}${rabbit ? ' y la conexión con RabbitMQ' : ''}${kafka ? ' y la conexión con Kafka' : ''}.
+ * La mensajería: la configuración del perfil, el puente de eventos${outbox ? ', el outbox con su relay' : ''}${processed ? ', el registro de mensajes procesados' : ''}${rabbit ? ' y la conexión con RabbitMQ' : ''}${kafka ? ' y la conexión con Kafka' : ''}${snssqs ? ' y la conexión con SNS/SQS' : ''}.
  * Global: los adaptadores de repositorio entregan al puente sin importarla.
  *
  * Lo que escribe el agente para el broker entra por BROKER_ADAPTERS (broker-bindings.ts), DESPUÉS de los

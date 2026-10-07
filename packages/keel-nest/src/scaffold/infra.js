@@ -5,6 +5,7 @@
 
 import { infraFiles } from 'keel-core/gen/infra-scripts';
 import { identityProvisioningFiles } from 'keel-core/gen/identity-provisioning';
+import { messagingProvisioning, messagingTopologyChecks } from 'keel-core/gen/messaging-provisioning';
 
 /**
  * La tabla de historial de las migraciones de TypeORM. Explícita (`migrationsTableName` del
@@ -44,7 +45,17 @@ export const NEST_INFRA = {
 # Vaciar los datos no lo arregla —el índice viejo sigue ahí—; borrar la base sí. El
 # volumen no se toca.`
   },
-  httpStubsReadme
+  httpStubsReadme,
+  // La topología de SNS/SQS (keel-core/gen/messaging-provisioning.js): cómo nombra init-messaging.sh las piezas
+  // de keel-nest, que los topics y colas que siembra EXISTAN, y el script mismo.
+  messaging: {
+    harnessReaders: 'publishedMessages / purgeMessages de test/integration/support/flow.ts',
+    codeReads: 'por la configuracion de cada perfil',
+    skill: 'keel-nest-snssqs',
+    copyHelper: 'copyToDevtools del arnes'
+  },
+  extraChecks: (model) => messagingTopologyChecks(model),
+  extraFiles: (model) => [messagingProvisioning(model, NEST_INFRA)].filter(Boolean)
 };
 
 export function generate(model) {

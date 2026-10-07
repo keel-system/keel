@@ -903,9 +903,28 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   tarda 5,6 s y cada `podman exec` 1,5 s en Windows): con mensajería, el plazo es de 120 s; y
   `awaitOutboxDrained` esperaba también a la fila ya rendida, agotando sus 15 s en cada lectura (con los dos
   brokers). `ts-syntax` y `ts-check` juzgan cada fixture con mensajería sobre los dos brokers.
-- **9g — SNS/SQS**: los clientes de AWS, la publicación con atributos (`eventType` para la FilterPolicy), el
-  consumo por sondeo con visibilidad y el descarte por `maxReceiveCount`, la siembra de `init-messaging.sh`
-  (neutral), la rama SQS del arnés, su `broker-check` y la skill `keel-nest-snssqs`.
+- **9g — SNS/SQS, hecho (2026-10-07)**: `infra/init-messaging.sh` y sus checks pasan a keel-core
+  (`gen/messaging-provisioning.js`, con los textos de cada generador por parámetro; keel-spring queda como capa
+  fina y su golden no se mueve). **keel-nest**: `src/scaffold/snssqs.js` sobre el SDK v3 de AWS
+  (`@aws-sdk/client-sns` y `-sqs` 3.1147): las mismas variables que keel-spring; la publicación con el tipo como
+  message attribute `eventType` (sobre él filtran las suscripciones) y el ARN resuelto LISTANDO y exigiendo un
+  suscriptor confirmado —lo que la skill de keel-spring le pide escribir al agente: el resolutor por defecto
+  crea el topic, y un topic sin suscriptores descarta sin error—, con los plazos cortos de SNS de esa misma
+  skill; y un consumidor por suscripción que sondea su cola (la de `init-messaging.sh`): borra al terminar bien,
+  aplica la curva del diseño alargando la VISIBILIDAD (`initialDelayMs·2^(n-1)`, la de la skill de keel-spring;
+  1 con `fixed`), deja que la RedrivePolicy lleve lo agotado a la DLQ y lleva él lo no reintentable directo a la
+  DLQ (la salida que esa skill da para los errores que el diseño no quiere reintentar). Sin DLQ declarada, lo
+  agotado se registra y se borra, como con los otros dos brokers — **keel-spring con SNS/SQS sin descarte lo
+  reintenta para siempre** cada visibilidad (anotado, no corregido aquí). Arnés: lectura en barrido que oculta
+  y suelta (`SQS_SWEEP_VISIBILITY`), dedupe por `MessageId`, y `startBroker` que resiembra con el relay en pausa y
+  espera a que una sonda llegue a la cola de arnés antes de soltar el broker (LocalStack pierde la topología al
+  reiniciarse). `broker-check` con `FL-BRK-002-B` propio: una fila cuyo topic no existe no se da por publicada.
+  Skill `keel-nest-snssqs`. `ts-syntax` y `ts-check` juzgan cada fixture con mensajería sobre los tres brokers
+  (`ts-check` 12/12 con 32 siluetas). `broker-check` con SNS/SQS **19/19** (los tres brokers en una pasada: **55/55**), falsado con dos sabotajes que compilan
+  —`isRetryable` que lo reintenta todo y la resolución del topic que lo crea sin exigir suscriptor—: caen
+  `FL-BRK-001-D`, `-E` y `FL-BRK-002-B`, y solo esos. El primer intento de sabotaje no compilaba (TypeScript
+  estrechaba el tipo) y habría pasado por falsación sin medir nada: el proyecto saboteado se compila ANTES de
+  lanzar la pasada.
 
 ### Inc. 10 — Idempotencia, compensación, reconciliación y barridos
 
