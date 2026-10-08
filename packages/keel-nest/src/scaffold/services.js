@@ -156,17 +156,16 @@ function scaleRounded(component, expression) {
 function componentNotes(model, component, fromPath) {
   const notes = [];
   if (fromPath.has(component.name)) return '';
-  // El formato heredado de un value type NO se valida en el borde: describe el valor ya normalizado.
-  // Quitarlo en silencio es la mitad mala de esa decisión; se dice aquí, que es donde se mira.
-  const dropped = component.list ? null : component.inheritedPattern;
-  if (dropped) {
+  // El formato heredado de un value type se valida YA en la entrada (keel-core/gen/constraints.js): un valor mal
+  // formado es un 400 antes que cualquier error de negocio. El dominio lo repite para lo que no entra por la API.
+  const inherited = component.list ? null : component.inheritedPattern;
+  if (inherited) {
     notes.push(
-      `El formato del value type ${component.typeName ?? 'del campo'} (${dropped}) NO se valida en el borde: describe`,
-      'el valor YA normalizado, y la validación de entrada corre antes de que el handler normalice nada.',
-      `Lo hace cumplir ${component.typeName}Format.validate(...) (${classPath(DIRS.valueObjects, `${component.typeName}Format`)}):`,
-      'llámalo DESPUÉS de normalizar, en el factory o el método de negocio de la entidad que recibe el valor,',
-      'o aquí mismo si el handler es quien normaliza. Si el diseño NO normaliza este campo, el formato es',
-      'contrato del cable y tiene que volver a la validación de entrada.'
+      `El formato del value type ${component.typeName ?? 'del campo'} (${inherited}) se valida YA en la entrada: mal formado`,
+      'es un 400 antes que cualquier precondición. No lo valides otra vez al principio del handler.',
+      `El dominio lo repite con ${component.typeName}Format.validate(...) (${classPath(DIRS.valueObjects, `${component.typeName}Format`)})`,
+      'en el factory o el método de negocio de la entidad que recibe el valor: es lo que cubre lo que no entra por',
+      'la API (un evento, una operación interna), y lo exige el gate check-domain-guards.sh.'
     );
   }
   if (component.resolvedIdentity) {

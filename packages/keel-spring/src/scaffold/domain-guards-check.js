@@ -1,11 +1,10 @@
 // El otro tramo que no estaba garantizado por construcción: el formato de los value
 // types ESCALARES.
 //
-// El DTO de entrada deja caer a propósito el `@Pattern` heredado del value type: el
-// formato describe el valor YA normalizado y Bean Validation corre antes de que el
-// handler normalice nada (type-mapper.js § inheritTypeFormat). Un value type COMPUESTO
-// recoge ese formato en su constructor compacto; uno escalar se aplana a String y no
-// tenía dónde. Ahora sí lo tiene —`<Tipo>Format`, que genera value-types.js—, pero la
+// El DTO de entrada valida el `@Pattern` heredado del value type, pero no todo entra por
+// la API: un evento o una operación interna construyen el agregado sin pasar por él. Por
+// eso el dominio lo repite. Un value type COMPUESTO recoge ese formato en su constructor
+// compacto; uno escalar se aplana a String y no tenía dónde. Ahora sí lo tiene —`<Tipo>Format`, que genera value-types.js—, pero la
 // LLAMADA sigue siendo del agente: build no escribe ni el factory ni los métodos de
 // negocio de la entidad.
 //
@@ -139,12 +138,11 @@ if [ "$findings" -gt 0 ]; then
   echo "HALLAZGOS ($findings)"
   printf '%b' "$detail"
   echo ""
-  echo "El DTO de entrada deja caer el formato heredado de un value type a propósito: describe"
-  echo "el valor YA normalizado y Bean Validation corre antes de que el handler normalice. La"
-  echo "clase <Tipo>Format lleva la regex del diseño; llámala DESPUÉS de normalizar, en el"
-  echo "factory de la entidad o en el método de negocio que asigna el campo. Sin esa llamada el"
-  echo "servicio acepta valores que el diseño declara imposibles, y ningún escenario que no lo"
-  echo "mire lo delata. Ver conventions/domain-modeling.md."
+  echo "El DTO de entrada valida el formato heredado de un value type, pero lo que no entra por la"
+  echo "API (un evento, una operación interna) no pasa por él. La clase <Tipo>Format lleva la regex"
+  echo "del diseño; llámala en el factory de la entidad o en el método de negocio que asigna el"
+  echo "campo. Sin esa llamada el servicio acepta por esas puertas valores que el diseño declara"
+  echo "imposibles, y ningún escenario que no lo mire lo delata. Ver conventions/domain-modeling.md."
   exit 1
 fi
 

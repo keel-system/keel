@@ -79,9 +79,10 @@ export function generate(model) {
  * Un valor no cumple el formato de su value type declarado. Lo lanza la clase
  * <Tipo>Format del dominio, que es donde vive la regex del diseño.
  *
- * No puede expresarse como Bean Validation sobre el DTO de entrada: el patrón
- * describe el valor YA normalizado y el binding corre antes de normalizar nada
- * (conventions/mapping.md § Normalización antes que validación de formato).
+ * Sobre una petición HTTP el formato ya lo rechaza el DTO de entrada; esto es la
+ * guarda del dominio, para lo que llega por otra puerta (un evento, una operación
+ * interna). Mismo code y status que la validación de entrada
+ * (conventions/mapping.md § El formato se valida en la entrada).
  */
 public class ValueFormatException extends BadRequestException {
 

@@ -87,10 +87,10 @@ export function toJava(resolved) {
  * devolvía 400 antes de llegar al handler. El resto de anotaciones (formato,
  * rango, tamaño) no se toca: si el cliente SÍ manda el campo, tiene que ser válido.
  */
-export function beanValidationAnnotations(field, resolved, { inheritTypeFormat = true, honourDefault = false } = {}) {
+export function beanValidationAnnotations(field, resolved, { input = false, honourDefault = false } = {}) {
   // QUÉ se valida es una decisión del diseño y vive en keel-core/gen (validationRules), la misma
   // para keel-nest; aquí solo se escribe como Bean Validation.
-  return validationRules(field, resolved, { inheritTypeFormat, honourDefault }).map(beanValidationAnnotation);
+  return validationRules(field, resolved, { input, honourDefault }).map(beanValidationAnnotation);
 }
 
 function beanValidationAnnotation(rule) {

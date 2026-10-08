@@ -123,10 +123,13 @@ test('en un PATCH, un opcional del cuerpo distingue ausente de null en su tipo',
   assert.ok(found > 0, 'alguna fixture declara un PATCH con opcionales');
 });
 
-test('el formato heredado de un value type escalar se anuncia en el mensaje, apuntando a su clase', () => {
+test('el formato heredado de un value type escalar se valida en la entrada, y el mensaje apunta a la guarda del dominio', () => {
   const { files } = planFixture('product-catalog');
   const command = files.find((file) => file.path === 'src/application/commands/create-product-command.ts').content;
-  assert.match(command, /El formato del value type SKU \(\^\[A-Z\]\{3\}-\[0-9\]\{4\}\$\) NO se valida en el borde/);
+  assert.match(command, /El formato del value type SKU \(\^\[A-Z\]\{3\}-\[0-9\]\{4\}\$\) se valida YA en la entrada/);
+  // Y el lector de la petición lo comprueba de verdad: es lo que hace que el 400 llegue antes que el negocio.
+  const reader = files.filter((file) => file.path.includes('/rest/controllers/')).map((file) => file.content).join(' ');
+  assert.match(reader, /\.check\('sku', sku, \[[^\]]*\{ rule: 'pattern', regexp: '\^\[A-Z\]\{3\}-\[0-9\]\{4\}\$' \}/);
   assert.match(command, /SKUFormat\.validate\(\.\.\.\) \(src\/domain\/valueobject\/sku-format\.ts\)/);
 });
 

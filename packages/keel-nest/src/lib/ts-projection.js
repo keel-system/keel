@@ -148,7 +148,7 @@ export const TS_PROJECTION = {
       // Escala y cotas numéricas: las hace cumplir el constructor del value object, que es el único
       // punto por el que pasa cualquier valor de ese tipo. La misma decisión que keel-spring.
       numeric: numericConstraints(field, resolved),
-      inputValidation: validationRules(field, resolved, { inheritTypeFormat: false, honourDefault: true }),
+      inputValidation: validationRules(field, resolved, { input: true, honourDefault: true }),
       // El formato heredado de un value type ESCALAR: sostiene la clase `<Tipo>Format` del dominio,
       // la nota del mensaje y el gate check-domain-guards.sh.
       inheritedPattern: inheritedFormat(field, resolved),

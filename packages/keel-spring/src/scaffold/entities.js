@@ -134,8 +134,8 @@ function renderEntity(model, entity) {
 
   bodyParts.push(declarations.join('\n\n'));
 
-  // Formato de los value types escalares: el DTO de entrada lo deja caer a propósito
-  // (describe el valor ya normalizado) y la clase <Tipo>Format es quien lo hace cumplir.
+  // Formato de los value types escalares: el DTO de entrada lo valida, pero lo que no entra
+  // por la API no pasa por él, y la clase <Tipo>Format es quien lo hace cumplir en el dominio.
   // Se nombran aquí, campo a campo, porque el sitio donde tienen que llamarse es este:
   // sin decir cuáles, la corrida real solo los puso donde un escenario los exigía.
   const formatGuards = entity.fields.filter((field) => field.inheritedPattern && field.typeName);

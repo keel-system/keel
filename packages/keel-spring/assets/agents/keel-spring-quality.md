@@ -345,9 +345,9 @@ falla, y porque las dos últimas familias no tienen ningún gate conductual detr
 
 ## El formato de los value types escalares
 
-El mismo reparto que la sección anterior, sobre otra pieza. El DTO de entrada deja caer
-a propósito el `@Pattern` que un campo hereda de su value type: el formato describe el
-valor **ya normalizado** y Bean Validation corre antes de que el handler normalice nada.
+El mismo reparto que la sección anterior, sobre otra pieza. El DTO de entrada valida el
+`@Pattern` que un campo hereda de su value type, pero el dominio lo repite: un evento o una
+operación interna no pasan por el DTO.
 Un value type compuesto recoge ese formato en su constructor compacto; uno **escalar** se
 aplana a String, así que build le genera una clase `<Tipo>Format` con la regex del
 diseño — pero la **llamada** es del agente de código, en el factory de la entidad o en el

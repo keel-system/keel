@@ -1,10 +1,10 @@
 // El gate del formato de los value types ESCALARES: `infra/check-domain-guards.sh`, el mismo que
 // emite keel-spring y con las MISMAS filas (guardedFields de keel-core/gen).
 //
-// La validación de entrada deja caer a propósito el formato heredado de un value type: describe el
-// valor YA normalizado. build genera `<Tipo>Format` con la regex del diseño, pero la LLAMADA es del
-// agente, y ese tramo falla en silencio: el servicio compila, arranca y acepta valores que el diseño
-// declara imposibles. Alcance deliberado, como en keel-spring: se comprueba que la clase exista y
+// El lector de la petición valida el formato heredado de un value type, pero un evento o una operación
+// interna no pasan por él, así que el dominio lo repite. build genera `<Tipo>Format` con la regex del
+// diseño, pero la LLAMADA es del agente, y ese tramo falla en silencio: el servicio compila, arranca y
+// acepta por esas puertas valores que el diseño declara imposibles. Alcance deliberado, como en keel-spring: se comprueba que la clase exista y
 // que ALGUIEN la llame desde código vivo, no DÓNDE — un check que exige una ubicación concreta tiene
 // como camino de menor resistencia romper el código para callarlo.
 
@@ -101,11 +101,11 @@ if [ "$findings" -gt 0 ]; then
   echo "HALLAZGOS ($findings)"
   printf '%b' "$detail"
   echo ""
-  echo "La validación de entrada deja caer el formato heredado de un value type a propósito: describe"
-  echo "el valor YA normalizado y se valida antes de que el handler normalice. La clase <Tipo>Format"
-  echo "lleva la regex del diseño; llámala DESPUÉS de normalizar, en el factory de la entidad o en el"
-  echo "método de negocio que asigna el campo. Sin esa llamada el servicio acepta valores que el"
-  echo "diseño declara imposibles, y ningún escenario que no lo mire lo delata."
+  echo "El lector de la petición valida el formato heredado de un value type, pero lo que no entra por"
+  echo "la API (un evento, una operación interna) no pasa por él. La clase <Tipo>Format lleva la regex"
+  echo "del diseño; llámala en el factory de la entidad o en el método de negocio que asigna el campo."
+  echo "Sin esa llamada el servicio acepta por esas puertas valores que el diseño declara imposibles,"
+  echo "y ningún escenario que no lo mire lo delata."
   exit 1
 fi
 

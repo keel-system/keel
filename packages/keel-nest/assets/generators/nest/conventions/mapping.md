@@ -174,17 +174,25 @@ arrancar— y que un handler recibe declarándolo en su `inject`, como cualquier
 variable de entorno y el mismo gradiente que keel-spring. **No leas la configuración desde application**
 ni escribas el valor como constante.
 
-### Normalización antes que validación de formato
+### El formato se valida en la entrada
 
-Si una regla del diseño normaliza un campo (mayúsculas, recorte, slug), se normaliza **antes** de
-validar su formato y antes de buscar por él: la unicidad y el formato se juzgan sobre el valor
-normalizado. Pero la normalización no amplía lo admitido: lo que el lector rechaza con 400 por su
-`pattern` propio no llega al dominio.
+El `pattern` de un value type se valida **ya en el lector de la petición** (`infrastructure/rest`), lo
+herede el campo de su tipo o lo declare él: un valor mal formado es un 400 `VALIDATION_ERROR` **antes**
+que cualquier precondición o error de negocio, igual que en el servidor de keel-spring del mismo diseño.
+No lo vuelvas a validar al principio del handler.
+
+El dominio lo **repite** (`<Tipo>Format.validate(...)` en el factory o el método de negocio que recibe el
+valor, o el constructor del value object compuesto), porque un evento o una operación interna no pasan
+por el lector. Esa llamada la exige el gate `check-domain-guards.sh`.
+
+Si el diseño normaliza un campo antes de validarlo y el `pattern` del tipo no admite el valor sin
+normalizar, la entrada lo rechaza antes de que la regla se aplique: es un `designGap`, no lo arregles
+quitando la regla del lector.
 
 ### La lista cerrada de `code` que NO nacen en el diseño
 
 Los conflictos de un mecanismo que el diseño no nombra (bloqueo optimista, unicidad sin error
-declarado, tope de transacción) salen con los `code` del catálogo de Keel (`VALIDATION_ERROR`,
+declarado, tope de transacción) salen con los `code` del catálogo de Keel (`{{keel:docs}}/framework-errors.md`: `VALIDATION_ERROR`,
 `OPTIMISTIC_LOCK_CONFLICT`, `TRANSACTION_TIMEOUT`…): ya los emite el filtro de errores. No inventes
 `code` nuevos: lo que no esté ni en el diseño ni en ese catálogo es un hueco del diseño.
 

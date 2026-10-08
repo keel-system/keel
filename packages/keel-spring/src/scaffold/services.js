@@ -156,17 +156,11 @@ function isWrappedInJsonNullable(operation, component, fromPath) {
  * es lo que hace que Bean Validation sepa desenvolverlo.
  */
 /**
- * El `regexp` del `@Pattern` que el campo hereda de su value type y que el mensaje
- * de ENTRADA deja fuera, o `null` si no hay ninguno.
- *
- * Se deriva comparando las dos listas que el modelo ya calcula —`validation` (el
- * valor ya formado) e `inputValidation` (lo que llega por el cable)— en vez de
- * volver a resolver el tipo: son exactamente las dos caras cuya diferencia se
- * quiere anunciar, así que si algún día dejan de diferir, esto deja de hablar solo.
- * Un `pattern` que el CAMPO declara por su cuenta sobrevive en las dos listas y no
- * cuenta como omitido, que es justo lo correcto: ese sí se está emitiendo.
+ * El `regexp` del `@Pattern` que el campo hereda de su value type ESCALAR, o `null`. Desde la corrida
+ * notification-mailer-mongo se valida también en la entrada; este dato decide la nota que dice que el
+ * dominio lo repite (con `<Tipo>Format`) para lo que no entra por la API.
  */
-function droppedTypePattern(component) {
+function inheritedPatternOf(component) {
   // El contenedor de una colección no hereda el formato del elemento: sus
   // anotaciones son de cardinalidad, y la nota iría al campo equivocado.
   if (component.list) return null;
@@ -213,22 +207,16 @@ function renderMessage(model, operation) {
     // camino feliz. El valor lo pone el servidor desde la credencial, y su presencia la garantiza
     // la cadena de seguridad: sin token no se llega hasta aquí.
     if (!fromPath.has(component.name) && !component.resolvedIdentity) {
-      // Entrada: sin el formato heredado del value type, que el diseño puede estar
-      // normalizando en el handler (mapping.md § Normalización antes que validación
-      // de formato). Presencia, tamaño y rango sí se quedan: no compiten con
-      // ninguna normalización.
+      // Entrada: presencia, tamaño, rango y TAMBIÉN el formato heredado del value type
+      // (keel-core/gen/constraints.js): un valor mal formado es un 400 antes que cualquier
+      // error de negocio, igual que en keel-nest.
       for (const annotation of component.inputValidation ?? component.validation ?? []) {
         imports.add(`jakarta.validation.constraints.${annotation.slice(1).split('(')[0]}`);
         annotations.push(annotation);
       }
-      // Y se DICE que se ha quitado. Quitarlo en silencio es la mitad mala de la
-      // decisión: si el diseño no normaliza este campo, el formato del tipo es el
-      // contrato del cable y aquí era el único sitio donde vivía, así que la entrada
-      // se queda sin validar y el borde acepta lo que el diseño prohíbe — un `201`
-      // donde el escenario espera un `400`, sin nada que lo delate en el código. Es
-      // una decisión que depende del diseño y build no puede tomarla (la normalización
-      // se declara en prosa, en `rules`), pero sí puede dejarla planteada donde se ve.
-      const dropped = droppedTypePattern(component);
+      // Y se dice que el dominio lo repite: lo que no entra por la API (un evento, una
+      // operación interna) no pasa por aquí, y para eso está la guarda del dominio.
+      const dropped = inheritedPatternOf(component);
       if (dropped) {
         // A dónde mandar al agente depende de la forma del tipo, y decirlo mal es peor
         // que no decirlo: un tipo ESCALAR (`ApplicationCode: {type: string, pattern: …}`)
@@ -236,21 +224,14 @@ function renderMessage(model, operation) {
         // value object" es mandarlo a un archivo que no existe — y una instrucción que no
         // se puede seguir no se sigue: el formato acaba sin comprobarse en ningún sitio.
         notes.push(
-          `// El @Pattern del value type ${component.typeName ?? 'del campo'} (${dropped}) NO está aquí: el formato del tipo`,
-          '// describe el valor YA normalizado, y Bean Validation corre antes de que el handler normalice nada.'
+          `// El @Pattern del value type ${component.typeName ?? 'del campo'} (${dropped}) se valida YA aquí: mal formado es`,
+          '// un 400 antes que cualquier precondición. No lo valides otra vez al principio del handler.'
         );
-        if (component.kind === 'composite') {
+        if (component.kind !== 'composite') {
           notes.push(
-            `// Si el diseño normaliza este campo antes de validarlo, ya se cumple: el constructor compacto`,
-            `// de ${component.typeName} lo comprueba. Si NO lo normaliza, el formato tiene que volver aquí.`
-          );
-        } else {
-          notes.push(
-            `// Este tipo es escalar: se aplana a ${component.javaType ?? 'su primitivo'} y no tiene clase propia, así`,
-            `// que lo hace cumplir ${component.typeName}Format.validate(...), que lleva la regex del diseño.`,
-            `// Llámalo DESPUÉS de normalizar (en el factory o el método de negocio de la entidad que`,
-            `// recibe el valor, o aquí mismo si el handler es quien normaliza). Si el diseño NO normaliza`,
-            '// este campo, el formato tiene que volver aquí como @Pattern.'
+            `// El dominio lo repite con ${component.typeName}Format.validate(...) en el factory o el método de`,
+            '// negocio de la entidad que recibe el valor: cubre lo que no entra por la API (un evento, una',
+            '// operación interna), y lo exige el gate check-domain-guards.sh.'
           );
         }
       }

@@ -19,21 +19,23 @@ test('la presencia de un texto es notBlank; la de cualquier otra cosa, notNull; 
   ]);
 });
 
-test('en la entrada, un campo con default no exige presencia y el formato heredado del tipo no se valida', () => {
+test('en la entrada, un campo con default no exige presencia y el formato heredado del tipo SÍ se valida', () => {
   const field = { required: true, default: 'draft' };
   assert.deepEqual(validationRules(field, text()), [{ rule: 'notBlank' }]);
   assert.deepEqual(validationRules(field, text(), { honourDefault: true }), []);
   const sku = text({ pattern: '^[A-Z]{3}$', maxLength: 3 });
-  assert.deepEqual(validationRules({}, sku), [{ rule: 'size', min: null, max: 3 }, { rule: 'pattern', regexp: '^[A-Z]{3}$' }]);
-  assert.deepEqual(validationRules({}, sku, { inheritTypeFormat: false }), [{ rule: 'size', min: null, max: 3 }]);
-  // El que el campo declara por su cuenta sí se conserva.
-  assert.deepEqual(validationRules({ constraints: { pattern: '^x$' } }, sku, { inheritTypeFormat: false })[1], { rule: 'pattern', regexp: '^x$' });
+  // Corrida notification-mailer-mongo: dejarlo caer en la entrada hacía que el orden 400/422 dependiera del agente.
+  const expected = [{ rule: 'size', min: null, max: 3 }, { rule: 'pattern', regexp: '^[A-Z]{3}$' }];
+  assert.deepEqual(validationRules({}, sku), expected);
+  assert.deepEqual(validationRules({}, sku, { input: true }), expected);
+  // El que el campo declara por su cuenta manda sobre el del tipo.
+  assert.deepEqual(validationRules({ constraints: { pattern: '^x$' } }, sku, { input: true })[1], { rule: 'pattern', regexp: '^x$' });
 });
 
 test('scalePolicy: reject es una regla de dígitos SOLO en la entrada, con la precisión de la columna', () => {
   const amount = { kind: 'base', base: 'decimal', constraints: { min: 0, scale: 2, scalePolicy: 'reject' } };
   assert.deepEqual(validationRules({}, amount), [{ rule: 'min', value: 0, decimal: true }]);
-  assert.deepEqual(validationRules({}, amount, { inheritTypeFormat: false }), [
+  assert.deepEqual(validationRules({}, amount, { input: true }), [
     { rule: 'min', value: 0, decimal: true },
     { rule: 'digits', integer: DECIMAL_PRECISION - 2, fraction: 2 }
   ]);

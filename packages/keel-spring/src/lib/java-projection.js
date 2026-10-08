@@ -163,7 +163,7 @@ export const JAVA_PROJECTION = {
       // omitir (ver type-mapper.js). Las dos diferencias son del lado de ENTRADA:
       // `validation` describe el valor ya formado y aquí se describe lo que llega
       // por el cable, que es antes de que el dominio ponga nada.
-      inputValidation: beanValidationAnnotations(field, java, { inheritTypeFormat: false, honourDefault: true }),
+      inputValidation: beanValidationAnnotations(field, java, { input: true, honourDefault: true }),
       // El formato que el campo hereda de su value type ESCALAR y que la entrada deja
       // caer. Es lo que sostiene la clase `<Tipo>Format` del dominio y el gate que
       // comprueba que alguien la llama: sin este dato aquí, el único sitio donde vive

@@ -42,11 +42,11 @@ verdadero porque suena bien.
 
 - **La fuente es el YAML, no la prosa.** Una `rule` en prosa describe el comportamiento, pero
   si contradice un campo estructurado, lo que se reporta es esa contradicción.
-- **Lo que valida la entrada y lo que se valida después de normalizar son cosas distintas.** El
-  `pattern` de un value type describe el valor YA normalizado: si una `rule` normaliza (a
-  mayúsculas, sin espacios…), un valor de entrada que aún no cumple el patrón **no** es un 400
-  de formato, llega a la regla. Tratarlo como rechazo en el borde fue el falso positivo de la
-  primera medición. Las cotas (`maxLength`, `min`…) y `required` sí se validan en la entrada.
+- **La entrada valida el `pattern` del value type.** Un valor mal formado es un 400 antes que
+  cualquier error de negocio, en los dos generadores. Si una `rule` normaliza (a mayúsculas, sin
+  espacios…) antes de validar, el `pattern` tiene que admitir el valor SIN normalizar, o la
+  regla no llega a aplicarse: un escenario que espera que la normalización acepte un valor que
+  el patrón rechaza es una contradicción del diseño, y es lo que se reporta.
 - **No repitas `keel validate`.** Si el hallazgo ya sale con un id `CHK-*` u `OBL-*`, no lo
   anotes.
 - **Una aserción que depende de algo que el diseño no fija es un hallazgo**, no una

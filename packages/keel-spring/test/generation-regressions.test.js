@@ -1115,30 +1115,19 @@ test('colección hija con orden explícito: @OrderBy en la entidad JPA', () => {
   assert.ok(parentJpa.includes('import jakarta.persistence.OrderBy;'));
 });
 
-test('normalización antes que formato: el patrón del value type no llega al DTO de entrada', () => {
+test('el formato del value type se valida en el DTO de entrada, y la nota apunta a la guarda del dominio', () => {
   const { read } = scaffoldExtended();
   const command = read(`${JAVA}/application/commands/CreateProductCommand.java`);
 
-  // `sku` es de tipo SKU, cuyo formato describe el valor YA normalizado. Bean
-  // Validation corre sobre el DTO antes de que el handler normalice nada: con
-  // @Pattern, un sku en minúsculas moría con 422 VALIDATION_ERROR sin llegar a la
-  // regla de negocio que debía responder 409 SKU_ALREADY_EXISTS — el escenario
-  // fallaba por el error equivocado (conventions/mapping.md).
-  // La anotación, no la palabra: lo que no puede estar es el @Pattern APLICADO al
-  // componente. La nota de abajo lo nombra a propósito, y un `includes('@Pattern')`
-  // a secas no distingue una cosa de la otra.
-  assert.ok(!/^\s*@[A-Za-z]*\s*@?Pattern\(|@Pattern\(regexp[^\n]*\)\s+String sku/m.test(command), command);
-  assert.ok(!command.includes('@NotBlank @Pattern'), command);
-  // Presencia sí se queda: no compite con ninguna normalización.
-  assert.ok(command.includes('@NotBlank String sku'), command);
-  // Y no se quita en silencio: quitarlo sin decirlo deja la entrada sin validar
-  // cuando el diseño NO normaliza ese campo (el sku de esta fixture se guarda tal
-  // cual llega), y el borde acepta un formato que el diseño prohíbe — un 201 donde
-  // el escenario espera un 400. Apareció en dos corridas seguidas y las dos veces lo
-  // arregló el agente a mano, que es la señal de que el generador no lo estaba
-  // planteando. La nota no decide por el diseño: deja la decisión escrita donde se ve.
+  // Corrida notification-mailer-mongo (2026-10-08): dejar caer el @Pattern heredado por si el diseño
+  // normalizaba —cosa que solo podía decir en prosa y ningún diseño hace— dejaba el orden 400/422 en
+  // manos de cada agente, y los dos servidores del mismo diseño respondían distinto. Ahora el formato
+  // es contrato de la entrada: un 400 antes que cualquier error de negocio.
+  assert.match(command, /@NotBlank @Pattern\(regexp = "[^"]+"\) String sku/, command);
+  // Y la nota dice que el dominio lo repite (para lo que no entra por la API), no que falte aquí.
   assert.ok(command.includes('El @Pattern del value type SKU'), command);
-  assert.ok(command.includes('el formato tiene que volver aquí'), command);
+  assert.ok(command.includes('se valida YA aquí'), command);
+  assert.ok(!command.includes('el formato tiene que volver aquí'), command);
 });
 
 // El mismo defecto lo encontró y corrigió a mano el agente de código en DOS corridas
@@ -1159,7 +1148,7 @@ test('el campo del lifecycle no entra en la entrada derivada', () => {
 
   // Y no es que se haya caído la entrada entera: `sku` sigue estando y sigue validado.
   // Sin esta mitad, el test pasaría igual con el DTO vacío.
-  assert.ok(command.includes('@NotBlank String sku'), command);
+  assert.match(command, /@NotBlank @Pattern\(regexp = "[^"]+"\) String sku/, command);
 });
 
 test('un campo con default que no es el del lifecycle sí entra, y sin exigir presencia', () => {

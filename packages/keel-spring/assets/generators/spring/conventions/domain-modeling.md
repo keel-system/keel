@@ -40,14 +40,12 @@ Consecuencia práctica: si el escenario manda `acme-1` y el diseño declara
 test: o el `pattern` del diseño admite ambas formas, o el escenario está mandando algo que el
 contrato no acepta. Es un `designGap` y se reporta como tal.
 
-### El formato heredado de un value type escalar no está en el DTO
+### El formato de un value type escalar: en la entrada, y otra vez en el dominio
 
-Cuidado con la fila anterior: el `@Pattern` que un campo **hereda de su value type** no viaja al
-record de entrada, y no es un olvido. El formato de un tipo describe el valor **ya normalizado**
-(un `SKU` es `^[A-Z0-9]…` porque el diseño pasa el código a mayúsculas antes de comprobar nada), y
-Bean Validation corre sobre el DTO **antes** de que el handler normalice: dejarlo ahí rechazaría
-con 400 exactamente las peticiones que la normalización existe para aceptar. El que sí se queda es
-el `pattern` que el **campo** declara por su cuenta, que sí habla del valor tal como llega.
+El `@Pattern` que un campo hereda de su value type está en el record de entrada: un valor mal
+formado es un 400 antes que cualquier error de negocio (`mapping.md` § El formato se valida en la
+entrada). Pero el dominio lo **repite**, porque no todo entra por la API: un evento o una operación
+interna construyen el agregado sin pasar por el DTO.
 
 Un tipo compuesto recoge ese formato en su compact constructor. Uno **escalar** se aplana a String
 y no tiene clase propia, así que build le genera una: `<Tipo>Format`, en `domain/valueobject`, con
@@ -56,7 +54,7 @@ la regex del diseño escrita **una sola vez**. Llamarla es tuyo:
 ```java
 // En el factory y en TODO método de negocio que asigne el campo, DESPUÉS de normalizar.
 public static Application create(String code, String senderAddress) {
-    ApplicationCodeFormat.validate(code);        // el handler ya lo pasó a minúsculas
+    ApplicationCodeFormat.validate(code);
     EmailAddressFormat.validate(senderAddress);
     …
 }

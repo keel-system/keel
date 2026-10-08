@@ -88,9 +88,16 @@ export const DECIMAL_PRECISION = 19;
  *
  * `honourDefault: true` (lo pasa el lado de ENTRADA) deja fuera la PRESENCIA de un campo que
  * declara `default`: por definición el cliente puede omitirlo, y exigirlo rechaza con 400 justo el
- * caso para el que el default existe. `inheritTypeFormat: false` (también la entrada) deja fuera el
- * `pattern` que el campo hereda de su value type: describe el valor YA normalizado, y la entrada se
- * valida antes de normalizar. El `pattern` que el campo declara por su cuenta se conserva.
+ * caso para el que el default existe. `input: true` (también la entrada) añade los dígitos de
+ * `scalePolicy: reject`, que solo tienen sentido sobre lo que llega por el cable.
+ *
+ * El `pattern` que el campo HEREDA de su value type se valida también en la entrada: un valor mal
+ * formado es un 400 antes que cualquier error de negocio, y en los dos servidores igual. Hasta la
+ * corrida notification-mailer-mongo (2026-10-08) la entrada lo dejaba caer por si el diseño
+ * normalizaba el campo antes de validarlo —cosa que solo podía decir en prosa y ningún diseño hacía—,
+ * y el orden quedaba en manos de cada agente: con un destinatario mal formado y una plantilla
+ * inexistente, keel-spring respondía 400 y keel-nest 422. Si un diseño necesita normalizar antes de
+ * validar, es un hueco del DSL, no algo que la entrada adivine.
  *
  * Cada regla es `{ rule, ... }`:
  *   · `notBlank` (texto) | `notNull` | `notEmpty` (lista) — presencia;
@@ -99,14 +106,11 @@ export const DECIMAL_PRECISION = 19;
  *   · `min` / `max` con `value` y `decimal` (cota inclusiva);
  *   · `digits` con `integer` y `fraction` (`scalePolicy: reject` en la entrada).
  */
-export function validationRules(field, resolved, { inheritTypeFormat = true, honourDefault = false } = {}) {
+export function validationRules(field, resolved, { input = false, honourDefault = false } = {}) {
   // `!== undefined` y no un truthy check: `default: 0` y `default: false` son tan legítimos como
   // cualquier otro, y son justo los que un `if (default)` se deja fuera.
   const omitPresence = honourDefault && field.default !== undefined;
-  const own = field.constraints ?? {};
-  const constraints = inheritTypeFormat
-    ? { ...resolved.constraints, ...own }
-    : { ...resolved.constraints, ...own, pattern: own.pattern ?? null };
+  const constraints = { ...resolved.constraints, ...(field.constraints ?? {}) };
 
   // Campo colección: las reglas son del contenedor, no del elemento.
   if (field.list) {
@@ -131,7 +135,7 @@ export function validationRules(field, resolved, { inheritTypeFormat = true, hon
   // 400, no un redondeo. Solo en la entrada: el valor ya formado tiene la escala por construcción.
   // La parte entera sale de la misma precisión que la columna, o el borde aceptaría importes que el
   // INSERT rechaza.
-  if (!inheritTypeFormat && decimal && constraints.scale != null && constraints.scalePolicy === 'reject') {
+  if (input && decimal && constraints.scale != null && constraints.scalePolicy === 'reject') {
     rules.push({ rule: 'digits', integer: DECIMAL_PRECISION - constraints.scale, fraction: constraints.scale });
   }
   return rules;

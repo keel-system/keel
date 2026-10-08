@@ -136,7 +136,7 @@ comportamiento y contradecirlo en el esquema es peor que cualquiera de las dos o
 | `sort` con **dot-path** sobre un value object (`price.amount`) | Sí se traduce, y a cosas distintas: en relacional a la columna aplanada (`priceAmount`), en documental a la ruta literal del subdocumento (`price.amount`) |
 | `input` con un campo `type: file` | Endpoint `multipart/form-data`: el binario llega como `@RequestPart MultipartFile` y viaja al mensaje como `FileUpload(content, filename, contentType, size)`; el resto de campos, como `@RequestParam`. El handler sube el contenido por el puerto `FileStorage` y guarda en el dominio la **clave** del objeto (String). Lo que el `output` expone se deriva de la visibilidad del bucket y **lo resuelve el mapper que genera build**, no el handler: ver [§ `storage`](#storage--storagekeelyaml) |
 | `preconditions` / `rules` | Lógica del `handle(...)` del handler, en el mismo orden del diseño, comentadas con la frase del diseño cuando no sea obvia |
-| `rules` con **normalización previa** (upper/lower/trim antes de validar formato o unicidad) | El campo **no** lleva `@Pattern`/`@Size` de Bean Validation en el DTO de entrada — ver el aviso de abajo |
+| `rules` con **normalización previa** (upper/lower/trim antes de validar formato o unicidad) | El `@Pattern` sigue en el DTO de entrada: si el `pattern` del tipo no admite el valor sin normalizar, es un `designGap` — ver § El formato se valida en la entrada |
 | `errors[].code` | `<PascalCode>Error` en `domain/errors` con el `code` exacto, extendiendo la subclase base de su `http` (404→`NotFoundException`, 409→`ConflictException`…; status sin subclase → `DomainException` con el `httpStatus` en la metadata); `ApiExceptionHandler` la traduce a `ErrorResponse` (`timestamp`, `status`, `error`, `code`, `message`, `details`) |
 | El mismo `code` con `http` **distinto** en dos operaciones | Una sola clase, pero con el status como **parámetro** del constructor (`new XxxError(mensaje, 422)`): extiende `DomainException` y `ApiExceptionHandler` resuelve el status desde la metadata. Cada handler pasa el `http` que su operación declara — pasarlo mal es un error de contrato invisible a la compilación |
 | `emits` | `raise(<E>Event.of(...))` **dentro del método de negocio del agregado** que provoca el cambio (`domain-modeling.md`); el handler no publica ni inyecta publishers. El adaptador de repositorio drena el buffer al persistir y el bridge lo entrega según `messaging.publishing.reliability` |
@@ -242,42 +242,22 @@ el de cualquier otro `errors[].code`. Que la operación se ejecute sin deduplica
 decisión **silenciosa** —no hay `Then` que la observe—, así que va al reporte como
 `designGaps` aunque no bloquee ningún escenario.
 
-### Normalización antes que validación de formato
+### El formato se valida en la entrada
 
-Replicar el tipo del dominio como `@Pattern` en el DTO de entrada es el reflejo
-natural, y es **incorrecto** cuando el diseño declara una regla de normalización
-antes de la validación de ese campo: Bean Validation corre sobre el DTO **antes**
-de que el handler llegue a normalizar nada.
+El `pattern` de un value type se valida **ya en el DTO de entrada** (`@Pattern`), lo herede el campo
+de su tipo o lo declare él: un valor mal formado es un `400 VALIDATION_ERROR` **antes** que cualquier
+precondición o error de negocio, y así responde también el servidor de keel-nest del mismo diseño. No
+lo vuelvas a validar al principio del handler.
 
-> `sku` es de tipo `SKU` (`^[A-Z0-9][A-Z0-9-]{2,31}$`) y `use-cases` declara
-> "normalizar el sku a mayúsculas" antes de "validar que no exista otro producto
-> con ese sku". Con `@Pattern` en el DTO, un `sku` en minúsculas se rechaza con
-> `400 VALIDATION_ERROR` y nunca llega a la regla de negocio, que debía devolver
-> `409 SKU_ALREADY_EXISTS`. El escenario falla por el error equivocado.
+El dominio lo **repite** —el constructor compacto de un value object compuesto, o
+`<Tipo>Format.validate(...)` para uno escalar, en el factory o el método de negocio que recibe el
+valor—, porque no todo entra por la API: un evento o una operación interna no pasan por el DTO. Esa
+llamada la exige el gate `check-domain-guards.sh`.
 
-Regla: si el orden de `rules` pone una normalización por delante de la validación
-de formato o de unicidad de un campo, ese campo va **sin** `@Pattern`/`@Size` en
-el DTO de entrada. La validación de formato vive después de normalizar, en el
-handler o en el constructor del value object del dominio (que es donde el modelo
-rico la quiere de todos modos, ver `domain-modeling.md`). `@NotNull`/`@NotBlank`
-sí pueden quedarse: no compiten con ninguna normalización.
-
-**Lo que ya hace `build`**: el `pattern` que un campo **hereda de su value type**
-no se emite en los mensajes de entrada (commands y queries) — el formato del tipo
-describe el valor ya normalizado. El `pattern` que el **campo declara por su
-cuenta** sí se emite: es una restricción de esa entrada concreta, no la forma del
-tipo. Si aun así una entrada llega con una anotación que compite con una
-normalización declarada, es un caso que el diseño no expresa: repórtalo como
-`designGap`, no lo arregles quitando la anotación a mano.
-
-**Con qué error falla entonces el formato.** Al sacar la validación del DTO, el fallo de formato
-deja de ser un `VALIDATION_ERROR` automático y pasa a ser tuyo. Si el diseño **no** declara un
-`code` para ese caso (el DSL no permite colgar un `code` de una `constraints`, así que casi nunca
-lo hará), lanza la `VALIDATION_ERROR` genérica del `ApiExceptionHandler` y **repórtalo como
-`designGap`** — nunca inventes un `code` nuevo: no aparece en el OpenAPI generado, ningún escenario
-lo espera y el cliente no puede programar contra él. Si el escenario exige un status distinto del
-que da la validación genérica, eso también es `designGap`, y entonces la vía es que el diseño lo
-declare en `errors[]`.
+**Si el diseño normaliza un campo antes de validarlo** (lo pasa a mayúsculas, lo recorta), el
+`pattern` del tipo tiene que admitir el valor SIN normalizar, o la entrada lo rechaza con 400 antes
+de que la regla llegue a aplicarse. Eso es del diseño, no tuyo: no quites el `@Pattern` a mano,
+repórtalo como `designGap`.
 
 ### La lista cerrada de `code` que NO nacen en el diseño
 
@@ -285,7 +265,7 @@ declare en `errors[]`.
 hay conflictos que no los provoca la lógica sino el **mecanismo** que el diseño encendió —la
 carrera y la reutilización de una clave de idempotencia, la escritura sobre una versión obsoleta,
 la subida que pasa del tamaño del bucket—, y esos tienen código canónico. Los emite `build`, están
-enumerados en `docs/framework-errors.md` del workspace de diseño, y el diseño los sustituye
+enumerados en `{{keel:docs}}/framework-errors.md`, y el diseño los sustituye
 declarando en `errors[]` un `code` de su familia con el mismo status.
 
 La regla completa, entonces:

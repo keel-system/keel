@@ -39,24 +39,18 @@ test('beanValidationAnnotations combina required y constraints', () => {
   assert.ok(annotations.some((a) => a.startsWith('@Pattern')));
 });
 
-test('beanValidationAnnotations sin inheritTypeFormat deja fuera el patrón del value type', () => {
+test('beanValidationAnnotations de ENTRADA conserva el patrón del value type', () => {
   const resolved = resolveType('SKU', domainTypes);
 
-  // El formato del value type describe el valor ya normalizado, así que no puede
-  // replicarse en un DTO de ENTRADA: Bean Validation corre antes de que el handler
-  // normalice (conventions/mapping.md § Normalización antes que validación).
-  const inherited = beanValidationAnnotations({ required: true }, resolved, { inheritTypeFormat: false });
+  // El formato del value type es contrato de la entrada (conventions/mapping.md § El formato se valida
+  // en la entrada): un 400 antes que cualquier error de negocio, en los dos generadores.
+  const inherited = beanValidationAnnotations({ required: true }, resolved, { input: true });
   assert.ok(inherited.includes('@NotBlank'));
   assert.ok(inherited.some((a) => a.startsWith('@Size(max = 8')), inherited.join(' '));
-  assert.ok(!inherited.some((a) => a.startsWith('@Pattern')), inherited.join(' '));
+  assert.ok(inherited.some((a) => a.startsWith('@Pattern')), inherited.join(' '));
 
-  // El que el CAMPO declara por su cuenta sí se queda: es una restricción de esta
-  // entrada, no la forma del tipo.
-  const own = beanValidationAnnotations(
-    { required: true, constraints: { pattern: '^[a-z]+$' } },
-    resolved,
-    { inheritTypeFormat: false }
-  );
+  // El que el CAMPO declara por su cuenta manda sobre el del tipo.
+  const own = beanValidationAnnotations({ required: true, constraints: { pattern: '^[a-z]+$' } }, resolved, { input: true });
   assert.ok(own.includes('@Pattern(regexp = "^[a-z]+$")'), own.join(' '));
 });
 
@@ -72,7 +66,7 @@ test('beanValidationAnnotations omite la presencia de un campo con default solo 
   assert.ok(beanValidationAnnotations(field, resolved).includes('@NotNull'));
 
   // Entrada: obligatorio es el VALOR, no que lo mande el cliente.
-  const input = beanValidationAnnotations(field, resolved, { inheritTypeFormat: false, honourDefault: true });
+  const input = beanValidationAnnotations(field, resolved, { input: true, honourDefault: true });
   assert.deepEqual(input, []);
 });
 
@@ -81,7 +75,7 @@ test('beanValidationAnnotations conserva las demás constraints de un campo con 
   const annotations = beanValidationAnnotations(
     { required: true, default: 'x', constraints: { maxLength: 10, pattern: '^[a-z]+$' } },
     resolved,
-    { inheritTypeFormat: false, honourDefault: true }
+    { input: true, honourDefault: true }
   );
   // Si el cliente SÍ lo manda, tiene que ser válido: solo cae la presencia.
   assert.ok(!annotations.includes('@NotBlank'), annotations.join(' '));
@@ -95,14 +89,14 @@ test('beanValidationAnnotations trata 0 y false como defaults legítimos', () =>
   const zero = beanValidationAnnotations(
     { required: true, default: 0 },
     resolveType('int', domainTypes),
-    { inheritTypeFormat: false, honourDefault: true }
+    { input: true, honourDefault: true }
   );
   assert.deepEqual(zero, []);
 
   const off = beanValidationAnnotations(
     { required: true, default: false },
     resolveType('boolean', domainTypes),
-    { inheritTypeFormat: false, honourDefault: true }
+    { input: true, honourDefault: true }
   );
   assert.deepEqual(off, []);
 });
@@ -111,7 +105,7 @@ test('beanValidationAnnotations omite @NotEmpty de una lista con default', () =>
   const resolved = resolveType('string', domainTypes);
   const field = { required: true, list: true, default: [] };
   assert.ok(beanValidationAnnotations(field, resolved).includes('@NotEmpty'));
-  assert.deepEqual(beanValidationAnnotations(field, resolved, { inheritTypeFormat: false, honourDefault: true }), []);
+  assert.deepEqual(beanValidationAnnotations(field, resolved, { input: true, honourDefault: true }), []);
 });
 
 test('beanValidationAnnotations usa DecimalMin para decimales', () => {

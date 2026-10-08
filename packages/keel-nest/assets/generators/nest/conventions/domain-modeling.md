@@ -19,13 +19,13 @@ la regla se ha fugado del dominio: pídele al agregado que haga la operación.
 La validación de negocio **nunca** vive solo en la entrada HTTP: un mensaje que llegue por otro camino
 (un listener, un barrido) se saltaría la regla.
 
-### El formato de un value type escalar no está en la entrada
+### El formato de un value type escalar: en la entrada, y otra vez en el dominio
 
-El lector de la petición deja caer a propósito el `pattern` que un campo hereda de su value type: el
-formato describe el valor **ya normalizado** (un `SKU` en mayúsculas), y comprobarlo antes de normalizar
-rechazaría peticiones válidas. build genera por eso `<Tipo>Format` en `domain/valueobject`, con la regex
-del diseño escrita una sola vez. Llamarla es tuyo, en el factory y en **todo** método que asigne el
-campo, después de normalizar:
+El lector de la petición valida el `pattern` que un campo hereda de su value type: mal formado es un 400
+antes que cualquier error de negocio (`mapping.md` § El formato se valida en la entrada). El dominio lo
+**repite**, porque un evento o una operación interna no pasan por el lector: build genera `<Tipo>Format`
+en `domain/valueobject`, con la regex del diseño escrita una sola vez. Llamarla es tuyo, en el factory y
+en **todo** método que asigne el campo:
 
 ```ts
 static create(props: { sku: string; name: string; price: Money }): Product {

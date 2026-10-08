@@ -1507,7 +1507,7 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     pendiente) y uno del contrato del cable (una lista no informada viaja como `[]` en los dos, pero `wire-contract.md` no
     lo escribe: pendiente).
   - Suites: keel-core 1140/1140, keel-nest 430/430, keel-spring 1650/1650. **Con esto el incremento 12 queda cerrado.**
-- **Pendientes de la 12e: dos de tres cerrados (2026-10-08)**, en los dos generadores:
+- **Pendientes de la 12e: los tres cerrados (2026-10-08)**, en los dos generadores:
   - **Los documentos de contrato viajan al proyecto**: `keel-core/gen/contract-docs.js` entrega `framework-errors.md` y
     `wire-contract.md`, y los dos generadores los instalan tal cual en `docs/keel/`; los agentes de pruebas los citan
     antes de reportar un `code` «sin declarar». Fijado en `keel-nest/test/generator-docs.test.js` y
@@ -1518,10 +1518,17 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     `keel-nest/test/list-never-null.test.js` lo exige en las 15 fixtures sobre lo que emiten LOS DOS; falsado quitando
     la normalización de keel-spring (caen las 5 fixtures con listas en la entrada). Línea base de keel-spring: los dos
     documentos nuevos, el agente de pruebas y los mensajes con listas.
-  - **Sigue abierto: la precedencia del formato (400/422)**. Build quita de la entrada el formato que un campo hereda de
-    su value type porque el diseño PODRÍA normalizarlo antes de validarlo, y eso solo se dice en prosa; hoy ningún
-    diseño lo hace. Dos salidas, a decidir: llevar el formato a la entrada por defecto (cambia el contrato de todo value
-    type con formato en los dos generadores) o declarar la normalización en el DSL (versión nueva).
+  - **Y el tercero, la precedencia del formato (400/422), cerrado** (decisión del diseñador: el formato a la entrada,
+    sin tocar el DSL): `validationRules` de `keel-core/gen/constraints.js` deja de quitar en la entrada el `pattern`
+    que un campo hereda de su value type —lo quitaba «por si el diseño normalizaba», cosa que solo podía decirse en
+    prosa y ningún diseño hace—, así que un valor mal formado es un 400 antes que cualquier error de negocio en los dos
+    servidores, también por la ruta y por la query. El dominio lo sigue repitiendo con `<Tipo>Format` para lo que no
+    entra por la API (eventos, operaciones internas), y el gate `check-domain-guards.sh` lo sigue exigiendo. Si un
+    diseño necesita normalizar antes de validar, el `pattern` tiene que admitir el valor sin normalizar: es un hueco
+    del diseño, y así lo dicen ahora `mapping.md` y `domain-modeling.md` de los dos generadores, sus agentes y la guía
+    del careo. `keel-nest/test/input-format-parity.test.js` lo exige sobre lo que emiten los dos en todas las
+    fixtures; falsado devolviendo la decisión vieja a keel-core (caen las 4 fixtures con formato heredado). El test
+    de paridad del contrato HTTP necesitó contar paréntesis: la regex de un `@Pattern` de ruta trae los suyos.
   - **Divergencia latente encontrada de paso**: la lista OPCIONAL del cuerpo de un PATCH es de tres estados en
     keel-spring (ausente = no tocar) y en keel-nest se lee como `[]`, que la vaciaría. Ninguna fixture tiene esa forma.
 

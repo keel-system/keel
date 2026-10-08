@@ -28,12 +28,10 @@ import { escapeJava } from '../lib/type-mapper.js';
  * Antes solo se emitía con un `@Pattern` presente, así que un value object de solo importes
  * —el caso más común de todos— se quedaba sin constructor y sin ninguna guarda.
  *
- * Los DTO de entrada dejan fuera el @Pattern heredado de un value type a propósito: el
- * formato describe el valor YA normalizado y Bean Validation corre antes de que el handler
- * normalice nada (type-mapper.js § inheritTypeFormat). El precio de esa decisión es que,
- * si nadie lo comprueba después, el formato no se comprueba en ningún sitio. Este es el
- * "después": el único punto por el que pasa cualquier valor de este tipo, venga del cable,
- * de la base de datos o de otro punto del dominio.
+ * Los DTO de entrada validan el @Pattern del value type, pero no todo entra por la API: un
+ * evento o una operación interna construyen el valor sin pasar por ellos. Por eso el
+ * constructor lo repite: es el único punto por el que pasa cualquier valor de este tipo,
+ * venga del cable, de la base de datos o de otro punto del dominio.
  */
 /**
  * Las cotas de longitud de un campo de TEXTO, leídas de su `@Size`. Una lista también lleva
@@ -190,10 +188,10 @@ public final class ${type.className} {
     }
 
     /**
-     * Hace cumplir el formato sobre un valor YA NORMALIZADO. Se llama donde se
-     * normaliza (el factory o el método de negocio de la entidad, o el handler que
-     * normaliza antes de entregarlo), nunca sobre lo que llega del cable: el patrón
-     * describe el valor normalizado y comprobarlo antes rechaza peticiones válidas.
+     * Hace cumplir el formato en el dominio: se llama en el factory o el método de
+     * negocio de la entidad que recibe el valor. La entrada HTTP ya lo validó (un 400
+     * antes que cualquier error de negocio); esto cubre lo que no entra por la API,
+     * como un evento o una operación interna.
      *
      * No aplica a null/blank: la presencia la decide la regla de negocio.
      */

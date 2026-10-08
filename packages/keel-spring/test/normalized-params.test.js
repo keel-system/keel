@@ -1,4 +1,5 @@
-// El formato heredado del value type NO se valida en la frontera, tampoco por ruta ni por query.
+// El formato heredado del value type se valida en la frontera, también por ruta y por query (desde la
+// corrida notification-mailer-mongo, 2026-10-08). Lo que sigue abajo es la historia de por qué no se hacía.
 //
 // Un `pattern` que el campo hereda de su tipo describe el valor YA NORMALIZADO: el diseño pasa el
 // sku a mayúsculas —o el código a minúsculas— ANTES de comparar, y Bean Validation corre antes de
@@ -50,15 +51,14 @@ function signatureOf(controller, method) {
   return lines.find((line) => line.includes('public ') && line.includes(`${method}(`)) ?? '';
 }
 
-test('el @PathVariable no lleva el @Pattern heredado del value type', () => {
+test('el @PathVariable lleva el @Pattern heredado del value type, como el cuerpo', () => {
   const signature = signatureOf(generate(), 'getProductBySlug');
   assert.ok(signature, 'no se generó el endpoint por slug');
 
   assert.ok(signature.includes('@PathVariable'), 'el segmento dejó de bindearse');
-  assert.ok(
-    !signature.includes('@Pattern'),
-    'valida el formato del tipo sobre el valor crudo: rechaza con 400 lo que el diseño normaliza'
-  );
+  // Desde la corrida notification-mailer-mongo el formato es contrato de la entrada, venga por el
+  // cuerpo, la ruta o la query: el mismo valor no puede aceptarse por un sitio y rechazarse por otro.
+  assert.ok(signature.includes('@Pattern(regexp = '), 'la ruta valida distinto que el cuerpo');
 });
 
 test('pero el @RequestParam conserva el pattern que el campo declara por su cuenta', () => {

@@ -91,8 +91,8 @@ export class InvalidValueException extends BadRequestException {
  * Un valor no cumple el formato de su value type declarado. Lo lanza la clase <Tipo>Format del
  * dominio, que es donde vive la regex del diseño.
  *
- * No puede ser validación del DTO de entrada: el patrón describe el valor YA normalizado y la
- * validación del borde corre antes de normalizar nada.
+ * Sobre una petición HTTP el formato ya lo rechaza el lector de entrada; esto es la guarda del
+ * dominio, para lo que llega por otra puerta (un evento, una operación interna). Mismo code y status.
  */
 export class ValueFormatException extends BadRequestException {
   constructor(message: string) {
