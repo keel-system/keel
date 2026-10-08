@@ -1126,7 +1126,40 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   - **Para 11b**: keel-spring no aplica el `timeoutMs` por llamada sino el MAYOR de las llamadas del cliente como
     timeout de lectura (`client.readTimeoutMs`), con 5 s de conexión fijos. keel-nest puede aplicarlo por llamada
     (`cockatiel`), pero entonces los dos servidores cortarían en instantes distintos: decidir al abrir 11b si se
-    iguala keel-nest a keel-spring o se corrige keel-spring.
+    iguala keel-nest a keel-spring o se corrige keel-spring. **Decidido en 11b**: se iguala (el mismo número, por
+    intento).
+- **11b — clientes HTTP, hecho (2026-10-07)**.
+  - **Sin cockatiel, medido**. Su `CountBreaker` no es el circuito de resilience4j en tres puntos: solo evalúa la
+    ventana al registrar un FALLO (fallo, fallo, éxito, éxito abre en resilience4j al 50 % y en cockatiel no), no
+    cuenta lo que su política no maneja (para resilience4j un 4xx es un ÉXITO que llena la ventana) y en semiabierto
+    reabre al primer fallo en vez de muestrear; su `IBreaker` no deja que un éxito abra, así que no se puede corregir
+    por encima. Además su `maxAttempts` son reintentos (resilience4j: intentos totales), su backoff lleva jitter y su
+    umbral es estricto (`>`). Por eso la máquina de estados de resilience4j vive en keel-core como referencia
+    ejecutable (`circuitBreakerReference`, con `minimumNumberOfCalls` = min(100, ventana) y 10 pruebas en
+    semiabierto, los defaults que keel-spring no sobrescribe —lo vigila `outbound-parity.test.js`—) y keel-nest
+    emite la suya (`infrastructure/clients/circuit-breaker.ts`) con el retry por fuera, el orden de resilience4j.
+  - **Lo que emite** (`src/scaffold/http-clients.js`): puerto `<Cliente>Client` (clase abstracta) y `<Llamada>Result`
+    en `domain/clients`; en `infrastructure/clients` —`infrastructure/http` es la plataforma de ENTRADA— el adaptador
+    sobre `fetch` (timeout por intento, sin seguir redirecciones), los DTOs wire con la guarda de los obligatorios
+    (`OutboundContractError`: se propaga, no entra al fallback ni cuenta para el circuito), el mapper ACL, la tabla
+    de fallos con su `kind` neutral, la clave de idempotencia saliente (`CommandSignature`, ahora también sin
+    registro de entrada), la configuración (`http-clients.yaml`, la de keel-spring sin el bloque de resilience4j) y
+    `HttpClientsModule` global. El fallback sale de la `onFailure` de la activación (ignore/fail/degrade), como en
+    keel-spring; el handler que la dispara recibe el puerto inyectado y la nota de la activación y del orden.
+  - **Frontera**: `http-clients` y `dependencies` se aceptan; `reconciledBy` y `compensations` con aviso (11c);
+    `needs`, `auth: oauth2-client-credentials` y un value object compuesto en una llamada se rechazan (sin fixture
+    en la frontera que los mida: asset-vault y catalog-extended, incrementos 12 y 13).
+  - **Medido**: `test/http-clients.test.js` (14) EJECUTA el adaptador de `stock-reservation` contra un proveedor
+    falso de `node:http` (con un sustituto de `@nestjs/common`): 3 intentos con la MISMA clave sin conexión o con
+    timeout, el 5xx sin reintento (no está en `retryOn`), el 4xx al fallback y como éxito del circuito, el cuerpo que
+    viola el contrato propagado, el 204 neutro, diez 5xx que abren y la llamada siguiente que ni sale; el circuito
+    emitido recorre 6000 pasos aleatorios igual que la referencia; `http-clients.yaml` es el de keel-spring en los
+    cuatro perfiles. Falsado con cinco sabotajes que conservan la forma (umbral estricto, el 4xx contado, reintentar
+    todo, clave aleatoria, fallback para cualquier error): cada uno lo caza su prueba. `ts-check` destapó que la
+    prueba de casos de uso emitida monta sus módulos a mano y le faltaba `HttpClientsModule` (nueve rojos: las tres
+    fixtures con clientes × tres brokers); arreglado y fijado en `npm test`. Después, `ts-check` entero en verde: las
+    33 siluetas compilan con `strict` y sus pruebas emitidas pasan.
+  - **Sin medir**: contra un WireMock real (el arnés y `stubSequence` son 11d) y en corrida (11e).
 
 ### Inc. 12 — Persistencia documental (MongoDB)
 

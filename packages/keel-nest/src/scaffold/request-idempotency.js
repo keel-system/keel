@@ -46,8 +46,19 @@ export function usesIdempotencyHeader(model) {
   return usesRelational(model) && usesHeaderInDesign(model);
 }
 
+/**
+ * ¿Se genera la firma canónica? La usa el registro y también la cara SALIENTE (la clave que se manda al
+ * proveedor), que puede existir sin que ninguna operación propia declare `idempotency` — como en keel-spring.
+ */
+export function usesCommandSignature(model) {
+  return (
+    usesRequestIdempotency(model) ||
+    Boolean(model.layersPresent?.httpClients && (model.httpClients ?? []).some((client) => client.calls.some((call) => call.idempotency)))
+  );
+}
+
 export function generate(model) {
-  if (!usesRequestIdempotency(model)) return [];
+  if (!usesRequestIdempotency(model)) return usesCommandSignature(model) ? [{ path: COMMAND_SIGNATURE_TS, content: commandSignature() }] : [];
   const files = [
     { path: IDEMPOTENCY_STORE_TS, content: storePort() },
     { path: IDEMPOTENCY_CONFLICT_TS, content: conflictException(model) },

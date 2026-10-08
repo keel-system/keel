@@ -144,7 +144,18 @@ export const RESILIENCE_DEFAULTS = Object.freeze({
   /** El de establecer la conexión: fijo, no lo declara el diseño. */
   connectTimeoutMs: 5000,
   retry: Object.freeze({ initialDelayMs: 500, backoff: 'exponential', multiplier: 2 }),
-  circuitBreaker: Object.freeze({ failureRateThreshold: 50, slidingWindowSize: 20, waitDurationMs: 30000 })
+  circuitBreaker: Object.freeze({
+    failureRateThreshold: 50,
+    slidingWindowSize: 20,
+    waitDurationMs: 30000,
+    // Los dos que el diseño no puede declarar y que tampoco escribe keel-spring: son los defaults de
+    // resilience4j, y se fijan aquí para que el otro servidor no dependa de los de SU librería.
+    //   · Llamadas antes de evaluar la ventana: 100, acotado al tamaño de la ventana por conteo (con
+    //     una ventana de 10 no habría nunca 100 llamadas que contar).
+    //   · Llamadas de prueba en semiabierto: 10, y su tasa decide si cierra o vuelve a abrir.
+    minimumNumberOfCalls: 100,
+    halfOpenCalls: 10
+  })
 });
 
 /**
@@ -164,11 +175,14 @@ export function resiliencePolicy(call) {
         retries: retriedFailures(call.retry.retryOn ?? DEFAULT_RETRY_ON).map((failure) => failure.kind)
       }
     : null;
+  const slidingWindowSize = call.circuitBreaker?.slidingWindowSize ?? RESILIENCE_DEFAULTS.circuitBreaker.slidingWindowSize;
   const circuitBreaker = call.circuitBreaker
     ? {
         failureRateThreshold: call.circuitBreaker.failureRateThreshold ?? RESILIENCE_DEFAULTS.circuitBreaker.failureRateThreshold,
-        slidingWindowSize: call.circuitBreaker.slidingWindowSize ?? RESILIENCE_DEFAULTS.circuitBreaker.slidingWindowSize,
+        slidingWindowSize,
         waitDurationMs: call.circuitBreaker.waitDurationMs ?? RESILIENCE_DEFAULTS.circuitBreaker.waitDurationMs,
+        minimumNumberOfCalls: Math.min(RESILIENCE_DEFAULTS.circuitBreaker.minimumNumberOfCalls, slidingWindowSize),
+        halfOpenCalls: RESILIENCE_DEFAULTS.circuitBreaker.halfOpenCalls,
         records: recordedFailures().map((failure) => failure.kind)
       }
     : null;
@@ -191,4 +205,76 @@ export function retryWaitMs(attempt, retry) {
   const wait = retry.initialDelayMs * retry.multiplier ** Math.max(attempt - 1, 0);
   if (retry.maxDelayMs == null) return wait;
   return Number.isFinite(wait) && wait <= retry.maxDelayMs ? wait : retry.maxDelayMs;
+}
+
+// ─── La REFERENCIA ejecutable del circuito ───────────────────────────────────
+//
+// La semántica de resilience4j con ventana por CONTEO, que es la que ya tiene el servidor de keel-spring.
+// No se delega en la librería del otro lenguaje porque ninguna medida dice lo mismo: el `CountBreaker` de
+// cockatiel solo evalúa la ventana al registrar un FALLO (con fallo, fallo, éxito, éxito resilience4j abre
+// al 50 % y él no), no cuenta lo que su política no maneja (para resilience4j un 4xx es un ÉXITO que llena
+// la ventana) y en semiabierto reabre al primer fallo en vez de muestrear. Medido el 2026-10-07.
+//
+//   · cerrado: cada llamada que sale cuenta —fallo si su fallo está en `records`, éxito si no—; con al
+//     menos `minimumNumberOfCalls` en la ventana, una tasa de fallo >= umbral abre;
+//   · abierto: rechaza sin intentar hasta `waitDurationMs`; la primera llamada después pasa a semiabierto
+//     (sin transición automática: el reloj solo se mira cuando alguien llama);
+//   · semiabierto: deja pasar `halfOpenCalls` llamadas; con todas registradas, tasa >= umbral reabre y si
+//     no, cierra con la ventana vacía.
+//
+// Cada generador escribe esto en su lenguaje y sus pruebas recorren las mismas secuencias contra esta.
+
+/**
+ * @param cb  el `circuitBreaker` de `resiliencePolicy`
+ * @param now el reloj en milisegundos
+ */
+export function circuitBreakerReference(cb, now = () => Date.now()) {
+  let state = 'closed';
+  let window = [];
+  let openedAt = 0;
+  let permitted = 0;
+  let trial = [];
+  const tripped = (outcomes) => (outcomes.filter(Boolean).length * 100) / outcomes.length >= cb.failureRateThreshold;
+  const open = () => {
+    state = 'open';
+    openedAt = now();
+    window = [];
+  };
+  return {
+    get state() {
+      return state;
+    },
+    /** ¿Puede salir esta llamada? Si no, el llamante ve el circuito abierto (`circuit-open`). */
+    tryAcquire() {
+      if (state === 'open') {
+        if (now() - openedAt < cb.waitDurationMs) return false;
+        state = 'half-open';
+        permitted = 0;
+        trial = [];
+      }
+      if (state === 'half-open') {
+        if (permitted >= cb.halfOpenCalls) return false;
+        permitted++;
+      }
+      return true;
+    },
+    /** El desenlace de una llamada que salió: `failed` si su fallo cuenta para el circuito. */
+    record(failed) {
+      if (state === 'half-open') {
+        trial.push(failed);
+        if (trial.length >= cb.halfOpenCalls) {
+          if (tripped(trial)) open();
+          else {
+            state = 'closed';
+            window = [];
+          }
+        }
+        return;
+      }
+      if (state !== 'closed') return;
+      window.push(failed);
+      if (window.length > cb.slidingWindowSize) window.shift();
+      if (window.length >= cb.minimumNumberOfCalls && tripped(window)) open();
+    }
+  };
 }

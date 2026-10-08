@@ -96,6 +96,13 @@ for (const name of [RELATIONAL, DOCUMENT]) {
           assert.equal(cb['sliding-window-size'], policy.circuitBreaker.slidingWindowSize);
           assert.equal(cb['wait-duration-in-open-state'], `${policy.circuitBreaker.waitDurationMs}ms`);
           assert.deepEqual(cb['record-exceptions'], recordedFailures().map((failure) => exceptionFor(failure.kind)));
+          // El mínimo de llamadas y el muestreo del semiabierto de la política neutral son los defaults de
+          // resilience4j (100 acotado a la ventana, y 10): si keel-spring los fijara, dejarían de coincidir.
+          assert.equal(cb['minimum-number-of-calls'], undefined);
+          assert.equal(cb['permitted-number-of-calls-in-half-open-state'], undefined);
+          assert.equal(cb['sliding-window-type'], undefined, 'la ventana es por CONTEO, la de por defecto');
+          assert.equal(policy.circuitBreaker.halfOpenCalls, 10);
+          assert.equal(policy.circuitBreaker.minimumNumberOfCalls, Math.min(100, policy.circuitBreaker.slidingWindowSize));
         }
       }
     }

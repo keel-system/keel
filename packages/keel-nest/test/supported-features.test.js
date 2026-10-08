@@ -9,7 +9,7 @@ import { checkSupportedFeatures, checkSupportedStack } from '../src/lib/supporte
 const manifestWith = (...layers) => ({ layers: Object.fromEntries(layers.map((layer) => [layer, `${layer}.keel.yaml`])) });
 const layersWith = (...layers) => Object.fromEntries(layers.map((layer) => [layer, {}]));
 
-for (const layer of ['http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
+for (const layer of ['storage', 'mail', 'payments']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);
@@ -129,4 +129,32 @@ test('con persistencia, la idempotencia de petición se genera y no se avisa', (
     persistence: { default: { model: 'relational' } }
   });
   assert.deepEqual(warnings, []);
+});
+
+test('capas http-clients y dependencies (incremento 11b): se generan; needs, oauth2 y los compuestos se rechazan', async () => {
+  const { loadService } = await import('keel-core');
+  const path = await import('node:path');
+  const { FIXTURES_DIR } = await import('./helpers/workspace.js');
+  const load = (name) => loadService(path.join(FIXTURES_DIR, name));
+
+  // stock-reservation: la llamada se genera; el barrido de reconciliación y la compensación, con aviso (11c).
+  const stock = load('stock-reservation');
+  const { errors, warnings } = checkSupportedFeatures(stock.manifest, stock.layers);
+  assert.deepEqual(errors, []);
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /reserveStock\.reconciledBy: reconcileReservations .*incremento 11c/);
+  assert.match(warnings[1], /inventory\.compensations: .*incremento 11c/);
+
+  // asset-vault y catalog-extended declaran needs (con réplica y lastKnown), que no tienen sujeto en la frontera.
+  const vault = checkSupportedFeatures(load('asset-vault').manifest, load('asset-vault').layers);
+  assert.ok(vault.errors.some((error) => /dependencies\.\w+\.needs/.test(error)), vault.errors.join(' | '));
+  const extended = checkSupportedFeatures(load('catalog-extended').manifest, load('catalog-extended').layers);
+  assert.ok(extended.errors.some((error) => /auth: oauth2-client-credentials/.test(error)), 'oauth2');
+  // Ninguna fixture lleva un value object compuesto en una llamada: el caso es sintético.
+  const composite = structuredClone(stock.layers);
+  composite.domain.types.Money = { fields: { amount: { type: 'decimal' }, currency: { type: 'string' } } };
+  composite['http-clients'].clients.inventory.calls.cancelStock.response.fields.refund = { type: 'Money' };
+  const rejected = checkSupportedFeatures(stock.manifest, composite).errors;
+  assert.equal(rejected.length, 1);
+  assert.match(rejected[0], /calls\.cancelStock: refund es un value object compuesto/);
 });

@@ -45,7 +45,9 @@ export const DIRS = {
   portOut: 'application/port/out',
   usecase: 'infrastructure/usecase',
   // La idempotencia de petición: el puerto del registro y sus dos desenlaces de conflicto.
-  idempotency: 'domain/idempotency'
+  idempotency: 'domain/idempotency',
+  // Los puertos de los clientes HTTP salientes y sus resultados, en términos del dominio.
+  clients: 'domain/clients'
 };
 
 export function entityDir(entity) {

@@ -37,6 +37,7 @@ import * as messagingStores from './messaging-stores.js';
 import * as rabbitmq from './rabbitmq.js';
 import * as kafka from './kafka.js';
 import * as snssqs from './snssqs.js';
+import * as httpClients from './http-clients.js';
 import * as scheduling from './scheduling.js';
 import * as purge from './purge.js';
 import * as claim from './claim.js';
@@ -92,6 +93,9 @@ const GENERATORS = [
   rabbitmq,
   kafka,
   snssqs,
+  // Los clientes HTTP salientes (incremento 11b): puerto en domain/clients, adaptador sobre fetch con el
+  // retry, el circuito y el fallback de la política neutral, DTOs wire y mapper de anticorrupción.
+  httpClients,
   // El reloj (incremento 10b): los schedulers de las operaciones con `schedule` y las purgas por lotes de las
   // tablas del generador.
   scheduling,

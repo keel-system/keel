@@ -42,7 +42,8 @@ export {
   DEFAULT_RETRY_ON,
   RESILIENCE_DEFAULTS,
   resiliencePolicy,
-  retryWaitMs
+  retryWaitMs,
+  circuitBreakerReference
 } from './outbound-resilience.js';
 export {
   RECONCILIATION_CLAIM,

@@ -26,6 +26,7 @@ import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js
 import { usesCallerScope } from './security.js';
 import { usesMessaging } from './messaging.js';
 import { usesServiceParameters } from './service-parameters.js';
+import { usesHttpClients } from './http-clients.js';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
@@ -124,10 +125,18 @@ function useCasesTest(model) {
     ? "\nimport { ServiceParametersModule } from '../src/infrastructure/config/service-parameters-module.js';" +
       (persistence ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
     : '';
+  // Los clientes HTTP salientes (globales): los handlers inyectan sus puertos. En el perfil test apuntan a una
+  // dirección que no responde, y nada los llama.
+  const clients = usesHttpClients(model);
+  const clientsImport = clients
+    ? "\nimport { HttpClientsModule } from '../src/infrastructure/clients/http-clients-module.js';" +
+      (persistence || parameters ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
+    : '';
   const modules = [
     parameters ? "ServiceParametersModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     persistence ? "PersistenceModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     messaging ? "MessagingModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
+    clients ? "HttpClientsModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     scope ? 'SecurityModule' : null,
     'UseCaseModule'
   ]
@@ -140,7 +149,7 @@ import { UseCaseModule } from '../src/infrastructure/usecase/use-case-module.js'
 import { UseCaseMediator } from '../src/infrastructure/usecase/use-case-mediator.js';
 import { UseCaseContainer } from '../src/infrastructure/usecase/use-case-container.js';
 import { Handles } from '../src/application/annotations/application-component.js';
-import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}
+import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}${clientsImport}
 ${imports}
 
 const OPERATIONS = [

@@ -23,11 +23,12 @@ import { usesHttpSecurity, usesCallerScope } from './security.js';
 import { usesMessaging } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 import { usesServiceParameters } from './service-parameters.js';
+import { usesHttpClients } from './http-clients.js';
 
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs() },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesRelational(model), usesCallerScope(model), usesMessaging(model) && usesRelational(model), usesScheduling(model), usesServiceParameters(model)) },
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesRelational(model), usesCallerScope(model), usesMessaging(model) && usesRelational(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model)) },
     { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model)) }
   ];
 }
@@ -54,7 +55,7 @@ await app.listen(configuration.server.port, configuration.server.address);
 `;
 }
 
-function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false) {
+function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false, withHttpClients = false) {
   // Los casos de uso del diseño entran por su módulo (infrastructure/usecase), que es el único que
   // cablea handlers y mappers; los controladores REST los despachan por el mediator que exporta. La
   // persistencia y el alcance por recurso (globales) van antes: son dependencias de los handlers.
@@ -65,6 +66,7 @@ function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope
       ? "\nimport { MessagingModule } from './infrastructure/messaging/messaging-module.js';" +
         "\nimport { MessageListenersModule } from './infrastructure/messaging/message-listeners-module.js';"
       : '') +
+    (withHttpClients ? "\nimport { HttpClientsModule } from './infrastructure/clients/http-clients-module.js';" : '') +
     (withCallerScope ? "\nimport { SecurityModule } from './infrastructure/security/security-module.js';" : '') +
     (withUseCases ? "\nimport { UseCaseModule } from './infrastructure/usecase/use-case-module.js';" : '') +
     (withScheduling ? "\nimport { SchedulingModule } from './infrastructure/scheduling/scheduling-module.js';" : '');
@@ -74,6 +76,8 @@ function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope
     withPersistence ? 'PersistenceModule.register(configuration)' : null,
     // La mensajería (global, como la persistencia): el puente lo usan los adaptadores de repositorio.
     withMessaging ? 'MessagingModule.register(configuration)' : null,
+    // Los clientes HTTP salientes (globales): los handlers inyectan sus puertos.
+    withHttpClients ? 'HttpClientsModule.register(configuration)' : null,
     withCallerScope ? 'SecurityModule' : null,
     withUseCases ? 'UseCaseModule' : null,
     // Los listeners del agente despachan por el mediator: van después de los casos de uso.

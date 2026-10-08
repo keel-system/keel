@@ -13,8 +13,6 @@
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  'http-clients': 'incremento 11',
-  dependencies: 'incremento 11',
   storage: 'incremento 13',
   mail: 'incremento 13',
   payments: 'incremento 13'
@@ -101,6 +99,8 @@ export function checkSupportedFeatures(manifest, layers) {
       );
     }
   }
+  for (const message of outboundFrontier(layers)) errors.push(message);
+  for (const message of dependenciesPending(layers)) warnings.push(message);
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   // La idempotencia de petición se genera (el registro idempotency_record, como keel-spring) cuando hay
   // persistencia donde registrar la clave en la misma transacción que el efecto. Sin persistencia no hay
@@ -123,6 +123,86 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
   return { errors, warnings };
+}
+
+/**
+ * Lo saliente que keel-nest todavía no genera (incremento 11b): se rechaza nombrando por qué.
+ *
+ *   · `needs` (el dato que se PIDE a otro servidor, con réplica o bajo demanda, y su `onUnavailable`):
+ *     solo lo declaran asset-vault (persistencia documental, incremento 12) y catalog-extended (storage,
+ *     incremento 13); se generará cuando haya una fixture en la frontera que lo mida;
+ *   · un campo COMPUESTO (un value object) en la petición o la respuesta de una llamada: el adaptador
+ *     lee y escribe escalares, enums y listas de ellos;
+ *   · `auth: oauth2-client-credentials`: la concesión del token, por el mismo motivo que `needs`
+ *     (solo catalog-extended la declara).
+ */
+function outboundFrontier(layers) {
+  const errors = [];
+  for (const [id, dependency] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
+    const needs = Object.keys(dependency?.needs ?? {});
+    if (needs.length > 0) {
+      errors.push(
+        `dependencies.${id}.needs (${needs.join(', ')}): keel-nest todavía no genera el dato que se pide a otro servidor —réplica, ` +
+          'onMiss, onUnavailable y lastKnown— (incremento 11 de PLAN-KEEL-NEST.md: llega cuando una fixture de la frontera lo mida). ' +
+          'Genera este diseño con keel-spring.'
+      );
+    }
+  }
+  const types = layers?.domain?.types ?? {};
+  const composite = (field) => {
+    const type = field?.type ?? field?.items?.type;
+    return Boolean(type && types[type] && (types[type].fields || types[type].kind === 'composite'));
+  };
+  for (const [id, client] of Object.entries(layers?.['http-clients']?.clients ?? {})) {
+    if (client?.auth?.type === 'oauth2-client-credentials') {
+      errors.push(
+        `http-clients.${id}.auth: oauth2-client-credentials — keel-nest todavía no genera la concesión del token (incremento 11 de ` +
+          'PLAN-KEEL-NEST.md: llega cuando una fixture de la frontera lo mida). Genera este diseño con keel-spring.'
+      );
+    }
+    for (const [name, call] of Object.entries(client?.calls ?? {})) {
+      const fields = [
+        ...Object.entries(call?.request?.body ?? {}),
+        ...Object.entries(call?.request?.queryParams ?? {}),
+        ...Object.entries(call?.request?.headers ?? {}),
+        ...Object.entries(call?.response?.fields ?? {})
+      ];
+      const nested = fields.filter(([, field]) => composite(field)).map(([field]) => field);
+      if (nested.length > 0) {
+        errors.push(
+          `http-clients.${id}.calls.${name}: ${nested.join(', ')} es un value object compuesto — keel-nest todavía lee y escribe solo ` +
+            'escalares, enums y listas de ellos en una llamada saliente. Genera este diseño con keel-spring.'
+        );
+      }
+    }
+  }
+  return errors;
+}
+
+/**
+ * Lo que `dependencies` declara y keel-nest acepta sin generar todavía su mecanismo (incremento 11c): el
+ * barrido de reconciliación (`reconciledBy`, con la tabla `reconciliation_claim`) y las compensaciones.
+ * Las operaciones y sus handlers existen; el aviso dice qué les falta.
+ */
+function dependenciesPending(layers) {
+  const warnings = [];
+  for (const [id, dependency] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
+    for (const [name, activation] of Object.entries(dependency?.activations ?? {})) {
+      if (activation?.reconciledBy) {
+        warnings.push(
+          `dependencies.${id}.activations.${name}.reconciledBy: ${activation.reconciledBy} se genera como operación, pero sin el reclamo ` +
+            'de reconciliación (reconciliation_claim) ni sus notas: llega en el incremento 11c de PLAN-KEEL-NEST.md.'
+        );
+      }
+    }
+    if ((dependency?.compensations ?? []).length > 0) {
+      warnings.push(
+        `dependencies.${id}.compensations: keel-nest todavía no genera las notas de la compensación en el handler que la ejecuta ` +
+          '(llega en el incremento 11c de PLAN-KEEL-NEST.md).'
+      );
+    }
+  }
+  return warnings;
 }
 
 /** Lo que el stack pide y keel-nest todavía no genera: se rechaza en el build en vez de estamparlo sin efecto. */

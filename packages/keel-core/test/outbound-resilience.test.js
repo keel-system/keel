@@ -13,7 +13,8 @@ import {
   recordedFailures,
   resiliencePolicy,
   retriedFailures,
-  retryWaitMs
+  retryWaitMs,
+  circuitBreakerReference
 } from '../src/lib/gen/outbound-resilience.js';
 
 const kinds = (failures) => failures.map((failure) => failure.kind);
@@ -82,8 +83,12 @@ test('resiliencePolicy: los defaults donde el diseño calla, y null donde no dec
     failureRateThreshold: 50,
     slidingWindowSize: 20,
     waitDurationMs: 30000,
+    minimumNumberOfCalls: 20,
+    halfOpenCalls: 10,
     records: ['transport', 'server-error', 'unknown-status']
   });
+  // La ventana de evaluación es la de resilience4j: 100 llamadas, acotadas al tamaño de la ventana.
+  assert.equal(resiliencePolicy({ instanceName: 'x', circuitBreaker: { slidingWindowSize: 500 } }).circuitBreaker.minimumNumberOfCalls, 100);
   assert.equal(full.timeoutMs, 2000);
 });
 
@@ -100,4 +105,62 @@ test('retryWaitMs: la referencia ejecutable de la espera entre intentos', () => 
   assert.deepEqual([1, 2, 3].map((n) => retryWaitMs(n, unbounded)), [500, 1000, 2000]);
   const fixed = resiliencePolicy({ instanceName: 'x', retry: { maxAttempts: 3, backoff: 'fixed', initialDelayMs: 300 } }).retry;
   assert.deepEqual([1, 2, 3].map((n) => retryWaitMs(n, fixed)), [300, 300, 300]);
+});
+
+// ─── El circuito ─────────────────────────────────────────────────────────────
+
+function breaker(overrides = {}) {
+  let clock = 0;
+  const cb = { failureRateThreshold: 50, slidingWindowSize: 4, minimumNumberOfCalls: 4, waitDurationMs: 1000, halfOpenCalls: 2, ...overrides };
+  const ref = circuitBreakerReference(cb, () => clock);
+  const call = (failed) => (ref.tryAcquire() ? (ref.record(failed), failed ? 'F' : 'S') : 'X');
+  return { ref, call, advance: (ms) => (clock += ms) };
+}
+
+test('circuito: con la ventana llena, una tasa IGUAL al umbral abre — también si la completa un éxito', () => {
+  const { ref, call } = breaker();
+  assert.deepEqual([true, true, false].map(call), ['F', 'F', 'S']);
+  assert.equal(ref.state, 'closed', 'tres llamadas no llegan al mínimo');
+  call(false);
+  assert.equal(ref.state, 'open', 'fallo, fallo, éxito, éxito: 50 % >= 50');
+  assert.equal(call(false), 'X', 'abierto rechaza sin intentar');
+});
+
+test('circuito: por debajo del umbral sigue cerrado, y la ventana se desliza', () => {
+  const { ref, call } = breaker();
+  [true, false, false, false, false, false].forEach(call);
+  assert.equal(ref.state, 'closed');
+  [true].forEach(call); // ventana: S S S F → 25 %
+  assert.equal(ref.state, 'closed');
+  [true].forEach(call); // S S F F → 50 %
+  assert.equal(ref.state, 'open');
+});
+
+test('circuito: pasado el plazo, semiabierto deja pasar N pruebas y decide con TODAS', () => {
+  const { ref, call, advance } = breaker();
+  [true, true, true, true].forEach(call);
+  assert.equal(ref.state, 'open');
+  advance(999);
+  assert.equal(call(false), 'X', 'antes del plazo sigue abierto');
+  advance(1);
+  assert.equal(call(true), 'F', 'la primera tras el plazo sale');
+  assert.equal(ref.state, 'half-open', 'un fallo no reabre solo: faltan pruebas');
+  assert.equal(call(false), 'S');
+  assert.equal(ref.state, 'open', '1 de 2 = 50 % → reabre');
+  advance(1000);
+  [false, false].forEach(call);
+  assert.equal(ref.state, 'closed');
+  assert.equal(call(true), 'F', 'cierra con la ventana vacía: un fallo no basta');
+  assert.equal(ref.state, 'closed');
+});
+
+test('circuito: en semiabierto, una llamada de más se rechaza mientras las de prueba no terminan', () => {
+  let clock = 0;
+  const ref = circuitBreakerReference({ failureRateThreshold: 50, slidingWindowSize: 2, minimumNumberOfCalls: 2, waitDurationMs: 10, halfOpenCalls: 1 }, () => clock);
+  for (const failed of [true, true]) ref.tryAcquire() && ref.record(failed);
+  clock = 10;
+  assert.equal(ref.tryAcquire(), true);
+  assert.equal(ref.tryAcquire(), false, 'la prueba en vuelo agota el cupo');
+  ref.record(false);
+  assert.equal(ref.state, 'closed');
 });

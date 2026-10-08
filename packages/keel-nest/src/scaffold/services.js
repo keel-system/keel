@@ -25,6 +25,7 @@ import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempoten
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_SCOPE_TS, scopedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
+import { portPath as clientPortPath } from './http-clients.js';
 
 export function generate(model) {
   const files = [];
@@ -223,6 +224,15 @@ function renderHandler(model, operation) {
     imports.push({ symbol: 'CallerScope', from: CALLER_SCOPE_TS });
     dependencies.push({ type: 'CallerScope', name: 'callerScope' });
   }
+  // El trabajo que el diseño le atribuye a esta operación en otro servidor (`dependencies.activations`, por
+  // `triggeredBy`): el puerto del cliente se inyecta, o el camino de menor resistencia es no llamarlo. Solo
+  // el canal síncrono: `via.publishes` lo emite el agregado.
+  for (const { activation } of operation.dependencyActivations ?? []) {
+    const client = (model.httpClients ?? []).find((candidate) => candidate.clientClass === activation.http?.clientClass);
+    if (!client || dependencies.some((dep) => dep.type === client.clientClass)) continue;
+    imports.push({ symbol: client.clientClass, from: clientPortPath(client) });
+    dependencies.push({ type: client.clientClass, name: decap(client.clientClass) });
+  }
   if (operation.responseDto?.entity && model.entities.some((e) => e.name === operation.responseDto.entity)) {
     const mapper = `${operation.responseDto.entity}ApplicationMapper`;
     imports.push({ symbol: mapper, from: classPath(DIRS.mappers, mapper) });
@@ -304,6 +314,7 @@ function handlerNotes(model, operation) {
         'del agregado (que llama a transitionTo), nunca el handler asignando el estado.'
     );
   }
+  for (const note of activationNotes(operation)) notes.push(note);
   for (const eventName of operation.emits ?? []) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
     const emisores = [
@@ -320,6 +331,64 @@ function handlerNotes(model, operation) {
  * La nota de una operación disparada por reloj: cómo la despacha su scheduler (keel-core/gen/scheduling.js,
  * la misma decisión que keel-spring) y lo que eso le cambia al handler.
  */
+function activationNotes(operation) {
+  const notes = [];
+  const sweep = Boolean(operation.schedule);
+  const reconciles = (operation.reconciles ?? []).length > 0;
+  for (const { dependency, activation } of operation.dependencyActivations ?? []) notes.push(activationNote(dependency, activation, sweep));
+  // El ORDEN de los efectos, el mismo que keel-spring. En un barrido de reconciliación el orden es otro y
+  // lo dice su nota (incremento 11c), así que aquí no se da: dos órdenes opuestos en el mismo stub no son dos
+  // consejos, son uno que el agente elegiría al azar.
+  const calls = (operation.dependencyActivations ?? []).filter(({ activation }) => activation.http);
+  if ((operation.transitions ?? []).length === 0 || calls.length === 0 || reconciles) return notes;
+  const fromKeys = operation.transitions.flatMap((t) => (t.from ?? []).map((state) => `${t.entity}::${state}`));
+  const branches = fromKeys.some((key, index) => fromKeys.indexOf(key) !== index);
+  const decided = branches ? calls.filter(({ activation }) => activation.awaits === 'outcome') : [];
+  const decidedNames = new Set(decided.map(({ activation }) => activation.name));
+  if (decided.length > 0) {
+    notes.push(
+      `ORDEN de los efectos: ${decided.map(({ dependency, activation }) => `${dependency}.${activation.name}`).join(', ')} es awaits: outcome y su resultado DECIDE la transición. ` +
+        'Comprueba primero la precondición de estado SIN escribir nada, llama después y aplica la transición que corresponda al veredicto. ' +
+        'Si una regla del diseño fija el orden, manda la regla'
+    );
+  }
+  const outgoing = calls.filter(({ activation }) => !decidedNames.has(activation.name));
+  if (outgoing.length > 0) {
+    const guards = operation.transitions.map((t) => `${t.entity}: ${(t.from ?? []).join('|')} → ${t.to}`).join('; ');
+    notes.push(
+      `ORDEN de los efectos: aplica PRIMERO la transición de estado (${guards}) y solo después llama a ${outgoing.map(({ dependency, activation }) => `${dependency}.${activation.name}`).join(', ')}. ` +
+        'La llamada saliente no es transaccional: si sale antes y la guarda del agregado rechaza el cambio, el rollback revierte la fila ' +
+        'pero el trabajo ya está encargado en el otro servidor y nadie lo deshace'
+    );
+  }
+  return notes;
+}
+
+/** La nota de una activación: el trabajo que esta operación delega en otro servidor (la de keel-spring). */
+function activationNote(depId, activation, sweep) {
+  if (activation.event) {
+    return `Activación ${depId}.${activation.name}: ${activation.effect} — se delega publicando ${activation.event.name}, que emite el agregado con this.raise(${activation.event.className ?? '...'}.of(...)) dentro del método de negocio. El handler no publica nada, y no esperes respuesta: publicar un evento no devuelve resultado`;
+  }
+  if (!activation.http) {
+    return `Activación ${depId}.${activation.name}: ${activation.effect} — el diseño no resuelve el canal (via.client/call no existe en http-clients). No inventes la llamada: dilo en el reporte`;
+  }
+  const awaits = {
+    outcome: `awaits: outcome — el resultado que devuelve ${depId} condiciona el desenlace de esta operación: no basta con que la llamada no falle. Qué significa un desenlace negativo lo dice el diseño: si specs/decisions.yaml acepta OBL-OUTCOME-NEGATIVE-UNDECIDED, manda esa decisión (y puede que el cuerpo no importe).`,
+    acknowledgement: `awaits: acknowledgement — basta con que ${depId} acuse recibo; no interpretes el cuerpo como parte del desenlace.`,
+    nothing: sweep
+      ? 'awaits: nothing — no se espera nada de vuelta, pero la llamada sigue siendo síncrona y su timeout bloquea la pasada del barrido.'
+      : 'awaits: nothing — no se espera nada de vuelta, pero la llamada sigue siendo síncrona y ocurre DENTRO de la transacción que abrió el UseCaseMediator: su timeout la mantiene abierta.'
+  }[activation.awaits];
+  const onFailure = activation.onFailure;
+  const failure = {
+    ignore: `onFailure: ignore — que ${depId} no responda no interrumpe esta operación; el fallback del adaptador ya lo absorbe y lo registra. No lo reintentes aquí.`,
+    fail: `onFailure: fail — si ${depId} no responde, esta operación falla con ${onFailure?.exceptionClass ?? onFailure?.error}; el fallback del adaptador ya la lanza. No la captures para convertirla en otra cosa.`,
+    degrade: `onFailure: degrade — si ${depId} no responde, esta operación degrada y el resultado degradado lo escribes TÚ: ${onFailure?.degradedTo}`
+  }[onFailure?.action];
+  const port = activation.http.clientClass;
+  return `Activación ${depId}.${activation.name}: ${activation.effect} — invoca this.${decap(port)}.${activation.http.call}(...) (con await). El retry y el circuito ya están en el adaptador: no los repitas. ${awaits ?? ''} ${failure ?? ''}`.trim();
+}
+
 function scheduleNotes(model, operation) {
   if (!operation.schedule) return [];
   const mode = scheduleDispatch(model, operation);

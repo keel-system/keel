@@ -33,9 +33,17 @@ export function planFixture(name, { mutate = null, withoutLayers = [], stack = n
  * Transpila los `.ts` de `files` bajo `src/` a un directorio temporal y devuelve `load(ruta)`, que
  * importa el módulo emitido en `ruta` (desde la raíz del proyecto, con `.ts`).
  */
-export function transpileTree(files) {
+export function transpileTree(files, { stubs = {} } = {}) {
   const root = tmpDir('keel-nest-emitted-');
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}\n');
+  // Paquetes sustitutos (`{ '@nestjs/common': fuente }`): lo emitido que importa Nest solo para decorar se
+  // puede ejecutar así sin instalarlo. El sustituto es del test que lo pide, nunca del árbol emitido.
+  for (const [name, source] of Object.entries(stubs)) {
+    const dir = path.join(root, 'node_modules', ...name.split('/'));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, type: 'module', main: 'index.js' }));
+    fs.writeFileSync(path.join(dir, 'index.js'), source);
+  }
   // Los paquetes que importa el código emitido sin Nest (decimal.js del dominio, jose de la seguridad) se
   // resuelven desde el node_modules del monorepo.
   fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
