@@ -17,6 +17,10 @@ entities:
       - [status, reserveStockAwaitingSince]
 audit:
   timestamps: declared
+  # Sin autoría: no hay usuarios (la API es interna y abierta) y el único autor de los cambios de
+  # estado es el propio servicio, por la API del sistema de pedidos, por un evento del almacén o por
+  # su barrido.
+  authorship: none
 consistency:
   transactionalBoundary: per-operation
   # `all`, no `none`: la compensación llega por un canal at-least-once y puede entregarse dos

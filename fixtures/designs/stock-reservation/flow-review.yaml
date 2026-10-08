@@ -1,0 +1,47 @@
+# Careo de flujos (flow-walkthrough.md) de stock-reservation v1.1.0, hecho al preparar la corrida del
+# incremento 11 de keel-nest (2026-10-07) por quien la preparaba, NO por un keel-flow-review de contexto
+# limpio: se puede repetir con él antes de la corrida. Los flujos de la mensajería son los de
+# stock-reservation-events, careados en su corrida; aquí se carearon los que trae esta silueta (FL-CLU-*,
+# FL-REC-*) y los que cambiaron. Pasada 1 con un hallazgo (corregido en el escenario) y pasada 2 limpia
+# sobre el documento corregido. Las decisiones (resolution) son del diseñador, por delegación.
+reviewedAt: 1.1.0
+passes: 2
+scenariosSha256: b0ad60d8a66e49bb340e94db62f419f015ae75e508488a3c29c1e75aa05a78ab
+conventionsSha256: a06a0dc51bc59f40e89292a72d72b1f236fa4748a07741c45da04e754a232ab2
+flows:
+  - { id: FL-RES-001, sha256: b26005bf6a1271a41e1d3201819c8edf11fea9644472b3045f0a4828257b8407 }
+  - { id: FL-RES-001-B, sha256: daf9378d76e9806a292f16a259ec40b15d38507f80262141b802c72f1b86b1de }
+  - { id: FL-RES-001-C, sha256: 711bfb68169f628f9a931af1f0f14ac37f017eeb7dc703c93f3d68f51e535a8f }
+  - { id: FL-RES-001-D, sha256: 9c121712b280e2a35016dd3738f1c3a9a23302ff7854e86eefead857badeb1cc }
+  - { id: FL-RES-002, sha256: ef2210590c673ce6f1ab28db11899f19c3dff8a5d0144d07a52ca8dfff98e3e9 }
+  - { id: FL-OBX-001, sha256: 78a9da4742380a939892900d1e50b69f39ccd4143ce3b5ed3ad710955c1eeba8 }
+  - { id: FL-RES-003, sha256: b60880843db433b33c45b1936728f46374605a1f4f4ea152a9d2014b40ef70ee }
+  - { id: FL-RES-003-B, sha256: f79c1da800b8e689126e13a294bf3e2539978f7259af9cff558480625819e6a2 }
+  - { id: FL-RES-004, sha256: 88dbe817b88e07787c08581a3ea2bdaf139d8e13dc00b1e265f8b66d363613f3 }
+  - { id: FL-CMP-001, sha256: efc74a802363b24f75f94fca1cdc893c4b1a7cc1929ef93282fd6bb53020876c }
+  - { id: FL-CMP-001-B, sha256: a8af586ab11077bda254ff6150eee3526e42d851491b8dc1e38af3bc42dce533 }
+  - { id: FL-CMP-001-C, sha256: 5679bcbef0f73989d54fe9c3c0af093af56f57ef99d3b8598317a441435933cb }
+  - { id: FL-CNT-001, sha256: 8f6c57ac65ea69105daede99b24838514bb6e7beba55e0dc1567e8d4ad2e8b3e }
+  - { id: FL-CNT-001-B, sha256: fd07866940fcd166cc20e6b0764f7d623f2b1f456eae2e338bc9def32217e688 }
+  - { id: FL-CLU-001, sha256: de7c1448762109cc6762b9ecee0d3a1bc474e72d53a5e09487e54c7fd02cae9f }
+  - { id: FL-CLU-002, sha256: 2287343d77922f2a80feb528dffa20ec989e97257d198cdb0b68dd57e4ad3772 }
+  - { id: FL-CLU-003, sha256: c64a7a419fddbe543a65db0213b5f4c1440c85731098dff602b4d2107cf7e14d }
+  - { id: FL-REC-001, sha256: 09c968f9838df20845da5daabfe8c865627407046088a9a9f79c82caafa5c885 }
+  - { id: FL-REC-001-B, sha256: 1885d6b4fe54f8a653f6574f2d8e0c9c16d6a250d83cb9ee019bec3102871353 }
+  - { id: FL-REC-002, sha256: 8acd696805d52ad3067efc592d2209831af977d3a3777a5d4ba1b5e11b543755 }
+  - { id: FL-REC-003, sha256: 6427ef67fa0da3ba2cac1d3b34d0f437c2e1e1ac029c25eb8096a85214108637 }
+findings:
+  - flow: FL-CLU-002
+    step: "3"
+    kind: unobservable
+    artifact: validation-scenarios.md § Estado entre flujos
+    evidence: >-
+      Pasada 1. El Then 3 decía «ninguna reserva ajena al escenario se ve afectada», pero el arnés deja el
+      estado como recién arrancado al empezar cada flujo y el Given solo crea las cinco reservas envejecidas:
+      no hay ninguna reserva ajena, así que la afirmación pasa sin mirar nada y no distingue un barrido que
+      reclama por el umbral de uno que se lleva todo lo que está en espera.
+    proposal: >-
+      Que el Given cree una sexta reserva en espera SIN envejecer, y que el Then afirme que sigue en
+      awaitingStock y que el proveedor no recibió su cancelación.
+    resolution: scenario
+    reason: "Corregido en el escenario: la sexta reserva sin envejecer hace que el Then 3 mida el umbral con las dos réplicas vivas."

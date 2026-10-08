@@ -33,7 +33,8 @@ entities:
         default: pending
       releaseReason:
         type: string
-        description: Por qué se liberó la reserva; lo escribe la compensación.
+        constraints: { maxLength: 255 }
+        description: Por qué se liberó la reserva; lo escriben la compensación (el motivo del almacén) y el barrido al rendirse.
       lastCountedQuantity:
         type: int
         description: >-

@@ -8,6 +8,8 @@ endpoints:
   confirmReservation:
     method: POST
     path: /reservations/{id}/confirm
+    # 200 y no 201: confirmar no crea un recurso, cambia el estado de uno que ya existe.
+    successStatus: 200
   getReservation:
     method: GET
     path: /reservations/{id}

@@ -1,9 +1,300 @@
-# El análisis de huecos de este diseño (gap-analysis.md): qué clases se recorrieron, sobre qué
-# unidades y qué se encontró. Migrado desde review.yaml, donde no lo leía nadie: es una fixture
-# del generador, así que el barrido está a medias a propósito y keel validate --ready lo cuenta.
-reviewedAt: 1.0.0
+# El análisis de huecos de stock-reservation v1.1.0 (gap-analysis.md), hecho al preparar la corrida del
+# incremento 11 de keel-nest (2026-10-07) por quien la preparaba, unidad a unidad, por delegación del
+# diseñador: las decisiones van como decididas en el artefacto que las sostiene, y las de la clase 16 como
+# riesgo aceptado. Parte del barrido de stock-reservation-events (la misma mensajería) y añade lo que esta
+# silueta tiene y aquella no: la llamada saliente, la reconciliación por reloj y el clúster.
+reviewedBy: keel-gap-sweep
+reviewedAt: 1.1.0
 
 coverage:
-  - class: 4
-    units: [createReservation, noteStockCount]
+  - class: 1
+    units: [ Reservation ]
     result: findings
+  - class: 2
+    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, releaseReservation, reconcileReservations ]
+    result: findings
+  - class: 3
+    units: [ Reservation ]
+    result: clean
+  - class: 4
+    # createReservation: la clave natural (orderId) más el registro de la clave, y su carrera (FL-RES-001-C,
+    # FL-CLU-003). noteStockCount: dos recuentos DISTINTOS a la vez chocan en el bloqueo optimista y el
+    # perdedor se reintenta. reconcileReservations: el reclamo reparte entre réplicas (FL-CLU-002).
+    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, releaseReservation, reconcileReservations ]
+    result: findings
+  - class: 5
+    units: [ getReservation ]
+    result: clean
+  - class: 7
+    units: [ publishing.StockReservationRequested, subscriptions.StockReserved, subscriptions.StockCountAdjusted, subscriptions.StockRejected ]
+    result: findings
+  - class: 8
+    units: [ inventory.activations.reserveStock, inventory.activations.cancelStock, clients.inventory, subscriptions.StockReserved, subscriptions.StockCountAdjusted, subscriptions.StockRejected ]
+    result: findings
+  - class: 9
+    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, getReservation, releaseReservation, reconcileReservations ]
+    result: findings
+  - class: 12
+    units: [ service ]
+    result: findings
+  - class: 13
+    units: [ reconcileReservations ]
+    result: findings
+  - class: 14
+    units: [ Reservation ]
+    result: findings
+  - class: 15
+    units: [ createReservation, confirmReservation, getReservation ]
+    result: findings
+  - class: 16
+    units: [ '3.1', '3.2', '3.3', '3.5', '3.6', '3.7', '3.9', '3.9b', '3.11' ]
+    result: findings
+
+findings:
+  # --- Clase 1 ---
+  - class: 1
+    unit: Reservation
+    what: >-
+      StockReserved puede llegar con la reserva ya liberada —por un rechazo anterior o porque el barrido se
+      rindió—: la transición awaitingStock → confirmed ya no aplica.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.1.0: es la carrera resuelta —otro camino ya sacó la reserva de la espera—, así
+      que el aviso se confirma SIN efecto y sin ir al descarte, y la reserva liberada no se resucita. Lo fija
+      FL-REC-001-B (el candidato a escenario que dejó abierto stock-reservation-events)."
+
+  # --- Clase 2 ---
+  - class: 2
+    unit: confirmReservation
+    what: >-
+      Confirmar una reserva que ya no está en pending: el diseño no declara su error.
+    severity: risk
+    state: decided
+    reason: "Decidido: el 409 INVALID_STATE_TRANSITION del catálogo de framework (framework-errors.md); no
+      hace falta un code propio, el cliente solo necesita saber que la reserva ya se encargó."
+  - class: 2
+    unit: reconcileReservations
+    what: >-
+      El barrido encuentra una reserva que ya salió de la espera entre el reclamo y la transición (llegó su
+      desenlace).
+    severity: risk
+    state: decided
+    reason: "Decidido: es la carrera con el camino feliz, resuelta: no se registra como error ni se reintenta,
+      y no se cancela el bloqueo de un encargo que el almacén sí contestó (nota del stub, y la transición
+      awaitingStock → released la rechaza desde confirmed o released)."
+
+  # --- Clase 4 ---
+  - class: 4
+    unit: releaseReservation
+    what: >-
+      Dos copias simultáneas del mismo StockRejected: la perdedora puede chocar con el bloqueo optimista o
+      encontrar la reserva ya en released.
+    severity: gap
+    state: decided
+    reason: "Decidido: optimisticLocking all y FL-CMP-001-C, que exige el efecto una vez y ninguna copia en el
+      descarte. La perdedora es la carrera resuelta, no un fallo."
+  - class: 4
+    unit: reconcileReservations
+    what: >-
+      El barrido corre en todas las réplicas: sin reclamo, las N se llevan las mismas reservas y cancelan N
+      veces el mismo bloqueo.
+    severity: gap
+    state: decided
+    reason: "Decidido: reclamo con marca persistida y caducable en reconciliation_claim (lo genera build) y
+      FL-CLU-002, que cuenta las cancelaciones RECIBIDAS por el proveedor con dos réplicas vivas."
+
+  # --- Clase 7 ---
+  - class: 7
+    unit: subscriptions.StockReserved
+    what: >-
+      Un aviso del almacén sobre un pedido sin reserva no se va a poder procesar nunca.
+    severity: gap
+    state: decided
+    reason: "Decidido: RESERVATION_NOT_FOUND es un rechazo de negocio y va al descarte sin agotar reintentos
+      (deadLetter true en las tres suscripciones). FL-RES-004 lo afirma."
+  - class: 7
+    unit: subscriptions.StockRejected
+    what: >-
+      El motivo del rechazo no tenía cota: uno más largo que la columna reventaría al escribir.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: maxLength 255 en el payload y en releaseReason; uno más largo incumple el
+      contrato y va al descarte."
+
+  # --- Clase 8 ---
+  - class: 8
+    unit: inventory.activations.reserveStock
+    what: >-
+      Si el almacén no responde nunca (ni StockReserved ni StockRejected), la reserva se queda en
+      awaitingStock para siempre.
+    severity: gap
+    state: decided
+    reason: "Decidido: reconciledBy reconcileReservations con unansweredAfterSeconds 1800; el barrido se rinde,
+      libera la reserva con su motivo y cancela el bloqueo (FL-REC-001)."
+  - class: 8
+    unit: inventory.activations.cancelStock
+    what: >-
+      El almacén no contesta a la cancelación, o contesta roto.
+    severity: gap
+    state: decided
+    reason: "Decidido: retry solo ante timeout y conexión, con la misma clave (FL-REC-002); un 5xx no se repite
+      (FL-REC-003); onFailure ignore: la reserva se libera igual y el bloqueo huérfano es del almacén
+      (registro estructural § 3.6)."
+  - class: 8
+    unit: clients.inventory
+    what: >-
+      El almacén caído convierte cada pasada del barrido en una espera de 3 s por reserva.
+    severity: risk
+    state: decided
+    reason: "Decidido: circuit breaker (50 % sobre 10 llamadas, 20 s abierto); con el circuito abierto la
+      llamada ni sale y el fallback libera igual (§ 3.6)."
+  - class: 8
+    unit: subscriptions.StockReserved
+    what: >-
+      El aviso del almacén llega cuando la base no responde.
+    severity: risk
+    state: decided
+    reason: "Decidido: retry exponencial de 5 intentos y deadLetter (§ 3.5); si se agota, el barrido acaba
+      liberando la reserva que se quedó en espera."
+  - class: 8
+    unit: subscriptions.StockCountAdjusted
+    what: >-
+      El recuento llega cuando la base no responde, después de marcarse como procesado (tryRecord).
+    severity: risk
+    state: accepted
+    reason: "Aceptado: el recuento se pierde y el almacén lo vuelve a mandar en su próximo recuento; repetirlo
+      sí corrompería el contador (§ 3.5)."
+  - class: 8
+    unit: subscriptions.StockRejected
+    what: >-
+      El rechazo llega cuando la base no responde.
+    severity: risk
+    state: decided
+    reason: "Decidido: retry y deadLetter (§ 3.5); perder un rechazo dejaría stock reservado que el almacén ya
+      no tiene, y la DLQ es la red."
+
+  # --- Clase 9 ---
+  - class: 9
+    unit: createReservation
+    what: >-
+      La API no tiene autenticación: cualquiera que llegue a ella crea, confirma y consulta reservas.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: security con protocol none y access public, a propósito. La API es interna y
+      la llama solo el sistema de pedidos; la frontera de confianza la pone su red. Vale para las siete
+      operaciones (las internas no tienen otra puerta que su suscripción o su reloj)."
+
+  # --- Clase 12 ---
+  - class: 12
+    unit: service
+    what: >-
+      Ausencia vs nulo: releaseReason y lastCountedQuantity sin valor, ¿viajan como null o no viajan?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: conventions.nulls include en el manifiesto; viajan como null. FL-RES-001 lo
+      afirma."
+  - class: 12
+    unit: service
+    what: >-
+      Texto: el diseño no decía si sku y el motivo del rechazo se normalizan.
+    severity: gap
+    state: decided
+    reason: "Decidido: se guardan tal cual llegan; sku no participa en ninguna unicidad ni búsqueda (la clave
+      es orderId, un uuid). Instantes en UTC con milisegundos (convenciones de validation-scenarios.md)."
+
+  # --- Clase 13 ---
+  - class: 13
+    unit: reconcileReservations
+    what: >-
+      Un barrido cada minuto con un umbral de 30 minutos: ¿qué pasa si una pasada tarda más que el tick, o
+      si muere a medias?
+    severity: risk
+    state: decided
+    reason: "Decidido: el reclamo caduca (claim-timeout-ms, dimensionado por encima del lote por el timeout de
+      la llamada con sus reintentos y de dos ticks), así que lo que una pasada muerta dejó reclamado lo recoge
+      otra; el lote está acotado (batch-size 50) y la pasada siguiente sigue. La frecuencia y el umbral son
+      cosas distintas: el umbral es del diseño y el resto, parámetros del generador."
+
+  # --- Clase 14 ---
+  - class: 14
+    unit: Reservation
+    what: >-
+      Las reservas no se borran nunca: no hay retención ni archivado.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: una reserva liberada sigue siendo el registro de lo que pasó con el pedido; la retención
+      entra con su versión y su operación, no como efecto de otra."
+
+  # --- Clase 15 ---
+  - class: 15
+    unit: confirmReservation
+    what: >-
+      Confirmar es un POST que no crea recurso: ¿201 o 200?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: successStatus 200 (api.keel.yaml); cambia el estado de una reserva que ya
+      existe."
+  - class: 15
+    unit: getReservation
+    what: >-
+      ¿Llama un navegador directamente a esta API? Sin cors declarado, una SPA no podría.
+    severity: risk
+    state: decided
+    reason: "Decidido: la llama el backend del sistema de pedidos; sin cors, el servicio no acepta peticiones
+      cross-origin."
+
+  # --- Clase 16 ---
+  - class: 16
+    unit: '3.1'
+    what: reliability outbox, decidido por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: perder el encargo con el broker caído dejaría la reserva esperando (registro estructural)."
+  - class: 16
+    unit: '3.2'
+    what: Idempotencia en createReservation y clave saliente en cancelStock, decididas por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: confirmReservation la frena su transición, y la cancelación reintentada no puede ser otra (registro estructural)."
+  - class: 16
+    unit: '3.3'
+    what: Sin caché en getReservation, decidido por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: el estado cambia por eventos y por el barrido en cualquier momento (registro estructural)."
+  - class: 16
+    unit: '3.5'
+    what: Retry y deadLetter de las tres suscripciones, decididos por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: el pasajero se reintenta y lo imposible va al descarte (registro estructural)."
+  - class: 16
+    unit: '3.6'
+    what: La resiliencia de cancelStock, decidida por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: solo se repite lo que no llegó, el circuito protege la pasada y el barrido se rinde igual (registro estructural)."
+  - class: 16
+    unit: '3.7'
+    what: Frontera per-operation, decidida por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: confirmar escribe la reserva y el outbox juntos; el barrido va sin transacción abarcadora (registro estructural)."
+  - class: 16
+    unit: '3.9'
+    what: optimisticLocking all, decidido por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: la doble entrega de la compensación y el barrido contra el desenlace (registro estructural)."
+  - class: 16
+    unit: '3.9b'
+    what: Auditoría declared y sin autoría, decidida por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: createdAt es contrato y no hay usuarios (registro estructural)."
+  - class: 16
+    unit: '3.11'
+    what: Compensación por evento y reconciliación por reloj que se rinde, decididas por quien preparaba la corrida.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: un encargo sin desenlace no produce ningún evento y solo un barrido lo ve (registro estructural)."

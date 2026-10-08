@@ -179,6 +179,8 @@ operations:
     # `awaiting_since` en la base y espera al siguiente tick.
     schedule:
       cron: "* * * * *"
+    rules:
+      - "Al rendirse escribe releaseReason = \"sin respuesta del almacén\": la reserva liberada dice por qué, venga del rechazo del almacén o del barrido."
     transitions:
       - entity: Reservation
         from: [awaitingStock]

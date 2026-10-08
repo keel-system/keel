@@ -1,32 +1,32 @@
-# Obligaciones de diseño que esta fixture deja abiertas a sabiendas.
-# Ver docs/design-obligations.md — el «aceptado» del análisis de huecos, por escrito.
+# Decisiones de stock-reservation v1.1.0, tomadas al preparar la corrida del incremento 11 de keel-nest
+# (2026-10-07) por quien la preparaba, por delegación del diseñador. Ver docs/design-obligations.md — el
+# «aceptado» del análisis de huecos, por escrito.
 #
-# Las tres son las que la corrida en vivo del outbox reportó como designGaps 1, 3 y 4
-# (info/INFORME-CORRIDA-OUTBOX.md): el comportamiento era correcto y lo que faltaba era
-# escribir el contrato. Aquí se escribe — aceptando el canónico, que es lo que el servidor
-# ya devolvía.
+# Las cuatro primeras son las que la corrida en vivo del outbox reportó como designGaps
+# (info/INFORME-CORRIDA-OUTBOX.md): el comportamiento era correcto y lo que faltaba era escribir el
+# contrato. Aquí se escribe — aceptando el canónico, que es lo que el servidor ya devolvía.
 decisions:
   - id: OBL-IDEM-RACE-CODE
     scope: use-cases
     reason: >
       La carrera de la clave de createReservation se contesta con el canónico
       409 IDEMPOTENCY_KEY_IN_PROGRESS, que es lo que afirma FL-RES-001-C.
-    since: 1.0.0
+    since: 1.1.0
   - id: OBL-IDEM-REUSE-CODE
     scope: use-cases
     reason: >
       Misma clave con otro cuerpo se contesta con el canónico 409 IDEMPOTENCY_KEY_REUSED.
-    since: 1.0.0
+    since: 1.1.0
   - id: OBL-CONCURRENCY-CODE
     scope: persistence
     reason: >
       El conflicto de escritura concurrente se contesta con el canónico
       409 CONCURRENT_MODIFICATION; ninguna operación necesita un code propio para él.
-    since: 1.0.0
+    since: 1.1.0
   - id: OBL-IDEM-KEY-REQUIRED
     scope: use-cases
     reason: El llamante actual siempre manda la cabecera; sin ella la reserva se ejecuta sin deduplicar y la clave natural del pedido frena el duplicado.
-    since: 1.0.0
+    since: 1.1.0
   - id: OBL-OUTCOME-NEGATIVE-UNDECIDED
     scope: dependencies
     reason: >
@@ -34,4 +34,134 @@ decisions:
       se libera de todos modos y el bloqueo huérfano lo resuelve el almacén. Se acepta a
       sabiendas de que no es lo mismo que un fallo de la llamada — ahí el proveedor no
       contestó, y aquí contesta que NO.
-    since: 1.0.0
+    since: 1.1.0
+  - id: CHK-DEPS-CLOCK-NOT-OBSERVABLE
+    scope: dependencies.inventory.activations.reserveStock.awaitingSince
+    reason: >
+      La marca es un dato operativo del barrido y no se proyecta a propósito: el cliente no la necesita
+      y exponerla la convertiría en contrato. Que confirmReservation la estampe lo vigila el gate
+      estático (check-idempotency.sh, familia reconciliation, y la nota del stub); FL-REC-001 envejece
+      la marca a mano, así que no distingue una marca bien estampada de una ausente. Se acepta esa mitad
+      sin comprobar en caja negra.
+    since: 1.1.0
+  - id: CHK-DEPS-COMPENSATION-DEAD-END
+    scope: dependencies.inventory.compensations[0]
+    reason: >
+      released es el desenlace definitivo y querido: un rechazo del almacén cierra la reserva, y volver a
+      encargar el stock es una reserva NUEVA del sistema de pedidos, no un reintento de esta. Lo terminal
+      es además lo que hace irrepetible la compensación (FL-CMP-001-B).
+    since: 1.1.0
+
+structural:
+  - section: '3.1'
+    scope: messaging.publishing.reliability
+    chosen: outbox
+    discarded: best-effort
+    reason: >-
+      StockReservationRequested es el encargo al almacén: si se perdiera con el broker caído, la reserva
+      se quedaría esperando un desenlace que nadie va a mandar, y sin un trabajo encargado no hay nada
+      que compensar. El servicio ya tiene persistencia: el outbox cuesta una tabla y un relay.
+    since: 1.1.0
+  - section: '3.2'
+    chosen: >-
+      idempotency client-key con ttlSeconds 3600 en createReservation; ninguna en confirmReservation;
+      clave saliente payload-hash en inventory.cancelStock
+    discarded: idempotency en confirmReservation; payload-hash en createReservation; cancelStock sin clave
+    reason: >-
+      createReservation crea un recurso y un cliente con timeout la reintenta: la clave la genera él y
+      la respuesta se reproduce. confirmReservation es una transición pending → awaitingStock: repetirla
+      la rechaza el agregado. cancelStock se reintenta ante un corte de red, y sin clave una segunda
+      cancelación podría anular un bloqueo NUEVO del mismo pedido creado entretanto (FL-REC-001-B).
+    since: 1.1.0
+  - section: '3.3'
+    chosen: sin caché en getReservation
+    discarded: cache con ttlSeconds e invalidación por las operaciones que mueven el estado
+    reason: >-
+      El estado de la reserva cambia por eventos del almacén y por el barrido en cualquier momento: quien
+      la consulta espera ver el desenlace en cuanto ocurre, y una respuesta cacheada le mentiría. Es una
+      lectura por id.
+    since: 1.1.0
+  - section: '3.5'
+    scope: messaging.subscriptions.StockReserved.onFailure
+    chosen: retry exponencial de 5 intentos (0,5 s a 15 s) y deadLetter true
+    discarded: sin retry, o descartar tras agotar los intentos
+    reason: >-
+      El fallo pasajero (la base no responde) se reintenta; el rechazo de negocio (un pedido sin
+      reserva) no mejora en un segundo y va al descarte, que es donde el almacén lo ve. Reintentar no
+      duplica: la guarda es metadata.eventId más la transición del agregado.
+    since: 1.1.0
+  - section: '3.5'
+    scope: messaging.subscriptions.StockCountAdjusted.onFailure
+    chosen: retry exponencial de 5 intentos (0,5 s a 15 s) y deadLetter true
+    discarded: sin retry, o descartar tras agotar los intentos
+    reason: >-
+      Mismo criterio que StockReserved. Aquí el orden del guard es tryRecord (sin guarda de dominio), así
+      que un fallo después de marcar pierde el mensaje: se acepta porque un recuento es una corrección que
+      el almacén vuelve a mandar en su próximo recuento, y repetirla sí corrompería el contador.
+    since: 1.1.0
+  - section: '3.5'
+    scope: messaging.subscriptions.StockRejected.onFailure
+    chosen: retry exponencial de 5 intentos (0,5 s a 15 s) y deadLetter true
+    discarded: sin retry, o descartar tras agotar los intentos
+    reason: >-
+      El fallo pasajero se reintenta y la DLQ es la red para lo que no se resuelve. Perder un rechazo
+      dejaría stock reservado que el almacén ya no tiene.
+    since: 1.1.0
+  - section: '3.6'
+    chosen: >-
+      inventory.cancelStock con timeoutMs 3000, retry de 3 intentos exponencial desde 200 ms solo ante
+      timeout y conexión, circuit breaker (50 % sobre 10 llamadas, 20 s abierto) y onFailure ignore
+    discarded: reintentar también los 5xx; sin circuito; onFailure fail
+    reason: >-
+      Cancelar es una escritura ajena: repetir un 5xx puede ejecutarla dos veces si el almacén la aplicó
+      antes de fallar, así que solo se repite lo que con seguridad no llegó (FL-REC-002). El circuito
+      evita que un almacén caído convierta cada pasada del barrido en N esperas de 3 s. Y ignore porque el
+      barrido se rinde igual: la reserva se libera aunque el almacén no conteste, y el bloqueo huérfano es
+      suyo (FL-REC-001-B).
+    since: 1.1.0
+  - section: '3.7'
+    scope: persistence.consistency.transactionalBoundary
+    chosen: per-operation
+    discarded: per-aggregate
+    reason: >-
+      confirmReservation cambia la reserva Y escribe el encargo en el outbox: las dos escrituras tienen
+      que confirmar juntas, y eso es la operación entera. El barrido se despacha sin transacción
+      abarcadora: reclama, resuelve la reserva y llama al almacén fuera de toda transacción.
+    since: 1.1.0
+  - section: '3.9'
+    scope: persistence.consistency.optimisticLocking
+    chosen: all
+    discarded: none
+    reason: >-
+      La compensación llega por un canal at-least-once y puede entregarse dos veces a la vez, y el barrido
+      puede coincidir con el desenlace del almacén: sin versión, las dos escrituras leen la misma reserva y
+      la última gana. El bloqueo optimista convierte esa carrera en un conflicto (FL-CMP-001-C).
+    since: 1.1.0
+  - section: '3.9b'
+    scope: persistence.audit.timestamps
+    chosen: declared
+    discarded: all o none
+    reason: >-
+      createdAt es contrato: el cliente lo lee en la respuesta (FL-RES-001). No hace falta updatedAt: los
+      cambios de estado relevantes los cuenta el propio estado y adjustmentCount.
+    since: 1.1.0
+  - section: '3.9b'
+    scope: persistence.audit.authorship
+    chosen: none
+    discarded: all
+    reason: >-
+      No hay usuarios: la API es interna y abierta, y el autor de cada cambio es el sistema de pedidos, el
+      almacén o el barrido, que ya distingue la puerta (operación HTTP, suscripción o reloj).
+    since: 1.1.0
+  - section: '3.11'
+    chosen: >-
+      compensación por evento (StockRejected → releaseReservation, que devuelve la reserva a released) y
+      reconciliación por reloj (reconcileReservations, que se rinde pasado unansweredAfterSeconds 1800 y
+      cancela el bloqueo con inventory.cancelStock)
+    discarded: solo compensación por evento; reintentar el encargo en el barrido
+    reason: >-
+      El rechazo del almacén llega por evento y se compensa en el dominio, irrepetible por el lifecycle.
+      Pero un encargo publicado puede no tener desenlace NUNCA, y eso no produce ningún evento: solo un
+      barrido lo ve. El barrido se rinde en vez de reencargar porque un segundo StockReservationRequested
+      con otro eventId sería otro encargo para el almacén, y lo que se quiere es cerrar el primero.
+    since: 1.1.0

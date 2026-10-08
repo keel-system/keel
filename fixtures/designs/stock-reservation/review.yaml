@@ -1,2 +1,95 @@
-# La revision semantica de este diseno: que se miro y con que resultado.
-reviewedAt: 1.0.0
+# Revisión semántica (review-checklist.md) de stock-reservation v1.1.0, hecha al preparar la corrida del
+# incremento 11 de keel-nest (2026-10-07) por quien la preparaba, siguiendo la checklist de /keel-validate id
+# a id, por delegación del diseñador. Los veredictos que no son `ok` llevan su porqué.
+reviewedBy: keel-design-review
+reviewedAt: 1.1.0
+findings:
+  - id: REV-DOMAIN-PROMISED-STATE
+    scope: domain.entities.Reservation
+    verdict: ok
+    note: >-
+      Todo lo que la prosa promete se representa: la espera (awaitingStock, con su marca
+      reserveStockAwaitingSince), sus tres salidas (confirmed; released por rechazo o por el barrido, con
+      releaseReason) y la corrección de recuento (lastCountedQuantity y adjustmentCount), que no mueve el
+      estado.
+  - id: REV-DOMAIN-PARTIAL-WRITER
+    scope: domain.entities.Reservation.releaseReason
+    verdict: ok
+    note: >-
+      Hay dos vías a released —releaseReservation (el rechazo del almacén) y reconcileReservations (el
+      barrido que se rinde)— y las dos escriben el porqué: la primera el motivo del evento, la segunda
+      "sin respuesta del almacén" (regla de reconcileReservations, afirmada en FL-REC-001). Encontrado en
+      esta revisión: en la v1.0.0 el barrido liberaba sin motivo.
+  - id: REV-USECASES-GUARD-ORDER
+    scope: use-cases.operations.reconcileReservations
+    verdict: ok
+    note: >-
+      La única regla del barrido (escribir releaseReason al rendirse) va con la transición
+      awaitingStock → released y solo necesita la reserva reclamada, que ya está cargada. Los órdenes de
+      evaluación de validation-scenarios.md son implementables: la clave de idempotencia antes que la
+      unicidad del pedido (FL-RES-001-C), y en el barrido la reserva resuelta antes de llamar al almacén
+      (la nota del stub, el orden de un deshacer).
+  - id: REV-USECASES-INTERNAL-REPEAT
+    scope: use-cases
+    verdict: accepted
+    note: >-
+      confirmReservation no declara idempotency a propósito: repetirla la rechaza la transición
+      pending → awaitingStock, así que no publica un segundo encargo (registro estructural § 3.2).
+      applyStockReserved y releaseReservation los frena su transición; reconcileReservations, el reclamo
+      y la transición awaitingStock → released. noteStockCount no tiene guarda de dominio y escribe un
+      contador: lo único que frena la reentrega es el registro de procesados de su suscripción
+      (tryRecord). Se acepta: es la rama que la fixture existe para medir (FL-CNT-001-B), y la operación es
+      interna, sin otra puerta que la suscripción.
+  - id: REV-MSG-MISSING-CHANNEL
+    scope: messaging
+    verdict: ok
+    note: El evento publicado y las tres suscripciones declaran el canal stockEvents.
+  - id: REV-MSG-DEDUPE-WINDOW
+    scope: messaging.subscriptions.StockCountAdjusted
+    verdict: accepted
+    note: >-
+      La ventana es processed-event.purge.retention-days (14 días por defecto): pasada, una reentrega
+      del mismo recuento sumaría otra vez. Se acepta porque la reentrega de un broker ocurre en minutos,
+      no en semanas. StockReserved y StockRejected no dependen de la ventana: los frena el lifecycle.
+  - id: REV-DEPS-IGNORED-FAILURE
+    scope: dependencies.inventory.activations.cancelStock
+    verdict: accepted
+    note: >-
+      cancelStock declara onFailure ignore: si el almacén no contesta, el barrido libera la reserva igual
+      y el bloqueo huérfano queda de su lado. Es la decisión correcta para una cancelación de algo cuyo
+      desenlace ya no sabemos: insistir para siempre retendría la reserva en espera por un fallo ajeno. Lo
+      que el ignore NO tapa se ve: la llamada sale (FL-REC-001), se reintenta lo que no llegó (FL-REC-002)
+      y no se repite lo que pudo llegar (FL-REC-003). reserveStock no espera nada por diseño (awaits
+      acknowledgement, el desenlace llega por evento) y lo cubre reconciledBy.
+  - id: REV-DEPS-NO-COMPENSATION
+    scope: dependencies.inventory
+    verdict: ok
+    note: >-
+      La única operación que encarga trabajo fuera es confirmReservation, y lo hace publicando por el
+      outbox en la MISMA transacción que el cambio de estado: o confirman las dos o ninguna, así que no
+      puede fallar después de haber encargado. El encargo que se hizo y no se cierra lo cubren la
+      compensación (StockRejected) y el barrido (reconciledBy), que cancela el bloqueo.
+  - id: REV-DEPS-AWAITING-CLOCK
+    scope: dependencies.inventory.activations.reserveStock.awaitingSince
+    verdict: ok
+    note: >-
+      La marca es propia de la activación (reserveStockAwaitingSince), la estampa confirmReservation al
+      encargar y no la toca nadie más: no es createdAt (la reserva puede confirmarse horas después de
+      nacer) ni un updatedAt (rejuvenecería con el recuento). Que se estampe no se ve en caja negra —se
+      acepta en decisions.yaml, CHK-DEPS-CLOCK-NOT-OBSERVABLE— y lo vigila el gate estático.
+  - id: REV-DEPS-COMPENSATION-WRONG-STATE
+    scope: dependencies.inventory.compensations[0]
+    verdict: ok
+    note: >-
+      El rechazo del almacén lleva la reserva a released desde awaitingStock o confirmed, que es lo que el
+      negocio quiere: el stock no se bloqueó (o se retiró) y la reserva ya no lo representa. Volver a
+      pending sería pedirle al sistema de pedidos que reencargue algo que el almacén ha dicho que no
+      tiene; lo terminal es además lo que la hace irrepetible (decisions.yaml,
+      CHK-DEPS-COMPENSATION-DEAD-END).
+  - id: REV-PERSIST-MISSING-INDEX
+    scope: persistence.entities.Reservation
+    verdict: ok
+    note: >-
+      getReservation busca por id (la clave primaria) y las tres operaciones internas por orderId, que
+      es la naturalKey (índice único). El barrido filtra por estado y marca de espera, con su índice
+      compuesto [status, reserveStockAwaitingSince]. No hay listados.

@@ -3,20 +3,30 @@ keel: "2.19"
 # que es lo que el resto de fixtures ejercita de refilón y ninguna prueba entera:
 #
 #   - idempotencia de PETICIÓN  → `createReservation` con `client-key`
-#   - idempotencia SALIENTE     → `inventory.reserveStock` con retry + payload-hash
-#   - idempotencia de CONSUMO   → `StockRejected` por el eventId de la envoltura Keel
+#   - idempotencia SALIENTE     → `inventory.cancelStock` con retry + payload-hash
+#   - idempotencia de CONSUMO   → las tres suscripciones, por el eventId de la envoltura Keel
 #   - COMPENSACIÓN              → `releaseReservation`, con su guarda de dominio,
 #                                 su estado de vuelta y su reconciliación
 #
-# Deliberadamente sin storage, caché ni seguridad: cada una añade un contenedor y
-# trabajo de generación que no dice nada sobre lo anterior. Lo que sí entra es
-# `publishing` con `reliability: outbox`: el encargo viaja publicado, así que la
-# garantía de que sale es la quinta pieza de la cadena, no un extra.
+# Deliberadamente sin storage ni caché: cada uno añade un contenedor y trabajo de
+# generación que no dice nada sobre lo anterior. Lo que sí entra es `publishing` con
+# `reliability: outbox`: el encargo viaja publicado, así que la garantía de que sale es la
+# quinta pieza de la cadena, no un extra.
+#
+# v1.1.0 (corrida del incremento 11 de keel-nest, 2026-10-07): lista para generar. La seguridad
+# se declara abierta en vez de ausente, el POST de confirmación declara su status, la autoría de
+# la auditoría se escribe, el motivo de un rechazo lleva cota, y los escenarios de clúster salen
+# (el arnés de keel-nest no arranca una segunda réplica; el reclamo entre réplicas lo mide su
+# db-check).
 service:
   name: stock-reservation
-  version: 1.0.0
+  version: 1.1.0
   description: Reserva stock para un pedido y lo libera si el almacén lo rechaza después.
   domain: fulfillment
+conventions:
+  # Un campo sin valor viaja como null (releaseReason y lastCountedQuantity hasta que algo los escribe):
+  # el default, escrito.
+  nulls: include
 layers:
   domain: domain.keel.yaml
   use-cases: use-cases.keel.yaml
@@ -25,3 +35,4 @@ layers:
   messaging: messaging.keel.yaml
   http-clients: http-clients.keel.yaml
   dependencies: dependencies.keel.yaml
+  security: security.keel.yaml

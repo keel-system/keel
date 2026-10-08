@@ -1216,6 +1216,38 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     fallo inesperado es un paso rojo con su mensaje—.
   - **Sin medir**: los flujos de una corrida (11e) y `harness-check` con un sujeto con clientes (sigue sobre
     `product-catalog`; lo que añade el 11d lo mide `stub-check`).
+- **11e — corrida, preparada (2026-10-07)**. `stock-reservation` pasa a **v1.1.0** y a **`--ready` 11/11** (estaba
+  en 3/11), partiendo de los laterales de `stock-reservation-events`:
+  - **YAML**: la capa `security` declarada abierta (`protocol: none`, API interna) en vez de ausente;
+    `successStatus: 200` en la confirmación; `authorship: none` escrito; cota 255 en `releaseReason` y en el motivo
+    del rechazo; y una regla en `reconcileReservations` que escribe `releaseReason = "sin respuesta del almacén"` al
+    rendirse (REV-DOMAIN-PARTIAL-WRITER: en la v1.0.0 el barrido liberaba sin motivo).
+  - **Laterales**: `decisions.yaml` (las aceptaciones reafirmadas para la v1.1.0, `CHK-DEPS-CLOCK-NOT-OBSERVABLE` y
+    `CHK-DEPS-COMPENSATION-DEAD-END` aceptadas, y el registro estructural de nueve secciones con §3.6 y §3.11),
+    `review.yaml` (11 ids), `gaps.yaml` (las 13 clases, con la 8 y la 13 de lo saliente y el barrido),
+    `validation-scenarios.md` (los de `events` —`FL-RES-004` cubre `RESERVATION_NOT_FOUND`, los «sin reintentos»
+    quedan en lo observable— más el clúster y la reconciliación: `FL-REC-001` se rinde y cancela, `FL-REC-001-B` el
+    desenlace tardío que no resucita la reserva —el candidato que dejó abierto `events`—, `FL-REC-002` el corte de
+    conexión que se reintenta con la MISMA clave, `FL-REC-003` el 503 que no se repite), careo en dos pasadas
+    (`FL-CLU-002` tenía un Then vacuo: «ninguna reserva ajena» con el estado recién arrancado; ahora una sexta sin
+    envejecer) y `DESIGN.md`. Entra en `READY_FIXTURES`.
+  - **El arnés de keel-nest gana la segunda réplica** (`startReplica`, `stopReplica`, `onReplica`, los nombres de
+    keel-spring): quitar los `FL-CLU-*` dejaba la incoherencia `CHK-SCEN-CLUSTER-UNCOVERED` —es la propiedad por la
+    que existe el reclamo—, así que se cerró la carencia del arnés y no el escenario. Es un segundo `AppModule` en el
+    mismo proceso, con su puerto, su pool, su planificador y su relay; el flujo la para al cerrar.
+    `test/replica-harness.test.js`.
+  - **Medido**: la línea base de keel-spring cambia SOLO en `stock-reservation` (48 puntos, regenerada);
+    `compile-check` de keel-spring en verde (rabbitmq, postgresql y mysql); `ts-check` de keel-nest en verde. Ojo:
+    `ts-check` compila con `test/` solo el proyecto de `product-catalog`; de las demás fixtures, dominio, aplicación
+    y API. Así que el `flow.ts` y el `http-stub.ts` de un diseño con clientes NO los juzgaba `tsc` (el 11d lo daba por
+    hecho): se comprobó sobre una copia del proyecto de la corrida —`npm install`, `tsc --noEmit` del proyecto entero
+    con `test/`, sus 67 pruebas del perfil `test`, `check:architecture` y `check-flows.sh`, todo en verde—.
+    Candidato: que `ts-check` compile también `test/integration/support` de cada fixture.
+  - **Workspaces** en `spring-live-test/corrida-stock-reservation-{nest,spring}/`, sobre PostgreSQL y RabbitMQ
+    (`keel-stack.json` sembrado), proyectos estampados `ready: true` (223 y 252 archivos). Los dos `check` sin avisos
+    del modelo (keel-spring, sus cuatro notas informativas de frontera de siempre); los dos gates
+    `check-idempotency.sh` nacen ROJOS en las mismas siete familias (`outboundIdempotency` nace verde: la clave la
+    cablea build).
 
 ### Inc. 12 — Persistencia documental (MongoDB)
 

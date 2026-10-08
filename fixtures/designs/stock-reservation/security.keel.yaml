@@ -1,0 +1,11 @@
+# Sin autenticación, y decidido: este servicio lo llama solo el sistema de pedidos desde la red interna, y
+# la frontera de confianza la pone esa red. Es la fixture que mide la cadena de compensación e
+# idempotencia y la llamada saliente de los generadores: meter un proveedor de identidad añadiría un
+# contenedor y trabajo de generación que no dice nada sobre lo que se mide (la seguridad ya la midió la
+# corrida de profile-directory).
+authentication:
+  protocol: none
+access:
+  default:
+    level: public
+    description: API interna detrás de la red del sistema de pedidos; nadie la expone fuera.

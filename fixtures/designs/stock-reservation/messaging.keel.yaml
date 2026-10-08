@@ -63,7 +63,7 @@ subscriptions:
     channel: stockEvents
     payload:
       orderId: { type: uuid, required: true }
-      reason:  { type: string, required: true }
+      reason:  { type: string, required: true, constraints: { maxLength: 255 } }
     contract:
       # Sin `messageId`: la fuente es otro servicio Keel, así que la identidad del mensaje
       # ya es `metadata.eventId` de la envoltura —estampado una vez en el `raise` y viaje
