@@ -1542,6 +1542,48 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   regresión de subida; corrida `payment-checkout` con las dos pasarelas.
 - **El correo ya está hecho**: se adelantó al 12e (`mail.js`, `mail-harness.js`, `mail-check` 17/17, skill
   `keel-nest-mail`). Quedan cache, storage (con la autoría de política, que solo declara `asset-vault`) y pagos.
+- **Evaluación al abrirlo (2026-10-08)**. Suites: keel-core 1140, keel-nest 462, keel-spring verde; línea base de
+  keel-spring idéntica (44 combinaciones, 10 945 archivos).
+  - **Sujetos**: pagos lo ejerce SOLO `payment-checkout` (dominio, casos de uso, API, seguridad, mensajería,
+    persistencia relacional y `payments`: todo lo demás ya está dentro de la frontera de keel-nest). Cache y storage
+    los declaran solo `asset-vault` y `catalog-extended`, y los dos arrastran además lo que la frontera todavía
+    rechaza: `needs` (los dos), `oauth2-client-credentials` (catalog-extended) y `authorship: all` (asset-vault).
+    Por eso **pagos va primero**: es el único tramo que se puede cerrar con corrida sin abrir otros tres frentes.
+  - **Lo de keel-spring a portar para pagos** (~2 700 líneas): `payments.js` (la parte neutra: `GatewayStatus`,
+    `GatewayOutcome`, `PaymentSource`, `ChargeRequest`, el puerto, `PaymentOutcomeApplier`, `PaymentNotices`,
+    `PaymentReconciliation`, propiedades, cliente HTTP sin reintentos, `MoneyAmounts`, el verificador como puerto y
+    el controlador del aviso sobre el cuerpo CRUDO), `payment-gateways/{stripe,mercadopago}.js` (adaptador y
+    verificador de cada una), `payments-harness.js` (el doble de la pasarela en el arnés), `gateway-support.js` (la
+    matriz), las skills `keel-spring-{payments,stripe,mercadopago}` y `payment-check` (pasarela falsa del JDK). Ya
+    eran neutrales: `payments-model.js` (el modelo), `payment-probes.js` (el doble) y la pregunta del stack.
+  - **Riesgos de equivalencia que hay que decidir en un sitio**: la clave de idempotencia hacia la pasarela (un
+    reintento por el OTRO servidor tiene que repetirla), la tabla de rechazos → motivo neutro, las claves con que
+    viaja la referencia, la ruta del aviso, y las **unidades menores de cada moneda**: medido, `Intl` de Node
+    (CLDR) discrepa del JDK en 25 monedas —IQD da 0 decimales en vez de 3, así que 12.500 IQD saldrían como 13 en la
+    unidad de la pasarela—. keel-nest no puede preguntarle a su plataforma. Y en Fastify, el aviso tiene que
+    verificarse sobre los bytes que llegaron: el parser JSON de `wire.ts` no puede tocarlos antes.
+  - **Tramos**: 13a lo neutral de pagos (keel-spring lo consume byte a byte igual); 13b la parte neutra en keel-nest
+    (tipos, puerto, aplicación del desenlace, aviso con cuerpo crudo, despacho sin transacción de las operaciones
+    que llaman a la pasarela, la puerta de la matriz en build/check) y se quita `payments` de la frontera; 13c los
+    adaptadores y verificadores de Stripe y MercadoPago sobre `fetch`, EJECUTADOS contra una pasarela falsa de
+    `node:http` con los casos de `payment-check`; 13d el arnés (el doble de la pasarela), las skills
+    `keel-nest-{payments,stripe,mercadopago}`, `payment-check` de keel-nest y gate; 13e corrida `payment-checkout`
+    con las dos pasarelas en los dos generadores. Después, cache, storage, autoría y `needs` (13f en adelante).
+- **13a — lo neutral de pagos: hecho (2026-10-08)**. `keel-core/gen/payment-gateways.js`: la matriz de paridad
+  (movida de keel-spring, que la reexporta), `PAYMENT_NOTICE_PATH`, `paymentIdempotencyKey`
+  (`<referencia>:<acción>`) y `savedMethodIdempotencyKey`, `SAVED_METHOD_SEPARATOR`, `GATEWAY_TRANSLATIONS` por
+  pasarela (rechazos → motivo neutro, clave de la referencia y del pagador, pasos de guardar un medio, la marca de la
+  captura caducada, los campos de la firma del aviso), `PAYMENT_TEST_SECRETS` (la credencial y el secreto con
+  que firma el arnés: un mismo `.env` para los dos servidores) y `CURRENCY_MINOR_UNITS` (las 218 monedas de
+  `java.util.Currency` con unidad menor). keel-spring lo consume: línea base **idéntica**, falsada cambiando la clave
+  de la referencia y un rechazo en keel-core (caen los adaptadores de las tres combinaciones de `payment-checkout`).
+  `keel-core/test/payment-gateways.test.js` (los casos neutrales de la matriz, que salen de keel-spring, más la
+  traducción contra el vocabulario y **contra el doble**: el código que `payment-probes.js` manda para cada motivo
+  tiene que volver como ese motivo; falsado cambiando uno en el doble). `payment-check` de keel-spring gana
+  `lasUnidadesMenoresDelJdkSonLasDeKeelCore`: el JDK tiene que seguir diciendo lo que dice la tabla (falsado moviendo
+  IQD a 0 decimales: cae ese caso). La razón de `why` de MercadoPago ya no nombra la skill de keel-spring.
+  Suites: keel-core 1149/1149, keel-nest 462/462, keel-spring 1645/1645 (los cinco casos neutrales de la matriz se
+  mudaron a keel-core); `payment-check` de keel-spring verde con las dos pasarelas.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

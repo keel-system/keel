@@ -27,6 +27,7 @@ import { instrumentationFor, usesTelemetry } from './telemetry.js';
 import { METRICS_TRANSPORT, OBSERVATIONS } from '../lib/telemetry-probes.js';
 import { sweepClaims, sweepConfig } from 'keel-core/gen';
 import { collectionBatchSize } from './persistence-entities.js';
+import { PAYMENT_TEST_SECRETS } from 'keel-core/gen/payment-gateways';
 
 const PROFILES = ['local', 'develop', 'production'];
 
@@ -1306,7 +1307,7 @@ function mailYaml(model, profile) {
  * de la pasarela elegida) con un secreto de firma conocido, que es el que usa el arnés para firmar
  * los avisos de los escenarios.
  */
-export const PAYMENT_TEST_SECRETS = { apiKey: 'keel-test-api-key', webhookSecret: 'keel-test-webhook-secret' };
+export { PAYMENT_TEST_SECRETS };
 
 function paymentsYaml(model, profile) {
   const gateway = model.payments.gateway;

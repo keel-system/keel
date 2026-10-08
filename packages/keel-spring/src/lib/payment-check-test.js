@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { paymentProbesFor } from 'keel-core/gen/payment-probes';
+import { CURRENCY_MINOR_UNITS } from 'keel-core/gen/payment-gateways';
 import { PAYMENT_TEST_SECRETS } from '../scaffold/config.js';
 import { isRawJsonField } from '../scaffold/jackson.js';
 
@@ -161,6 +162,7 @@ import ${base}.domain.payment.PaymentSource;
 import ${base}.application.port.out.PaymentGateway;
 import ${base}.infrastructure.messaging.events.${shapes.rawJson.eventClass};
 import ${base}.infrastructure.payment.InvalidPaymentNoticeException;
+import ${base}.infrastructure.payment.MoneyAmounts;
 import ${base}.infrastructure.payment.PaymentGatewayHttpConfig;
 import ${base}.infrastructure.payment.PaymentGatewayProperties;
 import ${base}.infrastructure.payment.${gateway}.${shapes.adapter};
@@ -321,6 +323,17 @@ class PaymentCheckTest {
     void unImporteConMasDecimalesQueLaMonedaNoSeRedondea() {
         assertThrows(IllegalArgumentException.class, () -> gateway().authorize(charge("ch-5", "10.555")));
         assertEquals(0, RECORDED.size(), "no se llama a la pasarela con un importe que no se puede representar");
+    }
+
+    // La tabla de unidades menores de keel-core es la que emite un generador que no corre sobre el
+    // JDK (keel-nest): si el JDK dejara de decir lo mismo, los dos servidores convertirían distinto.
+    @Test
+    void lasUnidadesMenoresDelJdkSonLasDeKeelCore() {
+        String table = "${Object.entries(CURRENCY_MINOR_UNITS).map(([code, digits]) => `${code}=${digits}`).join(' ')}";
+        for (String entry : table.split(" ")) {
+            String[] pair = entry.split("=");
+            assertEquals(Integer.parseInt(pair[1]), MoneyAmounts.fromMinorUnits(1, pair[0]).scale(), pair[0]);
+        }
     }
 
 ${model.payments.refund?.amount ? `    @Test

@@ -11,6 +11,7 @@
 // Lo marcado VERIFICAR EN SANDBOX es lo que la matriz de gateway-support.js declara `unverified`: la
 // documentación no fija la forma exacta y build lo genera con la lectura más probable, avisando.
 
+import { gatewayTranslation } from 'keel-core/gen/payment-gateways';
 import { javaFile, javaPath, subPackage } from '../render.js';
 
 // Un corte de conexión a mitad de la respuesta no llega como ResourceAccessException sino como
@@ -22,25 +23,10 @@ export function generate(model, ctx) {
 
 const SUB = 'infrastructure.payment.mercadopago';
 
-// status_detail de un pago de MercadoPago → vocabulario neutro.
-const DETAILS = [
-  ['cc_rejected_insufficient_amount', 'insufficientFunds'],
-  ['insufficient_amount', 'insufficientFunds'],
-  ['cc_rejected_bad_filled_date', 'expiredCard'],
-  ['expired_card', 'expiredCard'],
-  ['cc_rejected_high_risk', 'fraudSuspected'],
-  ['cc_rejected_blacklist', 'fraudSuspected'],
-  ['high_risk', 'fraudSuspected'],
-  ['cc_rejected_3ds_challenge', 'authenticationFailed'],
-  ['cc_rejected_3ds_mandatory', 'authenticationFailed'],
-  ['cc_rejected_bad_filled_security_code', 'invalidPaymentMethod'],
-  ['cc_rejected_bad_filled_card_number', 'invalidPaymentMethod'],
-  ['cc_rejected_bad_filled_other', 'invalidPaymentMethod'],
-  ['cc_rejected_card_disabled', 'invalidPaymentMethod'],
-  ['invalid_card_token', 'invalidPaymentMethod'],
-  ['cc_rejected_card_error', 'processingError'],
-  ['processing_error', 'processingError']
-];
+// status_detail → motivo neutro, el campo de la referencia y la firma del aviso son contrato con
+// MercadoPago, no con Java: los comparte keel-nest (keel-core/gen/payment-gateways.js).
+const TRANSLATION = gatewayTranslation('mercadopago');
+const DETAILS = TRANSLATION.declines;
 
 function renderAdapter(model, ctx) {
   const p = model.payments;
@@ -55,7 +41,7 @@ function renderAdapter(model, ctx) {
         order.put("type", "online");
         order.put("processing_mode", "automatic");
         order.put("capture_mode", "${p.captureLater ? 'manual' : 'automatic'}");
-        order.put("external_reference", request.reference());
+        order.put("${TRANSLATION.referenceKey}", request.reference());
         order.put("total_amount", amount);
         ObjectNode payment = order.putObject("transactions").putArray("payments").addObject();
         payment.put("amount", amount);
@@ -153,7 +139,7 @@ function renderAdapter(model, ctx) {
             ObjectNode customerBody = mapper.createObjectNode();
             customerBody.put("description", payerReference);
             JsonNode customer = json(http.post().uri("/v1/customers")
-                    .headers(headers -> credentials(headers, "save:" + token + ":customer"))
+                    .headers(headers -> credentials(headers, "save:" + token + ":${TRANSLATION.savedMethodSteps[0]}"))
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(customerBody.toString())
                     .retrieve()
@@ -162,7 +148,7 @@ function renderAdapter(model, ctx) {
             ObjectNode cardBody = mapper.createObjectNode();
             cardBody.put("token", token);
             JsonNode card = json(http.post().uri("/v1/customers/{id}/cards", customerId)
-                    .headers(headers -> credentials(headers, "save:" + token + ":card"))
+                    .headers(headers -> credentials(headers, "save:" + token + ":${TRANSLATION.savedMethodSteps[1]}"))
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(cardBody.toString())
                     .retrieve()
@@ -271,7 +257,7 @@ ${methods.join('\n\n')}
 
     private GatewayOutcome outcomeOf(JsonNode order, String reference) {
         String id = order.path("id").asText(null);
-        String ref = order.path("external_reference").asText(reference);
+        String ref = order.path("${TRANSLATION.referenceKey}").asText(reference);
         JsonNode payment = order.path("transactions").path("payments").path(0);
         String detail = order.path("status_detail").asText(payment.path("status_detail").asText(""));
         String status = order.path("status").asText("");
@@ -401,8 +387,8 @@ public class MercadopagoNoticeVerifier implements PaymentNoticeVerifier {
         if (Math.abs(clock.instant().getEpochSecond() - seconds) > properties.noticeToleranceSeconds()) {
             throw new InvalidPaymentNoticeException("aviso fuera de la ventana de tolerancia");
         }
-        String dataId = query.get("data.id");
-        String requestId = headers.getFirst("x-request-id");
+        String dataId = query.get("${TRANSLATION.notice.dataIdQuery}");
+        String requestId = headers.getFirst("${TRANSLATION.notice.requestIdHeader}");
         StringBuilder manifest = new StringBuilder();
         if (dataId != null && !dataId.isBlank()) {
             manifest.append("id:").append(dataId.toLowerCase(Locale.ROOT)).append(';');

@@ -162,3 +162,19 @@ export {
   UNKNOWN_INTEGRITY_MESSAGE,
   TRANSACTION_TIMEOUT_MESSAGE
 } from './constraint-errors.js';
+export {
+  GATEWAY_STATES,
+  GATEWAY_REQUIREMENTS,
+  gatewayRequirements,
+  checkGatewaySupport,
+  gatewayCoverage,
+  PAYMENT_NOTICE_PATH,
+  PAYMENT_TEST_SECRETS,
+  paymentIdempotencyKey,
+  PAYMENT_ACTIONS,
+  savedMethodIdempotencyKey,
+  SAVED_METHOD_SEPARATOR,
+  GATEWAY_TRANSLATIONS,
+  gatewayTranslation,
+  CURRENCY_MINOR_UNITS
+} from './payment-gateways.js';

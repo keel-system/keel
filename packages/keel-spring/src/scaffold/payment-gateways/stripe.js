@@ -10,6 +10,7 @@
 //   * Stripe-Signature: t=…,v1=…[,v1=…]: HMAC-SHA256 de `${t}.${cuerpo crudo}`; solo cuenta v1, puede
 //     haber varias durante la rotación del secreto, y se compara en tiempo constante.
 
+import { gatewayTranslation } from 'keel-core/gen/payment-gateways';
 import { javaFile, javaPath, subPackage } from '../render.js';
 
 // Un corte de conexión a mitad de la respuesta no llega como ResourceAccessException sino como
@@ -21,28 +22,10 @@ export function generate(model, ctx) {
 
 const SUB = 'infrastructure.payment.stripe';
 
-// Los códigos de rechazo de Stripe (decline_code, o code si no hay) → vocabulario neutro.
-const DECLINES = [
-  ['insufficient_funds', 'insufficientFunds'],
-  ['expired_card', 'expiredCard'],
-  ['fraudulent', 'fraudSuspected'],
-  ['stolen_card', 'fraudSuspected'],
-  ['lost_card', 'fraudSuspected'],
-  ['pickup_card', 'fraudSuspected'],
-  ['merchant_blacklist', 'fraudSuspected'],
-  ['authentication_required', 'authenticationFailed'],
-  ['incorrect_cvc', 'invalidPaymentMethod'],
-  ['incorrect_number', 'invalidPaymentMethod'],
-  ['invalid_cvc', 'invalidPaymentMethod'],
-  ['invalid_expiry_month', 'invalidPaymentMethod'],
-  ['invalid_expiry_year', 'invalidPaymentMethod'],
-  ['invalid_number', 'invalidPaymentMethod'],
-  ['card_not_supported', 'invalidPaymentMethod'],
-  ['resource_missing', 'invalidPaymentMethod'],
-  ['processing_error', 'processingError'],
-  ['try_again_later', 'processingError'],
-  ['issuer_not_available', 'processingError']
-];
+// Los códigos de rechazo, las claves de metadata y la marca de la captura caducada son contrato con
+// Stripe, no con Java: los comparte keel-nest (keel-core/gen/payment-gateways.js).
+const TRANSLATION = gatewayTranslation('stripe');
+const DECLINES = TRANSLATION.declines;
 
 function renderAdapter(model, ctx) {
   const p = model.payments;
@@ -168,9 +151,9 @@ function renderAdapter(model, ctx) {
     public String savePaymentMethod(String token, String payerReference) {
         try {
             MultiValueMap<String, String> customerForm = new LinkedMultiValueMap<>();
-            customerForm.add("metadata[keel_payer]", payerReference);
+            customerForm.add("metadata[${TRANSLATION.payerKey}]", payerReference);
             JsonNode customer = json(http.post().uri("/v1/customers")
-                    .headers(headers -> credentials(headers, "save:" + token + ":customer"))
+                    .headers(headers -> credentials(headers, "save:" + token + ":${TRANSLATION.savedMethodSteps[0]}"))
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .body(customerForm)
                     .retrieve()
@@ -179,7 +162,7 @@ function renderAdapter(model, ctx) {
             MultiValueMap<String, String> attachForm = new LinkedMultiValueMap<>();
             attachForm.add("customer", customerId);
             http.post().uri("/v1/payment_methods/{pm}/attach", token)
-                    .headers(headers -> credentials(headers, "save:" + token + ":attach"))
+                    .headers(headers -> credentials(headers, "save:" + token + ":${TRANSLATION.savedMethodSteps[1]}"))
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .body(attachForm)
                     .retrieve()
@@ -218,7 +201,7 @@ function renderAdapter(model, ctx) {
 public class StripePaymentGateway implements PaymentGateway {
 
     /** La clave de metadata con la que viaja la referencia del cobro; es lo que permite buscarlo. */
-    static final String REFERENCE_KEY = "keel_reference";
+    static final String REFERENCE_KEY = "${TRANSLATION.referenceKey}";
 
     private final RestClient http;
     private final PaymentGatewayProperties properties;
@@ -269,7 +252,7 @@ ${methods.join('\n\n')}
             // La autorización caducó: es la respuesta de la pasarela y no hace falta preguntarle.
             // Se busca en el texto y no se parsea: un 4xx con un cuerpo que no es JSON no puede
             // convertir una respuesta en una excepción.
-            if (error.getResponseBodyAsString().contains("charge_expired_for_capture")) {
+            if (error.getResponseBodyAsString().contains("${TRANSLATION.expiredCaptureMarker}")) {
                 return GatewayOutcome.of(GatewayStatus.CANCELED, reference, gatewayPaymentId);
             }
             // payment_intent_unexpected_state y compañía (ya se capturó…): el estado real se consulta.

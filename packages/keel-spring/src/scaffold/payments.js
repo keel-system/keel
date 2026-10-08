@@ -21,6 +21,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { pascalCase } from '../lib/naming.js';
+import { PAYMENT_NOTICE_PATH } from 'keel-core/gen/payment-gateways';
 import * as stripe from './payment-gateways/stripe.js';
 import * as mercadopago from './payment-gateways/mercadopago.js';
 
@@ -30,8 +31,8 @@ export const APP_PKG = 'application.payment';
 export const INFRA_PKG = 'infrastructure.payment';
 const ENUMS_PKG = 'domain.enums';
 
-/** La ruta del aviso de la pasarela. Fuera de la API versionada: no es contrato con nadie más. */
-export const PAYMENT_NOTICE_PATH = '/webhooks/payments';
+// La ruta del aviso de la pasarela es neutral: la seguridad de los dos generadores la deja pasar.
+export { PAYMENT_NOTICE_PATH };
 
 const GATEWAY_MODULES = { stripe, mercadopago };
 

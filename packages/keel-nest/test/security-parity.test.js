@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadService } from 'keel-core';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
-import { PAYMENT_NOTICE_PATH } from '../../keel-spring/src/scaffold/payments.js';
+import { PAYMENT_NOTICE_PATH } from 'keel-core/gen/payment-gateways';
 import { planService as planNest } from '../src/scaffold/index.js';
 import { transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
