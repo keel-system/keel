@@ -100,7 +100,6 @@ export function checkSupportedFeatures(manifest, layers) {
     }
   }
   for (const message of outboundFrontier(layers)) errors.push(message);
-  for (const message of dependenciesPending(layers)) warnings.push(message);
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   // La idempotencia de petición se genera (el registro idempotency_record, como keel-spring) cuando hay
   // persistencia donde registrar la clave en la misma transacción que el efecto. Sin persistencia no hay
@@ -177,32 +176,6 @@ function outboundFrontier(layers) {
     }
   }
   return errors;
-}
-
-/**
- * Lo que `dependencies` declara y keel-nest acepta sin generar todavía su mecanismo (incremento 11c): el
- * barrido de reconciliación (`reconciledBy`, con la tabla `reconciliation_claim`) y las compensaciones.
- * Las operaciones y sus handlers existen; el aviso dice qué les falta.
- */
-function dependenciesPending(layers) {
-  const warnings = [];
-  for (const [id, dependency] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
-    for (const [name, activation] of Object.entries(dependency?.activations ?? {})) {
-      if (activation?.reconciledBy) {
-        warnings.push(
-          `dependencies.${id}.activations.${name}.reconciledBy: ${activation.reconciledBy} se genera como operación, pero sin el reclamo ` +
-            'de reconciliación (reconciliation_claim) ni sus notas: llega en el incremento 11c de PLAN-KEEL-NEST.md.'
-        );
-      }
-    }
-    if ((dependency?.compensations ?? []).length > 0) {
-      warnings.push(
-        `dependencies.${id}.compensations: keel-nest todavía no genera las notas de la compensación en el handler que la ejecuta ` +
-          '(llega en el incremento 11c de PLAN-KEEL-NEST.md).'
-      );
-    }
-  }
-  return warnings;
 }
 
 /** Lo que el stack pide y keel-nest todavía no genera: se rechaza en el build en vez de estamparlo sin efecto. */

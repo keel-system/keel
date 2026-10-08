@@ -48,6 +48,8 @@ import { ormPath, ormClass, unidirectionalParents } from '../src/scaffold/persis
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_IMPL_TS, IDEMPOTENCY_CONFLICT_TS } from '../src/scaffold/request-idempotency.js';
 import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
 import { OUTBOX_EVENT, PROCESSED_EVENT } from 'keel-core/gen/messaging-stores';
+import { RECONCILIATION_CLAIM, reconciliationClaims } from 'keel-core/gen/reconciliation-stores';
+import { RECONCILIATION_CLAIM_ORM_TS, RECONCILIATION_CLAIM_STORE_TS } from '../src/scaffold/reconciliation-claim.js';
 import { TABLE_PURGES_TS, tablePurges } from '../src/scaffold/purge.js';
 import { IDEMPOTENCY_RECORD_ORM_TS } from '../src/scaffold/request-idempotency.js';
 import {
@@ -69,7 +71,7 @@ const keep = args.includes('--keep');
 const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation'];
 const results = [];
 
 function step(name, ok, detail = '') {
@@ -351,6 +353,14 @@ function expectedSchema(model, engine) {
     }
     for (const fkColumn of foreignKeyIndexColumns(model, entity, members)) t.indexes.add(foreignKeyIndexName(entity.tableName, fkColumn));
   }
+  // La marca del reclamo de la reconciliación (incremento 11c): la tabla de keel-core.
+  if (reconciliationClaims(model).length > 0) {
+    const t = table(RECONCILIATION_CLAIM.table);
+    for (const spec of RECONCILIATION_CLAIM.columns) {
+      t.columns.set(spec.name, { nullable: spec.nullable, length: spec.base === 'string' ? spec.length : null, scale: null, collation: null });
+    }
+    for (const index of RECONCILIATION_CLAIM.indexes) t.indexes.add(index.name);
+  }
   return tables;
 }
 
@@ -365,6 +375,7 @@ function probeScript(model, engine, db, expected) {
   // Antes de listar los imports: sus valores de muestra también añaden alguno.
   const messagingCode = messagingBlock(model, engine, ctx);
   const claimCode = claimBlock(model, engine, ctx);
+  const reconciliationCode = reconciliationBlock(model, ctx);
   const imports = [...ctx.imports].map((entry) => {
     const [symbol, file] = entry.split('|');
     return `import { ${symbol} } from '${distOf(file)}';`;
@@ -456,6 +467,7 @@ ${concurrencyBlock(model, engine, roots[0], ctx)}
 ${idempotencyBlock(model, engine)}
 ${messagingCode}
 ${claimCode}
+${reconciliationCode}
 ${purgeBlock(model)}
 
 await dataSource.destroy();
@@ -996,6 +1008,129 @@ function claimBlock(model, engine, ctx) {
 }
 
 /**
+ * El reclamo de la RECONCILIACIÓN (incremento 11c), lo que en keel-spring mide store-check: la tienda de
+ * reconciliation_claim (la inserción es el reclamo, la marca viva lo niega, la caducada se renueva, y de dos
+ * réplicas a la vez gana una) y el reclamo del adaptador (solo lo que lleva más que el umbral, el que más lleva
+ * primero, con su lote, SIN cambiar el estado de espera, y otra vez cuando la marca caduca).
+ */
+function reconciliationBlock(model, ctx) {
+  const blocks = [];
+  for (const root of repositoryRoots(model)) {
+    const claims = reconciliationClaims(model).filter((claim) => claim.entity === root.name);
+    if (claims.length === 0) continue;
+    const { enumType, field } = root.lifecycle;
+    const enumDef = model.enums.find((candidate) => candidate.name === enumType);
+    const waiting = new Set(claims.flatMap((claim) => claim.states));
+    const parked = enumDef.values.find((value) => !waiting.has(value.literal));
+    if (!parked) continue;
+    ctx.imports.add(`${enumType}|${classPath(DIRS.enums, enumType)}`);
+    ctx.imports.add(`${ormClass(root.name)}|${ormPath(root.name)}`);
+    ctx.imports.add(`ReconciliationClaimStore|${RECONCILIATION_CLAIM_STORE_TS}`);
+    const orm = ormClass(root.name);
+    const samples = Array.from({ length: 24 }, (_, i) => `() => ${sampleEntity(model, root, ctx, `reconcile${i}`)}`);
+    // El constructor del adaptador, en su orden: la transacción, el puente si la raíz emite, la configuración de
+    // los barridos si alguno la reclama, y la tienda y los números de la reconciliación.
+    const args = ['context', emitsDomainEvents(model, root) ? 'eventSink' : null, claimsForEntity(model, root.name).length > 0 ? 'sweepsStub' : null, 'store', 'windows(batch, timeoutMs)'].filter(Boolean);
+    const cases = claims.map((claim) => {
+      const label = `${root.name}.${claim.method}`;
+      const awaiting = `${enumType}.${screamingSnake(claim.states[0])}`;
+      const at = claim.awaitingField;
+      return `
+  {
+    await park();
+    const staleAt = (i) => new Date(Date.now() - (UNANSWERED + 600) * 1000 - i * 1000);
+    // Instantes al revés del orden de inserción: el que más lleva esperando es el último insertado.
+    const stale = await seed(3, ${awaiting}, (i) => ({ ${at}: staleAt(i) }));
+    const fresh = await seed(2, ${awaiting}, () => ({ ${at}: new Date(Date.now() - 5_000) }));
+    const first = await adapter(2, 60_000).${claim.method}();
+    check('${label}: solo lo que lleva más que el umbral, el que más lleva primero, con su lote', JSON.stringify(first.map((e) => e.id)) === JSON.stringify([stale[2], stale[1]]), JSON.stringify({ got: first.map((e) => e.id), stale, fresh }));
+    check('${label}: no cambia el estado de espera (es lo que el barrido busca)', first.every((e) => e.${field} === ${awaiting}), first.map((e) => e.${field}).join(','));
+    const rest = await adapter(10, 60_000).${claim.method}();
+    check('${label}: la pasada siguiente se lleva el resto y no lo ya reclamado', same(rest.map((e) => e.id), [stale[0]]), JSON.stringify(rest.map((e) => e.id)));
+    check('${label}: y la tercera, nada (las marcas siguen vivas)', (await adapter(10, 60_000).${claim.method}()).length === 0);
+    const marks = await dataSource.getRepository(ReconciliationClaimOrmRef()).findBy({ activation: '${claim.activation}' });
+    check('${label}: deja una marca por candidato en reconciliation_claim', marks.length === 3, marks.length);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const expired = await adapter(10, 10).${claim.method}();
+    check('${label}: con la marca caducada, el candidato vuelve (la réplica que lo tenía murió)', same(expired.map((e) => e.id), stale), JSON.stringify(expired.map((e) => e.id)));
+
+    // La CARRERA: dos réplicas a la vez; ningún candidato sale dos veces y ninguno se queda.
+    await park();
+    const raced = await seed(6, ${awaiting}, (i) => ({ ${at}: staleAt(i) }));
+    const replica = () => new ${adapterClass(root)}(${args.map((arg) => (arg === 'context' ? 'new TransactionContext(dataSource, settings)' : arg === 'store' ? 'new ReconciliationClaimStore(new TransactionContext(dataSource, settings))' : arg)).join(', ').replace('windows(batch, timeoutMs)', 'windows(6, 60_000)')});
+    const [a, b] = await Promise.all([replica().${claim.method}(), replica().${claim.method}()]);
+    const both = [...a, ...b].map((e) => e.id);
+    check('${label}: dos réplicas a la vez no se llevan el mismo candidato', new Set(both).size === both.length && same(both, raced), \`\${a.length} + \${b.length}\`);
+  }`;
+    });
+    blocks.push(`
+// ═══ Reclamo de reconciliación: ${root.name} ═══
+{
+  const SAMPLES = [
+    ${samples.join(',\n    ')}
+  ];
+  let next = 0;
+  const context = tx;
+  const UNANSWERED = 1800;
+  const sweepsStub = { batchSize: {}, stalledAfterSeconds: {} };
+  const windows = (batchSize, claimTimeoutMs) => ({ ${claims.map((claim) => `${JSON.stringify(claim.activation)}: { unansweredAfterSeconds: UNANSWERED, claimTimeoutMs, batchSize }`).join(', ')} });
+  const store = new ReconciliationClaimStore(tx);
+  const adapter = (batch, timeoutMs) => new ${adapterClass(root)}(${args.join(', ')});
+  const same = (got, want) => got.length === want.length && [...got].sort().join() === [...want].sort().join();
+  const ReconciliationClaimOrmRef = () => dataSource.entityMetadatas.find((meta) => meta.tableName === '${RECONCILIATION_CLAIM.table}').target;
+  // Aparca toda fila en un estado que ningún barrido busca, y vacía las marcas: cada caso empieza limpio.
+  const park = async () => {
+    await dataSource.createQueryBuilder().update(${orm}).set({ ${field}: ${enumType}.${screamingSnake(parked.literal)} }).where('1 = 1').execute();
+    await dataSource.getRepository(ReconciliationClaimOrmRef()).clear();
+  };
+  const meta = dataSource.getMetadata(${orm});
+  const rawSet = async (id, values) => {
+    const entries = Object.entries(values);
+    if (entries.length === 0) return;
+    const idColumn = meta.primaryColumns[0];
+    const params = { id: idColumn.transformer ? idColumn.transformer.to(id) : id };
+    const sets = entries.map(([property, value], i) => {
+      params[\`v\${i}\`] = value;
+      return \`\${dataSource.driver.escape(meta.findColumnWithPropertyName(property).databaseName)} = :v\${i}\`;
+    });
+    const [sql, bound] = dataSource.driver.escapeQueryWithParameters(
+      \`UPDATE \${dataSource.driver.escape(meta.tableName)} SET \${sets.join(', ')} WHERE \${dataSource.driver.escape(idColumn.databaseName)} = :id\`,
+      params,
+      {}
+    );
+    await dataSource.query(sql, bound);
+  };
+  const seed = async (count, state, at) => {
+    const ids = [];
+    for (let i = 0; i < count; i++) {
+      const saved = await adapter(10, 60_000).save(SAMPLES[next++]());
+      await dataSource.createQueryBuilder().update(${orm}).set({ ${field}: state }).where({ id: saved.id }).execute();
+      await rawSet(saved.id, at(i));
+      ids.push(saved.id);
+    }
+    return ids;
+  };
+
+  // ── La tienda, sola: la regla de keel-core (reconciliationClaimReference).
+  {
+    await park();
+    const id = randomUUID();
+    const t0 = new Date();
+    check('reconciliation_claim: sin marca, la inserción es el reclamo', await store.claim('probe', id, t0, new Date(t0.getTime() - 60_000)));
+    check('reconciliation_claim: con la marca viva, otra réplica no se lo lleva', !(await store.claim('probe', id, new Date(), new Date(Date.now() - 60_000))));
+    check('reconciliation_claim: con la marca caducada, se renueva y es de quien llega', await store.claim('probe', id, new Date(), new Date(Date.now() + 1_000)));
+    check('reconciliation_claim: la marca es por activación (la misma entidad puede esperar dos)', await store.claim('other', id, new Date(), new Date(Date.now() - 60_000)));
+    const racedId = randomUUID();
+    const replicas = [0, 1, 2].map(() => new ReconciliationClaimStore(new TransactionContext(dataSource, settings)));
+    const outcomes = await Promise.all(replicas.map((replica) => replica.claim('probe', racedId, new Date(), new Date(Date.now() - 60_000))));
+    check('reconciliation_claim: de tres réplicas que insertan a la vez, gana UNA', outcomes.filter(Boolean).length === 1, JSON.stringify(outcomes));
+  }${cases.join('')}
+}`);
+  }
+  return blocks.join('\n');
+}
+
+/**
  * Las PURGAS por lotes de las tablas del generador (incremento 10b), lo que en keel-spring mide store-check
  * con BatchedPurge: borran lo caducado y solo eso (lo pendiente del outbox nunca), en lotes —con lotes de
  * DOS filas e instantes repetidos en la frontera—, y con el tope alcanzado dejan el resto a la pasada
@@ -1007,7 +1142,8 @@ function purgeBlock(model) {
   const ORM = {
     outbox_event: ['OutboxEventOrm', OUTBOX_ORM_TS],
     processed_event: ['ProcessedEventOrm', PROCESSED_EVENT_ORM_TS],
-    idempotency_record: ['IdempotencyRecordOrm', IDEMPOTENCY_RECORD_ORM_TS]
+    idempotency_record: ['IdempotencyRecordOrm', IDEMPOTENCY_RECORD_ORM_TS],
+    reconciliation_claim: ['ReconciliationClaimOrm', RECONCILIATION_CLAIM_ORM_TS]
   };
   // Cada tabla: cómo es una fila caducada, una vigente y (en el outbox) una pendiente antigua.
   const ROWS = {
@@ -1029,6 +1165,13 @@ function purgeBlock(model) {
       kept: "(at) => ({ operationScope: 'op', idempotencyKey: randomUUID(), signature: 's', resourceId: null, createdAt: now, expiresAt: at })",
       old: 'old(1)',
       recent: 'new Date(now.getTime() + 3_600_000)'
+    },
+    // Retención de 7 días (RECONCILIATION_PURGE): una marca de hace 8 se va, una de ayer se queda.
+    reconciliation_claim: {
+      expired: "(at) => ({ activation: 'probe', entityId: randomUUID(), claimedAt: at })",
+      kept: "(at) => ({ activation: 'probe', entityId: randomUUID(), claimedAt: at })",
+      old: 'old(8)',
+      recent: 'old(1)'
     }
   };
   const imports = purges.map((purge) => `  const { ${ORM[purge.table][0]} } = await import('${distOf(ORM[purge.table][1])}');`).join('\n');
@@ -1066,7 +1209,7 @@ function purgeBlock(model) {
 ${imports}
   // El reloj no corre aquí: la sonda llama a las purgas a mano, con el mismo DataSource y la misma transacción.
   const scheduling = { register: () => {} };
-  const settings = (batch) => ({ outbox: { cron: 'x', retentionDays: 7, ...batch }, processedEvent: { cron: 'x', retentionDays: 14, ...batch }, idempotencyRecord: { cron: 'x', ...batch } });
+  const settings = (batch) => ({ outbox: { cron: 'x', retentionDays: 7, ...batch }, processedEvent: { cron: 'x', retentionDays: 14, ...batch }, idempotencyRecord: { cron: 'x', ...batch }, reconciliationClaim: { cron: 'x', retentionDays: 7, ...batch } });
   const now = new Date();
   const old = (days) => new Date(now.getTime() - days * 86_400_000);${checks}
 }`;

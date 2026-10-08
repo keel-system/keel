@@ -18,6 +18,7 @@
 
 import { MIGRATIONS_TABLE } from './infra.js';
 import { storeEntities } from './messaging-stores.js';
+import { reconciliationBindings, reconciliationEntities } from './reconciliation-claim.js';
 import { SWEEP_SETTINGS_TS, usesSweepClaims } from './claim.js';
 import {
   usesRequestIdempotency,
@@ -144,6 +145,8 @@ function dataSourceOptionsFile(model) {
   if (usesRequestIdempotency(model)) entities.push({ symbol: 'IdempotencyRecordOrm', from: IDEMPOTENCY_RECORD_ORM_TS });
   // Las tablas de la mensajería: el outbox y los mensajes procesados, las mismas que en keel-spring.
   entities.push(...storeEntities(model));
+  // La marca del reclamo de la reconciliación: la misma tabla que en keel-spring.
+  entities.push(...reconciliationEntities(model));
   const driverOptions =
     engine === 'postgresql'
       ? `    type: 'postgres',
@@ -573,6 +576,12 @@ function persistenceModuleFile(model) {
   }
   const bindings = roots.map((entity) => `    { provide: ${portClass(entity)}, useClass: ${adapterClass(entity)} }`);
   const ports = roots.map((entity) => portClass(entity));
+  // La tienda del reclamo de reconciliación y los números de cada barrido: los leen los adaptadores (y el
+  // agente, para un barrido que build no pudo reclamar).
+  const reconciliation = reconciliationBindings(model);
+  imports.push(...reconciliation.imports);
+  bindings.push(...reconciliation.bindings);
+  ports.push(...reconciliation.exports);
   // La configuración de los barridos (el lote y el plazo de cada reclamo): la leen los adaptadores.
   if (usesSweepClaims(model)) {
     imports.push({ symbol: 'SWEEP_SETTINGS', from: SWEEP_SETTINGS_TS }, { symbol: 'sweepSettings', from: SWEEP_SETTINGS_TS });

@@ -87,7 +87,7 @@ const propertyOf = (column) => column.name.replace(/_([a-z])/g, (_m, c) => c.toU
 
 const TS_TYPES = { timestamp: 'Date', int: 'number' };
 
-function storeEntity(model, spec, className, file, doc) {
+export function storeEntity(model, spec, className, file, doc) {
   const engine = engineOf(model);
   const transformers = new Set();
   const fields = storeColumns(spec, 'relational').map((column) => {

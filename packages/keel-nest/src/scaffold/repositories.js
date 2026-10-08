@@ -19,6 +19,7 @@ import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './re
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
 import { adapterClaimMethods, claimDependencies, portClaimMethods } from './claim.js';
+import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import {
   usesRelational,
   ormClass,
@@ -197,6 +198,8 @@ function renderPort(model, entity) {
   }
   // Los reclamos de los barridos que sacan filas de esta raíz (incremento 10c).
   methods.push(...portClaimMethods(model, entity));
+  // Los reclamos de los barridos de reconciliación que la esperan (incremento 11c).
+  methods.push(...portReconciliationMethods(model, entity));
   methods.push(
     `  /**\n   * Guarda el agregado entero (sus entidades internas y sus listas) y devuelve lo guardado. Con\n   * bloqueo optimista, una versión obsoleta sale como conflicto de concurrencia.\n   */\n  abstract save(entity: ${entity.name}): Promise<${entity.name}>;`,
     `  abstract deleteById(${id?.name ?? 'id'}: ${idType}): Promise<void>;`
@@ -307,6 +310,7 @@ function renderAdapter(model, entity) {
   }
 
   methods.push(...adapterClaimMethods(model, entity, imports, findOptions));
+  methods.push(...adapterReconciliationMethods(model, entity, imports, findOptions));
   methods.push(saveMethod(model, entity, imports));
   methods.push(`  async deleteById(${idName}: ${idType}): Promise<void> {
     await this.transactions.inTransaction(async (manager) => {
@@ -392,7 +396,7 @@ function constructorOf(model, entity, imports) {
     imports.push({ symbol: bridgeClass(model), from: bridgePath(model) });
     deps.push({ token: bridgeClass(model), name: 'events', type: bridgeClass(model) });
   }
-  for (const dep of claimDependencies(model, entity)) {
+  for (const dep of [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)]) {
     imports.push(...dep.imports);
     deps.push(dep);
   }

@@ -48,7 +48,8 @@ function springSchema(files) {
   // idempotencia de petición vive en persistence/idempotency).
   // Y los almacenes de la mensajería: el outbox y el registro de procesados (messaging/outbox e idempotency).
   const jpa = files.filter(
-    (f) => /\/infrastructure\/(persistence\/(entities|idempotency)|messaging\/(outbox|idempotency))\//.test(f.path) && f.path.endsWith('.java')
+    // Y la marca del reclamo de la reconciliación (persistence/reconciliation, incremento 11c).
+    (f) => /\/infrastructure\/(persistence\/(entities|idempotency|reconciliation)|messaging\/(outbox|idempotency))\//.test(f.path) && f.path.endsWith('.java')
   );
   const classes = new Map();
   for (const file of jpa) {

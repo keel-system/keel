@@ -21,6 +21,8 @@ import { usesNestOutbox, usesProcessedEvents } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 import { SCHEDULING_TS } from './scheduling.js';
+import { reconciliationPurge } from './reconciliation-claim.js';
+import { RECONCILIATION_CLAIM } from 'keel-core/gen/reconciliation-stores';
 
 const PURGE_DIR = 'src/infrastructure/persistence/purge';
 export const BATCHED_PURGE_TS = `${PURGE_DIR}/batched-purge.ts`;
@@ -77,10 +79,13 @@ export function tablePurges(model) {
       log: 'Idempotencia HTTP: purgadas ${deleted} claves caducadas'
     });
   }
+  // Las marcas del reclamo de reconciliación (incremento 11c), con la retención y el reloj de keel-spring.
+  const reconciliation = reconciliationPurge(model);
+  if (reconciliation) purges.push(reconciliation);
   // Las columnas que se nombran tienen que existir en los datos de la tabla: si keel-core renombrara una,
   // la purga borraría por una columna que no está y fallaría cada noche sin que nada lo dijera antes.
   for (const purge of purges) {
-    const table = [OUTBOX_EVENT, PROCESSED_EVENT, IDEMPOTENCY_RECORD].find((candidate) => candidate.table === purge.table);
+    const table = [OUTBOX_EVENT, PROCESSED_EVENT, IDEMPOTENCY_RECORD, RECONCILIATION_CLAIM].find((candidate) => candidate.table === purge.table);
     if (!table.columns.some((column) => column.name === purge.column)) {
       throw new Error(`La purga de ${purge.table} corta por ${purge.column}, que no es columna de la tabla en keel-core`);
     }

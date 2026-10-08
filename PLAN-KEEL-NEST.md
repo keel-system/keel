@@ -1160,6 +1160,34 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     fixtures con clientes × tres brokers); arreglado y fijado en `npm test`. Después, `ts-check` entero en verde: las
     33 siluetas compilan con `strict` y sus pruebas emitidas pasan.
   - **Sin medir**: contra un WireMock real (el arnés y `stubSequence` son 11d) y en corrida (11e).
+- **11c — reconciliación y compensación, hecho (2026-10-07)**.
+  - **Lo que emite** (`src/scaffold/reconciliation-claim.js`): la tabla `reconciliation_claim` como entidad TypeORM
+    sobre los datos de keel-core (con el emisor genérico de las tablas del generador, `storeEntity`), su tienda
+    (`ReconciliationClaimStore.claim`: UPDATE condicional sobre la marca caducada y, si no casa, INSERT con la clave
+    primaria arbitrando la carrera; cada paso confirmado en su transacción), el reclamo en el puerto y el adaptador de
+    la raíz que espera (candidatos con SKIP LOCKED por el umbral del diseño y `awaitingSince`, el que más lleva
+    primero, con su lote; el estado NO se toca), los tres números por activación (`RECONCILIATION_SETTINGS` y
+    `reconciliation.yaml`, el de keel-spring) y la purga por lotes de la tabla con el reloj y la retención de
+    `RECONCILIATION_PURGE`. El handler del barrido recibe la nota de keel-spring (reclamo generado o no, el ORDEN de
+    un deshacer frente a un reintento, la carrera con el camino feliz) y el de la compensación la suya (qué deshace,
+    qué estado devuelve, cuál es la guarda). La frontera ya no avisa de nada en `stock-reservation`.
+  - **Gate**: las familias `compensation` (el handler escrito; la vuelta al proveedor, exigida como LLAMADA
+    `this.<cliente>.<llamada>(` —en keel-spring basta con nombrar el tipo, que aquí ya está en el `inject` que genera
+    build—; y la transición de vuelta en el agregado), `reconciliation` (el reclamo generado usado y sin finder, el
+    barrido escrito, el disparador; y para un barrido que build no reclama, la marca, el lote y el umbral de SU
+    activación) y `outboundIdempotency` (pendiente del 11b), con los mismos sujetos que keel-spring.
+  - **Medido**: `test/reconciliation.test.js` (7: `reconciliation.yaml` igual al de keel-spring en los tres perfiles,
+    los defaults del código, la purga, las notas y el cableado); `schema-parity` con `reconciliation_claim` (lee ahora
+    también `persistence/reconciliation` de keel-spring); `idempotency-check.test.js` con `stock-reservation` en los
+    tres brokers y EJECUTANDO el gate: rojo recién generado en las dos familias, verde con el uso correcto, rojo otra
+    vez barriendo con un finder o dejando el estado sin devolver. `db-check` **32/32** con `stock-reservation` como
+    sujeto nuevo (115/115 en PostgreSQL y MySQL) y el reclamo de `catalog-extended` (`claimForReconcileWithdrawals…`)
+    medido de paso: la tienda (insertar, marca viva, caducada, por activación, tres réplicas a la vez y gana una), el
+    reclamo (umbral, orden, lote, estado intacto, marcas, caducidad, dos réplicas a la vez) y la purga. Falsado sobre
+    PostgreSQL: sin la condición de caducidad en el UPDATE caen la marca viva, la carrera de la tienda y las pasadas
+    siguientes (4 casos en cada sujeto); sin el umbral de espera caen las pasadas, las marcas y la caducidad (3).
+  - **Sin medir**: el reclamo de reconciliación DOCUMENTAL (incremento 12) y un barrido que build no pueda reclamar
+    (ninguna fixture de la frontera lo tiene: `asset-vault` y `catalog-extended` siguen fuera).
 
 ### Inc. 12 — Persistencia documental (MongoDB)
 

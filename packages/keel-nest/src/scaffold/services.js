@@ -314,6 +314,9 @@ function handlerNotes(model, operation) {
         'del agregado (que llama a transitionTo), nunca el handler asignando el estado.'
     );
   }
+  for (const note of reconciliationNotes(operation)) notes.push(note);
+  const compensation = compensationNote(operation);
+  if (compensation) notes.push(compensation);
   for (const note of activationNotes(operation)) notes.push(note);
   for (const eventName of operation.emits ?? []) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
@@ -331,6 +334,97 @@ function handlerNotes(model, operation) {
  * La nota de una operación disparada por reloj: cómo la despacha su scheduler (keel-core/gen/scheduling.js,
  * la misma decisión que keel-spring) y lo que eso le cambia al handler.
  */
+/**
+ * La nota de un barrido de RECONCILIACIÓN (incremento 11c), la de keel-spring. Dos formas: con el reclamo
+ * generado no se le dice CÓMO reclamar —sería pedirle que reescriba lo que existe, y el camino de menor
+ * resistencia es un segundo mecanismo en paralelo—; sin él, sí. Lo que es suyo en las dos (el ORDEN de los
+ * commits, la carrera con el camino feliz, qué hacer con cada candidato) va en las dos.
+ */
+function reconciliationNotes(operation) {
+  return (operation.reconciles ?? []).map(({ dependency, activation, waiting, claim }) => {
+    const head =
+      `Reconciliación de ${dependency}.${activation.name}: barre los encargos que nunca recibieron desenlace — el evento que los cerraría puede no llegar nunca. `;
+    const decide = `Decide qué hace con cada uno según el efecto declarado ("${activation.effect}"): reintentar el encargo o disparar la compensación. Si el diseño no lo dice, es designGap. `;
+    const noTransaction =
+      'SIN TRANSACCIÓN ABARCADORA: el scheduler lo despacha con dispatchWithoutTransaction, así que cada llamada al adaptador de repositorio abre y confirma la SUYA y la llamada al proveedor cae fuera de todas. ';
+    const race =
+      'CARRERA CON EL CAMINO FELIZ: mientras barres puede llegar el evento de desenlace. Si al mover el candidato lo encuentras ya fuera del estado de espera, ganó el otro camino: es la carrera resuelta, no un fallo — no lo registres como error ni lo reintentes. ';
+    const republish =
+      'Y si lo que haces es reencargar publicando un evento, no lo absorbe nada: cada réplica hace su propio raise y estampa un metadata.eventId distinto, así que para el consumidor son N hechos. ';
+    if (claim) {
+      return (
+        head +
+        `EL RECLAMO YA ESTÁ GENERADO: toma el lote con this.${decap(`${claim.entity}Repository`)}.${claim.method}(). Devuelve SOLO los candidatos que ESTA réplica se llevó —el barrido corre en todas a la vez— y ya trae dentro el umbral que declara el diseño, la cota del lote y la caducidad de la marca (config/parameters/<perfil>/reconciliation.yaml). NO escribas otro reclamo (ni un finder por estado, ni un lock, ni una marca propia en ${claim.entity}): un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor. ` +
+        decide +
+        noTransaction +
+        reconciliationOrder(operation, activation, true) +
+        'El reclamo no sustituye a la idempotencia saliente: lo que absorbe una llamada repetida al proveedor —tras una caducidad o un reintento— es solo esa. ' +
+        republish +
+        race +
+        'Lo verifica infra/check-idempotency.sh, familia reconciliation'
+      );
+    }
+    const key = `reconciliation.${activation.name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()}`;
+    return (
+      head +
+      (waiting.length > 0 ? `Los candidatos son ${waiting.join(', ')} que llevan demasiado tiempo ahí. ` : 'Los candidatos son las entidades que quedaron esperando el desenlace. ') +
+      `build NO pudo generar el reclamo (su aviso dice por qué), así que lo escribes tú, en el adaptador del repositorio y no aquí. DESDE CUÁNDO: la marca temporal la declara el diseño en awaitingSince${activation.awaitingSince ? ` (${activation.awaitingSince})` : ''}; NO uses createdAt ni un updatedAt de auditoría. ` +
+      `Los tres números —umbral (${key}.unanswered-after-seconds, del diseño), caducidad del reclamo y cota del lote— están en RECONCILIATION_SETTINGS[${JSON.stringify(activation.name)}] (infrastructure/persistence/reconciliation/reconciliation-settings.ts): léelos de ahí, no de una constante. ` +
+      'CÓMO reclamar: con la MISMA tienda que build genera para los reclamos que sí puede (ReconciliationClaimStore.claim, una marca persistida que caduca), confirmada ANTES de llamar al proveedor; no con un lock, que solo aísla mientras dura su transacción. ' +
+      decide +
+      noTransaction +
+      reconciliationOrder(operation, activation, false) +
+      republish +
+      race +
+      'Lo verifica infra/check-idempotency.sh, familia reconciliation'
+    );
+  });
+}
+
+/**
+ * El ORDEN de un barrido de reconciliación, el de keel-spring: si reintenta la misma activación, proveedor
+ * primero y transición después; si llama a OTRA que DESHACE el encargo, la entidad se resuelve primero.
+ */
+function reconciliationOrder(operation, activation, claimGenerated) {
+  const calls = (operation.dependencyActivations ?? []).filter(({ activation: called }) => called.http);
+  const retries = calls.some(({ activation: called }) => called.name === activation.name);
+  const undoes = calls.filter(({ activation: called }) => called.name !== activation.name);
+  const first = claimGenerated ? '(1) el reclamo, que ya está hecho y confirmado' : '(1) marcar el reclamo y confirmar, que es lo que lo hace visible a las demás réplicas';
+  if (undoes.length > 0 && !retries) {
+    const names = undoes.map(({ dependency, activation: called }) => `${dependency}.${called.name}`).join(', ');
+    return (
+      `ORDEN: aquí el barrido no reintenta el encargo, lo DESHACE con ${names}, así que va al revés que un reintento — ` +
+      `${first}; (2) transición al estado final y confirmar (save); (3) después, fuera de toda transacción, llamar a ${names}. ` +
+      'Llamar antes y morir antes de confirmar dejaría deshecho el trabajo del proveedor y la entidad todavía en espera. Si una regla del diseño fija el orden, manda la regla. '
+    );
+  }
+  return (
+    `ORDEN: son DOS commits y no se confunden — ${first}; (2) llamar al proveedor, FUERA de toda transacción; (3) transición al estado final y confirmar (save). ` +
+    'Si actúas y mueres antes de (3), la marca caduca y la pasada siguiente repite la llamada, que es lo que absorbe la idempotencia saliente. ' +
+    'Al revés —confirmar el desenlace y luego actuar— si mueres en medio dejas la entidad resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. Si una regla del diseño fija el orden, manda la regla. '
+  );
+}
+
+/** La nota de una COMPENSACIÓN (incremento 11c), la de keel-spring. */
+function compensationNote(operation) {
+  if (!operation.compensates) return null;
+  const { dependency, undoes, moves, event, deduplicated } = operation.compensates;
+  const restored = new Set((operation.transitions ?? []).map((transition) => transition.entity));
+  const pending = moves.filter((entity) => !restored.has(entity));
+  const guard = (operation.transitions ?? []).length > 0 ? 'transitions' : deduplicated ? 'messageId' : null;
+  return (
+    `Compensación de ${dependency}${undoes ? ` — deshace la activación '${undoes}'` : ''}: la dispara la suscripción a ${event}. ` +
+    (moves.length > 0
+      ? `El trabajo que deshaces movió el lifecycle de ${moves.join(', ')}: devolver ese estado es parte de la compensación, no un extra${pending.length > 0 ? ` (el diseño NO declara transición sobre ${pending.join(', ')} — repórtalo como designGap en vez de inventar el estado destino)` : ''}. `
+      : '') +
+    (guard === 'transitions'
+      ? "Aplicarla dos veces no debe deshacer dos veces: la guarda es la transición del agregado, que rechaza la segunda desde un estado que ya no está en 'from'. Va en el DOMINIO, no en el handler."
+      : guard === 'messageId'
+        ? 'Aplicarla dos veces no debe deshacer dos veces: la guarda es la deduplicación del listener por el id del mensaje (IdempotencyGuard). El handler no añade ninguna otra.'
+        : 'Aplicarla dos veces no debe deshacer dos veces y el diseño no declara guarda: repórtalo como designGap.')
+  );
+}
+
 function activationNotes(operation) {
   const notes = [];
   const sweep = Boolean(operation.schedule);

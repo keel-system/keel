@@ -131,19 +131,15 @@ test('con persistencia, la idempotencia de petición se genera y no se avisa', (
   assert.deepEqual(warnings, []);
 });
 
-test('capas http-clients y dependencies (incremento 11b): se generan; needs, oauth2 y los compuestos se rechazan', async () => {
+test('capas http-clients y dependencies (incrementos 11b y 11c): se generan; needs, oauth2 y los compuestos se rechazan', async () => {
   const { loadService } = await import('keel-core');
   const path = await import('node:path');
   const { FIXTURES_DIR } = await import('./helpers/workspace.js');
   const load = (name) => loadService(path.join(FIXTURES_DIR, name));
 
-  // stock-reservation: la llamada se genera; el barrido de reconciliación y la compensación, con aviso (11c).
+  // stock-reservation: la llamada, el barrido de reconciliación y la compensación se generan (11b y 11c).
   const stock = load('stock-reservation');
-  const { errors, warnings } = checkSupportedFeatures(stock.manifest, stock.layers);
-  assert.deepEqual(errors, []);
-  assert.equal(warnings.length, 2);
-  assert.match(warnings[0], /reserveStock\.reconciledBy: reconcileReservations .*incremento 11c/);
-  assert.match(warnings[1], /inventory\.compensations: .*incremento 11c/);
+  assert.deepEqual(checkSupportedFeatures(stock.manifest, stock.layers), { errors: [], warnings: [] });
 
   // asset-vault y catalog-extended declaran needs (con réplica y lastKnown), que no tienen sujeto en la frontera.
   const vault = checkSupportedFeatures(load('asset-vault').manifest, load('asset-vault').layers);

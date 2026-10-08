@@ -24,7 +24,7 @@ const rows = (script) => [...(script ?? '').matchAll(/^(unit|impl|claim) '([^']*
 // La escritura de los registros: en JPA, Persistable; en TypeORM, insert y no save. Sujetos distintos a propósito.
 const isInsertSubject = (row) => /: la (escritura es un INSERT|clave asignada fuerza INSERT)/.test(row);
 
-for (const name of ['product-catalog', 'job-dispatch', 'payout-runs', 'metering-digest', 'stock-reservation-events']) {
+for (const name of ['product-catalog', 'job-dispatch', 'payout-runs', 'metering-digest', 'stock-reservation-events', 'stock-reservation']) {
   for (const broker of ['rabbitmq', 'kafka', 'snssqs']) {
     test(`${name} [${broker}]: las familias y los sujetos del gate son los de keel-spring`, () => {
       const stack = { database: 'postgresql', broker };
@@ -113,4 +113,62 @@ test('con el uso correcto sale VERDE; leer el lote con un finder lo vuelve a pon
   });
   assert.equal(reading.code, 1);
   assert.match(reading.out, /\[sweepClaim\] sendPayouts .*falta/);
+});
+
+// ─── Compensación y reconciliación (incremento 11c), sobre stock-reservation ─
+
+const STOCK = {
+  reconcile: 'src/application/usecases/reconcile-reservations-command-handler.ts',
+  release: 'src/application/usecases/release-reservation-command-handler.ts',
+  reservation: 'src/domain/aggregate/reservation.ts'
+};
+/** El cuerpo de handle() sustituido por lo que escribiría el agente. */
+const handleWith = (body) => (source) => source.replace(/async handle\(([^)]*)\): Promise<void> \{[\s\S]*?\n  \}\n\}/, `async handle($1): Promise<void> {\n${body}\n  }\n}`);
+const sweepBody = `    for (const reservation of await this.reservationRepository.claimForReconcileReservationsReserveStock()) {
+      reservation.release('sin respuesta del almacén');
+      await this.reservationRepository.save(reservation);
+      await this.inventoryClient.cancelStock(reservation.id);
+    }`;
+const releaseBody = `    const reservation = await this.reservationRepository.findById(command.id);
+    if (reservation === null) return;
+    reservation.release(command.reason ?? 'rechazada por el almacén');
+    await this.reservationRepository.save(reservation);`;
+const withRelease = (source) =>
+  source.replace(/\n  private transitionTo\(/, `\n  release(reason: string): void {\n    this.transitionTo(ReservationStatus.RELEASED);\n  }\n\n  private transitionTo(`);
+
+test('stock-reservation: recién generado, compensación y reconciliación salen ROJAS en cada sujeto', (t) => {
+  const fresh = runGate('stock-reservation');
+  if (fresh === null) return t.skip('sin bash en el PATH');
+  const found = verdicts(fresh.out);
+  assert.equal(found.compensation, 'KO');
+  assert.equal(found.reconciliation, 'KO');
+  // La clave saliente la cablea build en el intento: nace verde, como en keel-spring.
+  assert.equal(found.outboundIdempotency, 'OK');
+  assert.match(fresh.out, /\[compensation\] releaseReservation \(/);
+  assert.match(fresh.out, /\[compensation\] releaseReservation · estado de Reservation .*falta 'transitionTo/);
+  assert.match(fresh.out, /\[reconciliation\] reconcileReservations · reclamo de inventory\.reserveStock .*falta/);
+});
+
+test('stock-reservation: con el uso correcto salen VERDES; barrer con un finder vuelve a poner roja la reconciliación', (t) => {
+  const correct = runGate('stock-reservation', {
+    [STOCK.reconcile]: handleWith(sweepBody),
+    [STOCK.release]: handleWith(releaseBody),
+    [STOCK.reservation]: withRelease
+  });
+  if (correct === null) return t.skip('sin bash en el PATH');
+  const found = verdicts(correct.out);
+  assert.equal(found.compensation, 'OK', correct.out);
+  assert.equal(found.reconciliation, 'OK', correct.out);
+
+  const reading = runGate('stock-reservation', {
+    [STOCK.reconcile]: handleWith(sweepBody.replace('claimForReconcileReservationsReserveStock()', 'findByStatus(ReservationStatus.AWAITING_STOCK)')),
+    [STOCK.release]: handleWith(releaseBody),
+    [STOCK.reservation]: withRelease
+  });
+  assert.equal(verdicts(reading.out).reconciliation, 'KO');
+  assert.equal(verdicts(reading.out).compensation, 'OK');
+
+  // Y el estado sin devolver: la compensación queda a medias aunque el handler esté escrito.
+  const halfway = runGate('stock-reservation', { [STOCK.reconcile]: handleWith(sweepBody), [STOCK.release]: handleWith(releaseBody) });
+  assert.equal(verdicts(halfway.out).compensation, 'KO');
 });
