@@ -21,7 +21,8 @@ import { kebabCase, screamingSnake } from 'keel-core/gen';
 import { registryOperations } from 'keel-core/gen/request-idempotency';
 import { capitalize, fileName } from './render.js';
 import { usesPersistence, usesDocument } from './persistence-entities.js';
-import { naturalKeyFinder } from './repositories.js';
+import { naturalKeyFinder, occupantFinders, repositoryRoots } from './repositories.js';
+import { relievingOperations } from 'keel-core/gen';
 import { usesNestOutbox, usesProcessedEvents, usesMessaging } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 
@@ -54,7 +55,9 @@ export function checksOf(model) {
     ...sweepClaimChecks(model),
     ...reconciliationChecks(model),
     ...outboundIdempotencyChecks(model),
-    ...outboxChecks(model)
+    ...outboxChecks(model),
+    ...mailChecks(model),
+    ...conditionalUniquenessChecks(model)
   ];
 }
 
@@ -484,4 +487,68 @@ function outboxChecks(model) {
       why: 'con reliability: outbox el diseño prometió que ningún evento se pierde; con solo el respaldo de build no sale ninguno'
     }
   ];
+}
+
+// 6. La salida por correo (incremento 12e). build genera el mecanismo entero —mensaje, puerto, adaptador,
+//    renderizador— y lo INYECTA en el handler de cada operación de mail.sentBy; el USO lo escribe el agente. Una
+//    operación que no manda el correo compila, responde su 2xx y pasa todos sus escenarios menos el que mire el
+//    buzón. Y la guarda, que es la otra mitad y la que no se ve fallar: que el correo salga DOS VECES tras una
+//    caída no lo nota ningún FL-*. Las mismas dos comprobaciones que keel-spring.
+function mailChecks(model) {
+  const senders = new Set(model.mail?.sentBy ?? []);
+  if (!model.layersPresent?.mail || senders.size === 0) return [];
+  const checks = [];
+  for (const operation of allOperations(model)) {
+    if (!senders.has(operation.name)) continue;
+    checks.push({
+      group: 'mailDelivery',
+      subject: operation.name,
+      class: fileName(operation.handlerClass),
+      // El punto entre corchetes: viaja por grep y por awk, que no entiende `\.`.
+      require: ['mailSender[.]send'],
+      forbid: ["TODO|throw new Error[(]'TODO"],
+      why: 'el diseño le atribuye la salida por correo (mail.sentBy): tiene que componer el MailMessage y llamar a this.mailSender.send(...)'
+    });
+    const guard = operation.guardClaim;
+    if (guard) {
+      checks.push({
+        group: 'mailDelivery',
+        subject: `${operation.name} · guarda confirmada antes del envío`,
+        class: fileName(operation.handlerClass),
+        require: ['[.]?' + guard.method + '[ ]*[(]'],
+        forbid: [],
+        why:
+          `la guarda contra el doble envío (${guard.from.join(' o ')} → ${guard.to}) tiene que estar CONFIRMADA antes de mandar ` +
+          'el correo, y hacerla en memoria no la confirma: el handler corre dentro de la transacción del mediator, así que la marca ' +
+          `no existe para nadie hasta el commit final —que llega después del envío—. Llama a ${guard.method}(...), que build generó ` +
+          `en ${guard.entity}Repository con transacción propia, y trata su null como la carrera perdida`
+      });
+    }
+  }
+  return checks;
+}
+
+// 7. El RELEVO en un índice único condicionado (el mismo sujeto que keel-spring). La operación saca una fila del
+//    estado del índice y mete otra en el mismo acto, y el índice se comprueba por FILA: la que lo ocupaba se
+//    retira y se GUARDA antes de guardar la nueva. En keel-spring lo afirmable es el flush del puerto; aquí cada
+//    save escribe en el acto, así que lo afirmable es que el handler busque la ocupante con el finder que build
+//    generó. Dónde va lo dice la nota del stub: pedir una posición sería suponer una forma de handler.
+function conditionalUniquenessChecks(model) {
+  // Solo relacional, como keel-spring: en documental su gate no la emite y aquí tampoco (la nota del stub sí).
+  if (usesDocument(model)) return [];
+  return relievingOperations(model).map(({ operation, entity, state }) => {
+    const root = repositoryRoots(model).find((candidate) => candidate.name === entity.rootEntity) ?? entity;
+    const finder = occupantFinders(model, root).find((candidate) => candidate.state === state);
+    return {
+      group: 'conditionalUniqueness',
+      subject: `${operation.name} (${entity.name}.${state})`,
+      class: fileName(operation.handlerClass),
+      require: [finder ? '[.]?' + finder.name + '[ ]*[(]' : 'save[ ]*[(]'],
+      forbid: ["throw new Error[(]'TODO"],
+      why:
+        `releva sobre el índice único condicionado de ${entity.name}.${state}: retira la fila que lo ocupaba${finder ? ` (búscala con ${finder.name}(...))` : ''} ` +
+        'y GUÁRDALA antes de guardar la nueva. El índice se comprueba por FILA y no se puede diferir: al revés, la transición ' +
+        'legítima muere con el error de unicidad del diseño, un 409 en el camino feliz'
+    };
+  });
 }

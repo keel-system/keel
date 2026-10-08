@@ -696,7 +696,7 @@ function contractDoc(model, sub) {
   if (sub.identity) {
     lines.push(
       `Identidad del emisor: resuelve ${sub.identity.field} desde ${sub.identity.from.location === 'header' ? `el header '${sub.identity.from.name}'` : `el campo '${sub.identity.from.name}' del mensaje`}, y pásala YA RESUELTA a la operación. No la leas del payload.` +
-        (sub.identity.resolvedBy ? '' : ' Se resuelve 1:1: el valor leído ES la clave natural del recurso que identifica.')
+        (sub.identity.resolvedBy ? resolvedByNote(sub.identity.resolvedBy) : ' Se resuelve 1:1: el valor leído ES la clave natural del recurso que identifica.')
     );
     lines.push(
       sub.identity.onUnresolved === 'deadLetter'
@@ -1048,3 +1048,14 @@ export class MessageListenersModule {}`
   );
 }
 
+
+/**
+ * La resolución de la identidad del emisor contra VARIAS credenciales (resolvedBy, DSL 2.17): la misma nota que
+ * keel-spring. El valor leído es UNA de las credenciales del recurso, no su clave natural; se busca con el finder
+ * que build generó en el puerto, y lo que se pasa a la operación es la clave natural —lo mismo que por HTTP—.
+ */
+function resolvedByNote(raw) {
+  const [entity, field] = typeof raw === 'object' ? [raw.entity, raw.field] : String(raw).split('.');
+  const finder = `findBy${field.charAt(0).toUpperCase()}${field.slice(1)}Containing`;
+  return ` El valor leído es UNA de las credenciales de ${entity} (resolvedBy: ${entity}.${field}), no su clave natural: búscalo con ${entity}Repository.${finder}(...), que build ya generó, y pasa la clave natural del ${entity} encontrado (lo mismo que hace la puerta HTTP). Buscar por la clave natural resuelve solo la credencial que coincide con ella.`;
+}

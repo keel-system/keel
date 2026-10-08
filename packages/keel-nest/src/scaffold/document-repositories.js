@@ -22,8 +22,8 @@ import { DIRS, classPath, entityDir, tsModule, tsString } from './render.js';
 import { domainMembers } from './entities.js';
 import { TEXT_FOLD_TS } from './persistence-entities.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
-import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, occupantFinders, constructorOf, emitsDomainEvents } from './repositories.js';
-import { documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
+import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, occupantFinders, constructorOf, emitsDomainEvents, credentialFinders } from './repositories.js';
+import { documentGuardMethods, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────
 
@@ -398,6 +398,13 @@ export function renderDocumentAdapter(model, entity) {
   }`);
   }
 
+  for (const credential of credentialFinders(model, entity)) {
+    // La lista es un array del propio documento: MongoDB casa un array con uno de sus elementos.
+    methods.push(`  async ${credential.name}(${credential.param}: string): Promise<${entity.name} | null> {
+    const found = await this.collection.findOne({ ${tsString(keyOf(model, entity, credential.field.name))}: ${writeScalar(credential.field, credential.param, use)} }, { session: this.session });
+    return found == null ? null : toDomain${entity.name}(found);
+  }`);
+  }
   if (isPaginated(model, entity)) {
     imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true });
     imports.push({ symbol: 'Sort', from: 'mongodb', type: true });
@@ -423,6 +430,7 @@ export function renderDocumentAdapter(model, entity) {
 
   // Los reclamos de los barridos que sacan documentos de esta raíz y los de las reconciliaciones que la esperan.
   methods.push(...documentSweepClaimMethods(model, entity), ...documentReconciliationMethods(model, entity));
+  methods.push(...documentGuardMethods(model, entity, idFilter, idType, idName));
   methods.push(saveMethod(model, entity, use));
   methods.push(`  async deleteById(${idName}: ${idType}): Promise<void> {
     // El agregado es el documento: borrarlo borra también sus hijas, que van dentro.

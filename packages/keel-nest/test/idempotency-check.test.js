@@ -24,7 +24,7 @@ const rows = (script) => [...(script ?? '').matchAll(/^(unit|impl|claim) '([^']*
 // La escritura de los registros: en JPA, Persistable; en TypeORM, insert y no save. Sujetos distintos a propósito.
 const isInsertSubject = (row) => /: la (escritura es un INSERT|clave asignada fuerza INSERT)/.test(row);
 
-for (const name of ['product-catalog', 'job-dispatch', 'payout-runs', 'metering-digest', 'stock-reservation-events', 'stock-reservation']) {
+for (const name of ['product-catalog', 'job-dispatch', 'payout-runs', 'metering-digest', 'stock-reservation-events', 'stock-reservation', 'notification-mailer']) {
   for (const broker of ['rabbitmq', 'kafka', 'snssqs']) {
     test(`${name} [${broker}]: las familias y los sujetos del gate son los de keel-spring`, () => {
       const stack = { database: 'postgresql', broker };
@@ -246,4 +246,55 @@ test('documental: la escritura de los registros es un insertOne; un upsert la po
   const upserted = run({ [guard]: (text) => text.replace(/\.insertOne\(([^)]*)\)/s, '.updateOne($1, { $set: {} }, { upsert: true })') });
   assert.ok(insertFindings(upserted).some((line) => /idempotency-guard/.test(line)), upserted);
   assert.ok(!insertFindings(upserted).some((line) => /idempotency-store-impl/.test(line)), 'y solo la guarda');
+});
+
+// ─── mailDelivery (incremento 12e) ───────────────────────────────────────────
+
+const MAIL_HANDLER = 'src/application/usecases/send-accepted-notification-command-handler.ts';
+/** El handler de mail.sentBy con el cuerpo que escribiría el agente (devuelve el DTO de la operación). */
+const mailHandleWith = (body) => (source) =>
+  source.replace(/(async handle\([^)]*\): Promise<[^>]*> \{)[\s\S]*?\n  \}\n\}/, `$1\n${body}\n  }\n}`);
+const sendBody = (claim) => `    const notification = ${claim
+  ? 'await this.notificationRepository.claimForSendAcceptedNotification(command.id)'
+  : 'await this.notificationRepository.findById(command.id)'};
+    if (notification === null) throw new Error('ya no está disponible');
+    await this.mailSender.send(new MailMessage({ to: [...notification.recipients], subject: 'x', html: 'h', text: 't' }));
+    return this.notificationApplicationMapper.toSendAcceptedNotificationResponseDto(notification);`;
+
+test('mailDelivery: recién generado, el envío y su guarda salen los DOS como pendientes', (t) => {
+  const fresh = runGate('notification-mailer');
+  if (fresh === null) return t.skip('sin bash en el PATH');
+  assert.equal(verdicts(fresh.out).mailDelivery, 'KO', fresh.out);
+  assert.match(fresh.out, /\[mailDelivery\] sendAcceptedNotification \(/, fresh.out);
+  assert.match(fresh.out, /\[mailDelivery\][^\n]*guarda confirmada antes del envío/, fresh.out);
+});
+
+test('mailDelivery: con el envío escrito y la guarda en memoria sigue rojo por la guarda; con el reclamo, verde', (t) => {
+  const inMemory = runGate('notification-mailer', { [MAIL_HANDLER]: mailHandleWith(sendBody(false)) });
+  if (inMemory === null) return t.skip('sin bash en el PATH');
+  assert.ok(!/\[mailDelivery\] sendAcceptedNotification \(/.test(inMemory.out), inMemory.out);
+  assert.match(inMemory.out, /\[mailDelivery\][^\n]*guarda confirmada antes del envío/, inMemory.out);
+  const claimed = runGate('notification-mailer', { [MAIL_HANDLER]: mailHandleWith(sendBody(true)) });
+  assert.equal(verdicts(claimed.out).mailDelivery, 'OK', claimed.out);
+  // La nota del stub nombra el reclamo y el envío: si el gate leyera comentarios, saldría verde por su propia prosa.
+  const noteOnly = runGate('notification-mailer', { [MAIL_HANDLER]: (source) => source.replace("throw new Error('TODO: sendAcceptedNotification');", "throw new Error('pendiente');") });
+  assert.match(noteOnly.out, /\[mailDelivery\] sendAcceptedNotification \(/, noteOnly.out);
+});
+
+test('conditionalUniqueness: recién generado sale rojo; con la ocupante buscada y guardada antes, verde', (t) => {
+  const fresh = runGate('notification-mailer');
+  if (fresh === null) return t.skip('sin bash en el PATH');
+  assert.equal(verdicts(fresh.out).conditionalUniqueness, 'KO', fresh.out);
+  const relieved = runGate('notification-mailer', {
+    'src/application/usecases/publish-template-command-handler.ts': mailHandleWith(`    const template = await this.templateRepository.findById(command.id);
+    if (template === null) throw new Error('no existe');
+    const occupant = await this.templateRepository.findByApplicationIdAndKeyAndLocaleAndStatus(template.applicationId, template.key, template.locale, TemplateStatus.ACTIVE);
+    if (occupant !== null) {
+      occupant.retire();
+      await this.templateRepository.save(occupant);
+    }
+    template.publish();
+    return this.templateApplicationMapper.toPublishTemplateResponseDto(await this.templateRepository.save(template));`)
+  });
+  assert.equal(verdicts(relieved.out).conditionalUniqueness, 'OK', relieved.out);
 });

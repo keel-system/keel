@@ -44,10 +44,10 @@ export function transpileTree(files, { stubs = {} } = {}) {
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, type: 'module', main: 'index.js' }));
     fs.writeFileSync(path.join(dir, 'index.js'), source);
   }
-  // Los paquetes que importa el código emitido sin Nest (decimal.js del dominio, jose de la seguridad) se
-  // resuelven desde el node_modules del monorepo.
+  // Los paquetes que importa el código emitido sin Nest (decimal.js del dominio, jose de la seguridad, handlebars
+  // y nodemailer del correo) se resuelven desde el node_modules del monorepo.
   fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
-  for (const dependency of ['decimal.js', 'jose']) {
+  for (const dependency of ['decimal.js', 'jose', 'handlebars', 'nodemailer']) {
     const dir = path.dirname(require.resolve(`${dependency}/package.json`));
     fs.symlinkSync(dir, path.join(root, 'node_modules', dependency), 'junction');
   }

@@ -19,16 +19,17 @@ import { controllerClasses } from './controllers.js';
 import { relativeSpecifier } from './render.js';
 import { usesPersistence } from './persistence-entities.js';
 import { usesIdempotencyHeader } from './request-idempotency.js';
-import { usesHttpSecurity, usesCallerScope } from './security.js';
+import { usesHttpSecurity, usesCallerScope, usesSecurityModule } from './security.js';
 import { usesMessaging } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 import { usesServiceParameters } from './service-parameters.js';
 import { usesHttpClients } from './http-clients.js';
+import { usesMail } from './mail.js';
 
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs() },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesPersistence(model), usesCallerScope(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model)) },
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model)) },
     { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model)) }
   ];
 }
@@ -55,7 +56,7 @@ await app.listen(configuration.server.port, configuration.server.address);
 `;
 }
 
-function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false, withHttpClients = false) {
+function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false, withHttpClients = false, withMail = false) {
   // Los casos de uso del diseño entran por su módulo (infrastructure/usecase), que es el único que
   // cablea handlers y mappers; los controladores REST los despachan por el mediator que exporta. La
   // persistencia y el alcance por recurso (globales) van antes: son dependencias de los handlers.
@@ -67,6 +68,7 @@ function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope
         "\nimport { MessageListenersModule } from './infrastructure/messaging/message-listeners-module.js';"
       : '') +
     (withHttpClients ? "\nimport { HttpClientsModule } from './infrastructure/clients/http-clients-module.js';" : '') +
+    (withMail ? "\nimport { MailModule } from './infrastructure/mail/mail-module.js';" : '') +
     (withCallerScope ? "\nimport { SecurityModule } from './infrastructure/security/security-module.js';" : '') +
     (withUseCases ? "\nimport { UseCaseModule } from './infrastructure/usecase/use-case-module.js';" : '') +
     (withScheduling ? "\nimport { SchedulingModule } from './infrastructure/scheduling/scheduling-module.js';" : '');
@@ -78,6 +80,8 @@ function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope
     withMessaging ? 'MessagingModule.register(configuration)' : null,
     // Los clientes HTTP salientes (globales): los handlers inyectan sus puertos.
     withHttpClients ? 'HttpClientsModule.register(configuration)' : null,
+    // El correo saliente (global): los handlers de mail.sentBy inyectan sus puertos.
+    withMail ? 'MailModule.register(configuration)' : null,
     withCallerScope ? 'SecurityModule' : null,
     withUseCases ? 'UseCaseModule' : null,
     // Los listeners del agente despachan por el mediator: van después de los casos de uso.

@@ -157,7 +157,26 @@ export const MECHANISMS = {
       }
     }
   },
-  'guard-claim': { pending: 'incremento 13 (la guarda de efecto irreversible solo la declara el correo)' },
+  'guard-claim': {
+    emitter: 'src/scaffold/claim.js (adapterGuardMethods, sobre operation.guardClaim de keel-core/gen) · src/scaffold/document-stores.js (documentGuardMethods) · el puerto de repositories.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'db-check, en los dos motores, sobre notification-mailer: la primera ejecución se lleva la fila y la pasa al estado en vuelo con su reloj estampado, la SEGUNDA devuelve null y una lectura posterior ve la marca confirmada (inNewTransaction, fuera de la del caso de uso). Falsado el 2026-10-08 quitando la condición de estado del UPDATE: cae «por segunda vez devuelve null» y solo esa. El USO en el handler (llamarla antes del envío) lo vigila la familia mailDelivery del gate'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          'findOneAndUpdate por _id y estado de partida, sin la sesión del caso de uso: lo mismo que la rama relacional, en doc-check sobre notification-mailer-mongo. Falsado el 2026-10-08 quitando el estado del filtro: cae «por segunda vez devuelve null» y solo esa'
+      }
+    }
+  },
   'harness-db-probes': {
     emitter: 'src/scaffold/integration-tests.js (rescueSection: stallInFlight, putInFlight, inFlightWithoutClock, sobre rescueProbes de keel-core/gen) · src/scaffold/messaging-harness.js (abandonOutboxEvent)',
     coverage: {

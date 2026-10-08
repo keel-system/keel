@@ -19,7 +19,7 @@ import { MEDIATOR_TS } from './mediator.js';
 import { messageComponents, messagePath, returnTypeOf, isPartialUpdate } from './services.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
-import { CALLER_IDENTITY_TS } from './security.js';
+import { CALLER_IDENTITY_TS, callerResolution } from './security.js';
 
 export const VALUE_READERS_TS = 'src/infrastructure/rest/value-readers.ts';
 export const PAGEABLE_READING_TS = 'src/infrastructure/rest/pageable-reading.ts';
@@ -196,9 +196,15 @@ function renderController(model, service, routed) {
   ];
   const readers = [];
   const methods = routed.map((operation) => renderMethod(model, operation, imports, readers));
+  // Con resolvedBy, la identidad del llamante se resuelve al recurso antes de despachar (callerResolution).
+  const resolving = callerResolution(model) != null && routed.some((operation) => resolvesCaller(model, operation));
+  if (resolving) imports.push({ symbol: 'CallerIdentityResolver', from: CALLER_IDENTITY_TS });
+  const constructor = resolving
+    ? `  constructor(\n    @Inject(UseCaseMediator) private readonly mediator: UseCaseMediator,\n    @Inject(CallerIdentityResolver) private readonly callerIdentity: CallerIdentityResolver\n  ) {}`
+    : '  constructor(@Inject(UseCaseMediator) private readonly mediator: UseCaseMediator) {}';
   const body = `${tsdoc(`Operaciones HTTP de ${service.controllerClass.replace(/V1Controller$/, '')}. Solo traduce: lee la petición, despacha el caso de uso y devuelve su resultado.`)}@Controller(${tsString(model.api.routeBase.replace(/^\//, ''))})
 export class ${service.controllerClass} {
-  constructor(@Inject(UseCaseMediator) private readonly mediator: UseCaseMediator) {}
+${constructor}
 
 ${methods.join('\n\n')}
 }
@@ -220,6 +226,14 @@ function renderMethod(model, operation, imports, readers) {
 
   const params = ['@Param() params: Record<string, string>', '@Query() query: Record<string, unknown>', '@Body() body: unknown'];
   let call = `this.mediator.dispatch(${readerName}(params, query, body))`;
+  let resolve = '';
+  if (resolvesCaller(model, operation)) {
+    // La credencial del token es UNA de las del recurso (resolvedBy): el mensaje lleva su clave natural, o null
+    // si no es de nadie (la precondición la responde la operación con el error que declare el diseño).
+    const field = messageComponents(model, operation).find((component) => component.resolvedIdentity).name;
+    resolve = `    const read = ${readerName}(params, query, body);\n    const message = new ${operation.messageClass}({ ...read, ${field}: await this.callerIdentity.resolve(read.${field}) });\n`;
+    call = 'this.mediator.dispatch(message)';
+  }
   let statements;
   if (location) {
     imports.push(
@@ -247,7 +261,7 @@ function renderMethod(model, operation, imports, readers) {
   return `${tsdoc(operation.description, '  ')}  @${decorator}(${tsString(nestPath(route.path))})
   @HttpCode(${route.status})
   async ${operation.name}(${params.join(', ')}): Promise<${resultType ?? 'void'}> {
-${statements}
+${resolve}${statements}
   }`;
 }
 
@@ -449,4 +463,9 @@ export function locationOf(request: FastifyRequest, template: string, value: unk
   return \`\${request.protocol}://\${request.host}\${template.replace(/\\{[^}]+\\}/, encodeURIComponent(String(value)))}\`;
 }`;
   return { path: ROUTES_TS, content: tsModule(ROUTES_TS, [{ symbol: 'FastifyRequest', from: 'fastify', type: true }], body) };
+}
+
+/** ¿La operación recibe la identidad del llamante y el diseño la resuelve contra varias credenciales? */
+function resolvesCaller(model, operation) {
+  return callerResolution(model) != null && messageComponents(model, operation).some((component) => component.resolvedIdentity);
 }

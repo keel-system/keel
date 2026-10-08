@@ -18,7 +18,7 @@ import { persistedMembers, collectInternalEntities, orderingFieldOf, partialUniq
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
-import { adapterClaimMethods, claimDependencies, portClaimMethods } from './claim.js';
+import { adapterClaimMethods, adapterGuardMethods, claimDependencies, portClaimMethods, portGuardMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { renderDocumentAdapter } from './document-repositories.js';
 import {
@@ -125,6 +125,45 @@ function typeImportsOf(field) {
   return imports;
 }
 
+// ─── La credencial que resuelve al agregado (resolvedBy) ─────────────────────
+
+/**
+ * Los finders por ELEMENTO de una colección, cuando el diseño declara que un recurso tiene varias
+ * credenciales: por HTTP (`security.authentication.callerIdentity.from.resolvedBy`) o por el broker
+ * (`messaging.subscriptions.<E>.identity.resolvedBy`, DSL 2.17). La misma decisión que keel-spring: uno por
+ * `Entidad.campo` distinto que nombre el diseño para ESTA entidad, y ninguno si no nombra ninguno. Sin él,
+ * el finder de la clave natural resuelve solo la credencial que casualmente coincide con la clave, y las
+ * demás acaban en un 403 en el camino feliz (corrida notification-mailer de keel-spring).
+ */
+export function credentialFinders(model, entity) {
+  const declared = [
+    model.security?.callerIdentity?.resolvedBy,
+    ...(model.subscriptions ?? []).map((sub) => resolvedByOf(sub.identity?.resolvedBy))
+  ].filter((resolved) => resolved && resolved.entity === entity.name);
+  const seen = new Set();
+  const finders = [];
+  for (const resolved of declared) {
+    if (seen.has(resolved.field)) continue;
+    seen.add(resolved.field);
+    const field = entity.fields.find((candidate) => candidate.name === resolved.field);
+    if (!field || !field.list) continue;
+    finders.push({ name: credentialFinderName(resolved.field), field, param: resolved.field.replace(/s$/, '') });
+  }
+  return finders;
+}
+
+/** El nombre del finder de `Entidad.campo`: el mismo que keel-spring, y el que nombran las notas al agente. */
+export function credentialFinderName(field) {
+  return `findBy${capitalize(field)}Containing`;
+}
+
+function resolvedByOf(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  const [entity, field] = String(raw).split('.');
+  return { entity, field };
+}
+
 // ─── El puerto ───────────────────────────────────────────────────────────────
 
 function pageBody() {
@@ -195,12 +234,24 @@ function renderPort(model, entity) {
         `  abstract ${occupant.name}(${occupant.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null>;`
     );
   }
+  for (const credential of credentialFinders(model, entity)) {
+    methods.push(
+      `  /**
+   * Resuelve el agregado a partir de UNA de sus credenciales: el diseño declara que un mismo ${entity.name} tiene
+   * varias (resolvedBy: ${entity.name}.${credential.field.name}), así que la del token o la del mensaje no tiene por qué
+   * ser su clave natural. Buscar por la clave natural resolvería solo una de ellas: un 403 en el camino feliz.
+   */
+  abstract ${credential.name}(${credential.param}: string): Promise<${entity.name} | null>;`
+    );
+  }
   if (isPaginated(model, entity)) {
     imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true });
     methods.push(`  /** Una página de agregados, en el orden pedido y con el id como desempate. */\n  abstract list(pageable: Pageable): Promise<Page<${entity.name}>>;`);
   }
   // Los reclamos de los barridos que sacan filas de esta raíz (incremento 10c).
   methods.push(...portClaimMethods(model, entity));
+  // La guarda de un efecto irreversible (mail.sentBy con estado en vuelo, incremento 12e).
+  methods.push(...portGuardMethods(model, entity, idType, id?.name ?? 'id'));
   // Los reclamos de los barridos de reconciliación que la esperan (incremento 11c).
   methods.push(...portReconciliationMethods(model, entity));
   methods.push(
@@ -293,6 +344,17 @@ function renderAdapter(model, entity) {
   }`);
   }
 
+  for (const credential of credentialFinders(model, entity)) {
+    const member = persistedMembers(model, entity).find((m) => m.kind === 'elementCollection' && m.name === credential.field.name);
+    const element = elementClass(entity, member);
+    imports.push({ symbol: element, from: ormPath(entity.name) });
+    methods.push(`  async ${credential.name}(${credential.param}: string): Promise<${entity.name} | null> {
+    // La credencial vive en la tabla de elementos de la lista: se busca ahí al dueño y se carga el agregado
+    // ENTERO por su id (filtrar la raíz por un elemento cargaría la lista recortada a ese elemento).
+    const owner = await this.manager.findOne(${element}, { where: { value: ${credential.param} } });
+    return owner == null ? null : this.findById(owner.ownerId);
+  }`);
+  }
   if (isPaginated(model, entity)) {
     imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true });
     imports.push({ symbol: 'FindOptionsOrder', from: 'typeorm', type: true });
@@ -313,6 +375,7 @@ function renderAdapter(model, entity) {
   }
 
   methods.push(...adapterClaimMethods(model, entity, imports, findOptions));
+  methods.push(...adapterGuardMethods(model, entity, imports, findOptions, idType, idName));
   methods.push(...adapterReconciliationMethods(model, entity, imports, findOptions));
   methods.push(saveMethod(model, entity, imports));
   methods.push(`  async deleteById(${idName}: ${idType}): Promise<void> {

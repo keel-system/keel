@@ -36,10 +36,11 @@ import { DB_NAME, run, resolveRuntime, startMongo, stopDatabase } from './lib/da
 import { sampleEntity, PROBE_HELPERS } from './lib/samples.js';
 import { adapterArgs, storeBlocks, storePreamble } from './lib/document-store-probes.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
-import { AMQPLIB_VERSION, JOSE_VERSION, MONGODB_VERSION } from '../src/lib/assets.js';
+import { AMQPLIB_VERSION, JOSE_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION } from '../src/lib/assets.js';
 import { build } from '../src/commands/build.js';
 import { classPath, DIRS } from '../src/scaffold/render.js';
-import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders } from '../src/scaffold/repositories.js';
+import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, credentialFinders } from '../src/scaffold/repositories.js';
+import { guardClaimsFor } from '../src/scaffold/claim.js';
 
 const keep = process.argv.includes('--keep');
 // Los sujetos y lo que cubre cada uno: hijas anidadas en dos niveles, un value object dentro de otro,
@@ -49,7 +50,8 @@ const keep = process.argv.includes('--keep');
 const SUBJECTS = [
   { name: 'inspection-reports', withoutLayers: [] },
   { name: 'job-dispatch-mongo', withoutLayers: [] },
-  { name: 'notification-mailer-mongo', withoutLayers: ['mail'] },
+  // Con su capa mail (incremento 12e): la guarda del envío sobre el documento.
+  { name: 'notification-mailer-mongo', withoutLayers: [] },
   // El reclamo de la reconciliación sobre documentos: la única fixture documental que lo declara.
   // Sin la autoría de política (created_by/updated_by), que keel-nest rechaza en su frontera: como las capas
   // que quedan fuera, se quita en vez de medir un hueco declarado.
@@ -314,6 +316,20 @@ ${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [{
   } catch {
     check('${name}: ordenar por una propiedad que no existe es un error', true);
   }` : ''}
+${guardClaimsFor(model, root.name).map((claim) => `  // La guarda del efecto irreversible (mail.sentBy): la primera ejecución se lleva la fila y la deja en
+  // ${claim.to}; la SEGUNDA no se la lleva — esa es toda la promesa, y su fallo es un segundo correo real.
+  {
+    const guarded = await repository.findById(original.id);
+    const first = await repository.${claim.method}(guarded.id);
+    check('${name}: ${claim.method} se lleva la fila y la pasa a ${claim.to}', first != null && String(first.id) === String(guarded.id) && String(first.${root.lifecycle.field}) !== String(guarded.${root.lifecycle.field}), JSON.stringify(first?.${root.lifecycle.field}));
+${claim.stampField ? `    check('${name}: ${claim.method} estampa ${claim.stampField} en el mismo reclamo', first?.${claim.stampField} instanceof Date, String(first?.${claim.stampField}));\n` : ''}    const second = await repository.${claim.method}(guarded.id);
+    check('${name}: ${claim.method} por segunda vez devuelve null (la carrera perdida)', second == null, JSON.stringify(second?.${root.lifecycle.field}));
+    const reloaded = await repository.findById(guarded.id);
+    check('${name}: ${claim.method} CONFIRMÓ la marca (la ve una lectura posterior)', String(reloaded?.${root.lifecycle.field}) === String(first?.${root.lifecycle.field}), JSON.stringify(reloaded?.${root.lifecycle.field}));
+  }`).join('\n')}
+${credentialFinders(model, root).map((credential) => `  // La credencial que NO es la primera de la lista: resolver por la clave natural no la encontraría.
+  check('${name}: ${credential.name} resuelve por una credencial que no es la primera', (await repository.${credential.name}(original.${credential.field.name}[original.${credential.field.name}.length - 1]))?.id === original.id);
+  check('${name}: ${credential.name} con una credencial ajena devuelve null', (await repository.${credential.name}('nadie-' + randomUUID())) == null);`).join('\n')}
   await repository.deleteById(original.id);
   check('${name}: deleteById borra el documento', (await repository.findById(original.id)) == null && (await collection.countDocuments({ _id: raw._id })) === 0);
 } catch (error) {
@@ -369,7 +385,7 @@ const generated = await runCommand(workspace, build, `specs/${NEST_READY_DESIGN.
 const projectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
 if (!step('build genera el proyecto de referencia', generated.exitCode === undefined, generated.output.slice(0, 600))) process.exit(1);
 // jose: la seguridad de los sujetos que la declaran (notification-mailer-mongo) también tiene que compilar.
-const install = run('npm', ['install', '--no-audit', '--no-fund', `mongodb@${MONGODB_VERSION}`, `jose@${JOSE_VERSION}`, `amqplib@${AMQPLIB_VERSION}`], { cwd: projectDir });
+const install = run('npm', ['install', '--no-audit', '--no-fund', `mongodb@${MONGODB_VERSION}`, `jose@${JOSE_VERSION}`, `amqplib@${AMQPLIB_VERSION}`, `nodemailer@${NODEMAILER_VERSION}`, `handlebars@${HANDLEBARS_VERSION}`], { cwd: projectDir });
 if (!step('npm install (el driver de MongoDB)', install.status === 0, install.status === 0 ? '' : install.stderr.slice(-800))) process.exit(1);
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');
 

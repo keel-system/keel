@@ -27,6 +27,7 @@ import { usesCallerScope } from './security.js';
 import { usesMessaging } from './messaging.js';
 import { usesServiceParameters } from './service-parameters.js';
 import { usesHttpClients } from './http-clients.js';
+import { usesMail } from './mail.js';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
@@ -132,11 +133,18 @@ function useCasesTest(model) {
     ? "\nimport { HttpClientsModule } from '../src/infrastructure/clients/http-clients-module.js';" +
       (persistence || parameters ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
     : '';
+  // El correo (global): los handlers de mail.sentBy inyectan sus puertos. En test nada envía.
+  const mail = usesMail(model);
+  const mailImport = mail
+    ? "\nimport { MailModule } from '../src/infrastructure/mail/mail-module.js';" +
+      (persistence || parameters || clients ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
+    : '';
   const modules = [
     parameters ? "ServiceParametersModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     persistence ? "PersistenceModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     messaging ? "MessagingModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     clients ? "HttpClientsModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
+    mail ? "MailModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     scope ? 'SecurityModule' : null,
     'UseCaseModule'
   ]
@@ -149,7 +157,7 @@ import { UseCaseModule } from '../src/infrastructure/usecase/use-case-module.js'
 import { UseCaseMediator } from '../src/infrastructure/usecase/use-case-mediator.js';
 import { UseCaseContainer } from '../src/infrastructure/usecase/use-case-container.js';
 import { Handles } from '../src/application/annotations/application-component.js';
-import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}${clientsImport}
+import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}${clientsImport}${mailImport}
 ${imports}
 
 const OPERATIONS = [
@@ -450,6 +458,16 @@ function commandDispatcher(model) {
   const orphans = orphanInternalOperations(model);
   if (orphans.length === 0) return [];
   const names = orphans.map((operation) => operation.name).join(', ');
+  // Las que producen un efecto que no se deshace (la guarda del correo): a salvo con las dos variantes, porque su
+  // reclamo confirma en su propia transacción —pero el argumento del pool sigue en pie—. La misma nota que keel-spring.
+  const irreversible = orphans.filter((operation) => operation.guardClaim);
+  const irreversibleNote = irreversible.length > 0
+    ? `
+ *
+ * Aquí ${irreversible.length === 1 ? 'la hay' : 'las hay'}: ${irreversible.map((operation) => operation.name).join(', ')} produce${irreversible.length === 1 ? '' : 'n'} un efecto que no se deshace.
+ * Su guarda contra la repetición es un reclamo con transacción propia (${irreversible.map((operation) => `${operation.guardClaim.method}()`).join(', ')}),
+ * así que está a salvo con cualquiera de las dos — pero el argumento del pool sigue en pie.`
+    : '';
   const port = `/**
  * Puerto de despacho de OTRO caso de uso desde un handler. Un handler nunca invoca a otro handler
  * directamente; cuando lo necesita, despacha su mensaje por este puerto, que implementa un adaptador
@@ -463,7 +481,7 @@ function commandDispatcher(model) {
  *     todo el trabajo es de base de datos y tiene que ser atómico con el del llamante.
  *   · dispatchWithoutTransaction: la operación invocada abre sus propias transacciones. Es lo
  *     correcto cuando hace I/O externo (un correo, una llamada a un proveedor): bajo la transacción
- *     del llamante, una tanda de N elementos retiene una conexión durante N latencias de un tercero.
+ *     del llamante, una tanda de N elementos retiene una conexión durante N latencias de un tercero.${irreversibleNote}
  *
  * Es una clase abstracta y no una interfaz porque sirve también de token de inyección.
  */

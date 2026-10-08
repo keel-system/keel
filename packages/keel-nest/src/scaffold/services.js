@@ -16,6 +16,8 @@
 // inyecta lo que existe.
 
 import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } from './render.js';
+import { callerResolution } from './security.js';
+import { mailPorts, sendsMail } from './mail.js';
 import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { repositoryRoots, portClass, portPath, occupantFinders, PAGE_TS } from './repositories.js';
@@ -116,7 +118,10 @@ function renderMessage(model, operation) {
     const threeState = partial && !fromPath.has(component.name) && !component.required && !component.list && (operation.bodyFields ?? []).some((f) => f.name === component.name);
     // Un campo con default puede no llegar (por eso la entrada no exige su presencia): en el
     // mensaje admite null, y el default lo aplica el dominio.
-    const type = component.initializer != null && !component.generated && !component.list && !isNullable(component)
+    // La identidad resuelta contra varias credenciales (resolvedBy) puede no ser de nadie: el mensaje lleva
+    // null y la operación responde con el error que declare el diseño (la misma decisión que keel-spring).
+    const unresolvable = component.resolvedIdentity && callerResolution(model) != null;
+    const type = (component.initializer != null && !component.generated && !component.list && !isNullable(component)) || unresolvable
       ? `${declType(component)} | null`
       : declType(component);
     const optional = threeState ? '?' : '';
@@ -169,6 +174,17 @@ function componentNotes(model, component, fromPath) {
       'Lo resuelve el servidor desde la credencial (security.authentication.callerIdentity): no llega del',
       'cuerpo, lo estampa el controlador.'
     );
+    const resolution = callerResolution(model);
+    if (resolution) {
+      // Resuelto ya en la puerta: las dos (controlador y listener) pasan la clave natural, así que el handler
+      // no vuelve a mirar credenciales. Lo único que decide es qué hacer con el null.
+      notes.push(
+        `Llega YA resuelto a la clave natural de ${resolution.entity.name} (${resolution.keyField}): por HTTP lo resuelve`,
+        `CallerIdentityResolver con ${resolution.port}.${resolution.finder}(...), y por eventos el listener con el`,
+        `mismo finder. null = la credencial no pertenece a ningún ${resolution.entity.name}: es la precondición de la`,
+        'operación y responde con el error que el diseño declare para ella.'
+      );
+    }
   }
   return notes.length > 0 ? `${notes.map((line) => `  // ${line}`).join('\n')}\n` : '';
 }
@@ -233,6 +249,14 @@ function renderHandler(model, operation) {
     imports.push({ symbol: client.clientClass, from: clientPortPath(client) });
     dependencies.push({ type: client.clientClass, name: decap(client.clientClass) });
   }
+  // La salida por correo, por el mismo criterio (mail.sentBy es el único enlace del DSL entre un caso de uso y el
+  // correo): sin el puerto delante, el camino de menor resistencia es no mandarlo, y no lo detecta nada.
+  if (sendsMail(model, operation)) {
+    for (const port of mailPorts(model)) {
+      imports.push(port);
+      dependencies.push({ type: port.symbol, name: decap(port.symbol) });
+    }
+  }
   if (operation.responseDto?.entity && model.entities.some((e) => e.name === operation.responseDto.entity)) {
     const mapper = `${operation.responseDto.entity}ApplicationMapper`;
     imports.push({ symbol: mapper, from: classPath(DIRS.mappers, mapper) });
@@ -285,6 +309,24 @@ function handlerNotes(model, operation) {
         'de guardar la nueva: cada save escribe en ese momento, así que el orden de los save es el orden en que el motor los comprueba. ' +
         'Al revés, la transición legítima muere con el error de unicidad del diseño — un 409 en el camino feliz. No lo arregles quitando ' +
         'el índice: es el invariante que el diseño declaró.'
+    );
+  }
+  if (sendsMail(model, operation)) {
+    const guard = operation.guardClaim;
+    notes.push(
+      'Correo: esta operación lo manda (mail.sentBy). Compón el MailMessage y llama a this.mailSender.send(...). ' +
+        'Un correo que sale NO lo deshace ningún rollback, así que la guarda tiene que estar CONFIRMADA antes del envío — ' +
+        'no basta con que haya ocurrido: ' +
+        (guard
+          ? `empieza por ${guard.method}(...) del puerto ${guard.entity}Repository, que pasa el agregado a ${guard.to} en su PROPIA ` +
+            'transacción y devuelve null si otra ejecución llegó antes (esa es la carrera perdida: tradúcela al error que el diseño ' +
+            'declara para «ya no está disponible»). Hacer esa transición solo en memoria la deja sin existir para nadie hasta el ' +
+            `commit final, que llega DESPUÉS del envío: si el proceso cae en medio, el agregado vuelve a ${guard.from.join(' o ')} ` +
+            'y el ciclo siguiente manda un SEGUNDO correo a una persona real'
+          : `${operation.idempotency ? 'la clave de idempotencia' : 'la transición declarada'} tiene que estar persistida y ` +
+            'confirmada antes de llamar a this.mailSender.send(...), no solo aplicada en memoria') +
+        '. Un MailDeliveryException con partial() es un correo que SALIÓ para alguien: no lo trates como «no salió». ' +
+        'El adaptador y el renderizador ya están escritos: no los toques — ver la skill keel-nest-mail'
     );
   }
   for (const note of scheduleNotes(model, operation)) notes.push(note);

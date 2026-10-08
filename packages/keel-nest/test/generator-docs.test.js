@@ -244,3 +244,28 @@ test('cada ruta src/… que cita la skill documental existe, y los ayudantes que
   assert.match(orchestrator, /calidad \+ índices/);
   assert.match(orchestrator, /indexes: OK/);
 });
+
+// La del correo (incremento 12e): con la capa mail y solo con ella, citando solo lo que build emite.
+const mailDir = path.join(assets, 'generators', 'nest', 'skills', 'keel-nest-mail');
+const mailSources = [path.join(mailDir, 'SKILL.md'), ...fs.readdirSync(path.join(mailDir, 'references')).map((name) => path.join(mailDir, 'references', name))];
+const mailer = byPath(planFixture('notification-mailer', { stack: { database: 'postgresql', broker: 'rabbitmq' } }).files);
+
+test('la skill del correo se instala con la capa mail, y solo con ella; lo que cita existe', () => {
+  for (const harness of HARNESSES) {
+    assert.ok(harness.skillPath('keel-nest-mail', 'SKILL.md') in mailer, `${harness.id}: keel-nest-mail`);
+    assert.ok(harness.skillPath('keel-nest-mail', 'references/security.md') in mailer, `${harness.id}: sus referencias`);
+  }
+  assert.ok(!Object.keys(rabbit).some((file) => file.includes('keel-nest-mail')), 'un diseño sin mail no la recibe');
+  const emitted = new Set(Object.keys(mailer));
+  for (const source of mailSources) {
+    const text = fs.readFileSync(source, 'utf8');
+    for (const [cited] of text.matchAll(/(?:src|test)\/[\w/.-]+\.ts/g)) assert.ok(emitted.has(cited), `${path.basename(source)} cita ${cited}, que build no emite`);
+    assert.doesNotMatch(text, /\.claude\/|\.opencode\//, path.basename(source));
+  }
+  const flow = mailer['test/integration/support/flow.ts'];
+  for (const helper of ['awaitMailTo', 'lastMailTo', 'mailCount', 'assertNoMailTo', 'relayRejectsRecipients', 'relayAccepts', 'rejectedAddress', 'mailSubject', 'mailHtml', 'mailText', 'mailFrom']) {
+    assert.ok(flow.includes(helper), `flow.ts exporta ${helper}`);
+  }
+  assert.match(mailer['src/application/port/out/template-renderer.ts'], /abstract compile\(source: string\): void;/);
+  assert.match(mailer['src/domain/mail/mail-delivery-exception.ts'], /partial\(\): boolean/);
+});

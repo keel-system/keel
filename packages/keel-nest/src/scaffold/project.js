@@ -28,6 +28,8 @@ import {
   FASTIFY_VERSION,
   TYPEORM_VERSION,
   MONGODB_VERSION,
+  HANDLEBARS_VERSION,
+  NODEMAILER_VERSION,
   PG_VERSION,
   MYSQL2_VERSION,
   JOSE_VERSION,
@@ -38,6 +40,7 @@ import {
 } from '../lib/assets.js';
 import { usesJwt } from './security.js';
 import { usesRelational, usesDocument, engineOf } from './persistence-entities.js';
+import { usesMail } from './mail.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 
@@ -95,7 +98,10 @@ function packageJson(model) {
       // La persistencia relacional: TypeORM y el driver del motor del stack.
       ...(usesRelational(model) ? { typeorm: TYPEORM_VERSION, ...(engineOf(model) === 'mysql' ? { mysql2: MYSQL2_VERSION } : { pg: PG_VERSION }) } : {}),
       // La persistencia documental: el driver oficial, sin ODM.
-      ...(usesDocument(model) ? { mongodb: MONGODB_VERSION } : {})
+      ...(usesDocument(model) ? { mongodb: MONGODB_VERSION } : {}),
+      // El correo (incremento 12e): el transporte SMTP y, con plantillas, el motor sin lógica.
+      ...(usesMail(model) ? { nodemailer: NODEMAILER_VERSION } : {}),
+      ...(usesMail(model) && model.mail.templating ? { handlebars: HANDLEBARS_VERSION } : {})
     },
     devDependencies: {
       '@nestjs/cli': NEST_CLI_VERSION,

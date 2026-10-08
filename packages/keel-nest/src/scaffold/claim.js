@@ -237,3 +237,76 @@ ${setup.join('\n')}${setup.length > 0 ? '\n' : ''}    const states = [${states}]
 ${method}`);
 }
 
+
+// ─── La guarda de un efecto irreversible (incremento 12e) ───────────────────
+//
+// Mismo mecanismo que el reclamo de la cola —una escritura condicional que dice si se llevó la fila, y
+// un commit propio—, pero su sujeto es UNA fila con el id ya elegido: la operación de `mail.sentBy` cuyo
+// ciclo de vida declara un estado EN VUELO (`classifyGuardClaims` de keel-core, el mismo `guardClaim` que
+// lee keel-spring). Existe porque después viene un correo, y ningún rollback lo deshace: la marca tiene que
+// existir para todo el mundo ANTES del envío. Una transición en memoria no llega a existir hasta el commit
+// del mediator, que cae DESPUÉS del envío; una caída en medio revierte la marca y el ciclo siguiente manda
+// un segundo correo a una persona real. Ningún escenario FL-* puede ver esa ventana.
+
+/** Los reclamos de guarda que apuntan a esta entidad (uno por operación que lo declara). */
+export function guardClaimsFor(model, entityName) {
+  return (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .map((operation) => operation.guardClaim)
+    .filter((claim) => claim && claim.entity === entityName);
+}
+
+function describeGuard(claim, entityName) {
+  return `Reclama ESTE ${entityName} para ${claim.operation}: lo pasa a ${claim.to} solo si sigue en ${claim.from.join(' o ')}${
+    claim.stampField ? `, y estampa\n${claim.stampField}` : ''
+  }. Devuelve el agregado ya reclamado, o null si otra ejecución llegó antes.
+
+Y CONFIRMA ANTES DE VOLVER (transacción propia, fuera de la del caso de uso). Eso es lo que lo hace una guarda
+y no una anotación en memoria: ${claim.operation} produce un efecto externo que NO se deshace, así que la marca
+tiene que existir para todo el mundo ANTES de producirlo. Si el proceso cae después del efecto y antes del
+commit final, la fila se queda en ${claim.to} —lo que busca el rescate— en vez de volver a ${claim.from.join(' o ')} y repetirse.
+
+El null es la carrera perdida: tradúcelo al error que el diseño declare para «ya no está disponible». No es
+un caso excepcional: es el caso normal cuando dos ejecuciones coinciden.`;
+}
+
+/** Los métodos de guarda del puerto <E>Repository. */
+export function portGuardMethods(model, entity, idType, idName = 'id') {
+  return guardClaimsFor(model, entity.name).map((claim) => `  /**
+${describeGuard(claim, entity.name)
+  .split('\n')
+  .map((line) => `   * ${line}`.trimEnd())
+  .join('\n')}
+   */
+  abstract ${claim.method}(${idName}: ${idType}): Promise<${entity.name} | null>;`);
+}
+
+/** Los métodos de guarda del adaptador TypeORM: UPDATE condicional por id y estado, en su propia transacción. */
+export function adapterGuardMethods(model, entity, imports, findOptions, idType, idName = 'id') {
+  const claims = guardClaimsFor(model, entity.name);
+  if (claims.length === 0) return [];
+  const { enumType, field } = entity.lifecycle;
+  const orm = ormClass(entity.name);
+  imports.push({ symbol: enumType, from: classPath(DIRS.enums, enumType) });
+  return claims.map((claim) => {
+    const states = claim.from.map((state) => `${enumType}.${screamingSnake(state)}`).join(', ');
+    const set = `{ ${field}: ${enumType}.${screamingSnake(claim.to)}${claim.stampField ? `, ${claim.stampField}: new Date()` : ''} }`;
+    return `  /** La guarda del puerto: ver ${entity.name}Repository.${claim.method}. */
+  async ${claim.method}(${idName}: ${idType}): Promise<${entity.name} | null> {
+    // inNewTransaction, y no la transacción del caso de uso: si la marca esperase a su commit, no existiría
+    // para nadie durante el efecto externo, que es justo cuando hace falta.
+    return this.transactions.inNewTransaction(async (manager) => {
+      // 1 = esta ejecución se la llevó; 0 = otra llegó antes. Esa comparación en el WHERE es toda la exclusión mutua.
+      const result = await manager
+        .createQueryBuilder()
+        .update(${orm})
+        .set(${set})
+        .where([${states}].map((state) => ({ ${idName}, ${field}: state })))
+        .execute();
+      if (!result.affected) return null;
+      const found = await manager.findOne(${orm}, ${findOptions(`{ ${idName} }`)});
+      return found == null ? null : toDomain${entity.name}(found);
+    });
+  }`;
+  });
+}

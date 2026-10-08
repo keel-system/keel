@@ -130,13 +130,19 @@ export function tsModule(filePath, imports, body) {
     if (isLocal && target === filePath) continue;
     const specifier = isLocal ? relativeSpecifier(filePath, target) : imp.from;
     if (!byModule.has(specifier)) byModule.set(specifier, { local: isLocal, symbols: new Map() });
+    // Import por defecto (`{ default: 'Nombre', from }`): un paquete CommonJS cuyo valor es el módulo entero.
+    if (imp.default) {
+      byModule.get(specifier).defaultName = imp.default;
+      continue;
+    }
     const entry = byModule.get(specifier).symbols;
     // Un símbolo que se usa como valor en algún sitio no puede quedarse como `import type`.
     entry.set(imp.symbol, (entry.get(imp.symbol) ?? true) && Boolean(imp.type));
   }
   const lines = [...byModule.entries()]
     .sort(([a, ea], [b, eb]) => Number(ea.local) - Number(eb.local) || a.localeCompare(b))
-    .map(([specifier, { symbols }]) => {
+    .map(([specifier, { symbols, defaultName }]) => {
+      if (defaultName) return `import ${defaultName} from '${specifier}';`;
       const names = [...symbols.entries()].sort(([a], [b]) => a.localeCompare(b));
       const allTypes = names.every(([, type]) => type);
       const list = names.map(([name, type]) => (type && !allTypes ? `type ${name}` : name)).join(', ');

@@ -14,7 +14,6 @@
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
   storage: 'incremento 13',
-  mail: 'incremento 13',
   payments: 'incremento 13'
 };
 
@@ -76,15 +75,6 @@ export function checkSupportedFeatures(manifest, layers) {
         "Genera este diseño con keel-spring, o declara la autoría en el dominio (authorship: declared)."
     );
   }
-  // La identidad del llamante con VARIAS credenciales por recurso (`from.resolvedBy`) necesita el finder
-  // por elemento de una colección en el repositorio, que keel-nest aún no emite. Sin él, el valor del
-  // token llegaría en crudo al campo que el diseño define como la clave natural: 403 en el camino feliz.
-  if (layers?.security?.authentication?.callerIdentity?.from?.resolvedBy) {
-    errors.push(
-      `security.authentication.callerIdentity.from.resolvedBy: keel-nest todavía no genera la resolución de una credencial a su recurso ` +
-        '(el finder por elemento de la colección). Genera este diseño con keel-spring, o declara la correspondencia 1:1.'
-    );
-  }
   // La mensajería (incremento 9) se genera sobre la persistencia RELACIONAL: el outbox y el registro de
   // mensajes procesados se confirman en la misma transacción que el efecto, y los listeners se cablean
   // con ella. Un servicio de solo mensajería no tendría dónde.
@@ -93,16 +83,6 @@ export function checkSupportedFeatures(manifest, layers) {
       'messaging sin persistence: keel-nest genera la mensajería sobre la persistencia relacional (el outbox y el registro de mensajes procesados). ' +
         'Genera este diseño con keel-spring, o declara la persistencia.'
     );
-  }
-  // La identidad del emisor resuelta contra VARIAS credenciales (`identity.from.resolvedBy`) necesita el
-  // finder por elemento de colección, que keel-nest aún no emite (como la de la puerta HTTP).
-  for (const [name, subscription] of Object.entries(layers?.messaging?.subscriptions ?? {})) {
-    if (subscription?.identity?.from?.resolvedBy || subscription?.identity?.resolvedBy) {
-      errors.push(
-        `messaging.subscriptions.${name}.identity: keel-nest todavía no genera la resolución de una credencial a su recurso ` +
-          '(resolvedBy, el finder por elemento de la colección). Genera este diseño con keel-spring, o declara la correspondencia 1:1.'
-      );
-    }
   }
   for (const message of outboundFrontier(layers)) errors.push(message);
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});

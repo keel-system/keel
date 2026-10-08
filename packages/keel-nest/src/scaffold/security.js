@@ -22,6 +22,8 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { accessPlan, audienceOf, tokenClaims, usesTokenProtocol } from 'keel-core/gen/access-plan';
 import { classPath, DIRS, tsModule, tsString } from './render.js';
 import { usesApi, ERROR_RESPONSE_TS } from './rest-support.js';
+import { credentialFinderName, portClass, portPath } from './repositories.js';
+import { entityDir } from './render.js';
 
 const DIR = 'src/infrastructure/security';
 export const SECURITY_CONTEXT_TS = `${DIR}/security-context.ts`;
@@ -80,6 +82,35 @@ export function usesCallerIdentity(model) {
 }
 
 /** ¿Hay alcance por recurso con su puerto? Solo sobre un token: es un claim. */
+/**
+ * Cuándo la identidad del llamante se RESUELVE al recurso y no se pasa en crudo: con `from.resolvedBy` el valor
+ * del token es UNA de las credenciales del recurso, no su clave natural. La misma decisión que keel-spring: el
+ * controlador pasa la clave natural (o null si la credencial no es de nadie, y la operación responde con el
+ * error que el diseño declare para ello), y lo mismo hace el listener por el canal de eventos. Solo con una
+ * clave natural de UN campo: una compuesta no cabe en el campo de identidad.
+ */
+export function callerResolution(model) {
+  const resolvedBy = model.security?.callerIdentity?.resolvedBy;
+  if (!resolvedBy || !usesCallerIdentity(model)) return null;
+  const entity = model.entities.find((candidate) => candidate.name === resolvedBy.entity);
+  if (!entity || (entity.naturalKey ?? []).length !== 1) return null;
+  const field = entity.fields.find((candidate) => candidate.name === resolvedBy.field);
+  if (!field || !field.list) return null;
+  return {
+    entity,
+    field: resolvedBy.field,
+    keyField: entity.naturalKey[0],
+    finder: credentialFinderName(resolvedBy.field),
+    port: portClass(entity),
+    portPath: portPath(entity)
+  };
+}
+
+/** ¿Hay módulo de seguridad? Con el alcance por recurso o con la resolución de la identidad del llamante. */
+export function usesSecurityModule(model) {
+  return usesCallerScope(model) || callerResolution(model) != null;
+}
+
 export function usesCallerScope(model) {
   return Boolean(usesJwt(model) && model.security?.scoping);
 }
@@ -102,6 +133,7 @@ export function generate(model) {
   if (model.security?.cors) files.push({ path: CORS_POLICY_TS, content: corsPolicy(model) });
   if (usesCallerIdentity(model)) files.push({ path: CALLER_IDENTITY_TS, content: callerIdentity(model) });
   if (usesCallerScope(model)) files.push(...callerScope(model));
+  if (usesSecurityModule(model)) files.push({ path: SECURITY_MODULE_TS, content: securityModuleFile(model) });
   files.push(...configFragments(model));
   return files;
 }
@@ -769,7 +801,42 @@ function text(value: unknown): string | null {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return null;
 }`;
-  return tsModule(CALLER_IDENTITY_TS, [{ symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS }], body);
+  const resolution = callerResolution(model);
+  if (!resolution) return tsModule(CALLER_IDENTITY_TS, [{ symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS }], body);
+  const resolver = `
+
+/**
+ * La identidad del llamante, resuelta al ${resolution.entity.name} al que pertenece su credencial. El diseño declara
+ * que un mismo ${resolution.entity.name} tiene varias (resolvedBy: ${resolution.entity.name}.${resolution.field}): el valor del token no es
+ * su clave natural. Se busca con ${resolution.port}.${resolution.finder} y se devuelve la clave natural
+ * (\`${resolution.keyField}\`), que es lo que el campo '${identity.field}' significa en el diseño —y lo mismo que el
+ * listener pasa por el canal de eventos—. Es lo que hace el CallerIdentity del servidor de keel-spring.
+ */
+@Injectable()
+export class CallerIdentityResolver {
+  constructor(@Inject(${resolution.port}) private readonly repository: ${resolution.port}) {}
+
+  /**
+   * La clave natural del ${resolution.entity.name} de la credencial del llamante, o null si la credencial no pertenece
+   * a ninguno. El null NO es un error de este punto: que el recurso no exista es una precondición de la
+   * operación, y es ella la que responde con el error que el diseño declare, con su precedencia.
+   */
+  async resolve(credential: string | null = CallerIdentity.resolve()): Promise<string | null> {
+    if (credential == null || credential === '') return null;
+    const found = await this.repository.${resolution.finder}(credential);
+    return found == null ? null : String(found.${resolution.keyField});
+  }
+}`;
+  return tsModule(
+    CALLER_IDENTITY_TS,
+    [
+      { symbol: 'Inject', from: '@nestjs/common' },
+      { symbol: 'Injectable', from: '@nestjs/common' },
+      { symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS },
+      { symbol: resolution.port, from: resolution.portPath }
+    ],
+    body + resolver
+  );
 }
 
 // ─── El alcance por recurso: CallerScope ─────────────────────────────────────
@@ -821,16 +888,6 @@ export class JwtCallerScope extends CallerScope {
     return new Set();
   }
 }`;
-  const module = `/**
- * El puerto del alcance por recurso y su adaptador, a disposición de todos los handlers (global):
- * los cablea UseCaseModule por el token CallerScope.
- */
-@Global()
-@Module({
-  providers: [{ provide: CallerScope, useClass: JwtCallerScope }],
-  exports: [CallerScope]
-})
-export class SecurityModule {}`;
   return [
     { path: CALLER_SCOPE_TS, content: tsModule(CALLER_SCOPE_TS, [], port) },
     {
@@ -843,21 +900,47 @@ export class SecurityModule {}`;
         ],
         adapter
       )
-    },
-    {
-      path: SECURITY_MODULE_TS,
-      content: tsModule(
-        SECURITY_MODULE_TS,
-        [
-          { symbol: 'Global', from: '@nestjs/common' },
-          { symbol: 'Module', from: '@nestjs/common' },
-          { symbol: 'CallerScope', from: CALLER_SCOPE_TS },
-          { symbol: 'JwtCallerScope', from: JWT_CALLER_SCOPE_TS }
-        ],
-        module
-      )
     }
   ];
+}
+
+// ─── security-module.ts ──────────────────────────────────────────────────────
+
+/**
+ * El módulo global de la seguridad de la aplicación: el puerto del alcance por recurso con su adaptador, y el
+ * resolutor de la identidad del llamante cuando el diseño la resuelve contra varias credenciales. Los cablean
+ * UseCaseModule (CallerScope) y los controladores (CallerIdentityResolver).
+ */
+function securityModuleFile(model) {
+  const imports = [
+    { symbol: 'Global', from: '@nestjs/common' },
+    { symbol: 'Module', from: '@nestjs/common' }
+  ];
+  const providers = [];
+  const exported = [];
+  if (usesCallerScope(model)) {
+    imports.push({ symbol: 'CallerScope', from: CALLER_SCOPE_TS }, { symbol: 'JwtCallerScope', from: JWT_CALLER_SCOPE_TS });
+    providers.push('{ provide: CallerScope, useClass: JwtCallerScope }');
+    exported.push('CallerScope');
+  }
+  if (callerResolution(model)) {
+    imports.push({ symbol: 'CallerIdentityResolver', from: CALLER_IDENTITY_TS });
+    providers.push('CallerIdentityResolver');
+    exported.push('CallerIdentityResolver');
+  }
+  return tsModule(
+    SECURITY_MODULE_TS,
+    imports,
+    `/**
+ * La seguridad de la aplicación a disposición de handlers y controladores (global)${exported.length > 0 ? `: ${exported.join(', ')}` : ''}.
+ */
+@Global()
+@Module({
+  providers: [${providers.join(', ')}],
+  exports: [${exported.join(', ')}]
+})
+export class SecurityModule {}`
+  );
 }
 
 // ─── Configuración: config/parameters/<perfil>/security.yaml ────────────────

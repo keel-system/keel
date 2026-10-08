@@ -1434,6 +1434,56 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     primera versión del paso del humo buscaba la palabra `ARNÉS` y no vio el primer sabotaje: ahora se juzga por el
     código 2. `ts-check` 12/12; keel-nest sin red 405/405. La matriz no tiene ya nada documental pendiente.
   - **Con esto el 12 queda cerrado salvo la corrida (12e)**, cuyo sujeto sigue por decidir.
+- **12e — sujeto decidido y corrida preparada (2026-10-08)**: `notification-mailer-mongo`, adelantando la capa `mail`
+  del incremento 13 y `resolvedBy`, que eran lo único de ese diseño fuera de la frontera.
+  - **12e-a, `resolvedBy`** (la credencial es UNA de las del recurso, no su clave natural): el finder
+    `findBy<Campo>Containing` en el puerto y en los dos adaptadores (relacional: la tabla de elementos y el dueño;
+    documental: el array del propio documento), con el nombre de keel-spring; `CallerIdentityResolver` en
+    `caller-identity.ts`, registrado en el `SecurityModule` (`usesSecurityModule`), que el controlador usa ANTES de
+    despachar; el campo del mensaje pasa a `string | null` con la nota de que llega resuelto y de que el null es la
+    precondición de la operación; y la nota de la suscripción nombra el mismo finder. Se quitan los dos rechazos de
+    la frontera. `test/caller-resolution.test.js` (paridad del nombre con keel-spring, el controlador y el resolutor
+    EJECUTADO); `db-check` y `doc-check` ganan «resuelve por una credencial que no es la primera» y «una ajena da
+    null». Falsado en documental buscando solo en la primera (`credential_keys.0`): cae esa y solo esa. Lo destapó
+    `doc-check` antes que nadie: el resolutor tipaba la credencial como `string` y el lector del mensaje la da como
+    `string | null` (no compilaba).
+  - **12e-b, la capa `mail`** (`src/scaffold/mail.js`), con el reparto de keel-spring —build genera también el
+    adaptador y el renderizador—: `MailMessage` en `domain/mail` (asunto y cabeceras saneados en el constructor,
+    nombres reservados rechazados), `MailDeliveryException` (`accepted`, `rejected`, `detail`, `partial()`), los
+    puertos `MailSender` y `TemplateRenderer` en `application/port/out`, el adaptador SMTP sobre **nodemailer** 10 (que
+    resuelve el envío parcial con `info.rejected` y el total con un error `EENVELOPE`: los dos acaban en
+    `MailDeliveryException`) y el renderizador **Handlebars** 4.7. Dos hallazgos del motor de JavaScript: (1) el escapado
+    no se puede poner por instancia —el runtime lee el de `Handlebars.Utils`—, así que la tabla cerrada `& < > " '`
+    se instala ahí, una vez; (2) `{{[if]}}` sigue llamando al helper (en Handlebars.java es un literal), así que los
+    marcadores se compilan como `{{this.[x]}}`. `compile()` usa `precompile`: el `compile` de Handlebars es
+    perezoso y solo fallaría al renderizar. `mail.yaml` con las MISMAS variables y defaults que keel-spring (lo
+    compara `mail.test.js`). La guarda del envío, `claimFor<Op>(id)`: UPDATE condicional en `inNewTransaction`, y en
+    documental `findOneAndUpdate` sin la sesión del caso de uso. El handler de `sentBy` recibe los puertos y la nota;
+    `CommandDispatcher` la de la operación irreversible. El gate gana `mailDelivery` (envío y guarda, rojo recién
+    generado) y, para igualar las familias de keel-spring en `notification-mailer`, `conditionalUniqueness`: en
+    keel-nest lo afirmable es que el handler busque la ocupante con el finder generado (no hay flush), y solo en
+    relacional, como keel-spring. El arnés del buzón (`test/integration/support/mail.ts`, sobre
+    `keel-core/gen/mail-probes.js`, reexportado por `flow.ts`), con la espera derivada del periodo del barrido y el
+    tiempo de caso ampliado a dos esperas; humo SMOKE-7. Skill `keel-nest-mail` (SKILL.md, `security.md`,
+    `flows.md`, `troubleshooting.md`).
+  - **Medido**: `test/mail.test.js` EJECUTA lo emitido —el mensaje, el renderizador (la tabla, las palabras del motor,
+    `compile`, la caché), el adaptador contra un servidor SMTP falso de `node:net` (las dos partes, el respaldo, el
+    Reply-To, el parcial, el total, el relay caído) y el arnés contra un Mailpit falso (la repaginación por encima de
+    200, el chaos)—. `npm run mail-check` (nuevo) **17/17** contra un Mailpit REAL con el entorno del catálogo,
+    falsado con cuatro sabotajes que compilan, cada uno cazado por su caso: el asunto sin sanear (y un dato: nodemailer
+    ya pliega el salto de línea, así que la inyección de `Bcc:` no llega a ocurrir por su lado; lo que mide el caso es
+    el asunto exacto), el escapado por defecto (`&#x27;`), el parcial dado por bueno y el remitente de respaldo
+    ignorado. `db-check` 32/32 (PostgreSQL y MySQL) y `doc-check` 11/11 con la guarda: se lleva la fila y estampa el
+    reloj, la segunda devuelve null y la marca está confirmada; falsado en las dos ramas quitando el estado de la
+    condición: cae «por segunda vez devuelve null» y solo esa. `ts-check` 12/12; keel-nest sin red 429/429. Lo emitido
+    para los diseños sin correo ni `resolvedBy` no cambia (digest de 9978 archivos).
+  - **Workspaces** en `spring-live-test/corrida-notification-mailer-mongo-{nest,spring}/`, sobre MongoDB, RabbitMQ y
+    Keycloak (`keel-stack.json` sembrado), `--ready` 11/11 y proyectos generados (273 y 300 archivos). Como `ts-check`
+    no compila `test/` de las fixtures, se juzgó una COPIA del proyecto nest: `npm install`, `tsc` entero y con
+    `tsconfig.flows.json`, sus 73 pruebas del perfil `test`, `check:architecture` y `check-flows.sh`, todo en verde.
+    Los dos gates `check-idempotency.sh` nacen ROJOS en las mismas siete familias (con `mailDelivery`). `check` sin
+    avisos del modelo en keel-nest (la nota del status por constructor); keel-spring, sus notas de siempre más la de
+    la auditoría sobre lo anidado. **Pendiente: ejecutar las dos corridas.**
 
 ### Inc. 13 — Capas de borde: cache, storage, correo, pagos
 
@@ -1443,6 +1493,8 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `payment-gateways/{stripe,mercadopago}.js` + `gateway-support.js` de nest.
 - **Puerta**: `mail-check`, `payment-check` (pasarela falsa con `node:http`), tests de
   regresión de subida; corrida `payment-checkout` con las dos pasarelas.
+- **El correo ya está hecho**: se adelantó al 12e (`mail.js`, `mail-harness.js`, `mail-check` 17/17, skill
+  `keel-nest-mail`). Quedan cache, storage (con la autoría de política, que solo declara `asset-vault`) y pagos.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

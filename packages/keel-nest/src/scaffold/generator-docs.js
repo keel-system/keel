@@ -20,6 +20,7 @@ import { usesJwt } from './security.js';
 import { usesSchemaBaseline } from './schema-baseline.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesHttpClients } from './http-clients.js';
+import { usesMail } from './mail.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'nest');
 const agentsSourceDir = path.join(assetsDir, 'agents');
@@ -52,6 +53,8 @@ export function stackSkills(model) {
   if (usesSnsSqs(model)) skills.push('keel-nest-snssqs');
   // Los clientes HTTP salientes (incremento 11d): la llamada desde el handler, los rechazos y los flujos.
   if (usesHttpClients(model)) skills.push('keel-nest-httpclient');
+  // El correo saliente (incremento 12e): el envío desde el handler, la guarda y los flujos del buzón.
+  if (usesMail(model)) skills.push('keel-nest-mail');
   return skills;
 }
 

@@ -27,6 +27,7 @@ import { tsString } from './render.js';
 import { closingCredential, identitySection, usesIdentityHarness } from './identity-harness.js';
 import { messagingHarnessImports, messagingHarnessSection, usesMessagingHarness } from './messaging-harness.js';
 import * as httpStubHarness from './http-stub-harness.js';
+import * as mailHarness from './mail-harness.js';
 import { documentHarnessSection, documentProbe } from './document-harness.js';
 import { usesNestOutbox } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
@@ -49,7 +50,9 @@ export function generate(model) {
     { path: 'tsconfig.flows.json', content: flowsTsconfig() },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript() },
     // El proveedor de prueba (incremento 11d): en su propio módulo, sin Nest, y reexportado por flow.ts.
-    ...httpStubHarness.generate(model)
+    ...httpStubHarness.generate(model),
+    // El buzón de prueba (incremento 12e): en su propio módulo, sin Nest, y reexportado por flow.ts.
+    ...mailHarness.generate(model)
   ];
 }
 
@@ -77,7 +80,9 @@ function integrationConfig(model) {
   // Con mensajería, un caso puede parar y levantar el broker (stopBroker/startBroker): con Kafka eso solo ya pasa
   // de 30 s —cada consulta al broker parado tarda varios segundos en rendirse, y la reconexión y el reenvío del
   // outbox suman otros tantos— sin que nada vaya mal (broker-check, 2026-10-07). Spring no pone plazo por caso.
-  const testTimeout = usesMessagingHarness(model) ? '120_000' : '30_000';
+  // Con correo, el caso tiene que dejar terminar dos esperas del buzón (la de awaitMailTo y la de assertNoMailTo).
+  const mailWaitMs = mailHarness.generate(model).length > 0 ? (mailHarness.mailAwaitSeconds(model).seconds * 2 + 30) * 1000 : 0;
+  const testTimeout = String(Math.max(usesMessagingHarness(model) ? 120_000 : 30_000, mailWaitMs)).replace(/(\d)(?=(\d{3})+$)/g, '$1_');
   return `import { defineConfig } from 'vitest/config';
 
 // La suite de integración: los flujos FL-* contra el servidor real y la infraestructura de infra/.
@@ -165,7 +170,11 @@ import { forgetSequences } from './http-stub.js';
 
 // El proveedor de prueba (WireMock de infra/): los flujos lo programan con estos helpers, importados de aquí.
 export { ${httpStubHarness.HTTP_STUB_EXPORTS.join(', ')} } from './http-stub.js';
-export type { StubRequest } from './http-stub.js';` : ''}
+export type { StubRequest } from './http-stub.js';` : ''}${mailHarness.generate(model).length > 0 ? `
+
+// El buzón de prueba (Mailpit de infra/): los flujos afirman sobre el correo con estos helpers, importados de aquí.
+export { ${mailHarness.MAIL_HARNESS_EXPORTS.filter((name) => name !== 'MailMessageView').join(', ')} } from './mail.js';
+export type { MailMessageView } from './mail.js';` : ''}
 ${api ? `
 /** Prefijo de todas las rutas del servicio (basePath del diseño + versión). */
 export const ROUTE_BASE = ${tsString(model.api.routeBase)};
@@ -524,6 +533,13 @@ function harnessSmokeTs(model) {
   });`);
   }
   if (identity) cases.push(identity);
+  if (mailHarness.generate(model).length > 0) {
+    imports.push('mailCount');
+    cases.push(`  it('SMOKE-7: el buzón de prueba responde y el reset lo deja vacío', async () => {
+    // Un correo de la corrida anterior haría que el primer awaitMailTo de un flujo devolviera el mensaje equivocado.
+    expect(await mailCount('humo@keel.test')).toBe(0);
+  });`);
+  }
   if (httpStubHarness.usesHttpStub(model)) {
     imports.push('stubFor', 'stubCallCount');
     cases.push(`  it('SMOKE-6: el proveedor de prueba se deja programar', async () => {

@@ -9,7 +9,7 @@ import { checkSupportedFeatures, checkSupportedStack } from '../src/lib/supporte
 const manifestWith = (...layers) => ({ layers: Object.fromEntries(layers.map((layer) => [layer, `${layer}.keel.yaml`])) });
 const layersWith = (...layers) => Object.fromEntries(layers.map((layer) => [layer, {}]));
 
-for (const layer of ['storage', 'mail', 'payments']) {
+for (const layer of ['storage', 'payments']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);
@@ -17,15 +17,18 @@ for (const layer of ['storage', 'mail', 'payments']) {
   });
 }
 
-test('capa security (incremento 8): se genera, salvo la identidad resuelta por varias credenciales', () => {
+test('capa mail (adelantada al 12e): se genera', () => {
+  const manifest = manifestWith('domain', 'use-cases', 'persistence', 'mail');
+  assert.deepEqual(checkSupportedFeatures(manifest, layersWith('domain', 'use-cases', 'persistence', 'mail')), { errors: [], warnings: [] });
+});
+
+test('capa security (incremento 8): se genera, también la identidad resuelta por varias credenciales (12e)', () => {
   const manifest = manifestWith('domain', 'use-cases', 'api', 'security');
   const plain = { ...layersWith('domain', 'use-cases', 'api'), security: { authentication: { protocol: 'oidc', callerIdentity: { field: 'tenant', from: { source: 'claim', name: 'sub' } } } } };
   assert.deepEqual(checkSupportedFeatures(manifest, plain), { errors: [], warnings: [] });
   const resolved = structuredClone(plain);
   resolved.security.authentication.callerIdentity.from = { source: 'serviceClient', resolvedBy: 'Application.credentialKeys' };
-  const { errors } = checkSupportedFeatures(manifest, resolved);
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /callerIdentity.from.resolvedBy/);
+  assert.deepEqual(checkSupportedFeatures(manifest, resolved), { errors: [], warnings: [] });
 });
 
 test('capa messaging (incremento 9): se genera sobre la persistencia relacional, y no sin ella', () => {
@@ -36,16 +39,12 @@ test('capa messaging (incremento 9): se genera sobre la persistencia relacional,
   assert.match(errors[0], /messaging sin persistence/);
 });
 
-test('messaging: la identidad del emisor resuelta por varias credenciales se rechaza', () => {
+test('messaging: la identidad del emisor resuelta por varias credenciales se genera (12e)', () => {
   const manifest = manifestWith('domain', 'use-cases', 'persistence', 'messaging');
   const layers = {
     ...layersWith('domain', 'use-cases', 'persistence'),
     messaging: { subscriptions: { Requested: { identity: { field: 'app', from: { location: 'field', name: 'metadata.source' }, resolvedBy: 'Application.keys' } } } }
   };
-  const { errors } = checkSupportedFeatures(manifest, layers);
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /messaging\.subscriptions\.Requested\.identity: .*resolvedBy/);
-  delete layers.messaging.subscriptions.Requested.identity.resolvedBy;
   assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, []);
 });
 

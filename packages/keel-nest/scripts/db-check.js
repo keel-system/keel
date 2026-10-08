@@ -40,10 +40,11 @@ import { DB_NAME, run, resolveRuntime, startDatabase } from './lib/database-cont
 import { sampleEntity, sampleValue, PROBE_HELPERS } from './lib/samples.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
-import { AMQPLIB_VERSION, JOSE_VERSION } from '../src/lib/assets.js';
+import { AMQPLIB_VERSION, JOSE_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION } from '../src/lib/assets.js';
 import { domainMembers } from '../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
-import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, emitsDomainEvents } from '../src/scaffold/repositories.js';
+import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, credentialFinders, emitsDomainEvents } from '../src/scaffold/repositories.js';
+import { guardClaimsFor } from '../src/scaffold/claim.js';
 import { claimsForEntity, claimOrderField, screamingSnake, rescueProbes, stallSql, missingClockCountSql } from 'keel-core/gen';
 import { ormPath, ormClass, unidirectionalParents } from '../src/scaffold/persistence-entities.js';
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_IMPL_TS, IDEMPOTENCY_CONFLICT_TS } from '../src/scaffold/request-idempotency.js';
@@ -341,6 +342,20 @@ ${foldedBlock(model, root, index, ctx, finder)}
 ${conditionalBlock(model, root, index, ctx)}
 ${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [] });
   check('${name}: list devuelve la página con su total', page.totalElements >= 1 && page.items.length >= 1 && page.totalPages >= 1, JSON.stringify({ total: page.totalElements, n: page.items.length }));` : ''}
+${guardClaimsFor(model, root.name).map((claim) => `  // La guarda del efecto irreversible (mail.sentBy): la primera ejecución se lleva la fila y la deja en
+  // ${claim.to}; la SEGUNDA no se la lleva — esa es toda la promesa, y su fallo es un segundo correo real.
+  {
+    const guarded = await repository.findById(original.id);
+    const first = await repository.${claim.method}(guarded.id);
+    check('${name}: ${claim.method} se lleva la fila y la pasa a ${claim.to}', first != null && String(first.id) === String(guarded.id) && String(first.${root.lifecycle.field}) !== String(guarded.${root.lifecycle.field}), JSON.stringify(first?.${root.lifecycle.field}));
+${claim.stampField ? `    check('${name}: ${claim.method} estampa ${claim.stampField} en el mismo reclamo', first?.${claim.stampField} instanceof Date, String(first?.${claim.stampField}));\n` : ''}    const second = await repository.${claim.method}(guarded.id);
+    check('${name}: ${claim.method} por segunda vez devuelve null (la carrera perdida)', second == null, JSON.stringify(second?.${root.lifecycle.field}));
+    const reloaded = await repository.findById(guarded.id);
+    check('${name}: ${claim.method} CONFIRMÓ la marca (la ve una lectura posterior)', String(reloaded?.${root.lifecycle.field}) === String(first?.${root.lifecycle.field}), JSON.stringify(reloaded?.${root.lifecycle.field}));
+  }`).join('\n')}
+${credentialFinders(model, root).map((credential) => `  // La credencial que NO es la primera de la lista: resolver por la clave natural no la encontraría.
+  check('${name}: ${credential.name} resuelve por una credencial que no es la primera', (await repository.${credential.name}(original.${credential.field.name}[original.${credential.field.name}.length - 1]))?.id === original.id);
+  check('${name}: ${credential.name} con una credencial ajena devuelve null', (await repository.${credential.name}('nadie-' + randomUUID())) == null);`).join('\n')}
   await repository.deleteById(original.id);
   check('${name}: deleteById borra el agregado y su grafo', (await repository.findById(original.id)) == null);
 }`;
@@ -1115,7 +1130,7 @@ mountDesign(workspace, NEST_READY_DESIGN.name, NEST_READY_DESIGN);
 const generated = await runCommand(workspace, build, `specs/${NEST_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
 const projectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
 if (!step('build genera el proyecto de referencia', generated.exitCode === undefined, generated.output.slice(0, 400))) process.exit(1);
-const install = run('npm', ['install', '--no-audit', '--no-fund', 'mysql2', 'pg', `amqplib@${AMQPLIB_VERSION}`, `jose@${JOSE_VERSION}`], { cwd: projectDir });
+const install = run('npm', ['install', '--no-audit', '--no-fund', 'mysql2', 'pg', `amqplib@${AMQPLIB_VERSION}`, `jose@${JOSE_VERSION}`, `nodemailer@${NODEMAILER_VERSION}`, `handlebars@${HANDLEBARS_VERSION}`], { cwd: projectDir });
 if (!step('npm install (TypeORM y los drivers)', install.status === 0, install.status === 0 ? '' : install.stderr.slice(-800))) process.exit(1);
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');
 

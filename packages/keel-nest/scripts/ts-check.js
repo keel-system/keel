@@ -30,7 +30,7 @@ import { planService } from '../src/scaffold/index.js';
 import { loadService } from 'keel-core';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { resolveRuntime, startDatabase, stopDatabase } from './lib/database-container.js';
-import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION, AWS_SDK_VERSION, MONGODB_VERSION } from '../src/lib/assets.js';
+import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION, AWS_SDK_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION } from '../src/lib/assets.js';
 
 const keep = process.argv.includes('--keep');
 const isWindows = process.platform === 'win32';
@@ -118,9 +118,12 @@ const extra = npm(projectDir, [
   `@aws-sdk/client-sns@${AWS_SDK_VERSION}`,
   `@aws-sdk/client-sqs@${AWS_SDK_VERSION}`,
   // La persistencia documental (incremento 12): el driver de MongoDB.
-  `mongodb@${MONGODB_VERSION}`
+  `mongodb@${MONGODB_VERSION}`,
+  // El correo (incremento 12e): el transporte SMTP y el motor de plantillas.
+  `nodemailer@${NODEMAILER_VERSION}`,
+  `handlebars@${HANDLEBARS_VERSION}`
 ]);
-if (!step('dependencias de las demás siluetas (jose, amqplib, kafka, aws, mongodb)', extra.ok)) console.error(extra.output);
+if (!step('dependencias de las demás siluetas (jose, amqplib, kafka, aws, mongodb, nodemailer, handlebars)', extra.ok)) console.error(extra.output);
 
 // Las trece siluetas: cada fixture entera, renderizada al lado y compilada con el mismo node_modules.
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');

@@ -24,6 +24,7 @@ import { RECONCILIATION_CLAIM, reconciliationClaims } from 'keel-core/gen/reconc
 import { documentShape, storeDocumentKey } from 'keel-core/gen/document';
 import { snakeCase } from 'keel-core/gen/naming';
 import { tsModule, tsString } from './render.js';
+import { guardClaimsFor } from './claim.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
 
@@ -538,3 +539,27 @@ export function documentPurgeMethod() {
   }`;
 }
 
+
+/**
+ * Los métodos de guarda del adaptador documental (incremento 12e): findOneAndUpdate filtra y marca en la MISMA
+ * operación atómica sobre el documento, y SIN la sesión del caso de uso: la marca confirma al volver, antes del
+ * efecto externo. Lo mismo que el findAndModify de keel-spring.
+ */
+export function documentGuardMethods(model, entity, idFilter, idType, idName = 'id') {
+  return guardClaimsFor(model, entity.name).map((claim) => {
+    const field = keyOf(model, entity, entity.lifecycle.field);
+    const states = claim.from.map((state) => JSON.stringify(storedState(model, entity, state))).join(', ');
+    const stamp = claim.stampField ? `, ${tsString(keyOf(model, entity, claim.stampField))}: new Date()` : '';
+    const filter = idFilter.replace(/ \}$/, `, ${tsString(field)}: { $in: [${states}] } }`);
+    return `  /** La guarda del puerto: ver ${entity.name}Repository.${claim.method}. */
+  async ${claim.method}(${idName}: ${idType}): Promise<${entity.name} | null> {
+    // Pasa a ${claim.to} SOLO si sigue en ${claim.from.join(' o ')}; null = otra ejecución llegó antes. Sin sesión: confirma al volver.
+    const document = await this.collection.findOneAndUpdate(
+      ${filter},
+      { $set: { ${tsString(field)}: ${JSON.stringify(storedState(model, entity, claim.to))}${stamp} } },
+      { returnDocument: 'after' }
+    );
+    return document == null ? null : toDomain${entity.name}(document);
+  }`;
+  });
+}
