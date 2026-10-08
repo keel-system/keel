@@ -15,7 +15,7 @@ import { HARNESSES, applyTokens, emitHarnessFiles } from 'keel-core';
 import { usesIdempotencyCheck } from './idempotency-check.js';
 import { describeStack } from 'keel-core/gen/stack';
 import { assetsDir, SKILL } from '../lib/assets.js';
-import { usesRelational } from './persistence-entities.js';
+import { usesDocument, usesRelational } from './persistence-entities.js';
 import { usesJwt } from './security.js';
 import { usesSchemaBaseline } from './schema-baseline.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
@@ -119,7 +119,11 @@ equivalente del servidor de keel-spring del mismo diseño: mismo contrato HTTP, 
 - **Configuración**: perfil por \`PROFILE\` (default \`local\`), \`config/application.yaml\` + \`config/parameters/<perfil>/\`; \`\${VAR}\` es obligatoria y \`\${VAR:default}\` opcional.
 - **Inyección**: siempre con \`@Inject(<token>)\` explícito. La capa application no usa \`@Inject\`: sus clases declaran \`static readonly inject = [...]\` y las cablea \`src/infrastructure/usecase/use-case-module.ts\`.
 - **Casos de uso**: un mensaje y un handler (\`@Handles(<Mensaje>)\`) por operación, despachados por \`UseCaseMediator\`, que abre la transacción. Los handlers nacen con las notas del diseño y terminan en \`throw new Error('TODO: <operación>')\`.${
-    persistence ? `\n- **Esquema**: en \`local\` lo crea TypeORM (\`synchronize\`); en \`develop\` y \`production\`, las migraciones de \`src/migrations/\` al arrancar.` : ''
+    persistence
+      ? `\n- **Esquema**: en \`local\` lo crea TypeORM (\`synchronize\`); en \`develop\` y \`production\`, las migraciones de \`src/migrations/\` al arrancar.`
+      : usesDocument(model)
+        ? `\n- **Documentos**: el agregado es el documento (MongoDB): las hijas van anidadas en la raíz. No hay migraciones; los índices del diseño los crea el servidor al arrancar (\`src/infrastructure/persistence/document-indexes.ts\`) y se contrastan con los vivos con \`bash infra/export-indexes.sh\`.`
+        : ''
   }
 
 ## Completar el servicio

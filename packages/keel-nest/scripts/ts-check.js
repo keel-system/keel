@@ -30,7 +30,7 @@ import { planService } from '../src/scaffold/index.js';
 import { loadService } from 'keel-core';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { resolveRuntime, startDatabase, stopDatabase } from './lib/database-container.js';
-import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION, AWS_SDK_VERSION } from '../src/lib/assets.js';
+import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION, AWS_SDK_VERSION, MONGODB_VERSION } from '../src/lib/assets.js';
 
 const keep = process.argv.includes('--keep');
 const isWindows = process.platform === 'win32';
@@ -116,9 +116,11 @@ const extra = npm(projectDir, [
   `amqplib@${AMQPLIB_VERSION}`,
   `@confluentinc/kafka-javascript@${KAFKA_JAVASCRIPT_VERSION}`,
   `@aws-sdk/client-sns@${AWS_SDK_VERSION}`,
-  `@aws-sdk/client-sqs@${AWS_SDK_VERSION}`
+  `@aws-sdk/client-sqs@${AWS_SDK_VERSION}`,
+  // La persistencia documental (incremento 12): el driver de MongoDB.
+  `mongodb@${MONGODB_VERSION}`
 ]);
-if (!step('dependencias de las demás siluetas (jose, amqplib, kafka, aws)', extra.ok)) console.error(extra.output);
+if (!step('dependencias de las demás siluetas (jose, amqplib, kafka, aws, mongodb)', extra.ok)) console.error(extra.output);
 
 // Las trece siluetas: cada fixture entera, renderizada al lado y compilada con el mismo node_modules.
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');

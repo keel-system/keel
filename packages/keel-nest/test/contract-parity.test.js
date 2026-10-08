@@ -121,10 +121,6 @@ for (const name of fs.readdirSync(FIXTURES_DIR)) {
       if (fromSpring.multipart) continue;
       const expected = { ...fromSpring };
       delete expected.multipart;
-      // La persistencia DOCUMENTAL llega en el incremento 12: hasta entonces keel-nest no tiene con qué
-      // ordenar, y la página de esos diseños son dos enteros. Es la única diferencia que se tolera, y
-      // solo en ellos.
-      if (nest.model.persistenceKind === 'document') expected.query = expected.query.filter((name) => name !== 'sort');
       const actual = { method: fromNest.method, path: fromNest.path, status: fromNest.status, location: fromNest.location, query: [...fromNest.query].sort(), body: fromNest.body };
       assert.deepEqual(actual, expected, operation.name);
       if (operation.responseDto) {

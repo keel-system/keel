@@ -85,7 +85,7 @@ test('lo que una operación declara y cuelga de un incremento futuro se avisa, n
   assert.ok(!warnings.join('\n').includes('listOrders'));
 });
 
-test('la persistencia relacional se genera; la documental se rechaza con el incremento que la trae', () => {
+test('las dos persistencias se generan; sobre documentos, cada mecanismo del 12c se rechaza nombrándolo', () => {
   const relational = checkSupportedFeatures(
     manifestWith('domain', 'use-cases', 'persistence'),
     { domain: {}, 'use-cases': {}, persistence: { default: { model: 'relational' } } }
@@ -96,8 +96,29 @@ test('la persistencia relacional se genera; la documental se rechaza con el incr
     manifestWith('domain', 'use-cases', 'persistence'),
     { domain: {}, 'use-cases': {}, persistence: { default: { model: 'document' } } }
   );
-  assert.equal(document.errors.length, 1);
-  assert.match(document.errors[0], /document .*incremento 12/);
+  assert.deepEqual(document.errors, []);
+  assert.deepEqual(document.warnings, []);
+  // Lo que guarda su estado en colecciones del generador llega en el 12c: uno por mecanismo.
+  const pending = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging', 'dependencies'), {
+    domain: {},
+    'use-cases': {
+      operations: {
+        sweep: { schedule: { cron: '*/5 * * * *' } },
+        place: { idempotency: { keySource: 'client-key' } },
+        guarded: { idempotency: { keySource: 'payload-field', guard: 'natural-key' } }
+      }
+    },
+    persistence: { default: { model: 'document' } },
+    messaging: {},
+    dependencies: { dependencies: { stock: { activations: { reserve: { reconciledBy: 'sweep' } } } } }
+  });
+  assert.equal(pending.errors.length, 4);
+  assert.ok(pending.errors.every((error) => /sobre persistencia documental .*incremento 12c/.test(error)));
+  assert.match(pending.errors[0], /^messaging/);
+  assert.match(pending.errors[1], /sweep \(schedule/);
+  assert.match(pending.errors[2], /place \(idempotency/);
+  assert.doesNotMatch(pending.errors[2], /guarded/, 'la clave natural no necesita registro');
+  assert.match(pending.errors[3], /stock\.reserve \(reconciledBy/);
 });
 
 test('un índice único condicionado se genera sin aviso (tramo 6c)', () => {

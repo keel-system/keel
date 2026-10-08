@@ -22,10 +22,11 @@ const PENDING_LAYERS = {
 const ACCEPTED_NOT_EMITTED = {};
 
 /**
- * Los motores relacionales que keel-nest genera (incremento 6): la matriz de TypeORM medida. Los
+ * Los motores que keel-nest genera: los relacionales de la matriz de TypeORM medida (incremento 6) y
+ * MongoDB (incremento 12). Los
  * demás del catálogo los genera keel-spring y llegan aquí cuando se midan.
  */
-export const SUPPORTED_DATABASES = ['postgresql', 'mysql'];
+export const SUPPORTED_DATABASES = ['postgresql', 'mysql', 'mongodb'];
 
 /** Los brokers que keel-nest genera: los tres del catálogo (incremento 9: RabbitMQ, Kafka en el 9f y SNS/SQS en el 9g). */
 export const SUPPORTED_BROKERS = ['rabbitmq', 'kafka', 'snssqs'];
@@ -63,13 +64,12 @@ export function checkSupportedFeatures(manifest, layers) {
       );
     }
   }
-  // La persistencia DOCUMENTAL es otra rama entera (driver de MongoDB, índices en clase, reclamo con
-  // findOneAndUpdate): llega en el incremento 12. La relacional se genera desde el 6.
+  // La persistencia DOCUMENTAL (incremento 12) se genera desde el 12b: documentos, índices, transacción y
+  // bloqueo optimista. Los mecanismos que guardan su estado en colecciones del generador (el outbox y los
+  // mensajes procesados, el registro de idempotencia, los reclamos de barrido y de reconciliación) llegan
+  // en el 12c: hasta entonces se rechazan, en vez de generar un handler sin su almacén.
   if (declared.includes('persistence') && layers?.persistence?.default?.model === 'document') {
-    errors.push(
-      'persistence.default.model: document — keel-nest todavía no genera la persistencia documental (llega en el incremento 12 de PLAN-KEEL-NEST.md). ' +
-        'Genera este diseño con keel-spring, o espera a que keel-nest la cubra.'
-    );
+    for (const message of documentFrontier(declared, layers)) errors.push(message);
   }
   // La identidad del llamante con VARIAS credenciales por recurso (`from.resolvedBy`) necesita el finder
   // por elemento de una colección en el repositorio, que keel-nest aún no emite. Sin él, el valor del
@@ -122,6 +122,32 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
   return { errors, warnings };
+}
+
+/**
+ * Lo que la persistencia documental todavía no genera (incremento 12c de PLAN-KEEL-NEST.md): cada
+ * mecanismo que necesita una colección del generador, con lo que lo dispara en el diseño.
+ */
+function documentFrontier(declared, layers) {
+  const errors = [];
+  const pending = (what) =>
+    `${what} sobre persistencia documental — keel-nest todavía no lo genera (llega en el incremento 12c de PLAN-KEEL-NEST.md). ` +
+    'Genera este diseño con keel-spring, o espera a que keel-nest lo cubra.';
+  if (declared.includes('messaging')) errors.push(pending('messaging (el outbox y el registro de mensajes procesados)'));
+  const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
+  const scheduled = operations.filter(([, operation]) => operation?.schedule != null).map(([name]) => name);
+  if (scheduled.length > 0) errors.push(pending(`use-cases: ${scheduled.join(', ')} (schedule: el barrido y su reclamo)`));
+  const idempotent = operations
+    .filter(([, operation]) => operation?.idempotency != null && operation.idempotency.guard !== 'natural-key')
+    .map(([name]) => name);
+  if (idempotent.length > 0) errors.push(pending(`use-cases: ${idempotent.join(', ')} (idempotency: el registro de claves)`));
+  const reconciled = Object.entries(layers?.dependencies?.dependencies ?? {}).flatMap(([id, dependency]) =>
+    Object.entries(dependency?.activations ?? {})
+      .filter(([, activation]) => activation?.reconciledBy)
+      .map(([name]) => `${id}.${name}`)
+  );
+  if (reconciled.length > 0) errors.push(pending(`dependencies: ${reconciled.join(', ')} (reconciledBy: el reclamo de la reconciliación)`));
+  return errors;
 }
 
 /**

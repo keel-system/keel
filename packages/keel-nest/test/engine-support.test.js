@@ -39,7 +39,9 @@ test('las celdas se indexan por el eje del catálogo y usan el vocabulario comú
   }
 });
 
-test('lo que la persistencia relacional genera hoy está ejecutado por db-check', () => {
+test('las dos persistencias que keel-nest genera las ejecuta su red en vivo', () => {
   assert.equal(MECHANISMS['persistence-adapter'].coverage.relational.net, 'db-check');
-  assert.ok(pending().some(({ id, branch }) => id === 'persistence-adapter' && branch === 'document'), 'la rama documental es del incremento 12');
+  // La documental (incremento 12b) contra un MongoDB real; los almacenes documentales siguen pendientes (12c).
+  assert.equal(MECHANISMS['persistence-adapter'].coverage.document.net, 'doc-check');
+  assert.ok(pending().some(({ id, branch }) => id === 'outbox-relay' && branch === 'document'), 'el outbox documental es del 12c');
 });

@@ -27,6 +27,7 @@ import {
   DEPENDENCY_CRUISER_VERSION,
   FASTIFY_VERSION,
   TYPEORM_VERSION,
+  MONGODB_VERSION,
   PG_VERSION,
   MYSQL2_VERSION,
   JOSE_VERSION,
@@ -36,7 +37,7 @@ import {
   CRON_VERSION
 } from '../lib/assets.js';
 import { usesJwt } from './security.js';
-import { usesRelational, engineOf } from './persistence-entities.js';
+import { usesRelational, usesDocument, engineOf } from './persistence-entities.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 
@@ -92,7 +93,9 @@ function packageJson(model) {
       rxjs: RXJS_VERSION,
       yaml: YAML_VERSION,
       // La persistencia relacional: TypeORM y el driver del motor del stack.
-      ...(usesRelational(model) ? { typeorm: TYPEORM_VERSION, ...(engineOf(model) === 'mysql' ? { mysql2: MYSQL2_VERSION } : { pg: PG_VERSION }) } : {})
+      ...(usesRelational(model) ? { typeorm: TYPEORM_VERSION, ...(engineOf(model) === 'mysql' ? { mysql2: MYSQL2_VERSION } : { pg: PG_VERSION }) } : {}),
+      // La persistencia documental: el driver oficial, sin ODM.
+      ...(usesDocument(model) ? { mongodb: MONGODB_VERSION } : {})
     },
     devDependencies: {
       '@nestjs/cli': NEST_CLI_VERSION,

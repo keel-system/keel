@@ -27,6 +27,8 @@ export const NETS = {
     'npm run harness-check [-- --database=mysql] — levanta infra/ con sus propios scripts, puntúa flujos sonda con score-scenarios.sh (cada código de salida y su evidencia) y exporta, aplica y verifica el baseline de migraciones',
   'broker-check':
     'npm run broker-check [-- --broker=rabbitmq|kafka|snssqs] — la mensajería contra RabbitMQ, Kafka y LocalStack reales de infra/: la topología, los consumer groups o las colas sembradas, el consumo con reintento y descarte (la DLQ, <topic>.DLT con los headers de Spring Kafka, o la RedrivePolicy de SQS), el relay del outbox con el broker caído y los helpers del arnés',
+  'doc-check':
+    'npm run doc-check — la persistencia documental contra un MongoDB real en replica set: los índices vivos, el documento crudo contra la forma neutral, ida y vuelta, versión, unicidad (también la condicionada), la carrera de dos transacciones, la auditoría, página y borrado',
   ninguna: 'nadie lo ejecuta'
 };
 
@@ -45,7 +47,7 @@ export const MECHANISMS = {
         why:
           'la tabla outbox_event es la de keel-spring (schema-parity contra OutboxEventJpa) y los parámetros del relay, los de keel-core (messaging.test.js contra el messaging.yaml de keel-spring; el backoff, contra la referencia ejecutable). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla contra el catálogo del motor, el puente escribiendo la fila en la transacción del cambio (y nada si revierte), el reclamo en orden y con su lote, el lease, SKIP LOCKED sin esperar a la fila retenida por otra réplica, el backoff de un fallo, la rendición al alcanzar el máximo y su cuenta, y que ni la publicada ni la rendida vuelven. Falsado el 2026-10-07 quitando el lease (cae su comprobación y solo esa) y quitando SKIP LOCKED (el reclamo espera a la fila retenida hasta el tope). Y broker-check, contra RabbitMQ real: el relay con un dispatcher sobre RabbitConnection.publish entrega la fila al canal con su envoltura y su tipo, no da por publicado lo que no tenía cola (mandatory), espera con el broker caído y sale al volver sin rendirse, y un evento abandonado no sale y se cuenta (falsado publicando sin mandatory: cae ese flujo y solo ese). Y contra Kafka real (9f): el mismo relay con un dispatcher sobre KafkaConnection.publish entrega la fila con la routing key como clave, espera con el broker caído y sale al volver, y el abandonado no sale. Y contra LocalStack (9g): con un dispatcher sobre SnsSqsConnection.publish, lo mismo, más que una fila cuyo topic no existe no se da por publicada (la conexión no crea el topic), y que tras levantar el broker la topología se resiembra y la fila sale. Y la purga por lotes (10b), en db-check: lo publicado y caducado sale en lotes de dos con instantes repetidos en la frontera, con el tope alcanzado la pasada siguiente lo termina, y lo vigente y lo PENDIENTE no se tocan (falsado cortando por created_at: caen esas tres y solo esas)'
       },
-      document: { pending: 'incremento 12 (persistencia documental)' }
+      document: { pending: 'incremento 12c (los almacenes documentales)' }
     }
   },
   'idempotency-request': {
@@ -59,7 +61,7 @@ export const MECHANISMS = {
         why:
           'la tabla idempotency_record es la de keel-spring (schema-parity la compara con IdempotencyRecordJpa, falsado con una cota distinta: caen las 4 fixtures con idempotencia). db-check, en los dos motores y en las 3 fixtures relacionales que la declaran: la tabla contra el catálogo del motor, guardar y encontrar, el ámbito dentro de la clave, la clave repetida y la CARRERA de dos transacciones como el conflicto con su code (el del diseño si lo declara), la clave caducada sustituible y el rollback del registro con su comando. Falsado el 2026-10-06 quitando la traducción de la violación: caen exactamente esas dos comprobaciones en las tres. La purga de las caducadas (10b), en db-check: por lotes, con tope y pasada siguiente, sin tocar las vigentes. Lo que no ejecuta ninguna red: el USO en el handler, que escribe el agente'
       },
-      document: { pending: 'incremento 12 (persistencia documental)' }
+      document: { pending: 'incremento 12c (los almacenes documentales)' }
     }
   },
   'idempotency-consume': {
@@ -73,7 +75,7 @@ export const MECHANISMS = {
         why:
           'la tabla processed_event es la de keel-spring (schema-parity contra ProcessedEventJpa). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla y sus cotas contra el catálogo del motor, la repetición arbitrada por la clave primaria, dos consumidores del mismo mensaje sin pisarse, el registro que sobrevive al rollback del handler (su transacción es propia) y la carrera de dos entregas, de la que registra UNA. Falsado el 2026-10-07 haciendo que el registro use la transacción del llamante: cae «sobrevive al rollback» y solo esa. Y la purga por retención (10b), en db-check. Lo que no mide: el ORDEN en el listener (alreadyProcessed/record o tryRecord), que escribe el agente y vigilará el gate de idempotencia (incremento 10d)'
       },
-      document: { pending: 'incremento 12 (persistencia documental)' }
+      document: { pending: 'incremento 12c (los almacenes documentales)' }
     }
   },
   'reconciliation-claim': { pending: 'incremento 11 (la reconciliación cuelga de dependencies)' },
@@ -88,7 +90,7 @@ export const MECHANISMS = {
         why:
           'db-check, en los dos motores, sobre job-dispatch (cola que estampa el reloj del rescate), payout-runs y notification-mailer: el lote del más antiguo al más nuevo y con su tamaño, ya en el estado de destino y con el reloj estampado en el MISMO UPDATE, la pasada siguiente con el resto, dos réplicas a la vez sin llevarse ninguna fila dos veces, y la fila bloqueada por otra réplica saltada sin esperar. sweep.yaml es el de keel-spring (claim.test.js). Falsado el 2026-10-07 por capas: sin el bloqueo cae SOLO el caso de SKIP LOCKED (la condición del UPDATE sigue impidiendo el doble reclamo); sin el bloqueo ni la condición cae también la carrera. Quitar solo la condición no pone nada rojo: con SKIP LOCKED dos réplicas nunca seleccionan la misma fila, y la condición es la segunda defensa'
       },
-      document: { pending: 'incremento 12 (persistencia documental)' }
+      document: { pending: 'incremento 12c (el reclamo con findOneAndUpdate)' }
     }
   },
   'sweep-claim-rescue': {
@@ -102,7 +104,7 @@ export const MECHANISMS = {
         why:
           'db-check sobre job-dispatch (plazo enlazado al parámetro abandonAfterMinutes, DSL 2.18): se lleva solo lo abandonado, no cambia el estado (lo arrienda), renueva el reloj en el mismo UPDATE, la pasada siguiente ya no lo ve, y lo recién entrado en vuelo no se toca. Falsado el 2026-10-07 quitando la cota temporal: caen esas tres comprobaciones y solo esas'
       },
-      document: { pending: 'incremento 12 (persistencia documental)' }
+      document: { pending: 'incremento 12c (el reclamo con findOneAndUpdate)' }
     }
   },
   'guard-claim': { pending: 'incremento 13 (la guarda de efecto irreversible solo la declara el correo)' },
@@ -117,7 +119,7 @@ export const MECHANISMS = {
         why:
           'las MISMAS sentencias del arnés, con los literales del motor, ejecutadas por db-check contra PostgreSQL y MySQL: la fila que deja stallInFlight la rescata el reclamo generado y la de putInFlight no, e inFlightWithoutClock cuenta cero y ve la fila sin reloj. Sin falsar por mutación'
       },
-      document: { pending: 'incremento 12 (persistencia documental)' }
+      document: { pending: 'incremento 12d (el arnés documental)' }
     }
   },
   'schema-baseline': {
@@ -131,7 +133,11 @@ export const MECHANISMS = {
         why:
           'export-schema.sh vacía el esquema local y le pide a TypeORM el DDL completo de las entidades; verify-baseline.sh aplica las migraciones sobre un esquema vacío —lo que hace el arranque en develop y production con migrationsRun— y exige que TypeORM no vea diferencia. harness-check lo ejecuta en los dos motores sobre product-catalog. Falsado el 2026-10-06 quitándole al baseline su última sentencia: la verificación sale en rojo nombrando lo que falta. A diferencia de keel-spring (baselineTested: PENDING), la prueba en vivo SÍ cabe en el pipeline: en local el esquema lo recrea synchronize. Lo que no mide: un diseño con FK entre tablas, porque product-catalog tiene una sola'
       },
-      document: { pending: 'incremento 12 (persistencia documental)' }
+      document: {
+        state: 'razonado',
+        why:
+          'no hay baseline que redactar: los índices salen enteros del diseño (document-indexes.ts, los de keel-core/gen/document.js) y infra/export-indexes.sh, neutral, exporta los vivos para contrastarlos. La creación al arrancar la mide doc-check; el script lo ejecutará el pase de calidad, que llega con los agentes del arnés documental (12d)'
+      }
     }
   },
   'transient-write-conflict': {
@@ -144,10 +150,28 @@ export const MECHANISMS = {
         why:
           'el UseCaseMediator reintenta tres veces la transacción de escritura que pierde un interbloqueo y, agotado, sale como 409 de concurrencia. db-check fabrica un interbloqueo DE VERDAD con el TransactionContext generado (dos transacciones, dos filas en orden inverso) y exige que se clasifique como transitorio, y una espera de bloqueo más allá del tope que tiene que salir como tope (503) y no como conflicto. Falsado el 2026-10-06 rompiendo cada clasificación por separado (40P01/1213, y 57014/1205/3024): cae su comprobación en los dos motores y solo esa. En MySQL el tope llega casi siempre por max_execution_time (3024), no por la espera de bloqueo. Lo que no se ejecuta es el BUCLE de reintento del mediator, que necesita un handler implementado'
       },
-      document: { pending: 'incremento 12 (persistencia documental)' }
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          'dos transacciones que escriben el mismo documento: MongoDB aborta a la segunda con un WriteConflict (112, TransientTransactionError), y doc-check exige que isTransientWriteConflict lo clasifique como transitorio —el que el mediator reintenta tres veces y, agotado, es un 409—. La transacción es manual y no withTransaction, que reintentaría dos minutos por su cuenta. Falsado el 2026-10-08 con un clasificador que no reconoce el código: cae la carrera en los tres sujetos y solo ella'
+      }
     }
   },
-  'document-indexes': { pending: 'incremento 12 (persistencia documental)' },
+  'document-indexes': {
+    emitter: 'src/scaffold/document-persistence.js (document-indexes.ts, sobre documentIndexes de keel-core/gen/document.js)',
+    coverage: {
+      relational: { state: 'no-aplica', why: 'en relacional los índices los declara la entidad y los crea el esquema (migraciones)' },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          'los índices se crean al ARRANCAR con los nombres del diseño, y doc-check lee los VIVOS (listIndexes) contra keel-core/gen/document.js: nombre, claves en orden, unicidad y filtro parcial, y que crearlos otra vez no falla. El filtro parcial va con el valor ALMACENADO (la constante del enum). Falsado el 2026-10-08 con el literal del diseño en el filtro: cae el índice de Template y el invariante condicionado, y solo esos'
+      }
+    }
+  },
   'partial-unique-index': {
     emitter: 'src/scaffold/persistence-entities.js (sobre partialIndexSpecs de keel-core/gen/relational.js)',
     coverage: {
@@ -215,7 +239,11 @@ export const MECHANISMS = {
         why:
           'la sombra se crea con su cota y la estampa el adaptador (catalog-extended: Category.slug, clave natural sobre la sombra), y db-check guarda la misma clave EN MAYÚSCULAS y exige que el motor la rechace. Falsado el 2026-10-06 con un TextFold que no pliega: cae esa comprobación y solo esa'
       },
-      document: { pending: 'incremento 12 (persistencia documental)' }
+      document: {
+        state: 'razonado',
+        why:
+          'la sombra plegada se escribe en el documento con TextFold (documentShape la incluye y los índices de unicidad van sobre ella), pero ninguna fixture documental declara compare: sin sujeto, nadie la ejecuta'
+      }
     }
   },
   'persistence-adapter': {
@@ -229,7 +257,13 @@ export const MECHANISMS = {
         why:
           'db-check sobre 4 sujetos y 8 raíces en los dos motores: el esquema contra el catálogo del motor, la cota que rechaza el motor, ida y vuelta por el adaptador (escala, bigint, uuid, fechas, listas de escalares y de value objects, hijas uni y bidireccionales), la fila en crudo, la versión obsoleta → conflicto, la clave natural duplicada → el error del diseño, página y borrado del grafo. Falsado el 2026-10-06 con tres sabotajes aislados (sin comprobar la versión, hijas en orden inverso, enum por su literal), cada uno cazado por su comprobación y solo por ella. Destapó la FK de una relación escrita sin el transformador del id (en MySQL, texto en un binary(16))'
       },
-      document: { pending: 'incremento 12 (persistencia documental)' }
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          'doc-check contra un MongoDB en replica set sobre inspection-reports, job-dispatch-mongo y notification-mailer-mongo (6 raíces): el documento CRUDO contra documentShape a todo nivel —cada clave con su tipo BSON y ninguna de más—, ida y vuelta, versión obsoleta → 409, clave natural e índice condicionado → el error del diseño, created_at que no cambia, página con orden por la ruta del espejo y borrado; y la DB_URL de keel-spring tal cual. Falsado el 2026-10-08 con seis sabotajes que compilan (decimal como texto, la versión fuera del filtro, _class en el documento, created_at reescrito, uuid como texto en los dos sentidos —la ida y vuelta sigue en verde: solo lo caza el documento crudo—), cada uno cazado por su comprobación. Sin red: document-persistence.test.js lo ejecuta con un sustituto del driver'
+      }
     }
   }
 };

@@ -45,7 +45,7 @@ test('una capa fuera de la frontera sale en rojo sin construir nada', async () =
   const before = treeDigest(workspace);
   const { exitCode, output } = await runCommand(workspace, check, 'specs/inspection-reports', {});
   assert.equal(exitCode, 1);
-  assert.match(output, /persistence.default.model: document/);
+  assert.match(output, /sobre persistencia documental — keel-nest todavía no lo genera/);
   assert.equal(treeDigest(workspace), before);
 });
 

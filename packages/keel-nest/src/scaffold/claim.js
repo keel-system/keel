@@ -109,6 +109,9 @@ function positive(configuration: Configuration, key: string, fallback: number): 
 
 /** Los métodos de reclamo del puerto <E>Repository, con lo que el agente tiene que saber de cada uno. */
 export function portClaimMethods(model, entity) {
+  // Sobre documentos el reclamo (findOneAndUpdate) llega en el incremento 12c; hasta entonces la frontera
+  // rechaza el diseño, y el puerto no promete un método que ningún adaptador implementa.
+  if (!usesRelational(model)) return [];
   return claimsForEntity(model, entity.name).map((claim) => `  /**
 ${describe(claim, entity.name)
   .split('\n')

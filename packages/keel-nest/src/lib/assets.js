@@ -53,6 +53,8 @@ export const DEPENDENCY_CRUISER_VERSION = '^18.5.0';
 export const TYPEORM_VERSION = '^1.1.1';
 export const PG_VERSION = '^8.23.1';
 export const MYSQL2_VERSION = '^3.24.5';
+// La persistencia documental (incremento 12): el driver oficial de MongoDB, sin ODM —el mapeo es explícito—.
+export const MONGODB_VERSION = '^7.7.0';
 // Seguridad (incremento 8), verificada el 2026-10-06 contra el registro de npm: la validación del JWT
 // contra el JWKS del proveedor (firma, caducidad, emisor). Sin dependencias y sin Passport: la regla
 // de cada ruta la evalúa un hook de la entrada HTTP con el plan neutral de keel-core.

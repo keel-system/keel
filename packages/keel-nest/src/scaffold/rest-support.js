@@ -17,7 +17,7 @@ import { WIRE_SHAPES } from 'keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { tsModule } from './render.js';
 import { DOMAIN_EXCEPTION_TS, BASE_SUBCLASSES } from './exceptions.js';
-import { usesRelational } from './persistence-entities.js';
+import { usesPersistence } from './persistence-entities.js';
 import { PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { usesMessaging, usesSubscriptionMessages } from './messaging.js';
 
@@ -64,7 +64,7 @@ export function generate(model) {
         EXCEPTION_FILTER_TS,
         [
           ...filterImports(),
-          ...(usesRelational(model)
+          ...(usesPersistence(model)
             ? [
                 { symbol: 'translatePersistenceError', from: PERSISTENCE_ERRORS_TS },
                 { symbol: 'TRANSACTION_TIMEOUT', from: PERSISTENCE_ERRORS_TS },
@@ -72,7 +72,7 @@ export function generate(model) {
               ]
             : [])
         ],
-        filterBody(usesRelational(model))
+        filterBody(usesPersistence(model))
       )
     }
   ];

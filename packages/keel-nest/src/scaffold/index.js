@@ -30,6 +30,7 @@ import * as mediator from './mediator.js';
 import * as persistenceEntities from './persistence-entities.js';
 import * as repositories from './repositories.js';
 import * as persistenceRuntime from './persistence-runtime.js';
+import * as documentPersistence from './document-persistence.js';
 import * as schemaBaseline from './schema-baseline.js';
 import * as requestIdempotency from './request-idempotency.js';
 import * as messaging from './messaging.js';
@@ -85,6 +86,9 @@ const GENERATORS = [
   persistenceEntities,
   repositories,
   persistenceRuntime,
+  // Persistencia documental (incremento 12): el cliente de MongoDB, la transacción, los índices del diseño y
+  // los mismos archivos de errores y módulo que la relacional; el adaptador de cada raíz sale de repositories.js.
+  documentPersistence,
   // La idempotencia de petición: el registro, su firma y su contexto (la misma tabla que keel-spring).
   requestIdempotency,
   // La mensajería (incremento 9): la envoltura, los eventos de integración, el puente, los mensajes de

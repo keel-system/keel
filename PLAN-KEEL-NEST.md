@@ -1323,6 +1323,53 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     auditoría de política): cada uno cae en la fixture que lo tiene y solo en ella. Y la línea base falsada a su vez:
     renombrar el prefijo del índice de la clave natural cambia 9 archivos de keel-spring. keel-core 1139/1139,
     keel-spring 1646/1646.
+- **12b — la persistencia documental en keel-nest, hecho (2026-10-08)**.
+  - **Una decisión de forma**: la rama documental emite los MISMOS archivos que la relacional para la transacción
+    (`transaction-context.ts`: `active`, `inTransaction`, `inNewTransaction`, `afterCommit`), los errores
+    (`persistence-errors.ts`: `translatePersistenceError`, `isTransientWriteConflict`, `OptimisticLockConflict`…) y el
+    módulo (`persistence-module.ts`), con el driver dentro. El mediator, el filtro de errores y el módulo raíz solo
+    cambian `usesRelational` por `usesPersistence`; el puerto de cada raíz es el mismo y el adaptador se elige por
+    modelo (`src/scaffold/document-repositories.js`).
+  - **Lo que emite** (`src/scaffold/document-persistence.js`): `db.yaml` con la `DB_URL` de keel-spring tal cual (la de
+    local es la MISMA; el driver de Node rechaza `uuidRepresentation` —medido, `MongoParseError`— y `mongo-settings.ts`
+    la quita al leerla), `bson-values.ts` (uuid binario subtipo 4, `Decimal128` con su escala, Int64 ↔ bigint, `date`
+    a medianoche UTC, json como texto, enum por su constante), `document-indexes.ts` (los de `keel-core/gen/document.js`,
+    creados al ARRANCAR), la transacción manual y no `withTransaction` (que reintentaría dos minutos: el conflicto lo
+    reintenta el mediator con sus tres intentos, como keel-spring), el `WriteConflict` (112 / `TransientTransactionError`)
+    como transitorio, E11000 → el error del diseño por el nombre del índice, y `export-indexes.sh` neutral. Sin tope de
+    transacción ni 503: keel-spring no lo aplica en Mongo. El adaptador guarda con `$set` (no reemplaza: lo que el
+    dominio no lleva, como la auditoría de política, se conserva), con la versión en el FILTRO y `created_at` en
+    `$setOnInsert`; el listado ordena por la RUTA del espejo (`location.label`, `sections.status`), que es lo que acepta
+    el `?sort=` de keel-spring documental —no el nombre aplanado de la rama relacional—, con desempate por `_id`.
+  - **Frontera**: el modelo documental se acepta y `mongodb` entra en `SUPPORTED_DATABASES`; sobre documentos se
+    rechazan, nombrando el 12c, la mensajería, los barridos con `schedule`, el registro de idempotencia y la
+    reconciliación. La paridad de contrato HTTP pierde su única excepción (la página documental sin `sort`).
+  - **Medido**: `npm run doc-check` (nuevo) contra un MongoDB miembro de un replica set, sobre `inspection-reports`
+    (sin su mensajería), `job-dispatch-mongo` y `notification-mailer-mongo` (sin mensajería ni correo): **9/9**, 84
+    comprobaciones —la URI de keel-spring, los índices vivos contra los neutrales (nombre, claves, unicidad y filtro
+    parcial; crearlos dos veces), el documento CRUDO contra `documentShape` a todo nivel (cada clave con su tipo BSON y
+    ninguna de más: ni `_class`), ida y vuelta, versión obsoleta → 409, clave natural e índice condicionado → el error
+    del diseño y el finder del ocupante, dos transacciones sobre el mismo documento → conflicto transitorio, `created_at`
+    que no cambia al reescribir, página con orden y la propiedad inexistente, borrado—. Falsado con siete sabotajes
+    que compilan, cada uno cazado por su comprobación: decimal como texto, la versión fuera del filtro, el literal del
+    diseño en el filtro parcial, un clasificador que no reconoce el WriteConflict, `_class` en el documento,
+    `created_at` reescrito y el uuid como texto en los dos sentidos —este con la ida y vuelta en VERDE: solo lo ve el
+    documento crudo contra el contrato, que es para lo que existe—. Dos primeros intentos de sabotaje no conservaban
+    la forma (el servidor rechazaba la operación, o el código reventaba) y la sonda moría sin resumen: ahora cada bloque
+    convierte un error inesperado en una comprobación roja con su causa. Y un fallo de la propia sonda, no del
+    generador: fijaba la clave del índice condicionado por el nombre del campo del diseño (`application`) en vez del
+    miembro del dominio (`applicationId`), y el «no conviven» salía rojo.
+    Las muestras de agregados salen de `db-check` a `scripts/lib/samples.js` (la sonda relacional, idéntica byte a byte).
+    `test/document-persistence.test.js` (sin red) EJECUTA el adaptador con un sustituto del driver: el documento del
+    contrato, la ida y vuelta, el conflicto de versión, los índices y la URL contra los de keel-spring.
+    `ts-check` **12/12**: las 33 siluetas compilan con `strict` —las documentales ya con su persistencia— y sus pruebas
+    emitidas pasan. keel-nest 398/398 sin red. La matriz de paridad: `document-indexes`, `persistence-adapter` y
+    `transient-write-conflict` documentales pasan a `verificado` por `doc-check`, falsados; `schema-baseline` y
+    `folded-text` documentales, `razonado` (sin red que ejecute `export-indexes.sh` y sin fixture documental con
+    `compare`); los almacenes, al 12c, y las sondas del arnés, al 12d.
+  - **Para 12c**: el registro de procesados, el outbox con `claimed_at` (el relay sin `SKIP LOCKED`), el registro de
+    idempotencia, `reconciliation_claim` y los reclamos de barrido con `findOneAndUpdate`, con el gate y la frontera
+    abiertos para `job-dispatch-mongo` e `inspection-reports` enteros. **Sigue por decidir el sujeto de 12e.**
 
 ### Inc. 13 — Capas de borde: cache, storage, correo, pagos
 

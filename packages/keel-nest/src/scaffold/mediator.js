@@ -21,7 +21,7 @@
 
 import { DIRS, classPath, tsModule } from './render.js';
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
-import { usesRelational } from './persistence-entities.js';
+import { usesPersistence, usesRelational } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { usesCallerScope } from './security.js';
 import { usesMessaging } from './messaging.js';
@@ -55,8 +55,8 @@ export function applicationClasses(model) {
 
 export function generate(model, { mappers = [] } = {}) {
   if (!usesMediator(model)) return [];
-  // Con persistencia relacional, el despacho abre la transacción del caso de uso.
-  const transactional = usesRelational(model);
+  // Con persistencia (de los dos modelos), el despacho abre la transacción del caso de uso.
+  const transactional = usesPersistence(model);
   const files = [
     { path: MESSAGES_TS, content: tsModule(MESSAGES_TS, [], messagesBody()) },
     { path: HANDLERS_TS, content: tsModule(HANDLERS_TS, [{ symbol: 'Command', from: MESSAGES_TS, type: true }, { symbol: 'Query', from: MESSAGES_TS, type: true }, { symbol: 'ReturningCommand', from: MESSAGES_TS, type: true }], handlersBody()) },
@@ -109,7 +109,7 @@ function useCasesTest(model) {
   const rows = operations.map((operation) => `  ['${operation.name}', ${operation.messageClass}]`).join(',\n');
   // Con persistencia, los handlers inyectan sus puertos: el módulo de persistencia del perfil test (sin
   // base de datos) los provee, y quien los use de verdad recibe un error que lo dice.
-  const persistence = usesRelational(model);
+  const persistence = usesPersistence(model);
   const persistenceImports = persistence
     ? "\nimport { PersistenceModule } from '../src/infrastructure/persistence/persistence-module.js';\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';"
     : '';
@@ -117,7 +117,7 @@ function useCasesTest(model) {
   const scope = usesCallerScope(model);
   const scopeImport = scope ? "\nimport { SecurityModule } from '../src/infrastructure/security/security-module.js';" : '';
   // Con mensajería, los adaptadores de repositorio entregan al puente de eventos: también es dependencia.
-  const messaging = persistence && usesMessaging(model);
+  const messaging = usesRelational(model) && usesMessaging(model);
   const messagingImport = messaging ? "\nimport { MessagingModule } from '../src/infrastructure/messaging/messaging-module.js';" : '';
   // Los parámetros de despliegue (globales): los inyectan los adaptadores y los handlers que los leen.
   const parameters = usesServiceParameters(model);

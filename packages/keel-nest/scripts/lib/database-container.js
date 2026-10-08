@@ -69,3 +69,31 @@ export async function startDatabase(runtime, engine) {
 export function stopDatabase(runtime, database) {
   if (database) run(runtime, ['rm', '-f', database.name]);
 }
+
+/**
+ * MongoDB como miembro ÚNICO de un replica set: las transacciones multidocumento solo existen sobre
+ * uno, y es como arranca la infra/ de los dos generadores. Sin autenticación (la del keyfile entre
+ * miembros es de la infra/; aquí se mide lo emitido) y con el miembro anunciado en localhost, que es
+ * por donde se conecta la sonda con `directConnection`.
+ */
+export async function startMongo(runtime) {
+  const db = DATABASES.mongodb;
+  const port = await freePort();
+  const name = `keel-nest-db-mongodb-${process.pid}-${port}`;
+  const started = run(runtime, ['run', '-d', '--rm', '--name', name, '-p', `${port}:${db.port}`, db.image, '--replSet', 'rs0', '--bind_ip_all']);
+  if (started.status !== 0) throw new Error(`no arrancó ${db.image}: ${started.stderr}`);
+  const until = Date.now() + 180_000;
+  let initiated = false;
+  while (Date.now() < until) {
+    const probe = initiated
+      ? run(runtime, ['exec', name, 'mongosh', '--quiet', '--eval', 'db.hello().isWritablePrimary'])
+      : run(runtime, ['exec', name, 'mongosh', '--quiet', '--eval', "rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }] }).ok"]);
+    if (!initiated && probe.status === 0 && /1/.test(probe.stdout)) initiated = true;
+    else if (initiated && probe.status === 0 && /true/.test(probe.stdout)) {
+      return { name, port, url: `mongodb://127.0.0.1:${port}/${DB_NAME}?directConnection=true&uuidRepresentation=standard` };
+    }
+    await sleep(1000);
+  }
+  run(runtime, ['rm', '-f', name]);
+  throw new Error(`MongoDB no fue primario de su replica set en 180 s`);
+}

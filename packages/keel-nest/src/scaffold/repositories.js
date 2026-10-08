@@ -20,8 +20,10 @@ import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
 import { adapterClaimMethods, claimDependencies, portClaimMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
+import { renderDocumentAdapter } from './document-repositories.js';
 import {
-  usesRelational,
+  usesPersistence,
+  usesDocument,
   ormClass,
   ormPath,
   elementClass,
@@ -41,9 +43,9 @@ export const portPath = (entity) => classPath(PORT_DIR, portClass(entity));
 export const adapterClass = (entity) => `${entity.name}RepositoryImpl`;
 export const adapterPath = (entity) => classPath(REPO_DIR, adapterClass(entity));
 
-/** Las raíces que tienen repositorio: persistidas y raíz de su agregado. */
+/** Las raíces que tienen repositorio: persistidas y raíz de su agregado (en los dos modelos). */
 export function repositoryRoots(model) {
-  if (!usesRelational(model)) return [];
+  if (!usesPersistence(model)) return [];
   return model.entities.filter((entity) => entity.persisted && entity.isAggregateRoot);
 }
 
@@ -58,7 +60,8 @@ export function generate(model) {
   const files = [{ path: PAGE_TS, content: tsModule(PAGE_TS, [], pageBody()) }];
   for (const entity of roots) {
     files.push(renderPort(model, entity));
-    files.push(renderAdapter(model, entity));
+    // El puerto es el mismo; el adaptador, el del almacén (documental: document-repositories.js).
+    files.push(usesDocument(model) ? renderDocumentAdapter(model, entity) : renderAdapter(model, entity));
   }
   return files;
 }

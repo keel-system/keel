@@ -54,6 +54,25 @@ export function usesRelational(model) {
   return Boolean(model.layersPresent?.persistence) && model.persistenceKind !== 'document';
 }
 
+/** ¿El diseño persiste en documentos (MongoDB, incremento 12)? Lo genera document-persistence.js. */
+export function usesDocument(model) {
+  return Boolean(model.layersPresent?.persistence) && model.persistenceKind === 'document';
+}
+
+/**
+ * ¿Hay persistencia, del modelo que sea? Es lo que deciden el mediator (abre la transacción), el filtro
+ * de errores (traduce los del almacén) y el módulo raíz: las dos ramas emiten los MISMOS archivos de
+ * transacción, errores y módulo, con la misma forma, y lo de encima no distingue cuál tiene debajo.
+ */
+export function usesPersistence(model) {
+  return usesRelational(model) || usesDocument(model);
+}
+
+/** ¿Algún campo persistido se compara plegado (`compare`)? Entonces hace falta TextFold, en las dos ramas. */
+export function usesTextFold(model) {
+  return model.entities.some((entity) => entity.persisted && entity.fields.some((field) => field.fold));
+}
+
 /** El motor del stack, con PostgreSQL por defecto (la frontera solo admite postgresql y mysql). */
 export function engineOf(model) {
   return model.stack?.database === 'mysql' ? 'mysql' : 'postgresql';
@@ -67,7 +86,7 @@ export const elementClass = (entity, member) => `${entity.name}${capitalize(memb
 export function generate(model) {
   if (!usesRelational(model)) return [];
   const files = [{ path: TRANSFORMERS_TS, content: transformersFile(model) }];
-  if (model.entities.some((entity) => entity.persisted && entity.fields.some((field) => field.fold))) {
+  if (usesTextFold(model)) {
     files.push({ path: TEXT_FOLD_TS, content: textFoldFile() });
   }
   if (usesAuditableEntity(model)) files.push({ path: AUDITABLE_TS, content: auditableFile(model) });
@@ -684,7 +703,7 @@ export function enumColumn<E extends Record<string, string>>(type: E): ValueTran
   );
 }
 
-function textFoldFile() {
+export function textFoldFile() {
   return `/**
  * El plegado de un texto que se compara sin distinguir mayúsculas (y acentos): \`compare\` del diseño
  * (DSL 2.14). Lo estampa el adaptador en la columna SOMBRA al guardar, y quien filtre por ese campo
