@@ -1248,6 +1248,23 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     del modelo (keel-spring, sus cuatro notas informativas de frontera de siempre); los dos gates
     `check-idempotency.sh` nacen ROJOS en las mismas siete familias (`outboundIdempotency` nace verde: la clave la
     cablea build).
+- **11e — corridas ejecutadas y registradas (2026-10-08)** en
+  `docs/corridas/2026-10-08-stock-reservation-{nest,spring}.md`. Las dos **al 100%**: keel-nest 24/24 (los 21 del
+  documento y tres `FL-RES-001-V*` que añadió su agente) con una ronda de arbitraje de prueba, keel-spring 21/21 sin
+  arbitraje; huella **10** en las dos; sin `harnessPatches`, sin huecos de diseño. Los escenarios de clúster pasaron
+  en keel-nest con la segunda réplica estrenada, y los de reconciliación con `ageForReconciliation` y los helpers del
+  stub, sin SQL ni mappings a mano. Contrastando los informes con los proyectos, dos defectos del GATE, comunes a los
+  dos generadores y arreglados en los dos: (1) la familia `reconciliation` (y `sweepClaim`) vetaba cualquier finder
+  en el barrido, también el `findById` que relee un candidato ya reclamado; keel-spring lo escondió tras
+  `reloadClaimed(UUID)` para callarlo. Ahora se veta el finder por el campo del lifecycle o `findAll`; (2) nadie
+  miraba que el barrido se tragara los errores: keel-nest dejó dos `catch {}` (uno sobre una llamada que ya no lanza
+  por el proveedor). Ahora la familia prohíbe el `catch` sin variable (TypeScript) o de `Exception`/
+  `RuntimeException`/`Throwable` (Java). Medido con el gate regenerado sobre copias de los dos proyectos terminados
+  (seis variantes, cada una en el color esperado) y fijado en los `idempotency-check.test.js` de los dos, falsado en
+  las cuatro direcciones. La línea base de keel-spring solo cambia en `check-idempotency.sh`. Pendiente: la
+  puntuación cuenta ids `FL-*` que no están en el documento. **Con esto el incremento 11 queda cerrado en su
+  alcance**; `needs` (réplica, `onMiss`, `lastKnown`), `oauth2-client-credentials` y los compuestos en una llamada
+  siguen rechazados hasta que una fixture de la frontera los mida (incrementos 12 y 13).
 
 ### Inc. 12 — Persistencia documental (MongoDB)
 
