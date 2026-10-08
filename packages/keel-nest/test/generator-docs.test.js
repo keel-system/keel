@@ -280,3 +280,38 @@ test('docs/keel lleva el catálogo de los code del generador y el contrato del c
   }
   assert.match(fs.readFileSync(path.join(assets, 'agents', 'keel-nest-tests.md'), 'utf8'), /\{\{keel:docs\}\}\/framework-errors\.md/);
 });
+
+// Los cobros con pasarela (incremento 13d): la neutra y la de la pasarela elegida. Lo que citan existe en lo que
+// emite build con CADA pasarela, y los helpers que enseñan los exporta flow.ts.
+const paymentSkills = ['keel-nest-payments', 'keel-nest-stripe', 'keel-nest-mercadopago'];
+const sourcesOf = (skill) => {
+  const dir = path.join(assets, 'generators', 'nest', 'skills', skill);
+  return [path.join(dir, 'SKILL.md'), ...fs.readdirSync(path.join(dir, 'references')).map((name) => path.join(dir, 'references', name))];
+};
+
+test('las skills de pagos se instalan con la capa, la de la pasarela solo con ella; lo que citan existe', () => {
+  for (const gateway of ['stripe', 'mercadopago']) {
+    const other = gateway === 'stripe' ? 'mercadopago' : 'stripe';
+    const project = byPath(planFixture('payment-checkout', { stack: { paymentGateway: gateway, broker: 'rabbitmq' } }).files);
+    for (const harness of HARNESSES) {
+      assert.ok(harness.skillPath('keel-nest-payments', 'SKILL.md') in project, `${harness.id}: keel-nest-payments`);
+      assert.ok(harness.skillPath('keel-nest-payments', 'references/security.md') in project, `${harness.id}: sus referencias`);
+      assert.ok(harness.skillPath(`keel-nest-${gateway}`, 'SKILL.md') in project, `${harness.id}: keel-nest-${gateway}`);
+      assert.ok(!(harness.skillPath(`keel-nest-${other}`, 'SKILL.md') in project), `${harness.id}: no la de ${other}`);
+    }
+    const emitted = new Set(Object.keys(project));
+    for (const skill of ['keel-nest-payments', `keel-nest-${gateway}`]) {
+      for (const source of sourcesOf(skill)) {
+        const text = fs.readFileSync(source, 'utf8');
+        for (const [cited] of text.matchAll(/(?:src|test)\/[\w/.-]+\.ts/g)) assert.ok(emitted.has(cited), `${gateway}: ${path.basename(source)} cita ${cited}, que build no emite`);
+        assert.doesNotMatch(text, /\.claude\/|\.opencode\//, path.basename(source));
+      }
+    }
+    const flow = project['test/integration/support/flow.ts'];
+    for (const helper of ['gatewayAuthorizes', 'gatewayDeclines', 'gatewayDoesNotAnswer', 'gatewayReports', 'gatewayExpiresAuthorization', 'gatewayRefunds', 'sendGatewayNotice', 'sendForgedGatewayNotice', 'ageForReconciliation', 'eventually', 'stubRequestHeader']) {
+      assert.ok(flow.includes(helper), `${gateway}: flow.ts exporta ${helper}`);
+    }
+    assert.match(project['src/application/payment/payment-reconciliation.ts'], /staleBefore\(now: Date = new Date\(\)\): Date/);
+  }
+  assert.ok(!Object.keys(rabbit).some((file) => paymentSkills.some((skill) => file.includes(skill))), 'un diseño sin pagos no las recibe');
+});

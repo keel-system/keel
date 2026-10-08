@@ -1627,6 +1627,39 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   - **La frontera sigue rechazando `payments`**: el proyecto compila y arranca, pero sin el arnés (el doble de la
     pasarela en los flujos, `gatewayExpiresAuthorization`, `ageForReconciliation` del barrido) ni las skills, el agente
     no tendría con qué. Se quita en el 13d.
+- **13d — el arnés, las skills y la frontera: hechos (2026-10-08)**. **keel-nest genera ya la capa `payments`.**
+  - `src/scaffold/payment-harness.js` emite `test/integration/support/payment-gateway.ts` (sin Nest ni vitest,
+    reexportado por `flow.ts`) con la API NEUTRA del `AbstractFlowIT` de keel-spring, los mismos nombres:
+    `gatewayAuthorizes`/`Charges`/`RequiresAction`/`Declines`, `gatewayDoesNotAnswer`, `gatewayReports` (por id y por
+    referencia, también `NOT_FOUND`), `gatewayCaptures`/`Cancels`/`Refunds`, `gatewayExpiresAuthorization`,
+    `gatewayRejects`, `gatewaySavesPaymentMethod`, `gatewayCallCount`/`Requests` y `sendGatewayNotice` /
+    `sendForgedGatewayNotice` (que reciben el `flow`, porque en TypeScript no hay instancia de la clase base). Por
+    debajo programa el WireMock de `infra/` con las formas de `payment-probes.js`, casando cada cobro por su
+    referencia en el cuerpo y cada búsqueda por la query (`stubRawMapping`, nuevo en `http-stub.ts` y no
+    reexportado). El proveedor de prueba se activa también con pagos (`usesHttpStub`), y `ageForReconciliation` gana
+    el barrido de pagos en las dos ramas, relacional y documental, como en keel-spring. Los importes del doble usan
+    los decimales de la moneda de los escenarios (keel-spring multiplica por 100).
+  - Skills `keel-nest-payments` (SKILL.md + `security`, `outcomes`, `reconciliation`, `flows`, `troubleshooting`),
+    `keel-nest-stripe` y `keel-nest-mercadopago` (con su `sandbox.md`), instaladas por `stackSkills` (la de la
+    pasarela, solo con ella). Lo que cambia respecto a keel-spring: build no inyecta los puertos de pagos en los
+    handlers (el agente los añade a `static readonly inject`, igual que en keel-spring los añade al constructor), el
+    `save` antes de `authorize` es el commit porque la operación va sin transacción, y el reclamo del barrido se
+    escribe con `inNewTransaction` y un UPDATE condicional (con el ejemplo).
+  - `build` y `check` llevan la matriz de la pasarela (rechazo y aviso de lo sin verificar; `check` enseña las dos
+    pasarelas del catálogo) y `supported-features.js` ya no rechaza `payments`. Probado de punta a punta: `build` de
+    `payment-checkout` con MercadoPago genera 294 archivos y la skill de esa pasarela, no la otra.
+  - **Medido**: `test/payment-harness.test.js` EJECUTA el arnés emitido contra un WireMock MÍNIMO de `node:http`
+    (admin y respuestas por mapping) y el adaptador emitido de la misma pasarela le habla: lo que programa cada
+    helper es el desenlace que lee el adaptador, también por id con la referencia en el objeto (lo que pregunta el
+    aviso), y el aviso que firma el arnés lo acepta el verificador emitido y el falsificado no. Falsado con seis
+    sabotajes: sin casar por referencia, aviso firmado sobre otra cosa, devolución de MercadoPago sin la consulta
+    previa, y sin la referencia en el objeto de cada pasarela (este último no lo cazaba nadie hasta añadir la
+    consulta por id: la referencia solo sale de ahí cuando la pregunta es la del aviso). `npm run stub-check` gana
+    la pasarela de las dos contra un WireMock REAL: **27/27**, falsado en vivo quitando el «cuerpo contiene» (caen
+    esos dos pasos). `generator-docs.test.js` exige que lo que citan las skills exista con cada pasarela;
+    `ts-check` **12/12** con el arnés (el primer intento cazó un `2 === 0` que TypeScript da por imposible con la
+    constante inferida como literal). keel-nest 515/515.
+  - Queda **13e, la corrida** de `payment-checkout` con las dos pasarelas en los dos generadores.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

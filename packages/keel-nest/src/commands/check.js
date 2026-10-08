@@ -4,6 +4,8 @@ import { readDesignGaps } from 'keel-core/gen/design-gaps';
 import { SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { planService } from '../scaffold/index.js';
+import { gatewayCoverage } from 'keel-core/gen/payment-gateways';
+import { PAYMENT_GATEWAYS } from 'keel-core/gen/infra-catalog';
 
 /**
  * La pasada en seco: el mismo tronco que `build` —la puerta del diseño y `planService`— sin
@@ -36,6 +38,21 @@ export function check(inputPath, { strict = false } = {}) {
   console.log(pc.bold('Traducción a código'));
   if (plan.model.warnings.length === 0) console.log(pc.dim(`  Sin avisos del modelo. ${plan.files.length} archivos se generarían.`));
   for (const message of plan.model.warnings) console.log(`  ${pc.yellow('•')} ${message}`);
+
+  // Con capa payments, qué pasarelas del catálogo pueden servir este diseño: la portabilidad del diseño de un vistazo
+  // (la matriz neutral de keel-core, la misma que enseña keel-spring check).
+  if (layers.payments) {
+    console.log();
+    console.log(pc.bold('Pasarelas de pago'));
+    const coverage = gatewayCoverage(layers, Object.keys(PAYMENT_GATEWAYS));
+    for (const entry of coverage) {
+      const verdict = entry.errors.length === 0 ? pc.green('✔') : pc.red('✘');
+      console.log(`  ${verdict} ${entry.id}${entry.errors.length === 0 && entry.warnings.length > 0 ? pc.dim(` — ${entry.warnings.length} sin verificar`) : ''}`);
+      for (const message of entry.errors) console.log(`    ${pc.red('•')} ${message}`);
+      for (const message of entry.warnings) console.log(`    ${pc.yellow('•')} ${message}`);
+      notices += entry.warnings.length;
+    }
+  }
 
   // Lo que la última generación encontró y vuelve al diseñador: el design-gaps.yaml que el pipeline
   // escribe en services/<servicio>-nest/. Son avisos, no bloqueos: propuestas sobre el diseño.

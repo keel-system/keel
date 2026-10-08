@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // stub-check: el arnés del proveedor de prueba y el adaptador saliente de keel-nest contra un WireMock REAL
-// (incremento 11d).
+// (incremento 11d), y la pasarela de pago de prueba de las dos pasarelas (incremento 13d).
 //
 //   npm run stub-check --workspace packages/keel-nest [-- --keep]
 //
@@ -20,6 +20,7 @@ import { run, resolveRuntime, freePort } from './lib/database-container.js';
 import { planFixture, transpileTree } from '../test/helpers/emitted.js';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { HTTP_STUB_TS } from '../src/scaffold/http-stub-harness.js';
+import { PAYMENT_HARNESS_TS } from '../src/scaffold/payment-harness.js';
 
 const keep = process.argv.includes('--keep');
 const results = [];
@@ -129,6 +130,59 @@ try {
   await stub.stubFor('DELETE', ROUTE, 200, {});
   const broken = await adapter().cancelStock(ID).then(() => null, (error) => error);
   step('un cuerpo que viola el contrato se propaga (no es el proveedor caído)', broken?.name === 'OutboundContractError', broken?.message);
+
+  // La pasarela de pago de prueba (incremento 13d): el arnés de payment-checkout programa ESTE WireMock con la forma
+  // de cada pasarela —casando por el cuerpo y por la query, que es lo que solo el stub de verdad puede juzgar— y el
+  // adaptador emitido de esa pasarela le habla.
+  for (const gateway of ['stripe', 'mercadopago']) {
+    current = `pasarela ${gateway}`;
+    const payment = planFixture('payment-checkout', { stack: { paymentGateway: gateway, broker: 'rabbitmq' } }).files;
+    const paymentByPath = Object.fromEntries(payment.map((file) => [file.path, file.content]));
+    const dir = tmpDir(`keel-nest-stub-check-${gateway}-`);
+    fs.writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}\n');
+    for (const [file, out] of [[HTTP_STUB_TS, 'http-stub.js'], [PAYMENT_HARNESS_TS, 'payment-gateway.js']]) {
+      fs.writeFileSync(path.join(dir, out), ts.transpileModule(paymentByPath[file], { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2023 } }).outputText);
+    }
+    const harness = await import(pathToFileURL(path.join(dir, 'payment-gateway.js')).href);
+    const http = await import(pathToFileURL(path.join(dir, 'http-stub.js')).href);
+    const paymentTree = transpileTree(payment, { stubs: { '@nestjs/common': NEST_STUB } });
+    const { PaymentGatewayHttp } = await paymentTree.load('src/infrastructure/payment/payment-gateway-http.ts');
+    const Adapter = gateway === 'stripe' ? 'StripePaymentGateway' : 'MercadopagoPaymentGateway';
+    const gatewayAdapter = new (await paymentTree.load(`src/infrastructure/payment/${gateway}/${gateway}-payment-gateway.ts`))[Adapter](
+      new PaymentGatewayHttp({ baseUrl, apiKey: 'k', webhookSecret: 'w', connectTimeoutMs: 1000, readTimeoutMs: 1000, noticeToleranceSeconds: 300, unansweredAfterSeconds: 5 })
+    );
+    const { ChargeRequest } = await paymentTree.load('src/domain/payment/charge-request.ts');
+    const { PaymentSource } = await paymentTree.load('src/domain/payment/payment-source.ts');
+    const { Decimal } = await paymentTree.load('src/domain/support/decimal.ts');
+    const charge = (reference) => new ChargeRequest(reference, Decimal.parse('25.90'), 'BRL', PaymentSource.token('tok_test'));
+
+    await http.resetStubs();
+    await harness.gatewayAuthorizes('pay-1');
+    await harness.gatewayDeclines('pay-2', 'insufficientFunds');
+    const authorized = await gatewayAdapter.authorize(charge('pay-1'));
+    const declined = await gatewayAdapter.authorize(charge('pay-2'));
+    step(`${gateway}: cada cobro casa con SU referencia (bodyPatterns del stub real)`, authorized.status === 'AUTHORIZED' && declined.status === 'FAILED' && declined.failureReason === 'insufficientFunds', `${authorized.status} / ${declined.status} ${declined.failureReason}`);
+    const [sent] = await harness.gatewayRequests(harness.GatewayCall.CHARGE);
+    step(`${gateway}: la clave de idempotencia viajó en la cabecera de la pasarela`, http.stubRequestHeader(sent, gateway === 'stripe' ? 'Idempotency-Key' : 'X-Idempotency-Key') === 'pay-1:authorize');
+
+    await harness.gatewayReports('pay-3', 'CAPTURED');
+    const byId = await gatewayAdapter.status(null, harness.gatewayIdFor('pay-3'));
+    const byReference = await gatewayAdapter.status('pay-3', null);
+    step(`${gateway}: lo que reporta, por id (con su referencia) y por referencia (queryParameters del stub real)`, byId.status === 'CAPTURED' && byId.reference === 'pay-3' && byReference.status === 'CAPTURED', `${byId.status} ${byId.reference} / ${byReference.status}`);
+    await harness.gatewayReports('pay-4', 'NOT_FOUND');
+    step(`${gateway}: NOT_FOUND por los dos caminos`, (await gatewayAdapter.status('pay-4', null)).status === 'NOT_FOUND' && (await gatewayAdapter.status('pay-4', harness.gatewayIdFor('pay-4'))).status === 'NOT_FOUND');
+
+    await harness.gatewayExpiresAuthorization('pay-5');
+    step(`${gateway}: la autorización caducada es un cobro anulado`, (await gatewayAdapter.capture('pay-5', harness.gatewayIdFor('pay-5'))).status === 'CANCELED');
+    await harness.gatewayRefunds('pay-6', '5.00');
+    const refunded = await gatewayAdapter.refund('pay-6', harness.gatewayIdFor('pay-6'), Decimal.parse('5.00'), 'BRL');
+    step(`${gateway}: la devolución parcial`, refunded.status === 'REFUNDED' && refunded.refundedAmount?.toString() === '5.00', `${refunded.status} ${refunded.refundedAmount}`);
+
+    await http.resetStubs();
+    await harness.gatewayDoesNotAnswer(harness.GatewayCall.CHARGE);
+    const unanswered = await gatewayAdapter.authorize(charge('pay-7')).then(() => null, (error) => error);
+    step(`${gateway}: sin respuesta, en duda y sin reintento`, unanswered?.name === 'PaymentGatewayUnavailableException' && (await harness.gatewayCallCount(harness.GatewayCall.CHARGE)) === 1, unanswered?.message);
+  }
 } catch (error) {
   step(`${current}: el paso no llegó a terminar`, false, error instanceof Error ? error.message : String(error));
 } finally {

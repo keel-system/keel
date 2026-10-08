@@ -47,6 +47,17 @@ function agingTargets(model) {
       }
     }
   }
+  // El barrido de la capa payments: su condición de entrada es la marca de espera del cobro, rancia, y la clave es el
+  // nombre del barrido. Como en keel-spring.
+  const payments = model.payments;
+  if (payments?.reconciliation?.sweep && payments.record?.awaitingSince) {
+    const entity = (model.entities ?? []).find((candidate) => candidate.name === payments.record.entity);
+    const clockField = entity?.collectionName ? documentShape(model, entity).find((entry) => entry.member === payments.record.awaitingSince)?.name : null;
+    if (clockField) {
+      if (!targets.has(payments.reconciliation.sweep)) targets.set(payments.reconciliation.sweep, []);
+      targets.get(payments.reconciliation.sweep).push({ collection: entity.collectionName, clockField });
+    }
+  }
   return targets;
 }
 

@@ -311,6 +311,8 @@ test('el mismo diseño genera lo mismo con cada pasarela, salvo su adaptador y s
   const differing = [...new Set([...stripe.keys(), ...mercadopago.keys()])].filter((file) => stripe.get(file) !== mercadopago.get(file));
   const allowed = [
     /^src\/infrastructure\/payment\/(stripe|mercadopago)\//,
+    // La sección del arnés que imita su protocolo (la API que usan los escenarios es la misma).
+    /^test\/integration\/support\/payment-gateway\.ts$/,
     // El módulo nombra el adaptador elegido.
     /^src\/infrastructure\/payment\/payments-module\.ts$/,
     // Las variables de su credencial y su URL pública, fuera de local y test.

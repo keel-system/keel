@@ -28,6 +28,7 @@ import { closingCredential, identitySection, usesIdentityHarness } from './ident
 import { messagingHarnessImports, messagingHarnessSection, usesMessagingHarness } from './messaging-harness.js';
 import * as httpStubHarness from './http-stub-harness.js';
 import * as mailHarness from './mail-harness.js';
+import * as paymentHarness from './payment-harness.js';
 import { documentHarnessSection, documentProbe } from './document-harness.js';
 import { usesNestOutbox } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
@@ -51,6 +52,7 @@ export function generate(model) {
     { path: CHECK_FLOWS_SH, content: checkFlowsScript() },
     // El proveedor de prueba (incremento 11d): en su propio módulo, sin Nest, y reexportado por flow.ts.
     ...httpStubHarness.generate(model),
+    ...paymentHarness.generate(model),
     // El buzón de prueba (incremento 12e): en su propio módulo, sin Nest, y reexportado por flow.ts.
     ...mailHarness.generate(model)
   ];
@@ -170,7 +172,10 @@ import { forgetSequences } from './http-stub.js';
 
 // El proveedor de prueba (WireMock de infra/): los flujos lo programan con estos helpers, importados de aquí.
 export { ${httpStubHarness.HTTP_STUB_EXPORTS.join(', ')} } from './http-stub.js';
-export type { StubRequest } from './http-stub.js';` : ''}${mailHarness.generate(model).length > 0 ? `
+export type { StubRequest } from './http-stub.js';` : ''}${paymentHarness.usesPaymentHarness(model) ? `
+
+// La pasarela de pago de prueba (el mismo WireMock, hablando su protocolo): la misma API que el arnés de keel-spring.
+export { ${paymentHarness.PAYMENT_HARNESS_EXPORTS.join(', ')} } from './payment-gateway.js';` : ''}${mailHarness.generate(model).length > 0 ? `
 
 // El buzón de prueba (Mailpit de infra/): los flujos afirman sobre el correo con estos helpers, importados de aquí.
 export { ${mailHarness.MAIL_HARNESS_EXPORTS.filter((name) => name !== 'MailMessageView').join(', ')} } from './mail.js';

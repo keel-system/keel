@@ -21,9 +21,12 @@ import { engineOf, usesRelational } from './persistence-entities.js';
 
 export const HTTP_STUB_TS = 'test/integration/support/http-stub.ts';
 
-/** ¿Hay proveedor de prueba? Con clientes HTTP salientes, como en keel-spring (la pasarela llega en el 13). */
+/**
+ * ¿Hay proveedor de prueba? Con clientes HTTP salientes y con la capa payments, cuya pasarela de prueba es el mismo
+ * WireMock hablando el protocolo de la elegida. Como en keel-spring.
+ */
 export function usesHttpStub(model) {
-  return Boolean(model.layersPresent?.httpClients && (model.httpClients ?? []).length > 0);
+  return Boolean((model.layersPresent?.httpClients && (model.httpClients ?? []).length > 0) || model.payments);
 }
 
 export function generate(model) {
@@ -46,7 +49,7 @@ export const HTTP_STUB_EXPORTS = [
 ];
 
 function httpStubTs(model) {
-  const clients = model.httpClients.map((client) => client.id).join(', ');
+  const clients = [...(model.httpClients ?? []).map((client) => client.id), ...(model.payments ? ['la pasarela de pago'] : [])].join(', ');
   return `/**
  * El proveedor de prueba: el WireMock de infra/docker-compose.yaml, al que apuntan las \`base-url\` de los
  * clientes salientes en el perfil \`local\` (${clients}). Cada flujo programa en su Given lo que responde, y el
@@ -162,6 +165,14 @@ export function stubRequestHeader(request: StubRequest, name: string): string | 
   return found === undefined ? null : String(found[1]);
 }
 
+/**
+ * Un mapping con el criterio y la respuesta ya escritos en el vocabulario del stub (cuerpo o query que tienen
+ * que contener algo). No se reexporta a los flujos: lo usa el arnés de la pasarela de pago (payment-gateway.ts).
+ */
+export async function stubRawMapping(request: object, response: object): Promise<void> {
+  await stubAdmin(${tsString(HTTP_STUB_ENDPOINTS.mappings)}, { request, response });
+}
+
 /** Borra los mappings, el log de peticiones y las secuencias. Lo hace el reset de cada flujo. */
 export async function resetStubs(): Promise<void> {
   SEQUENCED.clear();
@@ -230,6 +241,17 @@ function agingTargets(model) {
         if (!targets.has(activation.name)) targets.set(activation.name, []);
         targets.get(activation.name).push(target);
       }
+    }
+  }
+  // El barrido de la capa payments no es un `reconciledBy` de activations, pero su condición de entrada es la
+  // misma —la marca de espera del cobro, rancia— y tampoco se alcanza de otra forma. La clave es el nombre del
+  // barrido, como en keel-spring.
+  const payments = model.payments;
+  if (payments?.reconciliation?.sweep && payments.record?.awaitingSince) {
+    const entity = (model.entities ?? []).find((candidate) => candidate.name === payments.record.entity);
+    if (entity?.tableName) {
+      if (!targets.has(payments.reconciliation.sweep)) targets.set(payments.reconciliation.sweep, []);
+      targets.get(payments.reconciliation.sweep).push({ table: entity.tableName, awaitingField: payments.record.awaitingSince });
     }
   }
   return targets;

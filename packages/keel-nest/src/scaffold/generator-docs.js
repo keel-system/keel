@@ -22,6 +22,7 @@ import { usesSchemaBaseline } from './schema-baseline.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
+import { usesPayments } from './payments.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'nest');
 const agentsSourceDir = path.join(assetsDir, 'agents');
@@ -56,6 +57,8 @@ export function stackSkills(model) {
   if (usesHttpClients(model)) skills.push('keel-nest-httpclient');
   // El correo saliente (incremento 12e): el envío desde el handler, la guarda y los flujos del buzón.
   if (usesMail(model)) skills.push('keel-nest-mail');
+  // Los cobros con pasarela (incremento 13d): la neutra y la de la pasarela elegida, como keel-spring.
+  if (usesPayments(model)) skills.push('keel-nest-payments', `keel-nest-${model.payments.gateway.id}`);
   return skills;
 }
 
