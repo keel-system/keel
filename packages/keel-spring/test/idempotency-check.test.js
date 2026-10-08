@@ -1057,3 +1057,41 @@ ${body}
   );
   assert.ok(flagged(run(project).out), 'la sobrecarga de String con el id en una variable tenía que dar rojo');
 });
+
+// Corrida stock-reservation (2026-10-08). El gate vetaba en el barrido CUALQUIER finder, también el findById que
+// relee un candidato YA reclamado para ver si ganó el camino feliz, y el agente lo escondió detrás de un método con
+// otro nombre para callarlo. Lo que el reclamo evita es leer POR ESTADO (o findAll), y eso es lo que se veta ahora. Y
+// la otra mitad, que ninguna familia miraba: el barrido no se traga los errores con un catch de Exception.
+test('reconciliation: releer por id un candidato reclamado pasa; leer por estado o capturar Exception, no', (t) => {
+  const project = build('stock-reservation');
+  const handler = javaFile(project, 'ReconcileReservationsCommandHandler.java');
+  const body = (loop, capture) => (src) =>
+    src.replace(
+      'throw new UnsupportedOperationException("TODO: reconcileReservations");',
+      `for (Reservation candidate : ${loop}) {
+            try {
+                Reservation current = reservationRepository.findById(candidate.getId()).orElse(null);
+                if (current == null) {
+                    continue;
+                }
+                reservationRepository.save(current);
+            } catch (${capture} raceResolved) {
+                continue;
+            }
+            inventoryClient.cancelStock(candidate.getOrderId());
+        }`
+    );
+  const header = (out, text) => out.split(/\r?\n/).some((line) => /^\s*\[reconciliation\]/.test(line) && line.includes(text));
+  const claimed = 'reservationRepository.claimForReconcileReservationsReserveStock()';
+
+  const correct = mutating(project, handler, body(claimed, 'IllegalStateException'));
+  if (correct === null) return t.skip('sin bash');
+  assert.ok(!header(correct.out, 'reclamo de inventory.reserveStock'), correct.out);
+  assert.ok(!header(correct.out, 'reconcileReservations ('), correct.out);
+
+  const byState = mutating(project, handler, body('reservationRepository.findAllByStatus(ReservationStatus.AWAITING_STOCK)', 'IllegalStateException'));
+  assert.ok(header(byState.out, 'reclamo de inventory.reserveStock'), byState.out);
+
+  const swallowing = mutating(project, handler, body(claimed, 'Exception'));
+  assert.ok(header(swallowing.out, 'reconcileReservations ('), swallowing.out);
+});

@@ -153,7 +153,7 @@ function reconciliationChecks(model) {
         class: fileName(operation.handlerClass),
         require: ['\\.?' + claim.method + '\\s*\\('],
         // La lectura por estado es EXACTAMENTE el patrón que el reclamo evita.
-        forbid: ['\\.find(All)?By[A-Za-z]*\\s*\\('],
+        forbid: stateReadingFinder(model, [claim.entity]),
         why:
           `el barrido corre en TODAS las réplicas: toma su lote con ${claim.method}(), que build generó en ${claim.entity}Repository ` +
           '—una marca persistida que caduca, y solo lo que esta réplica se llevó—, no con un finder ni con un reclamo aparte'
@@ -166,9 +166,12 @@ function reconciliationChecks(model) {
       group: 'reconciliation',
       subject: operation.name,
       class: fileName(operation.handlerClass),
-      forbid: ['TODO'],
+      // Y sin tragarse los errores: un catch SIN variable no puede distinguir la carrera con el camino feliz (la
+      // transición rechazada, el conflicto de versión) de un bug propio, y la llamada ya no lanza por el proveedor
+      // (su fallback lo absorbe). Lo destapó la corrida stock-reservation (2026-10-08): dos catch {} en el barrido.
+      forbid: ['TODO', 'catch\\s*\\{'],
       require: [],
-      why: `barre ${operation.reconciles.map((r) => `${r.dependency}.${r.activation.name}`).join(', ')}: el barrido tiene que estar escrito, no dejado en un stub`
+      why: `barre ${operation.reconciles.map((r) => `${r.dependency}.${r.activation.name}`).join(', ')}: el barrido tiene que estar escrito, no dejado en un stub, y sin catch que se lo trague todo — la carrera con el camino feliz se captura por su excepción concreta y se relanza lo demás`
     });
   }
   if (pending.length > 0) {
@@ -231,6 +234,19 @@ function reconciliationChecks(model) {
 }
 
 const allOperations = (model) => (model.services ?? []).flatMap((service) => service.operations ?? []);
+
+/**
+ * La lectura del estado de partida que el reclamo existe para evitar: un finder por el campo del lifecycle de la
+ * entidad reclamada (findByStatus…, findAllByStatusAnd…) o un findAll. NO un finder cualquiera: releer por id un
+ * candidato YA reclamado, para ver si el camino feliz ganó entre el reclamo y la transición, es legítimo, y
+ * prohibirlo empujó a la corrida stock-reservation de keel-spring (2026-10-08) a esconder ese findById detrás de
+ * un método con otro nombre para callar el gate.
+ */
+function stateReadingFinder(model, entityNames) {
+  const fields = [...new Set(entityNames.map((name) => (model.entities ?? []).find((entity) => entity.name === name)?.lifecycle?.field).filter(Boolean))];
+  const byState = fields.map((field) => '\\.find(All)?By[A-Za-z]*' + capitalize(field) + '[A-Za-z]*\\s*\\(');
+  return [['\\.findAll\\s*\\(', ...byState].join('|')];
+}
 
 /**
  * Con RabbitMQ, las suscripciones de la misma fuente comparten cola: UN listener que enruta por el tipo
@@ -427,7 +443,7 @@ function sweepClaimChecks(model) {
         class: fileName(operation.handlerClass),
         require: [claims.map((claim) => '\\.?' + claim.method + '\\s*\\(').join('|')],
         // Leer el estado de partida con un finder es EXACTAMENTE el fallo: la misma página en todas las réplicas.
-        forbid: ['\\.find(All)?By[A-Za-z]*\\s*\\('],
+        forbid: stateReadingFinder(model, claims.map((claim) => claim.entity)),
         why:
           `el barrido corre en TODAS las réplicas: RECLAMA su lote con ${claims.map((claim) => `${claim.method}()`).join(' / ')}, ` +
           'que build generó en el puerto, no lo lee con un finder'

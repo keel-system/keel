@@ -185,7 +185,7 @@ function sweepClaimChecks(model) {
         // fallo: findByStatusOrderBy…(QUEUED, PageRequest…) devuelve la misma página en
         // todas las réplicas. Un finder derivado en el handler de un barrido que TIENE su
         // reclamo generado no tiene ningún uso legítimo que el reclamo no cubra mejor.
-        forbid: [String.raw`\.find(All)?By[A-Za-z]*\s*\(`],
+        forbid: stateReadingFinder(model, claims.map((claim) => claim.entity)),
         why:
           `el barrido corre en TODAS las réplicas: tiene que RECLAMAR su lote llamando a ` +
           `${claims.map((claim) => `${claim.method}()`).join(' / ')}, que build generó en el puerto, ` +
@@ -590,6 +590,19 @@ function naturalKeyChecks(model) {
 // del modelo: aplanarlas aquí evita repetir el doble bucle en cada familia.
 const allOperations = (model) => (model.services ?? []).flatMap((service) => service.operations ?? []);
 
+/**
+ * La lectura del estado de partida que el reclamo existe para evitar: un finder por el campo del lifecycle de la
+ * entidad reclamada (findByStatus…, findAllByStatusAnd…) o un findAll. NO un finder cualquiera: releer por id un
+ * candidato YA reclamado, para ver si el camino feliz ganó entre el reclamo y la transición, es legítimo, y
+ * prohibirlo empujó a la corrida stock-reservation de keel-spring (2026-10-08) a esconder ese findById detrás de
+ * un método con otro nombre para callar el gate.
+ */
+function stateReadingFinder(model, entityNames) {
+  const fields = [...new Set(entityNames.map((name) => (model.entities ?? []).find((entity) => entity.name === name)?.lifecycle?.field).filter(Boolean))];
+  const byState = fields.map((field) => String.raw`\.find(All)?By[A-Za-z]*` + capitalize(field) + String.raw`[A-Za-z]*\s*\(`);
+  return [[String.raw`\.findAll\s*\(`, ...byState].join('|')];
+}
+
 // 3. Compensación. No hay clase que comprobar porque build no genera ninguna: lo que se
 //    comprueba es que el handler que la ejecuta esté escrito y llegue al proveedor.
 /**
@@ -844,7 +857,7 @@ function reconciliationChecks(model) {
         require: [`\\.?${claim.method}\\s*\\(`],
         // La lectura por estado es EXACTAMENTE el patrón que el reclamo evita: devuelve la
         // misma página en todas las réplicas, y aquí actuar es llamar a otro servidor.
-        forbid: ['\\.find(All)?By[A-Za-z]*\\s*\\('],
+        forbid: stateReadingFinder(model, [claim.entity]),
         why:
           `el barrido corre en TODAS las réplicas: tiene que tomar su lote con ${claim.method}(), que build generó en ` +
           `${claim.entity}Repository —reclama con una marca persistida que caduca, y devuelve solo lo que esta ` +
@@ -865,8 +878,11 @@ function reconciliationChecks(model) {
       // ahí para salir en verde deja el diseño peor de lo que estaba. El umbral se
       // comprueba donde de verdad puede estar —el adaptador que ejecuta el reclamo—, en
       // el check de abajo y sobre el MISMO archivo que reclama.
-      forbid: ['TODO|UnsupportedOperationException'],
-      why: `barre ${operation.reconciles.map((r) => `${r.dependency}.${r.activation.name}`).join(', ')}: el barrido tiene que estar escrito, no dejado en un stub`
+      // Y sin tragarse los errores: el fallback de la llamada ya absorbe los del proveedor, y la carrera con el camino
+      // feliz es una excepción concreta (la de la transición o la del conflicto de versión). Capturar Exception,
+      // RuntimeException o Throwable esconde además un bug propio — el disfraz que ya costó meses en el fallback.
+      forbid: ['TODO|UnsupportedOperationException', String.raw`catch\s*\(\s*(final\s+)?(Exception|RuntimeException|Throwable)\b`],
+      why: `barre ${operation.reconciles.map((r) => `${r.dependency}.${r.activation.name}`).join(', ')}: el barrido tiene que estar escrito, no dejado en un stub, y sin capturar Exception, RuntimeException ni Throwable — la carrera con el camino feliz se captura por su excepción concreta`
     });
   }
   // Y lo único que decide si el barrido es correcto con varias réplicas: que la

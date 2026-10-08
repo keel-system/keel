@@ -172,3 +172,24 @@ test('stock-reservation: con el uso correcto salen VERDES; barrer con un finder 
   const halfway = runGate('stock-reservation', { [STOCK.reconcile]: handleWith(sweepBody), [STOCK.release]: handleWith(releaseBody) });
   assert.equal(verdicts(halfway.out).compensation, 'KO');
 });
+
+// Corrida stock-reservation (2026-10-08): releer por id un candidato YA reclamado es legítimo (el gate lo vetaba y
+// keel-spring lo escondió tras otro nombre), y un catch SIN variable en el barrido se traga cualquier error (lo dejó
+// keel-nest, dos veces, y ninguna familia lo miraba).
+test('stock-reservation: releer por id pasa; un catch {} en el barrido lo pone rojo', (t) => {
+  const reload = sweepBody.replace(
+    "      reservation.release('sin respuesta del almacén');",
+    "      const current = await this.reservationRepository.findById(reservation.id);\n      if (current === null) continue;\n      reservation.release('sin respuesta del almacén');"
+  );
+  const reloading = runGate('stock-reservation', { [STOCK.reconcile]: handleWith(reload), [STOCK.release]: handleWith(releaseBody), [STOCK.reservation]: withRelease });
+  if (reloading === null) return t.skip('sin bash en el PATH');
+  assert.equal(verdicts(reloading.out).reconciliation, 'OK', reloading.out);
+
+  const swallow = sweepBody.replace(
+    '      await this.inventoryClient.cancelStock(reservation.id);',
+    '      try {\n        await this.inventoryClient.cancelStock(reservation.id);\n      } catch {\n      }'
+  );
+  const swallowing = runGate('stock-reservation', { [STOCK.reconcile]: handleWith(swallow), [STOCK.release]: handleWith(releaseBody), [STOCK.reservation]: withRelease });
+  assert.equal(verdicts(swallowing.out).reconciliation, 'KO');
+  assert.match(swallowing.out, /\[reconciliation\] reconcileReservations \(.*catch/);
+});
