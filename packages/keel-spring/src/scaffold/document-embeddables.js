@@ -18,38 +18,15 @@ import { documentAnnotations, needsFieldType } from '../lib/type-mapper.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { capitalize } from './entities.js';
 import { DOC_PKG } from './document-entities.js';
+import { documentValueObjects } from 'keel-core/gen/document';
 
 export function generate(model) {
   if (!model.layersPresent.persistence || model.persistenceKind !== 'document') return [];
   return [...documentValueObjects(model)].map((vo) => renderVoDocument(model, vo));
 }
 
-/**
- * Value objects que necesitan espejo documental: los que alcanza cualquier campo de
- * una entidad persistida, transitivamente a través de los value objects anidados.
- * Devuelve un Set con orden de descubrimiento estable (el de las entidades).
- */
-export function documentValueObjects(model) {
-  const byName = new Map(model.valueObjects.map((vo) => [vo.name, vo]));
-  const reached = new Set();
-
-  const visit = (name) => {
-    const vo = byName.get(name);
-    if (!vo || reached.has(vo)) return;
-    reached.add(vo);
-    for (const sub of vo.fields) {
-      if (sub.kind === 'composite') visit(sub.javaType);
-    }
-  };
-
-  for (const entity of model.entities.filter((e) => e.persisted)) {
-    for (const field of entity.fields) {
-      if (field.kind !== 'composite') continue;
-      visit(field.list ? field.elementJavaType : field.javaType);
-    }
-  }
-  return reached;
-}
+// Qué value objects tienen subdocumento es una lectura del diseño que comparte keel-nest.
+export { documentValueObjects };
 
 function renderVoDocument(model, vo) {
   const imports = new Set(['org.springframework.data.mongodb.core.mapping.Field']);

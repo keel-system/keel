@@ -135,6 +135,23 @@ export {
   relievingOperations
 } from './relational.js';
 export {
+  DOCUMENT_STORAGE,
+  DOCUMENT_ID,
+  storageOf,
+  documentValueObjects,
+  valueObjectShape,
+  documentShape,
+  documentPathsFor,
+  naturalKeyIndexName,
+  documentIndexSpecs,
+  partialDocumentIndexSpecs,
+  nestedIndexWarnings,
+  storeDocumentIndexes,
+  documentIndexes,
+  INDEX_EXPORT_FILE,
+  exportIndexesScript
+} from './document.js';
+export {
   constraintErrors,
   raceOnlyConstraint,
   declaredConcurrencyError,

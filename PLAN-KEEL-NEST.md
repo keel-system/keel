@@ -1273,6 +1273,56 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   reclamo con `findOneAndUpdate`, outbox e idempotencia documentales, `export-indexes.sh`.
 - **Puerta**: `mongo-check`, `index-check` y `mapping-check` documentales; el par
   `notification-mailer` / `-mongo` genera en las dos ramas.
+- **Evaluación al abrirlo (2026-10-08, sin código todavía)**. Línea base de keel-spring verde (44 combinaciones,
+  10 857 archivos).
+  - **Sujetos en el repo**: `job-dispatch-mongo` (dominio, casos de uso, API y persistencia: clave natural con su
+    error, índices del barrido, `schedule` con reclamo y rescate), `inspection-reports` (más mensajería: outbox y
+    suscripciones, hijas anidadas, un campo `date`), `notification-mailer-mongo` (el del MVP: `--ready` 10/11 en la
+    fixture —el `DESIGN.md` vive en `fixtures/design-docs/`—, pero declara `mail`, que es del incremento 13) y
+    `asset-vault` (`storage` y `needs`: incremento 13).
+  - **Lo de keel-spring a portar**: `document-{entities,embeddables,repositories,indexes,config}.js` (1 337 líneas) y
+    las ramas documentales repartidas en `outbox.js`, `idempotency.js`, `http-idempotency.js`, `claim.js`
+    (`findOneAndUpdate`), `reconciliation-claim.js`, `mediator.js` (el `WriteConflict` —etiqueta
+    `TransientTransactionError` o código 112— reintentado), `controllers.js` (E11000 → error del diseño buscando el
+    nombre del índice), `config.js` (URI con `uuidRepresentation=standard`, `auto-index-creation` apagada) e
+    `integration-tests.js` (sobre `keel-core/gen/mongo-probes.js`, ya neutral). La `infra/` con replica set ya es
+    neutral (`infra-catalog.js`). Checks: `mongo-check`, y las ramas documentales de `index-check`, `mapping-check`,
+    `claim-check` y `store-check`.
+  - **La representación física es contrato** (la lee el otro servidor y la miden los checks): campos en
+    `snake_case`, `_id` = id de la raíz, UUID como binario subtipo 4, `decimal` como `Decimal128` (nunca texto: se
+    ordenaría lexicográficamente), `timestamp` como `Date` (milisegundos), `date` como `Date` a medianoche —Spring
+    la toma en la zona del sistema: riesgo a medir—, enum por el nombre de su constante, value object como
+    subdocumento, hija anidada en la raíz, relación a otro agregado como `<relación>_id`, `lock_version`, auditoría en
+    `created_at`/`updated_at`/`created_by`/`updated_by`. Spring escribe además `_class`: no es contrato (lee sin él)
+    y keel-nest no lo escribe.
+  - **Tramos propuestos**: 12a lo neutral (el documento como datos, las rutas, los índices del diseño y de los
+    almacenes, `export-indexes.sh`) con keel-spring consumiéndolo byte a byte igual; 12b la persistencia documental
+    en keel-nest (driver oficial `mongodb`, sesión y transacción con `AsyncLocalStorage`, versión comprobada en el
+    filtro, `WriteConflict` reintentado, índices al arrancar, E11000 → error del diseño, perfil `test` sin base) con
+    paridad contra lo que EMITE keel-spring y `db-check` sobre MongoDB; 12c los almacenes documentales (outbox con
+    `claimed_at`, `processed_event`, `idempotency_record`, `reconciliation_claim`, reclamos y rescate con
+    `findOneAndUpdate`, purgas); 12d el arnés (`mongo-probes` en `flow.ts`, `harness-check` con un sujeto documental)
+    y la skill `keel-nest-mongodb`; 12e la corrida. **Sujeto de 12e por decidir**: `notification-mailer-mongo` exige
+    adelantar `mail` del incremento 13; la alternativa es llevar `job-dispatch-mongo` o `inspection-reports` a
+    `--ready`, como `stock-reservation` en 11e.
+- **12a — lo neutral, hecho (2026-10-08)**. `keel-core/gen/document.js`, extraído de keel-spring sin cambiar un byte de
+  lo que emite (`golden-digest --check`: 44 combinaciones, 10 857 archivos idénticos):
+  - **El documento como datos**: `DOCUMENT_STORAGE` (la representación física de cada base del DSL), `documentShape`
+    (los campos de primer nivel de cada documento en el orden del diseño: `_id`, escalares con su tipo BSON, sombra
+    plegada, subdocumento, array, referencia, versión y auditoría de política), `valueObjectShape` y
+    `documentValueObjects`. El `_id` también en una hija anidada: el mapeador de Spring proyecta TODA propiedad id
+    sobre `_id`, y el otro servidor tiene que leerla ahí.
+  - **Rutas e índices**: `documentPathsFor`, `documentIndexSpecs`, `partialDocumentIndexSpecs` (keel-spring le añade
+    la clase del espejo), `nestedIndexWarnings`, `storeDocumentIndexes` (outbox, processed_event, idempotency_record
+    y reconciliation_claim, con un `store` estable en vez del nombre de la variable Java), `documentIndexes` y
+    `exportIndexesScript` con las dos piezas que nombra como parámetro de la plataforma.
+  - **Medido**: `keel-core/test/document.test.js` (10, sobre un diseño sintético con todas las formas de miembro) y
+    `keel-spring/test/document-parity.test.js`, que ata los `@Field`/`@Id` de cada `XxxDocument` y de cada espejo
+    de value object —nombre, orden y `DECIMAL128`— y la colección de cada raíz a `documentShape` en las cuatro
+    fixtures documentales. Falsado con tres sabotajes en keel-core (decimal como texto, la hija sin `_id`, sin
+    auditoría de política): cada uno cae en la fixture que lo tiene y solo en ella. Y la línea base falsada a su vez:
+    renombrar el prefijo del índice de la clave natural cambia 9 archivos de keel-spring. keel-core 1139/1139,
+    keel-spring 1646/1646.
 
 ### Inc. 13 — Capas de borde: cache, storage, correo, pagos
 
