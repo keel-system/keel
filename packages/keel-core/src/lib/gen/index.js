@@ -33,6 +33,7 @@ export {
   kafkaListenerRetry
 } from './dead-letter.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
+export { CONTRACT_DOCS, contractDocs } from './contract-docs.js';
 export {
   HTTP_STUB_ADMIN,
   HTTP_STUB_ENDPOINTS,

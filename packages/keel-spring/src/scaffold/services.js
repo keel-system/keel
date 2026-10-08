@@ -306,7 +306,7 @@ function renderMessage(model, operation) {
   });
 
   const componentBlock = rendered.length > 0 ? `\n${rendered.join(',\n')}\n` : '';
-  const body = `${javadoc(operation.description, '')}public record ${operation.messageClass}(${componentBlock}) implements ${contracts.message} {${scaleRounding(operation.messageClass, components, imports)}${idempotencyScopeMethod(operation)}
+  const body = `${javadoc(operation.description, '')}public record ${operation.messageClass}(${componentBlock}) implements ${contracts.message} {${compactConstructor(operation, components, fromPath, imports)}${idempotencyScopeMethod(operation)}
 }`;
 
   return {
@@ -1006,24 +1006,46 @@ function naturalKeyConflict(model, operation) {
  * camino que persiste: la respuesta del mismo comando devolvería el valor sin redondear.
  * `reject` no necesita nada aquí: lo dice el `@Digits` del componente.
  */
-function scaleRounding(recordName, components, imports) {
+/**
+ * El constructor compacto del mensaje: lo que la entrada fija antes de que nadie lo lea.
+ *
+ *   · `constraints.scalePolicy: round` — el importe se redondea a su escala al entrar;
+ *   · una LISTA no informada se lee como lista vacía, nunca null (contrato del cable, `list-never-null` de
+ *     keel-core/gen/wire.js). Es lo que ya hacía el lector de keel-nest; aquí dependía de que el agente lo
+ *     recordara al construir el agregado (corrida notification-mailer-mongo, 2026-10-08). En un PATCH la lista
+ *     opcional del cuerpo es de tres estados (JsonNullable): ausente significa «no tocar», y no se toca.
+ */
+function compactConstructor(operation, components, fromPath, imports) {
+  const lists = components.filter(
+    (component) => component.list && !component.resolvedIdentity && !component.file && !isWrappedInJsonNullable(operation, component, fromPath)
+  );
+  const rounding = scaleRoundingLines(components, imports);
+  if (lists.length === 0 && rounding.length === 0) return '';
+  const header = [
+    ...(rounding.length > 0 ? ['    // constraints.scalePolicy: round — el importe se redondea a su escala al entrar.'] : []),
+    ...(lists.length > 0 ? ['    // Una lista no informada es una lista vacía, nunca null (contrato del cable).'] : [])
+  ];
+  const lines = [...rounding, ...lists.map((component) => `        ${component.name} = ${component.name} == null ? List.of() : ${component.name};`)];
+  if (lists.length > 0) imports.add('java.util.List');
+  return `
+
+${header.join('\n')}
+    public ${operation.messageClass} {
+${lines.join('\n')}
+    }`;
+}
+
+function scaleRoundingLines(components, imports) {
   const rounded = components.filter(
     (component) =>
       component.kind !== 'composite' && component.numeric?.decimal && component.numeric.scalePolicy === 'round'
   );
-  if (rounded.length === 0) return '';
-  imports.add('java.math.RoundingMode');
-  const lines = rounded.map(
+  if (rounded.length > 0) imports.add('java.math.RoundingMode');
+  return rounded.map(
     (component) => `        if (${component.name} != null) {
             ${component.name} = ${component.name}.setScale(${component.numeric.scale}, RoundingMode.HALF_UP);
         }`
   );
-  return `
-
-    // constraints.scalePolicy: round — el importe se redondea a su escala al entrar.
-    public ${recordName} {
-${lines.join('\n')}
-    }`;
 }
 
 /**

@@ -1507,6 +1507,23 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     pendiente) y uno del contrato del cable (una lista no informada viaja como `[]` en los dos, pero `wire-contract.md` no
     lo escribe: pendiente).
   - Suites: keel-core 1140/1140, keel-nest 430/430, keel-spring 1650/1650. **Con esto el incremento 12 queda cerrado.**
+- **Pendientes de la 12e: dos de tres cerrados (2026-10-08)**, en los dos generadores:
+  - **Los documentos de contrato viajan al proyecto**: `keel-core/gen/contract-docs.js` entrega `framework-errors.md` y
+    `wire-contract.md`, y los dos generadores los instalan tal cual en `docs/keel/`; los agentes de pruebas los citan
+    antes de reportar un `code` «sin declarar». Fijado en `keel-nest/test/generator-docs.test.js` y
+    `keel-spring/test/scaffold.test.js` (mismos bytes que keel-core).
+  - **`list-never-null` en el contrato del cable** (`wire.js` y § Listas de `wire-contract.md`): una lista no viaja
+    nunca como `null`, y la que la entrada no informa se lee como `[]` salvo la opcional de un PATCH. keel-nest ya lo
+    hacía en el lector; keel-spring lo hace ahora en el constructor compacto del mensaje, en vez de depender del agente.
+    `keel-nest/test/list-never-null.test.js` lo exige en las 15 fixtures sobre lo que emiten LOS DOS; falsado quitando
+    la normalización de keel-spring (caen las 5 fixtures con listas en la entrada). Línea base de keel-spring: los dos
+    documentos nuevos, el agente de pruebas y los mensajes con listas.
+  - **Sigue abierto: la precedencia del formato (400/422)**. Build quita de la entrada el formato que un campo hereda de
+    su value type porque el diseño PODRÍA normalizarlo antes de validarlo, y eso solo se dice en prosa; hoy ningún
+    diseño lo hace. Dos salidas, a decidir: llevar el formato a la entrada por defecto (cambia el contrato de todo value
+    type con formato en los dos generadores) o declarar la normalización en el DSL (versión nueva).
+  - **Divergencia latente encontrada de paso**: la lista OPCIONAL del cuerpo de un PATCH es de tres estados en
+    keel-spring (ausente = no tocar) y en keel-nest se lee como `[]`, que la vaciaría. Ninguna fixture tiene esa forma.
 
 ### Inc. 13 — Capas de borde: cache, storage, correo, pagos
 

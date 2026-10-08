@@ -29,7 +29,8 @@ export const WIRE_RULES = {
   'boolean-literal': 'Un `boolean` viaja como true o false.',
   'nulls-include': 'Por defecto un campo sin valor viaja como null.',
   'nulls-omit': 'Con `conventions.nulls: omit` un campo sin valor no viaja en las respuestas ni en los payloads de evento; el cuerpo de error lo incluye siempre.',
-  'unknown-ignored': 'Una propiedad desconocida en la entrada se ignora.'
+  'unknown-ignored': 'Una propiedad desconocida en la entrada se ignora.',
+  'list-never-null': 'Una lista (`list: true`) nunca viaja como null: sin elementos sale `[]`, también con `conventions.nulls: omit`, y una lista que la entrada no informa se lee como `[]` (salvo la opcional de un PATCH, que ausente significa «no tocar»).'
 };
 
 /**

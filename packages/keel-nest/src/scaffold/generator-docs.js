@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from 'keel-core';
+import { contractDocs } from 'keel-core/gen/contract-docs';
 import { usesIdempotencyCheck } from './idempotency-check.js';
 import { describeStack } from 'keel-core/gen/stack';
 import { assetsDir, SKILL } from '../lib/assets.js';
@@ -64,6 +65,8 @@ export function generate(model) {
   for (const name of CONVENTIONS) {
     files.push({ path: `${DOCS_DIR}/conventions/${name}`, content: docContent(path.join(generatorDir, 'conventions', name)) });
   }
+  // Los documentos de contrato del método, los mismos que instala keel-spring (keel-core/gen/contract-docs.js).
+  for (const doc of contractDocs()) files.push({ path: `${DOCS_DIR}/${doc.name}`, content: doc.content });
   for (const harness of HARNESSES) files.push(...harnessArtifacts(model, harness));
   return files;
 }

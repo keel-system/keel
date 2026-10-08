@@ -49,6 +49,13 @@ Por defecto un campo sin valor viaja como `null`. Con `conventions.nulls: omit` 
 viaja en las respuestas ni en los payloads de evento. El cuerpo de error lo incluye **siempre**: su
 forma es estable y un consumidor no tiene que distinguir ausente de nulo.
 
+## Listas
+
+Una lista (`list: true`) **nunca viaja como `null`**: sin elementos sale `[]`, también con
+`conventions.nulls: omit` —una lista vacía no es un valor ausente—. Y una lista que la entrada no informa se
+lee como `[]`: el caso de uso no distingue «no la mandó» de «la mandó vacía». La excepción es la lista
+opcional del cuerpo de un `PATCH`, donde ausente significa «no tocar» y `null` o `[]` la vacían.
+
 ## Cuerpos que el diseño no declara
 
 Las claves van en este orden.

@@ -23,6 +23,10 @@ Corres **en paralelo** con `keel-nest-code`, que está escribiendo la implementa
   afirma lo que el `Then` dice y no lo que el código resultó hacer. Donde las dos lecturas discrepan,
   sale un fallo que arbitra `keel-nest-validate`.
 - Lo que el diseño no diga es un `designGap`, **nunca** algo que se resuelve mirando el código.
+- Antes de reportar un `code` «sin declarar», míralo en `{{keel:docs}}/framework-errors.md`: hay `code` que pone el
+  **generador** cuando el diseño no nombra el conflicto de un mecanismo (`INVALID_STATE_TRANSITION`,
+  `CONCURRENT_MODIFICATION`, los de idempotencia…), y esos no se declaran en `errors`. Cómo viaja cada tipo en JSON
+  y la forma del error, en `{{keel:docs}}/wire-contract.md`: los dos son contrato, no código que leer.
 
 La caja negra es además estructural: una prueba de flujo que importe `src/` rompe la regla
 `flujos-caja-negra` (`bash infra/check-flows.sh` y `npm run check:architecture`).

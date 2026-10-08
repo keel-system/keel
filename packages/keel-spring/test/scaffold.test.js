@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { HARNESSES, loadService } from 'keel-core';
+import { contractDocs } from 'keel-core/gen/contract-docs';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { isEmptyRead } from '../src/lib/broker-probes.js';
 import { hasScheduledOperations } from '../src/scaffold/services.js';
@@ -387,6 +388,11 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   // El reparto se describe ("lo reparte la skill"), no se prescribe al lector.
   assert.ok(claude.includes('## Quién ejecuta esto'));
   assert.ok(claude.includes('**único orquestador**'));
+
+  // Los documentos de contrato del método, tal cual (corrida notification-mailer-mongo: sin el catálogo, el agente de
+  // pruebas reportó un code del generador como «sin declarar»). Los mismos bytes que keel-core y que keel-nest.
+  for (const doc of contractDocs()) assert.equal(read(workspace, `docs/keel/${doc.name}`), doc.content, doc.name);
+  assert.match(fs.readFileSync(path.join(assetsDir, 'agents', 'keel-spring-tests.md'), 'utf8'), /\{\{keel:docs\}\}\/framework-errors\.md/);
 
   // architecture.md y constitution.md: documentos de primer nivel en docs/keel/.
   const architecture = read(workspace, 'docs/keel/architecture.md');

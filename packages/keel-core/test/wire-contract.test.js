@@ -29,7 +29,7 @@ test('cada caso cita una regla que existe, de un tipo que existe, y los ids no s
 });
 
 test('toda regla tiene al menos un caso, salvo las que son de forma y no de valor', () => {
-  const structural = new Set(['nulls-include', 'nulls-omit', 'unknown-ignored']);
+  const structural = new Set(['nulls-include', 'nulls-omit', 'unknown-ignored', 'list-never-null']);
   const cited = new Set(allCases.map((entry) => entry.rule));
   for (const rule of Object.keys(WIRE_RULES)) {
     if (!structural.has(rule)) assert.ok(cited.has(rule), `la regla ${rule} no tiene ningún caso que la ejecute`);

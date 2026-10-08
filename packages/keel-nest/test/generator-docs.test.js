@@ -3,6 +3,7 @@
 // se rompe en silencio: un asset que existe y nadie instala, un token sin resolver que el agente lee
 // literal, o una doc compartida que cita la ruta de UN harness y miente al que usa el otro.
 
+import { contractDocs } from 'keel-core/gen/contract-docs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -268,4 +269,14 @@ test('la skill del correo se instala con la capa mail, y solo con ella; lo que c
   }
   assert.match(mailer['src/application/port/out/template-renderer.ts'], /abstract compile\(source: string\): void;/);
   assert.match(mailer['src/domain/mail/mail-delivery-exception.ts'], /partial\(\): boolean/);
+});
+
+// Los documentos de contrato del método viajan al proyecto (corrida notification-mailer-mongo: sin el catálogo, el
+// agente de pruebas reportó un code del generador como «sin declarar»). Los mismos bytes que keel-core y que keel-spring.
+test('docs/keel lleva el catálogo de los code del generador y el contrato del cable, tal cual', () => {
+  for (const doc of contractDocs()) {
+    assert.equal(files[`docs/keel/${doc.name}`], doc.content, doc.name);
+    assert.doesNotMatch(doc.content, /\.claude\/|\.opencode\//, doc.name);
+  }
+  assert.match(fs.readFileSync(path.join(assets, 'agents', 'keel-nest-tests.md'), 'utf8'), /\{\{keel:docs\}\}\/framework-errors\.md/);
 });

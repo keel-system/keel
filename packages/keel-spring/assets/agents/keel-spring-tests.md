@@ -30,6 +30,10 @@ este mismo momento. Eso es deliberado:
   y arbitrar es trabajo de `keel-spring-validate`, no tuyo.
 - Lo que el diseño no diga es un `designGap`, **nunca** algo que se resuelve mirando el
   código.
+- Antes de reportar un `code` «sin declarar», míralo en `{{keel:docs}}/framework-errors.md`: hay `code` que pone el
+  **generador** cuando el diseño no nombra el conflicto de un mecanismo (`INVALID_STATE_TRANSITION`,
+  `CONCURRENT_MODIFICATION`, los de idempotencia…), y esos no se declaran en `errors`. Cómo viaja cada tipo en JSON
+  y la forma del error, en `{{keel:docs}}/wire-contract.md`: los dos son contrato, no código que leer.
 
 El build lo respalda: `build.gradle` deja `src/main/java` fuera del `compileClasspath` del
 source set `integrationTest`, así que un test que importe un DTO o una entidad generada
