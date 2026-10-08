@@ -1660,6 +1660,11 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     `ts-check` **12/12** con el arnés (el primer intento cazó un `2 === 0` que TypeScript da por imposible con la
     constante inferida como literal). keel-nest 515/515.
   - Queda **13e, la corrida** de `payment-checkout` con las dos pasarelas en los dos generadores.
+- **13e — corridas preparadas (2026-10-08), sin lanzar**: `spring-live-test/corrida-payment-checkout-{stripe,mercadopago}-{nest,spring}/`,
+  sembradas con `keel init` de este repo, `payment-checkout` v1.1.0 y su `DESIGN.md` (`--ready` en verde en las cuatro),
+  `keel-stack.json` con PostgreSQL, RabbitMQ, Keycloak y la pasarela, y `build` hecho (294 archivos en keel-nest, 325
+  en keel-spring; los nest con `npm install` y `typecheck` en verde). Sin contratos de `/keel-docs`, como las corridas
+  anteriores. Comparten los puertos de `infra/`: se corren de una en una.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 
