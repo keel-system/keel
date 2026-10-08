@@ -16,7 +16,8 @@ import { BATCHED_PURGE, batchedPurgeParameters } from 'keel-core/gen';
 import { OUTBOX_EVENT, OUTBOX_PURGE, PROCESSED_EVENT, PROCESSED_EVENT_PURGE } from 'keel-core/gen/messaging-stores';
 import { IDEMPOTENCY_RECORD, IDEMPOTENCY_RECORD_PURGE } from 'keel-core/gen/request-idempotency';
 import { tsModule, tsString } from './render.js';
-import { usesRelational } from './persistence-entities.js';
+import { usesPersistence, usesDocument } from './persistence-entities.js';
+import { DOCUMENT_PURGE_PREDICATES, documentPurgeMethod } from './document-stores.js';
 import { usesNestOutbox, usesProcessedEvents } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
@@ -34,7 +35,7 @@ const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
  * (lo pendiente del outbox no se toca nunca), con qué retención y bajo qué prefijo de configuración.
  */
 export function tablePurges(model) {
-  if (!usesRelational(model)) return [];
+  if (!usesPersistence(model)) return [];
   const purges = [];
   if (usesNestOutbox(model)) {
     purges.push({
@@ -102,7 +103,7 @@ export function generate(model) {
   if (purges.length === 0) return [];
   const files = [
     { path: BATCHED_PURGE_TS, content: batchedPurgeFile() },
-    { path: TABLE_PURGES_TS, content: tablePurgesFile(purges) }
+    { path: TABLE_PURGES_TS, content: tablePurgesFile(purges, usesDocument(model)) }
   ];
   // La cadencia de la purga del registro de idempotencia, en su propio fragmento como en keel-spring (las del
   // outbox y de processed_event van en messaging.yaml). El perfil test no lo lleva: allí no corre el reloj.
@@ -180,7 +181,7 @@ export async function batchedPurge(run: BatchedPurgeRun): Promise<number> {
   );
 }
 
-function tablePurgesFile(purges) {
+function tablePurgesFile(purges, document = false) {
   const settingsType = (purge) =>
     `{ readonly cron: string;${purge.retentionDays ? ' readonly retentionDays: number;' : ''} readonly batchSize: number; readonly maxBatches: number }`;
   const settingsValue = (purge) => {
@@ -204,7 +205,7 @@ function tablePurgesFile(purges) {
       return `  /** La purga de ${purge.what}${purge.predicate ? ` (solo ${purge.predicate})` : ''}. Devuelve las filas borradas. */
   async ${purge.method}(now: Date = new Date()): Promise<number> {
     const cutoff = ${cutoff};
-    const deleted = await this.purge(${tsString(purge.what)}, ${tsString(purge.table)}, ${tsString(purge.column)}, ${purge.predicate ? tsString(purge.predicate) : 'null'}, cutoff, this.settings.${purge.key});
+    const deleted = await this.purge(${tsString(purge.what)}, ${tsString(purge.table)}, ${tsString(purge.column)}, ${document ? DOCUMENT_PURGE_PREDICATES[purge.table] ?? 'null' : purge.predicate ? tsString(purge.predicate) : 'null'}, cutoff, this.settings.${purge.key});
     if (deleted > 0) this.logger.log(\`${purge.log}\`);
     return deleted;
   }`;
@@ -218,7 +219,9 @@ function tablePurgesFile(purges) {
       { symbol: 'Injectable', from: '@nestjs/common' },
       { symbol: 'Logger', from: '@nestjs/common' },
       { symbol: 'OnModuleInit', from: '@nestjs/common', type: true },
-      { symbol: 'DataSource', from: 'typeorm', type: true },
+      ...(document
+        ? [{ symbol: 'Document', from: 'mongodb', type: true }, { symbol: 'MongoClient', from: 'mongodb', type: true }]
+        : [{ symbol: 'DataSource', from: 'typeorm', type: true }]),
       { symbol: 'Configuration', from: CONFIG_TS, type: true },
       { symbol: 'DATA_SOURCE', from: TRANSACTION_CONTEXT_TS },
       { symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS },
@@ -255,7 +258,7 @@ export class TablePurges implements OnModuleInit {
   constructor(
     @Inject(Scheduling) private readonly scheduling: Scheduling,
     @Inject(PURGE_SETTINGS) private readonly settings: PurgeSettings,
-    @Inject(DATA_SOURCE) private readonly dataSource: DataSource | null,
+    @Inject(DATA_SOURCE) private readonly dataSource: ${document ? 'MongoClient' : 'DataSource'} | null,
     @Inject(TransactionContext) private readonly transactions: TransactionContext
   ) {}
 
@@ -266,7 +269,7 @@ ${registrations}
 
 ${methods}
 
-  private purge(
+${document ? documentPurgeMethod() : `  private purge(
     what: string,
     table: string,
     column: string,
@@ -314,7 +317,7 @@ ${methods}
   private source(): DataSource {
     if (this.dataSource == null) throw new Error('Sin base de datos en este perfil: las purgas no corren.');
     return this.dataSource;
-  }
+  }`}
 }
 
 function text(configuration: Configuration, key: string, fallback: string): string {

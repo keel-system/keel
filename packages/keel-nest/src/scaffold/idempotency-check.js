@@ -20,7 +20,7 @@ import { renderIdempotencyGate } from 'keel-core/gen/idempotency-gate';
 import { kebabCase, screamingSnake } from 'keel-core/gen';
 import { registryOperations } from 'keel-core/gen/request-idempotency';
 import { capitalize, fileName } from './render.js';
-import { usesRelational } from './persistence-entities.js';
+import { usesPersistence, usesDocument } from './persistence-entities.js';
 import { naturalKeyFinder } from './repositories.js';
 import { usesNestOutbox, usesProcessedEvents, usesMessaging } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
@@ -42,7 +42,7 @@ export function generate(model) {
 
 /** La matriz: { group, subject, why } más lo que cada clase de comprobación necesita (ver keel-core). */
 export function checksOf(model) {
-  if (!usesRelational(model)) return [];
+  if (!usesPersistence(model)) return [];
   return [
     ...dedupeChecks(model),
     ...payloadContractChecks(model),
@@ -338,13 +338,16 @@ function payloadContractChecks(model) {
 //     un upsert: la repetición no choca, y el registro dice «procesado» a todo.
 function insertChecks(model) {
   const checks = [];
+  // La misma promesa en los dos almacenes: que el registro choque con su clave en vez de pisarla. En TypeORM,
+  // insert() y no save() (save es un upsert); en MongoDB, insertOne() y no un reemplazo ni un upsert.
+  const document = usesDocument(model);
   const write = (group, file, why) => ({
     group,
     subject: `${file}: la escritura es un INSERT`,
     class: file,
-    require: ['\\.insert\\s*\\('],
-    forbid: ['\\.save\\s*\\('],
-    why
+    require: document ? ['\\.insertOne\\s*\\('] : ['\\.insert\\s*\\('],
+    forbid: document ? ['\\.replaceOne\\s*\\(', 'upsert\\s*:\\s*true'] : ['\\.save\\s*\\('],
+    why: document ? why.replace('insert() y NO save(): save hace upsert', 'insertOne() y NO un reemplazo ni un upsert').replace('insert() y NO save()', 'insertOne() y NO un reemplazo ni un upsert') : why
   });
   if (usesProcessedEvents(model)) {
     checks.push(write('dedupe', 'idempotency-guard', 'insert() y NO save(): save hace upsert y una reentrega nunca chocaría con la clave'));

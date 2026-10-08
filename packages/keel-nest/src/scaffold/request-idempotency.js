@@ -25,7 +25,8 @@ import {
   usesIdempotencyHeader as usesHeaderInDesign
 } from 'keel-core/gen/request-idempotency';
 import { DIRS, classPath, tsModule } from './render.js';
-import { ORM_DIR, engineOf, physicalColumn, usesRelational } from './persistence-entities.js';
+import { ORM_DIR, engineOf, physicalColumn, usesPersistence, usesDocument } from './persistence-entities.js';
+import { documentIdempotencyStore } from './document-stores.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 
 export const IDEMPOTENCY_STORE_TS = classPath(DIRS.idempotency, 'IdempotencyStore');
@@ -36,14 +37,14 @@ export const IDEMPOTENCY_CONTEXT_TS = classPath(DIRS.appSupport, 'IdempotencyCon
 export const IDEMPOTENCY_RECORD_ORM_TS = `src/${ORM_DIR}/idempotency-record-orm.ts`;
 export const IDEMPOTENCY_STORE_IMPL_TS = 'src/infrastructure/persistence/idempotency-store-impl.ts';
 
-/** ¿Se genera el registro? El relacional: el documental llega con la persistencia documental (inc. 12). */
+/** ¿Se genera el registro? Con persistencia, de los dos modelos (el documental desde el incremento 12c). */
 export function usesRequestIdempotency(model) {
-  return usesRelational(model) && usesRegistryInDesign(model);
+  return usesPersistence(model) && usesRegistryInDesign(model);
 }
 
 /** ¿Viaja la clave por la cabecera Idempotency-Key? */
 export function usesIdempotencyHeader(model) {
-  return usesRelational(model) && usesHeaderInDesign(model);
+  return usesPersistence(model) && usesHeaderInDesign(model);
 }
 
 /**
@@ -64,8 +65,14 @@ export function generate(model) {
     { path: IDEMPOTENCY_CONFLICT_TS, content: conflictException(model) },
     { path: IDEMPOTENCY_REUSE_TS, content: reuseException(model) },
     { path: COMMAND_SIGNATURE_TS, content: commandSignature() },
-    { path: IDEMPOTENCY_RECORD_ORM_TS, content: recordEntity(model) },
-    { path: IDEMPOTENCY_STORE_IMPL_TS, content: storeAdapter() }
+    // Sobre documentos no hay entidad: el registro es el documento de keel-core/gen/document.js.
+    ...(usesDocument(model) ? [] : [{ path: IDEMPOTENCY_RECORD_ORM_TS, content: recordEntity(model) }]),
+    {
+      path: IDEMPOTENCY_STORE_IMPL_TS,
+      content: usesDocument(model)
+        ? documentIdempotencyStore({ storeImplPath: IDEMPOTENCY_STORE_IMPL_TS, storePath: IDEMPOTENCY_STORE_TS, conflictPath: IDEMPOTENCY_CONFLICT_TS })
+        : storeAdapter()
+    }
   ];
   // El contexto es el camino de la CABECERA: solo con `client-key`. Con `payload-hash` o
   // `payload-field` la clave sale del propio comando y no hay nada que transportar.

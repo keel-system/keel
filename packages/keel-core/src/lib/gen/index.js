@@ -149,7 +149,9 @@ export {
   storeDocumentIndexes,
   documentIndexes,
   INDEX_EXPORT_FILE,
-  exportIndexesScript
+  exportIndexesScript,
+  storeDocumentKey,
+  storeDocumentFields
 } from './document.js';
 export {
   constraintErrors,

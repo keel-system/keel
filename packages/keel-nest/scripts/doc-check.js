@@ -34,8 +34,9 @@ import { documentShape, documentValueObjects, valueObjectShape, documentIndexes,
 import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startMongo, stopDatabase } from './lib/database-container.js';
 import { sampleEntity, PROBE_HELPERS } from './lib/samples.js';
+import { adapterArgs, storeBlocks, storePreamble } from './lib/document-store-probes.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
-import { JOSE_VERSION, MONGODB_VERSION } from '../src/lib/assets.js';
+import { AMQPLIB_VERSION, JOSE_VERSION, MONGODB_VERSION } from '../src/lib/assets.js';
 import { build } from '../src/commands/build.js';
 import { classPath, DIRS } from '../src/scaffold/render.js';
 import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders } from '../src/scaffold/repositories.js';
@@ -46,9 +47,13 @@ const keep = process.argv.includes('--keep');
 // reloj y la clave natural del barrido (job-dispatch-mongo); value objects en listas, sombras plegadas,
 // índices condicionados y la auditoría de política (notification-mailer-mongo).
 const SUBJECTS = [
-  { name: 'inspection-reports', withoutLayers: ['messaging'] },
+  { name: 'inspection-reports', withoutLayers: [] },
   { name: 'job-dispatch-mongo', withoutLayers: [] },
-  { name: 'notification-mailer-mongo', withoutLayers: ['messaging', 'mail'] }
+  { name: 'notification-mailer-mongo', withoutLayers: ['mail'] },
+  // El reclamo de la reconciliación sobre documentos: la única fixture documental que lo declara.
+  // Sin la autoría de política (created_by/updated_by), que keel-nest rechaza en su frontera: como las capas
+  // que quedan fuera, se quita en vez de medir un hueco declarado.
+  { name: 'asset-vault', withoutLayers: [], withoutAuthorship: true }
 ];
 const results = [];
 
@@ -95,6 +100,8 @@ function probeScript(model, db) {
   const blocks = roots.map((root, index) => rootBlock(model, root, index, ctx));
   const raceRoot = roots.find((root) => root.usesOptimisticLocking) ?? roots[0];
   const race = raceBlock(model, raceRoot, ctx);
+  // Los almacenes del generador (incremento 12c): antes de listar los imports, que sus muestras añaden.
+  const stores = storeBlocks(model, ctx);
   const shapes = expectedShapes(model);
   const enums = new Set([
     ...Object.values(shapes.entities).flat(),
@@ -115,7 +122,7 @@ function probeScript(model, db) {
     unsampled: [...new Set(ctx.unsampled)],
     script: `import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
-import { Binary, Decimal128, MongoClient } from 'mongodb';
+import { Binary, Decimal128, MongoClient, UUID } from 'mongodb';
 import { databaseSettings } from './dist/infrastructure/persistence/mongo-settings.js';
 import { ensureDocumentIndexes } from './dist/infrastructure/persistence/document-indexes.js';
 import { TransactionContext } from './dist/infrastructure/persistence/transaction-context.js';
@@ -138,6 +145,7 @@ const database = client.db(settings.database);
 await database.dropDatabase();
 await ensureDocumentIndexes(database);
 const tx = new TransactionContext(client, settings);
+${storePreamble(model)}
 
 // ── Índices: los vivos contra los del contrato.
 try {
@@ -164,6 +172,7 @@ for (const { collection, specs } of INDEXES) {
 
 ${blocks.join('\n')}
 ${race}
+${stores}
 
 await client.close();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -238,7 +247,7 @@ function rootBlock(model, root, index, ctx) {
   return `
 // ═══ ${name} ═══
 try {
-  const repository = new ${adapterClass(root)}(tx);
+  const repository = new ${adapterClass(root)}(${adapterArgs(model, root)});
   const collection = database.collection('${root.collectionName}');
   const original = ${first};
   await repository.save(original);
@@ -323,7 +332,7 @@ function raceBlock(model, root, ctx) {
   return `
 // ═══ Carrera: dos transacciones sobre el mismo documento ═══
 try {
-  const repository = new ${adapterClass(root)}(tx);
+  const repository = new ${adapterClass(root)}(${adapterArgs(model, root)});
   const subject = ${sampleEntity(model, root, ctx, 'race')};
   await repository.save(subject);
   const collection = database.collection('${root.collectionName}');
@@ -360,7 +369,7 @@ const generated = await runCommand(workspace, build, `specs/${NEST_READY_DESIGN.
 const projectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
 if (!step('build genera el proyecto de referencia', generated.exitCode === undefined, generated.output.slice(0, 600))) process.exit(1);
 // jose: la seguridad de los sujetos que la declaran (notification-mailer-mongo) también tiene que compilar.
-const install = run('npm', ['install', '--no-audit', '--no-fund', `mongodb@${MONGODB_VERSION}`, `jose@${JOSE_VERSION}`], { cwd: projectDir });
+const install = run('npm', ['install', '--no-audit', '--no-fund', `mongodb@${MONGODB_VERSION}`, `jose@${JOSE_VERSION}`, `amqplib@${AMQPLIB_VERSION}`], { cwd: projectDir });
 if (!step('npm install (el driver de MongoDB)', install.status === 0, install.status === 0 ? '' : install.stderr.slice(-800))) process.exit(1);
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');
 
@@ -379,7 +388,9 @@ try {
       delete manifest.layers[layer];
       delete layers[layer];
     }
-    const { files, model } = planService({ manifest, layers, workspace, stack: { database: 'mongodb' } });
+    if (subject.withoutAuthorship) delete layers.persistence.audit.authorship;
+    // Con mensajería, sobre RabbitMQ: los almacenes son los mismos con cualquier broker.
+    const { files, model } = planService({ manifest, layers, workspace, stack: { database: 'mongodb', ...(layers.messaging ? { broker: 'rabbitmq' } : {}) } });
     if (repositoryRoots(model).length === 0) continue;
     const dir = path.join(workspace, 'doc-check', subject.name);
     for (const file of files) {

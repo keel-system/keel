@@ -36,6 +36,9 @@ import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
 import { usesDocument, usesTextFold, textFoldFile, TEXT_FOLD_TS } from './persistence-entities.js';
 import { repositoryRoots, portClass, portPath, adapterClass, adapterPath, TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { PERSISTENCE_MODULE_TS } from './persistence-runtime.js';
+import { reconciliationBindings } from './reconciliation-claim.js';
+import { SWEEP_SETTINGS_TS, usesSweepClaims } from './claim.js';
+import { usesRequestIdempotency, IDEMPOTENCY_STORE_TS, IDEMPOTENCY_STORE_IMPL_TS } from './request-idempotency.js';
 
 export const MONGO_SETTINGS_TS = 'src/infrastructure/persistence/mongo-settings.ts';
 export const DOCUMENT_INDEXES_TS = 'src/infrastructure/persistence/document-indexes.ts';
@@ -154,6 +157,15 @@ function bsonValuesFile() {
  */
 export interface StoredDocument {
   _id: UUID | string;
+  [key: string]: any;
+}
+
+/**
+ * Un documento de un almacén del generador con el tipo de su \`_id\`: el subdocumento de una clave compuesta
+ * (processed_event, idempotency_record) o la clave aplanada (reconciliation_claim).
+ */
+export interface KeyedDocument<K> {
+  _id: K;
   [key: string]: any;
 }
 
@@ -325,6 +337,12 @@ export async function ensureDocumentIndexes(db: Db): Promise<void> {
 function transactionContextFile() {
   const body = `/** Token del cliente de MongoDB (null en el perfil test, que no tiene base de datos). */
 export const MONGO_CLIENT = Symbol('MONGO_CLIENT');
+
+/**
+ * El manejador del almacén con el nombre común a las dos ramas: lo inyectan el relay del outbox y las purgas
+ * para saber si hay base (null en el perfil test). Es el MISMO token que MONGO_CLIENT.
+ */
+export const DATA_SOURCE = MONGO_CLIENT;
 
 /** Token de la configuración del almacén ya resuelta. */
 export const DATABASE_SETTINGS = Symbol('DATABASE_SETTINGS');
@@ -614,6 +632,21 @@ function persistenceModuleFile(model) {
   }
   const bindings = roots.map((entity) => `    { provide: ${portClass(entity)}, useClass: ${adapterClass(entity)} }`);
   const ports = roots.map((entity) => portClass(entity));
+  // Los mismos enlaces que la rama relacional: la tienda del reclamo de reconciliación y los números de cada
+  // barrido, la configuración de los barridos y el puerto del registro de idempotencia.
+  const reconciliation = reconciliationBindings(model);
+  imports.push(...reconciliation.imports);
+  bindings.push(...reconciliation.bindings);
+  ports.push(...reconciliation.exports);
+  if (usesSweepClaims(model)) {
+    imports.push({ symbol: 'SWEEP_SETTINGS', from: SWEEP_SETTINGS_TS }, { symbol: 'sweepSettings', from: SWEEP_SETTINGS_TS });
+    bindings.push('    { provide: SWEEP_SETTINGS, useValue: sweepSettings(configuration) }');
+  }
+  if (usesRequestIdempotency(model)) {
+    imports.push({ symbol: 'IdempotencyStore', from: IDEMPOTENCY_STORE_TS }, { symbol: 'IdempotencyStoreImpl', from: IDEMPOTENCY_STORE_IMPL_TS });
+    bindings.push('    { provide: IdempotencyStore, useClass: IdempotencyStoreImpl }');
+    ports.push('IdempotencyStore');
+  }
   const body = `/** Cierra el cliente al apagar: después de que el servidor HTTP deje de aceptar y drene. */
 @Injectable()
 class MongoClientShutdown implements OnApplicationShutdown {

@@ -17,7 +17,7 @@ import { usesMediator } from './mediator.js';
 import { usesApi } from './rest-support.js';
 import { controllerClasses } from './controllers.js';
 import { relativeSpecifier } from './render.js';
-import { usesPersistence, usesRelational } from './persistence-entities.js';
+import { usesPersistence } from './persistence-entities.js';
 import { usesIdempotencyHeader } from './request-idempotency.js';
 import { usesHttpSecurity, usesCallerScope } from './security.js';
 import { usesMessaging } from './messaging.js';
@@ -28,7 +28,7 @@ import { usesHttpClients } from './http-clients.js';
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs() },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesPersistence(model), usesCallerScope(model), usesMessaging(model) && usesRelational(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model)) },
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesPersistence(model), usesCallerScope(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model)) },
     { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model)) }
   ];
 }

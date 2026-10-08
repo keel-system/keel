@@ -25,7 +25,8 @@ import {
   storeColumns
 } from 'keel-core/gen/messaging-stores';
 import { classPath, tsModule, tsString } from './render.js';
-import { TRANSFORMERS_TS, engineOf, optionsLiteral, physicalColumn } from './persistence-entities.js';
+import { TRANSFORMERS_TS, engineOf, optionsLiteral, physicalColumn, usesDocument } from './persistence-entities.js';
+import { documentGuard, documentRelayStore } from './document-stores.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import {
   IDEMPOTENCY_GUARD_TS,
@@ -43,20 +44,23 @@ import {
 
 export function generate(model) {
   const files = [];
+  // Sobre documentos no hay entidad que declarar (la colección la describe keel-core/gen/document.js) y el
+  // almacén es otro (document-stores.js); el relay, el dispatcher y el backoff son los mismos.
+  const document = usesDocument(model);
   if (usesNestOutbox(model)) {
     files.push(
-      { path: OUTBOX_ORM_TS, content: storeEntity(model, OUTBOX_EVENT, 'OutboxEventOrm', OUTBOX_ORM_TS, OUTBOX_DOC) },
+      ...(document ? [] : [{ path: OUTBOX_ORM_TS, content: storeEntity(model, OUTBOX_EVENT, 'OutboxEventOrm', OUTBOX_ORM_TS, OUTBOX_DOC) }]),
       { path: OUTBOX_DISPATCHER_TS, content: dispatcherPort() },
       { path: OUTBOX_DISPATCHER_FALLBACK_TS, content: dispatcherFallback() },
       { path: OUTBOX_BACKOFF_TS, content: backoffFile() },
-      { path: OUTBOX_RELAY_STORE_TS, content: relayStore(model) },
-      { path: OUTBOX_RELAY_TS, content: relay() }
+      { path: OUTBOX_RELAY_STORE_TS, content: document ? documentRelayStore() : relayStore(model) },
+      { path: OUTBOX_RELAY_TS, content: relay(model) }
     );
   }
   if (usesProcessedEvents(model)) {
     files.push(
-      { path: PROCESSED_EVENT_ORM_TS, content: storeEntity(model, PROCESSED_EVENT, 'ProcessedEventOrm', PROCESSED_EVENT_ORM_TS, PROCESSED_DOC) },
-      { path: IDEMPOTENCY_GUARD_TS, content: guard() }
+      ...(document ? [] : [{ path: PROCESSED_EVENT_ORM_TS, content: storeEntity(model, PROCESSED_EVENT, 'ProcessedEventOrm', PROCESSED_EVENT_ORM_TS, PROCESSED_DOC) }]),
+      { path: IDEMPOTENCY_GUARD_TS, content: document ? documentGuard(IDEMPOTENCY_GUARD_TS) : guard() }
     );
   }
   return files;
@@ -65,6 +69,7 @@ export function generate(model) {
 /** Las entidades de estas tablas, para el DataSource. */
 export function storeEntities(model) {
   const entities = [];
+  if (usesDocument(model)) return entities;
   if (usesNestOutbox(model)) entities.push({ symbol: 'OutboxEventOrm', from: OUTBOX_ORM_TS });
   if (usesProcessedEvents(model)) entities.push({ symbol: 'ProcessedEventOrm', from: PROCESSED_EVENT_ORM_TS });
   return entities;
@@ -328,7 +333,9 @@ export class OutboxRelayStore {
   );
 }
 
-function relay() {
+function relay(model) {
+  // El manejador del almacén solo dice si hay base (null en el perfil test): el DataSource o el cliente.
+  const handle = usesDocument(model) ? { symbol: 'MongoClient', from: 'mongodb' } : { symbol: 'DataSource', from: 'typeorm' };
   return tsModule(
     OUTBOX_RELAY_TS,
     [
@@ -337,7 +344,7 @@ function relay() {
       { symbol: 'Logger', from: '@nestjs/common' },
       { symbol: 'BeforeApplicationShutdown', from: '@nestjs/common', type: true },
       { symbol: 'OnApplicationBootstrap', from: '@nestjs/common', type: true },
-      { symbol: 'DataSource', from: 'typeorm', type: true },
+      { ...handle, type: true },
       { symbol: 'DATA_SOURCE', from: TRANSACTION_CONTEXT_TS },
       { symbol: 'MESSAGING_SETTINGS', from: MESSAGING_SETTINGS_TS },
       { symbol: 'MessagingSettings', from: MESSAGING_SETTINGS_TS, type: true },
@@ -371,7 +378,7 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
     @Inject(OutboxRelayStore) private readonly store: OutboxRelayStore,
     @Inject(OutboxDispatcher) private readonly dispatcher: OutboxDispatcher,
     @Inject(MESSAGING_SETTINGS) messaging: MessagingSettings,
-    @Inject(DATA_SOURCE) private readonly dataSource: DataSource | null
+    @Inject(DATA_SOURCE) private readonly dataSource: ${handle.symbol} | null
   ) {
     if (messaging.outboxRelay == null) throw new Error('OutboxRelay sin outbox.relay en la configuración de mensajería');
     this.settings = messaging.outboxRelay;

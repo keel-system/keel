@@ -10,7 +10,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { loadService } from 'keel-core';
-import { documentShape, documentValueObjects, valueObjectShape } from 'keel-core/gen/document';
+import { documentShape, documentValueObjects, valueObjectShape, storeDocumentKey, storeDocumentFields } from 'keel-core/gen/document';
+import { OUTBOX_EVENT, PROCESSED_EVENT } from 'keel-core/gen/messaging-stores';
+import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
+import { RECONCILIATION_CLAIM } from 'keel-core/gen/reconciliation-stores';
 import { buildModel } from '../src/lib/model.js';
 import { planService } from '../src/scaffold/index.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
@@ -73,3 +76,27 @@ test('la paridad ve lo que tiene que ver (se autocomprueba)', () => {
   const renamed = source.replace(/@Field\(name = "([^"]+)"/, '@Field(name = "$1_x"');
   assert.notDeepEqual(storedFields(renamed), expected(documentShape(model, root)));
 });
+
+// Los almacenes del generador como documentos: el `_id` (valor, subdocumento en su orden, o la clave
+// aplanada de la reconciliación) y los campos de keel-core/gen/document.js. El MongoIndexConfig ya sale
+// de los mismos datos; esto ata los espejos `*Document` escritos a mano.
+const STORES = [
+  { fixture: 'notification-mailer-mongo', table: OUTBOX_EVENT, className: 'OutboxEventDocument' },
+  { fixture: 'notification-mailer-mongo', table: PROCESSED_EVENT, className: 'ProcessedEventDocument' },
+  { fixture: 'notification-mailer-mongo', table: IDEMPOTENCY_RECORD, className: 'IdempotencyRecordDocument' },
+  { fixture: 'asset-vault', table: RECONCILIATION_CLAIM, className: 'ReconciliationClaimDocument' }
+];
+
+for (const { fixture, table, className } of STORES) {
+  test(`${fixture}: ${className} guarda el ${table.table} de keel-core/gen/document.js`, () => {
+    const { files } = load(fixture);
+    const file = files.find((f) => f.path.endsWith(`/${className}.java`));
+    assert.ok(file, `keel-spring emite ${className}`);
+    assert.ok(file.content.includes(`@Document(collection = "${table.table}")`), `${className} es la colección ${table.table}`);
+    const key = storeDocumentKey(table);
+    // El orden del archivo: el @Id, los campos del documento y, si la clave es un subdocumento, sus campos
+    // (la clase anidada va al final).
+    const expectedNames = ['_id', ...storeDocumentFields(table).map((f) => f.name), ...(key.kind === 'subdocument' ? key.columns : [])];
+    assert.deepEqual(storedFields(file.content).map((f) => f.name), expectedNames);
+  });
+}

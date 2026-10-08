@@ -55,6 +55,8 @@ import {
   OUTBOX_RELAY_TS,
   RABBIT_CONNECTION_TS
 } from './messaging.js';
+import { usesDocument } from './persistence-entities.js';
+import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 
 /** ¿Lleva el arnés la mensajería? Con los tres brokers que keel-nest genera. */
 export function usesMessagingHarness(model) {
@@ -75,6 +77,7 @@ export function messagingHarnessImports(model) {
       `import { OutboxRelay } from '../../../${OUTBOX_RELAY_TS.replace(/\.ts$/, '.js')}';`,
       `import { MESSAGING_SETTINGS, type MessagingSettings } from '../../../${MESSAGING_SETTINGS_TS.replace(/\.ts$/, '.js')}';`
     );
+    if (usesDocument(model)) lines.push(`import { TransactionContext } from '../../../${TRANSACTION_CONTEXT_TS.replace(/\.ts$/, '.js')}';`);
   }
   return `\n${lines.join('\n')}`;
 }
@@ -107,7 +110,7 @@ function rabbitSection(model) {
     tsString
   );
 
-  const outboxSection = outbox ? outboxHarness() : noOutboxDrain(model);
+  const outboxSection = outbox ? outboxHarness(model) : noOutboxDrain(model);
   const deliveries = subscriptions.map((sub) => deliverMethod(sub)).join('');
   return `
 // ── Mensajería (RabbitMQ) ────────────────────────────────────────────────────
@@ -312,7 +315,7 @@ function kafkaSection(model) {
   const topics = subscriptions.map((sub) => `  ${tsString(sub.name)}: process.env[${tsString(topicEnv(sub))}] ?? ${tsString(sub.topicDefault)}`).join(',\n');
   const deadLetters = deadLettered.map((entry) => `  ${tsString(entry.subscription)}: \`\${TOPIC_OF[${tsString(entry.subscription)}]}.DLT\``).join(',\n');
 
-  const outboxSection = outbox ? outboxHarness() : noOutboxDrain(model);
+  const outboxSection = outbox ? outboxHarness(model) : noOutboxDrain(model);
   const deliveries = subscriptions.map((sub) => deliverMethod(sub)).join('');
   return `
 // ── Mensajería (Kafka) ───────────────────────────────────────────────────────
@@ -592,7 +595,7 @@ async function reseedTopology(): Promise<void> {${outbox ? `
   }
 }`;
 
-  const outboxSection = outbox ? outboxHarness() : noOutboxDrain(model);
+  const outboxSection = outbox ? outboxHarness(model) : noOutboxDrain(model);
   const deliveries = subscriptions.map((sub) => deliverMethod(sub)).join('');
   return `
 // ── Mensajería (SNS/SQS) ─────────────────────────────────────────────────────
@@ -854,7 +857,8 @@ export function deliver${pascal(sub.name)}(${params}): void {
 `;
 }
 
-function outboxHarness() {
+function outboxHarness(model) {
+  if (usesDocument(model)) return documentOutboxHarness();
   return `
 // ── El outbox ────────────────────────────────────────────────────────────────
 
@@ -942,4 +946,88 @@ export function noOutboxDrain(model) {
 async function awaitOutboxDrained(_channel: string): Promise<void> {}
 `
     : '';
+}
+
+/**
+ * El outbox del arnés sobre documentos: lo mismo que la versión relacional, leyendo la colección outbox_event
+ * con la transacción del PROPIO servidor arrancado (flow.ts ya toma de él el relay y la configuración) en vez de
+ * componer SQL. Las mismas tres consultas: lo pendiente de este servicio sin rendir, el pendiente de un tipo y
+ * lo rendido.
+ */
+function documentOutboxHarness() {
+  return `
+// ── El outbox ────────────────────────────────────────────────────────────────
+
+const OUTBOX_DRAIN_TIMEOUT_MS = 15_000;
+
+function messagingSettings(): MessagingSettings {
+  if (currentApp == null) throw new Error('El servidor no está arrancado: useFlow() se llama dentro del describe del flujo.');
+  return currentApp.get<MessagingSettings>(MESSAGING_SETTINGS);
+}
+
+function outboxRelay(): OutboxRelay {
+  if (currentApp == null) throw new Error('El servidor no está arrancado: useFlow() se llama dentro del describe del flujo.');
+  return currentApp.get(OutboxRelay);
+}
+
+/** La colección del outbox, por la conexión del servidor arrancado. */
+function outboxCollection() {
+  if (currentApp == null) throw new Error('El servidor no está arrancado: useFlow() se llama dentro del describe del flujo.');
+  return currentApp.get(TransactionContext).collection('outbox_event');
+}
+
+/**
+ * Espera a que no queden eventos del outbox sin entregar para este servicio. Un canal que no publicamos no
+ * pasa por nuestro outbox, y con el broker parado por el escenario los eventos esperan a propósito. El
+ * RENDIDO no cuenta: no va a salir nunca, y contarlo agotaba la espera en cada lectura de su escenario.
+ */
+async function awaitOutboxDrained(channel: string): Promise<void> {
+  if (!PUBLISHED_CHANNELS.includes(channel) || brokerStopped) return;
+  const { destination } = messagingSettings();
+  const maxAttempts = messagingSettings().outboxRelay!.maxAttempts;
+  const until = Date.now() + OUTBOX_DRAIN_TIMEOUT_MS;
+  while (Date.now() < until && (await outboxCollection().countDocuments({ destination, published_at: null, attempts: { $lt: maxAttempts } })) > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+}
+
+/**
+ * Cuántos eventos se rindió el outbox: agotaron sus reintentos y no salieron nunca. El Then natural de casi
+ * cualquier escenario del outbox es que esto siga en CERO: entregar tarde es correcto, rendirse es perder.
+ */
+export function deadLetteredEvents(): Promise<number> {
+  return outboxRelay().countDeadLettered();
+}
+
+/**
+ * Agota el presupuesto de reintentos del evento pendiente de tipo \`eventType\` (el NOMBRE del evento en el
+ * diseño): la precondición del escenario de la rendición, que de verdad costaría 40 intentos. Va el último
+ * de su flujo, o limpia después con clearAbandonedOutboxEvents().
+ */
+export async function abandonOutboxEvent(eventType: string): Promise<void> {
+  const relay = outboxRelay();
+  await relay.pause();
+  try {
+    const pending = await outboxCollection().countDocuments({ event_type: eventType, published_at: null });
+    if (pending === 0) throw new Error(\`No hay ningún evento \${eventType} pendiente en el outbox que abandonar\`);
+    await outboxCollection().updateMany({ event_type: eventType, published_at: null }, { $set: { attempts: messagingSettings().outboxRelay!.maxAttempts } });
+  } finally {
+    relay.resume();
+  }
+}
+
+/** Retira lo que abandonOutboxEvent rindió: la purga no lo borra (solo lo publicado), y ensuciaría a los demás. */
+export async function clearAbandonedOutboxEvents(): Promise<void> {
+  await outboxCollection().deleteMany({ published_at: null, attempts: { $gte: messagingSettings().outboxRelay!.maxAttempts } });
+}
+
+/** Suspende el relay del outbox (la pasada en vuelo termina): los eventos quedan pendientes hasta resumeOutboxRelay(). */
+export function pauseOutboxRelay(): Promise<void> {
+  return outboxRelay().pause();
+}
+
+export function resumeOutboxRelay(): void {
+  outboxRelay().resume();
+}
+`;
 }

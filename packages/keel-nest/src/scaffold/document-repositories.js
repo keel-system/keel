@@ -22,7 +22,8 @@ import { DIRS, classPath, entityDir, tsModule, tsString } from './render.js';
 import { domainMembers } from './entities.js';
 import { TEXT_FOLD_TS } from './persistence-entities.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
-import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, occupantFinders } from './repositories.js';
+import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, occupantFinders, constructorOf, emitsDomainEvents } from './repositories.js';
+import { documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────
 
@@ -330,9 +331,14 @@ function saveMethod(model, entity, use) {
     lines.push(`      await this.collection.updateOne({ ${DOCUMENT_ID}: id }, { $set: fields${creation} }, { upsert: true, session });`);
   }
   const emitsEvents = (model.events ?? []).some((event) => event.aggregates.includes(entity.name));
-  // Sin mensajería sobre el documento todavía (incremento 12c) nadie los escucha, pero se vacían igual
-  // para que el buffer no crezca con cada escritura.
-  if (emitsEvents) lines.push('      entity.pullDomainEvents();');
+  if (emitsEvents && emitsDomainEvents(model, entity)) {
+    // Los eventos que la raíz acumuló salen por el puente DENTRO de esta transacción: con outbox, el documento
+    // del outbox y el cambio confirman o abortan juntos; con best-effort, se publican tras el commit.
+    lines.push('      await this.events.publish(entity.pullDomainEvents());');
+  } else if (emitsEvents) {
+    // Sin mensajería nadie los escucha, pero se vacían igual para que el buffer no crezca.
+    lines.push('      entity.pullDomainEvents();');
+  }
   lines.push(`      return toDomain${entity.name}({ ${DOCUMENT_ID}: id, ...fields });`);
   return `  async save(entity: ${entity.name}): Promise<${entity.name}> {
     return this.transactions.inTransaction(async (session) => {
@@ -415,6 +421,8 @@ export function renderDocumentAdapter(model, entity) {
   }`);
   }
 
+  // Los reclamos de los barridos que sacan documentos de esta raíz y los de las reconciliaciones que la esperan.
+  methods.push(...documentSweepClaimMethods(model, entity), ...documentReconciliationMethods(model, entity));
   methods.push(saveMethod(model, entity, use));
   methods.push(`  async deleteById(${idName}: ${idType}): Promise<void> {
     // El agregado es el documento: borrarlo borra también sus hijas, que van dentro.
@@ -433,9 +441,7 @@ ${paginated}/**
  */
 @Injectable()
 export class ${adapterClass(entity)} extends ${portClass(entity)} {
-  constructor(@Inject(TransactionContext) private readonly transactions: TransactionContext) {
-    super();
-  }
+${constructorOf(model, entity, imports)}
 
   private get collection(): Collection<StoredDocument> {
     return this.transactions.collection(COLLECTION);

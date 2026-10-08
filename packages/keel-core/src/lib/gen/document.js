@@ -15,9 +15,9 @@
 
 import { snakeCase } from './naming.js';
 import { persistedMembers, uniqueFields, indexName, storedWhenValue, partialUniqueIndexes, LOCK_VERSION, AUDIT_COLUMNS, usesAuditableEntity } from './relational.js';
-import { usesOutbox, usesMessageDeduplication } from './messaging-stores.js';
+import { usesOutbox, usesMessageDeduplication, storeColumns } from './messaging-stores.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
-import { reconciliationClaims } from './reconciliation-stores.js';
+import { reconciliationClaims, RECONCILIATION_CLAIM } from './reconciliation-stores.js';
 
 // ─── La representación física ────────────────────────────────────────────────
 
@@ -348,6 +348,39 @@ export function documentIndexes(model, warnings = model.warnings) {
       .map((entity) => ({ entity: entity.name, collection: entity.collectionName, specs: documentIndexSpecs(model, entity, warnings) })),
     ...storeDocumentIndexes(model)
   ].filter((entry) => entry.specs.length > 0);
+}
+
+// ─── Los almacenes del generador como documentos ─────────────────────────────
+
+/**
+ * El `_id` del documento de un almacén del generador (outbox_event, processed_event, idempotency_record,
+ * reconciliation_claim), derivado de su clave primaria:
+ *   · una columna → ese valor es el `_id` (`value`: el uuid del outbox);
+ *   · varias → un SUBDOCUMENTO con esas columnas en su orden (`subdocument`). MongoDB compara un `_id`
+ *     subdocumento campo a campo Y en orden: `{ handler_id, event_id }` y `{ event_id, handler_id }` son
+ *     dos claves distintas, así que el orden es contrato;
+ *   · la marca de la reconciliación es la excepción: su clave va APLANADA en un texto
+ *     (`reconciliationClaimDocumentId`) y las columnas se guardan además como campos (`flattened`).
+ */
+export function storeDocumentKey(table) {
+  const primary = table.columns.filter((column) => column.primary);
+  if (table.table === RECONCILIATION_CLAIM.table) {
+    return { kind: 'flattened', columns: primary.map((column) => column.name), separator: '|' };
+  }
+  if (primary.length === 1) return { kind: 'value', columns: [primary[0].name], storage: storageOf(primary[0]) };
+  return { kind: 'subdocument', columns: primary.map((column) => column.name) };
+}
+
+/**
+ * Los campos del documento de un almacén, fuera del `_id`, en el orden de la tabla y con su tipo BSON.
+ * Incluye lo que solo existe en documental (`claimed_at` del outbox) y, en la clave aplanada, las
+ * columnas de la clave como campos.
+ */
+export function storeDocumentFields(table) {
+  const key = storeDocumentKey(table);
+  return storeColumns(table, 'document')
+    .filter((column) => key.kind === 'flattened' || !column.primary)
+    .map((column) => ({ name: column.name, storage: storageOf(column), nullable: column.nullable }));
 }
 
 // ─── export-indexes.sh ───────────────────────────────────────────────────────

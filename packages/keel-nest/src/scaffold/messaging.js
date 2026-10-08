@@ -28,7 +28,8 @@ import { deadLetterDestination, subscriptionDestination as destinationOf, subscr
 import { OUTBOX_PURGE, OUTBOX_RELAY, PROCESSED_EVENT_PURGE, parameterValue } from 'keel-core/gen/messaging-stores';
 import { DIRS, classPath, fieldImports, tsModule, tsString, decapitalize } from './render.js';
 import { DOMAIN_EVENT_TS, EVENT_METADATA_TS } from './events.js';
-import { usesRelational } from './persistence-entities.js';
+import { usesPersistence, usesDocument } from './persistence-entities.js';
+import { outboxDocumentLiteral } from './document-stores.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 import { CORRELATION_TS, REQUEST_READING_TS, REQUEST_ERRORS_TS, usesApi } from './rest-support.js';
 import { readerOf, readerImports, valueReaders } from './controllers.js';
@@ -51,16 +52,16 @@ const PROFILES = ['local', 'develop', 'production', 'test'];
 
 // ─── Qué se genera ───────────────────────────────────────────────────────────
 
-/** ¿Hay mensajería que generar? Publica o consume, y su persistencia (si la tiene) es relacional. */
+/** ¿Hay mensajería que generar? Publica o consume, sobre la persistencia que tenga (relacional o documental) o sin ella. */
 export function usesMessaging(model) {
   if (!model.layersPresent?.messaging) return false;
   if ((model.events ?? []).length === 0 && (model.subscriptions ?? []).length === 0) return false;
-  return usesRelational(model) || !model.layersPresent?.persistence;
+  return usesPersistence(model) || !model.layersPresent?.persistence;
 }
 
-/** ¿Hay puente? Solo con persistencia relacional: los eventos salen del adaptador de repositorio. */
+/** ¿Hay puente? Solo con persistencia: los eventos salen del adaptador de repositorio. */
 export function usesBridge(model) {
-  return usesMessaging(model) && usesRelational(model) && (model.events ?? []).length > 0;
+  return usesMessaging(model) && usesPersistence(model) && (model.events ?? []).length > 0;
 }
 
 /** ¿Va por el outbox? Lo decide el diseño (`reliability: outbox`), y necesita la transacción del cambio. */
@@ -68,9 +69,9 @@ export function usesNestOutbox(model) {
   return usesBridge(model) && model.messaging?.reliability === 'outbox';
 }
 
-/** ¿Hay registro de mensajes procesados? Toda suscripción con persistencia relacional. */
+/** ¿Hay registro de mensajes procesados? Toda suscripción con persistencia (de los dos modelos). */
 export function usesProcessedEvents(model) {
-  return usesMessaging(model) && usesRelational(model) && (model.subscriptions ?? []).length > 0;
+  return usesMessaging(model) && usesPersistence(model) && (model.subscriptions ?? []).length > 0;
 }
 
 /** ¿Hay mensajes que leer? Las suscripciones necesitan los lectores de valores del cable. */
@@ -142,7 +143,7 @@ export function generate(model) {
   }
   // Los lectores de value objects los emite la API; sin ella, los mensajes los necesitan igual.
   if (!usesApi(model) && (model.valueObjects ?? []).length > 0 && usesSubscriptionMessages(model)) files.push(valueReaders(model));
-  if (usesRelational(model)) {
+  if (usesPersistence(model)) {
     files.push({ path: BROKER_BINDINGS_TS, content: bindingsFile(model) });
     files.push({ path: MESSAGING_MODULE_TS, content: moduleFile(model) });
     files.push({ path: LISTENERS_MODULE_TS, content: listenersModuleFile() });
@@ -340,6 +341,15 @@ export class ${stub} extends ${event.publisherClass} {
 
 // ─── El puente ───────────────────────────────────────────────────────────────
 
+/** El append de la fila del outbox sobre documentos: en la sesión de la transacción del cambio. */
+function documentAppend() {
+  return `    await this.transactions.collection<StoredDocument>('outbox_event').insertOne(
+    ${outboxDocumentLiteral({ id: 'new UUID(randomUUID())', destination: 'this.settings.destination', routingKey: 'routingKey', eventType: 'eventType', payload: 'toWireJson(envelope)', now: 'new Date()' })},
+      { session: this.transactions.session() }
+    );
+`;
+}
+
 function bridgeFile(model) {
   const file = bridgePath(model);
   const outbox = usesNestOutbox(model);
@@ -353,11 +363,15 @@ function bridgeFile(model) {
     { symbol: 'MESSAGING_SETTINGS', from: MESSAGING_SETTINGS_TS },
     { symbol: 'MessagingSettings', from: MESSAGING_SETTINGS_TS, type: true }
   ];
+  const document = usesDocument(model);
   if (outbox) {
     imports.push(
       { symbol: 'EventEnvelope', from: EVENT_ENVELOPE_TS },
-      { symbol: 'OutboxEventOrm', from: OUTBOX_ORM_TS },
-      { symbol: 'toWireJson', from: WIRE_TS }
+      { symbol: 'toWireJson', from: WIRE_TS },
+      // Sobre documentos, la fila es un documento de outbox_event con su uuid binario (keel-core/gen/document.js).
+      ...(document
+        ? [{ symbol: 'UUID', from: 'mongodb' }, { symbol: 'StoredDocument', from: 'src/infrastructure/persistence/bson-values.ts', type: true }]
+        : [{ symbol: 'OutboxEventOrm', from: OUTBOX_ORM_TS }])
     );
   }
   const ctor = [
@@ -392,7 +406,7 @@ ${delivery}
 
   /** La fila del outbox, en la transacción del cambio: el evento y el cambio confirman o revierten juntos. */
   private async append(routingKey: string, eventType: string, envelope: EventEnvelope<unknown>): Promise<void> {
-    await this.transactions.manager().insert(OutboxEventOrm, {
+${document ? documentAppend() : `    await this.transactions.manager().insert(OutboxEventOrm, {
       id: randomUUID(),
       destination: this.settings.destination,
       routingKey,
@@ -404,7 +418,7 @@ ${delivery}
       nextAttemptAt: null,
       lastError: null
     });
-  }`
+`}  }`
     : '';
   const body = `/**
  * ${bridgeClass(model)} — traduce cada evento de dominio a su evento de integración y lo entrega ${

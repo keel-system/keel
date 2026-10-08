@@ -85,40 +85,46 @@ test('lo que una operación declara y cuelga de un incremento futuro se avisa, n
   assert.ok(!warnings.join('\n').includes('listOrders'));
 });
 
-test('las dos persistencias se generan; sobre documentos, cada mecanismo del 12c se rechaza nombrándolo', () => {
-  const relational = checkSupportedFeatures(
-    manifestWith('domain', 'use-cases', 'persistence'),
-    { domain: {}, 'use-cases': {}, persistence: { default: { model: 'relational' } } }
-  );
-  assert.deepEqual(relational.errors, []);
-  assert.deepEqual(relational.warnings, []);
-  const document = checkSupportedFeatures(
-    manifestWith('domain', 'use-cases', 'persistence'),
-    { domain: {}, 'use-cases': {}, persistence: { default: { model: 'document' } } }
-  );
-  assert.deepEqual(document.errors, []);
-  assert.deepEqual(document.warnings, []);
-  // Lo que guarda su estado en colecciones del generador llega en el 12c: uno por mecanismo.
-  const pending = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging', 'dependencies'), {
+test('las dos persistencias se generan enteras, con los almacenes del generador (incremento 12c)', () => {
+  for (const model of ['relational', 'document']) {
+    const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging', 'dependencies'), {
+      domain: {},
+      'use-cases': {
+        operations: {
+          sweep: { schedule: { cron: '*/5 * * * *' } },
+          place: { idempotency: { keySource: 'client-key' } }
+        }
+      },
+      persistence: { default: { model } },
+      messaging: {},
+      dependencies: { dependencies: { stock: { activations: { reserve: { reconciledBy: 'sweep' } } } } }
+    });
+    assert.deepEqual(errors, [], model);
+    // Sobre documentos, un único aviso: el arnés de integración (reset y sondas) llega en el 12d.
+    if (model === 'relational') assert.deepEqual(warnings, [], model);
+    else {
+      assert.equal(warnings.length, 1, warnings.join('\n'));
+      assert.match(warnings[0], /arnés de integración sobre documentos .*incremento 12d/);
+    }
+  }
+});
+
+test('la autoría de política se rechaza en los dos modelos: ningún adaptador estampa quién', () => {
+  for (const model of ['relational', 'document']) {
+    const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), {
+      domain: {},
+      'use-cases': {},
+      persistence: { default: { model }, audit: { authorship: 'all' } }
+    });
+    assert.equal(errors.length, 1, model);
+    assert.match(errors[0], /persistence\.audit\.authorship: all .*authorship: declared/);
+  }
+  const declared = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), {
     domain: {},
-    'use-cases': {
-      operations: {
-        sweep: { schedule: { cron: '*/5 * * * *' } },
-        place: { idempotency: { keySource: 'client-key' } },
-        guarded: { idempotency: { keySource: 'payload-field', guard: 'natural-key' } }
-      }
-    },
-    persistence: { default: { model: 'document' } },
-    messaging: {},
-    dependencies: { dependencies: { stock: { activations: { reserve: { reconciledBy: 'sweep' } } } } }
+    'use-cases': {},
+    persistence: { audit: { authorship: 'declared' } }
   });
-  assert.equal(pending.errors.length, 4);
-  assert.ok(pending.errors.every((error) => /sobre persistencia documental .*incremento 12c/.test(error)));
-  assert.match(pending.errors[0], /^messaging/);
-  assert.match(pending.errors[1], /sweep \(schedule/);
-  assert.match(pending.errors[2], /place \(idempotency/);
-  assert.doesNotMatch(pending.errors[2], /guarded/, 'la clave natural no necesita registro');
-  assert.match(pending.errors[3], /stock\.reserve \(reconciledBy/);
+  assert.deepEqual(declared.errors, [], 'la autoría declarada es del dominio y se genera');
 });
 
 test('un índice único condicionado se genera sin aviso (tramo 6c)', () => {

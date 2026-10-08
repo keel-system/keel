@@ -19,7 +19,8 @@ import {
 } from 'keel-core/gen/reconciliation-stores';
 import { kebabCase, screamingSnake } from 'keel-core/gen';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
-import { ORM_DIR, engineOf, ormClass, usesRelational } from './persistence-entities.js';
+import { ORM_DIR, engineOf, ormClass, usesPersistence, usesDocument, usesRelational } from './persistence-entities.js';
+import { documentReconciliationStore } from './document-stores.js';
 import { storeEntity } from './messaging-stores.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 
@@ -29,14 +30,14 @@ export const RECONCILIATION_CLAIM_ORM_TS = `src/${ORM_DIR}/reconciliation-claim-
 export const RECONCILIATION_CLAIM_STORE_TS = `${RECONCILIATION_DIR}/reconciliation-claim-store.ts`;
 export const RECONCILIATION_SETTINGS_TS = `${RECONCILIATION_DIR}/reconciliation-settings.ts`;
 
-/** ¿Genera build algún reclamo de reconciliación? Rama relacional (la documental llega con el incremento 12). */
+/** ¿Genera build algún reclamo de reconciliación? En los dos modelos (el documental desde el incremento 12c). */
 export function usesReconciliationClaims(model) {
-  return usesRelational(model) && reconciliationClaims(model).length > 0;
+  return usesPersistence(model) && reconciliationClaims(model).length > 0;
 }
 
 /** ¿Hay parámetros de barridos de reconciliación que leer? Los hay aunque build no pueda generar el reclamo. */
 export function usesReconciliationSettings(model) {
-  return usesRelational(model) && reconciledActivations(model).length > 0;
+  return usesPersistence(model) && reconciledActivations(model).length > 0;
 }
 
 export function generate(model) {
@@ -50,8 +51,8 @@ export function generate(model) {
   }
   if (usesReconciliationClaims(model)) {
     files.push(
-      { path: RECONCILIATION_CLAIM_ORM_TS, content: storeEntity(model, RECONCILIATION_CLAIM, 'ReconciliationClaimOrm', RECONCILIATION_CLAIM_ORM_TS, CLAIM_DOC) },
-      { path: RECONCILIATION_CLAIM_STORE_TS, content: storeFile(model) }
+      ...(usesDocument(model) ? [] : [{ path: RECONCILIATION_CLAIM_ORM_TS, content: storeEntity(model, RECONCILIATION_CLAIM, 'ReconciliationClaimOrm', RECONCILIATION_CLAIM_ORM_TS, CLAIM_DOC) }]),
+      { path: RECONCILIATION_CLAIM_STORE_TS, content: usesDocument(model) ? documentReconciliationStore(RECONCILIATION_CLAIM_STORE_TS) : storeFile(model) }
     );
   }
   return files;
@@ -59,7 +60,7 @@ export function generate(model) {
 
 /** La entidad de la tabla, para el DataSource. */
 export function reconciliationEntities(model) {
-  return usesReconciliationClaims(model) ? [{ symbol: 'ReconciliationClaimOrm', from: RECONCILIATION_CLAIM_ORM_TS }] : [];
+  return usesReconciliationClaims(model) && usesRelational(model) ? [{ symbol: 'ReconciliationClaimOrm', from: RECONCILIATION_CLAIM_ORM_TS }] : [];
 }
 
 /** La purga de la tabla, para table-purges.ts: las marcas viejas ya no protegen nada. */
@@ -222,7 +223,7 @@ export class ReconciliationClaimStore {
 
 // ─── El puerto y el adaptador de la raíz que espera ──────────────────────────
 
-const claimsFor = (model, entityName) => (usesRelational(model) ? reconciliationClaims(model).filter((claim) => claim.entity === entityName) : []);
+const claimsFor = (model, entityName) => (usesPersistence(model) ? reconciliationClaims(model).filter((claim) => claim.entity === entityName) : []);
 
 function describe(claim) {
   return `Reclama los ${claim.entity} que encargaron trabajo a ${claim.dependency}.${claim.activation} y llevan

@@ -22,14 +22,36 @@ import { planService as planSpring } from '../../keel-spring/src/scaffold/index.
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { sampleEntity, PROBE_HELPERS } from '../scripts/lib/samples.js';
-import { repositoryRoots, adapterClass, adapterPath } from '../src/scaffold/repositories.js';
+import { repositoryRoots, adapterClass, adapterPath, emitsDomainEvents } from '../src/scaffold/repositories.js';
+import { claimsForEntity } from 'keel-core/gen';
+import { reconciliationClaims } from 'keel-core/gen/reconciliation-stores';
 
-// Las fixtures documentales sin lo que el 12b aún no genera (la mensajería y el correo).
+// Las fixtures documentales enteras, salvo el correo de notification-mailer-mongo (incremento 13).
 const SUBJECTS = [
-  { name: 'inspection-reports', withoutLayers: ['messaging'] },
+  { name: 'inspection-reports', withoutLayers: [] },
   { name: 'job-dispatch-mongo', withoutLayers: [] },
-  { name: 'notification-mailer-mongo', withoutLayers: ['messaging', 'mail'] }
+  { name: 'notification-mailer-mongo', withoutLayers: ['mail'] }
 ];
+
+/** El stack de un sujeto: MongoDB y, con mensajería, RabbitMQ (los almacenes son los mismos con cualquiera). */
+const stackOf = (name) => ({ database: 'mongodb', ...(loadService(path.join(FIXTURES_DIR, name)).layers.messaging ? { broker: 'rabbitmq' } : {}) });
+
+/**
+ * Los argumentos del adaptador de una raíz, en el orden de repositories.js (constructorOf): la transacción, el
+ * puente si la raíz emite, la configuración de los barridos (y los parámetros de un rescate), y la tienda y los
+ * números de la reconciliación. Aquí basta con que existan: se mide el mapeo.
+ */
+function adapterArgs(model, root, transactions) {
+  const args = [transactions];
+  if (emitsDomainEvents(model, root)) args.push({ publish: async () => {} });
+  const claims = claimsForEntity(model, root.name);
+  if (claims.length > 0) {
+    args.push({ batchSize: {}, stalledAfterSeconds: {} });
+    if (claims.some((claim) => claim.stalled?.parameter)) args.push({});
+  }
+  if (reconciliationClaims(model).some((claim) => claim.entity === root.name)) args.push({ claim: async () => true }, {});
+  return args;
+}
 
 const NEST_STUB = `
 export const Inject = () => () => {};
@@ -141,7 +163,7 @@ function typeProblem(value, storage, where) {
 }
 
 for (const subject of SUBJECTS) {
-  const { files, model } = planFixture(subject.name, { withoutLayers: subject.withoutLayers, stack: { database: 'mongodb' } });
+  const { files, model } = planFixture(subject.name, { withoutLayers: subject.withoutLayers, stack: stackOf(subject.name) });
   const byPath = Object.fromEntries(files.map((file) => [file.path, file.content]));
 
   test(`${subject.name}: un proyecto documental lleva el driver y ni rastro de TypeORM`, () => {
@@ -185,7 +207,7 @@ test('la URI de keel-spring vale para el driver de Node: se quita solo uuidRepre
 
 for (const subject of SUBJECTS) {
   test(`${subject.name}: los índices que crea el servidor son los de keel-core/gen/document.js`, async () => {
-    const { files, model } = planFixture(subject.name, { withoutLayers: subject.withoutLayers, stack: { database: 'mongodb' } });
+    const { files, model } = planFixture(subject.name, { withoutLayers: subject.withoutLayers, stack: stackOf(subject.name) });
     const { load } = transpileTree(files);
     const { DOCUMENT_INDEXES } = await load('src/infrastructure/persistence/document-indexes.ts');
     const expected = documentIndexes(model, []).map(({ collection, specs }) => ({
@@ -203,7 +225,7 @@ for (const subject of SUBJECTS) {
   });
 
   test(`${subject.name}: el adaptador escribe el documento del contrato y lo lee sin perder nada`, async () => {
-    const { files, model } = planFixture(subject.name, { withoutLayers: subject.withoutLayers, stack: { database: 'mongodb' } });
+    const { files, model } = planFixture(subject.name, { withoutLayers: subject.withoutLayers, stack: stackOf(subject.name) });
     const tree = transpileTree(files, { stubs: { '@nestjs/common': NEST_STUB, mongodb: MONGODB_STUB } });
     const shapes = { entity: {}, vo: {} };
     for (const entity of model.entities.filter((e) => e.persisted)) shapes.entity[entity.name] = documentShape(model, entity);
@@ -222,7 +244,7 @@ for (const subject of SUBJECTS) {
       const { sample, snapshot, differences } = await import(pathToFileURL(sampleFile).href);
       const { [adapterClass(root)]: Adapter } = await tree.load(adapterPath(root));
       const collections = {};
-      const repository = new Adapter(fakeTransactions(collections));
+      const repository = new Adapter(...adapterArgs(model, root, fakeTransactions(collections)));
       const original = sample();
       await repository.save(original);
       const [stored] = collections[root.collectionName].documents;

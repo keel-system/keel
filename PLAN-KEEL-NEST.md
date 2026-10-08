@@ -1370,6 +1370,44 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   - **Para 12c**: el registro de procesados, el outbox con `claimed_at` (el relay sin `SKIP LOCKED`), el registro de
     idempotencia, `reconciliation_claim` y los reclamos de barrido con `findOneAndUpdate`, con el gate y la frontera
     abiertos para `job-dispatch-mongo` e `inspection-reports` enteros. **Sigue por decidir el sujeto de 12e.**
+- **12c — los almacenes documentales, hecho (2026-10-08)**.
+  - **Neutral**: `storeDocumentKey` y `storeDocumentFields` en `keel-core/gen/document.js`: el `_id` de cada almacén
+    del generador (el uuid del outbox; el SUBDOCUMENTO `{handler_id, event_id}` y `{operation_scope, idempotency_key}`
+    —MongoDB compara un `_id` subdocumento en orden, así que el orden es contrato—; la clave aplanada de
+    `reconciliation_claim`) y sus campos, `claimed_at` incluido. `keel-spring/test/document-parity.test.js` los ata a
+    sus cuatro espejos `*Document`: casaban ya.
+  - **Lo que emite** (`src/scaffold/document-stores.js`): cada almacén con la MISMA API que su gemelo relacional (el
+    relay, los listeners, los handlers y el gate no distinguen el almacén). El relay reclama con `findOneAndUpdate`
+    y la marca caducable `claimed_at`, sin transacción —la operación ya es atómica—, ordenado por llegada; el fallo
+    incrementa y suelta la marca en una actualización por pipeline, con el error como `$literal` (un texto que
+    empiece por `$` se leería como un campo); la guarda y el registro INSERTAN sobre su `_id` subdocumento; la
+    tienda de la reconciliación es un upsert sobre la marca caducada; los reclamos de barrido y de reconciliación del
+    adaptador, con `findOneAndUpdate` en orden y el estado guardado como la constante del enum; las purgas, el mismo
+    bucle por lotes con la frontera y el borrado sobre la colección. El puente escribe el documento del outbox en la
+    sesión del cambio. El gate pide `insertOne` y prohíbe el reemplazo y el upsert. Lo relacional, idéntico: 9 840
+    archivos de las fixtures relacionales comparados contra `HEAD`, cero diferencias.
+  - **Frontera**: el modelo documental se acepta entero. Y se dice un hueco que no era del 12 y que destapó
+    `asset-vault`: la autoría de POLÍTICA (`audit.authorship: all`) no la estampa ningún adaptador de keel-nest (en
+    relacional la columna es NOT NULL: la escritura fallaría). Se rechaza en los dos modelos; solo la declara
+    `asset-vault`, fuera también por `storage`.
+  - **Medido**: `doc-check` **11/11**, 262 comprobaciones sobre cuatro sujetos —`inspection-reports` y
+    `notification-mailer-mongo` ya con su mensajería, y `asset-vault` para la reconciliación—: el documento de cada
+    almacén contra el contrato, el puente con su aborto, el reclamo del relay (orden, lote, marca viva y caducada,
+    carrera de réplicas, backoff, rendición), la guarda, el registro de idempotencia (repetición, carrera, aborto,
+    caducidad), los reclamos de cola y rescate, la reconciliación y las purgas. Falsado con once sabotajes que
+    compilan: nueve caen en su comprobación; uno (el relay sin orden) salía VERDE porque el índice de pendientes
+    regalaba el orden —ahora el orden se mide con el índice retirado y cae—; y uno, la purga del outbox sin su
+    condición, es una mutación EQUIVALENTE (un `published_at` nulo nunca cumple el corte). Como el uuid del 12b, la
+    clave del registro en otro orden pasa su propia ida y vuelta y solo la ve el documento crudo.
+    `idempotency-check.test.js` gana la paridad de familias con keel-spring en tres fixtures documentales y EJECUTA
+    el gate (la escritura nace verde; un upsert en la guarda la pone roja). keel-nest sin red en verde.
+  - **Lo que destapó `ts-check`** (12/12 al final, las 33 siluetas con `strict`): la sección del outbox del arnés
+    (`flow.ts`: esperar el drenaje, `abandonOutboxEvent`, `clearAbandonedOutboxEvents`) componía SQL con `db()`, que
+    en documental no existe. En vez de una espera vacía que pasara por buena, la versión documental lee la colección
+    con la `TransactionContext` del propio servidor arrancado (`flow.ts` ya tomaba de él el relay); ojo para la skill
+    del 12d: ahí `clearAbandonedOutboxEvents()` es asíncrona. El resto del arnés documental —el reset entre flujos y las
+    sondas de mongosh— es el 12d, y `build` lo avisa sobre todo diseño documental: el servidor sale entero, los
+    `FL-*` todavía no se pueden puntuar.
 
 ### Inc. 13 — Capas de borde: cache, storage, correo, pagos
 

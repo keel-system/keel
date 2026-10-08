@@ -393,7 +393,7 @@ function withStableOrder(pageable: Pageable): FindOptionsOrder<${ormClass(entity
  * integración al que los entrega; y si algún barrido la reclama, la configuración de los barridos (y los
  * parámetros del servicio, si un rescate lee de ellos su plazo).
  */
-function constructorOf(model, entity, imports) {
+export function constructorOf(model, entity, imports) {
   const deps = [{ token: 'TransactionContext', name: 'transactions', type: 'TransactionContext' }];
   if (emitsDomainEvents(model, entity)) {
     imports.push({ symbol: bridgeClass(model), from: bridgePath(model) });

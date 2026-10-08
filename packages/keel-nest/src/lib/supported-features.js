@@ -64,12 +64,25 @@ export function checkSupportedFeatures(manifest, layers) {
       );
     }
   }
-  // La persistencia DOCUMENTAL (incremento 12) se genera desde el 12b: documentos, índices, transacción y
-  // bloqueo optimista. Los mecanismos que guardan su estado en colecciones del generador (el outbox y los
-  // mensajes procesados, el registro de idempotencia, los reclamos de barrido y de reconciliación) llegan
-  // en el 12c: hasta entonces se rechazan, en vez de generar un handler sin su almacén.
+  // La persistencia DOCUMENTAL (incremento 12) se genera entera: documentos, índices, transacción y los
+  // almacenes del generador (outbox, mensajes procesados, registro de idempotencia y reclamos).
+  //
+  // El ARNÉS de integración sobre documentos (el reset entre flujos y las sondas de mongosh con las que se
+  // fabrican las precondiciones) llega en el 12d: el servidor se genera entero, pero las pruebas de flujo no
+  // tienen todavía con qué dejar la base limpia.
   if (declared.includes('persistence') && layers?.persistence?.default?.model === 'document') {
-    for (const message of documentFrontier(declared, layers)) errors.push(message);
+    warnings.push(
+      'persistence.default.model: document — el servidor se genera entero, pero el arnés de integración sobre documentos (el reset de la base entre flujos y las sondas que fabrican precondiciones) llega en el incremento 12d de PLAN-KEEL-NEST.md: los escenarios FL-* todavía no se pueden puntuar.'
+    );
+  }
+  // La auditoría de AUTORÍA por política (`created_by`/`updated_by` sin que el dominio los nombre) necesita
+  // saber quién llama al guardar, y ninguno de los dos adaptadores lo estampa todavía: la columna saldría
+  // vacía (en relacional, NOT NULL: la escritura fallaría). Solo la declara asset-vault, fuera también por storage.
+  if (declared.includes('persistence') && layers?.persistence?.audit?.authorship === 'all') {
+    errors.push(
+      'persistence.audit.authorship: all — keel-nest todavía no estampa quién crea y modifica cada agregado (llega con la capa storage, en el incremento 13 de PLAN-KEEL-NEST.md, que trae el único diseño que la declara). ' +
+        "Genera este diseño con keel-spring, o declara la autoría en el dominio (authorship: declared)."
+    );
   }
   // La identidad del llamante con VARIAS credenciales por recurso (`from.resolvedBy`) necesita el finder
   // por elemento de una colección en el repositorio, que keel-nest aún no emite. Sin él, el valor del
@@ -122,32 +135,6 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
   return { errors, warnings };
-}
-
-/**
- * Lo que la persistencia documental todavía no genera (incremento 12c de PLAN-KEEL-NEST.md): cada
- * mecanismo que necesita una colección del generador, con lo que lo dispara en el diseño.
- */
-function documentFrontier(declared, layers) {
-  const errors = [];
-  const pending = (what) =>
-    `${what} sobre persistencia documental — keel-nest todavía no lo genera (llega en el incremento 12c de PLAN-KEEL-NEST.md). ` +
-    'Genera este diseño con keel-spring, o espera a que keel-nest lo cubra.';
-  if (declared.includes('messaging')) errors.push(pending('messaging (el outbox y el registro de mensajes procesados)'));
-  const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
-  const scheduled = operations.filter(([, operation]) => operation?.schedule != null).map(([name]) => name);
-  if (scheduled.length > 0) errors.push(pending(`use-cases: ${scheduled.join(', ')} (schedule: el barrido y su reclamo)`));
-  const idempotent = operations
-    .filter(([, operation]) => operation?.idempotency != null && operation.idempotency.guard !== 'natural-key')
-    .map(([name]) => name);
-  if (idempotent.length > 0) errors.push(pending(`use-cases: ${idempotent.join(', ')} (idempotency: el registro de claves)`));
-  const reconciled = Object.entries(layers?.dependencies?.dependencies ?? {}).flatMap(([id, dependency]) =>
-    Object.entries(dependency?.activations ?? {})
-      .filter(([, activation]) => activation?.reconciledBy)
-      .map(([name]) => `${id}.${name}`)
-  );
-  if (reconciled.length > 0) errors.push(pending(`dependencies: ${reconciled.join(', ')} (reconciledBy: el reclamo de la reconciliación)`));
-  return errors;
 }
 
 /**

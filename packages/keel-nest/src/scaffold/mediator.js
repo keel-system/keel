@@ -21,7 +21,7 @@
 
 import { DIRS, classPath, tsModule } from './render.js';
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
-import { usesPersistence, usesRelational } from './persistence-entities.js';
+import { usesPersistence } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { usesCallerScope } from './security.js';
 import { usesMessaging } from './messaging.js';
@@ -117,7 +117,7 @@ function useCasesTest(model) {
   const scope = usesCallerScope(model);
   const scopeImport = scope ? "\nimport { SecurityModule } from '../src/infrastructure/security/security-module.js';" : '';
   // Con mensajería, los adaptadores de repositorio entregan al puente de eventos: también es dependencia.
-  const messaging = usesRelational(model) && usesMessaging(model);
+  const messaging = usesPersistence(model) && usesMessaging(model);
   const messagingImport = messaging ? "\nimport { MessagingModule } from '../src/infrastructure/messaging/messaging-module.js';" : '';
   // Los parámetros de despliegue (globales): los inyectan los adaptadores y los handlers que los leen.
   const parameters = usesServiceParameters(model);

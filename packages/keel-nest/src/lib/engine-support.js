@@ -47,7 +47,13 @@ export const MECHANISMS = {
         why:
           'la tabla outbox_event es la de keel-spring (schema-parity contra OutboxEventJpa) y los parámetros del relay, los de keel-core (messaging.test.js contra el messaging.yaml de keel-spring; el backoff, contra la referencia ejecutable). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla contra el catálogo del motor, el puente escribiendo la fila en la transacción del cambio (y nada si revierte), el reclamo en orden y con su lote, el lease, SKIP LOCKED sin esperar a la fila retenida por otra réplica, el backoff de un fallo, la rendición al alcanzar el máximo y su cuenta, y que ni la publicada ni la rendida vuelven. Falsado el 2026-10-07 quitando el lease (cae su comprobación y solo esa) y quitando SKIP LOCKED (el reclamo espera a la fila retenida hasta el tope). Y broker-check, contra RabbitMQ real: el relay con un dispatcher sobre RabbitConnection.publish entrega la fila al canal con su envoltura y su tipo, no da por publicado lo que no tenía cola (mandatory), espera con el broker caído y sale al volver sin rendirse, y un evento abandonado no sale y se cuenta (falsado publicando sin mandatory: cae ese flujo y solo ese). Y contra Kafka real (9f): el mismo relay con un dispatcher sobre KafkaConnection.publish entrega la fila con la routing key como clave, espera con el broker caído y sale al volver, y el abandonado no sale. Y contra LocalStack (9g): con un dispatcher sobre SnsSqsConnection.publish, lo mismo, más que una fila cuyo topic no existe no se da por publicada (la conexión no crea el topic), y que tras levantar el broker la topología se resiembra y la fila sale. Y la purga por lotes (10b), en db-check: lo publicado y caducado sale en lotes de dos con instantes repetidos en la frontera, con el tope alcanzado la pasada siguiente lo termina, y lo vigente y lo PENDIENTE no se tocan (falsado cortando por created_at: caen esas tres y solo esas)'
       },
-      document: { pending: 'incremento 12c (los almacenes documentales)' }
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          "el puente escribe el documento de outbox_event (el de keel-core/gen/document.js: _id uuid binario y sus campos en orden, claimed_at incluido) en la sesión de la transacción del cambio, y nada si aborta; el reclamo del relay con findOneAndUpdate en orden de llegada, con su lote, la marca claimed_at que retira de la pasada siguiente y que CADUCA, dos réplicas a la vez sin duplicar, el backoff, el error guardado tal cual (también si empieza por $) y la rendición con su cuenta; y la purga por lotes sin tocar lo pendiente. doc-check en inspection-reports, notification-mailer-mongo y asset-vault. Falsado el 2026-10-08: sin la condición de la marca, sin el orden (con el índice de pendientes retirado: con él el plan regalaba el orden y el sabotaje salía VERDE), con el error como expresión del pipeline y con el puente fuera de la sesión, cada uno cazado por su comprobación. Quitar la condición published_at de la purga es una mutación EQUIVALENTE: un published_at nulo nunca cumple el corte, en Mongo como en SQL"
+      }
     }
   },
   'idempotency-request': {
@@ -61,7 +67,13 @@ export const MECHANISMS = {
         why:
           'la tabla idempotency_record es la de keel-spring (schema-parity la compara con IdempotencyRecordJpa, falsado con una cota distinta: caen las 4 fixtures con idempotencia). db-check, en los dos motores y en las 3 fixtures relacionales que la declaran: la tabla contra el catálogo del motor, guardar y encontrar, el ámbito dentro de la clave, la clave repetida y la CARRERA de dos transacciones como el conflicto con su code (el del diseño si lo declara), la clave caducada sustituible y el rollback del registro con su comando. Falsado el 2026-10-06 quitando la traducción de la violación: caen exactamente esas dos comprobaciones en las tres. La purga de las caducadas (10b), en db-check: por lotes, con tope y pasada siguiente, sin tocar las vigentes. Lo que no ejecuta ninguna red: el USO en el handler, que escribe el agente'
       },
-      document: { pending: 'incremento 12c (los almacenes documentales)' }
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          "el registro de idempotency_record con el _id subdocumento {operation_scope, idempotency_key} EN ESE ORDEN —MongoDB compara el subdocumento en orden—, en la sesión del caso de uso: lo guardado se encuentra, el ámbito es parte de la clave, la repetición y la carrera de dos transacciones son su conflicto, aborta con el comando y la clave caducada se reusa. doc-check en notification-mailer-mongo y asset-vault. Falsado el 2026-10-08 sin borrar la caducada (cae el reuso) y con la clave en otro orden (find y save siguen casando entre sí: solo lo caza el documento crudo contra el contrato)"
+      }
     }
   },
   'idempotency-consume': {
@@ -75,10 +87,34 @@ export const MECHANISMS = {
         why:
           'la tabla processed_event es la de keel-spring (schema-parity contra ProcessedEventJpa). db-check, en los dos motores y en notification-mailer y catalog-extended: la tabla y sus cotas contra el catálogo del motor, la repetición arbitrada por la clave primaria, dos consumidores del mismo mensaje sin pisarse, el registro que sobrevive al rollback del handler (su transacción es propia) y la carrera de dos entregas, de la que registra UNA. Falsado el 2026-10-07 haciendo que el registro use la transacción del llamante: cae «sobrevive al rollback» y solo esa. Y la purga por retención (10b), en db-check. Lo que no mide: el ORDEN en el listener (alreadyProcessed/record o tryRecord), que escribe el agente y vigilará el gate de idempotencia (incremento 10d)'
       },
-      document: { pending: 'incremento 12c (los almacenes documentales)' }
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          "la guarda sobre processed_event con el _id subdocumento {handler_id, event_id}: la repetición la arbitra el _id, el registro sobrevive al fallo del handler, dos consumidores no se pisan y de dos entregas a la vez registra una. doc-check en inspection-reports, notification-mailer-mongo y asset-vault. Falsado el 2026-10-08 con un upsert en vez de insertOne (cae la repetición); el gate check-idempotency.sh exige insertOne y prohíbe el reemplazo y el upsert, y idempotency-check.test.js lo ejecuta"
+      }
     }
   },
-  'reconciliation-claim': { pending: 'incremento 11 (la reconciliación cuelga de dependencies)' },
+  'reconciliation-claim': {
+    emitter: 'src/scaffold/reconciliation-claim.js (sobre RECONCILIATION_CLAIM de keel-core/gen/reconciliation-stores.js) · src/scaffold/document-stores.js en la rama documental',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        falsified: true,
+        why:
+          'la tienda (insertar, marca viva, caducada, por activación, tres réplicas a la vez y gana una), el reclamo del adaptador (umbral, orden, lote, estado intacto, marcas, caducidad, dos réplicas a la vez) y la purga, en stock-reservation y catalog-extended sobre PostgreSQL y MySQL (incremento 11c). Falsado sin la condición de caducidad en el UPDATE y sin el umbral de espera'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          "la tienda es un upsert sobre la marca CADUCADA con la clave aplanada <activación>|<entidad> y las dos columnas también como campos (el documento de keel-spring): si no existe, insertarla es el reclamo; viva, lo niega; caducada, se renueva; de tres réplicas a la vez gana una. El reclamo del adaptador: umbral, el que más lleva primero, lote, estado de espera intacto, una marca por candidato y otra vez cuando caducan. doc-check sobre asset-vault (sin su autoría de política, que la frontera rechaza). Falsado el 2026-10-08 sin la condición de caducidad: caen la marca viva, la carrera y la pasada siguiente"
+      }
+    }
+  },
   'sweep-claim-queue': {
     emitter: 'src/scaffold/claim.js (sobre operation.claim[], claimOrderField y sweepConfig de keel-core/gen) · el puerto y el adaptador de repositories.js',
     coverage: {
@@ -90,7 +126,13 @@ export const MECHANISMS = {
         why:
           'db-check, en los dos motores, sobre job-dispatch (cola que estampa el reloj del rescate), payout-runs y notification-mailer: el lote del más antiguo al más nuevo y con su tamaño, ya en el estado de destino y con el reloj estampado en el MISMO UPDATE, la pasada siguiente con el resto, dos réplicas a la vez sin llevarse ninguna fila dos veces, y la fila bloqueada por otra réplica saltada sin esperar. sweep.yaml es el de keel-spring (claim.test.js). Falsado el 2026-10-07 por capas: sin el bloqueo cae SOLO el caso de SKIP LOCKED (la condición del UPDATE sigue impidiendo el doble reclamo); sin el bloqueo ni la condición cae también la carrera. Quitar solo la condición no pone nada rojo: con SKIP LOCKED dos réplicas nunca seleccionan la misma fila, y la condición es la segunda defensa'
       },
-      document: { pending: 'incremento 12c (el reclamo con findOneAndUpdate)' }
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          "findOneAndUpdate filtra y pasa al estado de destino (estampando el reloj si un rescate lo lee) en la MISMA operación atómica, ordenado: el lote sale del más antiguo al más nuevo, la pasada siguiente se lleva el resto y la tercera nada, y dos réplicas a la vez no se llevan el mismo documento. doc-check sobre job-dispatch-mongo y notification-mailer-mongo. Falsado el 2026-10-08 sin el orden: caen el lote y la pasada siguiente"
+      }
     }
   },
   'sweep-claim-rescue': {
@@ -104,7 +146,13 @@ export const MECHANISMS = {
         why:
           'db-check sobre job-dispatch (plazo enlazado al parámetro abandonAfterMinutes, DSL 2.18): se lleva solo lo abandonado, no cambia el estado (lo arrienda), renueva el reloj en el mismo UPDATE, la pasada siguiente ya no lo ve, y lo recién entrado en vuelo no se toca. Falsado el 2026-10-07 quitando la cota temporal: caen esas tres comprobaciones y solo esas'
       },
-      document: { pending: 'incremento 12c (el reclamo con findOneAndUpdate)' }
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          "el rescate arrienda: renueva el reloj SOLO si sigue atascado más que su plazo, sin mover el estado; lo recién entrado en vuelo no se toca y la pasada siguiente ya no lo ve. doc-check sobre job-dispatch-mongo. Falsado el 2026-10-08 moviendo el estado en el mismo $set: cae «no cambia el estado» y solo esa"
+      }
     }
   },
   'guard-claim': { pending: 'incremento 13 (la guarda de efecto irreversible solo la declara el correo)' },

@@ -19,16 +19,16 @@
 
 import { claimOrderField, claimsForEntity, screamingSnake, sweepClaims, sweepConfig } from 'keel-core/gen';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
-import { engineOf, ormClass, usesRelational } from './persistence-entities.js';
+import { engineOf, ormClass, usesPersistence } from './persistence-entities.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 export const SWEEP_SETTINGS_TS = 'src/infrastructure/persistence/sweep-settings.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
-/** ¿Genera build algún reclamo de barrido? Rama relacional (la documental llega con el incremento 12). */
+/** ¿Genera build algún reclamo de barrido? En los dos modelos (el documental desde el incremento 12c). */
 export function usesSweepClaims(model) {
-  return usesRelational(model) && sweepClaims(model).length > 0;
+  return usesPersistence(model) && sweepClaims(model).length > 0;
 }
 
 export function generate(model) {
@@ -109,9 +109,6 @@ function positive(configuration: Configuration, key: string, fallback: number): 
 
 /** Los métodos de reclamo del puerto <E>Repository, con lo que el agente tiene que saber de cada uno. */
 export function portClaimMethods(model, entity) {
-  // Sobre documentos el reclamo (findOneAndUpdate) llega en el incremento 12c; hasta entonces la frontera
-  // rechaza el diseño, y el puerto no promete un método que ningún adaptador implementa.
-  if (!usesRelational(model)) return [];
   return claimsForEntity(model, entity.name).map((claim) => `  /**
 ${describe(claim, entity.name)
   .split('\n')
@@ -155,7 +152,7 @@ entero a todas. Confirma en su propia transacción antes de volver: actúa sobre
 /** Lo que el constructor del adaptador inyecta además de la transacción: la configuración y, si un rescate lo lee, los parámetros. */
 export function claimDependencies(model, entity) {
   const claims = claimsForEntity(model, entity.name);
-  if (claims.length === 0 || !usesRelational(model)) return [];
+  if (claims.length === 0 || !usesPersistence(model)) return [];
   const deps = [{ token: 'SWEEP_SETTINGS', name: 'sweeps', type: 'SweepSettings', imports: [{ symbol: 'SWEEP_SETTINGS', from: SWEEP_SETTINGS_TS }, { symbol: 'SweepSettings', from: SWEEP_SETTINGS_TS, type: true }] }];
   if (claims.some((claim) => claim.stalled?.parameter)) {
     deps.push({ token: parametersClass(model), name: 'parameters', type: parametersClass(model), imports: [{ symbol: parametersClass(model), from: parametersPath(model) }] });

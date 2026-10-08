@@ -193,3 +193,57 @@ test('stock-reservation: releer por id pasa; un catch {} en el barrido lo pone r
   assert.equal(verdicts(swallowing.out).reconciliation, 'KO');
   assert.match(swallowing.out, /\[reconciliation\] reconcileReservations \(.*catch/);
 });
+
+// La persistencia DOCUMENTAL (incremento 12c): el mismo gate, con las mismas familias y sujetos que keel-spring
+// sobre el mismo diseño. notification-mailer-mongo sin su correo, que keel-nest no genera (incremento 13): fuera
+// de la frontera se quita, a los dos lados.
+const DOCUMENT_SUBJECTS = [
+  { name: 'job-dispatch-mongo', withoutLayers: [] },
+  { name: 'inspection-reports', withoutLayers: [] },
+  { name: 'notification-mailer-mongo', withoutLayers: ['mail'] }
+];
+for (const { name, withoutLayers } of DOCUMENT_SUBJECTS) {
+  test(`${name} [mongodb]: las familias y los sujetos del gate son los de keel-spring`, () => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+    const stack = { database: 'mongodb', ...(layers.messaging ? { broker: 'rabbitmq' } : {}) };
+    for (const layer of withoutLayers) {
+      delete manifest.layers[layer];
+      delete layers[layer];
+    }
+    const nest = planFixture(name, { stack, withoutLayers }).files.find((file) => file.path === CHECK_IDEMPOTENCY_SH)?.content;
+    const spring = planSpring({ manifest, layers, workspace: FIXTURES_DIR, stack }).files.find((file) => file.path === CHECK_IDEMPOTENCY_SH)?.content;
+    assert.ok(nest, 'keel-nest emite el gate también sobre documentos');
+    assert.deepEqual(rows(nest).filter((row) => !isInsertSubject(row)).sort(), rows(spring).filter((row) => !isInsertSubject(row)).sort());
+  });
+}
+
+test('documental: la escritura de los registros es un insertOne; un upsert la pone roja', (t) => {
+  const stack = { database: 'mongodb', broker: 'rabbitmq' };
+  const { files } = planFixture('notification-mailer-mongo', { stack, withoutLayers: ['mail'] });
+  const run = (edits) => {
+    const dir = tmpDir('keel-nest-gate-doc-');
+    for (const file of files) {
+      const out = path.join(dir, file.path);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, edits[file.path] ? edits[file.path](file.content) : file.content);
+    }
+    try {
+      return execFileSync('bash', [CHECK_IDEMPOTENCY_SH], { cwd: dir, encoding: 'utf8' });
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      return error.stdout;
+    }
+  };
+  // El gate imprime los HALLAZGOS (lo rojo): la escritura de los registros la emite build, así que nace sin
+  // ninguno; el resto de familias nace roja por el trabajo del agente, que aquí no se mira.
+  const insertFindings = (out) => out.split('\n').filter((line) => /la escritura es un INSERT/.test(line));
+  const fresh = run({});
+  if (fresh == null) return t.skip('sin bash');
+  const guard = 'src/infrastructure/messaging/idempotency/idempotency-guard.ts';
+  const store = 'src/infrastructure/persistence/idempotency-store-impl.ts';
+  assert.ok(files.some((file) => file.path === guard) && files.some((file) => file.path === store));
+  assert.deepEqual(insertFindings(fresh), [], 'recién generado, la guarda y el registro ya insertan');
+  const upserted = run({ [guard]: (text) => text.replace(/\.insertOne\(([^)]*)\)/s, '.updateOne($1, { $set: {} }, { upsert: true })') });
+  assert.ok(insertFindings(upserted).some((line) => /idempotency-guard/.test(line)), upserted);
+  assert.ok(!insertFindings(upserted).some((line) => /idempotency-store-impl/.test(line)), 'y solo la guarda');
+});
