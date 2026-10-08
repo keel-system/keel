@@ -431,7 +431,11 @@ mkdir -p "$(dirname "$OUT")"
     const out = {};
     db.getCollectionNames().sort().forEach(function (name) {
       out[name] = db.getCollection(name).getIndexes().map(function (ix) {
-        return { name: ix.name, key: ix.key, unique: ix.unique === true };
+        // El filtro parcial va también: sin él, el índice único CONDICIONADO es indistinguible de uno normal y
+        // su condición no se puede contrastar (corrida notification-mailer-mongo, 12e).
+        const entry = { name: ix.name, key: ix.key, unique: ix.unique === true };
+        if (ix.partialFilterExpression) entry.partialFilterExpression = ix.partialFilterExpression;
+        return entry;
       });
     });
     print(JSON.stringify(out, null, 2));
@@ -440,7 +444,8 @@ mkdir -p "$(dirname "$OUT")"
 echo "Índices exportados a $OUT"
 echo
 echo "Qué contrastar (es la verificación, no una redacción: build ya generó los índices):"
-echo "  1. Cada uk_*/idx_* de ${platform.indexCreator} aparece aquí, con las MISMAS claves y unique."
+echo "  1. Cada uk_*/idx_* de ${platform.indexCreator} aparece aquí, con las MISMAS claves y unique,"
+echo "     y el condicionado con su partialFilterExpression (el literal guardado del estado)."
 echo "  2. No sobra ninguno: un índice que no salga de ${platform.indexCreator} lo creó otra cosa,"
 echo "     y su nombre no lo conoce el ${platform.errorTranslator}."
 echo "  3. Cada naturalKey/unique/indexes de specs/persistence.keel.yaml tiene el suyo."

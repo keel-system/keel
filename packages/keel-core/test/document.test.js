@@ -217,3 +217,25 @@ test('export-indexes.sh nombra las piezas de la plataforma y la base del servici
   assert.match(script, /no lo conoce el ErrorFilter/);
   assert.doesNotMatch(script, /undefined/);
 });
+
+// Corrida notification-mailer-mongo (12e): el script exportaba nombre, claves y unique, y se dejaba el filtro
+// parcial; el índice único condicionado salía igual que uno normal. Se EJECUTA el fragmento de mongosh (es
+// JavaScript) contra un `db` falso con un índice parcial y otro sin él.
+test('export-indexes.sh exporta el filtro parcial del índice condicionado, y solo donde lo hay', () => {
+  const script = exportIndexesScript(model(), { indexCreator: 'IndexCreator', errorTranslator: 'ErrorFilter' });
+  const body = /--eval '([\s\S]*?)' >/.exec(script)[1];
+  const printed = [];
+  const db = {
+    getCollectionNames: () => ['templates'],
+    getCollection: () => ({
+      getIndexes: () => [
+        { name: '_id_', key: { _id: 1 } },
+        { name: 'uk_templates_active', key: { application_id: 1, key: 1 }, unique: true, partialFilterExpression: { status: 'ACTIVE' } }
+      ]
+    })
+  };
+  new Function('db', 'print', body)(db, (text) => printed.push(text));
+  const out = JSON.parse(printed[0]);
+  assert.deepEqual(out.templates[1], { name: 'uk_templates_active', key: { application_id: 1, key: 1 }, unique: true, partialFilterExpression: { status: 'ACTIVE' } });
+  assert.ok(!('partialFilterExpression' in out.templates[0]), 'un índice sin condición no gana la clave');
+});

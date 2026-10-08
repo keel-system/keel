@@ -494,11 +494,26 @@ export abstract class CommandDispatcher {
   const adapter = `/**
  * Adaptador del puerto CommandDispatcher sobre el UseCaseMediator. Vive en infraestructura porque es
  * aquí donde se conoce el mediator; la capa application solo ve el puerto.
+ *
+ * El mediator se resuelve de forma PEREZOSA (ModuleRef), no por constructor: el handler que despacha otro caso
+ * de uso recibe este adaptador, y el mediator depende del contenedor que construye a todos los handlers.
+ * Inyectarlo directo cierra el ciclo contenedor → handler → adaptador → mediator → contenedor, que Nest no
+ * admite entre providers de fábrica: la aplicación no arranca (corrida notification-mailer-mongo, 12e).
  */
 @Injectable()
 export class CommandDispatcherAdapter extends CommandDispatcher {
-  constructor(@Inject(UseCaseMediator) private readonly mediator: UseCaseMediator) {
+  private resolved: UseCaseMediator | null = null;
+
+  constructor(@Inject(ModuleRef) private readonly moduleRef: ModuleRef) {
     super();
+  }
+
+  /** El mediator, resuelto en el primer despacho: para entonces el contenedor ya está construido. */
+  private get mediator(): UseCaseMediator {
+    const mediator = this.resolved ?? this.moduleRef.get(UseCaseMediator, { strict: false });
+    if (mediator == null) throw new Error('UseCaseMediator no está disponible para el CommandDispatcher');
+    this.resolved = mediator;
+    return mediator;
   }
 
   dispatch<R>(message: ReturningCommand<R>): Promise<R>;
@@ -526,6 +541,7 @@ export class CommandDispatcherAdapter extends CommandDispatcher {
       content: tsModule(COMMAND_DISPATCHER_ADAPTER_TS, [
         { symbol: 'Inject', from: '@nestjs/common' },
         { symbol: 'Injectable', from: '@nestjs/common' },
+        { symbol: 'ModuleRef', from: '@nestjs/core' },
         { symbol: 'Command', from: MESSAGES_TS, type: true },
         { symbol: 'ReturningCommand', from: MESSAGES_TS, type: true },
         { symbol: 'CommandDispatcher', from: COMMAND_DISPATCHER_TS },

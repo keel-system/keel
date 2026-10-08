@@ -145,3 +145,32 @@ test('la operación interna sin disparador recibe el puerto CommandDispatcher y 
   }
   assert.ok(checked > 0, 'alguna fixture declara una operación interna sin disparador');
 });
+
+// Corrida notification-mailer-mongo (12e): un handler que inyecta CommandDispatcher cerraba el ciclo
+// contenedor → handler → adaptador → mediator → contenedor, y Nest no arrancaba. El adaptador resuelve el mediator
+// en el primer despacho (ModuleRef), no por constructor. Se ejecuta lo emitido con sustitutos de Nest.
+test('CommandDispatcherAdapter resuelve el mediator en el PRIMER despacho, no al construirse', async () => {
+  const { files } = planFixture('notification-mailer', { stack: { database: 'postgresql', broker: 'rabbitmq' } });
+  const adapterFile = files.find((file) => file.path === 'src/infrastructure/usecase/command-dispatcher-adapter.ts').content;
+  assert.doesNotMatch(adapterFile, /@Inject\(UseCaseMediator\)/, 'inyectar el mediator por constructor cierra el ciclo');
+  // El mediator solo hace de token aquí: se sustituye por una clase vacía para no arrastrar la persistencia.
+  const alone = files.map((file) =>
+    file.path === 'src/infrastructure/usecase/use-case-mediator.ts' ? { ...file, content: 'export class UseCaseMediator {}' } : file
+  );
+  const tree = transpileTree(alone, {
+    stubs: {
+      '@nestjs/common': 'export const Inject = () => () => {}; export const Injectable = () => () => {}; export const Global = () => () => {}; export const Module = () => () => {}; export class Logger { log() {} warn() {} error() {} }',
+      '@nestjs/core': 'export class ModuleRef {}'
+    }
+  });
+  const { CommandDispatcherAdapter } = await tree.load('src/infrastructure/usecase/command-dispatcher-adapter.ts');
+  const calls = [];
+  const mediator = { dispatch: async (m) => calls.push(['dispatch', m]), dispatchWithoutTransaction: async (m) => calls.push(['without', m]) };
+  let lookups = 0;
+  const adapter = new CommandDispatcherAdapter({ get: () => (lookups++, mediator) });
+  assert.equal(lookups, 0, 'construirlo no toca el contenedor');
+  await adapter.dispatch('a');
+  await adapter.dispatchWithoutTransaction('b');
+  assert.deepEqual(calls, [['dispatch', 'a'], ['without', 'b']]);
+  assert.equal(lookups, 1, 'se resuelve una sola vez');
+});

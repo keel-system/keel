@@ -1483,7 +1483,30 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     `tsconfig.flows.json`, sus 73 pruebas del perfil `test`, `check:architecture` y `check-flows.sh`, todo en verde.
     Los dos gates `check-idempotency.sh` nacen ROJOS en las mismas siete familias (con `mailDelivery`). `check` sin
     avisos del modelo en keel-nest (la nota del status por constructor); keel-spring, sus notas de siempre más la de
-    la auditoría sobre lo anidado. **Pendiente: ejecutar las dos corridas.**
+    la auditoría sobre lo anidado.
+- **12e — corridas ejecutadas y registradas (2026-10-08)** en
+  `docs/corridas/2026-10-08-notification-mailer-mongo-{nest,spring}.md`. Las dos **23/23**: keel-nest con un ciclo de
+  `culprit: code` (el formato del idioma, que su agente validó después de buscar la plantilla), keel-spring sin
+  arbitraje; huellas **18** y **17**, sin `harnessPatches`. Los dos agentes escribieron el mismo finder con el mismo
+  nombre (`findLatestVersion`, consulta de negocio: «la versión es la siguiente» está escrita en `registerTemplate`), y
+  los dos usaron la guarda, el renderizador por parte, el envío parcial y `compile()` al dar de alta como piden las skills
+  de correo. Contrastando informes y proyectos:
+  - **Defecto de keel-nest, arreglado**: `CommandDispatcherAdapter` inyectaba el mediator por constructor, y en cuanto
+    un handler inyecta `CommandDispatcher` (un barrido que despacha otro caso de uso) el contenedor no arranca: ciclo
+    contenedor → handler → adaptador → mediator. Reproducido sobre una copia limpia del proyecto; ahora se resuelve en
+    el primer despacho con `ModuleRef` (73/73 sobre la misma copia), fijado en `test/application.test.js`. `ts-check` no
+    lo veía: build no inyecta el puerto en ningún handler, así que el ciclo solo nace con el código del agente.
+  - **Defecto común, arreglado en keel-core**: `export-indexes.sh` no exportaba el `partialFilterExpression`, y el índice
+    único condicionado no se distinguía de uno normal al verificar en vivo. Fijado ejecutando el fragmento de mongosh;
+    la línea base de keel-spring cambia solo en ese script (9 puntos).
+  - **Divergencia entre los dos servidores** (sin escenario): con `recipient` mal formado y la plantilla inexistente,
+    keel-spring responde 400 y keel-nest 422, según dónde puso cada agente el `<Tipo>Format.validate`. Candidato: que el
+    formato de un campo que el diseño no normaliza viaje a la entrada en los dos generadores.
+  - **De los tres `designGaps` de keel-spring**: uno real y pequeño (`list-order-significance`); uno falso positivo
+    (`INVALID_STATE_TRANSITION` es del catálogo cerrado de `framework-errors.md`, que no viaja al proyecto generado:
+    pendiente) y uno del contrato del cable (una lista no informada viaja como `[]` en los dos, pero `wire-contract.md` no
+    lo escribe: pendiente).
+  - Suites: keel-core 1140/1140, keel-nest 430/430, keel-spring 1650/1650. **Con esto el incremento 12 queda cerrado.**
 
 ### Inc. 13 — Capas de borde: cache, storage, correo, pagos
 
