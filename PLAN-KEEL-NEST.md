@@ -1188,6 +1188,34 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     siguientes (4 casos en cada sujeto); sin el umbral de espera caen las pasadas, las marcas y la caducidad (3).
   - **Sin medir**: el reclamo de reconciliación DOCUMENTAL (incremento 12) y un barrido que build no pueda reclamar
     (ninguna fixture de la frontera lo tiene: `asset-vault` y `catalog-extended` siguen fuera).
+- **11d — arnés y skill, hecho (2026-10-07)**.
+  - **Vocabulario del stub como dato neutral** (`keel-core/gen/http-stub-probes.js`): el admin API (del puerto
+    publicado del catálogo), sus recursos, el corte de conexión, el estado inicial de una secuencia y la forma de
+    cada mapping. keel-spring sigue con su Java a mano y la paridad lo ata (las mismas cadenas en su
+    `AbstractFlowIT`).
+  - **Lo que emite** (`src/scaffold/http-stub-harness.js`): `test/integration/support/http-stub.ts`, SIN Nest ni
+    vitest (solo `fetch`), con los helpers de keel-spring (`stubFor`, `stubFailure`, `stubConnectionFault`,
+    `stubTimeout`, `StubResponse` + `stubSequence` con su guarda de una secuencia por ruta, `stubCallCount`,
+    `stubRequests`, `stubRequestBody`, `stubRequestHeader`, `resetStubs`); `flow.ts` lo reexporta (los flujos siguen
+    importando solo de `flow.ts`) y olvida las secuencias al empezar cada flujo, tras el reset que ya vacía el stub.
+    `ageForReconciliation(activación, id)` en `flow.ts`, con las sentencias de keel-spring sobre `db()` y el mismo
+    criterio de emisión (sin los literales del motor no sale). El humo gana SMOKE-6 (el stub se deja programar). El
+    reset en memoria del circuito de keel-spring no hace falta: aquí cada flujo arranca su servidor.
+  - **Skill `keel-nest-httpclient`** (`SKILL.md` + `references/implementation.md` y `references/flows.md`), instalada
+    con la capa: la llamada desde el handler, los rechazos con significado traducidos en `<llamada>Once`, el
+    contrato en prosa, el fallback `degrade`, y los flujos contra el stub (reintento con la misma clave, circuito,
+    barrido de reconciliación). `generator-docs.test.js` comprueba que cada ruta citada existe y que los ejemplos son
+    líneas del adaptador emitido.
+  - **Medido**: `test/http-stub-harness.test.js` (6) EJECUTA `http-stub.ts` contra un admin falso y compara cada
+    mapping con el vocabulario de keel-core; `npm run stub-check` (nuevo) levanta SOLO el WireMock del catálogo y
+    corre contra él los helpers emitidos y el adaptador emitido de `stock-reservation`: **13/13** (lo programado
+    llega, el corte de conexión y el timeout son transporte y se reintentan con la misma clave, la secuencia
+    entrega la segunda respuesta y se queda pegada, diez 503 abren el circuito, el cuerpo inválido se propaga).
+    Falsado: con el estado inicial equivocado caen los tres pasos de la secuencia; con el fault renombrado WireMock
+    rechaza el mapping (422) y el paso sale en rojo con esa causa —antes el script se caía sin resumen, y ahora un
+    fallo inesperado es un paso rojo con su mensaje—.
+  - **Sin medir**: los flujos de una corrida (11e) y `harness-check` con un sujeto con clientes (sigue sobre
+    `product-catalog`; lo que añade el 11d lo mide `stub-check`).
 
 ### Inc. 12 — Persistencia documental (MongoDB)
 

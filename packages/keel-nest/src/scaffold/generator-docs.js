@@ -19,6 +19,7 @@ import { usesRelational } from './persistence-entities.js';
 import { usesJwt } from './security.js';
 import { usesSchemaBaseline } from './schema-baseline.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
+import { usesHttpClients } from './http-clients.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'nest');
 const agentsSourceDir = path.join(assetsDir, 'agents');
@@ -42,13 +43,15 @@ export const CONVENTIONS = [
 /** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
 export const AGENTS = ['keel-nest-code.md', 'keel-nest-infra.md', 'keel-nest-tests.md', 'keel-nest-validate.md', 'keel-nest-quality.md'];
 
-/** Skills por tecnología aplicables al servicio: la de la base relacional, la del proveedor de identidad y la del broker. */
+/** Skills por tecnología aplicables al servicio: la de la base relacional, la del proveedor de identidad, la del broker y la de los clientes HTTP. */
 export function stackSkills(model) {
   const skills = usesRelational(model) ? ['keel-nest-database'] : [];
   if (usesJwt(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-nest-${model.stack.auth}`);
   if (usesRabbitMq(model)) skills.push('keel-nest-rabbitmq');
   if (usesKafka(model)) skills.push('keel-nest-kafka');
   if (usesSnsSqs(model)) skills.push('keel-nest-snssqs');
+  // Los clientes HTTP salientes (incremento 11d): la llamada desde el handler, los rechazos y los flujos.
+  if (usesHttpClients(model)) skills.push('keel-nest-httpclient');
   return skills;
 }
 

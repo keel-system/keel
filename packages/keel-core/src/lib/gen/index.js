@@ -34,6 +34,18 @@ export {
 } from './dead-letter.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export {
+  HTTP_STUB_ADMIN,
+  HTTP_STUB_ENDPOINTS,
+  HTTP_STUB_FAULT,
+  HTTP_STUB_INITIAL_STATE,
+  stubOkResponse,
+  stubSlowResponse,
+  stubFaultResponse,
+  stubMapping,
+  stubSequenceMappings,
+  stubCriterion
+} from './http-stub-probes.js';
+export {
   PROVIDER_FAILURES,
   fallbackFailures,
   recordedFailures,

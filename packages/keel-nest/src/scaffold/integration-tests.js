@@ -26,6 +26,7 @@ import { usesRelational, engineOf } from './persistence-entities.js';
 import { tsString } from './render.js';
 import { closingCredential, identitySection, usesIdentityHarness } from './identity-harness.js';
 import { messagingHarnessImports, messagingHarnessSection, usesMessagingHarness } from './messaging-harness.js';
+import * as httpStubHarness from './http-stub-harness.js';
 
 /** Dónde escribe Vitest el XML JUnit de la suite de integración: lo lee score-scenarios.sh. */
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
@@ -42,7 +43,9 @@ export function generate(model) {
     { path: HARNESS_SMOKE_TS, content: harnessSmokeTs(model) },
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: 'tsconfig.flows.json', content: flowsTsconfig() },
-    { path: CHECK_FLOWS_SH, content: checkFlowsScript() }
+    { path: CHECK_FLOWS_SH, content: checkFlowsScript() },
+    // El proveedor de prueba (incremento 11d): en su propio módulo, sin Nest, y reexportado por flow.ts.
+    ...httpStubHarness.generate(model)
   ];
 }
 
@@ -115,6 +118,7 @@ function flowSupportTs(model) {
   const reset = hasResetScript(model);
   const probe = dbProbe(model);
   const messaging = usesMessagingHarness(model);
+  const stub = httpStubHarness.usesHttpStub(model);
   return `/**
  * Base de las pruebas de flujo (\`test/integration/<flujo>.test.ts\`) que ejecutan los escenarios FL-*
  * de specs/validation-scenarios.md contra el servidor REAL —escuchando en un puerto libre, bajo el
@@ -151,7 +155,12 @@ import { NestFactory } from '@nestjs/core';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from '../../../src/app.module.js';
 import { loadConfiguration } from '../../../src/infrastructure/config/configuration.js';
-import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from '../../../src/infrastructure/http/http-platform.js';${messagingHarnessImports(model)}
+import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from '../../../src/infrastructure/http/http-platform.js';${messagingHarnessImports(model)}${stub ? `
+import { forgetSequences } from './http-stub.js';
+
+// El proveedor de prueba (WireMock de infra/): los flujos lo programan con estos helpers, importados de aquí.
+export { ${httpStubHarness.HTTP_STUB_EXPORTS.join(', ')} } from './http-stub.js';
+export type { StubRequest } from './http-stub.js';` : ''}
 ${api ? `
 /** Prefijo de todas las rutas del servicio (basePath del diseño + versión). */
 export const ROUTE_BASE = ${tsString(model.api.routeBase)};
@@ -279,7 +288,9 @@ export function useFlow(): Flow {
       currentApp = app;
       const address = app.getHttpServer().address() as AddressInfo;
       baseUrl = \`http://127.0.0.1:\${address.port}\`;${reset ? `
-      resetState();` : ''}${messaging ? `
+      resetState();` : ''}${stub ? `
+      // El reset ya vació el stub; las secuencias que programó el flujo anterior, también se olvidan.
+      forgetSequences();` : ''}${messaging ? `
       // El broker arriba (un flujo anterior pudo dejarlo parado) y la conexión del servicio hecha, con su
       // topología: sin ella, la primera entrega del flujo no encontraría cola.
       await prepareMessaging();` : ''}
@@ -440,7 +451,7 @@ const DB_QUERY_ARGV: readonly string[] = ${JSON.stringify(probe.argv)};
 export function db(sql: string): string {
   return run(containerRuntime(), ['exec', DB_CONTAINER, ...DB_QUERY_ARGV, sql], '¿Está la base arriba (bash infra/up.sh)?');
 }
-${rescueSection(model)}` : ''}${identitySection(model)}${messagingHarnessSection(model)}
+${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}` : ''}${identitySection(model)}${messagingHarnessSection(model)}
 
 /** Espera hasta que \`condition\` se cumpla o se agote \`timeoutMs\`; lanza con \`message\` si no llega. */
 export async function eventually(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, message = 'la condición no se cumplió a tiempo'): Promise<void> {
@@ -497,6 +508,17 @@ function harnessSmokeTs(model) {
   });`);
   }
   if (identity) cases.push(identity);
+  if (httpStubHarness.usesHttpStub(model)) {
+    imports.push('stubFor', 'stubCallCount');
+    cases.push(`  it('SMOKE-6: el proveedor de prueba se deja programar', async () => {
+    // Sin él, cada flujo con una llamada saliente fallaría por el stub, no por lo que mide. ¿Está WireMock arriba?
+    await stubFor('GET', '/__keel-smoke', 200, { ok: true });
+    const response = await fetch('http://localhost:8090/__keel-smoke');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toStrictEqual({ ok: true });
+    expect(await stubCallCount('GET', '/__keel-smoke')).toBe(1);
+  });`);
+  }
   return `// Humo del arnés: la fontanería de la que dependen TODOS los flujos (servidor vivo${reset ? ', reset' : ''}${
     probe ? ', base de prueba' : ''
   }${api ? ', API' : ''}).

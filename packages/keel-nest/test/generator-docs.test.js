@@ -169,3 +169,36 @@ test('las firmas que enseña la skill de SNS/SQS son las del código emitido', (
   assert.match(connection, /export interface InboundMessage \{[\s\S]*readonly body: string;/);
   for (const source of snssqsSkillSources) assert.doesNotMatch(fs.readFileSync(source, 'utf8'), /\.claude\/|\.opencode\//, path.basename(source));
 });
+
+// La de los clientes HTTP (incremento 11d), con las mismas dos comprobaciones.
+const httpclientDir = path.join(assets, 'generators', 'nest', 'skills', 'keel-nest-httpclient');
+const httpclientSources = [path.join(httpclientDir, 'SKILL.md'), ...fs.readdirSync(path.join(httpclientDir, 'references')).map((name) => path.join(httpclientDir, 'references', name))];
+
+test('la skill de los clientes HTTP se instala en cada harness con la capa, y solo con ella', () => {
+  for (const harness of HARNESSES) {
+    assert.ok(harness.skillPath('keel-nest-httpclient', 'SKILL.md') in rabbit, `${harness.id}: keel-nest-httpclient`);
+    assert.ok(harness.skillPath('keel-nest-httpclient', 'references/flows.md') in rabbit, `${harness.id}: sus referencias`);
+  }
+  assert.ok(!Object.keys(files).some((file) => file.includes('keel-nest-httpclient')), 'un diseño sin http-clients no la recibe');
+});
+
+test('cada ruta src/… que cita la skill de los clientes HTTP existe, y lo que enseña es lo emitido', () => {
+  const emitted = new Set(Object.keys(rabbit));
+  for (const source of httpclientSources) {
+    const text = fs.readFileSync(source, 'utf8');
+    for (const [cited] of text.matchAll(/src\/[\w/.-]+\.ts/g)) assert.ok(emitted.has(cited), `${path.basename(source)} cita ${cited}, que build no emite`);
+    assert.doesNotMatch(text, /\.claude\/|\.opencode\//, path.basename(source));
+  }
+  const adapter = rabbit['src/infrastructure/clients/inventory-http-adapter.ts'];
+  // El ejemplo de la forma de una llamada es el adaptador de stock-reservation: tiene que casar con el emitido.
+  assert.ok(adapter.includes('return await withResilience(CANCEL_STOCK_POLICY, this.cancelStockCircuit, () => this.cancelStockOnce(orderId));'));
+  assert.ok(adapter.includes("const failure = providerFailureOf(error, ['circuit-open', 'transport', 'server-error', 'unknown-status', 'client-error']);"));
+  assert.match(rabbit['src/infrastructure/clients/provider-failures.ts'], /export class ProviderStatusError extends ProviderFailure/);
+  assert.match(rabbit['src/infrastructure/clients/http-exchange.ts'], /export async function exchange\(client: ClientSettings, request: OutboundRequest\): Promise<OutboundResponse>/);
+  const flow = rabbit['test/integration/support/flow.ts'];
+  for (const helper of ['StubResponse', 'stubFor', 'stubFailure', 'stubConnectionFault', 'stubTimeout', 'stubSequence', 'stubCallCount', 'stubRequests', 'stubRequestBody', 'stubRequestHeader']) {
+    assert.ok(flow.includes(helper), `flow.ts exporta ${helper}`);
+  }
+  assert.match(flow, /export function ageForReconciliation\(activation: string, id: string\): void/);
+  assert.match(rabbit['test/integration/support/http-stub.ts'], /export async function stubSequence\(method: string, pathPattern: string, \.\.\.responses: object\[\]\): Promise<void>/);
+});
