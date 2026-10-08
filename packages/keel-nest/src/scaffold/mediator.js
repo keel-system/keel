@@ -54,7 +54,7 @@ export function applicationClasses(model) {
   return handlers;
 }
 
-export function generate(model, { mappers = [] } = {}) {
+export function generate(model, { mappers = [], payments = [] } = {}) {
   if (!usesMediator(model)) return [];
   // Con persistencia (de los dos modelos), el despacho abre la transacción del caso de uso.
   const transactional = usesPersistence(model);
@@ -88,7 +88,7 @@ export function generate(model, { mappers = [] } = {}) {
     ], mediatorBody(transactional)) }
   ];
   files.push(...commandDispatcher(model));
-  files.push(moduleFile(model, mappers));
+  files.push(moduleFile(model, mappers, payments));
   files.push({ path: 'test/use-cases.test.ts', content: useCasesTest(model) });
   return files;
 }
@@ -139,8 +139,16 @@ function useCasesTest(model) {
     ? "\nimport { MailModule } from '../src/infrastructure/mail/mail-module.js';" +
       (persistence || parameters || clients ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
     : '';
+  // La pasarela de pago (global): los handlers inyectan el puerto, y el módulo de casos de uso el umbral del
+  // barrido. En test apunta a la pasarela de prueba, y nada la llama.
+  const payments = Boolean(model.payments);
+  const paymentsImport = payments
+    ? "\nimport { PaymentsModule } from '../src/infrastructure/payment/payments-module.js';" +
+      (persistence || parameters || clients || mail ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
+    : '';
   const modules = [
     parameters ? "ServiceParametersModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
+    payments ? "PaymentsModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     persistence ? "PersistenceModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     messaging ? "MessagingModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     clients ? "HttpClientsModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
@@ -157,7 +165,7 @@ import { UseCaseModule } from '../src/infrastructure/usecase/use-case-module.js'
 import { UseCaseMediator } from '../src/infrastructure/usecase/use-case-mediator.js';
 import { UseCaseContainer } from '../src/infrastructure/usecase/use-case-container.js';
 import { Handles } from '../src/application/annotations/application-component.js';
-import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}${clientsImport}${mailImport}
+import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}${clientsImport}${mailImport}${paymentsImport}
 ${imports}
 
 const OPERATIONS = [
@@ -456,7 +464,7 @@ export function orphanInternalOperations(model) {
 
 function commandDispatcher(model) {
   const orphans = orphanInternalOperations(model);
-  if (orphans.length === 0) return [];
+  if (!usesCommandDispatcher(model)) return [];
   const names = orphans.map((operation) => operation.name).join(', ');
   // Las que producen un efecto que no se deshace (la guarda del correo): a salvo con las dos variantes, porque su
   // reclamo confirma en su propia transacción —pero el argumento del pool sigue en pie—. La misma nota que keel-spring.
@@ -551,9 +559,17 @@ export class CommandDispatcherAdapter extends CommandDispatcher {
   ];
 }
 
-function moduleFile(model, mappers) {
+/**
+ * ¿Hace falta el puerto CommandDispatcher? Para las operaciones internas sin disparador, y con la capa payments:
+ * el aplicador de desenlaces despacha la operación del diseño que aplica cada uno (payments.outcomes).
+ */
+export function usesCommandDispatcher(model) {
+  return orphanInternalOperations(model).length > 0 || Boolean(model.payments);
+}
+
+function moduleFile(model, mappers, payments = []) {
   const handlers = applicationClasses(model);
-  const dispatcher = orphanInternalOperations(model).length > 0;
+  const dispatcher = usesCommandDispatcher(model);
   const imports = [
     { symbol: 'Module', from: '@nestjs/common' },
     { symbol: 'FactoryProvider', from: '@nestjs/common', type: true },
@@ -562,7 +578,8 @@ function moduleFile(model, mappers) {
     { symbol: 'UseCaseContainer', from: CONTAINER_TS },
     { symbol: 'UseCaseMediator', from: MEDIATOR_TS },
     ...handlers,
-    ...mappers
+    ...mappers,
+    ...payments
   ];
   if (dispatcher) {
     imports.push({ symbol: 'CommandDispatcher', from: COMMAND_DISPATCHER_TS }, { symbol: 'CommandDispatcherAdapter', from: COMMAND_DISPATCHER_ADAPTER_TS });
@@ -584,7 +601,10 @@ function applicationProvider<T>(type: ApplicationClass<T>): FactoryProvider<T> {
 const HANDLERS = [${list(handlers)}] as const;
 
 /** Los mappers de aplicación que los handlers inyectan. */
-const MAPPERS = [${list(mappers)}] as const;
+const MAPPERS = [${list(mappers)}] as const;${payments.length > 0 ? `
+
+/** La capa payments: el aplicador de desenlaces, el aviso y la consulta del barrido (los usan handlers y controlador). */
+const PAYMENTS = [${list(payments)}] as const;` : ''}
 
 /**
  * El único sitio que cablea los casos de uso: handlers, mappers, el contenedor que los registra y el
@@ -592,7 +612,7 @@ const MAPPERS = [${list(mappers)}] as const;
  */
 @Module({
   providers: [
-    ...MAPPERS.map((type) => applicationProvider<object>(type)),
+    ...MAPPERS.map((type) => applicationProvider<object>(type)),${payments.length > 0 ? '\n    ...PAYMENTS.map((type) => applicationProvider<object>(type)),' : ''}
     ...HANDLERS.map((type) => applicationProvider<Handler>(type)),
     {
       provide: UseCaseContainer,
@@ -601,7 +621,7 @@ const MAPPERS = [${list(mappers)}] as const;
     },
     UseCaseMediator${dispatcher ? ',\n    { provide: CommandDispatcher, useClass: CommandDispatcherAdapter }' : ''}
   ],
-  exports: [UseCaseMediator${dispatcher ? ', CommandDispatcher' : ''}]
+  exports: [UseCaseMediator${dispatcher ? ', CommandDispatcher' : ''}${payments.length > 0 ? ', ...PAYMENTS' : ''}]
 })
 export class UseCaseModule {}`;
   return { path: MODULE_TS, content: tsModule(MODULE_TS, imports, body) };

@@ -34,6 +34,7 @@ import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 import { CORRELATION_TS, REQUEST_READING_TS, REQUEST_ERRORS_TS, usesApi } from './rest-support.js';
 import { readerOf, readerImports, valueReaders } from './controllers.js';
 import { MODULE_TS as USE_CASE_MODULE_TS } from './mediator.js';
+import { callsPaymentGateway } from 'keel-core/gen/payments-model';
 
 const MESSAGING_DIR = 'infrastructure/messaging';
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
@@ -728,11 +729,26 @@ function contractDoc(model, sub) {
     consumer = `el listener de la cola ${unit.queue}, que comparte con ${unit.subscriptions.filter((name) => name !== sub.name).join(', ')} y enruta por el tipo del mensaje`;
   else consumer = `el listener de su cola${unit ? ` (${unit.queue})` : ''}`;
   if (sub.trigger) {
+    // El cobro de la capa payments por evento: no hay cliente delante, así que el token del componente de la
+    // pasarela no existe —no es un hueco que el agente tenga que rellenar—. Lo mismo que keel-spring.
+    const paymentToken = model.payments?.charge?.operation === sub.trigger ? model.payments.charge.source.token : null;
     const argument = (a) =>
-      a.from === 'envelope' ? `envelope.metadata.${a.source}` : a.from === 'identity' ? 'la identidad resuelta' : a.source ? `payload.${a.source}` : 'TODO (agente)';
+      a.from === 'envelope'
+        ? `envelope.metadata.${a.source}`
+        : a.from === 'identity'
+          ? 'la identidad resuelta'
+          : a.source
+            ? `payload.${a.source}`
+            : a.component === paymentToken
+              ? 'null (por evento no hay cliente delante: solo se cobra un medio guardado)'
+              : 'TODO (agente)';
     const args = sub.triggerArguments.map((a) => `${a.component} = ${argument(a)}`).join(', ');
+    // La misma regla que el controlador y el scheduler: lo que llama a la pasarela va sin transacción abarcadora.
+    const via = callsPaymentGateway(model, sub.trigger)
+      ? 'UseCaseMediator.dispatchWithoutTransaction(...) —llama a la pasarela: registra y confirma antes de llamarla—'
+      : 'el UseCaseMediator';
     lines.push(
-      `Lo consume ${consumer} (lo escribe el agente y lo registra en broker-bindings.ts), despachando ${sub.triggerMessageClass ?? sub.trigger}${args ? `(${args})` : ''} por el UseCaseMediator.`
+      `Lo consume ${consumer} (lo escribe el agente y lo registra en broker-bindings.ts), despachando ${sub.triggerMessageClass ?? sub.trigger}${args ? `(${args})` : ''} por ${via}.`
     );
   } else {
     lines.push(`Lo consume ${consumer} (lo escribe el agente y lo registra en broker-bindings.ts).`);

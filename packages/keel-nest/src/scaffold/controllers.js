@@ -14,6 +14,7 @@
 // (Decimal, bigint) y sus decoradores tendrían que ir en los mensajes de la capa application.
 
 import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
+import { callsPaymentGateway } from 'keel-core/gen/payments-model';
 import { DIRS, classPath, fieldImports, tsModule, tsdoc, tsString } from './render.js';
 import { MEDIATOR_TS } from './mediator.js';
 import { messageComponents, messagePath, returnTypeOf, isPartialUpdate } from './services.js';
@@ -225,14 +226,17 @@ function renderMethod(model, operation, imports, readers) {
   readers.push(renderReader(model, operation, readerName, imports));
 
   const params = ['@Param() params: Record<string, string>', '@Query() query: Record<string, unknown>', '@Body() body: unknown'];
-  let call = `this.mediator.dispatch(${readerName}(params, query, body))`;
+  // Lo que llama a la pasarela de pago va SIN transacción abarcadora (callsPaymentGateway, keel-core): su garantía
+  // es registrar y confirmar ANTES de llamarla, como en keel-spring.
+  const dispatch = callsPaymentGateway(model, operation.name) ? 'dispatchWithoutTransaction' : 'dispatch';
+  let call = `this.mediator.${dispatch}(${readerName}(params, query, body))`;
   let resolve = '';
   if (resolvesCaller(model, operation)) {
     // La credencial del token es UNA de las del recurso (resolvedBy): el mensaje lleva su clave natural, o null
     // si no es de nadie (la precondición la responde la operación con el error que declare el diseño).
     const field = messageComponents(model, operation).find((component) => component.resolvedIdentity).name;
     resolve = `    const read = ${readerName}(params, query, body);\n    const message = new ${operation.messageClass}({ ...read, ${field}: await this.callerIdentity.resolve(read.${field}) });\n`;
-    call = 'this.mediator.dispatch(message)';
+    call = `this.mediator.${dispatch}(message)`;
   }
   let statements;
   if (location) {

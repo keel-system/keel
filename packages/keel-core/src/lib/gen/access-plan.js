@@ -13,6 +13,8 @@
 // regla de cierre de esa cadena. Las rutas que no existen también caen ahí: sin credencial, un camino
 // inexistente responde 401 y no 404, igual en los dos servidores.
 
+import { PAYMENT_NOTICE_PATH } from './payment-gateways.js';
+
 /** Las rutas técnicas abiertas: las sondas del servicio. No cuentan nada del negocio. */
 export const TECHNICAL_OPEN_PATHS = ['/livez', '/readyz'];
 
@@ -83,14 +85,15 @@ export function audienceOf(model, security = model.security) {
  * El plan completo de autorización de la entrada HTTP, o null sin capa security. Con el protocolo
  * `none` no hay nada que comprobar: todo abierto (`open: true`).
  *
- * `extraOpenPosts` son los POST que entran sin credencial por diseño de OTRA capa (el aviso de la
- * pasarela de pago, que se protege con su firma): van detrás de las rutas técnicas.
+ * `extraOpenPosts` son los POST que entran sin credencial por diseño de OTRA capa: van detrás de las
+ * rutas técnicas. Por defecto, el aviso de la pasarela de pago si el diseño cobra (capa payments): lo
+ * protege su FIRMA, y quien llama es la pasarela, que no tiene identidad en el servicio.
  *
  * Con audiencia comprobada y rutas de los DOS públicos, una sola cadena no sirve —la comprobación
  * rechazaría los tokens de usuario—, así que las rutas de máquinas van a una cadena PROPIA que se
  * evalúa primero, que no abre las rutas técnicas y cuyo cierre es «autenticado», no el del diseño.
  */
-export function accessPlan(model, { extraOpenPosts = [] } = {}) {
+export function accessPlan(model, { extraOpenPosts = model.payments ? [PAYMENT_NOTICE_PATH] : [] } = {}) {
   const security = model.layersPresent?.security ? model.security : null;
   if (!security) return null;
   if (security.protocol === 'none') return { protocol: 'none', open: true, chains: [] };

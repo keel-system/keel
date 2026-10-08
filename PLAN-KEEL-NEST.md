@@ -1584,6 +1584,49 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   IQD a 0 decimales: cae ese caso). La razón de `why` de MercadoPago ya no nombra la skill de keel-spring.
   Suites: keel-core 1149/1149, keel-nest 462/462, keel-spring 1645/1645 (los cinco casos neutrales de la matriz se
   mudaron a keel-core); `payment-check` de keel-spring verde con las dos pasarelas.
+- **13b + 13c — la capa en keel-nest, con sus dos adaptadores: hechos (2026-10-08)**. Van juntos porque el
+  `PaymentsModule` cablea el adaptador de la pasarela elegida y sin él el proyecto no compila.
+  - `src/scaffold/payments.js` (lo neutro): `domain/payment` (`GatewayStatus`, `GatewayOutcome`, `PaymentSource`,
+    `ChargeRequest`, `PaymentGatewayUnavailableException`), el puerto `PaymentGateway` en `application/port/out`,
+    `application/payment` (`PaymentOutcomeApplier`, `PaymentNotices`, `PaymentReconciliation` con `staleBefore()` y
+    su umbral como token de aplicación), y en `infrastructure/payment` la configuración (las MISMAS claves y
+    variables que keel-spring: `payments.yaml` es idéntico byte a byte en los cuatro perfiles, y las duraciones se
+    leen con la sintaxis de Spring —`2s`, `500ms`, `PT10S`— para que un mismo `.env` valga), `PaymentGatewayHttp`
+    (fetch sin reintentos; el cuerpo se lee dentro del try, así que un corte a mitad también es «no contestó»; el
+    plazo es conexión + lectura, porque fetch no los distingue), `MoneyAmounts` con la tabla de keel-core emitida
+    tal cual, el verificador como clase abstracta con `PaymentNotice` (cabeceras sin mayúsculas, primer valor), el
+    controlador del aviso y el `PaymentsModule` global. Las clases de aplicación las cablea el `UseCaseModule`, como
+    los mappers, y el `CommandDispatcher` se emite también con pagos (el aplicador despacha la operación de cada
+    desenlace).
+  - **El aviso en Fastify**: el lector JSON del contrato del cable deja pasar el cuerpo de `/webhooks/payments` como
+    texto (`http-platform.ts`), y el controlador lo verifica antes de leer nada; responde con `reply` a mano (200 o
+    401 vacíos, como el `ResponseEntity` de keel-spring). La ruta abierta la pone ahora el **plan de acceso neutral**
+    (`accessPlan` añade el POST del aviso cuando el modelo tiene pagos): `security-parity.test.js` ya no la excluye
+    y compara las dos.
+  - **Despacho sin transacción** de lo que llama a la pasarela (`callsPaymentGateway`): en los controladores; el
+    barrido ya lo hacía `scheduleDispatch`; y la nota de la suscripción lo dice, con el token nulo por evento.
+  - **Lo que TypeScript obliga a decidir y Java no**: un componente obligatorio del mensaje de desenlace que la
+    pasarela no da (`required(…)`) falla en voz alta en vez de pasar un null; el que la capa no nombra
+    (`cancelReason` en la fixture, aceptado por `CHK-PAYMENTS-OUTCOME-INPUT-UNBACKED`) sale como `todo<T>()`, que
+    compila y lanza con el TODO; y la acción del cliente se envuelve en `RawJson`. En MercadoPago, una acción sin
+    `payment_method` es null (Jackson daría la cadena vacía, que no es JSON).
+  - `src/scaffold/payment-gateways/{stripe,mercadopago}.js`: la traducción caso por caso de los de keel-spring, con
+    las tablas, las claves y la plantilla de la clave de idempotencia de keel-core.
+  - **Medido**: `test/payments.test.js` EJECUTA el adaptador y el verificador emitidos de las dos pasarelas contra una
+    pasarela falsa de `node:http` con las formas del doble (`payment-probes.js`): los casos de `payment-check` uno a
+    uno, más la devolución parcial con un 5xx y el 3DS sin cliente de Stripe; y, sin ejecutar, la paridad entre
+    pasarelas (solo cambian su carpeta, el módulo, las variables de develop/production y lo que nombra el stack), el
+    `payments.yaml` contra el de keel-spring, la ruta abierta, la exención del lector, el despacho sin transacción,
+    la tabla de monedas, el aplicador, la reconciliación y el aviso. Falsado con nueve sabotajes, cada uno cazado por
+    su caso: firma de cada pasarela, ventana, captura caducada en las dos, la lectura previa con 5xx, el corte sin
+    traducir, el 5xx reintentado, el 3DS leído como fallo, el redondeo silencioso y la clave aleatoria. (Un sabotaje
+    mal escrito —reintentar con recursión— colgó la pasada: los sabotajes van con `--test-timeout`.)
+    `ts-syntax.test.js` y `ts-check` ganan la silueta con MercadoPago: **ts-check 12/12**, 34 siluetas con `strict` y
+    sus pruebas emitidas en verde (la primera pasada cazó que el montaje de `use-cases.test.ts` no traía la pasarela).
+    Suites: keel-core 1149/1149, keel-nest 502/502.
+  - **La frontera sigue rechazando `payments`**: el proyecto compila y arranca, pero sin el arnés (el doble de la
+    pasarela en los flujos, `gatewayExpiresAuthorization`, `ageForReconciliation` del barrido) ni las skills, el agente
+    no tendría con qué. Se quita en el 13d.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

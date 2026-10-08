@@ -132,13 +132,18 @@ const failedFixtures = [];
 const failedTests = [];
 const silhouettes = fs.readdirSync(FIXTURES_DIR).flatMap((name) => {
   const { layers } = loadService(path.join(FIXTURES_DIR, name));
-  // Con mensajería, sobre cada broker que keel-nest genera.
-  return layers.messaging ? ['rabbitmq', 'kafka', 'snssqs'].map((broker) => ({ name, broker })) : [{ name, broker: null }];
+  // Con mensajería, sobre cada broker que keel-nest genera; con pagos, además, con la otra pasarela del catálogo
+  // (sobre un solo broker: lo que cambia entre pasarelas es su adaptador y su verificador).
+  const brokers = layers.messaging ? ['rabbitmq', 'kafka', 'snssqs'] : [null];
+  const silhouettesOf = brokers.map((broker) => ({ name, broker, paymentGateway: null }));
+  if (layers.payments) silhouettesOf.push({ name, broker: brokers[0], paymentGateway: 'mercadopago' });
+  return silhouettesOf;
 });
-for (const { name: fixture, broker } of silhouettes) {
-  const name = broker ? `${fixture}-${broker}` : fixture;
+for (const { name: fixture, broker, paymentGateway } of silhouettes) {
+  const name = [fixture, broker, paymentGateway].filter(Boolean).join('-');
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
-  const { files } = planService({ manifest, layers, workspace: workspace, stack: broker ? { broker } : null });
+  const stack = broker || paymentGateway ? { ...(broker ? { broker } : {}), ...(paymentGateway ? { paymentGateway } : {}) } : null;
+  const { files } = planService({ manifest, layers, workspace: workspace, stack });
   const dir = path.join(workspace, 'fixtures-tsc', name);
   for (const file of files) {
     const out = path.join(dir, file.path);

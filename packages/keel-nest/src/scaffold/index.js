@@ -10,6 +10,7 @@ import { buildModel } from 'keel-core/gen/model';
 import { materializeProject } from 'keel-core/gen/materialize';
 import { resolveStack } from 'keel-core/gen/stack';
 import { listKeelDocs } from 'keel-core/gen/keel-docs';
+import { checkGatewaySupport } from 'keel-core/gen/payment-gateways';
 import { packageVersion } from '../lib/assets.js';
 import { TS_PROJECTION } from '../lib/ts-projection.js';
 import * as project from './project.js';
@@ -40,6 +41,7 @@ import * as kafka from './kafka.js';
 import * as snssqs from './snssqs.js';
 import * as httpClients from './http-clients.js';
 import * as mail from './mail.js';
+import * as payments from './payments.js';
 import * as scheduling from './scheduling.js';
 import * as purge from './purge.js';
 import * as claim from './claim.js';
@@ -104,6 +106,8 @@ const GENERATORS = [
   httpClients,
   // El correo saliente (incremento 12e): mensaje, puertos, adaptador SMTP y renderizador, enteros (como keel-spring).
   mail,
+  // Los cobros con pasarela (incremento 13): la parte neutra y el adaptador y el verificador de la pasarela del stack.
+  payments,
   // El reloj (incremento 10b): los schedulers de las operaciones con `schedule` y las purgas por lotes de las
   // tablas del generador.
   scheduling,
@@ -117,7 +121,7 @@ const GENERATORS = [
   idempotencyCheck,
   // El baseline de migraciones: cómo se exporta y cómo se demuestra (lo usa el pase de calidad).
   schemaBaseline,
-  { generate: (model) => mediator.generate(model, { mappers: mappers.mapperClasses(model) }) },
+  { generate: (model) => mediator.generate(model, { mappers: mappers.mapperClasses(model), payments: payments.paymentApplicationClasses(model) }) },
   // API REST (incremento 5): correlación, ErrorResponse, lectura de peticiones, filtro de errores y
   // un controlador por grupo.
   restSupport,
@@ -145,6 +149,12 @@ const GENERATORS = [
  */
 export function planService({ manifest, layers, workspace, stack = null }) {
   const resolved = resolveStack(stack, layers);
+  // La pasarela elegida tiene que cubrir lo que el diseño exige (la matriz neutral de keel-core). Aquí y no solo en
+  // build, para que NINGÚN camino genere un adaptador a medias. La misma puerta que keel-spring.
+  if (resolved.paymentGateway) {
+    const { errors } = checkGatewaySupport(layers, resolved.paymentGateway);
+    if (errors.length > 0) throw new Error(errors.join('\n'));
+  }
   const model = buildModel({ manifest, layers, stack: resolved, projection: TS_PROJECTION });
   model.stack = resolved;
   // Contratos de /keel-docs presentes en el workspace: build los copia a docs/ del proyecto.

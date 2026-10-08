@@ -8,7 +8,7 @@
 // que cada generador lo ESCRIBE sin perder nada por el camino.
 //
 // Fuera, con su motivo: las rutas técnicas (Spring abre su actuator y su swagger; keel-nest, sus sondas
-// /livez y /readyz) y el aviso de la pasarela de pago, que keel-nest genera con la capa payments (inc. 13).
+// /livez y /readyz). El aviso de la pasarela de pago SÍ se compara: lo abre el plan neutral en los dos.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +16,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadService } from 'keel-core';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
-import { PAYMENT_NOTICE_PATH } from 'keel-core/gen/payment-gateways';
 import { planService as planNest } from '../src/scaffold/index.js';
 import { transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
@@ -40,8 +39,7 @@ function springChains(files) {
     const body = bean.slice(0, bean.indexOf('return http.build();'));
     const matcher = /\.securityMatcher\(([^)]*)\)/.exec(body);
     const rules = [...body.matchAll(/\.requestMatchers\(HttpMethod\.(\w+), "([^"]+)"\)\.([\w]+\([^)]*\))/g)]
-      .map(([, method, path, call]) => ({ method, path, requirement: requirementOf(call) }))
-      .filter((rule) => rule.path !== PAYMENT_NOTICE_PATH);
+      .map(([, method, path, call]) => ({ method, path, requirement: requirementOf(call) }));
     const fallback = /\.anyRequest\(\)\.([\w]+\([^)]*\))/.exec(body);
     return {
       paths: matcher ? JSON.parse(`[${matcher[1]}]`) : null,

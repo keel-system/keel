@@ -105,4 +105,11 @@ for (const name of fs.readdirSync(FIXTURES_DIR)) {
       assert.deepEqual(checkTree(files), []);
     });
   }
+  // Con pagos, también con la otra pasarela del catálogo: lo que cambia es su adaptador y su verificador.
+  if (layers.payments) {
+    test(`${name} (mercadopago): el TypeScript emitido parsea y sus imports llevan a lo que exportan`, () => {
+      const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { paymentGateway: 'mercadopago' } });
+      assert.deepEqual(checkTree(files), []);
+    });
+  }
 }

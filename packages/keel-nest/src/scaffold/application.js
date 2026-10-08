@@ -25,12 +25,14 @@ import { usesScheduling } from './scheduling.js';
 import { usesServiceParameters } from './service-parameters.js';
 import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
+import { paymentControllers, usesPayments } from './payments.js';
+import { PAYMENT_NOTICE_PATH } from 'keel-core/gen/payment-gateways';
 
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs() },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model)) },
-    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model)) }
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), [...controllerClasses(model), ...paymentControllers(model)], usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model), usesPayments(model)) },
+    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model), usesPayments(model)) }
   ];
 }
 
@@ -56,7 +58,7 @@ await app.listen(configuration.server.port, configuration.server.address);
 `;
 }
 
-function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false, withHttpClients = false, withMail = false) {
+function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false, withHttpClients = false, withMail = false, withPayments = false) {
   // Los casos de uso del diseño entran por su módulo (infrastructure/usecase), que es el único que
   // cablea handlers y mappers; los controladores REST los despachan por el mediator que exporta. La
   // persistencia y el alcance por recurso (globales) van antes: son dependencias de los handlers.
@@ -69,6 +71,7 @@ function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope
       : '') +
     (withHttpClients ? "\nimport { HttpClientsModule } from './infrastructure/clients/http-clients-module.js';" : '') +
     (withMail ? "\nimport { MailModule } from './infrastructure/mail/mail-module.js';" : '') +
+    (withPayments ? "\nimport { PaymentsModule } from './infrastructure/payment/payments-module.js';" : '') +
     (withCallerScope ? "\nimport { SecurityModule } from './infrastructure/security/security-module.js';" : '') +
     (withUseCases ? "\nimport { UseCaseModule } from './infrastructure/usecase/use-case-module.js';" : '') +
     (withScheduling ? "\nimport { SchedulingModule } from './infrastructure/scheduling/scheduling-module.js';" : '');
@@ -82,6 +85,8 @@ function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope
     withHttpClients ? 'HttpClientsModule.register(configuration)' : null,
     // El correo saliente (global): los handlers de mail.sentBy inyectan sus puertos.
     withMail ? 'MailModule.register(configuration)' : null,
+    // La pasarela de pago (global): los handlers inyectan el puerto PaymentGateway.
+    withPayments ? 'PaymentsModule.register(configuration)' : null,
     withCallerScope ? 'SecurityModule' : null,
     withUseCases ? 'UseCaseModule' : null,
     // Los listeners del agente despachan por el mediator: van después de los casos de uso.
@@ -112,7 +117,16 @@ export class AppModule {
 `;
 }
 
-function httpPlatformTs(withApi, withIdempotencyHeader = false, withSecurity = false) {
+function httpPlatformTs(withApi, withIdempotencyHeader = false, withSecurity = false, withPayments = false) {
+  // El aviso de la pasarela de pago se verifica sobre el texto TAL COMO LLEGÓ: la firma no sobrevive a un JSON
+  // leído y vuelto a escribir. Esa ruta recibe el cuerpo sin leer (PaymentNoticeController).
+  const noticeExemption = withPayments
+    ? `
+    if (request.url.split('?')[0] === '${PAYMENT_NOTICE_PATH}') {
+      done(null, body);
+      return;
+    }`
+    : '';
   // Con API, la entrada HTTP abre además la correlación de la petición y todo fallo sale por el
   // filtro de errores del contrato (ErrorResponse). Sin API no hay nada que correlacionar ni traducir.
   const apiImports = withApi
@@ -174,7 +188,7 @@ export const HTTP_APPLICATION_OPTIONS = { bodyParser: false } as const;
 export function configureHttp(app: NestFastifyApplication): void {
   const fastify = app.getHttpAdapter().getInstance();
   fastify.removeContentTypeParser('application/json');
-  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (_request, body, done) => {
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (${withPayments ? 'request' : '_request'}, body, done) => {${noticeExemption}
     try {
       done(null, parseWireJson(body as string));
     } catch {
