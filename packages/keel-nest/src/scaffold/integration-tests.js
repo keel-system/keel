@@ -27,6 +27,9 @@ import { tsString } from './render.js';
 import { closingCredential, identitySection, usesIdentityHarness } from './identity-harness.js';
 import { messagingHarnessImports, messagingHarnessSection, usesMessagingHarness } from './messaging-harness.js';
 import * as httpStubHarness from './http-stub-harness.js';
+import { usesNestOutbox } from './messaging.js';
+import { usesScheduling } from './scheduling.js';
+import { usesRequestIdempotency } from './request-idempotency.js';
 
 /** Dónde escribe Vitest el XML JUnit de la suite de integración: lo lee score-scenarios.sh. */
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
@@ -119,6 +122,7 @@ function flowSupportTs(model) {
   const probe = dbProbe(model);
   const messaging = usesMessagingHarness(model);
   const stub = httpStubHarness.usesHttpStub(model);
+  const replica = usesReplica(model);
   return `/**
  * Base de las pruebas de flujo (\`test/integration/<flujo>.test.ts\`) que ejecutan los escenarios FL-*
  * de specs/validation-scenarios.md contra el servidor REAL —escuchando en un puerto libre, bajo el
@@ -301,7 +305,9 @@ export function useFlow(): Flow {
     }
   });
 
-  afterAll(async () => {
+  afterAll(async () => {${replica ? `
+    // La red de los escenarios de clúster: una réplica viva seguiría publicando y barriendo en el flujo siguiente.
+    await stopReplica();` : ''}
     await app?.close();
     currentApp = null;
   });
@@ -342,7 +348,7 @@ async function startServer(): Promise<NestFastifyApplication> {
   return app;
 }
 
-/**
+${replica ? replicaSection(model) : ''}/**
  * Una petición HTTP de verdad. Nunca lanza por un 4xx/5xx: el status es una aserción del escenario,
  * no un error. Registra el intercambio para la evidencia.
  */
@@ -877,5 +883,69 @@ export function inFlightWithoutClock(operation: string): number {
   if (!Number.isInteger(count)) throw new Error(\`La cuenta de filas sin reloj no es un número: '\${output}'\`);
   return count;
 }
+`;
+}
+
+// ─── La segunda réplica (escenarios de clúster) ───────────────────────────────
+
+/**
+ * ¿Hay escenarios de clúster posibles? Las mismas condiciones que keel-spring: el relay del outbox, un barrido
+ * por reloj o el registro de idempotencia, que son las garantías «aunque haya varias réplicas».
+ */
+export function usesReplica(model) {
+  return usesNestOutbox(model) || usesScheduling(model) || usesRequestIdempotency(model);
+}
+
+
+function replicaSection(model) {
+  const onReplica = usesApi(model)
+    ? `
+/**
+ * Una petición dirigida a la SEGUNDA réplica, no a la del flujo: es lo que permite que dos peticiones
+ * simultáneas con la misma clave lleguen a instancias distintas, el caso que el registro de idempotencia
+ * existe para cerrar.
+ */
+export function onReplica(method: string, route: string, body?: unknown, headers?: Headers): Promise<Response> {
+  if (!replica) throw new Error('La réplica no está arrancada: llama antes a startReplica()');
+  return send(replicaUrl, method, route, body, headers);
+}
+`
+    : '';
+  return `// ── Segunda réplica ──────────────────────────────────────────────────────────
+
+/** La segunda instancia del servicio, si un escenario de clúster la arrancó. */
+let replica: NestFastifyApplication | null = null;
+let replicaUrl = '';
+
+/**
+ * Arranca una SEGUNDA instancia del servicio contra la misma infraestructura y devuelve su URL base. Es la
+ * palanca de los escenarios de clúster: con dos instancias vivas hay dos relays del outbox y dos barridos
+ * compitiendo por las mismas filas, y una petición puede dirigirse a una u otra. Sin esto, «lo arbitra la
+ * clave primaria» y «cada réplica se lleva un lote disjunto» son afirmaciones que ningún escenario toca.
+ *
+ * Es un segundo AppModule en este proceso, con su propio puerto, su propio pool de conexiones, su propio
+ * planificador y su propio relay: lo que se contrasta es que dos instancias con estado propio no se pisan.
+ * (En keel-spring es un proceso aparte, porque dos contextos en la misma JVM comparten demasiado; aquí cada
+ * AppModule construye su grafo entero y no comparte nada salvo el event loop.)
+ *
+ * **El escenario que la arranca la para**, en un \`finally\` con \`stopReplica()\`: una réplica viva sigue
+ * publicando y barriendo. Como red, el flujo la para al cerrar.
+ */
+export async function startReplica(): Promise<string> {
+  if (replica) return replicaUrl;
+  replica = await startServer();
+  const address = replica.getHttpServer().address() as AddressInfo;
+  replicaUrl = \`http://127.0.0.1:\${address.port}\`;
+  return replicaUrl;
+}
+
+/** Para la réplica, ordenadamente (cierra su servidor, sus consumidores y su pool). Idempotente. */
+export async function stopReplica(): Promise<void> {
+  const running = replica;
+  replica = null;
+  replicaUrl = '';
+  await running?.close();
+}
+${onReplica}
 `;
 }
