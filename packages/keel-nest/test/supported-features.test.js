@@ -100,12 +100,7 @@ test('las dos persistencias se generan enteras, con los almacenes del generador 
       dependencies: { dependencies: { stock: { activations: { reserve: { reconciledBy: 'sweep' } } } } }
     });
     assert.deepEqual(errors, [], model);
-    // Sobre documentos, un único aviso: el arnés de integración (reset y sondas) llega en el 12d.
-    if (model === 'relational') assert.deepEqual(warnings, [], model);
-    else {
-      assert.equal(warnings.length, 1, warnings.join('\n'));
-      assert.match(warnings[0], /arnés de integración sobre documentos .*incremento 12d/);
-    }
+    assert.deepEqual(warnings, [], model);
   }
 });
 

@@ -202,3 +202,45 @@ test('cada ruta src/… que cita la skill de los clientes HTTP existe, y lo que 
   assert.match(flow, /export function ageForReconciliation\(activation: string, id: string\): void/);
   assert.match(rabbit['test/integration/support/http-stub.ts'], /export async function stubSequence\(method: string, pathPattern: string, \.\.\.responses: object\[\]\): Promise<void>/);
 });
+
+// La de la persistencia documental (incremento 12d): se instala con database mongodb y en lugar de la
+// relacional, cita solo lo que build emite y enseña los ayudantes que flow.ts exporta de verdad.
+const mongoDir = path.join(assets, 'generators', 'nest', 'skills', 'keel-nest-mongodb');
+const mongoSources = [path.join(mongoDir, 'SKILL.md'), ...fs.readdirSync(path.join(mongoDir, 'references')).map((name) => path.join(mongoDir, 'references', name))];
+const jobsMongo = byPath(planFixture('job-dispatch-mongo', { stack: { database: 'mongodb' } }).files);
+const vaultMongo = byPath(planFixture('asset-vault', { stack: { database: 'mongodb', broker: 'rabbitmq' } }).files);
+
+test('la skill documental se instala con mongodb, y la relacional no', () => {
+  for (const harness of HARNESSES) {
+    assert.ok(harness.skillPath('keel-nest-mongodb', 'SKILL.md') in jobsMongo, `${harness.id}: keel-nest-mongodb`);
+    assert.ok(harness.skillPath('keel-nest-mongodb', 'references/harness.md') in jobsMongo, `${harness.id}: sus referencias`);
+    assert.ok(!(harness.skillPath('keel-nest-database', 'SKILL.md') in jobsMongo), `${harness.id}: sin la relacional`);
+  }
+  assert.ok(!Object.keys(files).some((file) => file.includes('keel-nest-mongodb')), 'un diseño relacional no la recibe');
+});
+
+test('cada ruta src/… que cita la skill documental existe, y los ayudantes que enseña los exporta flow.ts', () => {
+  const emitted = new Set([...Object.keys(jobsMongo), ...Object.keys(vaultMongo)]);
+  for (const source of mongoSources) {
+    const text = fs.readFileSync(source, 'utf8');
+    for (const [cited] of text.matchAll(/src\/[\w/.-]+\.ts/g)) assert.ok(emitted.has(cited), `${path.basename(source)} cita ${cited}, que build no emite`);
+    assert.doesNotMatch(text, /\.claude\/|\.opencode\//, path.basename(source));
+  }
+  const jobsFlow = jobsMongo['test/integration/support/flow.ts'];
+  assert.match(jobsFlow, /export function mongoEval\(script: string\): string/);
+  assert.match(jobsFlow, /export function resetState\(\): void/);
+  for (const helper of ['stallInFlight', 'putInFlight']) assert.ok(jobsFlow.includes(`export function ${helper}(operation: string, id: string): void`), helper);
+  assert.match(jobsFlow, /export function inFlightWithoutClock\(operation: string\): number/);
+  const vaultFlow = vaultMongo['test/integration/support/flow.ts'];
+  assert.match(vaultFlow, /export function ageForReconciliation\(activation: string, id: string\): void/);
+  assert.match(vaultFlow, /export async function clearAbandonedOutboxEvents\(\): Promise<void>/, 'la skill dice que es asíncrona');
+  // Las reglas citan bson-values.ts: los conversores que enseña existen.
+  for (const helper of ['toUuid', 'toDecimal128', 'toDay', 'toEnumName']) assert.ok(jobsMongo['src/infrastructure/persistence/bson-values.ts'].includes(`export function ${helper}`), helper);
+  // El agente de calidad sabe verificar los índices, y el pipeline se lo pide en documental.
+  const quality = Object.entries(jobsMongo).find(([file]) => file.endsWith('keel-nest-quality.md'))[1];
+  assert.match(quality, /bash infra\/export-indexes\.sh/);
+  assert.match(quality, /indexes: OK \| KO \| N\/A/);
+  const orchestrator = Object.entries(jobsMongo).find(([file]) => /keel-generate-nest[\/]SKILL\.md$/.test(file))[1];
+  assert.match(orchestrator, /calidad \+ índices/);
+  assert.match(orchestrator, /indexes: OK/);
+});

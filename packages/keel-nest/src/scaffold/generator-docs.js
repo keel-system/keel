@@ -43,9 +43,9 @@ export const CONVENTIONS = [
 /** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
 export const AGENTS = ['keel-nest-code.md', 'keel-nest-infra.md', 'keel-nest-tests.md', 'keel-nest-validate.md', 'keel-nest-quality.md'];
 
-/** Skills por tecnología aplicables al servicio: la de la base relacional, la del proveedor de identidad, la del broker y la de los clientes HTTP. */
+/** Skills por tecnología aplicables al servicio: la de la base (relacional o documental), la del proveedor de identidad, la del broker y la de los clientes HTTP. */
 export function stackSkills(model) {
-  const skills = usesRelational(model) ? ['keel-nest-database'] : [];
+  const skills = usesRelational(model) ? ['keel-nest-database'] : usesDocument(model) ? ['keel-nest-mongodb'] : [];
   if (usesJwt(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-nest-${model.stack.auth}`);
   if (usesRabbitMq(model)) skills.push('keel-nest-rabbitmq');
   if (usesKafka(model)) skills.push('keel-nest-kafka');
@@ -215,12 +215,14 @@ completo, con sus porqués: \`{{keel:docs}}/orchestration.md\`.
    → **en serie**, primero \`code\` (comparten la base de prueba). Cupo de ciclos \`blocking: scoped\`, por
    número de flujos \`FL-*\`: hasta 10, 2 (tope 4); de 11 a 20, 3 (tope 5); más de 20, 4 (tope 6). No lo
    consumen los \`systemic\` ni los \`test\`/\`harness\`. Alcanzado el tope, reporta la matriz y detente.
-4. **Fase 3 — calidad${baseline ? ' + baseline de migraciones' : ''}.** Solo con **todos** los escenarios OK:
+4. **Fase 3 — calidad${baseline ? ' + baseline de migraciones' : usesDocument(model) ? ' + índices' : ''}.** Solo con **todos** los escenarios OK:
    lanza \`keel-nest-quality\` y **espera sin tocar el proyecto**. Hace el pase no-conductual, comprueba la
    no-regresión (la suite al 100%) y \`npm test\`${
      baseline
        ? `, y produce el **baseline de migraciones**: lo exporta (\`infra/export-schema.sh\`), lo revisa, lo copia a \`src/migrations/\` y lo **verifica en vivo** (\`infra/verify-baseline.sh\`). Exige \`baseline: OK\` y \`baselineTested: OK\`: sin ellos el servicio pasa sus escenarios (corren en \`local\`) pero no arranca en \`develop\` ni en \`production\`. \`KO\` → relánzalo una vez con su error exacto`
-       : ''
+       : usesDocument(model)
+         ? `, y **verifica los índices vivos** contra los que crea el servidor (\`infra/export-indexes.sh\`, que solo lee). Exige \`indexes: OK\` e \`indexesTested: OK\`: un índice que falta deja una unicidad del diseño sin guardar y su violación sin traducir al \`code\` declarado. \`KO\` es un defecto de build: a \`blockers\`, nunca índices a mano`
+         : ''
    }. \`status: KO\` o \`scenarios: KO\` → revierte o reporta; nunca hagas commit con algo en rojo. Al
    terminar, baja la infraestructura: \`bash infra/down.sh\`.
 5. **Guía de despliegue.** Con todo en verde y **antes** del commit, añade al \`README.md\` una sección

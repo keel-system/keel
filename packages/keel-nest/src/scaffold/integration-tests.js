@@ -27,6 +27,7 @@ import { tsString } from './render.js';
 import { closingCredential, identitySection, usesIdentityHarness } from './identity-harness.js';
 import { messagingHarnessImports, messagingHarnessSection, usesMessagingHarness } from './messaging-harness.js';
 import * as httpStubHarness from './http-stub-harness.js';
+import { documentHarnessSection, documentProbe } from './document-harness.js';
 import { usesNestOutbox } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
@@ -457,7 +458,7 @@ const DB_QUERY_ARGV: readonly string[] = ${JSON.stringify(probe.argv)};
 export function db(sql: string): string {
   return run(containerRuntime(), ['exec', DB_CONTAINER, ...DB_QUERY_ARGV, sql], '¿Está la base arriba (bash infra/up.sh)?');
 }
-${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}` : ''}${identitySection(model)}${messagingHarnessSection(model)}
+${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}` : ''}${documentHarnessSection(model)}${identitySection(model)}${messagingHarnessSection(model)}
 
 /** Espera hasta que \`condition\` se cumpla o se agote \`timeoutMs\`; lanza con \`message\` si no llega. */
 export async function eventually(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, message = 'la condición no se cumplió a tiempo'): Promise<void> {
@@ -477,6 +478,7 @@ function harnessSmokeTs(model) {
   const api = usesApi(model);
   const reset = hasResetScript(model);
   const probe = dbProbe(model);
+  const documentDb = documentProbe(model);
   const credential = api ? closingCredential(model) : null;
   const identity = usesIdentityHarness(model) ? smokeCredentials(model) : null;
   const imports = [
@@ -484,6 +486,7 @@ function harnessSmokeTs(model) {
     api ? 'ROUTE_BASE' : null,
     reset ? 'resetState' : null,
     probe ? 'db' : null,
+    documentDb ? 'mongoEval' : null,
     ...['bearer', 'tokenFor', 'serviceCredential', 'apiKey'].filter((name) => `${credential ?? ''}${identity ?? ''}`.includes(`${name}(`))
   ].filter(Boolean);
   const cases = [];
@@ -501,6 +504,13 @@ function harnessSmokeTs(model) {
     cases.push(`  it('SMOKE-3: la base de prueba responde a una sentencia', () => {
     // Es la vía de los Then que miran el almacén: si no responde, fallarían por la fontanería.
     expect(db('SELECT 1').trim()).toBe('1');
+  });`);
+  }
+  if (documentDb) {
+    cases.push(`  it('SMOKE-3: la base de prueba responde a un script', () => {
+    // Es la vía de los Then que miran el almacén y de las precondiciones del rescate y la reconciliación: el
+    // script viaja por ARCHIVO e impreso. Si esto no devuelve 1, devolverían vacío, que parece un cero.
+    expect(mongoEval('db.runCommand({ ping: 1 }).ok').trim()).toBe('1');
   });`);
   }
   if (api) {

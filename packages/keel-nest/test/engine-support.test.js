@@ -41,10 +41,10 @@ test('las celdas se indexan por el eje del catálogo y usan el vocabulario comú
 
 test('las dos persistencias que keel-nest genera las ejecuta su red en vivo', () => {
   assert.equal(MECHANISMS['persistence-adapter'].coverage.relational.net, 'db-check');
-  // La documental (incremento 12) contra un MongoDB real, almacenes del generador incluidos; lo que queda
-  // pendiente en ella es el arnés de integración (12d).
+  // La documental (incremento 12) contra un MongoDB real, almacenes del generador y arnés incluidos.
   for (const id of ['persistence-adapter', 'outbox-relay', 'idempotency-request', 'idempotency-consume', 'reconciliation-claim', 'sweep-claim-queue', 'sweep-claim-rescue']) {
     assert.equal(MECHANISMS[id].coverage.document.net, 'doc-check', id);
   }
-  assert.deepEqual(pending().filter(({ branch }) => branch === 'document').map(({ id }) => id), ['harness-db-probes']);
+  assert.deepEqual(pending().filter(({ branch }) => branch === 'document').map(({ id }) => id), []);
+  assert.equal(MECHANISMS['harness-db-probes'].coverage.document.net, 'doc-harness-check');
 });

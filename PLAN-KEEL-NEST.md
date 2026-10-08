@@ -1408,6 +1408,32 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     del 12d: ahí `clearAbandonedOutboxEvents()` es asíncrona. El resto del arnés documental —el reset entre flujos y las
     sondas de mongosh— es el 12d, y `build` lo avisa sobre todo diseño documental: el servidor sale entero, los
     `FL-*` todavía no se pueden puntuar.
+- **12d — el arnés documental y la skill, hecho (2026-10-08)**.
+  - **Lo que emite** (`src/scaffold/document-harness.js`, sección de `flow.ts`): `mongoEval(script)` —el `db()`
+    documental—, por ARCHIVO dentro del contenedor y envuelto en el `print(...)` de `keel-core/gen/mongo-probes.js`
+    (las dos trampas que esa fuente documenta: el argv se come las comillas en Windows, y por archivo mongosh no
+    imprime la última expresión); `stallInFlight`/`putInFlight`/`inFlightWithoutClock` con `setStateScript` y
+    `missingClockCountScript`, y `ageForReconciliation` con `ageClockScript` y la clave del documento de
+    `documentShape`: los mismos nombres y los MISMOS scripts que el `AbstractFlowIT` de keel-spring. El humo gana
+    SMOKE-3 documental (la base responde a un script). La `infra/` ya era neutral y servía: el `reset-db.sh` vacía
+    documentos conservando índices. `build` deja de avisar de que el arnés documental está incompleto.
+  - **El agente de calidad** gana la rama documental: no hay baseline que redactar, sino índices que VERIFICAR con
+    `infra/export-indexes.sh` (`indexes`/`indexesTested` en su reporte, como keel-spring), y la skill orquestadora
+    se lo pide. Es el único cambio en lo relacional: el texto de ese agente compartido.
+  - **Skill `keel-nest-mongodb`** (`SKILL.md` + `repository-adapters.md`, `indexes.md`, `harness.md`,
+    `troubleshooting.md`), instalada con `database: mongodb` en lugar de `keel-nest-database`. `generator-docs.test.js`
+    comprueba que cada ruta que cita existe y que los ayudantes y conversores que enseña los exporta lo emitido
+    (incluido que `clearAbandonedOutboxEvents` sea asíncrona en documental).
+  - **Medido**: `npm run doc-harness-check` (nuevo) **14/14** sobre `job-dispatch-mongo` con su `infra/` real —build,
+    `check-flows.sh`, `up.sh`, `validate-infra.sh` (el replica set), el humo, `score-scenarios.sh` saliendo con 0— y
+    un flujo sonda que usa los ayudantes emitidos: comillas y `print` por `mongoEval`, el reset que conserva los
+    índices (los del arnés y `uk_jobs_natural`), el rescate (estado y reloj rancio, reloj a ahora), el recuento sin
+    reloj discriminando, y el script de `ageForReconciliation` que emite `asset-vault`, leído de su `flow.ts`.
+    Falsado con cuatro sabotajes que compilan: sin el `print` cae el humo (score sale con 2); `putInFlight` con el
+    reloj rancio, el recuento sobre otro campo y el envejecimiento sobre otro campo caen cada uno en su sonda. La
+    primera versión del paso del humo buscaba la palabra `ARNÉS` y no vio el primer sabotaje: ahora se juzga por el
+    código 2. `ts-check` 12/12; keel-nest sin red 405/405. La matriz no tiene ya nada documental pendiente.
+  - **Con esto el 12 queda cerrado salvo la corrida (12e)**, cuyo sujeto sigue por decidir.
 
 ### Inc. 13 — Capas de borde: cache, storage, correo, pagos
 

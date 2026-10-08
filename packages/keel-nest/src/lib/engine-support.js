@@ -27,6 +27,8 @@ export const NETS = {
     'npm run harness-check [-- --database=mysql] — levanta infra/ con sus propios scripts, puntúa flujos sonda con score-scenarios.sh (cada código de salida y su evidencia) y exporta, aplica y verifica el baseline de migraciones',
   'broker-check':
     'npm run broker-check [-- --broker=rabbitmq|kafka|snssqs] — la mensajería contra RabbitMQ, Kafka y LocalStack reales de infra/: la topología, los consumer groups o las colas sembradas, el consumo con reintento y descarte (la DLQ, <topic>.DLT con los headers de Spring Kafka, o la RedrivePolicy de SQS), el relay del outbox con el broker caído y los helpers del arnés',
+  'doc-harness-check':
+    'npm run doc-harness-check — el arnés de integración documental contra la infra/ real: mongoEval, el reset, los ayudantes del rescate y de la reconciliación, el humo y la puntuación',
   'doc-check':
     'npm run doc-check — la persistencia documental contra un MongoDB real en replica set: los índices vivos, el documento crudo contra la forma neutral, ida y vuelta, versión, unicidad (también la condicionada), la carrera de dos transacciones, la auditoría, página y borrado',
   ninguna: 'nadie lo ejecuta'
@@ -167,7 +169,13 @@ export const MECHANISMS = {
         why:
           'las MISMAS sentencias del arnés, con los literales del motor, ejecutadas por db-check contra PostgreSQL y MySQL: la fila que deja stallInFlight la rescata el reclamo generado y la de putInFlight no, e inFlightWithoutClock cuenta cero y ve la fila sin reloj. Sin falsar por mutación'
       },
-      document: { pending: 'incremento 12d (el arnés documental)' }
+      document: {
+        state: 'verificado',
+        net: 'doc-harness-check',
+        falsified: true,
+        why:
+          'mongoEval por ARCHIVO y envuelto en print (keel-core/gen/mongo-probes.js, la fuente del AbstractFlowIT de keel-spring), el reset que vacía documentos y conserva índices, stallInFlight y putInFlight con setStateScript (estado y reloj rancio, o a ahora), inFlightWithoutClock discriminando y ageForReconciliation con ageClockScript. doc-harness-check los ejecuta contra la infra/ real de job-dispatch-mongo (y el script de envejecimiento que emite asset-vault), con el humo y score-scenarios.sh. Falsado el 2026-10-08: sin el print cae el humo (score sale con 2); putInFlight con el reloj rancio, el recuento sobre otro campo y el envejecimiento sobre otro campo caen cada uno en su sonda. Y el outbox del arnés lee la colección por la TransactionContext del servidor arrancado, sin SQL'
+      }
     }
   },
   'schema-baseline': {

@@ -51,7 +51,7 @@ filtro, adaptadores, entidades ORM, arnés, `infra/`). Lo que encuentres ahí es
 genérica sin error declarado equivalente) es un **hueco del diseño**: va a `designGaps` con el artefacto y
 la propuesta concreta.
 
-## Baseline de migraciones (solo con persistencia)
+## Baseline de migraciones (solo con persistencia relacional)
 
 Sigue `{{keel:skills}}/keel-nest-database/references/migrations.md`; en corto, con la infraestructura
 arriba:
@@ -67,6 +67,22 @@ arriba:
 Aquí la prueba en vivo SÍ es tuya y se ejecuta: en `local` el esquema lo recrea `synchronize`, así que
 vaciarlo no destruye la base de tu no-regresión. `baselineTested` nunca sale `PENDING`.
 
+## Índices (solo con persistencia documental)
+
+Sobre MongoDB no hay baseline que redactar: los índices salen enteros del diseño y los crea el servidor al
+arrancar (`src/infrastructure/persistence/document-indexes.ts`). Lo tuyo es **verificarlos** contra los
+vivos, con la infraestructura arriba y después de la no-regresión (el servidor ya arrancó y los creó):
+
+1. `bash infra/export-indexes.sh` → `build/schema/indexes.json`. Solo lee: se ejecuta de verdad.
+2. Contrasta, con `{{keel:skills}}/keel-nest-mongodb/references/indexes.md`: cada índice de
+   `document-indexes.ts` está vivo con las MISMAS claves, unicidad y filtro parcial; no sobra ninguno (uno
+   que no salga de ahí lo creó otra cosa y su nombre no lo conoce el traductor de errores); cada
+   `naturalKey`/`unique`/`indexes` de `specs/persistence.keel.yaml` tiene el suyo.
+3. Un índice que falta o difiere es un defecto de build, no tuyo: a `blockers` con lo que imprime. Nunca
+   crees ni borres índices a mano para que case.
+
+`indexesTested` nunca sale `PENDING`: leer índices no toca la base de tu no-regresión.
+
 ## Cierre
 
 En este orden:
@@ -79,7 +95,8 @@ En este orden:
 3. `bash infra/score-scenarios.sh` con la infraestructura arriba: **la no-regresión es tuya**, los
    escenarios siguen al 100%. Si alguno falla, tu pase cambió comportamiento: revierte el ajuste
    responsable y repite; si no lo identificas, revierte el pase entero y repórtalo. No edites las pruebas.
-   (Va después del baseline: la base queda con el esquema de las migraciones y la suite lo ejercita.)
+   (Va después del baseline: la base queda con el esquema de las migraciones y la suite lo ejercita. Con
+   documentos, los índices se verifican DESPUÉS de esto: el servidor de la suite los creó al arrancar.)
 4. `npm test`: las pruebas que dejó build (arranque bajo el perfil `test` sin infraestructura,
    configuración, contrato del cable, API, casos de uso). Un fallo aquí suele ser de **arranque**: un
    proveedor que sale a la red al construirse, o configuración que el perfil `test` no declara. Si el
@@ -90,13 +107,15 @@ No preguntas al usuario. **No lanzas subagentes.**
 ## Reporte final
 
 ```yaml
-status: OK | KO           # OK solo con todo en verde y el baseline verificado
+status: OK | KO           # OK solo con todo en verde y el baseline (o los índices) verificados
 compiles: true | false    # npm run build
 architecture: OK | KO     # npm run check:architecture
 scenarios: OK | KO        # score-scenarios.sh al 100% tras el pase
 unitTests: OK | KO        # npm test
-baseline: OK | KO | N/A   # src/migrations/1000000000000-baseline-schema.ts revisado y copiado (N/A sin persistencia)
+baseline: OK | KO | N/A   # src/migrations/1000000000000-baseline-schema.ts revisado y copiado (N/A sin persistencia relacional)
 baselineTested: OK | KO | N/A   # bash infra/verify-baseline.sh
+indexes: OK | KO | N/A    # los índices vivos contrastados con document-indexes.ts (N/A sin persistencia documental)
+indexesTested: OK | KO | N/A    # bash infra/export-indexes.sh
 domainGuards: OK | KO | N/A
 issuesFixed: [...]
 remaining: [...]

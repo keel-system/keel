@@ -67,14 +67,6 @@ export function checkSupportedFeatures(manifest, layers) {
   // La persistencia DOCUMENTAL (incremento 12) se genera entera: documentos, índices, transacción y los
   // almacenes del generador (outbox, mensajes procesados, registro de idempotencia y reclamos).
   //
-  // El ARNÉS de integración sobre documentos (el reset entre flujos y las sondas de mongosh con las que se
-  // fabrican las precondiciones) llega en el 12d: el servidor se genera entero, pero las pruebas de flujo no
-  // tienen todavía con qué dejar la base limpia.
-  if (declared.includes('persistence') && layers?.persistence?.default?.model === 'document') {
-    warnings.push(
-      'persistence.default.model: document — el servidor se genera entero, pero el arnés de integración sobre documentos (el reset de la base entre flujos y las sondas que fabrican precondiciones) llega en el incremento 12d de PLAN-KEEL-NEST.md: los escenarios FL-* todavía no se pueden puntuar.'
-    );
-  }
   // La auditoría de AUTORÍA por política (`created_by`/`updated_by` sin que el dominio los nombre) necesita
   // saber quién llama al guardar, y ninguno de los dos adaptadores lo estampa todavía: la columna saldría
   // vacía (en relacional, NOT NULL: la escritura fallaría). Solo la declara asset-vault, fuera también por storage.
