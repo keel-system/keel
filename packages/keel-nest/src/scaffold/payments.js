@@ -17,6 +17,7 @@
 // handler), que es del diseño y la escribe el agente con la skill de la pasarela.
 
 import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS } from 'keel-core/gen/payment-gateways';
+import { PAYMENT_SWEEP_PARAMETERS } from 'keel-core/gen/payments-model';
 import { HTTP_STUB } from 'keel-core/gen/infra-catalog';
 import { DIRS, classPath, declType, tsModule, tsString } from './render.js';
 import { COMMAND_DISPATCHER_TS } from './mediator.js';
@@ -36,6 +37,7 @@ export const GATEWAY_OUTCOME_TS = classPath(DOMAIN_DIR, 'GatewayOutcome');
 export const PAYMENT_SOURCE_TS = classPath(DOMAIN_DIR, 'PaymentSource');
 export const CHARGE_REQUEST_TS = classPath(DOMAIN_DIR, 'ChargeRequest');
 export const UNAVAILABLE_TS = classPath(DOMAIN_DIR, 'PaymentGatewayUnavailableException');
+export const METHOD_REJECTED_TS = classPath(DOMAIN_DIR, 'GatewayRejectedPaymentMethodException');
 export const PAYMENT_GATEWAY_TS = classPath(DIRS.portOut, 'PaymentGateway');
 export const OUTCOME_APPLIER_TS = classPath(APP_DIR, 'PaymentOutcomeApplier');
 export const PAYMENT_NOTICES_TS = classPath(APP_DIR, 'PaymentNotices');
@@ -85,6 +87,7 @@ export function generate(model) {
     { path: PAYMENT_SOURCE_TS, content: paymentSourceTs() },
     { path: CHARGE_REQUEST_TS, content: chargeRequestTs(model) },
     { path: UNAVAILABLE_TS, content: unavailableTs() },
+    ...(model.payments.savePaymentMethod ? [{ path: METHOD_REJECTED_TS, content: methodRejectedTs() }] : []),
     { path: PAYMENT_GATEWAY_TS, content: portTs(model) },
     { path: OUTCOME_APPLIER_TS, content: outcomeApplierTs(model) },
     { path: PAYMENT_NOTICES_TS, content: noticesTs() },
@@ -250,6 +253,25 @@ export class ChargeRequest {
   );
 }
 
+function methodRejectedTs() {
+  return tsModule(
+    METHOD_REJECTED_TS,
+    [],
+    `/**
+ * La pasarela CONTESTÓ y no acepta el medio de pago que se le pidió guardar (un 4xx). Es una respuesta, no una
+ * duda: el caso de uso la traduce al error que declare el diseño. Tiene su propio tipo para que el handler la
+ * capture a ella y solo a ella —como la IllegalArgumentException del servidor de keel-spring—: un fallo de
+ * programación que cayera en el mismo catch saldría como un rechazo del medio, y no como el 500 que es.
+ */
+export class GatewayRejectedPaymentMethodException extends Error {
+  constructor(readonly status: number) {
+    super(\`La pasarela no acepta el medio de pago: HTTP \${status}\`);
+    this.name = 'GatewayRejectedPaymentMethodException';
+  }
+}`
+  );
+}
+
 function unavailableTs() {
   return tsModule(
     UNAVAILABLE_TS,
@@ -309,6 +331,8 @@ function portTs(model) {
    * Guarda un medio de pago para cobrarlo sin el cliente delante.
    *
    * @return la referencia opaca de la pasarela; no sale nunca del servicio
+   * @throws GatewayRejectedPaymentMethodException si la pasarela no acepta el medio (captura esta y solo esta)
+   * @throws PaymentGatewayUnavailableException si no se sabe qué hizo la pasarela
    */
   abstract savePaymentMethod(token: string, payerReference: string): Promise<string>;`);
   }
@@ -478,6 +502,8 @@ export const PAYMENT_RECONCILIATION_SETTINGS = Symbol('PAYMENT_RECONCILIATION_SE
  */
 export interface PaymentReconciliationSettings {
   readonly unansweredAfterSeconds: number;
+  /** Cuántos cobros consulta una pasada como máximo (payments.reconciliation.batch-size): capacidad, no diseño. */
+  readonly batchSize: number;
 }`
   );
 }
@@ -518,6 +544,14 @@ export class PaymentReconciliation {
   /** El corte del barrido: un cobro que espera desde antes de este instante lleva demasiado sin desenlace. */
   staleBefore(now: Date = new Date()): Date {
     return new Date(now.getTime() - this.settings.unansweredAfterSeconds * 1000);
+  }
+
+  /**
+   * Cuántos cobros consulta una pasada como máximo (\`${PAYMENT_SWEEP_PARAMETERS.batchSize.key}\`): capacidad, no diseño. Sin
+   * cota, una tanda con miles de atascados son miles de llamadas a la pasarela en una sola pasada.
+   */
+  batchSize(): number {
+    return this.settings.batchSize;
   }
 
   /**
@@ -569,6 +603,8 @@ export interface PaymentGatewaySettings {
   readonly noticeToleranceSeconds: number;
   /** El silencio tolerado antes de que el barrido pregunte por un cobro. */
   readonly unansweredAfterSeconds: number;
+  /** Cuántos cobros consulta una pasada del barrido como máximo. */
+  readonly batchSize: number;
 }
 
 export function paymentGatewaySettings(configuration: Configuration): PaymentGatewaySettings {
@@ -579,7 +615,8 @@ export function paymentGatewaySettings(configuration: Configuration): PaymentGat
     connectTimeoutMs: duration(configuration, 'payments.gateway.connect-timeout', 2000),
     readTimeoutMs: duration(configuration, 'payments.gateway.read-timeout', 10000),
     noticeToleranceSeconds: positive(configuration, 'payments.gateway.notice-tolerance-seconds', 300),
-    unansweredAfterSeconds: positive(configuration, 'payments.reconciliation.unanswered-after-seconds', 900)
+    unansweredAfterSeconds: positive(configuration, ${tsString(PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.key)}, 900),
+    batchSize: positive(configuration, ${tsString(PAYMENT_SWEEP_PARAMETERS.batchSize.key)}, ${PAYMENT_SWEEP_PARAMETERS.batchSize.default})
   };
 }
 
@@ -911,7 +948,7 @@ export class PaymentsModule {
       module: PaymentsModule,
       providers: [
         { provide: PAYMENT_GATEWAY_SETTINGS, useValue: settings },
-        { provide: PAYMENT_RECONCILIATION_SETTINGS, useValue: { unansweredAfterSeconds: settings.unansweredAfterSeconds } },
+        { provide: PAYMENT_RECONCILIATION_SETTINGS, useValue: { unansweredAfterSeconds: settings.unansweredAfterSeconds, batchSize: settings.batchSize } },
         PaymentGatewayHttp,
         { provide: PaymentGateway, useClass: ${adapter.symbol} },
         { provide: PaymentNoticeVerifier, useClass: ${verifier.symbol} }
@@ -947,7 +984,9 @@ export function paymentsYaml(model, profile) {
     '  reconciliation:',
     '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds); en local y test se acorta',
     '    # para que los escenarios del barrido no esperen un cuarto de hora.',
-    `    unanswered-after-seconds: ${isLocalish ? 5 : envWithDefault(profile, 'PAYMENT_UNANSWERED_AFTER_SECONDS', model.payments.reconciliation.unansweredAfterSeconds)}`
+    `    unanswered-after-seconds: ${isLocalish ? PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.local : envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.env, model.payments.reconciliation.unansweredAfterSeconds)}`,
+    '    # Cuántos cobros consulta una pasada como máximo: capacidad, no diseño. Se ajusta con datos de producción.',
+    `    batch-size: ${envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.batchSize.env, PAYMENT_SWEEP_PARAMETERS.batchSize.default)}`
   ];
   return `${lines.join('\n')}\n`;
 }

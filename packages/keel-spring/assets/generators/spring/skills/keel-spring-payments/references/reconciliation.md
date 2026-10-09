@@ -4,7 +4,8 @@
 
 Los cobros en los estados que esperan a la pasarela —`pending`, `actionRequired` si hay acción del
 cliente, y el `inFlight` de cada acción de seguimiento— cuyo `awaitingSince` es más antiguo que
-`payments.reconciliation.unanswered-after-seconds`. Un lote acotado por pasada.
+`payments.reconciliation.unanswered-after-seconds` (`paymentReconciliation.staleBefore(now)`). Un lote acotado por pasada:
+`paymentReconciliation.batchSize()`, que lee `payments.reconciliation.batch-size` —no lo escribas como constante—.
 
 ## El reclamo
 

@@ -261,6 +261,20 @@ for (const gateway of GATEWAYS) {
     });
   }
 
+  test(`${gateway}: guardar un medio que la pasarela rechaza es SU excepción, con tipo; sin respuesta, en duda`, async () => {
+    // Corridas payment-checkout en keel-nest: con un Error sin tipo, los dos agentes capturaron CUALQUIER error
+    // como rechazo del medio, y un fallo de programación habría salido como 422 en vez de 500.
+    const { GatewayRejectedPaymentMethodException } = await tree.load('src/domain/payment/gateway-rejected-payment-method-exception.ts');
+    fake.reset();
+    fake.route(calls.SAVE_METHOD, 400, { error: { code: 'rejected_by_test' } });
+    const rejected = await (await gatewayAt(fake.baseUrl)).savePaymentMethod('tok_x', 'cli-1').then(() => null, (error) => error);
+    assert.ok(rejected instanceof GatewayRejectedPaymentMethodException, String(rejected));
+    assert.equal(rejected.status, 400);
+    fake.reset();
+    fake.route(calls.SAVE_METHOD, 503, {});
+    await assert.rejects((await gatewayAt(fake.baseUrl)).savePaymentMethod('tok_x', 'cli-1'), PaymentGatewayUnavailableException);
+  });
+
   test(`${gateway}: capturar una autorización caducada es un cobro anulado`, async () => {
     fake.reset();
     fake.route(calls.CAPTURE, 400, shapes.expiredCapture);
@@ -406,10 +420,11 @@ test('el aplicador despacha la operación de cada desenlace; lo que la capa no n
   assert.equal(dispatched.length, before, 'PENDING no es un desenlace');
 
   // El barrido: lo que la pasarela no conoce es un cobro que falló sin cobrar (notReceived).
-  const reconciliation = new PaymentReconciliation({ status: async () => GatewayOutcome.notFound('ch-6') }, applier, { unansweredAfterSeconds: 900 });
+  const reconciliation = new PaymentReconciliation({ status: async () => GatewayOutcome.notFound('ch-6') }, applier, { unansweredAfterSeconds: 900, batchSize: 50 });
   assert.equal(await reconciliation.consult('ch-6', null), GatewayStatus.NOT_FOUND);
   assert.equal(dispatched.at(-1).failureReason, PaymentFailureReason.NOT_RECEIVED);
   assert.equal(reconciliation.staleBefore(new Date(NOW_MS)).getTime(), NOW_MS - 900_000);
+  assert.equal(reconciliation.batchSize(), 50, 'el lote del barrido sale de la configuración, no de una constante del agente');
 
   // El aviso no decide: se pregunta, y PENDING no se aplica.
   const asked = [];

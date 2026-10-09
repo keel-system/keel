@@ -8,6 +8,7 @@
 import { FAILURE_REASONS } from '../payment-vocabulary.js';
 import { PAYMENT_GATEWAYS } from './infra-catalog.js';
 import { pascalCase, screamingSnake } from './naming.js';
+import { RECONCILIATION_BATCH_SIZE } from './reconciliation-stores.js';
 
 // Los desenlaces neutros que puede devolver una pasarela. Es el vocabulario del puerto
 // (GatewayStatus) y lo traduce cada adaptador; no depende del diseño.
@@ -156,6 +157,26 @@ function awaitingStates(payments, entities) {
   }
   return states;
 }
+
+/**
+ * Los dos números del barrido de pagos (`payments.reconciliation.sweep`), con su clave, su variable y su default, para
+ * que los dos generadores escriban la MISMA configuración. Son de distinta clase, como los de un `reconciledBy`
+ * (reconciliation-stores.js): el silencio tolerado lo declara el diseño; el lote por pasada es capacidad, y lo pone el
+ * generador. Sin el segundo, los cuatro agentes de las corridas payment-checkout escribieron una constante a mano.
+ */
+export const PAYMENT_SWEEP_PARAMETERS = Object.freeze({
+  unansweredAfterSeconds: Object.freeze({
+    key: 'payments.reconciliation.unanswered-after-seconds',
+    env: 'PAYMENT_UNANSWERED_AFTER_SECONDS',
+    // En local y test se acorta, para que los escenarios del barrido no esperen el plazo real.
+    local: 5
+  }),
+  batchSize: Object.freeze({
+    key: 'payments.reconciliation.batch-size',
+    env: 'PAYMENT_RECONCILIATION_BATCH_SIZE',
+    default: RECONCILIATION_BATCH_SIZE
+  })
+});
 
 /**
  * Las operaciones que llaman a la pasarela EN MEDIO de su trabajo: las acciones de la capa y el

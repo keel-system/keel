@@ -5,7 +5,8 @@
 Los cobros en los estados que esperan a la pasarela —`pending`, `actionRequired` si hay acción del cliente, y el
 `inFlight` de cada acción de seguimiento— cuyo `awaitingSince` es anterior a
 `this.paymentReconciliation.staleBefore()` (el umbral es `payments.reconciliation.unanswered-after-seconds`; en
-local y test, 5 segundos). Un lote acotado por pasada, el que más lleva esperando primero.
+local y test, 5 segundos). Un lote acotado por pasada —`this.paymentReconciliation.batchSize()`, que lee
+`payments.reconciliation.batch-size`: no lo escribas como constante—, el que más lleva esperando primero.
 
 ## El reclamo
 

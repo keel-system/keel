@@ -172,6 +172,7 @@ function adapterTs(model) {
     { symbol: 'GatewayOutcome', from: NEUTRAL.outcome },
     { symbol: 'GatewayStatus', from: NEUTRAL.status },
     { symbol: 'PaymentGatewayUnavailableException', from: NEUTRAL.unavailable },
+    ...(p.savePaymentMethod ? [{ symbol: 'GatewayRejectedPaymentMethodException', from: 'src/domain/payment/gateway-rejected-payment-method-exception.ts' }] : []),
     { symbol: 'PaymentGateway', from: NEUTRAL.port },
     { symbol: 'MoneyAmounts', from: NEUTRAL.money },
     { symbol: 'GatewayNoAnswer', from: NEUTRAL.http },
@@ -360,7 +361,7 @@ function unavailable(action: string, answer: GatewayAnswer): PaymentGatewayUnava
 /** Guardar un medio: un 5xx deja la operación en duda; un 4xx es que la pasarela no acepta el medio. */
 function rejectedMethod(answer: GatewayAnswer): void {
   if (answer.status >= 500) throw unavailable('savePaymentMethod', answer);
-  if (answer.status >= 400) throw new Error(\`La pasarela no acepta el medio de pago: HTTP \${answer.status}\`);
+  if (answer.status >= 400) throw new GatewayRejectedPaymentMethodException(answer.status);
 }` : ''}`;
   return tsModule(ADAPTER_TS, imports, body);
 }

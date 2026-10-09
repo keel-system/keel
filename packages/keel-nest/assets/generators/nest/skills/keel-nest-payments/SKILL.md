@@ -63,6 +63,10 @@ constructor, en el mismo orden. Siempre en este orden, y el orden es la defensa:
    error que declara el diseño.
    - Un importe parcial viaja **con la moneda del cobro**, que ya tienes en el registro: no le preguntes la moneda
      a la pasarela.
+   - **Guardar un medio** (`savePaymentMethod`): la pasarela que lo rechaza lanza
+     `GatewayRejectedPaymentMethodException` (`src/domain/payment/gateway-rejected-payment-method-exception.ts`), y la
+     que no contesta, `PaymentGatewayUnavailableException`. Captura **esas dos** y tradúcelas a los errores que declare
+     el diseño; cualquier otra excepción se deja pasar, porque es un fallo de programación y tiene que salir como 500.
 3. **Desenlaces** (`outcomes.*`): **idempotentes**. Si el cobro ya no está en el estado de origen —lo aplicó otro
    camino—, no hagas nada y no lances. Ver `references/outcomes.md`.
    - Al salir de un estado de espera, **vacía `awaitingSince`** (y `customerAction` fuera de `actionRequired`).

@@ -22,6 +22,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { pascalCase } from '../lib/naming.js';
 import { PAYMENT_NOTICE_PATH } from 'keel-core/gen/payment-gateways';
+import { PAYMENT_SWEEP_PARAMETERS } from 'keel-core/gen/payments-model';
 import * as stripe from './payment-gateways/stripe.js';
 import * as mercadopago from './payment-gateways/mercadopago.js';
 
@@ -399,7 +400,7 @@ function renderReconciliation(model) {
  *
  * <p>Lo que no hace es elegir los candidatos ni reclamarlos: eso es del handler del barrido. Los
  * candidatos son los cobros en ${payments.awaitingStates.join(', ')} cuyo ${payments.record.awaitingSince} es
- * más antiguo que {@code payments.reconciliation.unanswered-after-seconds}; y el handler reclama cada uno
+ * anterior a {@link #staleBefore}, en lotes de {@link #batchSize}; y el handler reclama cada uno
  * volviendo a estampar ${payments.record.awaitingSince} ANTES de llamar aquí, para que otra réplica no lo
  * consulte en la misma pasada.
  */
@@ -408,10 +409,32 @@ public class PaymentReconciliation {
 
     private final PaymentGateway gateway;
     private final PaymentOutcomeApplier applier;
+    private final long unansweredAfterSeconds;
+    private final int batchSize;
 
-    public PaymentReconciliation(PaymentGateway gateway, PaymentOutcomeApplier applier) {
+    public PaymentReconciliation(PaymentGateway gateway, PaymentOutcomeApplier applier,
+            @Value("\${${PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.key}}") long unansweredAfterSeconds,
+            @Value("\${${PAYMENT_SWEEP_PARAMETERS.batchSize.key}:${PAYMENT_SWEEP_PARAMETERS.batchSize.default}}") int batchSize) {
+        if (unansweredAfterSeconds < 1 || batchSize < 1) {
+            throw new IllegalArgumentException("El umbral y el lote del barrido de pagos tienen que ser positivos");
+        }
         this.gateway = gateway;
         this.applier = applier;
+        this.unansweredAfterSeconds = unansweredAfterSeconds;
+        this.batchSize = batchSize;
+    }
+
+    /** El corte del barrido: un cobro que espera desde antes de este instante lleva demasiado sin desenlace. */
+    public Instant staleBefore(Instant now) {
+        return now.minusSeconds(unansweredAfterSeconds);
+    }
+
+    /**
+     * Cuántos cobros consulta una pasada como máximo ({@code ${PAYMENT_SWEEP_PARAMETERS.batchSize.key}}): capacidad, no
+     * diseño. Sin cota, una tanda con miles de atascados son miles de llamadas a la pasarela en una sola pasada.
+     */
+    public int batchSize() {
+        return batchSize;
     }
 
     /**
@@ -442,6 +465,8 @@ public class PaymentReconciliation {
       `${base}.${DOMAIN_PKG}.GatewayStatus`,
       `${base}.${ENUMS_PKG}.${payments.record.failureReasonType}`,
       `${base}.${PORT_PKG}.PaymentGateway`,
+      'java.time.Instant',
+      'org.springframework.beans.factory.annotation.Value',
       'org.springframework.stereotype.Component'
     ],
     body

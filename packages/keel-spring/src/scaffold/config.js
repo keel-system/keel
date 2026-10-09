@@ -28,6 +28,7 @@ import { METRICS_TRANSPORT, OBSERVATIONS } from '../lib/telemetry-probes.js';
 import { sweepClaims, sweepConfig } from 'keel-core/gen';
 import { collectionBatchSize } from './persistence-entities.js';
 import { PAYMENT_TEST_SECRETS } from 'keel-core/gen/payment-gateways';
+import { PAYMENT_SWEEP_PARAMETERS } from 'keel-core/gen/payments-model';
 
 const PROFILES = ['local', 'develop', 'production'];
 
@@ -1328,7 +1329,9 @@ function paymentsYaml(model, profile) {
     '  reconciliation:',
     '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds); en local y test se acorta',
     '    # para que los escenarios del barrido no esperen un cuarto de hora.',
-    `    unanswered-after-seconds: ${isLocalish ? 5 : envWithDefault(profile, 'PAYMENT_UNANSWERED_AFTER_SECONDS', model.payments.reconciliation.unansweredAfterSeconds)}`
+    `    unanswered-after-seconds: ${isLocalish ? PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.local : envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.env, model.payments.reconciliation.unansweredAfterSeconds)}`,
+    '    # Cuántos cobros consulta una pasada como máximo: capacidad, no diseño. Se ajusta con datos de producción.',
+    `    batch-size: ${envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.batchSize.env, PAYMENT_SWEEP_PARAMETERS.batchSize.default)}`
   ];
   return lines.join('\n') + '\n';
 }
