@@ -98,47 +98,20 @@ export function checkSupportedFeatures(manifest, layers) {
 }
 
 /**
- * Lo saliente que keel-nest todavía no genera (incremento 11b): se rechaza nombrando por qué.
- *
- *   · la réplica de un `need` y su `lastKnown` (13j; el dato bajo demanda ya se genera, 13i):
- *     solo lo declaran asset-vault (persistencia documental, incremento 12) y catalog-extended (storage,
- *     incremento 13); se generará cuando haya una fixture en la frontera que lo mida;
- *   · un campo COMPUESTO (un value object) en la petición o la respuesta de una llamada: el adaptador
- *     lee y escribe escalares, enums y listas de ellos;
- *   · `auth: oauth2-client-credentials`: la concesión del token, por el mismo motivo que `needs`
- *     (solo catalog-extended la declara).
+ * Lo saliente que keel-nest todavía no genera: un campo COMPUESTO (un value object) en la petición o la respuesta de
+ * una llamada —el adaptador lee y escribe escalares, enums y listas de ellos; ninguna fixture lo declara—. Los `needs`
+ * (13i, 13j) y oauth2-client-credentials (13j) ya se generan.
  */
 function outboundFrontier(layers) {
   const errors = [];
-  // El dato bajo demanda se genera (incremento 13i): el puerto inyectado en el handler y onUnavailable fail/degrade
-  // en el fallback. La réplica (strategy: replicated) y onUnavailable: lastKnown llegan con su mecanismo (13j).
-  for (const [id, dependency] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
-    for (const [name, need] of Object.entries(dependency?.needs ?? {})) {
-      if (need?.strategy === 'replicated') {
-        errors.push(
-          `dependencies.${id}.needs.${name}: strategy replicated — keel-nest todavía no genera la réplica local (proyector, lector y onMiss; ` +
-            'incremento 13j de PLAN-KEEL-NEST.md). Genera este diseño con keel-spring.'
-        );
-      } else if (need?.onUnavailable?.action === 'lastKnown') {
-        errors.push(
-          `dependencies.${id}.needs.${name}: onUnavailable lastKnown — keel-nest todavía no genera el almacén del último valor conocido ` +
-            '(incremento 13j de PLAN-KEEL-NEST.md). Genera este diseño con keel-spring.'
-        );
-      }
-    }
-  }
+  // Los needs se generan enteros: bajo demanda (13i), la réplica y lastKnown (13j).
   const types = layers?.domain?.types ?? {};
   const composite = (field) => {
     const type = field?.type ?? field?.items?.type;
     return Boolean(type && types[type] && (types[type].fields || types[type].kind === 'composite'));
   };
   for (const [id, client] of Object.entries(layers?.['http-clients']?.clients ?? {})) {
-    if (client?.auth?.type === 'oauth2-client-credentials') {
-      errors.push(
-        `http-clients.${id}.auth: oauth2-client-credentials — keel-nest todavía no genera la concesión del token (incremento 11 de ` +
-          'PLAN-KEEL-NEST.md: llega cuando una fixture de la frontera lo mida). Genera este diseño con keel-spring.'
-      );
-    }
+    // oauth2-client-credentials se genera (13j): la concesión con la semántica de Spring Security.
     for (const [name, call] of Object.entries(client?.calls ?? {})) {
       const fields = [
         ...Object.entries(call?.request?.body ?? {}),

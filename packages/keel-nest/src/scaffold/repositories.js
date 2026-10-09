@@ -529,8 +529,12 @@ function saveMethod(model, entity, imports) {
     lines.push('      entity.pullDomainEvents();');
   }
   lines.push(`      return toDomain${entity.name}(saved);`);
+  // La copia local de una dependencia replicada se guarda en su PROPIA transacción (el REQUIRES_NEW de keel-spring):
+  // a este save se llega también desde la hidratación del lector (onMiss: fetch), que corre dentro de una consulta
+  // de solo lectura. Contrapartida deliberada: la copia queda confirmada aunque la lectura falle después.
+  const open = entity.replicaOf ? 'inNewTransaction' : 'inTransaction';
   return `  async save(entity: ${entity.name}): Promise<${entity.name}> {
-    return this.transactions.inTransaction(async (manager) => {
+    return this.transactions.${open}(async (manager) => {
 ${lines.join('\n')}
     });
   }`;

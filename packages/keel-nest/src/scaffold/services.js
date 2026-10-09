@@ -29,6 +29,7 @@ import { CALLER_SCOPE_TS, scopedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
 import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
 import { portPath as clientPortPath } from './http-clients.js';
+import { projectorPath, readerPath, replicas } from './projections.js';
 
 export function generate(model) {
   const files = [];
@@ -249,9 +250,24 @@ function renderHandler(model, operation) {
     imports.push({ symbol: client.clientClass, from: clientPortPath(client) });
     dependencies.push({ type: client.clientClass, name: decap(client.clientClass) });
   }
+  // La operación de PROYECCIÓN (la que dispara la suscripción de un `fedBy`): escribe la copia por su proyector, que es
+  // la única puerta de escritura de la réplica (13j).
+  for (const projection of projectionsFedBy(model, operation)) {
+    if (dependencies.some((dep) => dep.type === projection.projectorClass)) continue;
+    imports.push({ symbol: projection.projectorClass, from: projectorPath(projection) });
+    dependencies.push({ type: projection.projectorClass, name: decap(projection.projectorClass) });
+  }
   // El dato que esta operación PIDE a otro servidor (`dependencies.needs`, por `usedBy`), bajo demanda: el puerto
   // del cliente se inyecta por el mismo criterio que el de una activación (incremento 13i).
   for (const { need } of operation.dependencyNeeds ?? []) {
+    // Replicada (13j): se lee por el lector, que es quien aplica onMiss; nunca el repositorio de la réplica.
+    if (need.strategy === 'replicated' && need.replica) {
+      if (!dependencies.some((dep) => dep.type === need.replica.readerClass)) {
+        imports.push({ symbol: need.replica.readerClass, from: readerPath(need.replica) });
+        dependencies.push({ type: need.replica.readerClass, name: decap(need.replica.readerClass) });
+      }
+      continue;
+    }
     if (need.strategy !== 'on-demand' || !need.fetch) continue;
     const client = (model.httpClients ?? []).find((candidate) => candidate.clientClass === need.fetch.clientClass);
     if (!client || dependencies.some((dep) => dep.type === client.clientClass)) continue;
@@ -373,6 +389,7 @@ function handlerNotes(model, operation) {
   if (compensation) notes.push(compensation);
   for (const note of activationNotes(operation)) notes.push(note);
   for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(dependency, need, operation));
+  for (const note of projectionNotes(model, operation)) notes.push(note);
   for (const eventName of operation.emits ?? []) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
     const emisores = [
@@ -533,7 +550,32 @@ function needNote(depId, need, operation) {
       : '';
     return `Dependencia ${depId}.${need.name} (on-demand)${why}: pide el dato con await this.${decap(need.fetch.clientClass)}.${need.fetch.call}(...), que ya devuelve el resultado de dominio (${need.fetch.resultType}): el DTO del cable no cruza a application. El retry y el circuito ya están en el adaptador: no los repitas.${policy}${exposeNote(need, operation)}`;
   }
-  return `Dependencia ${depId}.${need.name} (replicada)${why}: la réplica todavía no se genera en keel-nest (la frontera la rechaza); no leas el dato por tu cuenta`;
+  const { replica } = need;
+  if (!replica) {
+    return `Dependencia ${depId}.${need.name} (replicada)${why}: la réplica no se pudo resolver (revisa los avisos del build); no leas el dato por tu cuenta`;
+  }
+  const onMiss = {
+    fetch: `Si la copia aún no tiene el dato, el lector lo pide a ${depId} y lo guarda (su hydrate es tuyo: lo dice su TODO).`,
+    fail: `Si la copia aún no tiene el dato, el lector lanza ${replica.onMiss.exceptionClass ?? replica.onMiss.error}: no lo captures para seguir con un valor inventado.`,
+    degrade: `Si la copia aún no tiene el dato, el lector devuelve null y el resultado degradado lo escribes TÚ, distinguible por el cliente de una respuesta normal: ${replica.onMiss.degradedTo}`
+  }[replica.onMiss.action];
+  return `Dependencia ${depId}.${need.name} (replicada)${why}: lee ${replica.entityName} con await this.${decap(replica.readerClass)}.byKey(...), que ya aplica onMiss: ${replica.onMiss.action}. ${onMiss} NUNCA leas el repositorio de la réplica directamente ni la escribas desde aquí: la copia solo se escribe desde ${replica.projectorClass}.${exposeNote(need, operation)}`;
+}
+
+/** Las réplicas que alimenta la suscripción que dispara esta operación (`fedBy`). */
+function projectionsFedBy(model, operation) {
+  const fed = (model.subscriptions ?? []).filter((sub) => sub.trigger === operation.name && sub.feedsReplica);
+  return replicas(model)
+    .filter(({ entity }) => fed.some((sub) => sub.feedsReplica.entity === entity.name))
+    .map(({ need }) => need.replica);
+}
+
+/** La nota de la operación de proyección. */
+function projectionNotes(model, operation) {
+  return projectionsFedBy(model, operation).map(
+    (replica) =>
+      `Proyección de ${replica.entityName}: aplica el estado que informa el evento con await this.${decap(replica.projectorClass)}.apply({ ... }) —upsert idempotente que ya descarta la reentrega tardía—. Es la ÚNICA escritura de la copia: no la guardes por el repositorio.`
+  );
 }
 
 /** La nota de una activación: el trabajo que esta operación delega en otro servidor (la de keel-spring). */

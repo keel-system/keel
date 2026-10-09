@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeWorkspace, mountDesign, runCommand, NEST_READY_DESIGN } from './helpers/workspace.js';
+import { makeWorkspace, mountDesign, mountOutsideFrontier, runCommand, NEST_READY_DESIGN } from './helpers/workspace.js';
 import { check } from '../src/commands/check.js';
 
 function treeDigest(root) {
@@ -39,13 +39,13 @@ test('un diseño no listo sale en rojo aunque sea generable, y dice por qué', a
   assert.match(output, /Generable, pero no listo/);
 });
 
-test('una capa fuera de la frontera sale en rojo sin construir nada', async () => {
+test('lo que está fuera de la frontera sale en rojo sin construir nada', async () => {
   const workspace = makeWorkspace();
-  mountDesign(workspace, 'catalog-extended');
+  const spec = await mountOutsideFrontier(workspace);
   const before = treeDigest(workspace);
-  const { exitCode, output } = await runCommand(workspace, check, 'specs/catalog-extended', {});
+  const { exitCode, output } = await runCommand(workspace, check, spec, {});
   assert.equal(exitCode, 1);
-  assert.match(output, /strategy replicated — keel-nest todavía no genera la réplica/);
+  assert.match(output, /refund es un value object compuesto/);
   assert.equal(treeDigest(workspace), before);
 });
 

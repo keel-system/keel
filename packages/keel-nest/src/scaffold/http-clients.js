@@ -27,6 +27,41 @@ export const RESPONSE_READING_TS = `src/${CLIENTS_DIR}/response-reading.ts`;
 export const OUTBOUND_IDEMPOTENCY_TS = `src/${CLIENTS_DIR}/outbound-idempotency.ts`;
 export const HTTP_CLIENTS_SETTINGS_TS = `src/${CLIENTS_DIR}/http-clients-settings.ts`;
 export const HTTP_CLIENTS_MODULE_TS = `src/${CLIENTS_DIR}/http-clients-module.ts`;
+export const LAST_KNOWN_TS = `src/${CLIENTS_DIR}/last-known-values.ts`;
+export const OAUTH2_TS = `src/${CLIENTS_DIR}/oauth2-client-credentials.ts`;
+
+/** ¿Algún cliente se autentica con `oauth2-client-credentials`? */
+export function usesOAuth2(model) {
+  return (model.httpClients ?? []).some((client) => client.auth?.type === 'oauth2-client-credentials');
+}
+
+/** Los needs que declaran `onUnavailable: lastKnown`, con la llamada por la que se resuelven (los de keel-spring). */
+export function lastKnownNeeds(model) {
+  return (model.dependencies ?? []).flatMap((dependency) =>
+    (dependency.needs ?? []).filter((need) => need.onUnavailable?.action === 'lastKnown' && need.fetch).map((need) => ({ dependency: dependency.id, need }))
+  );
+}
+
+/** ¿Alguna llamada de este cliente sirve un need con `lastKnown`? */
+function clientRemembers(model, client) {
+  return lastKnownNeeds(model).some(({ need }) => need.fetch.clientId === client.id);
+}
+
+/** ¿Esta llamada resuelve un need con `lastKnown`? */
+function rememberedCall(model, client, call) {
+  return lastKnownNeeds(model).some(({ need }) => need.fetch.clientId === client.id && need.fetch.call === call.name);
+}
+
+/**
+ * La clave del último valor conocido: los MISMOS parámetros de la llamada. Es lo que hace que el fallback sirva el
+ * último precio DE ESE sku y no el del último que se consultara.
+ */
+function lastKnownKey(call) {
+  const args = callArgs(call);
+  if (args.length === 0) return "'-'";
+  if (args.length === 1) return args[0];
+  return `[${args.join(', ')}]`;
+}
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -61,6 +96,8 @@ export function generate(model) {
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/http-clients.yaml`, content: httpClientsYaml(model, profile) }))
   ];
   if (outboundIdempotentCalls(model).length > 0) files.push({ path: OUTBOUND_IDEMPOTENCY_TS, content: outboundIdempotencyTs(model) });
+  if (lastKnownNeeds(model).length > 0) files.push({ path: LAST_KNOWN_TS, content: lastKnownTs() });
+  if (usesOAuth2(model)) files.push({ path: OAUTH2_TS, content: oauth2Ts() });
   for (const client of model.httpClients) {
     files.push({ path: portPath(client), content: portTs(model, client) });
     files.push({ path: infraPath(client.mapperClass), content: mapperTs(model, client) });
@@ -308,6 +345,10 @@ function adapterTs(model, client) {
   const constants = [];
   const fields = [];
   const methods = client.calls.map((call) => callMethod(model, client, call, imports, constants, fields));
+  // Con `onUnavailable: lastKnown`, el almacén del último valor (13j): lo alimenta el camino feliz, lo lee el fallback.
+  const remembers = clientRemembers(model, client);
+  if (remembers) imports.push({ symbol: 'LastKnownValues', from: LAST_KNOWN_TS });
+  const lastKnownParam = remembers ? ',\n    @Inject(LastKnownValues) private readonly lastKnown: LastKnownValues' : '';
   const body = `${constants.join('\n\n')}${constants.length > 0 ? '\n\n' : ''}${tsdoc(`Adaptador HTTP de ${client.id}: implementa ${client.clientClass} sobre fetch, con la resiliencia que declara el diseño.`)}@Injectable()
 export class ${client.adapterClass} implements ${client.clientClass} {
   private readonly logger = new Logger(${tsString(client.adapterClass)});
@@ -315,7 +356,7 @@ export class ${client.adapterClass} implements ${client.clientClass} {
 
   constructor(
     @Inject(HTTP_CLIENTS_SETTINGS) settings: HttpClientsSettings,
-    @Inject(${client.mapperClass}) private readonly mapper: ${client.mapperClass}
+    @Inject(${client.mapperClass}) private readonly mapper: ${client.mapperClass}${lastKnownParam}
   ) {
     this.client = settings[${tsString(client.id)}];
   }
@@ -375,6 +416,8 @@ ${once}`;
   const kinds = fallbackFailures({ circuitBreaker: Boolean(call.circuitBreaker), oauth2: client.auth?.type === 'oauth2-client-credentials' }).map((f) => f.kind);
   imports.push({ symbol: 'providerFailureOf', from: PROVIDER_FAILURES_TS }, { symbol: 'OutboundFailure', from: PROVIDER_FAILURES_TS, type: true });
   const unavailable = unavailableBody(model, client, call, imports);
+  // Los parámetros de la llamada solo los lee el fallback de lastKnown (son la clave del último valor).
+  const usesArgs = /this.lastKnown.recall/.test(unavailable);
   return `${tsdoc(call.contract, '  ')}  async ${call.name}(${params.join(', ')}): Promise<${returns}> {
     try {
       ${ret}await ${guarded};
@@ -400,7 +443,7 @@ ${once}
    * programación de este adaptador no tiene rama que lo enrute y se propaga con su traza. No lo ensanches a
    * cualquier error para "que no se escape nada": lo que se escapa es el bug.
    */
-  private ${call.name}Unavailable(${[...params.map((p) => `_${p}`), 'failure: OutboundFailure'].join(', ')}): ${returns} {
+  private ${call.name}Unavailable(${[...params.map((p) => (usesArgs ? p : `_${p}`)), 'failure: OutboundFailure'].join(', ')}): ${returns} {
 ${unavailable}
   }`;
 }
@@ -454,9 +497,17 @@ ${todo}${lines.join('\n')}${lines.length > 0 ? '\n' : ''}    ${send};
       return ${neutralResult(call)};
     }`
     : '';
+  // Con `onUnavailable: lastKnown`, el resultado se recuerda ANTES de devolverlo: lo que sirve cuando el proveedor cae
+  // es lo último que contestó cuando no lo estaba.
+  const result = rememberedCall(model, client, call)
+    ? `
+    const result = this.mapper.to${call.pascal}Result(${call.responseType}.read(response.body));
+    this.lastKnown.remember(${tsString(call.name)}, ${lastKnownKey(call)}, result);
+    return result;`
+    : `
+    return this.mapper.to${call.pascal}Result(${call.responseType}.read(response.body));`;
   return `  private async ${call.name}Once(${params}): Promise<${call.resultType}> {
-${todo}${lines.join('\n')}${lines.length > 0 ? '\n' : ''}    const response = ${send};${emptyGuard}
-    return this.mapper.to${call.pascal}Result(${call.responseType}.read(response.body));
+${todo}${lines.join('\n')}${lines.length > 0 ? '\n' : ''}    const response = ${send};${emptyGuard}${result}
   }`;
 }
 
@@ -487,6 +538,7 @@ function unavailableBody(model, client, call, imports) {
   }
   // La política del `need` (`onUnavailable`): el dato que se PIDE al proveedor no depende de la prosa del fallback.
   if (needs.length > 0) return needFallbackBody(model, call, needs, trace, prose, todoThrow, imports);
+  // (needFallbackBody resuelve también lastKnown, con el almacén que inyecta el adaptador.)
   const { dependency, activation } = activations[0];
   const { onFailure } = activation;
   const origin = `    // Política declarada por la activación ${dependency}.${activation.name} (onFailure: ${onFailure?.action ?? 'sin declarar'}).\n`;
@@ -516,6 +568,19 @@ ${todoThrow}`;
 ${todoThrow}`;
 }
 
+/**
+ * El endpoint de token en `local`: el PATH del diseño sobre el proveedor de prueba (el WireMock de infra/), como
+ * keel-spring. Solo en local: fuera, el valor del diseño es el default (develop) o la variable obligatoria.
+ */
+function tokenUri(client, profile) {
+  if (profile !== 'local') return client.auth.tokenUrl;
+  try {
+    return LOCAL_STUB_BASE_URL + new URL(client.auth.tokenUrl).pathname;
+  } catch {
+    return client.auth.tokenUrl;
+  }
+}
+
 /** El fallback cuando la política la declara un `need` (`onUnavailable`): el mismo de keel-spring. */
 function needFallbackBody(model, call, needs, trace, prose, todoThrow, imports) {
   const { dependency, need } = needs[0];
@@ -539,8 +604,24 @@ ${todoThrow}`;
     //   ${onUnavailable.degradedTo}
 ${todoThrow}`;
   }
-  // `lastKnown` llega con su almacén (13j): la frontera lo rechaza hasta entonces.
-  return `${trace}\n${prose}${origin}    // TODO (agente): lastKnown todavía no se genera en keel-nest.
+  // `lastKnown`: el único con mecanismo propio, y por eso build lo escribe entero. Las dos mitades son inseparables
+  // —servir el último valor y RENDIRSE cuando ya es demasiado viejo—: sin la segunda, es la caché sin expiración que el
+  // diseño acaba de prohibir.
+  const recall = `this.lastKnown.recall<${call.resultType}>(${tsString(call.name)}, ${lastKnownKey(call)}, ${onUnavailable.maxAgeSeconds})`;
+  const window = `    // Dentro de la ventana declarada se sirve lo último que se leyó; fuera de ella no hay nada que servir: un valor
+    // más viejo que ${onUnavailable.maxAgeSeconds} s ya no es ese dato.
+    const remembered = ${recall};
+    if (remembered !== null) return remembered;`;
+  if (onUnavailable.exceptionClass) {
+    imports.push({ symbol: onUnavailable.exceptionClass, from: classPath(DIRS.errors, onUnavailable.exceptionClass) });
+    const message = tsString(`${dependency} no está disponible y el último ${need.name} conocido supera los ${onUnavailable.maxAgeSeconds}s`);
+    const args = onUnavailable.dynamicStatus ? `${message}, ${onUnavailable.httpStatus}` : message;
+    return `${trace}\n${prose}${origin}${window}
+    throw new ${onUnavailable.exceptionClass}(${args});`;
+  }
+  return `${trace}\n${prose}${origin}${window}
+    // TODO (agente): el diseño declara onUnavailable.error = ${onUnavailable.error}, pero ninguna operación de use-cases lo
+    // declara todavía, así que su clase no existe: solo falta con qué rendirse.
 ${todoThrow}`;
 }
 
@@ -574,6 +655,14 @@ export function httpClientsYaml(model, profile) {
         `      username: ${envValue(profile, `${client.envPrefix}_USERNAME`, 'changeme')}`,
         `      password: ${envValue(profile, `${client.envPrefix}_PASSWORD`, 'changeme')}`
       );
+    } else if (client.auth?.type === 'oauth2-client-credentials') {
+      // Las MISMAS variables que la registration de keel-spring (<CLIENTE>_CLIENT_ID, _CLIENT_SECRET, _TOKEN_URL).
+      lines.push(
+        '    auth:',
+        `      client-id: ${profile === 'test' ? 'test' : envValue(profile, `${client.envPrefix}_CLIENT_ID`, 'changeme')}`,
+        `      client-secret: ${profile === 'test' ? 'test' : envValue(profile, `${client.envPrefix}_CLIENT_SECRET`, 'changeme')}`,
+        `      token-uri: ${profile === 'test' ? 'http://localhost/token' : envValue(profile, `${client.envPrefix}_TOKEN_URL`, tokenUri(client, profile))}`
+      );
     }
   }
   return `${lines.join('\n')}\n`;
@@ -588,9 +677,19 @@ function settingsTs(model) {
     else if (auth?.type === 'basic') {
       headers = `{ Authorization: basic(text(configuration, ${tsString(`${auth.propertyPrefix}.username`)}), text(configuration, ${tsString(`${auth.propertyPrefix}.password`)})) }`;
     }
-    const oauth = auth?.type === 'oauth2-client-credentials'
-      ? '\n      // TODO (agente): oauth2-client-credentials todavía no se genera (la frontera de keel-nest lo rechaza en build).'
-      : '';
+    // OAuth2 client-credentials (13j): la concesión, una instancia por arranque —ningún token sobrevive entre arranques—.
+    const oauth =
+      auth?.type === 'oauth2-client-credentials'
+        ? `
+      authorization: clientCredentials({
+        id: ${tsString(client.id)},
+        tokenUri: text(configuration, ${tsString(`${auth.propertyPrefix}.token-uri`)}),
+        clientId: text(configuration, ${tsString(`${auth.propertyPrefix}.client-id`)}),
+        clientSecret: text(configuration, ${tsString(`${auth.propertyPrefix}.client-secret`)}),
+        scopes: [${(auth.scopes ?? []).map(tsString).join(', ')}],
+        timeoutMs: ${client.readTimeoutMs}
+      }),`
+        : '';
     return `    ${tsString(client.id)}: {
       id: ${tsString(client.id)},
       baseUrl: text(configuration, ${tsString(client.baseUrlProperty)}),
@@ -628,7 +727,8 @@ function basic(username: string, password: string): string {
     HTTP_CLIENTS_SETTINGS_TS,
     [
       { symbol: 'Configuration', from: CONFIG_TS, type: true },
-      { symbol: 'ClientSettings', from: HTTP_EXCHANGE_TS, type: true }
+      { symbol: 'ClientSettings', from: HTTP_EXCHANGE_TS, type: true },
+      ...(usesOAuth2(model) ? [{ symbol: 'clientCredentials', from: OAUTH2_TS }] : [])
     ],
     body
   );
@@ -644,6 +744,10 @@ function moduleTs(model) {
     { symbol: 'httpClientsSettings', from: HTTP_CLIENTS_SETTINGS_TS }
   ];
   const providers = ['{ provide: HTTP_CLIENTS_SETTINGS, useValue: httpClientsSettings(configuration) }'];
+  if (lastKnownNeeds(model).length > 0) {
+    imports.push({ symbol: 'LastKnownValues', from: LAST_KNOWN_TS });
+    providers.push('LastKnownValues');
+  }
   for (const client of model.httpClients) {
     imports.push(
       { symbol: client.clientClass, from: portPath(client) },
@@ -670,6 +774,170 @@ export class HttpClientsModule {
   }
 }`;
   return tsModule(HTTP_CLIENTS_MODULE_TS, imports, body);
+}
+
+// ─── OAuth2 client-credentials ───────────────────────────────────────────────
+
+function oauth2Ts() {
+  const body = `/** Lo que la concesión lee de http-clients.yaml (las variables de keel-spring: <CLIENTE>_CLIENT_ID, …). */
+export interface ClientCredentialsSettings {
+  readonly id: string;
+  readonly tokenUri: string;
+  readonly clientId: string;
+  readonly clientSecret: string;
+  readonly scopes: readonly string[];
+  readonly timeoutMs: number;
+}
+
+/** La concesión del token no se pudo obtener: el emisor no responde o nos rechaza. No cuenta para el circuito. */
+export class AuthGrantError extends ProviderFailure {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super('auth-grant', message, null, options);
+    this.name = 'AuthGrantError';
+  }
+}
+
+/**
+ * Margen con el que se renueva el token antes de que caduque: el clockSkew de 60 s del OAuth2AuthorizedClientManager de
+ * Spring Security, para que un token no caduque en vuelo.
+ */
+const CLOCK_SKEW_MS = 60_000;
+
+/**
+ * La concesión \`client_credentials\` de un cliente, con la semántica del OAuth2AuthorizedClientManager de keel-spring:
+ * el secreto por \`client_secret_basic\` (cabecera Basic con los dos valores codificados como formulario), los
+ * \`scope\` en el cuerpo, el token REUTILIZADO hasta \`expires_in\` menos el margen —una petición al emisor por
+ * concesión, no por llamada— y una sola petición en vuelo aunque lleguen varias llamadas a la vez. Devuelve la
+ * cabecera \`Authorization\` ya armada.
+ */
+export function clientCredentials(settings: ClientCredentialsSettings): () => Promise<string> {
+  let current: { header: string; renewAt: number } | null = null;
+  let pending: Promise<string> | null = null;
+  return () => {
+    if (current !== null && Date.now() < current.renewAt) return Promise.resolve(current.header);
+    pending ??= request(settings)
+      .then((token) => {
+        current = token;
+        return token.header;
+      })
+      .finally(() => {
+        pending = null;
+      });
+    return pending;
+  };
+}
+
+async function request(settings: ClientCredentialsSettings): Promise<{ header: string; renewAt: number }> {
+  const form = new URLSearchParams({ grant_type: 'client_credentials' });
+  if (settings.scopes.length > 0) form.set('scope', settings.scopes.join(' '));
+  const credentials = Buffer.from(\`\${formEncode(settings.clientId)}:\${formEncode(settings.clientSecret)}\`, 'utf8').toString('base64');
+  let status: number;
+  let text: string;
+  try {
+    const response = await fetch(settings.tokenUri, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8', Authorization: \`Basic \${credentials}\` },
+      body: form.toString(),
+      redirect: 'manual',
+      signal: AbortSignal.timeout(settings.timeoutMs)
+    });
+    status = response.status;
+    text = await response.text();
+  } catch (error) {
+    throw new AuthGrantError(\`\${settings.id}: el emisor del token no responde\`, { cause: error });
+  }
+  if (status < 200 || status > 299) throw new AuthGrantError(\`\${settings.id}: el emisor del token contestó \${status}\`);
+  let body: Record<string, unknown>;
+  try {
+    body = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    throw new AuthGrantError(\`\${settings.id}: la respuesta del emisor del token no es JSON\`);
+  }
+  const token = body['access_token'];
+  if (typeof token !== 'string' || token === '') throw new AuthGrantError(\`\${settings.id}: la respuesta del emisor no trae access_token\`);
+  // Spring Security exige token_type Bearer: sin él no hay concesión.
+  if (typeof body['token_type'] !== 'string' || body['token_type'].toLowerCase() !== 'bearer') {
+    throw new AuthGrantError(\`\${settings.id}: el emisor no devolvió un token Bearer\`);
+  }
+  // Sin expires_in (o no positivo), Spring lo da por caducado en un segundo: se pide de nuevo en la siguiente llamada.
+  const expiresIn = Number(body['expires_in']);
+  const lifetimeMs = Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn * 1000 : 1000;
+  return { header: \`Bearer \${token}\`, renewAt: Date.now() + lifetimeMs - CLOCK_SKEW_MS };
+}
+
+/** Codificación de formulario (RFC 6749 § 2.3.1): la de URLEncoder de Java, con el espacio como «+». */
+function formEncode(value: string): string {
+  return encodeURIComponent(value).replace(/%20/g, '+');
+}`;
+  return tsModule(OAUTH2_TS, [{ symbol: 'ProviderFailure', from: PROVIDER_FAILURES_TS }], body);
+}
+
+// ─── El último valor conocido (onUnavailable: lastKnown) ─────────────────────
+
+function lastKnownTs() {
+  const body = `/** Tope de entradas vivas: la clave la forman los parámetros de la llamada, así que sin tope es una fuga lenta. */
+const MAX_ENTRIES = 10_000;
+
+interface Entry {
+  readonly value: unknown;
+  readonly storedAt: number;
+}
+
+/**
+ * El último valor conocido de cada llamada saliente, para la política \`onUnavailable: lastKnown\` del diseño: el
+ * LastKnownValues de keel-spring.
+ *
+ * **Acotado por edad y por tamaño, y las dos cotas importan.** La edad la declara el diseño (\`maxAgeSeconds\` del need)
+ * y se aplica al LEER: pasado ese tiempo el valor deja de existir para quien pregunta, y el fallback lanza el error
+ * declarado en vez de servir algo que ya no significa nada. El tamaño lo pone este almacén.
+ *
+ * En memoria y por instancia a propósito: lo que promete es «lo último que ESTE proceso llegó a leer». Sobre la caché
+ * compartida prometería otra cosa y metería una dependencia más en el camino que se recorre cuando algo ya está caído.
+ */
+@Injectable()
+export class LastKnownValues {
+  private readonly entries = new Map<string, Entry>();
+
+  /** Recuerda lo que la llamada acaba de devolver. Se invoca en el camino FELIZ del adaptador. */
+  remember(scope: string, key: unknown, value: unknown): void {
+    if (value == null) return;
+    if (this.entries.size >= MAX_ENTRIES) this.evictOldest();
+    const id = entryKey(scope, key);
+    // Al final del orden de inserción: el más viejo es siempre el primero.
+    this.entries.delete(id);
+    this.entries.set(id, { value, storedAt: Date.now() });
+  }
+
+  /**
+   * El último valor de esa llamada si aún está dentro de \`maxAgeSeconds\`; null si no hay ninguno o si el que hay ya
+   * es demasiado viejo. El caducado se borra al detectarlo, para que el tope no expulse valores útiles.
+   */
+  recall<T>(scope: string, key: unknown, maxAgeSeconds: number): T | null {
+    const id = entryKey(scope, key);
+    const entry = this.entries.get(id);
+    if (entry == null) return null;
+    if (Date.now() - entry.storedAt > maxAgeSeconds * 1000) {
+      this.entries.delete(id);
+      return null;
+    }
+    return entry.value as T;
+  }
+
+  /** Deja sitio tirando las entradas más viejas, que son las que menos van a servir. */
+  private evictOldest(): void {
+    const excess = Math.max(1, this.entries.size - Math.floor((MAX_ENTRIES * 3) / 4));
+    let removed = 0;
+    for (const id of this.entries.keys()) {
+      if (removed++ >= excess) break;
+      this.entries.delete(id);
+    }
+  }
+}
+
+function entryKey(scope: string, key: unknown): string {
+  return \`\${scope}|\${Array.isArray(key) ? key.map(String).join(',') : String(key)}\`;
+}`;
+  return tsModule(LAST_KNOWN_TS, [{ symbol: 'Injectable', from: '@nestjs/common' }], body);
 }
 
 // ─── Soporte (uno por servicio) ──────────────────────────────────────────────
@@ -930,6 +1198,11 @@ export interface ClientSettings {
   readonly baseUrl: string;
   readonly timeoutMs: number;
   readonly headers: Readonly<Record<string, string>>;
+  /**
+   * La credencial que hay que ir a buscar antes de cada llamada (\`oauth2-client-credentials\`): la cabecera
+   * \`Authorization\` ya armada. Si no se puede obtener, lanza un fallo \`auth-grant\` y la petición no sale.
+   */
+  readonly authorization?: () => Promise<string>;
 }
 
 export interface OutboundRequest {
@@ -963,6 +1236,9 @@ export async function exchange(client: ClientSettings, request: OutboundRequest)
     for (const item of Array.isArray(value) ? value : [value]) url.searchParams.append(name, plain(item));
   }
   const headers: Record<string, string> = { Accept: 'application/json', ...client.headers };
+  // Sin token no se sale: una llamada sin Authorization sería peor que ninguna (el socio la rechazaría y el
+  // diagnóstico apuntaría a él). El fallo de la concesión ya es un \`auth-grant\` y lo atiende el fallback.
+  if (client.authorization) headers['Authorization'] = await client.authorization();
   for (const [name, value] of Object.entries(request.headers ?? {})) if (value != null) headers[name] = plain(value);
   let payload: string | undefined;
   if (request.body !== undefined) {

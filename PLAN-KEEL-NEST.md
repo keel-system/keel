@@ -1802,6 +1802,33 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `catalog-extended` como sujeto: la réplica (`strategy: replicated`: proyector, lector y `onMiss`),
   `onUnavailable: lastKnown` con su almacén, y `oauth2-client-credentials`. Siguiente paso: la corrida de
   `asset-vault` en los dos generadores (requiere cerrar su diseño a `--ready` o generarla con `--accept-unready`).
+- **13j — la réplica, `lastKnown` y OAuth2: hechos (2026-10-09). `catalog-extended` entra ENTERO: ya no queda ninguna
+  fixture fuera de la frontera de keel-nest** (lo único que rechaza es un value object compuesto en una llamada
+  saliente, que ninguna declara; los tests de la frontera lo derivan de `stock-reservation`).
+  - **La réplica** (`src/scaffold/projections.js`): `<E>Projector` y `<E>Reader` en `application/projection`, los de
+    keel-spring —el proyector es la única escritura de la copia y descarta la reentrega tardía si la entidad guarda el
+    instante del hecho; el lector aplica `onMiss` (`fetch` con el `hydrate` del agente, `fail` con el error del diseño,
+    `degrade` con null)—, cableados por el `UseCaseModule` e inyectados en el handler del `usedBy` (el lector) y en el
+    de la operación de proyección (el proyector, que keel-spring deja a la convención). La copia se guarda en su PROPIA
+    transacción (`inNewTransaction`, el `REQUIRES_NEW` de keel-spring) en los dos modelos de persistencia.
+  - **`lastKnown`**: `LastKnownValues` (en memoria y por instancia, acotado por edad al leer y por tamaño), alimentado en
+    el camino feliz del adaptador con la clave de los parámetros de la llamada, y el fallback que sirve dentro de
+    `maxAgeSeconds` y se rinde con el error declarado.
+  - **OAuth2 client-credentials**: `clientCredentials(...)` en `infrastructure/clients`, con la semántica del cliente de
+    Spring Security (secreto por `client_secret_basic` con codificación de formulario, `scope` en el cuerpo,
+    `token_type` Bearer obligatorio, token reutilizado hasta `expires_in` menos 60 s, una sola petición en vuelo, sin
+    `expires_in` caduca en 1 s); `exchange` pone la cabecera y un emisor caído es `auth-grant` (el fallback, nunca un
+    500 ni una petición sin `Authorization`). Una instancia por arranque: ningún token sobrevive entre flujos.
+    `http-clients.yaml` con las MISMAS variables y valores que la registration de keel-spring en los cuatro perfiles
+    (en `local`, el path del `tokenUrl` sobre el WireMock).
+  - **Medido**: `test/outbound-13j.test.js` EJECUTA `lastKnown` contra un proveedor que cae (el valor de ESE sku, la
+    ventana de 900 s con el reloj adelantado, el tope de tamaño), la concesión contra un emisor falso (una petición por
+    token con tres llamadas, dos concurrentes; el Bearer exacto; la cabecera Basic y el formulario; la renovación; el
+    emisor caído y el token sin `token_type` sin ninguna petición de negocio), el proyector con la reentrega tardía y la
+    paridad de la configuración con keel-spring; falsado con cuatro sabotajes. `ts-check` 12/12. `keel-nest build` de
+    `catalog-extended` genera el proyecto entero. La skill `keel-nest-httpclient` enseña los `needs`, la réplica y OAuth2.
+  - **Con esto el incremento 13 queda construido entero.** Lo que sigue son las corridas de `asset-vault` y
+    `catalog-extended` en los dos generadores, y el incremento 14.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

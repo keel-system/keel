@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeWorkspace, mountDesign, runCommand, NEST_READY_DESIGN } from './helpers/workspace.js';
+import { makeWorkspace, mountDesign, mountOutsideFrontier, runCommand, NEST_READY_DESIGN } from './helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { packageVersion } from '../src/lib/assets.js';
 
@@ -56,19 +56,14 @@ test('un diseño no listo NO se genera sin --accept-unready, y no se escribe nad
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
-test('una capa fuera de la frontera se rechaza nombrando keel-nest, antes de escribir nada', async () => {
+test('lo que está fuera de la frontera se rechaza nombrando keel-nest, antes de escribir nada', async () => {
   const workspace = makeWorkspace();
-  // catalog-extended: relacional con caché, storage y needs bajo demanda (todo eso ya se genera), pero con la réplica
-  // de un need, su lastKnown y la concesión oauth2, que llegan en el 13j.
-  mountDesign(workspace, 'catalog-extended');
-  const { exitCode, output } = await runCommand(workspace, build, 'specs/catalog-extended', { defaults: true, acceptUnready: true });
+  // Desde el 13j todas las fixtures entran: el diseño se deriva con lo único que keel-nest todavía rechaza.
+  const spec = await mountOutsideFrontier(workspace);
+  const { exitCode, output } = await runCommand(workspace, build, spec, { defaults: true, acceptUnready: true });
   assert.equal(exitCode, 1);
   assert.match(output, /capacidades que keel-nest no genera/);
-  assert.match(output, /dependencies\.pricing\.needs\.supplierPrice: strategy replicated/);
-  assert.match(output, /dependencies\.pricing\.needs\.currentPrice: onUnavailable lastKnown/);
-  assert.doesNotMatch(output, /productCost/, 'el need bajo demanda con degrade ya se genera (13i)');
-  assert.doesNotMatch(output, /capa storage/, 'storage ya no es frontera (13g)');
-  assert.doesNotMatch(output, /persistencia documental/, 'la documental ya no es frontera');
+  assert.match(output, /calls.cancelStock: refund es un value object compuesto/);
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 

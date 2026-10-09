@@ -66,3 +66,27 @@ export async function runCommand(workspace, command, ...args) {
     Object.assign(console, saved);
   }
 }
+
+/**
+ * Un diseño FUERA de la frontera de keel-nest. Desde el incremento 13j todas las fixtures entran enteras, así que se
+ * deriva uno de stock-reservation con lo único que keel-nest todavía rechaza: un value object compuesto en la
+ * respuesta de una llamada saliente. Devuelve la ruta del diseño (specs/<nombre>).
+ */
+export async function mountOutsideFrontier(workspace) {
+  const { parse, stringify } = await import('yaml');
+  const name = 'stock-reservation';
+  const specDir = mountDesign(workspace, name);
+  const edit = (file, change) => {
+    const target = path.join(specDir, file);
+    const document = parse(fs.readFileSync(target, 'utf8'));
+    change(document);
+    fs.writeFileSync(target, stringify(document));
+  };
+  edit('domain.keel.yaml', (domain) => {
+    domain.types = { ...(domain.types ?? {}), Refund: { description: 'Importe devuelto.', fields: { amount: { type: 'decimal' }, currency: { type: 'string' } } } };
+  });
+  edit('http-clients.keel.yaml', (layer) => {
+    layer.clients.inventory.calls.cancelStock.response.fields.refund = { type: 'Refund' };
+  });
+  return `specs/${name}`;
+}

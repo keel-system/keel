@@ -56,7 +56,7 @@ export function applicationClasses(model) {
   return handlers;
 }
 
-export function generate(model, { mappers = [], payments = [] } = {}) {
+export function generate(model, { mappers = [], payments = [], projections = [] } = {}) {
   if (!usesMediator(model)) return [];
   // Con persistencia (de los dos modelos), el despacho abre la transacción del caso de uso.
   const transactional = usesPersistence(model);
@@ -91,7 +91,7 @@ export function generate(model, { mappers = [], payments = [] } = {}) {
     ], mediatorBody(transactional, usesCache(model))) }
   ];
   files.push(...commandDispatcher(model));
-  files.push(moduleFile(model, mappers, payments));
+  files.push(moduleFile(model, mappers, payments, projections));
   files.push({ path: 'test/use-cases.test.ts', content: useCasesTest(model) });
   return files;
 }
@@ -601,7 +601,7 @@ export function usesCommandDispatcher(model) {
   return orphanInternalOperations(model).length > 0 || Boolean(model.payments);
 }
 
-function moduleFile(model, mappers, payments = []) {
+function moduleFile(model, mappers, payments = [], projections = []) {
   const handlers = applicationClasses(model);
   const dispatcher = usesCommandDispatcher(model);
   const imports = [
@@ -613,7 +613,8 @@ function moduleFile(model, mappers, payments = []) {
     { symbol: 'UseCaseMediator', from: MEDIATOR_TS },
     ...handlers,
     ...mappers,
-    ...payments
+    ...payments,
+    ...projections
   ];
   if (dispatcher) {
     imports.push({ symbol: 'CommandDispatcher', from: COMMAND_DISPATCHER_TS }, { symbol: 'CommandDispatcherAdapter', from: COMMAND_DISPATCHER_ADAPTER_TS });
@@ -638,7 +639,10 @@ const HANDLERS = [${list(handlers)}] as const;
 const MAPPERS = [${list(mappers)}] as const;${payments.length > 0 ? `
 
 /** La capa payments: el aplicador de desenlaces, el aviso y la consulta del barrido (los usan handlers y controlador). */
-const PAYMENTS = [${list(payments)}] as const;` : ''}
+const PAYMENTS = [${list(payments)}] as const;` : ''}${projections.length > 0 ? `
+
+/** Las copias locales de datos de otro servidor: el proyector (escritura) y el lector (con su onMiss) de cada una. */
+const PROJECTIONS = [${list(projections)}] as const;` : ''}
 
 /**
  * El único sitio que cablea los casos de uso: handlers, mappers, el contenedor que los registra y el
@@ -646,7 +650,7 @@ const PAYMENTS = [${list(payments)}] as const;` : ''}
  */
 @Module({
   providers: [
-    ...MAPPERS.map((type) => applicationProvider<object>(type)),${payments.length > 0 ? '\n    ...PAYMENTS.map((type) => applicationProvider<object>(type)),' : ''}
+    ...MAPPERS.map((type) => applicationProvider<object>(type)),${payments.length > 0 ? '\n    ...PAYMENTS.map((type) => applicationProvider<object>(type)),' : ''}${projections.length > 0 ? '\n    ...PROJECTIONS.map((type) => applicationProvider<object>(type)),' : ''}
     ...HANDLERS.map((type) => applicationProvider<Handler>(type)),
     {
       provide: UseCaseContainer,

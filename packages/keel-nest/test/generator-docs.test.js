@@ -184,7 +184,9 @@ test('la skill de los clientes HTTP se instala en cada harness con la capa, y so
 });
 
 test('cada ruta src/… que cita la skill de los clientes HTTP existe, y lo que enseña es lo emitido', () => {
-  const emitted = new Set(Object.keys(rabbit));
+  // stock-reservation y catalog-extended: entre las dos, todo lo saliente (lastKnown, la réplica y OAuth2, en la segunda).
+  const extended = byPath(planFixture('catalog-extended').files);
+  const emitted = new Set([...Object.keys(rabbit), ...Object.keys(extended)]);
   for (const source of httpclientSources) {
     const text = fs.readFileSync(source, 'utf8');
     for (const [cited] of text.matchAll(/src\/[\w/.-]+\.ts/g)) assert.ok(emitted.has(cited), `${path.basename(source)} cita ${cited}, que build no emite`);

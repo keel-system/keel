@@ -149,7 +149,7 @@ test('con persistencia, la idempotencia de petición se genera y no se avisa', (
   assert.deepEqual(warnings, []);
 });
 
-test('capas http-clients y dependencies (11b, 11c, 13i): se generan; la réplica, lastKnown, oauth2 y los compuestos se rechazan', async () => {
+test('capas http-clients y dependencies (11b, 11c, 13i, 13j): se generan enteras; solo un compuesto en una llamada se rechaza', async () => {
   const { loadService } = await import('keel-core');
   const path = await import('node:path');
   const { FIXTURES_DIR } = await import('./helpers/workspace.js');
@@ -159,14 +159,10 @@ test('capas http-clients y dependencies (11b, 11c, 13i): se generan; la réplica
   const stock = load('stock-reservation');
   assert.deepEqual(checkSupportedFeatures(stock.manifest, stock.layers), { errors: [], warnings: [] });
 
-  // asset-vault declara un need bajo demanda (13i): entra entero. catalog-extended, su réplica y su lastKnown (13j).
-  const vault = checkSupportedFeatures(load('asset-vault').manifest, load('asset-vault').layers);
-  assert.deepEqual(vault.errors, []);
-  const extended = checkSupportedFeatures(load('catalog-extended').manifest, load('catalog-extended').layers);
-  assert.ok(extended.errors.some((error) => /auth: oauth2-client-credentials/.test(error)), 'oauth2');
-  assert.ok(extended.errors.some((error) => /needs\.supplierPrice: strategy replicated/.test(error)), 'la réplica');
-  assert.ok(extended.errors.some((error) => /needs\.currentPrice: onUnavailable lastKnown/.test(error)), 'lastKnown');
-  assert.ok(!extended.errors.some((error) => /productCost/.test(error)), 'degrade bajo demanda se genera');
+  // asset-vault (need bajo demanda, 13i) y catalog-extended (réplica, lastKnown y oauth2, 13j) entran enteros.
+  for (const name of ['asset-vault', 'catalog-extended']) {
+    assert.deepEqual(checkSupportedFeatures(load(name).manifest, load(name).layers), { errors: [], warnings: [] }, name);
+  }
   // Ninguna fixture lleva un value object compuesto en una llamada: el caso es sintético.
   const composite = structuredClone(stock.layers);
   composite.domain.types.Money = { fields: { amount: { type: 'decimal' }, currency: { type: 'string' } } };
