@@ -66,7 +66,7 @@ test('dominio, casos de uso y API se generan sin aviso', () => {
   assert.deepEqual(warnings, []);
 });
 
-test('lo que una operación declara y cuelga de un incremento futuro se avisa, nombrando operación e incremento', () => {
+test('lo que una operación declara y keel-nest no puede generar se avisa, nombrando la operación', () => {
   const layers = {
     domain: {},
     'use-cases': {
@@ -81,11 +81,11 @@ test('lo que una operación declara y cuelga de un incremento futuro se avisa, n
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases'), layers);
   assert.deepEqual(errors, []);
   // Sin persistencia, la idempotencia no tiene dónde registrar la clave: se dice. El reloj y los reclamos se
-  // generan (10b, 10c), así que un schedule no avisa. La caché cuelga de su incremento.
-  assert.equal(warnings.length, 2);
+  // generan (10b, 10c), así que un schedule no avisa; la caché, tampoco (13f).
+  assert.equal(warnings.length, 1);
   assert.match(warnings[0], /createOrder declara idempotency, pero el diseño no tiene persistencia/);
   assert.ok(!warnings.join(' ').includes('purgeOld'));
-  assert.match(warnings[1], /getOrder declara cache .*incremento 13/);
+  assert.ok(!warnings.join(' ').includes('getOrder'));
   assert.ok(!warnings.join('\n').includes('listOrders'));
 });
 

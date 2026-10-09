@@ -33,6 +33,7 @@ import { documentHarnessSection, documentProbe } from './document-harness.js';
 import { usesNestOutbox } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
+import { cacheHarnessSection } from './cache.js';
 
 /** Dónde escribe Vitest el XML JUnit de la suite de integración: lo lee score-scenarios.sh. */
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
@@ -472,7 +473,7 @@ const DB_QUERY_ARGV: readonly string[] = ${JSON.stringify(probe.argv)};
 export function db(sql: string): string {
   return run(containerRuntime(), ['exec', DB_CONTAINER, ...DB_QUERY_ARGV, sql], '¿Está la base arriba (bash infra/up.sh)?');
 }
-${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}` : ''}${documentHarnessSection(model)}${identitySection(model)}${messagingHarnessSection(model)}
+${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}` : ''}${documentHarnessSection(model)}${identitySection(model)}${messagingHarnessSection(model)}${cacheHarnessSection(model)}
 
 /** Espera hasta que \`condition\` se cumpla o se agote \`timeoutMs\`; lanza con \`message\` si no llega. */
 export async function eventually(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, message = 'la condición no se cumplió a tiempo'): Promise<void> {

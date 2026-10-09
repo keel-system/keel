@@ -58,6 +58,9 @@ export const MONGODB_VERSION = '^7.7.0';
 // El correo saliente (incremento 12e): nodemailer para SMTP (trae sus tipos) y Handlebars para las plantillas.
 export const NODEMAILER_VERSION = '^10.0.10';
 export const HANDLEBARS_VERSION = '^4.7.9';
+// La caché de lectura (incremento 13f): el cliente oficial de Redis, solo el núcleo (sin los módulos de Redis Stack).
+// También habla con Valkey. La 6 cambió el plazo por defecto de cada orden (5 s): el adaptador fija el suyo.
+export const REDIS_CLIENT_VERSION = '^6.2.1';
 // Seguridad (incremento 8), verificada el 2026-10-06 contra el registro de npm: la validación del JWT
 // contra el JWKS del proveedor (firma, caducidad, emisor). Sin dependencias y sin Passport: la regla
 // de cada ruta la evalúa un hook de la entrada HTTP con el plan neutral de keel-core.

@@ -1713,6 +1713,43 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   FL-STL-002-B y el Then 3 de FL-EVT-001-B que lo miden; la convención de la pasarela de prueba pasa a «no contesta
   nada por defecto» y cada `Given` programa su respuesta (lo que el arnés realmente da). Revisión, barrido de huecos y
   careo hechos por los tres agentes de contexto limpio sobre la v1.2.0.
+- **Evaluación de 13f en adelante (2026-10-09)**. Los dos únicos diseños con caché o storage (`asset-vault`,
+  `catalog-extended`) arrastran los cuatro frentes que quedan: caché (los dos), storage (los dos), `needs` (los dos),
+  la autoría por política (`asset-vault`) y `oauth2-client-credentials` (`catalog-extended`). Ninguna corrida es
+  posible hasta tenerlos todos para uno de ellos, así que el orden es por independencia: **13f la caché** (no
+  depende de ningún otro), 13g storage, 13h la autoría, 13i `needs` → corrida `asset-vault` (documental); y después
+  `oauth2-client-credentials` y `lastKnown` → corrida `catalog-extended` (relacional).
+- **13f — la caché de lectura: hecha (2026-10-09)**. `keel-nest` genera `cache` sobre Redis y Valkey.
+  - **Qué se cachea es la RESPUESTA de la operación**, no el agregado: es lo que hicieron los agentes de keel-spring
+    en sus corridas (la ficha de `getAsset` como JSON con el `CacheManager` a mano; la respuesta del controlador de
+    `getProductBySlug` con `@Cacheable`), y en TypeScript es lo único que se puede reconstruir con tipos sin
+    reflexión. Se guarda con el contrato del cable (`toWireJson`) y se lee con un lector por DTO que genera build
+    (`infrastructure/cache/cached-responses.ts`): un acierto sale campo a campo igual que el origen.
+  - **Lo neutral** (`keel-core/gen/cache-plan.js`): el nombre de cada caché (`<servicio>:<operación>`, la entrada
+    `::<clave>` de RedisCacheManager, la clave con los `keyFields` por `:`), su TTL y **qué operación invalida cada
+    caché** —la que emite un evento de `invalidatedBy` y la que dispara la suscripción a uno—. keel-spring toma de ahí
+    `cachedOperations` (línea base idéntica, 44 combinaciones).
+  - **El reparto**: build emite el puerto `OperationCache` en `application/port/out` (`getOrLoad`, `evict`, `clear`,
+    `cacheKey`), una constante por caché con su clave (`keyOf`), el adaptador sobre `@redis/client` 6 (degrada a
+    miss, no guarda nulos ni errores, una carga por entrada —el `sync = true` de Spring—, y lo que keel-spring no
+    tiene: una carga que empezó antes de vaciar no guarda lo que leyó), el store (arranca sin Redis,
+    `disableOfflineQueue`, reconexión que no se rinde: la del cliente deja de reconectar tras un plazo de conexión
+    agotado), `cache.yaml` con `REDIS_HOST`/`REDIS_PORT` de keel-spring (sin caché en el perfil `test`), el módulo
+    global y `clearCache()` en `flow.ts` con la orden de `reset-db.sh`. **La consulta la pone el agente** en el
+    handler (skill `keel-nest-redis`), porque lo que depende de quién llama se comprueba sobre cada respuesta,
+    también la cacheada (lo que hizo el agente de keel-spring con el `ownerId` de la ficha). **La invalidación la pone
+    build**: el `UseCaseMediator` vacía, dentro de la transacción y por tanto tras el commit, las cachés de cada
+    operación (`cache-invalidations.ts`); entera, porque el evento no lleva la clave de la lectura. En keel-spring
+    eso lo escribe el agente: candidato a llevarlo también allí.
+  - **Medido**: `test/cache.test.js` EJECUTA el adaptador contra un store en memoria (acierto, TTL, nulos, error de
+    la carga, store caído, entrada ilegible, diez lecturas a la vez, vaciado tras el commit y nunca con rollback, la
+    carga anterior al vaciado) y hace **ida y vuelta del lector sobre todas las respuestas de todas las fixtures**
+    (más de cuarenta); paridad de nombres, TTL y variables con lo que emite keel-spring. Falsado con siete
+    sabotajes, cada uno cazado por su caso. `keel-core/test/cache-plan.test.js` con una proyección que no es de
+    ningún lenguaje. **`npm run cache-check`** contra Redis y Valkey reales: **22/22** (la entrada en el servidor con
+    su TTL y su JSON, el acierto, el vaciado de una caché sin tocar otras, la orden de `reset-db.sh`, el store parado
+    —la lectura va al origen en 1 ms— y de vuelta), falsado con tres sabotajes (sin `disableOfflineQueue` la lectura
+    esperó 4 s; sin TTL; sin reconexión).
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

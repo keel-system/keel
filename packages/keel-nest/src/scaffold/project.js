@@ -30,6 +30,7 @@ import {
   MONGODB_VERSION,
   HANDLEBARS_VERSION,
   NODEMAILER_VERSION,
+  REDIS_CLIENT_VERSION,
   PG_VERSION,
   MYSQL2_VERSION,
   JOSE_VERSION,
@@ -41,6 +42,7 @@ import {
 import { usesJwt } from './security.js';
 import { usesRelational, usesDocument, engineOf } from './persistence-entities.js';
 import { usesMail } from './mail.js';
+import { usesCache } from './cache.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 
@@ -101,6 +103,8 @@ function packageJson(model) {
       ...(usesDocument(model) ? { mongodb: MONGODB_VERSION } : {}),
       // El correo (incremento 12e): el transporte SMTP y, con plantillas, el motor sin lógica.
       ...(usesMail(model) ? { nodemailer: NODEMAILER_VERSION } : {}),
+      // La caché de lectura (incremento 13f): el cliente oficial de Redis, que también habla con Valkey.
+      ...(usesCache(model) ? { '@redis/client': REDIS_CLIENT_VERSION } : {}),
       ...(usesMail(model) && model.mail.templating ? { handlebars: HANDLEBARS_VERSION } : {})
     },
     devDependencies: {

@@ -42,6 +42,7 @@ import * as snssqs from './snssqs.js';
 import * as httpClients from './http-clients.js';
 import * as mail from './mail.js';
 import * as payments from './payments.js';
+import * as cache from './cache.js';
 import * as scheduling from './scheduling.js';
 import * as purge from './purge.js';
 import * as claim from './claim.js';
@@ -108,6 +109,9 @@ const GENERATORS = [
   mail,
   // Los cobros con pasarela (incremento 13): la parte neutra y el adaptador y el verificador de la pasarela del stack.
   payments,
+  // La caché de lectura (incremento 13f): el puerto, las cachés del diseño, sus lectores, el adaptador sobre
+  // Redis/Valkey y qué vacía cada operación.
+  cache,
   // El reloj (incremento 10b): los schedulers de las operaciones con `schedule` y las purgas por lotes de las
   // tablas del generador.
   scheduling,

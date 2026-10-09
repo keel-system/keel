@@ -315,3 +315,26 @@ test('las skills de pagos se instalan con la capa, la de la pasarela solo con el
   }
   assert.ok(!Object.keys(rabbit).some((file) => paymentSkills.some((skill) => file.includes(skill))), 'un diseño sin pagos no las recibe');
 });
+
+// La de la caché (incremento 13f): con caché en el diseño y solo con ella, una para Redis y Valkey, citando solo lo
+// que build emite. Con las dos fixtures que la declaran, que son una relacional y otra documental.
+const redisDir = path.join(assets, 'generators', 'nest', 'skills', 'keel-nest-redis');
+const redisSources = [path.join(redisDir, 'SKILL.md'), ...fs.readdirSync(path.join(redisDir, 'references')).map((name) => path.join(redisDir, 'references', name))];
+
+test('la skill de la caché se instala con caché en el diseño, y solo con ella; lo que cita existe', () => {
+  for (const [name, cache] of [['catalog-extended', 'redis'], ['asset-vault', 'valkey']]) {
+    const project = byPath(planFixture(name, { stack: { cache } }).files);
+    for (const harness of HARNESSES) {
+      assert.ok(harness.skillPath('keel-nest-redis', 'SKILL.md') in project, `${name} ${harness.id}: keel-nest-redis`);
+      assert.ok(harness.skillPath('keel-nest-redis', 'references/implementation.md') in project, `${name} ${harness.id}: sus referencias`);
+    }
+    const emitted = new Set(Object.keys(project));
+    for (const source of redisSources) {
+      const text = fs.readFileSync(source, 'utf8');
+      for (const [cited] of text.matchAll(/(?:src|test)\/[\w/.-]+\.ts/g)) assert.ok(emitted.has(cited), `${name}: ${path.basename(source)} cita ${cited}, que build no emite`);
+      assert.doesNotMatch(text, /\.claude\/|\.opencode\//, path.basename(source));
+    }
+    assert.match(project['test/integration/support/flow.ts'], /export function clearCache\(\): void/);
+  }
+  assert.ok(!Object.keys(rabbit).some((file) => file.includes('keel-nest-redis')), 'un diseño sin caché no la recibe');
+});

@@ -6,7 +6,7 @@
 // no responde. Lo que sí queda para el agente son las anotaciones @Cacheable /
 // @CacheEvict sobre los adaptadores (ver skill keel-spring-redis).
 
-import { kebabCase, screamingSnake } from '../lib/naming.js';
+import { cachedOperations } from 'keel-core/gen/cache-plan';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { timestampModuleImport } from './jackson.js';
 import { usesTelemetry } from '../lib/telemetry-probes.js';
@@ -14,25 +14,10 @@ import { usesTelemetry } from '../lib/telemetry-probes.js';
 const CACHE_PKG = 'infrastructure.configurations.cache';
 
 // Operaciones con política de caché declarada, con el nombre de caché que las
-// identifica: <servicio>:<operación>. RedisCacheManager le añade "::<clave>".
-export function cachedOperations(model) {
-  const slug = model.service.artifactId;
-  const entries = [];
-  for (const service of model.services) {
-    for (const operation of service.operations) {
-      if (!operation.cache) continue;
-      entries.push({
-        operation: operation.name,
-        constant: `${screamingSnake(operation.name)}_CACHE`,
-        cacheName: `${slug}:${kebabCase(operation.name)}`,
-        ttlSeconds: operation.cache.ttlSeconds,
-        keyFields: operation.cache.keyFields ?? [],
-        invalidatedBy: operation.cache.invalidatedBy ?? []
-      });
-    }
-  }
-  return entries;
-}
+// identifica: <servicio>:<operación>. RedisCacheManager le añade "::<clave>". Es
+// neutral (keel-core/gen/cache-plan.js): keel-nest nombra sus cachés igual, y el
+// reset de infra/ borra las de los dos servidores con la misma orden.
+export { cachedOperations };
 
 export function generate(model) {
   const caches = cachedOperations(model);

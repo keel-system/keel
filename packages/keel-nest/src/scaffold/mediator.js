@@ -28,6 +28,7 @@ import { usesMessaging } from './messaging.js';
 import { usesServiceParameters } from './service-parameters.js';
 import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
+import { usesCache, mediatorCacheImports } from './cache.js';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
@@ -84,8 +85,9 @@ export function generate(model, { mappers = [], payments = [] } = {}) {
             { symbol: 'isTransientWriteConflict', from: PERSISTENCE_ERRORS_TS },
             { symbol: 'WriteConflictExhausted', from: PERSISTENCE_ERRORS_TS }
           ]
-        : [])
-    ], mediatorBody(transactional)) }
+        : []),
+      ...mediatorCacheImports(model)
+    ], mediatorBody(transactional, usesCache(model))) }
   ];
   files.push(...commandDispatcher(model));
   files.push(moduleFile(model, mappers, payments));
@@ -146,7 +148,15 @@ function useCasesTest(model) {
     ? "\nimport { PaymentsModule } from '../src/infrastructure/payment/payments-module.js';" +
       (persistence || parameters || clients || mail ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
     : '';
+  // La caché (global): el mediator vacía lo que invalida cada operación, y los handlers inyectan el puerto. En
+  // test no hay store: toda lectura va al origen.
+  const cache = usesCache(model);
+  const cacheImport = cache
+    ? "\nimport { CacheModule } from '../src/infrastructure/cache/cache-module.js';" +
+      (persistence || parameters || clients || mail || payments ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
+    : '';
   const modules = [
+    cache ? "CacheModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     parameters ? "ServiceParametersModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     payments ? "PaymentsModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     persistence ? "PersistenceModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
@@ -165,7 +175,7 @@ import { UseCaseModule } from '../src/infrastructure/usecase/use-case-module.js'
 import { UseCaseMediator } from '../src/infrastructure/usecase/use-case-mediator.js';
 import { UseCaseContainer } from '../src/infrastructure/usecase/use-case-container.js';
 import { Handles } from '../src/application/annotations/application-component.js';
-import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}${clientsImport}${mailImport}${paymentsImport}
+import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}${clientsImport}${mailImport}${paymentsImport}${cacheImport}
 ${imports}
 
 const OPERATIONS = [
@@ -328,7 +338,7 @@ export class UseCaseContainer {
 }`;
 }
 
-function mediatorBody(transactional) {
+function mediatorBody(transactional, cache = false) {
   const transactionDoc = transactional
     ? ` * La frontera transaccional del diseño también vive aquí: cada Query corre en una transacción de
  * SOLO LECTURA y cada Command en una de escritura (TransactionContext), y los adaptadores de
@@ -336,18 +346,34 @@ function mediatorBody(transactional) {
  * reintenta entera; agotados los intentos, sale como conflicto de concurrencia (409).`
     : ` * La frontera transaccional del diseño (las Query en lectura, los Command en escritura) se instala
  * aquí con la persistencia; los handlers no la verán nunca.`;
-  const ctor = transactional
-    ? `  constructor(
-    @Inject(UseCaseContainer) private readonly container: UseCaseContainer,
-    @Inject(TransactionContext) private readonly transactions: TransactionContext
-  ) {}`
-    : '  constructor(@Inject(UseCaseContainer) private readonly container: UseCaseContainer) {}';
+  const injected = [
+    '@Inject(UseCaseContainer) private readonly container: UseCaseContainer',
+    transactional ? '@Inject(TransactionContext) private readonly transactions: TransactionContext' : null,
+    cache ? '@Inject(OperationCache) private readonly cache: OperationCache' : null
+  ].filter(Boolean);
+  const ctor = injected.length === 1 ? `  constructor(${injected[0]}) {}` : `  constructor(\n    ${injected.join(',\n    ')}\n  ) {}`;
+  // Con caché, el handler y lo que su operación invalida van JUNTOS dentro de la transacción: el vaciado se
+  // programa para después del commit (si revierte, no se vacía nada) y, con un reintento, se programa otra vez.
+  const call = cache ? 'this.handle(handler, message)' : 'handler.handle(message as never)';
+  const cacheHelpers = cache
+    ? `
+
+  /**
+   * El handler, y después las cachés de lectura que su operación invalida (\`invalidatedBy\` del diseño: las
+   * operaciones que emiten o consumen uno de sus eventos). Se vacían ENTERAS, tras el commit.
+   */
+  private async handle(handler: { handle(message: never): Promise<unknown> }, message: Dispatchable): Promise<unknown> {
+    const result = await handler.handle(message as never);
+    for (const cache of CACHE_INVALIDATIONS.get(message.constructor) ?? []) await this.cache.clear(cache);
+    return result;
+  }`
+    : '';
   const without = transactional
     ? '   * confirmar el desenlace).'
     : '   * confirmar el desenlace). Hasta que haya persistencia es el mismo despacho que `dispatch`.';
   const invoke = transactional
-    ? 'const result = transactional ? await this.inTransaction(message, () => handler.handle(message as never)) : await handler.handle(message as never);'
-    : 'const result = await handler.handle(message as never);';
+    ? `const result = transactional ? await this.inTransaction(message, () => ${call}) : await ${call};`
+    : `const result = await ${call};`;
   const params = transactional ? 'message: Dispatchable, transactional: boolean' : 'message: Dispatchable, _transactional: boolean';
   const transactionHelpers = transactional
     ? `
@@ -442,7 +468,7 @@ ${without}
       }
       throw error;
     }
-  }${transactionHelpers}
+  }${cacheHelpers}${transactionHelpers}
 }
 
 function elapsed(start: number): number {

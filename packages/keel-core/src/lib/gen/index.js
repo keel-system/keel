@@ -178,3 +178,4 @@ export {
   gatewayTranslation,
   CURRENCY_MINOR_UNITS
 } from './payment-gateways.js';
+export { cachedOperations, cacheInvalidations, unbackedInvalidations, CACHE_ENTRY_SEPARATOR, CACHE_KEY_PART_SEPARATOR } from './cache-plan.js';

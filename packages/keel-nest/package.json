@@ -17,7 +17,8 @@
     "security-check": "node scripts/security-check.js",
     "broker-check": "node scripts/broker-check.js",
     "stub-check": "node scripts/stub-check.js",
-    "mail-check": "node scripts/mail-check.js"
+    "mail-check": "node scripts/mail-check.js",
+    "cache-check": "node scripts/cache-check.js"
   },
   "files": [
     "src",
@@ -53,6 +54,7 @@
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
+    "@redis/client": "^6.2.1",
     "decimal.js": "^10.6.0",
     "handlebars": "^4.7.10",
     "jose": "^6.2.12",

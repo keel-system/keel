@@ -33,9 +33,10 @@ export const SUPPORTED_BROKERS = ['rabbitmq', 'kafka', 'snssqs'];
  * Lo que una operación de `use-cases` puede declarar y keel-nest todavía no genera. El dominio y la
  * aplicación se emiten (incremento 4), pero estos mecanismos cuelgan de piezas que llegan después:
  * el mensaje y el handler existen, y el aviso dice qué les falta y cuándo llega. Sin él, un handler
- * sin almacén de idempotencia parecería un handler completo.
+ * sin almacén de idempotencia parecería un handler completo. Hoy, ninguno: la caché (`cache`) se genera desde el
+ * incremento 13f.
  */
-const PENDING_OPERATION_FEATURES = [{ key: 'cache', what: 'cache (la caché de la consulta)', increment: 'incremento 13' }];
+const PENDING_OPERATION_FEATURES = [];
 
 /**
  * Comprueba el diseño contra la frontera de keel-nest. Devuelve { errors, warnings } de strings

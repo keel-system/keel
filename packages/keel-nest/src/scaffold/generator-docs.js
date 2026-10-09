@@ -22,6 +22,7 @@ import { usesSchemaBaseline } from './schema-baseline.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
+import { usesCache } from './cache.js';
 import { usesPayments } from './payments.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'nest');
@@ -59,6 +60,8 @@ export function stackSkills(model) {
   if (usesMail(model)) skills.push('keel-nest-mail');
   // Los cobros con pasarela (incremento 13d): la neutra y la de la pasarela elegida, como keel-spring.
   if (usesPayments(model)) skills.push('keel-nest-payments', `keel-nest-${model.payments.gateway.id}`);
+  // La caché de lectura (incremento 13f): una sola skill para Redis y Valkey, como keel-spring.
+  if (usesCache(model)) skills.push('keel-nest-redis');
   return skills;
 }
 
