@@ -158,6 +158,20 @@
           "type": "string",
           "pattern": "^[a-z][A-Za-z0-9]*$",
           "description": "Estado del lifecycle del registro en el que la operación deja el cobro ANTES de llamar a la pasarela (capturing, canceling, refunding). Es lo que hace reconciliable una acción cuya respuesta no llegó, y lo que impide que dos acciones incompatibles sobre el mismo cobro lleguen las dos a la pasarela: la segunda encuentra el cobro ya en vuelo."
+        },
+        "onRejected": {
+          "description": "Qué pasa cuando la pasarela CONTESTA QUE NO a la acción (no cuando no contesta: eso lo resuelve el barrido). Con `{ error }`, el cobro sale del estado en vuelo y vuelve al de origen, y la operación responde ese error de sus `errors`: el llamante sabe en la respuesta que no se hizo. Con `reconcile`, el cobro se queda en vuelo, la operación responde con él y el barrido lo devuelve a su estado al consultar. No hay default seguro —las dos son defendibles, y lo inaceptable es que cada servidor elija la suya—: sin declararlo, `OBL-PAYMENTS-FOLLOWUP-REJECTED`.",
+          "oneOf": [
+            { "const": "reconcile" },
+            {
+              "type": "object",
+              "required": ["error"],
+              "additionalProperties": false,
+              "properties": {
+                "error": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "El `code` de los `errors` de la operación con el que responde." }
+              }
+            }
+          ]
         }
       }
     },
@@ -260,6 +274,20 @@
           "type": "string",
           "pattern": "^[a-z][A-Za-z0-9]*$",
           "description": "Estado del lifecycle del registro en el que la operación deja el cobro ANTES de llamar a la pasarela (capturing, canceling, refunding). Es lo que hace reconciliable una acción cuya respuesta no llegó, y lo que impide que dos acciones incompatibles sobre el mismo cobro lleguen las dos a la pasarela: la segunda encuentra el cobro ya en vuelo."
+        },
+        "onRejected": {
+          "description": "Qué pasa cuando la pasarela CONTESTA QUE NO a la acción (no cuando no contesta: eso lo resuelve el barrido). Con `{ error }`, el cobro sale del estado en vuelo y vuelve al de origen, y la operación responde ese error de sus `errors`: el llamante sabe en la respuesta que no se hizo. Con `reconcile`, el cobro se queda en vuelo, la operación responde con él y el barrido lo devuelve a su estado al consultar. No hay default seguro —las dos son defendibles, y lo inaceptable es que cada servidor elija la suya—: sin declararlo, `OBL-PAYMENTS-FOLLOWUP-REJECTED`.",
+          "oneOf": [
+            { "const": "reconcile" },
+            {
+              "type": "object",
+              "required": ["error"],
+              "additionalProperties": false,
+              "properties": {
+                "error": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "El `code` de los `errors` de la operación con el que responde." }
+              }
+            }
+          ]
         }
       }
     }

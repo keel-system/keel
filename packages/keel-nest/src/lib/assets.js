@@ -14,7 +14,7 @@ export const SKILL = 'keel-generate-nest';
 // Versiones del DSL keel que este generador sabe mapear. La misma que keel-spring: el método
 // soporta una sola, y dos generadores que aceptaran versiones distintas no podrían recibir el
 // mismo diseño.
-export const SUPPORTED_DSL = ['2.19'];
+export const SUPPORTED_DSL = ['2.20'];
 
 // Stack del proyecto generado (un solo sitio para actualizarlo). Verificadas el 2026-10-06 contra
 // el registro de npm y contra la plantilla ESM de `nest new` (@nestjs/schematics 12.0.6), que es

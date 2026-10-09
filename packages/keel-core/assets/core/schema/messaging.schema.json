@@ -209,6 +209,13 @@
                 "type": "boolean",
                 "default": false,
                 "description": "Tras agotar reintentos, el mensaje va a una cola de mensajes muertos."
+              },
+              "acknowledgeOn": {
+                "type": "array",
+                "uniqueItems": true,
+                "minItems": 1,
+                "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+                "description": "Errores de negocio de la operación que dispara la suscripción con los que el mensaje se da por ATENDIDO: sin efecto, sin reintento y sin descarte (un duplicado que ya tiene su resultado, por ejemplo). Los demás rechazos de negocio no se reintentan y van al descarte. Cada `code` tiene que estar en los `errors` de la operación."
               }
             }
           }

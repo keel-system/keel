@@ -34,6 +34,7 @@ import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 import { CORRELATION_TS, REQUEST_READING_TS, REQUEST_ERRORS_TS, usesApi } from './rest-support.js';
 import { readerOf, readerImports, valueReaders } from './controllers.js';
 import { MODULE_TS as USE_CASE_MODULE_TS } from './mediator.js';
+import { acknowledgeNote } from 'keel-core/gen/rejection-notes';
 import { callsPaymentGateway } from 'keel-core/gen/payments-model';
 
 const MESSAGING_DIR = 'infrastructure/messaging';
@@ -719,6 +720,9 @@ function contractDoc(model, sub) {
     }[model.stack?.broker];
     lines.push(deadLetterText ?? `Con onFailure.deadLetter: tras agotar los reintentos el broker lo mueve al descarte de su cola. La topología la genera build — NO la declares tú.`);
   }
+  // Los rechazos de negocio que dan el mensaje por atendido (DSL 2.20): nota neutral, la misma en los dos generadores.
+  const acknowledged = acknowledgeNote(sub);
+  if (acknowledged) lines.push(acknowledged);
   // El listener es el de su CONSUMIDOR (consumerUnits): en RabbitMQ la cola, que pueden compartir varias
   // suscripciones; en Kafka el consumer group de la suscripción. La corrida stock-reservation-events vio
   // este texto decir «Lo consume StockReservedListener» con tres suscripciones en una sola cola.

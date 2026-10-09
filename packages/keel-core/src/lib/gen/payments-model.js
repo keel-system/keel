@@ -56,8 +56,25 @@ export function collectPayments(layers, stack, services, entities, warnings, pro
   const failureReasonType = recordFields[payments.record?.failureReason]?.type ?? null;
   const capabilities = payments.capabilities ?? [];
 
+  // El estado del que sale el cobro al entrar en vuelo: a donde vuelve con `onRejected: { error }`.
+  const originOf = (spec) => [
+    ...new Set(
+      (layers['use-cases']?.operations?.[spec.operation]?.transitions ?? [])
+        .filter((t) => t?.entity === payments.record?.entity && t?.to === spec.inFlight)
+        .flatMap((t) => t.from ?? [])
+    )
+  ];
   const followUp = (spec) =>
-    spec ? { operation: spec.operation, amount: spec.amount ?? null, inFlight: spec.inFlight ?? null } : null;
+    spec
+      ? {
+          operation: spec.operation,
+          amount: spec.amount ?? null,
+          inFlight: spec.inFlight ?? null,
+          // DSL 2.20: qué pasa cuando la pasarela contesta que NO. `reconcile`, `{ error }` o null (sin decidir).
+          onRejected: spec.onRejected ?? null,
+          origin: originOf(spec)
+        }
+      : null;
 
   // Las ranuras semánticas de la capa: el nombre que tiene cada dato EN ESTE DISEÑO. Es lo que
   // permite construir los comandos de desenlace sin adivinar —un componente que se llama como

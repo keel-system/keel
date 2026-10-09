@@ -443,3 +443,33 @@ test('la clave de idempotencia emitida es la de keel-core', async () => {
     assert.equal(idempotencyKey('ch-1', 'refund'), paymentIdempotencyKey('ch-1', 'refund'), gateway);
   }
 });
+
+// DSL 2.20: lo que hacen el handler de una acción de seguimiento ante el «no» de la pasarela y el listener ante un
+// rechazo que el diseño confirma. Las dos notas son texto NEUTRAL (keel-core/gen/rejection-notes.js) y tienen que
+// llegar iguales a los stubs de los dos generadores: con la decisión fuera de la nota, las corridas del 2026-10-09
+// eligieron una por generador.
+test('las notas del «no» (onRejected y acknowledgeOn) llegan iguales a keel-spring y a keel-nest', async () => {
+  const { followUpRejectionNote, acknowledgeNote } = await import('keel-core/gen/rejection-notes');
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, SUBJECT));
+  const stack = { paymentGateway: 'stripe', broker: 'rabbitmq' };
+  const nest = plan('stripe');
+  const spring = planSpring({ manifest, layers, workspace: '.', stack }).files;
+  const flat = (text) => text.replace(/^\s*(\*|\/\/)\s?/gm, ' ').replace(/\s+/g, ' ');
+  const joined = (files, pattern) => flat(files.filter((file) => pattern.test(file.path)).map((file) => file.content).join('\n'));
+  for (const [operation, nestFile, springFile] of [
+    ['cancelPayment', /cancel-payment-command-handler\.ts$/, /CancelPaymentCommandHandler\.java$/],
+    ['capturePayment', /capture-payment-command-handler\.ts$/, /CapturePaymentCommandHandler\.java$/],
+    ['refundPayment', /refund-payment-command-handler\.ts$/, /RefundPaymentCommandHandler\.java$/]
+  ]) {
+    const note = followUpRejectionNote(nest.model.payments, operation);
+    assert.ok(note, `${operation}: la fixture declara onRejected`);
+    assert.ok(joined(nest.files, nestFile).includes(flat(note)), `keel-nest: ${operation}`);
+    assert.ok(joined(spring, springFile).includes(flat(note)), `keel-spring: ${operation}`);
+  }
+  const subscription = nest.model.subscriptions.find((entry) => entry.acknowledgeOn.length > 0);
+  const note = acknowledgeNote(subscription);
+  assert.match(note, /CHARGE_ALREADY_REQUESTED/);
+  assert.ok(flat(nest.files.map((file) => file.content).join('\n')).includes(flat(note)), 'keel-nest: la suscripción');
+  assert.ok(flat(spring.map((file) => file.content).join('\n')).includes(flat(note)), 'keel-spring: la suscripción');
+  assert.equal(followUpRejectionNote(nest.model.payments, 'getPayment'), null, 'una operación que no es de seguimiento no lleva nota');
+});

@@ -2117,6 +2117,22 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         `${where}: no declara 'onFailure' — qué pasa cuando el handler falla (reintentos y destino de descarte) lo decidiría el default del broker elegido, y no es el mismo en todos`
       );
     }
+    // Los rechazos de negocio con los que el mensaje se da por ATENDIDO. Cada uno tiene que ser un error que la
+    // operación disparada pueda dar: uno que no está en sus `errors` no se produce nunca, y el mensaje que debía
+    // confirmarse acabaría en el descarte sin que el diseño lo note.
+    const acknowledgeOn = sub.onFailure?.acknowledgeOn ?? [];
+    if (acknowledgeOn.length > 0) {
+      const triggered = sub.triggers ? operations[sub.triggers] : null;
+      const codes = new Set((triggered?.errors ?? []).map((entry) => entry?.code));
+      const unknown = acknowledgeOn.filter((code) => !codes.has(code));
+      if (!sub.triggers || unknown.length > 0) {
+        error('CHK-MSG-ACK-CODE-UNKNOWN',
+          `${where}.onFailure.acknowledgeOn: ` +
+            (sub.triggers
+              ? `${unknown.join(', ')} no ${unknown.length === 1 ? 'está' : 'están'} en los errors de '${sub.triggers}', así que nunca se producen`
+              : 'la suscripción no dispara ninguna operación, así que no hay errores de negocio que confirmar'));
+      }
+    }
     // Un formato binario con schema registrado necesita saber DÓNDE está el schema: sin
     // esa referencia, el generador no puede deserializar y el diseño describe un
     // contrato que nadie puede resolver.
@@ -3886,6 +3902,51 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       error('CHK-PAYMENTS-ASYNC-NEEDS-OFF-SESSION',
         `payments: charge: '${chargeOpName}' la dispara una suscripción y la capa no declara 'off-session': por ` +
           'evento no hay cliente presente, así que solo se puede cobrar un medio de pago guardado');
+    }
+
+    // El TERCER desenlace de una acción de seguimiento. La regla de cada operación suele decir qué pasa si la
+    // pasarela confirma y si no contesta; el que falta es el que contesta que NO. Las cuatro corridas
+    // payment-checkout del 2026-10-09 lo resolvieron de dos formas, una por generador —keel-spring devolvió el
+    // cobro a su estado de origen con un 409; keel-nest lo dejó en vuelo con un 200 para el barrido—, las dos
+    // pasaban todos los escenarios y las dos son defendibles. Sin default seguro: obligación que no se acepta.
+    for (const [action, spec] of [['capture', payments.capture], ['void', payments.void], ['refund', payments.refund]]) {
+      const op = spec?.operation ? operations[spec.operation] : null;
+      if (!op) continue;
+      if (spec.onRejected == null) {
+        obligation(
+          'OBL-PAYMENTS-FOLLOWUP-REJECTED',
+          `payments.${action}`,
+          `payments: ${action}: el diseño no dice qué pasa cuando la pasarela CONTESTA QUE NO a '${spec.operation}' ` +
+            '(no cuando no contesta: eso lo resuelve el barrido). Declara onRejected: { error: <code> } —el cobro ' +
+            'vuelve al estado de origen y la operación responde ese error— u onRejected: reconcile —se queda en vuelo ' +
+            'y lo resuelve el barrido—'
+        );
+      } else if (typeof spec.onRejected === 'object') {
+        const codes = (op.errors ?? []).map((entry) => entry?.code);
+        if (!codes.includes(spec.onRejected.error)) {
+          error('CHK-PAYMENTS-REJECTED-ERROR-UNKNOWN',
+            `payments: ${action}.onRejected.error: '${spec.onRejected.error}' no está en los errors de '${spec.operation}': ` +
+              'la operación no tendría con qué responder el rechazo');
+        }
+      }
+    }
+
+    // Un cobro por evento con una referencia que YA tiene cobro, en un mensaje distinto (otro eventId: la
+    // deduplicación por mensaje no lo ve). La naturalKey impide el segundo cobro, así que lo que queda por decidir
+    // es qué se hace con el MENSAJE: confirmarlo como duplicado ya resuelto, o descartarlo para que alguien lo mire.
+    // Las mismas corridas lo resolvieron de las dos formas, una por generador.
+    if (chargedByEvent) {
+      for (const [subName, sub] of Object.entries(messaging?.subscriptions ?? {})) {
+        if (sub?.triggers !== chargeOpName || (sub.onFailure?.acknowledgeOn ?? []).length > 0) continue;
+        obligation(
+          'OBL-PAYMENTS-REFERENCE-REUSED',
+          `messaging.subscriptions.${subName}`,
+          `messaging: ${subName} dispara el cobro, y el diseño no dice qué se hace con un mensaje DISTINTO cuya ` +
+            `referencia (${payments.charge?.reference}) ya tiene cobro: la guarda impide el segundo cobro, pero el ` +
+            'mensaje se confirma o se descarta según quien construya. Declara en onFailure.acknowledgeOn el error de ' +
+            'la referencia repetida para confirmarlo como duplicado, o acepta por escrito que va al descarte'
+        );
+      }
     }
 
     // Los desenlaces. Los dispara el generador, nunca un cliente.

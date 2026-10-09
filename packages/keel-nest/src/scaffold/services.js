@@ -27,6 +27,7 @@ import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempoten
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_SCOPE_TS, scopedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
+import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
 import { portPath as clientPortPath } from './http-clients.js';
 
 export function generate(model) {
@@ -333,6 +334,9 @@ function handlerNotes(model, operation) {
   for (const note of textFilterNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
+  // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la misma en los dos generadores.
+  const rejection = followUpRejectionNote(model.payments, operation.name);
+  if (rejection) notes.push(rejection);
   for (const code of operation.errors ?? []) {
     const error = model.errors.find((e) => e.code === code);
     notes.push(

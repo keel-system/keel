@@ -331,7 +331,7 @@ function withPayments(d) {
     }
   };
   domain.aggregates.Payment = { root: 'Payment' };
-  d.layers.persistence.entities.Payment = { naturalKey: ['chargeRequestId'], indexes: [['status']] };
+  d.layers.persistence.entities.Payment = { naturalKey: ['chargeRequestId'], naturalKeyError: 'CHARGE_ALREADY_REQUESTED', indexes: [['status']] };
 
   const paymentInput = (fields) => ({
     fields: { chargeRequestId: { type: 'string', required: true, constraints: { maxLength: 64 } }, ...fields }
@@ -357,7 +357,10 @@ function withPayments(d) {
         paymentMethodRef: { type: 'string', constraints: { maxLength: 255 } }
       }),
       output: { entity: 'Payment' },
-      errors: [{ code: 'PAYMENT_SOURCE_MISSING', when: 'No llega ni token ni medio guardado.', http: 422 }]
+      errors: [
+        { code: 'PAYMENT_SOURCE_MISSING', when: 'No llega ni token ni medio guardado.', http: 422 },
+        { code: 'CHARGE_ALREADY_REQUESTED', when: 'La referencia ya tiene cobro.', http: 409 }
+      ]
     },
     capturePriorityCharge: {
       description: 'Captura lo autorizado al dar el soporte prioritario.',
@@ -427,7 +430,8 @@ function withPayments(d) {
     triggers: 'requestPriorityCharge',
     onFailure: {
       retry: { maxAttempts: 3, backoff: 'exponential', initialDelayMs: 500, maxDelayMs: 5000 },
-      deadLetter: true
+      deadLetter: true,
+      acknowledgeOn: ['CHARGE_ALREADY_REQUESTED']
     }
   };
 
@@ -449,8 +453,8 @@ function withPayments(d) {
       currency: { input: 'currency' },
       source: { token: 'paymentToken', saved: 'paymentMethodRef' }
     },
-    capture: { operation: 'capturePriorityCharge', inFlight: 'capturing' },
-    refund: { operation: 'refundPriorityCharge', amount: 'amount', inFlight: 'refunding' },
+    capture: { operation: 'capturePriorityCharge', inFlight: 'capturing', onRejected: 'reconcile' },
+    refund: { operation: 'refundPriorityCharge', amount: 'amount', inFlight: 'refunding', onRejected: 'reconcile' },
     savePaymentMethod: { operation: 'savePaymentMethod', token: 'paymentToken', exposedAs: 'paymentMethodRef' },
     outcomes: {
       authorized: 'markAuthorized',
@@ -498,7 +502,7 @@ function withPayments(d) {
 
 **Given** un medio guardado.
 **When** llega \`PriorityChargeRequested\`, y después se reentrega el mismo mensaje.
-**Then** hay un solo cobro y no hay segundo efecto.
+**Then** hay un solo cobro y no hay segundo efecto; un mensaje distinto con la misma referencia se confirma sin efecto, y por HTTP la misma referencia responde 409 con \`CHARGE_ALREADY_REQUESTED\`.
 
 #### FL-PAY-002-B: la pasarela rechaza
 
@@ -2309,6 +2313,42 @@ export const MUTATIONS = [
       ops(d).sweepPendingCharges.internal = true;
     },
     expect: ['CHK-PAYMENTS-SWEEP-INVALID']
+  },
+  {
+    id: 'M-PAYMENTS-FOLLOWUP-REJECTED',
+    title: 'la captura no dice qué pasa cuando la pasarela contesta que no',
+    extends: 'payments',
+    mutate: (d) => {
+      delete d.layers.payments.capture.onRejected;
+    },
+    expect: ['OBL-PAYMENTS-FOLLOWUP-REJECTED']
+  },
+  {
+    id: 'M-PAYMENTS-REJECTED-ERROR-UNKNOWN',
+    title: 'el rechazo de la captura responde con un error que la operación no declara',
+    extends: 'payments',
+    mutate: (d) => {
+      d.layers.payments.capture.onRejected = { error: 'CAPTURE_REJECTED' };
+    },
+    expect: ['CHK-PAYMENTS-REJECTED-ERROR-UNKNOWN']
+  },
+  {
+    id: 'M-PAYMENTS-REFERENCE-REUSED',
+    title: 'el cobro por evento no dice qué se hace con un mensaje distinto de la misma referencia',
+    extends: 'payments',
+    mutate: (d) => {
+      delete d.layers.messaging.subscriptions.PriorityChargeRequested.onFailure.acknowledgeOn;
+    },
+    expect: ['OBL-PAYMENTS-REFERENCE-REUSED']
+  },
+  {
+    id: 'M-MSG-ACK-CODE-UNKNOWN',
+    title: 'la suscripción confirma un error que la operación disparada no puede dar',
+    extends: 'payments',
+    mutate: (d) => {
+      d.layers.messaging.subscriptions.PriorityChargeRequested.onFailure.acknowledgeOn = ['CHARGE_DUPLICATED'];
+    },
+    expect: ['CHK-MSG-ACK-CODE-UNKNOWN']
   }
 ];
 

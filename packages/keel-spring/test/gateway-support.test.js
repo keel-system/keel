@@ -33,6 +33,6 @@ test('planService no genera con una pasarela que no cubre el diseño', () => {
     'use-cases': { operations: {} },
     payments: payments({ capabilities: ['partial-capture'] })
   };
-  const manifest = { keel: '2.19', service: { name: 'pay', version: '1.0.0', description: 'x' }, layers: {} };
+  const manifest = { keel: '2.20', service: { name: 'pay', version: '1.0.0', description: 'x' }, layers: {} };
   assert.throws(() => planService({ manifest, layers, workspace: '.', stack: { paymentGateway: 'mercadopago' } }), /partial-capture/);
 });

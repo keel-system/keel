@@ -22,6 +22,7 @@ import { usesCorrelation, correlationImport } from './correlation.js';
 import { claimMechanism } from './claim.js';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 import { callerResolution } from './security.js';
+import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
 import { rawJsonAnnotations } from './jackson.js';
 
 // Componentes del record mensaje: parámetros de ruta (en el orden del path) +
@@ -449,6 +450,9 @@ function renderHandler(model, service, operation) {
   for (const note of textFilterNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules) notes.push(`Regla (en orden): ${text}`);
+  // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la misma en los dos generadores.
+  const rejection = followUpRejectionNote(model.payments, operation.name);
+  if (rejection) notes.push(rejection);
   for (const code of operation.errors) {
     const error = model.errors.find((e) => e.code === code);
     notes.push(`Error: lanzar ${error?.exceptionClass ?? code} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}`);

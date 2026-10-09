@@ -2828,7 +2828,9 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
       envelopeRecord: contract.envelope === 'wrapped' ? `${pascalCase(name)}Envelope` : null,
       fields,
       retry: def.onFailure?.retry ?? null,
-      deadLetter: Boolean(def.onFailure?.deadLetter)
+      deadLetter: Boolean(def.onFailure?.deadLetter),
+      // Los rechazos de negocio con los que el mensaje se da por atendido (DSL 2.20).
+      acknowledgeOn: def.onFailure?.acknowledgeOn ?? []
     };
   });
 }

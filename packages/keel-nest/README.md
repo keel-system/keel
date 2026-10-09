@@ -22,7 +22,7 @@ cd services/<servicio>-nest
    `keel-core/gen/design-gate.js`, la misma que usa keel-spring: un diseño que uno rechaza no lo
    genera el otro, y uno no listo (`keel validate --ready` en rojo) solo se genera con
    `--accept-unready`, que queda estampado en `keel-generated.json`.
-2. **Compatibilidad**: DSL `2.19` (la misma versión que keel-spring; el método soporta una sola).
+2. **Compatibilidad**: DSL `2.20` (la misma versión que keel-spring; el método soporta una sola).
 3. **Salida**: `services/<servicio>-nest/`, un proyecto NestJS 12 sobre **Fastify**, en ESM sobre
    Node 22.12+, con TypeScript `strict`, Vitest, el **contrato del cable** de `keel-core/gen/wire.js`
    (decimales con su escala, `long` exactos, instantes en UTC con tres decimales), configuración por perfiles (`PROFILE`, `SERVER_PORT`,

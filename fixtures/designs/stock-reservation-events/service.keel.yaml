@@ -1,4 +1,4 @@
-keel: "2.19"
+keel: "2.20"
 # Variante de `stock-reservation` hecha para medir la MENSAJERÍA de los dos generadores con el
 # mismo diseño (incremento 9 de PLAN-KEEL-NEST.md): la reserva se encarga al almacén publicando un
 # evento y su desenlace llega por eventos. Sin la llamada saliente al almacén ni su reconciliación

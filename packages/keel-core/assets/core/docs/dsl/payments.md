@@ -149,7 +149,20 @@ Las acciones:
 - **`refund`**: devuelve lo cobrado. Con `amount` devuelve una parte (exige `partial-refund`). Exige `outcomes.refunded`.
 - **`savePaymentMethod`**: guarda un medio de pago para cobrar sin el cliente. Es una operación propia, y no un efecto lateral del cobro, porque cada pasarela lo hace de una forma distinta. `exposedAs` es el campo de la respuesta con el que sale la referencia guardada; es lo que después llega a `charge.source.saved`.
 
-Si la pasarela **rechaza** una acción de seguimiento (la autorización ya caducó, la devolución supera lo cobrado), el cobro vuelve al estado del que salió, o pasa al desenlace que corresponda, y la operación responde con su error declarado.
+### Cuando la pasarela contesta que NO (`onRejected`)
+
+Una acción de seguimiento tiene **tres** desenlaces, no dos: la pasarela confirma, no contesta, o **contesta que no** (la anulación ya no se puede hacer, la devolución supera lo cobrado). Los dos primeros los resuelve la capa —el desenlace y el barrido—; el tercero lo decide el diseño en `onRejected`, porque las dos respuestas son defendibles:
+
+```yaml
+capture: { operation: capturePayment, inFlight: capturing, onRejected: { error: PAYMENT_NOT_CAPTURABLE } }
+void:    { operation: cancelPayment, inFlight: canceling, onRejected: { error: PAYMENT_NOT_CANCELABLE } }
+refund:  { operation: refundPayment, amount: amount, inFlight: refunding, onRejected: reconcile }
+```
+
+- **`{ error: <code> }`**: el cobro sale del estado en vuelo y **vuelve al de origen** (`canceling` → `authorized`), y la operación responde ese error, que tiene que estar en sus `errors` (`CHK-PAYMENTS-REJECTED-ERROR-UNKNOWN`). El llamante sabe en la respuesta que no se hizo. Si la pasarela dice que el cobro ya está en otro desenlace (la autorización caducó: está anulado), se aplica ese desenlace en vez de volver.
+- **`reconcile`**: el cobro se queda en vuelo, la operación responde con él y el barrido lo devuelve a su estado al consultar. Más lento, y el llamante no se entera en la respuesta.
+
+Sin declararlo, `OBL-PAYMENTS-FOLLOWUP-REJECTED`, que no se acepta: lo que no vale es que cada servidor elija la suya. Las cuatro corridas `payment-checkout` del 2026-10-09 lo destaparon así —keel-spring devolvió el cobro a `authorized` con un 409 y keel-nest lo dejó en `canceling` con un 200, y las dos formas pasaban todos los escenarios—.
 
 ## Los desenlaces (`outcomes`)
 
@@ -157,6 +170,11 @@ Cada desenlace lo aplica una operación propia, que el generador dispara cuando 
 
 - **El aviso de la pasarela solo dice que algo cambió en un cobro; el desenlace se le consulta.** No es una precaución: en alguna pasarela la firma del aviso no cubre su contenido, y quien lo altere en tránsito decidiría el estado del cobro. Por eso la capa declara desenlaces y no webhooks.
 - **Un aviso que no verifica se rechaza** con un 4xx y no se consulta nada. Es lo único que hace observable la verificación: si se consultara igual, un aviso falso y uno verdadero acabarían en el mismo estado.
+- **Lo que responde el aviso lo fija el generador, no el diseño**: `POST /webhooks/payments` (fuera de la API versionada, sin credencial) responde **200 vacío** al aviso que verifica —aunque no hable de ningún cobro— y **401 vacío** al que no. Es contrato con la pasarela, que reintenta lo que no recibe un 2xx, y es el mismo en los dos generadores.
+
+### Un cobro por evento con una referencia que ya tiene cobro
+
+Cuando una suscripción dispara `charge.operation`, puede llegar un mensaje **distinto** (otro `metadata.eventId`, así que la deduplicación por mensaje no lo ve) con una `charge.reference` que ya tiene cobro. La `naturalKey` impide el segundo cobro; lo que queda por decidir es qué se hace con el **mensaje**: confirmarlo como un duplicado ya resuelto, o descartarlo para que alguien lo mire. Se declara en la suscripción con `onFailure.acknowledgeOn` (ver `messaging.md`), nombrando el error de la referencia repetida; sin declararlo, `OBL-PAYMENTS-REFERENCE-REUSED`, que se puede aceptar por escrito si la decisión es el descarte.
 
 Reglas de los desenlaces:
 

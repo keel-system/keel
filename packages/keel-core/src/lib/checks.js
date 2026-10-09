@@ -462,6 +462,13 @@ export const CHECKS = {
     title: 'la identidad de una suscripción no dice contra qué se resuelve, y la de HTTP sí',
     closes: 'declarar identity.resolvedBy (el mismo Entidad.campo que callerIdentity si el emisor se nombra como la credencial), o aceptar la resolución 1:1'
   },
+  'CHK-MSG-ACK-CODE-UNKNOWN': {
+    layer: 'messaging',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'onFailure.acknowledgeOn nombra un error que la operación disparada no puede dar',
+    closes: 'nombrar en acknowledgeOn códigos de los errors de la operación que la suscripción dispara'
+  },
   'CHK-MSG-SUB-NO-ONFAILURE': {
     layer: 'messaging',
     severity: 'warning',
@@ -1216,6 +1223,13 @@ export const CHECKS = {
     nature: 'incoherence',
     title: 'una acción declarada sin la operación que aplica su desenlace (refunded, canceled)',
     closes: 'declarar outcomes.refunded con refund, y outcomes.canceled con void o authorize-capture'
+  },
+  'CHK-PAYMENTS-REJECTED-ERROR-UNKNOWN': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'onRejected responde con un error que la operación de la acción no declara',
+    closes: 'añadir el code a los errors de la operación, o nombrar en onRejected.error uno que ya declare'
   },
   'CHK-PAYMENTS-SWEEP-INVALID': {
     layer: 'payments',

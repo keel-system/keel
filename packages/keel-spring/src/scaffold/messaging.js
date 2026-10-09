@@ -24,6 +24,7 @@ import { usesOutbox, outboxNames } from './outbox.js';
 import { correlationImport } from './correlation.js';
 import { usesTelemetry, messageTracingImport } from './telemetry.js';
 import { deadLetterDestination } from 'keel-core/gen';
+import { acknowledgeNote } from 'keel-core/gen/rejection-notes';
 import { credentialFinderName } from './repositories.js';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
@@ -619,6 +620,9 @@ function contractJavadoc(sub, model) {
       `Con onFailure.deadLetter: tras agotar los reintentos el broker mueve el mensaje a ${destination}. La topología la genera build — NO la declares tú.`
     );
   }
+  // Los rechazos de negocio que dan el mensaje por atendido (DSL 2.20): nota neutral, la misma en los dos generadores.
+  const acknowledged = acknowledgeNote(sub);
+  if (acknowledged) lines.push(acknowledged);
   if (sub.trigger) {
     // El cobro de la capa payments por evento: no hay cliente delante, así que el token del
     // componente de la pasarela no existe — no es un hueco que el agente tenga que rellenar.

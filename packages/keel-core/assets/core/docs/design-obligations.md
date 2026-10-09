@@ -42,6 +42,8 @@ donde «aceptado» significaría dejársela al generador. Están marcadas como t
 | `OBL-OUTCOME-NEGATIVE-UNDECIDED` | `dependencies`: una activación con `awaits: outcome` cuya llamada devuelve un campo booleano | el desenlace NEGATIVO de la llamada no está decidido | 13 | sí |
 | `OBL-GUARD-UNOBSERVABLE` | `mail`: una operación de `sentBy` con estado en vuelo y sin puerta propia | la guarda del efecto irreversible no la mide ningún escenario | 12 | sí |
 | `OBL-RESOURCE-SCOPE` | `use-cases`: una operación protegida por rol declara un error 403 | un 403 que nada de lo declarado puede producir | 9 | no |
+| `OBL-PAYMENTS-FOLLOWUP-REJECTED` | `payments`: una acción de seguimiento (`capture`, `void`, `refund`) sin `onRejected` | no está decidido qué pasa cuando la pasarela contesta que NO a una acción de seguimiento | 18 | no |
+| `OBL-PAYMENTS-REFERENCE-REUSED` | `payments` + `messaging`: una suscripción dispara el cobro y no declara `onFailure.acknowledgeOn` | no está decidido qué se hace con un mensaje distinto cuya referencia de cobro ya tiene cobro | 18 | sí |
 
 La columna **Clase** es la del análisis de huecos (`gap-analysis.md`), para que el barrido del
 agente y la validación mecánica hablen del mismo hueco con el mismo nombre.

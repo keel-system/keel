@@ -1,4 +1,4 @@
-keel: "2.19"
+keel: "2.20"
 # Variante de `job-dispatch` hecha para medir el RELOJ de los dos generadores con el mismo diseño
 # (incremento 10 de PLAN-KEEL-NEST.md): un barrido por cron que reclama la cola, rescata lo que una
 # réplica dejó a medias y lee su plazo de un parámetro de despliegue.

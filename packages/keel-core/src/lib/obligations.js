@@ -158,6 +158,26 @@ export const OBLIGATIONS = {
     closes:
       'un `code` de la familia CONCURRENT_MODIFICATION en `errors`, con status 409, o exención razonada',
     doc: 'framework-errors.md'
+  },
+
+  'OBL-PAYMENTS-FOLLOWUP-REJECTED': {
+    gapClass: 18,
+    when: 'payments: una acción de seguimiento (`capture`, `void`, `refund`) sin `onRejected`',
+    kind: 'decision',
+    waivable: false,
+    title: 'no está decidido qué pasa cuando la pasarela contesta que NO a una acción de seguimiento',
+    closes: '`onRejected: { error: <code> }` (vuelve al estado de origen y responde el error) u `onRejected: reconcile` (se queda en vuelo)',
+    doc: 'design-obligations.md'
+  },
+
+  'OBL-PAYMENTS-REFERENCE-REUSED': {
+    gapClass: 18,
+    when: 'payments + messaging: una suscripción dispara el cobro y no declara `onFailure.acknowledgeOn`',
+    kind: 'decision',
+    waivable: true,
+    title: 'no está decidido qué se hace con un mensaje distinto cuya referencia de cobro ya tiene cobro',
+    closes: 'el error de la referencia repetida en `onFailure.acknowledgeOn` (se confirma como duplicado), o exención razonada de que va al descarte',
+    doc: 'design-obligations.md'
   }
 };
 
