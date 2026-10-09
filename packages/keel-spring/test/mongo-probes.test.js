@@ -127,6 +127,7 @@ test('un diseño documental con reconciledBy PUEDE envejecer su marca de espera'
     harness.includes('protected static void ageForReconciliation(String activation, String id)'),
     'el arnés documental no declara ageForReconciliation: el barrido de reconciliación es inalcanzable'
   );
+  assert.ok(harness.includes('protected static void holdFromReconciliation(String activation, String id)'), 'ni su inverso');
 
   // Y lo que ejecuta es el script del módulo, no uno compuesto aquí. La colección y el campo
   // salen del diseño: Asset se almacena en `assets` y su `awaitingSince` es `lastScannedAt`,

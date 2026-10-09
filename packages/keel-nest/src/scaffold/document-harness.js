@@ -11,7 +11,7 @@
 //     `print(...)` un countDocuments devuelve cadena vacía, y la cadena vacía se parece a un cero.
 
 import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { PRINT_WRAPPER, CLOCK, setStateScript, ageClockScript, missingClockCountScript } from 'keel-core/gen/mongo-probes';
+import { PRINT_WRAPPER, CLOCK, setStateScript, ageClockScript, holdClockScript, missingClockCountScript } from 'keel-core/gen/mongo-probes';
 import { rescueProbes } from 'keel-core/gen';
 import { documentShape } from 'keel-core/gen/document';
 import { tsString } from './render.js';
@@ -176,6 +176,15 @@ function agingSection(model) {
       return `  ${tsString(name)}: [${scripts.join(', ')}]`;
     })
     .join(',\n');
+  const holding = [...targets]
+    .map(([name, list]) => {
+      const scripts = list.map((target) => {
+        const script = holdClockScript(target);
+        return `[${tsString(script.prefix)}, ${tsString(script.suffix)}]`;
+      });
+      return `  ${tsString(name)}: [${scripts.join(', ')}]`;
+    })
+    .join(',\n');
   return `
 /** Las marcas de espera que envejece \`ageForReconciliation\`, por activación: ${known}. */
 const RECONCILIATION_AGING: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
@@ -192,6 +201,22 @@ ${rows}
  */
 export function ageForReconciliation(activation: string, id: string): void {
   const scripts = RECONCILIATION_AGING[activation];
+  if (scripts == null) throw new Error(\`No hay barrido para la activación '\${activation}'. Las que lo tienen: ${known}\`);
+  for (const [prefix, suffix] of scripts) mongoEval(prefix + documentId(id) + suffix);
+}
+
+/** Las marcas de espera que retiene \`holdFromReconciliation\`, por activación. */
+const RECONCILIATION_HOLDING: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
+${holding}
+};
+
+/**
+ * El inverso de \`ageForReconciliation\`: deja la marca de espera del documento \`id\` en el FUTURO, de modo que el
+ * barrido NO lo tome aunque pasen sus ciclos. Es la palanca de «lo que acaba de entrar en vuelo no se toca»: con el
+ * umbral de prueba en segundos y el cron en minutos, sin ella ese documento también estaría rancio en el ciclo.
+ */
+export function holdFromReconciliation(activation: string, id: string): void {
+  const scripts = RECONCILIATION_HOLDING[activation];
   if (scripts == null) throw new Error(\`No hay barrido para la activación '\${activation}'. Las que lo tienen: ${known}\`);
   for (const [prefix, suffix] of scripts) mongoEval(prefix + documentId(id) + suffix);
 }

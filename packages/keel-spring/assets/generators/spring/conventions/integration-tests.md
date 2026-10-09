@@ -978,7 +978,11 @@ toca la infraestructura, y por la misma razón que el del outbox: el mecanismo c
 reaccionar a que no pasa nada, y no hay forma de observarlo sin fabricar ese silencio.
 
 `AbstractFlowIT` genera `ageForReconciliation(<activación>, id)`: deja la marca de espera de esa
-fila infinitamente rancia, de modo que el barrido la tome en su próxima pasada.
+fila infinitamente rancia, de modo que el barrido la tome en su próxima pasada. Y su inverso,
+`holdFromReconciliation(<activación>, id)`, la deja en el FUTURO: el barrido NO toma esa fila aunque
+pasen sus ciclos. Es lo que hace determinista un escenario de «lo que acaba de entrar en espera no se
+toca» (con el umbral de prueba en segundos y el cron en minutos, sin él esa fila también estaría rancia
+cuando llegue el ciclo). No escribas el UPDATE a mano.
 
 ```java
 String caseId = openCase();

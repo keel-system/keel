@@ -28,6 +28,7 @@ import { needsMessagingProvisioning } from './messaging-provisioning.js';
 import {
   setStateScript,
   ageClockScript,
+  holdClockScript,
   missingClockCountScript,
   outboxPendingScript,
   abandonOutboxScript,
@@ -4594,7 +4595,9 @@ function reconciliationAgingSection(model) {
     .map((part) => javaString(part))
     .join(', ');
 
-  const ramas = [...targets]
+  // Las ramas por activación, para un reloj: el rancio (ageForReconciliation) o el retenido en el futuro
+  // (holdFromReconciliation). Los dos con la misma forma, para que no diverjan.
+  const branches = (held) => [...targets]
     .map(([name, list]) => {
       const updates = list
         .map((target) => {
@@ -4602,14 +4605,14 @@ function reconciliationAgingSection(model) {
             // El script sale de mongo-probes.js CRUDO y lo escapa javaString(), que es la
             // regla del módulo: pre-escaparlo aquí produce el doble escape que ya se coló una
             // vez y que solo se ve leyendo el Java generado.
-            const script = ageClockScript({
+            const script = (held ? holdClockScript : ageClockScript)({
               collection: target.table,
               clockField: snakeCase(target.awaitingField)
             });
             return `            statements.add(${javaString(script.prefix)} + id + ${javaString(script.suffix)});`;
           }
           return `            statements.add(${javaString(
-            `UPDATE ${target.table} SET ${snakeCase(target.awaitingField)} = ${entry.staleTimestamp} WHERE id = `
+            `UPDATE ${target.table} SET ${snakeCase(target.awaitingField)} = ${held ? entry.heldTimestamp : entry.staleTimestamp} WHERE id = `
           )} + uuidLiteral(id));`;
         })
         .join(String.fromCharCode(10));
@@ -4622,6 +4625,7 @@ ${updates}
         }`;
     })
     .join(String.fromCharCode(10));
+  const ramas = branches(false);
 
   const conocidas = [...targets.keys()].join(', ');
   return `
@@ -4656,7 +4660,31 @@ ${ramas}
             ${document ? 'mongoEval(statement)' : statementCall(entry, argv, 'statement')};
         }
     }
-`;
+${document || entry.heldTimestamp ? `
+    /**
+     * El inverso de {@code ageForReconciliation}: deja la marca de espera de {@code activation} en
+     * el FUTURO para la fila {@code id}, de modo que el barrido <b>no</b> la tome aunque pasen sus
+     * ciclos. Es la palanca de un escenario que pide «lo que acaba de entrar en vuelo no se toca»:
+     * con el umbral de prueba en segundos y el cron en minutos, sin ella esa fila también estaría
+     * rancia cuando llegue el ciclo, y el escenario no sería determinista.
+     *
+     * <pre>{@code
+     * ageForReconciliation("${[...targets.keys()][0]}", atascado);
+     * holdFromReconciliation("${[...targets.keys()][0]}", recienEnVuelo);
+     * }</pre>
+     */
+    protected static void holdFromReconciliation(String activation, String id) {
+        List<String> statements = new ArrayList<>();
+${branches(true)}
+        if (statements.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "No hay barrido para la activación '" + activation + "'. Las que lo tienen: ${conocidas}");
+        }
+        for (String statement : statements) {
+            ${document ? 'mongoEval(statement)' : statementCall(entry, argv, 'statement')};
+        }
+    }
+` : ''}`;
 }
 
 /**

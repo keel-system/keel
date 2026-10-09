@@ -150,6 +150,9 @@ test(`${SUBJECT}: flow.ts reexporta los helpers, ageForReconciliation envejece l
   const entry = DATABASES.postgresql;
   assert.ok(flow.includes(tsString(`UPDATE reservations SET reserve_stock_awaiting_since = ${entry.staleTimestamp} WHERE id = `)), 'la sentencia');
   assert.match(flow, /export function ageForReconciliation\(activation: string, id: string\): void/);
+  // Y su inverso, para «lo que acaba de entrar en vuelo no se toca» (corrida payment-checkout, FL-REC-002-B).
+  assert.ok(flow.includes(tsString(`UPDATE reservations SET reserve_stock_awaiting_since = ${entry.heldTimestamp} WHERE id = `)), 'la sentencia de retener');
+  assert.match(flow, /export function holdFromReconciliation\(activation: string, id: string\): void/);
   assert.match(byPath['test/integration/harness-smoke.test.ts'], /SMOKE-6: el proveedor de prueba se deja programar/);
 });
 

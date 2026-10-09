@@ -50,6 +50,8 @@ test('hay motores relacionales que cubrir', () => {
 for (const [id, entry] of relacionales) {
   test(`${id}: declara con qué fabricar la precondición de un rescate`, () => {
     assert.ok(entry.staleTimestamp, `${id}: sin staleTimestamp el arnés no emite stallInFlight ni ageForReconciliation`);
+    // El inverso (holdFromReconciliation): un instante en el FUTURO que el TIMESTAMP de MySQL todavía admite (hasta 2038).
+    assert.match(entry.heldTimestamp ?? '', /2037-12-31/, `${id}: sin heldTimestamp el arnés no emite holdFromReconciliation`);
     assert.ok(entry.uuidLiteral?.prefix !== undefined, `${id}: sin uuidLiteral no hay forma de nombrar la fila`);
     assert.ok(entry.uuidLiteral?.suffix !== undefined, `${id}: uuidLiteral incompleto`);
   });

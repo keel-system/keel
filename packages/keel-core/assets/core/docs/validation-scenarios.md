@@ -231,8 +231,11 @@ disparador tampoco es alcanzable, pero su efecto sí —el evento aparece o no a
 infraestructura de en medio convierte esa diferencia en observable. Y la **reconciliación**
 (`activations.<a>.reconciledBy`): su efecto también lo es, y por partida doble —mueve el lifecycle y publica la
 cancelación al proveedor—; lo que faltaba era llegar a su condición de entrada, y se llega envejeciendo la marca
-de espera **de esa fila** (en keel-spring, `ageForReconciliation(...)` del arnés). El cron sigue disparando solo:
-no se le abre ninguna puerta, se fabrica el silencio que el diseño dice que el barrido busca.
+de espera **de esa fila** (`ageForReconciliation(...)` del arnés, en los dos generadores). El cron sigue disparando
+solo: no se le abre ninguna puerta, se fabrica el silencio que el diseño dice que el barrido busca. Y lo contrario
+—una fila que el barrido NO tiene que tocar porque acaba de entrar en espera— se fabrica dejando su marca en el
+futuro (`holdFromReconciliation(...)`): con el umbral de prueba en segundos y el cron en minutos, sin eso esa fila
+también estaría rancia cuando llegue el ciclo.
 
 Dos matices que esa salida deja escritos, porque es donde se tuerce:
 

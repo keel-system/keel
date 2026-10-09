@@ -302,5 +302,31 @@ export function ageForReconciliation(activation: string, id: string): void {
   if (statements == null) throw new Error(\`No hay barrido para la activación '\${activation}'. Las que lo tienen: ${known}\`);
   for (const statement of statements) db(statement + idLiteral(id));
 }
-`;
+${
+    entry.heldTimestamp
+      ? `
+/** Las marcas de espera que retiene \`holdFromReconciliation\`, por activación. */
+const RECONCILIATION_HOLDING: Readonly<Record<string, readonly string[]>> = {
+${[...targets]
+  .map(([name, list]) => `  ${tsString(name)}: [${list.map((target) => tsString(`UPDATE ${target.table} SET ${snakeCase(target.awaitingField)} = ${entry.heldTimestamp} WHERE id = `)).join(', ')}]`)
+  .join(',\n')}
+};
+
+/**
+ * El inverso de \`ageForReconciliation\`: deja la marca de espera de \`activation\` en el FUTURO para la fila \`id\`, de
+ * modo que el barrido NO la tome aunque pasen sus ciclos. Es la palanca de un escenario que pide «lo que acaba de
+ * entrar en vuelo no se toca»: con el umbral de prueba en segundos y el cron en minutos, sin ella esa fila también
+ * estaría rancia cuando llegue el ciclo, y el escenario no sería determinista.
+ *
+ *   ageForReconciliation(${tsString([...targets.keys()][0])}, atascado);
+ *   holdFromReconciliation(${tsString([...targets.keys()][0])}, recienEnVuelo);
+ */
+export function holdFromReconciliation(activation: string, id: string): void {
+  const statements = RECONCILIATION_HOLDING[activation];
+  if (statements == null) throw new Error(\`No hay barrido para la activación '\${activation}'. Las que lo tienen: ${known}\`);
+  for (const statement of statements) db(statement + idLiteral(id));
+}
+`
+      : ''
+  }`;
 }

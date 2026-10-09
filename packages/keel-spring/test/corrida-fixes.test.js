@@ -382,6 +382,10 @@ test('el arnés sabe envejecer la marca de espera de una fila concreta', () => {
   assert.ok(harness.includes("TIMESTAMP '1970-01-01 00:00:00'"), harness);
   // Y el id entra por el literal del motor, no concatenado a pelo: en MySQL es binario.
   assert.ok(harness.includes('+ uuidLiteral(id));'), harness);
+  // Y su inverso: la marca en el FUTURO, para que el barrido no tome lo que acaba de entrar en vuelo (corrida
+  // payment-checkout en keel-nest, FL-REC-002-B; la corrida de keel-spring lo había escrito con un UPDATE a mano).
+  assert.match(harness, /protected static void holdFromReconciliation\(String activation, String id\)/);
+  assert.ok(harness.includes("reserve_stock_awaiting_since = TIMESTAMP '2037-12-31 00:00:00'"), harness);
 });
 
 test('el arnés da la palanca fina para tumbar la salida con la entrada viva', () => {

@@ -1665,6 +1665,20 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `keel-stack.json` con PostgreSQL, RabbitMQ, Keycloak y la pasarela, y `build` hecho (294 archivos en keel-nest, 325
   en keel-spring; los nest con `npm install` y `typecheck` en verde). Sin contratos de `/keel-docs`, como las corridas
   anteriores. Comparten los puertos de `infra/`: se corren de una en una.
+- **Corrida stripe-nest, fase 1 — un blocker del arnés, arreglado en los dos generadores (2026-10-08)**. El agente de
+  pruebas no pudo escribir FL-REC-002-B («lo que acaba de entrar en vuelo no se toca»): con el umbral local en 5 s y el
+  barrido cada 5 min, ch-035 también está rancio cuando llega el ciclo. La corrida de keel-spring del 2026-10-02 lo
+  había resuelto con dos UPDATE a mano (uno al pasado, otro al FUTURO), y el arreglo F4 de entonces solo convirtió en
+  helper la primera mitad. Ahora el arnés de los dos generadores tiene el inverso de `ageForReconciliation`:
+  `holdFromReconciliation(activación, id)`, que deja la marca en el futuro, con `heldTimestamp` por motor en el catálogo
+  de keel-core (31-12-2037: el `TIMESTAMP` de MySQL acaba en 2038; medido contra PostgreSQL y MySQL reales en
+  `timestamptz`, `timestamp(6)`, `datetime(6)` y `datetime(3)`) y `holdClockScript` en `mongo-probes.js` (`mongo-check`
+  MONGO-11). keel-spring: `compile-check` de `payment-checkout` (PostgreSQL y MySQL) y `asset-vault` (documental) en verde;
+  línea base regenerada en su propio commit (solo `AbstractFlowIT.java` de las 15 combinaciones con barrido y los dos
+  documentos que lo enseñan). Los demás puntos del informe: el lote del barrido de pagos es una constante del agente
+  (pendiente: una clave como la de `reconciledBy`, en los dos generadores); la pasarela de prueba sin respuesta por
+  defecto queda escrita en la skill de flujos; `fromSubscription` en un mensaje de build y la DLQ de la reentrega con otro
+  `eventId` se miran al cerrar la corrida.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

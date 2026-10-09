@@ -83,7 +83,10 @@ export const DATABASES = {
     // Literal temporal ANSI, que estos motores aceptan tal cual. Se declara por motor y no
     // se compone en el renderizador por la misma razón que `uuidLiteral`: donde no consta,
     // no se emite el helper — inventar la forma es peor que no tenerlo.
+    // `heldTimestamp` es el inverso: una marca de espera en el FUTURO, para que un barrido NO tome esa fila
+    // (holdFromReconciliation). 2037 y no 9999: el TIMESTAMP de MySQL acaba en enero de 2038.
     staleTimestamp: "TIMESTAMP '1970-01-01 00:00:00'",
+    heldTimestamp: "TIMESTAMP '2037-12-31 00:00:00'",
     kind: 'relational',
     image: 'postgres:16-alpine',
     port: 5432,
@@ -116,6 +119,7 @@ export const DATABASES = {
     id: 'mysql',
     label: 'MySQL',
     staleTimestamp: "TIMESTAMP '1970-01-01 00:00:00'",
+    heldTimestamp: "TIMESTAMP '2037-12-31 00:00:00'",
     kind: 'relational',
     image: 'mysql:8.0',
     port: 3306,
@@ -176,6 +180,7 @@ export const DATABASES = {
     id: 'mariadb',
     label: 'MariaDB',
     staleTimestamp: "TIMESTAMP '1970-01-01 00:00:00'",
+    heldTimestamp: "TIMESTAMP '2037-12-31 00:00:00'",
     // MEDIDO, no deducido, y el resultado contradice a la deducción: pese a ser el primo de
     // MySQL, aquí el literal NO es `UUID_TO_BIN(...)` —MariaDB ni siquiera tiene esa función, es
     // de MySQL 8— sino el texto entrecomillado, como en PostgreSQL. La razón es el tipo: contra
@@ -233,6 +238,7 @@ export const DATABASES = {
     // que un literal incorrecto sale como Java válido. Se mide con
     // `node scripts/claim-check.js job-dispatch --database=sqlserver`.
     staleTimestamp: "CAST('1970-01-01T00:00:00Z' AS datetimeoffset)",
+    heldTimestamp: "CAST('2037-12-31T00:00:00Z' AS datetimeoffset)",
     // `CURRENT_TIMESTAMP` aquí devuelve `datetime` en hora LOCAL del servidor, no UTC, y el
     // rescate compara contra un `Instant`. Con el contenedor en UTC coincidiría, pero por
     // coincidencia: el reloj «a ahora» de este motor se nombra aparte.
@@ -281,6 +287,7 @@ export const DATABASES = {
     label: 'Oracle Database Free',
     // El literal ANSI sí lo acepta (sintaxis estándar documentada), igual que los tres primeros.
     staleTimestamp: "TIMESTAMP '1970-01-01 00:00:00'",
+    heldTimestamp: "TIMESTAMP '2037-12-31 00:00:00'",
     // Sin tipo nativo: `OracleDialect` mapea `java.util.UUID` a `RAW(16)`, así que el literal en
     // texto NO casa con ninguna fila —y, como en MySQL, tampoco falla: el WHERE devuelve vacío—.
     // `HEXTORAW` sobre los 32 hex sin guiones produce esos mismos 16 bytes.

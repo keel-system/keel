@@ -50,3 +50,20 @@ El barrido lo dispara su cron, como en producción. Para que tome un cobro concr
 `ageForReconciliation('<barrido>', id)` deja rancia su `awaitingSince` (el nombre es el de
 `payments.reconciliation.sweep`), y después se espera con `eventually` a que el estado cambie. No escribas un
 UPDATE a mano para eso.
+
+Para lo contrario —un cobro que acaba de entrar en vuelo y que el barrido NO tiene que tocar—,
+`holdFromReconciliation('<barrido>', id)` deja su `awaitingSince` en el futuro. Con el umbral local en segundos y el
+cron en minutos, sin él ese cobro también estaría rancio cuando llegue el ciclo:
+
+```ts
+ageForReconciliation('sweepPendingPayments', atascado);      // el que el barrido tiene que rescatar
+holdFromReconciliation('sweepPendingPayments', recienEnVuelo); // el que tiene que dejar en paz
+await eventually(async () => (await gatewayRequests(GatewayCall.STATUS)).length >= 1, 6 * 60_000);
+```
+
+## Lo que el arnés no programa solo
+
+La pasarela de prueba **no tiene respuesta por defecto**: lo que un escenario no programa, el WireMock lo contesta
+con un 404, que el adaptador lee como un cobro `FAILED` (o como `NOT_FOUND` si es una consulta). Cada Given programa
+la respuesta de su referencia; «un token válido de la pasarela de prueba» en un escenario es `gatewayAuthorizes`
+(o `gatewayCharges`) sobre esa referencia.

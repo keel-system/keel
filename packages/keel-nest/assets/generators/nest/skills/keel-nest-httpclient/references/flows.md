@@ -55,3 +55,7 @@ await eventually(async () => (await flow.get(`${ROUTE_BASE}/reservations/${reser
 
 Deja margen para un tick del cron. Bajar el umbral por configuración sería global y se llevaría las filas de los
 demás escenarios.
+
+Su inverso, `holdFromReconciliation(activación, id)`, deja la marca en el FUTURO: el barrido NO toma esa fila aunque
+pasen sus ciclos. Es lo que hace determinista un escenario de «lo que acaba de entrar en espera no se toca»: con el
+umbral de prueba en segundos y el cron en minutos, sin él esa fila también estaría rancia cuando llegue el ciclo.

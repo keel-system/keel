@@ -47,6 +47,7 @@ import {
   fill,
   setStateScript,
   ageClockScript,
+  holdClockScript,
   missingClockCountScript,
   outboxPendingScript,
   abandonOutboxScript,
@@ -410,6 +411,21 @@ async function agingScenarios({ raw, probe }) {
     const untouched = readAsset(OTHER_ID);
     if (millis(untouched.last_scanned_at) === 0) {
       throw new Error('envejecer una fila envejeció también la vecina: el filtro por _id no discrimina');
+    }
+  });
+
+  await check('MONGO-11', 'retener la marca de espera (holdFromReconciliation) la deja en el futuro, solo en ese documento', () => {
+    if (seed() !== 'ok') throw new Error('la siembra no confirmó');
+    probe(fill(holdClockScript(assets), ID));
+    const held = readAsset(ID);
+    if (held.last_scanned_at === undefined) throw new Error(`no hay last_scanned_at; el documento quedó: ${JSON.stringify(held)}`);
+    // En el futuro, y como FECHA: una cadena se compararía como texto y el barrido no la vería nunca como rancia ni como fresca.
+    if (!(millis(held.last_scanned_at) > Date.now())) {
+      throw new Error(`la marca vale ${JSON.stringify(held.last_scanned_at)}, esperaba una fecha futura`);
+    }
+    const untouched = readAsset(OTHER_ID);
+    if (millis(untouched.last_scanned_at) > Date.now()) {
+      throw new Error('retener una fila retuvo también la vecina: el filtro por _id no discrimina');
     }
   });
 }

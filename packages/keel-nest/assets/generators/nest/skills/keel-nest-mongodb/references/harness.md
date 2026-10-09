@@ -12,6 +12,7 @@ ayudantes que fabrican precondiciones. Son los mismos nombres que el arnés de k
 | `putInFlight(barrido, id)` | lo mismo con el reloj a ahora: el que el rescate NO debe tocar |
 | `inFlightWithoutClock(barrido)` | cuántos quedaron en vuelo sin reloj; tiene que valer 0 siempre |
 | `ageForReconciliation(activación, id)` | envejece SOLO la marca de espera de ese documento: el barrido lo toma en su próxima pasada |
+| `holdFromReconciliation(activación, id)` | el inverso: la marca en el futuro, para que el barrido NO lo tome aunque pasen sus ciclos |
 | `deadLetteredEvents()`, `abandonOutboxEvent(tipo)`, `clearAbandonedOutboxEvents()` | el outbox (con mensajería) |
 
 ```ts

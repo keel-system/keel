@@ -84,6 +84,8 @@ export const OUTBOX = {
  */
 export const CLOCK = {
   stale: 'new Date(0)',
+  // El inverso de stale: una marca en el futuro, para que un barrido no tome ese documento (holdFromReconciliation).
+  held: 'new Date("2037-12-31T00:00:00Z")',
   now: 'new Date()'
 };
 
@@ -133,6 +135,14 @@ export function ageClockScript({ collection, clockField }) {
   return split(
     `db.getCollection("${collection}").updateOne({ _id: UUID("`,
     `") }, { $set: { ${clockField}: ${CLOCK.stale} } })`
+  );
+}
+
+/** El inverso de `ageClockScript`: deja la marca de espera de ese documento en el futuro (holdFromReconciliation). */
+export function holdClockScript({ collection, clockField }) {
+  return split(
+    `db.getCollection("${collection}").updateOne({ _id: UUID("`,
+    `") }, { $set: { ${clockField}: ${CLOCK.held} } })`
   );
 }
 

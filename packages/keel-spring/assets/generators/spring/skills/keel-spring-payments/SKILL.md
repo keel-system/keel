@@ -69,7 +69,9 @@ defensa:
 
 En los escenarios, `gatewayExpiresAuthorization(referencia)` simula la autorización que caducó
 antes de capturarse, y `ageForReconciliation("<barrido>", id)` deja rancia la marca de espera de
-un cobro para que lo tome la próxima pasada del barrido. No escribas un UPDATE a mano para eso.
+un cobro para que lo tome la próxima pasada del barrido; `holdFromReconciliation("<barrido>", id)` hace lo
+contrario —deja la marca en el futuro, para que el barrido NO toque un cobro que acaba de entrar en vuelo—. No
+escribas un UPDATE a mano para ninguna de las dos cosas.
 
 Por qué el registro va **antes** y en su propia transacción: si la llamada a la pasarela va dentro
 de una transacción que después se deshace, la pasarela cobró y aquí no queda nada que reconciliar.
