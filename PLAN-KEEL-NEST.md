@@ -1679,6 +1679,27 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   (pendiente: una clave como la de `reconciledBy`, en los dos generadores); la pasarela de prueba sin respuesta por
   defecto queda escrita en la skill de flujos; `fromSubscription` en un mensaje de build y la DLQ de la reentrega con otro
   `eventId` se miran al cerrar la corrida.
+- **13e — las cuatro corridas, cerradas (2026-10-09)**: `payment-checkout` con Stripe y MercadoPago en keel-nest y
+  keel-spring, **las cuatro 25/25**, sin `harnessPatches`, con la huella prácticamente idéntica (20, 20, 20 y 21
+  reescritos; las de keel-spring del 2026-10-02 reescribían 30) y **ningún agente tocó el adaptador, el verificador, el
+  aviso, el aplicador ni el arnés de la pasarela**: la promesa de la capa se cumple en los dos ejes a la vez. Registradas
+  en `docs/corridas/2026-10-09-payment-checkout-{stripe,mercadopago}-{nest,spring}.md` (el análisis común, en
+  stripe-nest). Contrastando informes y proyectos:
+  - **Dos huecos del generador, arreglados**: el lote del barrido de pagos sin clave (los cuatro agentes lo escribieron
+    a mano) → `PAYMENT_SWEEP_PARAMETERS` en `keel-core/gen/payments-model.js` y `PaymentReconciliation.batchSize()` /
+    `staleBefore()` en los dos generadores, con `payments.yaml` idéntico; y en keel-nest el rechazo al guardar un medio
+    era un `Error` sin tipo, y los dos agentes capturaron cualquier error como rechazo (un fallo de programación habría
+    salido 422 y no 500) → `GatewayRejectedPaymentMethodException`. keel-spring: `compile-check` de las dos pasarelas
+    sobre PostgreSQL y MySQL y `payment-check` en verde, línea base regenerada aparte; keel-nest `ts-check` 12/12.
+  - **Dos divergencias entre los servidores, sin escenario que las mida, que vuelven al diseño**: la anulación que la
+    pasarela RECHAZA (keel-spring: `authorized` y 409; keel-nest: `canceling` con 200 y el barrido) y el
+    `ChargeRequested` distinto con un `chargeRequestId` ya usado (keel-spring lo confirma como duplicado; keel-nest lo
+    descarta a la DLQ). Los dos son el mismo hueco de la capa —qué pasa cuando la pasarela o el emisor contesta que
+    NO— y repiten entre corridas: candidatos a un `OBL-PAYMENTS-*` sin default seguro y a un escenario cada uno en la
+    próxima minor de `payment-checkout`, junto con el status del aviso (200, ya fijado por build), el Given de
+    FL-REC-002-B en términos de `holdFromReconciliation` y la convención de una pasarela de prueba que «contesta por
+    defecto», que no da ningún arnés. **Con esto el tramo de pagos del incremento 13 queda cerrado**; quedan cache,
+    storage, la autoría y `needs` (13f en adelante).
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 
