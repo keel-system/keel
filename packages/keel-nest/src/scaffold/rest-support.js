@@ -201,6 +201,22 @@ export class MissingParameterError extends Error {
   }
 }
 
+/** Falta la parte binaria obligatoria de una subida multipart. */
+export class MissingPartError extends Error {
+  constructor(readonly part: string) {
+    super(\`Falta la parte '\${part}' en la petición multipart\`);
+    this.name = 'MissingPartError';
+  }
+}
+
+/** Una operación de subida recibió un cuerpo que no es multipart/form-data. */
+export class UnsupportedMediaTypeError extends Error {
+  constructor() {
+    super('La operación espera multipart/form-data');
+    this.name = 'UnsupportedMediaTypeError';
+  }
+}
+
 /**
  * La petición se leyó pero incumple lo que el diseño declara. \`source\` distingue el cuerpo de los
  * parámetros sueltos (ruta y query), que en keel-spring salen con mensajes distintos.
@@ -496,6 +512,8 @@ function filterImports() {
     { symbol: 'ErrorResponse', from: ERROR_RESPONSE_TS },
     { symbol: 'MalformedRequestError', from: REQUEST_ERRORS_TS },
     { symbol: 'MissingParameterError', from: REQUEST_ERRORS_TS },
+    { symbol: 'MissingPartError', from: REQUEST_ERRORS_TS },
+    { symbol: 'UnsupportedMediaTypeError', from: REQUEST_ERRORS_TS },
     { symbol: 'RequestValidationError', from: REQUEST_ERRORS_TS },
     { symbol: 'allowsOtherMethod', from: ROUTES_TS }
   ];
@@ -565,6 +583,14 @@ export class ApiExceptionFilter implements ExceptionFilter {
     }
     if (exception instanceof MalformedRequestError) {
       return ErrorResponse.of(400, 'Bad Request', '${validation}', 'Petición malformada');
+    }
+    // La subida multipart: la parte que falta, sin code (el MissingServletRequestPartException de keel-spring), y
+    // un cuerpo que no es multipart.
+    if (exception instanceof MissingPartError) {
+      return ErrorResponse.of(400, 'Bad Request', null, exception.message);
+    }
+    if (exception instanceof UnsupportedMediaTypeError) {
+      return ErrorResponse.of(415, 'Unsupported Media Type', null, exception.message);
     }
     if (exception instanceof RouteNotFound) {
       // Ninguna ruta casa con método y camino. Si el camino existe con otro método, es un 405.

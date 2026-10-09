@@ -18,7 +18,8 @@ import { callsPaymentGateway } from 'keel-core/gen/payments-model';
 import { DIRS, classPath, fieldImports, tsModule, tsdoc, tsString } from './render.js';
 import { MEDIATOR_TS } from './mediator.js';
 import { messageComponents, messagePath, returnTypeOf, isPartialUpdate } from './services.js';
-import { PAGED_RESPONSE_TS } from './dtos.js';
+import { PAGED_RESPONSE_TS, FILE_UPLOAD_TS } from './dtos.js';
+import { MULTIPART_READING_TS } from './storage.js';
 import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
 import { CALLER_IDENTITY_TS, callerResolution } from './security.js';
 
@@ -231,23 +232,30 @@ function renderMethod(model, operation, imports, readers) {
   const dispatch = callsPaymentGateway(model, operation.name) ? 'dispatchWithoutTransaction' : 'dispatch';
   let call = `this.mediator.${dispatch}(${readerName}(params, query, body))`;
   let resolve = '';
+  // Una subida: el cuerpo es multipart/form-data. Los campos simples se leen como los de la query (el
+  // @RequestParam de keel-spring lee los dos) y los binarios llegan por su nombre de parte.
+  const needsRequest = Boolean(location) || operation.multipart;
+  if (operation.multipart) {
+    imports.push({ symbol: 'readMultipart', from: MULTIPART_READING_TS });
+    resolve = '    const form = await readMultipart(request);\n';
+    call = `this.mediator.${dispatch}(${readerName}(params, { ...query, ...form.fields }, form.files))`;
+  }
   if (resolvesCaller(model, operation)) {
     // La credencial del token es UNA de las del recurso (resolvedBy): el mensaje lleva su clave natural, o null
     // si no es de nadie (la precondición la responde la operación con el error que declare el diseño).
     const field = messageComponents(model, operation).find((component) => component.resolvedIdentity).name;
-    resolve = `    const read = ${readerName}(params, query, body);\n    const message = new ${operation.messageClass}({ ...read, ${field}: await this.callerIdentity.resolve(read.${field}) });\n`;
+    const readArgs = operation.multipart ? '{ ...query, ...form.fields }, form.files' : 'query, body';
+    resolve += `    const read = ${readerName}(params, ${readArgs});\n    const message = new ${operation.messageClass}({ ...read, ${field}: await this.callerIdentity.resolve(read.${field}) });\n`;
     call = `this.mediator.${dispatch}(message)`;
   }
   let statements;
+  if (needsRequest) {
+    imports.push({ symbol: 'Req', from: '@nestjs/common' }, { symbol: 'FastifyRequest', from: 'fastify', type: true });
+    params.push('@Req() request: FastifyRequest');
+  }
   if (location) {
-    imports.push(
-      { symbol: 'Req', from: '@nestjs/common' },
-      { symbol: 'Res', from: '@nestjs/common' },
-      { symbol: 'FastifyReply', from: 'fastify', type: true },
-      { symbol: 'FastifyRequest', from: 'fastify', type: true },
-      { symbol: 'locationOf', from: ROUTES_TS }
-    );
-    params.push('@Req() request: FastifyRequest', '@Res({ passthrough: true }) reply: FastifyReply');
+    imports.push({ symbol: 'Res', from: '@nestjs/common' }, { symbol: 'FastifyReply', from: 'fastify', type: true }, { symbol: 'locationOf', from: ROUTES_TS });
+    params.push('@Res({ passthrough: true }) reply: FastifyReply');
     const target = locationTarget(model, operation);
     const value = target.param ? `params[${tsString(target.param)}]` : 'response.id';
     statements = `    const response = await ${call};
@@ -256,10 +264,6 @@ function renderMethod(model, operation, imports, readers) {
     return response;`;
   } else {
     statements = resultType ? `    return ${call};` : `    await ${call};`;
-  }
-  if (operation.multipart) {
-    statements = `    // Subida multipart: la lectura del binario llega con la capa storage (incremento 13 de keel-nest).
-    throw new Error('TODO: ${operation.name} es una subida multipart, que keel-nest todavía no genera');`;
   }
   imports.push({ symbol: 'HttpCode', from: '@nestjs/common' });
   return `${tsdoc(operation.description, '  ')}  @${decorator}(${tsString(nestPath(route.path))})
@@ -276,7 +280,10 @@ function rulesLiteral(rules) {
 }
 
 function renderReader(model, operation, name, imports) {
-  const { asBody, bodyRequired } = requestShape(operation);
+  const shape = requestShape(operation);
+  // Una subida no tiene cuerpo JSON: sus campos simples vienen del formulario, mezclados con la query.
+  const asBody = shape.asBody && !operation.multipart;
+  const bodyRequired = shape.bodyRequired;
   const components = messageComponents(model, operation);
   const fromPath = new Set((operation.pathParams ?? []).map((param) => param.name));
   const partial = isPartialUpdate(operation);
@@ -306,7 +313,13 @@ function renderReader(model, operation, name, imports) {
   }
   for (const component of components) {
     if (fromPath.has(component.name)) continue;
-    if (component.resolvedIdentity || component.file) continue;
+    if (component.resolvedIdentity) continue;
+    // El binario se lee de su parte, en SU posición: Spring resuelve los argumentos en orden, así que una parte
+    // que falta se descubre antes que un parámetro posterior y antes de validar ninguna restricción.
+    if (component.file) {
+      if (operation.multipart) missing.push({ part: component.name, required: Boolean(component.required) });
+      continue;
+    }
     // La página no es un campo del diseño: la leen las líneas de abajo.
     if (component.pageable) continue;
     if (operation.paginated && ['page', 'size'].includes(component.name) && !operation.bodyFields.some((f) => f.name === component.name)) continue;
@@ -356,8 +369,8 @@ function renderReader(model, operation, name, imports) {
       value = 'CallerIdentity.resolve()';
       imports.push({ symbol: 'CallerIdentity', from: CALLER_IDENTITY_TS });
     } else if (component.file) {
-      value = `unsupported('la subida multipart llega con la capa storage (incremento 13 de keel-nest)')`;
-      use('unsupported');
+      // El binario, por su nombre de parte. Uno vacío llega null, como el MultipartFile vacío de keel-spring.
+      value = component.required ? `${component.name}!` : component.name;
     } else if (component.pageable) {
       value = component.name;
     } else if (component.list) {
@@ -375,6 +388,10 @@ function renderReader(model, operation, name, imports) {
   // El orden de Spring: ruta convertida, cuerpo leído y validado, query presente y convertida, y
   // las restricciones de ruta y query al final.
   const ordered = [];
+  if (operation.multipart) {
+    imports.push({ symbol: 'FileUpload', from: FILE_UPLOAD_TS, type: true });
+    ordered.push('  const files = body as Readonly<Record<string, FileUpload | null>>;');
+  }
   const pathLines = lines.filter((line) => (operation.pathParams ?? []).some((p) => line.startsWith(`  const ${p.name} =`)));
   const otherLines = lines.filter((line) => !pathLines.includes(line));
   ordered.push(...pathLines);
@@ -385,7 +402,13 @@ function renderReader(model, operation, name, imports) {
       ordered.push(`  new Violations('body')\n${bodyChecks.join('\n')}\n    .throwIfAny();`);
     }
   } else {
-    for (const name of missing) ordered.push(`  requireParameter(query, ${tsString(name)});`);
+    for (const entry of missing) {
+      if (typeof entry === 'string') ordered.push(`  requireParameter(query, ${tsString(entry)});`);
+      else if (entry.required) {
+        imports.push({ symbol: 'requirePart', from: MULTIPART_READING_TS });
+        ordered.push(`  const ${entry.part} = requirePart(files, ${tsString(entry.part)});`);
+      } else ordered.push(`  const ${entry.part} = files[${tsString(entry.part)}] ?? null;`);
+    }
     ordered.push(...otherLines);
   }
   const paramChecks = [...pathChecks, ...queryChecks];

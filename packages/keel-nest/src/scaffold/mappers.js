@@ -9,7 +9,9 @@
 // con comentario, pero en TypeScript estricto un null no cabe en un campo obligatorio.
 
 import { isPublicBucket } from 'keel-core/gen';
-import { DIRS, classPath, declType, entityDir, tsModule } from './render.js';
+import { DIRS, classPath, declType, entityDir, isNullable, tsModule } from './render.js';
+import { FILE_STORAGE_TS, STORAGE_POLICIES_TS } from './storage.js';
+import { screamingSnake } from 'keel-core/gen';
 import { ANNOTATIONS_TS } from './mediator.js';
 import { domainMembers } from './entities.js';
 
@@ -90,10 +92,14 @@ function renderMapper(model, entity, dtos) {
     imports.push({ symbol: childEntity.name, from: classPath(entityDir(childEntity), childEntity.name), type: true });
     methods.push(renderMethod(model, childEntity, child, imports));
   }
+  // Con un `file` de bucket público, el mapper resuelve su URL: necesita el puerto de almacenamiento.
+  const storage = imports.some((imp) => imp.symbol === 'FileStorage');
+  const injection = storage
+    ? '  static readonly inject = [FileStorage] as const;\n\n  constructor(private readonly fileStorage: FileStorage) {}\n'
+    : '  static readonly inject = [] as const;\n';
   const body = `@ApplicationComponent()
 export class ${className} {
-  static readonly inject = [] as const;
-
+${injection}
 ${methods.join('\n\n')}
 }`;
   return { path: file, content: tsModule(file, imports, body) };
@@ -136,10 +142,12 @@ function renderMethod(model, entity, dto, imports) {
     if (field.kind === 'refDto' || field.kind === 'needDto' || field.kind === 'parentId') return field.name;
     if (!gettable.has(field.name)) return todo(`${field.name} no es getter directo de ${entity.name}; mapéalo (¿subcampo de value object?)`);
     const getter = `entity.${field.name}`;
-    // Un `file` de bucket público expone la URL, no la key: la resuelve FileStorage, que llega con
-    // la capa storage (incremento 13).
+    // Un `file` de bucket público expone la URL, no la key: la resuelve FileStorage con el bucket del diseño (sus
+    // constantes en StoragePolicies, nunca un literal), como el mapper de keel-spring.
     if (field.base === 'file' && !field.list && isPublicBucket(model, field.bucket)) {
-      return todo(`${field.name} es de un bucket público: el DTO lleva la URL, que resuelve FileStorage (incremento 13 de keel-nest)`);
+      imports.push({ symbol: 'FileStorage', from: FILE_STORAGE_TS }, { symbol: 'StoragePolicies', from: STORAGE_POLICIES_TS });
+      const url = `this.fileStorage.publicUrl(StoragePolicies.${screamingSnake(field.bucket)}, ${getter})`;
+      return isNullable(field) ? `${getter} != null ? ${url} : null` : url;
     }
     if (field.kind === 'childDto') {
       const childDto = (model.childDtos ?? []).find((child) => child.entity === field.childEntity);

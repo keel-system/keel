@@ -23,6 +23,7 @@ import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
 import { usesCache } from './cache.js';
+import { usesStorage } from './storage.js';
 import { usesPayments } from './payments.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'nest');
@@ -62,6 +63,8 @@ export function stackSkills(model) {
   if (usesPayments(model)) skills.push('keel-nest-payments', `keel-nest-${model.payments.gateway.id}`);
   // La caché de lectura (incremento 13f): una sola skill para Redis y Valkey, como keel-spring.
   if (usesCache(model)) skills.push('keel-nest-redis');
+  // El almacenamiento de binarios (incremento 13g): una sola skill para MinIO y S3, como keel-spring.
+  if (usesStorage(model) && model.stack?.storage) skills.push('keel-nest-s3');
   return skills;
 }
 

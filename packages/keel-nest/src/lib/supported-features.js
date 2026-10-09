@@ -11,10 +11,8 @@
 //   · `warnings` dejan seguir — la capa se acepta pero lo que el diseño declara en ella todavía
 //     no se emite, y el aviso dice cuándo llega.
 
-/** Capas que aún no se generan, con el incremento del plan que las trae. */
-const PENDING_LAYERS = {
-  storage: 'incremento 13'
-};
+/** Capas que aún no se generan, con el incremento del plan que las trae. Hoy, ninguna: storage llegó en el 13g. */
+const PENDING_LAYERS = {};
 
 /** Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. Hoy, ninguna. */
 const ACCEPTED_NOT_EMITTED = {};
@@ -68,10 +66,10 @@ export function checkSupportedFeatures(manifest, layers) {
   //
   // La auditoría de AUTORÍA por política (`created_by`/`updated_by` sin que el dominio los nombre) necesita
   // saber quién llama al guardar, y ninguno de los dos adaptadores lo estampa todavía: la columna saldría
-  // vacía (en relacional, NOT NULL: la escritura fallaría). Solo la declara asset-vault, fuera también por storage.
+  // vacía (en relacional, NOT NULL: la escritura fallaría). Solo la declara asset-vault.
   if (declared.includes('persistence') && layers?.persistence?.audit?.authorship === 'all') {
     errors.push(
-      'persistence.audit.authorship: all — keel-nest todavía no estampa quién crea y modifica cada agregado (llega con la capa storage, en el incremento 13 de PLAN-KEEL-NEST.md, que trae el único diseño que la declara). ' +
+      'persistence.audit.authorship: all — keel-nest todavía no estampa quién crea y modifica cada agregado (llega en el incremento 13h de PLAN-KEEL-NEST.md: solo la declara asset-vault). ' +
         "Genera este diseño con keel-spring, o declara la autoría en el dominio (authorship: declared)."
     );
   }

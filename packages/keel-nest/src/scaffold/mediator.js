@@ -29,6 +29,7 @@ import { usesServiceParameters } from './service-parameters.js';
 import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
 import { usesCache, mediatorCacheImports } from './cache.js';
+import { usesStorage } from './storage.js';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
@@ -155,8 +156,15 @@ function useCasesTest(model) {
     ? "\nimport { CacheModule } from '../src/infrastructure/cache/cache-module.js';" +
       (persistence || parameters || clients || mail || payments ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
     : '';
+  // El almacenamiento (global): los handlers de subida inyectan FileStorage y StoragePolicies. En test nada sube.
+  const storage = usesStorage(model) && Boolean(model.stack?.storage);
+  const storageImport = storage
+    ? "\nimport { StorageModule } from '../src/infrastructure/storage/storage-module.js';" +
+      (persistence || parameters || clients || mail || payments || cache ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
+    : '';
   const modules = [
     cache ? "CacheModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
+    storage ? "StorageModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     parameters ? "ServiceParametersModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     payments ? "PaymentsModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     persistence ? "PersistenceModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
@@ -175,7 +183,7 @@ import { UseCaseModule } from '../src/infrastructure/usecase/use-case-module.js'
 import { UseCaseMediator } from '../src/infrastructure/usecase/use-case-mediator.js';
 import { UseCaseContainer } from '../src/infrastructure/usecase/use-case-container.js';
 import { Handles } from '../src/application/annotations/application-component.js';
-import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}${clientsImport}${mailImport}${paymentsImport}${cacheImport}
+import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}${clientsImport}${mailImport}${paymentsImport}${cacheImport}${storageImport}
 ${imports}
 
 const OPERATIONS = [

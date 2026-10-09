@@ -9,13 +9,10 @@ import { checkSupportedFeatures, checkSupportedStack } from '../src/lib/supporte
 const manifestWith = (...layers) => ({ layers: Object.fromEntries(layers.map((layer) => [layer, `${layer}.keel.yaml`])) });
 const layersWith = (...layers) => Object.fromEntries(layers.map((layer) => [layer, {}]));
 
-for (const layer of ['storage']) {
-  test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
-    const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
-    assert.equal(errors.length, 1);
-    assert.match(errors[0], new RegExp(`capa ${layer}: .*incremento \\d+`));
-  });
-}
+test('capa storage (incremento 13g): se genera', () => {
+  const manifest = manifestWith('domain', 'use-cases', 'api', 'storage');
+  assert.deepEqual(checkSupportedFeatures(manifest, layersWith('domain', 'use-cases', 'api', 'storage')), { errors: [], warnings: [] });
+});
 
 test('capa payments (incremento 13): se genera; lo que la pasarela no cubre lo decide la matriz, no la frontera', () => {
   const manifest = manifestWith('domain', 'use-cases', 'api', 'persistence', 'payments');

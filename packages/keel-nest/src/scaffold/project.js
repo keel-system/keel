@@ -31,6 +31,7 @@ import {
   HANDLEBARS_VERSION,
   NODEMAILER_VERSION,
   REDIS_CLIENT_VERSION,
+  FASTIFY_MULTIPART_VERSION,
   PG_VERSION,
   MYSQL2_VERSION,
   JOSE_VERSION,
@@ -43,6 +44,7 @@ import { usesJwt } from './security.js';
 import { usesRelational, usesDocument, engineOf } from './persistence-entities.js';
 import { usesMail } from './mail.js';
 import { usesCache } from './cache.js';
+import { usesStorage, usesMultipart } from './storage.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 
@@ -88,6 +90,11 @@ function packageJson(model) {
       ...(usesRabbitMq(model) ? { amqplib: AMQPLIB_VERSION } : {}),
       ...(usesKafka(model) ? { '@confluentinc/kafka-javascript': KAFKA_JAVASCRIPT_VERSION } : {}),
       ...(usesSnsSqs(model) ? { '@aws-sdk/client-sns': AWS_SDK_VERSION, '@aws-sdk/client-sqs': AWS_SDK_VERSION } : {}),
+      // El almacenamiento (incremento 13g): el SDK de S3 para el adaptador que escribe el agente (también MinIO), con
+      // el firmante de URLs para los buckets privados, y el lector de la entrada multipart.
+      ...(usesStorage(model) && model.stack?.storage ? { '@aws-sdk/client-s3': AWS_SDK_VERSION } : {}),
+      ...(usesStorage(model) && model.stack?.storage && model.storage.hasPrivateBucket ? { '@aws-sdk/s3-request-presigner': AWS_SDK_VERSION } : {}),
+      ...(usesMultipart(model) ? { '@fastify/multipart': FASTIFY_MULTIPART_VERSION } : {}),
       // El reloj: los barridos del diseño y las purgas de las tablas del generador (incremento 10b).
       ...(usesScheduling(model) ? { cron: CRON_VERSION } : {}),
       'decimal.js': DECIMAL_JS_VERSION,

@@ -61,6 +61,9 @@ export const HANDLEBARS_VERSION = '^4.7.9';
 // La caché de lectura (incremento 13f): el cliente oficial de Redis, solo el núcleo (sin los módulos de Redis Stack).
 // También habla con Valkey. La 6 cambió el plazo por defecto de cada orden (5 s): el adaptador fija el suyo.
 export const REDIS_CLIENT_VERSION = '^6.2.1';
+// El almacenamiento de binarios (incremento 13g): el lector de multipart/form-data de Fastify. El cliente S3 es el
+// SDK v3 de AWS (AWS_SDK_VERSION), que habla igual con MinIO.
+export const FASTIFY_MULTIPART_VERSION = '^10.1.1';
 // Seguridad (incremento 8), verificada el 2026-10-06 contra el registro de npm: la validación del JWT
 // contra el JWKS del proveedor (firma, caducidad, emisor). Sin dependencias y sin Passport: la regla
 // de cada ruta la evalúa un hook de la entrada HTTP con el plan neutral de keel-core.

@@ -28,12 +28,13 @@ import { usesMail } from './mail.js';
 import { paymentControllers, usesPayments } from './payments.js';
 import { PAYMENT_NOTICE_PATH } from 'keel-core/gen/payment-gateways';
 import { usesCache } from './cache.js';
+import { usesMultipart, multipartFileLimitBytes, usesStorage } from './storage.js';
 
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs() },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), [...controllerClasses(model), ...paymentControllers(model)], usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model), usesPayments(model), usesCache(model)) },
-    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model), usesPayments(model)) }
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), [...controllerClasses(model), ...paymentControllers(model)], usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model), usesPayments(model), usesCache(model), usesStorage(model) && Boolean(model.stack?.storage)) },
+    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model), usesPayments(model), usesMultipart(model) ? multipartFileLimitBytes(model) : null) }
   ];
 }
 
@@ -59,7 +60,7 @@ await app.listen(configuration.server.port, configuration.server.address);
 `;
 }
 
-function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false, withHttpClients = false, withMail = false, withPayments = false, withCache = false) {
+function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false, withHttpClients = false, withMail = false, withPayments = false, withCache = false, withStorage = false) {
   // Los casos de uso del diseño entran por su módulo (infrastructure/usecase), que es el único que
   // cablea handlers y mappers; los controladores REST los despachan por el mediator que exporta. La
   // persistencia y el alcance por recurso (globales) van antes: son dependencias de los handlers.
@@ -74,6 +75,7 @@ function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope
     (withMail ? "\nimport { MailModule } from './infrastructure/mail/mail-module.js';" : '') +
     (withPayments ? "\nimport { PaymentsModule } from './infrastructure/payment/payments-module.js';" : '') +
     (withCache ? "\nimport { CacheModule } from './infrastructure/cache/cache-module.js';" : '') +
+    (withStorage ? "\nimport { StorageModule } from './infrastructure/storage/storage-module.js';" : '') +
     (withCallerScope ? "\nimport { SecurityModule } from './infrastructure/security/security-module.js';" : '') +
     (withUseCases ? "\nimport { UseCaseModule } from './infrastructure/usecase/use-case-module.js';" : '') +
     (withScheduling ? "\nimport { SchedulingModule } from './infrastructure/scheduling/scheduling-module.js';" : '');
@@ -91,6 +93,8 @@ function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope
     withPayments ? 'PaymentsModule.register(configuration)' : null,
     // La caché de lectura (global): los handlers inyectan el puerto, y el mediator vacía lo que invalida cada operación.
     withCache ? 'CacheModule.register(configuration)' : null,
+    // El almacenamiento de binarios (global): los handlers inyectan FileStorage y StoragePolicies.
+    withStorage ? 'StorageModule.register(configuration)' : null,
     withCallerScope ? 'SecurityModule' : null,
     withUseCases ? 'UseCaseModule' : null,
     // Los listeners del agente despachan por el mediator: van después de los casos de uso.
@@ -121,7 +125,17 @@ export class AppModule {
 `;
 }
 
-function httpPlatformTs(withApi, withIdempotencyHeader = false, withSecurity = false, withPayments = false) {
+function httpPlatformTs(withApi, withIdempotencyHeader = false, withSecurity = false, withPayments = false, multipartLimit = null) {
+  // La subida multipart (capa storage): el lector de @fastify/multipart, con el límite de la ENTRADA —el doble del
+  // mayor maxSizeMb del diseño, como el servlet de keel-spring—, para que el límite de negocio, que comprueba el
+  // caso de uso con BucketPolicy, se alcance antes que esta red de seguridad.
+  const multipartImport = multipartLimit != null ? "\nimport multipart from '@fastify/multipart';" : '';
+  const multipartSetup =
+    multipartLimit != null
+      ? `
+  // multipart/form-data: lo lee @fastify/multipart, y cada operación de subida con readMultipart (rest/).
+  void fastify.register(multipart, { limits: { fileSize: ${multipartLimit} }, throwFileSizeLimit: true });`
+      : '';
   // El aviso de la pasarela de pago se verifica sobre el texto TAL COMO LLEGÓ: la firma no sobrevive a un JSON
   // leído y vuelto a escribir. Esa ruta recibe el cuerpo sin leer (PaymentNoticeController).
   const noticeExemption = withPayments
@@ -172,7 +186,7 @@ import { CORRELATION_HEADER, CorrelationContext } from '../correlation/correlati
     : '';
   return `import { BadRequestException } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { parseWireJson, toWireJson } from '../../application/support/wire.js';${apiImports}
+import { parseWireJson, toWireJson } from '../../application/support/wire.js';${apiImports}${multipartImport}
 
 /** El adaptador HTTP del servicio. */
 export function createHttpAdapter(): FastifyAdapter {
@@ -201,7 +215,7 @@ export function configureHttp(app: NestFastifyApplication): void {
       done(new BadRequestException('El cuerpo de la petición no es JSON válido'), undefined);
     }
   });
-  fastify.setReplySerializer((payload) => toWireJson(payload));${apiSetup}
+  fastify.setReplySerializer((payload) => toWireJson(payload));${multipartSetup}${apiSetup}
 }
 `;
 }

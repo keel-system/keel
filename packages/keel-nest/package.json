@@ -54,8 +54,10 @@
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
+    "@fastify/multipart": "^10.1.1",
     "@redis/client": "^6.2.1",
     "decimal.js": "^10.6.0",
+    "fastify": "^5.12.5",
     "handlebars": "^4.7.10",
     "jose": "^6.2.12",
     "nodemailer": "^10.0.16",

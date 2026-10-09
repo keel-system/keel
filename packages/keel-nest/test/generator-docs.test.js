@@ -338,3 +338,26 @@ test('la skill de la caché se instala con caché en el diseño, y solo con ella
   }
   assert.ok(!Object.keys(rabbit).some((file) => file.includes('keel-nest-redis')), 'un diseño sin caché no la recibe');
 });
+
+// La del almacenamiento (incremento 13g): con storage en el diseño y solo con ella, citando solo lo que build emite.
+const s3Dir = path.join(assets, 'generators', 'nest', 'skills', 'keel-nest-s3');
+const s3Sources = [path.join(s3Dir, 'SKILL.md'), ...fs.readdirSync(path.join(s3Dir, 'references')).map((name) => path.join(s3Dir, 'references', name))];
+
+test('la skill de S3 se instala con storage en el diseño, y solo con ella; lo que cita existe', () => {
+  for (const [name, storage] of [['asset-vault', 'minio'], ['catalog-extended', 's3']]) {
+    const project = byPath(planFixture(name, { stack: { storage, cache: 'redis' } }).files);
+    for (const harness of HARNESSES) {
+      assert.ok(harness.skillPath('keel-nest-s3', 'SKILL.md') in project, `${name} ${harness.id}: keel-nest-s3`);
+      assert.ok(harness.skillPath('keel-nest-s3', 'references/implementation.md') in project, `${name} ${harness.id}: sus referencias`);
+    }
+    const emitted = new Set(Object.keys(project));
+    for (const source of s3Sources) {
+      const text = fs.readFileSync(source, 'utf8');
+      for (const [cited] of text.matchAll(/(?:src|test)\/[\w/.-]+\.ts/g)) assert.ok(emitted.has(cited), `${name}: ${path.basename(source)} cita ${cited}, que build no emite`);
+      assert.doesNotMatch(text, /\.claude\/|\.opencode\//, path.basename(source));
+    }
+    assert.match(project['test/integration/support/flow.ts'], /upload\(path: string, file: UploadPart/);
+    assert.equal(/export async function stopStorage/.test(project['test/integration/support/flow.ts']), storage === 'minio', 'la palanca solo con un almacén en contenedor');
+  }
+  assert.ok(!Object.keys(rabbit).some((file) => file.includes('keel-nest-s3')), 'un diseño sin storage no la recibe');
+});

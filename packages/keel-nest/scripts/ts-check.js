@@ -30,7 +30,7 @@ import { planService } from '../src/scaffold/index.js';
 import { loadService } from 'keel-core';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { resolveRuntime, startDatabase, stopDatabase } from './lib/database-container.js';
-import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION, AWS_SDK_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION } from '../src/lib/assets.js';
+import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION, AWS_SDK_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION, FASTIFY_MULTIPART_VERSION } from '../src/lib/assets.js';
 
 const keep = process.argv.includes('--keep');
 const isWindows = process.platform === 'win32';
@@ -123,9 +123,13 @@ const extra = npm(projectDir, [
   `nodemailer@${NODEMAILER_VERSION}`,
   `handlebars@${HANDLEBARS_VERSION}`,
   // La caché de lectura (incremento 13f): el cliente de Redis.
-  `@redis/client@${REDIS_CLIENT_VERSION}`
+  `@redis/client@${REDIS_CLIENT_VERSION}`,
+  // El almacenamiento (incremento 13g): el SDK de S3, su firmante y el lector multipart.
+  `@aws-sdk/client-s3@${AWS_SDK_VERSION}`,
+  `@aws-sdk/s3-request-presigner@${AWS_SDK_VERSION}`,
+  `@fastify/multipart@${FASTIFY_MULTIPART_VERSION}`
 ]);
-if (!step('dependencias de las demás siluetas (jose, amqplib, kafka, aws, mongodb, nodemailer, handlebars, @redis/client)', extra.ok)) console.error(extra.output);
+if (!step('dependencias de las demás siluetas (jose, amqplib, kafka, aws, mongodb, nodemailer, handlebars, @redis/client, s3, multipart)', extra.ok)) console.error(extra.output);
 
 // Las trece siluetas: cada fixture entera, renderizada al lado y compilada con el mismo node_modules.
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');

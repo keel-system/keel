@@ -1750,6 +1750,35 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     su TTL y su JSON, el acierto, el vaciado de una caché sin tocar otras, la orden de `reset-db.sh`, el store parado
     —la lectura va al origen en 1 ms— y de vuelta), falsado con tres sabotajes (sin `disableOfflineQueue` la lectura
     esperó 4 s; sin TTL; sin reconexión).
+- **13g — el almacenamiento de binarios: hecho (2026-10-09)**. `keel-nest` genera la capa `storage` y la subida
+  multipart, con el reparto de keel-spring: build emite el contrato y la entrada; el adaptador S3 lo escribe el agente.
+  - **El contrato** (`src/scaffold/storage.js`), en `domain/storage`: el puerto `FileStorage` con la lectura
+    condicionada a la visibilidad (`download`/`signedUrl` solo con un bucket privado, `publicUrl` solo con uno
+    público), `StoredObject`, `BucketPolicy` (`allowsContent` = tipo declarado Y firma del binario, `allowsSize`,
+    `signedUrlTtlSeconds`), `StoragePolicies` con una constante por bucket y `ContentSignature`, cuya tabla es ahora
+    neutral (`keel-core/gen/content-signatures.js`, con su referencia ejecutable `contentMatches`). En
+    `infrastructure/storage`: `storage.yaml` —**idéntico clave a clave** al de keel-spring en los cuatro perfiles,
+    con MinIO y con S3—, su lector, las políticas desde la configuración, el módulo global y el stub `S3FileStorage`
+    que el módulo ya cablea (compila y arranca; cada método lanza su TODO). El mapper resuelve la URL de un bucket
+    público con `publicUrl`, como el de keel-spring (antes era un TODO).
+  - **La entrada multipart**: `@fastify/multipart` con el límite del servlet de keel-spring (el doble del mayor
+    `maxSizeMb`), `infrastructure/rest/multipart-reading.ts` (los campos como parámetros —repetidos, como lista—, el
+    binario como `FileUpload`, vacío = null) y el lector de cada subida en su controlador, que comprueba la parte en
+    SU posición, como Spring al resolver argumentos. Los errores del framework: 413 con el `code` del diseño
+    (`declaredErrorFor`), 400 `FILE_UNREADABLE` para un cuerpo roto o cortado (la lectura de las partes lanza
+    `ERR_STREAM_PREMATURE_CLOSE`, no un `FST_*`: medido) y el 400 sin `code` de la parte que falta. **Divergencia
+    anotada**: un cuerpo JSON en una subida es 415 en keel-nest; en keel-spring cae en el catch-all (500) —candidato
+    a corregir allí—.
+  - **El arnés**: `flow.upload(path, part, fields, headers)` (el `multipart(...)` del `AbstractFlowIT`) y, con MinIO,
+    `stopStorage()`/`startStorage()`. Skill `keel-nest-s3` (el cliente del SDK v3, subida, lectura, URL firmada con la
+    caducidad del diseño, aprovisionamiento tras `ensureBucketsOnStartup`, errores).
+  - **Medido**: `test/storage.test.js` EJECUTA la política y la firma (paridad con la tabla de keel-spring y la
+    referencia de keel-core), compara `storage.yaml` con el de keel-spring y corre la lectura multipart emitida sobre
+    **Fastify real** (campos, binario, vacío, parte que falta, 413 con un cuerpo de 50 MB + 1, cuerpo cortado, JSON);
+    falsado con seis sabotajes, cada uno cazado por su caso. `ts-check` 12/12: la prueba emitida de la API gana tres
+    casos de subida (lo primero que falta, el 415 y una subida completa que llega al handler) que corren contra Nest
+    sobre Fastify en `asset-vault` y `catalog-extended`. `keel-core/test/content-signatures.test.js`.
+  - Ni `asset-vault` ni `catalog-extended` entran aún en la frontera: falta la autoría (13h) y `needs` (13i).
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

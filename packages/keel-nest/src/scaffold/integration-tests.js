@@ -34,6 +34,7 @@ import { usesNestOutbox } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { cacheHarnessSection } from './cache.js';
+import { storageHarnessSection, usesMultipart } from './storage.js';
 
 /** Dónde escribe Vitest el XML JUnit de la suite de integración: lo lee score-scenarios.sh. */
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
@@ -132,6 +133,7 @@ function flowSupportTs(model) {
   const messaging = usesMessagingHarness(model);
   const stub = httpStubHarness.usesHttpStub(model);
   const replica = usesReplica(model);
+  const multipart = usesMultipart(model);
   return `/**
  * Base de las pruebas de flujo (\`test/integration/<flujo>.test.ts\`) que ejecutan los escenarios FL-*
  * de specs/validation-scenarios.md contra el servidor REAL —escuchando en un puerto libre, bajo el
@@ -224,8 +226,34 @@ export interface Flow {
   put(path: string, body?: unknown, headers?: Headers): Promise<Response>;
   patch(path: string, body?: unknown, headers?: Headers): Promise<Response>;
   delete(path: string, headers?: Headers): Promise<Response>;
-  exchange(method: string, path: string, body?: unknown, headers?: Headers): Promise<Response>;
+  exchange(method: string, path: string, body?: unknown, headers?: Headers): Promise<Response>;${multipart ? `
+  /**
+   * Una subida multipart/form-data (POST): el binario como la parte \`file.part\` y el resto de la entrada como
+   * campos del formulario (una lista, como el campo repetido). El mismo contrato que el \`multipart(...)\` del
+   * AbstractFlowIT de keel-spring.
+   */
+  upload(path: string, file: UploadPart, fields?: Readonly<Record<string, unknown>>, headers?: Headers): Promise<Response>;` : ''}
+}${multipart ? `
+
+/** La parte binaria de una subida: su nombre de parte, el del archivo, el tipo DECLARADO y los bytes. */
+export interface UploadPart {
+  readonly part: string;
+  readonly filename: string;
+  readonly contentType: string;
+  readonly content: Uint8Array | string;
 }
+
+/** El formulario de una subida, tal como lo manda un cliente. */
+function uploadForm(file: UploadPart, fields: Readonly<Record<string, unknown>>): FormData {
+  const form = new FormData();
+  for (const [name, value] of Object.entries(fields)) {
+    if (value === undefined || value === null) continue;
+    for (const item of Array.isArray(value) ? value : [value]) form.append(name, String(item));
+  }
+  const bytes = typeof file.content === 'string' ? new TextEncoder().encode(file.content) : file.content;
+  form.append(file.part, new Blob([new Uint8Array(bytes)], { type: file.contentType }), file.filename);
+  return form;
+}` : ''}
 
 // ── Evidencia ────────────────────────────────────────────────────────────────
 
@@ -347,7 +375,8 @@ export function useFlow(): Flow {
     put: (route, body, headers) => exchange('PUT', route, body, headers),
     patch: (route, body, headers) => exchange('PATCH', route, body, headers),
     delete: (route, headers) => exchange('DELETE', route, undefined, headers),
-    exchange
+    exchange${multipart ? `,
+    upload: (route, file, fields = {}, headers) => exchange('POST', route, uploadForm(file, fields), headers)` : ''}
   };
 }
 
@@ -370,19 +399,21 @@ ${replica ? replicaSection(model) : ''}/**
  */
 async function send(baseUrl: string, method: string, route: string, body?: unknown, headers: Headers = {}): Promise<Response> {
   if (!baseUrl) throw new Error('El servidor no está arrancado: useFlow() se llama dentro del describe del flujo.');
-  const payload = body === undefined ? null : typeof body === 'string' ? body : JSON.stringify(body);
+  // Un formulario (una subida) lo escribe fetch con su frontera; todo lo demás viaja como JSON.
+  const form = typeof FormData !== 'undefined' && body instanceof FormData ? body : null;
+  const payload = form ? null : body === undefined ? null : typeof body === 'string' ? body : JSON.stringify(body);
   const requestHeaders: Record<string, string> = { accept: 'application/json', ...headers };
   if (payload !== null && !Object.keys(requestHeaders).some((name) => name.toLowerCase() === 'content-type')) {
     requestHeaders['content-type'] = 'application/json';
   }
-  const response = await fetch(new URL(route, baseUrl), { method, headers: requestHeaders, body: payload });
+  const response = await fetch(new URL(route, baseUrl), { method, headers: requestHeaders, body: form ?? payload });
   const text = await response.text();
   const received: Record<string, string> = {};
   response.headers.forEach((value, name) => {
     received[name] = value;
   });
   lastExchange = {
-    request: { method, path: route, headers: requestHeaders, body: payload },
+    request: { method, path: route, headers: requestHeaders, body: form ? describeForm(form) : payload },
     response: { status: response.status, headers: received, body: text }
   };
   return {
@@ -393,6 +424,15 @@ async function send(baseUrl: string, method: string, route: string, body?: unkno
     json: () => parseJson(text, response.status, false),
     jsonExact: () => parseJson(text, response.status, true)
   };
+}
+
+/** Un formulario en la evidencia: los campos con su valor y las partes binarias por tamaño, nunca los bytes. */
+function describeForm(form: FormData): string {
+  const parts: string[] = [];
+  form.forEach((value, name) => {
+    parts.push(typeof value === 'string' ? \`\${name}=\${value}\` : \`\${name}=<\${value.size} bytes, \${value.type}>\`);
+  });
+  return \`multipart: \${parts.join('; ')}\`;
 }
 
 function parseJson(text: string, status: number, exact: boolean): any {
@@ -473,7 +513,7 @@ const DB_QUERY_ARGV: readonly string[] = ${JSON.stringify(probe.argv)};
 export function db(sql: string): string {
   return run(containerRuntime(), ['exec', DB_CONTAINER, ...DB_QUERY_ARGV, sql], '¿Está la base arriba (bash infra/up.sh)?');
 }
-${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}` : ''}${documentHarnessSection(model)}${identitySection(model)}${messagingHarnessSection(model)}${cacheHarnessSection(model)}
+${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}` : ''}${documentHarnessSection(model)}${identitySection(model)}${messagingHarnessSection(model)}${cacheHarnessSection(model)}${storageHarnessSection(model)}
 
 /** Espera hasta que \`condition\` se cumpla o se agote \`timeoutMs\`; lanza con \`message\` si no llega. */
 export async function eventually(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, message = 'la condición no se cumplió a tiempo'): Promise<void> {

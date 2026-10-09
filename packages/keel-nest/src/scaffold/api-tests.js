@@ -99,6 +99,26 @@ export function apiCases(model) {
       break;
     }
   }
+  // La subida: la primera operación multipart con una ruta concreta y campos de los que hay muestra segura.
+  for (const operation of (model.services ?? []).flatMap((service) => service.operations ?? []).filter((op) => op.route && op.multipart)) {
+    const url = concrete(model, operation);
+    if (!url) continue;
+    const fromPath = new Set((operation.pathParams ?? []).map((p) => p.name));
+    const components = messageComponents(model, operation).filter((c) => !fromPath.has(c.name) && !c.resolvedIdentity);
+    const file = components.find((c) => c.file && c.required);
+    if (!file) continue;
+    const fields = {};
+    let sampled = true;
+    for (const component of components.filter((c) => !c.file && c.required)) {
+      const value = sample(component);
+      if (value == null || hasRule(component, 'minLength') || hasRule(component, 'size')) sampled = false;
+      else fields[component.name] = value;
+    }
+    // El primer obligatorio, en el orden del mensaje: es el que el servidor echa en falta primero.
+    const first = components.find((c) => c.required);
+    cases.upload = { url, part: file.name, fields: sampled ? fields : null, firstMissing: first.file ? { part: first.name } : { parameter: first.name } };
+    break;
+  }
   return cases;
 }
 
@@ -158,6 +178,47 @@ function apiTest(model) {
     expectError(response, 405, 'Method Not Allowed', null, 'Método HTTP no soportado');
   });`);
   }
+  if (cases.upload) {
+    const { url, part, fields, firstMissing } = cases.upload;
+    const headers = secured ? '...CREDENTIAL, ' : '';
+    const expected = firstMissing.parameter
+      ? `expectError(response, 400, 'Bad Request', '${validation}', ${tsString(`Falta el parámetro '${firstMissing.parameter}' en la petición`)});`
+      : `expectError(response, 400, 'Bad Request', null, ${tsString(`Falta la parte '${firstMissing.part}' en la petición multipart`)});`;
+    tests.push(`  it('una subida vacía echa en falta lo primero que el mensaje pide, como keel-spring', async () => {
+    const form = multipart({});
+    const response = await app.inject({ method: 'POST', url: ${tsString(url)}, headers: { ${headers}...form.headers }, payload: form.payload });
+    ${expected}
+  });
+
+  it('un cuerpo JSON en una subida es 415', async () => {
+    const response = await app.inject({ method: 'POST', url: ${tsString(url)}, headers: { ${headers}'content-type': 'application/json' }, payload: '{}' });
+    expectError(response, 415, 'Unsupported Media Type', null, 'La operación espera multipart/form-data');
+  });`);
+    if (fields) {
+      tests.push(`  it('una subida completa llega a su handler: lee los campos y el binario', async () => {
+    const form = multipart(${JSON.stringify(fields)}, { part: ${tsString(part)}, filename: 'muestra.pdf', contentType: 'application/pdf', content: '%PDF-1.7 muestra' });
+    const response = await app.inject({ method: 'POST', url: ${tsString(url)}, headers: { ${headers}...form.headers }, payload: form.payload });
+    expect([400, 404, 405, 413, 415]).not.toContain(response.statusCode);
+  });`);
+    }
+  }
+  const multipartHelper = cases.upload
+    ? `
+
+/** Un cuerpo multipart/form-data escrito a mano: los campos y, si se pide, una parte binaria. */
+function multipart(fields: Record<string, string>, file?: { part: string; filename: string; contentType: string; content: string }): { payload: Buffer; headers: Record<string, string> } {
+  const boundary = 'keel-boundary-0192f1d2';
+  const chunks: string[] = [];
+  for (const [name, value] of Object.entries(fields)) {
+    chunks.push(\`--\${boundary}\\r\\nContent-Disposition: form-data; name="\${name}"\\r\\n\\r\\n\${value}\\r\\n\`);
+  }
+  if (file) {
+    chunks.push(\`--\${boundary}\\r\\nContent-Disposition: form-data; name="\${file.part}"; filename="\${file.filename}"\\r\\nContent-Type: \${file.contentType}\\r\\n\\r\\n\${file.content}\\r\\n\`);
+  }
+  chunks.push(\`--\${boundary}--\\r\\n\`);
+  return { payload: Buffer.from(chunks.join('')), headers: { 'content-type': \`multipart/form-data; boundary=\${boundary}\` } };
+}`
+    : '';
   return `import 'reflect-metadata';
 import { Test } from '@nestjs/testing';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -186,7 +247,7 @@ function expectError(response: Injected, status: number, error: string, code: st
   expect(parsed.message).toBe(message);
   expect(parsed.timestamp).toMatch(/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/);
   expect(parsed.correlationId).toBe(response.headers['x-correlation-id']);
-}
+}${multipartHelper}
 
 describe('API', () => {
   let app: NestFastifyApplication;

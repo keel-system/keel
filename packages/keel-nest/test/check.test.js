@@ -45,7 +45,7 @@ test('una capa fuera de la frontera sale en rojo sin construir nada', async () =
   const before = treeDigest(workspace);
   const { exitCode, output } = await runCommand(workspace, check, 'specs/asset-vault', {});
   assert.equal(exitCode, 1);
-  assert.match(output, /capa storage: keel-nest todavía no la genera/);
+  assert.match(output, /persistence.audit.authorship: all — keel-nest todavía no estampa/);
   assert.equal(treeDigest(workspace), before);
 });
 

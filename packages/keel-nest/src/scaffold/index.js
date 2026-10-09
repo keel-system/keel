@@ -43,6 +43,7 @@ import * as httpClients from './http-clients.js';
 import * as mail from './mail.js';
 import * as payments from './payments.js';
 import * as cache from './cache.js';
+import * as storage from './storage.js';
 import * as scheduling from './scheduling.js';
 import * as purge from './purge.js';
 import * as claim from './claim.js';
@@ -112,6 +113,9 @@ const GENERATORS = [
   // La caché de lectura (incremento 13f): el puerto, las cachés del diseño, sus lectores, el adaptador sobre
   // Redis/Valkey y qué vacía cada operación.
   cache,
+  // El almacenamiento de binarios (incremento 13g): el contrato (puerto, política con la firma del contenido,
+  // buckets), su configuración, el módulo con el stub del adaptador S3 y la lectura de la entrada multipart.
+  storage,
   // El reloj (incremento 10b): los schedulers de las operaciones con `schedule` y las purgas por lotes de las
   // tablas del generador.
   scheduling,
