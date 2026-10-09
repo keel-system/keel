@@ -1,203 +1,348 @@
 reviewedBy: keel-gap-sweep
-reviewedAt: 1.1.0
-
+reviewedAt: 1.2.0
 coverage:
   - class: 1
-    units: [Payment]
-    result: clean
+    units:
+      - Payment
+    result: findings
   - class: 2
-    units: [savePaymentMethod, requestCharge, capturePayment, cancelPayment, refundPayment, markAuthorized, markActionRequired, markCaptured, markFailed, markRefunded, markCanceled, sweepPendingPayments]
+    units:
+      - savePaymentMethod
+      - requestCharge
+      - capturePayment
+      - cancelPayment
+      - refundPayment
+      - markAuthorized
+      - markActionRequired
+      - markCaptured
+      - markFailed
+      - markRefunded
+      - markCanceled
+      - sweepPendingPayments
     result: findings
   - class: 3
-    units: [Payment, SavedPaymentMethod]
-    result: findings
+    units:
+      - Payment
+      - SavedPaymentMethod
+    result: clean
   - class: 4
-    units: [savePaymentMethod, requestCharge, capturePayment, cancelPayment, refundPayment, markAuthorized, markActionRequired, markCaptured, markFailed, markRefunded, markCanceled, sweepPendingPayments]
+    units:
+      - savePaymentMethod
+      - requestCharge
+      - capturePayment
+      - cancelPayment
+      - refundPayment
+      - markAuthorized
+      - markActionRequired
+      - markCaptured
+      - markFailed
+      - markRefunded
+      - markCanceled
+      - sweepPendingPayments
     result: findings
   - class: 5
-    units: [getPayment]
+    units:
+      - getPayment
     result: clean
   - class: 6
-    units: [Payment, SavedPaymentMethod]
+    units:
+      - Payment
+      - SavedPaymentMethod
     result: findings
   - class: 7
-    units: [publishing.PaymentAuthorized, publishing.PaymentActionRequired, publishing.PaymentCaptured, publishing.PaymentFailed, publishing.PaymentRefunded, publishing.PaymentCanceled, subscriptions.ChargeRequested]
+    units:
+      - publishing.PaymentAuthorized
+      - publishing.PaymentActionRequired
+      - publishing.PaymentCaptured
+      - publishing.PaymentFailed
+      - publishing.PaymentRefunded
+      - publishing.PaymentCanceled
+      - subscriptions.ChargeRequested
     result: findings
   - class: 8
-    units: [subscriptions.ChargeRequested]
-    result: findings
+    units:
+      - subscriptions.ChargeRequested
+    result: clean
   - class: 9
-    units: [savePaymentMethod, requestCharge, getPayment, capturePayment, cancelPayment, refundPayment, markAuthorized, markActionRequired, markCaptured, markFailed, markRefunded, markCanceled, sweepPendingPayments]
+    units:
+      - savePaymentMethod
+      - requestCharge
+      - getPayment
+      - capturePayment
+      - cancelPayment
+      - refundPayment
+      - markAuthorized
+      - markActionRequired
+      - markCaptured
+      - markFailed
+      - markRefunded
+      - markCanceled
+      - sweepPendingPayments
     result: clean
   - class: 11
-    units: [savePaymentMethod, requestCharge, getPayment, capturePayment, cancelPayment, refundPayment, serviceClients.orders-service]
-    result: clean
+    units:
+      - savePaymentMethod
+      - requestCharge
+      - getPayment
+      - capturePayment
+      - cancelPayment
+      - refundPayment
+      - serviceClients.orders-service
+    result: findings
   - class: 12
-    units: [service]
+    units:
+      - service
     result: clean
   - class: 13
-    units: [sweepPendingPayments]
+    units:
+      - sweepPendingPayments
     result: findings
   - class: 14
-    units: [Payment, SavedPaymentMethod]
+    units:
+      - Payment
+      - SavedPaymentMethod
     result: clean
   - class: 15
-    units: [savePaymentMethod, requestCharge, getPayment, capturePayment, cancelPayment, refundPayment, sweepPendingPayments]
+    units:
+      - savePaymentMethod
+      - requestCharge
+      - getPayment
+      - capturePayment
+      - cancelPayment
+      - refundPayment
+      - sweepPendingPayments
     result: clean
   - class: 16
-    units: ['3.1', '3.2', '3.3', '3.4', '3.5', '3.7', '3.9', '3.9b']
-    result: clean
-  - class: 18
-    units: [charge, capture, void, refund, savePaymentMethod]
+    units:
+      - "3.1"
+      - "3.2"
+      - "3.3"
+      - "3.4"
+      - "3.5"
+      - "3.7"
+      - "3.9"
+      - 3.9b
     result: findings
-
+  - class: 18
+    units:
+      - charge
+      - capture
+      - void
+      - refund
+      - savePaymentMethod
+    result: findings
 findings:
+  - class: 1
+    unit: Payment
+    what: "cancelPayment dice que, si la pasarela rechaza la anulación dando el cobro por capturado, se
+      aplica ese desenlace, pero el lifecycle no tiene la arista canceling → captured y markCaptured
+      solo parte de capturing: ese desenlace no tiene transición que ejecutar, y lo mismo le pasa al
+      barrido si encuentra capturado un cobro en canceling."
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: la rama «capturado» no puede ocurrir —solo este servicio captura, y
+      capturing impide anular—, y la rule de cancelPayment ya no la promete: solo la autorización
+      caducada lleva canceling a canceled (markCanceled, cancelReason expired). El «capturado» del
+      barrido es el de refunding → captured."
   - class: 2
     unit: capturePayment
-    what: >-
-      Solo dice qué pasa si la pasarela rechaza la captura porque la autorización caducó; si la
-      rechaza por cualquier otro motivo, no hay error declarado ni estado al que vuelva el cobro
-      (sale de capturing a authorized, a canceled, o se queda).
+    what: "La regla de la autorización caducada lleva el cobro de capturing a canceled (cancelReason
+      expired) y responde PAYMENT_NOT_CAPTURABLE, pero capturePayment no declara esa transición ni
+      dice si sale PaymentCanceled: no está dicho si pedidos se entera también por evento."
     severity: gap
     state: decided
-    reason: >-
-      Decidido en v1.1.0: si la pasarela rechaza la captura por otro motivo, el cobro vuelve a
-      authorized, con awaitingSince vacío, y se responde CAPTURE_REJECTED (422), simétrico con
-      REFUND_REJECTED (rule y transición capturing → authorized de capturePayment, FL-STL-001-B Then
-      4).
-  - class: 2
-    unit: cancelPayment
-    what: >-
-      No dice qué responde ni a qué estado vuelve el cobro si la pasarela rechaza la anulación (la
-      autorización ya caducó, o ya figura capturada en la pasarela): no hay un error de rechazo
-      como el REFUND_REJECTED de refundPayment.
-    severity: gap
-    state: decided
-    reason: >-
-      Decidido en v1.0.0 y vigente: la anulación pasa por canceling; si la pasarela no la hace, el
-      barrido devuelve el cobro a authorized (rule de sweepPendingPayments, FL-REC-002 Then 3), y un
-      cobro que ya no está autorizado responde PAYMENT_NOT_CANCELABLE.
-  - class: 3
-    unit: Payment
-    what: >-
-      awaitingSince se describe como «desde cuándo el cobro espera un desenlace» y sale en las
-      respuestas, pero el barrido lo vuelve a estampar al reclamar cada candidato, así que tras
-      una pasada ya no dice desde cuándo espera sino cuándo se consultó por última vez.
-    severity: risk
-    state: decided
-    reason: >-
-      Decidido en v1.1.0: awaitingSince significa desde cuándo el cobro espera SIN RESPUESTA, y lo
-      renueva cada consulta del barrido (description del campo en domain, docs/dsl/payments.md § El
-      registro). No dice cuándo empezó la espera, y no lo pretende.
+    reason: "Decidido en v1.2.0: la autorización caducada aplica markCanceled (transición capturing →
+      canceled, cancelReason expired), que publica PaymentCanceled como cualquier anulación; pedidos
+      se entera por la respuesta y por el evento."
   - class: 4
     unit: requestCharge
-    what: >-
-      No dice si puede haber más de un cobro vivo (no failed ni canceled) por orderId: la guarda del
-      doble cargo es solo chargeRequestId y orderId tiene un índice no único, así que dos
-      referencias distintas para el mismo pedido se cobran las dos.
+    what: "No dice si puede haber más de un cobro vivo (ni failed ni canceled) por orderId: la guarda es
+      solo chargeRequestId y orderId tiene un índice no único, así que dos referencias distintas
+      para el mismo pedido se cobran las dos."
     severity: gap
     state: accepted
-    reason: >-
-      Aceptado en v1.0.0 y vigente: puede haber varios cobros por pedido a propósito —tras un
-      failed, pedidos pide otro con otra referencia—. Qué cobro vale para un pedido es de pedidos
-      (DESIGN.md § 6, «Varios cobros por pedido»); este servicio garantiza una sola ejecución por
-      referencia.
+    reason: "Aceptado en v1.0.0 y vigente en v1.2.0: puede haber varios cobros por pedido a propósito
+      —tras un failed, pedidos pide otro con otra referencia—. Qué cobro vale para un pedido es de
+      pedidos (DESIGN.md § 6, «Varios cobros por pedido»); este servicio garantiza una sola
+      ejecución por referencia."
   - class: 4
     unit: savePaymentMethod
-    what: >-
-      Con la respuesta de la pasarela perdida (503) el medio puede haber quedado guardado en la
-      pasarela sin registro aquí, y reintentar con el mismo token —en general de un solo uso— lo
-      rechaza; el diseño no dice cómo recupera pedidos ese medio ni qué pasa con el huérfano.
+    what: "Con la respuesta de la pasarela perdida (GATEWAY_UNAVAILABLE) el medio puede haber quedado
+      guardado en la pasarela sin registro aquí, y el token suele ser de un solo uso: no dice cómo
+      recupera pedidos ese medio ni qué pasa con el huérfano."
     severity: risk
     state: accepted
-    reason: >-
-      Aceptado en v1.0.0 y vigente: un medio guardado en la pasarela sin registro propio no se puede
-      cobrar por este servicio (no hay id que lo nombre) y no tiene coste; pedidos pide otro token
-      al cliente y guarda otro medio.
+    reason: "Aceptado en v1.0.0 y vigente en v1.2.0: un medio guardado en la pasarela sin registro
+      propio no se puede cobrar por este servicio (no hay id que lo nombre) y no tiene coste;
+      pedidos pide otro token al cliente y guarda otro medio."
   - class: 6
     unit: SavedPaymentMethod
-    what: >-
-      No hay ninguna forma de retirar un medio guardado, ni aquí ni en la pasarela: el cliente que
-      quiere quitar su tarjeta, o un medio que ya no debe cobrarse, queda guardado y cobrable para
-      siempre con su gatewayReference sensible.
+    what: "No hay ninguna operación para retirar un medio guardado, ni aquí ni en la pasarela: un medio
+      que el cliente quiere quitar, o que ya no debe cobrarse, queda guardado y cobrable para
+      siempre con su gatewayReference sensible."
     severity: gap
     state: accepted
-    reason: >-
-      Aceptado en v1.0.0 y vigente: retirar un medio guardado queda fuera (DESIGN.md § 6, «Sin
-      retirar medios guardados en v1.x»). Solo pedidos puede cobrarlo y solo a nombre de su titular;
-      un medio caducado lo rechaza la pasarela. Entra con el caso de uso de baja de cliente.
+    reason: "Aceptado en v1.0.0 y vigente en v1.2.0: retirar un medio guardado queda fuera (DESIGN.md §
+      6, «Sin retirar medios guardados en v1.x»). Solo pedidos puede cobrarlo y solo a nombre de su
+      titular; un medio caducado lo rechaza la pasarela. Entra con el caso de uso de baja de
+      cliente."
   - class: 7
     unit: subscriptions.ChargeRequested
-    what: >-
-      La regla de rechazo por evento solo cubre el medio de pago; un ChargeRequested cuyo importe o
-      campos violan las cotas de requestCharge (más de dos decimales, importe menor de 0.01,
-      referencias de más de 64) no dice si se reintenta, va a la DLQ o sale como PaymentFailed, y
-      PaymentFailureReason no tiene motivo para ello.
+    what: "El rechazo por evento solo cubre el medio de pago: un ChargeRequested que viola las cotas de
+      requestCharge (más de dos decimales con scalePolicy reject, importe menor de 0.01, referencias
+      de más de 64) no dice si se reintenta, va a la DLQ o sale como PaymentFailed, y
+      PaymentFailureReason no tiene motivo para ello."
     severity: gap
     state: accepted
-    reason: >-
-      Aceptado en v1.1.0: un ChargeRequested que viola las cotas del contrato es un contrato roto
-      por el emisor, no un rechazo de negocio. Va a la cola de descarte sin reintento y lo vigila
-      operación, como el resto de fallos de la suscripción; por eso no hay failureReason que lo
-      nombre.
-  - class: 8
-    unit: subscriptions.ChargeRequested
-    what: >-
-      Dice que el cobro se registra en pending antes de llamar a la pasarela, pero no que ese
-      registro se confirme en su propia transacción: si la llamada va dentro de la transacción del
-      listener y algo falla después, el reintento deshace el pending y vuelve a cobrar, frenado solo
-      por la idempotencia de la pasarela, que caduca.
+    reason: "Aceptado en v1.1.0 y vigente en v1.2.0: un ChargeRequested que viola las cotas del contrato
+      es un contrato roto por el emisor, no un rechazo de negocio. Va a la cola de descarte sin
+      reintento y lo vigila operación, como el resto de fallos de la suscripción; por eso no hay
+      failureReason que lo nombre."
+  - class: 11
+    unit: getPayment
+    what: "Las respuestas a pedidos devuelven la entidad Payment entera, incluidos awaitingSince (el
+      reloj interno del barrido, que este re-estampa al reclamar) y el id interno: el contrato M2M
+      acopla a otro equipo a un mecanismo interno de la reconciliación sin que el diseño lo elija."
     severity: risk
-    state: decided
-    reason: >-
-      Decidido en v1.0.0 y vigente: el cobro se registra en pending ANTES de llamar a la pasarela
-      por las dos puertas (rule de requestCharge, docs/dsl/payments.md § El cobro), y el registro y
-      la llamada no comparten transacción: lo que la regla exige es que el pending exista cuando la
-      pasarela actúa.
+    state: accepted
+    reason: "Aceptado en v1.2.0: el único lector es pedidos, que lee awaitingSince para saber desde
+      cuándo un cobro espera sin respuesta (es su significado declarado), y el id no le sirve para
+      nada pero tampoco abre nada: no hay lectura por id. Recortar la respuesta es un cambio de
+      contrato que no pide nadie."
   - class: 13
     unit: sweepPendingPayments
-    what: >-
-      Un cobro que la pasarela sigue dando por en curso (actionRequired sin cliente, una devolución
-      pendiente) se deja para la siguiente pasada sin tope: se consulta cada 15 minutos
-      indefinidamente y nada avisa de que lleva días atascado.
+    what: "Un cobro que la pasarela sigue dando por en curso (actionRequired sin cliente, una devolución
+      pendiente) se deja para la siguiente pasada sin tope: se consulta indefinidamente y nada avisa
+      de que lleva días atascado."
     severity: risk
     state: accepted
-    reason: >-
-      Aceptado en v1.0.0 y vigente: el plazo lo pone la pasarela, que da por fallida una
-      autenticación que el cliente no completa; el barrido recoge ese desenlace. Un plazo propio más
-      corto cancelaría cobros que el cliente aún puede completar.
+    reason: "Aceptado en v1.0.0 y vigente en v1.2.0: el plazo lo pone la pasarela, que da por fallida
+      una autenticación que el cliente no completa; el barrido recoge ese desenlace. Un plazo propio
+      más corto cancelaría cobros que el cliente aún puede completar."
+  - class: 16
+    unit: "3.1"
+    what: La fiabilidad del outbox está registrada en structural con since 1.1.0; el diseño va por la
+      1.2.0 y no se ha vuelto a preguntar.
+    severity: gap
+    state: decided
+    reason: "Reafirmado en v1.2.0: decisions.yaml → structural lleva since 1.2.0 en todas las entradas,
+      y la de 3.5 describe el onFailure de ahora, acknowledgeOn incluido. Los onRejected de 3.2 son
+      una decisión de la capa payments, no de idempotencia: la guarda sigue siendo la misma."
+  - class: 16
+    unit: "3.2"
+    what: La política de idempotencia está registrada con since 1.1.0; la 1.2.0 añadió acknowledgeOn y
+      los onRejected de las acciones de seguimiento, que el registro no menciona, y no se ha vuelto
+      a preguntar.
+    severity: gap
+    state: decided
+    reason: "Reafirmado en v1.2.0: decisions.yaml → structural lleva since 1.2.0 en todas las entradas,
+      y la de 3.5 describe el onFailure de ahora, acknowledgeOn incluido. Los onRejected de 3.2 son
+      una decisión de la capa payments, no de idempotencia: la guarda sigue siendo la misma."
+  - class: 16
+    unit: "3.3"
+    what: La decisión de no cachear getPayment está registrada con since 1.1.0 y no se ha reafirmado
+      para la 1.2.0.
+    severity: gap
+    state: decided
+    reason: "Reafirmado en v1.2.0: decisions.yaml → structural lleva since 1.2.0 en todas las entradas,
+      y la de 3.5 describe el onFailure de ahora, acknowledgeOn incluido. Los onRejected de 3.2 son
+      una decisión de la capa payments, no de idempotencia: la guarda sigue siendo la misma."
+  - class: 16
+    unit: "3.4"
+    what: La superficie solo-services está registrada con since 1.1.0 y no se ha reafirmado para la
+      1.2.0.
+    severity: gap
+    state: decided
+    reason: "Reafirmado en v1.2.0: decisions.yaml → structural lleva since 1.2.0 en todas las entradas,
+      y la de 3.5 describe el onFailure de ahora, acknowledgeOn incluido. Los onRejected de 3.2 son
+      una decisión de la capa payments, no de idempotencia: la guarda sigue siendo la misma."
+  - class: 16
+    unit: "3.5"
+    what: "La política de fallo de ChargeRequested está registrada con since 1.1.0 como retry +
+      deadLetter; la 1.2.0 le añadió acknowledgeOn [CHARGE_ALREADY_REQUESTED], que el registro no
+      recoge: la entrada no describe el onFailure de ahora."
+    severity: gap
+    state: decided
+    reason: "Reafirmado en v1.2.0: decisions.yaml → structural lleva since 1.2.0 en todas las entradas,
+      y la de 3.5 describe el onFailure de ahora, acknowledgeOn incluido. Los onRejected de 3.2 son
+      una decisión de la capa payments, no de idempotencia: la guarda sigue siendo la misma."
+  - class: 16
+    unit: "3.7"
+    what: La frontera transaccional per-aggregate está registrada con since 1.1.0 y no se ha reafirmado
+      para la 1.2.0.
+    severity: gap
+    state: decided
+    reason: "Reafirmado en v1.2.0: decisions.yaml → structural lleva since 1.2.0 en todas las entradas,
+      y la de 3.5 describe el onFailure de ahora, acknowledgeOn incluido. Los onRejected de 3.2 son
+      una decisión de la capa payments, no de idempotencia: la guarda sigue siendo la misma."
+  - class: 16
+    unit: "3.9"
+    what: El optimisticLocking all está registrado con since 1.1.0 y no se ha reafirmado para la 1.2.0.
+    severity: gap
+    state: decided
+    reason: "Reafirmado en v1.2.0: decisions.yaml → structural lleva since 1.2.0 en todas las entradas,
+      y la de 3.5 describe el onFailure de ahora, acknowledgeOn incluido. Los onRejected de 3.2 son
+      una decisión de la capa payments, no de idempotencia: la guarda sigue siendo la misma."
+  - class: 16
+    unit: 3.9b
+    what: Las políticas audit.timestamps (all) y audit.authorship (none) están registradas con since
+      1.1.0 y no se han reafirmado para la 1.2.0.
+    severity: gap
+    state: decided
+    reason: "Reafirmado en v1.2.0: decisions.yaml → structural lleva since 1.2.0 en todas las entradas,
+      y la de 3.5 describe el onFailure de ahora, acknowledgeOn incluido. Los onRejected de 3.2 son
+      una decisión de la capa payments, no de idempotencia: la guarda sigue siendo la misma."
   - class: 18
     unit: charge
-    what: >-
-      No dice cuánto espera el servicio a que el cliente se autentique (actionRequired) ni quién
-      cancela el cobro si no vuelve: lo delega en que «la pasarela acaba dándolo por fallido», que
-      no hacen todas las pasarelas ni en el mismo plazo, y el lifecycle no tiene salida de
-      actionRequired a canceled.
+    what: "No dice cuánto espera el servicio a que el cliente se autentique ni quién cancela el cobro si
+      no vuelve: el lifecycle no tiene salida de actionRequired (ni de pending) a canceled y
+      cancelPayment exige authorized, así que pedidos no puede retirar un cobro en actionRequired de
+      un pedido abandonado."
     severity: gap
     state: accepted
-    reason: >-
-      Aceptado en v1.0.0 y vigente: el plazo de la autenticación lo pone la pasarela, que da por
-      fallido el cobro que el cliente no completa, y el barrido recoge ese desenlace. Un plazo
-      propio más corto cancelaría cobros que el cliente aún puede completar.
+    reason: "Aceptado en v1.0.0 y vigente en v1.2.0: el plazo de la autenticación lo pone la pasarela,
+      que da por fallido el cobro que el cliente no completa, y el barrido recoge ese desenlace. Un
+      plazo propio más corto cancelaría cobros que el cliente aún puede completar."
   - class: 18
     unit: charge
-    what: >-
-      El cobro no guarda la moneda ni la llevan los eventos: un cambio del parámetro currency entre
-      despliegues deja capturas, devoluciones y desenlaces de cobros anteriores sin decir en qué
-      moneda estaban.
+    what: "El parámetro currency admite cualquier código de tres letras, aunque su descripción pide solo
+      monedas de dos decimales: con una moneda de 0 o 3 decimales la escala 2 de todos los importes
+      deja de ser la de la pasarela, y nada lo impide ni declara qué pasa."
     severity: risk
     state: accepted
-    reason: >-
-      Aceptado en v1.1.0: la moneda es única por despliegue (service.parameters.currency) y
-      cambiarla es una migración de datos fuera del servicio, no un cambio de configuración.
+    reason: "Aceptado en v1.2.0: la moneda la elige quien despliega, y la descripción del parámetro dice
+      que solo valen monedas de dos decimales. Las unidades menores de cada moneda las conoce el
+      generador (la tabla de keel-core), así que el importe a la pasarela sale bien; lo que
+      cambiaría es la escala de los importes del contrato, y eso es otra versión del diseño."
+  - class: 18
+    unit: charge
+    what: "El cobro no guarda la moneda ni la llevan los eventos: un cambio del parámetro currency entre
+      despliegues deja capturas, devoluciones y desenlaces de cobros anteriores sin decir en qué
+      moneda estaban."
+    severity: risk
+    state: accepted
+    reason: "Aceptado en v1.1.0 y vigente en v1.2.0: la moneda es única por despliegue
+      (service.parameters.currency) y cambiarla es una migración de datos fuera del servicio, no un
+      cambio de configuración."
+  - class: 18
+    unit: charge
+    what: "Por la suscripción, un mensaje con un chargeRequestId que ya tiene cobro se da por atendido
+      aunque su orderId, payerId o amount sean otros: no dice si una referencia reutilizada con otro
+      contenido es un duplicado o un error de pedidos, que entonces no recibe desenlace ni
+      descarte."
+    severity: risk
+    state: accepted
+    reason: "Aceptado en v1.2.0: la referencia es de pedidos y reutilizarla con otro contenido es un
+      error de pedidos, no de este servicio. El cobro de esa referencia ya existe y tiene su
+      desenlace; el mensaje nuevo se confirma como duplicado (acknowledgeOn), igual que por HTTP
+      responde CHARGE_ALREADY_REQUESTED."
   - class: 18
     unit: refund
-    what: >-
-      No dice qué pasa con una devolución, captura o anulación hecha directamente en la pasarela
+    what: "No dice qué pasa con una devolución, captura o anulación hecha directamente en la pasarela
       (fuera del servicio): su aviso no tiene transición desde el estado del cobro, el desenlace es
-      un no-op y el registro y pedidos se quedan creyendo lo contrario.
+      un no-op y el registro y pedidos se quedan creyendo lo contrario."
     severity: risk
     state: accepted
-    reason: >-
-      Aceptado en v1.1.0: el servicio es el único que actúa sobre la pasarela; operar desde su panel
-      (devolver, capturar o anular a mano) queda fuera de alcance y no se reconcilia.
+    reason: "Aceptado en v1.1.0 y vigente en v1.2.0: el servicio es el único que actúa sobre la
+      pasarela; operar desde su panel (devolver, capturar o anular a mano) queda fuera de alcance y
+      no se reconcilia."

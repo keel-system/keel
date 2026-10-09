@@ -74,3 +74,6 @@ subscriptions:
     onFailure:
       retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 1000, maxDelayMs: 30000 }
       deadLetter: true
+      # Un mensaje distinto con una referencia que ya tiene cobro es un duplicado ya resuelto: se
+      # confirma sin efecto, en vez de ir al descarte (v1.2.0).
+      acknowledgeOn: [CHARGE_ALREADY_REQUESTED]

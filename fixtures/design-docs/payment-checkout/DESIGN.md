@@ -1,6 +1,6 @@
 # payment-checkout — Documento de diseño
 
-> specs/payment-checkout v1.1.0. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
+> specs/payment-checkout v1.2.0. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
 
 ## 1. Propósito y alcance
 
@@ -116,6 +116,15 @@ JSON: es opaca, pero no se escapa.
 - **Un rechazo por evento es un cobro fallido**: quien pide por evento se entera por evento. El
   cobro nace sin el medio que se rechazó: el invariante de titularidad manda sobre la anotación
   (v1.1.0, designGap `failed-saved-method` de las dos corridas de 2026-10-02).
+- **Cuando la pasarela contesta que NO, el cobro vuelve y se dice**: una captura, una anulación o una
+  devolución que la pasarela rechaza deja el cobro en el estado del que salió y responde su error
+  (`CAPTURE_REJECTED`, `CANCEL_REJECTED`, `REFUND_REJECTED`), en vez de dejarlo en vuelo para el
+  barrido: quien la pidió se entera en la respuesta. La anulación lo hacía distinto hasta la v1.2.0
+  —se quedaba en `canceling`— y las dos corridas de cada generador del 2026-10-09 la resolvieron cada
+  una a su manera.
+- **Una referencia repetida por evento es un duplicado, no un fallo**: un `ChargeRequested` distinto
+  con un `chargeRequestId` que ya tiene cobro se confirma sin efecto (`acknowledgeOn`), en vez de ir a
+  la DLQ. La DLQ es para lo que alguien tiene que mirar (v1.2.0).
 - **Varios cobros por pedido**: tras un fallo, pedidos pide otro con otra referencia. Qué cobro vale
   para un pedido es de pedidos.
 - **Moneda única de dos decimales**, como parámetro de despliegue: no es elección del cliente.

@@ -24,10 +24,12 @@ charge:
     token: paymentToken
     saved: paymentMethodRef
 
-# Cada acción de seguimiento deja el cobro en su estado en vuelo antes de llamar a la pasarela.
-capture: { operation: capturePayment, inFlight: capturing }
-void: { operation: cancelPayment, inFlight: canceling }
-refund: { operation: refundPayment, amount: amount, inFlight: refunding }
+# Cada acción de seguimiento deja el cobro en su estado en vuelo antes de llamar a la pasarela, y si
+# la pasarela contesta que NO, vuelve al estado de origen y responde su error (v1.2.0: las corridas
+# del 2026-10-09 lo resolvieron de dos formas distintas, una por generador).
+capture: { operation: capturePayment, inFlight: capturing, onRejected: { error: CAPTURE_REJECTED } }
+void: { operation: cancelPayment, inFlight: canceling, onRejected: { error: CANCEL_REJECTED } }
+refund: { operation: refundPayment, amount: amount, inFlight: refunding, onRejected: { error: REFUND_REJECTED } }
 savePaymentMethod:
   operation: savePaymentMethod
   token: paymentToken

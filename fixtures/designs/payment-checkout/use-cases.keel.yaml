@@ -69,6 +69,11 @@ operations:
         o de otro titular registra el cobro en pending, sin anotar el medio, y le aplica markFailed
         con failureReason invalidPaymentMethod, sin llamar a la pasarela: sale PaymentFailed, como
         de cualquier otro fallo. Así quien lo pidió por evento se entera por evento.
+      - >-
+        Por la suscripción, un mensaje distinto con un chargeRequestId que ya tiene cobro es un
+        duplicado ya resuelto: no hay segundo cobro ni desenlace, y el mensaje se da por atendido
+        (onFailure.acknowledgeOn de ChargeRequested), sin reintento ni descarte. Por HTTP, la misma
+        referencia otra vez responde CHARGE_ALREADY_REQUESTED.
     errors:
       - code: PAYMENT_SOURCE_INVALID
         when: No llega ningún medio de pago, o llegan los dos.
@@ -108,8 +113,9 @@ operations:
         el acto, la respuesta lleva el cobro en captured; si no contesta, en capturing, y lo resuelve
         el barrido.
       - >-
-        Si la pasarela rechaza la captura porque la autorización caducó, el cobro pasa a canceled
-        (cancelReason expired) y se responde PAYMENT_NOT_CAPTURABLE.
+        Si la pasarela rechaza la captura porque la autorización caducó, el cobro ya está anulado: se
+        aplica markCanceled (cancelReason expired), que lo saca de capturing y publica
+        PaymentCanceled, y se responde PAYMENT_NOT_CAPTURABLE.
       - >-
         Si la rechaza por cualquier otro motivo, el cobro vuelve a authorized, con awaitingSince
         vacío, y se responde CAPTURE_REJECTED.
@@ -144,6 +150,12 @@ operations:
         El cobro pasa a canceling, con awaitingSince, antes de llamar a la pasarela. Si confirma en
         el acto, la respuesta lleva el cobro en canceled (cancelReason requested); si no contesta,
         en canceling, y lo resuelve el barrido.
+      - >-
+        Si la pasarela rechaza la anulación, el cobro vuelve a authorized, con awaitingSince vacío,
+        y se responde CANCEL_REJECTED, como la captura y la devolución rechazadas. Si al rechazarla
+        la pasarela da la autorización por caducada, el cobro ya está anulado: se aplica markCanceled
+        (cancelReason expired) en vez de volver. No puede darlo por capturado: solo este servicio
+        captura, y capturing impide anular.
     errors:
       - code: PAYMENT_NOT_FOUND
         when: No hay cobro con esa referencia.
@@ -151,11 +163,15 @@ operations:
       - code: PAYMENT_NOT_CANCELABLE
         when: El cobro no está autorizado, o hay otra acción en curso.
         http: 409
+      - code: CANCEL_REJECTED
+        when: La pasarela rechaza la anulación.
+        http: 422
       - code: CONCURRENT_MODIFICATION
         when: Otro desenlace modificó el cobro a la vez.
         http: 409
     transitions:
       - { entity: Payment, from: [authorized], to: canceling }
+      - { entity: Payment, from: [canceling], to: authorized, description: La pasarela rechazó la anulación. }
 
   refundPayment:
     description: Devuelve todo o parte de lo capturado.

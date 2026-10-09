@@ -1,7 +1,7 @@
 # payment-checkout — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/payment-checkout v1.1.0. Contrato de validación para la fase de generación.
+> specs/payment-checkout v1.2.0. Contrato de validación para la fase de generación.
 
 > **Un único diseño, cualquier pasarela.** Estos escenarios no nombran ninguna pasarela y tienen
 > que pasar igual con todas las del menú de build. Hablan de la **pasarela de prueba**: el doble
@@ -13,7 +13,7 @@
 - **Formato temporal**: instante en UTC ISO-8601 con milisegundos (`2026-01-15T10:30:00.000Z`).
   `requestedAt`, `awaitingSince` y el `occurredAt` de los eventos se verifican **por forma**, nunca
   por valor.
-- **Identificadores**: `uuid` v4 canónico, verificados por forma y por reutilización simbólica
+- **Identificadores**: `uuid` canónico (cadena en minúsculas, sin fijar la versión), verificados por forma y por reutilización simbólica
   dentro del flujo (`<m1>`…): el id que devuelve un escenario es el que usa el siguiente. Los
   `chargeRequestId` los elige el escenario (`ch-001`…), igual que los elige pedidos, y se comparan
   **exactos**: `CH-001` y `ch-001` son referencias distintas.
@@ -38,8 +38,11 @@
   salvo que el `Given` diga otra cosa. El `payerId` de prueba es `cli-1`, y `cli-2` es otro pagador.
 - **Canales**: `paymentEvents` es por donde salen los desenlaces; `chargeRequests`, por donde
   pedidos pide cobros con la envoltura Keel.
-- **La pasarela de prueba**: autoriza, captura, anula y devuelve por defecto, y contesta en el acto.
-  El arnés puede pedirle, antes del `When`, que **rechace** la siguiente operación (con un motivo),
+- **La pasarela de prueba**: **no contesta nada por defecto**. Cada `Given` programa lo que contesta
+  para su referencia —que autorice, cobre, capture, anule o devuelva en el acto, o que guarde un
+  medio de pago—, y una referencia
+  sin programar no tiene cobro en la pasarela. El arnés también puede pedirle, antes del `When`,
+  que **rechace** la siguiente operación (con un motivo),
   que **exija autenticación**, que **no conteste** (registrando o no lo que recibió), o que **avise**
   de un desenlace de un cobro que ya conoce. Un aviso de la pasarela va firmado como lo firma ella;
   el servidor nunca toma el desenlace de su contenido: se lo pregunta.
@@ -81,7 +84,8 @@ La misma matriz leída por **mecanismo**:
 
 ### FL-MTH-001: se guarda un medio de pago
 
-**Given**: un token válido de la pasarela de prueba para `cli-1`.
+**Given**: un token válido de la pasarela de prueba para `cli-1`, y la pasarela de prueba programada para
+guardar el medio.
 
 **When**: `savePaymentMethod` con `{payerId: "cli-1", paymentToken: <token>}`.
 
@@ -102,7 +106,8 @@ La misma matriz leída por **mecanismo**:
 
 ### FL-CHG-001: un cobro con el cliente presente se autoriza
 
-**Given**: un token válido de la pasarela de prueba.
+**Given**: un token válido de la pasarela de prueba, y la pasarela de prueba programada para autorizar
+`ch-001` en el acto.
 
 **When**: `requestCharge` con `{chargeRequestId: "ch-001", orderId: "ped-1", payerId: "cli-1",
 amount: 25.90, paymentToken: <token>}`.
@@ -116,7 +121,8 @@ amount: 25.90, paymentToken: <token>}`.
    orderId: "ped-1", amount: 25.90, occurredAt}`.
 
 **Notas de determinación**: el cobro nace en `pending` y la respuesta llega ya con el desenlace
-porque la pasarela de prueba contesta en el acto; FL-REC-001 es el caso en que no.
+porque el `Given` programa a la pasarela de prueba para contestar en el acto; FL-REC-001 es el caso
+en que no.
 
 #### FL-CHG-001-B: la pasarela rechaza el cobro
 
@@ -183,7 +189,8 @@ porque la pasarela de prueba contesta en el acto; FL-REC-001 es el caso en que n
 
 ### FL-EVT-001: pedidos pide un cobro sin el cliente delante
 
-**Given**: un medio guardado `<m1>` de `cli-1`.
+**Given**: un medio guardado `<m1>` de `cli-1`, y la pasarela de prueba programada para autorizar
+`ch-010` en el acto.
 
 **When**: llega `ChargeRequested` por `chargeRequests` con `{chargeRequestId: "ch-010", orderId:
 "ped-10", payerId: "cli-1", amount: 40.00, paymentMethodRef: <m1>}`.
@@ -210,6 +217,8 @@ mensaje distinto con el mismo `chargeRequestId`.
 **Then**:
 1. La pasarela de prueba sigue teniendo **un** cobro para `ch-010`: no hay segundo efecto.
 2. `paymentEvents` no recibe ningún desenlace más para `ch-010`.
+3. El mensaje distinto se da por **atendido**: no llega al descarte de `chargeRequests`. Es un
+   duplicado ya resuelto, no un fallo que alguien tenga que mirar.
 
 ### FL-EVT-002: un cobro sin cliente que exige autenticación
 
@@ -243,7 +252,8 @@ al cliente, y si nunca vuelve, la pasarela acaba dando el cobro por fallido y el
 
 ### FL-STL-001: se captura un cobro autorizado
 
-**Given**: el cobro `ch-001` autorizado (FL-CHG-001).
+**Given**: el cobro `ch-001` autorizado (FL-CHG-001), y la pasarela de prueba programada para capturarlo
+en el acto.
 
 **When**: `capturePayment` sobre `ch-001`.
 
@@ -271,7 +281,7 @@ prueba rechaza.
 
 ### FL-STL-002: se anula una autorización
 
-**Given**: un cobro `ch-021` autorizado.
+**Given**: un cobro `ch-021` autorizado, y la pasarela de prueba programada para anularlo en el acto.
 
 **When**: `cancelPayment` sobre `ch-021`.
 
@@ -283,17 +293,22 @@ prueba rechaza.
 
 #### FL-STL-002-B: lo que no se puede anular
 
-**Given**: el cobro `ch-021` ya anulado.
+**Given**: el cobro `ch-021` ya anulado, y un cobro `ch-029` autorizado cuya anulación la pasarela
+de prueba rechaza.
 
-**When**: `cancelPayment` sobre `ch-021` y sobre `ch-999`.
+**When**: `cancelPayment` sobre `ch-021`, sobre `ch-999` y sobre `ch-029`.
 
 **Then**:
 1. `ch-021`: status `409` con `PAYMENT_NOT_CANCELABLE`.
 2. `ch-999`: status `404` con `PAYMENT_NOT_FOUND`.
+3. `ch-029`: status `422` con `CANCEL_REJECTED`, y `getPayment` lo vuelve a dar en `authorized`
+   con `awaitingSince: null`, sin esperar al barrido: como la captura y la devolución rechazadas.
+   `paymentEvents` no recibe ningún desenlace más para `ch-029` tras el `cancelPayment`.
 
 ### FL-STL-003: una devolución parcial
 
-**Given**: el cobro `ch-001` capturado por 25.90 (FL-STL-001).
+**Given**: el cobro `ch-001` capturado por 25.90 (FL-STL-001), y la pasarela de prueba programada para
+confirmar en el acto una devolución de 10.00.
 
 **When**: `refundPayment` sobre `ch-001` con `amount: 10.00`.
 
@@ -313,7 +328,7 @@ capturado cuya devolución la pasarela de prueba rechaza, y un cobro `ch-025` au
 
 **Then**:
 1. `ch-001`: status `409` con `PAYMENT_NOT_REFUNDABLE` — una sola devolución por cobro.
-2. `ch-023`: status `422` con `REFUND_EXCEEDS_CAPTURED`, y la pasarela no ha recibido nada.
+2. `ch-023`: status `422` con `REFUND_EXCEEDS_CAPTURED`, y la pasarela no ha recibido ninguna devolución para él.
 3. `ch-024`: status `422` con `REFUND_REJECTED`, y `getPayment` lo vuelve a dar en `captured`
    con `awaitingSince: null`.
 4. `ch-025`: status `409` con `PAYMENT_NOT_REFUNDABLE` — no está capturado.
@@ -326,7 +341,8 @@ capturado cuya devolución la pasarela de prueba rechaza, y un cobro `ch-025` au
 **When**: la pasarela de prueba avisa de que la autorización de `ch-026` caducó.
 
 **Then**:
-1. En ≤ 10 s `getPayment` sobre `ch-026` responde `status: "canceled"` y `cancelReason: "expired"`.
+1. El servidor responde al aviso con `200`, y en ≤ 10 s `getPayment` sobre `ch-026` responde
+   `status: "canceled"` y `cancelReason: "expired"`.
 2. `paymentEvents` recibe **exactamente un** `PaymentCanceled` para `ch-026`, con
    `cancelReason: "expired"`.
 
@@ -338,7 +354,8 @@ capturado cuya devolución la pasarela de prueba rechaza, y un cobro `ch-025` au
 
 #### FL-STL-004-B: dos acciones sobre el mismo cobro a la vez
 
-**Given**: un cobro `ch-028` autorizado.
+**Given**: un cobro `ch-028` autorizado, y la pasarela de prueba programada para confirmar en el acto
+tanto su captura como su anulación.
 
 **When**: a la vez, `capturePayment` y `cancelPayment` sobre `ch-028`.
 
@@ -399,10 +416,11 @@ siguiente captura, pero haciéndola.
 
 #### FL-REC-002-B: lo que acaba de entrar en vuelo no se toca
 
-**Given**: el barrido **detenido** desde antes de que `ch-034` entrara en `capturing`, así que ningún
-ciclo lo ha consultado todavía; `ch-034` lleva en `capturing` más del umbral, y un cobro `ch-035`
-entró en `capturing` hace segundos, los dos sin respuesta de la pasarela de prueba. Se reanuda el
-barrido.
+**Given**: dos cobros `ch-034` y `ch-035` en `capturing`, los dos sin respuesta de la pasarela de
+prueba. `ch-034` lleva esperando más del umbral (su `awaitingSince` es rancio: el arnés lo
+envejece) y `ch-035` acaba de entrar en vuelo (el arnés retiene su `awaitingSince` en el futuro,
+porque con el umbral de prueba en segundos y el barrido cada 5 minutos, cuando llegue el ciclo
+también estaría rancio).
 
 **When**: corre un ciclo de `sweepPendingPayments`.
 
@@ -416,7 +434,8 @@ barrido.
 transacción.
 
 **Given**: dos réplicas del servicio vivas contra el mismo almacén, y cinco cobros `ch-040` …
-`ch-044` en `pending` que la pasarela de prueba registró sin contestar.
+`ch-044` en `pending` que la pasarela de prueba registró sin contestar, y que al consultarlos los da
+por autorizados.
 
 **When**: pasa el umbral y corren dos ciclos del barrido en las dos réplicas.
 
@@ -429,7 +448,8 @@ transacción.
 
 ### FL-OBX-001: el desenlace sobrevive a un canal indisponible
 
-**Given**: el canal `paymentEvents` sin mensajes y el canal de eventos **indisponible**.
+**Given**: el canal `paymentEvents` sin mensajes, el canal de eventos **indisponible**, y la pasarela de
+prueba programada para autorizar `ch-050` en el acto.
 
 **When**: `requestCharge` con `chargeRequestId: "ch-050"` y un token.
 
