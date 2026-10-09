@@ -1700,6 +1700,19 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     FL-REC-002-B en términos de `holdFromReconciliation` y la convención de una pasarela de prueba que «contesta por
     defecto», que no da ningún arnés. **Con esto el tramo de pagos del incremento 13 queda cerrado**; quedan cache,
     storage, la autoría y `needs` (13f en adelante).
+- **13e′ — la minor que cierra las dos divergencias (DSL 2.20, `payment-checkout` v1.2.0)**: dos campos nuevos, cada
+  uno con su obligación sin default seguro. `onRejected` en `capture`/`void`/`refund` de la capa `payments`
+  (`{error: <code>}` = el cobro vuelve al estado del que salió y la operación responde ese error; `reconcile` = se
+  queda en vuelo y lo resuelve el barrido) con `OBL-PAYMENTS-FOLLOWUP-REJECTED` (`waivable: false`) y
+  `CHK-PAYMENTS-REJECTED-ERROR-UNKNOWN`; y `onFailure.acknowledgeOn` en una suscripción (los `code` de la operación
+  que confirman el mensaje sin efecto, sin reintento ni descarte) con `OBL-PAYMENTS-REFERENCE-REUSED` cuando la
+  suscripción dispara el cobro y `CHK-MSG-ACK-CODE-UNKNOWN`. Los dos generadores lo leen del modelo
+  (`followUp().onRejected`/`origin`, `subscription.acknowledgeOn`) y escriben la MISMA nota neutral para el agente
+  (`keel-core/gen/rejection-notes.js`). La fixture decide `{error}` en las tres acciones (la anulación cambia respecto
+  a la v1.0.0: vuelve a `authorized` con `CANCEL_REJECTED`) y `acknowledgeOn: [CHARGE_ALREADY_REQUESTED]`, con
+  FL-STL-002-B y el Then 3 de FL-EVT-001-B que lo miden; la convención de la pasarela de prueba pasa a «no contesta
+  nada por defecto» y cada `Given` programa su respuesta (lo que el arnés realmente da). Revisión, barrido de huecos y
+  careo hechos por los tres agentes de contexto limpio sobre la v1.2.0.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 
