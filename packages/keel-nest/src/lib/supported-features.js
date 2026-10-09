@@ -61,18 +61,8 @@ export function checkSupportedFeatures(manifest, layers) {
       );
     }
   }
-  // La persistencia DOCUMENTAL (incremento 12) se genera entera: documentos, índices, transacción y los
-  // almacenes del generador (outbox, mensajes procesados, registro de idempotencia y reclamos).
-  //
-  // La auditoría de AUTORÍA por política (`created_by`/`updated_by` sin que el dominio los nombre) necesita
-  // saber quién llama al guardar, y ninguno de los dos adaptadores lo estampa todavía: la columna saldría
-  // vacía (en relacional, NOT NULL: la escritura fallaría). Solo la declara asset-vault.
-  if (declared.includes('persistence') && layers?.persistence?.audit?.authorship === 'all') {
-    errors.push(
-      'persistence.audit.authorship: all — keel-nest todavía no estampa quién crea y modifica cada agregado (llega en el incremento 13h de PLAN-KEEL-NEST.md: solo la declara asset-vault). ' +
-        "Genera este diseño con keel-spring, o declara la autoría en el dominio (authorship: declared)."
-    );
-  }
+  // La persistencia (relacional y documental) se genera entera, también la auditoría de autoría por política o
+  // declarada (incremento 13h).
   // La mensajería (incremento 9) se genera sobre la persistencia RELACIONAL: el outbox y el registro de
   // mensajes procesados se confirman en la misma transacción que el efecto, y los listeners se cablean
   // con ella. Un servicio de solo mensajería no tendría dónde.

@@ -21,6 +21,7 @@ import { domainMembers } from './entities.js';
 import { adapterClaimMethods, adapterGuardMethods, claimDependencies, portClaimMethods, portGuardMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { renderDocumentAdapter } from './document-repositories.js';
+import { AUDIT_ACTOR_TS } from './audit-actor.js';
 import {
   usesPersistence,
   usesDocument,
@@ -489,10 +490,12 @@ function saveMethod(model, entity, imports) {
   const idName = entity.idField?.name ?? 'id';
   const audits = auditStamps(model, entity);
   const lines = [`      const orm = toOrm${entity.name}(entity);`];
-  if (audits.length > 0) {
-    lines.push('      const now = new Date();');
-    lines.push(...audits.map((line) => `      ${line}`));
+  if (audits.some((line) => line.includes('now;'))) lines.push('      const now = new Date();');
+  if (audits.some((line) => line.includes('actor;'))) {
+    imports.push({ symbol: 'currentActor', from: AUDIT_ACTOR_TS });
+    lines.push('      const actor = currentActor();');
   }
+  lines.push(...audits.map((line) => `      ${line}`));
   if (versioned) {
     imports.push({ symbol: 'OptimisticLockConflict', from: PERSISTENCE_ERRORS_TS });
     lines.push(`      const expected = entity.${versionProp};
@@ -543,19 +546,27 @@ function auditStamps(model, entity) {
   const involved = collectInternalEntities(model, entity).filter((candidate) => candidate.persisted);
   for (const candidate of involved) {
     const ts = candidate.auditTimestamps;
-    if (ts !== 'all' && ts !== 'declared') continue;
-    const hasCreated = ts === 'all' || candidate.fields.some((field) => field.name === 'createdAt');
-    const hasUpdated = ts === 'all' || candidate.fields.some((field) => field.name === 'updatedAt');
+    const by = candidate.auditAuthorship;
+    const hasCreated = ts === 'all' || (ts === 'declared' && candidate.fields.some((field) => field.name === 'createdAt'));
+    const hasUpdated = ts === 'all' || (ts === 'declared' && candidate.fields.some((field) => field.name === 'updatedAt'));
+    // La autoría (13h): `createdBy` no cambia después de nacer y `updatedBy` se estampa en cada escritura, como
+    // @CreatedBy/@LastModifiedBy; el actor es el de currentActor() (audit-actor.ts).
+    const hasCreatedBy = by === 'all' || (by === 'declared' && candidate.fields.some((field) => field.name === 'createdBy'));
+    const hasUpdatedBy = by === 'all' || (by === 'declared' && candidate.fields.some((field) => field.name === 'updatedBy'));
     if (candidate === entity) {
       if (hasCreated) stamp('orm', 'createdAt');
       if (hasUpdated) stamp('orm', 'updatedAt');
+      if (hasCreatedBy) lines.push('orm.createdBy ??= actor;');
+      if (hasUpdatedBy) lines.push('orm.updatedBy = actor;');
     } else {
       const path = pathTo(model, entity, candidate);
       if (!path) continue;
       const parts = [];
       if (hasCreated) parts.push('child.createdAt ??= now;');
       if (hasUpdated) parts.push('child.updatedAt = now;');
-      lines.push(`for (const child of ${walk(path)}) { ${parts.join(' ')} }`);
+      if (hasCreatedBy) parts.push('child.createdBy ??= actor;');
+      if (hasUpdatedBy) parts.push('child.updatedBy = actor;');
+      if (parts.length > 0) lines.push(`for (const child of ${walk(path)}) { ${parts.join(' ')} }`);
     }
   }
   return lines;

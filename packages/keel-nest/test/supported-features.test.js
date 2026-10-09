@@ -105,22 +105,17 @@ test('las dos persistencias se generan enteras, con los almacenes del generador 
   }
 });
 
-test('la autoría de política se rechaza en los dos modelos: ningún adaptador estampa quién', () => {
+test('la autoría, de política o declarada, se genera en los dos modelos (incremento 13h)', () => {
   for (const model of ['relational', 'document']) {
-    const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), {
-      domain: {},
-      'use-cases': {},
-      persistence: { default: { model }, audit: { authorship: 'all' } }
-    });
-    assert.equal(errors.length, 1, model);
-    assert.match(errors[0], /persistence\.audit\.authorship: all .*authorship: declared/);
+    for (const authorship of ['all', 'declared']) {
+      const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), {
+        domain: {},
+        'use-cases': {},
+        persistence: { default: { model }, audit: { authorship } }
+      });
+      assert.deepEqual(errors, [], `${model} ${authorship}`);
+    }
   }
-  const declared = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), {
-    domain: {},
-    'use-cases': {},
-    persistence: { audit: { authorship: 'declared' } }
-  });
-  assert.deepEqual(declared.errors, [], 'la autoría declarada es del dominio y se genera');
 });
 
 test('un índice único condicionado se genera sin aviso (tramo 6c)', () => {

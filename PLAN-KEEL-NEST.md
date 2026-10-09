@@ -1779,6 +1779,18 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     casos de subida (lo primero que falta, el 415 y una subida completa que llega al handler) que corren contra Nest
     sobre Fastify en `asset-vault` y `catalog-extended`. `keel-core/test/content-signatures.test.js`.
   - Ni `asset-vault` ni `catalog-extended` entran aún en la frontera: falta la autoría (13h) y `needs` (13i).
+- **13h — la autoría de las escrituras: hecha (2026-10-09)**. `persistence.audit.authorship` (`all` y `declared`) en
+  los dos modelos. `src/scaffold/audit-actor.js` emite `currentActor()` con la regla del `AuditorAware` de keel-spring:
+  el `sub` del token (el nombre solo si no lo trae), el cliente con una clave de API y, sin petición autenticada,
+  `system` —`system:<correlationId>` con correlación—, nunca vacío. El adaptador relacional estampa `createdBy ??=` y
+  `updatedBy =` en la raíz y sus hijas (la columna `created_by` ya era `update: false`); el documental, `updated_by`
+  en el `$set` y `created_by` en el `$setOnInsert` (y en el alta con versión), y la declarada en los campos del
+  dominio. **Medido**: `document-persistence.test.js` gana `asset-vault` como sujeto (su documento crudo con la
+  auditoría contra el contrato, ida y vuelta) y EJECUTA la autoría: el sujeto y no el nombre, la clave de API, el
+  centinela con y sin correlación, `created_by` que no cambia y `updated_by` del último que escribe;
+  `audit-actor.test.js` la rama relacional sobre `product-catalog` con la autoría cambiada (ninguna fixture
+  relacional la declara). Falsado con tres sabotajes. `ts-check` 12/12. **`asset-vault` ya solo queda fuera por
+  `needs`** (13i).
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

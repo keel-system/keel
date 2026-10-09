@@ -30,7 +30,9 @@ import { reconciliationClaims } from 'keel-core/gen/reconciliation-stores';
 const SUBJECTS = [
   { name: 'inspection-reports', withoutLayers: [] },
   { name: 'job-dispatch-mongo', withoutLayers: [] },
-  { name: 'notification-mailer-mongo', withoutLayers: ['mail'] }
+  { name: 'notification-mailer-mongo', withoutLayers: ['mail'] },
+  // La autoría por política (13h): created_by/updated_by en la raíz, que el adaptador estampa.
+  { name: 'asset-vault', withoutLayers: [] }
 ];
 
 /** El stack de un sujeto: MongoDB y, con mensajería, RabbitMQ (los almacenes son los mismos con cualquiera). */
@@ -259,3 +261,42 @@ for (const subject of SUBJECTS) {
     }
   });
 }
+
+// La autoría (incremento 13h), EJECUTADA: quién escribe, con la regla del AuditorAware de keel-spring.
+test('asset-vault: created_by es quien creó y no cambia; updated_by, quien escribió la última vez; sin petición, system', async () => {
+  const { files, model } = planFixture('asset-vault', { stack: stackOf('asset-vault') });
+  const tree = transpileTree(files, { stubs: { '@nestjs/common': NEST_STUB, mongodb: MONGODB_STUB } });
+  const { SecurityContext } = await tree.load('src/infrastructure/security/security-context.ts');
+  const { CorrelationContext } = await tree.load('src/infrastructure/correlation/correlation-context.ts');
+  const { currentActor } = await tree.load('src/infrastructure/persistence/audit-actor.ts');
+  const token = (sub, name) => ({ kind: 'token', name, authorities: new Set(), claims: sub ? { sub } : {} });
+  assert.equal(SecurityContext.runWith(token('u-1', 'ana'), () => currentActor()), 'u-1', 'el sujeto, no el nombre');
+  assert.equal(SecurityContext.runWith(token(null, 'ana'), () => currentActor()), 'ana', 'sin sub, el nombre');
+  assert.equal(SecurityContext.runWith({ kind: 'key', name: 'cliente-batch', authorities: new Set(), claims: {} }, () => currentActor()), 'cliente-batch');
+  assert.equal(currentActor(), 'system');
+  assert.equal(CorrelationContext.runWith('c-9', () => currentActor()), 'system:c-9');
+
+  const root = repositoryRoots(model).find((candidate) => candidate.name === 'Asset');
+  const ctx = { imports: new Set(), unsampled: [], nestedValueObjects: true };
+  const expression = sampleEntity(model, root, ctx, 'u');
+  const imports = [...ctx.imports].map((entry) => {
+    const [symbol, file] = entry.split('|');
+    return `import { ${symbol} } from ${JSON.stringify(pathToFileURL(path.join(tree.root, file.replace(/\.ts$/, '.js'))).href)};`;
+  });
+  const sampleFile = path.join(tree.root, 'sample-authorship.mjs');
+  fs.writeFileSync(sampleFile, `${imports.join('\n')}\nexport const sample = () => ${expression};\n`);
+  const { sample } = await import(pathToFileURL(sampleFile).href);
+  const { [adapterClass(root)]: Adapter } = await tree.load(adapterPath(root));
+  const collections = {};
+  const repository = new Adapter(...adapterArgs(model, root, fakeTransactions(collections)));
+  const created = await SecurityContext.runWith(token('u-1', 'ana'), () => repository.save(sample()));
+  const [stored] = collections[root.collectionName].documents;
+  assert.equal(stored.created_by, 'u-1');
+  assert.equal(stored.updated_by, 'u-1');
+  const reloaded = await repository.findById(created.id);
+  await SecurityContext.runWith(token('u-2', 'luis'), () => repository.save(reloaded));
+  assert.equal(stored.created_by, 'u-1', 'quien creó no cambia');
+  assert.equal(stored.updated_by, 'u-2');
+  await repository.save(await repository.findById(created.id));
+  assert.equal(stored.updated_by, 'system', 'sin petición autenticada, el centinela');
+});

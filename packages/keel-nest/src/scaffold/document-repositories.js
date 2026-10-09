@@ -24,6 +24,7 @@ import { TEXT_FOLD_TS } from './persistence-entities.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
 import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, occupantFinders, constructorOf, emitsDomainEvents, credentialFinders } from './repositories.js';
 import { documentGuardMethods, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
+import { AUDIT_ACTOR_TS } from './audit-actor.js';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────
 
@@ -276,10 +277,19 @@ function nestedPath(model, from, target, seen = new Set()) {
 function declaredAuditStamps(model, entity) {
   const lines = [];
   for (const candidate of collectInternalEntities(model, entity).filter((c) => c.persisted)) {
-    if (candidate.auditTimestamps !== 'declared') continue;
-    const created = candidate.fields.some((field) => field.name === 'createdAt');
-    const updated = candidate.fields.some((field) => field.name === 'updatedAt');
-    const stamps = [created ? 'node.created_at ??= now;' : null, updated ? 'node.updated_at = now;' : null].filter(Boolean).join(' ');
+    const declaredTs = candidate.auditTimestamps === 'declared';
+    const declaredBy = candidate.auditAuthorship === 'declared';
+    if (!declaredTs && !declaredBy) continue;
+    const has = (name) => candidate.fields.some((field) => field.name === name);
+    const stamps = [
+      declaredTs && has('createdAt') ? 'node.created_at ??= now;' : null,
+      declaredTs && has('updatedAt') ? 'node.updated_at = now;' : null,
+      // La autoría declarada (13h): campos del dominio, con el actor de currentActor().
+      declaredBy && has('createdBy') ? 'node.created_by ??= actor;' : null,
+      declaredBy && has('updatedBy') ? 'node.updated_by = actor;' : null
+    ]
+      .filter(Boolean)
+      .join(' ');
     if (!stamps) continue;
     if (candidate === entity) {
       lines.push(stamps.replaceAll('node.', 'document.'));
@@ -300,13 +310,20 @@ function saveMethod(model, entity, use) {
   const idName = entity.idField?.name ?? 'id';
   const versioned = entity.usesOptimisticLocking;
   const policyTimestamps = model.audit?.timestamps === 'all';
+  const policyAuthorship = model.audit?.authorship === 'all';
   const lines = [`      const document = toDocument${entity.name}(entity);`];
   const declared = declaredAuditStamps(model, entity);
-  if (declared.length > 0 || policyTimestamps) lines.push('      const now = new Date();');
+  if (declared.some((line) => line.includes('now;')) || policyTimestamps) lines.push('      const now = new Date();');
+  if (declared.some((line) => line.includes('actor;')) || policyAuthorship) {
+    use.import({ symbol: 'currentActor', from: AUDIT_ACTOR_TS });
+    lines.push('      const actor = currentActor();');
+  }
   lines.push(...declared.map((line) => `      ${line}`));
   lines.push(`      const { ${DOCUMENT_ID}: id, ...fields } = document;`);
   if (policyTimestamps) lines.push('      // La auditoría de política: `updated_at` en cada escritura, `created_at` solo al nacer.', '      fields.updated_at = now;');
-  const creation = policyTimestamps ? ', $setOnInsert: { created_at: now }' : '';
+  if (policyAuthorship) lines.push('      // La autoría de política: `updated_by` en cada escritura, `created_by` solo al nacer.', '      fields.updated_by = actor;');
+  const onInsert = [policyTimestamps ? 'created_at: now' : null, policyAuthorship ? 'created_by: actor' : null].filter(Boolean);
+  const creation = onInsert.length > 0 ? `, $setOnInsert: { ${onInsert.join(', ')} }` : '';
   if (versioned) {
     use.import({ symbol: 'OptimisticLockConflict', from: PERSISTENCE_ERRORS_TS });
     const versionProp = entity.declaresLockVersion ? 'lockVersion' : LOCK_VERSION.field;
@@ -314,7 +331,7 @@ function saveMethod(model, entity, use) {
       if (expected == null) {
         // Agregado nuevo: nace con la versión 0, como el @Version de Spring Data al insertar. Un id que ya
         // existe es una violación del _id, que sale como conflicto de integridad.
-        fields.${LOCK_VERSION.column} = 0n;${policyTimestamps ? '\n        fields.created_at = now;' : ''}
+        fields.${LOCK_VERSION.column} = 0n;${policyTimestamps ? '\n        fields.created_at = now;' : ''}${policyAuthorship ? '\n        fields.created_by = actor;' : ''}
         await this.collection.insertOne({ ${DOCUMENT_ID}: id, ...fields }, { session });
       } else {
         // La versión va en el FILTRO: si otra escritura la subió (o borró el documento) no casa nada, y
