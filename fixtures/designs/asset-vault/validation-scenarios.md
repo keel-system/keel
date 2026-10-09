@@ -1,7 +1,7 @@
 # asset-vault — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/asset-vault v1.0.0. Contrato de validación para la fase de generación.
+> specs/asset-vault v1.1.0. Contrato de validación para la fase de generación.
 
 > **Fixture de test del repo Keel.** Este archivo no es un diseño real: es el escenario
 > **documental transversal**. Cada flujo existe para poner a prueba, contra Mongo real, una
@@ -39,7 +39,14 @@
 - **Proveedores de prueba**: `scanner` y `rendering` son WireMock. Cada flujo programa sus
   respuestas y cuenta las llamadas recibidas; el arnés lo resetea entre flujos.
 - **Subida**: `uploadAsset` es `multipart/form-data` — el binario en la parte `binary` y el
-  resto de campos en las suyas.
+  resto de campos en las suyas. **Cada subida lleva un binario distinto** (su contenido cambia
+  en al menos un byte) salvo que el escenario diga que repite uno: el `checksum` es único, y dos
+  subidas con el mismo binario chocan por él antes que por cualquier otra cosa.
+- **Propietarios**: se siembran en la base antes de cada flujo (`ACME` y `OTRO`); el servicio no
+  los crea.
+- **Credenciales**: salvo que se diga otra cosa, las peticiones las hace un custodio `vault-admin`
+  (exento del alcance). Los escenarios del alcance usan un `vault-reader` con el claim `vaults`
+  que dicen, y el cliente máquina es `rendering-service`.
 - **Disponibilidad del canal**: el broker es infraestructura viva y el arnés lo puede **parar
   y volver a levantar**. Un escenario que lo pare tiene que volver a levantarlo en el mismo
   flujo, y hasta que el sondeo lo dé por listo nada de lo que se afirme sobre el canal cuenta.
@@ -65,13 +72,13 @@
 
 | Operación | Flujos | Superficie |
 |-----------|--------|------------|
-| uploadAsset | FL-AST-001, FL-AST-001-B, FL-AST-001-C, **FL-AST-001-D**, **FL-AST-001-E** | usuarios (multipart) |
-| getAsset | FL-AST-003, FL-AST-003-B | usuarios y clientes máquina |
-| listAssets | FL-AST-004 | usuarios |
-| publishAsset | FL-AST-002, FL-AST-002-B, **FL-OBX-001** | usuarios |
+| uploadAsset | FL-AST-001, FL-AST-001-B, FL-AST-001-C, **FL-AST-001-D**, **FL-AST-001-E**, FL-AST-001-F, FL-AST-001-G, FL-AST-001-H, FL-AST-001-I | usuarios (multipart) |
+| getAsset | FL-AST-003, FL-AST-003-B, FL-AST-003-C, FL-AST-003-D, FL-AST-003-E | usuarios y clientes máquina |
+| listAssets | FL-AST-004, FL-AST-004-B | usuarios |
+| publishAsset | FL-AST-002, FL-AST-002-B, FL-AST-002-C, **FL-AST-002-D**, FL-AST-002-E, **FL-OBX-001** | usuarios |
 | quarantineAsset | FL-QUA-001, FL-QUA-001-B, **FL-QUA-001-C** | suscripción (interna) |
 | noteThumbnailDelivery | **FL-THD-001**, **FL-THD-001-B** | suscripción (interna, fuente ajena) |
-| reconcileScans | **FL-REC-001** | programada; alcanzable envejeciendo la marca del último veredicto |
+| reconcileScans | **FL-REC-001**, **FL-REC-001-B** | programada; alcanzable envejeciendo la marca del último veredicto |
 | **clúster (2 réplicas)** | **FL-CLU-001**, **FL-CLU-002**, **FL-CLU-003** | outbox, barrido e idempotencia, arbitrados entre procesos |
 
 Y la misma matriz leída por **mecanismo**, que es como se decide si falta algo:
@@ -84,7 +91,7 @@ Y la misma matriz leída por **mecanismo**, que es como se decide si falta algo:
 | Idempotencia saliente (`OutboundIdempotency`) | — | **FL-AST-002** Then 3 (la cabecera en el cable) |
 | Outbox | FL-AST-002 (el evento sale) | **FL-OBX-001** (el canal no está) |
 | Compensación con llamada de vuelta | FL-QUA-001 (la miniatura se retira) | **FL-QUA-001-C** (sin retirada duplicada) |
-| Reconciliación | — | **FL-REC-001** |
+| Reconciliación | — | **FL-REC-001** · **FL-REC-001-B** (la amenaza la resuelve el barrido) |
 | Arbitraje ENTRE réplicas | — | **FL-CLU-001** (relay) · **FL-CLU-002** (barrido) · **FL-CLU-003** (clave) |
 
 `reconcileScans` **ya no es un hueco declarado**. Seguía sin flujo no por falta de efecto
@@ -157,9 +164,6 @@ en viajar, así que las dos peticiones se solapan sin esfuerzo.
    devuelve una vez, y un `POST` posterior con el mismo `slug` y otra clave devuelve
    `409 ASSET_OWNER_SLUG_ALREADY_EXISTS`. El conteo es la mitad que de verdad cierra el
    escenario: sin él, dos `201` con ids distintos pasarían el Then 2.
-4. El bucket no acaba con dos binarios vivos para el mismo archivo: la ficha devuelta apunta
-   a un `storageKey` y ese es el que se puede descargar. Un huérfano en el almacén es la
-   forma en que este mecanismo falla sin que la API lo enseñe.
 
 **Orden de evaluación**: la clave de idempotencia se arbitra **antes** que la unicidad del
 nombre. Si el `409` que sale es `ASSET_OWNER_SLUG_ALREADY_EXISTS`, el registro de la clave no
@@ -192,12 +196,49 @@ limitase a intentar la inserción, chocaría con ese documento y la petición re
 IDEMPOTENCY_KEY_IN_PROGRESS` — un conflicto con una clave que ya no protege nada, y durante
 casi 24 h. Que `find` la ignore por caducada no basta: el que la escribe tiene que retirarla.
 
+#### FL-AST-001-F: el mismo binario con otro nombre
+
+**Given**: el archivo de FL-AST-001 custodiado con su binario PDF.
+
+**When**: `POST /api/v1/assets` con el mismo `ownerId`, un `slug` **nuevo** `"informe-q1-copia"`, el
+**mismo** binario y un `Idempotency-Key` nuevo.
+**Then**:
+1. Status `409` con `code` = `"ASSET_CHECKSUM_ALREADY_EXISTS"`: la huella identifica el contenido con
+   independencia del nombre, y ese contenido ya está custodiado.
+2. `GET /api/v1/assets` sigue devolviendo un solo archivo con ese binario.
+
+#### FL-AST-001-G: el propietario no existe
+
+**When**: `POST /api/v1/assets` con un `ownerId` que no es de ningún propietario sembrado, `slug` =
+`"huerfano"` y un binario nuevo.
+**Then**:
+1. Status `422` con `code` = `"OWNER_NOT_FOUND"`.
+2. No se custodió nada: `GET /api/v1/assets` no trae ningún archivo con `slug` = `"huerfano"`, y no
+   sale ningún `AssetUploaded`.
+
+#### FL-AST-001-H: un ejecutable con la etiqueta de una imagen
+
+**When**: `POST /api/v1/assets` con `slug` = `"logo"` y como `binary` un ejecutable (empieza por
+`MZ`) enviado como `image/png`.
+**Then**:
+1. Status `415` con `code` = `"UNSUPPORTED_CONTENT_TYPE"`: el tipo declarado está admitido, pero el
+   contenido no es de ese tipo.
+2. No se custodió nada con `slug` = `"logo"`.
+
+#### FL-AST-001-I: un binario de más de 25 MB
+
+**When**: `POST /api/v1/assets` con `slug` = `"grande"` y un PDF de 26 MB.
+**Then**:
+1. Status `413` con `code` = `"FILE_TOO_LARGE"`: el límite es el `maxSizeMb` del bucket.
+2. No se custodió nada con `slug` = `"grande"`.
+
 ## Publicación
 
 ### FL-AST-002: publicar exige veredicto del escáner
 
-**Given**: el archivo `<a1>` de FL-AST-001 está en `draft`; `scanner.scanAsset` responde
-`200 {verdict: "clean", scannedAt: <t>}`.
+**Given**: el archivo `<a1>` de FL-AST-001 está en `draft`, y su ficha está cacheada: se pidió `GET /api/v1/assets/{a1}` con `rendering.getThumbnail`
+respondiendo `200 {url: "https://cdn/t/a1.png", width: 320}`, y devolvió `draft`.
+`scanner.scanAsset` responde `200 {verdict: "clean", scannedAt: <t>}`.
 
 **When**: `POST /api/v1/assets/{a1}/publish`.
 **Then**:
@@ -208,6 +249,18 @@ casi 24 h. Que `find` la ignore por caducada no basta: el que la escribe tiene q
    encargue dos análisis del mismo binario.
 4. `GET /api/v1/assets/{a1}` devuelve `published`: la respuesta cacheada de antes de
    publicar **no** sobrevive, porque `AssetPublished` la invalida.
+5. La ficha trae `lastScannedAt` estampado (por forma): publicar fija la marca del veredicto,
+   que es la que vigila después `reconcileScans`.
+
+#### FL-AST-002-E: el escáner no da el binario por limpio
+
+**Given**: un archivo `<a7>` en `draft`, custodiado como en FL-AST-001 con su propio `slug`;
+`scanner.scanAsset` responde `200 {verdict: "infected", scannedAt: <t>}`.
+
+**When**: `POST /api/v1/assets/{a7}/publish`.
+**Then**:
+1. Status `422` con `code` = `"ASSET_NOT_CLEAN"`.
+2. `<a7>` sigue en `draft` y no sale ningún `AssetPublished` para él.
 
 #### FL-AST-002-B: el escáner no responde
 
@@ -218,6 +271,28 @@ casi 24 h. Que `find` la ignore por caducada no basta: el que la escribe tiene q
 1. Status `502` con `code` = `"SCANNER_UNAVAILABLE"`.
 2. `<a2>` sigue en `draft`: sin veredicto no hay publicación (`onFailure: fail`).
 3. No se publicó ningún `AssetPublished`.
+
+#### FL-AST-002-C: publicar lo que ya está publicado
+
+**Given**: `<a1>` está en `published` (FL-AST-002).
+
+**When**: `POST /api/v1/assets/{a1}/publish` otra vez.
+**Then**:
+1. Status `422` con `code` = `"INVALID_ASSET_STATE"`: de `published` no se vuelve a `published`.
+2. El escáner **no** recibió una segunda llamada: la transición se comprueba antes de encargar nada.
+
+#### FL-AST-002-D: dos publicaciones del mismo archivo a la vez
+
+**Given**: un archivo `<a6>` en `draft`, custodiado como en FL-AST-001 con su propio `slug`;
+`scanner.scanAsset` responde `200 {verdict: "clean", scannedAt: <t>}`.
+
+**When**: se lanzan **simultáneamente** dos `POST /api/v1/assets/{a6}/publish`.
+**Then**:
+1. Una responde `200` con `status` = `"published"`.
+2. La otra responde **exactamente una** de estas dos cosas: `409` con `code` =
+   `"CONCURRENT_MODIFICATION"` (perdió la carrera sobre la versión del archivo) o `422` con `code` =
+   `"INVALID_ASSET_STATE"` (llegó cuando la primera ya había confirmado). Ni `500` ni un segundo `200`.
+3. Sale **exactamente un** `AssetPublished` para `<a6>`: la publicación ocurrió una vez.
 
 ## Publicación con el canal caído
 
@@ -273,16 +348,50 @@ política de reintentos declarada siendo más corta que la caída, y se arbitra 
 **Then**:
 1. Status `200` con el archivo y su `ownerId` plano (esta operación **no** lleva `embed`).
 2. El proveedor recibió una llamada a `GET /thumbnails/{a1}`.
+3. La ficha trae `thumbnail` = `{url: "https://cdn/t/a1.png", width: 320}`: la miniatura que se pidió
+   viaja en la respuesta (`exposedAs: thumbnail`), que es para lo que se pide.
 
 #### FL-AST-003-B: el servicio de renderizado cae
 
 **Given**: `rendering.getThumbnail` devuelve `503`.
 
-**When**: `GET /api/v1/assets/{a1}` con la caché ya invalidada.
+**When**: se vacía la caché (`clearCache()` del arnés) y se pide `GET /api/v1/assets/{a1}`.
 **Then**:
 1. Status `200` igualmente: la miniatura es un adorno de la ficha, no la ficha
-   (`fallback: Devolver la ficha sin miniatura`).
-2. La respuesta no trae miniatura, y el archivo llega completo.
+   (`onUnavailable: degrade` del need `rendering.thumbnail`).
+2. La ficha llega completa con `thumbnail` = `null`: el campo viaja, nulo, y así el consumidor sabe
+   que no hay miniatura.
+3. La ficha degradada no se queda servida (`getAsset` no la cachea): se vuelve a programar
+   `rendering.getThumbnail` con `200 {url: "https://cdn/t/a1.png", width: 320}` y el siguiente
+   `GET /api/v1/assets/{a1}` trae otra vez la miniatura, dentro de los 300 s del TTL.
+
+#### FL-AST-003-E: el renderizador lee cualquier ficha
+
+**When**: el cliente máquina `rendering-service` pide `GET /api/v1/assets/{a1}` con su token
+(sin claim `vaults`).
+**Then**:
+1. Status `200` con la ficha: el alcance es de los custodios, y el renderizador genera las
+   miniaturas de todos los propietarios.
+
+#### FL-AST-003-C: un archivo que no existe
+
+**When**: `GET /api/v1/assets/{id}` con un `id` que no es de ningún archivo.
+**Then**:
+1. Status `404` con `code` = `"ASSET_NOT_FOUND"`.
+2. El renderizador **no** recibió ninguna llamada por ese `id`: no se pide la miniatura de algo que no
+   existe.
+
+#### FL-AST-003-D: un archivo de un propietario fuera del alcance
+
+**Given**: un custodio con rol `vault-reader` cuyo token enumera `vaults` = `["OTRO"]`; `<a1>` es de
+`ACME`, y su ficha está cacheada: un `vault-admin` acaba de pedir `GET /api/v1/assets/{a1}` con
+`rendering.getThumbnail` respondiendo `200 {url: "https://cdn/t/a1.png", width: 320}`.
+
+**When**: ese custodio pide `GET /api/v1/assets/{a1}`.
+**Then**:
+1. Status `403` con `code` = `"ASSET_OUT_OF_SCOPE"`.
+2. Ni la ficha cacheada se le sirve: el alcance se comprueba en cada respuesta, también en la que sale
+   de la caché (la del `Given`).
 
 ### FL-AST-004: el listado va ordenado y trae el propietario
 
@@ -291,10 +400,19 @@ política de reintentos declarada siendo más corta que la caída, y se arbitra 
 **When**: `GET /api/v1/assets?page=0&size=2`.
 **Then**:
 1. Status `200`, dos elementos, y el orden es por `slug` ascendente: `"acta"` primero.
-2. Cada elemento trae `owner` resuelto (`embed: [owner]`) con su `code` y su `displayName`,
-   y el propietario se resuelve **una sola vez** para los dos elementos.
+2. Cada elemento trae `owner` resuelto (`embed: [owner]`) con su `code` y su `displayName`.
 3. `GET /api/v1/assets?page=1&size=2` devuelve el tercero y **ninguno repetido**: el
    desempate por id lo añade el adaptador aunque el orden declarado no lo pida.
+
+#### FL-AST-004-B: el listado se acota al alcance
+
+**Given**: los tres archivos de `ACME` de FL-AST-004 y un custodio `vault-reader` cuyo token
+enumera `vaults` = `["OTRO"]`.
+
+**When**: ese custodio pide `GET /api/v1/assets?page=0&size=20`.
+**Then**:
+1. Status `200` y **ningún** archivo de `ACME` en la página: solo ve los de los propietarios que
+   enumera su token.
 
 ## Cuarentena: el escáner encuentra algo después
 
@@ -303,25 +421,32 @@ política de reintentos declarada siendo más corta que la caída, y se arbitra 
 Cubre `security-scanner.compensations[0]` (`undoes: scanAsset`). La operación compensadora
 es `quarantineAsset`, interna y disparada solo por la suscripción.
 
-**Given**: `<a1>` está en `published` (FL-AST-002); `rendering.purgeThumbnail` responde `204`.
+**Given**: `<a1>` está en `published` (FL-AST-002), y su ficha está cacheada: se pidió `GET /api/v1/assets/{a1}` con `rendering.getThumbnail`
+respondiendo `200 {url: "https://cdn/t/a1.png", width: 320}`, y devolvió `published`.
+`rendering.purgeThumbnail` responde `204`.
 
 **When**: llega el evento entrante `MalwareDetected` con payload
 `{assetId: <a1>, reason: "firma conocida en el binario"}` y `metadata.eventId` `<m1>`.
 **Then**:
 1. Se ejecuta `quarantineAsset`.
-2. `GET /api/v1/assets/{a1}` devuelve `status` = `"quarantined"`.
+2. `GET /api/v1/assets/{a1}` devuelve `status` = `"quarantined"` y `quarantineReason` =
+   `"firma conocida en el binario"`, aunque la ficha estaba cacheada: `AssetQuarantined` la invalida.
 3. El proveedor recibió **exactamente un** `DELETE /thumbnails/{a1}`. Es la mitad de la
    compensación que vive **fuera**: sin ella el renderizador sigue sirviendo la miniatura de
    un binario infectado, y deshacer a medias deja al proveedor y a nosotros contando
    historias distintas. Un servidor que solo mueva el estado propio pasa el Then 2 y falla
    aquí.
+4. En el canal del servicio sale **exactamente un** `AssetQuarantined` con `assetId` = `<a1>` y
+   `reason` = `"firma conocida en el binario"`: quien supo por `AssetPublished` que el archivo
+   se podía servir se entera de que ya no.
 
 #### FL-QUA-001-B: el mismo evento se reentrega
 
 **When**: se entrega **otra vez** el mismo `MalwareDetected`, con idéntico payload y el
 **mismo** `metadata.eventId` `<m1>`.
 **Then**:
-1. `<a1>` sigue en `quarantined` y nada más cambia: ningún segundo efecto.
+1. `<a1>` sigue en `quarantined` y nada más cambia: ningún segundo efecto, ni un segundo
+   `AssetQuarantined`.
 2. El proveedor **no** recibió un segundo `DELETE /thumbnails/{a1}`: sigue habiendo uno.
 3. El servicio **confirma** el mensaje sin volver a procesarlo — no acaba en la DLQ ni
    reintentando: una reentrega es el comportamiento normal de cualquier broker.
@@ -351,9 +476,11 @@ idéntico payload `{assetId: <a4>, reason: "firma conocida en el binario"}` y el
    mensaje descartado.
 2. El efecto es **único** en las dos superficies: el estado es `quarantined` (y no volvió a
    pasar por ninguna transición) y el proveedor recibió **exactamente un**
-   `DELETE /thumbnails/{a4}`. Una retirada duplicada es una llamada real a un sistema ajeno,
-   y es lo que la cabecera `Idempotency-Key` de esa llamada absorbe del otro lado — por eso
-   lo que se cuenta son las llamadas **recibidas** y no su efecto.
+   `DELETE /thumbnails/{a4}`. Una retirada duplicada es una llamada real a un sistema ajeno:
+   la retirada se encarga **después** de confirmar la cuarentena, así que la copia que pierde
+   la carrera no llega al renderizador — por eso lo que se cuenta son las llamadas
+   **recibidas** y no su efecto. Y sale **exactamente un** `AssetQuarantined` con `assetId` =
+   `<a4>`.
 3. El servicio no acaba con el mensaje en la DLQ. Que la copia perdedora falle por dentro es
    correcto y esperable —es exactamente lo que hace la guarda—, pero el resultado observable
    de la perdedora es una entrega **confirmada sin efecto**, no un error propagado: una
@@ -379,7 +506,8 @@ veces se ve, y lo único que puede impedirlo es la marca de procesado leída del
 
 ### FL-THD-001: el renderizador comunica que sirvió la miniatura
 
-**Given**: el archivo `<a1>` existe (FL-AST-001), con `thumbnailDeliveryCount` = `0` y
+**Given**: el archivo `<a1>` existe (FL-AST-001), y su ficha está cacheada: se pidió `GET /api/v1/assets/{a1}` con `rendering.getThumbnail`
+respondiendo `200 {url: "https://cdn/t/a1.png", width: 320}`, y devolvió `thumbnailDeliveryCount` = `0` y
 `lastDeliveredAt` = `null`.
 
 **When**: llega el evento entrante `ThumbnailDelivered` **plano** (sin envoltura) con cuerpo
@@ -402,7 +530,7 @@ veces se ve, y lo único que puede impedirlo es la marca de procesado leída del
    hay estado terminal que rechace la repetición ni valor que coincida por casualidad — un
    segundo procesamiento suma, y se ve.
 2. `lastDeliveredAt` sigue siendo `<t5>`.
-3. El mensaje se confirma sin volver a procesarse: ni DLQ ni reintentos.
+3. El mensaje se confirma sin volver a procesarse: no acaba en la DLQ.
 4. Y se comprueba que la clave que deduplica es **la cabecera**: una tercera entrega con el
    mismo cuerpo y una cabecera `X-Render-Event-Id` **distinta** sí suma
    (`thumbnailDeliveryCount` = `2`). Sin este contraste, un servidor que dedujera la
@@ -463,18 +591,24 @@ dos pueden entregar el mismo. El escenario no lo mide; lo que mide es que el rec
 
 ### FL-CLU-002: dos barridos no reencargan el mismo análisis dos veces
 
-**Given**: la segunda réplica arrancada, y **cinco** archivos en `published` cuyo
-`lastScannedAt` se ha envejecido por encima del umbral. `scanner.scanAsset` responde
+El barrido es `reconcileScans`, y corre en las dos réplicas a la vez.
+
+**Given**: la segunda réplica arrancada, **cinco** archivos en `published` cuyo
+`lastScannedAt` se ha envejecido por encima del umbral, y un sexto `<a6x>` en `published` sin
+envejecer. `scanner.scanAsset` responde
 `200 {verdict: "clean", scannedAt: <t>}`.
 
 **When**: pasa un tick del barrido, que corre en las **dos** réplicas.
 **Then**:
-1. El proveedor recibió **exactamente cinco** `POST /scans`, uno por archivo. Diez
+1. Desde el envejecimiento, el proveedor recibió **exactamente cinco** `POST /scans`, uno por
+   archivo (las cinco de la publicación del `Given` no cuentan). Diez
    significaría que las dos réplicas se llevaron los mismos documentos, y cada análisis
    repetido es trabajo real encargado a un sistema ajeno.
-2. Los cinco archivos quedan con `lastScannedAt` renovado: el barrido no solo pregunta,
-   apunta que preguntó — si no, la pasada siguiente vuelve a llevárselos.
-3. Ningún archivo ajeno al escenario se ve afectado.
+2. Los cinco archivos quedan con `lastScannedAt` renovado en el listado (`GET /api/v1/assets`,
+   que no se cachea): el barrido no solo pregunta, apunta que preguntó — si no, la pasada
+   siguiente vuelve a llevárselos.
+3. El sexto archivo no recibió ningún `POST /scans` desde el envejecimiento y su `lastScannedAt`
+   no cambió.
 
 **Nota sobre la idempotencia saliente**: aunque hubiera duplicados, el proveedor los
 absorbería por la cabecera `Idempotency-Key` que `scanAsset` declara — por eso el `Then`
@@ -508,13 +642,16 @@ implementación que se escribe sola si nadie la prueba.
 
 ### FL-REC-001: el escáner no vuelve a decir nada y el barrido revalida
 
+Lo hace `reconcileScans` cuando la marca del último veredicto está envejecida más allá de
+`unansweredAfterSeconds`: la espera del escáner lleva demasiado tiempo sin desenlace.
+
 La pata del **silencio**, en su variante de **deriva**. No hay excepción que capturar ni
 evento al que reaccionar: el escáner dio su veredicto en el acto y puede encontrar la amenaza
 más tarde sin publicarla nunca. Lo que envejece aquí no es un encargo sin desenlace sino una
 **creencia**, y lo único que la ve es algo que corre solo.
 
-**Given**: un archivo `<a5>` en `published`, llegado ahí por FL-AST-001 → FL-AST-002, sobre
-el que **no** llega ningún `MalwareDetected`. `scanner.scanAsset` está programado para
+**Given**: dos archivos en `published`, `<a5>` y `<a9>`, llegados ahí por FL-AST-001 → FL-AST-002
+con su propio `slug`, sobre los que **no** llega ningún `MalwareDetected`. `scanner.scanAsset` está programado para
 responder `200 {verdict: "clean", scannedAt: <t>}`.
 
 **When**: se envejece `lastScannedAt` de `<a5>` por encima del umbral de paciencia —el
@@ -525,16 +662,37 @@ barrido.
 1. El proveedor recibió **al menos un** `POST /scans` con `assetId` = `<a5>` posterior al
    envejecido. Revalidar es una decisión, no una omisión: sin el barrido, un archivo
    publicado con un veredicto de hace meses sigue publicado y nadie vuelve a preguntar.
-2. `GET /api/v1/assets/{a5}` acaba devolviendo `lastScannedAt` renovado: el barrido apunta
+2. El listado (`GET /api/v1/assets`, que no se cachea) acaba devolviendo `<a5>` con `lastScannedAt`
+   renovado: el barrido apunta
    que preguntó. Sin eso la pasada siguiente vuelve a llevarse el mismo archivo y el trabajo
    encargado al escáner crece sin tope.
 3. `<a5>` sigue en `published`: el veredicto vino limpio, así que revalidar no cambia el
-   estado. Si el escáner respondiera con amenaza, el camino normal (`MalwareDetected` →
-   `quarantineAsset`) haría el resto, y ese ya es FL-QUA-001.
-4. Los archivos de los demás flujos **no** se ven afectados: solo se barre lo que lleva sin
-   revalidar más que el umbral, y el escenario solo envejeció a `<a5>`.
+   estado. Si el escáner respondiera con amenaza, el propio barrido lo pone en cuarentena: es
+   FL-REC-001-B.
+4. `<a9>`, que no se envejeció, **no** recibió ningún `POST /scans` posterior al envejecido de
+   `<a5>` y su `lastScannedAt` en el listado no cambió: solo se barre lo que lleva sin revalidar
+   más que el umbral. Un barrido que revalidara todo lo publicado fallaría aquí.
 
 **Lo que este escenario sigue sin ver**: que el barrido *reclame* los documentos con una cota
 en vez de leerlos enteros. Con un archivo el resultado es el mismo, y montar volumen aquí
 mediría la máquina, no el diseño. Eso lo cubre `infra/check-idempotency.sh` en estático,
 familia `reconciliation` — los dos gates son complementarios y ninguno sustituye al otro.
+
+#### FL-REC-001-B: la revalidación encuentra una amenaza
+
+La otra mitad de rendirse, y la que no puede esperar a que el escáner publique nada: su veredicto
+ya no es limpio, y lo que tiene que pasar es la cuarentena por el mismo camino que la compensación.
+
+**Given**: un archivo `<a8>` en `published`, llegado ahí por FL-AST-001 → FL-AST-002 con su propio
+`slug`, y la marca de su último veredicto envejecida más allá del umbral (la espera lleva
+demasiado tiempo sin desenlace). `scanner.scanAsset` responde
+`200 {verdict: "infected", scannedAt: <t>}` y `rendering.purgeThumbnail` responde `204`.
+
+**When**: pasa un tick de `reconcileScans`.
+**Then**:
+1. `GET /api/v1/assets/{a8}` acaba devolviendo `status` = `"quarantined"` con `quarantineReason` =
+   `"revalidación - infected"`: el estado propio. También si la ficha estaba cacheada, porque la
+   invalida `AssetQuarantined` y no el hallazgo entrante, que aquí no hay.
+2. El renderizador recibió **exactamente un** `DELETE /thumbnails/{a8}`: el mensaje que sale al
+   proveedor. Las dos mitades, como en FL-QUA-001.
+3. Sale **exactamente un** `AssetQuarantined` con `assetId` = `<a8>`.

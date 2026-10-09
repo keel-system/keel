@@ -33,7 +33,13 @@ authentication:
     error: ASSET_OUT_OF_SCOPE
     # La exención va rol a rol porque es la parte peligrosa: quien la tiene ve todo.
     exemptRoles: [vault-admin]
-    description: Cada custodio opera sobre los archivos de los propietarios que su token enumera.
+    # Las escrituras (uploadAsset, publishAsset) solo las hace vault-admin, que está exento: por eso
+    # no declaran el 403. Conceder asset:write a otro rol obliga a acotarlas antes.
+    description: >-
+      Cada custodio opera sobre los archivos de los propietarios que su token enumera. El claim se
+      compara con Owner.code tal cual, distinguiendo mayúsculas. Las escrituras las hace solo
+      vault-admin, exento del alcance; conceder asset:write a otro rol obliga a acotar antes
+      uploadAsset y publishAsset.
 
 roles:
   vault-admin:

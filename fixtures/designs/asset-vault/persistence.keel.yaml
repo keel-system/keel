@@ -18,6 +18,7 @@ entities:
       # lo único que un índice aprovecha entero. Con el de `status` a solas, la base
       # filtra por estado y evalúa la marca documento a documento.
       - [status, lastScannedAt]
+      - [slug]     # el orden de listAssets
 
 # Autoría: exige la capa security (sin principal autenticado no hay autor). Es lo que
 # enciende @CreatedBy/@LastModifiedBy y el AuditorAware en la rama documental.

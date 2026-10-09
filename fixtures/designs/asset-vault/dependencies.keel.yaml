@@ -9,9 +9,17 @@ dependencies:
         description: Miniatura que acompaña a la ficha del archivo.
         strategy: on-demand
         usedBy: [getAsset]
+        # La miniatura viaja en la ficha: es para lo que se pide. Sin declararlo se pediría al
+        # renderizador y se tiraría tras el anticorrupción, y ningún escenario podría afirmarla.
+        exposedAs: thumbnail
         fetchedFrom:
           client: rendering
           call: getThumbnail
+        # La miniatura es un adorno de la ficha, no la ficha: con el renderizador caído, la ficha
+        # sale entera y sin ella. Es lo que el `fallback` de la llamada decía en prosa.
+        onUnavailable:
+          action: degrade
+          degradedTo: La ficha se devuelve completa con thumbnail nulo; el consumidor sabe que no hay miniatura porque el campo llega nulo.
     activations:
       # La ACTIVACIÓN DE VUELTA de la compensación. Sin ella, poner el archivo en
       # cuarentena solo devuelve el estado propio y el renderizador sigue sirviendo la

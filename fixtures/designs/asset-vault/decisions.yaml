@@ -1,28 +1,181 @@
-# Obligaciones de diseño que esta fixture deja abiertas a sabiendas.
-# Ver docs/design-obligations.md — el «aceptado» del análisis de huecos, por escrito.
+# Lo que este diseño decidió y por qué. Es la silueta DOCUMENTAL transversal de las fixtures (caché,
+# storage, autoría, idempotencia de petición y de consumo, compensación con llamada de vuelta,
+# reconciliación y clúster sobre Mongo) y está CERRADA: `keel validate --ready` sale en verde.
 decisions:
   - id: OBL-IDEM-RACE-CODE
     scope: use-cases
-    reason: >
+    reason: >-
       El contrato público de uploadAsset para la carrera de la clave es el canónico
       409 IDEMPOTENCY_KEY_IN_PROGRESS. No hay un code de dominio que lo describa mejor.
-    since: 1.0.0
+    since: 1.1.0
   - id: OBL-IDEM-REUSE-CODE
     scope: use-cases
-    reason: >
-      Misma clave con otro cuerpo devuelve el canónico 409 IDEMPOTENCY_KEY_REUSED.
-      El bucket no distingue ese caso de ningún otro conflicto de negocio.
-    since: 1.0.0
+    reason: >-
+      Misma clave con otro cuerpo devuelve el canónico 409 IDEMPOTENCY_KEY_REUSED. El bucket no
+      distingue ese caso de ningún otro conflicto de negocio.
+    since: 1.1.0
   - id: OBL-CALLER-IDENTITY
     scope: security
-    reason: >
-      Quien llama no participa en el trabajo. El único cliente máquina declarado
-      (rendering-service) solo LEE: no sube ni publica nada, así que no hay campo que el
-      servidor deba estampar desde su credencial. El ownerId de uploadAsset es un dato de
-      negocio —de quién es el archivo—, no la identidad de quien hace la petición, y
-      confundirlos habría atado la propiedad del activo a la credencial que lo subió.
-    since: 1.0.0
+    reason: >-
+      Quien llama no participa en el trabajo. El único cliente máquina declarado (rendering-service)
+      solo LEE: no sube ni publica nada, así que no hay campo que el servidor deba estampar desde su
+      credencial. El ownerId de uploadAsset es un dato de negocio —de quién es el archivo—, no la
+      identidad de quien hace la petición, y confundirlos habría atado la propiedad del activo a la
+      credencial que lo subió.
+    since: 1.1.0
   - id: OBL-IDEM-KEY-REQUIRED
     scope: use-cases
-    reason: El cliente de subida es un servicio propio que siempre manda la cabecera; sin ella la subida se ejecuta sin deduplicar y se acepta.
-    since: 1.0.0
+    reason: >-
+      El cliente de subida es el back-office propio, que siempre manda la cabecera; sin ella la subida
+      se ejecuta sin deduplicar y se acepta.
+    since: 1.1.0
+  - id: OBL-ENTITY-UNREACHABLE
+    scope: domain
+    reason: >-
+      Los propietarios los aprovisiona el directorio de la organización fuera de este servicio: aquí
+      solo se custodian sus archivos. En los escenarios se siembran en la base antes de cada flujo.
+    since: 1.1.0
+  - id: CHK-DEPS-COMPENSATION-DEAD-END
+    scope: dependencies.security-scanner.compensations[0]
+    reason: >-
+      La cuarentena es el desenlace definitivo de un binario infectado: no se vuelve a analizar ni a
+      publicar. Si el propietario corrige el archivo, lo sube de nuevo y es otro binario, con su
+      propio análisis.
+    since: 1.1.0
+  - id: CHK-PERSIST-AUDIT-NESTED
+    scope: persistence.audit.AssetRevision
+    reason: >-
+      Las revisiones no se modifican: se añaden, y su revisionNumber las ordena. El rastro de cuándo y
+      quién está en el documento del archivo que las contiene, que es lo que se guarda.
+    since: 1.1.0
+  - id: CHK-USECASES-EMBED-ASYMMETRY
+    scope: use-cases.Asset.embed.owner
+    reason: >-
+      getAsset es la ficha que lee el servicio de renderizado y se cachea por id: embeber el
+      propietario la dejaría vieja cada vez que cambiara su nombre, porque ningún evento del propietario
+      la invalida. Las operaciones que lo embeben no se cachean.
+    since: 1.1.0
+  - id: CHK-USECASES-IDEM-SCOPE-UNDECIDED
+    scope: use-cases.uploadAsset.idempotency
+    reason: >-
+      La clave es global: el back-office la genera como un uuid por subida, así que dos llamantes no
+      pueden elegir la misma salvo a propósito, y partirla por propietario no protegería de nada más.
+    since: 1.1.0
+
+structural:
+  - section: '3.1'
+    scope: messaging.publishing.reliability
+    chosen: outbox
+    discarded: best-effort
+    reason: >-
+      AssetPublished le dice al resto de la organización qué archivos se pueden servir: uno perdido es
+      un archivo publicado que nadie muestra, y uno emitido sin commit, uno que se sirve sin estarlo.
+      El servicio ya tiene persistencia: el outbox cuesta una colección.
+    since: 1.1.0
+  - section: '3.2'
+    chosen: >-
+      client-key con ttlSeconds 86400 en uploadAsset; publishAsset y los commands internos sin
+      idempotency (los frenan sus transiciones, la guarda de procesados de su suscripción o, en
+      noteThumbnailDelivery, la marca de procesado escrita antes del efecto)
+    discarded: payload-field en uploadAsset, o idempotency en publishAsset
+    reason: >-
+      Una subida es la única operación cuyo reintento crearía otra cosa: el back-office reintenta las
+      subidas largas y sin clave saldría un segundo archivo. No hay campo del cuerpo que identifique
+      la intención (el checksum ya es una unicidad propia, con su error). Publicar dos veces lo rechaza
+      la transición draft → published.
+    since: 1.1.0
+  - section: '3.3'
+    chosen: >-
+      cache en getAsset (ttlSeconds 300, clave id, invalidatedBy AssetUploaded, AssetPublished,
+      ThumbnailDelivered y MalwareDetected; la ficha degradada no se cachea); listAssets sin caché
+    discarded: sin caché en getAsset, o cachear listAssets
+    reason: >-
+      La ficha la pide el renderizador cada vez que genera una miniatura y cambia poco; lo que la cambia
+      son cuatro eventos, los cuatro declarados. El listado depende de la página y del orden y se invalidaría
+      con cualquier alta: no compensa.
+    since: 1.1.0
+  - section: '3.4'
+    chosen: getAsset con audience both; el resto, solo usuarios
+    discarded: abrir más operaciones al cliente máquina
+    reason: >-
+      El renderizador solo necesita leer la ficha para generar la miniatura, y valida la audiencia de
+      su token. Subir y publicar son decisiones de un custodio con nombre.
+    since: 1.1.0
+  - section: '3.5'
+    chosen: >-
+      retry exponencial de 5 intentos (500 ms a 15 s) y deadLetter true en MalwareDetected y en
+      ThumbnailDelivered
+    discarded: sin retry, o descartar tras agotar los intentos
+    reason: >-
+      Un MalwareDetected perdido es un archivo infectado que sigue publicado; uno de telemetría perdido
+      es un contador que miente. Los fallos transitorios se resuelven reintentando y los que no, quedan
+      en la DLQ para que alguien los mire.
+    since: 1.1.0
+  - section: '3.6'
+    chosen: >-
+      timeouts propios por llamada, retry solo de lo transitorio y circuito en las tres llamadas; el
+      fallback lo decide la capa dependencies (fail en scanAsset, degrade en getThumbnail, ignore en
+      purgeThumbnail)
+    discarded: los defaults del generador, o un fallback único
+    reason: >-
+      Las tres llamadas tienen consecuencias distintas cuando el proveedor cae: sin veredicto no se
+      publica, sin miniatura la ficha sale igual, y sin retirada la cuarentena se aplica igualmente.
+    since: 1.1.0
+  - section: '3.7'
+    scope: persistence.consistency.transactionalBoundary
+    chosen: per-aggregate
+    discarded: per-operation
+    reason: >-
+      Ninguna operación escribe dos agregados: subir lee el propietario y escribe el archivo; el resto
+      solo mueve el archivo.
+    since: 1.1.0
+  - section: '3.8'
+    chosen: listAssets paginado (offset, 20 por defecto, 100 como máximo) ordenado por slug
+    discarded: listado sin paginar
+    reason: >-
+      Un propietario custodia cientos de archivos: sin página, la respuesta crece sin tope y el
+      back-office no la necesita entera.
+    since: 1.1.0
+  - section: '3.9'
+    scope: persistence.consistency.optimisticLocking
+    chosen: all
+    discarded: none (último gana)
+    reason: >-
+      Sobre un archivo escriben a la vez la publicación, la cuarentena que llega por evento, la
+      telemetría y el barrido: con último gana, una publicación tardía podría deshacer una cuarentena.
+      El perdedor recibe CONCURRENT_MODIFICATION y relee.
+    since: 1.1.0
+  - section: '3.9b'
+    scope: persistence.audit.timestamps
+    chosen: all
+    discarded: declared o none
+    reason: >-
+      Cuándo se custodió y cuándo cambió cada archivo es lo primero que pregunta una auditoría de
+      custodia, y el contrato no lo necesita: va por política.
+    since: 1.1.0
+  - section: '3.9b'
+    scope: persistence.audit.authorship
+    chosen: all
+    discarded: none
+    reason: >-
+      Quién subió y quién publicó un archivo es la pregunta de una auditoría de custodia; varios
+      custodios operan sobre los mismos propietarios.
+    since: 1.1.0
+  - section: '3.10'
+    scope: storage.buckets.assetBinaries.visibility
+    chosen: private
+    discarded: public
+    reason: >-
+      Los binarios son de los propietarios y este servicio solo los custodia: en esta versión no hay
+      operación de descarga, y cuando la haya será por enlace firmado de 600 s, nunca por una URL
+      estable.
+    since: 1.1.0
+  - section: '3.11'
+    chosen: >-
+      MalwareDetected deshace scanAsset llevando el archivo a quarantined y retirando su miniatura en
+      el renderizador
+    discarded: compensar solo el estado propio
+    reason: >-
+      Deshacer a medias deja al renderizador sirviendo la miniatura de un binario infectado: la
+      compensación tiene que llegar al proveedor. Que no conteste no la detiene (onFailure ignore).
+    since: 1.1.0

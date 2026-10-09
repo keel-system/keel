@@ -21,16 +21,18 @@ clients:
         response:
           fields:
             verdict:
-              type: string
+              type: ScanVerdict
               required: true
             scannedAt:
               type: timestamp
               required: true
         timeoutMs: 4000
         # Escritura ajena con reintentos: sin clave, un timeout de red encargaría dos
-        # análisis del mismo binario.
+        # análisis del mismo binario. La clave es la de la EJECUCIÓN y no la del contenido:
+        # una revalidación pide otro análisis del mismo binario, y con la huella del cuerpo
+        # el escáner devolvería el veredicto viejo sin volver a mirar.
         idempotency:
-          keyFrom: payload-hash
+          keyFrom: correlation
         retry:
           maxAttempts: 3
           initialDelayMs: 300
@@ -105,4 +107,4 @@ clients:
           failureRateThreshold: 60
           slidingWindowSize: 20
           waitDurationMs: 20000
-        fallback: Seguir con la cuarentena; la miniatura huérfana se retira en la siguiente pasada.
+        fallback: Seguir con la cuarentena; la miniatura queda huérfana en el renderizador hasta que se retire a mano.

@@ -1,0 +1,98 @@
+reviewedAt: 1.1.0
+passes: 3
+scenariosSha256: d845ae203ea99fe6e7d51482ce57c899edeaed76e73cfede2421b2c3e805d846
+conventionsSha256: ad857943bdd992cea0795ca3c4596ca8898e86e3d9b81576c0d67357d5a48fd5
+flows:
+  - { id: FL-AST-001, sha256: 9f8e48934087970d884c883ffda782cb985aaa328aa60862fbb3742c40813e73 }
+  - { id: FL-AST-001-B, sha256: 629264a9a4d7bbe2f8fe20ae00f1be96b37a4d3292cabccc5d5a3de0ca41e41a }
+  - { id: FL-AST-001-C, sha256: 539e9a88a7cde2f742a91613c9892ca47a0692ec4028ad7092b97840fa5c7c92 }
+  - { id: FL-AST-001-D, sha256: 427acc608456555f46e83d64dcb34644cb22a0ce4d9502428ddf06f2e43e4649 }
+  - { id: FL-AST-001-E, sha256: ae2758e1e702f344b4564cc4063bcbff5e04971caf1721b722e23a38d2afff88 }
+  - { id: FL-AST-001-F, sha256: 2da21580df52ecd7c6611732466d7e2b801072ea7fd108e4dc664a32a5ed8260 }
+  - { id: FL-AST-001-G, sha256: bba6c9c1ad6150f69e4d5d8d53ef33b2fd6057975dcf0276040f520fcfbda544 }
+  - { id: FL-AST-001-H, sha256: f929f48e4ca721e8d5d48d53eab7e781f474ae3c5d114ca104bd8ce877ec5e4e }
+  - { id: FL-AST-001-I, sha256: 24e506f9cd1671a34ef26bb960f404d70c35d95af3bece965dc9633760345f1d }
+  - { id: FL-AST-002, sha256: 74896bae3bfc621f0b2fdda3976f609dc7e89c10f15afcca6c39d8b06fcbdf2d }
+  - { id: FL-AST-002-E, sha256: cf377e9798fd4a5ffee0be6bfef2308a8a8a6e3eec3684fdbaa94071c0c17822 }
+  - { id: FL-AST-002-B, sha256: 493f5b98b088f3dc1bb4cc2e4e63f27c694ac3c52a2f20f1958146f9a68acd4f }
+  - { id: FL-AST-002-C, sha256: 55df4bfa0fe3f728295f0f6249983127c7ffd389576b8f61e6872006f91bd074 }
+  - { id: FL-AST-002-D, sha256: 5ba9722a48f82b163e2033cc59bf87106a5c46b5df85435792b2a65ef06337d3 }
+  - { id: FL-OBX-001, sha256: 2bec3d9c474416e20137833c51c66e3d63a57539df3bbe5ccc44b21d953b40de }
+  - { id: FL-AST-003, sha256: 8c748bc0cc669f74fbdad6e67b9e2d9ccad8eb71a7b3692ef0eb39a8974d54c5 }
+  - { id: FL-AST-003-B, sha256: 463546f732393542bd9f0bf932a6892e776d71d9ae5cced77b904f5215acda83 }
+  - { id: FL-AST-003-E, sha256: ca67b416ca3a67e10fa95d084f4bbf5ad08ef9bc433f8a3eff6e93dba109eb68 }
+  - { id: FL-AST-003-C, sha256: e6356aab5ebcfa431e00698ac31d3c639ef7665ca3f37b0f304f95ea3f72092e }
+  - { id: FL-AST-003-D, sha256: bc35e9fa95ee0c2977530f482e38733c8eb222352f4a46b1a3120f2878de8376 }
+  - { id: FL-AST-004, sha256: 4bc82aa236734743eaa8c9578f6a7fb089555d6ed33bf975ebc54340a609d50a }
+  - { id: FL-AST-004-B, sha256: 7ae187d54094faaf9822f7ed6291954c6dfebf1c1585819c29d185b0d6243fdc }
+  - { id: FL-QUA-001, sha256: d73e8c076ca2197b7bbc032f692129a094fec0c253e4c1696af9fecf7203e045 }
+  - { id: FL-QUA-001-B, sha256: 007f694ba8586ed8a48e83df6997213dce57e05af95e12981267845762a1441f }
+  - { id: FL-QUA-001-C, sha256: 1216ec0c51fcc62945067725a53535269bac51db538b6bf3a148ebf54231be06 }
+  - { id: FL-THD-001, sha256: 416fffa192ab5f405de1b56b13b5e86f92aa9bf5891d9ad4443b6b53d33b5962 }
+  - { id: FL-THD-001-B, sha256: 8ebef0c33f34dfa6fd7cf6c4cc45264fd68eb063150193f0e62f189ebbe2efe5 }
+  - { id: FL-CLU-001, sha256: 10afdbbc233f5be931617f89d3f601cf3ff2db7f5d5cb6ddb81efe45d2dae7a0 }
+  - { id: FL-CLU-002, sha256: ad265c97e6d1cb570af7c0410f211b6d471dca2650ca54d4d35259eca1f4b78c }
+  - { id: FL-CLU-003, sha256: b6fa967febddc1051055005cf17e7274949b43c0069bf9d5eeb352b9717c16db }
+  - { id: FL-REC-001, sha256: 415246f13c86822e466c2bc1075b14fab105b4929a1a092a7386a378110ba2e6 }
+  - { id: FL-REC-001-B, sha256: f6554120da0e133b909803e866378a0c2b7829d45cc25341f0a363f3e2f325fa }
+findings:
+  - flow: FL-AST-002
+    step: "Then 4"
+    kind: other
+    artifact: use-cases.getAsset.cache.invalidatedBy
+    evidence: >-
+      El Then dice que «la respuesta cacheada de antes de publicar no sobrevive, porque AssetPublished la invalida». Pero el flujo no cachea nada antes del When: el ejecutor resetea el estado antes de cada flujo, el Given solo deja <a1> en draft y programa el escáner, y aunque reprodujera el GET de FL-AST-001 Then 4, ahí rendering.getThumbnail no está programado, la ficha sale degradada y getAsset no la cachea (rule «La ficha degradada ... no se cachea»). El Then se cumple con la caché vacía, así que la invalidación por AssetPublished no la mide ningún flujo.
+    proposal: >-
+      Escenario: añadir al Given un GET /api/v1/assets/{a1} con rendering.getThumbnail respondiendo 200 (ficha completa, que sí se cachea) antes del When, como se hizo en FL-AST-003-D. Si no, quitar la frase de la caché del Then 4.
+    resolution: scenario
+    sealAfter: c92cb8d9c1538fef43d29753b8147e27c34bd6bd2fd0bb74b5fc9ec6a9fbd1b1
+  - flow: FL-QUA-001
+    step: "Then 2"
+    kind: other
+    artifact: use-cases.getAsset.cache.invalidatedBy
+    evidence: >-
+      El Then afirma quarantined «aunque la ficha estaba cacheada: AssetQuarantined la invalida». El Given (<a1> publicado por el camino de FL-AST-002 y purgeThumbnail en 204) no hace ningún GET de la ficha con rendering.getThumbnail programado, y tras el reset por flujo no hay nada en la caché; una ficha degradada tampoco se cachea. El Then se cumple sin caché y no prueba la invalidación por AssetQuarantined, que es justo lo que se añadió al diseño en la pasada anterior.
+    proposal: >-
+      Escenario: añadir al Given un GET /api/v1/assets/{a1} con rendering.getThumbnail respondiendo 200 antes de que llegue MalwareDetected.
+    resolution: scenario
+    sealAfter: 3638c80648311d146cbcaae1558d1a8fd03f3ffca2675efd2d588ac0cd402308
+  - flow: FL-THD-001
+    step: "Then 1"
+    kind: other
+    artifact: use-cases.getAsset.cache.invalidatedBy
+    evidence: >-
+      El Then dice «La ficha está cacheada y el contador viaja en ella, así que este Then también afirma que la caché la invalida un evento consumido (ThumbnailDelivered)». El Given solo dice que <a1> existe con thumbnailDeliveryCount 0; nada en el flujo pide la ficha antes del evento, y sin rendering.getThumbnail programado la ficha saldría degradada y no se cachearía. Con la caché vacía el contador sale 1 igual, y el escenario no mide la invalidación que dice medir.
+    proposal: >-
+      Escenario: añadir al Given un GET /api/v1/assets/{a1} con rendering.getThumbnail respondiendo 200 que devuelva thumbnailDeliveryCount = 0, y después el evento.
+    resolution: scenario
+    sealAfter: 9093bda9bc46d500f03f9c58755f395ea00a898d07f0b9f9714b06ef9d0333b4
+  - flow: FL-QUA-001-C
+    step: "Then 2"
+    kind: count
+    artifact: messaging.publishing.events.AssetQuarantined
+    evidence: >-
+      El Then dice «Y sale exactamente un AssetQuarantined» sin acotarlo a <a4>. FL-QUA-001-C está dentro del flujo FL-QUA-001, que encadena estado: FL-QUA-001 ya publicó un AssetQuarantined para <a1> (su Then 4), así que en el canal hay dos. El DELETE sí está acotado a {a4}; el evento no, y FL-OBX-001 ya advierte que un «exactamente una vez» sin acotar mide otra cosa.
+    proposal: >-
+      Escenario: «sale exactamente un AssetQuarantined con assetId = <a4>».
+    resolution: scenario
+    sealAfter: e58340c8afa1789b3b73a80abc8224ec9196a9becb8d591d5c4b0bcf01a53c22
+  - flow: FL-REC-001
+    step: "Then 4"
+    kind: other
+    artifact: dependencies.security-scanner.activations.scanAsset.unansweredAfterSeconds
+    evidence: >-
+      El Then afirma que «los archivos de los demás flujos no se ven afectados: solo se barre lo que lleva sin revalidar más que el umbral». El ejecutor resetea el estado antes de cada flujo, así que en FL-REC-001 no existe ningún archivo de otro flujo, y el único publicado es <a5>, el envejecido. La aserción no tiene sujeto, y un barrido que revalidara todo published sin mirar lastScannedAt pasaría el flujo entero: el umbral no lo discrimina ningún Then.
+    proposal: >-
+      Escenario: añadir al Given un segundo archivo publicado en el mismo flujo cuyo lastScannedAt NO se envejece, y afirmar que el proveedor no recibió ningún POST /scans con su assetId tras el tick y que su lastScannedAt no cambia.
+    resolution: scenario
+    sealAfter: 31bfd9ad68a3553944ae29f9958933d5785db5749549b28c9cd6f807d3b076e7
+  - flow: FL-CLU-002
+    step: "Then 3"
+    kind: other
+    artifact: dependencies.security-scanner.activations.scanAsset.unansweredAfterSeconds
+    evidence: >-
+      El Then dice «Ningún archivo ajeno al escenario se ve afectado». Tras el reset por flujo, los únicos archivos de FL-CLU-002 son los cinco del Given, todos envejecidos: no hay ningún archivo ajeno sobre el que afirmar nada, y la aserción se cumple siempre.
+    proposal: >-
+      Escenario: o quitar el Then 3, o añadir al Given un sexto archivo publicado sin envejecer y afirmar que no recibe POST /scans (con lo que el «exactamente cinco» del Then 1 también lo discrimina).
+    resolution: scenario
+    sealAfter: eabb25010ec2885d88bec3c0eb15172ecd75bdbb8fccca35531a57b3c751eeeb

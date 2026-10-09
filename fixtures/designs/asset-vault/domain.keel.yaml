@@ -2,6 +2,9 @@ types:
   AssetStatus:
     description: Estados por los que pasa un archivo custodiado.
     values: [draft, published, quarantined]
+  ScanVerdict:
+    description: Veredicto del escáner sobre un binario. Solo clean permite publicarlo.
+    values: [clean, infected, suspicious]
 
 entities:
   Owner:
@@ -29,10 +32,12 @@ entities:
       slug:
         type: string
         required: true
-        description: Nombre estable del archivo dentro de su propietario.
+        description: Nombre estable del archivo dentro de su propietario, en minúsculas y con guiones.
+        constraints: { pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 80 }
       title:
         type: string
         required: true
+        constraints: { maxLength: 200 }
       # Campo `unique` suelto, distinto de la clave natural: dos propietarios no pueden
       # custodiar el mismo binario. Es lo que genera un uk_ de campo (uk_assets_checksum)
       # además del uk_ de clave natural.
@@ -40,7 +45,7 @@ entities:
         type: string
         required: true
         unique: true
-        description: Huella del binario, que identifica el contenido con independencia del nombre.
+        description: Huella del binario (SHA-256 en hexadecimal y minúsculas, la calcula el servicio), que identifica el contenido con independencia del nombre.
       contentType:
         type: string
         required: true
@@ -56,6 +61,7 @@ entities:
       labels:
         type: string
         list: true
+        constraints: { maxItems: 20, maxLength: 40 }
         description: Etiquetas libres del archivo.
       status:
         type: AssetStatus
@@ -70,7 +76,7 @@ entities:
         type: int
         required: true
         default: 0
-        description: Cuántas entregas de su miniatura ha comunicado el renderizador.
+        description: Cuántas entregas de su miniatura ha comunicado el renderizador (una por mensaje distinto que envía).
       lastDeliveredAt:
         type: timestamp
         description: Cuándo sirvió el renderizador la miniatura por última vez.
@@ -82,7 +88,11 @@ entities:
       # siempre.
       lastScannedAt:
         type: timestamp
-        description: Cuándo dio el escáner su último veredicto sobre el binario.
+        description: Cuándo recibió el servicio el último veredicto del escáner sobre el binario (reloj propio, no el del escáner).
+      quarantineReason:
+        type: text
+        constraints: { maxLength: 500 }
+        description: Por qué se puso en cuarentena (el motivo del escáner o el veredicto de la revalidación).
     relations:
       owner:
         entity: Owner
@@ -124,3 +134,7 @@ aggregates:
   Vault:
     root: Asset
     entities: [AssetRevision]
+  # El propietario es su propio agregado: lo nombran los archivos solo por id, y su vida
+  # (alta, renombrado) no depende de la de ninguno de ellos.
+  Owners:
+    root: Owner

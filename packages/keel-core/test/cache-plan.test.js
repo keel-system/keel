@@ -57,7 +57,8 @@ test('la forma de la clave es la de RedisCacheManager: <servicio>:<operación>::
 test('una caché la invalida la operación que EMITE uno de sus eventos y la que CONSUME la suscripción a uno', () => {
   const vault = modelOf('asset-vault');
   const byOperation = Object.fromEntries(cacheInvalidations(vault).map((row) => [row.operation, row.caches]));
-  assert.deepEqual(Object.keys(byOperation).sort(), ['noteThumbnailDelivery', 'publishAsset', 'uploadAsset']);
+  assert.deepEqual(Object.keys(byOperation).sort(), ['noteThumbnailDelivery', 'publishAsset', 'quarantineAsset', 'uploadAsset']);
+  assert.deepEqual(byOperation.quarantineAsset, [{ cacheName: 'asset-vault:get-asset', constant: 'GET_ASSET_CACHE', events: ['AssetQuarantined'] }]);
   assert.deepEqual(byOperation.noteThumbnailDelivery, [{ cacheName: 'asset-vault:get-asset', constant: 'GET_ASSET_CACHE', events: ['ThumbnailDelivered'] }]);
   assert.deepEqual(unbackedInvalidations(vault), []);
 });

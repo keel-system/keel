@@ -1,2 +1,118 @@
-# La revisión semántica de este diseño: qué se miró y con qué resultado.
-reviewedAt: 1.0.0
+reviewedBy: keel-design-review
+reviewedAt: 1.1.0
+findings:
+  - id: REV-DOMAIN-PROMISED-STATE
+    scope: use-cases.operations.publishAsset
+    verdict: fixed
+    note: >-
+      Corregido en v1.1.0: el veredicto es el enum ScanVerdict; solo clean publica, y cualquier otro
+      deja el archivo en draft con ASSET_NOT_CLEAN (FL-AST-002-E). reconcileScans pone en cuarentena
+      él mismo un veredicto no limpio (FL-REC-001-B), y Asset guarda quarantineReason, que FL-QUA-001
+      afirma.
+  - id: REV-USECASES-INTERNAL-REPEAT
+    scope: use-cases.operations.noteThumbnailDelivery
+    verdict: accepted
+    note: >-
+      Aceptado: la única guarda de noteThumbnailDelivery es la marca de procesado escrita antes del
+      efecto, decidido en la estructural 3.2. La ventana de esa marca la trata REV-MSG-DEDUPE-WINDOW.
+  - id: REV-USECASES-CACHE-NON-EVENT-PATHS
+    scope: use-cases.operations.getAsset.cache
+    verdict: fixed
+    note: >-
+      Corregido en v1.1.0: MalwareDetected invalida la ficha (FL-QUA-001 lo afirma con la ficha
+      cacheada), la ficha degradada no se cachea (regla de getAsset, FL-AST-003-B) y lastScannedAt se
+      afirma por el listado, que no se cachea. Que lastScannedAt vaya viejo en la ficha hasta el TTL se
+      acepta: no lo lee nadie desde ella.
+  - id: REV-USECASES-GUARD-ORDER
+    scope: use-cases.operations.uploadAsset.rules
+    verdict: fixed
+    note: >-
+      Corregido en v1.1.0: la regla de uploadAsset ponía el propietario antes que el tamaño, y
+      FILE_TOO_LARGE se decide al leer el multipart, antes de poder buscar el Owner. Ahora el tamaño va
+      primero y después el orden de errors. publishAsset comprueba el estado antes del escáner y
+      getAsset llega a Owner.code por el ownerId de la ficha: los dos son implementables.
+  - id: REV-SEC-M2M-AUDIENCE
+    scope: security.authentication.serviceAuth
+    verdict: ok
+    note: >-
+      serviceAuth declara validateAudience true con audience asset-vault-api, y la prosa dice por qué.
+  - id: REV-SEC-RESOURCE-SCOPE
+    scope: security.authentication.scoping
+    verdict: fixed
+    note: >-
+      Corregido en v1.1.0: listAssets se acota al alcance (regla y FL-AST-004-B), y getAsset exime al
+      cliente máquina rendering-service por regla (FL-AST-003-E). Que el schema no pueda enumerar esa
+      exención de un cliente máquina queda como hallazgo del método (candidato exemptClients).
+  - id: REV-MSG-MISSING-CHANNEL
+    scope: messaging.publishing.events
+    verdict: accepted
+    note: >-
+      Aceptado: sin channel cada evento usa el canal por defecto del servicio, que es la convención
+      del método; ningún consumidor necesita hoy partirlos. MalwareDetected llega del canal por
+      defecto del escáner.
+  - id: REV-MSG-DEDUPE-WINDOW
+    scope: messaging.subscriptions.ThumbnailDelivered
+    verdict: accepted
+    note: >-
+      Aceptado: el contador es telemetría de entregas, no un saldo. Una reentrega que llegue pasada la
+      retención de processed_event (días) sumaría uno, y el renderizador no reentrega tan tarde.
+  - id: REV-DEPS-ONDEMAND-IN-COMMAND
+    scope: dependencies.rendering.needs.thumbnail
+    verdict: ok
+    note: >-
+      El único need on-demand lo usa getAsset, una query. scanAsset se encarga dentro de publishAsset
+      tras comprobar el estado (regla de publishAsset).
+  - id: REV-DEPS-NEED-IS-ACTIVATION
+    scope: dependencies.rendering.needs.thumbnail
+    verdict: ok
+    note: >-
+      getThumbnail es un GET sin efecto en el proveedor y su respuesta viaja en la ficha (exposedAs
+      thumbnail), que FL-AST-003 afirma.
+  - id: REV-DEPS-IGNORED-FAILURE
+    scope: dependencies.rendering.activations.purgeThumbnail
+    verdict: accepted
+    note: >-
+      Aceptado: el fallback ya no promete una pasada; la miniatura huérfana de un archivo en cuarentena
+      es un coste menor que dejar la cuarentena sin aplicar (estructural 3.11), y el binario original
+      ya no se publica.
+  - id: REV-DEPS-NO-COMPENSATION
+    scope: dependencies
+    verdict: ok
+    note: >-
+      scanAsset no tiene efecto acumulable que retirar, y purgeThumbnail retirada de más no hay que
+      reponerla.
+  - id: REV-DEPS-AWAITING-CLOCK
+    scope: dependencies.security-scanner.activations.scanAsset.awaitingSince
+    verdict: fixed
+    note: >-
+      Corregido en v1.1.0: publishAsset y reconcileScans fijan lastScannedAt con el instante propio en
+      que reciben el veredicto (reglas), un published siempre la tiene, y FL-AST-002 Then 5 la afirma.
+  - id: REV-DEPS-MESSAGEID-UNSTABLE
+    scope: messaging.subscriptions.ThumbnailDelivered.contract.messageId
+    verdict: accepted
+    note: >-
+      Aceptado: el renderizador estampa X-Render-Event-Id al crear el hecho y lo conserva en sus
+      reentregas; es lo que la suscripción declara en contract. Si cambiara, el efecto sería un
+      contador de más, que es telemetría (REV-MSG-DEDUPE-WINDOW).
+  - id: REV-DEPS-IDEMPOTENT-BY-DECLARATION
+    scope: use-cases.operations.noteThumbnailDelivery
+    verdict: accepted
+    note: >-
+      Aceptado: thumbnailDeliveryCount cuenta mensajes distintos que comunica el renderizador (así lo
+      dice su descripción), no entregas de negocio. lastDeliveredAt solo avanza, así que una entrega
+      repetida o desordenada no la estropea.
+  - id: REV-DEPS-COMPENSATION-WRONG-STATE
+    scope: dependencies.security-scanner.compensations[0]
+    verdict: ok
+    note: >-
+      quarantined es terminal a propósito: lo explica la aceptación de CHK-DEPS-COMPENSATION-DEAD-END.
+  - id: REV-PERSIST-MISSING-INDEX
+    scope: persistence.entities.Asset.indexes
+    verdict: fixed
+    note: Corregido en v1.1.0 con el índice [slug], que sirve el orden del listado.
+  - id: REV-STORAGE-UPLOAD-ERRORS
+    scope: use-cases.operations.uploadAsset.errors
+    verdict: fixed
+    note: >-
+      Corregido en v1.1.0: uploadAsset declara UNSUPPORTED_CONTENT_TYPE (415), FILE_TOO_LARGE es el
+      canónico, y FL-AST-001-H/I cubren los dos bordes.

@@ -1,9 +1,409 @@
 # El análisis de huecos de este diseño (gap-analysis.md): qué clases se recorrieron, sobre qué
-# unidades y qué se encontró. Migrado desde review.yaml, donde no lo leía nadie: es una fixture
-# del generador, así que el barrido está a medias a propósito y keel validate --ready lo cuenta.
-reviewedAt: 1.0.0
+# unidades y qué se encontró. Barrido completo de la v1.1.0 hecho por keel-gap-sweep en contexto
+# limpio; sustituye al parcial de la v1.0.0.
+reviewedBy: keel-gap-sweep
+reviewedAt: 1.1.0
 
 coverage:
-  - class: 4
-    units: [uploadAsset]
+  - class: 1
+    units: [ Asset ]
+    result: clean
+  - class: 2
+    units: [ uploadAsset, publishAsset, quarantineAsset, noteThumbnailDelivery, reconcileScans ]
     result: findings
+  - class: 3
+    units: [ Owner, Asset, AssetRevision ]
+    result: findings
+  - class: 4
+    units: [ uploadAsset, publishAsset, quarantineAsset, noteThumbnailDelivery, reconcileScans ]
+    result: findings
+  - class: 5
+    units: [ getAsset, listAssets ]
+    result: findings
+  - class: 6
+    units: [ Owner, Asset, AssetRevision ]
+    result: findings
+  - class: 7
+    units:
+      [
+        publishing.AssetUploaded,
+        publishing.AssetPublished,
+        subscriptions.MalwareDetected,
+        subscriptions.ThumbnailDelivered,
+        publishing.AssetQuarantined
+      ]
+    result: findings
+  - class: 8
+    units:
+      [
+        rendering.needs.thumbnail,
+        rendering.activations.purgeThumbnail,
+        security-scanner.activations.scanAsset,
+        clients.scanner,
+        clients.rendering,
+        subscriptions.MalwareDetected,
+        subscriptions.ThumbnailDelivered
+      ]
+    result: findings
+  - class: 9
+    units:
+      [
+        uploadAsset,
+        getAsset,
+        listAssets,
+        publishAsset,
+        quarantineAsset,
+        noteThumbnailDelivery,
+        reconcileScans
+      ]
+    result: findings
+  - class: 10
+    units: [ assetBinaries ]
+    result: findings
+  - class: 11
+    units: [ getAsset, serviceClients.rendering-service ]
+    result: findings
+  - class: 12
+    units: [ service ]
+    result: findings
+  - class: 13
+    units: [ reconcileScans ]
+    result: findings
+  - class: 14
+    units: [ Owner, Asset ]
+    result: findings
+  - class: 15
+    units: [ uploadAsset, getAsset, listAssets, publishAsset ]
+    result: clean
+  - class: 16
+    units: [ '3.1', '3.2', '3.3', '3.4', '3.5', '3.6', '3.7', '3.8', '3.9', '3.9b', '3.10', '3.11' ]
+    result: clean
+
+findings:
+  # --- huecos (gap) ---
+  - class: 2
+    unit: publishAsset
+    what: >-
+      El escáner puede devolver un veredicto que no sea limpio, y publishAsset no declara ni guarda
+      ni error ni efecto para ese caso: no dice si se rechaza (con qué code y http), si el archivo
+      sigue en draft o si pasa a quarantined.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: el veredicto es ScanVerdict; solo clean publica y cualquier otro
+      responde ASSET_NOT_CLEAN (422) con el archivo en draft (FL-AST-002-E)."
+  - class: 2
+    unit: quarantineAsset
+    what: >-
+      Un segundo MalwareDetected con otro eventId sobre un archivo ya en quarantined choca con la
+      transición (quarantined no sale) y no hay error ni desenlace declarado: no se sabe si se
+      confirma como no-op o se reintenta cinco veces y acaba en la DLQ.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: un archivo que ya está en quarantined se confirma sin efecto, conserva
+      el primer motivo y no publica otro AssetQuarantined (regla de quarantineAsset)."
+  - class: 3
+    unit: Asset
+    what: >-
+      checksum es requerido y único, pero no llega en el input ni es generated/computed: el diseño
+      no dice quién lo calcula, con qué algoritmo ni con qué codificación, y de eso depende que
+      ASSET_CHECKSUM_ALREADY_EXISTS salte igual en dos servidores. Lo mismo para contentType
+      (declarado por el cliente o detectado del binario) y el formato de storageKey.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: la regla de uploadAsset fija checksum (SHA-256 en hexadecimal y
+      minúsculas), contentType (el tipo declarado, comprobado con la firma del contenido) y el
+      formato de storageKey."
+  - class: 3
+    unit: Asset
+    what: >-
+      Ninguna operación declara que escribe lastScannedAt: no se dice si publishAsset la toma del
+      scannedAt de la respuesta o del reloj del servidor, ni qué hace reconcileScans con un archivo
+      publicado cuya marca es nula.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: publishAsset y reconcileScans fijan lastScannedAt con el instante propio
+      en que reciben el veredicto; un published siempre la tiene (FL-AST-002 Then 5)."
+  - class: 3
+    unit: AssetRevision
+    what: >-
+      Ninguna operación crea ni modifica revisiones: revisionNumber (requerido y «contrato
+      observable») y note no tienen origen, y no se dice quién asigna el número ni desde qué valor.
+    severity: gap
+    state: accepted
+    reason: Las revisiones existen para la silueta documental anidada del generador; en esta versión
+      ninguna operación las crea y la ficha las devuelve vacías. Crearlas es otra versión del
+      diseño.
+  - class: 5
+    unit: getAsset
+    what: >-
+      invalidatedBy no cubre quarantineAsset (no emite ningún evento) ni el lastScannedAt que
+      renueva reconcileScans: tras una cuarentena la ficha cacheada sigue diciendo published, con la
+      miniatura del binario infectado, hasta 300 s.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: AssetQuarantined invalida la ficha venga la cuarentena del hallazgo o
+      del barrido, la degradada no se cachea, y lastScannedAt se lee por el listado, que no se
+      cachea."
+  - class: 7
+    unit: publishing.AssetPublished
+    what: >-
+      Ningún evento retira una publicación: cuando un archivo publicado pasa a quarantined, los
+      consumidores que supieron por AssetPublished que se podía servir no se enteran nunca.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: quarantineAsset publica AssetQuarantined, que retira la publicación para
+      quien supo de ella (FL-QUA-001 Then 4, FL-REC-001-B Then 3)."
+  - class: 8
+    unit: security-scanner.activations.scanAsset
+    what: >-
+      El verdict de scanAsset es un string libre: el diseño no enumera sus valores ni dice cuál
+      cuenta como limpio, así que la condición de la que depende publicar la decide quien
+      implemente.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: verdict es el enum ScanVerdict (clean, infected, suspicious) y solo
+      clean cuenta como limpio."
+  - class: 8
+    unit: clients.scanner
+    what: >-
+      idempotency keyFrom payload-hash produce la misma clave en cada revalidación de reconcileScans
+      (mismo assetId y storageKey): un escáner que honre la cabecera devolverá el veredicto antiguo
+      sin volver a analizar, y el contrato no dice si la honra ni durante cuánto.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: la clave de idempotencia de scanAsset sale de la correlación de cada
+      encargo (keyFrom correlation), así que cada revalidación es un análisis nuevo."
+  - class: 8
+    unit: rendering.activations.purgeThumbnail
+    what: >-
+      El fallback promete que «la miniatura huérfana se retira en la siguiente pasada», pero no hay
+      reconciledBy ni barrido que la haga: con onFailure ignore, la miniatura del binario infectado
+      se sigue sirviendo para siempre y nadie lo detecta.
+    severity: gap
+    state: accepted
+    reason: "El fallback ya no promete una pasada: con el renderizador caído la miniatura queda huérfana
+      hasta que se retire a mano, coste menor que dejar sin aplicar la cuarentena (estructural
+      3.11)."
+  - class: 9
+    unit: getAsset
+    what: >-
+      El token de rendering-service (client-credentials, sin roles ni claim vaults) no dice si queda
+      sujeto al alcance por recurso: o recibe ASSET_OUT_OF_SCOPE en toda ficha, o lo ve todo sin que
+      esté decidido.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: la regla de getAsset exime al cliente máquina rendering-service del
+      alcance, porque genera las miniaturas de todos los propietarios (FL-AST-003-E)."
+  - class: 9
+    unit: listAssets
+    what: >-
+      El diseño no dice que el alcance por recurso (claim vaults) filtre la colección: un
+      vault-reader puede listar los archivos de todos los propietarios, que es la fuga que getAsset
+      sí cierra con su 403.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: el listado se acota al claim vaults (vault-admin exento) y un token de
+      servicio no lo alcanza (regla de listAssets, FL-AST-004-B)."
+  - class: 10
+    unit: assetBinaries
+    what: >-
+      El bucket es private con signedUrlTtlSeconds 600 y decisions 3.10 dice que se sirve por enlace
+      firmado, pero ninguna operación produce ese enlace ni una descarga: por contrato el binario es
+      inaccesible.
+    severity: gap
+    state: accepted
+    reason: "Este servicio custodia los binarios y no los sirve en esta versión: el bucket es privado y
+      solo lo lee el servicio (descripción del bucket y estructural 3.10). La descarga firmada es
+      otra versión."
+  - class: 12
+    unit: service
+    what: >-
+      Sin convención de mayúsculas/acentos: no se dice si la unicidad (owner, slug) distingue
+      «Informe» de «informe», si Owner.code se compara con el claim vaults sin distinguir caja, ni
+      la caja del checksum hexadecimal.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: slug solo admite minúsculas (pattern), checksum es hexadecimal en
+      minúsculas, y Owner.code se compara con el claim tal cual, distinguiendo mayúsculas
+      (security.authentication.scoping)."
+  - class: 12
+    unit: service
+    what: >-
+      Campos de texto y listas sin cota: slug, title, labels (sin maxItems ni longitud por
+      etiqueta), reason de MalwareDetected; tampoco hay formato para slug.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: slug con pattern y maxLength 80, title maxLength 200, labels maxItems 20
+      y maxLength 40, y reason y quarantineReason maxLength 500."
+  - class: 13
+    unit: reconcileScans
+    what: >-
+      Si la revalidación devuelve un veredicto no limpio, el barrido no declara transición ni
+      evento: confía en un MalwareDetected que, por la propia premisa del barrido, el escáner puede
+      no publicar nunca.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: con un veredicto no limpio el barrido despacha él mismo quarantineAsset
+      con reason «revalidación - <veredicto>» (FL-REC-001-B)."
+  - class: 13
+    unit: reconcileScans
+    what: >-
+      Con el escáner caído a mitad de la pasada (SCANNER_UNAVAILABLE no tiene llamante), no se dice
+      si se renueva lastScannedAt, si la pasada se aborta o sigue con el resto, ni cuántos archivos
+      revalida como máximo por pasada.
+    severity: gap
+    state: decided
+    reason: "Corregido en v1.1.0: con el escáner caído el archivo se deja como estaba, sin renovar la
+      marca, y la pasada sigue con los demás. El tamaño del lote es el del reclamo del generador
+      (parámetros sweep.*)."
+
+  # --- riesgos (risk) ---
+  - class: 2
+    unit: uploadAsset
+    what: >-
+      El orden de errors pone ASSET_CHECKSUM_ALREADY_EXISTS antes que OWNER_NOT_FOUND, pero el
+      propietario tiene que resolverse antes (la salida lo embebe): con los dos fallos a la vez, el
+      orden declarado no es implementable y el error que ve el cliente queda sin fijar.
+    severity: risk
+    state: decided
+    reason: "Corregido en v1.1.0: la regla de uploadAsset fija el orden (tamaño al leer la petición,
+      después propietario, tipo y las dos unicidades) y errors lo sigue."
+  - class: 3
+    unit: Asset
+    what: >-
+      El efecto de noteThumbnailDelivery (sumar 1 a thumbnailDeliveryCount y fijar lastDeliveredAt)
+      solo está en comentarios: la operación no declara ninguna regla.
+    severity: risk
+    state: decided
+    reason: "Corregido en v1.1.0: noteThumbnailDelivery declara su efecto en una regla (suma uno al
+      contador y lastDeliveredAt solo avanza)."
+  - class: 4
+    unit: noteThumbnailDelivery
+    what: >-
+      Con tryRecord (marca antes del efecto) y optimisticLocking all, cualquier
+      CONCURRENT_MODIFICATION con una publicación, cuarentena o barrido simultáneos pierde la
+      entrega para siempre (el reintento ve la marca): la pérdida solo está aceptada en un
+      comentario, no en decisions.yaml.
+    severity: risk
+    state: accepted
+    reason: "El contador es telemetría de entregas: perder una por un CONCURRENT_MODIFICATION con la marca
+      ya escrita es el precio del orden tryRecord, decidido en la estructural 3.2 y en
+      REV-MSG-DEDUPE-WINDOW."
+  - class: 5
+    unit: listAssets
+    what: >-
+      Sin ningún filtro (propietario, estado, etiquetas): los archivos en cuarentena salen mezclados
+      con los publicados y el listado cruza todos los propietarios ordenado solo por slug.
+    severity: risk
+    state: accepted
+    reason: "El back-office lista por slug dentro del alcance del custodio, y cada archivo trae su status:
+      filtrar por estado o por propietario no lo necesita nadie en esta versión."
+  - class: 6
+    unit: Owner
+    what: >-
+      Los propietarios se aprovisionan fuera, pero no hay vía por la que este servicio se entere de
+      un cambio de code (rompe el alcance por vaults) ni de una baja (los archivos quedan colgando).
+    severity: risk
+    state: accepted
+    reason: "Los propietarios los aprovisiona el directorio de la organización (OBL-ENTITY-UNREACHABLE):
+      un cambio de code o una baja se aplica a la vez en el directorio, en los tokens y en esta
+      base, fuera de este servicio."
+  - class: 7
+    unit: publishing.AssetUploaded
+    what: >-
+      No tiene consumidor conocido y su payload no lleva slug, checksum ni contentType: o es
+      contrato público sin dueño, o es anémico para quien lo consuma.
+    severity: risk
+    state: accepted
+    reason: Lo consume la auditoría de custodia de la organización, que solo necesita saber qué se
+      custodió y de quién; el resto lo pide a getAsset. Ampliar el payload es aditivo.
+  - class: 7
+    unit: subscriptions.ThumbnailDelivered
+    what: >-
+      Con entregas desordenadas, lastDeliveredAt puede retroceder (no se dice si gana la última en
+      llegar o el instante mayor), y una entrega de un assetId desconocido se reintenta cinco veces
+      y acaba en la DLQ por un dato de telemetría.
+    severity: risk
+    state: decided
+    reason: "Corregido en v1.1.0: lastDeliveredAt solo avanza (una entrega desordenada cuenta, pero no
+      retrasa la marca) y un assetId desconocido acaba en la DLQ tras los reintentos (reglas de
+      noteThumbnailDelivery)."
+  - class: 7
+    unit: subscriptions.MalwareDetected
+    what: >-
+      Un hallazgo para un assetId que no existe (ASSET_NOT_FOUND) no tiene desenlace declarado: se
+      reintentará y acabará en la DLQ, sin decir si es lo deseado o debe confirmarse sin efecto.
+    severity: risk
+    state: decided
+    reason: "Corregido en v1.1.0: un hallazgo sobre un archivo que no existe responde ASSET_NOT_FOUND y
+      acaba en la DLQ tras los reintentos, porque es una anomalía que alguien tiene que mirar (regla
+      de quarantineAsset)."
+  - class: 8
+    unit: security-scanner.activations.scanAsset
+    what: >-
+      No se dice si la llamada al escáner en publishAsset ocurre dentro de la transacción de
+      escritura: con timeout 4000 ms y 3 intentos, la transacción puede quedar abierta ~12 s.
+    severity: risk
+    state: accepted
+    reason: "El análisis se pide dentro del caso de uso, después de comprobar el estado: en el peor caso
+      son unos 12 s de transacción sobre un solo documento, dentro del límite de MongoDB y sin
+      bloquear a nadie más (bloqueo optimista)."
+  - class: 9
+    unit: uploadAsset
+    what: >-
+      Las escrituras (uploadAsset, publishAsset) quedan sin alcance por recurso solo porque
+      asset:write lo tiene únicamente vault-admin, que está en exemptRoles: es una consecuencia
+      implícita, no una decisión escrita, y se rompe al conceder asset:write a otro rol.
+    severity: risk
+    state: decided
+    reason: "Corregido en v1.1.0: security.authentication.scoping dice por escrito que las escrituras solo
+      las hace vault-admin, exento, y que conceder asset:write a otro rol obliga a acotarlas antes."
+  - class: 10
+    unit: assetBinaries
+    what: >-
+      No se dice qué pasa con el binario de un archivo en cuarentena (se conserva infectado en el
+      bucket o se borra) ni con el binario ya subido si la operación falla después de guardarlo.
+    severity: risk
+    state: accepted
+    reason: "El binario de un archivo en cuarentena se conserva como evidencia para la auditoría, y no se
+      sirve a nadie. Un binario subido cuya operación falla después queda huérfano en el bucket
+      privado: no es accesible y no cuesta más que su espacio."
+  - class: 11
+    unit: getAsset
+    what: >-
+      audience both sin rationale escrito de por qué compartir el endpoint y no darle operación
+      propia al cliente máquina; y es circular: el renderizador pide la ficha y getAsset le pide a
+      él la miniatura en la misma llamada.
+    severity: risk
+    state: accepted
+    reason: "El renderizador lee la misma ficha que un custodio y no necesita otra forma: una operación
+      propia sería un segundo contrato idéntico. No hay ciclo: el renderizador pide la ficha, y
+      getAsset le pide la miniatura por otro endpoint suyo (getThumbnail), que no vuelve a llamar
+      aquí."
+  - class: 14
+    unit: Asset
+    what: >-
+      Con authorship all, no se dice qué autor se estampa en las escrituras sin usuario
+      (quarantineAsset, noteThumbnailDelivery, reconcileScans).
+    severity: risk
+    state: accepted
+    reason: "Las escrituras sin usuario (la suscripción y el barrido) se estampan con el actor de sistema
+      de la convención del generador, que lleva la correlación del mensaje o de la pasada: basta
+      para la auditoría."
+  - class: 14
+    unit: Asset
+    what: >-
+      Sin retención ni borrado: los archivos, incluidos los de cuarentena, se guardan para siempre,
+      y ninguna operación permite retirarlos.
+    severity: risk
+    state: accepted
+    reason: "La custodia guarda todo, también lo que está en cuarentena: la retención la fija la política
+      documental de la organización, y no está en esta versión."
+  - class: 14
+    unit: Asset
+    what: >-
+      listAssets ordena por slug sobre todos los propietarios, y ningún índice empieza por slug (la
+      clave natural empieza por owner): el orden paginado no lo sostiene un índice al crecer.
+    severity: risk
+    state: decided
+    reason: "Corregido en v1.1.0: índice [slug], que sostiene el orden del listado."

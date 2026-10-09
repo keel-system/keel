@@ -10,9 +10,11 @@ operations:
         slug:
           type: string
           required: true
+          constraints: { pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 80 }
         title:
           type: string
           required: true
+          constraints: { maxLength: 200 }
         binary:
           type: file
           required: true
@@ -20,10 +22,21 @@ operations:
         labels:
           type: string
           list: true
+          constraints: { maxItems: 20, maxLength: 40 }
     output:
       entity: Asset
       embed: [owner]
+    rules:
+      - El servicio calcula checksum (SHA-256 del binario, en hexadecimal y minúsculas), toma contentType del tipo declarado de la parte —ya admitido por el bucket— y genera storageKey como <ownerId>/<assetId>/<uuid>; el nombre del archivo del cliente no entra en la clave.
+      - El tamaño se rechaza al leer la petición (FILE_TOO_LARGE), antes que nada; después van en el orden de errors - el propietario, el tipo del binario (con la firma de su contenido) y por último las dos unicidades.
+      - El checksum se compara tal cual (hexadecimal en minúsculas), y el slug solo admite minúsculas, así que la unicidad de owner y slug no tiene variantes de mayúsculas.
     errors:
+      - code: OWNER_NOT_FOUND
+        when: El propietario referenciado no existe.
+        http: 422
+      - code: UNSUPPORTED_CONTENT_TYPE
+        when: El tipo declarado no es de los que admite el bucket, o el contenido no es de verdad de ese tipo.
+        http: 415
       # El code nombra los campos de la clave natural (`owner, slug`), que es la
       # convención con la que el ApiExceptionHandler ata el índice único al error
       # declarado. Con otro nombre no adivina: deja un TODO y se inventa un code.
@@ -33,9 +46,6 @@ operations:
       - code: ASSET_CHECKSUM_ALREADY_EXISTS
         when: Ese binario ya está custodiado con otro nombre.
         http: 409
-      - code: OWNER_NOT_FOUND
-        when: El propietario referenciado no existe.
-        http: 422
     emits: [AssetUploaded]
     # Idempotencia de PETICIÓN: el cliente sube un archivo grande, se le va el timeout y
     # reintenta. Es la que crea `idempotency_record`, y con ella el único índice de
@@ -45,7 +55,7 @@ operations:
       ttlSeconds: 86400
 
   getAsset:
-    description: Recupera la ficha de un archivo con su propietario y su miniatura.
+    description: Recupera la ficha de un archivo con su miniatura; el propietario viaja por su id.
     kind: query
     input:
       fields:
@@ -57,6 +67,11 @@ operations:
     # cacheada lleva el ownerId; quien quiera el propietario entero lo pide aparte.
     output:
       entity: Asset
+    rules:
+      - Primero se carga el archivo (ASSET_NOT_FOUND) y se comprueba el alcance (ASSET_OUT_OF_SCOPE); solo después se pide la miniatura al renderizador.
+      - El alcance del solicitante sobre el Owner.code del archivo se comprueba en cada respuesta, también en la que sale de la caché.
+      - El alcance es de los custodios - el cliente máquina rendering-service lee cualquier ficha, porque genera las miniaturas de todos los propietarios.
+      - La ficha degradada (thumbnail nulo porque el renderizador no contestó) se sirve pero no se cachea.
     errors:
       - code: ASSET_NOT_FOUND
         when: No existe un archivo con ese id.
@@ -75,12 +90,18 @@ operations:
       # en esta misma ficha. Sin invalidar, la respuesta cacheada seguiría diciendo el
       # contador viejo hasta cinco minutos — la ficha mentiría sobre un dato que acaba de
       # cambiar, y ningún escenario que lea por aquí podría afirmar nada del contador.
-      invalidatedBy: [AssetUploaded, AssetPublished, ThumbnailDelivered]
+      # `AssetQuarantined`, por lo mismo: la cuarentena cambia el estado de la ficha, y una
+      # ficha que siguiera diciendo `published` de un binario infectado es lo peor que puede
+      # servir este servicio. Es el evento PUBLICADO y no el `MalwareDetected` consumido porque
+      # la cuarentena también la despacha el barrido, sin ningún hallazgo entrante.
+      invalidatedBy: [AssetUploaded, AssetPublished, ThumbnailDelivered, AssetQuarantined]
 
   listAssets:
     description: Lista los archivos custodiados de forma paginada.
     kind: query
     input: "void"
+    rules:
+      - El listado se acota al alcance del solicitante - solo los archivos de los propietarios que enumera su claim vaults (vault-admin ve todos). Un cliente máquina no lo alcanza - su regla de acceso no admite tokens de servicio.
     output:
       entity: Asset
       paginated: true
@@ -102,12 +123,19 @@ operations:
       - entity: Asset
         from: [draft]
         to: published
+    rules:
+      - El estado se comprueba antes de pedir el análisis - un archivo que no está en draft no le cuesta un análisis al escáner.
+      - Solo el veredicto clean publica; con cualquier otro el archivo sigue en draft y la operación responde ASSET_NOT_CLEAN.
+      - Al recibir el veredicto, fija lastScannedAt con el instante propio en que lo recibe (no el scannedAt del escáner).
     errors:
       - code: ASSET_NOT_FOUND
         when: No existe un archivo con ese id.
         http: 404
       - code: INVALID_ASSET_STATE
         when: El archivo no está en un estado desde el que se pueda publicar.
+        http: 422
+      - code: ASSET_NOT_CLEAN
+        when: El escáner no dio el binario por limpio.
         http: 422
       - code: CONCURRENT_MODIFICATION
         when: Otra operación modificó el archivo mientras se publicaba.
@@ -120,8 +148,8 @@ operations:
   quarantineAsset:
     description: Pone en cuarentena un archivo que el escáner marcó como infectado.
     kind: command
-    # Interna: solo la dispara la suscripción. Exponerla por HTTP abriría un segundo
-    # camino que la deduplicación del listener no cubre.
+    # Interna: solo la dispara la suscripción (y la revalidación, por el CommandDispatcher).
+    # Exponerla por HTTP abriría un segundo camino que la deduplicación del listener no cubre.
     internal: true
     input:
       fields:
@@ -131,11 +159,18 @@ operations:
         reason:
           type: string
           required: true
+          constraints: { maxLength: 500 }
     output: "void"
+    rules:
+      - Guarda reason en quarantineReason.
+      - Un archivo que ya está en quarantined se confirma sin efecto - un segundo hallazgo sobre el mismo binario no cambia nada, conserva el primer motivo y no publica otro AssetQuarantined.
+      - La retirada de la miniatura (purgeThumbnail) se encarga después de confirmar la cuarentena, nunca dentro de su transacción - una copia que pierde la carrera no llega al renderizador.
+      - Un assetId que no existe responde ASSET_NOT_FOUND y, por la suscripción, acaba en la DLQ tras los reintentos - un hallazgo sobre un archivo desconocido es una anomalía que alguien tiene que mirar.
     errors:
       - code: ASSET_NOT_FOUND
         when: No existe un archivo con ese id.
         http: 404
+    emits: [AssetQuarantined]
     # Declara transiciones, así que el guard de idempotencia usa el orden
     # `alreadyProcessed` + `record`: la reentrega la frena la propia transición.
     transitions:
@@ -165,6 +200,9 @@ operations:
           type: timestamp
           required: true
     output: "void"
+    rules:
+      - Suma uno a thumbnailDeliveryCount y lleva lastDeliveredAt a deliveredAt solo si es posterior al registrado - una entrega desordenada cuenta, pero no retrasa la marca.
+      - Un assetId que no existe responde ASSET_NOT_FOUND y acaba en la DLQ tras los reintentos, como cualquier otro mensaje que no se puede aplicar.
     errors:
       - code: ASSET_NOT_FOUND
         when: No existe un archivo con ese id.
@@ -176,11 +214,15 @@ operations:
     internal: true
     input: "void"
     output: "void"
+    rules:
+      - Barre los archivos published cuyo lastScannedAt es anterior al umbral de unansweredAfterSeconds (un published siempre lo tiene - lo fija publishAsset).
+      - Con veredicto clean, fija lastScannedAt con el instante propio en que lo recibe.
+      - Con cualquier otro veredicto, pone el archivo en cuarentena por el mismo camino que MalwareDetected - despacha quarantineAsset con reason "revalidación - <veredicto>".
+      - Si el escáner no contesta, el archivo se deja como estaba (sin renovar lastScannedAt) para la pasada siguiente, y la pasada sigue con los demás.
     # La pata del SILENCIO, en su variante de DERIVA: el escáner dio su veredicto en el
     # acto, pero puede encontrar la amenaza más tarde y no publicarla nunca. Aquí no hay
     # un desenlace que esperar sino una creencia que revalidar, así que el barrido no
-    # espera: vuelve a preguntar. Si el escáner responde con amenaza, el camino normal
-    # (ThreatFound → quarantineAsset) hace el resto.
+    # espera: vuelve a preguntar, y una amenaza la resuelve él mismo.
     #
     # Cada minuto, no cada media hora: la frecuencia del barrido y el umbral de paciencia
     # —cuánto puede envejecer un veredicto antes de revalidarlo— son DOS cosas separadas,

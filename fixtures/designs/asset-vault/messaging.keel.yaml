@@ -38,6 +38,21 @@ publishing:
         occurredAt:
           type: timestamp
           required: true
+    # La retirada de una publicación. Sin él, quien supo por AssetPublished que un archivo se
+    # podía servir no se entera nunca de que pasó a cuarentena; y es también lo que invalida la
+    # ficha cacheada venga la cuarentena de donde venga (el hallazgo del escáner o el barrido).
+    AssetQuarantined:
+      description: Un archivo custodiado pasó a cuarentena y no debe servirse.
+      payload:
+        assetId:
+          type: uuid
+          required: true
+        reason:
+          type: string
+          required: true
+        occurredAt:
+          type: timestamp
+          required: true
 
 subscriptions:
   MalwareDetected:

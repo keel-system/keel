@@ -29,7 +29,7 @@ keel: "2.20"
 # documento ya la prueba `inspection-reports`; repetirla aquí solo alargaría la corrida.
 service:
   name: asset-vault
-  version: 1.0.0
+  version: 1.1.0
   description: Custodia los archivos digitales de cada propietario y su ciclo de publicación.
   domain: content
 layers:
