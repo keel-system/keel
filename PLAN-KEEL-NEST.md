@@ -1791,6 +1791,17 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `audit-actor.test.js` la rama relacional sobre `product-catalog` con la autoría cambiada (ninguna fixture
   relacional la declara). Falsado con tres sabotajes. `ts-check` 12/12. **`asset-vault` ya solo queda fuera por
   `needs`** (13i).
+- **13i — el dato bajo demanda (`needs` on-demand): hecho (2026-10-09). `asset-vault` entra ENTERO en la frontera**
+  (`keel-nest build` lo genera con Kafka, Keycloak, MongoDB, Redis y MinIO, con sus siete skills). Lo que pone build es
+  lo de keel-spring: el puerto del cliente inyectado en el handler de la operación del `usedBy` con la nota de su
+  política (el puerto ya devuelve el resultado de dominio: el mapeo del cable vive en el adaptador), y
+  `onUnavailable` en el fallback del adaptador —`fail` lanza el error declarado; `degrade` deja el TODO con el
+  `degradedTo` del diseño; varias políticas distintas por la misma llamada se enumeran como conflicto del diseño—.
+  **Medido**: `test/needs.test.js` (la inyección y la nota; `fail` EJECUTADO contra un proveedor que corta la conexión:
+  dos intentos y el error del diseño; `degrade`), falsado con dos sabotajes; `ts-check` 12/12. **Quedan para 13j**, con
+  `catalog-extended` como sujeto: la réplica (`strategy: replicated`: proyector, lector y `onMiss`),
+  `onUnavailable: lastKnown` con su almacén, y `oauth2-client-credentials`. Siguiente paso: la corrida de
+  `asset-vault` en los dos generadores (requiere cerrar su diseño a `--ready` o generarla con `--accept-unready`).
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

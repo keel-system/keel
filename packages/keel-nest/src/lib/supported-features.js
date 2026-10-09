@@ -100,7 +100,7 @@ export function checkSupportedFeatures(manifest, layers) {
 /**
  * Lo saliente que keel-nest todavía no genera (incremento 11b): se rechaza nombrando por qué.
  *
- *   · `needs` (el dato que se PIDE a otro servidor, con réplica o bajo demanda, y su `onUnavailable`):
+ *   · la réplica de un `need` y su `lastKnown` (13j; el dato bajo demanda ya se genera, 13i):
  *     solo lo declaran asset-vault (persistencia documental, incremento 12) y catalog-extended (storage,
  *     incremento 13); se generará cuando haya una fixture en la frontera que lo mida;
  *   · un campo COMPUESTO (un value object) en la petición o la respuesta de una llamada: el adaptador
@@ -110,14 +110,21 @@ export function checkSupportedFeatures(manifest, layers) {
  */
 function outboundFrontier(layers) {
   const errors = [];
+  // El dato bajo demanda se genera (incremento 13i): el puerto inyectado en el handler y onUnavailable fail/degrade
+  // en el fallback. La réplica (strategy: replicated) y onUnavailable: lastKnown llegan con su mecanismo (13j).
   for (const [id, dependency] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
-    const needs = Object.keys(dependency?.needs ?? {});
-    if (needs.length > 0) {
-      errors.push(
-        `dependencies.${id}.needs (${needs.join(', ')}): keel-nest todavía no genera el dato que se pide a otro servidor —réplica, ` +
-          'onMiss, onUnavailable y lastKnown— (incremento 11 de PLAN-KEEL-NEST.md: llega cuando una fixture de la frontera lo mida). ' +
-          'Genera este diseño con keel-spring.'
-      );
+    for (const [name, need] of Object.entries(dependency?.needs ?? {})) {
+      if (need?.strategy === 'replicated') {
+        errors.push(
+          `dependencies.${id}.needs.${name}: strategy replicated — keel-nest todavía no genera la réplica local (proyector, lector y onMiss; ` +
+            'incremento 13j de PLAN-KEEL-NEST.md). Genera este diseño con keel-spring.'
+        );
+      } else if (need?.onUnavailable?.action === 'lastKnown') {
+        errors.push(
+          `dependencies.${id}.needs.${name}: onUnavailable lastKnown — keel-nest todavía no genera el almacén del último valor conocido ` +
+            '(incremento 13j de PLAN-KEEL-NEST.md). Genera este diseño con keel-spring.'
+        );
+      }
     }
   }
   const types = layers?.domain?.types ?? {};

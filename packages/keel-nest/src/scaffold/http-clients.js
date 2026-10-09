@@ -472,11 +472,21 @@ function unavailableBody(model, client, call, imports) {
     ...activations.map(({ activation }) => `activation:${JSON.stringify(activation.onFailure ?? null)}`),
     ...needs.map(({ need }) => `need:${JSON.stringify(need.onUnavailable)}`)
   ]);
-  // Los `needs` no se generan todavía (la frontera los rechaza): su fallback queda para el agente.
-  if (distinct.size !== 1 || needs.length > 0) {
+  // Una política, y solo una: con dos distintas el conflicto es del diseño (un método no puede hacer dos cosas).
+  if (distinct.size !== 1) {
     const doc = call.fallback ? `    // TODO (agente): ${call.fallback}` : '    // TODO (agente): política de fallback del circuito abierto.';
-    return `${trace}\n${doc}\n${todoThrow}`;
+    const conflicting = [
+      ...activations.map(({ dependency, activation }) => `${dependency}.${activation.name} (activación, onFailure: ${activation.onFailure?.action ?? 'sin declarar'})`),
+      ...needs.map(({ dependency, need }) => `${dependency}.${need.name} (need, onUnavailable: ${need.onUnavailable.action})`)
+    ];
+    const listed =
+      distinct.size > 1
+        ? `\n    // Varias políticas DISTINTAS salen por esta llamada y el diseño no puede darles caminos distintos sobre un\n    // único método: ${conflicting.join('; ')}`
+        : '';
+    return `${trace}\n${doc}${listed}\n${todoThrow}`;
   }
+  // La política del `need` (`onUnavailable`): el dato que se PIDE al proveedor no depende de la prosa del fallback.
+  if (needs.length > 0) return needFallbackBody(model, call, needs, trace, prose, todoThrow, imports);
   const { dependency, activation } = activations[0];
   const { onFailure } = activation;
   const origin = `    // Política declarada por la activación ${dependency}.${activation.name} (onFailure: ${onFailure?.action ?? 'sin declarar'}).\n`;
@@ -503,6 +513,34 @@ ${todoThrow}`;
 ${todoThrow}`;
   }
   return `${trace}\n${prose}${origin}    // TODO (agente): la activación no declara onFailure.
+${todoThrow}`;
+}
+
+/** El fallback cuando la política la declara un `need` (`onUnavailable`): el mismo de keel-spring. */
+function needFallbackBody(model, call, needs, trace, prose, todoThrow, imports) {
+  const { dependency, need } = needs[0];
+  const { onUnavailable } = need;
+  const cited = needs.map(({ dependency: dep, need: n }) => `${dep}.${n.name}`).join(', ');
+  const origin = `    // Política declarada por ${needs.length > 1 ? `los needs ${cited}, que declaran la misma` : `el need ${cited}`} (onUnavailable: ${onUnavailable.action}).\n`;
+  if (onUnavailable.action === 'fail') {
+    if (onUnavailable.exceptionClass) {
+      imports.push({ symbol: onUnavailable.exceptionClass, from: classPath(DIRS.errors, onUnavailable.exceptionClass) });
+      const message = tsString(`${dependency} no está disponible para ${need.name}`);
+      const args = onUnavailable.dynamicStatus ? `${message}, ${onUnavailable.httpStatus}` : message;
+      return `${trace}\n${prose}${origin}    throw new ${onUnavailable.exceptionClass}(${args});`;
+    }
+    return `${trace}\n${prose}${origin}    // TODO (agente): el diseño declara onUnavailable.error = ${onUnavailable.error}, pero ninguna operación de
+    // use-cases lo declara todavía, así que su clase no existe.
+${todoThrow}`;
+  }
+  if (onUnavailable.action === 'degrade') {
+    return `${trace}\n${prose}${origin}    // TODO (agente): el resultado degradado es lógica de negocio y debe ser distinguible por el cliente de
+    // una respuesta normal — un dato plausible pero falso es peor que fallar:
+    //   ${onUnavailable.degradedTo}
+${todoThrow}`;
+  }
+  // `lastKnown` llega con su almacén (13j): la frontera lo rechaza hasta entonces.
+  return `${trace}\n${prose}${origin}    // TODO (agente): lastKnown todavía no se genera en keel-nest.
 ${todoThrow}`;
 }
 
