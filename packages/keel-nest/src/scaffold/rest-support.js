@@ -434,6 +434,12 @@ export class Violations {
     return this;
   }
 
+  /** Las reglas de CADA ELEMENTO de una lista (\`labels[3] size must be between 0 and 40\`), como Bean Validation. */
+  checkEach(path: string, values: readonly unknown[] | null | undefined, rules: readonly Rule[]): this {
+    (values ?? []).forEach((value, index) => this.check(\`\${path}[\${index}]\`, value, rules));
+    return this;
+  }
+
   throwIfAny(): void {
     if (this.details.length > 0) throw new RequestValidationError([...this.details], this.source);
   }

@@ -71,6 +71,11 @@ Cómo se escriben: `conventions/domain-modeling.md`.
   la base no participa de la transacción: si sale antes de que el agregado valide y la guarda rechaza,
   el rollback deshace la fila y deja el efecto hecho fuera. El orden es siempre: cargar → guardas e
   invariantes → efectos externos → confirmar.
+- **Cuando el diseño dice «después de confirmar»**, el efecto va por el puerto `AfterCommit`
+  (`application/port/out/after-commit.ts`, que build ya emite y registra): `afterCommit.run(() => …)`
+  lo ejecuta tras el commit y nunca si la transacción revierte —la copia que pierde una carrera no llega
+  al proveedor—. No escribas otro: es el mismo `TransactionContext.afterCommit` con el que build invalida
+  la caché.
 - El bloqueo optimista (`lockVersion`) ya lo genera build, con su round-trip y su 409. Es
   infraestructura: no sale al contrato y nadie lo toca. Un `version` que declare el diseño es otro
   contador, de dominio, y lo incrementa el agregado.

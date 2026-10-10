@@ -35,6 +35,40 @@ export function effectiveErrorCode(model, entry, family) {
 }
 
 /**
+ * El `code` de un desenlace de la idempotencia de petición (la carrera o la clave reutilizada),
+ * OPERACIÓN A OPERACIÓN.
+ *
+ * El override es de la operación que lo declara, no del servicio: con `declaredErrorFor` sobre
+ * todos los errores, el `PRODUCT_KEY_IN_PROGRESS` que declaraba `createProduct` acababa siendo
+ * el de la carrera de `removeProductImage`, que no declaraba nada (corrida catalog de keel-nest,
+ * FL-IMG-001-G). Aquí cada operación con idempotencia busca solo entre SUS errores, y la que no
+ * declara ninguno de la familia sale con el canónico.
+ *
+ * @param {object} model modelo del servicio
+ * @param {object} entry FRAMEWORK_ERRORS.idempotencyRace o .idempotencyReuse
+ * @returns {{ operation: string, code: string, declared: boolean }[]} en el orden del modelo
+ */
+export function idempotencyOutcomeCodes(model, entry) {
+  const errors = model.errors ?? [];
+  const rows = [];
+  for (const service of model.services ?? []) {
+    for (const operation of service.operations ?? []) {
+      const idempotency = operation.idempotency;
+      if (!idempotency || idempotency.guard === 'natural-key') continue;
+      const own = new Set(operation.errors ?? []);
+      const declared = declaredErrorFor({ errors: errors.filter((error) => own.has(error.code)) }, entry);
+      rows.push({ operation: operation.name, code: declared?.code ?? entry.code, declared: Boolean(declared) });
+    }
+  }
+  return rows;
+}
+
+/** El `code` de ese desenlace para UNA operación (el de `idempotencyOutcomeCodes`, o el canónico). */
+export function idempotencyOutcomeCode(model, operationName, entry) {
+  return idempotencyOutcomeCodes(model, entry).find((row) => row.operation === operationName)?.code ?? entry.code;
+}
+
+/**
  * El error que el diseño declara para la UNICIDAD de una clave natural concreta.
  *
  * Se busca SOLO entre los errores de las operaciones que escriben esa entidad, y ese

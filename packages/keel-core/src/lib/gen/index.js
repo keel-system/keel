@@ -12,6 +12,8 @@ export { pascalCase, camelCase, kebabCase, snakeCase, screamingSnake, pluralize,
 export {
   declaredErrorFor,
   effectiveErrorCode,
+  idempotencyOutcomeCodes,
+  idempotencyOutcomeCode,
   declaredUniquenessErrorFor,
   declaredReferenceError,
   namedUniquenessError,
@@ -98,6 +100,7 @@ export {
   inheritedFormat,
   textConstraints,
   validationRules,
+  elementValidationRules,
   DECIMAL_PRECISION
 } from './constraints.js';
 export { guardedFields } from './domain-guards.js';

@@ -1829,6 +1829,24 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     `catalog-extended` genera el proyecto entero. La skill `keel-nest-httpclient` enseña los `needs`, la réplica y OAuth2.
   - **Con esto el incremento 13 queda construido entero.** Lo que sigue son las corridas de `asset-vault` y
     `catalog-extended` en los dos generadores, y el incremento 14.
+- **Evaluación 13 — corridas de keel-nest sobre las siluetas transversales: hechas (2026-10-10).**
+  - **Resultado:**
+    - `asset-vault` v1.1.0 (MongoDB, RabbitMQ): **32/32**, con 23 de 308 reescritos. El diseño se cerró en la fixture.
+    - `catalog` (PostgreSQL, Kafka): **56/56**, con 33 de 370 reescritos. Se cerró una COPIA de `catalog-extended`, porque la fixture es la silueta con huecos de la que dependen 37 tests.
+    - Las dos, sin parches al arnés. Registro en `docs/corridas/2026-10-10-{asset-vault,catalog}-nest.md`.
+  - **Cinco defectos del generador**, comparando cada proyecto con un build limpio. Cuatro estaban **también en keel-spring** y se arreglaron en los dos:
+    1. El `code` de la carrera y de la clave reutilizada de la idempotencia era de todo el servicio. Ahora va por operación: `idempotencyOutcomeCodes` en `keel-core/gen/declared-errors.js`.
+    2. El finder de una clave natural con `compare: ignore-case` comparaba el valor crudo. Ahora busca por la sombra plegada, en las cuatro ramas.
+    3. Una relación `required` de la entrada no se validaba, y daba un 500.
+    4. La cota de cada elemento de una lista no se validaba. Ahora la da `elementValidationRules` en `keel-core/gen/constraints.js`: keel-nest la aplica con `checkEach` y keel-spring con `List<@Size(...) T>`.
+    5. Una parte binaria obligatoria vacía no daba `FILE_UNREADABLE`.
+  - **Lo que pasa a emitir build:** el puerto `AfterCommit`, que los dos agentes escribieron idéntico a mano para las reglas «después de confirmar» (`src/scaffold/after-commit.js`).
+  - **Lo que queda abierto:**
+    - el lector de una réplica en un listado necesita leer en lote;
+    - el despacho de una operación desde otra solo cabe en prosa (el `CommandDispatcher`);
+    - la exención de alcance de un cliente máquina (candidato `exemptClients`);
+    - el `reason` sin cota del payload de `MalwareDetected`;
+    - las corridas de keel-spring sobre los dos diseños.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

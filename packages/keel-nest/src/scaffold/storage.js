@@ -631,7 +631,11 @@ export async function readMultipart(request: FastifyRequest): Promise<MultipartF
 /** El binario de una parte obligatoria: si no vino, es el 400 de keel-spring («Falta la parte…»). */
 export function requirePart(files: Readonly<Record<string, FileUpload | null>>, name: string): FileUpload | null {
   if (!(name in files)) throw new MissingPartError(name);
-  return files[name] ?? null;
+  // Una parte obligatoria que llega VACÍA (0 bytes) no es «sin archivo»: es una subida rota, el FILE_UNREADABLE del
+  // catálogo del framework. Devolver null la llevaba al handler y salía un 500 (corrida asset-vault, VAL-UPL-8).
+  const file = files[name] ?? null;
+  if (file == null) throw new BadRequestException('El archivo enviado está vacío', { code: FILE_UNREADABLE, httpStatus: 400 });
+  return file;
 }`;
   return tsModule(MULTIPART_READING_TS, imports, body);
 }

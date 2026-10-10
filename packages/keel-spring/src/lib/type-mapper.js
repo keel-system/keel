@@ -5,7 +5,7 @@
 import { snakeCase } from './naming.js';
 import { quoteIdentifier } from './sql-reserved.js';
 import { resolveType as resolveDslType, isBaseType as isDslBaseType } from 'keel-core/gen/types';
-import { validationRules, DECIMAL_PRECISION } from 'keel-core/gen/constraints';
+import { validationRules, elementValidationRules, DECIMAL_PRECISION } from 'keel-core/gen/constraints';
 import { columnSpec } from 'keel-core/gen/relational';
 
 const BASE_TYPES = {
@@ -91,6 +91,14 @@ export function beanValidationAnnotations(field, resolved, { input = false, hono
   // QUÉ se valida es una decisión del diseño y vive en keel-core/gen (validationRules), la misma
   // para keel-nest; aquí solo se escribe como Bean Validation.
   return validationRules(field, resolved, { input, honourDefault }).map(beanValidationAnnotation);
+}
+
+/**
+ * Las anotaciones de CADA ELEMENTO de un campo colección (`List<@Size(max = 40) String>`): las de
+ * `elementValidationRules` de keel-core/gen, la misma decisión que keel-nest. Vacío si no es una lista.
+ */
+export function elementBeanValidationAnnotations(field, resolved) {
+  return elementValidationRules(field, resolved).map(beanValidationAnnotation);
 }
 
 function beanValidationAnnotation(rule) {

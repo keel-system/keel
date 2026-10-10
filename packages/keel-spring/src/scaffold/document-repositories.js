@@ -62,14 +62,14 @@ function renderMongoRepository(model, entity) {
   if (finder) {
     imports.add('java.util.Optional');
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
-    methods = `\n\n    Optional<${entity.name}Document> ${finder.name}(${finder.signature});`;
+    methods = `\n\n    Optional<${entity.name}Document> ${finder.store.name}(${finder.store.signature});`;
   }
   // El puerto es el MISMO en las dos ramas (lo reexporta repositories.js), así que lo que
   // se declare allí hay que implementarlo aquí o el adaptador no compila.
   for (const occupant of occupantFinders(model, entity)) {
     imports.add('java.util.Optional');
     for (const param of occupant.params) for (const name of param.imports) imports.add(name);
-    methods += `\n\n    Optional<${entity.name}Document> ${occupant.name}(${occupant.signature});`;
+    methods += `\n\n    Optional<${entity.name}Document> ${occupant.store.name}(${occupant.store.signature});`;
   }
   for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
@@ -131,16 +131,18 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
+    if (finder.store.folds) imports.add(textFoldImport(model));
     methods.push(`    @Override
     public Optional<${entity.name}> ${finder.name}(${finder.signature}) {
-        return ${repoField}.${finder.name}(${finder.args}).map(this::toDomain);
+        return ${repoField}.${finder.store.name}(${finder.store.args}).map(this::toDomain);
     }`);
   }
   for (const occupant of occupantFinders(model, entity)) {
     for (const param of occupant.params) for (const name of param.imports) imports.add(name);
+    if (occupant.store.folds) imports.add(textFoldImport(model));
     methods.push(`    @Override
     public Optional<${entity.name}> ${occupant.name}(${occupant.signature}) {
-        return ${repoField}.${occupant.name}(${occupant.args}).map(this::toDomain);
+        return ${repoField}.${occupant.store.name}(${occupant.store.args}).map(this::toDomain);
     }`);
   }
   for (const credentialAdapter of credentialFinders(model, entity)) {

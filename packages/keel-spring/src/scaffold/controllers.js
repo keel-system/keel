@@ -167,8 +167,13 @@ function fileUploadHelper(model, imports) {
   imports.add(`${subPackage(model, 'domain.errors')}.BadRequestException`);
   imports.add('java.io.IOException');
 
-  return `    private static FileUpload toFileUpload(MultipartFile file) {
+  return `    private static FileUpload toFileUpload(MultipartFile file, boolean required) {
         if (file == null || file.isEmpty()) {
+            // Una parte OBLIGATORIA que llega vacía no es «sin archivo»: es una subida rota, el
+            // FILE_UNREADABLE del catálogo del framework, y no el VALIDATION_ERROR del @NotNull.
+            if (required) {
+                throw new BadRequestException("El archivo enviado está vacío", "FILE_UNREADABLE", 400, null);
+            }
             return null;
         }
         try {
@@ -310,7 +315,7 @@ function renderMethod(model, operation, imports) {
         imports.add('org.springframework.web.multipart.MultipartFile');
         const required = component.required ? '' : ', required = false';
         params.push(`@RequestPart(value = "${component.name}"${required}) MultipartFile ${component.name}`);
-        return `toFileUpload(${component.name})`;
+        return `toFileUpload(${component.name}, ${component.required ? 'true' : 'false'})`;
       }
       for (const name of component.imports) imports.add(name);
       const typeImport = domainTypeImport(model, component);

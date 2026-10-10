@@ -14,7 +14,7 @@
 // modelo.
 
 import { screamingSnake, basePackage } from './naming.js';
-import { toJava, beanValidationAnnotations, columnAnnotations } from './type-mapper.js';
+import { toJava, beanValidationAnnotations, elementBeanValidationAnnotations, columnAnnotations } from './type-mapper.js';
 import { numericConstraints, inheritedFormat } from 'keel-core/gen/constraints';
 
 // http declarado en el diseño → excepción base de shared/exception que extiende
@@ -164,6 +164,9 @@ export const JAVA_PROJECTION = {
       // `validation` describe el valor ya formado y aquí se describe lo que llega
       // por el cable, que es antes de que el dominio ponga nada.
       inputValidation: beanValidationAnnotations(field, java, { input: true, honourDefault: true }),
+      // Las de CADA ELEMENTO de una colección de entrada (`List<@Size(max = 40) String>`): las del contenedor
+      // son de cardinalidad y no dicen nada de cada etiqueta.
+      elementInputValidation: elementBeanValidationAnnotations(field, java),
       // El formato que el campo hereda de su value type ESCALAR y que la entrada deja
       // caer. Es lo que sostiene la clase `<Tipo>Format` del dominio y el gate que
       // comprueba que alguien la llama: sin este dato aquí, el único sitio donde vive

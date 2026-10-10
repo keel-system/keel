@@ -21,6 +21,7 @@
 //
 // El perfil `test` no tiene base de datos, como en la rama relacional.
 
+import { afterCommitFiles, afterCommitBinding } from './after-commit.js';
 import {
   constraintErrors,
   declaredConcurrencyError,
@@ -61,6 +62,7 @@ export function generate(model) {
     { path: TRANSACTION_CONTEXT_TS, content: transactionContextFile() },
     { path: PERSISTENCE_ERRORS_TS, content: persistenceErrorsFile(model) },
     { path: PERSISTENCE_MODULE_TS, content: persistenceModuleFile(model) },
+    ...afterCommitFiles(),
     { path: 'infra/export-indexes.sh', content: exportIndexesScript(model, PLATFORM) }
   ];
   if (usesTextFold(model)) files.push({ path: TEXT_FOLD_TS, content: textFoldFile() });
@@ -632,6 +634,11 @@ function persistenceModuleFile(model) {
   }
   const bindings = roots.map((entity) => `    { provide: ${portClass(entity)}, useClass: ${adapterClass(entity)} }`);
   const ports = roots.map((entity) => portClass(entity));
+  // El efecto tras el commit (AfterCommit): el mismo puerto que en la rama relacional.
+  const afterCommit = afterCommitBinding();
+  imports.push(...afterCommit.imports);
+  bindings.push(afterCommit.binding);
+  ports.push(afterCommit.export);
   // Los mismos enlaces que la rama relacional: la tienda del reclamo de reconciliación y los números de cada
   // barrido, la configuración de los barridos y el puerto del registro de idempotencia.
   const reconciliation = reconciliationBindings(model);

@@ -7,7 +7,7 @@
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import {
-  effectiveErrorCode,
+  idempotencyOutcomeCode,
   declaredUniquenessErrorFor,
   hasScheduledOperations,
   scheduleSeconds,
@@ -170,11 +170,25 @@ function inheritedPatternOf(component) {
 
 function renderComponentType(operation, component, fromPath, imports, annotations) {
   const prefix = annotations.length > 0 ? `${annotations.join(' ')} ` : '';
+  const javaType = elementAnnotatedType(component, fromPath, imports);
   if (!isWrappedInJsonNullable(operation, component, fromPath)) {
-    return `${prefix}${component.javaType}`;
+    return `${prefix}${javaType}`;
   }
   imports.add(JSON_NULLABLE_IMPORT);
-  return `JsonNullable<${prefix}${component.javaType}>`;
+  return `JsonNullable<${prefix}${javaType}>`;
+}
+
+// Las cotas de CADA ELEMENTO de una colección de entrada van dentro del tipo
+// (`List<@Size(max = 40) String>`): las anotaciones del componente son del contenedor y solo
+// dicen cuántos. Sin esto, una etiqueta de 41 caracteres entraba por la API (corrida
+// asset-vault de keel-nest, VAL-UPL-5; keel-spring tenía el mismo hueco).
+function elementAnnotatedType(component, fromPath, imports) {
+  const rules = component.elementInputValidation ?? [];
+  if (!component.list || rules.length === 0 || fromPath.has(component.name) || component.resolvedIdentity) return component.javaType;
+  const match = /^List<(.+)>$/.exec(component.javaType);
+  if (!match) return component.javaType;
+  for (const annotation of rules) imports.add(`jakarta.validation.constraints.${annotation.slice(1).split('(')[0]}`);
+  return `List<${rules.join(' ')} ${match[1]}>`;
 }
 
 // Record del mensaje. Lleva la Bean Validation de las constraints del diseño, sea
@@ -507,7 +521,7 @@ function renderHandler(model, service, operation) {
   if (operation.idempotency && operation.idempotency.guard !== 'natural-key') {
     const ttl = operation.idempotency.ttlSeconds ?? 86400;
     const common =
-      `find(scope, clave) con scope = command.idempotencyScope() (build lo genera desde el diseño: no lo compongas a mano); si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza IdempotencyReuseException (${FRAMEWORK_ERRORS.idempotencyReuse.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyReuse)}), que build genera para eso — no inventes un code ni reutilices el de la carrera, que es otro desenlace; si no hay registro, RECLAMA PRIMERO: decide el identificador del recurso, llama a save(scope, clave, firma, resourceId, ttl) y SOLO DESPUÉS ejecuta el negocio, todo dentro de la misma transacción del comando. ` +
+      `find(scope, clave) con scope = command.idempotencyScope() (build lo genera desde el diseño: no lo compongas a mano); si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza IdempotencyReuseException (${FRAMEWORK_ERRORS.idempotencyReuse.http} ${idempotencyOutcomeCode(model, operation.name, FRAMEWORK_ERRORS.idempotencyReuse)}), que build genera para eso — no inventes un code ni reutilices el de la carrera, que es otro desenlace; si no hay registro, RECLAMA PRIMERO: decide el identificador del recurso, llama a save(scope, clave, firma, resourceId, ttl) y SOLO DESPUÉS ejecuta el negocio, todo dentro de la misma transacción del comando. ` +
       // La CARRERA no la resuelve el find: dos peticiones simultáneas lo fallan las dos
       // —ninguna ha commiteado— y llegan las dos a save. Quien arbitra es la clave
       // primaria del registro, y el adaptador ya traduce esa violación al 409 del
@@ -515,7 +529,7 @@ function renderHandler(model, service, operation) {
       // try/catch «defensivo» que se traga justo la excepción que cierra la ventana, y
       // el resultado es un servidor que pasa el reintento secuencial y ejecuta dos veces
       // bajo concurrencia — que es el caso normal en cuanto hay más de una réplica.
-      `La CARRERA (dos peticiones con la misma clave a la vez) no la ve find: las dos encuentran vacío y las dos llegan a save. La arbitra la clave primaria del registro y el adaptador ya traduce la violación a IdempotencyConflictException (${FRAMEWORK_ERRORS.idempotencyRace.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyRace)}) — NO captures esa excepción ni la DataIntegrityViolationException que la origina: dejarla subir es lo que garantiza que de dos peticiones idénticas se ejecutó exactamente una. ` +
+      `La CARRERA (dos peticiones con la misma clave a la vez) no la ve find: las dos encuentran vacío y las dos llegan a save. La arbitra la clave primaria del registro y el adaptador ya traduce la violación a IdempotencyConflictException (${FRAMEWORK_ERRORS.idempotencyRace.http} ${idempotencyOutcomeCode(model, operation.name, FRAMEWORK_ERRORS.idempotencyRace)}) — NO captures esa excepción ni la DataIntegrityViolationException que la origina: dejarla subir es lo que garantiza que de dos peticiones idénticas se ejecutó exactamente una. ` +
       // Y por eso el orden del párrafo anterior no es una preferencia de estilo: si el
       // save va al FINAL del handler, en la carrera la perdedora choca antes contra la
       // primera restricción de negocio que encuentre —la unicidad de un campo, típicamente—

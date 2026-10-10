@@ -19,7 +19,7 @@
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
-import { declaredErrorFor } from 'keel-core/gen';
+import { idempotencyOutcomeCodes } from 'keel-core/gen';
 import { IDEMPOTENCY_RECORD_PURGE } from 'keel-core/gen/request-idempotency';
 import { javaFile, javaPath, subPackage } from './render.js';
 
@@ -151,10 +151,39 @@ export function generate(model) {
 // clase de error, no la lanzaba nadie, y por el cable salía el canónico. El aviso de
 // `keel validate` callaba con razón (el diseño SÍ había nombrado el desenlace), así
 // que nada lo delataba: el contrato público decía una cosa y el servidor otra.
+// El code es de la OPERACIÓN que lo declara, no del servicio (keel-core/gen, idempotencyOutcomeCodes): con la
+// búsqueda sobre todos los errores, el PRODUCT_KEY_IN_PROGRESS de createProduct salía también en la carrera de
+// otra operación con idempotencia que no declaraba nada (corrida catalog de keel-nest, FL-IMG-001-G). La
+// excepción lo resuelve por la operación que encabeza el scope, que build compone (idempotencyScope()).
+function outcomeCode(model, canonical) {
+  const declared = idempotencyOutcomeCodes(model, canonical).filter((row) => row.declared);
+  if (declared.length === 0) {
+    return { declared, imports: [], members: '', expr: `"${canonical.code}"` };
+  }
+  const entries = declared.map((row) => `"${row.operation}", "${row.code}"`).join(', ');
+  const members = `
+
+    /** El code que declara cada operación para este desenlace; la que no aparece usa el canónico. */
+    private static final Map<String, String> DECLARED_CODES = Map.of(${entries});
+
+    private static String codeFor(String scope) {
+        int end = scope.indexOf(':');
+        return DECLARED_CODES.getOrDefault(end < 0 ? scope : scope.substring(0, end), "${canonical.code}");
+    }`;
+  return { declared, imports: ['java.util.Map'], members, expr: 'codeFor(scope)' };
+}
+
+function outcomeOrigin(outcome, canonical) {
+  return outcome.declared.length > 0
+    ? `\n *\n * <p>El code sale del error que cada operación declara para este conflicto (${outcome.declared.map((row) => row.operation).join(', ')});\n * las demás usan el CANÓNICO del framework (docs/framework-errors.md).`
+    : `\n *\n * <p>El code es el CANÓNICO del framework (docs/framework-errors.md): el diseño no declara
+ * uno propio, y eso es una respuesta legítima, no un hueco. Para cambiarlo, declara en los
+ * errors de la operación un code de su familia con status ${canonical.http}.`;
+}
+
 function renderConflict(model) {
   const canonical = FRAMEWORK_ERRORS.idempotencyRace;
-  const declared = declaredErrorFor(model, canonical);
-  const code = declared?.code ?? canonical.code;
+  const outcome = outcomeCode(model, canonical);
   const body = `/**
  * Dos peticiones con la misma clave de idempotencia, a la vez.
  *
@@ -166,15 +195,9 @@ function renderConflict(model) {
  * no el cuerpo, y hasta que la ganadora no commitee ese id no existe.
  *
  * <p>Lo que sí queda garantizado es lo importante: la transacción de quien pierde
- * revierte entera, así que de dos peticiones idénticas se ejecutó exactamente una.${
-   declared
-     ? `\n *\n * <p>El code sale del error que el diseño declara para este conflicto.`
-     : `\n *\n * <p>El code es el CANÓNICO del framework (docs/framework-errors.md): el diseño no declara
- * uno propio, y eso es una respuesta legítima, no un hueco. Para cambiarlo, declara en los
- * errors de la operación un code de su familia con status ${canonical.http}.`
- }
+ * revierte entera, así que de dos peticiones idénticas se ejecutó exactamente una.${outcomeOrigin(outcome, canonical)}
  */
-public class IdempotencyConflictException extends ConflictException {
+public class IdempotencyConflictException extends ConflictException {${outcome.members}
 
     public IdempotencyConflictException(String scope, String idempotencyKey, Throwable cause) {
         // El constructor con metadata no acepta causa (DomainException guarda code y
@@ -183,7 +206,7 @@ public class IdempotencyConflictException extends ConflictException {
         // que solo se reproduce bajo carga.
         super(
                 "Otra petición con la misma clave de idempotencia está en curso: " + scope + "/" + idempotencyKey,
-                "${code}",
+                ${outcome.expr},
                 ${canonical.http},
                 new Object[] {scope, idempotencyKey});
         initCause(cause);
@@ -194,7 +217,7 @@ public class IdempotencyConflictException extends ConflictException {
     path: javaPath(model, PORT_PKG, 'IdempotencyConflictException'),
     content: javaFile(
       subPackage(model, PORT_PKG),
-      [`${subPackage(model, 'domain.errors')}.ConflictException`],
+      [...outcome.imports, `${subPackage(model, 'domain.errors')}.ConflictException`],
       body
     )
   };
@@ -207,8 +230,7 @@ public class IdempotencyConflictException extends ConflictException {
 // diseño lo sustituye declarando uno de su familia.
 function renderReuse(model) {
   const canonical = FRAMEWORK_ERRORS.idempotencyReuse;
-  const declared = declaredErrorFor(model, canonical);
-  const code = declared?.code ?? canonical.code;
+  const outcome = outcomeCode(model, canonical);
   const body = `/**
  * La misma clave de idempotencia con un contenido DISTINTO.
  *
@@ -219,21 +241,15 @@ function renderReuse(model) {
  * promesa de la clave. Lo que queda es decírselo.
  *
  * <p>Se detecta comparando la firma del contenido (CommandSignature) con la que se guardó
- * junto a la clave — por eso el registro guarda una firma y no un flag.${
-   declared
-     ? `\n *\n * <p>El code sale del error que el diseño declara para este conflicto.`
-     : `\n *\n * <p>El code es el CANÓNICO del framework (docs/framework-errors.md): el diseño no declara
- * uno propio, y eso es una respuesta legítima, no un hueco. Para cambiarlo, declara en los
- * errors de la operación un code de su familia con status ${canonical.http}.`
- }
+ * junto a la clave — por eso el registro guarda una firma y no un flag.${outcomeOrigin(outcome, canonical)}
  */
-public class IdempotencyReuseException extends ConflictException {
+public class IdempotencyReuseException extends ConflictException {${outcome.members}
 
     public IdempotencyReuseException(String scope, String idempotencyKey) {
         super(
                 "La clave de idempotencia " + scope + "/" + idempotencyKey
                         + " ya se usó con un contenido distinto",
-                "${code}",
+                ${outcome.expr},
                 ${canonical.http},
                 new Object[] {scope, idempotencyKey});
     }
@@ -243,7 +259,7 @@ public class IdempotencyReuseException extends ConflictException {
     path: javaPath(model, PORT_PKG, 'IdempotencyReuseException'),
     content: javaFile(
       subPackage(model, PORT_PKG),
-      [`${subPackage(model, 'domain.errors')}.ConflictException`],
+      [...outcome.imports, `${subPackage(model, 'domain.errors')}.ConflictException`],
       body
     )
   };

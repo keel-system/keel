@@ -15,7 +15,7 @@
 // `elementTsType` y `text` (formato y longitud del campo, que son las guardas de un value object).
 // El modelo nunca las nombra.
 
-import { screamingSnake, numericConstraints, inheritedFormat, textConstraints, validationRules, columnSpec } from 'keel-core/gen';
+import { screamingSnake, numericConstraints, inheritedFormat, textConstraints, validationRules, elementValidationRules, columnSpec } from 'keel-core/gen';
 
 const BASE_TS_TYPES = {
   string: { tsType: 'string', imports: [] },
@@ -149,6 +149,8 @@ export const TS_PROJECTION = {
       // punto por el que pasa cualquier valor de ese tipo. La misma decisión que keel-spring.
       numeric: numericConstraints(field, resolved),
       inputValidation: validationRules(field, resolved, { input: true, honourDefault: true }),
+      // Las de CADA ELEMENTO de una colección de entrada: las del contenedor son de cardinalidad.
+      elementInputValidation: elementValidationRules(field, resolved),
       // El formato heredado de un value type ESCALAR: sostiene la clase `<Tipo>Format` del dominio,
       // la nota del mensaje y el gate check-domain-guards.sh.
       inheritedPattern: inheritedFormat(field, resolved),

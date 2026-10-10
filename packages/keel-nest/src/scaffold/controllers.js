@@ -325,6 +325,8 @@ function renderReader(model, operation, name, imports) {
     if (operation.paginated && ['page', 'size'].includes(component.name) && !operation.bodyFields.some((f) => f.name === component.name)) continue;
     for (const imp of readerImports(model, component)) imports.push(imp);
     const rules = component.inputValidation ?? [];
+    // Las de cada elemento de una lista (keel-core/gen, elementValidationRules): las del contenedor solo dicen cuántos.
+    const each = component.list ? component.elementInputValidation ?? [] : [];
     if (asBody) {
       use('json');
       const read = `${readerOf(component, 'json')}(fields[${tsString(component.name)}])`;
@@ -333,6 +335,7 @@ function renderReader(model, operation, name, imports) {
         ? `  const ${component.name} = ${tsString(component.name)} in fields ? ${read} : undefined;`
         : `  const ${component.name} = ${read};`);
       if (rules.length > 0) bodyChecks.push(`    .check(${tsString(component.name)}, ${component.name}, ${rulesLiteral(rules)})`);
+      if (each.length > 0) bodyChecks.push(`    .checkEach(${tsString(component.name)}, ${component.name}, ${rulesLiteral(each)})`);
     } else {
       use('text');
       if (component.required) {
@@ -341,6 +344,7 @@ function renderReader(model, operation, name, imports) {
       }
       lines.push(`  const ${component.name} = ${readerOf(component, 'text')}(query[${tsString(component.name)}]);`);
       if (rules.length > 0) queryChecks.push(`    .check(${tsString(`${operation.name}.${component.name}`)}, ${component.name}, ${rulesLiteral(rules)})`);
+      if (each.length > 0) queryChecks.push(`    .checkEach(${tsString(`${operation.name}.${component.name}`)}, ${component.name}, ${rulesLiteral(each)})`);
     }
   }
 

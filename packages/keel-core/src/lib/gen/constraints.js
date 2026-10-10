@@ -140,3 +140,17 @@ export function validationRules(field, resolved, { input = false, honourDefault 
   }
   return rules;
 }
+
+/**
+ * Las reglas de CADA ELEMENTO de un campo colección: la longitud, el formato y las cotas que el diseño
+ * declara junto a `maxItems` (`labels: { list: true, constraints: { maxItems: 20, maxLength: 40 } }`
+ * dice que cada etiqueta tiene como mucho 40). `validationRules` da las del contenedor y estas faltaban
+ * en los dos generadores: una etiqueta de 41 caracteres entraba por la API y se descubría en el INSERT,
+ * o en ninguna parte (corrida asset-vault de keel-nest, VAL-UPL-5). Sin presencia: un elemento nulo de
+ * una lista no es un caso que el DSL declare. Vacío si el campo no es una lista.
+ */
+export function elementValidationRules(field, resolved) {
+  if (!field.list) return [];
+  const { minItems, maxItems, ...element } = { ...resolved.constraints, ...(field.constraints ?? {}) };
+  return validationRules({ ...field, list: false, required: false, constraints: element }, { ...resolved, constraints: {} }, { input: true });
+}

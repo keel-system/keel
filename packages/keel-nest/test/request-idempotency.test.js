@@ -41,9 +41,17 @@ test('el handler de la operación idempotente recibe el puerto y la nota con el 
   assert.doesNotMatch(retire, /IdempotencyStore/);
 });
 
-test('el code del diseño, si nombra el conflicto, es el que lanza el mecanismo', () => {
-  const files = byPath(planFixture('catalog-extended').files);
-  assert.match(files['src/domain/idempotency/idempotency-conflict-exception.ts'], /code: 'PRODUCT_KEY_IN_PROGRESS'/);
+test('el code del diseño, si nombra el conflicto, es el de SU operación y no el de todo el servicio', async () => {
+  // catalog-extended nombra PRODUCT_KEY_* en createProduct y nada en removeProductImage, que también tiene
+  // idempotencia: el override de una no puede salir por la carrera de la otra (corrida catalog, FL-IMG-001-G).
+  const tree = transpileTree(planFixture('catalog-extended').files);
+  const { IdempotencyConflictException } = await tree.load('src/domain/idempotency/idempotency-conflict-exception.ts');
+  const { IdempotencyReuseException } = await tree.load('src/domain/idempotency/idempotency-reuse-exception.ts');
+  const codeOf = (error) => error.code;
+  assert.equal(codeOf(new IdempotencyConflictException('createProduct', 'k1')), 'PRODUCT_KEY_IN_PROGRESS');
+  assert.equal(codeOf(new IdempotencyConflictException('removeProductImage', 'k2')), 'IDEMPOTENCY_KEY_IN_PROGRESS');
+  assert.equal(codeOf(new IdempotencyReuseException('createProduct', 'k1')), 'PRODUCT_KEY_REUSED');
+  assert.equal(codeOf(new IdempotencyReuseException('removeProductImage', 'k2')), 'IDEMPOTENCY_KEY_REUSED');
 });
 
 test('la cabecera Idempotency-Key llega al contexto de la petición', async () => {

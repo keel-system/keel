@@ -3101,7 +3101,16 @@ function relationPayloadFields(opName, payload, entity, { direction, relations: 
       }
       const name = `${relName}Id`;
       if (exclude.has(name)) continue;
-      projected.push(relationField({ name, type: P.fieldType(resolveType('uuid')), kind: 'base', base: 'uuid', required: Boolean(rel.required), description: rel.description }));
+      const reference = relationField({ name, type: P.fieldType(resolveType('uuid')), kind: 'base', base: 'uuid', required: Boolean(rel.required), description: rel.description });
+      // En la ENTRADA, una relación obligatoria es presencia como la de cualquier campo: sin la regla,
+      // un alta sin `categoryId` llegaba al handler con null y respondía 500 en vez de 400 (corrida catalog
+      // de keel-nest; keel-spring tampoco ponía el @NotNull). Las reglas salen de la proyección, igual que
+      // las de un campo propio.
+      if (direction === 'input' && rel.required) {
+        const { validation, inputValidation } = P.fieldDetails({ name, type: 'uuid', required: true }, resolveType('uuid'), { fieldName: name });
+        Object.assign(reference, { validation, inputValidation });
+      }
+      projected.push(reference);
       continue;
     }
 

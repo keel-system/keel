@@ -15,7 +15,7 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
 import { partialUniqueIndexes } from './persistence-members.js';
-import { collectInternalEntities } from 'keel-core/gen/relational';
+import { collectInternalEntities, foldedShadow } from 'keel-core/gen/relational';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -64,7 +64,8 @@ export function naturalKeyParams(model, entity) {
       return {
         name: member.name,
         javaType: member.javaType,
-        imports: member.imports ?? member.field?.imports ?? []
+        imports: member.imports ?? member.field?.imports ?? [],
+        fold: member.field ? foldedShadow(member.field) : null
       };
     }
 
@@ -208,7 +209,8 @@ export function occupantFinders(model, entity) {
       name,
       state: index.when.equals,
       signature: params.map((p) => `${p.javaType} ${p.name}`).join(', '),
-      args: params.map((p) => p.name).join(', ')
+      args: params.map((p) => p.name).join(', '),
+      store: storeQuery(params)
     });
   }
   return finders;
@@ -221,7 +223,24 @@ export function naturalKeyFinder(model, entity) {
     params,
     name: 'findBy' + params.map((p) => capitalize(p.name)).join('And'),
     signature: params.map((p) => `${p.javaType} ${p.name}`).join(', '),
-    args: params.map((p) => p.name).join(', ')
+    args: params.map((p) => p.name).join(', '),
+    store: storeQuery(params)
+  };
+}
+
+/**
+ * La consulta que el finder hace al ALMACÉN, que no siempre es la del puerto. Un campo con
+ * `compare: ignore-case` se busca por su sombra plegada, que es lo que la unicidad indexa: por el
+ * valor crudo, «Tools» no encuentra la categoría «tools» que el índice dice que ya existe (corrida
+ * catalog de keel-nest). El puerto sigue recibiendo el valor tal cual; el adaptador lo pliega.
+ */
+export function storeQuery(params) {
+  const folds = params.some((p) => p.fold);
+  return {
+    folds,
+    name: 'findBy' + params.map((p) => capitalize(p.fold ? p.fold.name : p.name)).join('And'),
+    signature: params.map((p) => (p.fold ? `String ${p.fold.name}` : `${p.javaType} ${p.name}`)).join(', '),
+    args: params.map((p) => (p.fold ? `TextFold.${p.fold.accents ? 'foldCaseAndAccents' : 'foldCase'}(${p.name})` : p.name)).join(', ')
   };
 }
 
@@ -379,12 +398,12 @@ function renderJpaRepository(model, entity) {
     imports.add('java.util.Optional');
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     // La clave natural es la otra lectura de UN agregado: mismo grafo, misma razón.
-    methods = `\n\n${graph}    Optional<${entity.name}Jpa> ${finder.name}(${finder.signature});`;
+    methods = `\n\n${graph}    Optional<${entity.name}Jpa> ${finder.store.name}(${finder.store.signature});`;
   }
   for (const occupant of occupantFinders(model, entity)) {
     imports.add('java.util.Optional');
     for (const param of occupant.params) for (const name of param.imports) imports.add(name);
-    methods += `\n\n${graph}    Optional<${entity.name}Jpa> ${occupant.name}(${occupant.signature});`;
+    methods += `\n\n${graph}    Optional<${entity.name}Jpa> ${occupant.store.name}(${occupant.store.signature});`;
   }
   for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
@@ -468,16 +487,18 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
+    if (finder.store.folds) imports.add(textFoldImport(model));
     methods.push(`    @Override
     public Optional<${entity.name}> ${finder.name}(${finder.signature}) {
-        return ${jpaField}.${finder.name}(${finder.args}).map(this::toDomain);
+        return ${jpaField}.${finder.store.name}(${finder.store.args}).map(this::toDomain);
     }`);
   }
   for (const occupant of occupantFinders(model, entity)) {
     for (const param of occupant.params) for (const name of param.imports) imports.add(name);
+    if (occupant.store.folds) imports.add(textFoldImport(model));
     methods.push(`    @Override
     public Optional<${entity.name}> ${occupant.name}(${occupant.signature}) {
-        return ${jpaField}.${occupant.name}(${occupant.args}).map(this::toDomain);
+        return ${jpaField}.${occupant.store.name}(${occupant.store.args}).map(this::toDomain);
     }`);
   }
   for (const credential of credentialFinders(model, entity)) {

@@ -175,10 +175,14 @@ test('una subida: los campos (repetidos, como lista) y el binario por su parte, 
   await app.close();
 });
 
-test('un binario vacío llega null; la parte que falta es el 400 de keel-spring', async () => {
+test('una parte obligatoria vacía es 400 FILE_UNREADABLE; la parte que falta es el 400 de keel-spring', async () => {
+  // Vacía no es «sin archivo»: es una subida rota. Devolverla null la llevaba al handler y salía un 500
+  // (corrida asset-vault, VAL-UPL-8); keel-spring responde lo mismo desde toFileUpload(file, true).
   const app = await server();
   const empty = (await app.inject({ method: 'POST', url: '/up', ...body([{ name: 'binary', filename: 'x.pdf', type: 'application/pdf', value: '' }]) })).json();
-  assert.equal(empty.binary, null);
+  assert.equal(empty.rejected, 'BadRequestException');
+  assert.equal(empty.code, 'FILE_UNREADABLE');
+  assert.equal(empty.httpStatus, 400);
   const missing = (await app.inject({ method: 'POST', url: '/up', ...body([{ name: 'slug', value: 'x' }]) })).json();
   assert.equal(missing.rejected, 'MissingPartError');
   assert.equal(missing.message, "Falta la parte 'binary' en la petición multipart");

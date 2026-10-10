@@ -16,6 +16,7 @@
 // arrancan sin infraestructura, y quien toque un repositorio recibe un error que lo dice. Lo que
 // juzga el esquema contra un motor real es `npm run ts-check` de keel-nest, que levanta uno.
 
+import { afterCommitFiles, afterCommitBinding } from './after-commit.js';
 import { MIGRATIONS_TABLE } from './infra.js';
 import { storeEntities } from './messaging-stores.js';
 import { reconciliationBindings, reconciliationEntities } from './reconciliation-claim.js';
@@ -68,7 +69,8 @@ export function generate(model) {
     { path: DATA_SOURCE_OPTIONS_TS, content: dataSourceOptionsFile(model) },
     { path: TRANSACTION_CONTEXT_TS, content: transactionContextFile(model) },
     { path: PERSISTENCE_ERRORS_TS, content: persistenceErrorsFile(model) },
-    { path: PERSISTENCE_MODULE_TS, content: persistenceModuleFile(model) }
+    { path: PERSISTENCE_MODULE_TS, content: persistenceModuleFile(model) },
+    ...afterCommitFiles()
   ];
 }
 
@@ -576,6 +578,11 @@ function persistenceModuleFile(model) {
   }
   const bindings = roots.map((entity) => `    { provide: ${portClass(entity)}, useClass: ${adapterClass(entity)} }`);
   const ports = roots.map((entity) => portClass(entity));
+  // El efecto tras el commit (AfterCommit): lo inyecta el handler cuya regla dice «después de confirmar».
+  const afterCommit = afterCommitBinding();
+  imports.push(...afterCommit.imports);
+  bindings.push(afterCommit.binding);
+  ports.push(afterCommit.export);
   // La tienda del reclamo de reconciliación y los números de cada barrido: los leen los adaptadores (y el
   // agente, para un barrido que build no pudo reclamar).
   const reconciliation = reconciliationBindings(model);

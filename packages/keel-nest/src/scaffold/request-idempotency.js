@@ -17,7 +17,7 @@
 // sin el mecanismo, el agente escribió el suyo con otra tabla y SQL de un solo motor.
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
-import { declaredErrorFor } from 'keel-core/gen';
+import { idempotencyOutcomeCodes } from 'keel-core/gen';
 import {
   IDEMPOTENCY_RECORD,
   IDEMPOTENCY_HEADER,
@@ -122,15 +122,22 @@ export abstract class IdempotencyStore {
 }
 
 function conflictBody(model, canonical, className, summary, detail) {
-  const declared = declaredErrorFor(model, canonical);
-  const code = declared?.code ?? canonical.code;
-  const origin = declared
-    ? 'El code sale del error que el diseño declara para este conflicto.'
+  // El code es de la OPERACIÓN que lo declara, no del servicio (keel-core/gen, idempotencyOutcomeCodes): la
+  // excepción lo resuelve por la operación que encabeza el scope, que build compone (idempotencyScope()).
+  const declared = idempotencyOutcomeCodes(model, canonical).filter((row) => row.declared);
+  const table = declared.length === 0
+    ? ''
+    : `\n/** El code que declara cada operación para este desenlace; la que no aparece usa el canónico. */\nconst DECLARED_CODES: Readonly<Record<string, string>> = {\n${declared.map((row) => `  ${row.operation}: '${row.code}'`).join(',\n')}\n};\n`;
+  const codeExpr = declared.length === 0
+    ? `'${canonical.code}'`
+    : `DECLARED_CODES[scope.split(':')[0]] ?? '${canonical.code}'`;
+  const origin = declared.length > 0
+    ? `El code sale del error que cada operación declara para este conflicto (${declared.map((row) => row.operation).join(', ')});\n * las demás usan el CANÓNICO del framework (docs/framework-errors.md). La operación es la que encabeza el scope.`
     : `El code es el CANÓNICO del framework (docs/framework-errors.md): el diseño no declara uno propio, y eso es\n * una respuesta legítima. Para cambiarlo, declara en los errors de la operación un code de su familia con\n * status ${canonical.http}.`;
   return tsModule(
     classPath(DIRS.idempotency, className),
     [{ symbol: 'ConflictException', from: classPath(DIRS.errors, 'ConflictException') }],
-    `/**
+    `${table}/**
  * ${summary}
  *
  * ${detail}
@@ -142,7 +149,7 @@ export class ${className} extends ConflictException {
     super(${className === 'IdempotencyConflictException'
       ? '`Otra petición con la misma clave de idempotencia está en curso: ${scope}/${idempotencyKey}`'
       : '`La clave de idempotencia ${scope}/${idempotencyKey} ya se usó con un contenido distinto`'}, {
-      code: '${code}',
+      code: ${codeExpr},
       httpStatus: ${canonical.http}
     });
   }

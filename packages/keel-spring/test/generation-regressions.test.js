@@ -199,7 +199,7 @@ test('campos file: endpoint multipart con MultipartFile y FileUpload en el mensa
 
   assert.ok(controller.includes('consumes = MediaType.MULTIPART_FORM_DATA_VALUE'));
   assert.ok(controller.includes('@RequestPart(value = "image") MultipartFile image'));
-  assert.ok(controller.includes('toFileUpload(image)'));
+  assert.ok(controller.includes('toFileUpload(image, true)'), 'una parte obligatoria vacía es FILE_UNREADABLE');
   assert.ok(command.includes('FileUpload image'));
   assert.ok(!command.includes('String image'));
 });
@@ -1921,22 +1921,32 @@ test('un code del dominio en la familia sustituye al canónico, en los DOS desen
   // mientras el servidor devolvía otra — y sin que nada lo delatara, porque el aviso
   // de `keel validate` calla con razón cuando el diseño SÍ nombra el desenlace.
   // Cuarta corrida consecutiva reportándolo (INFORME-CORRIDA-HTTP-AUTH.md).
+  //
+  // Y el override es de la OPERACIÓN que lo declara: removeProductImage también tiene
+  // idempotencia y no nombra nada, así que su carrera sale con el canónico. Con la búsqueda
+  // sobre todos los errores del servicio salía con el PRODUCT_KEY_* de createProduct
+  // (corrida catalog de keel-nest, FL-IMG-001-G). La excepción lo resuelve por la operación
+  // que encabeza el scope.
   const { read } = scaffoldExtended();
 
   const reuse = read(`${JAVA}/domain/idempotency/IdempotencyReuseException.java`);
-  assert.ok(reuse.includes('"PRODUCT_KEY_REUSED"'), reuse);
-  assert.ok(!reuse.includes('IDEMPOTENCY_KEY_REUSED'), reuse);
+  assert.ok(reuse.includes('Map.of("createProduct", "PRODUCT_KEY_REUSED")'), reuse);
+  assert.ok(reuse.includes('getOrDefault(end < 0 ? scope : scope.substring(0, end), "IDEMPOTENCY_KEY_REUSED")'), reuse);
+  assert.ok(!reuse.includes('removeProductImage'), reuse);
 
   const race = read(`${JAVA}/domain/idempotency/IdempotencyConflictException.java`);
-  assert.ok(race.includes('"PRODUCT_KEY_IN_PROGRESS"'), race);
-  assert.ok(!race.includes('IDEMPOTENCY_KEY_IN_PROGRESS'), race);
+  assert.ok(race.includes('Map.of("createProduct", "PRODUCT_KEY_IN_PROGRESS")'), race);
+  assert.ok(race.includes('"IDEMPOTENCY_KEY_IN_PROGRESS")'), race);
 
-  // Y las notas del handler citan los codes que de verdad van a salir por el cable: si
+  // Y las notas de cada handler citan los codes que de verdad van a salir por el cable: si
   // dijeran otra cosa, el agente escribiría el escenario contra un contrato inexistente.
   const handler = read(`${JAVA}/application/usecases/CreateProductCommandHandler.java`);
   assert.ok(handler.includes('PRODUCT_KEY_REUSED'), handler);
   assert.ok(handler.includes('PRODUCT_KEY_IN_PROGRESS'), handler);
   assert.ok(!handler.includes('IDEMPOTENCY_KEY_IN_PROGRESS'), handler);
+  const removal = read(`${JAVA}/application/usecases/RemoveProductImageCommandHandler.java`);
+  assert.ok(removal.includes('IDEMPOTENCY_KEY_IN_PROGRESS'), removal);
+  assert.ok(!removal.includes('PRODUCT_KEY_'), removal);
 });
 
 test('el 413 del límite de subida usa el error que el diseño declara', () => {

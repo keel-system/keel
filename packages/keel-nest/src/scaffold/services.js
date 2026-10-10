@@ -21,7 +21,7 @@ import { mailPorts, sendsMail } from './mail.js';
 import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { repositoryRoots, portClass, portPath, occupantFinders, PAGE_TS } from './repositories.js';
-import { relievingOperations, effectiveErrorCode, scheduleDispatch } from 'keel-core/gen';
+import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch } from 'keel-core/gen';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
@@ -692,8 +692,8 @@ function idempotencyNotes(model, operation) {
   }
   if (!usesRequestIdempotency(model)) return [];
   const ttl = idempotency.ttlSeconds ?? DEFAULT_IDEMPOTENCY_TTL_SECONDS;
-  const reuse = `${FRAMEWORK_ERRORS.idempotencyReuse.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyReuse)}`;
-  const race = `${FRAMEWORK_ERRORS.idempotencyRace.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyRace)}`;
+  const reuse = `${FRAMEWORK_ERRORS.idempotencyReuse.http} ${idempotencyOutcomeCode(model, operation.name, FRAMEWORK_ERRORS.idempotencyReuse)}`;
+  const race = `${FRAMEWORK_ERRORS.idempotencyRace.http} ${idempotencyOutcomeCode(model, operation.name, FRAMEWORK_ERRORS.idempotencyRace)}`;
   const source =
     idempotency.keySource === 'payload-hash'
       ? 'La clave es CommandSignature.of(command), que también es la firma: NO hay cabecera ni IdempotencyContext, y por tanto tampoco caso «sin clave» — siempre se deduplica.'

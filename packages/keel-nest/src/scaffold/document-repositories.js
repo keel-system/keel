@@ -211,6 +211,11 @@ function keyFilter(model, entity, finder, use) {
         if (sub.kind === 'composite') continue;
         conditions.push(`${tsString(`${snakeCase(member.name)}.${snakeCase(sub.name)}`)}: ${writeScalar(sub, `${param.name}.${sub.name}`, use)}`);
       }
+    } else if (member?.kind === 'scalar' && member.folded) {
+      // Un campo con `compare: ignore-case` se busca por su SOMBRA plegada, que es lo que la unicidad indexa:
+      // por el valor crudo, «Tools» no encontraría la categoría «tools» que el índice dice que ya existe.
+      use.import({ symbol: 'TextFold', from: TEXT_FOLD_TS });
+      conditions.push(`${tsString(keyOf(model, entity, member.folded.name))}: TextFold.${member.folded.accents ? 'foldCaseAndAccents' : 'foldCase'}(${param.name})`);
     } else if (member?.kind === 'scalar') {
       conditions.push(`${tsString(keyOf(model, entity, member.name))}: ${writeScalar(member.field, param.name, use)}`);
     } else {

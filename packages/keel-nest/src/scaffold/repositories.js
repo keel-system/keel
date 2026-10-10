@@ -14,7 +14,7 @@
 //     guardar el grafo; cero filas es otra escritura que ganó (o un borrado), y sale como conflicto;
 //   · la AUDITORÍA: `created_*`/`updated_*` los estampa el adaptador, como el listener de Spring Data.
 
-import { persistedMembers, collectInternalEntities, orderingFieldOf, partialUniqueIndexes, LOCK_VERSION } from 'keel-core/gen';
+import { persistedMembers, collectInternalEntities, orderingFieldOf, partialUniqueIndexes, LOCK_VERSION, foldedShadow } from 'keel-core/gen';
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
@@ -115,6 +115,11 @@ function keyFinder(model, entity, keys) {
         imports: [{ symbol: field.namedType, from: classPath(DIRS.valueObjects, field.namedType), type: true }]
       };
     }
+    // Un campo con `compare: ignore-case` se busca por su SOMBRA plegada, que es lo que la unicidad indexa: por el
+    // valor crudo, «Tools» no encontraría la categoría «tools» que el índice dice que ya existe (corrida catalog).
+    // El puerto sigue recibiendo el valor tal cual; el pliegue lo hace el adaptador (`fold`).
+    const shadow = foldedShadow(field);
+    if (shadow) return { name: field.name, type: field.tsType, where: [[shadow.name, `TextFold.${shadow.accents ? 'foldCaseAndAccents' : 'foldCase'}(${field.name})`]], imports: typeImportsOf(field), fold: true };
     return { name: field.name, type: field.tsType, where: [[field.name, field.name]], imports: typeImportsOf(field) };
   });
   return { name: `findBy${params.map((p) => capitalize(p.name)).join('And')}`, params };
@@ -328,7 +333,7 @@ function renderAdapter(model, entity) {
 
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
-    for (const param of finder.params) imports.push(...param.imports);
+    for (const param of finder.params) imports.push(...param.imports, ...(param.fold ? [{ symbol: 'TextFold', from: TEXT_FOLD_TS }] : []));
     const where = finder.params.flatMap((param) => param.where.map(([prop, expr]) => (prop === expr ? prop : `${prop}: ${expr}`)));
     methods.push(`  async ${finder.name}(${finder.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {
     const found = await this.manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${where.join(', ')} }`)});
@@ -337,7 +342,7 @@ function renderAdapter(model, entity) {
   }
 
   for (const occupant of occupantFinders(model, entity)) {
-    for (const param of occupant.params) imports.push(...param.imports);
+    for (const param of occupant.params) imports.push(...param.imports, ...(param.fold ? [{ symbol: 'TextFold', from: TEXT_FOLD_TS }] : []));
     const where = occupant.params.flatMap((param) => param.where.map(([prop, expr]) => (prop === expr ? prop : `${prop}: ${expr}`)));
     methods.push(`  async ${occupant.name}(${occupant.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {
     const found = await this.manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${where.join(', ')} }`)});
