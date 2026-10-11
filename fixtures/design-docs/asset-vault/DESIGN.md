@@ -1,7 +1,8 @@
 # asset-vault — Documento de diseño
 
-> specs/asset-vault v1.1.0. Diseño cerrado al preparar la corrida del incremento 13 de keel-nest
-> (2026-10-09); las decisiones las tomó quien la preparaba, por delegación del diseñador.
+> specs/asset-vault v1.1.1. Diseño cerrado al preparar la corrida del incremento 13 de keel-nest
+> (2026-10-09); las decisiones las tomó quien la preparaba, por delegación del diseñador. La v1.1.1
+> (2026-10-11) cierra el único hueco real de esa corrida: qué pasa con un motivo de cuarentena largo.
 
 ## 1. Propósito y alcance
 
@@ -50,6 +51,7 @@ Desde `published` también se pasa a `quarantined`. `quarantined` es terminal.
 - La cuarentena guarda su motivo y publica `AssetQuarantined`.
   - La retirada de la miniatura se encarga **después** de confirmar la cuarentena.
   - Un segundo hallazgo sobre un archivo ya en cuarentena se confirma sin efecto.
+  - Un motivo de más de 500 caracteres se guarda truncado a los 500 primeros, y `AssetQuarantined` lleva ese mismo motivo truncado.
 - `thumbnailDeliveryCount` cuenta mensajes distintos del renderizador. `lastDeliveredAt` solo avanza.
 - Alcance por recurso: el claim `vaults` enumera los `Owner.code` visibles y se compara distinguiendo mayúsculas.
   - `vault-admin` está exento, y es el único que escribe.
@@ -109,6 +111,7 @@ Desde `published` también se pasa a `quarantined`. `quarantined` es terminal.
 - **Dos órdenes de la guarda de consumo**:
   - La cuarentena registra lo procesado después, y la frena su transición.
   - El contador registra antes, y acepta perder una entrega si el handler falla.
+- **Truncar el motivo, no rechazar el hallazgo**: el `reason` de `MalwareDetected` lo escribe el escáner y no lleva cota. Rechazar uno largo lo mandaría a la DLQ con el archivo infectado todavía publicado. Perder la cola de un texto descriptivo es el coste menor.
 - **Autoría y marcas de tiempo por política**: quién subió y quién publicó es la pregunta de una auditoría de custodia.
 
 ## 7. Ficha de reutilización
@@ -136,6 +139,7 @@ Desde `published` también se pasa a `quarantined`. `quarantined` es terminal.
 - Ninguna operación crea revisiones: existen para la silueta documental anidada.
 - Los propietarios los aprovisiona el directorio. Un cambio de `code` se aplica a la vez allí, en los tokens y en esta base.
 - No hay retención ni borrado: la custodia lo guarda todo, también lo que está en cuarentena.
+- El truncado del motivo (v1.1.1) no lo afirma ningún flujo: el careo de la 1.1.x agotó su presupuesto. Su flujo, `FL-QUA-001-D`, llega con la próxima minor.
 - La exención del cliente máquina sobre el alcance vive en una regla de `getAsset`: el DSL no puede enumerarla. Es candidata a un `exemptClients`.
 
 ### Cómo reutilizarlo

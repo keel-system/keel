@@ -60,6 +60,8 @@ subscriptions:
     source: security-scanner
     payload:
       assetId: { type: uuid, required: true }
+      # Sin cota a propósito: un motivo largo no invalida el hallazgo. quarantineAsset lo
+      # trunca a los 500 de Asset.quarantineReason (regla de la operación, v1.1.1).
       reason:  { type: string, required: true }
     contract:
       # Sin `messageId`: con envoltura Keel la clave de deduplicación es `metadata.eventId`,

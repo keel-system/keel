@@ -1,7 +1,14 @@
 # asset-vault — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/asset-vault v1.1.0. Contrato de validación para la fase de generación.
+> specs/asset-vault v1.1.1. Contrato de validación para la fase de generación.
+
+> **v1.1.1 sin flujo nuevo, a sabiendas.** El parche decide que `quarantineAsset` **trunca** a 500
+> caracteres un `reason` más largo en vez de rechazar el hallazgo (regla de la operación). Ningún
+> flujo lo afirma todavía: el careo de la 1.1.x agotó sus tres pasadas y un flujo nuevo lo dejaría
+> sin salida. Llega con la próxima minor como `FL-QUA-001-D`: un `MalwareDetected` con un `reason`
+> de 600 caracteres ASCII deja el archivo en `quarantined` con `quarantineReason` = sus 500
+> primeros, y sale un `AssetQuarantined` con ese mismo motivo truncado; el mensaje no va a la DLQ.
 
 > **Fixture de test del repo Keel.** Este archivo no es un diseño real: es el escenario
 > **documental transversal**. Cada flujo existe para poner a prueba, contra Mongo real, una

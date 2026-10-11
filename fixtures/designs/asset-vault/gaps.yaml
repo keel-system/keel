@@ -234,7 +234,10 @@ findings:
     severity: gap
     state: decided
     reason: "Corregido en v1.1.0: slug con pattern y maxLength 80, title maxLength 200, labels maxItems 20
-      y maxLength 40, y reason y quarantineReason maxLength 500."
+      y maxLength 40, y reason y quarantineReason maxLength 500. Completado en v1.1.1: el reason de
+      MalwareDetected sigue sin cota y quarantineAsset lo trunca a 500 en vez de rechazarlo, porque un
+      hallazgo rechazado acaba en la DLQ con el archivo infectado publicado (designGap
+      subscription-text-bound de la corrida de keel-nest)."
   - class: 13
     unit: reconcileScans
     what: >-

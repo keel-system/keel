@@ -156,13 +156,17 @@ operations:
         assetId:
           type: uuid
           required: true
+        # Sin cota a propósito (v1.1.1): el motivo lo escribe el escáner, no un usuario, y
+        # rechazar el hallazgo por la longitud de su texto lo mandaría a la DLQ con el archivo
+        # infectado todavía publicado. La cota de 500 es la del almacén, y la cumple la regla
+        # de abajo truncando, no la entrada rechazando.
         reason:
           type: string
           required: true
-          constraints: { maxLength: 500 }
     output: "void"
     rules:
       - Guarda reason en quarantineReason.
+      - Un reason de más de 500 caracteres se guarda truncado a sus 500 primeros (la misma unidad con la que se mide el maxLength de quarantineReason) - el hallazgo nunca se rechaza por la longitud de su motivo, porque rechazarlo deja publicado un archivo infectado. AssetQuarantined lleva el motivo ya truncado, el mismo que queda guardado.
       - Un archivo que ya está en quarantined se confirma sin efecto - un segundo hallazgo sobre el mismo binario no cambia nada, conserva el primer motivo y no publica otro AssetQuarantined.
       - La retirada de la miniatura (purgeThumbnail) se encarga después de confirmar la cuarentena, nunca dentro de su transacción - una copia que pierde la carrera no llega al renderizador.
       - Un assetId que no existe responde ASSET_NOT_FOUND y, por la suscripción, acaba en la DLQ tras los reintentos - un hallazgo sobre un archivo desconocido es una anomalía que alguien tiene que mirar.
