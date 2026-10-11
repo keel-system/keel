@@ -111,6 +111,7 @@ function interpret({ manifest, layers, stack = null }) {
     for (const vo of valueObjects) vo.usedInCollection = collectionVoNames.has(vo.name);
   }
   const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings, persistenceKind, entities);
+  deriveFilterFolds(services, entities, warnings);
   // DTOs de las entidades hijas proyectadas en algún payload de salida.
   const childDtos = collectChildDtos(layers, services, domainTypes, inlineEnumName, warnings);
   // DTOs de referencia de las relaciones que el diseño marca con embed.
@@ -416,11 +417,14 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
   // mayúsculas (y acentos) lleva una columna SOMBRA con el valor plegado, que es donde vive
   // su unicidad y contra la que se filtra (persistence-members.js § folded).
   const compare = field.compare ?? 'exact';
+  // La cota del texto, la conserve o no el campo: la sombra de un FILTRO (`deriveFilterFolds`) se decide después,
+  // cuando ya se conocen las queries, y necesita la misma cota que tendría la del campo.
+  const textMaxLength = !isList && isTextual(resolved) ? ({ ...resolved.constraints, ...(field.constraints ?? {}) }.maxLength ?? null) : null;
   const fold =
     compare !== 'exact' && !isList && isTextual(resolved)
       ? {
           accents: compare === 'ignore-case-accents',
-          maxLength: { ...resolved.constraints, ...(field.constraints ?? {}) }.maxLength ?? null,
+          maxLength: textMaxLength,
           // El nombre de la sombra vive AQUÍ y en ningún otro sitio: lo leen el emisor de la
           // columna (`foldedShadow`) y el orden por defecto de los listados, que tienen que
           // ordenar por la misma fuente contra la que filtran.
@@ -434,6 +438,9 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     list: isList,
     compare,
     fold,
+    textMaxLength,
+    // La sombra que pide un filtro y no el campo: la pone `deriveFilterFolds`.
+    filterFold: null,
     // Cómo casa un filtro de texto (solo en el input de una query; crossrefs lo exige).
     match: field.match ?? 'exact',
     ...P.elementType(resolved),
@@ -464,6 +471,50 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     description: field.description ?? null,
     ...P.fieldDetails(field, resolved, { fieldName, isList, persisted, collation })
   };
+}
+
+// ─── La sombra plegada de un FILTRO ──────────────────────────────────────────
+//
+// Un filtro de query puede pedir `compare: ignore-case[-accents]` sobre un campo de la entidad que no lo declara
+// (`listProducts.name` frente a `Product.name`): el campo se compara exacto —su unicidad, su orden— y solo ese
+// filtro pliega. Hasta aquí build no emitía nada y cada generador lo resolvía distinto: el agente de keel-spring
+// escribía a mano la columna `name_normalized`, y el de keel-nest plegaba en la consulta (`translate(lower(…))`),
+// que es una función de plegado distinta de la que estampa `TextFold` — el mismo listado podía devolver filas
+// distintas en los dos servidores (corridas de catalog, 2026-10-10 y 2026-10-11).
+//
+// Ahora el campo lleva `filterFold`, con la misma forma que `fold`, y la columna se emite y se estampa igual. Lo que
+// NO hace es lo que hace `fold`: no lleva la unicidad del campo, no la usan los finders por clave y no cambia el
+// orden (`foldedShadow` la marca `filterOnly`). Dos filtros que pidan plegados distintos sobre el mismo campo no
+// caben en una sola columna: entonces no se emite ninguna y se avisa.
+function deriveFilterFolds(services, entities, warnings) {
+  const wanted = new Map();
+  for (const group of services) {
+    const entity = entities.find((candidate) => candidate.name === group.entity);
+    if (!entity?.persisted) continue;
+    for (const operation of group.operations) {
+      if (operation.kind !== 'query') continue;
+      for (const input of operation.bodyFields ?? []) {
+        if ((input.compare ?? 'exact') === 'exact') continue;
+        const field = entity.fields.find((candidate) => candidate.name === input.name);
+        if (!field || field.fold || field.list || !isTextual(field)) continue;
+        const key = `${entity.name}.${field.name}`;
+        const entry = wanted.get(key) ?? { field, accents: new Set(), operations: [] };
+        entry.accents.add(input.compare === 'ignore-case-accents');
+        entry.operations.push(operation.name);
+        wanted.set(key, entry);
+      }
+    }
+  }
+  for (const [key, { field, accents, operations }] of wanted) {
+    if (accents.size > 1) {
+      warnings.push(
+        `${key}: los filtros de ${operations.join(', ')} lo comparan con plegados distintos (ignore-case e ignore-case-accents); ` +
+          'una sola columna sombra no sirve a los dos, así que build no emite ninguna y el plegado de esos filtros queda al agente.'
+      );
+      continue;
+    }
+    field.filterFold = { accents: [...accents][0], maxLength: field.textMaxLength, shadow: `${field.name}Normalized`, operations };
+  }
 }
 
 // ─── Formato de los value types ESCALARES ────────────────────────────────────

@@ -312,9 +312,10 @@ entidad, la estampa en el adaptador con `TextFold`, pone la unicidad sobre ella 
 corrida `catalog`— también **el orden por defecto del listado** (`<OPERACION>_ORDER`).
 No la reintroduzcas ni cambies el `Sort`: ya apunta a la sombra.
 
-Lo que sigue siendo tuyo es la **consulta del filtro** contra esa columna (el fallback
-portable de `skills/keel-spring-database/references/jpa-mapping.md` § Búsqueda que ignora
-mayúsculas y acentos). Y la regla que la gobierna es que el filtro y el orden del mismo
+Lo que sigue siendo tuyo es la **consulta del filtro** contra esa columna
+(`skills/keel-spring-database/references/jpa-mapping.md` § Búsqueda que ignora mayúsculas y
+acentos). Si el `compare` lo declara solo el FILTRO de una query, build emite y estampa igual la
+sombra, pero ni la unicidad ni el orden van sobre ella: el campo se compara exacto. Y la regla que la gobierna es que el filtro y el orden del mismo
 listado salen de la MISMA columna:
 
 ```java

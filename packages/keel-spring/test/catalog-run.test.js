@@ -126,8 +126,17 @@ test('compare en la rama documental: el índice único va sobre la sombra, igual
 });
 
 test('un filtro con match/compare deja su nota en el handler, con o sin sombra', () => {
-  const sinSombra = scaffold('catalog-extended').find('/ListProductsQueryHandler.java');
-  assert.match(sinSombra, /Filtro name \(match: contains, compare: ignore-case-accents\): contiene ignorando mayúsculas y acentos/);
+  // El campo no declara `compare`, pero el filtro sí: desde la sombra de filtro (`filterFold`) también se compara
+  // contra la sombra. Antes la nota decía solo «ignorando mayúsculas y acentos» y cada agente plegó a su manera.
+  const deFiltro = scaffold('catalog-extended').find('/ListProductsQueryHandler.java').replace(/\n\s*\/\/\s*/g, ' ');
+  assert.match(deFiltro, /Filtro name \(match: contains, compare: ignore-case-accents\): contiene; pliega el parámetro con TextFold\.foldCaseAndAccents\(\.\.\.\) y compáralo contra Product\.nameNormalized/);
+  // Sin `compare` no hay sombra que valga: la nota solo dice cómo casa.
+  const sinSombra = scaffold('catalog-extended', {
+    patch: (layers) => {
+      delete layers['use-cases'].operations.listProducts.input.fields.name.compare;
+    }
+  }).find('/ListProductsQueryHandler.java');
+  assert.match(sinSombra, /Filtro name \(match: contains, compare: exact\): contiene, sensible a mayúsculas/);
   const conSombra = scaffold('catalog-extended', {
     patch: (layers) => {
       layers.domain.entities.Product.fields.name.compare = 'ignore-case-accents';

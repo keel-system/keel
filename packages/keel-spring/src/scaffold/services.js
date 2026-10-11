@@ -6,6 +6,7 @@
 // dominio (domain/repository) y del mapper de aplicación, nunca del JPA.
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import { textFilterNotes } from 'keel-core/gen/text-filters';
 import {
   idempotencyOutcomeCode,
   declaredUniquenessErrorFor,
@@ -1072,39 +1073,3 @@ function scaleRoundingLines(components, imports) {
   );
 }
 
-/**
- * Las notas de los filtros de TEXTO de una query que declaran `match` o `compare` (DSL 2.14).
- * La consulta la sigue escribiendo el agente —cómo se filtra depende del motor y de la forma
- * del listado—, pero lo que el diseño decidió ya no es prosa en una `rule`: se nombra aquí,
- * con la columna sombra si la entidad la tiene. Y la regla que no puede perderse: el
- * parámetro se pliega con la MISMA función que estampó la sombra, o el filtro deja de casar
- * en silencio.
- */
-function textFilterNotes(model, operation) {
-  if (operation.kind !== 'query') return [];
-  const owner = model.services.find((service) => service.operations.includes(operation))?.entity;
-  const entity = model.entities.find((e) => e.name === owner);
-  const notes = [];
-  for (const component of messageComponents(model, operation)) {
-    const match = component.match ?? 'exact';
-    const compare = component.compare ?? 'exact';
-    if (match === 'exact' && compare === 'exact') continue;
-    const shadow = entity?.fields.find((field) => field.name === component.name && field.fold);
-    const how = `match: ${match}, compare: ${compare}`;
-    const fold = compare === 'ignore-case-accents' ? 'TextFold.foldCaseAndAccents' : 'TextFold.foldCase';
-    notes.push(
-      compare !== 'exact' && shadow
-        ? `Filtro ${component.name} (${how}): pliega el parámetro con ${fold}(...) y compáralo contra ` +
-            `${entity.name}.${component.name}Normalized, la sombra que build ya mantiene — nunca contra ${component.name} con ` +
-            `lower()/unaccent() en la consulta: plegar el valor guardado y el buscado con dos funciones distintas deja ` +
-            `de casar en silencio con el primer carácter en que difieran`
-        : `Filtro ${component.name} (${how}): ${match === 'exact' ? 'igualdad' : match === 'prefix' ? 'empieza por' : 'contiene'}` +
-            (compare === 'exact'
-              ? ', sensible a mayúsculas'
-              : ` ignorando ${compare === 'ignore-case-accents' ? 'mayúsculas y acentos' : 'mayúsculas'}; ` +
-                `el campo de la entidad no declara compare, así que no hay sombra plegada: ver la skill de ` +
-                `persistencia § Búsqueda que ignora mayúsculas y acentos`)
-    );
-  }
-  return notes;
-}

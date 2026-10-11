@@ -209,7 +209,11 @@ export function naturalKeyIndexName(entity) {
 export function documentIndexSpecs(model, entity, warnings) {
   const members = persistedMembers(model, entity);
   const specs = [];
-  const shadowOf = (name) => members.find((m) => m.kind === 'scalar' && m.name === name)?.folded;
+  // La sombra de un FILTRO (`filterOnly`) no lleva la unicidad del campo: ese se compara exacto.
+  const shadowOf = (name) => {
+    const shadow = members.find((m) => m.kind === 'scalar' && m.name === name)?.folded;
+    return shadow && !shadow.filterOnly ? shadow : null;
+  };
 
   if (entity.naturalKey?.length > 0) {
     specs.push({

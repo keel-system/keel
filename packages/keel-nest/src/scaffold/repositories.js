@@ -14,7 +14,7 @@
 //     guardar el grafo; cero filas es otra escritura que ganó (o un borrado), y sale como conflicto;
 //   · la AUDITORÍA: `created_*`/`updated_*` los estampa el adaptador, como el listener de Spring Data.
 
-import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, foldedShadow, naturalKeyBatchReason, uniqueFields } from 'keel-core/gen';
+import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, keyShadow, naturalKeyBatchReason, uniqueFields } from 'keel-core/gen';
 import { pluralize } from 'keel-core/gen/naming';
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
@@ -168,7 +168,7 @@ function keyFinder(model, entity, keys) {
     // Un campo con `compare: ignore-case` se busca por su SOMBRA plegada, que es lo que la unicidad indexa: por el
     // valor crudo, «Tools» no encontraría la categoría «tools» que el índice dice que ya existe (corrida catalog).
     // El puerto sigue recibiendo el valor tal cual; el pliegue lo hace el adaptador (`fold`).
-    const shadow = foldedShadow(field);
+    const shadow = keyShadow(field);
     if (shadow) return { name: field.name, type: field.tsType, where: [[shadow.name, `TextFold.${shadow.accents ? 'foldCaseAndAccents' : 'foldCase'}(${field.name})`]], imports: typeImportsOf(field), fold: true };
     return { name: field.name, type: field.tsType, where: [[field.name, field.name]], imports: typeImportsOf(field) };
   });

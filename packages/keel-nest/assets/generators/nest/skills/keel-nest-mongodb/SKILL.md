@@ -40,6 +40,10 @@ El código de persistencia sale entero de build, sobre el driver oficial y sin O
 
 ## Reglas que no se rompen
 
+- Un filtro con `compare: ignore-case` o `ignore-case-accents` (en el campo o solo en la query) va contra
+  el campo sombra `<campo>_normalized` que build mantiene en el documento, con el término plegado por
+  `TextFold` (y escapado si va en una `$regex`). Nunca `$regex` con la opción `i` ni una collation: son otra
+  función de plegado, y el mismo diseño servido por keel-spring pliega con `TextFold`.
 - Ningún handler ni controlador importa `mongodb`, una colección ni una sesión: la frontera hexagonal lo
   prohíbe y `npm run check:architecture` lo comprueba.
 - El adaptador pasa **siempre** `{ session: this.session }` (la de la transacción abierta por el mediator):

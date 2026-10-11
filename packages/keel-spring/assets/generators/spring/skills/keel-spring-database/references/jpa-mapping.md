@@ -114,56 +114,27 @@ la que gana es la del `columnDefinition`.
 
 ### Búsqueda que ignora mayúsculas y acentos
 
-Cuando el diseño declara que una búsqueda "ignora mayúsculas y acentos", **es
-implementable siempre**, con o sin extensiones de la BD. Que la vía nativa del
-dialecto no esté disponible no convierte la regla en un hueco del diseño: hay
-un fallback portable y hay que aplicarlo.
+Cuando el diseño declara `compare: ignore-case` o `ignore-case-accents` —en el campo de la entidad
+o solo en el filtro de una query (`listProducts.name`)—, **la columna sombra ya existe**: build emite
+`<campo>Normalized` en la `XxxJpa` y la estampa en el adaptador con `TextFold` al guardar. Lo tuyo es
+la consulta, y tiene una sola forma:
 
-Por orden de preferencia:
+```java
+// el término se pliega con la MISMA función que estampó la sombra
+Page<ProductJpa> findByNameNormalizedContaining(String nameNormalized, Pageable pageable);
 
-1. **Colación insensible del dialecto**, si existe: `CITEXT`/collation
-   `und-x-icu` (PostgreSQL), `utf8mb4_0900_ai_ci` (MySQL 8), `..._CI_AI`
-   (SQL Server). Sin código: la comparación ya ignora caso y acento.
-2. **Extensión de normalización**: `unaccent` en PostgreSQL. La extensión se crea
-   desde **una migración de Flyway** (`CREATE EXTENSION IF NOT EXISTS unaccent;`),
-   que es parte del esquema del servicio — no un requisito manual del entorno, y
-   **no** un `CommandLineRunner`/`@PostConstruct` que la cree al arrancar: eso deja
-   el esquema fuera del control de las migraciones y el baseline exportado ya no
-   describe la BD real. Va acompañada de un índice funcional sobre
-   `lower(unaccent(<columna>))`. Requiere permisos de creación de extensión:
-   compruébalo contra la infra de prueba antes de comprometerte con esta vía.
+productJpaRepository.findByNameNormalizedContaining(TextFold.foldCaseAndAccents(term), pageable);
+```
 
-   La extensión es **DDL**: lo que la usa es el índice, y la query se beneficia de
-   él sin nombrar la función si la vía 1 está disponible. Si aun así invocas
-   `unaccent` desde JPQL con `function(...)`, hay una trampa que rompe **todos** los
-   listados de golpe: un parámetro con nombre dentro de un `concat(...)` viaja sin
-   tipo y PostgreSQL falla en `prepare` con `function unaccent(bytea) does not
-   exist`, incluso en las llamadas sin término de búsqueda (el `prepare` ocurre
-   antes de evaluar `:q is null`). Castea siempre el parámetro:
+**No** uses la colación del motor, `unaccent`, `lower()` ni `translate()` en la consulta, ni
+escribas otra columna normalizada: cualquiera de ellas es una función de plegado distinta de
+`TextFold`, y el mismo diseño servido por keel-nest pliega con `TextFold` —con dos funciones, el
+mismo listado devuelve filas distintas en los dos servidores, y deja de casar en silencio con el
+primer carácter en que difieran (corridas de catalog, 2026-10-10 y 2026-10-11).
 
-   ```java
-   // el cast(:q as string) no es decorativo: sin él la consulta no llega a ejecutarse
-   "where :q is null or lower(function('unaccent', p.name)) "
-     + "like lower(function('unaccent', concat('%', cast(:q as string), '%')))"
-   ```
-
-   Detalle completo y la regla general en `references/troubleshooting.md`.
-3. **Fallback portable, sin depender del dialecto** (el que aplica cuando 1 y 2
-   no están disponibles): una **columna normalizada** que se puebla en el mapeo
-   `toJpa` (`<campo>Normalized`), con el mismo plegado aplicado al término de
-   búsqueda antes de la query. El plegado en Java es estándar:
-
-   ```java
-   public static String fold(String value) {
-       if (value == null) return null;
-       return Normalizer.normalize(value, Normalizer.Form.NFD)
-               .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
-               .toLowerCase(Locale.ROOT);
-   }
-   ```
-
-   La columna se indexa como cualquier otra y la query es un `LIKE` normal. Es
-   menos elegante que la vía nativa y funciona en los seis dialectos.
+Si el campo declara `compare`, la sombra lleva además su unicidad y el orden por defecto del
+listado (`conventions/mapping.md` § Ordenar por un campo con columna normalizada). Si solo lo
+declara el filtro, no: el campo sigue comparándose exacto para todo lo demás.
 
 ## 4. Auditoría y locking
 

@@ -444,7 +444,10 @@ function renderTableAnnotation(model, entity, members, imports) {
     // Un miembro de la clave que pliega (`compare`, DSL 2.14) entra por su SOMBRA: la clave
     // natural es una unicidad como cualquier otra, y solo la columna plegada sabe que `ACME`
     // y `acme` son la misma.
-    const shadowOf = (f) => members.find((m) => m.kind === 'scalar' && m.name === f)?.folded;
+    const shadowOf = (f) => {
+      const shadow = members.find((m) => m.kind === 'scalar' && m.name === f)?.folded;
+      return shadow && !shadow.filterOnly ? shadow : null;
+    };
     const columns = entity.naturalKey
       .flatMap((f) => (shadowOf(f) ? [shadowOf(f).column.replace(/`/g, '')] : columnsFor(model, entity, members, f, model.warnings)))
       .map((c) => `"${column(c)}"`)
@@ -461,7 +464,9 @@ function renderTableAnnotation(model, entity, members, imports) {
   // son el mismo nombre para el diseño, y solo la columna plegada lo sabe. El nombre de la
   // constraint no cambia —el ApiExceptionHandler la traduce por nombre—.
   for (const field of uniqueFields(entity)) {
-    const shadow = members.find((m) => m.kind === 'scalar' && m.name === field.name)?.folded;
+    // La sombra de un FILTRO (`filterOnly`) no lleva la unicidad: el campo se compara exacto.
+    const folded = members.find((m) => m.kind === 'scalar' && m.name === field.name)?.folded;
+    const shadow = folded && !folded.filterOnly ? folded : null;
     const target = shadow ? shadow.column.replace(/`/g, '') : snakeCase(field.name);
     uniqueConstraints.push(
       `@UniqueConstraint(name = "uk_${entity.tableName}_${snakeCase(field.name)}", columnNames = { "${column(target)}" })`

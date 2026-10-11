@@ -70,7 +70,7 @@ export function usesPersistence(model) {
 
 /** ¿Algún campo persistido se compara plegado (`compare`)? Entonces hace falta TextFold, en las dos ramas. */
 export function usesTextFold(model) {
-  return model.entities.some((entity) => entity.persisted && entity.fields.some((field) => field.fold));
+  return model.entities.some((entity) => entity.persisted && entity.fields.some((field) => field.fold || field.filterFold));
 }
 
 /** El motor del stack, con PostgreSQL por defecto (la frontera solo admite postgresql y mysql). */
@@ -479,7 +479,11 @@ ${properties.join('\n\n')}
 function tableConstraints(model, entity, members, props, typeorm) {
   const lines = [];
   const propOf = (column) => props.get(column) ?? column;
-  const shadowOf = (name) => members.find((m) => m.kind === 'scalar' && m.name === name)?.folded;
+  // La sombra de un FILTRO (`filterOnly`) no lleva la unicidad del campo: ese se compara exacto.
+  const shadowOf = (name) => {
+    const shadow = members.find((m) => m.kind === 'scalar' && m.name === name)?.folded;
+    return shadow && !shadow.filterOnly ? shadow : null;
+  };
   const list = (columns) => `[${columns.map((column) => tsString(propOf(column))).join(', ')}]`;
 
   if (entity.naturalKey?.length > 0) {

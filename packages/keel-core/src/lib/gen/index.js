@@ -113,6 +113,7 @@ export {
   quoteIdentifierFor,
   columnSpec,
   foldedShadow,
+  keyShadow,
   LOCK_VERSION,
   AUDIT_COLUMNS,
   usesAuditableEntity,

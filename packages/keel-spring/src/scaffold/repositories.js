@@ -14,7 +14,7 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
 import { partialUniqueIndexes } from './persistence-members.js';
-import { collectInternalEntities, foldedShadow, naturalKeyBatchReason, uniqueFields } from 'keel-core/gen/relational';
+import { collectInternalEntities, keyShadow, naturalKeyBatchReason, uniqueFields } from 'keel-core/gen/relational';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -64,7 +64,7 @@ export function naturalKeyParams(model, entity) {
         name: member.name,
         javaType: member.javaType,
         imports: member.imports ?? member.field?.imports ?? [],
-        fold: member.field ? foldedShadow(member.field) : null
+        fold: member.field ? keyShadow(member.field) : null
       };
     }
 

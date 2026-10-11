@@ -27,7 +27,7 @@ export function textFoldImport(model) {
 /** ¿Algún campo persistido del diseño pliega? */
 export function usesTextFold(model) {
   if (!model.layersPresent?.persistence) return false;
-  return model.entities.some((entity) => entity.persisted && entity.fields.some((field) => field.fold));
+  return model.entities.some((entity) => entity.persisted && entity.fields.some((field) => field.fold || field.filterFold));
 }
 
 export function generate(model) {

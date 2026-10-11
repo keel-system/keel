@@ -78,9 +78,9 @@ Arreglo: castea el parámetro explícitamente en el JPQL.
 Generalización, aplicable a cualquier dialecto: **una función nativa invocada
 sobre `concat`/`coalesce`/aritmética con un parámetro con nombre necesita
 `cast(:param as <tipo>)`**. El cast no cuesta nada y hace la query portable.
-Antes de comprometerte con `function(...)` en JPQL, mira si la vía 1 o la 3 de
-`jpa-mapping.md` § Búsqueda que ignora mayúsculas y acentos te evitan el
-problema entero.
+Y si lo que buscabas era ignorar mayúsculas y acentos de un filtro con `compare`, no es
+`unaccent`: build ya mantiene la sombra `<campo>Normalized` y la consulta va contra ella
+(`jpa-mapping.md` § Búsqueda que ignora mayúsculas y acentos).
 
 ## `OptimisticLockException` en escenarios concurrentes
 

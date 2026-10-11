@@ -16,6 +16,7 @@
 // inyecta lo que existe.
 
 import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } from './render.js';
+import { textFilterNotes } from 'keel-core/gen/text-filters';
 import { callerResolution } from './security.js';
 import { mailPorts, sendsMail } from './mail.js';
 import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
@@ -656,21 +657,6 @@ function scheduleNotes(model, operation) {
             `lo acota el adaptador con sweep.${claim.sweepKey}.batch-size. No escribas otro reclamo (ni un finder por estado ni un lock): ` +
             'un segundo mecanismo en paralelo no reclama nada. Actúa sobre cada fila y guárdala: un fallo en una no revierte las demás.'
     );
-  }
-  return notes;
-}
-
-/** Notas de los filtros de TEXTO de una query que declaran `match` o `compare` (DSL 2.14). */
-function textFilterNotes(model, operation) {
-  if (operation.kind !== 'query') return [];
-  const notes = [];
-  for (const component of messageComponents(model, operation)) {
-    const match = component.match ?? 'exact';
-    const compare = component.compare ?? 'exact';
-    if (match === 'exact' && compare === 'exact') continue;
-    const how = match === 'exact' ? 'igualdad' : match === 'prefix' ? 'empieza por' : 'contiene';
-    const cases = compare === 'exact' ? 'sensible a mayúsculas' : `ignorando ${compare === 'ignore-case-accents' ? 'mayúsculas y acentos' : 'mayúsculas'}`;
-    notes.push(`Filtro ${component.name} (match: ${match}, compare: ${compare}): ${how}, ${cases}`);
   }
   return notes;
 }

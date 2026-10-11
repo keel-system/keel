@@ -133,16 +133,26 @@ export function columnSpec(fieldName, field, resolved, { collation = null } = {}
  * el valor tal como llegó, que es el que se devuelve.
  */
 export function foldedShadow(field) {
-  if (!field?.fold) return null;
-  const name = field.fold.shadow;
+  const fold = field?.fold ?? field?.filterFold;
+  if (!fold) return null;
+  const name = fold.shadow;
   return {
     name,
     source: field.name,
     column: snakeCase(name),
-    accents: field.fold.accents,
+    accents: fold.accents,
     required: Boolean(field.required),
-    maxLength: field.fold.maxLength
+    maxLength: fold.maxLength,
+    // La sombra de un FILTRO (`filterFold`, model.js § deriveFilterFolds): se emite y se estampa como cualquiera,
+    // pero el campo se compara exacto, así que ni su unicidad ni sus finders por clave van contra ella.
+    filterOnly: !field.fold
   };
+}
+
+/** La sombra que lleva la UNICIDAD y las búsquedas por clave del campo: solo la de su propio `compare`. */
+export function keyShadow(field) {
+  const shadow = foldedShadow(field);
+  return shadow && !shadow.filterOnly ? shadow : null;
 }
 
 /** La columna del bloqueo optimista que build pone en toda raíz que lo use. */

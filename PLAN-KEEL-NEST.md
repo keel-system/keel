@@ -1877,10 +1877,15 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     la API de administración con un nombre determinista igual en los dos (`scoped-<rol>-<hashCode de Java>`). Solo
     Keycloak (`usesScopedTokens`). Lo ejecuta `test/scoped-token.test.js` contra un Keycloak falso y `security-check`
     contra uno real, con asset-vault como segundo sujeto, falsado quitando el atributo del alta.
+  - **Cerrado después:** la sombra plegada de un FILTRO (`listProducts.name` pide `compare` y `Product.name` no). El
+    modelo deriva `filterFold` (`deriveFilterFolds`) y los dos generadores emiten y estampan `name_normalized`;
+    `foldedShadow` la marca `filterOnly` y ni la unicidad, ni los finders por clave, ni el orden van sobre ella
+    (`keyShadow`). La nota del handler es ahora neutral (`keel-core/gen/text-filters.js`): la de keel-nest no
+    nombraba la sombra y su agente plegó con `translate(lower(…))`. Lo miden `keel-nest/test/filter-fold.test.js`
+    y `db-check` (`filterFoldBlock`, falsado estampando sin quitar acentos). Y `db-check` volvió a medir
+    catalog-extended: desde el 13f no compilaba su sonda (faltaban `@redis/client` y el SDK de S3), y su
+    expectativa del code de la carrera seguía siendo la del servicio entero, no la de cada operación.
   - **Lo que queda abierto:**
-    - la sombra plegada cuando solo el FILTRO declara `compare` (`listProducts.name`): keel-spring la deja al agente,
-      que escribe la columna; keel-nest pliega en la consulta (`translate(lower(…))`). Dos funciones de plegado.
-      Emitirla separa de `fold` la unicidad y el orden, y cambia el esquema;
     - el emulador de Cognito no pone el claim del alcance en ningún usuario (`cognitoMockConfig` solo emite `sub`,
       `cognito:groups` y `client_id`): con `auth: cognito`, un diseño con `scoping` no tiene titular acotado. Visto al
       hacer `tokenWithScope`, sin corrida que lo haya pisado;

@@ -36,5 +36,10 @@ la traducción de cada violación de constraint al error del diseño (`persisten
 - Los nombres de constraint, índice y FK de las entidades son **contrato**: el filtro de errores traduce
   por ellos al `code` del diseño, y el servidor de keel-spring usa los mismos. No se renombran.
 - `synchronize` solo en `local`. En `develop` y `production` el esquema es el de las migraciones.
+- Un filtro con `compare: ignore-case` o `ignore-case-accents` (en el campo o solo en la query) va contra
+  la columna sombra `<campo>Normalized` que build emite y estampa, con el término plegado por `TextFold`
+  (`ILike` no; `Like('%' + TextFold.foldCaseAndAccents(term) + '%')` sobre la sombra, sí). Nunca `lower()`,
+  `unaccent()`, `translate()` ni la collation en la consulta: son otra función de plegado, y el mismo diseño
+  servido por keel-spring pliega con `TextFold` — el listado devolvería filas distintas en los dos servidores.
 - `lockVersion` no se toca: el adaptador ya hace el UPDATE condicionado por la versión (TypeORM no la
   comprueba) y lo traduce a 409.

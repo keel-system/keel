@@ -34,13 +34,13 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { loadService } from 'keel-core';
 import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { partialIndexSpecs, discriminatorColumn, orderingFieldOf, persistedMembers, uniqueConstraints, crossAggregateForeignKeys, elementTable, foreignKeyIndexColumns, foreignKeyIndexName, indexName, collectionIndexesOf, columnsFor, foreignKeyName, joinColumnOf, usesAuditableEntity, AUDIT_COLUMNS, LOCK_VERSION } from 'keel-core/gen';
+import { partialIndexSpecs, discriminatorColumn, orderingFieldOf, persistedMembers, uniqueConstraints, crossAggregateForeignKeys, elementTable, foreignKeyIndexColumns, foreignKeyIndexName, indexName, collectionIndexesOf, columnsFor, foreignKeyName, joinColumnOf, usesAuditableEntity, AUDIT_COLUMNS, LOCK_VERSION, foldedShadow } from 'keel-core/gen';
 import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startDatabase } from './lib/database-container.js';
 import { sampleEntity, sampleValue, PROBE_HELPERS } from './lib/samples.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
-import { AMQPLIB_VERSION, JOSE_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION } from '../src/lib/assets.js';
+import { AMQPLIB_VERSION, JOSE_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION, AWS_SDK_VERSION, FASTIFY_MULTIPART_VERSION } from '../src/lib/assets.js';
 import { domainMembers } from '../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
 import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, credentialFinders, emitsDomainEvents } from '../src/scaffold/repositories.js';
@@ -66,7 +66,7 @@ import {
   IDEMPOTENCY_GUARD_TS
 } from '../src/scaffold/messaging.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
-import { effectiveErrorCode } from 'keel-core/gen';
+import { idempotencyOutcomeCodes } from 'keel-core/gen';
 
 const args = process.argv.slice(2);
 const keep = args.includes('--keep');
@@ -339,6 +339,7 @@ ${finder ? `  const found = await repository.${finder.name}(${finder.params.map(
     check('${name}: la clave natural duplicada sale como el error del diseño', translated && translated !== 'integrity' && translated !== 'timeout' && translated.httpStatus === 409, translated?.code ?? translated ?? error?.message);
   }` : ''}
 ${foldedBlock(model, root, index, ctx, finder)}
+${filterFoldBlock(model, root, index, ctx)}
 ${conditionalBlock(model, root, index, ctx)}
 ${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [] });
   check('${name}: list devuelve la página con su total', page.totalElements >= 1 && page.items.length >= 1 && page.totalPages >= 1, JSON.stringify({ total: page.totalElements, n: page.items.length }));` : ''}
@@ -414,8 +415,12 @@ function concurrencyBlock(model, engine, root, ctx) {
  */
 function idempotencyBlock(model, engine) {
   if (!usesRequestIdempotency(model)) return '';
-  // El code de la carrera: el canónico, o el que el diseño declare de su familia (catalog-extended).
-  const race = { code: effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyRace), http: FRAMEWORK_ERRORS.idempotencyRace.http };
+  // El code de la carrera es POR OPERACIÓN (`idempotencyOutcomeCodes`): el ámbito de la sonda, `createThing`, no es
+  // ninguna, así que sale con el canónico; la que declara uno de su familia (catalog-extended: createProduct →
+  // PRODUCT_KEY_IN_PROGRESS) se mide aparte. Con el code del servicio entero, esta sonda esperaba el declarado en
+  // TODO ámbito —lo que el arreglo de la corrida de catalog de keel-nest quitó— y salía roja con lo correcto.
+  const race = { code: FRAMEWORK_ERRORS.idempotencyRace.code, http: FRAMEWORK_ERRORS.idempotencyRace.http };
+  const declaredRace = idempotencyOutcomeCodes(model, FRAMEWORK_ERRORS.idempotencyRace).find((row) => row.declared) ?? null;
   const schema = engine === 'postgresql' ? "'public'" : `'${DB_NAME}'`;
   const columnsQuery = engine === 'postgresql'
     ? 'SELECT column_name AS name, is_nullable AS nullable, character_maximum_length AS length FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2'
@@ -448,7 +453,13 @@ function idempotencyBlock(model, engine) {
   check('idempotencia: el ámbito forma parte de la clave', (await tx.inTransaction(() => store.find('otherThing', key))) == null);
   const repeated = await tx.inTransaction(() => store.save('createThing', key, 'firma-b', 'recurso-2', 3600)).then(() => null, (error) => error);
   check('idempotencia: la misma clave otra vez es el conflicto de clave en curso', repeated instanceof IdempotencyConflictException && repeated.code === '${race.code}' && repeated.httpStatus === ${race.http}, repeated?.code ?? repeated?.message ?? 'se guardó');
-
+${declaredRace ? `  {
+    const own = randomUUID();
+    await tx.inTransaction(() => store.save('${declaredRace.operation}', own, 'firma-a', 'recurso-1', 3600));
+    const clash = await tx.inTransaction(() => store.save('${declaredRace.operation}', own, 'firma-b', 'recurso-2', 3600)).then(() => null, (error) => error);
+    check('idempotencia: en ${declaredRace.operation} el conflicto lleva el code que declara (${declaredRace.code})', clash instanceof IdempotencyConflictException && clash.code === '${declaredRace.code}', clash?.code ?? clash?.message ?? 'se guardó');
+  }
+` : ''}
   const reverted = randomUUID();
   await tx.inTransaction(async () => { await store.save('createThing', reverted, 'firma', 'recurso', 3600); throw new Error('el comando falla'); }).catch(() => null);
   check('idempotencia: el registro revierte con la transacción del comando', (await tx.inTransaction(() => store.find('createThing', reverted))) == null);
@@ -1003,6 +1014,32 @@ function foldedBlock(model, root, index, ctx, finder) {
 }
 
 /**
+ * La sombra de un FILTRO (`filterFold`): un filtro de query pliega un campo que no declara `compare`. El motor
+ * tiene que guardar en la sombra el valor plegado por `TextFold` —el mismo que estampa keel-spring—, y la sombra
+ * NO lleva la unicidad del campo: dos nombres que solo difieren en mayúsculas conviven.
+ */
+function filterFoldBlock(model, root, index, ctx) {
+  const blocks = [];
+  for (const field of root.fields.filter((candidate) => candidate.filterFold)) {
+    const { column, accents } = foldedShadow(field);
+    // NFD descompone la Ñ y las vocales acentuadas (la marca se quita); Æ y Ø no se descomponen: solo bajan.
+    const expected = accents ? "'nandu ærø portatil'" : "'ñandú ærø portátil'";
+    blocks.push(`  {
+    const named = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}n`)}), ${field.name}: 'Ñandú Ærø Portátil' });
+    await repository.save(named);
+    const raw = await rawRow('${root.tableName}', named.id);
+    check('${root.name}.${field.name}: la sombra del filtro guarda el valor plegado por TextFold', raw?.['${column}'] === ${expected}, raw?.['${column}']);
+    const twin = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}m`)}), ${field.name}: 'ÑANDÚ ÆRØ PORTÁTIL' });
+    const clash = await repository.save(twin).then(() => null, (error) => error);
+    check('${root.name}.${field.name}: la sombra del filtro no lleva unicidad (el mismo nombre en mayúsculas convive)', clash == null, clash?.message);
+    await repository.deleteById(named.id);
+    if (clash == null) await repository.deleteById(twin.id);
+  }`);
+  }
+  return blocks.join('\n');
+}
+
+/**
  * La unicidad CONDICIONADA, preguntada al motor: dos filas con la misma clave en el estado de la
  * condición no conviven (y la violación sale traducida), una tercera con la misma clave en OTRO estado
  * sí, y el finder del ocupante encuentra la que está. Es el invariante entero; un índice que se crea sin
@@ -1130,7 +1167,10 @@ mountDesign(workspace, NEST_READY_DESIGN.name, NEST_READY_DESIGN);
 const generated = await runCommand(workspace, build, `specs/${NEST_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
 const projectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
 if (!step('build genera el proyecto de referencia', generated.exitCode === undefined, generated.output.slice(0, 400))) process.exit(1);
-const install = run('npm', ['install', '--no-audit', '--no-fund', 'mysql2', 'pg', `amqplib@${AMQPLIB_VERSION}`, `jose@${JOSE_VERSION}`, `nodemailer@${NODEMAILER_VERSION}`, `handlebars@${HANDLEBARS_VERSION}`], { cwd: projectDir });
+const install = run('npm', ['install', '--no-audit', '--no-fund', 'mysql2', 'pg', `amqplib@${AMQPLIB_VERSION}`, `jose@${JOSE_VERSION}`, `nodemailer@${NODEMAILER_VERSION}`, `handlebars@${HANDLEBARS_VERSION}`,
+  // catalog-extended tiene caché y almacenamiento desde el incremento 13: sin estos su sonda no compila y el sujeto
+  // entero queda sin medir (lo estuvo desde el 13f hasta que lo destapó la sombra de filtro).
+  `@redis/client@${REDIS_CLIENT_VERSION}`, `@aws-sdk/client-s3@${AWS_SDK_VERSION}`, `@aws-sdk/s3-request-presigner@${AWS_SDK_VERSION}`, `@fastify/multipart@${FASTIFY_MULTIPART_VERSION}`], { cwd: projectDir });
 if (!step('npm install (TypeORM y los drivers)', install.status === 0, install.status === 0 ? '' : install.stderr.slice(-800))) process.exit(1);
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');
 
