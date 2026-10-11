@@ -146,6 +146,23 @@ export function usesPersonaTokens(model) {
   );
 }
 
+/**
+ * ¿Necesita el arnés tokens con OTRO valor del claim del alcance (`tokenWithScope(rol, valores…)`)?
+ *
+ * El realm siembra a cada usuario no exento con UN valor del claim (`scopedValue`), y es el único
+ * que `tokenFor(rol)` puede dar. Los escenarios del alcance hablan además de un titular cuyo claim
+ * enumera OTRO recurso, o varios, o ninguno («un custodio con vaults = ["OTRO"]»), y eso no se podía
+ * pedir: las tres corridas de asset-vault (dos de keel-spring y una de keel-nest) lo dejaron como
+ * hueco del arnés (`test-realm-claim-values`). Solo Keycloak, por lo mismo que `usesPersonaTokens`:
+ * el emulador de Cognito fija los claims en su configuración, no por petición. Y hace falta un rol
+ * no exento: con todos exentos el claim no acota nada.
+ */
+export function usesScopedTokens(model) {
+  const scoping = model.security?.scoping;
+  const roles = model.security?.roles ?? [];
+  return model.stack.auth === 'keycloak' && Boolean(scoping) && roles.some((role) => !scoping.exemptRoles.includes(role));
+}
+
 /** Credenciales de administración del contenedor de Keycloak, tal como las declara el catálogo. */
 export function keycloakAdminCredentials() {
   const env = AUTH.keycloak.composeServices().keycloak.environment;

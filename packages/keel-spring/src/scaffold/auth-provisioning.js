@@ -18,6 +18,7 @@ export {
   tokenUrl,
   userTestClient,
   usesPersonaTokens,
+  usesScopedTokens,
   keycloakAdminCredentials,
   realmSpec
 } from 'keel-core/gen/identity-realm';

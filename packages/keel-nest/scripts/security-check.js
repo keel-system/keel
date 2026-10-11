@@ -190,7 +190,12 @@ try {
     const ok = new RegExp(`OK\\s+FL-SEC-001-${id}`).test(lines);
     step(`score: FL-SEC-001-${id}`, ok, ok ? '' : (lines.match(new RegExp(`.*FL-SEC-001-${id}.*`))?.[0] ?? 'sin fila'));
   }
-  step('score: el humo del arnés (con SMOKE-5, las credenciales) y la suite, en verde: sale con 0', scored.status === 0, scored.status === 0 ? '' : lines.slice(-2500));
+  // La sonda solo escribe los FL-SEC; los FL-CRD del diseño (la lógica de la ficha) no tienen prueba aquí y salen
+  // NO_EJERC, así que el script sale con 1 aunque todo lo medido esté en verde. Lo que se afirma es lo medido: el
+  // humo (con SMOKE-5, las credenciales), ningún FALLO y nada de la sonda sin ejercitar.
+  const notExercised = [...lines.matchAll(/NO_EJERC\s+(FL-\S+)/g)].map((match) => match[1]);
+  const measured = /Humo del arnés: OK/.test(lines) && !/^\s+FALLO\s/m.test(lines) && notExercised.every((id) => !id.startsWith('FL-SEC-'));
+  step('score: el humo del arnés (con SMOKE-5, las credenciales) en verde, ningún FALLO y la sonda entera ejercitada', measured, measured ? '' : lines.slice(-2500));
 
   // Falsado: con la regla de GET /me/card rebajada a «autenticado», el usuario sin el permiso pasa.
   const rulesFile = path.join(projectDir, 'src', 'infrastructure', 'security', 'access-rules.ts');
@@ -212,6 +217,73 @@ try {
 } finally {
   const down = bash(projectDir, 'infra/down.sh', ['--volumes']);
   step('bash infra/down.sh --volumes', down.status === 0, down.status === 0 ? '' : down.output.slice(-600));
+}
+
+// ── Segundo sujeto: el claim del ALCANCE con otro valor (`tokenWithScope`) ─────────────────────────────
+//
+// `profile-directory` no declara alcance por recurso; `asset-vault` sí (claim `vaults` sobre `Owner.code`). No hace
+// falta instalar el proyecto: la sección de identidad que emite build se transpila sola y se ejecuta con el cwd en
+// el proyecto, así que lee su `infra/test-credentials.env` y habla con el Keycloak que siembra su `init-keycloak.sh`.
+// Lo que se mide es lo que ningún test sin red puede: que el usuario que da de alta lleve el claim al TOKEN firmado.
+{
+  const SCOPED = 'asset-vault';
+  const scopedWorkspace = makeWorkspace('keel-nest-security-scoped-');
+  const scopedSpec = mountDesign(scopedWorkspace, SCOPED);
+  const scopedDir = path.join(scopedWorkspace, 'services', `${SCOPED}-nest`);
+  fs.mkdirSync(scopedDir, { recursive: true });
+  writeStackConfig(scopedDir, resolveStack({ database: 'mongodb', broker: 'rabbitmq', auth: 'keycloak', cache: 'redis', storage: 'minio' }, loadService(scopedSpec).layers));
+  const built = await runCommand(scopedWorkspace, build, `specs/${SCOPED}`, { defaults: true, acceptUnready: true });
+  if (step(`${SCOPED}: build genera el proyecto`, built.exitCode === undefined, built.exitCode ? built.output : '')) {
+    const { planService } = await import('../src/scaffold/index.js');
+    const { identitySection } = await import('../src/scaffold/identity-harness.js');
+    const ts = (await import('typescript')).default;
+    const { model } = planService({ ...loadService(scopedSpec), workspace: scopedWorkspace, stack: JSON.parse(fs.readFileSync(path.join(scopedDir, 'keel-stack.json'), 'utf8')) });
+    const source = `import fs from 'node:fs';\nimport path from 'node:path';\ntype Headers = Record<string, string>;\n${identitySection(model)}
+const claims = (token: string) => JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8'));
+const other = claims(await tokenWithScope('vault-reader', 'OTRO'));
+const many = claims(await tokenWithScope('vault-reader', 'B', 'A'));
+const none = claims(await tokenWithScope('vault-reader'));
+const again = claims(await tokenWithScope('vault-reader', 'OTRO'));
+const seeded = claims(await tokenFor('vault-reader'));
+console.log(JSON.stringify({ other, many, none, again, seeded, resource: scopedResource() }));
+`;
+    const probe = path.join(scopedDir, 'scoped-probe.mjs');
+    fs.writeFileSync(probe, ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2023 } }).outputText);
+    const scopedUp = bash(scopedDir, 'infra/up.sh');
+    if (step(`${SCOPED}: bash infra/up.sh`, scopedUp.status === 0, scopedUp.status === 0 ? '' : scopedUp.output.slice(-1200))) {
+      try {
+        const seeded = bash(scopedDir, 'infra/init-keycloak.sh');
+        if (step(`${SCOPED}: bash infra/init-keycloak.sh siembra el realm con el claim del alcance`, seeded.status === 0, seeded.status === 0 ? '' : seeded.output.slice(-1500))) {
+          const run = spawnSync(process.execPath, [probe], { cwd: scopedDir, encoding: 'utf8', env });
+          let out = null;
+          try {
+            out = JSON.parse(run.stdout.trim().split('\n').pop());
+          } catch {
+            out = null;
+          }
+          step(`${SCOPED}: el arnés ejecuta tokenWithScope contra Keycloak`, run.status === 0 && out != null, run.status === 0 ? '' : `${run.stdout}${run.stderr}`.slice(-1500));
+          if (out) {
+            const roles = (token) => token.realm_access?.roles ?? [];
+            step('tokenWithScope(rol, "OTRO"): el token lleva vaults = ["OTRO"] y el rol', JSON.stringify(out.other.vaults) === '["OTRO"]' && roles(out.other).includes('vault-reader'), JSON.stringify(out.other.vaults));
+            step('tokenWithScope(rol, "B", "A"): los dos valores', JSON.stringify([...(out.many.vaults ?? [])].sort()) === '["A","B"]', JSON.stringify(out.many.vaults));
+            step('tokenWithScope(rol): el usuario del rol SIN el claim', out.none.vaults === undefined && roles(out.none).includes('vault-reader'), JSON.stringify(out.none.vaults));
+            step('el mismo rol y valores dan el mismo usuario (nombre determinista)', out.again.preferred_username === out.other.preferred_username && out.other.preferred_username === 'scoped-vault-reader-252ee2', out.other.preferred_username);
+            step('tokenFor(rol) sigue trayendo scopedResource()', JSON.stringify(out.seeded.vaults) === JSON.stringify([out.resource]), JSON.stringify(out.seeded.vaults));
+          }
+          // Falsado: sin el atributo en el alta, el token sale sin claim y el arnés tiene que morir nombrando al usuario.
+          const sabotaged = fs.readFileSync(probe, 'utf8').replace(/\.\.\.\(values\.length > 0 \? \{ attributes: [^}]+\} \} : \{\}\),/, '').replaceAll("'OTRO'", "'SABOTAJE'");
+          if (step('falsado: el alta del usuario del alcance se puede quitar en lo emitido', sabotaged.includes("'SABOTAJE'") && !sabotaged.includes('attributes: {'))) {
+            fs.writeFileSync(probe, sabotaged);
+            const broken = spawnSync(process.execPath, [probe], { cwd: scopedDir, encoding: 'utf8', env });
+            step('falsado: sin el atributo, tokenWithScope muere nombrando al usuario', broken.status !== 0 && /tiene vaults=\[\] y el escenario pidió \["SABOTAJE"\]/.test(broken.stderr), `código ${broken.status}`);
+          }
+        }
+      } finally {
+        const down = bash(scopedDir, 'infra/down.sh', ['--volumes']);
+        step(`${SCOPED}: bash infra/down.sh --volumes`, down.status === 0, down.status === 0 ? '' : down.output.slice(-600));
+      }
+    }
+  }
 }
 
 const failed = results.filter((result) => !result.ok).length;

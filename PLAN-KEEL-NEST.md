@@ -1872,12 +1872,18 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     a todos los archivos); el finder de un campo `unique` suelto (`uniqueFieldFinders`); el lote de la clave natural
     que es el `over` del alcance (motivo `scope-claim`); el proyector de réplica no aplica un hecho del mismo
     instante; la siembra de una sombra en la convención de pruebas. En keel-spring, el TODO de `kafka.yaml`.
+  - **Cerrado después:** `tokenWithScope(rol, valores…)` en los dos arneses (`test-realm-claim-values`, tres
+    corridas): un usuario del rol cuyo claim del alcance enumera esos valores (ninguno: sin el claim), dado de alta por
+    la API de administración con un nombre determinista igual en los dos (`scoped-<rol>-<hashCode de Java>`). Solo
+    Keycloak (`usesScopedTokens`). Lo ejecuta `test/scoped-token.test.js` contra un Keycloak falso y `security-check`
+    contra uno real, con asset-vault como segundo sujeto, falsado quitando el atributo del alta.
   - **Lo que queda abierto:**
     - la sombra plegada cuando solo el FILTRO declara `compare` (`listProducts.name`): keel-spring la deja al agente,
       que escribe la columna; keel-nest pliega en la consulta (`translate(lower(…))`). Dos funciones de plegado.
       Emitirla separa de `fold` la unicidad y el orden, y cambia el esquema;
-    - `tokenWithScope(rol, valores…)` en los dos arneses: un usuario no exento con otro valor del claim del alcance
-      (`test-realm-claim-values`, tres corridas);
+    - el emulador de Cognito no pone el claim del alcance en ningún usuario (`cognitoMockConfig` solo emite `sub`,
+      `cognito:groups` y `client_id`): con `auth: cognito`, un diseño con `scoping` no tiene titular acotado. Visto al
+      hacer `tokenWithScope`, sin corrida que lo haya pisado;
     - un contrato formal (`openapi.yaml`) para que las pruebas asierten en STRICT (`response-shape-without-contract`,
       las dos v2).
 

@@ -38,8 +38,10 @@ test('con Keycloak: el script y las credenciales llevan los textos de la platafo
   assert.match(files['infra/init-keycloak.sh'], /entrega a PROBE-HARNESS, y por eso/);
   assert.match(files['infra/init-keycloak.sh'], /references\/test-clients\.md de la skill keel-probe-keycloak/);
   assert.match(files['infra/test-credentials.env'], /# PROBE-HARNESS \(quien las consume\)/);
-  // La persona del claim sub: el arnés de la plataforma la da de alta por la API de administración.
-  assert.match(files['infra/test-credentials.env'], /tokenAs\(sub, claims\) de PROBE-HARNESS/);
+  // La persona del claim sub y el titular con otro valor del claim del alcance: el arnés de la plataforma los da
+  // de alta por la API de administración, con las credenciales del contenedor.
+  assert.match(files['infra/test-credentials.env'], /tokenAs\(sub, claims\) y tokenWithScope\(rol, valores\) de PROBE-HARNESS/);
+  assert.match(files['infra/test-credentials.env'], /^AUTH_ADMIN_USER=/m);
   assert.match(files['infra/test-credentials.env'], /^AUTH_TEST_CLIENT=ticket-desk-probe-test$/m);
   for (const [file, content] of Object.entries(files)) assert.doesNotMatch(content, FOREIGN, file);
 });

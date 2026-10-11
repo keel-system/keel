@@ -37,6 +37,7 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Lo que tr
 | `serviceCredential(cliente)` | token `client_credentials` de un cliente del diseño o de la matriz `test-m2m-*`; con `serviceAuth: api-key`, su clave |
 | `tokenAs(sub, claims?, rol?)` | una persona con el `sub` exacto del escenario y sus claims (`null` quita uno); solo cuando la identidad del llamante es el claim `sub`, con Keycloak |
 | `scopedResource()` | el recurso al que alcanzan los usuarios no exentos del alcance por recurso |
+| `tokenWithScope(rol, ...valores)` | un usuario del rol cuyo claim del alcance enumera EXACTAMENTE esos valores (ninguno: sin el claim), para «un titular con `vaults = ["OTRO"]`»; solo con alcance por recurso y Keycloak. No es un `designGap` ni se arregla editando el realm |
 | `apiKey()` | la clave del perfil local con `protocol: api-key` |
 | `deliver<Suscripción>(messageId, payloadJson)` | entrega un mensaje en el canal real de esa suscripción, con la envoltura y las cabeceras que declara su contrato (con identidad del emisor, `deliver<S>(messageId, source, payloadJson)`); el **mismo** `messageId` dos veces es la reentrega |
 | `deliverMessage(destino, key, body, cabeceras?)` | un mensaje crudo (un evento ajeno del canal, un cuerpo que incumple el contrato) en el exchange (RabbitMQ: falla si no lo enruta) o el topic (Kafka, SNS/SQS) de la fuente; con SNS/SQS, sin el header `eventType` el filtro de la suscripción lo deja fuera |

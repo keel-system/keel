@@ -30,6 +30,7 @@ import {
   tokenUrl,
   userTestClient,
   usesPersonaTokens,
+  usesScopedTokens,
   keycloakAdminCredentials,
   realmSpec
 } from './identity-realm.js';
@@ -104,12 +105,13 @@ function credentialsEnv(model, platform) {
     const users = realmSpec(model)?.users.map((user) => user.username) ?? [];
     lines.push('', `# Usuarios de prueba (<rol> y <rol>-2, más uno sin roles): ${users.join(', ')}`);
   }
-  if (usesPersonaTokens(model)) {
+  if (usesPersonaTokens(model) || usesScopedTokens(model)) {
     const admin = keycloakAdminCredentials();
+    const helpers = [usesPersonaTokens(model) && 'tokenAs(sub, claims)', usesScopedTokens(model) && 'tokenWithScope(rol, valores)'].filter(Boolean);
     lines.push(
       '',
-      `# Administración del realm, para tokenAs(sub, claims) de ${platform.identity.harness}: da de alta a la`,
-      '# persona del escenario con su sub exacto y le pone los claims de cada petición. Son las del',
+      `# Administración del realm, para ${helpers.join(' y ')} de ${platform.identity.harness}: da de alta al`,
+      '# usuario que pide el escenario (su sub exacto, o el valor del claim del alcance). Son las del',
       '# contenedor de infra/ (KC_BOOTSTRAP_ADMIN_*), las mismas con las que entra init-keycloak.sh.',
       `AUTH_ADMIN_USER=${admin.user}`,
       `AUTH_ADMIN_PASSWORD=${admin.password}`

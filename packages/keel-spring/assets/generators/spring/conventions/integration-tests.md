@@ -495,7 +495,11 @@ es el `sub` del token (`subOf(<credencial>)`), no su nombre de usuario.
   crea una tercera copia del mismo dato: exactamente lo que tumbó tres clases con un
   `403 APPLICATION_FORBIDDEN` en su `@BeforeAll`, y lo que hizo que arreglar el realm no
   arreglara nada. Los roles exentos alcanzan cualquier recurso, así que el escenario negativo
-  —403 sobre otro recurso— se escribe con un rol **no** exento. La convención completa —realm, cliente de prueba, usuario
+  —403 sobre otro recurso— se escribe con un rol **no** exento. Cuando el `Given` habla de un titular
+  cuyo claim enumera **otro** recurso, varios o ninguno («un custodio con `vaults = ["OTRO"]`»), el
+  token es **`tokenWithScope("<rol>", "OTRO")`** (sin valores, el usuario del rol sin el claim): da de
+  alta por la API de administración un usuario de ese rol con ese claim, y solo con Keycloak. No es un
+  `designGap` ni se arregla editando el realm. La convención completa —realm, cliente de prueba, usuario
   por rol— está en [infra-validation](infra-validation.md) § Obtener un token.
 - Los **fixtures de identidad que ya documenta una skill del stack** (los clientes
   `test-m2m-*` de Keycloak, el usuario `no-role`, el cliente `<artifactId>-test`) se asumen

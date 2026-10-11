@@ -11,7 +11,7 @@
 // `serviceAuth` no hay clientes máquina.
 
 import { usesTokenProtocol, accessPlan } from 'keel-core/gen/access-plan';
-import { tokenUrl, userTestClient, usesPersonaTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from 'keel-core/gen/identity-realm';
+import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from 'keel-core/gen/identity-realm';
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
 import { tsString } from './render.js';
 
@@ -68,6 +68,8 @@ export function identitySection(model) {
   if (sec.serviceAuth) parts.push(serviceCredentialSection(model));
   if (usesPersonaTokens(model)) parts.push(personaSection(model));
   if (sec.scoping) parts.push(scopedResourceSection(model));
+  if (usesScopedTokens(model)) parts.push(scopedTokenSection(model));
+  if (usesPersonaTokens(model) || usesScopedTokens(model)) parts.push(keycloakAdminSection(model));
   return parts.join('\n');
 }
 
@@ -238,7 +240,6 @@ export function scopedResource(): string {
 }
 
 function personaSection(model) {
-  const admin = keycloakAdminCredentials();
   return `
 // ── Personas: un sub elegido por el escenario ────────────────────────────────
 
@@ -352,8 +353,90 @@ async function ensurePersonaMapper(admin: string, claim: string): Promise<void> 
       'userinfo.token.claim': 'true'
     }
   });
+}`;
 }
 
+/**
+ * Token de un usuario del rol cuyo claim del ALCANCE enumera los valores que pide el escenario
+ * (`usesScopedTokens`): el `tokenWithScope` de keel-spring, con el mismo nombre de usuario determinista.
+ */
+function scopedTokenSection(model) {
+  const { claim } = model.security.scoping;
+  return `
+// ── Alcance: un titular con otro valor del claim ─────────────────────────────
+
+/**
+ * Token de un usuario del rol \`role\` cuyo claim \`${claim}\` enumera EXACTAMENTE \`values\`; sin valores, el
+ * usuario del rol SIN el claim. Es lo que necesita «un titular cuyo ${claim} es ["OTRO"]»: \`tokenFor\` trae siempre
+ * \`scopedResource()\`, y el realm no siembra ningún otro valor.
+ *
+ * Da de alta (una vez por rol y valores) un usuario \`scoped-<rol>-<huella>\` por la API de administración del
+ * realm, con el rol y el atributo \`${claim}\`, que el mapper que siembra infra/init-keycloak.sh ya proyecta al
+ * claim. El nombre es determinista (el mismo que en keel-spring), así que la siguiente ejecución lo reutiliza. Un
+ * rol exento lo admite, pero su claim no acota nada. Llámalo en cada petición, como \`tokenFor\`.
+ */
+export async function tokenWithScope(role: string, ...values: readonly string[]): Promise<string> {
+  const wanted = [...new Set(values)].sort();
+  const username = \`scoped-\${role}-\${javaStringHash(wanted.join('\\n'))}\`;
+  return cachedToken(\`scope:\${username}\`, async () => {
+    await ensureScopedUser(username, role, wanted);
+    return requestToken({
+      grant_type: 'password',
+      client_id: credential('AUTH_TEST_CLIENT', ${tsString(userTestClient(model))}),
+      username,
+      password: credential('AUTH_TEST_PASSWORD', ${tsString(TEST_USER_PASSWORD)})
+    });
+  });
+}
+
+/** El \`Integer.toHexString(String.hashCode())\` de Java: el mismo usuario para los dos servidores del diseño. */
+function javaStringHash(text: string): string {
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = (Math.imul(31, hash) + text.charCodeAt(i)) | 0;
+  return (hash >>> 0).toString(16);
+}
+
+const scopedUsers = new Set<string>();
+
+/**
+ * Deja al usuario del alcance como lo pide el escenario; si ya existe, no se toca. Lo que se comprueba es lo que
+ * falla en silencio: que el atributo quedara guardado —el User Profile descarta lo que no conoce, y entonces el
+ * token sale sin claim y el escenario mide un 403 que no es el suyo—.
+ */
+async function ensureScopedUser(username: string, role: string, values: readonly string[]): Promise<void> {
+  if (scopedUsers.has(username)) return;
+  const admin = await personaAdminToken();
+  let id = await personaUserId(admin, username);
+  if (id == null) {
+    await personaAdmin(admin, 'POST', '/users', {
+      username,
+      enabled: true,
+      email: \`\${username}@example.com\`,
+      emailVerified: true,
+      firstName: 'Test',
+      lastName: 'Scoped',
+      requiredActions: [],
+      ...(values.length > 0 ? { attributes: { ${tsString(claim)}: [...values] } } : {}),
+      credentials: [{ type: 'password', value: credential('AUTH_TEST_PASSWORD', ${tsString(TEST_USER_PASSWORD)}), temporary: false }]
+    });
+    id = await personaUserId(admin, username);
+    if (id == null) throw new Error(\`Keycloak no dio de alta al usuario del alcance \${username}\`);
+    const realmRole = await personaAdmin(admin, 'GET', \`/roles/\${encodeURIComponent(role)}\`);
+    await personaAdmin(admin, 'POST', \`/users/\${id}/role-mappings/realm\`, [realmRole]);
+  }
+  const user = (await personaAdmin(admin, 'GET', \`/users/\${id}\`)) as { attributes?: Record<string, string[]> };
+  const stored = [...new Set(user.attributes?.[${tsString(claim)}] ?? [])].sort();
+  if (stored.join('\\n') !== values.join('\\n')) {
+    throw new Error(\`El usuario del alcance \${username} tiene ${claim}=\${JSON.stringify(stored)} y el escenario pidió \${JSON.stringify(values)}: ¿se ejecutó infra/init-keycloak.sh (User Profile)?\`);
+  }
+  scopedUsers.add(username);
+}`;
+}
+
+/** La API de administración del realm, que comparten \`tokenAs\` (personas) y \`tokenWithScope\` (alcance). */
+function keycloakAdminSection(model) {
+  const admin = keycloakAdminCredentials();
+  return `
 /** El id del usuario con ese username (Keycloak lo guarda en minúsculas), o null. */
 async function personaUserId(admin: string, username: string): Promise<string | null> {
   const users = (await personaAdmin(admin, 'GET', \`/users?exact=true&username=\${encodeURIComponent(username)}\`)) as Array<{ id: string; username: string }>;

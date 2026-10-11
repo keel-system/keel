@@ -36,7 +36,7 @@ import {
   CLOCK,
   PRINT_WRAPPER
 } from 'keel-core/gen/mongo-probes';
-import { tokenUrl, userTestClient, usesPersonaTokens } from './auth-provisioning.js';
+import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens } from './auth-provisioning.js';
 // La forma de la tabla y el SQL con el que el arnés fabrica la precondición del rescate:
 // fuente única con scripts/claim-check.js, que ejecuta AMBOS contra el motor junto al reclamo
 // que los lee. Copiar la derivación en vez de compartirla hacía que el check midiera su propia
@@ -793,7 +793,106 @@ function personaTokenSection(model) {
             "protocolMapper", "oidc-usermodel-attribute-mapper",
             "config", config)));
     }
+`;
+}
 
+/**
+ * Token de un usuario del rol cuyo claim del ALCANCE enumera los valores que pide el escenario
+ * (`usesScopedTokens`). El realm siembra a cada usuario no exento con UN valor, `scopedResource()`,
+ * y los escenarios hablan además de «un custodio con vaults = ["OTRO"]»: las tres corridas de
+ * asset-vault lo dejaron como hueco del arnés (`test-realm-claim-values`).
+ */
+function scopedTokenSection(model) {
+  if (!usesScopedTokens(model)) return '';
+  const { claim } = model.security.scoping;
+  return `
+    /**
+     * Token de un usuario del rol {@code role} cuyo claim {@code ${claim}} enumera EXACTAMENTE
+     * {@code values}; sin valores, el usuario del rol SIN el claim. Es lo que necesita «un titular cuyo
+     * ${claim} es ["OTRO"]»: {@link #tokenFor(String)} trae siempre {@link #scopedResource()}, y el
+     * realm no siembra ningún otro valor.
+     *
+     * <p>Da de alta (una vez por rol y valores) un usuario {@code scoped-<rol>-<huella>} por la API de
+     * administración del realm, con el rol y el atributo {@code ${claim}}, que el mapper que siembra
+     * {@code infra/init-keycloak.sh} ya proyecta al claim; el token sale del mismo cliente que
+     * {@code tokenFor}. El nombre es determinista, así que la siguiente ejecución lo reutiliza.
+     *
+     * <p>Un rol exento lo admite, pero su claim no acota nada. <b>Llámalo en cada petición</b>, igual
+     * que {@code tokenFor}: la caché renueva por {@code exp}.
+     */
+    protected String tokenWithScope(String role, String... values) {
+        List<String> wanted = java.util.Arrays.stream(values).distinct().sorted().toList();
+        String username = "scoped-" + role + "-" + Integer.toHexString(String.join("\\n", wanted).hashCode());
+        return cachedToken("scope:" + username, () -> {
+            ensureScopedUser(username, role, wanted);
+            return requestToken("grant_type=password"
+                + "&client_id=" + personaEncode(env("AUTH_TEST_CLIENT", "${userTestClient(model)}"))
+                + "&username=" + personaEncode(username)
+                + "&password=" + personaEncode(env("AUTH_TEST_PASSWORD", "password")));
+        });
+    }
+
+    /** Los usuarios del alcance ya comprobados en esta ejecución. */
+    private static final java.util.Set<String> SCOPED_USERS = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Deja al usuario del alcance como lo pide el escenario. Si ya existe (de esta ejecución o de una
+     * anterior: el nombre lleva la huella de rol y valores) no se toca. Lo que se comprueba al crearlo
+     * es lo que falla en silencio: que el atributo quedara guardado —el User Profile descarta lo que no
+     * conoce, y entonces el token sale sin claim y el escenario mide un 403 que no es el suyo—.
+     */
+    private static synchronized void ensureScopedUser(String username, String role, List<String> values) {
+        if (SCOPED_USERS.contains(username)) {
+            return;
+        }
+        String admin = personaAdminToken();
+        String id = personaUserId(admin, username);
+        if (id == null) {
+            Map<String, Object> user = new LinkedHashMap<>();
+            user.put("username", username);
+            user.put("enabled", true);
+            user.put("email", username + "@example.com");
+            user.put("emailVerified", true);
+            user.put("firstName", "Test");
+            user.put("lastName", "Scoped");
+            user.put("requiredActions", List.of());
+            if (!values.isEmpty()) {
+                user.put("attributes", Map.of("${claim}", values));
+            }
+            user.put("credentials", List.of(Map.of(
+                "type", "password", "value", env("AUTH_TEST_PASSWORD", "password"), "temporary", false)));
+            personaAdmin(admin, "POST", "/users", personaJson(user));
+            id = personaUserId(admin, username);
+            if (id == null) {
+                throw new IllegalStateException("Keycloak no dio de alta al usuario del alcance " + username);
+            }
+            String roleJson = personaAdmin(admin, "GET", "/roles/" + personaEncode(role), null);
+            personaAdmin(admin, "POST", "/users/" + id + "/role-mappings/realm", "[" + roleJson + "]");
+        }
+        List<String> stored = new java.util.ArrayList<>();
+        try {
+            JSON.readTree(personaAdmin(admin, "GET", "/users/" + id, null))
+                .path("attributes").path("${claim}").forEach(value -> stored.add(value.asText()));
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo leer el usuario del alcance " + username, e);
+        }
+        if (!new java.util.HashSet<>(stored).equals(new java.util.HashSet<>(values))) {
+            throw new IllegalStateException("El usuario del alcance " + username + " tiene ${claim}=" + stored
+                + " y el escenario pidió " + values + ": ¿se ejecutó infra/init-keycloak.sh (User Profile)?");
+        }
+        SCOPED_USERS.add(username);
+    }
+`;
+}
+
+/**
+ * La API de administración del realm, que comparten {@code tokenAs} (personas) y
+ * {@code tokenWithScope} (el claim del alcance): token del realm master, peticiones y el id de un
+ * usuario por su nombre.
+ */
+function keycloakAdminSection(model) {
+  if (!usesPersonaTokens(model) && !usesScopedTokens(model)) return '';
+  return `
     /** El id del usuario con ese username (Keycloak lo guarda en minúsculas), o null. */
     private static String personaUserId(String admin, String username) {
         List<Map<String, Object>> users = JsonPath.read(
@@ -5910,7 +6009,7 @@ ${
 
 `
       : ''
-  }${personaTokenSection(model)}
+  }${personaTokenSection(model)}${scopedTokenSection(model)}${keycloakAdminSection(model)}
     /**
      * El token cacheado de esa clave, pedido de nuevo si ya no sirve.
      *

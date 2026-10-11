@@ -38,19 +38,21 @@ del diseño (el plan de acceso lo decide keel-core): **no reescribas ese código
 **Pruebas** — el arnés (`test/integration/support/flow.ts`) ya trae las credenciales:
 
 ```ts
-import { bearer, tokenFor, serviceCredential, tokenAs, scopedResource } from './support/flow.js';
+import { bearer, tokenFor, serviceCredential, tokenAs, scopedResource, tokenWithScope } from './support/flow.js';
 
 await flow.get(`${ROUTE_BASE}/me/card`, bearer(await tokenFor('card-holder')));     // usuario con el rol
 await flow.get(ruta, bearer(await tokenFor('editor', 2)));                         // el SEGUNDO usuario del rol
 await flow.get(ruta, bearer(await tokenFor('no-role')));                           // autenticado sin roles: el 403
 await flow.get(ruta, bearer(await serviceCredential('billing-service')));          // cliente máquina
 await flow.get(ruta, bearer(await tokenAs('sub-ana-001', { email: 'ana@x.test' }))); // persona con un sub elegido
+await flow.get(ruta, bearer(await tokenWithScope('vault-reader', 'OTRO')));         // el claim del alcance con OTRO valor
 ```
 
 Llama a la función **en cada petición**: el token dura cinco minutos y la caché lo renueva solo si se le
 pregunta. `tokenAs` existe cuando la identidad del llamante es el claim `sub`: da de alta a la persona por
 la API de administración del realm con ese `sub` exacto y los claims del escenario (un `null` quita el
-claim).
+claim). `tokenWithScope` existe con alcance por recurso: da de alta un usuario del rol cuyo claim del alcance
+enumera esos valores (sin valores, sin el claim), porque `tokenFor` siempre trae `scopedResource()`.
 
 ## Lo que tiene que dar cada caso
 
