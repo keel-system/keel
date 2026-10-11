@@ -221,3 +221,38 @@ export function kafkaListenerRetry(model) {
     deadLetteredTopics: [...new Set(subs.map((sub) => subscriptionDestination('kafka', model, sub)))]
   };
 }
+
+// ─── El rechazo «no existe» en una suscripción ────────────────────────────────
+//
+// Los dos generadores no reintentan un rechazo de negocio (`DomainException`) en un listener: no se
+// resuelve mejor dentro de un segundo. Con UNA excepción, que salió de la corrida `catalog` de
+// keel-spring (2026-10-11): el «no existe» (`NotFoundException`). En consumo asíncrono es la forma
+// típica de la carrera de ORDEN —la compensación que llega antes que el hecho que compensa, el hallazgo
+// sobre un archivo cuyo alta aún no ha confirmado—, y es exactamente lo que el reintento puede
+// resolver. Agotados los intentos acaba igual en el descarte; lo único que cuesta es retraso.
+//
+// Solo donde no se pierde: con el orden `tryRecord` (operación SIN guarda de dominio) el primer intento
+// ya dejó el evento marcado como procesado, y el reintento lo confirmaría sin efecto —el «no existe» que
+// hoy llega a la DLQ desaparecería en silencio—. Por eso exige `triggerHasDomainGuard`, el mismo dato que
+// decide el orden del registro. Y exige un `retry` declarado: sin él no hay reintento que alargar.
+
+/** ¿Reintenta esta suscripción el «no existe» del caso de uso que dispara? */
+export function retriesMissingTarget(sub) {
+  return Boolean(sub.triggerHasDomainGuard) && (sub.retry?.maxAttempts ?? 1) > 1;
+}
+
+/**
+ * Los destinos de consumo (topic, cola) en los que se reintenta el «no existe». Va por DESTINO y no por
+ * suscripción porque es lo único que ve quien reintenta en keel-spring (el error handler de Kafka ve el
+ * topic; la política de RabbitMQ, la cola), y el mismo diseño tiene que reintentar igual en los dos
+ * generadores. Dos suscripciones que comparten destino lo reintentan solo si las DOS pueden: basta una
+ * con `tryRecord` para que reintentar pierda sus mensajes.
+ */
+export function missingTargetRetryDestinations(model, broker) {
+  const verdict = new Map();
+  for (const sub of model.subscriptions ?? []) {
+    const destination = subscriptionDestination(broker, model, sub);
+    verdict.set(destination, (verdict.get(destination) ?? true) && retriesMissingTarget(sub));
+  }
+  return [...verdict].filter(([, retries]) => retries).map(([destination]) => destination).sort();
+}

@@ -1849,13 +1849,19 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     `server.tomcat.max-part-count`, `auto-offset-reset: earliest` en Kafka y el desempate por id del orden de una
     colección hija (`orderingTieBreakerOf`, también en keel-nest). Y keel-spring emite ya `AfterCommit`: sus dos
     corridas lo escribieron a mano, como las de keel-nest.
-  - **Lo que queda abierto** (los tres primeros, repetidos ya en las cuatro corridas o en las dos de un generador):
-    - el lector de una réplica en un listado necesita leer en lote;
+  - **Cerrado después (2026-10-11), en los dos generadores:**
+    - el «no existe» de una suscripción se reintenta donde la operación tiene guarda de dominio y hay `retry`
+      (`missingTargetRetryDestinations` en `keel-core/gen/dead-letter.js`, por destino; `RETRIES_NOT_FOUND` en
+      keel-spring, `retriesNotFound` en cada entrada de consumo de keel-nest). Con `tryRecord` no: el reintento
+      encontraría el evento ya marcado;
+    - la copia de una réplica que lee una operación de listado se lee por lote (`naturalKeyBatchReason` en
+      `keel-core/gen/relational.js`: `findAllBy<Clave>In` en el puerto y los adaptadores, y `byKeys` en el Reader).
+      keel-nest no tenía ningún finder por lote; el suyo es más estrecho (clave de un campo escalar);
+    - la rama documental de keel-nest ordena las hijas por posición y desempata por id, como keel-spring.
+  - **Lo que queda abierto:**
     - el despacho de una operación desde otra solo cabe en prosa (el `CommandDispatcher`);
     - la exención de alcance de un cliente máquina (candidato `exemptClients`), implementada distinto en cada servidor;
     - el puerto de caché: keel-nest lo emite y en keel-spring lo escribe el agente, con otro nombre cada vez;
-    - un rechazo de negocio en una suscripción no se reintenta en ningún generador, y catalog cuenta con que un
-      `PRODUCT_NOT_FOUND` por la carrera «compensación antes que el hecho» sí se reintente;
     - la matriz de catalog: 65 en spring, 56 en nest, 64 bloques `FL-`; sin comprobar, porque se borró el JUnit.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue

@@ -23,7 +23,7 @@ import { rawJsonAnnotations } from './jackson.js';
 import { usesOutbox, outboxNames } from './outbox.js';
 import { correlationImport } from './correlation.js';
 import { usesTelemetry, messageTracingImport } from './telemetry.js';
-import { deadLetterDestination } from 'keel-core/gen';
+import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination } from 'keel-core/gen';
 import { acknowledgeNote } from 'keel-core/gen/rejection-notes';
 import { credentialFinderName } from './repositories.js';
 
@@ -552,6 +552,20 @@ function contractJavadoc(sub, model) {
         (sub.triggerHasDomainGuard
           ? ` Aquí es inocuo: ${sub.triggerGuardKind === 'natural-key' ? 'la constraint de la clave natural' : 'la transición del agregado'} sigue rechazándola, y esa no caduca.`
           : ' Aquí NO es inocuo: sin transición que la frene, pasada la retención el efecto se vuelve a aplicar. Si el negocio necesita una ventana mayor, el mecanismo correcto es una guarda de dominio, no esta deduplicación — y eso es un hueco del diseño, no algo que se arregle en el listener.')
+    );
+  }
+  // El «no existe» que SÍ se reintenta (keel-core, `missingTargetRetryDestinations`). Con Kafka
+  // y RabbitMQ lo aplica la configuración de build; con SNS/SQS el reintento es la visibilidad
+  // de la cola y el que decide es el listener del agente. En los tres, lo que lo rompe es lo
+  // mismo: tragarse la excepción o mandarla a la DLQ por su cuenta como un rechazo más.
+  const broker = model.stack?.broker;
+  if (broker && missingTargetRetryDestinations(model, broker).includes(subscriptionDestination(broker, model, sub))) {
+    lines.push(
+      `Un «no existe» (NotFoundException) del caso de uso SÍ se reintenta: aquí suele ser la carrera de orden de un consumo asíncrono —el mensaje llega antes que el hecho del que depende— y el reintento la resuelve; agotado, va al descarte igual. ${
+        broker === 'snssqs'
+          ? 'Relánzalo para que la visibilidad de la cola lo reintente con la curva del diseño; no lo trates como los demás rechazos de negocio (ni lo confirmes ni lo mandes tú a la DLQ).'
+          : 'Relánzalo tal cual (envuelto o no): lo reintenta la configuración que genera build. No lo confirmes ni lo mandes tú a la DLQ.'
+      }`
     );
   }
   // La identidad de quien pide el trabajo. Por HTTP la pone el proveedor de identidad en

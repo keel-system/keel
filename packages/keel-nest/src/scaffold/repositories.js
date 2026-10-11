@@ -14,7 +14,8 @@
 //     guardar el grafo; cero filas es otra escritura que ganó (o un borrado), y sale como conflicto;
 //   · la AUDITORÍA: `created_*`/`updated_*` los estampa el adaptador, como el listener de Spring Data.
 
-import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, foldedShadow } from 'keel-core/gen';
+import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, foldedShadow, naturalKeyBatchReason } from 'keel-core/gen';
+import { pluralize } from 'keel-core/gen/naming';
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
@@ -95,6 +96,37 @@ export function occupantFinders(model, entity) {
     finders.push({ ...finder, state: index.when.equals });
   }
   return finders;
+}
+
+/**
+ * El finder de la clave natural POR LOTE (`findAllBy<Clave>In`): una consulta para una colección de claves en vez
+ * de una por elemento. Cuándo hace falta lo decide keel-core (`naturalKeyBatchReason`), igual que para keel-spring:
+ * una lista del mismo value type en la entrada, o la copia de una réplica que lee una operación de listado (las
+ * corridas de catalog lo escribieron a mano en los dos generadores).
+ *
+ * Más estrecho que el de keel-spring a propósito: una clave de UN campo escalar, sin pliegue y sin transformador
+ * de columna. Con transformador (el uuid binario de MySQL), el `In(...)` de TypeORM podría no transformar sus
+ * valores y la consulta no casaría nada sin dar error; mejor sin lote que un lote que devuelve vacío.
+ */
+const BATCHABLE_BASES = new Set(['string', 'text', 'int', 'long']);
+
+export function naturalKeyBatchFinder(model, entity) {
+  const reason = naturalKeyBatchReason(model, entity);
+  if (!reason) return null;
+  const finder = naturalKeyFinder(model, entity);
+  if (!finder || finder.params.length !== 1) return null;
+  const [param] = finder.params;
+  const field = entity.fields.find((f) => f.name === param.name);
+  if (!field || param.fold || field.kind === 'composite' || field.kind === 'enum' || !BATCHABLE_BASES.has(field.base)) return null;
+  const plural = pluralize(param.name);
+  return {
+    reason,
+    name: `findAllBy${capitalize(param.name)}In`,
+    field,
+    param,
+    plural,
+    signature: `${plural}: readonly ${param.type}[]`
+  };
 }
 
 function keyFinder(model, entity, keys) {
@@ -228,6 +260,21 @@ function renderPort(model, entity) {
         `  abstract ${finder.name}(${finder.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null>;`
     );
   }
+  const batch = naturalKeyBatchFinder(model, entity);
+  if (batch) {
+    imports.push(...batch.param.imports);
+    methods.push(
+      `  /**
+   * El mismo finder para una colección de ${batch.param.name}: UNA consulta en vez de una por elemento. ${
+        batch.reason === 'replica-listing'
+          ? 'Es la copia de una réplica y la lee una operación de listado: leerla en un bucle son N consultas por página.'
+          : 'Alguna operación recibe esos valores en una lista acotada de su entrada.'
+      }
+   * El orden no está garantizado y lo que no exista no aparece: quien llama indexa lo que le vuelve.
+   */
+` + `  abstract ${batch.name}(${batch.signature}): Promise<${entity.name}[]>;`
+    );
+  }
   for (const occupant of occupantFinders(model, entity)) {
     for (const param of occupant.params) imports.push(...param.imports);
     methods.push(
@@ -338,6 +385,16 @@ function renderAdapter(model, entity) {
     methods.push(`  async ${finder.name}(${finder.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {
     const found = await this.manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${where.join(', ')} }`)});
     return found == null ? null : toDomain${entity.name}(found);
+  }`);
+  }
+
+  const batch = naturalKeyBatchFinder(model, entity);
+  if (batch) {
+    imports.push(...batch.param.imports, { symbol: 'In', from: 'typeorm' });
+    methods.push(`  async ${batch.name}(${batch.signature}): Promise<${entity.name}[]> {
+    if (${batch.plural}.length === 0) return [];
+    const found = await this.manager.find(${ormClass(entity.name)}, ${findOptions(`{ ${batch.param.name}: In([...${batch.plural}]) }`)});
+    return found.map(toDomain${entity.name});
   }`);
   }
 

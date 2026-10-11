@@ -63,6 +63,10 @@ campo que falta o fuera de cota, y la que lanzas tú con un cuerpo que no parsea
 reintentarlo hasta agotar acaba mandando a la DLQ un mensaje perfectamente válido. **No
 lo redeclares** ni construyas otro error handler para añadirlo.
 
+La única excepción también es de build: el `NotFoundException` se reintenta en los topics de
+`RETRIES_NOT_FOUND` (la carrera de orden de un consumo asíncrono; lo decide keel-core por destino y lo
+dice el javadoc del `<Evento>Message`). En el listener, relánzalo como cualquier otra excepción.
+
 Lo único que te toca es **ampliar** esa lista con OTROS tipos que lances tú y que tampoco
 sean transitorios. El cuerpo no parseable (más abajo) ya está cubierto si lanzas
 `IllegalArgumentException`.

@@ -40,6 +40,7 @@ tu contrato, y lanzar con él lo mandaría a tu descarte.
 | Un tipo que no es de esta suscripción | `return` | Se confirma (el offset avanza): no es tuyo |
 | Tuyo, pero no parsea o incumple el contrato | dejas que lance (`MessageContractViolation`) | Va a `<topic>.DLT` sin reintento, que es donde el emisor lo ve |
 | Tuyo y el dominio lo rechaza (`DomainException`) | dejas que lance | Al descarte sin reintento: no se resuelve mejor dentro de un segundo |
+| Tuyo y el dominio dice que no existe (`NotFoundException`), en una suscripción cuya nota lo marca como reintentable | dejas que lance | Se reintenta con la curva de `onFailure.retry` (suele ser la carrera de orden: el mensaje llegó antes que el hecho del que depende) y, agotado, al descarte. Lo decide build por destino; fuera de esos, es un rechazo más |
 | Un fallo transitorio (la base no responde) | dejas que lance | Se reintenta con la curva de `onFailure.retry` y, agotado, al descarte |
 | Ya procesado (el guard lo dice) | `return` | La reentrega absorbida: confirmada sin segundo efecto |
 

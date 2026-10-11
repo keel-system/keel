@@ -19,8 +19,8 @@
 // outbox o los publishers best-effort sobre `RabbitConnection.publish`, y los listeners sobre
 // `RabbitConnection.consume`. No declara topología.
 
-import { deadLetterName, rabbitListenerRetry, subscriptionDestination } from 'keel-core/gen';
-import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
+import { deadLetterName, missingTargetRetryDestinations, rabbitListenerRetry, subscriptionDestination } from 'keel-core/gen';
+import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, RABBIT_CONNECTION_TS, RABBIT_TOPOLOGY_TS, usesRabbitMq } from './messaging.js';
 
@@ -50,9 +50,13 @@ export function generate(model) {
 /** La topología de consumo como DATOS: una entrada por COLA (las suscripciones de un canal la comparten). */
 export function rabbitTopology(model) {
   const queues = new Map();
+  const missingTarget = missingTargetRetryDestinations(model, 'rabbitmq');
   for (const sub of model.subscriptions ?? []) {
     const queue = subscriptionDestination('rabbitmq', model, sub);
-    if (!queues.has(queue)) queues.set(queue, { source: sub.topicDefault, queue, deadLetter: null, subscriptions: [] });
+    if (!queues.has(queue)) {
+      // Por COLA, como RETRIES_NOT_FOUND en keel-spring (keel-core decide cuáles).
+      queues.set(queue, { source: sub.topicDefault, queue, deadLetter: null, retriesNotFound: missingTarget.includes(queue), subscriptions: [] });
+    }
     const entry = queues.get(queue);
     entry.subscriptions.push(sub.name);
     // El descarte es propiedad de la COLA: basta con que una de las que la comparten lo declare.
@@ -79,6 +83,7 @@ function topologyFile(model) {
     source: ${tsString(entry.source)},
     queue: ${tsString(entry.queue)},
     deadLetter: ${entry.deadLetter ? tsString(entry.deadLetter) : 'null'},
+    retriesNotFound: ${entry.retriesNotFound},
     subscriptions: [${entry.subscriptions.map(tsString).join(', ')}]
   }`
     )
@@ -94,6 +99,8 @@ export interface QueueTopology {
   readonly queue: string;
   /** Su descarte, enlazado por argumentos x-dead-letter-*; null si ninguna suscripción lo declara. */
   readonly deadLetter: string | null;
+  /** ¿Se reintenta aquí el «no existe» del caso de uso? Es el RETRIES_NOT_FOUND de keel-spring. */
+  readonly retriesNotFound: boolean;
   /** Las suscripciones del diseño que consumen de ella. */
   readonly subscriptions: readonly string[];
 }
@@ -207,13 +214,23 @@ export function listenerBackoffMs(attempt: number, retry: ListenerRetry | null =
  * (tryRecord) encontraría el evento ya marcado y lo confirmaría sin que llegara nunca al descarte. Ni el
  * contrato incumplido (MessageContractViolation): un mensaje mal formado no se vuelve válido.
  */
-export function isRetryable(error: unknown): boolean {
+export function isRetryable(error: unknown, retriesNotFound = false): boolean {
+  // Salvo el «no existe» donde la cola lo admite: suele ser la carrera de orden de un consumo asíncrono (llegó
+  // antes que el hecho del que depende) y el reintento la resuelve. Solo con guarda de dominio, que con
+  // tryRecord el reintento encontraría el evento ya marcado.
+  if (retriesNotFound && error instanceof NotFoundException) return true;
   return !(error instanceof DomainException) && !(error instanceof MessageContractViolation);
+}
+
+/** ¿Reintenta \`queue\` el «no existe»? Por el nombre con el que se consume, como la política de keel-spring. */
+export function retriesNotFoundOn(queue: string): boolean {
+  return RABBIT_TOPOLOGY.some((entry) => entry.queue === queue && entry.retriesNotFound);
 }`;
   return tsModule(
     RABBIT_TOPOLOGY_TS,
     [
       { symbol: 'DomainException', from: DOMAIN_EXCEPTION_TS },
+      { symbol: 'NotFoundException', from: NOT_FOUND_EXCEPTION_TS },
       { symbol: 'MessageContractViolation', from: MESSAGE_CONTRACT_TS }
     ],
     body
@@ -443,7 +460,7 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
     await channel.prefetch(${RABBIT_PREFETCH});
     await channel.consume(queue, (message) => {
       if (message == null) return;
-      this.deliver(channel, message, handler).catch((error: unknown) =>
+      this.deliver(channel, message, handler, retriesNotFoundOn(queue)).catch((error: unknown) =>
         this.logger.error(\`RabbitMQ: la entrega de \${queue} falló sin desenlace: \${describe(error)}\`)
       );
     });
@@ -460,7 +477,7 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
   }
 
   /** Lo que hace el contenedor de listeners de Spring con cada entrega. */
-  private async deliver(channel: Channel, message: ConsumeMessage, handler: MessageHandler): Promise<void> {
+  private async deliver(channel: Channel, message: ConsumeMessage, handler: MessageHandler, retriesNotFound: boolean): Promise<void> {
     const attempts = listenerAttempts();
     for (let attempt = 1; ; attempt++) {
       try {
@@ -469,7 +486,7 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
         return;
       } catch (error) {
         const reason = error instanceof Error ? \`\${error.name}: \${error.message}\` : String(error);
-        if (!isRetryable(error) || attempt >= attempts) {
+        if (!isRetryable(error, retriesNotFound) || attempt >= attempts) {
           // Rechazo SIN reencolar: con DLQ declarada, el broker lo lleva al descarte.
           this.logger.error(\`RabbitMQ: mensaje de \${message.fields.routingKey} descartado tras \${attempt} intento(s): \${reason}\`);
           this.settle(channel, message, false);
@@ -502,6 +519,7 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
       { symbol: 'MESSAGING_SETTINGS', from: MESSAGING_SETTINGS_TS },
       { symbol: 'MessagingSettings', from: MESSAGING_SETTINGS_TS, type: true },
       { symbol: 'isRetryable', from: RABBIT_TOPOLOGY_TS },
+      { symbol: 'retriesNotFoundOn', from: RABBIT_TOPOLOGY_TS },
       { symbol: 'listenerAttempts', from: RABBIT_TOPOLOGY_TS },
       { symbol: 'listenerBackoffMs', from: RABBIT_TOPOLOGY_TS }
     ],

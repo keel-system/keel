@@ -2441,3 +2441,62 @@ test('con Kafka, un grupo sin offset empieza por lo ya publicado en los cuatro p
     assert.ok(yaml.includes('      auto-offset-reset: earliest'), `${profile}: ${yaml}`);
   }
 });
+
+// ─── El «no existe» en una suscripción (corrida catalog de keel-spring, 2026-10-11) ───
+
+function scaffoldCatalogWith(broker) {
+  const { manifest, layers } = loadService(fixtureDir);
+  const workspace = tmpDir(`keel-regression-notfound-${broker}-`);
+  scaffoldService({ manifest, layers, workspace, force: true, stack: { database: 'postgresql', broker } });
+  const root = path.join(workspace, 'services', 'catalog-spring');
+  return (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+}
+
+test('Kafka: el NOT_FOUND se reintenta solo en el topic de la suscripción con guarda de dominio', () => {
+  const config = scaffoldCatalogWith('kafka')(`${JAVA}/infrastructure/messaging/DeadLetterConfig.java`);
+  // WithdrawalRejected (reactivateWithdrawnProduct declara transiciones) sí; SupplierPriceChanged (tryRecord) no.
+  assert.ok(config.includes('private static final Set<String> RETRIES_NOT_FOUND = Set.of("compliance.events");'), config);
+  assert.ok(config.includes('handler.addRetryableExceptions(NotFoundException.class);'), config);
+  // Fuera del conjunto, sin curva: directo al descarte, como cualquier otro rechazo.
+  assert.ok(config.includes('!RETRIES_NOT_FOUND.contains(record.topic()) ? NO_RETRY : null'), config);
+  assert.ok(config.includes('private static final BackOff NO_RETRY = () -> () -> BackOffExecution.STOP;'), config);
+  // Y el resto del rechazo de negocio sigue sin reintentarse.
+  assert.ok(config.includes('handler.addNotRetryableExceptions(DomainException.class, IllegalArgumentException.class);'), config);
+});
+
+test('RabbitMQ: la política decide el NOT_FOUND por cola antes que la tabla, vaya envuelto o no', () => {
+  const config = scaffoldCatalogWith('rabbitmq')(`${JAVA}/infrastructure/messaging/RabbitTopologyConfig.java`);
+  assert.ok(config.includes('private static final Set<String> RETRIES_NOT_FOUND = Set.of("catalog.compliance");'), config);
+  assert.ok(config.includes('if (last != null && isMissingTarget(last)) {'), config);
+  assert.ok(config.includes('queue != null && RETRIES_NOT_FOUND.contains(queue)'), config);
+  assert.ok(config.includes('getMessageProperties().getConsumerQueue()'), config);
+});
+
+test('el javadoc del mensaje le dice al agente dónde relanzar el NOT_FOUND, también con SNS/SQS', () => {
+  for (const broker of ['kafka', 'rabbitmq', 'snssqs']) {
+    const read = scaffoldCatalogWith(broker);
+    const guarded = read(`${JAVA}/infrastructure/messaging/subscriptions/WithdrawalRejectedMessage.java`);
+    const unguarded = read(`${JAVA}/infrastructure/messaging/subscriptions/SupplierPriceChangedMessage.java`);
+    assert.ok(guarded.includes('(NotFoundException) del caso de uso SÍ se reintenta'), `${broker}: ${guarded}`);
+    assert.ok(!unguarded.includes('(NotFoundException) del caso de uso SÍ se reintenta'), `${broker}: la de tryRecord no`);
+  }
+});
+
+// ─── La copia de una réplica en un listado se lee por lote (corridas catalog, 2026-10-10/11) ───
+
+test('réplica leída por un listado: finder por lote en las tres piezas, byKeys en el Reader y la nota en el handler', () => {
+  const read = scaffoldCatalogWith('kafka');
+  assert.ok(read(`${JAVA}/domain/repository/SupplierPriceRepository.java`).includes('List<SupplierPrice> findAllBySkuIn(Collection<String> skus);'));
+  assert.ok(read(`${JAVA}/infrastructure/persistence/repositories/SupplierPriceJpaRepository.java`).includes('List<SupplierPriceJpa> findAllBySkuIn(Collection<String> skus);'));
+  assert.ok(read(`${JAVA}/infrastructure/persistence/repositories/SupplierPriceRepositoryImpl.java`).includes('return supplierPriceJpaRepository.findAllBySkuIn(skus).stream().map(this::toDomain).toList();'));
+  const port = read(`${JAVA}/domain/repository/SupplierPriceRepository.java`);
+  assert.ok(port.includes('Es la copia local de una réplica y la lee una operación de listado'), 'el javadoc da el motivo de la réplica');
+
+  const reader = read(`${JAVA}/application/projection/SupplierPriceReader.java`);
+  assert.ok(reader.includes('public Map<String, SupplierPrice> byKeys(Collection<String> skus) {'), reader);
+  assert.ok(reader.includes('for (SupplierPrice copy : repository.findAllBySkuIn(skus)) {'), reader);
+  assert.ok(reader.includes('copies.put(copy.getSku(), copy);'), reader);
+
+  const handler = read(`${JAVA}/application/usecases/GetProductsByIdsQueryHandler.java`);
+  assert.ok(/supplierPriceReader\.byKeys\(\.\.\.\)/.test(handler.replace(/\n\s*\/\/\s*/g, ' ')), handler);
+});

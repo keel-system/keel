@@ -20,6 +20,7 @@ import { domainTypeImport } from './entities.js';
 import { refTargetsOf } from './ref-resolvers.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
 import { claimMechanism } from './claim.js';
+import { naturalKeyBatchFinder } from './repositories.js';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 import { callerResolution } from './security.js';
 import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
@@ -679,7 +680,7 @@ function renderHandler(model, service, operation) {
   // Lo que este caso de uso debe a otros servidores. Va al final de las notas
   // porque es lo último que se resuelve: el dato de fuera se trae antes de
   // decidir, y el trabajo delegado sale después de haber decidido.
-  for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(dependency, need, operation));
+  for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(dependency, need, operation, model));
   for (const { dependency, activation } of operation.dependencyActivations ?? []) {
     notes.push(activationNote(dependency, activation, (operation.reconciles ?? []).length > 0));
   }
@@ -770,7 +771,7 @@ function exposeNote(need, operation) {
   return ` El dato SALE en la respuesta: el mapper pide un ${need.dtoName} por parámetro y lo pone en el campo '${need.exposedAs}' — si no lo tienes, pásalo nulo, que es lo que el contrato admite cuando el proveedor no responde.${batch}`;
 }
 
-function needNote(depId, need, operation) {
+function needNote(depId, need, operation, model) {
   const why = need.description ? ` — ${need.description}` : '';
   if (need.strategy === 'on-demand') {
     if (!need.fetch) {
@@ -789,7 +790,13 @@ function needNote(depId, need, operation) {
     fail: `Si la copia aún no tiene el dato, el Reader lanza ${replica.onMiss.exceptionClass ?? replica.onMiss.error}: no lo captures para seguir con un valor inventado.`,
     degrade: `Si la copia aún no tiene el dato, el Reader devuelve vacío y el resultado degradado lo escribes TÚ, distinguible por el cliente de una respuesta normal: ${replica.onMiss.degradedTo}`
   }[replica.onMiss.action];
-  return `Dependencia ${depId}.${need.name} (replicada)${why}: lee ${replica.entityName} por ${reader}, que ya aplica onMiss: ${replica.onMiss.action}. ${onMiss} NUNCA leas el repositorio de la réplica directamente ni la escribas desde aquí — la proyección solo se escribe desde ${replica.projectorClass} (conventions/dependencies.md).${exposeNote(need, operation)}`;
+  // En un listado, primero el lote: un byKey(...) por elemento son N consultas por página.
+  const listing = operation?.returnsList || operation?.paginated;
+  const replicaEntity = model?.entities?.find((entity) => entity.name === replica.entityName);
+  const batch = listing && replicaEntity && naturalKeyBatchFinder(model, replicaEntity)
+    ? ` Esta operación devuelve una lista: lee la página entera con ${decap(replica.readerClass)}.byKeys(...) (UNA consulta) y pasa por byKey(...) solo las claves que falten, que es donde se aplica onMiss.`
+    : '';
+  return `Dependencia ${depId}.${need.name} (replicada)${why}: lee ${replica.entityName} por ${reader}, que ya aplica onMiss: ${replica.onMiss.action}. ${onMiss}${batch} NUNCA leas el repositorio de la réplica directamente ni la escribas desde aquí — la proyección solo se escribe desde ${replica.projectorClass} (conventions/dependencies.md).${exposeNote(need, operation)}`;
 }
 
 // Nota de una activación (`activations`): el trabajo que esta operación delega

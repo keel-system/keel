@@ -13,7 +13,7 @@
 import { DIRS, capitalize, classPath, decapitalize, entityDir, tsModule } from './render.js';
 import { portPath as clientPortPath } from './http-clients.js';
 import { ANNOTATIONS_TS } from './mediator.js';
-import { PORT_DIR } from './repositories.js';
+import { PORT_DIR, naturalKeyBatchFinder } from './repositories.js';
 
 const PROJECTION_DIR = 'application/projection';
 
@@ -123,6 +123,28 @@ export class ${replica.projectorClass} {
   return { path: file, content: tsModule(file, imports, body) };
 }
 
+/**
+ * La lectura POR LOTE de la copia, cuando la lee una operación de listado: el `byKeys` del Reader de keel-spring.
+ * Devuelve solo lo ya replicado; la política onMiss sigue siendo de `byKey(...)`, que se aplica a cada clave que
+ * falte. Sin él, el camino de menor resistencia era una consulta por elemento de la página.
+ */
+function batchRead(model, replica, entity, keyType) {
+  const finder = naturalKeyBatchFinder(model, entity);
+  if (finder?.reason !== 'replica-listing') return '';
+  return `
+
+  /**
+   * Las copias locales de varios ${replica.keyField} en UNA consulta, indexadas por ${replica.keyField}. Es lo que lee una
+   * operación de listado: un byKey(...) por elemento serían N consultas por página. Solo devuelve lo ya replicado: una
+   * clave que falte NO está en el mapa, y a cada una de esas se le aplica la política declarada pasándola por
+   * byKey(...). No la des por inexistente.
+   */
+  async byKeys(${finder.plural}: readonly ${keyType}[]): Promise<Map<${keyType}, ${entity.name}>> {
+    const copies = await this.repository.${finder.name}(${finder.plural});
+    return new Map(copies.map((copy) => [copy.${replica.keyField}, copy]));
+  }`;
+}
+
 function renderReader(model, dependency, need, entity) {
   const { replica } = need;
   const { onMiss } = replica;
@@ -200,7 +222,7 @@ export class ${replica.readerClass} {
 
   constructor(${deps.map((dep) => `private readonly ${dep.name}: ${dep.type}`).join(', ')}) {}
 
-${method}
+${method}${batchRead(model, replica, entity, keyType)}
 }`;
   return { path: file, content: tsModule(file, imports, body) };
 }

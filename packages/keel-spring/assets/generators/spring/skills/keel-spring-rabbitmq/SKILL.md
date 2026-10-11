@@ -300,7 +300,9 @@ cola vacía: el escenario daría por bueno un descarte que sí ocurrió.
 **El reintento también es de build**: `spring.rabbitmq.listener.simple.retry` en
 `parameters/<perfil>/rabbitmq.yaml` con los números de `onFailure.retry`, más
 `default-requeue-rejected: false`, y en `RabbitTopologyConfig` el `RabbitRetryTemplateCustomizer`
-que marca como no reintentables `DomainException` y `AmqpRejectAndDontRequeueException`.
+que marca como no reintentables `DomainException` y `AmqpRejectAndDontRequeueException`
+—salvo el `NotFoundException` en las colas de `RETRIES_NOT_FOUND`, que sí se reintenta aunque vaya
+envuelto: el javadoc del `<Evento>Message` te dice si es tu caso—.
 Agotado, el recuperador de Boot rechaza sin reencolar y la cola aplica su descarte. Lo que sí te
 toca: que el factory pase por `SimpleRabbitListenerContainerFactoryConfigurer` (sin él nada de
 eso llega al contenedor) y que el listener convierta el rechazo de negocio en

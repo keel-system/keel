@@ -8,14 +8,13 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, domainTypeImport, capitalize } from './entities.js';
 import { jpaMembers, backReferenceTo, JPA_PKG } from './persistence-entities.js';
 import { isRefTarget } from './ref-resolvers.js';
-import { isBaseType } from '../lib/type-mapper.js';
 import { pluralize } from '../lib/naming.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
 import { partialUniqueIndexes } from './persistence-members.js';
-import { collectInternalEntities, foldedShadow } from 'keel-core/gen/relational';
+import { collectInternalEntities, foldedShadow, naturalKeyBatchReason } from 'keel-core/gen/relational';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -99,17 +98,16 @@ export function naturalKeyParams(model, entity) {
 export function naturalKeyBatchFinder(model, entity) {
   const finder = naturalKeyFinder(model, entity);
   if (!finder) return null;
+  // Cuándo hace falta lo decide keel-core, igual para keel-nest: una lista del mismo value type
+  // en la entrada, o la copia de una réplica que lee una operación de listado.
+  const reason = naturalKeyBatchReason(model, entity);
+  if (!reason) return null;
+  // Un campo plegado se busca por su sombra, y el lote no la conoce todavía: mejor sin lote
+  // que un lote que compara el valor crudo.
+  if (finder.params[finder.params.length - 1].fold) return null;
 
   const last = entity.naturalKey[entity.naturalKey.length - 1];
   const field = entity.fields.find((f) => f.name === last);
-  // Un tipo con nombre, no un primitivo: `string` no ata nada con `string`.
-  if (!field || field.list || !field.typeName || isBaseType(field.typeName)) return null;
-
-  const listed = (model.services ?? [])
-    .flatMap((service) => service.operations ?? [])
-    .flatMap((operation) => operation.bodyFields ?? [])
-    .some((input) => input.list && input.typeName === field.typeName);
-  if (!listed) return null;
 
   const leading = finder.params.slice(0, -1);
   const tail = finder.params[finder.params.length - 1];
@@ -117,6 +115,7 @@ export function naturalKeyBatchFinder(model, entity) {
   // mal formado es la clase de detalle que se copia de una operación a la siguiente.
   const plural = pluralize(tail.name);
   return {
+    reason,
     typeName: field.typeName,
     elementType: field.javaType,
     name: 'findAllBy' + finder.params.map((p) => capitalize(p.name)).join('And') + 'In',
@@ -322,8 +321,11 @@ export function renderPort(model, entity, paginated, batchLookup) {
     for (const name of batchFinder.imports) imports.add(name);
     methods.push(`    /**
      * El mismo finder, para una colección de ${batchFinder.typeName}: UNA consulta en vez
-     * de una por elemento. Alguna operación recibe esos valores en una lista acotada de su
-     * entrada, y comprobarlos en un bucle es N consultas por petición.
+     * de una por elemento. ${batchFinder.reason === 'replica-listing'
+      ? `Es la copia local de una réplica y la lee una operación de listado: leerla en un bucle
+     * es N consultas por página, el mismo coste que la réplica existe para no pagar.`
+      : `Alguna operación recibe esos valores en una lista acotada de su
+     * entrada, y comprobarlos en un bucle es N consultas por petición.`}
      *
      * <p>El orden de salida NO está garantizado y lo que no exista simplemente no aparece:
      * quien llama indexa por ${batchFinder.typeName} lo que le vuelve.

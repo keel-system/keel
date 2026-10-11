@@ -20,7 +20,7 @@ import { callerResolution } from './security.js';
 import { mailPorts, sendsMail } from './mail.js';
 import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
-import { repositoryRoots, portClass, portPath, occupantFinders, PAGE_TS } from './repositories.js';
+import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyBatchFinder, PAGE_TS } from './repositories.js';
 import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch } from 'keel-core/gen';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
@@ -388,7 +388,7 @@ function handlerNotes(model, operation) {
   const compensation = compensationNote(operation);
   if (compensation) notes.push(compensation);
   for (const note of activationNotes(operation)) notes.push(note);
-  for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(dependency, need, operation));
+  for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(dependency, need, operation, model));
   for (const note of projectionNotes(model, operation)) notes.push(note);
   for (const eventName of operation.emits ?? []) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
@@ -539,7 +539,7 @@ function exposeNote(need, operation) {
 }
 
 /** La nota de un dato que esta operación pide a otro servidor (`needs`): la de keel-spring. */
-function needNote(depId, need, operation) {
+function needNote(depId, need, operation, model) {
   const why = need.description ? ` — ${need.description}` : '';
   if (need.strategy === 'on-demand') {
     if (!need.fetch) {
@@ -559,7 +559,12 @@ function needNote(depId, need, operation) {
     fail: `Si la copia aún no tiene el dato, el lector lanza ${replica.onMiss.exceptionClass ?? replica.onMiss.error}: no lo captures para seguir con un valor inventado.`,
     degrade: `Si la copia aún no tiene el dato, el lector devuelve null y el resultado degradado lo escribes TÚ, distinguible por el cliente de una respuesta normal: ${replica.onMiss.degradedTo}`
   }[replica.onMiss.action];
-  return `Dependencia ${depId}.${need.name} (replicada)${why}: lee ${replica.entityName} con await this.${decap(replica.readerClass)}.byKey(...), que ya aplica onMiss: ${replica.onMiss.action}. ${onMiss} NUNCA leas el repositorio de la réplica directamente ni la escribas desde aquí: la copia solo se escribe desde ${replica.projectorClass}.${exposeNote(need, operation)}`;
+  // En un listado, primero el lote: un byKey(...) por elemento son N consultas por página. La misma nota que keel-spring.
+  const replicaEntity = model?.entities?.find((entity) => entity.name === replica.entityName);
+  const batch = (operation?.returnsList || operation?.paginated) && replicaEntity && naturalKeyBatchFinder(model, replicaEntity)
+    ? ` Esta operación devuelve una lista: lee la página entera con await this.${decap(replica.readerClass)}.byKeys(...) (UNA consulta) y pasa por byKey(...) solo las claves que falten, que es donde se aplica onMiss.`
+    : '';
+  return `Dependencia ${depId}.${need.name} (replicada)${why}: lee ${replica.entityName} con await this.${decap(replica.readerClass)}.byKey(...), que ya aplica onMiss: ${replica.onMiss.action}. ${onMiss}${batch} NUNCA leas el repositorio de la réplica directamente ni la escribas desde aquí: la copia solo se escribe desde ${replica.projectorClass}.${exposeNote(need, operation)}`;
 }
 
 /** Las réplicas que alimenta la suscripción que dispara esta operación (`fedBy`). */

@@ -17,10 +17,41 @@ import {
   rabbitListenerRetry,
   retryMaxAttempts,
   retryInitialDelayMs,
-  retryMaxDelayMs
+  retryMaxDelayMs,
+  missingTargetRetryDestinations
 } from 'keel-core/gen';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
+
+/**
+ * El conjunto de destinos en los que se reintenta el «no existe» y el método que lo busca en la cadena
+ * de causas. Lo comparten las ramas de Kafka y RabbitMQ; qué destinos son lo decide keel-core
+ * (`missingTargetRetryDestinations`), igual que para keel-nest.
+ */
+function missingTargetMembers(model, broker, imports) {
+  imports.add(`${subPackage(model, 'domain.errors')}.NotFoundException`);
+  imports.add('java.util.Set');
+  const destinations = missingTargetRetryDestinations(model, broker).map((d) => `"${d}"`).join(', ');
+  return `
+    /**
+     * Destinos en los que el «no existe» SÍ se reintenta. Es la excepción a no reintentar un rechazo de
+     * negocio: en consumo asíncrono suele ser la carrera de orden —la compensación que llega antes que el
+     * hecho que compensa—, y el reintento es lo que la resuelve; agotado, va al descarte igual. Solo
+     * entran los destinos cuyas suscripciones tienen una guarda de dominio y un retry declarado: con
+     * tryRecord el primer intento ya marcó el evento, y reintentar lo confirmaría sin efecto.
+     */
+    private static final Set<String> RETRIES_NOT_FOUND = Set.of(${destinations});
+
+    /** ¿Hay un «no existe» del dominio en la cadena de causas? El contenedor lo entrega envuelto. */
+    static boolean isMissingTarget(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof NotFoundException) {
+                return true;
+            }
+        }
+        return false;
+    }`;
+}
 
 /**
  * Las suscripciones con descarte, agrupadas por DESTINO.
@@ -98,6 +129,11 @@ function kafkaConfig(model, subs) {
 
   const groups = byDestination(model, 'kafka', subs);
   const topics = groups.map((group) => `"${group.destination}"`).join(', ');
+  imports.add('org.springframework.util.backoff.BackOffExecution');
+  const missingTarget = missingTargetMembers(model, 'kafka', imports) + `
+
+    /** Sin reintentos: el descarte en el acto, como cualquier otro rechazo de negocio. */
+    private static final BackOff NO_RETRY = () -> () -> BackOffExecution.STOP;`;
   const backOff = retryBackOff(subs);
   for (const imported of backOff.imports) imports.add(imported);
   const listed = subs.map((sub) => `${sub.name} → ${deadLetterName('kafka', sub.topicDefault)}`).join(', ');
@@ -165,9 +201,16 @@ public class DeadLetterConfig {
         // Y el payload que incumple el contrato (requireContract lanza IllegalArgumentException):
         // un campo que falta o fuera de cota no se vuelve válido reintentándolo.
         handler.addNotRetryableExceptions(DomainException.class, IllegalArgumentException.class);
+        // Salvo el «no existe»: es reintentable, y fuera de RETRIES_NOT_FOUND se le niega la
+        // curva (sin reintentos, directo al descarte, como cualquier otro rechazo). Devolver
+        // null es «la curva por defecto».
+        handler.addRetryableExceptions(NotFoundException.class);
+        handler.setBackOffFunction((record, exception) ->
+                isMissingTarget(exception) && !RETRIES_NOT_FOUND.contains(record.topic()) ? NO_RETRY : null);
 
         return handler;
     }
+${missingTarget}
 
 ${backOff.method}
 
@@ -301,6 +344,8 @@ function rabbitConfig(model, subs) {
       'org.springframework.beans.factory.annotation.Value',
       'org.springframework.boot.autoconfigure.amqp.RabbitRetryTemplateCustomizer',
       'org.springframework.retry.policy.SimpleRetryPolicy',
+      'org.springframework.retry.RetryContext',
+      'org.springframework.amqp.rabbit.support.ListenerExecutionFailedException',
       `${subPackage(model, 'domain.errors')}.DomainException`
     ]) {
       imports.add(name);
@@ -324,6 +369,10 @@ function rabbitConfig(model, subs) {
      * {@code ListenerExecutionFailedException}. Agotado (o no reintentable), el recuperador de Boot
      * rechaza sin reencolar y la cola lo lleva a su DLQ si la declara.
      *
+     * <p>La excepción es el «no existe» ({@code NotFoundException}) en las colas de
+     * {@code RETRIES_NOT_FOUND}: allí suele ser la carrera de orden de un consumo asíncrono, y
+     * el reintento la resuelve. Fuera de ellas, se trata como cualquier otro rechazo.
+     *
      * <p>Sustituye la política que Boot montó desde las propiedades, así que reutiliza su
      * {@code max-attempts}; el backoff sigue saliendo de ellas. Solo toca el reintento del
      * LISTENER, no el del {@code RabbitTemplate}.
@@ -339,9 +388,32 @@ function rabbitConfig(model, subs) {
                     DomainException.class, false,
                     IllegalArgumentException.class, false,
                     AmqpRejectAndDontRequeueException.class, false);
-            retryTemplate.setRetryPolicy(new SimpleRetryPolicy(maxAttempts, retryable, true, true));
+            retryTemplate.setRetryPolicy(new SimpleRetryPolicy(maxAttempts, retryable, true, true) {
+                // El «no existe» se decide antes que la tabla, y por COLA: se reintenta solo en
+                // RETRIES_NOT_FOUND, vaya o no envuelto en el AmqpRejectAndDontRequeueException.
+                @Override
+                public boolean canRetry(RetryContext context) {
+                    Throwable last = context.getLastThrowable();
+                    if (last != null && isMissingTarget(last)) {
+                        String queue = consumerQueue(last);
+                        return queue != null && RETRIES_NOT_FOUND.contains(queue) && context.getRetryCount() < maxAttempts;
+                    }
+                    return super.canRetry(context);
+                }
+            });
         };
-    }`
+    }
+
+    /** La cola de la que se consumió el mensaje que falló, o null si el fallo no la trae. */
+    private static String consumerQueue(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof ListenerExecutionFailedException listener && listener.getFailedMessage() != null) {
+                return listener.getFailedMessage().getMessageProperties().getConsumerQueue();
+            }
+        }
+        return null;
+    }
+${missingTargetMembers(model, 'rabbitmq', imports)}`
     : '';
 
   const body = `/**

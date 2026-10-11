@@ -49,6 +49,6 @@ export function acknowledgeNote(subscription) {
     `${codes.length === 1 ? 'ese error' : 'uno de esos errores'}, el mensaje queda ATENDIDO — confírmalo sin ` +
     'efecto, sin reintentarlo y sin mandarlo al descarte: es un resultado ya conocido (un duplicado ya ' +
     'resuelto), no un fallo que alguien tenga que mirar. Cualquier otro rechazo de negocio no se reintenta y ' +
-    'va al descarte.'
+    'va al descarte, salvo el «no existe» cuando esta misma nota dice que se reintenta.'
   );
 }

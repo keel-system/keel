@@ -19,8 +19,8 @@
 // la plataforma (la skill keel-spring-kafka, § Topología).
 
 import { KAFKA_PRODUCER_TIMEOUTS } from 'keel-core/gen/infra-catalog';
-import { kafkaListenerRetry, subscriptionDestination, subscriptionGroupId } from 'keel-core/gen';
-import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
+import { kafkaListenerRetry, missingTargetRetryDestinations, subscriptionDestination, subscriptionGroupId } from 'keel-core/gen';
+import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { KAFKA_CONNECTION_TS, KAFKA_CONSUMPTION_TS, MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, usesKafka } from './messaging.js';
 
@@ -54,6 +54,7 @@ export function generate(model) {
 /** El consumo como DATOS: una entrada por SUSCRIPCIÓN (cada una con su consumer group). */
 export function kafkaConsumption(model) {
   const retry = kafkaListenerRetry(model);
+  const missingTarget = missingTargetRetryDestinations(model, 'kafka');
   return (model.subscriptions ?? []).map((sub) => {
     const topic = subscriptionDestination('kafka', model, sub);
     return {
@@ -61,7 +62,9 @@ export function kafkaConsumption(model) {
       topic,
       groupId: subscriptionGroupId(model, sub),
       // Por TOPIC, como DEAD_LETTERED en keel-spring: basta con que una suscripción del topic lo declare.
-      deadLetter: retry.deadLetteredTopics.includes(topic)
+      deadLetter: retry.deadLetteredTopics.includes(topic),
+      // Por TOPIC también, como RETRIES_NOT_FOUND en keel-spring (keel-core decide cuáles).
+      retriesNotFound: missingTarget.includes(topic)
     };
   });
 }
@@ -74,7 +77,7 @@ function consumptionFile(model) {
   const entries = consumption
     .map(
       (entry) =>
-        `  { subscription: ${tsString(entry.subscription)}, topic: ${tsString(entry.topic)}, groupId: ${tsString(entry.groupId)}, deadLetter: ${entry.deadLetter} }`
+        `  { subscription: ${tsString(entry.subscription)}, topic: ${tsString(entry.topic)}, groupId: ${tsString(entry.groupId)}, deadLetter: ${entry.deadLetter}, retriesNotFound: ${entry.retriesNotFound} }`
     )
     .join(',\n');
   const declared = retry.deadLetteredTopics.length > 0;
@@ -87,6 +90,8 @@ export interface SubscriptionConsumption {
   readonly groupId: string;
   /** ¿Publica en \`<topic>.DLT\` lo que agota sus reintentos? Por topic: basta con que una suscripción lo declare. */
   readonly deadLetter: boolean;
+  /** ¿Se reintenta aquí el «no existe» del caso de uso? Es el RETRIES_NOT_FOUND de keel-spring. */
+  readonly retriesNotFound: boolean;
 }
 
 /**
@@ -139,13 +144,18 @@ export function listenerBackoffMs(attempt: number, retry: ListenerRetry = LISTEN
  * repite la MISMA entrega: un guard que reclama antes (tryRecord) la encontraría ya marcada y la confirmaría
  * sin que llegara nunca al descarte.
  */
-export function isRetryable(error: unknown): boolean {
+export function isRetryable(error: unknown, retriesNotFound = false): boolean {
+  // Salvo el «no existe» donde la suscripción lo admite: suele ser la carrera de orden de un consumo asíncrono
+  // (llegó antes que el hecho del que depende) y el reintento la resuelve. Solo con guarda de dominio, que con
+  // tryRecord el reintento encontraría el evento ya marcado.
+  if (retriesNotFound && error instanceof NotFoundException) return true;
   return !(error instanceof DomainException) && !(error instanceof MessageContractViolation);
 }`;
   return tsModule(
     KAFKA_CONSUMPTION_TS,
     [
       { symbol: 'DomainException', from: DOMAIN_EXCEPTION_TS },
+      { symbol: 'NotFoundException', from: NOT_FOUND_EXCEPTION_TS },
       { symbol: 'MessageContractViolation', from: MESSAGE_CONTRACT_TS }
     ],
     body
@@ -228,6 +238,7 @@ interface Subscriber {
   readonly topic: string;
   readonly groupId: string;
   readonly deadLetter: boolean;
+  readonly retriesNotFound: boolean;
   readonly handler: MessageHandler;
   consumer: KafkaJS.Consumer | null;
   running: boolean;
@@ -312,6 +323,7 @@ export class KafkaConnection implements OnApplicationBootstrap, BeforeApplicatio
       topic: settings.topic,
       groupId: settings.groupId ?? consumption.groupId,
       deadLetter: consumption.deadLetter,
+      retriesNotFound: consumption.retriesNotFound,
       handler,
       consumer: null,
       running: false
@@ -397,7 +409,7 @@ export class KafkaConnection implements OnApplicationBootstrap, BeforeApplicatio
       } catch (error) {
         if (this.stopping) throw error;
         const reason = error instanceof Error ? \`\${error.name}: \${error.message}\` : String(error);
-        if (!isRetryable(error) || attempt >= attempts) {
+        if (!isRetryable(error, subscriber.retriesNotFound) || attempt >= attempts) {
           await this.recover(subscriber, payload, error, attempt, reason);
           return;
         }

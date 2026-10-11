@@ -15,14 +15,14 @@
 //     auditoría de Spring Data. Guardar es un `$set` del documento entero y no un reemplazo, para que
 //     lo que el dominio no lleva (la auditoría de política) no se pierda.
 
-import { persistedMembers, collectInternalEntities, LOCK_VERSION } from 'keel-core/gen';
+import { persistedMembers, collectInternalEntities, LOCK_VERSION, orderingFieldOf, orderingTieBreakerOf } from 'keel-core/gen';
 import { documentShape, DOCUMENT_ID, storageOf } from 'keel-core/gen/document';
 import { snakeCase } from 'keel-core/gen/naming';
 import { DIRS, classPath, entityDir, tsModule, tsString } from './render.js';
 import { domainMembers } from './entities.js';
 import { TEXT_FOLD_TS } from './persistence-entities.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
-import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, occupantFinders, constructorOf, emitsDomainEvents, credentialFinders } from './repositories.js';
+import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, naturalKeyBatchFinder, occupantFinders, constructorOf, emitsDomainEvents, credentialFinders } from './repositories.js';
 import { documentGuardMethods, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 import { AUDIT_ACTOR_TS } from './audit-actor.js';
 
@@ -154,7 +154,15 @@ function entityFunctions(model, entity, use, vos) {
     if (member.kind === 'externalRef') {
       reads.push(`    ${member.name}: ${use.helper('fromUuid', source)}`);
     } else if (member.kind === 'relationMany') {
-      reads.push(`    ${member.name}: ((${source} ?? []) as Document[]).map(toDomain${member.relation.entity})`);
+      // El orden de un array de Mongo es el de inserción, que tras reordenar ya no es el del diseño: con un campo de
+      // posición, el mapeo lo restablece —y desempata por id—, como el Comparator de keel-spring y la consulta
+      // relacional. Sin esto la rama documental devolvía las hijas en el orden en que se guardaron.
+      const ordering = orderingFieldOf(model, member.relation.entity);
+      const tie = orderingTieBreakerOf(model, member.relation.entity);
+      const sorted = ordering
+        ? `.sort((a, b) => Number(a.${ordering.name}) - Number(b.${ordering.name}) || (String(a.${tie}) < String(b.${tie}) ? -1 : String(a.${tie}) > String(b.${tie}) ? 1 : 0))`
+        : '';
+      reads.push(`    ${member.name}: ((${source} ?? []) as Document[]).map(toDomain${member.relation.entity})${sorted}`);
     } else if (member.kind === 'relationOne') {
       reads.push(`    ${member.name}: ${source} == null ? null : toDomain${member.relation.entity}(${source})`);
     } else {
@@ -421,6 +429,18 @@ export function renderDocumentAdapter(model, entity) {
     methods.push(`  async ${finder.name}(${finder.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {
     const found = await this.collection.findOne(${filter}, { session: this.session });
     return found == null ? null : toDomain${entity.name}(found);
+  }`);
+  }
+
+  const batch = naturalKeyBatchFinder(model, entity);
+  if (batch) {
+    imports.push(...batch.param.imports);
+    methods.push(`  async ${batch.name}(${batch.signature}): Promise<${entity.name}[]> {
+    if (${batch.plural}.length === 0) return [];
+    const found = await this.collection
+      .find({ ${tsString(keyOf(model, entity, batch.field.name))}: { $in: ${batch.plural}.map((value) => ${writeScalar(batch.field, 'value', use)}) } }, { session: this.session })
+      .toArray();
+    return found.map(toDomain${entity.name});
   }`);
   }
 

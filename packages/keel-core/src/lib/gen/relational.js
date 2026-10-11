@@ -13,7 +13,7 @@
 // nombres salen crudos, y quien los escribe los cita en su idioma.
 
 import { snakeCase } from './naming.js';
-import { isTextual } from './types.js';
+import { isTextual, isBaseType } from './types.js';
 
 // ─── Palabras reservadas ─────────────────────────────────────────────────────
 //
@@ -628,4 +628,47 @@ export function relievingOperations(model) {
     }
   }
   return out;
+}
+
+// ─── El finder de la clave natural POR LOTE ──────────────────────────────────
+
+/**
+ * ¿Necesita la clave natural de esta entidad un finder por lote (`findAllBy<Clave>In`), y por qué? Hay dos
+ * motivos, y los dos son el mismo bucle de una consulta por elemento que el agente escribe si el puerto solo
+ * trae el finder de un elemento:
+ *
+ *   - `listed-input`: una operación recibe una lista acotada del MISMO value type declarado que cierra la clave
+ *     natural (la lista de supresión de notification-mailer). Dos `string` no se atan: hace falta un tipo con
+ *     nombre.
+ *   - `replica-listing`: la entidad es la copia local de una dependencia `replicated` y alguna operación que la
+ *     lee (`usedBy`) devuelve una lista o una página. El motivo de replicar es precisamente no pagar una llamada
+ *     por elemento en un listado; leer la copia elemento a elemento lo reintroduce contra la base. Aquí el enlace
+ *     lo declara el diseño, así que no hace falta tipo con nombre. Lo escribieron a mano las corridas de catalog
+ *     en keel-nest y en keel-spring (`findBySkus`, `findAllBySkuIn`).
+ *
+ * Devuelve el motivo, o null. Solo cuando el último componente de la clave natural es el que se busca en lote;
+ * en la réplica, cuando su clave es solo el `keyField`.
+ */
+export function naturalKeyBatchReason(model, entity) {
+  const key = entity.naturalKey ?? [];
+  if (key.length === 0) return null;
+  const field = entity.fields.find((f) => f.name === key[key.length - 1]);
+  if (!field || field.list) return null;
+  if (entity.replicaOf && key.length === 1 && replicaReadInListing(model, entity)) return 'replica-listing';
+  if (!field.typeName || isBaseType(field.typeName)) return null;
+  const listed = (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .flatMap((operation) => operation.bodyFields ?? [])
+    .some((input) => input.list && input.typeName === field.typeName);
+  return listed ? 'listed-input' : null;
+}
+
+/** ¿Lee la copia local de esta réplica alguna operación que devuelve una lista o una página? */
+export function replicaReadInListing(model, entity) {
+  const { dependency, need: needName } = entity.replicaOf ?? {};
+  const need = (model.dependencies ?? []).find((dep) => dep.id === dependency)?.needs?.find((n) => n.name === needName);
+  const users = new Set(need?.usedBy ?? []);
+  return (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .some((operation) => users.has(operation.name) && (operation.returnsList || operation.paginated));
 }

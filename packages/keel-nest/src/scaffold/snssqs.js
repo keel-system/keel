@@ -19,7 +19,8 @@
 // `SnsSqsConnection.publish`, y un listener por suscripción sobre `SnsSqsConnection.consume`.
 
 import { subscriptionQueues } from 'keel-core/gen/messaging-provisioning';
-import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
+import { missingTargetRetryDestinations } from 'keel-core/gen';
+import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, SNSSQS_CONNECTION_TS, SNSSQS_CONSUMPTION_TS, usesSnsSqs } from './messaging.js';
 
@@ -52,9 +53,12 @@ export function generate(model) {
 /** El consumo como DATOS: una entrada por SUSCRIPCIÓN, cada una con su cola (la de init-messaging.sh). */
 export function snsSqsConsumption(model) {
   const queues = subscriptionQueues(model);
+  const missingTarget = missingTargetRetryDestinations(model, 'snssqs');
   return (model.subscriptions ?? []).map((sub, index) => ({
     subscription: sub.name,
     queue: queues[index].name,
+    // Por COLA, que aquí es una por suscripción (keel-core decide cuáles).
+    retriesNotFound: missingTarget.includes(queues[index].name),
     deadLetterQueue: queues[index].deadLetter ? queues[index].deadLetterName : null,
     maxReceive: queues[index].maxReceive,
     initialMs: sub.retry?.initialDelayMs ?? 1000,
@@ -72,6 +76,7 @@ function consumptionFile(model) {
     subscription: ${tsString(entry.subscription)},
     queue: ${tsString(entry.queue)},
     deadLetterQueue: ${entry.deadLetterQueue ? tsString(entry.deadLetterQueue) : 'null'},
+    retriesNotFound: ${entry.retriesNotFound},
     maxReceive: ${entry.maxReceive},
     initialMs: ${entry.initialMs},
     multiplier: ${entry.multiplier},
@@ -86,6 +91,8 @@ export interface SubscriptionConsumption {
   readonly queue: string;
   /** Su DLQ (RedrivePolicy de infra/init-messaging.sh); null si la suscripción no declara onFailure.deadLetter. */
   readonly deadLetterQueue: string | null;
+  /** ¿Se reintenta aquí el «no existe» del caso de uso? Lo que el javadoc del mensaje le pide al listener de keel-spring. */
+  readonly retriesNotFound: boolean;
   /** Recepciones antes del descarte: onFailure.retry.maxAttempts (uno sin retry). Lo cuenta SQS. */
   readonly maxReceive: number;
   readonly initialMs: number;
@@ -121,13 +128,17 @@ export function retryVisibilitySeconds(consumption: SubscriptionConsumption, rec
  * DLQ. SQS no distingue tipos de excepción: lo lleva a la DLQ la conexión (la salida que la skill keel-spring-snssqs
  * da para los errores que el diseño no quiere reintentar).
  */
-export function isRetryable(error: unknown): boolean {
+export function isRetryable(error: unknown, retriesNotFound = false): boolean {
+  // Salvo el «no existe» donde la suscripción lo admite: suele ser la carrera de orden de un consumo asíncrono
+  // (llegó antes que el hecho del que depende) y otra recepción la resuelve. Solo con guarda de dominio.
+  if (retriesNotFound && error instanceof NotFoundException) return true;
   return !(error instanceof DomainException) && !(error instanceof MessageContractViolation);
 }`;
   return tsModule(
     SNSSQS_CONSUMPTION_TS,
     [
       { symbol: 'DomainException', from: DOMAIN_EXCEPTION_TS },
+      { symbol: 'NotFoundException', from: NOT_FOUND_EXCEPTION_TS },
       { symbol: 'MessageContractViolation', from: MESSAGE_CONTRACT_TS }
     ],
     body
@@ -402,7 +413,7 @@ export class SnsSqsConnection implements OnApplicationBootstrap, BeforeApplicati
     } catch (error) {
       if (this.stopping) return; // sin desenlace: vuelve a la cola al vencer su visibilidad
       const reason = describe(error);
-      if (!isRetryable(error)) {
+      if (!isRetryable(error, consumption.retriesNotFound)) {
         if (subscriber.deadLetterUrl != null) {
           await this.sqs.send(new SendMessageCommand({ QueueUrl: subscriber.deadLetterUrl, MessageBody: message.Body ?? '', MessageAttributes: message.MessageAttributes }));
           this.logger.error(\`SQS: mensaje de \${subscriber.queue} llevado a \${consumption.deadLetterQueue} sin reintento: \${reason}\`);

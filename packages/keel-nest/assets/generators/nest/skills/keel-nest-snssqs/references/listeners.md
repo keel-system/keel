@@ -38,6 +38,7 @@ El comentario de `subscriptions/<e>-message.ts` lo trae traducido; impleméntalo
 | Un tipo que no es de esta suscripción | `return` | Se borra: no es tuyo |
 | Tuyo, pero no parsea o incumple el contrato | dejas que lance (`MessageContractViolation`) | La conexión lo lleva a la DLQ sin reintento |
 | Tuyo y el dominio lo rechaza (`DomainException`) | dejas que lance | A la DLQ sin reintento: no se resuelve mejor en la siguiente recepción |
+| Tuyo y el dominio dice que no existe (`NotFoundException`), en una suscripción cuya nota lo marca como reintentable | dejas que lance | Se reintenta con la curva de `onFailure.retry` (suele ser la carrera de orden: el mensaje llegó antes que el hecho del que depende) y, agotado, al descarte. Lo decide build por destino; fuera de esos, es un rechazo más |
 | Un fallo transitorio (la base no responde) | dejas que lance | Vuelve a la cola con la curva de `onFailure.retry`; al agotar `maxReceiveCount`, SQS lo mueve a la DLQ |
 | Ya procesado (el guard lo dice) | `return` | La reentrega absorbida: borrada sin segundo efecto |
 

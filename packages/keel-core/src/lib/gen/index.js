@@ -32,7 +32,9 @@ export {
   retryInitialDelayMs,
   retryMaxDelayMs,
   rabbitListenerRetry,
-  kafkaListenerRetry
+  kafkaListenerRetry,
+  retriesMissingTarget,
+  missingTargetRetryDestinations
 } from './dead-letter.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export { CONTRACT_DOCS, contractDocs } from './contract-docs.js';
@@ -119,6 +121,8 @@ export {
   parentColumnOf,
   orderingFieldOf,
   orderingTieBreakerOf,
+  naturalKeyBatchReason,
+  replicaReadInListing,
   backReferenceTo,
   collectInternalEntities,
   collectionBatchSize,

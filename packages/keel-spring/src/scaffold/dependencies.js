@@ -16,6 +16,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainSubPackage, domainTypeImport } from './entities.js';
+import { naturalKeyBatchFinder } from './repositories.js';
 
 const PROJECTION_PKG = 'application.projection';
 const ANNOTATIONS_PKG = 'application.annotations';
@@ -174,6 +175,8 @@ function renderReader(model, dependency, need, entity) {
     imports.add(`${subPackage(model, ERRORS_PKG)}.${onMiss.exceptionClass}`);
   }
 
+  const batch = batchReadBody(model, need, entity, imports);
+
   const fieldDecls = deps.map((dep) => `    private final ${dep.type} ${dep.name};`).join('\n');
   const ctorParams = deps.map((dep) => `${dep.type} ${dep.name}`).join(', ');
   const ctorBody = deps.map((dep) => `        this.${dep.name} = ${dep.name};`).join('\n');
@@ -193,10 +196,43 @@ ${fieldDecls}
 ${ctorBody}
     }
 
-${missBody(model, dependency, need, entity)}
+${missBody(model, dependency, need, entity)}${batch}
 }`
     )
   };
+}
+
+/**
+ * La lectura POR LOTE de la copia, cuando la lee una operación de listado (`naturalKeyBatchReason` de
+ * keel-core, `replica-listing`). Sin ella el handler solo tenía `byKey(...)` y el camino de menor resistencia
+ * era el bucle: una consulta por elemento de la página, justo lo que la réplica existe para no pagar. Las dos
+ * corridas de catalog (keel-nest y keel-spring) lo escribieron a mano. Devuelve solo lo ya replicado: la
+ * política onMiss sigue siendo de `byKey(...)`, que se aplica a cada clave que falte.
+ */
+function batchReadBody(model, need, entity, imports) {
+  const finder = naturalKeyBatchFinder(model, entity);
+  if (finder?.reason !== 'replica-listing') return '';
+  const { keyField, keyFieldJavaType, keyGetter } = need.replica;
+  for (const name of ['java.util.Collection', 'java.util.HashMap', 'java.util.Map', ...(need.replica.keyFieldImports ?? [])]) {
+    imports.add(name);
+  }
+  const plural = finder.args;
+  return `
+
+    /**
+     * Las copias locales de varios ${keyField} en UNA consulta, indexadas por ${keyField}. Es lo que
+     * lee una operación de listado: un {@code byKey(...)} por elemento serían N consultas por página.
+     *
+     * <p>Solo devuelve lo ya replicado. Una clave que falte NO está en el mapa, y a cada una de esas
+     * se le aplica la política declarada pasándola por {@code byKey(...)}: no la des por inexistente.
+     */
+    public Map<${keyFieldJavaType}, ${entity.name}> byKeys(Collection<${keyFieldJavaType}> ${plural}) {
+        Map<${keyFieldJavaType}, ${entity.name}> copies = new HashMap<>();
+        for (${entity.name} copy : repository.${finder.name}(${plural})) {
+            copies.put(copy.${keyGetter}(), copy);
+        }
+        return copies;
+    }`;
 }
 
 function readerJavadoc(dependency, need) {

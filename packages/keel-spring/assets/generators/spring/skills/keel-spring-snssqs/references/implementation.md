@@ -141,6 +141,10 @@ public class StockDepletedListener {
 - Errores de negocio no reintenables: si el diseño declara que un error no
   debe reintentarse, trágalo tras registrarlo (ack) o mándalo tú a la DLQ —
   documenta la decisión; SQS no distingue tipos de excepción.
+- **Salvo el «no existe»** cuando el javadoc del `<Evento>Message` dice que se reintenta: ahí
+  relanza el `NotFoundException` para que la visibilidad lo reintente con la curva del diseño. Suele
+  ser la carrera de orden (el mensaje llegó antes que el hecho del que depende); agotado, SQS lo
+  lleva a la DLQ igual.
 
 ### El backoff declarado no lo aplica la cola: lo aplicas tú
 

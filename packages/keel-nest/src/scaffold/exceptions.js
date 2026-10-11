@@ -22,6 +22,7 @@ export const BASE_SUBCLASSES = [
 ];
 
 export const DOMAIN_EXCEPTION_TS = classPath(DIRS.errors, 'DomainException');
+export const NOT_FOUND_EXCEPTION_TS = classPath(DIRS.errors, 'NotFoundException');
 export const INVALID_VALUE_TS = classPath(DIRS.errors, 'InvalidValueException');
 export const INVALID_TRANSITION_TS = classPath(DIRS.errors, 'InvalidStateTransitionException');
 export const VALUE_FORMAT_TS = classPath(DIRS.errors, 'ValueFormatException');

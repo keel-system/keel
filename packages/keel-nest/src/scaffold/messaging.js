@@ -24,7 +24,7 @@
 // Solo con persistencia RELACIONAL o sin persistencia: la documental llega con el incremento 12, y ahí
 // el puente y el outbox son otra rama entera.
 
-import { deadLetterDestination, subscriptionDestination as destinationOf, subscriptionGroupId } from 'keel-core/gen';
+import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination as destinationOf, subscriptionGroupId } from 'keel-core/gen';
 import { OUTBOX_PURGE, OUTBOX_RELAY, PROCESSED_EVENT_PURGE, parameterValue } from 'keel-core/gen/messaging-stores';
 import { DIRS, classPath, fieldImports, tsModule, tsString, decapitalize } from './render.js';
 import { DOMAIN_EVENT_TS, EVENT_METADATA_TS } from './events.js';
@@ -693,6 +693,14 @@ function contractDoc(model, sub) {
     lines.push(
       'La deduplicación tiene VENTANA: el registro se purgará a los processed-event.purge.retention-days (default 14; la purga es de build, por lotes), así que una reentrega posterior se procesa como nueva.' +
         (sub.triggerHasDomainGuard ? ' Aquí es inocuo: la guarda de dominio sigue rechazándola, y esa no caduca.' : ' Aquí NO es inocuo: sin guarda de dominio, pasada la retención el efecto se vuelve a aplicar.')
+    );
+  }
+  // El «no existe» que SÍ se reintenta (keel-core, `missingTargetRetryDestinations`): lo aplica la conexión de
+  // build; lo único que lo rompe es que el handler se trague la excepción. Misma nota que keel-spring.
+  const broker = model.stack?.broker;
+  if (broker && missingTargetRetryDestinations(model, broker).includes(destinationOf(broker, model, sub))) {
+    lines.push(
+      'Un «no existe» (NotFoundException) del caso de uso SÍ se reintenta: aquí suele ser la carrera de orden de un consumo asíncrono —el mensaje llega antes que el hecho del que depende— y el reintento la resuelve; agotado, va al descarte igual. Deja que lance: no lo confirmes ni lo trates como un rechazo más.'
     );
   }
   if (sub.identity) {
