@@ -439,7 +439,12 @@ export function cognitoMockConfig(model) {
       username: user.username,
       token_use: 'access',
       'cognito:groups': user.roles,
-      client_id: spec.userClient
+      client_id: spec.userClient,
+      // El claim del alcance por recurso (`scoping.claim`), con el mismo valor que siembra el realm de Keycloak y
+      // solo en los usuarios NO exentos. Sin él, con Cognito ningún usuario estaba acotado: el emulador emitía
+      // `sub`, grupos y cliente, y un diseño con alcance no tenía titular que probar. En un pool real llega igual
+      // al access token si un disparador de pre-generación (V2) copia el atributo con este nombre: lo dice la skill.
+      ...user.attributes
     }
   }));
 

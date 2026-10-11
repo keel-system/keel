@@ -54,6 +54,31 @@ test('con Cognito: credenciales y emulador, sin script de kcadm', () => {
   for (const [file, content] of Object.entries(files)) assert.doesNotMatch(content, FOREIGN, file);
 });
 
+// Con Cognito ningún usuario llevaba el claim del alcance: el emulador emitía sub, grupos y cliente, y un diseño
+// con `scoping` no tenía titular acotado que probar. Ahora lleva el mismo valor que el realm de Keycloak, solo en
+// los no exentos, y validate-infra lo comprueba contra el emulador igual que contra Keycloak.
+test('con Cognito: el emulador pone el claim del alcance en los no exentos, y validate-infra lo comprueba', async () => {
+  const exempt = modelFor('cognito', { roles: ['agent', 'supervisor'], scoping: { claim: 'desks', over: 'Desk.code', error: 'DESK_FORBIDDEN', exemptRoles: ['supervisor'], testResource: 'billing' } });
+  const config = JSON.parse(byPath(identityProvisioningFiles(exempt, PROBE))['infra/cognito/mock-oauth2-config.json']);
+  const claimsOf = (username) => config.tokenCallbacks[0].requestMappings.find((m) => m.requestParam === 'username' && m.match === username)?.claims;
+  assert.deepEqual(claimsOf('agent').desks, ['billing']);
+  assert.deepEqual(claimsOf('agent-2').desks, ['billing']);
+  assert.equal(claimsOf('supervisor').desks, undefined, 'un rol exento no lleva el claim');
+  assert.equal(claimsOf('no-role').desks, undefined);
+
+  const { scopingClaimChecks } = await import('../src/lib/gen/identity-realm.js');
+  const checks = scopingClaimChecks({ ...exempt, layersPresent: { security: true } });
+  assert.deepEqual(checks.map((check) => check.label), [
+    "Claim 'desks' en el token de agent (cognito)",
+    "Claim 'desks' en el token de agent-2 (cognito)"
+  ]);
+  assert.match(checks[0].cmd, /http:\/\/cognito-mock:8080\/ticket-desk\/token/);
+  // El emulador responde el JSON formateado en varias líneas: la extracción lo aplana y admite espacios
+  // (medido contra mock-oauth2-server 6.0.1; con el sed de Keycloak no casaba).
+  assert.ok(checks[0].cmd.includes(`tr -d '\\n\\r' | sed 's/.*"access_token" *: *"`), checks[0].cmd);
+  assert.ok(checks[0].cmd.includes(`grep -qF '"desks":["billing"]'`), checks[0].cmd);
+});
+
 test('sin protocolo de token no hay proveedor que aprovisionar', () => {
   assert.deepEqual(identityProvisioningFiles(modelFor('keycloak', { protocol: 'api-key' }), PROBE), []);
   assert.deepEqual(identityProvisioningFiles({ ...modelFor('keycloak'), layersPresent: {} }, PROBE), []);

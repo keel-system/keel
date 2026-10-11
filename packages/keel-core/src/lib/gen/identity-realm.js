@@ -77,24 +77,32 @@ export function secretEnvKey(clientName) {
  * entonces lo único que se ve son veinte escenarios en 403 sin pista. Aquí se pide el token por
  * la red del compose, se decodifica el payload (base64url) y se exige el claim con su valor.
  * Usuarios y valor salen de `realmSpec()`, la misma fuente que siembra el realm: un sondeo con
- * su propia lista comprobaría una copia de sí mismo. Solo con Keycloak: es el proveedor cuyo
- * realm siembra un script.
+ * su propia lista comprobaría una copia de sí mismo. Con Keycloak y con el emulador de Cognito, que sirven
+ * los dos el password grant del arnés.
  */
 export function scopingClaimChecks(model) {
-  if (model.stack?.auth !== 'keycloak') return [];
+  const provider = model.stack?.auth;
+  if (provider !== 'keycloak' && provider !== 'cognito') return [];
   const spec = realmSpec(model);
   if (!spec?.scoping || !spec.userClient) return [];
   const claim = spec.scoping.claim;
-  const url = `http://keycloak:8080/realms/${spec.realm}/protocol/openid-connect/token`;
+  // Con Cognito el sujeto es el emulador (mock-oauth2-server): sirve el token bajo el issuerId, que es el realm,
+  // y empareja al usuario por el parámetro `username` del mismo grant.
+  const url =
+    provider === 'cognito'
+      ? `http://cognito-mock:8080/${spec.realm}/token`
+      : `http://keycloak:8080/realms/${spec.realm}/protocol/openid-connect/token`;
   return spec.users
     .filter((user) => (user.attributes?.[claim] ?? []).length > 0)
     .map((user) => {
       const expected = JSON.stringify({ [claim]: user.attributes[claim] }).slice(1, -1);
       return {
-        label: `Claim '${claim}' en el token de ${user.username} (keycloak)`,
+        label: `Claim '${claim}' en el token de ${user.username} (${provider})`,
         cmd:
           `T=$(curl -sf -d grant_type=password -d client_id=${spec.userClient} -d username=${user.username} ` +
-          `-d password=${spec.password} ${url} | sed 's/.*"access_token":"\\([^"]*\\)".*/\\1/'); ` +
+          // El emulador de Cognito responde el JSON formateado (varias líneas, `"access_token" : "…"`) y Keycloak
+          // compacto: se aplana y se admiten espacios, o con Cognito la extracción no casaba y el sondeo salía rojo.
+          `-d password=${spec.password} ${url} | tr -d '\\n\\r' | sed 's/.*"access_token" *: *"\\([^"]*\\)".*/\\1/'); ` +
           `P=$(echo "$T" | cut -d. -f2 | tr '_-' '/+'); ` +
           `while [ $((\${#P} % 4)) -ne 0 ]; do P="$P="; done; ` +
           `echo "$P" | base64 -d 2>/dev/null | grep -qF '${expected}'`

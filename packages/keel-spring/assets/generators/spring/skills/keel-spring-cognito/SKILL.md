@@ -41,6 +41,13 @@ Build deja esto, y **no hay que crear ningún user pool**:
    afirmar lo contrario.
 2. **El alta de user pool, grupos y usuarios**: eso es la API de AWS, y se verifica contra
    Cognito real (`references/environment.md`).
+3. **El claim del alcance por recurso** (`security.authentication.scoping.claim`), si el diseño
+   lo declara. El emulador lo pone en el token de cada usuario no exento con el valor de
+   `scopedResource()`, igual que el realm de Keycloak, pero Cognito real **no** mete un atributo
+   propio en el access token: hace falta un disparador de pre-generación de tokens (V2) que copie
+   `custom:<claim>` al access token con el nombre del diseño. Sin él, todo usuario acotado recibe
+   el error del alcance. Y `tokenWithScope` no existe aquí (el emulador no da de alta usuarios):
+   un escenario que necesite otro valor del claim es un `blocker`, no un parche al config.
 
 **Lo que sí queda probado, y es todo lo que este servicio consume**: la verificación por
 JWKS, el `iss`, la caducidad, el mapeo de `cognito:groups` a roles, el formato real de los

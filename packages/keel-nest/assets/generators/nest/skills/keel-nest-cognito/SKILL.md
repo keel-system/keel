@@ -26,6 +26,12 @@ consume es el token. Build deja:
 **Lo que ahí no queda probado**, y hay que decirlo al cerrar: que el proveedor autentique de verdad (el
 emulador no valida contraseñas) y el alta de user pool, grupos y usuarios (API de AWS).
 
+Con **alcance por recurso** (`scoping` en el diseño), el emulador pone el claim en el token de cada usuario no
+exento con el valor de `scopedResource()`, como el realm de Keycloak. En un pool real ese claim no llega solo al
+access token: hace falta un disparador de pre-generación de tokens (V2) que copie `custom:<claim>` con el nombre
+del diseño, o todo usuario acotado recibe el error del alcance. Y `tokenWithScope` no existe con Cognito (el
+emulador no da de alta usuarios): un escenario que necesite otro valor del claim es un `blocker`.
+
 ## Las dos rarezas de Cognito, ya resueltas por build
 
 | Rareza | Quién la absorbe |

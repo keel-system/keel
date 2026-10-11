@@ -1885,10 +1885,13 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     y `db-check` (`filterFoldBlock`, falsado estampando sin quitar acentos). Y `db-check` volvió a medir
     catalog-extended: desde el 13f no compilaba su sonda (faltaban `@redis/client` y el SDK de S3), y su
     expectativa del code de la carrera seguía siendo la del servicio entero, no la de cada operación.
+  - **Cerrado después:** el claim del alcance con Cognito. El emulador lo pone en los usuarios no exentos con el
+    valor del realm de Keycloak (`cognitoMockConfig` copia los atributos de `realmSpec`), y `validate-infra.sh` lo
+    comprueba también contra `cognito-mock`. Ejecutar esa comprobación contra mock-oauth2-server real destapó que
+    su `sed` no extraía el token: el emulador responde el JSON formateado en varias líneas. Las skills de Cognito
+    dicen lo que local no prueba: en un pool real hace falta un disparador de pre-generación (V2) que copie
+    `custom:<claim>` al access token, y `tokenWithScope` no existe ahí.
   - **Lo que queda abierto:**
-    - el emulador de Cognito no pone el claim del alcance en ningún usuario (`cognitoMockConfig` solo emite `sub`,
-      `cognito:groups` y `client_id`): con `auth: cognito`, un diseño con `scoping` no tiene titular acotado. Visto al
-      hacer `tokenWithScope`, sin corrida que lo haya pisado;
     - un contrato formal (`openapi.yaml`) para que las pruebas asierten en STRICT (`response-shape-without-contract`,
       las dos v2).
 
