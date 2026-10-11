@@ -14,7 +14,7 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
 import { partialUniqueIndexes } from './persistence-members.js';
-import { collectInternalEntities, foldedShadow, naturalKeyBatchReason } from 'keel-core/gen/relational';
+import { collectInternalEntities, foldedShadow, naturalKeyBatchReason, uniqueFields } from 'keel-core/gen/relational';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -215,6 +215,42 @@ export function occupantFinders(model, entity) {
   return finders;
 }
 
+/**
+ * El finder de cada campo `unique` suelto de la raíz (`checksum: { unique: true }` → `findByChecksum`).
+ *
+ * La unicidad tiene su constraint y su error declarado, y el traductor de errores ya mapea la
+ * violación; pero el caso de uso suele comprobarla ANTES de un efecto que no se deshace con la
+ * transacción —subir el binario al almacenamiento, llamar a un proveedor—, y para eso el puerto solo
+ * traía el finder de la clave natural. Lo escribieron a mano las tres corridas de asset-vault
+ * (`findByChecksum`, `existsByChecksum`), en los dos generadores. Mismos campos que reciben un `uk_`
+ * propio (`uniqueFields` de keel-core), así que el que es por sí solo la clave natural no se repite.
+ */
+export function uniqueFieldFinders(model, entity) {
+  const seen = new Set(
+    [naturalKeyFinder(model, entity)?.name, ...occupantFinders(model, entity).map((finder) => finder.name)].filter(Boolean)
+  );
+  const finders = [];
+  for (const field of uniqueFields(entity)) {
+    if (field.list) continue;
+    const params = naturalKeyParams(model, { ...entity, naturalKey: [field.name] }).map((param) => {
+      const typeImport = domainTypeImport(model, field);
+      return typeImport && !param.imports.includes(typeImport) ? { ...param, imports: [...param.imports, typeImport] } : param;
+    });
+    const name = 'findBy' + params.map((p) => capitalize(p.name)).join('And');
+    if (seen.has(name)) continue;
+    seen.add(name);
+    finders.push({
+      params,
+      name,
+      field: field.name,
+      signature: params.map((p) => `${p.javaType} ${p.name}`).join(', '),
+      args: params.map((p) => p.name).join(', '),
+      store: storeQuery(params)
+    });
+  }
+  return finders;
+}
+
 export function naturalKeyFinder(model, entity) {
   const params = naturalKeyParams(model, entity);
   if (params.length === 0) return null;
@@ -303,6 +339,14 @@ export function renderPort(model, entity, paginated, batchLookup) {
      */
     Optional<${entity.name}> ${occupant.name}(${occupant.signature});`);
   }
+  for (const unique of uniqueFieldFinders(model, entity)) {
+    for (const param of unique.params) for (const name of param.imports) imports.add(name);
+    methods.push(`    /**
+     * El ${entity.name} que ya tiene este ${unique.field}, que es único: para comprobarlo antes de un
+     * efecto que la transacción no deshace. La carrera la sigue arbitrando la constraint.
+     */
+    Optional<${entity.name}> ${unique.name}(${unique.signature});`);
+  }
   for (const credential of credentialFinders(model, entity)) {
     methods.push(`    /**
      * Resuelve el agregado a partir de UNA de sus credenciales.
@@ -324,7 +368,10 @@ export function renderPort(model, entity, paginated, batchLookup) {
      * de una por elemento. ${batchFinder.reason === 'replica-listing'
       ? `Es la copia local de una réplica y la lee una operación de listado: leerla en un bucle
      * es N consultas por página, el mismo coste que la réplica existe para no pagar.`
-      : `Alguna operación recibe esos valores en una lista acotada de su
+      : batchFinder.reason === 'scope-claim'
+        ? `Es el recurso sobre el que se acota el acceso (scoping.over): el claim del token
+     * enumera los valores que el llamante puede ver, y el listado acotado los resuelve aquí de una vez.`
+        : `Alguna operación recibe esos valores en una lista acotada de su
      * entrada, y comprobarlos en un bucle es N consultas por petición.`}
      *
      * <p>El orden de salida NO está garantizado y lo que no exista simplemente no aparece:
@@ -406,6 +453,11 @@ function renderJpaRepository(model, entity) {
     imports.add('java.util.Optional');
     for (const param of occupant.params) for (const name of param.imports) imports.add(name);
     methods += `\n\n${graph}    Optional<${entity.name}Jpa> ${occupant.store.name}(${occupant.store.signature});`;
+  }
+  for (const unique of uniqueFieldFinders(model, entity)) {
+    imports.add('java.util.Optional');
+    for (const param of unique.params) for (const name of param.imports) imports.add(name);
+    methods += `\n\n${graph}    Optional<${entity.name}Jpa> ${unique.store.name}(${unique.store.signature});`;
   }
   for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
@@ -501,6 +553,14 @@ function renderAdapter(model, entity, paginated, batchLookup) {
     methods.push(`    @Override
     public Optional<${entity.name}> ${occupant.name}(${occupant.signature}) {
         return ${jpaField}.${occupant.store.name}(${occupant.store.args}).map(this::toDomain);
+    }`);
+  }
+  for (const unique of uniqueFieldFinders(model, entity)) {
+    for (const param of unique.params) for (const name of param.imports) imports.add(name);
+    if (unique.store.folds) imports.add(textFoldImport(model));
+    methods.push(`    @Override
+    public Optional<${entity.name}> ${unique.name}(${unique.signature}) {
+        return ${jpaField}.${unique.store.name}(${unique.store.args}).map(this::toDomain);
     }`);
   }
   for (const credential of credentialFinders(model, entity)) {

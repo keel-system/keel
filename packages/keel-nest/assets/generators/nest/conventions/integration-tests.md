@@ -147,7 +147,9 @@ no es dejarla en el estado que el escenario declara.
 Si el `Given` **no se puede materializar por la API**, es `designGap`: no se siembra por la base.
 `db(...)` es para **leer** lo que la API no expone (que una escritura llegó al almacén), y solo
 excepcionalmente para una precondición que ninguna operación puede fabricar — y entonces se dice en
-`assumptions`.
+`assumptions`. Si esa fila lleva una columna sombra `<campo>_normalized` (un campo con `compare`), va con el
+valor plegado del campo, nunca con `''`: es la columna que lleva la unicidad, y dos filas con cadena vacía chocan
+en `uk_<tabla>_natural` (le pasó a la siembra genérica de las dos corridas de catalog de keel-spring).
 
 Al aislar una guarda tardía, las anteriores se satisfacen con datos **válidos**: un cuerpo `{}` muere en
 otra guarda, con otro `code`, y el escenario mide lo que no es suyo.

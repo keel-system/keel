@@ -92,10 +92,11 @@ function renderProjector(model, dependency, need, entity) {
 
   const guard = ordering
     ? `
-            // Reentrega tardía: un hecho más viejo no puede pisar a uno más nuevo.
+            // Reentrega o hecho viejo: uno anterior O IGUAL al guardado se confirma sin efecto.
+            // Con el mismo instante no hay orden que decida, y aplicarlo dejaría ganar al último en llegar.
             if (existing.get${capitalize(ordering.name)}() != null
                     && ${ordering.name} != null
-                    && ${ordering.name}.isBefore(existing.get${capitalize(ordering.name)}())) {
+                    && !${ordering.name}.isAfter(existing.get${capitalize(ordering.name)}())) {
                 return;
             }
 `

@@ -187,8 +187,9 @@ test('scaffold: el Projector hace upsert por keyField y no importa Spring', () =
   assert.match(projector, /existing\.applySnapshot\(price, occurredAt\)/);
   assert.match(projector, /TODO \(agente\): añade a ProductSnapshot/);
   assert.match(projector, /public static ProductSnapshot projectionOf\(UUID productId, BigDecimal price, Instant occurredAt\)/);
-  // El payload trae occurredAt: se compara para que un hecho viejo no pise a uno nuevo.
-  assert.match(projector, /isBefore\(existing\.getOccurredAt\(\)\)/);
+  // El payload trae occurredAt: se compara para que un hecho viejo no pise a uno nuevo, y uno del MISMO
+  // instante tampoco (las tres corridas de catalog lo cambiaron a mano: el diseño dice «anterior o igual»).
+  assert.match(projector, /!occurredAt\.isAfter\(existing\.getOccurredAt\(\)\)/);
 });
 
 test('scaffold: sin instante en la entidad, el Projector deja el TODO de ordenación', () => {

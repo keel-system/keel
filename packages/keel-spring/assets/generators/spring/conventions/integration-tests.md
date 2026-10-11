@@ -716,6 +716,14 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    **Y la columna del bloqueo optimista se llama `lock_version`, no `version`.** Una fila
    sembrada sin ella —o con el nombre equivocado— falla al primer `UPDATE` del servicio, y el
    rojo aparece en el escenario, no en la siembra que lo causó.
+
+   **Ni una columna sombra `<campo>_normalized` se rellena con `''`.** Un campo con `compare:
+   ignore-case | ignore-case-accents` lleva al lado su valor plegado, y es ESA columna la que lleva
+   la unicidad y contra la que filtra el servicio. Una siembra genérica que rellena por
+   `information_schema` las columnas obligatorias con cadena vacía choca en la segunda fila con
+   `uk_<tabla>_natural` (la `initializationError` de una clase entera, en las dos corridas de
+   catalog) y, si solo hay una, deja una fila que ningún filtro encuentra. El valor es el del campo
+   plegado: en minúsculas, y sin marcas diacríticas si el `compare` las ignora.
 5. Por `devtools("cli", "arg", …)` en crudo, solo para lo que ninguna de las vías anteriores
    alcanza. Los argumentos van como **lista**, nunca como una cadena concatenada: es un
    `<runtime> exec` directo, sin shell. Si hace falta un pipe o una redirección, la variante

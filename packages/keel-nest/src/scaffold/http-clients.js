@@ -1386,10 +1386,12 @@ export const OutboundIdempotency = {
 
   /**
    * Clave por CORRELACIÓN: el proveedor deduplica por intención de negocio, no por contenido. Sin correlación
-   * abierta (un barrido, un arranque) cae a la firma del contenido: lo único estable que queda.
+   * abierta (un barrido, un arranque) cae a la firma del contenido: lo único estable que queda. La petición entra
+   * también en la clave: una ejecución puede hacer varias llamadas distintas al mismo método, y con solo la
+   * correlación el proveedor absorbería todas menos la primera (corrida asset-vault de keel-spring, 2026-10-11).
    */
   correlated(call: string, payload: unknown): string {
-    ${correlated ? 'const correlationId = CorrelationContext.get();\n    return correlationId === null ? OutboundIdempotency.fromPayload(call, payload) : CommandSignature.of([call, correlationId]);' : '// Este servicio no abre correlación (ni API ni mensajería): solo queda la firma del contenido.\n    return OutboundIdempotency.fromPayload(call, payload);'}
+    ${correlated ? 'const correlationId = CorrelationContext.get();\n    return correlationId === null ? OutboundIdempotency.fromPayload(call, payload) : CommandSignature.of([call, correlationId, payload]);' : '// Este servicio no abre correlación (ni API ni mensajería): solo queda la firma del contenido.\n    return OutboundIdempotency.fromPayload(call, payload);'}
   }
 };`
   );

@@ -645,6 +645,9 @@ export function relievingOperations(model) {
  *     por elemento en un listado; leer la copia elemento a elemento lo reintroduce contra la base. Aquí el enlace
  *     lo declara el diseño, así que no hace falta tipo con nombre. Lo escribieron a mano las corridas de catalog
  *     en keel-nest y en keel-spring (`findBySkus`, `findAllBySkuIn`).
+ *   - `scope-claim`: la clave natural es el `over` del alcance por recurso (`scoping.over: Owner.code`). El claim
+ *     del token ENUMERA los valores que el llamante puede ver, así que el listado acotado empieza por resolver esa
+ *     lista a sus raíces. Lo escribieron a mano las tres corridas de asset-vault (`findAllByCodeIn`).
  *
  * Devuelve el motivo, o null. Solo cuando el último componente de la clave natural es el que se busca en lote;
  * en la réplica, cuando su clave es solo el `keyField`.
@@ -655,6 +658,7 @@ export function naturalKeyBatchReason(model, entity) {
   const field = entity.fields.find((f) => f.name === key[key.length - 1]);
   if (!field || field.list) return null;
   if (entity.replicaOf && key.length === 1 && replicaReadInListing(model, entity)) return 'replica-listing';
+  if (key.length === 1 && model.security?.scoping?.over === `${entity.name}.${key[0]}`) return 'scope-claim';
   if (!field.typeName || isBaseType(field.typeName)) return null;
   const listed = (model.services ?? [])
     .flatMap((service) => service.operations ?? [])

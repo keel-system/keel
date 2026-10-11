@@ -385,6 +385,11 @@ public final class OutboundIdempotency {
      * contenido — dos peticiones idénticas de dos ejecuciones distintas sí deben
      * ejecutarse las dos.
      *
+     * <p>La petición entra también en la clave: una ejecución puede hacer varias llamadas
+     * distintas al mismo método (un barrido que revalida varios archivos en el mismo tick),
+     * y con solo la correlación todas compartirían clave y el proveedor absorbería todas
+     * menos la primera. El reintento repite petición y correlación, así que repite clave.
+     *
      * <p>Sin correlación abierta (un hilo de fondo, un arranque) se cae a la firma del
      * contenido: es lo único estable que queda, y una clave aleatoria sería peor que
      * no mandar ninguna.
@@ -393,7 +398,7 @@ public final class OutboundIdempotency {
         String correlationId = CorrelationContext.get();
         return correlationId == null
                 ? fromPayload(call, payload)
-                : CommandSignature.of(Arrays.asList(call, correlationId));
+                : CommandSignature.of(Arrays.asList(call, correlationId, payload));
     }
 }`;
 

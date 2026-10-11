@@ -19,6 +19,7 @@ import {
   renderPort,
   naturalKeyFinder,
   occupantFinders,
+  uniqueFieldFinders,
   credentialFinders,
   naturalKeyBatchFinder,
   collectInternalEntities,
@@ -71,6 +72,11 @@ function renderMongoRepository(model, entity) {
     imports.add('java.util.Optional');
     for (const param of occupant.params) for (const name of param.imports) imports.add(name);
     methods += `\n\n    Optional<${entity.name}Document> ${occupant.store.name}(${occupant.store.signature});`;
+  }
+  for (const unique of uniqueFieldFinders(model, entity)) {
+    imports.add('java.util.Optional');
+    for (const param of unique.params) for (const name of param.imports) imports.add(name);
+    methods += `\n\n    Optional<${entity.name}Document> ${unique.store.name}(${unique.store.signature});`;
   }
   for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
@@ -144,6 +150,14 @@ function renderAdapter(model, entity, paginated, batchLookup) {
     methods.push(`    @Override
     public Optional<${entity.name}> ${occupant.name}(${occupant.signature}) {
         return ${repoField}.${occupant.store.name}(${occupant.store.args}).map(this::toDomain);
+    }`);
+  }
+  for (const unique of uniqueFieldFinders(model, entity)) {
+    for (const param of unique.params) for (const name of param.imports) imports.add(name);
+    if (unique.store.folds) imports.add(textFoldImport(model));
+    methods.push(`    @Override
+    public Optional<${entity.name}> ${unique.name}(${unique.signature}) {
+        return ${repoField}.${unique.store.name}(${unique.store.args}).map(this::toDomain);
     }`);
   }
   for (const credentialAdapter of credentialFinders(model, entity)) {

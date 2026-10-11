@@ -1004,7 +1004,9 @@ function brokerYaml(model, profile) {
     '      # particiones queda asignado a cero y en reposo. En local y develop hay una sola',
     '      # partición por decisión, así que subirlo ahí no da throughput y sí rebalanceos.',
     `      concurrency: ${envWithDefault(profile, 'KAFKA_LISTENER_CONCURRENCY', 1)}`,
-    '    # TODO (agente): topics y deserialización de consumo según messaging.keel.yaml'
+    '    # Consumo: el listener recibe el cuerpo como String (el StringDeserializer de arriba) y lo lee con el',
+    '    # ObjectMapper de la app; los topics de cada suscripción salen de messaging.subscriptions.* (messaging.yaml).',
+    '    # Era un TODO que no dejaba nada por hacer, y las corridas de Kafka lo reescribían en los cuatro perfiles.'
   ].join('\n') + '\n';
 }
 

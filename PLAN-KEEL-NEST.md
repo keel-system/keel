@@ -1864,8 +1864,22 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     - el puerto de caché en keel-spring: `OperationCache` + `CachedOperations` + `RedisOperationCache` (la respuesta
       como el JSON del contrato, como hicieron los dos agentes) y la invalidación en el `UseCaseMediator`, con los
       mismos nombres de caché y la misma tabla de invalidaciones que keel-nest (`cache-port-parity.test.js`).
+  - **Corridas de control de keel-spring (2026-10-11 v2):** `asset-vault` v1.1.2 **32/32** con la huella de 25 a
+    **18** y ningún archivo del generador; `catalog` **56/56** escenarios del diseño (66 en el informe: FL-CBR-001
+    partido en tres y 8 `-V*` de la checklist) con la huella de 32 a **28**. Todas las piezas cerradas arriba se
+    usaron. Registro en `docs/corridas/2026-10-11-{asset-vault,catalog}-spring-v2.md`. Arreglos, en los dos
+    generadores: la clave saliente `keyFrom: correlation` incluye la petición (un tick del barrido daba la misma clave
+    a todos los archivos); el finder de un campo `unique` suelto (`uniqueFieldFinders`); el lote de la clave natural
+    que es el `over` del alcance (motivo `scope-claim`); el proyector de réplica no aplica un hecho del mismo
+    instante; la siembra de una sombra en la convención de pruebas. En keel-spring, el TODO de `kafka.yaml`.
   - **Lo que queda abierto:**
-    - la matriz de catalog: 65 en spring, 56 en nest, 64 bloques `FL-`; sin comprobar, porque se borró el JUnit.
+    - la sombra plegada cuando solo el FILTRO declara `compare` (`listProducts.name`): keel-spring la deja al agente,
+      que escribe la columna; keel-nest pliega en la consulta (`translate(lower(…))`). Dos funciones de plegado.
+      Emitirla separa de `fold` la unicidad y el orden, y cambia el esquema;
+    - `tokenWithScope(rol, valores…)` en los dos arneses: un usuario no exento con otro valor del claim del alcance
+      (`test-realm-claim-values`, tres corridas);
+    - un contrato formal (`openapi.yaml`) para que las pruebas asierten en STRICT (`response-shape-without-contract`,
+      las dos v2).
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

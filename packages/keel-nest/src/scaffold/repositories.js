@@ -14,7 +14,7 @@
 //     guardar el grafo; cero filas es otra escritura que ganó (o un borrado), y sale como conflicto;
 //   · la AUDITORÍA: `created_*`/`updated_*` los estampa el adaptador, como el listener de Spring Data.
 
-import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, foldedShadow, naturalKeyBatchReason } from 'keel-core/gen';
+import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, foldedShadow, naturalKeyBatchReason, uniqueFields } from 'keel-core/gen';
 import { pluralize } from 'keel-core/gen/naming';
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
@@ -99,10 +99,28 @@ export function occupantFinders(model, entity) {
 }
 
 /**
+ * El finder de cada campo `unique` suelto de la raíz (`findByChecksum`): para comprobar la unicidad ANTES de un efecto
+ * que la transacción no deshace. Lo escribieron a mano las tres corridas de asset-vault; mismo criterio que keel-spring
+ * (`uniqueFieldFinders`): los campos con `uk_` propio de keel-core, sin repetir la clave natural ni un ocupante.
+ */
+export function uniqueFieldFinders(model, entity) {
+  const seen = new Set([naturalKeyFinder(model, entity)?.name, ...occupantFinders(model, entity).map((f) => f.name)].filter(Boolean));
+  const finders = [];
+  for (const field of uniqueFields(entity)) {
+    if (field.list) continue;
+    const finder = keyFinder(model, entity, [field.name]);
+    if (!finder || seen.has(finder.name)) continue;
+    seen.add(finder.name);
+    finders.push({ ...finder, field: field.name });
+  }
+  return finders;
+}
+
+/**
  * El finder de la clave natural POR LOTE (`findAllBy<Clave>In`): una consulta para una colección de claves en vez
  * de una por elemento. Cuándo hace falta lo decide keel-core (`naturalKeyBatchReason`), igual que para keel-spring:
- * una lista del mismo value type en la entrada, o la copia de una réplica que lee una operación de listado (las
- * corridas de catalog lo escribieron a mano en los dos generadores).
+ * una lista del mismo value type en la entrada, la copia de una réplica que lee una operación de listado (las
+ * corridas de catalog lo escribieron a mano en los dos generadores) o el `over` del alcance por recurso.
  *
  * Más estrecho que el de keel-spring a propósito: una clave de UN campo escalar, sin pliegue y sin transformador
  * de columna. Con transformador (el uuid binario de MySQL), el `In(...)` de TypeORM podría no transformar sus
@@ -268,7 +286,9 @@ function renderPort(model, entity) {
    * El mismo finder para una colección de ${batch.param.name}: UNA consulta en vez de una por elemento. ${
         batch.reason === 'replica-listing'
           ? 'Es la copia de una réplica y la lee una operación de listado: leerla en un bucle son N consultas por página.'
-          : 'Alguna operación recibe esos valores en una lista acotada de su entrada.'
+          : batch.reason === 'scope-claim'
+            ? 'Es el recurso sobre el que se acota el acceso (scoping.over): el claim del token enumera los valores que el llamante puede ver.'
+            : 'Alguna operación recibe esos valores en una lista acotada de su entrada.'
       }
    * El orden no está garantizado y lo que no exista no aparece: quien llama indexa lo que le vuelve.
    */
@@ -285,6 +305,16 @@ function renderPort(model, entity) {
    */
 ` +
         `  abstract ${occupant.name}(${occupant.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null>;`
+    );
+  }
+  for (const unique of uniqueFieldFinders(model, entity)) {
+    for (const param of unique.params) imports.push(...param.imports);
+    methods.push(
+      `  /**
+   * El ${entity.name} que ya tiene este ${unique.field}, que es único: para comprobarlo antes de un efecto que la
+   * transacción no deshace. La carrera la sigue arbitrando la constraint.
+   */
+` + `  abstract ${unique.name}(${unique.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null>;`
     );
   }
   for (const credential of credentialFinders(model, entity)) {
@@ -398,7 +428,7 @@ function renderAdapter(model, entity) {
   }`);
   }
 
-  for (const occupant of occupantFinders(model, entity)) {
+  for (const occupant of [...occupantFinders(model, entity), ...uniqueFieldFinders(model, entity)]) {
     for (const param of occupant.params) imports.push(...param.imports, ...(param.fold ? [{ symbol: 'TextFold', from: TEXT_FOLD_TS }] : []));
     const where = occupant.params.flatMap((param) => param.where.map(([prop, expr]) => (prop === expr ? prop : `${prop}: ${expr}`)));
     methods.push(`  async ${occupant.name}(${occupant.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {

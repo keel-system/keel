@@ -22,7 +22,7 @@ import { DIRS, classPath, entityDir, tsModule, tsString } from './render.js';
 import { domainMembers } from './entities.js';
 import { TEXT_FOLD_TS } from './persistence-entities.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
-import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, naturalKeyBatchFinder, occupantFinders, constructorOf, emitsDomainEvents, credentialFinders } from './repositories.js';
+import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, naturalKeyBatchFinder, occupantFinders, uniqueFieldFinders, constructorOf, emitsDomainEvents, credentialFinders } from './repositories.js';
 import { documentGuardMethods, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 import { AUDIT_ACTOR_TS } from './audit-actor.js';
 
@@ -421,7 +421,7 @@ export function renderDocumentAdapter(model, entity) {
     return found == null ? null : toDomain${entity.name}(found);
   }`);
 
-  const finders = [naturalKeyFinder(model, entity), ...occupantFinders(model, entity)].filter(Boolean);
+  const finders = [naturalKeyFinder(model, entity), ...occupantFinders(model, entity), ...uniqueFieldFinders(model, entity)].filter(Boolean);
   for (const finder of finders) {
     for (const param of finder.params) imports.push(...param.imports);
     // El finder de un índice condicionado recibe también el estado (es un parámetro más del puerto).

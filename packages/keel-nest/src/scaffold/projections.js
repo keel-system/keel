@@ -75,8 +75,9 @@ function renderProjector(model, dependency, need, entity) {
   const updateArgs = fields.map((field) => `snapshot.${field.name}`).join(', ');
   const guard = ordering
     ? `
-      // Reentrega tardía: un hecho más viejo no puede pisar a uno más nuevo.
-      if (existing.${ordering.name} != null && snapshot.${ordering.name} != null && snapshot.${ordering.name} < existing.${ordering.name}) return;`
+      // Reentrega o hecho viejo: uno anterior O IGUAL al guardado se confirma sin efecto. Con el mismo instante no hay
+      // orden que decida, y aplicarlo dejaría ganar al último en llegar.
+      if (existing.${ordering.name} != null && snapshot.${ordering.name} != null && snapshot.${ordering.name} <= existing.${ordering.name}) return;`
     : `
       // TODO (agente): el payload no trae ningún instante del hecho, así que dos entregas desordenadas dejarían el valor
       // viejo. Si el proveedor expone uno, añádelo al payload en el diseño y compáralo aquí.`;
