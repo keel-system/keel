@@ -27,6 +27,7 @@
 
 import { outboxNames, usesOutbox } from '../scaffold/outbox.js';
 import { usesTelemetry } from '../scaffold/telemetry.js';
+import { mediatorCacheInvalidations } from '../scaffold/cache.js';
 import { processedEventNames, usesIdempotency } from '../scaffold/idempotency.js';
 import {
   declaresIdempotency,
@@ -519,6 +520,9 @@ const TRANSACTION_TIMEOUT_S = 2;
 function relationalMediatorClass(model, { datasource, packages }) {
   const { entity: entityClass, repository: repoClass } = outboxNames(model);
   const telemetry = usesTelemetry(model);
+  // Con caché, el mediator recibe además el puerto que la invalida; aquí no lo usa nadie (el mensaje de la
+  // sonda no invalida ninguna caché), así que basta null.
+  const cache = mediatorCacheInvalidations(model).length > 0;
   const properties = [
     `"spring.datasource.url=${datasource.url}"`,
     `"spring.datasource.username=${datasource.username}"`,
@@ -589,7 +593,7 @@ class ${CLASS_MEDIATOR} {
         };
         UseCaseContainer contenedor = new UseCaseContainer();
         contenedor.register(Cruce.class, handler);
-        UseCaseMediator mediator = new UseCaseMediator(contenedor, gestor${telemetry ? ', ObservationRegistry.NOOP' : ''});
+        UseCaseMediator mediator = new UseCaseMediator(contenedor, gestor${telemetry ? ', ObservationRegistry.NOOP' : ''}${cache ? ', null' : ''});
 
         ExecutorService hilos = Executors.newFixedThreadPool(2);
         try {

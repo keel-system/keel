@@ -10,6 +10,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { orphanInternalOperations, dispatchingOperations } from 'keel-core/gen';
+import { mediatorCacheInvalidations, OPERATION_CACHE_PKG, CACHED_OPERATIONS_PKG } from './cache.js';
 import { usesTelemetry, OBSERVATIONS } from './telemetry.js';
 import { ATTRIBUTES } from '../lib/telemetry-probes.js';
 
@@ -258,6 +259,55 @@ function observation() {
 // entró (ApiExceptionHandler en HTTP, el contenedor del listener en un mensaje, el scheduler en un
 // barrido). Si la imprimiera también aquí, cada fallo saldría con dos pilas idénticas —la prueba
 // de humo lo vio—. El mediator deja la línea de frontera: qué operación, qué resultado, cuánto.
+/**
+ * El vaciado de las cachés de lectura al terminar bien cada caso de uso que las invalida: envuelve la acción de
+ * callUseCase y añade la tabla mensaje → cachés y el método que la aplica.
+ */
+function withCacheInvalidation(helpers, invalidations) {
+  const original = `    private <T> T callUseCase(Object message, Supplier<T> action) {
+        String operation = message.getClass().getSimpleName();`;
+  if (!helpers.includes(original)) {
+    throw new Error('mediator.js: callUseCase cambió de forma; la invalidación de la caché no sabe dónde engancharse');
+  }
+  const rows = invalidations
+    .map((entry) => {
+      const why = entry.caches.map((cache) => `${cache.constant} por ${cache.events.join(', ')}`).join('; ');
+      return `            // ${entry.operation}: ${why}.
+            Map.entry(${entry.messageClass}.class, List.of(${entry.caches.map((cache) => `CachedOperations.${cache.constant}`).join(', ')}))`;
+    })
+    .join(',\n');
+  return (
+    helpers.replace(
+      original,
+      `    private <T> T callUseCase(Object message, Supplier<T> useCase) {
+        Supplier<T> action = () -> {
+            T result = useCase.get();
+            invalidateCaches(message);
+            return result;
+        };
+        String operation = message.getClass().getSimpleName();`
+    ) +
+    `
+
+    /**
+     * Qué cachés vacía cada operación al terminar bien: la que EMITE un evento de su invalidatedBy y la que
+     * DISPARA la suscripción a uno de ellos. Sale del diseño (keel-core/gen/cache-plan.js), así que ningún
+     * handler tiene que acordarse. Se vacía la caché ENTERA: la clave es la entrada de la lectura y el evento no
+     * tiene por qué llevarla. Invalida de más, nunca de menos —que es el error que no se ve: datos viejos hasta
+     * el TTL—.
+     */
+    private static final Map<Class<?>, List<String>> CACHE_INVALIDATIONS = Map.ofEntries(
+${rows});
+
+    /** Tras el commit si hay una transacción abierta (lo difiere el puerto); si no, ya. Un store caído no falla. */
+    private void invalidateCaches(Object message) {
+        for (String cache : CACHE_INVALIDATIONS.getOrDefault(message.getClass(), List.of())) {
+            operationCache.clear(cache);
+        }
+    }`
+  );
+}
+
 function useCaseHelpers(telemetry) {
   // El desenlace va en la OBSERVACIÓN y no solo en el log, y no es simetría: sin la etiqueta
   // `keel.outcome` no hay PromQL que separe los fallos del resto, así que la alerta de tasa de
@@ -488,10 +538,19 @@ function renderMediator(model) {
   const telemetry = usesTelemetry(model);
   const obs = observation();
   const { call, run } = obs;
-  const registryField = telemetry ? '\n    private final ObservationRegistry observationRegistry;' : '';
-  const registryParam = telemetry ? ', ObservationRegistry observationRegistry' : '';
-  const registryAssign = telemetry ? '\n        this.observationRegistry = observationRegistry;' : '';
-  const helpers = useCaseHelpers(telemetry);
+  // La invalidación de la caché de lectura (keel-core/gen/cache-plan.js): tras cada caso de uso que emite o
+  // consume un evento de un invalidatedBy, se vacía la caché entera. El puerto la difiere al commit si hay una
+  // transacción abierta (un despacho anidado); en el de primer nivel, cuando esto corre ya confirmó.
+  const invalidations = mediatorCacheInvalidations(model);
+  const cache = invalidations.length > 0;
+  const registryField =
+    (telemetry ? '\n    private final ObservationRegistry observationRegistry;' : '') +
+    (cache ? '\n    private final OperationCache operationCache;' : '');
+  const registryParam = (telemetry ? ', ObservationRegistry observationRegistry' : '') + (cache ? ', OperationCache operationCache' : '');
+  const registryAssign =
+    (telemetry ? '\n        this.observationRegistry = observationRegistry;' : '') +
+    (cache ? '\n        this.operationCache = operationCache;' : '');
+  const helpers = cache ? withCacheInvalidation(useCaseHelpers(telemetry), invalidations) : useCaseHelpers(telemetry);
 
   let members;
   let dispatchers;
@@ -582,6 +641,15 @@ ${dispatchers}
   }
   if (telemetry) {
     imports.push('io.micrometer.observation.Observation', 'io.micrometer.observation.ObservationRegistry');
+  }
+  if (cache) {
+    imports.push(
+      `${subPackage(model, OPERATION_CACHE_PKG)}.OperationCache`,
+      `${subPackage(model, CACHED_OPERATIONS_PKG)}.CachedOperations`,
+      'java.util.List',
+      'java.util.Map',
+      ...invalidations.map((entry) => entry.messageImport)
+    );
   }
   if (retriesConflicts) {
     imports.push(

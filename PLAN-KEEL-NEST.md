@@ -1861,8 +1861,10 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     - DSL 2.21: `scoping.exemptClients` (el cliente máquina exento del alcance, reconocido en los dos servidores por
       `azp`/`client_id`) y `operations.<op>.dispatches` (el handler que despacha recibe el `CommandDispatcher` y su
       nota; la decisión, en `keel-core/gen/dispatch.js`). asset-vault v1.1.2 los declara.
+    - el puerto de caché en keel-spring: `OperationCache` + `CachedOperations` + `RedisOperationCache` (la respuesta
+      como el JSON del contrato, como hicieron los dos agentes) y la invalidación en el `UseCaseMediator`, con los
+      mismos nombres de caché y la misma tabla de invalidaciones que keel-nest (`cache-port-parity.test.js`).
   - **Lo que queda abierto:**
-    - el puerto de caché: keel-nest lo emite y en keel-spring lo escribe el agente, con otro nombre cada vez;
     - la matriz de catalog: 65 en spring, 56 en nest, 64 bloques `FL-`; sin comprobar, porque se borró el JUnit.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue

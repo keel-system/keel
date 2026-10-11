@@ -5,54 +5,47 @@ Complementa «Qué implementa el agente» del SKILL.md. Todo vive en
 
 ## Caché de lectura (`cache` en queries del diseño)
 
-**`CacheConfig` ya existe**: build lo genera en
-`infrastructure/configurations/cache/` con `@EnableCaching`, el `RedisCacheManager`,
-una constante `public static final String <OPERACION>_CACHE` por operación con
-`cache` en el diseño, su TTL (`cache.ttlSeconds`), `disableCachingNullValues()`,
-el `CacheErrorHandler` que degrada a miss y el `ObjectMapper` de la caché con
-`JavaTimeModule` registrado. **No lo reescribas ni añadas otro `CacheManager`**:
-tu trabajo es anotar los adaptadores usando esas constantes.
+**Todo el mecanismo ya existe y es de build**: `CacheConfig` (el `RedisCacheManager` con el TTL de cada caché),
+el puerto `OperationCache` (`application/port/out`), `CachedOperations` (`application/support`: la constante de
+cada caché y su `<operacion>Key(mensaje)`), el adaptador `RedisOperationCache` y la invalidación en el
+`UseCaseMediator`. El handler de la operación con `cache` ya recibe el puerto inyectado. **No escribas otro
+puerto, otro adaptador ni otro `CacheManager`, y no uses `@Cacheable`/`@CacheEvict`.**
+
+Por qué no `@Cacheable`, que fue la receta anterior de esta skill:
+
+- **No expresa lo que el diseño pide.** Una respuesta DEGRADADA (un proveedor no contestó) se sirve y no se
+  guarda, y el alcance del llamante se comprueba también sobre el acierto. Con `sync = true` no hay `unless`
+  —Spring lo rechaza en runtime con un `500` en cada lectura cacheada— y la anotación va en un método, no
+  alrededor de la parte del handler que produce la respuesta.
+- **Cacheaba el agregado, no la respuesta.** El serializador tipado de la caché tiene que reconstruir el
+  agregado, sus colecciones inmutables y sus instantes; un fallo ahí no se ve —el `CacheErrorHandler` lo degrada
+  a miss— y la caché queda sin cachear nada.
+- **Dos corridas lo esquivaron igual y con nombres distintos** (`GetAssetCache`, `ResponseCache`): guardando la
+  respuesta como el JSON del contrato. Es lo que hace ahora `RedisOperationCache`, igual que keel-nest.
+
+Lo que hace el adaptador y no tienes que repetir: guarda la respuesta con el `ObjectMapper` de la aplicación
+(lo que vuelve es byte a byte lo que habría servido el origen), no guarda nulos ni los errores de la carga, carga
+UNA vez por entrada con varias peticiones a la vez, y un store caído o una entrada ilegible van al origen con un
+WARN.
+
+Tu parte, en el handler:
 
 ```java
-@Cacheable(cacheNames = CacheConfig.GET_PRODUCT_BY_SLUG_CACHE, key = "#slug", sync = true)
-public Optional<Product> findBySlug(String slug) { … }
+GetAssetResponseDto card = operationCache.getOrLoad(
+        CachedOperations.GET_ASSET_CACHE,
+        CachedOperations.getAssetKey(query),
+        () -> load(query),
+        loaded -> loaded.thumbnail() != null);   // la degradada no se guarda
+if (!callerScope.covers(card.ownerCode())) {      // el alcance, sobre CADA respuesta
+    throw new AssetOutOfScopeError(/* … */);
+}
 ```
 
-El serializador es JSON con soporte `java.time`: **cualquier configuración
-adicional que serialice valores debe registrar `JavaTimeModule` igual**. Un
-`ObjectMapper` por defecto revienta con `Instant`/`LocalDate` — y casi todo
-agregado del DSL trae timestamps de auditoría, así que el fallo aparece en la
-primera lectura cacheada, en runtime, contra el servidor real.
-
-- `@Cacheable` va en el **adaptador** del puerto (o un decorator del puerto),
-  nunca en el handler: la caché es infraestructura.
-- Clave = `keyFields` del diseño en el orden declarado
-  (`key = "#id"` o SpEL compuesto `"#a + ':' + #b"`).
-- **`sync = true`** en `@Cacheable`: ante expiración con concurrencia, un solo
-  hilo repuebla y el resto espera (evita la estampida contra la BD).
-- **Nunca `unless` junto a `sync = true`**: Spring rechaza la combinación en
-  tiempo de ejecución con
-  `IllegalStateException: A sync=true operation does not support the unless attribute`,
-  así que la primera lectura cacheada devuelve `500`. No compila-y-falla: falla
-  en runtime, contra el servidor real.
-- **Un solo caché por método con `sync = true`**: la restricción no es evidente
-  por el nombre de la anotación, pero Spring solo admite un `cacheNames` cuando
-  `sync = true`, y tampoco admite dos `@Cacheable(sync = true)` combinados en un
-  `@Caching`. Falla con
-  `IllegalStateException: @Cacheable(sync=true) only allows a single cache on ...`
-  en **cada** invocación, no al arrancar. Si dos operaciones del diseño declaran
-  `cache` con la misma clave (p. ej. `getProduct` y `lookupProduct`, ambas por
-  `productId`), **no** las cachees en un método con dos `cacheNames`: usa un
-  método por caché, o comparte una sola entrada si el valor devuelto es idéntico.
-- Para no cachear vacíos, **`disableCachingNullValues()`** en la
-  `RedisCacheConfiguration` base (ya está en el `CacheConfig` que genera build):
-  es compatible con `sync = true` y cubre el caso sin `unless`. Si lo que quieres
-  descartar es un `Optional.empty()` o una lista vacía, devuelve `null` desde el
-  adaptador y deja que esa opción decida.
-- Invalidación: `@CacheEvict` en los adaptadores de los commands que mutan la
-  misma entidad — repasa el diseño: cada command que toca la entidad cacheada
-  debe evictar, o servirás datos obsoletos más allá del TTL.
-- No caches nulls ni errores; no caches resultados de commands.
+- La clave sale de `CachedOperations.<operacion>Key(...)`: los `keyFields` del diseño en su orden, separados por
+  `:`. No la compongas a mano.
+- Desalojar a mano (`evict`, `clear`) solo hace falta para algo que el diseño no declara en `invalidatedBy`; los
+  dos lo hacen tras el commit si hay una transacción abierta.
+- No caches resultados de commands.
 
 ## Tolerancia a caída de Redis
 
@@ -94,7 +87,7 @@ inspecciona lo tuyo y solo lo tuyo).
 
 ## Estampida y TTLs
 
-- `sync = true` cubre la estampida por expiración puntual.
+- La carga única por entrada de `RedisOperationCache` cubre la estampida por expiración puntual (en el proceso).
 - Si muchas claves se crean a la vez (p. ej. tras un reset de datos), añade
   jitter al TTL (±10%) al poblarlas por código para que no expiren en masa.
 
@@ -109,13 +102,10 @@ flujos devuelve la respuesta del flujo anterior mientras dure el TTL declarado
 
 ## Checklist
 
-- [ ] `CacheConfig` generado por build usado tal cual (no hay un segundo `CacheManager`).
-- [ ] Toda config que serialice valores registra `JavaTimeModule`.
-- [ ] `@Cacheable(sync = true)` en adaptador/decorator, nunca en el handler.
-- [ ] Ningún `@Cacheable` combina `unless` con `sync = true` (los vacíos los
-      descarta `disableCachingNullValues()`).
-- [ ] Ningún `@Cacheable(sync = true)` declara más de un `cacheNames`, y ningún
-      `@Caching` combina dos entradas con `sync = true`.
-- [ ] `@CacheEvict` en todos los commands que mutan la entidad cacheada.
-- [ ] Claves de idempotencia con `SET NX EX` y TTL del diseño.
-- [ ] Toda clave con TTL; prefijo `<servicio>:` en todas.
+- [ ] `CacheConfig`, `OperationCache`, `CachedOperations` y `RedisOperationCache` generados por build, usados tal
+      cual (ni un segundo `CacheManager`, ni otro puerto, ni `@Cacheable`/`@CacheEvict`).
+- [ ] La consulta va en el handler con `operationCache.getOrLoad(...)`, y la clave sale de `CachedOperations`.
+- [ ] Lo que depende de quién llama se comprueba FUERA de la carga, sobre cada respuesta.
+- [ ] La respuesta degradada no se guarda (el `Predicate` de `getOrLoad`).
+- [ ] Ningún desalojo propio por los eventos de `invalidatedBy`: los aplica el `UseCaseMediator`.
+- [ ] La idempotencia NO va en Redis (la resuelve `IdempotencyStore`).

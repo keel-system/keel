@@ -85,3 +85,22 @@ export function unbackedInvalidations(model) {
     cache.invalidatedBy.filter((event) => !backed.has(`${cache.cacheName}|${event}`)).map((event) => ({ operation: cache.operation, event }))
   );
 }
+
+/**
+ * La nota del handler de una operación con `cache`, la misma en los dos generadores. `call` es cómo se escribe la
+ * consulta en el lenguaje del generador, con `{cache}` por sustituir por la constante de la caché.
+ */
+export function cacheNote(model, operation, { call }) {
+  const cache = cachedOperations(model).find((entry) => entry.operation === operation.name);
+  if (!cache) return null;
+  return (
+    `Caché de lectura (use-cases.${operation.name}.cache, TTL ${cache.ttlSeconds} s): envuelve con ` +
+    `${call.replaceAll('{cache}', cache.constant)} la parte que produce la respuesta; el puerto ya está inyectado. ` +
+    'Lo que depende de QUIÉN llama (el alcance, la propiedad) se comprueba FUERA de la carga, sobre cada respuesta, ' +
+    'también la que sale de la caché: la clave es la entrada de la operación, no el llamante. Lo que no debe servirse ' +
+    'durante el TTL —una respuesta degradada porque un proveedor no contestó— se sirve y no se guarda (cacheable). ' +
+    (cache.invalidatedBy.length > 0
+      ? `No escribas desalojos por ${cache.invalidatedBy.join(', ')}: el UseCaseMediator ya vacía la caché al confirmar.`
+      : 'Ningún evento la invalida: solo caduca por su TTL.')
+  );
+}

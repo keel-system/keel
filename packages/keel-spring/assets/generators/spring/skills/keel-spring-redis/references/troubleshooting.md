@@ -22,10 +22,11 @@ el generado.
 
 ## La caché sirve datos obsoletos
 
-Falta un `@CacheEvict` en algún command que muta la entidad. Repasa el diseño:
-lista los commands que tocan la entidad cacheada y comprueba que cada uno
-evicta. Verifícalo con el escenario: mutación → lectura debe devolver lo nuevo
-aunque el TTL no haya vencido.
+La invalidación la aplica el `UseCaseMediator` con su tabla `CACHE_INVALIDATIONS`, que sale de
+`invalidatedBy` + `emits` + las suscripciones del diseño. Si un command que cambia lo cacheado no está en ella,
+el command no emite ni consume ninguno de los eventos de `invalidatedBy`: es un hueco del diseño (añade el evento
+a `invalidatedBy` o a lo que emite el command), no un desalojo que escribir a mano. Verifícalo con el escenario:
+mutación → lectura debe devolver lo nuevo aunque el TTL no haya vencido.
 
 ## Claves sin TTL (`TTL <clave>` devuelve -1)
 
@@ -34,18 +35,12 @@ Alguien escribió con `opsForValue().set(k, v)` sin duración, o el
 servicio debe tener TTL: una clave sin TTL es una fuga de memoria. Encuéntralas:
 `redis-cli -h redis --scan --pattern '<servicio>:*' | while read k; do [ "$(redis-cli -h redis ttl "$k")" = "-1" ] && echo "$k"; done`.
 
-## `500` en toda lectura cacheada: `A sync=true operation does not support the unless attribute`
+## La caché no guarda nada (cada lectura va al origen)
 
-`IllegalStateException` lanzada por Spring Cache al invocar el método: el
-`@Cacheable` combina `sync = true` con `unless`, y son incompatibles. No hay
-error de compilación — solo se ve al llamar al endpoint. Quita el `unless`: los
-vacíos ya los descarta `disableCachingNullValues()` en la
-`RedisCacheConfiguration` base. Ver `references/implementation.md`.
-
-## El primer acceso tras expirar dispara N queries a la BD
-
-Estampida: falta `sync = true` en el `@Cacheable` (o el equivalente con lock
-si usas `RedisTemplate` directo). Ver `references/implementation.md`.
+`RedisOperationCache` degrada a miss cualquier error del store o de la lectura del JSON, con un WARN
+`Caché <nombre> no disponible al leer/escribir`. Búscalo en el log: un tipo de respuesta que no se puede leer
+con el `ObjectMapper` de la aplicación sale ahí, no como error de la petición. Y comprueba que el `Predicate`
+de `getOrLoad` no rechaza la respuesta normal.
 
 ## `RedisCommandTimeoutException` / handlers lentos con Redis degradado
 

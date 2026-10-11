@@ -21,6 +21,7 @@ import { domainTypeImport } from './entities.js';
 import { refTargetsOf } from './ref-resolvers.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
 import { claimMechanism } from './claim.js';
+import { cacheNote } from 'keel-core/gen/cache-plan';
 import { naturalKeyBatchFinder } from './repositories.js';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 import { callerResolution } from './security.js';
@@ -433,6 +434,10 @@ function renderHandler(model, service, operation) {
   // El despacho de otro caso de uso (use-cases.dispatches, 2.21), por el mismo criterio: el diseño
   // dice que esta operación ejecuta otra, así que recibe el puerto delante y la nota de cómo.
   if ((operation.dispatches ?? []).length > 0) inject('CommandDispatcher', 'application.port.out');
+  // La caché de lectura, por el mismo criterio: el diseño la atribuye a esta operación, así que recibe el
+  // puerto delante. Sin él, el camino de menor resistencia era escribir otro con otro nombre (las dos
+  // corridas de keel-spring: GetAssetCache y ResponseCache).
+  if (operation.cache) inject('OperationCache', 'application.port.out');
 
   let fields = '';
   let constructor = '';
@@ -470,6 +475,11 @@ function renderHandler(model, service, operation) {
   }
   const dispatch = dispatchNote(model, operation, { call: 'commandDispatcher.{variant}(new {message}(...))' });
   if (dispatch) notes.push(dispatch);
+  const cacheParam = operation.messageKind === 'query' ? 'query' : 'command';
+  const cached = cacheNote(model, operation, {
+    call: `operationCache.getOrLoad(CachedOperations.{cache}, CachedOperations.${operation.name}Key(${cacheParam}), () -> ...)`
+  });
+  if (cached) notes.push(cached);
   for (const note of textFilterNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules) notes.push(`Regla (en orden): ${text}`);

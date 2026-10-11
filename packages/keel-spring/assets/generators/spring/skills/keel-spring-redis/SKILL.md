@@ -21,28 +21,51 @@ recetas; solo cambia la imagen del compose.
 - `parameters/<perfil>/redis.yaml`: host/puerto por perfil (local apunta al contenedor del compose).
 - `infra/docker-compose.yaml`: `redis:7-alpine` o `valkey:8-alpine` (puerto 6379).
 - `infrastructure/configurations/cache/CacheConfig.java`: `@EnableCaching`, el
-  `RedisCacheManager`, una constante por caché del diseño con su TTL, el
-  serializador JSON con `JavaTimeModule` (obligatorio: los agregados traen
-  timestamps) y el `CacheErrorHandler` que degrada a miss. **Úsalo tal cual.**
+  `RedisCacheManager` con el TTL de cada caché del diseño y el `CacheErrorHandler` que degrada a miss.
+- `application/port/out/OperationCache.java`: el puerto (`getOrLoad`, `evict`, `clear`).
+- `application/support/CachedOperations.java`: una constante `<OPERACION>_CACHE` por caché del diseño y
+  `<operacion>Key(mensaje)`, que compone la clave con los `keyFields` en su orden.
+- `infrastructure/configurations/cache/RedisOperationCache.java`: el adaptador. Guarda la RESPUESTA de la
+  operación como el JSON del contrato (el `ObjectMapper` de la aplicación), la lee con su tipo, no guarda nulos,
+  carga una sola vez por entrada y degrada a miss si el store no responde.
+- **La invalidación**: el `UseCaseMediator` vacía la caché entera tras el commit de cada operación que emite o
+  consume un evento de su `invalidatedBy` (tabla `CACHE_INVALIDATIONS`).
+- El handler de la operación con `cache` ya recibe `OperationCache` inyectado y una nota que te dice la llamada.
 - `infra/reset-db.sh`: además de vaciar la BD, borra las claves `<servicio>:*`.
+
+> **No escribas otro puerto ni otro adaptador de caché, no uses `@Cacheable`/`@CacheEvict` y no escribas
+> desalojos para los eventos de `invalidatedBy`.** Es el mismo contrato que keel-nest: las dos corridas en que
+> el agente lo escribió por su cuenta salieron con dos nombres y dos formas distintas.
 
 ## Qué implementa el agente
 
-La caché se activa porque alguna operación del diseño declara `cache`
-(`ttlSeconds`, `keyFields`).
+Solo DÓNDE se consulta: en el handler de la operación con `cache`, envuelve con `getOrLoad` la parte que produce
+la respuesta.
 
-- **Caché de lectura** (`cache` en queries): anota el adaptador (o un decorator
-  del puerto) con `@Cacheable(cacheNames = CacheConfig.<OPERACION>_CACHE, …)` —
-  la capa application no importa Spring, y el `CacheManager` ya está generado.
-  Clave = `keyFields` en el orden declarado. Invalida (`@CacheEvict`) en los
-  commands que mutan la misma entidad.
+```java
+public GetAssetResponseDto handle(GetAssetQuery query) {
+    GetAssetResponseDto card = operationCache.getOrLoad(
+            CachedOperations.GET_ASSET_CACHE,
+            CachedOperations.getAssetKey(query),
+            () -> load(query),
+            // Lo que el diseño no quiere ver servido durante el TTL se sirve y no se guarda.
+            loaded -> loaded.thumbnail() != null);
+    // Lo que depende de QUIÉN llama se comprueba sobre CADA respuesta, también la que sale de la caché.
+    if (!callerScope.covers(card.ownerCode())) {
+        throw new AssetOutOfScopeError(/* … */);
+    }
+    return card;
+}
+```
 
-  > Dos restricciones de `sync = true` que Spring solo revela **en runtime**, con
-  > un `500` en cada lectura cacheada (no al compilar ni al arrancar):
-  > un `@Cacheable(sync = true)` **no admite `unless`**, y **no admite más de un
-  > caché** — ni varios `cacheNames`, ni dos entradas `sync = true` dentro de un
-  > `@Caching`. Si dos operaciones del diseño cachean por la misma clave, van en
-  > métodos distintos. Detalle y alternativas en `references/implementation.md`.
+Tres reglas, y las tres se pagan con un dato que nadie ve fallar:
+
+- **Lo que depende de quién llama se comprueba FUERA de la carga, sobre cada respuesta.** La clave son los
+  `keyFields`, no el llamante: una comprobación de alcance dentro de `load` se saltaría en cada acierto.
+- **Lo que no debe servirse durante el TTL no se guarda** (el `Predicate` de `getOrLoad`): la respuesta
+  DEGRADADA porque un proveedor no contestó.
+- **Solo en lecturas.** Ni en commands, ni como almacén de idempotencia (abajo).
+
 - **Idempotencia** (`idempotency` en commands): **no es tuya**. La resuelve el
   `IdempotencyStore` que genera build, con una fila transaccional; tú solo lo usas
   en el handler siguiendo `conventions/mapping.md`. No la reimplementes aquí con

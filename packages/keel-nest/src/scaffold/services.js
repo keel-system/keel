@@ -23,6 +23,8 @@ import { PAGED_RESPONSE_TS } from './dtos.js';
 import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyBatchFinder, PAGE_TS } from './repositories.js';
 import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch, dispatchNote } from 'keel-core/gen';
 import { COMMAND_DISPATCHER_TS } from './mediator.js';
+import { OPERATION_CACHE_TS } from './cache.js';
+import { cacheNote } from 'keel-core/gen/cache-plan';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
@@ -289,6 +291,12 @@ function renderHandler(model, operation) {
     imports.push({ symbol: 'CommandDispatcher', from: COMMAND_DISPATCHER_TS });
     dependencies.push({ type: 'CommandDispatcher', name: 'commandDispatcher' });
   }
+  // La caché de lectura, por el mismo criterio: el diseño la atribuye a esta operación, así que recibe el puerto
+  // delante (keel-spring igual).
+  if (operation.cache) {
+    imports.push({ symbol: 'OperationCache', from: OPERATION_CACHE_TS });
+    dependencies.push({ type: 'OperationCache', name: 'operationCache' });
+  }
   if (operation.responseDto?.entity && model.entities.some((e) => e.name === operation.responseDto.entity)) {
     const mapper = `${operation.responseDto.entity}ApplicationMapper`;
     imports.push({ symbol: mapper, from: classPath(DIRS.mappers, mapper) });
@@ -365,6 +373,9 @@ function handlerNotes(model, operation) {
   for (const note of idempotencyNotes(model, operation)) notes.push(note);
   const dispatch = dispatchNote(model, operation, { call: 'await this.commandDispatcher.{variant}(new {message}(...))' });
   if (dispatch) notes.push(dispatch);
+  const cacheParam = operation.messageKind === 'query' ? 'query' : 'command';
+  const cached = cacheNote(model, operation, { call: `await this.operationCache.getOrLoad({cache}, ${cacheParam}, () => ...)` });
+  if (cached) notes.push(cached);
   for (const note of textFilterNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);

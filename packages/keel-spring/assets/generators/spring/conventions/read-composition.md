@@ -140,7 +140,7 @@ respuesta, y es más simple, reutiliza los mappers y se beneficia de la caché.
   réplica de un dato de **otro servicio** (`dependencies.md`). Dentro de la misma base de datos,
   montar una proyección sincronizada por eventos para evitar dos consultas es desproporcionado.
 - **Caché por criterio propio.** La caché la declara el diseño (`cache` en la query) y build
-  genera el `CacheConfig`. No añadas `@Cacheable` porque una lectura te parezca cara. Si la query
+  genera el puerto `OperationCache`. No cachees una lectura porque te parezca cara. Si la query
   con `embed` **sí** declara `cache`, su `invalidatedBy` tiene que cubrir los eventos que mutan
   el agregado embebido — `keel validate` ya lo exige, pero compruébalo: si no, la marca cambia y
   la respuesta sigue mostrando la vieja hasta que expire el TTL.

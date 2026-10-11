@@ -38,8 +38,8 @@ mismo servidor que el de keel-spring del diseño: las cachés se llaman igual en
 
 ## Lo que sí te toca: consultar la caché desde el handler
 
-En el handler de la operación con `cache`, añade `OperationCache` a `static readonly inject` y al constructor, y
-envuelve con `getOrLoad` la parte que produce la respuesta:
+El handler de la operación con `cache` ya recibe `OperationCache` inyectado (en `static readonly inject` y en el
+constructor) y una nota con la llamada. Envuelve con `getOrLoad` la parte que produce la respuesta:
 
 ```ts
 static readonly inject = [AssetRepository, CallerScope, AssetApplicationMapper, OperationCache] as const;
