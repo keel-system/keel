@@ -12,6 +12,7 @@ import { capitalize } from './entities.js';
 import {
   persistedMembers,
   orderingFieldOf,
+  orderingTieBreakerOf,
   backReferenceTo,
   uniqueFields,
   uniqueConstraints,
@@ -340,7 +341,7 @@ function renderJpaEntity(model, entity) {
       const ordering = orderingFieldOf(model, member.relation.entity);
       if (ordering) {
         imports.add('jakarta.persistence.OrderBy');
-        annotation += `\n    @OrderBy("${ordering.name} ASC")`;
+        annotation += `\n    @OrderBy("${ordering.name} ASC, ${orderingTieBreakerOf(model, member.relation.entity)} ASC")`;
       }
       // Y el N+1 que ninguna aserción funcional ve: sin lote, recorrer esta colección
       // desde el mapper cuesta UNA consulta POR ELEMENTO de la página. La respuesta es

@@ -118,6 +118,7 @@ export {
   joinColumnOf,
   parentColumnOf,
   orderingFieldOf,
+  orderingTieBreakerOf,
   backReferenceTo,
   collectInternalEntities,
   collectionBatchSize,

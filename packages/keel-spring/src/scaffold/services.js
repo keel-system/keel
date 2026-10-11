@@ -181,8 +181,10 @@ function renderComponentType(operation, component, fromPath, imports, annotation
 // Las cotas de CADA ELEMENTO de una colección de entrada van dentro del tipo
 // (`List<@Size(max = 40) String>`): las anotaciones del componente son del contenedor y solo
 // dicen cuántos. Sin esto, una etiqueta de 41 caracteres entraba por la API (corrida
-// asset-vault de keel-nest, VAL-UPL-5; keel-spring tenía el mismo hueco).
-function elementAnnotatedType(component, fromPath, imports) {
+// asset-vault de keel-nest, VAL-UPL-5; keel-spring tenía el mismo hueco). Lo usa también el
+// controller para los @RequestParam: el record del comando no lo valida nadie en el camino
+// HTTP (corrida asset-vault de keel-spring).
+export function elementAnnotatedType(component, fromPath, imports) {
   const rules = component.elementInputValidation ?? [];
   if (!component.list || rules.length === 0 || fromPath.has(component.name) || component.resolvedIdentity) return component.javaType;
   const match = /^List<(.+)>$/.exec(component.javaType);

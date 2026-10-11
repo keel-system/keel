@@ -1841,12 +1841,22 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     4. La cota de cada elemento de una lista no se validaba. Ahora la da `elementValidationRules` en `keel-core/gen/constraints.js`: keel-nest la aplica con `checkEach` y keel-spring con `List<@Size(...) T>`.
     5. Una parte binaria obligatoria vacía no daba `FILE_UNREADABLE`.
   - **Lo que pasa a emitir build:** el puerto `AfterCommit`, que los dos agentes escribieron idéntico a mano para las reglas «después de confirmar» (`src/scaffold/after-commit.js`).
-  - **Lo que queda abierto:**
+  - **Cerrado después:** el `reason` sin cota de `MalwareDetected` (asset-vault v1.1.1 lo trunca a 500).
+  - **Las gemelas de keel-spring (2026-10-11):** `asset-vault` v1.1.1 **32/32** (25 de 330 reescritos) y
+    `catalog` **65/65** (32 de 402). Registro en `docs/corridas/2026-10-11-{asset-vault,catalog}-spring.md`.
+    Seis arreglos: la carrera de la clave en Mongo (WriteConflict → `IDEMPOTENCY_KEY_IN_PROGRESS`), el 400 de
+    `HandlerMethodValidationException`, la cota por elemento en el `@RequestParam` del multipart,
+    `server.tomcat.max-part-count`, `auto-offset-reset: earliest` en Kafka y el desempate por id del orden de una
+    colección hija (`orderingTieBreakerOf`, también en keel-nest). Y keel-spring emite ya `AfterCommit`: sus dos
+    corridas lo escribieron a mano, como las de keel-nest.
+  - **Lo que queda abierto** (los tres primeros, repetidos ya en las cuatro corridas o en las dos de un generador):
     - el lector de una réplica en un listado necesita leer en lote;
     - el despacho de una operación desde otra solo cabe en prosa (el `CommandDispatcher`);
-    - la exención de alcance de un cliente máquina (candidato `exemptClients`);
-    - el `reason` sin cota del payload de `MalwareDetected`;
-    - las corridas de keel-spring sobre los dos diseños.
+    - la exención de alcance de un cliente máquina (candidato `exemptClients`), implementada distinto en cada servidor;
+    - el puerto de caché: keel-nest lo emite y en keel-spring lo escribe el agente, con otro nombre cada vez;
+    - un rechazo de negocio en una suscripción no se reintenta en ningún generador, y catalog cuenta con que un
+      `PRODUCT_NOT_FOUND` por la carrera «compensación antes que el hecho» sí se reintente;
+    - la matriz de catalog: 65 en spring, 56 en nest, 64 bloques `FL-`; sin comprobar, porque se borró el JUnit.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

@@ -41,6 +41,7 @@ import * as events from './events.js';
 import * as correlation from './correlation.js';
 import * as telemetry from './telemetry.js';
 import * as concurrency from './concurrency.js';
+import * as afterCommit from './after-commit.js';
 import * as messaging from './messaging.js';
 import * as deadLetterConfig from './dead-letter-config.js';
 import * as outbox from './outbox.js';
@@ -120,6 +121,8 @@ const GENERATORS = [
   telemetry,
   // El executor que propaga el contexto a las tareas paralelas: con y sin telemetría.
   concurrency,
+  // El puerto para encargar un efecto tras el commit (las reglas «después de confirmar»).
+  afterCommit,
   messaging,
   deadLetterConfig,
   outbox,

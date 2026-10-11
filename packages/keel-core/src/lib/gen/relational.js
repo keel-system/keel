@@ -259,6 +259,16 @@ export function parentColumnOf(parentName) {
 const ORDERING_FIELDS = ['position', 'order', 'sortOrder', 'sequence'];
 const ORDERING_KINDS = new Set(['int', 'integer', 'long', 'short', 'number', 'decimal']);
 
+/**
+ * El desempate del orden propio de una colección hija: su id. Dos hijas pueden compartir posición
+ * (catalog: «dos imágenes pueden compartir position, y el orden entre ellas lo desempata su id»), y
+ * sin desempate el orden entre ellas lo decide el motor. Se compara como texto en minúsculas, que es
+ * el orden de bytes del uuid: el mismo en PostgreSQL, en Java y en TypeScript.
+ */
+export function orderingTieBreakerOf(model, entityName) {
+  return model.entities.find((e) => e.name === entityName)?.idField?.name ?? 'id';
+}
+
 /** Campo de orden explícito de la entidad hija, o null si no lo declara. */
 export function orderingFieldOf(model, entityName) {
   const child = model.entities.find((e) => e.name === entityName);

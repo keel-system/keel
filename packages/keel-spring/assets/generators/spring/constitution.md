@@ -47,6 +47,7 @@ Cómo se escriben los value objects monetarios y sus operaciones: `conventions/d
 - **Los eventos los emite el agregado**: cada evento de `emits` se hace `raise(<E>Event.of(...))` dentro del método de negocio que provoca el cambio, después de las guardas. Un handler que construya o publique un evento —o un adaptador que lo haga fuera del drenaje de `pullDomainEvents()`— es una fuga del dominio y se corrige, no se justifica. La traducción a evento de integración y la entrega ya vienen generadas (`<Servicio>DomainEventBridge`): el agente solo implementa el puerto de salida del broker.
 - La `EventMetadata` se estampa **una vez**, en el `raise`, y viaja intacta hasta el wire: su `eventId` es la clave de idempotencia del consumidor. Regenerarla aguas abajo rompe la deduplicación.
 - **Lo no transaccional va después de las guardas.** Una llamada saliente (`activation` por HTTP), una subida a storage o cualquier efecto fuera de la base de datos **no participa de la transacción**: si sale antes de que el agregado valide, y la guarda rechaza, el rollback deshace la fila y deja el efecto hecho en el otro lado, donde nadie lo va a deshacer. El orden es siempre: cargar → **aplicar la guarda de estado y las invariantes** → efectos externos → confirmar. Build escribe la nota de orden en el stub de todo handler que tenga las dos cosas; invertirla no es una preferencia de estilo, es fabricar una inconsistencia que solo se ve en producción.
+- **Cuando el diseño dice «después de confirmar»**, el efecto va por el puerto `AfterCommit` (`application/support/AfterCommit.java`, que build ya emite junto a su adaptador `TransactionAfterCommit`): `afterCommit.run(() -> …)` lo ejecuta tras el commit y nunca si la transacción revierte —la copia que pierde una carrera no llega al proveedor—. No escribas otro ni importes `TransactionSynchronizationManager` en `application`.
 - El `lockVersion` (`@Version`, bloqueo optimista) sin round-trip completo (`toDomain`/`toJpa` propagándolo) no protege nada: no se introduce a medias. Es infraestructura y no sale al contrato; un `version` que declare el diseño es un contador de dominio distinto, y lo incrementa el agregado.
 
 ## Configuración y secretos
@@ -68,7 +69,8 @@ fuera del equipo** (por una API, por un back-office).
 
 - **El motor de plantillas no evalúa expresiones arbitrarias.** Nada de Thymeleaf con SpEL ni equivalentes: si quien registra la plantilla puede invocar métodos, tiene ejecución remota de código en el servidor. Se usa un motor sin lógica —Handlebars o Mustache—, sin helpers que alcancen la JVM y sin resolvers de fichero.
 - **Las variables se escapan por defecto.** Un dato con `<script>` se escribe como texto. El marcado va en la plantilla, nunca dentro de una variable.
-- **Ninguna variable interpolada llega a una cabecera sin sanear.** Un `` o un `
+- **Ninguna variable interpolada llega a una cabecera sin sanear.** Un `
+` o un `
 ` dentro del asunto de un correo cierra la cabecera `Subject:` y abre otra: es cómo se inyecta un `Bcc:` que nadie puso. El saneado va donde ningún camino pueda saltárselo (el constructor del value object), no en el adaptador que hoy lo envía.
 
 Las tres son invisibles: quitarlas no rompe ninguna prueba y el correo sigue

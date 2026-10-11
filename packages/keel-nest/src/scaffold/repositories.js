@@ -14,7 +14,7 @@
 //     guardar el grafo; cero filas es otra escritura que ganó (o un borrado), y sale como conflicto;
 //   · la AUDITORÍA: `created_*`/`updated_*` los estampa el adaptador, como el listener de Spring Data.
 
-import { persistedMembers, collectInternalEntities, orderingFieldOf, partialUniqueIndexes, LOCK_VERSION, foldedShadow } from 'keel-core/gen';
+import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, foldedShadow } from 'keel-core/gen';
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
@@ -625,7 +625,8 @@ function domainValue(model, entity, member, persisted, imports, helpers) {
   if (member.kind === 'relationMany') {
     const child = member.relation.entity;
     const ordering = orderingFieldOf(model, child);
-    const sorted = ordering ? `[...(orm.${member.name} ?? [])].sort((a, b) => compareOrder(a.${ordering.name}, b.${ordering.name}))` : `(orm.${member.name} ?? [])`;
+    const tie = orderingTieBreakerOf(model, child);
+    const sorted = ordering ? `[...(orm.${member.name} ?? [])].sort((a, b) => compareOrder(a.${ordering.name}, b.${ordering.name}) || compareId(a.${tie}, b.${tie}))` : `(orm.${member.name} ?? [])`;
     if (ordering) helpers.add(compareOrderHelper());
     return `${sorted}.map(toDomain${child})`;
   }
@@ -681,6 +682,13 @@ function compareOrderHelper() {
 function compareOrder(a: unknown, b: unknown): number {
   if (a == null || b == null) return a == null ? (b == null ? 0 : 1) : -1;
   return Number(a) - Number(b);
+}
+
+/** Desempate de dos hijas con la misma posición: su id como texto, el orden de bytes del uuid. */
+function compareId(a: unknown, b: unknown): number {
+  const left = String(a ?? '');
+  const right = String(b ?? '');
+  return left < right ? -1 : left > right ? 1 : 0;
 }`;
 }
 

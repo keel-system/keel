@@ -4,8 +4,9 @@
 // Lo emite build porque las dos corridas que lo necesitaron (asset-vault y catalog, 2026-10-10) lo escribieron
 // cada una por su cuenta, idéntico: una regla del diseño decía «la retirada se encarga tras confirmar» y la
 // única vía era `TransactionContext.afterCommit`, que vive en infrastructure y un handler no puede importar. Es
-// el AFTER_COMMIT de Spring (`TransactionSynchronization`), que keel-spring no necesita emitir porque el
-// framework ya lo da. Sin persistencia no hay transacción que esperar, así que no se emite.
+// el AFTER_COMMIT de Spring (`TransactionSynchronization`), y keel-spring emite el mismo puerto
+// (`keel-spring/src/scaffold/after-commit.js`): allí tampoco un handler puede importar el framework, y sus dos
+// corridas del 2026-10-11 lo escribieron a mano. Sin persistencia no hay transacción que esperar, así que no se emite.
 
 import { DIRS, classPath, tsModule } from './render.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';

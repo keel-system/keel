@@ -24,6 +24,7 @@ import {
 } from './services.js';
 import { MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
+import { elementAnnotatedType } from './services.js';
 import { uniqueConstraints } from './persistence-entities.js';
 import {
   constraintErrors,
@@ -323,7 +324,7 @@ function renderMethod(model, operation, imports) {
       imports.add('org.springframework.web.bind.annotation.RequestParam');
       const required = component.required ? '' : '(required = false)';
       const validation = paramValidation(component, imports);
-      params.push(`@RequestParam${required} ${validation}${component.javaType} ${component.name}`);
+      params.push(`@RequestParam${required} ${validation}${elementAnnotatedType(component, fromPath, imports)} ${component.name}`);
       return component.name;
     });
     dispatchArg = `new ${operation.messageClass}(${args.join(', ')})`;
@@ -411,7 +412,7 @@ function renderMethod(model, operation, imports) {
         imports.add('org.springframework.web.bind.annotation.RequestParam');
         const required = component.required ? '' : '(required = false)';
         const validation = paramValidation(component, imports);
-        params.push(`@RequestParam${required} ${validation}${component.javaType} ${component.name}`);
+        params.push(`@RequestParam${required} ${validation}${elementAnnotatedType(component, fromPath, imports)} ${component.name}`);
       }
     }
     const withOrder = translatableSort(operation).length > 0;
@@ -721,6 +722,7 @@ function renderExceptionHandler(model) {
     'org.springframework.web.bind.annotation.ExceptionHandler',
     'org.springframework.web.bind.annotation.ResponseStatus',
     'org.springframework.web.bind.annotation.RestControllerAdvice',
+    'org.springframework.web.method.annotation.HandlerMethodValidationException',
     'org.springframework.web.method.annotation.MethodArgumentTypeMismatchException'
   ]);
 
@@ -765,6 +767,21 @@ ${constants.join('')}
     public ErrorResponse onConstraintViolation(ConstraintViolationException exception) {
         List<String> details = exception.getConstraintViolations().stream()
                 .map(violation -> violation.getPropertyPath() + " " + violation.getMessage())
+                .toList();
+        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Validation Error",
+                "${FRAMEWORK_ERRORS.validation.code}", "La petición viola restricciones declaradas", details);
+    }
+
+    // Desde Spring 6.1 la validación de los PARÁMETROS del método (@RequestParam, @RequestPart,
+    // el elemento de una lista) la hace el propio MVC y no el proxy de @Validated, así que sale
+    // como HandlerMethodValidationException y no como ConstraintViolationException. Sin este
+    // handler caía en el catch-all: una etiqueta de 41 caracteres en una subida multipart
+    // respondía 500 (corrida asset-vault de keel-spring).
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    public ErrorResponse onHandlerMethodValidation(HandlerMethodValidationException exception) {
+        List<String> details = exception.getAllErrors().stream()
+                .map(error -> String.valueOf(error.getDefaultMessage()))
                 .toList();
         return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Validation Error",
                 "${FRAMEWORK_ERRORS.validation.code}", "La petición viola restricciones declaradas", details);

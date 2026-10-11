@@ -49,9 +49,6 @@ spring:
       # Envuelve al deserializador real: un mensaje corrupto no tumba el listener
       # (va al error handler en vez de reventar el poll en bucle).
       value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
-      # Dónde empezar si el group no tiene offset: earliest procesa lo ya
-      # publicado (lo normal para suscripciones de eventos), latest lo ignora.
-      auto-offset-reset: earliest
       properties:
         spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
         # Solo confía en tus paquetes: sin esto la deserialización por type
@@ -128,8 +125,10 @@ reposo: no es que rinda menos, es que no hace nada.
 
 ## Por perfil
 
-- **local**: `localhost:9092` (listener EXTERNAL del compose); deja
-  `auto-offset-reset: earliest` para que los escenarios vean eventos previos.
+- **local**: `localhost:9092` (listener EXTERNAL del compose).
+- **Todos**: `auto-offset-reset: earliest` ya lo escribe build en los cuatro perfiles (un grupo
+  sin offset procesa lo ya publicado). No lo cambies a `latest`: lo que llegue mientras el grupo
+  se une se perdería, y los escenarios no verían los eventos previos.
 - **develop/production**: bootstrap por env var (ya en el gradiente); añade la
   seguridad del cluster real (`spring.kafka.security.protocol`, SASL) según el
   entorno — nunca credenciales literales.

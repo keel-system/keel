@@ -14,6 +14,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { persistedMembers, orderingFieldOf, usesAuditableEntity } from './persistence-members.js';
+import { orderingTieBreakerOf } from 'keel-core/gen/relational';
 import {
   renderPort,
   naturalKeyFinder,
@@ -356,7 +357,8 @@ function renderToDomain(model, entity, imports) {
       if (ordering) {
         imports.add('java.util.Comparator');
         return `${getter}.stream()
-                        .sorted(Comparator.comparing(${member.relation.entity}Document::get${capitalize(ordering.name)}))
+                        .sorted(Comparator.comparing(${member.relation.entity}Document::get${capitalize(ordering.name)})
+                                .thenComparing(child -> String.valueOf(child.get${capitalize(orderingTieBreakerOf(model, member.relation.entity))}())))
                         .map(this::toDomain)
                         .toList()`;
       }

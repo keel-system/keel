@@ -1111,7 +1111,9 @@ test('colección hija con orden explícito: @OrderBy en la entidad JPA', () => {
   // devuelve ordenada). Sin @OrderBy, la colección llega en el orden que decida la
   // base de datos, y tras un reorder la lista en memoria no refleja lo recién
   // guardado salvo que cada adaptador se acuerde de reordenarla al mapear.
-  assert.ok(parentJpa.includes('@OrderBy("position ASC")'), parentJpa);
+  // Y desempata por id: dos imágenes pueden compartir posición (lo dice una regla del
+  // diseño) y sin desempate su orden lo decide el motor (corrida catalog de keel-spring).
+  assert.ok(parentJpa.includes('@OrderBy("position ASC, id ASC")'), parentJpa);
   assert.ok(parentJpa.includes('import jakarta.persistence.OrderBy;'));
 });
 
@@ -2370,4 +2372,72 @@ test('el payload de un evento entrante comprueba también sus COTAS, sin reinten
   assert.ok(message.includes('private static final Validator VALIDATOR'), message);
   assert.ok(message.includes('var violations = VALIDATOR.validate(this);'), message);
   assert.ok(!message.includes('IllegalStateException'), 'lo que se lanza tiene que ser lo que build excluye de los reintentos');
+});
+
+// ─── Cosecha de las corridas asset-vault y catalog de keel-spring (2026-10-11) ───
+
+function scaffoldVault(stack = { database: 'mongodb', broker: 'rabbitmq', auth: 'keycloak', cache: 'redis', storage: 'minio' }) {
+  const { manifest, layers, errors } = loadService(path.join(FIXTURES_DIR, 'asset-vault'));
+  assert.deepEqual(errors, []);
+  const workspace = tmpDir('keel-regression-vault-');
+  scaffoldService({ manifest, layers, workspace, force: true, stack });
+  const root = path.join(workspace, 'services', 'asset-vault-spring');
+  return (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+}
+
+const VAULT_JAVA = 'src/main/java/com/content/assetvault';
+
+test('la carrera de la clave en Mongo es IDEMPOTENCY_KEY_IN_PROGRESS, no un write conflict que el mediator reintenta', () => {
+  const store = scaffoldVault()(`${VAULT_JAVA}/infrastructure/persistence/idempotency/MongoIdempotencyStore.java`);
+  // Mientras la ganadora no confirma, Mongo aborta el insert con WriteConflict (112): ni
+  // DuplicateKey ni TransactionSystemException. Sin traducirlo, el UseCaseMediator lo
+  // reintentaba y acababa en CONCURRENT_MODIFICATION (FL-AST-001-D).
+  assert.ok(store.includes('} catch (RuntimeException ex) {'), store);
+  assert.ok(store.includes('mongo.getCode() == 112'), store);
+  // Sin la causa: con ella dentro, el mediator la encontraría en la cadena y reintentaría.
+  assert.ok(store.includes('throw new IdempotencyConflictException(scope, idempotencyKey, null);'), store);
+  assert.ok(store.includes('import com.mongodb.MongoException;'), store);
+});
+
+test('la validación de parámetros de MVC (Spring 6.1+) es 400, no el 500 del catch-all', () => {
+  const handler = scaffoldVault()(`${VAULT_JAVA}/infrastructure/rest/ApiExceptionHandler.java`);
+  assert.ok(handler.includes('@ExceptionHandler(HandlerMethodValidationException.class)'), handler);
+  assert.ok(handler.includes('import org.springframework.web.method.annotation.HandlerMethodValidationException;'), handler);
+});
+
+test('la cota de cada elemento de una lista llega también al @RequestParam del multipart', () => {
+  const controller = scaffoldVault()(`${VAULT_JAVA}/infrastructure/rest/controllers/asset/v1/AssetV1Controller.java`);
+  // El record del comando ya la llevaba, pero en el camino HTTP no lo valida nadie.
+  assert.ok(controller.includes('@Size(max = 20) List<@Size(max = 40) String> labels'), controller);
+});
+
+test('max-part-count de Tomcat sale de la mayor petición multipart del diseño', () => {
+  const yaml = scaffoldVault()('src/main/resources/application.yaml');
+  // ownerId, slug, title, el binario y hasta 20 etiquetas: 24 partes, más que las 10 de Tomcat.
+  assert.ok(/^server:[\s\S]*?\n {2}tomcat:\n/.test(yaml), yaml);
+  assert.ok(yaml.includes('    max-part-count: 24'), yaml);
+  // Y sin listas que lo superen, no se toca el defecto.
+  const { read } = scaffoldExtended();
+  assert.ok(!read('src/main/resources/application.yaml').includes('max-part-count'));
+});
+
+test('AfterCommit: build emite el puerto y su adaptador sobre la transacción del mediator', () => {
+  const read = scaffoldVault();
+  const port = read(`${VAULT_JAVA}/application/support/AfterCommit.java`);
+  const adapter = read(`${VAULT_JAVA}/infrastructure/configurations/transaction/TransactionAfterCommit.java`);
+  // El puerto no importa Spring: application no puede.
+  assert.ok(!port.includes('import org.springframework'), port);
+  assert.ok(port.includes('void run(Runnable action);'), port);
+  assert.ok(adapter.includes('TransactionSynchronizationManager.registerSynchronization'), adapter);
+  assert.ok(adapter.includes('public void afterCommit()'), adapter);
+  // Sin transacción en curso, se ejecuta ya; nunca se pierde en silencio.
+  assert.ok(adapter.includes('if (!TransactionSynchronizationManager.isSynchronizationActive())'), adapter);
+});
+
+test('con Kafka, un grupo sin offset empieza por lo ya publicado en los cuatro perfiles', () => {
+  const read = scaffoldVault({ database: 'mongodb', broker: 'kafka', auth: 'keycloak', cache: 'redis', storage: 'minio' });
+  for (const profile of ['local', 'develop', 'production', 'test']) {
+    const yaml = read(`src/main/resources/parameters/${profile}/kafka.yaml`);
+    assert.ok(yaml.includes('      auto-offset-reset: earliest'), `${profile}: ${yaml}`);
+  }
 });

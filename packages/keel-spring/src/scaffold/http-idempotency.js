@@ -1066,8 +1066,31 @@ public class MongoIdempotencyStore implements IdempotencyStore {
             // del caso de uso sobre MongoTransactionManager. Un insert duplicado ahi dentro
             // puede no fallar en el insert sino al CONFIRMAR, y eso no es una excepcion de
             // acceso a datos: es TransactionSystemException, que se escapaba del catch.
-            throw new IdempotencyConflictException(scope, idempotencyKey, concurrent);
+            throw new IdempotencyConflictException(scope, idempotencyKey, writeConflictIn(concurrent) ? null : concurrent);
+        } catch (RuntimeException ex) {
+            // Mientras la peticion que gano la carrera no confirma, su documento aun no existe
+            // para nadie y la clave no choca como DuplicateKey: Mongo aborta este insert con un
+            // WriteConflict (codigo 112, TransientTransactionError), que no es ninguna de las dos
+            // familias de arriba. Es la carrera de la clave EN VUELO, y su respuesta es 409 con
+            // el code del diseño. Va SIN la causa a proposito: el UseCaseMediator busca el write
+            // conflict en la cadena de causas para reintentar el caso de uso entero, y reintentar
+            // contra una transaccion que sigue abierta solo acaba, agotados los intentos, en un
+            // CONCURRENT_MODIFICATION que no es el contrato (corrida asset-vault, FL-AST-001-D).
+            if (writeConflictIn(ex)) {
+                throw new IdempotencyConflictException(scope, idempotencyKey, null);
+            }
+            throw ex;
         }
+    }
+
+    private static boolean writeConflictIn(Throwable ex) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof MongoException mongo
+                    && (mongo.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL) || mongo.getCode() == 112)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Scheduled(cron = "\${${IDEMPOTENCY_RECORD_PURGE.cron.key}:${IDEMPOTENCY_RECORD_PURGE.cron.default}}")
@@ -1086,6 +1109,7 @@ public class MongoIdempotencyStore implements IdempotencyStore {
       [
         `${subPackage(model, PORT_PKG)}.IdempotencyConflictException`,
         `${subPackage(model, PORT_PKG)}.IdempotencyStore`,
+        'com.mongodb.MongoException',
         'java.time.Instant',
         'java.util.Optional',
         'org.slf4j.Logger',

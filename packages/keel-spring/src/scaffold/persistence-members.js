@@ -13,6 +13,7 @@ import {
   persistedMembers as neutralMembers,
   foldedShadow as neutralShadow,
   orderingFieldOf,
+  orderingTieBreakerOf,
   backReferenceTo,
   uniqueFields,
   indexName,
@@ -27,6 +28,7 @@ import { quoteIdentifier } from '../lib/sql-reserved.js';
 
 export {
   orderingFieldOf,
+  orderingTieBreakerOf,
   backReferenceTo,
   uniqueFields,
   indexName,

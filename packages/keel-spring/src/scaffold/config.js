@@ -197,6 +197,48 @@ function fragment(profile, name, content) {
   return { name, path: `src/main/resources/parameters/${profile}/${name}.yaml`, content };
 }
 
+// Partes por lista multipart cuyo diseño no acota cuántos elementos trae.
+const UNBOUNDED_LIST_PARTS = 100;
+// El defecto de Tomcat en Spring Boot 3.5 (`server.tomcat.max-part-count`).
+const TOMCAT_DEFAULT_PART_COUNT = 10;
+
+/**
+ * Cuántas partes trae, como mucho, la mayor petición multipart del diseño: una por campo y,
+ * en una lista, una por elemento (cada `labels` repetido es una parte). Si pasa del defecto de
+ * Tomcat, una petición VÁLIDA moría al leerse, antes de llegar a ninguna validación, con un 500
+ * (corrida asset-vault de keel-spring: 20 etiquetas declaradas, 10 partes admitidas).
+ */
+export function multipartPartCount(model) {
+  let max = 0;
+  for (const group of model.services ?? []) {
+    for (const operation of group.operations ?? []) {
+      if (!operation.multipart) continue;
+      const parts = (operation.bodyFields ?? []).reduce((sum, field) => {
+        if (!field.list) return sum + 1;
+        // En una lista, el @Size del contenedor es su cardinalidad: el maxItems del diseño.
+        const bound = (field.inputValidation ?? [])
+          .map((annotation) => /^@Size\(.*max = (\d+)/.exec(annotation))
+          .find(Boolean);
+        return sum + (bound ? Number(bound[1]) : UNBOUNDED_LIST_PARTS);
+      }, 0);
+      max = Math.max(max, parts);
+    }
+  }
+  return max;
+}
+
+function tomcatPartCountLines(model) {
+  const parts = multipartPartCount(model);
+  if (parts <= TOMCAT_DEFAULT_PART_COUNT) return [];
+  return [
+    '  tomcat:',
+    '    # Cada elemento de una lista multipart es una parte: con el defecto de Tomcat (10), una',
+    '    # petición válida se rechaza al leerla, antes de validar nada. Sale de la mayor petición',
+    '    # multipart del diseño (un campo, una parte; una lista, su maxItems).',
+    `    max-part-count: ${parts}`
+  ];
+}
+
 // application.yaml base: lo común a todos los perfiles.
 function baseYaml(model) {
   const { service, layersPresent } = model;
@@ -208,6 +250,7 @@ function baseYaml(model) {
     '  # (hasta spring.lifecycle.timeout-per-shutdown-phase) a que terminen las peticiones en vuelo.',
     '  # Con los probes de Actuator activos, el readiness pasa a OUT_OF_SERVICE mientras drena.',
     '  shutdown: graceful',
+    ...tomcatPartCountLines(model),
     'spring:',
     '  application:',
     `    name: ${service.name}`,
@@ -948,6 +991,9 @@ function brokerYaml(model, profile) {
     ...kafkaProducerTimeoutLines(profile),
     '    consumer:',
     `      group-id: ${envWithDefault(profile, 'KAFKA_GROUP_ID', `${service.artifactId}-group`)}`,
+    '      # Un grupo sin offset procesa lo ya publicado (earliest), como keel-nest con fromBeginning: con',
+    '      # latest, lo que llega mientras el grupo se une se pierde. Lo escribía a mano cada corrida de Kafka.',
+    '      auto-offset-reset: earliest',
     '      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer',
     '      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer',
     '    listener:',
