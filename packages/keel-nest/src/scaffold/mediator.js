@@ -20,6 +20,7 @@
 // mismo despacho, y existe igual para que el scheduler (scheduling.js) no pregunte por la capa.
 
 import { DIRS, classPath, tsModule } from './render.js';
+import { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher } from 'keel-core/gen';
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
 import { usesPersistence } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
@@ -484,22 +485,25 @@ function elapsed(start: number): number {
 }${transactionTail}`;
 }
 
-/**
- * Las operaciones internas a las que no llega ningún disparador generado: ni `schedule`, ni
- * endpoint, ni suscripción. Solo otro caso de uso puede ejecutarlas, y un handler no llama a otro
- * handler: para eso está el puerto CommandDispatcher (el mismo criterio que keel-spring).
- */
-export function orphanInternalOperations(model) {
-  const bySubscription = new Set((model.subscriptions ?? []).map((subscription) => subscription.trigger).filter(Boolean));
-  return (model.services ?? [])
-    .flatMap((service) => service.operations ?? [])
-    .filter((operation) => operation.internal && !operation.schedule && !bySubscription.has(operation.name));
-}
+// Las operaciones internas sin disparador y las que declaran `dispatches` (2.21) las decide keel-core
+// (`keel-core/gen/dispatch.js`), igual para keel-spring: un handler no llama a otro handler.
+export { orphanInternalOperations, usesCommandDispatcher };
 
 function commandDispatcher(model) {
   const orphans = orphanInternalOperations(model);
   if (!usesCommandDispatcher(model)) return [];
   const names = orphans.map((operation) => operation.name).join(', ');
+  const dispatching = dispatchingOperations(model);
+  const dispatchedBy = dispatching.map((operation) => `${operation.name} → ${operation.dispatches.join(', ')}`).join('; ');
+  const reasons = [
+    orphans.length > 0
+      ? `el diseño declara ${orphans.length === 1 ? 'una operación interna' : 'operaciones internas'} sin disparador propio
+ * (${names}): solo otro caso de uso puede ejecutarla${orphans.length === 1 ? '' : 's'}`
+      : null,
+    dispatching.length > 0 ? `el diseño declara despachos entre casos de uso
+ * (use-cases.dispatches: ${dispatchedBy})` : null,
+    orphans.length === 0 && dispatching.length === 0 ? 'la capa payments despacha la operación que aplica cada desenlace' : null
+  ].filter(Boolean).join(', y porque ');
   // Las que producen un efecto que no se deshace (la guarda del correo): a salvo con las dos variantes, porque su
   // reclamo confirma en su propia transacción —pero el argumento del pool sigue en pie—. La misma nota que keel-spring.
   const irreversible = orphans.filter((operation) => operation.guardClaim);
@@ -515,8 +519,7 @@ function commandDispatcher(model) {
  * directamente; cuando lo necesita, despacha su mensaje por este puerto, que implementa un adaptador
  * de infraestructura sobre el UseCaseMediator.
  *
- * Existe porque el diseño declara ${orphans.length === 1 ? 'una operación interna' : 'operaciones internas'} sin disparador propio
- * (${names}): solo otro caso de uso puede ejecutarla${orphans.length === 1 ? '' : 's'}.
+ * Existe porque ${reasons}.
  *
  * Las dos variantes no son intercambiables:
  *   · dispatch: la operación invocada se une a la transacción del llamante. Es lo correcto cuando
@@ -593,13 +596,6 @@ export class CommandDispatcherAdapter extends CommandDispatcher {
   ];
 }
 
-/**
- * ¿Hace falta el puerto CommandDispatcher? Para las operaciones internas sin disparador, y con la capa payments:
- * el aplicador de desenlaces despacha la operación del diseño que aplica cada uno (payments.outcomes).
- */
-export function usesCommandDispatcher(model) {
-  return orphanInternalOperations(model).length > 0 || Boolean(model.payments);
-}
 
 function moduleFile(model, mappers, payments = [], projections = []) {
   const handlers = applicationClasses(model);
@@ -646,7 +642,7 @@ const PROJECTIONS = [${list(projections)}] as const;` : ''}
 
 /**
  * El único sitio que cablea los casos de uso: handlers, mappers, el contenedor que los registra y el
- * mediator que los despacha.${dispatcher ? ' También el puerto CommandDispatcher, para las operaciones internas sin disparador.' : ''}
+ * mediator que los despacha.${dispatcher ? ' También el puerto CommandDispatcher, para despachar un caso de uso desde otro.' : ''}
  */
 @Module({
   providers: [

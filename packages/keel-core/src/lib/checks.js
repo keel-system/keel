@@ -117,6 +117,20 @@ export const CHECKS = {
   },
 
   // ─── use-cases ─────────────────────────────────────────────────────────────
+  'CHK-USECASES-DISPATCH-TARGET': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una operación despacha algo que no es un command de este servicio, o a sí misma',
+    closes: 'nombrar en dispatches commands de use-cases distintos de la propia operación'
+  },
+  'CHK-SECURITY-SCOPING-EXEMPT-CLIENT-UNKNOWN': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un cliente exento del alcance que no está en serviceClients',
+    closes: 'declarar el cliente en serviceClients, o quitarlo de scoping.exemptClients'
+  },
   'CHK-USECASES-STALLED-AFTER-INVALID': {
     layer: 'use-cases',
     severity: 'error',

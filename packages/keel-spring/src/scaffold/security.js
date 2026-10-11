@@ -118,6 +118,8 @@ function renderCallerScope(model, sec) {
   const portPkg = subPackage(model, SCOPE_PORT_PKG);
   const exempt = scoping.exemptRoles.map((role) => `"ROLE_${role}"`).join(', ');
   const exemptDoc = scoping.exemptRoles.length > 0 ? scoping.exemptRoles.map((role) => `{@code ${role}}`).join(', ') : 'ninguno';
+  const exemptClients = scoping.exemptClients ?? [];
+  const clientsDoc = exemptClients.length > 0 ? exemptClients.map((client) => `{@code ${client}}`).join(', ') : 'ninguno';
 
   const port = `/**
  * Alcance por recurso del llamante (security.authentication.scoping: claim {@code ${scoping.claim}}
@@ -129,7 +131,7 @@ function renderCallerScope(model, sec) {
  */
 public interface CallerScope {
 
-    /** El llamante está exento del alcance (roles exentos del diseño: ${exemptDoc}). */
+    /** El llamante está exento del alcance (roles exentos del diseño: ${exemptDoc}; clientes máquina exentos: ${clientsDoc}). */
     boolean isExempt();
 
     /** Los valores de {@code ${scoping.over}} que enumera el claim del llamante (vacío si no trae ninguno). */
@@ -147,23 +149,43 @@ public interface CallerScope {
  * <ul>
  *   <li>{@code ${scoping.claim}}: los valores de {@code ${scoping.over}} del llamante; se admite como
  *       lista (mapper multivaluado) o como texto separado por comas o espacios.</li>
- *   <li>Exentos: los roles ${exemptDoc}, como authority {@code ROLE_<rol>}.</li>
+ *   <li>Exentos: los roles ${exemptDoc}, como authority {@code ROLE_<rol>}; y los clientes máquina
+ *       ${clientsDoc} (scoping.exemptClients), reconocidos por el cliente de la credencial: {@code azp},
+ *       {@code client_id} o el nombre de la autenticación, el mismo criterio que la identidad del llamante.</li>
  * </ul>
  *
- * <p>Un exento que no sea un rol —un cliente máquina que lee cualquier recurso— no cabe en
- * {@code exemptRoles} y el diseño lo dice en prosa: esa rama es del agente, y es un hueco del DSL.
+ * <p>La exención es solo del alcance: las reglas de acceso (roles, scopes) ya se aplicaron en la cadena.
  */
 @Component
 public class JwtCallerScope implements CallerScope {
 
     static final String SCOPING_CLAIM = "${scoping.claim}";
     static final Set<String> EXEMPT_AUTHORITIES = Set.of(${exempt});
+    static final Set<String> EXEMPT_CLIENTS = Set.of(${exemptClients.map((client) => `"${client}"`).join(', ')});
 
     @Override
     public boolean isExempt() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        return authentication != null && authentication.getAuthorities().stream()
-                .anyMatch(authority -> EXEMPT_AUTHORITIES.contains(authority.getAuthority()));
+        if (authentication == null) {
+            return false;
+        }
+        return authentication.getAuthorities().stream()
+                .anyMatch(authority -> EXEMPT_AUTHORITIES.contains(authority.getAuthority()))
+                || EXEMPT_CLIENTS.contains(credentialClient(authentication));
+    }
+
+    /** El cliente máquina de la credencial: Keycloak lo pone en azp y otros proveedores en client_id. */
+    private static String credentialClient(Authentication authentication) {
+        if (authentication instanceof JwtAuthenticationToken token) {
+            String client = token.getToken().getClaimAsString("azp");
+            if (client == null || client.isBlank()) {
+                client = token.getToken().getClaimAsString("client_id");
+            }
+            if (client != null && !client.isBlank()) {
+                return client;
+            }
+        }
+        return authentication.getName();
     }
 
     @Override

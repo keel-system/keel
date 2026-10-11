@@ -70,7 +70,7 @@ operations:
     rules:
       - Primero se carga el archivo (ASSET_NOT_FOUND) y se comprueba el alcance (ASSET_OUT_OF_SCOPE); solo después se pide la miniatura al renderizador.
       - El alcance del solicitante sobre el Owner.code del archivo se comprueba en cada respuesta, también en la que sale de la caché.
-      - El alcance es de los custodios - el cliente máquina rendering-service lee cualquier ficha, porque genera las miniaturas de todos los propietarios.
+      - El alcance es de los custodios - el cliente máquina rendering-service lee cualquier ficha (security.authentication.scoping.exemptClients), porque genera las miniaturas de todos los propietarios.
       - La ficha degradada (thumbnail nulo porque el renderizador no contestó) se sirve pero no se cachea.
     errors:
       - code: ASSET_NOT_FOUND
@@ -148,7 +148,7 @@ operations:
   quarantineAsset:
     description: Pone en cuarentena un archivo que el escáner marcó como infectado.
     kind: command
-    # Interna: solo la dispara la suscripción (y la revalidación, por el CommandDispatcher).
+    # Interna: solo la dispara la suscripción (y la revalidación: reconcileScans.dispatches).
     # Exponerla por HTTP abriría un segundo camino que la deduplicación del listener no cubre.
     internal: true
     input:
@@ -216,6 +216,9 @@ operations:
     description: Vuelve a pedir el análisis de los archivos publicados sin veredicto firme.
     kind: command
     internal: true
+    # Con un veredicto no limpio, pone el archivo en cuarentena por el mismo camino que el hallazgo
+    # (la regla dice cuándo y con qué motivo). Hasta el DSL 2.21 el enlace solo estaba en esa regla (v1.1.2).
+    dispatches: [quarantineAsset]
     input: "void"
     output: "void"
     rules:

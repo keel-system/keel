@@ -90,11 +90,13 @@ authentication:
     over: Application.code       # qué identifica al recurso acotado (Entidad.campo de domain)
     error: APPLICATION_FORBIDDEN # el code del rechazo: es contrato público
     exemptRoles: [catalog-admin] # roles transversales, que NO se acotan
+    exemptClients: [search-indexer] # clientes máquina que leen cualquier recurso (2.21)
 ```
 
 - `over` apunta a una entidad y un campo **que existen en `domain`**, y es el dato que las operaciones acotadas reciben.
 - `error` es un `code` que alguna operación tiene que declarar en sus `errors` (con su `403` y su `when`): ahí es donde vive el contrato. Declarar el alcance sin su error es un **error de validación**.
 - `exemptRoles` se enumera uno a uno. La exención es la parte peligrosa —un rol exento alcanza cualquier recurso— y no puede quedar implícita.
+- `exemptClients` (2.21) es lo mismo para los clientes máquina: cada entrada tiene que estar en `serviceClients`. Un cliente máquina no representa a un inquilino y su token no lleva el claim del alcance, así que si no lo declaras exento recibe el error del alcance en todo recurso acotado. La exención es **solo del alcance**: el cliente sigue pasando por las reglas de acceso (sus `scopes`). El generador lo reconoce en el token por el identificador del cliente de la credencial —el mismo criterio que `callerIdentity` con `source: serviceClient`—.
 - **Sin este bloque**, un 403 declarado sobre una operación protegida por rol describe una discriminación que nada evalúa: `keel validate` lo avisa, el generador emite el código igual, y el servidor acaba sirviendo a cualquier titular del rol los recursos de todos los inquilinos.
 - Qué recurso alcanza cada usuario **de prueba** no es del diseño: el generador siembra el proveedor de identidad con un valor convencional y lo publica para el arnés (en keel-spring, `AUTH_SCOPED_RESOURCE` de `infra/test-credentials.env`).
 - La comprobación en sí se escribe como `rule` en cada operación acotada — el DSL declara de dónde sale el alcance, no el algoritmo que lo aplica.

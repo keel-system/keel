@@ -33,6 +33,10 @@ authentication:
     error: ASSET_OUT_OF_SCOPE
     # La exención va rol a rol porque es la parte peligrosa: quien la tiene ve todo.
     exemptRoles: [vault-admin]
+    # El renderizador genera las miniaturas de TODOS los propietarios: su token no lleva el claim
+    # `vaults` —no representa a un custodio— y sin declararlo exento recibiría ASSET_OUT_OF_SCOPE en
+    # toda ficha. Hasta el DSL 2.21 lo decía solo una regla de getAsset (v1.1.2).
+    exemptClients: [rendering-service]
     # Las escrituras (uploadAsset, publishAsset) solo las hace vault-admin, que está exento: por eso
     # no declaran el 403. Conceder asset:write a otro rol obliga a acotarlas antes.
     description: >-

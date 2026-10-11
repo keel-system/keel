@@ -845,6 +845,8 @@ function callerScope(model) {
   const scoping = model.security.scoping;
   const exempt = scoping.exemptRoles;
   const exemptDoc = exempt.length > 0 ? exempt.map((role) => `\`${role}\``).join(', ') : 'ninguno';
+  const exemptClients = scoping.exemptClients ?? [];
+  const clientsDoc = exemptClients.length > 0 ? exemptClients.map((client) => `\`${client}\``).join(', ') : 'ninguno';
   const port = `/**
  * Alcance por recurso del llamante (security.authentication.scoping: claim \`${scoping.claim}\` sobre
  * \`${scoping.over}\`).
@@ -854,7 +856,7 @@ function callerScope(model) {
  * petición HTTP; los listeners y los barridos no lo consultan.
  */
 export abstract class CallerScope {
-  /** El llamante está exento del alcance (roles exentos del diseño: ${exemptDoc}). */
+  /** El llamante está exento del alcance (roles exentos del diseño: ${exemptDoc}; clientes máquina exentos: ${clientsDoc}). */
   abstract isExempt(): boolean;
 
   /** Los valores de \`${scoping.over}\` que enumera el claim del llamante (vacío si no trae ninguno). */
@@ -868,15 +870,22 @@ export abstract class CallerScope {
   const adapter = `/**
  * Alcance por recurso leído del token de la petición en curso (security.authentication.scoping):
  * el claim \`${scoping.claim}\` como lista o como texto separado por comas o espacios; exentos, los roles
- * ${exemptDoc}. Sin dependencias: Nest lo construye sin decorador (SecurityModule).
+ * ${exemptDoc} y los clientes máquina ${clientsDoc} (scoping.exemptClients), reconocidos por el cliente de la
+ * credencial —\`azp\`, \`client_id\` o el nombre del principal, el mismo criterio que la identidad del llamante—.
+ * La exención es solo del alcance: las reglas de acceso ya se aplicaron. Sin dependencias: Nest lo construye sin
+ * decorador (SecurityModule).
  */
 const SCOPING_CLAIM = ${tsString(scoping.claim)};
 const EXEMPT_AUTHORITIES: readonly string[] = [${exempt.map((role) => tsString(`ROLE_${role}`)).join(', ')}];
+const EXEMPT_CLIENTS: readonly string[] = [${exemptClients.map((client) => tsString(client)).join(', ')}];
 
 export class JwtCallerScope extends CallerScope {
   isExempt(): boolean {
     const principal = SecurityContext.current();
-    return principal != null && EXEMPT_AUTHORITIES.some((authority) => principal.authorities.has(authority));
+    if (principal == null) return false;
+    if (EXEMPT_AUTHORITIES.some((authority) => principal.authorities.has(authority))) return true;
+    const client = textClaim(principal.claims['azp']) ?? textClaim(principal.claims['client_id']) ?? textClaim(principal.name);
+    return client != null && EXEMPT_CLIENTS.includes(client);
   }
 
   scopedValues(): ReadonlySet<string> {
@@ -887,6 +896,11 @@ export class JwtCallerScope extends CallerScope {
     if (typeof claim === 'string') return new Set(claim.split(/[\\s,]+/).filter((part) => part !== ''));
     return new Set();
   }
+}
+
+/** Un claim de texto no vacío, o null. */
+function textClaim(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null;
 }`;
   return [
     { path: CALLER_SCOPE_TS, content: tsModule(CALLER_SCOPE_TS, [], port) },

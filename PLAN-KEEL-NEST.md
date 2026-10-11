@@ -1858,9 +1858,10 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
       `keel-core/gen/relational.js`: `findAllBy<Clave>In` en el puerto y los adaptadores, y `byKeys` en el Reader).
       keel-nest no tenía ningún finder por lote; el suyo es más estrecho (clave de un campo escalar);
     - la rama documental de keel-nest ordena las hijas por posición y desempata por id, como keel-spring.
+    - DSL 2.21: `scoping.exemptClients` (el cliente máquina exento del alcance, reconocido en los dos servidores por
+      `azp`/`client_id`) y `operations.<op>.dispatches` (el handler que despacha recibe el `CommandDispatcher` y su
+      nota; la decisión, en `keel-core/gen/dispatch.js`). asset-vault v1.1.2 los declara.
   - **Lo que queda abierto:**
-    - el despacho de una operación desde otra solo cabe en prosa (el `CommandDispatcher`);
-    - la exención de alcance de un cliente máquina (candidato `exemptClients`), implementada distinto en cada servidor;
     - el puerto de caché: keel-nest lo emite y en keel-spring lo escribe el agente, con otro nombre cada vez;
     - la matriz de catalog: 65 en spring, 56 en nest, 64 bloques `FL-`; sin comprobar, porque se borró el JUnit.
 

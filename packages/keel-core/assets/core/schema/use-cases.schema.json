@@ -29,6 +29,13 @@
             "default": false,
             "description": "Operación sin trigger externo (solo invocada por otras operaciones o schedule)."
           },
+          "dispatches": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "$ref": "common.schema.json#/$defs/operationName" },
+            "description": "Commands de este servicio que esta operación despacha como parte de su trabajo (un barrido que pone en cuarentena lo que revalida). Es el enlace estructural de una regla «despacha X»: con él, el generador da a esta operación el puerto de despacho y su nota, en vez de dejar la costura en prosa. Solo commands: una lectura no se despacha, se consulta. (2.21)"
+          },
           "preconditions": {
             "type": "array",
             "items": { "type": "string", "minLength": 5 }

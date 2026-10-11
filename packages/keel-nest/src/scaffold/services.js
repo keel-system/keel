@@ -21,7 +21,8 @@ import { mailPorts, sendsMail } from './mail.js';
 import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyBatchFinder, PAGE_TS } from './repositories.js';
-import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch } from 'keel-core/gen';
+import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch, dispatchNote } from 'keel-core/gen';
+import { COMMAND_DISPATCHER_TS } from './mediator.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
@@ -282,6 +283,12 @@ function renderHandler(model, operation) {
       dependencies.push({ type: port.symbol, name: decap(port.symbol) });
     }
   }
+  // El despacho de otro caso de uso (use-cases.dispatches, 2.21): el diseño dice que esta operación ejecuta otra,
+  // así que recibe el puerto delante y la nota de cómo. El mismo criterio que keel-spring.
+  if ((operation.dispatches ?? []).length > 0) {
+    imports.push({ symbol: 'CommandDispatcher', from: COMMAND_DISPATCHER_TS });
+    dependencies.push({ type: 'CommandDispatcher', name: 'commandDispatcher' });
+  }
   if (operation.responseDto?.entity && model.entities.some((e) => e.name === operation.responseDto.entity)) {
     const mapper = `${operation.responseDto.entity}ApplicationMapper`;
     imports.push({ symbol: mapper, from: classPath(DIRS.mappers, mapper) });
@@ -356,6 +363,8 @@ function handlerNotes(model, operation) {
   }
   for (const note of scheduleNotes(model, operation)) notes.push(note);
   for (const note of idempotencyNotes(model, operation)) notes.push(note);
+  const dispatch = dispatchNote(model, operation, { call: 'await this.commandDispatcher.{variant}(new {message}(...))' });
+  if (dispatch) notes.push(dispatch);
   for (const note of textFilterNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
@@ -374,7 +383,7 @@ function handlerNotes(model, operation) {
     notes.push(
       `Alcance (security.authentication.scoping): this.callerScope ya está inyectado; comprueba ` +
         `this.callerScope.covers(<${scoping.over} del recurso>) donde lo digan las reglas; fuera del alcance, ${scoping.error}. ` +
-        `Exentos: ${scoping.exemptRoles.join(', ') || 'ninguno'}. En un listado, filtra por this.callerScope.scopedValues() con un ` +
+        `Exentos: ${[...scoping.exemptRoles, ...(scoping.exemptClients ?? []).map((client) => `cliente ${client}`)].join(', ') || 'ninguno'}. En un listado, filtra por this.callerScope.scopedValues() con un ` +
         'finder acotado que escribes tú'
     );
   }

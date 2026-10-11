@@ -9,6 +9,7 @@
 // (sus handlers seguían importando @Transactional).
 
 import { javaFile, javaPath, subPackage } from './render.js';
+import { orphanInternalOperations, dispatchingOperations } from 'keel-core/gen';
 import { usesTelemetry, OBSERVATIONS } from './telemetry.js';
 import { ATTRIBUTES } from '../lib/telemetry-probes.js';
 
@@ -673,20 +674,9 @@ public class UseCaseAutoRegister implements CommandLineRunner {
 
 const PORT_PKG = 'application.port.out';
 
-/**
- * Las operaciones internas a las que no llega ningún disparador generado.
- *
- * No tienen `schedule`, el schema les prohíbe endpoint y ninguna suscripción las
- * dispara: la única forma de que se ejecuten es que OTRO handler las invoque. Y un
- * handler no puede llamar a otro handler (constitution.md), así que ese enlace necesita
- * un puerto — que build no generaba, y que por tanto se inventaba el agente.
- */
-function orphanInternalOperations(model) {
-  const bySubscription = new Set((model.subscriptions ?? []).map((subscription) => subscription.trigger).filter(Boolean));
-  return (model.services ?? [])
-    .flatMap((service) => service.operations ?? [])
-    .filter((operation) => operation.internal && !operation.schedule && !bySubscription.has(operation.name));
-}
+// Las operaciones internas sin disparador y las que declaran `dispatches` (2.21) las decide keel-core
+// (`keel-core/gen/dispatch.js`), igual para keel-nest: un handler no puede llamar a otro handler
+// (constitution.md), así que ese enlace necesita un puerto, que si build no lo genera se inventa el agente.
 
 /**
  * El puerto de despacho entre casos de uso, y su adaptador sobre el mediator.
@@ -705,10 +695,12 @@ function orphanInternalOperations(model) {
  */
 function renderCommandDispatcher(model) {
   const orphans = orphanInternalOperations(model);
-  if (orphans.length === 0) return [];
+  const dispatching = dispatchingOperations(model);
+  if (orphans.length === 0 && dispatching.length === 0) return [];
 
   const interfacesPkg = subPackage(model, INTERFACES_PKG);
   const names = orphans.map((operation) => operation.name).join(', ');
+  const dispatchedBy = dispatching.map((operation) => `${operation.name} → ${operation.dispatches.join(', ')}`).join('; ');
   const irreversible = orphans.filter((operation) => operation.guardClaim);
 
   const portBody = `/**
@@ -717,10 +709,17 @@ function renderCommandDispatcher(model) {
  * por este puerto, que implementa un adaptador de infraestructura sobre el
  * {@code UseCaseMediator}.
  *
- * <p>Existe porque el diseño declara ${orphans.length === 1 ? 'una operación interna' : 'operaciones internas'}
+ * <p>Existe porque ${[
+   orphans.length > 0
+     ? `el diseño declara ${orphans.length === 1 ? 'una operación interna' : 'operaciones internas'}
  * sin disparador propio (${names}): no ${orphans.length === 1 ? 'tiene' : 'tienen'} ni {@code schedule}, ni
  * endpoint, ni suscripción, así que ${orphans.length === 1 ? 'solo puede ejecutarla' : 'solo pueden ejecutarlas'}
- * otro caso de uso.
+ * otro caso de uso`
+     : null,
+   dispatching.length > 0 ? `el diseño declara despachos entre casos de uso (use-cases.dispatches: ${dispatchedBy})` : null
+ ]
+   .filter(Boolean)
+   .join(', y porque ')}.
  *
  * <p><b>Las dos variantes no son intercambiables</b>, y elegir la primera «porque es la
  * de siempre» tiene consecuencias que no se ven hasta producción:

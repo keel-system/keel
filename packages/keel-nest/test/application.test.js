@@ -133,15 +133,18 @@ test('el formato heredado de un value type escalar se valida en la entrada, y el
   assert.match(command, /SKUFormat\.validate\(\.\.\.\) \(src\/domain\/valueobject\/sku-format\.ts\)/);
 });
 
-test('la operación interna sin disparador recibe el puerto CommandDispatcher y su adaptador', () => {
+test('la operación interna sin disparador, o una que despacha otra, recibe el puerto CommandDispatcher y su adaptador', () => {
   let checked = 0;
   for (const name of FIXTURES) {
     const { model, files } = planFixture(name);
     const bySubscription = new Set((model.subscriptions ?? []).map((s) => s.trigger));
     const orphans = operationsOf(model).filter((op) => op.internal && !op.schedule && !bySubscription.has(op.name));
+    // Desde el DSL 2.21 también la que declara `dispatches` (asset-vault: reconcileScans → quarantineAsset).
+    const dispatching = operationsOf(model).filter((op) => (op.dispatches ?? []).length > 0);
+    const needed = orphans.length > 0 || dispatching.length > 0;
     const paths = new Set(files.map((file) => file.path));
-    assert.equal(paths.has('src/application/port/out/command-dispatcher.ts'), orphans.length > 0, name);
-    if (orphans.length === 0) continue;
+    assert.equal(paths.has('src/application/port/out/command-dispatcher.ts'), needed, name);
+    if (!needed) continue;
     checked += 1;
     const module = files.find((file) => file.path === 'src/infrastructure/usecase/use-case-module.ts').content;
     assert.match(module, /\{ provide: CommandDispatcher, useClass: CommandDispatcherAdapter \}/);

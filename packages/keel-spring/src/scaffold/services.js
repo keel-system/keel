@@ -11,7 +11,8 @@ import {
   declaredUniquenessErrorFor,
   hasScheduledOperations,
   scheduleSeconds,
-  scheduleDispatch
+  scheduleDispatch,
+  dispatchNote
 } from 'keel-core/gen';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { kebabCase } from '../lib/naming.js';
@@ -429,6 +430,9 @@ function renderHandler(model, service, operation) {
     inject('MailSender', 'application.port.out');
     if (model.mail?.templating) inject('TemplateRenderer', 'application.port.out');
   }
+  // El despacho de otro caso de uso (use-cases.dispatches, 2.21), por el mismo criterio: el diseño
+  // dice que esta operación ejecuta otra, así que recibe el puerto delante y la nota de cómo.
+  if ((operation.dispatches ?? []).length > 0) inject('CommandDispatcher', 'application.port.out');
 
   let fields = '';
   let constructor = '';
@@ -464,6 +468,8 @@ function renderHandler(model, service, operation) {
         `. El adaptador y el renderizador ya están escritos: no los toques — ver la skill keel-spring-mail`
     );
   }
+  const dispatch = dispatchNote(model, operation, { call: 'commandDispatcher.{variant}(new {message}(...))' });
+  if (dispatch) notes.push(dispatch);
   for (const note of textFilterNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules) notes.push(`Regla (en orden): ${text}`);
@@ -481,7 +487,7 @@ function renderHandler(model, service, operation) {
     notes.push(
       `Alcance (security.authentication.scoping): inyecta CallerScope (application.support), que build ya ` +
         `generó con su adaptador JWT, y comprueba callerScope.covers(<${scoping.over} del recurso>) donde lo ` +
-        `digan las reglas; fuera del alcance, ${scoping.error}. Exentos: ${scoping.exemptRoles.join(', ') || 'ninguno'}. ` +
+        `digan las reglas; fuera del alcance, ${scoping.error}. Exentos: ${[...scoping.exemptRoles, ...(scoping.exemptClients ?? []).map((client) => `cliente ${client}`)].join(', ') || 'ninguno'}. ` +
         `En un listado, filtra por callerScope.scopedValues() con un finder acotado que escribes tú`
     );
   }

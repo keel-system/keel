@@ -1013,6 +1013,9 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       messageClass,
       handlerClass: `${messageClass}Handler`,
       internal: Boolean(op.internal),
+      // Los commands que esta operación despacha (2.21): su handler recibe el puerto de despacho y
+      // la nota. Nombres de operación; cada generador resuelve sus mensajes.
+      dispatches: [...(op.dispatches ?? [])],
       route,
       pathParams,
       hasIdParam: pathParams.length > 0,
@@ -1915,6 +1918,9 @@ function collectSecurity(layers, services, routeBase, warnings) {
         over: rawScoping.over,
         error: rawScoping.error,
         exemptRoles: rawScoping.exemptRoles ?? [],
+        // Los clientes máquina que no se acotan (2.21). Se reconocen en el token por el cliente de la
+        // credencial, el mismo criterio que `callerIdentity` con `source: serviceClient`.
+        exemptClients: rawScoping.exemptClients ?? [],
         // El recurso con el que se siembran los usuarios de prueba no exentos. Se deriva aquí y no
         // en el emisor porque lo consumen DOS —el script que siembra el realm y el arnés que pide
         // los tokens—, y cuando cada uno lo resolvía por su cuenta el desajuste tumbaba clases

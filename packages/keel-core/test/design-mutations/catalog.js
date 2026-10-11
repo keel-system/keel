@@ -201,6 +201,34 @@ function withM2m(d) {
 }
 
 /**
+ * Alcance por recurso con un cliente máquina exento (2.21): el bot de guardia lee los tickets de todos los
+ * solicitantes, y un agente solo los de los suyos. Sobre la extensión m2m, que ya declara el cliente.
+ */
+function withScoping(d) {
+  withM2m(d);
+  d.layers.security.authentication.scoping = {
+    claim: 'desks',
+    over: 'Ticket.requesterEmail',
+    error: 'TICKET_OUT_OF_SCOPE',
+    exemptClients: ['oncall-bot']
+  };
+  ops(d).getTicket.errors.push({
+    code: 'TICKET_OUT_OF_SCOPE',
+    when: 'El ticket es de un solicitante fuera del alcance del llamante.',
+    http: 403
+  });
+  insertScenarioBefore(
+    d,
+    '### FL-ESC-001',
+    `### FL-SCP-001: un agente pide un ticket fuera de su alcance
+
+**Given** un ticket de un solicitante que el claim \`desks\` del agente no enumera.
+**When** el agente llama a \`getTicket\`.
+**Then** responde 403 con \`code\` = \`"TICKET_OUT_OF_SCOPE"\`; el bot de guardia, exento, lo lee.`
+  );
+}
+
+/**
  * Entrega garantizada: `publishing.reliability: outbox`, con los dos escenarios que la
  * distinguen de best-effort —el canal caído y el relay que se rinde—.
  */
@@ -545,6 +573,7 @@ function withPayments(d) {
 export const EXTENSIONS = {
   payments: withPayments,
   m2m: withM2m,
+  scoping: withScoping,
   replica: withReplica,
   outbox: withOutbox,
   escalation: withEscalation,
@@ -1528,6 +1557,39 @@ export const MUTATIONS = [
       delete d.layers.security.serviceClients['oncall-bot'].scopes;
     },
     expect: ['CHK-SEC-SERVICE-NO-SCOPES']
+  },
+  {
+    id: 'M-SECURITY-SCOPING-EXEMPT-CLIENT-UNKNOWN',
+    title: 'un cliente exento del alcance que serviceClients no declara',
+    extends: 'scoping',
+    mutate: (d) => {
+      d.layers.security.authentication.scoping.exemptClients = ['ghost-bot'];
+    },
+    expect: ['CHK-SECURITY-SCOPING-EXEMPT-CLIENT-UNKNOWN']
+  },
+  {
+    id: 'M-USECASES-DISPATCH-UNKNOWN',
+    title: 'una operación despacha algo que use-cases no declara',
+    mutate: (d) => {
+      ops(d).closeTicket.dispatches = ['notifyRequester'];
+    },
+    expect: ['CHK-USECASES-DISPATCH-TARGET']
+  },
+  {
+    id: 'M-USECASES-DISPATCH-QUERY',
+    title: 'una operación despacha una query',
+    mutate: (d) => {
+      ops(d).closeTicket.dispatches = ['getTicket'];
+    },
+    expect: ['CHK-USECASES-DISPATCH-TARGET']
+  },
+  {
+    id: 'M-USECASES-DISPATCH-SELF',
+    title: 'una operación se despacha a sí misma',
+    mutate: (d) => {
+      ops(d).closeTicket.dispatches = ['closeTicket'];
+    },
+    expect: ['CHK-USECASES-DISPATCH-TARGET']
   },
   {
     id: 'M-SEC-SERVICES-PUBLIC',

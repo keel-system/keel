@@ -42,7 +42,8 @@ findings:
     note: >-
       Corregido en v1.1.0: listAssets se acota al alcance (regla y FL-AST-004-B), y getAsset exime al
       cliente máquina rendering-service por regla (FL-AST-003-E). Que el schema no pueda enumerar esa
-      exención de un cliente máquina queda como hallazgo del método (candidato exemptClients).
+      exención de un cliente máquina queda como hallazgo del método (candidato exemptClients). Cerrado
+      en v1.1.2 con scoping.exemptClients (DSL 2.21).
   - id: REV-MSG-MISSING-CHANNEL
     scope: messaging.publishing.events
     verdict: accepted

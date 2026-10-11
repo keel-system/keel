@@ -1,7 +1,7 @@
 # asset-vault — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/asset-vault v1.1.1. Contrato de validación para la fase de generación.
+> specs/asset-vault v1.1.2. Contrato de validación para la fase de generación.
 
 > **v1.1.1 sin flujo nuevo, a sabiendas.** El parche decide que `quarantineAsset` **trunca** a 500
 > caracteres un `reason` más largo en vez de rechazar el hallazgo (regla de la operación). Ningún

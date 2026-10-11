@@ -772,6 +772,17 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // use-cases: payloads, emits, cache
   for (const [opName, op] of Object.entries(operations)) {
     checkInputConstraints(op, opName);
+    // `dispatches` (2.21): cada destino, un command de este servicio que no es la propia operación.
+    for (const target of op.dispatches ?? []) {
+      const dispatched = operations[target];
+      if (target === opName) {
+        error('CHK-USECASES-DISPATCH-TARGET', `use-cases: ${opName}.dispatches: la operación se despacha a sí misma — eso no es un enlace, es un bucle`);
+      } else if (!dispatched) {
+        error('CHK-USECASES-DISPATCH-TARGET', `use-cases: ${opName}.dispatches: '${target}' no es una operación de use-cases — el despacho apunta a algo que el servicio no hace`);
+      } else if ((dispatched.kind ?? 'command') !== 'command') {
+        error('CHK-USECASES-DISPATCH-TARGET', `use-cases: ${opName}.dispatches: '${target}' es una query — una lectura no se despacha, se consulta (inyecta su puerto o su lector)`);
+      }
+    }
     checkPayload(op.input, `use-cases: ${opName}.input`, { direction: 'input' });
     checkPayload(op.output, `use-cases: ${opName}.output`);
     for (const event of op.emits ?? []) {
@@ -1487,6 +1498,13 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       for (const role of scoping.exemptRoles ?? []) {
         if (!Object.hasOwn(security.roles ?? {}, role)) {
           errors.push(`security: authentication.scoping.exemptRoles: el rol '${role}' no está en el catálogo de roles`);
+        }
+      }
+      for (const client of scoping.exemptClients ?? []) {
+        if (!Object.hasOwn(security.serviceClients ?? {}, client)) {
+          error('CHK-SECURITY-SCOPING-EXEMPT-CLIENT-UNKNOWN',
+            `security: authentication.scoping.exemptClients: '${client}' no está en serviceClients — la exención es la parte peligrosa del alcance y tiene que nombrar un cliente que el servicio reconoce`
+          );
         }
       }
       // El error del alcance tiene que ser un `code` que alguna operación declare: es ahí donde
@@ -4072,13 +4090,20 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   const hasOwnDoor = (opName, op, reachableByHttp) =>
     reachableByHttp || op?.schedule !== undefined || triggeredBySubscription.has(opName);
 
+  // Las que otra operación despacha (`dispatches`, 2.21): esa operación es su disparador.
+  const dispatchedOps = new Set(Object.values(operations).flatMap((op) => op?.dispatches ?? []));
+
   for (const [opName, op] of Object.entries(operations)) {
     const reachableByHttp = Boolean(api && (autoCoversOp(opName) || apiEndpoints.has(opName)));
     const exposed =
-      op.internal === true || op.schedule !== undefined || reachableByHttp || triggeredBySubscription.has(opName);
+      op.internal === true ||
+      op.schedule !== undefined ||
+      reachableByHttp ||
+      triggeredBySubscription.has(opName) ||
+      dispatchedOps.has(opName);
     if (!exposed) {
       warn('CHK-USECASES-ORPHAN-OP',
-        `use-cases: ${opName}: operación huérfana — sin endpoint, sin subscription, sin schedule y sin internal: true`
+        `use-cases: ${opName}: operación huérfana — sin endpoint, sin subscription, sin schedule, sin internal: true y sin nadie que la despache`
       );
     }
 

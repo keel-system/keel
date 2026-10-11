@@ -1,8 +1,10 @@
 # asset-vault — Documento de diseño
 
-> specs/asset-vault v1.1.1. Diseño cerrado al preparar la corrida del incremento 13 de keel-nest
+> specs/asset-vault v1.1.2. Diseño cerrado al preparar la corrida del incremento 13 de keel-nest
 > (2026-10-09); las decisiones las tomó quien la preparaba, por delegación del diseñador. La v1.1.1
-> (2026-10-11) cierra el único hueco real de esa corrida: qué pasa con un motivo de cuarentena largo.
+> (2026-10-11) cierra el único hueco real de esa corrida: qué pasa con un motivo de cuarentena largo. La v1.1.2
+> (DSL 2.21) declara dos cosas que solo estaban en prosa: el cliente máquina exento del alcance y que el barrido
+> despacha la cuarentena.
 
 ## 1. Propósito y alcance
 
@@ -140,7 +142,6 @@ Desde `published` también se pasa a `quarantined`. `quarantined` es terminal.
 - Los propietarios los aprovisiona el directorio. Un cambio de `code` se aplica a la vez allí, en los tokens y en esta base.
 - No hay retención ni borrado: la custodia lo guarda todo, también lo que está en cuarentena.
 - El truncado del motivo (v1.1.1) no lo afirma ningún flujo: el careo de la 1.1.x agotó su presupuesto. Su flujo, `FL-QUA-001-D`, llega con la próxima minor.
-- La exención del cliente máquina sobre el alcance vive en una regla de `getAsset`: el DSL no puede enumerarla. Es candidata a un `exemptClients`.
 
 ### Cómo reutilizarlo
 

@@ -157,5 +157,26 @@ La capa que expone la operación la referencia por nombre:
 | Evento del broker | `messaging` → `subscriptions.<Evento>.triggers` |
 | Temporal | aquí, con `schedule` |
 | Solo interna | aquí, con `internal: true` |
+| Otra operación de este servicio | en la que despacha, con `dispatches` (2.21) |
 
-Una operación sin ninguno de los cuatro es **huérfana**: `keel validate` la reporta como warning.
+Una operación sin ninguno de los cuatro primeros es **huérfana**: `keel validate` la reporta como warning.
+
+**`dispatches` — una operación que despacha otra (2.21).** Cuando parte del trabajo de una operación es ejecutar
+otro command del servicio —un barrido que pone en cuarentena lo que revalida, un alta que encadena una
+notificación—, se declara en la que despacha:
+
+```yaml
+reconcileScans:
+  kind: command
+  schedule: { cron: "0 * * * * *" }
+  dispatches: [quarantineAsset]   # con un veredicto no limpio, la pone en cuarentena por el mismo camino
+  rules:
+    - Con cualquier otro veredicto, despacha quarantineAsset con reason "revalidación - <veredicto>".
+```
+
+La regla sigue diciendo **cuándo** y **con qué**; `dispatches` dice **que** ocurre, que es lo que el generador
+necesita para dar a esa operación el puerto de despacho y su nota (qué variante usar: dentro de la transacción del
+llamante o sin ella). Sin el enlace, la costura quedaba en prosa y el agente escribía y cableaba el despachador en
+cada corrida. Cada destino tiene que ser un `command` de este servicio y no la propia operación
+(`CHK-USECASES-DISPATCH-TARGET`): una lectura no se despacha, se consulta. Despachar no sustituye a los demás
+disparadores —`quarantineAsset` sigue teniendo su suscripción—.

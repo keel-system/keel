@@ -95,6 +95,12 @@
               "items": { "$ref": "common.schema.json#/$defs/roleName" },
               "description": "Roles cuya función es transversal y que por tanto NO se acotan (un administrador que gobierna todos los recursos). Se declaran uno a uno: la exención es la parte peligrosa y no puede quedar implícita."
             },
+            "exemptClients": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+              "description": "Clientes máquina (entradas de serviceClients) que NO se acotan: un servicio que lee cualquier recurso para hacer su trabajo (un renderizador que genera las miniaturas de todos los propietarios). Su token no lleva el claim del alcance —no representa a un inquilino—, así que sin declararlo aquí recibe el error del alcance en todo recurso acotado. La exención es solo del alcance: las reglas de acceso (scopes) se siguen aplicando. Uno a uno, como exemptRoles. (2.21)"
+            },
             "description": { "type": "string" }
           }
         },
