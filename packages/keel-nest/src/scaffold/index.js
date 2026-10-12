@@ -20,6 +20,8 @@ import * as logging from './logging.js';
 import * as telemetry from './telemetry.js';
 import * as observabilityAssets from './observability-assets.js';
 import * as deploy from './deploy.js';
+import * as loggingCheck from './logging-check.js';
+import * as telemetryGate from './telemetry-gate.js';
 import * as serviceParameters from './service-parameters.js';
 import * as wire from './wire.js';
 import * as application from './application.js';
@@ -141,6 +143,10 @@ const GENERATORS = [
   observabilityAssets,
   // El servicio en contenedor para pruebas manuales (incremento 14d): el deploy/ neutral de keel-core.
   deploy,
+  // Los gates de prohibición sobre lo que escribe el agente (incremento 14e): la higiene de los logs y la
+  // cardinalidad de las métricas.
+  loggingCheck,
+  telemetryGate,
   // El reloj (incremento 10b): los schedulers de las operaciones con `schedule` y las purgas por lotes de las
   // tablas del generador.
   scheduling,

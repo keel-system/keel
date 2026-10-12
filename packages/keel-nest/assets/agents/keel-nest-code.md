@@ -58,7 +58,12 @@ Eres el **agente de código** de keel-nest. Recibes en el prompt la ruta raíz d
    - `bash infra/check-idempotency.sh` en verde (si existe): cada listener usa la guarda en el orden que
      dicta el diseño, cada handler idempotente usa el registro, cada barrido reclama su lote, cada evento
      se emite desde su agregado y el dispatcher del outbox está registrado. Nace ROJO a propósito: es tu
-     trabajo el que lo pone verde, y cada hallazgo dice qué falta y por qué.
+     trabajo el que lo pone verde, y cada hallazgo dice qué falta y por qué;
+   - `bash infra/check-logging.sh` en verde: nace verde y veta lo que tú puedas añadir —loguear un objeto
+     de entrada entero, un `error` desde `src/domain` o `src/application` (ahí se LANZA), la consola a pelo
+     (usa `new Logger(Contexto)`) y un `worker_thread` (pierde el contexto de la petición);
+   - `bash infra/check-telemetry.sh` en verde (si existe, con telemetría): las claves de etiqueta de una
+     métrica son las del vocabulario; un identificador va al span (`spanAttributes`), nunca a la métrica.
    No ejecutes `bash infra/up.sh`, `npm start` ni escenarios: de eso se encargan otros agentes. Esto vale
    íntegro en la **primera pasada** (fase 1), en paralelo con la infraestructura y con las pruebas.
 5. Con la compilación en verde, la **revisión mecánica final** de `flow-fidelity.md` (ningún `number`
@@ -108,6 +113,8 @@ compiles: true | false       # npm run build
 architecture: OK | KO        # npm run check:architecture
 domainGuards: OK | KO | N/A  # bash infra/check-domain-guards.sh (N/A si no existe)
 idempotency: OK | KO | N/A   # bash infra/check-idempotency.sh (N/A si no existe)
+logging: OK | KO             # bash infra/check-logging.sh
+cardinality: OK | KO | N/A   # bash infra/check-telemetry.sh (N/A sin telemetría)
 failures: [...]              # errores: archivo:línea y causa; relanzado, qué corregiste de cada fallo
 verifiedFiles:               # solo relanzado desde la fase 2. Verde aquí NO aprueba el escenario
   - { file: test/integration/product-creation.test.ts, result: OK | KO }

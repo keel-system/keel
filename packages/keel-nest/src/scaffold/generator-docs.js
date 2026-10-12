@@ -168,7 +168,9 @@ ${
     usesIdempotencyCheck(model)
       ? '\n`infra/check-idempotency.sh` también sale en ROJO recién generado a propósito: comprueba que el código del agente USE los mecanismos de repetición que build generó (la guarda de los listeners, el registro de peticiones, el reclamo de los barridos, el raise de los eventos, el dispatcher del outbox). Es el mismo gate que el del servidor de keel-spring.\n'
       : ''
-  }`;
+  }
+\`infra/check-logging.sh\`${usesTelemetry(model) ? ' y `infra/check-telemetry.sh`' : ''} salen en VERDE recién generado${usesTelemetry(model) ? 's' : ''}: vetan lo que el agente pueda añadir (un objeto de entrada entero en un log, un \`error\` desde el dominio o los casos de uso, la consola a pelo, un \`worker_thread\`${usesTelemetry(model) ? '; una etiqueta de métrica fuera del vocabulario' : ''}). Un rojo ahí es siempre código del agente.
+`;
 }
 
 function skillMd(model) {

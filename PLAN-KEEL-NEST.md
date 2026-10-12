@@ -2054,6 +2054,26 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     healthy, y en el backend están las series del panel (caso de uso, HTTP, heap, el pool `pg` leído de verdad), las
     trazas en Tempo, los logs en Loki con su `correlationId`, el panel, las cuatro alertas y el EXEMPLAR cuyo `trace_id`
     es una traza de Tempo. Lo automatiza el `deploy-check` del 14f.
+- **14e — los gates de logs y de cardinalidad: hechos (2026-10-12)**. `infra/check-logging.sh` (siempre que haya
+  casos de uso) y `infra/check-telemetry.sh` (con telemetría), gates de PROHIBICIÓN: nacen verdes y un rojo es siempre
+  código del agente. Como el proyecto es de Node, el análisis es un programa embebido en el `.sh` (`sourceGate` en
+  `src/scaffold/logging-check.js`): reglas como datos, comentarios fuera, archivo y línea en cada hallazgo.
+  - **Logs** (`LOGGING_RULES`): un objeto de entrada entero en un log (`JSON.stringify(command)`, `${dto}`, como
+    argumento), un `error`/`fatal` desde `src/domain` o `src/application` (ahí se lanza), la consola a pelo (salvo las
+    herramientas de línea de comandos que genera build, `CLI_FILES`) y un `worker_thread`. **No se traducen** de
+    keel-spring, y está dicho: la concatenación (en Node la plantilla es lo idiomático y el logger de Nest no tiene
+    argumentos estructurados) y los executors (AsyncLocalStorage sigue a promesas y temporizadores; solo otro hilo lo
+    pierde).
+  - **Cardinalidad** (`TAG_RULES`): `labelNames` de una métrica nueva, los `labels` de una observación y las
+    etiquetas de `inc`/`dec`/`labels`/`startTimer`/`set(…, n)` —sin el valor detrás, `.set({…})` es el
+    QueryBuilder de TypeORM: lo destapó el árbol recién generado—. Las claves admitidas son el vocabulario neutral
+    (dotted, manglado o `[ATTRIBUTES.x]`) sin la correlación, y las de las series HTTP y de caché.
+  - Los agentes de código y de calidad los ejecutan y los reportan (`logging`, `cardinality`); la skill orquestadora y
+    la convención de observabilidad los nombran.
+  - **Medido**: `test/logging-telemetry-gates.test.js` los EJECUTA con bash: verdes sobre cinco fixtures generadas con
+    telemetría, y cada regla roja con su forma prohibida (nombrando su id y el archivo) y verde con la correcta; los
+    comentarios y la consola de las herramientas de build no cuentan. Falsado tres veces (sin quitar los comentarios,
+    con la correlación como etiqueta admitida y con el `error` sin mirar dónde, que pone rojo el árbol generado).
 
 ### Inc. 15 — Evolución del proyecto ya generado
 

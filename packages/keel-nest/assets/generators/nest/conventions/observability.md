@@ -53,10 +53,13 @@ Se leen al arrancar: cambian con un reinicio, nunca en caliente. Solo se declara
 - **Si añades una métrica, añade dónde se mira** (el panel o una alerta). Una serie que nadie consulta no la mira nadie,
   y una alerta sobre una serie que nadie publica no dispara nunca.
 - **Cardinalidad baja en las etiquetas de métricas.** Nombres de operación o de evento, sí; ids, emails o importes,
-  nunca: cada valor distinto es una serie nueva. Un identificador va al span, que es donde sirve.
+  nunca: cada valor distinto es una serie nueva. Un identificador va al span, que es donde sirve. Lo veta
+  `infra/check-telemetry.sh`: las claves de etiqueta son las del vocabulario, y es el único hallazgo sin ningún
+  síntoma —nada falla, se ve en la factura del backend—.
 - **Ni datos personales ni secretos en atributos ni en logs.** Identifica por id, nunca por el dato.
 - **Loguea con `new Logger(Contexto)`** de Nest: el logger del servicio pone la correlación y la traza en cada línea.
-  Nada de `console.log`, que se salta el formato y los niveles.
+  Nada de `console.log`, que se salta el formato y los niveles. Lo veta `infra/check-logging.sh`, junto con loguear
+  un objeto de entrada entero, un `error` desde el dominio o los casos de uso y un `worker_thread`.
 
 ## Perfiles
 
