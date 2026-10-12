@@ -67,11 +67,13 @@ test('lo que está fuera de la frontera se rechaza nombrando keel-nest, antes de
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
-test('la telemetría pedida por flag se rechaza antes de escribir', async () => {
-  const { workspace, exitCode, output } = await generated({ telemetry: 'otel' });
-  assert.equal(exitCode, 1);
-  assert.match(output, /keel-nest todavía no genera telemetría/);
-  assert.ok(!fs.existsSync(path.join(workspace, 'services')));
+test('la telemetría pedida por flag se genera (incremento 14c): su núcleo, su configuración y sus dependencias', async () => {
+  const { exitCode, output, project } = await generated({ telemetry: 'otel' });
+  assert.equal(exitCode, undefined, output);
+  assert.ok(fs.existsSync(path.join(project, 'src', 'infrastructure', 'telemetry', 'telemetry.ts')));
+  assert.ok(fs.existsSync(path.join(project, 'config', 'parameters', 'production', 'telemetry.yaml')));
+  const pkg = JSON.parse(fs.readFileSync(path.join(project, 'package.json'), 'utf8'));
+  assert.ok(pkg.dependencies['@opentelemetry/sdk-trace-node'] && pkg.dependencies['@prometheus-io/client']);
 });
 
 test('una segunda pasada no pisa lo que ya existe, y --check dice que está al día', async () => {

@@ -17,6 +17,7 @@ import { TS_PROJECTION } from '../lib/ts-projection.js';
 import * as project from './project.js';
 import * as config from './config.js';
 import * as logging from './logging.js';
+import * as telemetry from './telemetry.js';
 import * as serviceParameters from './service-parameters.js';
 import * as wire from './wire.js';
 import * as application from './application.js';
@@ -132,6 +133,8 @@ const GENERATORS = [
   refResolvers,
   // Los logs (incremento 14b): texto en local, JSON ECS fuera de él, con el correlationId en cada línea.
   logging,
+  // La telemetría (incremento 14c): trazas por OTLP, métricas por scrape y los interruptores de cada subsistema.
+  telemetry,
   // El reloj (incremento 10b): los schedulers de las operaciones con `schedule` y las purgas por lotes de las
   // tablas del generador.
   scheduling,

@@ -80,8 +80,11 @@ Captúralas juntas, **no lances**: regístralo a `debug` diciendo por qué y, co
 
 ## La correlación
 
-Todo el trabajo del mensaje dentro de `CorrelationContext.runWith(envelope.metadata.correlationId, ...)`: los
-eventos que provoque heredan la correlación de origen.
+Todo el trabajo del mensaje dentro de `runInbound(envelope.metadata, ...)` (`infrastructure/messaging/inbound-context.ts`): los
+eventos que provoque heredan la correlación de origen y, con telemetría, el consumo continúa la traza del emisor
+(`metadata.traceparent`). Con SNS/SQS la envoltura es la ÚNICA vía de la traza: abrir solo la correlación con
+`CorrelationContext.runWith(envelope.metadata.correlationId, ...)` compila, pasa todos los escenarios y la corta
+en cada consumo sin un solo síntoma.
 
 ## La identidad del emisor
 

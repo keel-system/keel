@@ -148,11 +148,10 @@ export function checkSupportedStack(stack) {
         'Elige uno de ellos, o genera este diseño con keel-spring.'
     );
   }
-  if (stack?.telemetry && stack.telemetry !== 'none') {
-    errors.push(
-      `telemetry: ${stack.telemetry} — keel-nest todavía no genera telemetría (llega en el incremento 14 de PLAN-KEEL-NEST.md). ` +
-        'Genera sin ella (--telemetry none).'
-    );
+  // La telemetría (incremento 14c): OpenTelemetry. Una opción que el catálogo añada se rechaza hasta que keel-nest
+  // la genere, en vez de estamparse sin efecto.
+  if (stack?.telemetry && !['none', 'otel'].includes(stack.telemetry)) {
+    errors.push(`telemetry: ${stack.telemetry} — keel-nest genera la telemetría con OpenTelemetry (otel) o sin ella (none).`);
   }
   return { errors };
 }

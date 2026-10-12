@@ -47,6 +47,7 @@ import { usesCache } from './cache.js';
 import { usesStorage, usesMultipart } from './storage.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
+import { usesTelemetry, TELEMETRY_DEPENDENCIES } from './telemetry.js';
 
 export function generate(model) {
   return [
@@ -112,6 +113,8 @@ function packageJson(model) {
       ...(usesMail(model) ? { nodemailer: NODEMAILER_VERSION } : {}),
       // La caché de lectura (incremento 13f): el cliente oficial de Redis, que también habla con Valkey.
       ...(usesCache(model) ? { '@redis/client': REDIS_CLIENT_VERSION } : {}),
+      // La telemetría (incremento 14c): el SDK de OpenTelemetry y el cliente de Prometheus.
+      ...(usesTelemetry(model) ? TELEMETRY_DEPENDENCIES : {}),
       ...(usesMail(model) && model.mail.templating ? { handlebars: HANDLEBARS_VERSION } : {})
     },
     devDependencies: {

@@ -25,6 +25,7 @@ import { usesMail } from './mail.js';
 import { usesCache } from './cache.js';
 import { usesStorage } from './storage.js';
 import { usesPayments } from './payments.js';
+import { usesTelemetry } from './telemetry.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'nest');
 const agentsSourceDir = path.join(assetsDir, 'agents');
@@ -44,6 +45,9 @@ export const CONVENTIONS = [
   'integration-tests.md',
   'infra-validation.md'
 ];
+
+/** Las que solo se instalan con una elección del stack: la observabilidad, con telemetría. */
+export const CONDITIONAL_CONVENTIONS = { 'observability.md': (model) => usesTelemetry(model) };
 
 /** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
 export const AGENTS = ['keel-nest-code.md', 'keel-nest-infra.md', 'keel-nest-tests.md', 'keel-nest-validate.md', 'keel-nest-quality.md'];
@@ -71,7 +75,7 @@ export function stackSkills(model) {
 export function generate(model) {
   const files = [];
   for (const name of GUIDES) files.push({ path: `${DOCS_DIR}/${name}`, content: docContent(path.join(generatorDir, name)) });
-  for (const name of CONVENTIONS) {
+  for (const name of [...CONVENTIONS, ...Object.keys(CONDITIONAL_CONVENTIONS).filter((name) => CONDITIONAL_CONVENTIONS[name](model))]) {
     files.push({ path: `${DOCS_DIR}/conventions/${name}`, content: docContent(path.join(generatorDir, 'conventions', name)) });
   }
   // Los documentos de contrato del método, los mismos que instala keel-spring (keel-core/gen/contract-docs.js).

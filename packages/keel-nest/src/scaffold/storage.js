@@ -20,6 +20,7 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { screamingSnake } from 'keel-core/gen';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { FILE_UPLOAD_TS } from './dtos.js';
+import { TELEMETRY_TS, instrumentationFor } from './telemetry.js';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const STORAGE_DIR = 'domain/storage';
@@ -64,7 +65,7 @@ export function generate(model) {
       { path: STORAGE_SETTINGS_TS, content: storageSettingsTs(model) },
       { path: CONFIGURED_POLICIES_TS, content: configuredPoliciesTs() },
       { path: S3_FILE_STORAGE_TS, content: s3FileStorageTs(model) },
-      { path: STORAGE_MODULE_TS, content: storageModuleTs() },
+      { path: STORAGE_MODULE_TS, content: storageModuleTs(instrumentationFor(model).some((entry) => entry.id === 'storage')) },
       ...(model.stack?.storage ? PROFILES.map((profile) => ({ path: `config/parameters/${profile}/storage.yaml`, content: storageYaml(model, profile) })) : [])
     );
   }
@@ -468,7 +469,7 @@ ${methods.join('\n\n')}
   return tsModule(S3_FILE_STORAGE_TS, imports, body);
 }
 
-function storageModuleTs() {
+function storageModuleTs(instrumented = false) {
   const imports = [
     { symbol: 'Global', from: '@nestjs/common' },
     { symbol: 'Module', from: '@nestjs/common' },
@@ -479,8 +480,14 @@ function storageModuleTs() {
     { symbol: 'STORAGE_SETTINGS', from: STORAGE_SETTINGS_TS },
     { symbol: 'storageSettings', from: STORAGE_SETTINGS_TS },
     { symbol: 'ConfiguredStoragePolicies', from: CONFIGURED_POLICIES_TS },
-    { symbol: 'S3FileStorage', from: S3_FILE_STORAGE_TS }
+    { symbol: 'S3FileStorage', from: S3_FILE_STORAGE_TS },
+    ...(instrumented ? [{ symbol: 'instrumentStorage', from: TELEMETRY_TS }] : [])
   ];
+  // Con telemetría, el puerto se entrega observado (keel.storage, TELEMETRY_INSTRUMENT_STORAGE): el adaptador del
+  // agente no se instrumenta a sí mismo, y no hay un segundo proveedor del mismo token que coordinar.
+  const fileStorage = instrumented
+    ? 'S3FileStorage,\n        { provide: FileStorage, useFactory: (adapter: S3FileStorage) => instrumentStorage(adapter), inject: [S3FileStorage] }'
+    : '{ provide: FileStorage, useClass: S3FileStorage }';
   const body = `/**
  * El almacenamiento de binarios: la configuración, la política de cada bucket y el adaptador del puerto. Global:
  * los handlers inyectan FileStorage y StoragePolicies sin importarlo.
@@ -494,7 +501,7 @@ export class StorageModule {
       providers: [
         { provide: STORAGE_SETTINGS, useValue: storageSettings(configuration) },
         { provide: StoragePolicies, useClass: ConfiguredStoragePolicies },
-        { provide: FileStorage, useClass: S3FileStorage }
+        ${fileStorage}
       ],
       exports: [FileStorage, StoragePolicies, STORAGE_SETTINGS]
     };

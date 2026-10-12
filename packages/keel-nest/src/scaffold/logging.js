@@ -105,6 +105,20 @@ export interface KeelLoggerOptions {
   readonly service: { readonly name: string; readonly version?: string; readonly environment?: string; readonly nodeName?: string };
   /** Dónde se escribe cada línea (stdout por defecto; las pruebas lo sustituyen). */
   readonly write?: (line: string) => void;
+  /** La telemetría, si este proceso la arrancó: los ids de la traza en curso y el reenvío por OTLP. */
+  readonly telemetry?: LogTelemetry | null;
+}
+
+/**
+ * Lo que el logger necesita de la telemetría, sin depender de ella (sin telemetría no se emite su módulo): los ids
+ * de la traza en curso, que van en cada línea (trace.id/span.id: el enlace de la línea con su traza), y el reenvío
+ * de la línea por OTLP, que solo hace algo con LOG_EXPORT_OTLP.
+ */
+type TraceIds = { readonly traceId: string; readonly spanId: string };
+
+export interface LogTelemetry {
+  traceIds(): TraceIds | null;
+  emitLog(level: string, logger: string, message: string, attributes: Record<string, string>): void;
 }
 
 /**
@@ -129,7 +143,7 @@ export class KeelLogger implements LoggerService {
   }
 
   /** El logger que dice la configuración del perfil activo. */
-  static from(configuration: Configuration): KeelLogger {
+  static from(configuration: Configuration, telemetry: LogTelemetry | null = null): KeelLogger {
     const text = (path: string) => {
       const value = configuration.get(path);
       return value == null || value === '' ? undefined : String(value);
@@ -143,7 +157,8 @@ export class KeelLogger implements LoggerService {
         version: text('logging.structured.ecs.service.version'),
         environment: text('logging.structured.ecs.service.environment'),
         nodeName: text('logging.structured.ecs.service.node-name')
-      }
+      },
+      telemetry
     });
   }
 
@@ -184,14 +199,20 @@ export class KeelLogger implements LoggerService {
     if (error && stack == null) stack = error.stack;
     const text = message instanceof Error ? message.message : typeof message === 'string' ? message : JSON.stringify(message);
     const correlationId = ${correlationOf};
+    const telemetry = this.options.telemetry ?? null;
+    const trace = telemetry?.traceIds() ?? null;
     this.write(
       this.options.format === 'ecs'
-        ? \`\${JSON.stringify(this.ecs(level, context, text, correlationId, error, stack))}\\n\`
-        : this.text(level, context, text, correlationId, stack)
+        ? \`\${JSON.stringify(this.ecs(level, context, text, correlationId, trace, error, stack))}\\n\`
+        : this.text(level, context, text, correlationId, trace, stack)
     );
+    telemetry?.emitLog(ECS_LEVEL[level], context ?? 'app', text, {
+      ...(correlationId ? { correlationId } : {}),
+      ...(stack ? { 'exception.stacktrace': stack } : {})
+    });
   }
 
-  private ecs(level: Level, context: string | undefined, message: string, correlationId: string | null, error: Error | undefined, stack: string | undefined) {
+  private ecs(level: Level, context: string | undefined, message: string, correlationId: string | null, trace: TraceIds | null, error: Error | undefined, stack: string | undefined) {
     const { service } = this.options;
     return {
       '@timestamp': new Date().toISOString(),
@@ -205,6 +226,8 @@ export class KeelLogger implements LoggerService {
       },
       message,
       ...(correlationId ? { correlationId } : {}),
+      // Los nombres de ECS: con ellos un backend enlaza la línea con su traza.
+      ...(trace ? { trace: { id: trace.traceId }, span: { id: trace.spanId } } : {}),
       ...(stack || error
         ? { error: { type: error?.name ?? 'Error', message: error?.message ?? message, ...(stack ? { stack_trace: stack } : {}) } }
         : {}),
@@ -212,8 +235,9 @@ export class KeelLogger implements LoggerService {
     };
   }
 
-  private text(level: Level, context: string | undefined, message: string, correlationId: string | null, stack: string | undefined): string {
-    const head = \`\${new Date().toISOString()} \${ECS_LEVEL[level].padStart(5)} \${process.pid} --- \${correlationId ? \`[\${correlationId}] \` : ''}[\${context ?? 'app'}] \${message}\`;
+  private text(level: Level, context: string | undefined, message: string, correlationId: string | null, trace: TraceIds | null, stack: string | undefined): string {
+    const ids = trace ? \`[\${trace.traceId},\${trace.spanId}] \` : '';
+    const head = \`\${new Date().toISOString()} \${ECS_LEVEL[level].padStart(5)} \${process.pid} --- \${correlationId ? \`[\${correlationId}] \` : ''}\${ids}[\${context ?? 'app'}] \${message}\`;
     return \`\${head}\\n\${stack ? \`\${stack}\\n\` : ''}\`;
   }
 }

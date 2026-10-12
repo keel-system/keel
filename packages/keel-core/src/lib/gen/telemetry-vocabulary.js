@@ -11,6 +11,8 @@
 // conexiones de cada driver, el retraso del consumidor que publica (o no) el cliente de cada broker y la
 // observación que emite el cliente de Redis. Eso lo pone cada generador junto a su vocabulario.
 
+import { cachedOperations } from './cache-plan.js';
+
 /** ¿Se generó este proyecto con telemetría? (`telemetry: otel` en el stack). */
 export function usesTelemetry(model) {
   return model?.stack?.telemetry === 'otel';
@@ -75,6 +77,20 @@ export const INSTRUMENTATION = {
     label: 'los envíos de correo'
   }
 };
+
+/**
+ * Los interruptores que le tocan a ESTE diseño: uno por subsistema que existe (la caché si alguna operación la
+ * declara, el almacenamiento y el correo si están sus capas). Sin telemetría, ninguno.
+ */
+export function instrumentationFor(model) {
+  if (!usesTelemetry(model)) return [];
+  const applies = {
+    cache: cachedOperations(model).length > 0,
+    storage: Boolean(model.layersPresent?.storage),
+    mail: Boolean(model.layersPresent?.mail)
+  };
+  return Object.values(INSTRUMENTATION).filter((entry) => applies[entry.id]);
+}
 
 /**
  * El transporte de las métricas. El camino por defecto es el SCRAPE —el colector viene a buscarlas a

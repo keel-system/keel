@@ -30,7 +30,7 @@
 //     de trazas vacías y el muestreo en producción descarta las que importan.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { cachedOperations } from './cache.js';
+import { instrumentationFor } from 'keel-core/gen/telemetry-vocabulary';
 import {
   ATTRIBUTES,
   INSTRUMENTATION,
@@ -55,15 +55,7 @@ export { OBSERVATIONS, usesTelemetry };
  * `cache:` de una operación, y quién la declara ya lo sabe `cachedOperations()`. Preguntárselo a
  * él es lo que impide que «usa caché» acabe teniendo dos definiciones.
  */
-export function instrumentationFor(model) {
-  if (!usesTelemetry(model)) return [];
-  const applies = {
-    cache: cachedOperations(model).length > 0,
-    storage: Boolean(model.layersPresent?.storage),
-    mail: Boolean(model.layersPresent?.mail)
-  };
-  return Object.values(INSTRUMENTATION).filter((entry) => applies[entry.id]);
-}
+export { instrumentationFor };
 
 /** ¿Declara este diseño el interruptor de `<id>`? */
 export function instruments(model, id) {

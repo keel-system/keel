@@ -29,40 +29,42 @@ import { paymentControllers, usesPayments } from './payments.js';
 import { PAYMENT_NOTICE_PATH } from 'keel-core/gen/payment-gateways';
 import { usesCache } from './cache.js';
 import { usesMultipart, multipartFileLimitBytes, usesStorage } from './storage.js';
+import { mainTelemetry, usesTelemetry } from './telemetry.js';
 
 export function generate(model) {
   return [
-    { path: 'src/main.ts', content: mainTs() },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), [...controllerClasses(model), ...paymentControllers(model)], usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model), usesPayments(model), usesCache(model), usesStorage(model) && Boolean(model.stack?.storage)) },
-    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model), usesPayments(model), usesMultipart(model) ? multipartFileLimitBytes(model) : null) }
+    { path: 'src/main.ts', content: mainTs(model) },
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), [...controllerClasses(model), ...paymentControllers(model)], usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model), usesPayments(model), usesCache(model), usesStorage(model) && Boolean(model.stack?.storage), usesTelemetry(model)) },
+    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model), usesPayments(model), usesMultipart(model) ? multipartFileLimitBytes(model) : null, usesTelemetry(model)) }
   ];
 }
 
-function mainTs() {
+function mainTs(model) {
+  const telemetry = mainTelemetry(model);
   return `import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from './app.module.js';
 import { loadConfiguration } from './infrastructure/config/configuration.js';
 import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from './infrastructure/http/http-platform.js';
-import { KeelLogger } from './infrastructure/logging/keel-logger.js';
+import { KeelLogger } from './infrastructure/logging/keel-logger.js';${telemetry.imports}
 
-const configuration = loadConfiguration();
+const configuration = loadConfiguration();${telemetry.start}
 // Los logs del perfil activo (texto en local, JSON ECS fuera de él): también los de todo new Logger(...).
 const app = await NestFactory.create<NestFastifyApplication>(
   AppModule.register(configuration),
   createHttpAdapter(),
-  { ...HTTP_APPLICATION_OPTIONS, logger: KeelLogger.from(configuration) }
+  { ...HTTP_APPLICATION_OPTIONS, logger: KeelLogger.from(configuration${telemetry.loggerOptions}) }
 );
 configureHttp(app);
 // SIGTERM/SIGINT cierran la aplicación de forma ordenada (ver GracefulShutdown).
 app.enableShutdownHooks();
 // Fastify escucha por defecto solo en 127.0.0.1: dentro de un contenedor nadie llegaría.
-await app.listen(configuration.server.port, configuration.server.address);
+await app.listen(configuration.server.port, configuration.server.address);${telemetry.afterListen}
 `;
 }
 
-function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false, withHttpClients = false, withMail = false, withPayments = false, withCache = false, withStorage = false) {
+function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false, withHttpClients = false, withMail = false, withPayments = false, withCache = false, withStorage = false, withTelemetry = false) {
   // Los casos de uso del diseño entran por su módulo (infrastructure/usecase), que es el único que
   // cablea handlers y mappers; los controladores REST los despachan por el mediator que exporta. La
   // persistencia y el alcance por recurso (globales) van antes: son dependencias de los handlers.
@@ -112,7 +114,7 @@ function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope
   return `import { Module, type DynamicModule } from '@nestjs/common';
 import { CONFIGURATION, type Configuration } from './infrastructure/config/configuration.js';
 import { HealthController } from './infrastructure/health/health.controller.js';
-import { GracefulShutdown } from './infrastructure/health/graceful-shutdown.js';${useCaseImport}${controllerImports}
+import { GracefulShutdown } from './infrastructure/health/graceful-shutdown.js';${withTelemetry ? "\nimport { TelemetryLifecycle } from './infrastructure/telemetry/telemetry-lifecycle.js';" : ''}${useCaseImport}${controllerImports}
 
 @Module({})
 export class AppModule {
@@ -120,14 +122,22 @@ export class AppModule {
     return {
       module: AppModule,${useCaseModule}
       controllers: [${controllerList}],
-      providers: [{ provide: CONFIGURATION, useValue: configuration }, GracefulShutdown]
+      providers: [{ provide: CONFIGURATION, useValue: configuration }, GracefulShutdown${withTelemetry ? ', TelemetryLifecycle' : ''}]
     };
   }
 }
 `;
 }
 
-function httpPlatformTs(withApi, withIdempotencyHeader = false, withSecurity = false, withPayments = false, multipartLimit = null) {
+function httpPlatformTs(withApi, withIdempotencyHeader = false, withSecurity = false, withPayments = false, multipartLimit = null, withTelemetry = false) {
+  // Con telemetría, la entrada HTTP abre el span SERVER y cuenta http_server_requests ANTES que la correlación, para
+  // que todo lo que haga la petición quede dentro de su traza; y sirve el scrape (fuera de production).
+  const telemetryImport = withTelemetry ? "\nimport { Telemetry } from '../telemetry/telemetry.js';" : '';
+  const telemetrySetup = withTelemetry
+    ? `
+  // La telemetría, si este proceso la arrancó (main.ts): las pruebas emitidas no la arrancan.
+  Telemetry.current()?.installHttp(fastify);`
+    : '';
   // La subida multipart (capa storage): el lector de @fastify/multipart, con el límite de la ENTRADA —el doble del
   // mayor maxSizeMb del diseño, como el servlet de keel-spring—, para que el límite de negocio, que comprueba el
   // caso de uso con BucketPolicy, se alcance antes que esta red de seguridad.
@@ -188,7 +198,7 @@ import { CORRELATION_HEADER, CorrelationContext } from '../correlation/correlati
     : '';
   return `import { BadRequestException } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { parseWireJson, toWireJson } from '../../application/support/wire.js';${apiImports}${multipartImport}
+import { parseWireJson, toWireJson } from '../../application/support/wire.js';${apiImports}${multipartImport}${telemetryImport}
 
 /** El adaptador HTTP del servicio. */
 export function createHttpAdapter(): FastifyAdapter {
@@ -206,7 +216,7 @@ export const HTTP_APPLICATION_OPTIONS = { bodyParser: false } as const;
  * TODAS las respuestas. Se llama antes de \`init()\`/\`listen()\`, en el arranque y en las pruebas.
  */
 export function configureHttp(app: NestFastifyApplication): void {
-  const fastify = app.getHttpAdapter().getInstance();
+  const fastify = app.getHttpAdapter().getInstance();${telemetrySetup}
   fastify.removeContentTypeParser('application/json');
   fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (${withPayments ? 'request' : '_request'}, body, done) => {${noticeExemption}
     try {

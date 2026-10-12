@@ -88,9 +88,11 @@ anota cuando build ve la carrera; que no lo anote no significa que no exista.
 
 ## La correlación
 
-Todo el trabajo del mensaje dentro de `CorrelationContext.runWith(envelope.metadata.correlationId, ...)`: los
-eventos que provoque heredan la correlación de origen. Con una fuente ajena sin envoltura Keel, el header que
-lleve su correlación, o ninguna.
+Todo el trabajo del mensaje dentro de `runInbound(envelope.metadata, ...)` (`infrastructure/messaging/inbound-context.ts`): los
+eventos que provoque heredan la correlación de origen y, con telemetría, el consumo continúa la traza del emisor
+(`metadata.traceparent`). Abrir solo la correlación con `CorrelationContext.runWith(envelope.metadata.correlationId, ...)`
+compila y pasa todos los escenarios, y CORTA la traza en cada consumo. Con una fuente ajena sin envoltura Keel,
+`CorrelationContext.runWith` con el header que lleve su correlación, o ninguna.
 
 ## La identidad del emisor
 

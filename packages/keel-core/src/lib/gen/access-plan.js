@@ -14,6 +14,7 @@
 // inexistente responde 401 y no 404, igual en los dos servidores.
 
 import { PAYMENT_NOTICE_PATH } from './payment-gateways.js';
+import { METRICS_TRANSPORT, usesTelemetry } from './telemetry-vocabulary.js';
 
 /** Las rutas técnicas abiertas: las sondas del servicio. No cuentan nada del negocio. */
 export const TECHNICAL_OPEN_PATHS = ['/livez', '/readyz'];
@@ -119,6 +120,10 @@ export function accessPlan(model, { extraOpenPosts = model.payments ? [PAYMENT_N
     checksAudience: machines.length > 0 && !split,
     rules: [
       ...TECHNICAL_OPEN_PATHS.map((path) => ({ method: null, path, requirement: open })),
+      // El scrape de métricas, con telemetría: quien lo pide es un COLECTOR, sin identidad ni forma de renovar un
+      // token. Lo que impide que esos nombres salgan al borde no es esta regla sino DÓNDE se sirve: en production,
+      // en un puerto de gestión aparte que no se publica fuera del pod.
+      ...(usesTelemetry(model) ? [{ method: 'GET', path: METRICS_TRANSPORT.scrapePath, requirement: open }] : []),
       ...extraOpenPosts.map((path) => ({ method: 'POST', path, requirement: open })),
       ...mainRules.map(rule)
     ],

@@ -31,6 +31,8 @@ import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
 import { usesCache, mediatorCacheImports } from './cache.js';
 import { usesStorage } from './storage.js';
+import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
+import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
@@ -88,8 +90,16 @@ export function generate(model, { mappers = [], payments = [], projections = [] 
             { symbol: 'WriteConflictExhausted', from: PERSISTENCE_ERRORS_TS }
           ]
         : []),
-      ...mediatorCacheImports(model)
-    ], mediatorBody(transactional, usesCache(model))) }
+      ...mediatorCacheImports(model),
+      ...(usesTelemetry(model)
+        ? [
+            { symbol: 'ATTRIBUTES', from: TELEMETRY_TS },
+            { symbol: 'OBSERVATIONS', from: TELEMETRY_TS },
+            { symbol: 'Telemetry', from: TELEMETRY_TS },
+            ...(usesCorrelation(model) ? [{ symbol: 'CorrelationContext', from: CORRELATION_TS }] : [])
+          ]
+        : [])
+    ], mediatorBody(transactional, usesCache(model), usesTelemetry(model) ? { correlation: usesCorrelation(model) } : null)) }
   ];
   files.push(...commandDispatcher(model));
   files.push(moduleFile(model, mappers, payments, projections));
@@ -347,7 +357,7 @@ export class UseCaseContainer {
 }`;
 }
 
-function mediatorBody(transactional, cache = false) {
+function mediatorBody(transactional, cache = false, telemetry = null) {
   const transactionDoc = transactional
     ? ` * La frontera transaccional del diseño también vive aquí: cada Query corre en una transacción de
  * SOLO LECTURA y cada Command en una de escritura (TransactionContext), y los adaptadores de
@@ -410,6 +420,32 @@ function mediatorBody(transactional, cache = false) {
     }
   }`
     : '';
+  // Con telemetría, cada despacho va dentro de la observación keel.use-case: span con el nombre del mensaje y
+  // la métrica keel_use_case_seconds con keel.operation y keel.outcome (ok, rejected, error), la etiqueta sin la
+  // que la alerta de tasa de error no tendría qué consultar.
+  const correlationAttribute = telemetry?.correlation
+    ? '\n        spanAttributes: { [ATTRIBUTES.correlationId]: CorrelationContext.get() },'
+    : '';
+  const observed = telemetry
+    ? `/** La observación del caso de uso; sin telemetría en marcha (el perfil test), el despacho a secas. */
+  private run(${params}): Promise<unknown> {
+    const telemetry = Telemetry.current();
+    if (!telemetry) return this.logged(message, ${transactional ? 'transactional' : '_transactional'});
+    const operation = message.constructor.name;
+    return telemetry.observe(
+      OBSERVATIONS.useCase,
+      {
+        name: operation,
+        labels: { [ATTRIBUTES.operation]: operation },${correlationAttribute}
+        // Un rechazo del dominio es un desenlace esperado (un 4xx): rejected, sin marcar el span como error.
+        isRejection: (error) => error instanceof DomainException
+      },
+      () => this.logged(message, ${transactional ? 'transactional' : '_transactional'})
+    );
+  }
+
+  `
+    : '';
   const transactionTail = transactional
     ? `
 
@@ -454,13 +490,13 @@ ${without}
     return this.run(message, false);
   }
 
-  /**
+  ${observed}/**
    * El log de frontera. Solo nombres y códigos, nunca los valores del mensaje: un Command lleva datos
    * de quien llama. Niveles fijos: debug si salió bien, log si el dominio lo rechazó —un 4xx es un
    * resultado esperado— y error si falló. La pila de un fallo NO va aquí: la imprime el adaptador
    * por el que entró, y con las dos cada fallo saldría duplicado.
    */
-  private async run(${params}): Promise<unknown> {
+  private async ${telemetry ? 'logged' : 'run'}(${params}): Promise<unknown> {
     const operation = message.constructor.name;
     const handler = this.container.resolve(message);
     const start = performance.now();

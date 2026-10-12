@@ -119,7 +119,7 @@ export class StockReservedListener implements OnApplicationBootstrap {
     const envelope = EventEnvelope.parse(message.body); // lanza si no es una envoltura
     // El filtro de la suscripción ya deja fuera los demás tipos; comprobarlo cuesta una línea y no depende de él.
     if (envelope.metadata.eventType !== 'StockReserved') return;
-    await CorrelationContext.runWith(envelope.metadata.correlationId, async () => {
+    await runInbound(envelope.metadata, async () => {
       const payload = StockReservedMessage.fromWire(envelope.data);
       payload.requireContract();
       // El orden que dice el comentario de StockReservedMessage:

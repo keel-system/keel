@@ -15,6 +15,10 @@ import { loadService } from 'keel-core';
 import { planService } from '../../src/scaffold/index.js';
 import { FIXTURES_DIR } from './workspace.js';
 import { tmpDir } from './tmp.js';
+import { TELEMETRY_DEPENDENCIES } from '../../src/scaffold/telemetry.js';
+
+/** Los paquetes de la telemetría emitida (incremento 14c): devDependencies de keel-nest para poder ejecutarla. */
+const TELEMETRY_PACKAGES = Object.keys(TELEMETRY_DEPENDENCIES);
 
 const require = createRequire(import.meta.url);
 
@@ -47,8 +51,8 @@ export function transpileTree(files, { stubs = {} } = {}) {
   // Los paquetes que importa el código emitido sin Nest (decimal.js del dominio, jose de la seguridad, handlebars
   // y nodemailer del correo, el cliente de Redis de la caché) se resuelven desde el node_modules del monorepo.
   fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
-  for (const dependency of ['decimal.js', 'jose', 'handlebars', 'nodemailer', '@redis/client', 'yaml']) {
-    const dir = path.dirname(require.resolve(`${dependency}/package.json`));
+  for (const dependency of ['decimal.js', 'jose', 'handlebars', 'nodemailer', '@redis/client', 'yaml', 'fastify', ...TELEMETRY_PACKAGES]) {
+    const dir = packageDir(dependency);
     const link = path.join(root, 'node_modules', ...dependency.split('/'));
     fs.mkdirSync(path.dirname(link), { recursive: true });
     fs.symlinkSync(dir, link, 'junction');
@@ -75,3 +79,12 @@ export function transpileTree(files, { stubs = {} } = {}) {
 }
 
 export const here = path.dirname(fileURLToPath(import.meta.url));
+
+/** El directorio de un paquete instalado, aunque no exporte su package.json (los de OpenTelemetry no lo hacen). */
+function packageDir(name) {
+  for (const base of require.resolve.paths(name) ?? []) {
+    const candidate = path.join(base, ...name.split('/'));
+    if (fs.existsSync(path.join(candidate, 'package.json'))) return candidate;
+  }
+  throw new Error(`No está instalado ${name}: npm install en la raíz del monorepo`);
+}

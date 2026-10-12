@@ -1994,6 +1994,40 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   donde se pasa, texto en local, paridad de variables con keel-spring); falsado con tres sabotajes (sin
   `correlationId`, niveles cruzados, sin placeholder anidado), cada uno cazado por su caso. `ts-check` 12/12 y gana
   el paso «la consola de develop es JSON ECS, línea a línea» sobre el servidor arrancado.
+- **14c — la telemetría en keel-nest: hecha (2026-10-12). `telemetry: otel` sale de la frontera.**
+  - **Sin auto-instrumentación por loader**: en ESM exige `--experimental-loader` y parchea módulos ajenos. Los spans
+    los abre el código generado donde keel-nest ya es dueño del punto de paso, con el SDK de OpenTelemetry para Node
+    (2.11 / 0.222, exportación OTLP/HTTP) y las métricas con `@prometheus-io/client` 0.16 (el sucesor oficial de
+    prom-client, que npm marca deprecado), en OpenMetrics para los exemplars (`trace_id`/`span_id`).
+  - `src/scaffold/telemetry.js` emite `infrastructure/telemetry/telemetry.ts` (proveedor parent-based que produce W3C y
+    acepta B3, recurso con versión, entorno y réplica, `observe` con desenlace y exemplar, `publishing`/`consuming`,
+    `httpClient`, `instrumentPort`, `cacheGet`, `gauge`, `flush`) y `telemetry.yaml` por perfil con las MISMAS variables
+    y defaults que keel-spring (salvo el push OTLP de métricas, que keel-nest no ofrece). `main.ts` la arranca antes de
+    crear la aplicación y le da el logger; `TelemetryLifecycle` la vacía al apagar.
+  - **Las piezas**: `keel.use-case` en el mediator (el rechazo del dominio es `rejected` y no marca el span); el span
+    SERVER y `http_server_requests_seconds` (plantilla `/products/{id}`, `NOT_FOUND`, las sondas cuentan pero no abren
+    traza) en el hook de Fastify, antes que la correlación; `metadata.traceparent` estampado por `EventEnvelope.of`;
+    el relay publica dentro de la traza de la fila (`keel.outbox.publish`, PRODUCER) y publica
+    `keel_outbox_dead_lettered`; `runInbound(envelope.metadata, …)` —nuevo, en `infrastructure/messaging`— abre la
+    correlación y continúa la traza del emisor (`keel.message.consume`, CONSUMER), y las skills de los tres brokers y
+    `mapping.md` lo enseñan en vez de `CorrelationContext.runWith(...correlationId)`, que corta la traza; el cliente
+    saliente propaga `traceparent` y mide `http_client_requests_seconds`; storage y correo se entregan como PUERTO
+    observado desde su módulo (`TELEMETRY_INSTRUMENT_STORAGE`/`_MAIL`); la caché cuenta `cache_gets_total{cache,result}`;
+    el logger pone `trace.id`/`span.id` y reenvía por OTLP con `LOG_EXPORT_OTLP`. En `production`, el scrape solo en
+    `MANAGEMENT_PORT`; fuera de él, en el principal. El plan de acceso NEUTRAL abre el scrape con telemetría (keel-spring
+    ya lo abría por su cuenta: línea base idéntica). `instrumentationFor` sube al vocabulario de keel-core.
+    Convención `observability.md`, instalada solo con telemetría.
+  - **Medido**: `test/telemetry.test.js` EJECUTA la telemetría emitida de `catalog-extended` con la configuración real
+    de develop contra un receptor OTLP falso y un Fastify real (las tres salidas del caso de uso con su exemplar en la
+    traza del llamante, el recurso, la entrada HTTP, la traza que cruza envoltura → relay → consumo, el cliente
+    saliente contra un proveedor de `node:http`, el storage sin la key, la caché, el gauge, el logger por consola y por
+    OTLP, la paridad de `telemetry.yaml` con keel-spring); falsado con seis sabotajes (sin exemplar, publicar sin la
+    traza de la fila, la ruta con la sintaxis de Fastify, la llamada sin propagar, el rechazo como error, el logger sin
+    traza), cada uno cazado por su caso. Las dependencias de la telemetría son devDependencies de keel-nest para poder
+    ejecutarla. `ts-check` **13/13** con seis siluetas más con telemetría (40), y una pasada manual contra PostgreSQL:
+    develop exporta trazas y logs, production sirve el scrape solo en el puerto de gestión.
+  - **Queda para después**: los spans de los DRIVERS (SQL, Mongo, Redis: `telemetry-store-spans` de la matriz) y el
+    push OTLP de métricas.
 
 ### Inc. 15 — Evolución del proyecto ya generado
 

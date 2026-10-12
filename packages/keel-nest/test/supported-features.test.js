@@ -135,9 +135,10 @@ test('el motor: PostgreSQL y MySQL se generan; los demás del catálogo se recha
   assert.match(checkSupportedStack({ database: 'oracle' }).errors[0], /database: oracle .*postgresql y mysql/);
 });
 
-test('la telemetría se rechaza en vez de estamparse sin efecto', () => {
+test('la telemetría: otel y none se generan; una opción que keel-nest no genera se rechaza en vez de estamparse sin efecto', () => {
   assert.deepEqual(checkSupportedStack({ telemetry: 'none' }).errors, []);
-  assert.match(checkSupportedStack({ telemetry: 'otel' }).errors[0], /incremento 14/);
+  assert.deepEqual(checkSupportedStack({ telemetry: 'otel' }).errors, []);
+  assert.match(checkSupportedStack({ telemetry: 'zipkin' }).errors[0], /telemetry: zipkin/);
 });
 
 test('con persistencia, la idempotencia de petición se genera y no se avisa', () => {

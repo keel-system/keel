@@ -17,6 +17,7 @@
 // keel-spring (MAIL_HOST, MAIL_PORT…): el mismo .env sirve para los dos servidores del diseño.
 
 import { DIRS, classPath, tsModule } from './render.js';
+import { TELEMETRY_TS, instrumentationFor } from './telemetry.js';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const MAIL_DIR = 'domain/mail';
@@ -616,7 +617,13 @@ function mailModuleTs(model) {
     { symbol: 'MailSender', from: MAIL_SENDER_TS },
     { symbol: 'SmtpMailSender', from: SMTP_MAIL_SENDER_TS }
   ];
-  const providers = ['{ provide: MAIL_SETTINGS, useValue: mailSettings(configuration) }', '{ provide: MailSender, useClass: SmtpMailSender }'];
+  // Con telemetría, el puerto se entrega observado (keel.mail.send, TELEMETRY_INSTRUMENT_MAIL).
+  const instrumented = instrumentationFor(model).some((entry) => entry.id === 'mail');
+  if (instrumented) imports.push({ symbol: 'instrumentMail', from: TELEMETRY_TS });
+  const sender = instrumented
+    ? 'SmtpMailSender,\n        { provide: MailSender, useFactory: (adapter: SmtpMailSender) => instrumentMail(adapter), inject: [SmtpMailSender] }'
+    : '{ provide: MailSender, useClass: SmtpMailSender }';
+  const providers = ['{ provide: MAIL_SETTINGS, useValue: mailSettings(configuration) }', sender];
   const exports = ['MailSender'];
   if (templating) {
     imports.push({ symbol: 'TemplateRenderer', from: TEMPLATE_RENDERER_TS }, { symbol: 'HandlebarsTemplateRenderer', from: HANDLEBARS_RENDERER_TS });

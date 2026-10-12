@@ -36,6 +36,7 @@ import { readerOf, readerImports, valueReaders } from './controllers.js';
 import { MODULE_TS as USE_CASE_MODULE_TS } from './mediator.js';
 import { acknowledgeNote } from 'keel-core/gen/rejection-notes';
 import { callsPaymentGateway } from 'keel-core/gen/payments-model';
+import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 
 const MESSAGING_DIR = 'infrastructure/messaging';
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
@@ -139,6 +140,7 @@ export function generate(model) {
     }
   }
   if (usesBridge(model)) files.push({ path: bridgePath(model), content: bridgeFile(model) });
+  if ((model.subscriptions ?? []).length > 0) files.push({ path: INBOUND_CONTEXT_TS, content: inboundContextFile(model) });
   for (const sub of model.subscriptions ?? []) {
     files.push({ path: messagePath(sub), content: messageFile(model, sub) });
     if (sub.envelopeRecord) files.push({ path: envelopePath(sub), content: wrappedEnvelopeFile(sub) });
@@ -153,17 +155,51 @@ export function generate(model) {
   return files;
 }
 
+// ─── El contexto de un mensaje consumido ─────────────────────────────────────
+
+/** Dónde vive `runInbound`: lo que el listener del agente abre alrededor de todo el trabajo de un mensaje. */
+export const INBOUND_CONTEXT_TS = `src/${MESSAGING_DIR}/inbound-context.ts`;
+
+function inboundContextFile(model) {
+  const telemetry = usesTelemetry(model);
+  const run = telemetry
+    ? `CorrelationContext.runWith(metadata.correlationId, () => {
+    const telemetry = Telemetry.current();
+    return telemetry ? telemetry.consuming(metadata.eventType, metadata.traceparent, action) : action();
+  });`
+    : 'CorrelationContext.runWith(metadata.correlationId, action);';
+  return tsModule(
+    INBOUND_CONTEXT_TS,
+    [
+      { symbol: 'EventMetadata', from: EVENT_METADATA_TS, type: true },
+      { symbol: 'CorrelationContext', from: CORRELATION_TS },
+      ...(telemetry ? [{ symbol: 'Telemetry', from: TELEMETRY_TS }] : [])
+    ],
+    `/**
+ * Abre el contexto de un mensaje consumido con la metadata de su envoltura Keel: la correlación de origen (los
+ * eventos que provoque la heredan)${telemetry ? ' y la traza del emisor, que continúa en un span CONSUMER de keel.message.consume (keel_message_consume_seconds)' : ''}.
+ *
+ * Es lo que el listener envuelve alrededor de TODO el trabajo del mensaje: \`runInbound(envelope.metadata, () => ...)\`.
+ * Abrir solo la correlación con \`CorrelationContext.runWith(envelope.metadata.correlationId, ...)\` compila y pasa
+ * todos los escenarios, y corta la traza en cada consumo${telemetry ? '' : ' cuando el servicio se genere con telemetría'}.
+ */
+export function runInbound<T>(metadata: EventMetadata, action: () => Promise<T>): Promise<T> {
+  return ${run}
+}`
+  );
+}
+
 // ─── La envoltura ────────────────────────────────────────────────────────────
 
 function envelopeFile(model) {
+  const telemetry = usesTelemetry(model);
   const body = `/**
  * Envoltura estándar de los eventos: metadata + payload, en el orden del cable (keel-core,
  * WIRE_SHAPES.eventEnvelope). Es la misma que publica y consume el servidor de keel-spring del diseño.
  *
  * La metadata es la que el agregado estampó al emitir el evento de dominio: conserva el eventId, que es
  * la clave de idempotencia del consumidor. Aquí solo se le añaden la correlación y el contexto de traza
- * de la petición, que el dominio no conoce (este servicio no tiene telemetría: el traceparent viaja a
- * null).
+ * de la petición, que el dominio no conoce (${telemetry ? 'el traceparent es el de la traza en curso: con él el consumidor la continúa' : 'este servicio no tiene telemetría: el traceparent viaja a\n * null'}).
  */
 export class EventEnvelope<T> {
   constructor(
@@ -172,7 +208,7 @@ export class EventEnvelope<T> {
   ) {}
 
   static of<T>(metadata: EventMetadata, data: T, correlationId: string | null): EventEnvelope<T> {
-    return new EventEnvelope(metadata.withContext(correlationId, null), data);
+    return new EventEnvelope(metadata.withContext(correlationId, ${telemetry ? 'Telemetry.current()?.currentTraceparent() ?? null' : 'null'}), data);
   }
 
   /**
@@ -223,7 +259,8 @@ export class EventEnvelope<T> {
       { symbol: 'parseWireJson', from: WIRE_TS },
       { symbol: 'toInt', from: WIRE_TS },
       { symbol: 'toTimestamp', from: WIRE_TS },
-      { symbol: 'MessageContractViolation', from: MESSAGE_CONTRACT_TS }
+      { symbol: 'MessageContractViolation', from: MESSAGE_CONTRACT_TS },
+      ...(telemetry ? [{ symbol: 'Telemetry', from: TELEMETRY_TS }] : [])
     ],
     body
   );

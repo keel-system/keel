@@ -199,6 +199,7 @@ export {
   ATTRIBUTES,
   OUTCOMES,
   INSTRUMENTATION,
+  instrumentationFor,
   METRICS_TRANSPORT,
   promMetric,
   promGauge,

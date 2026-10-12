@@ -32,6 +32,7 @@ import { messageComponents, messagePath, returnTypeOf } from './services.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { usesPersistence } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
+import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const WIRE_TS = 'src/application/support/wire.ts';
@@ -494,6 +495,8 @@ ${rows.join(',\n')}
 
 function redisOperationCacheTs(model) {
   const transactional = usesPersistence(model);
+  // Con telemetría, cada lectura cuenta su acierto o su fallo (cache_gets_total{cache,result}, el ratio del panel).
+  const telemetry = usesTelemetry(model);
   const imports = [
     { symbol: 'Inject', from: '@nestjs/common' },
     { symbol: 'Injectable', from: '@nestjs/common' },
@@ -505,7 +508,8 @@ function redisOperationCacheTs(model) {
     { symbol: 'OperationCache', from: OPERATION_CACHE_TS },
     { symbol: 'RESPONSE_CODECS', from: CACHED_RESPONSES_TS },
     { symbol: 'ResponseCodec', from: CACHED_RESPONSES_TS, type: true },
-    ...(transactional ? [{ symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS }] : [])
+    ...(transactional ? [{ symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS }] : []),
+    ...(telemetry ? [{ symbol: 'Telemetry', from: TELEMETRY_TS }] : [])
   ];
   const afterCommit = transactional
     ? `
@@ -567,7 +571,8 @@ export class RedisOperationCache extends OperationCache {
     if (this.store == null) return load();
     const codec = codecOf(cache);
     const entry = entryKey(cache, cache.keyOf(message));
-    const hit = await this.read(cache, entry, codec);
+    const hit = await this.read(cache, entry, codec);${telemetry ? `
+    Telemetry.current()?.cacheGet(cache.name, hit !== MISS);` : ''}
     if (hit !== MISS) return hit as T;
     const pending = this.loading.get(entry);
     if (pending) return pending as Promise<T>;

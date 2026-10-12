@@ -108,7 +108,7 @@ export class InventoryEventsListener implements OnApplicationBootstrap {
 
   private async handle(message: ConsumeMessage): Promise<void> {
     const envelope = EventEnvelope.parse(message.content.toString('utf8')); // lanza si no es una envoltura
-    await CorrelationContext.runWith(envelope.metadata.correlationId, async () => {
+    await runInbound(envelope.metadata, async () => {
       switch (envelope.metadata.eventType) {
         case 'StockReserved': {
           const payload = StockReservedMessage.fromWire(envelope.data);

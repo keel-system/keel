@@ -18,6 +18,7 @@ import { DIRS, classPath, declType, fieldImports, fileName, tsModule, tsString, 
 import { DECIMAL_TS, RAW_JSON_TS, WIRE_TS } from './wire.js';
 import { COMMAND_SIGNATURE_TS } from './request-idempotency.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
+import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 
 const CLIENTS_DIR = 'infrastructure/clients';
 export const PROVIDER_FAILURES_TS = `src/${CLIENTS_DIR}/provider-failures.ts`;
@@ -90,7 +91,7 @@ export function generate(model) {
     { path: PROVIDER_FAILURES_TS, content: providerFailuresTs() },
     { path: CIRCUIT_BREAKER_TS, content: circuitBreakerTs() },
     { path: OUTBOUND_RESILIENCE_TS, content: outboundResilienceTs() },
-    { path: HTTP_EXCHANGE_TS, content: httpExchangeTs() },
+    { path: HTTP_EXCHANGE_TS, content: httpExchangeTs(usesTelemetry(model)) },
     { path: RESPONSE_READING_TS, content: responseReadingTs() },
     { path: HTTP_CLIENTS_SETTINGS_TS, content: settingsTs(model) },
     { path: HTTP_CLIENTS_MODULE_TS, content: moduleTs(model) },
@@ -1198,7 +1199,7 @@ export function retryWaitMs(attempt: number, retry: NonNullable<OutboundPolicy['
   );
 }
 
-function httpExchangeTs() {
+function httpExchangeTs(telemetry = false) {
   return tsModule(
     HTTP_EXCHANGE_TS,
     [
@@ -1206,7 +1207,8 @@ function httpExchangeTs() {
       { symbol: 'ProviderTransportError', from: PROVIDER_FAILURES_TS },
       { symbol: 'OutboundContractError', from: RESPONSE_READING_TS },
       { symbol: 'parseWireJson', from: WIRE_TS },
-      { symbol: 'toWireJson', from: WIRE_TS }
+      { symbol: 'toWireJson', from: WIRE_TS },
+      ...(telemetry ? [{ symbol: 'Telemetry', from: TELEMETRY_TS }] : [])
     ],
     `/** Lo que un adaptador sabe de su proveedor: la URL, el timeout y las cabeceras de su autenticación. */
 export interface ClientSettings {
@@ -1261,22 +1263,29 @@ export async function exchange(client: ClientSettings, request: OutboundRequest)
     headers['Content-Type'] = 'application/json';
     payload = toWireJson(request.body);
   }
-  let status: number;
-  let text: string;
-  try {
-    const response = await fetch(url, { method: request.method, headers, body: payload, redirect: 'manual', signal: AbortSignal.timeout(client.timeoutMs) });
-    status = response.status;
-    text = await response.text();
-  } catch (error) {
-    throw new ProviderTransportError(\`\${client.id}: \${request.method} \${url.pathname} sin respuesta (\${describe(error)})\`, { cause: error });
-  }
-  if (status < 200 || status > 299) throw new ProviderStatusError(status, text);
-  if (text.trim() === '') return { status, body: null };
-  try {
-    return { status, body: parseWireJson(text) };
-  } catch {
-    throw new OutboundContractError(\`\${client.id}: \${request.method} \${url.pathname} respondió \${status} con un cuerpo que no es JSON\`);
-  }
+  const send = async (): Promise<OutboundResponse> => {
+    let status: number;
+    let text: string;
+    try {
+      const response = await fetch(url, { method: request.method, headers, body: payload, redirect: 'manual', signal: AbortSignal.timeout(client.timeoutMs) });
+      status = response.status;
+      text = await response.text();
+    } catch (error) {
+      throw new ProviderTransportError(\`\${client.id}: \${request.method} \${url.pathname} sin respuesta (\${describe(error)})\`, { cause: error });
+    }
+    if (status < 200 || status > 299) throw new ProviderStatusError(status, text);
+    if (text.trim() === '') return { status, body: null };
+    try {
+      return { status, body: parseWireJson(text) };
+    } catch {
+      throw new OutboundContractError(\`\${client.id}: \${request.method} \${url.pathname} respondió \${status} con un cuerpo que no es JSON\`);
+    }
+  };${telemetry ? `
+  // Con telemetría, un span CLIENT que propaga la traza al proveedor (traceparent) y la métrica
+  // http_client_requests_seconds con la plantilla de la ruta, nunca la URL con sus valores.
+  const telemetry = Telemetry.current();
+  return telemetry ? telemetry.httpClient(client.id, request.method, request.path, headers, send) : send();` : `
+  return send();`}
 }
 
 /** La ruta con sus variables sustituidas y codificadas. Una variable sin valor es un bug: se lanza. */

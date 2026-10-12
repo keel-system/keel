@@ -37,7 +37,7 @@ export const NETS = {
 export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
-  'runtime-panel': { pending: 'incremento 14 (telemetría)' },
+  'runtime-panel': { pending: 'incremento 14d (el panel y las alertas, con la fila de runtime de Node)' },
   'outbox-relay': {
     emitter: 'src/scaffold/messaging-stores.js (sobre OUTBOX_EVENT y OUTBOX_RELAY de keel-core/gen/messaging-stores.js) · el puente de src/scaffold/messaging.js',
     coverage: {
@@ -303,7 +303,7 @@ export const MECHANISMS = {
       mysql: { state: 'verificado', net: 'db-check', falsified: false, why: "el mismo instante sobre datetime(6) y UUID_TO_BIN('…') sobre la columna binary(16): la fila atascada la rescata el reclamo generado" }
     }
   },
-  'telemetry-store-spans': { pending: 'incremento 14 (telemetría)' },
+  'telemetry-store-spans': { pending: 'incremento 14 (los spans de los drivers: SQL, Mongo y Redis; los demás spans los abre el código generado desde el 14c)' },
   'folded-text': {
     emitter: 'src/scaffold/persistence-entities.js (la columna sombra) · src/scaffold/repositories.js (TextFold al guardar)',
     coverage: {

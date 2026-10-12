@@ -28,6 +28,8 @@ import { classPath, tsModule, tsString } from './render.js';
 import { TRANSFORMERS_TS, engineOf, optionsLiteral, physicalColumn, usesDocument } from './persistence-entities.js';
 import { documentGuard, documentRelayStore } from './document-stores.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
+import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
+import { OUTBOX_DEAD_LETTERED } from 'keel-core/gen/telemetry-vocabulary';
 import {
   IDEMPOTENCY_GUARD_TS,
   MESSAGING_SETTINGS_TS,
@@ -336,6 +338,7 @@ export class OutboxRelayStore {
 function relay(model) {
   // El manejador del almacén solo dice si hay base (null en el perfil test): el DataSource o el cliente.
   const handle = usesDocument(model) ? { symbol: 'MongoClient', from: 'mongodb' } : { symbol: 'DataSource', from: 'typeorm' };
+  const telemetry = usesTelemetry(model);
   return tsModule(
     OUTBOX_RELAY_TS,
     [
@@ -351,7 +354,13 @@ function relay(model) {
       { symbol: 'OutboxRelaySettings', from: MESSAGING_SETTINGS_TS, type: true },
       { symbol: 'OutboxDispatcher', from: OUTBOX_DISPATCHER_TS },
       { symbol: 'OutboxRelayStore', from: OUTBOX_RELAY_STORE_TS },
-      { symbol: 'truncateError', from: OUTBOX_BACKOFF_TS }
+      { symbol: 'truncateError', from: OUTBOX_BACKOFF_TS },
+      ...(telemetry
+        ? [
+            { symbol: 'ClaimedOutboxEvent', from: OUTBOX_RELAY_STORE_TS, type: true },
+            { symbol: 'Telemetry', from: TELEMETRY_TS }
+          ]
+        : [])
     ],
     `/**
  * Reenvía al broker las filas pendientes del outbox, ya fuera de la transacción que las creó.
@@ -385,7 +394,9 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
   }
 
   onApplicationBootstrap(): void {
-    if (this.dataSource == null) return;
+    if (this.dataSource == null) return;${telemetry ? `
+    // La señal de que el outbox perdió algo, en cada scrape: lo que lee la alerta de eventos rendidos.
+    Telemetry.current()?.gauge('${OUTBOX_DEAD_LETTERED}', 'Eventos del outbox que agotaron sus reintentos y siguen sin entregarse', () => this.countDeadLettered());` : ''}
     this.schedule();
   }
 
@@ -405,7 +416,7 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
       // apagado una latencia del broker por fila.
       if (this.stopped) break;
       try {
-        await this.dispatcher.dispatch(row.destination, row.routingKey, row.eventType, row.payload);
+        await ${telemetry ? 'this.publish(row)' : 'this.dispatcher.dispatch(row.destination, row.routingKey, row.eventType, row.payload)'};
         await this.store.markPublished(row.id);
         this.logger.debug(\`Outbox: \${row.eventType} publicado (\${row.id})\`);
       } catch (error) {
@@ -422,7 +433,17 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
     return claimed.length;
   }
 
-  /**
+${telemetry ? `  /**
+   * La publicación de una fila dentro de la observación keel.outbox.publish, continuando la traza de la petición
+   * que la originó: el traceparent viaja en la envoltura guardada en la fila. Sin telemetría en marcha, a secas.
+   */
+  private publish(row: ClaimedOutboxEvent): Promise<void> {
+    const send = () => this.dispatcher.dispatch(row.destination, row.routingKey, row.eventType, row.payload);
+    const telemetry = Telemetry.current();
+    return telemetry ? telemetry.publishing(row.eventType, traceparentOf(row.payload), send) : send();
+  }
+
+` : ''}  /**
    * Suspende las pasadas, esperando a la que esté en vuelo. Es para el arnés de integración, que fabrica
    * así la precondición de un escenario del outbox (una fila pendiente que nadie entrega todavía).
    */
@@ -460,7 +481,17 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
         });
     }, this.settings.fixedDelayMs);
   }
-}`
+}${telemetry ? `
+
+/** El traceparent de la envoltura guardada en la fila (metadata.traceparent), o null si no lo trae. */
+function traceparentOf(payload: string): string | null {
+  try {
+    const value = (JSON.parse(payload) as { metadata?: { traceparent?: unknown } } | null)?.metadata?.traceparent;
+    return typeof value === 'string' ? value : null;
+  } catch {
+    return null;
+  }
+}` : ''}`
   );
 }
 

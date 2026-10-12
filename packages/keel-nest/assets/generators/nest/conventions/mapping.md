@@ -332,7 +332,7 @@ respaldo de build) y los listeners en `MESSAGE_LISTENERS`. Un listener se regist
 arrancar y hace, en este orden, lo que dice la clase del mensaje de su suscripción: leer la envoltura,
 descartar SIN lanzar lo que no es suyo, `fromWire` y `requireContract()`, deduplicar con `IdempotencyGuard`
 en el orden que esa clase prescribe, y despachar por el `UseCaseMediator` dentro de
-`CorrelationContext.runWith(metadata.correlationId, …)`. Lo que lanza se reintenta o va al descarte; lo que
+`runInbound(envelope.metadata, …)` (la correlación de origen y, con telemetría, la traza del emisor). Lo que lanza se reintenta o va al descarte; lo que
 retorna se confirma.
 
 ## Cobertura funcional (criterio de «generación terminada»)

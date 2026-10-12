@@ -27,6 +27,10 @@ import { spawn, spawnSync } from 'node:child_process';
 import { makeWorkspace, mountDesign, runCommand, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { planService } from '../src/scaffold/index.js';
+import { TELEMETRY_DEPENDENCIES } from '../src/scaffold/telemetry.js';
+
+/** Las fixtures que se compilan además con telemetría: cada pieza instrumentada, en los dos modelos. */
+const TELEMETRY_SUBJECTS = ['product-catalog', 'stock-reservation', 'catalog-extended', 'asset-vault', 'notification-mailer', 'notification-mailer-mongo'];
 import { loadService } from 'keel-core';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { resolveRuntime, startDatabase, stopDatabase } from './lib/database-container.js';
@@ -127,7 +131,9 @@ const extra = npm(projectDir, [
   // El almacenamiento (incremento 13g): el SDK de S3, su firmante y el lector multipart.
   `@aws-sdk/client-s3@${AWS_SDK_VERSION}`,
   `@aws-sdk/s3-request-presigner@${AWS_SDK_VERSION}`,
-  `@fastify/multipart@${FASTIFY_MULTIPART_VERSION}`
+  `@fastify/multipart@${FASTIFY_MULTIPART_VERSION}`,
+  // La telemetría (incremento 14c): el SDK de OpenTelemetry y el cliente de Prometheus.
+  ...Object.entries(TELEMETRY_DEPENDENCIES).map(([name, version]) => `${name}@${version}`)
 ]);
 if (!step('dependencias de las demás siluetas (jose, amqplib, kafka, aws, mongodb, nodemailer, handlebars, @redis/client, s3, multipart)', extra.ok)) console.error(extra.output);
 
@@ -143,12 +149,19 @@ const silhouettes = fs.readdirSync(FIXTURES_DIR).flatMap((name) => {
   const brokers = layers.messaging ? ['rabbitmq', 'kafka', 'snssqs'] : [null];
   const silhouettesOf = brokers.map((broker) => ({ name, broker, paymentGateway: null }));
   if (layers.payments) silhouettesOf.push({ name, broker: brokers[0], paymentGateway: 'mercadopago' });
+  // Con telemetría (incremento 14c), las fixtures que traen cada pieza instrumentada: la API y el mediator
+  // (product-catalog), el outbox y el consumo (stock-reservation), la caché, el storage y los clientes salientes
+  // (catalog-extended, asset-vault) y el correo (notification-mailer); en los dos modelos de persistencia.
+  if (TELEMETRY_SUBJECTS.includes(name)) silhouettesOf.push({ name, broker: brokers[0], paymentGateway: null, telemetry: 'otel' });
   return silhouettesOf;
 });
-for (const { name: fixture, broker, paymentGateway } of silhouettes) {
-  const name = [fixture, broker, paymentGateway].filter(Boolean).join('-');
+for (const { name: fixture, broker, paymentGateway, telemetry } of silhouettes) {
+  const name = [fixture, broker, paymentGateway, telemetry].filter(Boolean).join('-');
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
-  const stack = broker || paymentGateway ? { ...(broker ? { broker } : {}), ...(paymentGateway ? { paymentGateway } : {}) } : null;
+  const stack =
+    broker || paymentGateway || telemetry
+      ? { ...(broker ? { broker } : {}), ...(paymentGateway ? { paymentGateway } : {}), ...(telemetry ? { telemetry } : {}) }
+      : null;
   const { files } = planService({ manifest, layers, workspace: workspace, stack });
   const dir = path.join(workspace, 'fixtures-tsc', name);
   for (const file of files) {
