@@ -213,9 +213,49 @@ los imprime desde el workspace y `/keel-evolve` los recoge. **Copia ese archivo 
 de tirarlo**: comparar huecos entre corridas es lo que distingue el hueco de un diseño del hueco del
 método.
 
+## Modo evolución: el proyecto ya existía
+
+Un proyecto completado no se regenera desde cero cuando cambia su diseño. El diseñador ejecuta
+`keel-nest build specs/<servicio> --refresh --prune` en el workspace, y build deja en
+`build/keel-refresh/EVOLUTION.md` (más `evolution.json`, su forma estructurada) lo que cambió desde
+la última vez que se completó. El documento y su lógica son los mismos que los de keel-spring
+(`keel-core/gen/evolution.js`): solo cambian las rutas de esta plataforma.
+
+| Sección | Qué es | Para quién |
+|---|---|---|
+| 1. Fusiones pendientes | Archivos que el agente completó y el generador volvió a cambiar; la versión nueva está en `build/keel-refresh/<ruta>` | `keel-nest-code` |
+| 2. Huérfanos a retirar | Lo que build ya no emite y alguien tocó (lo intacto ya lo borró `--prune`) | `keel-nest-code` |
+| 3. Cambios del diseño | Delta por capa y sección: añadido, quitado, cambiado | `keel-nest-code` |
+| 4. Escenarios | `FL-*` añadidos, cambiados y quitados, y sus familias | `keel-nest-tests`, y solo esto |
+| 5. Archivos nuevos con TODO | Los stubs nuevos | `keel-nest-code` |
+| 6. Stack | Categorías que el diseño empezó o dejó de pedir | `keel-nest-infra` y `keel-nest-code` |
+
+El pipeline es el mismo; lo que cambia es el alcance de la fase 1. La fase 2a no se acota nunca:
+`score-scenarios.sh` corre la suite **completa**, y las pruebas de los flujos que no se tocaron son
+la no-regresión de lo que ya funcionaba. Una evolución que solo puntuara lo cambiado no vería el
+escenario viejo que el cambio rompió, que es justo lo que más cuesta ver.
+
+**La base del delta** es el diseño desde el que se completó el proyecto, no el snapshot de
+`specs/`: build lo refresca en cada pasada, así que se congela una copia en
+`build/keel-refresh/base-specs/` la primera vez que el diseño cambia. Dos builds seguidos antes de
+entrar al proyecto no pierden la evolución. La versión nueva de un conflicto cae en
+`build/keel-refresh/` y no junto al archivo: dentro de `src/` la compilaría `tsc` y la leerían los
+gates que hacen `grep -rl` sobre ese árbol.
+
+**Cierre, y es del orquestador**:
+1. Quitar de `pendingMerge` (en `keel-generated.json`) las rutas fusionadas. Build movió la línea
+   base de un conflicto a la versión nueva al dejarla en `build/keel-refresh/`: sin eso el
+   conflicto era perpetuo. `pendingMerge` es lo que impide que ese cambio de base se lea como «ya
+   fusionado»: mientras quede una entrada, `keel-nest build --check` sale en rojo.
+2. Borrar `build/keel-refresh/`.
+3. Hacer el commit.
+
+Hasta entonces nadie borra `build/`.
+
 ## Autosuficiencia del proyecto
 
 `build` deja aquí todo lo que el pipeline necesita: la skill orquestadora, los cinco agentes, las
 convenciones (`{{keel:docs}}/conventions/`), `architecture.md`, `constitution.md`, la skill de la base de
 datos y el snapshot del diseño en `specs/`. El canónico del diseño sigue siendo `specs/<servicio>/` del
-workspace: un cambio funcional se hace allí y se re-ejecuta `keel-nest build`.
+workspace: un cambio funcional se hace allí, se re-ejecuta `keel-nest build specs/<servicio> --refresh --prune`
+y se vuelve a entrar aquí, en modo evolución (ver [Modo evolución](#modo-evolución-el-proyecto-ya-existía)).

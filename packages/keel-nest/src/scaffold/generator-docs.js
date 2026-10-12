@@ -204,6 +204,16 @@ completo, con sus porqués: \`{{keel:docs}}/orchestration.md\`.
    detente y pide cerrar el diseño con \`/keel-design\`), que esta raíz es un repo git (si no,
    \`git init -b main\`) y que las dependencias están instaladas (\`npm install\` la primera vez, \`npm ci\`
    si ya hay \`package-lock.json\`). El stack está en \`keel-stack.json\`: respétalo.
+
+   **Modo evolución.** Si existe \`build/keel-refresh/EVOLUTION.md\`, este proyecto ya estaba completado y algo
+   cambió desde entonces —el diseño, el stack o el generador—: léelo entero antes de lanzar nada. Es el mismo
+   pipeline con el trabajo acotado: a \`keel-nest-code\` le pasas la ruta de ese documento (fusiones pendientes,
+   huérfanos a retirar, cambios del diseño, stubs nuevos y stack); a \`keel-nest-tests\`, la ruta y **solo su
+   sección 4** (los \`FL-*\` añadidos, cambiados y quitados: las pruebas de los demás flujos no se reescriben);
+   \`keel-nest-infra\` hace lo de siempre. La puntuación, el arbitraje y la calidad **no cambian**:
+   \`score-scenarios.sh\` corre la suite completa, y las pruebas de los flujos que no se tocaron son la
+   no-regresión. Hasta cerrar, nadie borra \`build/\`: se llevaría el documento, la base del delta y las
+   versiones nuevas de los conflictos.
 1. **Fase 1 — en paralelo** (los tres lanzados a la vez, en un único mensaje):
    - \`keel-nest-code\`: «Completa el proyecto en \`.\`. Tu proceso, tu alcance y tu criterio de terminado
      son los de tu archivo de agente; \`{{keel:context}}\` es el contexto del repo, no tu lista de
@@ -258,7 +268,11 @@ completo, con sus porqués: \`{{keel:docs}}/orchestration.md\`.
    \`specs/service.keel.yaml\` y \`generator: keel-nest\`): \`keel-nest check\` lo imprime desde el workspace.
    Sin huecos, no se escribe; sin nada que reportar, dilo en una línea.
 7. **Cerrar.** Commit (\`Generado desde specs/${service.name} v${service.version}\`) y resumen: matriz,
-   estado de cada agente, ajustes de calidad y huecos del diseño.
+   estado de cada agente, ajustes de calidad y huecos del diseño. **En modo evolución**, antes del commit:
+   quita de \`pendingMerge\` en \`keel-generated.json\` las rutas que se fusionaron (la clave entera si no
+   queda ninguna) —mientras quede una, \`keel-nest build --check\` sale en rojo, y así debe ser—, borra
+   \`build/keel-refresh/\` entero y añade al resumen el delta aplicado; el commit pasa a ser
+   \`Evolucionado desde specs/${service.name}\` con las dos versiones que nombra \`EVOLUTION.md\`.
 
 ## Conocimiento local
 

@@ -1,7 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import pc from 'picocolors';
-import { copyTree, diffDesigns, MANIFEST_FILE as DESIGN_MANIFEST } from 'keel-core';
+import { copyTree } from 'keel-core';
 import { gateDesign } from 'keel-core/gen/design-gate';
 import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
@@ -14,19 +13,21 @@ import {
   writeStackConfig,
   askStackConfig,
   describeStack,
-  stackDrift,
   normalizeTelemetry
 } from '../lib/stack-config.js';
 import { REFRESH_DIR } from '../lib/generated-manifest.js';
 import { writeSpecsSeal } from '../lib/specs-seal.js';
 import {
-  BASE_SPECS_DIR,
   EVOLUTION_MD,
-  evolutionState,
-  mergePrevious,
-  readPreviousEvolution,
-  writeEvolution
-} from '../scaffold/evolution.js';
+  checkFails,
+  designDelta,
+  evolveStack,
+  persistEvolution,
+  planEvolution,
+  reportEvolution,
+  reportGeneratorDrift
+} from 'keel-core/gen/evolution';
+import { SPRING_EVOLUTION } from '../scaffold/evolution.js';
 
 export async function build(
   inputPath,
@@ -88,41 +89,17 @@ export async function build(
   let stackIsNew = false;
   let stackChanges = { added: [], removed: [] };
   if (stack) {
-    // El stack persistido se reutiliza, pero el diseño pudo EVOLUCIONAR bajo él: una capa
-    // nueva que pide tecnología se pregunta (solo ella), y la que dejó de aplicar se anula.
-    const drift = stackDrift(stack, layers);
-    if (drift.missing.length + drift.stale.length > 0) {
-      const before = stack;
-      if (mode !== 'check') {
-        const answers =
-          drift.missing.length > 0 ? await askStackConfig(manifest, layers, { defaults, only: drift.missing }) : {};
-        stack = { ...stack };
-        for (const category of drift.missing) stack[category] = answers[category] ?? null;
-        for (const category of drift.stale) stack[category] = null;
-      }
-      stackChanges = {
-        added: drift.missing.map((category) => ({ category, value: stack[category] ?? null })),
-        removed: drift.stale.map((category) => ({ category, value: before[category] }))
-      };
-    }
-    // `--telemetry` sobre un stack ya persistido: es el único modo de cambiarla, porque no hay
-    // capa del diseño cuya aparición la pida. Se reporta como cualquier otro cambio de stack,
-    // así EVOLUTION.md lo recoge y el agente sabe que la config y el relay cambiaron.
-    const currentTelemetry = normalizeTelemetry(stack.telemetry);
-    if (telemetry != null && telemetry !== currentTelemetry) {
-      if (mode !== 'check') stack = { ...stack, telemetry };
-      if (currentTelemetry !== 'none') stackChanges.removed.push({ category: 'telemetry', value: currentTelemetry });
-      if (telemetry !== 'none') stackChanges.added.push({ category: 'telemetry', value: telemetry });
-    }
-    console.log();
-    console.log(pc.dim(`Stack (${STACK_FILE}): ${describeStack(stack)}`));
-    for (const { category, value } of stackChanges.added) {
-      console.log(`  ${pc.yellow('+')} ${category}: ${value ?? pc.dim('(sin elegir: --check no pregunta)')}`);
-    }
-    for (const { category, value } of stackChanges.removed) {
-      const why = category === 'telemetry' ? '(retirada con --telemetry none)' : '(el diseño ya no lo pide)';
-      console.log(`  ${pc.yellow('-')} ${category}: ${value} ${pc.dim(why)}`);
-    }
+    // El stack persistido se reutiliza, pero el diseño pudo EVOLUCIONAR bajo él
+    // (keel-core/gen/evolution.js): lo nuevo se pregunta (solo eso) y lo que dejó de aplicar se anula.
+    const evolved = await evolveStack({
+      stack,
+      layers,
+      mode,
+      telemetry,
+      ask: (only) => askStackConfig(manifest, layers, { defaults, only })
+    });
+    stack = evolved.stack;
+    stackChanges = evolved.changes;
   } else {
     stack = await askStackConfig(manifest, layers, { defaults, telemetry });
     stackIsNew = true;
@@ -131,19 +108,7 @@ export async function build(
   // El delta de diseño se calcula ANTES de refrescar el snapshot, contra la base congelada
   // si una evolución anterior sigue sin cerrar, o si no contra el snapshot: es el diseño
   // desde el que se completó el proyecto por última vez.
-  const snapshotDir = path.join(projectDir, 'specs');
-  const baseDir = path.join(projectDir, REFRESH_DIR, BASE_SPECS_DIR);
-  const hasDesign = (candidate) => fs.existsSync(path.join(candidate, DESIGN_MANIFEST));
-  const projectExisted = hasDesign(snapshotDir);
-  const deltaBase = hasDesign(baseDir) ? baseDir : projectExisted ? snapshotDir : null;
-  let delta = null;
-  if (deltaBase) {
-    delta = diffDesigns(deltaBase, dir);
-    if (delta.error) {
-      console.warn(`${pc.yellow('⚠')} No se pudo comparar con el diseño anterior del proyecto: ${delta.error}`);
-      delta = null;
-    }
-  }
+  const design = designDelta(projectDir, dir);
 
   // Scaffolding transversal al stack: todo lo derivable mecánicamente del
   // diseño cuyo código no depende de la infra puntual elegida (el resto lo
@@ -184,58 +149,32 @@ export async function build(
     )
   );
 
-  reportGeneratorDrift(scaffold, projectDir, workspace, mode);
+  reportGeneratorDrift(scaffold, mode, { generator: 'keel-spring' });
 
   // El traspaso al pipeline cuando el proyecto ya existía y algo cambió. En la primera
   // generación no hay nada que evolucionar: todo es nuevo y el pipeline lo sabe.
-  const evolution = projectExisted
-    ? mergePrevious(
-        evolutionState({
-          service: { name: manifest.service?.name, version: manifest.service?.version },
-          delta,
-          pendingMerge: scaffold.pendingMerge,
-          // Con --prune lo intacto ya se fue: queda lo tocado. Sin él, todo huérfano que
-          // siga en disco es algo que el diseño ya no tiene.
-          toRetire: scaffold.pruned ? scaffold.pruned.modificados : scaffold.huerfanosVivos,
-          pruned: scaffold.pruned?.borrados ?? [],
-          // Informativo, como `pruned`: no es trabajo del agente, es constancia de que build
-          // vio el borrado y lo respetó. Sin decirlo, un stub que no vuelve se lee como un
-          // archivo que build dejó de emitir.
-          notRecreated: scaffold.buckets.retirados,
-          newWithTodo: scaffold.nuevosConTodo,
-          stack: stackChanges,
-          notes: evolutionNotes(mode, prune, scaffold.buckets)
-        }),
-        readPreviousEvolution(projectDir),
-        projectDir
-      )
-    : null;
+  const evolution = planEvolution({ design, manifest, scaffold, stackChanges, mode, prune, projectDir });
   reportEvolution(evolution, scaffold.outDir, mode);
 
   if (mode === 'check') {
-    if (scaffold.buckets.refrescables.length > 0 || scaffold.buckets.conflictos.length > 0 || evolution?.pending) {
-      process.exitCode = 1;
-    }
+    if (checkFails(scaffold, evolution)) process.exitCode = 1;
     return;
   }
 
-  if (evolution) {
-    // La base se congela la primera vez que el diseño cambia, ANTES de refrescar el
-    // snapshot: si no, un segundo build compararía el diseño consigo mismo.
-    if (evolution.delta && deltaBase === snapshotDir) copyTree(snapshotDir, baseDir, { force: true });
-    writeEvolution(projectDir, evolution);
-  }
+  // La base se congela la primera vez que el diseño cambia, ANTES de refrescar el
+  // snapshot: si no, un segundo build compararía el diseño consigo mismo.
+  persistEvolution(evolution, design, projectDir, SPRING_EVOLUTION);
 
   // Snapshot del diseño dentro del proyecto: junto con el conocimiento del agente hace el repo
   // autosuficiente (quien lo clone finaliza la generación sin el workspace).
   // Siempre se refresca: el canónico es specs/<servicio> del workspace.
-  const snapshot = copyTree(dir, snapshotDir, { force: true });
+  const snapshot = copyTree(dir, design.snapshotDir, { force: true });
   // Y su sello: infra/score-scenarios.sh se niega a puntuar contra un snapshot editado desde el
   // proyecto (lib/specs-seal.js).
   writeSpecsSeal(projectDir);
   console.log(
     pc.dim(
-      `Snapshot del diseño → ${path.relative(workspace, snapshotDir).split(path.sep).join('/')}/ ` +
+      `Snapshot del diseño → ${path.relative(workspace, design.snapshotDir).split(path.sep).join('/')}/ ` +
         `(${snapshot.copied.length} archivo(s), refrescado en cada build)`
     )
   );
@@ -278,138 +217,5 @@ escenarios contra el servidor real y pase de calidad al final.`);
           'puntúa la suite completa como no-regresión.'
       )
     );
-  }
-}
-
-/** Lo que el diseñador tiene que saber de esta pasada y no es trabajo del agente. */
-function evolutionNotes(mode, prune, buckets) {
-  const notes = [];
-  if (mode !== 'refresh' && buckets.conflictos.length > 0) {
-    notes.push(
-      `${buckets.conflictos.length} conflicto(s) sin materializar: con \`--refresh\` su versión nueva queda en ` +
-        `\`${REFRESH_DIR}/\` y pasan a la sección 1.`
-    );
-  }
-  if (mode !== 'refresh' && buckets.refrescables.length > 0) {
-    notes.push(`${buckets.refrescables.length} archivo(s) de build sin poner al día: vuelve a lanzar con \`--refresh\`.`);
-  }
-  if (!prune && buckets.huerfanos.length > 0) {
-    notes.push('Con `--refresh --prune`, build retira él mismo los huérfanos que nadie tocó.');
-  }
-  return notes;
-}
-
-function reportEvolution(evolution, outDir, mode) {
-  if (!evolution?.pending) return;
-  console.log();
-  const version =
-    evolution.from && evolution.from !== evolution.to ? ` — diseño v${evolution.from} → v${evolution.to}` : '';
-  console.log(
-    pc.bold(
-      pc.yellow(
-        mode === 'check'
-          ? `Evolución pendiente${version} (no se escribe nada con --check):`
-          : `Evolución pendiente${version} → ${outDir}/${REFRESH_DIR}/${EVOLUTION_MD}`
-      )
-    )
-  );
-  const scenarios = evolution.delta?.scenarios;
-  const lines = [
-    ['fusión(es) pendiente(s)', evolution.pendingMerge.length],
-    ['huérfano(s) a retirar por el agente', evolution.toRetire.length],
-    ['sección(es) del diseño cambiada(s)', evolution.delta?.sections.length ?? 0],
-    [
-      'escenario(s) añadido(s), cambiado(s) o quitado(s)',
-      scenarios ? scenarios.added.length + scenarios.changed.length + scenarios.removed.length : 0
-    ],
-    ['archivo(s) nuevo(s) con TODO', evolution.newWithTodo.length],
-    ['cambio(s) de stack', evolution.stack.added.length + evolution.stack.removed.length],
-    ['archivo(s) retirado(s) por --prune', evolution.pruned.length]
-  ];
-  for (const [label, count] of lines) if (count > 0) console.log(`  ${pc.yellow('•')} ${count} ${label}`);
-  for (const note of evolution.notes) console.log(pc.dim(`  ${note.replace(/`/g, '')}`));
-}
-
-/**
- * Qué se ha quedado atrás respecto al generador instalado, y de quién es cada cosa.
- *
- * El vocabulario es el de `keel init --check`, que resuelve el problema hermano en el
- * workspace de diseño: `~` desfasado, `○` ausente. Se le añade `!` para el conflicto,
- * que allí no existe porque el payload no lo edita nadie a medias.
- *
- * Lo que este reporte hace y `--force` no puede: nombrar los archivos. Un `--force` a
- * ciegas propaga el arreglo Y destruye el trabajo del agente sin decir cuál era cuál.
- */
-function reportGeneratorDrift(scaffold, projectDir, workspace, mode) {
-  const { refrescables, conflictos, adoptados, retirados } = scaffold.buckets;
-  // Con --prune lo intacto ya se fue: solo queda por decir lo que alguien tocó.
-  const huerfanos = scaffold.pruned ? scaffold.pruned.modificados : scaffold.huerfanosVivos;
-  if (refrescables.length + conflictos.length + huerfanos.length + adoptados.length + retirados.length === 0) {
-    if (mode === 'check') console.log(pc.green('✔ El proyecto está al día con el generador instalado.'));
-    return;
-  }
-
-  const separar = () => console.log();
-  if (refrescables.length > 0) {
-    separar();
-    const puestos = mode === 'refresh';
-    console.log(
-      pc.bold(
-        puestos
-          ? pc.green(`${refrescables.length} archivo(s) del generador puestos al día:`)
-          : pc.yellow(`${refrescables.length} archivo(s) del generador se han quedado atrás:`)
-      )
-    );
-    for (const file of refrescables) console.log(`  ${puestos ? pc.green('+') : pc.yellow('~')} ${file}`);
-  }
-
-  if (conflictos.length > 0) {
-    separar();
-    console.log(pc.bold(pc.yellow(`${conflictos.length} archivo(s) en conflicto — los tocaste Y el generador cambió:`)));
-    for (const file of conflictos) console.log(`  ${pc.yellow('!')} ${file}`);
-    console.log(
-      pc.dim(
-        mode === 'refresh'
-          ? `  La versión nueva queda en ${REFRESH_DIR}/ para compararla con diff. Ninguno se ha tocado.`
-          : '  No se tocan: la decisión es tuya. Con --refresh se deja la versión nueva al lado para compararla.'
-      )
-    );
-  }
-
-  if (huerfanos.length > 0) {
-    separar();
-    console.log(
-      pc.dim(
-        scaffold.pruned
-          ? `${huerfanos.length} archivo(s) que el generador ya no emite y alguien tocó: no se borran, pasan al agente vía ${EVOLUTION_MD}: ${huerfanos.join(', ')}`
-          : `${huerfanos.length} archivo(s) que el generador ya no emite (no se borran; --refresh --prune retira los que nadie tocó): ${huerfanos.join(', ')}`
-      )
-    );
-  }
-
-  if (retirados.length > 0) {
-    separar();
-    console.log(
-      pc.dim(
-        `${retirados.length} archivo(s) que build escribió y ya no están: NO se recrean —borrarlos fue una decisión, ` +
-          `y el caso normal es un stub sustituido por su implementación real—. Si el borrado fue un error, --force los ` +
-          `devuelve: ${retirados.join(', ')}`
-      )
-    );
-  }
-
-  if (adoptados.length > 0) {
-    separar();
-    console.log(
-      pc.dim(
-        `${adoptados.length} archivo(s) sin registro de quién los escribió: se avisa de ellos, pero no se refrescan. ` +
-          'Un proyecto generado antes de este mecanismo los adopta enteros; salen de ahí cuando un --force los reescribe.'
-      )
-    );
-  }
-
-  if (refrescables.length > 0 && mode !== 'refresh') {
-    separar();
-    console.log(pc.dim(`Ponlos al día con ${pc.cyan('keel-spring build <ruta> --refresh')}.`));
   }
 }

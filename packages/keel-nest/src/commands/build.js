@@ -8,7 +8,6 @@ import {
   writeStackConfig,
   askStackConfig,
   describeStack,
-  stackDrift,
   normalizeTelemetry
 } from 'keel-core/gen/stack';
 import { writeProjectFiles } from 'keel-core/gen/project-writer';
@@ -18,6 +17,17 @@ import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures, checkSupportedStack } from '../lib/supported-features.js';
 import { scaffoldService } from '../scaffold/index.js';
 import { checkGatewaySupport } from 'keel-core/gen/payment-gateways';
+import {
+  EVOLUTION_MD,
+  checkFails,
+  designDelta,
+  evolveStack,
+  persistEvolution,
+  planEvolution,
+  reportEvolution,
+  reportGeneratorDrift
+} from 'keel-core/gen/evolution';
+import { NEST_EVOLUTION } from '../scaffold/evolution.js';
 
 export async function build(
   inputPath,
@@ -59,21 +69,21 @@ export async function build(
   const projectDir = path.join(workspace, 'services', `${manifest.service?.name}-nest`);
   let stack = readStackConfig(projectDir);
   let stackIsNew = false;
+  let stackChanges = { added: [], removed: [] };
   if (stack) {
-    const drift = stackDrift(stack, layers);
-    if (mode !== 'check' && drift.missing.length + drift.stale.length > 0) {
-      const answers = drift.missing.length > 0 ? await askStackConfig(manifest, layers, { defaults, only: drift.missing }) : {};
-      stack = { ...stack };
-      for (const category of drift.missing) stack[category] = answers[category] ?? null;
-      for (const category of drift.stale) stack[category] = null;
-      stackIsNew = true;
-    }
-    if (telemetry != null && mode !== 'check') {
-      stack = { ...stack, telemetry };
-      stackIsNew = true;
-    }
-    console.log();
-    console.log(pc.dim(`Stack (${STACK_FILE}): ${describeStack(stack)}`));
+    // El diseño pudo EVOLUCIONAR bajo el stack persistido (keel-core/gen/evolution.js, igual que
+    // keel-spring): lo nuevo se pregunta (solo eso), lo que dejó de aplicar se anula, y los dos
+    // cambios llegan a EVOLUTION.md.
+    const evolved = await evolveStack({
+      stack,
+      layers,
+      mode,
+      telemetry,
+      ask: (only) => askStackConfig(manifest, layers, { defaults, only })
+    });
+    stack = evolved.stack;
+    stackChanges = evolved.changes;
+    if (evolved.changed && mode !== 'check') stackIsNew = true;
   } else {
     stack = await askStackConfig(manifest, layers, { defaults, telemetry });
     stackIsNew = true;
@@ -103,6 +113,10 @@ export async function build(
     }
   }
 
+  // El delta del diseño, ANTES de refrescar el snapshot: contra la base congelada de una evolución
+  // sin cerrar o, si no, contra el snapshot, que es el diseño desde el que se completó el proyecto.
+  const design = designDelta(projectDir, dir);
+
   const acceptedUnready = acceptUnready && !readiness.ready;
   const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode, prune, readiness, acceptedUnready });
   if (stackIsNew && mode !== 'check') {
@@ -122,16 +136,25 @@ export async function build(
         (scaffold.skipped.length > 0 ? ' (usa --refresh para poner al día lo del generador, o --force para sobrescribir)' : '')
     )
   );
-  const behind = reportDrift(scaffold.buckets, mode);
+  reportGeneratorDrift(scaffold, mode, { generator: 'keel-nest' });
+
+  // El traspaso al pipeline cuando el proyecto ya existía y algo cambió (el diseño, el stack o el
+  // generador). En la primera generación no hay nada que evolucionar.
+  const evolution = planEvolution({ design, manifest, scaffold, stackChanges, mode, prune, projectDir });
+  reportEvolution(evolution, scaffold.outDir, mode);
 
   if (mode === 'check') {
-    if (behind) process.exitCode = 1;
+    if (checkFails(scaffold, evolution)) process.exitCode = 1;
     return;
   }
 
+  // La base se congela la primera vez que el diseño cambia, ANTES de refrescar el snapshot: si no,
+  // un segundo build compararía el diseño consigo mismo.
+  persistEvolution(evolution, design, projectDir, NEST_EVOLUTION);
+
   // Snapshot del diseño y su sello: el proyecto es autosuficiente, y el snapshot se refresca
   // siempre porque el canónico es specs/<servicio> del workspace.
-  const snapshot = copyTree(dir, path.join(projectDir, 'specs'), { force: true });
+  const snapshot = copyTree(dir, design.snapshotDir, { force: true });
   writeSpecsSeal(projectDir);
   console.log(pc.dim(`Snapshot del diseño → ${scaffold.outDir}/specs/ (${snapshot.copied.length} archivo(s), refrescado en cada build)`));
 
@@ -147,37 +170,12 @@ Siguiente paso, dentro del proyecto:
   1. ${pc.cyan(`cd ${scaffold.outDir}`)}
   2. ${pc.cyan('npm install')}
   3. ${pc.cyan(`/${SKILL}`)} ${pc.dim('(sin argumentos: completa el código y lo valida contra los escenarios FL-*)')}`);
-}
-
-/** Lo que se quedó atrás respecto al generador instalado. Devuelve si hay algo que poner al día. */
-function reportDrift(buckets, mode) {
-  const { refrescables, conflictos, retirados } = buckets;
-  if (refrescables.length > 0) {
-    console.log();
-    const puestos = mode === 'refresh';
+  if (evolution?.pending) {
     console.log(
-      pc.bold(
-        puestos
-          ? pc.green(`${refrescables.length} archivo(s) del generador puestos al día:`)
-          : pc.yellow(`${refrescables.length} archivo(s) del generador se han quedado atrás (ponlos al día con --refresh):`)
+      pc.dim(
+        `Como hay ${REFRESH_DIR}/${EVOLUTION_MD}, la skill entra en modo evolución: trabaja sobre lo que cambió y ` +
+          'puntúa la suite completa como no-regresión.'
       )
     );
-    for (const file of refrescables) console.log(`  ${puestos ? pc.green('+') : pc.yellow('~')} ${file}`);
   }
-  if (conflictos.length > 0) {
-    console.log();
-    console.log(pc.bold(pc.yellow(`${conflictos.length} archivo(s) en conflicto — los tocaste Y el generador cambió:`)));
-    for (const file of conflictos) console.log(`  ${pc.yellow('!')} ${file}`);
-    console.log(
-      pc.dim(mode === 'refresh' ? `  La versión nueva queda en ${REFRESH_DIR}/. Ninguno se ha tocado.` : '  No se tocan: con --refresh se deja la versión nueva al lado.')
-    );
-  }
-  if (retirados.length > 0) {
-    console.log();
-    console.log(pc.dim(`${retirados.length} archivo(s) que build escribió y ya no están: no se recrean (--force los devuelve): ${retirados.join(', ')}`));
-  }
-  if (mode === 'check' && refrescables.length + conflictos.length === 0) {
-    console.log(pc.green('✔ El proyecto está al día con el generador instalado.'));
-  }
-  return refrescables.length + conflictos.length > 0;
 }

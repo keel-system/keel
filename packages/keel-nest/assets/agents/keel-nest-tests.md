@@ -31,6 +31,20 @@ Corres **en paralelo** con `keel-nest-code`, que está escribiendo la implementa
 La caja negra es además estructural: una prueba de flujo que importe `src/` rompe la regla
 `flujos-caja-negra` (`bash infra/check-flows.sh` y `npm run check:architecture`).
 
+## Modo evolución
+
+Si el orquestador te pasa la sección 4 de `build/keel-refresh/EVOLUTION.md`, las pruebas ya existen
+y solo cambian las de esos flujos:
+
+- **Añadidos**: prueba nueva, como siempre.
+- **Cambiados**: localiza su archivo con `grep -rl '<FL-id>' test/integration/` y reescribe el caso
+  (o el archivo entero, si cambió la familia entera) contra el `Then` NUEVO.
+- **Quitados**: borra su caso, o el archivo si era todo suyo. Una prueba de un flujo que el diseño
+  retiró falla contra un servidor correcto.
+
+El resto **no se reescribe**: es la no-regresión de lo que ya funcionaba, y la puntuación lo ejecuta
+entero. La independencia no cambia: sigues sin leer `src/`.
+
 ## Proceso
 
 1. Lee, **en este orden**: `{{keel:context}}` y `keel-stack.json`; `specs/validation-scenarios.md`

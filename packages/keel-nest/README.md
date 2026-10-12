@@ -37,7 +37,8 @@ cd services/<servicio>-nest
 Todo lo que no depende del lenguaje vive en `keel-core/gen` y lo usan los dos: la interpretación del
 diseño (`buildModel`, al que keel-nest pasa su proyección TypeScript, `src/lib/ts-projection.js`), la
 puerta del diseño, el cuestionario del stack, la escritura con manifiesto (`--refresh`, `--prune`,
-`--check`, `--force`), el catálogo de infraestructura, los destinos físicos de mensajería y los
+`--check`, `--force`), la evolución de un proyecto ya generado (`build/keel-refresh/EVOLUTION.md` con
+el delta del diseño contra una base congelada, `keel-core/gen/evolution.js`), el catálogo de infraestructura, los destinos físicos de mensajería y los
 vocabularios de las sondas del arnés.
 
 ## Qué genera hoy (incremento 6)

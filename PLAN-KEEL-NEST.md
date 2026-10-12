@@ -2105,6 +2105,20 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `.keel-new` fuera del árbol de fuentes, traspaso escrito para el pipeline;
   `keel-nest check` imprime `design-gaps.yaml`.
 - **Puerta**: `design-evolution.test.js` y `generated-propagation.test.js` portados.
+- **Estado: hecho (2026-10-12).** La evolución pasó a ser NEUTRAL: `keel-core/gen/evolution.js`
+  (estado, base congelada en `build/keel-refresh/base-specs/`, fusión con la pasada anterior,
+  `EVOLUTION.md` + `evolution.json`, y el cableado entero de `build`: `designDelta`, `evolveStack`,
+  `planEvolution`, `persistEvolution`, `reportEvolution`, `reportGeneratorDrift`, `checkFails`). Lo
+  único de cada generador son cinco textos de su plataforma (`SPRING_EVOLUTION`, `NEST_EVOLUTION`:
+  el comando que se llevaría `build/`, dónde viven las pruebas de un flujo, qué pasa con un stub
+  duplicado); keel-spring sale con el mismo documento byte a byte. keel-nest gana con ello lo que no
+  tenía: el delta del diseño, los huérfanos tocados para el agente, los cambios de stack en el
+  documento (antes se perdían) y `--check` en rojo con una evolución sin cerrar. El modo evolución
+  entra en la skill orquestadora, en `keel-nest-code`, en `keel-nest-tests` y en `orchestration.md`.
+  `keel-nest check` ya imprimía `design-gaps.yaml` (incremento 7). **Puerta**: los dos tests
+  portados sobre `product-catalog` (7/7 y 9/9), con dos casos más que keel-spring no tiene: una
+  categoría de stack que falta llega a `evolution.json`, y la PARIDAD —el mismo cambio del mismo
+  diseño da el mismo delta y las mismas secciones con los dos generadores—.
 
 ### Inc. 16 — Cierre de paridad y publicación
 
