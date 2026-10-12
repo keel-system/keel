@@ -18,10 +18,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { LAYERS, schemaPathFor, loadService } from 'keel-core';
+import { walk, uncovered as uncoveredIn } from '../../keel-core/test/helpers/capability-coverage.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const fixturesDir = path.join(FIXTURES_DIR);
@@ -131,96 +129,9 @@ const EXCEPCIONES = new Map([
   ]
 ]);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Enumerar las propiedades opcionales de un schema y, a la vez, cuántas fixtures las
-// declaran. Se recorren schema y datos JUNTOS porque el camino de datos depende del schema:
-// un `additionalProperties` es un mapa cuyas claves son nombres del diseño, no propiedades
-// del DSL, y sin el schema delante no hay forma de distinguirlo de un objeto normal.
-
-/** Sigue los `$ref` locales. Un `$ref` a otro archivo (common.schema.json) es una hoja. */
-function resolveRef(schema, node, seen) {
-  let current = node;
-  while (current && current.$ref) {
-    if (!current.$ref.startsWith('#/')) return null;
-    if (seen.has(current.$ref)) return null;
-    seen.add(current.$ref);
-    current = current.$ref
-      .slice(2)
-      .split('/')
-      .reduce((acc, key) => acc?.[key], schema);
-  }
-  return current;
-}
-
-/** Subesquemas que describen EL MISMO nodo de datos (allOf/anyOf/oneOf, then/else de un if). */
-function branches(node) {
-  const out = [node];
-  for (const key of ['allOf', 'anyOf', 'oneOf']) for (const branch of node[key] ?? []) out.push(branch);
-  for (const key of ['then', 'else']) if (node[key]) out.push(node[key]);
-  return out;
-}
-
-function walk(schema, node, dataList, prefix, counts, seen) {
-  const resolved = resolveRef(schema, node, new Set(seen));
-  if (!resolved || typeof resolved !== 'object') return;
-  for (const branch of branches(resolved)) {
-    const current = branch === resolved ? resolved : resolveRef(schema, branch, new Set(seen));
-    if (!current || typeof current !== 'object') continue;
-    const required = new Set(current.required ?? []);
-    for (const [key, sub] of Object.entries(current.properties ?? {})) {
-      const dataPath = prefix ? `${prefix}.${key}` : key;
-      const declared = dataList
-        .filter((value) => value && typeof value === 'object' && value[key] !== undefined)
-        .map((value) => value[key]);
-      // La prosa queda fuera a propósito. Una `description` que el emisor lee acaba en un
-      // javadoc, y un javadoc que falta no es la clase de defecto que esto persigue: lo que
-      // se busca aquí es la rama de código que nadie compila.
-      if (!required.has(key) && key !== 'description') {
-        counts.set(dataPath, (counts.get(dataPath) ?? 0) + declared.length);
-      }
-      walk(schema, sub, declared, dataPath, counts, seen);
-    }
-    if (current.additionalProperties && typeof current.additionalProperties === 'object') {
-      const values = dataList.flatMap((value) =>
-        value && typeof value === 'object' && !Array.isArray(value) ? Object.values(value) : []
-      );
-      walk(schema, current.additionalProperties, values, prefix ? `${prefix}.*` : '*', counts, seen);
-    }
-    if (current.items) {
-      const values = dataList.flatMap((value) => (Array.isArray(value) ? value : []));
-      walk(schema, current.items, values, `${prefix}[]`, counts, seen);
-    }
-  }
-}
-
-function fixtureLayers() {
-  return fs
-    .readdirSync(fixturesDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => {
-      const { layers, errors } = loadService(path.join(fixturesDir, entry.name));
-      assert.deepEqual(errors, [], `la fixture ${entry.name} no carga`);
-      return layers;
-    });
-}
-
-/** path → número de fixtures que lo declaran. */
-function coverage() {
-  const counts = new Map();
-  const loaded = fixtureLayers();
-  for (const layer of LAYERS) {
-    const schema = JSON.parse(fs.readFileSync(schemaPathFor(layer), 'utf8'));
-    const data = loaded.map((layers) => layers[layer]).filter(Boolean);
-    walk(schema, schema, data, layer, counts, new Set());
-  }
-  return counts;
-}
-
-const uncovered = () =>
-  [...coverage()]
-    .filter(([, declaradas]) => declaradas === 0)
-    .map(([dataPath]) => dataPath)
-    .sort();
+// El enumerador (schema y datos recorridos JUNTOS) vive en keel-core/test/helpers/capability-coverage.js: lo
+// comparte keel-nest, que lee las mismas fixtures con su propia tabla de motivos.
+const uncovered = () => uncoveredIn(fixturesDir);
 
 test('toda capacidad opcional del DSL la declara alguna fixture, o EXCEPCIONES dice por qué no', () => {
   const sinAnotar = uncovered().filter((dataPath) => !EXCEPCIONES.has(dataPath));

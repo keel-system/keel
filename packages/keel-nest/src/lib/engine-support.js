@@ -42,6 +42,19 @@ export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
   'runtime-panel': {
+    parity: {
+      pair: 'notification-mailer',
+      stack: {
+        telemetry: 'otel'
+      },
+      markers: {
+        relational: ['keel_db_pool_pending', 'KeelConnectionPoolSaturated'],
+        document: ['keel_runtime_heap_limit_bytes']
+      },
+      absent: {
+        document: ['KeelConnectionPoolSaturated']
+      }
+    },
     emitter: 'src/scaffold/observability-assets.js (los neutrales de keel-core/gen/observability-assets.js con NODE_RUNTIME) · el pool en src/scaffold/persistence-runtime.js',
     coverage: {
       relational: {
@@ -60,6 +73,19 @@ export const MECHANISMS = {
     }
   },
   'outbox-relay': {
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: [
+          "src/infrastructure/messaging/outbox/outbox-relay-store.ts::setOnLocked('skip_locked')",
+          'file:src/infrastructure/persistence/entities/outbox-event-orm.ts'
+        ],
+        document: [
+          'src/infrastructure/messaging/outbox/outbox-relay-store.ts::findOneAndUpdate(',
+          'src/infrastructure/messaging/outbox/outbox-relay-store.ts::claimed_at'
+        ]
+      }
+    },
     emitter: 'src/scaffold/messaging-stores.js (sobre OUTBOX_EVENT y OUTBOX_RELAY de keel-core/gen/messaging-stores.js) · el puente de src/scaffold/messaging.js',
     coverage: {
       relational: {
@@ -80,6 +106,19 @@ export const MECHANISMS = {
     }
   },
   'idempotency-request': {
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: [
+          'src/infrastructure/persistence/idempotency-store-impl.ts::manager.insert(IdempotencyRecordOrm',
+          'IdempotencyConflictException'
+        ],
+        document: [
+          'src/infrastructure/persistence/idempotency-store-impl.ts::this.records.insertOne(',
+          'IdempotencyConflictException'
+        ]
+      }
+    },
     emitter: 'src/scaffold/request-idempotency.js (sobre IDEMPOTENCY_RECORD de keel-core/gen/request-idempotency.js)',
     coverage: {
       relational: {
@@ -100,6 +139,13 @@ export const MECHANISMS = {
     }
   },
   'idempotency-consume': {
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: ['src/infrastructure/messaging/idempotency/idempotency-guard.ts::manager.insert(ProcessedEventOrm'],
+        document: ['src/infrastructure/messaging/idempotency/idempotency-guard.ts::this.processed.insertOne(']
+      }
+    },
     emitter: 'src/scaffold/messaging-stores.js (IdempotencyGuard, sobre PROCESSED_EVENT de keel-core/gen/messaging-stores.js)',
     coverage: {
       relational: {
@@ -120,6 +166,10 @@ export const MECHANISMS = {
     }
   },
   'reconciliation-claim': {
+    parity: {
+      skip: 'su sujeto NO es un par byte a byte sino dos diseños distintos (stock-reservation relacional y asset-vault documental), igual que en keel-spring; las dos ramas las EJECUTAN db-check y doc-check, y la forma la fija este test',
+      test: 'test/reconciliation.test.js'
+    },
     emitter: 'src/scaffold/reconciliation-claim.js (sobre RECONCILIATION_CLAIM de keel-core/gen/reconciliation-stores.js) · src/scaffold/document-stores.js en la rama documental',
     coverage: {
       relational: {
@@ -139,6 +189,19 @@ export const MECHANISMS = {
     }
   },
   'sweep-claim-queue': {
+    parity: {
+      pair: 'job-dispatch',
+      markers: {
+        relational: [
+          'src/infrastructure/persistence/repositories/job-repository-impl.ts::claimForDispatchJobsRunning',
+          "src/infrastructure/persistence/repositories/job-repository-impl.ts::setOnLocked('skip_locked')"
+        ],
+        document: [
+          'src/infrastructure/persistence/repositories/job-repository-impl.ts::claimForDispatchJobsRunning',
+          'src/infrastructure/persistence/repositories/job-repository-impl.ts::findOneAndUpdate('
+        ]
+      }
+    },
     emitter: 'src/scaffold/claim.js (sobre operation.claim[], claimOrderField y sweepConfig de keel-core/gen) · el puerto y el adaptador de repositories.js',
     coverage: {
       relational: {
@@ -159,6 +222,19 @@ export const MECHANISMS = {
     }
   },
   'sweep-claim-rescue': {
+    parity: {
+      pair: 'job-dispatch',
+      markers: {
+        relational: [
+          'src/infrastructure/persistence/repositories/job-repository-impl.ts::claimForStalledDispatchJobsDone',
+          'src/infrastructure/persistence/repositories/job-repository-impl.ts::staleBefore'
+        ],
+        document: [
+          'src/infrastructure/persistence/repositories/job-repository-impl.ts::claimForStalledDispatchJobsDone',
+          'src/infrastructure/persistence/repositories/job-repository-impl.ts::staleBefore'
+        ]
+      }
+    },
     emitter: 'src/scaffold/claim.js (claim.stalled de keel-core/gen/model.js) · el plazo desde service.parameters (src/scaffold/service-parameters.js) o sweep.<x>.stalled-after-seconds',
     coverage: {
       relational: {
@@ -179,6 +255,19 @@ export const MECHANISMS = {
     }
   },
   'guard-claim': {
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: [
+          'src/infrastructure/persistence/repositories/notification-repository-impl.ts::claimForSendAcceptedNotification',
+          'src/infrastructure/persistence/repositories/notification-repository-impl.ts::inNewTransaction'
+        ],
+        document: [
+          'src/infrastructure/persistence/repositories/notification-repository-impl.ts::claimForSendAcceptedNotification',
+          'src/infrastructure/persistence/repositories/notification-repository-impl.ts::findOneAndUpdate('
+        ]
+      }
+    },
     emitter: 'src/scaffold/claim.js (adapterGuardMethods, sobre operation.guardClaim de keel-core/gen) · src/scaffold/document-stores.js (documentGuardMethods) · el puerto de repositories.js',
     coverage: {
       relational: {
@@ -199,6 +288,23 @@ export const MECHANISMS = {
     }
   },
   'harness-db-probes': {
+    parity: {
+      pair: 'job-dispatch',
+      markers: {
+        relational: [
+          'test/integration/support/flow.ts::export function stallInFlight(',
+          'test/integration/support/flow.ts::export function putInFlight(',
+          'test/integration/support/flow.ts::export function inFlightWithoutClock(',
+          'test/integration/support/flow.ts::UPDATE jobs SET'
+        ],
+        document: [
+          'test/integration/support/flow.ts::export function stallInFlight(',
+          'test/integration/support/flow.ts::export function putInFlight(',
+          'test/integration/support/flow.ts::export function inFlightWithoutClock(',
+          'test/integration/support/flow.ts::export function mongoEval('
+        ]
+      }
+    },
     emitter: 'src/scaffold/integration-tests.js (rescueSection: stallInFlight, putInFlight, inFlightWithoutClock, sobre rescueProbes de keel-core/gen) · src/scaffold/messaging-harness.js (abandonOutboxEvent)',
     coverage: {
       relational: {
@@ -219,6 +325,17 @@ export const MECHANISMS = {
     }
   },
   'schema-baseline': {
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: [
+          'file:infra/export-schema.sh',
+          'file:infra/verify-baseline.sh',
+          'file:src/infrastructure/persistence/schema-baseline.ts'
+        ],
+        document: ['file:infra/export-indexes.sh', 'file:src/infrastructure/persistence/document-indexes.ts']
+      }
+    },
     emitter: 'src/scaffold/schema-baseline.js (schema-baseline.ts, infra/export-schema.sh e infra/verify-baseline.sh)',
     coverage: {
       relational: {
@@ -230,13 +347,25 @@ export const MECHANISMS = {
           'export-schema.sh vacía el esquema local y le pide a TypeORM el DDL completo de las entidades; verify-baseline.sh aplica las migraciones sobre un esquema vacío —lo que hace el arranque en develop y production con migrationsRun— y exige que TypeORM no vea diferencia. harness-check lo ejecuta en los dos motores sobre product-catalog. Falsado el 2026-10-06 quitándole al baseline su última sentencia: la verificación sale en rojo nombrando lo que falta. A diferencia de keel-spring (baselineTested: PENDING), la prueba en vivo SÍ cabe en el pipeline: en local el esquema lo recrea synchronize. Lo que no mide: un diseño con FK entre tablas, porque product-catalog tiene una sola'
       },
       document: {
-        state: 'razonado',
+        state: 'verificado',
+        net: 'doc-harness-check',
+        falsified: true,
         why:
-          'no hay baseline que redactar: los índices salen enteros del diseño (document-indexes.ts, los de keel-core/gen/document.js) y infra/export-indexes.sh, neutral, exporta los vivos para contrastarlos. La creación al arrancar la mide doc-check; el script lo ejecutará el pase de calidad, que llega con los agentes del arnés documental (12d)'
+          'no hay baseline que redactar: los índices salen enteros del diseño (document-indexes.ts, los de keel-core/gen/document.js) y el servidor los crea al arrancar. Lo que hace el agente de calidad, doc-harness-check lo EJECUTA contra la infra/ real de job-dispatch-mongo, con el servidor ya arrancado por los flujos: infra/export-indexes.sh exporta los vivos y cada índice del contrato está, con sus claves, su unicidad y su filtro, y no sobra ninguno. Falsado el 2026-10-12 quitándole uk_jobs_natural al document-indexes.ts emitido (--sabotage=index): cae «están los índices del contrato» nombrando jobs.uk_jobs_natural (y la sonda del arnés que mira ese índice); las otras dos del baseline siguen en verde'
       }
     }
   },
   'transient-write-conflict': {
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: ["src/infrastructure/persistence/persistence-errors.ts::'40P01'", 'WRITE_CONFLICT_ATTEMPTS'],
+        document: [
+          'src/infrastructure/persistence/persistence-errors.ts::TransientTransactionError',
+          'WRITE_CONFLICT_ATTEMPTS'
+        ]
+      }
+    },
     emitter: 'src/scaffold/mediator.js · src/scaffold/persistence-runtime.js (isTransientWriteConflict)',
     coverage: {
       relational: {
@@ -256,6 +385,17 @@ export const MECHANISMS = {
     }
   },
   'document-indexes': {
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: [],
+        document: [
+          'file:src/infrastructure/persistence/document-indexes.ts',
+          'ensureDocumentIndexes',
+          'file:infra/export-indexes.sh'
+        ]
+      }
+    },
     emitter: 'src/scaffold/document-persistence.js (document-indexes.ts, sobre documentIndexes de keel-core/gen/document.js)',
     coverage: {
       relational: { state: 'no-aplica', why: 'en relacional los índices los declara la entidad y los crea el esquema (migraciones)' },
@@ -324,8 +464,30 @@ export const MECHANISMS = {
       mysql: { state: 'verificado', net: 'db-check', falsified: false, why: "el mismo instante sobre datetime(6) y UUID_TO_BIN('…') sobre la columna binary(16): la fila atascada la rescata el reclamo generado" }
     }
   },
-  'telemetry-store-spans': { pending: 'incremento 14 (los spans de los drivers: SQL, Mongo y Redis; los demás spans los abre el código generado desde el 14c)' },
+  'telemetry-store-spans': {
+    parity: {
+      skip: 'la telemetría es una elección de STACK (telemetry: otel) y el par se genera sin ella; lo que hay que ver es que NO se emiten spans de los drivers en ninguna rama (degradado), y lo fija este test generando con la opción',
+      test: 'test/telemetry.test.js'
+    },
+    emitter: 'src/scaffold/telemetry.js (los spans que abre el código generado: caso de uso, HTTP de entrada y salida, mensajería, caché, storage y correo)',
+    coverage: {
+      relational: {
+        state: 'degradado',
+        why:
+          'keel-spring cuelga de cada caso de uso los spans de JDBC (datasource-micrometer); keel-nest no instrumenta los drivers (pg, mysql2): en ESM la instrumentación automática de OpenTelemetry exige un loader hook (import-in-the-middle) delante de la aplicación, y el proyecto arranca sin él. La traza llega hasta el span del caso de uso, con su duración y su desenlace, y ahí se para: la consulta lenta se ve como un caso de uso lento, no como la sentencia. El eje de telemetría del plan (las series y sus etiquetas, que consultan el panel y las alertas) no depende de esto, y telemetry-check lo mide entero. Salida: registrar @opentelemetry/instrumentation-pg y -mysql2 con su hook en el arranque, y medirlo en telemetry-check'
+      },
+      document: {
+        state: 'degradado',
+        why:
+          'lo mismo con el driver de MongoDB (keel-spring: MongoObservationCommandListener) y con @redis/client: sin el hook de ESM no hay span del comando, y la traza se para en el caso de uso. Salida: @opentelemetry/instrumentation-mongodb y -redis con el mismo hook'
+      }
+    }
+  },
   'folded-text': {
+    parity: {
+      skip: 'ningún par declara `compare` —meterlo en uno movería la clave natural que miden db-check y doc-check—, así que las dos ramas las cubre un test que genera las dos con la opción (y las EJECUTAN db-check sobre catalog-extended y doc-check sobre job-dispatch-mongo derivada)',
+      test: 'test/filter-fold.test.js'
+    },
     emitter: 'src/scaffold/persistence-entities.js (la columna sombra) · src/scaffold/repositories.js (TextFold al guardar)',
     coverage: {
       relational: {
@@ -336,13 +498,25 @@ export const MECHANISMS = {
           'la sombra se crea con su cota y la estampa el adaptador (catalog-extended: Category.slug, clave natural sobre la sombra), y db-check guarda la misma clave EN MAYÚSCULAS y exige que el motor la rechace. Falsado el 2026-10-06 con un TextFold que no pliega: cae esa comprobación y solo esa'
       },
       document: {
-        state: 'razonado',
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
         why:
-          'la sombra plegada se escribe en el documento con TextFold (documentShape la incluye y los índices de unicidad van sobre ella), pero ninguna fixture documental declara compare: sin sujeto, nadie la ejecuta'
+          'ninguna fixture documental declara compare, así que doc-check lo mide sobre un sujeto DERIVADO (job-dispatch-mongo con compare: ignore-case-accents en la clave natural): el documento guarda en reference_normalized el valor plegado por TextFold (y documentShape la exige, sin claves de más), y el mismo valor en mayúsculas y sin acentos es la MISMA clave para el índice único → 409. Falsado el 2026-10-12 con un TextFold que no pliega: caen esas dos comprobaciones y solo esas (26/28; los demás sujetos, en verde)'
       }
     }
   },
   'persistence-adapter': {
+    parity: {
+      pair: 'job-dispatch',
+      markers: {
+        relational: ['file:src/infrastructure/persistence/entities/job-orm.ts', 'class JobRepositoryImpl'],
+        document: [
+          'src/infrastructure/persistence/repositories/job-repository-impl.ts::Collection',
+          'class JobRepositoryImpl'
+        ]
+      }
+    },
     emitter: 'src/scaffold/persistence-entities.js · src/scaffold/repositories.js · src/scaffold/persistence-runtime.js',
     coverage: {
       relational: {

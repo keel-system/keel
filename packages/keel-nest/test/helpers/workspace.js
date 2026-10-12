@@ -69,8 +69,8 @@ export async function runCommand(workspace, command, ...args) {
 
 /**
  * Un diseño FUERA de la frontera de keel-nest. Desde el incremento 13j todas las fixtures entran enteras, así que se
- * deriva uno de stock-reservation con lo único que keel-nest todavía rechaza: un value object compuesto en la
- * respuesta de una llamada saliente. Devuelve la ruta del diseño (specs/<nombre>).
+ * deriva uno de stock-reservation con lo único que keel-nest rechaza (y keel-spring también): un value object
+ * compuesto en la query de una llamada saliente. Devuelve la ruta del diseño (specs/<nombre>).
  */
 export async function mountOutsideFrontier(workspace) {
   const { parse, stringify } = await import('yaml');
@@ -86,7 +86,58 @@ export async function mountOutsideFrontier(workspace) {
     domain.types = { ...(domain.types ?? {}), Refund: { description: 'Importe devuelto.', fields: { amount: { type: 'decimal' }, currency: { type: 'string' } } } };
   });
   edit('http-clients.keel.yaml', (layer) => {
-    layer.clients.inventory.calls.cancelStock.response.fields.refund = { type: 'Refund' };
+    layer.clients.inventory.calls.cancelStock.request.queryParams = { refund: { type: 'Refund' } };
   });
   return `specs/${name}`;
+}
+
+/**
+ * Siluetas que ninguna fixture tiene y keel-nest genera (incremento 16): se derivan de una fixture real, quitando
+ * capas o añadiendo lo justo, y las compilan ts-syntax (sin red) y ts-check (con strict y sus pruebas emitidas).
+ *   · la mensajería SIN persistencia, que keel-spring también genera: sin outbox ni registro de procesados;
+ * Cada una es un diseño VÁLIDO (ts-syntax lo exige): una silueta que la validación rechaza no llega nunca a build.
+ *   · un value object compuesto en el cuerpo y en la respuesta de una llamada saliente.
+ */
+export const DERIVED_SILHOUETTES = [
+  { name: 'metering-digest-sin-persistencia', fixture: 'metering-digest', withoutLayers: ['persistence'] },
+  {
+    name: 'stock-reservation-sin-persistencia',
+    fixture: 'stock-reservation',
+    withoutLayers: ['persistence'],
+    // Sin almacén no hay outbox (la validación lo rechaza): el diseño válido publica best-effort.
+    mutate(layers) {
+      layers.messaging.publishing.reliability = 'best-effort';
+    }
+  },
+  {
+    name: 'stock-reservation-compuesto-saliente',
+    fixture: 'stock-reservation',
+    withoutLayers: [],
+    mutate(layers) {
+      layers.domain.types.Refund = {
+        description: 'Importe devuelto.',
+        fields: { amount: { type: 'decimal', required: true }, currency: { type: 'string', required: true } }
+      };
+      const calls = layers['http-clients'].clients.inventory.calls;
+      calls.cancelStock.response.fields.refund = { type: 'Refund' };
+      calls.reportRefund = {
+        contract: 'POST /stock/refunds informa de un reembolso y devuelve { accepted, refunds }.',
+        method: 'POST',
+        path: '/stock/refunds',
+        request: { body: { refund: { type: 'Refund', required: true }, history: { type: 'Refund', list: true } } },
+        response: { fields: { accepted: { type: 'boolean', required: true }, refunds: { type: 'Refund', list: true } } }
+      };
+    }
+  }
+];
+
+/** El manifiesto y las capas de una silueta derivada, ya derivados. */
+export function derivedDesign(silhouette, load) {
+  const { manifest, layers } = load(path.join(FIXTURES_DIR, silhouette.fixture));
+  for (const layer of silhouette.withoutLayers) {
+    delete manifest.layers[layer];
+    delete layers[layer];
+  }
+  silhouette.mutate?.(layers);
+  return { manifest, layers };
 }

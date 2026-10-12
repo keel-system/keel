@@ -1,88 +1,112 @@
 # keel-nest
 
-Generador **NestJS** para diseños Keel. Hermano de `keel-spring`: el mismo diseño tiene que producir,
-con uno u otro, servidores **equivalentes** —mismo contrato HTTP, mismo cable, misma semántica de
-fiabilidad, misma operación—. Se construye por incrementos evaluables: el plan y su estado están en
-[`PLAN-KEEL-NEST.md`](../../PLAN-KEEL-NEST.md) de la raíz del repo.
+Generador **NestJS** para diseños [Keel](https://github.com/keel-system/keel). Es el hermano de `keel-spring`, y lo
+gobierna una sola regla: **el mismo diseño genera, con uno u otro, servidores equivalentes**. Equivalentes quiere
+decir el mismo contrato HTTP y el mismo cable, los mismos eventos y destinos, las mismas tablas, la misma semántica
+de fiabilidad, la misma operación y las mismas series de telemetría. Lo que no depende del lenguaje no lo escribe
+keel-nest: lo comparte con keel-spring desde `keel-core/gen`. Cómo se construyó, incremento a incremento y con
+qué se midió cada uno, está en [`PLAN-KEEL-NEST.md`](../../PLAN-KEEL-NEST.md).
 
-## Flujo
-
-El mismo que todos los generadores de Keel, en dos pasos y con un `cd` en medio:
+## Uso
 
 ```bash
-keel-nest check specs/<servicio>   # opcional: no escribe nada, dice si es generable con keel-nest
-keel-nest build specs/<servicio>   # desde el workspace de diseño
+npm i -g keel-nest
+
+keel-nest check specs/<servicio>   # opcional, antes de cerrar el diseño: no escribe nada
+keel-nest build specs/<servicio>   # en el workspace de diseño; pregunta el stack
 cd services/<servicio>-nest
-/keel-generate-nest                # dentro del proyecto, sin argumentos (pipeline: incremento 7)
+/keel-generate-nest                # dentro del proyecto, SIN argumentos
 ```
+
+Es el mismo flujo de dos pasos que keel-spring, con las mismas opciones: `--accept-unready`, `--defaults`,
+`--refresh`, `--prune`, `--check`, `--force` y `--telemetry otel|none`. `build` no escribe nada en el workspace de
+diseño. `check` imprime además el `design-gaps.yaml` que haya dejado una generación.
 
 ## Contrato
 
-1. **Entrada**: el diseño multi-artefacto de `specs/<servicio>/`, validado. La puerta es la de
-   `keel-core/gen/design-gate.js`, la misma que usa keel-spring: un diseño que uno rechaza no lo
-   genera el otro, y uno no listo (`keel validate --ready` en rojo) solo se genera con
-   `--accept-unready`, que queda estampado en `keel-generated.json`.
-2. **Compatibilidad**: DSL `2.21` (la misma versión que keel-spring; el método soporta una sola).
-3. **Salida**: `services/<servicio>-nest/`, un proyecto NestJS 12 sobre **Fastify**, en ESM sobre
-   Node 22.12+, con TypeScript `strict`, Vitest, el **contrato del cable** de `keel-core/gen/wire.js`
-   (decimales con su escala, `long` exactos, instantes en UTC con tres decimales), configuración por perfiles (`PROFILE`, `SERVER_PORT`,
-   `SHUTDOWN_TIMEOUT`, gradiente literal → `${VAR:default}` → `${VAR}`) y sondas `/livez` y `/readyz`
-   con el contrato del servidor de keel-spring.
-4. **Regla de oro**: el generador nunca inventa ni corrige funcionalidad. Lo que todavía no sabe
-   generar lo **rechaza** nombrando el incremento que lo trae (`src/lib/supported-features.js`); no
-   produce un proyecto como si nada.
+1. **Entrada**: el diseño multi-artefacto de `specs/<servicio>/`, validado. La puerta es la de keel-spring
+   (`keel-core/gen/design-gate.js`): un diseño que uno rechaza no lo genera el otro. Un diseño no listo
+   (`keel validate --ready` en rojo) solo se genera con `--accept-unready`, que queda estampado en
+   `keel-generated.json`.
+2. **DSL soportada**: `2.21`, la misma que keel-spring. El método soporta una sola versión.
+3. **Salida**: `services/<servicio>-nest/`, un proyecto NestJS 12 sobre **Fastify**, en ESM sobre Node 22.12+,
+   con TypeScript 6 en `strict` y Vitest 5. Trae la arquitectura hexagonal con CQRS (`src/domain`,
+   `src/application` sin Nest, `src/infrastructure`), el contrato del cable de `keel-core/gen/wire.js`, los perfiles
+   `local`/`develop`/`production`/`test` con las variables de entorno de keel-spring, las sondas `/livez` y
+   `/readyz`, la infraestructura de prueba en `infra/` y el despliegue en `deploy/`. Incluye también el
+   conocimiento del agente (la skill orquestadora, cinco agentes y las skills del stack), proyectado a Claude Code
+   y a opencode.
+4. **Regla de oro**: el generador nunca inventa ni corrige funcionalidad. Lo que no sabe generar lo **rechaza**
+   en build, diciendo por qué (`src/lib/supported-features.js`). No produce un proyecto como si nada.
 
-## Qué comparte con keel-spring
+## Qué genera build y qué deja al agente
 
-Todo lo que no depende del lenguaje vive en `keel-core/gen` y lo usan los dos: la interpretación del
-diseño (`buildModel`, al que keel-nest pasa su proyección TypeScript, `src/lib/ts-projection.js`), la
-puerta del diseño, el cuestionario del stack, la escritura con manifiesto (`--refresh`, `--prune`,
-`--check`, `--force`), la evolución de un proyecto ya generado (`build/keel-refresh/EVOLUTION.md` con
-el delta del diseño contra una base congelada, `keel-core/gen/evolution.js`), el catálogo de infraestructura, los destinos físicos de mensajería y los
-vocabularios de las sondas del arnés.
+Es el mismo reparto que keel-spring: build genera de forma determinista todo lo transversal al stack, y el agente
+escribe la lógica de negocio y lo que depende del broker, del proveedor o del almacenamiento elegido. Lo que genera
+build:
 
-## Qué genera hoy (incremento 6)
+- el **dominio**: value objects que hacen cumplir sus cotas, agregados con su lifecycle, eventos y la jerarquía de
+  errores con los `code` del diseño;
+- la **aplicación**: un mensaje y un handler por operación con las notas del diseño, el `UseCaseMediator` con su
+  transacción y el despacho entre casos de uso;
+- la **API**: un lector generado por operación (sin `class-validator`), `ErrorResponse` byte a byte, paginación,
+  `Location`, idempotencia de petición y subidas multipart;
+- la **persistencia**: relacional con TypeORM sobre PostgreSQL y MySQL, con las mismas tablas, columnas, índices
+  y FK que keel-spring; documental con el driver oficial de MongoDB, con el mismo documento que keel-spring;
+- la **mensajería** sobre RabbitMQ, Kafka o SNS/SQS: envoltura, outbox con relay, registro de procesados, reintento
+  y descarte;
+- la **seguridad** con Keycloak o Cognito: el plan de acceso neutral en un hook `onRequest`, alcance por recurso e
+  identidad del llamante;
+- los **barridos y la fiabilidad**: reloj, reclamos con rescate, guardas de efectos irreversibles, reconciliación y
+  purgas por lotes;
+- las **integraciones**: los clientes HTTP salientes con la resiliencia de resilience4j y los `needs` (bajo demanda,
+  réplica y último valor conocido);
+- las **capas de borde**: correo SMTP, pagos con Stripe o MercadoPago, caché en Redis o Valkey y almacenamiento S3;
+- la **telemetría** con OpenTelemetry (las mismas series que keel-spring, para el mismo panel y las mismas alertas)
+  y los logs ECS;
+- los **gates** del proyecto: frontera hexagonal, idempotencia, guardas de dominio, logs y cardinalidad.
 
-- **Dominio**, TypeScript puro en `src/domain`: enums por su literal, value objects que hacen cumplir
-  en su constructor presencia, formato, longitud, cotas y escala (las mismas cotas que keel-spring,
-  desde `keel-core/gen/constraints.js`), `<Tipo>Format` para los escalares con formato, agregados con
-  estado de rehidratación, getters sin setters y guarda de lifecycle, eventos con su `EventMetadata`,
-  la jerarquía de errores por status con los `code` del diseño y `Uuids.v7()`.
-- **Aplicación** en `src/application`: un mensaje y un handler por operación (con las notas del diseño,
-  terminando en `TODO`), DTOs y mappers, y el `UseCaseMediator` con su contenedor y su módulo en
-  `src/infrastructure/usecase`.
-- **API REST** en `src/infrastructure/rest`: un controlador por grupo con un lector generado por
-  operación (convierte y valida en el orden del binding de Spring, con las reglas neutrales de
-  `keel-core/gen`), `ErrorResponse` con la forma y los textos del `ApiExceptionHandler` de keel-spring,
-  404/405, `Location` en los 201 y la correlación `X-Correlation-Id` en `AsyncLocalStorage`.
-- **Persistencia relacional** (TypeORM, PostgreSQL y MySQL) en `src/infrastructure/persistence`:
-  entidades con las MISMAS tablas, columnas, cotas y nombres de constraint, índice y FK que keel-spring
-  (`keel-core/gen/relational.js`), un puerto por raíz en `src/domain/repository` con su adaptador y su
-  mapeo explícito, la transacción del caso de uso en el mediator (consultas de solo lectura,
-  interbloqueo reintentado, tope de transacción → 503), bloqueo optimista con UPDATE condicionado, la
-  traducción de cada violación al error del diseño (`keel-core/gen/constraint-errors.js`) y la página
-  con el `Pageable` de Spring Data. El perfil `test` no tiene base de datos.
-- **Gates en el proyecto**: `npm run check:architecture` (dependency-cruiser: dominio y aplicación sin
-  framework) e `infra/check-domain-guards.sh` (las mismas filas que el de keel-spring).
+El pipeline `/keel-generate-nest` orquesta `keel-nest-code`, `keel-nest-infra` y `keel-nest-tests` en paralelo.
+Después puntúa los escenarios con `infra/score-scenarios.sh`; si hay algo en rojo lo arbitra `keel-nest-validate`, y
+al final pasa `keel-nest-quality`. La generación termina con el 100 % de los escenarios `FL-*` en OK contra la
+infraestructura real. Si el diseño cambia después, `build --refresh --prune` deja
+`build/keel-refresh/EVOLUTION.md` y la skill entra en modo evolución.
 
-## Estado de la frontera (incremento 6)
+## La frontera, comparada con keel-spring
 
-| Capa | Estado |
-|---|---|
-| `domain`, `use-cases` | se generan; `idempotency` y `schedule` de una operación se avisan (incremento 10), `cache` también (13) |
-| `api` | se genera (incremento 5); las subidas multipart llegan con `storage` (13) |
-| `persistence` | relacional: se genera sobre PostgreSQL y MySQL (los demás motores se rechazan), con la unicidad condicionada (índice parcial o columna discriminadora). Documental: se rechaza → incremento 12 |
-| `security` | se rechaza → incremento 8 |
-| `messaging` | se rechaza → incremento 9 |
-| `http-clients`, `dependencies` | se rechazan → incremento 11 |
-| `storage`, `mail`, `payments` | se rechazan → incremento 13 |
-| telemetría (stack) | se rechaza → incremento 14 |
+Toda fixture del repo se genera entera con keel-nest. Lo que todavía rechaza o degrada respecto a keel-spring se
+dice en código, cada cosa con su motivo:
+
+| Qué | keel-nest | Por qué |
+|---|---|---|
+| MariaDB, SQL Server y Oracle | se rechazan en build | keel-spring los genera, pero ninguna red de este repo los ha arrancado: en su matriz están sin ejecutar o degradados. Entran cuando una red los mida, para los dos |
+| un value object compuesto en la ruta, la query o una cabecera de una llamada saliente | se rechaza en build | no tiene forma en una URL. **keel-spring lo rechaza igual**, con el mismo mensaje (`keel-core/gen/outbound-params.js`) |
+| la serie del pool del driver de MongoDB | degradado | el driver no expone sus contadores sin suscribirse a sus eventos: sin serie no hay celda en el panel ni alerta de saturación |
+| los spans de los drivers (SQL, MongoDB, Redis) | degradado | en ESM la instrumentación automática exige un loader hook; la traza llega al span del caso de uso y se para ahí |
+
+La matriz entera, mecanismo a mecanismo y con la red que ejecuta cada celda: `npm run matrix`.
 
 ## Verificación del generador
 
 ```bash
-npm test --workspace packages/keel-nest        # rasgos de lo emitido (el dominio, EJECUTADO), sintaxis de las 13 fixtures, paridad con keel-spring (sin red)
-npm run ts-check --workspace packages/keel-nest # genera, instala, compila, comprueba la frontera hexagonal, prueba y ARRANCA el proyecto contra PostgreSQL, y compila las 13 fixtures (red, podman/docker, minutos)
-npm run db-check --workspace packages/keel-nest # la persistencia contra PostgreSQL y MySQL reales: esquema, cotas, ida y vuelta, versión, unicidad (también la condicionada), plegado, interbloqueo y tope (podman/docker)
-npm run matrix --workspace packages/keel-nest   # la matriz de paridad de keel-nest: qué mecanismo genera, quién lo ejecuta, si está falsado (puro)
+npm test --workspace packages/keel-nest                 # sin red: rasgos de lo emitido, sintaxis de todas las fixtures, lo emitido EJECUTADO y la paridad con keel-spring
+npm run ts-check --workspace packages/keel-nest         # genera, instala, compila con strict todas las siluetas, prueba y ARRANCA el proyecto (red, podman/docker)
+npm run db-check --workspace packages/keel-nest         # la persistencia contra PostgreSQL y MySQL reales
+npm run doc-check --workspace packages/keel-nest        # la persistencia documental contra un MongoDB real en replica set
+npm run harness-check --workspace packages/keel-nest    # el arnés de integración contra su infra/ real
+npm run doc-harness-check --workspace packages/keel-nest # el arnés documental y el baseline de índices
+npm run broker-check --workspace packages/keel-nest     # la mensajería contra RabbitMQ, Kafka y LocalStack
+npm run security-check --workspace packages/keel-nest   # la seguridad contra un Keycloak real
+npm run stub-check --workspace packages/keel-nest       # clientes salientes y pasarelas contra un WireMock real
+npm run mail-check --workspace packages/keel-nest       # el correo contra un Mailpit real
+npm run cache-check --workspace packages/keel-nest      # la caché contra Redis y Valkey
+npm run telemetry-check --workspace packages/keel-nest  # la telemetría con la app arrancada
+npm run deploy-check --workspace packages/keel-nest     # deploy/ entero, con las sondas que comparte con keel-spring
+npm run matrix --workspace packages/keel-nest           # la matriz de paridad (puro)
 ```
+
+## Compatibilidad
+
+| Paquete | DSL Keel | Necesita |
+|---------|----------|----------|
+| keel-nest 0.1.x | `keel: "2.21"` | Node.js >= 18 para el generador; Node.js 22.12+ y Docker o Podman para el proyecto generado |

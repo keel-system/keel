@@ -2131,6 +2131,26 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
 - Docs: README del paquete (contrato: entrada, DSL soportada, salida, regla de oro), fila en
   el README raíz, `CLAUDE.md` (sección keel-nest y filas de «Dónde se añade cada cosa»),
   `.claude/rules/nest-*.md`. Publicación npm.
+- **Estado: paridad y docs hechas (2026-10-12); faltan la corrida de control y la publicación.**
+  - **Frontera**: toda fixture entra entera (`capability-coverage.test.js` de keel-nest lo exige). Se generan ya la
+    mensajería SIN persistencia (el rechazo era un resto del 9: el emisor ya la sabía hacer) y el value object
+    compuesto en el cuerpo y en la respuesta de una llamada saliente (con el `read<Tipo>` de la entrada; lo que su
+    constructor rechaza es un `OutboundContractError`, EJECUTADO en `http-clients.test.js`). Quedan rechazados, con
+    motivo: MariaDB, SQL Server y Oracle (ninguna red los ha arrancado; en keel-spring están sin ejecutar) y el
+    compuesto en la ruta, la query o una cabecera, que tampoco tiene forma en keel-spring: lo rechazan los DOS con el
+    mismo mensaje (`keel-core/gen/outbound-params.js`; keel-spring escribía el `toString()` del record).
+  - **Matriz**: 38 celdas, 33 verificadas, 3 degradadas, 0 sin ejecutar, 0 pendientes. `folded-text/document` lo
+    ejecuta doc-check sobre `job-dispatch-mongo` con `compare` (28/28; falsado con un TextFold que no pliega: caen
+    sus dos comprobaciones y solo esas). `schema-baseline/document`, doc-harness-check con `export-indexes.sh` contra
+    el contrato (18/18; falsado con `--sabotage=index`). Los spans de los drivers pasan de «pendiente» a
+    `degradado` con su salida escrita (loader hook de ESM).
+  - **Puertas**: `parity.test.js` (con marcadores acotados a un archivo, porque las dos ramas comparten nombres, y
+    `absent` en las degradadas) y `capability-coverage.test.js` en verde para nest, con el enumerador compartido en
+    `keel-core/test/helpers/capability-coverage.js`; tres siluetas derivadas en ts-syntax y ts-check (43 en
+    strict, 13/13); `uncovered-branches.test.js` para las tres ramas sin fixture.
+  - **Destapado**: doc-check no compilaba `asset-vault` desde el 13f (faltaban `@redis/client` y S3 en su
+    instalación): ahora 90/90.
+  - Suites: keel-core 1186, keel-nest 770, keel-spring 1658.
 
 ## 4. Cómo se evalúa cada incremento (resumen)
 

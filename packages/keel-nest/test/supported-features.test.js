@@ -33,12 +33,11 @@ test('capa security (incremento 8): se genera, también la identidad resuelta po
   assert.deepEqual(checkSupportedFeatures(manifest, resolved), { errors: [], warnings: [] });
 });
 
-test('capa messaging (incremento 9): se genera sobre la persistencia relacional, y no sin ella', () => {
+test('capa messaging (incremento 9): se genera con persistencia y, como keel-spring, sin ella (16)', () => {
   const withPersistence = manifestWith('domain', 'use-cases', 'persistence', 'messaging');
   assert.deepEqual(checkSupportedFeatures(withPersistence, layersWith('domain', 'use-cases', 'persistence', 'messaging')), { errors: [], warnings: [] });
-  const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'messaging'), layersWith('domain', 'use-cases', 'messaging'));
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /messaging sin persistence/);
+  // Sin persistencia no hay outbox ni registro de procesados (ts-syntax y ts-check compilan esa silueta).
+  assert.deepEqual(checkSupportedFeatures(manifestWith('domain', 'use-cases', 'messaging'), layersWith('domain', 'use-cases', 'messaging')), { errors: [], warnings: [] });
 });
 
 test('messaging: la identidad del emisor resuelta por varias credenciales se genera (12e)', () => {
@@ -132,7 +131,10 @@ test('un índice único condicionado se genera sin aviso (tramo 6c)', () => {
 test('el motor: PostgreSQL y MySQL se generan; los demás del catálogo se rechazan nombrándolos', () => {
   assert.deepEqual(checkSupportedStack({ database: 'postgresql' }).errors, []);
   assert.deepEqual(checkSupportedStack({ database: 'mysql' }).errors, []);
-  assert.match(checkSupportedStack({ database: 'oracle' }).errors[0], /database: oracle .*postgresql y mysql/);
+  // Los tres motores que ninguna red ha arrancado (tampoco en keel-spring) se rechazan diciendo eso.
+  for (const database of ['mariadb', 'sqlserver', 'oracle']) {
+    assert.match(checkSupportedStack({ database }).errors[0], new RegExp(`database: ${database} .*postgresql, mysql, mongodb.*no lo ha arrancado ninguna red`));
+  }
 });
 
 test('la telemetría: otel y none se generan; una opción que keel-nest no genera se rechaza en vez de estamparse sin efecto', () => {
@@ -150,7 +152,7 @@ test('con persistencia, la idempotencia de petición se genera y no se avisa', (
   assert.deepEqual(warnings, []);
 });
 
-test('capas http-clients y dependencies (11b, 11c, 13i, 13j): se generan enteras; solo un compuesto en una llamada se rechaza', async () => {
+test('capas http-clients y dependencies (11b, 11c, 13i, 13j, 16): se generan enteras; solo un compuesto en la URL se rechaza, como en keel-spring', async () => {
   const { loadService } = await import('keel-core');
   const path = await import('node:path');
   const { FIXTURES_DIR } = await import('./helpers/workspace.js');
@@ -164,11 +166,20 @@ test('capas http-clients y dependencies (11b, 11c, 13i, 13j): se generan enteras
   for (const name of ['asset-vault', 'catalog-extended']) {
     assert.deepEqual(checkSupportedFeatures(load(name).manifest, load(name).layers), { errors: [], warnings: [] }, name);
   }
-  // Ninguna fixture lleva un value object compuesto en una llamada: el caso es sintético.
+  // Ninguna fixture lleva un value object compuesto en una llamada: los casos son sintéticos. En el cuerpo y en la
+  // respuesta se genera (16: http-clients.test.js lo EJECUTA); en la query no tiene forma, y lo rechazan los dos.
   const composite = structuredClone(stock.layers);
   composite.domain.types.Money = { fields: { amount: { type: 'decimal' }, currency: { type: 'string' } } };
   composite['http-clients'].clients.inventory.calls.cancelStock.response.fields.refund = { type: 'Money' };
+  assert.deepEqual(checkSupportedFeatures(stock.manifest, composite).errors, []);
+  composite['http-clients'].clients.inventory.calls.cancelStock.request.queryParams = { refund: { type: 'Money' } };
   const rejected = checkSupportedFeatures(stock.manifest, composite).errors;
   assert.equal(rejected.length, 1);
-  assert.match(rejected[0], /calls\.cancelStock: refund es un value object compuesto/);
+  assert.match(rejected[0], /calls\.cancelStock: refund es un value object compuesto en la ruta, la query o una cabecera/);
+  const { checkSupportedFeatures: checkSpring } = await import('../../keel-spring/src/lib/supported-features.js');
+  assert.deepEqual(
+    checkSpring(stock.manifest, composite).errors.filter((error) => /value object compuesto/.test(error)).map((error) => error.replace('keel-spring', 'X')),
+    rejected.map((error) => error.replace('keel-nest', 'X')),
+    'el mismo rechazo, con el mismo mensaje, en los dos generadores'
+  );
 });

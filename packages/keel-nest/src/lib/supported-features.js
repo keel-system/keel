@@ -11,6 +11,8 @@
 //   · `warnings` dejan seguir — la capa se acepta pero lo que el diseño declara en ella todavía
 //     no se emite, y el aviso dice cuándo llega.
 
+import { compositeUrlParamErrors } from 'keel-core/gen/outbound-params';
+
 /** Capas que aún no se generan, con el incremento del plan que las trae. Hoy, ninguna: storage llegó en el 13g. */
 const PENDING_LAYERS = {};
 
@@ -19,10 +21,17 @@ const ACCEPTED_NOT_EMITTED = {};
 
 /**
  * Los motores que keel-nest genera: los relacionales de la matriz de TypeORM medida (incremento 6) y
- * MongoDB (incremento 12). Los
- * demás del catálogo los genera keel-spring y llegan aquí cuando se midan.
+ * MongoDB (incremento 12).
+ *
+ * Los otros tres del catálogo (MariaDB, SQL Server, Oracle) se rechazan con su MOTIVO, que no es de keel-nest:
+ * keel-spring los genera, pero ninguna red de este repo los ha arrancado nunca (su matriz los tiene `sin ejecutar`
+ * o `degradado`: el baseline, la collation, los literales del arnés). Generarlos aquí sería emitir sin medir lo
+ * mismo que allí está sin medir, y llamarlo paridad. Entran cuando una red arranque el motor, para los dos.
  */
 export const SUPPORTED_DATABASES = ['postgresql', 'mysql', 'mongodb'];
+
+/** Los motores del catálogo que keel-nest rechaza a propósito, y por qué. */
+export const UNMEASURED_DATABASES = ['mariadb', 'sqlserver', 'oracle'];
 
 /** Los brokers que keel-nest genera: los tres del catálogo (incremento 9: RabbitMQ, Kafka en el 9f y SNS/SQS en el 9g). */
 export const SUPPORTED_BROKERS = ['rabbitmq', 'kafka', 'snssqs'];
@@ -62,17 +71,12 @@ export function checkSupportedFeatures(manifest, layers) {
     }
   }
   // La persistencia (relacional y documental) se genera entera, también la auditoría de autoría por política o
-  // declarada (incremento 13h).
-  // La mensajería (incremento 9) se genera sobre la persistencia RELACIONAL: el outbox y el registro de
-  // mensajes procesados se confirman en la misma transacción que el efecto, y los listeners se cablean
-  // con ella. Un servicio de solo mensajería no tendría dónde.
-  if (declared.includes('messaging') && !declared.includes('persistence')) {
-    errors.push(
-      'messaging sin persistence: keel-nest genera la mensajería sobre la persistencia relacional (el outbox y el registro de mensajes procesados). ' +
-        'Genera este diseño con keel-spring, o declara la persistencia.'
-    );
-  }
-  for (const message of outboundFrontier(layers)) errors.push(message);
+  // declarada (incremento 13h). La mensajería, con persistencia o sin ella, como keel-spring: sin persistencia no
+  // hay outbox ni registro de procesados (no hay transacción con la que confirmarlos), y los eventos salen por el
+  // puerto <Evento>Publisher.
+  // Lo saliente se genera entero (11b-13j, y el value object compuesto en el cuerpo y en la respuesta desde el
+  // 16); lo único que se rechaza es lo que tampoco genera keel-spring: un compuesto en la URL o en una cabecera.
+  for (const message of compositeUrlParamErrors(layers, 'keel-nest')) errors.push(message);
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   // La idempotencia de petición se genera (el registro idempotency_record, como keel-spring) cuando hay
   // persistencia donde registrar la clave en la misma transacción que el efecto. Sin persistencia no hay
@@ -97,46 +101,15 @@ export function checkSupportedFeatures(manifest, layers) {
   return { errors, warnings };
 }
 
-/**
- * Lo saliente que keel-nest todavía no genera: un campo COMPUESTO (un value object) en la petición o la respuesta de
- * una llamada —el adaptador lee y escribe escalares, enums y listas de ellos; ninguna fixture lo declara—. Los `needs`
- * (13i, 13j) y oauth2-client-credentials (13j) ya se generan.
- */
-function outboundFrontier(layers) {
-  const errors = [];
-  // Los needs se generan enteros: bajo demanda (13i), la réplica y lastKnown (13j).
-  const types = layers?.domain?.types ?? {};
-  const composite = (field) => {
-    const type = field?.type ?? field?.items?.type;
-    return Boolean(type && types[type] && (types[type].fields || types[type].kind === 'composite'));
-  };
-  for (const [id, client] of Object.entries(layers?.['http-clients']?.clients ?? {})) {
-    // oauth2-client-credentials se genera (13j): la concesión con la semántica de Spring Security.
-    for (const [name, call] of Object.entries(client?.calls ?? {})) {
-      const fields = [
-        ...Object.entries(call?.request?.body ?? {}),
-        ...Object.entries(call?.request?.queryParams ?? {}),
-        ...Object.entries(call?.request?.headers ?? {}),
-        ...Object.entries(call?.response?.fields ?? {})
-      ];
-      const nested = fields.filter(([, field]) => composite(field)).map(([field]) => field);
-      if (nested.length > 0) {
-        errors.push(
-          `http-clients.${id}.calls.${name}: ${nested.join(', ')} es un value object compuesto — keel-nest todavía lee y escribe solo ` +
-            'escalares, enums y listas de ellos en una llamada saliente. Genera este diseño con keel-spring.'
-        );
-      }
-    }
-  }
-  return errors;
-}
-
 /** Lo que el stack pide y keel-nest todavía no genera: se rechaza en el build en vez de estamparlo sin efecto. */
 export function checkSupportedStack(stack) {
   const errors = [];
   if (stack?.database && !SUPPORTED_DATABASES.includes(stack.database)) {
     errors.push(
-      `database: ${stack.database} — keel-nest genera la persistencia relacional sobre ${SUPPORTED_DATABASES.join(' y ')} (incremento 6 de PLAN-KEEL-NEST.md). ` +
+      `database: ${stack.database} — keel-nest genera la persistencia sobre ${SUPPORTED_DATABASES.join(', ')}, los motores que sus redes arrancan. ` +
+        (UNMEASURED_DATABASES.includes(stack.database)
+          ? `${stack.database} no lo ha arrancado ninguna red de este repo (en keel-spring está sin ejecutar): entra cuando se mida. `
+          : '') +
         'Elige uno de ellos, o genera este diseño con keel-spring.'
     );
   }

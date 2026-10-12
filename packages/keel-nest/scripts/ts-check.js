@@ -32,7 +32,7 @@ import { TELEMETRY_DEPENDENCIES } from '../src/scaffold/telemetry.js';
 /** Las fixtures que se compilan además con telemetría: cada pieza instrumentada, en los dos modelos. */
 const TELEMETRY_SUBJECTS = ['product-catalog', 'stock-reservation', 'catalog-extended', 'asset-vault', 'notification-mailer', 'notification-mailer-mongo'];
 import { loadService } from 'keel-core';
-import { FIXTURES_DIR } from '../test/helpers/workspace.js';
+import { DERIVED_SILHOUETTES, FIXTURES_DIR, derivedDesign } from '../test/helpers/workspace.js';
 import { resolveRuntime, startDatabase, stopDatabase } from './lib/database-container.js';
 import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION, AWS_SDK_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION, FASTIFY_MULTIPART_VERSION } from '../src/lib/assets.js';
 
@@ -155,9 +155,14 @@ const silhouettes = fs.readdirSync(FIXTURES_DIR).flatMap((name) => {
   if (TELEMETRY_SUBJECTS.includes(name)) silhouettesOf.push({ name, broker: brokers[0], paymentGateway: null, telemetry: 'otel' });
   return silhouettesOf;
 });
-for (const { name: fixture, broker, paymentGateway, telemetry } of silhouettes) {
+// Las siluetas que ninguna fixture tiene (incremento 16), sobre un broker si llevan mensajería.
+for (const derived of DERIVED_SILHOUETTES) {
+  const { layers } = derivedDesign(derived, loadService);
+  silhouettes.push({ name: derived.name, derived, broker: layers.messaging ? 'rabbitmq' : null, paymentGateway: null });
+}
+for (const { name: fixture, derived, broker, paymentGateway, telemetry } of silhouettes) {
   const name = [fixture, broker, paymentGateway, telemetry].filter(Boolean).join('-');
-  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
+  const { manifest, layers } = derived ? derivedDesign(derived, loadService) : loadService(path.join(FIXTURES_DIR, fixture));
   const stack =
     broker || paymentGateway || telemetry
       ? { ...(broker ? { broker } : {}), ...(paymentGateway ? { paymentGateway } : {}), ...(telemetry ? { telemetry } : {}) }

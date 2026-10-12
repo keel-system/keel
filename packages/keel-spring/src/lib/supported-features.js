@@ -8,6 +8,8 @@
 //
 // Al añadir soporte para una de estas capacidades, se borra su entrada de aquí.
 
+import { compositeUrlParamErrors } from 'keel-core/gen/outbound-params';
+
 /**
  * Comprueba el diseño contra la frontera de keel-spring.
  * Devuelve { errors, warnings } de strings ya redactados para consola:
@@ -207,6 +209,10 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   };
   const sinEnrutar = externalIo.filter((opName) => !alimentadoPorUnBarrido(opName));
+  // Un value object compuesto en la ruta, la query o una cabecera de una llamada saliente no tiene forma ahí: el
+  // RestClient escribiría el toString() del record. Lo rechazan los dos generadores con el mismo mensaje.
+  for (const message of compositeUrlParamErrors(layers, 'keel-spring')) errors.push(message);
+
   if (orphanInternal.length > 0) {
     warnings.push(
       `use-cases (${orphanInternal.join(', ')}): operación interna sin ningún disparador generado (ni schedule, ni endpoint, ni subscription). ` +

@@ -201,14 +201,15 @@ Este repo es un **monorepo npm workspaces** con dos tipos de paquete:
 | Paquete | CLI | Qué hace |
 |---------|-----|----------|
 | `packages/keel-core` | `keel` | El core: siembra workspaces, crea servicios y valida diseños. Define el DSL (schemas, docs, plantillas) y expone su validación como librería para los generadores. |
-| `packages/keel-spring` | `keel-spring` | Generador Spring Boot: `build` valida el diseño, pregunta el stack y genera `services/<servicio>-spring/` con el scaffolding transversal (el proyecto arranca) más el `.claude/` de ese proyecto —skill, agentes, conventions y skills del stack—; en el workspace de diseño no escribe nada. El código dependiente de la infra elegida y la lógica de negocio los completa el agente. Futuro: `keel-nest`, `keel-fastapi`, … |
-| `packages/keel-nest` | `keel-nest` | Generador NestJS, **en construcción por incrementos** (`PLAN-KEEL-NEST.md`): el mismo diseño tiene que producir con keel-spring o con keel-nest servidores equivalentes. Hoy genera el proyecto NestJS 12 (ESM, TypeScript strict, Vitest) que compila, arranca y responde a sus sondas, y rechaza nombrando el incremento todo lo que todavía no sabe generar. Comparte con keel-spring el núcleo neutral `keel-core/gen`. |
+| `packages/keel-spring` | `keel-spring` | Generador Spring Boot: `build` valida el diseño, pregunta el stack y genera `services/<servicio>-spring/` con el scaffolding transversal (el proyecto arranca) más el `.claude/` de ese proyecto —skill, agentes, conventions y skills del stack—; en el workspace de diseño no escribe nada. El código dependiente de la infra elegida y la lógica de negocio los completa el agente. Futuro: `keel-fastapi`, … |
+| `packages/keel-nest` | `keel-nest` | Generador NestJS: el mismo flujo y el mismo reparto build/agente que keel-spring, y la misma regla: **el mismo diseño genera con uno u otro servidores equivalentes** (contrato HTTP, cable, eventos, tablas, fiabilidad, operación y telemetría). `build` genera `services/<servicio>-nest/`, un proyecto NestJS 12 sobre Fastify (ESM, TypeScript strict, Vitest), y `/keel-generate-nest` lo completa con cinco agentes. Comparte con keel-spring el núcleo neutral `keel-core/gen`; lo que aún rechaza o degrada lo dice con su motivo (su README, § La frontera). Construido por incrementos medidos: `PLAN-KEEL-NEST.md`. |
 
 ## Instalación
 
 ```bash
 npm i -g keel-core     # comando `keel`
 npm i -g keel-spring   # comando `keel-spring` (el generador de la tecnología que uses)
+npm i -g keel-nest     # comando `keel-nest`, si generas en NestJS
 ```
 
 El core y cada generador son paquetes independientes: se instala el core más los generadores que se vayan a usar.
@@ -240,6 +241,7 @@ git clone https://github.com/keel-system/keel.git && cd keel
 npm install
 npm link --workspace packages/keel-core          # comando `keel`
 npm link --workspace packages/keel-spring        # comando `keel-spring`
+npm link --workspace packages/keel-nest          # comando `keel-nest`
 ```
 
 ## Uso
@@ -390,10 +392,10 @@ El workspace es **solo diseño**: no aloja skills ni convenciones de generadores
 
 - **DSL Keel 2.13**: diez capas (dos obligatorias, ocho opcionales) con validación en tres niveles — JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente.
 - **CLI `keel` completa**: `init`, `new`, `list`, `validate`, `describe`, `index`, `system` y `registry`, más las ocho skills del flujo de diseño que siembra `keel init`.
-- **Un generador en producción**: `keel-spring` (Spring Boot 3.5 / Java 21) — **63 módulos de scaffolding determinista**, 6 motores de base de datos (5 relacionales + MongoDB), 3 brokers, 2 proveedores de identidad, 2 cachés y 2 backends de storage, con **11 skills por tecnología** y orquestación de cinco subagentes con puntuación determinista de escenarios. Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el 100% de los escenarios `FL-*` en OK contra la infraestructura real.
+- **Dos generadores**: `keel-spring` (Spring Boot 3.5 / Java 21) — **63 módulos de scaffolding determinista**, 6 motores de base de datos (5 relacionales + MongoDB), 3 brokers, 2 proveedores de identidad, 2 cachés y 2 backends de storage, con **11 skills por tecnología** y orquestación de cinco subagentes con puntuación determinista de escenarios. Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el 100% de los escenarios `FL-*` en OK contra la infraestructura real. Y `keel-nest` (NestJS 12 / Node 22, `PLAN-KEEL-NEST.md`), que genera del mismo diseño un servidor equivalente sobre PostgreSQL, MySQL o MongoDB, los tres brokers, los dos proveedores de identidad, las dos cachés, S3 y las dos pasarelas de pago, con su propia matriz de paridad (`npm run matrix --workspace packages/keel-nest`) y doce redes en vivo.
 - **Verificación del propio generador**: **87 suites de test** (`npm test`), **11 fixtures de diseño** —4 de modelo documental y 7 relacional, dos de ellas **pares byte a byte** que solo se diferencian en el modelo de persistencia, que es lo que impide que una rama se quede atrás en silencio— y **8 redes que ejecutan de verdad** contra motores, brokers y buzones en contenedores —requieren Docker o Podman, y `compile-check` además JDK— (`compile-check`, `claim-check`, `store-check`, `index-check`, `mapping-check`, `broker-check`, `mail-check`, `mongo-check`). Su estado, celda a celda, lo imprime `npm run matrix`: **46 celdas · 31 verificadas · 30 falsadas · 9 sin ejecutar · 2 degradadas**.
 - **Publicado en npm**: [`keel-core`](https://www.npmjs.com/package/keel-core) y [`keel-spring`](https://www.npmjs.com/package/keel-spring), instalables con `npm i -g`.
-- **Pendiente**: terminar `keel-nest` (`PLAN-KEEL-NEST.md`) y más generadores (`keel-fastapi`); detección de drift entre spec y **código generado** —la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`—; sincronización inversa.
+- **Pendiente**: más generadores (`keel-fastapi`); MariaDB, SQL Server y Oracle medidos en vivo (hoy keel-nest los rechaza por eso); detección de drift entre spec y **código generado** —la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`—; sincronización inversa.
 
 ## Contribuir: estructura de este repo
 

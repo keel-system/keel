@@ -281,3 +281,58 @@ test('sin http-clients no se emite nada de lo saliente', () => {
   const bare = planFixture('product-catalog').files.map((file) => file.path);
   assert.ok(!bare.some((file) => file.includes('/clients/') || file.endsWith('http-clients.yaml')));
 });
+
+// ─── Un value object compuesto en la respuesta (incremento 16) ──────────────
+//
+// Ninguna fixture lo declara, así que el diseño se deriva de stock-reservation: la respuesta de cancelStock gana
+// un `refund` de un tipo compuesto. Se lee con el MISMO lector que la entrada (`readRefund` de value-readers.ts),
+// y lo que su constructor rechaza, o lo que no es un objeto, viola el contrato del PROVEEDOR: un
+// OutboundContractError (500, sin fallback y sin contar para el circuito), nunca el 400 de una petición nuestra.
+
+const compositeTree = (() => {
+  const { files: compositeFiles } = planFixture(SUBJECT, {
+    mutate(layers) {
+      layers.domain.types.Refund = {
+        description: 'Importe devuelto.',
+        fields: { amount: { type: 'decimal', required: true }, currency: { type: 'string', required: true } }
+      };
+      layers['http-clients'].clients.inventory.calls.cancelStock.response.fields.refund = { type: 'Refund' };
+    }
+  });
+  return transpileTree(compositeFiles, { stubs: { '@nestjs/common': NEST_STUB } });
+})();
+
+async function compositeAdapterFor(baseUrl) {
+  const { InventoryHttpAdapter } = await compositeTree.load('src/infrastructure/clients/inventory-http-adapter.ts');
+  const { InventoryMapper } = await compositeTree.load('src/infrastructure/clients/inventory-mapper.ts');
+  return new InventoryHttpAdapter({ inventory: { id: 'inventory', baseUrl, timeoutMs: 300, headers: {} } }, new InventoryMapper());
+}
+
+test(`${SUBJECT} con un compuesto en la respuesta: llega al dominio como su value object, con el decimal del cable`, async (t) => {
+  const fake = await provider();
+  t.after(fake.close);
+  const { Refund } = await compositeTree.load('src/domain/valueobject/refund.ts');
+  fake.reply(json(200, '{"cancelled":true,"refund":{"amount":12.50,"currency":"EUR"}}'));
+  const result = await (await compositeAdapterFor(fake.baseUrl)).cancelStock(ORDER_ID);
+  assert.ok(result.refund instanceof Refund, 'el resultado lleva el value object, no el objeto crudo');
+  assert.equal(result.refund.currency, 'EUR');
+  assert.equal(String(result.refund.amount), '12.50', 'la escala con la que viajó: un number binario la perdería');
+  fake.reply(json(200, { cancelled: true }));
+  assert.equal((await (await compositeAdapterFor(fake.baseUrl)).cancelStock(ORDER_ID)).refund, null, 'opcional: ausente es null');
+});
+
+test(`${SUBJECT} con un compuesto en la respuesta: el que no se construye viola el contrato del proveedor, no es un 400`, async (t) => {
+  const fake = await provider();
+  t.after(fake.close);
+  const { OutboundContractError } = await compositeTree.load('src/infrastructure/clients/response-reading.ts');
+  const adapter = await compositeAdapterFor(fake.baseUrl);
+  for (const refund of ['"doce"', '{"currency":"EUR"}', '{"amount":"x","currency":"EUR"}']) {
+    fake.reply(json(200, `{"cancelled":true,"refund":${refund}}`));
+    await assert.rejects(
+      adapter.cancelStock(ORDER_ID),
+      (error) => error instanceof OutboundContractError && /inventory\.cancelStock\.refund: se esperaba un Refund/.test(error.message),
+      refund
+    );
+  }
+  assert.equal(adapter.cancelStockCircuit.state, 'closed');
+});

@@ -31,12 +31,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadService } from 'keel-core';
 import { documentShape, documentValueObjects, valueObjectShape, documentIndexes, partialDocumentIndexSpecs } from 'keel-core/gen/document';
+import { foldedShadow } from 'keel-core/gen/relational';
 import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startMongo, stopDatabase } from './lib/database-container.js';
 import { sampleEntity, PROBE_HELPERS } from './lib/samples.js';
 import { adapterArgs, storeBlocks, storePreamble } from './lib/document-store-probes.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
-import { AMQPLIB_VERSION, JOSE_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION } from '../src/lib/assets.js';
+import { AMQPLIB_VERSION, AWS_SDK_VERSION, FASTIFY_MULTIPART_VERSION, JOSE_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION } from '../src/lib/assets.js';
 import { build } from '../src/commands/build.js';
 import { classPath, DIRS } from '../src/scaffold/render.js';
 import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, credentialFinders } from '../src/scaffold/repositories.js';
@@ -55,7 +56,17 @@ const SUBJECTS = [
   // El reclamo de la reconciliación sobre documentos: la única fixture documental que lo declara.
   // Sin la autoría de política (created_by/updated_by), que keel-nest rechaza en su frontera: como las capas
   // que quedan fuera, se quita en vez de medir un hueco declarado.
-  { name: 'asset-vault', withoutLayers: [], withoutAuthorship: true }
+  { name: 'asset-vault', withoutLayers: [], withoutAuthorship: true },
+  // La sombra PLEGADA sobre documentos (incremento 16): ninguna fixture documental declara `compare`, así que se
+  // deriva de job-dispatch-mongo con la clave natural plegada. Es la celda folded-text/document de la matriz.
+  {
+    name: 'job-dispatch-mongo',
+    label: 'job-dispatch-mongo-compare',
+    withoutLayers: [],
+    mutate(layers) {
+      layers.domain.entities.Job.fields.reference.compare = 'ignore-case-accents';
+    }
+  }
 ];
 const results = [];
 
@@ -327,6 +338,7 @@ ${claim.stampField ? `    check('${name}: ${claim.method} estampa ${claim.stampF
     const reloaded = await repository.findById(guarded.id);
     check('${name}: ${claim.method} CONFIRMÓ la marca (la ve una lectura posterior)', String(reloaded?.${root.lifecycle.field}) === String(first?.${root.lifecycle.field}), JSON.stringify(reloaded?.${root.lifecycle.field}));
   }`).join('\n')}
+${foldedBlock(model, root, index, ctx, finder)}
 ${credentialFinders(model, root).map((credential) => `  // La credencial que NO es la primera de la lista: resolver por la clave natural no la encontraría.
   check('${name}: ${credential.name} resuelve por una credencial que no es la primera', (await repository.${credential.name}(original.${credential.field.name}[original.${credential.field.name}.length - 1]))?.id === original.id);
   check('${name}: ${credential.name} con una credencial ajena devuelve null', (await repository.${credential.name}('nadie-' + randomUUID())) == null);`).join('\n')}
@@ -336,6 +348,34 @@ ${credentialFinders(model, root).map((credential) => `  // La credencial que NO 
   // Un fallo inesperado es una comprobación roja con su causa, no una sonda muerta sin resumen.
   check('${name}: la sonda recorre la raíz sin un error inesperado', false, String(error?.stack ?? error).slice(0, 400));
 }`;
+}
+
+/**
+ * El PLEGADO de un campo con `compare` dentro de la clave natural, sobre documentos: el documento guarda en su
+ * sombra el valor plegado por TextFold —el mismo que estampa keel-spring—, el índice único va sobre la sombra, y el
+ * mismo valor en MAYÚSCULAS y sin acentos es la MISMA clave. Si el adaptador no plegara, los dos convivirían.
+ */
+function foldedBlock(model, root, index, ctx, finder) {
+  if (!finder) return '';
+  const folded = finder.params.map((param) => root.fields.find((field) => field.name === param.name && field.fold)).filter(Boolean);
+  return folded
+    .map((field) => {
+      const { column, accents } = foldedShadow(field);
+      const others = finder.params.filter((param) => param.name !== field.name).map((param) => `${param.name}: original.${param.name}`);
+      const keyed = (seed, value) => `new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}${seed}`)}), ${[...others, `${field.name}: ${value}`].join(', ')} })`;
+      return `  {
+    const suffix = randomUUID().slice(0, 8);
+    const named = ${keyed('f1', "'Ñandú Ref ' + suffix")};
+    await repository.save(named);
+    const raw = await collection.findOne({ _id: new UUID(named.id).toBinary() });
+    check('${root.name}.${field.name}: el documento guarda en ${column} el valor plegado por TextFold', raw?.['${column}'] === ${accents ? "'nandu ref '" : "'ñandú ref '"} + suffix, raw?.['${column}']);
+    const shouted = ${keyed('f2', accents ? "'NANDU REF ' + suffix.toUpperCase()" : "'ÑANDÚ REF ' + suffix.toUpperCase()")};
+    const rejected = await repository.save(shouted).then(() => null, (error) => error);
+    check('${root.name}.${field.name}: en mayúsculas${accents ? ' y sin acentos' : ''} es la MISMA clave (compare)', rejected != null && translatePersistenceError(rejected)?.httpStatus === 409, rejected?.message ?? 'se guardó');
+    await repository.deleteById(named.id);
+  }`;
+    })
+    .join('\n');
 }
 
 /**
@@ -385,7 +425,10 @@ const generated = await runCommand(workspace, build, `specs/${NEST_READY_DESIGN.
 const projectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
 if (!step('build genera el proyecto de referencia', generated.exitCode === undefined, generated.output.slice(0, 600))) process.exit(1);
 // jose: la seguridad de los sujetos que la declaran (notification-mailer-mongo) también tiene que compilar.
-const install = run('npm', ['install', '--no-audit', '--no-fund', `mongodb@${MONGODB_VERSION}`, `jose@${JOSE_VERSION}`, `amqplib@${AMQPLIB_VERSION}`, `nodemailer@${NODEMAILER_VERSION}`, `handlebars@${HANDLEBARS_VERSION}`], { cwd: projectDir });
+const install = run('npm', ['install', '--no-audit', '--no-fund', `mongodb@${MONGODB_VERSION}`, `jose@${JOSE_VERSION}`, `amqplib@${AMQPLIB_VERSION}`, `nodemailer@${NODEMAILER_VERSION}`, `handlebars@${HANDLEBARS_VERSION}`,
+  // asset-vault tiene caché y almacenamiento desde el incremento 13: sin estos su sonda no compila y el sujeto entero
+  // queda sin medir (lo estuvo desde el 13f hasta el 16; db-check ya lo había corregido para catalog-extended).
+  `@redis/client@${REDIS_CLIENT_VERSION}`, `@aws-sdk/client-s3@${AWS_SDK_VERSION}`, `@aws-sdk/s3-request-presigner@${AWS_SDK_VERSION}`, `@fastify/multipart@${FASTIFY_MULTIPART_VERSION}`], { cwd: projectDir });
 if (!step('npm install (el driver de MongoDB)', install.status === 0, install.status === 0 ? '' : install.stderr.slice(-800))) process.exit(1);
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');
 
@@ -405,10 +448,12 @@ try {
       delete layers[layer];
     }
     if (subject.withoutAuthorship) delete layers.persistence.audit.authorship;
+    subject.mutate?.(layers);
+    const label = subject.label ?? subject.name;
     // Con mensajería, sobre RabbitMQ: los almacenes son los mismos con cualquier broker.
     const { files, model } = planService({ manifest, layers, workspace, stack: { database: 'mongodb', ...(layers.messaging ? { broker: 'rabbitmq' } : {}) } });
     if (repositoryRoots(model).length === 0) continue;
-    const dir = path.join(workspace, 'doc-check', subject.name);
+    const dir = path.join(workspace, 'doc-check', label);
     for (const file of files) {
       const out = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -416,20 +461,20 @@ try {
     }
     fs.symlinkSync(path.join(projectDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
     const compiled = run(process.execPath, [tsc, '-p', 'tsconfig.build.json'], { cwd: dir });
-    if (!step(`${subject.name}: compila`, compiled.status === 0, compiled.stdout.slice(0, 1200))) continue;
+    if (!step(`${label}: compila`, compiled.status === 0, compiled.stdout.slice(0, 1200))) continue;
     const probe = probeScript(model, db);
     fs.writeFileSync(path.join(dir, 'doc-probe.mjs'), probe.script);
     const result = run(process.execPath, ['doc-probe.mjs'], { cwd: dir, timeout: 180_000 });
     const marker = result.stdout.split('@@RESULTS@@')[1];
     if (!marker) {
-      step(`${subject.name}: la sonda corre`, false, (result.stderr || result.stdout).slice(-3000));
+      step(`${label}: la sonda corre`, false, (result.stderr || result.stdout).slice(-3000));
       continue;
     }
     const checks = JSON.parse(marker);
     const failed = checks.filter((check) => !check.ok);
     for (const check of failed) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
     step(
-      `${subject.name} (${probe.root}): índices, documento, ida y vuelta, versión, unicidad, carrera`,
+      `${label} (${probe.root}): índices, documento, ida y vuelta, versión, unicidad, carrera`,
       failed.length === 0,
       `${checks.length - failed.length}/${checks.length}${probe.unsampled.length > 0 ? `; sin muestra: ${probe.unsampled.join(', ')}` : ''}`
     );

@@ -17,7 +17,9 @@ import { fallbackFailures, resiliencePolicy, RESILIENCE_DEFAULTS } from 'keel-co
 import { DIRS, classPath, declType, fieldImports, fileName, tsModule, tsString, tsdoc } from './render.js';
 import { DECIMAL_TS, RAW_JSON_TS, WIRE_TS } from './wire.js';
 import { COMMAND_SIGNATURE_TS } from './request-idempotency.js';
-import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
+import { CORRELATION_TS, usesApi, usesCorrelation } from './rest-support.js';
+import { VALUE_READERS_TS, valueReaders } from './controllers.js';
+import { usesSubscriptionMessages } from './messaging.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 
 const CLIENTS_DIR = 'infrastructure/clients';
@@ -100,6 +102,9 @@ export function generate(model) {
   if (outboundIdempotentCalls(model).length > 0) files.push({ path: OUTBOUND_IDEMPOTENCY_TS, content: outboundIdempotencyTs(model) });
   if (lastKnownNeeds(model).length > 0) files.push({ path: LAST_KNOWN_TS, content: lastKnownTs() });
   if (usesOAuth2(model)) files.push({ path: OAUTH2_TS, content: oauth2Ts() });
+  // Un value object compuesto en una respuesta se lee con el MISMO lector que en la entrada (value-readers.ts), que
+  // emiten la API o, sin ella, la mensajería; si no hay ninguna de las dos, lo emite esta capa.
+  if (readsCompositeResponses(model) && !usesApi(model) && !usesSubscriptionMessages(model)) files.push(valueReaders(model));
   for (const client of model.httpClients) {
     files.push({ path: portPath(client), content: portTs(model, client) });
     files.push({ path: infraPath(client.mapperClass), content: mapperTs(model, client) });
@@ -123,6 +128,11 @@ function callFields(call) {
 }
 
 const isComposite = (field) => field.kind === 'composite';
+
+/** ¿Alguna respuesta trae un value object compuesto? Se lee con su `read<Tipo>`. */
+function readsCompositeResponses(model) {
+  return model.httpClients.some((client) => client.calls.some((call) => !call.bodiless && call.responseFields.some(isComposite)));
+}
 const elementType = (field) => field.elementTsType ?? String(field.tsType).replace(/\[\]$/, '');
 
 /** Un parámetro del puerto: lo que el diseño declara, con nulo si no es obligatorio. */
@@ -193,7 +203,7 @@ function resultTs(model, client, call) {
 function readerOf(field) {
   let element;
   if (field.kind === 'enum') element = `responseField.enumOf(${elementType(field)})`;
-  else if (isComposite(field)) element = 'responseField.unread';
+  else if (isComposite(field)) element = `responseField.valueOf(read${elementType(field)}, ${tsString(elementType(field))})`;
   else {
     const base = { string: 'string', text: 'string', file: 'string', uuid: 'uuid', int: 'int', long: 'long', decimal: 'decimal', boolean: 'boolean', date: 'date', timestamp: 'timestamp', json: 'json' }[field.base] ?? 'string';
     element = `responseField.${base}`;
@@ -203,7 +213,6 @@ function readerOf(field) {
 
 /** El tipo de un campo en el DTO wire: el obligatorio no admite nulo (lo garantiza la guarda). */
 function wireDecl(field) {
-  if (isComposite(field)) return field.list ? 'readonly unknown[]' : 'unknown';
   if (field.list) return `readonly ${elementType(field)}[]`;
   return field.required ? field.tsType : `${field.tsType} | null`;
 }
@@ -214,25 +223,21 @@ function responseTs(model, client, call) {
   const imports = [
     { symbol: 'responseField', from: RESPONSE_READING_TS },
     { symbol: 'responseObject', from: RESPONSE_READING_TS },
-    ...importsOf(model, call.responseFields.filter((field) => !isComposite(field)))
+    ...importsOf(model, call.responseFields),
+    ...call.responseFields.filter(isComposite).map((field) => ({ symbol: `read${elementType(field)}`, from: VALUE_READERS_TS }))
   ];
   const fields = call.responseFields;
-  if (fields.some((field) => field.required && !field.list && !isComposite(field))) imports.push({ symbol: 'requiredField', from: RESPONSE_READING_TS });
+  if (fields.some((field) => field.required && !field.list)) imports.push({ symbol: 'requiredField', from: RESPONSE_READING_TS });
   const members = fields.map((field) => `    readonly ${field.name}: ${wireDecl(field)}`);
   const reads = fields.map((field) => {
     const read = `${readerOf(field)}(fields[${tsString(field.name)}], ${tsString(`${subject}.${field.name}`)})`;
     if (field.list) return `      ${read} ?? []`;
-    if (isComposite(field)) return `      ${read}`;
     return field.required
       ? `      requiredField(${read}, ${tsString(`${subject}: la respuesta no trae '${field.name}', que el contrato declara obligatorio`)})`
       : `      ${read}`;
   });
   const todo = fields.length === 0 ? [`TODO (agente): declara los campos según el contract "${call.contract}".`] : [];
-  const composite = fields.filter(isComposite).map((field) => field.name);
-  const compositeNote = composite.length > 0
-    ? [`${composite.join(', ')}: value object compuesto, que keel-nest todavía no lee (la frontera lo rechaza en build); llega crudo.`]
-    : [];
-  const body = `${tsdoc([`Respuesta wire de ${subject} (contrato del sistema externo).`, ...todo, ...compositeNote])}export class ${call.responseType} {
+  const body = `${tsdoc([`Respuesta wire de ${subject} (contrato del sistema externo).`, ...todo])}export class ${call.responseType} {
   constructor(${members.length > 0 ? `\n${members.join(',\n')}\n  ` : ''}) {}
 
   /**
@@ -280,10 +285,7 @@ function mapperTs(model, client) {
     if (!call.bodiless) {
       imports.push({ symbol: call.resultType, from: resultPath(call) }, { symbol: call.responseType, from: infraPath(call.responseType) });
       if (call.responseFields.length > 0) {
-        // Un value object compuesto todavía no se lee: el resultado lo lleva ausente y lo dice.
-        const args = call.responseFields.map((field) =>
-          isComposite(field) ? (field.list ? '[] /* TODO (agente): value object compuesto */' : 'null /* TODO (agente): value object compuesto */') : `response.${field.name}`
-        );
+        const args = call.responseFields.map((field) => `response.${field.name}`);
         methods.push(`  /** Traduce la respuesta wire de ${call.name} al resultado del dominio. */
   to${call.pascal}Result(response: ${call.responseType}): ${call.resultType} {
     return new ${call.resultType}(${args.join(', ')});
@@ -1364,8 +1366,20 @@ export const responseField = {
   timestamp: convert('instante ISO-8601 con zona', toTimestamp),
   date: convert('fecha YYYY-MM-DD', toDate),
   json: convert('documento JSON', toJson) as Reader<RawJson>,
-  /** Un value object compuesto: keel-nest todavía no lo lee (la frontera lo rechaza en build). */
-  unread: ((value) => value ?? null) as Reader<unknown>,
+  /**
+   * Un value object compuesto, con el lector de la entrada (\`read<Tipo>\`): lo que su constructor rechaza, o lo que no
+   * es un objeto, viola el contrato del proveedor —no es una petición malformada nuestra—.
+   */
+  valueOf<T>(read: (value: unknown) => T | null, type: string): Reader<T> {
+    return (value, where) => {
+      if (value == null) return null;
+      try {
+        return read(value);
+      } catch {
+        return bad(where, type);
+      }
+    };
+  },
   enumOf<E extends EnumLike>(type: E): Reader<E[keyof E]> {
     const literals = new Set<string>(Object.values(type));
     return (value, where) => (value == null ? null : typeof value === 'string' && literals.has(value) ? (value as E[keyof E]) : bad(where, \`valor de \${Object.values(type).join('|')}\`));

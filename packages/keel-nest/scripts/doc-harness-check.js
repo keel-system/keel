@@ -10,9 +10,13 @@
 //     y que `inFlightWithoutClock` discrimine (cero con el reloj estampado, uno sin él);
 //   · que `ageForReconciliation` envejezca SOLO la marca de espera, con el script que emite un diseño que la
 //     tiene (asset-vault, que build no genera entero —storage es del incremento 13—: se lee de lo que emite);
-//   · y la cadena entera: up.sh, validate-infra.sh, el humo del arnés y score-scenarios.sh puntuando.
+//   · y la cadena entera: up.sh, validate-infra.sh, el humo del arnés y score-scenarios.sh puntuando;
+//   · el BASELINE documental (incremento 16): con el servidor ya arrancado por los flujos, infra/export-indexes.sh
+//     exporta los índices vivos y cada uno es el del contrato (keel-core/gen/document.js), sin que falte ni sobre
+//     ninguno. Es lo que hace el agente de calidad; aquí se ejecuta y se falsa (--sabotage=index le quita un
+//     índice al document-indexes.ts emitido: tiene que caer ESTA comprobación).
 //
-//   node packages/keel-nest/scripts/doc-harness-check.js [--keep]
+//   node packages/keel-nest/scripts/doc-harness-check.js [--keep] [--sabotage=index]
 //   npm run doc-harness-check --workspace packages/keel-nest
 //
 // Necesita podman o docker, y red la primera vez.
@@ -27,8 +31,10 @@ import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR } from '../test/he
 import { build } from '../src/commands/build.js';
 import { planService } from '../src/scaffold/index.js';
 import { resolveRuntime } from './lib/database-container.js';
+import { documentIndexes, INDEX_EXPORT_FILE } from 'keel-core/gen/document';
 
 const keep = process.argv.includes('--keep');
+const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
 const SUBJECT = 'job-dispatch-mongo';
 const isWindows = process.platform === 'win32';
 const results = [];
@@ -90,6 +96,18 @@ writeStackConfig(projectDir, resolveStack({ database: 'mongodb' }, loadService(s
 const generated = await runCommand(workspace, build, `specs/${SUBJECT}`, { defaults: true, acceptUnready: true });
 if (!step('build genera el proyecto documental', generated.exitCode === undefined && fs.existsSync(path.join(projectDir, 'package.json')), generated.exitCode ? generated.output.slice(-1200) : '')) {
   process.exit(1);
+}
+// El sabotaje: el índice de la clave natural fuera del document-indexes.ts emitido (el servidor no lo crea).
+const SABOTAGED_INDEX = 'uk_jobs_natural';
+if (sabotage === 'index') {
+  const file = path.join(projectDir, 'src', 'infrastructure', 'persistence', 'document-indexes.ts');
+  const source = fs.readFileSync(file, 'utf8');
+  const line = source.split('\n').find((candidate) => candidate.includes(`'${SABOTAGED_INDEX}'`));
+  if (!line) throw new Error(`document-indexes.ts ya no declara ${SABOTAGED_INDEX} en una línea: el sabotaje no se aplica`);
+  fs.writeFileSync(file, source.replace(`${line}\n`, ''));
+  console.log(`(sabotaje: ${SABOTAGED_INDEX} fuera de document-indexes.ts)`);
+} else if (sabotage) {
+  throw new Error(`sabotaje desconocido: ${sabotage}`);
 }
 const install = npm(projectDir, ['install', '--no-audit', '--no-fund']);
 if (!step('npm install', install.ok, install.ok ? '' : install.output.slice(-800))) process.exit(1);
@@ -170,9 +188,52 @@ try {
     const id = `FL-PROBE-101-${letter}`;
     step(`sonda ${id} en verde`, has(new RegExp(`OK\\s+${id}`)), has(new RegExp(`OK\\s+${id}`)) ? '' : (scored.output.match(new RegExp(`.*${id}.*`))?.[0] ?? scored.output.slice(-2500)));
   }
+  baselineSteps();
 } finally {
   const down = bash(projectDir, 'infra/down.sh', ['--volumes']);
   step('bash infra/down.sh --volumes', down.status === 0, down.status === 0 ? '' : down.output.slice(-600));
+}
+
+/**
+ * El baseline documental: lo que deja export-indexes.sh contra los índices del contrato. Los flujos ya arrancaron el
+ * servidor (que crea los índices al arrancar), así que lo vivo es lo que crea lo emitido.
+ */
+function baselineSteps() {
+  const exported = bash(projectDir, 'infra/export-indexes.sh');
+  if (!step('bash infra/export-indexes.sh', exported.status === 0, exported.status === 0 ? '' : exported.output.slice(-800))) return;
+  const live = JSON.parse(fs.readFileSync(path.join(projectDir, INDEX_EXPORT_FILE), 'utf8'));
+  const { manifest, layers } = loadService(specDir);
+  const { model } = planService({ manifest, layers, workspace, stack: { database: 'mongodb' } });
+  const contract = documentIndexes(model, []);
+  const missing = [];
+  const different = [];
+  for (const { collection, specs } of contract) {
+    const byName = new Map((live[collection] ?? []).map((index) => [index.name, index]));
+    for (const spec of specs) {
+      const got = byName.get(spec.name);
+      if (!got) {
+        missing.push(`${collection}.${spec.name}`);
+        continue;
+      }
+      const filter = spec.partialFilter ? { [spec.partialFilter.path]: spec.partialFilter.equals } : undefined;
+      if (
+        JSON.stringify(Object.keys(got.key)) !== JSON.stringify(spec.paths) ||
+        got.unique !== spec.unique ||
+        JSON.stringify(got.partialFilterExpression) !== JSON.stringify(filter)
+      ) {
+        different.push(`${collection}.${spec.name}: ${JSON.stringify(got)}`);
+      }
+    }
+  }
+  // Lo que sobra: un índice vivo que no sale del contrato (salvo el _id de MongoDB y la colección de la sonda).
+  const declared = new Set(contract.flatMap(({ collection, specs }) => specs.map((spec) => `${collection}.${spec.name}`)));
+  const extra = Object.entries(live)
+    .filter(([collection]) => collection !== 'keel_probe')
+    .flatMap(([collection, indexes]) => indexes.map((index) => `${collection}.${index.name}`))
+    .filter((id) => !id.endsWith('._id_') && !declared.has(id));
+  step(`export-indexes.sh: están los ${declared.size} índices del contrato`, missing.length === 0, missing.join(', '));
+  step('export-indexes.sh: cada índice vivo tiene las claves, la unicidad y el filtro del contrato', different.length === 0, different.join(' | '));
+  step('export-indexes.sh: no sobra ningún índice', extra.length === 0, extra.join(', '));
 }
 
 const failed = results.filter((result) => !result.ok).length;
