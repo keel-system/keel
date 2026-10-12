@@ -30,6 +30,29 @@ import { tsModule } from './render.js';
 export { usesTelemetry, instrumentationFor };
 
 export const TELEMETRY_TS = 'src/infrastructure/telemetry/telemetry.ts';
+
+/**
+ * Las series del RUNTIME de Node, que consulta la fila de runtime del panel y su alerta de heap. Las de
+ * `nodejs_*` las publica el cliente de Prometheus (`collectDefaultMetrics`); las de `keel_*` las publica la
+ * telemetría generada, porque no hay ninguna estándar:
+ *
+ *   · el LÍMITE del heap (`v8.getHeapStatistics().heap_size_limit`): la alerta compara lo usado con él y no con
+ *     `nodejs_heap_size_total_bytes`, que V8 hace crecer a demanda y que lo usado roza siempre —con él, la alerta del
+ *     90 % dispararía en un servicio sano—;
+ *   · el pool de conexiones del driver relacional (pg o mysql2), que no publica nada por sí mismo.
+ */
+export const NODE_RUNTIME = {
+  heapUsed: 'nodejs_heap_size_used_bytes',
+  heapLimit: 'keel_runtime_heap_limit_bytes',
+  gcSeconds: 'nodejs_gc_duration_seconds_sum',
+  eventLoopLagP99: 'nodejs_eventloop_lag_p99_seconds',
+  pool: {
+    active: 'keel_db_pool_active',
+    idle: 'keel_db_pool_idle',
+    max: 'keel_db_pool_max',
+    saturation: 'keel_db_pool_pending'
+  }
+};
 export const TELEMETRY_LIFECYCLE_TS = 'src/infrastructure/telemetry/telemetry-lifecycle.ts';
 
 /** Puerto de gestión por defecto en production (con telemetría): el mismo que keel-spring. */
@@ -181,7 +204,8 @@ function telemetryTs(model) {
     { symbol: 'FastifyInstance', from: 'fastify', type: true },
     { symbol: 'FastifyReply', from: 'fastify', type: true },
     { symbol: 'FastifyRequest', from: 'fastify', type: true },
-    { symbol: 'Configuration', from: 'src/infrastructure/config/configuration.ts', type: true }
+    { symbol: 'Configuration', from: 'src/infrastructure/config/configuration.ts', type: true },
+    { symbol: 'getHeapStatistics', from: 'node:v8' }
   ], `/** Las observaciones propias: el vocabulario neutral (keel-core/gen/telemetry-vocabulary.js), el de keel-spring. */
 export const OBSERVATIONS = ${JSON.stringify(OBSERVATIONS, null, 2)} as const;
 
@@ -287,7 +311,20 @@ export class Telemetry {
     private readonly configuration: Configuration
   ) {
     collectDefaultMetrics({ register: this.registry });
+    // El límite del heap, contra el que se mide la presión de memoria (el total de V8 crece a demanda).
+    void this.gauge('${NODE_RUNTIME.heapLimit}', 'Límite del heap de V8', async () => getHeapStatistics().heap_size_limit);
     this.logs = logProvider?.getLogger('keel') ?? null;
+  }
+
+  /**
+   * El pool de conexiones del driver relacional: en uso, libres, máximo y peticiones ESPERANDO una conexión (la
+   * serie de la alerta de saturación). Lo registra el módulo de persistencia al inicializar el DataSource.
+   */
+  connectionPool(read: () => { active: number; idle: number; max: number; pending: number }): void {
+    this.gauge('${NODE_RUNTIME.pool.active}', 'Conexiones del pool en uso', async () => read().active);
+    this.gauge('${NODE_RUNTIME.pool.idle}', 'Conexiones del pool libres', async () => read().idle);
+    this.gauge('${NODE_RUNTIME.pool.max}', 'Tamaño máximo del pool', async () => read().max);
+    this.gauge('${NODE_RUNTIME.pool.saturation}', 'Peticiones esperando una conexión del pool', async () => read().pending);
   }
 
   /** La telemetría en marcha, o null si este proceso no la arrancó. */

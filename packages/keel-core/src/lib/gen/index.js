@@ -205,3 +205,4 @@ export {
   promGauge,
   promTag
 } from './telemetry-vocabulary.js';
+export { observabilityAssets, dashboardUid } from './observability-assets.js';

@@ -37,7 +37,22 @@ export const NETS = {
 export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
-  'runtime-panel': { pending: 'incremento 14d (el panel y las alertas, con la fila de runtime de Node)' },
+  'runtime-panel': {
+    emitter: 'src/scaffold/observability-assets.js (los neutrales de keel-core/gen/observability-assets.js con NODE_RUNTIME) · el pool en src/scaffold/persistence-runtime.js',
+    coverage: {
+      relational: {
+        state: 'razonado',
+        owner: 'incremento 14f (telemetry-check contra PostgreSQL y MySQL reales)',
+        why:
+          'la fila de runtime de Node (heap contra su límite —keel_runtime_heap_limit_bytes, porque el total de V8 crece a demanda y la alerta del 90 % dispararía en un servicio sano—, GC, retraso del bucle de eventos) y el pool del driver (keel_db_pool_*: pg lo lee de DataSource.driver.master; mysql2, de los campos INTERNOS de su pool, sin API pública). test/observability-assets.test.js EJECUTA la telemetría emitida y exige que toda serie del panel y de las alertas salga en el scrape (falsado quitando el límite del heap, la serie de pendientes y poniendo la serie de GC de la JVM). Lo que nadie ha ejecutado aún es la LECTURA del pool contra un motor real'
+      },
+      document: {
+        state: 'degradado',
+        why:
+          'el driver de Mongo no expone sus contadores de pool sin suscribirse a sus eventos de conexión, así que keel-nest no publica serie de pool en el modelo documental: el panel no trae esa celda ni la alerta de saturación (keel-spring sí, con mongodb_driver_pool_*). Sin serie, ni fila ni alerta: una consulta sobre una serie que nadie publica dejaría el panel vacío y la alerta muda'
+      }
+    }
+  },
   'outbox-relay': {
     emitter: 'src/scaffold/messaging-stores.js (sobre OUTBOX_EVENT y OUTBOX_RELAY de keel-core/gen/messaging-stores.js) · el puente de src/scaffold/messaging.js',
     coverage: {

@@ -36,6 +36,7 @@ import {
   persistedMembers
 } from 'keel-core/gen';
 import { DATABASES } from 'keel-core/gen/infra-catalog';
+import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
@@ -555,7 +556,41 @@ export function translatePersistenceError(error: unknown): DomainException | 'in
 
 // ─── El módulo ───────────────────────────────────────────────────────────────
 
+/**
+ * Con telemetría, el pool del driver relacional en cada scrape (la fila de runtime del panel y la alerta de
+ * saturación). Ni pg ni mysql2 lo publican: se lee del pool que TypeORM tiene abierto. En mysql2 son campos internos
+ * del pool —no hay API pública—, así que una lectura que no los encuentra da cero en vez de romper el scrape.
+ */
+function poolMetrics(engine) {
+  const read =
+    engine === 'mysql'
+      ? `  const pool = (dataSource.driver as unknown as {
+    pool?: { _allConnections?: { length: number }; _freeConnections?: { length: number }; _connectionQueue?: { length: number }; config?: { connectionLimit?: number } };
+  }).pool;
+  const all = pool?._allConnections?.length ?? 0;
+  const idle = pool?._freeConnections?.length ?? 0;
+  return { active: all - idle, idle, max: pool?.config?.connectionLimit ?? 0, pending: pool?._connectionQueue?.length ?? 0 };`
+      : `  const pool = (dataSource.driver as unknown as {
+    master?: { totalCount: number; idleCount: number; waitingCount: number; options?: { max?: number } };
+  }).master;
+  const total = pool?.totalCount ?? 0;
+  const idle = pool?.idleCount ?? 0;
+  return { active: total - idle, idle, max: pool?.options?.max ?? 0, pending: pool?.waitingCount ?? 0 };`;
+  return `
+
+/** El pool del driver (${engine === 'mysql' ? 'mysql2' : 'pg'}) en las métricas, si la telemetría está en marcha. */
+function withPoolMetrics(dataSource: DataSource | null): DataSource | null {
+  if (dataSource != null) Telemetry.current()?.connectionPool(() => poolStats(dataSource));
+  return dataSource;
+}
+
+function poolStats(dataSource: DataSource): { active: number; idle: number; max: number; pending: number } {
+${read}
+}`;
+}
+
 function persistenceModuleFile(model) {
+  const telemetry = usesTelemetry(model);
   const roots = repositoryRoots(model);
   const imports = [
     { symbol: 'Global', from: '@nestjs/common' },
@@ -633,7 +668,7 @@ export class PersistenceModule {
         { provide: DATABASE_SETTINGS, useValue: settings },
         {
           provide: DATA_SOURCE,
-          useFactory: async () => (settings.options == null ? null : new DataSource(settings.options).initialize())
+          useFactory: ${telemetry ? 'async () => withPoolMetrics(settings.options == null ? null : await new DataSource(settings.options).initialize())' : 'async () => (settings.options == null ? null : new DataSource(settings.options).initialize())'}
         },
         TransactionContext,
         DataSourceShutdown,
@@ -642,6 +677,7 @@ ${bindings.join(',\n')}
       exports: [TransactionContext, DATA_SOURCE${ports.length > 0 ? `, ${ports.join(', ')}` : ''}]
     };
   }
-}`;
+}${telemetry ? poolMetrics(engineOf(model)) : ''}`;
+  if (telemetry) imports.push({ symbol: 'Telemetry', from: TELEMETRY_TS });
   return tsModule(PERSISTENCE_MODULE_TS, imports, body);
 }
