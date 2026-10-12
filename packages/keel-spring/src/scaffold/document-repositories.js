@@ -31,7 +31,7 @@ import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import { DOC_PKG } from './document-entities.js';
 import { documentValueObjects } from './document-embeddables.js';
-import { isRefTarget } from './ref-resolvers.js';
+import { idBatchReason } from 'keel-core/gen/ref-targets';
 import { textFoldImport } from './text-fold.js';
 
 export function generate(model) {
@@ -42,7 +42,7 @@ export function generate(model) {
     const paginated = model.services.some(
       (group) => group.entity === entity.name && group.operations.some((op) => op.paginated)
     );
-    const batchLookup = isRefTarget(model, entity.name);
+    const batchLookup = Boolean(idBatchReason(model, entity));
     files.push(renderPort(model, entity, paginated, batchLookup));
     files.push(renderMongoRepository(model, entity));
     files.push(renderAdapter(model, entity, paginated, batchLookup));

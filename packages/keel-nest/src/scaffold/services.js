@@ -17,6 +17,11 @@
 
 import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } from './render.js';
 import { textFilterNotes } from 'keel-core/gen/text-filters';
+import { refTargetsOf, listedIdsNote } from 'keel-core/gen/ref-targets';
+import { resolverPath } from './ref-resolvers.js';
+import { uploadNotes } from 'keel-core/gen/buckets';
+import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
+import { STORAGE_POLICIES_TS, FILE_STORAGE_TS } from './storage.js';
 import { callerResolution } from './security.js';
 import { mailPorts, sendsMail } from './mail.js';
 import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
@@ -298,6 +303,20 @@ function renderHandler(model, operation) {
     imports.push({ symbol: 'OperationCache', from: OPERATION_CACHE_TS });
     dependencies.push({ type: 'OperationCache', name: 'operationCache' });
   }
+  // Las referencias embebidas (`embed`): el mapper exige la RefDto por parámetro y el agregado solo guarda el id
+  // ajeno, así que el handler recibe el resolver —nunca el repositorio de la otra raíz—, que resuelve por lote.
+  for (const { entity } of refTargetsOf(model, operation)) {
+    const resolver = `${entity.name}RefResolver`;
+    if (dependencies.some((dep) => dep.type === resolver)) continue;
+    imports.push({ symbol: resolver, from: resolverPath(entity) });
+    dependencies.push({ type: resolver, name: decap(resolver) });
+  }
+  // La subida: la operación con un campo `file` comprueba la política de su bucket y sube el binario. Los dos agentes
+  // de catalog inyectaron los dos puertos a mano (2026-10-11); keel-spring igual.
+  if (uploadNotes(model, operation, { sizeCode: '' }).length > 0) {
+    imports.push({ symbol: 'StoragePolicies', from: STORAGE_POLICIES_TS }, { symbol: 'FileStorage', from: FILE_STORAGE_TS });
+    dependencies.push({ type: 'StoragePolicies', name: 'storagePolicies' }, { type: 'FileStorage', name: 'fileStorage' });
+  }
   if (operation.responseDto?.entity && model.entities.some((e) => e.name === operation.responseDto.entity)) {
     const mapper = `${operation.responseDto.entity}ApplicationMapper`;
     imports.push({ symbol: mapper, from: classPath(DIRS.mappers, mapper) });
@@ -378,6 +397,17 @@ function handlerNotes(model, operation) {
   const cached = cacheNote(model, operation, { call: `await this.operationCache.getOrLoad({cache}, ${cacheParam}, () => ...)` });
   if (cached) notes.push(cached);
   for (const note of textFilterNotes(model, operation)) notes.push(note);
+  for (const { entity, ref } of refTargetsOf(model, operation)) {
+    const resolver = `this.${decap(`${entity.name}RefResolver`)}`;
+    notes.push(
+      operation.paginated || operation.returnsList
+        ? `Embed ${entity.name}: por LOTE — recoge los ids de ${entity.name} de la página, UNA llamada a await ${resolver}.resolveAll(ids) y ${ref.name} = map.get(id) al mapear cada elemento. NUNCA findById dentro del bucle: es un N+1`
+        : `Embed ${entity.name}: ${ref.name} = await ${resolver}.resolve(<id>)`
+    );
+  }
+  const listed = listedIdsNote(model, operation, { call: `await this.${decap(`${operation.responseDto?.entity}Repository`)}.findAllById(query.{ids})` });
+  if (listed) notes.push(listed);
+  for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge) })) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la misma en los dos generadores.

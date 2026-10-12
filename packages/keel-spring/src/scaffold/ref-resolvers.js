@@ -15,55 +15,16 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { domainSubPackage } from './entities.js';
 import { rootId } from './repositories.js';
 import { ANNOTATIONS_PKG } from './mediator.js';
+import { refTargets } from 'keel-core/gen/ref-targets';
 
 const SUPPORT_PKG = 'application.support';
 const PORT_PKG = 'domain.repository';
 const MAPPER_PKG = 'application.mappers';
 const DTO_PKG = 'application.dtos';
 
-// Entidades que algún payload embebe: son las que necesitan resolver y lectura
-// por lote en su puerto. `model.refDtos` ya las recoge de los responseDto y de
-// los DTO de entidad hija (src/lib/model.js, collectRefDtos).
-export function refTargets(model) {
-  const targets = [];
-  for (const ref of model.refDtos ?? []) {
-    const entity = model.entities.find((e) => e.name === ref.entity);
-    // Sin persistencia no hay puerto que consultar; crossrefs ya garantiza que
-    // el destino de un embed es raíz de agregado.
-    if (!entity?.persisted || !entity.isAggregateRoot || !entity.idField) continue;
-    targets.push({ ref, entity });
-  }
-  return targets;
-}
-
-export function isRefTarget(model, entityName) {
-  return refTargets(model).some((target) => target.entity.name === entityName);
-}
-
-// Resolvers que necesita una operación: las entidades embebidas por su
-// responseDto, incluidas las que embeben los DTO de sus entidades hijas.
-export function refTargetsOf(model, operation) {
-  const dto = operation.responseDto;
-  if (!dto) return [];
-
-  const byEntity = new Map((model.childDtos ?? []).map((child) => [child.entity, child]));
-  const found = new Set();
-  const seenChildren = new Set();
-  const pending = [dto];
-
-  while (pending.length > 0) {
-    const current = pending.shift();
-    for (const field of current.fields ?? []) {
-      if (field.kind === 'refDto') found.add(field.refEntity);
-      if (field.kind === 'childDto' && !seenChildren.has(field.childEntity)) {
-        seenChildren.add(field.childEntity);
-        const child = byEntity.get(field.childEntity);
-        if (child) pending.push(child);
-      }
-    }
-  }
-  return refTargets(model).filter((target) => found.has(target.entity.name));
-}
+// Qué raíces embebe un payload y cuáles embebe una operación: neutral, lo comparte keel-nest
+// (keel-core/gen/ref-targets.js).
+export { refTargets, isRefTarget, refTargetsOf } from 'keel-core/gen/ref-targets';
 
 export function generate(model) {
   if (!model.layersPresent.persistence) return [];

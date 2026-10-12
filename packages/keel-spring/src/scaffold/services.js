@@ -7,6 +7,9 @@
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { textFilterNotes } from 'keel-core/gen/text-filters';
+import { listedIdsNote } from 'keel-core/gen/ref-targets';
+import { uploadNotes } from 'keel-core/gen/buckets';
+import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
 import {
   idempotencyOutcomeCode,
   declaredUniquenessErrorFor,
@@ -439,6 +442,12 @@ function renderHandler(model, service, operation) {
   // puerto delante. Sin él, el camino de menor resistencia era escribir otro con otro nombre (las dos
   // corridas de keel-spring: GetAssetCache y ResponseCache).
   if (operation.cache) inject('OperationCache', 'application.port.out');
+  // La subida, por el mismo criterio: la operación con un campo `file` comprueba la política de su bucket y sube
+  // el binario. Los dos agentes de catalog inyectaron los dos puertos a mano (2026-10-11).
+  if (uploadNotes(model, operation, { sizeCode: '' }).length > 0) {
+    inject('StoragePolicies', 'domain.storage');
+    inject('FileStorage', 'domain.storage');
+  }
 
   let fields = '';
   let constructor = '';
@@ -482,6 +491,10 @@ function renderHandler(model, service, operation) {
   });
   if (cached) notes.push(cached);
   for (const note of textFilterNotes(model, operation)) notes.push(note);
+  const repositoryOf = `${operation.responseDto?.entity ?? ''}Repository`;
+  const listed = listedIdsNote(model, operation, { call: `${repositoryOf[0].toLowerCase()}${repositoryOf.slice(1)}.findAllById(query.{ids}())` });
+  if (listed) notes.push(listed);
+  for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge) })) notes.push(note);
   for (const text of operation.preconditions) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules) notes.push(`Regla (en orden): ${text}`);
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la misma en los dos generadores.

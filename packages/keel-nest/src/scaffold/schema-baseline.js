@@ -22,6 +22,7 @@
 import { DATA_SOURCE_OPTIONS_TS } from './persistence-runtime.js';
 import { usesRelational } from './persistence-entities.js';
 import { DATABASES } from 'keel-core/gen/infra-catalog';
+import { crossAggregateForeignKeys } from 'keel-core/gen/relational';
 
 export const SCHEMA_BASELINE_TS = 'src/infrastructure/persistence/schema-baseline.ts';
 export const MIGRATIONS_DIR = 'src/migrations';
@@ -37,14 +38,19 @@ export function usesSchemaBaseline(model) {
 export function generate(model) {
   if (!usesSchemaBaseline(model)) return [];
   return [
-    { path: SCHEMA_BASELINE_TS, content: schemaBaselineTs() },
+    { path: SCHEMA_BASELINE_TS, content: schemaBaselineTs(model) },
     { path: 'infra/export-schema.sh', content: script('export') },
     { path: 'infra/verify-baseline.sh', content: script('verify') },
     { path: `${MIGRATIONS_DIR}/README.md`, content: migrationsReadme(model) }
   ];
 }
 
-function schemaBaselineTs() {
+function schemaBaselineTs(model) {
+  // Las FK ENTRE agregados: la entidad solo guarda el id de la otra raíz, sin asociación, así que TypeORM no las
+  // ve y el DDL de las entidades no las trae. Van en el baseline, como el apéndice de export-schema.sh de
+  // keel-spring, con los MISMOS nombres (`crossAggregateForeignKeys` de keel-core): el esquema de los dos
+  // servidores es el mismo. Hasta la corrida catalog de keel-nest (2026-10-11) solo lo decía un comentario.
+  const foreignKeys = crossAggregateForeignKeys(model).map(({ name, table, column, refTable, refColumn }) => ({ name, table, column, refTable, refColumn }));
   const dataSourceOptions = `./${DATA_SOURCE_OPTIONS_TS.split('/').pop().replace(/\.ts$/, '.js')}`;
   return `/**
  * Exporta y verifica el baseline de migraciones contra la base LOCAL (infra/). No es parte del
@@ -67,6 +73,9 @@ import { databaseSettings } from '${dataSourceOptions}';
 const OUTPUT = path.join('build', 'schema');
 const MIGRATION_CLASS = '${BASELINE_CLASS}';
 const MIGRATION_FILE = '${BASELINE_FILE}';
+
+/** Las FK entre agregados, que las entidades no declaran (crossAggregateForeignKeys de keel-core). */
+const CROSS_AGGREGATE_FOREIGN_KEYS: readonly { name: string; table: string; column: string; refTable: string; refColumn: string }[] = ${JSON.stringify(foreignKeys)};
 
 interface Statement {
   readonly query: string;
@@ -99,18 +108,34 @@ async function assertEmptySchema(dataSource: DataSource): Promise<void> {
   }
 }
 
+/** Un parámetro como literal SQL, solo para el archivo de revisión: la migración los pasa aparte. */
+function literal(value: unknown): string {
+  if (value === null || value === undefined) return 'NULL';
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+  return \`'\${String(value).replaceAll("'", "''")}'\`;
+}
+
+// Con una columna GENERADA (el discriminador de un índice condicionado en MySQL), TypeORM registra su expresión en
+// typeorm_metadata con un INSERT parametrizado. Antes el export lo rechazaba y el baseline no se podía escribir.
 function sqlOf(statements: readonly Statement[]): string {
-  for (const statement of statements) {
-    if (statement.parameters && statement.parameters.length > 0) {
-      throw new Error(\`Una sentencia del esquema lleva parámetros y no se puede escribir como SQL: \${statement.query}\`);
-    }
-  }
-  return statements.map((statement) => \`\${statement.query.trim()};\`).join('\\n');
+  return statements
+    .map((statement) => {
+      const parameters = [...(statement.parameters ?? [])];
+      const query = parameters.length > 0 ? statement.query.trim().replace(/\\?|\\$\\d+/g, () => literal(parameters.shift())) : statement.query.trim();
+      return \`\${query};\`;
+    })
+    .join('\\n');
 }
 
 function migrationOf(up: readonly Statement[], down: readonly Statement[]): string {
   const calls = (statements: readonly Statement[]) =>
-    statements.map((statement) => \`    await queryRunner.query(\${JSON.stringify(statement.query.trim())});\`).join('\\n');
+    statements
+      .map((statement) =>
+        statement.parameters && statement.parameters.length > 0
+          ? \`    await queryRunner.query(\${JSON.stringify(statement.query.trim())}, \${JSON.stringify(statement.parameters)});\`
+          : \`    await queryRunner.query(\${JSON.stringify(statement.query.trim())});\`
+      )
+      .join('\\n');
   return \`import type { MigrationInterface, QueryRunner } from 'typeorm';
 
 /**
@@ -132,15 +157,37 @@ export class \${MIGRATION_CLASS} implements MigrationInterface {
 \`;
 }
 
+/** Las sentencias que crean y retiran las FK entre agregados, con el escapado y la sintaxis del motor. */
+function crossAggregateStatements(dataSource: DataSource): { up: Statement[]; down: Statement[] } {
+  const q = (name: string) => dataSource.driver.escape(name);
+  const mysql = dataSource.options.type === 'mysql' || dataSource.options.type === 'mariadb';
+  return {
+    up: CROSS_AGGREGATE_FOREIGN_KEYS.map((fk) => ({
+      query: \`ALTER TABLE \${q(fk.table)} ADD CONSTRAINT \${q(fk.name)} FOREIGN KEY (\${q(fk.column)}) REFERENCES \${q(fk.refTable)} (\${q(fk.refColumn)})\`
+    })),
+    down: CROSS_AGGREGATE_FOREIGN_KEYS.map((fk) => ({
+      query: \`ALTER TABLE \${q(fk.table)} DROP \${mysql ? 'FOREIGN KEY' : 'CONSTRAINT'} \${q(fk.name)}\`
+    }))
+  };
+}
+
+/** ¿Es esta sentencia del ORM el borrado de una FK entre agregados? Las entidades no la declaran, así que la querría quitar. */
+function dropsCrossAggregateKey(statement: Statement): boolean {
+  return /\\bDROP\\s+(CONSTRAINT|FOREIGN\\s+KEY)\\b/i.test(statement.query) && CROSS_AGGREGATE_FOREIGN_KEYS.some((fk) => statement.query.includes(fk.name));
+}
+
 async function exportBaseline(dataSource: DataSource): Promise<number> {
   await assertEmptySchema(dataSource);
   const sql = await dataSource.driver.createSchemaBuilder().log();
   if (sql.upQueries.length === 0) throw new Error('TypeORM no devolvió ninguna sentencia: ¿hay entidades?');
+  const foreign = crossAggregateStatements(dataSource);
+  const up = [...sql.upQueries, ...foreign.up];
+  // El down deshace en orden inverso, como el de una migración generada por TypeORM: primero las FK añadidas.
+  const down = [...foreign.down.reverse(), ...[...sql.downQueries].reverse()];
   fs.mkdirSync(OUTPUT, { recursive: true });
-  fs.writeFileSync(path.join(OUTPUT, 'baseline.sql'), \`\${sqlOf(sql.upQueries)}\\n\`);
-  // El down deshace en orden inverso, como el de una migración generada por TypeORM.
-  fs.writeFileSync(path.join(OUTPUT, MIGRATION_FILE), migrationOf(sql.upQueries, [...sql.downQueries].reverse()));
-  console.log(\`baseline: \${sql.upQueries.length} sentencia(s) → \${path.join(OUTPUT, 'baseline.sql')}\`);
+  fs.writeFileSync(path.join(OUTPUT, 'baseline.sql'), \`\${sqlOf(up)}\\n\`);
+  fs.writeFileSync(path.join(OUTPUT, MIGRATION_FILE), migrationOf(up, down));
+  console.log(\`baseline: \${up.length} sentencia(s), \${foreign.up.length} de ellas FK entre agregados → \${path.join(OUTPUT, 'baseline.sql')}\`);
   console.log(\`migración candidata → \${path.join(OUTPUT, MIGRATION_FILE)} (revisarla y copiarla a ${MIGRATIONS_DIR}/)\`);
   return 0;
 }
@@ -152,12 +199,29 @@ async function verifyBaseline(dataSource: DataSource): Promise<number> {
     console.error('baseline: KO — no hay migraciones que aplicar (¿están en ${MIGRATIONS_DIR}/ y compiladas con npm run build?).');
     return 1;
   }
-  const diff = await dataSource.driver.createSchemaBuilder().log();
-  if (diff.upQueries.length > 0) {
+  const log = await dataSource.driver.createSchemaBuilder().log();
+  // El ORM querría quitar las FK entre agregados (las entidades no las declaran): esas no son diferencia.
+  const diff = log.upQueries.filter((statement) => !dropsCrossAggregateKey(statement));
+  if (diff.length > 0) {
     console.error(\`baseline: KO — tras aplicar \${applied.map((migration) => migration.name).join(', ')}, el esquema NO es el de las entidades.\`);
     console.error('Lo que el ORM tendría que cambiar todavía:');
-    for (const statement of diff.upQueries) console.error(\`  \${statement.query.trim()};\`);
+    for (const statement of diff) console.error(\`  \${statement.query.trim()};\`);
     return 1;
+  }
+  // Y las que el ORM no ve, que existan: es el contrato que comparte con keel-spring.
+  const runner = dataSource.createQueryRunner();
+  try {
+    const missing: string[] = [];
+    for (const fk of CROSS_AGGREGATE_FOREIGN_KEYS) {
+      const table = await runner.getTable(fk.table);
+      if (!table?.foreignKeys.some((key) => key.name === fk.name)) missing.push(fk.name);
+    }
+    if (missing.length > 0) {
+      console.error(\`baseline: KO — faltan las FK entre agregados \${missing.join(', ')} (el baseline tiene que añadirlas: infra/export-schema.sh las escribe).\`);
+      return 1;
+    }
+  } finally {
+    await runner.release();
   }
   console.log(\`baseline: OK — \${applied.map((migration) => migration.name).join(', ')} crea exactamente el esquema de las entidades.\`);
   return 0;

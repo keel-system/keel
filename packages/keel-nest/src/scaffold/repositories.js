@@ -16,6 +16,7 @@
 
 import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, keyShadow, naturalKeyBatchReason, uniqueFields } from 'keel-core/gen';
 import { pluralize } from 'keel-core/gen/naming';
+import { idBatchReason, listedIdQueries } from 'keel-core/gen/ref-targets';
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
@@ -270,6 +271,17 @@ function renderPort(model, entity) {
   const id = entity.idField;
   const idType = id?.tsType ?? 'string';
   const methods = [`  abstract findById(${id?.name ?? 'id'}: ${idType}): Promise<${entity.name} | null>;`];
+  const idBatch = idBatchReason(model, entity);
+  if (idBatch) {
+    methods.push(
+      `  /**
+   * Las raíces de esos ids en UNA consulta: el orden no está garantizado y lo que no exista no aparece; quien llama
+   * indexa por id. ${idBatch === 'embed' ? `La usa ${entity.name}RefResolver para el \`embed\` de una página` : `La usa ${listedIdQueries(model, entity).map((op) => op.name).join(', ')}, que recibe la lista de ids`}:
+   * leerlos en un bucle es una consulta por elemento.
+   */
+` + `  abstract findAllById(ids: readonly ${idType}[]): Promise<${entity.name}[]>;`
+    );
+  }
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) imports.push(...param.imports);
@@ -407,6 +419,15 @@ function renderAdapter(model, entity) {
     const found = await this.manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${idName} }`)});
     return found == null ? null : toDomain${entity.name}(found);
   }`);
+  if (idBatchReason(model, entity)) {
+    // `In(...)`: TypeORM aplica el transformador de la columna a cada valor (el uuid binario de MySQL); lo mide db-check.
+    imports.push({ symbol: 'In', from: 'typeorm' });
+    methods.push(`  async findAllById(ids: readonly ${idType}[]): Promise<${entity.name}[]> {
+    if (ids.length === 0) return [];
+    const found = await this.manager.find(${ormClass(entity.name)}, ${findOptions(`{ ${idName}: In([...ids]) }`)});
+    return found.map(toDomain${entity.name});
+  }`);
+  }
 
   const finder = naturalKeyFinder(model, entity);
   if (finder) {

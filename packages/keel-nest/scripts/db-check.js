@@ -40,6 +40,7 @@ import { DB_NAME, run, resolveRuntime, startDatabase } from './lib/database-cont
 import { sampleEntity, sampleValue, PROBE_HELPERS } from './lib/samples.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
+import { usesSchemaBaseline, BASELINE_FILE, MIGRATIONS_DIR } from '../src/scaffold/schema-baseline.js';
 import { AMQPLIB_VERSION, JOSE_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION, AWS_SDK_VERSION, FASTIFY_MULTIPART_VERSION } from '../src/lib/assets.js';
 import { domainMembers } from '../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
@@ -67,6 +68,7 @@ import {
 } from '../src/scaffold/messaging.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { idempotencyOutcomeCodes } from 'keel-core/gen';
+import { idBatchReason } from 'keel-core/gen/ref-targets';
 
 const args = process.argv.slice(2);
 const keep = args.includes('--keep');
@@ -340,6 +342,13 @@ ${finder ? `  const found = await repository.${finder.name}(${finder.params.map(
   }` : ''}
 ${foldedBlock(model, root, index, ctx, finder)}
 ${filterFoldBlock(model, root, index, ctx)}
+${idBatchReason(model, root) ? `  {
+    // findAllById: UNA consulta con In([...]) — en MySQL el id es binary(16) con transformador, y que TypeORM lo
+    // aplique a cada valor del In es lo que aquí se mide (si no, la consulta no casaría nada sin dar error).
+    const batch = await repository.findAllById([original.id, randomUUID()]);
+    check('${name}: findAllById devuelve la raíz guardada y omite el id que no existe', batch.length === 1 && String(batch[0]?.id) === String(original.id), JSON.stringify(batch.map((item) => item.id)));
+    check('${name}: findAllById con la lista vacía no consulta y devuelve vacío', (await repository.findAllById([])).length === 0);
+  }` : ''}
 ${conditionalBlock(model, root, index, ctx)}
 ${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [] });
   check('${name}: list devuelve la página con su total', page.totalElements >= 1 && page.items.length >= 1 && page.totalPages >= 1, JSON.stringify({ total: page.totalElements, n: page.items.length }));` : ''}
@@ -1153,6 +1162,60 @@ function literalFor(spec, member, model) {
   }
 }
 
+// ─── El baseline con las FK entre agregados ─────────────────────────────────
+//
+// La entidad solo guarda el id de la otra raíz, así que TypeORM no ve esas FK: las añade el exportador del baseline
+// con los nombres de `crossAggregateForeignKeys` (los mismos que el apéndice de keel-spring), y el verify las exige
+// y no cuenta como diferencia que el ORM las quiera quitar. Se mide con el exportador y el verify EMITIDOS, sobre el
+// motor real, y se falsa quitándolas de la migración.
+function baselineBlock(model, engine, db, dir, subject) {
+  const fks = crossAggregateForeignKeys(model);
+  if (fks.length === 0 || !usesSchemaBaseline({ ...model, stack: { ...model.stack, database: engine } })) return;
+  const dbYaml = path.join(dir, 'config', 'parameters', 'local', 'db.yaml');
+  const yaml = fs.readFileSync(dbYaml, 'utf8')
+    .replace(/^ {2}url: .*$/m, `  url: jdbc:${engine}://127.0.0.1:${db.port}/${DB_NAME}`)
+    .replace(/^ {2}username: .*$/m, `  username: ${DB_NAME}`)
+    .replace(/^ {2}password: .*$/m, `  password: ${db.password}`);
+  fs.writeFileSync(dbYaml, yaml);
+  fs.writeFileSync(
+    path.join(dir, 'baseline-reset.mjs'),
+    `import 'reflect-metadata';
+import { DataSource } from 'typeorm';
+import { databaseSettings } from './dist/infrastructure/persistence/data-source-options.js';
+const values = { 'database.url': 'jdbc:${engine}://127.0.0.1:${db.port}/${DB_NAME}', 'database.username': '${DB_NAME}', 'database.password': '${db.password}', 'database.synchronize': false, 'database.transaction-timeout': '30s' };
+const settings = databaseSettings({ get: (key) => values[key], application: { name: 'db-check' } });
+const dataSource = await new DataSource({ ...settings.options, synchronize: false, migrationsRun: false }).initialize();
+await dataSource.dropDatabase();
+await dataSource.destroy();
+`
+  );
+  const node = (args) => run(process.execPath, args, { cwd: dir, timeout: 180_000 });
+  const reset = () => node(['baseline-reset.mjs']);
+  const label = `${engine} · ${subject}: baseline`;
+  reset();
+  const exported = node(['dist/infrastructure/persistence/schema-baseline.js', 'export']);
+  const migration = path.join(dir, 'build', 'schema', BASELINE_FILE);
+  const text = fs.existsSync(migration) ? fs.readFileSync(migration, 'utf8') : '';
+  if (!step(`${label}: el export añade las FK entre agregados (${fks.map((fk) => fk.name).join(', ')})`, exported.status === 0 && fks.every((fk) => text.includes(fk.name)), (exported.stderr || exported.stdout).slice(-800))) return;
+  const install = (content) => {
+    fs.mkdirSync(path.join(dir, MIGRATIONS_DIR), { recursive: true });
+    fs.writeFileSync(path.join(dir, MIGRATIONS_DIR, BASELINE_FILE), content);
+    return run(process.execPath, [path.join(dir, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', 'tsconfig.build.json'], { cwd: dir });
+  };
+  if (!step(`${label}: la migración exportada compila`, install(text).status === 0)) return;
+  reset();
+  const verified = node(['dist/infrastructure/persistence/schema-baseline.js', 'verify']);
+  step(`${label}: verify en verde — las migraciones crean el esquema de las entidades MÁS las FK entre agregados`, verified.status === 0 && /baseline: OK/.test(verified.stdout), (verified.stderr || verified.stdout).slice(-1200));
+  // Falsado: sin las FK en la migración, el verify tiene que salir rojo nombrándolas.
+  const stripped = text.split('\n').filter((line) => !fks.some((fk) => line.includes(fk.name))).join('\n');
+  if (install(stripped).status === 0) {
+    reset();
+    const sabotaged = node(['dist/infrastructure/persistence/schema-baseline.js', 'verify']);
+    step(`${label}: falsado — sin las FK en la migración, el verify sale rojo y las nombra`, sabotaged.status !== 0 && fks.every((fk) => sabotaged.stderr.includes(fk.name)), `código ${sabotaged.status}`);
+  }
+  install(text);
+}
+
 // ─── Orquestación ────────────────────────────────────────────────────────────
 
 const runtime = resolveRuntime();
@@ -1216,6 +1279,7 @@ for (const engine of ENGINES) {
         failed.length === 0,
         `${checks.length - failed.length}/${checks.length}${probe.unsampled.length > 0 ? `; sin muestra: ${probe.unsampled.join(', ')}` : ''}`
       );
+      baselineBlock(model, engine, db, dir, subject);
     }
   } finally {
     if (!keep) run(runtime, ['rm', '-f', db.name]);

@@ -107,7 +107,7 @@ export {
   DECIMAL_PRECISION
 } from './constraints.js';
 export { guardedFields } from './domain-guards.js';
-export { physicalBucketName, declaredBuckets, isPublicBucket } from './buckets.js';
+export { physicalBucketName, declaredBuckets, isPublicBucket, uploadNotes } from './buckets.js';
 export {
   isReservedSqlWord,
   quoteIdentifierFor,
@@ -189,3 +189,4 @@ export {
   CURRENCY_MINOR_UNITS
 } from './payment-gateways.js';
 export { cachedOperations, cacheInvalidations, unbackedInvalidations, CACHE_ENTRY_SEPARATOR, CACHE_KEY_PART_SEPARATOR } from './cache-plan.js';
+export { refTargets, isRefTarget, refTargetsOf, listedIdQueries, idBatchReason, listedIdsNote } from './ref-targets.js';

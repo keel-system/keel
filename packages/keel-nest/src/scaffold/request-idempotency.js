@@ -211,6 +211,9 @@ export const CommandSignature = {
     if (value instanceof Date) return scalar(value.toISOString());
     if (typeof value === 'bigint' || typeof value === 'number' || typeof value === 'boolean') return scalar(String(value));
     if (typeof value === 'string') return scalar(value);
+    // Un binario (el contenido de una subida) puede pesar megas: entra por su digest, como en keel-spring. Sin esta
+    // rama caía en la de objeto y recorría byte a byte un archivo de 25 MB (corrida asset-vault de keel-nest).
+    if (value instanceof Uint8Array) return scalar(createHash('sha256').update(value).digest('hex'));
     if (Array.isArray(value)) return \`[\${value.map((item) => CommandSignature.canonical(item)).join(',')}]\`;
     if (typeof value === 'object') {
       const entries = Object.entries(value as Record<string, unknown>)

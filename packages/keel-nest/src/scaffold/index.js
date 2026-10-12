@@ -46,6 +46,7 @@ import * as cache from './cache.js';
 import * as storage from './storage.js';
 import * as auditActor from './audit-actor.js';
 import * as projections from './projections.js';
+import * as refResolvers from './ref-resolvers.js';
 import * as scheduling from './scheduling.js';
 import * as purge from './purge.js';
 import * as claim from './claim.js';
@@ -122,6 +123,8 @@ const GENERATORS = [
   auditActor,
   // La copia local de un dato de otro servidor (incremento 13j): el proyector y el lector de cada réplica.
   projections,
+  // La lectura por lote del `embed`: el <Raíz>RefResolver de keel-spring, sobre el findAllById del puerto.
+  refResolvers,
   // El reloj (incremento 10b): los schedulers de las operaciones con `schedule` y las purgas por lotes de las
   // tablas del generador.
   scheduling,
@@ -135,7 +138,7 @@ const GENERATORS = [
   idempotencyCheck,
   // El baseline de migraciones: cómo se exporta y cómo se demuestra (lo usa el pase de calidad).
   schemaBaseline,
-  { generate: (model) => mediator.generate(model, { mappers: mappers.mapperClasses(model), payments: payments.paymentApplicationClasses(model), projections: projections.projectionClasses(model) }) },
+  { generate: (model) => mediator.generate(model, { mappers: [...mappers.mapperClasses(model), ...refResolvers.resolverClasses(model)], payments: payments.paymentApplicationClasses(model), projections: projections.projectionClasses(model) }) },
   // API REST (incremento 5): correlación, ErrorResponse, lectura de peticiones, filtro de errores y
   // un controlador por grupo.
   restSupport,

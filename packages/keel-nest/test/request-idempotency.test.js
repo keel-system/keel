@@ -89,3 +89,18 @@ test('la firma canónica: el orden de las claves no cuenta, el de las listas sí
   }
   assert.equal(sig(new Command()), sig({ sku: 'ACM-0001' }));
 });
+
+test('un binario entra en la firma por su digest, como en keel-spring: 25 MB no se recorren byte a byte', async () => {
+  const tree = transpileTree(planFixture(NEST_READY_DESIGN.name).files);
+  const { CommandSignature } = await tree.load('src/application/support/command-signature.ts');
+  const { createHash } = await import('node:crypto');
+  const big = new Uint8Array(25 * 1024 * 1024).fill(7);
+  const started = Date.now();
+  const canonical = CommandSignature.canonical({ content: big });
+  assert.ok(Date.now() - started < 2000, `tardó ${Date.now() - started} ms`);
+  // La misma forma que el `scalar(hex(sha256(bytes)))` de keel-spring.
+  const hex = createHash('sha256').update(big).digest('hex');
+  assert.equal(canonical, `{7:content64:${hex}}`);
+  assert.notEqual(CommandSignature.of({ content: Buffer.from('a') }), CommandSignature.of({ content: Buffer.from('b') }));
+  assert.equal(CommandSignature.of({ content: Buffer.from('a') }), CommandSignature.of({ content: new Uint8Array([97]) }));
+});

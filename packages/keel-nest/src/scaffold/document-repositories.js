@@ -18,6 +18,7 @@
 import { persistedMembers, collectInternalEntities, LOCK_VERSION, orderingFieldOf, orderingTieBreakerOf } from 'keel-core/gen';
 import { documentShape, DOCUMENT_ID, storageOf } from 'keel-core/gen/document';
 import { snakeCase } from 'keel-core/gen/naming';
+import { idBatchReason } from 'keel-core/gen/ref-targets';
 import { DIRS, classPath, entityDir, tsModule, tsString } from './render.js';
 import { domainMembers } from './entities.js';
 import { TEXT_FOLD_TS } from './persistence-entities.js';
@@ -420,6 +421,15 @@ export function renderDocumentAdapter(model, entity) {
     const found = await this.collection.findOne(${idFilter}, { session: this.session });
     return found == null ? null : toDomain${entity.name}(found);
   }`);
+  if (idBatchReason(model, entity)) {
+    methods.push(`  async findAllById(ids: readonly ${idType}[]): Promise<${entity.name}[]> {
+    if (ids.length === 0) return [];
+    const found = await this.collection
+      .find({ ${DOCUMENT_ID}: { $in: ids.map((value) => ${id ? writeScalar(id, 'value', use) : 'value'}) } }, { session: this.session })
+      .toArray();
+    return found.map(toDomain${entity.name});
+  }`);
+  }
 
   const finders = [naturalKeyFinder(model, entity), ...occupantFinders(model, entity), ...uniqueFieldFinders(model, entity)].filter(Boolean);
   for (const finder of finders) {

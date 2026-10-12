@@ -7,7 +7,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, domainTypeImport, capitalize } from './entities.js';
 import { jpaMembers, backReferenceTo, JPA_PKG } from './persistence-entities.js';
-import { isRefTarget } from './ref-resolvers.js';
+import { idBatchReason, listedIdQueries } from 'keel-core/gen/ref-targets';
 import { pluralize } from '../lib/naming.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
@@ -31,7 +31,7 @@ export function generate(model) {
     // necesitan, y solo ellas la reciben — un puerto no se ensancha con métodos
     // que nadie llama. Es lo que permite resolver los embeds de una página con
     // una consulta por agregado en vez de una por elemento (N+1).
-    const batchLookup = isRefTarget(model, entity.name);
+    const batchLookup = Boolean(idBatchReason(model, entity));
     files.push(renderPort(model, entity, paginated, batchLookup));
     files.push(renderJpaRepository(model, entity));
     files.push(renderAdapter(model, entity, paginated, batchLookup));
@@ -321,7 +321,10 @@ export function renderPort(model, entity, paginated, batchLookup) {
     methods.push(`    /**
      * Carga en UNA consulta las raíces de la colección de ids. El orden de salida
      * NO está garantizado y los ids inexistentes simplemente no aparecen: quien
-     * llama indexa por id (ver ${entity.name}RefResolver).
+     * llama indexa por id${idBatchReason(model, entity) === 'embed' ? ` (ver ${entity.name}RefResolver)` : ''}.${idBatchReason(model, entity) === 'listed-ids' ? `
+     *
+     * <p>La usa ${listedIdQueries(model, entity).map((op) => op.name).join(', ')}, que recibe la lista de ids: leerlos en un
+     * bucle es una consulta por elemento.` : ''}
      */
     List<${entity.name}> findAllById(Collection<${id.javaType}> ids);`);
   }

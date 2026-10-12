@@ -1891,7 +1891,19 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     su `sed` no extraía el token: el emulador responde el JSON formateado en varias líneas. Las skills de Cognito
     dicen lo que local no prueba: en un pool real hace falta un disparador de pre-generación (V2) que copie
     `custom:<claim>` al access token, y `tokenWithScope` no existe ahí.
+  - **Corridas de control de keel-nest (2026-10-11 v2):** `asset-vault` **32/32** con la huella de 23 a **18** y
+    `catalog` **56/56** con la huella de 33 a **25**; la sombra de filtro y el proyector aguantaron. Registro en
+    `docs/corridas/2026-10-11-{asset-vault,catalog}-nest-v2.md`. Arreglos: la lectura por lote por id
+    (`keel-core/gen/ref-targets.js`: el `<Raíz>RefResolver` y `findAllById` en keel-nest para el `embed`, y
+    `findAllById` en los dos para la query que recibe la lista de ids); el handler de una subida recibe
+    `StoragePolicies` y `FileStorage` y la nota del límite del bucket (`uploadNotes`), en los dos; las FK entre
+    agregados en el baseline de keel-nest (export y verify, medidos en `db-check` contra PostgreSQL y MySQL); la
+    firma de un binario por su SHA-256; y el export del baseline en MySQL con una columna generada, que rechazaba el
+    INSERT parametrizado de `typeorm_metadata`. `db-check` gana `findAllById` (el `In(...)` sobre el uuid binario).
   - **Lo que queda abierto:**
+    - la marca `stale` del último precio conocido (`GetPriceResult`): la escribieron las dos v2, de keel-spring y de
+      keel-nest. Toca el tipo de resultado, el mapper, el almacén `lastKnown` y la nota de la caché, y en catalog la
+      llamada sirve a dos políticas a la vez;
     - un contrato formal (`openapi.yaml`) para que las pruebas asierten en STRICT (`response-shape-without-contract`,
       las dos v2).
 

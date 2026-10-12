@@ -58,7 +58,7 @@ test('embed: genera el RefResolver del agregado embebido con la resolución por 
   assert.ok(!resolver.includes('org.springframework'));
 });
 
-test('embed: solo la raíz embebida gana findAllById en su puerto y adaptador', () => {
+test('findAllById: la raíz embebida y la que una query recibe como lista de ids, y ninguna más', () => {
   const { read } = scaffold();
   const port = read(`${JAVA}/domain/repository/CategoryRepository.java`);
   const adapter = read(`${JAVA}/infrastructure/persistence/repositories/CategoryRepositoryImpl.java`);
@@ -67,9 +67,13 @@ test('embed: solo la raíz embebida gana findAllById en su puerto y adaptador', 
   assert.ok(adapter.includes('public List<Category> findAllById(Collection<UUID> ids)'));
   assert.ok(adapter.includes('categoryJpaRepository.findAllById(ids).stream().map(this::toDomain).toList()'));
 
-  // Product no lo embebe nadie: su puerto no se ensancha con un método que
-  // ningún resolver va a llamar.
-  assert.ok(!read(`${JAVA}/domain/repository/ProductRepository.java`).includes('findAllById'));
+  // Product no lo embebe nadie, pero getProductsByIds recibe la lista de sus ids: lo gana por eso (las cuatro
+  // corridas de catalog lo escribieron a mano), y su javadoc lo dice.
+  const products = read(`${JAVA}/domain/repository/ProductRepository.java`);
+  assert.ok(products.includes('List<Product> findAllById(Collection<UUID> ids);'));
+  assert.ok(products.includes('La usa getProductsByIds, que recibe la lista de ids'));
+  // SupplierPrice no tiene ninguno de los dos motivos: su puerto no se ensancha con un método que nadie llama.
+  assert.ok(!read(`${JAVA}/domain/repository/SupplierPriceRepository.java`).includes('findAllById'));
 });
 
 test('embed: el handler recibe el resolver de cada RefDto que su mapper exige', () => {
