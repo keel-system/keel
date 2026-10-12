@@ -46,10 +46,10 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { resolveStack, scaffoldService } from '../src/scaffold/index.js';
-import { dashboardUid } from '../src/scaffold/observability-assets.js';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { ALERTING, TELEMETRY_INFRA } from '../src/lib/stack-catalog.js';
-import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, promMetric, promTag } from '../src/lib/telemetry-probes.js';
+import { METRICS_TRANSPORT } from '../src/lib/telemetry-probes.js';
+import { DEPLOY_CASES, probeDeployBackend } from 'keel-core/gen/deploy-probes';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');
@@ -58,10 +58,6 @@ const args = process.argv.slice(2);
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'job-dispatch';
 const keep = args.includes('--keep');
 
-// Las credenciales del backend de prueba de la imagen. No son un secreto: es el Grafana de
-// deploy/, que nace con admin/admin y no sale de la máquina.
-const GRAFANA_USER = 'admin';
-const GRAFANA_PASSWORD = 'admin';
 
 // ─── Procesos ────────────────────────────────────────────────────────────────
 
@@ -88,27 +84,6 @@ async function http(url, options = {}) {
 
 let GRAFANA = '';
 
-const basic = () => 'Basic ' + Buffer.from(GRAFANA_USER + ':' + GRAFANA_PASSWORD).toString('base64');
-
-async function grafana(pathname, options = {}) {
-  const response = await http(GRAFANA + pathname, {
-    ...options,
-    headers: { Authorization: basic(), 'Content-Type': 'application/json', ...(options.headers ?? {}) }
-  });
-  let json = null;
-  try {
-    json = JSON.parse(response.text);
-  } catch {
-    json = null;
-  }
-  return { ...response, json };
-}
-
-/** Consulta instantánea a un datasource de Prometheus, por el proxy de Grafana. */
-async function promQuery(uid, query) {
-  const response = await grafana(`/api/datasources/proxy/uid/${uid}/api/v1/query?query=${encodeURIComponent(query)}`);
-  return response.json?.data?.result ?? [];
-}
 
 // ─── El proyecto y sus puertos ───────────────────────────────────────────────
 
@@ -212,16 +187,7 @@ function trafficPath(projectDir) {
 
 // ─── Los casos ───────────────────────────────────────────────────────────────
 
-const CASES = [
-  { id: 'DEP-1', title: 'el perfil develop expone el scrape que el colector viene a buscar' },
-  { id: 'DEP-2', title: 'la serie del caso de uso llegó al backend por el scrape, con su servicio' },
-  { id: 'DEP-3', title: 'el exemplar sobrevivió al viaje y trae un id de traza' },
-  { id: 'DEP-4', title: 'esa traza existe en el backend de trazas: el salto métrica→traza se cierra' },
-  { id: 'DEP-5', title: 'los logs del servicio llegaron al backend de logs' },
-  { id: 'DEP-6', title: 'el panel provisionado entró con su uid' },
-  { id: 'DEP-7', title: 'las alertas provisionadas están cargadas y la política enruta al contacto' },
-  { id: 'DEP-8', title: 'una alerta que dispara recorre la política y LLEGA al contacto' }
-];
+const CASES = DEPLOY_CASES;
 
 const results = [];
 const record = (id, ok, detail = '') => {
@@ -312,187 +278,17 @@ try {
   for (let i = 0; i < 5; i++) await http(`http://localhost:${appPort}${traffic}`);
   console.log(`tráfico enviado a ${traffic} (el stub responde 500: el desenlace es 'error', que es lo que se mide)`);
 
-  // Los datasources, por TIPO: sus uids son de la imagen del backend y pueden cambiar con ella.
-  const datasources = (await grafana('/api/datasources')).json ?? [];
-  const uidOf = (type) => datasources.find((item) => item.type === type)?.uid ?? null;
-  const prometheusUid = uidOf('prometheus');
-  const tempoUid = uidOf('tempo');
-  const lokiUid = uidOf('loki');
-  if (!prometheusUid) {
-    throw new Error('Grafana no tiene datasource de Prometheus: el backend de prueba no arrancó como se esperaba');
-  }
-
-  const useCase = promMetric(OBSERVATIONS.useCase);
-  process.stdout.write('esperando al scrape del colector… ');
-  let series = [];
-  for (let attempt = 0; attempt < 24 && series.length === 0; attempt++) {
-    series = await promQuery(prometheusUid, useCase.count);
-    if (series.length === 0) await sleep(5000);
-  }
-  console.log(series.length > 0 ? 'OK' : 'KO');
-
-  // DEP-2. Con `service_name`: un scrape no trae los atributos de recurso, los pone el procesador
-  // `resource/scrape` del colector. Sin él la serie llega igual y el panel no puede filtrar por
-  // servicio — otro fallo que no se ve hasta que hay dos servicios.
-  const conServicio = series.some((item) => item.metric?.service_name);
-  record(
-    'DEP-2',
-    series.length > 0 && conServicio,
-    series.length === 0
-      ? `el backend no tiene ${useCase.count}: el colector no alcanzó a la app, o su scrape no está configurado`
-      : conServicio
-        ? ''
-        : 'la serie llegó sin service_name: falta el procesador resource/scrape del colector'
-  );
-  const conDesenlace = series.some((item) => item.metric?.[promTag(ATTRIBUTES.outcome)]);
-
-  // DEP-3. El exemplar: lo que hace que del punto se pueda saltar a la petición concreta.
-  const ahora = Math.floor(Date.now() / 1000);
-  const exemplars = await grafana(
-    `/api/datasources/proxy/uid/${prometheusUid}/api/v1/query_exemplars` +
-      `?query=${encodeURIComponent(useCase.bucket)}&start=${ahora - 900}&end=${ahora}`
-  );
-  const traceId = exemplars.json?.data
-    ?.flatMap((item) => item.exemplars ?? [])
-    .map((item) => item.labels?.trace_id ?? item.labels?.traceID)
-    .find(Boolean);
-  record(
-    'DEP-3',
-    Boolean(traceId),
-    traceId
-      ? ''
-      : 'ningún exemplar en el backend: el Prometheus de la imagen los acepta y los TIRA sin ' +
-          '--enable-feature=exemplar-storage, y tampoco hay exemplar si la traza no se muestreó'
-  );
-
-  // DEP-4. Y que ese id lleve de verdad a una traza: el salto completo.
-  if (traceId && tempoUid) {
-    const trace = await grafana(`/api/datasources/proxy/uid/${tempoUid}/api/traces/${traceId}`);
-    record('DEP-4', trace.ok && trace.text.length > 2, trace.ok ? '' : `Tempo respondió ${trace.status} para ${traceId}`);
-  } else {
-    record('DEP-4', false, traceId ? 'no hay datasource de trazas' : 'sin exemplar no hay traza a la que saltar');
-  }
-
-  // DEP-5. Los logs. En deploy/ van por OTLP a propósito, porque allí nadie recoge la consola.
-  if (lokiUid) {
-    const query = `{service_name="${service.manifest.service.name}"}`;
-    const logs = await grafana(
-      `/api/datasources/proxy/uid/${lokiUid}/loki/api/v1/query_range` +
-        `?query=${encodeURIComponent(query)}&start=${(ahora - 900) * 1e9}&end=${ahora * 1e9}&limit=5`
-    );
-    const lineas = (logs.json?.data?.result ?? []).flatMap((item) => item.values ?? []);
-    record('DEP-5', lineas.length > 0, lineas.length > 0 ? '' : 'Loki no tiene logs del servicio: ¿LOG_EXPORT_OTLP?');
-  } else {
-    record('DEP-5', false, 'no hay datasource de logs');
-  }
-
-  // DEP-6. El panel: un montaje mal puesto deja a Grafana arrancando sin decir nada.
-  const uid = dashboardUid({ service: { artifactId: service.manifest.service.name } });
-  const panel = await grafana(`/api/dashboards/uid/${uid}`);
-  record('DEP-6', panel.ok, panel.ok ? '' : `el panel ${uid} no entró (${panel.status})`);
-
-  // DEP-7. Las reglas y la política.
-  const reglas = (await grafana('/api/v1/provisioning/alert-rules')).json ?? [];
-  const mias = reglas.filter((regla) => String(regla.uid ?? '').startsWith(`keel-${service.manifest.service.name}`));
-  const politica = (await grafana('/api/v1/provisioning/policies')).json ?? {};
-  const enruta = politica.receiver === ALERTING.contactPoint;
-  record(
-    'DEP-7',
-    mias.length > 0 && enruta,
-    mias.length === 0
-      ? 'ninguna regla provisionada llegó a Grafana'
-      : enruta
-        ? ''
-        : `la política no enruta a ${ALERTING.contactPoint}: las alertas se verían en la interfaz y no saldrían`
-  );
-
-  // DEP-8. Y la entrega. Se prueba el contacto TAL COMO QUEDÓ PROVISIONADO —se lee de Grafana— y
-  // no uno compuesto aquí: si `$__env{…}` no se resolvió, su url es el literal y la entrega falla,
-  // que es exactamente el fallo que no produce ningún síntoma.
-  const contactos = (await grafana('/api/v1/provisioning/contact-points')).json ?? [];
-  const contacto = contactos.find((item) => item.name === ALERTING.contactPoint);
-  const contar = (texto) => (texto.match(new RegExp(ALERTING.sink.path, 'g')) ?? []).length;
-  if (!contacto) {
-    record('DEP-8', false, 'el contacto no llegó a provisionarse');
-  } else if (String(contacto.settings?.url ?? '').includes('$__env')) {
-    record(
-      'DEP-8',
-      false,
-      `la url del contacto quedó sin resolver (${contacto.settings.url}): la variable no llegó al proceso de Grafana`
-    );
-  } else {
-    const previas = contar((await http(`http://localhost:${sinkPort}/__admin/requests`)).text);
-
-    // Se dispara una alerta DE VERDAD en vez de usar el botón «Test» de Grafana, y no es un
-    // rodeo: (a) esa API cambia de versión en versión —en la 13 los dos endpoints que había
-    // responden 410 y 404—, y (b) el botón manda al contacto DIRECTAMENTE, saltándose la
-    // política. Lo que aquí se quiere medir es el camino entero: regla → política → contacto →
-    // webhook. Una regla temporal con una condición siempre cierta y `for: 0s` lo recorre.
-    //
-    // La regla se crea en el MISMO grupo y carpeta que las provisionadas —se leen de una de
-    // ellas— para heredar su intervalo de evaluación: en un grupo nuevo habría que fijarlo aparte.
-    const provisionada = mias[0];
-    const sonda = {
-      title: 'KeelDeployCheckProbe',
-      ruleGroup: provisionada?.ruleGroup,
-      folderUID: provisionada?.folderUID,
-      orgID: 1,
-      condition: 'B',
-      for: '0s',
-      noDataState: 'OK',
-      execErrState: 'OK',
-      labels: { severity: 'warning' },
-      annotations: { summary: 'Sonda de deploy-check: comprobando que el contacto entrega' },
-      data: [
-        {
-          refId: 'A',
-          datasourceUid: '__expr__',
-          relativeTimeRange: { from: 600, to: 0 },
-          model: { refId: 'A', type: 'math', expression: '1', datasource: { type: '__expr__', uid: '__expr__' } }
-        },
-        {
-          refId: 'B',
-          datasourceUid: '__expr__',
-          model: {
-            refId: 'B',
-            type: 'threshold',
-            expression: 'A',
-            conditions: [{ evaluator: { type: 'gt', params: [0] } }],
-            datasource: { type: '__expr__', uid: '__expr__' }
-          }
-        }
-      ]
-    };
-    const creada = await grafana('/api/v1/provisioning/alert-rules', {
-      method: 'POST',
-      // Sin esto la regla queda marcada como provisionada y no se puede borrar luego por API.
-      headers: { 'X-Disable-Provenance': 'true' },
-      body: JSON.stringify(sonda)
-    });
-
-    // Evaluación (el grupo va a un minuto) más el `group_wait` de la política: hasta tres minutos.
-    let entregadas = previas;
-    if (creada.ok) {
-      for (let attempt = 0; attempt < 36 && entregadas === previas; attempt++) {
-        await sleep(5000);
-        entregadas = contar((await http(`http://localhost:${sinkPort}/__admin/requests`)).text);
-      }
-      const uidSonda = creada.json?.uid;
-      if (uidSonda) await grafana(`/api/v1/provisioning/alert-rules/${uidSonda}`, { method: 'DELETE' });
-    }
-    record(
-      'DEP-8',
-      entregadas > previas,
-      creada.ok
-        ? 'la alerta disparó y la política la enrutó, pero el webhook no llegó al sumidero: mira la url del contacto y la red del compose'
-        : `no se pudo crear la regla de sonda (${creada.status}): sin ella no hay alerta que recorra la política`
-    );
-  }
-  if (!conDesenlace && series.length > 0) {
-    console.log(
-      `  aviso: la serie llegó sin la etiqueta ${promTag(ATTRIBUTES.outcome)}; la alerta de tasa de error filtra por ella`
-    );
-  }
+  // DEP-2 a DEP-8: las preguntas al backend, NEUTRALES (keel-core/gen/deploy-probes.js): las mismas que hace el
+  // deploy-check de keel-nest, porque el backend, el panel, las alertas y el contacto son los mismos.
+  process.stdout.write('preguntando al backend (espera al scrape del colector y a la entrega de una alerta)… ');
+  const warnings = await probeDeployBackend({
+    grafanaUrl: GRAFANA,
+    sinkUrl: `http://localhost:${sinkPort}`,
+    serviceName: service.manifest.service.name,
+    record
+  });
+  console.log('hecho');
+  for (const warning of warnings) console.log(`  aviso: ${warning}`);
 } catch (error) {
   fatal = String(error?.message ?? error);
 } finally {

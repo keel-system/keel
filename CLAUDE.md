@@ -102,6 +102,8 @@ npm run doc-harness-check --workspace packages/keel-nest  # el ARNÉS documental
 npm run doc-check --workspace packages/keel-nest      # la persistencia DOCUMENTAL de keel-nest contra un MongoDB real en replica set: índices vivos, documento crudo contra el contrato, versión, unicidad, carrera y los almacenes del generador (podman/docker, ~3 min)
 npm run mail-check --workspace packages/keel-nest     # el CORREO de keel-nest contra un Mailpit real: adaptador, renderizador y arnés emitidos (`-- --sabotage=<id>` para falsarlo) (podman/docker, ~1 min)
 npm run cache-check --workspace packages/keel-nest    # la CACHÉ de keel-nest contra Redis y Valkey reales: entrada, TTL, acierto, vaciado, reset y store caído (`-- --cache=redis`, `-- --sabotage=<id>`) (podman/docker, ~1 min)
+npm run telemetry-check --workspace packages/keel-nest # la TELEMETRÍA de keel-nest con la app arrancada contra PostgreSQL y MySQL reales: series, exemplar, pool, traza, logs, puerto de gestión (podman/docker, ~5 min)
+npm run deploy-check --workspace packages/keel-nest    # deploy/ de keel-nest ENTERO y las preguntas al backend que comparte con keel-spring (keel-core/gen/deploy-probes.js) (podman/docker, minutos)
 npm run matrix --workspace packages/keel-nest    # la matriz de paridad de keel-nest, contra el catálogo neutral (puro)
 node packages/keel-core/src/cli.js <cmd>         # ejecutar sin link
 npm run compile-check --workspace packages/keel-spring    # compila de verdad el arnés generado (JDK + red, minutos)

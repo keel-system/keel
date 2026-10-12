@@ -2074,6 +2074,30 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     telemetría, y cada regla roja con su forma prohibida (nombrando su id y el archivo) y verde con la correcta; los
     comentarios y la consola de las herramientas de build no cuentan. Falsado tres veces (sin quitar los comentarios,
     con la correlación como etiqueta admitida y con el `error` sin mirar dónde, que pone rojo el árbol generado).
+- **14f — `telemetry-check` y `deploy-check` de keel-nest: hechos (2026-10-12). Con esto el incremento 14 queda
+  cerrado.**
+  - **`npm run telemetry-check`** (`scripts/telemetry-check.js`): la app ARRANCADA en el host contra PostgreSQL y MySQL
+    reales y un receptor OTLP de `node:http`. `job-dispatch` en develop sobre los dos motores (TEL-1 a TEL-9: la serie
+    del caso de uso atravesado por HTTP con su desenlace, el exemplar con la traza de QUIEN LLAMÓ, el correlationId
+    fuera de las etiquetas, la plantilla de la ruta, el runtime de Node, el pool del driver real con el tamaño
+    configurado y sus conexiones de vuelta como libres, la traza que llega al colector como hija del llamante, los logs
+    ECS con su trace.id y su correlationId), en production (TEL-10: el scrape solo en el puerto de gestión, las sondas
+    en el principal) y `profile-directory` con OIDC (TEL-11: el scrape sin token mientras la API da 401). **20/20**.
+    Falsado tres veces, cada uno cazado donde toca: el campo interno de `mysql2` renombrado (cae TEL-7 en MySQL y solo
+    ahí —el primer intento renombraba solo el acceso y NO compilaba: el check salió «sin veredicto», que no falsa
+    nada—), el scrape también en el puerto principal en production (TEL-10) y la entrada HTTP sin continuar la traza
+    (TEL-3, TEL-8 y TEL-9 en los dos motores). La celda `runtime-panel/relational` de la matriz pasa a `verificado`.
+  - **`npm run deploy-check`** (`scripts/deploy-check.js`): `deploy/` entero con su `up.sh` (antes, `npm install` para
+    el lockfile que pide la imagen) y las preguntas al backend, que ahora son NEUTRALES y las comparte keel-spring
+    (`keel-core/gen/deploy-probes.js`: `probeDeployBackend`, DEP-2 a DEP-8, y `trafficPath` desde el modelo); cada
+    generador pone su DEP-1 (la serie de runtime que su scrape tiene que traer). La primera pasada de keel-nest dio 7/8:
+    DEP-4 consultaba la traza del exemplar antes de que Tempo la indexara (el SDK y el colector agrupan); ahora
+    reintenta un minuto, también para keel-spring. **keel-nest 8/8 y keel-spring 8/8** sobre `job-dispatch`, con las
+    mismas sondas: el MISMO panel, las MISMAS alertas y el MISMO contacto tienen datos con los dos servidores, que es
+    la puerta del incremento. `keel-core/test/deploy-probes.test.js` las ejecuta contra un Grafana falso (sano, y con
+    el contacto sin resolver, que es el fallo sin síntoma).
+  - **Queda declarado para después**: los spans de los drivers (`telemetry-store-spans`), el push OTLP de métricas, el
+    pool del modelo documental (`runtime-panel/document`, degradado) y el retraso del consumidor.
 
 ### Inc. 15 — Evolución del proyecto ya generado
 

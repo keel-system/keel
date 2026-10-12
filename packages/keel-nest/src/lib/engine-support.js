@@ -31,6 +31,10 @@ export const NETS = {
     'npm run doc-harness-check — el arnés de integración documental contra la infra/ real: mongoEval, el reset, los ayudantes del rescate y de la reconciliación, el humo y la puntuación',
   'doc-check':
     'npm run doc-check — la persistencia documental contra un MongoDB real en replica set: los índices vivos, el documento crudo contra la forma neutral, ida y vuelta, versión, unicidad (también la condicionada), la carrera de dos transacciones, la auditoría, página y borrado',
+  'telemetry-check':
+    'npm run telemetry-check — la telemetría con la APLICACIÓN ARRANCADA contra PostgreSQL y MySQL reales: la serie del caso de uso atravesado por HTTP con su desenlace y el exemplar de la traza de quien llamó, la plantilla de la ruta, el runtime de Node, el pool del driver real con su tamaño, la traza en un receptor OTLP, los logs con su trace.id, el puerto de gestión en production y el scrape sin token con seguridad',
+  'deploy-check':
+    'npm run deploy-check — deploy/ ENTERO en contenedores (imagen de la app, colector, backend de prueba) y las preguntas al backend que comparte con keel-spring (keel-core/gen/deploy-probes.js): scrape, serie con su servicio, exemplar, traza en Tempo, logs en Loki, panel, alertas y la entrega de una alerta al contacto',
   ninguna: 'nadie lo ejecuta'
 };
 
@@ -41,10 +45,12 @@ export const MECHANISMS = {
     emitter: 'src/scaffold/observability-assets.js (los neutrales de keel-core/gen/observability-assets.js con NODE_RUNTIME) · el pool en src/scaffold/persistence-runtime.js',
     coverage: {
       relational: {
-        state: 'razonado',
-        owner: 'incremento 14f (telemetry-check contra PostgreSQL y MySQL reales)',
+        state: 'verificado',
+        net: 'telemetry-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
         why:
-          'la fila de runtime de Node (heap contra su límite —keel_runtime_heap_limit_bytes, porque el total de V8 crece a demanda y la alerta del 90 % dispararía en un servicio sano—, GC, retraso del bucle de eventos) y el pool del driver (keel_db_pool_*: pg lo lee de DataSource.driver.master; mysql2, de los campos INTERNOS de su pool, sin API pública). test/observability-assets.test.js EJECUTA la telemetría emitida y exige que toda serie del panel y de las alertas salga en el scrape (falsado quitando el límite del heap, la serie de pendientes y poniendo la serie de GC de la JVM). Lo que nadie ha ejecutado aún es la LECTURA del pool contra un motor real'
+          'la fila de runtime de Node (heap contra su límite —keel_runtime_heap_limit_bytes, porque el total de V8 crece a demanda y la alerta del 90 % dispararía en un servicio sano—, GC, retraso del bucle de eventos) y el pool del driver (keel_db_pool_*: pg lo lee de DataSource.driver.master; mysql2, de los campos INTERNOS de su pool, sin API pública). test/observability-assets.test.js EJECUTA la telemetría emitida y exige que toda serie del panel y de las alertas salga en el scrape. telemetry-check, con la app arrancada contra PostgreSQL y MySQL reales: el pool con el tamaño configurado y sus conexiones de vuelta como libres tras el tráfico; falsado renombrando el campo interno de mysql2 (cae el pool en MySQL y solo ahí). deploy-check: las series llegan al backend y el panel y las alertas entran'
       },
       document: {
         state: 'degradado',
