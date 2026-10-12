@@ -1134,7 +1134,9 @@ test('deploy: el servicio empaquetado para pruebas manuales, distinto de la infr
   assert.ok(compose.includes('image: product-catalog-spring-deploy:latest'));
   assert.ok(!compose.includes('dockerfile:'));
   const upScript = read(workspace, 'deploy/up.sh');
-  assert.ok(upScript.includes('build -f "$(hostpath "$HERE/Dockerfile")"'));
+  assert.ok(upScript.includes('build ${BUILD_FORMAT[@]+"${BUILD_FORMAT[@]}"} -f "$(hostpath "$HERE/Dockerfile")"'));
+  // Con podman, en formato docker: el OCI descarta el HEALTHCHECK y la app no pasaría nunca a healthy.
+  assert.ok(upScript.includes('if [ "$RUNTIME" = "podman" ]; then BUILD_FORMAT=(--format docker); fi'));
   // El puerto publicado sale de una variable: rango con docker (que es lo que permite replicar) y
   // puerto único con podman, que no admite un rango contra un puerto único del contenedor.
   assert.ok(compose.includes('${APP_PORTS:-8080}:8080'));

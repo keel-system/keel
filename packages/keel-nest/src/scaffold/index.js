@@ -19,6 +19,7 @@ import * as config from './config.js';
 import * as logging from './logging.js';
 import * as telemetry from './telemetry.js';
 import * as observabilityAssets from './observability-assets.js';
+import * as deploy from './deploy.js';
 import * as serviceParameters from './service-parameters.js';
 import * as wire from './wire.js';
 import * as application from './application.js';
@@ -138,6 +139,8 @@ const GENERATORS = [
   telemetry,
   // El panel y las alertas de deploy/ (incremento 14d): los neutrales de keel-core, con el runtime de Node.
   observabilityAssets,
+  // El servicio en contenedor para pruebas manuales (incremento 14d): el deploy/ neutral de keel-core.
+  deploy,
   // El reloj (incremento 10b): los schedulers de las operaciones con `schedule` y las purgas por lotes de las
   // tablas del generador.
   scheduling,

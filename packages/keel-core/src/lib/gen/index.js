@@ -206,3 +206,4 @@ export {
   promTag
 } from './telemetry-vocabulary.js';
 export { observabilityAssets, dashboardUid } from './observability-assets.js';
+export { deployFiles, publishedUrls, postmanEnvironmentPath, builtinScopes, appImage } from './deploy.js';

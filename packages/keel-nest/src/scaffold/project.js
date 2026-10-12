@@ -48,6 +48,7 @@ import { usesStorage, usesMultipart } from './storage.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 import { usesTelemetry, TELEMETRY_DEPENDENCIES } from './telemetry.js';
+import { DOCKERIGNORE } from './deploy.js';
 
 export function generate(model) {
   return [
@@ -57,7 +58,12 @@ export function generate(model) {
     { path: 'nest-cli.json', content: nestCli() },
     { path: 'vitest.config.ts', content: vitestConfig() },
     { path: '.nvmrc', content: `${NODE_VERSION}\n` },
-    { path: '.gitignore', content: gitignore() }
+    { path: '.gitignore', content: gitignore() },
+    // El contexto de build de deploy/Dockerfile es la RAÍZ (src/, config/ y el lockfile): lo demás no entra.
+    { path: '.dockerignore', content: DOCKERIGNORE },
+    // Los scripts de infra/ y deploy/ los ejecuta bash, y un Dockerfile con CRLF rompe sus líneas continuadas: un
+    // clon en Windows con core.autocrlf=true los convertiría si no se fijan aquí.
+    { path: '.gitattributes', content: '*.sh            text eol=lf\nDockerfile*     text eol=lf\n' }
   ];
 }
 

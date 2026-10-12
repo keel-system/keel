@@ -1001,6 +1001,12 @@ function configFragments(model) {
           );
         }
         lines.push(`    issuer-uri: ${envValue(profile, 'OAUTH2_ISSUER_URI', localIssuer(model))}`);
+        if (profile === 'develop' || profile === 'production') {
+          // El JWKS directo, si se da: gana al discovery del issuer y no comprueba \`iss\`. Es la salida del emisor
+          // PARTIDO de deploy/ (el token lo emite localhost:8180, la app alcanza keycloak:8080), la misma que
+          // keel-spring toma con su jwk-set-uri. Vacía, manda issuer-uri.
+          lines.push(`    jwk-set-uri: \${OAUTH2_JWK_SET_URI:}`);
+        }
       }
     }
     if (plan.protocol === 'api-key') {

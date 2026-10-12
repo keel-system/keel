@@ -2028,6 +2028,32 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     develop exporta trazas y logs, production sirve el scrape solo en el puerto de gestión.
   - **Queda para después**: los spans de los DRIVERS (SQL, Mongo, Redis: `telemetry-store-spans` de la matriz) y el
     push OTLP de métricas.
+- **14d — panel, alertas y `deploy/`: hecho (2026-10-12)**.
+  - **Panel y alertas neutrales** (`keel-core/gen/observability-assets.js`): el panel de Grafana, las alertas
+    provisionadas con su contacto y su política, las reglas de Prometheus y el receptor de Alertmanager, para los dos
+    generadores. Cada uno pone su PLATAFORMA: la fila de runtime (heap, GC, paneles propios, pool) y el retraso del
+    consumidor. keel-spring, **idéntico** byte a byte. keel-nest (`NODE_RUNTIME`): el heap contra su LÍMITE
+    (`keel_runtime_heap_limit_bytes`, un gauge propio: el total de V8 crece a demanda y la alerta del 90 % dispararía en
+    un servicio sano), `nodejs_gc_duration_seconds`, el retraso del bucle de eventos y el pool del driver relacional
+    (`keel_db_pool_*`, leído de `pg` o de los campos internos de `mysql2`). **Declarado**: sin pool en el modelo
+    documental (el driver de Mongo no expone sus contadores sin suscribirse a sus eventos; celda `degradado`) y sin
+    retraso del consumidor (ningún cliente de Node lo publica): ni panel ni alerta sobre una serie que nadie publica.
+  - **`deploy/` neutral** (`keel-core/gen/deploy.js`): compose de infraestructura con sus healthchecks y UIs, colector
+    y backend de prueba, sumidero de alertas, realm de Keycloak, environment de Postman, `.env`, `up.sh`/`down.sh`. La
+    plataforma pone el Dockerfile, la URL interna de la base, la variable del JWKS directo, la sonda de `up.sh` y sus
+    URLs. keel-spring, idéntico salvo un arreglo para los dos: con podman, `up.sh` construye con `--format docker`
+    (el OCI DESCARTA el `HEALTHCHECK`; la app no pasaba nunca a healthy). keel-nest: imagen en tres etapas
+    (`npm ci` con el lockfile, `npm prune --omit=dev`, usuario `node`, `HEALTHCHECK` sobre `/readyz`, Node como PID 1),
+    `.dockerignore` y `.gitattributes`, el mismo `DB_URL` que keel-spring y `OAUTH2_JWK_SET_URI` (nuevo en
+    develop/production) para el emisor partido; el README enseña `deploy/`.
+  - **Medido**: `test/observability-assets.test.js` compara con lo que emite keel-spring (filas, paneles de negocio,
+    alertas, contacto y política) y EJECUTA la telemetría emitida exigiendo que toda serie consultada salga en el
+    scrape (falsado tres veces). `test/deploy.test.js`: toda variable que develop exige sin default llega a la app y
+    toda la que llega la lee el servidor, la infraestructura y el realm son los de keel-spring, la imagen (falsado dos
+    veces). **En vivo con podman** sobre `product-catalog` con telemetría: `up.sh` construye y levanta todo, la app pasa a
+    healthy, y en el backend están las series del panel (caso de uso, HTTP, heap, el pool `pg` leído de verdad), las
+    trazas en Tempo, los logs en Loki con su `correlationId`, el panel, las cuatro alertas y el EXEMPLAR cuyo `trace_id`
+    es una traza de Tempo. Lo automatiza el `deploy-check` del 14f.
 
 ### Inc. 15 — Evolución del proyecto ya generado
 
