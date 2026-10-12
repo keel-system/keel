@@ -125,8 +125,9 @@ function renderMessage(model, operation) {
   for (const component of components) {
     imports.push(...fieldImports(model, component));
     // En un PATCH, un opcional del cuerpo distingue AUSENTE (undefined: conserva el valor) de
-    // PRESENTE CON NULL (vacía el campo). El tipo lo dice: `campo?: T | null`.
-    const threeState = partial && !fromPath.has(component.name) && !component.required && !component.list && (operation.bodyFields ?? []).some((f) => f.name === component.name);
+    // PRESENTE CON NULL (vacía el campo). El tipo lo dice: `campo?: T | null`. También una lista: ausente no
+    // la toca y null o [] la vacían (list-never-null, keel-core/gen/wire.js), como el JsonNullable de keel-spring.
+    const threeState = partial && !fromPath.has(component.name) && !component.required && (operation.bodyFields ?? []).some((f) => f.name === component.name);
     // Un campo con default puede no llegar (por eso la entrada no exige su presencia): en el
     // mensaje admite null, y el default lo aplica el dominio.
     // La identidad resuelta contra varias credenciales (resolvedBy) puede no ser de nadie: el mensaje lleva

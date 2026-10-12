@@ -219,3 +219,17 @@ test('el lector de la subida comprueba la parte en SU posición, antes de valida
   assert.match(controller, /const form = await readMultipart\(request\);/);
   assert.match(vault['src/infrastructure/http/http-platform.ts'], /fastify\.register\(multipart, \{ limits: \{ fileSize: 52428800 \}, throwFileSizeLimit: true \}\)/);
 });
+
+test('un cuerpo que no es multipart en una subida es el MISMO 415 en los dos: sin code y con el mismo mensaje', () => {
+  const nestMessage = vault['src/infrastructure/rest/request-errors.ts'].match(/class UnsupportedMediaTypeError[\s\S]*?super\('([^']+)'\)/)?.[1];
+  assert.equal(nestMessage, 'La operación espera multipart/form-data');
+  assert.match(vault['src/infrastructure/rest/api-exception-filter.ts'] ?? Object.values(vault).find((text) => text.includes('class ApiExceptionFilter')), /UnsupportedMediaTypeError\) \{\s*return ErrorResponse\.of\(415, 'Unsupported Media Type', null, exception\.message\)/);
+  for (const name of SUBJECTS) {
+    const handler = Object.entries(springFiles(name)).find(([file]) => file.endsWith('/ApiExceptionHandler.java'))?.[1] ?? '';
+    // En keel-spring caía en el catch-all como 500 (incremento 13g, divergencia anotada).
+    const block = handler.slice(handler.indexOf('@ExceptionHandler(HttpMediaTypeNotSupportedException.class)') - 60);
+    assert.match(block, /@ResponseStatus\(HttpStatus\.UNSUPPORTED_MEDIA_TYPE\)\s*@ExceptionHandler\(HttpMediaTypeNotSupportedException\.class\)/, name);
+    assert.ok(block.includes(`"${nestMessage}"`), `${name}: el mensaje de keel-spring`);
+    assert.match(block, /new ErrorResponse\(HttpStatus\.UNSUPPORTED_MEDIA_TYPE\.value\(\), "Unsupported Media Type", message\)/, name);
+  }
+});

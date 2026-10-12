@@ -43,7 +43,7 @@ import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens } from '.
 // copia — se vio rompiendo esto a propósito y viendo el check seguir en verde.
 import { stallSql, missingClockCountSql, rescueShape } from '../lib/claim-probes.js';
 import { declaresIdempotency } from './http-idempotency.js';
-import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, specsSealCheck } from 'keel-core/gen/junit-scoring';
+import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from 'keel-core/gen/junit-scoring';
 import { KAFKA_LOCAL_PRODUCER_TIMEOUTS } from './config.js';
 // Fuente única de los comandos de broker: lo que se emite aquí es lo mismo que
 // `scripts/broker-check.js` ejecuta contra los brokers reales.
@@ -527,15 +527,9 @@ ${JUNIT_MATRIX_AWK}
 # Escenarios que el documento declara y ninguna clase ejercita. No son OK: son
 # cobertura que falta. El cruce es por prefijo porque el documento numera el
 # flujo (FL-PRD-001) y las pruebas numeran cada escenario dentro de él
-# (FL-PRD-001-A).
-uncovered=""
-if [ -f "$SCENARIOS" ]; then
-  covered="$(printf '%s\\n' "$matrix" | cut -f2)"
-  for id in $(grep -oE '^#{1,6}[[:space:]]*FL-[A-Za-z0-9-]+' "$SCENARIOS" \\
-              | grep -oE 'FL-[A-Za-z0-9-]+' | sort -u); do
-    printf '%s\\n' "$covered" | grep -qE "^\${id}(-|$)" || uncovered="$uncovered $id"
-  done
-fi
+# (FL-PRD-001-A). Y al revés: una prueba con un id FL-* que el documento no
+# declara no puntúa (keel-core/gen/junit-scoring, el mismo cruce que en keel-nest).
+${SCENARIO_DOCUMENT_SCORING}
 
 echo ""
 echo "MATRIZ"
@@ -550,6 +544,7 @@ done
 for id in $uncovered; do
   printf '  %-8s %s\\n' "NO_EJERC" "$id"
 done
+${FOREIGN_ROWS_PRINT}
 
 ok=$(printf '%s\\n' "$matrix" | grep -c '^OK')
 ko=$(printf '%s\\n' "$matrix" | grep -c '^FALLO')
@@ -572,6 +567,8 @@ ${JUNIT_NON_SCENARIO_AWK}
 }
 
 broken="$(non_scenario_failures)"
+# Las pruebas en rojo con un id FL-* que el documento no declara tampoco salen en la matriz.
+if [ -n "$foreign_failures" ]; then broken="$(printf '%s\\n%s' "$broken" "$foreign_failures")"; fi
 
 echo ""
 if [ "$ko" -eq 0 ] && [ "$sk" -eq 0 ] && [ "$nc" -eq 0 ] && [ "$ok" -gt 0 ]; then

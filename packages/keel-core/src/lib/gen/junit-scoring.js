@@ -83,6 +83,61 @@ export const JUNIT_MATRIX_AWK = `  BEGIN { RS = "<testcase " }
   }`;
 
 /**
+ * El cruce de la matriz con el documento de escenarios (`$SCENARIOS`), en bash. Parte de `$matrix`
+ * (las líneas de `JUNIT_MATRIX_AWK`) y deja:
+ *
+ *   - `uncovered`: los ids que el documento declara y ninguna prueba ejercita — cobertura que falta;
+ *   - `foreign`: los ids `FL-*` de la suite que el documento NO declara, ni por sí mismos ni como
+ *     prolongación de uno suyo, y `foreign_rows`, sus filas;
+ *   - `foreign_failures`: los de esos que están en rojo, con el formato de `non_scenario_failures`;
+ *   - `$matrix` SIN las filas ajenas, que es lo que se puntúa.
+ *
+ * Una fila pertenece a un escenario si su id ES el suyo o lo prolonga con un guion: el documento
+ * numera el flujo (FL-PRD-001) y la prueba puede numerar cada caso dentro de él (FL-PRD-001-A). Lo
+ * ajeno no puntúa: las corridas `catalog` de los dos generadores (2026-10-11) dieron 66 en OK sobre
+ * un documento de 56 escenarios, y un id que no está en el documento no mide nada del diseño —una
+ * errata deja además el suyo como no ejercitado, que es donde se ve—. Sin documento no se filtra.
+ */
+export const SCENARIO_DOCUMENT_SCORING = `uncovered=""
+foreign=""
+foreign_rows=""
+foreign_failures=""
+if [ -f "$SCENARIOS" ]; then
+  declared="$(grep -oE '^#{1,6}[[:space:]]*FL-[A-Za-z0-9-]+' "$SCENARIOS" \\
+              | grep -oE 'FL-[A-Za-z0-9-]+' | sort -u)"
+  covered="$(printf '%s\\n' "$matrix" | cut -f2 | sort -u)"
+  for id in $declared; do
+    printf '%s\\n' "$covered" | grep -qE "^\${id}(-|$)" || uncovered="$uncovered $id"
+  done
+  for id in $covered; do
+    owned=0
+    for declared_id in $declared; do
+      case "$id" in "$declared_id"|"$declared_id"-*) owned=1; break ;; esac
+    done
+    [ "$owned" -eq 1 ] || foreign="$foreign $id"
+  done
+  if [ -n "$foreign" ]; then
+    foreign_rows="$(printf '%s\\n' "$matrix" | awk -F '\\t' -v ids="$foreign" \\
+      'BEGIN { n = split(ids, list, " "); for (i = 1; i <= n; i++) skip[list[i]] = 1 } ($2 in skip)')"
+    matrix="$(printf '%s\\n' "$matrix" | awk -F '\\t' -v ids="$foreign" \\
+      'BEGIN { n = split(ids, list, " "); for (i = 1; i <= n; i++) skip[list[i]] = 1 } NF > 0 && !($2 in skip)')"
+    foreign_failures="$(printf '%s\\n' "$foreign_rows" | awk -F '\\t' \\
+      '$1 == "FALLO" { printf "    %s  (%s)\\n      el documento de escenarios no declara %s\\n", $2, $3, $2 }')"
+  fi
+fi`;
+
+/**
+ * Las filas ajenas al documento, para imprimir debajo de la matriz. Va después de
+ * `SCENARIO_DOCUMENT_SCORING`.
+ */
+export const FOREIGN_ROWS_PRINT = `if [ -n "$foreign" ]; then
+  printf '%s\\n' "$foreign_rows" | while IFS="$(printf '\\t')" read -r result id cls; do
+    [ -n "\${id:-}" ] || continue
+    printf '  %-8s %-20s %-28s %s\\n' "AJENO" "$id" "$cls" "($result: el documento no lo declara; no puntúa)"
+  done
+fi`;
+
+/**
  * Programa awk que lista las pruebas en rojo que NO son escenarios, con su mensaje colapsado a una
  * línea. Indentado para ir dentro de la función `non_scenario_failures` del script.
  */

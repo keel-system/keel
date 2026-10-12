@@ -588,6 +588,8 @@ ${entries});`;
 function renderMultipartHandlers(imports, model) {
   imports.add('org.springframework.web.multipart.MaxUploadSizeExceededException');
   imports.add('org.springframework.web.multipart.support.MissingServletRequestPartException');
+  imports.add('org.springframework.web.HttpMediaTypeNotSupportedException');
+  imports.add('org.springframework.http.MediaType');
   // El diseño manda también aquí. Antes este handler emitía el canónico pasara lo que
   // pasara, así que una fixture que declaraba FILE_TOO_LARGE en su operación recibía por
   // el cable el code del scaffolding: dos nombres para el mismo 413 según por dónde
@@ -610,6 +612,17 @@ function renderMultipartHandlers(imports, model) {
     public ErrorResponse onMissingRequestPart(MissingServletRequestPartException exception) {
         return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request",
                 "Falta la parte '" + exception.getRequestPartName() + "' en la petición multipart");
+    }
+
+    // Un cuerpo que no es multipart en una subida (la ruta declara consumes multipart/form-data): sin
+    // este handler caía en el catch-all como 500. Es un 415 sin code, como en keel-nest.
+    @ResponseStatus(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ErrorResponse onUnsupportedMediaType(HttpMediaTypeNotSupportedException exception) {
+        String message = exception.getSupportedMediaTypes().contains(MediaType.MULTIPART_FORM_DATA)
+                ? "La operación espera multipart/form-data"
+                : "Tipo de contenido no soportado";
+        return new ErrorResponse(HttpStatus.UNSUPPORTED_MEDIA_TYPE.value(), "Unsupported Media Type", message);
     }
 `;
 }

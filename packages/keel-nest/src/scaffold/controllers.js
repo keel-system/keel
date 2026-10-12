@@ -330,7 +330,8 @@ function renderReader(model, operation, name, imports) {
     if (asBody) {
       use('json');
       const read = `${readerOf(component, 'json')}(fields[${tsString(component.name)}])`;
-      const threeState = partial && !component.required && !component.list;
+      // La lista opcional también: ausente es «no tocar» y null o [] la vacían (list-never-null, keel-core/gen/wire.js).
+      const threeState = partial && !component.required;
       lines.push(threeState
         ? `  const ${component.name} = ${tsString(component.name)} in fields ? ${read} : undefined;`
         : `  const ${component.name} = ${read};`);
@@ -377,10 +378,11 @@ function renderReader(model, operation, name, imports) {
       value = component.required ? `${component.name}!` : component.name;
     } else if (component.pageable) {
       value = component.name;
+    } else if (partial && asBody && !fromPath.has(component.name) && !component.required) {
+      // En un PATCH el opcional del cuerpo llega tal cual: undefined (ausente) conserva y null vacía.
+      value = component.name;
     } else if (component.list) {
       value = `${component.name} ?? []`;
-    } else if (partial && asBody && !fromPath.has(component.name) && !component.required) {
-      value = component.name;
     } else if (component.required && !component.initializer) {
       value = `${component.name}!`;
     } else {

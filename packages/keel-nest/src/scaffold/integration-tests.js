@@ -17,7 +17,7 @@
 
 import path from 'node:path';
 import { DATABASES, selectedInfra } from 'keel-core/gen/infra-catalog';
-import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, specsSealCheck } from 'keel-core/gen/junit-scoring';
+import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from 'keel-core/gen/junit-scoring';
 import { resetDbScript } from 'keel-core/gen/infra-scripts';
 import { missingClockCountSql, rescueProbes, stallSql } from 'keel-core/gen';
 import { NEST_INFRA } from './infra.js';
@@ -709,15 +709,10 @@ matrix="$(awk '
 ${JUNIT_MATRIX_AWK}
 ' "$RESULTS"/*.xml 2>/dev/null | sort -k2,2)"
 
-# Escenarios que el documento declara y ninguna prueba ejercita: cobertura que falta.
-uncovered=""
-if [ -f "$SCENARIOS" ]; then
-  covered="$(printf '%s\\n' "$matrix" | cut -f2)"
-  for id in $(grep -oE '^#{1,6}[[:space:]]*FL-[A-Za-z0-9-]+' "$SCENARIOS" \\
-              | grep -oE 'FL-[A-Za-z0-9-]+' | sort -u); do
-    printf '%s\\n' "$covered" | grep -qE "^\${id}(-|$)" || uncovered="$uncovered $id"
-  done
-fi
+# Escenarios que el documento declara y ninguna prueba ejercita (cobertura que falta), y pruebas
+# FL-* que el documento no declara (no puntúan): keel-core/gen/junit-scoring, el mismo cruce que en
+# keel-spring.
+${SCENARIO_DOCUMENT_SCORING}
 
 echo ""
 echo "MATRIZ"
@@ -732,6 +727,7 @@ done
 for id in $uncovered; do
   printf '  %-8s %s\\n' "NO_EJERC" "$id"
 done
+${FOREIGN_ROWS_PRINT}
 
 ok=$(printf '%s\\n' "$matrix" | grep -c '^OK')
 ko=$(printf '%s\\n' "$matrix" | grep -c '^FALLO')
@@ -763,6 +759,8 @@ init_failures() {
 }
 
 broken="$(non_scenario_failures)$(init_failures)"
+# Las pruebas en rojo con un id FL-* que el documento no declara tampoco salen en la matriz.
+if [ -n "$foreign_failures" ]; then broken="$(printf '%s\\n%s' "$broken" "$foreign_failures")"; fi
 
 echo ""
 if [ "$ko" -eq 0 ] && [ "$sk" -eq 0 ] && [ "$nc" -eq 0 ] && [ "$ok" -gt 0 ]; then

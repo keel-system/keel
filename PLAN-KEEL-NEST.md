@@ -1914,6 +1914,31 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     y daba por bueno uno con rutas que nadie sirve. Y que las reglas de entrada del modelo dependían de la
     proyección (en keel-spring, anotaciones): ahora el campo neutral lleva `inputRules`.
 
+### Validación de los incrementos 0-13 antes de abrir el 14 (2026-10-12)
+
+- **Suites de base en verde**: keel-core 1171, keel-nest 628, keel-spring 1658. Recorridos todos los «pendiente»,
+  «candidato» y «sin medir» del plan: la mayoría ya estaban cerrados por incrementos posteriores (el OpenAPI de
+  keel-nest, `CHK-PERSIST-NATURAL-KEY-ERROR-UNNAMED`, `CHK-SCEN-ROUTE-UNSERVED`, `test/integration/support` en el
+  `tsconfig` de cada fixture, la caché de keel-spring, las corridas de las siluetas con clientes y documentales).
+  **Quedaban tres abiertos, cerrados ahora:**
+  - **La puntuación contaba ids `FL-*` que el documento no declara** (11e; las corridas `catalog` dieron 66 en OK
+    sobre 56 escenarios). El cruce con el documento es ahora neutral (`SCENARIO_DOCUMENT_SCORING` y
+    `FOREIGN_ROWS_PRINT` en `keel-core/gen/junit-scoring.js`) y lo usan los dos `score-scenarios.sh`: lo ajeno sale
+    como `AJENO`, no puntúa, y su rojo se lista con las pruebas que no son escenarios. Un caso que prolonga un id
+    del documento con un guion (`FL-PRD-001-A`, los `-V*` de la checklist) sigue perteneciéndole; `FL-PRD-0010` no
+    es de `FL-PRD-001`. `keel-core/test/junit-scoring.test.js` lo EJECUTA con bash, falsado dos veces (pertenencia
+    sin guion; matriz sin filtrar); `harness-check` de keel-nest gana el paso (26/26 contra la `infra/` real).
+  - **Un cuerpo que no es multipart en una subida era 500 en keel-spring** (13g, divergencia anotada): handler de
+    `HttpMediaTypeNotSupportedException` → 415 sin `code` y con el mensaje de keel-nest. Paridad en
+    `keel-nest/test/storage.test.js`; `compile-check` de asset-vault en los tres brokers.
+  - **La lista OPCIONAL del cuerpo de un PATCH se leía como `[]` en keel-nest** (12e, divergencia latente: la
+    vaciaba). Ahora es de tres estados como el resto de opcionales del PATCH y como el `JsonNullable` de
+    keel-spring: ausente (`undefined`) no la toca, `null` o `[]` la vacían. Ninguna fixture tiene la forma:
+    `keel-nest/test/list-never-null.test.js` la deriva de `catalog-extended` y EJECUTA el lector emitido; falsado
+    por sus dos mitades (lector y mensaje).
+  - Línea base de keel-spring: cambian `score-scenarios.sh` (todas) y `ApiExceptionHandler.java` (las 9 con
+    storage), regenerada en su propio commit.
+
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 
 - `scaffold/{telemetry,logging,logging-check,telemetry-gate,observability-assets,deploy,

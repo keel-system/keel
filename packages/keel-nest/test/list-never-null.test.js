@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadService } from 'keel-core';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
-import { planFixture } from './helpers/emitted.js';
+import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const STACK = { database: 'postgresql', broker: 'rabbitmq' };
@@ -46,3 +46,42 @@ for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(
     if (checked === 0) t.diagnostic('sin listas en la entrada');
   });
 }
+
+// La forma que ninguna fixture tiene: una lista OPCIONAL en el cuerpo de un PATCH. keel-spring la envuelve en
+// JsonNullable (ausente = no tocar) y keel-nest la leía como `[]`, que la vaciaría (pendiente de la 12e). Se deriva
+// de catalog-extended (updateProduct es PATCH) y el lector emitido se EJECUTA.
+test('la lista opcional del cuerpo de un PATCH es de tres estados en los dos generadores', async () => {
+  const mutate = (layers) => {
+    layers['use-cases'].operations.updateProduct.input.fields.tags = { type: 'string', list: true, constraints: { maxLength: 40 } };
+  };
+  const nest = planFixture('catalog-extended', { stack: STACK, mutate });
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'catalog-extended'));
+  mutate(layers);
+  const spring = planSpring({ manifest, layers, workspace: FIXTURES_DIR, stack: STACK }).files;
+
+  const record = spring.find((file) => file.path.endsWith('/UpdateProductCommand.java')).content;
+  assert.match(record, /JsonNullable<List<@Size\(max = 40\) String>> tags/);
+  assert.ok(!record.includes('tags = tags == null ? List.of()'), 'keel-spring no la normaliza');
+  const message = nest.files.find((file) => file.path.endsWith('/update-product-command.ts')).content;
+  assert.match(message, /readonly tags\?: readonly string\[\] \| null;/);
+
+  const controller = nest.files.find((file) => file.path.endsWith('/product-v1-controller.ts')).content;
+  const start = controller.indexOf('function readUpdateProductCommand');
+  const reader = controller.slice(start, controller.indexOf('\n}\n', start) + 2);
+  assert.ok(!reader.includes('tags ?? []'), reader);
+  const probe = {
+    path: 'src/patch-probe.ts',
+    content: `import { bodyObject, json, text, Violations } from './infrastructure/rest/request-reading.js';
+import { UpdateProductCommand } from './application/commands/update-product-command.js';
+export ${reader}`
+  };
+  const { readUpdateProductCommand } = await transpileTree([...nest.files, probe]).load('src/patch-probe.ts');
+  const id = { id: '0190c6a4-7c1e-7cc0-8a3e-1b2c3d4e5f60' };
+  const read = (body) => readUpdateProductCommand(id, {}, body);
+  assert.equal(read({ name: 'x' }).tags, undefined, 'ausente: no se toca');
+  assert.equal('tags' in read({ name: 'x' }) && read({ name: 'x' }).tags !== undefined, false);
+  assert.equal(read({ tags: null }).tags, null, 'null: se vacía');
+  assert.deepEqual(read({ tags: [] }).tags, [], '[]: se vacía');
+  assert.deepEqual(read({ tags: ['rojo', 'azul'] }).tags, ['rojo', 'azul']);
+  assert.throws(() => read({ tags: ['x'.repeat(41)] }), (error) => error.name === 'RequestValidationError');
+});

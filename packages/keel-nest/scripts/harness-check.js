@@ -157,6 +157,8 @@ describe('FL-PROBE-001 · sonda en verde', () => {
     db('DROP TABLE typeorm_migrations');
     db('DROP TABLE keel_probe');
   });
+  // Un id que el documento no declara: sale AJENO y no puntúa (keel-core/gen/junit-scoring).
+  it('FL-PROBE-099-A: un caso fuera del documento', () => expect(true).toBe(true));
 });
 `
   );
@@ -215,6 +217,7 @@ describe('FL-PROBE-003 · sonda que no arranca', () => {
   step('score: el que falla sale FALLO con la ruta de su evidencia', has(/FALLO\s+FL-PROBE-002-A\s+probe-fail\s+build\/keel-failures\/FL-PROBE-002-A\.json/));
   step('score: el flujo que no arranca deja sus casos OMITIDOS', has(/OMITIDO\s+FL-PROBE-003-A/), has(/OMITIDO/) ? '' : 'sin fila OMITIDO');
   step('score: y lo nombra como arnés roto, con su causa', has(/ARNÉS/) && has(/probe-init\s+\(arranque del flujo\)/) && has(/DB_URL|obligatori/i));
+  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && has(/RESULTADO: KO — 2 OK/));
   step('score: un flujo del documento sin prueba sale NO_EJERC', has(/NO_EJERC\s+FL-PROBE-004/) && !has(/NO_EJERC\s+FL-PROBE-00[123]/));
   step('score: con algo que arbitrar sale con 1', run1.status === 1, `código ${run1.status}`);
   let report = null;
