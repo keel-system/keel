@@ -1948,6 +1948,38 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `deploy/` con la app en contenedor (multi-stage, usuario no root, `HEALTHCHECK`).
 - **Puerta**: `telemetry-check` (arranca la app y consulta las series del panel) y
   `deploy-check`; ninguna alerta nombra una serie que nest no publique.
+- **Evaluación al abrirlo (2026-10-12)**. keel-nest rechaza hoy `telemetry: otel` en `supported-features.js`, y le
+  falta además lo que keel-spring genera **con y sin** telemetría: los logs son el `ConsoleLogger` de Nest en
+  texto, sin `correlationId` por línea y sin JSON ECS fuera de `local`; no hay puerto de gestión
+  (`MANAGEMENT_PORT`); no hay `deploy/`. Lo de keel-spring a portar (~4 500 líneas): `telemetry-probes.js` (el
+  vocabulario y las sondas de `telemetry-check`), `telemetry.js`, `logging.js` (`@LogExceptions`),
+  `logging-check.js`, `telemetry-gate.js`, `observability-assets.js` (panel, alertas, reglas y Alertmanager),
+  `deploy.js` y `concurrency.js`.
+  - **Lo que es de cada plataforma y no se porta tal cual**: las series del RUNTIME (la JVM y Hikari frente a Node
+    y el pool de cada driver), el retraso del consumidor (Micrometer lo publica para Kafka; librdkafka no a través
+    de prom-client) y la propagación del contexto entre hilos (en Node la lleva `AsyncLocalStorage`, que ya usan la
+    transacción y la correlación). El panel y las alertas tienen que ser los MISMOS salvo esa fila, que cada
+    generador rellena con su vocabulario de runtime.
+  - **Decisiones de stack** (consultadas con ctx7/npm el 2026-10-12): métricas con `prom-client` 15 (el paquete
+    `@prometheus/client` que cita su documentación no está publicado), histogramas en segundos con los mismos
+    nombres (`promMetric`), registro OpenMetrics para los exemplars y etiquetas de exemplar `trace_id`/`span_id`
+    (las que enlaza el Grafana de `deploy/`); trazas y logs con el SDK de OpenTelemetry para Node por OTLP/HTTP al
+    colector (`OTEL_EXPORTER_OTLP_ENDPOINT`, la única variable que conoce el servidor).
+  - **Tramos**: 14a el vocabulario neutral en keel-core; 14b lo que existe SIN telemetría (logs JSON ECS con
+    `correlationId` fuera de `local`, una sola pila por fallo, el puerto de gestión con `/livez` y `/readyz` en el
+    principal); 14c la telemetría en keel-nest (trazas del caso de uso, del outbox y del consumo con
+    `metadata.traceparent`, métricas por scrape, interruptores de caché, storage y correo, anti-ruido) y se quita
+    de la frontera; 14d panel, alertas y `deploy/` neutrales en keel-core (con la fila de runtime de cada
+    plataforma) y el `deploy/` de keel-nest (Dockerfile multietapa, usuario no root, `HEALTHCHECK`); 14e los gates
+    (`check-logging.sh`, `check-telemetry.sh`) con patrones de TypeScript; 14f `telemetry-check` y `deploy-check`
+    de keel-nest contra el mismo panel.
+- **14a — el vocabulario neutral: hecho (2026-10-12)**. `keel-core/gen/telemetry-vocabulary.js`: `OBSERVATIONS`,
+  `OUTBOX_DEAD_LETTERED`, `ATTRIBUTES`, `OUTCOMES`, `INSTRUMENTATION` (la misma clave de configuración y la misma
+  variable en los dos), `METRICS_TRANSPORT` (la ruta del scrape, la misma en los dos para que el colector de
+  `deploy/` no dependa de quién la sirve) y `promMetric`/`promGauge`/`promTag`. keel-spring lo reexporta desde
+  `telemetry-probes.js` (queda allí lo de la JVM: `RUNTIME_*`, `CONSUMER_LAG`, la observación de Lettuce y las
+  sondas) y usa `OUTBOX_DEAD_LETTERED` en el gauge y en el panel: línea base **idéntica** (44 combinaciones).
+  `keel-core/test/telemetry-vocabulary.test.js`.
 
 ### Inc. 15 — Evolución del proyecto ya generado
 

@@ -30,6 +30,7 @@ import {
   runtimePool,
   usesTelemetry
 } from '../lib/telemetry-probes.js';
+import { OUTBOX_DEAD_LETTERED } from 'keel-core/gen/telemetry-vocabulary';
 import { instrumentationFor } from './telemetry.js';
 import { usesOutbox } from './outbox.js';
 
@@ -114,7 +115,7 @@ function dashboard(model) {
     const publish = promMetric(OBSERVATIONS.outboxPublish);
     row('Outbox', [
       // Debería ser siempre 0: cada unidad es un evento que agotó sus reintentos y NO salió.
-      stat('Eventos rendidos (debería ser 0)', [target(promGauge('keel.outbox.dead_lettered'), 'rendidos')]),
+      stat('Eventos rendidos (debería ser 0)', [target(promGauge(OUTBOX_DEAD_LETTERED), 'rendidos')]),
       timeseries('Eventos publicados por segundo', [
         target(`sum by (${promTag(ATTRIBUTES.eventType)}) (rate(${publish.count}[$__rate_interval]))`, `{{${promTag(ATTRIBUTES.eventType)}}}`)
       ])
@@ -337,7 +338,7 @@ function alerting(model) {
       rule({
         uid: `keel-${model.service.artifactId}-outbox`,
         title: 'Eventos del outbox rendidos',
-        expr: `max_over_time(${promGauge('keel.outbox.dead_lettered')}[5m])`,
+        expr: `max_over_time(${promGauge(OUTBOX_DEAD_LETTERED)}[5m])`,
         forDuration: '5m',
         severity: 'critical',
         summary:
@@ -534,7 +535,7 @@ function prometheusRules(model) {
   const outbox = usesOutbox(model)
     ? `
       - alert: KeelOutboxDeadLettered
-        expr: max_over_time(${promGauge('keel.outbox.dead_lettered')}[5m]) > 0
+        expr: max_over_time(${promGauge(OUTBOX_DEAD_LETTERED)}[5m]) > 0
         for: 5m
         labels: { severity: critical }
         annotations:

@@ -18,26 +18,29 @@
 //   · Los interruptores son propiedades de Spring leídas con `@ConditionalOnProperty`, así que se
 //     resuelven al construir el contexto: cambian con un reinicio, nunca en caliente.
 
-/**
- * ¿Se generó este proyecto con telemetría? Vive aquí, y no en el scaffolding, para que los
- * módulos que solo necesitan la PREGUNTA —`cache.js`, y cualquiera que venga detrás— no tengan
- * que importar el módulo que emite las clases: eso creaba un ciclo con `telemetry.js`, que a su
- * vez le pregunta a `cache.js` quién declara caché.
- */
-export function usesTelemetry(model) {
-  return model?.stack?.telemetry === 'otel';
-}
-
-/**
- * Nombres de las observaciones propias. Son también el nombre de sus métricas (timers), así que
- * van todos en el vocabulario `keel.*` que ya usa el gauge del outbox.
- */
-export const OBSERVATIONS = {
-  useCase: 'keel.use-case',
-  outboxPublish: 'keel.outbox.publish',
-  messageConsume: 'keel.message.consume',
-  storage: 'keel.storage',
-  mailSend: 'keel.mail.send'
+// Lo NEUTRAL —observaciones, atributos, interruptores, transporte y nombres de serie— vive en
+// keel-core/gen/telemetry-vocabulary.js desde el incremento 14 de PLAN-KEEL-NEST.md: keel-nest publica
+// las mismas series para que el mismo panel tenga datos. Aquí queda lo de la JVM y de Spring, y se
+// reexporta lo neutral para que los consumidores de este módulo no cambien.
+import {
+  usesTelemetry,
+  OBSERVATIONS,
+  ATTRIBUTES,
+  INSTRUMENTATION,
+  METRICS_TRANSPORT,
+  promMetric,
+  promGauge,
+  promTag
+} from 'keel-core/gen/telemetry-vocabulary';
+export {
+  usesTelemetry,
+  OBSERVATIONS,
+  ATTRIBUTES,
+  INSTRUMENTATION,
+  METRICS_TRANSPORT,
+  promMetric,
+  promGauge,
+  promTag
 };
 
 /**
@@ -46,56 +49,6 @@ export const OBSERVATIONS = {
  * nombra, así que el literal vive aquí y no en dos sitios.
  */
 export const REDIS_OBSERVATION = 'spring.data.redis';
-
-/**
- * Atributos que estampa el código generado. Todos de BAJA cardinalidad salvo `correlationId`, que
- * va al span como high-cardinality y jamás a una etiqueta de métrica.
- *
- * <p>Lo que NO está aquí es tan importante como lo que está: la clave de un objeto, el
- * destinatario de un correo y cualquier id de negocio son dato y son alta cardinalidad. El bucket
- * sí entra porque es un nombre LÓGICO del diseño, con un puñado de valores posibles.
- */
-export const ATTRIBUTES = {
-  operation: 'keel.operation',
-  outcome: 'keel.outcome',
-  eventType: 'keel.event.type',
-  correlationId: 'keel.correlation_id',
-  storageOperation: 'keel.storage.operation',
-  storageBucket: 'keel.storage.bucket'
-};
-
-/**
- * Los subsistemas cuya instrumentación se enciende y se apaga por ENTORNO, y el predicado que dice
- * si a este diseño le toca declarar cada uno.
- *
- * <p>Una variable solo se emite si su subsistema existe en el diseño: declarar
- * `TELEMETRY_INSTRUMENT_STORAGE` en un servicio sin buckets es una palanca que no mueve nada, y
- * eso es peor que no tenerla — quien la ponga creerá que hizo algo.
- *
- * <p>Aquí está el VOCABULARIO y no el predicado: quién declara cada subsistema lo decide
- * `instrumentationFor()` en `src/scaffold/telemetry.js`, que es quien puede preguntárselo a
- * `cachedOperations()` sin que `src/lib` acabe dependiendo del scaffolding.
- */
-export const INSTRUMENTATION = {
-  cache: {
-    id: 'cache',
-    property: 'keel.telemetry.instrumentation.cache.enabled',
-    envVar: 'TELEMETRY_INSTRUMENT_CACHE',
-    label: 'los comandos de Redis que ejecuta la caché'
-  },
-  storage: {
-    id: 'storage',
-    property: 'keel.telemetry.instrumentation.storage.enabled',
-    envVar: 'TELEMETRY_INSTRUMENT_STORAGE',
-    label: 'las operaciones sobre los buckets'
-  },
-  mail: {
-    id: 'mail',
-    property: 'keel.telemetry.instrumentation.mail.enabled',
-    envVar: 'TELEMETRY_INSTRUMENT_MAIL',
-    label: 'los envíos de correo'
-  }
-};
 
 // Exemplars: el enlace de un punto de una métrica a una traza de ejemplo.
 //
@@ -113,21 +66,6 @@ export const INSTRUMENTATION = {
 // Y una cosa que solo se ve ejecutando: el exemplar viaja SOLO en la exposición OPENMETRICS. Con
 // el `Accept` por defecto la respuesta trae las mismas series y las mismas etiquetas, y ni un
 // exemplar — así que quien lo mire sin pedir OpenMetrics concluirá que no se emiten.
-
-/**
- * El transporte de las métricas. Con telemetría el camino por defecto es el SCRAPE —el colector
- * viene a buscarlas a `/actuator/prometheus`—, porque es el único que conserva los exemplars.
- *
- * <p>El push por OTLP se queda como salida para quien no pueda scrapear, con su propio
- * interruptor y apagado: es el simétrico exacto de `LOG_EXPORT_OTLP` y por la misma razón, dos
- * caminos a la vez duplican las series en el backend.
- */
-export const METRICS_TRANSPORT = {
-  scrapePath: '/actuator/prometheus',
-  actuatorEndpointId: 'prometheus',
-  prometheus: { property: 'management.prometheus.metrics.export.enabled', envVar: 'METRICS_EXPORT_PROMETHEUS' },
-  otlp: { property: 'management.otlp.metrics.export.enabled', envVar: 'METRICS_EXPORT_OTLP' }
-};
 
 // ─── Las series del RUNTIME, que no son nuestras pero las consulta el panel ──
 //
@@ -244,37 +182,6 @@ export const CONSUMER_LAG = {
 export function consumerLagFor(broker) {
   const entry = CONSUMER_LAG[broker];
   return entry?.series ? entry : null;
-}
-
-/**
- * El nombre de serie con el que se ve una observación en un motor de métricas, y sus derivadas de
- * histograma.
- *
- * <p>Micrometer mangla el nombre (todo lo que no sea alfanumérico a `_`) y le añade la unidad base
- * del registro. Con el registro de Prometheus los timers van en SEGUNDOS —con el de OTLP iban en
- * milisegundos—, y un histograma se expone en la forma clásica: `_bucket` con su etiqueta `le`,
- * `_sum` y `_count`. De ahí que las consultas del panel no se escriban a mano.
- *
- * @param {string} observation nombre de la observación (p. ej. `keel.use-case`)
- * @returns {{ base: string, bucket: string, sum: string, count: string }}
- */
-export function promMetric(observation) {
-  const base = `${mangle(observation)}_seconds`;
-  return { base, bucket: `${base}_bucket`, sum: `${base}_sum`, count: `${base}_count` };
-}
-
-/** El nombre de serie de un gauge o un contador, que no lleva unidad. */
-export function promGauge(name) {
-  return mangle(name);
-}
-
-/** El nombre de una etiqueta: el mismo manglado, sin unidad. */
-export function promTag(attribute) {
-  return mangle(attribute);
-}
-
-function mangle(name) {
-  return String(name).replace(/[^a-zA-Z0-9]+/g, '_');
 }
 
 // ─── La sonda que se ejecuta DENTRO del proyecto generado ────────────────────

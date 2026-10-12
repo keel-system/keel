@@ -192,3 +192,15 @@ export { cachedOperations, cacheInvalidations, unbackedInvalidations, CACHE_ENTR
 export { refTargets, isRefTarget, refTargetsOf, listedIdQueries, idBatchReason, listedIdsNote } from './ref-targets.js';
 export { usesOpenapi, openapiDocument, openapiYaml, derivedOpenapiFiles } from './openapi.js';
 export { lastKnownNeeds as lastKnownNeedsNeutral, servesLastKnown, lastKnownNeedsOf } from './last-known.js';
+export {
+  usesTelemetry,
+  OBSERVATIONS,
+  OUTBOX_DEAD_LETTERED,
+  ATTRIBUTES,
+  OUTCOMES,
+  INSTRUMENTATION,
+  METRICS_TRANSPORT,
+  promMetric,
+  promGauge,
+  promTag
+} from './telemetry-vocabulary.js';

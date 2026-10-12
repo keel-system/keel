@@ -8,6 +8,7 @@
 // que sale por el puerto OutboxDispatcher; su implementación la escribe el
 // agente siguiendo la skill keel-spring-<broker>.
 
+import { OUTBOX_DEAD_LETTERED } from 'keel-core/gen/telemetry-vocabulary';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { claimSelectionSnippet, claimTransaction, supportsSkipLocked } from '../lib/claim-sql.js';
 import { usesTelemetry, tracedDispatch, messageTracingImport, TRACED_DISPATCH_IMPORTS } from './telemetry.js';
@@ -597,7 +598,7 @@ public class OutboxRelay {
      */
     @PostConstruct
     void registerDeadLetterGauge() {
-        Gauge.builder("keel.outbox.dead_lettered", this, relay -> relay.countDeadLettered())
+        Gauge.builder("${OUTBOX_DEAD_LETTERED}", this, relay -> relay.countDeadLettered())
                 .description("Documentos del outbox que agotaron sus reintentos y siguen sin entregarse")
                 .register(meterRegistry);
     }
@@ -935,7 +936,7 @@ ${purgeSettings('outbox.purge')}
      */
     @PostConstruct
     void registerDeadLetterGauge() {
-        Gauge.builder("keel.outbox.dead_lettered", outboxRepository, repository -> repository.countDeadLettered(maxAttempts))
+        Gauge.builder("${OUTBOX_DEAD_LETTERED}", outboxRepository, repository -> repository.countDeadLettered(maxAttempts))
                 .description("Filas del outbox que agotaron sus reintentos y siguen sin entregarse")
                 .register(meterRegistry);
     }
