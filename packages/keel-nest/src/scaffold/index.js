@@ -16,6 +16,7 @@ import { packageVersion } from '../lib/assets.js';
 import { TS_PROJECTION } from '../lib/ts-projection.js';
 import * as project from './project.js';
 import * as config from './config.js';
+import * as logging from './logging.js';
 import * as serviceParameters from './service-parameters.js';
 import * as wire from './wire.js';
 import * as application from './application.js';
@@ -129,6 +130,8 @@ const GENERATORS = [
   projections,
   // La lectura por lote del `embed`: el <Raíz>RefResolver de keel-spring, sobre el findAllById del puerto.
   refResolvers,
+  // Los logs (incremento 14b): texto en local, JSON ECS fuera de él, con el correlationId en cada línea.
+  logging,
   // El reloj (incremento 10b): los schedulers de las operaciones con `schedule` y las purgas por lotes de las
   // tablas del generador.
   scheduling,

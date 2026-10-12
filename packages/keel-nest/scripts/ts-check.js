@@ -235,6 +235,18 @@ if (results.every((result) => result.ok) && database) {
     missing ? `${missing.status} ${missing.body}` : 'sin respuesta'
   );
 
+  // develop escribe la consola en JSON ECS (incremento 14b): cada línea se parsea y lleva nivel, logger y servicio.
+  const logLines = appOutput.split('\n').filter((line) => line.trim() !== '');
+  const unparsed = logLines.filter((line) => {
+    try {
+      const parsed = JSON.parse(line);
+      return !(parsed.log?.level && parsed.log?.logger && parsed.service?.name && parsed.ecs?.version);
+    } catch {
+      return true;
+    }
+  });
+  step('la consola de develop es JSON ECS, línea a línea', logLines.length > 0 && unparsed.length === 0, unparsed.length > 0 ? `no ECS: ${unparsed[0].slice(0, 200)}` : `${logLines.length} líneas`);
+
   app.kill('SIGTERM');
   const end = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 15_000))]);
   if (isWindows) {

@@ -1980,6 +1980,20 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `telemetry-probes.js` (queda allí lo de la JVM: `RUNTIME_*`, `CONSUMER_LAG`, la observación de Lettuce y las
   sondas) y usa `OUTBOX_DEAD_LETTERED` en el gauge y en el panel: línea base **idéntica** (44 combinaciones).
   `keel-core/test/telemetry-vocabulary.test.js`.
+- **14b — los logs, con y sin telemetría: hecho (2026-10-12)**. `src/scaffold/logging.js` emite `KeelLogger`
+  (`infrastructure/logging/keel-logger.ts`), que `main.ts` instala para Nest y para todo `new Logger(...)`: texto en
+  `local` y `test` (`<instante> <NIVEL> <pid> --- [correlationId] [contexto] mensaje`, la pila debajo) y JSON ECS en
+  `develop` y `production` (`LOG_FORMAT`, default `ecs`) con la forma ANIDADA del formato de Spring Boot 3.5
+  (`@timestamp`, `log.level`/`log.logger`, `process.pid`, `service.name/version/environment/node.name`, `message`,
+  `correlationId`, `error.type/message/stack_trace`, `ecs.version: 8.11`), para que un mismo pipeline lea los dos
+  servidores. Los niveles: `LOG_LEVEL_ROOT` para los contextos del propio Nest y `LOG_LEVEL_APP` para el servicio,
+  con el gradiente de keel-spring; `logging.yaml` por perfil con las MISMAS variables y defaults. El cargador de
+  configuración resuelve ya el placeholder ANIDADO de keel-spring (`${SERVICE_INSTANCE_ID:${HOSTNAME:unknown}}`; antes
+  lo partía), sin volver a resolver lo que llega de una variable. **Medido**: `test/logging.test.js` EJECUTA la
+  configuración real de cada perfil y el logger emitidos (forma ECS, réplica por las tres vías, niveles, pila solo
+  donde se pasa, texto en local, paridad de variables con keel-spring); falsado con tres sabotajes (sin
+  `correlationId`, niveles cruzados, sin placeholder anidado), cada uno cazado por su caso. `ts-check` 12/12 y gana
+  el paso «la consola de develop es JSON ECS, línea a línea» sobre el servidor arrancado.
 
 ### Inc. 15 — Evolución del proyecto ya generado
 

@@ -45,12 +45,14 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from './app.module.js';
 import { loadConfiguration } from './infrastructure/config/configuration.js';
 import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from './infrastructure/http/http-platform.js';
+import { KeelLogger } from './infrastructure/logging/keel-logger.js';
 
 const configuration = loadConfiguration();
+// Los logs del perfil activo (texto en local, JSON ECS fuera de él): también los de todo new Logger(...).
 const app = await NestFactory.create<NestFastifyApplication>(
   AppModule.register(configuration),
   createHttpAdapter(),
-  HTTP_APPLICATION_OPTIONS
+  { ...HTTP_APPLICATION_OPTIONS, logger: KeelLogger.from(configuration) }
 );
 configureHttp(app);
 // SIGTERM/SIGINT cierran la aplicación de forma ordenada (ver GracefulShutdown).

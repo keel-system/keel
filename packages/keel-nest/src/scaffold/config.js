@@ -62,7 +62,7 @@ export interface Configuration {
 
 type Tree = Record<string, unknown>;
 
-const PLACEHOLDER = /\\$\\{([A-Za-z0-9_]+)(?::([^}]*))?\\}/g;
+const VARIABLE_NAME = /^[A-Za-z0-9_]+$/;
 
 export function loadConfiguration(env: NodeJS.ProcessEnv = process.env, root: string = process.cwd()): Configuration {
   const profiles = (env.PROFILE ?? 'local')
@@ -133,14 +133,48 @@ function resolve(node: unknown, env: NodeJS.ProcessEnv, path: string, missing: s
   return node;
 }
 
+/**
+ * Sustituye los placeholders de un valor. El default puede llevar otro placeholder
+ * (\`\${SERVICE_INSTANCE_ID:\${HOSTNAME:unknown}}\`), como en keel-spring; lo que llega de una variable de
+ * entorno se usa tal cual, sin volver a resolverlo.
+ */
 function resolveString(value: string, env: NodeJS.ProcessEnv, path: string, missing: string[]): string {
-  return value.replace(PLACEHOLDER, (_match, name: string, fallback: string | undefined) => {
+  let out = '';
+  let index = 0;
+  while (index < value.length) {
+    const start = value.indexOf('\${', index);
+    const end = start < 0 ? -1 : closingBrace(value, start + 2);
+    if (start < 0 || end < 0) return out + value.slice(index);
+    out += value.slice(index, start);
+    const inner = value.slice(start + 2, end);
+    const colon = inner.indexOf(':');
+    const name = colon < 0 ? inner : inner.slice(0, colon);
+    index = end + 1;
+    if (!VARIABLE_NAME.test(name)) {
+      out += value.slice(start, end + 1);
+      continue;
+    }
     const fromEnv = env[name];
-    if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
-    if (fallback !== undefined) return fallback;
-    missing.push(\`\${name} (\${path})\`);
-    return '';
-  });
+    if (fromEnv !== undefined && fromEnv !== '') out += fromEnv;
+    else if (colon >= 0) out += resolveString(inner.slice(colon + 1), env, path, missing);
+    else missing.push(\`\${name} (\${path})\`);
+  }
+  return out;
+}
+
+/** La llave que cierra el placeholder que empieza en \`from\`, saltando los anidados. */
+function closingBrace(text: string, from: number): number {
+  let depth = 0;
+  for (let index = from; index < text.length; index += 1) {
+    if (text.startsWith('\${', index)) {
+      depth += 1;
+      index += 1;
+    } else if (text[index] === '}') {
+      if (depth === 0) return index;
+      depth -= 1;
+    }
+  }
+  return -1;
 }
 
 function toPort(value: unknown): number {

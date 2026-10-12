@@ -47,7 +47,7 @@ export function transpileTree(files, { stubs = {} } = {}) {
   // Los paquetes que importa el código emitido sin Nest (decimal.js del dominio, jose de la seguridad, handlebars
   // y nodemailer del correo, el cliente de Redis de la caché) se resuelven desde el node_modules del monorepo.
   fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
-  for (const dependency of ['decimal.js', 'jose', 'handlebars', 'nodemailer', '@redis/client']) {
+  for (const dependency of ['decimal.js', 'jose', 'handlebars', 'nodemailer', '@redis/client', 'yaml']) {
     const dir = path.dirname(require.resolve(`${dependency}/package.json`));
     const link = path.join(root, 'node_modules', ...dependency.split('/'));
     fs.mkdirSync(path.dirname(link), { recursive: true });
