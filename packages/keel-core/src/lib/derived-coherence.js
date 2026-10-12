@@ -18,6 +18,7 @@ import YAML from 'yaml';
 import { checkFor } from './checks.js';
 import { FRAMEWORK_ERRORS } from './framework-errors.js';
 import { splitScenarioBlocks, scenarioFamilyOf } from './scenario-blocks.js';
+import { versionedRouteBase } from './gen/model.js';
 
 const METHODS = ['get', 'post', 'put', 'patch', 'delete'];
 
@@ -39,10 +40,10 @@ export function checkDerivedCoherence({ layers, manifest, docsDir, scenarios = n
   if (!docsDir || !fs.existsSync(docsDir)) return { findings };
 
   const name = manifest?.service?.name;
-  if (layers.api) checkOpenapi(path.join(docsDir, 'openapi.yaml'), layers, warn);
+  if (layers.api) checkOpenapi(path.join(docsDir, 'openapi.yaml'), layers, warn, name);
   if (layers.messaging) checkAsyncapi(path.join(docsDir, 'asyncapi.yaml'), layers, warn);
   if (layers.api && name) {
-    checkPostman(path.join(docsDir, 'postman', `${name}-collection.json`), layers, scenarios, warn);
+    checkPostman(path.join(docsDir, 'postman', `${name}-collection.json`), layers, scenarios, warn, name);
   }
   return { findings };
 }
@@ -58,11 +59,16 @@ function readYaml(file) {
 
 // ─── rutas del diseño ────────────────────────────────────────────────────────
 
-/** Los endpoints explícitos del diseño con su ruta completa. Con `auto` no se contrasta: las rutas no son del diseño. */
-function designEndpoints(layers) {
+/**
+ * Los endpoints explícitos del diseño con la ruta que SIRVEN los dos servidores: la base versionada
+ * (`versionedRouteBase`: `/api` → `/api/v1`), la misma que pone el modelo. Con el `basePath` a pelo, un openapi
+ * correcto salía con deriva en todas las rutas y uno que documentara `/api/products` —que ningún servidor sirve—
+ * pasaba por bueno; lo destapó el openapi derivado (keel-core/gen/openapi.js). Con `auto` no se contrasta.
+ */
+function designEndpoints(layers, serviceName) {
   const api = layers.api;
   if (!api || api.auto === true) return [];
-  const basePath = String(api.basePath ?? '').replace(/\/$/, '');
+  const basePath = versionedRouteBase(api.basePath ?? undefined, serviceName ?? 'service').replace(/\/$/, '');
   return Object.entries(api.endpoints ?? {}).map(([operation, endpoint]) => ({
     operation,
     method: String(endpoint?.method ?? '').toLowerCase(),
@@ -97,7 +103,7 @@ function allowedStatuses(layers, endpoint) {
 
 // ─── openapi.yaml ────────────────────────────────────────────────────────────
 
-function checkOpenapi(file, layers, warn) {
+function checkOpenapi(file, layers, warn, serviceName) {
   const doc = readYaml(file);
   if (doc === null) return; // no generado: lo dice listDerivatives
   const id = 'CHK-DOCS-OPENAPI-DRIFT';
@@ -117,7 +123,7 @@ function checkOpenapi(file, layers, warn) {
       });
     }
   }
-  const endpoints = designEndpoints(layers);
+  const endpoints = designEndpoints(layers, serviceName);
   const designOps = new Set(endpoints.map((e) => e.operation));
   for (const endpoint of endpoints) {
     const got = documented.get(endpoint.operation);
@@ -234,7 +240,7 @@ function assertedStatus(item) {
   return inName ? Number(inName[1]) : null;
 }
 
-function checkPostman(file, layers, scenarios, warn) {
+function checkPostman(file, layers, scenarios, warn, serviceName) {
   if (!fs.existsSync(file)) return;
   const id = 'CHK-DOCS-POSTMAN-DRIFT';
   let doc;
@@ -260,7 +266,7 @@ function checkPostman(file, layers, scenarios, warn) {
   }
 
   // Cada request contra el endpoint que dice llamar y los status que ese endpoint puede dar.
-  const endpoints = designEndpoints(layers).map((e) => ({ ...e, ...routeMatcher(e.path) }));
+  const endpoints = designEndpoints(layers, serviceName).map((e) => ({ ...e, ...routeMatcher(e.path) }));
   if (endpoints.length === 0) return;
   for (const item of flatten(doc.item)) {
     const method = String(item.request?.method ?? '').toLowerCase();

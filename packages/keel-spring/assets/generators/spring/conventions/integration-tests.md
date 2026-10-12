@@ -40,10 +40,13 @@ Lo primero que resuelve una duda, gana:
 1. **`specs/validation-scenarios.md`** — el `Then` literal y las convenciones de
    determinación del servicio (ausencia vs nulo, orden de las colecciones, escala
    decimal, colación, formato temporal). Es el contrato de aceptación.
-2. **`docs/openapi.yaml` y `docs/asyncapi.yaml`**, si existen — contrato formal ya
-   derivado del diseño por `/keel-docs`: rutas, status, esquemas de respuesta y payloads
-   de evento, sin interpretación intermedia. Es la vía más barata de acertar. Puede no
-   estar (el build avisa y sigue): entonces se deriva del punto 3.
+2. **`docs/openapi.yaml`** — el contrato formal de la API. Existe siempre que hay API: si
+   el diseñador no pasó `/keel-docs`, build lo DERIVA del mismo modelo que el código
+   (`x-keel-derived` en su `info`), y es el mismo para el servidor de keel-nest. Rutas,
+   status, cuerpos con sus cotas y cada respuesta con TODOS sus campos, su orden, qué puede
+   ser null y `additionalProperties: false`: lo que permite asertar el cuerpo entero
+   (`JSONCompareMode.STRICT`) en vez de campo a campo. **`docs/asyncapi.yaml`**, si existe,
+   da los payloads de evento. Es la vía más barata de acertar.
 3. **`specs/<capa>.keel.yaml` + `mapping.md`** — la derivación mecánica, tabla de abajo.
 4. Nada más. Lo que estas fuentes no fijan es un `designGap`, no un hueco que rellene el
    criterio de quien escribe el test.

@@ -2,6 +2,7 @@
 // diseño validado y renderiza todos los artefactos en services/<name>-spring/.
 // Regeneración segura: sin force solo se escriben archivos que no existen.
 
+import { derivedOpenapiFiles } from 'keel-core/gen/openapi';
 import path from 'node:path';
 import { buildModel } from '../lib/model.js';
 import { materializeProject } from 'keel-core/gen/materialize';
@@ -79,6 +80,9 @@ import * as textFold from './text-fold.js';
 
 const GENERATORS = [
   gradle,
+  // El contrato formal de la API, derivado del modelo neutral (el mismo en los dos generadores), salvo que el
+  // workspace traiga el de /keel-docs: keel-core/gen/openapi.js.
+  { generate: derivedOpenapiFiles },
   wrapper,
   application,
   appTests,

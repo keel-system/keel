@@ -61,10 +61,11 @@ puntuación las ejecuta todas. La independencia no cambia: sigues sin leer `src/
      son ejercitables.
    - `specs/validation-scenarios.md` **entero** — convenciones de determinación, matriz de
      cobertura y todos los flujos. Es el contrato de aceptación.
-   - `docs/openapi.yaml` y `docs/asyncapi.yaml` **si existen** — el contrato formal ya
-     derivado del diseño (rutas, status, esquemas de respuesta, payloads de evento). Es la
-     vía más barata de acertar la forma exacta del cuerpo; úsala antes de derivar a mano.
-     Pueden no estar (el diseñador no ejecutó `/keel-docs`): entonces derivas del siguiente.
+   - `docs/openapi.yaml` — el contrato formal de la API: existe siempre que hay API (si el
+     diseñador no ejecutó `/keel-docs`, build lo deriva del mismo modelo que el código). Cada
+     respuesta con todos sus campos, su orden y qué puede ser null: es la vía más barata de
+     acertar la forma exacta del cuerpo y lo que permite asertarlo en STRICT; úsala antes de
+     derivar a mano. `docs/asyncapi.yaml`, si existe, da los payloads de evento.
    - `{{keel:docs}}/conventions/integration-tests.md` — forma de las clases y, sobre todo,
      **§ Del DSL al cable**: precedencia de fuentes, tabla de derivación y checklist.
    - Los artefactos de `specs/` que necesites para el contrato (`api`, `use-cases`,

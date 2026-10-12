@@ -317,9 +317,11 @@ test('build sin docs/<servicio> avisa pero termina en verde y el README omite la
   assert.equal(exitCode, undefined);
 
   const outDir = path.join(workspace, 'services', 'product-catalog-spring');
-  // `docs/` existe siempre (ahí viven las conventions del generador), pero sin
-  // haber pasado por /keel-docs no trae ningún contrato: solo docs/keel/.
-  assert.deepEqual(fs.readdirSync(path.join(outDir, 'docs')), ['keel']);
+  // `docs/` existe siempre (ahí viven las conventions del generador). Sin haber pasado por /keel-docs no trae
+  // los contratos del diseñador, pero sí el openapi que build DERIVA del modelo (keel-core/gen/openapi.js): sin
+  // él, el agente de pruebas deducía la forma de cada respuesta.
+  assert.deepEqual(fs.readdirSync(path.join(outDir, 'docs')).sort(), ['keel', 'openapi.yaml']);
+  assert.match(fs.readFileSync(path.join(outDir, 'docs', 'openapi.yaml'), 'utf8'), /x-keel-derived:/);
   assert.ok(!fs.readFileSync(path.join(outDir, 'README.md'), 'utf8').includes('## Contratos y documentación'));
 });
 

@@ -17,7 +17,7 @@ comando y leer los fallos.
 Corres **en paralelo** con `keel-nest-code`, que está escribiendo la implementación ahora mismo:
 
 - Todo lo derivado del **diseño** es fuente: `specs/` (todas las capas + `validation-scenarios.md`),
-  `docs/` (`openapi.yaml` si existe), `{{keel:docs}}/conventions/`, `{{keel:context}}` y
+  `docs/` (`openapi.yaml`), `{{keel:docs}}/conventions/`, `{{keel:context}}` y
   `keel-stack.json`.
 - **Prohibido leer `src/`** (y `test/*.test.ts`, que son de build). Es la garantía de que la prueba
   afirma lo que el `Then` dice y no lo que el código resultó hacer. Donde las dos lecturas discrepan,
@@ -34,8 +34,8 @@ La caja negra es además estructural: una prueba de flujo que importe `src/` rom
 ## Proceso
 
 1. Lee, **en este orden**: `{{keel:context}}` y `keel-stack.json`; `specs/validation-scenarios.md`
-   **entero** (convenciones de determinación, matriz de cobertura y flujos); `docs/openapi.yaml` si
-   existe; `{{keel:docs}}/conventions/integration-tests.md` —forma de las pruebas y § Del DSL al
+   **entero** (convenciones de determinación, matriz de cobertura y flujos); `docs/openapi.yaml` —existe
+   siempre que hay API: build lo deriva si no se pasó `/keel-docs`, y fija cada respuesta entera—; `{{keel:docs}}/conventions/integration-tests.md` —forma de las pruebas y § Del DSL al
    cable—; los artefactos de `specs/` que necesites para el contrato y, de
    `{{keel:docs}}/conventions/mapping.md`, solo las secciones de contrato (sobre de error, ausencia vs.
    nulo, tipos y su forma en el cable, `Location`, paginación).

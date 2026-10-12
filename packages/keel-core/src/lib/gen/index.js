@@ -190,3 +190,4 @@ export {
 } from './payment-gateways.js';
 export { cachedOperations, cacheInvalidations, unbackedInvalidations, CACHE_ENTRY_SEPARATOR, CACHE_KEY_PART_SEPARATOR } from './cache-plan.js';
 export { refTargets, isRefTarget, refTargetsOf, listedIdQueries, idBatchReason, listedIdsNote } from './ref-targets.js';
+export { usesOpenapi, openapiDocument, openapiYaml, derivedOpenapiFiles } from './openapi.js';

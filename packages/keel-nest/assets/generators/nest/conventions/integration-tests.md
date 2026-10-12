@@ -107,7 +107,10 @@ Quien escribe estas pruebas no puede mirar el código, así que la forma exacta 
 
 1. **`specs/validation-scenarios.md`**: el `Then` literal y las Convenciones de determinación (ausencia
    vs. nulo, orden de las colecciones, escala decimal, colación, formato temporal).
-2. **`docs/openapi.yaml`**, si existe: rutas, status y esquemas ya derivados del diseño.
+2. **`docs/openapi.yaml`**: el contrato formal de la API. Existe siempre que hay API —si no se pasó `/keel-docs`,
+   build lo DERIVA del mismo modelo que el código (`x-keel-derived`), el mismo que el de keel-spring—: rutas, status,
+   cuerpos con sus cotas y cada respuesta con TODOS sus campos, su orden, qué puede ser null y
+   `additionalProperties: false`. Con él se aserta el cuerpo entero (`toStrictEqual`), no campo a campo.
 3. **`specs/<capa>.keel.yaml` + `mapping.md`**: la derivación mecánica.
 4. Nada más. Lo que estas fuentes no fijan es un `designGap`.
 

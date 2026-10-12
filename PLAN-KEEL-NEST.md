@@ -1904,8 +1904,13 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     - la marca `stale` del último precio conocido (`GetPriceResult`): la escribieron las dos v2, de keel-spring y de
       keel-nest. Toca el tipo de resultado, el mapper, el almacén `lastKnown` y la nota de la caché, y en catalog la
       llamada sirve a dos políticas a la vez;
-    - un contrato formal (`openapi.yaml`) para que las pruebas asierten en STRICT (`response-shape-without-contract`,
-      las dos v2).
+  - **Cerrado después:** el contrato formal. build escribe `docs/openapi.yaml` DERIVADO del modelo neutral
+    (`keel-core/gen/openapi.js`) cuando el workspace no trae el de `/keel-docs`: el mismo documento en los dos
+    generadores, comprobado contra la tabla de rutas que ejecuta keel-nest, contra `CHK-DOCS-OPENAPI-DRIFT` y con
+    Redocly (válido en las 14 fixtures con API). Al compararlo salió que `CHK-DOCS-OPENAPI-DRIFT` contrastaba con
+    `basePath` sin la versión (`/api/products` en vez de `/api/v1/products`): marcaba deriva en un contrato correcto
+    y daba por bueno uno con rutas que nadie sirve. Y que las reglas de entrada del modelo dependían de la
+    proyección (en keel-spring, anotaciones): ahora el campo neutral lleva `inputRules`.
 
 ### Inc. 14 — Telemetría, observabilidad y despliegue
 

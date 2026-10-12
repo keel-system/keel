@@ -5,6 +5,7 @@
 // TypeScript, y la escritura es la misma (`materializeProject`): lo único de este paquete son los
 // renderizadores de abajo.
 
+import { derivedOpenapiFiles } from 'keel-core/gen/openapi';
 import path from 'node:path';
 import { buildModel } from 'keel-core/gen/model';
 import { materializeProject } from 'keel-core/gen/materialize';
@@ -68,6 +69,9 @@ import * as generatorDocs from './generator-docs.js';
 
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara.
 const GENERATORS = [
+  // El contrato formal de la API, derivado del modelo neutral (el mismo en los dos generadores), salvo que el
+  // workspace traiga el de /keel-docs: keel-core/gen/openapi.js.
+  { generate: derivedOpenapiFiles },
   project,
   // La frontera hexagonal, como regla ejecutable (npm run check:architecture).
   architecture,

@@ -20,7 +20,7 @@ import {
   brokerSafeName
 } from './naming.js';
 import { resolveType, isTextual } from './types.js';
-import { FORMAT_TEXT_BASES } from './constraints.js';
+import { FORMAT_TEXT_BASES, validationRules, elementValidationRules } from './constraints.js';
 import { DATABASES, caseSensitiveCollationFor } from './infra-catalog.js';
 import {
   DEFAULT_UNANSWERED_AFTER_SECONDS,
@@ -469,6 +469,10 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     // Nombre real en el cable cuando la fuente externa no usa el nombre del DSL.
     wireName: field.wireName && field.wireName !== fieldName ? field.wireName : null,
     description: field.description ?? null,
+    // Las reglas de entrada como DATOS, sin pasar por la proyección (que las escribe en su lenguaje: anotaciones de
+    // Bean Validation en keel-spring). Las lee el contrato formal (gen/openapi.js), el mismo en los dos generadores.
+    inputRules: validationRules(field, resolved, { input: true, honourDefault: true }),
+    elementInputRules: elementValidationRules(field, resolved),
     ...P.fieldDetails(field, resolved, { fieldName, isList, persisted, collation })
   };
 }
@@ -3237,6 +3241,8 @@ function asPayloadField(field, direction) {
     ...P.uploadType(),
     kind: 'fileUpload',
     file: true,
+    inputRules: field.required ? [{ rule: 'notNull' }] : [],
+    elementInputRules: [],
     ...P.uploadValidation(field.required)
   };
 }
