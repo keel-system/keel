@@ -82,7 +82,9 @@ test('lastKnown: caído, sirve el último precio DE ESE sku dentro de la ventana
   assert.notDeepEqual(JSON.parse(JSON.stringify(first)), JSON.parse(JSON.stringify(second)), 'dos precios distintos');
   up = false;
   const served = await adapter.getPrice('SKU-1');
-  assert.deepEqual(JSON.parse(JSON.stringify(served)), JSON.parse(JSON.stringify(first)), 'el último valor de SKU-1, no el del último consultado');
+  // El último valor de SKU-1, no el del último consultado, y MARCADO: se sirve, pero no se cachea (last-known-stale).
+  assert.deepEqual(JSON.parse(JSON.stringify(served)), { ...JSON.parse(JSON.stringify(first)), stale: true }, 'el último valor de SKU-1, no el del último consultado');
+  assert.equal(first.stale, false, 'el recién leído no está marcado');
   // Pasada la ventana (900 s), ya no es ese dato.
   const realNow = Date.now;
   t.after(() => (Date.now = realNow));

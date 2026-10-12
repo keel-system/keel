@@ -191,3 +191,4 @@ export {
 export { cachedOperations, cacheInvalidations, unbackedInvalidations, CACHE_ENTRY_SEPARATOR, CACHE_KEY_PART_SEPARATOR } from './cache-plan.js';
 export { refTargets, isRefTarget, refTargetsOf, listedIdQueries, idBatchReason, listedIdsNote } from './ref-targets.js';
 export { usesOpenapi, openapiDocument, openapiYaml, derivedOpenapiFiles } from './openapi.js';
+export { lastKnownNeeds as lastKnownNeedsNeutral, servesLastKnown, lastKnownNeedsOf } from './last-known.js';

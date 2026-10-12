@@ -7,6 +7,7 @@
 // `<servicio>:<operación-en-kebab>`. keel-nest la escribe igual aunque su cliente no imponga ninguna, para que
 // una misma `infra/` y una misma inspección con redis-cli valgan para los dos.
 
+import { lastKnownNeedsOf } from './last-known.js';
 import { kebabCase, screamingSnake } from './naming.js';
 
 /** Separador entre el nombre de la caché y la clave de la entrada (el `::` de RedisCacheManager). */
@@ -99,6 +100,10 @@ export function cacheNote(model, operation, { call }) {
     'Lo que depende de QUIÉN llama (el alcance, la propiedad) se comprueba FUERA de la carga, sobre cada respuesta, ' +
     'también la que sale de la caché: la clave es la entrada de la operación, no el llamante. Lo que no debe servirse ' +
     'durante el TTL —una respuesta degradada porque un proveedor no contestó— se sirve y no se guarda (cacheable). ' +
+    (lastKnownNeedsOf(model, operation.name).length > 0
+      ? `Tampoco la que sirvió el ÚLTIMO VALOR CONOCIDO de ${lastKnownNeedsOf(model, operation.name).map(({ dependency, need }) => `${dependency}.${need.name}`).join(', ')} ` +
+        '(el resultado de la llamada viene con stale = true): ya puede tener la edad máxima que declara el diseño, y el TTL la alargaría. '
+      : '') +
     (cache.invalidatedBy.length > 0
       ? `No escribas desalojos por ${cache.invalidatedBy.join(', ')}: el UseCaseMediator ya vacía la caché al confirmar.`
       : 'Ningún evento la invalida: solo caduca por su TTL.')

@@ -1901,9 +1901,11 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     firma de un binario por su SHA-256; y el export del baseline en MySQL con una columna generada, que rechazaba el
     INSERT parametrizado de `typeorm_metadata`. `db-check` gana `findAllById` (el `In(...)` sobre el uuid binario).
   - **Lo que queda abierto:**
-    - la marca `stale` del último precio conocido (`GetPriceResult`): la escribieron las dos v2, de keel-spring y de
-      keel-nest. Toca el tipo de resultado, el mapper, el almacén `lastKnown` y la nota de la caché, y en catalog la
-      llamada sirve a dos políticas a la vez;
+  - **Cerrado después:** la marca `stale` del último valor conocido (las dos v2 de catalog la escribieron a mano).
+    No era una decisión abierta: la toma `maxAgeSeconds`, porque una respuesta cacheada con el valor rescatado lo
+    seguiría sirviendo todo el TTL. `keel-core/gen/last-known.js` decide qué llamadas lo sirven; el resultado lleva
+    `stale` y `asStale()`, el rescate generado lo marca (y el TODO de una llamada con varias políticas lo pide), y la
+    nota de la caché dice que no se guarda. En los dos generadores (`keel-nest/test/last-known-stale.test.js`).
   - **Cerrado después:** el contrato formal. build escribe `docs/openapi.yaml` DERIVADO del modelo neutral
     (`keel-core/gen/openapi.js`) cuando el workspace no trae el de `/keel-docs`: el mismo documento en los dos
     generadores, comprobado contra la tabla de rutas que ejecuta keel-nest, contra `CHK-DOCS-OPENAPI-DRIFT` y con

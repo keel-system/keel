@@ -13,6 +13,7 @@
 // (api-key, bearer, basic, oauth2 client-credentials) se aplica en el bean
 // RestClient; las credenciales llegan por configuración, nunca del diseño.
 
+import { servesLastKnown } from 'keel-core/gen/last-known';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
 import { rawJsonAnnotations } from './jackson.js';
@@ -233,16 +234,34 @@ ${methods}
 function renderResult(model, client, call) {
   const imports = new Set();
   addFieldImports(model, imports, call.responseFields);
-  const components = call.responseFields.map((f) => `${f.javaType} ${f.name}`).join(', ');
+  const stale = call.responseFields.length > 0 && servesLastKnown(model, client.id, call.name);
+  const names = call.responseFields.map((f) => f.name).join(', ');
+  const components = [...call.responseFields.map((f) => `${f.javaType} ${f.name}`), ...(stale ? ['boolean stale'] : [])].join(', ');
   const todo = call.responseFields.length === 0
     ? `\n * TODO (agente): declara los campos según el contract "${call.contract}".`
     : '';
+  // Con `lastKnown`, el valor rescatado se marca: se sirve, pero quien lo exponga no lo cachea (keel-core/gen/last-known.js).
+  const staleMembers = stale
+    ? `
+    /** Un resultado recién leído del proveedor. */
+    public ${call.resultType}(${call.responseFields.map((f) => `${f.javaType} ${f.name}`).join(', ')}) {
+        this(${names}, false);
+    }
+
+    /** El mismo valor, rescatado como ÚLTIMO CONOCIDO: puede tener hasta la edad máxima que declara el diseño. */
+    public ${call.resultType} asStale() {
+        return new ${call.resultType}(${names}, true);
+    }
+`
+    : '';
 
   const body = `/**
- * Resultado de ${client.id}.${call.name} en términos del dominio.${todo}
+ * Resultado de ${client.id}.${call.name} en términos del dominio.${todo}${stale ? `
+ *
+ * <p>{@code stale} es true cuando el valor no lo acaba de contestar el proveedor sino que es el último
+ * conocido (onUnavailable: lastKnown): se sirve, pero una respuesta que lo lleve no se cachea.` : ''}
  */
-public record ${call.resultType}(${components}) {
-}`;
+public record ${call.resultType}(${components}) {${staleMembers}}`;
   return {
     path: javaPath(model, PORT_PKG, call.resultType),
     content: javaFile(subPackage(model, PORT_PKG), [...imports], body)
@@ -702,7 +721,13 @@ function fallbackBody(model, client, call, imports) {
       distinct.size > 1
         ? `
         // Varias políticas DISTINTAS salen por esta llamada y el diseño no puede darles
-        // caminos distintos sobre un único método: ${conflicting.join('; ')}`
+        // caminos distintos sobre un único método: ${conflicting.join('; ')}${
+            needs.some(({ need }) => need.onUnavailable.action === 'lastKnown')
+              ? `
+        // Si sirves el último valor conocido, devuélvelo marcado (lastKnown.recall(...).map(${call.resultType}::asStale)):
+        // una respuesta que lo lleve no se cachea.`
+              : ''
+          }`
         : '';
     return `${trace}${doc}${listed}
         throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
@@ -807,12 +832,14 @@ function needFallbackBody(model, client, call, needs, trace, imports) {
     return `${trace}${prose}${origin}        // Dentro de la ventana declarada se sirve lo último que se leyó; fuera de ella no hay
         // nada que servir — un valor más viejo que ${onUnavailable.maxAgeSeconds}s ya no es ese dato.
         return ${recall}
+                .map(${call.resultType}::asStale)
                 .orElseThrow(() -> new ${onUnavailable.exceptionClass}(${args}));`;
   }
   return `${trace}${prose}${origin}        // TODO (agente): el diseño declara onUnavailable.error = ${onUnavailable.error}, pero
         // ninguna operación de use-cases lo declara todavía, así que su clase no existe. El
         // rescate del último valor conocido ya está escrito: solo falta con qué rendirse.
         return ${recall}
+                .map(${call.resultType}::asStale)
                 .orElseThrow(() -> new UnsupportedOperationException("TODO: error de ${call.name}"));`;
 }
 

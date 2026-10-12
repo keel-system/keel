@@ -12,6 +12,7 @@
 //
 // `src/infrastructure/http/` es la plataforma de ENTRADA (Fastify): lo saliente va a `infrastructure/clients`.
 
+import { servesLastKnown } from 'keel-core/gen/last-known';
 import { fallbackFailures, resiliencePolicy, RESILIENCE_DEFAULTS } from 'keel-core/gen/outbound-resilience';
 import { DIRS, classPath, declType, fieldImports, fileName, tsModule, tsString, tsdoc } from './render.js';
 import { DECIMAL_TS, RAW_JSON_TS, WIRE_TS } from './wire.js';
@@ -168,9 +169,20 @@ ${methods.join('\n\n')}
 function resultTs(model, client, call) {
   const file = resultPath(call);
   const todo = call.responseFields.length === 0 ? [`TODO (agente): declara los campos según el contract "${call.contract}".`] : [];
-  const members = call.responseFields.map((field) => `    readonly ${field.name}: ${resultDecl(field)}`);
+  // Con `lastKnown`, el valor rescatado se marca: se sirve, pero quien lo exponga no lo cachea (keel-core/gen/last-known.js).
+  const stale = call.responseFields.length > 0 && servesLastKnown(model, client.id, call.name);
+  const members = [...call.responseFields.map((field) => `    readonly ${field.name}: ${resultDecl(field)}`), ...(stale ? ['    readonly stale: boolean = false'] : [])];
   const ctor = members.length > 0 ? `\n  constructor(\n${members.join(',\n')}\n  ) {}\n` : '';
-  const body = `${tsdoc([`Resultado de ${client.id}.${call.name} en términos del dominio.`, ...todo])}export class ${call.resultType} {${ctor}}`;
+  const asStale = stale
+    ? `
+  /** El mismo valor, rescatado como ÚLTIMO CONOCIDO: puede tener hasta la edad máxima que declara el diseño. */
+  asStale(): ${call.resultType} {
+    return new ${call.resultType}(${call.responseFields.map((field) => `this.${field.name}`).join(', ')}, true);
+  }
+`
+    : '';
+  const notes = stale ? ['`stale` es true cuando el valor es el último conocido (onUnavailable: lastKnown) y no uno recién leído: se sirve, pero una respuesta que lo lleve no se cachea.'] : [];
+  const body = `${tsdoc([`Resultado de ${client.id}.${call.name} en términos del dominio.`, ...todo, ...notes])}export class ${call.resultType} {${ctor}${asStale}}`;
   return tsModule(file, importsOf(model, call.responseFields), body);
 }
 
@@ -532,7 +544,11 @@ function unavailableBody(model, client, call, imports) {
     ];
     const listed =
       distinct.size > 1
-        ? `\n    // Varias políticas DISTINTAS salen por esta llamada y el diseño no puede darles caminos distintos sobre un\n    // único método: ${conflicting.join('; ')}`
+        ? `\n    // Varias políticas DISTINTAS salen por esta llamada y el diseño no puede darles caminos distintos sobre un\n    // único método: ${conflicting.join('; ')}${
+            needs.some(({ need }) => need.onUnavailable.action === 'lastKnown')
+              ? `\n    // Si sirves el último valor conocido, devuélvelo marcado (this.lastKnown.recall(...)?.asStale()): una respuesta que\n    // lo lleve no se cachea.`
+              : ''
+          }`
         : '';
     return `${trace}\n${doc}${listed}\n${todoThrow}`;
   }
@@ -611,7 +627,7 @@ ${todoThrow}`;
   const window = `    // Dentro de la ventana declarada se sirve lo último que se leyó; fuera de ella no hay nada que servir: un valor
     // más viejo que ${onUnavailable.maxAgeSeconds} s ya no es ese dato.
     const remembered = ${recall};
-    if (remembered !== null) return remembered;`;
+    if (remembered !== null) return remembered.asStale();`;
   if (onUnavailable.exceptionClass) {
     imports.push({ symbol: onUnavailable.exceptionClass, from: classPath(DIRS.errors, onUnavailable.exceptionClass) });
     const message = tsString(`${dependency} no está disponible y el último ${need.name} conocido supera los ${onUnavailable.maxAgeSeconds}s`);
