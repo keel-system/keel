@@ -36,6 +36,10 @@ async countActiveByCategory(categoryId: string): Promise<number> {
   prueba y no en producción. La condición va al motor.
 - **Una consulta por elemento** dentro de un bucle sobre una página (N+1): una consulta con `In([...ids])`
   y se indexa el resultado.
+- **Un patrón LIKE concatenado a mano** (`Like('%' + texto + '%')`): el texto buscado es literal, y un `%`
+  o un `_` del parámetro harían de comodín. El patrón de un filtro `match: prefix | contains` lo compone
+  `LikePattern.prefix(...)`/`contains(...)` (`infrastructure/persistence/like-pattern.ts`, de build) sobre el
+  valor ya plegado con `TextFold`: `Like(LikePattern.contains(TextFold.foldCaseAndAccents(criteria.name)))`.
 - **Ordenar sin desempate**: una consulta paginada nueva termina su orden en `id`, como `list`; sin él,
   dos páginas seguidas pueden repetir una fila y omitir otra.
 - **Escribir sin `save`**: el bloqueo optimista, la auditoría y la traducción de constraints viven en el

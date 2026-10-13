@@ -51,6 +51,14 @@ filtro, adaptadores, entidades ORM, arnés, `infra/`). Lo que encuentres ahí es
 genérica sin error declarado equivalente) es un **hueco del diseño**: va a `designGaps` con el artefacto y
 la propuesta concreta.
 
+**Una aserción interna no es un hueco.** Un `throw new Error(…)` que comprueba una invariante que el propio
+agregado mantiene por construcción —ninguna petición válida del contrato ni secuencia de operaciones del
+diseño llega a él: posiciones que el agregado renumera, una principal que reasigna al borrar— es una
+aserción de programador. Si salta, es un defecto del código, y el 500 es la respuesta correcta: se queda
+genérico y **no** va a `designGaps`. Lo mismo la defensa de configuración en el arranque (un parámetro de
+despliegue mal puesto). Es hueco solo cuando puedes escribir la petición que lleva a ese `throw`: entonces
+el cliente vería un 500 por algo que el diseño debía nombrar, y en la propuesta va esa petición.
+
 ## Baseline de migraciones (solo con persistencia relacional)
 
 Sigue `{{keel:skills}}/keel-nest-database/references/migrations.md`; en corto, con la infraestructura

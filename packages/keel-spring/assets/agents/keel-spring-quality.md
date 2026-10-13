@@ -109,7 +109,8 @@ punto 8 del checklist — una excepción genérica que debería ser un error de 
 pero *no hay ningún error equivalente declarado* en `domain.keel.yaml`, así que no
 tienes con qué sustituirla. Eso no es "pendiente de decisión humana" en prosa: es un
 artefacto de diseño que falta y que puedes redactar. Va a `designGaps` con el
-artefacto y la propuesta concreta, no a `remaining`:
+artefacto y la propuesta concreta, no a `remaining` (salvo que sea una aserción
+interna: ver el párrafo de después del ejemplo):
 
 ```yaml
 designGaps:
@@ -118,6 +119,16 @@ designGaps:
     artifact: domain.keel.yaml
     proposal: "declarar error FILE_NOT_FOUND (http 404) y mapearlo desde storage.download"
 ```
+
+**Una aserción interna no es un hueco.** Una `IllegalStateException` que comprueba
+una invariante que el propio agregado mantiene por construcción —ninguna petición
+válida del contrato ni secuencia de operaciones del diseño llega a ella: posiciones
+que el agregado renumera, una principal que reasigna al borrar— es una aserción de
+programador. Si salta, es un defecto del código, y el 500 es la respuesta correcta:
+se queda genérica y **no** va a `designGaps`. Lo mismo la defensa de configuración en
+el arranque. Es hueco solo cuando puedes escribir la petición que lleva a ese
+`throw`: entonces el cliente vería un 500 por algo que el diseño debía nombrar, y en
+la propuesta va esa petición.
 
 La regla no cambia: **no** editas los artefactos del diseño ni el código para
 acomodarlos. Escribes la propuesta para que el diseñador la acepte o la descarte de

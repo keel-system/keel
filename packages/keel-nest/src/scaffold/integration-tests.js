@@ -21,8 +21,9 @@ import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FO
 import { resetDbScript } from 'keel-core/gen/infra-scripts';
 import { missingClockCountSql, rescueProbes, stallSql } from 'keel-core/gen';
 import { NEST_INFRA } from './infra.js';
-import { usesApi } from './rest-support.js';
+import { usesApi, CORRELATION_TS } from './rest-support.js';
 import { usesRelational, engineOf } from './persistence-entities.js';
+import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 import { tsString } from './render.js';
 import { closingCredential, identitySection, usesIdentityHarness } from './identity-harness.js';
 import { messagingHarnessImports, messagingHarnessSection, usesMessagingHarness } from './messaging-harness.js';
@@ -134,6 +135,7 @@ function flowSupportTs(model) {
   const stub = httpStubHarness.usesHttpStub(model);
   const replica = usesReplica(model);
   const multipart = usesMultipart(model);
+  const statements = usesStatementCount(model);
   return `/**
  * Base de las pruebas de flujo (\`test/integration/<flujo>.test.ts\`) que ejecutan los escenarios FL-*
  * de specs/validation-scenarios.md contra el servidor REAL —escuchando en un puerto libre, bajo el
@@ -170,7 +172,7 @@ import { NestFactory } from '@nestjs/core';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from '../../../src/app.module.js';
 import { loadConfiguration } from '../../../src/infrastructure/config/configuration.js';
-import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from '../../../src/infrastructure/http/http-platform.js';${messagingHarnessImports(model)}${stub ? `
+import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from '../../../src/infrastructure/http/http-platform.js';${statementCountImports(model)}${messagingHarnessImports(model)}${stub ? `
 import { forgetSequences } from './http-stub.js';
 
 // El proveedor de prueba (WireMock de infra/): los flujos lo programan con estos helpers, importados de aquí.
@@ -335,7 +337,8 @@ export function useFlow(): Flow {
       app = await startServer();
       currentApp = app;
       const address = app.getHttpServer().address() as AddressInfo;
-      baseUrl = \`http://127.0.0.1:\${address.port}\`;${reset ? `
+      baseUrl = \`http://127.0.0.1:\${address.port}\`;${statements ? `
+      countStatements(app);` : ''}${reset ? `
       resetState();` : ''}${stub ? `
       // El reset ya vació el stub; las secuencias que programó el flujo anterior, también se olvidan.
       forgetSequences();` : ''}${messaging ? `
@@ -513,7 +516,7 @@ const DB_QUERY_ARGV: readonly string[] = ${JSON.stringify(probe.argv)};
 export function db(sql: string): string {
   return run(containerRuntime(), ['exec', DB_CONTAINER, ...DB_QUERY_ARGV, sql], '¿Está la base arriba (bash infra/up.sh)?');
 }
-${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}` : ''}${documentHarnessSection(model)}${identitySection(model)}${messagingHarnessSection(model)}${cacheHarnessSection(model)}${storageHarnessSection(model)}
+${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}` : ''}${statementCountSection(model)}${documentHarnessSection(model)}${identitySection(model)}${messagingHarnessSection(model)}${cacheHarnessSection(model)}${storageHarnessSection(model)}
 
 /** Espera hasta que \`condition\` se cumpla o se agote \`timeoutMs\`; lanza con \`message\` si no llega. */
 export async function eventually(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, message = 'la condición no se cumplió a tiempo'): Promise<void> {
@@ -954,6 +957,99 @@ export function inFlightWithoutClock(operation: string): number {
   return count;
 }
 `;
+}
+
+// ─── El coste de una petición: queryCount() y queryExecutions() ──────────────
+//
+// El hermano del queryCount()/queryExecutions() del AbstractFlowIT de keel-spring, con la misma regla de
+// uso (se afirma la FORMA del salto, nunca un número) y las mismas condiciones: API que medir y persistencia
+// relacional. Sin él, un Then de coste («el trabajo no crece con el tamaño de la página») acababa en
+// `uncovered` (corrida catalog-nest: FL-SHP-001 paso 11 y FL-M2M-010 paso 6), y un N+1 que se colara en
+// una refactorización no lo vería nadie.
+//
+// Dos diferencias con keel-spring, las dos a favor: el servidor corre en el MISMO proceso, así que se cuenta
+// en el DataSource sin pasar por un actuator; y solo cuentan las sentencias emitidas DENTRO de una petición
+// HTTP (la correlación que abre el hook de entrada), de modo que el relay del outbox, las purgas y los
+// barridos —que corren en segundo plano y no la abren— no ensucian la medida.
+
+/** ¿Lleva el arnés el contador de sentencias? Las condiciones de queryCountSection en keel-spring. */
+export function usesStatementCount(model) {
+  return usesApi(model) && usesRelational(model);
+}
+
+function statementCountImports(model) {
+  if (!usesStatementCount(model)) return '';
+  const js = (file) => `../../../${file.replace(/\.ts$/, '.js')}`;
+  return `
+import type { DataSource } from 'typeorm';
+import { CorrelationContext } from '${js(CORRELATION_TS)}';
+import { DATA_SOURCE } from '${js(TRANSACTION_CONTEXT_TS)}';`;
+}
+
+function statementCountSection(model) {
+  if (!usesStatementCount(model)) return '';
+  return `
+
+// ── El coste de una petición ─────────────────────────────────────────────────
+
+/** El control de la transacción: lo paga igual una página de 2 que una de 100, y no es trabajo del almacén. */
+const TRANSACTION_CONTROL = /^\\s*(START|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|SET)\\b/i;
+const READ_STATEMENT = /^\\s*(SELECT|WITH)\\b/i;
+let statementTotal = 0;
+let readTotal = 0;
+
+/**
+ * Cuenta las sentencias del DataSource del servidor del flujo (no las de una réplica). Solo las que se emiten
+ * DENTRO de una petición HTTP —con la correlación abierta—: el relay del outbox, las purgas y los barridos
+ * corren en segundo plano, sin ella, y no ensucian la medida.
+ */
+function countStatements(app: NestFastifyApplication): void {
+  const dataSource = app.get<DataSource | null>(DATA_SOURCE);
+  if (!dataSource) throw new Error('El servidor del flujo arrancó sin DataSource: ¿perfil sin base de datos?');
+  dataSource.subscribers.push({
+    beforeQuery: ({ query }) => {
+      if (CorrelationContext.get() === null || TRANSACTION_CONTROL.test(query)) return;
+      statementTotal++;
+      if (READ_STATEMENT.test(query)) readTotal++;
+    }
+  });
+}
+
+/**
+ * Sentencias SQL (lecturas y escrituras, sin el control de la transacción) que han emitido las peticiones
+ * HTTP desde que arrancó la suite.
+ *
+ * Sirve para acotar el coste de una LECTURA: se lee antes y después de la petición y se afirma sobre el
+ * SALTO, nunca sobre el valor absoluto. Lo que se afirma es que el coste NO crece con el tamaño de la página
+ * o de la lista:
+ *
+ *   await flow.get(listado + '?size=2');                // calienta: se mide la SEGUNDA ejecución
+ *   let before = queryCount();
+ *   await flow.get(listado + '?size=2');
+ *   const small = queryCount() - before;
+ *   before = queryCount();
+ *   await flow.get(listado + '?size=100');
+ *   expect(queryCount() - before).toBeLessThanOrEqual(small);
+ *
+ * Se compara la FORMA (la grande no cuesta más que la pequeña), nunca contra un número escrito: «cuesta 4» se
+ * rompe con cualquier índice o versión de TypeORM y acaba subiéndose sin mirar. Sin el margen de +1 de
+ * keel-spring: aquí no hay caché de planes ni carga perezosa, la cuenta es exacta. La petición medida tiene que
+ * ser la ÚNICA del intervalo (nada de peticiones en paralelo mientras se mide), y el Given tiene que dejar más
+ * elementos que el tamaño pequeño, o las dos páginas son la misma.
+ */
+export function queryCount(): number {
+  return statementTotal;
+}
+
+/**
+ * Solo las LECTURAS (SELECT/WITH) de las peticiones HTTP: para cuando el When ESCRIBE. Allí cuentan también los
+ * INSERT —una colección de 20 elementos son 20—, y «comprobar X no crece con N» saldría rojo aunque la
+ * comprobación fuera una sola consulta por lote. A diferencia del de keel-spring, aquí no tiene punto ciego:
+ * la carga por id también es un SELECT y cuenta.
+ */
+export function queryExecutions(): number {
+  return readTotal;
+}`;
 }
 
 // ─── La segunda réplica (escenarios de clúster) ───────────────────────────────

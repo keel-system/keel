@@ -12,7 +12,7 @@ import path from 'node:path';
 import { loadService } from 'keel-core';
 import { textFilterNotes } from 'keel-core/gen/text-filters';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
-import { planFixture } from './helpers/emitted.js';
+import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
 function spring(stack, mutate = null) {
@@ -90,4 +90,27 @@ test('dos filtros con plegados distintos sobre el mismo campo: ninguna sombra, y
   const name = model.entities.find((e) => e.name === 'Product').fields.find((f) => f.name === 'name');
   assert.equal(name.filterFold, null);
   assert.ok(model.warnings.some((w) => w.startsWith('Product.name: los filtros de listProducts, searchProducts')), model.warnings.join('\n'));
+});
+
+test('un filtro por patrón: el texto buscado es LITERAL, en la nota de los dos y en el LikePattern que emite keel-nest', async () => {
+  // El agente de keel-nest escribió su escape con un template literal que nunca interpolaba: ?name=50% buscaba
+  // «50${character}», y la barra no se escapaba. Ningún escenario buscaba un comodín (corrida catalog-nest, 2026-10-13).
+  const { model } = nest(RELATIONAL);
+  const operation = model.services.flatMap((s) => s.operations).find((o) => o.name === 'listProducts');
+  const [note] = textFilterNotes(model, operation);
+  assert.match(note, /el texto buscado es LITERAL: un %, un _ o una barra invertida/);
+  const flat = (text) => text.replace(/\n\s*\/\/\s*/g, ' ');
+  assert.ok(flat(spring(RELATIONAL).read('/ListProductsQueryHandler.java')).includes('el texto buscado es LITERAL'));
+  assert.ok(flat(nest(RELATIONAL).read('list-products-query-handler.ts')).includes('LikePattern.prefix(...)/contains(...)'));
+
+  const { files } = planFixture('catalog-extended', { stack: RELATIONAL });
+  const tree = transpileTree(files);
+  const { LikePattern } = await tree.load('src/infrastructure/persistence/like-pattern.ts');
+  // String.raw: lo que se lee es lo que viaja al motor, barra a barra.
+  assert.equal(LikePattern.contains('50%'), String.raw`%50\%%`);
+  assert.equal(LikePattern.prefix('a_b'), String.raw`a\_b%`);
+  assert.equal(LikePattern.contains(String.raw`c\d`), String.raw`%c\\d%`);
+  assert.equal(LikePattern.prefix('bota'), 'bota%');
+  // Sin base relacional no hay LIKE: el documental no lo emite.
+  assert.equal(planFixture('catalog-extended', { stack: DOCUMENT }).files.some((f) => f.path.endsWith('like-pattern.ts')), false);
 });

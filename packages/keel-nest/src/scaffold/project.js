@@ -132,7 +132,12 @@ function packageJson(model) {
       typescript: TYPESCRIPT_VERSION,
       vite: VITE_VERSION,
       vitest: VITEST_VERSION
-    }
+    },
+    // UNA sola copia de Fastify. @nestjs/platform-fastify la fija EXACTA (12.1.3 → 5.12.5) y la nuestra es un
+    // rango: en cuanto sale un parche de Fastify, npm instala dos, y los tipos que @fastify/multipart aumenta en
+    // la de la raíz no son los de la instancia que crea el adaptador (http-platform.ts deja de compilar). El
+    // override lleva a todo el árbol la versión que resuelve la raíz (corrida catalog-nest).
+    overrides: { fastify: '$fastify' }
   };
   return `${JSON.stringify(pkg, null, 2)}\n`;
 }
@@ -207,6 +212,8 @@ function gitignore() {
   return `node_modules/
 dist/
 coverage/
+# La caché de la compilación incremental de tsc (incremental: true): la corrida catalog-nest la versionó (470 KB).
+*.tsbuildinfo
 *.log
 .env
 # Salida de build que no es del servidor: la versión nueva de un conflicto de --refresh,

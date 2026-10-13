@@ -57,6 +57,12 @@ entero. La independencia no cambia: sigues sin leer `src/`.
    (`useFlow()`, el cliente HTTP, `json()`/`jsonExact()`, `UUID_SHAPE`/`INSTANT_SHAPE`, `db()`,
    `resetState()`, `eventually()`). **Úsalo, no lo reimplementes**, y en esta fase es de **solo
    lectura**: si le falta una pieza transversal, va a `blockers` con la firma que propones.
+   - **Una afirmación de COSTE tampoco es un `uncovered`.** Un `Then` cuyo trabajo «no crece con el
+     tamaño de la página» (o de la lista) se escribe con `queryCount()` (sentencias contra la base, solo
+     con persistencia relacional; si el When **escribe**, `queryExecutions()`, que solo cuenta lecturas)
+     o con `stubCallCount` (llamadas al proveedor de prueba), midiendo **dos tamaños muy distintos** y
+     comparando el salto — nunca contra un número absoluto. Las reglas y el ejemplo:
+     `{{keel:docs}}/conventions/integration-tests.md` § Afirmar el coste.
 3. Escribe **una prueba por flujo** en `test/integration/<flujo-en-kebab>.test.ts`: un `describe` con
    el id del flujo, `useFlow()` dentro, y un `it` por escenario **en el orden del documento** con el id
    exacto delante de los dos puntos (`'FL-PRD-001-A: …'`). El reset es por flujo (lo hace `useFlow()`),

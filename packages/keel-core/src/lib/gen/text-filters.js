@@ -9,6 +9,20 @@
 
 import { foldedShadow } from './relational.js';
 
+// Y el texto buscado de un `match: prefix | contains` es LITERAL: un `%`, un `_` o una barra del parámetro casan
+// consigo mismos. El agente de keel-nest escribió su escape con un template literal que nunca interpolaba
+// (`?name=50%` buscaba «50${character}») y no escapaba la barra; ningún escenario buscaba un comodín, así que la
+// corrida cerró 194/194 con el filtro roto (corrida catalog-nest, 2026-10-13).
+const LITERAL =
+  'el texto buscado es LITERAL: un %, un _ o una barra invertida del parámetro casan consigo mismos, no son comodines ' +
+  '(escápalos antes de componer el patrón, y el carácter de escape también)';
+
+/** ¿Tiene la operación algún filtro que case por patrón (`match: prefix | contains`)? */
+export function hasPatternFilter(operation) {
+  if (operation.kind !== 'query') return false;
+  return [...(operation.pathParams ?? []), ...(operation.bodyFields ?? [])].some((component) => (component.match ?? 'exact') !== 'exact');
+}
+
 /** Las notas, una por filtro de texto que no sea igualdad exacta. Sin persistencia, solo cómo casa. */
 export function textFilterNotes(model, operation) {
   if (operation.kind !== 'query') return [];
@@ -29,13 +43,15 @@ export function textFilterNotes(model, operation) {
         `Filtro ${component.name} (${how}): ${casa}; pliega el parámetro con ${fold}(...) y compáralo contra ` +
           `${entity.name}.${shadow.name}, la sombra que build ya mantiene — nunca contra ${component.name} con ` +
           'lower()/unaccent()/translate() en la consulta: plegar el valor guardado y el buscado con dos funciones distintas ' +
-          'deja de casar en silencio con el primer carácter en que difieran'
+          'deja de casar en silencio con el primer carácter en que difieran' +
+          (match === 'exact' ? '' : `; ${LITERAL}`)
       );
       continue;
     }
     notes.push(
       `Filtro ${component.name} (${how}): ${casa}, ` +
-        (compare === 'exact' ? 'sensible a mayúsculas' : `ignorando ${compare === 'ignore-case-accents' ? 'mayúsculas y acentos' : 'mayúsculas'}`)
+        (compare === 'exact' ? 'sensible a mayúsculas' : `ignorando ${compare === 'ignore-case-accents' ? 'mayúsculas y acentos' : 'mayúsculas'}`) +
+        (match === 'exact' ? '' : `; ${LITERAL}`)
     );
   }
   return notes;

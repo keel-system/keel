@@ -16,7 +16,8 @@
 // inyecta lo que existe.
 
 import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } from './render.js';
-import { textFilterNotes } from 'keel-core/gen/text-filters';
+import { textFilterNotes, hasPatternFilter } from 'keel-core/gen/text-filters';
+import { usesLikePattern, LIKE_PATTERN_TS } from './persistence-entities.js';
 import { refTargetsOf, listedIdsNote } from 'keel-core/gen/ref-targets';
 import { resolverPath } from './ref-resolvers.js';
 import { uploadNotes } from 'keel-core/gen/buckets';
@@ -398,6 +399,12 @@ function handlerNotes(model, operation) {
   const cached = cacheNote(model, operation, { call: `await this.operationCache.getOrLoad({cache}, ${cacheParam}, () => ...)` });
   if (cached) notes.push(cached);
   for (const note of textFilterNotes(model, operation)) notes.push(note);
+  if (usesLikePattern(model) && hasPatternFilter(operation)) {
+    notes.push(
+      `El patrón LIKE de esos filtros lo compone LikePattern.prefix(...)/contains(...) (${LIKE_PATTERN_TS}, de build) sobre el valor ya plegado: ` +
+        "nunca '%' concatenado a mano"
+    );
+  }
   for (const { entity, ref } of refTargetsOf(model, operation)) {
     const resolver = `this.${decap(`${entity.name}RefResolver`)}`;
     notes.push(

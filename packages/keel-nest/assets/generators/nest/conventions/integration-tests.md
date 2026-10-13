@@ -48,10 +48,37 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Lo que tr
 | `await deadLetteredEvents()` | cuántos eventos se rindió el outbox: el Then natural de un escenario del outbox es que siga en 0 |
 | `await abandonOutboxEvent(evento)`, `clearAbandonedOutboxEvents()` | agota los reintentos de un evento pendiente (la rendición, sin esperar 40 intentos) y lo retira después |
 | `await pauseOutboxRelay()` / `resumeOutboxRelay()` | deja filas pendientes sin entregar mientras el escenario lo necesite |
+| `queryCount()` / `queryExecutions()` | las sentencias SQL que han emitido las peticiones HTTP (solo con API y persistencia relacional): para los `Then` de **coste**. `queryCount()` cuenta lecturas y escrituras; `queryExecutions()`, solo lecturas, y es la que va cuando el When **escribe**. El relay, las purgas y los barridos no cuentan: corren fuera de una petición. Ver § Afirmar el coste |
 
 Las credenciales salen de `infra/test-credentials.env` (lo escribe build junto a `init-keycloak.sh`):
 **no escribas ningún secreto, cliente ni usuario a mano**. Y pide el token **en cada petición**
 (`bearer(await tokenFor('editor'))`): dura cinco minutos y la caché lo renueva solo si se le pregunta.
+
+## Afirmar el coste
+
+Un `Then` que dice que el trabajo de una operación «no crece con el tamaño de la página» (o de la lista
+del lote) **no es un `uncovered`**: se escribe con `queryCount()` —o `queryExecutions()` si el When
+escribe— midiendo **dos tamaños muy distintos** y comparando el **salto**, nunca contra un número:
+
+```ts
+it('FL-SHP-001-K: el coste no crece con la página', async () => {
+  await flow.get(`${ROUTE_BASE}/products?size=2`);       // calienta: se mide la segunda ejecución
+  let before = queryCount();
+  await flow.get(`${ROUTE_BASE}/products?size=2`);
+  const small = queryCount() - before;
+  before = queryCount();
+  await flow.get(`${ROUTE_BASE}/products?size=100`);
+  expect(queryCount() - before).toBeLessThanOrEqual(small);
+});
+```
+
+Tres reglas, las mismas que en keel-spring: **se compara la forma** —la grande no cuesta más que la
+pequeña—, nunca contra un número escrito («cuesta 4» se rompe con un índice o una versión de TypeORM y
+acaba subiéndose sin mirar); **la petición medida es la única del intervalo** (nada en paralelo; lo de
+segundo plano ya no cuenta); y **se mide la segunda ejecución**. Sin el margen de `+1` de keel-spring:
+aquí no hay caché de planes ni carga perezosa, y la cuenta es exacta. Para que el salto signifique algo, el `Given` tiene que dejar más elementos que el tamaño
+pequeño. El N+1 de RED —una llamada saliente por elemento— no lo cuenta `queryCount()`: se mide con
+`stubCallCount`, con el mismo criterio.
 
 ## Una prueba por flujo
 

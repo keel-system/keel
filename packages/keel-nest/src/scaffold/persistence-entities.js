@@ -42,12 +42,14 @@ import {
   partialIndexSpecs,
   discriminatorColumn
 } from 'keel-core/gen';
+import { hasPatternFilter } from 'keel-core/gen/text-filters';
 import { DIRS, classPath, capitalize, decapitalize, isNullable, tsModule, tsString } from './render.js';
 
 export const ORM_DIR = 'infrastructure/persistence/entities';
 export const TRANSFORMERS_TS = 'src/infrastructure/persistence/column-transformers.ts';
 export const AUDITABLE_TS = classPath(ORM_DIR, 'AuditableOrm');
 export const TEXT_FOLD_TS = 'src/infrastructure/persistence/text-fold.ts';
+export const LIKE_PATTERN_TS = 'src/infrastructure/persistence/like-pattern.ts';
 
 /** ¿El diseño persiste en un motor relacional? Es lo que genera todo este módulo. */
 export function usesRelational(model) {
@@ -73,6 +75,15 @@ export function usesTextFold(model) {
   return model.entities.some((entity) => entity.persisted && entity.fields.some((field) => field.fold || field.filterFold));
 }
 
+/**
+ * ¿Hay algún filtro que case por patrón (`match: prefix | contains`) sobre una base relacional? Entonces build emite
+ * LikePattern: el escape del texto buscado, que el agente escribía a mano (corrida catalog-nest: roto y sin escenario
+ * que lo viera).
+ */
+export function usesLikePattern(model) {
+  return usesRelational(model) && (model.services ?? []).some((service) => service.operations.some(hasPatternFilter));
+}
+
 /** El motor del stack, con PostgreSQL por defecto (la frontera solo admite postgresql y mysql). */
 export function engineOf(model) {
   return model.stack?.database === 'mysql' ? 'mysql' : 'postgresql';
@@ -89,6 +100,7 @@ export function generate(model) {
   if (usesTextFold(model)) {
     files.push({ path: TEXT_FOLD_TS, content: textFoldFile() });
   }
+  if (usesLikePattern(model)) files.push({ path: LIKE_PATTERN_TS, content: likePatternFile() });
   if (usesAuditableEntity(model)) files.push({ path: AUDITABLE_TS, content: auditableFile(model) });
   for (const entity of model.entities.filter((candidate) => candidate.persisted)) {
     files.push(renderEntity(model, entity));
@@ -705,6 +717,31 @@ export function enumColumn<E extends Record<string, string>>(type: E): ValueTran
     ],
     body
   );
+}
+
+// String.raw: el archivo lleva barras invertidas que tienen que llegar tal cual (sin interpolar nada).
+export function likePatternFile() {
+  return String.raw`/**
+ * El patrón LIKE de un filtro 'match: prefix | contains' del diseño. El texto buscado es LITERAL: un %, un _ o una
+ * barra invertida del parámetro casan consigo mismos, así que se escapan con la barra, que es el carácter de escape
+ * por defecto de LIKE en PostgreSQL y en MySQL (el Like() de TypeORM no escribe cláusula ESCAPE).
+ *
+ * Se pliega ANTES y se escapa DESPUÉS: LikePattern.contains(TextFold.foldCaseAndAccents(criterio)), contra la
+ * columna sombra. Nunca se concatena '%' a mano: ?name=50% buscaría «50 y lo que sea» y ?name=_ casaría con todo.
+ */
+const SPECIAL = /[\\%_]/g;
+
+function escape(value: string): string {
+  return value.replace(SPECIAL, (character) => '\\' + character);
+}
+
+export const LikePattern = {
+  /** empieza por: texto% */
+  prefix: (value: string): string => escape(value) + '%',
+  /** contiene: %texto% */
+  contains: (value: string): string => '%' + escape(value) + '%'
+} as const;
+`;
 }
 
 export function textFoldFile() {

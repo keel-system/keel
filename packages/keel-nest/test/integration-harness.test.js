@@ -108,6 +108,38 @@ test('el humo del arnés cubre lo que el diseño tiene: reset, base y API', () =
   assert.doesNotMatch(bare['test/integration/support/flow.ts'], /export function (resetState|db)\(/);
 });
 
+test('el coste de una petición: queryCount()/queryExecutions() con API y persistencia relacional, como keel-spring', () => {
+  // Sin ellos, un Then de coste acababa en `uncovered` (corrida catalog-nest: FL-SHP-001 paso 11, FL-M2M-010 paso 6).
+  const flow = byPath(planFixture(NEST_READY_DESIGN.name).files)['test/integration/support/flow.ts'];
+  assert.match(flow, /export function queryCount\(\): number/);
+  assert.match(flow, /export function queryExecutions\(\): number/);
+  // Instalado en el servidor del flujo al arrancar, y solo dentro de una petición: lo de segundo plano no cuenta.
+  assert.match(flow, /currentApp = app;[\s\S]*countStatements\(app\);/);
+  assert.match(flow, /CorrelationContext\.get\(\) === null/);
+  assert.match(flow, /import \{ DATA_SOURCE \} from '\.\.\/\.\.\/\.\.\/src\/infrastructure\/persistence\/transaction-context\.js';/);
+  // El control de la transacción no es trabajo del almacén: lo paga igual una página de 2 que una de 100.
+  const control = new RegExp(flow.match(/const TRANSACTION_CONTROL = \/(.+)\/i;/)[1], 'i');
+  for (const sql of ['START TRANSACTION', 'COMMIT', 'ROLLBACK', 'SET LOCAL statement_timeout = 30000', 'SET TRANSACTION READ ONLY']) assert.match(sql, control, sql);
+  for (const sql of ['SELECT 1', 'UPDATE products SET name = $1', 'INSERT INTO products VALUES ($1)']) assert.doesNotMatch(sql, control, sql);
+  // Las mismas condiciones que keel-spring: sin base relacional o sin API no hay nada que contar.
+  const document = byPath(planFixture('notification-mailer-mongo').files)['test/integration/support/flow.ts'];
+  assert.doesNotMatch(document, /queryCount|countStatements/);
+  const bare = byPath(planFixture(NEST_READY_DESIGN.name, { withoutLayers: ['persistence'] }).files)['test/integration/support/flow.ts'];
+  assert.doesNotMatch(bare, /queryCount|countStatements/);
+});
+
+test('package.json fuerza UNA sola copia de Fastify (Nest la fija exacta; la nuestra es un rango)', () => {
+  const pkg = JSON.parse(byPath(planFixture(NEST_READY_DESIGN.name).files)['package.json']);
+  assert.ok(pkg.dependencies.fastify, 'fastify es dependencia directa');
+  assert.deepEqual(pkg.overrides, { fastify: '$fastify' });
+});
+
+test('.gitignore deja fuera la caché de la compilación incremental (tsconfig con incremental: true)', () => {
+  const files = byPath(planFixture(NEST_READY_DESIGN.name).files);
+  assert.match(files['tsconfig.json'], /"incremental": true/);
+  assert.match(files['.gitignore'], /^\*\.tsbuildinfo$/m);
+});
+
 test('el baseline de migraciones: build deja el mecanismo y develop/production aplican las migraciones', () => {
   const files = byPath(planFixture(NEST_READY_DESIGN.name).files);
   for (const file of ['src/infrastructure/persistence/schema-baseline.ts', 'infra/export-schema.sh', 'infra/verify-baseline.sh', 'src/migrations/README.md']) {
