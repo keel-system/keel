@@ -25,10 +25,18 @@ const PENDING_LAYERS = {
 
 /** Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. */
 const ACCEPTED_NOT_EMITTED = {
-  domain: 'incremento 4 (dominio y aplicación)',
-  'use-cases': 'incremento 4 (dominio y aplicación)',
   api: 'incremento 5 (API REST)'
 };
+
+/**
+ * Lo que una operación de use-cases puede declarar y keel-dotnet aún no genera: el mensaje y el handler sí
+ * salen, el mecanismo no. Se avisa, porque el handler sin él compila y responde como si nada.
+ */
+const PENDING_OPERATION_FEATURES = [
+  { key: 'idempotency', what: 'idempotency (el almacén, la firma del comando y el gate check-idempotency.sh)', increment: 'incremento 10' },
+  { key: 'schedule', what: 'schedule (el reloj que dispara la operación)', increment: 'incremento 10' },
+  { key: 'cache', what: 'cache (la caché de la consulta)', increment: 'incremento 13' }
+];
 
 /**
  * Comprueba el diseño contra la frontera de keel-dotnet. Devuelve { errors, warnings } de strings ya
@@ -54,6 +62,15 @@ export function checkSupportedFeatures(manifest, layers) {
           'el proyecto generado arranca y responde a sus sondas, sin nada de esta capa.'
       );
     }
+  }
+  const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
+  for (const feature of PENDING_OPERATION_FEATURES) {
+    const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
+    if (names.length === 0) continue;
+    warnings.push(
+      `use-cases: ${names.join(', ')} declara${names.length === 1 ? '' : 'n'} ${feature.what}; keel-dotnet genera el mensaje y el handler, ` +
+        `pero no el mecanismo (llega en el ${feature.increment} de PLAN-KEEL-DOTNET.md).`
+    );
   }
   return { errors, warnings };
 }

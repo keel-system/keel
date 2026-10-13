@@ -2,7 +2,7 @@
 // (`CLAUDE.md`, `AGENTS.md`) y la skill `keel-generate-dotnet`, proyectados a cada harness soportado por
 // `keel-core` (HARNESSES). Se emiten todos: el proyecto sirve para cualquiera sin decidir nada al generarlo.
 //
-// Estado (incremento 2 de PLAN-KEEL-DOTNET.md): todavía no hay pipeline de agentes —llega en el
+// Estado (incremento 4 de PLAN-KEEL-DOTNET.md): todavía no hay pipeline de agentes —llega en el
 // incremento 7, con el arnés de integración—, así que la skill dice exactamente eso y lo que sí se puede
 // hacer ya, en vez de prometer una generación que no existe.
 
@@ -47,8 +47,10 @@ dotnet run --project ${sln.api.dir}   # GET /livez y /readyz → {"status":"UP"}
 ## Estado del generador
 
 keel-dotnet se construye por incrementos (PLAN-KEEL-DOTNET.md del repo de Keel). Esta versión genera el
-proyecto que arranca, su configuración y sus sondas; el código del dominio, los casos de uso y la API llega
-en los incrementos 4 y 5, y el pipeline de agentes de \`/${SKILL}\` en el 7.
+proyecto que arranca, su configuración, sus sondas, el contrato del cable, el dominio (value objects con sus
+guardas, agregados con su lifecycle, eventos y errores) y la capa de aplicación (mensajes, handlers que nacen
+fallando con su TODO, DTOs, mappers y el mediator). La API llega en el incremento 5 y el pipeline de agentes de
+\`/${SKILL}\` en el 7.
 `;
 }
 
@@ -73,7 +75,8 @@ al que generan keel-spring y keel-nest del mismo diseño, que es el objetivo.
 Lo que sí puedes hacer ahora, con el cwd en esta raíz:
 
 1. \`dotnet build\` — la solución compila sin warnings.
-2. \`dotnet test\` — el proyecto arranca bajo el perfil \`test\` y sus sondas responden.
+2. \`dotnet test\` — el proyecto arranca bajo el perfil \`test\`, sus sondas responden y cada mensaje del diseño
+   llega a su handler por el contenedor real.
 3. \`dotnet run --project ${sln.api.dir}\` — \`GET /livez\` y \`GET /readyz\` responden \`{"status":"UP"}\`.
 
 Si algo de eso falla en un proyecto recién generado, es un defecto de keel-dotnet: repórtalo con la salida.

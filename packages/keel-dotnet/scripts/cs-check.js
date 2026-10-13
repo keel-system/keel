@@ -9,7 +9,7 @@
 // `compile-check` de keel-spring, y como ellos se lanza antes de dar por bueno cualquier cambio en lo que
 // se emite.
 //
-//   node packages/keel-dotnet/scripts/cs-check.js [--keep] [--sabotage=<id>]
+//   node packages/keel-dotnet/scripts/cs-check.js [--keep] [--sabotage=<id>] [--fixtures]
 //   npm run cs-check --workspace packages/keel-dotnet
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo.
@@ -20,13 +20,18 @@
 //   decimal-exact     el decimal con más de 28 decimales se redondea en silencio en vez de rechazarse
 //   timestamp-format  el instante se escribe sin los ceros finales del milisegundo (.000 → nada)
 //   utf8              vuelve el codificador por defecto, que escapa lo que no es ASCII
+//   wiring            el registro pierde el handler de una consulta
 
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { makeWorkspace, mountDesign, runCommand, DOTNET_READY_DESIGN } from '../test/helpers/workspace.js';
+import { fileURLToPath } from 'node:url';
+import { loadService } from 'keel-core';
+import { makeWorkspace, mountDesign, runCommand, DOTNET_READY_DESIGN, FIXTURES_DIR } from '../test/helpers/workspace.js';
+import { planService } from '../src/scaffold/index.js';
+import { solution } from '../src/scaffold/render.js';
 import { build } from '../src/commands/build.js';
 import { licenseProblems } from '../src/lib/dotnet-stack.js';
 
@@ -46,8 +51,43 @@ const SABOTAGES = {
   // warnings como errores el sabotaje no compilaría, que no falsa nada.
   'decimal-exact': [`${WIRE_DIR}/WireConverters.cs`, 'if (value.Scale != scale)', 'if (value.Scale != scale && scale < 0)'],
   'timestamp-format': [`${WIRE_DIR}/WireConverters.cs`, `"yyyy-MM-dd'T'HH:mm:ss.fff'Z'"`, `"yyyy-MM-dd'T'HH:mm:ss.FFF'Z'"`],
-  utf8: [`${WIRE_DIR}/WireJson.cs`, 'options.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;', 'options.Encoder = JavaScriptEncoder.Default;']
+  utf8: [`${WIRE_DIR}/WireJson.cs`, 'options.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;', 'options.Encoder = JavaScriptEncoder.Default;'],
+  // Nada depende del handler de una consulta, así que el contenedor arranca igual: solo la fila de esa
+  // operación en UseCasesTests puede notarlo.
+  wiring: [
+    'src/ProductCatalog.Infrastructure/UseCase/UseCaseRegistration.cs',
+    'services.AddScoped<IQueryHandler<GetProductQuery, GetProductResponseDto>, GetProductQueryHandler>();',
+    '// (sabotaje) sin el handler de GetProductQuery'
+  ]
 };
+
+// Las sondas que EJECUTAN lo emitido para todas las fixtures (scripts/probes/): C# de verdad, no plantillas.
+const PROBES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'probes');
+
+// Variantes derivadas en memoria de una fixture real, para lo que ninguna declara. Cada una cambia el
+// nombre del servicio, que es el namespace raíz: dos variantes de la misma fixture no pueden chocar.
+const DERIVED = [
+  {
+    name: 'inspection-reports-reject',
+    from: 'inspection-reports',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+      layers.domain.types.GeoPoint.fields.latitude.constraints.scalePolicy = 'reject';
+    }
+  },
+  {
+    // El decimal ESCALAR de una entrada con `scalePolicy: round` se redondea en el propio mensaje
+    // (`init => field = ...`, C# 14). Ninguna fixture lo declara: las dos ramas, la obligatoria y la opcional.
+    name: 'payment-checkout-round',
+    from: 'payment-checkout',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+      for (const operation of ['requestCharge', 'refundPayment']) {
+        layers['use-cases'].operations[operation].input.fields.amount.constraints.scalePolicy = 'round';
+      }
+    }
+  }
+];
 const isWindows = process.platform === 'win32';
 const results = [];
 
@@ -123,6 +163,18 @@ function resolvedPackages(projectDir) {
 const sdk = dotnet(process.cwd(), ['--version']);
 if (!step('SDK de .NET disponible', sdk.ok && /^10\./.test(sdk.output.trim()), sdk.ok ? sdk.output.trim() : 'instala el SDK 10: winget install Microsoft.DotNet.SDK.10')) {
   process.exit(1);
+}
+
+// --fixtures: solo la compilación del dominio y la aplicación de todas las fixtures (la más lenta de
+// iterar), sin generar ni arrancar el proyecto de referencia.
+if (process.argv.includes('--fixtures')) {
+  const root = compileAllFixtures();
+  if (keep) {
+    const kept = fs.mkdtempSync(path.join(path.dirname(root), 'keel-dotnet-kept-'));
+    fs.cpSync(root, kept, { recursive: true });
+    console.log(`Fixtures conservadas en ${kept}`);
+  }
+  process.exit(results.every((result) => result.ok) ? 0 : 1);
 }
 
 const workspace = makeWorkspace('keel-dotnet-cs-check-');
@@ -203,6 +255,61 @@ if (results.every((result) => result.ok)) {
   if (!end) app.kill('SIGKILL');
   if (results.some((result) => !result.ok)) console.error(appOutput);
 }
+
+// ─── La solución ENTERA de todas las fixtures ────────────────────────────────────────────────────
+// La frontera de keel-dotnet todavía rechaza casi todas las fixtures (persistencia, mensajería…), pero lo que
+// ya se emite para ellas —dominio, aplicación, mediator y sus pruebas— tiene que compilar y pasar: es donde se
+// cuelan los nombres que no son identificadores, los tipos que no existen, los usings que faltan y la
+// dependencia sin registrar en el contenedor. Van todas en UNA solución, que MSBuild compila en paralelo, en
+// vez de quince compilaciones sueltas, junto a las sondas que ejecutan el dominio (scripts/probes).
+function compileAllFixtures() {
+  const root = makeWorkspace('keel-dotnet-fixtures-');
+  const projects = [];
+  const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
+  const designs = [...fixtures.map((name) => ({ name, from: name })), ...DERIVED];
+  for (const { name, from, mutate } of designs) {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
+    if (mutate) mutate(manifest, layers, name);
+    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR });
+    for (const file of files) {
+      const target = path.join(root, name, file.path);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, file.content);
+      // El SDK se fija desde la raíz de la solución común: el global.json de cualquier fixture vale (es el mismo).
+      if (file.path === 'global.json') fs.writeFileSync(path.join(root, 'global.json'), file.content);
+      if (file.path.endsWith('.csproj')) projects.push(`${name}/${file.path}`);
+    }
+  }
+  fs.cpSync(path.join(PROBES_DIR, 'DomainProbes'), path.join(root, 'DomainProbes'), { recursive: true });
+  // Las sondas encuentran los props comunes subiendo desde su carpeta: les vale los de cualquier fixture.
+  for (const shared of ['Directory.Build.props', 'Directory.Packages.props']) fs.copyFileSync(path.join(root, fixtures[0], shared), path.join(root, shared));
+  const lines = [...projects, 'DomainProbes/DomainProbes.csproj'].map((p) => `  <Project Path="${p}" />`);
+  fs.writeFileSync(path.join(root, 'Fixtures.slnx'), ['<Solution>', ...lines, '</Solution>', ''].join('\n'));
+  const built = dotnet(root, ['build', 'Fixtures.slnx', '-c', 'Release']);
+  // Que la solución compile no basta: tiene que haber salido un ensamblado por proyecto declarado.
+  const assemblies = projects.filter((project) => {
+    const dir = path.dirname(path.join(root, project));
+    return fs.existsSync(path.join(dir, 'bin', 'Release', 'net10.0', `${path.basename(project, '.csproj')}.dll`));
+  });
+  const detail = `${assemblies.length}/${projects.length} ensamblados`;
+  const title = `la solución de las ${fixtures.length} fixtures y ${DERIVED.length} variante(s) compila sin warnings`;
+  if (!step(title, built.ok && assemblies.length === projects.length, detail)) {
+    const problems = new Set(built.output.split('\n').filter((line) => /(error|warning) [A-Z]+\d+/.test(line)));
+    console.error([...problems].slice(0, 60).join('\n'));
+    return root;
+  }
+  // Las pruebas emitidas de cada fixture (configuración, sondas, cable, cableado de los casos de uso) y las sondas
+  // del dominio, en una sola ejecución.
+  const tested = dotnet(root, ['test', '--solution', 'Fixtures.slnx', '--no-build', '-c', 'Release']);
+  const totals = [...tested.output.matchAll(/total: (\d+)/g)].map((match) => Number(match[1]));
+  const total = totals.length > 0 ? Math.max(...totals) : null;
+  if (!step('las pruebas emitidas de todas las fixtures y las sondas del dominio pasan', tested.ok, total ? `${total} pruebas` : '')) {
+    console.error(tested.output.split('\n').filter((line) => /con errores|failed|error/i.test(line)).slice(0, 80).join('\n'));
+  }
+  return root;
+}
+
+compileAllFixtures();
 
 const failed = results.filter((result) => !result.ok).length;
 if (keep) {

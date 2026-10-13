@@ -36,6 +36,15 @@ const BASE_CS_TYPES = {
 
 const PARAM_CS_TYPES = { string: 'string', int: 'int', long: 'long', decimal: 'decimal', boolean: 'bool' };
 
+/**
+ * El miembro C# de un valor de enum del diseño: `in-review` → `InReview`. Lo que viaja es el valor, que
+ * el enum declara con [JsonStringEnumMemberName]; el miembro solo tiene que ser un identificador válido.
+ */
+export function enumMember(literal) {
+  const member = pascalCase(String(literal));
+  return /^[A-Za-z_]/.test(member) ? member : `V${member}`;
+}
+
 /** Cómo se crea un uuid que genera el servidor: versión 7 (ordenado por tiempo), como los otros dos. */
 export const UUID_V7_CALL = 'Guid.CreateVersion7()';
 
@@ -54,7 +63,7 @@ function typeProps(csType, usings, list) {
 /** Un literal C# del default declarado, o la expresión que genera el valor; null si no hay ninguno. */
 function initializer(field, cs) {
   if (field.default !== undefined) {
-    if (cs.kind === 'enum' || field.type === 'enum') return `${cs.csType}.${pascalCase(String(field.default))}`;
+    if (cs.kind === 'enum' || field.type === 'enum') return `${cs.csType}.${enumMember(field.default)}`;
     if (cs.csType === 'string') return JSON.stringify(String(field.default));
     // El sufijo `m` conserva la escala escrita: `2.50m` es 2.50, no 2.5.
     if (cs.csType === 'decimal') return `${field.default}m`;

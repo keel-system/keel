@@ -63,3 +63,21 @@ export async function runCommand(workspace, command, ...args) {
     Object.assign(console, saved);
   }
 }
+
+/** Las fixtures compartidas (las que tienen manifiesto). */
+export function fixtureNames() {
+  return fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
+}
+
+/**
+ * El plan (modelo + árbol en memoria) de una fixture ENTERA, sin pasar por la frontera: el dominio y la
+ * aplicación se emiten para cualquier diseño aunque `build` todavía rechace alguna de sus capas.
+ * `mutate(manifest, layers)` deriva una variante en memoria.
+ */
+export async function planFixture(name, { mutate = null } = {}) {
+  const { loadService } = await import('keel-core');
+  const { planService } = await import('../../src/scaffold/index.js');
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+  if (mutate) mutate(manifest, layers);
+  return planService({ manifest, layers, workspace: FIXTURES_DIR });
+}

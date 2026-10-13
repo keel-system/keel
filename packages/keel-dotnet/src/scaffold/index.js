@@ -16,13 +16,23 @@ import * as project from './project.js';
 import * as config from './config.js';
 import * as health from './health.js';
 import * as wire from './wire.js';
+import * as enums from './enums.js';
+import * as exceptions from './exceptions.js';
+import * as valueTypes from './value-types.js';
+import * as entities from './entities.js';
+import * as events from './events.js';
+import * as dtos from './dtos.js';
+import * as mappers from './mappers.js';
+import * as services from './services.js';
+import * as mediator from './mediator.js';
+import * as domainGuardsCheck from './domain-guards-check.js';
 import * as api from './api.js';
 import * as tests from './tests.js';
 import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara.
-const GENERATORS = [project, config, health, wire, api, tests, readme, generatorDocs];
+const GENERATORS = [project, config, health, wire, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, dtos, mappers, services, mediator, api, tests, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus

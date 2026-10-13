@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Las sondas del dominio emitido. cs-check las copia junto a las fixtures generadas: las rutas son
+       las de esa carpeta, no las del repo. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\product-catalog\src\ProductCatalog.Application\ProductCatalog.Application.csproj" />
+    <ProjectReference Include="..\catalog-extended\src\Catalog.Domain\Catalog.Domain.csproj" />
+    <ProjectReference Include="..\inspection-reports\src\InspectionReports.Domain\InspectionReports.Domain.csproj" />
+    <ProjectReference Include="..\inspection-reports-reject\src\InspectionReportsReject.Domain\InspectionReportsReject.Domain.csproj" />
+    <ProjectReference Include="..\stock-reservation\src\StockReservation.Application\StockReservation.Application.csproj" />
+    <ProjectReference Include="..\payment-checkout-round\src\PaymentCheckoutRound.Application\PaymentCheckoutRound.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+</Project>

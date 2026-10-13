@@ -373,6 +373,96 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
   - **Para el inc. 4-5**: la red de `PropertyNamingPolicy` en camelCase solo cubre lo que no se nombra.
     Los DTO llevarán `[JsonPropertyName]` con el nombre del diseño, porque la política convierte mal
     los acrónimos.
+- **Inc. 4 — hecho (2026-10-13)**, en dos tramos. La red sin SDK (`cs-syntax` con tree-sitter) queda
+  para después (ver «Pendiente»).
+  - **4a, el dominio.**
+    - **Lo neutral, primero**: el script del gate del formato (`infra/check-domain-guards.sh`) pasa a
+      `keel-core/gen/domain-guards.js` (`domainGuardsScript`). Lo que cambia de un lenguaje a otro va
+      como parámetro: archivo de la clase, extensión, línea de import y nombre del método. keel-nest
+      sale idéntico (41 / 10 050). keel-spring conserva el suyo con motivo escrito: busca la clase por
+      nombre con `find`, y unificarlo movería su línea base sin cambiar lo que mide.
+    - **Los emisores**: `enums`, `exceptions`, `value-types`, `entities`, `events` y
+      `domain-guards-check`, sobre un `render.js` que es el único mapa de tipo → namespace y archivo.
+    - **Lo que en C# toma otra forma**:
+      - **Enums**: el miembro es el valor del diseño en PascalCase y lleva
+        `[JsonStringEnumMemberName]`. Las constantes de Java del modelo (`DRAFT`) se traducen por su
+        valor.
+      - **Value objects**: clases selladas con `IEquatable`. La igualdad (`ValueEquality`) compara
+        la escala del decimal, como `BigDecimal.equals`.
+      - **`Decimals.SetScale`**: `decimal.Round` no sube la escala (2.5 a dos decimales sigue
+        siendo 2.5). `SetScale` la sube sumando un cero con la escala pedida.
+      - **Expresiones regulares**: van ancladas con `\z`, porque el `$` de .NET casa también antes
+        de un salto de línea final.
+      - **Entidades**: el estado de rehidratación es una clase con propiedades `required`. El
+        compilador exige que esté completo, sin argumentos posicionales que se desordenen.
+      - **`Raise`**: una sobrecarga por evento del diseño, así que el agregado solo acumula los
+        suyos.
+      - **UUIDv7**: es `Guid.CreateVersion7()` del BCL, así que no hace falta la clase `Uuids`.
+  - **4b, la aplicación.**
+    - **Los emisores**: `services` (mensajes y handlers), `dtos`, `mappers` y `mediator`.
+    - **Contratos**: C# conserva los genéricos al compilar, así que no hace falta el `@Handles` de
+      keel-nest. Cada handler implementa `IQueryHandler<TQuery, TResult>` (o sus hermanos) y
+      `UseCaseRegistration` lo registra en el contenedor: es generado y explícito.
+    - **El mediator**: es propio, sin MediatR. Cierra los genéricos con un envoltorio por tipo de
+      mensaje y lleva el log de frontera con `[LoggerMessage]`.
+    - **El dispatcher**: `ICommandDispatcher` se emite solo si el diseño lo pide (`dispatches`,
+      operaciones internas huérfanas, pagos).
+    - **Los mensajes** son clases (no records: el `ToString` de un record imprime los datos de quien
+      llama) con propiedades `required`.
+      - Un opcional de PATCH es `Optional<T>`: tres estados, como el `JsonNullable` de keel-spring.
+      - `scalePolicy: round` en un decimal escalar se redondea en el propio mensaje
+        (`init => field = …`, C# 14).
+    - **Los DTOs** son records con `[JsonPropertyName]` en el orden del diseño.
+    - **Los mappers** asignan campo a campo. Lo que no sale tal cual de la entidad es un
+      `Todo.Value<T>(...)`, que compila y falla nombrando el campo: el tipo no casa, o la entidad
+      admite null y el DTO no.
+    - **La frontera**: dominio y casos de uso ya no avisan. Avisa de `idempotency` y `schedule`
+      (inc. 10) y de `cache` (inc. 13) por operación, como keel-nest en su incremento 4.
+  - **Dos defectos que destapó compilar TODAS las fixtures, no solo la de referencia:**
+    - Una entidad que se llama como un segmento del namespace raíz (`Application` en
+      notification-mailer) resolvía al namespace `NotificationMailer.Application` y no compilaba.
+      Los `using` van ahora **dentro** del namespace, en todos los archivos (`csFile`), y así se
+      consultan antes que los namespaces exteriores.
+    - `Decimals` solo se emitía con value objects. Un diseño sin ellos que redondea un decimal de
+      entrada no compilaba. Lo destapó la variante derivada `payment-checkout-round`: ninguna fixture
+      ejercía esa rama.
+  - **Una corrección del inc. 3**: `csString` escapaba los acentos (`más`). El fuente se
+    escribe en UTF-8 y los comentarios ya los llevaban tal cual, así que aquella precaución no
+    protegía nada y sí estorbaba la lectura. Ahora solo escapa los caracteres de control.
+  - **Medido**:
+    - `npm test` 152/152, que incluye:
+      - paridad de errores (clase, `code`, status) con lo que EMITEN keel-spring y keel-nest, en
+        las 15 fixtures;
+      - las mismas filas del gate del formato que los otros dos, y el gate EJECUTADO con bash (rojo
+        recién generado, rojo con la llamada en un comentario, verde con una real, y avisa si falta
+        la clase);
+      - mensajes con la misma clase, y DTOs con las mismas claves en el mismo orden que keel-nest;
+      - el registro y la fila de cableado de cada operación.
+    - keel-core 1 206/1 206 y keel-nest 798/798.
+    - **`cs-check` 12/12**. Gana un paso que compila, en UNA solución, todo lo que se emite para las
+      15 fixtures y dos variantes derivadas (85 ensamblados, sin un warning). Después ejecuta sus
+      pruebas emitidas y las sondas del dominio: 1 072 pruebas.
+      - Entre ellas, `UseCasesTests` de cada fixture: el contenedor se construye entero
+        (`ValidateOnBuild`), cada mensaje llega a su handler, y el mediator despacha las tres clases
+        de mensaje y deja pasar el rechazo del dominio.
+      - Las sondas (`scripts/probes/DomainProbes`) son C# de verdad, no plantillas. Calcan los casos
+        de `keel-nest/test/domain.test.js`: escala normalizada, rechazos con 400 `VALIDATION_ERROR`,
+        `scalePolicy: reject` y `round`, el `\z`, la transición negada con 409, colecciones de solo
+        lectura y el orden del cable de la metadata.
+      - `--fixtures` corre solo ese paso.
+  - **Falsado**:
+    - **Sin la subida de escala de `SetScale`**: caen las dos sondas de escala.
+    - **Con la guarda del lifecycle rota**: cae la sonda de la transición.
+    - **Con otro status en la transición**: caen 13 pruebas de paridad.
+    - **Con el orden de los DTOs invertido**: caen las 15 de paridad del cable.
+    - **`cs-check --sabotage=wiring`** (sin el registro de un handler): cae exactamente la fila de
+      `GetProductQuery` (1 de 61).
+  - **Pendiente**:
+    - **4c, `cs-syntax`**: la red sin SDK con `web-tree-sitter` + `tree-sitter-c-sharp`. Añade dos
+      dependencias de desarrollo, y la duda del §5 (si el parser entiende C# 14: `field`,
+      constructores primarios) sigue abierta.
+    - **Las notas de los handlers que cuelgan de otras capas** (persistencia, idempotencia, correo,
+      caché, embeds, subidas, alcance) llegan con su incremento, igual que en keel-nest.
 
 ## 5. Riesgos conocidos
 

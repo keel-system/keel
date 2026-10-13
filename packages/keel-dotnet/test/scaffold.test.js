@@ -155,8 +155,8 @@ test('el contrato del cable: la prueba emitida lleva TODOS los casos de keel-cor
   const rows = [...tests.matchAll(/^\s*\[InlineData\("([^"]+)", "[^"]*", "/gm)].map(([, id]) => id);
   const expected = [...WIRE_OUTPUT_CASES, ...WIRE_INPUT_CASES, ...WIRE_REJECTED_INPUTS].map((entry) => entry.id);
   assert.deepEqual(rows, expected);
-  // El texto no ASCII viaja escapado en el fuente: el caso de UTF-8 dice lo mismo con cualquier codificación.
-  assert.ok(tests.includes(String.raw`"\u00D1and\u00FA \"x\""`), 'el caso UTF-8 no va escapado a ASCII');
+  // El texto no ASCII se queda legible en el fuente; solo se escapan la comilla y los caracteres de control.
+  assert.ok(tests.includes('"Ñandú \\"x\\""'), 'el caso UTF-8 no está tal cual en el fuente');
   assert.match(tests, /\[JsonStringEnumMemberName\("in-review"\)\]\s+InReview,/);
 });
 

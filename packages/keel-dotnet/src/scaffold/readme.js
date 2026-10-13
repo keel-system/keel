@@ -50,11 +50,11 @@ dotnet test                       # xUnit v3 sobre Microsoft.Testing.Platform, b
 
 | Proyecto | Qué contiene | Ve a |
 |---|---|---|
-| \`${sln.domain.name}\` | el dominio, en C# puro | nadie |
-| \`${sln.application.name}\` | los casos de uso | Domain |
-| \`${sln.infrastructure.name}\` | configuración, persistencia, mensajería, sondas | Application |
+| \`${sln.domain.name}\` | el dominio, en C# puro: value objects, agregados, eventos, errores | nadie |
+| \`${sln.application.name}\` | los casos de uso: mensajes, handlers, DTOs, mappers, contrato del cable | Domain |
+| \`${sln.infrastructure.name}\` | configuración, mediator, persistencia, mensajería, sondas | Application |
 | \`${sln.api.name}\` | el arranque y la API HTTP | Infrastructure |
-| \`${sln.unitTests.name}\` | las pruebas del arranque | Api |
+| \`${sln.unitTests.name}\` | las pruebas del arranque, del cable y del cableado de los casos de uso | Api |
 
 La frontera hexagonal la impone el compilador: un proyecto solo ve a los que referencia.
 `
