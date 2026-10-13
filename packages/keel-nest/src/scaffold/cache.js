@@ -33,6 +33,7 @@ import { PAGED_RESPONSE_TS } from './dtos.js';
 import { usesPersistence } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
+import { envValue } from 'keel-core/gen/profile-values';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const WIRE_TS = 'src/application/support/wire.ts';
@@ -255,12 +256,6 @@ function cacheYaml(profile) {
     '    command-timeout-ms: 2000'
   );
   return `${lines.join('\n')}\n`;
-}
-
-function envValue(profile, name, value) {
-  if (profile === 'local' || profile === 'test') return String(value);
-  if (profile === 'develop') return `\${${name}:${value}}`;
-  return `\${${name}}`;
 }
 
 // ─── infrastructure/cache/cached-responses.ts ────────────────────────────────

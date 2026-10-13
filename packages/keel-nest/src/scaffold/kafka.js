@@ -23,6 +23,7 @@ import { kafkaListenerRetry, missingTargetRetryDestinations, subscriptionDestina
 import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { KAFKA_CONNECTION_TS, KAFKA_CONSUMPTION_TS, MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, usesKafka } from './messaging.js';
+import { envValue } from 'keel-core/gen/profile-values';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -514,14 +515,6 @@ function kafkaLogger(logger: Logger): KafkaJS.Logger {
 }
 
 // ─── La configuración ────────────────────────────────────────────────────────
-
-// El gradiente de keel-spring: literal en local y test, `${VAR:default}` en develop y `${VAR}` sin default
-// en production (un broker que nadie eligió no deja arrancar).
-function envValue(profile, name, value) {
-  if (profile === 'local' || profile === 'test') return String(value);
-  if (profile === 'develop') return `\${${name}:${value}}`;
-  return `\${${name}}`;
-}
 
 function envWithDefault(profile, name, value) {
   return profile === 'local' || profile === 'test' ? String(value) : `\${${name}:${value}}`;

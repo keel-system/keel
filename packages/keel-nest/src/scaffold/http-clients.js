@@ -21,6 +21,7 @@ import { CORRELATION_TS, usesApi, usesCorrelation } from './rest-support.js';
 import { VALUE_READERS_TS, valueReaders } from './controllers.js';
 import { usesSubscriptionMessages } from './messaging.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
+import { envValue } from 'keel-core/gen/profile-values';
 
 const CLIENTS_DIR = 'infrastructure/clients';
 export const PROVIDER_FAILURES_TS = `src/${CLIENTS_DIR}/provider-failures.ts`;
@@ -645,14 +646,6 @@ ${todoThrow}`;
 }
 
 // ─── Configuración ───────────────────────────────────────────────────────────
-
-// El gradiente de keel-spring: literal en local y test; `${VAR:default}` en develop y `${VAR}` en production
-// para los secretos; y la URL, OBLIGATORIA fuera de local (el DSL no declara URLs: son infraestructura).
-function envValue(profile, name, value) {
-  if (profile === 'local' || profile === 'test') return String(value);
-  if (profile === 'develop') return `\${${name}:${value}}`;
-  return `\${${name}}`;
-}
 
 /** El mismo `http-clients.yaml` que keel-spring, sin el bloque de resilience4j (aquí va en código). */
 export function httpClientsYaml(model, profile) {

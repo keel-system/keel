@@ -50,6 +50,7 @@ import {
   TRANSACTION_CONTEXT_TS,
   PERSISTENCE_ERRORS_TS
 } from './repositories.js';
+import { envValue, envWithDefault } from 'keel-core/gen/profile-values';
 
 export const DATA_SOURCE_OPTIONS_TS = 'src/infrastructure/persistence/data-source-options.ts';
 export const PERSISTENCE_MODULE_TS = 'src/infrastructure/persistence/persistence-module.ts';
@@ -76,19 +77,6 @@ export function generate(model) {
 }
 
 // ─── Configuración ───────────────────────────────────────────────────────────
-
-// El gradiente de keel-spring: literal en local (y test), `${VAR:default}` en develop y `${VAR}` sin
-// default en production, donde un valor que nadie eligió no deja arrancar.
-function envValue(profile, name, local) {
-  if (profile === 'local' || profile === 'test') return String(local);
-  if (profile === 'develop') return `\${${name}:${local}}`;
-  return `\${${name}}`;
-}
-
-// Valores operativos (no secretos): con default en todos los perfiles.
-function envWithDefault(profile, name, local) {
-  return profile === 'local' ? String(local) : `\${${name}:${local}}`;
-}
 
 /** La URL de conexión de local: la JDBC que escribe keel-spring para el mismo motor. */
 export function localDatabaseUrl(engine, dbName) {

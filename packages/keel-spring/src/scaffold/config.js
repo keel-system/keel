@@ -29,6 +29,7 @@ import { sweepClaims, sweepConfig } from 'keel-core/gen';
 import { collectionBatchSize } from './persistence-entities.js';
 import { PAYMENT_TEST_SECRETS } from 'keel-core/gen/payment-gateways';
 import { PAYMENT_SWEEP_PARAMETERS } from 'keel-core/gen/payments-model';
+import { envValue, envWithDefault, cronWithDefault, envRequired } from 'keel-core/gen/profile-values';
 
 const PROFILES = ['local', 'develop', 'production'];
 
@@ -53,34 +54,6 @@ export const LOCAL_STUB_BASE_URL = `http://localhost:${HTTP_STUB.publishedPort}`
 // (Create React App / Next.js y Vite), para probar un front sin editar YAML.
 export const LOCAL_CORS_ORIGINS = 'http://localhost:3000,http://localhost:5173';
 
-// Gradiente de externalización: literal en local, env var con default en
-// develop y env var obligatoria (sin default) en production. `test` es literal
-// como local: es un perfil cerrado (H2, sin infra externa) que debe arrancar sin
-// que nadie exporte nada.
-function envValue(profile, varName, localValue) {
-  if (profile === 'local' || profile === 'test') return String(localValue);
-  if (profile === 'develop') return `\${${varName}:${localValue}}`;
-  return `\${${varName}}`;
-}
-
-// Variante para valores operativos que no son secretos ni endpoints (niveles de
-// log, group-id): parametrizados en todos los ambientes, pero siempre con
-// default, porque su ausencia no debe impedir el arranque.
-function envWithDefault(profile, varName, localValue) {
-  if (profile === 'local') return String(localValue);
-  return `\${${varName}:${localValue}}`;
-}
-
-// Variante para expresiones cron. No basta con envWithDefault: la expresión hay
-// que entrecomillarla en YAML (empieza por dígito y lleva '*'), y si las comillas
-// van DENTRO del default del placeholder pasan a formar parte del valor —
-// `${VAR:"0 0 4 * * *"}` resuelve a `"0 0 4 * * *"` con las comillas incluidas y
-// Spring rechaza el @Scheduled al arrancar ("invalid cron expression"). Así que
-// se entrecomilla el escalar entero y el default va desnudo.
-function cronWithDefault(profile, varName, cron) {
-  return profile === 'local' ? `"${cron}"` : `"\${${varName}:${cron}}"`;
-}
-
 // La línea YAML de un parámetro del catálogo neutral (keel-core/gen/messaging-stores.js): la hoja
 // de su clave con el gradiente de su variable y el valor de ESTE perfil. La sangría sale de la
 // profundidad de la clave, así que la línea cae bajo su padre sin escribirla a mano.
@@ -91,14 +64,6 @@ function parameterLine(profile, parameter) {
     ? cronWithDefault(profile, parameter.env, value)
     : envWithDefault(profile, parameter.env, value);
   return `${'  '.repeat(segments.length - 1)}${segments.at(-1)}: ${rendered}`;
-}
-
-// Variante para valores que NO tienen un default razonable fuera de local (el
-// diseño no los declara): literal en local y env var obligatoria en el resto,
-// para fallar al arrancar en vez de apuntar en silencio a un destino erróneo.
-function envRequired(profile, varName, localValue) {
-  if (profile === 'local') return String(localValue);
-  return `\${${varName}}`;
 }
 
 export function generate(model) {

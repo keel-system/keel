@@ -24,6 +24,7 @@ import { classPath, DIRS, tsModule, tsString } from './render.js';
 import { usesApi, ERROR_RESPONSE_TS } from './rest-support.js';
 import { credentialFinderName, portClass, portPath } from './repositories.js';
 import { entityDir } from './render.js';
+import { envValue } from 'keel-core/gen/profile-values';
 
 const DIR = 'src/infrastructure/security';
 export const SECURITY_CONTEXT_TS = `${DIR}/security-context.ts`;
@@ -958,14 +959,6 @@ export class SecurityModule {}`
 }
 
 // ─── Configuración: config/parameters/<perfil>/security.yaml ────────────────
-
-// El gradiente de keel-spring, con sus mismas variables de entorno: literal en local, `${VAR:default}`
-// en develop y `${VAR}` sin default en production.
-function envValue(profile, name, local) {
-  if (profile === 'local' || profile === 'test') return String(local);
-  if (profile === 'develop') return `\${${name}:${local}}`;
-  return `\${${name}}`;
-}
 
 function envRequired(profile, name, local) {
   if (profile === 'local' || profile === 'test') return String(local);

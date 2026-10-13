@@ -25,6 +25,7 @@ import { DECIMAL_TS, RAW_JSON_TS } from './wire.js';
 import { messageComponents, messagePath } from './services.js';
 import * as stripe from './payment-gateways/stripe.js';
 import * as mercadopago from './payment-gateways/mercadopago.js';
+import { envValue, envWithDefault } from 'keel-core/gen/profile-values';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const DOMAIN_DIR = 'domain/payment';
@@ -989,15 +990,4 @@ export function paymentsYaml(model, profile) {
     `    batch-size: ${envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.batchSize.env, PAYMENT_SWEEP_PARAMETERS.batchSize.default)}`
   ];
   return `${lines.join('\n')}\n`;
-}
-
-function envValue(profile, name, value) {
-  if (profile === 'local' || profile === 'test') return String(value);
-  if (profile === 'develop') return `\${${name}:${value}}`;
-  return `\${${name}}`;
-}
-
-function envWithDefault(profile, name, value) {
-  if (profile === 'local') return String(value);
-  return `\${${name}:${value}}`;
 }

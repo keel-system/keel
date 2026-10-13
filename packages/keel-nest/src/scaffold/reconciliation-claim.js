@@ -23,6 +23,7 @@ import { ORM_DIR, engineOf, ormClass, usesPersistence, usesDocument, usesRelatio
 import { documentReconciliationStore } from './document-stores.js';
 import { storeEntity } from './messaging-stores.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
+import { envWithDefault } from 'keel-core/gen/profile-values';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const RECONCILIATION_DIR = 'src/infrastructure/persistence/reconciliation';
@@ -87,8 +88,6 @@ const CLAIM_DOC = `Marca de que una réplica se llevó un candidato del barrido 
  * réplica que la escribió.`;
 
 // ─── Configuración ───────────────────────────────────────────────────────────
-
-const envWithDefault = (profile, name, value) => (profile === 'local' ? String(value) : `\${${name}:${value}}`);
 
 /** El mismo `reconciliation.yaml` que keel-spring, con las claves de keel-core. */
 function reconciliationYaml(model, profile) {

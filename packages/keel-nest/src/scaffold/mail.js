@@ -18,6 +18,7 @@
 
 import { DIRS, classPath, tsModule } from './render.js';
 import { TELEMETRY_TS, instrumentationFor } from './telemetry.js';
+import { envWithDefault } from 'keel-core/gen/profile-values';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const MAIL_DIR = 'domain/mail';
@@ -687,11 +688,6 @@ function envValue(profile, name, value) {
   if (profile === 'local' || profile === 'test') return value === '' ? "''" : String(value);
   if (profile === 'develop') return `\${${name}:${value}}`;
   return `\${${name}}`;
-}
-
-function envWithDefault(profile, name, value) {
-  if (profile === 'local') return String(value);
-  return `\${${name}:${value}}`;
 }
 
 /** Para quien compone los avisos: los nombres de los puertos que el handler recibe inyectados. */

@@ -21,6 +21,7 @@ import { screamingSnake } from 'keel-core/gen';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { FILE_UPLOAD_TS } from './dtos.js';
 import { TELEMETRY_TS, instrumentationFor } from './telemetry.js';
+import { envValue, envWithDefault } from 'keel-core/gen/profile-values';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const STORAGE_DIR = 'domain/storage';
@@ -563,17 +564,6 @@ function storageYaml(model, profile) {
     }
   }
   return `${lines.join('\n')}\n`;
-}
-
-function envValue(profile, name, value) {
-  if (profile === 'local' || profile === 'test') return String(value);
-  if (profile === 'develop') return `\${${name}:${value}}`;
-  return `\${${name}}`;
-}
-
-function envWithDefault(profile, name, value) {
-  if (profile === 'local') return String(value);
-  return `\${${name}:${value}}`;
 }
 
 // ─── infrastructure/rest/multipart-reading.ts ────────────────────────────────
