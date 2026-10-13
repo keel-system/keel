@@ -335,6 +335,44 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     - En una plantilla de JS, incluso con `String.raw`, un `${` literal del C# se evalúa.
     - Los heredocs de la terminal se comen las barras dobles: los archivos se escriben con el
       editor.
+- **Inc. 3 — hecho (2026-10-13).** El contrato del cable (`src/scaffold/wire.js`).
+  - **Dónde vive**: en el proyecto Application (`Support/`), porque System.Text.Json es de la
+    biblioteca base y no arrastra ASP.NET Core. `WireJson.Configure` lo aplica a cualquier
+    `JsonSerializerOptions`, y `Program.cs` lo instala con `ConfigureHttpJsonOptions`: un solo punto
+    de lectura y escritura, como Fastify en keel-nest. `WireJson.Options` es la copia de solo lectura
+    para quien serializa fuera de la API.
+  - **Lo que .NET ya hacía bien** y solo se fija por escrito: la escala del `decimal`, sin notación
+    exponencial; el `long` entero; el `Guid` en minúsculas; ignorar lo desconocido.
+  - **Lo que necesitaba conversor o ajuste:**
+    - `DateTimeOffset` salía con `+00:00` y siete decimales. Ahora sale en UTC, con `Z` y tres
+      decimales truncados, y se lee solo con zona.
+    - `JsonElement` no se leía desde una cadena.
+    - El codificador por defecto escapaba lo no ASCII y la comilla (`"`); ahora va
+      `UnsafeRelaxedJsonEscaping`.
+    - El enum va por `[JsonStringEnumMemberName]` (.NET 9+), con `allowIntegerValues: false`.
+    - Omitir nulos es por tipo, con `[OmitNulls]` y un modificador del contrato.
+    - Las opciones de ASP.NET Core parten de las de la web, que comparan nombres sin mayúsculas. Se
+      fija la comparación exacta, como Jackson y keel-nest.
+  - **Una divergencia medida y cerrada**: el `decimal` de .NET tiene 28-29 dígitos. Por encima del
+    máximo lanza (400), pero con más de 28 decimales **redondea en silencio**: `1E-40` se leía 0. El
+    conversor compara la escala leída con la escrita y lo rechaza. Ningún caso de `wire.js` llega ahí,
+    así que va en pruebas propias, no en el contrato neutral. Lo que queda es un límite con motivo:
+    Spring acepta lo que aquí es un 400. Se cierra en el diseño, con las cotas del `decimal`.
+  - **Medido**:
+    - `npm test` 62/62. La prueba emitida lleva los 31 casos de `wire.js`, en su orden y sin uno
+      de más, y el texto no ASCII va escapado en el fuente (`csString`).
+    - `cs-check` 10/10, con 54 pruebas emitidas.
+  - **Falsado** con `cs-check --sabotage=<id>` (nuevo, calcado de `mail-check`). Cada sabotaje
+    tumba las pruebas de su regla y solo esas:
+    - `decimal-scale`: 4 de 54;
+    - `decimal-exact`: 2;
+    - `timestamp-format`: 1, `timestamp-pads`;
+    - `utf8`: 1.
+  - **Pendiente para el inc. 16**: `wire-contract.md` nombra solo a keel-spring y keel-nest. Cambiarlo
+    ahora movería las dos líneas base por una mención a un generador sin publicar.
+  - **Para el inc. 4-5**: la red de `PropertyNamingPolicy` en camelCase solo cubre lo que no se nombra.
+    Los DTO llevarán `[JsonPropertyName]` con el nombre del diseño, porque la política convierte mal
+    los acrónimos.
 
 ## 5. Riesgos conocidos
 

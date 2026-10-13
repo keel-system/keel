@@ -36,7 +36,12 @@ export function csFile({ namespace, usings = [], body, header = null }) {
   return parts.join('\n');
 }
 
-/** Un literal de cadena C# normal (no verbatim): escapa barras, comillas y saltos de línea. */
+/**
+ * Un literal de cadena C# normal (no verbatim): escapa barras, comillas y saltos de línea, y escribe lo que
+ * no es ASCII imprimible como `\uXXXX`, para que el fuente diga lo mismo con cualquier codificación.
+ */
 export function csString(value) {
-  return `"${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', '\\n').replaceAll('\r', '\\r')}"`;
+  const escaped = String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', '\\n').replaceAll('\r', '\\r');
+  const ascii = escaped.replace(/[^\x20-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
+  return `"${ascii}"`;
 }

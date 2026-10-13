@@ -15,13 +15,14 @@ import { CS_PROJECTION } from '../lib/cs-projection.js';
 import * as project from './project.js';
 import * as config from './config.js';
 import * as health from './health.js';
+import * as wire from './wire.js';
 import * as api from './api.js';
 import * as tests from './tests.js';
 import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara.
-const GENERATORS = [project, config, health, api, tests, readme, generatorDocs];
+const GENERATORS = [project, config, health, wire, api, tests, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus

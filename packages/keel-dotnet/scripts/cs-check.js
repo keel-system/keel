@@ -9,10 +9,17 @@
 // `compile-check` de keel-spring, y como ellos se lanza antes de dar por bueno cualquier cambio en lo que
 // se emite.
 //
-//   node packages/keel-dotnet/scripts/cs-check.js [--keep]
+//   node packages/keel-dotnet/scripts/cs-check.js [--keep] [--sabotage=<id>]
 //   npm run cs-check --workspace packages/keel-dotnet
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo.
+//
+// --sabotage=<id> rompe lo emitido CONSERVANDO LA FORMA (sigue compilando) y el check tiene que salir rojo
+// en las pruebas, con las de esa regla y solo esas:
+//   decimal-scale     el decimal se escribe normalizado (2.50 → 2.5)
+//   decimal-exact     el decimal con más de 28 decimales se redondea en silencio en vez de rechazarse
+//   timestamp-format  el instante se escribe sin los ceros finales del milisegundo (.000 → nada)
+//   utf8              vuelve el codificador por defecto, que escapa lo que no es ASCII
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -24,6 +31,23 @@ import { build } from '../src/commands/build.js';
 import { licenseProblems } from '../src/lib/dotnet-stack.js';
 
 const keep = process.argv.includes('--keep');
+const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
+
+// Los sabotajes: [archivo, texto que se sustituye, sustituto]. Si el texto ya no está, el check lo dice y sale
+// rojo: un sabotaje que dejó de aplicarse no puede pasar por medido.
+const WIRE_DIR = 'src/ProductCatalog.Application/Support';
+const SABOTAGES = {
+  'decimal-scale': [
+    `${WIRE_DIR}/WireConverters.cs`,
+    'writer.WriteRawValue(value.ToString(CultureInfo.InvariantCulture), skipInputValidation: true);',
+    'writer.WriteRawValue((value / 1.000000000000000000000000000000000m).ToString(CultureInfo.InvariantCulture), skipInputValidation: true);'
+  ],
+  // `scale < 0` nunca es cierto y compila sin warning; un `&& false` sería código inalcanzable, y con los
+  // warnings como errores el sabotaje no compilaría, que no falsa nada.
+  'decimal-exact': [`${WIRE_DIR}/WireConverters.cs`, 'if (value.Scale != scale)', 'if (value.Scale != scale && scale < 0)'],
+  'timestamp-format': [`${WIRE_DIR}/WireConverters.cs`, `"yyyy-MM-dd'T'HH:mm:ss.fff'Z'"`, `"yyyy-MM-dd'T'HH:mm:ss.FFF'Z'"`],
+  utf8: [`${WIRE_DIR}/WireJson.cs`, 'options.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;', 'options.Encoder = JavaScriptEncoder.Default;']
+};
 const isWindows = process.platform === 'win32';
 const results = [];
 
@@ -107,6 +131,18 @@ const generated = await runCommand(workspace, build, `specs/${DOTNET_READY_DESIG
 const projectDir = path.join(workspace, 'services', `${DOTNET_READY_DESIGN.name}-dotnet`);
 if (!step('build genera el proyecto', generated.exitCode === undefined && fs.existsSync(projectDir), generated.exitCode ? generated.output : '')) {
   process.exit(1);
+}
+
+if (sabotage) {
+  const [file, from, to] = SABOTAGES[sabotage] ?? [];
+  const target = file ? path.join(projectDir, file) : null;
+  const content = target && fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
+  if (!content.includes(from)) {
+    console.error(`El sabotaje '${sabotage}' no se aplica a lo emitido hoy (¿cambió el texto?).`);
+    process.exit(2);
+  }
+  fs.writeFileSync(target, content.replace(from, to));
+  console.log(`(sabotaje: ${sabotage})`);
 }
 
 const restore = dotnet(projectDir, ['restore']);

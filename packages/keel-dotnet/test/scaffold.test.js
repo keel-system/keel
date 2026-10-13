@@ -147,3 +147,28 @@ test('el proyecto se llama <servicio>-dotnet y el modelo es el de keel-core/gen 
   assert.ok(product, 'el modelo no tiene la entidad del diseño');
   assert.ok(product.fields.every((field) => typeof field.csType === 'string'), 'algún campo sin tipo C#');
 });
+
+test('el contrato del cable: la prueba emitida lleva TODOS los casos de keel-core/gen/wire.js', async () => {
+  const { WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS } = await import('keel-core/gen/wire');
+  const tests = byPath.get('tests/ProductCatalog.UnitTests/WireContractTests.cs');
+  // Las filas de los casos compartidos llevan id, tipo y valor; las de las pruebas propias de .NET, menos.
+  const rows = [...tests.matchAll(/^\s*\[InlineData\("([^"]+)", "[^"]*", "/gm)].map(([, id]) => id);
+  const expected = [...WIRE_OUTPUT_CASES, ...WIRE_INPUT_CASES, ...WIRE_REJECTED_INPUTS].map((entry) => entry.id);
+  assert.deepEqual(rows, expected);
+  // El texto no ASCII viaja escapado en el fuente: el caso de UTF-8 dice lo mismo con cualquier codificación.
+  assert.ok(tests.includes(String.raw`"\u00D1and\u00FA \"x\""`), 'el caso UTF-8 no va escapado a ASCII');
+  assert.match(tests, /\[JsonStringEnumMemberName\("in-review"\)\]\s+InReview,/);
+});
+
+test('el contrato del cable lo instala Program.cs en las opciones JSON de la API', () => {
+  const program = byPath.get('src/ProductCatalog.Api/Program.cs');
+  assert.match(program, /ConfigureHttpJsonOptions\(options => WireJson\.Configure\(options\.SerializerOptions\)\)/);
+  const wire = byPath.get('src/ProductCatalog.Application/Support/WireJson.cs');
+  for (const converter of ['DecimalWireConverter', 'TimestampWireConverter', 'DateWireConverter', 'JsonWireConverter']) {
+    assert.ok(wire.includes(`Converters.Add(new ${converter}())`), converter);
+  }
+  assert.match(wire, /allowIntegerValues: false/);
+  assert.match(wire, /UnsafeRelaxedJsonEscaping/);
+  // Vive en Application: System.Text.Json es de la biblioteca base, no de ASP.NET Core.
+  assert.doesNotMatch(wire, /Microsoft\.AspNetCore/);
+});

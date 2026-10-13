@@ -8,13 +8,15 @@
 import { solution } from './render.js';
 import { configNamespace } from './config.js';
 import { healthNamespace } from './health.js';
+import { wireNamespace } from './wire.js';
 
 export function generate(model) {
   return [{ path: `${solution(model).api.dir}/Program.cs`, content: programCs(model) }];
 }
 
 function programCs(model) {
-  return `using ${configNamespace(model)};
+  return `using ${wireNamespace(model)};
+using ${configNamespace(model)};
 using ${healthNamespace(model)};
 
 // La configuración del perfil activo (PROFILE), cargada y validada antes de crear la aplicación: una
@@ -29,6 +31,8 @@ builder.Services.AddSingleton(configuration);
 builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);
+// El contrato del cable: todo cuerpo JSON que la API lee o escribe pasa por estas opciones (WireJson).
+builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));
 
 var app = builder.Build();
 app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);
