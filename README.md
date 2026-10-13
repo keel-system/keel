@@ -203,6 +203,7 @@ Este repo es un **monorepo npm workspaces** con dos tipos de paquete:
 | `packages/keel-core` | `keel` | El core: siembra workspaces, crea servicios y valida diseños. Define el DSL (schemas, docs, plantillas) y expone su validación como librería para los generadores. |
 | `packages/keel-spring` | `keel-spring` | Generador Spring Boot: `build` valida el diseño, pregunta el stack y genera `services/<servicio>-spring/` con el scaffolding transversal (el proyecto arranca) más el `.claude/` de ese proyecto —skill, agentes, conventions y skills del stack—; en el workspace de diseño no escribe nada. El código dependiente de la infra elegida y la lógica de negocio los completa el agente. Futuro: `keel-fastapi`, … |
 | `packages/keel-nest` | `keel-nest` | Generador NestJS: el mismo flujo y el mismo reparto build/agente que keel-spring, y la misma regla: **el mismo diseño genera con uno u otro servidores equivalentes** (contrato HTTP, cable, eventos, tablas, fiabilidad, operación y telemetría). `build` genera `services/<servicio>-nest/`, un proyecto NestJS 12 sobre Fastify (ESM, TypeScript strict, Vitest), y `/keel-generate-nest` lo completa con cinco agentes. Comparte con keel-spring el núcleo neutral `keel-core/gen`; lo que aún rechaza o degrada lo dice con su motivo (su README, § La frontera). Construido por incrementos medidos: `PLAN-KEEL-NEST.md`. |
+| `packages/keel-dotnet` | `keel-dotnet` | Generador .NET, **en construcción por incrementos** (`PLAN-KEEL-DOTNET.md`), con la misma regla que los otros dos: el mismo diseño produce servidores equivalentes. Hoy genera una solución .NET 10 (un proyecto por capa, xUnit v3) que compila sin warnings, arranca y responde a sus sondas, y rechaza nombrando el incremento todo lo que todavía no sabe generar. Solo paquetes con licencia permisiva, comprobado en código. Comparte con los otros dos el núcleo neutral `keel-core/gen`. |
 
 ## Instalación
 
@@ -242,6 +243,7 @@ npm install
 npm link --workspace packages/keel-core          # comando `keel`
 npm link --workspace packages/keel-spring        # comando `keel-spring`
 npm link --workspace packages/keel-nest          # comando `keel-nest`
+npm link --workspace packages/keel-dotnet        # comando `keel-dotnet` (en construcción)
 ```
 
 ## Uso

@@ -292,6 +292,49 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       plataforma da excepciones o códigos distintos); las notas para el agente, que nombran
       símbolos de cada proyecto; y `HANDLEBARS_VERSION`, que es la versión de dos librerías
       distintas.
+- **Inc. 1 — cerrado (2026-10-13)** con 1a, 1b, 1c (tres pasos) y 1d (dos lotes).
+- **Inc. 2 — hecho (2026-10-13).** El paquete `packages/keel-dotnet`, calcado del incremento 2 de
+  keel-nest (commit `f6dcb86`).
+  - **El paquete**:
+    - CLI con `build` y `check` sobre el tronco neutral (`gateDesign`, `evolveStack`,
+      `reportGeneratorDrift`, `materializeProject`);
+    - `cs-projection.js` con el contrato entero;
+    - la frontera: dominio, casos de uso y API aceptados con aviso, el resto rechazado con su
+      incremento;
+    - `dotnet-stack.js` con versión exacta y SPDX de cada paquete;
+    - registro en `KNOWN_GENERATORS`.
+  - **El proyecto emitido**: `global.json`, `Directory.Build.props` (net10.0, nulabilidad,
+    warnings como errores, lockfile, NuGet Audit en aviso), `Directory.Packages.props`, `.slnx`,
+    un proyecto por capa y uno de pruebas.
+    - `config/application.yaml`, con las mismas líneas que el de keel-nest (un test lo compara),
+      y su cargador C# (`ServiceConfiguration`), traducción del de keel-nest.
+    - `/livez` y `/readyz` con el drenaje sobre el ciclo de vida del host.
+    - `Program.cs`, que valida la configuración antes de crear la aplicación.
+    - Las pruebas: el gradiente, las sondas en memoria y el drenaje sin señal.
+  - **Medido**:
+    - `npm test` 60/60: build, check, frontera, la proyección en las 15 fixtures (mismas
+      entidades, rutas, status y avisos que con Java y TypeScript), licencias y rasgos del
+      scaffold;
+    - `npm run cs-check` 10/10: SDK, generación, restore, restore `--locked-mode`, licencias de
+      los 49 paquetes resueltos contra nuget.org, build sin warnings, 12 pruebas, `/livez`,
+      `/readyz` y 404. El apagado tras SIGTERM no se mide en Windows, y se dice.
+    - Falsado dos veces: `/readyz` saboteado a `DOWN` pone roja exactamente su prueba emitida, y
+      MediatR 13 añadido al proyecto pone rojo el paso de licencias, por dos motivos (regla
+      comercial y sin SPDX).
+  - **Decisiones medidas, no supuestas:**
+    - **xUnit v3 4.x con el SDK 10 ya no corre por VSTest.** Se opta por Microsoft.Testing.Platform
+      en `global.json`, y sobran `xunit.runner.visualstudio` y `Microsoft.NET.Test.Sdk`. Su reporte
+      JUnit (`--report-xunit-junit`) pone `time` entre `name` y `classname`. Los awk neutrales lo
+      leen, pero el incremento 7 debe fijarlo en `junit-scoring.test.js` con un XML capturado de
+      esta versión.
+    - **`.slnx`**, el formato que crea hoy `dotnet new sln`.
+  - **Trampas que costaron un ciclo cada una:**
+    - Un comentario XML con `--` hace que MSBuild descarte el `.props` entero **sin decir nada**:
+      el `TargetFramework` llegaba vacío y la restauración fallaba con «devolvió false, pero no
+      registró un error». Lo caza ahora `scaffold.test.js`, que exige XML bien formado.
+    - En una plantilla de JS, incluso con `String.raw`, un `${` literal del C# se evalúa.
+    - Los heredocs de la terminal se comen las barras dobles: los archivos se escriben con el
+      editor.
 
 ## 5. Riesgos conocidos
 

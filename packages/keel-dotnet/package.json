@@ -1,0 +1,47 @@
+{
+  "name": "keel-dotnet",
+  "version": "0.0.1",
+  "description": "Generador .NET para diseños Keel: valida el diseño agnóstico y genera services/<servicio>-dotnet/ con el scaffolding transversal al stack. Equivalente a keel-spring y keel-nest: el mismo diseño produce servidores con el mismo contrato observable.",
+  "type": "module",
+  "bin": {
+    "keel-dotnet": "src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "cs-check": "node scripts/cs-check.js"
+  },
+  "files": [
+    "src",
+    "assets"
+  ],
+  "keel": {
+    "dsl": "2.21"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "keel",
+    "dotnet",
+    "aspnetcore",
+    "codegen",
+    "agents",
+    "dsl"
+  ],
+  "author": "asuridev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keel-system/keel.git",
+    "directory": "packages/keel-dotnet"
+  },
+  "homepage": "https://github.com/keel-system/keel/tree/main/packages/keel-dotnet#readme",
+  "bugs": {
+    "url": "https://github.com/keel-system/keel/issues"
+  },
+  "dependencies": {
+    "commander": "^14.0.0",
+    "keel-core": "^0.4.0",
+    "picocolors": "^1.1.1"
+  }
+}
