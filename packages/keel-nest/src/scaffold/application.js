@@ -180,7 +180,8 @@ import { CORRELATION_HEADER, CorrelationContext } from '../correlation/correlati
     ${
       withIdempotencyHeader
         ? `// Y la clave de idempotencia (keySource: client-key), para el handler que la use: sin cabecera no se
-    // abre nada y la operación se ejecuta sin deduplicar.
+    // abre nada y la operación se ejecuta sin deduplicar, salvo que el diseño declare el error que la exige
+    // (lo comprueba el handler).
     const idempotencyKey = request.headers[IDEMPOTENCY_HEADER.toLowerCase()];
     CorrelationContext.runWith(correlationId, () => IdempotencyContext.runWith(idempotencyKey, done));`
         : 'CorrelationContext.runWith(correlationId, done);'

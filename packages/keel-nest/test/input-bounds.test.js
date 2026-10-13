@@ -31,10 +31,13 @@ test('una relación obligatoria de la entrada se valida como presencia, en los d
   assert.match(spring, /@NotNull UUID categoryId/);
 });
 
-test('la relación opcional de un PATCH sigue sin presencia', () => {
+test('la relación opcional de un PATCH no exige presencia: solo rechaza el null (patch-not-null.test.js)', () => {
   const controller = nestFiles('catalog-extended')['src/infrastructure/rest/controllers/product-v1-controller.ts'];
   const reader = controller.slice(controller.indexOf('function readUpdateProductCommand'));
-  assert.doesNotMatch(reader.slice(0, reader.indexOf('return new')), /\.check\('categoryId'/);
+  const body = reader.slice(0, reader.indexOf('return new'));
+  // Ausente es `undefined` y Violations.check no lo mira; presente con null, la many-to-one requerida no puede vaciarse.
+  assert.match(body, /const categoryId = 'categoryId' in fields \? json\.uuid\(fields\['categoryId'\]\) : undefined;/);
+  assert.match(body, /\.check\('categoryId', categoryId, \[\{ rule: 'notNull' \}\]\)/);
 });
 
 test('cada elemento de una lista lleva su cota, además de la del contenedor', async () => {

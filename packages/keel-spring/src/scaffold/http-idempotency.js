@@ -331,7 +331,8 @@ function renderContext(model) {
  * ajena y se saltaría su propia ejecución.
  *
  * La cabecera es OPCIONAL: si el cliente no la manda, get() devuelve un Optional
- * vacío y la operación se ejecuta sin deduplicar (ver conventions/mapping.md).
+ * vacío y la operación se ejecuta sin deduplicar — no se rechaza, salvo que el
+ * diseño declare el error que la exige (ver conventions/mapping.md).
  */
 public final class IdempotencyContext {
 
@@ -1135,7 +1136,8 @@ function renderFilter(model) {
  *
  * No valida ni exige la cabecera: {@code keySource: client-key} dice de dónde
  * sale la clave, no que sea obligatoria. Sin cabecera, la operación se ejecuta
- * sin deduplicar (conventions/mapping.md).
+ * sin deduplicar, salvo que el diseño declare el error que la exige: entonces lo
+ * rechaza el handler (conventions/mapping.md).
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 11)

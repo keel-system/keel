@@ -324,7 +324,9 @@ function renderReader(model, operation, name, imports) {
     if (component.pageable) continue;
     if (operation.paginated && ['page', 'size'].includes(component.name) && !operation.bodyFields.some((f) => f.name === component.name)) continue;
     for (const imp of readerImports(model, component)) imports.push(imp);
-    const rules = component.inputValidation ?? [];
+    // El null de un PATCH sobre un campo que el dominio exige no vacía nada: es un 400 (keel-core/gen/model.js,
+    // derivePatchNotNull). Solo cuando viene: `Violations.check` no mira un ausente (undefined).
+    const rules = component.patchNotNull ? [{ rule: 'notNull' }, ...(component.inputValidation ?? [])] : component.inputValidation ?? [];
     // Las de cada elemento de una lista (keel-core/gen, elementValidationRules): las del contenedor solo dicen cuántos.
     const each = component.list ? component.elementInputValidation ?? [] : [];
     if (asBody) {

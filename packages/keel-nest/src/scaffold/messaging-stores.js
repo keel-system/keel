@@ -183,8 +183,8 @@ export function outboxDispatcherFallback(profiles: readonly string[]): OutboxDis
   logger.warn(\`OutboxDispatcher sin implementar: los eventos NO salen del proceso (perfil \${profiles.join(',')})\`);
   return new (class extends OutboxDispatcher {
     async dispatch(destination: string, routingKey: string, eventType: string): Promise<void> {
-      // TODO (agente): sustituir por el dispatcher real del broker (skill keel-nest-<broker>), registrado
-      //   en broker-bindings.ts: publicar el payload tal cual, con content-type application/json.
+      // El dispatcher real lo escribe el agente (skill keel-nest-<broker>) y lo registra en broker-bindings.ts,
+      //   que es donde está su marca de trabajo: este respaldo se queda y no hay nada que completar aquí.
       logger.warn(\`OutboxDispatcher no implementado: \${eventType} no salió a \${destination}/\${routingKey}\`);
     }
   })();

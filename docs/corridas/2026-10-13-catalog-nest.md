@@ -53,6 +53,46 @@ migraciones (calidad) y `src/infrastructure/persistence/like-pattern.ts`, que es
   siguen en verde y la de coste sale roja (6 sentencias frente a 105).
 - **`tsconfig.build.tsbuildinfo` versionado** (470 KB): el `.gitignore` emitido no lo excluía.
 
+## Corrida de control (con `1b8d927`)
+
+Mismo diseño y stack, regenerado con los arreglos (commit `dfdfe65` del proyecto). **198/198**, primera pasada
+188 (10 fallos, todos `culprit: test`). Huella: 393 registrados (el nuevo es `like-pattern.ts`), **41 reescritos**,
+los mismos 41 que la primera; 352 intactos.
+
+- Los tres arreglos se cumplen: los tres adaptadores importan `LikePattern` de build sin tocarlo; FL-SHP-001-K y
+  FL-M2M-010-F afirman el coste con `queryCount()` (`<= small`) en vez de quedar `uncovered`; `tsbuildinfo` ya no se
+  versiona, y nadie tuvo que deduplicar Fastify.
+- **Los 10 fallos de la primera pasada salieron de dos huecos de documentación**, no del diseño, aunque el agente los
+  escribió como `designGaps`: (a) 9 por afirmar `Location` con `toBe(<ruta>)` cuando los dos servidores la emiten
+  absoluta —la convención de keel-spring lo enseña con `endsWith`; la de keel-nest solo lo tenía en un ejemplo—;
+  (b) uno por afirmar 400 con `size=0`/`page=-1`, cuando los dos servidores normalizan como Spring Data y
+  `dsl/api.md` solo documentaba el tope superior. Es el mismo caso que la página vacía de la corrida `catalog`:
+  hueco del documento reportado como hueco del diseño. Arreglo: `dsl/api.md` (`Location` absoluta y cotas inferiores)
+  y la tabla del contrato de `conventions/integration-tests.md` de keel-nest.
+- Hallazgos «del generador» del informe, contrastados: el PATCH que deja pasar `null` en `name`/`sku`/… **es el
+  contrato de los dos generadores** (ausente conserva, `null` vacía; keel-spring con `JsonNullable`), y la regla de
+  catalog vive en prosa; candidato a derivarlo: un opcional del PATCH cuyo campo del dominio es `required` no puede
+  vaciarse, así que `null` ahí es 400 en los dos. `IDEMPOTENCY_KEY_REQUIRED` después de la validación del cuerpo:
+  igual en los dos (el código lo declara el diseño y lo comprueba el handler); orden sin decidir, no defecto. El
+  comentario «contradictorio» de `IdempotencyContext` ya dice «salvo que el diseño declare el error que la exige»;
+  el del hook de `http-platform.ts` no lo dice. Los `TODO` residuales (`outbox-dispatcher-fallback.ts`, `unsupported()`
+  de `request-reading.ts`) están en archivos que el agente no debe tocar: ruido para quien barre TODOs.
+
+Aplicado después (sin corrida que lo mida todavía):
+
+- **`null` en un PATCH sobre un campo que el dominio exige → 400**, en los dos generadores. `derivePatchNotNull`
+  (`keel-core/gen/model.js`) marca `patchNotNull` en el opcional del cuerpo de un PATCH cuyo campo homónimo de la
+  entidad del grupo es `required`, o es la FK de una many-to-one requerida (el mismo enlace por nombre que
+  `deriveFilterFolds`). keel-spring emite `JsonNullable<@NotNull …>` (ejecutado con Hibernate Validator: ausente
+  pasa, `null` falla, el no marcado sigue vaciando); keel-nest añade `notNull` al lector, y `Violations.check` deja de
+  mirar un `undefined`, que solo es el ausente de un PATCH. `keel-nest/test/patch-not-null.test.js`, falsado por las
+  dos mitades; documentado en `wire-contract.md`.
+- **Los `TODO` en archivos permanentes de build**: los dos respaldos del broker de keel-nest señalan a
+  `broker-bindings.ts`, que lleva ahora la marca (solo cuando hay puertos o listeners que registrar);
+  `unsupported()`, que no usaba ningún emisor, se borra. `keel-nest/test/build-residue.test.js`, sobre todas las
+  fixtures. Los comentarios del hook y del contexto de idempotencia (keel-nest y keel-spring) dicen ya «salvo que
+  el diseño declare el error que la exige».
+
 ## designGaps
 
 Ninguno en pie. El único reportado (`keel-nest-quality`: las invariantes de imágenes de `Product` lanzan `Error`

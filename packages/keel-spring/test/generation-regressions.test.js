@@ -750,9 +750,12 @@ test('C3: PATCH parcial con tri-estado JsonNullable (ausente ≠ null explícito
   // encuentra la anotación y encuentra el tipo, y no hay comparación de cadenas que
   // distinga dónde está puesta. Lo destapó una corrida real (FL-PRD-002-D/E), y por eso
   // ahora también se prohíbe explícitamente la forma vieja.
-  assert.ok(command.includes('JsonNullable<@Size(max = 200) String> name'), command);
+  // Y `name` y `categoryId` llevan además @NotNull dentro: Product los exige, así que su null no vacía nada
+  // (keel-core/gen/model.js, derivePatchNotNull; keel-nest/test/patch-not-null.test.js).
+  assert.ok(command.includes('JsonNullable<@NotNull @Size(max = 200) String> name'), command);
   assert.ok(!/@Size\([^)]*\)\s+JsonNullable</.test(command), command);
-  assert.ok(command.includes('JsonNullable<UUID> categoryId'));
+  assert.ok(!/@NotNull\s+JsonNullable</.test(command), command);
+  assert.ok(command.includes('JsonNullable<@NotNull UUID> categoryId'));
   assert.ok(buildGradle.includes('org.openapitools:jackson-databind-nullable'));
   assert.ok(webConfig.includes('public JsonNullableModule jsonNullableModule()'));
   // Y el value extractor, que es lo que permite a Bean Validation desenvolver el

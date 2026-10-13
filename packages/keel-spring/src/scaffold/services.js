@@ -234,7 +234,11 @@ function renderMessage(model, operation) {
       // Entrada: presencia, tamaño, rango y TAMBIÉN el formato heredado del value type
       // (keel-core/gen/constraints.js): un valor mal formado es un 400 antes que cualquier
       // error de negocio, igual que en keel-nest.
-      for (const annotation of component.inputValidation ?? component.validation ?? []) {
+      // El null de un PATCH sobre un campo que el dominio exige no vacía nada: es un 400
+      // (keel-core/gen/model.js, derivePatchNotNull). Va DENTRO del JsonNullable, así que el
+      // extractor solo lo evalúa cuando el campo viene: ausente sigue siendo «no tocar».
+      const presence = component.patchNotNull ? ['@NotNull'] : [];
+      for (const annotation of [...presence, ...(component.inputValidation ?? component.validation ?? [])]) {
         imports.add(`jakarta.validation.constraints.${annotation.slice(1).split('(')[0]}`);
         annotations.push(annotation);
       }

@@ -369,9 +369,9 @@ export class ${stub} extends ${event.publisherClass} {
   private readonly logger = new Logger(${tsString(stub)});
 
   async publish(_event: ${event.integrationClass}, correlationId: string | null): Promise<void> {
-    // TODO (agente): sustituir por el publisher real del broker de keel-stack.json (skill
-    //   keel-nest-<broker>): envolver con EventEnvelope.of(event.metadata, event, correlationId),
-    //   serializar con toWireJson y publicar en el destino y la routing key de MessagingSettings.
+    // El publisher real lo escribe el agente (skill keel-nest-<broker>: EventEnvelope.of(event.metadata, event,
+    //   correlationId), toWireJson y el destino y la routing key de MessagingSettings) y lo registra en
+    //   broker-bindings.ts, que es donde está su marca de trabajo: este respaldo se queda.
     this.logger.warn(\`Publisher no implementado: ${event.name} no salió del servicio (correlationId=\${correlationId})\`);
   }
 }`
@@ -993,13 +993,13 @@ function bindingsFile(model) {
  * Las implementaciones de los puertos de salida del broker${ports.length > 0 ? `:\n *   · ${ports.join('\n *   · ')}` : ' (este diseño no publica nada)'}.
  * Cada una como \`{ provide: <Puerto>, useClass: <Implementación> }\`: sustituye al respaldo que build
  * registra antes (el stub que avisa, o el que no deja arrancar fuera de local y test).
- */
+ */${ports.length > 0 ? '\n// TODO (agente): una implementación por puerto, con la skill keel-nest-<broker>.' : ''}
 export const BROKER_ADAPTERS: Provider[] = [];
 
 /**
  * Los listeners de las suscripciones, ${kafka ? 'UNO POR SUSCRIPCIÓN' : 'UNO POR COLA y no uno por suscripción'}${listeners.length > 0 ? `:\n *   · ${listeners.join('\n *   · ')}` : ' (este diseño no consume nada)'}.
 ${listenerRule}
- */
+ */${listeners.length > 0 ? '\n// TODO (agente): los listeners de arriba, con la skill keel-nest-<broker>.' : ''}
 export const MESSAGE_LISTENERS: Provider[] = [];`
   );
 }

@@ -56,6 +56,11 @@ Una lista (`list: true`, y también una relación a-muchos proyectada) **nunca v
 lee como `[]`: el caso de uso no distingue «no la mandó» de «la mandó vacía». La excepción es la lista
 opcional del cuerpo de un `PATCH`, donde ausente significa «no tocar» y `null` o `[]` la vacían.
 
+Lo mismo vale para cualquier opcional del cuerpo de un `PATCH`, con una excepción: si su campo homónimo de la
+entidad del grupo es `required` —o es la FK `<relación>Id` de una many-to-one requerida—, el `null` no tiene a
+dónde vaciar y es un `400` de validación (`<campo> must not be null`), en los dos generadores y solo cuando el campo
+viene. Ausente sigue siendo «no tocar».
+
 ## Cuerpos que el diseño no declara
 
 Las claves van en este orden.

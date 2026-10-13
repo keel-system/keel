@@ -112,6 +112,7 @@ function interpret({ manifest, layers, stack = null }) {
   }
   const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings, persistenceKind, entities);
   deriveFilterFolds(services, entities, warnings);
+  derivePatchNotNull(services, entities);
   // DTOs de las entidades hijas proyectadas en algún payload de salida.
   const childDtos = collectChildDtos(layers, services, domainTypes, inlineEnumName, warnings);
   // DTOs de referencia de las relaciones que el diseño marca con embed.
@@ -518,6 +519,37 @@ function deriveFilterFolds(services, entities, warnings) {
       continue;
     }
     field.filterFold = { accents: [...accents][0], maxLength: field.textMaxLength, shadow: `${field.name}Normalized`, operations };
+  }
+}
+
+// ─── El null de un PATCH sobre un campo que el dominio exige ─────────────────
+//
+// En un PATCH el opcional del cuerpo tiene tres estados: ausente conserva, presente con valor cambia y presente con
+// null VACÍA (JsonNullable en keel-spring, `undefined` frente a `null` en keel-nest). Vaciar un campo `required` de la
+// entidad —o la FK `<relación>Id` de una many-to-one requerida— no tiene desenlace válido: el agregado no puede quedar
+// sin él. Hasta aquí ese null llegaba al handler, y cada agente lo rechazaba a mano o lo dejaba caer en el
+// constructor del value object (corrida catalog-nest, 2026-10-13: la regla vivía en prosa en las tres altas).
+//
+// Ahora el campo lleva `patchNotNull` y los dos generadores lo rechazan a la ENTRADA con el 400 de validación
+// («must not be null»), solo cuando viene: ausente sigue siendo «no tocar». El enlace es por nombre con la entidad
+// del grupo, el mismo que usa `deriveFilterFolds`: no hereda cotas (eso sería inventar un contrato), solo dice que
+// el null de un PATCH apunta a ESE campo, que es lo que el propio PATCH significa.
+function derivePatchNotNull(services, entities) {
+  for (const group of services) {
+    const entity = entities.find((candidate) => candidate.name === group.entity);
+    if (!entity) continue;
+    const required = new Set(entity.fields.filter((field) => field.required && !field.list).map((field) => field.name));
+    for (const relation of entity.relations ?? []) {
+      if (relation.required && relation.cardinality === 'many-to-one' && !relation.backReference) required.add(`${relation.name}Id`);
+    }
+    for (const operation of group.operations) {
+      if (operation.route?.method !== 'PATCH') continue;
+      const fromPath = new Set((operation.pathParams ?? []).map((param) => param.name));
+      for (const field of operation.bodyFields ?? []) {
+        if (field.required || field.list || field.file || field.resolvedIdentity || fromPath.has(field.name)) continue;
+        if (required.has(field.name)) field.patchNotNull = true;
+      }
+    }
   }
 }
 

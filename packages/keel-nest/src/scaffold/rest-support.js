@@ -382,11 +382,6 @@ export function requireParameter(query: Record<string, unknown>, name: string): 
   if (query[name] === undefined) throw new MissingParameterError(name);
 }
 
-/** Lo que esta versión de keel-nest todavía no sabe leer: falla en ejecución, nombrándolo. */
-export function unsupported(what: string): never {
-  throw new Error(\`TODO: \${what}\`);
-}
-
 /** El cuerpo de la petición como objeto: sin cuerpo, solo si es opcional. */
 export function bodyObject(body: unknown, required: boolean): Record<string, unknown> {
   if (body == null) return required ? malformed() : {};
@@ -426,7 +421,12 @@ export class Violations {
 
   constructor(private readonly source: 'body' | 'params') {}
 
+  /**
+   * Un \`undefined\` es el opcional AUSENTE de un PATCH («no tocar»): no se valida, como el JsonNullable sin
+   * valor de keel-spring. Los lectores convierten todo lo demás que falta en \`null\`, que sí se valida.
+   */
   check(path: string, value: unknown, rules: readonly Rule[]): this {
+    if (value === undefined) return this;
     for (const rule of rules) {
       const message = violation(rule, value);
       if (message) this.details.push(\`\${path} \${message}\`);

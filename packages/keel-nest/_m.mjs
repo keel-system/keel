@@ -1,0 +1,11 @@
+import path from 'node:path';
+import { loadService } from 'keel-core';
+import { buildModel } from 'keel-core/gen/model';
+import { TS_PROJECTION } from './src/lib/ts-projection.js';
+const dir = process.argv[2];
+const { manifest, layers } = loadService(dir);
+const model = buildModel({ manifest, layers, projection: TS_PROJECTION });
+const ent = model.entities.find(e => e.name === 'Product');
+console.log(ent.fields.map(f => `${f.name}:${f.required}`).join(' '));
+console.log(JSON.stringify(ent.relations));
+for (const g of model.services) for (const op of g.operations) if (op.route?.method === 'PATCH') console.log(g.entity, op.name, op.bodyFields.map(f => `${f.name}:${f.required}`).join(' '));
