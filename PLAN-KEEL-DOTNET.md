@@ -189,6 +189,30 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
   - **Lección para los incrementos siguientes**: los cambios de lo emitido en keel-spring no
     regeneraban el golden en el mismo commit. A partir del inc. 1, todo cambio en `keel-core/gen`
     pasa `golden -- --check` antes de dar el commit por bueno.
+- **Inc. 1 — en curso.**
+  - **1a, el reporte de xUnit (hecho).** XML capturado de una ejecución real de xUnit v3 3.2.2
+    (`-jUnit`, SDK 8, que ya ejecuta xUnit v3). La matriz lo lee bien tal cual: los atributos van
+    como en Gradle, todo en una línea y las clases anidadas con `+`. Lo que no leía bien era el
+    mensaje de una prueba en rojo que no es escenario: xUnit escribe el salto como `&#xA;` y escapa
+    la comilla con barra (`\&quot;`), y el awk solo conocía `&#10;`. Arreglado en
+    `junit-scoring.js`. El caso lleva el XML real en `test/junit-scoring.test.js`, en rojo antes del
+    arreglo. Cambio intencional de lo emitido: solo `infra/score-scenarios.sh` en las 44
+    combinaciones de keel-spring; línea base regenerada. Una `[Theory]` da una fila por dato, igual
+    que `@ParameterizedTest` o `it.each`: no es un hueco de .NET, y la skill pedirá un `[Fact]` por
+    flujo.
+  - **1b, línea base de keel-nest (hecho).** La mecánica del golden pasa a
+    `keel-core/gen/golden-digest.js` (huella, comparación y `runGolden`). keel-spring la usa con sus
+    combinaciones y sale idéntica (44 / 11 137). keel-nest gana `npm run golden` con las mismas
+    combinaciones menos Oracle (41 / 10 050), determinista y falsada: un espacio en una plantilla
+    las pone rojas las 41.
+  - **1c, el gradiente por perfil (siguiente).** `envWithDefault` está una vez en keel-spring y
+    nueve en keel-nest, con DOS semánticas. En el perfil `test`, keel-spring escribe
+    `${VAR:default}` y cinco copias de keel-nest escriben el literal (kafka, logging, messaging,
+    rabbitmq y claim). Los nombres y defaults de unas 20 variables de entorno se escriben en los
+    dos generadores sin nada que los ate; hoy coinciden. Plan:
+    1. `keel-core/gen/profile-values.js`, sin cambiar un byte (golden de los dos).
+    2. Igualar el perfil `test` al de keel-spring, en commit propio y con su golden regenerado.
+    3. El catálogo de variables operativas con sus defaults, del que leen los dos.
 
 ## 5. Riesgos conocidos
 

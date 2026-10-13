@@ -9,33 +9,8 @@
 // cambio intencional del generador también la pone roja: entonces se regenera a sabiendas,
 // en un commit propio, nunca dentro del refactor que mide.
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { GOLDEN_FILE, compareGolden, computeGolden, serializeGolden } from '../src/lib/golden-digest.js';
+import { runGolden } from 'keel-core/gen/golden-digest';
+import { GOLDEN_FILE, goldenCombos } from '../src/lib/golden-digest.js';
+import { planService } from '../src/scaffold/index.js';
 
-const check = process.argv.includes('--check');
-const golden = computeGolden();
-const combos = Object.keys(golden.combos).length;
-const files = Object.values(golden.combos).reduce((n, digests) => n + Object.keys(digests).length, 0);
-
-if (!check) {
-  fs.mkdirSync(path.dirname(GOLDEN_FILE), { recursive: true });
-  fs.writeFileSync(GOLDEN_FILE, serializeGolden(golden));
-  console.log(`Línea base escrita: ${combos} combinaciones, ${files} archivos → ${path.relative(process.cwd(), GOLDEN_FILE)}`);
-  process.exit(0);
-}
-
-if (!fs.existsSync(GOLDEN_FILE)) {
-  console.error(`No hay línea base en ${GOLDEN_FILE}: ejecútalo sin --check primero.`);
-  process.exit(2);
-}
-const expected = JSON.parse(fs.readFileSync(GOLDEN_FILE, 'utf8'));
-const diffs = compareGolden(expected, golden);
-if (diffs.length === 0) {
-  console.log(`Idéntico a la línea base: ${combos} combinaciones, ${files} archivos.`);
-  process.exit(0);
-}
-console.log(`La salida difiere de la línea base en ${diffs.length} punto(s):`);
-for (const diff of diffs.slice(0, 200)) console.log(`  ${diff}`);
-if (diffs.length > 200) console.log(`  … y ${diffs.length - 200} más`);
-process.exit(1);
+process.exit(runGolden({ goldenFile: GOLDEN_FILE, combos: goldenCombos(), planService }));
