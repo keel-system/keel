@@ -169,7 +169,11 @@ export const JUNIT_NON_SCENARIO_AWK = `    BEGIN { RS = "<testcase " }
         frag = substr(seg, RSTART, RLENGTH)
         if (match(frag, /message="[^"]*"/)) msg = substr(frag, RSTART + 9, RLENGTH - 10)
       }
+      # El salto de línea en decimal (Gradle, Vitest) o en hexadecimal (xUnit v3), y la comilla que
+      # xUnit escapa además con una barra (\\&quot;): antes que &quot; a secas, o la barra se queda.
       gsub(/&#10;/, " ", msg); gsub(/&#13;/, " ", msg)
+      gsub(/&#[xX][aA];/, " ", msg); gsub(/&#[xX][dD];/, " ", msg)
+      gsub(/\\\\&quot;/, "\\"", msg)
       gsub(/&quot;/, "\\"", msg)
       gsub(/&lt;/, "<", msg); gsub(/&gt;/, ">", msg)
       gsub(/&amp;/, "\\\\&", msg)

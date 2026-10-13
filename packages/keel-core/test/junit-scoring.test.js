@@ -74,6 +74,33 @@ for (const [order, classname, shown] of [
   });
 }
 
+// El XML que escribe xUnit v3 (3.2.2, `-jUnit <archivo>`), CAPTURADO de una ejecución real y no
+// fabricado (solo se recortan las trazas): el runner de keel-dotnet. Tiene tres cosas que Gradle y Vitest
+// no: todo en UNA línea, las clases anidadas con `+` y los mensajes con el salto de línea en hexadecimal
+// (`&#xA;`) y las comillas escapadas con barra (`\&quot;`). Con la decodificación de antes, un mensaje
+// de varias líneas salía con el `&#xA;` literal.
+const XUNIT_V3_XML = String.raw`<testsuites name="Test results" time="0.118" tests="8" failures="3" errors="0" disabled="1"><testsuite name="Test collection for Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest+Nested (id: 49c2a93b)" time="0.009" tests="1" failures="0" skipped="0"><testcase name="FL-RES-005: anidado" classname="Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest+Nested" time="0.0089095" /></testsuite><testsuite name="Test collection for Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest (id: 35b3238d)" time="0.014" tests="7" failures="3" skipped="1"><testcase name="FL-RES-001: alta de reserva" classname="Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest" time="0.0088853" /><testcase name="Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest.NotAScenario" classname="Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest" time="0.0029523"><failure type="System.InvalidOperationException" message="System.InvalidOperationException : arranque roto">   at Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest.NotAScenario()</failure></testcase><testcase name="Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest.Multiline" classname="Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest" time="0.0003"><failure type="Xunit.Sdk.FailException" message="esperaba 409 STOCK_EXHAUSTED&#xA;y llegó 200 &lt;ok&gt; &amp; \&quot;x\&quot;">   at Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest.Multiline()</failure></testcase><testcase name="FL-RES-004-A: variantes(n: 1)" classname="Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest" time="0.0012794" /><testcase name="FL-RES-003: barrido" classname="Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest" time="0"><skipped message="sin broker" /></testcase><testcase name="FL-RES-002: rechazo con \&quot;stock\&quot; agotado" classname="Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest" time="0.0003124"><failure type="Xunit.Sdk.FailException" message="esperaba 409">   at Fulfillment.Stock.IntegrationTests.Flows.ReservationFlowsTest.Fails()</failure></testcase></testsuite></testsuites>
+`;
+
+test('la matriz lee el XML real de xUnit v3 (una línea, clases anidadas con +)', () => {
+  const rows = runAwk(JUNIT_MATRIX_AWK, XUNIT_V3_XML).trim().split('\n').sort();
+  assert.deepEqual(rows, [
+    'FALLO\tFL-RES-002\tReservationFlowsTest',
+    'OK\tFL-RES-001\tReservationFlowsTest',
+    'OK\tFL-RES-004-A\tReservationFlowsTest',
+    'OK\tFL-RES-005\tReservationFlowsTest+Nested',
+    'OMITIDO\tFL-RES-003\tReservationFlowsTest'
+  ]);
+});
+
+test('el mensaje de xUnit v3 sale en una línea legible: salto en hexadecimal y comillas con barra', () => {
+  const out = runAwk(JUNIT_NON_SCENARIO_AWK, XUNIT_V3_XML);
+  assert.match(out, /ReservationFlowsTest\.NotAScenario\s+\(ReservationFlowsTest\)\n\s+System\.InvalidOperationException : arranque roto/);
+  assert.match(out, /esperaba 409 STOCK_EXHAUSTED y llegó 200 <ok> & "x"/);
+  assert.doesNotMatch(out, /&#x|\\"|&quot;/);
+  assert.doesNotMatch(out, /FL-RES/);
+});
+
 // El cruce con el documento de escenarios, EJECUTADO: lo que no declara el documento no puntúa (las corridas
 // `catalog` de los dos generadores dieron 66 en OK sobre 56 escenarios) y sale aparte, también en rojo.
 function runScoring(document, matrixRows) {
