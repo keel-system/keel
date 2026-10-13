@@ -2131,7 +2131,18 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
 - Docs: README del paquete (contrato: entrada, DSL soportada, salida, regla de oro), fila en
   el README raíz, `CLAUDE.md` (sección keel-nest y filas de «Dónde se añade cada cosa»),
   `.claude/rules/nest-*.md`. Publicación npm.
-- **Estado: paridad y docs hechas (2026-10-12); faltan la corrida de control y la publicación.**
+- **Estado: paridad, docs y corrida de control hechas (2026-10-12); falta la publicación npm.**
+  - **Corrida de control** (`docs/corridas/2026-10-12-notification-mailer{,-mongo}-{nest,spring}-control.md`): las
+    cuatro en **23/23** con el mismo stack (`rabbitmq · keycloak`, PostgreSQL o MongoDB), y la **misma huella: 17
+    reescritos en las cuatro**, archivo por archivo (los nueve handlers, los cuatro del dominio, el README y una
+    consulta de negocio, la misma en las cuatro con dos nombres; el decimoséptimo es `broker-bindings.ts` en keel-nest
+    y la interfaz de Spring Data en keel-spring). Tres de cuatro sin `validate`; ninguna con `harnessPatches`. Un
+    hueco del generador, NEUTRAL: el OpenAPI derivado ponía el status y el `when` de la primera declaración de un
+    code a todas las operaciones (`statuses` es un Map y se leía como objeto), que los dos agentes de pruebas de
+    keel-spring tomaron por hueco del diseño; arreglado en `keel-core/gen/openapi.js` con su caso en
+    `openapi.test.js`. Del diseño quedan cuatro para la próxima minor del par (la guarda de `acceptNotificationRequest`
+    que la clave natural ya tiene y no enlaza, el envío parcial, la cota del asunto interpolado y la versión
+    congelada que falta).
   - **Frontera**: toda fixture entra entera (`capability-coverage.test.js` de keel-nest lo exige). Se generan ya la
     mensajería SIN persistencia (el rechazo era un resto del 9: el emisor ya la sabía hacer) y el value object
     compuesto en el cuerpo y en la respuesta de una llamada saliente (con el `read<Tipo>` de la entrada; lo que su

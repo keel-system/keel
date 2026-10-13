@@ -121,3 +121,19 @@ test('si el workspace trae el openapi de /keel-docs, build copia ese y no deriva
   const { files } = planSpring({ manifest, layers, workspace });
   assert.equal(files.find((f) => f.path === DOC), undefined);
 });
+
+// El mismo code con status distintos según la operación: cada operación lo lista bajo SU status y con SU `when`.
+// Lo destapó la corrida de control del incremento 16 (las dos de keel-spring lo reportaron como hueco del diseño):
+// TEMPLATE_NOT_FOUND salía 404 en requestNotification, que lo declara 422, porque el status se buscaba en un Map
+// como si fuera un objeto y caía siempre en el de la primera declaración.
+test('notification-mailer: un code con varios status sale bajo el de cada operación, con su when', () => {
+  const { files } = planFixture('notification-mailer');
+  const document = YAML.parse(files.find((file) => file.path === DOC).content);
+  const responsesOf = (operationId) =>
+    Object.values(document.paths).flatMap((item) => Object.values(item)).find((op) => op.operationId === operationId).responses;
+  const request = responsesOf('requestNotification');
+  assert.match(request['422'].description, /`TEMPLATE_NOT_FOUND`: No hay plantilla activa con esa clave e idioma/);
+  assert.doesNotMatch(request['404']?.description ?? '', /TEMPLATE_NOT_FOUND/);
+  assert.match(responsesOf('getTemplate')['404'].description, /`TEMPLATE_NOT_FOUND`/);
+  assert.doesNotMatch(responsesOf('getTemplate')['422']?.description ?? '', /TEMPLATE_NOT_FOUND/);
+});

@@ -182,7 +182,7 @@ function responses(context, operation, inputs) {
   for (const code of operation.errors ?? []) {
     const error = (model.errors ?? []).find((candidate) => candidate.code === code);
     if (!error) continue;
-    add(error.statuses?.[operation.name] ?? error.http, code, error.when);
+    add(statusIn(error, operation.name), code, error.whenByOperation?.get(operation.name) ?? error.when);
   }
   for (const [http, lines] of [...errors.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     if (result[http]) continue;
@@ -192,6 +192,17 @@ function responses(context, operation, inputs) {
     };
   }
   return result;
+}
+
+/**
+ * El status con el que ESTA operación declara un code. El mismo code puede ir con status distintos según la
+ * operación (`statuses` es un Map status → operaciones); leerlo como un objeto por operación devolvía siempre
+ * undefined y el contrato heredaba el status de la primera declaración (corrida de control del incremento 16:
+ * TEMPLATE_NOT_FOUND salía 404 en requestNotification, que lo declara 422).
+ */
+function statusIn(error, operationName) {
+  for (const [http, operations] of error.statuses ?? []) if (operations.includes(operationName)) return http;
+  return error.http;
 }
 
 // ─── Esquemas ────────────────────────────────────────────────────────────────

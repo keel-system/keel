@@ -1045,11 +1045,15 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
           when: error.when ?? null,
           // Rastro de dónde se declara: si el mismo code aparece con http
           // distinto en dos operaciones, el status no puede quemarse en la clase.
-          statuses: new Map([[http, [opName]]])
+          statuses: new Map([[http, [opName]]]),
+          // El `when` de CADA operación: el mismo code puede significar cosas distintas según quién lo declara
+          // (TEMPLATE_NOT_FOUND por id en una, por clave e idioma en otra), y el contrato derivado cita el suyo.
+          whenByOperation: new Map([[opName, error.when ?? null]])
         });
       } else {
         if (!existing.statuses.has(http)) existing.statuses.set(http, []);
         existing.statuses.get(http).push(opName);
+        existing.whenByOperation.set(opName, error.when ?? null);
       }
     }
 
