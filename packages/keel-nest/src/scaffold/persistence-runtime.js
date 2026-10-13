@@ -50,15 +50,15 @@ import {
   TRANSACTION_CONTEXT_TS,
   PERSISTENCE_ERRORS_TS
 } from './repositories.js';
-import { envValue, envWithDefault } from 'keel-core/gen/profile-values';
+import { envFor, runtimeDefault } from 'keel-core/gen/runtime-env';
 
 export const DATA_SOURCE_OPTIONS_TS = 'src/infrastructure/persistence/data-source-options.ts';
 export const PERSISTENCE_MODULE_TS = 'src/infrastructure/persistence/persistence-module.ts';
 
-/** El tope por defecto de una transacción: el mismo que keel-spring (DB_TRANSACTION_TIMEOUT). */
-export const DB_TRANSACTION_TIMEOUT = '30s';
-/** Cuánto espera una petición a que el pool tenga conexión libre (ms): el mismo que keel-spring. */
-export const DB_POOL_CONNECTION_TIMEOUT_MS = 5000;
+/** El tope por defecto de una transacción (catálogo neutral: keel-core/gen/runtime-env). */
+export const DB_TRANSACTION_TIMEOUT = runtimeDefault('DB_TRANSACTION_TIMEOUT');
+/** Cuánto espera una petición a que el pool tenga conexión libre (ms; catálogo neutral). */
+export const DB_POOL_CONNECTION_TIMEOUT_MS = runtimeDefault('DB_POOL_CONNECTION_TIMEOUT_MS');
 
 export function generate(model) {
   if (!usesRelational(model)) return [];
@@ -97,21 +97,21 @@ database:
   return `database:
   # La URL JDBC de keel-spring vale tal cual (jdbc:${engine}://host:puerto/base): el mismo .env sirve
   # para los dos servidores del diseño.
-  url: ${envValue(profile, 'DB_URL', localDatabaseUrl(engine, dbName))}
-  username: ${envValue(profile, 'DB_USERNAME', db.user(dbName))}
-  password: ${envValue(profile, 'DB_PASSWORD', db.password)}
+  url: ${envFor('DB_URL', profile, localDatabaseUrl(engine, dbName))}
+  username: ${envFor('DB_USERNAME', profile, db.user(dbName))}
+  password: ${envFor('DB_PASSWORD', profile, db.password)}
   pool:
     # El nombre del pool en los logs del driver: con el de por defecto, dos servicios en el mismo
     # backend no se distinguen.
     name: ${model.service.name}-pool
-    max-size: ${envWithDefault(profile, 'DB_POOL_MAX_SIZE', 10)}
+    max-size: ${envFor('DB_POOL_MAX_SIZE', profile)}
     # Cuánto espera una petición a que haya conexión libre: fallar rápido con el pool agotado en vez
     # de acumular peticiones que el cliente ya abandonó.
-    connection-timeout-ms: ${envWithDefault(profile, 'DB_POOL_CONNECTION_TIMEOUT_MS', DB_POOL_CONNECTION_TIMEOUT_MS)}
+    connection-timeout-ms: ${envFor('DB_POOL_CONNECTION_TIMEOUT_MS', profile)}
     # Vida máxima de una conexión: menor que cualquier corte de ociosas entre el servicio y la base.
-    max-lifetime-ms: ${envWithDefault(profile, 'DB_POOL_MAX_LIFETIME_MS', 1800000)}
+    max-lifetime-ms: ${envFor('DB_POOL_MAX_LIFETIME_MS', profile)}
   # Tope de cada transacción; lo cancelado sale como 503 TRANSACTION_TIMEOUT.
-  transaction-timeout: ${envWithDefault(profile, 'DB_TRANSACTION_TIMEOUT', DB_TRANSACTION_TIMEOUT)}
+  transaction-timeout: ${envFor('DB_TRANSACTION_TIMEOUT', profile)}
   # ${profile === 'local' ? 'Solo para iterar: en local el ORM crea y altera el esquema.' : 'El esquema lo gobiernan las migraciones de src/migrations/, nunca el ORM.'}
   synchronize: ${profile === 'local'}
   # ${profile === 'local' ? 'En local no hay migraciones que aplicar: el esquema es el de las entidades.' : 'Al arrancar se aplican las migraciones pendientes de src/migrations/ (el baseline lo exporta el pase de calidad).'}

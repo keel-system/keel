@@ -23,8 +23,8 @@ import { missingTargetRetryDestinations } from 'keel-core/gen';
 import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, SNSSQS_CONNECTION_TS, SNSSQS_CONSUMPTION_TS, usesSnsSqs } from './messaging.js';
-import { envValue } from 'keel-core/gen/profile-values';
 import { envWithDefault } from 'keel-core/gen/profile-values';
+import { envFor } from 'keel-core/gen/runtime-env';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -503,16 +503,16 @@ function snssqsYaml(profile) {
     ...(profile === 'test'
       ? ['  # Las pruebas de build arrancan sin broker: la conexión no se intenta.', '  enabled: false']
       : ['  enabled: true']),
-    `  region: ${envValue(profile, 'AWS_REGION', 'us-east-1')}`,
+    `  region: ${envFor('AWS_REGION', profile)}`,
     '  credentials:',
     '    # En producción, si la plataforma da un rol IAM, vacía las dos y el SDK usa su cadena por defecto.',
-    `    access-key: ${envValue(profile, 'AWS_ACCESS_KEY_ID', 'test')}`,
-    `    secret-key: ${envValue(profile, 'AWS_SECRET_ACCESS_KEY', 'test')}`
+    `    access-key: ${envFor('AWS_ACCESS_KEY_ID', profile)}`,
+    `    secret-key: ${envFor('AWS_SECRET_ACCESS_KEY', profile)}`
   ];
   // En local y develop, LocalStack; en production el SDK resuelve el endpoint real de AWS (no se fija).
-  if (profile !== 'production') lines.push('  sns:', `    endpoint: ${envValue(profile, 'AWS_SNS_ENDPOINT', 'http://localhost:4566')}`);
+  if (profile !== 'production') lines.push('  sns:', `    endpoint: ${envFor('AWS_SNS_ENDPOINT', profile)}`);
   lines.push('  sqs:');
-  if (profile !== 'production') lines.push(`    endpoint: ${envValue(profile, 'AWS_SQS_ENDPOINT', 'http://localhost:4566')}`);
+  if (profile !== 'production') lines.push(`    endpoint: ${envFor('AWS_SQS_ENDPOINT', profile)}`);
   lines.push(
     '    listener:',
     '      # Sondeo largo: hasta estos segundos esperando mensajes (el máximo de SQS es 20).',

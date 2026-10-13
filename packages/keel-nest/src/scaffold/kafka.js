@@ -23,8 +23,8 @@ import { kafkaListenerRetry, missingTargetRetryDestinations, subscriptionDestina
 import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { KAFKA_CONNECTION_TS, KAFKA_CONSUMPTION_TS, MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, usesKafka } from './messaging.js';
-import { envValue } from 'keel-core/gen/profile-values';
 import { envWithDefault } from 'keel-core/gen/profile-values';
+import { envFor } from 'keel-core/gen/runtime-env';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -525,7 +525,7 @@ function kafkaYaml(profile) {
     ...(profile === 'test'
       ? ['  # Las pruebas de build arrancan sin broker: la conexión no se intenta.', '  enabled: false']
       : ['  enabled: true']),
-    `  bootstrap-servers: ${envValue(profile, 'KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')}`,
+    `  bootstrap-servers: ${envFor('KAFKA_BOOTSTRAP_SERVERS', profile)}`,
     '  producer:',
     '    # Cuánto espera un envío sin confirmar antes de fallar (las mismas variables que keel-spring). El',
     '    # dispatcher del outbox no espera más que esto: con el broker caído, el intento falla en este plazo.',

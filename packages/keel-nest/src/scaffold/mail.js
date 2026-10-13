@@ -18,7 +18,7 @@
 
 import { DIRS, classPath, tsModule } from './render.js';
 import { TELEMETRY_TS, instrumentationFor } from './telemetry.js';
-import { envWithDefault } from 'keel-core/gen/profile-values';
+import { envFor } from 'keel-core/gen/runtime-env';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const MAIL_DIR = 'domain/mail';
@@ -657,37 +657,38 @@ function mailYaml(model, profile) {
   const localish = profile === 'local' || profile === 'test';
   const lines = [
     'mail:',
-    `  host: ${envValue(profile, 'MAIL_HOST', 'localhost')}`,
-    `  port: ${envValue(profile, 'MAIL_PORT', 1025)}`,
-    `  username: ${envValue(profile, 'MAIL_USERNAME', '')}`,
-    `  password: ${envValue(profile, 'MAIL_PASSWORD', '')}`,
+    `  host: ${envFor('MAIL_HOST', profile)}`,
+    `  port: ${envFor('MAIL_PORT', profile)}`,
+    `  username: ${yamlScalar(envFor('MAIL_USERNAME', profile))}`,
+    `  password: ${yamlScalar(envFor('MAIL_PASSWORD', profile))}`,
     '  smtp:'
   ];
   if (localish) {
     // Mailpit no exige ni autenticación ni cifrado, y pedirlos haría fallar el envío contra la infra de prueba.
     lines.push('    auth: false', '    starttls: false');
   } else {
-    lines.push(`    auth: ${envWithDefault(profile, 'MAIL_SMTP_AUTH', true)}`, `    starttls: ${envWithDefault(profile, 'MAIL_SMTP_STARTTLS', true)}`);
+    lines.push(`    auth: ${envFor('MAIL_SMTP_AUTH', profile)}`, `    starttls: ${envFor('MAIL_SMTP_STARTTLS', profile)}`);
   }
   lines.push(
     '    # Un envío esperando a un proveedor caído retiene a quien lo hace: sin plazos esperaría para siempre.',
-    `    connect-timeout-ms: ${envWithDefault(profile, 'MAIL_CONNECT_TIMEOUT_MS', 5000)}`,
-    `    read-timeout-ms: ${envWithDefault(profile, 'MAIL_READ_TIMEOUT_MS', 5000)}`,
-    `    write-timeout-ms: ${envWithDefault(profile, 'MAIL_WRITE_TIMEOUT_MS', 5000)}`
+    `    connect-timeout-ms: ${envFor('MAIL_CONNECT_TIMEOUT_MS', profile)}`,
+    `    read-timeout-ms: ${envFor('MAIL_READ_TIMEOUT_MS', profile)}`,
+    `    write-timeout-ms: ${envFor('MAIL_WRITE_TIMEOUT_MS', profile)}`
   );
   if (mail.sender?.source === 'fixed') {
-    lines.push(`  sender: ${envValue(profile, 'MAIL_SENDER', mail.sender.address)}`);
+    lines.push(`  sender: ${envFor('MAIL_SENDER', profile, mail.sender.address)}`);
   } else if (mail.sender?.fallback) {
-    lines.push('  # Remitente de respaldo: se usa cuando el dato del servicio no lo resuelve.', `  sender-fallback: ${envValue(profile, 'MAIL_SENDER_FALLBACK', mail.sender.fallback)}`);
+    lines.push('  # Remitente de respaldo: se usa cuando el dato del servicio no lo resuelve.', `  sender-fallback: ${envFor('MAIL_SENDER_FALLBACK', profile, mail.sender.fallback)}`);
   }
-  if (mail.replyTo?.source === 'fixed') lines.push(`  reply-to: ${envValue(profile, 'MAIL_REPLY_TO', mail.replyTo.address)}`);
+  if (mail.replyTo?.source === 'fixed') lines.push(`  reply-to: ${envFor('MAIL_REPLY_TO', profile, mail.replyTo.address)}`);
   return `${lines.join('\n')}\n`;
 }
 
-function envValue(profile, name, value) {
-  if (profile === 'local' || profile === 'test') return value === '' ? "''" : String(value);
-  if (profile === 'develop') return `\${${name}:${value}}`;
-  return `\${${name}}`;
+// El cargador de config/ lee un escalar vacío como nulo, y las credenciales del SMTP son cadenas: el vacío
+// va entrecomillado. Es cómo lee YAML esta plataforma, no el contrato (keel-spring escribe `username: ` y
+// Spring lo trata como ausente: las dos dicen «sin credencial»).
+function yamlScalar(text) {
+  return text === '' ? "''" : text;
 }
 
 /** Para quien compone los avisos: los nombres de los puertos que el handler recibe inyectados. */

@@ -30,6 +30,7 @@ import { collectionBatchSize } from './persistence-entities.js';
 import { PAYMENT_TEST_SECRETS } from 'keel-core/gen/payment-gateways';
 import { PAYMENT_SWEEP_PARAMETERS } from 'keel-core/gen/payments-model';
 import { envValue, envWithDefault, cronWithDefault, envRequired } from 'keel-core/gen/profile-values';
+import { envFor, runtimeDefault } from 'keel-core/gen/runtime-env';
 
 const PROFILES = ['local', 'develop', 'production'];
 
@@ -40,7 +41,7 @@ const PROFILES = ['local', 'develop', 'production'];
 // pasar EXACTAMENTE estos valores por entorno: el perfil `develop` con el que corre
 // el contenedor declara estas claves como obligatorias y sin default, así que un
 // literal reinventado allí no daría un 401 raro — impediría arrancar la app.
-export const LOCAL_API_KEY = 'local-dev-api-key';
+export const LOCAL_API_KEY = runtimeDefault('SECURITY_API_KEY');
 export const localClientApiKey = (clientName) => `local-${clientName}-key`;
 
 // El proveedor de prueba del perfil local: el WireMock que levanta infra/ cuando
@@ -52,7 +53,7 @@ export const LOCAL_STUB_BASE_URL = `http://localhost:${HTTP_STUB.publishedPort}`
 
 // Orígenes CORS del perfil local: los puertos de dev habituales de una SPA
 // (Create React App / Next.js y Vite), para probar un front sin editar YAML.
-export const LOCAL_CORS_ORIGINS = 'http://localhost:3000,http://localhost:5173';
+export const LOCAL_CORS_ORIGINS = runtimeDefault('SECURITY_CORS_ALLOWED_ORIGINS');
 
 // La línea YAML de un parámetro del catálogo neutral (keel-core/gen/messaging-stores.js): la hoja
 // de su clave con el gradiente de su variable y el valor de ESTE perfil. La sangría sale de la
@@ -307,8 +308,8 @@ function loggingYaml(model, profile) {
   const lines = [
     'logging:',
     '  level:',
-    `    root: ${envWithDefault(profile, 'LOG_LEVEL_ROOT', root)}`,
-    `    ${model.service.basePackage}: ${envWithDefault(profile, 'LOG_LEVEL_APP', app)}`
+    `    root: ${envFor('LOG_LEVEL_ROOT', profile, root)}`,
+    `    ${model.service.basePackage}: ${envFor('LOG_LEVEL_APP', profile, app)}`
   ];
   // Y el contrapeso de `generate_statistics: true`, que dbYaml enciende en estos dos
   // perfiles para que el arnés pueda leer `hibernate.statements`. Ese flag activa además
@@ -347,7 +348,7 @@ function loggingYaml(model, profile) {
     lines.push(
       '  structured:',
       '    format:',
-      `      console: ${envWithDefault(profile, 'LOG_FORMAT', 'ecs')}`,
+      `      console: ${envFor('LOG_FORMAT', profile)}`,
       // Quién escribió la línea. Boot pone el nombre (spring.application.name); la versión, el
       // entorno y la réplica no los pone, y sin ellos dos despliegues o dos instancias del mismo
       // servicio escriben líneas indistinguibles. Mismas fuentes que los atributos de recurso de
@@ -355,7 +356,7 @@ function loggingYaml(model, profile) {
       '    ecs:',
       '      service:',
       `        version: "${model.service.version}"`,
-      `        environment: ${envWithDefault(profile, 'DEPLOYMENT_ENVIRONMENT', profile)}`,
+      `        environment: ${envFor('DEPLOYMENT_ENVIRONMENT', profile, profile)}`,
       '        node-name: ${SERVICE_INSTANCE_ID:${HOSTNAME:unknown}}'
     );
     if (telemetry) {
@@ -411,13 +412,13 @@ function telemetryYaml(model, profile) {
           '      # haciendo muestreo por cola, súbelo a 1.0: si no, se muestrea dos veces.'
         ]
       : []),
-    `      probability: ${envWithDefault(profile, 'TRACING_SAMPLING_PROBABILITY', sampling)}`,
+    `      probability: ${envFor('TRACING_SAMPLING_PROBABILITY', profile, sampling)}`,
     '  opentelemetry:',
     '    resource-attributes:',
     // service.name lo pone Boot desde spring.application.name. Las claves llevan corchetes: con
     // un punto dentro, sin ellos el binder de Boot las leería como mapas anidados.
     `      "[service.version]": "${model.service.version}"`,
-    `      "[deployment.environment]": ${envWithDefault(profile, 'DEPLOYMENT_ENVIRONMENT', profile)}`,
+    `      "[deployment.environment]": ${envFor('DEPLOYMENT_ENVIRONMENT', profile, profile)}`,
     // Qué RÉPLICA emitió cada señal. Sin esto, dos instancias del mismo servicio son
     // indistinguibles en el backend: sus trazas y sus logs se mezclan bajo el mismo nombre.
     // HOSTNAME es el nombre del pod o del contenedor en cualquier plataforma de contenedores;
@@ -612,7 +613,7 @@ function managementYaml(model, profile) {
       '  server:',
       '    # Puerto del actuator, distinto del de negocio. NO se publica fuera del pod/host: solo lo',
       `    # alcanza el colector que viene a leer ${METRICS_TRANSPORT.scrapePath}.`,
-      `    port: ${envWithDefault(profile, 'MANAGEMENT_PORT', MANAGEMENT_PORT)}`
+      `    port: ${envFor('MANAGEMENT_PORT', profile)}`
     );
   }
   lines.push(
@@ -637,13 +638,13 @@ function managementYaml(model, profile) {
  * El tope por defecto de una transacción. Holgado para el trabajo de una petición —que se mide en
  * milisegundos— y para un lote de purga, y corto frente a una espera de bloqueo sin fin.
  */
-export const DB_TRANSACTION_TIMEOUT = '30s';
+export const DB_TRANSACTION_TIMEOUT = runtimeDefault('DB_TRANSACTION_TIMEOUT');
 
 /** Cuánto espera una petición a que el pool tenga conexión libre (ms), en vez de los 30 s de Hikari. */
-export const DB_POOL_CONNECTION_TIMEOUT_MS = 5000;
+export const DB_POOL_CONNECTION_TIMEOUT_MS = runtimeDefault('DB_POOL_CONNECTION_TIMEOUT_MS');
 
 /** Puerto de gestión por defecto en production (solo con telemetría). */
-export const MANAGEMENT_PORT = 8081;
+export const MANAGEMENT_PORT = runtimeDefault('MANAGEMENT_PORT');
 
 function dbYaml(model, profile, dbName) {
   const db = DATABASES[model.stack.database] ?? DATABASES.postgresql;
@@ -651,25 +652,25 @@ function dbYaml(model, profile, dbName) {
   const lines = [
     'spring:',
     '  datasource:',
-    `    url: ${envValue(profile, 'DB_URL', JAVA_DATABASES[db.id].url(dbName))}`,
-    `    username: ${envValue(profile, 'DB_USERNAME', db.user(dbName))}`,
-    `    password: ${envValue(profile, 'DB_PASSWORD', db.password)}`,
+    `    url: ${envFor('DB_URL', profile, JAVA_DATABASES[db.id].url(dbName))}`,
+    `    username: ${envFor('DB_USERNAME', profile, db.user(dbName))}`,
+    `    password: ${envFor('DB_PASSWORD', profile, db.password)}`,
     '    hikari:',
     '      # Tuning del pool expuesto por ambiente; ajustar en production.',
     // El nombre es la etiqueta `pool` de sus métricas: con el de por defecto (HikariPool-1) dos
     // servicios en el mismo backend no se distinguen.
     `      pool-name: ${model.service.name}-pool`,
-    `      maximum-pool-size: ${envWithDefault(profile, 'DB_POOL_MAX_SIZE', 10)}`,
+    `      maximum-pool-size: ${envFor('DB_POOL_MAX_SIZE', profile)}`,
     // Cuánto espera una petición a que haya conexión libre. El default de Hikari (30 s) es
     // demasiado: con hilos virtuales la entrada no tiene techo, así que con el pool agotado se
     // acumulan miles de peticiones esperando 30 s —el cliente HTTP ya se rindió mucho antes y el
     // servidor sigue haciendo trabajo que nadie va a leer—. Fallar rápido devuelve el error
     // mientras alguien lo escucha y deja ver la saturación en vez de esconderla en latencia.
-    `      connection-timeout: ${envWithDefault(profile, 'DB_POOL_CONNECTION_TIMEOUT_MS', DB_POOL_CONNECTION_TIMEOUT_MS)}`,
+    `      connection-timeout: ${envFor('DB_POOL_CONNECTION_TIMEOUT_MS', profile)}`,
     // Vida máxima de una conexión. Tiene que ser MENOR que cualquier corte de conexiones
     // ociosas entre el servicio y la base (un proxy, un balanceador, el propio motor): si no, el
     // pool entrega conexiones que alguien ya cerró por el otro lado. Por defecto, el de Hikari.
-    `      max-lifetime: ${envWithDefault(profile, 'DB_POOL_MAX_LIFETIME_MS', 1800000)}`,
+    `      max-lifetime: ${envFor('DB_POOL_MAX_LIFETIME_MS', profile)}`,
     // El tope de TODA transacción: las del mediator y las @Transactional de los adaptadores
     // (relay, reclamos, purgas). Hibernate lo aplica con setQueryTimeout a cada sentencia, flush
     // incluido, y eso lo soportan los cinco drivers. Sin él, una consulta lenta o una espera de
@@ -679,7 +680,7 @@ function dbYaml(model, profile, dbName) {
     // (ApiExceptionHandler). Las purgas van por lotes para caber holgadas (purge.js).
     '  transaction:',
     '    # Tope de cada transacción; lo cancelado sale como 503 TRANSACTION_TIMEOUT.',
-    `    default-timeout: ${envWithDefault(profile, 'DB_TRANSACTION_TIMEOUT', DB_TRANSACTION_TIMEOUT)}`,
+    `    default-timeout: ${envFor('DB_TRANSACTION_TIMEOUT', profile)}`,
     '  jpa:',
     '    hibernate:'
   ];
@@ -784,7 +785,7 @@ function documentDbYaml(db, profile, dbName) {
       'spring:',
       '  data:',
       '    mongodb:',
-      `      uri: ${envValue(profile, 'DB_URL', JAVA_DATABASES[db.id].url(dbName))}`,
+      `      uri: ${envFor('DB_URL', profile, JAVA_DATABASES[db.id].url(dbName))}`,
       '      # Los índices los crea MongoIndexConfig, que build deriva entero de',
       '      # persistence.keel.yaml: dejar que Spring los infiera de las anotaciones',
       '      # los crearía con nombres suyos, y el ApiExceptionHandler traduce la',
@@ -893,19 +894,19 @@ function brokerYaml(model, profile) {
       '  cloud:',
       '    aws:',
       '      region:',
-      `        static: ${envValue(profile, 'AWS_REGION', 'us-east-1')}`,
+      `        static: ${envFor('AWS_REGION', profile)}`,
       '      credentials:',
-      `        access-key: ${envValue(profile, 'AWS_ACCESS_KEY_ID', 'test')}`,
-      `        secret-key: ${envValue(profile, 'AWS_SECRET_ACCESS_KEY', 'test')}`
+      `        access-key: ${envFor('AWS_ACCESS_KEY_ID', profile)}`,
+      `        secret-key: ${envFor('AWS_SECRET_ACCESS_KEY', profile)}`
     ];
     // En local/develop se apunta a LocalStack; en production el SDK resuelve el
     // endpoint real de AWS (no se fija endpoint).
     if (profile !== 'production') {
       lines.push(
         '      sns:',
-        `        endpoint: ${envValue(profile, 'AWS_SNS_ENDPOINT', 'http://localhost:4566')}`,
+        `        endpoint: ${envFor('AWS_SNS_ENDPOINT', profile)}`,
         '      sqs:',
-        `        endpoint: ${envValue(profile, 'AWS_SQS_ENDPOINT', 'http://localhost:4566')}`
+        `        endpoint: ${envFor('AWS_SQS_ENDPOINT', profile)}`
       );
     }
     return lines.join('\n') + '\n';
@@ -914,10 +915,10 @@ function brokerYaml(model, profile) {
     return [
       'spring:',
       '  rabbitmq:',
-      `    host: ${envValue(profile, 'RABBITMQ_HOST', 'localhost')}`,
-      `    port: ${envValue(profile, 'RABBITMQ_PORT', 5672)}`,
-      `    username: ${envValue(profile, 'RABBITMQ_USERNAME', 'guest')}`,
-      `    password: ${envValue(profile, 'RABBITMQ_PASSWORD', 'guest')}`,
+      `    host: ${envFor('RABBITMQ_HOST', profile)}`,
+      `    port: ${envFor('RABBITMQ_PORT', profile)}`,
+      `    username: ${envFor('RABBITMQ_USERNAME', profile)}`,
+      `    password: ${envFor('RABBITMQ_PASSWORD', profile)}`,
       // Con `reliability: outbox` el dispatcher tiene que saber si el broker CONFIRMÓ cada
       // envío (confirms correlados) y si el mensaje se quedó sin cola (mandatory + returns):
       // sin eso marca como publicado lo que el broker descartó, que es justo lo que el outbox
@@ -937,13 +938,13 @@ function brokerYaml(model, profile) {
       // invisible no se puede respetar.
       'rabbitmq:',
       '  listener:',
-      `    recovery-interval-ms: ${envWithDefault(profile, 'RABBITMQ_LISTENER_RECOVERY_INTERVAL_MS', 5000)}`
+      `    recovery-interval-ms: ${envFor('RABBITMQ_LISTENER_RECOVERY_INTERVAL_MS', profile)}`
     ].join('\n') + '\n';
   }
   return [
     'spring:',
     '  kafka:',
-    `    bootstrap-servers: ${envValue(profile, 'KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')}`,
+    `    bootstrap-servers: ${envFor('KAFKA_BOOTSTRAP_SERVERS', profile)}`,
     '    producer:',
     '      key-serializer: org.apache.kafka.common.serialization.StringSerializer',
     '      # El JSON del EventEnvelope lo produce el ObjectMapper de la aplicación',
@@ -986,7 +987,7 @@ function messagingYaml(model, profile) {
     const first = model.events[0];
     lines.push(
       '  publishing:',
-      `    destination: ${envWithDefault(profile, 'MESSAGING_DESTINATION', first.destinationDefault)}`,
+      `    destination: ${envFor('MESSAGING_DESTINATION', profile, first.destinationDefault)}`,
       '    routing-keys:'
     );
     for (const event of model.events) {
@@ -1127,8 +1128,8 @@ function redisYaml(profile) {
     'spring:',
     '  data:',
     '    redis:',
-    `      host: ${envValue(profile, 'REDIS_HOST', 'localhost')}`,
-    `      port: ${envValue(profile, 'REDIS_PORT', 6379)}`
+    `      host: ${envFor('REDIS_HOST', profile)}`,
+    `      port: ${envFor('REDIS_PORT', profile)}`
   ].join('\n') + '\n';
 }
 
@@ -1139,7 +1140,7 @@ function oauth2Yaml(model, profile) {
     if (profile === 'local') {
       lines.push('          # Keycloak de prueba del docker-compose; crea el realm y ajusta el nombre.');
     }
-    lines.push(`          issuer-uri: ${envValue(profile, 'OAUTH2_ISSUER_URI', `http://localhost:8180/realms/${service.name}`)}`);
+    lines.push(`          issuer-uri: ${envFor('OAUTH2_ISSUER_URI', profile, `http://localhost:8180/realms/${service.name}`)}`);
   } else if (stack.auth === 'cognito') {
     if (profile === 'local') {
       lines.push(
@@ -1150,13 +1151,13 @@ function oauth2Yaml(model, profile) {
       );
     }
     lines.push(
-      `          issuer-uri: ${envValue(profile, 'OAUTH2_ISSUER_URI', `http://localhost:${AUTH.cognito.port}/${service.name}`)}`
+      `          issuer-uri: ${envFor('OAUTH2_ISSUER_URI', profile, `http://localhost:${AUTH.cognito.port}/${service.name}`)}`
     );
   } else {
     if (profile === 'local') {
       lines.push('          # TODO (agente): issuer real del resource server según security.keel.yaml.');
     }
-    lines.push(`          issuer-uri: ${envValue(profile, 'OAUTH2_ISSUER_URI', 'https://tu-issuer')}`);
+    lines.push(`          issuer-uri: ${envFor('OAUTH2_ISSUER_URI', profile, 'https://tu-issuer')}`);
   }
   return lines.join('\n') + '\n';
 }
@@ -1197,12 +1198,12 @@ function securityYaml(model, profile) {
         ? '  # Clave que deben enviar los clientes; esta es la de los escenarios de validación.'
         : '  # Clave que deben enviar los clientes; obligatoria (sin ella la app no arranca).'
     );
-    lines.push(`  api-key: ${envRequired(profile, 'SECURITY_API_KEY', LOCAL_API_KEY)}`);
+    lines.push(`  api-key: ${envFor('SECURITY_API_KEY', profile)}`);
   }
   if (jwt && sec.serviceAuth?.validateAudience === true) {
     const audience = sec.serviceAuth.audience ?? model.service.artifactId;
     lines.push('  # Audiencia que debe traer el claim aud de los tokens de clientes máquina.');
-    lines.push(`  audience: ${envValue(profile, 'SECURITY_AUDIENCE', audience)}`);
+    lines.push(`  audience: ${envFor('SECURITY_AUDIENCE', profile, audience)}`);
   }
   if (sec.serviceAuth?.protocol === 'api-key' && (sec.serviceClients?.length ?? 0) > 0) {
     lines.push(
@@ -1227,7 +1228,7 @@ function securityYaml(model, profile) {
         : '    # Orígenes del navegador (CSV); obligatorio (sin él la app no arranca).'
     );
     lines.push(
-      `    allowed-origins: ${envRequired(profile, 'SECURITY_CORS_ALLOWED_ORIGINS', LOCAL_CORS_ORIGINS)}`
+      `    allowed-origins: ${envFor('SECURITY_CORS_ALLOWED_ORIGINS', profile)}`
     );
   }
   return lines.join('\n') + '\n';
@@ -1260,10 +1261,10 @@ function mailYaml(model, profile) {
   const lines = [
     'spring:',
     '  mail:',
-    `    host: ${envValue(profile, 'MAIL_HOST', 'localhost')}`,
-    `    port: ${envValue(profile, 'MAIL_PORT', 1025)}`,
-    `    username: ${envValue(profile, 'MAIL_USERNAME', '')}`,
-    `    password: ${envValue(profile, 'MAIL_PASSWORD', '')}`,
+    `    host: ${envFor('MAIL_HOST', profile)}`,
+    `    port: ${envFor('MAIL_PORT', profile)}`,
+    `    username: ${envFor('MAIL_USERNAME', profile)}`,
+    `    password: ${envFor('MAIL_PASSWORD', profile)}`,
     '    properties:',
     '      mail:',
     '        smtp:',
@@ -1279,17 +1280,17 @@ function mailYaml(model, profile) {
     lines.push('          auth: false', '          starttls:', '            enable: false');
   } else {
     lines.push(
-      `          auth: ${envWithDefault(profile, 'MAIL_SMTP_AUTH', true)}`,
+      `          auth: ${envFor('MAIL_SMTP_AUTH', profile)}`,
       '          starttls:',
-      `            enable: ${envWithDefault(profile, 'MAIL_SMTP_STARTTLS', true)}`
+      `            enable: ${envFor('MAIL_SMTP_STARTTLS', profile)}`
     );
   }
   // Un envío que se queda esperando a un proveedor caído bloquea el hilo que lo
   // hace. Los defaults de JavaMail son "sin timeout": el hilo espera para siempre.
   lines.push(
-    `          connectiontimeout: ${envWithDefault(profile, 'MAIL_CONNECT_TIMEOUT_MS', 5000)}`,
-    `          timeout: ${envWithDefault(profile, 'MAIL_READ_TIMEOUT_MS', 5000)}`,
-    `          writetimeout: ${envWithDefault(profile, 'MAIL_WRITE_TIMEOUT_MS', 5000)}`
+    `          connectiontimeout: ${envFor('MAIL_CONNECT_TIMEOUT_MS', profile)}`,
+    `          timeout: ${envFor('MAIL_READ_TIMEOUT_MS', profile)}`,
+    `          writetimeout: ${envFor('MAIL_WRITE_TIMEOUT_MS', profile)}`
   );
 
   // Bajo `mail:` va SOLO lo que el servidor lee en tiempo de ejecución, y eso son las
@@ -1300,15 +1301,15 @@ function mailYaml(model, profile) {
   // parámetros no cambia el comportamiento, y descubrirlo cuesta una sesión.
   const settings = [];
   if (mail.sender?.source === 'fixed') {
-    settings.push(`  sender: ${envValue(profile, 'MAIL_SENDER', mail.sender.address)}`);
+    settings.push(`  sender: ${envFor('MAIL_SENDER', profile, mail.sender.address)}`);
   } else if (mail.sender?.fallback) {
     settings.push(
       '  # Remitente de respaldo: se usa cuando el dato del servicio no lo resuelve.',
-      `  sender-fallback: ${envValue(profile, 'MAIL_SENDER_FALLBACK', mail.sender.fallback)}`
+      `  sender-fallback: ${envFor('MAIL_SENDER_FALLBACK', profile, mail.sender.fallback)}`
     );
   }
   if (mail.replyTo?.source === 'fixed') {
-    settings.push(`  reply-to: ${envValue(profile, 'MAIL_REPLY_TO', mail.replyTo.address)}`);
+    settings.push(`  reply-to: ${envFor('MAIL_REPLY_TO', profile, mail.replyTo.address)}`);
   }
   if (settings.length > 0) lines.push('', 'mail:', ...settings);
   return lines.join('\n') + '\n';
@@ -1336,9 +1337,9 @@ function paymentsYaml(model, profile) {
     `    webhook-secret: ${envValue(profile, gateway.env.webhookSecret, PAYMENT_TEST_SECRETS.webhookSecret)}`,
     // Más corto que el presupuesto de la operación: superado, la acción queda en duda y responde con
     // su estado en vuelo, en vez de dejar al llamante esperando a la pasarela.
-    `    connect-timeout: ${envWithDefault(profile, 'PAYMENT_GATEWAY_CONNECT_TIMEOUT', '2s')}`,
-    `    read-timeout: ${envWithDefault(profile, 'PAYMENT_GATEWAY_READ_TIMEOUT', '10s')}`,
-    `    notice-tolerance-seconds: ${envWithDefault(profile, 'PAYMENT_NOTICE_TOLERANCE_SECONDS', gateway.webhook.toleranceSeconds)}`,
+    `    connect-timeout: ${envFor('PAYMENT_GATEWAY_CONNECT_TIMEOUT', profile)}`,
+    `    read-timeout: ${envFor('PAYMENT_GATEWAY_READ_TIMEOUT', profile)}`,
+    `    notice-tolerance-seconds: ${envFor('PAYMENT_NOTICE_TOLERANCE_SECONDS', profile, gateway.webhook.toleranceSeconds)}`,
     '  reconciliation:',
     '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds); en local y test se acorta',
     '    # para que los escenarios del barrido no esperen un cuarto de hora.',
@@ -1390,14 +1391,14 @@ function storageYaml(model, profile) {
     // en test; es deliberado: si algo llama, falla en local y rápido.
     lines.push('  endpoint: http://localhost:9000');
   } else if (isMinio) {
-    lines.push(`  endpoint: ${envValue(profile, 'STORAGE_ENDPOINT', 'http://localhost:9000')}`);
+    lines.push(`  endpoint: ${envFor('STORAGE_ENDPOINT', profile)}`);
   } else if (profile === 'local') {
     lines.push('  # S3 real: el endpoint lo resuelve el SDK por región; define STORAGE_ENDPOINT solo para un compatible.');
   }
   lines.push(
-    `  region: ${envValue(profile, 'STORAGE_REGION', 'us-east-1')}`,
-    `  access-key: ${envValue(profile, 'STORAGE_ACCESS_KEY', isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
-    `  secret-key: ${envValue(profile, 'STORAGE_SECRET_KEY', isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
+    `  region: ${envFor('STORAGE_REGION', profile)}`,
+    `  access-key: ${envFor('STORAGE_ACCESS_KEY', profile, isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
+    `  secret-key: ${envFor('STORAGE_SECRET_KEY', profile, isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
     isMinio || isTest ? '  path-style-access: true' : '  path-style-access: false'
   );
 
@@ -1413,7 +1414,7 @@ function storageYaml(model, profile) {
       // se llama a nadie, pero el binding de StorageProperties no puede quedar a null.
       lines.push('  public-base-url: http://localhost:9000');
     } else if (profile === 'local') {
-      lines.push(`  public-base-url: ${envValue(profile, 'STORAGE_PUBLIC_BASE_URL', 'http://localhost:9000')}`);
+      lines.push(`  public-base-url: ${envFor('STORAGE_PUBLIC_BASE_URL', profile)}`);
     } else {
       // Sin default, también en develop: una base vacía no falla, compone URLs
       // rotas que solo se ven al abrir una imagen. Mejor no arrancar.

@@ -22,6 +22,7 @@ import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { FILE_UPLOAD_TS } from './dtos.js';
 import { TELEMETRY_TS, instrumentationFor } from './telemetry.js';
 import { envValue, envWithDefault } from 'keel-core/gen/profile-values';
+import { envFor } from 'keel-core/gen/runtime-env';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const STORAGE_DIR = 'domain/storage';
@@ -521,19 +522,19 @@ function storageYaml(model, profile) {
     // El perfil test no tiene almacén: un endpoint local SIEMPRE, también con S3, para que nada salga a Internet.
     lines.push('  endpoint: http://localhost:9000');
   } else if (isMinio) {
-    lines.push(`  endpoint: ${envValue(profile, 'STORAGE_ENDPOINT', 'http://localhost:9000')}`);
+    lines.push(`  endpoint: ${envFor('STORAGE_ENDPOINT', profile)}`);
   } else if (profile === 'local') {
     lines.push('  # S3 real: el endpoint lo resuelve el SDK por región; define STORAGE_ENDPOINT solo para un compatible.');
   }
   lines.push(
-    `  region: ${envValue(profile, 'STORAGE_REGION', 'us-east-1')}`,
-    `  access-key: ${envValue(profile, 'STORAGE_ACCESS_KEY', isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
-    `  secret-key: ${envValue(profile, 'STORAGE_SECRET_KEY', isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
+    `  region: ${envFor('STORAGE_REGION', profile)}`,
+    `  access-key: ${envFor('STORAGE_ACCESS_KEY', profile, isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
+    `  secret-key: ${envFor('STORAGE_SECRET_KEY', profile, isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
     isMinio || isTest ? '  path-style-access: true' : '  path-style-access: false'
   );
   if (model.storage?.hasPublicBucket) {
     if (isTest) lines.push('  public-base-url: http://localhost:9000');
-    else if (profile === 'local') lines.push(`  public-base-url: ${envValue(profile, 'STORAGE_PUBLIC_BASE_URL', 'http://localhost:9000')}`);
+    else if (profile === 'local') lines.push(`  public-base-url: ${envFor('STORAGE_PUBLIC_BASE_URL', profile)}`);
     else {
       lines.push(
         '  # URL base con la que el CONSUMIDOR lee los objetos públicos (CDN o borde),',

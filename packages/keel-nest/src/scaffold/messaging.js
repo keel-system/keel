@@ -38,6 +38,7 @@ import { acknowledgeNote } from 'keel-core/gen/rejection-notes';
 import { callsPaymentGateway } from 'keel-core/gen/payments-model';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { envWithDefault } from 'keel-core/gen/profile-values';
+import { envFor } from 'keel-core/gen/runtime-env';
 
 const MESSAGING_DIR = 'infrastructure/messaging';
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
@@ -822,7 +823,7 @@ export function messagingYaml(model, profile) {
   const events = model.events ?? [];
   const subscriptions = model.subscriptions ?? [];
   if (events.length > 0) {
-    lines.push('  publishing:', `    destination: ${envWithDefault(profile, 'MESSAGING_DESTINATION', events[0].destinationDefault)}`, '    routing-keys:');
+    lines.push('  publishing:', `    destination: ${envFor('MESSAGING_DESTINATION', profile, events[0].destinationDefault)}`, '    routing-keys:');
     for (const event of events) lines.push(`      ${routingKeyName(event)}: ${event.routingKeyDefault}`);
   }
   if (subscriptions.length > 0) {

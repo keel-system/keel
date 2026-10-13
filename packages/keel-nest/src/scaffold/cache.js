@@ -33,7 +33,7 @@ import { PAGED_RESPONSE_TS } from './dtos.js';
 import { usesPersistence } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
-import { envValue } from 'keel-core/gen/profile-values';
+import { envFor } from 'keel-core/gen/runtime-env';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const WIRE_TS = 'src/application/support/wire.ts';
@@ -249,8 +249,8 @@ function cacheYaml(profile) {
   }
   lines.push(
     '  redis:',
-    `    host: ${envValue(profile, 'REDIS_HOST', 'localhost')}`,
-    `    port: ${envValue(profile, 'REDIS_PORT', 6379)}`,
+    `    host: ${envFor('REDIS_HOST', profile)}`,
+    `    port: ${envFor('REDIS_PORT', profile)}`,
     '    # Una caché caída no puede retener a quien lee: pasado el plazo, la lectura va al origen.',
     '    connect-timeout-ms: 2000',
     '    command-timeout-ms: 2000'

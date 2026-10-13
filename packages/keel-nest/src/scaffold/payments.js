@@ -26,6 +26,7 @@ import { messageComponents, messagePath } from './services.js';
 import * as stripe from './payment-gateways/stripe.js';
 import * as mercadopago from './payment-gateways/mercadopago.js';
 import { envValue, envWithDefault } from 'keel-core/gen/profile-values';
+import { envFor } from 'keel-core/gen/runtime-env';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const DOMAIN_DIR = 'domain/payment';
@@ -979,9 +980,9 @@ export function paymentsYaml(model, profile) {
     `    base-url: ${isLocalish ? baseUrl : envWithDefault(profile, gateway.env.baseUrl, gateway.baseUrl)}`,
     `    api-key: ${envValue(profile, gateway.env.apiKey, PAYMENT_TEST_SECRETS.apiKey)}`,
     `    webhook-secret: ${envValue(profile, gateway.env.webhookSecret, PAYMENT_TEST_SECRETS.webhookSecret)}`,
-    `    connect-timeout: ${envWithDefault(profile, 'PAYMENT_GATEWAY_CONNECT_TIMEOUT', '2s')}`,
-    `    read-timeout: ${envWithDefault(profile, 'PAYMENT_GATEWAY_READ_TIMEOUT', '10s')}`,
-    `    notice-tolerance-seconds: ${envWithDefault(profile, 'PAYMENT_NOTICE_TOLERANCE_SECONDS', gateway.webhook.toleranceSeconds)}`,
+    `    connect-timeout: ${envFor('PAYMENT_GATEWAY_CONNECT_TIMEOUT', profile)}`,
+    `    read-timeout: ${envFor('PAYMENT_GATEWAY_READ_TIMEOUT', profile)}`,
+    `    notice-tolerance-seconds: ${envFor('PAYMENT_NOTICE_TOLERANCE_SECONDS', profile, gateway.webhook.toleranceSeconds)}`,
     '  reconciliation:',
     '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds); en local y test se acorta',
     '    # para que los escenarios del barrido no esperen un cuarto de hora.',

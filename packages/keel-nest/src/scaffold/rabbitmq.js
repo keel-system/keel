@@ -23,16 +23,16 @@ import { deadLetterName, missingTargetRetryDestinations, rabbitListenerRetry, su
 import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, RABBIT_CONNECTION_TS, RABBIT_TOPOLOGY_TS, usesRabbitMq } from './messaging.js';
-import { envValue } from 'keel-core/gen/profile-values';
 import { envWithDefault } from 'keel-core/gen/profile-values';
+import { envFor, runtimeDefault } from 'keel-core/gen/runtime-env';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
 /** El prefetch del contenedor de Spring Boot (`spring.rabbitmq.listener.simple.prefetch`, 250). */
 export const RABBIT_PREFETCH = 250;
-/** El intervalo de recuperación del listener: el de keel-spring (`rabbitmq.listener.recovery-interval-ms`). */
-export const RABBIT_RECOVERY_INTERVAL_MS = 5000;
+/** El intervalo de recuperación del listener (`rabbitmq.listener.recovery-interval-ms`; catálogo neutral). */
+export const RABBIT_RECOVERY_INTERVAL_MS = runtimeDefault('RABBITMQ_LISTENER_RECOVERY_INTERVAL_MS');
 /**
  * Cuánto espera una publicación la confirmación del broker. Por ENCIMA del intervalo de recuperación:
  * un plazo más corto reinicia ese reloj en cada intento y la reconexión no converge (la regla que la
@@ -537,13 +537,13 @@ function rabbitYaml(_model, profile) {
     ...(profile === 'test'
       ? ['  # Las pruebas de build arrancan sin broker: la conexión no se intenta.', '  enabled: false']
       : ['  enabled: true']),
-    `  host: ${envValue(profile, 'RABBITMQ_HOST', 'localhost')}`,
-    `  port: ${envValue(profile, 'RABBITMQ_PORT', 5672)}`,
-    `  username: ${envValue(profile, 'RABBITMQ_USERNAME', 'guest')}`,
-    `  password: ${envValue(profile, 'RABBITMQ_PASSWORD', 'guest')}`,
+    `  host: ${envFor('RABBITMQ_HOST', profile)}`,
+    `  port: ${envFor('RABBITMQ_PORT', profile)}`,
+    `  username: ${envFor('RABBITMQ_USERNAME', profile)}`,
+    `  password: ${envFor('RABBITMQ_PASSWORD', profile)}`,
     '  listener:',
     '    # Techo de la espera entre reconexiones (la misma clave que keel-spring).',
-    `    recovery-interval-ms: ${envWithDefault(profile, 'RABBITMQ_LISTENER_RECOVERY_INTERVAL_MS', RABBIT_RECOVERY_INTERVAL_MS)}`
+    `    recovery-interval-ms: ${envFor('RABBITMQ_LISTENER_RECOVERY_INTERVAL_MS', profile)}`
   ];
   // El reintento del listener NO va aquí: sale del diseño (onFailure.retry) y lo lleva rabbit-topology.ts.
   // Una clave que nadie lee sería una palanca que no mueve nada.

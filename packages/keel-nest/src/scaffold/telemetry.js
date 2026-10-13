@@ -27,6 +27,7 @@ import {
 } from 'keel-core/gen/telemetry-vocabulary';
 import { tsModule } from './render.js';
 import { envWithDefault } from 'keel-core/gen/profile-values';
+import { envFor, runtimeDefault } from 'keel-core/gen/runtime-env';
 
 export { usesTelemetry, instrumentationFor };
 
@@ -56,8 +57,8 @@ export const NODE_RUNTIME = {
 };
 export const TELEMETRY_LIFECYCLE_TS = 'src/infrastructure/telemetry/telemetry-lifecycle.ts';
 
-/** Puerto de gestión por defecto en production (con telemetría): el mismo que keel-spring. */
-export const MANAGEMENT_PORT = 8081;
+/** Puerto de gestión por defecto en production (con telemetría; catálogo neutral). */
+export const MANAGEMENT_PORT = runtimeDefault('MANAGEMENT_PORT');
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -110,7 +111,7 @@ export function telemetryYaml(model, profile) {
     'telemetry:',
     '  tracing:',
     '    # Parent-based: se respeta la decisión de quien llama; la proporción solo decide en las raíces.',
-    `    sampling-probability: ${envWithDefault(profile, 'TRACING_SAMPLING_PROBABILITY', sampling)}`,
+    `    sampling-probability: ${envFor('TRACING_SAMPLING_PROBABILITY', profile, sampling)}`,
     '  export:',
     `    enabled: ${exportEnabled}`,
     `    endpoint: ${endpoint}`,
@@ -121,7 +122,7 @@ export function telemetryYaml(model, profile) {
     `    prometheus-enabled: ${envWithDefault(profile, METRICS_TRANSPORT.prometheus.envVar, 'true')}`,
     '  resource:',
     `    service-version: "${model.service.version}"`,
-    `    deployment-environment: ${envWithDefault(profile, 'DEPLOYMENT_ENVIRONMENT', profile)}`,
+    `    deployment-environment: ${envFor('DEPLOYMENT_ENVIRONMENT', profile, profile)}`,
     // Qué réplica emitió cada señal; en local hay una sola instancia.
     ...(profile === 'local' ? [] : ['    service-instance-id: ${SERVICE_INSTANCE_ID:${HOSTNAME:unknown}}'])
   ];
@@ -131,7 +132,7 @@ export function telemetryYaml(model, profile) {
       '  server:',
       `    # Puerto del scrape, distinto del de negocio. NO se publica fuera del pod/host: solo lo alcanza el`,
       `    # colector que viene a leer ${METRICS_TRANSPORT.scrapePath}.`,
-      `    port: ${envWithDefault(profile, 'MANAGEMENT_PORT', MANAGEMENT_PORT)}`
+      `    port: ${envFor('MANAGEMENT_PORT', profile)}`
     );
   }
   const switches = instrumentationFor(model);

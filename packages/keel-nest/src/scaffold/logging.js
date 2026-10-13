@@ -16,7 +16,7 @@
 
 import { tsModule } from './render.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
-import { envWithDefault } from 'keel-core/gen/profile-values';
+import { envFor } from 'keel-core/gen/runtime-env';
 
 export const LOGGER_TS = 'src/infrastructure/logging/keel-logger.ts';
 
@@ -54,19 +54,19 @@ export function loggingYaml(model, profile) {
     `# Generado por keel-nest build. Los logs del servicio en el perfil ${profile}.`,
     'logging:',
     '  level:',
-    `    root: ${envWithDefault(profile, 'LOG_LEVEL_ROOT', root)}`,
-    `    app: ${envWithDefault(profile, 'LOG_LEVEL_APP', app)}`
+    `    root: ${envFor('LOG_LEVEL_ROOT', profile, root)}`,
+    `    app: ${envFor('LOG_LEVEL_APP', profile, app)}`
   ];
   if (profile === 'develop' || profile === 'production') {
     lines.push(
       '  # Fuera de local la consola es JSON (ECS): la recoge un agente que la separa en campos.',
       '  structured:',
       '    format:',
-      `      console: ${envWithDefault(profile, 'LOG_FORMAT', 'ecs')}`,
+      `      console: ${envFor('LOG_FORMAT', profile)}`,
       '    ecs:',
       '      service:',
       `        version: "${model.service.version}"`,
-      `        environment: ${envWithDefault(profile, 'DEPLOYMENT_ENVIRONMENT', profile)}`,
+      `        environment: ${envFor('DEPLOYMENT_ENVIRONMENT', profile, profile)}`,
       '        node-name: ${SERVICE_INSTANCE_ID:${HOSTNAME:unknown}}'
     );
   }

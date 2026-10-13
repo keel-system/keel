@@ -225,8 +225,35 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
        - Queda una excepción con motivo: el `envValue` de mail en keel-nest entrecomilla el vacío,
          por cómo lee YAML su cargador, no por el contrato.
        - `test/profile-values-source.test.js` prohíbe una copia nueva; falsado plantando una.
-    3. **Pendiente.** El catálogo de variables operativas con sus defaults, del que leerán
-       los dos (hoy unas 20 se escriben en los dos generadores y coinciden).
+    3. **Hecho.** `keel-core/gen/runtime-env.js`: el catálogo de las variables de entorno del
+       servidor que no dependen del lenguaje.
+       - Inventario: 93 variables con gradiente en los dos generadores, 72 compartidas. De esas,
+         las de los parámetros del outbox, del barrido y de la pasarela ya venían de su propio
+         catálogo neutral. Las demás se escribían a mano en cada emisor, con su nombre, su
+         gradiente y su default.
+       - El catálogo tiene 51 entradas de dos clases. Con `default` (35), el valor lo fija el
+         catálogo y `envFor` lanza si un emisor intenta poner otro. Sin `default` (la URL de la
+         base de datos, la audiencia, el issuer), el valor sale del diseño y el catálogo fija
+         nombre y gradiente.
+       - Lo que es de una plataforma se queda en su generador (`FLYWAY_ENABLED`, `MANAGEMENT_*`
+         de Spring; los intervalos de reconexión del cliente en Nest).
+       - 107 llamadas reescritas a `envFor` (55 en keel-spring y 52 en keel-nest). Ninguna
+         contradecía el gradiente del catálogo.
+       - Las constantes copiadas (`LOCAL_API_KEY`, `LOCAL_CORS_ORIGINS`,
+         `DB_TRANSACTION_TIMEOUT`, `DB_POOL_CONNECTION_TIMEOUT_MS`, `MANAGEMENT_PORT`,
+         `RABBIT_RECOVERY_INTERVAL_MS`) conservan su nombre exportado, pero salen del catálogo.
+       - El `envValue` de mail en keel-nest desaparece: el vacío entrecomillado pasa a ser un
+         `yamlScalar()` sobre el valor del catálogo. Era cómo lee YAML esa plataforma, no otro
+         gradiente.
+       - Las dos líneas base salen idénticas.
+       - `test/runtime-env.test.js` ata cada valor local a lo que publica la `infra/` de prueba
+         (puertos del compose, credenciales de LocalStack y RabbitMQ, el SMTP de Mailpit).
+         Falsado con el puerto de RabbitMQ a 5673.
+       - `test/profile-values-source.test.js`, en los dos generadores, prohíbe definir el
+         gradiente y escribir a mano una variable del catálogo. Falsado plantando una llamada.
+       - **Fuera de este paso, para el README de keel-dotnet:** la descripción de cada variable.
+         keel-spring documenta 21 en su README con un formato distinto del de keel-nest, y el
+         catálogo no lleva descripciones todavía.
 
 ## 5. Riesgos conocidos
 
