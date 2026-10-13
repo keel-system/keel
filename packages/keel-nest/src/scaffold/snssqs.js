@@ -24,6 +24,7 @@ import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, SNSSQS_CONNECTION_TS, SNSSQS_CONSUMPTION_TS, usesSnsSqs } from './messaging.js';
 import { envValue } from 'keel-core/gen/profile-values';
+import { envWithDefault } from 'keel-core/gen/profile-values';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -495,10 +496,6 @@ function toInbound(message: Message): InboundMessage {
 }
 
 // ─── La configuración ────────────────────────────────────────────────────────
-
-function envWithDefault(profile, name, value) {
-  return profile === 'local' || profile === 'test' ? String(value) : `\${${name}:${value}}`;
-}
 
 function snssqsYaml(profile) {
   const lines = [

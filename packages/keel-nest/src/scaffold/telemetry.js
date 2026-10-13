@@ -26,6 +26,7 @@ import {
   usesTelemetry
 } from 'keel-core/gen/telemetry-vocabulary';
 import { tsModule } from './render.js';
+import { envWithDefault } from 'keel-core/gen/profile-values';
 
 export { usesTelemetry, instrumentationFor };
 
@@ -90,10 +91,6 @@ export function generate(model) {
     { path: TELEMETRY_LIFECYCLE_TS, content: lifecycleTs() },
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/telemetry.yaml`, content: telemetryYaml(model, profile) }))
   ];
-}
-
-function envWithDefault(profile, name, value) {
-  return profile === 'local' || profile === 'test' ? String(value) : `\${${name}:${value}}`;
 }
 
 /**

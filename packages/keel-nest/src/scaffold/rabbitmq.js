@@ -24,6 +24,7 @@ import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, RABBIT_CONNECTION_TS, RABBIT_TOPOLOGY_TS, usesRabbitMq } from './messaging.js';
 import { envValue } from 'keel-core/gen/profile-values';
+import { envWithDefault } from 'keel-core/gen/profile-values';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -529,10 +530,6 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
 }
 
 // ─── La configuración ────────────────────────────────────────────────────────
-
-function envWithDefault(profile, name, value) {
-  return profile === 'local' || profile === 'test' ? String(value) : `\${${name}:${value}}`;
-}
 
 function rabbitYaml(_model, profile) {
   const lines = [

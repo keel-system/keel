@@ -25,6 +25,7 @@ import { usesApi, ERROR_RESPONSE_TS } from './rest-support.js';
 import { credentialFinderName, portClass, portPath } from './repositories.js';
 import { entityDir } from './render.js';
 import { envValue } from 'keel-core/gen/profile-values';
+import { envRequired } from 'keel-core/gen/profile-values';
 
 const DIR = 'src/infrastructure/security';
 export const SECURITY_CONTEXT_TS = `${DIR}/security-context.ts`;
@@ -959,11 +960,6 @@ export class SecurityModule {}`
 }
 
 // ─── Configuración: config/parameters/<perfil>/security.yaml ────────────────
-
-function envRequired(profile, name, local) {
-  if (profile === 'local' || profile === 'test') return String(local);
-  return `\${${name}}`;
-}
 
 /** El issuer del perfil local: el del proveedor de prueba de infra/, el mismo que en keel-spring. */
 export function localIssuer(model) {

@@ -30,10 +30,10 @@ test('envWithDefault: literal solo en local, con default en el resto (test inclu
   });
 });
 
-test('envRequired: literal solo en local, obligatoria en el resto', () => {
+test('envRequired: literal en local y test (perfil cerrado), obligatoria en el resto', () => {
   assert.deepEqual(row(envRequired, 'OAUTH2_ISSUER_URI', 'http://localhost:8180'), {
     local: 'http://localhost:8180',
-    test: '${OAUTH2_ISSUER_URI}',
+    test: 'http://localhost:8180',
     develop: '${OAUTH2_ISSUER_URI}',
     production: '${OAUTH2_ISSUER_URI}'
   });

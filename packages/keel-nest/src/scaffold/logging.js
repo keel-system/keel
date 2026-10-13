@@ -16,6 +16,7 @@
 
 import { tsModule } from './render.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
+import { envWithDefault } from 'keel-core/gen/profile-values';
 
 export const LOGGER_TS = 'src/infrastructure/logging/keel-logger.ts';
 
@@ -43,10 +44,6 @@ export function generate(model) {
     { path: LOGGER_TS, content: loggerTs(model) },
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/logging.yaml`, content: loggingYaml(model, profile) }))
   ];
-}
-
-function envWithDefault(profile, name, value) {
-  return profile === 'local' || profile === 'test' ? String(value) : `\${${name}:${value}}`;
 }
 
 /** El fragmento de cada perfil: las mismas claves de nivel y formato, y las mismas variables, que keel-spring. */

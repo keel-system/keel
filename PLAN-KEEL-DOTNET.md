@@ -205,14 +205,28 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     combinaciones y sale idéntica (44 / 11 137). keel-nest gana `npm run golden` con las mismas
     combinaciones menos Oracle (41 / 10 050), determinista y falsada: un espacio en una plantilla
     las pone rojas las 41.
-  - **1c, el gradiente por perfil (siguiente).** `envWithDefault` está una vez en keel-spring y
-    nueve en keel-nest, con DOS semánticas. En el perfil `test`, keel-spring escribe
-    `${VAR:default}` y cinco copias de keel-nest escriben el literal (kafka, logging, messaging,
-    rabbitmq y claim). Los nombres y defaults de unas 20 variables de entorno se escriben en los
-    dos generadores sin nada que los ate; hoy coinciden. Plan:
-    1. `keel-core/gen/profile-values.js`, sin cambiar un byte (golden de los dos).
-    2. Igualar el perfil `test` al de keel-spring, en commit propio y con su golden regenerado.
-    3. El catálogo de variables operativas con sus defaults, del que leen los dos.
+  - **1c, el gradiente por perfil.** Inventario: 24 definiciones (3 en keel-spring y 21 en
+    keel-nest: 12 `envWithDefault`, 10 `envValue` y 1 `envRequired`).
+    1. **Hecho.** `keel-core/gen/profile-values.js` con la semántica de keel-spring; la usa
+       todo lo que ya la tenía (keel-spring y once copias de keel-nest). Las dos líneas base
+       salen idénticas.
+    2. **Hecho; `ts-check` 13/13.** Las siete copias de `envWithDefault` que escribían el
+       literal en `test` (claim, kafka, logging, messaging, rabbitmq, snssqs y telemetry) pasan a
+       la de keel-spring, `${VAR:default}`. Solo cambian 113 archivos `config/parameters/test/*.yaml`
+       de keel-nest, y lo que los lee ya convierte el texto (`positive()`, `!== 'false'`), porque
+       en develop y production siempre fue texto.
+       - **Lo que destapó: la de keel-spring no era la buena en `envRequired`.** Su
+         `envRequired` pedía `${VAR}` sin default en `test`, contra su propia regla («`test` es
+         un perfil cerrado que arranca sin que nadie exporte nada»). No se notaba porque ningún
+         fragmento de keel-spring con un valor obligatorio llega al perfil `test`. En keel-nest
+         sí llega (la seguridad configura ahí la clave de prueba), y su copia ya lo tenía bien.
+         El neutral toma `test` como literal y keel-spring sigue idéntico, que es la prueba de
+         que nunca lo llamaba con `test`.
+       - Queda una excepción con motivo: el `envValue` de mail en keel-nest entrecomilla el vacío,
+         por cómo lee YAML su cargador, no por el contrato.
+       - `test/profile-values-source.test.js` prohíbe una copia nueva; falsado plantando una.
+    3. **Pendiente.** El catálogo de variables operativas con sus defaults, del que leerán
+       los dos (hoy unas 20 se escriben en los dos generadores y coinciden).
 
 ## 5. Riesgos conocidos
 

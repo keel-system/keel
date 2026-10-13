@@ -37,6 +37,7 @@ import { MODULE_TS as USE_CASE_MODULE_TS } from './mediator.js';
 import { acknowledgeNote } from 'keel-core/gen/rejection-notes';
 import { callsPaymentGateway } from 'keel-core/gen/payments-model';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
+import { envWithDefault } from 'keel-core/gen/profile-values';
 
 const MESSAGING_DIR = 'infrastructure/messaging';
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
@@ -806,12 +807,6 @@ function contractDoc(model, sub) {
 }
 
 // ─── La configuración ────────────────────────────────────────────────────────
-
-// El gradiente de keel-spring para lo que tiene default en todos los perfiles: literal en local (y en
-// test, que en Nest es un perfil más de config/), `${VAR:default}` en los demás.
-function envWithDefault(profile, name, value) {
-  return profile === 'local' || profile === 'test' ? String(value) : `\${${name}:${value}}`;
-}
 
 /** La clave de la routing key de un evento (`notification-sent`) y la de una suscripción. */
 export const routingKeyName = (event) => event.routingKeyProperty.split('.').pop();

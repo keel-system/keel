@@ -42,10 +42,13 @@ export function cronWithDefault(profile, varName, cron) {
 
 /**
  * Para valores que NO tienen un default razonable fuera de local (el diseño no los declara): literal en
- * local y variable obligatoria en el resto, para fallar al arrancar en vez de apuntar en silencio a un
- * destino erróneo.
+ * local y en test, y variable obligatoria en el resto, para fallar al arrancar en vez de apuntar en
+ * silencio a un destino erróneo. `test` es literal por la misma razón que en `envValue`: un perfil
+ * cerrado que arranca sin que nadie exporte nada. En keel-spring ningún fragmento con un valor
+ * obligatorio llega al perfil test; en keel-nest sí (la seguridad configura ahí la clave de prueba), y una
+ * variable sin default lo dejaría sin arrancar.
  */
 export function envRequired(profile, varName, localValue) {
-  if (profile === 'local') return String(localValue);
+  if (profile === 'local' || profile === 'test') return String(localValue);
   return `\${${varName}}`;
 }

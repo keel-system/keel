@@ -21,6 +21,7 @@ import { claimOrderField, claimsForEntity, screamingSnake, sweepClaims, sweepCon
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { engineOf, ormClass, usesPersistence } from './persistence-entities.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
+import { envWithDefault } from 'keel-core/gen/profile-values';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 export const SWEEP_SETTINGS_TS = 'src/infrastructure/persistence/sweep-settings.ts';
@@ -38,8 +39,6 @@ export function generate(model) {
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/sweep.yaml`, content: sweepYaml(model, profile) }))
   ];
 }
-
-const envWithDefault = (profile, name, value) => (profile === 'local' || profile === 'test' ? String(value) : `\${${name}:${value}}`);
 
 function sweepYaml(model, profile) {
   const lines = ['sweep:'];
