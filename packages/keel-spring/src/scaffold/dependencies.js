@@ -17,6 +17,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainSubPackage, domainTypeImport } from './entities.js';
 import { naturalKeyBatchFinder } from './repositories.js';
+import { occurredAtField } from 'keel-core/gen/replica';
 
 const PROJECTION_PKG = 'application.projection';
 const ANNOTATIONS_PKG = 'application.annotations';
@@ -46,13 +47,6 @@ function projectedFields(entity, replica) {
   return entity.fields.filter((field) => !field.isId && field.name !== replica.keyField && !field.generated);
 }
 
-// Si el payload trae un instante del hecho, se compara antes de escribir: es lo
-// que impide que una reentrega tardía pise un valor más nuevo. Es el problema que
-// el DSL deliberadamente no declara (sería un SLA de implementación); lo resuelve
-// el generador porque es una decisión de solución.
-function occurredAtField(entity) {
-  return entity.fields.find((field) => /^(occurredAt|updatedAt|eventTime)$/.test(field.name)) ?? null;
-}
 
 function renderProjector(model, dependency, need, entity) {
   const { replica } = need;

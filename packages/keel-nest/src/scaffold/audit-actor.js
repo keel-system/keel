@@ -12,7 +12,8 @@
 import { usesPersistence } from './persistence-entities.js';
 import { usesApi, CORRELATION_TS, usesCorrelation } from './rest-support.js';
 import { SECURITY_CONTEXT_TS, usesHttpSecurity } from './security.js';
-import { tsModule } from './render.js';
+import { tsModule, tsString } from './render.js';
+import { SYSTEM_ACTOR } from 'keel-core/gen/relational';
 
 export const AUDIT_ACTOR_TS = 'src/infrastructure/persistence/audit-actor.ts';
 
@@ -46,7 +47,7 @@ export function generate(model) {
   return correlationId != null ? \`\${SYSTEM_ACTOR}:\${correlationId}\` : SYSTEM_ACTOR;`
     : '  return SYSTEM_ACTOR;';
   const body = `/** El autor de las escrituras que no nacen de una petición autenticada. */
-export const SYSTEM_ACTOR = 'system';
+export const SYSTEM_ACTOR = ${tsString(SYSTEM_ACTOR)};
 
 /**
  * Quién escribe, para \`created_by\`/\`updated_by\`: la misma regla que el AuditorAware de keel-spring. Nunca vacío.${

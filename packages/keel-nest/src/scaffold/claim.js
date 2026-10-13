@@ -22,6 +22,7 @@ import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { engineOf, ormClass, usesPersistence } from './persistence-entities.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
 import { envWithDefault } from 'keel-core/gen/profile-values';
+import { needsReadCommitted } from 'keel-core/gen/infra-catalog';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 export const SWEEP_SETTINGS_TS = 'src/infrastructure/persistence/sweep-settings.ts';
@@ -166,10 +167,9 @@ export function adapterClaimMethods(model, entity, imports, findOptions) {
   const { enumType, field } = entity.lifecycle;
   const orm = ormClass(entity.name);
   imports.push({ symbol: enumType, from: classPath(DIRS.enums, enumType) });
-  const mysql = engineOf(model) === 'mysql';
   // READ COMMITTED en MySQL: en REPEATABLE READ la lectura con bloqueo toma también los HUECOS entre claves
   // y frena los INSERT de filas nuevas hasta el lock wait timeout. Es la misma decisión que keel-spring.
-  const isolation = mysql ? ", { isolation: 'READ COMMITTED' }" : '';
+  const isolation = needsReadCommitted(engineOf(model)) ? ", { isolation: 'READ COMMITTED' }" : '';
   const operators = new Set();
   const methods = claims.map((claim) => {
     const states = claim.from.map((state) => `${enumType}.${screamingSnake(state)}`).join(', ');

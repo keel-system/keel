@@ -43,6 +43,7 @@ import {
   usesNestOutbox,
   usesProcessedEvents
 } from './messaging.js';
+import { needsReadCommitted } from 'keel-core/gen/infra-catalog';
 
 export function generate(model) {
   const files = [];
@@ -224,7 +225,7 @@ export function truncateError(error: unknown): string | null {
 }
 
 function relayStore(model) {
-  const mysql = engineOf(model) === 'mysql';
+  const readCommitted = needsReadCommitted(engineOf(model));
   return tsModule(
     OUTBOX_RELAY_STORE_TS,
     [
@@ -290,7 +291,7 @@ export class OutboxRelayStore {
         for (const row of rows) await manager.update(OutboxEventOrm, { id: row.id }, { nextAttemptAt: leaseUntil });
         return rows.map(({ id, destination, routingKey, eventType, payload }) => ({ id, destination, routingKey, eventType, payload }));
       },
-      ${mysql ? "// READ COMMITTED: en REPEATABLE READ (el default de MySQL) la lectura con bloqueo toma también los\n      // HUECOS entre claves y frena los INSERT de filas nuevas —el puente escribiendo el outbox— hasta el\n      // lock wait timeout.\n      { isolation: 'READ COMMITTED' }" : '{}'}
+      ${readCommitted ? "// READ COMMITTED: en REPEATABLE READ (el default de MySQL) la lectura con bloqueo toma también los\n      // HUECOS entre claves y frena los INSERT de filas nuevas —el puente escribiendo el outbox— hasta el\n      // lock wait timeout.\n      { isolation: 'READ COMMITTED' }" : '{}'}
     );
   }
 

@@ -24,6 +24,7 @@ import { documentReconciliationStore } from './document-stores.js';
 import { storeEntity } from './messaging-stores.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { envWithDefault } from 'keel-core/gen/profile-values';
+import { needsReadCommitted } from 'keel-core/gen/infra-catalog';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const RECONCILIATION_DIR = 'src/infrastructure/persistence/reconciliation';
@@ -275,7 +276,7 @@ export function adapterReconciliationMethods(model, entity, imports, findOptions
   imports.push({ symbol: enumType, from: classPath(DIRS.enums, enumType) }, { symbol: 'LessThan', from: 'typeorm' });
   // READ COMMITTED en MySQL, por lo mismo que el reclamo de una cola: la lectura con bloqueo de REPEATABLE READ
   // toma también los huecos entre claves y frena los INSERT de filas nuevas.
-  const isolation = engineOf(model) === 'mysql' ? ", { isolation: 'READ COMMITTED' }" : '';
+  const isolation = needsReadCommitted(engineOf(model)) ? ", { isolation: 'READ COMMITTED' }" : '';
   return claims.map((claim) => {
     const states = claim.states.map((state) => `${enumType}.${screamingSnake(state)}`).join(', ');
     return `  /** El reclamo del puerto (reconciliación): ver ${entity.name}Repository.${claim.method}. */

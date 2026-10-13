@@ -22,32 +22,15 @@ import {
   CHAOS_OFF,
   REJECTED_DOMAIN
 } from 'keel-core/gen/mail-probes';
-import { fastestSchedulePeriod } from 'keel-core/gen';
+import { MAIL_AWAIT, mailAwaitSeconds } from 'keel-core/gen/mail-probes';
 import { tsString } from './render.js';
 import { usesMail } from './mail.js';
 
 export const MAIL_HARNESS_TS = 'test/integration/support/mail.ts';
 
-// Los mismos tres números que keel-spring (mail-harness.js): suelo sin barrido, margen sobre su periodo y techo.
-const MAIL_AWAIT_FLOOR = 15;
-const MAIL_AWAIT_MARGIN = 15;
-const MAIL_AWAIT_CAP = 300;
-
-/**
- * Cuántos segundos espera el arnés a que llegue un correo, derivado del contrato (la misma regla que keel-spring):
- * si el correo lo empuja un barrido con `schedule`, una espera menor que su periodo falla según la fase en que
- * arranque la suite —verde o rojo por el reloj, no por el código—.
- */
-export function mailAwaitSeconds(model) {
-  const drivenBySweep = (model.mail?.sentBy ?? []).some((name) =>
-    (model.services ?? []).some((service) =>
-      (service.operations ?? []).some((operation) => operation.name === name && (operation.internal || operation.schedule))
-    )
-  );
-  const period = drivenBySweep ? fastestSchedulePeriod(model) : null;
-  if (period == null) return { seconds: MAIL_AWAIT_FLOOR, period: null };
-  return { seconds: Math.min(MAIL_AWAIT_CAP, Math.max(MAIL_AWAIT_FLOOR, period + MAIL_AWAIT_MARGIN)), period };
-}
+// Cuántos segundos espera el arnés a que llegue un correo: la regla y sus tres números son de keel-core
+// (gen/mail-probes.js), los mismos para los dos arneses.
+export { mailAwaitSeconds };
 
 export function generate(model) {
   return usesMail(model) ? [{ path: MAIL_HARNESS_TS, content: mailHarnessTs(model) }] : [];
@@ -73,7 +56,7 @@ function mailHarnessTs(model) {
   const senders = model.mail.sentBy.join(', ');
   const parts = model.mail.multipart ? 'las dos partes del cuerpo (HTML y texto)' : model.mail.hasHtml ? 'solo el cuerpo HTML' : 'solo el cuerpo en texto';
   const wait = mailAwaitSeconds(model);
-  const tooSlow = wait.period != null && wait.period + MAIL_AWAIT_MARGIN > MAIL_AWAIT_CAP;
+  const tooSlow = wait.period != null && wait.period + MAIL_AWAIT.marginSeconds > MAIL_AWAIT.capSeconds;
   return `/**
  * El buzón de prueba: el Mailpit de infra/docker-compose.yaml, al que el perfil \`local\` entrega el correo. El
  * reset de estado (\`resetState()\`, al empezar cada flujo) lo vacía y le quita el rechazo: un correo de un
@@ -97,12 +80,12 @@ const MAIL_API = process.env.MAIL_API ?? ${tsString(HOST_BASE)};
  *
  * Sale del contrato, no de un número redondo: el correo lo empuja un barrido con cadencia de ${wait.period} s (el
  * \`schedule\` más rápido del diseño), y una espera más corta que su periodo falla según la fase en que arranque
- * la suite. Lleva ${MAIL_AWAIT_MARGIN} s de margen por el desfase que build reparte entre barridos de la misma cadencia.`
+ * la suite. Lleva ${MAIL_AWAIT.marginSeconds} s de margen por el desfase que build reparte entre barridos de la misma cadencia.`
   }${
     tooSlow
       ? `
  *
- * OJO: ese periodo excede el techo de ${MAIL_AWAIT_CAP} s y se ha recortado ahí. Ningún escenario que dependa del
+ * OJO: ese periodo excede el techo de ${MAIL_AWAIT.capSeconds} s y se ha recortado ahí. Ningún escenario que dependa del
  * barrido va a pasar tal cual: si tiene que ser verificable, el diseño necesita un disparador además del \`schedule\`.`
       : ''
   }

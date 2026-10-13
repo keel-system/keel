@@ -31,6 +31,7 @@ import { PAYMENT_TEST_SECRETS } from 'keel-core/gen/payment-gateways';
 import { PAYMENT_SWEEP_PARAMETERS } from 'keel-core/gen/payments-model';
 import { envValue, envWithDefault, cronWithDefault, envRequired } from 'keel-core/gen/profile-values';
 import { envFor, runtimeDefault } from 'keel-core/gen/runtime-env';
+import { LOCAL_STUB_BASE_URL, UNREACHABLE_BASE_URL } from 'keel-core/gen/infra-catalog';
 
 const PROFILES = ['local', 'develop', 'production'];
 
@@ -49,7 +50,7 @@ export const localClientApiKey = (clientName) => `local-${clientName}-key`;
 // DOS los sitios que tienen que apuntar al mismo sitio —la base-url de cada
 // cliente y el endpoint de token de los oauth2—, y basta con que uno se quede
 // atrás para que en local se hable con dos proveedores distintos.
-export const LOCAL_STUB_BASE_URL = `http://localhost:${HTTP_STUB.publishedPort}`;
+export { LOCAL_STUB_BASE_URL };
 
 // Orígenes CORS del perfil local: los puertos de dev habituales de una SPA
 // (Create React App / Next.js y Vite), para probar un front sin editar YAML.
@@ -303,13 +304,11 @@ function profileYaml(profile, fragments) {
 }
 
 function loggingYaml(model, profile) {
-  const root = profile === 'production' ? 'WARN' : 'INFO';
-  const app = profile === 'production' ? 'INFO' : 'DEBUG';
   const lines = [
     'logging:',
     '  level:',
-    `    root: ${envFor('LOG_LEVEL_ROOT', profile, root)}`,
-    `    ${model.service.basePackage}: ${envFor('LOG_LEVEL_APP', profile, app)}`
+    `    root: ${envFor('LOG_LEVEL_ROOT', profile)}`,
+    `    ${model.service.basePackage}: ${envFor('LOG_LEVEL_APP', profile)}`
   ];
   // Y el contrapeso de `generate_statistics: true`, que dbYaml enciende en estos dos
   // perfiles para que el arnés pueda leer `hibernate.statements`. Ese flag activa además
@@ -1771,7 +1770,7 @@ function testProfileFiles(model) {
   if (model.layersPresent.httpClients && (model.httpClients ?? []).length > 0) {
     const lines = ['http-clients:'];
     for (const client of model.httpClients) {
-      lines.push(`  ${client.id}:`, '    base-url: http://localhost:9');
+      lines.push(`  ${client.id}:`, `    base-url: ${UNREACHABLE_BASE_URL}`);
     }
     if (oauthClients.length > 0) {
       lines.push('spring:', '  security:', '    oauth2:', '      client:', '        registration:');

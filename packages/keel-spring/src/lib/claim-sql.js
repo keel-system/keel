@@ -28,6 +28,8 @@
 // y el barrido de reconciliación). Un `@Lock` escrito a mano en cualquiera de ellos
 // vuelve a partir la decisión en dos, que es de donde venía el bug del relay.
 
+import { needsReadCommitted } from 'keel-core/gen/infra-catalog';
+
 /**
  * Sufijo que se añade al SELECT de candidatos para que dos réplicas no se lleven la
  * misma página. Recibe ya resuelto lo que el motor necesita saber.
@@ -156,17 +158,11 @@ export function unsupportedClaimWarning(database, mechanisms) {
 // gap locks y el reclamo funciona. Medido: cinco casos de store-check caen en MySQL sin esto y
 // ninguno en PostgreSQL.
 
-/**
- * Los motores cuyo default de aislamiento rompe el reclamo, y por tanto los únicos donde se
- * declara uno explícito. PostgreSQL, Oracle y SQL Server ya arrancan en READ COMMITTED:
- * anotarlos ahí sería ruido que sugiere una decisión donde no hay ninguna.
- */
-const GAP_LOCKING_DEFAULTS = ['mysql', 'mariadb'];
-
-/** ¿Necesita este motor que el reclamo fije el aislamiento a mano? */
-export function needsReadCommitted(database) {
-  return GAP_LOCKING_DEFAULTS.includes(database);
-}
+// Qué motores lo necesitan es un hecho del motor y no de Spring: lo decide keel-core
+// (`needsReadCommitted` en gen/infra-catalog.js), el mismo para los dos generadores. Anotarlo en
+// PostgreSQL, Oracle o SQL Server, que ya arrancan en READ COMMITTED, sería ruido que sugiere una
+// decisión donde no hay ninguna.
+export { needsReadCommitted };
 
 /**
  * La anotación `@Transactional` de un método de reclamo, con su comentario.

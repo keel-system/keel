@@ -16,6 +16,7 @@
 // El modelo nunca las nombra.
 
 import { screamingSnake, numericConstraints, inheritedFormat, textConstraints, validationRules, elementValidationRules, columnSpec } from 'keel-core/gen';
+import { errorBaseFor } from 'keel-core/gen/error-bases';
 
 const BASE_TS_TYPES = {
   string: { tsType: 'string', imports: [] },
@@ -37,18 +38,6 @@ const BASE_TS_TYPES = {
 };
 
 const PARAM_TS_TYPES = { string: 'string', int: 'number', long: 'bigint', decimal: 'Decimal', boolean: 'boolean' };
-
-// Las mismas clases base por status que keel-spring: los nombres de la jerarquía de errores son
-// parte de la arquitectura compartida, no del framework (el dominio no importa @nestjs/common).
-const ERROR_BASE_BY_HTTP = {
-  400: 'BadRequestException',
-  401: 'UnauthorizedException',
-  403: 'ForbiddenException',
-  404: 'NotFoundException',
-  409: 'ConflictException',
-  413: 'PayloadTooLargeException',
-  422: 'BusinessException'
-};
 
 /** Cómo se crea un uuid que genera el servidor: versión 7, igual que keel-spring. */
 export const UUID_V7_CALL = 'Uuids.v7()';
@@ -135,7 +124,7 @@ export const TS_PROJECTION = {
   },
 
   errorBase(http) {
-    return ERROR_BASE_BY_HTTP[http] ?? 'DomainException';
+    return errorBaseFor(http);
   },
 
   fieldDetails(field, resolved, { fieldName, isList, persisted, collation } = {}) {

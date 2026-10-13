@@ -57,6 +57,7 @@ import {
 } from './messaging.js';
 import { usesDocument } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
+import { PROBE_BODY_FILE } from 'keel-core/gen/broker-probes';
 
 /** ¿Lleva el arnés la mensajería? Con los tres brokers que keel-nest genera. */
 export function usesMessagingHarness(model) {
@@ -121,7 +122,7 @@ function rabbitSection(model) {
 ${containerConstants(service, broker)}
 const RABBIT_API = ${tsString(ENDPOINTS.rabbitmq.queuesApi)};
 const RABBIT_EXCHANGE_API = ${tsString(ENDPOINTS.rabbitmq.exchangeApi)};
-const PROBE_BODY = '/tmp/keel-probe.json';
+const PROBE_BODY = ${tsString(PROBE_BODY_FILE)};
 const DELIVER_BODY = '/tmp/keel-deliver.json';
 const BROKER_TIMEOUT_MS = 90_000;
 

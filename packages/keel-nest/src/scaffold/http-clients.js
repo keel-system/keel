@@ -12,7 +12,7 @@
 //
 // `src/infrastructure/http/` es la plataforma de ENTRADA (Fastify): lo saliente va a `infrastructure/clients`.
 
-import { servesLastKnown } from 'keel-core/gen/last-known';
+import { LAST_KNOWN_MAX_ENTRIES, servesLastKnown } from 'keel-core/gen/last-known';
 import { fallbackFailures, resiliencePolicy, RESILIENCE_DEFAULTS } from 'keel-core/gen/outbound-resilience';
 import { DIRS, classPath, declType, fieldImports, fileName, tsModule, tsString, tsdoc } from './render.js';
 import { DECIMAL_TS, RAW_JSON_TS, WIRE_TS } from './wire.js';
@@ -22,6 +22,8 @@ import { VALUE_READERS_TS, valueReaders } from './controllers.js';
 import { usesSubscriptionMessages } from './messaging.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { envValue } from 'keel-core/gen/profile-values';
+import { hasCallFallback } from 'keel-core/gen/outbound-resilience';
+import { LOCAL_STUB_BASE_URL, UNREACHABLE_BASE_URL } from 'keel-core/gen/infra-catalog';
 
 const CLIENTS_DIR = 'infrastructure/clients';
 export const PROVIDER_FAILURES_TS = `src/${CLIENTS_DIR}/provider-failures.ts`;
@@ -70,10 +72,9 @@ function lastKnownKey(call) {
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
-/** La URL del proveedor de prueba en `local`: el WireMock de infra/ (el mismo puerto que keel-spring). */
-export const LOCAL_STUB_BASE_URL = 'http://localhost:8090';
-/** En `test` nadie llama al proveedor: una dirección que no responde, como en keel-spring. */
-const TEST_BASE_URL = 'http://localhost:9';
+// La URL del proveedor de prueba en `local` (el WireMock de infra/) y la de `test`, que no responde: keel-core.
+export { LOCAL_STUB_BASE_URL };
+const TEST_BASE_URL = UNREACHABLE_BASE_URL;
 
 export function usesHttpClients(model) {
   return Boolean(model.layersPresent?.httpClients && (model.httpClients ?? []).length > 0);
@@ -321,11 +322,6 @@ ${methods.join('\n\n')}
 
 const policyConst = (call) => `${call.name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()}_POLICY`;
 
-/** ¿Tiene fallback? La misma regla que keel-spring: hace falta una política y algo que lo dispare. */
-function hasFallback(call) {
-  return Boolean((call.fallback || call.circuitBreaker || (call.needs ?? []).some(({ need }) => need.onUnavailable)) && (call.retry || call.circuitBreaker));
-}
-
 /** La política de una llamada como literal TypeScript: la de keel-core, ya resuelta. */
 function policyLiteral(call) {
   const policy = resiliencePolicy(call);
@@ -419,7 +415,7 @@ const ${policyConst(call)}: OutboundPolicy = ${policyLiteral(call)};`);
   const guarded = `withResilience(${policyConst(call)}, ${circuit}, () => this.${call.name}Once(${args}))`;
   const ret = call.bodiless ? '' : 'return ';
 
-  if (!hasFallback(call)) {
+  if (!hasCallFallback(call)) {
     return `${tsdoc(call.contract, '  ')}  async ${call.name}(${params.join(', ')}): Promise<${returns}> {
     ${ret}await ${guarded};
   }
@@ -888,7 +884,7 @@ function formEncode(value: string): string {
 
 function lastKnownTs() {
   const body = `/** Tope de entradas vivas: la clave la forman los parámetros de la llamada, así que sin tope es una fuga lenta. */
-const MAX_ENTRIES = 10_000;
+const MAX_ENTRIES = ${String(LAST_KNOWN_MAX_ENTRIES).replace(/\B(?=(\d{3})+(?!\d))/g, '_')};
 
 interface Entry {
   readonly value: unknown;

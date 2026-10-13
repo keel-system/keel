@@ -29,7 +29,7 @@ import {
   CHAOS_OFF,
   REJECTED_DOMAIN
 } from 'keel-core/gen/mail-probes';
-import { fastestSchedulePeriod } from 'keel-core/gen';
+import { MAIL_AWAIT, mailAwaitSeconds } from 'keel-core/gen/mail-probes';
 
 // Un literal de cadena Java: los cuerpos JSON de chaos llevan comillas dobles.
 const javaString = (value) => `"${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
@@ -38,41 +38,10 @@ export function hasMail(model) {
   return Boolean(model.layersPresent.mail);
 }
 
-// Suelo de la espera cuando nada la empuja desde un barrido: la entrega ocurre justo
-// después de la respuesta y 15 s cubren de sobra el viaje al relay.
-const MAIL_AWAIT_FLOOR = 15;
-
-// Margen sobre el periodo del barrido. Cubre las dos cosas que se suman al periodo
-// nominal: el desfase de fase que `scheduleSeconds()` reparte entre barridos de la
-// misma cadencia (hasta 60 s) y el envío en sí.
-const MAIL_AWAIT_MARGIN = 15;
-
-// Techo por encima del cual una espera deja de ser una prueba y pasa a ser un cuelgue.
-const MAIL_AWAIT_CAP = 300;
-
-/**
- * Cuántos segundos espera el arnés a que llegue un correo, derivado del contrato.
- *
- * No es un número de estilo. Si la única forma de que un mensaje llegue a la bandeja es
- * un barrido con `schedule`, una espera inferior a su periodo falla según la fase del
- * minuto en que arranque la suite: verde o rojo por el reloj, no por el código. Un
- * literal fijo aquí hace intermitente cualquier diseño cuyo barrido sea más lento que él.
- *
- * Solo cuenta cuando alguna operación de `sentBy` es interna: si el correo sale dentro
- * de la operación que atiende la petición, la espera no depende de ningún cron.
- */
-function mailAwaitSeconds(model) {
-  const drivenBySweep = (model.mail?.sentBy ?? []).some((name) =>
-    (model.services ?? []).some((service) =>
-      (service.operations ?? []).some((operation) => operation.name === name && (operation.internal || operation.schedule))
-    )
-  );
-  if (!drivenBySweep) return { seconds: MAIL_AWAIT_FLOOR, period: null };
-
-  const period = fastestSchedulePeriod(model);
-  if (period == null) return { seconds: MAIL_AWAIT_FLOOR, period: null };
-  return { seconds: Math.min(MAIL_AWAIT_CAP, Math.max(MAIL_AWAIT_FLOOR, period + MAIL_AWAIT_MARGIN)), period };
-}
+// Cuántos segundos espera el arnés a que llegue un correo lo decide keel-core
+// (`mailAwaitSeconds` y `MAIL_AWAIT` en gen/mail-probes.js), el mismo para los dos arneses: no es
+// un número de estilo, porque una espera menor que el periodo del barrido que envía el correo
+// falla según la fase del minuto en que arranque la suite.
 
 /**
  * Imports que la sección añade a AbstractFlowIT. Van aparte porque el emisor de la
@@ -91,7 +60,7 @@ export function mailSection(model) {
       : 'solo el cuerpo en texto';
 
   const wait = mailAwaitSeconds(model);
-  const tooSlow = wait.period != null && wait.period + MAIL_AWAIT_MARGIN > MAIL_AWAIT_CAP;
+  const tooSlow = wait.period != null && wait.period + MAIL_AWAIT.marginSeconds > MAIL_AWAIT.capSeconds;
 
   return `
     /** API del buzón de prueba (Mailpit de infra/docker-compose.yaml). */
@@ -111,13 +80,13 @@ export function mailSection(model) {
      * <p>Sale del contrato, no de un número redondo: el correo lo empuja un barrido con
      * cadencia de ${wait.period} s (el \`schedule\` más rápido del diseño), y una espera
      * más corta que su periodo falla según la fase en que arranque la suite — verde o
-     * rojo por el reloj y no por el código. Lleva ${MAIL_AWAIT_MARGIN} s de margen por el
+     * rojo por el reloj y no por el código. Lleva ${MAIL_AWAIT.marginSeconds} s de margen por el
      * desfase que build reparte entre barridos de la misma cadencia.`
      }${
        tooSlow
          ? `
      *
-     * <p><b>Ojo</b>: ese periodo excede el techo de ${MAIL_AWAIT_CAP} s y se ha recortado
+     * <p><b>Ojo</b>: ese periodo excede el techo de ${MAIL_AWAIT.capSeconds} s y se ha recortado
      * ahí. Ningún escenario que dependa del barrido va a pasar tal cual, y no es algo que
      * se arregle en la prueba: si tiene que ser verificable, el diseño necesita exponer un
      * disparador de ese trabajo además del \`schedule\`.`

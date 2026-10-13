@@ -278,3 +278,17 @@ export function circuitBreakerReference(cb, now = () => Date.now()) {
     }
   };
 }
+
+/**
+ * ¿Emite la llamada su método de respaldo? Hace falta una RAZÓN —la prosa del `fallback`, un circuito que
+ * abra, o un `need` que declare qué ve el cliente con el proveedor caído (`onUnavailable`)— y algo que lo
+ * DISPARE —un reintento que se agote o un circuito—. Sin lo primero no hay nada que devolver; sin lo segundo
+ * el método no lo llamaría nadie. La comparten todos los generadores (estaba copiada en keel-spring y
+ * keel-nest; incremento 1d de PLAN-KEEL-DOTNET.md).
+ */
+export function hasCallFallback(call) {
+  return Boolean(
+    (call.fallback || call.circuitBreaker || (call.needs ?? []).some(({ need }) => need.onUnavailable)) &&
+      (call.retry || call.circuitBreaker)
+  );
+}

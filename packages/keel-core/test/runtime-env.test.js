@@ -18,9 +18,18 @@ test('con default en el catálogo, envFor aplica su gradiente y rechaza otro val
 
 test('sin default en el catálogo, el valor lo pone el emisor y es obligatorio', () => {
   assert.equal(envFor('DB_URL', 'develop', 'jdbc:postgresql://localhost:5432/x'), '${DB_URL:jdbc:postgresql://localhost:5432/x}');
-  assert.equal(envFor('LOG_LEVEL_ROOT', 'local', 'INFO'), 'INFO');
+  assert.equal(envFor('MAIL_SENDER', 'local', 'no-reply@acme.test'), 'no-reply@acme.test');
   assert.throws(() => envFor('DB_URL', 'local'), /el emisor tiene que poner el valor/);
   assert.throws(() => runtimeDefault('DB_URL'), /no tiene default/);
+});
+
+test('con default por perfil, envFor lo toma del perfil y tampoco admite otro', () => {
+  assert.equal(envFor('LOG_LEVEL_ROOT', 'local'), 'INFO');
+  assert.equal(envFor('LOG_LEVEL_ROOT', 'production'), '${LOG_LEVEL_ROOT:WARN}');
+  assert.equal(envFor('LOG_LEVEL_APP', 'develop'), '${LOG_LEVEL_APP:DEBUG}');
+  assert.equal(runtimeDefault('LOG_LEVEL_APP', 'production'), 'INFO');
+  assert.throws(() => runtimeDefault('LOG_LEVEL_APP'), /depende del perfil/);
+  assert.throws(() => envFor('LOG_LEVEL_ROOT', 'local', 'TRACE'), /tiene default en el catálogo/);
 });
 
 test('una variable fuera del catálogo no se puede escribir con él', () => {

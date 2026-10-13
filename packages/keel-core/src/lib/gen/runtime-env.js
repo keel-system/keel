@@ -5,8 +5,9 @@
 // defaults copiados («la misma que siembra keel-spring»), que coincidían porque alguien los copió bien.
 //
 // Dos clases de entrada:
-//   - con `default`: el valor lo fija el catálogo, y un emisor que intente pasar otro FALLA — dos generadores
-//     con dos defaults para la misma variable es exactamente lo que este módulo existe para impedir;
+//   - con `default` (o `byProfile`, cuando el default cambia con el perfil): el valor lo fija el catálogo, y
+//     un emisor que intente pasar otro FALLA — dos generadores con dos defaults para la misma variable es
+//     exactamente lo que este módulo existe para impedir;
 //   - sin `default`: el valor sale del diseño o del stack (la URL de la base de datos, la audiencia, el
 //     issuer del realm) y lo pone el emisor; el catálogo fija el nombre y el gradiente.
 //
@@ -91,14 +92,22 @@ export const RUNTIME_ENV = {
   MANAGEMENT_PORT: { gradient: 'default', default: 8081 },
   DEPLOYMENT_ENVIRONMENT: { gradient: 'default' },
   LOG_FORMAT: { gradient: 'default', default: 'ecs' },
-  LOG_LEVEL_ROOT: { gradient: 'default' },
-  LOG_LEVEL_APP: { gradient: 'default' },
+  // Más callado en production; el del servicio, un nivel por debajo del de las librerías.
+  LOG_LEVEL_ROOT: { gradient: 'default', byProfile: { production: 'WARN', otherwise: 'INFO' } },
+  LOG_LEVEL_APP: { gradient: 'default', byProfile: { production: 'INFO', otherwise: 'DEBUG' } },
   TRACING_SAMPLING_PROBABILITY: { gradient: 'default' }
 };
 
-/** El default del catálogo de una variable (lanza si no lo tiene: entonces lo pone el emisor). */
-export function runtimeDefault(name) {
+/**
+ * El default del catálogo de una variable; `profile` hace falta si cambia con el perfil. Lanza si no lo tiene:
+ * entonces lo pone el emisor.
+ */
+export function runtimeDefault(name, profile) {
   const entry = entryOf(name);
+  if (entry.byProfile) {
+    if (profile === undefined) throw new Error(`runtime-env: el default de ${name} depende del perfil`);
+    return entry.byProfile[profile] ?? entry.byProfile.otherwise;
+  }
   if (!('default' in entry)) throw new Error(`runtime-env: ${name} no tiene default en el catálogo; su valor sale del diseño`);
   return entry.default;
 }
@@ -109,9 +118,9 @@ export function runtimeDefault(name) {
  */
 export function envFor(name, profile, value) {
   const entry = entryOf(name);
-  if ('default' in entry) {
-    if (value !== undefined) throw new Error(`runtime-env: ${name} tiene default en el catálogo (${JSON.stringify(entry.default)}); el emisor no puede poner otro`);
-    return GRADIENTS[entry.gradient](profile, name, entry.default);
+  if ('default' in entry || entry.byProfile) {
+    if (value !== undefined) throw new Error(`runtime-env: ${name} tiene default en el catálogo; el emisor no puede poner otro`);
+    return GRADIENTS[entry.gradient](profile, name, runtimeDefault(name, profile));
   }
   if (value === undefined) throw new Error(`runtime-env: ${name} no tiene default en el catálogo; el emisor tiene que poner el valor`);
   return GRADIENTS[entry.gradient](profile, name, value);

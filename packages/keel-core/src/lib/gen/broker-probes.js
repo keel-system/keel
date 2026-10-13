@@ -470,3 +470,10 @@ export function spliceBody(template, expressions, literal) {
     .filter((piece) => piece !== literal(''))
     .join(' + ');
 }
+
+/**
+ * El archivo, dentro del contenedor devtools, por el que viaja el cuerpo de un mensaje de prueba: por archivo y
+ * no por el argv, porque en Windows el cliente de contenedores se come las comillas de dentro de un argumento.
+ * Estaba copiado en los dos arneses (incremento 1d de PLAN-KEEL-DOTNET.md).
+ */
+export const PROBE_BODY_FILE = '/tmp/keel-probe.json';

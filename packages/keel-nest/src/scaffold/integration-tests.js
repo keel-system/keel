@@ -31,9 +31,7 @@ import * as httpStubHarness from './http-stub-harness.js';
 import * as mailHarness from './mail-harness.js';
 import * as paymentHarness from './payment-harness.js';
 import { documentHarnessSection, documentProbe } from './document-harness.js';
-import { usesNestOutbox } from './messaging.js';
-import { usesScheduling } from './scheduling.js';
-import { usesRequestIdempotency } from './request-idempotency.js';
+import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
 import { cacheHarnessSection } from './cache.js';
 import { storageHarnessSection, usesMultipart } from './storage.js';
 
@@ -1055,11 +1053,11 @@ export function queryExecutions(): number {
 // ─── La segunda réplica (escenarios de clúster) ───────────────────────────────
 
 /**
- * ¿Hay escenarios de clúster posibles? Las mismas condiciones que keel-spring: el relay del outbox, un barrido
- * por reloj o el registro de idempotencia, que son las garantías «aunque haya varias réplicas».
+ * ¿Hay escenarios de clúster posibles? Lo decide keel-core/gen/cluster-scenarios.js, el mismo predicado para los
+ * dos generadores.
  */
 export function usesReplica(model) {
-  return usesNestOutbox(model) || usesScheduling(model) || usesRequestIdempotency(model);
+  return usesClusterScenarios(model);
 }
 
 

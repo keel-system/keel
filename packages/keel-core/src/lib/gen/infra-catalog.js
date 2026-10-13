@@ -1407,3 +1407,24 @@ function redisInsightService(serviceKey) {
     depends_on: [serviceKey]
   };
 }
+
+/**
+ * La URL del proveedor de prueba en el perfil `local` (el WireMock de infra/), y la de `test`, donde nadie
+ * llama al proveedor: una dirección que no responde, para que una llamada inesperada falle en vez de salir a
+ * la red. keel-nest tenía el puerto escrito a mano (incremento 1d de PLAN-KEEL-DOTNET.md).
+ */
+export const LOCAL_STUB_BASE_URL = `http://localhost:${HTTP_STUB.publishedPort}`;
+export const UNREACHABLE_BASE_URL = 'http://localhost:9';
+
+/**
+ * Los motores cuyo aislamiento por defecto rompe un reclamo, y por tanto los únicos donde el reclamo lo fija a
+ * mano. MySQL y MariaDB arrancan en REPEATABLE READ, y ahí una lectura con bloqueo toma también los HUECOS entre
+ * claves: no frena a otro barrido —para eso está SKIP LOCKED— sino a los INSERT de filas NUEVAS, que esperan
+ * hasta el lock wait timeout. PostgreSQL, Oracle y SQL Server ya arrancan en READ COMMITTED.
+ */
+const GAP_LOCKING_DEFAULTS = ['mysql', 'mariadb'];
+
+/** ¿Necesita este motor que el reclamo fije READ COMMITTED a mano? */
+export function needsReadCommitted(database) {
+  return GAP_LOCKING_DEFAULTS.includes(database);
+}

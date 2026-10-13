@@ -16,22 +16,13 @@
 import { screamingSnake, basePackage } from './naming.js';
 import { toJava, beanValidationAnnotations, elementBeanValidationAnnotations, columnAnnotations } from './type-mapper.js';
 import { numericConstraints, inheritedFormat } from 'keel-core/gen/constraints';
+import { errorBaseFor } from 'keel-core/gen/error-bases';
 
 // http declarado en el diseño → excepción base de shared/exception que extiende
 // el error generado; los status sin subclase dedicada extienden DomainException
 // pasando el httpStatus por metadata.
-const SHARED_EXCEPTION_BY_HTTP = {
-  400: 'BadRequestException',
-  401: 'UnauthorizedException',
-  403: 'ForbiddenException',
-  404: 'NotFoundException',
-  409: 'ConflictException',
-  413: 'PayloadTooLargeException',
-  422: 'BusinessException'
-};
-
 export function sharedExceptionFor(http) {
-  return SHARED_EXCEPTION_BY_HTTP[http] ?? 'DomainException';
+  return errorBaseFor(http);
 }
 
 // Un parámetro de despliegue es un escalar: lo que necesita estructura es diseño.

@@ -13,6 +13,7 @@ import { orphanInternalOperations, dispatchingOperations } from 'keel-core/gen';
 import { mediatorCacheInvalidations, OPERATION_CACHE_PKG, CACHED_OPERATIONS_PKG } from './cache.js';
 import { usesTelemetry, OBSERVATIONS } from './telemetry.js';
 import { ATTRIBUTES } from '../lib/telemetry-probes.js';
+import { WRITE_CONFLICT_ATTEMPTS } from 'keel-core/gen/transactions';
 
 export const INTERFACES_PKG = 'application.interfaces';
 export const ANNOTATIONS_PKG = 'application.annotations';
@@ -458,7 +459,7 @@ function writeConflictRetry(document) {
   return `
 
     /** Intentos de una transacción de escritura que pierde un conflicto transitorio. */
-    private static final int WRITE_CONFLICT_ATTEMPTS = 3;
+    private static final int WRITE_CONFLICT_ATTEMPTS = ${WRITE_CONFLICT_ATTEMPTS};
 
     /**
      * Reintenta la transacción de escritura cuando pierde un conflicto de escritura TRANSITORIO de

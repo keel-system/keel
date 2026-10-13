@@ -33,6 +33,7 @@ import { usesCache, mediatorCacheImports } from './cache.js';
 import { usesStorage } from './storage.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
+import { WRITE_CONFLICT_ATTEMPTS } from 'keel-core/gen/transactions';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
@@ -450,7 +451,7 @@ function mediatorBody(transactional, cache = false, telemetry = null) {
     ? `
 
 /** Intentos de una transacción de escritura que pierde un conflicto transitorio (interbloqueo). */
-const WRITE_CONFLICT_ATTEMPTS = 3;
+const WRITE_CONFLICT_ATTEMPTS = ${WRITE_CONFLICT_ATTEMPTS};
 
 function pause(attempt: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 10 * attempt + Math.floor(Math.random() * 10)));

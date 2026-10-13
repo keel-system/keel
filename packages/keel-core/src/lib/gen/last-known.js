@@ -22,3 +22,10 @@ export function servesLastKnown(model, clientId, callName) {
 export function lastKnownNeedsOf(model, operationName) {
   return lastKnownNeeds(model).filter(({ need }) => (need.usedBy ?? []).includes(operationName));
 }
+
+/**
+ * Tope de entradas vivas de la memoria del último valor conocido. La clave la forman los parámetros de la
+ * llamada, así que sin tope es una fuga lenta. Estaba copiado en los dos generadores (incremento 1d de
+ * PLAN-KEEL-DOTNET.md).
+ */
+export const LAST_KNOWN_MAX_ENTRIES = 10_000;

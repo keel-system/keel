@@ -11,19 +11,12 @@ import { usesCorrelation, correlationImport } from './correlation.js';
 // El `code` de un error del FRAMEWORK no se escribe a mano: sale del catálogo del
 // método (keel-core), que es su única definición.
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import { ERROR_BASES } from 'keel-core/gen/error-bases';
 
 const ERRORS_PKG = 'domain.errors';
 
 // Subclases base y el status al que responde cada una en ApiExceptionHandler.
-const BASE_SUBCLASSES = [
-  { name: 'BadRequestException', http: 400 },
-  { name: 'UnauthorizedException', http: 401 },
-  { name: 'ForbiddenException', http: 403 },
-  { name: 'NotFoundException', http: 404 },
-  { name: 'ConflictException', http: 409 },
-  { name: 'PayloadTooLargeException', http: 413 },
-  { name: 'BusinessException', http: 422 }
-];
+const BASE_SUBCLASSES = ERROR_BASES;
 
 export function generate(model) {
   const errorsPkg = subPackage(model, ERRORS_PKG);

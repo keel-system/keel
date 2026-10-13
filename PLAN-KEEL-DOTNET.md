@@ -254,6 +254,44 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
        - **Fuera de este paso, para el README de keel-dotnet:** la descripción de cada variable.
          keel-spring documenta 21 en su README con un formato distinto del de keel-nest, y el
          catálogo no lleva descripciones todavía.
+  - **1d, decisiones y datos que keel-nest reimplementó (hecho).**
+    - **Método.** keel-nest anota cada copia («la misma que keel-spring»): 96 anotaciones.
+      Descontadas las que citan un módulo de keel-core y las que son forma o comportamiento
+      traducidos al idioma de cada plataforma, que keel-dotnet escribirá en C#, quedan las
+      decisiones y los datos. Cada uno pasa a keel-core con la versión de keel-spring y las dos
+      líneas base hacen de oráculo: si keel-nest decidía distinto en alguna fixture, su línea
+      base cambia.
+    - **Lote 1, decisiones del modelo:**
+      - `hasCallFallback` (`outbound-resilience.js`);
+      - `occurredAtField` (`replica.js`);
+      - `usesClusterScenarios` (`cluster-scenarios.js`).
+    - **Lote 2, datos:**
+      - la jerarquía de errores por status, que estaba escrita **cuatro** veces (`error-bases.js`);
+      - `WRITE_CONFLICT_ATTEMPTS` (`transactions.js`);
+      - las defensas del correo: cabeceras reservadas, nombre de cabecera, tabla de escapado y
+        caché de plantillas (`mail-message.js`);
+      - la regla y los tres números de la espera del buzón (`mail-probes.js`);
+      - el tope del último valor conocido (`last-known.js`);
+      - la ruta de la sonda (`broker-probes.js`);
+      - las URLs del proveedor de prueba en `local` y `test`, y qué motores fijan
+        `READ COMMITTED` en el reclamo (`infra-catalog.js`). keel-nest lo decidía en tres
+        emisores y tenía el puerto `8090` escrito a mano;
+      - el autor `system` (`relational.js`);
+      - los niveles de log por perfil (`runtime-env.js` gana `byProfile`).
+    - **Sin cambio de salida en ningún lote:** keel-spring 44 / 11 137, keel-nest 41 / 10 050.
+      Son 18 piezas. Las reglas (clase base, escenarios de clúster, fallback, instante del
+      hecho, aislamiento, espera del buzón y defensas del correo) las fija además
+      `test/shared-decisions.test.js`, también en ramas que ninguna fixture recorre. Las
+      constantes no llevan test propio: su valor lo vigila la línea base.
+    - **Una divergencia latente.** El `usesReplica` de keel-nest contaba como «barrido por
+      reloj» las purgas de las tablas del generador, y la de `processed_event` existe con
+      cualquier suscripción y persistencia. Un diseño con solo eso tenía escenarios de clúster
+      en keel-nest y no en keel-spring. Ninguna fixture tiene esa forma; manda la de keel-spring,
+      porque una purga es limpieza y no una garantía del diseño.
+    - **Lo que no se extrae, con motivo:** reconocer un conflicto transitorio (el driver de cada
+      plataforma da excepciones o códigos distintos); las notas para el agente, que nombran
+      símbolos de cada proyecto; y `HANDLEBARS_VERSION`, que es la versión de dos librerías
+      distintas.
 
 ## 5. Riesgos conocidos
 

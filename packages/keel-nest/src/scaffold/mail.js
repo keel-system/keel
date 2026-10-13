@@ -16,9 +16,10 @@
 // Las claves de config/parameters/<perfil>/mail.yaml son de Nest, pero las VARIABLES de entorno son las de
 // keel-spring (MAIL_HOST, MAIL_PORT…): el mismo .env sirve para los dos servidores del diseño.
 
-import { DIRS, classPath, tsModule } from './render.js';
+import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { TELEMETRY_TS, instrumentationFor } from './telemetry.js';
 import { envFor } from 'keel-core/gen/runtime-env';
+import { COMPILED_TEMPLATES_LIMIT, HTML_ESCAPES, MAIL_HEADER_NAME_CLASS, RESERVED_MAIL_HEADERS } from 'keel-core/gen/mail-message';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const MAIL_DIR = 'domain/mail';
@@ -107,10 +108,10 @@ export interface MailMessageProps {
  * Cabeceras que el propio mensaje ya gobierna con sus campos, o que compone el transporte. Una cabecera propia
  * con uno de estos nombres duplicaría o pisaría lo que dice el resto del mensaje: se rechaza al construir.
  */
-const RESERVED_HEADERS = new Set(['from', 'sender', 'to', 'cc', 'bcc', 'reply-to', 'subject', 'date', 'message-id', 'mime-version', 'return-path']);
+const RESERVED_HEADERS = new Set([${RESERVED_MAIL_HEADERS.map(tsString).join(', ')}]);
 
 /** Nombre de cabecera (RFC 5322): imprimibles sin espacio ni dos puntos. */
-const HEADER_NAME = /^[!-9;-~]+$/;
+const HEADER_NAME = /^${MAIL_HEADER_NAME_CLASS}$/;
 
 /**
  * Un correo listo para salir: destinatarios, asunto y cuerpo ya renderizados.
@@ -433,7 +434,7 @@ function handlebarsRendererTs() {
  * corrida que corrigió el de keel-spring). Handlebars no admite un escapado por instancia: el runtime lee el
  * de Handlebars.Utils, así que se instala UNA vez, aquí, en el único sitio del servicio que usa Handlebars.
  */
-const HTML_FIVE: Readonly<Record<string, string>> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const HTML_FIVE: Readonly<Record<string, string>> = { ${HTML_ESCAPES.map(([from, to]) => `${from === "'" ? JSON.stringify(from) : tsString(from)}: ${tsString(to)}`).join(', ')} };
 
 function escapeHtmlFive(value: unknown): string {
   if (typeof value !== 'string') {
@@ -468,7 +469,7 @@ export function literalMarkers(source: string): string {
 }
 
 /** Techo de la caché: las plantillas vivas de un servicio son decenas, no miles. */
-const MAX_COMPILED = 500;
+const MAX_COMPILED = ${COMPILED_TEMPLATES_LIMIT};
 
 /**
  * Renderizado con Handlebars. La elección de motor es una decisión de SEGURIDAD: un motor que evalúa

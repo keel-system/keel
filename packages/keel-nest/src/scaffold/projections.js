@@ -14,6 +14,7 @@ import { DIRS, capitalize, classPath, decapitalize, entityDir, tsModule } from '
 import { portPath as clientPortPath } from './http-clients.js';
 import { ANNOTATIONS_TS } from './mediator.js';
 import { PORT_DIR, naturalKeyBatchFinder } from './repositories.js';
+import { occurredAtField } from 'keel-core/gen/replica';
 
 const PROJECTION_DIR = 'application/projection';
 
@@ -48,12 +49,6 @@ export function generate(model) {
 // Lo que la proyección mantiene: todo menos el id técnico y la clave de correlación, que identifican la fila.
 function projectedFields(entity, replica) {
   return entity.fields.filter((field) => !field.isId && field.name !== replica.keyField && !field.generated);
-}
-
-// Si la copia guarda el instante del hecho, se compara antes de escribir: una reentrega tardía no pisa un valor más
-// nuevo. La misma regla que keel-spring.
-function occurredAtField(entity) {
-  return entity.fields.find((field) => /^(occurredAt|updatedAt|eventTime)$/.test(field.name)) ?? null;
 }
 
 const repositoryPortPath = (entity) => classPath(PORT_DIR, `${entity.name}Repository`);

@@ -12,6 +12,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
+import { SYSTEM_ACTOR } from 'keel-core/gen/relational';
 
 const AUDIT_PKG = 'infrastructure.configurations.audit';
 
@@ -85,7 +86,7 @@ function renderAuditorAware(model) {
 public class AuditorAwareConfig {
 
     /** Autor de las escrituras que no nacen de una petición autenticada. */
-    private static final String SYSTEM = "system";
+    private static final String SYSTEM = "${SYSTEM_ACTOR}";
 
     @Bean
     public AuditorAware<String> auditorProvider() {

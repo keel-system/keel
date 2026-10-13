@@ -21,6 +21,7 @@ import { outboundIdempotentCalls } from './http-idempotency.js';
 import { providerFailures } from '../lib/outbound-failures.js';
 import { callPolicy, clientRemembers } from './last-known.js';
 import { usesTelemetry } from './telemetry.js';
+import { hasCallFallback } from 'keel-core/gen/outbound-resilience';
 
 const PORT_PKG = 'domain.clients';
 const HTTP_PKG = 'infrastructure.http';
@@ -477,10 +478,7 @@ function renderCallMethod(model, client, call, imports) {
   // Una política declarada en un `need` (`onUnavailable`) cuenta como razón para
   // emitirlo, igual que la prosa del `fallback`: es la decisión del diseño sobre qué ve
   // el cliente con el proveedor caído, y sin el método no se aplicaría en ninguna parte.
-  const hasFallback = Boolean(
-    (call.fallback || call.circuitBreaker || (call.needs ?? []).some(({ need }) => need.onUnavailable)) &&
-      (call.retry || call.circuitBreaker)
-  );
+  const hasFallback = hasCallFallback(call);
   const pascal = call.pascal;
   // `return` delante de la delegación solo si hay algo que devolver: en Java un
   // `return f()` con f void no compila.

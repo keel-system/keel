@@ -24,6 +24,7 @@
 // de gradle.js). Eso tampoco se delega.
 
 import { javaFile, javaPath } from './render.js';
+import { COMPILED_TEMPLATES_LIMIT, HTML_ESCAPES, MAIL_HEADER_NAME_CLASS, RESERVED_MAIL_HEADERS } from 'keel-core/gen/mail-message';
 
 const DOMAIN_PKG = 'domain.mail';
 const PORT_PKG = 'application.port.out';
@@ -95,11 +96,10 @@ public record MailMessage(String from, String replyTo, List<String> to, List<Str
      * resto del mensaje dice, así que se rechaza al construir.
      */
     private static final Set<String> RESERVED_HEADERS = Set.of(
-            "from", "sender", "to", "cc", "bcc", "reply-to", "subject", "date", "message-id",
-            "mime-version", "return-path");
+${javaStringList(RESERVED_MAIL_HEADERS, '            ')});
 
     /** Nombre de cabecera (RFC 5322): imprimibles sin espacio ni dos puntos. */
-    private static final Pattern HEADER_NAME = Pattern.compile("[!-9;-~]+");
+    private static final Pattern HEADER_NAME = Pattern.compile("${MAIL_HEADER_NAME_CLASS}");
 
     public MailMessage {
         to = to == null ? List.of() : List.copyOf(to);
@@ -597,7 +597,7 @@ public class HandlebarsTemplateRenderer implements TemplateRenderer {
      * correcto (corrida notifications, 2026-09-30).
      */
     static final EscapingStrategy HTML_FIVE = new EscapingStrategy.Hbs(new String[][] {
-        {"&", "&amp;"}, {"<", "&lt;"}, {">", "&gt;"}, {"\\"", "&quot;"}, {"'", "&#39;"}
+        ${HTML_ESCAPES.map(([from, to]) => `{${JSON.stringify(from)}, ${JSON.stringify(to)}}`).join(', ')}
     });
 
     /**
@@ -632,7 +632,7 @@ public class HandlebarsTemplateRenderer implements TemplateRenderer {
     }
 
     /** Techo de la caché: las plantillas vivas de un servicio son decenas, no miles. */
-    private static final int MAX_COMPILED = 500;
+    private static final int MAX_COMPILED = ${COMPILED_TEMPLATES_LIMIT};
 
     /**
      * Compilación cacheada por parte + identidad de plantilla, en un LRU acotado. La parte
@@ -695,4 +695,22 @@ public class HandlebarsTemplateRenderer implements TemplateRenderer {
       body
     )
   };
+}
+
+// Una lista de literales Java partida a 100 columnas, con la sangría dada en cada línea.
+function javaStringList(values, indent) {
+  const lines = [];
+  let line = indent;
+  for (const [index, value] of values.entries()) {
+    const item = `${JSON.stringify(value)}${index < values.length - 1 ? ',' : ''}`;
+    const next = line === indent ? `${line}${item}` : `${line} ${item}`;
+    if (next.length > 100 && line !== indent) {
+      lines.push(line);
+      line = `${indent}${item}`;
+    } else {
+      line = next;
+    }
+  }
+  lines.push(line);
+  return lines.join('\n');
 }

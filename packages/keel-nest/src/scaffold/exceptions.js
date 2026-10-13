@@ -9,17 +9,10 @@
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { DIRS, classPath, tsModule, tsdoc, tsString } from './render.js';
+import { ERROR_BASES } from 'keel-core/gen/error-bases';
 
 // Subclases base y el status al que responde cada una (el mismo reparto que keel-spring).
-export const BASE_SUBCLASSES = [
-  { name: 'BadRequestException', http: 400 },
-  { name: 'UnauthorizedException', http: 401 },
-  { name: 'ForbiddenException', http: 403 },
-  { name: 'NotFoundException', http: 404 },
-  { name: 'ConflictException', http: 409 },
-  { name: 'PayloadTooLargeException', http: 413 },
-  { name: 'BusinessException', http: 422 }
-];
+export const BASE_SUBCLASSES = ERROR_BASES;
 
 export const DOMAIN_EXCEPTION_TS = classPath(DIRS.errors, 'DomainException');
 export const NOT_FOUND_EXCEPTION_TS = classPath(DIRS.errors, 'NotFoundException');

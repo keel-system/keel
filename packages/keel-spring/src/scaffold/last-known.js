@@ -16,6 +16,7 @@
 // justo el que no puede tener dependencias nuevas.
 
 import { javaFile, javaPath, subPackage } from './render.js';
+import { LAST_KNOWN_MAX_ENTRIES } from 'keel-core/gen/last-known';
 
 const HTTP_PKG = 'infrastructure.http';
 
@@ -72,7 +73,7 @@ function renderStore(model) {
 public class LastKnownValues {
 
     /** Tope de entradas vivas. Ver el javadoc de la clase: la clave la forman los parámetros. */
-    private static final int MAX_ENTRIES = 10_000;
+    private static final int MAX_ENTRIES = ${String(LAST_KNOWN_MAX_ENTRIES).replace(/\B(?=(\d{3})+(?!\d))/g, '_')};
 
     private final Map<String, Entry> entries = new ConcurrentHashMap<>();
 

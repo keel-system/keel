@@ -22,6 +22,8 @@
 // imagen o con la pasarela, no con un lenguaje. Los comentarios cuentan cómo la usa keel-spring,
 // que es la implementación de referencia; un arnés de otro lenguaje la renderiza igual.
 
+import { fastestSchedulePeriod } from './cron-period.js';
+
 /**
  * La imagen. Va aquí y no en el catálogo porque las rutas de este módulo son contrato con
  * ELLA: chaos (`ROUTES.chaos`) no existe antes de la 1.22, y la forma de sus disparadores
@@ -201,3 +203,34 @@ export const FIELDS = {
   from: '$.From.Address',
   to: '$.To[*].Address'
 };
+
+/**
+ * Cuántos segundos espera el arnés a que llegue un correo. Si lo empuja un barrido (una operación con
+ * `schedule` o `internal` entre las que lo envían), una espera menor que su periodo falla según la fase en
+ * que arranque la suite —verde o rojo por el reloj, no por el código—; así que es el periodo del barrido más
+ * rápido más un margen, entre un suelo y un techo. Estaba copiada en los dos arneses (incremento 1d de
+ * PLAN-KEEL-DOTNET.md).
+ */
+export const MAIL_AWAIT = {
+  // Sin barrido: la entrega ocurre justo después de la respuesta y esto cubre de sobra el viaje al relay.
+  floorSeconds: 15,
+  // Sobre el periodo del barrido: el desfase de fase que el planificador reparte entre barridos de la misma
+  // cadencia (hasta 60 s) y el envío en sí.
+  marginSeconds: 15,
+  // Por encima, una espera deja de ser una prueba y pasa a ser un cuelgue.
+  capSeconds: 300
+};
+
+export function mailAwaitSeconds(model) {
+  const drivenBySweep = (model.mail?.sentBy ?? []).some((name) =>
+    (model.services ?? []).some((service) =>
+      (service.operations ?? []).some((operation) => operation.name === name && (operation.internal || operation.schedule))
+    )
+  );
+  const period = drivenBySweep ? fastestSchedulePeriod(model) : null;
+  if (period == null) return { seconds: MAIL_AWAIT.floorSeconds, period: null };
+  return {
+    seconds: Math.min(MAIL_AWAIT.capSeconds, Math.max(MAIL_AWAIT.floorSeconds, period + MAIL_AWAIT.marginSeconds)),
+    period
+  };
+}

@@ -48,14 +48,12 @@ export function generate(model) {
 
 /** El fragmento de cada perfil: las mismas claves de nivel y formato, y las mismas variables, que keel-spring. */
 export function loggingYaml(model, profile) {
-  const root = profile === 'production' ? 'WARN' : 'INFO';
-  const app = profile === 'production' ? 'INFO' : 'DEBUG';
   const lines = [
     `# Generado por keel-nest build. Los logs del servicio en el perfil ${profile}.`,
     'logging:',
     '  level:',
-    `    root: ${envFor('LOG_LEVEL_ROOT', profile, root)}`,
-    `    app: ${envFor('LOG_LEVEL_APP', profile, app)}`
+    `    root: ${envFor('LOG_LEVEL_ROOT', profile)}`,
+    `    app: ${envFor('LOG_LEVEL_APP', profile)}`
   ];
   if (profile === 'develop' || profile === 'production') {
     lines.push(

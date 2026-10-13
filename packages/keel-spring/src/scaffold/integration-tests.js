@@ -70,6 +70,8 @@ import {
   shellQuote,
   UNKNOWN_TOPIC
 } from '../lib/broker-probes.js';
+import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
+import { PROBE_BODY_FILE } from 'keel-core/gen/broker-probes';
 
 // El reset por script existe con las mismas condiciones con las que docker.js lo
 // genera: una BD con cliResetCmd, una caché que vaciar, o destinos de mensajería
@@ -2524,11 +2526,7 @@ function storageControlSection(model) {
  * dos hilos de la misma JVM comparten pool y contexto.
  */
 function usesReplica(model) {
-  return usesOutbox(model) || hasScheduledOperation(model) || declaresIdempotency(model);
-}
-
-function hasScheduledOperation(model) {
-  return (model.services ?? []).some((group) => group.operations.some((operation) => operation.schedule));
+  return usesClusterScenarios(model);
 }
 
 /**
@@ -5181,7 +5179,7 @@ function brokerSection(model) {
     return `
     private static final String RABBIT_API = "${ENDPOINTS.rabbitmq.queuesApi}";
 
-    private static final String PROBE_BODY = "/tmp/keel-probe.json";
+    private static final String PROBE_BODY = "${PROBE_BODY_FILE}";
 ${physicalDestinationSection(model)}${doc}
     protected static String publishedMessages(String destination, int count) {${drainBeforeRead(model)}
         // Peek (ack_requeue_true): leer no consume, así que un escenario puede

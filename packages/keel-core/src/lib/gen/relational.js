@@ -686,3 +686,10 @@ export function replicaReadInListing(model, entity) {
     .flatMap((service) => service.operations ?? [])
     .some((operation) => users.has(operation.name) && (operation.returnsList || operation.paginated));
 }
+
+/**
+ * El autor de una escritura que no nace de una petición autenticada (una tarea programada, el arranque): con
+ * correlación, `system:<correlationId>`; sin ella, `system`. Estaba copiado en los dos generadores
+ * (incremento 1d de PLAN-KEEL-DOTNET.md).
+ */
+export const SYSTEM_ACTOR = 'system';
