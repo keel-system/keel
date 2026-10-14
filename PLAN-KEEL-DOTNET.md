@@ -902,7 +902,11 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     contra lo que emiten `stock-reservation-events` (outbox) y `metering-digest` (best-effort), y las firmas que enseña
     (`Publish`, `Consume`, `Header`, `Dispatch`, `InboundContext.Run`, la guarda, el publisher y el comando). Falsado
     citando un archivo inventado. `npm test` 356/356; `cs-check` 15/15.
-  - **Siguiente: 9e**, la corrida con RabbitMQ (`stock-reservation-events`, como en keel-nest).
+  - **9e, la corrida — preparada (2026-10-14).** Workspace `spring-live-test/corrida-stock-reservation-events-dotnet`:
+    `keel init`, el diseño de la fixture (`--ready` 11/11, sin `--accept-unready`) y `keel-dotnet build` con
+    `postgresql · rabbitmq` (196 archivos, con la skill `keel-dotnet-rabbitmq`); el proyecto compila tal cual. Sus
+    gemelas son `2026-10-07-stock-reservation-events-{nest,spring}.md` (18/18 huella 9 y 14/14 huella 8). Los
+    contenedores se llaman `stock-reservation-events-*`: no puede correr a la vez que otra corrida del mismo diseño.
 
 ## 5. Riesgos conocidos
 
