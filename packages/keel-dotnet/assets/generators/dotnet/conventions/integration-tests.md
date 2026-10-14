@@ -35,8 +35,19 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Un flujo 
 | `ResetState()` | el reset, a mano (la base ya lo hace al empezar cada flujo) |
 | `Eventually(cond, plazo?, mensaje?)` | espera a que algo asíncrono se cumpla |
 | `BaseUrl` | la URL del servidor arrancado, por si un escenario necesita construir una a mano |
+| `Bearer(token)` | las cabeceras con `Authorization` de un token (solo con capa `security`); añade otras al mismo diccionario |
+| `TokenFor(rol, n?)` | token de usuario del rol; `n = 2` es el segundo usuario del mismo rol (titularidad) y `TokenFor("no-role")` el autenticado sin roles |
+| `ServiceCredential(cliente)` | token `client_credentials` de un cliente del diseño o de la matriz `test-m2m-*`; con `serviceAuth: api-key`, su clave |
+| `TokenAs(sub, claims?, rol?)` | una persona con el `sub` exacto del escenario y sus claims (`null` quita uno); solo cuando la identidad del llamante es el claim `sub`, con Keycloak |
+| `ScopedResource()` | el recurso al que alcanzan los usuarios no exentos del alcance por recurso |
+| `TokenWithScope(rol, valores…)` | un usuario del rol cuyo claim del alcance enumera EXACTAMENTE esos valores (ninguno: sin el claim); solo con alcance por recurso y Keycloak. No es un `designGap` ni se arregla editando el realm |
+| `ApiKey()` | la clave del perfil local con `protocol: api-key` |
 
 Nada de FluentAssertions (licencia comercial desde la 8): las aserciones son las de xUnit y `AssertJson`.
+
+Las credenciales salen de `infra/test-credentials.env` (lo escribe build junto a `init-keycloak.sh`): **no escribas
+ningún secreto, cliente ni usuario a mano**. Y pide el token **en cada petición**
+(`Get(ruta, Bearer(await TokenFor("editor")))`): dura cinco minutos y la caché lo renueva solo si se le pregunta.
 
 Una cabecera va en el diccionario del último argumento (`Post(ruta, cuerpo, new() { ["Idempotency-Key"] = clave })`),
 y dos peticiones **a la vez** se lanzan sin esperar a la primera y se esperan juntas

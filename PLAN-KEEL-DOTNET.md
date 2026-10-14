@@ -781,10 +781,36 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       con sus 1 371 pruebas en verde. Falsado dos veces sobre lo emitido: sin las ramas de rechazo del middleware caen
       los 401 y 403 de las fixtures que los emiten; sin comprobar la caducidad cae exactamente `UnTokenCaducadoEs401`
       en las seis fixtures con token.
-  - **Lo siguiente**: 8b, el arnés (`identityProvisioningFiles` con `DOTNET_INFRA.identity`, `TokenFor`,
-    `ServiceCredential`, `TokenAs`, `ScopedResource` y `TokenWithScope` en `FlowTest`, las skills
-    `keel-dotnet-keycloak`/`cognito`); 8c, `security-check` contra un Keycloak real; 8d, la corrida sobre
-    `profile-directory`.
+  - **8b, el arnés de identidad (hecho, 2026-10-14).**
+    - **Neutral**: qué credencial satisface la regla de cierre (la del humo) pasa a keel-core (`closingCredentialOf` en
+      `access-plan.js`, como dato); keel-nest la renderiza igual que antes (41/10 050, idéntico).
+    - **`src/scaffold/identity-harness.js`** → `tests/<Raíz>.IntegrationTests/Support/Credentials.cs`: lee
+      `infra/test-credentials.env` (entorno → archivo → convencional), caché de tokens que renueva a 30 s del `exp`, y
+      `TokenFor`, `ServiceCredential` (token o clave), `TokenAs` (personas por `partialImport`, atributos `kp_<claim>`
+      y un mapper por claim), `ScopedResource`, `TokenWithScope` (usuario `scoped-<rol>-<String.hashCode de Java>`, el
+      mismo nombre que keel-spring y keel-nest) y `ApiKey`, cada uno solo si el diseño lo hace posible. `FlowTest` gana
+      los atajos y `Bearer(token)`; el humo llama con la credencial de cierre (SMOKE-4) y gana SMOKE-5.
+    - **`infra/`**: `identityProvisioningFiles` neutral con `DOTNET_INFRA.identity` (el realm y `test-credentials.env`
+      con Keycloak, el emulador con Cognito).
+    - **Skills** `keel-dotnet-keycloak` (con `test-clients.md` y `troubleshooting.md`) y `keel-dotnet-cognito`, que
+      se instalan con su stack; la sección `security` de `mapping.md`, la tabla del arnés de `integration-tests.md`,
+      el proveedor de identidad en `infra-validation.md` y el paso de `init-keycloak.sh` del agente de infraestructura.
+    - `generator-docs.test.js` mide las rutas de las skills de identidad contra lo que emiten `profile-directory` y
+      `asset-vault` con su proveedor (falsado citando un archivo inventado).
+  - **8c, `security-check` (hecho, 2026-10-14): 34/34.** `npm run security-check --workspace packages/keel-dotnet`, el
+    gemelo del de keel-nest:
+    - `profile-directory` con PostgreSQL y Keycloak reales: `init-keycloak.sh` siembra y es idempotente; nueve flujos
+      sonda puntuados por `score-scenarios.sh` (401 sin credencial y con token inválido, 403 sin el permiso, el `sub`
+      del token llega al handler, `TokenAs` con su `sub` y sus claims, la identidad no se acepta del cuerpo, 401/404 de
+      un camino inexistente, 401 con el token de otro emisor) y el humo con SMOKE-5. Falsado rebajando la regla de
+      `GET /me/card` en `AccessRules.cs`: sale FALLO `FL-SEC-001-C` y solo él.
+    - `asset-vault` (que la frontera aún rechaza entero): su `infra/` y su `Credentials.cs` emitidos, compilados en un
+      programa de consola contra su realm: `TokenWithScope` lleva el claim al token firmado, con el mismo usuario
+      determinista que los otros dos generadores. Falsado quitando el atributo del alta: muere nombrando al usuario.
+    - **Lo que destapó, del propio check**: con los `FL-SEC-*` fuera del documento de escenarios, la matriz los marca
+      AJENO y un FALLO suyo deja el script con 2 (arnés roto), no con 1, así que el falsado no se podía leer. La sonda
+      sustituye el documento por el suyo y retira su línea del sello, como `harness-check`.
+  - **Lo siguiente**: 8d, la corrida sobre `profile-directory` (la lanza el usuario con `/keel-generate-dotnet`).
 
 ## 5. Riesgos conocidos
 

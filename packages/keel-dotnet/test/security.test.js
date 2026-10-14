@@ -125,3 +125,50 @@ test('la frontera: la capa entra; resolvedBy y un campo de identidad que no es t
   assert.equal(typed.length, 1);
   assert.match(typed[0], /use-cases\.getMine\.input\.caller: uuid .*string/);
 });
+
+// ─── El arnés de identidad (8b) ───────────────────────────────────────────────
+
+const flowTest = (files) => content(files, '/Support/FlowTest.cs');
+
+test('el arnés: credenciales del proveedor de prueba, solo lo que el diseño hace posible', () => {
+  const vault = plan('asset-vault').files;
+  assert.match(content(vault, '/Support/Credentials.cs'), /Path\.Combine\(Harness\.Root, "infra", "test-credentials\.env"\)/);
+  for (const member of ['Bearer', 'TokenFor', 'ServiceCredential', 'ScopedResource', 'TokenWithScope']) {
+    assert.match(flowTest(vault), new RegExp(`protected static [^\\n]* ${member}\\(`), member);
+  }
+  // asset-vault no identifica al llamante por `sub`: sin personas.
+  assert.doesNotMatch(flowTest(vault), / TokenAs\(/);
+  const cards = plan('profile-directory').files;
+  assert.match(flowTest(cards), /protected static Task<string> TokenAs\(string sub/);
+  assert.doesNotMatch(flowTest(cards), / ScopedResource\(/);
+  // Con Cognito no hay personas ni usuarios del alcance: el emulador fija los claims en su configuración.
+  assert.doesNotMatch(flowTest(plan('asset-vault', 'cognito').files), / TokenWithScope\(| TokenAs\(/);
+  // Sin capa security, nada.
+  const catalog = plan('product-catalog').files;
+  assert.equal(content(catalog, '/Support/Credentials.cs'), undefined);
+  assert.doesNotMatch(flowTest(catalog), /Bearer|TokenFor/);
+});
+
+test('el humo llama con la credencial que satisface el cierre (keel-core) y comprueba que el proveedor emite', () => {
+  const smoke = content(plan('asset-vault').files, '/HarnessSmoke.cs');
+  assert.match(smoke, /Dictionary<string, string> headers = Bearer\(await TokenFor\("vault-admin"\)\);/);
+  assert.match(smoke, /\[Scenario\("SMOKE-5: el proveedor de identidad emite credenciales"\)\]/);
+  assert.match(smoke, /await ServiceCredential\("rendering-service"\)/);
+});
+
+test('infra/ siembra el proveedor de identidad: el realm con Keycloak y el emulador con Cognito', () => {
+  const keycloak = plan('profile-directory').files;
+  assert.ok(content(keycloak, 'infra/init-keycloak.sh'));
+  assert.match(content(keycloak, 'infra/test-credentials.env'), /AUTH_TEST_CLIENT=profile-directory-dotnet-test/);
+  assert.match(content(keycloak, 'infra/test-credentials.env'), /Support\/Credentials\.cs/);
+  const cognito = plan('profile-directory', 'cognito').files;
+  assert.ok(content(cognito, 'infra/cognito/mock-oauth2-config.json'));
+  assert.equal(content(cognito, 'infra/init-keycloak.sh'), undefined);
+});
+
+test('la skill del proveedor se instala con su stack, en cada harness', () => {
+  const skills = (files) => [...new Set(files.map((file) => /\/skills\/(keel-dotnet-[\w-]+)\//.exec(file.path)?.[1]).filter(Boolean))].sort();
+  assert.deepEqual(skills(plan('profile-directory').files), ['keel-dotnet-database', 'keel-dotnet-keycloak']);
+  assert.deepEqual(skills(plan('profile-directory', 'cognito').files), ['keel-dotnet-cognito', 'keel-dotnet-database']);
+  assert.deepEqual(skills(plan('product-catalog').files), ['keel-dotnet-database']);
+});

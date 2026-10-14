@@ -28,6 +28,7 @@ import { DOTNET_INFRA } from './infra.js';
 import { usesApi } from './rest-support.js';
 import { usesRelational } from './persistence.js';
 import { csFile, csString, solution } from './render.js';
+import { closingCredentialExpression, credentialsCs, flowTestCredentialMembers, smokeCredentialsCase } from './identity-harness.js';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
 export const SCORE_SCENARIOS_SH = 'infra/score-scenarios.sh';
@@ -51,6 +52,8 @@ export function generate(model) {
     { path: `${project.dir}/Support/Harness.cs`, content: harnessCs(model) },
     { path: `${project.dir}/Support/JsonShape.cs`, content: jsonShapeCs(model) },
     { path: `${project.dir}/Support/ScenarioOrder.cs`, content: scenarioOrderCs(model) },
+    // Con capa security, las credenciales del proveedor de prueba (identity-harness.js).
+    ...[credentialsCs(model, supportNamespace(model))].filter(Boolean).map((content) => ({ path: `${project.dir}/Support/Credentials.cs`, content })),
     { path: `${project.dir}/${HARNESS_SMOKE_CLASS}.cs`, content: harnessSmokeCs(model) },
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript(model) }
@@ -95,6 +98,8 @@ function flowTestCs(model) {
     /// </summary>
     protected static void ResetState() => Harness.ResetState();`);
   }
+  // Las credenciales del proveedor de prueba, con capa security: atajos sobre Support/Credentials.cs.
+  helpers.push(...flowTestCredentialMembers(model));
   if (probe) {
     helpers.push(String.raw`    /// <summary>
     /// Ejecuta una sentencia contra la base de prueba (${probe.label}) y devuelve su salida en crudo. Es para lo que
@@ -829,16 +834,27 @@ function harnessSmokeCs(model) {
         Assert.Equal("1", Db("SELECT 1").Trim());`);
   }
   if (api) {
+    // Con seguridad, con la credencial que satisface la regla de cierre: sin ella, un camino que no existe es 401 (se
+    // decide antes de enrutar), y el humo mediría la autorización.
+    const credential = closingCredentialExpression(model);
+    const headers =
+      credential && credential !== 'null'
+        ? `        Dictionary<string, string> headers = ${credential};
+        headers["X-Correlation-Id"] = "keel-smoke";
+        var response = await Get($"{RouteBase}/keel-smoke-ruta-inexistente", headers);`
+        : '        var response = await Get($"{RouteBase}/keel-smoke-ruta-inexistente", new() { ["X-Correlation-Id"] = "keel-smoke" });';
     cases.push(String.raw`    [Scenario("SMOKE-4: la API responde con ErrorResponse y correlación")]
     public async Task LaApiRespondeConErrorResponse()
     {
-        var response = await Get($"{RouteBase}/keel-smoke-ruta-inexistente", new() { ["X-Correlation-Id"] = "keel-smoke" });
+${headers}
         Assert.True(response.Status == 404, response.ToString());
         Assert.Equal(404, response.Json().GetProperty("status").GetInt32());
         Assert.Equal("keel-smoke", response.Header("x-correlation-id"));
     }`);
   }
-  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null].filter(Boolean);
+  const identity = smokeCredentialsCase(model);
+  if (identity) cases.push(identity);
+  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null].filter(Boolean);
   return csFile({
     namespace: solution(model).integrationTests.name,
     header: `// Humo del arnés: la fontanería de la que dependen TODOS los flujos (servidor vivo${plumbing.length > 0 ? `, ${plumbing.join(', ')}` : ''}).

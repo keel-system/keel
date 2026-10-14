@@ -10,7 +10,7 @@
 // usuarios a los que pedir un token (`tokenFor` no existiría y su promesa sería mentira), sin
 // `serviceAuth` no hay clientes máquina.
 
-import { usesTokenProtocol, accessPlan } from 'keel-core/gen/access-plan';
+import { closingCredentialOf, usesTokenProtocol } from 'keel-core/gen/access-plan';
 import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from 'keel-core/gen/identity-realm';
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
 import { tsString } from './render.js';
@@ -26,32 +26,19 @@ export function usesIdentityHarness(model) {
  * 403 y el humo caía sin hablar del servicio). Devuelve las cabeceras, o null si nada la satisface.
  */
 export function closingCredential(model) {
-  if (!usesIdentityHarness(model)) return null;
-  const sec = model.security;
-  if (!usesTokenProtocol(sec)) {
-    return sec.protocol === 'api-key' ? `{ 'X-API-Key': apiKey() }` : null;
+  // Qué credencial es la decide keel-core (closingCredentialOf, la misma para todos los generadores); aquí solo se escribe.
+  const credential = closingCredentialOf(model);
+  if (credential == null) return null;
+  switch (credential.kind) {
+    case 'open':
+      return '{}';
+    case 'apiKey':
+      return `{ 'X-API-Key': apiKey() }`;
+    case 'role':
+      return `bearer(await tokenFor(${tsString(credential.name)}))`;
+    default:
+      return `bearer(await serviceCredential(${tsString(credential.name)}))`;
   }
-  const plan = accessPlan(model);
-  const fallback = plan.chains[plan.chains.length - 1].fallback;
-  if (fallback.kind === 'public') return '{}';
-  const roles = sec.roles ?? [];
-  const clients = sec.serviceAuth && sec.serviceAuth.protocol !== 'api-key' ? sec.serviceClients ?? [] : [];
-  const asRole = (role) => (roles.includes(role) ? `bearer(await tokenFor(${tsString(role)}))` : null);
-  const asClient = (client) => `bearer(await serviceCredential(${tsString(client.name)}))`;
-  const wanted = fallback.authorities ?? [];
-  const candidates = [
-    ...wanted.filter((a) => a.startsWith('ROLE_')).map((a) => asRole(a.slice(5))),
-    ...wanted
-      .filter((a) => !a.startsWith('ROLE_') && !a.startsWith('SCOPE_'))
-      .flatMap((permission) => (sec.roleGrants ?? []).filter((grant) => grant.permissions.includes(permission)).map((grant) => asRole(grant.role))),
-    ...wanted
-      .filter((a) => a.startsWith('SCOPE_'))
-      .flatMap((scope) => clients.filter((client) => client.scopes.includes(scope.slice(6))).map(asClient))
-  ].filter(Boolean);
-  if (candidates.length > 0) return candidates[0];
-  if (roles[0]) return asRole(roles[0]);
-  if (clients[0]) return asClient(clients[0]);
-  return null;
 }
 
 /** La sección de flow.ts: lectura de test-credentials.env y las funciones de credencial. */

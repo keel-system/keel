@@ -13,7 +13,9 @@ import { HARNESSES } from 'keel-core';
 import { AGENTS, CONVENTIONS, GUIDES, DOCS_DIR } from '../src/scaffold/generator-docs.js';
 import { solution } from '../src/scaffold/render.js';
 import { SKILL } from '../src/lib/assets.js';
-import { DOTNET_READY_DESIGN, planFixture } from './helpers/workspace.js';
+import { loadService } from 'keel-core';
+import { planService } from '../src/scaffold/index.js';
+import { DOTNET_READY_DESIGN, FIXTURES_DIR, planFixture } from './helpers/workspace.js';
 
 const assets = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets');
 const byPath = (files) => Object.fromEntries(files.map((file) => [file.path, file.content]));
@@ -90,23 +92,60 @@ test('la skill de la base y el baseline solo se instalan con persistencia relaci
 // todas las de los assets contra lo que build emite para el diseño de referencia: las que llevan un marcador
 // (`<Flujo>Flow.cs`) son plantillas y no se miran; `<Raíz>` se sustituye por la raíz del servicio.
 test('cada ruta src/, tests/ e infra/ que citan los assets existe en lo que emite build', () => {
-  const emitted = Object.keys(files);
+  // Lo de infra/ no lleva el nombre del servicio: vale también lo que emiten los diseños con seguridad (el realm de
+  // prueba, sus credenciales y el emulador de Cognito), que las guías comunes citan para cuando el diseño lo pide.
+  const securityInfra = Object.values(SKILL_SUBJECTS).flatMap(({ fixtures, auth }) =>
+    fixtures.flatMap((fixture) => planWith(fixture, auth).files.map((file) => file.path).filter((route) => route.startsWith('infra/')))
+  );
+  const emitted = [...Object.keys(files), ...securityInfra];
   // Lo que crea otro después: las migraciones (el pase de calidad), la salida de compilación y las pruebas de flujo
   // (el agente de pruebas; `<Flujo>Flow.cs` en los ejemplos).
   const createdLater = [`${sln.infrastructure.dir}/Persistence/Migrations`, `${sln.integrationTests.dir}/bin/`];
   const agentFlow = new RegExp(`^${sln.integrationTests.dir}/\\w+Flow\\.cs$`);
   const missing = [];
   for (const source of assetSources()) {
-    const text = fs.readFileSync(source, 'utf8').replaceAll('<Raíz>', sln.root);
-    for (const [cited] of text.matchAll(/\b(?:src|tests|infra)\/[\w./-]+/g)) {
-      const route = cited.replace(/[.,:;]+$/, '');
-      if (route.includes('<') || createdLater.some((later) => route.startsWith(later)) || agentFlow.test(route)) continue;
-      const exists = emitted.includes(route) || emitted.some((file) => file.startsWith(route.endsWith('/') ? route : `${route}/`));
-      if (!exists) missing.push(`${path.relative(assets, source)} → ${route}`);
+    // Las skills de un proveedor de identidad citan lo que build emite CON seguridad: se miden contra su diseño.
+    const target = Object.entries(SKILL_SUBJECTS).find(([skill]) => source.includes(`${path.sep}${skill}${path.sep}`))?.[1];
+    if (target) continue;
+    missing.push(...missingRoutes(source, sln, emitted, createdLater, agentFlow));
+  }
+  for (const [skill, subject] of Object.entries(SKILL_SUBJECTS)) {
+    // La skill vale para cualquier diseño con ese proveedor: una ruta cuenta si la emite alguno de sus sujetos.
+    const plans = subject.fixtures.map((fixture) => planWith(fixture, subject.auth));
+    for (const source of assetSources(path.join(assets, 'generators', 'dotnet', 'skills', skill))) {
+      const perSubject = plans.map(({ model, files: subjectFiles }) => missingRoutes(source, solution(model), subjectFiles.map((file) => file.path), [], agentFlow));
+      // Lo que falta en TODOS (por la ruta citada, que no depende del nombre del servicio salvo por <Raíz>).
+      const routeOf = (entry) => entry.split(' → ')[1].replace(/^(src|tests)\/[A-Za-z]+\./, '$1/<Raíz>.');
+      const everywhere = perSubject[0].filter((entry) => perSubject.every((list) => list.some((other) => routeOf(other) === routeOf(entry))));
+      missing.push(...everywhere);
     }
   }
   assert.deepEqual(missing, []);
 });
+
+/** Las skills que solo se instalan con un stack, y el diseño y el stack contra los que se miden sus rutas. */
+const SKILL_SUBJECTS = {
+  'keel-dotnet-keycloak': { fixtures: ['profile-directory', 'asset-vault'], auth: 'keycloak' },
+  'keel-dotnet-cognito': { fixtures: ['profile-directory', 'asset-vault'], auth: 'cognito' }
+};
+
+function planWith(fixture, auth) {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
+  return planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { auth } });
+}
+
+/** Las rutas src/, tests/ e infra/ que cita un asset y no están en lo emitido. */
+function missingRoutes(source, solutionOf, emitted, createdLater, agentFlow) {
+  const missing = [];
+  const text = fs.readFileSync(source, 'utf8').replaceAll('<Raíz>', solutionOf.root);
+  for (const [cited] of text.matchAll(/\b(?:src|tests|infra)\/[\w./-]+/g)) {
+    const route = cited.replace(/[.,:;]+$/, '');
+    if (route.includes('<') || createdLater.some((later) => route.startsWith(later)) || agentFlow.test(route)) continue;
+    const exists = emitted.includes(route) || emitted.some((file) => file.startsWith(route.endsWith('/') ? route : `${route}/`));
+    if (!exists) missing.push(`${path.relative(assets, source)} → ${route}`);
+  }
+  return missing;
+}
 
 // Los símbolos y firmas que la documentación ENSEÑA a usar, contra el código emitido.
 test('los tipos y miembros que enseñan las convenciones son los del código emitido', () => {

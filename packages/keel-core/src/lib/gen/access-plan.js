@@ -157,6 +157,43 @@ export function tokenClaims(auth) {
 }
 
 /**
+ * La credencial del ARNÉS de integración que SATISFACE la regla de cierre del diseño, no una cualquiera: con
+ * `access.default` de nivel admin, el primer rol recibía un 403 y el humo caía sin hablar del servicio (la lección de
+ * keel-spring). El orden sigue a la regla: un rol que nombra, un rol que otorga un permiso que nombra (`roleGrants`), un
+ * cliente máquina con un scope que nombra; si nada la satisface, el primer rol o el primer cliente que haya.
+ *
+ *   · null                          → sin capa security, protocolo `none`, o nada con lo que llamar;
+ *   · { kind: 'open' }              → el cierre es público: no hace falta credencial;
+ *   · { kind: 'apiKey' }            → la clave de API del servicio;
+ *   · { kind: 'role', name }        → el token de un usuario de ese rol (tokenFor);
+ *   · { kind: 'client', name }      → el token de máquina de ese cliente (serviceCredential).
+ */
+export function closingCredentialOf(model) {
+  const sec = model.layersPresent?.security ? model.security : null;
+  if (!sec || sec.protocol === 'none') return null;
+  if (!usesTokenProtocol(sec)) return sec.protocol === 'api-key' ? { kind: 'apiKey' } : null;
+  const plan = accessPlan(model);
+  const fallback = plan.chains[plan.chains.length - 1].fallback;
+  if (fallback.kind === 'public') return { kind: 'open' };
+  const roles = sec.roles ?? [];
+  const clients = sec.serviceAuth && sec.serviceAuth.protocol !== 'api-key' ? sec.serviceClients ?? [] : [];
+  const asRole = (role) => (roles.includes(role) ? { kind: 'role', name: role } : null);
+  const asClient = (client) => ({ kind: 'client', name: client.name });
+  const wanted = fallback.authorities ?? [];
+  const candidates = [
+    ...wanted.filter((a) => a.startsWith('ROLE_')).map((a) => asRole(a.slice(5))),
+    ...wanted
+      .filter((a) => !a.startsWith('ROLE_') && !a.startsWith('SCOPE_'))
+      .flatMap((permission) => (sec.roleGrants ?? []).filter((grant) => grant.permissions.includes(permission)).map((grant) => asRole(grant.role))),
+    ...wanted.filter((a) => a.startsWith('SCOPE_')).flatMap((scope) => clients.filter((client) => client.scopes.includes(scope.slice(6))).map(asClient))
+  ].filter(Boolean);
+  if (candidates.length > 0) return candidates[0];
+  if (roles[0]) return asRole(roles[0]);
+  if (clients[0]) return asClient(clients[0]);
+  return null;
+}
+
+/**
  * Los claims de un token que satisface TODA regla de acceso del plan: sus roles, permisos y scopes, en los claims donde
  * los pone el proveedor del stack, y la audiencia del servicio. Es el token con el que las pruebas que build deja
  * escritas pasan la autorización para medir lo que dicen medir (el contrato del cable, la lectura de peticiones), el

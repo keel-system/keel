@@ -4,10 +4,14 @@
 // herramientas y la tabla de historial de sus migraciones.
 
 import { infraFiles } from 'keel-core/gen/infra-scripts';
+import { identityProvisioningFiles } from 'keel-core/gen/identity-provisioning';
 import { MIGRATIONS_TABLE } from './persistence-runtime.js';
 
 export const DOTNET_INFRA = {
   generator: 'keel-dotnet',
+  // El proveedor de identidad de prueba (keel-core/gen/identity-provisioning.js): quién consume test-credentials.env
+  // y qué skill documenta los clientes de prueba.
+  identity: { harness: 'tests/<Servicio>.IntegrationTests/Support/Credentials.cs', skill: 'keel-dotnet-keycloak' },
   // El historial de EF Core con su nombre propio (`MigrationsHistoryTable`, persistence-runtime.js): el reset lo
   // respeta por nombre, y truncarlo haría que el siguiente arranque en develop reaplicara el baseline sobre tablas
   // ya existentes.
@@ -41,7 +45,7 @@ export const DOTNET_INFRA = {
 };
 
 export function generate(model) {
-  return infraFiles(model, DOTNET_INFRA);
+  return [...infraFiles(model, DOTNET_INFRA), ...identityProvisioningFiles(model, DOTNET_INFRA)];
 }
 
 // Lo emite infra-scripts.js solo con integraciones salientes, que keel-dotnet genera desde el incremento 11: queda

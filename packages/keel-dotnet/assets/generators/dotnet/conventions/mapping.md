@@ -187,6 +187,35 @@ convierte y valida la petición con las mismas reglas y mensajes que keel-spring
 sitio que registra las rutas. Si el binding, el status o la ruta no casan con `api.keel.yaml`, es un defecto del
 scaffolding: **repórtalo**, no lo compenses en el handler.
 
+## `security` — security.keel.yaml
+
+Entera de build, con la misma autorización que los servidores de keel-spring y keel-nest (el plan de acceso lo
+decide keel-core): un middleware de la entrada HTTP (`<Raíz>.Api/Rest/HttpSecurityMiddleware.cs`) que evalúa las
+reglas de `<Raíz>.Infrastructure/Security/AccessRules.cs` **delante de los endpoints** —sin credencial, un camino que
+no existe es 401, no 404—, la validación del JWT (`JwtAuthenticator.cs`, contra el JWKS del proveedor), las claves de
+API, CORS, los rechazos 401/403 con su `code` del catálogo (`UNAUTHENTICATED`, `ACCESS_DENIED`) y la configuración
+por perfil (`config/parameters/<perfil>/security.yaml`). **No uses `[Authorize]`, políticas de ASP.NET Core ni
+`RequireAuthorization`**: la autorización del diseño ya está entera, y una segunda capa diría otra cosa en cuanto el
+diseño cambie.
+
+Lo que toca a un handler:
+
+- **La identidad del llamante** (`authentication.callerIdentity`) llega YA resuelta en su campo del mensaje: la
+  estampa el lector del endpoint desde la credencial (`CallerIdentity.Resolve()`), nunca del cuerpo. El handler la
+  usa como cualquier otro campo; no mira el token.
+- **El alcance por recurso** (`authentication.scoping`): el handler de una operación que declara el error del alcance
+  recibe `ICallerScope` inyectado. Comprueba `callerScope.Covers(valor)` donde lo digan las reglas y lanza el error
+  del diseño si no lo cubre; en un listado, filtra en la consulta con `callerScope.ScopedValues()` (un finder acotado
+  en el puerto), nunca cargando todo y filtrando.
+
+```csharp
+var application = await applicationRepository.FindByCode(command.ApplicationCode, cancellationToken);
+if (!callerScope.Covers(command.ApplicationCode)) throw new ApplicationForbiddenException();
+```
+
+Las credenciales de los escenarios salen del arnés (`TokenFor`, `ServiceCredential`, `TokenAs`), que lee
+`infra/test-credentials.env`: ver la skill del proveedor (`keel-dotnet-keycloak`, `keel-dotnet-cognito`).
+
 ## `persistence` — persistence.keel.yaml
 
 Entera de build: las filas (`Persistence/Rows/<Entidad>Row.cs`) con su mapeo fluente sobre el esquema neutral de

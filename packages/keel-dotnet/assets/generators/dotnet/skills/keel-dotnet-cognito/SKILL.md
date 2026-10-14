@@ -1,0 +1,53 @@
+---
+name: keel-dotnet-cognito
+description: Guía de autenticación OIDC con Amazon Cognito en un proyecto generado por keel-dotnet — qué se emula en local (el contrato del token, no la API de AWS), qué no queda probado ahí y cómo verificar grupos, scopes y audiencia; el código de seguridad y la configuración del emulador ya los genera build. Usar cuando keel-stack.json declara auth "cognito".
+---
+
+# Amazon Cognito (auth: `cognito`)
+
+La capa `security` sale **entera** de build, con la misma autorización que los servidores de keel-spring y
+keel-nest del diseño: el middleware de la entrada HTTP (`src/<Raíz>.Api/Rest/HttpSecurityMiddleware.cs`), las
+reglas como datos (`src/<Raíz>.Infrastructure/Security/AccessRules.cs`) y la validación del JWT
+(`src/<Raíz>.Infrastructure/Security/JwtAuthenticator.cs`), que lee los claims planos de Cognito:
+`cognito:groups` → `ROLE_<grupo>`, `scope` → `SCOPE_<scope>`. **No reescribas ese código.**
+
+## Qué corre en local, y qué NO se prueba ahí
+
+En local no corre Cognito: corre `mock-oauth2-server`, que emite tokens con la **forma exacta** de los de
+Cognito. Este servicio es un resource server puro —nunca llama a la API de AWS—, así que lo único que
+consume es el token. Build deja:
+
+- `infra/cognito/mock-oauth2-config.json` — un usuario por rol (con sus `cognito:groups`), uno sin roles
+  y un cliente máquina por `serviceClient`, derivados de `security.keel.yaml`. No hay nada que sembrar.
+- `config/parameters/<perfil>/security.yaml` — el `issuer-uri`: en local `http://localhost:9229/<servicio>`
+  (determinista); fuera de local, el pool real por `OAUTH2_ISSUER_URI`.
+- `infra/test-credentials.env` — `AUTH_TOKEN_URL` y los clientes que usa el arnés (`TokenFor`,
+  `ServiceCredential` de `tests/<Raíz>.IntegrationTests/Support/FlowTest.cs`).
+
+**Lo que ahí no queda probado**, y hay que decirlo al cerrar: que el proveedor autentique de verdad (el
+emulador no valida contraseñas) y el alta de user pool, grupos y usuarios (API de AWS).
+
+Con **alcance por recurso** (`scoping` en el diseño), el emulador pone el claim en el token de cada usuario no
+exento con el valor de `ScopedResource()`, como el realm de Keycloak. En un pool real ese claim no llega solo al
+access token: hace falta un disparador de pre-generación de tokens (V2) que copie `custom:<claim>` con el nombre
+del diseño, o todo usuario acotado recibe el error del alcance. Y `TokenWithScope` no existe con Cognito (el
+emulador no da de alta usuarios): un escenario que necesite otro valor del claim es un `blocker`.
+
+## Las dos rarezas de Cognito, ya resueltas por build
+
+| Rareza | Quién la absorbe |
+|---|---|
+| Los scopes vienen prefijados por el resource server (`<servicio>/product:read`) | `JwtAuthenticator.cs` corta el prefijo antes de componer `SCOPE_*` |
+| Los tokens de `client_credentials` **no traen `aud`** | `JwtAuthenticator.IssuedFor` exige que algún scope venga prefijado por el resource server de este servicio, que es como Cognito dice «este token es para esta API» |
+
+Si algo no casa, el fallo está en otro sitio: no las arregles a mano.
+
+## Qué hace el agente
+
+1. **Infraestructura**: `bash infra/up.sh` y `bash infra/validate-infra.sh`. No hay script de
+   aprovisionamiento: el emulador arranca con su configuración.
+2. **Pruebas**: las credenciales salen del arnés (`Bearer(await TokenFor("<rol>"))`,
+   `Bearer(await ServiceCredential("<cliente>"))`). `TokenAs` no existe con Cognito: el emulador fija los
+   claims en su configuración, no por petición.
+3. **Verificación**: sin token → 401 `UNAUTHENTICATED`; token sin el grupo → 403 `ACCESS_DENIED`; con él
+   → 2xx. En un token de máquina, el `scope` con prefijo y sin `aud`.

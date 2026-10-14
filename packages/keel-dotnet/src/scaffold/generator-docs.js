@@ -17,6 +17,7 @@ import { describeStack } from 'keel-core/gen/stack';
 import { assetsDir, SKILL, TARGET_FRAMEWORK } from '../lib/assets.js';
 import { solution } from './render.js';
 import { usesRelational } from './persistence.js';
+import { usesJwt } from './security.js';
 import { usesSchemaBaseline, baselineCommand } from './schema-baseline.js';
 import { HARNESS_SMOKE_CLASS } from './integration-tests.js';
 
@@ -35,9 +36,11 @@ export const CONVENTIONS = ['mapping.md', 'project-layout.md', 'domain-modeling.
 /** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
 export const AGENTS = ['keel-dotnet-code.md', 'keel-dotnet-infra.md', 'keel-dotnet-tests.md', 'keel-dotnet-validate.md', 'keel-dotnet-quality.md'];
 
-/** Skills por tecnología aplicables al servicio: hoy, la de la base relacional. */
+/** Skills por tecnología aplicables al servicio: la de la base relacional y la del proveedor de identidad. */
 export function stackSkills(model) {
-  return usesRelational(model) ? ['keel-dotnet-database'] : [];
+  const skills = usesRelational(model) ? ['keel-dotnet-database'] : [];
+  if (usesJwt(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-dotnet-${model.stack.auth}`);
+  return skills;
 }
 
 export function generate(model) {
