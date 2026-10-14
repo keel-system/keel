@@ -81,6 +81,8 @@ test('el handler del barrido dice que el reclamo ya está generado y cómo se us
   assert.match(handler, /EL RECLAMO YA ESTÁ GENERADO: toma el lote con jobRepository\.ClaimForDispatchJobsRunning\(cancellationToken\)/);
   assert.match(handler, /EL RESCATE YA ESTÁ GENERADO: jobRepository\.ClaimForStalledDispatchJobsDone\(cancellationToken\)/);
   assert.match(handler, /SIN TRANSACCIÓN ABARCADORA/);
+  // Corrida job-dispatch-cycles (10e): el rescate cortaba el lote entero al primer Save que perdía la carrera.
+  assert.match(handler, /Un fallo en una fila NO corta el lote: cada Save va en su try/);
   // El handler recibe el puerto del repositorio con el nombre que la nota cita.
   assert.match(handler, /private readonly IJobRepository jobRepository = jobRepository;/);
 });

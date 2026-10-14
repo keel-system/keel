@@ -1078,6 +1078,16 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     generados se usen tal cual y que el arnés del rescate (`StallInFlight`/`PutInFlight`) aguante un pipeline real. Los
     contenedores se llaman `job-dispatch-cycles-*`, como los de las gemelas: no puede correr a la vez que otra corrida del
     mismo diseño.
+  - **10e, hecha (2026-10-14): 12/12 a la primera y huella 6**, los mismos seis archivos que keel-nest (12/12, huella 6;
+    keel-spring 12/12, huella 5) (`docs/corridas/2026-10-14-job-dispatch-cycles-dotnet.md`). Sin `--accept-unready`, sin
+    ronda de arbitraje, sin `harnessPatches` ni `design-gaps.yaml`, y `check-idempotency.sh` en verde. Un tick del reloj
+    disparó de verdad el handler (los escenarios esperan al cron real), el barrido usa los dos reclamos generados tal cual y
+    los flujos del rescate usan los tres helpers del arnés. Un hueco del generador: la nota del rescate no decía que un
+    fallo en una fila no corta el lote, y el handler del agente cortaba la pasada al primer `Save` que perdía la carrera con
+    el ejecutor (ningún escenario lo ve). Arreglado en la nota, con su aserción; keel-nest y keel-spring llevan la misma
+    nota sin la frase (latente).
+- **Inc. 10 — cerrado (2026-10-14).** La reconciliación, la compensación y `lastKnown` van al 11, como en keel-nest.
+  Siguiente: el incremento 11 (clientes HTTP salientes, circuito propio, reconciliación, arnés WireMock).
 
 ## 5. Riesgos conocidos
 
