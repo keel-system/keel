@@ -44,6 +44,7 @@ import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
 import { enumMember } from '../lib/cs-projection.js';
 import { IDEMPOTENCY_ROW, usesRequestIdempotency } from './request-idempotency.js';
 import { storeRows, storeSchemaNames } from './messaging-stores.js';
+import { RECONCILIATION_ROW, reconciliationSchemaNames, usesReconciliationClaims } from './reconciliation-claim.js';
 import { csFile, csMember, csString, located, namespaceOf, solution, typeUsings, xmlDoc } from './render.js';
 
 /** ¿El diseño persiste en un motor relacional? Es lo que genera todo este módulo. */
@@ -657,6 +658,8 @@ export function rowClasses(model) {
   if (usesRequestIdempotency(model)) classes.push(IDEMPOTENCY_ROW);
   // Y los de la mensajería: el outbox y el registro de mensajes procesados.
   classes.push(...storeRows(model));
+  // Y la marca del reclamo de reconciliación (incremento 11c).
+  if (usesReconciliationClaims(model)) classes.push(RECONCILIATION_ROW);
   return classes;
 }
 
@@ -718,6 +721,7 @@ export function expectedSchemaNames(model) {
     for (const index of IDEMPOTENCY_RECORD.indexes) names.add(index.name);
   }
   for (const name of storeSchemaNames(model)) names.add(name);
+  for (const name of reconciliationSchemaNames(model)) names.add(name);
   return [...names].sort();
 }
 

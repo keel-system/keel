@@ -18,12 +18,18 @@ import { messagingNamespace, usesMessaging } from './messaging.js';
 import { schedulingNamespace, usesScheduling } from './scheduling.js';
 import { usesServiceParameters } from './service-parameters.js';
 import { usesSweepClaims } from './claim.js';
+import { usesReconciliationSettings } from './reconciliation-claim.js';
 import { clientAdaptersNamespace, usesHttpClients } from './http-clients.js';
 
 // Los barridos del perfil, antes de la persistencia: AddPersistence solo pone los defaults si nadie registró estos.
 const SWEEPS = `
 // Los barridos del perfil (sweep.yaml): el lote de cada reclamo y el plazo de cada rescate.
 builder.Services.AddSingleton(SweepSettings.From(configuration));`;
+
+// Los barridos de reconciliación del perfil, por lo mismo: AddPersistence solo pone los defaults si nadie registró estos.
+const RECONCILIATIONS = `
+// Los barridos de reconciliación del perfil (reconciliation.yaml): el umbral, la caducidad del reclamo y el lote.
+builder.Services.AddSingleton(ReconciliationSettings.From(configuration));`;
 
 export function generate(model) {
   return [{ path: `${solution(model).api.dir}/Program.cs`, content: programCs(model) }];
@@ -51,7 +57,7 @@ builder.Services.AddUseCases();`
     : '';
   const database = persistence
     ? `
-// La persistencia relacional del perfil: el DbContext, la transacción del caso de uso y los repositorios.${usesSweepClaims(model) ? SWEEPS : ''}
+// La persistencia relacional del perfil: el DbContext, la transacción del caso de uso y los repositorios.${usesSweepClaims(model) ? SWEEPS : ''}${usesReconciliationSettings(model) ? RECONCILIATIONS : ''}
 builder.Services.AddPersistence(DatabaseSettings.From(configuration));
 // Cada sentencia SQL no es un evento del servicio: solo sus avisos y errores, como Hibernate sin show-sql en keel-spring y
 // TypeORM sin logging en keel-nest. A nivel Information, un relay que sondea cada segundo inundaba el log.

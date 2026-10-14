@@ -20,11 +20,13 @@ import {
   partialUniqueIndexes,
   uniqueFields,
   keyShadow,
-  LOCK_VERSION
+  LOCK_VERSION,
+  claimsForEntity
 } from 'keel-core/gen';
 import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, typeUsings, xmlDoc, entityPlace } from './render.js';
 import { domainMembers } from './entities.js';
 import { adapterClaimMethods, claimDependencies, claimUsings, portClaimMethods } from './claim.js';
+import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import {
   usesRelational,
   rowClass,
@@ -230,6 +232,8 @@ function renderPort(model, entity) {
   }
   // Los reclamos de barrido que el modelo decide para esta raíz (incremento 10c).
   methods.push(...portClaimMethods(model, entity));
+  // Y los de reconciliación (incremento 11c).
+  methods.push(...portReconciliationMethods(model, entity));
   methods.push(
     `${xmlDoc(
       [
@@ -338,6 +342,9 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
 
   // Los reclamos de barrido (incremento 10c): SKIP LOCKED + UPDATE condicional por fila, en su propia transacción.
   methods.push(...adapterClaimMethods(model, entity));
+  // Los de reconciliación: la marca de reconciliation_claim. El ayudante RequireOwnTransaction lo emite claim.js si la raíz
+  // tiene además un reclamo de barrido.
+  methods.push(...adapterReconciliationMethods(model, entity, { ownTransactionHelper: claimsForEntity(model, entity.name).length === 0 }));
   usings.push(...claimUsings(model, entity));
   methods.push(saveMethod(model, entity, helpers));
   methods.push(`    public async Task DeleteById(${idType} ${idName}, CancellationToken cancellationToken = default)
@@ -368,7 +375,7 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
   const body = `${xmlDoc([
     `Adaptador del puerto ${portClass(entity)} sobre EF Core. Usa el DbContext del ámbito, el de la transacción que abrió`,
     'el UseCaseMediator; sin ella, cada lectura va sola y cada escritura abre la suya.'
-  ])}public sealed class ${adapterClass(entity)}(${dbContextClass(model)} db, PersistenceTransactions transactions${usesBridge(model) && emitsEvents(model, entity) ? `, ${bridgeClass(model)} events` : ''}${claimDependencies(model, entity).map((dep) => `, ${dep.type} ${dep.name}`).join('')}) : ${portClass(entity)}
+  ])}public sealed class ${adapterClass(entity)}(${dbContextClass(model)} db, PersistenceTransactions transactions${usesBridge(model) && emitsEvents(model, entity) ? `, ${bridgeClass(model)} events` : ''}${[...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)].map((dep) => `, ${dep.type} ${dep.name}`).join('')}) : ${portClass(entity)}
 {
 ${fields.join('\n')}${sortable}
 

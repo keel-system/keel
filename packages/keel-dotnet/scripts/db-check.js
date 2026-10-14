@@ -32,6 +32,9 @@
 //   purge-batch cada lote borra hasta el corte y no hasta su frontera (la pasada deja de ir por lotes)
 //   claim-skip-locked  el reclamo de un barrido espera al lock de otra réplica en vez de saltarse la fila
 //   claim-stale        el rescate se lleva todo lo que está en vuelo, también lo recién entrado (sin cota temporal)
+//   reconciliation-expiry     la marca de reconciliación caduca con `<` y no con el `<=` de keel-core (el límite se retiene)
+//   reconciliation-threshold  el reclamo de reconciliación se lleva también lo recién encargado (sin el umbral del diseño)
+//   reconciliation-head       la lectura de candidatos no excluye los de marca viva (la cabeza de la cola tapa al resto)
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -62,7 +65,10 @@ const SABOTAGES = {
   purge: ['Purge/TablePurges.cs', 'published_at IS NOT NULL AND published_at < {cutoff}', 'published_at IS NOT NULL AND created_at < {cutoff}'],
   'purge-batch': ['Purge/TablePurges.cs', ' <= {upTo.ToUniversalTime()}', ' <= {cutoff}'],
   'claim-skip-locked': ['Repositories/', 'LIMIT {batch} FOR UPDATE SKIP LOCKED', 'LIMIT {batch} FOR UPDATE'],
-  'claim-stale': ['Repositories/', ' < {staleBefore}', ' <= {claimedAt}']
+  'claim-stale': ['Repositories/', ' < {staleBefore}', ' <= {claimedAt}'],
+  'reconciliation-expiry': ['Persistence/ReconciliationClaimStore.cs', 'claimed_at <= {expired}', 'claimed_at < {expired}'],
+  'reconciliation-threshold': ['Repositories/', ' < {unansweredBefore}', ' <= {now}'],
+  'reconciliation-head': ['Repositories/', 'c.claimed_at > {claimExpiredBefore})', 'c.claimed_at > {claimExpiredBefore} AND 1 = 0)']
 };
 
 const results = [];

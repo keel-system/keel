@@ -89,7 +89,7 @@ const CS_TYPES = { uuid: 'Guid', string: 'string', text: 'string', timestamp: 'D
 /** `routing_key` → `RoutingKey`. */
 const propertyOf = (column) => column.name.replace(/(^|_)([a-z])/g, (_m, _s, c) => c.toUpperCase());
 
-function rowFile(model, className, table, doc) {
+export function rowFile(model, className, table, doc) {
   const { namespace, path } = located(model, 'rows', className);
   const columns = storeColumns(table, 'relational');
   const primary = columns.filter((column) => column.primary);

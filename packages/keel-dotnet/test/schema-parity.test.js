@@ -30,12 +30,8 @@ test('hay fixtures relacionales que comparar', () => {
   assert.ok(relational.length >= 6, relational.join(', '));
 });
 
-/**
- * Las tablas del DISEÑO en keel-spring: las de los mecanismos que keel-dotnet todavía no genera (el outbox y los
- * mensajes procesados, incremento 9; el reclamo de reconciliación, 11) llegan con su incremento, y entonces dejan de
- * filtrarse aquí. El registro de idempotencia (`idempotency_record`) ya se compara: se adelantó al incremento 7.
- */
-const PENDING_TABLES = new Set(['reconciliation_claim']);
+// Las tablas de los mecanismos del generador entran todas: el outbox y los mensajes procesados (incremento 9), el
+// registro de idempotencia (7) y la marca del reclamo de reconciliación (11c).
 
 for (const name of relational) {
   test(`${name}: el esquema de keel-dotnet es el de keel-spring`, async () => {
@@ -43,7 +39,6 @@ for (const name of relational) {
     const springFiles = planSpring({ manifest, layers, workspace: FIXTURES_DIR }).files;
     const spring = springSchema(springFiles);
     for (const [tableName, fks] of springCrossAggregateForeignKeys(springFiles)) for (const fk of fks) schemaTable(spring, tableName).names.add(fk);
-    for (const pending of PENDING_TABLES) spring.delete(pending);
     const dotnet = dotnetSchema((await planFixture(name)).files);
     assert.deepEqual([...dotnet.keys()].sort(), [...spring.keys()].sort(), 'las mismas tablas');
     for (const [tableName, want] of spring) {

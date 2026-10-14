@@ -12,6 +12,7 @@
 
 import { cronPeriodSeconds } from './cron-period.js';
 import { kebabCase, screamingSnake } from './naming.js';
+import { envWithDefault } from './profile-values.js';
 
 // ─── La tabla, como DATOS ────────────────────────────────────────────────────
 
@@ -103,6 +104,33 @@ export function reconciliationParameters(activation, sweeper) {
     }),
     batchSize: Object.freeze({ key: `${key}.batch-size`, env: `${env}_BATCH_SIZE`, default: RECONCILIATION_BATCH_SIZE })
   });
+}
+
+/**
+ * El `reconciliation.yaml` de un perfil (`local`, `develop` o `production`; en `test` valen los defaults del código): los
+ * tres números de cada barrido con su clave, su variable y su default. El MISMO texto en keel-nest y keel-dotnet, y las
+ * mismas claves que el de keel-spring. Estaba escrito en keel-nest; salió aquí con el tercer generador
+ * (PLAN-KEEL-DOTNET.md, incremento 11c).
+ */
+export function reconciliationYaml(model, profile) {
+  const lines = ['reconciliation:'];
+  for (const { dependency, activation, sweeper } of reconciledActivations(model)) {
+    const parameters = reconciliationParameters(activation, sweeper);
+    lines.push(
+      `  ${kebabCase(activation.name)}:`,
+      `    # Encargos a ${dependency} sin desenlace pasado este tiempo: candidatos del barrido.`,
+      '    # Lo declara el DISEÑO; aquí solo se parametriza para poder moverlo por entorno.',
+      `    unanswered-after-seconds: ${envWithDefault(profile, parameters.unansweredAfterSeconds.env, parameters.unansweredAfterSeconds.default)}`,
+      '    # Caducidad del reclamo: una réplica que muere con el lote en vuelo retiene sus',
+      '    # candidatos hasta que pasa esto. Del generador, no del diseño: cubre el lote entero',
+      '    # (lote × timeout de la llamada con sus reintentos) y al menos dos ticks del cron.',
+      `    claim-timeout-ms: ${envWithDefault(profile, parameters.claimTimeoutMs.env, parameters.claimTimeoutMs.default)}`,
+      '    # Cota del lote por pasada: sin ella, una tanda con 50.000 atascados son 50.000',
+      '    # llamadas al proveedor de una vez. Del generador, no del diseño.',
+      `    batch-size: ${envWithDefault(profile, parameters.batchSize.env, parameters.batchSize.default)}`
+    );
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 /** Las activaciones con barrido declarado, con su dependencia y la operación que barre. */

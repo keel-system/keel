@@ -29,7 +29,7 @@ const isInsertSubject = (row) => /: la escritura es un INSERT/.test(row);
 // Lo que keel-dotnet todavía no genera (correo: incremento 13) no tiene familia aquí.
 const PENDING_FAMILIES = new Set(['mailDelivery']);
 
-for (const name of ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'metering-digest', 'stock-reservation-events', 'notification-mailer']) {
+for (const name of ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'metering-digest', 'stock-reservation-events', 'notification-mailer', 'stock-reservation', 'catalog-extended']) {
   for (const broker of ['rabbitmq', 'kafka', 'snssqs']) {
     test(`${name} [${broker}]: las familias y los sujetos del gate son los de keel-nest`, () => {
       const stack = { database: 'postgresql', broker };
@@ -171,6 +171,74 @@ public sealed class InventoryEventsListener(IdempotencyGuard guard)
     out = error.stdout;
   }
   assert.equal(verdicts(out).dedupe, 'KO', out);
+});
+
+// stock-reservation (incremento 11c): el barrido de reconciliación y la compensación son del agente; la clave saliente la
+// cablea build. El uso correcto: el barrido toma su lote con el reclamo generado, avisa al almacén y libera; la
+// compensación libera la reserva con el método del agregado.
+const RECONCILE = 'UseCases/ReconcileReservationsCommandHandler.cs';
+const RELEASE = 'UseCases/ReleaseReservationCommandHandler.cs';
+const RESERVATION = 'Aggregate/Reservation.cs';
+const reconcileWritten = (source) =>
+  source.replace(
+    'throw new NotImplementedException("TODO: reconcileReservations");',
+    `foreach (var reservation in await reservationRepository.ClaimForReconcileReservationsReserveStock(cancellationToken))
+        {
+            reservation.GiveUp();
+            try
+            {
+                await reservationRepository.Save(reservation, cancellationToken);
+            }
+            catch (ConcurrencyConflictException)
+            {
+                continue;
+            }
+            await inventoryClient.CancelStock(reservation.OrderId, cancellationToken);
+        }`
+  );
+const releaseWritten = (source) =>
+  source.replace('throw new NotImplementedException("TODO: releaseReservation");', 'return Task.CompletedTask;');
+const reservationReleases = (source) =>
+  source.replace(
+    '    // Guarda interna del lifecycle',
+    '    public void Release() => TransitionTo(ReservationStatus.Released);\n\n    // Guarda interna del lifecycle'
+  );
+
+test('stock-reservation: reconciliation y compensation nacen ROJAS y outboundIdempotency VERDE; con el uso correcto, verdes', (t) => {
+  const fresh = runGate('stock-reservation');
+  if (fresh === null) return t.skip('sin bash en el PATH');
+  const born = verdicts(fresh.out);
+  assert.equal(born.reconciliation, 'KO', fresh.out);
+  assert.equal(born.compensation, 'KO', fresh.out);
+  assert.equal(born.outboundIdempotency, 'OK', fresh.out);
+
+  const written = runGate('stock-reservation', { [RECONCILE]: reconcileWritten, [RELEASE]: releaseWritten, [RESERVATION]: reservationReleases });
+  const correct = verdicts(written.out);
+  assert.equal(correct.reconciliation, 'OK', written.out);
+  assert.equal(correct.compensation, 'OK', written.out);
+  assert.equal(correct.outboundIdempotency, 'OK', written.out);
+
+  // Barrer con un finder por estado, o tragarse los errores, lo vuelve a poner rojo.
+  const reading = runGate('stock-reservation', {
+    [RECONCILE]: (source) => reconcileWritten(source).replace('ClaimForReconcileReservationsReserveStock(cancellationToken))', 'FindByStatus(ReservationStatus.AwaitingStock, cancellationToken))'),
+    [RELEASE]: releaseWritten,
+    [RESERVATION]: reservationReleases
+  });
+  assert.equal(verdicts(reading.out).reconciliation, 'KO', 'reading ' + reading.out);
+  const swallowing = runGate('stock-reservation', {
+    [RECONCILE]: (source) => reconcileWritten(source).replace('catch (ConcurrencyConflictException)', 'catch (Exception)'),
+    [RELEASE]: releaseWritten,
+    [RESERVATION]: reservationReleases
+  });
+  assert.equal(verdicts(swallowing.out).reconciliation, 'KO', 'swallowing ' + swallowing.out);
+  // La compensación que no devuelve el estado en el agregado.
+  const unrestored = runGate('stock-reservation', { [RECONCILE]: reconcileWritten, [RELEASE]: releaseWritten });
+  assert.equal(verdicts(unrestored.out).compensation, 'KO', 'unrestored ' + unrestored.out);
+  // Y si alguien quita la clave saliente del adaptador.
+  const keyless = runGate('stock-reservation', {
+    'Clients/InventoryHttpAdapter.cs': (source) => source.replace(/OutboundIdempotency\.FromPayload\("cancelStock", (new object\?\[\] \{ orderId \})\)/, 'Guid.NewGuid().ToString()')
+  });
+  assert.equal(verdicts(keyless.out).outboundIdempotency, 'KO', 'keyless ' + keyless.out);
 });
 
 test('conditionalUniqueness: recién generado sale rojo; con la ocupante buscada antes, verde', (t) => {

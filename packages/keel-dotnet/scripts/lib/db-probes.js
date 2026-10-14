@@ -27,6 +27,8 @@ import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
 import { claimOrderField, claimsForEntity, missingClockCountSql, rescueProbes, screamingSnake, snakeCase, stallSql, sweepClaims, sweepConfig } from 'keel-core/gen';
 import { DATABASES } from 'keel-core/gen/infra-catalog';
 import { usesSweepClaims } from '../../src/scaffold/claim.js';
+import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
+import { reconciledActivations, reconciliationClaims, reconciliationParameters } from 'keel-core/gen/reconciliation-stores';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { sampleFor } from '../../../keel-nest/scripts/lib/samples.js';
@@ -217,7 +219,7 @@ function probesCs(model, namespace) {
     ctx.refs.clear();
     const states = [];
     // Las muestras comunes y, por encima, las de los reclamos de esta raíz: cada sonda de reclamo guarda las suyas.
-    const total = SAMPLES + claimSampleCount(model, root);
+    const total = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -370,12 +372,14 @@ function probesCs(model, namespace) {
         });`);
     }
     tests.push(...claimProbes(model, root, { state, first: SAMPLES + 1, port, context: dbContext(model) }));
+    tests.push(...reconciliationProbes(model, root, { state, first: SAMPLES + 1 + claimSampleCount(model, root), port, context: dbContext(model) }));
     blocks.push(`    // ─── ${root.name} ───\n\n${tests.join('\n\n')}`);
   }
 
   if (usesRequestIdempotency(model)) blocks.push(idempotencyBlock(model));
   if (usesDotnetOutbox(model)) blocks.push(outboxBlock(model));
   if (usesProcessedEvents(model)) blocks.push(guardBlock());
+  if (usesReconciliationClaims(model)) blocks.push(reconciliationStoreBlock(model));
   const purges = tablePurges(model);
   if (purges.length > 0) blocks.push(purgeBlock(model, purges));
 
@@ -462,7 +466,9 @@ public sealed class PersistenceFixture : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddLogging();${usesSweepClaims(model) ? `
         // Los barridos con lotes de DOS: con tres filas, dos pasadas. AddPersistence no pisa estos (TryAdd).
-        services.AddSingleton(${probeSweepSettings(model)});` : ''}${usesServiceParameters(model) ? `
+        services.AddSingleton(${probeSweepSettings(model)});` : ''}${usesReconciliationSettings(model) ? `
+        // Los barridos de reconciliación con lotes de DOS (con tres candidatos, dos pasadas); AddPersistence no los pisa.
+        services.AddSingleton(${probeReconciliationSettings(model)});` : ''}${usesServiceParameters(model) ? `
         services.AddSingleton(${parametersTestInstance(model)});` : ''}
         services.AddPersistence(new DatabaseSettings(true, target.ConnectionString, TimeSpan.FromSeconds(30), SchemaMode.Create));${usesBridge(model) ? `
         // Los adaptadores de las raíces que emiten eventos los entregan al puente (incremento 9).
@@ -787,6 +793,13 @@ const PURGE_SEEDS = {
     live: 'now.AddDays(-1)',
     count: (context) => `other.GetRequiredService<${context}>().Set<ProcessedEventRow>().CountAsync(r => r.HandlerId == marker, Cancel)`
   },
+  // La marca del reclamo de reconciliación: 7 días de retención, como en keel-nest.
+  ReconciliationClaim: {
+    row: (at) => `new ReconciliationClaimRow { Activation = marker, EntityId = Guid.NewGuid(), ClaimedAt = ${at} }`,
+    expired: (i) => `now.AddDays(-30).AddSeconds(${i})`,
+    live: 'now.AddDays(-1)',
+    count: (context) => `other.GetRequiredService<${context}>().Set<ReconciliationClaimRow>().CountAsync(r => r.Activation == marker, Cancel)`
+  },
   IdempotencyRecord: {
     row: (at) =>
       `new IdempotencyRecordRow { OperationScope = marker, IdempotencyKey = Guid.NewGuid().ToString(), Signature = "probe", CreatedAt = now.AddDays(-2), ExpiresAt = ${at} }`,
@@ -1046,6 +1059,166 @@ ${seed([held, free], claim.from[0], order === 'id' ? null : order, (i) => `origi
                 Cancel));
             Assert.Contains("DispatchWithoutTransaction", error.Message, StringComparison.Ordinal);
         });`);
+  return tests;
+}
+
+// ─── El reclamo de reconciliación (incremento 11c) ──────────────────────────────────────────────
+
+const reconciliationClaimsOf = (model, root) => (usesReconciliationClaims(model) ? reconciliationClaims(model).filter((claim) => claim.entity === root.name) : []);
+
+/** Las muestras propias de los reclamos de reconciliación de una raíz: cuatro para la pasada, dos para la caducidad y cuatro para la carrera. */
+function reconciliationSampleCount(model, root) {
+  return reconciliationClaimsOf(model, root).length * 10;
+}
+
+/** Las ReconciliationSettings de las sondas: lotes de DOS, y el umbral y la caducidad de los defaults de keel-core. */
+function probeReconciliationSettings(model) {
+  const entries = reconciledActivations(model).map(({ activation, sweeper }) => {
+    const parameters = reconciliationParameters(activation, sweeper);
+    return `[${csString(activation.name)}] = new ReconciliationWindow(${parameters.unansweredAfterSeconds.default}, ${parameters.claimTimeoutMs.default}, 2)`;
+  });
+  return `new ReconciliationSettings(new Dictionary<string, ReconciliationWindow>(StringComparer.Ordinal) { ${entries.join(', ')} })`;
+}
+
+/**
+ * La TIENDA de la marca, sola: la regla de keel-core (reconciliationClaimReference). Sin marca se inserta; con la marca
+ * viva, no; caducada (claimed_at <= la caducidad, el MISMO `<=`), se renueva; por activación; y de tres réplicas a la vez
+ * sobre el mismo candidato, gana una.
+ */
+function reconciliationStoreBlock(model) {
+  return `    // ─── La tienda del reclamo de reconciliación ───
+
+    private static Task<bool> ClaimMark(string activation, Guid entity, DateTimeOffset now, DateTimeOffset expiredBefore) =>
+        InScope(other => other.GetRequiredService<ReconciliationClaimStore>().Claim(activation, entity, now, expiredBefore, Cancel));
+
+    [Fact]
+    public async Task Reconciliacion_LaMarcaSeInsertaRespetaLaVivaYRenuevaLaCaducada()
+    {
+        var activation = "probe-" + Guid.NewGuid().ToString("N")[..12];
+        var entity = Guid.NewGuid();
+        var now = TruncatedNow();
+        Assert.True(await ClaimMark(activation, entity, now, now.AddMinutes(-5)), "sin marca, la inserción es el reclamo");
+        Assert.False(await ClaimMark(activation, entity, now.AddSeconds(1), now.AddMinutes(-5)), "con la marca viva, no");
+        // Caducada justo en el límite: claimed_at <= la caducidad.
+        Assert.True(await ClaimMark(activation, entity, now.AddSeconds(2), now), "la marca en el límite de la caducidad ya caducó");
+        Assert.Equal(now.AddSeconds(2), await InScope(other => other.GetRequiredService<${dbContext(model)}>().Database
+            .SqlQuery<DateTimeOffset>($"SELECT claimed_at AS \\"Value\\" FROM reconciliation_claim WHERE activation = {activation} AND entity_id = {entity}")
+            .SingleAsync(Cancel)));
+        // Por activación: la misma entidad esperando otro desenlace tiene su propia marca.
+        Assert.True(await ClaimMark(activation + "-otra", entity, now, now.AddMinutes(-5)));
+    }
+
+    [Fact]
+    public async Task Reconciliacion_TresReplicasALaVezSobreElMismoCandidatoGanaUna()
+    {
+        var activation = "probe-" + Guid.NewGuid().ToString("N")[..12];
+        var entity = Guid.NewGuid();
+        var now = TruncatedNow();
+        var won = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ => Task.Run(() => ClaimMark(activation, entity, now, now.AddMinutes(-5)))));
+        Assert.Single(won, value => value);
+    }`;
+}
+
+/**
+ * El RECLAMO de reconciliación del adaptador de una raíz: los candidatos que llevan en espera más que el umbral, el que
+ * más lleva primero, en lotes, con su marca; el estado intacto; la marca viva los esconde y la caducada los devuelve; y
+ * dos réplicas a la vez no repiten ninguno.
+ */
+function reconciliationProbes(model, root, { state, first, port, context }) {
+  const claims = reconciliationClaimsOf(model, root);
+  if (claims.length === 0) return [];
+  const table = root.tableName;
+  const stateColumn = snakeCase(root.lifecycle.field);
+  const id = csMember(root.idField?.name ?? 'id');
+  const enumDef = model.enums.find((candidate) => candidate.name === root.lifecycle.enumType);
+  const waiting = new Set(claims.flatMap((claim) => claim.states));
+  const park = enumDef.values.map((value) => value.literal).find((literal) => !waiting.has(literal));
+  const parkSql = (states) => `UPDATE ${table} SET ${stateColumn} = '${screamingSnake(park)}' WHERE ${stateColumn} IN (${states.map((s) => `'${screamingSnake(s)}'`).join(', ')})`;
+  let next = first;
+  const take = (count) => Array.from({ length: count }, () => next++);
+  const tests = [];
+  for (const claim of claims) {
+    const method = csMember(claim.method);
+    const awaiting = snakeCase(claim.awaitingField);
+    const waitState = screamingSnake(claim.states[0]);
+    const claimVia = `InScope(other => other.GetRequiredService<${port}>().${method}(Cancel))`;
+    // Guarda las muestras y las deja en espera desde el instante de cada una.
+    const seed = (samples, at) => `            var ids = new List<Guid>();
+${samples
+  .map(
+    (n, i) => `            var sample${i} = new ${root.name}(${state(n)});
+            await InScope(other => other.GetRequiredService<${port}>().Save(sample${i}, Cancel));
+            ids.Add(sample${i}.${id});
+            var since${i} = ${at(i)};
+            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlAsync($"UPDATE ${table} SET ${stateColumn} = '${waitState}', ${awaiting} = {since${i}} WHERE id = {sample${i}.${id}}", Cancel));`
+  )
+  .join('\n')}`;
+    const park = `            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(${csString(parkSql(claim.states))}, Cancel));`;
+    const pass = take(4);
+    tests.push(`    [Fact]
+    public async Task Reconciliacion_${method}_SoloLoQueSuperaElUmbralEnOrdenPorLotesYSinTocarElEstado() =>
+        await InScope(async services =>
+        {
+${park}
+            var now = DateTimeOffset.UtcNow;
+            // Tres que llevan horas sin desenlace (el umbral de los defaults es de ${claim.unansweredAfterSeconds} s) y uno recién encargado.
+${seed(pass, (i) => (i < 3 ? `now.AddSeconds(-${claim.unansweredAfterSeconds} - 3600 + ${i})` : 'now'))}
+            async Task<string> StateOf(Guid row) => await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<string>($"SELECT ${stateColumn}::text AS \\"Value\\" FROM ${table} WHERE id = {row}").SingleAsync(Cancel));
+            var first = await ${claimVia};
+            Assert.Equal(ids.Take(2), first.Select(r => r.${id}));
+            // El reclamo marca, no mueve: siguen esperando el desenlace.
+            foreach (var row in ids)
+            {
+                Assert.Equal(${csString(waitState)}, await StateOf(row));
+            }
+            Assert.Equal(2L, await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<long>($"SELECT COUNT(*) AS \\"Value\\" FROM reconciliation_claim WHERE activation = ${"'"}${claim.activation}${"'"} AND entity_id = ANY({ids.Take(2).ToArray()})").SingleAsync(Cancel)));
+            // La pasada siguiente: el tercero; los marcados no vuelven y el recién encargado no ha superado el umbral.
+            Assert.Equal([ids[2]], (await ${claimVia}).Select(r => r.${id}));
+            Assert.Empty(await ${claimVia});
+        });`);
+    const [old1, old2] = take(2);
+    tests.push(`    [Fact]
+    public async Task Reconciliacion_${method}_LaMarcaCaducadaDevuelveElCandidato() =>
+        await InScope(async services =>
+        {
+${park}
+            var now = DateTimeOffset.UtcNow;
+${seed([old1, old2], (i) => `now.AddSeconds(-${claim.unansweredAfterSeconds} - 3600 + ${i})`)}
+            Assert.Equal(ids, (await ${claimVia}).Select(r => r.${id}));
+            Assert.Empty(await ${claimVia});
+            // La réplica que se los llevó murió: su marca envejece más que la caducidad (${claim.claimTimeoutMs} ms).
+            var expired = DateTimeOffset.UtcNow.AddMilliseconds(-${claim.claimTimeoutMs}).AddSeconds(-1);
+            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlAsync($"UPDATE reconciliation_claim SET claimed_at = {expired} WHERE entity_id = {ids[0]}", Cancel));
+            Assert.Equal([ids[0]], (await ${claimVia}).Select(r => r.${id}));
+        });`);
+    const race = take(4);
+    tests.push(`    [Fact]
+    public async Task Reconciliacion_${method}_DosReplicasALaVezNoRepitenCandidato() =>
+        await InScope(async services =>
+        {
+${park}
+            var now = DateTimeOffset.UtcNow;
+${seed(race, (i) => `now.AddSeconds(-${claim.unansweredAfterSeconds} - 3600 + ${i})`)}
+            var replicas = await Task.WhenAll(Task.Run(() => ${claimVia}), Task.Run(() => ${claimVia}));
+            var taken = replicas.SelectMany(batch => batch.Select(r => r.${id})).ToList();
+            Assert.NotEmpty(taken);
+            Assert.Equal(taken.Count, taken.Distinct().Count());
+            Assert.All(taken, row => Assert.Contains(row, ids));
+        });`);
+  }
+  // Si la raíz no tiene reclamo de barrido, su sonda de «no corre dentro de otra transacción» va aquí.
+  if (claimsForEntity(model, root.name).length === 0) {
+    tests.push(`    [Fact]
+    public async Task Reconciliacion_${root.name}_NoCorreDentroDeOtraTransaccion() =>
+        await InScope(async services =>
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => services.GetRequiredService<PersistenceTransactions>().InTransaction(
+                async () => await services.GetRequiredService<${port}>().${csMember(claims[0].method)}(Cancel),
+                readOnly: false,
+                Cancel));
+            Assert.Contains("DispatchWithoutTransaction", error.Message, StringComparison.Ordinal);
+        });`);
+  }
   return tests;
 }
 

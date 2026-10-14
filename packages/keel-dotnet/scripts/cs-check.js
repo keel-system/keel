@@ -427,6 +427,10 @@ function compileAllFixtures() {
   const total = totals.length > 0 ? Math.max(...totals) : null;
   if (!step('las pruebas emitidas de todas las fixtures y las sondas del dominio y de la API pasan', tested.ok, total ? `${total} pruebas` : '')) {
     console.error(tested.output.split('\n').filter((line) => /con errores|failed|error/i.test(line)).slice(0, 80).join('\n'));
+    // Los nombres no bastan para un fallo de limpieza o de tiempos: la salida entera, fuera de la raíz temporal.
+    const log = path.join(os.tmpdir(), `keel-dotnet-cs-check-${Date.now()}.log`);
+    fs.writeFileSync(log, tested.output);
+    console.error(`Salida completa de dotnet test en ${log}`);
   }
   return root;
 }

@@ -1133,6 +1133,39 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       empieza en minúscula), así que la solución salió roja sin decir por qué; y `--keep` con `--fixtures` dejaba la
       copia dentro de la raíz temporal que se borra al salir. Los dos, arreglados (el filtro también en `db-check`).
     - **Sin medir**: contra un WireMock real (11d, `stub-check`) y en corrida (11e).
+  - **11c, reconciliación y compensación (hecho, 2026-10-14).**
+    - **Lo neutral que faltaba**: el `reconciliation.yaml` de cada perfil salió de keel-nest a
+      `keel-core/gen/reconciliation-stores.js` (`reconciliationYaml`; golden de keel-nest idéntico, 41 / 10 050).
+    - **Lo que emite** (`src/scaffold/reconciliation-claim.js`): la fila `reconciliation_claim` con el emisor genérico de
+      las tablas del generador (`rowFile` de `messaging-stores.js`), `ReconciliationClaimStore` (la marca con UNA
+      sentencia, `INSERT … ON CONFLICT DO UPDATE … WHERE claimed_at <= caducidad`: en PostgreSQL un error aborta la
+      transacción entera, así que la carrera no se resuelve capturando la violación de clave como en keel-nest),
+      `ReconciliationSettings` (los tres números por activación; `Program.cs` registra los del perfil y
+      `AddPersistence` los defaults con `TryAdd`), el reclamo en el puerto y el adaptador de la raíz que espera
+      (SKIP LOCKED sobre el estado de espera y la marca del diseño, el lote del perfil, la marca por candidato, el estado
+      intacto y `RequireOwnTransaction`) y su purga por lotes (`TablePurges`, la misma lista que keel-nest). Las notas
+      del barrido y de la compensación son las de keel-nest con los nombres de C#; el gate gana las familias
+      `compensation`, `reconciliation` y `outboundIdempotency` con los mismos sujetos. La frontera deja de avisar.
+    - **Un defecto latente en los TRES generadores, cerrado aquí**: la lectura de candidatos no excluía los que ya
+      tienen una marca VIVA, así que con más atascados que el lote la cabeza de la cola —reclamada y aún sin resolver
+      (un reintento, un proveedor caído)— ocupaba el lote de cada pasada hasta caducar, y los de detrás no se
+      reconciliaban antes. keel-dotnet los excluye en la propia lectura (`NOT EXISTS` sobre `reconciliation_claim` con
+      `claimed_at > caducidad`, `FOR UPDATE OF e`). keel-spring y keel-nest lo tienen igual: **pendiente de decidir**.
+    - **Medido**: `test/reconciliation.test.js` (7: el YAML igual al de keel-nest y lo que lee `ReconciliationSettings`,
+      la sentencia de la tienda, el reclamo del adaptador, las purgas contra keel-nest, el registro y las notas);
+      `schema-parity` ya compara `reconciliation_claim` con keel-spring; `idempotency-check.test.js` con
+      `stock-reservation` y `catalog-extended` en la paridad de familias y EJECUTANDO el gate: las dos familias nacen
+      rojas y `outboundIdempotency` verde, verdes con el uso correcto, y rojas otra vez barriendo con un finder,
+      tragándose los errores (`catch (Exception)`), sin devolver el estado en el agregado o sin la clave saliente.
+      `npm test` 442/442. `db-check` **26/26, 188 sondas** (14 nuevas): la tienda (inserta, respeta la marca viva,
+      renueva la caducada justo en el límite, por activación, tres réplicas a la vez y gana una), el reclamo (umbral,
+      orden, lote, estado intacto, marcas, la pasada siguiente que se lleva al de detrás, la caducidad y dos réplicas
+      a la vez sin repetir) y su purga. **Falsado** con tres sabotajes (`--sabotage=reconciliation-expiry`, `-threshold`
+      y `-head`): cada uno cae en su sonda y solo en ella. `cs-check` **15/15** (2 237 pruebas).
+    - **Ojo, intermitente**: con la máquina cargada (justo tras `db-check` o con las suites a la vez), dos pasadas de
+      `cs-check` salieron rojas por la LIMPIEZA de `ApiTests` (el servidor en memoria al cerrarse) en fixtures con
+      servicios de fondo, también en algunas sin nada del 11c; seis pasadas seguidas en reposo, verdes. `cs-check` guarda
+      ahora la salida entera de `dotnet test` cuando falla, para leer el mensaje la próxima vez.
 
 ## 5. Riesgos conocidos
 

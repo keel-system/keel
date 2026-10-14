@@ -15,15 +15,15 @@ import {
   RECONCILIATION_PURGE,
   reconciledActivations,
   reconciliationClaims,
-  reconciliationParameters
+  reconciliationParameters,
+  reconciliationYaml
 } from 'keel-core/gen/reconciliation-stores';
-import { kebabCase, screamingSnake } from 'keel-core/gen';
+import { screamingSnake } from 'keel-core/gen';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { ORM_DIR, engineOf, ormClass, usesPersistence, usesDocument, usesRelational } from './persistence-entities.js';
 import { documentReconciliationStore } from './document-stores.js';
 import { storeEntity } from './messaging-stores.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
-import { envWithDefault } from 'keel-core/gen/profile-values';
 import { needsReadCommitted } from 'keel-core/gen/infra-catalog';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
@@ -90,27 +90,7 @@ const CLAIM_DOC = `Marca de que una réplica se llevó un candidato del barrido 
 
 // ─── Configuración ───────────────────────────────────────────────────────────
 
-/** El mismo `reconciliation.yaml` que keel-spring, con las claves de keel-core. */
-function reconciliationYaml(model, profile) {
-  const lines = ['reconciliation:'];
-  for (const { dependency, activation, sweeper } of reconciledActivations(model)) {
-    const parameters = reconciliationParameters(activation, sweeper);
-    lines.push(
-      `  ${kebabCase(activation.name)}:`,
-      `    # Encargos a ${dependency} sin desenlace pasado este tiempo: candidatos del barrido.`,
-      '    # Lo declara el DISEÑO; aquí solo se parametriza para poder moverlo por entorno.',
-      `    unanswered-after-seconds: ${envWithDefault(profile, parameters.unansweredAfterSeconds.env, parameters.unansweredAfterSeconds.default)}`,
-      '    # Caducidad del reclamo: una réplica que muere con el lote en vuelo retiene sus',
-      '    # candidatos hasta que pasa esto. Del generador, no del diseño: cubre el lote entero',
-      '    # (lote × timeout de la llamada con sus reintentos) y al menos dos ticks del cron.',
-      `    claim-timeout-ms: ${envWithDefault(profile, parameters.claimTimeoutMs.env, parameters.claimTimeoutMs.default)}`,
-      '    # Cota del lote por pasada: sin ella, una tanda con 50.000 atascados son 50.000',
-      '    # llamadas al proveedor de una vez. Del generador, no del diseño.',
-      `    batch-size: ${envWithDefault(profile, parameters.batchSize.env, parameters.batchSize.default)}`
-    );
-  }
-  return `${lines.join('\n')}\n`;
-}
+// El `reconciliation.yaml` de cada perfil es neutral (keel-core/gen/reconciliation-stores.js): el mismo que keel-dotnet.
 
 function settingsFile(model) {
   const entries = reconciledActivations(model).map(({ activation, sweeper }) => {

@@ -20,6 +20,8 @@ import { configNamespace } from './config.js';
 import { dbContextClass, persistenceNamespace, usesRelational } from './persistence.js';
 import { usesDotnetOutbox, usesProcessedEvents } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
+import { reconciliationPurge } from './reconciliation-claim.js';
+import { RECONCILIATION_CLAIM } from 'keel-core/gen/reconciliation-stores';
 
 export function purgeNamespace(model) {
   return namespaceOf(model, 'purge');
@@ -75,10 +77,13 @@ export function tablePurges(model) {
       log: 'Idempotencia HTTP: purgadas {Deleted} claves caducadas antes de {Cutoff}'
     });
   }
+  // Las marcas del reclamo de reconciliación (incremento 11c): la misma purga que keel-nest.
+  const reconciliation = reconciliationPurge(model);
+  if (reconciliation) purges.push(reconciliation);
   // Las columnas que se nombran tienen que existir en los datos de la tabla: si keel-core renombrara una, la purga
   // borraría por una columna que no está y fallaría cada noche sin que nada lo dijera antes.
   for (const purge of purges) {
-    const table = [OUTBOX_EVENT, PROCESSED_EVENT, IDEMPOTENCY_RECORD].find((candidate) => candidate.table === purge.table);
+    const table = [OUTBOX_EVENT, PROCESSED_EVENT, IDEMPOTENCY_RECORD, RECONCILIATION_CLAIM].find((candidate) => candidate.table === purge.table);
     if (!table.columns.some((column) => column.name === purge.column)) {
       throw new Error(`La purga de ${purge.table} corta por ${purge.column}, que no es columna de la tabla en keel-core`);
     }

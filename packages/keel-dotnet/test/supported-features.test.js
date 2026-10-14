@@ -45,15 +45,11 @@ test('los clientes salientes y las activaciones se generan (incremento 11); need
   inPath['http-clients'].clients.pricing.calls.getPrice.request.pathParams.sku = { type: 'Money' };
   assert.match(checkSupportedFeatures(manifestWith(...layers), inPath).errors.join('\n'), /getPrice: sku es un value object compuesto en la ruta, la query o una cabecera.*keel-dotnet/);
 
-  // La reconciliación y la compensación se aceptan, con el aviso del tramo que las trae.
-  const pending = structuredClone(base);
-  pending.dependencies.dependencies.pricing.activations.quote.reconciledBy = 'sweep';
-  pending.dependencies.dependencies.pricing.compensations = [{ onEvent: 'Rejected', undoes: 'quote' }];
-  const { errors, warnings } = checkSupportedFeatures(manifestWith(...layers), pending);
-  assert.deepEqual(errors, []);
-  assert.equal(warnings.length, 2);
-  assert.match(warnings[0], /quote\.reconciledBy: sweep .*tramo 11c/);
-  assert.match(warnings[1], /pricing\.compensations .*tramo 11c/);
+  // La reconciliación y la compensación se generan (11c): ni error ni aviso.
+  const swept = structuredClone(base);
+  swept.dependencies.dependencies.pricing.activations.quote.reconciledBy = 'sweep';
+  swept.dependencies.dependencies.pricing.compensations = [{ onEvent: 'Rejected', undoes: 'quote' }];
+  assert.deepEqual(checkSupportedFeatures(manifestWith(...layers), swept), { errors: [], warnings: [] });
 });
 
 test('la persistencia relacional se genera (incremento 6); la documental se rechaza con el incremento 12', () => {
