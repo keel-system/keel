@@ -42,7 +42,7 @@ import { deadLetterDestination, subscriptionDestination } from 'keel-core/gen';
 import { harnessQueueName } from 'keel-core/gen/messaging-provisioning';
 import { tsString } from './render.js';
 import { publishedChannels } from 'keel-core/gen/messaging-plan';
-import { kafkaConsumption } from './kafka.js';
+import { kafkaConsumption } from 'keel-core/gen/messaging-plan';
 import { snsSqsConsumption } from './snssqs.js';
 import {
   usesKafka,

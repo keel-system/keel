@@ -10,7 +10,8 @@
 // Nació en keel-nest (incremento 9) y se sacó aquí al empezar keel-dotnet: escrita dos veces, la cola de
 // una suscripción o la clave de un parámetro divergen al primer matiz.
 
-import { missingTargetRetryDestinations, deadLetterName, subscriptionDestination, subscriptionGroupId, subscriptionKey } from './dead-letter.js';
+import { kafkaListenerRetry, missingTargetRetryDestinations, deadLetterName, subscriptionDestination, subscriptionGroupId, subscriptionKey } from './dead-letter.js';
+import { KAFKA_PRODUCER_TIMEOUTS } from './infra-catalog.js';
 import { OUTBOX_PURGE, OUTBOX_RELAY, PROCESSED_EVENT_PURGE, parameterValue } from './messaging-stores.js';
 import { envWithDefault } from './profile-values.js';
 import { envFor, runtimeDefault } from './runtime-env.js';
@@ -183,5 +184,65 @@ export function messagingYaml(model, profile, { outbox = false, processedEvents 
       ...line(OUTBOX_PURGE.retentionDays)
     );
   }
+  return `${lines.join('\n')}\n`;
+}
+
+// ─── Kafka ───────────────────────────────────────────────────────────────────
+
+/** El techo de la espera entre reconexiones: el de RabbitMQ (y el de la recuperación del listener de Spring). */
+export const KAFKA_RECONNECT_INTERVAL_MS = 5000;
+/**
+ * Cada cuánto refresca el consumidor los metadatos de sus topics, en el perfil `local`. Fuera de `local`,
+ * el default de librdkafka (5 min), por variable.
+ *
+ * Por qué existe: un consumidor suscrito a un topic que aún no existe no se entera de que lo crean hasta el
+ * siguiente refresco, y en infra/ los topics los autocrea el broker con el PRIMER mensaje. Con los 5 min de
+ * librdkafka, el primer evento que entrega un escenario esperaba ahí cinco minutos; medido con un Kafka real
+ * (2026-10-07): con 2 s llega en menos de medio segundo. El cliente de Java de keel-spring refresca solo
+ * en cuanto ve el topic desconocido, así que allí no hace falta.
+ */
+export const KAFKA_LOCAL_METADATA_REFRESH_MS = 2000;
+export const KAFKA_DEFAULT_METADATA_REFRESH_MS = 300000;
+
+/** El consumo como DATOS: una entrada por SUSCRIPCIÓN (cada una con su consumer group). */
+export function kafkaConsumption(model) {
+  const retry = kafkaListenerRetry(model);
+  const missingTarget = missingTargetRetryDestinations(model, 'kafka');
+  return (model.subscriptions ?? []).map((sub) => {
+    const topic = subscriptionDestination('kafka', model, sub);
+    return {
+      subscription: sub.name,
+      topic,
+      groupId: subscriptionGroupId(model, sub),
+      // Por TOPIC, como DEAD_LETTERED en keel-spring: basta con que una suscripción del topic lo declare.
+      deadLetter: retry.deadLetteredTopics.includes(topic),
+      // Por TOPIC también, como RETRIES_NOT_FOUND en keel-spring (keel-core decide cuáles).
+      retriesNotFound: missingTarget.includes(topic)
+    };
+  });
+}
+
+/** El fragmento `kafka.yaml` de un perfil: las variables de keel-spring y los plazos del productor de keel-core. */
+export function kafkaYaml(profile) {
+  const local = profile === 'local';
+  const timeout = (p) => (local ? String(p.local) : `\${${p.env}:${p.default}}`);
+  const lines = [
+    'kafka:',
+    ...(profile === 'test'
+      ? ['  # Las pruebas de build arrancan sin broker: la conexión no se intenta.', '  enabled: false']
+      : ['  enabled: true']),
+    `  bootstrap-servers: ${envFor('KAFKA_BOOTSTRAP_SERVERS', profile)}`,
+    '  producer:',
+    '    # Cuánto espera un envío sin confirmar antes de fallar (las mismas variables en todos los servidores). El',
+    '    # dispatcher del outbox no espera más que esto: con el broker caído, el intento falla en este plazo.',
+    `    delivery-timeout-ms: ${timeout(KAFKA_PRODUCER_TIMEOUTS.delivery)}`,
+    `    request-timeout-ms: ${timeout(KAFKA_PRODUCER_TIMEOUTS.request)}`,
+    '  consumer:',
+    '    # Cada cuánto se refrescan los metadatos de los topics: un topic creado después de suscribirse no se ve',
+    '    # hasta el siguiente refresco (corto en local, donde los autocrea el primer mensaje).',
+    `    metadata-refresh-interval-ms: ${local ? KAFKA_LOCAL_METADATA_REFRESH_MS : envWithDefault(profile, 'KAFKA_CONSUMER_METADATA_REFRESH_INTERVAL_MS', KAFKA_DEFAULT_METADATA_REFRESH_MS)}`,
+    '  # La espera entre intentos de conexión mientras el broker no está.',
+    `  reconnect-interval-ms: ${envWithDefault(profile, 'KAFKA_RECONNECT_INTERVAL_MS', KAFKA_RECONNECT_INTERVAL_MS)}`
+  ];
   return `${lines.join('\n')}\n`;
 }
