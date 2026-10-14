@@ -74,7 +74,9 @@ resuelta, confirmada sin efecto.
   (`/tmp/keel-probe-<guid>.json`) y lo borra al terminar. `broker-check` gana `FL-BRK-001-G` (ocho entregas distintas
   a la vez, todas procesadas con su cuerpo) y su falsado: con el archivo compartido de antes, sale FALLO. **22/22**.
   - **keel-spring tiene el mismo defecto latente** (`DELIVER_BODY` fijo y `deliverMessage` sin `synchronized`); keel-nest
-    no, porque sus entregas son síncronas en un solo hilo. Sin tocar: queda anotado.
+    no, porque sus entregas son síncronas en un solo hilo. **Arreglado después** (tras la 9h): `deliverMessage` de los
+    tres brokers y el sondeo de RabbitMQ usan un archivo por llamada (`devtoolsFile`) y lo borran al terminar;
+    `compile-check` en verde.
 
 ## Pruebas
 

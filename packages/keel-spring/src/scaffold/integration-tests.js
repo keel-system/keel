@@ -2392,8 +2392,11 @@ function devtoolsSection(model) {
   return `
     private static final String DEVTOOLS_CONTAINER = "${model.service.name}-devtools";
 ${brokerEntry(model) ? `
-    /** Archivo del contenedor por el que viaja el cuerpo de {@link #deliverMessage}. */
-    private static final String DELIVER_BODY = "/tmp/keel-deliver.json";
+    /**
+     * Prefijo de los archivos del contenedor por los que viaja el cuerpo de {@link #deliverMessage}: uno por llamada
+     * ({@link #devtoolsFile}), porque dos entregas a la vez sobre un archivo fijo se pisan el cuerpo.
+     */
+    private static final String DELIVER_BODY = "/tmp/keel-deliver";
 ` : ''}${queryCountSection(model)}${brokerSection(model)}${outboxDrainSection(model)}${reconciliationAgingSection(model)}${deadLetteredOutboxSection(model)}${abandonOutboxSection(model)}${deadLetterSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
     /**
      * Ejecuta un comando dentro del contenedor devtools y devuelve su salida.
@@ -3983,6 +3986,26 @@ function bodyFileHelper(model) {
     private static void copyToDevtools(String content, String target) {
         copyIntoContainer(DEVTOOLS_CONTAINER, content, ".json", target);
     }
+
+    /**
+     * Un archivo del contenedor PROPIO de esta llamada. Con uno fijo, dos entregas lanzadas a la vez (el escenario de
+     * una carrera) copian su cuerpo al mismo sitio antes de publicarlo, y una se lleva el de la otra: con cuerpos
+     * iguales no se nota, con distintos el escenario prueba otra cosa. Se borra con {@link #removeFromDevtools}.
+     */
+    private static String devtoolsFile(String prefix) {
+        return prefix + "-" + UUID.randomUUID() + ".json";
+    }
+
+    /** Borra los archivos de una llamada; si no se puede, no es asunto del escenario (el contenedor es de prueba). */
+    private static void removeFromDevtools(String... files) {
+        try {
+            List<String> argv = new ArrayList<>(List.of("rm", "-f"));
+            argv.addAll(List.of(files));
+            devtools(argv.toArray(String[]::new));
+        } catch (RuntimeException ignored) {
+            // Un /tmp con un archivo de más no cambia ningún resultado.
+        }
+    }
 `;
 }
 
@@ -5174,24 +5197,28 @@ function brokerSection(model) {
     // El destino con el que se habla es el FÍSICO: quien llama pasa el nombre del canal
     // del diseño, que para una suscripción no es el de su cola.
     const physical = expr('physicalDestination(destination)');
-    const read = readParts('rabbitmq', { destination: physical, bodyFile: expr('PROBE_BODY'), base });
+    const read = readParts('rabbitmq', { destination: physical, bodyFile: expr('probeFile'), base });
     const purge = purgeParts('rabbitmq', { destination: physical, base });
     return `
     private static final String RABBIT_API = "${ENDPOINTS.rabbitmq.queuesApi}";
 
-    private static final String PROBE_BODY = "${PROBE_BODY_FILE}";
+    /** Prefijo de los archivos del cuerpo del sondeo: uno por llamada, como en {@link #deliverMessage}. */
+    private static final String PROBE_BODY = "${PROBE_BODY_FILE.replace(/\.json$/, '')}";
 ${physicalDestinationSection(model)}${doc}
     protected static String publishedMessages(String destination, int count) {${drainBeforeRead(model)}
         // Peek (ack_requeue_true): leer no consume, así que un escenario puede
         // assertar dos veces sobre el mismo mensaje.
-        copyToDevtools(${rabbitProbeBodyJava('count')}, PROBE_BODY);
+        String probeFile = devtoolsFile(PROBE_BODY);
         try {
+            copyToDevtools(${rabbitProbeBodyJava('count')}, probeFile);
             // Desescapado ANTES de devolver: quien llama nunca ve el sobre de
             // aplicación como cadena escapada, que es la trampa que hacía fallar en
             // silencio aserciones por lo demás correctas.
             return decodePayloads(devtools(${javaArgs(read)}));
         } catch (RuntimeException e) {
             return emptyIfBrokerStopped(e);
+        } finally {
+            removeFromDevtools(probeFile);
         }
     }
 ${RABBIT_PAYLOAD_DECODING}
@@ -5585,7 +5612,7 @@ function deliverySection(model) {
 
   if (broker.id === 'rabbitmq') {
     const publish = deliverParts('rabbitmq', {
-      bodyFile: expr('DELIVER_BODY'),
+      bodyFile: expr('bodyFile'),
       base: expr('RABBIT_EXCHANGE_API'),
       destination: expr('destination')
     });
@@ -5608,8 +5635,14 @@ ${doc}
           routingKey: 'key',
           payload: 'Base64.getEncoder().encodeToString(body.getBytes(StandardCharsets.UTF_8))'
         })};
-        copyToDevtools(request, DELIVER_BODY);
-        String published = devtools(${javaArgs(publish)});
+        String bodyFile = devtoolsFile(DELIVER_BODY);
+        String published;
+        try {
+            copyToDevtools(request, bodyFile);
+            published = devtools(${javaArgs(publish)});
+        } finally {
+            removeFromDevtools(bodyFile);
+        }
         // Publicar donde no hay binding que case NO es un error para RabbitMQ: contesta 200 y
         // \`"routed":false\`, así que el curl sale con 0 y la entrega parece hecha. El mensaje
         // no llega, el consumidor no reacciona, y el escenario muere mucho después en un
@@ -5625,8 +5658,8 @@ ${headersJsonHelper()}`;
 
   if (broker.id === 'snssqs') {
     return `
-    /** Archivo del contenedor por el que viajan los atributos del mensaje entregado. */
-    private static final String DELIVER_ATTRS = "/tmp/keel-deliver-attrs.json";
+    /** Prefijo de los archivos del contenedor por los que viajan los atributos del mensaje entregado (uno por llamada). */
+    private static final String DELIVER_ATTRS = "/tmp/keel-deliver-attrs";
 
     /**
      * Prefijo del ARN de los topics. La entrega ENTRANTE se publica en el topic de
@@ -5637,27 +5670,33 @@ ${headersJsonHelper()}`;
     private static final String TOPIC_ARN = "${ENDPOINTS.snssqs.topicArnPrefix}";
 ${doc}
     protected static void deliverMessage(String destination, String key, String body, Map<String, String> headers) {
-        copyToDevtools(body, DELIVER_BODY);
-        List<String> argv = new ArrayList<>(List.of(${javaArgs(
-          deliverParts('snssqs', {
-            destination: expr('destination'),
-            bodyFile: expr('DELIVER_BODY'),
-            base: expr('TOPIC_ARN')
-          })
-        )}));
-        if (!headers.isEmpty()) {
-            copyToDevtools(attributesJson(headers), DELIVER_ATTRS);
-            argv.addAll(List.of(${javaArgs(
+        String bodyFile = devtoolsFile(DELIVER_BODY);
+        String attrsFile = devtoolsFile(DELIVER_ATTRS);
+        try {
+            copyToDevtools(body, bodyFile);
+            List<String> argv = new ArrayList<>(List.of(${javaArgs(
               deliverParts('snssqs', {
                 destination: expr('destination'),
-                bodyFile: expr('DELIVER_BODY'),
-                attrsFile: expr('DELIVER_ATTRS'),
-                base: expr('TOPIC_ARN'),
-                withAttributes: true
-              }).slice(-2)
+                bodyFile: expr('bodyFile'),
+                base: expr('TOPIC_ARN')
+              })
             )}));
+            if (!headers.isEmpty()) {
+                copyToDevtools(attributesJson(headers), attrsFile);
+                argv.addAll(List.of(${javaArgs(
+                  deliverParts('snssqs', {
+                    destination: expr('destination'),
+                    bodyFile: expr('bodyFile'),
+                    attrsFile: expr('attrsFile'),
+                    base: expr('TOPIC_ARN'),
+                    withAttributes: true
+                  }).slice(-2)
+                )}));
+            }
+            aws(argv.toArray(String[]::new));
+        } finally {
+            removeFromDevtools(bodyFile, attrsFile);
         }
-        aws(argv.toArray(String[]::new));
     }
 
     /** Cabeceras → atributos de mensaje SQS, que es su equivalente en este broker. */
@@ -5685,11 +5724,16 @@ ${doc}
         // mensajes que el listener no puede deserializar, y de rebote satura la partición
         // con reintentos hasta la dead-letter. JSON válido no necesita saltos de línea
         // fuera de las cadenas, y dentro de una cadena viajan escapados como \\n.
-        copyToDevtools(${collapseToSingleLineJava('body')}, DELIVER_BODY);
-        StringBuilder command = new StringBuilder("${kafkaDeliverPrefix()}")
-            .append(shellQuote(destination)).append(" -k ").append(shellQuote(key));
-        headers.forEach((name, value) -> command.append(" -H ").append(shellQuote(name + "=" + value)));
-        devtoolsShell(command.append(" -l ").append(DELIVER_BODY).toString());
+        String bodyFile = devtoolsFile(DELIVER_BODY);
+        try {
+            copyToDevtools(${collapseToSingleLineJava('body')}, bodyFile);
+            StringBuilder command = new StringBuilder("${kafkaDeliverPrefix()}")
+                .append(shellQuote(destination)).append(" -k ").append(shellQuote(key));
+            headers.forEach((name, value) -> command.append(" -H ").append(shellQuote(name + "=" + value)));
+            devtoolsShell(command.append(" -l ").append(bodyFile).toString());
+        } finally {
+            removeFromDevtools(bodyFile);
+        }
     }
 `;
 }

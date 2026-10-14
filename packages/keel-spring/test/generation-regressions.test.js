@@ -275,7 +275,8 @@ test('§1.1: el sondeo del broker va por argv, nunca por una cadena con comillas
   // El cuerpo JSON viaja por archivo copiado al contenedor: pasarlo en la línea de
   // comandos es lo que docker.exe/podman.exe corrompen en Windows (400 not_json).
   assert.ok(rabbit.includes('private static void copyToDevtools(String content, String target)'));
-  assert.ok(rabbit.includes('"-d", "@" + PROBE_BODY'));
+  assert.ok(rabbit.includes('"-d", "@" + probeFile'));
+  assert.ok(rabbit.includes('String probeFile = devtoolsFile(PROBE_BODY);'), 'el sondeo usa un archivo por llamada');
   assert.ok(!rabbit.includes('String.format('));
   // Un curl fallido ya no se traga: exit code != 0 lanza con la evidencia.
   assert.ok(rabbit.includes('Falló el sondeo de infraestructura (código'));
@@ -298,8 +299,8 @@ test('§1.1: el sondeo del broker va por argv, nunca por una cadena con comillas
   // Y con Kafka el cuerpo se colapsa a UNA línea antes de copiarlo, porque `kcat -l`
   // manda un mensaje POR LÍNEA: un payload escrito como text block llegaba troceado en
   // varios mensajes indeserializables (informe de notifications-spring § 1.5).
-  assert.ok(kafka.includes(`copyToDevtools(${collapseToSingleLineJava('body')}, DELIVER_BODY);`));
-  assert.ok(!kafka.includes('copyToDevtools(body, DELIVER_BODY);'));
+  assert.ok(kafka.includes(`copyToDevtools(${collapseToSingleLineJava('body')}, bodyFile);`));
+  assert.ok(!kafka.includes('copyToDevtools(body, bodyFile);'));
   assert.ok(kafka.includes('deliverMessage(EVENT_TOPIC, key, payload, Map.of());'));
   assert.ok(!kafka.includes("printf '%s'"));
   assert.ok(!kafka.includes('shellQuote(payload)'));
@@ -1624,9 +1625,14 @@ test('cada suscripción tiene su deliver, en los tres brokers', () => {
     // Con RabbitMQ lo que se copia es el sobre de la API de gestión, con el cuerpo
     // dentro en base64 — misma garantía, un envoltorio más.
     assert.ok(
-      /copyToDevtools\((body|body\.replaceAll\([^)]*\)|request), DELIVER_BODY\)/.test(harness),
+      /copyToDevtools\((body|body\.replaceAll\([^)]*\)|request), bodyFile\)/.test(harness),
       `${broker}: el cuerpo entregado no viaja por archivo`
     );
+    // Y por un archivo PROPIO de la llamada, que se borra al terminar: con uno fijo, dos entregas a la vez (el
+    // escenario de una carrera) se pisaban el cuerpo (corrida 9e de keel-dotnet, el mismo defecto).
+    assert.ok(harness.includes('String bodyFile = devtoolsFile(DELIVER_BODY);'), `${broker}: archivo por llamada`);
+    assert.ok(/removeFromDevtools\(bodyFile/.test(harness), `${broker}: el archivo de la llamada se borra`);
+    assert.ok(!harness.includes('"/tmp/keel-deliver.json"'), `${broker}: queda el archivo fijo`);
   }
 });
 
