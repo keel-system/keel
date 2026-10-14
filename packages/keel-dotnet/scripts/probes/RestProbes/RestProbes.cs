@@ -1,4 +1,4 @@
-// La lectura de peticiones que emite keel-dotnet (Api/Rest/RequestReading.cs e InputValidation.cs), EJECUTADA:
+// La lectura de peticiones que emite keel-dotnet (Application/Support/JsonReading.cs e InputValidation.cs, y Api/Rest/RequestReading.cs), EJECUTADA:
 // convierte lo que llega como lo convierte Spring y valida con los mensajes de Bean Validation. Un servidor que
 // aceptara `?active=yes` y otro que respondiera 400 al mismo diseño no serían equivalentes, y eso no lo ve ninguna
 // comparación de cadenas. Los mismos casos que keel-nest/test/rest.test.js, sobre la misma fixture.
@@ -10,6 +10,7 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Primitives;
 using ProductCatalog.Api.Rest;
+using ProductCatalog.Application.Support;
 using ProductCatalog.Domain.Enums;
 using Xunit;
 

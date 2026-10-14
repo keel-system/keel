@@ -37,7 +37,7 @@ const TEXT_READERS = { string: 'String', text: 'String', file: 'String', uuid: '
 const READER_LOCALS = new Set(['httpRequest', 'requestFields', 'bodyChecks', 'paramChecks']);
 
 /** ¿Es el campo un tipo de valor de C# (int, decimal, Guid, un enum…)? */
-function isValueType(field) {
+export function isValueType(field) {
   if (field.kind === 'enum') return true;
   if (field.kind === 'composite') return false;
   return VALUE_BASES.has(field.base);
@@ -66,7 +66,6 @@ export function generate(model) {
     const served = (service.operations ?? []).filter(servedOperation);
     if (served.length > 0) files.push(renderEndpoints(model, service, served));
   }
-  if ((model.valueObjects ?? []).length > 0) files.push(valueReaders(model));
   files.push(routesFile(model));
   return files;
 }
@@ -79,9 +78,12 @@ function localOf(component) {
   return READER_LOCALS.has(local) ? `${local}Value` : local;
 }
 
-/** La expresión que lee UN valor de un objeto JSON (`source`, un JsonElement?). */
-function jsonRead(field, source) {
-  const name = csString(field.name);
+/**
+ * La expresión que lee UN valor de un objeto JSON (`source`, un JsonElement?). `key` es la propiedad del cable: el
+ * nombre del campo, o el de la fuente (`wireName`) en el mensaje de una suscripción.
+ */
+export function jsonRead(field, source, key = field.name) {
+  const name = csString(key);
   if (field.list) return `JsonBodyReader.List(${source}, ${name}, ${jsonElementReader(field)})`;
   if (field.kind === 'enum') return `JsonBodyReader.EnumValue<${field.elementCsType}>(${source}, ${name})`;
   if (field.kind === 'composite') return `ValueReaders.Read${field.elementCsType}(JsonBodyReader.Property(${source}, ${name}))`;
@@ -108,12 +110,12 @@ function textElement(field, source) {
 }
 
 /** Un valor que el diseño exige: si no llegó, la petición no se puede leer. */
-function present(field, expression) {
+export function present(field, expression) {
   return isValueType(field) ? `JsonBodyReader.PresentValue(${expression})` : `JsonBodyReader.Present(${expression})`;
 }
 
 /** Las reglas de un campo como argumentos C# (datos neutrales de keel-core). */
-function rulesArgs(rules) {
+export function rulesArgs(rules) {
   return rules
     .map((rule) => {
       switch (rule.rule) {
@@ -141,7 +143,7 @@ function rulesArgs(rules) {
 }
 
 export function valueReaders(model) {
-  const { namespace, path } = located(model, 'rest', 'ValueReaders');
+  const { namespace, path } = located(model, 'appSupport', 'ValueReaders');
   const usings = ['System.Text.Json'];
   const readers = model.valueObjects.map((vo) => {
     usings.push(...fieldUsings(model, { csType: vo.name }));
@@ -173,6 +175,7 @@ function renderEndpoints(model, service, served) {
     'Microsoft.AspNetCore.Http',
     'Microsoft.Extensions.DependencyInjection',
     restNamespace(model),
+    namespaceOf(model, 'appSupport'),
     namespaceOf(model, 'abstractions')
   ];
   const members = served.flatMap((operation) => [renderEndpoint(model, operation, usings), renderReader(model, operation, usings)]);
@@ -319,7 +322,7 @@ function renderReader(model, operation, usings) {
 
   const lines = [...pathLines];
   if (asBody) {
-    lines.push(`        var requestFields = await JsonBodyReader.ReadObject(httpRequest, required: ${bodyRequired});`);
+    lines.push(`        var requestFields = await HttpJsonBody.ReadObject(httpRequest, required: ${bodyRequired});`);
     lines.push(...bodyLines);
     if (bodyChecks.length > 0) lines.push('        var bodyChecks = new InputViolations(ViolationSource.Body);', ...bodyChecks, '        bodyChecks.ThrowIfAny();');
   } else {

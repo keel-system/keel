@@ -68,7 +68,7 @@ const SABOTAGES = {
   // La cabecera de la respuesta sigue saliendo: solo el cuerpo de error puede notar que no se abrió.
   correlation: [`${REST_DIR}/CorrelationMiddleware.cs`, 'using (CorrelationContext.Open(correlationId))', 'using ((IDisposable?)null)'],
   'method-405': [`${REST_DIR}/ApiErrorMiddleware.cs`, 'context.Response.StatusCode == StatusCodes.Status405MethodNotAllowed', 'context.Response.StatusCode < 0'],
-  'not-blank': [`${REST_DIR}/InputValidation.cs`, '(value is string text && string.IsNullOrWhiteSpace(text))', '(value is string text && text.Length < 0)']
+  'not-blank': [`src/ProductCatalog.Application/Support/InputValidation.cs`, '(value is string text && string.IsNullOrWhiteSpace(text))', '(value is string text && text.Length < 0)']
 };
 
 // Las sondas que EJECUTAN lo emitido para todas las fixtures (scripts/probes/): C# de verdad, no plantillas.

@@ -22,6 +22,7 @@ import { FRAMEWORK_RESPONSES as FW, domainErrorResponses } from 'keel-core/gen/a
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { wireNamespace } from './wire.js';
 import { usesRelational } from './persistence.js';
+import { valueReaders } from './endpoints.js';
 
 /** ¿Expone el servicio una API? Sin capa api, o sin ninguna operación con ruta, no hay nada de esto. */
 export function usesApi(model) {
@@ -32,24 +33,46 @@ export function restNamespace(model) {
   return namespaceOf(model, 'rest');
 }
 
+/**
+ * ¿Hace falta la LECTURA del cable (Application/Support)? La usan los lectores de la API y los mensajes de las
+ * suscripciones, que leen su payload con los mismos conversores y las mismas reglas: un mensaje y una petición del
+ * mismo diseño se leen igual.
+ */
+export function usesWireReading(model) {
+  return usesApi(model) || (Boolean(model.layersPresent?.messaging) && (model.subscriptions ?? []).length > 0);
+}
+
 export function generate(model) {
-  if (!usesApi(model)) return [];
+  const files = [];
+  if (usesWireReading(model)) {
+    const support = (name, usings, body) => {
+      const { namespace, path } = located(model, 'appSupport', name);
+      return { path, content: csFile({ namespace, usings, body }) };
+    };
+    files.push(
+      support('RequestErrors', [], requestErrorsBody()),
+      support('JsonReading', ['System.Reflection', 'System.Text.Json', 'System.Text.Json.Serialization', namespaceOf(model, 'errors')], jsonReadingBody()),
+      support('InputValidation', ['System.Collections', 'System.Collections.Concurrent', 'System.Globalization', 'System.Text.RegularExpressions'], inputValidationBody())
+    );
+    // Los value objects leídos del JSON, con las guardas de su constructor (endpoints.js los escribe).
+    if ((model.valueObjects ?? []).length > 0) files.push(valueReaders(model));
+  }
+  if (!usesApi(model)) return files;
   const rest = (name, usings, body) => {
     const { namespace, path } = located(model, 'rest', name);
     return { path, content: csFile({ namespace, usings, body }) };
   };
   const { namespace: correlationNs, path: correlationPath } = located(model, 'correlation', 'CorrelationContext');
   return [
+    ...files,
     { path: correlationPath, content: csFile({ namespace: correlationNs, usings: ['System.Text.RegularExpressions'], body: correlationContextBody() }) },
     rest('CorrelationMiddleware', ['Microsoft.AspNetCore.Http', 'Microsoft.Extensions.Logging', correlationNs], correlationMiddlewareBody()),
     rest('ErrorResponse', ['System.Text.Json.Serialization', correlationNs], errorResponseBody()),
-    rest('RequestErrors', [], requestErrorsBody()),
     rest(
       'RequestReading',
-      ['System.Globalization', 'System.Reflection', 'System.Text.Json', 'System.Text.Json.Serialization', 'System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', 'Microsoft.Extensions.Primitives', wireNamespace(model), namespaceOf(model, 'errors')],
+      ['System.Globalization', 'System.Text.Json', 'System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', 'Microsoft.Extensions.Primitives', wireNamespace(model)],
       requestReadingBody()
     ),
-    rest('InputValidation', ['System.Collections', 'System.Collections.Concurrent', 'System.Globalization', 'System.Text.RegularExpressions'], inputValidationBody()),
     rest('HttpReply', ['System.Globalization', 'System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', wireNamespace(model)], httpReplyBody()),
     rest(
       'ApiErrorMiddleware',
@@ -291,15 +314,11 @@ public sealed class RequestValidationException(IReadOnlyList<string> details, Vi
 }
 
 function requestReadingBody() {
-  return `// Lectura de una petición: convertir lo que llega por el cable al tipo del diseño. Lo usan los lectores que
-// genera build para cada operación (Endpoints/). Un valor ausente es null; lo que no se puede convertir es una
-// petición malformada.
+  return `// Lectura de una petición HTTP: el cuerpo y los valores de TEXTO (ruta y query). Lo que se lee del JSON lo
+// convierte JsonBodyReader (Application/Support), el mismo que lee los mensajes de las suscripciones.
 
-/// <summary>
-/// Lectores de un cuerpo JSON. Los valores se convierten con el contrato del cable (WireJson): un decimal exacto,
-/// un instante con zona, un uuid en su forma canónica de 36 caracteres.
-/// </summary>
-public static class JsonBodyReader
+/// <summary>El cuerpo de la petición como objeto JSON.</summary>
+public static class HttpJsonBody
 {
     /// <summary>El cuerpo como objeto JSON. Sin cuerpo (o con <c>null</c>): null si es opcional, malformada si es obligatorio.</summary>
     public static async Task<JsonElement?> ReadObject(HttpRequest request, bool required)
@@ -307,117 +326,8 @@ public static class JsonBodyReader
         ArgumentNullException.ThrowIfNull(request);
         using var buffer = new MemoryStream();
         await request.Body.CopyToAsync(buffer, request.HttpContext.RequestAborted);
-        JsonElement root;
-        if (buffer.Length == 0)
-        {
-            root = default;
-        }
-        else
-        {
-            try
-            {
-                using var document = JsonDocument.Parse(buffer.ToArray());
-                root = document.RootElement.Clone();
-            }
-            catch (JsonException error)
-            {
-                throw new MalformedRequestException(error);
-            }
-        }
-        if (root.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
-        {
-            if (required)
-            {
-                throw new MalformedRequestException();
-            }
-            return null;
-        }
-        return root.ValueKind == JsonValueKind.Object ? root : throw new MalformedRequestException();
+        return JsonBodyReader.ParseObject(buffer.GetBuffer().AsSpan(0, (int)buffer.Length), required);
     }
-
-    /// <summary>¿Viene la propiedad, aunque sea con null? Es lo que distingue «no tocar» de «vaciar» en un PATCH.</summary>
-    public static bool Has(JsonElement? fields, string name) => fields is { } value && value.TryGetProperty(name, out _);
-
-    /// <summary>La propiedad del objeto, o null si falta o vale null.</summary>
-    public static JsonElement? Property(JsonElement? fields, string name) =>
-        fields is { } value && value.TryGetProperty(name, out var property) && property.ValueKind != JsonValueKind.Null ? property : null;
-
-    /// <summary>Un valor del objeto, convertido con el contrato del cable. Para un tipo de valor, pásalo nullable (<c>decimal?</c>).</summary>
-    public static T? Value<T>(JsonElement? fields, string name) => Property(fields, name) is { } property ? Element<T>(property) : default;
-
-    /// <summary>Un valor JSON presente, convertido con el contrato del cable: un null aquí es una petición malformada.</summary>
-    public static T Element<T>(JsonElement element)
-    {
-        T? value;
-        try
-        {
-            value = element.Deserialize<T>(WireJson.Options);
-        }
-        catch (Exception error) when (error is JsonException or NotSupportedException or InvalidOperationException or FormatException or OverflowException)
-        {
-            throw new MalformedRequestException(error);
-        }
-        return value is null ? throw new MalformedRequestException() : value;
-    }
-
-    /// <summary>Un enum por el LITERAL del diseño, exacto: es lo que escribe el cable.</summary>
-    public static T? EnumValue<T>(JsonElement? fields, string name)
-        where T : struct, Enum => Property(fields, name) is { } property ? EnumElement<T>(property) : null;
-
-    public static T EnumElement<T>(JsonElement element)
-        where T : struct, Enum =>
-        element.ValueKind == JsonValueKind.String && EnumLiterals<T>.ByLiteral.TryGetValue(element.GetString()!, out var value)
-            ? value
-            : throw new MalformedRequestException();
-
-    /// <summary>Una lista: ausente o null es null; algo que no es un array, malformada.</summary>
-    public static IReadOnlyList<T>? List<T>(JsonElement? fields, string name, Func<JsonElement, T> element)
-    {
-        ArgumentNullException.ThrowIfNull(element);
-        if (Property(fields, name) is not { } property)
-        {
-            return null;
-        }
-        if (property.ValueKind != JsonValueKind.Array)
-        {
-            throw new MalformedRequestException();
-        }
-        return [.. property.EnumerateArray().Select(element)];
-    }
-
-    /// <summary>
-    /// Un value object: un objeto JSON. Si su constructor lo rechaza, la petición es malformada: en keel-spring eso
-    /// pasa dentro de Jackson y sale igual.
-    /// </summary>
-    public static T? ValueObject<T>(JsonElement? value, Func<JsonElement, T> build)
-        where T : class
-    {
-        ArgumentNullException.ThrowIfNull(build);
-        if (value is not { } element)
-        {
-            return null;
-        }
-        if (element.ValueKind != JsonValueKind.Object)
-        {
-            throw new MalformedRequestException();
-        }
-        try
-        {
-            return build(element);
-        }
-        catch (DomainException error)
-        {
-            throw new MalformedRequestException(error);
-        }
-    }
-
-    /// <summary>Lo que el diseño exige y no llegó: una petición que no se puede leer.</summary>
-    public static T Present<T>(T? value)
-        where T : class => value ?? throw new MalformedRequestException();
-
-    /// <summary>Lo que el diseño exige y no llegó, para un tipo de valor.</summary>
-    public static T PresentValue<T>(T? value)
-        where T : struct => value ?? throw new MalformedRequestException();
 }
 
 /// <summary>
@@ -573,10 +483,142 @@ public static partial class TextValues
             throw new MalformedRequestException(error);
         }
     }
+}`;
+}
+
+function jsonReadingBody() {
+  return `// Lectura de lo que llega por el cable al tipo del diseño. La usan los lectores que genera build para cada
+// operación de la API (Endpoints/) y los mensajes de las suscripciones (Messaging/): las mismas conversiones y las
+// mismas reglas. Un valor ausente es null; lo que no se puede convertir es una petición malformada.
+
+/// <summary>
+/// Lectores de un cuerpo JSON. Los valores se convierten con el contrato del cable (WireJson): un decimal exacto,
+/// un instante con zona, un uuid en su forma canónica de 36 caracteres.
+/// </summary>
+public static class JsonBodyReader
+{
+    /// <summary>
+    /// Un documento JSON como objeto. Vacío (o <c>null</c>): null si es opcional, malformada si es obligatorio; algo
+    /// que no es un objeto, malformada.
+    /// </summary>
+    public static JsonElement? ParseObject(ReadOnlySpan<byte> utf8, bool required)
+    {
+        JsonElement root;
+        if (utf8.IsEmpty)
+        {
+            root = default;
+        }
+        else
+        {
+            try
+            {
+                var reader = new Utf8JsonReader(utf8);
+                using var document = JsonDocument.ParseValue(ref reader);
+                root = document.RootElement.Clone();
+            }
+            catch (JsonException error)
+            {
+                throw new MalformedRequestException(error);
+            }
+        }
+        if (root.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            if (required)
+            {
+                throw new MalformedRequestException();
+            }
+            return null;
+        }
+        return root.ValueKind == JsonValueKind.Object ? root : throw new MalformedRequestException();
+    }
+
+    /// <summary>¿Viene la propiedad, aunque sea con null? Es lo que distingue «no tocar» de «vaciar» en un PATCH.</summary>
+    public static bool Has(JsonElement? fields, string name) => fields is { } value && value.TryGetProperty(name, out _);
+
+    /// <summary>La propiedad del objeto, o null si falta o vale null.</summary>
+    public static JsonElement? Property(JsonElement? fields, string name) =>
+        fields is { } value && value.TryGetProperty(name, out var property) && property.ValueKind != JsonValueKind.Null ? property : null;
+
+    /// <summary>Un valor del objeto, convertido con el contrato del cable. Para un tipo de valor, pásalo nullable (<c>decimal?</c>).</summary>
+    public static T? Value<T>(JsonElement? fields, string name) => Property(fields, name) is { } property ? Element<T>(property) : default;
+
+    /// <summary>Un valor JSON presente, convertido con el contrato del cable: un null aquí es una petición malformada.</summary>
+    public static T Element<T>(JsonElement element)
+    {
+        T? value;
+        try
+        {
+            value = element.Deserialize<T>(WireJson.Options);
+        }
+        catch (Exception error) when (error is JsonException or NotSupportedException or InvalidOperationException or FormatException or OverflowException)
+        {
+            throw new MalformedRequestException(error);
+        }
+        return value is null ? throw new MalformedRequestException() : value;
+    }
+
+    /// <summary>Un enum por el LITERAL del diseño, exacto: es lo que escribe el cable.</summary>
+    public static T? EnumValue<T>(JsonElement? fields, string name)
+        where T : struct, Enum => Property(fields, name) is { } property ? EnumElement<T>(property) : null;
+
+    public static T EnumElement<T>(JsonElement element)
+        where T : struct, Enum =>
+        element.ValueKind == JsonValueKind.String && EnumLiterals<T>.ByLiteral.TryGetValue(element.GetString()!, out var value)
+            ? value
+            : throw new MalformedRequestException();
+
+    /// <summary>Una lista: ausente o null es null; algo que no es un array, malformada.</summary>
+    public static IReadOnlyList<T>? List<T>(JsonElement? fields, string name, Func<JsonElement, T> element)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        if (Property(fields, name) is not { } property)
+        {
+            return null;
+        }
+        if (property.ValueKind != JsonValueKind.Array)
+        {
+            throw new MalformedRequestException();
+        }
+        return [.. property.EnumerateArray().Select(element)];
+    }
+
+    /// <summary>
+    /// Un value object: un objeto JSON. Si su constructor lo rechaza, la petición es malformada: en keel-spring eso
+    /// pasa dentro de Jackson y sale igual.
+    /// </summary>
+    public static T? ValueObject<T>(JsonElement? value, Func<JsonElement, T> build)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(build);
+        if (value is not { } element)
+        {
+            return null;
+        }
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            throw new MalformedRequestException();
+        }
+        try
+        {
+            return build(element);
+        }
+        catch (DomainException error)
+        {
+            throw new MalformedRequestException(error);
+        }
+    }
+
+    /// <summary>Lo que el diseño exige y no llegó: una petición que no se puede leer.</summary>
+    public static T Present<T>(T? value)
+        where T : class => value ?? throw new MalformedRequestException();
+
+    /// <summary>Lo que el diseño exige y no llegó, para un tipo de valor.</summary>
+    public static T PresentValue<T>(T? value)
+        where T : struct => value ?? throw new MalformedRequestException();
 }
 
 /// <summary>Los literales del diseño de un enum (los de [JsonStringEnumMemberName]) y sus nombres, una vez por tipo.</summary>
-internal static class EnumLiterals<T>
+public static class EnumLiterals<T>
     where T : struct, Enum
 {
     public static readonly IReadOnlyDictionary<string, T> ByLiteral = Build(literal: true);
