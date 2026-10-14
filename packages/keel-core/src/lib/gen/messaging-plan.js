@@ -12,6 +12,7 @@
 
 import { kafkaListenerRetry, missingTargetRetryDestinations, deadLetterName, subscriptionDestination, subscriptionGroupId, subscriptionKey } from './dead-letter.js';
 import { KAFKA_PRODUCER_TIMEOUTS } from './infra-catalog.js';
+import { subscriptionQueues } from './messaging-provisioning.js';
 import { OUTBOX_PURGE, OUTBOX_RELAY, PROCESSED_EVENT_PURGE, parameterValue } from './messaging-stores.js';
 import { envWithDefault } from './profile-values.js';
 import { envFor, runtimeDefault } from './runtime-env.js';
@@ -244,5 +245,66 @@ export function kafkaYaml(profile) {
     '  # La espera entre intentos de conexión mientras el broker no está.',
     `  reconnect-interval-ms: ${envWithDefault(profile, 'KAFKA_RECONNECT_INTERVAL_MS', KAFKA_RECONNECT_INTERVAL_MS)}`
   ];
+  return `${lines.join('\n')}\n`;
+}
+
+// ─── SNS/SQS ─────────────────────────────────────────────────────────────────
+
+/** La espera entre intentos mientras el broker o una cola no están: la de los demás brokers. */
+export const SNSSQS_RECONNECT_INTERVAL_MS = 5000;
+/** El sondeo largo de SQS: hasta 10 s esperando mensajes (el `poll-timeout` de la skill de keel-spring). */
+export const SQS_POLL_WAIT_SECONDS = 10;
+/** Mensajes por sondeo: el máximo de SQS. */
+export const SQS_MAX_MESSAGES = 10;
+/**
+ * Los plazos de una llamada a SNS: los de la skill keel-spring-snssqs (`apiCallAttemptTimeout` 1,5 s, dos
+ * intentos). Sin ellos el SDK reintenta puertas adentro con su propia política, y ese tiempo se suma al backoff
+ * del relay en vez de estar gobernado por él: la fila se rinde dentro de la misma caída que causó el fallo.
+ */
+export const SNS_REQUEST_TIMEOUT_MS = 1500;
+export const SNS_MAX_ATTEMPTS = 2;
+
+/** El consumo como DATOS: una entrada por SUSCRIPCIÓN, cada una con su cola (la de init-messaging.sh). */
+export function snsSqsConsumption(model) {
+  const queues = subscriptionQueues(model);
+  const missingTarget = missingTargetRetryDestinations(model, 'snssqs');
+  return (model.subscriptions ?? []).map((sub, index) => ({
+    subscription: sub.name,
+    queue: queues[index].name,
+    // Por COLA, que aquí es una por suscripción (keel-core decide cuáles).
+    retriesNotFound: missingTarget.includes(queues[index].name),
+    deadLetterQueue: queues[index].deadLetter ? queues[index].deadLetterName : null,
+    maxReceive: queues[index].maxReceive,
+    initialMs: sub.retry?.initialDelayMs ?? 1000,
+    multiplier: (sub.retry?.backoff ?? 'exponential') === 'exponential' ? 2 : 1,
+    maxDelayMs: sub.retry?.maxDelayMs ?? null
+  }));
+}
+
+/** El fragmento `snssqs.yaml` de un perfil: las variables de keel-spring (aws.*) y el sondeo de SQS. */
+export function snssqsYaml(profile) {
+  const lines = [
+    'aws:',
+    ...(profile === 'test'
+      ? ['  # Las pruebas de build arrancan sin broker: la conexión no se intenta.', '  enabled: false']
+      : ['  enabled: true']),
+    `  region: ${envFor('AWS_REGION', profile)}`,
+    '  credentials:',
+    '    # En producción, si la plataforma da un rol IAM, vacía las dos y el SDK usa su cadena por defecto.',
+    `    access-key: ${envFor('AWS_ACCESS_KEY_ID', profile)}`,
+    `    secret-key: ${envFor('AWS_SECRET_ACCESS_KEY', profile)}`
+  ];
+  // En local y develop, LocalStack; en production el SDK resuelve el endpoint real de AWS (no se fija).
+  if (profile !== 'production') lines.push('  sns:', `    endpoint: ${envFor('AWS_SNS_ENDPOINT', profile)}`);
+  lines.push('  sqs:');
+  if (profile !== 'production') lines.push(`    endpoint: ${envFor('AWS_SQS_ENDPOINT', profile)}`);
+  lines.push(
+    '    listener:',
+    '      # Sondeo largo: hasta estos segundos esperando mensajes (el máximo de SQS es 20).',
+    `      poll-timeout-seconds: ${envWithDefault(profile, 'SQS_LISTENER_POLL_TIMEOUT_SECONDS', SQS_POLL_WAIT_SECONDS)}`,
+    `      max-messages-per-poll: ${envWithDefault(profile, 'SQS_LISTENER_MAX_MESSAGES_PER_POLL', SQS_MAX_MESSAGES)}`,
+    '  # La espera entre intentos mientras el broker o una cola no están.',
+    `  reconnect-interval-ms: ${envWithDefault(profile, 'AWS_RECONNECT_INTERVAL_MS', SNSSQS_RECONNECT_INTERVAL_MS)}`
+  );
   return `${lines.join('\n')}\n`;
 }

@@ -18,30 +18,13 @@
 // keel-nest-snssqs) es lo mismo que en keel-spring: el dispatcher del outbox o los publishers best-effort sobre
 // `SnsSqsConnection.publish`, y un listener por suscripción sobre `SnsSqsConnection.consume`.
 
-import { subscriptionQueues } from 'keel-core/gen/messaging-provisioning';
-import { missingTargetRetryDestinations } from 'keel-core/gen';
+import { SNSSQS_RECONNECT_INTERVAL_MS, SNS_MAX_ATTEMPTS, SNS_REQUEST_TIMEOUT_MS, SQS_MAX_MESSAGES, SQS_POLL_WAIT_SECONDS, snsSqsConsumption, snssqsYaml } from 'keel-core/gen/messaging-plan';
 import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, SNSSQS_CONNECTION_TS, SNSSQS_CONSUMPTION_TS, usesSnsSqs } from './messaging.js';
-import { envWithDefault } from 'keel-core/gen/profile-values';
-import { envFor } from 'keel-core/gen/runtime-env';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
-
-/** La espera entre intentos mientras el broker o una cola no están: la de los demás brokers. */
-export const SNSSQS_RECONNECT_INTERVAL_MS = 5000;
-/** El sondeo largo de SQS: hasta 10 s esperando mensajes (el `poll-timeout` de la skill de keel-spring). */
-export const SQS_POLL_WAIT_SECONDS = 10;
-/** Mensajes por sondeo: el máximo de SQS. */
-export const SQS_MAX_MESSAGES = 10;
-/**
- * Los plazos de una llamada a SNS: los de la skill keel-spring-snssqs (`apiCallAttemptTimeout` 1,5 s, dos
- * intentos). Sin ellos el SDK reintenta puertas adentro con su propia política, y ese tiempo se suma al backoff
- * del relay en vez de estar gobernado por él: la fila se rinde dentro de la misma caída que causó el fallo.
- */
-export const SNS_REQUEST_TIMEOUT_MS = 1500;
-export const SNS_MAX_ATTEMPTS = 2;
 
 export function generate(model) {
   if (!usesSnsSqs(model)) return [];
@@ -50,23 +33,6 @@ export function generate(model) {
     { path: SNSSQS_CONNECTION_TS, content: connectionFile() },
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/snssqs.yaml`, content: snssqsYaml(profile) }))
   ];
-}
-
-/** El consumo como DATOS: una entrada por SUSCRIPCIÓN, cada una con su cola (la de init-messaging.sh). */
-export function snsSqsConsumption(model) {
-  const queues = subscriptionQueues(model);
-  const missingTarget = missingTargetRetryDestinations(model, 'snssqs');
-  return (model.subscriptions ?? []).map((sub, index) => ({
-    subscription: sub.name,
-    queue: queues[index].name,
-    // Por COLA, que aquí es una por suscripción (keel-core decide cuáles).
-    retriesNotFound: missingTarget.includes(queues[index].name),
-    deadLetterQueue: queues[index].deadLetter ? queues[index].deadLetterName : null,
-    maxReceive: queues[index].maxReceive,
-    initialMs: sub.retry?.initialDelayMs ?? 1000,
-    multiplier: (sub.retry?.backoff ?? 'exponential') === 'exponential' ? 2 : 1,
-    maxDelayMs: sub.retry?.maxDelayMs ?? null
-  }));
 }
 
 // ─── El consumo y el reintento (TypeScript puro) ─────────────────────────────
@@ -493,33 +459,4 @@ function toInbound(message: Message): InboundMessage {
     ],
     body
   );
-}
-
-// ─── La configuración ────────────────────────────────────────────────────────
-
-function snssqsYaml(profile) {
-  const lines = [
-    'aws:',
-    ...(profile === 'test'
-      ? ['  # Las pruebas de build arrancan sin broker: la conexión no se intenta.', '  enabled: false']
-      : ['  enabled: true']),
-    `  region: ${envFor('AWS_REGION', profile)}`,
-    '  credentials:',
-    '    # En producción, si la plataforma da un rol IAM, vacía las dos y el SDK usa su cadena por defecto.',
-    `    access-key: ${envFor('AWS_ACCESS_KEY_ID', profile)}`,
-    `    secret-key: ${envFor('AWS_SECRET_ACCESS_KEY', profile)}`
-  ];
-  // En local y develop, LocalStack; en production el SDK resuelve el endpoint real de AWS (no se fija).
-  if (profile !== 'production') lines.push('  sns:', `    endpoint: ${envFor('AWS_SNS_ENDPOINT', profile)}`);
-  lines.push('  sqs:');
-  if (profile !== 'production') lines.push(`    endpoint: ${envFor('AWS_SQS_ENDPOINT', profile)}`);
-  lines.push(
-    '    listener:',
-    '      # Sondeo largo: hasta estos segundos esperando mensajes (el máximo de SQS es 20).',
-    `      poll-timeout-seconds: ${envWithDefault(profile, 'SQS_LISTENER_POLL_TIMEOUT_SECONDS', SQS_POLL_WAIT_SECONDS)}`,
-    `      max-messages-per-poll: ${envWithDefault(profile, 'SQS_LISTENER_MAX_MESSAGES_PER_POLL', SQS_MAX_MESSAGES)}`,
-    '  # La espera entre intentos mientras el broker o una cola no están.',
-    `  reconnect-interval-ms: ${envWithDefault(profile, 'AWS_RECONNECT_INTERVAL_MS', SNSSQS_RECONNECT_INTERVAL_MS)}`
-  );
-  return `${lines.join('\n')}\n`;
 }
