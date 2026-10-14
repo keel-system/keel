@@ -10,7 +10,8 @@ import { packagesFor } from '../src/scaffold/project.js';
 
 test('todo paquete y herramienta de la tabla tiene versión exacta y licencia permisiva', () => {
   for (const [id, { version, license }] of [...Object.entries(PACKAGES), ...Object.entries(TOOLS)]) {
-    assert.match(version, /^\d+\.\d+\.\d+$/, `${id}: versión no exacta (${version})`);
+    // Exacta: tres números, o cuatro (el SDK de AWS versiona así). Nunca un rango ni un comodín.
+    assert.match(version, /^\d+(\.\d+){2,3}$/, `${id}: versión no exacta (${version})`);
     assert.deepEqual(licenseProblems({ id, version, license }), [], id);
   }
 });

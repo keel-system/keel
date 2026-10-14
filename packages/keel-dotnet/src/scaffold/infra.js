@@ -5,6 +5,7 @@
 
 import { infraFiles } from 'keel-core/gen/infra-scripts';
 import { identityProvisioningFiles } from 'keel-core/gen/identity-provisioning';
+import { messagingProvisioning, messagingTopologyChecks } from 'keel-core/gen/messaging-provisioning';
 import { MIGRATIONS_TABLE } from './persistence-runtime.js';
 
 export const DOTNET_INFRA = {
@@ -41,7 +42,17 @@ export const DOTNET_INFRA = {
 # Vaciar los datos no lo arregla —el índice viejo sigue ahí—; borrar la base sí. El
 # volumen no se toca.`
   },
-  httpStubsReadme
+  httpStubsReadme,
+  // La topología de SNS/SQS (keel-core/gen/messaging-provisioning.js): cómo nombra init-messaging.sh las piezas de
+  // keel-dotnet, que los topics y colas que siembra EXISTAN, y el script mismo.
+  messaging: {
+    harnessReaders: 'PublishedMessages / PurgeMessages de tests/<Servicio>.IntegrationTests/Support/Messaging.cs',
+    codeReads: 'por la configuracion de cada perfil',
+    skill: 'keel-dotnet-snssqs',
+    copyHelper: 'CopyToDevtools del arnes'
+  },
+  extraChecks: (model) => messagingTopologyChecks(model),
+  extraFiles: (model) => [messagingProvisioning(model, DOTNET_INFRA)].filter(Boolean)
 };
 
 export function generate(model) {

@@ -99,7 +99,8 @@ export const PLACES = {
   outbox: ['infrastructure', 'Messaging/Outbox'],
   messageIdempotency: ['infrastructure', 'Messaging/Idempotency'],
   rabbitmq: ['infrastructure', 'Messaging/RabbitMq'],
-  kafka: ['infrastructure', 'Messaging/Kafka']
+  kafka: ['infrastructure', 'Messaging/Kafka'],
+  snssqs: ['infrastructure', 'Messaging/SnsSqs']
 };
 
 /** El namespace y la ruta de un tipo `className` en el sitio `place` (una clave de PLACES). */

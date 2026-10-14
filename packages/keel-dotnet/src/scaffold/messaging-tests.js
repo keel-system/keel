@@ -11,7 +11,8 @@ import { WIRE_SHAPES } from 'keel-core/gen/wire';
 import { outboxBackoffMs } from 'keel-core/gen/messaging-stores';
 import { kafkaListenerRetry, rabbitListenerRetry } from 'keel-core/gen';
 import { csFile, csMember, csString, namespaceOf, solution } from './render.js';
-import { messagingNamespace, usesDotnetOutbox, usesKafka, usesMessaging, usesRabbitMq } from './messaging.js';
+import { messagingNamespace, usesDotnetOutbox, usesKafka, usesMessaging, usesRabbitMq, usesSnsSqs } from './messaging.js';
+import { snsSqsConsumption } from 'keel-core/gen/messaging-plan';
 
 export function generate(model) {
   if (!usesMessaging(model)) return [];
@@ -29,6 +30,10 @@ export function generate(model) {
   if (usesKafka(model)) {
     usings.push(namespaceOf(model, 'kafka'));
     members.push(kafkaRetryTests(model));
+  }
+  if (usesSnsSqs(model)) {
+    usings.push(namespaceOf(model, 'snssqs'));
+    members.push(snsSqsRetryTests(model));
   }
   if ((model.events ?? []).length > 0) {
     usings.push(namespaceOf(model, 'integrationEvents'));
@@ -214,5 +219,30 @@ ${rows.join('\n')}
     {
         Assert.False(KafkaConsumption.IsRetryable(new MessageContractViolation("x"), retriesNotFound: true));
         Assert.True(KafkaConsumption.IsRetryable(new TimeoutException(), retriesNotFound: false));
+    }`;
+}
+
+function snsSqsRetryTests(model) {
+  // La visibilidad que oculta un mensaje tras cada recepción fallida (la curva de la skill keel-spring-snssqs), redondeada
+  // al segundo: la referencia, evaluada aquí con los datos de keel-core.
+  const rows = [];
+  snsSqsConsumption(model).forEach((entry, index) => {
+    for (const received of [1, 2, 4]) {
+      const delay = entry.initialMs * entry.multiplier ** Math.max(received - 1, 0);
+      const capped = entry.maxDelayMs != null ? Math.min(delay, entry.maxDelayMs) : delay;
+      const seconds = Math.min(Math.max(Math.ceil(capped / 1000), 0), 43200);
+      rows.push(`    [InlineData(${index}, ${received}, ${seconds})]`);
+    }
+  });
+  return `    [Theory]
+${rows.join('\n')}
+    public void LaVisibilidadTrasUnFalloSigueLaCurvaDelDiseño(int subscription, int received, int expected) =>
+        Assert.Equal(expected, SnsSqsConsumption.RetryVisibilitySeconds(SnsSqsConsumption.Subscriptions[subscription], received));
+
+    [Fact]
+    public void ElContratoIncumplidoNoSeReintentaEnSqs()
+    {
+        Assert.False(SnsSqsConsumption.IsRetryable(new MessageContractViolation("x"), retriesNotFound: true));
+        Assert.True(SnsSqsConsumption.IsRetryable(new TimeoutException(), retriesNotFound: false));
     }`;
 }

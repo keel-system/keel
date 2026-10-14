@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { loadService } from 'keel-core';
-import { rabbitTopology } from 'keel-core/gen/messaging-plan';
+import { rabbitTopology, snsSqsConsumption } from 'keel-core/gen/messaging-plan';
 import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planService } from '../src/scaffold/index.js';
@@ -210,4 +210,38 @@ test('con Kafka: el consumo es el de keel-core (un grupo por suscripción) y el 
   const harness = content(files, '.IntegrationTests/Support/Messaging.cs');
   assert.ok(harness.includes('MarkChannels()') && harness.includes('DescribeConsumerGroupsAsync'));
   assert.match(content(files, '.IntegrationTests/StockReservationEvents.IntegrationTests.csproj'), /PackageReference Include="Confluent.Kafka"/);
+});
+
+// ─── SNS/SQS (incremento 9g) ─────────────────────────────────────────────────
+
+test('con SNS/SQS: messaging.yaml y snssqs.yaml son los de keel-nest, byte a byte, y la topología la siembra init-messaging.sh', () => {
+  const stack = { broker: 'snssqs', database: 'postgresql' };
+  for (const name of ['stock-reservation-events', 'metering-digest']) {
+    const ours = planService({ ...design(name), workspace: FIXTURES_DIR, stack }).files;
+    const nest = planNest({ ...design(name), workspace: FIXTURES_DIR, stack }).files;
+    for (const profile of ['local', 'develop', 'production', 'test']) {
+      for (const fragment of ['messaging', 'snssqs']) {
+        const file = `config/parameters/${profile}/${fragment}.yaml`;
+        assert.ok(content(ours, file), `${name}: ${file}`);
+        assert.equal(content(ours, file), content(nest, file), `${name}: ${file}`);
+      }
+    }
+    assert.equal(content(ours, 'rabbitmq.yaml'), undefined, 'sin RabbitMQ');
+    assert.match(content(ours, 'Directory.Packages.props'), /AWSSDK\.SimpleNotificationService" Version="4\.0\.100\.15"/);
+    assert.match(content(ours, 'Directory.Packages.props'), /AWSSDK\.SQS" Version="4\.0\.100\.14"/);
+    // El script de la topología es el neutral: crea las MISMAS colas que el de keel-nest.
+    const queuesOf = (files) => [...content(files, 'infra/init-messaging.sh').matchAll(/^create_queue(?:_with_dlq)? '([\w.-]+)'/gm)].map((match) => match[1]).sort();
+    assert.ok(queuesOf(ours).length > 0, `${name}: init-messaging.sh crea colas`);
+    assert.deepEqual(queuesOf(ours), queuesOf(nest), `${name}: las colas`);
+  }
+});
+
+test('con SNS/SQS: el consumo es el de keel-core (una cola por suscripción, su DLQ y su maxReceiveCount)', () => {
+  const generated = planService({ ...design('stock-reservation-events'), workspace: FIXTURES_DIR, stack: { broker: 'snssqs', database: 'postgresql' } });
+  const consumption = content(generated.files, '/SnsSqs/SnsSqsConsumption.cs');
+  for (const entry of snsSqsConsumption(generated.model)) {
+    assert.ok(consumption.includes(`new("${entry.subscription}", "${entry.queue}", ${entry.deadLetterQueue ? `"${entry.deadLetterQueue}"` : 'null'}, ${entry.retriesNotFound}, ${entry.maxReceive},`), entry.subscription);
+  }
+  const harness = content(generated.files, '.IntegrationTests/Support/Messaging.cs');
+  assert.ok(harness.includes('init-messaging.sh'), 'el arnés resiembra la topología al levantar el broker');
 });

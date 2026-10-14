@@ -5,7 +5,7 @@
 //
 // Por qué no está en `npm test`: necesita el SDK 10, red (NuGet restaura el proyecto), podman o docker, y minutos.
 //
-//   node packages/keel-dotnet/scripts/broker-check.js [--broker=rabbitmq,kafka] [--keep]
+//   node packages/keel-dotnet/scripts/broker-check.js [--broker=rabbitmq,kafka,snssqs] [--keep]
 //   npm run broker-check --workspace packages/keel-dotnet
 //
 // El sujeto es stock-reservation-events: outbox, y tres suscripciones Keel de la misma fuente que comparten cola, con
@@ -35,7 +35,7 @@ import { resolveRuntime } from '../../keel-nest/scripts/lib/database-container.j
 
 const DESIGN = 'stock-reservation-events';
 const brokerArg = process.argv.find((arg) => arg.startsWith('--broker='));
-const BROKERS = brokerArg ? brokerArg.slice('--broker='.length).split(',') : ['rabbitmq', 'kafka'];
+const BROKERS = brokerArg ? brokerArg.slice('--broker='.length).split(',') : ['rabbitmq', 'kafka', 'snssqs'];
 const keep = process.argv.includes('--keep');
 const isWindows = process.platform === 'win32';
 const results = [];
@@ -78,7 +78,8 @@ function dotnet(cwd, args) {
 
 async function checkBroker(broker) {
   const kafka = broker === 'kafka';
-  const label = kafka ? 'Kafka' : 'RabbitMQ';
+  const snssqs = broker === 'snssqs';
+  const label = { rabbitmq: 'RabbitMQ', kafka: 'Kafka', snssqs: 'SNS/SQS' }[broker];
   const stack = { database: 'postgresql', broker };
   const step = (name, ok, detail = '') => record(`${label}: ${name}`, ok, detail);
   console.log(`\n── ${label} ──`);
@@ -98,25 +99,31 @@ async function checkBroker(broker) {
 
   // ── Lo del agente, como sonda: lo único que cambia de un broker a otro es la conexión ─────────────
   const root = sln.root;
-  const dir = kafka ? 'Kafka' : 'RabbitMq';
-  const connection = kafka ? 'KafkaConnection' : 'RabbitConnection';
-  const publishCall = kafka
-    ? 'connection.Publish(destination, routingKey, payload, cancellationToken: cancellationToken)'
-    : 'connection.Publish(destination, routingKey, payload, eventType, cancellationToken: cancellationToken)';
+  const dir = { rabbitmq: 'RabbitMq', kafka: 'Kafka', snssqs: 'SnsSqs' }[broker];
+  const connection = { rabbitmq: 'RabbitConnection', kafka: 'KafkaConnection', snssqs: 'SnsSqsConnection' }[broker];
+  // SNS/SQS: no hay clave de mensaje; el tipo viaja como message attribute (sobre él filtran las suscripciones).
+  const publishCall = {
+    rabbitmq: 'connection.Publish(destination, routingKey, payload, eventType, cancellationToken: cancellationToken)',
+    kafka: 'connection.Publish(destination, routingKey, payload, cancellationToken: cancellationToken)',
+    snssqs: 'connection.Publish(destination, payload, new Dictionary<string, string> { ["eventType"] = eventType, ["routingKey"] = routingKey }, cancellationToken)'
+  }[broker];
   const bodyMember = kafka ? 'Value' : 'Body';
   const sub = model.subscriptions.find((candidate) => candidate.name === 'StockReserved');
-  // RabbitMQ consume de la COLA de la suscripción; Kafka, de la suscripción por su nombre (con su consumer group).
+  // RabbitMQ consume de la COLA de la suscripción; Kafka y SNS/SQS, de la suscripción por su nombre (con su consumer
+  // group o su cola propia).
   // En Kafka cada suscripción tiene su grupo y su listener: la sonda registra TODAS (un proyecto completo las tiene, y el
   // arnés espera a sus grupos), y cada consumidor actúa solo sobre la suya.
   const allSubscriptions = model.subscriptions.map((candidate) => `"${candidate.name}"`).join(', ');
   const consumeCall = kafka
     ? `foreach (var subscription in (string[])[${allSubscriptions}]) connection.Consume(subscription`
+    : snssqs
+    ? `connection.Consume("${sub.name}"`
     : `connection.Consume(settings.Subscriptions["${sub.name}"].Queue!`;
   const ownFilter = kafka ? `subscription != "${sub.name}" || envelope.Metadata.EventType != "${sub.name}"` : `envelope.Metadata.EventType != "${sub.name}"`;
-  const listenerParams = kafka ? `${connection} connection, IdempotencyGuard guard` : `${connection} connection, IdempotencyGuard guard, MessagingSettings settings`;
+  const listenerParams = broker === 'rabbitmq' ? `${connection} connection, IdempotencyGuard guard, MessagingSettings settings` : `${connection} connection, IdempotencyGuard guard`;
   const event = model.events[0];
   const channel = model.messaging.publishChannels[0];
-  const attempts = kafka ? kafkaListenerRetry(model).attempts : rabbitListenerRetry(model).attempts;
+  const attempts = { rabbitmq: () => rabbitListenerRetry(model).attempts, kafka: () => kafkaListenerRetry(model).attempts, snssqs: () => sub.retry?.maxAttempts ?? 1 }[broker]();
   const messagingDir = path.join(projectDir, sln.infrastructure.dir, 'Messaging');
 
   fs.writeFileSync(
@@ -220,12 +227,29 @@ async function checkBroker(broker) {
   const flowsDir = path.join(projectDir, sln.integrationTests.dir);
   // Lo propio de cada broker. RabbitMQ: el tipo nativo y `mandatory` (lo que no tiene cola no se da por publicado).
   // Kafka: la clave del registro es la routing key, y el descarte conserva la clave y lleva los headers de Spring Kafka.
-  const publishedShape = kafka
-    ? `Assert.Equal(${cs(routingKey)}, message.RoutingKey);`
-    : `Assert.Equal(${cs(routingKey)}, message.RoutingKey);
-          Assert.Equal(${cs(event.name)}, message.Properties.GetProperty("type").GetString());`;
+  // SNS/SQS: no hay clave de mensaje (el tipo viaja como message attribute, y si no casara con el filtro la cola de
+  // arnés no lo recibiría), y una fila cuyo topic no existe no se da por publicada.
+  const publishedShape = {
+    rabbitmq: `Assert.Equal(${cs(routingKey)}, message.RoutingKey);
+          Assert.Equal(${cs(event.name)}, message.Properties.GetProperty("type").GetString());`,
+    kafka: `Assert.Equal(${cs(routingKey)}, message.RoutingKey);`,
+    snssqs: `Assert.Equal(${cs(event.name)}, message.Payload!.Value.GetProperty("metadata").GetProperty("eventType").GetString());`
+  }[broker];
   const mandatoryCase = kafka
     ? ''
+    : snssqs
+    ? `
+      [Scenario("FL-BRK-002-B: una fila cuyo topic no existe no se da por publicada (la conexión no lo crea)")]
+      public async Task SinTopicNoSePublica()
+      {
+          var id = BrokerProbe.Id();
+          Db($"INSERT INTO outbox_event (id, destination, routing_key, event_type, payload, created_at, attempts) VALUES ('{id}', 'keel-sin-topic', '${routingKey}', '${event.name}', '{{}}', now(), 0)");
+          // Hasta que el relay la intente o la dé por publicada: lo segundo es el fallo que se mide, y tiene que decirlo.
+          await Eventually(() => Task.FromResult(BrokerProbe.Count($"SELECT COUNT(*) FROM outbox_event WHERE id = '{id}' AND (attempts >= 1 OR published_at IS NOT NULL)") == 1), TimeSpan.FromSeconds(20), "el relay no lo intentó");
+          Assert.Equal(1, BrokerProbe.Count($"SELECT COUNT(*) FROM outbox_event WHERE id = '{id}' AND published_at IS NULL"));
+          Db($"DELETE FROM outbox_event WHERE id = '{id}'");
+      }
+  `
     : `
       [Scenario("FL-BRK-002-B: lo que no tiene cola (mandatory) no se da por publicado")]
       public async Task SinColaNoSePublica()
@@ -253,8 +277,8 @@ async function checkBroker(broker) {
           Assert.Equal("rechazo de negocio de la sonda", dead.Properties.GetProperty("kafka_dlt-exception-message").GetString());
       }`
     : '';
-  // Con Kafka el arranque tras levantar el broker suma el reparto del grupo: más margen.
-  const recoverySeconds = kafka ? 90 : 30;
+  // Con Kafka el arranque tras levantar el broker suma el reparto del grupo, y con SNS/SQS la resiembra: más margen.
+  const recoverySeconds = broker === 'rabbitmq' ? 30 : 90;
   fs.writeFileSync(
     path.join(flowsDir, 'BrokerProbeFlows.cs'),
     `namespace ${sln.integrationTests.name};
@@ -431,6 +455,12 @@ async function checkBroker(broker) {
   const up = bash(projectDir, 'infra/up.sh');
   if (!step('bash infra/up.sh (PostgreSQL y el broker)', up.status === 0, up.status === 0 ? '' : up.output.slice(-1200))) return;
   try {
+    // La topología de SNS/SQS no la crea la aplicación: la siembra init-messaging.sh, que en una corrida ejecuta el
+    // agente de infraestructura tras levantar la infra.
+    if (fs.existsSync(path.join(projectDir, 'infra', 'init-messaging.sh'))) {
+      const seed = bash(projectDir, 'infra/init-messaging.sh');
+      step('bash infra/init-messaging.sh', seed.status === 0, seed.status === 0 ? '' : seed.output.slice(-1500));
+    }
     const validate = bash(projectDir, 'infra/validate-infra.sh');
     step('bash infra/validate-infra.sh (el broker incluido)', validate.status === 0, validate.status === 0 ? '' : validate.output.slice(-1200));
 
@@ -456,7 +486,7 @@ async function checkBroker(broker) {
     step('score: el humo del arnés (con SMOKE-6, el broker y la conexión) en verde y el script con 0', measured, measured ? '' : lines.slice(-2500));
 
     // Falsado: con el rechazo de negocio tratado como reintentable, el caso que afirma «sin reintento» sale FALLO, y solo él.
-    const topologyFile = path.join(messagingDir, dir, kafka ? 'KafkaConsumption.cs' : 'RabbitTopology.cs');
+    const topologyFile = path.join(messagingDir, dir, { rabbitmq: 'RabbitTopology.cs', kafka: 'KafkaConsumption.cs', snssqs: 'SnsSqsConsumption.cs' }[broker]);
     const topology = fs.readFileSync(topologyFile, 'utf8');
     const weakened = topology.replace('return error is not DomainException and not MessageContractViolation;', 'return error is not MessageContractViolation;');
     if (step('falsado: el no-reintento del rechazo de negocio se puede quitar en lo emitido', weakened !== topology)) {

@@ -258,9 +258,12 @@ variables de entorno y tablas `outbox_event` y `processed_event`):
   **Nunca publiques desde un handler** ni escribas en `outbox_event`.
 - **Lo que entra**: cada suscripción tiene su mensaje (`Messaging/Subscriptions/<Evento>Message.cs`) con `FromWire` y
   `RequireContract`, y su comentario dice el orden del guard (`IdempotencyGuard`) y el mapeo al comando.
-- **Lo del broker** —el dispatcher del outbox o los publishers best-effort, y los listeners, uno por COLA— lo escribe el
-  agente con la skill del broker (`keel-dotnet-rabbitmq`) y lo registra en UN solo archivo,
-  `Messaging/BrokerBindings.cs`. La conexión, la topología, el reintento y la DLQ son de build.
+- **Lo del broker** —el dispatcher del outbox o los publishers best-effort, y los listeners: uno por COLA con
+  RabbitMQ, uno por SUSCRIPCIÓN con Kafka y con SNS/SQS— lo escribe el agente con la skill del broker
+  (`keel-dotnet-rabbitmq`, `keel-dotnet-kafka` o `keel-dotnet-snssqs`, la que esté instalada) y lo registra en UN solo
+  archivo, `Messaging/BrokerBindings.cs`. La conexión, el reintento y el descarte son de build, y la topología no es
+  nunca del agente: la de RabbitMQ la declara build, los topics de Kafka los crea el broker en `infra/` (la plataforma
+  fuera) y la de SNS/SQS la siembra `infra/init-messaging.sh`.
 
 El handler de una operación disparada por un mensaje es un handler más: recibe su comando ya mapeado, y la
 deduplicación, la reentrega y el descarte no son cosa suya.

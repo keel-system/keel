@@ -19,7 +19,7 @@ import { PACKAGES, TOOLS } from '../lib/dotnet-stack.js';
 import { solution } from './render.js';
 import { usesRelational } from './persistence.js';
 import { usesJwt } from './security.js';
-import { usesKafka, usesRabbitMq } from './messaging.js';
+import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 
 /** Los paquetes que usa ESTA solución: los del esqueleto y los de las capas que el diseño declara. */
 export function packagesFor(model) {
@@ -39,7 +39,9 @@ export function infrastructurePackages(model) {
     // La mensajería sobre RabbitMQ: el cliente oficial (sin MassTransit, que pasó a licencia comercial).
     ...(usesRabbitMq(model) ? ['RabbitMQ.Client'] : []),
     // La mensajería sobre Kafka: el cliente de Confluent (librdkafka). También lo usa el arnés, para esperar a los grupos.
-    ...(usesKafka(model) ? ['Confluent.Kafka'] : [])
+    ...(usesKafka(model) ? ['Confluent.Kafka'] : []),
+    // La mensajería sobre SNS/SQS: el SDK oficial de AWS (los dos clientes; AWSSDK.Core lo resuelve NuGet).
+    ...(usesSnsSqs(model) ? ['AWSSDK.SimpleNotificationService', 'AWSSDK.SQS'] : [])
   ];
 }
 

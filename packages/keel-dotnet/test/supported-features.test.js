@@ -25,7 +25,7 @@ test('la persistencia relacional se genera (incremento 6); la documental se rech
   assert.match(document.errors[0], /model: document .*incremento 12/);
 });
 
-test('la mensajería se genera sobre persistencia relacional con RabbitMQ y Kafka (incremento 9); sin persistencia o con SNS/SQS se rechaza', () => {
+test('la mensajería se genera sobre persistencia relacional con los tres brokers (incremento 9); sin persistencia se rechaza', () => {
   const layers = { ...layersWith('domain', 'use-cases', 'messaging'), persistence: { default: { model: 'relational' } } };
   assert.deepEqual(checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging'), layers).errors, []);
   const bare = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'messaging'), layersWith('domain', 'use-cases', 'messaging'));
@@ -35,12 +35,8 @@ test('la mensajería se genera sobre persistencia relacional con RabbitMQ y Kafk
   const identity = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging'), resolved);
   assert.equal(identity.errors.length, 1);
   assert.match(identity.errors[0], /Paid\.identity\.resolvedBy .*incremento 13/);
-  for (const broker of ['rabbitmq', 'kafka']) assert.deepEqual(checkSupportedStack({ broker }).errors, [], broker);
-  for (const broker of ['snssqs']) {
-    const { errors } = checkSupportedStack({ broker });
-    assert.equal(errors.length, 1, broker);
-    assert.match(errors[0], new RegExp(`broker: ${broker} .*rabbitmq`));
-  }
+  for (const broker of ['rabbitmq', 'kafka', 'snssqs']) assert.deepEqual(checkSupportedStack({ broker }).errors, [], broker);
+  assert.match(checkSupportedStack({ broker: 'pulsar' }).errors[0], /broker: pulsar .*rabbitmq/);
 });
 
 test('el motor relacional: PostgreSQL entra; cualquier otro se rechaza hasta que una red lo mida', () => {

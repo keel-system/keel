@@ -71,6 +71,11 @@ export function usesKafka(model) {
   return usesMessaging(model) && model.stack?.broker === 'kafka';
 }
 
+/** ¿El stack es SNS/SQS (incremento 9g)? */
+export function usesSnsSqs(model) {
+  return usesMessaging(model) && model.stack?.broker === 'snssqs';
+}
+
 export const bridgeClass = (model) => `${model.service.rootNamespace}DomainEventBridge`;
 export const publisherPort = (event) => `I${event.publisherClass}`;
 export const publisherStub = (event) => `${event.publisherClass}Stub`;
@@ -778,6 +783,7 @@ ${subscriptions.map(subscriptionRead).join('\n')}
 function bindingsBody(model) {
   const outbox = usesDotnetOutbox(model);
   const kafka = model.stack?.broker === 'kafka';
+  const perSubscription = kafka || model.stack?.broker === 'snssqs';
   const ports = [];
   if (outbox) ports.push('IOutboxDispatcher (el envío de cada fila del outbox al broker)');
   if (usesBridge(model) && !outbox) for (const event of model.events) ports.push(`${publisherPort(event)} (best-effort)`);
@@ -801,8 +807,10 @@ public static class BrokerBindings
     }
 
     /// <summary>
-    /// Los listeners de las suscripciones, ${kafka ? 'UNO POR SUSCRIPCIÓN' : 'UNO POR COLA y no uno por suscripción'}${listeners.length > 0 ? `:\n${listeners.map((line) => `    ///   · ${line}`).join('\n')}` : ' (este diseño no consume nada)'}.
-${kafka
+    /// Los listeners de las suscripciones, ${perSubscription ? 'UNO POR SUSCRIPCIÓN' : 'UNO POR COLA y no uno por suscripción'}${listeners.length > 0 ? `:\n${listeners.map((line) => `    ///   · ${line}`).join('\n')}` : ' (este diseño no consume nada)'}.
+${model.stack?.broker === 'snssqs'
+  ? `    /// Cada suscripción tiene su cola propia, suscrita al topic de la fuente con filtro por su tipo.`
+  : kafka
   ? `    /// Cada suscripción tiene su consumer group, que recibe el topic entero: dos de la misma fuente leen el mismo topic y
     /// cada una descarta lo que no es suyo por el tipo del mensaje.`
   : `    /// Dos consumidores de la misma cola compiten y cada mensaje llega a uno solo: el de una cola compartida enruta por
@@ -823,6 +831,7 @@ function registrationFile(model) {
   const processed = usesProcessedEvents(model);
   const rabbit = usesRabbitMq(model);
   const kafka = usesKafka(model);
+  const snssqs = usesSnsSqs(model);
   const usings = ['Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.DependencyInjection.Extensions', configNamespace(model)];
   const lines = ['        services.AddDomainEvents(settings);'];
   if (outbox) {
@@ -855,13 +864,21 @@ function registrationFile(model) {
       '        services.AddHostedService(provider => provider.GetRequiredService<KafkaConnection>());'
     );
   }
+  if (snssqs) {
+    usings.push(namespaceOf(model, 'snssqs'));
+    lines.push(
+      '        services.AddSingleton(SnsSqsSettings.From(configuration));',
+      '        services.AddSingleton<SnsSqsConnection>();',
+      '        services.AddHostedService(provider => provider.GetRequiredService<SnsSqsConnection>());'
+    );
+  }
   const domainEvents = [];
   if (bridge) {
     domainEvents.push(`        services.AddScoped<${bridgeClass(model)}>();`);
     if (!outbox) for (const event of model.events) domainEvents.push(`        services.TryAddSingleton<${publisherPort(event)}, ${publisherStub(event)}>();`);
   }
   const body = `/// <summary>
-/// La mensajería en el contenedor: la configuración del perfil, el puente de eventos${outbox ? ', el outbox con su relay' : ''}${processed ? ', el registro de mensajes procesados' : ''}${rabbit ? ' y la conexión con RabbitMQ' : ''}${kafka ? ' y la conexión con Kafka' : ''}.
+/// La mensajería en el contenedor: la configuración del perfil, el puente de eventos${outbox ? ', el outbox con su relay' : ''}${processed ? ', el registro de mensajes procesados' : ''}${rabbit ? ' y la conexión con RabbitMQ' : ''}${kafka ? ' y la conexión con Kafka' : ''}${snssqs ? ' y la conexión con SNS/SQS' : ''}.
 /// El ÚNICO sitio que la registra.
 /// </summary>
 /// <remarks>

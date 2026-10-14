@@ -20,7 +20,9 @@
 import {
   ENDPOINTS,
   PROBE_BODY_FILE,
+  READ_BATCH_LIMIT,
   RECORD_FORMAT,
+  SQS_SWEEP_VISIBILITY,
   UNKNOWN_TOPIC,
   deliverParts,
   deliverShell,
@@ -30,7 +32,9 @@ import {
   purgeParts,
   rabbitProbeBody,
   rabbitPublishBody,
+  prefix,
   readParts,
+  releaseParts,
   renderParts,
   shellQuote,
   spliceBody
@@ -38,13 +42,14 @@ import {
 import { BROKERS, KAFKA_PRODUCER_TIMEOUTS, brokerContainer, devtoolsContainer } from 'keel-core/gen/infra-catalog';
 import { deadLetterDestination, subscriptionDestination } from 'keel-core/gen';
 import { OUTBOX_RELAY, parameterValue } from 'keel-core/gen/messaging-stores';
-import { groupEnv, kafkaConsumption, publishedChannels, topicEnv } from 'keel-core/gen/messaging-plan';
+import { groupEnv, kafkaConsumption, publishedChannels, queueEnv, snsSqsConsumption, topicEnv } from 'keel-core/gen/messaging-plan';
+import { harnessQueueName } from 'keel-core/gen/messaging-provisioning';
 import { csFile, csMember, csString } from './render.js';
-import { usesDotnetOutbox, usesKafka, usesRabbitMq } from './messaging.js';
+import { usesDotnetOutbox, usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 
 /** ¿Lleva el arnés la mensajería? Con los brokers que keel-dotnet genera. */
 export function usesMessagingHarness(model) {
-  return usesRabbitMq(model) || usesKafka(model);
+  return usesRabbitMq(model) || usesKafka(model) || usesSnsSqs(model);
 }
 
 /** El nombre con el que la conexión del servicio se presenta al broker: lo busca el arnés entre sus conexiones. */
@@ -58,15 +63,16 @@ const cs = (parts) => renderParts(parts, csString);
 export function messagingHarnessCs(model, namespace) {
   if (!usesMessagingHarness(model)) return null;
   const kafka = usesKafka(model);
+  const snssqs = usesSnsSqs(model);
   const body = `${brokerMessageBody()}
 
-// ── Mensajería (${kafka ? 'Kafka' : 'RabbitMQ'}) ────────────────────────────────────────────────────────────────────────
+// ── Mensajería (${kafka ? 'Kafka' : snssqs ? 'SNS/SQS' : 'RabbitMQ'}) ────────────────────────────────────────────────────────────────────────
 //
 // Los comandos salen de keel-core/gen/broker-probes.js: los mismos que usan los arneses de keel-spring y keel-nest y los
 // que ejecuta broker-check. Viajan por el contenedor devtools, que ve el broker por la red del compose.
 ${flowTestBody(model)}
 
-${kafka ? kafkaHarnessBody(model) : rabbitHarnessBody(model)}`;
+${kafka ? kafkaHarnessBody(model) : snssqs ? snsSqsHarnessBody(model) : rabbitHarnessBody(model)}`;
   const usings = ['System.Globalization', 'System.Text', 'System.Text.Json'];
   if (kafka) usings.push('Confluent.Kafka', 'Confluent.Kafka.Admin');
   return csFile({ namespace, usings, body });
@@ -626,6 +632,239 @@ ${commonPlumbing(model, broker)}
         }
     }
 }`;
+}
+
+// ── SNS/SQS ──────────────────────────────────────────────────────────────────────────────────────
+//
+// El servicio publica en UN topic (messaging.publishing.destination) con el tipo como message attribute `eventType`; de
+// un topic no se lee, así que el aprovisionamiento cuelga de él una COLA DE ARNÉS por canal, llamada como el canal y
+// filtrada por sus eventos. Cada suscripción consume de su cola propia, suscrita al topic de la fuente, y su DLQ cuelga
+// de ella por RedrivePolicy. LocalStack sirve la topología de MEMORIA: levantar el broker exige resembrarla
+// (infra/init-messaging.sh) y confirmar que la suscripción entrega antes de seguir.
+
+function snsSqsHarnessBody(model) {
+  const broker = BROKERS.snssqs;
+  const subscriptions = model.subscriptions ?? [];
+  const consumption = snsSqsConsumption(model);
+  const published = publishedChannels(model).map((entry) => entry.channel);
+  const outbox = usesDotnetOutbox(model);
+  const base = expr('QueueUrl');
+  const read = readParts('snssqs', { destination: expr('queue'), count: expr('size.ToString(CultureInfo.InvariantCulture)'), base });
+  const sweep = readParts('snssqs', { destination: expr('queue'), count: expr('size.ToString(CultureInfo.InvariantCulture)'), base, hideSeconds: SQS_SWEEP_VISIBILITY });
+  const release = releaseParts('snssqs', { destination: expr('queue'), receiptHandle: expr('handle'), base });
+  const purge = purgeParts('snssqs', { destination: expr('queue'), base });
+  const remove = ['sqs', 'delete-message', '--queue-url', expr('QueueUrl + queue'), '--receipt-handle', expr('handle')];
+  const deliver = deliverParts('snssqs', { destination: expr('topic'), bodyFile: expr('bodyFile'), attrsFile: expr('attrsFile'), base: expr('TopicArn'), withAttributes: true });
+  const deliverPlain = deliverParts('snssqs', { destination: expr('topic'), bodyFile: expr('bodyFile'), base: expr('TopicArn') });
+  // La sonda de la resiembra: el primer evento publicado y la cola de arnés de SU canal (la que lo admite).
+  const probe = (model.events ?? [])[0];
+  const probeChannel = probe ? Object.entries(model.messaging?.eventTypesByChannel ?? {}).find(([, events]) => (events ?? []).includes(probe.name))?.[0] : null;
+  return `/// <summary>La fontanería de la mensajería del arnés: el contenedor devtools, LocalStack, las colas y los topics del diseño.</summary>
+internal static class BrokerHarness
+{
+    private const string QueueUrl = ${csString(ENDPOINTS.snssqs.queueUrlPrefix)};
+    private const string TopicArn = ${csString(ENDPOINTS.snssqs.topicArnPrefix)};
+    private static readonly string[] Aws = [${prefix('snssqs').map(csString).join(', ')}];
+    /// <summary>SQS no devuelve más de diez mensajes por llamada.</summary>
+    private const int ReadBatchLimit = ${READ_BATCH_LIMIT.snssqs};
+
+    /// <summary>Canal → la cola de ARNÉS de la que se lee lo publicado (init-messaging.sh: se llama como el canal).</summary>
+    private static readonly IReadOnlyDictionary<string, string> HarnessQueueOf = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+${published.map((channel) => `        [${csString(channel)}] = ${csString(harnessQueueName(channel))},`).join('\n')}
+    };
+
+    /// <summary>Suscripción → su cola propia (la del perfil: la variable si está).</summary>
+    public static readonly IReadOnlyDictionary<string, string> QueueOf = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+${consumption.map((entry, index) => `        [${csString(entry.subscription)}] = Environment.GetEnvironmentVariable(${csString(queueEnv(subscriptions[index]))}) ?? ${csString(entry.queue)},`).join('\n')}
+    };
+
+    /// <summary>Suscripción → su DLQ (las que declaran onFailure.deadLetter).</summary>
+    public static readonly IReadOnlyDictionary<string, string> DeadLetterOf = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+${consumption.filter((entry) => entry.deadLetterQueue).map((entry) => `        [${csString(entry.subscription)}] = ${csString(entry.deadLetterQueue)},`).join('\n')}
+    };
+
+${commonPlumbing(model, broker)}
+    private static string AwsCli(IEnumerable<string> arguments) => Devtools([.. Aws, .. arguments]);
+
+    public static async Task<IReadOnlyList<BrokerMessage>> PublishedAsync(string channel, int count)
+    {
+        RequirePublished(channel);
+        await AwaitOutboxDrained(channel);
+        return ReadQueue(HarnessQueueOf[channel], count);
+    }
+
+    public static IReadOnlyList<BrokerMessage> DeadLetters(string subscription, int count) => ReadQueue(RequireDeadLetter(subscription), count);
+
+    public static async Task PurgeAsync(string channelOrSubscription)
+    {
+        var queue = HarnessQueueOf.GetValueOrDefault(channelOrSubscription) ?? QueueOf.GetValueOrDefault(channelOrSubscription) ?? DeadLetterOf.GetValueOrDefault(channelOrSubscription) ?? channelOrSubscription;
+        await AwaitOutboxDrained(channelOrSubscription);
+        // PurgeQueue está limitada a una vez cada 60 s por cola en AWS real; LocalStack no aplica esa cuota.
+        AwsCli([${cs(purge)}]);
+    }
+
+    /// <summary>La lista Messages de una respuesta de receive-message; una cola agotada puede no devolver ni un {}.</summary>
+    private static List<JsonElement> Received(string raw)
+    {
+        if (raw.Trim().Length == 0) return [];
+        using var document = JsonDocument.Parse(raw);
+        return document.RootElement.TryGetProperty("Messages", out var messages) ? [.. messages.EnumerateArray().Select(message => message.Clone())] : [];
+    }
+
+    private static string? Text(JsonElement message, string name) => message.TryGetProperty(name, out var value) ? value.GetString() : null;
+
+    /// <summary>
+    /// Lee una cola sin consumirla (hasta <paramref name="count"/>). SQS da como mucho diez por llamada y, con la lectura en
+    /// peek, lo devuelto vuelve a estar visible al instante: pedir más de diez es un BARRIDO que oculta lo leído para
+    /// avanzar y lo SUELTA al final, así que la cola queda como estaba. Se deduplica por MessageId, que es estable entre
+    /// relecturas del mismo mensaje — y NO por el cuerpo: la reentrega de un escenario de idempotencia comparte cuerpo con
+    /// la primera entrega.
+    /// </summary>
+    private static List<BrokerMessage> ReadQueue(string queue, int count)
+    {
+        var wanted = Math.Max(count, 1);
+        var sweeping = wanted > ReadBatchLimit;
+        var seen = new Dictionary<string, BrokerMessage>(StringComparer.Ordinal);
+        var hidden = new List<string>();
+        // Cota de llamadas: una cola que solo puede repescar lo ya visto no deja el bucle sondeando para siempre.
+        var maxAttempts = (wanted + ReadBatchLimit - 1) / ReadBatchLimit + 5;
+        try
+        {
+            for (var attempt = 0; attempt < maxAttempts && seen.Count < wanted; attempt++)
+            {
+                var size = Math.Min(wanted - seen.Count, ReadBatchLimit);
+                var messages = Received(sweeping ? AwsCli([${cs(sweep)}]) : AwsCli([${cs(read)}]));
+                if (messages.Count == 0) break;
+                foreach (var message in messages)
+                {
+                    if (sweeping && Text(message, "ReceiptHandle") is { } handle) hidden.Add(handle);
+                    var id = Text(message, "MessageId") ?? Text(message, "ReceiptHandle") ?? seen.Count.ToString(CultureInfo.InvariantCulture);
+                    seen.TryAdd(id, new BrokerMessage("", default, Text(message, "Body") ?? ""));
+                }
+                // Barriendo, un lote corto no prueba nada (lo devuelto quedó oculto); sin barrer, sí es el final.
+                if (!sweeping && messages.Count < size) break;
+            }
+        }
+        catch (InvalidOperationException) when (brokerStopped)
+        {
+            // Con el broker parado POR EL ESCENARIO, «no hay mensajes» es la lectura correcta.
+            return [];
+        }
+        finally
+        {
+            foreach (var handle in hidden)
+            {
+                try
+                {
+                    AwsCli([${cs(release)}]);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Soltar es de mejor esfuerzo: el plazo de ocultación vence solo.
+                }
+            }
+        }
+        return [.. seen.Values];
+    }
+
+    /// <summary>
+    /// Publica en el TOPIC de una fuente —no en la cola—, que es como llega un mensaje de verdad: por la suscripción
+    /// SNS→SQS con su filtro por <c>eventType</c>. Sin ese header, el filtro lo deja fuera de la cola sin ningún error. La
+    /// clave no viaja: SNS no tiene clave de mensaje.
+    /// </summary>
+    public static void Deliver(string topic, string key, string body, IReadOnlyDictionary<string, string> headers)
+    {
+        _ = key;
+        WithBodyFile(body, bodyFile =>
+        {
+            if (headers.Count == 0)
+            {
+                return AwsCli([${cs(deliverPlain)}]);
+            }
+            var attributes = headers.ToDictionary(pair => pair.Key, pair => new Dictionary<string, string> { ["DataType"] = "String", ["StringValue"] = pair.Value });
+            return WithBodyFile(JsonSerializer.Serialize(attributes), attrsFile => AwsCli([${cs(deliver)}]));
+        });
+    }
+
+    /// <summary>Al abrir cada flujo: el broker arriba (con su topología resembrada si un flujo anterior lo dejó parado).</summary>
+    public static async Task PrepareAsync()
+    {
+        if (!Accepts()) await StartAsync();
+        brokerStopped = false;
+    }
+
+    /// <summary>
+    /// Tras levantar LocalStack, que sirve la topología de MEMORIA: resembrarla (el mismo script del arranque, idempotente)
+    /// y confirmar que entrega.${outbox ? ` Con el relay del outbox CONGELADO: si publicara en el hueco entre el topic
+    /// recreado y su suscripción, SNS aceptaría el mensaje y lo descartaría sin error. El servidor es otro proceso, así que
+    /// no se le pausa: se aparcan sus filas pendientes en la base (next_attempt_at en el futuro, que el reclamo respeta) y se
+    /// devuelven al terminar. Se aparcan dos veces, con una espera entre medias: una fila que el relay ya tenía reclamada
+    /// vuelve con su backoff cuando su intento falla (el topic aún no existe), y la segunda pasada la recoge.` : ''}
+    /// </summary>
+    public static async Task AwaitServerConnectedAsync()
+    {${outbox ? `
+        ParkOutbox();
+        await Task.Delay(TimeSpan.FromSeconds(4));
+        ParkOutbox();` : ''}
+        try
+        {
+            Harness.Run(Harness.BashExecutable(), ["infra/init-messaging.sh"], "La topología no quedó sembrada tras levantar el broker, así que el escenario siguiente fallará por «destino inexistente» y no por lo que prueba.");${probe && probeChannel ? `
+            await AwaitTopologyWired();` : ''}
+        }
+        finally
+        {${outbox ? `
+            UnparkOutbox();` : ''}
+        }
+    }
+${outbox ? `
+    /// <summary>La marca de las filas aparcadas: una fecha que ningún backoff alcanza.</summary>
+    private const string Parked = "2999-01-01 00:00:00+00";
+
+    private static void ParkOutbox() =>
+        Harness.Db($"UPDATE outbox_event SET next_attempt_at = '{Parked}' WHERE published_at IS NULL AND attempts < {MaxAttempts}");
+
+    private static void UnparkOutbox() =>
+        Harness.Db($"UPDATE outbox_event SET next_attempt_at = NULL WHERE next_attempt_at = '{Parked}'");
+` : ''}${probe && probeChannel ? `
+    private const string TopologyProbeQueue = ${csString(harnessQueueName(probeChannel))};
+    private static readonly string TopologyProbeTopic = Environment.GetEnvironmentVariable("MESSAGING_DESTINATION") ?? ${csString(model.messaging?.destinationDefault ?? '')};
+
+    /// <summary>
+    /// Confirma que la suscripción SNS→SQS resembrada ENTREGA, no solo que existe: SNS acepta un publish contra un topic
+    /// recién creado aunque su suscripción aún no esté lista, y sin suscriptor el mensaje se descarta sin error. Publica
+    /// una sonda y la espera en la cola de arnés de su canal (y la borra); una sonda perdida no es un fallo, es la señal de
+    /// reintentar.
+    /// </summary>
+    private static async Task AwaitTopologyWired()
+    {
+        var deadline = DateTime.UtcNow + BrokerTimeout;
+        while (true)
+        {
+            var probeId = $"keel-topology-probe-{Guid.NewGuid():N}";
+            Deliver(TopologyProbeTopic, probeId, JsonSerializer.Serialize(new { metadata = new { eventId = probeId, eventType = ${csString(probe.name)} }, data = new { } }), new Dictionary<string, string> { ["eventType"] = ${csString(probe.name)} });
+            var attemptDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (DateTime.UtcNow < attemptDeadline)
+            {
+                var queue = TopologyProbeQueue;
+                var found = Received(AwsCli(["sqs", "receive-message", "--queue-url", QueueUrl + queue, "--max-number-of-messages", "10", "--visibility-timeout", "0"]))
+                    .FirstOrDefault(message => (Text(message, "Body") ?? "").Contains(probeId, StringComparison.Ordinal));
+                if (found.ValueKind == JsonValueKind.Object && Text(found, "ReceiptHandle") is { } handle)
+                {
+                    AwsCli([${cs(remove)}]);
+                    return;
+                }
+                await Task.Delay(200);
+            }
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new InvalidOperationException($"La suscripción SNS→SQS de '{TopologyProbeTopic}' → '{TopologyProbeQueue}' no entregó la sonda tras resembrar la topología");
+            }
+        }
+    }
+` : ''}}`;
 }
 
 function deliverMethod(sub) {

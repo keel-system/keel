@@ -79,16 +79,18 @@ const PROBES = ['DomainProbes', 'RestProbes'];
 // Variantes derivadas en memoria de una fixture real, para lo que ninguna declara. Cada una cambia el
 // nombre del servicio, que es el namespace raíz: dos variantes de la misma fixture no pueden chocar.
 const DERIVED = [
-  // La mensajería sobre KAFKA (incremento 9f): las fixtures con mensajería compilan sobre RabbitMQ; estas dos, con outbox
-  // y best-effort, compilan además la conexión, el consumo y el arnés de Kafka.
-  ...['stock-reservation-events', 'metering-digest'].map((from) => ({
-    name: `${from}-kafka`,
-    from,
-    broker: 'kafka',
-    mutate: (manifest, layers, name) => {
-      manifest.service.name = name;
-    }
-  })),
+  // La mensajería sobre KAFKA (incremento 9f) y sobre SNS/SQS (9g): las fixtures con mensajería compilan sobre RabbitMQ;
+  // estas dos, con outbox y best-effort, compilan además la conexión, el consumo y el arnés de cada uno.
+  ...['kafka', 'snssqs'].flatMap((broker) =>
+    ['stock-reservation-events', 'metering-digest'].map((from) => ({
+      name: `${from}-${broker}`,
+      from,
+      broker,
+      mutate: (manifest, layers, name) => {
+        manifest.service.name = name;
+      }
+    }))
+  ),
   {
     name: 'inspection-reports-reject',
     from: 'inspection-reports',

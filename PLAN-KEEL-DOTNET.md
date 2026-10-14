@@ -943,6 +943,29 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       - `--keep` había quedado fuera de la función por broker al convertir el script.
     - **Medido:** `npm test` 360/360; `broker-check` **44/44** (22 por broker, los dos falsados); `cs-check` 15/15 con dos
       variantes con Kafka (`stock-reservation-events-kafka` y `metering-digest-kafka`): 114 ensamblados.
+  - **9g, SNS/SQS (hecho, 2026-10-14).**
+    - **9g-a, lo neutral** (`aabb112`): `snsSqsConsumption`, los plazos de la conexión y `snssqs.yaml` pasan de keel-nest a
+      `keel-core/gen/messaging-plan.js`; keel-nest idéntico byte a byte.
+    - **La conexión** (`src/scaffold/snssqs.js`) sobre el **SDK oficial de AWS v4** (`AWSSDK.SimpleNotificationService`
+      4.0.100.15 y `AWSSDK.SQS` 4.0.100.14, Apache-2.0; `AWSSDK.Core` lo resuelve NuGet): `SnsSqsConsumption` (por
+      suscripción, su cola, su DLQ y su `maxReceiveCount`, los mismos que siembra `init-messaging.sh`), `SnsSqsSettings`
+      (las claves `aws:*` de keel-spring) y `SnsSqsConnection`: publica con el tipo como message attribute `eventType` y
+      resuelve el ARN LISTANDO y exigiendo un suscriptor confirmado —nunca crea el topic—; un sondeo largo por
+      suscripción que borra al terminar bien, alarga la VISIBILIDAD con la curva del diseño lo transitorio y lleva a la
+      DLQ lo no reintentable. Arranca sin broker. `infra/init-messaging.sh` es el neutral de
+      `keel-core/gen/messaging-provisioning.js`, con los textos de keel-dotnet.
+    - **El arnés**: un `BrokerHarness` más, con la API de los otros dos: lectura en barrido que suelta lo leído, purga,
+      entrega al TOPIC con el `eventType` como atributo (archivo de cuerpo y de atributos por llamada), y al levantar el
+      broker resiembra con `init-messaging.sh` y espera a que una sonda atraviese la suscripción. El abandono aparca el
+      outbox por SQL mientras dura (LocalStack no tiene un envío en vuelo que esperar, pero el relay sí reintenta).
+    - **La skill** `keel-dotnet-snssqs` (con listeners y diagnóstico), atada a lo emitido por `generator-docs.test.js`;
+      `mapping.md` § messaging nombra las tres.
+    - **`broker-check` corre con los tres brokers.** Con SNS/SQS, doce flujos: los de RabbitMQ con `FL-BRK-002-B`
+      cambiado por «una fila cuyo topic no existe no se da por publicada», y los dos falsados. **23/23** a la primera.
+    - **Medido:** `npm test` 363/363 (keel-core 1214, keel-nest 798); `broker-check` **67/67** con los tres brokers (22 RabbitMQ, 22 Kafka, 23 SNS/SQS); `cs-check` 15/15 (126 ensamblados, 2018 pruebas) con
+      dos variantes más (`stock-reservation-events-snssqs` y `metering-digest-snssqs`).
+- **Inc. 9 — mensajería cerrada (2026-10-14)**: RabbitMQ con corrida, Kafka y SNS/SQS medidos con `broker-check`. La
+  corrida de Kafka o de SNS/SQS queda como control opcional. Siguiente: el incremento 10.
 
 ## 5. Riesgos conocidos
 

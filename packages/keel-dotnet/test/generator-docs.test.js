@@ -129,7 +129,8 @@ const SKILL_SUBJECTS = {
   'keel-dotnet-cognito': { fixtures: ['profile-directory', 'asset-vault'], stack: { auth: 'cognito' } },
   // Con outbox y best-effort: la skill cita las piezas de los dos.
   'keel-dotnet-rabbitmq': { fixtures: ['stock-reservation-events', 'metering-digest'], stack: { broker: 'rabbitmq', database: 'postgresql' } },
-  'keel-dotnet-kafka': { fixtures: ['stock-reservation-events', 'metering-digest'], stack: { broker: 'kafka', database: 'postgresql' } }
+  'keel-dotnet-kafka': { fixtures: ['stock-reservation-events', 'metering-digest'], stack: { broker: 'kafka', database: 'postgresql' } },
+  'keel-dotnet-snssqs': { fixtures: ['stock-reservation-events', 'metering-digest'], stack: { broker: 'snssqs', database: 'postgresql' } }
 };
 
 function planWith(fixture, stack) {
@@ -228,4 +229,18 @@ test('la skill de Kafka se instala con el broker y enseña las firmas del códig
   assert.ok(connection.includes('public void Consume(string subscription, Func<KafkaMessage, CancellationToken, Task> handler)'));
   assert.ok(connection.includes('public sealed record KafkaMessage(string Topic, int Partition, long Offset, string? Key, string Value,'));
   assert.ok(find('/Messaging/MessagingSettings.cs').includes('SubscriptionSettings(string Topic, string? Queue, string? GroupId)'));
+});
+
+test('la skill de SNS/SQS se instala con el broker y enseña las firmas del código emitido', () => {
+  const tree = byPath(planWith('stock-reservation-events', { broker: 'snssqs', database: 'postgresql' }).files);
+  const find = (suffix) => Object.entries(tree).find(([file]) => file.endsWith(suffix))?.[1] ?? '';
+  assert.ok(Object.keys(tree).some((file) => file.endsWith('skills/keel-dotnet-snssqs/SKILL.md')), 'se instala con snssqs');
+  assert.ok(!Object.keys(tree).some((file) => file.includes('keel-dotnet-rabbitmq') || file.includes('keel-dotnet-kafka')), 'y no las de los otros brokers');
+  const connection = find('/SnsSqs/SnsSqsConnection.cs');
+  assert.ok(connection.includes('public async Task Publish(string topic, string payload, IReadOnlyDictionary<string, string> attributes, CancellationToken cancellationToken = default)'));
+  assert.ok(connection.includes('public void Consume(string subscription, Func<SqsMessage, CancellationToken, Task> handler)'));
+  assert.ok(connection.includes('public sealed record SqsMessage(string MessageId, string Body, IReadOnlyDictionary<string, string> Attributes, int ReceiveCount)'));
+  assert.ok(connection.includes('public string? Attribute(string name)'));
+  assert.ok(find('/Messaging/MessagingSettings.cs').includes('SubscriptionSettings(string Topic, string? Queue, string? GroupId)'));
+  assert.ok(tree['infra/init-messaging.sh'], 'la topología la siembra init-messaging.sh');
 });

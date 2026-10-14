@@ -56,7 +56,12 @@ export const PACKAGES = {
   'RabbitMQ.Client': { version: '7.2.2', license: 'Apache-2.0 OR MPL-2.0', use: 'conexión con RabbitMQ (capa messaging)' },
   // La mensajería sobre Kafka (incremento 9f): el cliente oficial de Confluent sobre librdkafka (nativo, por
   // librdkafka.redist, ver VERIFIED_LICENSES). Fijado a la versión de librdkafka que trae. Verificada el 2026-10-14.
-  'Confluent.Kafka': { version: '2.15.1', license: 'Apache-2.0', use: 'conexión con Kafka (capa messaging)' }
+  'Confluent.Kafka': { version: '2.15.1', license: 'Apache-2.0', use: 'conexión con Kafka (capa messaging)' },
+  // La mensajería sobre SNS/SQS (incremento 9g): el SDK oficial de AWS para .NET (v4), las versiones con dos semanas o
+  // más el día que se fijaron (el SDK publica casi a diario). Los dos piden AWSSDK.Core [4.0.102.6, 5): NuGet resuelve
+  // la mínima, Apache-2.0 también. Verificadas el 2026-10-14.
+  'AWSSDK.SimpleNotificationService': { version: '4.0.100.15', license: 'Apache-2.0', use: 'publicación en SNS (capa messaging)' },
+  'AWSSDK.SQS': { version: '4.0.100.14', license: 'Apache-2.0', use: 'consumo de SQS (capa messaging)' }
 };
 
 /**
