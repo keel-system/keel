@@ -733,6 +733,13 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
         `harness-check` 32/32.
     - **Sin cubrir todavía**, como en el 10a de keel-nest: la purga de las claves caducadas (necesita el reloj del
       incremento 10; `Find` ya las ignora y `Save` las sustituye) y el gate `check-idempotency.sh`.
+  - **7d, la corrida (hecha, 2026-10-14): primer servidor .NET equivalente demostrado.** `product-catalog` v1.1.0 con
+    `/keel-generate-dotnet`: **23/23 a la primera** y huella de **7 reescritos**, los mismos 7 archivos que keel-nest v2
+    (keel-spring, 6): los cinco handlers, el agregado y la guía de despliegue del README. Ningún archivo de
+    infraestructura de build tocado. Sin `harnessPatches`, sin `culprit: harness` y sin huecos. El baseline salió
+    verificado en vivo (24 elementos), y `FL-PRD-002`/`003` pasan con el registro generado
+    (`docs/corridas/2026-10-14-product-catalog-dotnet.md`).
+- **Inc. 7 — cerrado (2026-10-14).** Siguiente: el 8 (seguridad).
 
 ## 5. Riesgos conocidos
 
