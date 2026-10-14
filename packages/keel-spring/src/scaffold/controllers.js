@@ -10,6 +10,7 @@
 
 import { callsPaymentGateway } from '../lib/payments-model.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import { DOMAIN_ERROR_RESPONSES as DOMAIN, FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
 import { callerResolution } from './security.js';
 import { declaredErrorFor } from 'keel-core/gen';
 import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
@@ -34,6 +35,9 @@ import {
   TRANSACTION_TIMEOUT_MESSAGE
 } from 'keel-core/gen/constraint-errors';
 import { escapeJava } from '../lib/type-mapper.js';
+
+// Los textos del ApiExceptionHandler son contrato y los comparten los generadores (keel-core/gen/api-errors.js).
+const MISSING_PARAMETER = FW.missingParameter.message.split('{name}');
 
 const MAPPING_BY_METHOD = {
   GET: 'GetMapping',
@@ -771,8 +775,8 @@ ${constants.join('')}
         List<String> details = exception.getBindingResult().getFieldErrors().stream()
                 .map(error -> error.getField() + " " + error.getDefaultMessage())
                 .toList();
-        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Validation Error",
-                "${FRAMEWORK_ERRORS.validation.code}", "La petición no supera las validaciones", details);
+        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "${FW.invalidBody.error}",
+                "${FRAMEWORK_ERRORS.validation.code}", "${FW.invalidBody.message}", details);
     }
 
     @ResponseStatus(HttpStatus.BAD_REQUEST)
@@ -781,8 +785,8 @@ ${constants.join('')}
         List<String> details = exception.getConstraintViolations().stream()
                 .map(violation -> violation.getPropertyPath() + " " + violation.getMessage())
                 .toList();
-        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Validation Error",
-                "${FRAMEWORK_ERRORS.validation.code}", "La petición viola restricciones declaradas", details);
+        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "${FW.invalidParams.error}",
+                "${FRAMEWORK_ERRORS.validation.code}", "${FW.invalidParams.message}", details);
     }
 
     // Desde Spring 6.1 la validación de los PARÁMETROS del método (@RequestParam, @RequestPart,
@@ -796,8 +800,8 @@ ${constants.join('')}
         List<String> details = exception.getAllErrors().stream()
                 .map(error -> String.valueOf(error.getDefaultMessage()))
                 .toList();
-        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Validation Error",
-                "${FRAMEWORK_ERRORS.validation.code}", "La petición viola restricciones declaradas", details);
+        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "${FW.invalidParams.error}",
+                "${FRAMEWORK_ERRORS.validation.code}", "${FW.invalidParams.message}", details);
     }
 
     // ── Errores de framework ─────────────────────────────────────────────────
@@ -805,8 +809,8 @@ ${constants.join('')}
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
     public ErrorResponse onMalformedRequest(Exception exception) {
-        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request",
-                "${FRAMEWORK_ERRORS.validation.code}", "Petición malformada", null);
+        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "${FW.malformed.error}",
+                "${FRAMEWORK_ERRORS.validation.code}", "${FW.malformed.message}", null);
     }
 
     // Un @RequestParam obligatorio que no viaja en la query lo rechaza Spring
@@ -816,15 +820,15 @@ ${constants.join('')}
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(MissingServletRequestParameterException.class)
     public ErrorResponse onMissingRequestParameter(MissingServletRequestParameterException exception) {
-        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request",
+        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "${FW.missingParameter.error}",
                 "${FRAMEWORK_ERRORS.validation.code}",
-                "Falta el parámetro '" + exception.getParameterName() + "' en la petición", null);
+                "${MISSING_PARAMETER[0]}" + exception.getParameterName() + "${MISSING_PARAMETER[1]}", null);
     }
 
     @ResponseStatus(HttpStatus.METHOD_NOT_ALLOWED)
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ErrorResponse onMethodNotAllowed(HttpRequestMethodNotSupportedException exception) {
-        return new ErrorResponse(HttpStatus.METHOD_NOT_ALLOWED.value(), "Method Not Allowed", "Método HTTP no soportado");
+        return new ErrorResponse(HttpStatus.METHOD_NOT_ALLOWED.value(), "${FW.methodNotAllowed.error}", "${FW.methodNotAllowed.message}");
     }
 ${multipart}${dataIntegrity}${optimisticLock}${transactionTimeout}
     // ── Errores de dominio (jerarquía DomainException) ───────────────────────
@@ -832,45 +836,45 @@ ${multipart}${dataIntegrity}${optimisticLock}${transactionTimeout}
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(BadRequestException.class)
     public ErrorResponse onBadRequest(BadRequestException exception) {
-        return buildResponse(HttpStatus.BAD_REQUEST, "Bad Request", exception, "Petición inválida");
+        return buildResponse(HttpStatus.BAD_REQUEST, "${DOMAIN.BadRequestException.error}", exception, "${DOMAIN.BadRequestException.fallback}");
     }
 
     @ResponseStatus(HttpStatus.UNAUTHORIZED)
     @ExceptionHandler(UnauthorizedException.class)
     public ErrorResponse onUnauthorized(UnauthorizedException exception) {
-        return buildResponse(HttpStatus.UNAUTHORIZED, "Unauthorized", exception, "Autenticación requerida");
+        return buildResponse(HttpStatus.UNAUTHORIZED, "${DOMAIN.UnauthorizedException.error}", exception, "${DOMAIN.UnauthorizedException.fallback}");
     }
 
     @ResponseStatus(HttpStatus.FORBIDDEN)
     @ExceptionHandler(ForbiddenException.class)
     public ErrorResponse onForbidden(ForbiddenException exception) {
-        return buildResponse(HttpStatus.FORBIDDEN, "Forbidden", exception, "Acceso denegado");
+        return buildResponse(HttpStatus.FORBIDDEN, "${DOMAIN.ForbiddenException.error}", exception, "${DOMAIN.ForbiddenException.fallback}");
     }
 
     @ResponseStatus(HttpStatus.NOT_FOUND)
     @ExceptionHandler(NotFoundException.class)
     public ErrorResponse onNotFound(NotFoundException exception) {
-        return buildResponse(HttpStatus.NOT_FOUND, "Not Found", exception, "Recurso no encontrado");
+        return buildResponse(HttpStatus.NOT_FOUND, "${DOMAIN.NotFoundException.error}", exception, "${DOMAIN.NotFoundException.fallback}");
     }
 
     @ResponseStatus(HttpStatus.CONFLICT)
     @ExceptionHandler(ConflictException.class)
     public ErrorResponse onConflict(ConflictException exception) {
-        return buildResponse(HttpStatus.CONFLICT, "Conflict", exception, "Conflicto con el estado actual del recurso");
+        return buildResponse(HttpStatus.CONFLICT, "${DOMAIN.ConflictException.error}", exception, "${DOMAIN.ConflictException.fallback}");
     }
 
     @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
     @ExceptionHandler(PayloadTooLargeException.class)
     public ErrorResponse onPayloadTooLarge(PayloadTooLargeException exception) {
-        return buildResponse(HttpStatus.PAYLOAD_TOO_LARGE, "Payload Too Large", exception,
-                "El contenido enviado supera el tamaño permitido");
+        return buildResponse(HttpStatus.PAYLOAD_TOO_LARGE, "${DOMAIN.PayloadTooLargeException.error}", exception,
+                "${DOMAIN.PayloadTooLargeException.fallback}");
     }
 
     @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
     @ExceptionHandler(BusinessException.class)
     public ErrorResponse onBusinessException(BusinessException exception) {
-        return buildResponse(HttpStatus.UNPROCESSABLE_ENTITY, "Business Rule Violation", exception,
-                "Se violó una regla de negocio");
+        return buildResponse(HttpStatus.UNPROCESSABLE_ENTITY, "${DOMAIN.BusinessException.error}", exception,
+                "${DOMAIN.BusinessException.fallback}");
     }
 
     // Errores con status extendido (402, 429, 503…): extienden DomainException
@@ -891,8 +895,8 @@ ${multipart}${dataIntegrity}${optimisticLock}${transactionTimeout}
     @ExceptionHandler(Exception.class)
     public ErrorResponse onServerError(Exception exception) {
         log.error("Excepción no controlada", exception);
-        return new ErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Internal Server Error",
-                "Ocurrió un error inesperado");
+        return new ErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR.value(), "${FW.internal.error}",
+                "${FW.internal.message}");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

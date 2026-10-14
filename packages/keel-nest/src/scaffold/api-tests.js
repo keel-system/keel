@@ -11,115 +11,24 @@
 
 import { WIRE_SHAPES } from 'keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from 'keel-core';
-import { requestShape } from 'keel-core/gen/api-contract';
+import { FRAMEWORK_RESPONSES as FW, missingParameterMessage } from 'keel-core/gen/api-errors';
+import { apiCases as neutralApiCases, concretePath } from 'keel-core/gen/api-cases';
 import { usesApi } from './rest-support.js';
 import { messageComponents } from './services.js';
 import { tsString } from './render.js';
 import { securityPlan, usesJwt } from './security.js';
 
 export const API_TEST = 'test/api.test.ts';
-const SAMPLE_UUID = '0192f1d2-0000-7000-8000-000000000001';
+const fullPath = (model, path) => `${model.api.routeBase}${path}`;
 
 export function generate(model) {
   if (!usesApi(model)) return [];
   return [{ path: API_TEST, content: apiTest(model) }];
 }
 
-const routed = (model) => (model.services ?? []).flatMap((service) => service.operations ?? []).filter((op) => op.route && !op.multipart);
-const fullPath = (model, path) => `${model.api.routeBase}${path}`;
-const hasRule = (field, name) => (field.inputValidation ?? []).some((rule) => rule.rule === name);
-
-/** Un valor de muestra para un parámetro de ruta, o null si no hay uno que seguro pase su regla. */
-function sample(param) {
-  if (hasRule(param, 'pattern') || hasRule(param, 'min') || hasRule(param, 'max') || param.list) return null;
-  if (param.kind === 'enum') return null;
-  return { uuid: SAMPLE_UUID, int: '1', long: '1', string: 'abc', text: 'abc' }[param.base] ?? null;
-}
-
-function concrete(model, operation) {
-  let path = fullPath(model, operation.route.path);
-  for (const param of operation.pathParams ?? []) {
-    const value = sample(param);
-    if (value == null) return null;
-    path = path.replace(`{${param.name}}`, value);
-  }
-  return path;
-}
-
-/** Los casos que el diseño permite ejercitar, cada uno con su petición. */
+/** Los casos que el diseño permite ejercitar (keel-core/gen/api-cases.js), con los componentes de keel-nest. */
 export function apiCases(model) {
-  const operations = routed(model);
-  const cases = {};
-  // Llega al handler: sin campos obligatorios fuera de la ruta y sin cuerpo.
-  for (const operation of operations) {
-    const fromPath = new Set((operation.pathParams ?? []).map((p) => p.name));
-    const required = messageComponents(model, operation).filter((c) => !fromPath.has(c.name) && c.required && !['page', 'size'].includes(c.name));
-    const url = concrete(model, operation);
-    if (required.length === 0 && url && !requestShape(operation).asBody && !messageComponents(model, operation).some((c) => c.resolvedIdentity)) {
-      cases.reachesHandler = { method: operation.route.method, url, operation: operation.name };
-      break;
-    }
-  }
-  const bodyOp = operations.find((op) => requestShape(op).asBody && concrete(model, op));
-  if (bodyOp) cases.malformedBody = { method: bodyOp.route.method, url: concrete(model, bodyOp) };
-  for (const operation of operations) {
-    const { asBody, bodyRequired } = requestShape(operation);
-    // La identidad del llamante no viaja en el cuerpo (la resuelve la seguridad): no sirve de caso.
-    if ((operation.bodyFields ?? []).some((f) => f.resolvedIdentity)) continue;
-    const field = (operation.bodyFields ?? []).find((f) => hasRule(f, 'notBlank') || hasRule(f, 'notNull'));
-    const url = concrete(model, operation);
-    if (asBody && bodyRequired && field && url) {
-      cases.invalidBody = { method: operation.route.method, url, field: field.name, message: hasRule(field, 'notBlank') ? 'must not be blank' : 'must not be null' };
-      break;
-    }
-  }
-  for (const operation of operations) {
-    const param = (operation.pathParams ?? []).find((p) => p.base === 'uuid' && !p.list);
-    if (!param) continue;
-    let url = fullPath(model, operation.route.path).replace(`{${param.name}}`, 'no-es-un-uuid');
-    let ok = true;
-    for (const other of (operation.pathParams ?? []).filter((p) => p !== param)) {
-      const value = sample(other);
-      if (value == null) ok = false;
-      else url = url.replace(`{${other.name}}`, value);
-    }
-    if (ok) {
-      cases.malformedPath = { method: operation.route.method, url };
-      break;
-    }
-  }
-  // 405: un camino que existe, con un método que ninguna operación sirve en él.
-  for (const operation of operations) {
-    const url = concrete(model, operation);
-    if (!url) continue;
-    const served = new Set(operations.filter((op) => op.route.path === operation.route.path).map((op) => op.route.method));
-    const other = ['DELETE', 'PUT', 'PATCH', 'POST', 'GET'].find((method) => !served.has(method));
-    if (other) {
-      cases.wrongMethod = { method: other, url };
-      break;
-    }
-  }
-  // La subida: la primera operación multipart con una ruta concreta y campos de los que hay muestra segura.
-  for (const operation of (model.services ?? []).flatMap((service) => service.operations ?? []).filter((op) => op.route && op.multipart)) {
-    const url = concrete(model, operation);
-    if (!url) continue;
-    const fromPath = new Set((operation.pathParams ?? []).map((p) => p.name));
-    const components = messageComponents(model, operation).filter((c) => !fromPath.has(c.name) && !c.resolvedIdentity);
-    const file = components.find((c) => c.file && c.required);
-    if (!file) continue;
-    const fields = {};
-    let sampled = true;
-    for (const component of components.filter((c) => !c.file && c.required)) {
-      const value = sample(component);
-      if (value == null || hasRule(component, 'minLength') || hasRule(component, 'size')) sampled = false;
-      else fields[component.name] = value;
-    }
-    // El primer obligatorio, en el orden del mensaje: es el que el servidor echa en falta primero.
-    const first = components.find((c) => c.required);
-    cases.upload = { url, part: file.name, fields: sampled ? fields : null, firstMissing: first.file ? { part: first.name } : { parameter: first.name } };
-    break;
-  }
-  return cases;
+  return neutralApiCases(model, { components: (operation) => messageComponents(model, operation) });
 }
 
 /**
@@ -148,41 +57,41 @@ function apiTest(model) {
     if (response.statusCode >= 400) {
       const parsed = body(response);
       expect(Object.keys(parsed)).toEqual(ERROR_SHAPE);
-      expect(parsed.message).not.toBe('Recurso no encontrado');
+      expect(parsed.message).not.toBe('${FW.notFound.message}');
     }
   });`);
   }
   if (cases.malformedBody) {
     tests.push(`  it('un cuerpo que no es JSON es 400 «Petición malformada», sin details', async () => {
     const response = await app.inject(${request(cases.malformedBody, { json: '{"roto":', secured })});
-    expectError(response, 400, 'Bad Request', '${validation}', 'Petición malformada');
+    expectError(response, 400, '${FW.malformed.error}', '${validation}', '${FW.malformed.message}');
     expect(body(response).details).toBeNull();
   });`);
   }
   if (cases.invalidBody) {
     tests.push(`  it('un cuerpo que incumple lo declarado es 400 Validation Error, con el campo en details', async () => {
     const response = await app.inject(${request(cases.invalidBody, { json: '{}', secured })});
-    expectError(response, 400, 'Validation Error', '${validation}', 'La petición no supera las validaciones');
+    expectError(response, 400, '${FW.invalidBody.error}', '${validation}', '${FW.invalidBody.message}');
     expect(body(response).details).toContain(${tsString(`${cases.invalidBody.field} ${cases.invalidBody.message}`)});
   });`);
   }
   if (cases.malformedPath) {
     tests.push(`  it('un uuid de ruta mal formado es 400 «Petición malformada»', async () => {
     const response = await app.inject(${request(cases.malformedPath, { json: '{}', secured })});
-    expectError(response, 400, 'Bad Request', '${validation}', 'Petición malformada');
+    expectError(response, 400, '${FW.malformed.error}', '${validation}', '${FW.malformed.message}');
   });`);
   }
   if (cases.wrongMethod) {
     tests.push(`  it('un camino que existe con otro método es 405', async () => {
     const response = await app.inject(${request(cases.wrongMethod, { secured })});
-    expectError(response, 405, 'Method Not Allowed', null, 'Método HTTP no soportado');
+    expectError(response, 405, '${FW.methodNotAllowed.error}', null, '${FW.methodNotAllowed.message}');
   });`);
   }
   if (cases.upload) {
     const { url, part, fields, firstMissing } = cases.upload;
     const headers = secured ? '...CREDENTIAL, ' : '';
     const expected = firstMissing.parameter
-      ? `expectError(response, 400, 'Bad Request', '${validation}', ${tsString(`Falta el parámetro '${firstMissing.parameter}' en la petición`)});`
+      ? `expectError(response, 400, '${FW.missingParameter.error}', '${validation}', ${tsString(missingParameterMessage(firstMissing.parameter))});`
       : `expectError(response, 400, 'Bad Request', null, ${tsString(`Falta la parte '${firstMissing.part}' en la petición multipart`)});`;
     tests.push(`  it('una subida vacía echa en falta lo primero que el mensaje pide, como keel-spring', async () => {
     const form = multipart({});
@@ -267,7 +176,7 @@ ${security ? security.setup : "    const configuration = loadConfiguration({ ...
 
   it('una ruta que no existe es 404 con ErrorResponse', async () => {
     const response = await app.inject({ method: 'GET', url: ${tsString(`${model.api.routeBase}/keel-ruta-que-no-existe`)}${secured ? ', headers: CREDENTIAL' : ''} });
-    expectError(response, 404, 'Not Found', null, 'Recurso no encontrado');
+    expectError(response, 404, '${FW.notFound.error}', null, '${FW.notFound.message}');
   });
 
   it('la correlación recibida vuelve en la respuesta; una que no cumple el formato se sustituye', async () => {
@@ -354,7 +263,7 @@ let CREDENTIAL: Readonly<Record<string, string>> = {};`;
   for (const rule of plan.chains.flatMap((chain) => chain.rules)) {
     if (rule.requirement.kind !== 'anyOf' || !rule.method) continue;
     const operation = routed.find((op) => op.route.method === rule.method && fullPath(model, op.route.path) === rule.path);
-    const url = operation ? concrete(model, operation) : null;
+    const url = operation ? concretePath(model, operation) : null;
     if (!url) continue;
     tests.push(`  it(${tsString(`una credencial válida sin lo que exige la regla (${rule.requirement.authorities.join(' o ')}) es 403`)}, async () => {
     const bare = await credential.tokenWith({ sub: 'keel-sin-permisos' });

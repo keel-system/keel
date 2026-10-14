@@ -126,6 +126,12 @@ public sealed class DecimalWireConverter : JsonConverter<decimal>
             JsonTokenType.String => reader.GetString()!,
             _ => throw new JsonException("se esperaba un decimal")
         };
+        return Parse(text);
+    }
+
+    /// <summary>El decimal EXACTO de un texto (también de la ruta o de la query); lanza JsonException si no lo es.</summary>
+    public static decimal Parse(string text)
+    {
         decimal value;
         int scale;
         try
@@ -172,7 +178,17 @@ public sealed partial class TimestampWireConverter : JsonConverter<DateTimeOffse
 
     public override DateTimeOffset Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        var match = reader.TokenType == JsonTokenType.String ? Iso8601WithZone().Match(reader.GetString()!) : Match.Empty;
+        if (reader.TokenType != JsonTokenType.String)
+        {
+            throw new JsonException("se esperaba un instante ISO-8601 con zona");
+        }
+        return Parse(reader.GetString()!);
+    }
+
+    /// <summary>El instante de un texto ISO-8601 con zona (también de la ruta o de la query); lanza JsonException si no lo es.</summary>
+    public static DateTimeOffset Parse(string text)
+    {
+        var match = Iso8601WithZone().Match(text);
         if (!match.Success)
         {
             throw new JsonException("se esperaba un instante ISO-8601 con zona");
@@ -198,13 +214,18 @@ public sealed class DateWireConverter : JsonConverter<DateOnly>
 
     public override DateOnly Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        if (reader.TokenType == JsonTokenType.String
-            && DateOnly.TryParseExact(reader.GetString(), WireFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var value))
+        if (reader.TokenType != JsonTokenType.String)
         {
-            return value;
+            throw new JsonException("se esperaba una fecha YYYY-MM-DD que exista");
         }
-        throw new JsonException("se esperaba una fecha YYYY-MM-DD que exista");
+        return Parse(reader.GetString()!);
     }
+
+    /// <summary>La fecha de un texto <c>YYYY-MM-DD</c> (también de la ruta o de la query); lanza JsonException si no lo es.</summary>
+    public static DateOnly Parse(string text) =>
+        DateOnly.TryParseExact(text, WireFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var value)
+            ? value
+            : throw new JsonException("se esperaba una fecha YYYY-MM-DD que exista");
 
     public override void Write(Utf8JsonWriter writer, DateOnly value, JsonSerializerOptions options) =>
         writer.WriteStringValue(value.ToString(WireFormat, CultureInfo.InvariantCulture));

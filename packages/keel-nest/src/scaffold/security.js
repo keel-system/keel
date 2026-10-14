@@ -19,6 +19,7 @@
 //     (`scoping`) como un puerto de la aplicación con su adaptador.
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
 import { accessPlan, audienceOf, tokenClaims, usesTokenProtocol } from 'keel-core/gen/access-plan';
 import { classPath, DIRS, tsModule, tsString } from './render.js';
 import { usesApi, ERROR_RESPONSE_TS } from './rest-support.js';
@@ -690,7 +691,7 @@ function httpSecurity(model) {
       .catch((error: unknown) => {
         ${jwt ? 'if (error instanceof InvalidCredential) return reject(reply, 401);\n        ' : ''}// El servidor no puede decidir (el proveedor no responde): 500, nunca un 401 que culpe a la credencial.
         log.error('No se pudo autenticar la petición', error instanceof Error ? error.stack : String(error));
-        void reply.code(500).send(ErrorResponse.of(500, 'Internal Server Error', null, 'Ocurrió un error inesperado'));
+        void reply.code(500).send(ErrorResponse.of(500, '${FW.internal.error}', null, '${FW.internal.message}'));
       });`;
 
   const authenticate = plan.open

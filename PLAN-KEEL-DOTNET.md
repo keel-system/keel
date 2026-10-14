@@ -464,6 +464,64 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     - **Las notas de los handlers que cuelgan de otras capas** (persistencia, idempotencia, correo,
       caché, embeds, subidas, alcance) llegan con su incremento, igual que en keel-nest.
 
+- **Inc. 5 — hecho (2026-10-13)**, en dos tramos.
+  - **5a, lo neutral primero.** Sin cambio de salida: keel-spring 44 / 11 137 y keel-nest 41 / 10 050.
+    - `keel-core/gen/api-errors.js`: el `error` y el `message` de cada clase base de la jerarquía y de cada fallo
+      del framework (malformada, validación del cuerpo y de los parámetros, parámetro ausente, 404, 405,
+      catch-all). Estaban escritos a mano en el `ApiExceptionHandler` de keel-spring y copiados en el filtro, la
+      seguridad y la prueba emitida de keel-nest. `test/api-errors.test.js` prohíbe el literal en el `src/` de
+      cualquier generador; su primera ejecución encontró las cinco copias de la prueba emitida de keel-nest.
+    - `keel-core/gen/api-cases.js`: qué peticiones elige del diseño la prueba emitida de la API. Los componentes
+      del mensaje entran por parámetro (con persistencia keel-nest lee un Pageable).
+    - El lector de la tabla de rutas de keel-spring pasa de la paridad de keel-nest a
+      `keel-spring/test/helpers/contract-table.js`, oráculo de las dos paridades.
+  - **5b, la API en keel-dotnet.**
+    - `rest-support.js`: `CorrelationContext` (en Infrastructure, sobre `AsyncLocal`: la mensajería lo usará) y
+      su middleware, `ErrorResponse` en el orden del cable, los lectores (`JsonBodyReader` con el contrato del
+      cable, `TextValues` con las conversiones de Spring), `InputRule`/`InputViolations` con los mensajes de
+      Hibernate Validator, `HttpReply` y `ApiErrorMiddleware`, que también pone cuerpo al 404 y al 405 que el
+      enrutado de ASP.NET Core devuelve vacíos.
+    - `endpoints.js`: un `<Grupo>V1Endpoints` por grupo, con un lector GENERADO por operación en el orden del
+      binding de Spring, y `ApiRoutes`: la tabla de rutas como datos y el único sitio que las registra
+      (`MapMethods` con un `RequestDelegate`, sin el enlace de parámetros de las APIs mínimas).
+    - El `openapi.yaml` derivado neutral, byte a byte el de los otros dos.
+    - La frontera ya no avisa de la capa `api`.
+  - **Decisiones medidas, no supuestas:**
+    - `Exception.Message` nunca es null en .NET (sin mensaje inventa uno en inglés): `DomainException` guarda
+      `GivenMessage` y el manejador responde con el de la clase base cuando falta, como keel-spring.
+    - El enum se lee del cuerpo por su literal EXACTO con un mapa propio, no con `JsonStringEnumConverter`.
+    - En la query, el enum se compara como Spring Boot (sin mayúsculas ni separadores), que admite `IN_PROGRESS`
+      e `in-progress`: un poco más que keel-nest, lo mismo que keel-spring.
+    - Los conversores del cable exponen `Parse(string)`: la ruta y la query convierten decimal, instante y fecha
+      con las MISMAS reglas que el cuerpo (un `1E-40` en la query es 400, no 0).
+  - **Dos trampas que costaron un ciclo:** una propiedad `Source` en una excepción oculta `Exception.Source`
+    (CS0114 con warnings como errores); y un diseño cuyas rutas son todas de una capa que aún no se sirve
+    (`profile-directory`) dejaba `ApiRoutes` importando un namespace de endpoints vacío.
+  - **Fuera, con su incremento:** las subidas multipart (13) y las operaciones con la identidad del llamante
+    (8). Son 14 de las 56 operaciones con ruta; entre ellas, cinco del par del MVP.
+  - **Medido:**
+    - `npm test` 204/204, que incluye:
+      - `contract-parity.test.js`: las 42 operaciones servidas contra lo que EMITE keel-spring (método, ruta,
+        status, `Location`, query, cuerpo y campos de cada DTO). Falsado: un 201 escrito como 200 tumba 12
+        fixtures;
+      - `openapi.test.js`: el documento idéntico al de los otros dos, con cada ruta de `ApiRoutes` descrita;
+      - `api.test.js`: la prueba emitida pide las mismas peticiones que la de keel-nest.
+    - **`cs-check` 13/13**: el servidor arrancado responde 404 y 400 «Petición malformada» con el
+      `ErrorResponse` del contrato; la solución de las 15 fixtures y 2 variantes compila sin warnings y pasan
+      1 183 pruebas, entre ellas las `ApiTests.cs` emitidas y las sondas `scripts/probes/RestProbes` (los casos
+      de `keel-nest/test/rest.test.js`, ejecutados en C#).
+    - Falsado con `cs-check --sabotage=`, cada uno contra sus pruebas y solo esas:
+      - `correlation` (el middleware no abre el contexto): las 5 pruebas que comparan el `correlationId` del
+        cuerpo con el de la cabecera;
+      - `method-405`: la del 405, 1 de 68;
+      - `not-blank`: la de la validación, 1 de 68. **El primer intento no lo cazó**: la prueba emitida mandaba
+        `{}`, y un ausente lo rechaza también la rama del null. Ahora manda el campo en blanco, que es más de lo
+        que pide la de keel-nest.
+    - keel-core 1 209/1 209, keel-spring 1 661/1 661 y keel-nest 798/798.
+  - **Asimetrías conocidas, sin cubrir** (las de keel-nest siguen en pie, y dos más):
+    - el `Content-Type` del cuerpo no se comprueba: Spring respondería 415, aquí se lee igual;
+    - un `null` DENTRO de una lista del cuerpo es petición malformada; en keel-spring llega como elemento nulo.
+
 ## 5. Riesgos conocidos
 
 - **MySQL con EF Core 10.** Pomelo (MIT) suele ir detrás de la versión de EF. Además, el `Guid` de

@@ -72,7 +72,11 @@ export const PLACES = {
   dtos: ['application', 'Dtos'],
   mappers: ['application', 'Mappers'],
   appSupport: ['application', 'Support'],
-  useCaseInfra: ['infrastructure', 'UseCase']
+  useCaseInfra: ['infrastructure', 'UseCase'],
+  correlation: ['infrastructure', 'Correlation'],
+  // La entrada HTTP: la infraestructura REST común y un archivo de endpoints por grupo de operaciones.
+  rest: ['api', 'Rest'],
+  endpoints: ['api', 'Endpoints']
 };
 
 /** El namespace y la ruta de un tipo `className` en el sitio `place` (una clave de PLACES). */

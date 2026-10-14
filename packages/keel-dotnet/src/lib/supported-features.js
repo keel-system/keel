@@ -24,9 +24,7 @@ const PENDING_LAYERS = {
 };
 
 /** Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. */
-const ACCEPTED_NOT_EMITTED = {
-  api: 'incremento 5 (API REST)'
-};
+const ACCEPTED_NOT_EMITTED = {};
 
 /**
  * Lo que una operación de use-cases puede declarar y keel-dotnet aún no genera: el mensaje y el handler sí

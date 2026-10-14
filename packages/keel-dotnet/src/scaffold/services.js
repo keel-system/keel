@@ -81,7 +81,7 @@ export function messageComponents(operation) {
  * de PRESENTE CON NULL (vacía el campo). También una lista: ausente no la toca, y null o [] la vacían
  * (list-never-null, keel-core/gen/wire.js), como el JsonNullable de keel-spring.
  */
-function isThreeState(operation, component) {
+export function isThreeState(operation, component) {
   const fromPath = (operation.pathParams ?? []).some((param) => param.name === component.name);
   return isPartialUpdate(operation) && !fromPath && !component.required && (operation.bodyFields ?? []).some((f) => f.name === component.name);
 }
@@ -93,7 +93,7 @@ function usesOptional(model) {
 }
 
 /** El tipo con el que el mensaje DECLARA un componente. */
-function componentType(operation, component) {
+export function componentType(operation, component) {
   if (isThreeState(operation, component)) {
     const inner = component.list ? component.csType : `${component.csType}?`;
     return `Optional<${inner}>`;

@@ -21,6 +21,9 @@
 //   timestamp-format  el instante se escribe sin los ceros finales del milisegundo (.000 → nada)
 //   utf8              vuelve el codificador por defecto, que escapa lo que no es ASCII
 //   wiring            el registro pierde el handler de una consulta
+//   correlation       el middleware deja de abrir la correlación (el cuerpo de error la pierde)
+//   method-405        un camino que existe con otro método responde como si no existiera
+//   not-blank         la regla notBlank deja de rechazar el texto en blanco
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -34,6 +37,7 @@ import { planService } from '../src/scaffold/index.js';
 import { solution } from '../src/scaffold/render.js';
 import { build } from '../src/commands/build.js';
 import { licenseProblems } from '../src/lib/dotnet-stack.js';
+import { WIRE_SHAPES } from 'keel-core/gen/wire';
 
 const keep = process.argv.includes('--keep');
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
@@ -41,6 +45,7 @@ const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.spli
 // Los sabotajes: [archivo, texto que se sustituye, sustituto]. Si el texto ya no está, el check lo dice y sale
 // rojo: un sabotaje que dejó de aplicarse no puede pasar por medido.
 const WIRE_DIR = 'src/ProductCatalog.Application/Support';
+const REST_DIR = 'src/ProductCatalog.Api/Rest';
 const SABOTAGES = {
   'decimal-scale': [
     `${WIRE_DIR}/WireConverters.cs`,
@@ -58,11 +63,17 @@ const SABOTAGES = {
     'src/ProductCatalog.Infrastructure/UseCase/UseCaseRegistration.cs',
     'services.AddScoped<IQueryHandler<GetProductQuery, GetProductResponseDto>, GetProductQueryHandler>();',
     '// (sabotaje) sin el handler de GetProductQuery'
-  ]
+  ],
+  // La cabecera de la respuesta sigue saliendo: solo el cuerpo de error puede notar que no se abrió.
+  correlation: [`${REST_DIR}/CorrelationMiddleware.cs`, 'using (CorrelationContext.Open(correlationId))', 'using ((IDisposable?)null)'],
+  'method-405': [`${REST_DIR}/ApiErrorMiddleware.cs`, 'context.Response.StatusCode == StatusCodes.Status405MethodNotAllowed', 'context.Response.StatusCode < 0'],
+  'not-blank': [`${REST_DIR}/InputValidation.cs`, '(value is string text && string.IsNullOrWhiteSpace(text))', '(value is string text && text.Length < 0)']
 };
 
 // Las sondas que EJECUTAN lo emitido para todas las fixtures (scripts/probes/): C# de verdad, no plantillas.
 const PROBES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'probes');
+// El dominio (DomainProbes) y la lectura de peticiones de la API (RestProbes).
+const PROBES = ['DomainProbes', 'RestProbes'];
 
 // Variantes derivadas en memoria de una fixture real, para lo que ninguna declara. Cada una cambia el
 // nombre del servicio, que es el namespace raíz: dos variantes de la misma fixture no pueden chocar.
@@ -125,6 +136,16 @@ function get(port, route) {
     request.on('error', () => resolve(null));
     request.on('timeout', () => request.destroy());
   });
+}
+
+/** ¿Es el cuerpo un ErrorResponse con las claves del cable, en su orden, y con este status? */
+function errorShaped(body, status) {
+  try {
+    const parsed = JSON.parse(body);
+    return JSON.stringify(Object.keys(parsed)) === JSON.stringify(WIRE_SHAPES.errorResponse) && parsed.status === status && typeof parsed.correlationId === 'string';
+  } catch {
+    return false;
+  }
 }
 
 async function waitFor(port, route, deadlineMs) {
@@ -241,7 +262,15 @@ if (results.every((result) => result.ok)) {
   const readyz = await get(port, '/readyz');
   step('GET /readyz → 200 {"status":"UP"}', readyz?.status === 200 && readyz.body === '{"status":"UP"}', readyz ? `${readyz.status} ${readyz.body}` : 'sin respuesta');
   const missing = await get(port, '/no-existe');
-  step('una ruta que no existe → 404', missing?.status === 404, missing ? String(missing.status) : 'sin respuesta');
+  step('una ruta que no existe → 404 con ErrorResponse', missing?.status === 404 && errorShaped(missing.body, 404), missing ? `${missing.status} ${missing.body}` : 'sin respuesta');
+  // Una ruta del DISEÑO, en el servidor arrancado de verdad: el uuid mal formado lo rechaza el lector antes de
+  // llegar al handler, con el cuerpo de error del contrato.
+  const malformed = await get(port, '/api/v1/products/no-es-un-uuid');
+  step(
+    'GET /api/v1/products/no-es-un-uuid → 400 «Petición malformada» con ErrorResponse',
+    malformed?.status === 400 && errorShaped(malformed.body, 400) && JSON.parse(malformed.body).message === 'Petición malformada',
+    malformed ? `${malformed.status} ${malformed.body}` : 'sin respuesta'
+  );
 
   app.kill('SIGTERM');
   const end = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 15_000))]);
@@ -280,10 +309,10 @@ function compileAllFixtures() {
       if (file.path.endsWith('.csproj')) projects.push(`${name}/${file.path}`);
     }
   }
-  fs.cpSync(path.join(PROBES_DIR, 'DomainProbes'), path.join(root, 'DomainProbes'), { recursive: true });
+  for (const probes of PROBES) fs.cpSync(path.join(PROBES_DIR, probes), path.join(root, probes), { recursive: true });
   // Las sondas encuentran los props comunes subiendo desde su carpeta: les vale los de cualquier fixture.
   for (const shared of ['Directory.Build.props', 'Directory.Packages.props']) fs.copyFileSync(path.join(root, fixtures[0], shared), path.join(root, shared));
-  const lines = [...projects, 'DomainProbes/DomainProbes.csproj'].map((p) => `  <Project Path="${p}" />`);
+  const lines = [...projects, ...PROBES.map((probes) => `${probes}/${probes}.csproj`)].map((p) => `  <Project Path="${p}" />`);
   fs.writeFileSync(path.join(root, 'Fixtures.slnx'), ['<Solution>', ...lines, '</Solution>', ''].join('\n'));
   const built = dotnet(root, ['build', 'Fixtures.slnx', '-c', 'Release']);
   // Que la solución compile no basta: tiene que haber salido un ensamblado por proyecto declarado.
@@ -298,12 +327,12 @@ function compileAllFixtures() {
     console.error([...problems].slice(0, 60).join('\n'));
     return root;
   }
-  // Las pruebas emitidas de cada fixture (configuración, sondas, cable, cableado de los casos de uso) y las sondas
-  // del dominio, en una sola ejecución.
+  // Las pruebas emitidas de cada fixture (configuración, sondas, cable, cableado de los casos de uso, API) y las
+  // sondas del dominio y de la lectura de peticiones, en una sola ejecución.
   const tested = dotnet(root, ['test', '--solution', 'Fixtures.slnx', '--no-build', '-c', 'Release']);
   const totals = [...tested.output.matchAll(/total: (\d+)/g)].map((match) => Number(match[1]));
   const total = totals.length > 0 ? Math.max(...totals) : null;
-  if (!step('las pruebas emitidas de todas las fixtures y las sondas del dominio pasan', tested.ok, total ? `${total} pruebas` : '')) {
+  if (!step('las pruebas emitidas de todas las fixtures y las sondas del dominio y de la API pasan', tested.ok, total ? `${total} pruebas` : '')) {
     console.error(tested.output.split('\n').filter((line) => /con errores|failed|error/i.test(line)).slice(0, 80).join('\n'));
   }
   return root;

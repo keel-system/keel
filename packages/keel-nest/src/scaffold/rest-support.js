@@ -15,6 +15,7 @@
 
 import { WIRE_SHAPES } from 'keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import { FRAMEWORK_RESPONSES as FW, domainErrorResponses } from 'keel-core/gen/api-errors';
 import { tsModule } from './render.js';
 import { DOMAIN_EXCEPTION_TS, BASE_SUBCLASSES } from './exceptions.js';
 import { usesPersistence } from './persistence-entities.js';
@@ -30,6 +31,8 @@ export const ROUTES_TS = 'src/infrastructure/rest/routes.ts';
 const WIRE_TS = 'src/application/support/wire.ts';
 const DECIMAL_TS = 'src/domain/support/decimal.ts';
 const RAW_JSON_TS = 'src/domain/support/raw-json.ts';
+// Los textos de la respuesta de error son contrato y los comparten los generadores (keel-core/gen/api-errors.js).
+const MISSING_PARAMETER = FW.missingParameter.message.split('{name}');
 
 /** ¿Expone el servicio una API? Sin capa api no hay nada de esto. */
 export function usesApi(model) {
@@ -187,7 +190,7 @@ function requestErrorsBody() {
 
 /** La petición no se puede leer: JSON roto, un tipo que no encaja, un value object inválido. */
 export class MalformedRequestError extends Error {
-  constructor(reason = 'Petición malformada') {
+  constructor(reason = '${FW.malformed.message}') {
     super(reason);
     this.name = 'MalformedRequestError';
   }
@@ -196,7 +199,7 @@ export class MalformedRequestError extends Error {
 /** Falta un parámetro obligatorio de la query. */
 export class MissingParameterError extends Error {
   constructor(readonly parameter: string) {
-    super(\`Falta el parámetro '\${parameter}' en la petición\`);
+    super(\`${MISSING_PARAMETER[0]}\${parameter}${MISSING_PARAMETER[1]}\`);
     this.name = 'MissingParameterError';
   }
 }
@@ -226,7 +229,7 @@ export class RequestValidationError extends Error {
     readonly details: readonly string[],
     readonly source: 'body' | 'params'
   ) {
-    super('La petición no supera las validaciones');
+    super('${FW.invalidBody.message}');
     this.name = 'RequestValidationError';
   }
 }`;
@@ -490,17 +493,6 @@ function compare(value: unknown, bound: number | string): number | null {
 }`;
 }
 
-// Textos y status de ApiExceptionHandler de keel-spring, por subclase de DomainException.
-const DOMAIN_RESPONSES = {
-  BadRequestException: ['Bad Request', 'Petición inválida'],
-  UnauthorizedException: ['Unauthorized', 'Autenticación requerida'],
-  ForbiddenException: ['Forbidden', 'Acceso denegado'],
-  NotFoundException: ['Not Found', 'Recurso no encontrado'],
-  ConflictException: ['Conflict', 'Conflicto con el estado actual del recurso'],
-  PayloadTooLargeException: ['Payload Too Large', 'El contenido enviado supera el tamaño permitido'],
-  BusinessException: ['Business Rule Violation', 'Se violó una regla de negocio']
-};
-
 function filterImports() {
   return [
     { symbol: 'Catch', from: '@nestjs/common' },
@@ -548,8 +540,7 @@ const PERSISTENCE_BRANCH = `    // ── Persistencia
 
 function filterBody(persistence = false) {
   const validation = FRAMEWORK_ERRORS.validation.code;
-  const domainBranches = BASE_SUBCLASSES.map(({ name, http }) => {
-    const [error, fallback] = DOMAIN_RESPONSES[name];
+  const domainBranches = domainErrorResponses().map(({ name, http, error, fallback }) => {
     return `    if (exception instanceof ${name}) return this.domain(${http}, '${error}', exception, '${fallback}');`;
   }).join('\n');
   return `/**
@@ -580,15 +571,15 @@ export class ApiExceptionFilter implements ExceptionFilter {
   private toResponse(exception: unknown, request: FastifyRequest): ErrorResponse | HttpException {
     // ── Validación: errores de FORMA de la petición, 400. El 422 queda para las reglas de negocio.
     if (exception instanceof RequestValidationError) {
-      const message = exception.source === 'body' ? 'La petición no supera las validaciones' : 'La petición viola restricciones declaradas';
-      return ErrorResponse.of(400, 'Validation Error', '${validation}', message, exception.details);
+      const message = exception.source === 'body' ? '${FW.invalidBody.message}' : '${FW.invalidParams.message}';
+      return ErrorResponse.of(400, '${FW.invalidBody.error}', '${validation}', message, exception.details);
     }
     // ── Errores de framework
     if (exception instanceof MissingParameterError) {
-      return ErrorResponse.of(400, 'Bad Request', '${validation}', exception.message);
+      return ErrorResponse.of(400, '${FW.missingParameter.error}', '${validation}', exception.message);
     }
     if (exception instanceof MalformedRequestError) {
-      return ErrorResponse.of(400, 'Bad Request', '${validation}', 'Petición malformada');
+      return ErrorResponse.of(400, '${FW.malformed.error}', '${validation}', '${FW.malformed.message}');
     }
     // La subida multipart: la parte que falta, sin code (el MissingServletRequestPartException de keel-spring), y
     // un cuerpo que no es multipart.
@@ -601,9 +592,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
     if (exception instanceof RouteNotFound) {
       // Ninguna ruta casa con método y camino. Si el camino existe con otro método, es un 405.
       if (allowsOtherMethod(request.method, request.url)) {
-        return ErrorResponse.of(405, 'Method Not Allowed', null, 'Método HTTP no soportado');
+        return ErrorResponse.of(405, '${FW.methodNotAllowed.error}', null, '${FW.methodNotAllowed.message}');
       }
-      return ErrorResponse.of(404, 'Not Found', null, 'Recurso no encontrado');
+      return ErrorResponse.of(404, '${FW.notFound.error}', null, '${FW.notFound.message}');
     }
 ${persistence ? PERSISTENCE_BRANCH : ''}    // ── Errores de dominio (jerarquía DomainException)
     if (exception instanceof DomainException) return this.fromDomain(exception);
@@ -612,12 +603,12 @@ ${persistence ? PERSISTENCE_BRANCH : ''}    // ── Errores de dominio (jerarq
     // /livez y /readyz, que no son API del diseño (en keel-spring las sirve el actuator, fuera de
     // ApiExceptionHandler).
     if (exception instanceof HttpException) {
-      if (exception.getStatus() === 400) return ErrorResponse.of(400, 'Bad Request', '${validation}', 'Petición malformada');
+      if (exception.getStatus() === 400) return ErrorResponse.of(400, '${FW.malformed.error}', '${validation}', '${FW.malformed.message}');
       return exception;
     }
     // ── Catch-all
     this.log.error('Excepción no controlada', exception instanceof Error ? exception.stack : String(exception));
-    return ErrorResponse.of(500, 'Internal Server Error', null, 'Ocurrió un error inesperado');
+    return ErrorResponse.of(500, '${FW.internal.error}', null, '${FW.internal.message}');
   }
 
   private fromDomain(exception: DomainException): ErrorResponse {

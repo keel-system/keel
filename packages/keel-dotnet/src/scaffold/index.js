@@ -10,6 +10,7 @@ import { buildModel } from 'keel-core/gen/model';
 import { materializeProject } from 'keel-core/gen/materialize';
 import { resolveStack } from 'keel-core/gen/stack';
 import { listKeelDocs } from 'keel-core/gen/keel-docs';
+import { derivedOpenapiFiles } from 'keel-core/gen/openapi';
 import { packageVersion } from '../lib/assets.js';
 import { CS_PROJECTION } from '../lib/cs-projection.js';
 import * as project from './project.js';
@@ -26,13 +27,18 @@ import * as mappers from './mappers.js';
 import * as services from './services.js';
 import * as mediator from './mediator.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
+import * as restSupport from './rest-support.js';
+import * as endpoints from './endpoints.js';
 import * as api from './api.js';
+import * as apiTests from './api-tests.js';
 import * as tests from './tests.js';
 import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
-// Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara.
-const GENERATORS = [project, config, health, wire, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, dtos, mappers, services, mediator, api, tests, readme, generatorDocs];
+// Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara. El primero es el contrato formal
+// de la API, derivado del modelo neutral (el mismo en los tres generadores), salvo que el workspace traiga el de
+// /keel-docs: keel-core/gen/openapi.js.
+const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, wire, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, dtos, mappers, services, mediator, restSupport, endpoints, api, tests, apiTests, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus

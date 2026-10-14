@@ -92,11 +92,18 @@ public abstract class DomainException : Exception
         Exception? cause = null)
         : base(message, cause)
     {
+        GivenMessage = message;
         Code = code;
         HttpStatus = httpStatus;
         Args = args;
         Details = details is null ? null : [.. details];
     }
+
+    /// <summary>
+    /// El mensaje con el que se construyó, o null. <see cref="Exception.Message"/> nunca es null (sin mensaje,
+    /// .NET inventa uno en inglés), y la API necesita saber si responder con el de la clase base.
+    /// </summary>
+    public string? GivenMessage { get; }
 
     /// <summary>El código estable del error (contrato público), o null si el diseño no lo nombra.</summary>
     public string? Code { get; }
