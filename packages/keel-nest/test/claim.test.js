@@ -78,6 +78,8 @@ test('el handler del barrido dice que el reclamo ya está generado y cómo se us
   assert.match(handler, /EL RECLAMO YA ESTÁ GENERADO: toma el lote con this\.jobRepository\.claimForDispatchJobsRunning\(\)/);
   assert.match(handler, /EL RESCATE YA ESTÁ GENERADO: this\.jobRepository\.claimForStalledDispatchJobsDone\(\)/);
   assert.match(handler, /SIN TRANSACCIÓN ABARCADORA/);
+  // Corrida job-dispatch-cycles de keel-dotnet (10e): el rescate cortaba el lote al primer save que perdía la carrera.
+  assert.match(handler.replace(/\n\s*\/\/\s+/g, ' '), /Un fallo en una fila NO corta el lote: cada save va en su try/);
 });
 
 test('sin barridos con reclamo no hay configuración de barridos', () => {

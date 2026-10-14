@@ -27,7 +27,9 @@ import { usesNestOutbox, usesProcessedEvents, usesMessaging } from './messaging.
 import { usesRequestIdempotency } from './request-idempotency.js';
 
 /** Dónde están las fuentes y qué archivos son los de los mensajes (nombran a todos los listeners y no son ninguno). */
-export const NEST_GATE = { srcDir: 'src', extension: 'ts', messageFiles: 'infrastructure/messaging/subscriptions/' };
+// TypeScript deja varios tipos en un archivo (tres listeners en un listeners.ts): el archivo localizado por contenido se
+// recorta a su tipo, como en keel-dotnet. Sin el recorte, cada listener prohibía el orden del vecino.
+export const NEST_GATE = { srcDir: 'src', extension: 'ts', messageFiles: 'infrastructure/messaging/subscriptions/', typesPerFile: 'many' };
 
 export const CHECK_IDEMPOTENCY_SH = 'infra/check-idempotency.sh';
 

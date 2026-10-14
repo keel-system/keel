@@ -689,7 +689,9 @@ function scheduleNotes(model, operation) {
         ? `EL RESCATE YA ESTÁ GENERADO: this.${decap(repository(claim))}.${claim.method}() devuelve los ${claim.entity} que llevan atascados en ` +
             `${claim.stalled.state} más que su plazo y que ESTA réplica se llevó, SIGUIENDO en ${claim.stalled.state} con ${claim.stalled.stampField} ` +
             `renovado. La transición a ${claim.to} la haces TÚ con el método del agregado (fija los campos que ${claim.to} exige) y la guardas. ` +
-            'No escribas otro rescate, ni un finder por estado, ni una cota propia.'
+            'No escribas otro rescate, ni un finder por estado, ni una cota propia. Un fallo en una fila NO corta el lote: cada save va en ' +
+            'su try, y un conflicto de versión es la carrera con quien saca la fila del estado a la vez (la ganó él): sigue con la siguiente. ' +
+            'Sin eso, una sola fila que pierde la carrera deja las demás arrendadas sin rescatar hasta que vuelva a vencer su plazo.'
         : `EL RECLAMO YA ESTÁ GENERADO: toma el lote con this.${decap(repository(claim))}.${claim.method}(), que devuelve SOLO los ${claim.entity} ` +
             `que ESTA réplica se llevó, ya en ${claim.to}${claim.stamps ? ` y con ${claim.stamps.field} estampado` : ''}. El tamaño del lote no se pasa: ` +
             `lo acota el adaptador con sweep.${claim.sweepKey}.batch-size. No escribas otro reclamo (ni un finder por estado ni un lock): ` +

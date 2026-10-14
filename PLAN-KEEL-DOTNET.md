@@ -1084,8 +1084,12 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     disparó de verdad el handler (los escenarios esperan al cron real), el barrido usa los dos reclamos generados tal cual y
     los flujos del rescate usan los tres helpers del arnés. Un hueco del generador: la nota del rescate no decía que un
     fallo en una fila no corta el lote, y el handler del agente cortaba la pasada al primer `Save` que perdía la carrera con
-    el ejecutor (ningún escenario lo ve). Arreglado en la nota, con su aserción; keel-nest y keel-spring llevan la misma
-    nota sin la frase (latente).
+    el ejecutor (ningún escenario lo ve). Arreglado en la nota, con su aserción.
+  - **Los dos latentes, cerrados (2026-10-14).** La misma frase en la nota del rescate de keel-nest y keel-spring (cambian
+    solo los handlers del barrido de las tres fixtures con rescate), y el gate de keel-nest con `typesPerFile: 'many'`
+    (TypeScript también deja varios tipos en un archivo), con su caso ejecutado en `test/idempotency-check.test.js` y
+    falsado quitando la opción. Contra las 15 corridas de keel-nest, el veredicto del gate es idéntico antes y después.
+    Las dos líneas base del golden, regeneradas por ese cambio intencional.
 - **Inc. 10 — cerrado (2026-10-14).** La reconciliación, la compensación y `lastKnown` van al 11, como en keel-nest.
   Siguiente: el incremento 11 (clientes HTTP salientes, circuito propio, reconciliación, arnés WireMock).
 

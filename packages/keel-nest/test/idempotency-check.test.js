@@ -298,3 +298,52 @@ test('conditionalUniqueness: recién generado sale rojo; con la ocupante buscada
   });
   assert.equal(verdicts(relieved.out).conditionalUniqueness, 'OK', relieved.out);
 });
+
+// El hueco que destapó keel-dotnet en su 9h, latente aquí: TypeScript deja varios tipos en un archivo, y con tres
+// listeners en un listeners.ts el gate miraba el archivo entero y cada uno «prohibía» el orden del vecino. El archivo
+// localizado por contenido se recorta ahora a su tipo (typesPerFile: 'many').
+test('snssqs: tres listeners en un archivo salen VERDES; uno con el orden cruzado, ROJO solo él', (t) => {
+  const { files } = planFixture('stock-reservation-events', { stack: { database: 'postgresql', broker: 'snssqs' } });
+  const listener = (name, message, order) => `export class ${name} {
+  constructor(private readonly guard: IdempotencyGuard) {}
+
+  async handle(payload: ${message}, eventId: string): Promise<void> {
+    payload.requireContract();
+${order}
+  }
+}
+`;
+  const guarded = (name) => `    if (await this.guard.alreadyProcessed('${name}', eventId)) return;
+    await this.guard.record('${name}', eventId);`;
+  const unguarded = (name) => `    if (!(await this.guard.tryRecord('${name}', eventId))) return;`;
+  const run = (reservedOrder) => {
+    const dir = tmpDir('keel-nest-gate-listeners-');
+    for (const file of files) {
+      const out = path.join(dir, file.path);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, file.content);
+    }
+    fs.writeFileSync(
+      path.join(dir, 'src/infrastructure/messaging/listeners.ts'),
+      [
+        listener('StockReservedListener', 'StockReservedMessage', reservedOrder),
+        listener('StockRejectedListener', 'StockRejectedMessage', guarded('StockRejectedListener')),
+        listener('StockCountAdjustedListener', 'StockCountAdjustedMessage', unguarded('StockCountAdjustedListener'))
+      ].join('\n')
+    );
+    try {
+      return execFileSync('bash', [CHECK_IDEMPOTENCY_SH], { cwd: dir, encoding: 'utf8' });
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      return error.stdout;
+    }
+  };
+  const correct = run(guarded('StockReservedListener'));
+  if (correct === null) return t.skip('sin bash en el PATH');
+  assert.equal(verdicts(correct).dedupe, 'OK', correct);
+  assert.equal(verdicts(correct).payloadContract, 'OK', correct);
+  const crossed = run(unguarded('StockReservedListener'));
+  assert.equal(verdicts(crossed).dedupe, 'KO', crossed);
+  const findings = crossed.split('\n').filter((line) => line.includes('[dedupe]'));
+  assert.ok(findings.length > 0 && findings.every((line) => line.includes('StockReserved (')), crossed);
+});

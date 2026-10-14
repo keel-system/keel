@@ -615,6 +615,9 @@ function renderHandler(model, service, operation) {
           : `El puerto del repositorio NO trae método de reclamo para este barrido, así que lo escribes tú: ${claimMechanism(model).conditional} que marque la fila y devuelva cuántas afectó (1 = es mía, 0 = otra llegó antes). `) +
         `Lo que NO vale es leer con un finder y marcar después: entre la lectura y la marca las N réplicas ya se llevaron las mismas filas, y con un efecto que no se puede retirar —un correo, un cobro— eso son N efectos. ` +
         `El lote va acotado, y actúa sobre lo reclamado FUERA de la transacción del reclamo: sostenerla durante una llamada externa retiene una conexión del pool por la latencia de un tercero. ` +
+        (claims.some((claim) => claim.stalled)
+          ? `Lo que devuelve el RESCATE (${claims.filter((claim) => claim.stalled).map((claim) => `${claim.method}()`).join(', ')}) se transiciona y se guarda fila a fila, y un fallo en una NO corta el lote: cada save va en su try, y un conflicto de versión es la carrera con quien saca la fila del estado a la vez (la ganó él): sigue con la siguiente. Sin eso, una sola fila que pierde la carrera deja las demás arrendadas sin rescatar hasta que vuelva a vencer su plazo. `
+          : '') +
         `Lo verifica infra/check-idempotency.sh, familia sweepClaim`
     );
   }

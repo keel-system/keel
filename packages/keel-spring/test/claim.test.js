@@ -13,6 +13,7 @@ import { warnUnsupportedDialect } from '../src/scaffold/claim.js';
 import * as integrationTests from '../src/scaffold/integration-tests.js';
 import { supportsSkipLocked } from '../src/lib/claim-sql.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { planService } from '../src/scaffold/index.js';
 
 // Un barrido corre en TODAS las réplicas: @Scheduled es «una vez por instancia», no «una
 // vez en el clúster». Estos tests fijan qué reclamo genera build y —tan importante como
@@ -555,4 +556,18 @@ test('sin reloj declarado no hay reclamo y tampoco palanca', () => {
 
 test('un barrido que solo vacía una COLA no recibe palanca de rescate', () => {
   assert.ok(!harnessFor(queueSweep()).includes('stallInFlight'));
+});
+
+// Corrida job-dispatch-cycles de keel-dotnet (2026-10-14): el handler del rescate cortaba el lote al primer save que
+// perdía la carrera con quien saca la fila del estado, y las demás filas, ya arrendadas, esperaban otro plazo entero.
+// Ningún escenario lo ve. La nota del barrido lo dice cuando hay rescate, y solo entonces.
+test('la nota del barrido con rescate dice que un fallo en una fila no corta el lote', () => {
+  const handlerOf = (name) => {
+    const { manifest: m, layers } = loadService(path.join(FIXTURES_DIR, name));
+    const { files } = planService({ manifest: m, layers, workspace: FIXTURES_DIR, stack: { database: 'postgresql' } });
+    return files.find((file) => file.path.endsWith('/DispatchJobsCommandHandler.java') || file.path.endsWith('/SendPayoutsCommandHandler.java')).content.replace(/\n\s*\/\/\s+/g, ' ');
+  };
+  assert.match(handlerOf('job-dispatch'), /claimForStalledDispatchJobsDone\(\)\) se transiciona y se guarda fila a fila, y un fallo en una NO corta el lote/);
+  // Un barrido de cola sin rescate no lleva la frase.
+  assert.doesNotMatch(handlerOf('payout-runs'), /NO corta el lote/);
 });

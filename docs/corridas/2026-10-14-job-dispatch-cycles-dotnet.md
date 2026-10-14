@@ -59,7 +59,7 @@ ni del arnés tocado: el barrido (`DispatchJobsCommandHandler`) llama a `ClaimFo
   (`FL-RSC-001-B` es la confirmación TARDÍA, no la simultánea). El agente de keel-nest sí lo aisló (un `try` por fila y
   un `AggregateError` al final); la diferencia venía de la nota: la de la cola decía «un fallo en una no revierte las
   demás» y la del rescate no. Arreglado en la nota del rescate de keel-dotnet (`services.js`), con su aserción en
-  `test/claim.test.js`. keel-nest y keel-spring llevan la misma nota sin esa frase: latente, sin tocar.
+  `test/claim.test.js`. keel-nest y keel-spring llevaban la misma nota sin esa frase: arreglada también en los dos.
 
 ## designGaps
 
