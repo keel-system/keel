@@ -902,11 +902,15 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     contra lo que emiten `stock-reservation-events` (outbox) y `metering-digest` (best-effort), y las firmas que enseña
     (`Publish`, `Consume`, `Header`, `Dispatch`, `InboundContext.Run`, la guarda, el publisher y el comando). Falsado
     citando un archivo inventado. `npm test` 356/356; `cs-check` 15/15.
-  - **9e, la corrida — preparada (2026-10-14).** Workspace `spring-live-test/corrida-stock-reservation-events-dotnet`:
-    `keel init`, el diseño de la fixture (`--ready` 11/11, sin `--accept-unready`) y `keel-dotnet build` con
-    `postgresql · rabbitmq` (196 archivos, con la skill `keel-dotnet-rabbitmq`); el proyecto compila tal cual. Sus
-    gemelas son `2026-10-07-stock-reservation-events-{nest,spring}.md` (18/18 huella 9 y 14/14 huella 8). Los
-    contenedores se llaman `stock-reservation-events-*`: no puede correr a la vez que otra corrida del mismo diseño.
+  - **9e, la corrida (hecha, 2026-10-14): 15/15 y huella 9**, los MISMOS nueve archivos que keel-nest (18/18, huella 9;
+    keel-spring 14/14, huella 8) (`docs/corridas/2026-10-14-stock-reservation-events-dotnet.md`). Diseño listo, sin
+    `--accept-unready`, sin `harnessPatches`, sin `design-gaps.yaml` y sin rojos en la ejecución final. El listener del
+    agente es el de la skill casi literal (cola compartida, ámbito por mensaje, el orden del guard de cada mensaje, la
+    carrera resuelta). Un hueco del generador, propuesto por el propio agente de pruebas: el arnés escribía el cuerpo de
+    cada entrega en un archivo FIJO de devtools, y dos entregas a la vez (`FL-CMP-001-C`) se lo pisaban; no falló porque
+    los cuerpos eran iguales. Arreglado (un archivo por llamada) y medido: `broker-check` gana `FL-BRK-001-G` con su
+    falsado, **22/22**. keel-spring tiene el mismo defecto latente (anotado, sin tocar).
+- **Inc. 9 — RabbitMQ cerrado (2026-10-14).** Siguiente: 9f (Kafka) y 9g (SNS/SQS), como en keel-nest.
 
 ## 5. Riesgos conocidos
 

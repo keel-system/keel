@@ -294,6 +294,17 @@ public sealed class BrokerConsumptionFlow : FlowTest
         Assert.Equal(0, BrokerProbe.Attempts(id));
         Assert.Equal(before, DeadLetterMessages("${sub.name}").Count);
     }
+
+    [Scenario("FL-BRK-001-G: entregas DISTINTAS lanzadas a la vez llegan todas, cada una con su cuerpo")]
+    public async Task LasEntregasALaVezNoSePisan()
+    {
+        // El escenario de carrera de una corrida (dos entregas a la vez): con un archivo de cuerpo compartido en devtools,
+        // una entrega se llevaba el cuerpo de la otra.
+        var ids = Enumerable.Range(0, 8).Select(_ => BrokerProbe.Id()).ToList();
+        await Task.WhenAll(ids.Select(id => Task.Run(() => Deliver${sub.name}(id, BrokerProbe.Order), TestContext.Current.CancellationToken)));
+        await Eventually(() => Task.FromResult(ids.All(id => BrokerProbe.Processed(id) == 1)), TimeSpan.FromSeconds(30), "alguna entrega no llegó con su cuerpo");
+        Assert.All(ids, id => Assert.Equal(1, BrokerProbe.Attempts(id)));
+    }
 }
 
 public sealed class BrokerPublicationFlow : FlowTest
@@ -368,7 +379,7 @@ if (!step('el proyecto con las sondas y los flujos compila sin warnings', compil
   process.exit(1);
 }
 
-const CASES = { 'FL-BRK-001': 'ABCDEF', 'FL-BRK-002': 'ABCDE' };
+const CASES = { 'FL-BRK-001': 'ABCDEFG', 'FL-BRK-002': 'ABCDE' };
 const up = bash(projectDir, 'infra/up.sh');
 if (!step('bash infra/up.sh (PostgreSQL y RabbitMQ)', up.status === 0, up.status === 0 ? '' : up.output.slice(-1200))) process.exit(1);
 try {
@@ -406,6 +417,20 @@ try {
     const caught = sabotaged.status === 1 && /FALLO\s+FL-BRK-001-D/.test(sabotaged.output) && !/FALLO\s+FL-BRK-00[12]-[^D]/.test(sabotaged.output);
     step('falsado: con el rechazo reintentado, FL-BRK-001-D sale FALLO (y solo él) y el script con 1', caught, caught ? '' : `código ${sabotaged.status}\n${sabotaged.output.slice(-2000)}`);
     fs.writeFileSync(topologyFile, topology);
+  }
+
+  // Falsado: con el archivo de cuerpo COMPARTIDO entre llamadas (el arnés antes del arreglo), las entregas a la vez se
+  // pisan el cuerpo y FL-BRK-001-G sale FALLO.
+  const harnessFile = path.join(flowsDir, 'Support', 'Messaging.cs');
+  const harness = fs.readFileSync(harnessFile, 'utf8');
+  const shared = harness.replace('$"{BodyFilePrefix}-{Guid.NewGuid():N}.json"', '$"{BodyFilePrefix}.json"');
+  if (step('falsado: el archivo de cuerpo por llamada se puede volver compartido en lo emitido', shared !== harness)) {
+    fs.writeFileSync(harnessFile, shared);
+    const sabotaged = bash(projectDir, 'infra/score-scenarios.sh');
+    const caught = sabotaged.status === 1 && /FALLO\s+FL-BRK-001-G/.test(sabotaged.output);
+    step('falsado: con el cuerpo compartido, FL-BRK-001-G sale FALLO y el script con 1', caught, caught ? '' : `código ${sabotaged.status}
+${sabotaged.output.slice(-2000)}`);
+    fs.writeFileSync(harnessFile, harness);
   }
 } finally {
   const down = bash(projectDir, 'infra/down.sh', ['--volumes']);

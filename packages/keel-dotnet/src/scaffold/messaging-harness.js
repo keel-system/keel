@@ -44,9 +44,9 @@ export function messagingHarnessCs(model, namespace) {
   const deadLetters = subscriptions.filter((sub) => sub.deadLetter);
   const outbox = usesDotnetOutbox(model);
 
-  const read = readParts('rabbitmq', { destination: expr('queue'), bodyFile: expr('ProbeBody'), base: expr('RabbitApi') });
+  const read = readParts('rabbitmq', { destination: expr('queue'), bodyFile: expr('bodyFile'), base: expr('RabbitApi') });
   const purge = purgeParts('rabbitmq', { destination: expr('queue'), base: expr('RabbitApi') });
-  const deliver = deliverParts('rabbitmq', { destination: expr('exchange'), bodyFile: expr('DeliverBody'), base: expr('RabbitExchangeApi') });
+  const deliver = deliverParts('rabbitmq', { destination: expr('exchange'), bodyFile: expr('bodyFile'), base: expr('RabbitExchangeApi') });
   const probeBody = spliceBody(rabbitProbeBody(hole(0)), ['count.ToString(CultureInfo.InvariantCulture)'], csString);
   const publishBody = spliceBody(
     rabbitPublishBody({ routingKey: hole(0), key: hole(1), headersJson: hole(2), payloadBase64: hole(3) }),
@@ -149,8 +149,10 @@ internal static class BrokerHarness
     private const string RabbitApi = ${csString(ENDPOINTS.rabbitmq.queuesApi)};
     private const string RabbitExchangeApi = ${csString(ENDPOINTS.rabbitmq.exchangeApi)};
     private const string ConnectionsApi = ${csString(connections)};
-    private const string ProbeBody = ${csString(PROBE_BODY_FILE)};
-    private const string DeliverBody = "/tmp/keel-deliver.json";
+    // Los cuerpos viajan por un archivo del contenedor devtools: UNO POR LLAMADA (el nombre fijo de keel-core más un
+    // sufijo único). Con uno fijo, dos entregas lanzadas a la vez por un escenario de carrera se pisaban el cuerpo
+    // (corrida stock-reservation-events, FL-CMP-001-C: no falló porque los dos eran iguales).
+    private static readonly string BodyFilePrefix = ${csString(PROBE_BODY_FILE.replace(/\.json$/, ''))};
     private const string ConnectionName = ${csString(connectionName(model))};
     private static readonly TimeSpan BrokerTimeout = TimeSpan.FromSeconds(90);
 
@@ -183,14 +185,35 @@ ${deadLetters.map((sub) => `        [${csString(sub.name)}] = ${csString(deadLet
     /// <summary>Un archivo dentro del contenedor devtools: los cuerpos viajan así, nunca embebidos en la línea de comandos.</summary>
     private static void CopyToDevtools(string content, string file) => Devtools(["sh", "-c", $"cat > {file}"], content);
 
+    /// <summary>Un archivo propio de esta llamada en devtools, con <paramref name="content"/>; se borra al terminar.</summary>
+    private static T WithBodyFile<T>(string content, Func<string, T> use)
+    {
+        var bodyFile = $"{BodyFilePrefix}-{Guid.NewGuid():N}.json";
+        CopyToDevtools(content, bodyFile);
+        try
+        {
+            return use(bodyFile);
+        }
+        finally
+        {
+            try
+            {
+                Devtools(["rm", "-f", bodyFile]);
+            }
+            catch (InvalidOperationException)
+            {
+                // Un archivo temporal que no se pudo borrar no invalida la lectura ni la entrega.
+            }
+        }
+    }
+
     /// <summary>Peek de una cola (leer no consume).</summary>
     public static IReadOnlyList<BrokerMessage> ReadQueue(string queue, int count)
     {
-        CopyToDevtools(${probeBody}, ProbeBody);
         string raw;
         try
         {
-            raw = Devtools([${cs(read)}]);
+            raw = WithBodyFile(${probeBody}, bodyFile => Devtools([${cs(read)}]));
         }
         catch (InvalidOperationException) when (brokerStopped)
         {
@@ -213,8 +236,7 @@ ${deadLetters.map((sub) => `        [${csString(sub.name)}] = ${csString(deadLet
 
     public static void Deliver(string exchange, string key, string body, IReadOnlyDictionary<string, string> headers)
     {
-        CopyToDevtools(${publishBody}, DeliverBody);
-        var published = Devtools([${cs(deliver)}]);
+        var published = WithBodyFile(${publishBody}, bodyFile => Devtools([${cs(deliver)}]));
         if (!published.Contains("\\"routed\\":true", StringComparison.Ordinal))
         {
             throw new InvalidOperationException($"RabbitMQ aceptó la publicación en '{exchange}' pero no la enrutó a ninguna cola (routed:false): ¿arrancó la conexión del servicio y declaró su topología? Respuesta: {published}");
