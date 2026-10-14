@@ -181,3 +181,33 @@ test('sin outbox (metering-digest) el arnés no trae los helpers del outbox; sin
   assert.match(harness, /public static Task AwaitOutboxDrained\(string channel\) => Task\.CompletedTask;/);
   assert.equal(content(plan('product-catalog').files, '.IntegrationTests/Support/Messaging.cs'), undefined);
 });
+
+// ─── Kafka (incremento 9f) ───────────────────────────────────────────────────
+
+test('con Kafka: messaging.yaml (con el group-id) y kafka.yaml son los de keel-nest, byte a byte', () => {
+  const stack = { broker: 'kafka', database: 'postgresql' };
+  for (const name of ['stock-reservation-events', 'metering-digest']) {
+    const ours = planService({ ...design(name), workspace: FIXTURES_DIR, stack }).files;
+    const nest = planNest({ ...design(name), workspace: FIXTURES_DIR, stack }).files;
+    for (const profile of ['local', 'develop', 'production', 'test']) {
+      for (const fragment of ['messaging', 'kafka']) {
+        const file = `config/parameters/${profile}/${fragment}.yaml`;
+        assert.ok(content(ours, file), `${name}: ${file}`);
+        assert.equal(content(ours, file), content(nest, file), `${name}: ${file}`);
+      }
+    }
+    assert.equal(content(ours, 'rabbitmq.yaml'), undefined, 'sin RabbitMQ');
+    assert.match(content(ours, 'Directory.Packages.props'), /Confluent\.Kafka" Version="2\.15\.1"/);
+  }
+});
+
+test('con Kafka: el consumo es el de keel-core (un grupo por suscripción) y el arnés marca offsets en vez de purgar', () => {
+  const { files } = planService({ ...design('stock-reservation-events'), workspace: FIXTURES_DIR, stack: { broker: 'kafka', database: 'postgresql' } });
+  const consumption = content(files, '/Kafka/KafkaConsumption.cs');
+  for (const group of ['stock-reservation-events-stock-reserved', 'stock-reservation-events-stock-rejected', 'stock-reservation-events-stock-count-adjusted']) {
+    assert.ok(consumption.includes(`"${group}"`), group);
+  }
+  const harness = content(files, '.IntegrationTests/Support/Messaging.cs');
+  assert.ok(harness.includes('MarkChannels()') && harness.includes('DescribeConsumerGroupsAsync'));
+  assert.match(content(files, '.IntegrationTests/StockReservationEvents.IntegrationTests.csproj'), /PackageReference Include="Confluent.Kafka"/);
+});

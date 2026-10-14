@@ -29,6 +29,7 @@ import { usesApi } from './rest-support.js';
 import { usesRelational } from './persistence.js';
 import { csFile, csString, solution } from './render.js';
 import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
+import { usesKafka } from './messaging.js';
 import { closingCredentialExpression, credentialsCs, flowTestCredentialMembers, smokeCredentialsCase } from './identity-harness.js';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
@@ -922,7 +923,10 @@ export function integrationTestsCsproj(model) {
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.v3" />${usesKafka(model) ? `
+    <!-- Con Kafka, la API de administración: el arnés espera a que los consumer groups del servidor tengan sus particiones
+         (el servidor es otro proceso, así que se le pregunta al broker). -->
+    <PackageReference Include="Confluent.Kafka" />` : ''}
   </ItemGroup>
 
 </Project>

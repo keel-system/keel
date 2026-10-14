@@ -9,9 +9,9 @@
 
 import { WIRE_SHAPES } from 'keel-core/gen/wire';
 import { outboxBackoffMs } from 'keel-core/gen/messaging-stores';
-import { rabbitListenerRetry } from 'keel-core/gen';
+import { kafkaListenerRetry, rabbitListenerRetry } from 'keel-core/gen';
 import { csFile, csMember, csString, namespaceOf, solution } from './render.js';
-import { messagingNamespace, usesDotnetOutbox, usesMessaging, usesRabbitMq } from './messaging.js';
+import { messagingNamespace, usesDotnetOutbox, usesKafka, usesMessaging, usesRabbitMq } from './messaging.js';
 
 export function generate(model) {
   if (!usesMessaging(model)) return [];
@@ -25,6 +25,10 @@ export function generate(model) {
   if (usesRabbitMq(model)) {
     usings.push(namespaceOf(model, 'rabbitmq'));
     members.push(listenerRetryTests(model));
+  }
+  if (usesKafka(model)) {
+    usings.push(namespaceOf(model, 'kafka'));
+    members.push(kafkaRetryTests(model));
   }
   if ((model.events ?? []).length > 0) {
     usings.push(namespaceOf(model, 'integrationEvents'));
@@ -184,4 +188,31 @@ function integrationTests(model) {
 ${rows.join('\n')}
     public void LaMetadataNoSeSerializaEnData(Type integration) =>
         Assert.NotNull(integration.GetProperty(${csString(csMember('metadata'))})!.GetCustomAttributes(typeof(JsonIgnoreAttribute), inherit: true).SingleOrDefault());`;
+}
+
+function kafkaRetryTests(model) {
+  const retry = kafkaListenerRetry(model);
+  // La curva del DeadLetterConfig de keel-spring (o el DefaultErrorHandler por defecto: diez intentos sin espera).
+  const expected = (attempt) => {
+    const delay = retry.initialMs * retry.multiplier ** Math.max(attempt - 1, 0);
+    return Math.trunc(retry.maxDelayMs != null ? Math.min(delay, retry.maxDelayMs) : delay);
+  };
+  const rows = [1, 2, 3, 8].map((attempt) => `    [InlineData(${attempt}, ${expected(attempt)})]`);
+  return `    [Fact]
+    public void ElReintentoDelConsumidorEsElDelDiseño() => Assert.Equal(${retry.attempts}, KafkaConsumption.Retry.Attempts);
+
+    [Theory]
+${rows.join('\n')}
+    public void LaEsperaEntreIntentosDelConsumidorSigueLaCurva(int attempt, long expected) =>
+        Assert.Equal(expected, KafkaConsumption.ListenerBackoffMs(attempt, KafkaConsumption.Retry));
+
+    [Fact]
+    public void ElDescarteDeKafkaEsElTopicPuntoDlt() => Assert.Equal("t.DLT", KafkaConsumption.DeadLetterTopic("t"));
+
+    [Fact]
+    public void ElContratoIncumplidoNoSeReintentaEnKafka()
+    {
+        Assert.False(KafkaConsumption.IsRetryable(new MessageContractViolation("x"), retriesNotFound: true));
+        Assert.True(KafkaConsumption.IsRetryable(new TimeoutException(), retriesNotFound: false));
+    }`;
 }

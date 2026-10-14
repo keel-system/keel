@@ -8,7 +8,7 @@
 // fijó la versión; subir una versión obliga a volver a leerla.
 
 /** Licencias admitidas: permisivas, sin obligación de publicar el código del servicio. */
-export const ALLOWED_LICENSES = ['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'PostgreSQL', 'MS-PL'];
+export const ALLOWED_LICENSES = ['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'PostgreSQL', 'MS-PL', 'Zlib', 'ISC'];
 
 /**
  * Lo que pasó a licencia comercial, por nombre y desde qué versión mayor. Una versión anterior seguiría
@@ -53,8 +53,33 @@ export const PACKAGES = {
   // Sin el handler JwtBearer de ASP.NET Core, que decide después de enrutar (scaffold/security.js). Verificada el 2026-10-14.
   'Microsoft.IdentityModel.JsonWebTokens': { version: '8.23.0', license: 'MIT', use: 'validación del JWT (capa security)' },
   // La mensajería sobre RabbitMQ (incremento 9): el cliente oficial, con licencia doble a elegir. Verificada el 2026-10-14.
-  'RabbitMQ.Client': { version: '7.2.2', license: 'Apache-2.0 OR MPL-2.0', use: 'conexión con RabbitMQ (capa messaging)' }
+  'RabbitMQ.Client': { version: '7.2.2', license: 'Apache-2.0 OR MPL-2.0', use: 'conexión con RabbitMQ (capa messaging)' },
+  // La mensajería sobre Kafka (incremento 9f): el cliente oficial de Confluent sobre librdkafka (nativo, por
+  // librdkafka.redist, ver VERIFIED_LICENSES). Fijado a la versión de librdkafka que trae. Verificada el 2026-10-14.
+  'Confluent.Kafka': { version: '2.15.1', license: 'Apache-2.0', use: 'conexión con Kafka (capa messaging)' }
 };
+
+/**
+ * Lo que NuGet resuelve y NO declara una licencia SPDX, solo una URL: leída a mano en su fuente, para una versión
+ * EXACTA. Otra versión vuelve a no poder comprobarse (y cs-check sale en rojo) hasta que alguien la lea.
+ */
+export const VERIFIED_LICENSES = {
+  // librdkafka (el driver nativo que usa Confluent.Kafka) es BSD-2-Clause, y su LICENSES.txt lista lo que incluye:
+  // cJSON, hdrhistogram y pycrc (MIT), crc32c, nanopb y tinycthread (Zlib), lz4, queue y snappy (BSD), wingetopt
+  // (ISC), la parte de OpenTelemetry (Apache-2.0) y fnv1a, murmur2 y regexp (dominio público, sin obligaciones).
+  'librdkafka.redist': {
+    version: '2.15.1',
+    license: 'BSD-2-Clause AND MIT AND Zlib AND BSD-3-Clause AND ISC AND Apache-2.0',
+    source: 'https://github.com/confluentinc/librdkafka/blob/v2.15.1/LICENSES.txt',
+    verified: '2026-10-14'
+  }
+};
+
+/** La licencia verificada a mano de un paquete y versión, o null. */
+export function verifiedLicense(id, version) {
+  const entry = Object.entries(VERIFIED_LICENSES).find(([known]) => known.toLowerCase() === String(id).toLowerCase())?.[1];
+  return entry && entry.version === version ? entry.license : null;
+}
 
 /**
  * Las herramientas locales de .NET (`.config/dotnet-tools.json`), con la misma regla que los paquetes: versión exacta

@@ -9,7 +9,7 @@
 //   · lo que solo es markdown que un agente lee por ruta —architecture, constitution, orchestration, conventions— va
 //     a `docs/keel/`, UNA sola copia, y no puede citar rutas de harness.
 
-import { usesRabbitMq } from './messaging.js';
+import { usesKafka, usesRabbitMq } from './messaging.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from 'keel-core';
@@ -42,6 +42,7 @@ export function stackSkills(model) {
   const skills = usesRelational(model) ? ['keel-dotnet-database'] : [];
   if (usesJwt(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-dotnet-${model.stack.auth}`);
   if (usesRabbitMq(model)) skills.push('keel-dotnet-rabbitmq');
+  if (usesKafka(model)) skills.push('keel-dotnet-kafka');
   return skills;
 }
 

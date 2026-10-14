@@ -5,7 +5,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PACKAGES, TOOLS, licenseAllowed, licenseProblems, commercialRule } from '../src/lib/dotnet-stack.js';
+import { PACKAGES, TOOLS, VERIFIED_LICENSES, licenseAllowed, licenseProblems, commercialRule, verifiedLicense } from '../src/lib/dotnet-stack.js';
 import { packagesFor } from '../src/scaffold/project.js';
 
 test('todo paquete y herramienta de la tabla tiene versión exacta y licencia permisiva', () => {
@@ -42,4 +42,16 @@ test('una expresión SPDX compuesta: OR deja elegir, AND obliga a todas', () => 
   assert.equal(licenseAllowed('(Apache-2.0 OR MIT)'), true);
   assert.equal(licenseAllowed('MIT AND GPL-3.0-only'), false);
   assert.equal(licenseAllowed('MIT AND Apache-2.0'), true);
+});
+
+test('una licencia leída a mano vale solo para su versión exacta, y es permisiva', () => {
+  for (const [id, { version, license, source }] of Object.entries(VERIFIED_LICENSES)) {
+    assert.match(version, /^\d+\.\d+\.\d+$/, id);
+    assert.ok(source.includes(version), `${id}: la fuente es la de esa versión`);
+    assert.deepEqual(licenseProblems({ id, version, license }), [], id);
+    assert.equal(verifiedLicense(id, version), license);
+    assert.equal(verifiedLicense(id, '0.0.1'), null, `${id}: otra versión no está leída`);
+  }
+  // La de librdkafka es la que trae Confluent.Kafka: subir uno sin el otro deja el nativo sin licencia comprobada.
+  assert.equal(VERIFIED_LICENSES['librdkafka.redist'].version, PACKAGES['Confluent.Kafka'].version);
 });

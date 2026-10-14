@@ -36,7 +36,7 @@ import { makeWorkspace, mountDesign, runCommand, DOTNET_READY_DESIGN, FIXTURES_D
 import { planService } from '../src/scaffold/index.js';
 import { solution } from '../src/scaffold/render.js';
 import { build } from '../src/commands/build.js';
-import { licenseProblems } from '../src/lib/dotnet-stack.js';
+import { licenseProblems, verifiedLicense } from '../src/lib/dotnet-stack.js';
 import { WIRE_SHAPES } from 'keel-core/gen/wire';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
@@ -79,6 +79,16 @@ const PROBES = ['DomainProbes', 'RestProbes'];
 // Variantes derivadas en memoria de una fixture real, para lo que ninguna declara. Cada una cambia el
 // nombre del servicio, que es el namespace raíz: dos variantes de la misma fixture no pueden chocar.
 const DERIVED = [
+  // La mensajería sobre KAFKA (incremento 9f): las fixtures con mensajería compilan sobre RabbitMQ; estas dos, con outbox
+  // y best-effort, compilan además la conexión, el consumo y el arnés de Kafka.
+  ...['stock-reservation-events', 'metering-digest'].map((from) => ({
+    name: `${from}-kafka`,
+    from,
+    broker: 'kafka',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+    }
+  })),
   {
     name: 'inspection-reports-reject',
     from: 'inspection-reports',
@@ -231,7 +241,8 @@ try {
   const packages = resolvedPackages(projectDir);
   const problems = [];
   for (const { id, version } of packages) {
-    problems.push(...licenseProblems({ id, version, license: await nugetLicense(id, version) }));
+    // Lo que solo declara una URL vale si está leído a mano para ESA versión (dotnet-stack.js, VERIFIED_LICENSES).
+    problems.push(...licenseProblems({ id, version, license: (await nugetLicense(id, version)) ?? verifiedLicense(id, version) }));
   }
   if (!step(`licencias de los ${packages.length} paquetes resueltos, transitivos incluidos`, problems.length === 0, problems.join('; '))) {
     for (const problem of problems) console.error(`  ${problem}`);
@@ -337,11 +348,11 @@ function compileAllFixtures() {
   const projects = [];
   const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
   const designs = [...fixtures.map((name) => ({ name, from: name })), ...DERIVED];
-  for (const { name, from, mutate } of designs) {
+  for (const { name, from, mutate, broker } of designs) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     if (mutate) mutate(manifest, layers, name);
     // Con mensajería, sobre RabbitMQ: es el broker que la frontera admite (el default del stack es Kafka).
-    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: layers.messaging ? { broker: 'rabbitmq' } : null });
+    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: layers.messaging ? { broker: broker ?? 'rabbitmq' } : null });
     for (const file of files) {
       const target = path.join(root, name, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });

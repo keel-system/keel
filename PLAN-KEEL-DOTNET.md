@@ -911,6 +911,38 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     los cuerpos eran iguales. Arreglado (un archivo por llamada) y medido: `broker-check` gana `FL-BRK-001-G` con su
     falsado, **22/22**. keel-spring tiene el mismo defecto latente (anotado, sin tocar).
 - **Inc. 9 — RabbitMQ cerrado (2026-10-14).** Siguiente: 9f (Kafka) y 9g (SNS/SQS), como en keel-nest.
+  - **9f, Kafka (hecho, 2026-10-14).**
+    - **9f-a, lo neutral** (`1bffff7`): `kafkaConsumption`, los plazos de la conexión y `kafka.yaml` pasan de keel-nest a
+      `keel-core/gen/messaging-plan.js`; keel-nest idéntico salvo un comentario de `kafka.yaml` que nombraba a keel-spring
+      (72 archivos).
+    - **La conexión** (`src/scaffold/kafka.js`) sobre **Confluent.Kafka 2.15.1** (Apache-2.0): `KafkaConsumption` (un
+      grupo por suscripción, el descarte por topic, la curva de `kafkaListenerRetry`), `KafkaSettings` y
+      `KafkaConnection`: productor con acks de todas las réplicas e idempotencia, un consumidor por suscripción en su
+      propio hilo con el offset guardado DESPUÉS del desenlace (`EnableAutoOffsetStore = false`), reintento en memoria y
+      descarte en `<topic>.DLT` con los headers de Spring Kafka (partición y offset big-endian). Arranca sin broker.
+    - **La licencia del nativo**: `librdkafka.redist` no declara SPDX, solo una URL. Se leyó su `LICENSES.txt`
+      (BSD-2-Clause, MIT, Zlib, BSD-3-Clause, ISC, Apache-2.0 y dominio público) y queda en `VERIFIED_LICENSES`
+      (`dotnet-stack.js`) con su versión EXACTA y su fuente; `cs-check` la acepta solo para esa versión, y
+      `licenses.test.js` ata su versión a la de Confluent.Kafka. Zlib e ISC entran en la lista de admitidas. Se fijó la
+      2.15.1 y no la 2.16.0, que salió hace una semana.
+    - **El arnés** (`messaging-harness.js`, reestructurado): la misma API con los dos brokers sobre un `BrokerHarness`
+      propio de cada uno. Con Kafka, marca de offset por canal y por descarte en vez de purga, lectura con kcat filtrada
+      por el tipo dentro del topic único del servicio, entrega con kcat, y la espera a los consumidores por la API de
+      administración de Confluent.Kafka desde el proyecto de flujos (lo que hace el `AbstractFlowIT` de keel-spring), que
+      ahora NOMBRA los grupos que no llegan («¿falta el listener de su suscripción?»).
+    - **La skill** `keel-dotnet-kafka` (con listeners y diagnóstico), atada a lo emitido por `generator-docs.test.js`.
+    - **`broker-check` corre con los dos brokers** (`--broker=rabbitmq,kafka`). Con Kafka, once flujos: los de RabbitMQ
+      menos `mandatory`, más `FL-BRK-001-H` (el descarte conserva la clave y lleva los headers de Spring Kafka).
+    - **Lo que destapó**:
+      - El arnés exigía los TRES grupos del topic y la sonda solo registraba un listener: en un proyecto completo están
+        todos, así que la sonda registra ahora las tres suscripciones, cada consumidor filtrando la suya (con el mismo
+        manejador para las tres, cada grupo recibe el topic entero y `StockReserved` se habría procesado tres veces).
+      - `FL-BRK-002-D` (el abandono) salía rojo: el envío que el relay tenía EN VUELO seguía en el buffer de librdkafka
+        y, al levantar el broker, el evento «abandonado» salía. Es la K2 de las corridas `payment-checkout` de
+        keel-spring; `AbandonOutboxEvent` espera ahora, con Kafka, el `delivery.timeout.ms` del perfil local más un margen.
+      - `--keep` había quedado fuera de la función por broker al convertir el script.
+    - **Medido:** `npm test` 360/360; `broker-check` **44/44** (22 por broker, los dos falsados); `cs-check` 15/15 con dos
+      variantes con Kafka (`stock-reservation-events-kafka` y `metering-digest-kafka`): 114 ensamblados.
 
 ## 5. Riesgos conocidos
 

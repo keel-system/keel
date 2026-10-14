@@ -26,8 +26,8 @@ const PENDING_LAYERS = {
  */
 export const SUPPORTED_DATABASES = ['postgresql'];
 
-/** Los brokers que keel-dotnet genera: RabbitMQ primero (incremento 9); Kafka y SNS/SQS, en sus tramos, como en keel-nest. */
-export const SUPPORTED_BROKERS = ['rabbitmq'];
+/** Los brokers que keel-dotnet genera: RabbitMQ (incremento 9) y Kafka (9f); SNS/SQS, en su tramo, como en keel-nest. */
+export const SUPPORTED_BROKERS = ['rabbitmq', 'kafka'];
 
 /** Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. */
 const ACCEPTED_NOT_EMITTED = {};
@@ -103,8 +103,8 @@ export function checkSupportedStack(stack) {
   }
   if (stack?.broker && !SUPPORTED_BROKERS.includes(stack.broker)) {
     errors.push(
-      `broker: ${stack.broker} — keel-dotnet genera la mensajería sobre ${SUPPORTED_BROKERS.join(', ')} (incremento 9 de PLAN-KEEL-DOTNET.md); Kafka y SNS/SQS llegan en sus tramos. ` +
-        'Elige rabbitmq, o genera este diseño con keel-spring o keel-nest.'
+      `broker: ${stack.broker} — keel-dotnet genera la mensajería sobre ${SUPPORTED_BROKERS.join(', ')} (incremento 9 de PLAN-KEEL-DOTNET.md); SNS/SQS llega en su tramo. ` +
+        'Elige rabbitmq o kafka, o genera este diseño con keel-spring o keel-nest.'
     );
   }
   if (stack?.telemetry && stack.telemetry !== 'none') {
