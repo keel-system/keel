@@ -20,6 +20,7 @@ import { solution } from './render.js';
 import { usesRelational } from './persistence.js';
 import { usesJwt } from './security.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
+import { usesScheduling } from './scheduling.js';
 
 /** Los paquetes que usa ESTA solución: los del esqueleto y los de las capas que el diseño declara. */
 export function packagesFor(model) {
@@ -41,7 +42,9 @@ export function infrastructurePackages(model) {
     // La mensajería sobre Kafka: el cliente de Confluent (librdkafka). También lo usa el arnés, para esperar a los grupos.
     ...(usesKafka(model) ? ['Confluent.Kafka'] : []),
     // La mensajería sobre SNS/SQS: el SDK oficial de AWS (los dos clientes; AWSSDK.Core lo resuelve NuGet).
-    ...(usesSnsSqs(model) ? ['AWSSDK.SimpleNotificationService', 'AWSSDK.SQS'] : [])
+    ...(usesSnsSqs(model) ? ['AWSSDK.SimpleNotificationService', 'AWSSDK.SQS'] : []),
+    // El reloj: el cron de seis campos de los barridos y de las purgas.
+    ...(usesScheduling(model) ? ['Cronos'] : [])
   ];
 }
 

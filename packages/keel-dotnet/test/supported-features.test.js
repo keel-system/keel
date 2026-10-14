@@ -54,12 +54,14 @@ test('dominio, casos de uso y API se generan sin aviso (la API llegó en el incr
   assert.deepEqual(warnings, []);
 });
 
-test('una operación con idempotency, schedule o cache se acepta avisando del incremento de su mecanismo', () => {
+test('una operación con idempotency, un barrido con transiciones o cache se acepta avisando del incremento de su mecanismo', () => {
   const layers = layersWith('domain', 'use-cases');
   layers['use-cases'] = {
     operations: {
       createThing: { idempotency: { keySource: 'client-key' } },
-      sweepThings: { schedule: { cron: '0 * * * * *' } },
+      sweepThings: { schedule: { cron: '* * * * *' }, transitions: [{ entity: 'Thing', from: ['new'], to: 'taken' }] },
+      // Un cierre por reloj sin transiciones ya se genera entero (incremento 10b): no avisa.
+      closeDay: { schedule: { cron: '0 3 * * *' } },
       getThing: { cache: { ttlSeconds: 60 } },
       plain: {}
     }
@@ -68,7 +70,7 @@ test('una operación con idempotency, schedule o cache se acepta avisando del in
   assert.deepEqual(errors, []);
   assert.equal(warnings.length, 3);
   assert.match(warnings[0], /createThing declara idempotency .*incremento 10/);
-  assert.match(warnings[1], /sweepThings declara schedule .*incremento 10/);
+  assert.match(warnings[1], /sweepThings declara un barrido con transiciones .*incremento 10c/);
   assert.match(warnings[2], /getThing declara cache .*incremento 13/);
 });
 

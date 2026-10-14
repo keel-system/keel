@@ -138,12 +138,38 @@ public async Task<CreateProductResponseDto> Handle(CreateProductCommand command,
 - La clave reutilizada con otro contenido es `IdempotencyReuseException` (409 `IDEMPOTENCY_KEY_REUSED` o el del
   diseño): no reutilices el error de la carrera ni inventes un `code`.
 
+### Las operaciones por reloj: el disparo ya está, el trabajo es tuyo
+
+Una operación con `schedule` tiene **ya generado** su disparador: `<Grupo>Scheduler` (`Infrastructure/Scheduling/`) la
+registra en el reloj del servicio (`Scheduling`, un `BackgroundService` sobre Cronos) con un cron de **seis** campos
+—build añade el segundo de arranque, repartido para que dos barridos con la misma cadencia no salgan a la vez— y la
+despacha por el `IUseCaseMediator` en un ámbito de DI propio. Es el mismo segundo y el mismo despacho que el
+`@Scheduled` del servidor de keel-spring. **No escribas otro disparador, otro `BackgroundService`, un `PeriodicTimer`
+ni un `Timer`, y no cambies el segundo a 0.**
+
+- Corre en **todas las réplicas** a la vez. Lo que actúa sobre lo que encuentra tiene que **reclamarlo** (marcar la
+  fila y quedarse con las que esta réplica se llevó), no solo leerlo.
+- Cómo se despacha lo dice el diseño, y la nota del handler lo repite: un barrido que reclama su lote (o llama a un
+  proveedor en medio) va **sin transacción abarcadora** (`DispatchWithoutTransaction`): cada llamada al adaptador
+  confirma la suya, y el orden es reclamar y confirmar, actuar fuera de toda transacción, confirmar el desenlace. Lo
+  demás (un cierre diario) va en la transacción del caso de uso.
+- Un tick que llega con la pasada anterior en curso **se salta**: el barrido no se solapa consigo mismo. Al apagar, la
+  pasada en vuelo no se corta: el host la espera antes de soltar la base.
+- El perfil `test` no tiene base de datos y el reloj no corre (`scheduling.enabled: false`); en los demás lo conmuta
+  `SCHEDULING_ENABLED`.
+
+Las **purgas** de las tablas del generador (`outbox_event`, `processed_event`, `idempotency_record`) son también de
+build (`Infrastructure/Persistence/Purge/`): por lotes, cada lote en su transacción, con la cadencia y la retención de
+`config/parameters/<perfil>/` (las mismas claves y variables que keel-spring y keel-nest). No las toques ni escribas
+otra.
+
 ### Lo que build avisa y no genera
 
-`keel-dotnet build` acepta, con un aviso, el `schedule` de una operación (el reloj que la dispara), que todavía no
-genera. El aviso es la frontera del generador, no una invitación: **no escribas un temporizador propio**. Un
-mecanismo escrito a mano pasa los escenarios y deja de ser el servidor de keel-spring y keel-nest. Si un escenario lo
-exige, el escenario queda en rojo y el hueco va a `blockers` como del generador.
+`keel-dotnet build` acepta, con un aviso, un barrido que saca filas de un estado (`schedule` + `transitions`): el
+scheduler ya lo dispara, pero el **reclamo** de su lote entre réplicas todavía no se genera. El aviso es la frontera
+del generador, no una invitación: **no escribas un reclamo propio**. Un mecanismo escrito a mano pasa los escenarios y
+deja de ser el servidor de keel-spring y keel-nest. Si un escenario lo exige, el escenario queda en rojo y el hueco va a
+`blockers` como del generador.
 
 ### La lista cerrada de `code` que NO nacen en el diseño
 

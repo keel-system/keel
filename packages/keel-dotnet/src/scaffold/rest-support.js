@@ -38,6 +38,11 @@ function usesCorrelationForMessaging(model) {
   return Boolean(model.layersPresent?.messaging) && ((model.events ?? []).length > 0 || (model.subscriptions ?? []).length > 0) && usesRelational(model);
 }
 
+/** ¿Se emite el CorrelationContext? Lo abren la entrada HTTP y la mensajería (y el reloj, si está). */
+export function usesCorrelation(model) {
+  return usesApi(model) || usesCorrelationForMessaging(model);
+}
+
 /**
  * ¿Hace falta la LECTURA del cable (Application/Support)? La usan los lectores de la API y los mensajes de las
  * suscripciones, que leen su payload con los mismos conversores y las mismas reglas: un mensaje y una petición del
@@ -64,7 +69,7 @@ export function generate(model) {
   }
   const { namespace: correlationNs, path: correlationPath } = located(model, 'correlation', 'CorrelationContext');
   // La correlación: la abre la entrada HTTP y también el consumo de un mensaje (InboundContext).
-  if (usesApi(model) || usesCorrelationForMessaging(model)) {
+  if (usesCorrelation(model)) {
     files.push({ path: correlationPath, content: csFile({ namespace: correlationNs, usings: ['System.Text.RegularExpressions'], body: correlationContextBody() }) });
   }
   if (!usesApi(model)) return files;

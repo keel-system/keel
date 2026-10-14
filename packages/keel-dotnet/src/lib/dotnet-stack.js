@@ -61,7 +61,10 @@ export const PACKAGES = {
   // más el día que se fijaron (el SDK publica casi a diario). Los dos piden AWSSDK.Core [4.0.102.6, 5): NuGet resuelve
   // la mínima, Apache-2.0 también. Verificadas el 2026-10-14.
   'AWSSDK.SimpleNotificationService': { version: '4.0.100.15', license: 'Apache-2.0', use: 'publicación en SNS (capa messaging)' },
-  'AWSSDK.SQS': { version: '4.0.100.14', license: 'Apache-2.0', use: 'consumo de SQS (capa messaging)' }
+  'AWSSDK.SQS': { version: '4.0.100.14', license: 'Apache-2.0', use: 'consumo de SQS (capa messaging)' },
+  // El reloj (incremento 10b): el cron de SEIS campos (con segundos) de los barridos y de las purgas, con su zona horaria.
+  // Sin dependencias en net6.0+. La 0.13.0 salió el 2026-04-29. Verificada el 2026-10-14.
+  Cronos: { version: '0.13.0', license: 'MIT', use: 'expresiones cron del reloj (schedule y purgas)' }
 };
 
 /**

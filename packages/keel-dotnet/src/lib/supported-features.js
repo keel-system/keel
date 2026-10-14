@@ -40,7 +40,14 @@ const PENDING_OPERATION_FEATURES = [
   // El registro de idempotencia de petición se genera con persistencia relacional (adelantado del incremento 10, como en
   // keel-nest): sin persistencia no hay dónde registrar la clave en la transacción del comando.
   { key: 'idempotency', what: 'idempotency sin persistencia (el registro de claves necesita la base)', increment: 'incremento 10', unless: (layers) => Boolean(layers?.persistence) },
-  { key: 'schedule', what: 'schedule (el reloj que dispara la operación)', increment: 'incremento 10' },
+  // El reloj (incremento 10b) ya se genera; el RECLAMO del lote de un barrido que mueve estados, no todavía (10c): el
+  // scheduler lo dispara y el handler sale sin el método que reparte las filas entre réplicas.
+  {
+    key: 'schedule',
+    what: 'un barrido con transiciones (el reclamo de su lote entre réplicas)',
+    increment: 'incremento 10c',
+    applies: (operation) => (operation.transitions ?? []).length > 0
+  },
   { key: 'cache', what: 'cache (la caché de la consulta)', increment: 'incremento 13' }
 ];
 
@@ -81,7 +88,9 @@ export function checkSupportedFeatures(manifest, layers) {
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     if (feature.unless?.(layers)) continue;
-    const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
+    const names = operations
+      .filter(([, operation]) => operation?.[feature.key] != null && (feature.applies?.(operation) ?? true))
+      .map(([name]) => name);
     if (names.length === 0) continue;
     warnings.push(
       `use-cases: ${names.join(', ')} declara${names.length === 1 ? '' : 'n'} ${feature.what}; keel-dotnet genera el mensaje y el handler, ` +

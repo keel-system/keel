@@ -23,6 +23,7 @@ import { constraintErrors, declaredConcurrencyError, idempotencyOutcomeCode, LOC
 import { registryOperations } from 'keel-core/gen/request-idempotency';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
+import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { sampleFor } from '../../../keel-nest/scripts/lib/samples.js';
 import { domainMembers } from '../../src/scaffold/entities.js';
@@ -368,6 +369,8 @@ function probesCs(model, namespace) {
   if (usesRequestIdempotency(model)) blocks.push(idempotencyBlock(model));
   if (usesDotnetOutbox(model)) blocks.push(outboxBlock(model));
   if (usesProcessedEvents(model)) blocks.push(guardBlock());
+  const purges = tablePurges(model);
+  if (purges.length > 0) blocks.push(purgeBlock(model, purges));
 
   // Las raíces a las que apunta una referencia obligatoria: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -413,6 +416,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     ...(usesBridge(model) || usesProcessedEvents(model) ? [messagingNamespace(model)] : []),
     ...(usesDotnetOutbox(model) ? [namespaceOf(model, 'outbox'), namespaceOf(model, 'rows')] : []),
     ...(usesProcessedEvents(model) ? [namespaceOf(model, 'messageIdempotency')] : []),
+    ...(purges.length > 0 ? [purgeNamespace(model), namespaceOf(model, 'rows'), 'Microsoft.Extensions.Logging.Abstractions'] : []),
     ...ctx.usings
   ];
   const body = `/// <summary>La base del sujeto: una propia en el motor, con el esquema que crea EF desde el modelo.</summary>
@@ -453,7 +457,10 @@ public sealed class PersistenceFixture : IAsyncLifetime
         // Los adaptadores de las raíces que emiten eventos los entregan al puente (incremento 9).
         services.AddDomainEvents(MessagingSettings.Defaults);` : ''}${usesDotnetOutbox(model) ? `
         services.AddSingleton<OutboxRelayStore>();` : ''}${usesProcessedEvents(model) ? `
-        services.AddSingleton<IdempotencyGuard>();` : ''}
+        services.AddSingleton<IdempotencyGuard>();` : ''}${purges.length > 0 ? `
+        // Las purgas con lotes de DOS: con cinco filas caducadas, varios lotes por pasada.
+        services.AddSingleton(${purgeSettings(purges, 2, 50)});
+        services.AddSingleton<TablePurges>();` : ''}
         Services = services.BuildServiceProvider();
         await Services.InitializeDatabase();
     }
@@ -737,6 +744,109 @@ function guardBlock() {
         var outcomes = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() => Guard.Record("RaceListener", eventId, Cancel))));
         Assert.Equal(1, outcomes.Count(won => won));
     }`;
+}
+
+// ─── Las purgas por lotes (incremento 10b) ────────────────────────────────────────────────────────
+
+/** Unas PurgeSettings con el lote y el tope indicados y el cron y la retención de los defaults. */
+function purgeSettings(purges, batchSize, maxBatches) {
+  const schedules = purges.map(
+    (purge) => `new PurgeSchedule(${csString(purge.cron.default)}, ${purge.retentionDays ? purge.retentionDays.default : 'null'}, ${batchSize}, ${maxBatches})`
+  );
+  return `new PurgeSettings(${schedules.join(', ')})`;
+}
+
+/**
+ * Cómo se siembra cada tabla para su purga: una fila por instante con la marca de la sonda, y qué instante está
+ * caducado y cuál vigente con la retención de los defaults (7 días el outbox, 14 los procesados; el registro de
+ * idempotencia, por su propia caducidad).
+ */
+const PURGE_SEEDS = {
+  Outbox: {
+    // Lo vigente se creó también hace 30 días: cortar por created_at en vez de published_at se lo llevaría.
+    row: (at) =>
+      `new OutboxEventRow { Id = Guid.CreateVersion7(), Destination = "probe.events", RoutingKey = "probe.k", EventType = marker, Payload = "{}", CreatedAt = now.AddDays(-30), PublishedAt = ${at}, Attempts = 1 }`,
+    expired: (i) => `now.AddDays(-20).AddSeconds(${i})`,
+    live: 'now.AddDays(-1)',
+    count: (context) => `other.GetRequiredService<${context}>().Set<OutboxEventRow>().CountAsync(r => r.EventType == marker, Cancel)`
+  },
+  ProcessedEvent: {
+    row: (at) => `new ProcessedEventRow { HandlerId = marker, EventId = Guid.NewGuid().ToString(), ProcessedAt = ${at} }`,
+    expired: (i) => `now.AddDays(-30).AddSeconds(${i})`,
+    live: 'now.AddDays(-1)',
+    count: (context) => `other.GetRequiredService<${context}>().Set<ProcessedEventRow>().CountAsync(r => r.HandlerId == marker, Cancel)`
+  },
+  IdempotencyRecord: {
+    row: (at) =>
+      `new IdempotencyRecordRow { OperationScope = marker, IdempotencyKey = Guid.NewGuid().ToString(), Signature = "probe", CreatedAt = now.AddDays(-2), ExpiresAt = ${at} }`,
+    expired: (i) => `now.AddDays(-1).AddSeconds(${i})`,
+    live: 'now.AddDays(1)',
+    count: (context) => `other.GetRequiredService<${context}>().Set<IdempotencyRecordRow>().CountAsync(r => r.OperationScope == marker, Cancel)`
+  }
+};
+
+function purgeBlock(model, purges) {
+  const context = dbContext(model);
+  const tests = purges.map((purge) => {
+    const seed = PURGE_SEEDS[purge.key];
+    // Cinco caducadas, dos de ellas con el MISMO instante (caen en el mismo lote), y una vigente.
+    const expired = [0, 0, 1, 2, 3].map((i) => seed.row(seed.expired(i)));
+    const pending =
+      purge.key === 'Outbox'
+        ? `
+            // Pendiente desde hace 30 días: no se purga nunca, por vieja que sea.
+            db.Add(new OutboxEventRow { Id = Guid.CreateVersion7(), Destination = "probe.events", RoutingKey = "probe.k", EventType = marker, Payload = "{}", CreatedAt = now.AddDays(-30), Attempts = 0 });`
+        : '';
+    const survivors = purge.key === 'Outbox' ? 2 : 1;
+    return `    [Fact]
+    public async Task Purga_${purge.key}_PorLotesSeLlevaLoCaducadoConInstantesRepetidosYDejaLoVigente()
+    {
+        var marker = "purge-" + Guid.NewGuid().ToString("N")[..12];
+        var now = TruncatedNow();
+        await InScope(async other =>
+        {
+            var db = other.GetRequiredService<${context}>();
+${expired.map((row) => `            db.Add(${row});`).join('\n')}
+            db.Add(${seed.row(seed.live)});${pending}
+            return await db.SaveChangesAsync(Cancel);
+        });
+        var deleted = await root.GetRequiredService<TablePurges>().${purge.method}(now, Cancel);
+        Assert.Equal(5, deleted);
+        Assert.Equal(${survivors}, await InScope(other => ${seed.count(context)}));
+        // La pasada siguiente no encuentra nada más que purgar.
+        Assert.Equal(0, await root.GetRequiredService<TablePurges>().${purge.method}(now, Cancel));
+    }`;
+  });
+  // El tope, sobre la primera purga: un lote por pasada deja el resto para la siguiente.
+  const first = purges[0];
+  const seed = PURGE_SEEDS[first.key];
+  tests.push(`    [Fact]
+    public async Task Purga_AlLlegarAlTopeAvisaYLaPasadaSiguienteSigue()
+    {
+        var marker = "purge-" + Guid.NewGuid().ToString("N")[..12];
+        var now = TruncatedNow();
+        await InScope(async other =>
+        {
+            var db = other.GetRequiredService<${context}>();
+${[0, 1, 2, 3, 4].map((i) => `            db.Add(${seed.row(seed.expired(i))});`).join('\n')}
+            return await db.SaveChangesAsync(Cancel);
+        });
+        var capped = new TablePurges(root.GetRequiredService<IServiceScopeFactory>(), ${purgeSettings(purges, 2, 1)}, root.GetRequiredService<DatabaseSettings>(), NullLogger<TablePurges>.Instance);
+        Assert.Equal(2, await capped.${first.method}(now, Cancel));
+        Assert.Equal(3, await InScope(other => ${seed.count(context)}));
+        Assert.Equal(3, await root.GetRequiredService<TablePurges>().${first.method}(now, Cancel));
+        Assert.Equal(0, await InScope(other => ${seed.count(context)}));
+    }
+
+    /// <summary>Ahora, a segundos enteros: el motor guarda microsegundos y la comparación de instantes tiene que ser exacta.</summary>
+    private static DateTimeOffset TruncatedNow()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new DateTimeOffset(now.Year, now.Month, now.Day, now.Hour, now.Minute, now.Second, TimeSpan.Zero);
+    }`);
+  return `    // ─── Las purgas por lotes ───
+
+${tests.join('\n\n')}`;
 }
 
 /** La base del sujeto en el motor: un identificador sin guiones. */

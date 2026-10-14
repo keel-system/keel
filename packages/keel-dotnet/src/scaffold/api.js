@@ -15,6 +15,7 @@ import { usesRelational } from './persistence.js';
 import { usesIdempotencyHeader } from './request-idempotency.js';
 import { securityNamespace, usesHttpSecurity } from './security.js';
 import { messagingNamespace, usesMessaging } from './messaging.js';
+import { schedulingNamespace, usesScheduling } from './scheduling.js';
 
 export function generate(model) {
   return [{ path: `${solution(model).api.dir}/Program.cs`, content: programCs(model) }];
@@ -31,7 +32,8 @@ function programCs(model) {
     ...(persistence ? [namespaceOf(model, 'persistence')] : []),
     ...(usesApi(model) ? [restNamespace(model)] : []),
     ...(usesHttpSecurity(model) ? [securityNamespace(model)] : []),
-    ...(usesMessaging(model) ? [messagingNamespace(model)] : [])
+    ...(usesMessaging(model) ? [messagingNamespace(model)] : []),
+    ...(usesScheduling(model) ? [schedulingNamespace(model)] : [])
   ];
   const registration = useCases
     ? `
@@ -57,6 +59,12 @@ builder.Services.AddHttpSecurity(configuration);`
 // La mensajería del diseño: el puente de eventos, el outbox, el registro de procesados y la conexión con el broker
 // (MessagingRegistration, generado). Lo que escribe el agente para el broker entra por BrokerBindings.cs.
 builder.Services.AddMessaging(configuration);`
+    : '';
+  // El reloj va el último: despacha por los casos de uso y purga con la persistencia.
+  const clock = usesScheduling(model)
+    ? `
+// El reloj: los barridos del diseño (schedule) y las purgas de las tablas del generador (SchedulingRegistration, generado).
+builder.Services.AddScheduling(configuration);`
     : '';
   // El esquema se pone al ARRANCAR: una base inalcanzable tumba el arranque, no la primera petición.
   const schema = persistence ? '\nawait app.Services.InitializeDatabase();' : '';
@@ -85,7 +93,7 @@ builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);
 // El contrato del cable: todo cuerpo JSON que la API lee o escribe pasa por estas opciones (WireJson).
-builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${database}${security}${messaging}
+builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${database}${security}${messaging}${clock}
 
 var app = builder.Build();
 app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);${schema}${pipeline}

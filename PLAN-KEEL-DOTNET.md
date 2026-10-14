@@ -982,6 +982,38 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     Arreglado en `keel-dotnet-infra.md` (paso 3 y `messaging` en el reporte) e `infra-validation.md`, como en
     keel-spring. keel-nest tenía el mismo hueco latente: arreglado igual. Y el archivo de cuerpo compartido del arnés de
     keel-spring (el defecto de la 9e): arreglado con un archivo por llamada, `compile-check` 38/38.
+- **Inc. 10 — en curso (abierto el 2026-10-14).** Tramos como los de keel-nest (su § Inc. 10): la idempotencia de petición
+  ya estaba (7e) y la deduplicación de mensajes también (9b); quedan 10b (reloj y purgas), 10c (reclamos de barrido,
+  rescate y parámetros de despliegue), 10d (el gate `check-idempotency.sh`) y 10e (la corrida, `job-dispatch-cycles`).
+  La reconciliación, la compensación y `lastKnown` van al 11, como en keel-nest. **Hueco de frontera visto al abrirlo**,
+  el mismo que destapó keel-nest en su 10c: keel-dotnet ignora EN SILENCIO `service.parameters` (DSL 2.15), sin código
+  ni aviso, y `job-dispatch` y `job-dispatch-cycles` entran en la frontera. Se cierra en el 10c.
+  - **10b, reloj y purgas (hecho, 2026-10-14).** Sin cambio en `keel-core`: el segundo repartido, el despacho y la purga
+    por lotes ya eran neutrales (`keel-core/gen/scheduling.js`, `BATCHED_PURGE`).
+    - `src/scaffold/scheduling.js`: `Scheduling` (un `BackgroundService`; un bucle por tarea que calcula la siguiente
+      ocurrencia AL TERMINAR la pasada, así que un tick con la anterior en curso se salta; cada pasada en su ámbito de DI;
+      al apagar, la pasada en vuelo corre sin el token y el host la espera), `ScheduledTask` (el cron de seis campos con
+      **Cronos 0.13.0**, MIT y sin dependencias; un cron inválido no deja arrancar), `SchedulingSettings`
+      (`scheduling.enabled`, apagado en `test`; `scheduling.yaml` es el de keel-nest byte a byte) y un
+      `<Grupo>Scheduler` por grupo, que abre la correlación de cada pasada y despacha con `Dispatch` o
+      `DispatchWithoutTransaction` según `scheduleDispatch`. `Program.cs` lo registra el último.
+    - `src/scaffold/purge.js`: `BatchedPurge` (el bucle, sin EF), `PurgeSettings` (las claves y defaults de keel-spring;
+      `idempotency.yaml` como el de keel-nest) y `TablePurges`, con el SQL de cada tabla LITERAL (solo los instantes
+      viajan como parámetro) y cada lote en una transacción nueva.
+    - La nota del handler dice quién lo dispara y cómo; la frontera deja de avisar del `schedule` y avisa solo del
+      barrido con transiciones (su reclamo, 10c); `mapping.md` y el agente de código lo enseñan.
+    - **Medido:** `test/scheduling.test.js` (14): segundo y despacho contra el `Scheduler.java` que EMITE keel-spring en
+      las cuatro fixtures con reloj, qué se purga contra keel-nest, la configuración contra keel-spring (y que lo que el
+      YAML declara es lo que lee `PurgeSettings`), y los casos de la prueba emitida contra `batchedPurgeReference`.
+      Falsado poniendo el segundo a 0: cae `payout-runs`, la única con dos barridos. La prueba emitida
+      `SchedulingTests` ejecuta con Cronos el cron de cada tarea y el bucle por lotes: `cs-check` **15/15** (2 118
+      pruebas, cien más; `product-catalog` arranca con el reloj y su purga). `db-check` **26/26, 154 sondas** (23 nuevas):
+      cada purga con lotes de dos e instantes repetidos, lo vigente intacto, lo pendiente del outbox intacto aunque sea
+      viejo, y el tope seguido de la pasada siguiente. Falsado con `--sabotage=purge` (el outbox cortado por
+      `created_at`: caen las dos sondas del outbox y solo ellas) y `--sabotage=purge-batch` (cada lote hasta el corte:
+      cae solo el tope). `npm test` 377/377.
+    - Lo que no mide ninguna red: que un tick dispare de verdad el handler (lo medirá la corrida del 10e) y el apagado con
+      una pasada en vuelo (en Windows SIGTERM no ejecuta los hooks).
 
 ## 5. Riesgos conocidos
 

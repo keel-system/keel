@@ -28,6 +28,8 @@
 //   lease       el lease del reclamo vence en el pasado (la pasada siguiente vuelve a ver la fila en vuelo)
 //   skip-locked el reclamo del outbox espera al lock de otra réplica en vez de saltarse la fila
 //   guard       la guarda de procesados no reconoce el choque de la clave (la carrera sale como error)
+//   purge       la purga del outbox corta por created_at y no por published_at (se lleva lo publicado ayer)
+//   purge-batch cada lote borra hasta el corte y no hasta su frontera (la pasada deja de ir por lotes)
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -54,7 +56,9 @@ const SABOTAGES = {
   idempotency: ['Persistence/IdempotencyStore.cs', '"idempotency_record_pkey"', '"idempotency_record_pk"'],
   lease: ['Outbox/OutboxRelayStore.cs', 'now.AddMilliseconds(claimTimeoutMs)', 'now.AddMilliseconds(-claimTimeoutMs)'],
   'skip-locked': ['Outbox/OutboxRelayStore.cs', 'FOR UPDATE SKIP LOCKED', 'FOR UPDATE'],
-  guard: ['Idempotency/IdempotencyGuard.cs', 'PostgresErrorCodes.UniqueViolation', 'PostgresErrorCodes.ForeignKeyViolation']
+  guard: ['Idempotency/IdempotencyGuard.cs', 'PostgresErrorCodes.UniqueViolation', 'PostgresErrorCodes.ForeignKeyViolation'],
+  purge: ['Purge/TablePurges.cs', 'published_at IS NOT NULL AND published_at < {cutoff}', 'published_at IS NOT NULL AND created_at < {cutoff}'],
+  'purge-batch': ['Purge/TablePurges.cs', ' <= {upTo.ToUniversalTime()}', ' <= {cutoff}']
 };
 
 const results = [];

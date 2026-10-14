@@ -88,6 +88,10 @@ export const PLACES = {
   persistence: ['infrastructure', 'Persistence'],
   rows: ['infrastructure', 'Persistence/Rows'],
   repositoryAdapters: ['infrastructure', 'Persistence/Repositories'],
+  // La purga por lotes de las tablas del generador (incremento 10b).
+  purge: ['infrastructure', 'Persistence/Purge'],
+  // Lo que corre por reloj: el registro de tareas y un scheduler por grupo de operaciones con `schedule` (incremento 10b).
+  scheduling: ['infrastructure', 'Scheduling'],
   // La entrada HTTP: la infraestructura REST común y un archivo de endpoints por grupo de operaciones.
   rest: ['api', 'Rest'],
   endpoints: ['api', 'Endpoints'],

@@ -13,7 +13,7 @@
 // lo que cuelga de capas que keel-dotnet todavía no genera (el almacén de idempotencia, el correo, los clientes
 // salientes) llega con su incremento: el handler de hoy solo inyecta lo que existe.
 
-import { dispatchNote } from 'keel-core/gen';
+import { dispatchNote, scheduleDispatch } from 'keel-core/gen';
 import { textFilterNotes } from 'keel-core/gen/text-filters';
 import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
@@ -24,6 +24,7 @@ import { idempotencyOutcomeCode } from 'keel-core/gen';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_PORT, idempotencyNamespace, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_SCOPE_PORT, scopedOperation } from './security.js';
+import { schedulerPath } from './scheduling.js';
 
 export function generate(model) {
   const files = [];
@@ -273,6 +274,7 @@ function handlerNotes(model, operation) {
   const dispatch = dispatchNote(model, operation, { call: 'await commandDispatcher.{variant}(new {message} { ... }, cancellationToken)' });
   if (dispatch) notes.push(dispatch);
   for (const note of textFilterNotes(model, operation)) notes.push(note);
+  for (const note of scheduleNotes(model, operation)) notes.push(note);
   for (const note of idempotencyNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
@@ -309,6 +311,25 @@ function handlerNotes(model, operation) {
     );
   }
   return notes.flatMap((note) => wrap(note));
+}
+
+/**
+ * La nota de una operación disparada por reloj: cómo la despacha su scheduler (keel-core/gen/scheduling.js, la misma
+ * decisión que keel-spring y keel-nest) y lo que eso le cambia al handler.
+ */
+function scheduleNotes(model, operation) {
+  if (!operation.schedule) return [];
+  const mode = scheduleDispatch(model, operation);
+  const where = schedulerPath(model, model.services.find((service) => service.operations.includes(operation)));
+  return [
+    `Por reloj (cron ${operation.schedule.cron}): la dispara ${where} en TODAS las réplicas a la vez. Lo que ` +
+      'actúa sobre lo que encuentra tiene que RECLAMARLO (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo.',
+    mode.withoutTransaction
+      ? 'SIN TRANSACCIÓN ABARCADORA: el scheduler la despacha con DispatchWithoutTransaction, así que cada llamada al adaptador de ' +
+        'repositorio confirma la SUYA. El orden es el de los commits: reclamar y confirmar, actuar fuera de toda transacción, ' +
+        'confirmar el desenlace. Un fallo en una fila no puede revertir las demás.'
+      : 'Corre en UNA transacción, la del caso de uso: no llama a nadie en medio de su trabajo, así que todo o nada.'
+  ];
 }
 
 /**
