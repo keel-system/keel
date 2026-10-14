@@ -810,7 +810,12 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     - **Lo que destapó, del propio check**: con los `FL-SEC-*` fuera del documento de escenarios, la matriz los marca
       AJENO y un FALLO suyo deja el script con 2 (arnés roto), no con 1, así que el falsado no se podía leer. La sonda
       sustituye el documento por el suyo y retira su línea del sello, como `harness-check`.
-  - **Lo siguiente**: 8d, la corrida sobre `profile-directory` (la lanza el usuario con `/keel-generate-dotnet`).
+  - **8d, la corrida (hecha, 2026-10-14): 13/13 a la primera y huella 4**, la misma que keel-nest y keel-spring
+    (`docs/corridas/2026-10-14-profile-directory-dotnet.md`). Diseño listo, sin `--accept-unready`. Los cuatro
+    reescritos son TODOs (los dos handlers, el agregado y el README); ningún archivo de seguridad tocado, ninguna
+    credencial escrita a mano (los flujos usan `TokenFor` y `TokenAs` del arnés), sin `design-gaps.yaml`, sin
+    `harnessPatches` y sin ningún rojo intermedio.
+- **Inc. 8 — cerrado (2026-10-14).** Siguiente: el 9 (mensajería).
 
 ## 5. Riesgos conocidos
 
