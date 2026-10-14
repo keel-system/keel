@@ -980,7 +980,8 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     enseña la skill, y el arnés de LocalStack sin un rojo. Un hueco del generador: el agente de infraestructura no
     ejecutaba `infra/init-messaging.sh` (`up.sh` deja LocalStack vacío y `validate-infra.sh` falla); el agente lo rodeó.
     Arreglado en `keel-dotnet-infra.md` (paso 3 y `messaging` en el reporte) e `infra-validation.md`, como en
-    keel-spring. keel-nest tiene el mismo hueco latente (anotado, sin tocar).
+    keel-spring. keel-nest tenía el mismo hueco latente: arreglado igual. Y el archivo de cuerpo compartido del arnés de
+    keel-spring (el defecto de la 9e): arreglado con un archivo por llamada, `compile-check` 38/38.
 
 ## 5. Riesgos conocidos
 

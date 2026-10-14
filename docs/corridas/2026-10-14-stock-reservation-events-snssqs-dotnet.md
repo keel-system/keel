@@ -75,7 +75,8 @@ el consumo con la visibilidad, el puente, el relay y el registro de procesados f
   `messaging.provisioned`/`topology`, y la convención tiene su sección. Sin efecto en el resultado de esta corrida (el
   agente lo rodeó sin parchear nada), pero sí en lo que cuesta llegar a él.
   - **keel-nest tiene el mismo hueco latente** (`keel-nest-infra.md` no cita `init-messaging.sh`): ninguna corrida de
-    keel-nest ha usado SNS/SQS. Sin tocar: queda anotado.
+    keel-nest ha usado SNS/SQS. **Arreglado después**, igual que aquí (paso 3, `messaging` en el reporte y la sección
+    de `infra-validation.md`).
 - Cosmético: el comentario de `AddMessageListeners` en `BrokerBindings.cs` juntaba con SNS/SQS dos frases en una línea
   de 190 columnas; ahora parte como con los otros brokers.
 
