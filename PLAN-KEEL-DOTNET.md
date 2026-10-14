@@ -1069,6 +1069,15 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       un `Listeners.cs`; mirando el archivo entero, cada uno «prohibía» el orden del vecino. El archivo localizado por
       contenido se recorta ahora al bloque de primer nivel que nombra los mensajes. Los dos casos están en el test, con la
       DLL al lado. keel-nest (TypeScript) también admite varios tipos por archivo: el mismo hueco, latente y sin tocar.
+  - **10e, la corrida — preparada (2026-10-14).** Workspace `spring-live-test/corrida-job-dispatch-cycles-dotnet`:
+    `keel init`, el MISMO diseño que las gemelas de keel-nest (12/12, huella 6) y keel-spring (12/12, huella 5) —la fixture
+    `job-dispatch-cycles` v1.0.1 y su `DESIGN.md`, `--ready` 11/11, sin `--accept-unready`— y `keel-dotnet build` con
+    `postgresql` (el stack de las dos gemelas; 167 archivos, estampado `ready: true`). El proyecto compila tal cual, sin
+    warnings; las pruebas de build pasan (77/77) y `check-idempotency.sh` nace ROJO solo en `sweepClaim`, que es el
+    trabajo del agente. Mide lo que ninguna red mide: que un tick dispare de verdad el handler, que el reclamo y el rescate
+    generados se usen tal cual y que el arnés del rescate (`StallInFlight`/`PutInFlight`) aguante un pipeline real. Los
+    contenedores se llaman `job-dispatch-cycles-*`, como los de las gemelas: no puede correr a la vez que otra corrida del
+    mismo diseño.
 
 ## 5. Riesgos conocidos
 
