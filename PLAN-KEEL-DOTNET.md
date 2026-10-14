@@ -964,8 +964,16 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       cambiado por «una fila cuyo topic no existe no se da por publicada», y los dos falsados. **23/23** a la primera.
     - **Medido:** `npm test` 363/363 (keel-core 1214, keel-nest 798); `broker-check` **67/67** con los tres brokers (22 RabbitMQ, 22 Kafka, 23 SNS/SQS); `cs-check` 15/15 (126 ensamblados, 2018 pruebas) con
       dos variantes más (`stock-reservation-events-snssqs` y `metering-digest-snssqs`).
-- **Inc. 9 — mensajería cerrada (2026-10-14)**: RabbitMQ con corrida, Kafka y SNS/SQS medidos con `broker-check`. La
-  corrida de Kafka o de SNS/SQS queda como control opcional. Siguiente: el incremento 10.
+- **Inc. 9 — mensajería cerrada (2026-10-14)**: RabbitMQ con corrida, Kafka y SNS/SQS medidos con `broker-check`.
+  Siguiente: el incremento 10.
+  - **9h, corrida de control con SNS/SQS — preparada (2026-10-14).** Workspace
+    `spring-live-test/corrida-stock-reservation-events-snssqs-dotnet`: `keel init`, el MISMO diseño que la 9e (la fixture
+    y su `DESIGN.md`, `--ready` 11/11, sin `--accept-unready`) y `keel-dotnet build` con `postgresql · snssqs`
+    (197 archivos, con la skill `keel-dotnet-snssqs`); el proyecto compila tal cual. Cambia una sola variable respecto a
+    la 9e (15/15, huella 9): el broker. Mide si los nueve archivos del agente siguen siendo los mismos con la skill de
+    SNS/SQS y si el arnés de LocalStack (resiembra, lectura en barrido, abandono aparcado) aguanta un pipeline real. Los
+    contenedores se llaman `stock-reservation-events-*`, como los de la 9e: no puede correr a la vez que otra corrida del
+    mismo diseño.
 
 ## 5. Riesgos conocidos
 
