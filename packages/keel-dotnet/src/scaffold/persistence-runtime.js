@@ -256,11 +256,30 @@ public sealed partial class PersistenceTransactions(${context} db, DatabaseSetti
     /// <summary>Intentos de una transacción de escritura que pierde un conflicto transitorio (keel-core/gen/transactions.js).</summary>
     public const int WriteConflictAttempts = ${WRITE_CONFLICT_ATTEMPTS};
 
+    /// <summary>Lo que espera al commit de la transacción abierta (null: no hay ninguna abierta por esta instancia).</summary>
+    private List<Func<Task>>? afterCommit;
+
     private readonly string statementTimeout = string.Create(
         CultureInfo.InvariantCulture,
         $"SET LOCAL statement_timeout = {(long)settings.TransactionTimeout.TotalMilliseconds}");
 
     public Task<T> Run<T>(Func<Task<T>> work, bool readOnly, CancellationToken cancellationToken) => InTransaction(work, readOnly, cancellationToken);
+
+    /// <summary>
+    /// Ejecuta <paramref name="action"/> DESPUÉS de que la transacción abierta confirme (el afterCommit de Spring): un
+    /// rollback la descarta. Sin transacción abierta, se ejecuta ya. Un fallo de la acción no deshace nada —el cambio ya
+    /// está confirmado—: se registra y se sigue.
+    /// </summary>
+    public void AfterCommit(Func<Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        if (afterCommit is null)
+        {
+            _ = RunAfterCommit([action]);
+            return;
+        }
+        afterCommit.Add(action);
+    }
 
     /// <summary>
     /// Ejecuta <paramref name="work"/> en una transacción: la ABIERTA si la hay (se une a ella, como la propagación por
@@ -302,16 +321,46 @@ public sealed partial class PersistenceTransactions(${context} db, DatabaseSetti
     private async Task<T> Once<T>(Func<Task<T>> work, bool readOnly, CancellationToken cancellationToken)
     {
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
-        // Solo lectura primero: SET TRANSACTION tiene que ir antes de cualquier consulta.
-        if (readOnly)
+        // Lo que espera al commit es de ESTE intento: uno que se revierte (y se repite) no deja nada pendiente.
+        var pending = new List<Func<Task>>();
+        afterCommit = pending;
+        try
         {
-            await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", cancellationToken);
+            // Solo lectura primero: SET TRANSACTION tiene que ir antes de cualquier consulta.
+            if (readOnly)
+            {
+                await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", cancellationToken);
+            }
+            await db.Database.ExecuteSqlRawAsync(statementTimeout, cancellationToken);
+            var result = await work();
+            await transaction.CommitAsync(cancellationToken);
+            afterCommit = null;
+            await RunAfterCommit(pending);
+            return result;
         }
-        await db.Database.ExecuteSqlRawAsync(statementTimeout, cancellationToken);
-        var result = await work();
-        await transaction.CommitAsync(cancellationToken);
-        return result;
+        finally
+        {
+            afterCommit = null;
+        }
     }
+
+    private async Task RunAfterCommit(IReadOnlyList<Func<Task>> actions)
+    {
+        foreach (var action in actions)
+        {
+            try
+            {
+                await action();
+            }
+            catch (Exception error)
+            {
+                LogAfterCommitFailed(error);
+            }
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Lo que esperaba al commit falló; el cambio ya estaba confirmado")]
+    private partial void LogAfterCommitFailed(Exception error);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Conflicto de escritura transitorio en el intento {Attempt} ({Type}): se repite la transacción")]
     private partial void LogRetry(int attempt, string type);

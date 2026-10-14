@@ -14,6 +14,7 @@ import { restNamespace, usesApi } from './rest-support.js';
 import { usesRelational } from './persistence.js';
 import { usesIdempotencyHeader } from './request-idempotency.js';
 import { securityNamespace, usesHttpSecurity } from './security.js';
+import { messagingNamespace, usesMessaging } from './messaging.js';
 
 export function generate(model) {
   return [{ path: `${solution(model).api.dir}/Program.cs`, content: programCs(model) }];
@@ -29,7 +30,8 @@ function programCs(model) {
     ...(useCases ? [namespaceOf(model, 'useCaseInfra')] : []),
     ...(persistence ? [namespaceOf(model, 'persistence')] : []),
     ...(usesApi(model) ? [restNamespace(model)] : []),
-    ...(usesHttpSecurity(model) ? [securityNamespace(model)] : [])
+    ...(usesHttpSecurity(model) ? [securityNamespace(model)] : []),
+    ...(usesMessaging(model) ? [messagingNamespace(model)] : [])
   ];
   const registration = useCases
     ? `
@@ -39,13 +41,22 @@ builder.Services.AddUseCases();`
   const database = persistence
     ? `
 // La persistencia relacional del perfil: el DbContext, la transacción del caso de uso y los repositorios.
-builder.Services.AddPersistence(DatabaseSettings.From(configuration));`
+builder.Services.AddPersistence(DatabaseSettings.From(configuration));
+// Cada sentencia SQL no es un evento del servicio: solo sus avisos y errores, como Hibernate sin show-sql en keel-spring y
+// TypeORM sin logging en keel-nest. A nivel Information, un relay que sondea cada segundo inundaba el log.
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);`
     : '';
   // La seguridad del diseño (capa security): los autenticadores, CORS y el alcance por recurso (SecurityRegistration).
   const security = usesHttpSecurity(model)
     ? `
 // La seguridad del diseño: autenticadores, CORS y alcance por recurso (SecurityRegistration, generado).
 builder.Services.AddHttpSecurity(configuration);`
+    : '';
+  const messaging = usesMessaging(model)
+    ? `
+// La mensajería del diseño: el puente de eventos, el outbox, el registro de procesados y la conexión con el broker
+// (MessagingRegistration, generado). Lo que escribe el agente para el broker entra por BrokerBindings.cs.
+builder.Services.AddMessaging(configuration);`
     : '';
   // El esquema se pone al ARRANCAR: una base inalcanzable tumba el arranque, no la primera petición.
   const schema = persistence ? '\nawait app.Services.InitializeDatabase();' : '';
@@ -74,7 +85,7 @@ builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);
 // El contrato del cable: todo cuerpo JSON que la API lee o escribe pasa por estas opciones (WireJson).
-builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${database}${security}
+builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${database}${security}${messaging}
 
 var app = builder.Build();
 app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);${schema}${pipeline}

@@ -13,7 +13,6 @@
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  messaging: 'incremento 9',
   'http-clients': 'incremento 11',
   dependencies: 'incremento 11',
   storage: 'incremento 13',
@@ -26,6 +25,9 @@ const PENDING_LAYERS = {
  * Core el uuid binario y el proveedor van por detrás: PLAN-KEEL-DOTNET.md § 5); los demás, como en keel-nest.
  */
 export const SUPPORTED_DATABASES = ['postgresql'];
+
+/** Los brokers que keel-dotnet genera: RabbitMQ primero (incremento 9); Kafka y SNS/SQS, en sus tramos, como en keel-nest. */
+export const SUPPORTED_BROKERS = ['rabbitmq'];
 
 /** Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. */
 const ACCEPTED_NOT_EMITTED = {};
@@ -75,6 +77,7 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
   errors.push(...callerIdentityErrors(layers));
+  errors.push(...messagingErrors(declared, layers));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     if (feature.unless?.(layers)) continue;
@@ -96,6 +99,12 @@ export function checkSupportedStack(stack) {
     errors.push(
       `database: ${stack.database} — keel-dotnet genera la persistencia relacional sobre ${SUPPORTED_DATABASES.join(', ')} (incremento 6 de PLAN-KEEL-DOTNET.md): ` +
         'ninguna red de keel-dotnet ha medido otro motor todavía. Elige postgresql, o genera este diseño con keel-spring o keel-nest.'
+    );
+  }
+  if (stack?.broker && !SUPPORTED_BROKERS.includes(stack.broker)) {
+    errors.push(
+      `broker: ${stack.broker} — keel-dotnet genera la mensajería sobre ${SUPPORTED_BROKERS.join(', ')} (incremento 9 de PLAN-KEEL-DOTNET.md); Kafka y SNS/SQS llegan en sus tramos. ` +
+        'Elige rabbitmq, o genera este diseño con keel-spring o keel-nest.'
     );
   }
   if (stack?.telemetry && stack.telemetry !== 'none') {
@@ -132,6 +141,33 @@ function callerIdentityErrors(layers) {
       `use-cases.${name}.input.${identity.field}: ${type} — la identidad del llamante sale de la credencial como TEXTO, igual que en keel-spring y keel-nest; ` +
         'keel-dotnet solo la estampa en un campo string o text. Declara el campo como string.'
     );
+  }
+  return errors;
+}
+
+/**
+ * Lo que keel-dotnet todavía no sabe hacer con la mensajería:
+ *   · sin persistencia: el puente sale del adaptador de repositorio y el registro de procesados vive en la base (en
+ *     keel-nest se cerró en su incremento 16);
+ *   · la identidad del emisor resuelta contra las credenciales de un recurso (`identity.resolvedBy`): el finder llega
+ *     con el incremento 13, como para la del llamante.
+ */
+function messagingErrors(declared, layers) {
+  if (!declared.includes('messaging')) return [];
+  const errors = [];
+  if (!declared.includes('persistence')) {
+    errors.push(
+      'capa messaging sin persistence — keel-dotnet genera la mensajería sobre la persistencia relacional (incremento 9 de PLAN-KEEL-DOTNET.md): ' +
+        'el puente de eventos sale del adaptador de repositorio y el registro de mensajes procesados vive en la base. Genera este diseño con keel-spring o keel-nest.'
+    );
+  }
+  for (const [name, sub] of Object.entries(layers?.messaging?.subscriptions ?? {})) {
+    if (sub?.identity?.resolvedBy) {
+      errors.push(
+        `messaging.subscriptions.${name}.identity.resolvedBy — keel-dotnet todavía no resuelve la identidad del emisor contra las credenciales de un recurso ` +
+          '(llega con el finder de credenciales, en el incremento 13 de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
+      );
+    }
   }
   return errors;
 }

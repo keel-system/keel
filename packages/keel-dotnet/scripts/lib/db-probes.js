@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { constraintErrors, declaredConcurrencyError, idempotencyOutcomeCode, LOCK_VERSION, persistedMembers, partialUniqueIndexes, indexName } from 'keel-core/gen';
 import { registryOperations } from 'keel-core/gen/request-idempotency';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
+import { messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { sampleFor } from '../../../keel-nest/scripts/lib/samples.js';
 import { domainMembers } from '../../src/scaffold/entities.js';
@@ -365,6 +366,8 @@ function probesCs(model, namespace) {
   }
 
   if (usesRequestIdempotency(model)) blocks.push(idempotencyBlock(model));
+  if (usesDotnetOutbox(model)) blocks.push(outboxBlock(model));
+  if (usesProcessedEvents(model)) blocks.push(guardBlock());
 
   // Las raíces a las que apunta una referencia obligatoria: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -407,6 +410,9 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     namespaceOf(model, 'errors'),
     namespaceOf(model, 'appSupport'),
     ...(usesRequestIdempotency(model) ? [idempotencyNamespace(model)] : []),
+    ...(usesBridge(model) || usesProcessedEvents(model) ? [messagingNamespace(model)] : []),
+    ...(usesDotnetOutbox(model) ? [namespaceOf(model, 'outbox'), namespaceOf(model, 'rows')] : []),
+    ...(usesProcessedEvents(model) ? [namespaceOf(model, 'messageIdempotency')] : []),
     ...ctx.usings
   ];
   const body = `/// <summary>La base del sujeto: una propia en el motor, con el esquema que crea EF desde el modelo.</summary>
@@ -443,7 +449,11 @@ public sealed class PersistenceFixture : IAsyncLifetime
         var target = new NpgsqlConnectionStringBuilder(admin) { Database = Database };
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddPersistence(new DatabaseSettings(true, target.ConnectionString, TimeSpan.FromSeconds(30), SchemaMode.Create));
+        services.AddPersistence(new DatabaseSettings(true, target.ConnectionString, TimeSpan.FromSeconds(30), SchemaMode.Create));${usesBridge(model) ? `
+        // Los adaptadores de las raíces que emiten eventos los entregan al puente (incremento 9).
+        services.AddDomainEvents(MessagingSettings.Defaults);` : ''}${usesDotnetOutbox(model) ? `
+        services.AddSingleton<OutboxRelayStore>();` : ''}${usesProcessedEvents(model) ? `
+        services.AddSingleton<IdempotencyGuard>();` : ''}
         Services = services.BuildServiceProvider();
         await Services.InitializeDatabase();
     }
@@ -590,6 +600,142 @@ function idempotencyBlock(model) {
             throw new InvalidOperationException("el comando falla después de reclamar");
         }, readOnly: false, Cancel)));
         Assert.Null(await InScope(other => ${store}.Find(${csString(scope)}, key, Cancel)));
+    }`;
+}
+
+// ─── Los almacenes de la mensajería (incremento 9) ───────────────────────────────────────────────
+
+function outboxBlock(model) {
+  const context = dbContext(model);
+  return `    // ─── El outbox ───
+
+    /// <summary>
+    /// Deja el outbox sin pendientes ajenas (las que escribió el puente al guardar en otras sondas) y mete las suyas: el
+    /// reclamo es por orden de llegada sobre TODA la tabla.
+    /// </summary>
+    private static async Task<List<Guid>> SeedOutbox(int count)
+    {
+        var ids = new List<Guid>();
+        await InScope(async other =>
+        {
+            var db = other.GetRequiredService<${context}>();
+            await db.Database.ExecuteSqlRawAsync("UPDATE outbox_event SET published_at = now() WHERE published_at IS NULL", Cancel);
+            for (var i = 0; i < count; i++)
+            {
+                var id = Guid.CreateVersion7();
+                ids.Add(id);
+                db.Set<OutboxEventRow>().Add(new OutboxEventRow
+                {
+                    Id = id,
+                    Destination = "probe.events",
+                    RoutingKey = "probe.k",
+                    EventType = "Probe",
+                    Payload = "{}",
+                    CreatedAt = DateTimeOffset.UtcNow.AddSeconds(-60 + i),
+                    Attempts = 0
+                });
+            }
+            return await db.SaveChangesAsync(Cancel);
+        });
+        return ids;
+    }
+
+    private static OutboxRelayStore Relay => root.GetRequiredService<OutboxRelayStore>();
+
+    [Fact]
+    public async Task Outbox_ElReclamoEsPorOrdenDeLlegadaYElLeaseLasRetiraDeLaPasadaSiguiente()
+    {
+        var ids = await SeedOutbox(3);
+        var first = await Relay.ClaimBatch(maxAttempts: 10, batchSize: 2, claimTimeoutMs: 60000, Cancel);
+        Assert.Equal(ids.Take(2), first.Select(row => row.Id));
+        // Las dos reclamadas tienen el lease puesto: la pasada siguiente solo ve la tercera.
+        var second = await Relay.ClaimBatch(maxAttempts: 10, batchSize: 10, claimTimeoutMs: 60000, Cancel);
+        Assert.Equal([ids[2]], second.Select(row => row.Id));
+        Assert.Empty(await Relay.ClaimBatch(maxAttempts: 10, batchSize: 10, claimTimeoutMs: 60000, Cancel));
+    }
+
+    [Fact]
+    public async Task Outbox_ConOtraTransaccionReteniendoUnaFilaElReclamoSeLlevaLasDemasSinEsperar()
+    {
+        var ids = await SeedOutbox(2);
+        var locked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Otra réplica a mitad de su reclamo: la primera fila bloqueada y sin confirmar.
+        var holder = InScope(other => other.GetRequiredService<PersistenceTransactions>().InTransaction(async () =>
+        {
+            var db = other.GetRequiredService<${context}>();
+            await db.Database.ExecuteSqlRawAsync("SELECT 1 FROM outbox_event WHERE id = {0} FOR UPDATE", [ids[0]], Cancel);
+            locked.SetResult();
+            await release.Task;
+            return true;
+        }, readOnly: false, Cancel));
+        await locked.Task;
+        try
+        {
+            // SKIP LOCKED: se lleva la otra al momento en vez de esperar al lock (con FOR UPDATE a secas, esperaría).
+            var claimed = await Relay.ClaimBatch(maxAttempts: 10, batchSize: 10, claimTimeoutMs: 60000, Cancel).WaitAsync(TimeSpan.FromSeconds(5), Cancel);
+            Assert.Equal([ids[1]], claimed.Select(row => row.Id));
+        }
+        finally
+        {
+            release.SetResult();
+            await holder;
+        }
+    }
+
+    [Fact]
+    public async Task Outbox_UnFalloCuentaElIntentoConSuBackoffYAlAgotarseLaFilaSeRinde()
+    {
+        var ids = await SeedOutbox(1);
+        await Relay.ClaimBatch(maxAttempts: 2, batchSize: 1, claimTimeoutMs: 60000, Cancel);
+        var before = DateTimeOffset.UtcNow;
+        var first = await Relay.MarkFailed(ids[0], "broker caído", maxAttempts: 2, backoffInitialMs: 60000, backoffMaxMs: 120000, Cancel);
+        Assert.Equal(new MarkFailedOutcome(1, false), first);
+        var row = await InScope(other => other.GetRequiredService<${context}>().Set<OutboxEventRow>().AsNoTracking().SingleAsync(r => r.Id == ids[0], Cancel));
+        Assert.Equal("broker caído", row.LastError);
+        Assert.True(row.NextAttemptAt >= before.AddMilliseconds(59000), "el backoff del primer fallo es el inicial");
+        Assert.Equal(0, await Relay.CountDeadLettered(maxAttempts: 2, Cancel));
+        Assert.Equal(new MarkFailedOutcome(2, true), await Relay.MarkFailed(ids[0], "otra vez", maxAttempts: 2, backoffInitialMs: 60000, backoffMaxMs: 120000, Cancel));
+        Assert.Equal(1, await Relay.CountDeadLettered(maxAttempts: 2, Cancel));
+        // Rendida: no se reclama nunca más, ni con el backoff vencido.
+        await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync("UPDATE outbox_event SET next_attempt_at = NULL", Cancel));
+        Assert.Empty(await Relay.ClaimBatch(maxAttempts: 2, batchSize: 10, claimTimeoutMs: 60000, Cancel));
+        await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync("UPDATE outbox_event SET published_at = now() WHERE published_at IS NULL", Cancel));
+    }
+
+    [Fact]
+    public async Task Outbox_LaPublicadaNoSeVuelveAReclamar()
+    {
+        var ids = await SeedOutbox(1);
+        await Relay.ClaimBatch(maxAttempts: 10, batchSize: 1, claimTimeoutMs: 0, Cancel);
+        await Relay.MarkPublished(ids[0], Cancel);
+        Assert.Empty(await Relay.ClaimBatch(maxAttempts: 10, batchSize: 10, claimTimeoutMs: 60000, Cancel));
+    }`;
+}
+
+function guardBlock() {
+  return `    // ─── El registro de mensajes procesados ───
+
+    private static IdempotencyGuard Guard => root.GetRequiredService<IdempotencyGuard>();
+
+    [Fact]
+    public async Task Procesados_ElRegistroSeVeYLaSegundaVezEsDuplicado_YElConsumidorEsParteDeLaClave()
+    {
+        var eventId = Guid.NewGuid().ToString();
+        Assert.False(await Guard.AlreadyProcessed("ProbeListener", eventId, Cancel));
+        Assert.True(await Guard.Record("ProbeListener", eventId, Cancel));
+        Assert.True(await Guard.AlreadyProcessed("ProbeListener", eventId, Cancel));
+        Assert.False(await Guard.TryRecord("ProbeListener", eventId, Cancel));
+        // Otro consumidor del mismo evento no se deduplica con este.
+        Assert.True(await Guard.TryRecord("OtherListener", eventId, Cancel));
+    }
+
+    [Fact]
+    public async Task Procesados_DosEntregasALaVezLaGanaUna()
+    {
+        var eventId = Guid.NewGuid().ToString();
+        var outcomes = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() => Guard.Record("RaceListener", eventId, Cancel))));
+        Assert.Equal(1, outcomes.Count(won => won));
     }`;
 }
 

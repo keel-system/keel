@@ -817,6 +817,68 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     `harnessPatches` y sin ningún rojo intermedio.
 - **Inc. 8 — cerrado (2026-10-14).** Siguiente: el 9 (mensajería).
 
+- **Inc. 9 — en curso.** Tramos como los de keel-nest (su § Inc. 9): lo neutral primero, después RabbitMQ entero con su
+  corrida, y Kafka y SNS/SQS al final. La frontera rechaza `kafka` y `snssqs` en el stack, la mensajería sin persistencia y
+  la identidad del emisor con `resolvedBy` (llega con el finder del 13).
+  - **9a, lo neutral que faltaba (hecho, 2026-10-14).** `keel-core/gen/messaging-plan.js`: `consumerUnits` (un listener
+    por cola en RabbitMQ, por suscripción en Kafka), la topología RabbitMQ de consumo y de publicación, los números de la
+    conexión (prefetch 250, recuperación, confirmación 10 s) y los fragmentos `messaging.yaml` y `rabbitmq.yaml`. Vivían
+    en keel-nest; keel-nest los consume de ahí con su línea base idéntica salvo un comentario de `rabbitmq.yaml` que
+    nombraba a keel-spring en el texto emitido (12 archivos; `gen-neutral.test.js` lo cazó). keel-spring sin cambios.
+  - **9b-1, la lectura del cable compartida (hecho).** `JsonBodyReader`, `EnumLiterals`, los errores de lectura,
+    `InputValidation` y `ValueReaders` pasan de Api/Rest a Application/Support: los mensajes de las suscripciones
+    (Infrastructure) leen su payload con las mismas conversiones y reglas que la API, como `request-reading.ts` en
+    keel-nest. En Api quedan `HttpJsonBody` y `TextValues`. `cs-check` 15/15.
+  - **9b-2, la mensajería sobre RabbitMQ y PostgreSQL (hecho).**
+    - `src/scaffold/messaging.js`: `EventEnvelope` (`Of`, `ToWire`, `Parse`), un `<Evento>IntegrationEvent` por evento con
+      la metadata `[JsonIgnore]`, el puente `<Raíz>DomainEventBridge` (outbox: la fila en el MISMO `SaveChanges` del
+      cambio; best-effort: `PersistenceTransactions.AfterCommit`, nuevo, con el puerto `I<Evento>Publisher` y su respaldo
+      que avisa), el mensaje de cada suscripción (`FromWire` con los nombres de la fuente y `RequireContract` con las
+      frases de keel-spring) y la envoltura propia de una fuente `wrapped`, `MessagingSettings`, `InboundContext` (la
+      correlación de origen), `BrokerBindings.cs` (lo del agente, registrado ANTES que los respaldos de build, que entran
+      con `TryAdd`) y `MessagingRegistration`. El adaptador de repositorio entrega `PullDomainEvents()` al puente ANTES de
+      `SaveChanges`.
+    - `src/scaffold/messaging-stores.js`: las filas de `outbox_event` y `processed_event` (datos de keel-core), el relay
+      en tres pasos (`OutboxRelayStore` con `FOR UPDATE SKIP LOCKED` y el lease, cada transacción corta en su propio
+      ámbito de DI; `OutboxRelay` como `BackgroundService` con retardo fijo, `Pause`/`Resume` para el arnés), el respaldo
+      del dispatcher que no deja arrancar fuera de local/test, y `IdempotencyGuard` (`AlreadyProcessed`/`Record`/
+      `TryRecord`, la carrera resuelta en la clave).
+    - `src/scaffold/rabbitmq.js`: `RabbitTopology` (las colas, los canales publicados y el reintento como datos, y su
+      declaración) y `RabbitConnection` sobre **RabbitMQ.Client 7.2.2** (Apache-2.0 OR MPL-2.0): arranca sin broker y
+      conecta en segundo plano, recuperación automática, publicación con confirmación y `mandatory` (la `PublishException`
+      de un mensaje sin cola es un `BrokerUnavailableException`), consumo con ack al terminar, reintento en memoria con la
+      curva del diseño salvo `DomainException` y `MessageContractViolation`, y nack sin reencolar → DLQ.
+    - **La prueba emitida `MessagingTests`** (`src/scaffold/messaging-tests.js`): la envoltura en el cable (orden de
+      `WIRE_SHAPES`, nulos), su lectura y rechazos, el contrato de cada suscripción, el backoff del relay contra
+      `outboxBackoffMs` y la curva del listener. Falsada rompiendo la fórmula del backoff y la correlación de la
+      envoltura: caen exactamente sus tres pruebas.
+    - **Medido:** `npm test` 353/353; `test/messaging.test.js` (nuevo): `messaging.yaml` y `rabbitmq.yaml` byte a byte los
+      de keel-nest en seis fixtures y cuatro perfiles, la topología contra la `RabbitTopologyConfig` que EMITE keel-spring,
+      toda clave que leen `MessagingSettings` y `RabbitMqSettings` existe en su YAML, y el puente en el repositorio.
+      `schema-parity` ya compara `outbox_event` y `processed_event` con keel-spring (salen de `PENDING_TABLES`).
+      `cs-check` 15/15: las fixtures con mensajería compilan sobre RabbitMQ (102 ensamblados, 1 595 pruebas).
+    - **`db-check` 131 sondas** (32 nuevas): el reclamo por orden de llegada con su lease, el reclamo que se salta la fila
+      que otra transacción retiene (SKIP LOCKED, con un tope de 5 s), el fallo que cuenta con su backoff y la rendición,
+      la publicada que no se vuelve a reclamar, y la guarda (duplicado, consumidor como parte de la clave y cuatro
+      entregas a la vez que gana una). Falsado con `--sabotage=lease` (el lease en el pasado), `skip-locked` y `guard`:
+      cada uno cae en su sonda y solo en ella.
+    - **Humo en vivo** sobre la `infra/` generada de `stock-reservation-events`: el servidor arranca en `local`, conecta,
+      declara la topología (la cola propia con su DLQ por argumentos y la cola del canal publicado con su routing key), el
+      relay corre con el respaldo que avisa, y tras parar y levantar RabbitMQ la conexión se recupera sola.
+    - **Lo que destapó:**
+      - `IConnection.CloseAsync(TimeSpan, CancellationToken)` no existe en RabbitMQ.Client 7 (solo la firma completa de
+        la interfaz); lo cazó la compilación de las fixtures, no la de referencia.
+      - EF registraba CADA sentencia SQL a nivel Information: con el relay sondeando cada segundo, dos líneas por segundo
+        sin que pase nada. `Program.cs` filtra `Microsoft.EntityFrameworkCore.Database.Command` a Warning, como Hibernate
+        sin `show-sql` y TypeORM sin `logging`.
+      - `db-check` dejaba vivo su contenedor cuando salía a mitad (un sabotaje que no compilaba): el `process.exit` dentro
+        del `try` se saltaba el `finally`. Ahora aborta por excepción y para la base (comprobado con un sabotaje que no
+        existe). Y el primer sabotaje del lease no compilaba: un sabotaje así no falsa nada.
+  - **Siguiente: 9c**, el arnés (entregar a una suscripción, leer lo publicado y la DLQ con `keel-core/gen/broker-probes.js`)
+    y `broker-check` contra un RabbitMQ real (publicar con confirmación, `mandatory` sin cola, consumo con reintento y
+    descarte, el outbox con el broker caído); **9d**, la skill `keel-dotnet-rabbitmq` y la sección `messaging` de
+    `mapping.md`; **9e**, la corrida.
+
 ## 5. Riesgos conocidos
 
 - **MySQL con EF Core 10.** Pomelo (MIT) suele ir detrás de la versión de EF. Además, el `Guid` de

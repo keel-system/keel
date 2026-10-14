@@ -25,6 +25,9 @@
 //   constraint  el traductor no reconoce ninguna constraint (la clave repetida sale como 409 sin code)
 //   index       los índices únicos salen con OTRO nombre: el traductor ya no los reconoce
 //   idempotency el adaptador del registro no reconoce el choque de la clave primaria (la carrera sale sin su code)
+//   lease       el lease del reclamo vence en el pasado (la pasada siguiente vuelve a ver la fila en vuelo)
+//   skip-locked el reclamo del outbox espera al lock de otra réplica en vez de saltarse la fila
+//   guard       la guarda de procesados no reconoce el choque de la clave (la carrera sale como error)
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -48,7 +51,10 @@ const SABOTAGES = {
   enum: ['Persistence/EnumColumns.cs', 'new(value => ', 'new(value => value.ToString() ?? '],
   constraint: ['Persistence/PersistenceErrors.cs', 'ConstraintToError.TryGetValue(constraint, out var build)', 'ConstraintToError.TryGetValue(constraint + "-", out var build)'],
   index: ['Persistence/Rows/', '.IsUnique().HasDatabaseName("uk_', '.IsUnique().HasDatabaseName("zz_'],
-  idempotency: ['Persistence/IdempotencyStore.cs', '"idempotency_record_pkey"', '"idempotency_record_pk"']
+  idempotency: ['Persistence/IdempotencyStore.cs', '"idempotency_record_pkey"', '"idempotency_record_pk"'],
+  lease: ['Outbox/OutboxRelayStore.cs', 'now.AddMilliseconds(claimTimeoutMs)', 'now.AddMilliseconds(-claimTimeoutMs)'],
+  'skip-locked': ['Outbox/OutboxRelayStore.cs', 'FOR UPDATE SKIP LOCKED', 'FOR UPDATE'],
+  guard: ['Idempotency/IdempotencyGuard.cs', 'PostgresErrorCodes.UniqueViolation', 'PostgresErrorCodes.ForeignKeyViolation']
 };
 
 const results = [];
@@ -87,6 +93,15 @@ try {
 
 const root = makeWorkspace('keel-dotnet-db-check-');
 const subjects = [];
+// Salir a mitad (un sabotaje que no se aplica, lo emitido que no compila) pasa por el `finally`, que para la base: un
+// process.exit dentro del try se lo saltaba y dejaba el contenedor vivo (medido con un sabotaje que no compilaba).
+class Abort extends Error {
+  constructor(code) {
+    super(`db-check abortado (${code})`);
+    this.code = code;
+  }
+}
+let aborted = 0;
 try {
   // ─── Los sujetos y sus sondas, en UNA solución ─────────────────────────────────────────────────
   const projects = [];
@@ -117,7 +132,7 @@ try {
     }
     if (!suffix || applied === 0) {
       console.error(`El sabotaje '${sabotage}' no se aplica a lo emitido hoy (¿cambió el texto?).`);
-      process.exit(2);
+      throw new Abort(2);
     }
     console.log(`(sabotaje: ${sabotage}, en ${applied} archivo(s))`);
   }
@@ -126,7 +141,7 @@ try {
   const built = dotnet(root, ['build', 'DbCheck.slnx', '-c', 'Release']);
   if (!step(`los ${subjects.length} sujetos y sus sondas compilan`, built.ok)) {
     console.error([...new Set(built.output.split('\n').filter((line) => /(error|warning) [A-Z]+\d+/.test(line)))].slice(0, 60).join('\n'));
-    process.exit(1);
+    throw new Abort(1);
   }
 
   // ─── Las sondas, contra el motor ──────────────────────────────────────────────────────────────
@@ -147,6 +162,9 @@ try {
 
   // ─── El esquema que creó EF, contra lo emitido ─────────────────────────────────────────────────
   for (const subject of subjects) step(`${subject.name}: el catálogo del motor es el esquema emitido`, ...schemaCheck(subject));
+} catch (error) {
+  if (!(error instanceof Abort)) throw error;
+  aborted = error.code;
 } finally {
   stopDatabase(runtime, database);
   if (keep) {
@@ -215,6 +233,7 @@ function* walk(dir) {
   }
 }
 
+if (aborted) process.exit(aborted);
 const failed = results.filter((result) => !result.ok).length;
 console.log(failed === 0 ? `\ndb-check: ${results.length}/${results.length} en verde.` : `\ndb-check: ${failed} paso(s) en rojo.`);
 process.exit(failed === 0 ? 0 : 1);

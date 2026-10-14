@@ -90,7 +90,15 @@ export const PLACES = {
   repositoryAdapters: ['infrastructure', 'Persistence/Repositories'],
   // La entrada HTTP: la infraestructura REST común y un archivo de endpoints por grupo de operaciones.
   rest: ['api', 'Rest'],
-  endpoints: ['api', 'Endpoints']
+  endpoints: ['api', 'Endpoints'],
+  // La mensajería (capa messaging): la envoltura, el puente de eventos, la configuración y el registro; los eventos de
+  // integración, los mensajes de las suscripciones, el outbox, la guarda de procesados y la conexión con el broker.
+  messaging: ['infrastructure', 'Messaging'],
+  integrationEvents: ['infrastructure', 'Messaging/Events'],
+  subscriptionMessages: ['infrastructure', 'Messaging/Subscriptions'],
+  outbox: ['infrastructure', 'Messaging/Outbox'],
+  messageIdempotency: ['infrastructure', 'Messaging/Idempotency'],
+  rabbitmq: ['infrastructure', 'Messaging/RabbitMq']
 };
 
 /** El namespace y la ruta de un tipo `className` en el sitio `place` (una clave de PLACES). */

@@ -340,7 +340,8 @@ function compileAllFixtures() {
   for (const { name, from, mutate } of designs) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     if (mutate) mutate(manifest, layers, name);
-    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR });
+    // Con mensajería, sobre RabbitMQ: es el broker que la frontera admite (el default del stack es Kafka).
+    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: layers.messaging ? { broker: 'rabbitmq' } : null });
     for (const file of files) {
       const target = path.join(root, name, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });

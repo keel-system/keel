@@ -11,6 +11,7 @@
 // el agregado es el valor ORIGINAL del token de concurrencia y la fila sube a la siguiente: EF escribe
 // `UPDATE … WHERE lock_version = @leída`, y cero filas es otra escritura que ganó (un 409).
 
+import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
 import {
   persistedMembers,
   collectInternalEntities,
@@ -32,6 +33,11 @@ import {
   persistenceNamespace,
   auditColumns
 } from './persistence.js';
+
+/** ¿Emite eventos de dominio este agregado? */
+export function emitsEvents(model, entity) {
+  return (model.events ?? []).some((event) => event.aggregates.includes(entity.name));
+}
 
 export const portClass = (entity) => `I${entity.name}Repository`;
 export const adapterClass = (entity) => `${entity.name}Repository`;
@@ -356,7 +362,7 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
   const body = `${xmlDoc([
     `Adaptador del puerto ${portClass(entity)} sobre EF Core. Usa el DbContext del ámbito, el de la transacción que abrió`,
     'el UseCaseMediator; sin ella, cada lectura va sola y cada escritura abre la suya.'
-  ])}public sealed class ${adapterClass(entity)}(${dbContextClass(model)} db, PersistenceTransactions transactions) : ${portClass(entity)}
+  ])}public sealed class ${adapterClass(entity)}(${dbContextClass(model)} db, PersistenceTransactions transactions${usesBridge(model) && emitsEvents(model, entity) ? `, ${bridgeClass(model)} events` : ''}) : ${portClass(entity)}
 {
 ${fields.join('\n')}${sortable}
 
@@ -367,6 +373,7 @@ ${methods.join('\n\n')}
 ${mappers.join('\n\n')}
 }`;
   if (sortable) usings.push('System.Linq.Expressions');
+  if (usesBridge(model) && emitsEvents(model, entity)) usings.push(messagingNamespace(model));
   return { path, content: csFile({ namespace, usings, body }) };
 }
 
@@ -456,13 +463,17 @@ function saveMethod(model, entity, helpers) {
   if (helpers.now) lines.push('                var now = DateTimeOffset.UtcNow;');
   if (helpers.actor) lines.push('                var actor = AuditActor.Current();');
   lines.push(...stamps.map((line) => `                ${line}`));
-  lines.push('                await db.SaveChangesAsync(cancellationToken);');
-  // Los eventos que la raíz acumuló: sin capa de mensajería nadie los escucha (llega con el incremento 9), pero se
-  // vacían igual para que el buffer no crezca con cada escritura.
-  if ((model.events ?? []).some((event) => event.aggregates.includes(entity.name))) {
-    lines.push('                // Sin mensajería nadie escucha los eventos (incremento 9): se vacían para que el buffer no crezca.');
-    lines.push('                entity.PullDomainEvents();');
+  // Los eventos que la raíz acumuló salen por el puente ANTES de SaveChanges: con outbox, la fila del evento se confirma
+  // con el cambio en el MISMO SaveChanges; con best-effort, el puente los deja para después del commit. Sin mensajería
+  // nadie los escucha, pero se vacían igual para que el buffer no crezca con cada escritura.
+  if (emitsEvents(model, entity)) {
+    lines.push(
+      usesBridge(model)
+        ? '                events.Publish(entity.PullDomainEvents());'
+        : '                entity.PullDomainEvents();'
+    );
   }
+  lines.push('                await db.SaveChangesAsync(cancellationToken);');
   lines.push('                return ToDomain(row);');
   return `    public async Task<${entity.name}> Save(${entity.name} entity, CancellationToken cancellationToken = default)
     {

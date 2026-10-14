@@ -35,7 +35,7 @@ test('hay fixtures relacionales que comparar', () => {
  * mensajes procesados, incremento 9; el reclamo de reconciliación, 11) llegan con su incremento, y entonces dejan de
  * filtrarse aquí. El registro de idempotencia (`idempotency_record`) ya se compara: se adelantó al incremento 7.
  */
-const PENDING_TABLES = new Set(['outbox_event', 'processed_event', 'reconciliation_claim']);
+const PENDING_TABLES = new Set(['reconciliation_claim']);
 
 for (const name of relational) {
   test(`${name}: el esquema de keel-dotnet es el de keel-spring`, async () => {

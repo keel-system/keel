@@ -51,7 +51,9 @@ export const PACKAGES = {
   'Microsoft.EntityFrameworkCore.Design': { version: '10.0.13', license: 'MIT', use: 'generación de migraciones (tiempo de diseño)' },
   // La seguridad con token (incremento 8): validar el JWT contra el JWKS del proveedor. Trae Microsoft.IdentityModel.Tokens.
   // Sin el handler JwtBearer de ASP.NET Core, que decide después de enrutar (scaffold/security.js). Verificada el 2026-10-14.
-  'Microsoft.IdentityModel.JsonWebTokens': { version: '8.23.0', license: 'MIT', use: 'validación del JWT (capa security)' }
+  'Microsoft.IdentityModel.JsonWebTokens': { version: '8.23.0', license: 'MIT', use: 'validación del JWT (capa security)' },
+  // La mensajería sobre RabbitMQ (incremento 9): el cliente oficial, con licencia doble a elegir. Verificada el 2026-10-14.
+  'RabbitMQ.Client': { version: '7.2.2', license: 'Apache-2.0 OR MPL-2.0', use: 'conexión con RabbitMQ (capa messaging)' }
 };
 
 /**

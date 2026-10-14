@@ -33,6 +33,11 @@ export function restNamespace(model) {
   return namespaceOf(model, 'rest');
 }
 
+/** ¿Hay mensajería que abra la correlación? La misma condición que `usesMessaging` de messaging.js, sin importarlo. */
+function usesCorrelationForMessaging(model) {
+  return Boolean(model.layersPresent?.messaging) && ((model.events ?? []).length > 0 || (model.subscriptions ?? []).length > 0) && usesRelational(model);
+}
+
 /**
  * ¿Hace falta la LECTURA del cable (Application/Support)? La usan los lectores de la API y los mensajes de las
  * suscripciones, que leen su payload con los mismos conversores y las mismas reglas: un mensaje y una petición del
@@ -57,15 +62,18 @@ export function generate(model) {
     // Los value objects leídos del JSON, con las guardas de su constructor (endpoints.js los escribe).
     if ((model.valueObjects ?? []).length > 0) files.push(valueReaders(model));
   }
+  const { namespace: correlationNs, path: correlationPath } = located(model, 'correlation', 'CorrelationContext');
+  // La correlación: la abre la entrada HTTP y también el consumo de un mensaje (InboundContext).
+  if (usesApi(model) || usesCorrelationForMessaging(model)) {
+    files.push({ path: correlationPath, content: csFile({ namespace: correlationNs, usings: ['System.Text.RegularExpressions'], body: correlationContextBody() }) });
+  }
   if (!usesApi(model)) return files;
   const rest = (name, usings, body) => {
     const { namespace, path } = located(model, 'rest', name);
     return { path, content: csFile({ namespace, usings, body }) };
   };
-  const { namespace: correlationNs, path: correlationPath } = located(model, 'correlation', 'CorrelationContext');
   return [
     ...files,
-    { path: correlationPath, content: csFile({ namespace: correlationNs, usings: ['System.Text.RegularExpressions'], body: correlationContextBody() }) },
     rest('CorrelationMiddleware', ['Microsoft.AspNetCore.Http', 'Microsoft.Extensions.Logging', correlationNs], correlationMiddlewareBody()),
     rest('ErrorResponse', ['System.Text.Json.Serialization', correlationNs], errorResponseBody()),
     rest(

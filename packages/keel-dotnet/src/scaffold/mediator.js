@@ -15,6 +15,7 @@
 // paso directo; con ella (incremento 6), la de EF Core (PersistenceTransactions), que también traduce los fallos del
 // motor al contrato.
 
+import { messagingNamespace, usesBridge } from './messaging.js';
 import { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher } from 'keel-core/gen';
 import { csFile, located, namespaceOf, solution, typeUsings } from './render.js';
 import { usesRelational } from './persistence.js';
@@ -324,6 +325,10 @@ function useCasesTest(model) {
   // Con persistencia, los handlers reciben su repositorio: el contenedor la registra SIN base (el perfil test), que
   // se construye entera y solo falla si algo intenta conectar.
   const persistenceLine = persistence ? '\n        services.AddPersistence(DatabaseSettings.Disabled);' : '';
+  // Con eventos, los adaptadores de repositorio reciben el puente: el registro real, con la configuración del diseño.
+  const bridge = usesBridge(model);
+  if (bridge) usings.push(messagingNamespace(model));
+  const bridgeLine = bridge ? '\n        services.AddDomainEvents(MessagingSettings.Defaults);' : '';
   // Con alcance por recurso, los handlers que declaran su error lo reciben: el registro real, sin la entrada HTTP.
   const scope = usesCallerScope(model);
   if (scope) usings.push(securityNamespace(model));
@@ -339,7 +344,7 @@ function useCasesTest(model) {
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddUseCases();${persistenceLine}${scopeLine}
+        services.AddUseCases();${persistenceLine}${bridgeLine}${scopeLine}
         extra?.Invoke(services);
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
