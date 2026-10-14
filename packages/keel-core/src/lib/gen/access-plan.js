@@ -155,3 +155,26 @@ const GENERIC_TOKEN_CLAIMS = { type: 'flat', rolesClaim: 'roles', permissionsCla
 export function tokenClaims(auth) {
   return TOKEN_CLAIMS[auth] ?? GENERIC_TOKEN_CLAIMS;
 }
+
+/**
+ * Los claims de un token que satisface TODA regla de acceso del plan: sus roles, permisos y scopes, en los claims donde
+ * los pone el proveedor del stack, y la audiencia del servicio. Es el token con el que las pruebas que build deja
+ * escritas pasan la autorización para medir lo que dicen medir (el contrato del cable, la lectura de peticiones), el
+ * mismo en todos los generadores. Cognito dice la audiencia con el prefijo de cada scope; los demás, con `aud`.
+ */
+export function fullAccessClaims(model, plan = accessPlan(model)) {
+  const requirements = plan.chains.flatMap((chain) => [...chain.rules.map((rule) => rule.requirement), chain.fallback]);
+  const authorities = [...new Set(requirements.flatMap((requirement) => requirement.authorities ?? []))];
+  const claims = tokenClaims(model.stack?.auth);
+  const cognito = model.stack?.auth === 'cognito';
+  const roles = authorities.filter((a) => a.startsWith('ROLE_')).map((a) => a.slice('ROLE_'.length));
+  const scopes = authorities.filter((a) => a.startsWith('SCOPE_')).map((a) => a.slice('SCOPE_'.length));
+  const permissions = authorities.filter((a) => !a.startsWith('ROLE_') && !a.startsWith('SCOPE_'));
+  const full = { sub: 'keel-test', azp: 'keel-test', [claims.principalClaim]: 'keel-test' };
+  if (claims.type === 'nested') full[claims.rolesParent] = { [claims.rolesField]: roles };
+  else full[claims.rolesClaim] = roles;
+  if (permissions.length > 0) full[claims.permissionsClaim] = permissions;
+  if (scopes.length > 0) full.scope = scopes.map((scope) => (cognito && plan.audience ? `${plan.audience}/${scope}` : scope)).join(' ');
+  if (plan.audience && !cognito) full.aud = plan.audience;
+  return full;
+}

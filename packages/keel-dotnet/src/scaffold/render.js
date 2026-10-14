@@ -80,6 +80,9 @@ export const PLACES = {
   idempotency: ['domain', 'Idempotency'],
   useCaseInfra: ['infrastructure', 'UseCase'],
   correlation: ['infrastructure', 'Correlation'],
+  // La seguridad (capa security): el principal, las reglas como datos, los autenticadores, CORS y la identidad del
+  // llamante. El middleware que los usa vive en Api/Rest, junto a los otros de la entrada HTTP.
+  security: ['infrastructure', 'Security'],
   // La persistencia relacional (EF Core): el contexto y su tiempo de ejecución, las filas con su mapeo y un
   // adaptador por puerto.
   persistence: ['infrastructure', 'Persistence'],

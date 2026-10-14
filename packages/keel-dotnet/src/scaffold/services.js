@@ -23,6 +23,7 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { idempotencyOutcomeCode } from 'keel-core/gen';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_PORT, idempotencyNamespace, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
+import { CALLER_SCOPE_PORT, scopedOperation } from './security.js';
 
 export function generate(model) {
   const files = [];
@@ -191,15 +192,24 @@ function resultUsings(model, operation) {
 /** Las notas de un componente que el diseño obliga a decir donde se ve. */
 function componentNotes(model, operation, component) {
   if ((operation.pathParams ?? []).some((param) => param.name === component.name)) return '';
+  const lines = [];
+  if (component.resolvedIdentity) {
+    lines.push(
+      'Lo resuelve el servidor desde la credencial (security.authentication.callerIdentity): no llega del',
+      'cuerpo, lo estampa el lector del endpoint con CallerIdentity.Resolve().'
+    );
+  }
   const inherited = component.list ? null : component.inheritedPattern;
-  if (!inherited || !(model.formatTypes ?? []).some((type) => type.name === component.typeName)) return '';
-  const lines = [
+  if (!inherited || !(model.formatTypes ?? []).some((type) => type.name === component.typeName)) {
+    return lines.length > 0 ? `${lines.map((line) => `    // ${line}`).join('\n')}\n` : '';
+  }
+  lines.push(
     `El formato del value type ${component.typeName} (${inherited}) se valida YA en la entrada: mal formado`,
     'es un 400 antes que cualquier precondición. No lo valides otra vez al principio del handler.',
     `El dominio lo repite con ${component.typeName}Format.Validate(...) (${located(model, 'valueObjects', `${component.typeName}Format`).path})`,
     'en el factory o el método de negocio de la entidad que recibe el valor: es lo que cubre lo que no entra por',
     'la API (un evento, una operación interna), y lo exige el gate check-domain-guards.sh.'
-  ];
+  );
   return `${lines.map((line) => `    // ${line}`).join('\n')}\n`;
 }
 
@@ -224,6 +234,11 @@ function renderHandler(model, operation) {
   if (usesRegistry(model, operation)) {
     usings.push(idempotencyNamespace(model));
     dependencies.push(IDEMPOTENCY_PORT);
+  }
+  // El alcance por recurso (security.authentication.scoping): lo reciben las operaciones que declaran su error.
+  if (scopedOperation(model, operation)) {
+    usings.push(namespaceOf(model, 'appSupport'));
+    dependencies.push(CALLER_SCOPE_PORT);
   }
   // El despacho de otro caso de uso (use-cases.dispatches, DSL 2.21): el diseño dice que esta operación ejecuta
   // otra, así que recibe el puerto delante y la nota de cómo. El mismo criterio que keel-spring y keel-nest.
@@ -269,6 +284,15 @@ function handlerNotes(model, operation) {
     notes.push(
       `Error: lanzar ${error?.exceptionClass ?? code} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}` +
         (error ? ` — ${located(model, 'errors', error.exceptionClass).path}` : '')
+    );
+  }
+  const scoping = model.security?.scoping;
+  if (scopedOperation(model, operation)) {
+    const exempt = [...scoping.exemptRoles, ...(scoping.exemptClients ?? []).map((client) => `cliente ${client}`)];
+    notes.push(
+      `Alcance (security.authentication.scoping): callerScope ya está inyectado; comprueba ` +
+        `callerScope.Covers(<${scoping.over} del recurso>) donde lo digan las reglas; fuera del alcance, ${scoping.error}. ` +
+        `Exentos: ${exempt.join(', ') || 'ninguno'}. En un listado, filtra por callerScope.ScopedValues() con un finder acotado que escribes tú`
     );
   }
   for (const transition of operation.transitions ?? []) {

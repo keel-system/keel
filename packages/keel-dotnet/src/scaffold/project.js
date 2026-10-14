@@ -18,6 +18,7 @@ import { DOTNET_SDK_BAND, TARGET_FRAMEWORK, TEST_RUNNER } from '../lib/assets.js
 import { PACKAGES, TOOLS } from '../lib/dotnet-stack.js';
 import { solution } from './render.js';
 import { usesRelational } from './persistence.js';
+import { usesJwt } from './security.js';
 
 /** Los paquetes que usa ESTA solución: los del esqueleto y los de las capas que el diseño declara. */
 export function packagesFor(model) {
@@ -26,10 +27,15 @@ export function packagesFor(model) {
 
 /**
  * Los paquetes del proyecto Infrastructure: la configuración y, con persistencia relacional, EF Core, Npgsql y el
- * paquete de diseño de EF (solo para `dotnet ef`: no viaja con el servicio).
+ * paquete de diseño de EF (solo para `dotnet ef`: no viaja con el servicio); con seguridad por token, la validación del JWT.
  */
 export function infrastructurePackages(model) {
-  return ['YamlDotNet', ...(usesRelational(model) ? ['Microsoft.EntityFrameworkCore', 'Microsoft.EntityFrameworkCore.Relational', 'Npgsql.EntityFrameworkCore.PostgreSQL', DESIGN_PACKAGE] : [])];
+  return [
+    'YamlDotNet',
+    ...(usesRelational(model) ? ['Microsoft.EntityFrameworkCore', 'Microsoft.EntityFrameworkCore.Relational', 'Npgsql.EntityFrameworkCore.PostgreSQL', DESIGN_PACKAGE] : []),
+    // La seguridad con token: la validación del JWT (capa security).
+    ...(usesJwt(model) ? ['Microsoft.IdentityModel.JsonWebTokens'] : [])
+  ];
 }
 
 const DESIGN_PACKAGE = 'Microsoft.EntityFrameworkCore.Design';

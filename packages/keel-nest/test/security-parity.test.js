@@ -19,38 +19,9 @@ import { planService as planSpring } from '../../keel-spring/src/scaffold/index.
 import { planService as planNest } from '../src/scaffold/index.js';
 import { transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { springChains, normalizeRequirement } from '../../keel-spring/test/helpers/security-chains.js';
 
-/** Lo que exige una llamada terminal de Spring Security, como el dato del plan. */
-function requirementOf(call) {
-  if (call === 'permitAll()') return { kind: 'public', authorities: [] };
-  if (call === 'authenticated()') return { kind: 'authenticated', authorities: [] };
-  const match = /^(hasAnyRole|hasAnyAuthority|hasRole)\((.*)\)$/.exec(call);
-  assert.ok(match, `llamada de Spring desconocida: ${call}`);
-  const values = JSON.parse(`[${match[2]}]`);
-  return { kind: 'anyOf', authorities: match[1] === 'hasAnyAuthority' ? values : values.map((role) => `ROLE_${role}`) };
-}
-
-/** Las cadenas de la SecurityConfig que emite keel-spring, en el orden en que Spring las evalúa. */
-function springChains(files) {
-  const config = files.find((file) => file.path.endsWith('/SecurityConfig.java'));
-  if (!config) return null;
-  const beans = config.content.split(/public SecurityFilterChain \w+\(HttpSecurity http\)/).slice(1);
-  return beans.map((bean) => {
-    const body = bean.slice(0, bean.indexOf('return http.build();'));
-    const matcher = /\.securityMatcher\(([^)]*)\)/.exec(body);
-    const rules = [...body.matchAll(/\.requestMatchers\(HttpMethod\.(\w+), "([^"]+)"\)\.([\w]+\([^)]*\))/g)]
-      .map(([, method, path, call]) => ({ method, path, requirement: requirementOf(call) }));
-    const fallback = /\.anyRequest\(\)\.([\w]+\([^)]*\))/.exec(body);
-    return {
-      paths: matcher ? JSON.parse(`[${matcher[1]}]`) : null,
-      checksAudience: /AudienceAuthorizationFilter/.test(body),
-      rules,
-      fallback: fallback ? requirementOf(fallback[1]) : null
-    };
-  });
-}
-
-const normalize = (requirement) => ({ kind: requirement.kind, authorities: [...(requirement.authorities ?? [])].sort() });
+const normalize = normalizeRequirement;
 
 const secured = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'security.keel.yaml')));
 

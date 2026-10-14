@@ -9,6 +9,7 @@
 
 import { PAYMENT_NOTICE_PATH } from './payments.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
 import {
   audienceOf,
   checksAudience,
@@ -744,13 +745,13 @@ public class SecurityErrorHandlers implements AuthenticationEntryPoint, AccessDe
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response,
             AuthenticationException exception) throws IOException {
-        write(response, HttpStatus.UNAUTHORIZED, "Unauthorized", "${FRAMEWORK_ERRORS.unauthenticated.code}", "Credenciales ausentes o no válidas");
+        write(response, HttpStatus.UNAUTHORIZED, "${FW.unauthenticated.error}", "${FRAMEWORK_ERRORS.unauthenticated.code}", "${FW.unauthenticated.message}");
     }
 
     @Override
     public void handle(HttpServletRequest request, HttpServletResponse response,
             AccessDeniedException exception) throws IOException {
-        write(response, HttpStatus.FORBIDDEN, "Forbidden", "${FRAMEWORK_ERRORS.accessDenied.code}", "La credencial no autoriza esta operación");
+        write(response, HttpStatus.FORBIDDEN, "${FW.accessDenied.error}", "${FRAMEWORK_ERRORS.accessDenied.code}", "${FW.accessDenied.message}");
     }
 
     // El code es el canónico de la lista cerrada (framework-errors.md): sin él un escenario

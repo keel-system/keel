@@ -45,6 +45,6 @@ test('una capa fuera de la frontera sale en rojo sin construir nada', async () =
   const before = treeDigest(workspace);
   const { exitCode, output } = await runCommand(workspace, check, 'specs/stock-reservation', {});
   assert.equal(exitCode, 1);
-  assert.match(output, /capa security/);
+  assert.match(output, /capa messaging/);
   assert.equal(treeDigest(workspace), before);
 });

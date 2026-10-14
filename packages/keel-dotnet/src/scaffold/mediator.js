@@ -20,6 +20,7 @@ import { csFile, located, namespaceOf, solution, typeUsings } from './render.js'
 import { usesRelational } from './persistence.js';
 import { mapperClasses } from './mappers.js';
 import { contractOf, messageNamespace } from './services.js';
+import { securityNamespace, usesCallerScope } from './security.js';
 
 /** ¿Hay casos de uso que despachar? Sin operaciones no se genera nada de esto. */
 export function usesMediator(model) {
@@ -323,6 +324,10 @@ function useCasesTest(model) {
   // Con persistencia, los handlers reciben su repositorio: el contenedor la registra SIN base (el perfil test), que
   // se construye entera y solo falla si algo intenta conectar.
   const persistenceLine = persistence ? '\n        services.AddPersistence(DatabaseSettings.Disabled);' : '';
+  // Con alcance por recurso, los handlers que declaran su error lo reciben: el registro real, sin la entrada HTTP.
+  const scope = usesCallerScope(model);
+  if (scope) usings.push(securityNamespace(model));
+  const scopeLine = scope ? '\n        services.AddCallerScope();' : '';
   const passThrough = persistence
     ? `
             // Sin base: la transacción de este despacho es el paso directo, no la de EF.
@@ -334,7 +339,7 @@ function useCasesTest(model) {
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddUseCases();${persistenceLine}
+        services.AddUseCases();${persistenceLine}${scopeLine}
         extra?.Invoke(services);
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }

@@ -12,8 +12,11 @@
 // Qué se valida sale de las reglas neutrales (inputValidation, keel-core/gen/constraints.js); dónde viaja cada
 // campo y si el cuerpo es obligatorio, de keel-core/gen/api-contract.js.
 //
-// Fuera, con su incremento: las subidas multipart (capa storage, incremento 13) y la identidad del llamante
-// (capa security, incremento 8). La frontera rechaza los diseños que las declaran; aquí no se emite su ruta.
+// La identidad del llamante (security.authentication.callerIdentity) NO se lee de la petición: el campo lo estampa el
+// lector con CallerIdentity.Resolve(), desde la credencial que validó el middleware de seguridad.
+//
+// Fuera, con su incremento: las subidas multipart (capa storage, incremento 13). La frontera rechaza los diseños que
+// las declaran; aquí no se emite su ruta.
 
 import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
 import { callsPaymentGateway } from 'keel-core/gen/payments-model';
@@ -22,6 +25,7 @@ import { componentType, isPartialUpdate, isThreeState, messageComponents, messag
 import { restNamespace, usesApi } from './rest-support.js';
 import { repositoriesNamespace } from './repositories.js';
 import { pageableDefaults } from 'keel-core/gen/pagination';
+import { securityNamespace } from './security.js';
 
 // Los tipos base que en C# son tipos de VALOR: un ausente se escribe `T?` (Nullable<T>), no una referencia nula.
 const VALUE_BASES = new Set(['int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json']);
@@ -39,10 +43,10 @@ function isValueType(field) {
   return VALUE_BASES.has(field.base);
 }
 
-/** ¿Se puede servir la operación hoy? Las subidas y la identidad del llamante llegan con su capa. */
+/** ¿Se puede servir la operación hoy? Las subidas llegan con su capa. */
 export function servedOperation(operation) {
   if (!operation.route || operation.multipart) return false;
-  return !messageComponents(operation).some((component) => component.resolvedIdentity || component.file);
+  return !messageComponents(operation).some((component) => component.file);
 }
 
 /** Las operaciones con ruta que se sirven, con su grupo. */
@@ -239,6 +243,8 @@ function renderReader(model, operation, usings) {
   // 2. Cuerpo, o 3. query.
   for (const component of components) {
     if (fromPath.has(component.name)) continue;
+    // La identidad del llamante no viaja en la petición: la estampa el servidor (abajo).
+    if (component.resolvedIdentity) continue;
     // La página no es un campo del diseño: la leen las líneas de abajo.
     if (component.pageable) continue;
     if (operation.paginated && ['page', 'size'].includes(component.name) && !(operation.bodyFields ?? []).some((f) => f.name === component.name)) continue;
@@ -289,7 +295,12 @@ function renderReader(model, operation, usings) {
     const local = localOf(component);
     const type = componentType(operation, component);
     let value;
-    if (type.startsWith('Optional<')) {
+    if (component.resolvedIdentity) {
+      // La estampa el servidor desde la credencial (security.authentication.callerIdentity), nunca el cuerpo: quien hace
+      // la petición no elige en nombre de quién actúa.
+      usings.push(securityNamespace(model));
+      value = 'CallerIdentity.Resolve()';
+    } else if (type.startsWith('Optional<')) {
       const inner = type.slice('Optional<'.length, -1);
       usings.push(namespaceOf(model, 'appSupport'));
       value = `${local}Present ? Optional<${inner}>.Of(${component.list ? `${local} ?? []` : local}) : Optional<${inner}>.Absent`;
@@ -337,7 +348,7 @@ export function routeRow(model, operation) {
   const query = asBody
     ? []
     : messageComponents(operation, model)
-        .filter((c) => !fromPath.has(c.name))
+        .filter((c) => !fromPath.has(c.name) && !c.resolvedIdentity)
         // El Pageable viaja como los tres parámetros de Spring Data.
         .flatMap((c) => (c.pageable ? ['page', 'size', 'sort'] : [c.name]));
   return {

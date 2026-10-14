@@ -741,6 +741,51 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     (`docs/corridas/2026-10-14-product-catalog-dotnet.md`).
 - **Inc. 7 — cerrado (2026-10-14).** Siguiente: el 8 (seguridad).
 
+- **Inc. 8 — en curso.** Tramos como los de keel-nest; lo neutral (`access-plan.js`, `identity-provisioning.js`) ya
+  estaba en keel-core desde su 8a.
+  - **8a, la autorización de la entrada HTTP (hecho, 2026-10-14).**
+    - **Lo neutral que faltaba, sacado antes de escribir C#** (keel-spring 44/11 137 y keel-nest 41/10 050, idénticos):
+      los textos del 401 y del 403 (`FRAMEWORK_RESPONSES.unauthenticated/accessDenied` en `api-errors.js`, que estaban
+      copiados en los dos), los claims del token de acceso total de las pruebas emitidas (`fullAccessClaims` en
+      `access-plan.js`, antes en keel-nest) y las peticiones de los casos de seguridad de la prueba de la API
+      (`securityCases` en `api-cases.js`). El lector de la `SecurityConfig` de keel-spring pasa a
+      `keel-spring/test/helpers/security-chains.js`, que comparten las dos paridades.
+    - **`src/scaffold/security.js`**: un MIDDLEWARE propio (`HttpSecurityMiddleware`, en Api/Rest), no la autorización
+      de ASP.NET Core ni el handler JwtBearer: va detrás de la correlación y del de errores y delante de los endpoints,
+      así que decide también sobre un camino que no existe (401 y no 404, como Spring Security). Compara la FORMA de la
+      plantilla de la ruta que casó (`RoutePattern.RawText`), y si no casó ninguna, el camino.
+      - Las reglas como DATOS (`AccessRules.cs`), del plan neutral.
+      - El JWT con `Microsoft.IdentityModel.JsonWebTokens` 8.23.0 (MIT): discovery del issuer, `jwk-set-uri` o el JWKS en
+        línea del perfil test; perezoso (arranca sin el proveedor); un fallo del proveedor sigue hasta el 500 del
+        contrato, nunca un 401; 60 s de margen y `exp` no obligatorio, como Spring; relee el JWKS ante una clave
+        desconocida como mucho cada 30 s. El payload se lee como `JsonElement`, sin el mapeo de claims de .NET.
+      - Clave de API en tiempo constante, CORS con la semántica del `DefaultCorsProcessor`, `CallerIdentity` y el puerto
+        `ICallerScope` (Application/Support) con `JwtCallerScope`.
+      - Configuración: los `security.yaml` de cada perfil son BYTE A BYTE los de keel-nest (lo comprueba
+        `security.test.js` en las 8 fixtures con seguridad × Keycloak y Cognito).
+    - **Los endpoints sirven ya las operaciones con identidad del llamante**: el campo lo estampa el lector con
+      `CallerIdentity.Resolve()`, nunca de la petición, y no aparece en la query de `ApiRoutes`. Los handlers que
+      declaran el error del alcance reciben `ICallerScope` con su nota.
+    - **La frontera** acepta la capa. Rechaza con motivo `callerIdentity.from.resolvedBy` (el finder de credenciales
+      llega en el 13, como en keel-nest) y un campo de identidad que no sea `string`/`text` (sale de un claim, que es
+      texto; en C# el mensaje es tipado).
+    - **Las pruebas emitidas**: `TestCredential.cs` genera su clave RSA y `InMemoryServer` publica el JWKS en
+      `SECURITY_TEST_JWKS`; ninguna clave en el repo. `ApiTests` manda la credencial de acceso total por defecto y gana
+      el 401 sin credencial (exista o no la ruta), el bearer malformado en `/livez`, el caducado, el firmado con otra
+      clave y el 403 de una regla. `UseCasesTests` registra el alcance con el registro real (`AddCallerScope`).
+  - **Medido:**
+    - `npm test`: keel-dotnet 327/327, keel-core 1 214, keel-spring 1 662 y keel-nest 798.
+    - `security-parity.test.js` (nuevo) 17/17 contra la `SecurityConfig` de keel-spring; falsado quitando una
+      authority: caen 10, como en keel-nest.
+    - `cs-check`: el proyecto de referencia entero, y la solución de las 15 fixtures y 2 variantes compila (102/102)
+      con sus 1 371 pruebas en verde. Falsado dos veces sobre lo emitido: sin las ramas de rechazo del middleware caen
+      los 401 y 403 de las fixtures que los emiten; sin comprobar la caducidad cae exactamente `UnTokenCaducadoEs401`
+      en las seis fixtures con token.
+  - **Lo siguiente**: 8b, el arnés (`identityProvisioningFiles` con `DOTNET_INFRA.identity`, `TokenFor`,
+    `ServiceCredential`, `TokenAs`, `ScopedResource` y `TokenWithScope` en `FlowTest`, las skills
+    `keel-dotnet-keycloak`/`cognito`); 8c, `security-check` contra un Keycloak real; 8d, la corrida sobre
+    `profile-directory`.
+
 ## 5. Riesgos conocidos
 
 - **MySQL con EF Core 10.** Pomelo (MIT) suele ir detrás de la versión de EF. Además, el `Guid` de

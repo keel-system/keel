@@ -10,11 +10,13 @@
 import { WIRE_SHAPES } from 'keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
-import { apiCases as neutralApiCases } from 'keel-core/gen/api-cases';
+import { apiCases as neutralApiCases, securityCases as neutralSecurityCases } from 'keel-core/gen/api-cases';
 import { csFile, csString, solution } from './render.js';
 import { messageComponents } from './services.js';
 import { usesApi } from './rest-support.js';
 import { servedOperation } from './endpoints.js';
+import { securityPlan, usesJwt } from './security.js';
+import { usesTestCredential } from './test-credential.js';
 
 export function generate(model) {
   if (!usesApi(model)) return [];
@@ -48,6 +50,7 @@ function expected(key, code = null) {
 function apiTestsCs(model) {
   const cases = apiCases(model);
   const validation = FRAMEWORK_ERRORS.validation.code;
+  const credential = usesTestCredential(model);
   const tests = [];
   if (cases.reachesHandler) {
     // No afirma QUÉ responde el handler, solo que la ruta llega a él: así sigue en verde cuando el agente lo
@@ -112,7 +115,7 @@ public sealed class ApiTests(InMemoryServer server) : IClassFixture<InMemoryServ
     /// <summary>El orden de las claves de ErrorResponse: el del cable (keel-core, WIRE_SHAPES.errorResponse).</summary>
     private static readonly string[] ErrorShape = [${WIRE_SHAPES.errorResponse.map(csString).join(', ')}];
 
-    private async Task<HttpResponseMessage> Send(string method, string url, string? json = null, string? correlationId = null)
+    private async Task<HttpResponseMessage> Send(string method, string url, string? json = null, string? correlationId = null${credential ? ', (string Name, string Value)? credential = null, bool anonymous = false' : ''})
     {
         using var request = new HttpRequestMessage(new HttpMethod(method), new Uri(url, UriKind.Relative));
         if (json is not null)
@@ -122,7 +125,7 @@ public sealed class ApiTests(InMemoryServer server) : IClassFixture<InMemoryServ
         if (correlationId is not null)
         {
             request.Headers.TryAddWithoutValidation("X-Correlation-Id", correlationId);
-        }
+        }${credential ? CREDENTIAL_HEADER : ''}
         using var client = server.CreateClient();
         return await client.SendAsync(request, TestContext.Current.CancellationToken);
     }
@@ -168,7 +171,78 @@ public sealed class ApiTests(InMemoryServer server) : IClassFixture<InMemoryServ
         Assert.Matches("^[0-9a-f-]{36}\\\\z", Correlation(generated));
     }
 
-${tests.join('\n\n')}
+${[...tests, ...securityTests(model)].join('\n\n')}
 }`;
   return csFile({ namespace: solution(model).unitTests.name, usings: ['System.Text', 'System.Text.Json', 'Xunit'], body });
+}
+
+// Con la API protegida, cada petición de la prueba lleva la credencial de acceso total (TestCredential) salvo que el
+// caso pida otra o ninguna: así los demás casos miden la API y no la autorización.
+const CREDENTIAL_HEADER = `
+        if (!anonymous)
+        {
+            var (name, value) = credential ?? TestCredential.Header;
+            request.Headers.TryAddWithoutValidation(name, value);
+        }`;
+
+/**
+ * Los casos propios de la seguridad, con las peticiones de keel-core/gen/api-cases.js (las mismas que la prueba de
+ * keel-nest): el 401 antes de enrutar, la clave o el token que no valen (malformado, caducado, firmado con otra clave) y
+ * el 403 de una regla.
+ */
+function securityTests(model) {
+  if (!usesTestCredential(model)) return [];
+  const cases = neutralSecurityCases(model, securityPlan(model));
+  const rejected = expected('unauthenticated', FRAMEWORK_ERRORS.unauthenticated.code);
+  const tests = [];
+  if (cases.protectedPath) {
+    tests.push(`    [Fact]
+    public async Task SinCredencialUnCaminoProtegidoEs401ExistaONo()
+    {
+        // Spring Security decide antes de enrutar: sin credencial no se sabe siquiera si la ruta existe.
+        using var response = await Send("GET", ${csString(cases.protectedPath)}, anonymous: true);
+        await ExpectError(response, ${rejected});
+    }`);
+  }
+  if (!usesJwt(model)) {
+    tests.push(`    [Fact]
+    public async Task UnaClaveDeApiQueNoEsLaConfiguradaNoAutentica401()
+    {
+        using var response = await Send("GET", ${csString(cases.notFound)}, credential: ("X-API-Key", "no-es-la-clave"));
+        await ExpectError(response, ${rejected});
+    }`);
+    return tests;
+  }
+  tests.push(`    [Fact]
+    public async Task UnTokenQueNoValidaEs401TambienEnUnaRutaAbierta()
+    {
+        // Como el resource server de Spring: un bearer que no vale es 401 aunque la ruta no exija nada.
+        using var response = await Send("GET", "/livez", credential: ("Authorization", "Bearer no.es-un.token"));
+        await ExpectError(response, ${rejected});
+    }`);
+  tests.push(`    [Fact]
+    public async Task UnTokenCaducadoEs401()
+    {
+        var expired = TestCredential.TokenWith(TestCredential.FullAccess, DateTimeOffset.UtcNow.AddMinutes(-5));
+        using var response = await Send("GET", ${csString(cases.notFound)}, credential: ("Authorization", "Bearer " + expired));
+        await ExpectError(response, ${rejected});
+    }`);
+  tests.push(`    [Fact]
+    public async Task UnTokenFirmadoConOtraClaveEs401()
+    {
+        var forged = TestCredential.ForgedWith(TestCredential.FullAccess);
+        using var response = await Send("GET", ${csString(cases.notFound)}, credential: ("Authorization", "Bearer " + forged));
+        await ExpectError(response, ${rejected});
+    }`);
+  if (cases.forbidden) {
+    tests.push(`    /// <summary>Una credencial válida sin lo que exige la regla (${cases.forbidden.authorities.join(' o ')}) es 403.</summary>
+    [Fact]
+    public async Task UnaCredencialValidaSinLoQueExigeLaReglaEs403()
+    {
+        var bare = TestCredential.TokenWith("""{"sub":"keel-sin-permisos"}""");
+        using var response = await Send(${csString(cases.forbidden.method)}, ${csString(cases.forbidden.url)}, credential: ("Authorization", "Bearer " + bare));
+        await ExpectError(response, ${expected('accessDenied', FRAMEWORK_ERRORS.accessDenied.code)});
+    }`);
+  }
+  return tests;
 }

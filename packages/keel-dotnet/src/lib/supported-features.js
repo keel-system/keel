@@ -13,7 +13,6 @@
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  security: 'incremento 8',
   messaging: 'incremento 9',
   'http-clients': 'incremento 11',
   dependencies: 'incremento 11',
@@ -75,6 +74,7 @@ export function checkSupportedFeatures(manifest, layers) {
         'Genera este diseño con keel-spring o keel-nest, o espera a que keel-dotnet la cubra.'
     );
   }
+  errors.push(...callerIdentityErrors(layers));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     if (feature.unless?.(layers)) continue;
@@ -105,4 +105,33 @@ export function checkSupportedStack(stack) {
     );
   }
   return { errors };
+}
+
+/**
+ * Lo que keel-dotnet todavía no sabe hacer con la identidad del llamante (security.authentication.callerIdentity):
+ *   · `from.resolvedBy`: la credencial del token es UNA de las del recurso y hay que buscar su dueño con el finder de
+ *     credenciales del repositorio, que llega con el correo (incremento 13), como en keel-nest;
+ *   · un campo de identidad que no sea texto: el valor sale de un claim, que es texto, y los servidores de keel-spring y
+ *     keel-nest lo pasan tal cual. En C# el mensaje es tipado: un value type o un uuid no compilaría.
+ */
+function callerIdentityErrors(layers) {
+  const identity = layers?.security?.authentication?.callerIdentity;
+  if (!identity) return [];
+  const errors = [];
+  if (identity.from?.resolvedBy) {
+    errors.push(
+      'security.authentication.callerIdentity.from.resolvedBy — keel-dotnet todavía no resuelve la identidad del llamante contra las credenciales de un recurso ' +
+        '(llega con el finder de credenciales, en el incremento 13 de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
+    );
+  }
+  const typed = Object.entries(layers?.['use-cases']?.operations ?? {})
+    .map(([name, operation]) => [name, operation?.input?.fields?.[identity.field]?.type])
+    .filter(([, type]) => type != null && !['string', 'text'].includes(type));
+  for (const [name, type] of typed) {
+    errors.push(
+      `use-cases.${name}.input.${identity.field}: ${type} — la identidad del llamante sale de la credencial como TEXTO, igual que en keel-spring y keel-nest; ` +
+        'keel-dotnet solo la estampa en un campo string o text. Declara el campo como string.'
+    );
+  }
+  return errors;
 }

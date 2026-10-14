@@ -7,7 +7,7 @@
 // red ni proveedor. Sin variable publicada, el perfil test no acepta ningún token, así que no hay ninguna
 // clave en el repositorio que un despliegue con el perfil equivocado aceptara.
 
-import { tokenClaims } from 'keel-core/gen/access-plan';
+import { fullAccessClaims as neutralFullAccessClaims } from 'keel-core/gen/access-plan';
 import { securityPlan, usesJwt, TEST_JWKS_VARIABLE, LOCAL_API_KEY } from './security.js';
 import { tsString } from './render.js';
 
@@ -25,26 +25,11 @@ export function generate(model) {
 }
 
 /**
- * Los claims que satisfacen TODA regla de acceso del diseño: sus roles, permisos y scopes, en los
- * claims donde los pone el proveedor del stack, y la audiencia del servicio.
+ * Los claims que satisfacen TODA regla de acceso del diseño: el cálculo es neutral (keel-core/gen/access-plan.js, el
+ * mismo token de acceso total que escriben las pruebas de keel-dotnet).
  */
 export function fullAccessClaims(model) {
-  const plan = securityPlan(model);
-  const requirements = plan.chains.flatMap((chain) => [...chain.rules.map((rule) => rule.requirement), chain.fallback]);
-  const authorities = [...new Set(requirements.flatMap((requirement) => requirement.authorities ?? []))];
-  const claims = tokenClaims(model.stack?.auth);
-  const cognito = model.stack?.auth === 'cognito';
-  const roles = authorities.filter((a) => a.startsWith('ROLE_')).map((a) => a.slice('ROLE_'.length));
-  const scopes = authorities.filter((a) => a.startsWith('SCOPE_')).map((a) => a.slice('SCOPE_'.length));
-  const permissions = authorities.filter((a) => !a.startsWith('ROLE_') && !a.startsWith('SCOPE_'));
-  const full = { sub: 'keel-test', azp: 'keel-test', [claims.principalClaim]: 'keel-test' };
-  if (claims.type === 'nested') full[claims.rolesParent] = { [claims.rolesField]: roles };
-  else full[claims.rolesClaim] = roles;
-  if (permissions.length > 0) full[claims.permissionsClaim] = permissions;
-  // Cognito dice la audiencia con el prefijo de cada scope; los demás, con `aud`.
-  if (scopes.length > 0) full.scope = scopes.map((scope) => (cognito && plan.audience ? `${plan.audience}/${scope}` : scope)).join(' ');
-  if (plan.audience && !cognito) full.aud = plan.audience;
-  return full;
+  return neutralFullAccessClaims(model, securityPlan(model));
 }
 
 function tokenCredential(model) {

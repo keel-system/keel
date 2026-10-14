@@ -114,3 +114,30 @@ export function apiCases(model, { components }) {
   }
   return cases;
 }
+
+/**
+ * Las peticiones con las que la prueba emitida ejercita la SEGURIDAD de la API (`plan`, el de access-plan.js), las
+ * mismas en todos los generadores:
+ *   · `protectedPath`: un camino que no existe, cuando el cierre de la cadena principal exige credencial. Sin ella es
+ *     401 y no 404, porque la seguridad decide antes de enrutar;
+ *   · `forbidden`: la PRIMERA regla que exige authorities, sobre una operación de la que hay URL concreta, para pedirla
+ *     con una credencial válida sin ninguna (403). null si ninguna regla la tiene.
+ */
+export function securityCases(model, plan) {
+  if (!plan || plan.open) return null;
+  const main = plan.chains[plan.chains.length - 1];
+  const protectedPath = main.fallback.kind !== 'public' ? fullPath(model, '/keel-ruta-que-no-existe') : null;
+  const withRoute = (model.services ?? []).flatMap((service) => service.operations ?? []).filter((op) => op.route);
+  let forbidden = null;
+  for (const rule of plan.chains.flatMap((chain) => chain.rules)) {
+    if (rule.requirement.kind !== 'anyOf' || !rule.method) continue;
+    // Cualquier operación con ruta, multipart incluida: la seguridad decide antes de enrutar, así que la regla responde
+    // 403 aunque el endpoint no se sirva.
+    const operation = withRoute.find((op) => op.route.method === rule.method && fullPath(model, op.route.path) === rule.path);
+    const url = operation ? concretePath(model, operation) : null;
+    if (!url) continue;
+    forbidden = { method: rule.method, url, authorities: rule.requirement.authorities };
+    break;
+  }
+  return { protectedPath, forbidden, notFound: fullPath(model, '/keel-ruta-que-no-existe') };
+}

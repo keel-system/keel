@@ -48,7 +48,10 @@ export const PACKAGES = {
   'Microsoft.EntityFrameworkCore.Relational': { version: '10.0.13', license: 'MIT', use: 'EF Core relacional (fijado a la versión de EF Core)' },
   // Solo en tiempo de diseño (PrivateAssets: no viaja con el servicio): lo que usa `dotnet ef` para generar las
   // migraciones desde el modelo.
-  'Microsoft.EntityFrameworkCore.Design': { version: '10.0.13', license: 'MIT', use: 'generación de migraciones (tiempo de diseño)' }
+  'Microsoft.EntityFrameworkCore.Design': { version: '10.0.13', license: 'MIT', use: 'generación de migraciones (tiempo de diseño)' },
+  // La seguridad con token (incremento 8): validar el JWT contra el JWKS del proveedor. Trae Microsoft.IdentityModel.Tokens.
+  // Sin el handler JwtBearer de ASP.NET Core, que decide después de enrutar (scaffold/security.js). Verificada el 2026-10-14.
+  'Microsoft.IdentityModel.JsonWebTokens': { version: '8.23.0', license: 'MIT', use: 'validación del JWT (capa security)' }
 };
 
 /**

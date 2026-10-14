@@ -735,8 +735,8 @@ function decodedPath(url: string): string {
 function reject(reply: FastifyReply, status: 401 | 403): void {
   const body =
     status === 401
-      ? ErrorResponse.of(401, 'Unauthorized', '${unauthenticated}', 'Credenciales ausentes o no válidas')
-      : ErrorResponse.of(403, 'Forbidden', '${denied}', 'La credencial no autoriza esta operación');
+      ? ErrorResponse.of(401, '${FW.unauthenticated.error}', '${unauthenticated}', '${FW.unauthenticated.message}')
+      : ErrorResponse.of(403, '${FW.accessDenied.error}', '${denied}', '${FW.accessDenied.message}');
   void reply.code(status).send(body);
 }`;
 

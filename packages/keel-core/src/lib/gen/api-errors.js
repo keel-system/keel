@@ -50,7 +50,11 @@ export const FRAMEWORK_RESPONSES = {
   /** Ninguna ruta casa con el camino. */
   notFound: { status: 404, error: 'Not Found', message: 'Recurso no encontrado' },
   /** Lo que nadie tradujo: el catch-all. */
-  internal: { status: 500, error: 'Internal Server Error', message: 'Ocurrió un error inesperado' }
+  internal: { status: 500, error: 'Internal Server Error', message: 'Ocurrió un error inesperado' },
+  /** La cadena de seguridad: la petición no trae credencial, o la que trae no vale (code UNAUTHENTICATED). */
+  unauthenticated: { status: 401, error: 'Unauthorized', message: 'Credenciales ausentes o no válidas' },
+  /** La cadena de seguridad: la credencial vale pero no autoriza la operación (code ACCESS_DENIED). */
+  accessDenied: { status: 403, error: 'Forbidden', message: 'La credencial no autoriza esta operación' }
 };
 
 /** El mensaje de un parámetro obligatorio ausente, con el nombre ya puesto. */

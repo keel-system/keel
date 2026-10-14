@@ -13,6 +13,7 @@ import { wireNamespace } from './wire.js';
 import { restNamespace, usesApi } from './rest-support.js';
 import { usesRelational } from './persistence.js';
 import { usesIdempotencyHeader } from './request-idempotency.js';
+import { securityNamespace, usesHttpSecurity } from './security.js';
 
 export function generate(model) {
   return [{ path: `${solution(model).api.dir}/Program.cs`, content: programCs(model) }];
@@ -27,7 +28,8 @@ function programCs(model) {
     healthNamespace(model),
     ...(useCases ? [namespaceOf(model, 'useCaseInfra')] : []),
     ...(persistence ? [namespaceOf(model, 'persistence')] : []),
-    ...(usesApi(model) ? [restNamespace(model)] : [])
+    ...(usesApi(model) ? [restNamespace(model)] : []),
+    ...(usesHttpSecurity(model) ? [securityNamespace(model)] : [])
   ];
   const registration = useCases
     ? `
@@ -39,13 +41,22 @@ builder.Services.AddUseCases();`
 // La persistencia relacional del perfil: el DbContext, la transacción del caso de uso y los repositorios.
 builder.Services.AddPersistence(DatabaseSettings.From(configuration));`
     : '';
+  // La seguridad del diseño (capa security): los autenticadores, CORS y el alcance por recurso (SecurityRegistration).
+  const security = usesHttpSecurity(model)
+    ? `
+// La seguridad del diseño: autenticadores, CORS y alcance por recurso (SecurityRegistration, generado).
+builder.Services.AddHttpSecurity(configuration);`
+    : '';
   // El esquema se pone al ARRANCAR: una base inalcanzable tumba el arranque, no la primera petición.
   const schema = persistence ? '\nawait app.Services.InitializeDatabase();' : '';
   const api = usesApi(model);
   // La correlación envuelve todo (también el cuerpo de error); el middleware de errores, todo lo que va después.
   // La cabecera Idempotency-Key, detrás de la correlación y de los errores: un rechazo sigue llevando su correlationId.
   const idempotency = api && usesIdempotencyHeader(model) ? '\napp.UseMiddleware<IdempotencyKeyMiddleware>();' : '';
-  const pipeline = api ? `\napp.UseMiddleware<CorrelationMiddleware>();\napp.UseMiddleware<ApiErrorMiddleware>();${idempotency}` : '';
+  // La seguridad, detrás de la correlación y de los errores (el 401 lleva su correlationId; un proveedor caído es el 500
+  // del contrato) y delante de los endpoints: decide también sobre un camino que no existe, como Spring Security.
+  const securityMiddleware = api && usesHttpSecurity(model) ? '\napp.UseMiddleware<HttpSecurityMiddleware>();' : '';
+  const pipeline = api ? `\napp.UseMiddleware<CorrelationMiddleware>();\napp.UseMiddleware<ApiErrorMiddleware>();${idempotency}${securityMiddleware}` : '';
   // Las rutas del diseño: un solo mapa (ApiRoutes, generado).
   const routes = api ? '\napp.MapApiRoutes();' : '';
   return `${usings.map((using) => `using ${using};`).join('\n')}
@@ -63,7 +74,7 @@ builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);
 // El contrato del cable: todo cuerpo JSON que la API lee o escribe pasa por estas opciones (WireJson).
-builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${database}
+builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${database}${security}
 
 var app = builder.Build();
 app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);${schema}${pipeline}

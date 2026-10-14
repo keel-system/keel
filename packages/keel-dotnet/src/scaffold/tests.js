@@ -11,6 +11,8 @@
 import { solution, csFile } from './render.js';
 import { configNamespace } from './config.js';
 import { healthNamespace } from './health.js';
+import { usesJwt, TEST_JWKS_VARIABLE } from './security.js';
+import { usesTestCredential } from './test-credential.js';
 
 export function testsNamespace(model) {
   return solution(model).unitTests.name;
@@ -26,6 +28,13 @@ export function generate(model) {
 }
 
 function testServerCs(model) {
+  // Con seguridad por token, el perfil test solo acepta los tokens de la clave que publica la prueba (TestCredential).
+  const jwks =
+    usesTestCredential(model) && usesJwt(model)
+      ? `
+        // El perfil test solo acepta los tokens de la clave de la prueba (TestCredential): su JWKS.
+        Environment.SetEnvironmentVariable(${JSON.stringify(TEST_JWKS_VARIABLE)}, TestCredential.Jwks);`
+      : '';
   return csFile({
     namespace: testsNamespace(model),
     usings: ['Microsoft.AspNetCore.Mvc.Testing'],
@@ -38,7 +47,7 @@ public sealed class InMemoryServer : WebApplicationFactory<Program>
     public InMemoryServer()
     {
         // El arranque lee el perfil de PROFILE antes de crear la aplicación.
-        Environment.SetEnvironmentVariable("PROFILE", "test");
+        Environment.SetEnvironmentVariable("PROFILE", "test");${jwks}
     }
 }
 `

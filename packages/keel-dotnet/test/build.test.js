@@ -64,7 +64,7 @@ test('una capa fuera de la frontera se rechaza nombrando keel-dotnet, antes de e
   const { exitCode, output } = await runCommand(workspace, build, 'specs/stock-reservation', { defaults: true, acceptUnready: true });
   assert.equal(exitCode, 1);
   assert.match(output, /capacidades que keel-dotnet no genera/);
-  assert.match(output, /capa security: keel-dotnet todavía no la genera/);
+  assert.match(output, /capa messaging: keel-dotnet todavía no la genera/);
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 

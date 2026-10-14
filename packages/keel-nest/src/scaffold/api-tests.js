@@ -12,14 +12,13 @@
 import { WIRE_SHAPES } from 'keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { FRAMEWORK_RESPONSES as FW, missingParameterMessage } from 'keel-core/gen/api-errors';
-import { apiCases as neutralApiCases, concretePath } from 'keel-core/gen/api-cases';
+import { apiCases as neutralApiCases, securityCases as neutralSecurityCases } from 'keel-core/gen/api-cases';
 import { usesApi } from './rest-support.js';
 import { messageComponents } from './services.js';
 import { tsString } from './render.js';
 import { securityPlan, usesJwt } from './security.js';
 
 export const API_TEST = 'test/api.test.ts';
-const fullPath = (model, path) => `${model.api.routeBase}${path}`;
 
 export function generate(model) {
   if (!usesApi(model)) return [];
@@ -195,8 +194,8 @@ ${[...tests, ...(security?.tests ?? [])].join('\n\n')}
 
 // ─── La seguridad, cuando el diseño la declara ───────────────────────────────
 
-const REJECTED_401 = `'Unauthorized', '${FRAMEWORK_ERRORS.unauthenticated.code}', 'Credenciales ausentes o no válidas'`;
-const REJECTED_403 = `'Forbidden', '${FRAMEWORK_ERRORS.accessDenied.code}', 'La credencial no autoriza esta operación'`;
+const REJECTED_401 = `'${FW.unauthenticated.error}', '${FRAMEWORK_ERRORS.unauthenticated.code}', '${FW.unauthenticated.message}'`;
+const REJECTED_403 = `'${FW.accessDenied.error}', '${FRAMEWORK_ERRORS.accessDenied.code}', '${FW.accessDenied.message}'`;
 
 /** El token del caso como cabecera, escrito en el TypeScript emitido. */
 const bearer = (expression) => `{ authorization: \`Bearer \${${expression}}\` }`;
@@ -208,14 +207,13 @@ const bearer = (expression) => `{ authorization: \`Bearer \${${expression}}\` }`
  * clave y el 403 de una regla.
  */
 function securityCases(model) {
-  const plan = securityPlan(model);
-  if (!plan || plan.open) return null;
-  const main = plan.chains[plan.chains.length - 1];
-  const notFound = fullPath(model, '/keel-ruta-que-no-existe');
+  const cases = neutralSecurityCases(model, securityPlan(model));
+  if (!cases) return null;
+  const notFound = cases.notFound;
   const tests = [];
-  if (main.fallback.kind !== 'public') {
+  if (cases.protectedPath) {
     tests.push(`  it('sin credencial, un camino protegido es 401, exista o no (Spring Security decide antes de enrutar)', async () => {
-    const response = await app.inject({ method: 'GET', url: ${tsString(notFound)} });
+    const response = await app.inject({ method: 'GET', url: ${tsString(cases.protectedPath)} });
     expectError(response, 401, ${REJECTED_401});
   });`);
   }
@@ -258,19 +256,14 @@ let CREDENTIAL: Readonly<Record<string, string>> = {};`;
     const response = await app.inject({ method: 'GET', url: ${tsString(notFound)}, headers: ${bearer('forged')} });
     expectError(response, 401, ${REJECTED_401});
   });`);
-  // El 403: la primera regla que exige algo, sobre una ruta de la que hay una URL concreta.
-  const routed = (model.services ?? []).flatMap((service) => service.operations ?? []).filter((op) => op.route);
-  for (const rule of plan.chains.flatMap((chain) => chain.rules)) {
-    if (rule.requirement.kind !== 'anyOf' || !rule.method) continue;
-    const operation = routed.find((op) => op.route.method === rule.method && fullPath(model, op.route.path) === rule.path);
-    const url = operation ? concretePath(model, operation) : null;
-    if (!url) continue;
-    tests.push(`  it(${tsString(`una credencial válida sin lo que exige la regla (${rule.requirement.authorities.join(' o ')}) es 403`)}, async () => {
+  // El 403: la primera regla que exige algo, sobre una ruta de la que hay una URL concreta (keel-core/gen/api-cases.js).
+  const forbidden = cases.forbidden;
+  if (forbidden) {
+    tests.push(`  it(${tsString(`una credencial válida sin lo que exige la regla (${forbidden.authorities.join(' o ')}) es 403`)}, async () => {
     const bare = await credential.tokenWith({ sub: 'keel-sin-permisos' });
-    const response = await app.inject({ method: ${tsString(rule.method)}, url: ${tsString(url)}, headers: ${bearer('bare')} });
+    const response = await app.inject({ method: ${tsString(forbidden.method)}, url: ${tsString(forbidden.url)}, headers: ${bearer('bare')} });
     expectError(response, 403, ${REJECTED_403});
   });`);
-    break;
   }
 
   return { header, setup, tests };
