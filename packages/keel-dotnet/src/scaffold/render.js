@@ -76,6 +76,8 @@ export const PLACES = {
   appSupport: ['application', 'Support'],
   // El puerto de persistencia de cada raíz y la página que nombra: dominio puro (incremento 6).
   repositories: ['domain', 'Repository'],
+  // El registro de idempotencia de petición: el puerto, lo guardado y sus dos errores de conflicto.
+  idempotency: ['domain', 'Idempotency'],
   useCaseInfra: ['infrastructure', 'UseCase'],
   correlation: ['infrastructure', 'Correlation'],
   // La persistencia relacional (EF Core): el contexto y su tiempo de ejecución, las filas con su mapeo y un

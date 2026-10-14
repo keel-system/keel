@@ -12,6 +12,7 @@ import { healthNamespace } from './health.js';
 import { wireNamespace } from './wire.js';
 import { restNamespace, usesApi } from './rest-support.js';
 import { usesRelational } from './persistence.js';
+import { usesIdempotencyHeader } from './request-idempotency.js';
 
 export function generate(model) {
   return [{ path: `${solution(model).api.dir}/Program.cs`, content: programCs(model) }];
@@ -42,7 +43,9 @@ builder.Services.AddPersistence(DatabaseSettings.From(configuration));`
   const schema = persistence ? '\nawait app.Services.InitializeDatabase();' : '';
   const api = usesApi(model);
   // La correlación envuelve todo (también el cuerpo de error); el middleware de errores, todo lo que va después.
-  const pipeline = api ? '\napp.UseMiddleware<CorrelationMiddleware>();\napp.UseMiddleware<ApiErrorMiddleware>();' : '';
+  // La cabecera Idempotency-Key, detrás de la correlación y de los errores: un rechazo sigue llevando su correlationId.
+  const idempotency = api && usesIdempotencyHeader(model) ? '\napp.UseMiddleware<IdempotencyKeyMiddleware>();' : '';
+  const pipeline = api ? `\napp.UseMiddleware<CorrelationMiddleware>();\napp.UseMiddleware<ApiErrorMiddleware>();${idempotency}` : '';
   // Las rutas del diseño: un solo mapa (ApiRoutes, generado).
   const routes = api ? '\napp.MapApiRoutes();' : '';
   return `${usings.map((using) => `using ${using};`).join('\n')}

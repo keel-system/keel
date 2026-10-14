@@ -30,13 +30,18 @@ Eres el **agente de código** de keel-dotnet. Recibes en el prompt la ruta raíz
      build, sustituyendo el `throw new NotImplementedException("TODO: …")`. Lanzan el `<PascalCode>Error` del
      diseño; nunca construyen una respuesta de error. No abren transacciones (lo hace el mediator). Una
      dependencia nueva es un parámetro más del constructor primario.
+   - **La idempotencia de petición**, si la operación la declara: el registro, la firma, el contexto de la cabecera,
+     el ámbito del comando y los dos errores de conflicto **ya están generados** y el puerto `IIdempotencyStore` está
+     inyectado. Tú escribes el uso en el handler, con el algoritmo de la nota del stub y de `mapping.md` § La
+     idempotencia de petición (reclamar PRIMERO, reproducir la respuesta sin re-ejecutar). No escribas otro registro ni
+     toques el mediator o el endpoint para esto.
    - **Los mappers**: los `Todo.Value<T>(...)` que build dejó donde no supo derivar un campo.
    - **Los puertos**: lo que pidan las `preconditions` y `rules` (un `ExistsBy…`, un contador) se añade al puerto
      de `Domain/Repository/` **y** a su adaptador de `Infrastructure/Persistence/Repositories/`, con el
      `DbContext` del adaptador (`keel-dotnet-database/references/repository-adapters.md`). Nunca el `DbContext`
      ni una fila en un handler.
-   - Lo que build acepta con un **aviso** y no genera (la `idempotency` o el `schedule` de una operación) **no se
-     escribe a mano**: `mapping.md` § Lo que build avisa y no genera. Si un escenario lo exige, va a `blockers`.
+   - Lo que build acepta con un **aviso** y no genera (el `schedule` de una operación) **no se escribe a mano**:
+     `mapping.md` § Lo que build avisa y no genera. Si un escenario lo exige, va a `blockers`.
 4. Verifica con:
    - `dotnet build` en verde, **sin warnings** (son errores: `TreatWarningsAsErrors`). La frontera hexagonal es la
      de las referencias entre proyectos: un error de tipo no encontrado en Domain o Application porque falta una

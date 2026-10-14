@@ -11,11 +11,17 @@
 //   cota          un texto más largo que su `maxLength` lo rechaza el MOTOR (22001);
 //   página        List(pageable) con su total y el tamaño pedido; DeleteById borra el grafo.
 //
+// Con idempotencia de petición, el REGISTRO (idempotency_record): guardar y encontrar, el ámbito en la clave, la clave
+// repetida y la CARRERA de dos transacciones como el conflicto con su code, la caducada sustituible y el rollback con el
+// comando. Las mismas comprobaciones que el db-check de keel-nest.
+//
 // Las muestras respetan las cotas y los patrones del diseño (el texto de un patrón lo da `sampleFor`, el mismo de las
 // sondas de keel-nest), y cada una es distinta: dos muestras no comparten clave natural.
 
 import { randomUUID } from 'node:crypto';
-import { constraintErrors, declaredConcurrencyError, LOCK_VERSION, persistedMembers, partialUniqueIndexes, indexName } from 'keel-core/gen';
+import { constraintErrors, declaredConcurrencyError, idempotencyOutcomeCode, LOCK_VERSION, persistedMembers, partialUniqueIndexes, indexName } from 'keel-core/gen';
+import { registryOperations } from 'keel-core/gen/request-idempotency';
+import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { sampleFor } from '../../../keel-nest/scripts/lib/samples.js';
 import { domainMembers } from '../../src/scaffold/entities.js';
@@ -358,6 +364,8 @@ function probesCs(model, namespace) {
     blocks.push(`    // ─── ${root.name} ───\n\n${tests.join('\n\n')}`);
   }
 
+  if (usesRequestIdempotency(model)) blocks.push(idempotencyBlock(model));
+
   // Las raíces a las que apunta una referencia obligatoria: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
   const ensured = new Set();
@@ -398,6 +406,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     namespaceOf(model, 'persistence'),
     namespaceOf(model, 'errors'),
     namespaceOf(model, 'appSupport'),
+    ...(usesRequestIdempotency(model) ? [idempotencyNamespace(model)] : []),
     ...ctx.usings
   ];
   const body = `/// <summary>La base del sujeto: una propia en el motor, con el esquema que crea EF desde el modelo.</summary>
@@ -494,6 +503,94 @@ ${ensures.join('\n\n')}
 }`;
   if (ctx.unsampled.length > 0) console.warn(`  (db-check) sin muestra para ${[...new Set(ctx.unsampled)].join(', ')}`);
   return csFileLike(namespace, usings, body);
+}
+
+/**
+ * Las sondas del registro de idempotencia, sobre el puerto y la transacción generados. El ámbito es el de la primera
+ * operación que lo usa: así el code que se afirma es el que esa operación declara (o el canónico).
+ */
+function idempotencyBlock(model) {
+  const scope = registryOperations(model)[0].name;
+  const race = idempotencyOutcomeCode(model, scope, FRAMEWORK_ERRORS.idempotencyRace);
+  const store = 'other.GetRequiredService<IIdempotencyStore>()';
+  return `    // ─── El registro de idempotencia ───
+
+    private static string NewKey() => Guid.NewGuid().ToString();
+
+    [Fact]
+    public async Task Idempotencia_GuardaYEncuentraConSuFirmaYSuRecurso_YElAmbitoEsParteDeLaClave()
+    {
+        var key = NewKey();
+        await InScope(other => ${store}.Save(${csString(scope)}, key, "firma-1", "recurso-1", 3600, Cancel));
+        var found = await InScope(other => ${store}.Find(${csString(scope)}, key, Cancel));
+        Assert.Equal(new StoredRequest("firma-1", "recurso-1"), found);
+        // La misma clave en OTRO ámbito es otra petición.
+        Assert.Null(await InScope(other => ${store}.Find(${csString(`${scope}:otro`)}, key, Cancel)));
+        await InScope(other => ${store}.Save(${csString(`${scope}:otro`)}, key, "firma-2", null, 3600, Cancel));
+        Assert.Equal(new StoredRequest("firma-2", null), await InScope(other => ${store}.Find(${csString(`${scope}:otro`)}, key, Cancel)));
+    }
+
+    [Fact]
+    public async Task Idempotencia_LaClaveRepetidaEsElConflictoDelContrato()
+    {
+        var key = NewKey();
+        await InScope(other => ${store}.Save(${csString(scope)}, key, "firma", "r", 3600, Cancel));
+        var error = await Assert.ThrowsAsync<IdempotencyConflictException>(() => InScope(other => ${store}.Save(${csString(scope)}, key, "firma", "r", 3600, Cancel)));
+        Assert.Equal(${csString(race)}, error.Code);
+        Assert.Equal(409, error.HttpStatus);
+    }
+
+    [Fact]
+    public async Task Idempotencia_LaCarreraDeDosTransaccionesLaGanaUnaYLaOtraEsElConflicto()
+    {
+        var key = NewKey();
+        var claimed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // La primera reclama la clave DENTRO de su transacción y no confirma hasta que la segunda está esperando.
+        var first = InScope(other => other.GetRequiredService<PersistenceTransactions>().InTransaction(async () =>
+        {
+            await ${store}.Save(${csString(scope)}, key, "firma", "r1", 3600, Cancel);
+            claimed.SetResult();
+            await release.Task;
+            return true;
+        }, readOnly: false, Cancel));
+        await claimed.Task;
+        // La segunda no ve la fila sin confirmar: la encuentra la clave primaria, que la hace esperar y luego chocar.
+        var second = InScope(other => other.GetRequiredService<PersistenceTransactions>().InTransaction(async () =>
+        {
+            Assert.Null(await ${store}.Find(${csString(scope)}, key, Cancel));
+            await ${store}.Save(${csString(scope)}, key, "firma", "r2", 3600, Cancel);
+            return true;
+        }, readOnly: false, Cancel));
+        await Task.Delay(500, Cancel);
+        release.SetResult();
+        Assert.True(await first);
+        var error = await Assert.ThrowsAsync<IdempotencyConflictException>(() => second);
+        Assert.Equal(${csString(race)}, error.Code);
+        Assert.Equal(new StoredRequest("firma", "r1"), await InScope(other => ${store}.Find(${csString(scope)}, key, Cancel)));
+    }
+
+    [Fact]
+    public async Task Idempotencia_UnaClaveCaducadaNoSeEncuentraYSePuedeVolverAUsar()
+    {
+        var key = NewKey();
+        await InScope(other => ${store}.Save(${csString(scope)}, key, "vieja", "r1", 0, Cancel));
+        Assert.Null(await InScope(other => ${store}.Find(${csString(scope)}, key, Cancel)));
+        await InScope(other => ${store}.Save(${csString(scope)}, key, "nueva", "r2", 3600, Cancel));
+        Assert.Equal(new StoredRequest("nueva", "r2"), await InScope(other => ${store}.Find(${csString(scope)}, key, Cancel)));
+    }
+
+    [Fact]
+    public async Task Idempotencia_ElRegistroRevierteConElComando()
+    {
+        var key = NewKey();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => InScope(other => other.GetRequiredService<PersistenceTransactions>().InTransaction<bool>(async () =>
+        {
+            await ${store}.Save(${csString(scope)}, key, "firma", "r", 3600, Cancel);
+            throw new InvalidOperationException("el comando falla después de reclamar");
+        }, readOnly: false, Cancel)));
+        Assert.Null(await InScope(other => ${store}.Find(${csString(scope)}, key, Cancel)));
+    }`;
 }
 
 /** La base del sujeto en el motor: un identificador sin guiones. */

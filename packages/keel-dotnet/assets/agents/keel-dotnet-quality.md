@@ -29,9 +29,13 @@ la **higiene** (checklist), el **baseline de migraciones** (solo ahora el modelo
    cero divisiones sin `Decimals.SetScale`, cero `Math.Round` sin modo. Son **conductuales**: a `remaining` con
    archivo y línea.
 7. **Consultas dentro de un bucle (N+1)** y filtros en memoria sobre colecciones: conductuales, a `remaining`.
-8. **Restos del scaffolding**: ningún `NotImplementedException`, `Todo.Value` ni `TODO (agente)` vivo en lo que el
+8. **Idempotencia de petición** (si el diseño la declara): el handler usa el `IIdempotencyStore`, `CommandSignature` y
+   `command.IdempotencyScope()` generados, reclama ANTES del negocio y no tiene un registro propio, otra tabla ni
+   cambios en el mediator o el endpoint para esto; con `payload-hash`, sin rama «sin clave». Lo contrario es
+   conductual: a `remaining`, para el agente de código.
+9. **Restos del scaffolding**: ningún `NotImplementedException`, `Todo.Value` ni `TODO (agente)` vivo en lo que el
    diseño usa. Uno vivo es conductual (es un 500): a `remaining`, para el agente de código.
-9. **Higiene**: sin código muerto, variables sin usar ni `Console.WriteLine` (la frontera ya loguea).
+10. **Higiene**: sin código muerto, variables sin usar ni `Console.WriteLine` (la frontera ya loguea).
 
 ## Frontera: no-conductual vs conductual
 

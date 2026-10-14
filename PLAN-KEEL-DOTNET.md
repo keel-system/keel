@@ -698,11 +698,41 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       - **La sonda de la migración editada no se aplicaba al principio**: `dotnet ef` escribe con CRLF en Windows.
         Lo delató su propia guarda (`sabotaged !== original`), no un verde falso.
       - `cs-check` 15/15 (102 ensamblados, 1 291 pruebas).
-  - **7d, la corrida — pendiente, con una decisión previa.** La única fixture que la frontera admite entera es
-    `product-catalog`, y `createProduct` declara `idempotency` (`client-key`): `FL-PRD-002` y `FL-PRD-003` la
-    exigen. keel-dotnet la acepta con aviso y no la genera. Es el mismo punto en el que estaba keel-nest en su 7d.
-    Allí el agente escribió el registro a mano (otra tabla y SQL de un solo motor), y por eso se adelantó su 10a.
-    Aquí `mapping.md` prohíbe escribirlo a mano.
+  - **7d, la corrida — con una decisión previa (tomada el 2026-10-14).** La única fixture que la frontera admite
+    entera es `product-catalog`, y `createProduct` declara `idempotency` (`client-key`): `FL-PRD-002` y `FL-PRD-003`
+    la exigen. Era el mismo punto en el que estaba keel-nest en su 7d. Allí el agente escribió el registro a mano
+    (otra tabla y SQL de un solo motor), y por eso se adelantó su 10a. Aquí se adelanta ANTES de la corrida (lo
+    decidió el usuario): la primera corrida mide un servidor equivalente.
+  - **7e, la idempotencia de petición adelantada del incremento 10 (hecha, 2026-10-14).**
+    - **Lo neutral ya estaba** en `keel-core/gen/request-idempotency.js`: qué operaciones usan el registro y la
+      tabla `idempotency_record` como datos.
+    - **En keel-dotnet**, `src/scaffold/request-idempotency.js`:
+      - en Domain, el puerto `IIdempotencyStore` (`Domain/Idempotency`) y los dos conflictos, con el `code` de SU
+        operación (`idempotencyOutcomeCodes`);
+      - en Application, `CommandSignature` (firma canónica por reflexión: propiedades ordenadas, prefijo de
+        longitud, decimal sin ceros finales, binario por su digest) e `IdempotencyContext` (`AsyncLocal`);
+      - en Infrastructure, la fila con su mapeo (PK compuesta `idempotency_record_pkey`, índice de la purga) y el
+        adaptador EF;
+      - en Api, `IdempotencyKeyMiddleware`, detrás de la correlación y de los errores.
+    - **El comando** gana `IdempotencyScope()` (método, no propiedad: la firma recorre propiedades). El handler recibe
+      el puerto y la nota con el algoritmo: reclamar PRIMERO y no capturar la carrera. `mapping.md` lo enseña con
+      código, y la frontera ya solo avisa si no hay persistencia.
+    - **La carrera**: la perdedora espera a que la ganadora confirme y choca en la PK (23505). El adaptador la
+      traduce SIN la causa del motor detrás: si no, el traductor de la transacción la volvía a leer y la convertía en
+      un 409 sin code.
+    - **Medido:**
+      - `npm test` 286/286. `schema-parity` ya compara `idempotency_record` con la de keel-spring (salía de
+        `PENDING_TABLES`). `test/request-idempotency.test.js` (nuevo): lo emitido, el cableado, la nota y el code por
+        operación de catalog-extended.
+      - **Prueba emitida `IdempotencyTests`**: la firma canónica y el contexto, ejecutados. Falsada quitando el orden
+        de las propiedades: cae su prueba.
+      - **`db-check` 26/26, 99 sondas** (25 nuevas: cinco por cada una de las cinco fixtures con registro): guardar y
+        encontrar, el ámbito en la clave, la clave repetida, la CARRERA de dos transacciones, la caducada sustituible
+        y el rollback con el comando. Falsado con `--sabotage=idempotency`: caen exactamente las dos del conflicto.
+      - `cs-check` 15/15 (1 337 pruebas; el arranque en `develop` crea `idempotency_record` con el baseline) y
+        `harness-check` 32/32.
+    - **Sin cubrir todavía**, como en el 10a de keel-nest: la purga de las claves caducadas (necesita el reloj del
+      incremento 10; `Find` ya las ignora y `Save` las sustituye) y el gate `check-idempotency.sh`.
 
 ## 5. Riesgos conocidos
 

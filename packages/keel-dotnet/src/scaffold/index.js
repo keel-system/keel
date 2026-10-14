@@ -29,6 +29,7 @@ import * as mediator from './mediator.js';
 import * as persistence from './persistence.js';
 import * as persistenceRuntime from './persistence-runtime.js';
 import * as repositories from './repositories.js';
+import * as requestIdempotency from './request-idempotency.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as restSupport from './rest-support.js';
 import * as endpoints from './endpoints.js';
@@ -44,7 +45,7 @@ import * as generatorDocs from './generator-docs.js';
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara. El primero es el contrato formal
 // de la API, derivado del modelo neutral (el mismo en los tres generadores), salvo que el workspace traiga el de
 // /keel-docs: keel-core/gen/openapi.js.
-const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, wire, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, dtos, mappers, services, mediator, persistence, persistenceRuntime, repositories, restSupport, endpoints, api, tests, apiTests, infra, integrationTests, schemaBaseline, readme, generatorDocs];
+const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, wire, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, dtos, mappers, services, mediator, persistence, persistenceRuntime, repositories, requestIdempotency, restSupport, endpoints, api, tests, apiTests, infra, integrationTests, schemaBaseline, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus

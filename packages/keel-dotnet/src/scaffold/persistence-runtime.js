@@ -14,6 +14,7 @@
 // infraestructura, y quien toque un repositorio recibe un error que lo dice. El esquema contra un motor real lo
 // juzga `npm run db-check` de keel-dotnet.
 
+import { idempotencyRegistration, idempotencyRegistrationUsings } from './request-idempotency.js';
 import { constraintErrors, declaredConcurrencyError, CONCURRENT_MODIFICATION_MESSAGE, UNKNOWN_INTEGRITY_MESSAGE, TRANSACTION_TIMEOUT_MESSAGE } from 'keel-core/gen';
 import { WRITE_CONFLICT_ATTEMPTS } from 'keel-core/gen/transactions';
 import { DATABASES } from 'keel-core/gen/infra-catalog';
@@ -55,7 +56,8 @@ export function generate(model) {
         'Microsoft.Extensions.DependencyInjection.Extensions',
         namespaceOf(model, 'useCaseInfra'),
         repositoriesNamespace(model),
-        namespaceOf(model, 'repositoryAdapters')
+        namespaceOf(model, 'repositoryAdapters'),
+        ...idempotencyRegistrationUsings(model)
       ],
       registrationBody(model)
     ),
@@ -435,6 +437,8 @@ ${rows.join('\n')}
 function registrationBody(model) {
   const context = dbContextClass(model);
   const repositories = repositoryRoots(model).map((entity) => `        services.AddScoped<${portClass(entity)}, ${adapterClass(entity)}>();`);
+  const idempotency = idempotencyRegistration(model);
+  if (idempotency) repositories.push(idempotency);
   return `/// <summary>
 /// La persistencia relacional en el contenedor: el DbContext del perfil (uno por ámbito), la transacción del caso de
 /// uso y un adaptador por puerto. El ÚNICO sitio que registra los repositorios.

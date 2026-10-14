@@ -36,7 +36,9 @@ const ACCEPTED_NOT_EMITTED = {};
  * salen, el mecanismo no. Se avisa, porque el handler sin él compila y responde como si nada.
  */
 const PENDING_OPERATION_FEATURES = [
-  { key: 'idempotency', what: 'idempotency (el almacén, la firma del comando y el gate check-idempotency.sh)', increment: 'incremento 10' },
+  // El registro de idempotencia de petición se genera con persistencia relacional (adelantado del incremento 10, como en
+  // keel-nest): sin persistencia no hay dónde registrar la clave en la transacción del comando.
+  { key: 'idempotency', what: 'idempotency sin persistencia (el registro de claves necesita la base)', increment: 'incremento 10', unless: (layers) => Boolean(layers?.persistence) },
   { key: 'schedule', what: 'schedule (el reloj que dispara la operación)', increment: 'incremento 10' },
   { key: 'cache', what: 'cache (la caché de la consulta)', increment: 'incremento 13' }
 ];
@@ -75,6 +77,7 @@ export function checkSupportedFeatures(manifest, layers) {
   }
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
+    if (feature.unless?.(layers)) continue;
     const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
     if (names.length === 0) continue;
     warnings.push(

@@ -38,6 +38,11 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Un flujo 
 
 Nada de FluentAssertions (licencia comercial desde la 8): las aserciones son las de xUnit y `AssertJson`.
 
+Una cabecera va en el diccionario del último argumento (`Post(ruta, cuerpo, new() { ["Idempotency-Key"] = clave })`),
+y dos peticiones **a la vez** se lanzan sin esperar a la primera y se esperan juntas
+(`var responses = await Task.WhenAll(Post(…), Post(…));`): es la única forma de escribir un escenario de carrera, como
+el de dos altas con la misma clave de idempotencia.
+
 ## Una prueba por flujo
 
 ```csharp

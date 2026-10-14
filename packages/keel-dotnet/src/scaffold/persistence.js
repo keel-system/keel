@@ -40,7 +40,9 @@ import {
   AUDIT_COLUMNS,
   DECIMAL_PRECISION
 } from 'keel-core/gen';
+import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
 import { enumMember } from '../lib/cs-projection.js';
+import { IDEMPOTENCY_ROW, usesRequestIdempotency } from './request-idempotency.js';
 import { csFile, csMember, csString, located, namespaceOf, solution, typeUsings, xmlDoc } from './render.js';
 
 /** ¿El diseño persiste en un motor relacional? Es lo que genera todo este módulo. */
@@ -650,6 +652,8 @@ export function rowClasses(model) {
     classes.push(rowClass(entity.name));
     for (const member of persistedMembers(model, entity).filter((m) => m.kind === 'elementCollection')) classes.push(elementClass(entity, member));
   }
+  // Las tablas de los mecanismos del generador: el registro de idempotencia de petición.
+  if (usesRequestIdempotency(model)) classes.push(IDEMPOTENCY_ROW);
   return classes;
 }
 
@@ -706,6 +710,10 @@ export function expectedSchemaNames(model) {
   }
   for (const constraint of uniqueConstraints(model)) names.add(constraint.constraint);
   for (const fk of crossAggregateForeignKeys(model)) names.add(fk.name);
+  if (usesRequestIdempotency(model)) {
+    names.add(IDEMPOTENCY_RECORD.table).add(`${IDEMPOTENCY_RECORD.table}_pkey`);
+    for (const index of IDEMPOTENCY_RECORD.indexes) names.add(index.name);
+  }
   return [...names].sort();
 }
 

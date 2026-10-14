@@ -3,8 +3,7 @@
 Qué produce cada construcción del diseño y qué queda para el agente. Se sigue **estrictamente**: lo que aquí se
 fija es lo que hace que este servidor sea equivalente a los de keel-spring y keel-nest del mismo diseño. Las capas
 que keel-dotnet aún no genera las rechaza `keel-dotnet build`: si estás aquí, el diseño no las declara. Y lo que
-acepta con un **aviso** (la idempotencia o el reloj de una operación) no se escribe a mano: ver § Lo que build
-avisa y no genera.
+acepta con un **aviso** (el reloj de una operación) no se escribe a mano: ver § Lo que build avisa y no genera.
 
 ## `domain` — domain.keel.yaml
 
@@ -94,14 +93,57 @@ Si el diseño normaliza un campo antes de validarlo y el `pattern` del tipo no a
 entrada lo rechaza antes de que la regla se aplique: es un `designGap`, no lo arregles quitando la regla del
 lector.
 
+### La idempotencia de petición: el registro ya está, el uso es tuyo
+
+Una operación con `idempotency` (salvo `keySource: payload-field` cuyo campo está en la clave natural: ahí la guarda
+es la constraint del agregado) tiene **ya generado** todo el mecanismo, el mismo que el de los servidores de
+keel-spring y keel-nest: el puerto `IIdempotencyStore` (`Domain/Idempotency`, inyectado en su handler), su adaptador
+con la tabla `idempotency_record`, `CommandSignature` (la firma canónica del comando), `IdempotencyContext` (la
+cabecera `Idempotency-Key`, con `client-key`, que abre `IdempotencyKeyMiddleware`), el ámbito ya compuesto en el
+comando (`command.IdempotencyScope()`) y los dos errores de conflicto. **No escribas otro registro, otra tabla ni otra
+firma, y no toques el mediator ni el endpoint para esto**: un registro propio pasa los escenarios y deja de ser el
+servidor de los otros dos (otra tabla, otro algoritmo).
+
+```csharp
+public async Task<CreateProductResponseDto> Handle(CreateProductCommand command, CancellationToken cancellationToken)
+{
+    var key = IdempotencyContext.Get();                       // null = el cliente no mandó la cabecera
+    if (key is null) return await Create(command, Guid.CreateVersion7(), cancellationToken);   // sin clave: sin deduplicar
+    var scope = command.IdempotencyScope();                   // lo compone build desde el diseño
+    var signature = CommandSignature.Of(command);
+    var previous = await idempotencyStore.Find(scope, key, cancellationToken);
+    if (previous is not null)
+    {
+        if (previous.Signature != signature) throw new IdempotencyReuseException(scope, key);
+        // La MISMA respuesta, reconstruida desde el recurso: sin re-ejecutar nada.
+        var product = await productRepository.FindById(Guid.Parse(previous.ResourceId!), cancellationToken);
+        return productApplicationMapper.ToCreateProductResponseDto(product!);
+    }
+    var id = Guid.CreateVersion7();                           // RECLAMA PRIMERO: el id se decide aquí
+    await idempotencyStore.Save(scope, key, signature, id.ToString(), 86400, cancellationToken);
+    return await Create(command, id, cancellationToken);      // y SOLO DESPUÉS el negocio, con ese id
+}
+```
+
+- El id lo decide el handler y lo recibe el factory del agregado (un parámetro más de `Create`), para que el recurso
+  creado sea el que el registro nombra.
+- Con `keySource: payload-hash` la clave es `CommandSignature.Of(command)` y **no hay rama sin clave**: envolver el
+  algoritmo en un `if (key is not null)` hace que la operación no deduplique nunca, en silencio.
+- El `ttlSeconds` es el del diseño (lo dice la nota del handler).
+- `Save` corre dentro de la transacción del comando: si el comando revierte, el registro revierte con él.
+- **La carrera** (dos peticiones con la misma clave a la vez) no la ve `Find`: la arbitra la clave primaria del
+  registro y el adaptador la traduce a `IdempotencyConflictException` (409 `IDEMPOTENCY_KEY_IN_PROGRESS` o el que
+  declare el diseño). **No la captures.** Y por eso se reclama PRIMERO: con `Save` al final, la perdedora choca antes
+  contra la primera restricción de negocio (la unicidad del sku) y sale ese `code`, no el de la clave en curso.
+- La clave reutilizada con otro contenido es `IdempotencyReuseException` (409 `IDEMPOTENCY_KEY_REUSED` o el del
+  diseño): no reutilices el error de la carrera ni inventes un `code`.
+
 ### Lo que build avisa y no genera
 
-`keel-dotnet build` acepta, con un aviso, algunas construcciones de una operación que todavía no genera: la
-`idempotency` (el registro de peticiones, la firma del comando y su gate) y el `schedule` (el reloj que la
-dispara). El aviso es la frontera del generador, no una invitación: **no escribas un registro de idempotencia, una
-tabla ni un temporizador propios**. Un mecanismo escrito a mano pasa los escenarios y deja de ser el servidor de
-keel-spring y keel-nest (otra tabla, otro algoritmo, otro motor). Si un escenario lo exige, el escenario queda en
-rojo y el hueco va a `blockers` como del generador.
+`keel-dotnet build` acepta, con un aviso, el `schedule` de una operación (el reloj que la dispara), que todavía no
+genera. El aviso es la frontera del generador, no una invitación: **no escribas un temporizador propio**. Un
+mecanismo escrito a mano pasa los escenarios y deja de ser el servidor de keel-spring y keel-nest. Si un escenario lo
+exige, el escenario queda en rojo y el hueco va a `blockers` como del generador.
 
 ### La lista cerrada de `code` que NO nacen en el diseño
 

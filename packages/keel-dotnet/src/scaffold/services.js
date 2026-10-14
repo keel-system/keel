@@ -19,6 +19,10 @@ import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 import { mapperOf } from './mappers.js';
 import { repositoryRoots, repositoryOf, portClass, repositoriesNamespace } from './repositories.js';
+import { FRAMEWORK_ERRORS } from 'keel-core';
+import { idempotencyOutcomeCode } from 'keel-core/gen';
+import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
+import { IDEMPOTENCY_PORT, idempotencyNamespace, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
 
 export function generate(model) {
   const files = [];
@@ -149,11 +153,34 @@ function renderMessage(model, operation) {
     const notes = componentNotes(model, operation, component);
     return `${notes}${xmlDoc(component.description, '    ')}    public ${required}${type} ${csMember(component.name)} { get; ${rounding ?? 'init;'} }`;
   });
+  const scope = idempotencyScope(model, operation);
+  if (scope && (operation.idempotency.partitionBy ?? []).length > 0) usings.push('System.Globalization');
+  const members = scope ? [...properties, scope] : properties;
   const body = `${xmlDoc(operation.description)}public sealed class ${operation.messageClass} : ${contract.message}
 {
-${properties.join('\n\n')}
+${members.join('\n\n')}
 }`;
   return { path, content: csFile({ namespace, usings, body }) };
+}
+
+/**
+ * El ÁMBITO de la clave de idempotencia, ya compuesto (DSL 2.17, `idempotency.partitionBy`): la misma decisión que
+ * keel-spring y keel-nest. Es un MÉTODO, no una propiedad: la firma canónica del comando recorre sus propiedades, y el
+ * ámbito no es contenido de la petición.
+ */
+function idempotencyScope(model, operation) {
+  if (!usesRegistry(model, operation)) return null;
+  const partition = operation.idempotency.partitionBy ?? [];
+  const what =
+    partition.length > 0
+      ? `la operación y ${partition.join(', ')} (idempotency.partitionBy)`
+      : 'la operación (sin partitionBy la clave es GLOBAL entre llamantes: lo decidió el diseño)';
+  const value =
+    partition.length > 0
+      ? `string.Create(CultureInfo.InvariantCulture, $"${[operation.name, ...partition.map((field) => `{${csMember(field)}}`)].join(':')}")`
+      : `"${operation.name}"`;
+  return `    /// <summary>Ámbito de la clave de idempotencia: ${what}. No lo compongas a mano.</summary>
+    public string IdempotencyScope() => ${value};`;
 }
 
 function resultUsings(model, operation) {
@@ -193,6 +220,11 @@ function renderHandler(model, operation) {
     usings.push(repositoriesNamespace(model));
     dependencies.push(portClass(repository));
   }
+  // El registro de idempotencia de petición: el handler lo usa con el algoritmo de su nota.
+  if (usesRegistry(model, operation)) {
+    usings.push(idempotencyNamespace(model));
+    dependencies.push(IDEMPOTENCY_PORT);
+  }
   // El despacho de otro caso de uso (use-cases.dispatches, DSL 2.21): el diseño dice que esta operación ejecuta
   // otra, así que recibe el puerto delante y la nota de cómo. El mismo criterio que keel-spring y keel-nest.
   if ((operation.dispatches ?? []).length > 0) {
@@ -226,6 +258,7 @@ function handlerNotes(model, operation) {
   const dispatch = dispatchNote(model, operation, { call: 'await commandDispatcher.{variant}(new {message} { ... }, cancellationToken)' });
   if (dispatch) notes.push(dispatch);
   for (const note of textFilterNotes(model, operation)) notes.push(note);
+  for (const note of idempotencyNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la de los tres generadores.
@@ -252,6 +285,51 @@ function handlerNotes(model, operation) {
     );
   }
   return notes.flatMap((note) => wrap(note));
+}
+
+/**
+ * Las notas de la idempotencia de petición: el algoritmo que el agente escribe con las piezas que build ya generó. Las
+ * mismas reglas que keel-spring y keel-nest, con los nombres de este proyecto: sin ellas el camino de menor resistencia
+ * es escribir otro registro, o guardar la clave AL FINAL, que deja a la perdedora de una carrera con el code de la
+ * primera restricción de negocio que encuentre.
+ */
+function idempotencyNotes(model, operation) {
+  const idempotency = operation.idempotency;
+  if (!idempotency) return [];
+  if (idempotency.guard === 'natural-key') {
+    return [
+      `Idempotencia: keySource=payload-field, keyField=${idempotency.keyField}. La guarda es la CLAVE NATURAL ` +
+        `(${(idempotency.naturalKey ?? []).join(', ')}) del agregado, no un registro: build NO genera IIdempotencyStore para ` +
+        'esta operación y no debes escribir otro. Busca por la clave natural ANTES de insertar; si ya existe, devuelve ese mismo ' +
+        'recurso sin re-ejecutar nada — una repetición devuelve la respuesta original, NO un error. La carrera la arbitra la ' +
+        'constraint: no captures su violación para «arreglarla».'
+    ];
+  }
+  if (!usesRequestIdempotency(model)) return [];
+  const ttl = idempotency.ttlSeconds ?? DEFAULT_IDEMPOTENCY_TTL_SECONDS;
+  const reuse = `${FRAMEWORK_ERRORS.idempotencyReuse.http} ${idempotencyOutcomeCode(model, operation.name, FRAMEWORK_ERRORS.idempotencyReuse)}`;
+  const race = `${FRAMEWORK_ERRORS.idempotencyRace.http} ${idempotencyOutcomeCode(model, operation.name, FRAMEWORK_ERRORS.idempotencyRace)}`;
+  const source =
+    idempotency.keySource === 'payload-hash'
+      ? 'La clave es CommandSignature.Of(command), que también es la firma: NO hay cabecera ni IdempotencyContext, y por tanto tampoco caso «sin clave» — siempre se deduplica.'
+      : idempotency.keySource === 'payload-field'
+        ? `La clave es el campo ${csMember(idempotency.keyField)} del comando; la firma, CommandSignature.Of(command). No hay cabecera.`
+        : 'La clave es IdempotencyContext.Get() (Application/Support): null = el cliente no mandó la cabecera, y entonces se ejecuta SIN deduplicar (no se rechaza). La firma es CommandSignature.Of(command).';
+  return [
+    `Idempotencia: keySource=${idempotency.keySource}, ttlSeconds=${ttl}. El puerto IIdempotencyStore (inyectado), su adaptador, ` +
+      'la tabla idempotency_record y CommandSignature ya están generados: NO escribas otro registro, otra tabla ni otra firma, y ' +
+      'no toques el mediator ni el endpoint para esto. ' +
+      source,
+    'Algoritmo, dentro de la transacción del comando (ya abierta por el mediator): var scope = command.IdempotencyScope() (build lo ' +
+      'compone desde el diseño); var previous = await idempotencyStore.Find(scope, clave, cancellationToken). Si hay previa con la ' +
+      'MISMA firma, reconstruye la respuesta desde previous.ResourceId sin re-ejecutar nada (ni escrituras ni eventos). Si la firma ' +
+      `difiere, lanza IdempotencyReuseException (${reuse}). Si no hay previa, RECLAMA PRIMERO: decide el id del recurso ` +
+      `(Guid.CreateVersion7()), await idempotencyStore.Save(scope, clave, firma, id.ToString(), ${ttl}, cancellationToken) y SOLO ` +
+      'DESPUÉS ejecuta el negocio con ese id.',
+    'La CARRERA (dos peticiones con la misma clave a la vez) no la ve Find: la arbitra la clave primaria del registro, y el ' +
+      `adaptador la traduce a IdempotencyConflictException (${race}). NO la captures. Y por eso el orden de arriba: con Save ` +
+      'al final, la perdedora choca antes contra la primera restricción de negocio y sale su code, no el de la clave en curso.'
+  ];
 }
 
 /** Parte una nota larga en líneas de comentario legibles. */

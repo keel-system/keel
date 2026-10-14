@@ -24,6 +24,7 @@
 //   enum        el conversor guarda el miembro de C# y no la constante del diseño
 //   constraint  el traductor no reconoce ninguna constraint (la clave repetida sale como 409 sin code)
 //   index       los índices únicos salen con OTRO nombre: el traductor ya no los reconoce
+//   idempotency el adaptador del registro no reconoce el choque de la clave primaria (la carrera sale sin su code)
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -46,7 +47,8 @@ const SABOTAGES = {
   version: ['Repositories/', 'Property(r => r.LockVersion).OriginalValue = expected;', 'Property(r => r.LockVersion).OriginalValue = row.LockVersion;'],
   enum: ['Persistence/EnumColumns.cs', 'new(value => ', 'new(value => value.ToString() ?? '],
   constraint: ['Persistence/PersistenceErrors.cs', 'ConstraintToError.TryGetValue(constraint, out var build)', 'ConstraintToError.TryGetValue(constraint + "-", out var build)'],
-  index: ['Persistence/Rows/', '.IsUnique().HasDatabaseName("uk_', '.IsUnique().HasDatabaseName("zz_']
+  index: ['Persistence/Rows/', '.IsUnique().HasDatabaseName("uk_', '.IsUnique().HasDatabaseName("zz_'],
+  idempotency: ['Persistence/IdempotencyStore.cs', '"idempotency_record_pkey"', '"idempotency_record_pk"']
 };
 
 const results = [];
