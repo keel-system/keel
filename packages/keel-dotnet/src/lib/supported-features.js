@@ -13,7 +13,6 @@
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  persistence: 'incremento 6 (relacional con EF Core) y 12 (documental)',
   security: 'incremento 8',
   messaging: 'incremento 9',
   'http-clients': 'incremento 11',
@@ -22,6 +21,12 @@ const PENDING_LAYERS = {
   mail: 'incremento 13',
   payments: 'incremento 13'
 };
+
+/**
+ * Los motores relacionales que keel-dotnet genera: solo PostgreSQL. MySQL espera a que `db-check` lo mida (con EF
+ * Core el uuid binario y el proveedor van por detrás: PLAN-KEEL-DOTNET.md § 5); los demás, como en keel-nest.
+ */
+export const SUPPORTED_DATABASES = ['postgresql'];
 
 /** Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. */
 const ACCEPTED_NOT_EMITTED = {};
@@ -61,6 +66,13 @@ export function checkSupportedFeatures(manifest, layers) {
       );
     }
   }
+  // La persistencia documental (MongoDB) llega en el incremento 12: la relacional ya se genera.
+  if (declared.includes('persistence') && layers?.persistence?.default?.model === 'document') {
+    errors.push(
+      'capa persistence con model: document — keel-dotnet todavía no genera la persistencia documental (llega en el incremento 12 de PLAN-KEEL-DOTNET.md). ' +
+        'Genera este diseño con keel-spring o keel-nest, o espera a que keel-dotnet la cubra.'
+    );
+  }
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
@@ -76,6 +88,13 @@ export function checkSupportedFeatures(manifest, layers) {
 /** La telemetría todavía no se genera: se rechaza en el build en vez de estamparla sin efecto. */
 export function checkSupportedStack(stack) {
   const errors = [];
+  // El motor solo importa con persistencia relacional: sin ella, el cuestionario no lo pregunta y no se estampa.
+  if (stack?.database && !SUPPORTED_DATABASES.includes(stack.database)) {
+    errors.push(
+      `database: ${stack.database} — keel-dotnet genera la persistencia relacional sobre ${SUPPORTED_DATABASES.join(', ')} (incremento 6 de PLAN-KEEL-DOTNET.md): ` +
+        'ninguna red de keel-dotnet ha medido otro motor todavía. Elige postgresql, o genera este diseño con keel-spring o keel-nest.'
+    );
+  }
   if (stack?.telemetry && stack.telemetry !== 'none') {
     errors.push(
       `telemetry: ${stack.telemetry} — keel-dotnet todavía no genera telemetría (llega en el incremento 14 de PLAN-KEEL-DOTNET.md). ` +

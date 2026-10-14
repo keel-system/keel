@@ -15,6 +15,7 @@
 
 import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
 import { callsPaymentGateway } from 'keel-core/gen/payments-model';
+import { pageableDefaults } from 'keel-core/gen/pagination';
 import { DIRS, classPath, fieldImports, tsModule, tsdoc, tsString } from './render.js';
 import { MEDIATOR_TS } from './mediator.js';
 import { messageComponents, messagePath, returnTypeOf, isPartialUpdate } from './services.js';
@@ -26,21 +27,6 @@ import { CALLER_IDENTITY_TS, callerResolution } from './security.js';
 export const VALUE_READERS_TS = 'src/infrastructure/rest/value-readers.ts';
 export const PAGEABLE_READING_TS = 'src/infrastructure/rest/pageable-reading.ts';
 const CONTROLLERS_DIR = 'infrastructure/rest/controllers';
-
-// Los defaults del Pageable de keel-spring: `@PageableDefault` sin tamaño es 10 (la anotación gana a
-// `spring.data.web.pageable.default-page-size`), y el tope de Spring Data sin `max-page-size` es 2000.
-const PAGEABLE_DEFAULT_SIZE = 10;
-const PAGEABLE_MAX_SIZE = 2000;
-
-/**
- * El orden por defecto del diseño (`output.sort`) que se puede aplicar sin más: un criterio sobre un
- * agregado embebido necesita un join que lo resuelva, y entonces no se traduce (lo avisa el modelo).
- */
-function translatableSort(operation) {
-  const sort = operation.sort ?? [];
-  if (sort.length === 0 || sort.some((criterion) => criterion.embedded)) return [];
-  return sort;
-}
 
 const DECORATOR_BY_METHOD = { GET: 'Get', POST: 'Post', PUT: 'Put', PATCH: 'Patch', DELETE: 'Delete' };
 
@@ -355,8 +341,9 @@ function renderReader(model, operation, name, imports) {
   // por defecto del diseño cuando el cliente no pide uno.
   if (components.some((component) => component.pageable)) {
     imports.push({ symbol: 'readPageable', from: PAGEABLE_READING_TS });
-    const defaults = [`defaultSize: ${model.pagination?.defaultSize ?? PAGEABLE_DEFAULT_SIZE}`, `maxSize: ${model.pagination?.maxSize ?? PAGEABLE_MAX_SIZE}`];
-    const order = translatableSort(operation);
+    // El tamaño por defecto, el tope y el orden del diseño: keel-core/gen/pagination.js.
+    const { defaultSize, maxSize, defaultSort: order } = pageableDefaults(model, operation);
+    const defaults = [`defaultSize: ${defaultSize}`, `maxSize: ${maxSize}`];
     if (order.length > 0) {
       defaults.push(`defaultSort: [${order.map((c) => `{ property: ${tsString(c.property)}, direction: ${tsString(c.direction)} }`).join(', ')}]`);
     }

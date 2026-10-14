@@ -11,6 +11,7 @@ import { configNamespace } from './config.js';
 import { healthNamespace } from './health.js';
 import { wireNamespace } from './wire.js';
 import { restNamespace, usesApi } from './rest-support.js';
+import { usesRelational } from './persistence.js';
 
 export function generate(model) {
   return [{ path: `${solution(model).api.dir}/Program.cs`, content: programCs(model) }];
@@ -18,12 +19,27 @@ export function generate(model) {
 
 function programCs(model) {
   const useCases = usesMediator(model);
-  const usings = [wireNamespace(model), configNamespace(model), healthNamespace(model), ...(useCases ? [namespaceOf(model, 'useCaseInfra')] : []), ...(usesApi(model) ? [restNamespace(model)] : [])];
+  const persistence = usesRelational(model);
+  const usings = [
+    wireNamespace(model),
+    configNamespace(model),
+    healthNamespace(model),
+    ...(useCases ? [namespaceOf(model, 'useCaseInfra')] : []),
+    ...(persistence ? [namespaceOf(model, 'persistence')] : []),
+    ...(usesApi(model) ? [restNamespace(model)] : [])
+  ];
   const registration = useCases
     ? `
 // Los casos de uso del diseño: el mediator, los handlers y los mappers (UseCaseRegistration, generado).
 builder.Services.AddUseCases();`
     : '';
+  const database = persistence
+    ? `
+// La persistencia relacional del perfil: el DbContext, la transacción del caso de uso y los repositorios.
+builder.Services.AddPersistence(DatabaseSettings.From(configuration));`
+    : '';
+  // El esquema se pone al ARRANCAR: una base inalcanzable tumba el arranque, no la primera petición.
+  const schema = persistence ? '\nawait app.Services.InitializeDatabase();' : '';
   const api = usesApi(model);
   // La correlación envuelve todo (también el cuerpo de error); el middleware de errores, todo lo que va después.
   const pipeline = api ? '\napp.UseMiddleware<CorrelationMiddleware>();\napp.UseMiddleware<ApiErrorMiddleware>();' : '';
@@ -44,10 +60,10 @@ builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);
 // El contrato del cable: todo cuerpo JSON que la API lee o escribe pasa por estas opciones (WireJson).
-builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}
+builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${database}
 
 var app = builder.Build();
-app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);${pipeline}
+app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);${schema}${pipeline}
 app.MapHealthEndpoints();${routes}
 app.Run();
 

@@ -21,6 +21,7 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { FRAMEWORK_RESPONSES as FW, domainErrorResponses } from 'keel-core/gen/api-errors';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { wireNamespace } from './wire.js';
+import { usesRelational } from './persistence.js';
 
 /** ¿Expone el servicio una API? Sin capa api, o sin ninguna operación con ruta, no hay nada de esto. */
 export function usesApi(model) {
@@ -52,10 +53,102 @@ export function generate(model) {
     rest('HttpReply', ['System.Globalization', 'System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', wireNamespace(model)], httpReplyBody()),
     rest(
       'ApiErrorMiddleware',
-      ['Microsoft.AspNetCore.Http', 'Microsoft.AspNetCore.WebUtilities', 'Microsoft.Extensions.Logging', wireNamespace(model), namespaceOf(model, 'errors')],
-      apiErrorMiddlewareBody()
-    )
+      [
+        'Microsoft.AspNetCore.Http',
+        'Microsoft.AspNetCore.WebUtilities',
+        'Microsoft.Extensions.Logging',
+        wireNamespace(model),
+        namespaceOf(model, 'errors'),
+        ...(usesRelational(model) ? [namespaceOf(model, 'persistence')] : [])
+      ],
+      apiErrorMiddlewareBody(usesRelational(model))
+    ),
+    ...(usesPageable(model)
+      ? [rest('PageableReading', ['System.Globalization', 'System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', 'Microsoft.Extensions.Primitives', namespaceOf(model, 'repositories')], pageableReadingBody())]
+      : [])
   ];
+}
+
+/** ¿Algún listado con ruta lee un Pageable? Con persistencia relacional, todo listado paginado. */
+export function usesPageable(model) {
+  return usesRelational(model) && (model.services ?? []).some((service) => (service.operations ?? []).some((op) => op.route && op.paginated));
+}
+
+/**
+ * La lectura del Pageable con la semántica del PageableHandlerMethodArgumentResolver de Spring Data, que es
+ * indulgente a propósito: una página o un tamaño que no se pueden leer no son un 400 sino el valor por defecto,
+ * una página negativa es la 0 y un tamaño por encima del tope es el tope. La misma que keel-nest.
+ */
+function pageableReadingBody() {
+  return String.raw`/// <summary><c>?page=&amp;size=&amp;sort=prop,dir</c> → Pageable, como lo lee Spring Data.</summary>
+public static partial class PageableReading
+{
+    public static Pageable Read(IQueryCollection query, int defaultSize, int maxSize, IReadOnlyList<SortOrder> defaultSort)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var page = Bounded(First(query["page"]), int.MaxValue) ?? 0;
+        var size = Bounded(First(query["size"]), maxSize) ?? defaultSize;
+        if (size < 1)
+        {
+            size = defaultSize;
+        }
+        if (size > maxSize)
+        {
+            size = maxSize;
+        }
+        var sort = ReadSort(query["sort"]);
+        return new Pageable(page, size, sort.Count > 0 ? sort : defaultSort);
+    }
+
+    private static string? First(StringValues values) => values.Count == 0 ? null : values[0];
+
+    /// <summary>
+    /// Un entero con los límites de Spring Data: sin texto no hay valor (se usa el default); lo que no es un entero de
+    /// 32 bits se lee como 0; negativo, 0; por encima del tope, el tope.
+    /// </summary>
+    private static int? Bounded(string? text, int upper)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+        if (!Integer().IsMatch(text) || !long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var parsed) || parsed is > int.MaxValue or < int.MinValue)
+        {
+            return 0;
+        }
+        return parsed < 0 ? 0 : parsed > upper ? upper : (int)parsed;
+    }
+
+    /// <summary>
+    /// <c>sort</c> repetido o con varias propiedades: <c>name,desc</c>, <c>status,name</c>. La última pieza es la
+    /// dirección si lo es (sin distinguir mayúsculas) y vale para todas las propiedades de ese valor.
+    /// </summary>
+    private static List<SortOrder> ReadSort(StringValues values)
+    {
+        var orders = new List<SortOrder>();
+        foreach (var value in values)
+        {
+            var parts = (value ?? string.Empty).Split(',').Where(part => part.Trim().Length > 0).ToList();
+            if (parts.Count == 0)
+            {
+                continue;
+            }
+            var last = parts[^1].Trim().ToLowerInvariant();
+            SortDirection? direction = last switch
+            {
+                "asc" => SortDirection.Asc,
+                "desc" => SortDirection.Desc,
+                _ => null
+            };
+            var properties = direction is null ? parts : parts[..^1];
+            orders.AddRange(properties.Select(property => new SortOrder(property, direction ?? SortDirection.Asc)));
+        }
+        return orders;
+    }
+
+    [GeneratedRegex(@"^[+-]?\d+\z")]
+    private static partial Regex Integer();
+}`;
 }
 
 function correlationContextBody() {
@@ -690,7 +783,7 @@ public static partial class HttpReply
 }`;
 }
 
-function apiErrorMiddlewareBody() {
+function apiErrorMiddlewareBody(persistence = false) {
   const validation = FRAMEWORK_ERRORS.validation.code;
   const domainBranches = domainErrorResponses().map(
     ({ name, http, error, fallback }) => `            ${name} => Domain(${http}, ${csString(error)}, exception, ${csString(fallback)}),`
@@ -739,7 +832,7 @@ public sealed partial class ApiErrorMiddleware(RequestDelegate next, ILogger<Api
 
     private static Task Write(HttpContext context, ErrorResponse body)
     {
-        context.Response.StatusCode = body.Status;
+        context.Response.StatusCode = body.Status;${persistence ? RETRY_AFTER : ''}
         return context.Response.WriteAsJsonAsync(body, WireJson.Options, context.RequestAborted);
     }
 
@@ -761,7 +854,7 @@ public sealed partial class ApiErrorMiddleware(RequestDelegate next, ILogger<Api
             case MalformedRequestException:
             case BadHttpRequestException { StatusCode: StatusCodes.Status400BadRequest }:
                 return ${response('malformed', 'ValidationCode')};
-            // ── Errores de dominio (jerarquía DomainException)
+${persistence ? PERSISTENCE_BRANCH : ''}            // ── Errores de dominio (jerarquía DomainException)
             case DomainException domain:
                 return FromDomain(domain);
             // ── Catch-all
@@ -794,6 +887,34 @@ ${domainBranches.join('\n')}
     }
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Excepción no controlada")]
-    private partial void LogUnhandled(Exception exception);
+    private partial void LogUnhandled(Exception exception);${persistence ? PERSISTENCE_LOGS : ''}
 }`;
 }
+
+// Los fallos de la persistencia, en el orden del ApiExceptionHandler de keel-spring: el tope de transacción es un 503
+// transitorio y la violación de integridad sin constraint conocida un 409 sin code. La de una constraint con nombre y
+// el conflicto de versión ya llegan traducidos a su DomainException (PersistenceTransactions).
+const PERSISTENCE_BRANCH = `            // ── Persistencia
+            case TransactionTimeoutException timeout:
+                // Sin pila: el motivo va en el mensaje, y una ráfaga de esperas de bloqueo llenaría el log.
+                LogTimeout(timeout.InnerException?.Message ?? timeout.Message);
+                return ErrorResponse.Of(TransactionTimeoutException.Status, "Service Unavailable", TransactionTimeoutException.Code, TransactionTimeoutException.DefaultMessage, []);
+            case IntegrityViolationException integrity:
+                LogIntegrity(integrity);
+                return ErrorResponse.Of(StatusCodes.Status409Conflict, "Conflict", null, IntegrityViolationException.DefaultMessage);
+`;
+
+const RETRY_AFTER = `
+        // El tope de transacción es transitorio: el cliente puede reintentar, y se lo dice la cabecera.
+        if (body.Status == TransactionTimeoutException.Status && body.Code == TransactionTimeoutException.Code)
+        {
+            context.Response.Headers.RetryAfter = "1";
+        }`;
+
+const PERSISTENCE_LOGS = `
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Transacción cancelada por tiempo: {Reason}")]
+    private partial void LogTimeout(string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Violación de integridad no asociada a ninguna constraint conocida")]
+    private partial void LogIntegrity(Exception exception);`;

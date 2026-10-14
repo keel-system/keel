@@ -42,8 +42,8 @@ export function mountDesign(workspace, name, { withoutLayers = [] } = {}) {
   return specDir;
 }
 
-/** El diseño que keel-dotnet sabe generar hoy: product-catalog sin persistencia (incremento 2). */
-export const DOTNET_READY_DESIGN = { name: 'product-catalog', withoutLayers: ['persistence'] };
+/** El diseño que keel-dotnet sabe generar entero: product-catalog, con su persistencia relacional (incremento 6). */
+export const DOTNET_READY_DESIGN = { name: 'product-catalog', withoutLayers: [] };
 
 /** Ejecuta un comando de la CLI en `workspace`, en silencio, y devuelve su exitCode y lo que imprimió. */
 export async function runCommand(workspace, command, ...args) {

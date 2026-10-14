@@ -15,12 +15,28 @@
 //   · <Proyecto>.csproj      un proyecto: sus referencias y sus paquetes (sin versión: la pone el anterior).
 
 import { DOTNET_SDK_BAND, TARGET_FRAMEWORK, TEST_RUNNER } from '../lib/assets.js';
-import { PACKAGES } from '../lib/dotnet-stack.js';
+import { PACKAGES, TOOLS } from '../lib/dotnet-stack.js';
 import { solution } from './render.js';
+import { usesRelational } from './persistence.js';
 
-/** Los paquetes que usa ESTA solución (hoy, todos los del esqueleto). */
-export function packagesFor() {
-  return ['YamlDotNet', 'xunit.v3', 'Microsoft.AspNetCore.Mvc.Testing'];
+/** Los paquetes que usa ESTA solución: los del esqueleto y los de las capas que el diseño declara. */
+export function packagesFor(model) {
+  return ['YamlDotNet', 'xunit.v3', 'Microsoft.AspNetCore.Mvc.Testing', ...infrastructurePackages(model).filter((id) => id !== 'YamlDotNet')];
+}
+
+/**
+ * Los paquetes del proyecto Infrastructure: la configuración y, con persistencia relacional, EF Core, Npgsql y el
+ * paquete de diseño de EF (solo para `dotnet ef`: no viaja con el servicio).
+ */
+export function infrastructurePackages(model) {
+  return ['YamlDotNet', ...(usesRelational(model) ? ['Microsoft.EntityFrameworkCore', 'Microsoft.EntityFrameworkCore.Relational', 'Npgsql.EntityFrameworkCore.PostgreSQL', DESIGN_PACKAGE] : [])];
+}
+
+const DESIGN_PACKAGE = 'Microsoft.EntityFrameworkCore.Design';
+
+/** Las herramientas locales: `dotnet ef`, con persistencia relacional. */
+export function toolsFor(model) {
+  return usesRelational(model) ? ['dotnet-ef'] : [];
 }
 
 export function generate(model) {
@@ -31,6 +47,7 @@ export function generate(model) {
     { path: 'Directory.Packages.props', content: packagesProps(packagesFor(model)) },
     { path: sln.file, content: slnx(sln) },
     { path: '.gitignore', content: gitignore() },
+    ...(toolsFor(model).length > 0 ? [{ path: '.config/dotnet-tools.json', content: toolsJson(toolsFor(model)) }] : []),
     { path: sln.domain.csproj, content: csproj({}) },
     { path: sln.application.csproj, content: csproj({ references: [sln.domain], from: sln.application }) },
     {
@@ -41,12 +58,18 @@ export function generate(model) {
         // Los tipos de ASP.NET Core (endpoints, ciclo de vida del host) sin ser un proyecto web: el que
         // arranca el servidor es Api.
         frameworks: ['Microsoft.AspNetCore.App'],
-        packages: ['YamlDotNet']
+        packages: infrastructurePackages(model)
       })
     },
     { path: sln.api.csproj, content: apiCsproj(sln) },
     { path: sln.unitTests.csproj, content: testsCsproj(sln) }
   ];
+}
+
+/** El manifiesto de herramientas locales: `dotnet tool restore` las instala en la versión fijada. */
+function toolsJson(ids) {
+  const tools = Object.fromEntries(ids.map((id) => [id, { version: TOOLS[id].version, commands: [TOOLS[id].command], rollForward: false }]));
+  return `${JSON.stringify({ version: 1, isRoot: true, tools }, null, 2)}\n`;
 }
 
 function globalJson() {
@@ -134,10 +157,18 @@ function csproj({ sdk = 'Microsoft.NET.Sdk', from = null, references = [], frame
     groups.push(`  <ItemGroup>\n${frameworks.map((name) => `    <FrameworkReference Include="${name}" />`).join('\n')}\n  </ItemGroup>`);
   }
   if (packages.length > 0) {
-    groups.push(`  <ItemGroup>\n${packages.map((id) => `    <PackageReference Include="${id}" />`).join('\n')}\n  </ItemGroup>`);
+    groups.push(`  <ItemGroup>\n${packages.map(packageReference).join('\n')}\n  </ItemGroup>`);
   }
   groups.push(...extra);
   return `<Project Sdk="${sdk}">\n${groups.length > 0 ? `\n${groups.join('\n\n')}\n\n` : ''}</Project>\n`;
+}
+
+/** Una referencia de paquete. El de diseño de EF no se publica ni se propaga: solo lo usa `dotnet ef`. */
+function packageReference(id) {
+  if (id === DESIGN_PACKAGE) {
+    return `    <PackageReference Include="${id}">\n      <PrivateAssets>all</PrivateAssets>\n      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>\n    </PackageReference>`;
+  }
+  return `    <PackageReference Include="${id}" />`;
 }
 
 function apiCsproj(sln) {

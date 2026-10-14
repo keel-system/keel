@@ -7,9 +7,11 @@
 // Fuera, con su motivo escrito:
 //   · las subidas multipart (capa storage, incremento 13) y las operaciones con la identidad del llamante (capa
 //     security, incremento 8): keel-dotnet aún no las sirve, y la frontera rechaza los diseños que las declaran;
-//   · la query de un listado paginado CON persistencia: keel-spring la lee como un Pageable de Spring Data (page,
-//     size y sort) y keel-dotnet trae la página con orden en el incremento 6. Sin persistencia, los dos leen page y
-//     size, y eso sí se compara.
+//   · el `sort` de un listado paginado de un diseño DOCUMENTAL: keel-spring lo lee como Pageable y keel-dotnet no
+//     persiste en documentos hasta el incremento 12 (la frontera lo rechaza), así que ahí lee page y size.
+//
+// La query de un listado paginado se compara entera: con persistencia, los dos leen el Pageable de Spring Data (page,
+// size y sort); sin ella, page y size.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -50,7 +52,6 @@ for (const name of fixtureNames()) {
       const file = dotnet.files.find((f) => f.path.endsWith(`/Endpoints/${row.handler.className}.cs`));
       assert.ok(file?.content.includes(`public static async Task ${row.handler.method}(HttpContext http)`), `${operation}: su endpoint existe`);
     }
-    const pageable = Boolean(dotnet.model.layersPresent.persistence);
     let compared = 0;
     for (const operation of served) {
       const fromSpring = springTable.get(operation.name);
@@ -58,10 +59,7 @@ for (const name of fixtureNames()) {
       const expected = { ...fromSpring };
       delete expected.multipart;
       const { handler, ...actual } = table.get(operation.name);
-      if (operation.paginated && pageable) {
-        expected.query = expected.query.filter((q) => !['page', 'size', 'sort'].includes(q));
-        actual.query = actual.query.filter((q) => !['page', 'size'].includes(q));
-      }
+      if (operation.paginated && dotnet.model.persistenceKind === 'document') expected.query = expected.query.filter((q) => q !== 'sort');
       assert.deepEqual(actual, expected, operation.name);
       if (operation.responseDto) {
         assert.deepEqual(dotnetDtoFields(dotnet.files, operation.responseDto.name), springDtoFields(spring.files, operation.responseDto.name), operation.responseDto.name);

@@ -522,6 +522,88 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     - el `Content-Type` del cuerpo no se comprueba: Spring respondería 415, aquí se lee igual;
     - un `null` DENTRO de una lista del cuerpo es petición malformada; en keel-spring llega como elemento nulo.
 
+- **Inc. 6 — hecho (2026-10-14)**, en tres tramos: 6a, 6b y 6c.
+  - **6a, lo neutral primero.** Los defaults del Pageable (10 y el tope 2000 de Spring Data) y el orden por defecto
+    que se puede traducir (`translatableSort`) estaban en keel-spring (el orden) y copiados en keel-nest (todo): pasan
+    a `keel-core/gen/pagination.js`. Las dos líneas base, idénticas (44 / 11 137 y 41 / 10 050).
+  - **6b, la persistencia relacional con EF Core 10 sobre PostgreSQL.**
+    - **Los emisores:**
+      - `persistence.js`: una fila (`<Entidad>Row`) por entidad persistida y por lista, con su mapeo fluente
+        (`IEntityTypeConfiguration`), los enums por su CONSTANTE con un `ValueConverter` por enum, `TextFold`,
+        `RowSync` (la fusión del grafo) y el `DbContext`;
+      - `repositories.js`: la página y el puerto `I<Raíz>Repository` en `Domain/Repository`, y el adaptador con el
+        mapeo explícito fila ↔ dominio (sin AutoMapper), los finders de clave natural, ocupante y campo único, y
+        `List(pageable)` con el desempate por id;
+      - `persistence-runtime.js`: `db.yaml` por perfil, `DatabaseSettings` (la URL JDBC de keel-spring vale tal
+        cual), `PersistenceTransactions`, `PersistenceErrors`, el registro y la fábrica de tiempo de diseño.
+    - **La transacción** la abre el mediator por `IUseCaseTransactions`: las consultas con `SET TRANSACTION READ
+      ONLY`, el tope con `SET LOCAL statement_timeout`, y el interbloqueo repetido hasta tres veces y luego 409. Los
+      adaptadores se unen a la abierta (el DbContext es del ámbito). Sin persistencia, un paso directo.
+    - **Los errores del motor** salen ya traducidos de la transacción: la constraint por su NOMBRE
+      (`PostgresException.ConstraintName`) al error de `keel-core/gen/constraint-errors.js`, la versión a 409, y el
+      tope a 503 con `Retry-After`.
+    - **El esquema**: en `local`, `EnsureCreated`; fuera, las migraciones (`ef_migrations_history`). El baseline lo
+      crea `dotnet ef` (herramienta local fijada en `.config/dotnet-tools.json`) desde la fábrica de diseño, sin
+      arrancar el servidor. El perfil `test` no tiene base: el contexto se construye y falla al conectar, diciéndolo.
+    - **La frontera**: la persistencia relacional entra; la documental se rechaza con el incremento 12, y el motor
+      solo puede ser PostgreSQL (`SUPPORTED_DATABASES`).
+  - **Decisiones medidas, no supuestas:**
+    - **Todo índice es NOMBRADO en EF** (`HasIndex(…, "nombre")`). EF identifica un índice sin nombre por sus
+      columnas, así que dos sobre las mismas se funden. En `metering-digest` la clave natural y un índice declarado
+      comparten columnas, y `uk_meter_readings_natural` DESAPARECÍA del esquema. No lo vio ni el compilador ni la
+      paridad de texto: lo vio la prueba emitida del modelo.
+    - **`Microsoft.EntityFrameworkCore.Relational` fijado a mano.** El proveedor de Npgsql lo pide como
+      `[10.0.4, 11)`, NuGet resuelve la mínima y el paquete de diseño trae la 10.0.13: el proyecto mezclaba las dos
+      (MSB3277).
+    - **La unicidad es un índice único, no una clave alternativa**: EF no deja modificar una clave alternativa.
+    - **La PK con el nombre de PostgreSQL** (`<tabla>_pkey`, el que deja Hibernate) y las FK entre agregados en el
+      modelo, con `NO ACTION` como el baseline de keel-spring: en EF el esquema SALE del modelo.
+    - **Guardar es fusionar**: se carga el grafo y se le lleva el agregado (RowSync), con la versión leída como valor
+      ORIGINAL del token de concurrencia. EF escribe `WHERE lock_version = @leída`; a diferencia de TypeORM, sí
+      comprueba la versión.
+  - **Medido:**
+    - `npm test`: keel-dotnet 234/234, keel-core 1 212/1 212, keel-spring 1 662/1 662 y keel-nest 798/798.
+    - `schema-parity.test.js` (nuevo): tablas, columnas (nulabilidad, cota, escala), nombres y predicados contra lo
+      que EMITE keel-spring, en las 11 fixtures relacionales más la derivación del value object opcional. El lector
+      de keel-spring pasa a `keel-spring/test/helpers/schema-table.js` y lo usa también la paridad de keel-nest.
+      Falsado con tres sabotajes aislados: la cota +1 tumba 10 fixtures, un índice de FK de menos tumba 2, y la
+      nulabilidad del value object opcional tumba la derivación.
+    - `persistence.test.js` (nuevo): `db.yaml` con las mismas variables, gradiente y defaults que keel-nest; puertos,
+      adaptadores y handlers; el traductor con una fila por constraint; la frontera transaccional.
+    - **`cs-check` 15/15**, contra un PostgreSQL en podman:
+      - licencias de 76 paquetes resueltos;
+      - `dotnet ef` genera el baseline y compila con él;
+      - el servidor arranca en `develop` con `DB_URL` del entorno, aplica la migración y responde con el contrato;
+      - la solución de las 15 fixtures y 2 variantes compila, y pasan 1 291 pruebas. Entre ellas, la nueva
+        `PersistenceModelTests` de cada fixture: EF construye el modelo y genera el DDL sin base, el DDL lleva cada
+        nombre del diseño y ninguno puesto por EF (`PK_`, `FK_`, `IX_`, `AK_`). Falsada quitando el nombre de la PK:
+        cae esa prueba en las cinco fixtures afectadas.
+  - **6c, `db-check` (hecho, 2026-10-14).** `npm run db-check --workspace packages/keel-dotnet` ejecuta los
+    adaptadores generados contra un PostgreSQL real, en las 11 fixtures relacionales.
+    - **Las sondas** son un proyecto xUnit por sujeto, escrito desde el modelo (`scripts/lib/db-probes.js`) y compilado
+      contra lo emitido. Las muestras respetan cotas y patrones del diseño (el texto de un patrón lo da `sampleFor`, el
+      de keel-nest). Toda referencia a otra raíz apunta a una guardada de verdad: su FK existe.
+    - **Por raíz**: ida y vuelta del agregado entero, comparado con el contrato del cable; la fila en crudo (el enum
+      por su constante); la lectura obsoleta → el 409 de concurrencia; la clave natural repetida → su error declarado
+      con su mensaje; la unicidad CONDICIONADA → el suyo; un texto por encima de su cota lo rechaza el motor (22001);
+      la página con su total y el borrado del grafo.
+    - **El esquema**: el catálogo del motor (`information_schema`, `pg_indexes`, `pg_constraint`) contra el mapeo
+      emitido (columnas, cotas, escalas, nulabilidad, nombres y predicados), sin ningún nombre puesto por EF.
+    - **Medido: 26/26, 74 sondas.** Falsado con cuatro sabotajes que compilan, cada uno cazado por su comprobación:
+      `version` (la versión leída no es el valor original del token) tumba solo las sondas de versión; `constraint`
+      (el traductor no reconoce ninguna) solo las de unicidad; `enum` (se guarda el miembro de C#) la fila en crudo y
+      todo lo que relee; `index` (los únicos salen con otro nombre) el catálogo y las sondas de unicidad.
+    - **Lo que destapó, todo de las sondas y nada del generador:** una referencia OPCIONAL dentro de la clave natural
+      (`Template.application`) a null no choca nunca, porque en PostgreSQL dos NULL no son iguales en un índice
+      único; el choque de la clave natural de `Template` violaba además la unicidad condicionada (las dos muestras
+      estaban activas); y los sujetos creando su base a la vez chocan copiando `template1` (55006).
+    - **Dos fallos del propio check, arreglados antes de darlo por bueno:** `Catalog.DbProbes.` es subcadena de
+      `ProductCatalog.DbProbes.`, así que un sujeto se llevaba los fallos de otro; y el primer sabotaje `index` no
+      rompía nada, porque un índice NOMBRADO en EF usa ese nombre aunque falte `HasDatabaseName`.
+  - **Fuera, con su incremento**: el outbox, `processed_event`, la idempotencia y la reconciliación (9-11), con sus
+    tablas; los finders de credencial, de lote y `FindAllById` (8, 11 y 13); la relación a-uno dentro del agregado y
+    el value object anidado salen como TODO que compila y falla nombrándose, como en keel-nest.
+
 ## 5. Riesgos conocidos
 
 - **MySQL con EF Core 10.** Pomelo (MIT) suele ir detrás de la versión de EF. Además, el `Guid` de

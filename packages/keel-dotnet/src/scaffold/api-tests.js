@@ -30,7 +30,7 @@ export function apiCases(model) {
     ...model,
     services: (model.services ?? []).map((service) => ({ ...service, operations: (service.operations ?? []).filter((op) => !op.route || servedOperation(op)) }))
   };
-  const cases = neutralApiCases(served, { components: (operation) => messageComponents(operation) });
+  const cases = neutralApiCases(served, { components: (operation) => messageComponents(operation, model) });
   delete cases.upload;
   return cases;
 }

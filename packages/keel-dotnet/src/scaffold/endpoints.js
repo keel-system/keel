@@ -20,6 +20,8 @@ import { callsPaymentGateway } from 'keel-core/gen/payments-model';
 import { csFile, csLocal, csMember, csString, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
 import { componentType, isPartialUpdate, isThreeState, messageComponents, messageNamespace } from './services.js';
 import { restNamespace, usesApi } from './rest-support.js';
+import { repositoriesNamespace } from './repositories.js';
+import { pageableDefaults } from 'keel-core/gen/pagination';
 
 // Los tipos base que en C# son tipos de VALOR: un ausente se escribe `T?` (Nullable<T>), no una referencia nula.
 const VALUE_BASES = new Set(['int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json']);
@@ -215,7 +217,7 @@ ${statements}
 
 function renderReader(model, operation, usings) {
   const { asBody, bodyRequired } = requestShape(operation);
-  const components = messageComponents(operation);
+  const components = messageComponents(operation, model);
   const fromPath = new Set((operation.pathParams ?? []).map((param) => param.name));
   const partial = isPartialUpdate(operation);
   const pathLines = [];
@@ -238,6 +240,7 @@ function renderReader(model, operation, usings) {
   for (const component of components) {
     if (fromPath.has(component.name)) continue;
     // La página no es un campo del diseño: la leen las líneas de abajo.
+    if (component.pageable) continue;
     if (operation.paginated && ['page', 'size'].includes(component.name) && !(operation.bodyFields ?? []).some((f) => f.name === component.name)) continue;
     usings.push(...fieldUsings(model, component));
     const local = localOf(component);
@@ -267,8 +270,15 @@ function renderReader(model, operation, usings) {
       if (each.length > 0) queryChecks.push(`        paramChecks.CheckEach(${csString(`${operation.name}.${component.name}`)}, ${local}, ${rulesArgs(each)});`);
     }
   }
-  // La paginación sin persistencia: dos enteros de la query con sus defaults (también con cuerpo).
-  if (operation.paginated) {
+  if (components.some((component) => component.pageable)) {
+    // La paginación con persistencia: el Pageable de Spring Data (página, tamaño y orden), con el orden del diseño
+    // cuando el cliente no pide uno. Los defaults y el tope: keel-core/gen/pagination.js.
+    const { defaultSize, maxSize, defaultSort } = pageableDefaults(model, operation);
+    usings.push(repositoriesNamespace(model));
+    const sort = defaultSort.map((criterion) => `new SortOrder(${csString(criterion.property)}, SortDirection.${criterion.direction === 'desc' ? 'Desc' : 'Asc'})`);
+    queryLines.push(`        var pageable = PageableReading.Read(httpRequest.Query, defaultSize: ${defaultSize}, maxSize: ${maxSize}, defaultSort: [${sort.join(', ')}]);`);
+  } else if (operation.paginated) {
+    // La paginación sin persistencia: dos enteros de la query con sus defaults (también con cuerpo).
     queryLines.push('        var page = TextValues.Int(httpRequest.Query["page"]) ?? 0;');
     queryLines.push(`        var size = TextValues.Int(httpRequest.Query["size"]) ?? ${model.pagination?.defaultSize ?? 20};`);
   }
@@ -288,7 +298,7 @@ function renderReader(model, operation, usings) {
     } else if (type.endsWith('?')) {
       // Opcional, o con default que pone el dominio: llega tal cual, null incluido.
       value = local;
-    } else if (operation.paginated && ['page', 'size'].includes(component.name) && !fromPath.has(component.name)) {
+    } else if (component.pageable || (operation.paginated && ['page', 'size'].includes(component.name) && !fromPath.has(component.name))) {
       value = local;
     } else {
       value = present(component, local);
@@ -326,9 +336,10 @@ export function routeRow(model, operation) {
   const fromPath = new Set((operation.pathParams ?? []).map((param) => param.name));
   const query = asBody
     ? []
-    : messageComponents(operation)
+    : messageComponents(operation, model)
         .filter((c) => !fromPath.has(c.name))
-        .map((c) => c.name);
+        // El Pageable viaja como los tres parámetros de Spring Data.
+        .flatMap((c) => (c.pageable ? ['page', 'size', 'sort'] : [c.name]));
   return {
     operation: operation.name,
     method: operation.route.method,

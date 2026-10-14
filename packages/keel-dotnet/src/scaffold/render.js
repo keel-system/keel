@@ -72,8 +72,15 @@ export const PLACES = {
   dtos: ['application', 'Dtos'],
   mappers: ['application', 'Mappers'],
   appSupport: ['application', 'Support'],
+  // El puerto de persistencia de cada raíz y la página que nombra: dominio puro (incremento 6).
+  repositories: ['domain', 'Repository'],
   useCaseInfra: ['infrastructure', 'UseCase'],
   correlation: ['infrastructure', 'Correlation'],
+  // La persistencia relacional (EF Core): el contexto y su tiempo de ejecución, las filas con su mapeo y un
+  // adaptador por puerto.
+  persistence: ['infrastructure', 'Persistence'],
+  rows: ['infrastructure', 'Persistence/Rows'],
+  repositoryAdapters: ['infrastructure', 'Persistence/Repositories'],
   // La entrada HTTP: la infraestructura REST común y un archivo de endpoints por grupo de operaciones.
   rest: ['api', 'Rest'],
   endpoints: ['api', 'Endpoints']
@@ -83,7 +90,8 @@ export const PLACES = {
 export function located(model, place, className) {
   const [layer, folder] = PLACES[place];
   const project = solution(model)[layer];
-  return { namespace: `${project.name}.${folder}`, path: `${project.dir}/${folder}/${className}.cs` };
+  // Una carpeta anidada (`Persistence/Rows`) es un namespace anidado (`.Persistence.Rows`).
+  return { namespace: `${project.name}.${folder.replaceAll('/', '.')}`, path: `${project.dir}/${folder}/${className}.cs` };
 }
 
 export function namespaceOf(model, place) {

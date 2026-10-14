@@ -13,6 +13,7 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { DOMAIN_ERROR_RESPONSES as DOMAIN, FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
 import { callerResolution } from './security.js';
 import { declaredErrorFor } from 'keel-core/gen';
+import { translatableSort } from 'keel-core/gen/pagination';
 import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import {
@@ -203,12 +204,6 @@ function fileUploadHelper(model, imports) {
 // agente con un adaptador de lectura, ya avisado por model.js y por el stub.
 function orderConstantName(operation) {
   return `${operation.name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()}_ORDER`;
-}
-
-function translatableSort(operation) {
-  const sort = operation.sort ?? [];
-  if (sort.length === 0 || sort.some((criterion) => criterion.embedded)) return [];
-  return sort;
 }
 
 function defaultOrderConstant(operation) {

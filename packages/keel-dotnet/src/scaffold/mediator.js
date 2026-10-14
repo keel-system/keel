@@ -10,12 +10,14 @@
 //     en el contenedor de dependencias. Es código generado y explícito: lo que no está ahí no se despacha, y
 //     el contenedor lo dice al arrancar (ValidateOnBuild), no en la primera petición.
 //
-// La frontera transaccional (las Query en lectura, los Command en escritura) se instala aquí con la
-// persistencia (incremento 6); sin ella `DispatchWithoutTransaction` es el mismo despacho, y existe igual para
-// que el scheduler no pregunte por la capa.
+// La frontera transaccional la pone el mediator a través de IUseCaseTransactions: las Query en solo lectura, los
+// Command en escritura, y `DispatchWithoutTransaction` sin abarcar nada. Sin persistencia la implementación es un
+// paso directo; con ella (incremento 6), la de EF Core (PersistenceTransactions), que también traduce los fallos del
+// motor al contrato.
 
 import { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher } from 'keel-core/gen';
 import { csFile, located, namespaceOf, solution, typeUsings } from './render.js';
+import { usesRelational } from './persistence.js';
 import { mapperClasses } from './mappers.js';
 import { contractOf, messageNamespace } from './services.js';
 
@@ -38,6 +40,7 @@ export function generate(model) {
     abstractions('Messages', messagesBody()),
     abstractions('Handlers', handlersBody()),
     abstractions('IUseCaseMediator', mediatorPortBody()),
+    infra('IUseCaseTransactions', transactionsPortBody(), []),
     infra('UseCaseMediator', mediatorBody(), [
       'System.Collections.Concurrent',
       'System.Diagnostics',
@@ -110,11 +113,33 @@ public interface IUseCaseMediator
     /// <summary>
     /// Despacha SIN transacción abarcadora: las abre el adaptador de repositorio en cada llamada, así que
     /// quien despacha controla dónde cae cada commit. Es para los barridos que llaman a un proveedor EN MEDIO
-    /// de su trabajo. Hasta que haya persistencia es el mismo despacho que <see cref="Dispatch(ICommand, CancellationToken)"/>.
+    /// de su trabajo. Sin persistencia es el mismo despacho que <see cref="Dispatch(ICommand, CancellationToken)"/>.
     /// </summary>
     Task DispatchWithoutTransaction(ICommand command, CancellationToken cancellationToken = default);
 
     Task<TResult> DispatchWithoutTransaction<TResult>(IReturningCommand<TResult> command, CancellationToken cancellationToken = default);
+}`;
+}
+
+function transactionsPortBody() {
+  return `/// <summary>
+/// La frontera transaccional de un caso de uso: el mediator envuelve en ella cada despacho, en solo lectura las
+/// consultas. Una transacción ya abierta se REUTILIZA (un caso de uso que despacha otro con Dispatch se une a la
+/// del llamante).
+/// </summary>
+public interface IUseCaseTransactions
+{
+    Task<T> Run<T>(Func<Task<T>> work, bool readOnly, CancellationToken cancellationToken);
+}
+
+/// <summary>Sin persistencia no hay transacción que abrir: el trabajo se ejecuta tal cual.</summary>
+public sealed class PassThroughUseCaseTransactions : IUseCaseTransactions
+{
+    public Task<T> Run<T>(Func<Task<T>> work, bool readOnly, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        return work();
+    }
 }`;
 }
 
@@ -130,25 +155,35 @@ function mediatorBody() {
 /// 4xx es un resultado esperado— y Error si falló. La pila de un fallo NO va aquí: la imprime el adaptador
 /// por el que entró, y con las dos cada fallo saldría duplicado.
 /// </remarks>
-public sealed partial class UseCaseMediator(IServiceProvider services, ILogger<UseCaseMediator> logger) : IUseCaseMediator
+public sealed partial class UseCaseMediator(IServiceProvider services, IUseCaseTransactions transactions, ILogger<UseCaseMediator> logger) : IUseCaseMediator
 {
     // Un envoltorio por tipo de mensaje, construido una vez: cierra los genéricos del handler a partir del tipo
     // concreto del mensaje, que el método solo conoce como su interfaz.
     private static readonly ConcurrentDictionary<Type, object> Wrappers = new();
 
     public Task Dispatch(ICommand command, CancellationToken cancellationToken = default) =>
-        Run(command, () => Wrapper<CommandWrapper>(typeof(CommandWrapper<>), command).Handle(command, services, cancellationToken));
+        Run(command, () => transactions.Run(() => Handled(command, cancellationToken), readOnly: false, cancellationToken));
 
     public Task<TResult> Dispatch<TResult>(IReturningCommand<TResult> command, CancellationToken cancellationToken = default) =>
-        Run(command, () => Wrapper<ResultWrapper<TResult>>(typeof(ReturningCommandWrapper<,>), command, typeof(TResult)).Handle(command, services, cancellationToken));
+        Run(command, () => transactions.Run(() => Handled(command, cancellationToken), readOnly: false, cancellationToken));
 
     public Task<TResult> Dispatch<TResult>(IQuery<TResult> query, CancellationToken cancellationToken = default) =>
-        Run(query, () => Wrapper<ResultWrapper<TResult>>(typeof(QueryWrapper<,>), query, typeof(TResult)).Handle(query, services, cancellationToken));
+        Run(query, () => transactions.Run(() => Wrapper<ResultWrapper<TResult>>(typeof(QueryWrapper<,>), query, typeof(TResult)).Handle(query, services, cancellationToken), readOnly: true, cancellationToken));
 
-    public Task DispatchWithoutTransaction(ICommand command, CancellationToken cancellationToken = default) => Dispatch(command, cancellationToken);
+    public Task DispatchWithoutTransaction(ICommand command, CancellationToken cancellationToken = default) =>
+        Run(command, () => Handled(command, cancellationToken));
 
     public Task<TResult> DispatchWithoutTransaction<TResult>(IReturningCommand<TResult> command, CancellationToken cancellationToken = default) =>
-        Dispatch(command, cancellationToken);
+        Run(command, () => Handled(command, cancellationToken));
+
+    private async Task<bool> Handled(ICommand command, CancellationToken cancellationToken)
+    {
+        await Wrapper<CommandWrapper>(typeof(CommandWrapper<>), command).Handle(command, services, cancellationToken);
+        return true;
+    }
+
+    private Task<TResult> Handled<TResult>(IReturningCommand<TResult> command, CancellationToken cancellationToken) =>
+        Wrapper<ResultWrapper<TResult>>(typeof(ReturningCommandWrapper<,>), command, typeof(TResult)).Handle(command, services, cancellationToken);
 
     private static T Wrapper<T>(Type open, IMessage message, Type? result = null)
     {
@@ -236,7 +271,7 @@ function operations(model) {
 }
 
 function registrationUsings(model) {
-  const usings = ['Microsoft.Extensions.DependencyInjection', namespaceOf(model, 'abstractions'), namespaceOf(model, 'useCases')];
+  const usings = ['Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.DependencyInjection.Extensions', namespaceOf(model, 'abstractions'), namespaceOf(model, 'useCases')];
   if (mapperClasses(model).length > 0) usings.push(namespaceOf(model, 'mappers'));
   if (usesCommandDispatcher(model)) usings.push(namespaceOf(model, 'ports'));
   for (const operation of operations(model)) {
@@ -247,7 +282,8 @@ function registrationUsings(model) {
 }
 
 function registrationBody(model) {
-  const lines = ['services.AddScoped<IUseCaseMediator, UseCaseMediator>();'];
+  // La transacción: un paso directo salvo que la persistencia ponga la suya (AddPersistence la reemplaza).
+  const lines = ['services.TryAddScoped<IUseCaseTransactions, PassThroughUseCaseTransactions>();', 'services.AddScoped<IUseCaseMediator, UseCaseMediator>();'];
   if (usesCommandDispatcher(model)) lines.push('services.AddScoped<ICommandDispatcher, CommandDispatcherAdapter>();');
   for (const mapper of mapperClasses(model)) lines.push(`services.AddScoped<${mapper}>();`);
   for (const operation of operations(model)) lines.push(`services.AddScoped<${contractOf(operation).handler}, ${operation.handlerClass}>();`);
@@ -275,14 +311,30 @@ ${lines.map((line) => `        ${line}`).join('\n')}
 function useCasesTest(model) {
   const sln = solution(model);
   const rows = operations(model).map((operation) => `    [InlineData(typeof(${contractOf(operation).handler}), typeof(${operation.handlerClass}))]`);
-  const usings = [...registrationUsings(model), 'Microsoft.Extensions.DependencyInjection', 'Xunit', namespaceOf(model, 'useCaseInfra'), namespaceOf(model, 'errors')];
+  const persistence = usesRelational(model);
+  const usings = [
+    ...registrationUsings(model),
+    'Microsoft.Extensions.DependencyInjection',
+    'Xunit',
+    namespaceOf(model, 'useCaseInfra'),
+    namespaceOf(model, 'errors'),
+    ...(persistence ? [namespaceOf(model, 'persistence')] : [])
+  ];
+  // Con persistencia, los handlers reciben su repositorio: el contenedor la registra SIN base (el perfil test), que
+  // se construye entera y solo falla si algo intenta conectar.
+  const persistenceLine = persistence ? '\n        services.AddPersistence(DatabaseSettings.Disabled);' : '';
+  const passThrough = persistence
+    ? `
+            // Sin base: la transacción de este despacho es el paso directo, no la de EF.
+            services.Replace(ServiceDescriptor.Scoped<IUseCaseTransactions, PassThroughUseCaseTransactions>());`
+    : '';
   const body = `public sealed class UseCasesTests
 {
     private static ServiceProvider Provider(Action<IServiceCollection>? extra = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddUseCases();
+        services.AddUseCases();${persistenceLine}
         extra?.Invoke(services);
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
@@ -350,7 +402,7 @@ ${rows.join('\n')}
             services.AddScoped<IQueryHandler<Ping, string>, PingHandler>();
             services.AddScoped<IReturningCommandHandler<Create, int>, CreateHandler>();
             services.AddSingleton<ICommandHandler<Touch>>(touch);
-            services.AddScoped<ICommandHandler<Refuse>, RefuseHandler>();
+            services.AddScoped<ICommandHandler<Refuse>, RefuseHandler>();${passThrough}
         });
         using var scope = provider.CreateScope();
         var mediator = scope.ServiceProvider.GetRequiredService<IUseCaseMediator>();

@@ -9,15 +9,16 @@
 //
 // El handler nace con las notas del diseño (precondiciones, reglas, errores, eventos, transiciones) y termina
 // en NotImplementedException: COMPILA y falla en ejecución nombrando la operación, como el
-// UnsupportedOperationException de keel-spring. Lo que cuelga de capas que keel-dotnet todavía no genera (el
-// repositorio, el almacén de idempotencia, el correo, los clientes salientes) llega con su incremento: el
-// handler de hoy solo inyecta lo que existe.
+// UnsupportedOperationException de keel-spring. Inyecta el puerto del repositorio de su agregado (incremento 6);
+// lo que cuelga de capas que keel-dotnet todavía no genera (el almacén de idempotencia, el correo, los clientes
+// salientes) llega con su incremento: el handler de hoy solo inyecta lo que existe.
 
 import { dispatchNote } from 'keel-core/gen';
 import { textFilterNotes } from 'keel-core/gen/text-filters';
 import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 import { mapperOf } from './mappers.js';
+import { repositoryRoots, repositoryOf, portClass, repositoriesNamespace } from './repositories.js';
 
 export function generate(model) {
   const files = [];
@@ -66,12 +67,17 @@ export function isPartialUpdate(operation) {
  * Componentes del mensaje: parámetros de ruta (en el orden del path) + campos del cuerpo + paginación. Los
  * comparte el lector de la API (incremento 5) para construir el mensaje.
  */
-export function messageComponents(operation) {
+export function messageComponents(operation, model) {
   const components = [...(operation.pathParams ?? []), ...(operation.bodyFields ?? [])];
   if (operation.paginated) {
-    // Sin persistencia, dos enteros; con ella (incremento 6) la página viaja con su orden.
-    components.push({ name: 'page', csType: 'int', elementCsType: 'int', kind: 'base', base: 'int', required: true, usings: [] });
-    components.push({ name: 'size', csType: 'int', elementCsType: 'int', kind: 'base', base: 'int', required: true, usings: [] });
+    if (model && repositoryRoots(model).length > 0) {
+      // Con persistencia, la página viaja como un Pageable (página, tamaño y orden), el de Spring Data.
+      components.push({ name: 'pageable', csType: 'Pageable', elementCsType: 'Pageable', kind: 'base', required: true, pageable: true, usings: [repositoriesNamespace(model)] });
+    } else {
+      // Sin persistencia, dos enteros.
+      components.push({ name: 'page', csType: 'int', elementCsType: 'int', kind: 'base', base: 'int', required: true, usings: [] });
+      components.push({ name: 'size', csType: 'int', elementCsType: 'int', kind: 'base', base: 'int', required: true, usings: [] });
+    }
   }
   return components;
 }
@@ -88,7 +94,7 @@ export function isThreeState(operation, component) {
 
 function usesOptional(model) {
   return (model.services ?? []).some((service) =>
-    (service.operations ?? []).some((operation) => messageComponents(operation).some((component) => isThreeState(operation, component)))
+    (service.operations ?? []).some((operation) => messageComponents(operation, model).some((component) => isThreeState(operation, component)))
   );
 }
 
@@ -122,7 +128,7 @@ function scaleRounding(component, type) {
 export function messagesRoundScale(model) {
   return (model.services ?? []).some((service) =>
     (service.operations ?? []).some((operation) =>
-      messageComponents(operation).some((component) => scaleRounding(component, componentType(operation, component)) != null)
+      messageComponents(operation, model).some((component) => scaleRounding(component, componentType(operation, component)) != null)
     )
   );
 }
@@ -132,7 +138,7 @@ function renderMessage(model, operation) {
   const { namespace, path } = located(model, place, operation.messageClass);
   const contract = contractOf(operation);
   const usings = [namespaceOf(model, 'abstractions'), ...resultUsings(model, operation)];
-  const properties = messageComponents(operation).map((component) => {
+  const properties = messageComponents(operation, model).map((component) => {
     usings.push(...fieldUsings(model, component));
     const type = componentType(operation, component);
     const rounding = scaleRounding(component, type);
@@ -179,6 +185,13 @@ function renderHandler(model, operation) {
   if (mapper) {
     usings.push(namespaceOf(model, 'mappers'));
     dependencies.push(mapper);
+  }
+  // El puerto del repositorio del agregado de la operación (el de su raíz si opera sobre una hija): sin él, el
+  // handler no tendría con qué leer ni guardar, y el camino de menor resistencia sería inventárselo.
+  const repository = repositoryOf(model, operation);
+  if (repository) {
+    usings.push(repositoriesNamespace(model));
+    dependencies.push(portClass(repository));
   }
   // El despacho de otro caso de uso (use-cases.dispatches, DSL 2.21): el diseño dice que esta operación ejecuta
   // otra, así que recibe el puerto delante y la nota de cómo. El mismo criterio que keel-spring y keel-nest.

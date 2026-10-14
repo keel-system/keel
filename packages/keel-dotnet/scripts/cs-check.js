@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Restaura, compila, prueba y ARRANCA de verdad el proyecto que genera keel-dotnet.
 //
-// Por qué no está en `npm test`: necesita el SDK de .NET 10 y red (NuGet descarga los paquetes la primera
-// vez), y tarda minutos. La suite de este paquete compara el texto emitido; esto es lo único que dice que
+// Por qué no está en `npm test`: necesita el SDK de .NET 10, red (NuGet descarga los paquetes la primera
+// vez) y podman o docker (el servidor de referencia persiste en PostgreSQL), y tarda minutos. La suite de este paquete compara el texto emitido; esto es lo único que dice que
 // ese texto es una solución que compila sin un solo warning, que sus pruebas pasan, que lo que NuGet
 // resuelve tiene licencia permisiva (transitivas incluidas) y que el servidor arranca y responde a sus
 // sondas con el contrato de los otros dos generadores. Es el equivalente de `ts-check` de keel-nest y de
@@ -38,6 +38,7 @@ import { solution } from '../src/scaffold/render.js';
 import { build } from '../src/commands/build.js';
 import { licenseProblems } from '../src/lib/dotnet-stack.js';
 import { WIRE_SHAPES } from 'keel-core/gen/wire';
+import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const keep = process.argv.includes('--keep');
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
@@ -244,12 +245,43 @@ if (!step('dotnet build sin warnings (TreatWarningsAsErrors)', compiled.ok)) con
 const tested = dotnet(projectDir, ['test', '--no-build', '-c', 'Release']);
 if (!step('pruebas del proyecto bajo el perfil test (dotnet test)', tested.ok)) console.error(tested.output);
 
+// El baseline del esquema, como lo crea el pase de calidad: `dotnet ef` (herramienta local, versión fijada) compara
+// el modelo con la última migración —ninguna— y escribe la primera. Sin él, `develop` no arranca: EF se niega a
+// migrar un modelo con cambios pendientes.
+const tools = dotnet(projectDir, ['tool', 'restore']);
+const baseline = tools.ok ? dotnet(projectDir, ['ef', 'migrations', 'add', 'Baseline', '--project', 'src/ProductCatalog.Infrastructure']) : tools;
+const rebuilt = baseline.ok ? dotnet(projectDir, ['build', '-c', 'Release']) : baseline;
+if (!step('dotnet ef genera el baseline desde el modelo y compila con él', rebuilt.ok)) console.error(rebuilt.output);
+
+// El servidor arranca en `develop` (el único perfil que se redirige por entorno) contra un PostgreSQL de verdad: al
+// arrancar aplica el baseline, y cada caso de uso abre su transacción en esa base.
+const runtime = resolveRuntime();
+let database = null;
 if (results.every((result) => result.ok)) {
+  if (!runtime) step('podman o docker disponible para la base del arranque', false, 'instala podman (o docker) y arráncalo');
+  else {
+    try {
+      database = await startDatabase(runtime, 'postgresql');
+    } catch (error) {
+      step('PostgreSQL en contenedor', false, error.message);
+    }
+  }
+}
+
+if (results.every((result) => result.ok) && database) {
   const port = await freePort();
   const dll = path.join(projectDir, 'src', 'ProductCatalog.Api', 'bin', 'Release', 'net10.0', 'ProductCatalog.Api.dll');
   const app = spawn('dotnet', [dll], {
     cwd: projectDir,
-    env: { ...process.env, PROFILE: 'local', SERVER_PORT: String(port), DOTNET_NOLOGO: '1' },
+    env: {
+      ...process.env,
+      PROFILE: 'develop',
+      SERVER_PORT: String(port),
+      DB_URL: database.url,
+      DB_USERNAME: database.user,
+      DB_PASSWORD: database.password,
+      DOTNET_NOLOGO: '1'
+    },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let appOutput = '';
@@ -272,6 +304,14 @@ if (results.every((result) => result.ok)) {
     malformed ? `${malformed.status} ${malformed.body}` : 'sin respuesta'
   );
 
+  // El arranque aplicó el baseline: las tablas del diseño y el historial de migraciones con su nombre propio.
+  const tables = run(runtime, ['exec', database.name, 'psql', '-U', database.user, '-d', 'keel_db_check', '-At', '-c', "SELECT string_agg(table_name, ',' ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'public'"]);
+  step(
+    'el arranque aplica el baseline (products y ef_migrations_history en la base)',
+    tables.status === 0 && tables.stdout.trim().split(',').includes('products') && tables.stdout.trim().split(',').includes('ef_migrations_history'),
+    tables.stdout.trim() || tables.stderr.trim()
+  );
+
   app.kill('SIGTERM');
   const end = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 15_000))]);
   if (isWindows) {
@@ -284,6 +324,7 @@ if (results.every((result) => result.ok)) {
   if (!end) app.kill('SIGKILL');
   if (results.some((result) => !result.ok)) console.error(appOutput);
 }
+if (database) stopDatabase(runtime, database);
 
 // ─── La solución ENTERA de todas las fixtures ────────────────────────────────────────────────────
 // La frontera de keel-dotnet todavía rechaza casi todas las fixtures (persistencia, mensajería…), pero lo que

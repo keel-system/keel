@@ -5,18 +5,22 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PACKAGES, licenseAllowed, licenseProblems, commercialRule } from '../src/lib/dotnet-stack.js';
+import { PACKAGES, TOOLS, licenseAllowed, licenseProblems, commercialRule } from '../src/lib/dotnet-stack.js';
 import { packagesFor } from '../src/scaffold/project.js';
 
-test('todo paquete de la tabla tiene versión exacta y licencia permisiva', () => {
-  for (const [id, { version, license }] of Object.entries(PACKAGES)) {
+test('todo paquete y herramienta de la tabla tiene versión exacta y licencia permisiva', () => {
+  for (const [id, { version, license }] of [...Object.entries(PACKAGES), ...Object.entries(TOOLS)]) {
     assert.match(version, /^\d+\.\d+\.\d+$/, `${id}: versión no exacta (${version})`);
     assert.deepEqual(licenseProblems({ id, version, license }), [], id);
   }
 });
 
-test('todo paquete que emite el proyecto está en la tabla', () => {
-  for (const id of packagesFor()) assert.ok(PACKAGES[id], `${id} se emite sin estar en dotnet-stack.js`);
+test('todo paquete que emite el proyecto está en la tabla, con persistencia relacional o sin ella', () => {
+  const relational = { layersPresent: { persistence: true }, persistenceKind: 'relational' };
+  for (const model of [{ layersPresent: {} }, relational]) {
+    for (const id of packagesFor(model)) assert.ok(PACKAGES[id], `${id} se emite sin estar en dotnet-stack.js`);
+  }
+  assert.ok(packagesFor(relational).includes('Npgsql.EntityFrameworkCore.PostgreSQL'));
 });
 
 test('la regla se pone roja con lo que pasó a licencia comercial, por versión', () => {

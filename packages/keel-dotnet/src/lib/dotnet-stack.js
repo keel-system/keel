@@ -38,7 +38,25 @@ export const PACKAGES = {
   // Pruebas: xUnit v3 sobre Microsoft.Testing.Platform (trae xunit.v3.mtp-v2), y el host de prueba de
   // ASP.NET Core para pedir las rutas del servidor sin abrir un puerto.
   'xunit.v3': { version: '4.0.2', license: 'Apache-2.0', use: 'pruebas' },
-  'Microsoft.AspNetCore.Mvc.Testing': { version: '10.0.13', license: 'MIT', use: 'pruebas del servidor en memoria' }
+  'Microsoft.AspNetCore.Mvc.Testing': { version: '10.0.13', license: 'MIT', use: 'pruebas del servidor en memoria' },
+  // La persistencia relacional (incremento 6): EF Core y su proveedor de PostgreSQL, que trae Npgsql. La licencia
+  // de Npgsql es la de PostgreSQL (permisiva, tipo MIT). Verificadas el 2026-10-13.
+  'Microsoft.EntityFrameworkCore': { version: '10.0.13', license: 'MIT', use: 'persistencia relacional (ORM)' },
+  'Npgsql.EntityFrameworkCore.PostgreSQL': { version: '10.0.3', license: 'PostgreSQL', use: 'proveedor de PostgreSQL para EF Core' },
+  // Fijado a mano: el proveedor de Npgsql lo pide como `[10.0.4, 11)` y NuGet resuelve la MÍNIMA, mientras EF Core y
+  // su paquete de diseño traen la 10.0.13. Sin fijarlo, el proyecto mezclaba las dos (MSB3277, medido).
+  'Microsoft.EntityFrameworkCore.Relational': { version: '10.0.13', license: 'MIT', use: 'EF Core relacional (fijado a la versión de EF Core)' },
+  // Solo en tiempo de diseño (PrivateAssets: no viaja con el servicio): lo que usa `dotnet ef` para generar las
+  // migraciones desde el modelo.
+  'Microsoft.EntityFrameworkCore.Design': { version: '10.0.13', license: 'MIT', use: 'generación de migraciones (tiempo de diseño)' }
+};
+
+/**
+ * Las herramientas locales de .NET (`.config/dotnet-tools.json`), con la misma regla que los paquetes: versión exacta
+ * y licencia permisiva. `dotnet tool restore` las instala en la versión fijada.
+ */
+export const TOOLS = {
+  'dotnet-ef': { version: '10.0.13', license: 'MIT', command: 'dotnet-ef', use: 'migraciones de EF Core (dotnet ef)' }
 };
 
 /** Las versiones mayores de un id comercial que no se pueden emitir; null si el id no está vetado. */
