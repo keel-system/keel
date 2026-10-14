@@ -100,6 +100,7 @@ npm link --workspace packages/keel-nest          # habilita `keel-nest` local
 npm link --workspace packages/keel-dotnet        # habilita `keel-dotnet` local
 npm run db-check --workspace packages/keel-dotnet  # los ADAPTADORES de keel-dotnet contra PostgreSQL real: sondas xUnit generadas desde el modelo y el catálogo del motor contra el esquema emitido (`-- --only=<fixture>`, `-- --sabotage=<id>`) (podman/docker, minutos)
 npm run cs-check --workspace packages/keel-dotnet  # genera, restaura, compila sin warnings, prueba, comprueba licencias (transitivas), genera el baseline con dotnet ef y ARRANCA el proyecto .NET contra PostgreSQL (SDK 10, red y podman/docker, minutos)
+npm run harness-check --workspace packages/keel-dotnet  # el ARNÉS de keel-dotnet: infra/ real, flujos sonda caja negra, cada código de score-scenarios.sh y el baseline de dotnet ef verificado y falsado (SDK 10, podman/docker, ~6 min)
 npm run ts-check --workspace packages/keel-nest  # genera, instala, compila, prueba y ARRANCA el proyecto Nest contra PostgreSQL (red, podman/docker, minutos)
 npm run db-check --workspace packages/keel-nest  # la persistencia de keel-nest contra PostgreSQL y MySQL reales (podman/docker)
 npm run harness-check --workspace packages/keel-nest  # el ARNÉS de keel-nest: infra/ real, flujos sonda y cada código de score-scenarios.sh (podman/docker, minutos)
