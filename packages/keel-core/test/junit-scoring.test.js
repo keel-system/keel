@@ -101,6 +101,25 @@ test('el mensaje de xUnit v3 sale en una línea legible: salto en hexadecimal y 
   assert.doesNotMatch(out, /FL-RES/);
 });
 
+// El XML del runner que usa HOY el arnés de keel-dotnet: xUnit v3 4.0.2 con su runner propio (`-result-junit`; el
+// proyecto de flujos está fuera de Microsoft.Testing.Platform), CAPTURADO en Windows y recortado (trazas y rutas). Frente
+// al de 3.2.2: `time` va entre `name` y `classname`, el salto es `&#xD;&#xA;` y un caso omitido en tiempo de ejecución
+// (el flujo que no llegó a arrancar, que se salta con Assert.Skip) lleva su motivo como TEXTO de `<skipped>`.
+const XUNIT_V3_4_XML = String.raw`<testsuites name="Test results" tests="4" failures="2" errors="0" disabled="0" time="7.064000" timestamp="2026-10-14T11:20:19"><testsuite name="C:\proyecto\tests\ProductCatalog.IntegrationTests\bin\Debug\net10.0\ProductCatalog.IntegrationTests.dll" tests="4" failures="2" errors="0" disabled="0" skipped="1" time="7.064000" timestamp="2026-10-14T11:20:19" hostname="host"><testcase name="FL-CAP-001-A: en verde" time="0.008000" classname="ProductCatalog.IntegrationTests.CaptureFlow" /><testcase name="FL-CAP-001-B: en rojo con &quot;comillas&quot;" time="0.013000" classname="ProductCatalog.IntegrationTests.CaptureFlow"><failure message="Assert.Equal() Failure: Values differ&#xD;&#xA;Expected: 201&#xD;&#xA;Actual:   409">   at ProductCatalog.IntegrationTests.CaptureFlow.Rojo() in C:\proyecto\tests\ProductCatalog.IntegrationTests\CaptureFlow.cs:line 12</failure></testcase><testcase name="ProductCatalog.IntegrationTests.CaptureFlow.NoEsEscenario" time="0.003000" classname="ProductCatalog.IntegrationTests.CaptureFlow"><failure message="Assert.Equal() Failure: Strings differ&#xD;&#xA;           ↓ (pos 0)&#xD;&#xA;Expected: &quot;409 &lt;ok&gt; &amp; &quot;x&quot;&quot;&#xD;&#xA;Actual:   &quot;200&quot;&#xD;&#xA;           ↑ (pos 0)">   at ProductCatalog.IntegrationTests.CaptureFlow.NoEsEscenario() in C:\proyecto\tests\ProductCatalog.IntegrationTests\CaptureFlow.cs:line 15</failure></testcase><testcase name="FL-CAP-002-A: no arranca" time="0.000000" classname="ProductCatalog.IntegrationTests.CaptureInitFlow"><skipped>El flujo no llegó a arrancar: el servidor no arrancó (salió con código -532462766). Log: C:\proyecto\build\keel-scenarios\server.log</skipped></testcase></testsuite></testsuites>
+`;
+
+test('la matriz lee el XML real de xUnit v3 4.x (runner propio, omitido con motivo como texto)', () => {
+  const rows = runAwk(JUNIT_MATRIX_AWK, XUNIT_V3_4_XML).trim().split('\n').sort();
+  assert.deepEqual(rows, ['FALLO\tFL-CAP-001-B\tCaptureFlow', 'OK\tFL-CAP-001-A\tCaptureFlow', 'OMITIDO\tFL-CAP-002-A\tCaptureInitFlow']);
+});
+
+test('el mensaje de xUnit v3 4.x sale en una línea: el salto CRLF en hexadecimal también', () => {
+  const out = runAwk(JUNIT_NON_SCENARIO_AWK, XUNIT_V3_4_XML);
+  assert.match(out, /CaptureFlow\.NoEsEscenario\s+\(CaptureFlow\)\n\s+Assert\.Equal\(\) Failure: Strings differ .*Expected: "409 <ok> & "x"" Actual: "200"/);
+  assert.doesNotMatch(out, /&#x|&quot;/);
+  assert.doesNotMatch(out, /FL-CAP/);
+});
+
 // El cruce con el documento de escenarios, EJECUTADO: lo que no declara el documento no puntúa (las corridas
 // `catalog` de los dos generadores dieron 66 en OK sobre 56 escenarios) y sale aparte, también en rojo.
 function runScoring(document, matrixRows) {

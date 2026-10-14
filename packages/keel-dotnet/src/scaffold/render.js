@@ -19,7 +19,9 @@ export function solution(model) {
     application: project('Application'),
     infrastructure: project('Infrastructure'),
     api: project('Api'),
-    unitTests: project('UnitTests', 'tests')
+    unitTests: project('UnitTests', 'tests'),
+    // Las pruebas de flujo (FL-*): caja negra contra el servidor arrancado, fuera de `dotnet test`.
+    integrationTests: project('IntegrationTests', 'tests')
   };
 }
 

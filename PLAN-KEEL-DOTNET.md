@@ -604,6 +604,64 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     tablas; los finders de credencial, de lote y `FindAllById` (8, 11 y 13); la relación a-uno dentro del agregado y
     el value object anidado salen como TODO que compila y falla nombrándose, como en keel-nest.
 
+- **Inc. 7 — en curso.** Tramos como los de keel-nest: 7a (la `infra/` neutral) ya estaba hecho en keel-core.
+  - **7b, el arnés (hecho, 2026-10-14).**
+    - **`infra/`**: la neutral de `keel-core/gen/infra-scripts.js` con la plataforma `DOTNET_INFRA`
+      (`src/scaffold/infra.js`): el historial es `ef_migrations_history`, el que declara el contexto de EF.
+    - **El proyecto de flujos** (`tests/<Raíz>.IntegrationTests`, `src/scaffold/integration-tests.js`):
+      - **Caja negra por construcción**, como el source set de keel-spring: el proyecto NO ve ningún tipo del
+        servicio. Solo ordena la compilación del Api (`ReferenceOutputAssembly="false"`) y el arnés lo arranca como
+        PROCESO aparte, el mismo ejecutable que se despliega, en un puerto libre bajo `local`. Un flujo que nombra
+        un tipo del servicio no compila.
+      - `FlowTest`: verbos HTTP, `Db()`, `ResetState()`, `Eventually()`, `AssertJson()` (estricto, números por
+        su texto, comodines `<uuid>`/`<instant>`/`<any>`) y `GivenAsync()`, el Given común del flujo.
+      - `FailureCapture`: la evidencia con el formato de los otros dos.
+      - `[Scenario("FL-…: …")]`: el título es el `name` del XML. Los escenarios corren en el orden escrito, con
+        un `ITestMethodOrderer`.
+      - Un flujo que no arranca sale OMITIDO (`Assert.Skip`) y deja `<Flujo>-init.json`, como el `beforeAll` de
+        keel-nest.
+    - **`infra/score-scenarios.sh`**: compila, ejecuta el humo y luego la suite, con los programas de
+      `junit-scoring.js` y los mismos códigos 0/1/2 (y 2 si la solución no compila). `--score` no exige el SDK.
+    - **`infra/check-flows.sh`**: compila el proyecto de flujos sin construir sus referencias (un `src/` a medio
+      escribir no lo pone en rojo) y rechaza una referencia que deje ver los tipos del servicio.
+  - **Decisiones medidas, no supuestas:**
+    - **Fuera de `dotnet test`**: con `IsTestProject=false` lo seguía ejecutando (y en rojo sin infraestructura).
+      Lo que mira Microsoft.Testing.Platform es `IsTestingPlatformApplication`. Con ella a `false`, el ejecutable
+      usa el runner propio de xUnit v3 (`-class`, `-result-junit`), cuyo XML ya leía la matriz.
+    - **El orden**: en xUnit v3 el `ITestCaseOrderer` ordena casos DENTRO de un método. El de los métodos es un
+      `ITestMethodOrderer`. El primero se ejecutaba y no cambiaba nada.
+    - **xUnit 4.0.2** ya no admite `CollectionBehavior(DisableTestParallelization)` (es error con
+      warnings-as-errors): `[assembly: Parallelization(Mode = ParallelMode.None)]`. Y `FactAttribute` tiene
+      constructor con la información de fuente: el analizador exige que la subclase la pase.
+    - **El XML de xUnit 4.x**, capturado y fijado en `keel-core/test/junit-scoring.test.js`: `time` entre `name` y
+      `classname`, el salto `&#xD;&#xA;` y el motivo del omitido como texto de `<skipped>`. La matriz lo leía sin
+      cambios.
+  - **Una trampa de entorno**: generado bajo una ruta larga (el scratchpad, unos 150 caracteres), Roslyn compila
+    Application sin dejar la DLL ni decir por qué (MSB3030 al copiarla). Es el límite de 260 caracteres de
+    Windows. Va al README del proyecto generado en 7c.
+  - **Medido:**
+    - `npm test` 270/270; keel-core 1 214/1 214.
+    - `test/integration-harness.test.js` (nuevo):
+      - la `infra/` de las 15 fixtures es la de keel-spring salvo los textos de la plataforma;
+      - el reset respeta el historial y el proyecto de flujos es caja negra en todas;
+      - `score-scenarios.sh --score` EJECUTADO sobre XML con OK, FALLO, OMITIDO, NO_EJERC, AJENO y lo que no es
+        escenario.
+      - Falsado: con otra tabla de historial caen 16 pruebas, y con la referencia visible, 15.
+    - **`harness-check` 27/27** (nuevo, `npm run harness-check`): `dotnet test` en la raíz sin los flujos;
+      `check-flows` en sus cuatro desenlaces; la infra levantada con sus scripts; y flujos SONDA puntuados, cada
+      desenlace con su código:
+      - uno en verde que mide el reset contra la base y el `AssertJson` del 404;
+      - uno en rojo con su evidencia;
+      - uno que no arranca;
+      - uno de orden;
+      - un id ajeno y un flujo sin prueba;
+      - la solución sin compilar y el sello roto;
+      - además, que el servidor no sobrevive a la suite.
+      - Falsado dos veces: con otra tabla de historial cae la sonda del reset, y sin el `TestMethodOrderer`, la
+        del orden.
+    - `cs-check` 15/15: compila los proyectos de flujos de las 15 fixtures y 2 variantes (102 ensamblados) en
+      Release.
+
 ## 5. Riesgos conocidos
 
 - **MySQL con EF Core 10.** Pomelo (MIT) suele ir detrás de la versión de EF. Además, el `Guid` de

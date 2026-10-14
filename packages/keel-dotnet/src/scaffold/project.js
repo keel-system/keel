@@ -136,6 +136,7 @@ ${[sln.domain, sln.application, sln.infrastructure, sln.api].map(project).join('
   </Folder>
   <Folder Name="/tests/">
 ${project(sln.unitTests)}
+${project(sln.integrationTests)}
   </Folder>
 </Solution>
 `;
