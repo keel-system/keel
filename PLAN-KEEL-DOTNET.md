@@ -661,6 +661,48 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
         del orden.
     - `cs-check` 15/15: compila los proyectos de flujos de las 15 fixtures y 2 variantes (102 ensamblados) en
       Release.
+  - **7c, agentes, convenciones, skill y baseline (hecho, 2026-10-14).**
+    - **Los assets** (`assets/`), calcados de los de keel-nest y escritos contra lo que emite keel-dotnet:
+      - los cinco agentes `keel-dotnet-{code,infra,tests,validate,quality}`, hojas;
+      - `architecture`, `constitution` (con la regla de licencias y la asincronía) y `orchestration`, sin modo
+        evolución (llega en el inc. 15);
+      - seis convenciones: `mapping`, `project-layout`, `domain-modeling`, `flow-fidelity`, `integration-tests` e
+        `infra-validation`;
+      - la skill `keel-dotnet-database`, con cuatro referencias.
+    - **`generator-docs.js`**: la skill `/keel-generate-dotnet` con el pipeline entero (los mismos códigos y cupos
+      que los otros dos) y el contexto del repo. `keel-dotnet check` imprime `design-gaps.yaml`, con la lectura
+      neutral de keel-core.
+    - **El baseline** (`src/scaffold/schema-baseline.js`): la migración la crea `dotnet ef migrations add` (no se
+      exporta a mano, como en keel-nest).
+      - `infra/export-schema.sh` deja el DDL del modelo para revisarlo.
+      - `infra/verify-baseline.sh` exige migraciones y cero cambios pendientes del modelo
+        (`has-pending-model-changes`). Después las aplica a una base VACÍA y aparte y compara su catálogo
+        (columnas, índices, constraints) con el del DDL del modelo, aplicado a otra.
+      - Esa comparación es la que caza una migración editada a mano: el snapshot del modelo no cambia con ella.
+      - Falsado en vivo: sin un `CreateIndex` sale `-index … idx_products_status`; con una cota cambiada sin
+        migración sale el cambio pendiente.
+    - **`test/generator-docs.test.js`** (nuevo), que comprueba:
+      - que las listas instalan todo `assets/`;
+      - que no queda ningún token y las docs no citan un harness;
+      - que **toda ruta `src/`, `tests/` e `infra/` que citan los assets existe en lo emitido**;
+      - que los miembros que enseñan las convenciones son los del código emitido (`Decimals.SetScale`, `Page`,
+        `FlowTest`, `Optional.IsPresent`…).
+      - Falsado citando un archivo inventado. Ya cazó un `HasValue` que no existe (es `IsPresent`) y una ruta de
+        keel-spring.
+    - **El README** del proyecto generado dice cómo se completa y avisa de la ruta corta.
+    - **Medido:**
+      - `npm test` 280/280.
+      - **`harness-check` 32/32**: gana el baseline. Exporta el DDL; sin migraciones sale 1 diciendo cómo
+        crearlas; con la de `dotnet ef`, `baseline: OK`. Falsado en sus dos ramas: una migración sin un índice, y
+        una cota cambiada sin migración.
+      - **La sonda de la migración editada no se aplicaba al principio**: `dotnet ef` escribe con CRLF en Windows.
+        Lo delató su propia guarda (`sabotaged !== original`), no un verde falso.
+      - `cs-check` 15/15 (102 ensamblados, 1 291 pruebas).
+  - **7d, la corrida — pendiente, con una decisión previa.** La única fixture que la frontera admite entera es
+    `product-catalog`, y `createProduct` declara `idempotency` (`client-key`): `FL-PRD-002` y `FL-PRD-003` la
+    exigen. keel-dotnet la acepta con aviso y no la genera. Es el mismo punto en el que estaba keel-nest en su 7d.
+    Allí el agente escribió el registro a mano (otra tabla y SQL de un solo motor), y por eso se adelantó su 10a.
+    Aquí `mapping.md` prohíbe escribirlo a mano.
 
 ## 5. Riesgos conocidos
 

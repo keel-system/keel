@@ -1,84 +1,246 @@
-// Lo que el harness del agente carga en el proyecto generado: el archivo de contexto del repo
-// (`CLAUDE.md`, `AGENTS.md`) y la skill `keel-generate-dotnet`, proyectados a cada harness soportado por
-// `keel-core` (HARNESSES). Se emiten todos: el proyecto sirve para cualquiera sin decidir nada al generarlo.
+// Conocimiento del generador dentro del proyecto: la skill orquestadora `keel-generate-dotnet` (la ÚNICA del flujo:
+// no se siembra ninguna en el workspace de diseño), los cinco agentes de la orquestación, las skills por tecnología
+// del stack y las docs de apoyo. Junto con el snapshot de specs/, hace el repo autosuficiente: quien lo clone puede
+// completar la generación sin el workspace.
 //
-// Estado (incremento 4 de PLAN-KEEL-DOTNET.md): todavía no hay pipeline de agentes —llega en el
-// incremento 7, con el arnés de integración—, así que la skill dice exactamente eso y lo que sí se puede
-// hacer ya, en vez de prometer una generación que no existe.
+// Dos destinos, igual que en keel-spring y keel-nest:
+//   · lo que el harness CARGA —skills, agentes, el archivo de contexto— se PROYECTA a la convención de cada harness
+//     soportado (HARNESSES de keel-core) desde una fuente neutral;
+//   · lo que solo es markdown que un agente lee por ruta —architecture, constitution, orchestration, conventions— va
+//     a `docs/keel/`, UNA sola copia, y no puede citar rutas de harness.
 
-import { HARNESSES, applyTokens } from 'keel-core';
+import fs from 'node:fs';
+import path from 'node:path';
+import { HARNESSES, applyTokens, emitHarnessFiles } from 'keel-core';
+import { contractDocs } from 'keel-core/gen/contract-docs';
 import { describeStack } from 'keel-core/gen/stack';
-import { SKILL } from '../lib/assets.js';
+import { assetsDir, SKILL, TARGET_FRAMEWORK } from '../lib/assets.js';
 import { solution } from './render.js';
+import { usesRelational } from './persistence.js';
+import { usesSchemaBaseline, baselineCommand } from './schema-baseline.js';
+import { HARNESS_SMOKE_CLASS } from './integration-tests.js';
+
+const generatorDir = path.join(assetsDir, 'generators', 'dotnet');
+const agentsSourceDir = path.join(assetsDir, 'agents');
+
+/** Raíz de las docs de apoyo en el proyecto generado; es también el valor del token {{keel:docs}}. */
+export const DOCS_DIR = 'docs/keel';
+
+/** Docs de primer nivel del generador, junto a conventions/ bajo DOCS_DIR. */
+export const GUIDES = ['architecture.md', 'constitution.md', 'orchestration.md'];
+
+/** Las convenciones: el único punto de instalación (un archivo nuevo de conventions/ va aquí). */
+export const CONVENTIONS = ['mapping.md', 'project-layout.md', 'domain-modeling.md', 'flow-fidelity.md', 'integration-tests.md', 'infra-validation.md'];
+
+/** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
+export const AGENTS = ['keel-dotnet-code.md', 'keel-dotnet-infra.md', 'keel-dotnet-tests.md', 'keel-dotnet-validate.md', 'keel-dotnet-quality.md'];
+
+/** Skills por tecnología aplicables al servicio: hoy, la de la base relacional. */
+export function stackSkills(model) {
+  return usesRelational(model) ? ['keel-dotnet-database'] : [];
+}
 
 export function generate(model) {
   const files = [];
-  for (const harness of HARNESSES) {
-    const tokens = harness.tokens;
-    files.push({ path: harness.contextFile, content: applyTokens(contextMd(model), tokens) });
-    files.push({ path: harness.skillPath(SKILL, 'SKILL.md'), content: applyTokens(skillMd(model), tokens) });
-  }
+  for (const name of GUIDES) files.push({ path: `${DOCS_DIR}/${name}`, content: docContent(path.join(generatorDir, name)) });
+  for (const name of CONVENTIONS) files.push({ path: `${DOCS_DIR}/conventions/${name}`, content: docContent(path.join(generatorDir, 'conventions', name)) });
+  // Los documentos de contrato del método, los mismos que instalan keel-spring y keel-nest (keel-core/gen/contract-docs.js).
+  for (const doc of contractDocs()) files.push({ path: `${DOCS_DIR}/${doc.name}`, content: doc.content });
+  for (const harness of HARNESSES) files.push(...harnessArtifacts(model, harness));
   return files;
+}
+
+// El archivo de contexto de cada harness tiene otro nombre en el otro: en material compartido sería tan mentira
+// como una ruta `.claude/`.
+const CONTEXT_FILES = new RegExp(`\\b(${HARNESSES.map((h) => h.contextFile.replace('.', '\\.')).join('|')})`, 'g');
+
+/**
+ * Las docs viven en un único sitio, compartido por todos los harnesses: solo se resuelve `{{keel:docs}}`, y
+ * cualquier token de harness o nombre de archivo de contexto es un error de la fuente — esa frase tiene que nombrar
+ * la skill o el agente, no su ruta.
+ */
+export function docContent(sourceFile) {
+  const resolved = applyTokens(fs.readFileSync(sourceFile, 'utf8'), { docs: DOCS_DIR });
+  const leftover = resolved.match(/\{\{keel:\w+\}\}/g);
+  if (leftover) {
+    throw new Error(`${path.basename(sourceFile)} cita rutas de harness (${[...new Set(leftover)].join(', ')}), pero vive en ${DOCS_DIR}/ y lo leen todos.`);
+  }
+  const contextFiles = resolved.match(CONTEXT_FILES);
+  if (contextFiles) {
+    throw new Error(`${path.basename(sourceFile)} nombra el archivo de contexto (${[...new Set(contextFiles)].join(', ')}), que en otro harness se llama de otra forma.`);
+  }
+  return resolved;
+}
+
+/** Contexto del repo + skill orquestadora + skills por tecnología + agentes, en la convención de un harness. */
+function harnessArtifacts(model, harness) {
+  const tokens = { ...harness.tokens, docs: DOCS_DIR };
+  const files = [
+    { path: harness.contextFile, content: contextMd(model) },
+    { path: harness.skillPath(SKILL, 'SKILL.md'), content: skillMd(model) },
+    ...emitHarnessFiles({
+      harnesses: [harness],
+      skills: stackSkills(model).map((name) => path.join(generatorDir, 'skills', name)),
+      agents: AGENTS.map((name) => path.join(agentsSourceDir, name)),
+      extraTokens: { docs: DOCS_DIR }
+    })
+  ];
+  return files.map((file) => ({ ...file, content: applyTokens(file.content, tokens) }));
+}
+
+/** El ejecutable de las pruebas de flujo, con la clase que se le pide (la ruta relativa a la raíz del proyecto). */
+function flowsCommand(model, className) {
+  const project = solution(model).integrationTests;
+  return `dotnet ${project.dir}/bin/Debug/${TARGET_FRAMEWORK}/${project.name}.dll -class "${project.name}.${className}"`;
 }
 
 function contextMd(model) {
   const { service } = model;
   const sln = solution(model);
   const layers = Object.keys(model.layersPresent).filter((layer) => model.layersPresent[layer]);
+  const persistence = usesRelational(model);
   return `# ${service.projectName}
 
-Servicio .NET generado por \`keel-dotnet build\` desde \`specs/${service.name}\` v${service.version}.
+Servicio .NET generado por \`keel-dotnet build\` desde \`specs/${service.name}\` v${service.version}. Es el equivalente
+de los servidores de keel-spring y keel-nest del mismo diseño: mismo contrato HTTP, mismo cable, mismo esquema.
 
 - **Diseño**: \`specs/\` es un snapshot del diseño Keel; el canónico vive en el workspace de diseño. No se edita aquí.
 - **Capas declaradas**: ${layers.length > 0 ? layers.join(', ') : '(ninguna)'}.
 - **Stack** (\`keel-stack.json\`): ${describeStack(model.stack)}.
-- **Arquitectura**: hexagonal + CQRS, la misma que los servidores de keel-spring y keel-nest del mismo diseño. Un proyecto por capa (\`${sln.domain.name}\`, \`${sln.application.name}\`, \`${sln.infrastructure.name}\`, \`${sln.api.name}\`); la frontera la impone el compilador con las referencias entre proyectos.
+- **Arquitectura**: hexagonal + CQRS (\`{{keel:docs}}/architecture.md\`), un proyecto por capa (\`${sln.domain.name}\`, \`${sln.application.name}\`, \`${sln.infrastructure.name}\`, \`${sln.api.name}\`): la frontera la impone el compilador con las referencias entre proyectos. Reglas inviolables: \`{{keel:docs}}/constitution.md\`.
 - **Configuración**: perfil por \`PROFILE\` (default \`local\`), \`config/application.yaml\` + \`config/parameters/<perfil>/\`; \`\${VAR}\` es obligatoria y \`\${VAR:default}\` opcional.
-- **Paquetes**: solo con licencia permisiva; nunca uno que haya pasado a licencia comercial (MediatR, AutoMapper, MassTransit, FluentAssertions…).
+- **Casos de uso**: un mensaje y un handler por operación, despachados por \`UseCaseMediator\`, que abre la transacción; el registro de los handlers es generado (\`UseCaseRegistration\`). Los handlers nacen con las notas del diseño y terminan en \`throw new NotImplementedException("TODO: <operación>")\`.${
+    persistence ? `\n- **Esquema**: en \`local\` lo crea EF Core desde el modelo (\`EnsureCreated\`); en \`develop\` y \`production\`, las migraciones de EF Core al arrancar.` : ''
+  }
+- **Paquetes**: solo con licencia permisiva y versión exacta (\`Directory.Packages.props\`); nunca uno que haya pasado a licencia comercial (MediatR, AutoMapper, MassTransit, FluentAssertions…).
+
+## Completar el servicio
+
+\`/${SKILL}\`, sin argumentos y con el cwd en esta raíz: orquesta los agentes de código, infraestructura, pruebas,
+arbitraje y calidad hasta el 100% de los escenarios \`FL-*\`. El pipeline: \`{{keel:docs}}/orchestration.md\`.
 
 ## Verificación
 
 \`\`\`bash
-dotnet build         # un warning es un error
-dotnet test          # arranque bajo el perfil test y sondas
-dotnet run --project ${sln.api.dir}   # GET /livez y /readyz → {"status":"UP"}
+dotnet restore                     # la primera vez escribe packages.lock.json: commitéalos
+dotnet build                       # la solución entera; un warning es un error
+dotnet test                        # las pruebas de build (perfil test, sin infraestructura)
+bash infra/up.sh && bash infra/validate-infra.sh   # la infraestructura de prueba
+bash infra/score-scenarios.sh                      # compila + humo del arnés + flujos FL-* + matriz
 \`\`\`
-
-## Estado del generador
-
-keel-dotnet se construye por incrementos (PLAN-KEEL-DOTNET.md del repo de Keel). Esta versión genera el
-proyecto que arranca, su configuración, sus sondas, el contrato del cable, el dominio (value objects con sus
-guardas, agregados con su lifecycle, eventos y errores) y la capa de aplicación (mensajes, handlers que nacen
-fallando con su TODO, DTOs, mappers y el mediator). La API llega en el incremento 5 y el pipeline de agentes de
-\`/${SKILL}\` en el 7.
-`;
+${
+    (model.formatTypes ?? []).length > 0
+      ? '\n`infra/check-domain-guards.sh` sale en ROJO recién generado a propósito: el formato de los value types escalares lo hace cumplir `<Tipo>Format.Validate(...)`, y esa llamada es del agente.\n'
+      : ''
+  }`;
 }
 
 function skillMd(model) {
   const { service } = model;
   const sln = solution(model);
+  const persistence = usesRelational(model);
+  const baseline = usesSchemaBaseline(model);
+  const techSkills = stackSkills(model);
+  const techSkillsBullet = techSkills.length
+    ? `\n- Skills por tecnología (\`{{keel:skills}}\`, hermanas de esta), instaladas solo las aplicables a este servicio: ${techSkills.map((s) => `\`${s}\``).join(', ')}. Cada una trae \`references/\` que se leen bajo demanda.`
+    : '';
   return `---
 name: ${SKILL}
-description: Completa la generación de este microservicio .NET a partir del diseño Keel incluido en specs/. Usar dentro de este proyecto, sin argumentos.
+description: Completa la generación de este microservicio .NET a partir del diseño Keel incluido en specs/, orquestando los subagentes de código, infraestructura, pruebas de integración, arbitraje y calidad. Usar dentro de este proyecto, sin argumentos.
 ---
 
 # /${SKILL} — completar ${service.projectName}
 
-Este proyecto lo generó \`keel-dotnet build\` desde \`specs/${service.name}\` v${service.version}.
+Este proyecto lo generó \`keel-dotnet build\` desde \`specs/${service.name}\` v${service.version} y es **autosuficiente**.
+Se invoca **sin argumentos, con el cwd en esta raíz**; todas las rutas son relativas a ella. Tú eres el
+**orquestador**: el trabajo lo hacen los subagentes de \`{{keel:agents}}\`. El pipeline completo, con sus porqués:
+\`{{keel:docs}}/orchestration.md\`.
 
-**Todavía no hay pipeline de completado.** keel-dotnet se construye por incrementos y el orquestador de
-subagentes (código, infraestructura, pruebas de integración, validación funcional y calidad) llega en el
-incremento 7 de PLAN-KEEL-DOTNET.md, junto con el arnés que puntúa los escenarios \`FL-*\`. No escribas el
-servidor a mano a partir de \`specs/\` para suplirlo: sin el arnés no hay forma de saber si es equivalente
-al que generan keel-spring y keel-nest del mismo diseño, que es el objetivo.
+## Proceso
 
-Lo que sí puedes hacer ahora, con el cwd en esta raíz:
+0. **Precondiciones.** \`specs/\` es un snapshot que \`keel-dotnet build\` ya validó: no lo revalides ni lo edites
+   —el canónico es \`specs/${service.name}/\` del workspace, y un cambio funcional lo hace **el diseñador** allí y
+   re-ejecuta \`keel-dotnet build\`—. **Tú no editas ni este snapshot ni el workspace.** Un escenario que contradice al
+   diseño es un \`culprit: design\`: se **propone** en \`design-gaps.yaml\`, no se aplica (\`infra/score-scenarios.sh\`
+   comprueba el sello de \`specs/\` y sale con \`2\` si cambió). Comprueba solo: que existe
+   \`specs/validation-scenarios.md\` (sin escenarios no hay contra qué validar: detente y pide cerrar el diseño con
+   \`/keel-design\`), que esta raíz es un repo git (si no, \`git init -b main\`), que está el SDK de .NET 10
+   (\`dotnet --list-sdks\`) y que los paquetes se restauran (\`dotnet restore\`). El stack está en
+   \`keel-stack.json\`: respétalo.
+1. **Fase 1 — en paralelo** (los tres lanzados a la vez, en un único mensaje):
+   - \`keel-dotnet-code\`: «Completa el proyecto en \`.\`. Tu proceso, tu alcance y tu criterio de terminado son los de
+     tu archivo de agente; \`{{keel:context}}\` es el contexto del repo, no tu lista de tareas.» — hasta \`dotnet build\`
+     en verde, sin warnings.
+   - \`keel-dotnet-infra\`: «Levanta y valida la infraestructura de \`.\` (\`infra/\`). Déjala arriba y reporta.»
+   - \`keel-dotnet-tests\`: «Traduce los escenarios \`FL-*\` de \`specs/validation-scenarios.md\` a pruebas en
+     \`${sln.integrationTests.dir}/\` de \`.\`.» — una clase por flujo, en caja negra y **sin leer \`src/\`**, hasta
+     \`bash infra/check-flows.sh\` en verde.
 
-1. \`dotnet build\` — la solución compila sin warnings.
-2. \`dotnet test\` — el proyecto arranca bajo el perfil \`test\`, sus sondas responden y cada mensaje del diseño
-   llega a su handler por el contenedor real.
-3. \`dotnet run --project ${sln.api.dir}\` — \`GET /livez\` y \`GET /readyz\` responden \`{"status":"UP"}\`.
+   **Espera a los tres sin hacer nada más.** Gating sobre su bloque estructurado: sin docker/podman
+   (\`infra status: PENDIENTE\`) → **detente** (compilado pero NO validado). Infra KO corregible → relanza infra una
+   vez. \`code\` con \`compiles: false\` → relánzalo con sus \`failures\` (máx. 2 ciclos). \`tests\` en KO por causa
+   propia → relánzalo; si su KO viene de \`src/\`, no es suyo. \`blockers\` en cualquiera → detente y repórtalo.
+2. **Fase 2a — puntuación mecánica (tú, sin agente).** Con los tres en OK: \`bash infra/score-scenarios.sh\`. Compila
+   la solución, arranca por el **humo del arnés** y solo con él en verde ejecuta la suite y compone la matriz
+   \`FL-* → OK | FALLO | OMITIDO | NO_EJERC\` desde el XML JUnit. La salida de \`dotnet\` va a
+   \`build/keel-scenarios/run.log\` y la del servidor a \`build/keel-scenarios/server.log\`: no las vuelques en tu
+   contexto salvo para diagnosticar. Según el código: \`0\` → fase 3 **sin invocar a nadie**; \`1\` → fase 2b; \`2\` →
+   **nada que arbitrar**: con \`BUILD: KO\`, relanza a quien sea dueño de los errores que imprime (\`src/\` →
+   \`keel-dotnet-code\`, el proyecto de flujos → \`keel-dotnet-tests\`); con el humo rojo, la matriz vacía, la suite en
+   rojo por pruebas que no son escenarios o un flujo que no arrancó, relanza \`keel-dotnet-tests\` (no consume cupo)
+   — salvo que el defecto esté fuera del proyecto de flujos (\`infra/\`, la solución, \`Directory.*.props\`): eso es de
+   build, lo corriges tú y va al informe como fix del generador.
+3. **Fase 2b — arbitraje.** Lanza \`keel-dotnet-validate\` con la matriz y, por cada fallo, su clase de flujo y su
+   volcado de \`build/keel-failures/\`, y **espera sin ejecutar nada** (una pasada tuya del script le borraría la
+   evidencia). Según \`culprit\`: \`code\` → \`keel-dotnet-code\` con **exactamente** sus \`failures\` (con
+   \`evidence\`); \`test\` → \`keel-dotnet-tests\`; \`harness\` → \`keel-dotnet-tests\` exigiendo verificación amplia y
+   \`harnessPatches\`; \`design\` → detente y propón el cambio. Tras cualquier ciclo de fix se vuelve **siempre** a
+   \`bash infra/score-scenarios.sh\`. Mezcla de \`code\` con \`test\`/\`harness\` → **en serie**, primero \`code\`
+   (comparten la base de prueba). Cupo de ciclos \`blocking: scoped\`, por número de flujos \`FL-*\`: hasta 10, 2 (tope
+   4); de 11 a 20, 3 (tope 5); más de 20, 4 (tope 6). No lo consumen los \`systemic\` ni los \`test\`/\`harness\`.
+   Alcanzado el tope, reporta la matriz y detente.
+4. **Fase 3 — calidad${baseline ? ' + baseline de migraciones' : ''}.** Solo con **todos** los escenarios OK: lanza
+   \`keel-dotnet-quality\` y **espera sin tocar el proyecto**. Hace el pase no-conductual, comprueba la no-regresión
+   (la suite al 100%) y \`dotnet test\`${
+     baseline
+       ? `, y produce el **baseline de migraciones**: revisa el DDL del modelo (\`infra/export-schema.sh\`), crea la migración (\`${baselineCommand(model)}\`) y la **verifica en vivo** (\`infra/verify-baseline.sh\`). Exige \`baseline: OK\` y \`baselineTested: OK\`: sin ellos el servicio pasa sus escenarios (corren en \`local\`) pero no arranca en \`develop\` ni en \`production\`. \`KO\` → relánzalo una vez con su error exacto`
+       : ''
+   }. \`status: KO\` o \`scenarios: KO\` → revierte o reporta; nunca hagas commit con algo en rojo. Al terminar, baja la
+   infraestructura: \`bash infra/down.sh\`.
+5. **Guía de despliegue.** Con todo en verde y **antes** del commit, añade al \`README.md\` una sección
+   \`## Despliegue en producción\` con los pasos y la tabla de parámetros obligatorios: todo \`\${VAR}\` sin default de
+   \`config/parameters/production/*.yaml\`${persistence ? ', y que el esquema lo crean las migraciones de EF Core al arrancar' : ''}.
+   No inventes parámetros.
+6. **Informe de generación.** Escribe \`INFORME-GENERACION.md\`, que **abre con la matriz final de
+   \`infra/score-scenarios.sh\` y su código de salida, literales**, y sigue con lo que es del generador
+   (\`harnessPatches\`, fixes de \`infra/\` o de la solución, \`culprit: harness\`, \`probes[].verdict: FALSO-NEGATIVO\`),
+   cada entrada diciendo de quién es. Y \`design-gaps.yaml\` con **cada** \`designGap\` (schema
+   \`design-gaps.schema.json\` de keel-core, con el \`service\` y la \`version\` de \`specs/service.keel.yaml\` y
+   \`generator: keel-dotnet\`): \`keel-dotnet check\` lo imprime desde el workspace. Sin huecos, no se escribe; sin nada
+   que reportar, dilo en una línea.
+7. **Cerrar.** Commit (\`Generado desde specs/${service.name} v${service.version}\`; los \`packages.lock.json\` incluidos) y
+   resumen: matriz, estado de cada agente, ajustes de calidad y huecos del diseño.
 
-Si algo de eso falla en un proyecto recién generado, es un defecto de keel-dotnet: repórtalo con la salida.
+## Conocimiento local
+
+- \`{{keel:context}}\` — contexto del repo (diseño, stack, verificación).
+- \`{{keel:docs}}/orchestration.md\` — el pipeline: fases, códigos, agentes, handoffs y ciclos.
+- \`{{keel:docs}}/architecture.md\` y \`{{keel:docs}}/constitution.md\` — la arquitectura y sus reglas inviolables.
+- \`{{keel:docs}}/conventions/\` — mapeo diseño → código (\`mapping.md\`, estricto), estructura y comandos
+  (\`project-layout.md\`), el dominio (\`domain-modeling.md\`), la auditoría de cada handler (\`flow-fidelity.md\`), las
+  pruebas de los escenarios (\`integration-tests.md\`) y la infraestructura (\`infra-validation.md\`).${techSkillsBullet}
+- Un flujo suelto, con la solución compilada: \`${flowsCommand(model, '<Flujo>Flow')}\`; el humo,
+  \`${flowsCommand(model, HARNESS_SMOKE_CLASS)}\`.
+
+**Un solo actor sobre el proyecto, en todo momento.** Mientras un subagente esté vivo, tú no ejecutas nada sobre
+este directorio: el script sobrescribe la evidencia que el árbitro lee, el reset vacía la base que otro está
+usando, y en Windows el servidor de los flujos retiene el ejecutable del Api. Y el trabajo de un agente **no lo
+haces tú aunque sepas hacerlo**: sus restricciones —el de pruebas sin leer \`src/\`, el árbitro sin corregir, el de
+calidad sin cambiar comportamiento— son del agente. Tu trabajo propio es la fase 2a y los pasos 5 a 7.
+
+En corto, de la constitución: el diseño es la única fuente de verdad funcional, los \`code\` de error se copian
+exactos, los importes son \`decimal\` (nunca \`double\`) con escala y redondeo explícitos, ningún paquete con licencia
+comercial, y ante ambigüedad, diseño > conventions > criterio. No des la generación por terminada con la
+compilación en rojo o un escenario fallando.
 `;
 }

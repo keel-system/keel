@@ -26,7 +26,7 @@ import { configNamespace } from './config.js';
 import { usesRelational, dbContextClass, persistedEntities } from './persistence.js';
 import { repositoryRoots, portClass, adapterClass, repositoriesNamespace } from './repositories.js';
 
-/** El historial de migraciones con nombre propio: infra/reset-db.sh lo respeta por nombre (incremento 7). */
+/** El historial de migraciones con nombre propio: infra/reset-db.sh lo respeta por nombre. */
 export const MIGRATIONS_TABLE = 'ef_migrations_history';
 
 export function generate(model) {

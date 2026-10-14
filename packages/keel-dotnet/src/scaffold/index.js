@@ -37,13 +37,14 @@ import * as apiTests from './api-tests.js';
 import * as tests from './tests.js';
 import * as infra from './infra.js';
 import * as integrationTests from './integration-tests.js';
+import * as schemaBaseline from './schema-baseline.js';
 import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara. El primero es el contrato formal
 // de la API, derivado del modelo neutral (el mismo en los tres generadores), salvo que el workspace traiga el de
 // /keel-docs: keel-core/gen/openapi.js.
-const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, wire, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, dtos, mappers, services, mediator, persistence, persistenceRuntime, repositories, restSupport, endpoints, api, tests, apiTests, infra, integrationTests, readme, generatorDocs];
+const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, wire, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, dtos, mappers, services, mediator, persistence, persistenceRuntime, repositories, restSupport, endpoints, api, tests, apiTests, infra, integrationTests, schemaBaseline, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus

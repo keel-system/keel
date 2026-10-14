@@ -276,6 +276,41 @@ public sealed class ProbeOrderFlow : FlowTest
   const run3 = bash(projectDir, 'infra/score-scenarios.sh');
   step('score: todo en verde sale con 0', run3.status === 0 && /RESULTADO: OK/.test(run3.output), `código ${run3.status}: ${run3.output.slice(-600)}`);
 
+  // El baseline de migraciones, como lo produce el pase de calidad: el DDL del modelo para revisarlo, la migración con
+  // dotnet ef, y la verificación en vivo sobre bases aparte (la de los flujos no se toca).
+  const exported = bash(projectDir, 'infra/export-schema.sh');
+  const modelSql = path.join(projectDir, 'build', 'schema', 'model.sql');
+  step(
+    'export-schema.sh escribe el DDL del modelo sin tocar ninguna base',
+    exported.status === 0 && fs.existsSync(modelSql) && /CREATE TABLE products/i.test(fs.readFileSync(modelSql, 'utf8')),
+    exported.status === 0 ? '' : exported.output.slice(-1200)
+  );
+  const empty = bash(projectDir, 'infra/verify-baseline.sh');
+  step('verify-baseline.sh sin migraciones sale con 1 y dice cómo crearlas', empty.status === 1 && /dotnet ef migrations add Baseline/.test(empty.output), `código ${empty.status}`);
+  const added = dotnet(projectDir, ['ef', 'migrations', 'add', 'Baseline', '--project', 'src/ProductCatalog.Infrastructure', '--output-dir', 'Persistence/Migrations']);
+  const verified = added.ok ? bash(projectDir, 'infra/verify-baseline.sh') : { status: null, output: added.output };
+  step('con el baseline creado por dotnet ef, verify-baseline.sh sale baseline: OK', verified.status === 0 && /baseline: OK/.test(verified.output), verified.output.slice(-1200));
+  // Falsado: una migración editada a mano (sin un índice) no pasa, aunque el snapshot del modelo no haya cambiado.
+  const migrationsDir = path.join(projectDir, 'src', 'ProductCatalog.Infrastructure', 'Persistence', 'Migrations');
+  const migration = fs.existsSync(migrationsDir) ? fs.readdirSync(migrationsDir).find((name) => /_Baseline\.cs$/.test(name)) : null;
+  if (migration) {
+    const file = path.join(migrationsDir, migration);
+    const original = fs.readFileSync(file, 'utf8');
+    // dotnet ef escribe la migración con CRLF en Windows: el salto se casa con \r? opcional.
+    const sabotaged = original.replace(/\r?\n\s*migrationBuilder\.CreateIndex\([\s\S]*?\);\r?\n/, '\n');
+    fs.writeFileSync(file, sabotaged);
+    const edited = bash(projectDir, 'infra/verify-baseline.sh');
+    step('verify-baseline.sh sale en rojo con una migración a la que le falta un índice', sabotaged !== original && edited.status === 1 && /baseline: KO/.test(edited.output) && /index/.test(edited.output), `código ${edited.status}`);
+    fs.writeFileSync(file, original);
+  }
+  // Y un cambio del mapeo sin migración tampoco.
+  const row = path.join(projectDir, 'src', 'ProductCatalog.Infrastructure', 'Persistence', 'Rows', 'ProductRow.cs');
+  const rowSource = fs.readFileSync(row, 'utf8');
+  fs.writeFileSync(row, rowSource.replace(/HasMaxLength\((\d+)\)/, (_m, n) => `HasMaxLength(${Number(n) + 1})`));
+  const pending = bash(projectDir, 'infra/verify-baseline.sh');
+  fs.writeFileSync(row, rowSource);
+  step('verify-baseline.sh sale en rojo con un cambio del mapeo sin migración', pending.status === 1 && /cambios que ninguna migración recoge/.test(pending.output), `código ${pending.status}`);
+
   // Una solución que no compila no se puntúa: sale con 2 diciéndolo.
   fs.writeFileSync(programCs, `${programSource}\nclass Roto { int n = "src a medio escribir"; }\n`);
   const run4 = bash(projectDir, 'infra/score-scenarios.sh');

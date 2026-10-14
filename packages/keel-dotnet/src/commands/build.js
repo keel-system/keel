@@ -117,7 +117,6 @@ export async function build(
   console.log(`
 Siguiente paso, dentro del proyecto:
   1. ${pc.cyan(`cd ${scaffold.outDir}`)}
-  2. ${pc.cyan('dotnet build && dotnet test')}
-
-${pc.dim(`El pipeline de agentes de /${SKILL} llega en el incremento 7 de PLAN-KEEL-DOTNET.md.`)}`);
+  2. ${pc.cyan('dotnet restore')}
+  3. ${pc.cyan(`/${SKILL}`)} ${pc.dim('(sin argumentos: completa el código y lo valida contra los escenarios FL-*)')}`);
 }
