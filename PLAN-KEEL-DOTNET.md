@@ -1092,6 +1092,47 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     Las dos líneas base del golden, regeneradas por ese cambio intencional.
 - **Inc. 10 — cerrado (2026-10-14).** La reconciliación, la compensación y `lastKnown` van al 11, como en keel-nest.
   Siguiente: el incremento 11 (clientes HTTP salientes, circuito propio, reconciliación, arnés WireMock).
+- **Inc. 11 — en curso (abierto el 2026-10-14).** Tramos como los de keel-nest (su § Inc. 11), con el 11a ya hecho en
+  keel-core (`outbound-resilience.js`, `reconciliation-stores.js`, `http-stub-probes.js`): 11b clientes HTTP, 11c
+  reconciliación y compensación (con las familias `compensation`, `reconciliation` y `outboundIdempotency` del gate), 11d
+  arnés del proveedor de prueba y skill `keel-dotnet-httpclient` (con `stub-check`), 11e la corrida sobre
+  `stock-reservation`, el sujeto de las gemelas (keel-nest 24/24, keel-spring 21/21, huella 10).
+  - **11b, clientes HTTP (hecho, 2026-10-14).**
+    - **Lo neutral que faltaba**: el `http-clients.yaml` de cada perfil salió de keel-nest a
+      `keel-core/gen/http-clients-config.js` (keel-nest lo importa; su línea base del golden, idéntica: 41 / 10 050) y
+      lo comparte keel-dotnet byte a byte. `test/http-clients-config.test.js` en keel-core.
+    - **Lo que emite** (`src/scaffold/http-clients.js`): el puerto `I<Cliente>Client` y los `<Llamada>Result` en
+      `Domain/Clients`; en `Infrastructure/Clients` el adaptador sobre **HttpClient** (un solo `HttpExchange` sobre un
+      `SocketsHttpHandler` sin redirecciones, 5 s de conexión y el timeout de lectura de keel-spring por intento), los DTOs
+      del cable (la respuesta se lee con `WireJson` y un campo obligatorio que falta o llega con otro tipo es un
+      `OutboundContractException`, que se propaga), el mapper de anticorrupción, la clave de idempotencia saliente
+      (`OutboundIdempotency` sobre `CommandSignature`, que ahora se emite también sin registro de entrada) y la
+      configuración (`HttpClientsSettings`, leída al arrancar; `AddOutboundClients` en `Program.cs`). **Sin Polly**: el
+      circuito es la máquina de estados de resilience4j escrita en C# (`CircuitBreaker`, con `Lock`), y el retry va por
+      fuera (`OutboundResilience.Run`), con la política de keel-core como literal en el adaptador. El fallback es un
+      filtro de excepción (`catch (ProviderFailureException failure) when (...Fallback.Contains(failure.Kind))`): lo que
+      no es un fallo del proveedor ni siquiera se captura. La cancelación de quien llama NO es un timeout. El handler que
+      activa otro servidor por HTTP recibe el puerto y la nota de la activación y del orden de los efectos (las de
+      keel-nest). Ningún paquete nuevo: HttpClient es de la biblioteca base.
+    - **Frontera**: `http-clients` y `dependencies` se aceptan; `reconciledBy` y `compensations` con aviso (11c); `needs`,
+      `oauth2-client-credentials` y un value object compuesto en el cuerpo o en la respuesta se rechazan nombrando el
+      incremento 13 (el compuesto en la URL, con el rechazo neutral de `outbound-params.js`).
+    - **Medido**: `test/http-clients.test.js` (8): `http-clients.yaml` igual al de keel-nest en los cuatro perfiles y
+      `HttpClientsSettings` leyendo solo claves que declara; la política y lo que atiende el fallback de cada llamada de
+      las tres fixtures con clientes, contra keel-core; la secuencia del circuito pasa por las cuatro transiciones y
+      distingue otro umbral. `npm test` 428/428. La prueba EMITIDA `OutboundClientsTests` ejecuta el circuito contra la
+      secuencia que build generó con `circuitBreakerReference` (600 pasos), la espera contra `retryWaitMs`, la
+      clasificación de cada desenlace del proveedor con un `HttpMessageHandler` falso (2xx, sin cuerpo, 4xx, 5xx, 3xx,
+      600, sin conexión, timeout, cancelación de quien llama, cuerpo que no es JSON), la lectura del contrato y CADA
+      llamada resiliente del diseño contra un proveedor falso (intentos y MISMA clave sin conexión, el contrato roto que
+      no cae al fallback, el circuito que se abre y la llamada siguiente que ni sale): 24, 43 y 34 pruebas en
+      `stock-reservation`, `catalog-extended` y `asset-vault`; `cs-check` **15/15** (2 231 pruebas, 101 más). **Falsado** con seis sabotajes que conservan la forma
+      (`cs-check --fixtures --sabotage=<id>`: `circuit-strict`, `circuit-4xx`, `retry-all`, `idempotency-random`,
+      `fallback-any`, `cancel-as-timeout`): cada uno lo caza su prueba y solo la suya.
+    - **Lo que destapó** en `cs-check`: su filtro de errores no veía los de los analizadores de xUnit (`xUnit1051`
+      empieza en minúscula), así que la solución salió roja sin decir por qué; y `--keep` con `--fixtures` dejaba la
+      copia dentro de la raíz temporal que se borra al salir. Los dos, arreglados (el filtro también en `db-check`).
+    - **Sin medir**: contra un WireMock real (11d, `stub-check`) y en corrida (11e).
 
 ## 5. Riesgos conocidos
 

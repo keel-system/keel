@@ -9,13 +9,52 @@ import { checkSupportedFeatures, checkSupportedStack } from '../src/lib/supporte
 const manifestWith = (...layers) => ({ layers: Object.fromEntries(layers.map((layer) => [layer, `${layer}.keel.yaml`])) });
 const layersWith = (...layers) => Object.fromEntries(layers.map((layer) => [layer, {}]));
 
-for (const layer of ['http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
+for (const layer of ['storage', 'mail', 'payments']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);
     assert.match(errors[0], new RegExp(`capa ${layer}: .*incremento \\d+`));
   });
 }
+
+test('los clientes salientes y las activaciones se generan (incremento 11); needs, oauth2 y el compuesto en una llamada se rechazan con su incremento', () => {
+  const layers = ['domain', 'use-cases', 'http-clients', 'dependencies'];
+  const call = { method: 'GET', path: '/p/{sku}', request: { pathParams: { sku: { type: 'string', required: true } } }, response: { fields: { price: { type: 'decimal' } } } };
+  const base = {
+    ...layersWith('domain', 'use-cases'),
+    domain: { types: { Money: { fields: { amount: { type: 'decimal' } } } } },
+    'http-clients': { clients: { pricing: { calls: { getPrice: call } } } },
+    dependencies: { dependencies: { pricing: { activations: { quote: { triggeredBy: ['x'], via: { client: 'pricing', call: 'getPrice' } } } } } }
+  };
+  assert.deepEqual(checkSupportedFeatures(manifestWith(...layers), base), { errors: [], warnings: [] });
+
+  const needs = structuredClone(base);
+  needs.dependencies.dependencies.pricing.needs = { price: { strategy: 'on-demand' } };
+  assert.match(checkSupportedFeatures(manifestWith(...layers), needs).errors.join('\n'), /dependencies\.pricing\.needs \(price\) .*incremento 13/);
+
+  const oauth = structuredClone(base);
+  oauth['http-clients'].clients.pricing.auth = { type: 'oauth2-client-credentials', tokenUrl: 'https://auth/token' };
+  assert.match(checkSupportedFeatures(manifestWith(...layers), oauth).errors.join('\n'), /pricing\.auth: oauth2-client-credentials .*incremento 13/);
+
+  const inBody = structuredClone(base);
+  inBody['http-clients'].clients.pricing.calls.getPrice.response.fields.price = { type: 'Money' };
+  assert.match(checkSupportedFeatures(manifestWith(...layers), inBody).errors.join('\n'), /getPrice: price es un value object compuesto en el cuerpo o en la respuesta .*incremento 13/);
+
+  // En la URL, el rechazo NEUTRAL: el mismo mensaje que keel-spring y keel-nest.
+  const inPath = structuredClone(base);
+  inPath['http-clients'].clients.pricing.calls.getPrice.request.pathParams.sku = { type: 'Money' };
+  assert.match(checkSupportedFeatures(manifestWith(...layers), inPath).errors.join('\n'), /getPrice: sku es un value object compuesto en la ruta, la query o una cabecera.*keel-dotnet/);
+
+  // La reconciliación y la compensación se aceptan, con el aviso del tramo que las trae.
+  const pending = structuredClone(base);
+  pending.dependencies.dependencies.pricing.activations.quote.reconciledBy = 'sweep';
+  pending.dependencies.dependencies.pricing.compensations = [{ onEvent: 'Rejected', undoes: 'quote' }];
+  const { errors, warnings } = checkSupportedFeatures(manifestWith(...layers), pending);
+  assert.deepEqual(errors, []);
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /quote\.reconciledBy: sweep .*tramo 11c/);
+  assert.match(warnings[1], /pricing\.compensations .*tramo 11c/);
+});
 
 test('la persistencia relacional se genera (incremento 6); la documental se rechaza con el incremento 12', () => {
   const relational = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), { ...layersWith('domain', 'use-cases'), persistence: { default: { model: 'relational' } } });

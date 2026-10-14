@@ -11,10 +11,10 @@
 //   · `warnings` dejan seguir — la capa se acepta pero lo que el diseño declara en ella todavía no se
 //     emite, y el aviso dice cuándo llega.
 
+import { compositeUrlParamErrors } from 'keel-core/gen/outbound-params';
+
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  'http-clients': 'incremento 11',
-  dependencies: 'incremento 11',
   storage: 'incremento 13',
   mail: 'incremento 13',
   payments: 'incremento 13'
@@ -77,6 +77,8 @@ export function checkSupportedFeatures(manifest, layers) {
   }
   errors.push(...callerIdentityErrors(layers));
   errors.push(...messagingErrors(declared, layers));
+  errors.push(...outboundErrors(layers));
+  warnings.push(...outboundWarnings(layers));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     if (feature.unless?.(layers)) continue;
@@ -170,3 +172,74 @@ function messagingErrors(declared, layers) {
   }
   return errors;
 }
+
+/** ¿Es `field` un value object compuesto del dominio (o una lista de ellos)? */
+function isComposite(layers, field) {
+  const types = layers?.domain?.types ?? {};
+  const type = field?.type ?? field?.items?.type;
+  return Boolean(type && types[type] && (types[type].fields || types[type].kind === 'composite'));
+}
+
+/**
+ * Lo que keel-dotnet todavía no sabe hacer con los clientes salientes y las dependencias (incremento 11 de
+ * PLAN-KEEL-DOTNET.md): los clientes y las activaciones se generan; esto, no.
+ *   · `needs` (el dato que se PIDE a otro servidor, bajo demanda o replicado, con su onUnavailable y su réplica): llega en
+ *     el incremento 13, como en keel-nest (13i y 13j);
+ *   · `auth: oauth2-client-credentials`: la concesión del token, también en el 13 (13j de keel-nest);
+ *   · un value object compuesto en una llamada: en la URL no tiene forma (el rechazo neutral, el mismo que en keel-spring y
+ *     keel-nest); en el cuerpo o en la respuesta sí, pero ninguna red de keel-dotnet lo ha medido todavía.
+ */
+function outboundErrors(layers) {
+  const errors = [...compositeUrlParamErrors(layers, 'keel-dotnet')];
+  for (const [dependency, definition] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
+    const needs = Object.keys(definition?.needs ?? {});
+    if (needs.length > 0) {
+      errors.push(
+        `dependencies.${dependency}.needs (${needs.join(', ')}) — keel-dotnet todavía no genera los datos que se piden a otro servidor ` +
+          '(llegan en el incremento 13 de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
+      );
+    }
+  }
+  for (const [client, definition] of Object.entries(layers?.['http-clients']?.clients ?? {})) {
+    if (definition?.auth?.type === 'oauth2-client-credentials') {
+      errors.push(
+        `http-clients.${client}.auth: oauth2-client-credentials — keel-dotnet todavía no genera la concesión del token ` +
+          '(llega en el incremento 13 de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
+      );
+    }
+    for (const [call, spec] of Object.entries(definition?.calls ?? {})) {
+      const fields = [...Object.entries(spec?.request?.body ?? {}), ...Object.entries(spec?.response?.fields ?? {})]
+        .filter(([, field]) => isComposite(layers, field))
+        .map(([name]) => name);
+      if (fields.length > 0) {
+        errors.push(
+          `http-clients.${client}.calls.${call}: ${fields.join(', ')} es un value object compuesto en el cuerpo o en la respuesta — keel-dotnet ` +
+            'todavía no lo genera (ninguna de sus redes lo ha medido; llega en el incremento 13 de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
+        );
+      }
+    }
+  }
+  return errors;
+}
+
+/** Lo que se acepta y aún no se emite entero: la reconciliación y la compensación llegan en el tramo 11c. */
+function outboundWarnings(layers) {
+  const warnings = [];
+  for (const [dependency, definition] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
+    for (const [name, activation] of Object.entries(definition?.activations ?? {})) {
+      if (activation?.reconciledBy) {
+        warnings.push(
+          `dependencies.${dependency}.activations.${name}.reconciledBy: ${activation.reconciledBy} — keel-dotnet genera el barrido sin su reclamo de ` +
+            'reconciliación ni su nota (llegan en el tramo 11c del incremento 11 de PLAN-KEEL-DOTNET.md).'
+        );
+      }
+    }
+    if ((definition?.compensations ?? []).length > 0) {
+      warnings.push(
+        `dependencies.${dependency}.compensations — keel-dotnet genera el handler de la compensación sin su nota (llega en el tramo 11c del incremento 11 de PLAN-KEEL-DOTNET.md).`
+      );
+    }
+  }
+  return warnings;
+}
+

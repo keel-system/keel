@@ -80,6 +80,11 @@ export const PLACES = {
   parameters: ['domain', 'Parameters'],
   // El registro de idempotencia de petición: el puerto, lo guardado y sus dos errores de conflicto.
   idempotency: ['domain', 'Idempotency'],
+  // Los clientes HTTP salientes (incremento 11b): el PUERTO de cada uno y sus resultados, en términos del dominio.
+  clients: ['domain', 'Clients'],
+  // Y su adaptador, los DTOs del cable del tercero, el mapper de anticorrupción y la resiliencia. No en Api/Rest, que es
+  // la plataforma de ENTRADA.
+  clientAdapters: ['infrastructure', 'Clients'],
   useCaseInfra: ['infrastructure', 'UseCase'],
   // La configuración por perfiles (ServiceConfiguration) y quien puebla los parámetros de despliegue.
   config: ['infrastructure', 'Config'],

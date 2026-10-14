@@ -26,6 +26,7 @@
 //   not-blank         la regla notBlank deja de rechazar el texto en blanco
 
 import fs from 'node:fs';
+import os from 'node:os';
 import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
@@ -70,6 +71,32 @@ const SABOTAGES = {
   'method-405': [`${REST_DIR}/ApiErrorMiddleware.cs`, 'context.Response.StatusCode == StatusCodes.Status405MethodNotAllowed', 'context.Response.StatusCode < 0'],
   'not-blank': [`src/ProductCatalog.Application/Support/InputValidation.cs`, '(value is string text && string.IsNullOrWhiteSpace(text))', '(value is string text && text.Length < 0)']
 };
+
+// Los sabotajes de lo que solo emiten las FIXTURES (el proyecto de referencia no lo tiene): se aplican en la solución de
+// todas ellas, y cae la prueba emitida de esa regla. Con `--fixtures` no se genera el proyecto de referencia.
+//   circuit-strict      el circuito abre con la tasa ESTRICTAMENTE mayor que el umbral (la de cockatiel, no la de resilience4j)
+//   circuit-4xx         el circuito cuenta como fallo todo lo que no sea el propio circuito abierto (un 4xx incluido)
+//   retry-all           el retry reintenta cualquier fallo del proveedor, no los de su política
+//   idempotency-random  la clave saliente cambia en cada intento
+//   fallback-any        el fallback atiende cualquier excepción, también un cuerpo que viola el contrato
+//   cancel-as-timeout   la cancelación de quien llama se toma por un timeout del proveedor
+const CLIENTS_DIR = 'stock-reservation/src/StockReservation.Infrastructure/Clients';
+const FIXTURE_SABOTAGES = {
+  'circuit-strict': [`${CLIENTS_DIR}/CircuitBreaker.cs`, '* 100.0 / outcomes.Count >= spec.FailureRateThreshold', '* 100.0 / outcomes.Count > spec.FailureRateThreshold'],
+  'circuit-4xx': [`${CLIENTS_DIR}/OutboundResilience.cs`, 'ProviderFailures.Recorded.Contains(failure.Kind)', 'failure.Kind != ProviderFailureKind.CircuitOpen'],
+  'retry-all': [`${CLIENTS_DIR}/OutboundResilience.cs`, 'retry.Retries.Contains(failure.Kind)', 'failure.Kind != ProviderFailureKind.CircuitOpen'],
+  'idempotency-random': [`${CLIENTS_DIR}/OutboundIdempotency.cs`, 'CommandSignature.Of(new object?[] { call, payload })', 'CommandSignature.Of(new object?[] { call, payload, Guid.NewGuid() })'],
+  'fallback-any': [
+    `${CLIENTS_DIR}/InventoryHttpAdapter.cs`,
+    'catch (ProviderFailureException failure) when (CancelStockFallback.Contains(failure.Kind))',
+    'catch (Exception error) when (error is not OperationCanceledException && (error as ProviderFailureException ?? new ProviderTransportException(error.Message)) is var failure)'
+  ],
+  'cancel-as-timeout': [`${CLIENTS_DIR}/HttpExchange.cs`, 'when (!cancellationToken.IsCancellationRequested)', 'when (client.Timeout > TimeSpan.Zero)']
+};
+if (sabotage && !SABOTAGES[sabotage] && !FIXTURE_SABOTAGES[sabotage]) {
+  console.error(`Sabotaje desconocido: ${sabotage}. Los hay del proyecto (${Object.keys(SABOTAGES).join(', ')}) y de las fixtures (${Object.keys(FIXTURE_SABOTAGES).join(', ')}).`);
+  process.exit(2);
+}
 
 // Las sondas que EJECUTAN lo emitido para todas las fixtures (scripts/probes/): C# de verdad, no plantillas.
 const PROBES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'probes');
@@ -204,7 +231,7 @@ if (!step('SDK de .NET disponible', sdk.ok && /^10\./.test(sdk.output.trim()), s
 if (process.argv.includes('--fixtures')) {
   const root = compileAllFixtures();
   if (keep) {
-    const kept = fs.mkdtempSync(path.join(path.dirname(root), 'keel-dotnet-kept-'));
+    const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-dotnet-kept-'));
     fs.cpSync(root, kept, { recursive: true });
     console.log(`Fixtures conservadas en ${kept}`);
   }
@@ -219,8 +246,8 @@ if (!step('build genera el proyecto', generated.exitCode === undefined && fs.exi
   process.exit(1);
 }
 
-if (sabotage) {
-  const [file, from, to] = SABOTAGES[sabotage] ?? [];
+if (sabotage && SABOTAGES[sabotage]) {
+  const [file, from, to] = SABOTAGES[sabotage];
   const target = file ? path.join(projectDir, file) : null;
   const content = target && fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
   if (!content.includes(from)) {
@@ -364,6 +391,17 @@ function compileAllFixtures() {
       if (file.path.endsWith('.csproj')) projects.push(`${name}/${file.path}`);
     }
   }
+  if (sabotage && FIXTURE_SABOTAGES[sabotage]) {
+    const [file, from, to] = FIXTURE_SABOTAGES[sabotage];
+    const target = path.join(root, file);
+    const text = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
+    if (!text.includes(from)) {
+      console.error(`El sabotaje '${sabotage}' no se aplica a lo emitido hoy (¿cambió el texto?).`);
+      process.exit(2);
+    }
+    fs.writeFileSync(target, text.replace(from, to));
+    console.log(`(sabotaje de las fixtures: ${sabotage})`);
+  }
   for (const probes of PROBES) fs.cpSync(path.join(PROBES_DIR, probes), path.join(root, probes), { recursive: true });
   // Las sondas encuentran los props comunes subiendo desde su carpeta: les vale los de cualquier fixture.
   for (const shared of ['Directory.Build.props', 'Directory.Packages.props']) fs.copyFileSync(path.join(root, fixtures[0], shared), path.join(root, shared));
@@ -378,7 +416,7 @@ function compileAllFixtures() {
   const detail = `${assemblies.length}/${projects.length} ensamblados`;
   const title = `la solución de las ${fixtures.length} fixtures y ${DERIVED.length} variante(s) compila sin warnings`;
   if (!step(title, built.ok && assemblies.length === projects.length, detail)) {
-    const problems = new Set(built.output.split('\n').filter((line) => /(error|warning) [A-Z]+\d+/.test(line)));
+    const problems = new Set(built.output.split('\n').filter((line) => /(error|warning) [A-Za-z]+\d+/.test(line)));
     console.error([...problems].slice(0, 60).join('\n'));
     return root;
   }
@@ -398,7 +436,7 @@ compileAllFixtures();
 const failed = results.filter((result) => !result.ok).length;
 if (keep) {
   // El directorio temporal se borra al salir; para conservarlo se copia fuera.
-  const kept = fs.mkdtempSync(path.join(path.dirname(workspace), 'keel-dotnet-kept-'));
+  const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-dotnet-kept-'));
   fs.cpSync(projectDir, kept, { recursive: true });
   console.log(`Proyecto conservado en ${kept}`);
 }

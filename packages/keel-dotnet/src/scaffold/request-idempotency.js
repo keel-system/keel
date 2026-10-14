@@ -20,6 +20,7 @@ import { IDEMPOTENCY_RECORD, IDEMPOTENCY_HEADER, registryOperations, usesRequest
 import { csFile, csString, located, namespaceOf, solution } from './render.js';
 import { usesRelational, rowsNamespace, persistenceNamespace } from './persistence.js';
 import { usesApi } from './rest-support.js';
+import { usesOutboundIdempotency } from './http-clients.js';
 
 /** La fila del registro y su configuración: las lee el DbContext y la paridad del esquema. */
 export const IDEMPOTENCY_ROW = 'IdempotencyRecordRow';
@@ -46,7 +47,8 @@ export function idempotencyNamespace(model) {
 }
 
 export function generate(model) {
-  if (!usesRequestIdempotency(model)) return [];
+  // La firma canónica la usa también la clave de idempotencia SALIENTE (http-clients): sin registro, solo ella.
+  if (!usesRequestIdempotency(model)) return usesOutboundIdempotency(model) ? [commandSignature(model)] : [];
   const files = [storePort(model), conflictException(model), reuseException(model), commandSignature(model), recordRow(model), storeAdapter(model)];
   // El contexto es el camino de la CABECERA: solo con `client-key`. Con `payload-hash` o `payload-field` la clave sale
   // del propio comando y no hay nada que transportar.

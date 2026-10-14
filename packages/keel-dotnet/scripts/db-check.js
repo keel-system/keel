@@ -148,7 +148,7 @@ try {
 
   const built = dotnet(root, ['build', 'DbCheck.slnx', '-c', 'Release']);
   if (!step(`los ${subjects.length} sujetos y sus sondas compilan`, built.ok)) {
-    console.error([...new Set(built.output.split('\n').filter((line) => /(error|warning) [A-Z]+\d+/.test(line)))].slice(0, 60).join('\n'));
+    console.error([...new Set(built.output.split('\n').filter((line) => /(error|warning) [A-Za-z]+\d+/.test(line)))].slice(0, 60).join('\n'));
     throw new Abort(1);
   }
 

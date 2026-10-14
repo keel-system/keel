@@ -132,7 +132,8 @@ test('el despacho entre casos de uso: el handler que despacha recibe ICommandDis
   assert.ok(dispatching.length > 0);
   for (const operation of dispatching) {
     const handler = mailer.files.find((f) => f.path.endsWith(`/UseCases/${operation.handlerClass}.cs`)).content;
-    assert.match(handler, /\(ICommandDispatcher commandDispatcher\)/);
+    // Puede recibir además el puerto de un cliente saliente (una activación de la misma operación).
+    assert.match(handler, /\(ICommandDispatcher commandDispatcher[,)]/);
     assert.match(handler, /Despacha \(use-cases\.dispatches\)/);
   }
   assert.ok(mailer.files.some((f) => f.path.endsWith('/Ports/ICommandDispatcher.cs')));

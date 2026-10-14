@@ -18,6 +18,7 @@ import { messagingNamespace, usesMessaging } from './messaging.js';
 import { schedulingNamespace, usesScheduling } from './scheduling.js';
 import { usesServiceParameters } from './service-parameters.js';
 import { usesSweepClaims } from './claim.js';
+import { clientAdaptersNamespace, usesHttpClients } from './http-clients.js';
 
 // Los barridos del perfil, antes de la persistencia: AddPersistence solo pone los defaults si nadie registró estos.
 const SWEEPS = `
@@ -40,7 +41,8 @@ function programCs(model) {
     ...(usesApi(model) ? [restNamespace(model)] : []),
     ...(usesHttpSecurity(model) ? [securityNamespace(model)] : []),
     ...(usesMessaging(model) ? [messagingNamespace(model)] : []),
-    ...(usesScheduling(model) ? [schedulingNamespace(model)] : [])
+    ...(usesScheduling(model) ? [schedulingNamespace(model)] : []),
+    ...(usesHttpClients(model) ? [clientAdaptersNamespace(model)] : [])
   ];
   const registration = useCases
     ? `
@@ -72,6 +74,12 @@ builder.Services.AddMessaging(configuration);`
     ? `
 // Los parámetros de despliegue del diseño (service.parameters), validados al arrancar.
 builder.Services.AddServiceParameters(configuration);`
+    : '';
+  // Los clientes salientes del diseño, antes de los casos de uso que los inyectan (la URL obligatoria no deja arrancar sin ella).
+  const clients = usesHttpClients(model)
+    ? `
+// Los clientes HTTP salientes del diseño (http-clients): la configuración del perfil, los adaptadores y su resiliencia.
+builder.Services.AddOutboundClients(HttpClientsSettings.From(configuration));`
     : '';
   // El reloj va el último: despacha por los casos de uso y purga con la persistencia.
   const clock = usesScheduling(model)
@@ -106,7 +114,7 @@ builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);
 // El contrato del cable: todo cuerpo JSON que la API lee o escribe pasa por estas opciones (WireJson).
-builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${database}${security}${messaging}${clock}
+builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${clients}${database}${security}${messaging}${clock}
 
 var app = builder.Build();
 app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);${schema}${pipeline}

@@ -21,9 +21,9 @@ import { CORRELATION_TS, usesApi, usesCorrelation } from './rest-support.js';
 import { VALUE_READERS_TS, valueReaders } from './controllers.js';
 import { usesSubscriptionMessages } from './messaging.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
-import { envValue } from 'keel-core/gen/profile-values';
+import { httpClientsYaml } from 'keel-core/gen/http-clients-config';
 import { hasCallFallback } from 'keel-core/gen/outbound-resilience';
-import { LOCAL_STUB_BASE_URL, UNREACHABLE_BASE_URL } from 'keel-core/gen/infra-catalog';
+import { LOCAL_STUB_BASE_URL } from 'keel-core/gen/infra-catalog';
 
 const CLIENTS_DIR = 'infrastructure/clients';
 export const PROVIDER_FAILURES_TS = `src/${CLIENTS_DIR}/provider-failures.ts`;
@@ -72,9 +72,10 @@ function lastKnownKey(call) {
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
-// La URL del proveedor de prueba en `local` (el WireMock de infra/) y la de `test`, que no responde: keel-core.
+// La URL del proveedor de prueba en `local` (el WireMock de infra/): keel-core.
 export { LOCAL_STUB_BASE_URL };
-const TEST_BASE_URL = UNREACHABLE_BASE_URL;
+// El `http-clients.yaml` de cada perfil es neutral (keel-core/gen/http-clients-config.js): el mismo que el de keel-dotnet.
+export { httpClientsYaml };
 
 export function usesHttpClients(model) {
   return Boolean(model.layersPresent?.httpClients && (model.httpClients ?? []).length > 0);
@@ -584,19 +585,6 @@ ${todoThrow}`;
 ${todoThrow}`;
 }
 
-/**
- * El endpoint de token en `local`: el PATH del diseño sobre el proveedor de prueba (el WireMock de infra/), como
- * keel-spring. Solo en local: fuera, el valor del diseño es el default (develop) o la variable obligatoria.
- */
-function tokenUri(client, profile) {
-  if (profile !== 'local') return client.auth.tokenUrl;
-  try {
-    return LOCAL_STUB_BASE_URL + new URL(client.auth.tokenUrl).pathname;
-  } catch {
-    return client.auth.tokenUrl;
-  }
-}
-
 /** El fallback cuando la política la declara un `need` (`onUnavailable`): el mismo de keel-spring. */
 function needFallbackBody(model, call, needs, trace, prose, todoThrow, imports) {
   const { dependency, need } = needs[0];
@@ -642,39 +630,6 @@ ${todoThrow}`;
 }
 
 // ─── Configuración ───────────────────────────────────────────────────────────
-
-/** El mismo `http-clients.yaml` que keel-spring, sin el bloque de resilience4j (aquí va en código). */
-export function httpClientsYaml(model, profile) {
-  const lines = ['http-clients:'];
-  for (const client of model.httpClients) {
-    lines.push(`  ${client.id}:`);
-    if (profile === 'local') {
-      lines.push('    # Proveedor de prueba (WireMock de infra/docker-compose.yaml).', '    # Los mappings los programa cada test; nada que configurar aquí.');
-    }
-    const baseUrl = profile === 'local' ? LOCAL_STUB_BASE_URL : profile === 'test' ? TEST_BASE_URL : `\${${client.envPrefix}_BASE_URL}`;
-    lines.push(`    base-url: ${baseUrl}`);
-    if (client.auth?.type === 'api-key') {
-      lines.push('    auth:', `      api-key: ${envValue(profile, `${client.envPrefix}_API_KEY`, 'changeme')}`);
-    } else if (client.auth?.type === 'bearer-static') {
-      lines.push('    auth:', `      token: ${envValue(profile, `${client.envPrefix}_TOKEN`, 'changeme')}`);
-    } else if (client.auth?.type === 'basic') {
-      lines.push(
-        '    auth:',
-        `      username: ${envValue(profile, `${client.envPrefix}_USERNAME`, 'changeme')}`,
-        `      password: ${envValue(profile, `${client.envPrefix}_PASSWORD`, 'changeme')}`
-      );
-    } else if (client.auth?.type === 'oauth2-client-credentials') {
-      // Las MISMAS variables que la registration de keel-spring (<CLIENTE>_CLIENT_ID, _CLIENT_SECRET, _TOKEN_URL).
-      lines.push(
-        '    auth:',
-        `      client-id: ${profile === 'test' ? 'test' : envValue(profile, `${client.envPrefix}_CLIENT_ID`, 'changeme')}`,
-        `      client-secret: ${profile === 'test' ? 'test' : envValue(profile, `${client.envPrefix}_CLIENT_SECRET`, 'changeme')}`,
-        `      token-uri: ${profile === 'test' ? 'http://localhost/token' : envValue(profile, `${client.envPrefix}_TOKEN_URL`, tokenUri(client, profile))}`
-      );
-    }
-  }
-  return `${lines.join('\n')}\n`;
-}
 
 function settingsTs(model) {
   const entries = model.httpClients.map((client) => {

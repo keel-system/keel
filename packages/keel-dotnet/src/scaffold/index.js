@@ -31,6 +31,7 @@ import * as persistenceRuntime from './persistence-runtime.js';
 import * as repositories from './repositories.js';
 import * as claim from './claim.js';
 import * as requestIdempotency from './request-idempotency.js';
+import * as httpClients from './http-clients.js';
 import * as messaging from './messaging.js';
 import * as messagingStores from './messaging-stores.js';
 import * as rabbitmq from './rabbitmq.js';
@@ -59,7 +60,7 @@ import * as generatorDocs from './generator-docs.js';
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara. El primero es el contrato formal
 // de la API, derivado del modelo neutral (el mismo en los tres generadores), salvo que el workspace traiga el de
 // /keel-docs: keel-core/gen/openapi.js.
-const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, wire, serviceParameters, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, idempotencyCheck, dtos, mappers, services, mediator, persistence, persistenceRuntime, repositories, claim, requestIdempotency, messaging, messagingStores, rabbitmq, kafka, snssqs, messagingTests, purge, scheduling, schedulingTests, security, restSupport, endpoints, api, tests, testCredential, apiTests, infra, integrationTests, schemaBaseline, readme, generatorDocs];
+const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, wire, serviceParameters, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, idempotencyCheck, dtos, mappers, services, mediator, persistence, persistenceRuntime, repositories, claim, requestIdempotency, httpClients, messaging, messagingStores, rabbitmq, kafka, snssqs, messagingTests, purge, scheduling, schedulingTests, security, restSupport, endpoints, api, tests, testCredential, apiTests, infra, integrationTests, schemaBaseline, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus

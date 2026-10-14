@@ -41,10 +41,10 @@ test('un diseño no listo sale en rojo aunque sea generable, y dice por qué', a
 
 test('una capa fuera de la frontera sale en rojo sin construir nada', async () => {
   const workspace = makeWorkspace();
-  mountDesign(workspace, 'stock-reservation');
+  mountDesign(workspace, 'payment-checkout');
   const before = treeDigest(workspace);
-  const { exitCode, output } = await runCommand(workspace, check, 'specs/stock-reservation', {});
+  const { exitCode, output } = await runCommand(workspace, check, 'specs/payment-checkout', {});
   assert.equal(exitCode, 1);
-  assert.match(output, /capa http-clients/);
+  assert.match(output, /capa payments/);
   assert.equal(treeDigest(workspace), before);
 });

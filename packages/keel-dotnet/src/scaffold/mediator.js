@@ -23,6 +23,7 @@ import { mapperClasses } from './mappers.js';
 import { contractOf, messageNamespace } from './services.js';
 import { securityNamespace, usesCallerScope } from './security.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from './service-parameters.js';
+import { clientAdaptersNamespace, usesHttpClients } from './http-clients.js';
 
 /** ¿Hay casos de uso que despachar? Sin operaciones no se genera nada de esto. */
 export function usesMediator(model) {
@@ -338,6 +339,11 @@ function useCasesTest(model) {
   const parameters = usesServiceParameters(model);
   if (parameters) usings.push(parametersNamespace(model));
   const parametersLine = parameters ? `\n        services.AddSingleton(${parametersTestInstance(model)});` : '';
+  // Con clientes salientes, los handlers que activan otro servidor reciben su puerto: el registro real, con un proveedor
+  // que no responde (ninguna prueba de build sale a la red).
+  const clients = usesHttpClients(model);
+  if (clients) usings.push(clientAdaptersNamespace(model));
+  const clientsLine = clients ? '\n        services.AddOutboundClients(HttpClientsSettings.Unreachable);' : '';
   const passThrough = persistence
     ? `
             // Sin base: la transacción de este despacho es el paso directo, no la de EF.
@@ -349,7 +355,7 @@ function useCasesTest(model) {
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddUseCases();${persistenceLine}${bridgeLine}${scopeLine}${parametersLine}
+        services.AddUseCases();${persistenceLine}${bridgeLine}${scopeLine}${parametersLine}${clientsLine}
         extra?.Invoke(services);
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
