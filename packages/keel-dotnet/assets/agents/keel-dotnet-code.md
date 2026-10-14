@@ -40,10 +40,10 @@ Eres el **agente de código** de keel-dotnet. Recibes en el prompt la ruta raíz
      de `Domain/Repository/` **y** a su adaptador de `Infrastructure/Persistence/Repositories/`, con el
      `DbContext` del adaptador (`keel-dotnet-database/references/repository-adapters.md`). Nunca el `DbContext`
      ni una fila en un handler.
-   - Una operación con `schedule` ya tiene su disparador y las tablas del generador sus purgas (`mapping.md` § Las
-     operaciones por reloj): el handler hace el trabajo, no el disparo. Lo que build acepta con un **aviso** y no
-     genera (el reclamo del lote de un barrido) **no se escribe a mano**: `mapping.md` § Lo que build avisa y no
-     genera. Si un escenario lo exige, va a `blockers`.
+   - Una operación con `schedule` ya tiene su disparador, las tablas del generador sus purgas y un barrido su reclamo
+     en el puerto (`mapping.md` § Las operaciones por reloj y § El reclamo de un barrido): el handler hace el trabajo,
+     no el disparo ni el reparto entre réplicas. Los parámetros de despliegue llegan inyectados (`mapping.md` § Los
+     parámetros de despliegue).
 4. Verifica con:
    - `dotnet build` en verde, **sin warnings** (son errores: `TreatWarningsAsErrors`). La frontera hexagonal es la
      de las referencias entre proyectos: un error de tipo no encontrado en Domain o Application porque falta una

@@ -54,13 +54,13 @@ test('dominio, casos de uso y API se generan sin aviso (la API llegó en el incr
   assert.deepEqual(warnings, []);
 });
 
-test('una operación con idempotency, un barrido con transiciones o cache se acepta avisando del incremento de su mecanismo', () => {
+test('una operación con idempotency sin persistencia o con cache se acepta avisando del incremento de su mecanismo; el reloj ya no avisa', () => {
   const layers = layersWith('domain', 'use-cases');
   layers['use-cases'] = {
     operations: {
       createThing: { idempotency: { keySource: 'client-key' } },
+      // El reloj (10b) y el reclamo de su lote (10c) ya se generan: ni el barrido ni el cierre avisan.
       sweepThings: { schedule: { cron: '* * * * *' }, transitions: [{ entity: 'Thing', from: ['new'], to: 'taken' }] },
-      // Un cierre por reloj sin transiciones ya se genera entero (incremento 10b): no avisa.
       closeDay: { schedule: { cron: '0 3 * * *' } },
       getThing: { cache: { ttlSeconds: 60 } },
       plain: {}
@@ -68,10 +68,9 @@ test('una operación con idempotency, un barrido con transiciones o cache se ace
   };
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases'), layers);
   assert.deepEqual(errors, []);
-  assert.equal(warnings.length, 3);
+  assert.equal(warnings.length, 2);
   assert.match(warnings[0], /createThing declara idempotency .*incremento 10/);
-  assert.match(warnings[1], /sweepThings declara un barrido con transiciones .*incremento 10c/);
-  assert.match(warnings[2], /getThing declara cache .*incremento 13/);
+  assert.match(warnings[1], /getThing declara cache .*incremento 13/);
 });
 
 test('la telemetría se rechaza en vez de estamparse sin efecto', () => {

@@ -24,6 +24,10 @@ import { registryOperations } from 'keel-core/gen/request-idempotency';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
+import { claimOrderField, claimsForEntity, missingClockCountSql, rescueProbes, screamingSnake, snakeCase, stallSql, sweepClaims, sweepConfig } from 'keel-core/gen';
+import { DATABASES } from 'keel-core/gen/infra-catalog';
+import { usesSweepClaims } from '../../src/scaffold/claim.js';
+import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { sampleFor } from '../../../keel-nest/scripts/lib/samples.js';
 import { domainMembers } from '../../src/scaffold/entities.js';
@@ -212,7 +216,9 @@ function probesCs(model, namespace) {
     const refsBefore = new Set(ctx.refs);
     ctx.refs.clear();
     const states = [];
-    for (let n = 1; n <= SAMPLES; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
+    // Las muestras comunes y, por encima, las de los reclamos de esta raíz: cada sonda de reclamo guarda las suyas.
+    const total = SAMPLES + claimSampleCount(model, root);
+    for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
     const params = refs.map((ref) => `Guid ${csLocal(`${ref}Id`)}`).join(', ');
@@ -363,6 +369,7 @@ function probesCs(model, namespace) {
             Assert.Null(await InScope(other => other.GetRequiredService<${port}>().FindById(samples[0].${id}, Cancel)));
         });`);
     }
+    tests.push(...claimProbes(model, root, { state, first: SAMPLES + 1, port, context: dbContext(model) }));
     blocks.push(`    // ─── ${root.name} ───\n\n${tests.join('\n\n')}`);
   }
 
@@ -417,6 +424,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     ...(usesDotnetOutbox(model) ? [namespaceOf(model, 'outbox'), namespaceOf(model, 'rows')] : []),
     ...(usesProcessedEvents(model) ? [namespaceOf(model, 'messageIdempotency')] : []),
     ...(purges.length > 0 ? [purgeNamespace(model), namespaceOf(model, 'rows'), 'Microsoft.Extensions.Logging.Abstractions'] : []),
+    ...(usesServiceParameters(model) ? [parametersNamespace(model)] : []),
     ...ctx.usings
   ];
   const body = `/// <summary>La base del sujeto: una propia en el motor, con el esquema que crea EF desde el modelo.</summary>
@@ -452,7 +460,10 @@ public sealed class PersistenceFixture : IAsyncLifetime
         }
         var target = new NpgsqlConnectionStringBuilder(admin) { Database = Database };
         var services = new ServiceCollection();
-        services.AddLogging();
+        services.AddLogging();${usesSweepClaims(model) ? `
+        // Los barridos con lotes de DOS: con tres filas, dos pasadas. AddPersistence no pisa estos (TryAdd).
+        services.AddSingleton(${probeSweepSettings(model)});` : ''}${usesServiceParameters(model) ? `
+        services.AddSingleton(${parametersTestInstance(model)});` : ''}
         services.AddPersistence(new DatabaseSettings(true, target.ConnectionString, TimeSpan.FromSeconds(30), SchemaMode.Create));${usesBridge(model) ? `
         // Los adaptadores de las raíces que emiten eventos los entregan al puente (incremento 9).
         services.AddDomainEvents(MessagingSettings.Defaults);` : ''}${usesDotnetOutbox(model) ? `
@@ -847,6 +858,195 @@ ${[0, 1, 2, 3, 4].map((i) => `            db.Add(${seed.row(seed.expired(i))});`
   return `    // ─── Las purgas por lotes ───
 
 ${tests.join('\n\n')}`;
+}
+
+// ─── Los reclamos de barrido (incremento 10c) ─────────────────────────────────────────────────────
+
+/** Cuántas muestras propias necesitan los reclamos de una raíz: cada sonda guarda las suyas, que no se reutilizan. */
+function claimSampleCount(model, root) {
+  return claimsForEntity(model, root.name).reduce((total, claim) => total + (claim.stalled ? 5 : 9), 0);
+}
+
+/** Las SweepSettings de las sondas: lotes de DOS (con tres filas, dos pasadas) y los plazos de los defaults. */
+function probeSweepSettings(model) {
+  const config = sweepConfig(model);
+  const entries = (kind, value) =>
+    config.flatMap(({ key, entries: list }) => list.filter((entry) => entry.kind === kind).map((entry) => `[${csString(key)}] = ${value(entry)}`));
+  return `new SweepSettings(new Dictionary<string, int>(StringComparer.Ordinal) { ${entries('batch', () => 2).join(', ')} }, new Dictionary<string, int>(StringComparer.Ordinal) { ${entries('stalled', (entry) => entry.default).join(', ')} })`;
+}
+
+/**
+ * Las sondas de los reclamos de una raíz. `state(n)` es la muestra n (las de los reclamos van por encima de las
+ * comunes, a partir de `first`); `repo` y `port`, el puerto en el ámbito de la sonda.
+ */
+function claimProbes(model, root, { state, first, port, context }) {
+  const claims = claimsForEntity(model, root.name);
+  if (claims.length === 0) return [];
+  const enumDef = model.enums.find((candidate) => candidate.name === root.lifecycle.enumType);
+  const constant = (state) => screamingSnake(state);
+  const table = root.tableName;
+  const stateColumn = snakeCase(root.lifecycle.field);
+  const id = csMember(root.idField?.name ?? 'id');
+  const touched = new Set(claims.flatMap((claim) => [...claim.from, ...(claim.stalled ? [claim.stalled.state] : [])]));
+  // El aparcamiento: un estado que ningún reclamo mira. Ahí van las filas que otras sondas dejaron en un estado de partida.
+  const park = enumDef.values.map((value) => value.literal).find((literal) => !touched.has(literal));
+  let next = first;
+  const take = (count) => Array.from({ length: count }, () => next++);
+  const tests = [];
+  const parkSql = (states) => `UPDATE ${table} SET ${stateColumn} = '${constant(park)}' WHERE ${stateColumn} IN (${states.map((s) => `'${constant(s)}'`).join(', ')})`;
+  // Guarda las muestras y las deja en `stateName` con `column` = el instante de cada una (o sin tocar el reloj).
+  const seed = (samples, stateName, column, at) => `            var ids = new List<Guid>();
+            var instants = new List<DateTimeOffset>();
+${samples
+  .map(
+    (n, i) => `            var sample${i} = new ${root.name}(${state(n)});
+            await InScope(other => other.GetRequiredService<${port}>().Save(sample${i}, Cancel));
+            ids.Add(sample${i}.${id});
+            instants.Add(${at(i)});`
+  )
+  .join('\n')}
+            for (var i = 0; i < ids.Count; i++)
+            {
+                var row = ids[i];
+                var instant = instants[i];
+                await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlAsync($"UPDATE ${table} SET ${stateColumn} = '${constant(stateName)}'${column ? `, ${column} = {instant}` : ''} WHERE id = {row}", Cancel));
+            }`;
+  const stateOf = `            async Task<string> StateOf(Guid row) => await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<string>($"SELECT ${stateColumn}::text AS \\"Value\\" FROM ${table} WHERE id = {row}").SingleAsync(Cancel));`;
+  const claimVia = (method) => `InScope(other => other.GetRequiredService<${port}>().${method}(Cancel))`;
+
+  for (const claim of claims) {
+    const method = csMember(claim.method);
+    if (claim.stalled) {
+      const clock = snakeCase(claim.stalled.stampField);
+      const [stale1, stale2, fresh] = take(3);
+      tests.push(`    [Fact]
+    public async Task Rescate_${method}_SoloLoAbandonadoYLoArriendaSinCambiarElEstado() =>
+        await InScope(async services =>
+        {
+            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(${csString(parkSql([claim.stalled.state]))}, Cancel));
+            var now = DateTimeOffset.UtcNow;
+${seed([stale1, stale2, fresh], claim.stalled.state, clock, (i) => (i < 2 ? `now.AddDays(-10).AddSeconds(${i})` : 'now'))}
+${stateOf}
+            var rescued = await ${claimVia(method)};
+            // Solo los abandonados, el más atascado primero; el recién entrado en vuelo no se toca.
+            Assert.Equal(ids.Take(2), rescued.Select(r => r.${id}));
+            foreach (var row in ids)
+            {
+                Assert.Equal(${csString(constant(claim.stalled.state))}, await StateOf(row));
+            }
+            var clocks = await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<DateTimeOffset>($"SELECT ${clock} AS \\"Value\\" FROM ${table} WHERE id = {ids[2]}").SingleAsync(Cancel));
+            Assert.True(Math.Abs((clocks - now).TotalSeconds) < 1, "el fresco conserva su reloj");
+            var renewed = await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<DateTimeOffset>($"SELECT ${clock} AS \\"Value\\" FROM ${table} WHERE id = {ids[0]}").SingleAsync(Cancel));
+            Assert.True(renewed >= now.AddSeconds(-1), "el rescatado lleva el reloj renovado: está arrendado");
+            // Arrendado: la pasada siguiente no vuelve a llevárselo.
+            Assert.Empty(await ${claimVia(method)});
+        });`);
+      const rescue = rescueProbes(model).find((probe) => probe.operation === sweepClaims(model).find((entry) => entry.claim === claim)?.operation.name);
+      if (rescue) {
+        const entry = DATABASES[model.stack?.database ?? 'postgresql'];
+        const [stalled, put] = take(2);
+        const stall = stallSql({ ...rescue, clockSql: entry.staleTimestamp });
+        const fresh = stallSql({ ...rescue, clockSql: entry.nowTimestamp ?? 'CURRENT_TIMESTAMP' });
+        tests.push(`    [Fact]
+    public async Task Rescate_${method}_LasSentenciasDelArnesFabricanSuPrecondicion() =>
+        await InScope(async services =>
+        {
+            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(${csString(parkSql([claim.stalled.state]))}, Cancel));
+            var stalled = new ${root.name}(${state(stalled)});
+            var put = new ${root.name}(${state(put)});
+            await InScope(other => other.GetRequiredService<${port}>().Save(stalled, Cancel));
+            await InScope(other => other.GetRequiredService<${port}>().Save(put, Cancel));
+            // Las MISMAS sentencias que StallInFlight y PutInFlight del arnés (keel-core/gen/scheduling.js).
+            // La sentencia se monta como la monta el arnés (prefijo + literal del id): el id es un Guid, no texto de fuera.
+            var stallSql = ${csString(stall)} + ${csString(entry.uuidLiteral.prefix)} + stalled.${id} + ${csString(entry.uuidLiteral.suffix)};
+            var putSql = ${csString(fresh)} + ${csString(entry.uuidLiteral.prefix)} + put.${id} + ${csString(entry.uuidLiteral.suffix)};
+            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(stallSql, Cancel));
+            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(putSql, Cancel));
+            // Y la de InFlightWithoutClock: ninguna fila en vuelo sin reloj.
+            Assert.Equal(0L, await InScope(other => other.GetRequiredService<${context}>().Database.SqlQueryRaw<long>(${csString(`SELECT (${missingClockCountSql(rescue)}) AS "Value"`)}).SingleAsync(Cancel)));
+            Assert.Equal([stalled.${id}], (await ${claimVia(method)}).Select(r => r.${id}));
+        });`);
+      }
+      continue;
+    }
+    const order = snakeCase(claimOrderField(root, claim));
+    const [a, b, c] = take(3);
+    const stamp = claim.stamps
+      ? `
+            // El reloj que vigila el rescate, estampado en el MISMO UPDATE que el cambio de estado.
+            Assert.Equal(0L, await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<long>($"SELECT COUNT(*) AS \\"Value\\" FROM ${table} WHERE id = ANY({ids.Take(2).ToArray()}) AND ${snakeCase(claim.stamps.field)} IS NULL").SingleAsync(Cancel)));`
+      : '';
+    tests.push(`    [Fact]
+    public async Task Reclamo_${method}_SeLlevaElLoteEnOrdenAlDestinoYLaPasadaSiguienteSigue() =>
+        await InScope(async services =>
+        {
+            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(${csString(parkSql(claim.from))}, Cancel));
+            var origin = DateTimeOffset.UtcNow.AddHours(-1);
+${seed([a, b, c], claim.from[0], order === 'id' ? null : order, (i) => `origin.AddSeconds(${i})`)}
+${stateOf}
+            var first = await ${claimVia(method)};
+            Assert.Equal(ids.Take(2), first.Select(r => r.${id}));
+            Assert.Equal(${csString(constant(claim.to))}, await StateOf(ids[0]));
+            Assert.Equal(${csString(constant(claim.from[0]))}, await StateOf(ids[2]));${stamp}
+            Assert.Equal([ids[2]], (await ${claimVia(method)}).Select(r => r.${id}));
+            Assert.Empty(await ${claimVia(method)});
+        });`);
+    const race = take(4);
+    tests.push(`    [Fact]
+    public async Task Reclamo_${method}_DosReplicasALaVezSeRepartenElLoteSinRepetir() =>
+        await InScope(async services =>
+        {
+            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(${csString(parkSql(claim.from))}, Cancel));
+            var origin = DateTimeOffset.UtcNow.AddHours(-1);
+${seed(race, claim.from[0], order === 'id' ? null : order, (i) => `origin.AddSeconds(${i})`)}
+            var replicas = await Task.WhenAll(Task.Run(() => ${claimVia(method)}), Task.Run(() => ${claimVia(method)}));
+            var taken = replicas.SelectMany(batch => batch.Select(r => r.${id})).ToList();
+            Assert.Equal(taken.Count, taken.Distinct().Count());
+            Assert.Equal(ids.OrderBy(row => row), taken.OrderBy(row => row));
+        });`);
+    const [held, free] = take(2);
+    tests.push(`    [Fact]
+    public async Task Reclamo_${method}_ConOtraReplicaReteniendoUnaFilaSeLlevaLasDemasSinEsperar() =>
+        await InScope(async services =>
+        {
+            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(${csString(parkSql(claim.from))}, Cancel));
+            var origin = DateTimeOffset.UtcNow.AddHours(-1);
+${seed([held, free], claim.from[0], order === 'id' ? null : order, (i) => `origin.AddSeconds(${i})`)}
+            var locked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var holder = InScope(other => other.GetRequiredService<PersistenceTransactions>().InTransaction(async () =>
+            {
+                await other.GetRequiredService<${context}>().Database.ExecuteSqlAsync($"SELECT 1 FROM ${table} WHERE id = {ids[0]} FOR UPDATE", Cancel);
+                locked.SetResult();
+                await release.Task;
+                return true;
+            }, readOnly: false, Cancel));
+            await locked.Task;
+            try
+            {
+                // SKIP LOCKED: se lleva la otra al momento en vez de esperar al lock (con FOR UPDATE a secas, esperaría).
+                var claimed = await ${claimVia(method)}.WaitAsync(TimeSpan.FromSeconds(5), Cancel);
+                Assert.Equal([ids[1]], claimed.Select(r => r.${id}));
+            }
+            finally
+            {
+                release.SetResult();
+                await holder;
+            }
+        });`);
+  }
+  const firstMethod = csMember(claims[0].method);
+  tests.push(`    [Fact]
+    public async Task Reclamo_${root.name}_NoCorreDentroDeOtraTransaccion() =>
+        await InScope(async services =>
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => services.GetRequiredService<PersistenceTransactions>().InTransaction(
+                async () => await services.GetRequiredService<${port}>().${firstMethod}(Cancel),
+                readOnly: false,
+                Cancel));
+            Assert.Contains("DispatchWithoutTransaction", error.Message, StringComparison.Ordinal);
+        });`);
+  return tests;
 }
 
 /** La base del sujeto en el motor: un identificador sin guiones. */

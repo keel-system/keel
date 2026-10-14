@@ -3,7 +3,7 @@
 Qué produce cada construcción del diseño y qué queda para el agente. Se sigue **estrictamente**: lo que aquí se
 fija es lo que hace que este servidor sea equivalente a los de keel-spring y keel-nest del mismo diseño. Las capas
 que keel-dotnet aún no genera las rechaza `keel-dotnet build`: si estás aquí, el diseño no las declara. Y lo que
-acepta con un **aviso** (el reloj de una operación) no se escribe a mano: ver § Lo que build avisa y no genera.
+acepta con un **aviso** no se escribe a mano: el aviso es la frontera del generador, no una invitación.
 
 ## `domain` — domain.keel.yaml
 
@@ -163,13 +163,49 @@ build (`Infrastructure/Persistence/Purge/`): por lotes, cada lote en su transacc
 `config/parameters/<perfil>/` (las mismas claves y variables que keel-spring y keel-nest). No las toques ni escribas
 otra.
 
-### Lo que build avisa y no genera
+### El reclamo de un barrido: ya está en el puerto, úsalo
 
-`keel-dotnet build` acepta, con un aviso, un barrido que saca filas de un estado (`schedule` + `transitions`): el
-scheduler ya lo dispara, pero el **reclamo** de su lote entre réplicas todavía no se genera. El aviso es la frontera
-del generador, no una invitación: **no escribas un reclamo propio**. Un mecanismo escrito a mano pasa los escenarios y
-deja de ser el servidor de keel-spring y keel-nest. Si un escenario lo exige, el escenario queda en rojo y el hueco va a
-`blockers` como del generador.
+Un barrido que saca filas de un estado (`schedule` + `transitions`) tiene **ya generado** su reclamo en el puerto del
+repositorio: `ClaimFor<…>(cancellationToken)`, con su adaptador. Es el mismo mecanismo que el de los servidores de
+keel-spring y keel-nest: los candidatos con `FOR UPDATE SKIP LOCKED` (cada réplica recibe filas distintas) y un UPDATE
+condicional por fila (`… WHERE id = {id} AND estado IN (…)`: una fila afectada = es tuya), en su propia transacción, con el
+lote de `sweep.<barrido>.batch-size`. Devuelve **solo** lo que esta réplica se llevó.
+
+```csharp
+public async Task Handle(DispatchJobsCommand command, CancellationToken cancellationToken)
+{
+    foreach (var job in await jobRepository.ClaimForDispatchJobsRunning(cancellationToken))         // ya en running
+    {
+        // … el trabajo de cada fila, y su desenlace guardado: un fallo en una no revierte las demás
+    }
+    foreach (var job in await jobRepository.ClaimForStalledDispatchJobsDone(cancellationToken))     // SIGUE en running
+    {
+        job.Finish();                                  // la transición la hace el dominio
+        await jobRepository.Save(job, cancellationToken);
+    }
+}
+```
+
+- **No escribas otro reclamo**: ni un finder por estado, ni un lock, ni una marca propia. Leer el lote y marcarlo después
+  pasa con una réplica y se lo da entero a todas en producción.
+- El reclamo confirma en **su propia transacción**: el scheduler despacha la operación con `DispatchWithoutTransaction`,
+  y llamarlo con una transacción abierta lanza en vez de unirse a ella.
+- El **rescate** (`ClaimForStalled…`) solo se lleva lo ABANDONADO —el reloj del estado más viejo que su plazo— y **no
+  cambia el estado: lo arrienda** renovando el reloj. La transición la haces tú con el método del agregado, que fija los
+  campos que el estado de destino exige. Su plazo sale de `sweep.<rescate>.stalled-after-seconds` o, si el diseño lo
+  enlaza (`stalledAfter`), del parámetro de despliegue.
+- Si la cola estampa el reloj que el rescate vigila (`runningSince`), viene **ya estampado**: no lo vuelvas a poner, una
+  segunda escritura abre la ventana en la que la fila queda sin reloj para siempre.
+- Un barrido que sale de DOS estados en vuelo a la vez no tiene reclamo generado (son dos relojes y «lleva demasiado»
+  deja de estar definido para el lote): build lo avisa, y ese reclamo sí lo escribes tú, con las mismas dos capas.
+
+### Los parámetros de despliegue
+
+Los `parameters` del manifiesto llegan en un value object de dominio, `<Servicio>Parameters` (`Domain/Parameters/`), que
+valida sus cotas al construirse —un valor fuera de rango no deja arrancar— y que se recibe por inyección, como cualquier
+puerto. Lo puebla `ServiceParametersRegistration` (`Infrastructure/Config/`) desde `<artifactId>.<clave>` de
+`config/parameters/<perfil>/`, con la misma variable de entorno y el mismo gradiente que keel-spring y keel-nest. **No leas
+la configuración desde Application** ni escribas el valor como constante.
 
 ### La lista cerrada de `code` que NO nacen en el diseño
 

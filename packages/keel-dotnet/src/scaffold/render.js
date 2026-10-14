@@ -76,9 +76,13 @@ export const PLACES = {
   appSupport: ['application', 'Support'],
   // El puerto de persistencia de cada raíz y la página que nombra: dominio puro (incremento 6).
   repositories: ['domain', 'Repository'],
+  // Los parámetros de despliegue del servicio (service.parameters), ya validados: un value object de dominio (incremento 10c).
+  parameters: ['domain', 'Parameters'],
   // El registro de idempotencia de petición: el puerto, lo guardado y sus dos errores de conflicto.
   idempotency: ['domain', 'Idempotency'],
   useCaseInfra: ['infrastructure', 'UseCase'],
+  // La configuración por perfiles (ServiceConfiguration) y quien puebla los parámetros de despliegue.
+  config: ['infrastructure', 'Config'],
   correlation: ['infrastructure', 'Correlation'],
   // La seguridad (capa security): el principal, las reglas como datos, los autenticadores, CORS y la identidad del
   // llamante. El middleware que los usa vive en Api/Rest, junto a los otros de la entrada HTTP.

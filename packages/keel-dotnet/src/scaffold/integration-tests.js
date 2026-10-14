@@ -21,6 +21,7 @@
 // Aquí NO se genera ninguna prueba de flujo: eso es derivado del diseño y lo escribe el agente.
 
 import { DATABASES, selectedInfra } from 'keel-core/gen/infra-catalog';
+import { missingClockCountSql, rescueProbes, stallSql } from 'keel-core/gen';
 import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from 'keel-core/gen/junit-scoring';
 import { resetDbScript } from 'keel-core/gen/infra-scripts';
 import { TARGET_FRAMEWORK } from '../lib/assets.js';
@@ -111,6 +112,7 @@ function flowTestCs(model) {
     /// operación del diseño puede fabricar. Si el servicio lo expone por su API, se comprueba por ahí.
     /// </summary>
     protected static string Db(string sql) => Harness.Db(sql);`);
+    helpers.push(...rescueMembers(model));
   }
   return csFile({
     namespace: supportNamespace(model),
@@ -543,6 +545,70 @@ internal static class FailureCapture
 }
 `
   });
+}
+
+// ─── El rescate de un barrido (incremento 10c) ───────────────────────────────────────────────────
+
+/**
+ * Los helpers con los que un flujo fabrica la precondición del RESCATE: una fila en vuelo que una réplica muerta dejó a
+ * medias (`StallInFlight`), la misma recién entrada en vuelo, que el rescate NO debe tocar (`PutInFlight`), y cuántas
+ * quedaron en vuelo sin reloj (`InFlightWithoutClock`, que vale cero siempre). Los mismos que el AbstractFlowIT de
+ * keel-spring y el flow.ts de keel-nest, con las mismas sentencias (keel-core/gen/scheduling.js) y los literales del motor
+ * de su catálogo. Sin un motor que declare esos literales no se emiten: un UPDATE que no casa dejaría el escenario verde
+ * sin haber atascado nada.
+ */
+export function rescueMembers(model) {
+  if (!usesRelational(model)) return [];
+  const entry = DATABASES[model.stack?.database ?? 'postgresql'];
+  if (!entry?.staleTimestamp || !entry?.uuidLiteral) return [];
+  const probes = rescueProbes(model);
+  if (probes.length === 0) return [];
+  const now = entry.nowTimestamp ?? 'CURRENT_TIMESTAMP';
+  const rows = probes.map(
+    (probe) =>
+      `        [${csString(probe.operation)}] = (${csString(stallSql({ ...probe, clockSql: entry.staleTimestamp }))}, ${csString(stallSql({ ...probe, clockSql: now }))}, ${csString(missingClockCountSql(probe))}),`
+  );
+  const known = probes.map((probe) => probe.operation).join(', ');
+  return [
+    `    /// <summary>Las sentencias del rescate de cada barrido que lo tiene: ${known}.</summary>
+    private static readonly Dictionary<string, (string Stall, string Put, string Missing)> Rescues = new(StringComparer.Ordinal)
+    {
+${rows.join('\n')}
+    };`,
+    `    /// <summary>
+    /// Deja la fila <paramref name="id"/> EN VUELO con el reloj infinitamente rancio: el estado exacto en el que queda una
+    /// réplica que murió con ella en la mano, que es lo que el rescate busca. No dispara el barrido —lo dispara su cron, como
+    /// en producción— y no siembra la fila: mueve una creada por la API.
+    /// </summary>
+    protected static void StallInFlight(string operation, string id) => Db(RescueOf(operation).Stall + IdLiteral(id));`,
+    `    /// <summary>
+    /// Lo mismo con el reloj a AHORA: la fila acaba de entrar en vuelo y hay alguien trabajando en ella. Es la mitad que separa
+    /// rescatar de robarle el trabajo a quien lo está haciendo: un rescate sin cota temporal pasa el escenario del rescate y
+    /// falla aquí.
+    /// </summary>
+    protected static void PutInFlight(string operation, string id) => Db(RescueOf(operation).Put + IdLiteral(id));`,
+    `    /// <summary>
+    /// Cuántas filas quedaron EN VUELO con el reloj sin estampar. Tiene que valer cero siempre: si el reclamo mueve el estado
+    /// sin estampar la marca en el MISMO UPDATE, la fila que caiga en esa ventana queda irrescatable.
+    /// </summary>
+    protected static int InFlightWithoutClock(string operation)
+    {
+        var output = Db(RescueOf(operation).Missing).Trim();
+        var last = output.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        return int.TryParse(last, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var count)
+            ? count
+            : throw new InvalidOperationException($"La cuenta de filas sin reloj no es un número: '{output}'");
+    }`,
+    `    private static (string Stall, string Put, string Missing) RescueOf(string operation) =>
+        Rescues.TryGetValue(operation, out var rescue)
+            ? rescue
+            : throw new ArgumentException($"No hay rescate para el barrido '{operation}'. Los que lo tienen: ${known}", nameof(operation));
+
+    private static string IdLiteral(string id) =>
+        Guid.TryParseExact(id, "D", out _)
+            ? ${csString(entry.uuidLiteral.prefix)} + id + ${csString(entry.uuidLiteral.suffix)}
+            : throw new ArgumentException($"No es un id: '{id}'", nameof(id));`
+  ];
 }
 
 // ─── Support/Harness.cs ──────────────────────────────────────────────────────────────────────────

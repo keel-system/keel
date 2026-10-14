@@ -16,6 +16,13 @@ import { usesIdempotencyHeader } from './request-idempotency.js';
 import { securityNamespace, usesHttpSecurity } from './security.js';
 import { messagingNamespace, usesMessaging } from './messaging.js';
 import { schedulingNamespace, usesScheduling } from './scheduling.js';
+import { usesServiceParameters } from './service-parameters.js';
+import { usesSweepClaims } from './claim.js';
+
+// Los barridos del perfil, antes de la persistencia: AddPersistence solo pone los defaults si nadie registró estos.
+const SWEEPS = `
+// Los barridos del perfil (sweep.yaml): el lote de cada reclamo y el plazo de cada rescate.
+builder.Services.AddSingleton(SweepSettings.From(configuration));`;
 
 export function generate(model) {
   return [{ path: `${solution(model).api.dir}/Program.cs`, content: programCs(model) }];
@@ -42,7 +49,7 @@ builder.Services.AddUseCases();`
     : '';
   const database = persistence
     ? `
-// La persistencia relacional del perfil: el DbContext, la transacción del caso de uso y los repositorios.
+// La persistencia relacional del perfil: el DbContext, la transacción del caso de uso y los repositorios.${usesSweepClaims(model) ? SWEEPS : ''}
 builder.Services.AddPersistence(DatabaseSettings.From(configuration));
 // Cada sentencia SQL no es un evento del servicio: solo sus avisos y errores, como Hibernate sin show-sql en keel-spring y
 // TypeORM sin logging en keel-nest. A nivel Information, un relay que sondea cada segundo inundaba el log.
@@ -59,6 +66,12 @@ builder.Services.AddHttpSecurity(configuration);`
 // La mensajería del diseño: el puente de eventos, el outbox, el registro de procesados y la conexión con el broker
 // (MessagingRegistration, generado). Lo que escribe el agente para el broker entra por BrokerBindings.cs.
 builder.Services.AddMessaging(configuration);`
+    : '';
+  // Los parámetros de despliegue, antes que nada: un valor mal puesto no deja arrancar (ServiceParametersRegistration).
+  const parameters = usesServiceParameters(model)
+    ? `
+// Los parámetros de despliegue del diseño (service.parameters), validados al arrancar.
+builder.Services.AddServiceParameters(configuration);`
     : '';
   // El reloj va el último: despacha por los casos de uso y purga con la persistencia.
   const clock = usesScheduling(model)
@@ -88,7 +101,7 @@ var builder = WebApplication.CreateBuilder(args);
 // El resto de la aplicación lee la configuración ya resuelta por la vía estándar de ASP.NET Core.
 builder.Configuration.AddInMemoryCollection(configuration.Values);
 builder.WebHost.UseUrls($"http://{configuration.Server.Address}:{configuration.Server.Port}");
-builder.Services.AddSingleton(configuration);
+builder.Services.AddSingleton(configuration);${parameters}
 builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);

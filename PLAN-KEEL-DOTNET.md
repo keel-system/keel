@@ -1014,6 +1014,37 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       cae solo el tope). `npm test` 377/377.
     - Lo que no mide ninguna red: que un tick dispare de verdad el handler (lo medirá la corrida del 10e) y el apagado con
       una pasada en vuelo (en Windows SIGTERM no ejecuta los hooks).
+  - **10c, reclamos de barrido, rescate y parámetros de despliegue (hecho, 2026-10-14).** Sin cambio en `keel-core`: el
+    orden de los candidatos, las claves de `sweep.*`, las sentencias del rescate y el gradiente de los parámetros ya eran
+    neutrales.
+    - **El hueco de frontera, cerrado**: `src/scaffold/service-parameters.js` emite `<Servicio>Parameters` en
+      `Domain/Parameters` (las guardas de keel-spring con sus frases; el constructor recibe nulables para decir QUÉ falta),
+      `ServiceParametersRegistration` en `Infrastructure/Config` (lee `<artifactId>.<clave>`; `Program.cs` lo registra
+      antes que nada), el fragmento de cada perfil (el de keel-nest byte a byte) y la prueba emitida
+      `ServiceParametersTests`, que EJECUTA las guardas: el valor de prueba, el ausente y cada cota rota.
+    - `src/scaffold/claim.js`: un método por reclamo en el puerto y en el adaptador —candidatos con `FOR UPDATE SKIP
+      LOCKED` y un UPDATE condicional por fila, SQL literal, en una transacción propia; la cola estampa el reloj del rescate
+      en el mismo UPDATE; el rescate solo se lleva lo más viejo que su plazo (de `sweep.*` o del parámetro del diseño) y
+      ARRIENDA sin cambiar el estado; ninguno sube la versión del bloqueo optimista, como en los otros dos—, `SweepSettings`
+      (`Program.cs` registra los del perfil y `AddPersistence` pone los defaults con `TryAdd`) y `sweep.yaml` (el de
+      keel-nest byte a byte). Lo propio de .NET: el reclamo **se niega a correr dentro de una transacción abierta**
+      (`RequireOwnTransaction`), porque con `InTransaction` se uniría a ella y el reclamo no existiría para nadie hasta el
+      commit final.
+    - La nota del handler dice que el reclamo y el rescate ya están generados y cómo se llaman; la frontera deja de avisar
+      del barrido; el arnés gana `StallInFlight`, `PutInFlight` e `InFlightWithoutClock` con las sentencias de keel-core
+      (las mismas que keel-nest); `mapping.md` y el agente de código lo enseñan.
+    - **Medido:** `test/claim.test.js` (13) y `test/service-parameters.test.js` (5): el puerto y el adaptador de cada
+      reclamo en las cuatro fixtures con barrido, `sweep.yaml` contra keel-nest y keel-spring y lo que lee
+      `SweepSettings`, el rescate que lee su plazo del parámetro, los fragmentos contra los dos y las sentencias del arnés
+      contra las de keel-nest. `npm test` 395/395. `cs-check` **15/15** (2 130 pruebas). `db-check` **26/26, 174 sondas**
+      (20 nuevas): la cola (orden, lote, destino, reloj estampado y la pasada siguiente), dos réplicas a la vez sin
+      repetir, SKIP LOCKED con otra transacción reteniendo una fila, la negativa a correr dentro de otra transacción, el
+      rescate (solo lo abandonado, arrienda sin cambiar el estado, el fresco intacto, renovado no se repite) y las MISMAS
+      sentencias del arnés contra el motor. **Falsado por capas**: con `--sabotage=claim-skip-locked` cae solo la sonda de
+      SKIP LOCKED; con `--sabotage=claim-stale` (el rescate sin cota temporal), solo las dos del rescate.
+    - **Lo que destapó**: el analizador EF1003 de EF Core no deja concatenar SQL dentro de `ExecuteSqlRawAsync` (la sonda
+      que monta la sentencia del arnés la arma antes en una variable); y el heredoc de este shell come las barras
+      invertidas, así que dos ediciones dejaron saltos de línea reales dentro de un literal de JS (cazado al importar).
 
 ## 5. Riesgos conocidos
 

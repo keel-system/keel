@@ -15,6 +15,7 @@
 // juzga `npm run db-check` de keel-dotnet.
 
 import { idempotencyRegistration, idempotencyRegistrationUsings } from './request-idempotency.js';
+import { usesSweepClaims } from './claim.js';
 import { constraintErrors, declaredConcurrencyError, CONCURRENT_MODIFICATION_MESSAGE, UNKNOWN_INTEGRITY_MESSAGE, TRANSACTION_TIMEOUT_MESSAGE } from 'keel-core/gen';
 import { WRITE_CONFLICT_ATTEMPTS } from 'keel-core/gen/transactions';
 import { DATABASES } from 'keel-core/gen/infra-catalog';
@@ -488,6 +489,8 @@ function registrationBody(model) {
   const repositories = repositoryRoots(model).map((entity) => `        services.AddScoped<${portClass(entity)}, ${adapterClass(entity)}>();`);
   const idempotency = idempotencyRegistration(model);
   if (idempotency) repositories.push(idempotency);
+  // Los barridos: los defaults si nadie registró antes los del perfil (Program.cs lo hace con SweepSettings.From).
+  if (usesSweepClaims(model)) repositories.unshift('        services.TryAddSingleton(SweepSettings.Defaults);');
   return `/// <summary>
 /// La persistencia relacional en el contenedor: el DbContext del perfil (uno por ámbito), la transacción del caso de
 /// uso y un adaptador por puerto. El ÚNICO sitio que registra los repositorios.

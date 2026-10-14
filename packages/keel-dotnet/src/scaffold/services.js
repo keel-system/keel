@@ -328,7 +328,19 @@ function scheduleNotes(model, operation) {
       ? 'SIN TRANSACCIÓN ABARCADORA: el scheduler la despacha con DispatchWithoutTransaction, así que cada llamada al adaptador de ' +
         'repositorio confirma la SUYA. El orden es el de los commits: reclamar y confirmar, actuar fuera de toda transacción, ' +
         'confirmar el desenlace. Un fallo en una fila no puede revertir las demás.'
-      : 'Corre en UNA transacción, la del caso de uso: no llama a nadie en medio de su trabajo, así que todo o nada.'
+      : 'Corre en UNA transacción, la del caso de uso: no llama a nadie en medio de su trabajo, así que todo o nada.',
+    ...(operation.claim ?? []).map((claim) => {
+      const call = `${claim.entity[0].toLowerCase()}${claim.entity.slice(1)}Repository.${claim.method[0].toUpperCase()}${claim.method.slice(1)}(cancellationToken)`;
+      return claim.stalled
+        ? `EL RESCATE YA ESTÁ GENERADO: ${call} devuelve los ${claim.entity} que llevan atascados en ` +
+            `${claim.stalled.state} más que su plazo y que ESTA réplica se llevó, SIGUIENDO en ${claim.stalled.state} con ${claim.stalled.stampField} ` +
+            `renovado. La transición a ${claim.to} la haces TÚ con el método del agregado (fija los campos que ${claim.to} exige) y la guardas. ` +
+            'No escribas otro rescate, ni un finder por estado, ni una cota propia.'
+        : `EL RECLAMO YA ESTÁ GENERADO: toma el lote con ${call}, que devuelve SOLO los ${claim.entity} ` +
+            `que ESTA réplica se llevó, ya en ${claim.to}${claim.stamps ? ` y con ${claim.stamps.field} estampado` : ''}. El tamaño del lote no se pasa: ` +
+            `lo acota el adaptador con sweep.${claim.sweepKey}.batch-size. No escribas otro reclamo (ni un finder por estado ni un lock): ` +
+            'un segundo mecanismo en paralelo no reclama nada. Actúa sobre cada fila y guárdala: un fallo en una no revierte las demás.';
+    })
   ];
 }
 

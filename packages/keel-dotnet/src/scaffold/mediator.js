@@ -22,6 +22,7 @@ import { usesRelational } from './persistence.js';
 import { mapperClasses } from './mappers.js';
 import { contractOf, messageNamespace } from './services.js';
 import { securityNamespace, usesCallerScope } from './security.js';
+import { parametersNamespace, parametersTestInstance, usesServiceParameters } from './service-parameters.js';
 
 /** ¿Hay casos de uso que despachar? Sin operaciones no se genera nada de esto. */
 export function usesMediator(model) {
@@ -333,6 +334,10 @@ function useCasesTest(model) {
   const scope = usesCallerScope(model);
   if (scope) usings.push(securityNamespace(model));
   const scopeLine = scope ? '\n        services.AddCallerScope();' : '';
+  // Con parámetros de despliegue, los que reciben (el rescate que lee su plazo de uno) los tienen con su valor de prueba.
+  const parameters = usesServiceParameters(model);
+  if (parameters) usings.push(parametersNamespace(model));
+  const parametersLine = parameters ? `\n        services.AddSingleton(${parametersTestInstance(model)});` : '';
   const passThrough = persistence
     ? `
             // Sin base: la transacción de este despacho es el paso directo, no la de EF.
@@ -344,7 +349,7 @@ function useCasesTest(model) {
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddUseCases();${persistenceLine}${bridgeLine}${scopeLine}
+        services.AddUseCases();${persistenceLine}${bridgeLine}${scopeLine}${parametersLine}
         extra?.Invoke(services);
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
