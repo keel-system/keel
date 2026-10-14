@@ -19,58 +19,22 @@
 // outbox o los publishers best-effort sobre `RabbitConnection.publish`, y los listeners sobre
 // `RabbitConnection.consume`. No declara topología.
 
-import { deadLetterName, missingTargetRetryDestinations, rabbitListenerRetry, subscriptionDestination } from 'keel-core/gen';
+import { rabbitListenerRetry } from 'keel-core/gen';
+import { RABBIT_CONFIRM_TIMEOUT_MS, RABBIT_PREFETCH, RABBIT_RECOVERY_INTERVAL_MS, publishedChannels, rabbitTopology, rabbitYaml } from 'keel-core/gen/messaging-plan';
 import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, RABBIT_CONNECTION_TS, RABBIT_TOPOLOGY_TS, usesRabbitMq } from './messaging.js';
-import { envWithDefault } from 'keel-core/gen/profile-values';
-import { envFor, runtimeDefault } from 'keel-core/gen/runtime-env';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
-
-/** El prefetch del contenedor de Spring Boot (`spring.rabbitmq.listener.simple.prefetch`, 250). */
-export const RABBIT_PREFETCH = 250;
-/** El intervalo de recuperación del listener (`rabbitmq.listener.recovery-interval-ms`; catálogo neutral). */
-export const RABBIT_RECOVERY_INTERVAL_MS = runtimeDefault('RABBITMQ_LISTENER_RECOVERY_INTERVAL_MS');
-/**
- * Cuánto espera una publicación la confirmación del broker. Por ENCIMA del intervalo de recuperación:
- * un plazo más corto reinicia ese reloj en cada intento y la reconexión no converge (la regla que la
- * skill keel-spring-rabbitmq le da al dispatcher del outbox).
- */
-export const RABBIT_CONFIRM_TIMEOUT_MS = 10000;
 
 export function generate(model) {
   if (!usesRabbitMq(model)) return [];
   return [
     { path: RABBIT_TOPOLOGY_TS, content: topologyFile(model) },
     { path: RABBIT_CONNECTION_TS, content: connectionFile() },
-    ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/rabbitmq.yaml`, content: rabbitYaml(model, profile) }))
+    ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/rabbitmq.yaml`, content: rabbitYaml(profile) }))
   ];
-}
-
-/** La topología de consumo como DATOS: una entrada por COLA (las suscripciones de un canal la comparten). */
-export function rabbitTopology(model) {
-  const queues = new Map();
-  const missingTarget = missingTargetRetryDestinations(model, 'rabbitmq');
-  for (const sub of model.subscriptions ?? []) {
-    const queue = subscriptionDestination('rabbitmq', model, sub);
-    if (!queues.has(queue)) {
-      // Por COLA, como RETRIES_NOT_FOUND en keel-spring (keel-core decide cuáles).
-      queues.set(queue, { source: sub.topicDefault, queue, deadLetter: null, retriesNotFound: missingTarget.includes(queue), subscriptions: [] });
-    }
-    const entry = queues.get(queue);
-    entry.subscriptions.push(sub.name);
-    // El descarte es propiedad de la COLA: basta con que una de las que la comparten lo declare.
-    if (sub.deadLetter) entry.deadLetter = deadLetterName('rabbitmq', queue);
-  }
-  return [...queues.values()];
-}
-
-/** Los canales en los que publica el servicio, con sus eventos (messaging.publishChannels del modelo). */
-export function publishedChannels(model) {
-  const byChannel = model.messaging?.eventTypesByChannel ?? {};
-  return (model.messaging?.publishChannels ?? []).map((channel) => ({ channel, events: byChannel[channel] ?? [] }));
 }
 
 // ─── La topología y el reintento (TypeScript puro) ───────────────────────────
@@ -527,30 +491,4 @@ export class RabbitConnection implements OnApplicationBootstrap, BeforeApplicati
     ],
     body
   );
-}
-
-// ─── La configuración ────────────────────────────────────────────────────────
-
-function rabbitYaml(_model, profile) {
-  const lines = [
-    'rabbitmq:',
-    ...(profile === 'test'
-      ? ['  # Las pruebas de build arrancan sin broker: la conexión no se intenta.', '  enabled: false']
-      : ['  enabled: true']),
-    `  host: ${envFor('RABBITMQ_HOST', profile)}`,
-    `  port: ${envFor('RABBITMQ_PORT', profile)}`,
-    `  username: ${envFor('RABBITMQ_USERNAME', profile)}`,
-    `  password: ${envFor('RABBITMQ_PASSWORD', profile)}`,
-    '  listener:',
-    '    # Techo de la espera entre reconexiones (la misma clave que keel-spring).',
-    `    recovery-interval-ms: ${envFor('RABBITMQ_LISTENER_RECOVERY_INTERVAL_MS', profile)}`
-  ];
-  // El reintento del listener NO va aquí: sale del diseño (onFailure.retry) y lo lleva rabbit-topology.ts.
-  // Una clave que nadie lee sería una palanca que no mueve nada.
-  lines.push(
-    '  publisher:',
-    '    # Cuánto espera una publicación la confirmación del broker: por encima de la recuperación.',
-    `    confirm-timeout-ms: ${envWithDefault(profile, 'RABBITMQ_PUBLISHER_CONFIRM_TIMEOUT_MS', RABBIT_CONFIRM_TIMEOUT_MS)}`
-  );
-  return `${lines.join('\n')}\n`;
 }

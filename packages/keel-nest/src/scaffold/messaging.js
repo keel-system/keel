@@ -25,7 +25,7 @@
 // el puente y el outbox son otra rama entera.
 
 import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination as destinationOf, subscriptionGroupId } from 'keel-core/gen';
-import { OUTBOX_PURGE, OUTBOX_RELAY, PROCESSED_EVENT_PURGE, parameterValue } from 'keel-core/gen/messaging-stores';
+import { consumerUnits, consumesFromQueue, messagingYaml as neutralMessagingYaml, routingKeyName, subscriptionKey } from 'keel-core/gen/messaging-plan';
 import { DIRS, classPath, fieldImports, tsModule, tsString, decapitalize } from './render.js';
 import { DOMAIN_EVENT_TS, EVENT_METADATA_TS } from './events.js';
 import { usesPersistence, usesDocument } from './persistence-entities.js';
@@ -37,8 +37,7 @@ import { MODULE_TS as USE_CASE_MODULE_TS } from './mediator.js';
 import { acknowledgeNote } from 'keel-core/gen/rejection-notes';
 import { callsPaymentGateway } from 'keel-core/gen/payments-model';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
-import { envWithDefault } from 'keel-core/gen/profile-values';
-import { envFor } from 'keel-core/gen/runtime-env';
+import { OUTBOX_RELAY } from 'keel-core/gen/messaging-stores';
 
 const MESSAGING_DIR = 'infrastructure/messaging';
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
@@ -99,8 +98,6 @@ export function usesSnsSqs(model) {
   return usesMessaging(model) && model.stack?.broker === 'snssqs';
 }
 
-/** ¿Consume el servicio de una COLA propia? RabbitMQ (cuelga del exchange de la fuente) y SNS/SQS (del topic). */
-const consumesFromQueue = (model) => model.stack?.broker === 'rabbitmq' || model.stack?.broker === 'snssqs';
 
 export const bridgeClass = (model) => `${model.service.className}DomainEventBridge`;
 export const bridgePath = (model) => classPath(MESSAGING_DIR, bridgeClass(model));
@@ -659,34 +656,6 @@ ${
   );
 }
 
-/**
- * Los CONSUMIDORES del servicio, que es a lo que corresponde un listener, con las suscripciones de cada uno.
- * No es lo mismo en los dos brokers, y confundirlos pierde mensajes:
- *
- *   · RabbitMQ — un consumidor por COLA. La cola sale de la fuente (keel-core/gen/dead-letter.js) y varias
- *     suscripciones la comparten: dos consumidores de la misma cola competirían y cada mensaje llegaría a
- *     uno solo, así que el listener es uno y enruta por el tipo.
- *   · Kafka — un consumidor por SUSCRIPCIÓN, cada uno con su consumer group (`<servicio>-<evento>`). Cada
- *     grupo recibe el topic ENTERO: dos suscripciones de la misma fuente leen el mismo topic y cada una
- *     descarta lo que no es suyo. Con un solo grupo, Kafka les repartiría las particiones.
- */
-export function consumerUnits(model) {
-  const units = new Map();
-  for (const sub of model.subscriptions ?? []) {
-    let unit;
-    if (model.stack?.broker === 'kafka') {
-      const group = subscriptionGroupId(model, sub);
-      unit = { key: group, label: `el consumer group ${group} sobre ${sub.topicDefault}`, group, topic: sub.topicDefault };
-    } else {
-      const queue = consumesFromQueue(model) ? destinationOf(model.stack.broker, model, sub) : sub.name;
-      unit = { key: queue, label: `la cola ${queue}`, queue };
-    }
-    if (!units.has(unit.key)) units.set(unit.key, { ...unit, subscriptions: [] });
-    units.get(unit.key).subscriptions.push(sub.name);
-  }
-  return [...units.values()];
-}
-
 // El contrato de recepción, escrito donde lo va a leer el agente al escribir el listener. Es el de
 // keel-spring (`contractJavadoc`), con los nombres de keel-nest.
 function contractDoc(model, sub) {
@@ -809,72 +778,9 @@ function contractDoc(model, sub) {
 
 // ─── La configuración ────────────────────────────────────────────────────────
 
-/** La clave de la routing key de un evento (`notification-sent`) y la de una suscripción. */
-export const routingKeyName = (event) => event.routingKeyProperty.split('.').pop();
-export const subscriptionKey = (sub) => sub.topicProperty.split('.').slice(-2)[0];
-const topicEnv = (sub) => sub.topicProperty.toUpperCase().replace(/[.-]/g, '_');
-const queueEnv = (sub) => `${topicEnv(sub).replace(/_TOPIC$/, '')}_QUEUE`;
-const groupEnv = (sub) => `${topicEnv(sub).replace(/_TOPIC$/, '')}_GROUP_ID`;
-
-
-/** El mismo `messaging.yaml` que keel-spring, con las claves del relay de keel-core/gen/messaging-stores.js. */
+/** El mismo `messaging.yaml` que keel-spring (keel-core/gen/messaging-plan.js). */
 export function messagingYaml(model, profile) {
-  const lines = ['messaging:'];
-  const events = model.events ?? [];
-  const subscriptions = model.subscriptions ?? [];
-  if (events.length > 0) {
-    lines.push('  publishing:', `    destination: ${envFor('MESSAGING_DESTINATION', profile, events[0].destinationDefault)}`, '    routing-keys:');
-    for (const event of events) lines.push(`      ${routingKeyName(event)}: ${event.routingKeyDefault}`);
-  }
-  if (subscriptions.length > 0) {
-    lines.push('  subscriptions:');
-    for (const sub of subscriptions) {
-      lines.push(`    ${subscriptionKey(sub)}:`, `      topic: ${envWithDefault(profile, topicEnv(sub), sub.topicDefault)}`);
-      // Con RabbitMQ se consume de una COLA propia de este servicio que cuelga del exchange del canal:
-      // su nombre lo declara aquí build, el mismo que crea la topología y al que entrega el arnés.
-      if (consumesFromQueue(model)) {
-        lines.push(`      queue: ${envWithDefault(profile, queueEnv(sub), destinationOf(model.stack.broker, model, sub))}`);
-      }
-      // Con Kafka, el consumer group de la suscripción: la misma clave y el mismo default que keel-spring.
-      if (model.stack?.broker === 'kafka') {
-        lines.push(`      group-id: ${envWithDefault(profile, groupEnv(sub), subscriptionGroupId(model, sub))}`);
-      }
-    }
-  }
-  // La línea de un parámetro del catálogo neutral: la hoja de su clave con el gradiente de su variable. Un
-  // cron va entrecomillado ENTERO (empieza por dígito y lleva `*`), con el default desnudo dentro.
-  const line = (parameter, comment) => {
-    const leaf = parameter.key.split('.');
-    const out = comment ? [`${'  '.repeat(leaf.length - 1)}# ${comment}`] : [];
-    const value = envWithDefault(profile, parameter.env, parameterValue(parameter, profile));
-    out.push(`${'  '.repeat(leaf.length - 1)}${leaf.at(-1)}: ${parameter.cron ? `"${value}"` : value}`);
-    return out;
-  };
-  if (usesProcessedEvents(model)) {
-    lines.push(
-      'processed-event:',
-      '  purge:',
-      ...line(PROCESSED_EVENT_PURGE.cron, 'Borrado del registro de mensajes procesados; la retención solo tiene que cubrir la ventana de reentrega del broker.'),
-      ...line(PROCESSED_EVENT_PURGE.retentionDays)
-    );
-  }
-  if (usesNestOutbox(model)) {
-    lines.push(
-      'outbox:',
-      '  relay:',
-      ...line(OUTBOX_RELAY.fixedDelayMs, 'Cada cuánto el relay busca filas pendientes y las entrega al broker.'),
-      ...line(OUTBOX_RELAY.batchSize),
-      ...line(OUTBOX_RELAY.maxAttempts, 'Tras agotar los reintentos la fila queda como dead-letter: no se reintenta ni se borra.'),
-      '    backoff:',
-      ...line(OUTBOX_RELAY.backoffInitialMs, 'Backoff exponencial entre reintentos de una fila (initial·2^(n-1), con tope max-ms).'),
-      ...line(OUTBOX_RELAY.backoffMaxMs),
-      ...line(OUTBOX_RELAY.claimTimeoutMs, 'Lease de una fila reclamada mientras su publicación está en vuelo; si la réplica muere, caduca.'),
-      '  purge:',
-      ...line(OUTBOX_PURGE.cron, 'Borrado diario de lo ya publicado (lo pendiente no se toca nunca); la tabla no es un histórico.'),
-      ...line(OUTBOX_PURGE.retentionDays)
-    );
-  }
-  return `${lines.join('\n')}\n`;
+  return neutralMessagingYaml(model, profile, { outbox: usesNestOutbox(model), processedEvents: usesProcessedEvents(model) });
 }
 
 function settingsFile(model) {
