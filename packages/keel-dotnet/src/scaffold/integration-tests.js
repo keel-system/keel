@@ -32,6 +32,7 @@ import { csFile, csString, solution } from './render.js';
 import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
 import { usesKafka } from './messaging.js';
 import { closingCredentialExpression, credentialsCs, flowTestCredentialMembers, smokeCredentialsCase } from './identity-harness.js';
+import { httpStubFile, idLiteralMember, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
 export const SCORE_SCENARIOS_SH = 'infra/score-scenarios.sh';
@@ -59,6 +60,8 @@ export function generate(model) {
     ...[credentialsCs(model, supportNamespace(model))].filter(Boolean).map((content) => ({ path: `${project.dir}/Support/Credentials.cs`, content })),
     // Con mensajería, los helpers del broker y del outbox (messaging-harness.js).
     ...[messagingHarnessCs(model, supportNamespace(model))].filter(Boolean).map((content) => ({ path: `${project.dir}/Support/Messaging.cs`, content })),
+    // Con clientes salientes, el proveedor de prueba (http-stub-harness.js).
+    ...[httpStubFile(model, supportNamespace(model))].filter(Boolean),
     { path: `${project.dir}/${HARNESS_SMOKE_CLASS}.cs`, content: harnessSmokeCs(model) },
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript(model) }
@@ -112,7 +115,11 @@ function flowTestCs(model) {
     /// operación del diseño puede fabricar. Si el servicio lo expone por su API, se comprueba por ahí.
     /// </summary>
     protected static string Db(string sql) => Harness.Db(sql);`);
-    helpers.push(...rescueMembers(model));
+    const rescue = rescueMembers(model);
+    const aging = reconciliationAgingMembers(model);
+    helpers.push(...rescue, ...aging);
+    // El id como literal del motor: lo comparten el rescate y la reconciliación.
+    if (rescue.length > 0 || aging.length > 0) helpers.push(idLiteralMember(model));
   }
   return csFile({
     namespace: supportNamespace(model),
@@ -175,7 +182,9 @@ ${api ? `    /// <summary>Prefijo de todas las rutas del servicio (basePath del 
         try
         {
             await FlowServer.EnsureStartedAsync(TestContext.Current.CancellationToken);${reset ? `
-            Harness.ResetState();` : ''}${usesMessagingHarness(model) ? `
+            Harness.ResetState();` : ''}${usesHttpStub(model) ? `
+            // El reset ya vació el proveedor de prueba: se olvidan también las secuencias del flujo anterior.
+            HttpStubHarness.ForgetSequences();` : ''}${usesMessagingHarness(model) ? `
             // El broker arriba (un flujo anterior pudo dejarlo parado) y el servidor conectado a él.
             await BrokerHarness.PrepareAsync();` : ''}
             await GivenAsync();
@@ -602,12 +611,7 @@ ${rows.join('\n')}
     `    private static (string Stall, string Put, string Missing) RescueOf(string operation) =>
         Rescues.TryGetValue(operation, out var rescue)
             ? rescue
-            : throw new ArgumentException($"No hay rescate para el barrido '{operation}'. Los que lo tienen: ${known}", nameof(operation));
-
-    private static string IdLiteral(string id) =>
-        Guid.TryParseExact(id, "D", out _)
-            ? ${csString(entry.uuidLiteral.prefix)} + id + ${csString(entry.uuidLiteral.suffix)}
-            : throw new ArgumentException($"No es un id: '{id}'", nameof(id));`
+            : throw new ArgumentException($"No hay rescate para el barrido '{operation}'. Los que lo tienen: ${known}", nameof(operation));`
   ];
 }
 
@@ -933,9 +937,20 @@ ${headers}
   }
   const identity = smokeCredentialsCase(model);
   if (identity) cases.push(identity);
+  const stub = usesHttpStub(model);
+  if (stub) {
+    // El mismo SMOKE-6 que keel-spring y keel-nest: que el stub ACEPTE un mapping, lo sirva y lo cuente.
+    cases.push(String.raw`    [Scenario("SMOKE-6: el proveedor de prueba se deja programar")]
+    public async Task ElProveedorDePruebaSeDejaProgramar()
+    {
+        await StubFor("GET", "/keel-smoke/.*", 200, new { ok = true });
+        Assert.Equal(0, await StubCallCount("GET", "/keel-smoke/.*"));
+        await ResetStubs();
+    }`);
+  }
   const messaging = messagingSmokeCase(model);
   if (messaging) cases.push(messaging);
-  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null, messaging ? 'broker' : null].filter(Boolean);
+  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null, stub ? 'proveedor de prueba' : null, messaging ? 'broker' : null].filter(Boolean);
   return csFile({
     namespace: solution(model).integrationTests.name,
     header: `// Humo del arnés: la fontanería de la que dependen TODOS los flujos (servidor vivo${plumbing.length > 0 ? `, ${plumbing.join(', ')}` : ''}).

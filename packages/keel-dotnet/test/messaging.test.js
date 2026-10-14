@@ -172,7 +172,7 @@ test('el arnés de mensajería: los helpers de keel-spring y keel-nest, con los 
   assert.match(content(files, '/RabbitMq/RabbitConnection.cs'), /ClientProvidedName = "stock-reservation-events"/);
   // Cada flujo abre con el broker arriba y el servidor conectado, y el humo lo afirma.
   assert.match(content(files, '.IntegrationTests/Support/FlowTest.cs'), /await BrokerHarness\.PrepareAsync\(\);/);
-  assert.match(content(files, '.IntegrationTests/HarnessSmoke.cs'), /SMOKE-6: el broker responde y el servidor está conectado a él/);
+  assert.match(content(files, '.IntegrationTests/HarnessSmoke.cs'), /SMOKE-8: el broker responde y el servidor está conectado a él/);
 });
 
 test('sin outbox (metering-digest) el arnés no trae los helpers del outbox; sin mensajería, ni el archivo', () => {

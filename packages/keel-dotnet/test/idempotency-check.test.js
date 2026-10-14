@@ -189,7 +189,7 @@ const reconcileWritten = (source) =>
             {
                 await reservationRepository.Save(reservation, cancellationToken);
             }
-            catch (ConcurrencyConflictException)
+            catch (ConflictException conflict) when (conflict.Code == \"CONCURRENT_MODIFICATION\")
             {
                 continue;
             }
@@ -226,7 +226,7 @@ test('stock-reservation: reconciliation y compensation nacen ROJAS y outboundIde
   });
   assert.equal(verdicts(reading.out).reconciliation, 'KO', 'reading ' + reading.out);
   const swallowing = runGate('stock-reservation', {
-    [RECONCILE]: (source) => reconcileWritten(source).replace('catch (ConcurrencyConflictException)', 'catch (Exception)'),
+    [RECONCILE]: (source) => reconcileWritten(source).replace('catch (ConflictException conflict) when (conflict.Code == \"CONCURRENT_MODIFICATION\")', 'catch (Exception)'),
     [RELEASE]: releaseWritten,
     [RESERVATION]: reservationReleases
   });

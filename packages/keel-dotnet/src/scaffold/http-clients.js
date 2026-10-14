@@ -61,7 +61,7 @@ export function generate(model) {
     support('ProviderFailures', providerFailuresCs()),
     support('CircuitBreaker', circuitBreakerCs()),
     support('OutboundResilience', outboundResilienceCs()),
-    support('HttpExchange', httpExchangeCs(), ['System.Globalization', 'System.Net.Http.Headers', 'System.Text.Json', 'System.Text.RegularExpressions', wireNamespace(model)]),
+    support('HttpExchange', httpExchangeCs(), ['System.Globalization', 'System.Net.Http.Headers', 'System.Net.Sockets', 'System.Runtime.CompilerServices', 'System.Text.Json', 'System.Text.RegularExpressions', wireNamespace(model)]),
     support('ResponseReading', responseReadingCs(), ['System.Text.Json', wireNamespace(model)]),
     support('HttpClientsSettings', settingsCs(model), ['System.Text', configNamespace(model)]),
     registration(model),
@@ -993,12 +993,42 @@ public sealed partial class HttpExchange(HttpMessageHandler handler) : IDisposab
 {
     private readonly HttpClient http = new(handler, disposeHandler: true) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
-    /// <summary>El manejador del servidor: sin redirecciones, 5 s para conectar (fijos, como keel-spring) y conexiones que se renuevan.</summary>
+    /// <summary>Cuántas conexiones abrió el transporte para UNA petición: la guarda de <see cref="DefaultHandler"/>.</summary>
+    private static readonly HttpRequestOptionsKey<StrongBox<int>> OpenedConnections = new("keel.opened-connections");
+
+    /// <summary>
+    /// El manejador del servidor: sin redirecciones, 5 s para conectar (fijos, como keel-spring) y SIN reintentos propios.
+    /// </summary>
+    /// <remarks>
+    /// SocketsHttpHandler reenvía por su cuenta, hasta tres veces, una petición cuya conexión se corta antes de la
+    /// respuesta (medido contra WireMock: un DELETE con el corte de conexión llegaba CUATRO veces). Eso es un retry por
+    /// debajo del que declara el diseño: repetiría una escritura que el diseño no reintenta ante <c>connection</c>, y
+    /// multiplicaría las que sí. Cada intento va en su propia conexión (<c>Connection: close</c>) y esta guarda no deja
+    /// abrir una segunda para la misma petición: el corte llega al retry del diseño como el fallo de transporte que es.
+    /// El precio es no reutilizar conexiones entre llamadas.
+    /// </remarks>
     public static SocketsHttpHandler DefaultHandler() => new()
     {
         AllowAutoRedirect = false,
         ConnectTimeout = TimeSpan.FromMilliseconds(5000),
-        PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+        ConnectCallback = async (context, cancellationToken) =>
+        {
+            if (context.InitialRequestMessage.Options.TryGetValue(OpenedConnections, out var opened) && Interlocked.Increment(ref opened.Value) > 1)
+            {
+                throw new IOException("el transporte no reintenta por su cuenta: lo decide la política de la llamada");
+            }
+            var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+            try
+            {
+                await socket.ConnectAsync(context.DnsEndPoint, cancellationToken);
+                return new NetworkStream(socket, ownsSocket: true);
+            }
+            catch
+            {
+                socket.Dispose();
+                throw;
+            }
+        }
     };
 
     public async Task<OutboundResponse> Send(ClientSettings client, OutboundRequest request, CancellationToken cancellationToken)
@@ -1007,6 +1037,9 @@ public sealed partial class HttpExchange(HttpMessageHandler handler) : IDisposab
         ArgumentNullException.ThrowIfNull(request);
         var target = Target(client.BaseUrl, request);
         using var message = new HttpRequestMessage(new HttpMethod(request.Method), target);
+        // Una conexión por intento, y la guarda de DefaultHandler contando las que se abren para él.
+        message.Headers.ConnectionClose = true;
+        message.Options.Set(OpenedConnections, new StrongBox<int>(0));
         message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         foreach (var (name, value) in client.Headers)
         {

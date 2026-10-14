@@ -11,6 +11,7 @@
 
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesIdempotencyCheck } from './idempotency-check.js';
+import { usesHttpClients } from './http-clients.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from 'keel-core';
@@ -45,6 +46,8 @@ export function stackSkills(model) {
   if (usesRabbitMq(model)) skills.push('keel-dotnet-rabbitmq');
   if (usesKafka(model)) skills.push('keel-dotnet-kafka');
   if (usesSnsSqs(model)) skills.push('keel-dotnet-snssqs');
+  // Los clientes salientes (incremento 11): la llamada, los rechazos, el barrido de reconciliación y el proveedor de prueba.
+  if (usesHttpClients(model)) skills.push('keel-dotnet-httpclient');
   return skills;
 }
 

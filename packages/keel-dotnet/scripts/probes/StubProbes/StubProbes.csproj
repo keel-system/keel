@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Las sondas del proveedor de prueba: el arnés emitido (Support/HttpStub.cs, compilado SOLO) y el adaptador
+       emitido de stock-reservation, contra un WireMock real. stub-check las copia junto al proyecto generado: las
+       rutas son las de esa carpeta, no las del repo. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\stock-reservation\src\StockReservation.Infrastructure\StockReservation.Infrastructure.csproj" />
+    <Compile Include="..\stock-reservation\tests\StockReservation.IntegrationTests\Support\HttpStub.cs" Link="Support\HttpStub.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+</Project>

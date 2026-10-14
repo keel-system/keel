@@ -483,7 +483,7 @@ async function checkBroker(broker) {
       }
     }
     const measured = scored.status === 0 && /Humo del arnés: OK/.test(lines);
-    step('score: el humo del arnés (con SMOKE-6, el broker y la conexión) en verde y el script con 0', measured, measured ? '' : lines.slice(-2500));
+    step('score: el humo del arnés (con SMOKE-8, el broker y la conexión) en verde y el script con 0', measured, measured ? '' : lines.slice(-2500));
 
     // Falsado: con el rechazo de negocio tratado como reintentable, el caso que afirma «sin reintento» sale FALLO, y solo él.
     const topologyFile = path.join(messagingDir, dir, { rabbitmq: 'RabbitTopology.cs', kafka: 'KafkaConsumption.cs', snssqs: 'SnsSqsConsumption.cs' }[broker]);

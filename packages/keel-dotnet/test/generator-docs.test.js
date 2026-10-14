@@ -130,7 +130,9 @@ const SKILL_SUBJECTS = {
   // Con outbox y best-effort: la skill cita las piezas de los dos.
   'keel-dotnet-rabbitmq': { fixtures: ['stock-reservation-events', 'metering-digest'], stack: { broker: 'rabbitmq', database: 'postgresql' } },
   'keel-dotnet-kafka': { fixtures: ['stock-reservation-events', 'metering-digest'], stack: { broker: 'kafka', database: 'postgresql' } },
-  'keel-dotnet-snssqs': { fixtures: ['stock-reservation-events', 'metering-digest'], stack: { broker: 'snssqs', database: 'postgresql' } }
+  'keel-dotnet-snssqs': { fixtures: ['stock-reservation-events', 'metering-digest'], stack: { broker: 'snssqs', database: 'postgresql' } },
+  // Con barrido de reconciliación y compensación.
+  'keel-dotnet-httpclient': { fixtures: ['stock-reservation'], stack: { broker: 'rabbitmq', database: 'postgresql' } }
 };
 
 function planWith(fixture, stack) {
@@ -243,4 +245,51 @@ test('la skill de SNS/SQS se instala con el broker y enseña las firmas del cód
   assert.ok(connection.includes('public string? Attribute(string name)'));
   assert.ok(find('/Messaging/MessagingSettings.cs').includes('SubscriptionSettings(string Topic, string? Queue, string? GroupId)'));
   assert.ok(tree['infra/init-messaging.sh'], 'la topología la siembra init-messaging.sh');
+});
+
+test('la skill de clientes salientes se instala con la capa y enseña las firmas del código emitido', () => {
+  const tree = byPath(planWith('stock-reservation', { broker: 'rabbitmq', database: 'postgresql' }).files);
+  const find = (suffix) => Object.entries(tree).find(([file]) => file.endsWith(suffix))?.[1] ?? '';
+  assert.ok(Object.keys(tree).some((file) => file.endsWith('skills/keel-dotnet-httpclient/SKILL.md')), 'se instala con http-clients');
+  assert.ok(!Object.keys(files).some((file) => file.includes('keel-dotnet-httpclient')), 'y no sin clientes');
+  const adapter = find('/Clients/InventoryHttpAdapter.cs');
+  for (const line of [
+    'public async Task<CancelStockResult> CancelStock(Guid orderId, CancellationToken cancellationToken = default)',
+    'return await OutboundResilience.Run(CancelStockPolicy, cancelStockCircuit, () => CancelStockOnce(orderId, cancellationToken), cancellationToken);',
+    'catch (ProviderFailureException failure) when (CancelStockFallback.Contains(failure.Kind))',
+    'private async Task<CancelStockResult> CancelStockOnce(Guid orderId, CancellationToken cancellationToken)',
+    'var response = await http.Send(client, new OutboundRequest("DELETE", "/stock/reservations/{orderId}")'
+  ]) {
+    assert.ok(adapter.includes(line), line);
+  }
+  const failures = find('/Clients/ProviderFailures.cs');
+  for (const member of ['public sealed class ProviderTransportException', 'public sealed class ProviderStatusException', 'public sealed class CallNotPermittedException', 'public int? Status', 'public string Body']) assert.ok(failures.includes(member), member);
+  const reading = find('/Clients/ResponseReading.cs');
+  for (const member of ['public static T Required<T>(', 'public static T Optional<T>(', 'public static IReadOnlyList<T> List<T>(']) assert.ok(reading.includes(member), member);
+  assert.ok(find('/Clients/HttpExchange.cs').includes('public static SocketsHttpHandler DefaultHandler()'));
+  assert.ok(find('/Clients/OutboundIdempotency.cs').includes('public static string FromPayload(string call, object? payload)'));
+  assert.ok(find('/Clients/HttpClientsRegistration.cs').includes('public static IServiceCollection AddOutboundClients(this IServiceCollection services, HttpClientsSettings settings)'));
+  assert.ok(find('/Repository/IReservationRepository.cs').includes('Task<IReadOnlyList<Reservation>> ClaimForReconcileReservationsReserveStock(CancellationToken cancellationToken = default);'));
+  assert.ok(find('/Errors/ConflictException.cs').includes('class ConflictException'));
+  const stub = find('/Support/HttpStub.cs');
+  for (const member of [
+    'protected static Task StubFor(string method, string pathPattern, int status, object? body = null)',
+    'protected static Task StubFailure(string method, string pathPattern, int status)',
+    'protected static Task StubConnectionFault(string method, string pathPattern)',
+    'protected static Task StubTimeout(string method, string pathPattern, int delayMs)',
+    'protected static Task StubSequence(string method, string pathPattern, params JsonObject[] responses)',
+    'protected static Task<int> StubCallCount(string method, string pathPattern)',
+    'protected static Task<IReadOnlyList<StubRequest>> StubRequests(string method, string pathPattern)',
+    'protected static JsonElement? StubRequestBody(StubRequest request)',
+    'protected static string? StubRequestHeader(StubRequest request, string name)',
+    'public static JsonObject ConnectionFault()',
+    'public static JsonObject Ok(int status, object? body = null)'
+  ]) {
+    assert.ok(stub.includes(member), member);
+  }
+  const flowTest = find('/Support/FlowTest.cs');
+  assert.ok(flowTest.includes('protected static void AgeForReconciliation(string activation, string id)'));
+  assert.ok(flowTest.includes('protected static void HoldFromReconciliation(string activation, string id)'));
+  assert.ok(flowTest.includes('HttpStubHarness.ForgetSequences();'));
+  assert.match(find('HarnessSmoke.cs'), /SMOKE-6: el proveedor de prueba se deja programar/);
 });

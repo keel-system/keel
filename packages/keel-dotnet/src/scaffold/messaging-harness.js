@@ -1006,7 +1006,7 @@ function kafkaInFlightWait(model) {
 /** El caso del humo: el broker responde y el servidor está conectado a él. */
 export function messagingSmokeCase(model) {
   if (!usesMessagingHarness(model)) return null;
-  return `    [Scenario("SMOKE-6: el broker responde y el servidor está conectado a él")]
+  return `    [Scenario("SMOKE-8: el broker responde y el servidor está conectado a él")]
     public Task ElServidorEstaConectadoAlBroker() =>
         // Sin ella, toda entrega se queda en la cola y los Then de los flujos de mensajería agotan su espera.
         AssertBrokerConnected();`;

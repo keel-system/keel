@@ -330,6 +330,21 @@ variables de entorno y tablas `outbox_event` y `processed_event`):
 El handler de una operación disparada por un mensaje es un handler más: recibe su comando ya mapeado, y la
 deduplicación, la reentrega y el descarte no son cosa suya.
 
+## `http-clients` y `dependencies` — las llamadas a otros servidores
+
+Casi enteras de build, con la misma política que los servidores de keel-spring y keel-nest (rutas, cabecera de
+idempotencia, reintentos, circuito y fallback):
+
+- **La llamada**: el puerto `I<Cliente>Client` (`Domain/Clients`) llega por el constructor del handler cuando una
+  activación del diseño sale por él, y la nota del handler dice el ORDEN de los efectos. Se llama con `await`, sin
+  retry, circuito ni try/catch alrededor: ya están en el adaptador (`Infrastructure/Clients/<Cliente>HttpAdapter.cs`).
+- **La reconciliación**: el reclamo del barrido ya está en el repositorio de la raíz que espera
+  (`ClaimFor<Barrido><Activación>`), con su marca en `reconciliation_claim`; el barrido lo usa y no escribe otro.
+- **La compensación**: el estado vuelve con el método semántico del agregado; la guarda contra repetirla es la
+  transición.
+- Lo que el contrato solo dice en prosa, los rechazos con significado, un fallback `degrade` y los flujos contra el
+  proveedor de prueba los enseña la skill `keel-dotnet-httpclient`.
+
 ## Cobertura funcional (criterio de «generación terminada»)
 
 `dotnet build` en verde (sin warnings), los gates estáticos en verde y el 100% de los escenarios `FL-*` en OK en

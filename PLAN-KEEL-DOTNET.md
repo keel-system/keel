@@ -1166,6 +1166,33 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       `cs-check` salieron rojas por la LIMPIEZA de `ApiTests` (el servidor en memoria al cerrarse) en fixtures con
       servicios de fondo, también en algunas sin nada del 11c; seis pasadas seguidas en reposo, verdes. `cs-check` guarda
       ahora la salida entera de `dotnet test` cuando falla, para leer el mensaje la próxima vez.
+  - **11d, el arnés del proveedor de prueba y la skill (hecho, 2026-10-14).**
+    - **Lo que emite** (`src/scaffold/http-stub-harness.js`): `Support/HttpStub.cs` en el proyecto de flujos, con los
+      helpers de keel-spring y keel-nest (`StubFor`, `StubFailure`, `StubConnectionFault`, `StubTimeout`,
+      `StubSequence` con su guarda de una secuencia por ruta, `StubCallCount`, `StubRequests`, `StubRequestBody`,
+      `StubRequestHeader`, `ResetStubs`) sobre el vocabulario de `keel-core/gen/http-stub-probes.js`, como parte de
+      `FlowTest` más un `HttpStubHarness` que solo usa HttpClient (así `stub-check` lo compila SOLO);
+      `AgeForReconciliation`/`HoldFromReconciliation` en `FlowTest`, con las sentencias de keel-nest, y el `IdLiteral`
+      compartido con el rescate. El humo gana SMOKE-6, el mismo número que en los otros dos; el del broker de keel-dotnet,
+      que lo ocupaba, pasa a SMOKE-8 (un diseño con mensajería y clientes habría tenido dos casos con el mismo id en la
+      matriz). Skill `keel-dotnet-httpclient` (`SKILL.md` + `references/implementation.md` y `flows.md`), instalada con
+      la capa, y `mapping.md` gana su apartado.
+    - **Lo que destapó el WireMock real: SocketsHttpHandler reintenta por su cuenta.** Un DELETE con el corte de conexión
+      llegaba CUATRO veces al proveedor por intento (con `curl`, una; el POST con cuerpo no lo reenviaba, el DELETE y el
+      GET sí): un retry por debajo del del diseño, que repetiría una escritura que el diseño no reintenta ante
+      `connection`. No hay opción pública para apagarlo; `HttpExchange` manda cada intento en su propia conexión
+      (`Connection: close`) y un `ConnectCallback` no deja abrir una segunda para la misma petición. El precio, sin
+      keep-alive entre llamadas; escrito en el código. FL-REC-002 («exactamente dos») habría salido verde por casualidad:
+      el reenvío interno se encontraba la segunda respuesta de la secuencia.
+    - **Medido**: `npm run stub-check` (nuevo) levanta SOLO el WireMock del catálogo y corre las sondas de
+      `scripts/probes/StubProbes` —el arnés emitido y el adaptador emitido de `stock-reservation` con la configuración
+      de `develop` apuntando a él—: **5/5, 10 sondas** (lo programado llega y se registra, el corte y el retraso son
+      transporte y se reintentan con la MISMA clave, la secuencia entrega la segunda y se queda pegada, diez 503 abren
+      el circuito, el 404 no se reintenta, el contrato roto se propaga, el reset vacía, y una conexión reutilizada que se
+      corta no se reenvía por debajo del retry). **Falsado** con tres sabotajes (`initial-state`, `fault`,
+      `transport-retry`): cada uno cae en su sonda. `generator-docs.test.js` ata las rutas y las firmas de la skill a lo
+      emitido. `npm test` 443/443; `cs-check` 15/15 (2 237 pruebas).
+    - **Sin medir**: los flujos de una corrida (11e). `harness-check` sigue sobre `product-catalog`, sin clientes.
 
 ## 5. Riesgos conocidos
 
