@@ -10,6 +10,7 @@
 //     a `docs/keel/`, UNA sola copia, y no puede citar rutas de harness.
 
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
+import { usesIdempotencyCheck } from './idempotency-check.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from 'keel-core';
@@ -138,6 +139,10 @@ bash infra/score-scenarios.sh                      # compila + humo del arnés +
 ${
     (model.formatTypes ?? []).length > 0
       ? '\n`infra/check-domain-guards.sh` sale en ROJO recién generado a propósito: el formato de los value types escalares lo hace cumplir `<Tipo>Format.Validate(...)`, y esa llamada es del agente.\n'
+      : ''
+  }${
+    usesIdempotencyCheck(model)
+      ? '\n`infra/check-idempotency.sh` también sale en ROJO recién generado a propósito: comprueba que el código del agente USE los mecanismos de repetición que build generó (la guarda de los listeners, el registro de peticiones, el reclamo de los barridos, el Raise de los eventos, el dispatcher del outbox). Es el mismo gate que el de los servidores de keel-spring y keel-nest.\n'
       : ''
   }`;
 }

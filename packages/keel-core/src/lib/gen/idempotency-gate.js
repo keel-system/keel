@@ -9,7 +9,14 @@
 //   · claim — dos patrones que se dan juntos en algún lugar del árbol (opcionalmente en el mismo bloque), y
 //             que no sean el bloque que generó build.
 // Lo único que cambia entre lenguajes va en `platform`: la carpeta de fuentes, la extensión de los
-// archivos y qué archivos son los de los mensajes (que nombran a todos los listeners y no son ninguno).
+// archivos, qué archivos son los de los mensajes (que nombran a todos los listeners y no son ninguno) y,
+// opcional, `excludeDirs`: las carpetas de compilación que viven DENTRO de las fuentes (en .NET, `bin` y
+// `obj` de cada proyecto bajo `src/`). Sin ellas fuera, la búsqueda por contenido elegía una DLL que nombra
+// los mismos mensajes que el listener, y el gate salía rojo sobre un proyecto correcto (medido sobre las
+// corridas de keel-dotnet). Sin declararla, el script no cambia. Y `typesPerFile: 'many'`: el lenguaje deja
+// varios tipos en un archivo (C#), así que un archivo localizado por CONTENIDO se recorta al bloque de primer
+// nivel que nombra los mensajes; sin el recorte, tres listeners en un `Listeners.cs` se prohibían los órdenes unos
+// a otros (corrida stock-reservation-events con SNS/SQS de keel-dotnet, correcta y en rojo).
 //
 // Una fila de la matriz es { group, subject, why } más, según su clase:
 //   unit:  { class, require[], forbid[], locate?, confirm? }   (expresiones regulares extendidas, grep -E)
@@ -19,6 +26,13 @@
 const shellQuote = (value) => `'${String(value).replaceAll("'", `'\\''`)}'`;
 
 export function renderIdempotencyGate({ serviceName, platform }, checks) {
+  const excluded = platform.excludeDirs ?? [];
+  // Lo que se busca por contenido: solo fuentes, y fuera de las carpetas de compilación.
+  const grepScope = excluded.length > 0 ? ` --include='*.${platform.extension}' ${excluded.map((dir) => `--exclude-dir=${dir}`).join(' ')}` : '';
+  // Lo que se busca por nombre: las mismas carpetas, podadas.
+  const findPrune = excluded.length > 0 ? ` \\( ${excluded.map((dir) => `-name ${dir}`).join(' -o ')} \\) -prune -o` : '';
+  const findPrint = excluded.length > 0 ? ' -print' : '';
+  const narrow = platform.typesPerFile === 'many';
   const rows = checks.map((check) => {
     if (check.implementors) {
       return `impl ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.implementors)} ${shellQuote(check.exclude)} ${shellQuote(check.why)}`;
@@ -77,10 +91,32 @@ ${groups.map((group) => `    ${group}) ${group}_ko=1 ;;`).join('\n')}
 # El archivo se busca por nombre, no por ruta: algunos los escribe el agente y dónde
 # los ponga es suyo (la frontera hexagonal la vigila conventions/project-layout.md).
 locate() {
-  find "$SRC" -name "$1.${platform.extension}" -type f 2>/dev/null | head -n 1
+  find "$SRC"${findPrune} -name "$1.${platform.extension}" -type f${findPrint} 2>/dev/null | head -n 1
 }
 
-# Una unidad de comprobación: un archivo, lo que tiene que aparecer y lo que no.
+${
+    narrow
+      ? `# Los bloques de PRIMER NIVEL (un tipo con su cabecera: atributos, firma, constructor primario) que casan con
+# el patrón. Lo que va entre llaves de profundidad 0 a 1 es un tipo; lo que hay antes de abrirlo, su cabecera.
+typeBlocks() {  # patrón
+  awk -v pat="$1" '
+    { line = $0
+      t = line; o = gsub(/\\{/, "", t)
+      t = line; c = gsub(/\\}/, "", t)
+      if (depth == 0 && o == 0) { head = head line "\\n"; next }
+      buf = buf line "\\n"
+      depth += o - c
+      if (depth <= 0) {
+        block = head buf
+        if (block ~ pat) printf "%s", block
+        head = ""; buf = ""; depth = 0
+      }
+    }'
+}
+
+`
+      : ''
+  }# Una unidad de comprobación: un archivo, lo que tiene que aparecer y lo que no.
 unit() {  # familia, sujeto, clase, requeridos (\\001), prohibidos (\\001), localizador, porqué, confirmador
   local group="$1" subject="$2" class="$3" required="$4" forbidden="$5" locator="$6" why="$7" confirm="\${8:-}"
   local file
@@ -92,8 +128,8 @@ unit() {  # familia, sujeto, clase, requeridos (\\001), prohibidos (\\001), loca
   # del mediador, que también nombran la operación. Sin esto, la implementación correcta
   # se reporta como ausente y el camino de menor resistencia para apagar el hallazgo es
   # partirla en la incorrecta — que aquí serían DOS beans disparando el mismo barrido.
-  if [ -z "$file" ] && [ -n "$locator" ] && [ -n "$confirm" ]; then
-    local candidate
+${narrow ? '  local bycontent=""\n' : ''}  if [ -z "$file" ] && [ -n "$locator" ] && [ -n "$confirm" ]; then
+${narrow ? '    bycontent=1\n' : ''}    local candidate
     while IFS= read -r candidate; do
       [ -n "$candidate" ] || continue
       if grep -qE -- "$confirm" "$candidate" 2>/dev/null; then
@@ -101,7 +137,7 @@ unit() {  # familia, sujeto, clase, requeridos (\\001), prohibidos (\\001), loca
         break
       fi
     done <<EOF
-$(grep -rlE -- "$locator" "$SRC" 2>/dev/null | grep -vE '${platform.messageFiles}')
+$(grep -rlE${grepScope} -- "$locator" "$SRC" 2>/dev/null | grep -vE '${platform.messageFiles}')
 EOF
   fi
   if [ -z "$file" ]; then
@@ -112,7 +148,16 @@ EOF
   # explica lo que HAY que hacer no es lo mismo que un TODO vivo en el cuerpo. Se
   # miran las líneas de código, no la prosa que build dejó de guía.
   local code
-  code="$(sed -e 's://.*::' -e '/^[[:space:]]*\\*/d' -e '/^[[:space:]]*\\/\\*/d' "$file")"
+  code="$(sed -e 's://.*::' -e '/^[[:space:]]*\\*/d' -e '/^[[:space:]]*\\/\\*/d' "$file")"${
+    narrow
+      ? `
+  # Varios tipos en un archivo: el que se encontró por contenido se mira solo en los bloques de primer nivel
+  # (con su cabecera) que nombran los mensajes, no el archivo entero con sus vecinos.
+  if [ -n "$bycontent" ]; then
+    code="$(printf '%s\\n' "$code" | typeBlocks "$locator")"
+  fi`
+      : ''
+  }
   local pattern
   while IFS= read -r pattern; do
     [ -n "$pattern" ] || continue
@@ -134,7 +179,7 @@ EOF
 impl() {  # familia, sujeto, interfaz, clase excluida, porqué
   local group="$1" subject="$2" iface="$3" excluded="$4" why="$5"
   local found
-  found="$(grep -rlE "implements[^{]*\\\\b$iface\\\\b|$iface[[:space:]]*\\\\(" "$SRC" 2>/dev/null \\
+  found="$(grep -rlE${grepScope} "implements[^{]*\\\\b$iface\\\\b|$iface[[:space:]]*\\\\(" "$SRC" 2>/dev/null \\
            | grep -v "/$excluded.${platform.extension}" | head -n 1)"
   [ -n "$found" ] || note "$group" "$subject: solo está el fallback $excluded — $why"
 }
@@ -237,7 +282,7 @@ claim() {  # familia, sujeto, patrón principal, patrón que lo acompaña, rutas
       break
     fi
   done <<EOF
-$(grep -rlE -- "$pattern" "$SRC" 2>/dev/null | grep -vE "$excluded")
+$(grep -rlE${grepScope} -- "$pattern" "$SRC" 2>/dev/null | grep -vE "$excluded")
 EOF
   [ -n "$found" ] || note "$group" "$subject: $why"
 }

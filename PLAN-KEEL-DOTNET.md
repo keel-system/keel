@@ -1045,6 +1045,30 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     - **Lo que destapó**: el analizador EF1003 de EF Core no deja concatenar SQL dentro de `ExecuteSqlRawAsync` (la sonda
       que monta la sentencia del arnés la arma antes en una variable); y el heredoc de este shell come las barras
       invertidas, así que dos ediciones dejaron saltos de línea reales dentro de un literal de JS (cazado al importar).
+  - **10d, el gate `check-idempotency.sh` (hecho, 2026-10-14).** El MOTOR es el de keel-core
+    (`gen/idempotency-gate.js`), el mismo que el de keel-spring y keel-nest; `src/scaffold/idempotency-check.js` pone la
+    MATRIZ con patrones de C#: `dedupe`, `payloadContract`, la escritura de los registros como INSERT (en EF Core, `Add` y
+    no `Update` ni `Attach`), `commandIdempotency` (registro y clave natural), `domainEvent`, `sweepClaim` (con el
+    reclamo generado y el barrido que build no puede reclamar, con su `deny` sobre los bloques de build),
+    `outboxDelivery` (el dispatcher registrado en `BrokerBindings.cs`) y `conditionalUniqueness`. Las familias de lo que
+    keel-dotnet aún no genera (compensación, reconciliación, idempotencia saliente, correo) llegan con el 11 y el 13. Los
+    agentes de código y de calidad lo ejecutan y lo reportan (`idempotency:`), y el README dice que nace rojo.
+    - **Medido:** `test/idempotency-check.test.js` (26): familias y sujetos iguales a los de keel-nest en 7 fixtures × 3
+      brokers, y el gate EJECUTADO con bash: rojo recién generado en las cinco familias de `stock-reservation-events` y
+      en las dos de `payout-runs`; verde con el uso correcto; rojo otra vez leyendo el lote con un finder, y con solo la
+      nota del stub (el gate no lee comentarios). **Contra las corridas reales** de keel-dotnet (sin tocarlas: el script se
+      lanza desde el scratchpad): `product-catalog` (7d), `stock-reservation-events` con RabbitMQ (9e) y con SNS/SQS (9h),
+      **verdes** en todas sus familias. Falsado sobre una copia del `src/` de la 9e con tres sabotajes que conservan la
+      forma (sin `RequireContract`, el orden de la guarda cruzado, el dispatcher sin registrar): cada uno tumba su familia
+      y solo esa.
+    - **Dos defectos del MOTOR que destapó keel-dotnet**, invisibles en los otros dos y arreglados como opciones de
+      plataforma que solo emiten algo si se declaran (las líneas base de keel-spring y keel-nest, **idénticas**):
+      (1) `excludeDirs`: en .NET `bin` y `obj` viven DENTRO de `src/<Proyecto>/`, y la búsqueda por contenido elegía una
+      DLL que nombra los mismos mensajes que el listener: el gate salía ROJO sobre las corridas 9e y 9h, que estaban bien;
+      (2) `typesPerFile: 'many'`: C# deja varios tipos en un archivo, y el agente de la 9h escribió sus tres listeners en
+      un `Listeners.cs`; mirando el archivo entero, cada uno «prohibía» el orden del vecino. El archivo localizado por
+      contenido se recorta ahora al bloque de primer nivel que nombra los mensajes. Los dos casos están en el test, con la
+      DLL al lado. keel-nest (TypeScript) también admite varios tipos por archivo: el mismo hueco, latente y sin tocar.
 
 ## 5. Riesgos conocidos
 

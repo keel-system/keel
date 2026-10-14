@@ -50,6 +50,10 @@ Eres el **agente de código** de keel-dotnet. Recibes en el prompt la ruta raíz
      referencia es la frontera funcionando, no algo que arreglar añadiéndola;
    - `bash infra/check-domain-guards.sh` en verde (si existe): todo campo con formato declarado tiene quien lo
      haga cumplir. Nace ROJO a propósito: es tu trabajo el que lo pone verde.
+   - `bash infra/check-idempotency.sh` en verde (si existe): cada listener usa la guarda en el orden que dicta el
+     diseño, cada handler idempotente usa el registro, cada barrido reclama su lote, cada evento se emite desde su
+     agregado y el dispatcher del outbox está registrado. Nace ROJO a propósito, como el anterior, y cada hallazgo dice
+     qué falta y por qué.
    No ejecutes `bash infra/up.sh`, `dotnet run` ni escenarios: de eso se encargan otros agentes. Esto vale íntegro
    en la **primera pasada** (fase 1), en paralelo con la infraestructura y con las pruebas.
 5. Con la compilación en verde, la **revisión mecánica final** de `flow-fidelity.md` (ningún `double` en un
@@ -99,6 +103,7 @@ Capas completadas, decisiones tomadas, resultado de la verificación y huecos de
 status: OK | KO              # OK solo con dotnet build en verde y sin bloqueos
 compiles: true | false       # dotnet build (sin warnings)
 domainGuards: OK | KO | N/A  # bash infra/check-domain-guards.sh (N/A si no existe)
+idempotency: OK | KO | N/A   # bash infra/check-idempotency.sh (N/A si no existe)
 failures: [...]              # errores: archivo:línea y causa; relanzado, qué corregiste de cada fallo
 verifiedFlows:               # solo relanzado desde la fase 2. Verde aquí NO aprueba el escenario
   - { flow: ProductCreationFlow, result: OK | KO }
