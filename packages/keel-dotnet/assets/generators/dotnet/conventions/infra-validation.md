@@ -42,6 +42,21 @@ curl -s -d 'grant_type=password&client_id=<servicio>-dotnet-test&username=<rol>&
   http://localhost:8180/realms/<servicio>/protocol/openid-connect/token
 ```
 
+## La topología de mensajería (`broker: snssqs`)
+
+`infra/init-messaging.sh` siembra en LocalStack los topics, las colas, sus DLQ (con el `maxReceiveCount` del diseño) y
+las suscripciones SNS→SQS con raw delivery y filtro por `eventType`. `up.sh` NO lo ejecuta: LocalStack arranca vacío y
+pierde la topología al reiniciarse. El agente de infraestructura lo **ejecuta y verifica**, no lo escribe: tras cada
+`up.sh` y antes de `validate-infra.sh`, que comprueba que cada topic y cada cola existen. En los flujos, `StartBroker()`
+lo vuelve a ejecutar solo. Con RabbitMQ la topología la declara la app al conectar, y con Kafka los topics los crea el
+broker con el primer mensaje: no hay nada que sembrar.
+
+```bash
+bash infra/up.sh
+bash infra/init-messaging.sh
+bash infra/validate-infra.sh
+```
+
 ## Reset entre flujos (`infra/reset-db.sh`)
 
 Deja el estado como recién arrancado: **vacía los datos** de la base, preservando el esquema y la tabla de

@@ -15,7 +15,12 @@ Todo lo que hagas ocurre dentro de esa raíz.
 2. Detecta el runtime igual que los scripts: `$CONTAINER_RUNTIME` si está definida; si no, `docker`; si no,
    `podman`. Sea `$RT` el elegido. Sin ninguno de los dos → `status: PENDIENTE` y termina.
 3. Levanta con **`bash infra/up.sh`**, no con un `compose up -d` a mano: el script resuelve además el frontend de
-   compose, y con podman en Windows eso no es adivinable desde fuera.
+   compose, y con podman en Windows eso no es adivinable desde fuera. Si existe **`infra/init-messaging.sh`** (stack
+   con `broker: snssqs`), ejecútalo justo después y ANTES del sondeo: `up.sh` levanta LocalStack vacío, y la topología
+   (topics, colas, DLQ con su `maxReceiveCount` y las suscripciones SNS→SQS con raw delivery y filtro por `eventType`)
+   la siembra ese script. Es idempotente —reejecútalo tras cada `up.sh`: LocalStack la sirve de memoria— y no se edita:
+   es del generador. Sin él, `validate-infra.sh` falla con razón (comprueba que cada topic y cada cola EXISTEN, que es
+   lo que separa «LocalStack responde» de «la topología está sembrada»).
 4. Sondea con `bash infra/validate-infra.sh` (ya reintenta: levantar no es estar listo). Si sigue fallando,
    diagnostica con `$RT ps` y `$RT logs <contenedor>` y corrige **solo causas operativas** (puerto ocupado,
    contenedor viejo → `bash infra/down.sh` + `bash infra/up.sh`). **Nunca edites código del proyecto ni los
@@ -52,6 +57,9 @@ services:
   - { name: db, state: up | down | unhealthy }
 validateInfra: OK | KO | FALSO-NEGATIVO
 reset: OK | KO | N/A          # bash infra/reset-db.sh
+messaging:                    # solo con broker snssqs
+  provisioned: OK | KO | N/A  # init-messaging.sh ejecutado sin error
+  topology: OK | KO | N/A     # topics y colas verificados como existentes por validate-infra.sh
 probes:                       # solo los checks que no salieron OK a la primera: qué comprobaste a mano
   - { check: "…", verdict: FALSO-NEGATIVO, evidence: "…" }
 blockers: [...]

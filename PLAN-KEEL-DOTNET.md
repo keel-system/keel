@@ -974,6 +974,13 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     SNS/SQS y si el arnés de LocalStack (resiembra, lectura en barrido, abandono aparcado) aguanta un pipeline real. Los
     contenedores se llaman `stock-reservation-events-*`, como los de la 9e: no puede correr a la vez que otra corrida del
     mismo diseño.
+  - **9h, hecha (2026-10-14): 19/19 y huella 9**, los MISMOS nueve archivos que la 9e: cambiar de broker no movió la
+    huella fuera de `BrokerBindings.cs` (`docs/corridas/2026-10-14-stock-reservation-events-snssqs-dotnet.md`). Diseño
+    listo, sin `--accept-unready`, sin `harnessPatches` ni `design-gaps.yaml`; tres listeners, uno por suscripción, como
+    enseña la skill, y el arnés de LocalStack sin un rojo. Un hueco del generador: el agente de infraestructura no
+    ejecutaba `infra/init-messaging.sh` (`up.sh` deja LocalStack vacío y `validate-infra.sh` falla); el agente lo rodeó.
+    Arreglado en `keel-dotnet-infra.md` (paso 3 y `messaging` en el reporte) e `infra-validation.md`, como en
+    keel-spring. keel-nest tiene el mismo hueco latente (anotado, sin tocar).
 
 ## 5. Riesgos conocidos
 

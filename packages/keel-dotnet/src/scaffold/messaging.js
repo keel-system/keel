@@ -809,7 +809,8 @@ public static class BrokerBindings
     /// <summary>
     /// Los listeners de las suscripciones, ${perSubscription ? 'UNO POR SUSCRIPCIÓN' : 'UNO POR COLA y no uno por suscripción'}${listeners.length > 0 ? `:\n${listeners.map((line) => `    ///   · ${line}`).join('\n')}` : ' (este diseño no consume nada)'}.
 ${model.stack?.broker === 'snssqs'
-  ? `    /// Cada suscripción tiene su cola propia, suscrita al topic de la fuente con filtro por su tipo.`
+  ? `    /// Cada suscripción tiene su cola propia, suscrita al topic de la fuente con filtro por su tipo: a cada listener
+    /// solo le llega lo suyo.`
   : kafka
   ? `    /// Cada suscripción tiene su consumer group, que recibe el topic entero: dos de la misma fuente leen el mismo topic y
     /// cada una descarta lo que no es suyo por el tipo del mensaje.`
