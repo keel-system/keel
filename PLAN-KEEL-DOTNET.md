@@ -874,10 +874,35 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       - `db-check` dejaba vivo su contenedor cuando salía a mitad (un sabotaje que no compilaba): el `process.exit` dentro
         del `try` se saltaba el `finally`. Ahora aborta por excepción y para la base (comprobado con un sabotaje que no
         existe). Y el primer sabotaje del lease no compilaba: un sabotaje así no falsa nada.
-  - **Siguiente: 9c**, el arnés (entregar a una suscripción, leer lo publicado y la DLQ con `keel-core/gen/broker-probes.js`)
-    y `broker-check` contra un RabbitMQ real (publicar con confirmación, `mandatory` sin cola, consumo con reintento y
-    descarte, el outbox con el broker caído); **9d**, la skill `keel-dotnet-rabbitmq` y la sección `messaging` de
-    `mapping.md`; **9e**, la corrida.
+  - **9c, el arnés de mensajería y `broker-check` (hecho, 2026-10-14).**
+    - `src/scaffold/messaging-harness.js` → `tests/<Raíz>.IntegrationTests/Support/Messaging.cs`: los helpers de keel-spring
+      y keel-nest en PascalCase (`Deliver<Sub>` con la envoltura de su contrato, `DeliverMessage`, `PublishedMessages`,
+      `DeadLetterMessages`, `PurgeMessages`, `StopBroker`/`StartBroker` y, con outbox, `DeadLetteredEvents`,
+      `AbandonOutboxEvent` y `ClearAbandonedOutboxEvents`). Los comandos salen de `keel-core/gen/broker-probes.js` y viajan
+      por el contenedor devtools; los cuerpos, por la entrada estándar (`Harness.Run` gana `input`).
+    - **El servidor es otro proceso**, así que el modelo es keel-spring y no keel-nest: lo rendido y el abandono del
+      outbox van por SQL (`attempts` a 1 000 000, el mismo número que keel-spring), el drenaje antes de leer un canal
+      también, y la espera a que el servidor vuelva a estar conectado se le pregunta al BROKER: la conexión emitida se
+      presenta con el nombre del servicio (`ClientProvidedName`) y el arnés la busca en `/api/connections`. Cada flujo abre
+      con el broker arriba y el servidor conectado, y el humo gana SMOKE-6.
+    - **`npm run broker-check` 19/19** sobre `stock-reservation-events` generado por `build`: el dispatcher y el listener
+      del agente como SONDAS registradas en `BrokerBindings.cs` (el listener decide por el `eventId` y anota cada intento
+      en `build/broker-probe/attempts.log`, porque el servidor es otro proceso), y once flujos sonda puntuados por
+      `score-scenarios.sh` que usan solo los helpers del arnés: entrega procesada una vez, reentrega absorbida, el fallo
+      transitorio reintentado 5 veces hasta la DLQ, el rechazo de negocio y el contrato incumplido a la DLQ sin reintento,
+      el evento ajeno ignorado; la fila del outbox publicada con su routing key y su tipo, lo que no tiene cola
+      (`mandatory`) sin dar por publicado, la fila que espera con el broker caído y sale al volver sin rendirse, el
+      abandono contado como rendido y la purga. Falsado: con el rechazo de negocio reintentable sale FALLO
+      `FL-BRK-001-D` y solo él. A la primera, sin un rojo intermedio.
+  - **9d, la skill y las convenciones (hecho, 2026-10-14).** `skills/keel-dotnet-rabbitmq` (SKILL.md, `listeners.md` y
+    `troubleshooting.md`), portada de la de keel-nest con lo propio de .NET: el listener es un `IHostedService` que abre
+    un ámbito de DI por mensaje para el `IUseCaseMediator`, el registro en `BrokerBindings.cs` va antes de los respaldos
+    (`TryAdd`), y nada de MassTransit. Se instala con `broker: rabbitmq` (`stackSkills`). `mapping.md` gana la sección
+    `messaging` e `integration-tests.md` los helpers del arnés. `generator-docs.test.js` mide las rutas de la skill
+    contra lo que emiten `stock-reservation-events` (outbox) y `metering-digest` (best-effort), y las firmas que enseña
+    (`Publish`, `Consume`, `Header`, `Dispatch`, `InboundContext.Run`, la guarda, el publisher y el comando). Falsado
+    citando un archivo inventado. `npm test` 356/356; `cs-check` 15/15.
+  - **Siguiente: 9e**, la corrida con RabbitMQ (`stock-reservation-events`, como en keel-nest).
 
 ## 5. Riesgos conocidos
 

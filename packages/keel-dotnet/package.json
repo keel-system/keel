@@ -11,7 +11,8 @@
     "cs-check": "node scripts/cs-check.js",
     "db-check": "node scripts/db-check.js",
     "harness-check": "node scripts/harness-check.js",
-    "security-check": "node scripts/security-check.js"
+    "security-check": "node scripts/security-check.js",
+    "broker-check": "node scripts/broker-check.js"
   },
   "files": [
     "src",

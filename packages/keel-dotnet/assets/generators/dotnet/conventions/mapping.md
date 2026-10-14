@@ -247,6 +247,24 @@ skill `keel-dotnet-database`.
 El esquema de `develop` y `production` lo crean las migraciones de EF Core; el baseline lo produce el pase de
 calidad.
 
+## `messaging` — messaging.keel.yaml
+
+Casi entera de build, con los mismos nombres que los servidores de keel-spring y keel-nest (destinos, colas, DLQ,
+variables de entorno y tablas `outbox_event` y `processed_event`):
+
+- **Lo que sale**: los eventos de dominio llegan solos al broker. El agregado hace `Raise(...)`; al guardar, su
+  adaptador de repositorio entrega `PullDomainEvents()` al puente (`Messaging/<Raíz>DomainEventBridge.cs`), que con
+  `reliability: outbox` escribe la fila del outbox en la MISMA transacción y con `best-effort` publica tras el commit.
+  **Nunca publiques desde un handler** ni escribas en `outbox_event`.
+- **Lo que entra**: cada suscripción tiene su mensaje (`Messaging/Subscriptions/<Evento>Message.cs`) con `FromWire` y
+  `RequireContract`, y su comentario dice el orden del guard (`IdempotencyGuard`) y el mapeo al comando.
+- **Lo del broker** —el dispatcher del outbox o los publishers best-effort, y los listeners, uno por COLA— lo escribe el
+  agente con la skill del broker (`keel-dotnet-rabbitmq`) y lo registra en UN solo archivo,
+  `Messaging/BrokerBindings.cs`. La conexión, la topología, el reintento y la DLQ son de build.
+
+El handler de una operación disparada por un mensaje es un handler más: recibe su comando ya mapeado, y la
+deduplicación, la reentrega y el descarte no son cosa suya.
+
 ## Cobertura funcional (criterio de «generación terminada»)
 
 `dotnet build` en verde (sin warnings), los gates estáticos en verde y el 100% de los escenarios `FL-*` en OK en

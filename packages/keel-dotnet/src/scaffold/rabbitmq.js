@@ -23,6 +23,7 @@ import { RABBIT_CONFIRM_TIMEOUT_MS, RABBIT_PREFETCH, RABBIT_RECOVERY_INTERVAL_MS
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { usesRabbitMq, messagingNamespace } from './messaging.js';
+import { connectionName } from './messaging-harness.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -39,7 +40,7 @@ export function generate(model) {
     file(
       'RabbitConnection',
       ['System.Text', 'Microsoft.Extensions.Hosting', 'Microsoft.Extensions.Logging', 'RabbitMQ.Client', 'RabbitMQ.Client.Events', 'RabbitMQ.Client.Exceptions', messagingNamespace(model)],
-      connectionBody()
+      connectionBody(model)
     )
   ];
 }
@@ -223,7 +224,7 @@ public sealed record RabbitMqSettings(bool Enabled, string Host, int Port, strin
 }`;
 }
 
-function connectionBody() {
+function connectionBody(model) {
   return `/// <summary>Un mensaje recibido de una cola, ya copiado: el cuerpo de la entrega solo vale mientras dura el callback.</summary>
 /// <param name="Body">El cuerpo en UTF-8 (JSON con el contrato del cable).</param>
 /// <param name="Type">El tipo nativo del mensaje (la propiedad type de AMQP), o null.</param>
@@ -422,7 +423,8 @@ public sealed partial class RabbitConnection(RabbitMqSettings settings, Messagin
             Port = settings.Port,
             UserName = settings.Username,
             Password = settings.Password,
-            ClientProvidedName = messaging.Destination,
+            // El nombre con el que se presenta al broker: el arnés busca así la conexión del servicio.
+            ClientProvidedName = ${csString(connectionName(model))},
             AutomaticRecoveryEnabled = true,
             TopologyRecoveryEnabled = true,
             NetworkRecoveryInterval = settings.RecoveryInterval

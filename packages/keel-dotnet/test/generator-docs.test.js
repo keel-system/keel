@@ -94,8 +94,8 @@ test('la skill de la base y el baseline solo se instalan con persistencia relaci
 test('cada ruta src/, tests/ e infra/ que citan los assets existe en lo que emite build', () => {
   // Lo de infra/ no lleva el nombre del servicio: vale también lo que emiten los diseños con seguridad (el realm de
   // prueba, sus credenciales y el emulador de Cognito), que las guías comunes citan para cuando el diseño lo pide.
-  const securityInfra = Object.values(SKILL_SUBJECTS).flatMap(({ fixtures, auth }) =>
-    fixtures.flatMap((fixture) => planWith(fixture, auth).files.map((file) => file.path).filter((route) => route.startsWith('infra/')))
+  const securityInfra = Object.values(SKILL_SUBJECTS).flatMap(({ fixtures, stack }) =>
+    fixtures.flatMap((fixture) => planWith(fixture, stack).files.map((file) => file.path).filter((route) => route.startsWith('infra/')))
   );
   const emitted = [...Object.keys(files), ...securityInfra];
   // Lo que crea otro después: las migraciones (el pase de calidad), la salida de compilación y las pruebas de flujo
@@ -111,7 +111,7 @@ test('cada ruta src/, tests/ e infra/ que citan los assets existe en lo que emit
   }
   for (const [skill, subject] of Object.entries(SKILL_SUBJECTS)) {
     // La skill vale para cualquier diseño con ese proveedor: una ruta cuenta si la emite alguno de sus sujetos.
-    const plans = subject.fixtures.map((fixture) => planWith(fixture, subject.auth));
+    const plans = subject.fixtures.map((fixture) => planWith(fixture, subject.stack));
     for (const source of assetSources(path.join(assets, 'generators', 'dotnet', 'skills', skill))) {
       const perSubject = plans.map(({ model, files: subjectFiles }) => missingRoutes(source, solution(model), subjectFiles.map((file) => file.path), [], agentFlow));
       // Lo que falta en TODOS (por la ruta citada, que no depende del nombre del servicio salvo por <Raíz>).
@@ -125,13 +125,15 @@ test('cada ruta src/, tests/ e infra/ que citan los assets existe en lo que emit
 
 /** Las skills que solo se instalan con un stack, y el diseño y el stack contra los que se miden sus rutas. */
 const SKILL_SUBJECTS = {
-  'keel-dotnet-keycloak': { fixtures: ['profile-directory', 'asset-vault'], auth: 'keycloak' },
-  'keel-dotnet-cognito': { fixtures: ['profile-directory', 'asset-vault'], auth: 'cognito' }
+  'keel-dotnet-keycloak': { fixtures: ['profile-directory', 'asset-vault'], stack: { auth: 'keycloak' } },
+  'keel-dotnet-cognito': { fixtures: ['profile-directory', 'asset-vault'], stack: { auth: 'cognito' } },
+  // Con outbox y best-effort: la skill cita las piezas de los dos.
+  'keel-dotnet-rabbitmq': { fixtures: ['stock-reservation-events', 'metering-digest'], stack: { broker: 'rabbitmq', database: 'postgresql' } }
 };
 
-function planWith(fixture, auth) {
+function planWith(fixture, stack) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
-  return planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { auth } });
+  return planService({ manifest, layers, workspace: FIXTURES_DIR, stack });
 }
 
 /** Las rutas src/, tests/ e infra/ que cita un asset y no están en lo emitido. */
@@ -193,4 +195,24 @@ test('la skill orquestadora enseña los comandos de esta plataforma, no los de o
     assert.match(skill, new RegExp(`-class "${sln.integrationTests.name}\\.HarnessSmoke"`));
     assert.doesNotMatch(skill, /npm |gradlew|vitest|check:architecture/i);
   }
+});
+
+test('la skill de RabbitMQ se instala con el broker y enseña las firmas del código emitido', () => {
+  const outbox = byPath(planWith('stock-reservation-events', { broker: 'rabbitmq', database: 'postgresql' }).files);
+  const bestEffort = byPath(planWith('metering-digest', { broker: 'rabbitmq', database: 'postgresql' }).files);
+  const find = (tree, suffix) => Object.entries(tree).find(([file]) => file.endsWith(suffix))?.[1] ?? '';
+  assert.ok(Object.keys(outbox).some((file) => file.endsWith('skills/keel-dotnet-rabbitmq/SKILL.md')), 'se instala con rabbitmq');
+  assert.ok(!Object.keys(files).some((file) => file.includes('keel-dotnet-rabbitmq')), 'y no sin mensajería');
+  const connection = find(outbox, '/RabbitMq/RabbitConnection.cs');
+  assert.ok(connection.includes('public async Task Publish(string exchange, string routingKey, string payload, string type, IReadOnlyDictionary<string, string>? headers = null, CancellationToken cancellationToken = default)'));
+  assert.ok(connection.includes('public void Consume(string queue, Func<RabbitMessage, CancellationToken, Task> handler)'));
+  assert.ok(connection.includes('public string? Header(string name)'));
+  assert.ok(find(outbox, '/Outbox/IOutboxDispatcher.cs').includes('Task Dispatch(string destination, string routingKey, string eventType, string payload, CancellationToken cancellationToken = default);'));
+  assert.ok(find(outbox, '/Messaging/InboundContext.cs').includes('public static async Task Run(EventMetadata metadata, Func<Task> action)'));
+  const guard = find(outbox, '/Idempotency/IdempotencyGuard.cs');
+  for (const member of ['AlreadyProcessed(string handlerId, string eventId', 'Record(string handlerId, string eventId', 'TryRecord(string handlerId, string eventId']) assert.ok(guard.includes(member), member);
+  assert.ok(find(outbox, '/Messaging/BrokerBindings.cs').includes('public static void AddBrokerAdapters(IServiceCollection services)'));
+  assert.ok(find(outbox, '/Messaging/MessagingSettings.cs').includes('IReadOnlyDictionary<string, SubscriptionSettings> Subscriptions'));
+  assert.ok(find(bestEffort, '/Messaging/IDailyDigestClosedPublisher.cs').includes('Task Publish(DailyDigestClosedIntegrationEvent integrationEvent, string? correlationId, CancellationToken cancellationToken = default);'));
+  assert.ok(find(outbox, '/Commands/ApplyStockReservedCommand.cs').includes('public required Guid OrderId { get; init; }'));
 });

@@ -42,6 +42,14 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Un flujo 
 | `ScopedResource()` | el recurso al que alcanzan los usuarios no exentos del alcance por recurso |
 | `TokenWithScope(rol, valores…)` | un usuario del rol cuyo claim del alcance enumera EXACTAMENTE esos valores (ninguno: sin el claim); solo con alcance por recurso y Keycloak. No es un `designGap` ni se arregla editando el realm |
 | `ApiKey()` | la clave del perfil local con `protocol: api-key` |
+| `Deliver<Suscripción>(messageId, payloadJson)` | entrega un mensaje de esa suscripción en su canal real, con la envoltura de su contrato (solo con capa `messaging`); el MISMO `messageId` dos veces es la reentrega que el consumidor tiene que absorber |
+| `DeliverMessage(canal, clave, cuerpo, cabeceras?)` | un mensaje crudo en un canal (un evento ajeno del canal compartido, un cuerpo roto); falla si el broker no lo enrutó |
+| `await PublishedMessages(canal, n?)` | lo publicado en un canal del diseño desde el reset (cada `BrokerMessage` con `RoutingKey`, `Properties`, `Body`, `Payload` y `EventId`); con outbox, espera antes a que el relay entregue lo pendiente. Leer no consume |
+| `DeadLetterMessages(suscripción, n?)` | lo que acabó en el descarte de una suscripción: úsalo también para la aserción NEGATIVA (el duplicado absorbido no acaba aquí) |
+| `await PurgeMessages(canal o suscripción)` | vacía un canal justo antes de la acción cuyo Then afirma que NO se publica nada |
+| `await StopBroker()` / `await StartBroker()` | el canal indisponible: lo para, y lo levanta esperando a que el servidor vuelva a estar conectado |
+| `DeadLetteredEvents()` | cuántos eventos se rindió el outbox (solo con `reliability: outbox`): el Then natural de casi cualquier escenario del outbox es que siga en 0 |
+| `AbandonOutboxEvent(evento)` / `ClearAbandonedOutboxEvents()` | agota el presupuesto de reintentos del evento pendiente de ese tipo (la precondición de la rendición) y lo retira después |
 
 Nada de FluentAssertions (licencia comercial desde la 8): las aserciones son las de xUnit y `AssertJson`.
 

@@ -9,6 +9,7 @@
 //   · lo que solo es markdown que un agente lee por ruta —architecture, constitution, orchestration, conventions— va
 //     a `docs/keel/`, UNA sola copia, y no puede citar rutas de harness.
 
+import { usesRabbitMq } from './messaging.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from 'keel-core';
@@ -36,10 +37,11 @@ export const CONVENTIONS = ['mapping.md', 'project-layout.md', 'domain-modeling.
 /** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
 export const AGENTS = ['keel-dotnet-code.md', 'keel-dotnet-infra.md', 'keel-dotnet-tests.md', 'keel-dotnet-validate.md', 'keel-dotnet-quality.md'];
 
-/** Skills por tecnología aplicables al servicio: la de la base relacional y la del proveedor de identidad. */
+/** Skills por tecnología aplicables al servicio: la de la base relacional, la del proveedor de identidad y la del broker. */
 export function stackSkills(model) {
   const skills = usesRelational(model) ? ['keel-dotnet-database'] : [];
   if (usesJwt(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-dotnet-${model.stack.auth}`);
+  if (usesRabbitMq(model)) skills.push('keel-dotnet-rabbitmq');
   return skills;
 }
 

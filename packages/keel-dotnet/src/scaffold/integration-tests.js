@@ -28,6 +28,7 @@ import { DOTNET_INFRA } from './infra.js';
 import { usesApi } from './rest-support.js';
 import { usesRelational } from './persistence.js';
 import { csFile, csString, solution } from './render.js';
+import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
 import { closingCredentialExpression, credentialsCs, flowTestCredentialMembers, smokeCredentialsCase } from './identity-harness.js';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
@@ -54,6 +55,8 @@ export function generate(model) {
     { path: `${project.dir}/Support/ScenarioOrder.cs`, content: scenarioOrderCs(model) },
     // Con capa security, las credenciales del proveedor de prueba (identity-harness.js).
     ...[credentialsCs(model, supportNamespace(model))].filter(Boolean).map((content) => ({ path: `${project.dir}/Support/Credentials.cs`, content })),
+    // Con mensajería, los helpers del broker y del outbox (messaging-harness.js).
+    ...[messagingHarnessCs(model, supportNamespace(model))].filter(Boolean).map((content) => ({ path: `${project.dir}/Support/Messaging.cs`, content })),
     { path: `${project.dir}/${HARNESS_SMOKE_CLASS}.cs`, content: harnessSmokeCs(model) },
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript(model) }
@@ -143,7 +146,7 @@ function flowTestCs(model) {
 /// <para>Lo generó keel-dotnet build: no se edita. Lo que un flujo necesite y no esté aquí se escribe en la propia
 /// clase del flujo.</para>
 /// </remarks>
-public abstract class FlowTest : IAsyncLifetime
+public abstract partial class FlowTest : IAsyncLifetime
 {
 ${api ? `    /// <summary>Prefijo de todas las rutas del servicio (basePath del diseño + versión).</summary>
     public const string RouteBase = ${csString(model.api.routeBase)};
@@ -169,7 +172,9 @@ ${api ? `    /// <summary>Prefijo de todas las rutas del servicio (basePath del 
         try
         {
             await FlowServer.EnsureStartedAsync(TestContext.Current.CancellationToken);${reset ? `
-            Harness.ResetState();` : ''}
+            Harness.ResetState();` : ''}${usesMessagingHarness(model) ? `
+            // El broker arriba (un flujo anterior pudo dejarlo parado) y el servidor conectado a él.
+            await BrokerHarness.PrepareAsync();` : ''}
             await GivenAsync();
             Prepared[flow] = null;
         }
@@ -609,18 +614,25 @@ internal static class Harness
         return new FlowResponse((int)response.StatusCode, received, text);
     }
 
-    public static string Run(string command, IEnumerable<string> arguments, string hint = "")
+    public static string Run(string command, IEnumerable<string> arguments, string hint = "", string? input = null)
     {
         var start = new ProcessStartInfo(command)
         {
             WorkingDirectory = Root,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = input is not null,
             UseShellExecute = false
         };
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         var line = string.Join(' ', start.ArgumentList.Prepend(command));
         using var process = Process.Start(start) ?? throw new InvalidOperationException($"no se pudo lanzar {command}");
+        if (input is not null)
+        {
+            // Lo que viaja por la entrada estándar (un cuerpo que se copia a un contenedor), sin pasar por el argv.
+            process.StandardInput.Write(input);
+            process.StandardInput.Close();
+        }
         var stderr = process.StandardError.ReadToEndAsync();
         var stdout = process.StandardOutput.ReadToEnd();
         process.WaitForExit();
@@ -854,7 +866,9 @@ ${headers}
   }
   const identity = smokeCredentialsCase(model);
   if (identity) cases.push(identity);
-  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null].filter(Boolean);
+  const messaging = messagingSmokeCase(model);
+  if (messaging) cases.push(messaging);
+  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null, messaging ? 'broker' : null].filter(Boolean);
   return csFile({
     namespace: solution(model).integrationTests.name,
     header: `// Humo del arnés: la fontanería de la que dependen TODOS los flujos (servidor vivo${plumbing.length > 0 ? `, ${plumbing.join(', ')}` : ''}).

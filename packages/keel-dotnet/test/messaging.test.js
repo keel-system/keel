@@ -155,3 +155,29 @@ test('el paquete de RabbitMQ solo viaja con RabbitMQ, y la frontera aún no deja
   const plain = planService({ ...design('product-catalog'), workspace: FIXTURES_DIR, stack: RABBIT }).files;
   assert.doesNotMatch(content(plain, 'Directory.Packages.props'), /RabbitMQ/);
 });
+
+// ─── El arnés (incremento 9c) ────────────────────────────────────────────────
+
+test('el arnés de mensajería: los helpers de keel-spring y keel-nest, con los comandos de broker-probes y la conexión por su nombre', () => {
+  const { files } = plan('stock-reservation-events');
+  const harness = content(files, '.IntegrationTests/Support/Messaging.cs');
+  for (const helper of ['PublishedMessages', 'DeadLetterMessages', 'PurgeMessages', 'DeliverMessage', 'DeliverStockReserved', 'StopBroker', 'StartBroker', 'DeadLetteredEvents', 'AbandonOutboxEvent', 'ClearAbandonedOutboxEvents']) {
+    assert.ok(harness.split('\n').some((line) => line.includes('protected static ') && line.includes(` ${helper}(`)), helper);
+  }
+  // Los comandos son los de keel-core/gen/broker-probes.js (la API de gestión por el contenedor devtools).
+  assert.match(harness, /"http:\/\/rabbitmq:15672\/api\/queues\/%2F\/"/);
+  assert.ok(harness.includes('ack_requeue_true'), 'el cuerpo del peek es el de rabbitProbeBody');
+  // El arnés busca la conexión del servicio por el nombre que declara la conexión emitida.
+  assert.match(harness, /ConnectionName = "stock-reservation-events"/);
+  assert.match(content(files, '/RabbitMq/RabbitConnection.cs'), /ClientProvidedName = "stock-reservation-events"/);
+  // Cada flujo abre con el broker arriba y el servidor conectado, y el humo lo afirma.
+  assert.match(content(files, '.IntegrationTests/Support/FlowTest.cs'), /await BrokerHarness\.PrepareAsync\(\);/);
+  assert.match(content(files, '.IntegrationTests/HarnessSmoke.cs'), /SMOKE-6: el broker responde y el servidor está conectado a él/);
+});
+
+test('sin outbox (metering-digest) el arnés no trae los helpers del outbox; sin mensajería, ni el archivo', () => {
+  const harness = content(plan('metering-digest').files, '.IntegrationTests/Support/Messaging.cs');
+  assert.doesNotMatch(harness, /DeadLetteredEvents|AbandonOutboxEvent/);
+  assert.match(harness, /public static Task AwaitOutboxDrained\(string channel\) => Task\.CompletedTask;/);
+  assert.equal(content(plan('product-catalog').files, '.IntegrationTests/Support/Messaging.cs'), undefined);
+});
