@@ -1467,7 +1467,13 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       tres skills existan en lo emitido y que los helpers que enseña `flows.md` sean los del arnés;
       `build.test.js` (build con MercadoPago: avisa de lo sin verificar e instala su skill y no la otra; la captura
       parcial con MercadoPago no pasa de `planService` y con Stripe sí) y `check.test.js` (la cobertura por pasarela).
-  - Queda **13e, la corrida** de `payment-checkout` con las dos pasarelas.
+  - **13e — corridas preparadas (2026-10-15), sin lanzar**: `spring-live-test/corrida-payment-checkout-{stripe,mercadopago}-dotnet/`,
+    sembradas con `keel init` de este repo, `payment-checkout` v1.2.0 y su `DESIGN.md` (`--ready` en verde en las dos),
+    `keel-stack.json` con PostgreSQL, RabbitMQ, Keycloak y la pasarela, y `build` hecho (322 archivos en cada una; con
+    MercadoPago, los dos avisos de lo que la matriz no ha verificado). Las dos compilan sin warnings y sus pruebas unitarias
+    pasan recién generadas (164 y 162, con `PaymentGatewayTests` y `PaymentNoticeEndpointTests`). Sin contratos de
+    `/keel-docs`, como las de keel-nest y keel-spring. Comparten los puertos de `infra/`: se corren de una en una. Las
+    gemelas para comparar la huella son las de keel-nest y keel-spring del 2026-10-09 (25/25, huella 20–21).
 
 ## 5. Riesgos conocidos
 
