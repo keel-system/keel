@@ -11,7 +11,7 @@ import { configNamespace } from './config.js';
 import { healthNamespace } from './health.js';
 import { wireNamespace } from './wire.js';
 import { restNamespace, usesApi } from './rest-support.js';
-import { usesRelational } from './persistence.js';
+import { usesRelational, usesPersistence } from './persistence.js';
 import { usesIdempotencyHeader } from './request-idempotency.js';
 import { securityNamespace, usesHttpSecurity } from './security.js';
 import { messagingNamespace, usesMessaging } from './messaging.js';
@@ -31,13 +31,24 @@ const RECONCILIATIONS = `
 // Los barridos de reconciliación del perfil (reconciliation.yaml): el umbral, la caducidad del reclamo y el lote.
 builder.Services.AddSingleton(ReconciliationSettings.From(configuration));`;
 
+const RELATIONAL_PERSISTENCE = `
+// La persistencia relacional del perfil: el DbContext, la transacción del caso de uso y los repositorios.`;
+
+const DOCUMENT_PERSISTENCE = `
+// La persistencia documental del perfil: el cliente de MongoDB, la transacción del caso de uso y los repositorios.`;
+
+const SQL_LOG_FILTER = `
+// Cada sentencia SQL no es un evento del servicio: solo sus avisos y errores, como Hibernate sin show-sql en keel-spring y
+// TypeORM sin logging en keel-nest. A nivel Information, un relay que sondea cada segundo inundaba el log.
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);`;
+
 export function generate(model) {
   return [{ path: `${solution(model).api.dir}/Program.cs`, content: programCs(model) }];
 }
 
 function programCs(model) {
   const useCases = usesMediator(model);
-  const persistence = usesRelational(model);
+  const persistence = usesPersistence(model);
   const usings = [
     wireNamespace(model),
     configNamespace(model),
@@ -57,11 +68,8 @@ builder.Services.AddUseCases();`
     : '';
   const database = persistence
     ? `
-// La persistencia relacional del perfil: el DbContext, la transacción del caso de uso y los repositorios.${usesSweepClaims(model) ? SWEEPS : ''}${usesReconciliationSettings(model) ? RECONCILIATIONS : ''}
-builder.Services.AddPersistence(DatabaseSettings.From(configuration));
-// Cada sentencia SQL no es un evento del servicio: solo sus avisos y errores, como Hibernate sin show-sql en keel-spring y
-// TypeORM sin logging en keel-nest. A nivel Information, un relay que sondea cada segundo inundaba el log.
-builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);`
+${usesRelational(model) ? RELATIONAL_PERSISTENCE : DOCUMENT_PERSISTENCE}${usesSweepClaims(model) ? SWEEPS : ''}${usesReconciliationSettings(model) ? RECONCILIATIONS : ''}
+builder.Services.AddPersistence(DatabaseSettings.From(configuration));${usesRelational(model) ? SQL_LOG_FILTER : ''}`
     : '';
   // La seguridad del diseño (capa security): los autenticadores, CORS y el alcance por recurso (SecurityRegistration).
   const security = usesHttpSecurity(model)

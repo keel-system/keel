@@ -21,7 +21,7 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { FRAMEWORK_RESPONSES as FW, domainErrorResponses } from 'keel-core/gen/api-errors';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { wireNamespace } from './wire.js';
-import { usesRelational } from './persistence.js';
+import { usesRelational, usesPersistence } from './persistence.js';
 import { valueReaders } from './endpoints.js';
 
 /** ¿Expone el servicio una API? Sin capa api, o sin ninguna operación con ruta, no hay nada de esto. */
@@ -95,9 +95,9 @@ export function generate(model) {
         'Microsoft.Extensions.Logging',
         wireNamespace(model),
         namespaceOf(model, 'errors'),
-        ...(usesRelational(model) ? [namespaceOf(model, 'persistence')] : [])
+        ...(usesPersistence(model) ? [namespaceOf(model, 'persistence')] : [])
       ],
-      apiErrorMiddlewareBody(usesRelational(model))
+      apiErrorMiddlewareBody(usesPersistence(model))
     ),
     ...(usesPageable(model)
       ? [rest('PageableReading', ['System.Globalization', 'System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', 'Microsoft.Extensions.Primitives', namespaceOf(model, 'repositories')], pageableReadingBody())]
@@ -105,9 +105,9 @@ export function generate(model) {
   ];
 }
 
-/** ¿Algún listado con ruta lee un Pageable? Con persistencia relacional, todo listado paginado. */
+/** ¿Algún listado con ruta lee un Pageable? Con persistencia, del modelo que sea, todo listado paginado. */
 export function usesPageable(model) {
-  return usesRelational(model) && (model.services ?? []).some((service) => (service.operations ?? []).some((op) => op.route && op.paginated));
+  return usesPersistence(model) && (model.services ?? []).some((service) => (service.operations ?? []).some((op) => op.route && op.paginated));
 }
 
 /**

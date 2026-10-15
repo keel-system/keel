@@ -1,7 +1,8 @@
 // Persistencia hexagonal de cada raíz de agregado persistida, el mismo reparto que keel-spring y keel-nest:
 //   · el PUERTO `I<Raíz>Repository` en Domain/Repository, que solo nombra el dominio y la página (Page.cs);
 //   · el ADAPTADOR `<Raíz>Repository` en Infrastructure/Persistence/Repositories, sobre EF Core, con el mapeo
-//     dominio ↔ fila escrito campo a campo (ToDomain/Apply), sin reflexión ni AutoMapper.
+//     dominio ↔ fila escrito campo a campo (ToDomain/Apply), sin reflexión ni AutoMapper. Con persistencia
+//     documental, el adaptador es otro (document-repositories.js, sobre el driver de MongoDB) y el puerto, el mismo.
 //
 // El adaptador usa el DbContext del ámbito, que es el de la transacción que abrió el mediator: los handlers no ven
 // la transacción. Una escritura sin transacción abarcadora (un barrido despachado sin ella) abre la suya.
@@ -27,8 +28,10 @@ import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, 
 import { domainMembers } from './entities.js';
 import { adapterClaimMethods, claimDependencies, claimUsings, portClaimMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
+import { renderDocumentAdapter } from './document-repositories.js';
 import {
-  usesRelational,
+  usesPersistence,
+  usesDocument,
   rowClass,
   elementClass,
   dbContextClass,
@@ -47,7 +50,7 @@ export const adapterClass = (entity) => `${entity.name}Repository`;
 
 /** Las raíces que tienen repositorio: persistidas y raíz de su agregado. */
 export function repositoryRoots(model) {
-  if (!usesRelational(model)) return [];
+  if (!usesPersistence(model)) return [];
   return model.entities.filter((entity) => entity.persisted && entity.isAggregateRoot);
 }
 
@@ -76,7 +79,8 @@ export function generate(model) {
   const files = [{ path, content: csFile({ namespace, body: pageBody() }) }];
   for (const entity of roots) {
     files.push(renderPort(model, entity));
-    files.push(renderAdapter(model, entity));
+    // El adaptador, por modelo: el relacional sobre EF Core y el documental sobre el driver de MongoDB (incremento 12).
+    files.push(usesDocument(model) ? renderDocumentAdapter(model, entity) : renderAdapter(model, entity));
   }
   return files;
 }

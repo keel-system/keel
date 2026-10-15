@@ -17,7 +17,7 @@
 import { DOTNET_SDK_BAND, TARGET_FRAMEWORK, TEST_RUNNER } from '../lib/assets.js';
 import { PACKAGES, TOOLS } from '../lib/dotnet-stack.js';
 import { solution } from './render.js';
-import { usesRelational } from './persistence.js';
+import { usesRelational, usesDocument } from './persistence.js';
 import { usesJwt } from './security.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
@@ -35,6 +35,8 @@ export function infrastructurePackages(model) {
   return [
     'YamlDotNet',
     ...(usesRelational(model) ? ['Microsoft.EntityFrameworkCore', 'Microsoft.EntityFrameworkCore.Relational', 'Npgsql.EntityFrameworkCore.PostgreSQL', DESIGN_PACKAGE] : []),
+    // La persistencia documental: el driver oficial de MongoDB, sin mapeo de clases (el adaptador escribe el documento).
+    ...(usesDocument(model) ? ['MongoDB.Driver'] : []),
     // La seguridad con token: la validación del JWT (capa security).
     ...(usesJwt(model) ? ['Microsoft.IdentityModel.JsonWebTokens'] : []),
     // La mensajería sobre RabbitMQ: el cliente oficial (sin MassTransit, que pasó a licencia comercial).

@@ -64,7 +64,11 @@ export const PACKAGES = {
   'AWSSDK.SQS': { version: '4.0.100.14', license: 'Apache-2.0', use: 'consumo de SQS (capa messaging)' },
   // El reloj (incremento 10b): el cron de SEIS campos (con segundos) de los barridos y de las purgas, con su zona horaria.
   // Sin dependencias en net6.0+. La 0.13.0 salió el 2026-04-29. Verificada el 2026-10-14.
-  Cronos: { version: '0.13.0', license: 'MIT', use: 'expresiones cron del reloj (schedule y purgas)' }
+  Cronos: { version: '0.13.0', license: 'MIT', use: 'expresiones cron del reloj (schedule y purgas)' },
+  // La persistencia documental (incremento 12): el driver oficial de MongoDB, que trae MongoDB.Bson. Sus transitivas
+  // (DnsClient, SharpCompress, Snappier, ZstdSharp.Port) son Apache-2.0, MIT y BSD-3-Clause: las comprueba cs-check.
+  // La 3.12.0 salió el 2026-09-17. Verificada el 2026-10-15.
+  'MongoDB.Driver': { version: '3.12.0', license: 'Apache-2.0', use: 'conexión con MongoDB (persistencia documental)' }
 };
 
 /**

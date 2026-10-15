@@ -71,14 +71,14 @@ export function probeProject(model) {
 // ─── Muestras ────────────────────────────────────────────────────────────────────────────────────
 
 /** Un contador por muestra: los enteros distintos entre elementos (una posición repetida es un empate). */
-function counter() {
+export function counter() {
   let next = 0;
   let variant = 0;
   return { int: () => next++, variant: () => variant++ };
 }
 
 /** Un literal C# de un valor de muestra para un campo (o sub-campo) del dominio; null si no se sabe muestrear. */
-function sampleValue(model, field, ctx, salt) {
+export function sampleValue(model, field, ctx, salt) {
   if (field.kind === 'enum') {
     const enumDef = model.enums.find((e) => e.name === field.namedType);
     ctx.usings.push(...typeUsings(model, [enumDef.name]));
@@ -87,8 +87,9 @@ function sampleValue(model, field, ctx, salt) {
   }
   if (field.kind === 'composite') {
     const vo = model.valueObjects.find((candidate) => candidate.name === field.namedType);
-    // Un value object dentro de otro: build no lo mapea a columnas (deja un TODO al agente), así que no se muestrea.
-    if (!vo || vo.fields.some((sub) => sub.kind === 'composite')) return null;
+    // Un value object dentro de otro: build no lo mapea a columnas (deja un TODO al agente), así que no se muestrea. En
+    // un documento sí: es un subdocumento dentro de otro (`ctx.document`, las sondas de doc-check).
+    if (!vo || (!ctx.document && vo.fields.some((sub) => sub.kind === 'composite'))) return null;
     ctx.usings.push(...typeUsings(model, [vo.name]));
     const args = vo.fields.map((sub) => {
       const value = sub.list ? listOf(model, sub, ctx, `${salt}a`) : sampleValue(model, sub, ctx, salt);
@@ -141,7 +142,7 @@ function sampleValue(model, field, ctx, salt) {
   }
 }
 
-function listOf(model, field, ctx, salt) {
+export function listOf(model, field, ctx, salt) {
   const values = [1, 2].map((n) => sampleValue(model, { ...field, list: false }, ctx, `${salt}${n}`));
   return values.some((value) => value == null) ? '[]' : `[${values.join(', ')}]`;
 }
@@ -151,7 +152,7 @@ function listOf(model, field, ctx, salt) {
  * raíz son parámetros (`refs`): su FK existe en el esquema, así que apuntan a un agregado guardado de verdad. Las
  * opcionales van a null.
  */
-function sampleState(model, entity, ctx, salt, depth = 0) {
+export function sampleState(model, entity, ctx, salt, depth = 0) {
   ctx.usings.push(namespaceOf(model, entityPlace(entity)));
   const lines = [];
   for (const member of domainMembers(model, entity)) {
@@ -167,7 +168,9 @@ function sampleState(model, entity, ctx, salt, depth = 0) {
       const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
       value = depth > 2 || !child ? '[]' : `[${[1, 2].map((n) => `new ${child.name}(${sampleState(model, child, ctx, `${salt}${n}`, depth + 1)})`).join(', ')}]`;
     } else if (member.kind === 'relationOne') {
-      value = 'null!';
+      // En relacional build no la mapea (TODO del agente); en un documento es un subdocumento: se muestrea si es obligatoria.
+      const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
+      value = ctx.document && child && depth <= 2 ? (member.relation.required ? `new ${child.name}(${sampleState(model, child, ctx, `${salt}o`, depth + 1)})` : 'null') : 'null!';
     } else if (member.field.list) {
       value = listOf(model, member.field, ctx, salt);
     } else if (member.field.isId) {

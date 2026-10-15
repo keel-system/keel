@@ -1226,6 +1226,57 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
 - **Inc. 11 — cerrado (2026-10-14).** `needs` (réplica, `onMiss`, `lastKnown`), `oauth2-client-credentials` y los
   compuestos en una llamada siguen rechazados hasta el incremento 13, como en keel-nest. Siguiente: el incremento 12
   (persistencia documental, MongoDB).
+- **Inc. 12 — en curso (abierto el 2026-10-15).** Tramos como los de keel-nest (su § Inc. 12), con el 12a ya hecho en
+  keel-core (`document.js`: el documento como datos, rutas, índices del diseño y de los almacenes, `export-indexes.sh`;
+  `mongo-probes.js`, los scripts del arnés): 12b la persistencia documental, 12c los almacenes del generador sobre
+  documentos, 12d el arnés y la skill `keel-dotnet-mongodb`, 12e la corrida (keel-nest la hizo sobre
+  `notification-mailer-mongo`, que en keel-dotnet trae `mail` y `resolvedBy`, del 13: el sujeto está por decidir).
+  - **12b, la persistencia documental (hecho, 2026-10-15).** `cs-check` 15/15 (126 ensamblados, 2 237 pruebas) y su paso nuevo de licencias de las fixtures (95 paquetes); keel-dotnet sin red 468/468. Sobre el driver oficial (**MongoDB.Driver 3.12.0**,
+    Apache-2.0; sus transitivas DnsClient, SharpCompress, Snappier y ZstdSharp.Port son Apache-2.0, MIT y BSD-3-Clause),
+    **sin mapeo de clases**: cada adaptador escribe y lee el `BsonDocument` campo a campo (el mapeo del driver
+    decidiría nombres, discriminadores y representaciones por su cuenta).
+    - **Una decisión de forma**: la rama documental emite los MISMOS nombres que la relacional —`DatabaseSettings`,
+      `PersistenceTransactions` (con `InTransaction`, `AfterCommit` y `Run`), `PersistenceErrors.Translate`,
+      `AddPersistence`/`InitializeDatabase`—, así que Program.cs, el mediator, el middleware de errores y la página solo
+      cambian `usesRelational` por `usesPersistence` (`src/scaffold/persistence.js`). El puerto de cada raíz es el
+      mismo; el adaptador se elige por modelo (`src/scaffold/document-repositories.js`). Un reclamo de barrido del
+      puerto, en el adaptador documental, lanza `NotSupportedException` nombrando el 12c (la frontera ya rechaza el
+      diseño que lo declara).
+    - **Lo que emite** (`src/scaffold/document-persistence.js`): `db.yaml` con la `DB_URL` de keel-spring tal cual
+      (`uuidRepresentation=standard` incluida: el driver de .NET la acepta, a diferencia del de Node); `DocumentDatabase`
+      (un cliente por proceso); `BsonValues` (uuid binario de subtipo 4, `Decimal128` con su escala, Int64, el instante
+      al milisegundo, el día a medianoche UTC, el json como texto, el enum por su constante con `EnumColumns`, y la
+      auditoría declarada: `StampCreated` trata como «sin estampar» el null y el valor por defecto del dominio, como el
+      `== default` relacional); `DocumentIndexes` creados al ARRANCAR con los nombres de keel-core; la transacción
+      sobre una sesión, sin el `WithTransaction` del driver (que reintentaría dos minutos): el `WriteConflict` (112 o
+      `TransientTransactionError`) repite el caso de uso entero hasta 3 veces y, agotado, es el 409; el E11000 → el
+      error del diseño buscando el nombre del índice en el mensaje; y `infra/export-indexes.sh` neutral. Sin tope de
+      transacción ni 503, como keel-spring en Mongo. El adaptador guarda con `$set` (no reemplaza: la auditoría de
+      política se conserva), con la versión en el FILTRO y `created_*` en `$setOnInsert`; el listado ordena por la RUTA
+      del espejo (`location.label`, `sections.status`), con desempate por `_id`.
+    - **Frontera**: el modelo documental y `mongodb` entran; sobre documentos se rechazan, nombrando el 12c, la
+      mensajería, los barridos con `schedule`, el registro de idempotencia y la reconciliación (el reparto de keel-nest), y
+      se avisa de que el arnés de flujos documental llega en el 12d. Ninguna fixture documental entra entera por `build`
+      todavía (todas traen algo del 12c o del 13): las redes miden sobre `planService`, como keel-nest en su 12b. La
+      paridad del contrato HTTP pierde su única excepción (el `sort` de la página documental).
+    - **Medido**: `npm run doc-check` (nuevo) contra un MongoDB miembro de un replica set, sobre las cuatro fixtures
+      documentales y la derivada `job-dispatch-mongo-compare` (la sombra plegada en la clave natural): **14/14, 56 sondas**
+      —ida y vuelta, el documento CRUDO contra `documentShape` a todo nivel (cada clave con su tipo BSON y ninguna de
+      más), la versión obsoleta, la clave natural y el índice condicionado con su error y su mensaje, la carrera de dos
+      transacciones (el clasificador y el 409 tras los reintentos), la auditoría, la página con orden y la propiedad
+      inexistente, y los índices vivos contra el contrato (nombre, claves en orden, unicidad, filtro parcial, ninguno de
+      más; creados dos veces)—. **Falsado con diez sabotajes** que compilan, cada uno en su comprobación: decimal como
+      texto, uuid como texto en los dos sentidos (la ida y vuelta en VERDE: solo lo ve el documento crudo), la versión
+      fuera del filtro, el clasificador del conflicto, el traductor sin índices, el literal en el filtro parcial,
+      `created_at` declarado y de política reescritos, el enum por su miembro de C# y el día en otra zona. El del
+      clasificador salió VERDE la primera vez: quitaba solo la etiqueta, y el código 112 dice lo mismo (mutación
+      equivalente); ahora quita las dos vías. `test/document-persistence.test.js` (sin red): las claves que escribe cada
+      `ToDocument` contra `documentShape` en orden y a todo nivel, los índices contra `documentIndexes`, el traductor
+      contra `constraintErrors`, la `DB_URL` contra la que emite keel-spring y las propiedades de orden contra el
+      `SORTABLE` que emite keel-nest.
+    - **Lo que destapó**: `cs-check` solo revisaba las licencias transitivas del proyecto de referencia (PostgreSQL), así
+      que lo que traen Kafka, SNS/SQS y ahora MongoDB no lo leía nadie. Gana un paso: las licencias de todo lo que NuGet
+      resuelve para la solución de TODAS las fixtures.
 
 ## 5. Riesgos conocidos
 

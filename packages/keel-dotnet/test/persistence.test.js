@@ -113,7 +113,8 @@ test('un listado paginado con persistencia lee el Pageable de Spring Data, con e
   assert.match(query, /public required Pageable Pageable \{ get; init; \}/);
 });
 
-test('el diseño documental no emite persistencia relacional (llega en el incremento 12)', () => {
+test('el diseño documental no emite persistencia RELACIONAL: ni filas, ni DbContext, ni migraciones (la suya es la del incremento 12)', () => {
   const { files } = plans.get('job-dispatch-mongo');
-  assert.deepEqual(files.filter((file) => /\/Persistence\/|\/Repository\/|db\.yaml$/.test(file.path)).map((file) => file.path), []);
+  assert.deepEqual(files.filter((file) => /\/Persistence\/Rows\/|DbContext|DesignTimeDbContextFactory|\.config\/dotnet-tools\.json$/.test(file.path)).map((file) => file.path), []);
+  assert.ok(files.some((file) => file.path.endsWith('/Persistence/DocumentIndexes.cs')));
 });

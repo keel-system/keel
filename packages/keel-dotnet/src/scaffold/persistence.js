@@ -52,6 +52,20 @@ export function usesRelational(model) {
   return Boolean(model.layersPresent?.persistence) && model.persistenceKind !== 'document';
 }
 
+/** ¿El diseño persiste en documentos (MongoDB, incremento 12)? Lo genera document-persistence.js. */
+export function usesDocument(model) {
+  return Boolean(model.layersPresent?.persistence) && model.persistenceKind === 'document';
+}
+
+/**
+ * ¿Hay persistencia, del modelo que sea? Es lo que mira lo que está ENCIMA de ella —el mediator, Program.cs, el
+ * middleware de errores, la página—: las dos ramas emiten los MISMOS nombres (DatabaseSettings, PersistenceTransactions,
+ * PersistenceErrors, AddPersistence), así que nada de arriba distingue qué almacén tiene debajo.
+ */
+export function usesPersistence(model) {
+  return usesRelational(model) || usesDocument(model);
+}
+
 export const rowClass = (entityName) => `${entityName}Row`;
 export const rowConfigurationClass = (className) => `${className}Configuration`;
 /** La fila de un elemento de una lista: vive en el archivo de su entidad. */
@@ -605,7 +619,7 @@ public static class RowSync
   return { path, content: csFile({ namespace, usings: ['Microsoft.EntityFrameworkCore'], body }) };
 }
 
-function textFoldFile(model) {
+export function textFoldFile(model) {
   const { namespace, path } = located(model, 'persistence', 'TextFold');
   const body = `/// <summary>
 /// El plegado de un texto que se compara sin distinguir mayúsculas (y acentos): <c>compare</c> del diseño (DSL 2.14).

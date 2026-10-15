@@ -10,6 +10,7 @@
     "test": "node --test",
     "cs-check": "node scripts/cs-check.js",
     "db-check": "node scripts/db-check.js",
+    "doc-check": "node scripts/doc-check.js",
     "harness-check": "node scripts/harness-check.js",
     "security-check": "node scripts/security-check.js",
     "broker-check": "node scripts/broker-check.js",

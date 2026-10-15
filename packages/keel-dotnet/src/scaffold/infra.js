@@ -28,7 +28,7 @@ export const DOTNET_INFRA = {
   },
   schemaRebuiltBy: {
     relational: 'lo vuelve a crear EF Core al arrancar la app (EnsureCreated del perfil local)',
-    // La persistencia documental llega en el incremento 12: el texto queda escrito con la promesa de keel-nest.
+    // La persistencia documental (incremento 12): los índices los crea DocumentIndexes al arrancar.
     document: 'las colecciones nacen al escribir y los índices los recrea la app al arrancar'
   },
   schemaHelp: {

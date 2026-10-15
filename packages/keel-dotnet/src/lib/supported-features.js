@@ -21,10 +21,11 @@ const PENDING_LAYERS = {
 };
 
 /**
- * Los motores relacionales que keel-dotnet genera: solo PostgreSQL. MySQL espera a que `db-check` lo mida (con EF
- * Core el uuid binario y el proveedor van por detrás: PLAN-KEEL-DOTNET.md § 5); los demás, como en keel-nest.
+ * Los motores que keel-dotnet genera: PostgreSQL (incremento 6) y MongoDB (incremento 12). MySQL espera a que
+ * `db-check` lo mida (con EF Core el uuid binario y el proveedor van por detrás: PLAN-KEEL-DOTNET.md § 5); los demás,
+ * como en keel-nest.
  */
-export const SUPPORTED_DATABASES = ['postgresql'];
+export const SUPPORTED_DATABASES = ['postgresql', 'mongodb'];
 
 /** Los brokers que keel-dotnet genera: RabbitMQ (incremento 9), Kafka (9f) y SNS/SQS (9g), los tres de keel-nest. */
 export const SUPPORTED_BROKERS = ['rabbitmq', 'kafka', 'snssqs'];
@@ -68,11 +69,17 @@ export function checkSupportedFeatures(manifest, layers) {
       );
     }
   }
-  // La persistencia documental (MongoDB) llega en el incremento 12: la relacional ya se genera.
+  // La persistencia DOCUMENTAL (incremento 12) se genera desde el 12b: documentos, índices, transacción y bloqueo
+  // optimista. Los mecanismos que guardan su estado en colecciones del generador (el outbox y los mensajes procesados, el
+  // registro de idempotencia, los reclamos de barrido y de reconciliación) llegan en el 12c: hasta entonces se rechazan,
+  // en vez de generar un handler sin su almacén. El mismo reparto que keel-nest.
   if (declared.includes('persistence') && layers?.persistence?.default?.model === 'document') {
-    errors.push(
-      'capa persistence con model: document — keel-dotnet todavía no genera la persistencia documental (llega en el incremento 12 de PLAN-KEEL-DOTNET.md). ' +
-        'Genera este diseño con keel-spring o keel-nest, o espera a que keel-dotnet la cubra.'
+    errors.push(...documentFrontier(declared, layers));
+    // El servidor sale entero; lo que todavía no es el arnés de flujos sobre documentos (las sondas de mongosh, el reset
+    // y los ayudantes del rescate) ni la skill de la base, que llegan en el 12d. Se avisa: sin ellos los FL-* no se puntúan.
+    warnings.push(
+      'persistence con model: document — el servidor se genera entero, pero el arnés de flujos documental (los ayudantes sobre mongosh) ' +
+        'y la skill keel-dotnet-mongodb llegan en el incremento 12d de PLAN-KEEL-DOTNET.md: hasta entonces los FL-* no se pueden puntuar.'
     );
   }
   errors.push(...callerIdentityErrors(layers));
@@ -91,14 +98,40 @@ export function checkSupportedFeatures(manifest, layers) {
   return { errors, warnings };
 }
 
+/**
+ * Lo que la persistencia documental todavía no genera (incremento 12c de PLAN-KEEL-DOTNET.md): cada mecanismo que
+ * necesita una colección del generador, con lo que lo dispara en el diseño.
+ */
+function documentFrontier(declared, layers) {
+  const errors = [];
+  const pending = (what) =>
+    `${what} sobre persistencia documental — keel-dotnet todavía no lo genera (llega en el incremento 12c de PLAN-KEEL-DOTNET.md). ` +
+    'Genera este diseño con keel-spring o keel-nest, o espera a que keel-dotnet lo cubra.';
+  if (declared.includes('messaging')) errors.push(pending('messaging (el outbox y el registro de mensajes procesados)'));
+  const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
+  const scheduled = operations.filter(([, operation]) => operation?.schedule != null).map(([name]) => name);
+  if (scheduled.length > 0) errors.push(pending(`use-cases: ${scheduled.join(', ')} (schedule: el barrido y su reclamo)`));
+  const idempotent = operations
+    .filter(([, operation]) => operation?.idempotency != null && operation.idempotency.guard !== 'natural-key')
+    .map(([name]) => name);
+  if (idempotent.length > 0) errors.push(pending(`use-cases: ${idempotent.join(', ')} (idempotency: el registro de claves)`));
+  const reconciled = Object.entries(layers?.dependencies?.dependencies ?? {}).flatMap(([id, dependency]) =>
+    Object.entries(dependency?.activations ?? {})
+      .filter(([, activation]) => activation?.reconciledBy)
+      .map(([name]) => `${id}.${name}`)
+  );
+  if (reconciled.length > 0) errors.push(pending(`dependencies: ${reconciled.join(', ')} (reconciledBy: el reclamo de la reconciliación)`));
+  return errors;
+}
+
 /** La telemetría todavía no se genera: se rechaza en el build en vez de estamparla sin efecto. */
 export function checkSupportedStack(stack) {
   const errors = [];
-  // El motor solo importa con persistencia relacional: sin ella, el cuestionario no lo pregunta y no se estampa.
+  // El motor solo importa con persistencia: sin ella, el cuestionario no lo pregunta y no se estampa.
   if (stack?.database && !SUPPORTED_DATABASES.includes(stack.database)) {
     errors.push(
-      `database: ${stack.database} — keel-dotnet genera la persistencia relacional sobre ${SUPPORTED_DATABASES.join(', ')} (incremento 6 de PLAN-KEEL-DOTNET.md): ` +
-        'ninguna red de keel-dotnet ha medido otro motor todavía. Elige postgresql, o genera este diseño con keel-spring o keel-nest.'
+      `database: ${stack.database} — keel-dotnet genera la persistencia sobre ${SUPPORTED_DATABASES.join(', ')} (incrementos 6 y 12 de PLAN-KEEL-DOTNET.md): ` +
+        'ninguna red de keel-dotnet ha medido otro motor todavía. Elige uno de ellos, o genera este diseño con keel-spring o keel-nest.'
     );
   }
   if (stack?.broker && !SUPPORTED_BROKERS.includes(stack.broker)) {

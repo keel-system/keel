@@ -18,7 +18,7 @@
 import { messagingNamespace, usesBridge } from './messaging.js';
 import { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher } from 'keel-core/gen';
 import { csFile, located, namespaceOf, solution, typeUsings } from './render.js';
-import { usesRelational } from './persistence.js';
+import { usesPersistence } from './persistence.js';
 import { mapperClasses } from './mappers.js';
 import { contractOf, messageNamespace } from './services.js';
 import { securityNamespace, usesCallerScope } from './security.js';
@@ -315,7 +315,7 @@ ${lines.map((line) => `        ${line}`).join('\n')}
 function useCasesTest(model) {
   const sln = solution(model);
   const rows = operations(model).map((operation) => `    [InlineData(typeof(${contractOf(operation).handler}), typeof(${operation.handlerClass}))]`);
-  const persistence = usesRelational(model);
+  const persistence = usesPersistence(model);
   const usings = [
     ...registrationUsings(model),
     'Microsoft.Extensions.DependencyInjection',

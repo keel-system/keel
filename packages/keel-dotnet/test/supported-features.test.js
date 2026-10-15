@@ -52,12 +52,40 @@ test('los clientes salientes y las activaciones se generan (incremento 11); need
   assert.deepEqual(checkSupportedFeatures(manifestWith(...layers), swept), { errors: [], warnings: [] });
 });
 
-test('la persistencia relacional se genera (incremento 6); la documental se rechaza con el incremento 12', () => {
-  const relational = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), { ...layersWith('domain', 'use-cases'), persistence: { default: { model: 'relational' } } });
-  assert.deepEqual(relational.errors, []);
-  const document = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), { ...layersWith('domain', 'use-cases'), persistence: { default: { model: 'document' } } });
-  assert.equal(document.errors.length, 1);
-  assert.match(document.errors[0], /model: document .*incremento 12/);
+test('la persistencia relacional (incremento 6) y la documental (12b) se generan', () => {
+  for (const model of ['relational', 'document']) {
+    const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), { ...layersWith('domain', 'use-cases'), persistence: { default: { model } } });
+    assert.deepEqual(errors, [], model);
+    // Sobre documentos se avisa de que el arnés de flujos llega en el 12d.
+    assert.equal(warnings.length, model === 'document' ? 1 : 0, model);
+    if (model === 'document') assert.match(warnings[0], /arnés de flujos documental .*incremento 12d/);
+  }
+});
+
+test('sobre documentos, lo que guarda su estado en una colección del generador se rechaza nombrando el 12c', () => {
+  const layers = {
+    ...layersWith('domain', 'use-cases', 'messaging'),
+    persistence: { default: { model: 'document' } },
+    'use-cases': {
+      operations: {
+        sweep: { schedule: { cron: '0 * * * * *' } },
+        create: { idempotency: { keySource: 'client-key' } },
+        upsert: { idempotency: { guard: 'natural-key' } }
+      }
+    },
+    dependencies: { dependencies: { pricing: { activations: { quote: { reconciledBy: 'sweep' } } } } }
+  };
+  const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging', 'dependencies'), layers);
+  assert.equal(errors.length, 4, errors.join('\n'));
+  for (const [what, error] of [['messaging', errors[0]], ['sweep', errors[1]], ['create', errors[2]], ['pricing.quote', errors[3]]]) {
+    assert.match(error, /sobre persistencia documental .*incremento 12c/, what);
+    assert.ok(error.includes(what), `${what}: ${error}`);
+  }
+  // La guarda por clave natural no necesita registro: no se rechaza.
+  assert.ok(!errors.some((error) => error.includes('upsert')));
+  // Lo mismo sobre la relacional se genera.
+  const relational = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging', 'dependencies'), { ...layers, persistence: { default: { model: 'relational' } } });
+  assert.ok(!relational.errors.some((error) => error.includes('12c')));
 });
 
 test('la mensajería se genera sobre persistencia relacional con los tres brokers (incremento 9); sin persistencia se rechaza', () => {
@@ -74,12 +102,13 @@ test('la mensajería se genera sobre persistencia relacional con los tres broker
   assert.match(checkSupportedStack({ broker: 'pulsar' }).errors[0], /broker: pulsar .*rabbitmq/);
 });
 
-test('el motor relacional: PostgreSQL entra; cualquier otro se rechaza hasta que una red lo mida', () => {
+test('el motor: PostgreSQL y MongoDB entran; cualquier otro se rechaza hasta que una red lo mida', () => {
   assert.deepEqual(checkSupportedStack({ database: 'postgresql' }).errors, []);
+  assert.deepEqual(checkSupportedStack({ database: 'mongodb' }).errors, []);
   for (const database of ['mysql', 'mariadb', 'sqlserver', 'oracle']) {
     const { errors } = checkSupportedStack({ database });
     assert.equal(errors.length, 1, database);
-    assert.match(errors[0], new RegExp(`database: ${database} .*postgresql`));
+    assert.match(errors[0], new RegExp(`database: ${database} .*postgresql, mongodb`));
   }
 });
 

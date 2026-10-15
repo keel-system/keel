@@ -6,9 +6,7 @@
 //
 // Fuera, con su motivo escrito:
 //   · las subidas multipart (capa storage, incremento 13) y las operaciones con la identidad del llamante (capa
-//     security, incremento 8): keel-dotnet aún no las sirve, y la frontera rechaza los diseños que las declaran;
-//   · el `sort` de un listado paginado de un diseño DOCUMENTAL: keel-spring lo lee como Pageable y keel-dotnet no
-//     persiste en documentos hasta el incremento 12 (la frontera lo rechaza), así que ahí lee page y size.
+//     security, incremento 8): keel-dotnet aún no las sirve, y la frontera rechaza los diseños que las declaran.
 //
 // La query de un listado paginado se compara entera: con persistencia, los dos leen el Pageable de Spring Data (page,
 // size y sort); sin ella, page y size.
@@ -59,7 +57,6 @@ for (const name of fixtureNames()) {
       const expected = { ...fromSpring };
       delete expected.multipart;
       const { handler, ...actual } = table.get(operation.name);
-      if (operation.paginated && dotnet.model.persistenceKind === 'document') expected.query = expected.query.filter((q) => q !== 'sort');
       assert.deepEqual(actual, expected, operation.name);
       if (operation.responseDto) {
         assert.deepEqual(dotnetDtoFields(dotnet.files, operation.responseDto.name), springDtoFields(spring.files, operation.responseDto.name), operation.responseDto.name);

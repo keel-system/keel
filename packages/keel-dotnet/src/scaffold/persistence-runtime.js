@@ -102,7 +102,7 @@ export function usesAuthorship(model) {
  * hay principal, así que toda escritura es del sistema: el centinela `system`, con la correlación si la hay
  * (`system:<correlationId>`), que dice la verdad en vez de un null que obligue a adivinarlo.
  */
-function auditActorFile(model) {
+export function auditActorFile(model) {
   const { namespace, path } = located(model, 'persistence', 'AuditActor');
   const correlation = usesApi(model);
   const body = `/// <summary>Quién escribe, para created_by y updated_by. Nunca vacío: las columnas son NOT NULL.</summary>

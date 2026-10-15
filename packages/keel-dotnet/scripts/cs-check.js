@@ -230,6 +230,7 @@ if (!step('SDK de .NET disponible', sdk.ok && /^10\./.test(sdk.output.trim()), s
 // iterar), sin generar ni arrancar el proyecto de referencia.
 if (process.argv.includes('--fixtures')) {
   const root = compileAllFixtures();
+  await fixtureLicenses(root);
   if (keep) {
     const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-dotnet-kept-'));
     fs.cpSync(root, kept, { recursive: true });
@@ -366,6 +367,26 @@ if (results.every((result) => result.ok) && database) {
 }
 if (database) stopDatabase(runtime, database);
 
+/**
+ * Las licencias de lo que NuGet resuelve para la solución de TODAS las fixtures, transitivos incluidos: el proyecto de
+ * referencia solo trae los paquetes de su stack (PostgreSQL), y los del resto —Kafka, SNS/SQS, MongoDB— entran por las
+ * fixtures. Cada paquete distinto se consulta una vez.
+ */
+async function fixtureLicenses(root) {
+  try {
+    const packages = resolvedPackages(root);
+    const problems = [];
+    for (const { id, version } of packages) {
+      problems.push(...licenseProblems({ id, version, license: (await nugetLicense(id, version)) ?? verifiedLicense(id, version) }));
+    }
+    if (!step(`licencias de los ${packages.length} paquetes resueltos para todas las fixtures, transitivos incluidos`, problems.length === 0, problems.join('; '))) {
+      for (const problem of problems) console.error(`  ${problem}`);
+    }
+  } catch (error) {
+    step('licencias de los paquetes resueltos para todas las fixtures', false, error.message.split('\n')[0]);
+  }
+}
+
 // ─── La solución ENTERA de todas las fixtures ────────────────────────────────────────────────────
 // La frontera de keel-dotnet todavía rechaza casi todas las fixtures (persistencia, mensajería…), pero lo que
 // ya se emite para ellas —dominio, aplicación, mediator y sus pruebas— tiene que compilar y pasar: es donde se
@@ -435,7 +456,7 @@ function compileAllFixtures() {
   return root;
 }
 
-compileAllFixtures();
+await fixtureLicenses(compileAllFixtures());
 
 const failed = results.filter((result) => !result.ok).length;
 if (keep) {
