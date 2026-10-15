@@ -62,7 +62,7 @@ function envelopeTests() {
   const wire = JSON.stringify(Object.fromEntries(WIRE_SHAPES.eventEnvelope.map((key) => [key, key === 'metadata' ? metadata : { amount: 1 }])));
   const valid = JSON.stringify({ metadata, data: { anything: true } });
   return `    private static EventMetadata Sample() =>
-        new(Guid.Parse(${csString(SAMPLE.eventId)}), ${csString(SAMPLE.eventType)}, ${SAMPLE.eventVersion}, DateTimeOffset.Parse(${csString(SAMPLE.occurredAt)}, System.Globalization.CultureInfo.InvariantCulture), ${csString(SAMPLE.source)}, null, null);
+        new(${csString(SAMPLE.eventId)}, ${csString(SAMPLE.eventType)}, ${SAMPLE.eventVersion}, DateTimeOffset.Parse(${csString(SAMPLE.occurredAt)}, System.Globalization.CultureInfo.InvariantCulture), ${csString(SAMPLE.source)}, null, null);
 
     [Fact]
     public void LaEnvolturaSaleConLaMetadataEnElOrdenDelCableConSusNulos() =>
@@ -72,7 +72,7 @@ function envelopeTests() {
     public void LaEnvolturaSeLeeYConservaElEventId()
     {
         var envelope = EventEnvelope.Parse(${csString(valid)});
-        Assert.Equal(Guid.Parse(${csString(SAMPLE.eventId)}), envelope.Metadata.EventId);
+        Assert.Equal(${csString(SAMPLE.eventId)}, envelope.Metadata.EventId);
         Assert.Equal(${csString(SAMPLE.eventType)}, envelope.Metadata.EventType);
         Assert.Equal(${csString(SAMPLE.correlationId)}, envelope.Metadata.CorrelationId);
         Assert.Null(envelope.Metadata.Traceparent);
@@ -83,10 +83,17 @@ function envelopeTests() {
     [InlineData("no es json", "El mensaje no es JSON válido")]
     [InlineData("""{"data":{}}""", "El mensaje no trae la envoltura Keel (metadata + data)")]
     [InlineData("""{"metadata":{"eventType":"X","eventVersion":1,"occurredAt":"2026-01-02T03:04:05.006Z","source":"s"},"data":{}}""", "La envoltura no trae metadata.eventId")]
-    [InlineData("""{"metadata":{"eventId":"no-uuid","eventType":"X","eventVersion":1,"occurredAt":"2026-01-02T03:04:05.006Z","source":"s"},"data":{}}""", "metadata.eventId no es un uuid")]
     [InlineData("""{"metadata":{"eventId":"${SAMPLE.eventId}","eventType":"X","eventVersion":"uno","occurredAt":"2026-01-02T03:04:05.006Z","source":"s"},"data":{}}""", "metadata.occurredAt o metadata.eventVersion no cumplen el contrato del cable")]
     public void LoQueNoEsUnaEnvolturaIncumpleElContrato(string text, string message) =>
-        Assert.Equal(message, Assert.Throws<MessageContractViolation>(() => EventEnvelope.Parse(text)).Message);`;
+        Assert.Equal(message, Assert.Throws<MessageContractViolation>(() => EventEnvelope.Parse(text)).Message);
+
+    /// <summary>
+    /// El eventId es la clave de deduplicación y viaja como TEXTO: un emisor que no lo escribe como uuid sigue siendo un
+    /// mensaje válido, como en los servidores de keel-spring y keel-nest.
+    /// </summary>
+    [Fact]
+    public void UnEventIdQueNoEsUuidSeLeeTalCual() =>
+        Assert.Equal("evt-ch-010", EventEnvelope.Parse("""{"metadata":{"eventId":"evt-ch-010","eventType":"X","eventVersion":1,"occurredAt":"2026-01-02T03:04:05.006Z","source":"s"},"data":{}}""").Metadata.EventId);`;
 }
 
 /** Un valor JSON que NO es del tipo del campo (null si no hay ninguno: un json admite cualquier cosa). */

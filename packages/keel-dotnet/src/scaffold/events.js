@@ -20,7 +20,10 @@ function needsMetadata(model) {
 
 // El tipo C# de cada clave de la metadata, en el orden del cable.
 const METADATA_TYPES = {
-  eventId: 'Guid',
+  // Texto, como el String de keel-spring y el string de keel-nest: el emisor lo estampa como uuid, pero un consumidor
+  // no puede exigirlo a lo que le llega (la corrida payment-checkout-stripe-dotnet: un eventId que no era uuid se
+  // descartaba aquí y en los otros dos servidores se procesaba).
+  eventId: 'string',
   eventType: 'string',
   eventVersion: 'int',
   occurredAt: 'DateTimeOffset',
@@ -90,7 +93,7 @@ ${params})
 {
     /// <summary>Fábrica que usa el agregado al emitir: sin correlación ni traza, que son de infraestructura.</summary>
     public static EventMetadata Now(string eventType) =>
-        new(Guid.NewGuid(), eventType, 1, DateTimeOffset.UtcNow, ${csString(model.service.name)}, null, null);
+        new(Guid.NewGuid().ToString(), eventType, 1, DateTimeOffset.UtcNow, ${csString(model.service.name)}, null, null);
 
     /// <summary>Copia con la correlación de la petición; conserva el EventId original.</summary>
     public EventMetadata WithCorrelationId(string? correlationId) => this with { CorrelationId = correlationId };

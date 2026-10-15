@@ -218,7 +218,7 @@ export function documentBridgeBlock(model, { bridge, sample }) {
     private static async Task<string> PublishThrough(bool commit)
     {
         var domainEvent = ${event.className}.Of(${args});
-        var eventId = domainEvent.Metadata.EventId.ToString();
+        var eventId = domainEvent.Metadata.EventId;
         try
         {
             await InScope(other => other.GetRequiredService<PersistenceTransactions>().InTransaction(async () =>

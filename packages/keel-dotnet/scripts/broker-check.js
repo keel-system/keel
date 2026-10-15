@@ -168,7 +168,7 @@ async function checkBroker(broker) {
               {
                   return;
               }
-              var eventId = envelope.Metadata.EventId.ToString();
+              var eventId = envelope.Metadata.EventId;
               lock (Gate)
               {
                   Directory.CreateDirectory(Path.Combine("build", "broker-probe"));

@@ -127,7 +127,7 @@ public sealed class StockReservedListener(KafkaConnection connection, IServiceSc
         {
             var payload = StockReservedMessage.FromWire(envelope.Data);
             payload.RequireContract();
-            var eventId = envelope.Metadata.EventId.ToString();
+            var eventId = envelope.Metadata.EventId;
             // El orden que dice el comentario de StockReservedMessage:
             if (await guard.AlreadyProcessed(nameof(StockReservedListener), eventId, cancellationToken)) return;
             await using (var scope = scopes.CreateAsyncScope())

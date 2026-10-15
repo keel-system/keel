@@ -182,14 +182,12 @@ public static class EventEnvelope
         {
             throw new MessageContractViolation("metadata.occurredAt o metadata.eventVersion no cumplen el contrato del cable", error);
         }
+        // El eventId se lee como texto, sin exigirle forma: es la clave de deduplicación, y keel-spring y keel-nest
+        // aceptan cualquier texto. Exigir un uuid descartaba aquí mensajes que los otros dos servidores procesan.
         var eventId = Text(metadata, "eventId", required: true)!;
-        if (!Guid.TryParseExact(eventId, "D", out var id))
-        {
-            throw new MessageContractViolation("metadata.eventId no es un uuid");
-        }
         return new EventEnvelope<JsonElement>(
             new EventMetadata(
-                id,
+                eventId,
                 Text(metadata, "eventType", required: true)!,
                 eventVersion,
                 occurredAt,
