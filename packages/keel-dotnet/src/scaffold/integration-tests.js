@@ -33,6 +33,7 @@ import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './
 import { usesKafka } from './messaging.js';
 import { closingCredentialExpression, credentialsCs, flowTestCredentialMembers, smokeCredentialsCase } from './identity-harness.js';
 import { httpStubFile, idLiteralMember, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
+import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
 export const SCORE_SCENARIOS_SH = 'infra/score-scenarios.sh';
@@ -121,6 +122,8 @@ function flowTestCs(model) {
     // El id como literal del motor: lo comparten el rescate y la reconciliación.
     if (rescue.length > 0 || aging.length > 0) helpers.push(idLiteralMember(model));
   }
+  // La segunda réplica, con escenarios de clúster posibles.
+  helpers.push(...replicaMembers(model));
   return csFile({
     namespace: supportNamespace(model),
     usings: ['System.Collections.Concurrent', 'Xunit'],
@@ -181,7 +184,9 @@ ${api ? `    /// <summary>Prefijo de todas las rutas del servicio (basePath del 
         }
         try
         {
-            await FlowServer.EnsureStartedAsync(TestContext.Current.CancellationToken);${reset ? `
+            await FlowServer.EnsureStartedAsync(TestContext.Current.CancellationToken);${usesReplica(model) ? `
+            // Red: una réplica que el flujo anterior dejó viva seguiría publicando y barriendo sobre este.
+            ReplicaServer.Stop();` : ''}${reset ? `
             Harness.ResetState();` : ''}${usesHttpStub(model) ? `
             // El reset ya vació el proveedor de prueba: se olvidan también las secuencias del flujo anterior.
             HttpStubHarness.ForgetSequences();` : ''}${usesMessagingHarness(model) ? `
@@ -297,6 +302,7 @@ public sealed class FlowResponse(int status, IReadOnlyDictionary<string, string>
 
 function flowServerCs(model) {
   const launch = apiLaunch(model);
+  const replica = usesReplica(model);
   return csFile({
     namespace: supportNamespace(model),
     usings: ['System.Diagnostics', 'System.Net', 'System.Net.Sockets', 'System.Reflection', 'Xunit'],
@@ -359,6 +365,17 @@ internal static class FlowServer
             throw new InvalidOperationException($"No está compilado el servidor ({dll}): compila la solución antes (dotnet build).");
         }
         var port = FreePort();
+        Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+        log = new StreamWriter(LogPath, append: false) { AutoFlush = true };
+        process = Launch(dll, port, Write);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => Stop();
+        BaseUrl = $"http://127.0.0.1:{port}";
+        await WaitLiveAsync(process, BaseUrl, "el servidor", LogPath, () => LogTail(), cancellationToken);
+    }
+
+    /// <summary>Lanza el ejecutable del Api en <paramref name="port"/> con el perfil de las pruebas; su salida va a <paramref name="write"/>.</summary>
+    internal static Process Launch(string dll, int port, Action<string?> write)
+    {
         var start = new ProcessStartInfo("dotnet")
         {
             WorkingDirectory = Harness.Root,
@@ -371,28 +388,28 @@ internal static class FlowServer
         start.Environment["SERVER_PORT"] = port.ToString(System.Globalization.CultureInfo.InvariantCulture);
         start.Environment["SERVER_ADDRESS"] = "127.0.0.1";
         start.Environment["DOTNET_NOLOGO"] = "1";
+        var launched = new Process { StartInfo = start };
+        launched.OutputDataReceived += (_, line) => write(line.Data);
+        launched.ErrorDataReceived += (_, line) => write(line.Data);
+        launched.Start();
+        launched.BeginOutputReadLine();
+        launched.BeginErrorReadLine();
+        return launched;
+    }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
-        log = new StreamWriter(LogPath, append: false) { AutoFlush = true };
-        process = new Process { StartInfo = start };
-        process.OutputDataReceived += (_, line) => Write(line.Data);
-        process.ErrorDataReceived += (_, line) => Write(line.Data);
-        process.Start();
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => Stop();
-
-        BaseUrl = $"http://127.0.0.1:{port}";
+    /// <summary>Espera a que <paramref name="baseUrl"/> responda /livez, o falla con el final de su log.</summary>
+    internal static async Task WaitLiveAsync(Process launched, string baseUrl, string what, string logPath, Func<string> tail, CancellationToken cancellationToken)
+    {
         var until = DateTime.UtcNow + StartTimeout;
         while (DateTime.UtcNow < until)
         {
-            if (process.HasExited)
+            if (launched.HasExited)
             {
-                throw new InvalidOperationException($"el servidor no arrancó (salió con código {process.ExitCode}). Log: {LogPath}\n{LogTail()}");
+                throw new InvalidOperationException($"{what} no arrancó (salió con código {launched.ExitCode}). Log: {logPath}\n{tail()}");
             }
             try
             {
-                using var response = await Probe.GetAsync($"{BaseUrl}/livez", cancellationToken);
+                using var response = await Probe.GetAsync($"{baseUrl}/livez", cancellationToken);
                 if (response.StatusCode == HttpStatusCode.OK) return;
             }
             catch (HttpRequestException)
@@ -405,7 +422,7 @@ internal static class FlowServer
             }
             await Task.Delay(200, cancellationToken);
         }
-        throw new InvalidOperationException($"el servidor no respondió /livez en {StartTimeout.TotalSeconds} s. Log: {LogPath}\n{LogTail()}");
+        throw new InvalidOperationException($"{what} no respondió /livez en {StartTimeout.TotalSeconds} s. Log: {logPath}\n{tail()}");
     }
 
     /// <summary>Para el servidor (y lo que haya lanzado). Lo llama el final de la suite y la salida del proceso.</summary>
@@ -450,13 +467,13 @@ internal static class FlowServer
     /// El ejecutable del Api, en la configuración con la que se compiló este proyecto (Debug o Release): el
     /// proyecto de flujos ordena su compilación sin ver sus tipos.
     /// </summary>
-    private static string ApiAssembly()
+    internal static string ApiAssembly()
     {
         var configuration = typeof(FlowServer).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>().FirstOrDefault(attribute => attribute.Key == "Configuration")?.Value ?? "Debug";
         return Path.Combine(Harness.Root, "src", ApiProject, "bin", configuration, ${csString(TARGET_FRAMEWORK)}, $"{ApiProject}.dll");
     }
 
-    private static int FreePort()
+    internal static int FreePort()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -469,12 +486,127 @@ public sealed class FlowServerShutdown : IAsyncDisposable
 {
     public ValueTask DisposeAsync()
     {
-        FlowServer.Stop();
+        FlowServer.Stop();${replica ? `
+        ReplicaServer.Stop();` : ''}
         return ValueTask.CompletedTask;
     }
 }
-`
+${replica ? REPLICA_SERVER : ''}`
   });
+}
+
+// ─── La segunda réplica (escenarios de clúster) ──────────────────────────────────────────────────
+
+/**
+ * ¿Hay escenarios de clúster posibles? Lo decide keel-core/gen/cluster-scenarios.js, el mismo predicado que keel-spring y
+ * keel-nest. Sin ellos el arnés no emite la réplica.
+ */
+export function usesReplica(model) {
+  return usesClusterScenarios(model);
+}
+
+const REPLICA_SERVER = String.raw`
+/// <summary>
+/// La SEGUNDA instancia del servicio, si un escenario de clúster la arrancó: el mismo ejecutable que FlowServer, en otro
+/// puerto libre y contra la misma infraestructura, como el proceso aparte de keel-spring. Con dos instancias vivas hay dos
+/// relays del outbox y dos barridos compitiendo por las mismas filas, y una petición puede dirigirse a una u otra: sin
+/// esto, «lo arbitra la clave primaria» y «cada réplica se lleva un lote disjunto» son afirmaciones que ningún escenario
+/// toca. Su salida va a <c>build/keel-scenarios/server-replica.log</c>.
+/// </summary>
+internal static class ReplicaServer
+{
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+    private static readonly object LogLock = new();
+    private static Process? process;
+    private static StreamWriter? log;
+
+    public static string BaseUrl { get; private set; } = "";
+
+    public static bool Running => process is { HasExited: false };
+
+    public static string LogPath => Path.Combine(Harness.Root, "build", "keel-scenarios", "server-replica.log");
+
+    public static async Task<string> StartAsync(CancellationToken cancellationToken)
+    {
+        await Gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (Running) return BaseUrl;
+            Stop();
+            var port = FlowServer.FreePort();
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            log = new StreamWriter(LogPath, append: false) { AutoFlush = true };
+            process = FlowServer.Launch(FlowServer.ApiAssembly(), port, Write);
+            BaseUrl = $"http://127.0.0.1:{port}";
+            try
+            {
+                await FlowServer.WaitLiveAsync(process, BaseUrl, "la réplica", LogPath, () => FlowServer.LogTail(), cancellationToken);
+            }
+            catch
+            {
+                Stop();
+                throw;
+            }
+            return BaseUrl;
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    /// <summary>Para la réplica (y lo que haya lanzado). Idempotente.</summary>
+    public static void Stop()
+    {
+        try
+        {
+            if (process is { HasExited: false }) process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // Ya había terminado.
+        }
+        process = null;
+        BaseUrl = "";
+        lock (LogLock)
+        {
+            log?.Dispose();
+            log = null;
+        }
+    }
+
+    private static void Write(string? line)
+    {
+        if (line is null) return;
+        lock (LogLock) log?.WriteLine(line);
+    }
+}
+`;
+
+/** Los miembros de FlowTest con la segunda réplica: los nombres de keel-spring y keel-nest. */
+function replicaMembers(model) {
+  if (!usesReplica(model)) return [];
+  const members = [
+    `    /// <summary>
+    /// Arranca una SEGUNDA instancia del servicio contra la misma infraestructura y devuelve su URL base. Es la palanca de
+    /// los escenarios de clúster (FL-CLU-*). <b>El escenario que la arranca la para</b>, en un <c>finally</c> con
+    /// <see cref="StopReplica"/>: una réplica viva sigue publicando y barriendo. Como red, cada flujo nuevo la para al empezar.
+    /// </summary>
+    protected static Task<string> StartReplica() => ReplicaServer.StartAsync(TestContext.Current.CancellationToken);`,
+    `    /// <summary>Para la segunda instancia. Idempotente.</summary>
+    protected static void StopReplica() => ReplicaServer.Stop();`
+  ];
+  if (usesApi(model)) {
+    members.push(`    /// <summary>
+    /// Una petición dirigida a la SEGUNDA réplica, no a la del flujo: es lo que permite que dos peticiones simultáneas con
+    /// la misma clave lleguen a instancias distintas, el caso que el registro de idempotencia existe para cerrar.
+    /// </summary>
+    protected static Task<FlowResponse> OnReplica(string method, string path, object? body = null, Dictionary<string, string>? headers = null) =>
+        ReplicaServer.Running
+            ? Harness.SendAsync(method, path, body, headers, TestContext.Current.CancellationToken, ReplicaServer.BaseUrl)
+            : throw new InvalidOperationException("La réplica no está arrancada: llama antes a StartReplica()");`);
+  }
+  return members;
 }
 
 // ─── Support/FailureCapture.cs ───────────────────────────────────────────────────────────────────
@@ -652,16 +784,18 @@ internal static class Harness
         throw new InvalidOperationException("No se encontró la raíz del proyecto (${solution(model).file}) por encima de " + AppContext.BaseDirectory);
     }
 
-    public static async Task<FlowResponse> SendAsync(string method, string path, object? body, IReadOnlyDictionary<string, string>? headers, CancellationToken cancellationToken)
+    /// <summary>Una petición al servidor del flujo, o a <paramref name="baseUrl"/> (la segunda réplica) si se da.</summary>
+    public static async Task<FlowResponse> SendAsync(string method, string path, object? body, IReadOnlyDictionary<string, string>? headers, CancellationToken cancellationToken, string? baseUrl = null)
     {
-        if (string.IsNullOrEmpty(FlowServer.BaseUrl)) throw new InvalidOperationException("El servidor no está arrancado: la prueba de flujo hereda de FlowTest.");
+        var target = baseUrl ?? FlowServer.BaseUrl;
+        if (string.IsNullOrEmpty(target)) throw new InvalidOperationException("El servidor no está arrancado: la prueba de flujo hereda de FlowTest.");
         var payload = body switch
         {
             null => null,
             string json => json,
             _ => JsonSerializer.Serialize(body)
         };
-        using var request = new HttpRequestMessage(new HttpMethod(method), new Uri(new Uri(FlowServer.BaseUrl), path));
+        using var request = new HttpRequestMessage(new HttpMethod(method), new Uri(new Uri(target), path));
         var sent = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/json" };
         foreach (var (name, value) in headers ?? new Dictionary<string, string>()) sent[name] = value;
         string? contentType = null;

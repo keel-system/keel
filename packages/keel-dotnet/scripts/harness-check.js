@@ -149,6 +149,27 @@ public sealed class ProbeOkFlow : FlowTest
         Db("DROP TABLE keel_probe");
     }
 
+    // La segunda réplica de los escenarios de clúster: un proceso aparte del mismo Api, contra la misma infra.
+    [Scenario("FL-PROBE-001-C: la segunda réplica arranca, responde, se para y el servidor del flujo sigue")]
+    public async Task LaReplicaArrancaYSePara()
+    {
+        try
+        {
+            var url = await StartReplica();
+            Assert.NotEqual(BaseUrl, url);
+            Assert.Equal(url, await StartReplica());
+            var response = await OnReplica("GET", $"{RouteBase}/keel-probe");
+            Assert.True(response.Status == 404, response.ToString());
+            Assert.Equal(404, response.Json().GetProperty("status").GetInt32());
+        }
+        finally
+        {
+            StopReplica();
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => OnReplica("GET", $"{RouteBase}/keel-probe"));
+        Assert.True((await Get("/livez")).Status == 200);
+    }
+
     // Un id que el documento no declara: sale AJENO y no puntúa (keel-core/gen/junit-scoring).
     [Scenario("FL-PROBE-099-A: un caso fuera del documento")]
     public void FueraDelDocumento() => Assert.True(true);
@@ -228,7 +249,7 @@ public sealed class ProbeOrderFlow : FlowTest
   const run1 = bash(projectDir, 'infra/score-scenarios.sh');
   const lines = run1.output;
   const has = (pattern) => pattern.test(lines);
-  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/), has(/OK\s+FL-PROBE-001-B/) ? '' : lines.slice(-2500));
+  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/), has(/OK\s+FL-PROBE-001-C/) ? '' : lines.slice(-2500));
   step('score: los escenarios de un flujo corren en el orden escrito', has(/OK\s+FL-PROBE-005-B/), has(/FL-PROBE-005-B/) ? '' : 'sin fila FL-PROBE-005-B');
   step('score: el que falla sale FALLO con la ruta de su evidencia', has(/FALLO\s+FL-PROBE-002-A\s+ProbeFailFlow\s+build\/keel-failures\/FL-PROBE-002-A\.json/));
   step('score: el flujo que no arranca deja sus casos OMITIDOS', has(/OMITIDO\s+FL-PROBE-003-A/), has(/OMITIDO/) ? '' : 'sin fila OMITIDO');
