@@ -241,7 +241,9 @@ Se invoca **sin argumentos, con el cwd en esta raíz**; todas las rutas son rela
    (\`harnessPatches\`, fixes de \`infra/\` o de la solución, \`culprit: harness\`, \`probes[].verdict: FALSO-NEGATIVO\`),
    cada entrada diciendo de quién es. Y \`design-gaps.yaml\` con **cada** \`designGap\` (schema
    \`design-gaps.schema.json\` de keel-core, con el \`service\` y la \`version\` de \`specs/service.keel.yaml\` y
-   \`generator: keel-dotnet\`): \`keel-dotnet check\` lo imprime desde el workspace. Sin huecos, no se escribe; sin nada
+   \`generator: keel-dotnet\`): \`keel-dotnet check\` lo imprime desde el workspace. Antes de escribir un hueco, búscalo
+   en \`specs/gaps.yaml\` y \`specs/decisions.yaml\`: si ya está ahí aceptado (\`state: accepted\`), es una decisión
+   tomada por escrito y no se reporta. Sin huecos, no se escribe; sin nada
    que reportar, dilo en una línea.
 7. **Cerrar.** Commit (\`Generado desde specs/${service.name} v${service.version}\`; los \`packages.lock.json\` incluidos) y
    resumen: matriz, estado de cada agente, ajustes de calidad y huecos del diseño.

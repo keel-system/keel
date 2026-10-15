@@ -334,3 +334,13 @@ test('lo que enseña keel-dotnet-mongodb existe en lo emitido: rutas, valores de
     assert.match(all, new RegExp(`protected static [^\\n]*\\b${helper}\\(`), `el arnés emite ${helper}`);
   }
 });
+
+test('el cierre no reporta como hueco lo que el diseño ya aceptó por escrito (specs/gaps.yaml, specs/decisions.yaml)', () => {
+  // La corrida notification-mailer-mongo-dotnet (2026-10-15) devolvió como designGap el `queued` sin rescate, que
+  // gaps.yaml traía aceptado con su motivo; la de profile-directory-nest (2026-10-07), lo mismo.
+  const docs = [`${DOCS_DIR}/orchestration.md`, ...Object.keys(files).filter((file) => file.endsWith(`${SKILL}/SKILL.md`))];
+  assert.ok(docs.length > 1);
+  for (const file of docs) {
+    for (const words of ['`specs/gaps.yaml`', '`specs/decisions.yaml`', '`state: accepted`', 'no se reporta']) assert.ok(files[file].includes(words), `${file}: ${words}`);
+  }
+});

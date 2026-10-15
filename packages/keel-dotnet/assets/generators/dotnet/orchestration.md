@@ -209,6 +209,11 @@ sellado con el `service` y la `version` de `specs/service.keel.yaml`), una entra
 `/keel-evolve` los recoge. **Copia ese archivo fuera del proyecto antes de tirarlo**: comparar huecos entre corridas
 es lo que distingue el hueco de un diseño del hueco del método.
 
+Un hueco que `specs/gaps.yaml` ya trae con `state: accepted` (o que `specs/decisions.yaml` acepta)
+**no se reporta**: es una decisión tomada por escrito, con su motivo y el disparador que la reabriría. Si crees que
+ese disparador ya se cumplió, dilo en el informe, no en `design-gaps.yaml`. Reportarlo como nuevo lo cuenta como
+hueco del diseño en el registro de corridas, y no lo es.
+
 ## Autosuficiencia del proyecto
 
 `build` deja aquí todo lo que el pipeline necesita: la skill orquestadora, los cinco agentes, las convenciones

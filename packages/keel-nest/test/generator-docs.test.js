@@ -363,3 +363,12 @@ test('la skill de S3 se instala con storage en el diseño, y solo con ella; lo q
   }
   assert.ok(!Object.keys(rabbit).some((file) => file.includes('keel-nest-s3')), 'un diseño sin storage no la recibe');
 });
+
+test('el cierre no reporta como hueco lo que el diseño ya aceptó por escrito (specs/gaps.yaml, specs/decisions.yaml)', () => {
+  // La corrida profile-directory-nest (2026-10-07) devolvió como designGap una entrada que gaps.yaml traía aceptada.
+  const docs = [`${DOCS_DIR}/orchestration.md`, ...Object.keys(files).filter((file) => file.endsWith('keel-generate-nest/SKILL.md'))];
+  assert.ok(docs.length > 1);
+  for (const file of docs) {
+    for (const words of ['`specs/gaps.yaml`', '`specs/decisions.yaml`', '`state: accepted`', 'no se reporta']) assert.ok(files[file].includes(words), `${file}: ${words}`);
+  }
+});

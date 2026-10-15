@@ -1226,7 +1226,7 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
 - **Inc. 11 — cerrado (2026-10-14).** `needs` (réplica, `onMiss`, `lastKnown`), `oauth2-client-credentials` y los
   compuestos en una llamada siguen rechazados hasta el incremento 13, como en keel-nest. Siguiente: el incremento 12
   (persistencia documental, MongoDB).
-- **Inc. 12 — en curso (abierto el 2026-10-15).** Tramos como los de keel-nest (su § Inc. 12), con el 12a ya hecho en
+- **Inc. 12 — cerrado (2026-10-15, corrida `notification-mailer-mongo` 23/23, huella 17).** Tramos como los de keel-nest (su § Inc. 12), con el 12a ya hecho en
   keel-core (`document.js`: el documento como datos, rutas, índices del diseño y de los almacenes, `export-indexes.sh`;
   `mongo-probes.js`, los scripts del arnés): 12b la persistencia documental, 12c los almacenes del generador sobre
   documentos, 12d el arnés y la skill `keel-dotnet-mongodb`, 12e la corrida (keel-nest la hizo sobre
@@ -1381,6 +1381,14 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       malformado salió roja: el endpoint resolvía la identidad del llamante (una consulta a la base) ANTES de leer la
       entrada, así que una ruta malformada llegaba a la base en vez de responder 400. Ahora el lector recibe la resolución
       como función y la llama tras sus comprobaciones —el orden de keel-nest—, y `test/caller-resolution.test.js` lo fija.
+  - **12e, la corrida (hecha, 2026-10-15; `docs/corridas/2026-10-15-notification-mailer-mongo-dotnet.md`).** **23/23 a
+    la primera**, sin `harnessPatches` ni fixes de `infra/`, y `check-idempotency.sh` en verde sobre el proyecto
+    terminado. Huella **17** de 298, la de las gemelas de control de keel-nest y keel-spring archivo por archivo (los
+    nueve handlers, los tres agregados y la entidad hija, `BrokerBindings.cs`, el `README.md` y la misma consulta de
+    negocio de la versión siguiente de una plantilla): 15 TODO · 2 consulta. Nada del adaptador documental, de los
+    almacenes, del arnés ni del correo tocado. El único `designGap` ya estaba aceptado en `specs/gaps.yaml`, y era la
+    segunda vez que un agente lo hacía (antes, `profile-directory-nest`): las skills de los tres generadores no decían
+    que hay que mirar ahí antes de reportar. Arreglado en los tres, con su prueba.
 
 ## 5. Riesgos conocidos
 

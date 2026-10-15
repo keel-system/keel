@@ -417,6 +417,11 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(skill.includes('keel-spring-tests'));
   assert.ok(skill.includes('keel-spring-validate'));
   assert.ok(skill.includes('keel-spring-quality'));
+  // Lo que el diseño ya aceptó por escrito no vuelve como designGap (corridas profile-directory-nest y
+  // notification-mailer-mongo-dotnet).
+  for (const text of [skill, read(workspace, 'docs/keel/orchestration.md')]) {
+    for (const words of ['`specs/gaps.yaml`', '`specs/decisions.yaml`', '`state: accepted`', 'no se reporta']) assert.ok(text.includes(words), words);
+  }
   // Flujo normalizado: se invoca sin argumentos, con el cwd en la raíz del proyecto.
   assert.ok(skill.includes('sin argumentos'));
   assert.ok(!skill.includes('argument-hint'));

@@ -501,6 +501,11 @@ quien mantiene `keel-spring`. Va estructurado así:
    `layer`, `unit`, `kind` (`missing` | `contradiction` | `undeclared`), `proposal` y
    `source`, más el `scenario` que lo destapó si lo hubo.
 
+   Un hueco que `specs/gaps.yaml` ya trae con `state: accepted` (o que `specs/decisions.yaml`
+   acepta) **no se reporta**: es una decisión tomada por escrito, con su motivo y el
+   disparador que la reabriría. Si crees que ese disparador ya se cumplió, dilo en el
+   informe, no en `design-gaps.yaml`.
+
    **Y ese archivo se copia FUERA del proyecto antes de tirarlo.** Un proyecto generado es
    desechable y el `design-gaps.yaml` se va con él: los diez huecos de la primera corrida de
    medición estuvieron perdidos por esto, y solo se recuperaron del transcript de la sesión.
