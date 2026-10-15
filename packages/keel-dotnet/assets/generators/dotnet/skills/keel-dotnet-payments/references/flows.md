@@ -26,7 +26,18 @@ cobro.
 - `GatewayCaptures`, `GatewayCancels`, `GatewayRefunds(referencia, "5.00")`: las acciones de seguimiento.
 - `GatewayExpiresAuthorization(referencia)`: la autorización caducó antes de capturarse — la captura se rechaza y el cobro
   queda anulado. Ningún escenario puede esperar los días reales.
-- `GatewayRejects(GatewayCall.Refund)`: la pasarela rechaza esa llamada (4xx).
+- `GatewayRejects(GatewayCall.Refund)`: la pasarela rechaza esa llamada (4xx). **Tras rechazar una captura, una
+  anulación o una devolución, el servidor le pregunta el estado real del cobro** (el rechazo no lo dice; lo hacen los
+  adaptadores de los tres generadores), así que el Given programa las dos cosas:
+
+  ```csharp
+  await GatewayRejects(GatewayCall.Capture);
+  await GatewayReports("ch-022", "AUTHORIZED");   // sigue autorizado: el rechazo no movió nada
+  ```
+
+  Sin el `GatewayReports`, la consulta no encuentra el cobro (`NotFound`) y el handler no puede distinguir el rechazo
+  de un cobro que la pasarela no conoce. **No lo arregles en el adaptador**: la pasarela real sí conoce el cobro, y el
+  adaptador es el mismo servidor que el de keel-spring y keel-nest.
 - `GatewaySavesPaymentMethod()`: guardar un medio de pago funciona.
 - `GatewayCallCount(GatewayCall.Charge)` y `GatewayRequests(...)`: cuántas veces y qué se le mandó (la clave de
   idempotencia viaja en la cabecera de la pasarela: `StubRequestHeader(request, "<cabecera>")`).

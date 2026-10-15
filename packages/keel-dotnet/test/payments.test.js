@@ -155,6 +155,16 @@ test('el aplicador despacha la operación de cada desenlace; lo que la capa no n
   assert.match(content(files, '/Payment/PaymentReconciliation.cs'), /GatewayOutcome\.Failed\(reference, null, PaymentFailureReason\.NotReceived\)/);
 });
 
+test('la prueba del contenedor registra la pasarela: un handler que la recibe sigue construyéndose', () => {
+  // La corrida de payment-checkout con MercadoPago (2026-10-15): sin esto, en cuanto el agente añade IPaymentGateway a un
+  // handler, las 15 filas de UseCasesTests caen (medido: 15/15 en rojo sin el registro, 15/15 en verde con él).
+  for (const gateway of GATEWAYS) {
+    const tests = content(plans.get(gateway).files, '/UseCasesTests.cs');
+    assert.match(tests, /services\.AddPayments\(PaymentGatewaySettings\.Unreachable\);/, gateway);
+  }
+  assert.match(content(plans.get('stripe').files, '/Payment/PaymentGatewaySettings.cs'), /public static PaymentGatewaySettings Unreachable \{ get; \} =/);
+});
+
 test('el registro cablea la pasarela elegida y el cliente HTTP sin reintentos por debajo', () => {
   for (const [gateway, adapter] of [['stripe', 'StripePaymentGateway'], ['mercadopago', 'MercadopagoPaymentGateway']]) {
     const { files } = plans.get(gateway);

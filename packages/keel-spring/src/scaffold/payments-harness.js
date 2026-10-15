@@ -134,7 +134,12 @@ ${routes});
         gatewayReports(reference, "CANCELED");
     }
 
-    /** La pasarela rechaza esa llamada (4xx): la acción no se hizo. */
+    /**
+     * La pasarela rechaza esa llamada (4xx): la acción no se hizo. Tras rechazar una captura, una anulación o una
+     * devolución, el servidor le PREGUNTA a la pasarela el estado real del cobro (el rechazo no lo dice): programa también
+     * {@code gatewayReports(referencia, "AUTHORIZED")} —o "CAPTURED" para una devolución—. Sin él la consulta no lo
+     * encuentra (NOT_FOUND), y un rechazo no se distingue de un cobro que la pasarela no conoce.
+     */
     protected static void gatewayRejects(GatewayCall call) {
         String[] route = GATEWAY_ROUTES.get(call);
         stubFor(route[0], route[1], 400, "{\\"error\\": {\\"code\\": \\"rejected_by_test\\"}}");

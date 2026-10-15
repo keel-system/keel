@@ -20,6 +20,7 @@
 import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, paymentIdempotencyKey, savedMethodIdempotencyKey, SAVED_METHOD_SEPARATOR } from 'keel-core/gen/payment-gateways';
 import { PAYMENT_SWEEP_PARAMETERS } from 'keel-core/gen/payments-model';
 import { paymentsYaml } from 'keel-core/gen/payments-config';
+import { UNREACHABLE_BASE_URL } from 'keel-core/gen/infra-catalog';
 import { enumMember } from '../lib/cs-projection.js';
 import { csFile, csString, located, namespaceOf, solution } from './render.js';
 import { componentType, messageComponents, messageNamespace } from './services.js';
@@ -566,6 +567,13 @@ public sealed partial record PaymentGatewaySettings(
     int UnansweredAfterSeconds,
     int BatchSize)
 {
+    /// <summary>
+    /// Una pasarela que no responde, con la credencial y el secreto de prueba: la de las pruebas de build que construyen el
+    /// contenedor (ninguna sale a la red).
+    /// </summary>
+    public static PaymentGatewaySettings Unreachable { get; } =
+        new("UNREACHABLE_URL", "TEST_API_KEY", "TEST_WEBHOOK_SECRET", TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(10), 300, 900, PAYMENT_BATCH_DEFAULT);
+
     public static PaymentGatewaySettings From(ServiceConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -641,7 +649,10 @@ public sealed partial record PaymentGatewaySettings(
 }`
     .replace('"PAYMENT_UNANSWERED_KEY"', csString(PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.key.replaceAll('.', ':')))
     .replace('"PAYMENT_BATCH_KEY"', csString(PAYMENT_SWEEP_PARAMETERS.batchSize.key.replaceAll('.', ':')))
-    .replace('PAYMENT_BATCH_DEFAULT', String(PAYMENT_SWEEP_PARAMETERS.batchSize.default));
+    .replaceAll('PAYMENT_BATCH_DEFAULT', String(PAYMENT_SWEEP_PARAMETERS.batchSize.default))
+    .replace('"UNREACHABLE_URL"', csString(UNREACHABLE_BASE_URL))
+    .replace('"TEST_API_KEY"', csString(PAYMENT_TEST_SECRETS.apiKey))
+    .replace('"TEST_WEBHOOK_SECRET"', csString(PAYMENT_TEST_SECRETS.webhookSecret));
 }
 
 function gatewayHttpBody() {

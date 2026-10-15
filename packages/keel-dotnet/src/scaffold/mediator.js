@@ -25,6 +25,7 @@ import { securityNamespace, usesCallerScope } from './security.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from './service-parameters.js';
 import { clientAdaptersNamespace, usesHttpClients } from './http-clients.js';
 import { mailInfraNamespace, usesMail } from './mail.js';
+import { paymentInfraNamespace, usesPayments } from './payments.js';
 
 /** ¿Hay casos de uso que despachar? Sin operaciones no se genera nada de esto. */
 export function usesMediator(model) {
@@ -349,6 +350,12 @@ function useCasesTest(model) {
   const mailing = usesMail(model);
   if (mailing) usings.push(mailInfraNamespace(model));
   const mailLine = mailing ? '\n        services.AddMail(MailSettings.Defaults);' : '';
+  // Con pagos, los handlers que cobran reciben el puerto de la pasarela y las clases de aplicación: el registro real, con
+  // una pasarela que no responde (nadie cobra aquí). Sin él, el contenedor deja de construirse en cuanto el agente añade
+  // IPaymentGateway a un handler (lo destapó la corrida de payment-checkout con MercadoPago).
+  const payments = usesPayments(model);
+  if (payments) usings.push(paymentInfraNamespace(model));
+  const paymentsLine = payments ? '\n        services.AddPayments(PaymentGatewaySettings.Unreachable);' : '';
   const passThrough = persistence
     ? `
             // Sin base: la transacción de este despacho es el paso directo, no la de EF.
@@ -360,7 +367,7 @@ function useCasesTest(model) {
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddUseCases();${persistenceLine}${bridgeLine}${scopeLine}${parametersLine}${clientsLine}${mailLine}
+        services.AddUseCases();${persistenceLine}${bridgeLine}${scopeLine}${parametersLine}${clientsLine}${mailLine}${paymentsLine}
         extra?.Invoke(services);
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }

@@ -130,7 +130,12 @@ public abstract partial class FlowTest
     /// </summary>
     protected static Task GatewayExpiresAuthorization(string reference) => PaymentGatewayHarness.ExpiresAuthorization(reference);
 
-    /// <summary>La pasarela rechaza esa llamada (4xx): la acción no se hizo.</summary>
+    /// <summary>
+    /// La pasarela rechaza esa llamada (4xx): la acción no se hizo. Tras rechazar una captura, una anulación o una
+    /// devolución, el servidor le PREGUNTA a la pasarela el estado real del cobro (el rechazo no lo dice): programa también
+    /// <c>GatewayReports(referencia, "AUTHORIZED")</c> —o "CAPTURED" para una devolución—. Sin él la consulta no lo
+    /// encuentra (NOT_FOUND), y un rechazo no se distingue de un cobro que la pasarela no conoce.
+    /// </summary>
     protected static Task GatewayRejects(GatewayCall call) => PaymentGatewayHarness.Rejects(call);
 
     /// <summary>La pasarela guarda el medio de pago que se le pase.</summary>
