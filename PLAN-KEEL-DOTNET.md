@@ -1193,6 +1193,16 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       `transport-retry`): cada uno cae en su sonda. `generator-docs.test.js` ata las rutas y las firmas de la skill a lo
       emitido. `npm test` 443/443; `cs-check` 15/15 (2 237 pruebas).
     - **Sin medir**: los flujos de una corrida (11e). `harness-check` sigue sobre `product-catalog`, sin clientes.
+  - **11e, la corrida — preparada (2026-10-14).** Workspace `spring-live-test/corrida-stock-reservation-dotnet`:
+    `keel init`, el MISMO diseño que las gemelas de keel-nest (24/24, huella 10) y keel-spring (21/21, huella 10) —la
+    fixture `stock-reservation` v1.1.0 y su `DESIGN.md`, `--ready` 11/11, sin `--accept-unready`— y `keel-dotnet build`
+    con `postgresql · rabbitmq` (el stack de las gemelas, sembrado en `keel-stack.json`; 248 archivos, estampado
+    `ready: true`, con la skill `keel-dotnet-httpclient`). El proyecto compila tal cual, sin warnings; las pruebas de
+    build pasan (155/155) y `check-idempotency.sh` nace ROJO en las mismas siete familias que en keel-nest, con
+    `outboundIdempotency` en verde (la clave la cablea build). Mide lo que ninguna red mide: los flujos del barrido de
+    reconciliación con `AgeForReconciliation`, la compensación, el reintento con la MISMA clave contra el WireMock de
+    `infra/` (FL-REC-002, «exactamente dos») y el clúster de dos réplicas. Los contenedores se llaman
+    `stock-reservation-*`, como los de las gemelas: no puede correr a la vez que otra corrida del mismo diseño.
 
 ## 5. Riesgos conocidos
 
