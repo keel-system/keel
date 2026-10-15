@@ -1480,7 +1480,14 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     `AddPayments` (keel-dotnet; medido 15/15 rojo → verde) y el rechazo de una acción de seguimiento en el arnés de los
     tres (el adaptador consulta el estado real tras un 4xx; el doble necesita `GatewayReports`, y el agente había
     cambiado el adaptador en su lugar). **Pendiente, de los tres generadores**: el origen de `requestCharge` (HTTP o
-    suscripción) que cinco corridas resolvieron a mano de cinco formas; candidato a pieza neutral. Queda la de Stripe.
+    suscripción) que cinco corridas resolvieron a mano de cinco formas; candidato a pieza neutral.
+  - **13e, Stripe: 25/25 (2026-10-15; `docs/corridas/2026-10-15-payment-checkout-stripe-dotnet.md`).** Con los arreglos de
+    la de MercadoPago dentro (`build --refresh` antes de lanzarla), que se confirman: el agente no tocó `UseCasesTests.cs`
+    ni el adaptador. Huella 21; quitando el hueco del generador, 20. **Una divergencia del servidor, arreglada**: keel-dotnet
+    exigía que `metadata.eventId` fuera un uuid y descartaba el mensaje; en keel-spring y keel-nest es texto. El agente lo
+    había resuelto en el arnés (`harnessPatch`); ahora `EventMetadata.EventId` es `string` y el lector no le exige forma
+    (`MessagingTests`, `cs-check --fixtures` y `broker-check` con RabbitMQ 22/22). `payments-cancel-reason` aparece en las
+    dos corridas: candidato obligatorio a id en la próxima minor de la capa. **Incremento 13, pagos: cerrado.**
 
 ## 5. Riesgos conocidos
 
