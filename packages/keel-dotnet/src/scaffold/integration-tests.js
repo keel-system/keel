@@ -35,6 +35,7 @@ import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './
 import { usesKafka } from './messaging.js';
 import { closingCredentialExpression, credentialsCs, flowTestCredentialMembers, smokeCredentialsCase } from './identity-harness.js';
 import { httpStubFile, idLiteralMember, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
+import { mailHarnessFile, mailSmokeCase } from './mail-harness.js';
 import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
@@ -65,6 +66,7 @@ export function generate(model) {
     ...[messagingHarnessCs(model, supportNamespace(model))].filter(Boolean).map((content) => ({ path: `${project.dir}/Support/Messaging.cs`, content })),
     // Con clientes salientes, el proveedor de prueba (http-stub-harness.js).
     ...[httpStubFile(model, supportNamespace(model))].filter(Boolean),
+    ...[mailHarnessFile(model, supportNamespace(model))].filter(Boolean),
     { path: `${project.dir}/${HARNESS_SMOKE_CLASS}.cs`, content: harnessSmokeCs(model) },
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript(model) }
@@ -1131,9 +1133,11 @@ ${headers}
         await ResetStubs();
     }`);
   }
+  const mailbox = mailSmokeCase(model);
+  if (mailbox) cases.push(mailbox);
   const messaging = messagingSmokeCase(model);
   if (messaging) cases.push(messaging);
-  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null, stub ? 'proveedor de prueba' : null, messaging ? 'broker' : null].filter(Boolean);
+  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null, stub ? 'proveedor de prueba' : null, mailbox ? 'buzón de prueba' : null, messaging ? 'broker' : null].filter(Boolean);
   return csFile({
     namespace: solution(model).integrationTests.name,
     header: `// Humo del arnés: la fontanería de la que dependen TODOS los flujos (servidor vivo${plumbing.length > 0 ? `, ${plumbing.join(', ')}` : ''}).

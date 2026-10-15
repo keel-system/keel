@@ -101,6 +101,10 @@ export const PLACES = {
   purge: ['infrastructure', 'Persistence/Purge'],
   // Lo que corre por reloj: el registro de tareas y un scheduler por grupo de operaciones con `schedule` (incremento 10b).
   scheduling: ['infrastructure', 'Scheduling'],
+  // El correo saliente (capa mail): el mensaje y sus excepciones son dominio; el adaptador SMTP, el renderizador y su
+  // configuración, infraestructura. Los puertos van con los demás de la aplicación (Ports).
+  mail: ['domain', 'Mail'],
+  mailInfra: ['infrastructure', 'Mail'],
   // La entrada HTTP: la infraestructura REST común y un archivo de endpoints por grupo de operaciones.
   rest: ['api', 'Rest'],
   endpoints: ['api', 'Endpoints'],

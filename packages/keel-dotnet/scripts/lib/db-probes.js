@@ -26,7 +26,7 @@ import { messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents }
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
 import { claimOrderField, claimsForEntity, missingClockCountSql, rescueProbes, screamingSnake, snakeCase, stallSql, sweepClaims, sweepConfig } from 'keel-core/gen';
 import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { usesSweepClaims } from '../../src/scaffold/claim.js';
+import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
 import { reconciledActivations, reconciliationClaims, reconciliationParameters } from 'keel-core/gen/reconciliation-stores';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
@@ -236,7 +236,7 @@ function probesCs(model, namespace) {
     ctx.refs.clear();
     const states = [];
     // Las muestras comunes y, por encima, las de los reclamos de esta raíz: cada sonda de reclamo guarda las suyas.
-    const total = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root);
+    const total = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root) + guardSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -391,6 +391,22 @@ function probesCs(model, namespace) {
     tests.push(...credentialProbes(model, root, { state, sample: 16, port }));
     tests.push(...claimProbes(model, root, { state, first: SAMPLES + 1, port, context: dbContext(model) }));
     tests.push(...reconciliationProbes(model, root, { state, first: SAMPLES + 1 + claimSampleCount(model, root), port, context: dbContext(model) }));
+    // La guarda de un efecto que no se deshace (mail.sentBy), con sus muestras por encima de las de los reclamos.
+    const stateColumn = snakeCase(root.lifecycle?.field ?? 'status');
+    const sql = (text) => `await InScope(other => other.GetRequiredService<${dbContext(model)}>().Database.${text})`;
+    tests.push(
+      ...guardProbes(model, root, {
+        state,
+        first: SAMPLES + 1 + claimSampleCount(model, root) + reconciliationSampleCount(model, root),
+        port,
+        seed: (row, stateName) => `${sql(`ExecuteSqlAsync($"UPDATE ${root.tableName} SET ${stateColumn} = '${storedState(model, root, stateName)}' WHERE id = {${row}}", Cancel)`)};`,
+        stateOf: (row) => sql(`SqlQuery<string>($"SELECT ${stateColumn}::text AS \\"Value\\" FROM ${root.tableName} WHERE id = {${row}}").SingleAsync(Cancel)`),
+        stampOf: (row) => {
+          const claim = guardClaimsFor(model, root.name).find((candidate) => candidate.stampField);
+          return sql(`SqlQuery<bool>($"SELECT ${snakeCase(claim?.stampField ?? 'id')} IS NOT NULL AS \\"Value\\" FROM ${root.tableName} WHERE id = {${row}}").SingleAsync(Cancel)`);
+        }
+      })
+    );
     blocks.push(`    // ─── ${root.name} ───\n\n${tests.join('\n\n')}`);
   }
 
@@ -1277,3 +1293,53 @@ function csFileLike(namespace, usings, body) {
   return [`namespace ${namespace};`, '', ...unique.map((using) => `using ${using};`), '', body.trim(), ''].join('\n');
 }
 
+
+/**
+ * Las sondas de la GUARDA de un efecto que no se deshace (`ClaimFor<Op>`, mail.sentBy): pasa a su estado en vuelo
+ * solo desde los de partida, estampa su reloj, CONFIRMA aunque la transacción de quien la llama se deshaga (es lo que la
+ * hace una guarda), y de dos a la vez gana una. Lo que cambia entre relacional y documental —cómo se siembra un estado
+ * y cómo se lee el guardado— lo pone quien llama: `seed(row, estado)`, `stateOf(row)` y `stampOf(row)` son C#.
+ */
+export function guardProbes(model, root, { state, first, port, seed, stateOf, stampOf }) {
+  const id = csMember(root.idField?.name ?? 'id');
+  let next = first;
+  return guardClaimsFor(model, root.name).map((claim) => {
+    const method = csMember(claim.method);
+    const [single, rolledBack, raced] = [next++, next++, next++];
+    const to = csString(storedState(model, root, claim.to));
+    const sample = (n, name) => `            var ${name} = new ${root.name}(${state(n)});
+            await InScope(other => other.GetRequiredService<${port}>().Save(${name}, Cancel));
+            ${seed(`${name}.${id}`, claim.from[0])}`;
+    const guard = (row) => `InScope(other => other.GetRequiredService<${port}>().${method}(${row}, Cancel))`;
+    return `    [Fact]
+    public async Task Guarda_${method}_PasaAEnVueloConfirmadaYSoloUnaVez() =>
+        await InScope(async services =>
+        {
+            // CONFIRMA aunque la transacción del caso de uso se deshaga: la marca tiene que existir antes del efecto externo.
+${sample(rolledBack, 'rolledBack')}
+            await Assert.ThrowsAsync<InvalidOperationException>(() => InScope(other => other.GetRequiredService<PersistenceTransactions>().InTransaction<bool>(async () =>
+            {
+                Assert.NotNull(await other.GetRequiredService<${port}>().${method}(rolledBack.${id}, Cancel));
+                throw new InvalidOperationException("el caso de uso falla después de reclamar");
+            }, readOnly: false, Cancel)));
+            Assert.Equal(${to}, ${stateOf(`rolledBack.${id}`)});
+
+${sample(single, 'single')}
+            var claimed = await ${guard(`single.${id}`)};
+            Assert.NotNull(claimed);
+            Assert.Equal(single.${id}, claimed.${id});
+            Assert.Equal(${to}, ${stateOf(`single.${id}`)});${claim.stampField ? `\n            Assert.True(${stampOf(`single.${id}`)}, "la guarda estampa ${claim.stampField}");` : ''}
+            // Ya en vuelo: la segunda ejecución no se la lleva.
+            Assert.Null(await ${guard(`single.${id}`)});
+
+            // Dos a la vez sobre la misma fila: gana una, la otra recibe null.
+${sample(raced, 'raced')}
+            var both = await Task.WhenAll(${guard(`raced.${id}`)}, ${guard(`raced.${id}`)});
+            Assert.Equal(1, both.Count(result => result is not null));
+        });`;
+  });
+}
+
+export function guardSampleCount(model, root) {
+  return guardClaimsFor(model, root.name).length * 3;
+}

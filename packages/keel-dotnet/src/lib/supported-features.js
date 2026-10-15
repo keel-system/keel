@@ -16,7 +16,6 @@ import { compositeUrlParamErrors } from 'keel-core/gen/outbound-params';
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
   storage: 'incremento 13',
-  mail: 'incremento 13',
   payments: 'incremento 13'
 };
 

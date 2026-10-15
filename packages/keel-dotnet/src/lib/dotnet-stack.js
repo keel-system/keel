@@ -68,7 +68,18 @@ export const PACKAGES = {
   // La persistencia documental (incremento 12): el driver oficial de MongoDB, que trae MongoDB.Bson. Sus transitivas
   // (DnsClient, SharpCompress, Snappier, ZstdSharp.Port) son Apache-2.0, MIT y BSD-3-Clause: las comprueba cs-check.
   // La 3.12.0 salió el 2026-09-17. Verificada el 2026-10-15.
-  'MongoDB.Driver': { version: '3.12.0', license: 'Apache-2.0', use: 'conexión con MongoDB (persistencia documental)' }
+  'MongoDB.Driver': { version: '3.12.0', license: 'Apache-2.0', use: 'conexión con MongoDB (persistencia documental)' },
+  // El correo saliente (capa mail, adelantada al 12e): el SMTP con MailKit (trae MimeKit y BouncyCastle.Cryptography, MIT)
+  // y las plantillas con Handlebars.Net, el Handlebars de .NET (solo sustituye, recorre y condiciona). Las dos con más de
+  // dos semanas el día que se fijaron. Verificadas el 2026-10-15.
+  MailKit: { version: '4.18.1', license: 'MIT', use: 'envío SMTP (capa mail)' },
+  'Handlebars.Net': { version: '2.4.3', license: 'MIT', use: 'plantillas de correo (capa mail)' },
+  // NO es una elección: es una TRANSITIVA de MimeKit que se fija a mano. MimeKit pide >= 10.0.0, NuGet resuelve la más
+  // baja, y de la 10.0.0 a la 10.0.12 tiene dos avisos publicados (GHSA-846f-f764-76mx, alta; GHSA-2fmv-rv2c-59x7,
+  // moderada), corregidos en la 10.0.13. Es la ÚNICA excepción a la regla de las dos semanas (se publicó el 2026-10-13):
+  // un parche de servicio de Microsoft frente a emitir a sabiendas una versión con un aviso de gravedad alta. Revisar
+  // al subir MailKit: si MimeKit ya pide la corregida, la línea sobra.
+  'System.Security.Cryptography.Pkcs': { version: '10.0.13', license: 'MIT', use: 'transitiva de MimeKit fijada en la versión corregida (capa mail)' }
 };
 
 /**

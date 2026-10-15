@@ -18,7 +18,7 @@
 // Las muestras son las de db-check (db-probes.js), con los value objects anidados y las hijas uno-a-uno que solo existen
 // en el documento.
 
-import { constraintErrors, declaredConcurrencyError, LOCK_VERSION, partialUniqueIndexes, indexName } from 'keel-core/gen';
+import { constraintErrors, declaredConcurrencyError, LOCK_VERSION, partialUniqueIndexes, indexName, snakeCase } from 'keel-core/gen';
 import { documentShape, documentValueObjects, valueObjectShape } from 'keel-core/gen/document';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { domainMembers } from '../../src/scaffold/entities.js';
@@ -26,12 +26,12 @@ import { csMember, csString, namespaceOf, solution, typeUsings } from '../../src
 import { repositoryRoots, portClass, repositoriesNamespace, isPaginated } from '../../src/scaffold/repositories.js';
 import { isNullable } from '../../src/scaffold/render.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
-import { counter, credentialProbes, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
+import { counter, credentialProbes, guardProbes, guardSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
 import { documentProbeSupport, storeKeyBlock, documentOutboxBlock, documentBridgeBlock, documentReconciliationStoreBlock, documentClaimProbes, documentReconciliationProbes, documentPurgeBlock } from './doc-store-probes.js';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { bridgeClass, messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
-import { usesSweepClaims } from '../../src/scaffold/claim.js';
+import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
 
@@ -178,7 +178,7 @@ function probesCs(model, namespace) {
     const refsBefore = new Set(ctx.refs);
     ctx.refs.clear();
     const states = [];
-    const total = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root);
+    const total = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root) + guardSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -372,6 +372,21 @@ function probesCs(model, namespace) {
     tests.push(...credentialProbes(model, root, { state, sample: 18, port }));
     tests.push(...documentClaimProbes(model, root, { state, first: SAMPLES + 1, port }));
     tests.push(...documentReconciliationProbes(model, root, { state, first: SAMPLES + 1 + claimSampleCount(model, root), port }));
+    // La guarda de un efecto que no se deshace (mail.sentBy), con sus muestras por encima de las de los reclamos.
+    const field = (member) => documentShape(model, root).find((entry) => entry.member === member)?.name ?? snakeCase(member);
+    const stampKey = field(guardClaimsFor(model, root.name).find((claim) => claim.stampField)?.stampField ?? 'id');
+    const rawOf = (row) => `(await Raw(${csString(root.collectionName)}).Find(new BsonDocument("_id", BsonValues.Of(${row}))).SingleAsync(Cancel))`;
+    tests.push(
+      ...guardProbes(model, root, {
+        state,
+        first: SAMPLES + 1 + claimSampleCount(model, root) + reconciliationSampleCount(model, root),
+        port,
+        seed: (row, stateName) =>
+          `await Raw(${csString(root.collectionName)}).UpdateOneAsync(new BsonDocument("_id", BsonValues.Of(${row})), new BsonDocument("$set", new BsonDocument(${csString(field(root.lifecycle.field))}, ${csString(storedState(model, root, stateName))})), cancellationToken: Cancel);`,
+        stateOf: (row) => `${rawOf(row)}[${csString(field(root.lifecycle.field))}].AsString`,
+        stampOf: (row) => `!${rawOf(row)}.GetValue(${csString(stampKey)}, BsonNull.Value).IsBsonNull`
+      })
+    );
     blocks.push(`    // ─── ${root.name} ───\n\n${tests.join('\n\n')}`);
   }
 

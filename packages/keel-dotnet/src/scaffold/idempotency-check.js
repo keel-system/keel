@@ -58,6 +58,7 @@ export function checksOf(model) {
     ...reconciliationChecks(model),
     ...outboundIdempotencyChecks(model),
     ...outboxChecks(model),
+    ...mailChecks(model),
     ...conditionalUniquenessChecks(model)
   ];
 }
@@ -507,6 +508,45 @@ function outboxChecks(model) {
 //    del estado del índice y mete otra en el mismo acto, y el índice se comprueba por FILA: la que lo ocupaba se retira y
 //    se GUARDA antes de guardar la nueva. Cada Save del adaptador confirma su SaveChanges en el acto, así que lo
 //    afirmable es que el handler busque la ocupante con el finder que build generó.
+// La salida por correo (capa mail, adelantada al 12e). build genera el mecanismo entero —mensaje, puerto, adaptador,
+// renderizador— y lo INYECTA en el handler de cada operación de mail.sentBy; el USO lo escribe el agente. Una operación que
+// no manda el correo compila, responde su 2xx y pasa todos sus escenarios menos el que mire el buzón. Y la guarda, que es la
+// otra mitad y la que no se ve fallar: que el correo salga DOS VECES tras una caída no lo nota ningún FL-*. Las mismas dos
+// comprobaciones que keel-spring y keel-nest.
+function mailChecks(model) {
+  const senders = new Set(model.mail?.sentBy ?? []);
+  if (!model.layersPresent?.mail || senders.size === 0) return [];
+  const checks = [];
+  for (const operation of allOperations(model)) {
+    if (!senders.has(operation.name)) continue;
+    checks.push({
+      group: 'mailDelivery',
+      subject: operation.name,
+      class: operation.handlerClass,
+      // El punto entre corchetes: viaja por grep y por awk, que no entiende `\.`.
+      require: ['mailSender[.]Send'],
+      forbid: ['NotImplementedException'],
+      why: 'el diseño le atribuye la salida por correo (mail.sentBy): tiene que componer el MailMessage y llamar a mailSender.Send(...)'
+    });
+    const guard = operation.guardClaim;
+    if (guard) {
+      checks.push({
+        group: 'mailDelivery',
+        subject: `${operation.name} · guarda confirmada antes del envío`,
+        class: operation.handlerClass,
+        require: ['[.]?' + csMember(guard.method) + '[ ]*[(]'],
+        forbid: [],
+        why:
+          `la guarda contra el doble envío (${guard.from.join(' o ')} → ${guard.to}) tiene que estar CONFIRMADA antes de mandar ` +
+          'el correo, y hacerla en memoria no la confirma: el handler corre dentro de la transacción del mediator, así que la marca ' +
+          `no existe para nadie hasta el commit final —que llega después del envío—. Llama a ${csMember(guard.method)}(...), que build generó ` +
+          `en I${guard.entity}Repository con transacción propia, y trata su null como la carrera perdida`
+      });
+    }
+  }
+  return checks;
+}
+
 function conditionalUniquenessChecks(model) {
   // Solo relacional, como keel-spring y keel-nest: en documental sus gates no la emiten y aquí tampoco (la nota del stub sí).
   if (usesDocument(model)) return [];

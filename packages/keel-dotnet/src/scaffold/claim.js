@@ -255,6 +255,81 @@ ${setup.join('\n')}
   return methods;
 }
 
+// ─── La guarda de un efecto que no se deshace (mail.sentBy, adelantada al 12e) ───────────────────
+//
+// El reclamo de UNA fila concreta para la operación que produce un efecto externo, cuando su ciclo de vida declara un
+// estado EN VUELO (`guardClaim` de keel-core, el mismo que leen keel-spring y keel-nest). Existe porque después viene un
+// correo, y ningún rollback lo deshace: la marca tiene que existir para todo el mundo ANTES del envío. Una transición en
+// memoria no llega a existir hasta el commit del mediator, que cae DESPUÉS del envío; una caída en medio revierte la marca
+// y el ciclo siguiente manda un segundo correo a una persona real. Ningún escenario FL-* puede ver esa ventana.
+
+/** Los reclamos de guarda que apuntan a esta entidad (uno por operación que lo declara). */
+export function guardClaimsFor(model, entityName) {
+  return (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .map((operation) => operation.guardClaim)
+    .filter((claim) => claim && claim.entity === entityName);
+}
+
+/** El valor GUARDADO de un estado del ciclo de vida de la entidad: la constante de su enum. */
+export function storedState(model, entity, state) {
+  const enumDef = (model.enums ?? []).find((candidate) => candidate.name === entity.lifecycle?.enumType);
+  return enumDef?.values.find((value) => value.literal === state)?.constant ?? screamingSnake(state);
+}
+
+function describeGuard(claim, entityName) {
+  return `Reclama ESTE ${entityName} para ${claim.operation}: lo pasa a ${claim.to} solo si sigue en ${claim.from.join(' o ')}${
+    claim.stampField ? `, y estampa ${claim.stampField}` : ''
+  }. Devuelve el agregado ya reclamado, o null si otra ejecución llegó antes.
+
+Y CONFIRMA ANTES DE VOLVER (transacción propia, fuera de la del caso de uso). Eso es lo que lo hace una guarda y no una
+anotación en memoria: ${claim.operation} produce un efecto externo que NO se deshace, así que la marca tiene que existir
+para todo el mundo ANTES de producirlo. Si el proceso cae después del efecto y antes del commit final, la fila se queda en
+${claim.to} —lo que busca el rescate— en vez de volver a ${claim.from.join(' o ')} y repetirse.
+
+El null es la carrera perdida: no hay efecto, y se termina como digan las reglas (sin efecto o con el error declarado). No es un caso
+excepcional: es el caso normal cuando dos ejecuciones coinciden.`;
+}
+
+/** Los métodos de guarda del puerto I<E>Repository. */
+export function portGuardMethods(model, entity) {
+  const idType = entity.idField?.csType ?? 'Guid';
+  return guardClaimsFor(model, entity.name).map(
+    (claim) => `${xmlDoc(describeGuard(claim, entity.name).split('\n'), '    ')}    Task<${entity.name}?> ${csMethod(claim.method)}(${idType} id, CancellationToken cancellationToken = default);`
+  );
+}
+
+/** Lo que el adaptador relacional recibe para sus guardas: los ámbitos, para abrir una transacción que no sea la del caso de uso. */
+export function guardDependencies(model, entity) {
+  if (guardClaimsFor(model, entity.name).length === 0) return [];
+  return [{ type: 'IServiceScopeFactory', name: 'scopes', usings: ['Microsoft.Extensions.DependencyInjection'] }];
+}
+
+/** Los métodos de guarda del adaptador EF Core: UPDATE condicional por id y estado, en un ámbito y una transacción propios. */
+export function adapterGuardMethods(model, entity, context) {
+  const idType = entity.idField?.csType ?? 'Guid';
+  const table = entity.tableName;
+  const stateColumn = snakeCase(entity.lifecycle?.field ?? 'status');
+  return guardClaimsFor(model, entity.name).map((claim) => {
+    const states = claim.from.map((state) => `'${storedState(model, entity, state)}'`).join(', ');
+    const stamp = claim.stampField ? `, ${snakeCase(claim.stampField)} = {claimedAt}` : '';
+    return `    /// <summary>La guarda del puerto: ver I${entity.name}Repository.${csMethod(claim.method)}.</summary>
+    public async Task<${entity.name}?> ${csMethod(claim.method)}(${idType} id, CancellationToken cancellationToken = default)
+    {
+        // En un ámbito y una transacción PROPIOS, y no en la del caso de uso: si la marca esperase a su commit, no existiría
+        // para nadie durante el efecto externo, que es justo cuando hace falta.
+        await using var scope = scopes.CreateAsyncScope();
+        var own = scope.ServiceProvider.GetRequiredService<${context}>();${claim.stampField ? '\n        var claimedAt = DateTimeOffset.UtcNow;' : ''}
+        // 1 = esta ejecución se la llevó; 0 = otra llegó antes. Esa comparación en el WHERE es toda la exclusión mutua.
+        var won = await scope.ServiceProvider.GetRequiredService<PersistenceTransactions>().InTransaction(
+            () => own.Database.ExecuteSqlAsync($"UPDATE ${table} SET ${stateColumn} = '${storedState(model, entity, claim.to)}'${stamp} WHERE id = {id} AND ${stateColumn} IN (${states})", cancellationToken),
+            readOnly: false,
+            cancellationToken);
+        return won == 1 ? await FindById(id, cancellationToken) : null;
+    }`;
+  });
+}
+
 /** Los namespaces que el adaptador necesita para sus reclamos. */
 export function claimUsings(model, entity) {
   return claimDependencies(model, entity).flatMap((dep) => dep.usings);

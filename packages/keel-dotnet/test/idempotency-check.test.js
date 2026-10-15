@@ -26,8 +26,8 @@ const gateOf = (files) => files.find((file) => file.path === CHECK_IDEMPOTENCY_S
 const rows = (script) => [...(script ?? '').matchAll(/^(unit|impl|claim) '([^']*)' '([^']*)'/gm)].map((match) => `${match[2]} | ${match[3]}`);
 // La escritura de los registros: en TypeORM, insert y no save; en EF Core, Add y no Update. Sujetos con el nombre del archivo.
 const isInsertSubject = (row) => /: la escritura es un INSERT/.test(row);
-// Lo que keel-dotnet todavía no genera (correo: incremento 13) no tiene familia aquí.
-const PENDING_FAMILIES = new Set(['mailDelivery']);
+// Lo que keel-dotnet todavía no genera no tiene familia aquí (hoy, nada: el correo se adelantó al 12e).
+const PENDING_FAMILIES = new Set([]);
 
 for (const name of ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'metering-digest', 'stock-reservation-events', 'notification-mailer', 'stock-reservation', 'catalog-extended']) {
   for (const broker of ['rabbitmq', 'kafka', 'snssqs']) {

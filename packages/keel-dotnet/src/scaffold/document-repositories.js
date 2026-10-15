@@ -20,9 +20,9 @@ import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, 
 import { domainMembers } from './entities.js';
 import { persistenceNamespace } from './persistence.js';
 import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
-import { claimDependencies } from './claim.js';
+import { claimDependencies, guardClaimsFor } from './claim.js';
 import { reconciliationDependencies } from './reconciliation-claim.js';
-import { documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
+import { documentGuardMethods, documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents, credentialFinders } from './repositories.js';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────────────────────────
@@ -446,6 +446,8 @@ export function renderDocumentAdapter(model, entity) {
   const sweeps = documentSweepClaimMethods(model, entity);
   const reconciliations = documentReconciliationMethods(model, entity);
   methods.push(...sweeps, ...reconciliations);
+  // Las guardas de un efecto que no se deshace (mail.sentBy).
+  methods.push(...documentGuardMethods(model, entity, guardClaimsFor(model, entity.name)));
   if (sweeps.length + reconciliations.length > 0) methods.push(documentOwnTransactionHelper());
   methods.push(saveMethod(model, entity));
   methods.push(`    public async Task DeleteById(${idType} ${idName}, CancellationToken cancellationToken = default)

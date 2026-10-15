@@ -18,6 +18,7 @@ import { DOTNET_SDK_BAND, TARGET_FRAMEWORK, TEST_RUNNER } from '../lib/assets.js
 import { PACKAGES, TOOLS } from '../lib/dotnet-stack.js';
 import { solution } from './render.js';
 import { usesRelational, usesDocument } from './persistence.js';
+import { usesMail } from './mail.js';
 import { usesJwt } from './security.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
@@ -46,7 +47,10 @@ export function infrastructurePackages(model) {
     // La mensajería sobre SNS/SQS: el SDK oficial de AWS (los dos clientes; AWSSDK.Core lo resuelve NuGet).
     ...(usesSnsSqs(model) ? ['AWSSDK.SimpleNotificationService', 'AWSSDK.SQS'] : []),
     // El reloj: el cron de seis campos de los barridos y de las purgas.
-    ...(usesScheduling(model) ? ['Cronos'] : [])
+    ...(usesScheduling(model) ? ['Cronos'] : []),
+    // El correo saliente: el SMTP y, con plantillas, su motor.
+    // (con la transitiva de MimeKit fijada en su versión corregida: ver dotnet-stack.js)
+    ...(usesMail(model) ? ['MailKit', 'System.Security.Cryptography.Pkcs', ...(model.mail.templating ? ['Handlebars.Net'] : [])] : [])
   ];
 }
 

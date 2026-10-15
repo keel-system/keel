@@ -510,6 +510,31 @@ export function documentReconciliationMethods(model, entity) {
     });
 }
 
+/**
+ * Las guardas de un efecto que no se deshace (mail.sentBy) sobre documentos: FindOneAndUpdate filtra por id y estado y
+ * marca en la MISMA operación atómica, y SIN la sesión del caso de uso: la marca confirma al volver, antes del efecto
+ * externo. Lo mismo que el findAndModify de keel-spring y el findOneAndUpdate de keel-nest.
+ */
+export function documentGuardMethods(model, entity, guards) {
+  const idType = entity.idField?.csType ?? 'Guid';
+  const field = keyOf(model, entity, entity.lifecycle?.field ?? 'status');
+  return guards.map((claim) => {
+    const states = claim.from.map((state) => csString(csEnumConstant(model, entity, state))).join(', ');
+    const stamp = claim.stampField ? `, { ${csString(keyOf(model, entity, claim.stampField))}, BsonValues.Of(DateTimeOffset.UtcNow) }` : '';
+    return `    /// <summary>La guarda del puerto: ver I${entity.name}Repository.${csMember(claim.method)}.</summary>
+    public async Task<${entity.name}?> ${csMember(claim.method)}(${idType} id, CancellationToken cancellationToken = default)
+    {
+        // Pasa a ${claim.to} SOLO si sigue en ${claim.from.join(' o ')}; null = otra ejecución llegó antes. Sin sesión: confirma al volver.
+        var document = await Collection.FindOneAndUpdateAsync<BsonDocument>(
+            new BsonDocument { { "_id", BsonValues.Of(id) }, { ${csString(field)}, new BsonDocument("$in", new BsonArray { ${states} }) } },
+            new BsonDocument("$set", new BsonDocument { { ${csString(field)}, ${csString(csEnumConstant(model, entity, claim.to))} }${stamp} }),
+            new FindOneAndUpdateOptions<BsonDocument> { ReturnDocument = ReturnDocument.After },
+            cancellationToken);
+        return document is null ? null : ToDomain${entity.name}(document);
+    }`;
+  });
+}
+
 /** El ayudante de los reclamos documentales: confirman al volver, así que no corren dentro de una transacción abierta. */
 export function documentOwnTransactionHelper() {
   return `    /// <summary>

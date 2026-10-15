@@ -20,6 +20,7 @@ import { usesServiceParameters } from './service-parameters.js';
 import { usesSweepClaims } from './claim.js';
 import { usesReconciliationSettings } from './reconciliation-claim.js';
 import { clientAdaptersNamespace, usesHttpClients } from './http-clients.js';
+import { mailInfraNamespace, usesMail } from './mail.js';
 
 // Los barridos del perfil, antes de la persistencia: AddPersistence solo pone los defaults si nadie registró estos.
 const SWEEPS = `
@@ -59,7 +60,8 @@ function programCs(model) {
     ...(usesHttpSecurity(model) ? [securityNamespace(model)] : []),
     ...(usesMessaging(model) ? [messagingNamespace(model)] : []),
     ...(usesScheduling(model) ? [schedulingNamespace(model)] : []),
-    ...(usesHttpClients(model) ? [clientAdaptersNamespace(model)] : [])
+    ...(usesHttpClients(model) ? [clientAdaptersNamespace(model)] : []),
+    ...(usesMail(model) ? [mailInfraNamespace(model)] : [])
   ];
   const registration = useCases
     ? `
@@ -95,6 +97,12 @@ builder.Services.AddServiceParameters(configuration);`
 // Los clientes HTTP salientes del diseño (http-clients): la configuración del perfil, los adaptadores y su resiliencia.
 builder.Services.AddOutboundClients(HttpClientsSettings.From(configuration));`
     : '';
+  // El correo saliente (capa mail): el adaptador SMTP y el renderizador que reciben los handlers de mail.sentBy.
+  const mailing = usesMail(model)
+    ? `
+// El correo saliente del diseño (capa mail): el adaptador SMTP y el renderizador, con la configuración del perfil.
+builder.Services.AddMail(MailSettings.From(configuration));`
+    : '';
   // El reloj va el último: despacha por los casos de uso y purga con la persistencia.
   const clock = usesScheduling(model)
     ? `
@@ -128,7 +136,7 @@ builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);
 // El contrato del cable: todo cuerpo JSON que la API lee o escribe pasa por estas opciones (WireJson).
-builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${clients}${database}${security}${messaging}${clock}
+builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${clients}${mailing}${database}${security}${messaging}${clock}
 
 var app = builder.Build();
 app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);${schema}${pipeline}

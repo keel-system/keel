@@ -36,6 +36,7 @@
 //   reconciliation-threshold  el reclamo de reconciliación se lleva también lo recién encargado (sin el umbral del diseño)
 //   reconciliation-head       la lectura de candidatos no excluye los de marca viva (la cabeza de la cola tapa al resto)
 //   credential  el finder de resolvedBy busca solo en la primera credencial de la lista
+//   send-guard  la guarda del envío (mail.sentBy) escribe dentro de la transacción del caso de uso, no en la suya
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -70,7 +71,9 @@ const SABOTAGES = {
   'reconciliation-expiry': ['Persistence/ReconciliationClaimStore.cs', 'claimed_at <= {expired}', 'claimed_at < {expired}'],
   'reconciliation-threshold': ['Repositories/', ' < {unansweredBefore}', ' <= {now}'],
   'reconciliation-head': ['Repositories/', 'c.claimed_at > {claimExpiredBefore})', 'c.claimed_at > {claimExpiredBefore} AND 1 = 0)'],
-  credential: ['Repositories/', 'Where(element => element.Value == ', 'Where(element => element.Position == 0 && element.Value == ']
+  credential: ['Repositories/', 'Where(element => element.Value == ', 'Where(element => element.Position == 0 && element.Value == '],
+  // La guarda del envío (mail.sentBy, 12e) escribe con el contexto del caso de uso: su marca se deshace con él.
+  'send-guard': ['Repositories/', 'var own = scope.ServiceProvider.GetRequiredService<', 'var own = db; _ = scope.ServiceProvider.GetRequiredService<']
 };
 
 const results = [];

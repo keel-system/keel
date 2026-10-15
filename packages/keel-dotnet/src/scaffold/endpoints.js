@@ -201,11 +201,12 @@ ${members.join('\n\n')}
 function renderEndpoint(model, operation, usings) {
   usings.push(messageNamespace(model, operation));
   const { asBody } = requestShape(operation);
-  // resolvedBy: la identidad del llamante se resuelve al recurso ANTES de leer, con el resolutor del ámbito de la petición.
+  // resolvedBy: la identidad del llamante se resuelve al recurso DESPUÉS de leer y validar la entrada (como keel-nest):
+  // una petición malformada es 400 sin tocar la base. El lector recibe la resolución como función y la llama al final.
   const resolving = resolvesCaller(model, operation);
   if (resolving) usings.push(securityNamespace(model));
-  const callerArg = resolving ? ', await http.RequestServices.GetRequiredService<CallerIdentityResolver>().Resolve(CallerIdentity.Resolve(), http.RequestAborted)' : '';
-  const read = `${asBody ? 'await ' : ''}Read${csMember(operation.name)}(http.Request${callerArg})`;
+  const callerArg = resolving ? ', () => http.RequestServices.GetRequiredService<CallerIdentityResolver>().Resolve(CallerIdentity.Resolve(), http.RequestAborted)' : '';
+  const read = `${asBody || resolving ? 'await ' : ''}Read${csMember(operation.name)}(http.Request${callerArg})`;
   // Lo que llama a la pasarela de pago va SIN transacción abarcadora (callsPaymentGateway, keel-core): su garantía
   // es registrar y confirmar ANTES de llamarla, como en keel-spring y keel-nest.
   const dispatch = callsPaymentGateway(model, operation.name) ? 'DispatchWithoutTransaction' : 'Dispatch';
@@ -345,8 +346,10 @@ function renderReader(model, operation, usings) {
   const paramChecks = [...pathChecks, ...queryChecks];
   if (paramChecks.length > 0) lines.push('        var paramChecks = new InputViolations(ViolationSource.Params);', ...paramChecks, '        paramChecks.ThrowIfAny();');
   const construct = assigns.length > 0 ? `new ${operation.messageClass}\n        {\n${assigns.join('\n')}\n        }` : `new ${operation.messageClass}()`;
-  const resolved = resolvesCaller(model, operation) ? ', string? resolvedCaller' : '';
-  const signature = asBody
+  const resolving = resolvesCaller(model, operation);
+  const resolved = resolving ? ', Func<Task<string?>> resolveCaller' : '';
+  if (resolving) lines.push('        // La identidad, resuelta al recurso solo cuando la entrada ya es válida.', '        var resolvedCaller = await resolveCaller();');
+  const signature = asBody || resolving
     ? `private static async Task<${operation.messageClass}> Read${csMember(operation.name)}(HttpRequest httpRequest${resolved})`
     : `private static ${operation.messageClass} Read${csMember(operation.name)}(HttpRequest httpRequest${resolved})`;
   return `    /// <summary>Lee ${operation.route.method} ${operation.route.path} (${operation.name}) al mensaje de su caso de uso.</summary>

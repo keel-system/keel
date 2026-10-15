@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Las sondas del correo: el arnés emitido (Support/Mail.cs, compilado SOLO), el adaptador SMTP y el renderizador
+       emitidos de notification-mailer, contra un Mailpit real. mail-check las copia junto al proyecto generado: las
+       rutas son las de esa carpeta, no las del repo. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\notification-mailer\src\NotificationMailer.Infrastructure\NotificationMailer.Infrastructure.csproj" />
+    <Compile Include="..\notification-mailer\tests\NotificationMailer.IntegrationTests\Support\Mail.cs" Link="Support\Mail.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+</Project>

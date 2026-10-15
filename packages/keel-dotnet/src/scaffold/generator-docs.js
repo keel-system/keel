@@ -12,6 +12,7 @@
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesIdempotencyCheck } from './idempotency-check.js';
 import { usesHttpClients } from './http-clients.js';
+import { usesMail } from './mail.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from 'keel-core';
@@ -48,6 +49,8 @@ export function stackSkills(model) {
   if (usesSnsSqs(model)) skills.push('keel-dotnet-snssqs');
   // Los clientes salientes (incremento 11): la llamada, los rechazos, el barrido de reconciliación y el proveedor de prueba.
   if (usesHttpClients(model)) skills.push('keel-dotnet-httpclient');
+  // El correo saliente (capa mail, adelantada al 12e): lo que build genera, la guarda del doble envío y el buzón.
+  if (usesMail(model)) skills.push('keel-dotnet-mail');
   return skills;
 }
 

@@ -30,13 +30,20 @@ for (const name of ['notification-mailer', 'notification-mailer-mongo']) {
     }
   });
 
-  test(`${name}: el resolutor se registra y el endpoint resuelve la credencial ANTES de leer`, () => {
+  test(`${name}: el resolutor se registra y el endpoint resuelve la credencial DESPUÉS de validar la entrada (como keel-nest)`, () => {
     assert.match(find('/Security/CallerIdentityResolver.cs'), /FindByCredentialKeysContaining\(credential, cancellationToken\)/);
     assert.match(find('/Security/SecurityRegistration.cs'), /AddScoped<CallerIdentityResolver>\(\)/);
     const endpoints = files.filter((file) => /\/Endpoints\/\w+\.cs$/.test(file.path) && file.content.includes('resolvedCaller'));
     assert.ok(endpoints.length > 0, 'algún endpoint resuelve la identidad');
     for (const { content } of endpoints) {
-      assert.match(content, /Read\w+\(http\.Request, await http\.RequestServices\.GetRequiredService<CallerIdentityResolver>\(\)\.Resolve\(CallerIdentity\.Resolve\(\), http\.RequestAborted\)\)/);
+      assert.match(content, /await Read\w+\(http\.Request, \(\) => http\.RequestServices\.GetRequiredService<CallerIdentityResolver>\(\)\.Resolve\(CallerIdentity\.Resolve\(\), http\.RequestAborted\)\)/);
+      // Un uuid malformado es 400 sin tocar la base: la resolución va DESPUÉS de las comprobaciones de la entrada.
+      for (const reader of content.split('private static async Task<').slice(1).filter((text) => text.includes('Func<Task<string?>> resolveCaller'))) {
+        const body = reader.slice(0, reader.indexOf('\n    }'));
+        const resolveAt = body.indexOf('await resolveCaller()');
+        assert.ok(resolveAt > 0);
+        assert.ok(!/ThrowIfAny\(\)/.test(body.slice(resolveAt)), 'ninguna comprobación después de resolver');
+      }
       assert.doesNotMatch(content, /ApplicationKey = CallerIdentity\.Resolve\(\)/);
     }
   });

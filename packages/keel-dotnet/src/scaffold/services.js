@@ -26,6 +26,7 @@ import { IDEMPOTENCY_PORT, idempotencyNamespace, usesRegistry, usesRequestIdempo
 import { CALLER_SCOPE_PORT, callerResolution, scopedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
 import { callMethod, clientPort, clientsNamespace } from './http-clients.js';
+import { mailNamespace, mailPorts, sendsMail } from './mail.js';
 
 export function generate(model) {
   const files = [];
@@ -271,6 +272,12 @@ function renderHandler(model, operation) {
     usings.push(clientsNamespace(model));
     dependencies.push(clientPort(client));
   }
+  // La salida por correo, por el mismo criterio (mail.sentBy es el único enlace del DSL entre un caso de uso y el
+  // correo): sin el puerto delante, el camino de menor resistencia es no mandarlo, y no lo detecta nada.
+  if (sendsMail(model, operation)) {
+    usings.push(namespaceOf(model, 'ports'), mailNamespace(model));
+    for (const port of mailPorts(model)) if (!dependencies.includes(port)) dependencies.push(port);
+  }
   const local = (type) => {
     const name = type.replace(/^I(?=[A-Z])/, '');
     return name[0].toLowerCase() + name.slice(1);
@@ -325,6 +332,24 @@ function handlerNotes(model, operation) {
     notes.push(
       `Transición: ${transition.entity} ${(transition.from ?? []).join('|')} → ${transition.to}. La aplica el método semántico ` +
         'del agregado (que llama a TransitionTo), nunca el handler asignando el estado.'
+    );
+  }
+  if (sendsMail(model, operation)) {
+    const guard = operation.guardClaim;
+    notes.push(
+      'Correo: esta operación lo manda (mail.sentBy). Compón el MailMessage y llama a mailSender.Send(...). ' +
+        'Un correo que sale NO lo deshace ningún rollback, así que la guarda tiene que estar CONFIRMADA antes del envío — ' +
+        'no basta con que haya ocurrido: ' +
+        (guard
+          ? `empieza por ${csMember(guard.method)}(...) del puerto I${guard.entity}Repository, que pasa el agregado a ${guard.to} en su PROPIA ` +
+            'transacción y devuelve null si otra ejecución llegó antes (la carrera perdida: NO envíes, y termina como digan las reglas, sin efecto o con el error ' +
+            'que el diseño declare). Hacer esa transición solo en memoria la deja sin existir para nadie hasta el ' +
+            `commit final, que llega DESPUÉS del envío: si el proceso cae en medio, el agregado vuelve a ${guard.from.join(' o ')} ` +
+            'y el ciclo siguiente manda un SEGUNDO correo a una persona real'
+          : `${operation.idempotency ? 'la clave de idempotencia' : 'la transición declarada'} tiene que estar persistida y ` +
+            'confirmada antes de llamar a mailSender.Send(...), no solo aplicada en memoria') +
+        '. Un MailDeliveryException con Partial() es un correo que SALIÓ para alguien: no lo trates como «no salió». ' +
+        'El adaptador y el renderizador ya están escritos: no los toques — ver la skill keel-dotnet-mail'
     );
   }
   for (const note of reconciliationNotes(operation)) notes.push(note);

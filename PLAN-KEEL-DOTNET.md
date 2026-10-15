@@ -1230,7 +1230,9 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
   keel-core (`document.js`: el documento como datos, rutas, índices del diseño y de los almacenes, `export-indexes.sh`;
   `mongo-probes.js`, los scripts del arnés): 12b la persistencia documental, 12c los almacenes del generador sobre
   documentos, 12d el arnés y la skill `keel-dotnet-mongodb`, 12e la corrida (keel-nest la hizo sobre
-  `notification-mailer-mongo`, que en keel-dotnet trae `mail` y `resolvedBy`, del 13: el sujeto está por decidir).
+  `notification-mailer-mongo`, que trae `mail` y `resolvedBy`, del 13). **Sujeto decidido (2026-10-15)**: el mismo que
+  keel-nest, adelantando `resolvedBy` (12e-a) y la capa `mail` (12e-b); `inspection-reports` y `job-dispatch-mongo` no traen
+  `validation-scenarios.md`, así que una corrida sobre ellos no tendría matriz que puntuar.
   - **12b, la persistencia documental (hecho, 2026-10-15).** `cs-check` 15/15 (126 ensamblados, 2 237 pruebas) y su paso nuevo de licencias de las fixtures (95 paquetes); keel-dotnet sin red 468/468. Sobre el driver oficial (**MongoDB.Driver 3.12.0**,
     Apache-2.0; sus transitivas DnsClient, SharpCompress, Snappier y ZstdSharp.Port son Apache-2.0, MIT y BSD-3-Clause),
     **sin mapeo de clases**: cada adaptador escribe y lee el `BsonDocument` campo a campo (el mapeo del driver
@@ -1339,6 +1341,46 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       referenciado, aunque no vea sus tipos, y sin el Api compilado esa copia falla con `MSB3030` —después de compilar las
       pruebas—. En las corridas no se vio porque el agente de código iba por delante; `harness-check` compila la solución
       antes. Ahora el script ignora esa copia y lo dice. `harness-check` relacional sigue 32/32.
+  - **12e-a, `resolvedBy` (hecho, 2026-10-15, `2ec07ca`).** La identidad del llamante resuelta contra VARIAS credenciales:
+    el finder `FindBy<Campo>Containing` (el nombre de keel-spring en PascalCase) en el puerto y en los dos adaptadores
+    —relacional sobre la tabla de elementos, documental sobre el array—, y `CallerIdentityResolver` (scoped, en
+    `SecurityRegistration`), que el endpoint llama antes de despachar; el lector recibe `string? resolvedCaller`. Medido con
+    `test/caller-resolution.test.js` y la sonda `credential` de `db-check` y `doc-check`, falsada en los dos.
+  - **12e-b, la capa `mail` (hecho, 2026-10-15).** El reparto de keel-spring y keel-nest: build genera TAMBIÉN el adaptador
+    y el renderizador (`src/scaffold/mail.js`), porque lo que llevan dentro son dos defensas cuya ausencia no rompe ninguna
+    prueba. `MailMessage` (Domain/Mail) sanea asunto y cabeceras en el constructor con las reservadas de
+    `keel-core/gen/mail-message.js`; `MailDeliveryException` con `Accepted`/`Rejected`/`Detail`/`Partial()`; los puertos
+    `IMailSender` e `ITemplateRenderer` en Application/Ports; `SmtpMailSender` sobre **MailKit 4.18.1** (MIT), con un
+    `SmtpClient` que apunta el destinatario rechazado en vez de abortar (`OnRecipientNotAccepted`): así se dice el envío
+    PARCIAL; `HandlebarsTemplateRenderer` sobre **Handlebars.Net 2.4.3** (MIT) con dos entornos propios
+    (`Handlebars.Create`) y un `ITextEncoder` con la tabla cerrada `& < > " '` —a diferencia de keel-nest, Handlebars.Net
+    sí admite el escapado por instancia—, los marcadores simples como `{{this.[x]}}`, `Compile` y el LRU de 500;
+    `mail.yaml` con las variables `MAIL_*` de keel-spring. La guarda contra el doble envío `ClaimFor<Op>` (el `guardClaim`
+    de keel-core) en el puerto y en los dos adaptadores: en relacional un UPDATE condicional en un ámbito y una
+    transacción PROPIOS (`IServiceScopeFactory`), en documental un `FindOneAndUpdate` sin la sesión del caso de uso. El
+    handler de `mail.sentBy` recibe los dos puertos y la nota; la familia `mailDelivery` del gate entra (la paridad de
+    `idempotency-check.test.js` ya no tiene familias pendientes). El arnés del buzón en `Support/Mail.cs`
+    (`src/scaffold/mail-harness.js`, sobre `keel-core/gen/mail-probes.js`) con los once helpers de keel-spring y el
+    SMOKE-7; la skill `keel-dotnet-mail` (`SKILL.md` + `security.md`, `flows.md`, `troubleshooting.md`).
+    - **Una dependencia transitiva fijada a mano**: MimeKit pide `System.Security.Cryptography.Pkcs >= 10.0.0` y NuGet
+      resolvía la 10.0.0, con dos avisos publicados (GHSA-846f-f764-76mx, alta; GHSA-2fmv-rv2c-59x7, moderada) corregidos
+      en la 10.0.13. Se fija esa versión con correo, y es la ÚNICA excepción a la regla de las dos semanas (la publicó
+      Microsoft el 2026-10-13): un parche de servicio frente a emitir a sabiendas una versión con un aviso de gravedad
+      alta. Lo vigila `test/mail.test.js`; revisar al subir MailKit.
+    - **Medido**: `npm run mail-check` (nuevo) **5/5 con 11 sondas** contra un Mailpit real —las dos partes, el adjunto,
+      el remitente de respaldo, el Reply-To y la cabecera propia; un cuerpo con acentos byte a byte; la tabla cerrada en
+      el buzón; el asunto saneado; el rechazo parcial y el total; el conteo; las palabras del motor como variables, los
+      bloques, `Compile` y la parte en la clave de la caché—, **falsado con cuatro sabotajes** (`subject`, `escape`,
+      `partial`, `fallback`), cada uno en su sonda. La guarda, con la sonda `Guarda_ClaimFor…` de `db-check` (PostgreSQL)
+      y de `doc-check` (MongoDB): confirma aunque el caso de uso se deshaga, estampa su reloj, no se la lleva dos veces y
+      de dos a la vez gana una; **falsada** en los dos con `send-guard` (la guarda escribe en la transacción o la sesión
+      del caso de uso). `test/mail.test.js` (paridad del `mail.yaml` y del nombre de la guarda con keel-spring).
+      `cs-check` **16/16** (126 ensamblados, 2 360 pruebas, licencias de 100 paquetes con las fixtures de correo ya dentro);
+      keel-dotnet sin red 488/488.
+    - **Lo que destapó, y era del 12e-a**: con `notification-mailer` dentro de la frontera, la prueba emitida del uuid
+      malformado salió roja: el endpoint resolvía la identidad del llamante (una consulta a la base) ANTES de leer la
+      entrada, así que una ruta malformada llegaba a la base en vez de responder 400. Ahora el lector recibe la resolución
+      como función y la llama tras sus comprobaciones —el orden de keel-nest—, y `test/caller-resolution.test.js` lo fija.
 
 ## 5. Riesgos conocidos
 
