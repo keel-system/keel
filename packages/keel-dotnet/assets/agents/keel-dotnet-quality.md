@@ -1,6 +1,6 @@
 ---
 name: keel-dotnet-quality
-description: Pase de calidad no-conductual del código C# de un proyecto keel-dotnet ya validado funcionalmente — usings, nulabilidad, inmutabilidad, excepciones, asincronía, higiene — más el baseline de migraciones de EF Core (creado, revisado y verificado en vivo) y la comprobación de que las pruebas de build siguen en verde, sin cambiar el comportamiento que la validación dejó pasando. Reporta (no aplica) todo hallazgo conductual.
+description: Pase de calidad no-conductual del código C# de un proyecto keel-dotnet ya validado funcionalmente — usings, nulabilidad, inmutabilidad, excepciones, asincronía, higiene — más el baseline de migraciones de EF Core (creado, revisado y verificado en vivo) o, sobre MongoDB, la verificación de los índices vivos y la comprobación de que las pruebas de build siguen en verde, sin cambiar el comportamiento que la validación dejó pasando. Reporta (no aplica) todo hallazgo conductual.
 tools: [read, write, edit, bash, grep, glob]
 # Hoja de la orquestación: el único orquestador es la skill (ver orchestration.md).
 spawns: false
@@ -77,6 +77,22 @@ la solución compilando:
 La prueba en vivo SÍ es tuya y se ejecuta: trabaja sobre bases aparte, así que no destruye la de tu no-regresión.
 `baselineTested` nunca sale `PENDING`.
 
+## Índices (solo con persistencia documental)
+
+Sobre MongoDB no hay baseline que redactar: los índices salen enteros del diseño y los crea el servidor al arrancar
+(`Persistence/DocumentIndexes.cs`). Lo tuyo es **verificarlos** contra los vivos, con la infraestructura arriba y después
+de la no-regresión (el servidor ya arrancó y los creó):
+
+1. `bash infra/export-indexes.sh` → `build/schema/indexes.json`. Solo lee: se ejecuta de verdad.
+2. Contrasta, con `{{keel:skills}}/keel-dotnet-mongodb/references/indexes.md`: cada índice de `DocumentIndexes.cs` está
+   vivo con las MISMAS claves, unicidad y filtro parcial; no sobra ninguno (uno que no salga de ahí lo creó otra cosa y su
+   nombre no lo conoce el traductor de errores); cada `naturalKey`/`unique`/`indexes` de `specs/persistence.keel.yaml`
+   tiene el suyo.
+3. Un índice que falta o difiere es un defecto de build, no tuyo: a `blockers` con lo que imprime. Nunca crees ni borres
+   índices a mano para que case.
+
+`indexesTested` nunca sale `PENDING`: leer índices no toca la base de tu no-regresión.
+
 ## Cierre
 
 En este orden:
@@ -99,12 +115,14 @@ No preguntas al usuario. **No lanzas subagentes.**
 ## Reporte final
 
 ```yaml
-status: OK | KO           # OK solo con todo en verde y el baseline verificado
+status: OK | KO           # OK solo con todo en verde y el baseline (o los índices, sobre MongoDB) verificado
 compiles: true | false    # dotnet build (sin warnings)
 scenarios: OK | KO        # score-scenarios.sh al 100% tras el pase
 unitTests: OK | KO        # dotnet test
 baseline: OK | KO | N/A   # la migración Baseline creada y revisada (N/A sin persistencia relacional)
 baselineTested: OK | KO | N/A   # bash infra/verify-baseline.sh
+indexes: OK | KO | N/A    # los índices vivos contrastados con DocumentIndexes.cs (N/A sin persistencia documental)
+indexesTested: OK | KO | N/A    # bash infra/export-indexes.sh
 domainGuards: OK | KO | N/A
 idempotency: OK | KO | N/A
 issuesFixed: [...]

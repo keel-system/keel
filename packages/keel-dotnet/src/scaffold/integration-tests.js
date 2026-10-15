@@ -29,6 +29,7 @@ import { DOTNET_INFRA } from './infra.js';
 import { usesApi } from './rest-support.js';
 import { usesRelational, usesDocument } from './persistence.js';
 import { PRINT_WRAPPER } from 'keel-core/gen/mongo-probes';
+import { documentFlowMembers, documentSmokeCase } from './document-harness.js';
 import { csFile, csString, solution } from './render.js';
 import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
 import { usesKafka } from './messaging.js';
@@ -135,6 +136,9 @@ function flowTestCs(model) {
     // El id como literal del motor: lo comparten el rescate y la reconciliación.
     if (rescue.length > 0 || aging.length > 0) helpers.push(idLiteralMember(model));
   }
+  // Sobre documentos (incremento 12d): MongoEval y los mismos ayudantes con los scripts de keel-core/gen/mongo-probes.js.
+  const mongo = documentProbe(model);
+  if (mongo) helpers.push(...documentFlowMembers(model, mongo));
   // La segunda réplica, con escenarios de clúster posibles.
   helpers.push(...replicaMembers(model));
   return csFile({
@@ -1094,6 +1098,7 @@ function harnessSmokeCs(model) {
         // Es la vía de los Then que miran el almacén: si no responde, fallarían por la fontanería.
         Assert.Equal("1", Db("SELECT 1").Trim());`);
   }
+  if (documentProbe(model)) cases.push(documentSmokeCase());
   if (api) {
     // Con seguridad, con la credencial que satisface la regla de cierre: sin ella, un camino que no existe es 401 (se
     // decide antes de enrutar), y el humo mediría la autorización.
@@ -1456,9 +1461,17 @@ if [ -n "$visible" ]; then
 fi
 
 if ! dotnet build "$PROJECT" -c Debug --nologo -p:BuildProjectReferences=false >build/keel-flows-build.log 2>&1; then
-  echo "Las pruebas de flujo no compilan:"
-  grep -E '(error|warning) [A-Z]+[0-9]+' build/keel-flows-build.log | sed 's/^/  /' | sort -u | head -30
-  fail=1
+  # MSBuild copia la salida del Api (apphost, deps.json, runtimeconfig.json) a la de los flujos porque es un ejecutable
+  # referenciado, aunque no vea sus tipos. Sin el Api compilado todavía (un proyecto recién generado, o el agente de
+  # código a medio trabajo) esa copia falla con MSB3030 DESPUÉS de compilar las pruebas: no dice nada de ellas.
+  problems="$(grep -E '(error|warning) [A-Z]+[0-9]+' build/keel-flows-build.log | grep -v 'MSB3030' || true)"
+  if [ -n "$problems" ]; then
+    echo "Las pruebas de flujo no compilan:"
+    printf '%s\\n' "$problems" | sed 's/^/  /' | sort -u | head -30
+    fail=1
+  else
+    echo "(El Api aún no está compilado: su salida no se pudo copiar, y las pruebas de flujo sí compilan.)"
+  fi
 fi
 [ "$fail" -eq 0 ] && echo "Pruebas de flujo: compilan y respetan la caja negra."
 exit "$fail"

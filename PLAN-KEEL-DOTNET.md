@@ -1313,6 +1313,32 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       quitar el orden de un reclamo era una mutación equivalente: ahora se siembran al revés de la inserción. Y una de las
       sondas: el muestreador de patrones daba 26 valores (un carácter), y con más de 26 muestras de una raíz la clave
       natural de `asset-vault` chocaba consigo misma; pasada la vigésimo sexta variante, la muestra se alarga.
+  - **12d, el arnés documental y la skill (hecho, 2026-10-15).**
+    - **Lo que emite** (`src/scaffold/document-harness.js`): en `FlowTest`, `MongoEval` —el `Db` de los documentos, sobre
+      el `Harness.MongoEval` del 12c— y los ayudantes con los MISMOS nombres y scripts que keel-spring y keel-nest
+      (`keel-core/gen/mongo-probes.js`): `StallInFlight`/`PutInFlight`/`InFlightWithoutClock` con `setStateScript` y
+      `missingClockCountScript`, y `AgeForReconciliation`/`HoldFromReconciliation` con `ageClockScript`/`holdClockScript` y
+      la clave del documento de `documentShape`. El humo gana el SMOKE-3 documental (la base responde a un script). La
+      `infra/` ya era neutral: el `reset-db.sh` vacía documentos conservando índices.
+    - **El agente de calidad** gana la rama documental: no hay baseline que redactar, sino índices que VERIFICAR con
+      `infra/export-indexes.sh` (`indexes`/`indexesTested` en su reporte, como keel-nest), y la skill orquestadora se lo
+      pide. **Skill `keel-dotnet-mongodb`** (`SKILL.md` + `repository-adapters.md`, `indexes.md`, `harness.md`,
+      `troubleshooting.md`), instalada con `database: mongodb` en lugar de `keel-dotnet-database`; `generator-docs.test.js`
+      comprueba que las rutas, los valores de `BsonValues` y los ayudantes que enseña existen en lo emitido. La frontera
+      deja de avisar: sobre documentos ya no queda nada propio del modelo pendiente.
+    - **Medido**: `npm run doc-harness-check` (nuevo) **18/18** sobre `job-dispatch-mongo` con su `infra/` real —build,
+      `check-flows.sh`, `up.sh`, `validate-infra.sh` (el replica set), el humo, `score-scenarios.sh` saliendo con 0— y un
+      flujo sonda con los ayudantes emitidos: las comillas y el `print` por `MongoEval`, el reset que conserva los índices,
+      el rescate (estado y reloj rancio, reloj a ahora), el recuento sin reloj discriminando, el script de
+      `AgeForReconciliation` que emite `asset-vault` (leído de su `FlowTest.cs`), y los índices vivos contra el contrato
+      con `export-indexes.sh`. **Falsado con cuatro sabotajes**: sin el `print` cae el humo (score sale con 2); `PutInFlight`
+      con el reloj rancio y el recuento sobre otro campo, cada uno en su sonda; y un índice fuera de `DocumentIndexes.cs`,
+      en la verificación de calidad (y en la sonda del reset).
+    - **Lo que destapó, y no era documental**: `check-flows.sh` salía ROJO sobre un proyecto RECIÉN generado, también
+      relacional (`product-catalog`): MSBuild copia la salida del Api a la de los flujos por ser un ejecutable
+      referenciado, aunque no vea sus tipos, y sin el Api compilado esa copia falla con `MSB3030` —después de compilar las
+      pruebas—. En las corridas no se vio porque el agente de código iba por delante; `harness-check` compila la solución
+      antes. Ahora el script ignora esa copia y lo dice. `harness-check` relacional sigue 32/32.
 
 ## 5. Riesgos conocidos
 

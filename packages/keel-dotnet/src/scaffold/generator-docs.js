@@ -19,7 +19,7 @@ import { contractDocs } from 'keel-core/gen/contract-docs';
 import { describeStack } from 'keel-core/gen/stack';
 import { assetsDir, SKILL, TARGET_FRAMEWORK } from '../lib/assets.js';
 import { solution } from './render.js';
-import { usesRelational } from './persistence.js';
+import { usesRelational, usesDocument } from './persistence.js';
 import { usesJwt } from './security.js';
 import { usesSchemaBaseline, baselineCommand } from './schema-baseline.js';
 import { HARNESS_SMOKE_CLASS } from './integration-tests.js';
@@ -39,9 +39,9 @@ export const CONVENTIONS = ['mapping.md', 'project-layout.md', 'domain-modeling.
 /** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
 export const AGENTS = ['keel-dotnet-code.md', 'keel-dotnet-infra.md', 'keel-dotnet-tests.md', 'keel-dotnet-validate.md', 'keel-dotnet-quality.md'];
 
-/** Skills por tecnología aplicables al servicio: la de la base relacional, la del proveedor de identidad y la del broker. */
+/** Skills por tecnología aplicables al servicio: la de la base (relacional o documental), la del proveedor de identidad y la del broker. */
 export function stackSkills(model) {
-  const skills = usesRelational(model) ? ['keel-dotnet-database'] : [];
+  const skills = usesRelational(model) ? ['keel-dotnet-database'] : usesDocument(model) ? ['keel-dotnet-mongodb'] : [];
   if (usesJwt(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-dotnet-${model.stack.auth}`);
   if (usesRabbitMq(model)) skills.push('keel-dotnet-rabbitmq');
   if (usesKafka(model)) skills.push('keel-dotnet-kafka');
@@ -122,6 +122,10 @@ de los servidores de keel-spring y keel-nest del mismo diseño: mismo contrato H
 - **Configuración**: perfil por \`PROFILE\` (default \`local\`), \`config/application.yaml\` + \`config/parameters/<perfil>/\`; \`\${VAR}\` es obligatoria y \`\${VAR:default}\` opcional.
 - **Casos de uso**: un mensaje y un handler por operación, despachados por \`UseCaseMediator\`, que abre la transacción; el registro de los handlers es generado (\`UseCaseRegistration\`). Los handlers nacen con las notas del diseño y terminan en \`throw new NotImplementedException("TODO: <operación>")\`.${
     persistence ? `\n- **Esquema**: en \`local\` lo crea EF Core desde el modelo (\`EnsureCreated\`); en \`develop\` y \`production\`, las migraciones de EF Core al arrancar.` : ''
+  }${
+    usesDocument(model)
+      ? `\n- **Documentos** (MongoDB, sobre un replica set): no hay migraciones; los índices del diseño los crea el servidor al arrancar (\`DocumentIndexes.cs\`) y \`bash infra/export-indexes.sh\` los exporta para verificarlos.`
+      : ''
   }
 - **Paquetes**: solo con licencia permisiva y versión exacta (\`Directory.Packages.props\`); nunca uno que haya pasado a licencia comercial (MediatR, AutoMapper, MassTransit, FluentAssertions…).
 
@@ -155,6 +159,7 @@ function skillMd(model) {
   const sln = solution(model);
   const persistence = usesRelational(model);
   const baseline = usesSchemaBaseline(model);
+  const indexes = usesDocument(model);
   const techSkills = stackSkills(model);
   const techSkillsBullet = techSkills.length
     ? `\n- Skills por tecnología (\`{{keel:skills}}\`, hermanas de esta), instaladas solo las aplicables a este servicio: ${techSkills.map((s) => `\`${s}\``).join(', ')}. Cada una trae \`references/\` que se leen bajo demanda.`
@@ -214,12 +219,14 @@ Se invoca **sin argumentos, con el cwd en esta raíz**; todas las rutas son rela
    (comparten la base de prueba). Cupo de ciclos \`blocking: scoped\`, por número de flujos \`FL-*\`: hasta 10, 2 (tope
    4); de 11 a 20, 3 (tope 5); más de 20, 4 (tope 6). No lo consumen los \`systemic\` ni los \`test\`/\`harness\`.
    Alcanzado el tope, reporta la matriz y detente.
-4. **Fase 3 — calidad${baseline ? ' + baseline de migraciones' : ''}.** Solo con **todos** los escenarios OK: lanza
+4. **Fase 3 — calidad${baseline ? ' + baseline de migraciones' : indexes ? ' + índices vivos' : ''}.** Solo con **todos** los escenarios OK: lanza
    \`keel-dotnet-quality\` y **espera sin tocar el proyecto**. Hace el pase no-conductual, comprueba la no-regresión
    (la suite al 100%) y \`dotnet test\`${
      baseline
        ? `, y produce el **baseline de migraciones**: revisa el DDL del modelo (\`infra/export-schema.sh\`), crea la migración (\`${baselineCommand(model)}\`) y la **verifica en vivo** (\`infra/verify-baseline.sh\`). Exige \`baseline: OK\` y \`baselineTested: OK\`: sin ellos el servicio pasa sus escenarios (corren en \`local\`) pero no arranca en \`develop\` ni en \`production\`. \`KO\` → relánzalo una vez con su error exacto`
-       : ''
+       : indexes
+         ? ', y **verifica los índices vivos** contra los que crea el servidor (`bash infra/export-indexes.sh`, sin crear ni borrar ninguno a mano). Exige `indexes: OK` e `indexesTested: OK`'
+         : ''
    }. \`status: KO\` o \`scenarios: KO\` → revierte o reporta; nunca hagas commit con algo en rojo. Al terminar, baja la
    infraestructura: \`bash infra/down.sh\`.
 5. **Guía de despliegue.** Con todo en verde y **antes** del commit, añade al \`README.md\` una sección

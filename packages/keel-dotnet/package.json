@@ -11,6 +11,7 @@
     "cs-check": "node scripts/cs-check.js",
     "db-check": "node scripts/db-check.js",
     "doc-check": "node scripts/doc-check.js",
+    "doc-harness-check": "node scripts/doc-harness-check.js",
     "harness-check": "node scripts/harness-check.js",
     "security-check": "node scripts/security-check.js",
     "broker-check": "node scripts/broker-check.js",

@@ -56,9 +56,8 @@ test('la persistencia relacional (incremento 6) y la documental (12b) se generan
   for (const model of ['relational', 'document']) {
     const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), { ...layersWith('domain', 'use-cases'), persistence: { default: { model } } });
     assert.deepEqual(errors, [], model);
-    // Sobre documentos se avisa de que el arnés de flujos llega en el 12d.
-    assert.equal(warnings.length, model === 'document' ? 1 : 0, model);
-    if (model === 'document') assert.match(warnings[0], /arnés de flujos documental .*incremento 12d/);
+    // Con el arnés documental (12d), tampoco hay nada que avisar.
+    assert.deepEqual(warnings, [], model);
   }
 });
 

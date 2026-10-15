@@ -293,3 +293,42 @@ test('la skill de clientes salientes se instala con la capa y enseña las firmas
   assert.ok(flowTest.includes('HttpStubHarness.ForgetSequences();'));
   assert.match(find('HarnessSmoke.cs'), /SMOKE-6: el proveedor de prueba se deja programar/);
 });
+
+// La persistencia DOCUMENTAL (incremento 12d): su skill en lugar de la relacional, y lo que enseña existe en lo emitido.
+test('sobre MongoDB se instala keel-dotnet-mongodb y no keel-dotnet-database; la orquestadora pide verificar los índices vivos', async () => {
+  const mongo = byPath((await planFixture('job-dispatch-mongo')).files);
+  for (const harness of HARNESSES) {
+    assert.ok(harness.skillPath('keel-dotnet-mongodb', 'SKILL.md') in mongo, `${harness.id}: skill documental`);
+    for (const reference of ['repository-adapters.md', 'harness.md', 'indexes.md', 'troubleshooting.md']) {
+      assert.ok(harness.skillPath('keel-dotnet-mongodb', `references/${reference}`) in mongo, `${harness.id}: ${reference}`);
+    }
+  }
+  assert.ok(!Object.keys(mongo).some((file) => file.includes('keel-dotnet-database')));
+  assert.equal('infra/verify-baseline.sh' in mongo, false);
+  assert.ok('infra/export-indexes.sh' in mongo);
+  const skill = mongo[HARNESSES[0].skillPath(SKILL, 'SKILL.md')];
+  assert.match(skill, /índices vivos/);
+  assert.match(skill, /indexesTested: OK/);
+});
+
+test('lo que enseña keel-dotnet-mongodb existe en lo emitido: rutas, valores de BsonValues y ayudantes del arnés', async () => {
+  const sources = fs
+    .readdirSync(path.join(assets, 'generators', 'dotnet', 'skills', 'keel-dotnet-mongodb', 'references'))
+    .map((name) => fs.readFileSync(path.join(assets, 'generators', 'dotnet', 'skills', 'keel-dotnet-mongodb', 'references', name), 'utf8'))
+    .concat(fs.readFileSync(path.join(assets, 'generators', 'dotnet', 'skills', 'keel-dotnet-mongodb', 'SKILL.md'), 'utf8'))
+    .join('\n');
+  // Las fixtures que, juntas, tienen todo lo que la skill nombra: rescate, reconciliación y outbox.
+  const emitted = [];
+  for (const name of ['job-dispatch-mongo', 'inspection-reports', 'asset-vault']) emitted.push(...(await planFixture(name)).files);
+  const all = emitted.map((file) => `${file.path}\n${file.content}`).join('\n');
+  for (const file of ['BsonValues.cs', 'PersistenceTransactions.cs', 'DocumentIndexes.cs', 'PersistenceErrors.cs', 'FlowTest.cs']) {
+    if (sources.includes(file)) assert.ok(emitted.some((candidate) => candidate.path.endsWith(`/${file}`)), `la skill cita ${file}`);
+  }
+  for (const member of ['BsonValues.Of(', 'BsonValues.Day(', 'BsonValues.Enum(', 'DocumentIndexes.ByCollection', 'EnumColumns.']) {
+    if (sources.includes(member)) assert.ok(all.includes(member.replace('BsonValues.', 'public static BsonValue ').replace('(', '')) || all.includes(member), `la skill enseña ${member}`);
+  }
+  for (const helper of ['MongoEval', 'StallInFlight', 'PutInFlight', 'InFlightWithoutClock', 'AgeForReconciliation', 'HoldFromReconciliation', 'DeadLetteredEvents', 'AbandonOutboxEvent', 'ClearAbandonedOutboxEvents', 'ResetState', 'Eventually']) {
+    assert.ok(sources.includes(helper), `la skill nombra ${helper}`);
+    assert.match(all, new RegExp(`protected static [^\\n]*\\b${helper}\\(`), `el arnés emite ${helper}`);
+  }
+});

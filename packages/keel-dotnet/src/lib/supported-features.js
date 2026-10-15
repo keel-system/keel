@@ -71,15 +71,8 @@ export function checkSupportedFeatures(manifest, layers) {
   }
   // La persistencia DOCUMENTAL (incremento 12) se genera entera desde el 12c: documentos, índices, transacción y bloqueo
   // optimista (12b), y los almacenes del generador sobre colecciones —el outbox y los mensajes procesados, el registro de
-  // idempotencia, los reclamos de barrido y de reconciliación, las purgas— (12c). El mismo reparto que keel-nest.
-  if (declared.includes('persistence') && layers?.persistence?.default?.model === 'document') {
-    // El servidor sale entero; lo que todavía no es el arnés de flujos sobre documentos (las sondas de mongosh, el reset
-    // y los ayudantes del rescate) ni la skill de la base, que llegan en el 12d. Se avisa: sin ellos los FL-* no se puntúan.
-    warnings.push(
-      'persistence con model: document — el servidor se genera entero, pero el arnés de flujos documental (los ayudantes sobre mongosh) ' +
-        'y la skill keel-dotnet-mongodb llegan en el incremento 12d de PLAN-KEEL-DOTNET.md: hasta entonces los FL-* no se pueden puntuar.'
-    );
-  }
+  // idempotencia, los reclamos de barrido y de reconciliación, las purgas— (12c), con su arnés de flujos (12d): no queda
+  // nada propio del modelo que rechazar ni que avisar. El mismo reparto que keel-nest.
   errors.push(...callerIdentityErrors(layers));
   errors.push(...messagingErrors(declared, layers));
   errors.push(...outboundErrors(layers));
