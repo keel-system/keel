@@ -1474,6 +1474,13 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     pasan recién generadas (164 y 162, con `PaymentGatewayTests` y `PaymentNoticeEndpointTests`). Sin contratos de
     `/keel-docs`, como las de keel-nest y keel-spring. Comparten los puertos de `infra/`: se corren de una en una. Las
     gemelas para comparar la huella son las de keel-nest y keel-spring del 2026-10-09 (25/25, huella 20–21).
+  - **13e, MercadoPago: 25/25 a la primera (2026-10-15; `docs/corridas/2026-10-15-payment-checkout-mercadopago-dotnet.md`).**
+    Huella 22 de 322; quitando los dos huecos del generador, 20, la de las gemelas. Es la primera corrida de
+    `payment-checkout` v1.2.0 en cualquier generador (con los escenarios de `onRejected`). Arreglados: `UseCasesTests` sin
+    `AddPayments` (keel-dotnet; medido 15/15 rojo → verde) y el rechazo de una acción de seguimiento en el arnés de los
+    tres (el adaptador consulta el estado real tras un 4xx; el doble necesita `GatewayReports`, y el agente había
+    cambiado el adaptador en su lugar). **Pendiente, de los tres generadores**: el origen de `requestCharge` (HTTP o
+    suscripción) que cinco corridas resolvieron a mano de cinco formas; candidato a pieza neutral. Queda la de Stripe.
 
 ## 5. Riesgos conocidos
 
