@@ -1389,6 +1389,85 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     almacenes, del arnés ni del correo tocado. El único `designGap` ya estaba aceptado en `specs/gaps.yaml`, y era la
     segunda vez que un agente lo hacía (antes, `profile-directory-nest`): las skills de los tres generadores no decían
     que hay que mirar ahí antes de reportar. Arreglado en los tres, con su prueba.
+- **Inc. 13 — en curso (abierto el 2026-10-15).** El correo ya entró en el 12e-b. Quedan pagos, caché, storage, autoría,
+  `needs` (bajo demanda y réplica, con `lastKnown`) y `oauth2-client-credentials`. **El orden es el de keel-nest (su § Inc. 13),
+  y por el mismo motivo**: pagos lo ejerce solo `payment-checkout`, que ya cabe entero en la frontera salvo la capa, así que
+  es el único tramo que se cierra con corrida sin abrir otros frentes; caché y storage los declaran `asset-vault` y
+  `catalog-extended`, que arrastran además `needs` y OAuth2. Tramos: 13a lo neutral (ya en keel-core desde keel-nest:
+  matriz, claves, rechazos, monedas, doble); 13b+13c la capa y sus dos adaptadores; 13d el arnés, las skills, la matriz en
+  build/check y la frontera; 13e la corrida `payment-checkout`; después 13f caché, 13g storage, 13h autoría, 13i–13j `needs`
+  y OAuth2.
+  - **13a, lo que faltaba de neutral (hecho, 2026-10-15).** `payments.yaml` estaba escrito en keel-nest: sale a
+    `keel-core/gen/payments-config.js` (`paymentsYaml`), y keel-nest lo reexporta. Su `test/payments.test.js` sigue en verde
+    contra keel-spring.
+  - **13b+13c, la capa y sus dos adaptadores (hecho, 2026-10-15).** Van juntos, como en keel-nest: el registro cablea el
+    adaptador de la pasarela elegida. `src/scaffold/payments.js` (lo neutro) emite `Domain/Payment` (`GatewayStatus`,
+    `GatewayOutcome`, `PaymentSource`, `ChargeRequest`, `PaymentGatewayUnavailableException`,
+    `GatewayRejectedPaymentMethodException`), el puerto `IPaymentGateway` en `Application/Ports`, `Application/Payment`
+    (`PaymentOutcomeApplier` sobre `ICommandDispatcher`, `PaymentNotices`, `PaymentReconciliation` con `StaleBefore()` y
+    `BatchSize()`) e `Infrastructure/Payment`: `PaymentGatewaySettings` (las duraciones con la sintaxis de Spring),
+    `PaymentGatewayHttp`, `GatewayJson` (la lectura de un campo como la de los otros dos: falta, null o no escalar es sin
+    valor; un número vale su texto), `GatewayKeys` (la clave `<referencia>:<acción>`, `save:<token>:<paso>` y el `|` del
+    medio guardado, de keel-core), `MoneyAmounts` con la tabla de keel-core tal cual, `PaymentNotice` +
+    `IPaymentNoticeVerifier` y `PaymentsRegistration`; y en `Api/Rest` el `PaymentNoticeEndpoint`, que lee el cuerpo como
+    texto con un `StreamReader` (sin el contrato del cable: la firma es sobre los bytes que llegaron) y responde 401 o 200
+    vacíos. La ruta la abre el plan de acceso neutral, que ya la traía. `src/scaffold/payment-gateways/{stripe,mercadopago}.js`
+    traducen los de keel-nest caso por caso; la traducción de los rechazos se emite como diccionario desde
+    `GATEWAY_TRANSLATIONS`.
+    - **Lo que C# obliga a decidir**: un componente obligatorio del mensaje de desenlace que la pasarela no da falla en voz
+      alta (`Required`/`RequiredValue`, uno por referencia y otro por valor); el que la capa no nombra (`cancelReason`) sale
+      `Todo<T>(…)`, que lanza; la acción del cliente se embebe como `JsonElement`. **Y el transporte**: `SocketsHttpHandler`
+      reenvía por su cuenta una petición cuya conexión se corta (medido en el 11b), y aquí eso es cobrar dos veces. El
+      cliente de la pasarela lleva la misma guarda que `HttpExchange`: `Connection: close` y un `ConnectCallback` que no abre
+      una segunda conexión para la misma petición.
+    - **Medido**: dos pruebas EMITIDAS, que se ejecutan en `cs-check` con la fixture (Stripe) y la variante nueva
+      `payment-checkout-mp` (MercadoPago). `PaymentGatewayTests` lanza el adaptador y el verificador contra una pasarela falsa
+      (`HttpMessageHandler`) con las formas del doble (`payment-probes.js`): la clave y la unidad, la clave repetida al
+      reintentar, cada código de rechazo del doble como su motivo, el 5xx y el corte en duda sin reintento, el plazo, el
+      importe con más decimales sin mandarse, la búsqueda por referencia, `NotFound`, la devolución (parcial, con la lectura
+      previa en MercadoPago), la captura caducada, guardar un medio y los avisos (firma, rotación, ventana, ts en
+      milisegundos). `PaymentNoticeEndpointTests`, en el servidor en memoria: sin firma 401 vacío, firmado 200, y el GET
+      cerrado. **Falsado** a mano con nueve sabotajes, cada uno cazado por su prueba (clave aleatoria, ventana, marca de
+      captura caducada, redondeo, reintento del 5xx, firma ignorada, manifiesto sin minúsculas, lectura previa tragada, ts
+      en milisegundos sin normalizar), y seis quedan en `cs-check --sabotage=payment-*`. `test/payments.test.js` (nuevo, sin
+      red): solo cambian entre pasarelas su carpeta, el registro, sus pruebas y las variables fuera de local y test;
+      `payments.yaml` idéntico al de keel-nest y al de keel-spring en los cuatro perfiles, y `PaymentGatewaySettings` lee solo
+      claves que declara; la tabla, la clave y los rechazos de keel-core; la ruta abierta solo al POST; el despacho sin
+      transacción; el aplicador. `cs-check --fixtures` **132/132 ensamblados, 2 584 pruebas**, licencias de 100 paquetes
+      (ningún paquete nuevo: todo es de la biblioteca base); keel-dotnet sin red 496/496.
+    - **La frontera sigue rechazando `payments`**, como en keel-nest tras su 13c: el proyecto compila, arranca y responde al
+      aviso, pero sin el arnés (el doble en los flujos) ni las skills el agente no tendría con qué. Se quita en el 13d.
+  - **13d, el arnés, las skills y la frontera (hecho, 2026-10-15). keel-dotnet genera ya la capa `payments`.**
+    - `src/scaffold/payment-harness.js` emite `tests/<Raíz>.IntegrationTests/Support/PaymentGateway.cs` con la API NEUTRA de
+      keel-spring y keel-nest en PascalCase (`GatewayAuthorizes`/`Charges`/`RequiresAction`/`Declines`,
+      `GatewayDoesNotAnswer`, `GatewayReports`, `GatewayCaptures`/`Cancels`/`Refunds`, `GatewayExpiresAuthorization`,
+      `GatewayRejects`, `GatewaySavesPaymentMethod`, `GatewayCallCount`/`Requests`, `GatewayIdFor`, y `GatewayCall` como
+      enum). La lógica vive en `PaymentGatewayHarness`, que solo usa `HttpStubHarness` y la biblioteca base, para que
+      `stub-check` lo compile SOLO; por eso `SendGatewayNotice`/`SendForgedGatewayNotice`, que necesitan el `Post` del
+      flujo, van en `FlowTest.cs`. `AgeForReconciliation` y `HoldFromReconciliation` ganan el barrido de pagos en las dos
+      ramas, relacional y documental, con el nombre del barrido como clave (como en los otros dos). La moneda de los
+      escenarios (`paymentTestCurrency`) sale a `keel-core/gen/payments-config.js`: estaba escrita en keel-spring y en
+      keel-nest, y ahora la importan los tres.
+    - Skills `keel-dotnet-payments` (SKILL.md + `security`, `outcomes`, `reconciliation`, `flows`, `troubleshooting`),
+      `keel-dotnet-stripe` y `keel-dotnet-mercadopago` (con su `sandbox.md`), instaladas por `stackSkills` (la de la
+      pasarela, solo con ella). Lo que dicen distinto de keel-nest: los puertos se añaden al constructor primario (el
+      contenedor ya los tiene), la sexta defensa es la del transporte (`Connection: close` y el `ConnectCallback`), y el
+      reclamo del barrido se escribe como las guardas `ClaimFor…` que ya emite build (ámbito y transacción propios).
+    - `build` y `check` llevan la matriz de la pasarela (rechazo y aviso de lo sin verificar; `check` enseña las dos
+      pasarelas del catálogo), y `planService` la aplica también, para que ningún camino genere un adaptador a medias.
+      `supported-features.js` ya no rechaza `payments`.
+    - **Medido**: `npm run stub-check` gana la pasarela de las dos contra un WireMock REAL —`scripts/probes/PaymentProbes`,
+      NEUTRAL: el mismo C# para las dos, la pasarela la elige `AddPayments`—: el arnés compilado solo con el adaptador y el
+      verificador emitidos, cada helper con su desenlace (dos cobros a la vez casados por su referencia, cada motivo del
+      arnés como ese motivo, el corte en duda y sin repetir, la consulta por id y por referencia, captura, anulación,
+      autorización caducada, devolución parcial, guardar un medio y su rechazo) y el aviso firmado por el arnés aceptado
+      por el verificador, el falsificado no. **9/9 a la primera, 14 sondas por pasarela**; falsado con
+      `--sabotage=payment-body` (sin casar por la referencia: caen los dos casos de cobro en las dos pasarelas) y
+      `payment-forged` (cae el del aviso en las dos). Sin red: `generator-docs.test.js` exige que las rutas que citan las
+      tres skills existan en lo emitido y que los helpers que enseña `flows.md` sean los del arnés;
+      `build.test.js` (build con MercadoPago: avisa de lo sin verificar e instala su skill y no la otra; la captura
+      parcial con MercadoPago no pasa de `planService` y con Stripe sí) y `check.test.js` (la cobertura por pasarela).
+  - Queda **13e, la corrida** de `payment-checkout` con las dos pasarelas.
 
 ## 5. Riesgos conocidos
 

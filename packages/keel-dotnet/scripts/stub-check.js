@@ -14,6 +14,12 @@
 //   initial-state  la secuencia arranca en un estado que no es el inicial de WireMock (no casa nunca)
 //   fault          el corte de conexión con un nombre que WireMock no conoce (rechaza el mapping)
 //   transport-retry  el transporte reutiliza conexiones, y con ellas vuelve el reintento propio de SocketsHttpHandler
+//   payment-body     el cobro del doble deja de casar por la referencia en el cuerpo (dos cobros a la vez se pisan)
+//   payment-forged   el arnés firma el aviso «falsificado» con el secreto bueno
+//
+// Y la pasarela de pago (incremento 13d): las sondas de scripts/probes/PaymentProbes, con el arnés emitido de
+// payment-checkout (Support/HttpStub.cs y Support/PaymentGateway.cs, compilados solos) y su adaptador y su verificador,
+// una vez con cada pasarela del catálogo.
 //
 // Necesita el SDK de .NET 10 y podman o docker; red la primera vez (la imagen y NuGet).
 
@@ -29,11 +35,16 @@ import { planFixture, makeWorkspace } from '../test/helpers/workspace.js';
 
 const keep = process.argv.includes('--keep');
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
+/** El arnés de la pasarela, relativo a la carpeta de cada proyecto de pagos. */
+const PAYMENT_HARNESS = 'tests/PaymentCheckout.IntegrationTests/Support/PaymentGateway.cs';
 const SABOTAGES = {
   'initial-state': ['tests/StockReservation.IntegrationTests/Support/HttpStub.cs', `"${HTTP_STUB_INITIAL_STATE}"`, '"Inicio"'],
   fault: ['tests/StockReservation.IntegrationTests/Support/HttpStub.cs', `"${HTTP_STUB_FAULT}"`, '"CONNECTION_RESET"'],
-  'transport-retry': ['src/StockReservation.Infrastructure/Clients/HttpExchange.cs', 'message.Headers.ConnectionClose = true;', 'message.Headers.ConnectionClose = false;']
+  'transport-retry': ['src/StockReservation.Infrastructure/Clients/HttpExchange.cs', 'message.Headers.ConnectionClose = true;', 'message.Headers.ConnectionClose = false;'],
+  'payment-body': [PAYMENT_HARNESS, 'request["bodyPatterns"] = new JsonArray(new JsonObject { ["contains"] = bodyContains });', '_ = bodyContains;'],
+  'payment-forged': [PAYMENT_HARNESS, 'forged ? WebhookSecret + "-falso" : WebhookSecret', 'forged ? WebhookSecret : WebhookSecret']
 };
+const PAYMENT_GATEWAYS = ['stripe', 'mercadopago'];
 if (sabotage && !SABOTAGES[sabotage]) {
   console.error(`Sabotaje desconocido: ${sabotage}. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);
   process.exit(2);
@@ -86,15 +97,32 @@ try {
   }
   const probes = path.join(path.dirname(fileURLToPath(import.meta.url)), 'probes', 'StubProbes');
   fs.cpSync(probes, path.join(root, 'StubProbes'), { recursive: true });
+  // payment-checkout con cada pasarela, y una copia de las sondas de la pasarela apuntando a cada uno.
+  for (const gateway of PAYMENT_GATEWAYS) {
+    const subject = `payment-${gateway}`;
+    const { files: paymentFiles } = await planFixture('payment-checkout', { stack: { database: 'postgresql', broker: 'rabbitmq', paymentGateway: gateway } });
+    for (const file of paymentFiles) {
+      const target = path.join(root, subject, file.path);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, file.content);
+    }
+    const probesDir = path.join(root, `PaymentProbes-${gateway}`);
+    fs.cpSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'probes', 'PaymentProbes'), probesDir, { recursive: true });
+    const csproj = path.join(probesDir, 'PaymentProbes.csproj');
+    fs.writeFileSync(csproj, fs.readFileSync(csproj, 'utf8').replaceAll('__SUBJECT__', subject));
+  }
   if (sabotage) {
     const [file, from, to] = SABOTAGES[sabotage];
-    const harness = path.join(root, 'stock-reservation', file);
-    const text = fs.readFileSync(harness, 'utf8');
-    if (!text.includes(from)) {
-      console.error(`El sabotaje '${sabotage}' no se aplica a lo emitido hoy (¿cambió el texto?).`);
-      process.exit(2);
+    const targets = file === PAYMENT_HARNESS ? PAYMENT_GATEWAYS.map((gateway) => `payment-${gateway}`) : ['stock-reservation'];
+    for (const folder of targets) {
+      const harness = path.join(root, folder, file);
+      const text = fs.readFileSync(harness, 'utf8');
+      if (!text.includes(from)) {
+        console.error(`El sabotaje '${sabotage}' no se aplica a lo emitido hoy (¿cambió el texto?).`);
+        process.exit(2);
+      }
+      fs.writeFileSync(harness, text.replace(from, to));
     }
-    fs.writeFileSync(harness, text.replace(from, to));
     console.log(`(sabotaje: ${sabotage})`);
   }
 
@@ -115,6 +143,20 @@ try {
     const log = path.join(os.tmpdir(), `keel-dotnet-stub-check-${Date.now()}.log`);
     fs.writeFileSync(log, tested.output);
     console.error(`Salida completa de dotnet test en ${log}`);
+  }
+
+  // La pasarela de pago de prueba, una vez con cada pasarela del catálogo.
+  for (const gateway of PAYMENT_GATEWAYS) {
+    const project = `PaymentProbes-${gateway}/PaymentProbes.csproj`;
+    const paymentBuilt = dotnet(root, ['build', project, '-c', 'Release']);
+    if (!step(`${gateway}: el arnés de la pasarela (solo), el adaptador y el verificador compilan con las sondas`, paymentBuilt.ok)) {
+      console.error([...new Set(paymentBuilt.output.split('\n').filter((line) => /(error|warning) [A-Za-z]+\d+/.test(line)))].slice(0, 40).join('\n'));
+      continue;
+    }
+    const paymentTested = dotnet(root, ['test', '--project', project, '--no-build', '-c', 'Release'], { HTTP_STUB_ADMIN: `${baseUrl}/__admin`, STUB_CHECK_BASE_URL: baseUrl });
+    const paymentTotal = Number(/total: (\d+)/.exec(paymentTested.output)?.[1] ?? 0);
+    const paymentFailures = paymentTested.output.split('\n').filter((line) => /^\s*(con errores|failed)\s/i.test(line)).map((line) => line.trim().replace(/^.*PaymentProbes\./, ''));
+    step(`${gateway}: las sondas de la pasarela pasan contra el WireMock real`, paymentTested.ok && paymentTotal > 0, paymentTested.ok ? `${paymentTotal} sondas` : paymentFailures.join('; ') || 'sin resumen');
   }
 } catch (error) {
   if (!results.some((result) => !result.ok)) step('stub-check', false, error.message);

@@ -41,10 +41,22 @@ test('un diseño no listo sale en rojo aunque sea generable, y dice por qué', a
 
 test('una capa fuera de la frontera sale en rojo sin construir nada', async () => {
   const workspace = makeWorkspace();
+  mountDesign(workspace, 'asset-vault');
+  const before = treeDigest(workspace);
+  const { exitCode, output } = await runCommand(workspace, check, 'specs/asset-vault', {});
+  assert.equal(exitCode, 1);
+  assert.match(output, /capa storage/);
+  assert.equal(treeDigest(workspace), before);
+});
+
+test('con payments, check enseña qué pasarelas del catálogo sirven el diseño, sin escribir nada', async () => {
+  const workspace = makeWorkspace();
   mountDesign(workspace, 'payment-checkout');
   const before = treeDigest(workspace);
-  const { exitCode, output } = await runCommand(workspace, check, 'specs/payment-checkout', {});
-  assert.equal(exitCode, 1);
-  assert.match(output, /capa payments/);
+  const { output: colored } = await runCommand(workspace, check, 'specs/payment-checkout', {});
+  const output = colored.replace(/\[\d+m/g, '');
+  assert.match(output, /Pasarelas de pago/);
+  assert.match(output, /✔ stripe/);
+  assert.match(output, /✔ mercadopago — \d+ sin verificar/);
   assert.equal(treeDigest(workspace), before);
 });

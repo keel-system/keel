@@ -74,10 +74,10 @@ export function fixtureNames() {
  * aplicación se emiten para cualquier diseño aunque `build` todavía rechace alguna de sus capas.
  * `mutate(manifest, layers)` deriva una variante en memoria.
  */
-export async function planFixture(name, { mutate = null } = {}) {
+export async function planFixture(name, { mutate = null, stack = null } = {}) {
   const { loadService } = await import('keel-core');
   const { planService } = await import('../../src/scaffold/index.js');
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
   if (mutate) mutate(manifest, layers);
-  return planService({ manifest, layers, workspace: FIXTURES_DIR });
+  return planService({ manifest, layers, workspace: FIXTURES_DIR, stack });
 }

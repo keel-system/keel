@@ -9,6 +9,7 @@ import { checkFails, evolveStack, reportGeneratorDrift } from 'keel-core/gen/evo
 import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures, checkSupportedStack } from '../lib/supported-features.js';
 import { scaffoldService } from '../scaffold/index.js';
+import { checkGatewaySupport } from 'keel-core/gen/payment-gateways';
 
 export async function build(
   inputPath,
@@ -72,6 +73,21 @@ export async function build(
     for (const message of stackSupport.errors) console.error(`  ${pc.red('•')} ${message}`);
     process.exitCode = 1;
     return;
+  }
+
+  // La pasarela elegida contra lo que el diseño exige (la matriz neutral de keel-core), antes de escribir nada: una
+  // capacidad que no cubre no se genera, y una sin verificar se avisa. Lo mismo que keel-spring y keel-nest.
+  if (layers.payments) {
+    const gateway = stack?.paymentGateway ?? null;
+    const support = gateway ? checkGatewaySupport(layers, gateway) : { errors: [], warnings: [] };
+    for (const message of support.warnings) console.warn(`${pc.yellow('⚠')} ${message}`);
+    if (support.errors.length > 0) {
+      console.error(pc.bold(pc.red(`✘ La pasarela '${gateway}' no cubre lo que el diseño exige — ${support.errors.length}:`)));
+      for (const message of support.errors) console.error(`  ${pc.red('•')} ${message}`);
+      console.error(pc.dim('  Elige otra pasarela (borra paymentGateway de keel-stack.json) o quita la capacidad del diseño.'));
+      process.exitCode = 1;
+      return;
+    }
   }
 
   const acceptedUnready = acceptUnready && !readiness.ready;

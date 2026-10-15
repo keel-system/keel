@@ -51,6 +51,8 @@ export function stackSkills(model) {
   if (usesHttpClients(model)) skills.push('keel-dotnet-httpclient');
   // El correo saliente (capa mail, adelantada al 12e): lo que build genera, la guarda del doble envío y el buzón.
   if (usesMail(model)) skills.push('keel-dotnet-mail');
+  // Los cobros (capa payments): la skill neutra y la de la pasarela elegida, solo esa.
+  if (model.payments) skills.push('keel-dotnet-payments', `keel-dotnet-${model.payments.gateway.id}`);
   return skills;
 }
 

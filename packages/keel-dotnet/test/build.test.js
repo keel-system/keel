@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeWorkspace, mountDesign, runCommand, DOTNET_READY_DESIGN } from './helpers/workspace.js';
+import { makeWorkspace, mountDesign, planFixture, runCommand, DOTNET_READY_DESIGN } from './helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { packageVersion } from '../src/lib/assets.js';
 
@@ -60,12 +60,38 @@ test('un diseño no listo NO se genera sin --accept-unready, y no se escribe nad
 
 test('una capa fuera de la frontera se rechaza nombrando keel-dotnet, antes de escribir nada', async () => {
   const workspace = makeWorkspace();
-  mountDesign(workspace, 'payment-checkout');
-  const { exitCode, output } = await runCommand(workspace, build, 'specs/payment-checkout', { defaults: true, acceptUnready: true });
+  mountDesign(workspace, 'asset-vault');
+  const { exitCode, output } = await runCommand(workspace, build, 'specs/asset-vault', { defaults: true, acceptUnready: true });
   assert.equal(exitCode, 1);
   assert.match(output, /capacidades que keel-dotnet no genera/);
-  assert.match(output, /capa payments: keel-dotnet todavía no la genera/);
+  assert.match(output, /capa storage: keel-dotnet todavía no la genera/);
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
+});
+
+test('payments: build genera con la pasarela del stack, avisa de lo que la matriz no ha verificado e instala solo su skill', async () => {
+  const workspace = makeWorkspace();
+  mountDesign(workspace, 'payment-checkout');
+  const project = path.join(workspace, 'services', 'payment-checkout-dotnet');
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(project, 'keel-stack.json'), JSON.stringify({ database: 'postgresql', broker: 'rabbitmq', auth: 'keycloak', paymentGateway: 'mercadopago', telemetry: 'none' }));
+  const { exitCode, output } = await runCommand(workspace, build, 'specs/payment-checkout', { defaults: true, acceptUnready: true });
+  assert.equal(exitCode ?? 0, 0, output);
+  assert.match(output, /la pasarela 'mercadopago' lo cubre SIN verificar/);
+  assert.ok(fs.existsSync(path.join(project, 'src/PaymentCheckout.Infrastructure/Payment/Mercadopago/MercadopagoPaymentGateway.cs')));
+  assert.ok(fs.existsSync(path.join(project, '.claude/skills/keel-dotnet-payments/SKILL.md')));
+  assert.ok(fs.existsSync(path.join(project, '.claude/skills/keel-dotnet-mercadopago/SKILL.md')));
+  assert.ok(!fs.existsSync(path.join(project, '.claude/skills/keel-dotnet-stripe')), 'la skill de la otra pasarela no');
+});
+
+test('payments: una pasarela que no cubre lo que el diseño exige no se genera por ningún camino (planService)', async () => {
+  // La captura parcial: MercadoPago no la cubre (la matriz neutral de keel-core); Stripe sí.
+  const partialCapture = (manifest, layers) => {
+    layers.payments.capabilities = ['partial-capture', ...layers.payments.capabilities];
+  };
+  const stack = (paymentGateway) => ({ database: 'postgresql', broker: 'rabbitmq', paymentGateway });
+  await assert.rejects(planFixture('payment-checkout', { mutate: partialCapture, stack: stack('mercadopago') }), /la pasarela 'mercadopago' no lo cubre/);
+  const { files } = await planFixture('payment-checkout', { mutate: partialCapture, stack: stack('stripe') });
+  assert.ok(files.some((file) => file.path.endsWith('StripePaymentGateway.cs')));
 });
 
 test('la telemetría pedida por flag se rechaza antes de escribir', async () => {

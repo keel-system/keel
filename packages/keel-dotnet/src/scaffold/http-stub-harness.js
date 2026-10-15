@@ -312,6 +312,17 @@ function agingTargets(model) {
       }
     }
   }
+  // El barrido de la capa payments no es un `reconciledBy` de activations, pero su condición de entrada es la misma —la
+  // marca de espera del cobro, rancia— y tampoco se alcanza de otra forma. La clave es el nombre del barrido, como en
+  // keel-spring y keel-nest.
+  const payments = model.payments;
+  if (payments?.reconciliation?.sweep && payments.record?.awaitingSince) {
+    const entity = (model.entities ?? []).find((candidate) => candidate.name === payments.record.entity);
+    if (entity?.tableName) {
+      if (!targets.has(payments.reconciliation.sweep)) targets.set(payments.reconciliation.sweep, []);
+      targets.get(payments.reconciliation.sweep).push({ table: entity.tableName, awaitingField: payments.record.awaitingSince });
+    }
+  }
   return targets;
 }
 

@@ -34,6 +34,7 @@ import { csFile, csString, solution } from './render.js';
 import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
 import { usesKafka } from './messaging.js';
 import { closingCredentialExpression, credentialsCs, flowTestCredentialMembers, smokeCredentialsCase } from './identity-harness.js';
+import { paymentHarnessFile, paymentNoticeMembers } from './payment-harness.js';
 import { httpStubFile, idLiteralMember, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
 import { mailHarnessFile, mailSmokeCase } from './mail-harness.js';
 import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
@@ -67,6 +68,8 @@ export function generate(model) {
     // Con clientes salientes, el proveedor de prueba (http-stub-harness.js).
     ...[httpStubFile(model, supportNamespace(model))].filter(Boolean),
     ...[mailHarnessFile(model, supportNamespace(model))].filter(Boolean),
+    // Con pagos, la pasarela de prueba (payment-harness.js).
+    ...[paymentHarnessFile(model, supportNamespace(model))].filter(Boolean),
     { path: `${project.dir}/${HARNESS_SMOKE_CLASS}.cs`, content: harnessSmokeCs(model) },
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript(model) }
@@ -143,6 +146,8 @@ function flowTestCs(model) {
   if (mongo) helpers.push(...documentFlowMembers(model, mongo));
   // La segunda réplica, con escenarios de clúster posibles.
   helpers.push(...replicaMembers(model));
+  // Con pagos, los dos helpers que MANDAN el aviso de la pasarela (el resto vive en Support/PaymentGateway.cs).
+  helpers.push(...paymentNoticeMembers(model));
   return csFile({
     namespace: supportNamespace(model),
     usings: ['System.Collections.Concurrent', 'Xunit'],

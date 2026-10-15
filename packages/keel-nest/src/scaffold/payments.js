@@ -16,17 +16,15 @@
 // Lo que NO genera: la lógica de los casos de uso (cuándo se llama al puerto y qué transición aplica cada
 // handler), que es del diseño y la escribe el agente con la skill de la pasarela.
 
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS } from 'keel-core/gen/payment-gateways';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH } from 'keel-core/gen/payment-gateways';
+import { paymentsYaml } from 'keel-core/gen/payments-config';
 import { PAYMENT_SWEEP_PARAMETERS } from 'keel-core/gen/payments-model';
-import { HTTP_STUB } from 'keel-core/gen/infra-catalog';
 import { DIRS, classPath, declType, tsModule, tsString } from './render.js';
 import { COMMAND_DISPATCHER_TS } from './mediator.js';
 import { DECIMAL_TS, RAW_JSON_TS } from './wire.js';
 import { messageComponents, messagePath } from './services.js';
 import * as stripe from './payment-gateways/stripe.js';
 import * as mercadopago from './payment-gateways/mercadopago.js';
-import { envValue, envWithDefault } from 'keel-core/gen/profile-values';
-import { envFor } from 'keel-core/gen/runtime-env';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const DOMAIN_DIR = 'domain/payment';
@@ -962,33 +960,5 @@ export class PaymentsModule {
   );
 }
 
-// ─── config/parameters/<perfil>/payments.yaml ────────────────────────────────
-
-/**
- * Las MISMAS claves, variables y defaults que el payments.yaml de keel-spring (lo compara test/payments.test.js):
- * un mismo .env sirve a los dos servidores. En production la credencial y el secreto no tienen default —un
- * despliegue que los olvide no arranca, en vez de cobrar contra otra cuenta—; en local y test, la pasarela de
- * prueba de infra/ con el secreto que usa el arnés para firmar los avisos.
- */
-export function paymentsYaml(model, profile) {
-  const gateway = model.payments.gateway;
-  const isLocalish = profile === 'local' || profile === 'test';
-  const baseUrl = isLocalish ? `http://localhost:${HTTP_STUB.publishedPort}` : gateway.baseUrl;
-  const lines = [
-    'payments:',
-    '  gateway:',
-    `    base-url: ${isLocalish ? baseUrl : envWithDefault(profile, gateway.env.baseUrl, gateway.baseUrl)}`,
-    `    api-key: ${envValue(profile, gateway.env.apiKey, PAYMENT_TEST_SECRETS.apiKey)}`,
-    `    webhook-secret: ${envValue(profile, gateway.env.webhookSecret, PAYMENT_TEST_SECRETS.webhookSecret)}`,
-    `    connect-timeout: ${envFor('PAYMENT_GATEWAY_CONNECT_TIMEOUT', profile)}`,
-    `    read-timeout: ${envFor('PAYMENT_GATEWAY_READ_TIMEOUT', profile)}`,
-    `    notice-tolerance-seconds: ${envFor('PAYMENT_NOTICE_TOLERANCE_SECONDS', profile, gateway.webhook.toleranceSeconds)}`,
-    '  reconciliation:',
-    '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds); en local y test se acorta',
-    '    # para que los escenarios del barrido no esperen un cuarto de hora.',
-    `    unanswered-after-seconds: ${isLocalish ? PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.local : envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.env, model.payments.reconciliation.unansweredAfterSeconds)}`,
-    '    # Cuántos cobros consulta una pasada como máximo: capacidad, no diseño. Se ajusta con datos de producción.',
-    `    batch-size: ${envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.batchSize.env, PAYMENT_SWEEP_PARAMETERS.batchSize.default)}`
-  ];
-  return `${lines.join('\n')}\n`;
-}
+// config/parameters/<perfil>/payments.yaml: el NEUTRAL de keel-core (keel-core/gen/payments-config.js), el mismo que keel-dotnet.
+export { paymentsYaml };

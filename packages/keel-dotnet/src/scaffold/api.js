@@ -21,6 +21,7 @@ import { usesSweepClaims } from './claim.js';
 import { usesReconciliationSettings } from './reconciliation-claim.js';
 import { clientAdaptersNamespace, usesHttpClients } from './http-clients.js';
 import { mailInfraNamespace, usesMail } from './mail.js';
+import { paymentsProgram } from './payments.js';
 
 // Los barridos del perfil, antes de la persistencia: AddPersistence solo pone los defaults si nadie registró estos.
 const SWEEPS = `
@@ -49,6 +50,8 @@ export function generate(model) {
 
 function programCs(model) {
   const useCases = usesMediator(model);
+  // La capa payments: la pasarela del stack y la entrada de su aviso.
+  const payments = paymentsProgram(model);
   const persistence = usesPersistence(model);
   const usings = [
     wireNamespace(model),
@@ -61,7 +64,8 @@ function programCs(model) {
     ...(usesMessaging(model) ? [messagingNamespace(model)] : []),
     ...(usesScheduling(model) ? [schedulingNamespace(model)] : []),
     ...(usesHttpClients(model) ? [clientAdaptersNamespace(model)] : []),
-    ...(usesMail(model) ? [mailInfraNamespace(model)] : [])
+    ...(usesMail(model) ? [mailInfraNamespace(model)] : []),
+    ...payments.usings
   ];
   const registration = useCases
     ? `
@@ -121,7 +125,7 @@ builder.Services.AddScheduling(configuration);`
   const pipeline = api ? `\napp.UseMiddleware<CorrelationMiddleware>();\napp.UseMiddleware<ApiErrorMiddleware>();${idempotency}${securityMiddleware}` : '';
   // Las rutas del diseño: un solo mapa (ApiRoutes, generado).
   const routes = api ? '\napp.MapApiRoutes();' : '';
-  return `${usings.map((using) => `using ${using};`).join('\n')}
+  return `${[...new Set(usings)].map((using) => `using ${using};`).join('\n')}
 
 // La configuración del perfil activo (PROFILE), cargada y validada antes de crear la aplicación: una
 // variable obligatoria sin valor no deja arrancar, y se listan todas las que faltan.
@@ -136,11 +140,11 @@ builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);
 // El contrato del cable: todo cuerpo JSON que la API lee o escribe pasa por estas opciones (WireJson).
-builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${clients}${mailing}${database}${security}${messaging}${clock}
+builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${clients}${mailing}${payments.registration}${database}${security}${messaging}${clock}
 
 var app = builder.Build();
 app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);${schema}${pipeline}
-app.MapHealthEndpoints();${routes}
+app.MapHealthEndpoints();${routes}${payments.mapping}
 app.Run();
 
 /// <summary>Visible para las pruebas, que levantan el servidor en memoria (WebApplicationFactory).</summary>

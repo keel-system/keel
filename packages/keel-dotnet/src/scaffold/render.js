@@ -105,6 +105,14 @@ export const PLACES = {
   // configuración, infraestructura. Los puertos van con los demás de la aplicación (Ports).
   mail: ['domain', 'Mail'],
   mailInfra: ['infrastructure', 'Mail'],
+  // Los cobros con pasarela (capa payments, incremento 13): el vocabulario neutro del puerto es dominio; el aplicador de
+  // desenlaces, el aviso y la reconciliación, aplicación; el cliente HTTP, la configuración y el verificador, infraestructura,
+  // con el adaptador de cada pasarela en su carpeta.
+  payment: ['domain', 'Payment'],
+  paymentApp: ['application', 'Payment'],
+  paymentInfra: ['infrastructure', 'Payment'],
+  stripe: ['infrastructure', 'Payment/Stripe'],
+  mercadopago: ['infrastructure', 'Payment/Mercadopago'],
   // La entrada HTTP: la infraestructura REST común y un archivo de endpoints por grupo de operaciones.
   rest: ['api', 'Rest'],
   endpoints: ['api', 'Endpoints'],

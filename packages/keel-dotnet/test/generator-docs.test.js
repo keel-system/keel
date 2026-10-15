@@ -134,7 +134,11 @@ const SKILL_SUBJECTS = {
   // Con barrido de reconciliación y compensación.
   'keel-dotnet-httpclient': { fixtures: ['stock-reservation'], stack: { broker: 'rabbitmq', database: 'postgresql' } },
   // El correo, sobre las dos persistencias: la guarda vive en un adaptador u otro.
-  'keel-dotnet-mail': { fixtures: ['notification-mailer', 'notification-mailer-mongo'], stack: { broker: 'rabbitmq' } }
+  'keel-dotnet-mail': { fixtures: ['notification-mailer', 'notification-mailer-mongo'], stack: { broker: 'rabbitmq' } },
+  // Los cobros: la skill neutra y la de cada pasarela, con la suya.
+  'keel-dotnet-payments': { fixtures: ['payment-checkout'], stack: { broker: 'rabbitmq', database: 'postgresql', paymentGateway: 'stripe' } },
+  'keel-dotnet-stripe': { fixtures: ['payment-checkout'], stack: { broker: 'rabbitmq', database: 'postgresql', paymentGateway: 'stripe' } },
+  'keel-dotnet-mercadopago': { fixtures: ['payment-checkout'], stack: { broker: 'rabbitmq', database: 'postgresql', paymentGateway: 'mercadopago' } }
 };
 
 function planWith(fixture, stack) {
@@ -342,5 +346,27 @@ test('el cierre no reporta como hueco lo que el diseño ya aceptó por escrito (
   assert.ok(docs.length > 1);
   for (const file of docs) {
     for (const words of ['`specs/gaps.yaml`', '`specs/decisions.yaml`', '`state: accepted`', 'no se reporta']) assert.ok(files[file].includes(words), `${file}: ${words}`);
+  }
+});
+
+test('las skills de pagos se instalan con la capa, la de la pasarela solo con ella, y lo que enseñan existe en lo emitido', () => {
+  for (const [gateway, other] of [['stripe', 'mercadopago'], ['mercadopago', 'stripe']]) {
+    const tree = byPath(planWith('payment-checkout', { broker: 'rabbitmq', database: 'postgresql', paymentGateway: gateway }).files);
+    const names = Object.keys(tree);
+    assert.ok(names.some((file) => file.endsWith('skills/keel-dotnet-payments/SKILL.md')), `${gateway}: la neutra`);
+    assert.ok(names.some((file) => file.endsWith(`skills/keel-dotnet-${gateway}/SKILL.md`)), `${gateway}: la suya`);
+    assert.ok(!names.some((file) => file.includes(`keel-dotnet-${other}`)), `${gateway}: no la de ${other}`);
+    const find = (suffix) => Object.entries(tree).find(([file]) => file.endsWith(suffix))?.[1] ?? '';
+    // Los helpers que enseña flows.md son los del arnés.
+    const harness = find('/Support/PaymentGateway.cs') + find('/Support/FlowTest.cs');
+    for (const helper of ['GatewayAuthorizes', 'GatewayCharges', 'GatewayRequiresAction', 'GatewayDeclines', 'GatewayDoesNotAnswer', 'GatewayReports', 'GatewayCaptures', 'GatewayCancels', 'GatewayExpiresAuthorization', 'GatewayRejects', 'GatewaySavesPaymentMethod', 'GatewayRefunds', 'GatewayCallCount', 'GatewayRequests', 'GatewayIdFor', 'SendGatewayNotice', 'SendForgedGatewayNotice', 'AgeForReconciliation', 'HoldFromReconciliation']) {
+      assert.ok(harness.includes(` ${helper}(`) && /protected static/.test(harness), `${gateway}: ${helper}`);
+    }
+    // Lo que el handler llama en la aplicación.
+    const reconciliation = find('/Payment/PaymentReconciliation.cs');
+    for (const member of ['public DateTimeOffset StaleBefore()', 'public int BatchSize()', 'public async Task<GatewayStatus> Consult(string reference, string? gatewayPaymentId, CancellationToken cancellationToken = default)']) {
+      assert.ok(reconciliation.includes(member), `${gateway}: ${member}`);
+    }
+    assert.ok(find('/Payment/PaymentOutcomeApplier.cs').includes('public async Task Apply(GatewayOutcome outcome, CancellationToken cancellationToken = default)'));
   }
 });

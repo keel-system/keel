@@ -80,7 +80,14 @@ const SABOTAGES = {
 //   idempotency-random  la clave saliente cambia en cada intento
 //   fallback-any        el fallback atiende cualquier excepción, también un cuerpo que viola el contrato
 //   cancel-as-timeout   la cancelación de quien llama se toma por un timeout del proveedor
+//   payment-key-random  la clave de idempotencia hacia la pasarela cambia en cada intento
+//   payment-5xx-pending un 5xx de la pasarela al pedir el cobro se lee como un cobro pendiente, no como una duda
+//   payment-rounding    un importe con más decimales que la moneda se redondea en silencio
+//   payment-window      el aviso de Stripe se acepta fuera de su ventana
+//   payment-notice-open un aviso que no verifica se responde 200
+//   payment-mp-manifest el manifiesto de MercadoPago firma el data.id tal como llega, sin pasarlo a minúsculas
 const CLIENTS_DIR = 'stock-reservation/src/StockReservation.Infrastructure/Clients';
+const PAYMENT_DIR = 'payment-checkout/src/PaymentCheckout.Infrastructure/Payment';
 const FIXTURE_SABOTAGES = {
   'circuit-strict': [`${CLIENTS_DIR}/CircuitBreaker.cs`, '* 100.0 / outcomes.Count >= spec.FailureRateThreshold', '* 100.0 / outcomes.Count > spec.FailureRateThreshold'],
   'circuit-4xx': [`${CLIENTS_DIR}/OutboundResilience.cs`, 'ProviderFailures.Recorded.Contains(failure.Kind)', 'failure.Kind != ProviderFailureKind.CircuitOpen'],
@@ -91,7 +98,17 @@ const FIXTURE_SABOTAGES = {
     'catch (ProviderFailureException failure) when (CancelStockFallback.Contains(failure.Kind))',
     'catch (Exception error) when (error is not OperationCanceledException && (error as ProviderFailureException ?? new ProviderTransportException(error.Message)) is var failure)'
   ],
-  'cancel-as-timeout': [`${CLIENTS_DIR}/HttpExchange.cs`, 'when (!cancellationToken.IsCancellationRequested)', 'when (client.Timeout > TimeSpan.Zero)']
+  'cancel-as-timeout': [`${CLIENTS_DIR}/HttpExchange.cs`, 'when (!cancellationToken.IsCancellationRequested)', 'when (client.Timeout > TimeSpan.Zero)'],
+  'payment-key-random': [`${PAYMENT_DIR}/GatewayKeys.cs`, '=> $"{reference}:{action}";', '=> $"{reference}:{action}:{Guid.NewGuid()}";'],
+  'payment-5xx-pending': [`${PAYMENT_DIR}/Stripe/StripePaymentGateway.cs`, 'throw Unavailable("authorize", answer);', 'return GatewayOutcome.Of(GatewayStatus.Pending, request.Reference, null);'],
+  'payment-rounding': [`${PAYMENT_DIR}/MoneyAmounts.cs`, 'if (decimal.Round(amount, digits, MidpointRounding.ToZero) != amount)', 'if (decimal.Round(amount, digits, MidpointRounding.ToZero) != amount && digits < 0)'],
+  'payment-window': [`${PAYMENT_DIR}/Stripe/StripeNoticeVerifier.cs`, '> settings.NoticeToleranceSeconds)', '> settings.NoticeToleranceSeconds * 1000L)'],
+  'payment-notice-open': ['payment-checkout/src/PaymentCheckout.Api/Rest/PaymentNoticeEndpoint.cs', 'StatusCodes.Status401Unauthorized;', 'StatusCodes.Status200OK;'],
+  'payment-mp-manifest': [
+    'payment-checkout-mp/src/PaymentCheckoutMp.Infrastructure/Payment/Mercadopago/MercadopagoNoticeVerifier.cs',
+    'manifest.Append("id:").Append(dataId.ToLowerInvariant())',
+    'manifest.Append("id:").Append(dataId)'
+  ]
 };
 if (sabotage && !SABOTAGES[sabotage] && !FIXTURE_SABOTAGES[sabotage]) {
   console.error(`Sabotaje desconocido: ${sabotage}. Los hay del proyecto (${Object.keys(SABOTAGES).join(', ')}) y de las fixtures (${Object.keys(FIXTURE_SABOTAGES).join(', ')}).`);
@@ -129,6 +146,15 @@ const DERIVED = [
   {
     // El decimal ESCALAR de una entrada con `scalePolicy: round` se redondea en el propio mensaje
     // (`init => field = ...`, C# 14). Ninguna fixture lo declara: las dos ramas, la obligatoria y la opcional.
+    // La pasarela de pago con MERCADOPAGO (incremento 13): payment-checkout compila con Stripe, el default del stack.
+    name: 'payment-checkout-mp',
+    from: 'payment-checkout',
+    paymentGateway: 'mercadopago',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+    }
+  },
+  {
     name: 'payment-checkout-round',
     from: 'payment-checkout',
     mutate: (manifest, layers, name) => {
@@ -398,11 +424,16 @@ function compileAllFixtures() {
   const projects = [];
   const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
   const designs = [...fixtures.map((name) => ({ name, from: name })), ...DERIVED];
-  for (const { name, from, mutate, broker } of designs) {
+  for (const { name, from, mutate, broker, paymentGateway } of designs) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     if (mutate) mutate(manifest, layers, name);
-    // Con mensajería, sobre RabbitMQ: es el broker que la frontera admite (el default del stack es Kafka).
-    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: layers.messaging ? { broker: broker ?? 'rabbitmq' } : null });
+    // Con mensajería, sobre RabbitMQ: es el broker que la frontera admite (el default del stack es Kafka). Con pagos, sobre
+    // Stripe salvo que la variante diga otra pasarela: sin una, el stack no la elige y la capa no se emite.
+    const stack = {
+      ...(layers.messaging ? { broker: broker ?? 'rabbitmq' } : {}),
+      ...(layers.payments ? { paymentGateway: paymentGateway ?? 'stripe' } : {})
+    };
+    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: Object.keys(stack).length > 0 ? stack : null });
     for (const file of files) {
       const target = path.join(root, name, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });

@@ -9,13 +9,18 @@ import { checkSupportedFeatures, checkSupportedStack } from '../src/lib/supporte
 const manifestWith = (...layers) => ({ layers: Object.fromEntries(layers.map((layer) => [layer, `${layer}.keel.yaml`])) });
 const layersWith = (...layers) => Object.fromEntries(layers.map((layer) => [layer, {}]));
 
-for (const layer of ['storage', 'payments']) {
+for (const layer of ['storage']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);
     assert.match(errors[0], new RegExp(`capa ${layer}: .*incremento \\d+`));
   });
 }
+
+test('capa payments: se genera (incremento 13, como en keel-nest)', () => {
+  const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'payments'), layersWith('domain', 'use-cases', 'payments'));
+  assert.deepEqual(errors, []);
+});
 
 test('capa mail: se genera (adelantada al incremento 12e, como en keel-nest)', () => {
   const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'mail'), layersWith('domain', 'use-cases', 'mail'));

@@ -14,6 +14,7 @@
 import { paymentProbesFor } from 'keel-core/gen/payment-probes';
 import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation } from 'keel-core/gen/payment-gateways';
 import { tsString } from './render.js';
+import { paymentTestCurrency } from 'keel-core/gen/payments-config';
 
 export const PAYMENT_HARNESS_TS = 'test/integration/support/payment-gateway.ts';
 
@@ -47,12 +48,8 @@ export function generate(model) {
   return usesPaymentHarness(model) ? [{ path: PAYMENT_HARNESS_TS, content: paymentGatewayTs(model) }] : [];
 }
 
-/** La moneda con la que corren los escenarios: el testValue del parámetro, si la moneda sale de uno. */
-export function testCurrency(model) {
-  const parameter = model.payments.charge.currency?.parameter;
-  const found = parameter ? (model.service.parameters ?? []).find((entry) => entry.name === parameter) : null;
-  return String(found?.testValue ?? 'EUR').toUpperCase();
-}
+/** La moneda con la que corren los escenarios (keel-core/gen/payments-config.js: la misma en los tres generadores). */
+export const testCurrency = paymentTestCurrency;
 
 function paymentGatewayTs(model) {
   const gateway = model.payments.gateway;

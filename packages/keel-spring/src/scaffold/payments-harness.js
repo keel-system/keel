@@ -9,6 +9,7 @@
 import { paymentProbesFor } from 'keel-core/gen/payment-probes';
 import { PAYMENT_TEST_SECRETS } from './config.js';
 import { PAYMENT_NOTICE_PATH } from './payments.js';
+import { paymentTestCurrency as testCurrency } from 'keel-core/gen/payments-config';
 
 export function usesPaymentHarness(model) {
   return Boolean(model.payments);
@@ -31,12 +32,6 @@ export function paymentHarnessImports(model) {
   ];
 }
 
-/** La moneda con la que corren los escenarios: el testValue del parámetro, si la moneda sale de uno. */
-function testCurrency(model) {
-  const parameter = model.payments.charge.currency?.parameter;
-  const found = parameter ? (model.service.parameters ?? []).find((entry) => entry.name === parameter) : null;
-  return String(found?.testValue ?? 'EUR').toUpperCase();
-}
 
 export function paymentHarnessSection(model) {
   if (!usesPaymentHarness(model)) return '';

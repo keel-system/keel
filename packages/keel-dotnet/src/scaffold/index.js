@@ -9,6 +9,7 @@ import path from 'node:path';
 import { buildModel } from 'keel-core/gen/model';
 import { materializeProject } from 'keel-core/gen/materialize';
 import { resolveStack } from 'keel-core/gen/stack';
+import { checkGatewaySupport } from 'keel-core/gen/payment-gateways';
 import { listKeelDocs } from 'keel-core/gen/keel-docs';
 import { derivedOpenapiFiles } from 'keel-core/gen/openapi';
 import { packageVersion } from '../lib/assets.js';
@@ -35,6 +36,7 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import * as requestIdempotency from './request-idempotency.js';
 import * as httpClients from './http-clients.js';
 import * as mail from './mail.js';
+import * as payments from './payments.js';
 import * as messaging from './messaging.js';
 import * as messagingStores from './messaging-stores.js';
 import * as rabbitmq from './rabbitmq.js';
@@ -63,7 +65,7 @@ import * as generatorDocs from './generator-docs.js';
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara. El primero es el contrato formal
 // de la API, derivado del modelo neutral (el mismo en los tres generadores), salvo que el workspace traiga el de
 // /keel-docs: keel-core/gen/openapi.js.
-const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, wire, serviceParameters, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, idempotencyCheck, dtos, mappers, services, mediator, persistence, persistenceRuntime, documentPersistence, repositories, claim, reconciliationClaim, requestIdempotency, httpClients, mail, messaging, messagingStores, rabbitmq, kafka, snssqs, messagingTests, purge, scheduling, schedulingTests, security, restSupport, endpoints, api, tests, testCredential, apiTests, infra, integrationTests, schemaBaseline, readme, generatorDocs];
+const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, wire, serviceParameters, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, idempotencyCheck, dtos, mappers, services, mediator, persistence, persistenceRuntime, documentPersistence, repositories, claim, reconciliationClaim, requestIdempotency, httpClients, mail, payments, messaging, messagingStores, rabbitmq, kafka, snssqs, messagingTests, purge, scheduling, schedulingTests, security, restSupport, endpoints, api, tests, testCredential, apiTests, infra, integrationTests, schemaBaseline, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus
@@ -72,6 +74,12 @@ const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, 
  */
 export function planService({ manifest, layers, workspace, stack = null }) {
   const resolved = resolveStack(stack, layers);
+  // La pasarela elegida tiene que cubrir lo que el diseño exige (la matriz neutral de keel-core). Aquí y no solo en build,
+  // para que NINGÚN camino genere un adaptador a medias. La misma puerta que keel-spring y keel-nest.
+  if (resolved.paymentGateway) {
+    const { errors } = checkGatewaySupport(layers, resolved.paymentGateway);
+    if (errors.length > 0) throw new Error(errors.join('\n'));
+  }
   const model = buildModel({ manifest, layers, stack: resolved, projection: CS_PROJECTION });
   model.stack = resolved;
   // Contratos de /keel-docs presentes en el workspace: build los copia a docs/ del proyecto.

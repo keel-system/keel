@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Las sondas de la pasarela de pago de prueba: el arnés emitido (Support/HttpStub.cs y Support/PaymentGateway.cs,
+       compilados SOLOS) y el adaptador y el verificador emitidos de payment-checkout, contra un WireMock real.
+       stub-check copia esta carpeta una vez por pasarela y sustituye __SUBJECT__ por la carpeta del proyecto generado:
+       las rutas son las de esa carpeta, no las del repo. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\__SUBJECT__\src\PaymentCheckout.Infrastructure\PaymentCheckout.Infrastructure.csproj" />
+    <Compile Include="..\__SUBJECT__\tests\PaymentCheckout.IntegrationTests\Support\HttpStub.cs" Link="Support\HttpStub.cs" />
+    <Compile Include="..\__SUBJECT__\tests\PaymentCheckout.IntegrationTests\Support\PaymentGateway.cs" Link="Support\PaymentGateway.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+</Project>
