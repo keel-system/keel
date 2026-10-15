@@ -170,6 +170,17 @@ public sealed class ProbeOkFlow : FlowTest
         Assert.True((await Get("/livez")).Status == 200);
     }
 
+    // AssertJson compara las cadenas por su VALOR: el escape no es contrato (corrida stock-reservation de keel-dotnet).
+    [Scenario("FL-PROBE-001-D: AssertJson compara las cadenas por su valor y no por su escape")]
+    public void LasCadenasPorSuValor()
+    {
+        var literal = new FlowResponse(200, new Dictionary<string, string>(), """{"motivo":"sin respuesta del almacén","importe":2.50}""");
+        // El esperado con la é ESCAPADA, como la escribe el codificador por defecto de System.Text.Json.
+        AssertJson("""{"motivo":"sin respuesta del almac\\u00e9n","importe":2.50}""", literal);
+        Assert.ThrowsAny<Exception>(() => AssertJson("""{"motivo":"sin respuesta del almacen","importe":2.50}""", literal));
+        Assert.ThrowsAny<Exception>(() => AssertJson("""{"motivo":"sin respuesta del almacén","importe":2.5}""", literal));
+    }
+
     // Un id que el documento no declara: sale AJENO y no puntúa (keel-core/gen/junit-scoring).
     [Scenario("FL-PROBE-099-A: un caso fuera del documento")]
     public void FueraDelDocumento() => Assert.True(true);
@@ -249,12 +260,12 @@ public sealed class ProbeOrderFlow : FlowTest
   const run1 = bash(projectDir, 'infra/score-scenarios.sh');
   const lines = run1.output;
   const has = (pattern) => pattern.test(lines);
-  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/), has(/OK\s+FL-PROBE-001-C/) ? '' : lines.slice(-2500));
+  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/) && has(/OK\s+FL-PROBE-001-D/), has(/OK\s+FL-PROBE-001-D/) ? '' : lines.slice(-2500));
   step('score: los escenarios de un flujo corren en el orden escrito', has(/OK\s+FL-PROBE-005-B/), has(/FL-PROBE-005-B/) ? '' : 'sin fila FL-PROBE-005-B');
   step('score: el que falla sale FALLO con la ruta de su evidencia', has(/FALLO\s+FL-PROBE-002-A\s+ProbeFailFlow\s+build\/keel-failures\/FL-PROBE-002-A\.json/));
   step('score: el flujo que no arranca deja sus casos OMITIDOS', has(/OMITIDO\s+FL-PROBE-003-A/), has(/OMITIDO/) ? '' : 'sin fila OMITIDO');
   step('score: y lo nombra como arnés roto, con su causa', has(/ARNÉS/) && has(/ProbeInitFlow\s+\(arranque del flujo\)/) && has(/keel_tabla_que_no_existe/));
-  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && has(/RESULTADO: KO — 5 OK/));
+  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && has(/RESULTADO: KO — 7 OK/));
   step('score: un flujo del documento sin prueba sale NO_EJERC', has(/NO_EJERC\s+FL-PROBE-004/) && !has(/NO_EJERC\s+FL-PROBE-00[1235]/));
   step('score: con algo que arbitrar sale con 1', run1.status === 1, `código ${run1.status}`);
   let report = null;

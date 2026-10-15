@@ -1159,8 +1159,9 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       `doc-check` 13/13, falsados anulando la exclusión (caen justo esas sondas en `stock-reservation`,
       `catalog-extended` y `asset-vault`); keel-spring `npm test` 1664/1664 y `compile-check` en verde en las tres
       fixtures con reconciliación. Golden regenerado en los dos (solo cambian sus adaptadores y tiendas de
-      reconciliación). **Pendiente**: `store-check` de keel-spring, que levanta la `infra/` de `stock-reservation` con
-      puertos fijos y chocaría con la corrida 11e en curso.
+      reconciliación). Y tras la corrida, `store-check` de keel-spring sobre `stock-reservation`: **33/33** en
+      PostgreSQL y en MySQL, con `laPasadaSiguienteSeLlevaAlDeDetrasConElMismoLote` dentro; falsado anulando la
+      exclusión (cae esa sonda y solo esa).
     - **Medido**: `test/reconciliation.test.js` (7: el YAML igual al de keel-nest y lo que lee `ReconciliationSettings`,
       la sentencia de la tienda, el reclamo del adaptador, las purgas contra keel-nest, el registro y las notas);
       `schema-parity` ya compara `reconciliation_claim` con keel-spring; `idempotency-check.test.js` con
@@ -1213,6 +1214,18 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     reconciliación con `AgeForReconciliation`, la compensación, el reintento con la MISMA clave contra el WireMock de
     `infra/` (FL-REC-002, «exactamente dos») y el clúster de dos réplicas. Los contenedores se llaman
     `stock-reservation-*`, como los de las gemelas: no puede correr a la vez que otra corrida del mismo diseño.
+  - **11e, hecha (2026-10-14): 27/27 y huella 11** —10 de trabajo del agente, las mismas que las dos gemelas, más un
+    `harnessPatch`— (`docs/corridas/2026-10-14-stock-reservation-dotnet.md`). Sin huecos del diseño. Dos defectos del
+    generador, los dos arreglados en keel-dotnet: (1) el arnés no tenía segunda réplica y el agente de pruebas se paró en
+    FL-CLU-*; se arregló a mitad de corrida (`5718300`, `StartReplica`/`StopReplica`/`OnReplica` con un segundo proceso
+    del Api) y se propagó con `build --refresh`, sin `harnessPatch`; (2) `AssertJson` comparaba las cadenas por su texto
+    crudo y `"é"` no casaba con `"é"` (cinco falsos negativos; el agente lo parcheó en `JsonShape.cs`): ahora las
+    cadenas por su valor decodificado. `harness-check` **32/32** con FL-PROBE-001-C (la réplica arranca, responde, se
+    para y el servidor sigue) y FL-PROBE-001-D (una `é` escapada frente a una literal). El aviso de `reset-db.sh` sobre
+    las colas fue del agente de infraestructura antes de que el servidor declarara la topología: no es defecto.
+- **Inc. 11 — cerrado (2026-10-14).** `needs` (réplica, `onMiss`, `lastKnown`), `oauth2-client-credentials` y los
+  compuestos en una llamada siguen rechazados hasta el incremento 13, como en keel-nest. Siguiente: el incremento 12
+  (persistencia documental, MongoDB).
 
 ## 5. Riesgos conocidos
 

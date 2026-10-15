@@ -970,8 +970,14 @@ internal static partial class JsonShape
                 if (expectedItems.Count != actualItems.Count) problems.Add($"{path}: se esperaban {expectedItems.Count} elemento(s) y llegaron {actualItems.Count}");
                 for (var i = 0; i < Math.Min(expectedItems.Count, actualItems.Count); i++) Compare(expectedItems[i], actualItems[i], $"{path}[{i}]", problems);
                 break;
+            case JsonValueKind.String:
+                // Las cadenas por su valor DECODIFICADO: el escape no es contrato. Un JSON esperado escrito con el
+                // codificador por defecto de System.Text.Json lleva é como é, y el servidor la manda literal
+                // (corrida stock-reservation de keel-dotnet: cinco falsos negativos con «sin respuesta del almacén»).
+                if (!string.Equals(expected.GetString(), actual.GetString(), StringComparison.Ordinal)) problems.Add($"{path}: se esperaba {expected.GetRawText()} y llegó {actual.GetRawText()}");
+                break;
             default:
-                // Números por su texto exacto (2.50 no es 2.5); cadenas, booleanos y null, por su valor.
+                // Números por su texto exacto (2.50 no es 2.5); booleanos y null, por su texto (no tienen escapes).
                 if (expected.GetRawText() != actual.GetRawText()) problems.Add($"{path}: se esperaba {expected.GetRawText()} y llegó {actual.GetRawText()}");
                 break;
         }
