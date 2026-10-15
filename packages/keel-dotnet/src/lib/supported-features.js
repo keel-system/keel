@@ -38,8 +38,9 @@ const ACCEPTED_NOT_EMITTED = {};
 const PENDING_OPERATION_FEATURES = [
   // El registro de idempotencia de petición se genera con persistencia relacional (adelantado del incremento 10, como en
   // keel-nest): sin persistencia no hay dónde registrar la clave en la transacción del comando.
-  { key: 'idempotency', what: 'idempotency sin persistencia (el registro de claves necesita la base)', increment: 'incremento 10', unless: (layers) => Boolean(layers?.persistence) },
-  { key: 'cache', what: 'cache (la caché de la consulta)', increment: 'incremento 13' }
+  { key: 'idempotency', what: 'idempotency sin persistencia (el registro de claves necesita la base)', increment: 'incremento 10', unless: (layers) => Boolean(layers?.persistence) }
+  // La caché de lectura (`cache`) se genera desde el incremento 13f: el puerto, el adaptador sobre Redis/Valkey y la
+  // invalidación en el mediator.
 ];
 
 /**

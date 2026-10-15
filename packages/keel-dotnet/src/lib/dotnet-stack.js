@@ -79,7 +79,11 @@ export const PACKAGES = {
   // moderada), corregidos en la 10.0.13. Es la ÚNICA excepción a la regla de las dos semanas (se publicó el 2026-10-13):
   // un parche de servicio de Microsoft frente a emitir a sabiendas una versión con un aviso de gravedad alta. Revisar
   // al subir MailKit: si MimeKit ya pide la corregida, la línea sobra.
-  'System.Security.Cryptography.Pkcs': { version: '10.0.13', license: 'MIT', use: 'transitiva de MimeKit fijada en la versión corregida (capa mail)' }
+  'System.Security.Cryptography.Pkcs': { version: '10.0.13', license: 'MIT', use: 'transitiva de MimeKit fijada en la versión corregida (capa mail)' },
+  // La caché de lectura (incremento 13f): StackExchange.Redis, el cliente de Redis de .NET (también habla con Valkey).
+  // La 3.3.1 salió el 2026-09-22; la 3.4.0 está retirada del catálogo y la 3.4.5 tiene dos días. Su transitiva
+  // Pipelines.Sockets.Unofficial es MIT: la comprueba cs-check. Verificada el 2026-10-15.
+  'StackExchange.Redis': { version: '3.3.1', license: 'MIT', use: 'caché de lectura sobre Redis o Valkey (use-cases.<op>.cache)' }
 };
 
 /**

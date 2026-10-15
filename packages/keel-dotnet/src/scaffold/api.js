@@ -22,6 +22,7 @@ import { usesReconciliationSettings } from './reconciliation-claim.js';
 import { clientAdaptersNamespace, usesHttpClients } from './http-clients.js';
 import { mailInfraNamespace, usesMail } from './mail.js';
 import { paymentsProgram } from './payments.js';
+import { cacheProgram } from './cache.js';
 
 // Los barridos del perfil, antes de la persistencia: AddPersistence solo pone los defaults si nadie registró estos.
 const SWEEPS = `
@@ -52,6 +53,8 @@ function programCs(model) {
   const useCases = usesMediator(model);
   // La capa payments: la pasarela del stack y la entrada de su aviso.
   const payments = paymentsProgram(model);
+  // La caché de lectura: el adaptador y su store.
+  const caching = cacheProgram(model);
   const persistence = usesPersistence(model);
   const usings = [
     wireNamespace(model),
@@ -65,7 +68,8 @@ function programCs(model) {
     ...(usesScheduling(model) ? [schedulingNamespace(model)] : []),
     ...(usesHttpClients(model) ? [clientAdaptersNamespace(model)] : []),
     ...(usesMail(model) ? [mailInfraNamespace(model)] : []),
-    ...payments.usings
+    ...payments.usings,
+    ...caching.usings
   ];
   const registration = useCases
     ? `
@@ -140,7 +144,7 @@ builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);
 // El contrato del cable: todo cuerpo JSON que la API lee o escribe pasa por estas opciones (WireJson).
-builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${clients}${mailing}${payments.registration}${database}${security}${messaging}${clock}
+builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${clients}${mailing}${payments.registration}${caching.registration}${database}${security}${messaging}${clock}
 
 var app = builder.Build();
 app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);${schema}${pipeline}

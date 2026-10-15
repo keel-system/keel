@@ -26,6 +26,7 @@ import { parametersNamespace, parametersTestInstance, usesServiceParameters } fr
 import { clientAdaptersNamespace, usesHttpClients } from './http-clients.js';
 import { mailInfraNamespace, usesMail } from './mail.js';
 import { paymentInfraNamespace, usesPayments } from './payments.js';
+import { cacheNamespace, usesCache } from './cache.js';
 
 /** ¿Hay casos de uso que despachar? Sin operaciones no se genera nada de esto. */
 export function usesMediator(model) {
@@ -47,13 +48,14 @@ export function generate(model) {
     abstractions('Handlers', handlersBody()),
     abstractions('IUseCaseMediator', mediatorPortBody()),
     infra('IUseCaseTransactions', transactionsPortBody(), []),
-    infra('UseCaseMediator', mediatorBody(), [
+    infra('UseCaseMediator', mediatorBody(model), [
       'System.Collections.Concurrent',
       'System.Diagnostics',
       'Microsoft.Extensions.DependencyInjection',
       'Microsoft.Extensions.Logging',
       namespaceOf(model, 'abstractions'),
-      namespaceOf(model, 'errors')
+      namespaceOf(model, 'errors'),
+      ...(usesCache(model) ? [namespaceOf(model, 'ports'), cacheNamespace(model)] : [])
     ]),
     infra('UseCaseRegistration', registrationBody(model), registrationUsings(model))
   ];
@@ -149,7 +151,41 @@ public sealed class PassThroughUseCaseTransactions : IUseCaseTransactions
 }`;
 }
 
-function mediatorBody() {
+// Sin caché, el resultado del handler sale tal cual.
+const PLAIN_RETURNING_HANDLED = `
+    private Task<TResult> Handled<TResult>(IReturningCommand<TResult> command, CancellationToken cancellationToken) =>
+        Wrapper<ResultWrapper<TResult>>(typeof(ReturningCommandWrapper<,>), command, typeof(TResult)).Handle(command, services, cancellationToken);`;
+
+// Con caché, el comando vacía lo que invalida DENTRO de la transacción del caso de uso: el vaciado espera al commit (si
+// revierte, no se vacía nada) y, sin transacción, ocurre antes de volver.
+const CACHED_RETURNING_HANDLED = `
+    private async Task<TResult> Handled<TResult>(IReturningCommand<TResult> command, CancellationToken cancellationToken)
+    {
+        var result = await Wrapper<ResultWrapper<TResult>>(typeof(ReturningCommandWrapper<,>), command, typeof(TResult)).Handle(command, services, cancellationToken);
+        await Invalidate(command, cancellationToken);
+        return result;
+    }
+
+    /// <summary>
+    /// Vacía las cachés que el diseño invalida con este comando (CacheInvalidations, keel-core/gen/cache-plan.js). Dentro de
+    /// la transacción del caso de uso: la caché lo deja para tras el commit.
+    /// </summary>
+    private async Task Invalidate(IMessage message, CancellationToken cancellationToken)
+    {
+        var caches = CacheInvalidations.Of(message);
+        if (caches.Count == 0)
+        {
+            return;
+        }
+        var operationCache = services.GetRequiredService<IOperationCache>();
+        foreach (var cache in caches)
+        {
+            await operationCache.Clear(cache, cancellationToken);
+        }
+    }`;
+
+function mediatorBody(model) {
+  const cache = usesCache(model);
   return `/// <summary>
 /// Fachada única de despacho de casos de uso: resuelve el handler del mensaje en el contenedor y lo invoca.
 /// </summary>
@@ -184,12 +220,10 @@ public sealed partial class UseCaseMediator(IServiceProvider services, IUseCaseT
 
     private async Task<bool> Handled(ICommand command, CancellationToken cancellationToken)
     {
-        await Wrapper<CommandWrapper>(typeof(CommandWrapper<>), command).Handle(command, services, cancellationToken);
+        await Wrapper<CommandWrapper>(typeof(CommandWrapper<>), command).Handle(command, services, cancellationToken);${cache ? '\n        await Invalidate(command, cancellationToken);' : ''}
         return true;
     }
-
-    private Task<TResult> Handled<TResult>(IReturningCommand<TResult> command, CancellationToken cancellationToken) =>
-        Wrapper<ResultWrapper<TResult>>(typeof(ReturningCommandWrapper<,>), command, typeof(TResult)).Handle(command, services, cancellationToken);
+${cache ? CACHED_RETURNING_HANDLED : PLAIN_RETURNING_HANDLED}
 
     private static T Wrapper<T>(Type open, IMessage message, Type? result = null)
     {
@@ -356,6 +390,10 @@ function useCasesTest(model) {
   const payments = usesPayments(model);
   if (payments) usings.push(paymentInfraNamespace(model));
   const paymentsLine = payments ? '\n        services.AddPayments(PaymentGatewaySettings.Unreachable);' : '';
+  // Con caché, los handlers que cachean reciben el puerto, y el mediator lo pide para invalidar: el registro real, sin store.
+  const caching = usesCache(model);
+  if (caching) usings.push(cacheNamespace(model));
+  const cacheLine = caching ? '\n        services.AddOperationCache(CacheSettings.Disabled);' : '';
   const passThrough = persistence
     ? `
             // Sin base: la transacción de este despacho es el paso directo, no la de EF.
@@ -367,7 +405,7 @@ function useCasesTest(model) {
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddUseCases();${persistenceLine}${bridgeLine}${scopeLine}${parametersLine}${clientsLine}${mailLine}${paymentsLine}
+        services.AddUseCases();${persistenceLine}${bridgeLine}${scopeLine}${parametersLine}${clientsLine}${mailLine}${paymentsLine}${cacheLine}
         extra?.Invoke(services);
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }

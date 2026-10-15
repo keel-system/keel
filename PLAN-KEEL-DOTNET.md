@@ -1488,6 +1488,37 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     había resuelto en el arnés (`harnessPatch`); ahora `EventMetadata.EventId` es `string` y el lector no le exige forma
     (`MessagingTests`, `cs-check --fixtures` y `broker-check` con RabbitMQ 22/22). `payments-cancel-reason` aparece en las
     dos corridas: candidato obligatorio a id en la próxima minor de la capa. **Incremento 13, pagos: cerrado.**
+  - **13f, la caché de lectura (hecho, 2026-10-15).** `keel-dotnet` genera `cache` sobre Redis y Valkey, con el reparto de
+    keel-nest: se cachea la RESPUESTA de la operación, la consulta la pone el agente en el handler (después de lo que
+    dependa de quién llama) y la invalidación, build. `src/scaffold/cache.js` emite el puerto `IOperationCache` en
+    `Application/Ports` (`GetOrLoad`, `Evict`, `Clear`, `CachedOperation<T, TMessage>`, `CacheKey.Of`), las cachés del diseño
+    en `Application/Support/CachedOperations.cs` (nombre, TTL y clave de `keel-core/gen/cache-plan.js`), y en
+    `Infrastructure/Cache` el adaptador `RedisOperationCache` (degrada a miss, no guarda nulos, una carga por entrada, y una
+    carga anterior al vaciado no guarda), el store sobre **StackExchange.Redis 3.3.1** (MIT; `AbortOnConnectFail = false`,
+    `BacklogPolicy.FailFast` —la rama 3.x encola por defecto—, plazo por orden), `CacheInvalidations` (la tabla de keel-core,
+    que el `UseCaseMediator` aplica dentro de la transacción del caso de uso) y el registro. `cache.yaml` sale a
+    `keel-core/gen/cache-config.js` (estaba en keel-nest, que lo importa ahora). Las dos transacciones ganan
+    `AfterCommitOrNow`: el vaciado espera al commit y, sin transacción, ocurre antes de responder (el `AfterCommit` de
+    siempre lanza la acción sin esperarla). El arnés gana `ClearCache()` con la orden de `reset-db.sh`, y la skill es
+    `keel-dotnet-redis`. La frontera deja de avisar de la caché.
+    - **Lo que C# cambia**: el codec es System.Text.Json con las opciones del cable, sin lector por DTO. Con una
+      diferencia al leer (`CacheCodec`): ninguna propiedad se exige presente. Una respuesta con `nulls: omit` se guarda sin
+      esos campos y los DTO los declaran `required`, así que con las opciones del cable la entrada **no se leía nunca** y la
+      caché no acertaba jamás, en silencio. Lo destapó `cache-check` (el acierto volvía al origen); la ida y vuelta de la
+      prueba emitida no lo veía porque su muestra no llevaba nulos, y ahora hace una segunda vuelta con ellos (falsada:
+      leer con las opciones del cable hace caer la de `GetProductBySlug`).
+    - **Medido**: la prueba emitida `OperationCacheTests` EJECUTA el adaptador contra un store en memoria (acierto con su
+      clave, su TTL y el JSON del cable, nulos, `Cacheable`, error de la carga, store caído, entrada ilegible, diez lecturas
+      a la vez, el vaciado de una caché sin tocar otras con la carga anterior, sin store) y la ida y vuelta de cada respuesta
+      cacheada del diseño; falsada con cinco sabotajes, cada uno en su caso. `npm run cache-check` (nuevo) contra Redis y
+      Valkey reales con la sonda `scripts/probes/CacheProbes` (consola, porque sus pasos tienen orden): **25/25**, falsado
+      con `offline` (la cola de la rama 3.x: la lectura esperó 4,5 s) y `ttl`. `test/cache.test.js` (sin red): `cache.yaml`
+      idéntico al de keel-nest y leído por claves que declara, nombres y TTL de keel-core, la tabla de invalidación, el
+      vaciado tras el commit, el puerto y la nota en el handler, el registro en la prueba del contenedor y en `Program.cs`,
+      `ClearCache()` con la orden de `reset-db.sh`. `cs-check --fixtures` 132/132, **2 604 pruebas**, licencias de 103
+      paquetes (StackExchange.Redis y su transitiva Pipelines.Sockets.Unofficial, MIT).
+    - Los dos diseños con caché (`asset-vault`, `catalog-extended`) siguen fuera de la frontera por storage, `needs`, OAuth2
+      y la autoría: la corrida espera al final del 13. Siguiente: 13g (storage).
 
 ## 5. Riesgos conocidos
 

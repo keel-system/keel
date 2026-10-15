@@ -108,6 +108,9 @@ export const PLACES = {
   // Los cobros con pasarela (capa payments, incremento 13): el vocabulario neutro del puerto es dominio; el aplicador de
   // desenlaces, el aviso y la reconciliación, aplicación; el cliente HTTP, la configuración y el verificador, infraestructura,
   // con el adaptador de cada pasarela en su carpeta.
+  // La caché de lectura (use-cases.<op>.cache, incremento 13f): el puerto en Application/Ports, las cachés del diseño en
+  // Application/Support, y el adaptador, el store y la invalidación en Infrastructure/Cache.
+  cache: ['infrastructure', 'Cache'],
   payment: ['domain', 'Payment'],
   paymentApp: ['application', 'Payment'],
   paymentInfra: ['infrastructure', 'Payment'],

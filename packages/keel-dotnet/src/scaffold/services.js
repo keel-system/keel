@@ -27,6 +27,8 @@ import { CALLER_SCOPE_PORT, callerResolution, scopedOperation } from './security
 import { schedulerPath } from './scheduling.js';
 import { callMethod, clientPort, clientsNamespace } from './http-clients.js';
 import { mailNamespace, mailPorts, sendsMail } from './mail.js';
+import { OPERATION_CACHE_PORT, cacheCall, cachesOperation } from './cache.js';
+import { cacheNote } from 'keel-core/gen/cache-plan';
 
 export function generate(model) {
   const files = [];
@@ -278,6 +280,12 @@ function renderHandler(model, operation) {
     usings.push(namespaceOf(model, 'ports'), mailNamespace(model));
     for (const port of mailPorts(model)) if (!dependencies.includes(port)) dependencies.push(port);
   }
+  // La caché de lectura (use-cases.<op>.cache): el puerto delante, y la caché del diseño en CachedOperations. Dónde se
+  // consulta lo decide el handler (después de lo que dependa de quién llama), como en keel-spring y keel-nest.
+  if (cachesOperation(model, operation)) {
+    usings.push(namespaceOf(model, 'ports'), namespaceOf(model, 'appSupport'));
+    dependencies.push(OPERATION_CACHE_PORT);
+  }
   const local = (type) => {
     const name = type.replace(/^I(?=[A-Z])/, '');
     return name[0].toLowerCase() + name.slice(1);
@@ -352,6 +360,8 @@ function handlerNotes(model, operation) {
         'El adaptador y el renderizador ya están escritos: no los toques — ver la skill keel-dotnet-mail'
     );
   }
+  const caching = cacheNote(model, operation, { call: cacheCall(operation) });
+  if (caching) notes.push(caching);
   for (const note of reconciliationNotes(operation)) notes.push(note);
   const compensation = compensationNote(operation);
   if (compensation) notes.push(compensation);

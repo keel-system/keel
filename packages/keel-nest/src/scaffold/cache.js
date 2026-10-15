@@ -33,7 +33,7 @@ import { PAGED_RESPONSE_TS } from './dtos.js';
 import { usesPersistence } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
-import { envFor } from 'keel-core/gen/runtime-env';
+import { cacheYaml } from 'keel-core/gen/cache-config';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const WIRE_TS = 'src/application/support/wire.ts';
@@ -239,24 +239,7 @@ function flag(configuration: Configuration, key: string, fallback: boolean): boo
   return tsModule(CACHE_SETTINGS_TS, [{ symbol: 'Configuration', from: CONFIG_TS, type: true }], body);
 }
 
-/** config/parameters/<perfil>/cache.yaml: las mismas variables y defaults que el redis.yaml de keel-spring. */
-function cacheYaml(profile) {
-  const lines = ['cache:'];
-  if (profile === 'test') {
-    lines.push('  # Las pruebas del perfil test no levantan infraestructura: sin caché, toda lectura va al origen.', '  enabled: false');
-  } else {
-    lines.push('  enabled: true');
-  }
-  lines.push(
-    '  redis:',
-    `    host: ${envFor('REDIS_HOST', profile)}`,
-    `    port: ${envFor('REDIS_PORT', profile)}`,
-    '    # Una caché caída no puede retener a quien lee: pasado el plazo, la lectura va al origen.',
-    '    connect-timeout-ms: 2000',
-    '    command-timeout-ms: 2000'
-  );
-  return `${lines.join('\n')}\n`;
-}
+// config/parameters/<perfil>/cache.yaml: el NEUTRAL de keel-core (keel-core/gen/cache-config.js), el mismo que keel-dotnet.
 
 // ─── infrastructure/cache/cached-responses.ts ────────────────────────────────
 

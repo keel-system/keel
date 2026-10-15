@@ -35,6 +35,7 @@ import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './
 import { usesKafka } from './messaging.js';
 import { closingCredentialExpression, credentialsCs, flowTestCredentialMembers, smokeCredentialsCase } from './identity-harness.js';
 import { paymentHarnessFile, paymentNoticeMembers } from './payment-harness.js';
+import { cacheHarnessMembers } from './cache.js';
 import { httpStubFile, idLiteralMember, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
 import { mailHarnessFile, mailSmokeCase } from './mail-harness.js';
 import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
@@ -148,6 +149,8 @@ function flowTestCs(model) {
   helpers.push(...replicaMembers(model));
   // Con pagos, los dos helpers que MANDAN el aviso de la pasarela (el resto vive en Support/PaymentGateway.cs).
   helpers.push(...paymentNoticeMembers(model));
+  // Con caché, el vaciado a mitad de escenario.
+  helpers.push(...cacheHarnessMembers(model));
   return csFile({
     namespace: supportNamespace(model),
     usings: ['System.Collections.Concurrent', 'Xunit'],

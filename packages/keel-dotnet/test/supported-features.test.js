@@ -121,7 +121,7 @@ test('dominio, casos de uso y API se generan sin aviso (la API llegó en el incr
   assert.deepEqual(warnings, []);
 });
 
-test('una operación con idempotency sin persistencia o con cache se acepta avisando del incremento de su mecanismo; el reloj ya no avisa', () => {
+test('una operación con idempotency sin persistencia se acepta avisando del incremento de su mecanismo; el reloj y la caché ya no avisan', () => {
   const layers = layersWith('domain', 'use-cases');
   layers['use-cases'] = {
     operations: {
@@ -135,9 +135,9 @@ test('una operación con idempotency sin persistencia o con cache se acepta avis
   };
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases'), layers);
   assert.deepEqual(errors, []);
-  assert.equal(warnings.length, 2);
+  // La caché (13f) ya se genera: getThing no avisa.
+  assert.equal(warnings.length, 1);
   assert.match(warnings[0], /createThing declara idempotency .*incremento 10/);
-  assert.match(warnings[1], /getThing declara cache .*incremento 13/);
 });
 
 test('la telemetría se rechaza en vez de estamparse sin efecto', () => {

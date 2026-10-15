@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- La sonda de la caché de lectura: el store y el adaptador emitidos de catalog-extended contra un Redis o un Valkey
+       reales. Es una aplicación de consola y no una suite de xUnit porque sus pasos tienen ORDEN (parar el store y
+       levantarlo). cache-check la copia junto al proyecto generado: las rutas son las de esa carpeta, no las del repo. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\catalog-extended\src\Catalog.Infrastructure\Catalog.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

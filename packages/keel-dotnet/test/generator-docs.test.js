@@ -138,7 +138,9 @@ const SKILL_SUBJECTS = {
   // Los cobros: la skill neutra y la de cada pasarela, con la suya.
   'keel-dotnet-payments': { fixtures: ['payment-checkout'], stack: { broker: 'rabbitmq', database: 'postgresql', paymentGateway: 'stripe' } },
   'keel-dotnet-stripe': { fixtures: ['payment-checkout'], stack: { broker: 'rabbitmq', database: 'postgresql', paymentGateway: 'stripe' } },
-  'keel-dotnet-mercadopago': { fixtures: ['payment-checkout'], stack: { broker: 'rabbitmq', database: 'postgresql', paymentGateway: 'mercadopago' } }
+  'keel-dotnet-mercadopago': { fixtures: ['payment-checkout'], stack: { broker: 'rabbitmq', database: 'postgresql', paymentGateway: 'mercadopago' } },
+  // La caché de lectura: los dos diseños que la declaran.
+  'keel-dotnet-redis': { fixtures: ['asset-vault', 'catalog-extended'], stack: { broker: 'rabbitmq', database: 'postgresql', cache: 'redis' } }
 };
 
 function planWith(fixture, stack) {

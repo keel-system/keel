@@ -284,6 +284,22 @@ public sealed partial class PersistenceTransactions(${context} db, DatabaseSetti
     }
 
     /// <summary>
+    /// Como <see cref="AfterCommit"/>, pero sin transacción abierta la ESPERA en vez de lanzarla: lo que lo llama necesita
+    /// que haya ocurrido al volver (la caché vaciada antes de responder, o la siguiente lectura serviría el valor viejo).
+    /// Con transacción abierta, queda para tras el commit, como <see cref="AfterCommit"/>.
+    /// </summary>
+    public Task AfterCommitOrNow(Func<Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        if (afterCommit is null)
+        {
+            return RunAfterCommit([action]);
+        }
+        afterCommit.Add(action);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
     /// Ejecuta <paramref name="work"/> en una transacción: la ABIERTA si la hay (se une a ella, como la propagación por
     /// defecto de Spring) o una nueva, que confirma si termina y revierte si lanza. Los fallos del motor salen ya
     /// traducidos al contrato (PersistenceErrors).
