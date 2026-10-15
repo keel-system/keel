@@ -32,18 +32,19 @@ import { callsPaymentGateway } from 'keel-core/gen/payments-model';
 import { csFile, csLocal, csMember, csString, declType, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
 import { wireNamespace } from './wire.js';
-import { usesRelational, dbContextClass, persistenceNamespace, rowsNamespace } from './persistence.js';
+import { usesPersistence, usesDocument, dbContextClass, persistenceNamespace, rowsNamespace } from './persistence.js';
+import { outboxDocumentLiteral } from './document-stores.js';
 import { jsonRead, rulesArgs } from './endpoints.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
 // ─── Qué se genera ───────────────────────────────────────────────────────────────────────────────
 
-/** ¿Hay mensajería que generar? Publica o consume, sobre persistencia relacional. */
+/** ¿Hay mensajería que generar? Publica o consume, sobre persistencia (relacional o, desde el incremento 12c, documental). */
 export function usesMessaging(model) {
   if (!model.layersPresent?.messaging) return false;
   if ((model.events ?? []).length === 0 && (model.subscriptions ?? []).length === 0) return false;
-  return usesRelational(model);
+  return usesPersistence(model);
 }
 
 /** ¿Hay puente? Los eventos salen del adaptador de repositorio. */
@@ -338,9 +339,14 @@ public sealed partial class ${stub}(ILogger<${stub}> logger) : ${publisherPort(e
 function bridgeFile(model) {
   const { namespace, path } = located(model, 'messaging', bridgeClass(model));
   const outbox = usesDotnetOutbox(model);
+  // Sobre documentos, la fila del outbox se INSERTA en la sesión del cambio, y eso es asíncrono: Publish devuelve Task.
+  const document = usesDocument(model);
   const usings = [namespaceOf(model, 'events'), namespaceOf(model, 'integrationEvents'), namespaceOf(model, 'correlation')];
   const ctor = [];
-  if (outbox) {
+  if (outbox && document) {
+    usings.push(persistenceNamespace(model), 'MongoDB.Bson', 'MongoDB.Driver');
+    ctor.push('PersistenceTransactions transactions', 'MessagingSettings settings');
+  } else if (outbox) {
     usings.push(persistenceNamespace(model), rowsNamespace(model));
     ctor.push(`${dbContextClass(model)} db`, 'MessagingSettings settings');
   } else {
@@ -361,7 +367,31 @@ function bridgeFile(model) {
                 return;
             }`;
   });
-  const append = outbox
+  const append = outbox && document
+    ? `
+
+    /// <summary>
+    /// La fila del outbox, en la sesión de la transacción del cambio: el documento del evento y el del agregado confirman o
+    /// abortan juntos. Sin transacción abierta no hay cambio al que atarlo, y es un error.
+    /// </summary>
+    private void Append(string routingKey, string eventType, string payload) =>
+        pending.Add(${outboxDocumentLiteral()});
+
+    private readonly List<BsonDocument> pending = [];
+
+    private async Task Flush(CancellationToken cancellationToken)
+    {
+        if (pending.Count == 0)
+        {
+            return;
+        }
+        var session = transactions.Session
+            ?? throw new InvalidOperationException("El outbox se escribe dentro de la transacción del cambio, y no hay ninguna abierta");
+        var rows = pending.ToList();
+        pending.Clear();
+        await transactions.Collection(${csString('outbox_event')}).InsertManyAsync(session, rows, cancellationToken: cancellationToken);
+    }`
+    : outbox
     ? `
 
     /// <summary>La fila del outbox, en la transacción del cambio: el evento y el cambio confirman o revierten juntos.</summary>
@@ -377,6 +407,26 @@ function bridgeFile(model) {
             Attempts = 0
         });`
     : '';
+  const publish = document
+    ? `    /// <summary>Lo llama el adaptador de repositorio al guardar, dentro de la transacción del caso de uso.</summary>
+    public async Task Publish(IReadOnlyList<IDomainEvent> events, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        foreach (var domainEvent in events)
+        {
+            Route(domainEvent);
+        }
+        ${outbox ? 'await Flush(cancellationToken);' : 'await Task.CompletedTask;'}
+    }`
+    : `    /// <summary>Lo llama el adaptador de repositorio al guardar, dentro de la transacción del caso de uso.</summary>
+    public void Publish(IReadOnlyList<IDomainEvent> events)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        foreach (var domainEvent in events)
+        {
+            Route(domainEvent);
+        }
+    }`;
   const body = `/// <summary>
 /// Traduce cada evento de dominio a su evento de integración y lo entrega ${
     outbox
@@ -390,15 +440,7 @@ function bridgeFile(model) {
 /// </remarks>
 public sealed class ${bridgeClass(model)}(${ctor.join(', ')})
 {
-    /// <summary>Lo llama el adaptador de repositorio al guardar, dentro de la transacción del caso de uso.</summary>
-    public void Publish(IReadOnlyList<IDomainEvent> events)
-    {
-        ArgumentNullException.ThrowIfNull(events);
-        foreach (var domainEvent in events)
-        {
-            Route(domainEvent);
-        }
-    }
+${publish}
 
     private void Route(IDomainEvent domainEvent)
     {

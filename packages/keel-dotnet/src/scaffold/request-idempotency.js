@@ -18,7 +18,8 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { idempotencyOutcomeCodes } from 'keel-core/gen';
 import { IDEMPOTENCY_RECORD, IDEMPOTENCY_HEADER, registryOperations, usesRequestIdempotency as usesRegistryInDesign } from 'keel-core/gen/request-idempotency';
 import { csFile, csString, located, namespaceOf, solution } from './render.js';
-import { usesRelational, rowsNamespace, persistenceNamespace } from './persistence.js';
+import { usesPersistence, usesDocument, rowsNamespace, persistenceNamespace } from './persistence.js';
+import { documentIdempotencyStoreBody } from './document-stores.js';
 import { usesApi } from './rest-support.js';
 import { usesOutboundIdempotency } from './http-clients.js';
 
@@ -27,9 +28,12 @@ export const IDEMPOTENCY_ROW = 'IdempotencyRecordRow';
 export const IDEMPOTENCY_PORT = 'IIdempotencyStore';
 const ADAPTER = 'IdempotencyStore';
 
-/** ¿Se genera el registro? Con persistencia relacional y alguna operación que lo use (no la guarda por clave natural). */
+/**
+ * ¿Se genera el registro? Con persistencia —relacional o, desde el incremento 12c, documental— y alguna operación que lo
+ * use (no la guarda por clave natural).
+ */
 export function usesRequestIdempotency(model) {
-  return usesRelational(model) && usesRegistryInDesign(model);
+  return usesPersistence(model) && usesRegistryInDesign(model);
 }
 
 /** ¿Viaja la clave por la cabecera Idempotency-Key? Solo con `client-key`, y con API. */
@@ -49,7 +53,10 @@ export function idempotencyNamespace(model) {
 export function generate(model) {
   // La firma canónica la usa también la clave de idempotencia SALIENTE (http-clients): sin registro, solo ella.
   if (!usesRequestIdempotency(model)) return usesOutboundIdempotency(model) ? [commandSignature(model)] : [];
-  const files = [storePort(model), conflictException(model), reuseException(model), commandSignature(model), recordRow(model), storeAdapter(model)];
+  const files = [storePort(model), conflictException(model), reuseException(model), commandSignature(model)];
+  // El adaptador, por modelo: sobre documentos no hay fila, y el `_id` subdocumento arbitra la carrera (incremento 12c).
+  if (usesDocument(model)) files.push(documentStoreAdapter(model));
+  else files.push(recordRow(model), storeAdapter(model));
   // El contexto es el camino de la CABECERA: solo con `client-key`. Con `payload-hash` o `payload-field` la clave sale
   // del propio comando y no hay nada que transportar.
   if (usesIdempotencyHeader(model)) files.push(idempotencyContext(model), headerMiddleware(model));
@@ -481,6 +488,14 @@ public sealed class ${ADAPTER}(${context} db, PersistenceTransactions transactio
   return {
     path,
     content: csFile({ namespace, usings: ['Microsoft.EntityFrameworkCore', 'Npgsql', idempotencyNamespace(model), rowsNamespace(model)], body })
+  };
+}
+
+function documentStoreAdapter(model) {
+  const { namespace, path } = located(model, 'persistence', ADAPTER);
+  return {
+    path,
+    content: csFile({ namespace, usings: ['MongoDB.Bson', 'MongoDB.Driver', idempotencyNamespace(model)], body: documentIdempotencyStoreBody({ adapter: ADAPTER, port: IDEMPOTENCY_PORT }) })
   };
 }
 

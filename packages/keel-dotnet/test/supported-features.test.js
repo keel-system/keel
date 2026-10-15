@@ -62,7 +62,7 @@ test('la persistencia relacional (incremento 6) y la documental (12b) se generan
   }
 });
 
-test('sobre documentos, lo que guarda su estado en una colección del generador se rechaza nombrando el 12c', () => {
+test('sobre documentos, lo que guarda su estado en una colección del generador se genera (incremento 12c), igual que sobre la relacional', () => {
   const layers = {
     ...layersWith('domain', 'use-cases', 'messaging'),
     persistence: { default: { model: 'document' } },
@@ -75,17 +75,10 @@ test('sobre documentos, lo que guarda su estado en una colección del generador 
     },
     dependencies: { dependencies: { pricing: { activations: { quote: { reconciledBy: 'sweep' } } } } }
   };
-  const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging', 'dependencies'), layers);
-  assert.equal(errors.length, 4, errors.join('\n'));
-  for (const [what, error] of [['messaging', errors[0]], ['sweep', errors[1]], ['create', errors[2]], ['pricing.quote', errors[3]]]) {
-    assert.match(error, /sobre persistencia documental .*incremento 12c/, what);
-    assert.ok(error.includes(what), `${what}: ${error}`);
+  for (const model of ['document', 'relational']) {
+    const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging', 'dependencies'), { ...layers, persistence: { default: { model } } });
+    assert.deepEqual(errors, [], model);
   }
-  // La guarda por clave natural no necesita registro: no se rechaza.
-  assert.ok(!errors.some((error) => error.includes('upsert')));
-  // Lo mismo sobre la relacional se genera.
-  const relational = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging', 'dependencies'), { ...layers, persistence: { default: { model: 'relational' } } });
-  assert.ok(!relational.errors.some((error) => error.includes('12c')));
 });
 
 test('la mensajería se genera sobre persistencia relacional con los tres brokers (incremento 9); sin persistencia se rechaza', () => {

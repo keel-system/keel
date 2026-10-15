@@ -46,6 +46,8 @@ import { groupEnv, kafkaConsumption, publishedChannels, queueEnv, snsSqsConsumpt
 import { harnessQueueName } from 'keel-core/gen/messaging-provisioning';
 import { csFile, csMember, csString } from './render.js';
 import { usesDotnetOutbox, usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
+import { usesDocument } from './persistence.js';
+import { OUTBOX, clearAbandonedScript } from 'keel-core/gen/mongo-probes';
 
 /** ¿Lleva el arnés la mensajería? Con los brokers que keel-dotnet genera. */
 export function usesMessagingHarness(model) {
@@ -152,7 +154,7 @@ ${(model.subscriptions ?? []).map((sub) => deliverMethod(sub)).join('')}
 
     /// <summary>El broker arriba y el servidor conectado a él; falla diciéndolo si no llega.</summary>
     protected static Task AssertBrokerConnected() => BrokerHarness.PrepareAsync();
-${outbox ? outboxMembers() : ''}}`;
+${outbox ? outboxMembers(model) : ''}}`;
 }
 
 // ── Lo común a los dos brokers ───────────────────────────────────────────────────────────────────
@@ -820,15 +822,7 @@ ${commonPlumbing(model, broker)}
         }
     }
 ${outbox ? `
-    /// <summary>La marca de las filas aparcadas: una fecha que ningún backoff alcanza.</summary>
-    private const string Parked = "2999-01-01 00:00:00+00";
-
-    private static void ParkOutbox() =>
-        Harness.Db($"UPDATE outbox_event SET next_attempt_at = '{Parked}' WHERE published_at IS NULL AND attempts < {MaxAttempts}");
-
-    private static void UnparkOutbox() =>
-        Harness.Db($"UPDATE outbox_event SET next_attempt_at = NULL WHERE next_attempt_at = '{Parked}'");
-` : ''}${probe && probeChannel ? `
+${parkOutbox(model)}` : ''}${probe && probeChannel ? `
     private const string TopologyProbeQueue = ${csString(harnessQueueName(probeChannel))};
     private static readonly string TopologyProbeTopic = Environment.GetEnvironmentVariable("MESSAGING_DESTINATION") ?? ${csString(model.messaging?.destinationDefault ?? '')};
 
@@ -916,7 +910,7 @@ function deliverMethod(sub) {
 // arnés de keel-spring).
 const ABANDONED = 1000000;
 
-function outboxMembers() {
+function outboxMembers(model) {
   return `
     /// <summary>
     /// Cuántos eventos se rindió el outbox: agotaron sus reintentos y no salieron nunca. El Then natural de casi cualquier
@@ -933,7 +927,35 @@ function outboxMembers() {
     protected static void AbandonOutboxEvent(string eventType) => BrokerHarness.AbandonOutboxEvent(eventType);
 
     /// <summary>Retira lo que AbandonOutboxEvent rindió: la purga no lo borra (solo lo publicado), y ensuciaría a los demás.</summary>
-    protected static void ClearAbandonedOutboxEvents() => Harness.Db("DELETE FROM outbox_event WHERE published_at IS NULL AND attempts >= ${ABANDONED}");
+    protected static void ClearAbandonedOutboxEvents() => ${
+      usesDocument(model) ? `Harness.MongoEval(${csString(clearAbandonedScript(ABANDONED))})` : `Harness.Db("DELETE FROM outbox_event WHERE published_at IS NULL AND attempts >= ${ABANDONED}")`
+    };
+`;
+}
+
+/**
+ * Aparcar el outbox mientras se resiembra la topología: las filas pendientes con una fecha de reintento que ningún backoff
+ * alcanza, y de vuelta. Sobre documentos, el mismo filtro con mongosh (incremento 12c).
+ */
+function parkOutbox(model) {
+  if (usesDocument(model)) {
+    const parked = 'new Date("2999-01-01T00:00:00Z")';
+    const { collection, publishedAt, attempts } = OUTBOX;
+    return `    private static void ParkOutbox() =>
+        Harness.MongoEval($"db.getCollection(\\"${collection}\\").updateMany({{ ${publishedAt}: null, ${attempts}: {{ $lt: {MaxAttempts} }} }}, {{ $set: {{ next_attempt_at: ${parked.replaceAll('"', '\\"')} }} }}).modifiedCount");
+
+    private static void UnparkOutbox() =>
+        Harness.MongoEval(${csString(`db.getCollection("${collection}").updateMany({ next_attempt_at: ${parked} }, { $set: { next_attempt_at: null } }).modifiedCount`)});
+`;
+  }
+  return `    /// <summary>La marca de las filas aparcadas: una fecha que ningún backoff alcanza.</summary>
+    private const string Parked = "2999-01-01 00:00:00+00";
+
+    private static void ParkOutbox() =>
+        Harness.Db($"UPDATE outbox_event SET next_attempt_at = '{Parked}' WHERE published_at IS NULL AND attempts < {MaxAttempts}");
+
+    private static void UnparkOutbox() =>
+        Harness.Db($"UPDATE outbox_event SET next_attempt_at = NULL WHERE next_attempt_at = '{Parked}'");
 `;
 }
 
@@ -966,7 +988,11 @@ function outboxPlumbing(model) {
     /// nuestro outbox, y con el broker parado por el escenario las filas esperan a propósito. La fila RENDIDA no cuenta: no
     /// va a salir nunca.
     /// </summary>
-    public static async Task AwaitOutboxDrained(string channel)
+${usesDocument(model) ? documentOutboxQueries(model) : relationalOutboxQueries(model)}`;
+}
+
+function relationalOutboxQueries(model) {
+  return `    public static async Task AwaitOutboxDrained(string channel)
     {
         if (!PublishedChannels.Contains(channel) || brokerStopped) return;
         var until = DateTime.UtcNow + OutboxDrainTimeout;
@@ -987,6 +1013,42 @@ function outboxPlumbing(model) {
             throw new InvalidOperationException($"No hay ningún evento {eventType} pendiente en el outbox que abandonar");
         }
         Harness.Db($"UPDATE outbox_event SET attempts = ${ABANDONED} WHERE event_type = '{type}' AND published_at IS NULL");${kafkaInFlightWait(model)}
+    }
+`;
+}
+
+/**
+ * Las mismas consultas sobre la colección del outbox (incremento 12c), con mongosh por Harness.MongoEval: los nombres del
+ * documento son los de keel-core/gen/mongo-probes.js (OUTBOX), y un valor viaja como literal JSON, que es un literal de
+ * cadena válido en el script. El predicado es el de la rama relacional: la fila RENDIDA no cuenta como pendiente.
+ */
+function documentOutboxQueries(model) {
+  const { collection, destination, eventType, publishedAt, attempts } = OUTBOX;
+  const outbox = `db.getCollection(\\"${collection}\\")`;
+  return `    /// <summary>Un valor como literal de cadena del script de mongosh.</summary>
+    private static string Js(string value) => JsonSerializer.Serialize(value);
+
+    public static async Task AwaitOutboxDrained(string channel)
+    {
+        if (!PublishedChannels.Contains(channel) || brokerStopped) return;
+        var until = DateTime.UtcNow + OutboxDrainTimeout;
+        while (DateTime.UtcNow < until && CountOf(Harness.MongoEval($"${outbox}.countDocuments({{ ${destination}: {Js(Destination)}, ${publishedAt}: null, ${attempts}: {{ $lt: {MaxAttempts} }} }})")) > 0)
+        {
+            await Task.Delay(150);
+        }
+    }
+
+    public static long DeadLetteredEvents() =>
+        CountOf(Harness.MongoEval($"${outbox}.countDocuments({{ ${publishedAt}: null, ${attempts}: {{ $gte: {MaxAttempts} }} }})"));
+
+    public static void AbandonOutboxEvent(string eventType)
+    {
+        var type = Js(eventType);
+        if (CountOf(Harness.MongoEval($"${outbox}.countDocuments({{ ${eventType}: {type}, ${publishedAt}: null }})")) == 0)
+        {
+            throw new InvalidOperationException($"No hay ningún evento {eventType} pendiente en el outbox que abandonar");
+        }
+        Harness.MongoEval($"${outbox}.updateMany({{ ${eventType}: {type}, ${publishedAt}: null }}, {{ $set: {{ ${attempts}: ${ABANDONED} }} }}).modifiedCount");${kafkaInFlightWait(model)}
     }
 `;
 }

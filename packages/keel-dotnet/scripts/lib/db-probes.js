@@ -129,7 +129,12 @@ export function sampleValue(model, field, ctx, salt) {
       const min = text.minLength ?? 0;
       const max = text.maxLength ?? 40;
       if (text.pattern) {
-        const sample = sampleFor(text.pattern, min, max, ctx.counter.variant()) ?? sampleFor(text.pattern, min, max);
+        // Las variantes de sampleFor salen de UN carácter (26 valores): pasada la vigésimo sexta, la muestra se alarga para
+        // que siga siendo distinta (las sondas documentales guardan más de 26 de la misma raíz, y una clave natural con
+        // patrón chocaba consigo misma). Si el patrón no admite otra longitud, la variante de siempre.
+        const variant = ctx.counter.variant();
+        const longer = variant >= 26 ? matching(text.pattern, sampleFor(text.pattern, Math.max(min, 1) + Math.floor(variant / 26), max, variant)) : null;
+        const sample = longer ?? sampleFor(text.pattern, min, max, variant) ?? sampleFor(text.pattern, min, max);
         if (sample == null) {
           ctx.unsampled.push(`${field.name} (${text.pattern})`);
           return null;
@@ -139,6 +144,15 @@ export function sampleValue(model, field, ctx, salt) {
       const base = `${field.name}-${salt}`;
       return csString(base.length > max ? base.slice(-max) : base.padEnd(min, 'x'));
     }
+  }
+}
+
+/** La muestra, si casa con el patrón (el del diseño, leído como expresión de JavaScript); si no, null. */
+function matching(pattern, sample) {
+  try {
+    return sample != null && new RegExp(pattern).test(sample) ? sample : null;
+  } catch {
+    return null;
   }
 }
 
@@ -546,7 +560,7 @@ ${ensures.join('\n\n')}
  * Las sondas del registro de idempotencia, sobre el puerto y la transacción generados. El ámbito es el de la primera
  * operación que lo usa: así el code que se afirma es el que esa operación declara (o el canónico).
  */
-function idempotencyBlock(model) {
+export function idempotencyBlock(model) {
   const scope = registryOperations(model)[0].name;
   const race = idempotencyOutcomeCode(model, scope, FRAMEWORK_ERRORS.idempotencyRace);
   const store = 'other.GetRequiredService<IIdempotencyStore>()';
@@ -740,7 +754,7 @@ function outboxBlock(model) {
     }`;
 }
 
-function guardBlock() {
+export function guardBlock() {
   return `    // ─── El registro de mensajes procesados ───
 
     private static IdempotencyGuard Guard => root.GetRequiredService<IdempotencyGuard>();
@@ -769,7 +783,7 @@ function guardBlock() {
 // ─── Las purgas por lotes (incremento 10b) ────────────────────────────────────────────────────────
 
 /** Unas PurgeSettings con el lote y el tope indicados y el cron y la retención de los defaults. */
-function purgeSettings(purges, batchSize, maxBatches) {
+export function purgeSettings(purges, batchSize, maxBatches) {
   const schedules = purges.map(
     (purge) => `new PurgeSchedule(${csString(purge.cron.default)}, ${purge.retentionDays ? purge.retentionDays.default : 'null'}, ${batchSize}, ${maxBatches})`
   );
@@ -879,12 +893,12 @@ ${tests.join('\n\n')}`;
 // ─── Los reclamos de barrido (incremento 10c) ─────────────────────────────────────────────────────
 
 /** Cuántas muestras propias necesitan los reclamos de una raíz: cada sonda guarda las suyas, que no se reutilizan. */
-function claimSampleCount(model, root) {
+export function claimSampleCount(model, root) {
   return claimsForEntity(model, root.name).reduce((total, claim) => total + (claim.stalled ? 5 : 9), 0);
 }
 
 /** Las SweepSettings de las sondas: lotes de DOS (con tres filas, dos pasadas) y los plazos de los defaults. */
-function probeSweepSettings(model) {
+export function probeSweepSettings(model) {
   const config = sweepConfig(model);
   const entries = (kind, value) =>
     config.flatMap(({ key, entries: list }) => list.filter((entry) => entry.kind === kind).map((entry) => `[${csString(key)}] = ${value(entry)}`));
@@ -1070,12 +1084,12 @@ ${seed([held, free], claim.from[0], order === 'id' ? null : order, (i) => `origi
 const reconciliationClaimsOf = (model, root) => (usesReconciliationClaims(model) ? reconciliationClaims(model).filter((claim) => claim.entity === root.name) : []);
 
 /** Las muestras propias de los reclamos de reconciliación de una raíz: cuatro para la pasada, dos para la caducidad y cuatro para la carrera. */
-function reconciliationSampleCount(model, root) {
+export function reconciliationSampleCount(model, root) {
   return reconciliationClaimsOf(model, root).length * 10;
 }
 
 /** Las ReconciliationSettings de las sondas: lotes de DOS, y el umbral y la caducidad de los defaults de keel-core. */
-function probeReconciliationSettings(model) {
+export function probeReconciliationSettings(model) {
   const entries = reconciledActivations(model).map(({ activation, sweeper }) => {
     const parameters = reconciliationParameters(activation, sweeper);
     return `[${csString(activation.name)}] = new ReconciliationWindow(${parameters.unansweredAfterSeconds.default}, ${parameters.claimTimeoutMs.default}, 2)`;

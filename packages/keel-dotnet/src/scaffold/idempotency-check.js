@@ -21,7 +21,7 @@ import { clientPort } from './http-clients.js';
 import { schedulerClass } from './scheduling.js';
 import { registryOperations } from 'keel-core/gen/request-idempotency';
 import { csMember } from './render.js';
-import { usesRelational } from './persistence.js';
+import { usesPersistence, usesDocument } from './persistence.js';
 import { naturalKeyFinder, occupantFinders, repositoryRoots } from './repositories.js';
 import { usesDotnetOutbox, usesMessaging, usesProcessedEvents } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
@@ -45,7 +45,7 @@ export function generate(model) {
 
 /** La matriz: { group, subject, why } más lo que cada clase de comprobación necesita (ver keel-core). */
 export function checksOf(model) {
-  if (!usesRelational(model)) return [];
+  if (!usesPersistence(model)) return [];
   return [
     ...dedupeChecks(model),
     ...payloadContractChecks(model),
@@ -162,20 +162,39 @@ function payloadContractChecks(model) {
 // 1c. Que la escritura de los registros sea un INSERT de verdad. Vigila archivos de build, y hace falta: no son
 //     intocables (una corrida de keel-spring vio al agente editar un mapper generado).
 function insertChecks(model) {
+  // Sobre documentos (incremento 12c), el INSERT es InsertOneAsync, y lo prohibido es el reemplazo y el upsert: sobre un
+  // `_id` presente no chocarían nunca. El mismo criterio que el gate de keel-nest documental.
+  const document = usesDocument(model);
   const write = (group, file, why) => ({
     group,
     subject: `${file}: la escritura es un INSERT`,
     class: file,
-    require: ['\\.Add\\s*\\('],
-    forbid: ['\\.Update\\s*\\(', '\\.Attach\\s*\\(', 'ExecuteUpdate'],
+    require: document ? ['InsertOneAsync\\s*\\('] : ['\\.Add\\s*\\('],
+    forbid: document ? ['ReplaceOne', 'IsUpsert', 'UpdateOne', 'FindOneAndReplace'] : ['\\.Update\\s*\\(', '\\.Attach\\s*\\(', 'ExecuteUpdate'],
     why
   });
   const checks = [];
   if (usesProcessedEvents(model)) {
-    checks.push(write('dedupe', 'IdempotencyGuard', 'Add() y NO Update() ni Attach(): con EF decidiendo, una reentrega nunca chocaría con la clave'));
+    checks.push(
+      write(
+        'dedupe',
+        'IdempotencyGuard',
+        document
+          ? 'InsertOneAsync y NO un reemplazo ni un upsert: sobre un _id presente, una reentrega nunca chocaría con la clave'
+          : 'Add() y NO Update() ni Attach(): con EF decidiendo, una reentrega nunca chocaría con la clave'
+      )
+    );
   }
   if (usesRequestIdempotency(model) && registryOperations(model).length > 0) {
-    checks.push(write('commandIdempotency', 'IdempotencyStore', 'Add() y NO Update() ni Attach(): es la clave primaria la que arbitra la carrera de dos peticiones con la misma clave'));
+    checks.push(
+      write(
+        'commandIdempotency',
+        'IdempotencyStore',
+        document
+          ? 'InsertOneAsync y NO un reemplazo ni un upsert: es el _id el que arbitra la carrera de dos peticiones con la misma clave'
+          : 'Add() y NO Update() ni Attach(): es la clave primaria la que arbitra la carrera de dos peticiones con la misma clave'
+      )
+    );
   }
   return checks;
 }
@@ -489,6 +508,8 @@ function outboxChecks(model) {
 //    se GUARDA antes de guardar la nueva. Cada Save del adaptador confirma su SaveChanges en el acto, así que lo
 //    afirmable es que el handler busque la ocupante con el finder que build generó.
 function conditionalUniquenessChecks(model) {
+  // Solo relacional, como keel-spring y keel-nest: en documental sus gates no la emiten y aquí tampoco (la nota del stub sí).
+  if (usesDocument(model)) return [];
   return relievingOperations(model).map(({ operation, entity, state }) => {
     const root = repositoryRoots(model).find((candidate) => candidate.name === entity.rootEntity) ?? entity;
     const finder = occupantFinders(model, root).find((candidate) => candidate.state === state);

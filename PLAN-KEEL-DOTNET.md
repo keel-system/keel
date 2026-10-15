@@ -1277,6 +1277,42 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     - **Lo que destapó**: `cs-check` solo revisaba las licencias transitivas del proyecto de referencia (PostgreSQL), así
       que lo que traen Kafka, SNS/SQS y ahora MongoDB no lo leía nadie. Gana un paso: las licencias de todo lo que NuGet
       resuelve para la solución de TODAS las fixtures.
+  - **12c, los almacenes del generador sobre documentos (hecho, 2026-10-15).** Cada almacén conserva su archivo, su clase y
+    su API, y solo cambia el cuerpo por modelo (`src/scaffold/document-stores.js`): el relay, los listeners, los handlers,
+    el reloj y el gate no distinguen el almacén.
+    - **Lo que emite**: el relay del outbox reclama con `FindOneAndUpdate` y la marca caducable `claimed_at` (el
+      equivalente del SKIP LOCKED), sin transacción, en orden de llegada; el fallo es un `$inc` con el error como VALOR de
+      un `$set` (un texto que empiece por `$` no se lee como campo), y la rendición con el contador ya incrementado. El
+      PUENTE escribe el documento del outbox en la sesión de la transacción del cambio (con outbox, `Publish` pasa a ser
+      `Task`: insertar es asíncrono) y, fuera de una, es un error. La guarda y el registro de idempotencia INSERTAN sobre
+      su `_id` subdocumento en el orden de keel-core (`storeDocumentKey`), la guarda sin sesión (una inserción suelta ya es
+      atómica) y el registro en la del caso de uso; la tienda de reconciliación es un upsert sobre la marca caducada, con
+      `Held` para excluir de la lectura los candidatos de marca viva. Los reclamos de barrido (cola y rescate) y de
+      reconciliación del adaptador, con `FindOneAndUpdate` en orden y el estado guardado como la constante del enum, y
+      `RequireOwnTransaction` mirando la sesión. Las purgas, el mismo bucle por lotes sobre la colección (sin condición
+      propia en el outbox: un `$lt` sobre una fecha no casa con null, y repetir la clave en el filtro rompía el documento).
+      El gate pide `InsertOneAsync` y prohíbe el reemplazo y el upsert, y no emite `conditionalUniqueness` sobre
+      documentos (ni keel-spring ni keel-nest lo hacen): `idempotency-check.test.js` gana la paridad de familias con
+      keel-nest en las cuatro fixtures documentales.
+    - **Adelantado del 12d**: el arnés de mensajería esperaba al outbox por SQL (`Harness.Db`), que en documental no existe,
+      y no compilaba. Gana `Harness.MongoEval` (el script por ARCHIVO dentro del contenedor y envuelto en el `print` de
+      `keel-core/gen/mongo-probes.js`) y la versión documental de `AwaitOutboxDrained`, `DeadLetteredEvents`,
+      `AbandonOutboxEvent`, `ClearAbandonedOutboxEvents` y el aparcamiento del outbox. El rescate y la reconciliación del
+      arnés siguen en el 12d.
+    - **Frontera**: sobre documentos ya no se rechaza nada propio del modelo; `job-dispatch-mongo` e `inspection-reports`
+      entran enteras por `build`. `notification-mailer-mongo` y `asset-vault` siguen fuera por lo del incremento 13 (correo,
+      storage, `needs`, `resolvedBy`), como estaban en keel-nest.
+    - **Medido**: `doc-check` **14/14, 127 sondas**, con los almacenes: el outbox (orden, lote, la marca viva y la
+      caducada, dos réplicas sin repetir, fallo con backoff y rendición, lo publicado), el puente (la fila con las claves
+      del contrato confirma y aborta con el cambio), el `_id` subdocumento de los dos registros en su orden, el registro de
+      idempotencia y la guarda con las MISMAS sondas que la rama relacional (solo usan la API), los reclamos de barrido y de
+      reconciliación de cada raíz, la tienda de la marca y las purgas por lotes. **Falsado con trece sabotajes** de los
+      almacenes, cada uno en su sonda. Dos trampas medidas: (1) el sabotaje que quitaba el ORDEN del relay salió VERDE —el
+      índice `ix_outbox_event_pending` (published_at, created_at) regala el orden, la misma que encontró keel-nest—, y ahora
+      el orden se mide con el índice retirado; (2) con los instantes de las muestras creciendo como el `_id` (UUIDv7),
+      quitar el orden de un reclamo era una mutación equivalente: ahora se siembran al revés de la inserción. Y una de las
+      sondas: el muestreador de patrones daba 26 valores (un carácter), y con más de 26 muestras de una raíz la clave
+      natural de `asset-vault` chocaba consigo misma; pasada la vigésimo sexta variante, la muestra se alarga.
 
 ## 5. Riesgos conocidos
 

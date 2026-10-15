@@ -1,4 +1,4 @@
-// La purga POR LOTES de las tablas del generador en la rama relacional: `outbox_event`, `processed_event` e
+// La purga POR LOTES de las tablas del generador (y, desde el incremento 12c, de sus colecciones): `outbox_event`, `processed_event` e
 // `idempotency_record` (incremento 10b).
 //
 // Las mismas que purgan los servidores de keel-spring y keel-nest del mismo diseño, con la misma forma
@@ -17,7 +17,8 @@ import { OUTBOX_EVENT, OUTBOX_PURGE, PROCESSED_EVENT, PROCESSED_EVENT_PURGE } fr
 import { IDEMPOTENCY_RECORD, IDEMPOTENCY_RECORD_PURGE } from 'keel-core/gen/request-idempotency';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
-import { dbContextClass, persistenceNamespace, usesRelational } from './persistence.js';
+import { dbContextClass, persistenceNamespace, usesPersistence, usesDocument } from './persistence.js';
+import { documentPurgeMethod } from './document-stores.js';
 import { usesDotnetOutbox, usesProcessedEvents } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { reconciliationPurge } from './reconciliation-claim.js';
@@ -32,7 +33,7 @@ export function purgeNamespace(model) {
  * del outbox no se toca nunca), con qué retención y bajo qué prefijo de configuración. Las mismas que keel-nest.
  */
 export function tablePurges(model) {
-  if (!usesRelational(model)) return [];
+  if (!usesPersistence(model)) return [];
   const purges = [];
   if (usesDotnetOutbox(model)) {
     purges.push({
@@ -126,11 +127,17 @@ export function generate(model) {
   const files = [
     file('BatchedPurge', [], batchedPurgeBody()),
     file('PurgeSettings', ['System.Globalization', configNamespace(model)], settingsBody(purges)),
-    file(
-      'TablePurges',
-      ['Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.Logging', persistenceNamespace(model), namespaceOf(model, 'scheduling')],
-      tablePurgesBody(model, purges)
-    )
+    usesDocument(model)
+      ? file(
+          'TablePurges',
+          ['MongoDB.Bson', 'MongoDB.Driver', 'Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.Logging', persistenceNamespace(model), namespaceOf(model, 'scheduling')],
+          documentTablePurgesBody(purges)
+        )
+      : file(
+          'TablePurges',
+          ['Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.Logging', persistenceNamespace(model), namespaceOf(model, 'scheduling')],
+          tablePurgesBody(model, purges)
+        )
   ];
   // La cadencia de la purga del registro de idempotencia, en su propio fragmento como en keel-spring y keel-nest (las del
   // outbox y de processed_event van en messaging.yaml). El perfil test no lo lleva: allí no corre el reloj.
@@ -260,6 +267,44 @@ ${purges.map(read).join(',\n')});
             ? parsed
             : throw new InvalidOperationException($"{key.Replace(':', '.')} tiene que ser un entero positivo: '{value}'");
     }
+}`;
+}
+
+/**
+ * Las purgas sobre DOCUMENTOS (incremento 12c): la misma clase, las mismas tareas y el mismo bucle por lotes; la frontera
+ * y el borrado, sobre la colección (document-stores.js).
+ */
+function documentTablePurgesBody(purges) {
+  const tasks = purges.map(
+    (purge) =>
+      `            new(${csString(`purge:${purge.what}`)}, settings.${purge.key}.Cron, (services, cancellationToken) => services.GetRequiredService<TablePurges>().${purge.method}(null, cancellationToken))`
+  );
+  const logs = purges.map(
+    (purge) => `    [LoggerMessage(Level = LogLevel.Information, Message = ${csString(purge.log)})]
+    private partial void Log${purge.key}Purged(long deleted, DateTimeOffset cutoff);`
+  );
+  return `/// <summary>
+/// Las purgas de las colecciones del generador, cada una con su reloj. Por lotes y SIN transacción abarcadora: cada lote es
+/// un DeleteMany suelto (BatchedPurge). Sin base de datos (el perfil test) no hacen nada.
+/// </summary>
+public sealed partial class TablePurges(DocumentDatabase documentDatabase, PurgeSettings settings, DatabaseSettings database, ILogger<TablePurges> logger)
+{
+    /// <summary>Las tareas por reloj de las purgas, con el cron del perfil.</summary>
+    public static IReadOnlyList<ScheduledTask> Tasks(PurgeSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return
+        [
+${tasks.join(',\n')}
+        ];
+    }
+
+${purges.map(documentPurgeMethod).join('\n\n')}
+
+${logs.join('\n\n')}
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Message}")]
+    private partial void LogExhausted(string message);
 }`;
 }
 

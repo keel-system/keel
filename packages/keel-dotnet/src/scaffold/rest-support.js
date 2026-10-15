@@ -21,7 +21,7 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { FRAMEWORK_RESPONSES as FW, domainErrorResponses } from 'keel-core/gen/api-errors';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { wireNamespace } from './wire.js';
-import { usesRelational, usesPersistence } from './persistence.js';
+import { usesPersistence } from './persistence.js';
 import { valueReaders } from './endpoints.js';
 
 /** ¿Expone el servicio una API? Sin capa api, o sin ninguna operación con ruta, no hay nada de esto. */
@@ -35,7 +35,7 @@ export function restNamespace(model) {
 
 /** ¿Hay mensajería que abra la correlación? La misma condición que `usesMessaging` de messaging.js, sin importarlo. */
 function usesCorrelationForMessaging(model) {
-  return Boolean(model.layersPresent?.messaging) && ((model.events ?? []).length > 0 || (model.subscriptions ?? []).length > 0) && usesRelational(model);
+  return Boolean(model.layersPresent?.messaging) && ((model.events ?? []).length > 0 || (model.subscriptions ?? []).length > 0) && usesPersistence(model);
 }
 
 /** ¿Se emite el CorrelationContext? Lo abren la entrada HTTP y la mensajería (y el reloj, si está). */

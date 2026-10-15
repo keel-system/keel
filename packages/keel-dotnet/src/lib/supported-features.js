@@ -69,12 +69,10 @@ export function checkSupportedFeatures(manifest, layers) {
       );
     }
   }
-  // La persistencia DOCUMENTAL (incremento 12) se genera desde el 12b: documentos, índices, transacción y bloqueo
-  // optimista. Los mecanismos que guardan su estado en colecciones del generador (el outbox y los mensajes procesados, el
-  // registro de idempotencia, los reclamos de barrido y de reconciliación) llegan en el 12c: hasta entonces se rechazan,
-  // en vez de generar un handler sin su almacén. El mismo reparto que keel-nest.
+  // La persistencia DOCUMENTAL (incremento 12) se genera entera desde el 12c: documentos, índices, transacción y bloqueo
+  // optimista (12b), y los almacenes del generador sobre colecciones —el outbox y los mensajes procesados, el registro de
+  // idempotencia, los reclamos de barrido y de reconciliación, las purgas— (12c). El mismo reparto que keel-nest.
   if (declared.includes('persistence') && layers?.persistence?.default?.model === 'document') {
-    errors.push(...documentFrontier(declared, layers));
     // El servidor sale entero; lo que todavía no es el arnés de flujos sobre documentos (las sondas de mongosh, el reset
     // y los ayudantes del rescate) ni la skill de la base, que llegan en el 12d. Se avisa: sin ellos los FL-* no se puntúan.
     warnings.push(
@@ -96,32 +94,6 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
   return { errors, warnings };
-}
-
-/**
- * Lo que la persistencia documental todavía no genera (incremento 12c de PLAN-KEEL-DOTNET.md): cada mecanismo que
- * necesita una colección del generador, con lo que lo dispara en el diseño.
- */
-function documentFrontier(declared, layers) {
-  const errors = [];
-  const pending = (what) =>
-    `${what} sobre persistencia documental — keel-dotnet todavía no lo genera (llega en el incremento 12c de PLAN-KEEL-DOTNET.md). ` +
-    'Genera este diseño con keel-spring o keel-nest, o espera a que keel-dotnet lo cubra.';
-  if (declared.includes('messaging')) errors.push(pending('messaging (el outbox y el registro de mensajes procesados)'));
-  const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
-  const scheduled = operations.filter(([, operation]) => operation?.schedule != null).map(([name]) => name);
-  if (scheduled.length > 0) errors.push(pending(`use-cases: ${scheduled.join(', ')} (schedule: el barrido y su reclamo)`));
-  const idempotent = operations
-    .filter(([, operation]) => operation?.idempotency != null && operation.idempotency.guard !== 'natural-key')
-    .map(([name]) => name);
-  if (idempotent.length > 0) errors.push(pending(`use-cases: ${idempotent.join(', ')} (idempotency: el registro de claves)`));
-  const reconciled = Object.entries(layers?.dependencies?.dependencies ?? {}).flatMap(([id, dependency]) =>
-    Object.entries(dependency?.activations ?? {})
-      .filter(([, activation]) => activation?.reconciledBy)
-      .map(([name]) => `${id}.${name}`)
-  );
-  if (reconciled.length > 0) errors.push(pending(`dependencies: ${reconciled.join(', ')} (reconciledBy: el reclamo de la reconciliación)`));
-  return errors;
 }
 
 /** La telemetría todavía no se genera: se rechaza en el build en vez de estamparla sin efecto. */
@@ -190,7 +162,7 @@ function messagingErrors(declared, layers) {
   const errors = [];
   if (!declared.includes('persistence')) {
     errors.push(
-      'capa messaging sin persistence — keel-dotnet genera la mensajería sobre la persistencia relacional (incremento 9 de PLAN-KEEL-DOTNET.md): ' +
+      'capa messaging sin persistence — keel-dotnet genera la mensajería sobre la persistencia, relacional o documental (incrementos 9 y 12c de PLAN-KEEL-DOTNET.md): ' +
         'el puente de eventos sale del adaptador de repositorio y el registro de mensajes procesados vive en la base. Genera este diseño con keel-spring o keel-nest.'
     );
   }

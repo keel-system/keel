@@ -26,7 +26,23 @@ import { csMember, csString, namespaceOf, solution, typeUsings } from '../../src
 import { repositoryRoots, portClass, repositoriesNamespace, isPaginated } from '../../src/scaffold/repositories.js';
 import { isNullable } from '../../src/scaffold/render.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
-import { counter, sampleState } from './db-probes.js';
+import { counter, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
+import { documentProbeSupport, storeKeyBlock, documentOutboxBlock, documentBridgeBlock, documentReconciliationStoreBlock, documentClaimProbes, documentReconciliationProbes, documentPurgeBlock } from './doc-store-probes.js';
+import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
+import { bridgeClass, messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
+import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
+import { usesSweepClaims } from '../../src/scaffold/claim.js';
+import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
+import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
+
+/** Lo que el contenedor de la sonda registra antes de la persistencia (AddPersistence no pisa estos: TryAdd). */
+function fixtureRegistrations(model) {
+  const lines = [];
+  if (usesSweepClaims(model)) lines.push('        // Los barridos con lotes de DOS: con tres documentos, dos pasadas.', `        services.AddSingleton(${probeSweepSettings(model)});`);
+  if (usesReconciliationSettings(model)) lines.push('        // Los barridos de reconciliación con lotes de DOS.', `        services.AddSingleton(${probeReconciliationSettings(model)});`);
+  if (usesServiceParameters(model)) lines.push(`        services.AddSingleton(${parametersTestInstance(model)});`);
+  return lines.join('\n');
+}
 
 /** Las muestras distintas que necesita cada raíz (cada prueba usa las suyas: una repetida chocaría en el _id). */
 const SAMPLES = 20;
@@ -162,7 +178,8 @@ function probesCs(model, namespace) {
     const refsBefore = new Set(ctx.refs);
     ctx.refs.clear();
     const states = [];
-    for (let n = 1; n <= SAMPLES; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
+    const total = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root);
+    for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
     const params = refs.map((ref) => `Guid ${ref[0].toLowerCase()}${ref.slice(1)}Id`).join(', ');
@@ -351,8 +368,30 @@ function probesCs(model, namespace) {
             Assert.Null(await InScope(other => other.GetRequiredService<${port}>().FindById(samples[0].${id}, Cancel)));
         });`);
     }
+    // Los reclamos de barrido y de reconciliación del adaptador (incremento 12c), con sus muestras por encima de las comunes.
+    tests.push(...documentClaimProbes(model, root, { state, first: SAMPLES + 1, port }));
+    tests.push(...documentReconciliationProbes(model, root, { state, first: SAMPLES + 1 + claimSampleCount(model, root), port }));
     blocks.push(`    // ─── ${root.name} ───\n\n${tests.join('\n\n')}`);
   }
+
+  // Los almacenes del generador (incremento 12c): el registro de idempotencia y la guarda con las MISMAS sondas que la
+  // rama relacional (solo usan la API), y el outbox, la marca de reconciliación y las purgas sobre la colección.
+  blocks.push(documentProbeSupport());
+  if (usesRequestIdempotency(model)) blocks.push(idempotencyBlock(model));
+  if (usesProcessedEvents(model)) blocks.push(guardBlock());
+  const keys = storeKeyBlock({ guard: usesProcessedEvents(model), idempotency: usesRequestIdempotency(model) });
+  if (keys) blocks.push(keys);
+  if (usesDotnetOutbox(model)) {
+    blocks.push(documentOutboxBlock());
+    const bridge = documentBridgeBlock(model, {
+      bridge: bridgeClass(model),
+      sample: (field) => sampleValue(model, field, ctx, 'evento') ?? 'default!'
+    });
+    if (bridge) blocks.push(bridge);
+  }
+  if (usesReconciliationClaims(model)) blocks.push(documentReconciliationStoreBlock());
+  const purges = tablePurges(model);
+  if (purges.length > 0) blocks.push(documentPurgeBlock(purges));
 
   // Las raíces a las que apunta una referencia: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -395,6 +434,12 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     namespaceOf(model, 'errors'),
     namespaceOf(model, 'appSupport'),
     ...typeUsings(model, roots.map((root) => root.name)),
+    ...(usesRequestIdempotency(model) ? [idempotencyNamespace(model)] : []),
+    ...(usesBridge(model) || usesProcessedEvents(model) ? [messagingNamespace(model)] : []),
+    ...(usesDotnetOutbox(model) ? [namespaceOf(model, 'outbox'), namespaceOf(model, 'events')] : []),
+    ...(usesProcessedEvents(model) ? [namespaceOf(model, 'messageIdempotency')] : []),
+    ...(tablePurges(model).length > 0 ? [purgeNamespace(model), 'Microsoft.Extensions.Logging.Abstractions'] : []),
+    ...(usesServiceParameters(model) ? [parametersNamespace(model)] : []),
     ...ctx.usings
   ];
   const body = `/// <summary>La base del sujeto: una propia en el servidor, vacía al empezar; los índices los crea el arranque.</summary>
@@ -415,7 +460,15 @@ public sealed class DocumentFixture : IAsyncLifetime
         }
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddPersistence(new DatabaseSettings(true, MongoUrl.Create(target), Database, "doc-check"));
+${fixtureRegistrations(model)}
+        services.AddPersistence(new DatabaseSettings(true, MongoUrl.Create(target), Database, "doc-check"));${usesBridge(model) ? `
+        // Los adaptadores de las raíces que emiten eventos los entregan al puente.
+        services.AddDomainEvents(MessagingSettings.Defaults);` : ''}${usesDotnetOutbox(model) ? `
+        services.AddSingleton<OutboxRelayStore>();` : ''}${usesProcessedEvents(model) ? `
+        services.AddSingleton<IdempotencyGuard>();` : ''}${tablePurges(model).length > 0 ? `
+        // Las purgas con lotes de DOS: con cinco documentos caducados, varios lotes por pasada.
+        services.AddSingleton(${purgeSettings(tablePurges(model), 2, 50)});
+        services.AddSingleton<TablePurges>();` : ''}
         Services = services.BuildServiceProvider();
         // Dos veces: crear los índices sobre una base que ya los tiene no puede fallar (es lo que pasa en cada arranque).
         await Services.InitializeDatabase();

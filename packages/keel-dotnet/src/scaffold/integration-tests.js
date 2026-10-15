@@ -27,7 +27,8 @@ import { resetDbScript } from 'keel-core/gen/infra-scripts';
 import { TARGET_FRAMEWORK } from '../lib/assets.js';
 import { DOTNET_INFRA } from './infra.js';
 import { usesApi } from './rest-support.js';
-import { usesRelational } from './persistence.js';
+import { usesRelational, usesDocument } from './persistence.js';
+import { PRINT_WRAPPER } from 'keel-core/gen/mongo-probes';
 import { csFile, csString, solution } from './render.js';
 import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
 import { usesKafka } from './messaging.js';
@@ -72,6 +73,18 @@ export function generate(model) {
 /** ¿Hay `infra/reset-db.sh`? Las mismas condiciones con las que lo escribe infra-scripts.js. */
 export function hasResetScript(model) {
   return resetDbScript(selectedInfra(model), model.service, model, DOTNET_INFRA) !== null;
+}
+
+/** La base documental de prueba como contenedor al que se le pueden mandar scripts de mongosh (sin `--eval`: por archivo). */
+export function documentProbe(model) {
+  if (!usesDocument(model)) return null;
+  const entry = DATABASES.mongodb;
+  const dbName = model.service.name.replaceAll('-', '_');
+  return {
+    container: `${model.service.name}-db`,
+    argv: entry.cliQueryArgv({ user: entry.user(dbName), pass: entry.password, db: dbName }).filter((part) => part !== '--eval'),
+    label: entry.label
+  };
 }
 
 /** La base de prueba como contenedor al que se le pueden mandar sentencias (relacional con CLI). */
@@ -762,6 +775,31 @@ function harnessCs(model) {
 
     /// <summary>La sentencia viaja como UN argumento más, nunca armada para un shell.</summary>
     public static string Db(string sql) => Run(ContainerRuntime(), ["exec", DbContainer, .. DbQueryArguments, sql], "¿Está la base arriba (bash infra/up.sh)?");`);
+  }
+  const mongo = documentProbe(model);
+  if (mongo) {
+    sections.push(String.raw`    private const string DbContainer = ${csString(mongo.container)};
+    private static readonly string[] DbScriptArguments = [${mongo.argv.map(csString).join(', ')}];
+
+    /// <summary>Dónde se deja el script dentro del contenedor de la base.</summary>
+    private const string DbScript = "/tmp/keel-eval.js";
+
+    /// <summary>
+    /// Ejecuta un script de mongosh contra la base de prueba (${mongo.label}) y devuelve su salida en crudo: el Db de la
+    /// rama relacional sobre documentos. Los nombres son los del DOCUMENTO (snake_case, <c>_id</c>), y un id va como
+    /// <c>UUID("…")</c>: un literal que no case deja el script en cero modificados SIN fallar.
+    /// </summary>
+    /// <remarks>
+    /// El script viaja por ARCHIVO (el argv se come las comillas en Windows) y va envuelto en un print(...): ejecutado por
+    /// archivo, mongosh no imprime el valor de la última expresión, y sin él un countDocuments devolvería cadena vacía, que
+    /// se parece a un cero (keel-core/gen/mongo-probes.js).
+    /// </remarks>
+    public static string MongoEval(string script)
+    {
+        var printed = ${csString(PRINT_WRAPPER.prefix)} + script + ${csString(PRINT_WRAPPER.suffix)};
+        Run(ContainerRuntime(), ["exec", "-i", DbContainer, "sh", "-c", "cat > " + DbScript], "¿Está la base arriba (bash infra/up.sh)?", printed);
+        return Run(ContainerRuntime(), ["exec", DbContainer, .. DbScriptArguments, DbScript], "¿Está la base arriba (bash infra/up.sh)?");
+    }`);
   }
   return csFile({
     namespace: supportNamespace(model),

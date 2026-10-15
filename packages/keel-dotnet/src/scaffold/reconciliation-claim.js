@@ -18,21 +18,22 @@ import { RECONCILIATION_CLAIM, RECONCILIATION_PURGE, reconciledActivations, reco
 import { screamingSnake, snakeCase } from 'keel-core/gen';
 import { csFile, csMember, csString, located, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
-import { dbContextClass, usesRelational } from './persistence.js';
+import { dbContextClass, usesPersistence, usesDocument } from './persistence.js';
+import { documentReconciliationStoreBody } from './document-stores.js';
 import { rowFile } from './messaging-stores.js';
 
 export const RECONCILIATION_ROW = 'ReconciliationClaimRow';
 const STORE = 'ReconciliationClaimStore';
 const SETTINGS = 'ReconciliationSettings';
 
-/** ¿Genera build algún reclamo de reconciliación? Con persistencia relacional (el documental llega en el incremento 12). */
+/** ¿Genera build algún reclamo de reconciliación? Con persistencia, relacional o documental (incremento 12c). */
 export function usesReconciliationClaims(model) {
-  return usesRelational(model) && reconciliationClaims(model).length > 0;
+  return usesPersistence(model) && reconciliationClaims(model).length > 0;
 }
 
 /** ¿Hay parámetros de barridos de reconciliación que leer? Los hay aunque build no pueda generar el reclamo. */
 export function usesReconciliationSettings(model) {
-  return usesRelational(model) && reconciledActivations(model).length > 0;
+  return usesPersistence(model) && reconciledActivations(model).length > 0;
 }
 
 /** Los nombres que la tabla pone en el esquema: los busca la prueba emitida del modelo. */
@@ -69,9 +70,14 @@ export function generate(model) {
     }
   }
   if (usesReconciliationClaims(model)) {
-    files.push(rowFile(model, RECONCILIATION_ROW, RECONCILIATION_CLAIM, CLAIM_DOC));
     const { namespace, path } = located(model, 'persistence', STORE);
-    files.push({ path, content: csFile({ namespace, usings: ['Microsoft.EntityFrameworkCore'], body: storeBody(model) }) });
+    // Sobre documentos (incremento 12c), la misma tienda sin fila: un upsert sobre la marca caducada (document-stores.js).
+    if (usesDocument(model)) {
+      files.push({ path, content: csFile({ namespace, usings: ['MongoDB.Bson', 'MongoDB.Driver'], body: documentReconciliationStoreBody() }) });
+    } else {
+      files.push(rowFile(model, RECONCILIATION_ROW, RECONCILIATION_CLAIM, CLAIM_DOC));
+      files.push({ path, content: csFile({ namespace, usings: ['Microsoft.EntityFrameworkCore'], body: storeBody(model) }) });
+    }
   }
   return files;
 }
@@ -175,7 +181,7 @@ public sealed class ${STORE}(${dbContextClass(model)} db)
 
 // ─── El puerto y el adaptador de la raíz que espera ──────────────────────────────────────────────
 
-const claimsFor = (model, entityName) => (usesRelational(model) ? reconciliationClaims(model).filter((claim) => claim.entity === entityName) : []);
+const claimsFor = (model, entityName) => (usesPersistence(model) ? reconciliationClaims(model).filter((claim) => claim.entity === entityName) : []);
 
 /** El método C# de un reclamo (`claimForReconcileReservationsReserveStock` → `ClaimForReconcileReservationsReserveStock`). */
 export function reconciliationMethod(claim) {

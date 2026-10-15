@@ -19,6 +19,10 @@ import { snakeCase } from 'keel-core/gen/naming';
 import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, entityPlace, typeUsings } from './render.js';
 import { domainMembers } from './entities.js';
 import { persistenceNamespace } from './persistence.js';
+import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
+import { claimDependencies } from './claim.js';
+import { reconciliationDependencies } from './reconciliation-claim.js';
+import { documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents } from './repositories.js';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────────────────────────
@@ -350,9 +354,12 @@ function saveMethod(model, entity) {
       `await Collection.UpdateOneAsync(session, new BsonDocument(${csString(DOCUMENT_ID)}, id), ${update}, new UpdateOptions { IsUpsert = true }, cancellationToken);`
     );
   }
-  // Los eventos que la raíz acumuló: sin mensajería sobre documentos (incremento 12c) nadie los escucha, pero se vacían
-  // igual para que el buffer no crezca con cada escritura.
-  if (emitsEvents(model, entity)) lines.push('entity.PullDomainEvents();');
+  // Los eventos que la raíz acumuló salen por el puente DENTRO de esta transacción: con outbox, el documento del outbox y
+  // el cambio confirman o abortan juntos; con best-effort, se publican tras el commit. Sin mensajería nadie los escucha,
+  // pero se vacían igual para que el buffer no crezca con cada escritura.
+  if (emitsEvents(model, entity)) {
+    lines.push(usesBridge(model) ? 'await events.Publish(entity.PullDomainEvents(), cancellationToken);' : 'entity.PullDomainEvents();');
+  }
   lines.push(`return ToDomain${entity.name}(new BsonDocument(${csString(DOCUMENT_ID)}, id).AddRange(fields));`);
   return `    public async Task<${entity.name}> Save(${entity.name} entity, CancellationToken cancellationToken = default)
     {
@@ -425,12 +432,11 @@ export function renderDocumentAdapter(model, entity) {
     }`);
   }
 
-  // Los reclamos de barrido: el puerto es el mismo en los dos modelos, y sobre documentos (findOneAndUpdate) llegan en el
-  // incremento 12c. Hasta entonces la frontera rechaza el diseño que los declara; aquí solo se nombran.
-  for (const claim of claimsForEntity(model, entity.name)) {
-    methods.push(`    public Task<IReadOnlyList<${entity.name}>> ${csMember(claim.method)}(CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException("El reclamo ${claim.method} sobre documentos llega en el incremento 12c de keel-dotnet");`);
-  }
+  // Los reclamos de barrido y de reconciliación (incremento 12c): el puerto es el mismo en los dos modelos.
+  const sweeps = documentSweepClaimMethods(model, entity);
+  const reconciliations = documentReconciliationMethods(model, entity);
+  methods.push(...sweeps, ...reconciliations);
+  if (sweeps.length + reconciliations.length > 0) methods.push(documentOwnTransactionHelper());
   methods.push(saveMethod(model, entity));
   methods.push(`    public async Task DeleteById(${idType} ${idName}, CancellationToken cancellationToken = default)
     {
@@ -445,12 +451,22 @@ export function renderDocumentAdapter(model, entity) {
             cancellationToken);
     }`);
 
+  // Lo que recibe el constructor: la transacción, el puente si la raíz emite eventos, y lo de sus reclamos.
+  const ctor = ['PersistenceTransactions transactions'];
+  if (usesBridge(model) && emitsEvents(model, entity)) {
+    ctor.push(`${bridgeClass(model)} events`);
+    usings.push(messagingNamespace(model));
+  }
+  for (const dep of [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)]) {
+    ctor.push(`${dep.type} ${dep.name}`);
+    usings.push(...dep.usings);
+  }
   const sortable = isPaginated(model, entity) ? sortableBlock(model, entity) : '';
   const body = `/// <summary>
 /// Adaptador del puerto ${portClass(entity)} sobre el driver de MongoDB. Toma la sesión de la transacción abierta (la abre
 /// el UseCaseMediator); sin ella, cada lectura va sola y cada escritura abre la suya.
 /// </summary>
-public sealed class ${adapterClass(entity)}(PersistenceTransactions transactions) : ${portClass(entity)}
+public sealed class ${adapterClass(entity)}(${ctor.join(', ')}) : ${portClass(entity)}
 {
     /// <summary>La colección del agregado: el documento de la raíz, con sus hijas dentro.</summary>
     private const string CollectionName = ${csString(collection)};

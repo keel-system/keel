@@ -13,7 +13,8 @@
 
 import { OUTBOX_EVENT, PROCESSED_EVENT, OUTBOX_LAST_ERROR_LENGTH, storeColumns } from 'keel-core/gen/messaging-stores';
 import { csFile, csString, located, namespaceOf } from './render.js';
-import { dbContextClass, persistenceNamespace, rowsNamespace } from './persistence.js';
+import { dbContextClass, persistenceNamespace, rowsNamespace, usesDocument } from './persistence.js';
+import { documentGuardBody, documentRelayStoreBody } from './document-stores.js';
 import { usesDotnetOutbox, usesProcessedEvents } from './messaging.js';
 
 export const OUTBOX_ROW = 'OutboxEventRow';
@@ -44,31 +45,39 @@ export function generate(model) {
     const { namespace, path } = located(model, place, name);
     return { path, content: csFile({ namespace, usings, body }) };
   };
+  // Sobre documentos (incremento 12c), los mismos archivos y la misma API, sin filas: document-stores.js.
+  const document = usesDocument(model);
   if (usesDotnetOutbox(model)) {
+    if (!document) files.push(rowFile(model, OUTBOX_ROW, OUTBOX_EVENT, OUTBOX_DOC));
     files.push(
-      rowFile(model, OUTBOX_ROW, OUTBOX_EVENT, OUTBOX_DOC),
       file('outbox', 'IOutboxDispatcher', [], dispatcherPortBody()),
       file('outbox', 'OutboxDispatcherFallback', ['Microsoft.Extensions.Logging'], dispatcherFallbackBody()),
       file('outbox', 'OutboxBackoff', [], backoffBody()),
-      file(
-        'outbox',
-        'OutboxRelayStore',
-        ['Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.DependencyInjection', persistenceNamespace(model), rowsNamespace(model)],
-        relayStoreBody(model)
-      ),
+      document
+        ? file('outbox', 'OutboxRelayStore', ['MongoDB.Bson', 'MongoDB.Driver', persistenceNamespace(model)], documentRelayStoreBody())
+        : file(
+            'outbox',
+            'OutboxRelayStore',
+            ['Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.DependencyInjection', persistenceNamespace(model), rowsNamespace(model)],
+            relayStoreBody(model)
+          ),
       file('outbox', 'OutboxRelay', ['Microsoft.Extensions.Hosting', 'Microsoft.Extensions.Logging', persistenceNamespace(model), namespaceOf(model, 'messaging')], relayBody())
     );
   }
   if (usesProcessedEvents(model)) {
-    files.push(
-      rowFile(model, PROCESSED_ROW, PROCESSED_EVENT, PROCESSED_DOC),
-      file(
-        'messageIdempotency',
-        'IdempotencyGuard',
-        ['Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.Logging', 'Npgsql', persistenceNamespace(model), rowsNamespace(model)],
-        guardBody(model)
-      )
-    );
+    if (document) {
+      files.push(file('messageIdempotency', 'IdempotencyGuard', ['MongoDB.Bson', 'MongoDB.Driver', 'Microsoft.Extensions.Logging', persistenceNamespace(model)], documentGuardBody()));
+    } else {
+      files.push(
+        rowFile(model, PROCESSED_ROW, PROCESSED_EVENT, PROCESSED_DOC),
+        file(
+          'messageIdempotency',
+          'IdempotencyGuard',
+          ['Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.Logging', 'Npgsql', persistenceNamespace(model), rowsNamespace(model)],
+          guardBody(model)
+        )
+      );
+    }
   }
   return files;
 }

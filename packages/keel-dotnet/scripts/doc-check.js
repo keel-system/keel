@@ -28,6 +28,20 @@
 //   created-policy  el created_at de la auditoría de POLÍTICA (que el dominio no lleva) se reescribe en cada guardado
 //   enum        el enum se guarda por su miembro de C# y no por la constante del diseño
 //   day         el día se guarda en la zona del proceso, no a medianoche UTC
+// y los de los almacenes del generador (incremento 12c):
+//   outbox-order   el relay reclama sin el orden de llegada
+//   outbox-mark    el reclamo del relay ignora la marca viva (lo reclamado vuelve en la pasada siguiente)
+//   guard          la guarda no reconoce el _id repetido (la reentrega sale como error)
+//   key-order      el _id del registro de idempotencia con sus campos en otro orden (la ida y vuelta pasa: solo lo ve el crudo)
+//   claim-state    el reclamo de un barrido no filtra por su estado de partida
+//   claim-stale    el rescate se lleva también lo recién entrado en vuelo (sin cota temporal)
+//   claim-order    el reclamo ordena por el _id y no por el campo del diseño
+//   reconciliation-held       la lectura de candidatos no excluye los de marca viva
+//   reconciliation-threshold  el reclamo de reconciliación se lleva también lo recién encargado
+//   reconciliation-expiry     la marca caduca con < y no con el <= de keel-core
+//   purge-batch    cada lote borra hasta el corte y no hasta su frontera
+//   purge-column   la purga del outbox corta por created_at y no por published_at
+//   bridge-session el puente escribe la fila del outbox fuera de la sesión del cambio (sobrevive al aborto)
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -81,7 +95,29 @@ const SABOTAGES = {
   partial: ['Persistence/DocumentIndexes.cs', 'PartialFilterExpression = new BsonDocument("status", "', 'PartialFilterExpression = new BsonDocument("status", "x'],
   created: ['Persistence/BsonValues.cs', 'if (current.IsBsonNull || current is BsonString { Value: "" }', 'if (true || current.IsBsonNull || current is BsonString { Value: "" }'],
   enum: ['Persistence/BsonValues.cs', 'where T : struct, System.Enum => new BsonString(constant(value));', 'where T : struct, System.Enum => new BsonString(value.ToString());'],
-  day: ['Persistence/BsonValues.cs', 'new DateTimeOffset(value.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero)', 'new DateTimeOffset(value.ToDateTime(TimeOnly.MinValue), TimeSpan.FromHours(-5))']
+  day: ['Persistence/BsonValues.cs', 'new DateTimeOffset(value.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero)', 'new DateTimeOffset(value.ToDateTime(TimeOnly.MinValue), TimeSpan.FromHours(-5))'],
+  // Los almacenes del generador (incremento 12c).
+  'outbox-order': ['Outbox/OutboxRelayStore.cs', 'Sort = new BsonDocument("created_at", 1), ', ''],
+  'outbox-mark': [
+    'Outbox/OutboxRelayStore.cs',
+    'new BsonDocument("$or", new BsonArray { new BsonDocument("claimed_at", BsonNull.Value), new BsonDocument("claimed_at", new BsonDocument("$lte", claimCutoff)) })',
+    'new BsonDocument()'
+  ],
+  guard: ['Idempotency/IdempotencyGuard.cs', 'when (PersistenceErrors.DuplicateKeyMessage(error) is not null)', 'when (PersistenceErrors.DuplicateKeyMessage(error) is null)'],
+  'key-order': [
+    'Persistence/IdempotencyStore.cs',
+    'new BsonDocument { { "operation_scope", BsonValues.Of(scope) }, { "idempotency_key", BsonValues.Of(idempotencyKey) } }',
+    'new BsonDocument { { "idempotency_key", BsonValues.Of(idempotencyKey) }, { "operation_scope", BsonValues.Of(scope) } }'
+  ],
+  'claim-state': ['Repositories/', 'new BsonDocument("$in", new BsonArray {', 'new BsonDocument("$nin", new BsonArray {'],
+  'claim-stale': ['Repositories/', 'new BsonDocument("$lt", staleBefore)', 'new BsonDocument("$lt", claimedAt)'],
+  'claim-order': ['Repositories/', '{ Sort = new BsonDocument(', '{ Sort = new BsonDocument("_id", 1).Add('],
+  'reconciliation-held': ['Repositories/', 'new BsonDocument("$nin", new BsonArray(held))', 'new BsonDocument("$nin", new BsonArray())'],
+  'reconciliation-threshold': ['Repositories/', 'new BsonDocument("$lt", BsonValues.Of(unansweredBefore))', 'new BsonDocument("$lt", BsonValues.Of(now.AddDays(1)))'],
+  'reconciliation-expiry': ['Persistence/ReconciliationClaimStore.cs', 'new BsonDocument("$lte", BsonValues.Of(expiredBefore))', 'new BsonDocument("$lt", BsonValues.Of(expiredBefore))'],
+  'purge-batch': ['Purge/TablePurges.cs', '{ "$lte", BsonValues.Of(upTo) }', '{ "$lte", BsonValues.Of(cutoff) }'],
+  'purge-column': ['Purge/TablePurges.cs', 'new BsonDocument("published_at", ', 'new BsonDocument("created_at", '],
+  'bridge-session': ['DomainEventBridge.cs', 'InsertManyAsync(session, rows, ', 'InsertManyAsync(rows, ']
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación

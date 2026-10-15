@@ -43,6 +43,30 @@ for (const name of ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'p
   }
 }
 
+// Sobre documentos (incremento 12c), las mismas familias y sujetos que keel-nest documental.
+for (const name of ['inspection-reports', 'job-dispatch-mongo', 'notification-mailer-mongo', 'asset-vault']) {
+  test(`${name} [mongodb]: las familias y los sujetos del gate son los de keel-nest`, () => {
+    const stack = { database: 'mongodb', broker: 'rabbitmq' };
+    const ours = rows(gateOf(planService({ ...design(name), workspace: FIXTURES_DIR, stack }).files));
+    const theirs = rows(gateOf(planNest({ ...design(name), workspace: FIXTURES_DIR, stack }).files)).filter((row) => !PENDING_FAMILIES.has(row.split(' | ')[0]));
+    assert.ok(ours.length > 0);
+    assert.deepEqual(ours.filter((row) => !isInsertSubject(row)).sort(), theirs.filter((row) => !isInsertSubject(row)).sort());
+    assert.deepEqual(ours.filter(isInsertSubject).map((row) => row.split(' | ')[0]).sort(), theirs.filter(isInsertSubject).map((row) => row.split(' | ')[0]).sort());
+  });
+}
+
+test('sobre documentos, el INSERT que exige el gate es el que build emite: InsertOneAsync, sin reemplazo ni upsert', () => {
+  const { files } = planService({ ...design('notification-mailer-mongo'), workspace: FIXTURES_DIR, stack: { database: 'mongodb', broker: 'rabbitmq' } });
+  const gate = gateOf(files);
+  assert.match(gate, /InsertOneAsync/);
+  for (const suffix of ['/IdempotencyGuard.cs', '/IdempotencyStore.cs']) {
+    const source = files.find((file) => file.path.endsWith(suffix))?.content;
+    if (!source) continue;
+    assert.match(source, /InsertOneAsync\s*\(/, suffix);
+    assert.doesNotMatch(source, /ReplaceOne|IsUpsert|UpdateOne|FindOneAndReplace/, suffix);
+  }
+});
+
 /** Escribe el árbol emitido (con cambios del «agente») y ejecuta el gate. null sin bash. */
 function runGate(name, edits = {}) {
   const { files } = planService({ ...design(name), workspace: FIXTURES_DIR, stack: { database: 'postgresql', broker: 'rabbitmq' } });

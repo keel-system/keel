@@ -23,14 +23,14 @@ import { claimOrderField, claimsForEntity, screamingSnake, snakeCase, sweepClaim
 import { envWithDefault } from 'keel-core/gen/profile-values';
 import { csFile, csMember, csString, located, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
-import { usesRelational } from './persistence.js';
+import { usesPersistence } from './persistence.js';
 import { parametersClass, parametersNamespace } from './service-parameters.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
-/** ¿Genera build algún reclamo de barrido? Con persistencia relacional (el documental llega en el incremento 12). */
+/** ¿Genera build algún reclamo de barrido? Con persistencia, relacional o documental (incremento 12c). */
 export function usesSweepClaims(model) {
-  return usesRelational(model) && sweepClaims(model).length > 0;
+  return usesPersistence(model) && sweepClaims(model).length > 0;
 }
 
 export function generate(model) {
@@ -159,7 +159,7 @@ entero a todas. Actúa sobre lo que devuelve FUERA de su transacción.${stamp}${
 /** Lo que el constructor del adaptador recibe para sus reclamos: la configuración y, si un rescate lo lee, los parámetros. */
 export function claimDependencies(model, entity) {
   const claims = claimsForEntity(model, entity.name);
-  if (claims.length === 0 || !usesRelational(model)) return [];
+  if (claims.length === 0 || !usesPersistence(model)) return [];
   const deps = [{ type: 'SweepSettings', name: 'sweeps', usings: [] }];
   if (claims.some((claim) => claim.stalled?.parameter)) deps.push({ type: parametersClass(model), name: 'parameters', usings: [parametersNamespace(model)] });
   return deps;
