@@ -9,20 +9,19 @@
 // el resultado es indistinguible de una subida buena. Ningún escenario la echa de menos. La tabla es la neutral
 // de keel-core (gen/content-signatures.js), la misma que la del ContentSignature de keel-spring.
 //
-// La configuración (config/parameters/<perfil>/storage.yaml) tiene las MISMAS variables y el mismo gradiente
-// que el storage.yaml de keel-spring: un mismo .env sirve para los dos servidores del diseño.
+// La configuración (config/parameters/<perfil>/storage.yaml) es la neutral de keel-core (gen/storage-config.js), con las
+// MISMAS variables y el mismo gradiente que el storage.yaml de keel-spring: un mismo .env sirve para los tres servidores.
 
 import { CONTENT_SIGNATURES } from 'keel-core/gen/content-signatures';
-import { physicalBucketName } from 'keel-core/gen/buckets';
 import { declaredErrorFor } from 'keel-core/gen/declared-errors';
 import { STORAGE, devtoolsContainer, storageContainer } from 'keel-core/gen/infra-catalog';
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
 import { screamingSnake } from 'keel-core/gen';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { FILE_UPLOAD_TS } from './dtos.js';
 import { TELEMETRY_TS, instrumentationFor } from './telemetry.js';
-import { envValue, envWithDefault } from 'keel-core/gen/profile-values';
-import { envFor } from 'keel-core/gen/runtime-env';
+import { storageYaml, multipartFileLimitBytes } from 'keel-core/gen/storage-config';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const STORAGE_DIR = 'domain/storage';
@@ -49,11 +48,7 @@ export function usesMultipart(model) {
   return (model.services ?? []).some((service) => (service.operations ?? []).some((operation) => operation.route && operation.multipart));
 }
 
-/** El límite de la ENTRADA: el doble del mayor `maxSizeMb`, como el servlet de keel-spring (o 10 MB sin ninguno). */
-export function multipartFileLimitBytes(model) {
-  const maxSizeMb = model.storage?.maxSizeMb ?? null;
-  return (maxSizeMb != null ? maxSizeMb * 2 : 10) * 1024 * 1024;
-}
+export { multipartFileLimitBytes };
 
 export function generate(model) {
   const files = [];
@@ -512,61 +507,6 @@ export class StorageModule {
   return tsModule(STORAGE_MODULE_TS, imports, body);
 }
 
-/** config/parameters/<perfil>/storage.yaml: las mismas claves, variables y gradiente que el de keel-spring. */
-function storageYaml(model, profile) {
-  const { stack } = model;
-  const isMinio = stack.storage === 'minio';
-  const isTest = profile === 'test';
-  const lines = ['storage:', `  provider: ${stack.storage}`];
-  if (isTest) {
-    // El perfil test no tiene almacén: un endpoint local SIEMPRE, también con S3, para que nada salga a Internet.
-    lines.push('  endpoint: http://localhost:9000');
-  } else if (isMinio) {
-    lines.push(`  endpoint: ${envFor('STORAGE_ENDPOINT', profile)}`);
-  } else if (profile === 'local') {
-    lines.push('  # S3 real: el endpoint lo resuelve el SDK por región; define STORAGE_ENDPOINT solo para un compatible.');
-  }
-  lines.push(
-    `  region: ${envFor('STORAGE_REGION', profile)}`,
-    `  access-key: ${envFor('STORAGE_ACCESS_KEY', profile, isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
-    `  secret-key: ${envFor('STORAGE_SECRET_KEY', profile, isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
-    isMinio || isTest ? '  path-style-access: true' : '  path-style-access: false'
-  );
-  if (model.storage?.hasPublicBucket) {
-    if (isTest) lines.push('  public-base-url: http://localhost:9000');
-    else if (profile === 'local') lines.push(`  public-base-url: ${envFor('STORAGE_PUBLIC_BASE_URL', profile)}`);
-    else {
-      lines.push(
-        '  # URL base con la que el CONSUMIDOR lee los objetos públicos (CDN o borde),',
-        '  # no el endpoint interno del almacén.',
-        '  public-base-url: ${STORAGE_PUBLIC_BASE_URL}'
-      );
-    }
-  }
-  lines.push(
-    `  ensure-buckets-on-startup: ${
-      isTest ? 'false' : profile === 'local' ? 'true' : profile === 'develop' ? '${STORAGE_ENSURE_BUCKETS:true}' : '${STORAGE_ENSURE_BUCKETS:false}'
-    }`
-  );
-  const buckets = model.storage?.buckets ?? [];
-  if (buckets.length > 0) {
-    lines.push('  buckets:');
-    for (const bucket of buckets) {
-      lines.push(
-        `    ${bucket.name}:`,
-        `      bucket: ${envValue(profile, `STORAGE_BUCKET_${screamingSnake(bucket.name)}`, physicalBucketName(model, bucket))}`,
-        `      visibility: ${bucket.visibility}`
-      );
-      if (bucket.maxSizeMb != null) lines.push(`      max-size-mb: ${bucket.maxSizeMb}`);
-      if (bucket.signedUrlTtlSeconds != null) {
-        lines.push(`      signed-url-ttl-seconds: ${envWithDefault(profile, `STORAGE_${screamingSnake(bucket.name)}_SIGNED_URL_TTL_SECONDS`, bucket.signedUrlTtlSeconds)}`);
-      }
-      if (bucket.allowedContentTypes.length > 0) lines.push(`      allowed-content-types: ${bucket.allowedContentTypes.join(',')}`);
-    }
-  }
-  return `${lines.join('\n')}\n`;
-}
-
 // ─── infrastructure/rest/multipart-reading.ts ────────────────────────────────
 
 function multipartReadingTs(model) {
@@ -617,11 +557,11 @@ export async function readMultipart(request: FastifyRequest): Promise<MultipartF
   } catch (error) {
     const code = (error as { code?: unknown } | null)?.code;
     if (code === 'FST_REQ_FILE_TOO_LARGE') {
-      throw new PayloadTooLargeException('El archivo supera el tamaño máximo permitido', { code: FILE_TOO_LARGE });
+      throw new PayloadTooLargeException(${tsString(FW.fileTooLarge.message)}, { code: FILE_TOO_LARGE });
     }
     // Todo lo demás es un cuerpo que no se puede leer: cortado (ERR_STREAM_PREMATURE_CLOSE), mal formado (busboy) o
     // fuera de los límites del lector (FST_*). Es el FILE_UNREADABLE del catálogo de errores del framework.
-    throw new BadRequestException('No se pudo leer el archivo enviado', { code: FILE_UNREADABLE, httpStatus: 400, cause: error });
+    throw new BadRequestException(${tsString(FW.fileUnreadable.message)}, { code: FILE_UNREADABLE, httpStatus: 400, cause: error });
   }
   return { fields, files };
 }
@@ -632,7 +572,7 @@ export function requirePart(files: Readonly<Record<string, FileUpload | null>>, 
   // Una parte obligatoria que llega VACÍA (0 bytes) no es «sin archivo»: es una subida rota, el FILE_UNREADABLE del
   // catálogo del framework. Devolver null la llevaba al handler y salía un 500 (corrida asset-vault, VAL-UPL-8).
   const file = files[name] ?? null;
-  if (file == null) throw new BadRequestException('El archivo enviado está vacío', { code: FILE_UNREADABLE, httpStatus: 400 });
+  if (file == null) throw new BadRequestException(${tsString(FW.fileEmpty.message)}, { code: FILE_UNREADABLE, httpStatus: 400 });
   return file;
 }`;
   return tsModule(MULTIPART_READING_TS, imports, body);

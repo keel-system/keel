@@ -34,6 +34,15 @@ export function isPublicBucket(model, name) {
   return (model.storage?.buckets ?? []).some((bucket) => bucket.name === name && bucket.visibility === 'public');
 }
 
+/** Los nombres de la política y de sus métodos en la nota de la subida: los de keel-spring y keel-nest. */
+export const UPLOAD_NOTE_NAMES = {
+  policies: 'storagePolicies',
+  forBucket: 'forBucket',
+  constant: (name) => screamingSnake(name),
+  allowsSize: 'allowsSize',
+  allowsContent: 'allowsContent'
+};
+
 /**
  * La nota del handler de una operación con SUBIDA: qué comprueba el caso de uso antes de subir, y en qué orden.
  *
@@ -41,14 +50,16 @@ export function isPublicBucket(model, name) {
  * no es el límite de negocio. El del bucket lo comprueba el handler con `BucketPolicy.allowsSize`, y eso no lo decía
  * ninguna nota: el agente de keel-spring lo sacó de su skill de S3 y el de keel-nest no (corrida catalog de
  * keel-nest, 2026-10-11: FL-IMG-001-F, un ciclo), con una regla del diseño que dice «el tamaño se rechaza al leer la
- * petición». Neutral: la escriben igual los dos generadores.
+ * petición». Neutral: la escriben igual los tres generadores, cada uno con los nombres de su lenguaje.
  *
  * @param {object} model modelo del servicio
  * @param {object} operation la operación
- * @param {{ sizeCode: string }} codes el `code` del 413 que resuelve el generador (declarado o canónico)
+ * @param {{ sizeCode: string, names?: object }} codes el `code` del 413 que resuelve el generador (declarado o canónico)
+ *   y, si hace falta, cómo se llaman la política y sus métodos en su lenguaje (por defecto `UPLOAD_NOTE_NAMES`, los de
+ *   keel-spring y keel-nest; keel-dotnet pasa los de C#)
  * @returns {string[]} una nota por campo de subida
  */
-export function uploadNotes(model, operation, { sizeCode }) {
+export function uploadNotes(model, operation, { sizeCode, names = UPLOAD_NOTE_NAMES }) {
   const notes = [];
   for (const field of operation.bodyFields ?? []) {
     if (field.kind !== 'fileUpload' || !field.bucket) continue;
@@ -57,13 +68,13 @@ export function uploadNotes(model, operation, { sizeCode }) {
     const size = bucket.maxSizeMb != null ? `${bucket.maxSizeMb} MB` : null;
     const types = (bucket.allowedContentTypes ?? []).join(', ');
     notes.push(
-      `Subida ${field.name} (bucket ${bucket.name}): la política es storagePolicies.forBucket(StoragePolicies.${screamingSnake(bucket.name)}). ` +
+      `Subida ${field.name} (bucket ${bucket.name}): la política es ${names.policies}.${names.forBucket}(StoragePolicies.${names.constant(bucket.name)}). ` +
         (size
           ? `El lector multipart solo corta al doble del mayor maxSizeMb del servicio: el límite de este bucket (${size}) ` +
-            `lo compruebas TÚ, lo primero, con allowsSize(tamaño) → ${sizeCode} (413) si no cabe. `
+            `lo compruebas TÚ, lo primero, con ${names.allowsSize}(tamaño) → ${sizeCode} (413) si no cabe. `
           : 'El bucket no declara tamaño máximo. ') +
         (types
-          ? `Después allowsContent(bytes, tipo declarado) —el tipo (${types}) y la firma del contenido—; nunca solo el tipo declarado. `
+          ? `Después ${names.allowsContent}(bytes, tipo declarado) —el tipo (${types}) y la firma del contenido—; nunca solo el tipo declarado. `
           : '') +
         'Y la subida al almacenamiento, al final: lo que se rechaza antes no deja un objeto huérfano.'
     );

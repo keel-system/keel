@@ -54,8 +54,25 @@ export const FRAMEWORK_RESPONSES = {
   /** La cadena de seguridad: la petición no trae credencial, o la que trae no vale (code UNAUTHENTICATED). */
   unauthenticated: { status: 401, error: 'Unauthorized', message: 'Credenciales ausentes o no válidas' },
   /** La cadena de seguridad: la credencial vale pero no autoriza la operación (code ACCESS_DENIED). */
-  accessDenied: { status: 403, error: 'Forbidden', message: 'La credencial no autoriza esta operación' }
+  accessDenied: { status: 403, error: 'Forbidden', message: 'La credencial no autoriza esta operación' },
+  // La subida multipart (capa storage). Su `code` no vive aquí: el 413 lleva el que declara el diseño o el canónico
+  // (FRAMEWORK_ERRORS.fileTooLarge), y lo ilegible y lo vacío, FILE_UNREADABLE (FRAMEWORK_ERRORS.fileUnreadable).
+  /** Falta la parte binaria obligatoria (el MissingServletRequestPartException de keel-spring), sin code. */
+  missingPart: { status: 400, error: 'Bad Request', message: "Falta la parte '{name}' en la petición multipart" },
+  /** Una operación de subida recibió un cuerpo que no es multipart/form-data, sin code. */
+  notMultipart: { status: 415, error: 'Unsupported Media Type', message: 'La operación espera multipart/form-data' },
+  /** El cuerpo supera el límite de la ENTRADA (el doble del mayor `maxSizeMb`). */
+  fileTooLarge: { status: 413, error: 'Payload Too Large', message: 'El archivo supera el tamaño máximo permitido' },
+  /** El cuerpo multipart no se puede leer: cortado o mal formado. */
+  fileUnreadable: { status: 400, error: 'Bad Request', message: 'No se pudo leer el archivo enviado' },
+  /** Una parte obligatoria llegó con cero bytes: es una subida rota, no «sin archivo». */
+  fileEmpty: { status: 400, error: 'Bad Request', message: 'El archivo enviado está vacío' }
 };
+
+/** El mensaje de una parte obligatoria ausente en una subida multipart, con el nombre ya puesto. */
+export function missingPartMessage(name) {
+  return FRAMEWORK_RESPONSES.missingPart.message.replace('{name}', name);
+}
 
 /** El mensaje de un parámetro obligatorio ausente, con el nombre ya puesto. */
 export function missingParameterMessage(name) {

@@ -26,6 +26,12 @@ function javaSignature(block) {
   return null;
 }
 
+// Los argumentos de una anotación: un paréntesis dentro de una cadena no la cierra (`@Pattern(regexp = "^(a|b)$")`).
+const ANNOTATION_ARGS = String.raw`(?:\((?:"(?:[^"\\]|\\.)*"|[^()"])*\))?`;
+// Un @RequestParam con sus anotaciones de validación y su tipo, que puede ser genérico con anotaciones dentro
+// (`List<@Size(max = 40) String>`, la lista de una subida). Con la versión anterior se perdían los dos casos.
+const REQUEST_PARAM = new RegExp(String.raw`@RequestParam${ANNOTATION_ARGS} (?:@\w+${ANNOTATION_ARGS} )*[\w.]+(?:<[^>]*>)? (\w+)`, 'g');
+
 /** La tabla de rutas de los controladores Java que emite keel-spring, por nombre de operación. */
 export function springRoutes(files) {
   const routes = new Map();
@@ -41,7 +47,7 @@ export function springRoutes(files) {
       const status = /ResponseEntity\.created/.test(block)
         ? 201
         : STATUS_BY_CONSTANT[/@ResponseStatus\(HttpStatus\.(\w+)\)/.exec(block)?.[1]] ?? Number(/HttpStatus\.valueOf\((\d+)\)/.exec(block)?.[1] ?? 200);
-      const query = [...params.matchAll(/@RequestParam(?:\([^)]*\))? (?:@\w+(?:\([^)]*\))? )*[\w<>.]+ (\w+)/g)].map((m) => m[1]);
+      const query = [...params.matchAll(REQUEST_PARAM)].map((m) => m[1]);
       // El Pageable de Spring Data lee tres parámetros: página, tamaño y orden.
       if (/Pageable pageable/.test(params)) query.push('page', 'size', 'sort');
       const body = /@RequestBody\(required = false\)/.test(params) ? 'optional' : /@RequestBody/.test(params) ? 'required' : null;

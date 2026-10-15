@@ -11,7 +11,7 @@
 
 import { WIRE_SHAPES } from 'keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from 'keel-core';
-import { FRAMEWORK_RESPONSES as FW, missingParameterMessage } from 'keel-core/gen/api-errors';
+import { FRAMEWORK_RESPONSES as FW, missingParameterMessage, missingPartMessage } from 'keel-core/gen/api-errors';
 import { apiCases as neutralApiCases, securityCases as neutralSecurityCases } from 'keel-core/gen/api-cases';
 import { usesApi } from './rest-support.js';
 import { messageComponents } from './services.js';
@@ -91,7 +91,7 @@ function apiTest(model) {
     const headers = secured ? '...CREDENTIAL, ' : '';
     const expected = firstMissing.parameter
       ? `expectError(response, 400, '${FW.missingParameter.error}', '${validation}', ${tsString(missingParameterMessage(firstMissing.parameter))});`
-      : `expectError(response, 400, 'Bad Request', null, ${tsString(`Falta la parte '${firstMissing.part}' en la petición multipart`)});`;
+      : `expectError(response, 400, 'Bad Request', null, ${tsString(missingPartMessage(firstMissing.part))});`;
     tests.push(`  it('una subida vacía echa en falta lo primero que el mensaje pide, como keel-spring', async () => {
     const form = multipart({});
     const response = await app.inject({ method: 'POST', url: ${tsString(url)}, headers: { ${headers}...form.headers }, payload: form.payload });
@@ -100,7 +100,7 @@ function apiTest(model) {
 
   it('un cuerpo JSON en una subida es 415', async () => {
     const response = await app.inject({ method: 'POST', url: ${tsString(url)}, headers: { ${headers}'content-type': 'application/json' }, payload: '{}' });
-    expectError(response, 415, 'Unsupported Media Type', null, 'La operación espera multipart/form-data');
+    expectError(response, 415, 'Unsupported Media Type', null, ${tsString(FW.notMultipart.message)});
   });`);
     if (fields) {
       tests.push(`  it('una subida completa llega a su handler: lee los campos y el binario', async () => {

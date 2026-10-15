@@ -207,7 +207,7 @@ export class MissingParameterError extends Error {
 /** Falta la parte binaria obligatoria de una subida multipart. */
 export class MissingPartError extends Error {
   constructor(readonly part: string) {
-    super(\`Falta la parte '\${part}' en la petición multipart\`);
+    super(\`${FW.missingPart.message.split('{name}')[0]}\${part}${FW.missingPart.message.split('{name}')[1]}\`);
     this.name = 'MissingPartError';
   }
 }
@@ -215,7 +215,7 @@ export class MissingPartError extends Error {
 /** Una operación de subida recibió un cuerpo que no es multipart/form-data. */
 export class UnsupportedMediaTypeError extends Error {
   constructor() {
-    super('La operación espera multipart/form-data');
+    super('${FW.notMultipart.message}');
     this.name = 'UnsupportedMediaTypeError';
   }
 }

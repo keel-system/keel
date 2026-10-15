@@ -178,14 +178,14 @@ function fileUploadHelper(model, imports) {
             // Una parte OBLIGATORIA que llega vacía no es «sin archivo»: es una subida rota, el
             // FILE_UNREADABLE del catálogo del framework, y no el VALIDATION_ERROR del @NotNull.
             if (required) {
-                throw new BadRequestException("El archivo enviado está vacío", "FILE_UNREADABLE", 400, null);
+                throw new BadRequestException(${JSON.stringify(FW.fileEmpty.message)}, "FILE_UNREADABLE", 400, null);
             }
             return null;
         }
         try {
             return new FileUpload(file.getBytes(), file.getOriginalFilename(), file.getContentType(), file.getSize());
         } catch (IOException exception) {
-            throw new BadRequestException("No se pudo leer el archivo enviado", "FILE_UNREADABLE", 400, null);
+            throw new BadRequestException(${JSON.stringify(FW.fileUnreadable.message)}, "FILE_UNREADABLE", 400, null);
         }
     }`;
 }
@@ -603,14 +603,14 @@ function renderMultipartHandlers(imports, model) {
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ErrorResponse onMaxUploadSizeExceeded(MaxUploadSizeExceededException exception) {
         return new ErrorResponse(HttpStatus.PAYLOAD_TOO_LARGE.value(), "Payload Too Large",
-                "${tooLarge}", "El archivo supera el tamaño máximo permitido", List.of());
+                "${tooLarge}", ${JSON.stringify(FW.fileTooLarge.message)}, List.of());
     }
 
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(MissingServletRequestPartException.class)
     public ErrorResponse onMissingRequestPart(MissingServletRequestPartException exception) {
         return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request",
-                "Falta la parte '" + exception.getRequestPartName() + "' en la petición multipart");
+                ${JSON.stringify(FW.missingPart.message.split('{name}')[0])} + exception.getRequestPartName() + ${JSON.stringify(FW.missingPart.message.split('{name}')[1])});
     }
 
     // Un cuerpo que no es multipart en una subida (la ruta declara consumes multipart/form-data): sin
@@ -619,7 +619,7 @@ function renderMultipartHandlers(imports, model) {
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     public ErrorResponse onUnsupportedMediaType(HttpMediaTypeNotSupportedException exception) {
         String message = exception.getSupportedMediaTypes().contains(MediaType.MULTIPART_FORM_DATA)
-                ? "La operación espera multipart/form-data"
+                ? ${JSON.stringify(FW.notMultipart.message)}
                 : "Tipo de contenido no soportado";
         return new ErrorResponse(HttpStatus.UNSUPPORTED_MEDIA_TYPE.value(), "Unsupported Media Type", message);
     }
