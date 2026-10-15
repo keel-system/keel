@@ -42,6 +42,7 @@
 //   purge-batch    cada lote borra hasta el corte y no hasta su frontera
 //   purge-column   la purga del outbox corta por created_at y no por published_at
 //   bridge-session el puente escribe la fila del outbox fuera de la sesión del cambio (sobrevive al aborto)
+//   credential     el finder de resolvedBy busca solo en la primera credencial de la lista
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -117,7 +118,9 @@ const SABOTAGES = {
   'reconciliation-expiry': ['Persistence/ReconciliationClaimStore.cs', 'new BsonDocument("$lte", BsonValues.Of(expiredBefore))', 'new BsonDocument("$lt", BsonValues.Of(expiredBefore))'],
   'purge-batch': ['Purge/TablePurges.cs', '{ "$lte", BsonValues.Of(upTo) }', '{ "$lte", BsonValues.Of(cutoff) }'],
   'purge-column': ['Purge/TablePurges.cs', 'new BsonDocument("published_at", ', 'new BsonDocument("created_at", '],
-  'bridge-session': ['DomainEventBridge.cs', 'InsertManyAsync(session, rows, ', 'InsertManyAsync(rows, ']
+  'bridge-session': ['DomainEventBridge.cs', 'InsertManyAsync(session, rows, ', 'InsertManyAsync(rows, '],
+  // resolvedBy (12e): el finder por credencial busca solo en la PRIMERA de la lista.
+  credential: ['Repositories/', 'new BsonDocument("credential_keys", ', 'new BsonDocument("credential_keys.0", ']
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación

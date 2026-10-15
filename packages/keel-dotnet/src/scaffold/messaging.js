@@ -33,6 +33,7 @@ import { csFile, csLocal, csMember, csString, declType, fieldUsings, located, na
 import { configNamespace } from './config.js';
 import { wireNamespace } from './wire.js';
 import { usesPersistence, usesDocument, dbContextClass, persistenceNamespace, rowsNamespace } from './persistence.js';
+import { credentialFinderName } from './repositories.js';
 import { outboxDocumentLiteral } from './document-stores.js';
 import { jsonRead, rulesArgs } from './endpoints.js';
 
@@ -677,7 +678,7 @@ function contractDoc(model, sub) {
     lines.push(
       `Identidad del emisor: resuelve ${sub.identity.field} desde ${sub.identity.from.location === 'header' ? `el header '${sub.identity.from.name}'` : `el campo '${sub.identity.from.name}' del mensaje`}, y pásala YA RESUELTA a la operación. No la leas del payload.` +
         (sub.identity.resolvedBy
-          ? ` El valor leído es una credencial de ${sub.identity.resolvedBy.entity}: búscala con su finder antes de despachar.`
+          ? ` El valor leído es UNA de las credenciales de ${sub.identity.resolvedBy.entity} (resolvedBy: ${sub.identity.resolvedBy.entity}.${sub.identity.resolvedBy.field}), no su clave natural: búscalo con I${sub.identity.resolvedBy.entity}Repository.${credentialFinderName(sub.identity.resolvedBy.field)}(...), que build ya generó, y pasa la clave natural del ${sub.identity.resolvedBy.entity} encontrado (lo mismo que hace la puerta HTTP). Buscar por la clave natural resuelve solo la credencial que coincide con ella.`
           : ' Se resuelve 1:1: el valor leído ES la clave natural del recurso que identifica.')
     );
     lines.push(

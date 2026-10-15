@@ -34,7 +34,7 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { sampleFor } from '../../../keel-nest/scripts/lib/samples.js';
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { csLocal, csMember, csString, entityPlace, namespaceOf, solution, typeUsings } from '../../src/scaffold/render.js';
-import { repositoryRoots, portClass, repositoriesNamespace, isPaginated } from '../../src/scaffold/repositories.js';
+import { repositoryRoots, portClass, repositoriesNamespace, isPaginated, credentialFinders } from '../../src/scaffold/repositories.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
 
 /**
@@ -388,6 +388,7 @@ function probesCs(model, namespace) {
             Assert.Null(await InScope(other => other.GetRequiredService<${port}>().FindById(samples[0].${id}, Cancel)));
         });`);
     }
+    tests.push(...credentialProbes(model, root, { state, sample: 16, port }));
     tests.push(...claimProbes(model, root, { state, first: SAMPLES + 1, port, context: dbContext(model) }));
     tests.push(...reconciliationProbes(model, root, { state, first: SAMPLES + 1 + claimSampleCount(model, root), port, context: dbContext(model) }));
     blocks.push(`    // ─── ${root.name} ───\n\n${tests.join('\n\n')}`);
@@ -554,6 +555,29 @@ ${ensures.join('\n\n')}
 }`;
   if (ctx.unsampled.length > 0) console.warn(`  (db-check) sin muestra para ${[...new Set(ctx.unsampled)].join(', ')}`);
   return csFileLike(namespace, usings, body);
+}
+
+/**
+ * El finder por credencial (resolvedBy, 12e): el agregado se resuelve por CUALQUIERA de sus credenciales —también la que
+ * no es la primera— y una credencial ajena no resuelve nada. Lo comparten db-check y doc-check: solo usa el puerto.
+ */
+export function credentialProbes(model, root, { state, sample, port }) {
+  const id = csMember(root.idField?.name ?? 'id');
+  return credentialFinders(model, root).map(
+    (credential) => `    [Fact]
+    public async Task ${root.name}_${credential.name}_ResuelvePorCualquierCredencialYUnaAjenaNoResuelve() =>
+        await InScope(async services =>
+        {
+            var sample = new ${root.name}(${state(sample)});
+            Assert.True(sample.${csMember(credential.field.name)}.Count >= 2, "la muestra necesita dos credenciales");
+            await services.GetRequiredService<${port}>().Save(sample, Cancel);
+            // La SEGUNDA: buscar solo la primera (o por la clave natural) resolvería una sola.
+            var found = await InScope(other => other.GetRequiredService<${port}>().${credential.name}(sample.${csMember(credential.field.name)}[1], Cancel));
+            Assert.NotNull(found);
+            Assert.Equal(sample.${id}, found.${id});
+            Assert.Null(await InScope(other => other.GetRequiredService<${port}>().${credential.name}("ajena-" + Guid.NewGuid().ToString("N"), Cancel)));
+        });`
+  );
 }
 
 /**

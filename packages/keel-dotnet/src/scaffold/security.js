@@ -24,7 +24,8 @@ import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
 import { accessPlan, audienceOf, tokenClaims, usesTokenProtocol } from 'keel-core/gen/access-plan';
 import { envRequired } from 'keel-core/gen/profile-values';
 import { envFor, runtimeDefault } from 'keel-core/gen/runtime-env';
-import { csFile, csString, located, namespaceOf } from './render.js';
+import { csFile, csMember, csString, located, namespaceOf } from './render.js';
+import { credentialFinderName, portClass, repositoriesNamespace } from './repositories.js';
 import { configNamespace } from './config.js';
 import { usesApi } from './rest-support.js';
 import { wireNamespace } from './wire.js';
@@ -75,6 +76,24 @@ export function usesCallerIdentity(model) {
   return Boolean(plan && !plan.open && model.security?.callerIdentity);
 }
 
+/**
+ * Cuándo la identidad del llamante se RESUELVE al recurso y no se pasa en crudo: con `from.resolvedBy` el valor del token
+ * es UNA de las credenciales del recurso, no su clave natural. La misma decisión que keel-spring y keel-nest: el endpoint
+ * pasa la clave natural (o null si la credencial no es de nadie, y la operación responde con el error que el diseño
+ * declare para ello), y lo mismo hace el listener por el canal de eventos. Solo con una clave natural de UN campo: una
+ * compuesta no cabe en el campo de identidad.
+ */
+export function callerResolution(model) {
+  const resolvedBy = model.security?.callerIdentity?.resolvedBy;
+  if (!resolvedBy || !usesCallerIdentity(model)) return null;
+  const entity = model.entities.find((candidate) => candidate.name === resolvedBy.entity);
+  if (!entity || (entity.naturalKey ?? []).length !== 1) return null;
+  const field = entity.fields.find((candidate) => candidate.name === resolvedBy.field);
+  if (!field || !field.list) return null;
+  const keyField = entity.fields.find((candidate) => candidate.name === entity.naturalKey[0]);
+  return { entity, field: resolvedBy.field, keyField: entity.naturalKey[0], keyType: keyField?.csType ?? 'string', finder: credentialFinderName(resolvedBy.field), port: portClass(entity) };
+}
+
 /** ¿Hay alcance por recurso con su puerto? Solo sobre un token: es un claim. */
 export function usesCallerScope(model) {
   return Boolean(usesJwt(model) && model.security?.scoping);
@@ -113,6 +132,10 @@ export function generate(model) {
     files.push(file(model, 'security', 'CorsPolicy', corsPolicyBody(model), ['System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', configNamespace(model)]));
   }
   if (usesCallerIdentity(model)) files.push(file(model, 'security', 'CallerIdentity', callerIdentityBody(model)));
+  const resolution = callerResolution(model);
+  if (resolution) {
+    files.push(file(model, 'security', 'CallerIdentityResolver', callerIdentityResolverBody(model, resolution), [repositoriesNamespace(model), 'System.Globalization']));
+  }
   if (usesCallerScope(model)) {
     files.push(file(model, 'appSupport', CALLER_SCOPE_PORT, callerScopePortBody(model)));
     files.push(file(model, 'security', 'JwtCallerScope', jwtCallerScopeBody(model), ['System.Text.Json', namespaceOf(model, 'appSupport')]));
@@ -806,6 +829,36 @@ ${extract}
 }`;
 }
 
+function callerIdentityResolverBody(model, resolution) {
+  const identity = model.security.callerIdentity;
+  const key = csMember(resolution.keyField);
+  const value = resolution.keyType === 'string' ? `found?.${key}` : `found is null ? null : Convert.ToString(found.${key}, CultureInfo.InvariantCulture)`;
+  return `/// <summary>
+/// La identidad del llamante, resuelta al ${resolution.entity.name} al que pertenece su credencial. El diseño declara que un
+/// mismo ${resolution.entity.name} tiene varias (resolvedBy: ${resolution.entity.name}.${resolution.field}): el valor del token no es su
+/// clave natural. Se busca con ${resolution.port}.${resolution.finder} y se devuelve la clave natural (<c>${resolution.keyField}</c>),
+/// que es lo que el campo <c>${identity.field}</c> significa en el diseño —y lo mismo que el listener pasa por el canal de
+/// eventos—. Es lo que hace el CallerIdentity del servidor de keel-spring y el resolutor de keel-nest.
+/// </summary>
+public sealed class CallerIdentityResolver(${resolution.port} repository)
+{
+    /// <summary>
+    /// La clave natural del ${resolution.entity.name} de la credencial del llamante, o null si la credencial no pertenece a
+    /// ninguno. El null NO es un error de este punto: que el recurso no exista es una precondición de la operación, y es
+    /// ella la que responde con el error que el diseño declare, con su precedencia.
+    /// </summary>
+    public async Task<string?> Resolve(string? credential, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(credential))
+        {
+            return null;
+        }
+        var found = await repository.${resolution.finder}(credential, cancellationToken);
+        return ${value};
+    }
+}`;
+}
+
 // ─── El alcance por recurso: ICallerScope ───────────────────────────────────────────────────────
 
 function callerScopePortBody(model) {
@@ -895,6 +948,8 @@ function registration(model) {
   if (usesJwt(model)) lines.push('        services.AddSingleton(new JwtAuthenticator(configuration));');
   if (apiKeyClients(model).length > 0) lines.push('        services.AddSingleton(new ApiKeyAuthenticator(configuration));');
   if (model.security?.cors) lines.push('        services.AddSingleton(new CorsPolicy(configuration));');
+  // La identidad del llamante resuelta contra las credenciales del recurso: por petición, sobre el repositorio del ámbito.
+  if (callerResolution(model)) lines.push('        services.AddScoped<CallerIdentityResolver>();');
   const usings = ['Microsoft.Extensions.DependencyInjection', configNamespace(model)];
   if (usesCallerScope(model)) {
     lines.push('        services.AddCallerScope();');

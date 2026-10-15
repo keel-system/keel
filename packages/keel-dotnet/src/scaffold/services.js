@@ -23,7 +23,7 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { idempotencyOutcomeCode } from 'keel-core/gen';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_PORT, idempotencyNamespace, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
-import { CALLER_SCOPE_PORT, scopedOperation } from './security.js';
+import { CALLER_SCOPE_PORT, callerResolution, scopedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
 import { callMethod, clientPort, clientsNamespace } from './http-clients.js';
 
@@ -106,7 +106,10 @@ function usesOptional(model) {
 }
 
 /** El tipo con el que el mensaje DECLARA un componente. */
-export function componentType(operation, component) {
+export function componentType(operation, component, model = null) {
+  // La identidad resuelta contra varias credenciales (resolvedBy) puede no ser de nadie: el mensaje lleva null y la
+  // operación responde con el error que declare el diseño (la misma decisión que keel-spring y keel-nest).
+  if (component.resolvedIdentity && model && callerResolution(model)) return `${component.csType}?`;
   if (isThreeState(operation, component)) {
     const inner = component.list ? component.csType : `${component.csType}?`;
     return `Optional<${inner}>`;
@@ -135,7 +138,7 @@ function scaleRounding(component, type) {
 export function messagesRoundScale(model) {
   return (model.services ?? []).some((service) =>
     (service.operations ?? []).some((operation) =>
-      messageComponents(operation, model).some((component) => scaleRounding(component, componentType(operation, component)) != null)
+      messageComponents(operation, model).some((component) => scaleRounding(component, componentType(operation, component, model)) != null)
     )
   );
 }
@@ -147,7 +150,7 @@ function renderMessage(model, operation) {
   const usings = [namespaceOf(model, 'abstractions'), ...resultUsings(model, operation)];
   const properties = messageComponents(operation, model).map((component) => {
     usings.push(...fieldUsings(model, component));
-    const type = componentType(operation, component);
+    const type = componentType(operation, component, model);
     const rounding = scaleRounding(component, type);
     if (rounding) usings.push(namespaceOf(model, 'domainSupport'));
     if (type.startsWith('Optional<')) usings.push(namespaceOf(model, 'appSupport'));
@@ -200,6 +203,17 @@ function componentNotes(model, operation, component) {
       'Lo resuelve el servidor desde la credencial (security.authentication.callerIdentity): no llega del',
       'cuerpo, lo estampa el lector del endpoint con CallerIdentity.Resolve().'
     );
+    const resolution = callerResolution(model);
+    if (resolution) {
+      // Resuelto ya en la puerta: el endpoint y el listener pasan la clave natural, así que el handler no vuelve a mirar
+      // credenciales. Lo único que decide es qué hacer con el null.
+      lines.push(
+        `Llega YA resuelto a la clave natural de ${resolution.entity.name} (${resolution.keyField}): por HTTP lo resuelve`,
+        `CallerIdentityResolver con ${resolution.port}.${resolution.finder}(...), y por eventos el listener con el`,
+        `mismo finder. null = la credencial no pertenece a ningún ${resolution.entity.name}: es la precondición de la`,
+        'operación y responde con el error que el diseño declare para ella.'
+      );
+    }
   }
   const inherited = component.list ? null : component.inheritedPattern;
   if (!inherited || !(model.formatTypes ?? []).some((type) => type.name === component.typeName)) {

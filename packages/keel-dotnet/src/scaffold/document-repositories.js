@@ -23,7 +23,7 @@ import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
 import { claimDependencies } from './claim.js';
 import { reconciliationDependencies } from './reconciliation-claim.js';
 import { documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
-import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents } from './repositories.js';
+import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents, credentialFinders } from './repositories.js';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -411,6 +411,16 @@ export function renderDocumentAdapter(model, entity) {
     methods.push(`    public async Task<${entity.name}?> ${finder.name}(${signature}, CancellationToken cancellationToken = default)
     {
         var found = await Find(${keyFilter(model, entity, finder)}).FirstOrDefaultAsync(cancellationToken);
+        return found is null ? null : ToDomain${entity.name}(found);
+    }`);
+  }
+
+  for (const credential of credentialFinders(model, entity)) {
+    const local = csLocal(credential.param);
+    methods.push(`    public async Task<${entity.name}?> ${credential.name}(string ${local}, CancellationToken cancellationToken = default)
+    {
+        // La lista es un array del propio documento: MongoDB casa un array con uno de sus elementos.
+        var found = await Find(new BsonDocument(${csString(keyOf(model, entity, credential.field.name))}, ${writeScalar(credential.field, local)})).FirstOrDefaultAsync(cancellationToken);
         return found is null ? null : ToDomain${entity.name}(found);
     }`);
   }

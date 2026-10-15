@@ -111,16 +111,14 @@ for (const name of secured) {
   }
 }
 
-test('la frontera: la capa entra; resolvedBy y un campo de identidad que no es texto se rechazan con su motivo', () => {
+test('la frontera: la capa entra, también con resolvedBy (12e); un campo de identidad que no es texto se rechaza con su motivo', () => {
   const manifest = { layers: { domain: 'd', 'use-cases': 'u', security: 's' } };
   const layersWith = (callerIdentity, type = 'string') => ({
     security: { authentication: { callerIdentity } },
     'use-cases': { operations: { getMine: { input: { fields: { caller: { type } } } } } }
   });
   assert.deepEqual(checkSupportedFeatures(manifest, layersWith({ field: 'caller', from: { source: 'claim' } })).errors, []);
-  const resolved = checkSupportedFeatures(manifest, layersWith({ field: 'caller', from: { source: 'serviceClient', resolvedBy: 'Application.keys' } })).errors;
-  assert.equal(resolved.length, 1);
-  assert.match(resolved[0], /resolvedBy .*incremento 13/);
+  assert.deepEqual(checkSupportedFeatures(manifest, layersWith({ field: 'caller', from: { source: 'serviceClient', resolvedBy: 'Application.keys' } })).errors, []);
   const typed = checkSupportedFeatures(manifest, layersWith({ field: 'caller', from: { source: 'claim' } }, 'uuid')).errors;
   assert.equal(typed.length, 1);
   assert.match(typed[0], /use-cases\.getMine\.input\.caller: uuid .*string/);

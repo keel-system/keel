@@ -87,9 +87,10 @@ test('la mensajería se genera sobre persistencia relacional con los tres broker
   assert.equal(bare.errors.length, 1);
   assert.match(bare.errors[0], /capa messaging sin persistence/);
   const resolved = { ...layers, messaging: { subscriptions: { Paid: { identity: { resolvedBy: { entity: 'Merchant' } } } } } };
-  const identity = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging'), resolved);
-  assert.equal(identity.errors.length, 1);
-  assert.match(identity.errors[0], /Paid\.identity\.resolvedBy .*incremento 13/);
+  // La identidad del emisor resuelta contra las credenciales de un recurso se genera desde el 12e (el finder).
+  assert.deepEqual(checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging'), resolved).errors, []);
+  const caller = { ...layers, security: { authentication: { callerIdentity: { field: 'merchantKey', from: { resolvedBy: { entity: 'Merchant', field: 'keys' } } } } } };
+  assert.deepEqual(checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging', 'security'), caller).errors, []);
   for (const broker of ['rabbitmq', 'kafka', 'snssqs']) assert.deepEqual(checkSupportedStack({ broker }).errors, [], broker);
   assert.match(checkSupportedStack({ broker: 'pulsar' }).errors[0], /broker: pulsar .*rabbitmq/);
 });

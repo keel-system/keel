@@ -35,6 +35,7 @@
 //   reconciliation-expiry     la marca de reconciliación caduca con `<` y no con el `<=` de keel-core (el límite se retiene)
 //   reconciliation-threshold  el reclamo de reconciliación se lleva también lo recién encargado (sin el umbral del diseño)
 //   reconciliation-head       la lectura de candidatos no excluye los de marca viva (la cabeza de la cola tapa al resto)
+//   credential  el finder de resolvedBy busca solo en la primera credencial de la lista
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -68,7 +69,8 @@ const SABOTAGES = {
   'claim-stale': ['Repositories/', ' < {staleBefore}', ' <= {claimedAt}'],
   'reconciliation-expiry': ['Persistence/ReconciliationClaimStore.cs', 'claimed_at <= {expired}', 'claimed_at < {expired}'],
   'reconciliation-threshold': ['Repositories/', ' < {unansweredBefore}', ' <= {now}'],
-  'reconciliation-head': ['Repositories/', 'c.claimed_at > {claimExpiredBefore})', 'c.claimed_at > {claimExpiredBefore} AND 1 = 0)']
+  'reconciliation-head': ['Repositories/', 'c.claimed_at > {claimExpiredBefore})', 'c.claimed_at > {claimExpiredBefore} AND 1 = 0)'],
+  credential: ['Repositories/', 'Where(element => element.Value == ', 'Where(element => element.Position == 0 && element.Value == ']
 };
 
 const results = [];

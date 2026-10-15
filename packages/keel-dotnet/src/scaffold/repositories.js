@@ -190,6 +190,43 @@ export function uniqueFieldFinders(model, entity) {
 
 const signature = (finder) => finder.params.map((p) => `${p.type} ${csLocal(p.name)}`).join(', ');
 
+// ─── La credencial que resuelve al agregado (resolvedBy) ─────────────────────────────────────────
+
+/**
+ * Los finders por ELEMENTO de una colección, cuando el diseño declara que un recurso tiene varias credenciales: por HTTP
+ * (`security.authentication.callerIdentity.from.resolvedBy`) o por el broker (`messaging.subscriptions.<E>.identity.resolvedBy`,
+ * DSL 2.17). La misma decisión que keel-spring y keel-nest: uno por `Entidad.campo` distinto que nombre el diseño para ESTA
+ * entidad. Sin él, el finder de la clave natural resuelve solo la credencial que casualmente coincide con la clave, y las
+ * demás acaban en un 403 en el camino feliz (corrida notification-mailer de keel-spring).
+ */
+export function credentialFinders(model, entity) {
+  const declared = [model.security?.callerIdentity?.resolvedBy, ...(model.subscriptions ?? []).map((sub) => resolvedByOf(sub.identity?.resolvedBy))].filter(
+    (resolved) => resolved && resolved.entity === entity.name
+  );
+  const seen = new Set();
+  const finders = [];
+  for (const resolved of declared) {
+    if (seen.has(resolved.field)) continue;
+    seen.add(resolved.field);
+    const field = entity.fields.find((candidate) => candidate.name === resolved.field);
+    if (!field || !field.list) continue;
+    finders.push({ name: credentialFinderName(resolved.field), field, param: resolved.field.replace(/s$/, '') });
+  }
+  return finders;
+}
+
+/** El nombre del finder de `Entidad.campo`: el de keel-spring y keel-nest, en PascalCase (`FindByCredentialKeysContaining`). */
+export function credentialFinderName(field) {
+  return `FindBy${csMember(field)}Containing`;
+}
+
+function resolvedByOf(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  const [entity, field] = String(raw).split('.');
+  return { entity, field };
+}
+
 // ─── El puerto ───────────────────────────────────────────────────────────────────────────────────
 
 function renderPort(model, entity) {
@@ -227,6 +264,18 @@ function renderPort(model, entity) {
         ],
         '    '
       )}    Task<${entity.name}?> ${unique.name}(${signature(unique)}, CancellationToken cancellationToken = default);`
+    );
+  }
+  for (const credential of credentialFinders(model, entity)) {
+    methods.push(
+      `${xmlDoc(
+        [
+          `Resuelve el agregado a partir de UNA de sus credenciales: el diseño declara que un mismo ${entity.name} tiene varias`,
+          `(resolvedBy: ${entity.name}.${credential.field.name}), así que la del token o la del mensaje no tiene por qué ser su clave`,
+          'natural. Buscar por la clave natural resolvería solo una de ellas: un 403 en el camino feliz.'
+        ],
+        '    '
+      )}    Task<${entity.name}?> ${credential.name}(string ${csLocal(credential.param)}, CancellationToken cancellationToken = default);`
     );
   }
   if (isPaginated(model, entity)) {
@@ -329,6 +378,19 @@ function renderAdapter(model, entity) {
     {
 ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Graph().AsNoTracking().SingleOrDefaultAsync(r => ${conditions.join(' && ')}, cancellationToken);
         return found is null ? null : ToDomain(found);
+    }`);
+  }
+
+  for (const credential of credentialFinders(model, entity)) {
+    const member = persistedMembers(model, entity).find((m) => m.kind === 'elementCollection' && m.name === credential.field.name);
+    const element = elementClass(entity, member);
+    const local = csLocal(credential.param);
+    methods.push(`    public async Task<${entity.name}?> ${credential.name}(string ${local}, CancellationToken cancellationToken = default)
+    {
+        // La credencial vive en la tabla de elementos de la lista: se busca ahí al dueño y se carga el agregado ENTERO por
+        // su id (filtrar la raíz por un elemento cargaría la lista recortada a ese elemento).
+        var owner = await db.Set<${element}>().AsNoTracking().Where(element => element.Value == ${local}).Select(element => (${idType}?)element.OwnerId).FirstOrDefaultAsync(cancellationToken);
+        return owner is { } id ? await FindById(id, cancellationToken) : null;
     }`);
   }
 

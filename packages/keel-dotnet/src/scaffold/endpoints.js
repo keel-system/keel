@@ -25,7 +25,7 @@ import { componentType, isPartialUpdate, isThreeState, messageComponents, messag
 import { restNamespace, usesApi } from './rest-support.js';
 import { repositoriesNamespace } from './repositories.js';
 import { pageableDefaults } from 'keel-core/gen/pagination';
-import { securityNamespace } from './security.js';
+import { callerResolution, securityNamespace } from './security.js';
 
 // Los tipos base que en C# son tipos de VALOR: un ausente se escribe `T?` (Nullable<T>), no una referencia nula.
 const VALUE_BASES = new Set(['int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json']);
@@ -166,6 +166,11 @@ ${readers.join('\n\n')}
   return { path, content: csFile({ namespace, usings, body }) };
 }
 
+/** ¿Resuelve esta operación la identidad del llamante contra las credenciales del recurso (resolvedBy)? */
+export function resolvesCaller(model, operation) {
+  return callerResolution(model) != null && messageComponents(operation, model).some((component) => component.resolvedIdentity);
+}
+
 // ─── Endpoints ──────────────────────────────────────────────────────────────────────────────────
 
 function renderEndpoints(model, service, served) {
@@ -196,7 +201,11 @@ ${members.join('\n\n')}
 function renderEndpoint(model, operation, usings) {
   usings.push(messageNamespace(model, operation));
   const { asBody } = requestShape(operation);
-  const read = `${asBody ? 'await ' : ''}Read${csMember(operation.name)}(http.Request)`;
+  // resolvedBy: la identidad del llamante se resuelve al recurso ANTES de leer, con el resolutor del ámbito de la petición.
+  const resolving = resolvesCaller(model, operation);
+  if (resolving) usings.push(securityNamespace(model));
+  const callerArg = resolving ? ', await http.RequestServices.GetRequiredService<CallerIdentityResolver>().Resolve(CallerIdentity.Resolve(), http.RequestAborted)' : '';
+  const read = `${asBody ? 'await ' : ''}Read${csMember(operation.name)}(http.Request${callerArg})`;
   // Lo que llama a la pasarela de pago va SIN transacción abarcadora (callsPaymentGateway, keel-core): su garantía
   // es registrar y confirmar ANTES de llamarla, como en keel-spring y keel-nest.
   const dispatch = callsPaymentGateway(model, operation.name) ? 'DispatchWithoutTransaction' : 'Dispatch';
@@ -296,9 +305,13 @@ function renderReader(model, operation, usings) {
   const assigns = components.map((component) => {
     const member = csMember(component.name);
     const local = localOf(component);
-    const type = componentType(operation, component);
+    const type = componentType(operation, component, model);
     let value;
-    if (component.resolvedIdentity) {
+    if (component.resolvedIdentity && callerResolution(model)) {
+      // resolvedBy: la credencial del token es UNA de las del recurso, y el endpoint la resolvió antes de leer a su clave
+      // natural (o null si no es de nadie: la precondición la responde la operación con el error que declare el diseño).
+      value = 'resolvedCaller';
+    } else if (component.resolvedIdentity) {
       // La estampa el servidor desde la credencial (security.authentication.callerIdentity), nunca el cuerpo: quien hace
       // la petición no elige en nombre de quién actúa.
       usings.push(securityNamespace(model));
@@ -332,9 +345,10 @@ function renderReader(model, operation, usings) {
   const paramChecks = [...pathChecks, ...queryChecks];
   if (paramChecks.length > 0) lines.push('        var paramChecks = new InputViolations(ViolationSource.Params);', ...paramChecks, '        paramChecks.ThrowIfAny();');
   const construct = assigns.length > 0 ? `new ${operation.messageClass}\n        {\n${assigns.join('\n')}\n        }` : `new ${operation.messageClass}()`;
+  const resolved = resolvesCaller(model, operation) ? ', string? resolvedCaller' : '';
   const signature = asBody
-    ? `private static async Task<${operation.messageClass}> Read${csMember(operation.name)}(HttpRequest httpRequest)`
-    : `private static ${operation.messageClass} Read${csMember(operation.name)}(HttpRequest httpRequest)`;
+    ? `private static async Task<${operation.messageClass}> Read${csMember(operation.name)}(HttpRequest httpRequest${resolved})`
+    : `private static ${operation.messageClass} Read${csMember(operation.name)}(HttpRequest httpRequest${resolved})`;
   return `    /// <summary>Lee ${operation.route.method} ${operation.route.path} (${operation.name}) al mensaje de su caso de uso.</summary>
     ${signature}
     {

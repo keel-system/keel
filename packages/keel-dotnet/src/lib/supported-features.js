@@ -115,9 +115,9 @@ export function checkSupportedStack(stack) {
 }
 
 /**
- * Lo que keel-dotnet todavía no sabe hacer con la identidad del llamante (security.authentication.callerIdentity):
- *   · `from.resolvedBy`: la credencial del token es UNA de las del recurso y hay que buscar su dueño con el finder de
- *     credenciales del repositorio, que llega con el correo (incremento 13), como en keel-nest;
+ * Lo que keel-dotnet todavía no sabe hacer con la identidad del llamante (security.authentication.callerIdentity). La
+ * credencial resuelta contra las de un recurso (`from.resolvedBy`) se genera desde el 12e (el finder de credenciales y
+ * CallerIdentityResolver, como en keel-nest); queda:
  *   · un campo de identidad que no sea texto: el valor sale de un claim, que es texto, y los servidores de keel-spring y
  *     keel-nest lo pasan tal cual. En C# el mensaje es tipado: un value type o un uuid no compilaría.
  */
@@ -125,12 +125,6 @@ function callerIdentityErrors(layers) {
   const identity = layers?.security?.authentication?.callerIdentity;
   if (!identity) return [];
   const errors = [];
-  if (identity.from?.resolvedBy) {
-    errors.push(
-      'security.authentication.callerIdentity.from.resolvedBy — keel-dotnet todavía no resuelve la identidad del llamante contra las credenciales de un recurso ' +
-        '(llega con el finder de credenciales, en el incremento 13 de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
-    );
-  }
   const typed = Object.entries(layers?.['use-cases']?.operations ?? {})
     .map(([name, operation]) => [name, operation?.input?.fields?.[identity.field]?.type])
     .filter(([, type]) => type != null && !['string', 'text'].includes(type));
@@ -144,11 +138,9 @@ function callerIdentityErrors(layers) {
 }
 
 /**
- * Lo que keel-dotnet todavía no sabe hacer con la mensajería:
- *   · sin persistencia: el puente sale del adaptador de repositorio y el registro de procesados vive en la base (en
- *     keel-nest se cerró en su incremento 16);
- *   · la identidad del emisor resuelta contra las credenciales de un recurso (`identity.resolvedBy`): el finder llega
- *     con el incremento 13, como para la del llamante.
+ * Lo que keel-dotnet todavía no sabe hacer con la mensajería: sin persistencia, porque el puente sale del adaptador de
+ * repositorio y el registro de procesados vive en la base (en keel-nest se cerró en su incremento 16). La identidad del
+ * emisor resuelta contra las credenciales de un recurso (`identity.resolvedBy`) se genera desde el 12e: el finder.
  */
 function messagingErrors(declared, layers) {
   if (!declared.includes('messaging')) return [];
@@ -158,14 +150,6 @@ function messagingErrors(declared, layers) {
       'capa messaging sin persistence — keel-dotnet genera la mensajería sobre la persistencia, relacional o documental (incrementos 9 y 12c de PLAN-KEEL-DOTNET.md): ' +
         'el puente de eventos sale del adaptador de repositorio y el registro de mensajes procesados vive en la base. Genera este diseño con keel-spring o keel-nest.'
     );
-  }
-  for (const [name, sub] of Object.entries(layers?.messaging?.subscriptions ?? {})) {
-    if (sub?.identity?.resolvedBy) {
-      errors.push(
-        `messaging.subscriptions.${name}.identity.resolvedBy — keel-dotnet todavía no resuelve la identidad del emisor contra las credenciales de un recurso ` +
-          '(llega con el finder de credenciales, en el incremento 13 de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
-      );
-    }
   }
   return errors;
 }
