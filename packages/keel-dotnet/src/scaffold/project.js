@@ -20,6 +20,7 @@ import { solution } from './render.js';
 import { usesRelational, usesDocument } from './persistence.js';
 import { usesMail } from './mail.js';
 import { usesCache } from './cache.js';
+import { usesStorageAdapter } from './storage.js';
 import { usesJwt } from './security.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
@@ -53,7 +54,9 @@ export function infrastructurePackages(model) {
     // (con la transitiva de MimeKit fijada en su versión corregida: ver dotnet-stack.js)
     ...(usesMail(model) ? ['MailKit', 'System.Security.Cryptography.Pkcs', ...(model.mail.templating ? ['Handlebars.Net'] : [])] : []),
     // La caché de lectura: el cliente de Redis (y de Valkey, el mismo protocolo).
-    ...(usesCache(model) ? ['StackExchange.Redis'] : [])
+    ...(usesCache(model) ? ['StackExchange.Redis'] : []),
+    // El almacenamiento de binarios: el SDK oficial de AWS para S3 (también habla con MinIO). Lo usa el adaptador del agente.
+    ...(usesStorageAdapter(model) ? ['AWSSDK.S3'] : [])
   ];
 }
 

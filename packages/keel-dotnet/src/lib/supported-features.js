@@ -14,9 +14,7 @@
 import { compositeUrlParamErrors } from 'keel-core/gen/outbound-params';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
-const PENDING_LAYERS = {
-  storage: 'incremento 13'
-};
+const PENDING_LAYERS = {};
 
 /**
  * Los motores que keel-dotnet genera: PostgreSQL (incremento 6) y MongoDB (incremento 12). MySQL espera a que

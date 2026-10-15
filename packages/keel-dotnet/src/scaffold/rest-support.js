@@ -23,6 +23,7 @@ import { csFile, csString, located, namespaceOf } from './render.js';
 import { wireNamespace } from './wire.js';
 import { usesPersistence } from './persistence.js';
 import { valueReaders } from './endpoints.js';
+import { usesMultipart } from './storage.js';
 
 /** ¿Expone el servicio una API? Sin capa api, o sin ninguna operación con ruta, no hay nada de esto. */
 export function usesApi(model) {
@@ -97,7 +98,7 @@ export function generate(model) {
         namespaceOf(model, 'errors'),
         ...(usesPersistence(model) ? [namespaceOf(model, 'persistence')] : [])
       ],
-      apiErrorMiddlewareBody(usesPersistence(model))
+      apiErrorMiddlewareBody(usesPersistence(model), usesMultipart(model))
     ),
     ...(usesPageable(model)
       ? [rest('PageableReading', ['System.Globalization', 'System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', 'Microsoft.Extensions.Primitives', namespaceOf(model, 'repositories')], pageableReadingBody())]
@@ -838,7 +839,7 @@ public static partial class HttpReply
 }`;
 }
 
-function apiErrorMiddlewareBody(persistence = false) {
+function apiErrorMiddlewareBody(persistence = false, multipart = false) {
   const validation = FRAMEWORK_ERRORS.validation.code;
   const domainBranches = domainErrorResponses().map(
     ({ name, http, error, fallback }) => `            ${name} => Domain(${http}, ${csString(error)}, exception, ${csString(fallback)}),`
@@ -909,7 +910,7 @@ public sealed partial class ApiErrorMiddleware(RequestDelegate next, ILogger<Api
             case MalformedRequestException:
             case BadHttpRequestException { StatusCode: StatusCodes.Status400BadRequest }:
                 return ${response('malformed', 'ValidationCode')};
-${persistence ? PERSISTENCE_BRANCH : ''}            // ── Errores de dominio (jerarquía DomainException)
+${multipart ? MULTIPART_BRANCH : ''}${persistence ? PERSISTENCE_BRANCH : ''}            // ── Errores de dominio (jerarquía DomainException)
             case DomainException domain:
                 return FromDomain(domain);
             // ── Catch-all
@@ -945,6 +946,15 @@ ${domainBranches.join('\n')}
     private partial void LogUnhandled(Exception exception);${persistence ? PERSISTENCE_LOGS : ''}
 }`;
 }
+
+// La subida multipart (capa storage): la parte que falta y un cuerpo que no es multipart, sin code, como el
+// ApiExceptionHandler de keel-spring. El 413 y lo ilegible ya llegan como su DomainException, con su code.
+const MULTIPART_BRANCH = `            // ── Subida de archivos (capa storage)
+            case MissingPartException missingPart:
+                return ErrorResponse.Of(${FW.missingPart.status}, ${csString(FW.missingPart.error)}, null, missingPart.Message);
+            case NotMultipartException:
+                return ErrorResponse.Of(${FW.notMultipart.status}, ${csString(FW.notMultipart.error)}, null, ${csString(FW.notMultipart.message)});
+`;
 
 // Los fallos de la persistencia, en el orden del ApiExceptionHandler de keel-spring: el tope de transacción es un 503
 // transitorio y la violación de integridad sin constraint conocida un 409 sin code. La de una constraint con nombre y

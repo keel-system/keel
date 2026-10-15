@@ -1519,6 +1519,44 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       paquetes (StackExchange.Redis y su transitiva Pipelines.Sockets.Unofficial, MIT).
     - Los dos diseños con caché (`asset-vault`, `catalog-extended`) siguen fuera de la frontera por storage, `needs`, OAuth2
       y la autoría: la corrida espera al final del 13. Siguiente: 13g (storage).
+  - **13g, el almacenamiento de binarios (hecho, 2026-10-15). La capa `storage` sale de la frontera.** El reparto de
+    keel-spring y keel-nest: build emite el contrato y la entrada; el adaptador S3 lo escribe el agente.
+    - **Lo neutral primero, sin mover ninguna línea base** (keel-spring 44/11 137 y keel-nest 41/10 050 idénticas):
+      `storage.yaml` sale de keel-nest a `keel-core/gen/storage-config.js` (con `multipartFileLimitBytes`), como `cache.yaml`
+      en el 13f; los cinco textos de la subida (la parte que falta, el 415, el 413, lo ilegible y la parte vacía) entran en
+      `FRAMEWORK_RESPONSES` de `keel-core/gen/api-errors.js`, y keel-spring y keel-nest los leen de ahí (eran literales en
+      los dos: la tercera copia no se escribió); `uploadNotes` acepta los nombres del lenguaje (`UPLOAD_NOTE_NAMES`, por
+      defecto los de siempre). Antes, la línea base de keel-nest se regeneró en su propio commit: `492b743` cambió a
+      propósito su arnés de pagos sin hacerlo (9 huellas, todas de ese commit).
+    - **Lo emitido** (`src/scaffold/storage.js`): en `Domain/Storage`, `IFileStorage` (`Download`/`SignedUrl` solo con un
+      bucket privado, `PublicUrl` solo con uno público), `StoredObject`, `BucketPolicy` (`AllowsContent` = tipo declarado Y
+      firma, `AllowsSize`, `SignedUrlTtlSeconds()` que lanza sin caducidad declarada), `ContentSignature` (la tabla de
+      keel-core) y `StoragePolicies` con una constante por bucket; en `Infrastructure/Storage`, `StorageSettings` (lee los
+      buckets del diseño por su nombre y no arranca sin su nombre físico), `ConfiguredStoragePolicies`, el stub
+      `S3FileStorage` y `StorageRegistration`, que llaman `Program.cs` y la prueba del contenedor (`Unconfigured`). El
+      handler de la subida recibe `StoragePolicies` e `IFileStorage` con la nota neutral en nombres de C#; el mapper
+      resuelve la URL de un bucket público con `PublicUrl` (era un `Todo.Value`). **AWSSDK.S3 4.0.103.4** (Apache-2.0, el
+      mismo `AWSSDK.Core` que SNS/SQS) para el agente, skill `keel-dotnet-s3`.
+    - **La entrada multipart** (`Api/Rest/MultipartReading.cs`): el lector de la subida lee el formulario LO PRIMERO (415 si
+      no es multipart, 413 con el code del diseño por la longitud declarada y, por trozos, con el límite de Kestrel puesto en
+      la petición —su máximo por defecto, 30 MB, es otro número—, `FILE_UNREADABLE` si está roto), después la ruta y luego
+      campos y partes en el orden del controlador de keel-spring (`RequirePart`/`OptionalPart`, `Field`/`RequireField`, que
+      leen el formulario y si no la query). `ApiErrorMiddleware` gana la parte que falta (400 sin code) y el 415. `ApiRoutes`
+      sirve las subidas: su query son los campos simples y el binario no (el `@RequestPart`).
+    - **Lo que destapó**: el oráculo de la paridad del contrato (`keel-spring/test/helpers/contract-table.js`) no leía un
+      `@RequestParam` con un `@Pattern` que lleva paréntesis en la regex ni un `List<@Size(...) String>`: perdía `slug` y
+      `labels` de `uploadAsset`. Corregido; la paridad de keel-nest sigue verde con él. Y, en C#, `MultipartFormDataContent`
+      sin partes escribe una sección sin cabeceras que ASP.NET no lee como formulario: la prueba manda el cierre a secas,
+      como la de keel-nest (un cliente real siempre manda alguna parte).
+    - **El arnés**: `Upload(path, UploadPart, fields, headers)` (el `multipart(...)` de keel-spring) y, con MinIO,
+      `StopStorage()`/`StartStorage()`.
+    - **Medido**: `test/storage.test.js` (sin red, 9/9): `storage.yaml` idéntico al de keel-nest en los cuatro perfiles con
+      MinIO y con S3 y leído por claves que declara, la tabla de firmas byte a byte, los métodos según la visibilidad, la
+      inyección y la nota, el mapper, los registros, el límite y el arnés. La prueba emitida `ApiTests` gana los casos de la
+      subida (la parte o el parámetro que falta primero, el 415, el 413, el cuerpo cortado, la parte vacía y la subida
+      completa que llega al handler), que en keel-nest medía su test sobre Fastify: `cs-check --fixtures` 132/132
+      ensamblados, **2 614 pruebas**, licencias de 104 paquetes. Falsado con dos sabotajes nuevos de `cs-check`, cada uno en su caso y solo en él: `multipart-limit` (sin el corte por la longitud declarada) tumba el 413 y `multipart-empty` (la parte vacía pasa) tumba el `FILE_UNREADABLE` de la parte vacía.
+    - `asset-vault` y `catalog-extended` siguen fuera por `needs` y OAuth2 (y la autoría). Siguiente: 13h (la autoría).
 
 ## 5. Riesgos conocidos
 

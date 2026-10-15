@@ -15,8 +15,9 @@
 // La identidad del llamante (security.authentication.callerIdentity) NO se lee de la petición: el campo lo estampa el
 // lector con CallerIdentity.Resolve(), desde la credencial que validó el middleware de seguridad.
 //
-// Fuera, con su incremento: las subidas multipart (capa storage, incremento 13). La frontera rechaza los diseños que
-// las declaran; aquí no se emite su ruta.
+// Una SUBIDA (capa storage, incremento 13g) es multipart/form-data: el lector lee primero el formulario con
+// MultipartReading (Api/Rest; 415, 413 y FILE_UNREADABLE antes de convertir nada, como el DispatcherServlet de Spring),
+// después la ruta, y los campos y las partes en su orden, que es el de los argumentos del controlador de keel-spring.
 
 import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
 import { callsPaymentGateway } from 'keel-core/gen/payments-model';
@@ -43,10 +44,16 @@ export function isValueType(field) {
   return VALUE_BASES.has(field.base);
 }
 
-/** ¿Se puede servir la operación hoy? Las subidas llegan con su capa. */
+/** ¿Se puede servir la operación? Un binario solo viaja en una subida (multipart). */
 export function servedOperation(operation) {
-  if (!operation.route || operation.multipart) return false;
-  return !messageComponents(operation).some((component) => component.file);
+  if (!operation.route) return false;
+  return operation.multipart || !messageComponents(operation).some((component) => component.file);
+}
+
+/** Cómo viaja la entrada: la de keel-core (api-contract), salvo que una subida no lleva cuerpo JSON. */
+function shapeOf(operation) {
+  const { asBody, bodyRequired } = requestShape(operation);
+  return operation.multipart ? { asBody: false, bodyRequired: false } : { asBody, bodyRequired };
 }
 
 /** Las operaciones con ruta que se sirven, con su grupo. */
@@ -200,13 +207,13 @@ ${members.join('\n\n')}
 
 function renderEndpoint(model, operation, usings) {
   usings.push(messageNamespace(model, operation));
-  const { asBody } = requestShape(operation);
+  const { asBody } = shapeOf(operation);
   // resolvedBy: la identidad del llamante se resuelve al recurso DESPUÉS de leer y validar la entrada (como keel-nest):
   // una petición malformada es 400 sin tocar la base. El lector recibe la resolución como función y la llama al final.
   const resolving = resolvesCaller(model, operation);
   if (resolving) usings.push(securityNamespace(model));
   const callerArg = resolving ? ', () => http.RequestServices.GetRequiredService<CallerIdentityResolver>().Resolve(CallerIdentity.Resolve(), http.RequestAborted)' : '';
-  const read = `${asBody || resolving ? 'await ' : ''}Read${csMember(operation.name)}(http.Request${callerArg})`;
+  const read = `${asBody || resolving || operation.multipart ? 'await ' : ''}Read${csMember(operation.name)}(http.Request${callerArg})`;
   // Lo que llama a la pasarela de pago va SIN transacción abarcadora (callsPaymentGateway, keel-core): su garantía
   // es registrar y confirmar ANTES de llamarla, como en keel-spring y keel-nest.
   const dispatch = callsPaymentGateway(model, operation.name) ? 'DispatchWithoutTransaction' : 'Dispatch';
@@ -233,7 +240,8 @@ ${statements}
 }
 
 function renderReader(model, operation, usings) {
-  const { asBody, bodyRequired } = requestShape(operation);
+  const { asBody, bodyRequired } = shapeOf(operation);
+  const multipart = Boolean(operation.multipart);
   const components = messageComponents(operation, model);
   const fromPath = new Set((operation.pathParams ?? []).map((param) => param.name));
   const partial = isPartialUpdate(operation);
@@ -261,8 +269,14 @@ function renderReader(model, operation, usings) {
     // La página no es un campo del diseño: la leen las líneas de abajo.
     if (component.pageable) continue;
     if (operation.paginated && ['page', 'size'].includes(component.name) && !(operation.bodyFields ?? []).some((f) => f.name === component.name)) continue;
-    usings.push(...fieldUsings(model, component));
     const local = localOf(component);
+    // El binario se lee de su parte, en SU posición: Spring resuelve los argumentos en orden, así que una parte que falta
+    // se descubre antes que un parámetro posterior y antes de validar ninguna restricción.
+    if (component.file) {
+      if (multipart) queryRequired.push(`        var ${local} = MultipartReading.${component.required ? 'RequirePart' : 'OptionalPart'}(form, ${csString(component.name)});`);
+      continue;
+    }
+    usings.push(...fieldUsings(model, component));
     // El null de un PATCH sobre un campo que el dominio exige no vacía nada: es un 400 (keel-core/gen/model.js,
     // derivePatchNotNull). Solo cuando viene.
     const rules = component.patchNotNull ? [{ rule: 'notNull' }, ...(component.inputValidation ?? [])] : component.inputValidation ?? [];
@@ -282,8 +296,11 @@ function renderReader(model, operation, usings) {
         bodyChecks.push(...checks.map((c) => `        ${c}`));
       }
     } else {
-      const source = `httpRequest.Query[${csString(component.name)}]`;
-      if (component.required) queryRequired.push(`        TextValues.Require(httpRequest, ${csString(component.name)});`);
+      // En una subida, los campos simples llegan en el formulario (o en la query: el @RequestParam de Spring lee los dos).
+      const source = multipart ? `MultipartReading.Field(httpRequest, form, ${csString(component.name)})` : `httpRequest.Query[${csString(component.name)}]`;
+      if (component.required) {
+        queryRequired.push(multipart ? `        MultipartReading.RequireField(httpRequest, form, ${csString(component.name)});` : `        TextValues.Require(httpRequest, ${csString(component.name)});`);
+      }
       queryLines.push(`        var ${local} = ${textRead(component, source)};`);
       if (rules.length > 0) queryChecks.push(`        paramChecks.Check(${csString(`${operation.name}.${component.name}`)}, ${local}, ${rulesArgs(rules)});`);
       if (each.length > 0) queryChecks.push(`        paramChecks.CheckEach(${csString(`${operation.name}.${component.name}`)}, ${local}, ${rulesArgs(each)});`);
@@ -317,6 +334,9 @@ function renderReader(model, operation, usings) {
       // la petición no elige en nombre de quién actúa.
       usings.push(securityNamespace(model));
       value = 'CallerIdentity.Resolve()';
+    } else if (component.file) {
+      // El binario de su parte: la obligatoria ya no puede ser null (RequirePart), la opcional llega tal cual.
+      value = local;
     } else if (type.startsWith('Optional<')) {
       const inner = type.slice('Optional<'.length, -1);
       usings.push(namespaceOf(model, 'appSupport'));
@@ -334,7 +354,9 @@ function renderReader(model, operation, usings) {
     return `            ${member} = ${value},`;
   });
 
-  const lines = [...pathLines];
+  // Una subida lee el formulario lo primero: un cuerpo que no es multipart, demasiado grande o roto se rechaza antes de
+  // convertir la ruta, como en Spring (el multipart se resuelve antes de los argumentos).
+  const lines = multipart ? ['        var form = await MultipartReading.Read(httpRequest);', ...pathLines] : [...pathLines];
   if (asBody) {
     lines.push(`        var requestFields = await HttpJsonBody.ReadObject(httpRequest, required: ${bodyRequired});`);
     lines.push(...bodyLines);
@@ -349,7 +371,7 @@ function renderReader(model, operation, usings) {
   const resolving = resolvesCaller(model, operation);
   const resolved = resolving ? ', Func<Task<string?>> resolveCaller' : '';
   if (resolving) lines.push('        // La identidad, resuelta al recurso solo cuando la entrada ya es válida.', '        var resolvedCaller = await resolveCaller();');
-  const signature = asBody || resolving
+  const signature = asBody || resolving || multipart
     ? `private static async Task<${operation.messageClass}> Read${csMember(operation.name)}(HttpRequest httpRequest${resolved})`
     : `private static ${operation.messageClass} Read${csMember(operation.name)}(HttpRequest httpRequest${resolved})`;
   return `    /// <summary>Lee ${operation.route.method} ${operation.route.path} (${operation.name}) al mensaje de su caso de uso.</summary>
@@ -363,12 +385,13 @@ ${lines.join('\n')}${lines.length > 0 ? '\n' : ''}        return ${construct};
 
 /** La fila del contrato HTTP de una operación: lo que registra ApiRoutes y compara la paridad. */
 export function routeRow(model, operation) {
-  const { asBody, bodyRequired } = requestShape(operation);
+  const { asBody, bodyRequired } = shapeOf(operation);
   const fromPath = new Set((operation.pathParams ?? []).map((param) => param.name));
   const query = asBody
     ? []
     : messageComponents(operation, model)
-        .filter((c) => !fromPath.has(c.name) && !c.resolvedIdentity)
+        // El binario de una subida es una PARTE (el @RequestPart de keel-spring), no un parámetro.
+        .filter((c) => !fromPath.has(c.name) && !c.resolvedIdentity && !c.file)
         // El Pageable viaja como los tres parámetros de Spring Data.
         .flatMap((c) => (c.pageable ? ['page', 'size', 'sort'] : [c.name]));
   return {

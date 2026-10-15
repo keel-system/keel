@@ -14,6 +14,7 @@ import { usesIdempotencyCheck } from './idempotency-check.js';
 import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
 import { usesCache } from './cache.js';
+import { usesStorageAdapter } from './storage.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from 'keel-core';
@@ -57,6 +58,9 @@ export function stackSkills(model) {
   // La caché de lectura (13f): la skill de su store; Redis y Valkey hablan el mismo protocolo y comparten skill, como en
   // keel-spring y keel-nest.
   if (usesCache(model) && ['redis', 'valkey'].includes(model.stack?.cache)) skills.push('keel-dotnet-redis');
+  // El almacenamiento de binarios (13g): MinIO y S3 hablan el mismo protocolo y comparten skill, como en keel-spring y
+  // keel-nest. El adaptador lo escribe el agente.
+  if (usesStorageAdapter(model)) skills.push('keel-dotnet-s3');
   return skills;
 }
 

@@ -29,6 +29,9 @@ import { callMethod, clientPort, clientsNamespace } from './http-clients.js';
 import { mailNamespace, mailPorts, sendsMail } from './mail.js';
 import { OPERATION_CACHE_PORT, cacheCall, cachesOperation } from './cache.js';
 import { cacheNote } from 'keel-core/gen/cache-plan';
+import { uploadNotes } from 'keel-core/gen/buckets';
+import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
+import { FILE_STORAGE_PORT, UPLOAD_NOTE_NAMES_CS, storageNamespace } from './storage.js';
 
 export function generate(model) {
   const files = [];
@@ -286,6 +289,12 @@ function renderHandler(model, operation) {
     usings.push(namespaceOf(model, 'ports'), namespaceOf(model, 'appSupport'));
     dependencies.push(OPERATION_CACHE_PORT);
   }
+  // La subida: la operación con un campo `file` comprueba la política de su bucket y sube el binario. Los dos puertos, como
+  // en keel-spring y keel-nest (los agentes de catalog los inyectaron a mano).
+  if (uploadNotes(model, operation, { sizeCode: '' }).length > 0) {
+    usings.push(storageNamespace(model));
+    dependencies.push('StoragePolicies', FILE_STORAGE_PORT);
+  }
   const local = (type) => {
     const name = type.replace(/^I(?=[A-Z])/, '');
     return name[0].toLowerCase() + name.slice(1);
@@ -315,6 +324,7 @@ function handlerNotes(model, operation) {
   for (const note of textFilterNotes(model, operation)) notes.push(note);
   for (const note of scheduleNotes(model, operation)) notes.push(note);
   for (const note of idempotencyNotes(model, operation)) notes.push(note);
+  for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), names: UPLOAD_NOTE_NAMES_CS })) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la de los tres generadores.

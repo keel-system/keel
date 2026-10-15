@@ -83,7 +83,11 @@ export const PACKAGES = {
   // La caché de lectura (incremento 13f): StackExchange.Redis, el cliente de Redis de .NET (también habla con Valkey).
   // La 3.3.1 salió el 2026-09-22; la 3.4.0 está retirada del catálogo y la 3.4.5 tiene dos días. Su transitiva
   // Pipelines.Sockets.Unofficial es MIT: la comprueba cs-check. Verificada el 2026-10-15.
-  'StackExchange.Redis': { version: '3.3.1', license: 'MIT', use: 'caché de lectura sobre Redis o Valkey (use-cases.<op>.cache)' }
+  'StackExchange.Redis': { version: '3.3.1', license: 'MIT', use: 'caché de lectura sobre Redis o Valkey (use-cases.<op>.cache)' },
+  // El almacenamiento de binarios (incremento 13g): el SDK oficial de AWS para S3, que habla también con MinIO. Lo usa el
+  // adaptador que escribe el agente (skill keel-dotnet-s3). La 4.0.103.4 salió el 2026-09-23 y pide AWSSDK.Core
+  // [4.0.102.6, 5), lo mismo que SNS y SQS. Verificada el 2026-10-15.
+  'AWSSDK.S3': { version: '4.0.103.4', license: 'Apache-2.0', use: 'almacenamiento de binarios sobre S3 o MinIO (capa storage)' }
 };
 
 /**

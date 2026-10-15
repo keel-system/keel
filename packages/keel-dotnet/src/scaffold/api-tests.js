@@ -9,7 +9,8 @@
 
 import { WIRE_SHAPES } from 'keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from 'keel-core';
-import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
+import { FRAMEWORK_RESPONSES as FW, missingParameterMessage, missingPartMessage } from 'keel-core/gen/api-errors';
+import { declaredErrorFor } from 'keel-core/gen/declared-errors';
 import { apiCases as neutralApiCases, securityCases as neutralSecurityCases } from 'keel-core/gen/api-cases';
 import { csFile, csString, solution } from './render.js';
 import { messageComponents } from './services.js';
@@ -23,18 +24,13 @@ export function generate(model) {
   return [{ path: `${solution(model).unitTests.dir}/ApiTests.cs`, content: apiTestsCs(model) }];
 }
 
-/**
- * Los casos que el diseño permite ejercitar, sobre las operaciones que keel-dotnet SIRVE hoy (sin subidas ni
- * identidad del llamante: llegan con su capa).
- */
+/** Los casos que el diseño permite ejercitar, sobre las operaciones que keel-dotnet sirve (las de keel-nest). */
 export function apiCases(model) {
   const served = {
     ...model,
     services: (model.services ?? []).map((service) => ({ ...service, operations: (service.operations ?? []).filter((op) => !op.route || servedOperation(op)) }))
   };
-  const cases = neutralApiCases(served, { components: (operation) => messageComponents(operation, model) });
-  delete cases.upload;
-  return cases;
+  return neutralApiCases(served, { components: (operation) => messageComponents(operation, model) });
 }
 
 /** La llamada a Send para un caso. */
@@ -105,6 +101,7 @@ function apiTestsCs(model) {
         await ExpectError(response, ${expected('methodNotAllowed')});
     }`);
   }
+  if (cases.upload) tests.push(...uploadTests(model, cases.upload));
   const notFound = `${model.api.routeBase}/keel-ruta-que-no-existe`;
   const body = `/// <summary>
 /// El contrato HTTP del servidor arrancado en memoria: lo que fija el diseño sin depender de la lógica del agente.
@@ -115,13 +112,13 @@ public sealed class ApiTests(InMemoryServer server) : IClassFixture<InMemoryServ
     /// <summary>El orden de las claves de ErrorResponse: el del cable (keel-core, WIRE_SHAPES.errorResponse).</summary>
     private static readonly string[] ErrorShape = [${WIRE_SHAPES.errorResponse.map(csString).join(', ')}];
 
-    private async Task<HttpResponseMessage> Send(string method, string url, string? json = null, string? correlationId = null${credential ? ', (string Name, string Value)? credential = null, bool anonymous = false' : ''})
+    private async Task<HttpResponseMessage> Send(string method, string url, string? json = null, string? correlationId = null${credential ? ', (string Name, string Value)? credential = null, bool anonymous = false' : ''}${cases.upload ? ', HttpContent? content = null' : ''})
     {
         using var request = new HttpRequestMessage(new HttpMethod(method), new Uri(url, UriKind.Relative));
         if (json is not null)
         {
             request.Content = new StringContent(json, Encoding.UTF8, "application/json");
-        }
+        }${cases.upload ? CONTENT_BODY : ''}
         if (correlationId is not null)
         {
             request.Headers.TryAddWithoutValidation("X-Correlation-Id", correlationId);
@@ -171,9 +168,105 @@ public sealed class ApiTests(InMemoryServer server) : IClassFixture<InMemoryServ
         Assert.Matches("^[0-9a-f-]{36}\\\\z", Correlation(generated));
     }
 
-${[...tests, ...securityTests(model)].join('\n\n')}
+${[...tests, ...securityTests(model)].join('\n\n')}${cases.upload ? FORM_HELPER : ''}
 }`;
-  return csFile({ namespace: solution(model).unitTests.name, usings: ['System.Text', 'System.Text.Json', 'Xunit'], body });
+  const usings = ['System.Text', 'System.Text.Json', 'Xunit', ...(cases.upload ? ['System.Net.Http.Headers', `${solution(model).api.name}.Rest`] : [])];
+  return csFile({ namespace: solution(model).unitTests.name, usings, body });
+}
+
+const CONTENT_BODY = `
+        if (content is not null)
+        {
+            request.Content = content;
+        }`;
+
+const FORM_HELPER = `
+
+    /// <summary>Un cuerpo multipart/form-data: los campos y, si se pide, una parte binaria.</summary>
+    private static MultipartFormDataContent Form(IReadOnlyDictionary<string, string> fields, (string Part, byte[] Content, string ContentType)? file = null)
+    {
+        var form = new MultipartFormDataContent("keel-boundary-0192f1d2");
+        foreach (var (name, value) in fields)
+        {
+            form.Add(new StringContent(value), name);
+        }
+        if (file is { } binary)
+        {
+            var part = new ByteArrayContent(binary.Content);
+            part.Headers.ContentType = new MediaTypeHeaderValue(binary.ContentType);
+            form.Add(part, binary.Part, "muestra.pdf");
+        }
+        return form;
+    }`;
+
+/**
+ * Los casos de la SUBIDA (capa storage), sobre la operación que elige keel-core/gen/api-cases.js: los tres de keel-nest
+ * (lo primero que falta, el 415 y una subida completa que llega a su handler) y lo que keel-nest medía en su test sobre
+ * Fastify: el 413 de la entrada con el code del diseño, un cuerpo cortado y una parte obligatoria vacía (FILE_UNREADABLE).
+ */
+function uploadTests(model, upload) {
+  const { url, part, fields, firstMissing } = upload;
+  const tooLarge = declaredErrorFor(model, FRAMEWORK_ERRORS.fileTooLarge)?.code ?? FRAMEWORK_ERRORS.fileTooLarge.code;
+  const unreadable = FRAMEWORK_ERRORS.fileUnreadable.code;
+  const post = (content) => `await Send("POST", ${csString(url)}, content: ${content})`;
+  const dictionary = (entries) => `new Dictionary<string, string> { ${Object.entries(entries).map(([key, value]) => `[${csString(key)}] = ${csString(value)}`).join(', ')} }`;
+  const missing = firstMissing.parameter
+    ? `await ExpectError(response, ${FW.missingParameter.status}, ${csString(FW.missingParameter.error)}, ${csString(FRAMEWORK_ERRORS.validation.code)}, ${csString(missingParameterMessage(firstMissing.parameter))});`
+    : `await ExpectError(response, ${FW.missingPart.status}, ${csString(FW.missingPart.error)}, null, ${csString(missingPartMessage(firstMissing.part))});`;
+  const truncated = `--keel-boundary-0192f1d2\r\nContent-Disposition: form-data; name="${part}"; filename="muestra.pdf"\r\n\r\n%PDF-1.7 a medias`;
+  const tests = [
+    `    [Fact]
+    public async Task UnaSubidaVaciaEchaEnFaltaLoPrimeroQueElMensajePideComoKeelSpring()
+    {
+        // El formulario vacío como lo escribe la prueba de keel-nest (solo el cierre): MultipartFormDataContent sin partes
+        // escribe una sección sin cabeceras, que ASP.NET no lee como formulario.
+        using var form = new StringContent("--keel-boundary-0192f1d2--\\r\\n");
+        form.Headers.ContentType = MediaTypeHeaderValue.Parse("multipart/form-data; boundary=keel-boundary-0192f1d2");
+        using var response = ${post('form')};
+        ${missing}
+    }`,
+    `    [Fact]
+    public async Task UnCuerpoJsonEnUnaSubidaEs415()
+    {
+        using var response = await Send("POST", ${csString(url)}, json: "{}");
+        await ExpectError(response, ${expected('notMultipart')});
+    }`,
+    `    [Fact]
+    public async Task UnCuerpoQuePasaDelLimiteDeLaEntradaEs413ConElCodeDelDiseno()
+    {
+        using var content = new ByteArrayContent(new byte[MultipartReading.LimitBytes + 1]);
+        content.Headers.ContentType = MediaTypeHeaderValue.Parse("multipart/form-data; boundary=keel-boundary-0192f1d2");
+        using var response = ${post('content')};
+        await ExpectError(response, ${expected('fileTooLarge', tooLarge)});
+    }`,
+    `    [Fact]
+    public async Task UnCuerpoMultipartCortadoEs400FileUnreadable()
+    {
+        using var content = new StringContent(${csString(truncated)});
+        content.Headers.ContentType = MediaTypeHeaderValue.Parse("multipart/form-data; boundary=keel-boundary-0192f1d2");
+        using var response = ${post('content')};
+        await ExpectError(response, ${expected('fileUnreadable', unreadable)});
+    }`
+  ];
+  if (fields) {
+    tests.push(
+      `    [Fact]
+    public async Task UnaParteObligatoriaVaciaEs400FileUnreadable()
+    {
+        using var form = Form(${dictionary(fields)}, (${csString(part)}, [], "application/pdf"));
+        using var response = ${post('form')};
+        await ExpectError(response, ${expected('fileEmpty', unreadable)});
+    }`,
+      `    [Fact]
+    public async Task UnaSubidaCompletaLlegaASuHandlerLeeLosCamposYElBinario()
+    {
+        using var form = Form(${dictionary(fields)}, (${csString(part)}, "%PDF-1.7 muestra"u8.ToArray(), "application/pdf"));
+        using var response = ${post('form')};
+        Assert.DoesNotContain((int)response.StatusCode, new[] { 400, 404, 405, 413, 415 });
+    }`
+    );
+  }
+  return tests;
 }
 
 // Con la API protegida, cada petición de la prueba lleva la credencial de acceso total (TestCredential) salvo que el

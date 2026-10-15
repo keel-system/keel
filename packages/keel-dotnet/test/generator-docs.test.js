@@ -140,7 +140,9 @@ const SKILL_SUBJECTS = {
   'keel-dotnet-stripe': { fixtures: ['payment-checkout'], stack: { broker: 'rabbitmq', database: 'postgresql', paymentGateway: 'stripe' } },
   'keel-dotnet-mercadopago': { fixtures: ['payment-checkout'], stack: { broker: 'rabbitmq', database: 'postgresql', paymentGateway: 'mercadopago' } },
   // La caché de lectura: los dos diseños que la declaran.
-  'keel-dotnet-redis': { fixtures: ['asset-vault', 'catalog-extended'], stack: { broker: 'rabbitmq', database: 'postgresql', cache: 'redis' } }
+  'keel-dotnet-redis': { fixtures: ['asset-vault', 'catalog-extended'], stack: { broker: 'rabbitmq', database: 'postgresql', cache: 'redis' } },
+  // El almacenamiento: un bucket privado (asset-vault) y uno público (catalog-extended), cada uno con sus métodos.
+  'keel-dotnet-s3': { fixtures: ['asset-vault', 'catalog-extended'], stack: { broker: 'rabbitmq', database: 'postgresql', storage: 'minio' } }
 };
 
 function planWith(fixture, stack) {

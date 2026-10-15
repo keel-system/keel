@@ -36,6 +36,7 @@ import { usesKafka } from './messaging.js';
 import { closingCredentialExpression, credentialsCs, flowTestCredentialMembers, smokeCredentialsCase } from './identity-harness.js';
 import { paymentHarnessFile, paymentNoticeMembers } from './payment-harness.js';
 import { cacheHarnessMembers } from './cache.js';
+import { storageFlowMembers, uploadHarnessSection, uploadPartRecord } from './storage.js';
 import { httpStubFile, idLiteralMember, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
 import { mailHarnessFile, mailSmokeCase } from './mail-harness.js';
 import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
@@ -151,6 +152,8 @@ function flowTestCs(model) {
   helpers.push(...paymentNoticeMembers(model));
   // Con caché, el vaciado a mitad de escenario.
   helpers.push(...cacheHarnessMembers(model));
+  // Con storage, la subida y la palanca del almacén caído.
+  helpers.push(...storageFlowMembers(model));
   return csFile({
     namespace: supportNamespace(model),
     usings: ['System.Collections.Concurrent', 'Xunit'],
@@ -780,6 +783,8 @@ function harnessCs(model) {
   const reset = hasResetScript(model);
   const probe = dbProbe(model);
   const sections = [];
+  const upload = uploadHarnessSection(model);
+  if (upload) sections.push(upload);
   if (reset) {
     sections.push(String.raw`    public static void ResetState() => Run(BashExecutable(), ["infra/reset-db.sh"], "¿Está la infraestructura arriba (bash infra/up.sh)?");`);
   }
@@ -819,7 +824,7 @@ function harnessCs(model) {
     namespace: supportNamespace(model),
     usings: ['System.Diagnostics', 'System.Text', 'System.Text.Json'],
     body: String.raw`
-/// <summary>La fontanería del arnés: la raíz del proyecto, el cliente HTTP, los comandos y la base de prueba.</summary>
+${uploadPartRecord(model)}/// <summary>La fontanería del arnés: la raíz del proyecto, el cliente HTTP, los comandos y la base de prueba.</summary>
 internal static class Harness
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };

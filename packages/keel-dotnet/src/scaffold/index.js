@@ -38,6 +38,7 @@ import * as httpClients from './http-clients.js';
 import * as mail from './mail.js';
 import * as payments from './payments.js';
 import * as cache from './cache.js';
+import * as storage from './storage.js';
 import * as messaging from './messaging.js';
 import * as messagingStores from './messaging-stores.js';
 import * as rabbitmq from './rabbitmq.js';
@@ -66,7 +67,7 @@ import * as generatorDocs from './generator-docs.js';
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara. El primero es el contrato formal
 // de la API, derivado del modelo neutral (el mismo en los tres generadores), salvo que el workspace traiga el de
 // /keel-docs: keel-core/gen/openapi.js.
-const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, wire, serviceParameters, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, idempotencyCheck, dtos, mappers, services, mediator, persistence, persistenceRuntime, documentPersistence, repositories, claim, reconciliationClaim, requestIdempotency, httpClients, mail, payments, cache, messaging, messagingStores, rabbitmq, kafka, snssqs, messagingTests, purge, scheduling, schedulingTests, security, restSupport, endpoints, api, tests, testCredential, apiTests, infra, integrationTests, schemaBaseline, readme, generatorDocs];
+const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, wire, serviceParameters, enums, exceptions, valueTypes, entities, events, domainGuardsCheck, idempotencyCheck, dtos, mappers, services, mediator, persistence, persistenceRuntime, documentPersistence, repositories, claim, reconciliationClaim, requestIdempotency, httpClients, mail, payments, cache, storage, messaging, messagingStores, rabbitmq, kafka, snssqs, messagingTests, purge, scheduling, schedulingTests, security, restSupport, endpoints, api, tests, testCredential, apiTests, infra, integrationTests, schemaBaseline, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus

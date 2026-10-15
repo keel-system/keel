@@ -12,6 +12,7 @@
 import { isPublicBucket } from 'keel-core/gen';
 import { domainMembers } from './entities.js';
 import { csFile, csLocal, csMember, csString, declType, entityPlace, isNullable, located, namespaceOf, typeUsings } from './render.js';
+import { FILE_STORAGE_PORT, bucketConstant, storageNamespace } from './storage.js';
 
 /** El mapper que necesita el handler de una operación, o null. */
 export function mapperOf(model, operation) {
@@ -86,17 +87,23 @@ function renderMapper(model, entity, dtos, state) {
   const className = `${entity.name}ApplicationMapper`;
   const { namespace, path } = located(model, 'mappers', className);
   const usings = [namespaceOf(model, entityPlace(entity))];
-  const methods = dtos.map((dto) => renderMethod(model, entity, dto, usings, state));
+  const own = { todo: false, storage: false };
+  const methods = dtos.map((dto) => renderMethod(model, entity, dto, usings, own));
   for (const child of reachableChildDtos(model, dtos)) {
     const childEntity = model.entities.find((e) => e.name === child.entity);
     if (!childEntity) continue;
     usings.push(namespaceOf(model, entityPlace(childEntity)));
-    methods.push(renderMethod(model, childEntity, child, usings, state));
+    methods.push(renderMethod(model, childEntity, child, usings, own));
   }
+  if (own.todo) state.todo = true;
+  // Con un `file` de bucket público, el mapper resuelve su URL: recibe el puerto de almacenamiento, como en keel-spring y
+  // keel-nest.
+  const primary = own.storage ? `(${FILE_STORAGE_PORT} fileStorage)` : '';
+  const field = own.storage ? `    private readonly ${FILE_STORAGE_PORT} fileStorage = fileStorage;\n\n` : '';
   const body = `/// <summary>Traduce ${entity.name} a los DTOs de las operaciones que lo devuelven.</summary>
-public sealed class ${className}
+public sealed class ${className}${primary}
 {
-${methods.join('\n\n')}
+${field}${methods.join('\n\n')}
 }`;
   return { path, content: csFile({ namespace, usings, body }) };
 }
@@ -142,9 +149,13 @@ function renderMethod(model, entity, dto, usings, state) {
     const member = members.get(field.name);
     if (!member) return todo(field, `${field.name} no es miembro directo de ${entity.name}; mapéalo (¿subcampo de value object?)`);
     const getter = `entity.${csMember(member.name)}`;
-    // Un `file` de bucket público expone la URL, no la clave: la resuelve el almacenamiento (incremento 13).
+    // Un `file` de bucket público expone la URL, no la clave: la resuelve IFileStorage con el bucket del diseño (sus
+    // constantes en StoragePolicies, nunca un literal), como el mapper de keel-spring y el de keel-nest.
     if (field.base === 'file' && !field.list && isPublicBucket(model, field.bucket)) {
-      return todo(field, `${field.name} es un archivo de bucket público: expón su URL con el almacenamiento, no la clave`);
+      state.storage = true;
+      usings.push(storageNamespace(model));
+      const bucket = `StoragePolicies.${bucketConstant(field.bucket)}`;
+      return member.type.endsWith('?') ? `${getter} is { } key ? fileStorage.PublicUrl(${bucket}, key) : null` : `fileStorage.PublicUrl(${bucket}, ${getter})`;
     }
     if (field.kind === 'childDto') return childValue(model, entity, field, member, getter, todo);
     if (baseType(member.type) !== baseType(declType(field))) {

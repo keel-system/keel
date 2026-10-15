@@ -49,11 +49,16 @@ test('el manejador de errores traduce cada clase base de la jerarquía con su st
   for (const { name, http } of ERROR_BASES) assert.match(middleware, new RegExp(`${name} => Domain\\(${http}, `), name);
 });
 
-test('una operación de una capa que aún no se sirve (subida, identidad del llamante) no tiene ruta', async () => {
-  const { model, files } = await planFixture('notification-mailer');
-  const routes = file(files, '/Rest/ApiRoutes.cs');
-  for (const operation of model.services.flatMap((s) => s.operations).filter((op) => op.route)) {
-    assert.equal(routes.includes(`new("${operation.name}"`), servedOperation(operation), operation.name);
+test('toda operación con ruta tiene la suya, las subidas multipart incluidas (incremento 13g)', async () => {
+  for (const name of ['notification-mailer', 'asset-vault', 'catalog-extended']) {
+    const { model, files } = await planFixture(name);
+    const routes = file(files, '/Rest/ApiRoutes.cs');
+    const routed = model.services.flatMap((s) => s.operations).filter((op) => op.route);
+    assert.ok(name === 'notification-mailer' || routed.some((op) => op.multipart), `${name} tiene una subida`);
+    for (const operation of routed) {
+      assert.ok(servedOperation(operation), `${name}: ${operation.name}`);
+      assert.ok(routes.includes(`new("${operation.name}"`), `${name}: ${operation.name}`);
+    }
   }
 });
 
@@ -66,7 +71,6 @@ for (const name of fixtureNames()) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
     const nest = planNest({ manifest, layers, workspace: FIXTURES_DIR });
     const fromNest = nestApiCases(nest.model);
-    delete fromNest.upload;
     const fromDotnet = apiCases(model);
     // Con persistencia keel-nest lee la página como un Pageable (incremento 6 en keel-dotnet): la operación que
     // llega al handler puede ser otra. Lo demás no depende de ello.

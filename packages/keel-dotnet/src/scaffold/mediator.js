@@ -27,6 +27,7 @@ import { clientAdaptersNamespace, usesHttpClients } from './http-clients.js';
 import { mailInfraNamespace, usesMail } from './mail.js';
 import { paymentInfraNamespace, usesPayments } from './payments.js';
 import { cacheNamespace, usesCache } from './cache.js';
+import { storageInfraNamespace, usesStorage } from './storage.js';
 
 /** ¿Hay casos de uso que despachar? Sin operaciones no se genera nada de esto. */
 export function usesMediator(model) {
@@ -394,6 +395,10 @@ function useCasesTest(model) {
   const caching = usesCache(model);
   if (caching) usings.push(cacheNamespace(model));
   const cacheLine = caching ? '\n        services.AddOperationCache(CacheSettings.Disabled);' : '';
+  // Con storage, los handlers de las subidas reciben IFileStorage y StoragePolicies: el registro real, sin almacén.
+  const storing = usesStorage(model);
+  if (storing) usings.push(storageInfraNamespace(model));
+  const storageLine = storing ? '\n        services.AddStorage(StorageSettings.Unconfigured);' : '';
   const passThrough = persistence
     ? `
             // Sin base: la transacción de este despacho es el paso directo, no la de EF.
@@ -405,7 +410,7 @@ function useCasesTest(model) {
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddUseCases();${persistenceLine}${bridgeLine}${scopeLine}${parametersLine}${clientsLine}${mailLine}${paymentsLine}${cacheLine}
+        services.AddUseCases();${persistenceLine}${bridgeLine}${scopeLine}${parametersLine}${clientsLine}${mailLine}${paymentsLine}${cacheLine}${storageLine}
         extra?.Invoke(services);
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }

@@ -58,13 +58,13 @@ test('un diseño no listo NO se genera sin --accept-unready, y no se escribe nad
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
-test('una capa fuera de la frontera se rechaza nombrando keel-dotnet, antes de escribir nada', async () => {
+test('lo que está fuera de la frontera (needs, hasta el 13i) se rechaza nombrando keel-dotnet, antes de escribir nada', async () => {
   const workspace = makeWorkspace();
   mountDesign(workspace, 'asset-vault');
   const { exitCode, output } = await runCommand(workspace, build, 'specs/asset-vault', { defaults: true, acceptUnready: true });
   assert.equal(exitCode, 1);
   assert.match(output, /capacidades que keel-dotnet no genera/);
-  assert.match(output, /capa storage: keel-dotnet todavía no la genera/);
+  assert.match(output, /dependencies\.\w+\.needs .*keel-dotnet todavía no genera/);
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 

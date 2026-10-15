@@ -4,9 +4,8 @@
 // exige que digan lo mismo: método, ruta completa, status de éxito, si hay `Location`, los parámetros de query, si
 // el cuerpo es obligatorio u opcional y los campos de cada DTO de respuesta, en orden.
 //
-// Fuera, con su motivo escrito:
-//   · las subidas multipart (capa storage, incremento 13) y las operaciones con la identidad del llamante (capa
-//     security, incremento 8): keel-dotnet aún no las sirve, y la frontera rechaza los diseños que las declaran.
+// Una subida (multipart) se compara igual: sus campos simples son la query de keel-spring (sus @RequestParam) y el binario,
+// una parte (@RequestPart), no un parámetro; ninguna de las dos lleva cuerpo JSON.
 //
 // La query de un listado paginado se compara entera: con persistencia, los dos leen el Pageable de Spring Data (page,
 // size y sort); sin ella, page y size.

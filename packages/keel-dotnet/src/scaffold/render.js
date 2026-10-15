@@ -111,6 +111,10 @@ export const PLACES = {
   // La caché de lectura (use-cases.<op>.cache, incremento 13f): el puerto en Application/Ports, las cachés del diseño en
   // Application/Support, y el adaptador, el store y la invalidación en Infrastructure/Cache.
   cache: ['infrastructure', 'Cache'],
+  // El almacenamiento de binarios (capa storage, incremento 13g): el puerto, la política de cada bucket y lo que el agregado
+  // guarda de un binario son dominio; la configuración, las políticas leídas de ella y el adaptador S3, infraestructura.
+  storage: ['domain', 'Storage'],
+  storageInfra: ['infrastructure', 'Storage'],
   payment: ['domain', 'Payment'],
   paymentApp: ['application', 'Payment'],
   paymentInfra: ['infrastructure', 'Payment'],
