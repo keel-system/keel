@@ -384,6 +384,18 @@ export class ReconciliationClaimStore {
    * @param expiredBefore por debajo de este instante, un reclamo ajeno ya caducó
    * @returns true si el candidato es de esta réplica
    */
+  /**
+   * Las entidades de \`activation\` con una marca VIVA (posterior a \`expiredBefore\`), tal como se guardan: lo que la
+   * lectura de candidatos excluye, para que la cabeza de la cola —reclamada y aún sin resolver— no ocupe el lote de
+   * cada pasada hasta caducar.
+   */
+  async held(activation: string, expiredBefore: Date): Promise<unknown[]> {
+    const live = await this.claims
+      .find({ ${activationColumn}: activation, claimed_at: { $gt: expiredBefore } }, { projection: { ${entityColumn}: 1 } })
+      .toArray();
+    return live.map((mark) => (mark as Record<string, unknown>)[${tsString(entityColumn)}]);
+  }
+
   async claim(activation: string, entityId: string, now: Date, expiredBefore: Date): Promise<boolean> {
     const key = \`\${activation}${storeDocumentKey(RECONCILIATION_CLAIM).separator}\${entityId.toLowerCase()}\`;
     try {
@@ -481,8 +493,11 @@ export function documentReconciliationMethods(model, entity) {
     const now = new Date();
     const staleBefore = new Date(now.getTime() - window.unansweredAfterSeconds * 1000);
     const claimExpiredBefore = new Date(now.getTime() - window.claimTimeoutMs);
+    // Los que ya tienen una marca VIVA no son candidatos: sin excluirlos, la cabeza de la cola ocuparía el lote de
+    // cada pasada hasta caducar, y los de detrás no se reconciliarían antes.
+    const held = await this.reconciliationClaims.held(${tsString(claim.activation)}, claimExpiredBefore);
     const candidates = await this.collection
-      .find({ ${tsString(field)}: { $in: [${states}] }, ${tsString(awaiting)}: { $lt: staleBefore } })
+      .find({ ${tsString(field)}: { $in: [${states}] }, ${tsString(awaiting)}: { $lt: staleBefore }, _id: { $nin: held as never[] } })
       .sort({ ${tsString(awaiting)}: 1 })
       .limit(window.batchSize)
       .toArray();

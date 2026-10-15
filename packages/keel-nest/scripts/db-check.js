@@ -834,8 +834,10 @@ function reconciliationBlock(model, ctx) {
     const first = await adapter(2, 60_000).${claim.method}();
     check('${label}: solo lo que lleva más que el umbral, el que más lleva primero, con su lote', JSON.stringify(first.map((e) => e.id)) === JSON.stringify([stale[2], stale[1]]), JSON.stringify({ got: first.map((e) => e.id), stale, fresh }));
     check('${label}: no cambia el estado de espera (es lo que el barrido busca)', first.every((e) => e.${field} === ${awaiting}), first.map((e) => e.${field}).join(','));
-    const rest = await adapter(10, 60_000).${claim.method}();
-    check('${label}: la pasada siguiente se lleva el resto y no lo ya reclamado', same(rest.map((e) => e.id), [stale[0]]), JSON.stringify(rest.map((e) => e.id)));
+    // Con el MISMO lote: si la lectura no excluyera las marcas vivas, la cabeza de la cola volvería a ocuparlo y el
+    // de detrás no saldría hasta que caducaran.
+    const rest = await adapter(2, 60_000).${claim.method}();
+    check('${label}: la pasada siguiente, con el mismo lote, se lleva al de detrás y no lo ya reclamado', same(rest.map((e) => e.id), [stale[0]]), JSON.stringify(rest.map((e) => e.id)));
     check('${label}: y la tercera, nada (las marcas siguen vivas)', (await adapter(10, 60_000).${claim.method}()).length === 0);
     const marks = await dataSource.getRepository(ReconciliationClaimOrmRef()).findBy({ activation: '${claim.activation}' });
     check('${label}: deja una marca por candidato en reconciliation_claim', marks.length === 3, marks.length);

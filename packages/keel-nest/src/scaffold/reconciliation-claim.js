@@ -253,7 +253,7 @@ export function adapterReconciliationMethods(model, entity, imports, findOptions
   if (claims.length === 0) return [];
   const { enumType, field } = entity.lifecycle;
   const orm = ormClass(entity.name);
-  imports.push({ symbol: enumType, from: classPath(DIRS.enums, enumType) }, { symbol: 'LessThan', from: 'typeorm' });
+  imports.push({ symbol: enumType, from: classPath(DIRS.enums, enumType) }, { symbol: 'LessThan', from: 'typeorm' }, { symbol: 'Brackets', from: 'typeorm' });
   // READ COMMITTED en MySQL, por lo mismo que el reclamo de una cola: la lectura con bloqueo de REPEATABLE READ
   // toma también los huecos entre claves y frena los INSERT de filas nuevas.
   const isolation = needsReadCommitted(engineOf(model)) ? ", { isolation: 'READ COMMITTED' }" : '';
@@ -268,13 +268,19 @@ export function adapterReconciliationMethods(model, entity, imports, findOptions
     const claimExpiredBefore = new Date(now.getTime() - window.claimTimeoutMs);
     const states = [${states}];
     // Los candidatos, el que más lleva primero. SKIP LOCKED reparte entre réplicas; quién se queda cada uno lo
-    // decide el reclamo de abajo, no esta consulta.
+    // decide el reclamo de abajo, no esta consulta. Los que ya tienen una marca VIVA no son candidatos: sin
+    // excluirlos, la cabeza de la cola —reclamada y aún sin resolver— ocuparía el lote de cada pasada hasta
+    // caducar, y los de detrás no se reconciliarían antes.
     const candidates = await this.transactions.inNewTransaction(
       (manager) =>
         manager
           .createQueryBuilder(${orm}, 'e')
           .select(['e.id'])
-          .where(states.map((state) => ({ ${field}: state, ${claim.awaitingField}: LessThan(staleBefore) })))
+          .where(new Brackets((either) => either.where(states.map((state) => ({ ${field}: state, ${claim.awaitingField}: LessThan(staleBefore) })))))
+          .andWhere(
+            'NOT EXISTS (SELECT 1 FROM ${RECONCILIATION_CLAIM.table} c WHERE c.activation = :activation AND c.entity_id = e.id AND c.claimed_at > :claimExpiredBefore)',
+            { activation: ${tsString(claim.activation)}, claimExpiredBefore }
+          )
           .orderBy('e.${claim.awaitingField}', 'ASC')
           .limit(window.batchSize)
           .setLock('pessimistic_write')

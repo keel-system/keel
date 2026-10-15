@@ -1414,6 +1414,24 @@ function reconciliationSweepTests(claim, enumConstant, otroEstado) {
     }
 
     @Test
+    void laPasadaSiguienteSeLlevaAlDeDetrasConElMismoLote() {
+        // La cabeza de la cola queda reclamada y SIN resolver (el barrido no mueve el estado). Si la lectura
+        // de candidatos no excluyera las marcas vivas, volvería a ocupar el lote de la pasada siguiente y el
+        // de detrás no saldría hasta que caducaran.
+        for (int i = 0; i < LOTE; i++) {
+            esperandoDesdeHace(TOLERANCIA_S * 100 + i);
+        }
+        UUID detras = esperandoDesdeHace(TOLERANCIA_S * 10);
+
+        var primera = adaptador.${claim.method}();
+        var segunda = adaptador.${claim.method}();
+
+        assertEquals(LOTE, primera.size(), "la primera pasada no llenó su lote");
+        assertEquals(1, segunda.size(), "la pasada siguiente no llegó al de detrás: la cabeza reclamada le tapa el lote");
+        assertTrue(marcaDe(ACTIVACION, detras), "el de detrás sigue sin marca");
+    }
+
+    @Test
     void laSegundaPasadaInmediataNoDevuelveNada() {
         // El caso que ATA las dos mitades. El barrido no mueve el lifecycle —el estado de espera
         // sigue siendo el mismo—, así que lo único que impide re-reclamar es la marca. Un

@@ -371,8 +371,9 @@ function reconciliationBlock(model, ctx) {
       check('${label}: el estado de espera NO se toca', first.every((e) => e.${field} === ${enumType}.${screamingSnake(claim.states[0])}), first.map((e) => e.${field}).join(','));
       const marks = await database.collection('${RECONCILIATION_CLAIM.table}').find({}).toArray();
       check('${label}: deja la marca de cada uno en ${RECONCILIATION_CLAIM.table}', marks.length === 2 && marks.every((mark) => mark._id === \`${claim.activation}|\${mark.entity_id.toUUID().toHexString()}\`), JSON.stringify(marks.map((mark) => mark._id)));
-      const second = await adapter(reconciliationWindow(10)).${claim.method}();
-      check('${label}: la pasada siguiente se lleva SOLO el que quedaba (las marcas vivas lo niegan)', JSON.stringify(second.map((e) => e.id)) === JSON.stringify([stale[2]]), JSON.stringify(second.map((e) => e.id)));
+      // Con el MISMO lote: si la lectura no excluyera las marcas vivas, la cabeza de la cola volvería a ocuparlo.
+      const second = await adapter(reconciliationWindow(2)).${claim.method}();
+      check('${label}: la pasada siguiente, con el mismo lote, se lleva SOLO el que quedaba (las marcas vivas lo niegan)', JSON.stringify(second.map((e) => e.id)) === JSON.stringify([stale[2]]), JSON.stringify(second.map((e) => e.id)));
       await new Promise((resolve) => setTimeout(resolve, 30));
       const again = await adapter(reconciliationWindow(10, 60, 10)).${claim.method}();
       check('${label}: con las marcas caducadas, vuelven a reclamarse', same(again.map((e) => e.id), stale), JSON.stringify(again.map((e) => e.id)));

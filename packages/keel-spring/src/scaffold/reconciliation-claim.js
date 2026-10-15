@@ -130,11 +130,17 @@ export function jpaRepositoryMethods(model, entity, imports) {
     (claim) => `    /**
      * Candidatos de ${claim.dependency}.${claim.activation}: siguen esperando y llevan más
      * de lo tolerado ahí. El orden es por la marca de espera —el que más lleva, primero—, y
-     * quién se los queda lo decide el reclamo, no esta consulta.
+     * quién se los queda lo decide el reclamo, no esta consulta. Los que ya tienen una marca
+     * VIVA no son candidatos: sin excluirlos, la cabeza de la cola —reclamada y aún sin
+     * resolver— ocuparía el lote de cada pasada hasta caducar, y los de detrás no se
+     * reconciliarían antes.
      */
 ${selection.annotations}
-    @Query("select e.id from ${entity.name}Jpa e where e.${field} in :states and e.${claim.awaitingField} < :staleBefore order by e.${claim.awaitingField} asc")
-    List<UUID> candidatesFor${claim.suffix}(@Param("states") List<${enumType}> states, @Param("staleBefore") Instant staleBefore, Pageable pageable);`
+    @Query("select e.id from ${entity.name}Jpa e where e.${field} in :states and e.${claim.awaitingField} < :staleBefore"
+            + " and not exists (select 1 from ReconciliationClaimJpa c where c.id.activation = :activation and c.id.entityId = e.id and c.claimedAt > :claimExpiredBefore)"
+            + " order by e.${claim.awaitingField} asc")
+    List<UUID> candidatesFor${claim.suffix}(@Param("states") List<${enumType}> states, @Param("staleBefore") Instant staleBefore,
+            @Param("activation") String activation, @Param("claimExpiredBefore") Instant claimExpiredBefore, Pageable pageable);`
   );
 }
 
@@ -173,7 +179,7 @@ ${claimTx.annotation}
         Instant claimExpiredBefore = now.minusMillis(${claim.activation}ClaimTimeoutMs);
         List<${enumType}> states = List.of(${stateList(claim, enumType)});
         List<UUID> candidates = ${jpaField}.candidatesFor${claim.suffix}(
-                states, staleBefore, PageRequest.of(0, ${claim.activation}BatchSize));
+                states, staleBefore, "${claim.activation}", claimExpiredBefore, PageRequest.of(0, ${claim.activation}BatchSize));
         List<${entity.name}> claimed = new ArrayList<>();
         for (UUID id : candidates) {
             // true = la marca es mía; false = otra réplica la tiene y aún no ha caducado.
@@ -207,6 +213,7 @@ export function documentAdapterMethods(model, entity, imports) {
   imports.add('org.springframework.data.mongodb.core.query.Query');
   imports.add(`${subPackage(model, 'domain.enums')}.${enumType}`);
   imports.add(`${subPackage(model, CLAIM_PKG)}.ReconciliationClaimStore`);
+  imports.add(`${subPackage(model, CLAIM_PKG)}.ReconciliationClaimDocument`);
 
   return claims.map(
     (claim) => `    /**
@@ -217,9 +224,16 @@ export function documentAdapterMethods(model, entity, imports) {
         Instant now = Instant.now();
         Instant staleBefore = now.minusSeconds(${claim.activation}UnansweredAfterSeconds);
         Instant claimExpiredBefore = now.minusMillis(${claim.activation}ClaimTimeoutMs);
+        // Los que ya tienen una marca VIVA no son candidatos: sin excluirlos, la cabeza de la cola
+        // ocuparía el lote de cada pasada hasta caducar, y los de detrás no se reconciliarían antes.
+        List<UUID> held = mongoTemplate.find(
+                        Query.query(Criteria.where("activation").is("${claim.activation}").and("claimedAt").gt(claimExpiredBefore)),
+                        ReconciliationClaimDocument.class)
+                .stream().map(ReconciliationClaimDocument::getEntityId).toList();
         Query query = Query.query(new Criteria().andOperator(
                         Criteria.where("${field}").in(List.of(${stateList(claim, enumType)})),
-                        Criteria.where("${claim.awaitingField}").lt(staleBefore)))
+                        Criteria.where("${claim.awaitingField}").lt(staleBefore),
+                        Criteria.where("id").nin(held)))
                 .with(Sort.by(Sort.Direction.ASC, "${claim.awaitingField}"))
                 .limit(${claim.activation}BatchSize);
         List<${entity.name}> claimed = new ArrayList<>();

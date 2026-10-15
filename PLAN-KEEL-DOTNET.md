@@ -1150,7 +1150,17 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       tienen una marca VIVA, así que con más atascados que el lote la cabeza de la cola —reclamada y aún sin resolver
       (un reintento, un proveedor caído)— ocupaba el lote de cada pasada hasta caducar, y los de detrás no se
       reconciliaban antes. keel-dotnet los excluye en la propia lectura (`NOT EXISTS` sobre `reconciliation_claim` con
-      `claimed_at > caducidad`, `FOR UPDATE OF e`). keel-spring y keel-nest lo tienen igual: **pendiente de decidir**.
+      `claimed_at > caducidad`, `FOR UPDATE OF e`). keel-spring y keel-nest lo tenían igual: **cerrado en los dos
+      (2026-10-14, a petición del usuario)**, en las dos ramas —JPQL con `not exists` y Mongo con `nin` en keel-spring;
+      TypeORM con `NOT EXISTS` entre `Brackets` y la tienda documental con `held()` en keel-nest—. Las sondas que había
+      pasaban con y sin el arreglo (la segunda pasada usaba un lote mayor): `db-check` y `doc-check` de keel-nest la
+      repiten ahora con el MISMO lote, y `store-check` de keel-spring gana
+      `laPasadaSiguienteSeLlevaAlDeDetrasConElMismoLote`. Medido: keel-nest `db-check` 48/48 (PostgreSQL y MySQL) y
+      `doc-check` 13/13, falsados anulando la exclusión (caen justo esas sondas en `stock-reservation`,
+      `catalog-extended` y `asset-vault`); keel-spring `npm test` 1664/1664 y `compile-check` en verde en las tres
+      fixtures con reconciliación. Golden regenerado en los dos (solo cambian sus adaptadores y tiendas de
+      reconciliación). **Pendiente**: `store-check` de keel-spring, que levanta la `infra/` de `stock-reservation` con
+      puertos fijos y chocaría con la corrida 11e en curso.
     - **Medido**: `test/reconciliation.test.js` (7: el YAML igual al de keel-nest y lo que lee `ReconciliationSettings`,
       la sentencia de la tienda, el reclamo del adaptador, las purgas contra keel-nest, el registro y las notas);
       `schema-parity` ya compara `reconciliation_claim` con keel-spring; `idempotency-check.test.js` con
