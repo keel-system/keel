@@ -25,6 +25,7 @@ import {
   claimsForEntity,
   naturalKeyBatchReason
 } from 'keel-core/gen';
+import { idBatchReason } from 'keel-core/gen/ref-targets';
 import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, typeUsings, xmlDoc, entityPlace } from './render.js';
 import { domainMembers } from './entities.js';
 import { adapterClaimMethods, adapterGuardMethods, claimDependencies, claimUsings, guardDependencies, portClaimMethods, portGuardMethods } from './claim.js';
@@ -84,6 +85,12 @@ export function generate(model) {
     files.push(usesDocument(model) ? renderDocumentAdapter(model, entity) : renderAdapter(model, entity));
   }
   return files;
+}
+
+/** ¿Llama algún adaptador relacional a RowValues.Unmapped (un value object que build no sabe mapear)? */
+export function usesUnmapped(model) {
+  if (usesDocument(model)) return false;
+  return repositoryRoots(model).some((entity) => renderAdapter(model, entity).content.includes('RowValues.Unmapped<'));
 }
 
 // ─── La página ───────────────────────────────────────────────────────────────────────────────────
@@ -257,6 +264,11 @@ function renderPort(model, entity) {
   const idType = entity.idField?.csType ?? 'Guid';
   const idName = csLocal(entity.idField?.name ?? 'id');
   const methods = [`    Task<${entity.name}?> FindById(${idType} ${idName}, CancellationToken cancellationToken = default);`];
+  // La lectura POR LOTE por id (keel-core/gen/ref-targets.js): la raíz que embebe una página, o la que devuelve una query que
+  // recibe la lista de sus ids. Sin ella, el camino de menor resistencia es un FindById por elemento.
+  if (idBatchReason(model, entity)) {
+    methods.push(`${xmlDoc('Los agregados de varios id en UNA consulta; los que no existen no están. El orden no está garantizado.', '    ')}    Task<IReadOnlyList<${entity.name}>> FindAllById(IReadOnlyCollection<${idType}> ids, CancellationToken cancellationToken = default);`);
+  }
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) usings.push(...param.usings);
@@ -391,6 +403,19 @@ function renderAdapter(model, entity) {
         var found = await Graph().AsNoTracking().SingleOrDefaultAsync(r => r.${idProp} == ${idName}, cancellationToken);
         return found is null ? null : ToDomain(found);
     }`);
+  if (idBatchReason(model, entity)) {
+    methods.push(`    public async Task<IReadOnlyList<${entity.name}>> FindAllById(IReadOnlyCollection<${idType}> ids, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        var keys = ids.Distinct().ToList();
+        if (keys.Count == 0)
+        {
+            return [];
+        }
+        var found = await Graph().AsNoTracking().Where(r => keys.Contains(r.${idProp})).ToListAsync(cancellationToken);
+        return [.. found.Select(ToDomain)];
+    }`);
+  }
 
   for (const finder of [naturalKeyFinder(model, entity), ...occupantFinders(model, entity), ...uniqueFieldFinders(model, entity)].filter(Boolean)) {
     for (const param of finder.params) usings.push(...param.usings);

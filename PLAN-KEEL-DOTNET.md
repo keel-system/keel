@@ -1655,6 +1655,27 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       `degrade`), y el adaptador enumera el conflicto con un TODO, como keel-spring y keel-nest; la prueba afirmaba
       `lastKnown` sin mirar que fuera LA política de la llamada. Ahora sale de `fallbackPolicy(call)`, la misma regla que el
       adaptador, y `test/outbound-13j.test.js` lo cubre derivando el conflicto de `catalog-extended` (ninguna red lo tenía).
+  - **13k — corridas hechas (2026-10-16)**. Las fichas: `docs/corridas/2026-10-16-asset-vault-dotnet.md` y
+    `docs/corridas/2026-10-16-catalog-dotnet.md`.
+    - **`asset-vault`: 32/32, huella 21** (gemelas: 18). La primera puntuación dio 13 FAILED por un único defecto: la firma
+      del comando recorría por reflexión el `ReadOnlyMemory<byte>` de una subida y caía en su `Span`. Cinco arreglos:
+      la firma de la subida por el digest de su contenido (prueba emitida, sabotaje `signature-memory`),
+      `check-flows.sh` con dígitos en el prefijo del id, `S3FileStorage` como `IHostedService` que aprovisiona los
+      buckets, la lectura por lote del `embed` (`<Raíz>RefResolver` + `FindAllById`, la de los otros dos; sonda y
+      sabotaje `id-batch` en `db-check` y `doc-check`) y `UploadOnReplica` en el arnés.
+    - **`catalog`: 56/56, huella 23** (keel-nest v2: 25; keel-spring v2: 28). Ninguno de sus cuatro huecos del generador
+      está en la huella. Los arreglos: el puerto **`IAfterCommit`** (la corrida se paró en `removeProductImage`, que
+      borraba el binario dentro de la transacción porque Application no tenía con qué esperar al commit),
+      `RowValues.Unmapped` solo cuando algún adaptador lo llama, **`RestartServerAsync()`** en `FlowTest` para empezar un
+      flujo con la ventana del circuito vacía (el servidor es otro proceso: keel-spring la vacía en el suyo), y la nota del
+      filtro plegado con la grafía de C# (`textFilterNotes` acepta la de la plataforma; golden de keel-spring y keel-nest
+      idéntico). Sus dos designGaps no eran huecos: el 500 genérico no lleva `code` por contrato, y la invalidación de
+      la caché termina antes de responder (la skill `keel-dotnet-redis` lo dice ahora entero).
+    - **Medido**: sin red, keel-core 1216, keel-dotnet 545, keel-nest 800 y keel-spring 1664, todas en verde; golden de
+      keel-spring y keel-nest idéntico. `cs-check --fixtures` 138/138 ensamblados y 2 803 pruebas; `db-check` entero, 12
+      sujetos y **208 sondas**; `doc-check` entero, 5 sujetos y **133 sondas**. Falsados: `signature-memory` (solo cae
+      la prueba de la firma), `id-batch` en `db-check` (las dos sondas del lote) y en `doc-check` (la del `Owner`).
+    - **Con esto el incremento 13 queda cerrado.** Sigue el 14 (telemetría y `deploy/`).
 
 ## 5. Riesgos conocidos
 

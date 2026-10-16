@@ -29,7 +29,7 @@ rota.
 | La política de cada bucket | `src/<Raíz>.Domain/Storage/BucketPolicy.cs` (`AllowsContent`, `AllowsSize`, `SignedUrlTtlSeconds()`) y `src/<Raíz>.Domain/Storage/StoragePolicies.cs` (una constante por bucket y `ForBucket`) |
 | La firma del binario | `src/<Raíz>.Domain/Storage/ContentSignature.cs` — la usa `AllowsContent` |
 | Configuración | `config/parameters/<perfil>/storage.yaml` y `src/<Raíz>.Infrastructure/Storage/StorageSettings.cs` |
-| Registro | `src/<Raíz>.Infrastructure/Storage/StorageRegistration.cs` — ya registra `S3FileStorage` como `IFileStorage`, y `Program.cs` lo llama |
+| Registro | `src/<Raíz>.Infrastructure/Storage/StorageRegistration.cs` — ya registra `S3FileStorage` como `IFileStorage` y como servicio de arranque (su `StartAsync` aprovisiona los buckets), y `Program.cs` lo llama. **No lo toques** |
 | La entrada multipart | `src/<Raíz>.Api/Rest/MultipartReading.cs` y el lector de cada subida en su archivo de `Endpoints/`: el binario llega al mensaje como `FileUpload` (`src/<Raíz>.Application/Dtos/FileUpload.cs`) |
 | La URL de un bucket público en las respuestas | el `<Entidad>ApplicationMapper` ya llama a `PublicUrl` |
 | El handler de la subida | ya recibe `StoragePolicies` e `IFileStorage` en su constructor primario, con una nota del orden de las comprobaciones |

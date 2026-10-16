@@ -87,8 +87,9 @@ nunca «no encontrado». La cancelación de la petición (`OperationCanceledExce
 En local los crea el sidecar `minio-init` de `infra/` (y les aplica la lectura pública). El adaptador lleva su propio
 aprovisionamiento idempotente para los entornos reales, **tras la guarda** que build siembra por perfil: `true` en local,
 `false` en test, `${STORAGE_ENSURE_BUCKETS:true}` en develop y `${STORAGE_ENSURE_BUCKETS:false}` en producción (crear
-buckets exige permisos que la plataforma no suele conceder). Hazlo en un `IHostedService` que registras en
-`StorageRegistration` —nunca en el constructor—, y que un fallo se registre y no tumbe el arranque:
+buckets exige permisos que la plataforma no suele conceder). Va en el `StartAsync` del propio `S3FileStorage`, que build
+ya deja como `IHostedService` con la guarda puesta y **registrado** en `StorageRegistration` (no toques el registro);
+nunca en el constructor, y que un fallo se registre y no tumbe el arranque:
 
 ```csharp
 public async Task StartAsync(CancellationToken cancellationToken)
@@ -113,5 +114,5 @@ lectura directa 403.
 - [ ] La subida valida con `AllowsSize` y `AllowsContent` en el caso de uso, antes de llamar al puerto.
 - [ ] La clave del objeto la genera el servicio; el nombre del cliente no entra en ella.
 - [ ] La URL firmada caduca en `SignedUrlTtlSeconds()`; la pública se compone desde `PublicBaseUrl`.
-- [ ] El aprovisionamiento va tras `EnsureBucketsOnStartup` y fuera del constructor.
+- [ ] El aprovisionamiento va en el `StartAsync` del adaptador, tras `EnsureBucketsOnStartup`; el registro no se toca.
 - [ ] Ninguna clase del SDK sale de `src/<Raíz>.Infrastructure/Storage/`.

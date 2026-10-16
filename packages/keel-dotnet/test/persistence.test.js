@@ -118,3 +118,27 @@ test('el diseño documental no emite persistencia RELACIONAL: ni filas, ni DbCon
   assert.deepEqual(files.filter((file) => /\/Persistence\/Rows\/|DbContext|DesignTimeDbContextFactory|\.config\/dotnet-tools\.json$/.test(file.path)).map((file) => file.path), []);
   assert.ok(files.some((file) => file.path.endsWith('/Persistence/DocumentIndexes.cs')));
 });
+
+test('la nota del filtro plegado nombra la función y la sombra con la grafía de C#, las que existen en el proyecto', async () => {
+  const { files } = await planFixture('catalog-extended');
+  const notes = files.filter((file) => /QueryHandler\.cs$/.test(file.path) && /pliega el parámetro/.test(file.content));
+  assert.ok(notes.length > 0);
+  for (const file of notes) {
+    assert.match(file.content, /TextFold\.FoldCase(AndAccents)?\(\.\.\.\)/, file.path);
+    assert.match(file.content, /\.[A-Z]\w*Normalized, la sombra/, file.path);
+    assert.doesNotMatch(file.content, /TextFold\.fold/, file.path);
+  }
+});
+
+test('RowValues.Unmapped solo existe si algún adaptador lo llama: sin uso, es andamiaje que lanza NotImplementedException', async () => {
+  const unmapped = (files) => files.filter((file) => file.content.includes('Unmapped<')).map((file) => path.basename(file.path)).sort();
+  assert.deepEqual(unmapped((await planFixture('product-catalog')).files), []);
+  // Un value object que anida otro: build no sabe aplanarlo, el adaptador lo nombra y RowValues lo trae.
+  const nested = await planFixture('product-catalog', {
+    mutate: (manifest, layers) => {
+      layers.domain.types.Tier = { description: 'Escalón.', fields: { price: { type: 'Money', required: true }, label: { type: 'string' } } };
+      layers.domain.entities.Product.fields.tier = { type: 'Tier' };
+    }
+  });
+  assert.deepEqual(unmapped(nested.files), ['ProductRepository.cs', 'RowValues.cs']);
+});

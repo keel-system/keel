@@ -29,6 +29,7 @@ import { securityNamespace, usesHttpSecurity } from './security.js';
 import { configNamespace } from './config.js';
 import { usesRelational, dbContextClass, persistedEntities } from './persistence.js';
 import { repositoryRoots, portClass, adapterClass, repositoriesNamespace } from './repositories.js';
+import { AFTER_COMMIT_REGISTRATION } from './after-commit.js';
 
 /** El historial de migraciones con nombre propio: infra/reset-db.sh lo respeta por nombre. */
 export const MIGRATIONS_TABLE = 'ef_migrations_history';
@@ -60,6 +61,7 @@ export function generate(model) {
         namespaceOf(model, 'useCaseInfra'),
         repositoriesNamespace(model),
         namespaceOf(model, 'repositoryAdapters'),
+        namespaceOf(model, 'ports'),
         ...idempotencyRegistrationUsings(model)
       ],
       registrationBody(model)
@@ -611,6 +613,7 @@ public static class PersistenceRegistration
         services.AddScoped<PersistenceTransactions>();
         // El mediator abre la transacción de cada caso de uso con ESTA implementación.
         services.Replace(ServiceDescriptor.Scoped<IUseCaseTransactions>(provider => provider.GetRequiredService<PersistenceTransactions>()));
+${AFTER_COMMIT_REGISTRATION}
 ${repositories.join('\n')}
         return services;
     }

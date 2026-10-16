@@ -88,6 +88,11 @@ Cómo se escriben: `conventions/domain-modeling.md`.
   participa de la transacción: si sale antes de que el agregado valide y la guarda rechaza, el rollback deshace
   la fila y deja el efecto hecho fuera. El orden es siempre: cargar → guardas e invariantes → efectos externos →
   confirmar.
+- **Cuando el diseño dice «después de confirmar»** (borrar un binario, avisar a un proveedor), el efecto va por el
+  puerto `IAfterCommit` (`Application/Ports/IAfterCommit.cs`, que build ya emite y registra con la persistencia):
+  `await afterCommit.Run(() => …)` lo ejecuta tras el commit y nunca si la transacción revierte; sin transacción,
+  antes de volver. No escribas otro, ni lo hagas dentro de la transacción: `PersistenceTransactions` vive en
+  Infrastructure y un handler no puede referenciarla.
 - El bloqueo optimista (`lockVersion`) ya lo genera build, con su round-trip y su 409. Es infraestructura: no
   sale al contrato y nadie lo toca. Un `version` que declare el diseño es otro contador, de dominio, y lo
   incrementa el agregado.

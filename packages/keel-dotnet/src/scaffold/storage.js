@@ -78,7 +78,7 @@ export function generate(model) {
       file('storage', 'StoragePolicies', [], storagePoliciesBody(model)),
       file('storageInfra', 'StorageSettings', ['System.Globalization', configNamespace(model)], settingsBody(model)),
       file('storageInfra', 'ConfiguredStoragePolicies', [domain], configuredPoliciesBody()),
-      file('storageInfra', 'S3FileStorage', [domain], s3StubBody(model)),
+      file('storageInfra', 'S3FileStorage', ['Microsoft.Extensions.Hosting', domain], s3StubBody(model)),
       file('storageInfra', 'StorageRegistration', ['Microsoft.Extensions.DependencyInjection', domain], registrationBody())
     );
     if (usesStorageAdapter(model)) {
@@ -443,13 +443,33 @@ function s3StubBody(model) {
 /// aprovisionamiento al arrancar si <c>settings.EnsureBucketsOnStartup</c> y, para un bucket privado, la URL firmada con la
 /// caducidad que declara el diseño (<c>SignedUrlTtlSeconds()</c>).
 /// </summary>
-/// <remarks>StorageRegistration ya lo registra como IFileStorage: no lo registres en otro sitio.</remarks>
-public sealed class S3FileStorage(StorageSettings settings, StoragePolicies policies) : ${FILE_STORAGE_PORT}
+/// <remarks>
+/// StorageRegistration ya lo registra como IFileStorage y como servicio de arranque (IHostedService): el aprovisionamiento de
+/// los buckets va en StartAsync, que ya está cableado. No toques el registro.
+/// </remarks>
+public sealed class S3FileStorage(StorageSettings settings, StoragePolicies policies) : ${FILE_STORAGE_PORT}, IHostedService
 {
     private readonly StorageSettings settings = settings;
     private readonly StoragePolicies policies = policies;
 
 ${methods.join('\n\n')}
+
+    /// <summary>
+    /// El aprovisionamiento de los buckets al arrancar, solo con <c>settings.EnsureBucketsOnStartup</c> (sí en local y develop,
+    /// no en test ni en producción). En local los crea además el sidecar minio-init de infra/.
+    /// </summary>
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        if (!settings.EnsureBucketsOnStartup)
+        {
+            return Task.CompletedTask;
+        }
+        // TODO (agente): crea los buckets que falten (policies.ForBucket(nombre).Bucket por cada uno de settings.Buckets) y, si
+        // son públicos, su política de lectura anónima. Un fallo se registra y no tumba el arranque — skills/keel-dotnet-s3.
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }`;
 }
 
@@ -465,7 +485,10 @@ public static class StorageRegistration
         ArgumentNullException.ThrowIfNull(settings);
         services.AddSingleton(settings);
         services.AddSingleton<StoragePolicies, ConfiguredStoragePolicies>();
-        services.AddSingleton<${FILE_STORAGE_PORT}, S3FileStorage>();
+        // Un solo adaptador: es el puerto y el servicio de arranque que aprovisiona los buckets (su StartAsync).
+        services.AddSingleton<S3FileStorage>();
+        services.AddSingleton<${FILE_STORAGE_PORT}>(provider => provider.GetRequiredService<S3FileStorage>());
+        services.AddHostedService(provider => provider.GetRequiredService<S3FileStorage>());
         return services;
     }
 }`;
@@ -703,10 +726,11 @@ public sealed record UploadPart(string Part, string Filename, string ContentType
 export function uploadHarnessSection(model) {
   if (!usesMultipart(model)) return null;
   return `    /// <summary>Una subida multipart/form-data al servidor del flujo. Nunca lanza por un 4xx/5xx: el status es una aserción.</summary>
-    public static async Task<FlowResponse> UploadAsync(string path, UploadPart file, IReadOnlyDictionary<string, object?>? fields, IReadOnlyDictionary<string, string>? headers, CancellationToken cancellationToken)
+    public static async Task<FlowResponse> UploadAsync(string path, UploadPart file, IReadOnlyDictionary<string, object?>? fields, IReadOnlyDictionary<string, string>? headers, CancellationToken cancellationToken, string? baseUrl = null)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (string.IsNullOrEmpty(FlowServer.BaseUrl)) throw new InvalidOperationException("El servidor no está arrancado: la prueba de flujo hereda de FlowTest.");
+        var target = baseUrl ?? FlowServer.BaseUrl;
+        if (string.IsNullOrEmpty(target)) throw new InvalidOperationException("El servidor no está arrancado: la prueba de flujo hereda de FlowTest.");
         using var form = new MultipartFormDataContent();
         var described = new List<string>();
         foreach (var (name, value) in fields ?? new Dictionary<string, object?>())
@@ -721,7 +745,7 @@ export function uploadHarnessSection(model) {
         if (!string.IsNullOrEmpty(file.ContentType)) binary.Headers.TryAddWithoutValidation("Content-Type", file.ContentType);
         form.Add(binary, file.Part, file.Filename);
         described.Add($"{file.Part}=<{file.Content.Length} bytes, {file.ContentType}>");
-        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(new Uri(FlowServer.BaseUrl), path)) { Content = form };
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(new Uri(target), path)) { Content = form };
         var sent = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/json" };
         foreach (var (name, value) in headers ?? new Dictionary<string, string>())
         {

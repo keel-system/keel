@@ -23,6 +23,7 @@ import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
 import { claimDependencies, guardClaimsFor } from './claim.js';
 import { reconciliationDependencies } from './reconciliation-claim.js';
 import { documentGuardMethods, documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
+import { idBatchReason } from 'keel-core/gen/ref-targets';
 import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents, credentialFinders, replicaOwnTransaction, replicaDependencies, naturalKeyBatchFinder } from './repositories.js';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────────────────────────
@@ -408,6 +409,22 @@ export function renderDocumentAdapter(model, entity) {
         var found = await Find(${idFilter}).FirstOrDefaultAsync(cancellationToken);
         return found is null ? null : ToDomain${entity.name}(found);
     }`);
+  // La lectura POR LOTE por id (keel-core/gen/ref-targets.js): la de los embebidos de una página y la de una query que recibe
+  // la lista de ids de la raíz que devuelve.
+  if (idBatchReason(model, entity)) {
+    const idValue = idField ? writeScalar(idField, 'key') : 'BsonValues.Of(key)';
+    methods.push(`    public async Task<IReadOnlyList<${entity.name}>> FindAllById(IReadOnlyCollection<${idType}> ids, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        var keys = ids.Distinct().ToList();
+        if (keys.Count == 0)
+        {
+            return [];
+        }
+        var found = await Find(new BsonDocument(${csString(DOCUMENT_ID)}, new BsonDocument("$in", new BsonArray(keys.Select(key => ${idValue}))))).ToListAsync(cancellationToken);
+        return [.. found.Select(ToDomain${entity.name})];
+    }`);
+  }
 
   for (const finder of [naturalKeyFinder(model, entity), ...occupantFinders(model, entity), ...uniqueFieldFinders(model, entity)].filter(Boolean)) {
     for (const param of finder.params) usings.push(...param.usings);

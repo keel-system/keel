@@ -34,7 +34,11 @@ await operationCache.Evict(CachedOperations.GetAsset, CacheKey.Of(asset.Id), can
 `src/<Raíz>.Infrastructure/Cache/CacheInvalidations.cs` dice qué cachés vacía cada operación: la que EMITE un evento de
 su `invalidatedBy` y la que DISPARA la suscripción a uno de ellos. El `UseCaseMediator` las vacía enteras al terminar el
 handler, y el vaciado espera al COMMIT (si la transacción revierte, no se vacía nada; con un reintento por interbloqueo,
-se programa otra vez). Sin transacción abierta, el vaciado ocurre antes de devolver la respuesta.
+se programa otra vez). Con transacción o sin ella, el vaciado termina ANTES de devolver la respuesta: la lectura que
+llega después de la respuesta de la mutación ya no ve el dato viejo. No es asíncrono ni tiene plazo que esperar; un
+escenario lo afirma con un GET inmediato, sin `Eventually` (corrida catalog-dotnet: el agente lo creyó asíncrono y pidió un
+plazo de visibilidad al diseño). Lo que sí llega tarde es la mutación que dispara una SUSCRIPCIÓN: el vaciado ocurre
+cuando el listener la procesa, y esa espera es la del broker.
 
 Se vacía la caché ENTERA porque la clave es la entrada de la lectura (el slug de la categoría, el id) y el evento no
 tiene por qué llevarla: invalida de más, nunca de menos. La tabla la genera build y no se edita: si una mutación deja un

@@ -171,3 +171,19 @@ test('la skill keel-dotnet-s3 se instala con un almacén en el stack', () => {
     assert.ok(files.some((file) => file.path === '.claude/skills/keel-dotnet-s3/references/implementation.md'), name);
   }
 });
+
+test('el stub S3 es también el servicio de arranque, y el registro lo cablea: el agente no toca StorageRegistration', () => {
+  for (const [name, { files }] of plans) {
+    assert.match(content(files, '/Storage/S3FileStorage.cs'), /: IFileStorage, IHostedService/, name);
+    assert.match(content(files, '/Storage/S3FileStorage.cs'), /if \(!settings\.EnsureBucketsOnStartup\)/, name);
+    const registration = content(files, '/Storage/StorageRegistration.cs');
+    assert.match(registration, /services\.AddHostedService\(provider => provider\.GetRequiredService<S3FileStorage>\(\)\);/, name);
+    assert.match(registration, /services\.AddSingleton<IFileStorage>\(provider => provider\.GetRequiredService<S3FileStorage>\(\)\);/, name);
+  }
+});
+
+test('con réplica y subida, el arnés sube también contra la segunda instancia (UploadOnReplica)', () => {
+  const { files } = plans.get('asset-vault');
+  assert.match(content(files, '/Support/FlowTest.cs'), /protected static Task<FlowResponse> UploadOnReplica\(string path, UploadPart file/);
+  assert.match(content(files, '/Support/Harness.cs'), /CancellationToken cancellationToken, string\? baseUrl = null\)/);
+});

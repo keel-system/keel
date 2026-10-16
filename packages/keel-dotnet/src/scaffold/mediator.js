@@ -21,6 +21,7 @@ import { csFile, located, namespaceOf, solution, typeUsings } from './render.js'
 import { usesPersistence } from './persistence.js';
 import { mapperClasses } from './mappers.js';
 import { projectionClasses, projectionNamespace } from './projections.js';
+import { resolverClasses } from './ref-resolvers.js';
 import { contractOf, messageNamespace } from './services.js';
 import { securityNamespace, usesCallerScope } from './security.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from './service-parameters.js';
@@ -316,6 +317,7 @@ function registrationUsings(model) {
   const usings = ['Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.DependencyInjection.Extensions', namespaceOf(model, 'abstractions'), namespaceOf(model, 'useCases')];
   if (mapperClasses(model).length > 0) usings.push(namespaceOf(model, 'mappers'));
   if (projectionClasses(model).length > 0) usings.push(projectionNamespace(model));
+  if (resolverClasses(model).length > 0) usings.push(namespaceOf(model, 'appSupport'));
   if (usesCommandDispatcher(model)) usings.push(namespaceOf(model, 'ports'));
   for (const operation of operations(model)) {
     usings.push(messageNamespace(model, operation));
@@ -331,6 +333,8 @@ function registrationBody(model) {
   for (const mapper of mapperClasses(model)) lines.push(`services.AddScoped<${mapper}>();`);
   // La copia local de cada réplica (13j): su proyector y su lector.
   for (const projection of projectionClasses(model)) lines.push(`services.AddScoped<${projection}>();`);
+  // La resolución por lote de las referencias embebidas (`embed`).
+  for (const resolver of resolverClasses(model)) lines.push(`services.AddScoped<${resolver}>();`);
   for (const operation of operations(model)) lines.push(`services.AddScoped<${contractOf(operation).handler}, ${operation.handlerClass}>();`);
   return `/// <summary>
 /// El ÚNICO sitio que registra los casos de uso en el contenedor: el mediator, los mappers y un handler por

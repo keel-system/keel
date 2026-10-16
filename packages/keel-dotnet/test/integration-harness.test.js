@@ -178,3 +178,35 @@ test('score-scenarios.sh --score sale con 0 con todo en verde, y con 2 sin nada 
   assert.equal(none.status, 2, none.output);
   assert.match(none.output, /matriz está VACÍA/);
 });
+
+test('check-flows.sh: el filtro de diagnósticos reconoce los códigos con minúsculas (xUnit2031), EJECUTADO con bash', async () => {
+  const { files } = await planFixture(DOTNET_READY_DESIGN.name);
+  const script = files.find((file) => file.path === 'infra/check-flows.sh').content;
+  const line = script.split('\n').find((candidate) => candidate.trim().startsWith('problems="$(grep -E'));
+  assert.ok(line, 'el filtro existe');
+  const dir = tmpDir('keel-dotnet-check-flows-');
+  fs.mkdirSync(path.join(dir, 'build'));
+  const log = [
+    'FlowTest.cs(12,9): error xUnit2031: Do not use a Where clause to filter before calling Assert.Single',
+    'Program.cs(3,1): warning CS8618: Non-nullable property',
+    'x.csproj : error MSB3030: Could not copy the file'
+  ].join('\n');
+  fs.writeFileSync(path.join(dir, 'build', 'keel-flows-build.log'), log);
+  const run = spawnSync('bash', ['-c', `${line.trim()}\nprintf '%s' "$problems"`], { cwd: dir, encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /error xUnit2031/);
+  assert.match(run.stdout, /warning CS8618/);
+  assert.doesNotMatch(run.stdout, /MSB3030/);
+});
+
+test('con estado en memoria del servidor (circuito, token OAuth2, último valor conocido), el arnés ofrece reiniciarlo', async () => {
+  const flowTest = (files) => files.find((file) => file.path.endsWith('/Support/FlowTest.cs')).content;
+  const { files } = await planFixture('catalog-extended');
+  assert.match(flowTest(files), /protected static Task RestartServerAsync\(\) => FlowServer\.RestartAsync\(TestContext\.Current\.CancellationToken\);/);
+  const server = files.find((file) => file.path.endsWith('/Support/FlowServer.cs')).content;
+  assert.match(server, /public static async Task RestartAsync\(CancellationToken cancellationToken\)/);
+  // El log sigue tras un reinicio, y la parada al salir del proceso se registra UNA vez.
+  assert.match(server, /new StreamWriter\(LogPath, append: restarted\)/);
+  assert.match(server, /if \(!stopOnExit\)/);
+  assert.doesNotMatch(flowTest((await planFixture('job-dispatch')).files), /RestartServerAsync/);
+});

@@ -30,6 +30,9 @@ import { mailNamespace, mailPorts, sendsMail } from './mail.js';
 import { OPERATION_CACHE_PORT, cacheCall, cachesOperation } from './cache.js';
 import { cacheNote } from 'keel-core/gen/cache-plan';
 import { projectionNamespace, projectionNotes, projectionsFedBy, readerLocal } from './projections.js';
+import { refTargetsOf, listedIdsNote } from 'keel-core/gen/ref-targets';
+import { resolverClass } from './ref-resolvers.js';
+import { usesPersistence } from './persistence.js';
 import { naturalKeyBatchFinder } from './repositories.js';
 import { uploadNotes } from 'keel-core/gen/buckets';
 import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
@@ -297,6 +300,15 @@ function renderHandler(model, operation) {
     usings.push(clientsNamespace(model));
     dependencies.push(clientPort(client));
   }
+  // Las referencias embebidas (`embed`): el mapper exige la RefDto por parámetro y el agregado solo guarda el id ajeno, así
+  // que el handler recibe el resolver —nunca el repositorio de la otra raíz—, que resuelve por lote. Como keel-spring y keel-nest.
+  if (usesPersistence(model)) {
+    for (const { entity } of refTargetsOf(model, operation)) {
+      if (dependencies.includes(resolverClass(entity))) continue;
+      usings.push(namespaceOf(model, 'appSupport'));
+      dependencies.push(resolverClass(entity));
+    }
+  }
   // La operación de proyección (la que dispara la suscripción del `fedBy` de una réplica) recibe su proyector.
   for (const { need } of projectionsFedBy(model, operation)) {
     if (dependencies.includes(need.replica.projectorClass)) continue;
@@ -347,7 +359,7 @@ function handlerNotes(model, operation) {
   const notes = [];
   const dispatch = dispatchNote(model, operation, { call: 'await commandDispatcher.{variant}(new {message} { ... }, cancellationToken)' });
   if (dispatch) notes.push(dispatch);
-  for (const note of textFilterNotes(model, operation)) notes.push(note);
+  for (const note of textFilterNotes(model, operation, { names: (symbol) => symbol[0].toUpperCase() + symbol.slice(1) })) notes.push(note);
   for (const note of scheduleNotes(model, operation)) notes.push(note);
   for (const note of idempotencyNotes(model, operation)) notes.push(note);
   for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), names: UPLOAD_NOTE_NAMES_CS })) notes.push(note);
@@ -404,6 +416,7 @@ function handlerNotes(model, operation) {
   for (const note of activationNotes(model, operation)) notes.push(note);
   for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(model, dependency, need, operation));
   for (const note of projectionNotes(model, operation)) notes.push(note);
+  for (const note of embedNotes(model, operation)) notes.push(note);
   for (const eventName of operation.emits ?? []) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
     const emitters = [...new Set((event?.emittedBy ?? []).filter((e) => e.operation === operation.name && e.aggregate).map((e) => e.aggregate))];
@@ -567,6 +580,24 @@ function needNote(model, depId, need, operation) {
     `Dependencia ${depId}.${need.name} (on-demand)${why}: pide el dato con await ${local}.${method}(..., cancellationToken), que ya devuelve el resultado de dominio ` +
     `(${need.fetch.resultType}): el DTO del cable no cruza a Application. El retry y el circuito ya están en el adaptador: no los repitas.${policy}${exposed}`
   );
+}
+
+/** Las notas de las referencias embebidas y de la query que recibe la lista de ids: las de keel-spring y keel-nest. */
+function embedNotes(model, operation) {
+  if (!usesPersistence(model)) return [];
+  const notes = [];
+  for (const { entity, ref } of refTargetsOf(model, operation)) {
+    const resolver = `${resolverClass(entity)[0].toLowerCase()}${resolverClass(entity).slice(1)}`;
+    notes.push(
+      operation.paginated || operation.returnsList
+        ? `Embed ${entity.name}: por LOTE — recoge los ids de ${entity.name} de la página, UNA llamada a await ${resolver}.ResolveAll(ids, cancellationToken) y ${ref.name} = refs[id] al mapear cada elemento. NUNCA FindById dentro del bucle: es un N+1`
+        : `Embed ${entity.name}: await ${resolver}.Resolve(<id>, cancellationToken)`
+    );
+  }
+  const repository = operation.responseDto?.entity ? `${operation.responseDto.entity[0].toLowerCase()}${operation.responseDto.entity.slice(1)}Repository` : 'repository';
+  const listed = listedIdsNote(model, operation, { call: `await ${repository}.FindAllById(query.{ids}, cancellationToken)` });
+  if (listed) notes.push(listed);
+  return notes;
 }
 
 /** La nota de un dato replicado: se lee por el lector, que aplica onMiss (la de keel-spring y keel-nest). */

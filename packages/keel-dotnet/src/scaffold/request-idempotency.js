@@ -133,7 +133,7 @@ function emittedTests(model) {
         var digest = Convert.ToHexStringLower(SHA256.HashData("a"u8.ToArray()));
         Assert.Equal("{7:Content64:" + digest + "}", CommandSignature.Canonical(new { Content = "a"u8.ToArray() }));
     }
-
+${model.hasFileUploads ? FILE_UPLOAD_SIGNATURE_TEST : ''}
     [Theory]
 ${cases.join('\n')}
     public void CadaConflictoSaleConElCodeDeSuOperacion(string operation, string race, string reuse)
@@ -145,9 +145,24 @@ ${cases.join('\n')}
 }`;
   return {
     path: `${sln.unitTests.dir}/IdempotencyTests.cs`,
-    content: csFile({ namespace: sln.unitTests.name, usings: ['System.Security.Cryptography', 'Xunit', idempotencyNamespace(model), namespaceOf(model, 'appSupport')], body })
+    content: csFile({ namespace: sln.unitTests.name, usings: ['System.Security.Cryptography', 'Xunit', idempotencyNamespace(model), namespaceOf(model, 'appSupport'), ...(model.hasFileUploads ? [namespaceOf(model, 'dtos')] : [])], body })
   };
 }
+
+// Con una subida en el diseño, la firma del comando EJECUTADA sobre el FileUpload de verdad (su contenido es un
+// ReadOnlyMemory, no un byte[]): sin este caso, todo POST de subida con idempotencia daba 500 en la corrida asset-vault y
+// la prueba seguía en verde porque solo firmaba un byte[].
+const FILE_UPLOAD_SIGNATURE_TEST = `
+    [Fact]
+    public void UnaSubidaEnTransitoSeFirmaPorElDigestDeSuContenido()
+    {
+        var upload = new FileUpload("a"u8.ToArray(), "a.pdf", "application/pdf", 1);
+        var digest = Convert.ToHexStringLower(SHA256.HashData("a"u8.ToArray()));
+        Assert.Contains("7:Content64:" + digest, CommandSignature.Canonical(upload));
+        Assert.Equal(Sig(new { Binary = upload }), Sig(new { Binary = new FileUpload("a"u8.ToArray(), "a.pdf", "application/pdf", 1) }));
+        Assert.NotEqual(Sig(new { Binary = upload }), Sig(new { Binary = upload with { Content = "b"u8.ToArray() } }));
+    }
+`;
 
 function storePort(model) {
   const { namespace, path } = located(model, 'idempotency', IDEMPOTENCY_PORT);
@@ -291,6 +306,11 @@ public static class CommandSignature
             // Un binario (el contenido de una subida) puede pesar megas: entra por su digest, como en keel-spring.
             case byte[] bytes:
                 return Scalar(Convert.ToHexStringLower(SHA256.HashData(bytes)));
+            // El contenido de una subida en tránsito (FileUpload.Content) es un ReadOnlyMemory: el mismo digest que su byte[].
+            case ReadOnlyMemory<byte> memory:
+                return Scalar(Convert.ToHexStringLower(SHA256.HashData(memory.Span)));
+            case Memory<byte> writable:
+                return Scalar(Convert.ToHexStringLower(SHA256.HashData(writable.Span)));
             case Enum member:
                 return Scalar(member.ToString());
             case IFormattable formattable:
@@ -307,8 +327,24 @@ public static class CommandSignature
         }
         var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(property => property.GetIndexParameters().Length == 0)
+            // Un ref struct (un Span) no se puede leer por reflexión: nunca se desciende a él.
+            .Where(property => !property.PropertyType.IsByRefLike)
             .OrderBy(property => property.Name, StringComparer.Ordinal);
-        return "{" + string.Join(",", properties.Select(property => Scalar(property.Name) + Canonical(property.GetValue(value)))) + "}";
+        return "{" + string.Join(",", properties.Select(property => Scalar(property.Name) + Canonical(ReadProperty(property, value)))) + "}";
+    }
+
+    /// <summary>Una propiedad que no se puede leer no se salta en silencio: dice cuál es, para añadir su caso arriba.</summary>
+    private static object? ReadProperty(PropertyInfo property, object owner)
+    {
+        try
+        {
+            return property.GetValue(owner);
+        }
+        catch (Exception error) when (error is NotSupportedException or TargetInvocationException)
+        {
+            throw new InvalidOperationException(
+                $"CommandSignature no puede firmar {property.DeclaringType?.Name}.{property.Name} ({property.PropertyType.Name}): añade su caso en Canonical.", error);
+        }
     }
 
     /// <summary>Prefijo de longitud: hace imposible que un contenido imite un separador.</summary>

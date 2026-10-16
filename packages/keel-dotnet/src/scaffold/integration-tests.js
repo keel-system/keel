@@ -36,8 +36,9 @@ import { usesKafka } from './messaging.js';
 import { closingCredentialExpression, credentialsCs, flowTestCredentialMembers, smokeCredentialsCase } from './identity-harness.js';
 import { paymentHarnessFile, paymentNoticeMembers } from './payment-harness.js';
 import { cacheHarnessMembers } from './cache.js';
-import { storageFlowMembers, uploadHarnessSection, uploadPartRecord } from './storage.js';
+import { storageFlowMembers, uploadHarnessSection, uploadPartRecord, usesMultipart } from './storage.js';
 import { httpStubFile, idLiteralMember, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
+import { usesLastKnown } from './http-clients.js';
 import { mailHarnessFile, mailSmokeCase } from './mail-harness.js';
 import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
 
@@ -248,7 +249,7 @@ ${api ? `    /// <summary>Prefijo de todas las rutas del servicio (basePath del 
 
     /// <summary>URL base del servidor arrancado (http://127.0.0.1:&lt;puerto&gt;).</summary>
     protected static string BaseUrl => FlowServer.BaseUrl;
-
+${inMemoryState(model) ? RESTART_MEMBER : ''}
     protected static Task<FlowResponse> Get(string path, Dictionary<string, string>? headers = null) => Exchange("GET", path, null, headers);
 
     /// <summary><paramref name="body"/> es un objeto (se serializa) o el JSON ya escrito, tal cual viaja.</summary>
@@ -328,6 +329,28 @@ public sealed class FlowResponse(int status, IReadOnlyDictionary<string, string>
   });
 }
 
+/**
+ * ¿Guarda el servidor estado en MEMORIA que un flujo puede dejar sucio para el siguiente? La ventana de un circuito, el
+ * token OAuth2 cacheado y el último valor conocido. keel-spring los vacía en el propio proceso antes de cada escenario
+ * (`resetCircuitBreakers`); aquí el servidor es otro proceso, y la única forma de vaciarlos sin abrir en él un endpoint
+ * de pruebas es reiniciarlo. Sin esto, el agente de la corrida catalog-dotnet (2026-10-16) «cerró» el circuito con
+ * llamadas buenas, la ventana quedó llena de éxitos y tres escenarios del circuito fallaron en la primera puntuación;
+ * los arregló con aserciones tolerantes a la ventana.
+ */
+export function inMemoryState(model) {
+  return (model.httpClients ?? []).some((client) => client.auth?.type === 'oauth2-client-credentials' || client.calls.some((call) => call.circuitBreaker)) || usesLastKnown(model);
+}
+
+const RESTART_MEMBER = `
+    /// <summary>
+    /// Reinicia el servidor: la ventana de cada circuito vuelve a estar VACÍA y cerrada, y se olvidan los tokens y los
+    /// últimos valores conocidos que guarda en memoria. Llámalo al empezar (en <see cref="GivenAsync"/>) un flujo que
+    /// cuente fallos del circuito: los que dejó un flujo anterior cuentan para el suyo, y «cerrarlo» con llamadas buenas
+    /// deja la ventana llena de éxitos, que retrasan su apertura. Cuesta un arranque; la base y el broker no se tocan.
+    /// </summary>
+    protected static Task RestartServerAsync() => FlowServer.RestartAsync(TestContext.Current.CancellationToken);
+`;
+
 // ─── Support/FlowServer.cs ───────────────────────────────────────────────────────────────────────
 
 function flowServerCs(model) {
@@ -353,6 +376,8 @@ internal static class FlowServer
     private static Process? process;
     private static StreamWriter? log;
     private static string? failure;
+    private static bool restarted;
+    private static bool stopOnExit;
 
     public static string BaseUrl { get; private set; } = "";
 
@@ -387,6 +412,36 @@ internal static class FlowServer
         }
     }
 
+    /// <summary>
+    /// Para el servidor y arranca otro, en otro puerto (<see cref="BaseUrl"/> cambia): el estado que vive en su memoria
+    /// —la ventana de un circuito, un token cacheado, el último valor conocido— vuelve a estar vacío. La base y el broker
+    /// no se tocan: para eso está el reset.
+    /// </summary>
+    public static async Task RestartAsync(CancellationToken cancellationToken)
+    {
+        await Gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (failure is not null) throw new InvalidOperationException(failure);
+            Stop();
+            restarted = true;
+            try
+            {
+                await StartAsync(cancellationToken);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                failure = error.Message;
+                Stop();
+                throw;
+            }
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
     private static async Task StartAsync(CancellationToken cancellationToken)
     {
         var dll = ApiAssembly();
@@ -396,9 +451,14 @@ internal static class FlowServer
         }
         var port = FreePort();
         Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
-        log = new StreamWriter(LogPath, append: false) { AutoFlush = true };
+        // Un reinicio a mitad de suite SIGUE el log: lo que el servidor anterior escribió es evidencia de los flujos que ya pasaron.
+        log = new StreamWriter(LogPath, append: restarted) { AutoFlush = true };
         process = Launch(dll, port, Write);
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => Stop();
+        if (!stopOnExit)
+        {
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => Stop();
+            stopOnExit = true;
+        }
         BaseUrl = $"http://127.0.0.1:{port}";
         await WaitLiveAsync(process, BaseUrl, "el servidor", LogPath, () => LogTail(), cancellationToken);
     }
@@ -634,6 +694,15 @@ function replicaMembers(model) {
     protected static Task<FlowResponse> OnReplica(string method, string path, object? body = null, Dictionary<string, string>? headers = null) =>
         ReplicaServer.Running
             ? Harness.SendAsync(method, path, body, headers, TestContext.Current.CancellationToken, ReplicaServer.BaseUrl)
+            : throw new InvalidOperationException("La réplica no está arrancada: llama antes a StartReplica()");`);
+  }
+  // Con una subida en el diseño, la misma palanca para el multipart: sin ella, el escenario de clúster de una subida con
+  // clave escribía su propio helper, cuya petición no dejaba evidencia (corrida asset-vault de keel-dotnet).
+  if (usesMultipart(model)) {
+    members.push(`    /// <summary>Una subida multipart/form-data dirigida a la SEGUNDA réplica: <see cref="Upload"/> contra la otra instancia.</summary>
+    protected static Task<FlowResponse> UploadOnReplica(string path, UploadPart file, IReadOnlyDictionary<string, object?>? fields = null, Dictionary<string, string>? headers = null) =>
+        ReplicaServer.Running
+            ? Harness.UploadAsync(path, file, fields, headers, TestContext.Current.CancellationToken, ReplicaServer.BaseUrl)
             : throw new InvalidOperationException("La réplica no está arrancada: llama antes a StartReplica()");`);
   }
   return members;
@@ -1481,7 +1550,9 @@ if ! dotnet build "$PROJECT" -c Debug --nologo -p:BuildProjectReferences=false >
   # MSBuild copia la salida del Api (apphost, deps.json, runtimeconfig.json) a la de los flujos porque es un ejecutable
   # referenciado, aunque no vea sus tipos. Sin el Api compilado todavía (un proyecto recién generado, o el agente de
   # código a medio trabajo) esa copia falla con MSB3030 DESPUÉS de compilar las pruebas: no dice nada de ellas.
-  problems="$(grep -E '(error|warning) [A-Z]+[0-9]+' build/keel-flows-build.log | grep -v 'MSB3030' || true)"
+  # El código del diagnóstico puede llevar minúsculas (xUnit2031): con [A-Z] se escapaba, y el check salía verde con pruebas
+  # que no compilaban (corrida asset-vault de keel-dotnet).
+  problems="$(grep -E '(error|warning) [A-Za-z]+[0-9]+' build/keel-flows-build.log | grep -v 'MSB3030' || true)"
   if [ -n "$problems" ]; then
     echo "Las pruebas de flujo no compilan:"
     printf '%s\\n' "$problems" | sed 's/^/  /' | sort -u | head -30

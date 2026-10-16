@@ -91,6 +91,7 @@ const SABOTAGES = {
 //   lastknown-key       el adaptador recuerda el último valor sin la clave de sus parámetros
 //   oauth-reuse         la concesión no reutiliza el token: una petición al emisor por llamada
 //   oauth-bearer        la concesión acepta un token que no es Bearer
+//   signature-memory    la firma del comando no reconoce el ReadOnlyMemory de una subida y la firma por sus propiedades
 //   actor-name          con un token, el autor es el nombre del principal y no su sujeto
 //   multipart-limit     la entrada de una subida no corta por la longitud declarada (el 413 no llega)
 //   multipart-empty     una parte obligatoria vacía pasa al handler como si nada (sin FILE_UNREADABLE)
@@ -104,6 +105,8 @@ const FIXTURE_SABOTAGES = {
   'lastknown-key': ['catalog-extended/src/Catalog.Infrastructure/Clients/PricingHttpAdapter.cs', 'lastKnown.Remember("getPrice", LastKnownValues.Key(sku), result);', 'lastKnown.Remember("getPrice", LastKnownValues.Key(), result);'],
   'oauth-reuse': ['catalog-extended/src/Catalog.Infrastructure/Clients/ClientCredentials.cs', 'clock.GetUtcNow() + lifetime - ClockSkew', 'clock.GetUtcNow() - lifetime - ClockSkew'],
   'oauth-bearer': ['catalog-extended/src/Catalog.Infrastructure/Clients/ClientCredentials.cs', 'string.Equals(tokenType.GetString(), "bearer", StringComparison.OrdinalIgnoreCase)', 'string.Equals(tokenType.GetString(), tokenType.GetString(), StringComparison.OrdinalIgnoreCase)'],
+  // La firma del comando no sabe del contenido de una subida en tránsito (corrida asset-vault: todo POST de subida daba 500).
+  'signature-memory': ['asset-vault/src/AssetVault.Application/Support/CommandSignature.cs', 'case ReadOnlyMemory<byte> memory:', 'case ReadOnlyMemory<byte> memory when memory.Length < 0:'],
   // La autoría (13h): con un token, el nombre del principal en vez de su sujeto.
   'actor-name': ['asset-vault/src/AssetVault.Infrastructure/Persistence/AuditActor.cs', 'is { Length: > 0 } subject ? subject : principal.Name', 'is { Length: > 0 } subject ? principal.Name : principal.Name'],
   'multipart-limit': ['catalog-extended/src/Catalog.Api/Rest/MultipartReading.cs', 'if (request.ContentLength > LimitBytes)', 'if (request.ContentLength > LimitBytes * 1000)'],

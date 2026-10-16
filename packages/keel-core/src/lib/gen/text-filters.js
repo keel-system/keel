@@ -23,8 +23,12 @@ export function hasPatternFilter(operation) {
   return [...(operation.pathParams ?? []), ...(operation.bodyFields ?? [])].some((component) => (component.match ?? 'exact') !== 'exact');
 }
 
-/** Las notas, una por filtro de texto que no sea igualdad exacta. Sin persistencia, solo cómo casa. */
-export function textFilterNotes(model, operation) {
+/**
+ * Las notas, una por filtro de texto que no sea igualdad exacta. Sin persistencia, solo cómo casa. `names` pone la
+ * grafía de la plataforma: la función de plegado y el miembro de la sombra (keel-dotnet escribe `FoldCaseAndAccents` y
+ * `NameNormalized`; con la grafía de Java su agente no encontraba ninguno de los dos, corrida catalog-dotnet 2026-10-16).
+ */
+export function textFilterNotes(model, operation, { names = (symbol) => symbol } = {}) {
   if (operation.kind !== 'query') return [];
   const owner = (model.services ?? []).find((service) => service.operations.includes(operation))?.entity;
   const entity = (model.entities ?? []).find((candidate) => candidate.name === owner);
@@ -38,10 +42,10 @@ export function textFilterNotes(model, operation) {
     const field = entity?.persisted ? entity.fields.find((candidate) => candidate.name === component.name) : null;
     const shadow = compare !== 'exact' && field ? foldedShadow(field) : null;
     if (shadow) {
-      const fold = shadow.accents ? 'TextFold.foldCaseAndAccents' : 'TextFold.foldCase';
+      const fold = `TextFold.${names(shadow.accents ? 'foldCaseAndAccents' : 'foldCase')}`;
       notes.push(
         `Filtro ${component.name} (${how}): ${casa}; pliega el parámetro con ${fold}(...) y compáralo contra ` +
-          `${entity.name}.${shadow.name}, la sombra que build ya mantiene — nunca contra ${component.name} con ` +
+          `${entity.name}.${names(shadow.name)}, la sombra que build ya mantiene — nunca contra ${component.name} con ` +
           'lower()/unaccent()/translate() en la consulta: plegar el valor guardado y el buscado con dos funciones distintas ' +
           'deja de casar en silencio con el primer carácter en que difieran' +
           (match === 'exact' ? '' : `; ${LITERAL}`)

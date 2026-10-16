@@ -26,7 +26,8 @@ import { csMember, csString, namespaceOf, solution, typeUsings } from '../../src
 import { repositoryRoots, portClass, repositoriesNamespace, isPaginated } from '../../src/scaffold/repositories.js';
 import { isNullable } from '../../src/scaffold/render.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
-import { authorshipProbe, counter, credentialProbes, guardProbes, guardSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
+import { idBatchReason } from 'keel-core/gen/ref-targets';
+import { authorshipProbe, idBatchProbe, counter, credentialProbes, guardProbes, guardSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
 import { documentProbeSupport, storeKeyBlock, documentOutboxBlock, documentBridgeBlock, documentReconciliationStoreBlock, documentClaimProbes, documentReconciliationProbes, documentPurgeBlock } from './doc-store-probes.js';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { bridgeClass, messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
@@ -178,7 +179,9 @@ function probesCs(model, namespace) {
     const refsBefore = new Set(ctx.refs);
     ctx.refs.clear();
     const states = [];
-    const total = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root) + guardSampleCount(model, root);
+    // Las de la lectura por lote por id, las últimas: añadirlas en medio movería las de las demás sondas.
+    const beforeBatch = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root) + guardSampleCount(model, root);
+    const total = beforeBatch + (idBatchReason(model, root) ? 2 : 0);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -370,6 +373,7 @@ function probesCs(model, namespace) {
     }
     // Los reclamos de barrido y de reconciliación del adaptador (incremento 12c), con sus muestras por encima de las comunes.
     tests.push(...credentialProbes(model, root, { state, sample: 18, port }));
+    tests.push(...idBatchProbe(model, root, { state, first: beforeBatch + 1, port }));
     tests.push(...authorshipProbe(model, root, {
       state,
       sample: 19,

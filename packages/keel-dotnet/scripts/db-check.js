@@ -41,6 +41,7 @@
 //   replica-tx  la copia de una réplica se guarda en la transacción de quien la escribe, no en la suya
 //   replica-order  el proyector aplica un hecho anterior al guardado
 //   replica-batch  la lectura por lote de la réplica no trae nada
+//   id-batch    la lectura por lote por id (FindAllById) se deja el primer id
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -84,7 +85,9 @@ const SABOTAGES = {
   // lote no trae nada.
   'replica-tx': ['Repositories/', 'return await own.SaveHere(entity, cancellationToken);', 'return await SaveHere(entity, cancellationToken);'],
   'replica-order': ['Projection/', 'if (snapshot.OccurredAt <= existing.OccurredAt)', 'if (snapshot.OccurredAt == existing.OccurredAt)'],
-  'replica-batch': ['Repositories/', 'Where(r => keys.Contains(r.Sku))', 'Where(r => keys.Skip(1).Contains(r.Sku))']
+  'replica-batch': ['Repositories/', 'Where(r => keys.Contains(r.Sku))', 'Where(r => keys.Skip(1).Contains(r.Sku))'],
+  // La lectura por lote por id (los embebidos de una página) se deja el primer id.
+  'id-batch': ['Repositories/', 'Where(r => keys.Contains(r.Id))', 'Where(r => keys.Skip(1).Contains(r.Id))']
 };
 
 const results = [];

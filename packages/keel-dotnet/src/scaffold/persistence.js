@@ -46,6 +46,7 @@ import { IDEMPOTENCY_ROW, usesRequestIdempotency } from './request-idempotency.j
 import { storeRows, storeSchemaNames } from './messaging-stores.js';
 import { RECONCILIATION_ROW, reconciliationSchemaNames, usesReconciliationClaims } from './reconciliation-claim.js';
 import { csFile, csMember, csString, located, namespaceOf, solution, typeUsings, xmlDoc } from './render.js';
+import { usesUnmapped } from './repositories.js';
 
 /** ¿El diseño persiste en un motor relacional? Es lo que genera todo este módulo. */
 export function usesRelational(model) {
@@ -502,6 +503,15 @@ ${blocks.join('\n\n')}
 
 // ─── Utilidades del mapeo ────────────────────────────────────────────────────────────────────────
 
+// Lo que build no sabe mapear (un value object anidado): compila y falla al usarse, nombrándolo. Solo si algún adaptador
+// lo llama: emitido siempre, era un NotImplementedException sin uso que el agente de calidad señaló como resto de
+// andamiaje (corrida catalog-dotnet, 2026-10-16).
+const UNMAPPED = `
+
+    /// <summary>Lo que build no sabe mapear (un value object anidado): compila y falla al usarse, nombrándolo.</summary>
+    public static T Unmapped<T>(string what) =>
+        throw new NotImplementedException($"TODO (agente): mapear {what} (skill keel-dotnet-database)");`;
+
 function rowValuesFile(model) {
   const { namespace, path } = located(model, 'persistence', 'RowValues');
   const body = `/// <summary>
@@ -534,10 +544,7 @@ public static class RowValues
         using var document = JsonDocument.Parse(text);
         return document.RootElement.Clone();
     }
-
-    /// <summary>Lo que build no sabe mapear (un value object anidado): compila y falla al usarse, nombrándolo.</summary>
-    public static T Unmapped<T>(string what) =>
-        throw new NotImplementedException($"TODO (agente): mapear {what} (skill keel-dotnet-database)");
+${usesUnmapped(model) ? UNMAPPED : ''}
 }
 
 /// <summary>Una fila de la tabla de elementos de una lista: su posición es parte de la clave.</summary>

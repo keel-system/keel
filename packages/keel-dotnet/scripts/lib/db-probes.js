@@ -41,6 +41,7 @@ import { usesCorrelation } from '../../src/scaffold/rest-support.js';
 import { projectionNamespace } from '../../src/scaffold/projections.js';
 import { naturalKeyBatchFinder } from '../../src/scaffold/repositories.js';
 import { occurredAtField } from 'keel-core/gen/replica';
+import { idBatchReason } from 'keel-core/gen/ref-targets';
 
 /**
  * Las muestras distintas que necesita cada raíz: ida y vuelta, crudo, versión, la clave natural (×2), la cota, la página
@@ -247,7 +248,9 @@ function probesCs(model, namespace) {
     // Las muestras comunes y, por encima, las de los reclamos de esta raíz: cada sonda de reclamo guarda las suyas.
     // Las muestras de la réplica, las ÚLTIMAS de su raíz: añadirlas en medio movería las de las demás sondas.
     const beforeReplica = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root) + guardSampleCount(model, root);
-    const total = beforeReplica + (root.replicaOf ? 2 : 0);
+    // Y las de la lectura por lote por id, las últimas de todas.
+    const beforeBatch = beforeReplica + (root.replicaOf ? 2 : 0);
+    const total = beforeBatch + (idBatchReason(model, root) ? 2 : 0);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -411,6 +414,7 @@ function probesCs(model, namespace) {
           .join('\n')
     }));
     tests.push(...replicaProbes(model, root, { state, first: beforeReplica + 1, port, usings: ctx.usings }));
+    tests.push(...idBatchProbe(model, root, { state, first: beforeBatch + 1, port }));
     tests.push(...claimProbes(model, root, { state, first: SAMPLES + 1, port, context: dbContext(model) }));
     tests.push(...reconciliationProbes(model, root, { state, first: SAMPLES + 1 + claimSampleCount(model, root), port, context: dbContext(model) }));
     // La guarda de un efecto que no se deshace (mail.sentBy), con sus muestras por encima de las de los reclamos.
@@ -647,6 +651,27 @@ ${raw(`sample.${id}`)}
  * instante y aplica uno más nuevo; la copia se guarda en su PROPIA transacción (sobrevive a la de quien la escribe, que se
  * revierte); y el lector lee por lote. Lo usa db-check (doc-check, si una réplica es documental).
  */
+/**
+ * La lectura POR LOTE por id (keel-core/gen/ref-targets.js: los embebidos de una página, o la query que recibe la lista de
+ * ids): FindAllById trae los que existen, en UNA consulta, y un id que no existe no aparece. Lo usan db-check y doc-check.
+ */
+export function idBatchProbe(model, root, { state, first, port }) {
+  if (!idBatchReason(model, root)) return [];
+  const id = csMember(root.idField?.name ?? 'id');
+  return [`    [Fact]
+    public async Task ${root.name}_FindAllByIdTraeLosQueExistenEnUnaConsulta() =>
+        await InScope(async services =>
+        {
+            var first = new ${root.name}(${state(first)});
+            var second = new ${root.name}(${state(first + 1)});
+            await InScope(other => other.GetRequiredService<${port}>().Save(first, Cancel));
+            await InScope(other => other.GetRequiredService<${port}>().Save(second, Cancel));
+            var found = await InScope(other => other.GetRequiredService<${port}>().FindAllById(new[] { first.${id}, second.${id}, first.${id}, Guid.CreateVersion7() }, Cancel));
+            Assert.Equal(new[] { first.${id}, second.${id} }.OrderBy(value => value), found.Select(root => root.${id}).OrderBy(value => value));
+            Assert.Empty(await InScope(other => other.GetRequiredService<${port}>().FindAllById(Array.Empty<Guid>(), Cancel)));
+        });`];
+}
+
 export function replicaProbes(model, root, { state, first, port, usings }) {
   const replica = (model.dependencies ?? []).flatMap((dependency) => dependency.needs ?? []).find((need) => need.replica?.entityName === root.name)?.replica;
   if (!replica) return [];

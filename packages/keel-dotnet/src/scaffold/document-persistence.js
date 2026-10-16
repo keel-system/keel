@@ -36,6 +36,7 @@ import { repositoryRoots, portClass, adapterClass, repositoriesNamespace } from 
 import { idempotencyRegistration, idempotencyRegistrationUsings } from './request-idempotency.js';
 import { usesSweepClaims } from './claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from './reconciliation-claim.js';
+import { AFTER_COMMIT_REGISTRATION } from './after-commit.js';
 
 /** La pieza que crea los índices y la que traduce sus violaciones, como las nombra export-indexes.sh. */
 const PLATFORM = { indexCreator: 'DocumentIndexes.cs', errorTranslator: 'PersistenceErrors' };
@@ -65,6 +66,7 @@ export function generate(model) {
         namespaceOf(model, 'useCaseInfra'),
         repositoriesNamespace(model),
         namespaceOf(model, 'repositoryAdapters'),
+        namespaceOf(model, 'ports'),
         ...idempotencyRegistrationUsings(model)
       ],
       registrationBody(model)
@@ -857,6 +859,7 @@ public static class PersistenceRegistration
         services.AddScoped<PersistenceTransactions>();
         // El mediator abre la transacción de cada caso de uso con ESTA implementación.
         services.Replace(ServiceDescriptor.Scoped<IUseCaseTransactions>(provider => provider.GetRequiredService<PersistenceTransactions>()));
+${AFTER_COMMIT_REGISTRATION}
 ${repositories.join('\n')}
         return services;
     }

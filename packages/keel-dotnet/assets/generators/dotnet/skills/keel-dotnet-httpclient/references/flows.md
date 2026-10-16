@@ -38,10 +38,13 @@ por ejemplo); `StubRequests(...)` devuelve las peticiones, y `StubRequestBody(re
 
 ## El circuito
 
-El servidor arranca con el circuito cerrado y su ventana vacía, y los escenarios lo comparten. Para abrirlo hacen
-falta tantas llamadas fallidas como `slidingWindowSize` (con una tasa de fallo >= `failureRateThreshold`), y un 4xx
-NO cuenta: es un éxito para el circuito. Con el circuito abierto la llamada ni sale (`StubCallCount` no sube) y el
-resultado es el del fallback del diseño.
+El servidor arranca con el circuito cerrado y su ventana vacía, y los flujos lo comparten: lo que falló en un flujo
+cuenta para el siguiente. Un flujo que cuente fallos del circuito empieza con `await RestartServerAsync()` en su
+`GivenAsync`: reinicia el servidor y la ventana vuelve a estar vacía de verdad. No lo «cierres» con llamadas buenas:
+la ventana queda llena de éxitos y el circuito tarda más de lo que dice el diseño en abrir (corrida catalog-dotnet).
+Para abrirlo hacen falta tantas llamadas fallidas como `slidingWindowSize` (con una tasa de fallo >=
+`failureRateThreshold`), y un 4xx NO cuenta: es un éxito para el circuito. Con el circuito abierto la llamada ni sale
+(`StubCallCount` no sube) y el resultado es el del fallback del diseño.
 
 ## Un barrido de reconciliación
 
