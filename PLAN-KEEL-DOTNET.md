@@ -1578,6 +1578,20 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     - La autoría `declared` (campos del dominio) se estampa con el mismo actor y la mide el texto; ninguna fixture la
       declara, así que no tiene sujeto en vivo.
     - `asset-vault` y `catalog-extended` siguen fuera solo por `needs` y OAuth2. Siguiente: 13i (`needs`).
+  - **13i, el dato bajo demanda (`needs` on-demand): hecho (2026-10-15). `asset-vault` entra ENTERO en la frontera**
+    (`keel-dotnet build` lo genera con MongoDB, Kafka, Keycloak, Redis y MinIO, con sus seis skills). El fallback del
+    adaptador ya aplicaba `onUnavailable` desde el 11b (`fail` lanza el error del diseño, `degrade` deja el TODO con el
+    `degradedTo`); faltaba lo de keel-spring y keel-nest en el handler: el puerto del cliente inyectado en la operación del
+    `usedBy` y la nota de su política (que el dato ya llega en términos del dominio, que el retry y el circuito ya están,
+    que el `fail` no se captura y, con `exposedAs`, que el mapper pide su DTO). La frontera deja pasar el `need` bajo
+    demanda y rechaza, nombrando el 13j, la réplica y `onUnavailable: lastKnown` (este dejaba un TODO en el fallback). La
+    skill `keel-dotnet-httpclient` enseña el `need`.
+    - **Medido**: `test/needs.test.js` (sin red): la inyección y la nota solo donde toca, `degrade` y `fail` en el fallback.
+      La prueba emitida `OutboundClientsTests` gana `<Adaptador><Llamada>ConElProveedorCaidoLanzaElErrorDelDiseno`: con el
+      proveedor inalcanzable, la llamada lanza el error del diseño con su code, para un `need` y para una activación con
+      `fail` (el escáner de asset-vault la estrena). Ninguna fixture declara un `need` con `fail`: lo trae la variante
+      `asset-vault-need-fail` de `cs-check` (138/138 ensamblados, 2 791 pruebas), falsada con `--sabotage=need-fail`, que tumba ese caso y solo ese. keel-dotnet sin red 525/525.
+    - Siguiente: 13j (la réplica, `lastKnown` y OAuth2: `catalog-extended`).
 
 ## 5. Riesgos conocidos
 

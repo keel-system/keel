@@ -484,6 +484,23 @@ ${empty}
     }`;
 }
 
+/**
+ * El error que el fallback de esta llamada LANZA por política del diseño (`onUnavailable: fail` de un need u `onFailure:
+ * fail` de una activación), o null: sin fallback, con otra política, con varias distintas o sin clase del error.
+ */
+export function declaredFailure(call) {
+  if (!hasCallFallback(call)) return null;
+  const activations = call.activations ?? [];
+  const needs = (call.needs ?? []).filter(({ need }) => need.onUnavailable);
+  const distinct = new Set([
+    ...activations.map(({ activation }) => `activation:${JSON.stringify(activation.onFailure ?? null)}`),
+    ...needs.map(({ need }) => `need:${JSON.stringify(need.onUnavailable)}`)
+  ]);
+  if (distinct.size !== 1) return null;
+  const decl = needs.length > 0 ? needs[0].need.onUnavailable : activations[0]?.activation.onFailure;
+  return decl?.action === 'fail' && decl.exceptionClass ? decl : null;
+}
+
 /** El cuerpo del fallback: la política que declara la activación que sale por esta llamada (como keel-spring y keel-nest). */
 function unavailableBody(model, client, call, usings) {
   const subject = `${client.id}.${call.name}`;
@@ -1650,6 +1667,25 @@ function adapterProbe(model, client, call, args) {
         var adapter = ${client.adapterClass}Over(provider);
         await Assert.ThrowsAsync<OutboundContractException>(() => ${invoke});
         Assert.Single(provider.Requests);
-    }${circuit}
+    }${circuit}${declaredFailureProbe(model, call, name, client, invoke)}
 `;
+}
+
+/**
+ * Con `fail` en la política (de un need o de una activación), el proveedor caído es EL ERROR DEL DISEÑO, con su code: es lo
+ * que el handler deja pasar sin capturarlo (la nota lo dice), y lo que ve el cliente.
+ */
+function declaredFailureProbe(model, call, name, client, invoke) {
+  const failure = declaredFailure(call);
+  if (!failure) return '';
+  return `
+
+    /// <summary>${client.id}.${call.name}: con el proveedor caído, el fallback lanza el error que declara el diseño (${failure.error}).</summary>
+    [Fact]
+    public async Task ${name}ConElProveedorCaidoLanzaElErrorDelDiseno()
+    {
+        var adapter = ${client.adapterClass}Over(FakeProvider.Unreachable());
+        var error = await Assert.ThrowsAsync<${namespaceOf(model, 'errors')}.${failure.exceptionClass}>(() => ${invoke});
+        Assert.Equal(${csString(failure.error)}, error.Code);
+    }`;
 }

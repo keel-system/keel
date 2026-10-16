@@ -277,6 +277,16 @@ function renderHandler(model, operation) {
     usings.push(clientsNamespace(model));
     dependencies.push(clientPort(client));
   }
+  // El dato que esta operación PIDE a otro servidor (`dependencies.needs`, por `usedBy`), bajo demanda: el puerto del
+  // cliente se inyecta por el mismo criterio que el de una activación (incremento 13i, como keel-spring y keel-nest). La
+  // réplica (`replicated`) se lee por su lector y llega en el 13j.
+  for (const { need } of operation.dependencyNeeds ?? []) {
+    if (need.strategy !== 'on-demand' || !need.fetch) continue;
+    const client = (model.httpClients ?? []).find((candidate) => candidate.clientClass === need.fetch.clientClass);
+    if (!client || dependencies.includes(clientPort(client))) continue;
+    usings.push(clientsNamespace(model));
+    dependencies.push(clientPort(client));
+  }
   // La salida por correo, por el mismo criterio (mail.sentBy es el único enlace del DSL entre un caso de uso y el
   // correo): sin el puerto delante, el camino de menor resistencia es no mandarlo, y no lo detecta nada.
   if (sendsMail(model, operation)) {
@@ -376,6 +386,7 @@ function handlerNotes(model, operation) {
   const compensation = compensationNote(operation);
   if (compensation) notes.push(compensation);
   for (const note of activationNotes(model, operation)) notes.push(note);
+  for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(model, dependency, need, operation));
   for (const eventName of operation.emits ?? []) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
     const emitters = [...new Set((event?.emittedBy ?? []).filter((e) => e.operation === operation.name && e.aggregate).map((e) => e.aggregate))];
@@ -511,6 +522,36 @@ function activationNotes(model, operation) {
     );
   }
   return notes;
+}
+
+/**
+ * La nota de un dato que esta operación pide a otro servidor (`needs`): la de keel-spring y keel-nest, con los nombres de
+ * este proyecto. La réplica no llega aquí todavía (13j): la frontera la rechaza.
+ */
+function needNote(model, depId, need, operation) {
+  const why = need.description ? ` — ${need.description}` : '';
+  if (need.strategy !== 'on-demand') {
+    return `Dependencia ${depId}.${need.name} (replicada)${why}: keel-dotnet todavía no genera la réplica; no leas el dato por tu cuenta`;
+  }
+  if (!need.fetch) {
+    return `Dependencia ${depId}.${need.name} (on-demand)${why}: el diseño no resuelve la llamada (fetchedFrom no apunta a ninguna de http-clients). No inventes el canal: dilo en el reporte`;
+  }
+  const client = (model.httpClients ?? []).find((candidate) => candidate.clientClass === need.fetch.clientClass);
+  const call = client?.calls.find((candidate) => candidate.name === need.fetch.call);
+  const port = client ? clientPort(client) : `I${need.fetch.clientClass}`;
+  const local = `${port.slice(1, 2).toLowerCase()}${port.slice(2)}`;
+  const method = call ? callMethod(call) : need.fetch.call;
+  const policy = need.onUnavailable
+    ? ` Si ${depId} no responde, el fallback del adaptador ya aplica onUnavailable: ${need.onUnavailable.action}; no lo captures para convertirlo en otra cosa.`
+    : '';
+  const exposed =
+    need.exposedAs && need.dtoName
+      ? ` El dato SALE en la respuesta: el mapper pide un ${need.dtoName} por parámetro y lo pone en el campo '${need.exposedAs}' — si no lo tienes, pásalo null, que es lo que el contrato admite cuando el proveedor no responde.`
+      : '';
+  return (
+    `Dependencia ${depId}.${need.name} (on-demand)${why}: pide el dato con await ${local}.${method}(..., cancellationToken), que ya devuelve el resultado de dominio ` +
+    `(${need.fetch.resultType}): el DTO del cable no cruza a Application. El retry y el circuito ya están en el adaptador: no los repitas.${policy}${exposed}`
+  );
 }
 
 /** La nota de una activación: el trabajo que esta operación delega en otro servidor (la de keel-spring y keel-nest). */

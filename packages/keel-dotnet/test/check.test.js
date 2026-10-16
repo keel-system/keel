@@ -39,11 +39,11 @@ test('un diseño no listo sale en rojo aunque sea generable, y dice por qué', a
   assert.match(output, /Generable, pero no listo/);
 });
 
-test('lo que está fuera de la frontera (needs, hasta el 13i) sale en rojo sin construir nada', async () => {
+test('lo que está fuera de la frontera (la réplica, lastKnown y OAuth2, hasta el 13j) sale en rojo sin construir nada', async () => {
   const workspace = makeWorkspace();
-  mountDesign(workspace, 'asset-vault');
+  mountDesign(workspace, 'catalog-extended');
   const before = treeDigest(workspace);
-  const { exitCode, output } = await runCommand(workspace, check, 'specs/asset-vault', {});
+  const { exitCode, output } = await runCommand(workspace, check, 'specs/catalog-extended', {});
   assert.equal(exitCode, 1);
   assert.match(output, /dependencies\.\w+\.needs/);
   assert.equal(treeDigest(workspace), before);

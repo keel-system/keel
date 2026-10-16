@@ -28,8 +28,8 @@ No reescribas lo demás.
 ## Antes de empezar
 
 - Aplica solo si el diseño declara la capa `http-clients`.
-- Lee `specs/http-clients.keel.yaml` y `specs/dependencies.keel.yaml` (la `onFailure` de cada activación es la
-  política del fallback, y ya está escrita en `<Llamada>Unavailable`).
+- Lee `specs/http-clients.keel.yaml` y `specs/dependencies.keel.yaml` (la `onFailure` de cada activación y la
+  `onUnavailable` de cada `need` son la política del fallback, y ya están escritas en `<Llamada>Unavailable`).
 - Sigue `{{keel:docs}}/conventions/mapping.md` y la frontera de `{{keel:docs}}/architecture.md`: el puerto y los
   resultados son DOMINIO; el adaptador, los DTOs del cable y el mapper, infraestructura. **Application y Domain no
   ven nada de `Infrastructure/Clients`**, ni un fallo del proveedor: lo impide el compilador.
@@ -37,7 +37,8 @@ No reescribas lo demás.
 ## Lo que escribes
 
 1. **La llamada desde el handler.** El puerto ya está en su constructor (`inventoryClient`) cuando una activación
-   del diseño sale por esta llamada, y la nota del handler dice el ORDEN de los efectos. Se llama con `await` y
+   del diseño sale por esta llamada, o cuando la operación PIDE un dato bajo demanda (`needs` con `usedBy`), y la nota
+   del handler dice el ORDEN de los efectos o qué hacer con el dato. Se llama con `await` y
    **sin** retry, try/catch ni circuito alrededor: eso ya está en el adaptador, y repetirlo multiplica los intentos.
 2. **Los rechazos con significado.** Un 4xx llega al fallback con su línea de log y NO cuenta para el circuito.
    Si el diseño le da significado (un 404 es «no existe», un 409 un conflicto suyo), tradúcelo en `<Llamada>Once`,
@@ -45,10 +46,13 @@ No reescribas lo demás.
 3. **El contrato en prosa.** Sin `request`/`response` estructurados, build deja los DTOs y el mapper con
    `TODO (agente)`; sin `method`/`path`, la llamada entera. Complétalos desde la frase `contract`; si la prosa es
    ambigua, es un hueco del diseño: dilo en el reporte, no inventes la ruta.
-4. **El fallback que build no pudo escribir.** Con `onFailure: ignore` o `fail` ya está escrito; con `degrade`, o
-   sin activación que lo declare, queda un `TODO` con la prosa del diseño. Un resultado degradado tiene que ser
+4. **El fallback que build no pudo escribir.** Con `onFailure: ignore` o `fail` (o `onUnavailable: fail` de un `need`)
+   ya está escrito: el error del diseño sale del adaptador y el handler **no lo captura**. Con `degrade`, o sin política
+   que lo declare, queda un `TODO` con la prosa del diseño (`degradedTo`). Un resultado degradado tiene que ser
    distinguible por el cliente de uno normal.
-5. **El barrido de reconciliación y la compensación.** El reclamo ya está generado en el repositorio; su nota dice
+5. **El dato que sale en la respuesta** (`needs.<n>.exposedAs`). El mapper pide su DTO por parámetro: pásale lo que
+   devolvió el puerto, o null si el proveedor no respondió y la política degrada — es lo que el contrato admite.
+6. **El barrido de reconciliación y la compensación.** El reclamo ya está generado en el repositorio; su nota dice
    cómo se llama y el ORDEN de los commits — `references/implementation.md` § Reconciliación.
 
 **No ensanches el fallback.** El `catch (ProviderFailureException failure) when (...)` deja pasar solo los fallos

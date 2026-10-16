@@ -169,13 +169,21 @@ function isComposite(layers, field) {
  */
 function outboundErrors(layers) {
   const errors = [...compositeUrlParamErrors(layers, 'keel-dotnet')];
+  // El dato bajo demanda se genera desde el 13i (el cliente inyectado en el handler del usedBy, con su nota, y
+  // onUnavailable fail/degrade en el fallback del adaptador). La réplica y el último valor conocido llegan en el 13j.
   for (const [dependency, definition] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
-    const needs = Object.keys(definition?.needs ?? {});
-    if (needs.length > 0) {
-      errors.push(
-        `dependencies.${dependency}.needs (${needs.join(', ')}) — keel-dotnet todavía no genera los datos que se piden a otro servidor ` +
-          '(llegan en el incremento 13 de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
-      );
+    for (const [name, need] of Object.entries(definition?.needs ?? {})) {
+      if (need?.strategy === 'replicated') {
+        errors.push(
+          `dependencies.${dependency}.needs.${name}: strategy replicated — keel-dotnet todavía no genera la réplica (el proyector y el lector; ` +
+            'llega en el incremento 13j de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
+        );
+      } else if (need?.onUnavailable?.action === 'lastKnown') {
+        errors.push(
+          `dependencies.${dependency}.needs.${name}: onUnavailable lastKnown — keel-dotnet todavía no genera el almacén del último valor conocido ` +
+            '(llega en el incremento 13j de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
+        );
+      }
     }
   }
   for (const [client, definition] of Object.entries(layers?.['http-clients']?.clients ?? {})) {

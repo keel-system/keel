@@ -86,6 +86,7 @@ const SABOTAGES = {
 //   payment-window      el aviso de Stripe se acepta fuera de su ventana
 //   payment-notice-open un aviso que no verifica se responde 200
 //   payment-mp-manifest el manifiesto de MercadoPago firma el data.id tal como llega, sin pasarlo a minúsculas
+//   need-fail           con el proveedor caído, el need con onUnavailable: fail no lanza el error del diseño
 //   actor-name          con un token, el autor es el nombre del principal y no su sujeto
 //   multipart-limit     la entrada de una subida no corta por la longitud declarada (el 413 no llega)
 //   multipart-empty     una parte obligatoria vacía pasa al handler como si nada (sin FILE_UNREADABLE)
@@ -93,6 +94,8 @@ const CLIENTS_DIR = 'stock-reservation/src/StockReservation.Infrastructure/Clien
 const PAYMENT_DIR = 'payment-checkout/src/PaymentCheckout.Infrastructure/Payment';
 const FIXTURE_SABOTAGES = {
   // La autoría (13h): con un token, el nombre del principal en vez de su sujeto.
+  // El need bajo demanda con fail (13i): el fallback deja de lanzar el error del diseño.
+  'need-fail': ['asset-vault-need-fail/src/AssetVaultNeedFail.Infrastructure/Clients/RenderingHttpAdapter.cs', 'throw new RenderingUnavailableError(', 'throw new InvalidOperationException('],
   'actor-name': ['asset-vault/src/AssetVault.Infrastructure/Persistence/AuditActor.cs', 'is { Length: > 0 } subject ? subject : principal.Name', 'is { Length: > 0 } subject ? principal.Name : principal.Name'],
   'multipart-limit': ['catalog-extended/src/Catalog.Api/Rest/MultipartReading.cs', 'if (request.ContentLength > LimitBytes)', 'if (request.ContentLength > LimitBytes * 1000)'],
   'multipart-empty': ['catalog-extended/src/Catalog.Api/Rest/MultipartReading.cs', 'return file ?? throw new BadRequestException(', 'if (file is null) return new FileUpload(ReadOnlyMemory<byte>.Empty, "vacio", "", 1); return file ?? throw new BadRequestException('],
@@ -159,6 +162,20 @@ const DERIVED = [
     paymentGateway: 'mercadopago',
     mutate: (manifest, layers, name) => {
       manifest.service.name = name;
+    }
+  },
+  {
+    // El dato bajo demanda con `onUnavailable: fail` (incremento 13i): ninguna fixture lo declara (asset-vault degrada).
+    // Con el renderizador caído, getAsset falla con su error: lo EJECUTA la prueba emitida del adaptador.
+    name: 'asset-vault-need-fail',
+    from: 'asset-vault',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+      layers['use-cases'].operations.getAsset.errors = [
+        ...(layers['use-cases'].operations.getAsset.errors ?? []),
+        { code: 'RENDERING_UNAVAILABLE', when: 'El renderizador no responde y la ficha no puede salir sin su miniatura.', http: 503 }
+      ];
+      layers.dependencies.dependencies.rendering.needs.thumbnail.onUnavailable = { action: 'fail', error: 'RENDERING_UNAVAILABLE' };
     }
   },
   {
