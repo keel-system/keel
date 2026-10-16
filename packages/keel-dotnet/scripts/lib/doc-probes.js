@@ -26,7 +26,7 @@ import { csMember, csString, namespaceOf, solution, typeUsings } from '../../src
 import { repositoryRoots, portClass, repositoriesNamespace, isPaginated } from '../../src/scaffold/repositories.js';
 import { isNullable } from '../../src/scaffold/render.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
-import { counter, credentialProbes, guardProbes, guardSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
+import { authorshipProbe, counter, credentialProbes, guardProbes, guardSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
 import { documentProbeSupport, storeKeyBlock, documentOutboxBlock, documentBridgeBlock, documentReconciliationStoreBlock, documentClaimProbes, documentReconciliationProbes, documentPurgeBlock } from './doc-store-probes.js';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { bridgeClass, messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
@@ -370,6 +370,15 @@ function probesCs(model, namespace) {
     }
     // Los reclamos de barrido y de reconciliación del adaptador (incremento 12c), con sus muestras por encima de las comunes.
     tests.push(...credentialProbes(model, root, { state, sample: 18, port }));
+    tests.push(...authorshipProbe(model, root, {
+      state,
+      sample: 19,
+      port,
+      usings: ctx.usings,
+      raw: (id) => `            var stored = await Raw(services, ${collection}, ${idValue(id)});
+            var createdBy = stored["created_by"].AsString;
+            var updatedBy = stored["updated_by"].AsString;`
+    }));
     tests.push(...documentClaimProbes(model, root, { state, first: SAMPLES + 1, port }));
     tests.push(...documentReconciliationProbes(model, root, { state, first: SAMPLES + 1 + claimSampleCount(model, root), port }));
     // La guarda de un efecto que no se deshace (mail.sentBy), con sus muestras por encima de las de los reclamos.

@@ -23,8 +23,9 @@ import { DATABASES } from 'keel-core/gen/infra-catalog';
 import { envFor } from 'keel-core/gen/runtime-env';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { SYSTEM_ACTOR } from 'keel-core/gen/relational';
-import { csFile, csString, located, namespaceOf } from './render.js';
-import { usesApi } from './rest-support.js';
+import { csFile, csString, located, namespaceOf, solution } from './render.js';
+import { usesCorrelation } from './rest-support.js';
+import { securityNamespace, usesHttpSecurity } from './security.js';
 import { configNamespace } from './config.js';
 import { usesRelational, dbContextClass, persistedEntities } from './persistence.js';
 import { repositoryRoots, portClass, adapterClass, repositoriesNamespace } from './repositories.js';
@@ -63,7 +64,7 @@ export function generate(model) {
       ],
       registrationBody(model)
     ),
-    ...(usesAuthorship(model) ? [auditActorFile(model)] : []),
+    ...(usesAuthorship(model) ? auditActorFiles(model) : []),
     file('DesignTimeDbContextFactory', ['Microsoft.EntityFrameworkCore', 'Microsoft.EntityFrameworkCore.Design'], designTimeFactoryBody(model))
   ];
 }
@@ -98,23 +99,107 @@ export function usesAuthorship(model) {
 }
 
 /**
- * La AUTORÍA de las escrituras: el AuditorAware de keel-spring, con su regla. Sin capa de seguridad (incremento 8) no
- * hay principal, así que toda escritura es del sistema: el centinela `system`, con la correlación si la hay
- * (`system:<correlationId>`), que dice la verdad en vez de un null que obligue a adivinarlo.
+ * La AUTORÍA de las escrituras (`persistence.audit.authorship`, incremento 13h): el AuditorAware de keel-spring y el
+ * `currentActor()` de keel-nest, con la misma regla, porque lo que queda en `created_by`/`updated_by` es contrato de los
+ * datos —lo lee quien audita, con cualquiera de los tres servidores—:
+ *   · con un token, el SUJETO (`sub`): el identificador estable, no el nombre del principal, que es para mostrar y puede
+ *     cambiar; el nombre solo si el token no trae `sub`;
+ *   · con una clave de API, el cliente que autenticó;
+ *   · sin petición autenticada detrás (un listener, un barrido, el relay): el centinela `system`, con la correlación si la
+ *     hay (`system:<correlationId>`), que dice la verdad en vez de un null que obligue a adivinarlo.
  */
 export function auditActorFile(model) {
   const { namespace, path } = located(model, 'persistence', 'AuditActor');
-  const correlation = usesApi(model);
-  const body = `/// <summary>Quién escribe, para created_by y updated_by. Nunca vacío: las columnas son NOT NULL.</summary>
+  // La correlación la abren la entrada HTTP y la mensajería: un listener sin API también la tiene.
+  const correlation = usesCorrelation(model);
+  const security = usesHttpSecurity(model);
+  const fallback = correlation ? 'CorrelationContext.Get() is { } correlationId ? $"{System}:{correlationId}" : System' : 'System';
+  const current = security
+    ? `    public static string Current()
+    {
+        if (SecurityContext.Get() is { } principal)
+        {
+            // Con un token, el sujeto; con una clave de API, el cliente que la presentó.
+            return principal.Kind == PrincipalKind.Token && ClaimValues.Text(principal.Claims, "sub") is { Length: > 0 } subject ? subject : principal.Name;
+        }
+        // Escritura sin petición autenticada detrás: no hay actor, pero sí traza.
+        return ${fallback};
+    }`
+    : `    /// <remarks>Sin capa de seguridad no hay principal: toda escritura es del sistema.</remarks>
+    public static string Current() => ${fallback};`;
+  const body = `/// <summary>Quién escribe, para created_by y updated_by: la regla del AuditorAware de keel-spring. Nunca vacío: las columnas son NOT NULL.</summary>
 public static class AuditActor
 {
     /// <summary>El autor de las escrituras que no nacen de una petición autenticada.</summary>
     public const string System = ${csString(SYSTEM_ACTOR)};
 
-    public static string Current() =>
-${correlation ? '        CorrelationContext.Get() is { } correlationId ? $"{System}:{correlationId}" : System;' : '        System;'}
+${current}
 }`;
-  return { path, content: csFile({ namespace, usings: correlation ? [namespaceOf(model, 'correlation')] : [], body }) };
+  const usings = [...(correlation ? [namespaceOf(model, 'correlation')] : []), ...(security ? [securityNamespace(model)] : [])];
+  return { path, content: csFile({ namespace, usings, body }) };
+}
+
+/** El actor y su prueba emitida: lo que cada rama de persistencia añade con autoría. */
+export function auditActorFiles(model) {
+  return [auditActorFile(model), auditActorTestsFile(model)];
+}
+
+/**
+ * `AuditActorTests`: la regla del actor EJECUTADA, caso a caso, con lo que el servicio tiene (seguridad, correlación).
+ * Es lo que en keel-nest mide audit-actor.test.js transpilando el actor; aquí corre en `dotnet test`.
+ */
+function auditActorTestsFile(model) {
+  const sln = solution(model);
+  const correlation = usesCorrelation(model);
+  const security = usesHttpSecurity(model);
+  const tests = [];
+  if (security) {
+    tests.push(`    [Fact]
+    public void ConUnTokenEsElSujetoNoElNombre()
+    {
+        using var _ = SecurityContext.Open(Token("nombre-visible", """{"sub":"sujeto-estable"}"""));
+        Assert.Equal("sujeto-estable", AuditActor.Current());
+    }
+
+    [Fact]
+    public void ConUnTokenSinSujetoEsElNombre()
+    {
+        using var _ = SecurityContext.Open(Token("nombre-visible", """{"name":"x"}"""));
+        Assert.Equal("nombre-visible", AuditActor.Current());
+    }
+
+    [Fact]
+    public void ConUnaClaveDeApiEsElCliente()
+    {
+        using var _ = SecurityContext.Open(new Principal(PrincipalKind.Key, "cliente-de-la-clave", new HashSet<string>(), new Dictionary<string, JsonElement>()));
+        Assert.Equal("cliente-de-la-clave", AuditActor.Current());
+    }
+
+    private static Principal Token(string name, string claims) =>
+        new(PrincipalKind.Token, name, new HashSet<string>(), JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(claims)!);`);
+  }
+  if (correlation) {
+    tests.push(`    [Fact]
+    public void SinPrincipalEsElSistemaConLaCorrelacion()
+    {
+        using var _ = CorrelationContext.Open("pedido-42");
+        Assert.Equal("system:pedido-42", AuditActor.Current());
+    }`);
+  }
+  tests.push(`    [Fact]
+    public void SinPrincipalNiCorrelacionEsElSistemaNuncaVacio() => Assert.Equal(AuditActor.System, AuditActor.Current());`);
+  const body = `/// <summary>Quién queda en created_by y updated_by: la regla del AuditorAware de keel-spring, ejecutada.</summary>
+public sealed class AuditActorTests
+{
+${tests.join('\n\n')}
+}`;
+  const usings = [
+    'Xunit',
+    namespaceOf(model, 'persistence'),
+    ...(correlation ? [namespaceOf(model, 'correlation')] : []),
+    ...(security ? ['System.Text.Json', securityNamespace(model)] : [])
+  ];
+  return { path: `${sln.unitTests.dir}/AuditActorTests.cs`, content: csFile({ namespace: sln.unitTests.name, usings, body }) };
 }
 
 export function persistenceRuntimeNamespace(model) {

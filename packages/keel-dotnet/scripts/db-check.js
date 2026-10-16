@@ -37,6 +37,7 @@
 //   reconciliation-head       la lectura de candidatos no excluye los de marca viva (la cabeza de la cola tapa al resto)
 //   credential  el finder de resolvedBy busca solo en la primera credencial de la lista
 //   send-guard  la guarda del envío (mail.sentBy) escribe dentro de la transacción del caso de uso, no en la suya
+//   created-by  el created_by de la autoría de política se reescribe en cada guardado (sujeto product-catalog-authorship)
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -73,7 +74,9 @@ const SABOTAGES = {
   'reconciliation-head': ['Repositories/', 'c.claimed_at > {claimExpiredBefore})', 'c.claimed_at > {claimExpiredBefore} AND 1 = 0)'],
   credential: ['Repositories/', 'Where(element => element.Value == ', 'Where(element => element.Position == 0 && element.Value == '],
   // La guarda del envío (mail.sentBy, 12e) escribe con el contexto del caso de uso: su marca se deshace con él.
-  'send-guard': ['Repositories/', 'var own = scope.ServiceProvider.GetRequiredService<', 'var own = db; _ = scope.ServiceProvider.GetRequiredService<']
+  'send-guard': ['Repositories/', 'var own = scope.ServiceProvider.GetRequiredService<', 'var own = db; _ = scope.ServiceProvider.GetRequiredService<'],
+  // La autoría de política (13h): created_by se reescribe en cada guardado.
+  'created-by': ['Repositories/', 'if (string.IsNullOrEmpty(row.CreatedBy)) { row.CreatedBy = actor; }', 'row.CreatedBy = actor;']
 };
 
 const results = [];
@@ -97,7 +100,17 @@ const relational = fs.readdirSync(FIXTURES_DIR).filter((name) => {
   const file = path.join(FIXTURES_DIR, name, 'persistence.keel.yaml');
   return fs.existsSync(file) && !/model:\s*document/.test(fs.readFileSync(file, 'utf8'));
 });
-const SUBJECTS = only ? [only] : relational;
+// Los sujetos DERIVADOS: lo que ninguna fixture relacional declara. La autoría de política (13h) solo la declara
+// asset-vault, que es documental: aquí, product-catalog con `authorship: all`, como el sujeto de keel-nest.
+const DERIVED = {
+  'product-catalog-authorship': {
+    from: 'product-catalog',
+    mutate: (manifest, layers) => {
+      layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship: 'all' };
+    }
+  }
+};
+const SUBJECTS = only ? [only] : [...relational, ...Object.keys(DERIVED)];
 
 const runtime = resolveRuntime();
 if (!step('podman o docker disponible', Boolean(runtime), runtime ?? 'instala podman (o docker) y arráncalo')) process.exit(1);
@@ -125,7 +138,8 @@ try {
   // ─── Los sujetos y sus sondas, en UNA solución ─────────────────────────────────────────────────
   const projects = [];
   for (const name of SUBJECTS) {
-    const { model, files } = await planFixture(name);
+    const derived = DERIVED[name];
+    const { model, files } = await planFixture(derived?.from ?? name, { mutate: derived?.mutate ?? null });
     const probes = probeProject(model);
     for (const file of [...files, ...probes.files]) {
       const target = path.join(root, name, file.path);

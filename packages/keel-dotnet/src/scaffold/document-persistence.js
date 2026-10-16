@@ -31,7 +31,7 @@ import { enumMember } from '../lib/cs-projection.js';
 import { csFile, csString, located, namespaceOf, typeUsings } from './render.js';
 import { configNamespace } from './config.js';
 import { usesDocument, persistedEntities, usesTextFold, textFoldFile } from './persistence.js';
-import { auditActorFile, usesAuthorship } from './persistence-runtime.js';
+import { auditActorFiles, usesAuthorship } from './persistence-runtime.js';
 import { repositoryRoots, portClass, adapterClass, repositoriesNamespace } from './repositories.js';
 import { idempotencyRegistration, idempotencyRegistrationUsings } from './request-idempotency.js';
 import { usesSweepClaims } from './claim.js';
@@ -74,7 +74,7 @@ export function generate(model) {
   const enums = documentEnums(model);
   if (enums.length > 0) files.push(file('EnumColumns', typeUsings(model, enums.map((e) => e.name)), enumColumnsBody(enums)));
   if (usesTextFold(model)) files.push(textFoldFile(model));
-  if (usesAuthorship(model)) files.push(auditActorFile(model));
+  if (usesAuthorship(model)) files.push(...auditActorFiles(model));
   return files;
 }
 

@@ -86,11 +86,14 @@ const SABOTAGES = {
 //   payment-window      el aviso de Stripe se acepta fuera de su ventana
 //   payment-notice-open un aviso que no verifica se responde 200
 //   payment-mp-manifest el manifiesto de MercadoPago firma el data.id tal como llega, sin pasarlo a minúsculas
+//   actor-name          con un token, el autor es el nombre del principal y no su sujeto
 //   multipart-limit     la entrada de una subida no corta por la longitud declarada (el 413 no llega)
 //   multipart-empty     una parte obligatoria vacía pasa al handler como si nada (sin FILE_UNREADABLE)
 const CLIENTS_DIR = 'stock-reservation/src/StockReservation.Infrastructure/Clients';
 const PAYMENT_DIR = 'payment-checkout/src/PaymentCheckout.Infrastructure/Payment';
 const FIXTURE_SABOTAGES = {
+  // La autoría (13h): con un token, el nombre del principal en vez de su sujeto.
+  'actor-name': ['asset-vault/src/AssetVault.Infrastructure/Persistence/AuditActor.cs', 'is { Length: > 0 } subject ? subject : principal.Name', 'is { Length: > 0 } subject ? principal.Name : principal.Name'],
   'multipart-limit': ['catalog-extended/src/Catalog.Api/Rest/MultipartReading.cs', 'if (request.ContentLength > LimitBytes)', 'if (request.ContentLength > LimitBytes * 1000)'],
   'multipart-empty': ['catalog-extended/src/Catalog.Api/Rest/MultipartReading.cs', 'return file ?? throw new BadRequestException(', 'if (file is null) return new FileUpload(ReadOnlyMemory<byte>.Empty, "vacio", "", 1); return file ?? throw new BadRequestException('],
   'circuit-strict': [`${CLIENTS_DIR}/CircuitBreaker.cs`, '* 100.0 / outcomes.Count >= spec.FailureRateThreshold', '* 100.0 / outcomes.Count > spec.FailureRateThreshold'],

@@ -26,6 +26,7 @@
 //   partial     el filtro parcial lleva el literal del diseño y no la constante guardada (el índice no indexa nada)
 //   created     el created_at DECLARADO (un campo del dominio) se reescribe en cada guardado
 //   created-policy  el created_at de la auditoría de POLÍTICA (que el dominio no lleva) se reescribe en cada guardado
+//   created-by  el created_by de la autoría de política se reescribe en cada guardado
 //   enum        el enum se guarda por su miembro de C# y no por la constante del diseño
 //   day         el día se guarda en la zona del proceso, no a medianoche UTC
 // y los de los almacenes del generador (incremento 12c):
@@ -95,6 +96,8 @@ const SABOTAGES = {
   version: ['Repositories/', '{ "lock_version", new BsonInt64(expected.Value) } }', '{ "lock_version", new BsonDocument("$exists", true) } }'],
   transient: ['Persistence/PersistenceErrors.cs', 'mongo.HasErrorLabel("TransientTransactionError")', 'mongo.HasErrorLabel("TransientTransactionErrorX")'],
   'created-policy': ['Repositories/', 'fields["updated_at"] = now;', 'fields["updated_at"] = now; fields["created_at"] = now;'],
+  // La autoría de política (13h): created_by se reescribe en cada guardado.
+  'created-by': ['Repositories/', 'fields["updated_by"] = actor;', 'fields["updated_by"] = actor; fields["created_by"] = actor;'],
   constraint: ['Persistence/PersistenceErrors.cs', 'detail.IndexOf("index: " + index, StringComparison.Ordinal)', 'detail.IndexOf("index: " + index + "-", StringComparison.Ordinal)'],
   partial: ['Persistence/DocumentIndexes.cs', 'PartialFilterExpression = new BsonDocument("status", "', 'PartialFilterExpression = new BsonDocument("status", "x'],
   created: ['Persistence/BsonValues.cs', 'if (current.IsBsonNull || current is BsonString { Value: "" }', 'if (true || current.IsBsonNull || current is BsonString { Value: "" }'],

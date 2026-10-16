@@ -1557,6 +1557,27 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       completa que llega al handler), que en keel-nest medía su test sobre Fastify: `cs-check --fixtures` 132/132
       ensamblados, **2 614 pruebas**, licencias de 104 paquetes. Falsado con dos sabotajes nuevos de `cs-check`, cada uno en su caso y solo en él: `multipart-limit` (sin el corte por la longitud declarada) tumba el 413 y `multipart-empty` (la parte vacía pasa) tumba el `FILE_UNREADABLE` de la parte vacía.
     - `asset-vault` y `catalog-extended` siguen fuera por `needs` y OAuth2 (y la autoría). Siguiente: 13h (la autoría).
+  - **13h, la autoría de las escrituras (hecho, 2026-10-15).** Lo que se estampa ya estaba desde los incrementos 6 y 12b
+    (las columnas `created_by`/`updated_by` de la política `all`, los campos `declared`, `created_by` solo al nacer y
+    `updated_by` en cada escritura, en la raíz y sus hijas, en las dos ramas), pero **QUIÉN** quedaba no era el de
+    keel-spring ni el de keel-nest, y no lo medía nada:
+    - `AuditActor` se escribió en el 6, antes de la seguridad: devolvía `system` también con una petición autenticada.
+      Ahora sigue la regla del `AuditorAware` de keel-spring y del `currentActor()` de keel-nest: con un token, el `sub`
+      (el nombre del principal solo si no lo trae); con una clave de API, el cliente; sin petición autenticada,
+      `system:<correlationId>` o `system`. Y la correlación la miraba solo con API: un servicio sin API cuya mensajería
+      abre la correlación en el listener (`metering-digest`) escribía `system` a secas.
+    - **Medido**: `test/audit-actor.test.js` (sin red, 5/5): la regla con y sin seguridad, la correlación de un listener,
+      nada sin autoría y el estampado de las dos ramas (raíz e hijas con `catalog-extended` con la autoría puesta). La
+      prueba emitida `AuditActorTests` EJECUTA el actor caso a caso con lo que el servicio tiene (`cs-check --fixtures`
+      132/132, 2 619 pruebas). Contra la base real, la sonda nueva `<Raíz>_CreatedByEsDeQuienCreaYUpdatedByDelUltimoQueEscribe`
+      (dos escrituras con dos autores; `created_by` del primero, `updated_by` del segundo): en `db-check` con el sujeto
+      derivado `product-catalog-authorship` (ninguna fixture relacional declara la autoría; el mismo sujeto que keel-nest)
+      y en `doc-check` con `asset-vault`, con el `sub` del token. Falsado con tres sabotajes, cada uno en su caso y solo
+      en él: `actor-name` (cs-check: el nombre en vez del sujeto), `created-by` en db-check y en doc-check (created_by se
+      reescribe en cada guardado).
+    - La autoría `declared` (campos del dominio) se estampa con el mismo actor y la mide el texto; ninguna fixture la
+      declara, así que no tiene sujeto en vivo.
+    - `asset-vault` y `catalog-extended` siguen fuera solo por `needs` y OAuth2. Siguiente: 13i (`needs`).
 
 ## 5. Riesgos conocidos
 

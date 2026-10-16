@@ -36,12 +36,14 @@ import { domainMembers } from '../../src/scaffold/entities.js';
 import { csLocal, csMember, csString, entityPlace, namespaceOf, solution, typeUsings } from '../../src/scaffold/render.js';
 import { repositoryRoots, portClass, repositoriesNamespace, isPaginated, credentialFinders } from '../../src/scaffold/repositories.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
+import { securityNamespace, usesHttpSecurity } from '../../src/scaffold/security.js';
+import { usesCorrelation } from '../../src/scaffold/rest-support.js';
 
 /**
  * Las muestras distintas que necesita cada raíz: ida y vuelta, crudo, versión, la clave natural (×2), la cota, la página
  * (×3) y dos por cada índice único condicionado. Cada prueba usa las suyas: una muestra repetida chocaría en la PK.
  */
-const SAMPLES = 16;
+const SAMPLES = 17;
 
 /** El proyecto de sondas de un sujeto: su .csproj y su clase de pruebas. */
 export function probeProject(model) {
@@ -389,6 +391,16 @@ function probesCs(model, namespace) {
         });`);
     }
     tests.push(...credentialProbes(model, root, { state, sample: 16, port }));
+    tests.push(...authorshipProbe(model, root, {
+      state,
+      sample: 17,
+      port,
+      usings: ctx.usings,
+      raw: (id) =>
+        ['createdBy', 'updatedBy']
+          .map((name) => `            var ${name} = await InScope(other => other.GetRequiredService<${dbContext(model)}>().Database.SqlQuery<string>($"SELECT ${snakeCase(name)} AS \\"Value\\" FROM ${root.tableName} WHERE ${root.idField?.columns?.name ?? 'id'} = {${id}}").SingleAsync(Cancel));`)
+          .join('\n')
+    }));
     tests.push(...claimProbes(model, root, { state, first: SAMPLES + 1, port, context: dbContext(model) }));
     tests.push(...reconciliationProbes(model, root, { state, first: SAMPLES + 1 + claimSampleCount(model, root), port, context: dbContext(model) }));
     // La guarda de un efecto que no se deshace (mail.sentBy), con sus muestras por encima de las de los reclamos.
@@ -577,6 +589,49 @@ ${ensures.join('\n\n')}
  * El finder por credencial (resolvedBy, 12e): el agregado se resuelve por CUALQUIERA de sus credenciales —también la que
  * no es la primera— y una credencial ajena no resuelve nada. Lo comparten db-check y doc-check: solo usa el puerto.
  */
+/**
+ * La AUTORÍA de política (`persistence.audit.authorship: all`, incremento 13h) contra la base real: quien crea queda en
+ * created_by y no cambia al reescribir; quien escribe la última vez, en updated_by. El actor es el de AuditActor: con
+ * seguridad, el `sub` del token que abre la sonda; sin ella, el sistema con la correlación (o sin ella). `raw` lee los dos
+ * valores crudos de la fila o del documento (`createdBy`, `updatedBy`). Lo usan db-check y doc-check.
+ */
+export function authorshipProbe(model, root, { state, sample, port, raw, usings }) {
+  if (root.auditAuthorship !== 'all') return [];
+  const security = usesHttpSecurity(model);
+  const correlation = usesCorrelation(model);
+  usings.push(namespaceOf(model, 'persistence'));
+  if (security) usings.push(securityNamespace(model), 'System.Text.Json');
+  else if (correlation) usings.push(namespaceOf(model, 'correlation'));
+  const writer = security
+    ? 'SecurityContext.Open(new Principal(PrincipalKind.Token, "nombre-" + who, new HashSet<string>(), new Dictionary<string, JsonElement> { ["sub"] = JsonSerializer.SerializeToElement(who) }))'
+    : correlation
+      ? 'CorrelationContext.Open(who)'
+      : 'new MemoryStream()';
+  const expected = security ? 'who' : correlation ? 'AuditActor.System + ":" + who' : 'AuditActor.System';
+  const id = csMember(root.idField?.name ?? 'id');
+  return [`    [Fact]
+    public async Task ${root.name}_CreatedByEsDeQuienCreaYUpdatedByDelUltimoQueEscribe() =>
+        await InScope(async services =>
+        {
+            static IDisposable Writer(string who) => ${writer};
+            static string Expected(string who) => ${expected};
+            var sample = new ${root.name}(${state(sample)});
+            using (Writer("autor-que-crea"))
+            {
+                await InScope(other => other.GetRequiredService<${port}>().Save(sample, Cancel));
+            }
+            var read = await InScope(other => other.GetRequiredService<${port}>().FindById(sample.${id}, Cancel));
+            Assert.NotNull(read);
+            using (Writer("autor-que-modifica"))
+            {
+                await InScope(other => other.GetRequiredService<${port}>().Save(read, Cancel));
+            }
+${raw(`sample.${id}`)}
+            Assert.Equal(Expected("autor-que-crea"), createdBy);
+            Assert.Equal(Expected("autor-que-modifica"), updatedBy);
+        });`];
+}
+
 export function credentialProbes(model, root, { state, sample, port }) {
   const id = csMember(root.idField?.name ?? 'id');
   return credentialFinders(model, root).map(
