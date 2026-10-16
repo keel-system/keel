@@ -609,6 +609,16 @@ ${empty}
  * fail` de una activación), o null: sin fallback, con otra política, con varias distintas o sin clase del error.
  */
 export function declaredFailure(call) {
+  const decl = fallbackPolicy(call);
+  return decl?.action === 'fail' && decl.exceptionClass ? decl : null;
+}
+
+/**
+ * LA política del fallback de esta llamada (`onUnavailable` de un need u `onFailure` de una activación), o null: sin
+ * fallback, o con varias DISTINTAS por la misma llamada, que el adaptador enumera como conflicto del diseño con un TODO
+ * (keel-spring y keel-nest igual). La prueba emitida solo afirma lo que el fallback de verdad hace.
+ */
+export function fallbackPolicy(call) {
   if (!hasCallFallback(call)) return null;
   const activations = call.activations ?? [];
   const needs = (call.needs ?? []).filter(({ need }) => need.onUnavailable);
@@ -617,8 +627,7 @@ export function declaredFailure(call) {
     ...needs.map(({ need }) => `need:${JSON.stringify(need.onUnavailable)}`)
   ]);
   if (distinct.size !== 1) return null;
-  const decl = needs.length > 0 ? needs[0].need.onUnavailable : activations[0]?.activation.onFailure;
-  return decl?.action === 'fail' && decl.exceptionClass ? decl : null;
+  return needs.length > 0 ? needs[0].need.onUnavailable : activations[0]?.activation.onFailure ?? null;
 }
 
 /** El cuerpo del fallback: la política que declara la activación que sale por esta llamada (como keel-spring y keel-nest). */
@@ -1861,7 +1870,8 @@ function sampleJson(model, field) {
  */
 function lastKnownProbe(model, client, call, name, args) {
   const need = (call.needs ?? []).find(({ need: candidate }) => candidate.onUnavailable?.action === 'lastKnown')?.need;
-  if (!need || !remembersCall(model, client, call) || !need.onUnavailable.exceptionClass) return '';
+  // Solo si lastKnown es LA política de la llamada: con otra distinta por la misma llamada, el fallback es un TODO.
+  if (!need || fallbackPolicy(call)?.action !== 'lastKnown' || !remembersCall(model, client, call) || !need.onUnavailable.exceptionClass) return '';
   const body = {};
   for (const field of call.responseFields) {
     const value = sampleJson(model, field);

@@ -39,6 +39,20 @@ test('OAuth2: la concesión se lee de http-clients.yaml con las claves de keel-s
   assert.match(content(files, '/Clients/PartnerCatalogHttpAdapter.cs'), /ProviderFailureKind\.AuthGrant/);
 });
 
+test('con otra política distinta por la misma llamada, el fallback es el TODO del conflicto y la prueba emitida no afirma lastKnown', async () => {
+  // La silueta de la corrida `catalog`: la réplica supplierPrice degrada por la MISMA llamada getPrice que currentPrice sirve
+  // con lastKnown. La prueba emitida afirmaba lastKnown y caía en el proyecto recién generado.
+  const { files } = await planFixture('catalog-extended', {
+    mutate: (manifest, layers) => {
+      layers.dependencies.dependencies.pricing.needs.supplierPrice.onUnavailable = { action: 'degrade', degradedTo: 'sin precio de proveedor' };
+    }
+  });
+  const adapter = content(files, '/Clients/PricingHttpAdapter.cs');
+  assert.match(adapter, /Varias políticas DISTINTAS salen por esta llamada/);
+  assert.match(adapter, /throw new NotImplementedException\("TODO: fallback getPrice"\);/);
+  assert.doesNotMatch(content(files, '.UnitTests/OutboundClientsTests.cs'), /PricingHttpAdapterGetPriceSirveElUltimoValorConocido/);
+});
+
 test('sin lastKnown ni OAuth2 no se emite nada de ellos', async () => {
   const { files } = await planFixture('stock-reservation');
   assert.ok(!files.some((file) => /LastKnownValues|ClientCredentials/.test(file.path)));

@@ -1641,6 +1641,20 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       comunes obliga a pasar TODOS los sujetos. Al pasarlos salió el segundo fallo del 13h: el sujeto derivado `product-catalog-authorship` conservaba el nombre del servicio, y sus proyectos chocaban con los de `product-catalog` en la solución común (con `--only` no se ve); ahora se llama como el sujeto. Con los dos arreglos, `db-check` entero: 12 sujetos, **206 sondas**; `doc-check` entero: 5 sujetos, 131 sondas; `cs-check --fixtures` 138/138, 2 800 pruebas. keel-dotnet sin red 532/532.
     - **Con esto el incremento 13 queda construido entero.** Lo que sigue son las corridas de `asset-vault` y
       `catalog-extended` en keel-dotnet, y el incremento 14.
+  - **13k — corridas preparadas (2026-10-15), sin lanzar**: `spring-live-test/corrida-asset-vault-dotnet/` y
+    `spring-live-test/corrida-catalog-dotnet/`, con los diseños de las gemelas de control de keel-spring y keel-nest
+    (2026-10-11 v2): `asset-vault` v1.1.2 (idéntico a la fixture) y `catalog` v1.0.0 (la copia cerrada de
+    `catalog-extended`, de `corrida-catalog-nest-v2`), cada uno con su `DESIGN.md` y sin contratos de `/keel-docs`, como las
+    gemelas. Sembradas con `keel init` de este repo, `--ready` en verde (11/11) y el `keel-stack.json` de las gemelas
+    (`mongodb · rabbitmq · keycloak · redis · minio` y `postgresql · kafka · keycloak · redis · minio`). `build` hecho: 335 y
+    399 archivos; las dos compilan sin warnings y sus pruebas unitarias pasan recién generadas (169 y 228). Comparten los
+    puertos de `infra/`: se corren de una en una. Gemelas para comparar la huella: `asset-vault` 32/32 con huella 18 en
+    keel-spring y en keel-nest; `catalog` 56 escenarios con huella 28 (keel-spring) y la de keel-nest v2.
+    - **Lo que destapó prepararlas**: la prueba emitida de `lastKnown` (13j-a) caía en `catalog` recién generado. Ahí
+      `getPrice` sirve dos needs con políticas DISTINTAS (`currentPrice` con `lastKnown` y la réplica `supplierPrice` con
+      `degrade`), y el adaptador enumera el conflicto con un TODO, como keel-spring y keel-nest; la prueba afirmaba
+      `lastKnown` sin mirar que fuera LA política de la llamada. Ahora sale de `fallbackPolicy(call)`, la misma regla que el
+      adaptador, y `test/outbound-13j.test.js` lo cubre derivando el conflicto de `catalog-extended` (ninguna red lo tenía).
 
 ## 5. Riesgos conocidos
 
