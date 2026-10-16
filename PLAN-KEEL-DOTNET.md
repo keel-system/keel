@@ -1592,6 +1592,27 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       `fail` (el escáner de asset-vault la estrena). Ninguna fixture declara un `need` con `fail`: lo trae la variante
       `asset-vault-need-fail` de `cs-check` (138/138 ensamblados, 2 791 pruebas), falsada con `--sabotage=need-fail`, que tumba ese caso y solo ese. keel-dotnet sin red 525/525.
     - Siguiente: 13j (la réplica, `lastKnown` y OAuth2: `catalog-extended`).
+  - **13j-a, el último valor conocido y OAuth2 client-credentials (hecho, 2026-10-15).** Las dos piezas de keel-nest (su §
+    13j), sobre los clientes del 11b:
+    - **`lastKnown`**: `LastKnownValues` en `Infrastructure/Clients` (en memoria y por proceso, acotado por edad al LEER con la
+      `maxAgeSeconds` del diseño y por tamaño con el tope de keel-core, con un `TimeProvider` para medirlo), alimentado en
+      el camino feliz del adaptador con la clave de los parámetros de la llamada; el fallback lo sirve dentro de la ventana
+      marcado (`Stale` y `AsStale()` en el resultado, que la nota de la caché ya pide no cachear) y se rinde con el error
+      declarado. Antes dejaba un TODO.
+    - **OAuth2**: `ClientCredentials` con la semántica del OAuth2AuthorizedClientManager de keel-spring (y la de
+      keel-nest): `client_secret_basic` con la codificación de formulario de `URLEncoder`, los `scope` en el cuerpo, token
+      reutilizado hasta `expires_in` menos 60 s, una sola petición en vuelo (`SemaphoreSlim`), `token_type` Bearer
+      obligatorio y, sin `expires_in`, caducado en 1 s. `ClientSettings` gana la credencial y `HttpExchange` la pide antes de
+      cada intento: sin token la petición no sale, y el fallo es `AuthGrant` (lo atiende el fallback, no cuenta para el
+      circuito). `http-clients.yaml` ya traía las claves de keel-spring (neutral).
+    - **Medido**: `test/outbound-13j.test.js` (sin red) y, EJECUTADO, `OutboundClientsTests`: el almacén (la ventana exacta,
+      la clave por llamada y parámetros, los nulos, el tope), el adaptador de `catalog-extended` que recuerda, sirve el
+      último valor de ESA clave dentro de la ventana y se rinde fuera, y la concesión contra un emisor falso (una petición
+      con tres llamadas y con dos a la vez, la cabecera Basic y el formulario exactos, la renovación a 60 s del final,
+      el token sin `expires_in`, el emisor caído, el rechazo, el JSON roto y el token que no es Bearer, y la llamada que
+      lleva su Bearer o no sale). `cs-check --fixtures` 138/138, **2 800 pruebas**; falsado con cuatro sabotajes, cada uno
+      en sus casos: `lastknown-window`, `lastknown-key`, `oauth-reuse`, `oauth-bearer`. keel-dotnet sin red 528/528.
+    - `catalog-extended` queda fuera solo por la réplica (13j-b).
 
 ## 5. Riesgos conocidos
 

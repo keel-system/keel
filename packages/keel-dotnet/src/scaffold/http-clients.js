@@ -16,6 +16,7 @@
 
 import { fallbackFailures, hasCallFallback, recordedFailures, resiliencePolicy, retryWaitMs, circuitBreakerReference, PROVIDER_FAILURES } from 'keel-core/gen/outbound-resilience';
 import { httpClientsYaml } from 'keel-core/gen/http-clients-config';
+import { LAST_KNOWN_MAX_ENTRIES, lastKnownNeeds, servesLastKnown } from 'keel-core/gen/last-known';
 import { UNREACHABLE_BASE_URL } from 'keel-core/gen/infra-catalog';
 import { pascalCase } from 'keel-core/gen';
 import { csFile, csLocal, csMember, csString, declType, fieldUsings, located, namespaceOf, solution, xmlDoc } from './render.js';
@@ -69,6 +70,8 @@ export function generate(model) {
     emittedTests(model)
   ];
   if (usesOutboundIdempotency(model)) files.push(outboundIdempotency(model));
+  if (usesLastKnown(model)) files.push(lastKnownValues(model));
+  if (usesOAuth2(model)) files.push(clientCredentials(model));
   for (const client of model.httpClients) {
     files.push(port(model, client), mapper(model, client), adapter(model, client));
     for (const call of client.calls) {
@@ -174,8 +177,18 @@ ${methods.join('\n\n')}
 function result(model, client, call) {
   const { namespace, path } = located(model, 'clients', call.resultType);
   const todo = call.responseFields.length === 0 ? [`TODO (agente): declara los campos según el contract "${call.contract}".`] : [];
-  const members = call.responseFields.map((field) => `${resultDecl(field)} ${csMember(field.name)}`);
-  const body = `${xmlDoc([`Resultado de ${client.id}.${call.name} en términos del dominio. Cada campo admite su ausencia: es lo que`, 'devuelve el fallback cuando el proveedor no dijo nada.', ...todo])}public sealed record ${call.resultType}(${members.join(', ')});`;
+  // Con `lastKnown`, el valor rescatado se marca: se sirve, pero quien lo exponga no lo cachea (keel-core/gen/last-known.js).
+  const stale = call.responseFields.length > 0 && servesLastKnown(model, client.id, call.name);
+  const members = [...call.responseFields.map((field) => `${resultDecl(field)} ${csMember(field.name)}`), ...(stale ? ['bool Stale = false'] : [])];
+  const notes = stale ? ['Stale es true cuando el valor es el último conocido (onUnavailable: lastKnown) y no uno recién leído: se sirve, pero una respuesta que lo lleve no se cachea.'] : [];
+  const asStale = stale
+    ? `
+{
+    /// <summary>El mismo valor, rescatado como ÚLTIMO CONOCIDO: puede tener hasta la edad máxima que declara el diseño.</summary>
+    public ${call.resultType} AsStale() => this with { Stale = true };
+}`
+    : ';';
+  const body = `${xmlDoc([`Resultado de ${client.id}.${call.name} en términos del dominio. Cada campo admite su ausencia: es lo que`, 'devuelve el fallback cuando el proveedor no dijo nada.', ...todo, ...notes])}public sealed record ${call.resultType}(${members.join(', ')})${asStale}`;
   return { path, content: csFile({ namespace, usings: usingsOf(model, call.responseFields), body }) };
 }
 
@@ -336,8 +349,107 @@ function adapterDependencies(client, methods) {
     { type: 'HttpClientsSettings', name: 'settings', used: true, sample: 'HttpClientsSettings.Unreachable' },
     { type: client.mapperClass, name: 'mapper', used: /\bmapper\./.test(methods), sample: `new ${client.mapperClass}()` },
     { type: 'HttpExchange', name: 'http', used: /\bhttp\.Send\(/.test(methods), sample: 'new HttpExchange(provider)' },
-    { type: `ILogger<${client.adapterClass}>`, name: 'logger', used: /\blogger\.Log/.test(methods), sample: `NullLogger<${client.adapterClass}>.Instance` }
+    { type: `ILogger<${client.adapterClass}>`, name: 'logger', used: /\blogger\.Log/.test(methods), sample: `NullLogger<${client.adapterClass}>.Instance` },
+    // Con `onUnavailable: lastKnown`, el almacén del último valor (13j): lo alimenta el camino feliz, lo lee el fallback.
+    { type: 'LastKnownValues', name: 'lastKnown', used: /\blastKnown\.(Remember|Recall)/.test(methods), sample: 'lastKnown ?? new LastKnownValues()' }
   ].filter((dependency) => dependency.used);
+}
+
+/** ¿Esta llamada resuelve un need con `onUnavailable: lastKnown`? Entonces el camino feliz recuerda su resultado. */
+function remembersCall(model, client, call) {
+  return servesLastKnown(model, client.id, call.name) && call.responseFields.length > 0;
+}
+
+/**
+ * La clave del último valor conocido: los MISMOS parámetros de la llamada. Es lo que hace que el fallback sirva el último
+ * precio DE ESE sku y no el del último que se consultara.
+ */
+function lastKnownKey(call) {
+  const args = callArgs(call);
+  return args.length === 0 ? 'LastKnownValues.Key()' : `LastKnownValues.Key(${args.join(', ')})`;
+}
+
+/** ¿Hay algún need con `lastKnown`? Entonces se emite el almacén y se registra. */
+export function usesLastKnown(model) {
+  return lastKnownNeeds(model).length > 0;
+}
+
+/**
+ * El último valor conocido de cada llamada saliente: el LastKnownValues de keel-spring y keel-nest, acotado por edad (la que
+ * declara el diseño, al LEER) y por tamaño (el tope de keel-core).
+ */
+function lastKnownValues(model) {
+  const { namespace, path } = located(model, 'clientAdapters', 'LastKnownValues');
+  const body = `/// <summary>
+/// El último valor conocido de cada llamada saliente, para la política <c>onUnavailable: lastKnown</c> del diseño: el
+/// LastKnownValues de keel-spring y keel-nest.
+/// </summary>
+/// <remarks>
+/// <b>Acotado por edad y por tamaño, y las dos cotas importan.</b> La edad la declara el diseño (<c>maxAgeSeconds</c> del
+/// need) y se aplica al LEER: pasado ese tiempo el valor deja de existir para quien pregunta, y el fallback lanza el error
+/// declarado en vez de servir algo que ya no significa nada. El tamaño lo pone este almacén.
+/// En memoria y por instancia a propósito: lo que promete es «lo último que ESTE proceso llegó a leer». Sobre la caché
+/// compartida prometería otra cosa y metería una dependencia más en el camino que se recorre cuando algo ya está caído.
+/// </remarks>
+public sealed class LastKnownValues(TimeProvider? clock = null)
+{
+    /// <summary>Tope de entradas vivas: la clave la forman los parámetros de la llamada, así que sin tope es una fuga lenta.</summary>
+    public const int MaxEntries = ${LAST_KNOWN_MAX_ENTRIES};
+
+    private readonly TimeProvider clock = clock ?? TimeProvider.System;
+    private readonly ConcurrentDictionary<string, Entry> entries = new(StringComparer.Ordinal);
+
+    private sealed record Entry(object Value, DateTimeOffset StoredAt);
+
+    /// <summary>La clave de los parámetros de una llamada, en su orden y con su texto invariante.</summary>
+    public static string Key(params object?[] parts) =>
+        string.Join("\\u001f", parts.Select(part => Convert.ToString(part, CultureInfo.InvariantCulture) ?? "\\u0000"));
+
+    /// <summary>Recuerda lo que la llamada acaba de devolver. Se invoca en el camino FELIZ del adaptador.</summary>
+    public void Remember(string scope, string key, object? value)
+    {
+        if (value is null)
+        {
+            return;
+        }
+        if (entries.Count >= MaxEntries)
+        {
+            EvictOldest();
+        }
+        entries[scope + "|" + key] = new Entry(value, clock.GetUtcNow());
+    }
+
+    /// <summary>
+    /// El último valor de esa llamada si aún está dentro de <paramref name="maxAgeSeconds"/>; null si no hay ninguno o si el
+    /// que hay ya es demasiado viejo. El caducado se borra al detectarlo, para que el tope no expulse valores útiles.
+    /// </summary>
+    public T? Recall<T>(string scope, string key, int maxAgeSeconds)
+        where T : class
+    {
+        var id = scope + "|" + key;
+        if (!entries.TryGetValue(id, out var entry))
+        {
+            return null;
+        }
+        if (clock.GetUtcNow() - entry.StoredAt > TimeSpan.FromSeconds(maxAgeSeconds))
+        {
+            entries.TryRemove(id, out _);
+            return null;
+        }
+        return entry.Value as T;
+    }
+
+    /// <summary>Deja sitio tirando las entradas más viejas, que son las que menos van a servir.</summary>
+    private void EvictOldest()
+    {
+        var excess = Math.Max(1, entries.Count - (MaxEntries * 3 / 4));
+        foreach (var old in entries.OrderBy(pair => pair.Value.StoredAt).Take(excess).ToList())
+        {
+            entries.TryRemove(old.Key, out _);
+        }
+    }
+}`;
+  return { path, content: csFile({ namespace, usings: ['System.Collections.Concurrent', 'System.Globalization'], body }) };
 }
 
 /** Las dependencias de un adaptador ya renderizado (las lee la prueba emitida para construirlo). */
@@ -468,6 +580,14 @@ ${prelude}        await http.Send(client, ${outbound}, cancellationToken);
   }
   // Cuerpo ausente (un 204): el mismo criterio que keel-spring y keel-nest — valores AUSENTES, no un fallo. Con
   // `awaits: outcome` quien decide qué hacer sin desenlace es el handler; lanzar se lo robaría.
+  // Con `onUnavailable: lastKnown`, el resultado se recuerda ANTES de devolverlo: lo que se sirve cuando el proveedor cae es
+  // lo último que contestó cuando no lo estaba.
+  const read = (source) =>
+    remembersCall(model, client, call)
+      ? `        var result = mapper.To${call.pascal}Result(${call.responseType}.Read(${source}));
+        lastKnown.Remember(${csString(call.name)}, ${lastKnownKey(call)}, result);
+        return result;`
+      : `        return mapper.To${call.pascal}Result(${call.responseType}.Read(${source}));`;
   const empty =
     call.responseFields.length > 0
       ? `        if (response.Body is not { } body)
@@ -475,8 +595,8 @@ ${prelude}        await http.Send(client, ${outbound}, cancellationToken);
             logger.LogWarning("{Call} respondió sin cuerpo; el contrato declara {Fields} campo(s)", ${csString(subject)}, ${call.responseFields.length});
             return ${neutralResult(call)};
         }
-        return mapper.To${call.pascal}Result(${call.responseType}.Read(body));`
-      : `        return mapper.To${call.pascal}Result(${call.responseType}.Read(response.Body ?? default));`;
+${read('body')}`
+      : read('response.Body ?? default');
   return `    private async Task<${call.resultType}> ${method}Once(${params.join(', ')})
     {
 ${prelude}        var response = await http.Send(client, ${outbound}, cancellationToken);
@@ -557,8 +677,25 @@ ${todoThrow}`;
 ${todoThrow}`;
   }
   if (decl?.action === 'lastKnown') {
-    // Rechazado por la frontera de keel-dotnet (supported-features.js): el almacén del último valor llega después.
-    return `${trace}\n${prose}${origin}        // TODO (agente): onUnavailable: lastKnown todavía no lo genera keel-dotnet.
+    // El único con mecanismo propio, y por eso build lo escribe entero (13j, como keel-spring y keel-nest). Las dos mitades
+    // son inseparables —servir el último valor y RENDIRSE cuando ya es demasiado viejo—: sin la segunda, es la caché sin
+    // expiración que el diseño acaba de prohibir.
+    const window = `        // Dentro de la ventana declarada se sirve lo último que se leyó; fuera de ella no hay nada que servir: un valor
+        // más viejo que ${decl.maxAgeSeconds} s ya no es ese dato.
+        if (lastKnown.Recall<${call.resultType}>(${csString(call.name)}, ${lastKnownKey(call)}, ${decl.maxAgeSeconds}) is { } remembered)
+        {
+            return remembered.AsStale();
+        }`;
+    if (decl.exceptionClass) {
+      usings.push(namespaceOf(model, 'errors'));
+      const message = csString(`${dep} no está disponible y el último ${name} conocido supera los ${decl.maxAgeSeconds}s`);
+      const args = decl.dynamicStatus ? `${message}, ${decl.httpStatus}` : message;
+      return `${trace}\n${prose}${origin}${window}
+        throw new ${decl.exceptionClass}(${args});`;
+    }
+    return `${trace}\n${prose}${origin}${window}
+        // TODO (agente): el diseño declara onUnavailable.error = ${decl.error}, pero ninguna operación de use-cases lo
+        // declara todavía, así que su clase no existe: solo falta con qué rendirse.
 ${todoThrow}`;
   }
   return `${trace}\n${prose}${origin}        // TODO (agente): la activación no declara onFailure.
@@ -580,20 +717,33 @@ function authHeaders(client) {
 function settingsCs(model) {
   const entries = model.httpClients.map((client) => {
     const header = authHeaders(client);
+    // OAuth2 client-credentials (13j): la concesión, una instancia por arranque —ningún token sobrevive entre arranques—.
+    const prefix = (leaf) => csString(`${client.auth?.propertyPrefix}.${leaf}`.replaceAll('.', ':'));
     const oauth =
       client.auth?.type === 'oauth2-client-credentials'
-        ? '\n            // TODO: oauth2-client-credentials todavía no lo genera keel-dotnet (la frontera lo rechaza): la concesión del token llega después.'
+        ? `,
+                Authorization: new ClientCredentials(new ClientCredentialsSettings(
+                    ${csString(client.id)},
+                    BaseUrl(get, ${prefix('token-uri')}),
+                    Text(get, ${prefix('client-id')}),
+                    Text(get, ${prefix('client-secret')}),
+                    [${(client.auth.scopes ?? []).map(csString).join(', ')}],
+                    TimeSpan.FromMilliseconds(${client.readTimeoutMs}))).Authorization`
         : '';
     return `            [${csString(client.id)}] = new(
                 ${csString(client.id)},
                 BaseUrl(get, ${csString(client.baseUrlProperty.replaceAll('.', ':'))}),
                 // El timeout de lectura de keel-spring: el MAYOR de las llamadas del cliente, por intento.
                 TimeSpan.FromMilliseconds(${client.readTimeoutMs}),
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)${header ? ` { ${header} }` : ''}),${oauth}`;
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)${header ? ` { ${header} }` : ''}${oauth}),`;
   });
   const basic = model.httpClients.some((client) => client.auth?.type === 'basic');
   return `/// <summary>Lo que un adaptador sabe de su proveedor: la URL, el timeout de cada intento y las cabeceras de su autenticación.</summary>
-public sealed record ClientSettings(string Id, Uri BaseUrl, TimeSpan Timeout, IReadOnlyDictionary<string, string> Headers);
+/// <param name="Authorization">
+/// La credencial que hay que ir a buscar antes de cada intento (oauth2-client-credentials): la cabecera Authorization ya
+/// armada. Si no se puede obtener, lanza un fallo AuthGrant y la petición no sale.
+/// </param>
+public sealed record ClientSettings(string Id, Uri BaseUrl, TimeSpan Timeout, IReadOnlyDictionary<string, string> Headers, Func<CancellationToken, Task<string>>? Authorization = null);
 
 /// <summary>
 /// Lo que cada cliente lee de config/parameters/&lt;perfil&gt;/http-clients.yaml (las MISMAS claves y variables que los
@@ -621,7 +771,7 @@ public sealed class HttpClientsSettings
     /// Las del perfil test sin configuración (las pruebas de build): un proveedor que no responde y credenciales de prueba.
     /// Ninguna prueba del perfil sale a la red.
     /// </summary>
-    public static HttpClientsSettings Unreachable { get; } = Read(key => key.EndsWith(":base-url", StringComparison.Ordinal) ? ${csString(UNREACHABLE_BASE_URL)} : "test");
+    public static HttpClientsSettings Unreachable { get; } = Read(key => key.EndsWith(":base-url", StringComparison.Ordinal) || key.EndsWith(":token-uri", StringComparison.Ordinal) ? ${csString(UNREACHABLE_BASE_URL)} : "test");
 
     private static HttpClientsSettings Read(Func<string, string?> get) =>
         new(new Dictionary<string, ClientSettings>(StringComparer.Ordinal)
@@ -645,10 +795,14 @@ ${entries.join('\n')}
 
 function registration(model) {
   const { namespace, path } = located(model, 'clientAdapters', 'HttpClientsRegistration');
-  const lines = model.httpClients.flatMap((client) => [
+  const lines = [
+    // El último valor conocido (onUnavailable: lastKnown): uno por proceso, lo comparten los adaptadores que lo sirven.
+    ...(usesLastKnown(model) ? ['        services.AddSingleton(_ => new LastKnownValues());'] : []),
+    ...model.httpClients.flatMap((client) => [
     `        services.AddSingleton<${client.mapperClass}>();`,
     `        services.AddSingleton<${clientPort(client)}, ${client.adapterClass}>();`
-  ]);
+    ])
+  ];
   const body = `/// <summary>
 /// Los clientes HTTP salientes: un adaptador por puerto de Domain/Clients, con su mapper y la configuración del perfil.
 /// Singletons: el circuito de cada llamada vive lo que su adaptador, y su ventana es la de este proceso.
@@ -1062,6 +1216,12 @@ public sealed partial class HttpExchange(HttpMessageHandler handler) : IDisposab
         {
             message.Headers.TryAddWithoutValidation(name, value);
         }
+        if (client.Authorization is { } authorize)
+        {
+            // Sin token no se sale: una llamada sin Authorization sería peor que ninguna (el socio la rechazaría y el
+            // diagnóstico apuntaría a él). El fallo de la concesión ya es un AuthGrant y lo atiende el fallback.
+            message.Headers.TryAddWithoutValidation("Authorization", await authorize(cancellationToken));
+        }
         foreach (var (name, value) in request.Headers)
         {
             if (value is not null)
@@ -1347,7 +1507,7 @@ function emittedTests(model) {
   const probed = probedCalls(model);
   const probes = probed.map(({ client, call, args }) => adapterProbe(model, client, call, args));
   if (probed.length > 0) probes.unshift(probeHelpers(model, [...new Set(probed.map(({ client }) => client))]));
-  const usings = ['System.Net', 'System.Text', 'System.Text.Json', 'Microsoft.Extensions.Logging.Abstractions', 'Xunit', clientAdaptersNamespace(model), clientsNamespace(model)];
+  const usings = ['System.Net', 'System.Net.Http.Headers', 'System.Text', 'System.Text.Json', 'Microsoft.Extensions.Logging.Abstractions', 'Xunit', clientAdaptersNamespace(model), clientsNamespace(model)];
   const circuitTheory = circuits.length > 0
     ? `
     /// <summary>
@@ -1586,16 +1746,19 @@ public sealed class OutboundClientsTests
         }
         Assert.Equal(CircuitState.Open, circuit.State);
     }
-${circuitTheory}${retryTheory}${probes.join('')}}`;
+${circuitTheory}${retryTheory}${probes.join('')}${manualClock(model)}${lastKnownStoreTests(model)}${clientCredentialsTests(model)}}`;
   return { path: `${sln.unitTests.dir}/OutboundClientsTests.cs`, content: csFile({ namespace: sln.unitTests.name, usings, body }) };
 }
 
 /** Los ayudantes de las sondas de adaptador: uno para construir cada adaptador sobre el proveedor falso, y el que traga el desenlace. */
 function probeHelpers(model, clients) {
   const builders = clients.map((client) => {
-    const deps = renderedAdapterDependencies(model, client).map((dependency) => dependency.sample);
+    const dependencies = renderedAdapterDependencies(model, client);
+    const deps = dependencies.map((dependency) => dependency.sample);
+    // Con lastKnown, el almacén se puede pasar: dos adaptadores (proveedor vivo y caído) que comparten lo recordado.
+    const store = dependencies.some((dependency) => dependency.name === 'lastKnown') ? ', LastKnownValues? lastKnown = null' : '';
     return `
-    private static ${client.adapterClass} ${client.adapterClass}Over(FakeProvider provider) =>
+    private static ${client.adapterClass} ${client.adapterClass}Over(FakeProvider provider${store}) =>
         new(${deps.join(', ')});`;
   });
   return `${builders.join('\n')}
@@ -1667,8 +1830,389 @@ function adapterProbe(model, client, call, args) {
         var adapter = ${client.adapterClass}Over(provider);
         await Assert.ThrowsAsync<OutboundContractException>(() => ${invoke});
         Assert.Single(provider.Requests);
-    }${circuit}${declaredFailureProbe(model, call, name, client, invoke)}
+    }${circuit}${declaredFailureProbe(model, call, name, client, invoke)}${lastKnownProbe(model, client, call, name, args)}
 `;
+}
+
+/** Un valor JSON de muestra para un campo de la respuesta, o null si no tiene uno sencillo. */
+function sampleJson(model, field) {
+  if (field.list) return [];
+  if (field.kind === 'enum') return model.enums?.find((e) => e.name === field.csType)?.values?.[0] ?? null;
+  if (field.kind === 'composite') return null;
+  return (
+    {
+      string: 'x',
+      text: 'x',
+      file: 'x',
+      int: 7,
+      long: 7,
+      decimal: 12.5,
+      boolean: true,
+      uuid: '0192f1d2-0000-7000-8000-000000000001',
+      date: '2026-01-01',
+      timestamp: '2026-01-01T00:00:00.000Z'
+    }[field.base] ?? null
+  );
+}
+
+/**
+ * Con `onUnavailable: lastKnown` y su error: el proveedor contesta y el adaptador lo recuerda; el proveedor cae y, dentro de
+ * la ventana del diseño, sirve ESE valor marcado como último conocido; pasada la ventana, se rinde con el error declarado.
+ */
+function lastKnownProbe(model, client, call, name, args) {
+  const need = (call.needs ?? []).find(({ need: candidate }) => candidate.onUnavailable?.action === 'lastKnown')?.need;
+  if (!need || !remembersCall(model, client, call) || !need.onUnavailable.exceptionClass) return '';
+  const body = {};
+  for (const field of call.responseFields) {
+    const value = sampleJson(model, field);
+    if (value == null) return '';
+    body[field.wireName ?? field.name] = value;
+  }
+  const locals = args.map((arg, index) => `        var arg${index} = ${arg};`).join('\n');
+  const invoke = (adapter) => `${adapter}.${callMethod(call)}(${[...args.map((_, index) => `arg${index}`), 'TestContext.Current.CancellationToken'].join(', ')})`;
+  return `
+
+    /// <summary>${client.id}.${call.name} (need ${need.name}, onUnavailable: lastKnown): el último valor, dentro de su ventana; después, el error del diseño.</summary>
+    [Fact]
+    public async Task ${name}SirveElUltimoValorConocidoDentroDeSuVentanaYDespuesSeRinde()
+    {
+        var clock = new ManualClock();
+        var store = new LastKnownValues(clock);
+${locals}
+        var fresh = await ${invoke(`${client.adapterClass}Over(FakeProvider.Status(HttpStatusCode.OK, ${csString(JSON.stringify(body))}), store)`)};
+        Assert.False(fresh.Stale);
+        var down = ${client.adapterClass}Over(FakeProvider.Unreachable(), store);
+        clock.Advance(TimeSpan.FromSeconds(${need.onUnavailable.maxAgeSeconds}));
+        var served = await ${invoke('down')};
+        Assert.Equal(fresh with { Stale = true }, served);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await Assert.ThrowsAsync<${namespaceOf(model, 'errors')}.${need.onUnavailable.exceptionClass}>(() => ${invoke('down')});
+    }`;
+}
+
+/** ¿Algún cliente se autentica con `oauth2-client-credentials`? */
+export function usesOAuth2(model) {
+  return (model.httpClients ?? []).some((client) => client.auth?.type === 'oauth2-client-credentials');
+}
+
+/**
+ * La concesión `client_credentials` (13j), con la semántica del OAuth2AuthorizedClientManager de keel-spring y la de
+ * keel-nest: el secreto por `client_secret_basic` con la codificación de formulario de URLEncoder, los `scope` en el cuerpo,
+ * el token REUTILIZADO hasta `expires_in` menos 60 s, una sola petición en vuelo, `token_type` Bearer obligatorio y, sin
+ * `expires_in`, caducado en 1 s.
+ */
+function clientCredentials(model) {
+  const { namespace, path } = located(model, 'clientAdapters', 'ClientCredentials');
+  const body = `/// <summary>Lo que la concesión lee de http-clients.yaml (las variables de keel-spring: &lt;CLIENTE&gt;_CLIENT_ID, …).</summary>
+public sealed record ClientCredentialsSettings(string Id, Uri TokenUri, string ClientId, string ClientSecret, IReadOnlyList<string> Scopes, TimeSpan Timeout);
+
+/// <summary>La concesión del token no se pudo obtener: el emisor no responde o nos rechaza. No cuenta para el circuito.</summary>
+public sealed class AuthGrantException(string message, Exception? cause = null)
+    : ProviderFailureException(ProviderFailureKind.AuthGrant, message, null, cause);
+
+/// <summary>
+/// La concesión <c>client_credentials</c> de un cliente, con la semántica del OAuth2AuthorizedClientManager de keel-spring:
+/// el secreto por <c>client_secret_basic</c> (cabecera Basic con los dos valores codificados como formulario), los
+/// <c>scope</c> en el cuerpo, el token REUTILIZADO hasta <c>expires_in</c> menos el margen —una petición al emisor por
+/// concesión, no por llamada— y una sola petición en vuelo aunque lleguen varias llamadas a la vez.
+/// </summary>
+public sealed class ClientCredentials(ClientCredentialsSettings settings, HttpMessageHandler? handler = null, TimeProvider? clock = null)
+{
+    /// <summary>El clockSkew de Spring Security: el token se renueva antes de caducar, para que no caduque en vuelo.</summary>
+    public static readonly TimeSpan ClockSkew = TimeSpan.FromSeconds(60);
+
+    private readonly ClientCredentialsSettings settings = settings;
+    private readonly TimeProvider clock = clock ?? TimeProvider.System;
+    // Sin redirecciones, como el cliente del JDK por defecto; el timeout lo pone cada petición.
+    private readonly HttpClient http = new(handler ?? new SocketsHttpHandler { AllowAutoRedirect = false }) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+    private readonly SemaphoreSlim gate = new(1, 1);
+    private Token? current;
+
+    private sealed record Token(string Header, DateTimeOffset RenewAt);
+
+    /// <summary>La cabecera Authorization (<c>Bearer …</c>): la vigente, o una nueva si ya toca renovarla.</summary>
+    /// <exception cref="AuthGrantException">Si el emisor no responde, nos rechaza o no devuelve un token Bearer.</exception>
+    public async Task<string> Authorization(CancellationToken cancellationToken)
+    {
+        if (current is { } token && clock.GetUtcNow() < token.RenewAt)
+        {
+            return token.Header;
+        }
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            // Quien esperaba en la puerta usa el que acaba de pedir otro.
+            if (current is { } renewed && clock.GetUtcNow() < renewed.RenewAt)
+            {
+                return renewed.Header;
+            }
+            current = await Request(cancellationToken);
+            return current.Header;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<Token> Request(CancellationToken cancellationToken)
+    {
+        var form = new List<KeyValuePair<string, string>> { new("grant_type", "client_credentials") };
+        if (settings.Scopes.Count > 0)
+        {
+            form.Add(new("scope", string.Join(' ', settings.Scopes)));
+        }
+        using var message = new HttpRequestMessage(HttpMethod.Post, settings.TokenUri) { Content = new FormUrlEncodedContent(form) };
+        message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes(FormEncode(settings.ClientId) + ":" + FormEncode(settings.ClientSecret)));
+        message.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(settings.Timeout);
+        int status;
+        string text;
+        try
+        {
+            using var response = await http.SendAsync(message, timeout.Token);
+            status = (int)response.StatusCode;
+            text = await response.Content.ReadAsStringAsync(timeout.Token);
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException || (error is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+        {
+            throw new AuthGrantException($"{settings.Id}: el emisor del token no responde", error);
+        }
+        if (status is < 200 or > 299)
+        {
+            throw new AuthGrantException(string.Create(CultureInfo.InvariantCulture, $"{settings.Id}: el emisor del token contestó {status}"));
+        }
+        JsonElement body;
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            body = document.RootElement.Clone();
+        }
+        catch (JsonException error)
+        {
+            throw new AuthGrantException($"{settings.Id}: la respuesta del emisor del token no es JSON", error);
+        }
+        if (body.ValueKind != JsonValueKind.Object || !body.TryGetProperty("access_token", out var accessToken) || accessToken.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(accessToken.GetString()))
+        {
+            throw new AuthGrantException($"{settings.Id}: la respuesta del emisor no trae access_token");
+        }
+        // Spring Security exige token_type Bearer: sin él no hay concesión.
+        if (!body.TryGetProperty("token_type", out var tokenType) || tokenType.ValueKind != JsonValueKind.String || !string.Equals(tokenType.GetString(), "bearer", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AuthGrantException($"{settings.Id}: el emisor no devolvió un token Bearer");
+        }
+        // Sin expires_in (o no positivo), Spring lo da por caducado en un segundo: se pide de nuevo en la siguiente llamada.
+        var lifetime = body.TryGetProperty("expires_in", out var expiresIn) && expiresIn.ValueKind == JsonValueKind.Number && expiresIn.TryGetDouble(out var seconds) && seconds > 0
+            ? TimeSpan.FromSeconds(seconds)
+            : TimeSpan.FromSeconds(1);
+        return new Token("Bearer " + accessToken.GetString(), clock.GetUtcNow() + lifetime - ClockSkew);
+    }
+
+    /// <summary>La codificación de formulario de URLEncoder de Java (RFC 6749 § 2.3.1): se queda lo alfanumérico y <c>.-*_</c>; el espacio, «+».</summary>
+    public static string FormEncode(string value)
+    {
+        var encoded = new StringBuilder();
+        foreach (var b in Encoding.UTF8.GetBytes(value))
+        {
+            var c = (char)b;
+            if (char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '*' or '_')
+            {
+                encoded.Append(c);
+            }
+            else if (c == ' ')
+            {
+                encoded.Append('+');
+            }
+            else
+            {
+                encoded.Append('%').Append(b.ToString("X2", CultureInfo.InvariantCulture));
+            }
+        }
+        return encoded.ToString();
+    }
+}`;
+  return { path, content: csFile({ namespace, usings: ['System.Globalization', 'System.Net.Http.Headers', 'System.Text', 'System.Text.Json'], body }) };
+}
+
+/**
+ * Las pruebas de la concesión (con OAuth2 en el diseño), contra un emisor falso: una petición por token aunque se pida tres
+ * veces y dos a la vez; la cabecera Basic y el formulario exactos; la renovación; el emisor caído y el token sin token_type,
+ * los dos como AuthGrant; y la llamada de negocio que no sale sin token.
+ */
+function manualClock(model) {
+  if (!usesLastKnown(model) && !usesOAuth2(model)) return '';
+  return `
+
+    /// <summary>Un reloj que solo avanza cuando la prueba lo dice.</summary>
+    private sealed class ManualClock : TimeProvider
+    {
+        private DateTimeOffset now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow() => now;
+
+        public void Advance(TimeSpan by) => now += by;
+    }`;
+}
+
+function clientCredentialsTests(model) {
+  if (!usesOAuth2(model)) return '';
+  return `
+
+    /// <summary>Un emisor de tokens falso: contesta lo que diga <c>answer</c>, guarda cada petición con su cuerpo y puede hacerse esperar.</summary>
+    private sealed class FakeIssuer(Func<int, (HttpStatusCode Status, string Body)> answer, TimeSpan? delay = null) : HttpMessageHandler
+    {
+        public List<(HttpRequestMessage Request, string Body)> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
+            int index;
+            lock (Requests)
+            {
+                Requests.Add((request, body));
+                index = Requests.Count;
+            }
+            if (delay is { } wait)
+            {
+                await Task.Delay(wait, cancellationToken);
+            }
+            var (status, text) = answer(index);
+            return new HttpResponseMessage(status) { Content = new StringContent(text) };
+        }
+
+        public static FakeIssuer Bearer(int expiresIn = 300, TimeSpan? delay = null) =>
+            new(index => (HttpStatusCode.OK, $$"""{"access_token":"token-{{index}}","token_type":"Bearer","expires_in":{{expiresIn}}}"""), delay);
+    }
+
+    private static readonly ClientCredentialsSettings Grant = new("socio", new Uri("http://emisor.test/token"), "cliente id", "secreto+&", ["catalog.read", "catalog.write"], TimeSpan.FromSeconds(2));
+
+    [Fact]
+    public async Task LaConcesionPideUnTokenYLoReutilizaConLaCabeceraBasicYElFormularioDeSpring()
+    {
+        var issuer = FakeIssuer.Bearer();
+        var grant = new ClientCredentials(Grant, issuer);
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.Equal("Bearer token-1", await grant.Authorization(TestContext.Current.CancellationToken));
+        }
+        var (request, body) = Assert.Single(issuer.Requests);
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Equal("Basic", request.Headers.Authorization!.Scheme);
+        Assert.Equal("cliente+id:secreto%2B%26", Encoding.UTF8.GetString(Convert.FromBase64String(request.Headers.Authorization.Parameter!)));
+        Assert.Equal("grant_type=client_credentials&scope=catalog.read+catalog.write", body);
+    }
+
+    [Fact]
+    public async Task DosLlamadasALaVezSonUnaSolaPeticionAlEmisor()
+    {
+        var issuer = FakeIssuer.Bearer(delay: TimeSpan.FromMilliseconds(100));
+        var grant = new ClientCredentials(Grant, issuer);
+        var headers = await Task.WhenAll(grant.Authorization(TestContext.Current.CancellationToken), grant.Authorization(TestContext.Current.CancellationToken));
+        Assert.Equal(new[] { "Bearer token-1", "Bearer token-1" }, headers);
+        Assert.Single(issuer.Requests);
+    }
+
+    [Fact]
+    public async Task ElTokenSeRenuevaSesentaSegundosAntesDeCaducarYSinExpiresInDuraUnSegundo()
+    {
+        var clock = new ManualClock();
+        var issuer = FakeIssuer.Bearer(expiresIn: 300);
+        var grant = new ClientCredentials(Grant, issuer, clock);
+        Assert.Equal("Bearer token-1", await grant.Authorization(TestContext.Current.CancellationToken));
+        clock.Advance(TimeSpan.FromSeconds(239));
+        Assert.Equal("Bearer token-1", await grant.Authorization(TestContext.Current.CancellationToken));
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal("Bearer token-2", await grant.Authorization(TestContext.Current.CancellationToken));
+        var brief = new FakeIssuer(index => (HttpStatusCode.OK, $$"""{"access_token":"t{{index}}","token_type":"bearer"}"""));
+        var once = new ClientCredentials(Grant, brief, clock);
+        await once.Authorization(TestContext.Current.CancellationToken);
+        await once.Authorization(TestContext.Current.CancellationToken);
+        Assert.Equal(2, brief.Requests.Count);
+    }
+
+    [Fact]
+    public async Task UnEmisorCaidoORechazandoOSinTokenBearerEsUnAuthGrant()
+    {
+        foreach (var issuer in new[]
+        {
+            new FakeIssuer(_ => throw new HttpRequestException("conexión rechazada")),
+            new FakeIssuer(_ => (HttpStatusCode.Unauthorized, "{}")),
+            new FakeIssuer(_ => (HttpStatusCode.OK, """{"access_token":"t","expires_in":300}""")),
+            new FakeIssuer(_ => (HttpStatusCode.OK, """{"access_token":"t","token_type":"mac","expires_in":300}""")),
+            new FakeIssuer(_ => (HttpStatusCode.OK, "<html>"))
+        })
+        {
+            var failure = await Assert.ThrowsAsync<AuthGrantException>(() => new ClientCredentials(Grant, issuer).Authorization(TestContext.Current.CancellationToken));
+            Assert.Equal(ProviderFailureKind.AuthGrant, failure.Kind);
+        }
+    }
+
+    [Fact]
+    public async Task ConTokenLaPeticionLlevaElBearerYSinElNoSale()
+    {
+        var provider = FakeProvider.Status(HttpStatusCode.OK, """{"ok":true}""");
+        var granted = Provider with { Authorization = new ClientCredentials(Grant, FakeIssuer.Bearer()).Authorization };
+        using (var exchange = new HttpExchange(provider))
+        {
+            await exchange.Send(granted, new OutboundRequest("GET", "/stock/{sku}") { PathParams = new Dictionary<string, object?> { ["sku"] = "a" } }, TestContext.Current.CancellationToken);
+        }
+        Assert.Equal("Bearer token-1", Assert.Single(provider.Requests).Headers.Authorization!.ToString());
+        var denied = Provider with { Authorization = new ClientCredentials(Grant, new FakeIssuer(_ => (HttpStatusCode.Unauthorized, "{}"))).Authorization };
+        var blocked = FakeProvider.Status(HttpStatusCode.OK, "{}");
+        using (var exchange = new HttpExchange(blocked))
+        {
+            var failure = await Assert.ThrowsAsync<AuthGrantException>(() => exchange.Send(denied, new OutboundRequest("GET", "/stock/{sku}") { PathParams = new Dictionary<string, object?> { ["sku"] = "a" } }, TestContext.Current.CancellationToken));
+            Assert.Equal(ProviderFailureKind.AuthGrant, failure.Kind);
+        }
+        Assert.Empty(blocked.Requests);
+    }`;
+}
+
+/** Las pruebas del almacén del último valor conocido (con lastKnown en el diseño): ventana, clave, nulos y tope. */
+function lastKnownStoreTests(model) {
+  if (!usesLastKnown(model)) return '';
+  return `
+
+    private sealed record Remembered(string Value);
+
+    [Fact]
+    public void ElUltimoValorConocidoValeSuVentanaYNiUnSegundoMas()
+    {
+        var clock = new ManualClock();
+        var store = new LastKnownValues(clock);
+        store.Remember("llamada", LastKnownValues.Key("sku-1"), new Remembered("a"));
+        clock.Advance(TimeSpan.FromSeconds(60));
+        Assert.Equal(new Remembered("a"), store.Recall<Remembered>("llamada", LastKnownValues.Key("sku-1"), 60));
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.Null(store.Recall<Remembered>("llamada", LastKnownValues.Key("sku-1"), 60));
+    }
+
+    [Fact]
+    public void ElUltimoValorEsDeEsaClaveYDeEsaLlamadaYUnNuloNoSeRecuerda()
+    {
+        var store = new LastKnownValues();
+        store.Remember("llamada", LastKnownValues.Key("sku-1"), new Remembered("a"));
+        store.Remember("llamada", LastKnownValues.Key("sku-2"), null);
+        Assert.Null(store.Recall<Remembered>("llamada", LastKnownValues.Key("sku-2"), 60));
+        Assert.Null(store.Recall<Remembered>("otra", LastKnownValues.Key("sku-1"), 60));
+        Assert.NotEqual(LastKnownValues.Key("a", "b"), LastKnownValues.Key("a,b"));
+    }
+
+    [Fact]
+    public void ElTopeExpulsaLoMasViejoYConservaLoUltimo()
+    {
+        var clock = new ManualClock();
+        var store = new LastKnownValues(clock);
+        for (var i = 0; i <= LastKnownValues.MaxEntries; i++)
+        {
+            store.Remember("llamada", LastKnownValues.Key(i), new Remembered(i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            clock.Advance(TimeSpan.FromMilliseconds(1));
+        }
+        Assert.Null(store.Recall<Remembered>("llamada", LastKnownValues.Key(0), 3600));
+        Assert.NotNull(store.Recall<Remembered>("llamada", LastKnownValues.Key(LastKnownValues.MaxEntries), 3600));
+    }`;
 }
 
 /**

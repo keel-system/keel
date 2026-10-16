@@ -24,7 +24,7 @@ test('capa mail: se genera (adelantada al incremento 12e, como en keel-nest)', (
   assert.deepEqual(errors, []);
 });
 
-test('los clientes salientes, las activaciones y el need bajo demanda se generan (11 y 13i); la réplica, lastKnown, oauth2 y el compuesto en una llamada se rechazan con su incremento', () => {
+test('los clientes salientes, las activaciones y el need bajo demanda con lastKnown y OAuth2 se generan (11, 13i y 13j); la réplica y el compuesto en una llamada se rechazan con su incremento', () => {
   const layers = ['domain', 'use-cases', 'http-clients', 'dependencies'];
   const call = { method: 'GET', path: '/p/{sku}', request: { pathParams: { sku: { type: 'string', required: true } } }, response: { fields: { price: { type: 'decimal' } } } };
   const base = {
@@ -47,11 +47,11 @@ test('los clientes salientes, las activaciones y el need bajo demanda se generan
   assert.match(checkSupportedFeatures(manifestWith(...layers), replicated).errors.join('\n'), /dependencies\.pricing\.needs\.price: strategy replicated .*incremento 13j/);
   const lastKnown = structuredClone(base);
   lastKnown.dependencies.dependencies.pricing.needs = { price: { strategy: 'on-demand', onUnavailable: { action: 'lastKnown', maxAgeSeconds: 60 } } };
-  assert.match(checkSupportedFeatures(manifestWith(...layers), lastKnown).errors.join('\n'), /dependencies\.pricing\.needs\.price: onUnavailable lastKnown .*incremento 13j/);
+  assert.deepEqual(checkSupportedFeatures(manifestWith(...layers), lastKnown).errors, []);
 
   const oauth = structuredClone(base);
   oauth['http-clients'].clients.pricing.auth = { type: 'oauth2-client-credentials', tokenUrl: 'https://auth/token' };
-  assert.match(checkSupportedFeatures(manifestWith(...layers), oauth).errors.join('\n'), /pricing\.auth: oauth2-client-credentials .*incremento 13/);
+  assert.deepEqual(checkSupportedFeatures(manifestWith(...layers), oauth).errors, []);
 
   const inBody = structuredClone(base);
   inBody['http-clients'].clients.pricing.calls.getPrice.response.fields.price = { type: 'Money' };

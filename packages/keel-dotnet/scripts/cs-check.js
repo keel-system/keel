@@ -87,15 +87,24 @@ const SABOTAGES = {
 //   payment-notice-open un aviso que no verifica se responde 200
 //   payment-mp-manifest el manifiesto de MercadoPago firma el data.id tal como llega, sin pasarlo a minúsculas
 //   need-fail           con el proveedor caído, el need con onUnavailable: fail no lanza el error del diseño
+//   lastknown-window    el último valor conocido se da por caducado justo en su edad máxima (y no después)
+//   lastknown-key       el adaptador recuerda el último valor sin la clave de sus parámetros
+//   oauth-reuse         la concesión no reutiliza el token: una petición al emisor por llamada
+//   oauth-bearer        la concesión acepta un token que no es Bearer
 //   actor-name          con un token, el autor es el nombre del principal y no su sujeto
 //   multipart-limit     la entrada de una subida no corta por la longitud declarada (el 413 no llega)
 //   multipart-empty     una parte obligatoria vacía pasa al handler como si nada (sin FILE_UNREADABLE)
 const CLIENTS_DIR = 'stock-reservation/src/StockReservation.Infrastructure/Clients';
 const PAYMENT_DIR = 'payment-checkout/src/PaymentCheckout.Infrastructure/Payment';
 const FIXTURE_SABOTAGES = {
-  // La autoría (13h): con un token, el nombre del principal en vez de su sujeto.
   // El need bajo demanda con fail (13i): el fallback deja de lanzar el error del diseño.
   'need-fail': ['asset-vault-need-fail/src/AssetVaultNeedFail.Infrastructure/Clients/RenderingHttpAdapter.cs', 'throw new RenderingUnavailableError(', 'throw new InvalidOperationException('],
+  // El último valor conocido y la concesión OAuth2 (13j).
+  'lastknown-window': ['catalog-extended/src/Catalog.Infrastructure/Clients/LastKnownValues.cs', '> TimeSpan.FromSeconds(maxAgeSeconds)', '>= TimeSpan.FromSeconds(maxAgeSeconds)'],
+  'lastknown-key': ['catalog-extended/src/Catalog.Infrastructure/Clients/PricingHttpAdapter.cs', 'lastKnown.Remember("getPrice", LastKnownValues.Key(sku), result);', 'lastKnown.Remember("getPrice", LastKnownValues.Key(), result);'],
+  'oauth-reuse': ['catalog-extended/src/Catalog.Infrastructure/Clients/ClientCredentials.cs', 'clock.GetUtcNow() + lifetime - ClockSkew', 'clock.GetUtcNow() - lifetime - ClockSkew'],
+  'oauth-bearer': ['catalog-extended/src/Catalog.Infrastructure/Clients/ClientCredentials.cs', 'string.Equals(tokenType.GetString(), "bearer", StringComparison.OrdinalIgnoreCase)', 'string.Equals(tokenType.GetString(), tokenType.GetString(), StringComparison.OrdinalIgnoreCase)'],
+  // La autoría (13h): con un token, el nombre del principal en vez de su sujeto.
   'actor-name': ['asset-vault/src/AssetVault.Infrastructure/Persistence/AuditActor.cs', 'is { Length: > 0 } subject ? subject : principal.Name', 'is { Length: > 0 } subject ? principal.Name : principal.Name'],
   'multipart-limit': ['catalog-extended/src/Catalog.Api/Rest/MultipartReading.cs', 'if (request.ContentLength > LimitBytes)', 'if (request.ContentLength > LimitBytes * 1000)'],
   'multipart-empty': ['catalog-extended/src/Catalog.Api/Rest/MultipartReading.cs', 'return file ?? throw new BadRequestException(', 'if (file is null) return new FileUpload(ReadOnlyMemory<byte>.Empty, "vacio", "", 1); return file ?? throw new BadRequestException('],

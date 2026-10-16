@@ -161,16 +161,15 @@ function isComposite(layers, field) {
 /**
  * Lo que keel-dotnet todavía no sabe hacer con los clientes salientes y las dependencias (incremento 11 de
  * PLAN-KEEL-DOTNET.md): los clientes y las activaciones se generan; esto, no.
- *   · `needs` (el dato que se PIDE a otro servidor, bajo demanda o replicado, con su onUnavailable y su réplica): llega en
- *     el incremento 13, como en keel-nest (13i y 13j);
- *   · `auth: oauth2-client-credentials`: la concesión del token, también en el 13 (13j de keel-nest);
+ *   · la réplica de un `need` (`strategy: replicated`): llega en el 13j, como en keel-nest;
  *   · un value object compuesto en una llamada: en la URL no tiene forma (el rechazo neutral, el mismo que en keel-spring y
  *     keel-nest); en el cuerpo o en la respuesta sí, pero ninguna red de keel-dotnet lo ha medido todavía.
  */
 function outboundErrors(layers) {
   const errors = [...compositeUrlParamErrors(layers, 'keel-dotnet')];
   // El dato bajo demanda se genera desde el 13i (el cliente inyectado en el handler del usedBy, con su nota, y
-  // onUnavailable fail/degrade en el fallback del adaptador). La réplica y el último valor conocido llegan en el 13j.
+  // onUnavailable fail/degrade en el fallback del adaptador) y el último valor conocido desde el 13j (LastKnownValues). La
+  // réplica, después.
   for (const [dependency, definition] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
     for (const [name, need] of Object.entries(definition?.needs ?? {})) {
       if (need?.strategy === 'replicated') {
@@ -178,21 +177,11 @@ function outboundErrors(layers) {
           `dependencies.${dependency}.needs.${name}: strategy replicated — keel-dotnet todavía no genera la réplica (el proyector y el lector; ` +
             'llega en el incremento 13j de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
         );
-      } else if (need?.onUnavailable?.action === 'lastKnown') {
-        errors.push(
-          `dependencies.${dependency}.needs.${name}: onUnavailable lastKnown — keel-dotnet todavía no genera el almacén del último valor conocido ` +
-            '(llega en el incremento 13j de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
-        );
       }
     }
   }
   for (const [client, definition] of Object.entries(layers?.['http-clients']?.clients ?? {})) {
-    if (definition?.auth?.type === 'oauth2-client-credentials') {
-      errors.push(
-        `http-clients.${client}.auth: oauth2-client-credentials — keel-dotnet todavía no genera la concesión del token ` +
-          '(llega en el incremento 13 de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
-      );
-    }
+    // `auth: oauth2-client-credentials` se genera desde el 13j (ClientCredentials, con la semántica de Spring Security).
     for (const [call, spec] of Object.entries(definition?.calls ?? {})) {
       const fields = [...Object.entries(spec?.request?.body ?? {}), ...Object.entries(spec?.response?.fields ?? {})]
         .filter(([, field]) => isComposite(layers, field))
