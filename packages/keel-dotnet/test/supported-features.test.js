@@ -24,7 +24,7 @@ test('capa mail: se genera (adelantada al incremento 12e, como en keel-nest)', (
   assert.deepEqual(errors, []);
 });
 
-test('los clientes salientes, las activaciones y el need bajo demanda con lastKnown y OAuth2 se generan (11, 13i y 13j); la réplica y el compuesto en una llamada se rechazan con su incremento', () => {
+test('los clientes salientes, las activaciones y los needs (bajo demanda, lastKnown y la réplica) y OAuth2 se generan (11, 13i y 13j); el compuesto en una llamada se rechaza', () => {
   const layers = ['domain', 'use-cases', 'http-clients', 'dependencies'];
   const call = { method: 'GET', path: '/p/{sku}', request: { pathParams: { sku: { type: 'string', required: true } } }, response: { fields: { price: { type: 'decimal' } } } };
   const base = {
@@ -44,7 +44,7 @@ test('los clientes salientes, las activaciones y el need bajo demanda con lastKn
 
   const replicated = structuredClone(base);
   replicated.dependencies.dependencies.pricing.needs = { price: { strategy: 'replicated' } };
-  assert.match(checkSupportedFeatures(manifestWith(...layers), replicated).errors.join('\n'), /dependencies\.pricing\.needs\.price: strategy replicated .*incremento 13j/);
+  assert.deepEqual(checkSupportedFeatures(manifestWith(...layers), replicated).errors, []);
   const lastKnown = structuredClone(base);
   lastKnown.dependencies.dependencies.pricing.needs = { price: { strategy: 'on-demand', onUnavailable: { action: 'lastKnown', maxAgeSeconds: 60 } } };
   assert.deepEqual(checkSupportedFeatures(manifestWith(...layers), lastKnown).errors, []);

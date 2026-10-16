@@ -38,6 +38,9 @@
 //   credential  el finder de resolvedBy busca solo en la primera credencial de la lista
 //   send-guard  la guarda del envío (mail.sentBy) escribe dentro de la transacción del caso de uso, no en la suya
 //   created-by  el created_by de la autoría de política se reescribe en cada guardado (sujeto product-catalog-authorship)
+//   replica-tx  la copia de una réplica se guarda en la transacción de quien la escribe, no en la suya
+//   replica-order  el proyector aplica un hecho anterior al guardado
+//   replica-batch  la lectura por lote de la réplica no trae nada
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -76,7 +79,12 @@ const SABOTAGES = {
   // La guarda del envío (mail.sentBy, 12e) escribe con el contexto del caso de uso: su marca se deshace con él.
   'send-guard': ['Repositories/', 'var own = scope.ServiceProvider.GetRequiredService<', 'var own = db; _ = scope.ServiceProvider.GetRequiredService<'],
   // La autoría de política (13h): created_by se reescribe en cada guardado.
-  'created-by': ['Repositories/', 'if (string.IsNullOrEmpty(row.CreatedBy)) { row.CreatedBy = actor; }', 'row.CreatedBy = actor;']
+  'created-by': ['Repositories/', 'if (string.IsNullOrEmpty(row.CreatedBy)) { row.CreatedBy = actor; }', 'row.CreatedBy = actor;'],
+  // La réplica (13j): la copia se guarda en la transacción de quien la escribe; el proyector aplica un hecho anterior; el
+  // lote no trae nada.
+  'replica-tx': ['Repositories/', 'return await own.SaveHere(entity, cancellationToken);', 'return await SaveHere(entity, cancellationToken);'],
+  'replica-order': ['Projection/', 'if (snapshot.OccurredAt <= existing.OccurredAt)', 'if (snapshot.OccurredAt == existing.OccurredAt)'],
+  'replica-batch': ['Repositories/', 'Where(r => keys.Contains(r.Sku))', 'Where(r => keys.Skip(1).Contains(r.Sku))']
 };
 
 const results = [];
@@ -106,6 +114,8 @@ const DERIVED = {
   'product-catalog-authorship': {
     from: 'product-catalog',
     mutate: (manifest, layers) => {
+      // Otro nombre de servicio: los sujetos van en UNA solución, y dos proyectos con el mismo nombre no caben.
+      manifest.service.name = 'product-catalog-authorship';
       layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship: 'all' };
     }
   }

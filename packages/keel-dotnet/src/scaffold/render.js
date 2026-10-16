@@ -114,6 +114,8 @@ export const PLACES = {
   // El almacenamiento de binarios (capa storage, incremento 13g): el puerto, la política de cada bucket y lo que el agregado
   // guarda de un binario son dominio; la configuración, las políticas leídas de ella y el adaptador S3, infraestructura.
   storage: ['domain', 'Storage'],
+  // La copia local de un dato de otro servidor (needs replicado, 13j): el proyector y el lector son de la aplicación.
+  projection: ['application', 'Projection'],
   storageInfra: ['infrastructure', 'Storage'],
   payment: ['domain', 'Payment'],
   paymentApp: ['application', 'Payment'],

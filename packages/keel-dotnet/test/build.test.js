@@ -58,14 +58,17 @@ test('un diseño no listo NO se genera sin --accept-unready, y no se escribe nad
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
-test('lo que está fuera de la frontera (la réplica, lastKnown y OAuth2, hasta el 13j) se rechaza nombrando keel-dotnet, antes de escribir nada', async () => {
+test('lo que está fuera de la frontera (aquí, un motor que ninguna red ha medido) se rechaza nombrando keel-dotnet, antes de escribir nada', async () => {
+  // Desde el 13j ninguna fixture queda fuera de la frontera: lo que sigue fuera es del STACK (MySQL, la telemetría).
   const workspace = makeWorkspace();
-  mountDesign(workspace, 'catalog-extended');
-  const { exitCode, output } = await runCommand(workspace, build, 'specs/catalog-extended', { defaults: true, acceptUnready: true });
+  mountDesign(workspace, DOTNET_READY_DESIGN.name, DOTNET_READY_DESIGN);
+  const project = projectOf(workspace);
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(project, 'keel-stack.json'), JSON.stringify({ database: 'mysql', telemetry: 'none' }));
+  const { exitCode, output } = await runCommand(workspace, build, SPEC, { defaults: true, acceptUnready: true });
   assert.equal(exitCode, 1);
-  assert.match(output, /capacidades que keel-dotnet no genera/);
-  assert.match(output, /needs\.supplierPrice: strategy replicated — keel-dotnet todavía no genera la réplica/);
-  assert.ok(!fs.existsSync(path.join(workspace, 'services')));
+  assert.match(output, /database: mysql — keel-dotnet genera la persistencia sobre postgresql, mongodb/);
+  assert.deepEqual(fs.readdirSync(project), ['keel-stack.json']);
 });
 
 test('payments: build genera con la pasarela del stack, avisa de lo que la matriz no ha verificado e instala solo su skill', async () => {

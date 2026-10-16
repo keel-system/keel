@@ -132,7 +132,8 @@ const SKILL_SUBJECTS = {
   'keel-dotnet-kafka': { fixtures: ['stock-reservation-events', 'metering-digest'], stack: { broker: 'kafka', database: 'postgresql' } },
   'keel-dotnet-snssqs': { fixtures: ['stock-reservation-events', 'metering-digest'], stack: { broker: 'snssqs', database: 'postgresql' } },
   // Con barrido de reconciliación y compensación.
-  'keel-dotnet-httpclient': { fixtures: ['stock-reservation'], stack: { broker: 'rabbitmq', database: 'postgresql' } },
+  // Con la réplica, lastKnown y OAuth2 (13j), los de catalog-extended.
+  'keel-dotnet-httpclient': { fixtures: ['stock-reservation', 'catalog-extended'], stack: { broker: 'rabbitmq', database: 'postgresql' } },
   // El correo, sobre las dos persistencias: la guarda vive en un adaptador u otro.
   'keel-dotnet-mail': { fixtures: ['notification-mailer', 'notification-mailer-mongo'], stack: { broker: 'rabbitmq' } },
   // Los cobros: la skill neutra y la de cada pasarela, con la suya.

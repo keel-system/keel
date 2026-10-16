@@ -39,13 +39,18 @@ test('un diseño no listo sale en rojo aunque sea generable, y dice por qué', a
   assert.match(output, /Generable, pero no listo/);
 });
 
-test('lo que está fuera de la frontera (la réplica, lastKnown y OAuth2, hasta el 13j) sale en rojo sin construir nada', async () => {
+test('lo que está fuera de la frontera (un value object compuesto en una llamada saliente) sale en rojo sin construir nada', async () => {
+  // Desde el 13j ninguna fixture queda fuera: se deriva de catalog-extended un precio compuesto en la respuesta de getPrice.
   const workspace = makeWorkspace();
-  mountDesign(workspace, 'catalog-extended');
+  const spec = mountDesign(workspace, 'catalog-extended');
+  const domain = path.join(spec, 'domain.keel.yaml');
+  fs.writeFileSync(domain, fs.readFileSync(domain, 'utf8').replace('types:\n', 'types:\n  Price:\n    description: Importe con su moneda.\n    fields:\n      amount: { type: decimal, required: true }\n      currency: { type: string, required: true }\n\n'));
+  const clients = path.join(spec, 'http-clients.keel.yaml');
+  fs.writeFileSync(clients, fs.readFileSync(clients, 'utf8').replace('        response:\n          fields:\n            amount:\n              type: decimal', '        response:\n          fields:\n            amount:\n              type: Price'));
   const before = treeDigest(workspace);
   const { exitCode, output } = await runCommand(workspace, check, 'specs/catalog-extended', {});
   assert.equal(exitCode, 1);
-  assert.match(output, /dependencies\.\w+\.needs/);
+  assert.match(output, /getPrice: amount es un value object compuesto en el cuerpo o en la respuesta/);
   assert.equal(treeDigest(workspace), before);
 });
 

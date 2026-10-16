@@ -1613,6 +1613,34 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       lleva su Bearer o no sale). `cs-check --fixtures` 138/138, **2 800 pruebas**; falsado con cuatro sabotajes, cada uno
       en sus casos: `lastknown-window`, `lastknown-key`, `oauth-reuse`, `oauth-bearer`. keel-dotnet sin red 528/528.
     - `catalog-extended` queda fuera solo por la réplica (13j-b).
+  - **13j-b, la réplica (hecho, 2026-10-15). `catalog-extended` entra ENTERO y ya no queda ninguna fixture fuera de la
+    frontera de keel-dotnet** (`keel-dotnet build` lo genera con PostgreSQL, Kafka, Redis y MinIO, con sus cinco skills); lo
+    único que rechaza es del stack (MySQL y los demás motores sin medir, la telemetría hasta el 14) y un value object
+    compuesto en el cuerpo o la respuesta de una llamada saliente (ninguna fixture lo declara; los tests de la frontera
+    lo derivan de `catalog-extended`).
+    - **Lo emitido** (`src/scaffold/projections.js`, en `Application/Projection`): `<E>Snapshot`, `<E>Projector` (upsert
+      idempotente que descarta un hecho anterior O IGUAL al guardado por su instante, `occurredAt` de keel-core) y `<E>Reader`
+      (`onMiss`: `fetch` con el `Hydrate` del agente, `fail` con el error del diseño, `degrade` con null; y `ByKeys` cuando la
+      lee un listado). El handler del `usedBy` recibe el lector con su nota, y el de la operación de proyección el proyector;
+      los dos se registran en `UseCaseRegistration`. El adaptador de la réplica guarda en su PROPIA transacción, el
+      REQUIRES_NEW de keel-spring: `Save` abre un ámbito de DI nuevo (otro contexto, otra transacción) y delega en el
+      `SaveHere` del adaptador de ese ámbito, en las dos ramas. Y el finder por lote de la clave natural
+      (`FindAll<Clave>In`, con `naturalKeyBatchReason` de keel-core), que también estrena `asset-vault` por su `scope-claim`.
+    - **Diferencia con keel-nest, a propósito**: allí el proyector llama, por un cast, a dos métodos de dominio que escribe
+      el agente; en C# eso no compila, y una réplica no lleva invariantes propias, así que el proyector construye la copia con
+      el constructor de rehidratación del agregado. La escritura de la copia no deja TODO.
+    - **Medido**: `test/replica.test.js` (sin red) y, contra PostgreSQL, las sondas nuevas de `db-check` sobre
+      `catalog-extended`: el proyector crea, deja sin efecto la reentrega del mismo instante y un hecho anterior, y aplica
+      uno más nuevo conservando el id; la copia sobrevive a la transacción de quien la escribe cuando esta se revierte; y
+      `ByKeys` trae lo replicado y nada más. Falsado con `replica-tx`, `replica-order` y `replica-batch`.
+    - **Lo que destapó, y era nuestro**: `db-check` de `catalog-extended` salía rojo de forma intermitente (un 409 de `sku`
+      en una sonda u otra según el orden). Lo había roto el 13h: subir las muestras comunes de 16 a 17 llevó las de `Product`
+      a 27, y la variante 27 de un texto con patrón repetía la primera (`AAAA`). El alargado que debía evitarlo sumaba al
+      `minLength` declarado y no a la longitud natural de la muestra, así que con `{3,19}` no alargaba nada. Arreglado en
+      `db-probes.js`. **La lección**: el 13h pasó `db-check` solo con el sujeto que había tocado; un cambio en las sondas
+      comunes obliga a pasar TODOS los sujetos. Al pasarlos salió el segundo fallo del 13h: el sujeto derivado `product-catalog-authorship` conservaba el nombre del servicio, y sus proyectos chocaban con los de `product-catalog` en la solución común (con `--only` no se ve); ahora se llama como el sujeto. Con los dos arreglos, `db-check` entero: 12 sujetos, **206 sondas**; `doc-check` entero: 5 sujetos, 131 sondas; `cs-check --fixtures` 138/138, 2 800 pruebas. keel-dotnet sin red 532/532.
+    - **Con esto el incremento 13 queda construido entero.** Lo que sigue son las corridas de `asset-vault` y
+      `catalog-extended` en keel-dotnet, y el incremento 14.
 
 ## 5. Riesgos conocidos
 

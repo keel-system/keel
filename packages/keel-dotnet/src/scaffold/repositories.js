@@ -22,7 +22,8 @@ import {
   uniqueFields,
   keyShadow,
   LOCK_VERSION,
-  claimsForEntity
+  claimsForEntity,
+  naturalKeyBatchReason
 } from 'keel-core/gen';
 import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, typeUsings, xmlDoc, entityPlace } from './render.js';
 import { domainMembers } from './entities.js';
@@ -156,6 +157,27 @@ export function naturalKeyFinder(model, entity) {
   return keyFinder(model, entity, entity.naturalKey ?? []);
 }
 
+// Las bases que se buscan por lote con un IN sobre el valor tal cual: un value object compuesto, un enum o una clave con
+// su sombra plegada necesitarían traducir cada valor, y una consulta que no casara nada sin error sería peor que no tener lote.
+const BATCHABLE_BASES = new Set(['string', 'text', 'int', 'long']);
+
+/**
+ * El finder por LOTE de la clave natural (`FindAllBySkuIn`), cuando keel-core dice que hace falta (`naturalKeyBatchReason`:
+ * la réplica que lee un listado, la clave que es el `over` del alcance, una entrada que lista la clave). El mismo criterio
+ * que keel-spring y keel-nest; sin él, el camino de menor resistencia es una consulta por elemento de la página.
+ */
+export function naturalKeyBatchFinder(model, entity) {
+  const reason = naturalKeyBatchReason(model, entity);
+  if (!reason) return null;
+  const finder = naturalKeyFinder(model, entity);
+  if (!finder || finder.params.length !== 1) return null;
+  const [param] = finder.params;
+  const field = entity.fields.find((candidate) => candidate.name === param.name);
+  if (!field || param.fold || field.kind === 'composite' || field.kind === 'enum' || !BATCHABLE_BASES.has(field.base)) return null;
+  const plural = `${csLocal(param.name).replace(/^@/, '')}${param.name.endsWith('s') ? 'es' : 's'}`;
+  return { reason, name: `FindAllBy${csMember(param.name)}In`, field, param, plural, type: param.type };
+}
+
 /**
  * Los finders de la fila que OCUPA cada índice único condicionado (`indexes` con `when` sobre un campo directo):
  * como mucho una por clave. La operación que releva la busca aquí para retirarla antes de activar la nueva. El
@@ -240,6 +262,12 @@ function renderPort(model, entity) {
     for (const param of finder.params) usings.push(...param.usings);
     methods.push(
       `${xmlDoc(`El agregado por su clave natural (${entity.naturalKey.join(', ')}), o null.`, '    ')}    Task<${entity.name}?> ${finder.name}(${signature(finder)}, CancellationToken cancellationToken = default);`
+    );
+  }
+  const batch = naturalKeyBatchFinder(model, entity);
+  if (batch) {
+    methods.push(
+      `${xmlDoc([`Los agregados de varias ${batch.param.name} en UNA consulta; los que no existen no están. Es la lectura por lote que pide`, `un listado: un ${finder.name} por elemento serían N consultas por página.`], '    ')}    Task<IReadOnlyList<${entity.name}>> ${batch.name}(IReadOnlyCollection<${batch.type}> ${batch.plural}, CancellationToken cancellationToken = default);`
     );
   }
   for (const occupant of occupantFinders(model, entity)) {
@@ -383,6 +411,22 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
     }`);
   }
 
+  const batch = naturalKeyBatchFinder(model, entity);
+  if (batch) {
+    const [[property]] = batch.param.where;
+    methods.push(`    public async Task<IReadOnlyList<${entity.name}>> ${batch.name}(IReadOnlyCollection<${batch.type}> ${batch.plural}, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(${batch.plural});
+        var keys = ${batch.plural}.Distinct().ToList();
+        if (keys.Count == 0)
+        {
+            return [];
+        }
+        var found = await Graph().AsNoTracking().Where(r => keys.Contains(r.${property})).ToListAsync(cancellationToken);
+        return [.. found.Select(ToDomain)];
+    }`);
+  }
+
   for (const credential of credentialFinders(model, entity)) {
     const member = persistedMembers(model, entity).find((m) => m.kind === 'elementCollection' && m.name === credential.field.name);
     const element = elementClass(entity, member);
@@ -415,7 +459,7 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
   // tiene además un reclamo de barrido.
   methods.push(...adapterReconciliationMethods(model, entity, { ownTransactionHelper: claimsForEntity(model, entity.name).length === 0 }));
   usings.push(...claimUsings(model, entity));
-  for (const dep of guardDependencies(model, entity)) usings.push(...dep.usings);
+  for (const dep of adapterExtras(model, entity)) usings.push(...dep.usings);
   methods.push(saveMethod(model, entity, helpers));
   methods.push(`    public async Task DeleteById(${idType} ${idName}, CancellationToken cancellationToken = default)
     {
@@ -445,7 +489,7 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
   const body = `${xmlDoc([
     `Adaptador del puerto ${portClass(entity)} sobre EF Core. Usa el DbContext del ámbito, el de la transacción que abrió`,
     'el UseCaseMediator; sin ella, cada lectura va sola y cada escritura abre la suya.'
-  ])}public sealed class ${adapterClass(entity)}(${dbContextClass(model)} db, PersistenceTransactions transactions${usesBridge(model) && emitsEvents(model, entity) ? `, ${bridgeClass(model)} events` : ''}${[...claimDependencies(model, entity), ...reconciliationDependencies(model, entity), ...guardDependencies(model, entity)].map((dep) => `, ${dep.type} ${dep.name}`).join('')}) : ${portClass(entity)}
+  ])}public sealed class ${adapterClass(entity)}(${dbContextClass(model)} db, PersistenceTransactions transactions${usesBridge(model) && emitsEvents(model, entity) ? `, ${bridgeClass(model)} events` : ''}${adapterExtras(model, entity).map((dep) => `, ${dep.type} ${dep.name}`).join('')}) : ${portClass(entity)}
 {
 ${fields.join('\n')}${sortable}
 
@@ -506,7 +550,17 @@ ${entries.join('\n')}
     }`;
 }
 
+/** Lo que recibe el adaptador relacional además del contexto y la transacción. */
+function adapterExtras(model, entity) {
+  const others = [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity), ...guardDependencies(model, entity)];
+  return [...others, ...replicaDependencies(entity, others)];
+}
+
 function saveMethod(model, entity, helpers) {
+  return replicaOwnTransaction(model, entity, saveMethodBody(model, entity, helpers));
+}
+
+function saveMethodBody(model, entity, helpers) {
   const row = rowClass(entity.name);
   const idProp = csMember(entity.idField?.name ?? 'id');
   const versioned = entity.usesOptimisticLocking;
@@ -569,6 +623,37 @@ ${lines.join('\n')}
             readOnly: false,
             cancellationToken);
     }`;
+}
+
+
+/**
+ * La copia local de una dependencia replicada (`needs` con `strategy: replicated`, 13j) se guarda en su PROPIA
+ * transacción, el REQUIRES_NEW de keel-spring y el inNewTransaction de keel-nest: la escribe el proyector (desde la
+ * operación de proyección) y el lector cuando la hidrata desde una consulta, de solo lectura. Un ámbito de DI nuevo es un
+ * contexto y una transacción nuevos: `Save` delega en `SaveHere` del adaptador de ese ámbito.
+ */
+export function replicaOwnTransaction(model, entity, saveMethodText) {
+  if (!entity.replicaOf) return saveMethodText;
+  const here = saveMethodText.replace(`public async Task<${entity.name}> Save(`, `internal async Task<${entity.name}> SaveHere(`);
+  return `    /// <summary>
+    /// La copia local de ${entity.name} (réplica de ${entity.replicaOf.dependency}.${entity.replicaOf.need}) se guarda en su PROPIA
+    /// transacción, la de un ámbito nuevo: el REQUIRES_NEW de keel-spring. Quien la escribe no la ata a la suya.
+    /// </summary>
+    public async Task<${entity.name}> Save(${entity.name} entity, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        await using var scope = scopes.CreateAsyncScope();
+        var own = (${adapterClass(entity)})scope.ServiceProvider.GetRequiredService<${portClass(entity)}>();
+        return await own.SaveHere(entity, cancellationToken);
+    }
+
+${here}`;
+}
+
+/** Lo que recibe el adaptador de una réplica para su transacción propia (si no lo recibe ya por otra razón). */
+export function replicaDependencies(entity, others) {
+  if (!entity.replicaOf || others.some((dep) => dep.name === 'scopes')) return [];
+  return [{ type: 'IServiceScopeFactory', name: 'scopes', usings: ['Microsoft.Extensions.DependencyInjection'] }];
 }
 
 /**

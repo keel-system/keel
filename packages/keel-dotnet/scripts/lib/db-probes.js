@@ -38,6 +38,9 @@ import { repositoryRoots, portClass, repositoriesNamespace, isPaginated, credent
 import { enumMember } from '../../src/lib/cs-projection.js';
 import { securityNamespace, usesHttpSecurity } from '../../src/scaffold/security.js';
 import { usesCorrelation } from '../../src/scaffold/rest-support.js';
+import { projectionNamespace } from '../../src/scaffold/projections.js';
+import { naturalKeyBatchFinder } from '../../src/scaffold/repositories.js';
+import { occurredAtField } from 'keel-core/gen/replica';
 
 /**
  * Las muestras distintas que necesita cada raíz: ida y vuelta, crudo, versión, la clave natural (×2), la cota, la página
@@ -134,9 +137,13 @@ export function sampleValue(model, field, ctx, salt) {
         // Las variantes de sampleFor salen de UN carácter (26 valores): pasada la vigésimo sexta, la muestra se alarga para
         // que siga siendo distinta (las sondas documentales guardan más de 26 de la misma raíz, y una clave natural con
         // patrón chocaba consigo misma). Si el patrón no admite otra longitud, la variante de siempre.
+        // Se alarga sobre la longitud NATURAL de la muestra (la que fija el patrón), no sobre el mínimo declarado: con
+        // `{3,19}` y sin minLength, alargar «hasta 2» no cambiaba nada y la vigésimo séptima repetía la primera (lo destapó
+        // catalog-extended en db-check al pasar sus muestras de Product de 26).
         const variant = ctx.counter.variant();
-        const longer = variant >= 26 ? matching(text.pattern, sampleFor(text.pattern, Math.max(min, 1) + Math.floor(variant / 26), max, variant)) : null;
-        const sample = longer ?? sampleFor(text.pattern, min, max, variant) ?? sampleFor(text.pattern, min, max);
+        const base = sampleFor(text.pattern, min, max, variant);
+        const longer = variant >= 26 && base != null ? matching(text.pattern, sampleFor(text.pattern, base.length + Math.floor(variant / 26), max, variant)) : null;
+        const sample = longer ?? base ?? sampleFor(text.pattern, min, max);
         if (sample == null) {
           ctx.unsampled.push(`${field.name} (${text.pattern})`);
           return null;
@@ -238,7 +245,9 @@ function probesCs(model, namespace) {
     ctx.refs.clear();
     const states = [];
     // Las muestras comunes y, por encima, las de los reclamos de esta raíz: cada sonda de reclamo guarda las suyas.
-    const total = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root) + guardSampleCount(model, root);
+    // Las muestras de la réplica, las ÚLTIMAS de su raíz: añadirlas en medio movería las de las demás sondas.
+    const beforeReplica = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root) + guardSampleCount(model, root);
+    const total = beforeReplica + (root.replicaOf ? 2 : 0);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -401,6 +410,7 @@ function probesCs(model, namespace) {
           .map((name) => `            var ${name} = await InScope(other => other.GetRequiredService<${dbContext(model)}>().Database.SqlQuery<string>($"SELECT ${snakeCase(name)} AS \\"Value\\" FROM ${root.tableName} WHERE ${root.idField?.columns?.name ?? 'id'} = {${id}}").SingleAsync(Cancel));`)
           .join('\n')
     }));
+    tests.push(...replicaProbes(model, root, { state, first: beforeReplica + 1, port, usings: ctx.usings }));
     tests.push(...claimProbes(model, root, { state, first: SAMPLES + 1, port, context: dbContext(model) }));
     tests.push(...reconciliationProbes(model, root, { state, first: SAMPLES + 1 + claimSampleCount(model, root), port, context: dbContext(model) }));
     // La guarda de un efecto que no se deshace (mail.sentBy), con sus muestras por encima de las de los reclamos.
@@ -630,6 +640,72 @@ ${raw(`sample.${id}`)}
             Assert.Equal(Expected("autor-que-crea"), createdBy);
             Assert.Equal(Expected("autor-que-modifica"), updatedBy);
         });`];
+}
+
+/**
+ * La RÉPLICA (`needs` replicado, 13j) contra la base real: el proyector crea la copia, deja sin efecto un hecho del mismo
+ * instante y aplica uno más nuevo; la copia se guarda en su PROPIA transacción (sobrevive a la de quien la escribe, que se
+ * revierte); y el lector lee por lote. Lo usa db-check (doc-check, si una réplica es documental).
+ */
+export function replicaProbes(model, root, { state, first, port, usings }) {
+  const replica = (model.dependencies ?? []).flatMap((dependency) => dependency.needs ?? []).find((need) => need.replica?.entityName === root.name)?.replica;
+  if (!replica) return [];
+  const ordering = occurredAtField(root);
+  const keyField = root.fields.find((field) => field.name === replica.keyField);
+  const projected = root.fields.filter((field) => !field.isId && field.name !== replica.keyField && !field.generated);
+  if (!ordering || !keyField) return [];
+  usings.push(projectionNamespace(model), namespaceOf(model, 'persistence'));
+  const key = csMember(replica.keyField);
+  const at = csMember(ordering.name);
+  const snapshot = (seed) => `new ${root.name}Snapshot(${[keyField, ...projected].map((field) => `${seed}.${csMember(field.name)}`).join(', ')})`;
+  const batch = naturalKeyBatchFinder(model, root);
+  const byKeys = batch?.reason === 'replica-listing'
+    ? `
+            var reader = new ${replica.readerClass}(${['repository', ...(replica.onMiss.action === 'fetch' ? ['null!'] : [])].join(', ')});
+            var read = await reader.ByKeys(new[] { snapshot.${key}, "no-replicado" }, Cancel);
+            Assert.Equal(new[] { snapshot.${key} }, read.Keys);`
+    : '';
+  return [`    [Fact]
+    public async Task ${root.name}_ElProyectorCreaIgnoraElMismoInstanteYAplicaUnoMasNuevo() =>
+        await InScope(async services =>
+        {
+            var repository = services.GetRequiredService<${port}>();
+            var seed = new ${root.name}(${state(first)});
+            var snapshot = ${snapshot('seed')};
+            await new ${replica.projectorClass}(repository).Apply(snapshot, Cancel);
+            var created = await InScope(other => other.GetRequiredService<${port}>().FindBy${key}(snapshot.${key}, Cancel));
+            Assert.NotNull(created);
+            Assert.Equal(snapshot.${at}, created.${at});
+            // El mismo instante (una reentrega) no pisa nada; uno anterior, tampoco.
+            await new ${replica.projectorClass}(repository).Apply(snapshot with { ${at} = snapshot.${at} }, Cancel);
+            await new ${replica.projectorClass}(repository).Apply(snapshot with { ${at} = snapshot.${at}.AddMinutes(-5) }, Cancel);
+            Assert.Equal(snapshot.${at}, (await InScope(other => other.GetRequiredService<${port}>().FindBy${key}(snapshot.${key}, Cancel)))!.${at});
+            // Uno más nuevo, sí.
+            await new ${replica.projectorClass}(repository).Apply(snapshot with { ${at} = snapshot.${at}.AddMinutes(5) }, Cancel);
+            var updated = await InScope(other => other.GetRequiredService<${port}>().FindBy${key}(snapshot.${key}, Cancel));
+            Assert.Equal(snapshot.${at}.AddMinutes(5), updated!.${at});
+            Assert.Equal(created.Id, updated.Id);${byKeys}
+        });
+
+    [Fact]
+    public async Task ${root.name}_LaCopiaSeGuardaEnSuPropiaTransaccionYSobreviveALaQueSeRevierte()
+    {
+        var snapshot = await InScope(async services =>
+        {
+            var seed = new ${root.name}(${state(first + 1)});
+            await Task.CompletedTask;
+            return ${snapshot('seed')};
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => InScope(services => services.GetRequiredService<PersistenceTransactions>().InTransaction<bool>(
+            async () =>
+            {
+                await new ${replica.projectorClass}(services.GetRequiredService<${port}>()).Apply(snapshot, Cancel);
+                throw new InvalidOperationException("quien escribe la copia revierte la suya");
+            },
+            readOnly: false,
+            Cancel)));
+        Assert.NotNull(await InScope(other => other.GetRequiredService<${port}>().FindBy${key}(snapshot.${key}, Cancel)));
+    }`];
 }
 
 export function credentialProbes(model, root, { state, sample, port }) {

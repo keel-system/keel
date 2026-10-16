@@ -29,6 +29,8 @@ import { callMethod, clientPort, clientsNamespace } from './http-clients.js';
 import { mailNamespace, mailPorts, sendsMail } from './mail.js';
 import { OPERATION_CACHE_PORT, cacheCall, cachesOperation } from './cache.js';
 import { cacheNote } from 'keel-core/gen/cache-plan';
+import { projectionNamespace, projectionNotes, projectionsFedBy, readerLocal } from './projections.js';
+import { naturalKeyBatchFinder } from './repositories.js';
 import { uploadNotes } from 'keel-core/gen/buckets';
 import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
 import { FILE_STORAGE_PORT, UPLOAD_NOTE_NAMES_CS, storageNamespace } from './storage.js';
@@ -281,11 +283,25 @@ function renderHandler(model, operation) {
   // cliente se inyecta por el mismo criterio que el de una activación (incremento 13i, como keel-spring y keel-nest). La
   // réplica (`replicated`) se lee por su lector y llega en el 13j.
   for (const { need } of operation.dependencyNeeds ?? []) {
+    // Replicada (13j): se lee por el lector, que es quien aplica onMiss; nunca el repositorio de la réplica.
+    if (need.strategy === 'replicated' && need.replica) {
+      if (!dependencies.includes(need.replica.readerClass)) {
+        usings.push(projectionNamespace(model));
+        dependencies.push(need.replica.readerClass);
+      }
+      continue;
+    }
     if (need.strategy !== 'on-demand' || !need.fetch) continue;
     const client = (model.httpClients ?? []).find((candidate) => candidate.clientClass === need.fetch.clientClass);
     if (!client || dependencies.includes(clientPort(client))) continue;
     usings.push(clientsNamespace(model));
     dependencies.push(clientPort(client));
+  }
+  // La operación de proyección (la que dispara la suscripción del `fedBy` de una réplica) recibe su proyector.
+  for (const { need } of projectionsFedBy(model, operation)) {
+    if (dependencies.includes(need.replica.projectorClass)) continue;
+    usings.push(projectionNamespace(model));
+    dependencies.push(need.replica.projectorClass);
   }
   // La salida por correo, por el mismo criterio (mail.sentBy es el único enlace del DSL entre un caso de uso y el
   // correo): sin el puerto delante, el camino de menor resistencia es no mandarlo, y no lo detecta nada.
@@ -387,6 +403,7 @@ function handlerNotes(model, operation) {
   if (compensation) notes.push(compensation);
   for (const note of activationNotes(model, operation)) notes.push(note);
   for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(model, dependency, need, operation));
+  for (const note of projectionNotes(model, operation)) notes.push(note);
   for (const eventName of operation.emits ?? []) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
     const emitters = [...new Set((event?.emittedBy ?? []).filter((e) => e.operation === operation.name && e.aggregate).map((e) => e.aggregate))];
@@ -530,9 +547,7 @@ function activationNotes(model, operation) {
  */
 function needNote(model, depId, need, operation) {
   const why = need.description ? ` — ${need.description}` : '';
-  if (need.strategy !== 'on-demand') {
-    return `Dependencia ${depId}.${need.name} (replicada)${why}: keel-dotnet todavía no genera la réplica; no leas el dato por tu cuenta`;
-  }
+  if (need.strategy !== 'on-demand') return replicaNote(model, depId, need, operation, why);
   if (!need.fetch) {
     return `Dependencia ${depId}.${need.name} (on-demand)${why}: el diseño no resuelve la llamada (fetchedFrom no apunta a ninguna de http-clients). No inventes el canal: dilo en el reporte`;
   }
@@ -552,6 +567,24 @@ function needNote(model, depId, need, operation) {
     `Dependencia ${depId}.${need.name} (on-demand)${why}: pide el dato con await ${local}.${method}(..., cancellationToken), que ya devuelve el resultado de dominio ` +
     `(${need.fetch.resultType}): el DTO del cable no cruza a Application. El retry y el circuito ya están en el adaptador: no los repitas.${policy}${exposed}`
   );
+}
+
+/** La nota de un dato replicado: se lee por el lector, que aplica onMiss (la de keel-spring y keel-nest). */
+function replicaNote(model, depId, need, operation, why) {
+  const { replica } = need;
+  if (!replica) return `Dependencia ${depId}.${need.name} (replicada)${why}: la réplica no se pudo resolver (revisa los avisos del build); no leas el dato por tu cuenta`;
+  const reader = readerLocal(replica);
+  const onMiss = {
+    fetch: `Si la copia aún no tiene el dato, el lector lo pide a ${depId} y lo guarda (su Hydrate es tuyo: lo dice su TODO).`,
+    fail: `Si la copia aún no tiene el dato, el lector lanza ${replica.onMiss.exceptionClass ?? replica.onMiss.error}: no lo captures para seguir con un valor inventado.`,
+    degrade: `Si la copia aún no tiene el dato, el lector devuelve null y el resultado degradado lo escribes TÚ, distinguible por el cliente de una respuesta normal: ${replica.onMiss.degradedTo}`
+  }[replica.onMiss.action];
+  const entity = (model.entities ?? []).find((candidate) => candidate.name === replica.entityName);
+  const batch = (operation.returnsList || operation.paginated) && entity && naturalKeyBatchFinder(model, entity)?.reason === 'replica-listing'
+    ? ` Esta operación devuelve una lista: lee la página entera con await ${reader}.ByKeys(..., cancellationToken) (UNA consulta) y pasa por ByKey(...) solo las claves que falten, que es donde se aplica onMiss.`
+    : '';
+  const exposed = need.exposedAs && need.dtoName ? ` El dato SALE en la respuesta: el mapper pide un ${need.dtoName} por parámetro y lo pone en el campo '${need.exposedAs}'.` : '';
+  return `Dependencia ${depId}.${need.name} (replicada)${why}: lee ${replica.entityName} con await ${reader}.ByKey(..., cancellationToken), que ya aplica onMiss: ${replica.onMiss.action}. ${onMiss}${batch} NUNCA leas el repositorio de la réplica directamente ni la escribas desde aquí: la copia solo se escribe desde ${replica.projectorClass}.${exposed}`;
 }
 
 /** La nota de una activación: el trabajo que esta operación delega en otro servidor (la de keel-spring y keel-nest). */

@@ -23,7 +23,7 @@ import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
 import { claimDependencies, guardClaimsFor } from './claim.js';
 import { reconciliationDependencies } from './reconciliation-claim.js';
 import { documentGuardMethods, documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
-import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents, credentialFinders } from './repositories.js';
+import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents, credentialFinders, replicaOwnTransaction, replicaDependencies, naturalKeyBatchFinder } from './repositories.js';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -305,6 +305,10 @@ function declaredAuditStamps(model, entity, needs) {
 }
 
 function saveMethod(model, entity) {
+  return replicaOwnTransaction(model, entity, saveMethodBody(model, entity));
+}
+
+function saveMethodBody(model, entity) {
   const idProp = csMember(entity.idField?.name ?? 'id');
   const versioned = entity.usesOptimisticLocking;
   const policyTimestamps = entity.auditTimestamps === 'all' && documentShape(model, entity).some((entry) => entry.kind === 'audit' && entry.name === 'created_at');
@@ -415,6 +419,22 @@ export function renderDocumentAdapter(model, entity) {
     }`);
   }
 
+  const batch = naturalKeyBatchFinder(model, entity);
+  if (batch) {
+    methods.push(`    public async Task<IReadOnlyList<${entity.name}>> ${batch.name}(IReadOnlyCollection<${batch.type}> ${batch.plural}, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(${batch.plural});
+        var keys = ${batch.plural}.Distinct().ToList();
+        if (keys.Count == 0)
+        {
+            return [];
+        }
+        var filter = new BsonDocument(${csString(keyOf(model, entity, batch.field.name))}, new BsonDocument("$in", new BsonArray(keys.Select(key => ${writeScalar(batch.field, 'key')}))));
+        var found = await Find(filter).ToListAsync(cancellationToken);
+        return [.. found.Select(ToDomain${entity.name})];
+    }`);
+  }
+
   for (const credential of credentialFinders(model, entity)) {
     const local = csLocal(credential.param);
     methods.push(`    public async Task<${entity.name}?> ${credential.name}(string ${local}, CancellationToken cancellationToken = default)
@@ -469,7 +489,8 @@ export function renderDocumentAdapter(model, entity) {
     ctor.push(`${bridgeClass(model)} events`);
     usings.push(messagingNamespace(model));
   }
-  for (const dep of [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)]) {
+  const others = [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)];
+  for (const dep of [...others, ...replicaDependencies(entity, others)]) {
     ctor.push(`${dep.type} ${dep.name}`);
     usings.push(...dep.usings);
   }

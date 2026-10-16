@@ -55,6 +55,19 @@ No reescribas lo demás.
 6. **El barrido de reconciliación y la compensación.** El reclamo ya está generado en el repositorio; su nota dice
    cómo se llama y el ORDEN de los commits — `references/implementation.md` § Reconciliación.
 
+**Lo que ya viene escrito y no repites:**
+
+- `onUnavailable: lastKnown`: el adaptador recuerda cada respuesta en `LastKnownValues` (por llamada y parámetros) y su
+  fallback sirve la última dentro de `maxAgeSeconds`, marcada (`Stale`), o lanza el error del diseño. Una respuesta que
+  lleve un valor `Stale` no se cachea (`Cacheable` de la caché, si la hay).
+- `auth: oauth2-client-credentials`: `ClientCredentials` pide el token, lo reutiliza hasta su caducidad y lo pone en cada
+  intento; sin token la llamada no sale y el fallo es `AuthGrant`, que atiende el fallback. Las credenciales salen de
+  `http-clients.yaml` (`<CLIENTE>_CLIENT_ID`, `_CLIENT_SECRET`, `_TOKEN_URL`).
+- La réplica (`needs` con `strategy: replicated`): en `src/<Raíz>.Application/Projection/`, `<E>Projector` (el upsert de la
+  copia, que descarta la reentrega tardía y guarda en su PROPIA transacción) y `<E>Reader` (aplica `onMiss`, y `ByKeys` en
+  los listados). El handler de la operación de proyección recibe el proyector; el del `usedBy`, el lector. Con `onMiss:
+  fetch` el `Hydrate` del lector es tuyo (su TODO dice cómo). La copia NUNCA se escribe desde otro sitio.
+
 **No ensanches el fallback.** El `catch (ProviderFailureException failure) when (...)` deja pasar solo los fallos
 del proveedor; un bug del adaptador o un `OutboundContractException` se propagan con su traza sin que nadie los
 capture. Capturar cualquier excepción ahí registró durante meses un defecto propio como «el proveedor está caído»

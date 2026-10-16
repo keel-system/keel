@@ -167,19 +167,8 @@ function isComposite(layers, field) {
  */
 function outboundErrors(layers) {
   const errors = [...compositeUrlParamErrors(layers, 'keel-dotnet')];
-  // El dato bajo demanda se genera desde el 13i (el cliente inyectado en el handler del usedBy, con su nota, y
-  // onUnavailable fail/degrade en el fallback del adaptador) y el último valor conocido desde el 13j (LastKnownValues). La
-  // réplica, después.
-  for (const [dependency, definition] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
-    for (const [name, need] of Object.entries(definition?.needs ?? {})) {
-      if (need?.strategy === 'replicated') {
-        errors.push(
-          `dependencies.${dependency}.needs.${name}: strategy replicated — keel-dotnet todavía no genera la réplica (el proyector y el lector; ` +
-            'llega en el incremento 13j de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
-        );
-      }
-    }
-  }
+  // Los `needs` se generan enteros: bajo demanda desde el 13i (el cliente en el handler del usedBy y onUnavailable en el
+  // fallback), el último valor conocido y la réplica (proyector, lector y su transacción propia) desde el 13j.
   for (const [client, definition] of Object.entries(layers?.['http-clients']?.clients ?? {})) {
     // `auth: oauth2-client-credentials` se genera desde el 13j (ClientCredentials, con la semántica de Spring Security).
     for (const [call, spec] of Object.entries(definition?.calls ?? {})) {
