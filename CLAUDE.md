@@ -121,6 +121,7 @@ npm run cache-check --workspace packages/keel-nest    # la CACHÉ de keel-nest c
 npm run telemetry-check --workspace packages/keel-nest # la TELEMETRÍA de keel-nest con la app arrancada contra PostgreSQL y MySQL reales: series, exemplar, pool, traza, logs, puerto de gestión (podman/docker, ~5 min)
 npm run deploy-check --workspace packages/keel-nest    # deploy/ de keel-nest ENTERO y las preguntas al backend que comparte con keel-spring (keel-core/gen/deploy-probes.js) (podman/docker, minutos)
 npm run matrix --workspace packages/keel-nest    # la matriz de paridad de keel-nest, contra el catálogo neutral (puro)
+npm run matrix --workspace packages/keel-dotnet  # la matriz de paridad de keel-dotnet, contra el catálogo neutral (puro)
 node packages/keel-core/src/cli.js <cmd>         # ejecutar sin link
 npm run compile-check --workspace packages/keel-spring    # compila de verdad el arnés generado (JDK + red, minutos)
 npm run broker-check --workspace packages/keel-spring     # levanta la infra y ejercita los tres brokers (podman/docker)
@@ -242,6 +243,7 @@ La columna «detalle» nombra el archivo de `.claude/rules/` que lleva el razona
 | Nuevo broker | Entrada en `BROKERS` (`keel-core/src/lib/gen/infra-catalog.js`) + su rama en `keel-core/src/lib/gen/broker-probes.js` + las ramas de `integration-tests.js` + escenarios en `scripts/broker-check.js` + decidir `needsBrokerReseed` | `arnés` |
 | Cambio en la FRONTERA de keel-nest (algo que empieza o deja de rechazarse) | `keel-nest/src/lib/supported-features.js` + `test/supported-features.test.js`. Si deja de rechazarse: una fixture que lo declare o una silueta en `DERIVED_SILHOUETTES` (`test/helpers/workspace.js`, que la recorren `ts-syntax` y `ts-check`) y lo emitido EJECUTADO. Si tampoco tiene forma en keel-spring, la pregunta es NEUTRAL en `keel-core/gen` (como `outbound-params.js`) y la rechazan los dos con el mismo mensaje | `nest` |
 | Un mecanismo nuevo en la matriz de paridad de keel-nest | Fila en `keel-nest/src/lib/engine-support.js` con sus celdas Y su bloque `parity` (marcadores por rama, acotables a un archivo con `<ruta>::<texto>`; `absent` en una celda degradada) + `test/parity.test.js` + `test/engine-support.test.js`; después `npm run matrix --workspace packages/keel-nest` | `nest` |
+| Un mecanismo nuevo en la matriz de paridad de keel-dotnet, o una celda que cambia de estado | Fila o celda en `keel-dotnet/src/lib/engine-support.js` (la misma forma que la de keel-nest; los marcadores llevan la ruta del proyecto de cada rama, que se llama distinto) + `test/parity.test.js` + `test/engine-support.test.js`; después `npm run matrix --workspace packages/keel-dotnet`. Una celda pasa a `verificado` solo con la red que la ejecuta, y a `falsified: true` solo con el sabotaje medido | — |
 | Nuevo generador | Paquete `packages/keel-<tech>/` calcado de `keel-spring`; guía en `keel-core/assets/core/docs/building-a-generator.md`; registrar en `KNOWN_GENERATORS` (`src/lib/assets.js`) | `core` |
 | Cambio de versión del DSL en un generador | Sincronizar `SUPPORTED_DSL` (`src/lib/assets.js` del generador) + campo `keel.dsl` de su `package.json` + su README | `core` |
 

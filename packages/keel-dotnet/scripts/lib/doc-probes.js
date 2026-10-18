@@ -167,6 +167,64 @@ function sortProperty(model, entity) {
   return documentShape(model, entity).find((entry) => entry.kind === 'scalar' && !entry.field.list)?.member ?? null;
 }
 
+/** Los campos de la clave natural que declaran `compare` (su unicidad va sobre la sombra plegada), si son texto. */
+function foldedKeyMembers(root) {
+  return (root.naturalKey ?? []).filter((key) => {
+    const field = root.fields.find((candidate) => candidate.name === key);
+    return field?.fold && field.kind === 'base';
+  });
+}
+
+/**
+ * El PLEGADO de la clave natural (`compare`, DSL 2.14) sobre documentos: el documento guarda en la sombra el valor
+ * plegado por TextFold —el mismo que estampan keel-spring y keel-nest—, y la misma clave en MAYÚSCULAS (y sin
+ * acentos, si la comparación los ignora) es la MISMA clave para el índice único: el error del diseño. Un TextFold que no
+ * plegara dejaría la sombra con otro valor y las dos convivirían.
+ */
+function foldedKeyProbes(model, root, { state, first, port, members, keys, memberOf, natural, outside, collection, id, idValue }) {
+  const folded = foldedKeyMembers(root);
+  if (folded.length === 0) return [];
+  const shape = documentShape(model, root);
+  const original = 'Ñandú Ærø Portátil';
+  const keyMembers = new Set(keys.map(memberOf).filter(Boolean));
+  const value = (name, text) => (folded.includes(name) ? csString(text) : null);
+  const build = (source, overrides) =>
+    members.map((name) => `${csMember(name)} = ${overrides(name) ?? `${typeof source === 'function' ? source(name) : source}.${csMember(name)}`},`).join('\n                ');
+  const checks = folded.map((name) => {
+    const field = root.fields.find((candidate) => candidate.name === name);
+    const shadow = shape.find((entry) => entry.kind === 'folded' && entry.of === name)?.name;
+    // NFD descompone la Ñ y las vocales acentuadas (la marca se quita); Æ y Ø no se descomponen: solo bajan.
+    const expected = field.fold.accents ? 'nandu ærø portatil' : 'ñandú ærø portátil';
+    return `            Assert.Equal(${csString(expected)}, raw[${csString(shadow)}].AsString);`;
+  });
+  const accents = folded.some((name) => root.fields.find((candidate) => candidate.name === name).fold.accents);
+  // La otra grafía de la MISMA clave: en mayúsculas, y sin las tildes si la comparación las ignora.
+  const shouted = accents ? 'NANDU ÆRØ PORTATIL' : 'ÑANDÚ ÆRØ PORTÁTIL';
+  return [
+    `    [Fact]
+    public async Task ${root.name}_LaClaveNaturalPlegadaEsLaMismaClaveEnOtraGrafia() =>
+        await InScope(async services =>
+        {
+            var one = ${state(first)};
+            var two = ${state(first + 1)};
+            var stored = new ${root.name}State
+            {
+                ${build('one', (name) => value(name, original) ?? outside[name] ?? null)}
+            };
+            await InScope(other => other.GetRequiredService<${port}>().Save(new ${root.name}(stored), Cancel));
+            var raw = await Raw(services, ${collection}, ${idValue(`stored.${id}`)});
+${checks.join('\n')}
+            var clash = new ${root.name}State
+            {
+                ${build((name) => (keyMembers.has(name) ? 'stored' : 'two'), (name) => value(name, shouted) ?? outside[name] ?? null)}
+            };
+            var error = await Assert.ThrowsAnyAsync<DomainException>(() => InScope(other => other.GetRequiredService<${port}>().Save(new ${root.name}(clash), Cancel)));
+            Assert.Equal(${csString(natural.code)}, error.Code);
+            Assert.Equal(${csString(natural.message)}, error.GivenMessage);
+        });`
+  ];
+}
+
 function probesCs(model, namespace) {
   const roots = repositoryRoots(model);
   const ctx = { usings: [], refs: new Set(), unsampled: [], counter: counter(), document: true };
@@ -181,7 +239,9 @@ function probesCs(model, namespace) {
     const states = [];
     // Las de la lectura por lote por id, las últimas: añadirlas en medio movería las de las demás sondas.
     const beforeBatch = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root) + guardSampleCount(model, root);
-    const total = beforeBatch + (idBatchReason(model, root) ? 2 : 0);
+    // Las del plegado, después de todas: añadirlas en medio movería las de las demás sondas.
+    const beforeFold = beforeBatch + (idBatchReason(model, root) ? 2 : 0);
+    const total = beforeFold + (foldedKeyMembers(root).length > 0 ? 2 : 0);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -284,6 +344,7 @@ function probesCs(model, namespace) {
         if (value && !root.naturalKey.includes(index.when.field)) outside[index.when.field] = value;
       }
       clashTest('LaClaveNaturalRepetidaEsElErrorDelDiseño', root.naturalKey, natural, { onClash: outside });
+      tests.push(...foldedKeyProbes(model, root, { state, first: beforeFold + 1, port, members: allNames, keys: root.naturalKey, memberOf, natural, outside, collection, id, idValue }));
     }
     conditional.slice(0, 3).forEach((index, position) => {
       const entry = errors.find((candidate) => candidate.constraint === indexName(root, index));

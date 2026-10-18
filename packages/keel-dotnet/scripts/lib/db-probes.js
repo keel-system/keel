@@ -9,7 +9,12 @@
 //   versión       guardar dos veces la MISMA lectura: la segunda es el conflicto de concurrencia del contrato;
 //   unicidad      otro agregado con la misma clave natural sale como el error que el diseño declara, con su mensaje;
 //   cota          un texto más largo que su `maxLength` lo rechaza el MOTOR (22001);
-//   página        List(pageable) con su total y el tamaño pedido; DeleteById borra el grafo.
+//   página        List(pageable) con su total y el tamaño pedido; DeleteById borra el grafo;
+//   plegado       la clave natural con `compare` en MAYÚSCULAS es la misma clave, y la sombra de un filtro guarda el
+//                 valor plegado por TextFold sin llevar la unicidad del campo.
+//
+// Por sujeto, la CONCURRENCIA: un interbloqueo real entre dos transacciones se repite hasta que las dos terminan, y uno
+// que agota sus intentos sale como el 409 de concurrencia.
 //
 // Con idempotencia de petición, el REGISTRO (idempotency_record): guardar y encontrar, el ámbito en la clave, la clave
 // repetida y la CARRERA de dos transacciones como el conflicto con su code, la caducada sustituible y el rollback con el
@@ -19,7 +24,7 @@
 // sondas de keel-nest), y cada una es distinta: dos muestras no comparten clave natural.
 
 import { randomUUID } from 'node:crypto';
-import { constraintErrors, declaredConcurrencyError, idempotencyOutcomeCode, LOCK_VERSION, persistedMembers, partialUniqueIndexes, indexName } from 'keel-core/gen';
+import { constraintErrors, declaredConcurrencyError, foldedShadow, idempotencyOutcomeCode, LOCK_VERSION, persistedMembers, partialUniqueIndexes, indexName } from 'keel-core/gen';
 import { registryOperations } from 'keel-core/gen/request-idempotency';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
@@ -250,7 +255,10 @@ function probesCs(model, namespace) {
     const beforeReplica = SAMPLES + claimSampleCount(model, root) + reconciliationSampleCount(model, root) + guardSampleCount(model, root);
     // Y las de la lectura por lote por id, las últimas de todas.
     const beforeBatch = beforeReplica + (root.replicaOf ? 2 : 0);
-    const total = beforeBatch + (idBatchReason(model, root) ? 2 : 0);
+    // Las del plegado y, en la primera raíz, las del interbloqueo: después de todas, para no mover ninguna.
+    const beforeFold = beforeBatch + (idBatchReason(model, root) ? 2 : 0);
+    const beforeDeadlock = beforeFold + foldSampleCount(root);
+    const total = beforeDeadlock + (root === roots[0] ? 2 : 0);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -312,7 +320,7 @@ function probesCs(model, namespace) {
     const members = domainMembers(model, root);
     const allNames = [...members.map((m) => m.name), ...(root.usesOptimisticLocking && !root.declaresLockVersion ? [LOCK_VERSION.field] : [])];
     const memberOf = (key) => members.find((m) => m.name === key || m.relation?.name === key)?.name;
-    const clashTest = (title, keys, entry, { both = {}, onClash = {}, samples = [4, 5] } = {}) => {
+    const clashTest = (title, keys, entry, { both = {}, onClash = {}, samples = [4, 5], precondition = null } = {}) => {
       const keyMembers = new Set(keys.map(memberOf).filter(Boolean));
       const build = (source, overrides) =>
         allNames.map((name) => `${csMember(name)} = ${overrides[name] ?? `${typeof source === 'function' ? source(name) : source}.${csMember(name)}`},`).join('\n                ');
@@ -331,7 +339,7 @@ function probesCs(model, namespace) {
             {
                 ${build((name) => (keyMembers.has(name) ? 'first' : 'two'), { ...both, ...onClash })}
             };
-            var error = await Assert.ThrowsAnyAsync<DomainException>(() => InScope(other => other.GetRequiredService<${port}>().Save(new ${root.name}(clash), Cancel)));
+${precondition ? `            ${precondition}\n` : ''}            var error = await Assert.ThrowsAnyAsync<DomainException>(() => InScope(other => other.GetRequiredService<${port}>().Save(new ${root.name}(clash), Cancel)));
             Assert.Equal(${csString(entry.code)}, error.Code);
             Assert.Equal(${csString(entry.message)}, error.GivenMessage);
         });`);
@@ -354,6 +362,17 @@ function probesCs(model, namespace) {
         if (value && !root.naturalKey.includes(index.when.field)) outside[index.when.field] = value;
       }
       clashTest('LaClaveNaturalRepetidaEsElErrorDelDiseño', root.naturalKey, natural, { onClash: outside });
+      // El PLEGADO (`compare`): la misma clave con sus campos plegados en MAYÚSCULAS es la MISMA clave, y solo la sombra lo
+      // sabe. Si el adaptador no plegara, las dos convivirían.
+      const folded = foldedKeyMembers(root);
+      if (folded.length > 0) {
+        const upper = Object.fromEntries(folded.map((name) => [name, `first.${csMember(name)}.ToUpperInvariant()`]));
+        clashTest('LaClaveNaturalEnMayusculasEsLaMismaClave', root.naturalKey, natural, {
+          onClash: { ...outside, ...upper },
+          samples: [beforeFold + 1, beforeFold + 2],
+          precondition: folded.map((name) => `Assert.NotEqual(first.${csMember(name)}, clash.${csMember(name)});`).join(' ')
+        });
+      }
     }
     // La unicidad CONDICIONADA: dos en el estado de la condición con las mismas columnas.
     conditional.slice(0, 3).forEach((index, position) => {
@@ -402,6 +421,8 @@ function probesCs(model, namespace) {
             Assert.Null(await InScope(other => other.GetRequiredService<${port}>().FindById(samples[0].${id}, Cancel)));
         });`);
     }
+    tests.push(...filterFoldProbes(model, root, { state, first: beforeFold + 1 + (foldedKeyMembers(root).length > 0 ? 2 : 0), port, members: allNames, id }));
+    if (root === roots[0]) tests.push(...deadlockProbes(model, root, { state, first: beforeDeadlock + 1, port, id, concurrency }));
     tests.push(...credentialProbes(model, root, { state, sample: 16, port }));
     tests.push(...authorshipProbe(model, root, {
       state,
@@ -597,6 +618,120 @@ ${ensures.join('\n\n')}
 }`;
   if (ctx.unsampled.length > 0) console.warn(`  (db-check) sin muestra para ${[...new Set(ctx.unsampled)].join(', ')}`);
   return csFileLike(namespace, usings, body);
+}
+
+/** Los campos de la clave natural que declaran `compare` (su unicidad va sobre la sombra plegada), si son texto. */
+function foldedKeyMembers(root) {
+  return (root.naturalKey ?? []).filter((key) => {
+    const field = root.fields.find((candidate) => candidate.name === key);
+    return field?.fold && field.kind === 'base';
+  });
+}
+
+/** Los campos de texto con la sombra de un FILTRO (`filterFold`): la sombra se estampa, pero no lleva la unicidad. */
+function filterFoldFields(root) {
+  return root.fields.filter((field) => field.filterFold && !field.fold && field.kind === 'base');
+}
+
+/** Las muestras del plegado de una raíz: dos para la clave natural plegada y dos por cada sombra de filtro. */
+function foldSampleCount(root) {
+  return (foldedKeyMembers(root).length > 0 ? 2 : 0) + 2 * filterFoldFields(root).length;
+}
+
+/**
+ * La sombra de un FILTRO contra el motor: el adaptador guarda en ella el valor plegado por TextFold —el mismo que
+ * estampan keel-spring y keel-nest—, y la sombra NO lleva la unicidad del campo: el mismo nombre en mayúsculas convive.
+ * Un TextFold que no plegara (o que no quitara los acentos) dejaría la sombra con otro valor y el filtro sin casar.
+ */
+function filterFoldProbes(model, root, { state, first, port, members, id }) {
+  return filterFoldFields(root).map((field, index) => {
+    const { column, accents } = foldedShadow(field);
+    // NFD descompone la Ñ y las vocales acentuadas (la marca se quita); Æ y Ø no se descomponen: solo bajan.
+    const expected = accents ? 'nandu ærø portatil' : 'ñandú ærø portátil';
+    const build = (source, value) =>
+      members.map((name) => `${csMember(name)} = ${name === field.name ? csString(value) : `${source}.${csMember(name)}`},`).join('\n                ');
+    const [a, b] = [first + index * 2, first + index * 2 + 1];
+    return `    [Fact]
+    public async Task ${root.name}_${csMember(field.name)}LaSombraDelFiltroGuardaElValorPlegadoYNoEsUnica() =>
+        await InScope(async services =>
+        {
+            var one = ${state(a)};
+            var two = ${state(b)};
+            var named = new ${root.name}State
+            {
+                ${build('one', 'Ñandú Ærø Portátil')}
+            };
+            await InScope(other => other.GetRequiredService<${port}>().Save(new ${root.name}(named), Cancel));
+            var shadow = await InScope(other => other.GetRequiredService<${dbContext(model)}>().Database.SqlQuery<string>($"SELECT ${column} AS \\"Value\\" FROM ${root.tableName} WHERE ${root.idField?.columns?.name ?? 'id'} = {named.${id}}").SingleAsync(Cancel));
+            Assert.Equal(${csString(expected)}, shadow);
+            var twin = new ${root.name}State
+            {
+                ${build('two', 'ÑANDÚ ÆRØ PORTÁTIL')}
+            };
+            // Sin unicidad: el mismo nombre en mayúsculas convive (la sombra del filtro no es la clave del campo).
+            await InScope(other => other.GetRequiredService<${port}>().Save(new ${root.name}(twin), Cancel));
+        });`;
+  });
+}
+
+/**
+ * El INTERBLOQUEO, de verdad y contra el motor: dos ámbitos, cada uno con su PersistenceTransactions, bloquean dos filas
+ * en orden inverso; el motor aborta a uno (40P01) y la transacción lo tiene que repetir ENTERA hasta que las dos
+ * terminan —tres intentos en total—. Y uno que agota sus intentos sale como el 409 de concurrencia, no como un 500.
+ * Con un clasificador equivocado el interbloqueo no se reintenta nunca, y nada más lo dice.
+ */
+function deadlockProbes(model, root, { state, first, port, id, concurrency }) {
+  const idColumn = root.idField?.columns?.name ?? 'id';
+  const lock = (variable) => `await db.Database.SqlQuery<Guid>($"SELECT ${idColumn} AS \\"Value\\" FROM ${root.tableName} WHERE ${idColumn} = {${variable}} FOR UPDATE").ToListAsync(Cancel);`;
+  return [
+    `    [Fact]
+    public async Task Concurrencia_ElInterbloqueoSeRepiteHastaQueLasDosTransaccionesTerminan()
+    {
+        var a = new ${root.name}(${state(first)});
+        var b = new ${root.name}(${state(first + 1)});
+        await InScope(other => other.GetRequiredService<${port}>().Save(a, Cancel));
+        await InScope(other => other.GetRequiredService<${port}>().Save(b, Cancel));
+        var attempts = 0;
+        async Task Cross(Guid firstId, Guid secondId)
+        {
+            await using var scope = root.CreateAsyncScope();
+            var transactions = scope.ServiceProvider.GetRequiredService<PersistenceTransactions>();
+            var db = scope.ServiceProvider.GetRequiredService<${dbContext(model)}>();
+            await transactions.InTransaction(
+                async () =>
+                {
+                    Interlocked.Increment(ref attempts);
+                    ${lock('firstId')}
+                    await Task.Delay(400, Cancel);
+                    ${lock('secondId')}
+                    return true;
+                },
+                readOnly: false,
+                Cancel);
+        }
+        // T1 toma a y luego b; T2, b y luego a. El motor aborta a una, y su transacción se repite tras el commit de la otra.
+        await Task.WhenAll(Cross(a.${id}, b.${id}), Cross(b.${id}, a.${id}));
+        Assert.Equal(3, attempts);
+    }`,
+    `    [Fact]
+    public async Task Concurrencia_ElInterbloqueoAgotadoEsElConflictoDeConcurrencia() =>
+        await InScope(async services =>
+        {
+            var transactions = services.GetRequiredService<PersistenceTransactions>();
+            var attempts = 0;
+            var error = await Assert.ThrowsAnyAsync<DomainException>(() => transactions.InTransaction<bool>(
+                () =>
+                {
+                    attempts++;
+                    throw new PostgresException("deadlock detected", "ERROR", "ERROR", PostgresErrorCodes.DeadlockDetected);
+                },
+                readOnly: false,
+                Cancel));
+            Assert.Equal(PersistenceTransactions.WriteConflictAttempts, attempts);
+            Assert.Equal(${csString(concurrency)}, error.Code);
+            Assert.Equal(409, error.HttpStatus);
+        });`
+  ];
 }
 
 /**

@@ -1676,6 +1676,48 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       sujetos y **208 sondas**; `doc-check` entero, 5 sujetos y **133 sondas**. Falsados: `signature-memory` (solo cae
       la prueba de la firma), `id-batch` en `db-check` (las dos sondas del lote) y en `doc-check` (la del `Owner`).
     - **Con esto el incremento 13 queda cerrado.** Sigue el 14 (telemetría y `deploy/`).
+- **Tramo previo al 14 — la revisión de los incrementos 0-13 (2026-10-18).** Antes de abrir el 14 se repasó el plan
+  contra el código buscando lo que los incrementos cerrados habían dejado prometido. Cinco cosas, cuatro hechas:
+  - **La matriz de paridad** (§1, principio 5, y §3), que el plan prometía desde el principio y no existía:
+    `src/lib/engine-support.js` con una fila por mecanismo de `keel-core/gen/mechanisms.js`, `test/engine-support.test.js`,
+    `test/parity.test.js` (marcadores por rama sobre los pares `job-dispatch` y `notification-mailer`, acotados a un
+    archivo con la ruta del proyecto de cada rama) y `npm run matrix`. Las celdas salen de lo que este plan registra como
+    medido y de los sabotajes que existen en cada red. Falsada quitando el `SKIP LOCKED` del relay en el emisor: cae
+    exactamente `outbox-relay/relational`. **30 celdas: 25 verificadas, 3 sin ejecutar, 2 no-aplica y 2 filas pendientes
+    del 14** (`runtime-panel`, `telemetry-store-spans`). Lo que destapó pasarla a código:
+    - **sin ejecutar**: `transient-write-conflict/relational` (ninguna red provoca un interbloqueo real; el reintento de
+      `PersistenceTransactions` no lo recorre nadie) y `folded-text` en las dos ramas (la sombra existe y se conserva,
+      pero ninguna sonda manda la clave en mayúsculas al índice único: un `TextFold` que no plegara saldría verde). Las dos
+      las mide keel-nest; aquí faltan sus sondas y sus sabotajes. La puerta del 16 («matriz sin `sin ejecutar`») las exige;
+    - **sin falsar**: `harness-db-probes/relational`, `harness-sql-literals/postgresql` (como en keel-nest) y
+      `partial-unique-index/postgresql` (ningún sabotaje rompe el PREDICADO del índice parcial).
+  - **`test/profile-values-source.test.js`** en keel-dotnet, el de keel-spring y keel-nest (1c): ningún emisor define su
+    gradiente ni escribe a mano una variable de `runtime-env`. La fuente estaba limpia; nada se lo exigía. Falsado
+    plantando una copia y una llamada.
+  - **La frontera sin incrementos cerrados**: el rechazo del value object compuesto en el cuerpo o la respuesta de una
+    llamada saliente decía «llega en el incremento 13»; ahora nombra el 16, donde lo generó keel-nest. Y la idempotencia sin
+    persistencia ya no se anuncia como pendiente del 10: no tiene mecanismo posible, y el aviso lo dice como keel-nest.
+  - **El README del paquete**, que seguía en el incremento 4, con el flujo normalizado de dos pasos, la frontera de hoy,
+    todos los sabotajes de `cs-check` y las redes en vivo.
+  - **Para el 14** (no se hace aquí): la descripción de cada variable de producción en el README generado. Solo keel-spring
+    la tiene (`productionParameters` de su `readme.js`, con las descripciones a mano); keel-nest tampoco. Es parte del
+    `deploy/` del 14, y candidata a salir al catálogo neutral `runtime-env` con su descripción.
+  - **Sigue abierto**: la red sin SDK `cs-syntax` (4c), sin decidir. Hoy la sintaxis de C# solo la juzga `cs-check`.
+  - **Las tres celdas sin ejecutar, cerradas (2026-10-18).** Sondas nuevas y sus sabotajes, cada uno medido rojo en sus
+    sondas y solo en ellas:
+    - **`transient-write-conflict/relational`**, en `db-check` y en los 12 sujetos: dos ámbitos con su
+      `PersistenceTransactions` bloquean dos filas en orden inverso; el motor aborta a uno (40P01) y la transacción lo
+      repite ENTERA hasta que las dos terminan (tres intentos); y un 40P01 que agota sus intentos sale como el 409 de
+      concurrencia. Sabotajes `deadlock` (el clasificador sin el 40P01) y `retry` (el bucle sin repetir): caen esas dos.
+    - **`folded-text/relational`**, en `db-check` sobre `catalog-extended`: `Category.slug` en mayúsculas es la misma
+      clave (el error del diseño) y la sombra del filtro de `Product.name` guarda el valor de `TextFold` sin unicidad.
+      Sabotajes `fold` (cae solo la de la clave) y `fold-accents` (solo la del filtro).
+    - **`folded-text/document`**, en `doc-check` sobre la derivada `job-dispatch-mongo-compare`: el documento guarda el
+      valor plegado y la clave en mayúsculas y sin tildes choca con el error del diseño. Sabotaje `fold-accents`.
+    - **Medido**: `db-check` entero, 12 sujetos y **234 sondas** (eran 208); `doc-check` entero, 5 sujetos y **134 sondas** (eran 133). La matriz
+      queda en **28 verificadas, 0 sin ejecutar**, y `test/engine-support.test.js` lo sostiene: una celda razonada nueva
+      lo pone rojo. Siguen **sin falsar** `harness-db-probes/relational`, `harness-sql-literals/postgresql` y el predicado de
+      `partial-unique-index/postgresql`.
 
 ## 5. Riesgos conocidos
 

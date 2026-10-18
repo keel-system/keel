@@ -55,7 +55,7 @@ test('los clientes salientes, las activaciones y los needs (bajo demanda, lastKn
 
   const inBody = structuredClone(base);
   inBody['http-clients'].clients.pricing.calls.getPrice.response.fields.price = { type: 'Money' };
-  assert.match(checkSupportedFeatures(manifestWith(...layers), inBody).errors.join('\n'), /getPrice: price es un value object compuesto en el cuerpo o en la respuesta .*incremento 13/);
+  assert.match(checkSupportedFeatures(manifestWith(...layers), inBody).errors.join('\n'), /getPrice: price es un value object compuesto en el cuerpo o en la respuesta .*incremento 16/);
 
   // En la URL, el rechazo NEUTRAL: el mismo mensaje que keel-spring y keel-nest.
   const inPath = structuredClone(base);
@@ -144,7 +144,7 @@ test('una operación con idempotency sin persistencia se acepta avisando del inc
   assert.deepEqual(errors, []);
   // La caché (13f) ya se genera: getThing no avisa.
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /createThing declara idempotency .*incremento 10/);
+  assert.match(warnings[0], /createThing declara idempotency, pero el diseño no tiene persistencia: .*no se genera ningún mecanismo/);
 });
 
 test('la telemetría se rechaza en vez de estamparse sin efecto', () => {

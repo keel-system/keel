@@ -42,6 +42,10 @@
 //   replica-order  el proyector aplica un hecho anterior al guardado
 //   replica-batch  la lectura por lote de la réplica no trae nada
 //   id-batch    la lectura por lote por id (FindAllById) se deja el primer id
+//   fold        TextFold.FoldCase no pliega: la clave natural con `compare` en mayúsculas pasa por otra (catalog-extended)
+//   fold-accents  TextFold.FoldCaseAndAccents solo baja la caja: la sombra del filtro conserva los acentos
+//   deadlock    el clasificador no reconoce el interbloqueo (40P01): no se repite y sale como 500
+//   retry       la transacción no repite el conflicto transitorio: el interbloqueo pierde una de las dos
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -87,7 +91,13 @@ const SABOTAGES = {
   'replica-order': ['Projection/', 'if (snapshot.OccurredAt <= existing.OccurredAt)', 'if (snapshot.OccurredAt == existing.OccurredAt)'],
   'replica-batch': ['Repositories/', 'Where(r => keys.Contains(r.Sku))', 'Where(r => keys.Skip(1).Contains(r.Sku))'],
   // La lectura por lote por id (los embebidos de una página) se deja el primer id.
-  'id-batch': ['Repositories/', 'Where(r => keys.Contains(r.Id))', 'Where(r => keys.Skip(1).Contains(r.Id))']
+  'id-batch': ['Repositories/', 'Where(r => keys.Contains(r.Id))', 'Where(r => keys.Skip(1).Contains(r.Id))'],
+  // El plegado (DSL 2.14): la sombra con otro valor que el de TextFold.
+  fold: ['Persistence/TextFold.cs', 'FoldCase(string? value) => value?.ToLowerInvariant();', 'FoldCase(string? value) => value;'],
+  'fold-accents': ['Persistence/TextFold.cs', 'return kept.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant();', 'return value.ToLowerInvariant();'],
+  // El reintento del conflicto transitorio: el clasificador o el bucle.
+  deadlock: ['Persistence/PersistenceErrors.cs', 'SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.SerializationFailure', 'SqlState is PostgresErrorCodes.SerializationFailure'],
+  retry: ['Persistence/PersistenceTransactions.cs', 'attempt < WriteConflictAttempts &&', 'attempt < 1 &&']
 };
 
 const results = [];

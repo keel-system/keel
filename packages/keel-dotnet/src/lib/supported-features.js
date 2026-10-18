@@ -30,18 +30,6 @@ export const SUPPORTED_BROKERS = ['rabbitmq', 'kafka', 'snssqs'];
 const ACCEPTED_NOT_EMITTED = {};
 
 /**
- * Lo que una operación de use-cases puede declarar y keel-dotnet aún no genera: el mensaje y el handler sí
- * salen, el mecanismo no. Se avisa, porque el handler sin él compila y responde como si nada.
- */
-const PENDING_OPERATION_FEATURES = [
-  // El registro de idempotencia de petición se genera con persistencia relacional (adelantado del incremento 10, como en
-  // keel-nest): sin persistencia no hay dónde registrar la clave en la transacción del comando.
-  { key: 'idempotency', what: 'idempotency sin persistencia (el registro de claves necesita la base)', increment: 'incremento 10', unless: (layers) => Boolean(layers?.persistence) }
-  // La caché de lectura (`cache`) se genera desde el incremento 13f: el puerto, el adaptador sobre Redis/Valkey y la
-  // invalidación en el mediator.
-];
-
-/**
  * Comprueba el diseño contra la frontera de keel-dotnet. Devuelve { errors, warnings } de strings ya
  * redactados para consola.
  */
@@ -73,15 +61,18 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...callerIdentityErrors(layers));
   errors.push(...messagingErrors(declared, layers));
   errors.push(...outboundErrors(layers));
-  const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
-  for (const feature of PENDING_OPERATION_FEATURES) {
-    if (feature.unless?.(layers)) continue;
-    const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
-    if (names.length === 0) continue;
-    warnings.push(
-      `use-cases: ${names.join(', ')} declara${names.length === 1 ? '' : 'n'} ${feature.what}; keel-dotnet genera el mensaje y el handler, ` +
-        `pero no el mecanismo (llega en el ${feature.increment} de PLAN-KEEL-DOTNET.md).`
-    );
+  // Lo que una operación declara se genera entero: la idempotencia de petición desde el 7e, el reloj y los reclamos desde
+  // el 10 y la caché desde el 13f. La idempotencia sin persistencia no es un pendiente: el registro de claves tiene que
+  // confirmarse en la misma transacción que el efecto, así que no hay mecanismo posible, y se dice (como keel-nest).
+  if (!layers?.persistence) {
+    const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
+    const idempotent = operations.filter(([, operation]) => operation?.idempotency != null).map(([name]) => name);
+    if (idempotent.length > 0) {
+      warnings.push(
+        `use-cases: ${idempotent.join(', ')} declara${idempotent.length === 1 ? '' : 'n'} idempotency, pero el diseño no tiene persistencia: ` +
+          'el registro de claves tiene que confirmarse en la misma transacción que el efecto, así que no se genera ningún mecanismo.'
+      );
+    }
   }
   return { errors, warnings };
 }
@@ -142,7 +133,7 @@ function callerIdentityErrors(layers) {
 function messagingErrors(declared, layers) {
   if (!declared.includes('messaging')) return [];
   const errors = [];
-  if (!declared.includes('persistence')) {
+  if (!layers?.persistence) {
     errors.push(
       'capa messaging sin persistence — keel-dotnet genera la mensajería sobre la persistencia, relacional o documental (incrementos 9 y 12c de PLAN-KEEL-DOTNET.md): ' +
         'el puente de eventos sale del adaptador de repositorio y el registro de mensajes procesados vive en la base. Genera este diseño con keel-spring o keel-nest.'
@@ -159,9 +150,8 @@ function isComposite(layers, field) {
 }
 
 /**
- * Lo que keel-dotnet todavía no sabe hacer con los clientes salientes y las dependencias (incremento 11 de
- * PLAN-KEEL-DOTNET.md): los clientes y las activaciones se generan; esto, no.
- *   · la réplica de un `need` (`strategy: replicated`): llega en el 13j, como en keel-nest;
+ * Lo que keel-dotnet todavía no sabe hacer con los clientes salientes y las dependencias: los clientes, las activaciones,
+ * los needs y OAuth2 se generan (incrementos 11 y 13 de PLAN-KEEL-DOTNET.md); esto, no.
  *   · un value object compuesto en una llamada: en la URL no tiene forma (el rechazo neutral, el mismo que en keel-spring y
  *     keel-nest); en el cuerpo o en la respuesta sí, pero ninguna red de keel-dotnet lo ha medido todavía.
  */
@@ -178,7 +168,7 @@ function outboundErrors(layers) {
       if (fields.length > 0) {
         errors.push(
           `http-clients.${client}.calls.${call}: ${fields.join(', ')} es un value object compuesto en el cuerpo o en la respuesta — keel-dotnet ` +
-            'todavía no lo genera (ninguna de sus redes lo ha medido; llega en el incremento 13 de PLAN-KEEL-DOTNET.md). Genera este diseño con keel-spring o keel-nest.'
+            'todavía no lo genera (ninguna de sus redes lo ha medido; llega en el incremento 16 de PLAN-KEEL-DOTNET.md, como en keel-nest). Genera este diseño con keel-spring o keel-nest.'
         );
       }
     }

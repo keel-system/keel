@@ -97,5 +97,5 @@ test('la frontera ya no avisa de la idempotencia con persistencia; sin ella, sí
     []
   );
   withoutPersistence(manifest, layers);
-  assert.ok(checkSupportedFeatures(manifest, layers).warnings.some((w) => /idempotency sin persistencia/.test(w)));
+  assert.ok(checkSupportedFeatures(manifest, layers).warnings.some((w) => /idempotency, pero el diseño no tiene persistencia/.test(w)));
 });

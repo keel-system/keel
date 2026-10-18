@@ -46,6 +46,8 @@
 //   bridge-session el puente escribe la fila del outbox fuera de la sesión del cambio (sobrevive al aborto)
 //   credential     el finder de resolvedBy busca solo en la primera credencial de la lista
 //   send-guard     la guarda del envío (mail.sentBy) escribe en la sesión del caso de uso, no confirma al volver
+//   fold-accents   TextFold.FoldCaseAndAccents solo baja la caja: la sombra conserva los acentos y la clave natural de
+//                  job-dispatch-mongo-compare con otra grafía pasa por otra
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -131,7 +133,9 @@ const SABOTAGES = {
   // resolvedBy (12e): el finder por credencial busca solo en la PRIMERA de la lista.
   credential: ['Repositories/', 'new BsonDocument("credential_keys", ', 'new BsonDocument("credential_keys.0", '],
   // La guarda del envío (mail.sentBy, 12e) escribe en la sesión del caso de uso: su marca se deshace con ella.
-  'send-guard': ['Repositories/', 'Sin sesión: confirma al volver.' + NL + '        var document = await Collection.FindOneAndUpdateAsync<BsonDocument>(' + NL, 'Sin sesión: confirma al volver.' + NL + '        var document = await Collection.FindOneAndUpdateAsync<BsonDocument>(transactions.Session!,' + NL]
+  'send-guard': ['Repositories/', 'Sin sesión: confirma al volver.' + NL + '        var document = await Collection.FindOneAndUpdateAsync<BsonDocument>(' + NL, 'Sin sesión: confirma al volver.' + NL + '        var document = await Collection.FindOneAndUpdateAsync<BsonDocument>(transactions.Session!,' + NL],
+  // El plegado (DSL 2.14), en la derivada job-dispatch-mongo-compare.
+  'fold-accents': ['Persistence/TextFold.cs', 'return kept.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant();', 'return value.ToLowerInvariant();']
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación
