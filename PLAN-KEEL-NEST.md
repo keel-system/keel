@@ -2144,7 +2144,9 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     que la clave natural ya tiene y no enlaza, el envío parcial, la cota del asunto interpolado y la versión
     congelada que falta).
   - **Frontera**: toda fixture entra entera (`capability-coverage.test.js` de keel-nest lo exige). Se generan ya la
-    mensajería SIN persistencia (el rechazo era un resto del 9: el emisor ya la sabía hacer) y el value object
+    mensajería SIN persistencia (el rechazo era un resto del 9: el emisor ya la sabía hacer; **corregido el 2026-10-18**: no
+    publicaba —sin adaptador de repositorio no había puente ni publisher—, y desde el 16 de keel-dotnet la rechazan los tres,
+    `keel-core/gen/messaging-frontier.js`) y el value object
     compuesto en el cuerpo y en la respuesta de una llamada saliente (con el `read<Tipo>` de la entrada; lo que su
     constructor rechaza es un `OutboundContractError`, EJECUTADO en `http-clients.test.js`). Quedan rechazados, con
     motivo: MariaDB, SQL Server y Oracle (ninguna red los ha arrancado; en keel-spring están sin ejecutar) y el

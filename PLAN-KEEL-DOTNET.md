@@ -1943,13 +1943,17 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     cuerpo viaja como objeto con los nombres del diseño. Silueta `stock-reservation-compuesto-saliente` (el parche de
     keel-nest). `cs-check --fixtures`: 15 fixtures y 19 variantes, 204/204 ensamblados y 4 991 pruebas. Falsado con
     `--sabotage=outbound-composite` (la respuesta leída con `Deserialize`): cae justo el caso del obligatorio que falta.
-  - **16b, la mensajería sin persistencia: NO se cierra, y destapa un defecto de los otros dos.** keel-nest la «cerró» en
+  - **16b, la mensajería sin persistencia: se rechaza en los TRES, y destapa un defecto de los otros dos.** keel-nest la «cerró» en
     su 16 porque «el emisor ya la sabía hacer», pero lo que emite no publica: los eventos los levanta el agregado y los
     drena el adaptador de repositorio, y sin persistencia keel-nest no emite ni puente ni publisher (el handler dice «no
     publica nada») ni registra la conexión del broker en `app.module.ts`; keel-spring emite un puente que espera un
     `@TransactionalEventListener(AFTER_COMMIT)` que nadie dispara. Los dos generan, sin decirlo, un servicio que no
-    publica ni consume. keel-dotnet sigue rechazándola, ahora con ese motivo; arreglarlo en los tres es decisión abierta.
-  - Queda: la decisión del 16b, la matriz (sin celdas `sin ejecutar` ni pendientes desde el 14f; tres celdas sin falsar)
+    publica ni consume. Decidido (2026-10-18): rechazarla en los tres con el mismo motivo, neutral en
+    `keel-core/gen/messaging-frontier.js` (`messagingWithoutPersistenceErrors`), como `outbound-params.js`. keel-nest retira sus
+    dos siluetas «sin persistencia» de `DERIVED_SILHOUETTES`. Ninguna fixture la declara, así que lo emitido no cambia. Lo
+    fija `test/messaging-frontier.test.js`: el de keel-core prueba la función, y el de keel-dotnet, que los tres rechazan
+    con el mismo mensaje. Suites: keel-core 1224, keel-spring 1664, keel-nest 792 y keel-dotnet 683.
+  - Queda: la matriz (sin celdas `sin ejecutar` ni pendientes desde el 14f; tres celdas sin falsar)
     y la corrida de control del par MVP en los tres generadores.
 
 ## 5. Riesgos conocidos

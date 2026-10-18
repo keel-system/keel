@@ -33,11 +33,13 @@ test('capa security (incremento 8): se genera, también la identidad resuelta po
   assert.deepEqual(checkSupportedFeatures(manifest, resolved), { errors: [], warnings: [] });
 });
 
-test('capa messaging (incremento 9): se genera con persistencia y, como keel-spring, sin ella (16)', () => {
+test('capa messaging (incremento 9): se genera con persistencia; sin ella se rechaza, como en keel-spring y keel-dotnet', () => {
   const withPersistence = manifestWith('domain', 'use-cases', 'persistence', 'messaging');
   assert.deepEqual(checkSupportedFeatures(withPersistence, layersWith('domain', 'use-cases', 'persistence', 'messaging')), { errors: [], warnings: [] });
-  // Sin persistencia no hay outbox ni registro de procesados (ts-syntax y ts-check compilan esa silueta).
-  assert.deepEqual(checkSupportedFeatures(manifestWith('domain', 'use-cases', 'messaging'), layersWith('domain', 'use-cases', 'messaging')), { errors: [], warnings: [] });
+  // Sin persistencia nadie publicaría los eventos del agregado: el rechazo neutral (keel-core/gen/messaging-frontier.js).
+  const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'messaging'), layersWith('domain', 'use-cases', 'messaging'));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /capa messaging sin persistence .*keel-nest generaría un servicio que no publica/);
 });
 
 test('messaging: la identidad del emisor resuelta por varias credenciales se genera (12e)', () => {

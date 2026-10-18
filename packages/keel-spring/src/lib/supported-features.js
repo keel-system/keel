@@ -9,6 +9,7 @@
 // Al añadir soporte para una de estas capacidades, se borra su entrada de aquí.
 
 import { compositeUrlParamErrors } from 'keel-core/gen/outbound-params';
+import { messagingWithoutPersistenceErrors } from 'keel-core/gen/messaging-frontier';
 
 /**
  * Comprueba el diseño contra la frontera de keel-spring.
@@ -212,6 +213,9 @@ export function checkSupportedFeatures(manifest, layers) {
   // Un value object compuesto en la ruta, la query o una cabecera de una llamada saliente no tiene forma ahí: el
   // RestClient escribiría el toString() del record. Lo rechazan los dos generadores con el mismo mensaje.
   for (const message of compositeUrlParamErrors(layers, 'keel-spring')) errors.push(message);
+  // La mensajería sin persistencia: el puente esperaba un AFTER_COMMIT que nadie dispara, y el servicio no publicaba
+  // sin decirlo (medido en el incremento 16 de keel-dotnet). El rechazo neutral, el mismo en los tres.
+  errors.push(...messagingWithoutPersistenceErrors(manifest, layers, 'keel-spring'));
 
   if (orphanInternal.length > 0) {
     warnings.push(

@@ -12,6 +12,7 @@
 //     no se emite, y el aviso dice cuándo llega.
 
 import { compositeUrlParamErrors } from 'keel-core/gen/outbound-params';
+import { messagingWithoutPersistenceErrors } from 'keel-core/gen/messaging-frontier';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. Hoy, ninguna: storage llegó en el 13g. */
 const PENDING_LAYERS = {};
@@ -71,12 +72,13 @@ export function checkSupportedFeatures(manifest, layers) {
     }
   }
   // La persistencia (relacional y documental) se genera entera, también la auditoría de autoría por política o
-  // declarada (incremento 13h). La mensajería, con persistencia o sin ella, como keel-spring: sin persistencia no
-  // hay outbox ni registro de procesados (no hay transacción con la que confirmarlos), y los eventos salen por el
-  // puerto <Evento>Publisher.
+  // declarada (incremento 13h). La mensajería, solo con persistencia: sin ella no se emitía ni
+  // puente ni publisher ni el registro de la conexión, y el servicio no publicaba sin decirlo (lo midió el incremento 16 de
+  // keel-dotnet). El rechazo neutral, el mismo en los tres.
   // Lo saliente se genera entero (11b-13j, y el value object compuesto en el cuerpo y en la respuesta desde el
   // 16); lo único que se rechaza es lo que tampoco genera keel-spring: un compuesto en la URL o en una cabecera.
   for (const message of compositeUrlParamErrors(layers, 'keel-nest')) errors.push(message);
+  errors.push(...messagingWithoutPersistenceErrors(manifest, layers, 'keel-nest'));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   // La idempotencia de petición se genera (el registro idempotency_record, como keel-spring) cuando hay
   // persistencia donde registrar la clave en la misma transacción que el efecto. Sin persistencia no hay

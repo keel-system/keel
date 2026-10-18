@@ -11,6 +11,7 @@
 //     emite, y el aviso dice cuándo llega.
 
 import { compositeUrlParamErrors } from 'keel-core/gen/outbound-params';
+import { messagingWithoutPersistenceErrors } from 'keel-core/gen/messaging-frontier';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {};
@@ -58,7 +59,8 @@ export function checkSupportedFeatures(manifest, layers) {
   // idempotencia, los reclamos de barrido y de reconciliación, las purgas— (12c), con su arnés de flujos (12d): no queda
   // nada propio del modelo que rechazar ni que avisar. El mismo reparto que keel-nest.
   errors.push(...callerIdentityErrors(layers));
-  errors.push(...messagingErrors(declared, layers));
+  // La mensajería sin persistencia: nadie publicaría los eventos del agregado (el rechazo neutral, el mismo en los tres).
+  errors.push(...messagingWithoutPersistenceErrors(manifest, layers, 'keel-dotnet'));
   errors.push(...outboundErrors(layers));
   // Lo que una operación declara se genera entero: la idempotencia de petición desde el 7e, el reloj y los reclamos desde
   // el 10 y la caché desde el 13f. La idempotencia sin persistencia no es un pendiente: el registro de claves tiene que
@@ -121,25 +123,6 @@ function callerIdentityErrors(layers) {
   return errors;
 }
 
-/**
- * La mensajería SIN persistencia se rechaza con motivo: los eventos los levanta el agregado y los drena el adaptador de
- * repositorio al guardarlo, y sin persistencia no hay ni adaptador ni transacción tras la que publicarlos. Medido en el
- * incremento 16: keel-spring emite un puente que espera un AFTER_COMMIT que nadie dispara, y keel-nest ni puente ni
- * publisher (el handler dice «no publica nada»); los dos generan un servicio que no publica sin decirlo, y aquí no se
- * copia. La identidad del emisor resuelta contra las credenciales de un recurso (`identity.resolvedBy`) se genera desde el
- * 12e: el finder.
- */
-function messagingErrors(declared, layers) {
-  if (!declared.includes('messaging')) return [];
-  const errors = [];
-  if (!layers?.persistence) {
-    errors.push(
-      'capa messaging sin persistence — keel-dotnet genera la mensajería sobre la persistencia, relacional o documental (incrementos 9 y 12c de PLAN-KEEL-DOTNET.md): ' +
-        'los eventos del agregado los drena el adaptador de repositorio al guardarlo, y sin persistencia nadie los publicaría (ni hay registro de mensajes procesados). Declara la persistencia.'
-    );
-  }
-  return errors;
-}
 
 /**
  * Lo saliente se genera entero: los clientes, las activaciones, los needs y OAuth2 (incrementos 11 y 13 de PLAN-KEEL-DOTNET.md),

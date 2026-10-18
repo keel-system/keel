@@ -94,21 +94,12 @@ export async function mountOutsideFrontier(workspace) {
 /**
  * Siluetas que ninguna fixture tiene y keel-nest genera (incremento 16): se derivan de una fixture real, quitando
  * capas o añadiendo lo justo, y las compilan ts-syntax (sin red) y ts-check (con strict y sus pruebas emitidas).
- *   · la mensajería SIN persistencia, que keel-spring también genera: sin outbox ni registro de procesados;
  * Cada una es un diseño VÁLIDO (ts-syntax lo exige): una silueta que la validación rechaza no llega nunca a build.
  *   · un value object compuesto en el cuerpo y en la respuesta de una llamada saliente.
+ * La mensajería SIN persistencia estuvo aquí hasta el incremento 16 de keel-dotnet, que midió que no publicaba: sin
+ * adaptador de repositorio no se emitía ni puente ni publisher. Ahora la rechazan los tres (keel-core/gen/messaging-frontier.js).
  */
 export const DERIVED_SILHOUETTES = [
-  { name: 'metering-digest-sin-persistencia', fixture: 'metering-digest', withoutLayers: ['persistence'] },
-  {
-    name: 'stock-reservation-sin-persistencia',
-    fixture: 'stock-reservation',
-    withoutLayers: ['persistence'],
-    // Sin almacén no hay outbox (la validación lo rechaza): el diseño válido publica best-effort.
-    mutate(layers) {
-      layers.messaging.publishing.reliability = 'best-effort';
-    }
-  },
   {
     name: 'stock-reservation-compuesto-saliente',
     fixture: 'stock-reservation',

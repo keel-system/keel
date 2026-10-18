@@ -64,6 +64,7 @@ export {
   circuitBreakerReference
 } from './outbound-resilience.js';
 export { compositeUrlParams, compositeUrlParamErrors } from './outbound-params.js';
+export { messagingWithoutPersistenceErrors } from './messaging-frontier.js';
 export {
   RECONCILIATION_CLAIM,
   RECONCILIATION_PURGE,
