@@ -362,9 +362,41 @@ public sealed class TelemetryTests : IDisposable
         return root;
     }
 
-    private sealed class PruebaRechazo() : DomainException("rechazo de prueba");${messaging ? ENVELOPE_TESTS : ''}
+    private sealed class PruebaRechazo() : DomainException("rechazo de prueba");${messaging ? ENVELOPE_TESTS : ''}${relational ? POOL_TESTS : ''}
 }`;
 }
+
+// El pool de Npgsql, con los instrumentos y los NOMBRES que publica Npgsql 10.0.3 (medidos con un MeterListener el
+// 2026-10-18): los observables db.client.connection.count (por estado) y .max, y el UpDownCounter propio
+// db.client.connection.npgsql.pending_requests. Un Meter de prueba con el mismo nombre los publica; cada uno tiene que
+// acabar en su serie del panel. La saturación en reposo es 0, así que telemetry-check no la distingue de un nombre
+// equivocado: esto sí.
+const POOL_TESTS = String.raw`
+
+    [Fact]
+    public async Task ElPoolSeLeeDeLosInstrumentosQuePublicaNpgsql()
+    {
+        var telemetry = Started();
+        using var meter = new System.Diagnostics.Metrics.Meter("Npgsql");
+        meter.CreateObservableUpDownCounter("db.client.connection.count", () => new[]
+        {
+            new System.Diagnostics.Metrics.Measurement<int>(3, new KeyValuePair<string, object?>("db.client.connection.state", "idle")),
+            new System.Diagnostics.Metrics.Measurement<int>(2, new KeyValuePair<string, object?>("db.client.connection.state", "used"))
+        });
+        meter.CreateObservableUpDownCounter("db.client.connection.max", () => 9);
+        var pending = meter.CreateUpDownCounter<int>("db.client.connection.npgsql.pending_requests");
+        pending.Add(4);
+        pending.Add(-1);
+        var exposition = await Exposition(telemetry);
+        double Value(string series) => double.Parse(
+            exposition.Split('\n').First(line => line.StartsWith(series + " ", StringComparison.Ordinal)).Split(' ')[1],
+            CultureInfo.InvariantCulture);
+        // Mayor o igual: el servidor en memoria de otras pruebas puede tener su propio pool (en el perfil test, vacío).
+        Assert.True(Value("${DOTNET_RUNTIME.pool.idle}") >= 3);
+        Assert.True(Value("${DOTNET_RUNTIME.pool.active}") >= 2);
+        Assert.True(Value("${DOTNET_RUNTIME.pool.max}") >= 9);
+        Assert.Equal(3, Value("${DOTNET_RUNTIME.pool.saturation}"));
+    }`;
 
 const ENVELOPE_TESTS = String.raw`
 

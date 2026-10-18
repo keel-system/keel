@@ -39,6 +39,10 @@ export const NETS = {
     'npm run doc-harness-check — el arnés documental contra la infra/ real: MongoEval, reset, rescate, reconciliación, puntuación e índices vivos con export-indexes.sh',
   'broker-check':
     'npm run broker-check [-- --broker=rabbitmq|kafka|snssqs] — la mensajería contra RabbitMQ, Kafka y LocalStack reales: dispatcher y listener, el relay con el broker caído y los helpers del arnés',
+  'telemetry-check':
+    'npm run telemetry-check — la telemetría con la app ARRANCADA contra PostgreSQL y un colector OTLP falso: series, exemplar, runtime, el pool de Npgsql, la traza, los logs y el puerto de gestión',
+  'deploy-check':
+    'npm run deploy-check — deploy/ entero con su up.sh (la app en contenedor, el colector y el backend) y las preguntas al backend que comparten los tres generadores',
   ninguna: 'nadie lo ejecuta'
 };
 
@@ -46,11 +50,26 @@ export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
   'runtime-panel': {
-    // Emitido desde el 14d (DOTNET_RUNTIME de src/scaffold/telemetry.js) y su presencia en el scrape la exige la prueba
-    // emitida TelemetryTests en cs-check; lo que falta para la celda es medir con la app arrancada qué publica de verdad el
-    // Meter de Npgsql (los nombres de db.client.connection.* y sus estados), y que el documental no trae pool.
-    pending:
-      'el panel y sus series ya se emiten (incremento 14d); la celda espera a telemetry-check, en el incremento 14f de PLAN-KEEL-DOTNET.md: el pool que lee del Meter de Npgsql solo se ve contra un PostgreSQL real'
+    parity: {
+      skip: 'la telemetría es una elección de STACK (telemetry: otel) y el par se genera sin ella; el panel y sus series los comparan con keel-spring test/observability-assets.test.js y la prueba emitida TelemetryTests, generando con la opción',
+      test: 'test/observability-assets.test.js'
+    },
+    emitter: 'src/scaffold/observability-assets.js (los neutrales de keel-core/gen/observability-assets.js con DOTNET_RUNTIME) · las series en src/scaffold/telemetry.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'telemetry-check',
+        engines: ['postgresql'],
+        falsified: true,
+        why:
+          'la fila de runtime de .NET (heap gestionado contra TotalAvailableMemoryBytes, pausas de GC, cola del thread pool) y el pool de Npgsql leído de su Meter (keel_db_pool_*). La prueba emitida TelemetryTests exige en cs-check que el scrape publique toda serie del panel y de las alertas, y que el pool salga de los instrumentos que publica Npgsql 10.0.3, medidos con un MeterListener: db.client.connection.count por estado, .max y db.client.connection.npgsql.pending_requests (sabotaje telemetry-pool: con el nombre sin npgsql la saturación salía siempre a 0). telemetry-check, con la app arrancada contra PostgreSQL: el pool con el tamaño configurado y sus conexiones de vuelta como libres; falsado leyendo un instrumento que no existe (cae TEL-7 y solo él). deploy-check: las series llegan al backend y el panel y las alertas entran'
+      },
+      document: {
+        state: 'degradado',
+        why:
+          'MongoDB.Driver no publica sus contadores de pool sin suscribirse a sus eventos de conexión, así que keel-dotnet, como keel-nest, no publica serie de pool en el modelo documental: el panel no trae esa celda ni la alerta de saturación (keel-spring sí, con mongodb_driver_pool_*). Sin serie, ni fila ni alerta: una consulta sobre una serie que nadie publica dejaría el panel vacío y la alerta muda'
+      }
+    }
   },
   'outbox-relay': {
     parity: {

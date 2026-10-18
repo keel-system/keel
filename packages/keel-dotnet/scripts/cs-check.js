@@ -110,6 +110,7 @@ const SABOTAGES = {
 //   telemetry-b3        la entrada solo lee W3C: la traza de quien llama con B3 se corta
 //   telemetry-log-trace la línea de log no lleva los ids de su traza
 //   telemetry-series    una serie del runtime sale con otro nombre que el que consultan el panel y las alertas
+//   telemetry-pool      la saturación del pool se lee de db.client.connection.pending_requests (sin el prefijo npgsql)
 const CLIENTS_DIR = 'stock-reservation/src/StockReservation.Infrastructure/Clients';
 // La telemetría (incremento 14c), sobre la variante con mensajería: la prueba emitida TelemetryTests las caza.
 const TELEMETRY_DIR = 'stock-reservation-otel/src/StockReservationOtel.Infrastructure/Telemetry';
@@ -120,6 +121,7 @@ const FIXTURE_SABOTAGES = {
   'telemetry-host': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, '            Activity.Current = null;\n', ''],
   'telemetry-rejection': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'options.IsRejection?.Invoke(error) == true', 'options.IsRejection?.Invoke(error) == false'],
   'telemetry-b3': [`${TELEMETRY_DIR}/W3cOutB3InPropagator.cs`, 'if (fromW3c.ActivityContext.TraceId != default)', 'if (fromW3c.ActivityContext.TraceId != default || fromW3c.ActivityContext.TraceId == default)'],
+  'telemetry-pool': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'PoolValue("db.client.connection.npgsql.pending_requests", null)', 'PoolValue("db.client.connection.pending_requests", null)'],
   'telemetry-series': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'metrics.CreateGauge("keel_runtime_threadpool_queue_length"', 'metrics.CreateGauge("keel_runtime_threadpool_queue"'],
   'telemetry-log-trace': ['stock-reservation-otel/src/StockReservationOtel.Infrastructure/Logging/KeelConsoleFormatter.cs', 'KeelTelemetry.TraceIds()', '((string, string)?)null'],
   // El need bajo demanda con fail (13i): el fallback deja de lanzar el error del diseño.

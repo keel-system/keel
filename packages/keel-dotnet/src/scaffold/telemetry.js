@@ -200,7 +200,9 @@ ${constants(ATTRIBUTES)}
 // ─── KeelTelemetry ───────────────────────────────────────────────────────────────────────────────
 
 /**
- * El pool de Npgsql: lo que publica su Meter (`db.client.connection.count` por estado, `.max` y `.pending_requests`),
+ * El pool de Npgsql: lo que publica su Meter (`db.client.connection.count` por estado y `.max`, observables, y
+ * `db.client.connection.npgsql.pending_requests`, un UpDownCounter propio de Npgsql: medidos con un MeterListener sobre
+ * Npgsql 10.0.3 el 2026-10-18; sin el prefijo npgsql, la serie de saturación saldría siempre a 0 y su alerta no dispararía),
  * escuchado con un MeterListener y volcado en las series del panel en cada scrape. Un instrumento observable da su valor;
  * uno que no lo es da incrementos, y se acumulan.
  */
@@ -245,7 +247,7 @@ const POOL_MEMBERS = `
             active.Set(PoolValue("db.client.connection.count", "used"));
             idle.Set(PoolValue("db.client.connection.count", "idle"));
             max.Set(PoolValue("db.client.connection.max", null));
-            pending.Set(PoolValue("db.client.connection.pending_requests", null));
+            pending.Set(PoolValue("db.client.connection.npgsql.pending_requests", null));
         });
     }
 

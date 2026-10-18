@@ -1880,6 +1880,34 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       fixtures recién generadas, cada regla roja con su forma prohibida y verde con la correcta, el ERROR fuera de Domain
       y Application no cuenta, la correlación nunca es etiqueta. Falsado quitando el filtro de comentarios: cae justo la
       prueba de los comentarios, la única que puede verlo, porque las notas de build no contienen formas prohibidas.
+  - **14f — `telemetry-check` y `deploy-check`. Con esto el incremento 14 queda cerrado.**
+    - **`npm run telemetry-check`** (`scripts/telemetry-check.js`), el gemelo del de keel-nest: la app ARRANCADA contra un
+      PostgreSQL real y un colector OTLP falso. El exportador de .NET manda protobuf y no JSON, así que el receptor lo lee
+      con un lector mínimo (`scripts/lib/otlp-traces.js`, probado sin red contra un mensaje codificado a mano). Un solo
+      motor (PostgreSQL, el de la frontera). Antes de arrancar, el baseline de `dotnet ef`. `job-dispatch` en develop
+      (TEL-1 a TEL-9), en production (TEL-10) y `profile-directory` con OIDC (TEL-11). **11/11 a la primera.** Falsado
+      tres veces, cada sabotaje en su caso: `pool-name` (TEL-7), `management` (TEL-10) y `server-parent` (TEL-3, TEL-8 y
+      TEL-9: el log tampoco lleva ya la traza de quien llamó).
+    - **Lo que destapó, y no lo veía ningún caso**: el pool salió con su tamaño, pero TEL-7 exige `pendiente == 0`, que
+      también sale si el instrumento no existe. Medido con un `MeterListener` sobre Npgsql 10.0.3, la cola de espera es
+      `db.client.connection.npgsql.pending_requests` (propia de Npgsql, con el prefijo), no
+      `db.client.connection.pending_requests`: **la serie de saturación salía siempre a 0 y su alerta no habría
+      disparado nunca**. Arreglado, y medido donde sí se ve: la prueba emitida publica los cuatro instrumentos con un
+      `Meter` llamado `Npgsql` y exige cada valor en su serie (sabotaje `telemetry-pool` de `cs-check`: cae esa prueba y
+      solo ella). `cs-check --fixtures` 174/174 y 3 978 pruebas tras el arreglo.
+    - **`npm run deploy-check`** (`scripts/deploy-check.js`): `deploy/` entero con su `up.sh` y las preguntas al backend,
+      NEUTRALES desde keel-nest (`keel-core/gen/deploy-probes.js`, DEP-2 a DEP-8); keel-dotnet pone su DEP-1 (la serie de
+      runtime de .NET en el scrape). Antes de construir la imagen, el baseline de `dotnet ef`, como el `npm install` de
+      keel-nest. **8/8**: la serie del caso de uso en el backend, el exemplar y su traza en Tempo, los logs en Loki, el
+      panel, las alertas y una alerta que llega al contacto. Es la puerta del incremento: el MISMO panel, las MISMAS
+      alertas y el MISMO contacto tienen datos con los tres servidores.
+    - **Matriz**: `runtime-panel` pasa a `verificado` en relacional (telemetry-check, falsado) y a `degradado` en
+      documental (MongoDB.Driver no publica su pool sin suscribirse a sus eventos, como en keel-nest). **Ya no queda
+      ninguna fila pendiente**: 34 celdas, 29 verificadas, 3 degradadas con su motivo y 2 que no aplican.
+    - **Queda declarado para después**, como en keel-nest: los spans de los drivers (`telemetry-store-spans`), el push
+      OTLP de métricas, el pool documental y el retraso del consumidor. Sin medir aquí: el `broker-check` de Kafka y
+      SNS/SQS tras el arreglo del apagado (pendiente desde el 14b).
+- **Inc. 14 — cerrado (2026-10-18).** Siguiente: el 15 (evolución del proyecto generado).
 
 ## 5. Riesgos conocidos
 

@@ -95,3 +95,5 @@ Las redes en vivo (SDK 10 y podman/docker), una por mecanismo; todas aceptan `--
 | `stub-check` | el proveedor de prueba y la pasarela de pago contra un WireMock real |
 | `cache-check` | la caché contra Redis y Valkey |
 | `mail-check` | el correo contra un Mailpit real |
+| `telemetry-check` | la telemetría con la app arrancada contra PostgreSQL y un colector OTLP falso |
+| `deploy-check` | `deploy/` entero y las preguntas al backend que comparten los tres generadores |

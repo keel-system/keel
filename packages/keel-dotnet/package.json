@@ -18,7 +18,9 @@
     "stub-check": "node scripts/stub-check.js",
     "mail-check": "node scripts/mail-check.js",
     "cache-check": "node scripts/cache-check.js",
-    "matrix": "node scripts/support-matrix.js"
+    "matrix": "node scripts/support-matrix.js",
+    "telemetry-check": "node scripts/telemetry-check.js",
+    "deploy-check": "node scripts/deploy-check.js"
   },
   "files": [
     "src",

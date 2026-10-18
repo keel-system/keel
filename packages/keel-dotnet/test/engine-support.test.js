@@ -49,9 +49,8 @@ test('las dos persistencias que keel-dotnet genera las ejecuta su red en vivo', 
   assert.equal(MECHANISMS['harness-db-probes'].coverage.document.net, 'doc-harness-check');
 });
 
-test('lo pendiente es solo el panel de runtime, que trae el 14d', () => {
-  assert.deepEqual(pending().map(({ id }) => id).sort(), ['runtime-panel']);
-  for (const { pending: when } of pending()) assert.match(when, /incremento 14/);
+test('no queda ninguna fila pendiente de un incremento (desde el 14f)', () => {
+  assert.deepEqual(pending().map(({ id }) => id), []);
 });
 
 test('cada motor relacional que la frontera admite tiene su celda en los mecanismos por motor', () => {
