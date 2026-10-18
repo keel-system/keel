@@ -1816,6 +1816,42 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       raíz por segundo. Queda pendiente `runtime-panel` (14d).
     - **Queda**: la fila de runtime de .NET (heap, GC, pool de Npgsql) para el panel (14d), los gates (14e) y las redes en
       vivo (14f, la primera vez que un colector de verdad lee este scrape).
+  - **14d — el panel, las alertas y `deploy/`.**
+    - **La fila de runtime de .NET** (`DOTNET_RUNTIME` en `src/scaffold/telemetry.js`), publicada por la telemetría
+      generada con nombres propios, como keel-nest, porque nada de la plataforma sale por este scrape:
+      - el heap gestionado (`GCMemoryInfo.HeapSizeBytes`) contra su límite (`TotalAvailableMemoryBytes`, el que respeta el
+        límite del contenedor; el tamaño del heap crece a demanda y la alerta del 90 % dispararía en un servicio sano);
+      - las pausas de GC como contador (`GC.GetTotalPauseDuration`);
+      - un panel propio de .NET: la cola del thread pool (`ThreadPool.PendingWorkItemCount`), el síntoma de un código que
+        bloquea hilos;
+      - el pool de Npgsql, que no tiene otra API que su `Meter`: un `MeterListener` lee `db.client.connection.count` por
+        estado, `.max` y `.pending_requests` y los vuelca en `keel_db_pool_*` (los nombres de keel-nest). Un instrumento
+        observable da su valor y uno que no lo es da incrementos. **Sin medir contra Npgsql de verdad**: los nombres son
+        los de su documentación de la 10; lo mide `telemetry-check` (14f), y hasta entonces la celda `runtime-panel`
+        sigue pendiente con ese motivo.
+      - Declarado como en keel-nest: sin pool en el modelo documental y sin retraso del consumidor.
+    - **Panel y alertas** (`src/scaffold/observability-assets.js`): los neutrales de keel-core con esa plataforma.
+    - **`deploy/`** (`src/scaffold/deploy.js`): el neutral de keel-core. La imagen va en dos etapas: publicación del Api con
+      el SDK de .NET y runtime de ASP.NET con su usuario sin privilegios (`$APP_UID`). La imagen no trae ni curl ni wget,
+      así que el `HEALTHCHECK` pide `/readyz` con el `/dev/tcp` de bash, y `dotnet` es el PID 1. El `DB_URL`, el
+      `OAUTH2_JWK_SET_URI` y las sondas son los de keel-nest. En la raíz, `.dockerignore` y `.gitattributes`. El README
+      enseña `deploy/`.
+    - **Medido sin red**: `test/deploy.test.js` (toda variable que develop exige llega a la app y toda la que llega la lee
+      el servidor; infraestructura, colector y realm idénticos a keel-spring; la imagen; el JWKS interno; el README) y
+      `test/observability-assets.test.js` (panel y alertas contra keel-spring salvo el runtime y lo declarado). La pregunta
+      que importa —¿publica el servidor TODA serie que consultan?— va en C#: build saca la lista del panel y las alertas
+      de ESE diseño (`consultedSeries`) y la prueba emitida `TelemetryTests` ejercita cada observación y busca cada serie
+      en el scrape, igual que la prueba de las series del runtime.
+    - **Medido**: `cs-check --fixtures` en verde, 174 ensamblados y **3 974 pruebas**. Sabotaje `telemetry-series` (una
+      serie del runtime con otro nombre): caen exactamente las dos pruebas que la miran. Sin red: keel-core 1216, keel-nest
+      800 y keel-dotnet 631. **La imagen, construida y arrancada a mano con podman** (`--format docker`, como `up.sh`):
+      construye, corre como `app` (UID 1654) con `dotnet` como PID 1, el `HEALTHCHECK` por `/dev/tcp` la pone en
+      `healthy` y `/readyz` responde 200 por el puerto publicado. Con `localhost` el host no conecta: Windows resuelve
+      primero `::1` y el reenvío IPv6 de podman no responde. Es de la máquina, no de la imagen, y lo mide `deploy-check`
+      (14f).
+    - **Dos trampas de la herramienta, otra vez**: el heredoc de la terminal convirtió en salto real un `'\n'` de una
+      plantilla C# (no compilaba en ninguna variante), y el analizador `xUnit2029` rechaza `Assert.Empty` sobre un
+      `Where`. Las dos las vio `cs-check`; la suite sin red no.
 
 ## 5. Riesgos conocidos
 

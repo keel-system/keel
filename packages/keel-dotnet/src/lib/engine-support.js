@@ -46,7 +46,11 @@ export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
   'runtime-panel': {
-    pending: 'la telemetría (el panel, sus series y la alerta del pool) llega en el incremento 14 de PLAN-KEEL-DOTNET.md'
+    // Emitido desde el 14d (DOTNET_RUNTIME de src/scaffold/telemetry.js) y su presencia en el scrape la exige la prueba
+    // emitida TelemetryTests en cs-check; lo que falta para la celda es medir con la app arrancada qué publica de verdad el
+    // Meter de Npgsql (los nombres de db.client.connection.* y sus estados), y que el documental no trae pool.
+    pending:
+      'el panel y sus series ya se emiten (incremento 14d); la celda espera a telemetry-check, en el incremento 14f de PLAN-KEEL-DOTNET.md: el pool que lee del Meter de Npgsql solo se ve contra un PostgreSQL real'
   },
   'outbox-relay': {
     parity: {

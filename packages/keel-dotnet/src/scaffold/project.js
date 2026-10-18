@@ -25,6 +25,7 @@ import { usesJwt } from './security.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 import { usesTelemetry } from 'keel-core/gen/telemetry-vocabulary';
+import { DOCKERIGNORE } from './deploy.js';
 
 /** Los paquetes que usa ESTA solución: los del esqueleto y los de las capas que el diseño declara. */
 export function packagesFor(model) {
@@ -78,6 +79,10 @@ export function generate(model) {
     { path: 'Directory.Packages.props', content: packagesProps(packagesFor(model)) },
     { path: sln.file, content: slnx(sln) },
     { path: '.gitignore', content: gitignore() },
+    // El contexto de build de la imagen de deploy/ es la raíz del proyecto (incremento 14d).
+    { path: '.dockerignore', content: DOCKERIGNORE },
+    // Los scripts y el Dockerfile se ejecutan en Linux: con CRLF, bash no los lee.
+    { path: '.gitattributes', content: '*.sh            text eol=lf\nDockerfile*     text eol=lf\n' },
     ...(toolsFor(model).length > 0 ? [{ path: '.config/dotnet-tools.json', content: toolsJson(toolsFor(model)) }] : []),
     { path: sln.domain.csproj, content: csproj({}) },
     { path: sln.application.csproj, content: csproj({ references: [sln.domain], from: sln.application }) },

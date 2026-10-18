@@ -6,7 +6,36 @@ import { csFile, namespaceOf, solution } from './render.js';
 import { configNamespace } from './config.js';
 import { loggingNamespace } from './logging.js';
 import { messagingNamespace, usesMessaging } from './messaging.js';
-import { telemetryNamespace, usesTelemetry } from './telemetry.js';
+import { DOTNET_RUNTIME, telemetryNamespace, usesTelemetry } from './telemetry.js';
+import { usesRelational } from './persistence.js';
+import { DOTNET_OBSERVABILITY } from './observability-assets.js';
+import { observabilityAssets } from 'keel-core/gen/observability-assets';
+import { parse as parseYaml } from 'yaml';
+
+const PROMQL_WORDS = new Set(['sum', 'max', 'min', 'rate', 'by', 'le', 'histogram_quantile', 'clamp_min', 'max_over_time', 'irate', 'avg', 'count', 'without', 'on']);
+
+/** Los nombres de serie que nombra una expresión PromQL (sin funciones, etiquetas ni literales). */
+export function seriesOf(expr) {
+  const withoutLabels = expr.replace(/\{[^}]*\}/g, '').replace(/\[[^\]]*\]/g, '').replace(/by \([^)]*\)/g, '');
+  return [...withoutLabels.matchAll(/[a-z_][a-z0-9_]*/g)].map(([name]) => name).filter((name) => !PROMQL_WORDS.has(name) && name.includes('_'));
+}
+
+/**
+ * Las series que consultan el panel y las alertas que build genera para ESTE diseño: la prueba emitida exige que el
+ * scrape las publique todas. Una alerta sobre una serie que nadie publica no falla: no dispara nunca.
+ */
+export function consultedSeries(model) {
+  const byPath = Object.fromEntries(observabilityAssets(model, DOTNET_OBSERVABILITY).map((file) => [file.path, file.content]));
+  const dashboard = JSON.parse(Object.entries(byPath).find(([file]) => file.startsWith('deploy/observability/dashboards/') && file.endsWith('.json'))[1]);
+  const alerts = parseYaml(byPath['deploy/observability/alerting/keel-alerts.yaml']);
+  const rules = parseYaml(byPath['deploy/observability/prometheus-rules.example.yaml']);
+  const expressions = [
+    ...dashboard.panels.flatMap((panel) => (panel.targets ?? []).map((target) => target.expr)),
+    ...alerts.groups.flatMap((group) => group.rules.map((rule) => rule.data[0].model.expr)),
+    ...rules.groups.flatMap((group) => group.rules.map((rule) => rule.expr))
+  ];
+  return [...new Set(expressions.flatMap(seriesOf))].sort();
+}
 
 export function generate(model) {
   if (!usesTelemetry(model)) return [];
@@ -30,10 +59,11 @@ export function generate(model) {
     telemetryNamespace(model),
     ...(messaging ? [messagingNamespace(model), namespaceOf(model, 'events')] : [])
   ];
-  return [{ path: `${sln.unitTests.dir}/TelemetryTests.cs`, content: csFile({ namespace: sln.unitTests.name, usings, body: body(messaging) }) }];
+  return [{ path: `${sln.unitTests.dir}/TelemetryTests.cs`, content: csFile({ namespace: sln.unitTests.name, usings, body: body(messaging, usesRelational(model), consultedSeries(model)) }) }];
 }
 
-function body(messaging) {
+function body(messaging, relational, consulted) {
+  const series = [DOTNET_RUNTIME.heapUsed, DOTNET_RUNTIME.heapLimit, DOTNET_RUNTIME.gcSeconds, DOTNET_RUNTIME.threadPoolQueue, ...(relational ? Object.values(DOTNET_RUNTIME.pool) : [])];
   return String.raw`/// <summary>
 /// La telemetría EJECUTADA sin red: el servidor en memoria del perfil test, los spans del origen keel y el scrape. Lo que
 /// se afirma es lo que hacen keel-spring y keel-nest: la entrada HTTP continúa la traza de quien llama y mide
@@ -246,6 +276,49 @@ public sealed class TelemetryTests : IDisposable
         var name = "keel.prueba.gauge." + Guid.NewGuid().ToString("N");
         telemetry.RegisterGauge(name, "prueba", _ => Task.FromResult((double)Interlocked.Increment(ref value)));
         Assert.Contains(KeelTelemetry.Mangle(name) + " 1", await Exposition(telemetry), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LasSeriesDelRuntimeSalenEnElScrapeYElHeapSeMideContraSuLimite()
+    {
+        var telemetry = Started();
+        GC.Collect();
+        var exposition = await Exposition(telemetry);
+        foreach (var series in new[] { ${series.map((name) => `"${name}"`).join(', ')} })
+        {
+            Assert.Matches("(?m)^" + series + " [0-9.e+-]+", exposition);
+        }
+        double Value(string series) => double.Parse(
+            exposition.Split('\n').First(line => line.StartsWith(series + " ", StringComparison.Ordinal)).Split(' ')[1],
+            CultureInfo.InvariantCulture);
+        Assert.True(Value("${DOTNET_RUNTIME.heapUsed}") > 0);
+        Assert.True(Value("${DOTNET_RUNTIME.heapUsed}") < Value("${DOTNET_RUNTIME.heapLimit}"));
+    }
+
+    /// <summary>Las series que consultan el panel y las alertas de deploy/observability, sacadas por build de ellos.</summary>
+    private static readonly string[] Consulted = [${consulted.map((name) => `"${name}"`).join(', ')}];
+
+    [Fact]
+    public async Task TodaSerieQueConsultanElPanelYLasAlertasLaPublicaElScrape()
+    {
+        var telemetry = Started();
+        // Cada observación, con las etiquetas con que la emite el código generado.
+        await telemetry.Observe(Observations.UseCase, new ObserveOptions { Labels = new Dictionary<string, string> { [TelemetryAttributes.Operation] = "PruebaPanel" } }, () => Task.CompletedTask);
+        await telemetry.Publishing("PruebaPanel", null, () => Task.CompletedTask);
+        await telemetry.Consuming("PruebaPanel", null, () => Task.FromResult(true));
+        var storage = new Dictionary<string, string> { [TelemetryAttributes.StorageOperation] = "upload", [TelemetryAttributes.StorageBucket] = "prueba" };
+        await telemetry.Observe(Observations.Storage, new ObserveOptions { Labels = storage }, () => Task.CompletedTask);
+        await telemetry.Observe(Observations.MailSend, new ObserveOptions(), () => Task.CompletedTask);
+        telemetry.CacheGet("prueba", hit: true);
+        telemetry.RegisterGauge(Observations.OutboxDeadLettered, "prueba", _ => Task.FromResult(0d));
+        telemetry.FinishServer(null, Stopwatch.GetTimestamp(), "GET", "/prueba/{id}", 200, null);
+        telemetry.FinishClient(null, Stopwatch.GetTimestamp(), "prueba", "GET", "/prueba/{id}", 200);
+        var published = (await Exposition(telemetry)).Split('\n')
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .Select(line => line.Split('{', ' ')[0])
+            .ToHashSet(StringComparer.Ordinal);
+        // Lo que falte sale en el mensaje: una alerta sobre una serie que nadie publica no falla, no dispara nunca.
+        Assert.Equal(Array.Empty<string>(), Consulted.Where(series => !published.Contains(series)).ToArray());
     }
 
     [Fact]

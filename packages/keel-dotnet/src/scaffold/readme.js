@@ -4,6 +4,7 @@
 import { describeStack } from 'keel-core/gen/stack';
 import { SKILL } from '../lib/assets.js';
 import { solution } from './render.js';
+import { postmanEnvironmentPath, publishedUrls } from './deploy.js';
 
 export function generate(model) {
   const { service } = model;
@@ -74,7 +75,36 @@ profundo, un proyecto compila sin dejar su DLL (\`MSB3030\`). Si aparece, mueve 
 | \`${sln.integrationTests.name}\` | las pruebas de flujo \`FL-*\`, contra el servidor arrancado | ninguno (caja negra) |
 
 La frontera hexagonal la impone el compilador: un proyecto solo ve a los que referencia.
-`
+${manualTestingSection(model)}`
     }
   ];
+}
+
+/**
+ * «Pruebas manuales en contenedor»: cómo levantar `deploy/` (el servicio y su infraestructura) para probarlo con
+ * Postman o con un front. La sección existe sobre todo para que nadie lo confunda con infra/, la de la generación.
+ */
+function manualTestingSection(model) {
+  const plain = (url) => `<${url.replace(/\$\{[A-Z_]+:-(\d+)\}/g, '$1')}>`;
+  return `
+## Pruebas manuales en contenedor
+
+Cuando el flujo de generación termina en verde, \`deploy/\` levanta el servicio **y** su infraestructura en
+contenedores. No es \`infra/\` (la infraestructura de los escenarios): no conviene tener los dos arriba a la vez, porque
+publican los mismos puertos. Funciona igual con Docker que con Podman (el runtime se detecta solo; se fuerza con
+\`CONTAINER_RUNTIME=podman\`). La imagen se publica con el SDK de .NET dentro del contenedor: no hace falta tenerlo
+instalado para esto.
+
+\`\`\`bash
+bash deploy/up.sh      # construye la imagen, levanta todo y espera a /readyz
+bash deploy/down.sh    # apaga (con -v borra además los datos)
+\`\`\`
+
+| URL | Qué es |
+|---|---|
+${publishedUrls(model).map(({ label, url }) => `| ${plain(url)} | ${label} |`).join('\n')}
+
+Los puertos publicados salen de \`deploy/.env\`. Para Postman, importa \`${postmanEnvironmentPath(model)}\` junto con las
+colecciones de \`docs/postman/\`.
+`;
 }

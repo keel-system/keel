@@ -134,5 +134,6 @@ test('el proveedor solo escucha el origen keel: los spans de los drivers no sale
   const telemetry = content(plan('catalog-extended', { broker: 'kafka' }).files, 'Telemetry/KeelTelemetry.cs');
   assert.deepEqual([...telemetry.matchAll(/\.AddSource\(([^)]*)\)/g)].map((match) => match[1]), ['SourceName']);
   assert.match(telemetry, /public const string SourceName = "keel";/);
-  assert.doesNotMatch(telemetry, /AddAspNetCoreInstrumentation|AddHttpClientInstrumentation|Npgsql|MongoDB/);
+  // Ni la instrumentación automática de ASP.NET Core o de HttpClient. Del Meter de Npgsql solo se lee el pool (14d): sus spans no.
+  assert.doesNotMatch(telemetry, /AddAspNetCoreInstrumentation|AddHttpClientInstrumentation|AddNpgsql|ActivitySource\("Npgsql"\)/);
 });

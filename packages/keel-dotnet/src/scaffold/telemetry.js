@@ -23,6 +23,32 @@ import { telemetryYaml as neutralTelemetryYaml } from 'keel-core/gen/telemetry-c
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { usesCorrelation } from './rest-support.js';
+import { usesRelational } from './persistence.js';
+
+/**
+ * Las series del RUNTIME de .NET, que consultan la fila de runtime del panel y su alerta de heap (incremento 14d). Las
+ * publica la telemetría generada, con nombres propios como keel-nest, porque ninguna de las de la plataforma sale por
+ * este scrape:
+ *
+ *   · el heap gestionado contra su LÍMITE (`GCMemoryInfo.TotalAvailableMemoryBytes`, el que respeta el límite del
+ *     contenedor), no contra el tamaño actual del heap, que el GC hace crecer a demanda;
+ *   · el tiempo total en pausas de GC, como contador (el panel mira su ritmo);
+ *   · la cola del thread pool: el síntoma propio de .NET, el de un código que bloquea hilos (`.Result`, `.Wait()`);
+ *   · el pool de Npgsql, leído de su Meter (`db.client.connection.*`): Npgsql no tiene otra API de estadísticas. Con los
+ *     mismos nombres que el de keel-nest.
+ */
+export const DOTNET_RUNTIME = {
+  heapUsed: 'keel_runtime_heap_used_bytes',
+  heapLimit: 'keel_runtime_heap_limit_bytes',
+  gcSeconds: 'keel_runtime_gc_pause_seconds_total',
+  threadPoolQueue: 'keel_runtime_threadpool_queue_length',
+  pool: {
+    active: 'keel_db_pool_active',
+    idle: 'keel_db_pool_idle',
+    max: 'keel_db_pool_max',
+    saturation: 'keel_db_pool_pending'
+  }
+};
 
 export { usesTelemetry };
 
@@ -61,6 +87,7 @@ export function generate(model) {
       [
         'System.Collections.Concurrent',
         'System.Diagnostics',
+        ...(usesRelational(model) ? ['System.Diagnostics.Metrics'] : []),
         'System.Globalization',
         'System.Net.Http.Headers',
         'OpenTelemetry',
@@ -70,7 +97,7 @@ export function generate(model) {
         'OpenTelemetry.Trace',
         'Prometheus'
       ],
-      telemetryBody()
+      telemetryBody(model)
     ),
     file('W3cOutB3InPropagator', ['OpenTelemetry.Context.Propagation'], propagatorBody()),
     file(
@@ -172,7 +199,77 @@ ${constants(ATTRIBUTES)}
 
 // ─── KeelTelemetry ───────────────────────────────────────────────────────────────────────────────
 
-function telemetryBody() {
+/**
+ * El pool de Npgsql: lo que publica su Meter (`db.client.connection.count` por estado, `.max` y `.pending_requests`),
+ * escuchado con un MeterListener y volcado en las series del panel en cada scrape. Un instrumento observable da su valor;
+ * uno que no lo es da incrementos, y se acumulan.
+ */
+const POOL_MEMBERS = `
+    private readonly ConcurrentDictionary<string, double> pool = new(StringComparer.Ordinal);
+
+    private MeterListener? poolListener;
+
+    /// <summary>
+    /// El pool de conexiones de Npgsql: en uso, libres, máximo y peticiones ESPERANDO una conexión (la serie de la alerta
+    /// de saturación). Npgsql no tiene otra API de estadísticas que su Meter.
+    /// </summary>
+    private void RegisterConnectionPool()
+    {
+        var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, subscription) =>
+            {
+                if (instrument.Meter.Name == "Npgsql" && instrument.Name.StartsWith("db.client.connection.", StringComparison.Ordinal))
+                {
+                    subscription.EnableMeasurementEvents(instrument);
+                }
+            }
+        };
+        listener.SetMeasurementEventCallback<int>((instrument, value, tags, _) => PoolMeasured(instrument, value, tags));
+        listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) => PoolMeasured(instrument, value, tags));
+        listener.SetMeasurementEventCallback<double>((instrument, value, tags, _) => PoolMeasured(instrument, value, tags));
+        listener.Start();
+        poolListener = listener;
+        var active = metrics.CreateGauge("${DOTNET_RUNTIME.pool.active}", "Conexiones del pool en uso");
+        var idle = metrics.CreateGauge("${DOTNET_RUNTIME.pool.idle}", "Conexiones del pool libres");
+        var max = metrics.CreateGauge("${DOTNET_RUNTIME.pool.max}", "Tamaño máximo del pool");
+        var pending = metrics.CreateGauge("${DOTNET_RUNTIME.pool.saturation}", "Peticiones esperando una conexión del pool");
+        Registry.AddBeforeCollectCallback(() =>
+        {
+            // Los observables se leen ahora; los demás ya acumularon sus incrementos.
+            foreach (var key in pool.Keys.Where(key => key.StartsWith("observable:", StringComparison.Ordinal)))
+            {
+                pool[key] = 0;
+            }
+            poolListener?.RecordObservableInstruments();
+            active.Set(PoolValue("db.client.connection.count", "used"));
+            idle.Set(PoolValue("db.client.connection.count", "idle"));
+            max.Set(PoolValue("db.client.connection.max", null));
+            pending.Set(PoolValue("db.client.connection.pending_requests", null));
+        });
+    }
+
+    private void PoolMeasured(Instrument instrument, double value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
+    {
+        string? state = null;
+        foreach (var tag in tags)
+        {
+            if (tag.Key is "db.client.connection.state" or "state")
+            {
+                state = tag.Value as string;
+            }
+        }
+        var key = (instrument.IsObservable ? "observable:" : "delta:") + instrument.Name + "|" + state;
+        // Varias fuentes de datos (varios pools) suman: el panel mira el servicio, no cada pool.
+        pool.AddOrUpdate(key, value, (_, previous) => previous + value);
+    }
+
+    private double PoolValue(string instrument, string? state) =>
+        pool.Where(entry => entry.Key.EndsWith(":" + instrument + "|" + state, StringComparison.Ordinal)).Sum(entry => entry.Value);
+`;
+
+function telemetryBody(model) {
+  const pool = usesRelational(model);
   const list = (values) => values.map(csString).join(', ');
   return `/// <summary>Cómo se observa una acción: el span, sus atributos y qué fallo es un desenlace esperado.</summary>
 public sealed class ObserveOptions
@@ -249,6 +346,7 @@ public sealed class KeelTelemetry
         Registry = Metrics.NewCustomRegistry();
         metrics = Metrics.WithCustomRegistry(Registry);
         cacheGets = new(() => metrics.CreateCounter("cache_gets_total", "Lecturas de las cachés de lectura", new CounterConfiguration { LabelNames = ["cache", "result"] }));
+        RegisterRuntime();${pool ? '\n        RegisterConnectionPool();' : ''}
         Sdk.SetDefaultTextMapPropagator(new W3cOutB3InPropagator());
         // Parent-based: se respeta la decisión de quien llama; la proporción solo decide en las raíces. Sin exportar (local,
         // por defecto) las trazas existen igual: dan el trace.id a los logs y a los exemplars.
@@ -480,6 +578,27 @@ public sealed class KeelTelemetry
         }
     }
 
+    /// <summary>
+    /// Las series del runtime de .NET, leídas en cada scrape: el heap gestionado contra su límite (el que respeta el límite
+    /// del contenedor; el tamaño actual del heap crece a demanda y la alerta del 90 % dispararía en un servicio sano), el
+    /// tiempo en pausas de GC y la cola del thread pool, el síntoma de un código que bloquea hilos.
+    /// </summary>
+    private void RegisterRuntime()
+    {
+        var used = metrics.CreateGauge("${DOTNET_RUNTIME.heapUsed}", "Heap gestionado tras el último GC");
+        var limit = metrics.CreateGauge("${DOTNET_RUNTIME.heapLimit}", "Memoria que el GC puede usar (respeta el límite del contenedor)");
+        var paused = metrics.CreateCounter("${DOTNET_RUNTIME.gcSeconds}", "Tiempo total en pausas de GC");
+        var queue = metrics.CreateGauge("${DOTNET_RUNTIME.threadPoolQueue}", "Trabajo esperando un hilo del thread pool");
+        Registry.AddBeforeCollectCallback(() =>
+        {
+            var memory = GC.GetGCMemoryInfo();
+            used.Set(memory.HeapSizeBytes);
+            limit.Set(memory.TotalAvailableMemoryBytes);
+            paused.IncTo(GC.GetTotalPauseDuration().TotalSeconds);
+            queue.Set(ThreadPool.PendingWorkItemCount);
+        });
+    }
+${pool ? POOL_MEMBERS : ''}
     /// <summary>El contexto que continúa la traza de un <c>traceparent</c> recibido (la envoltura de un evento); sin él, ninguno.</summary>
     public static ActivityContext? ContextFrom(string? traceparent) =>
         traceparent is not null && ActivityContext.TryParse(traceparent, null, isRemote: true, out var context) ? context : null;
