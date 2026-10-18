@@ -277,6 +277,11 @@ public sealed partial class RabbitConnection(RabbitMqSettings settings, Messagin
 
     private readonly SemaphoreSlim confirmGate = new(1, 1);
 
+    private readonly Lock stopGate = new();
+
+    /// <summary>El apagado, una vez empezado: lo esperan el host y el contenedor.</summary>
+    private Task? stopped;
+
     private readonly CancellationTokenSource stopping = new();
 
     private IConnection? connection;
@@ -301,7 +306,20 @@ public sealed partial class RabbitConnection(RabbitMqSettings settings, Messagin
     /// Cierra la conexión y para los reintentos. Con un tope: un broker que no contesta al cierre no puede retener el
     /// apagado del servicio, que tiene su propio margen (server.shutdown-timeout).
     /// </summary>
-    public async Task StopAsync(CancellationToken cancellationToken)
+    /// <remarks>
+    /// Una sola vez, la pida quien la pida primero: el host al pararse o el contenedor al disponerse. Con
+    /// WebApplicationFactory el Program que termina dispone los servicios mientras la fábrica aún está parando el host,
+    /// y el segundo apagado llegaba a recursos ya dispuestos (ObjectDisposedException del CancellationTokenSource).
+    /// </remarks>
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        lock (stopGate)
+        {
+            return stopped ??= Stop();
+        }
+    }
+
+    private async Task Stop()
     {
         await stopping.CancelAsync();
         if (connecting is not null)
@@ -316,6 +334,7 @@ public sealed partial class RabbitConnection(RabbitMqSettings settings, Messagin
 
     public async ValueTask DisposeAsync()
     {
+        await StopAsync(CancellationToken.None);
         if (connection is not null)
         {
             await connection.DisposeAsync();

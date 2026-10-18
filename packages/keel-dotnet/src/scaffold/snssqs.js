@@ -221,6 +221,11 @@ public sealed partial class SnsSqsConnection : IHostedService, IDisposable
     private readonly ILogger<SnsSqsConnection> logger;
     private readonly List<Subscriber> subscribers = [];
     private readonly List<Task> polls = [];
+    private readonly Lock stopGate = new();
+
+    /// <summary>El apagado, una vez empezado: lo esperan el host y el contenedor.</summary>
+    private Task? stopped;
+
     private readonly Lock state = new();
     private readonly CancellationTokenSource stopping = new();
     /// <summary>El ARN de cada topic, solo cuando ya se vio con un suscriptor confirmado.</summary>
@@ -287,7 +292,20 @@ public sealed partial class SnsSqsConnection : IHostedService, IDisposable
     }
 
     /// <summary>Para los sondeos (corta el que esté esperando), con un tope: el apagado tiene su propio margen.</summary>
-    public async Task StopAsync(CancellationToken cancellationToken)
+    /// <remarks>
+    /// Una sola vez, la pida quien la pida primero: el host al pararse o el contenedor al disponerse. Con
+    /// WebApplicationFactory el Program que termina dispone los servicios mientras la fábrica aún está parando el host,
+    /// y el segundo apagado llegaba a recursos ya dispuestos (ObjectDisposedException del CancellationTokenSource).
+    /// </remarks>
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        lock (stopGate)
+        {
+            return stopped ??= Stop();
+        }
+    }
+
+    private async Task Stop()
     {
         await stopping.CancelAsync();
         Task[] running;
@@ -300,6 +318,8 @@ public sealed partial class SnsSqsConnection : IHostedService, IDisposable
 
     public void Dispose()
     {
+        // Después del apagado, aunque lo pida el contenedor antes que el host: tiene su propio tope.
+        StopAsync(CancellationToken.None).GetAwaiter().GetResult();
         sns.Dispose();
         sqs.Dispose();
         stopping.Dispose();
