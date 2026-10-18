@@ -1852,6 +1852,34 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     - **Dos trampas de la herramienta, otra vez**: el heredoc de la terminal convirtió en salto real un `'\n'` de una
       plantilla C# (no compilaba en ninguna variante), y el analizador `xUnit2029` rechaza `Assert.Empty` sobre un
       `Where`. Las dos las vio `cs-check`; la suite sin red no.
+  - **14e — los gates de logs y de cardinalidad.**
+    - **La forma**: el gate de keel-nest es un programa de Node embebido en el `.sh`, y un proyecto .NET no tiene por qué
+      tener Node. Va en **bash y awk POSIX**, como el `check-idempotency.sh` que ya genera keel-dotnet, con un motor
+      NEUTRAL nuevo en keel-core (`gen/source-gate.js`): recorre los archivos, quita los comentarios (los de bloque se
+      vacían conservando las líneas) y aplica reglas que son DATOS, con su sintaxis de comentarios por plataforma. Un
+      solo awk para todos los archivos (uno por archivo tardaba más de diez minutos en la suite, en Windows). Las reglas
+      no pueden llevar barras invertidas ni comillas simples: viajan dentro de una cadena de awk entre comillas de bash, y
+      el motor lanza si una las lleva.
+    - **Lo que destapó la primera ejecución**: con el awk roto (una variable llamada `close`, que es una función de awk),
+      el gate daba **OK**. Ahora un awk que no corre deja el gate sin veredicto (sale con 2), y hay una prueba para eso.
+    - **`infra/check-logging.sh`** (`src/scaffold/logging-check.js`, siempre que haya casos de uso): el objeto de entrada
+      entero en un log, el mensaje construido a mano (`$"…"` o `+`: en .NET las plantillas sí tienen argumentos
+      estructurados, como en keel-spring), un `LogError` desde Domain o Application, la consola a pelo y las formas que
+      lanzan trabajo SIN el contexto de la petición. En .NET esas son `UnsafeQueueUserWorkItem`, `UnsafeRegister`,
+      `UnsafeStart` y `ExecutionContext.SuppressFlow`: el `ExecutionContext` lleva el `AsyncLocal` a `Task.Run`, a los
+      temporizadores y a un `Thread` nuevo.
+    - **`infra/check-telemetry.sh`** (`src/scaffold/telemetry-gate.js`, con telemetría): las claves de `Labels` de una
+      observación, los `LabelNames` y los `CreateCounter(…, "etiqueta")` de prometheus-net y los tags de
+      `System.Diagnostics.Metrics`, contra el vocabulario (sin la correlación) y las claves de las series HTTP y de caché.
+      Por línea: un inicializador repartido en varias no lo ve, igual que el de keel-spring no ve una constante.
+    - Los agentes de código y de calidad los ejecutan y los reportan (`logging`, `cardinality`); la skill orquestadora y
+      la convención de observabilidad los nombran.
+    - **Medido**: `keel-core/test/source-gate.test.js` (el motor con una plataforma inventada: reglas, rutas, comentarios,
+      claves con y sin los literales que se saltan, directorios excluidos, awk roto) y
+      `keel-dotnet/test/logging-telemetry-gates.test.js`, que EJECUTA los dos gates con bash: verdes en las quince
+      fixtures recién generadas, cada regla roja con su forma prohibida y verde con la correcta, el ERROR fuera de Domain
+      y Application no cuenta, la correlación nunca es etiqueta. Falsado quitando el filtro de comentarios: cae justo la
+      prueba de los comentarios, la única que puede verlo, porque las notas de build no contienen formas prohibidas.
 
 ## 5. Riesgos conocidos
 

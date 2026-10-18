@@ -60,10 +60,13 @@ Se leen al arrancar: cambian con un reinicio, nunca en caliente. Solo se declara
   y una alerta sobre una serie que nadie publica no dispara nunca.
 - **Cardinalidad baja en las etiquetas de métricas.** Nombres de operación o de evento, sí; ids, emails o importes,
   nunca: cada valor distinto es una serie nueva, y es el único fallo sin ningún síntoma —nada falla, se ve en la
-  factura del backend—. Un identificador va al span (`SpanAttributes`), que es donde sirve.
+  factura del backend—. Un identificador va al span (`SpanAttributes`), que es donde sirve. Lo veta
+  `infra/check-telemetry.sh`: las claves de etiqueta son las del vocabulario.
 - **Ni datos personales ni secretos en atributos ni en logs.** Identifica por id, nunca por el dato.
 - **Loguea con `ILogger<T>`** (mejor con `[LoggerMessage]`): el formateador del servicio pone la correlación y la
-  traza en cada línea. Nada de `Console.WriteLine`, que se salta el formato y los niveles.
+  traza en cada línea. Nada de `Console.WriteLine`, que se salta el formato y los niveles. Lo veta
+  `infra/check-logging.sh`, junto con loguear un objeto de entrada entero, construir el mensaje a mano, un `LogError`
+  desde Domain o Application y lanzar trabajo sin el contexto de la petición.
 
 ## Perfiles
 

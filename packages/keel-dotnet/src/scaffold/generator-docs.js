@@ -170,6 +170,10 @@ ${
     usesIdempotencyCheck(model)
       ? '\n`infra/check-idempotency.sh` también sale en ROJO recién generado a propósito: comprueba que el código del agente USE los mecanismos de repetición que build generó (la guarda de los listeners, el registro de peticiones, el reclamo de los barridos, el Raise de los eventos, el dispatcher del outbox). Es el mismo gate que el de los servidores de keel-spring y keel-nest.\n'
       : ''
+  }${
+    (model.services ?? []).some((service) => (service.operations ?? []).length > 0)
+      ? `\n\`infra/check-logging.sh\`${usesTelemetry(model) ? ' y `infra/check-telemetry.sh`' : ''} salen en VERDE recién generado${usesTelemetry(model) ? 's' : ''}: vetan lo que el agente pueda añadir (un objeto de entrada entero en un log, un mensaje construido a mano, un \`LogError\` desde Domain o Application, la consola a pelo, trabajo lanzado sin el contexto de la petición${usesTelemetry(model) ? '; una etiqueta de métrica fuera del vocabulario' : ''}). Un rojo ahí es siempre código del agente.\n`
+      : ''
   }`;
 }
 

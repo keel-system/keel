@@ -97,7 +97,9 @@ test('cada ruta src/, tests/ e infra/ que citan los assets existe en lo que emit
   const securityInfra = Object.values(SKILL_SUBJECTS).flatMap(({ fixtures, stack }) =>
     fixtures.flatMap((fixture) => planWith(fixture, stack).files.map((file) => file.path).filter((route) => route.startsWith('infra/')))
   );
-  const emitted = [...Object.keys(files), ...securityInfra];
+  // Y lo que solo emite la telemetría (el gate de cardinalidad, que los agentes ejecutan «si existe»).
+  const telemetryInfra = planWith('product-catalog', { database: 'postgresql', telemetry: 'otel' }).files.map((file) => file.path).filter((route) => route.startsWith('infra/'));
+  const emitted = [...Object.keys(files), ...securityInfra, ...telemetryInfra];
   // Lo que crea otro después: las migraciones (el pase de calidad), la salida de compilación y las pruebas de flujo
   // (el agente de pruebas; `<Flujo>Flow.cs` en los ejemplos).
   const createdLater = [`${sln.infrastructure.dir}/Persistence/Migrations`, `${sln.integrationTests.dir}/bin/`];

@@ -54,6 +54,12 @@ Eres el **agente de código** de keel-dotnet. Recibes en el prompt la ruta raíz
      diseño, cada handler idempotente usa el registro, cada barrido reclama su lote, cada evento se emite desde su
      agregado y el dispatcher del outbox está registrado. Nace ROJO a propósito, como el anterior, y cada hallazgo dice
      qué falta y por qué.
+   - `bash infra/check-logging.sh` en verde: nace verde y veta lo que tú puedas añadir —loguear un objeto de entrada
+     entero, construir el mensaje a mano (`$"…"` o `+`: usa la plantilla con sus argumentos, o un `[LoggerMessage]`),
+     un `LogError` desde Domain o Application (ahí se LANZA), la consola a pelo (usa `ILogger<T>`) y las formas que
+     lanzan trabajo sin el contexto de la petición (`UnsafeQueueUserWorkItem`, `ExecutionContext.SuppressFlow`);
+   - `bash infra/check-telemetry.sh` en verde (si existe, con telemetría): las claves de etiqueta de una métrica son
+     las del vocabulario; un identificador va al span (`SpanAttributes`), nunca a la métrica.
    No ejecutes `bash infra/up.sh`, `dotnet run` ni escenarios: de eso se encargan otros agentes. Esto vale íntegro
    en la **primera pasada** (fase 1), en paralelo con la infraestructura y con las pruebas.
 5. Con la compilación en verde, la **revisión mecánica final** de `flow-fidelity.md` (ningún `double` en un
@@ -104,6 +110,8 @@ status: OK | KO              # OK solo con dotnet build en verde y sin bloqueos
 compiles: true | false       # dotnet build (sin warnings)
 domainGuards: OK | KO | N/A  # bash infra/check-domain-guards.sh (N/A si no existe)
 idempotency: OK | KO | N/A   # bash infra/check-idempotency.sh (N/A si no existe)
+logging: OK | KO             # bash infra/check-logging.sh
+cardinality: OK | KO | N/A   # bash infra/check-telemetry.sh (N/A sin telemetría)
 failures: [...]              # errores: archivo:línea y causa; relanzado, qué corregiste de cada fallo
 verifiedFlows:               # solo relanzado desde la fase 2. Verde aquí NO aprueba el escenario
   - { flow: ProductCreationFlow, result: OK | KO }
