@@ -9,6 +9,7 @@ import { solution, namespaceOf } from './render.js';
 import { usesMediator } from './mediator.js';
 import { configNamespace } from './config.js';
 import { healthNamespace } from './health.js';
+import { loggingNamespace } from './logging.js';
 import { wireNamespace } from './wire.js';
 import { restNamespace, usesApi } from './rest-support.js';
 import { usesRelational, usesPersistence } from './persistence.js';
@@ -63,6 +64,7 @@ function programCs(model) {
     wireNamespace(model),
     configNamespace(model),
     healthNamespace(model),
+    loggingNamespace(model),
     ...(useCases ? [namespaceOf(model, 'useCaseInfra')] : []),
     ...(persistence ? [namespaceOf(model, 'persistence')] : []),
     ...(usesApi(model) ? [restNamespace(model)] : []),
@@ -142,6 +144,9 @@ var configuration = ServiceConfiguration.Load();
 var builder = WebApplication.CreateBuilder(args);
 // El resto de la aplicación lee la configuración ya resuelta por la vía estándar de ASP.NET Core.
 builder.Configuration.AddInMemoryCollection(configuration.Values);
+// Los logs del perfil (logging.yaml): texto en local, JSON ECS fuera de él, con LOG_LEVEL_ROOT para el framework y
+// LOG_LEVEL_APP para el servicio (LoggingRegistration, generado).
+builder.Logging.AddServiceLogging(LoggingSettings.From(configuration));
 builder.WebHost.UseUrls($"http://{configuration.Server.Address}:{configuration.Server.Port}");
 builder.Services.AddSingleton(configuration);${parameters}
 builder.Services.AddSingleton<GracefulShutdown>();

@@ -89,6 +89,8 @@ export const PLACES = {
   // La configuración por perfiles (ServiceConfiguration) y quien puebla los parámetros de despliegue.
   config: ['infrastructure', 'Config'],
   correlation: ['infrastructure', 'Correlation'],
+  // Los logs del servicio (incremento 14b): la consola con su formateador y los niveles del perfil.
+  logging: ['infrastructure', 'Logging'],
   // La seguridad (capa security): el principal, las reglas como datos, los autenticadores, CORS y la identidad del
   // llamante. El middleware que los usa vive en Api/Rest, junto a los otros de la entrada HTTP.
   security: ['infrastructure', 'Security'],

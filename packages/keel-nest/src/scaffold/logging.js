@@ -16,7 +16,7 @@
 
 import { tsModule } from './render.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
-import { envFor } from 'keel-core/gen/runtime-env';
+import { ECS_VERSION, loggingYaml as neutralLoggingYaml } from 'keel-core/gen/logging-config';
 
 export const LOGGER_TS = 'src/infrastructure/logging/keel-logger.ts';
 
@@ -36,8 +36,8 @@ export const FRAMEWORK_CONTEXTS = [
   'Scheduler'
 ];
 
-/** La versión del esquema ECS que declara cada línea: la del formato de Spring Boot 3.5. */
-export const ECS_VERSION = '8.11';
+/** La versión del esquema ECS que declara cada línea (keel-core/gen/logging-config.js). */
+export { ECS_VERSION };
 
 export function generate(model) {
   return [
@@ -46,29 +46,9 @@ export function generate(model) {
   ];
 }
 
-/** El fragmento de cada perfil: las mismas claves de nivel y formato, y las mismas variables, que keel-spring. */
+/** El fragmento de cada perfil: el NEUTRAL de keel-core (keel-core/gen/logging-config.js), el mismo que keel-dotnet. */
 export function loggingYaml(model, profile) {
-  const lines = [
-    `# Generado por keel-nest build. Los logs del servicio en el perfil ${profile}.`,
-    'logging:',
-    '  level:',
-    `    root: ${envFor('LOG_LEVEL_ROOT', profile)}`,
-    `    app: ${envFor('LOG_LEVEL_APP', profile)}`
-  ];
-  if (profile === 'develop' || profile === 'production') {
-    lines.push(
-      '  # Fuera de local la consola es JSON (ECS): la recoge un agente que la separa en campos.',
-      '  structured:',
-      '    format:',
-      `      console: ${envFor('LOG_FORMAT', profile)}`,
-      '    ecs:',
-      '      service:',
-      `        version: "${model.service.version}"`,
-      `        environment: ${envFor('DEPLOYMENT_ENVIRONMENT', profile, profile)}`,
-      '        node-name: ${SERVICE_INSTANCE_ID:${HOSTNAME:unknown}}'
-    );
-  }
-  return `${lines.join('\n')}\n`;
+  return neutralLoggingYaml(model, profile, { header: `Generado por keel-nest build. Los logs del servicio en el perfil ${profile}.` });
 }
 
 function loggerTs(model) {

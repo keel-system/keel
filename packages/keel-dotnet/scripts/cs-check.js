@@ -24,6 +24,9 @@
 //   correlation       el middleware deja de abrir la correlación (el cuerpo de error la pierde)
 //   method-405        un camino que existe con otro método responde como si no existiera
 //   not-blank         la regla notBlank deja de rechazar el texto en blanco
+//   log-correlation   la línea de log deja de llevar el correlationId en curso
+//   log-levels        las categorías del servicio quedan con el nivel del framework (LOG_LEVEL_APP no cuenta)
+//   log-node          la línea ECS pierde la réplica (service.node.name)
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -48,6 +51,7 @@ const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.spli
 // rojo: un sabotaje que dejó de aplicarse no puede pasar por medido.
 const WIRE_DIR = 'src/ProductCatalog.Application/Support';
 const REST_DIR = 'src/ProductCatalog.Api/Rest';
+const LOGGING_DIR = 'src/ProductCatalog.Infrastructure/Logging';
 const SABOTAGES = {
   'decimal-scale': [
     `${WIRE_DIR}/WireConverters.cs`,
@@ -69,7 +73,11 @@ const SABOTAGES = {
   // La cabecera de la respuesta sigue saliendo: solo el cuerpo de error puede notar que no se abrió.
   correlation: [`${REST_DIR}/CorrelationMiddleware.cs`, 'using (CorrelationContext.Open(correlationId))', 'using ((IDisposable?)null)'],
   'method-405': [`${REST_DIR}/ApiErrorMiddleware.cs`, 'context.Response.StatusCode == StatusCodes.Status405MethodNotAllowed', 'context.Response.StatusCode < 0'],
-  'not-blank': [`src/ProductCatalog.Application/Support/InputValidation.cs`, '(value is string text && string.IsNullOrWhiteSpace(text))', '(value is string text && text.Length < 0)']
+  'not-blank': [`src/ProductCatalog.Application/Support/InputValidation.cs`, '(value is string text && string.IsNullOrWhiteSpace(text))', '(value is string text && text.Length < 0)'],
+  // Los logs (incremento 14b): solo la prueba emitida ServiceLoggingTests puede notarlos, el servidor arranca igual.
+  'log-correlation': [`${LOGGING_DIR}/KeelConsoleFormatter.cs`, 'logEntry.Exception, CorrelationContext.Get());', 'logEntry.Exception, (string?)null);'],
+  'log-levels': [`${LOGGING_DIR}/LoggingRegistration.cs`, 'logging.AddFilter(LoggingSettings.AppCategory, settings.AppLevel);', 'logging.AddFilter(LoggingSettings.AppCategory, settings.RootLevel);'],
+  'log-node': [`${LOGGING_DIR}/LoggingSettings.cs`, '"logging:structured:ecs:service:node-name"', '"logging:structured:ecs:service:node"']
 };
 
 // Los sabotajes de lo que solo emiten las FIXTURES (el proyecto de referencia no lo tiene): se aplican en la solución de
@@ -414,6 +422,19 @@ if (results.every((result) => result.ok) && database) {
     tables.status === 0 && tables.stdout.trim().split(',').includes('products') && tables.stdout.trim().split(',').includes('ef_migrations_history'),
     tables.stdout.trim() || tables.stderr.trim()
   );
+
+  // develop escribe la consola en JSON ECS (incremento 14b): cada línea se parsea y lleva nivel, logger y servicio, como
+  // en el ts-check de keel-nest. Lo que la consola de serie de .NET escribía en texto (el arranque del host) ya no puede colarse.
+  const logLines = appOutput.split(/\r?\n/).filter((line) => line.trim() !== '');
+  const unparsed = logLines.filter((line) => {
+    try {
+      const parsed = JSON.parse(line);
+      return !(parsed.log?.level && parsed.log?.logger && parsed.service?.name && parsed.ecs?.version);
+    } catch {
+      return true;
+    }
+  });
+  step('la consola de develop es JSON ECS, línea a línea', logLines.length > 0 && unparsed.length === 0, unparsed.length > 0 ? `no ECS: ${unparsed[0].slice(0, 200)}` : `${logLines.length} líneas`);
 
   app.kill('SIGTERM');
   const end = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 15_000))]);

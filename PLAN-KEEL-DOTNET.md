@@ -1718,6 +1718,56 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       queda en **28 verificadas, 0 sin ejecutar**, y `test/engine-support.test.js` lo sostiene: una celda razonada nueva
       lo pone rojo. Siguen **sin falsar** `harness-db-probes/relational`, `harness-sql-literals/postgresql` y el predicado de
       `partial-unique-index/postgresql`.
+- **Inc. 14 — en curso (abierto el 2026-10-18).** Tramos como los de keel-nest (su § Inc. 14), con el 14a ya hecho en
+  keel-core (`gen/telemetry-vocabulary.js`) y lo neutral del 14d también (`gen/observability-assets.js` con la fila de
+  runtime por plataforma, `gen/deploy.js`, `gen/deploy-probes.js`).
+  - **Evaluación al abrirlo.** keel-dotnet rechaza `telemetry: otel` en `supported-features.js` y le falta lo que los
+    otros dos generan **con y sin** telemetría: la consola era la de serie de .NET (texto, sin `correlationId` por
+    línea, sin JSON ECS fuera de `local`, niveles fijos en Information), no hay puerto de gestión y no hay `deploy/`.
+  - **Tramos**: 14b los logs con y sin telemetría; 14c la telemetría en C# (spans con `ActivitySource` abiertos por el
+    código generado, exportación OTLP de trazas y logs con el SDK de OpenTelemetry, métricas por scrape con los nombres
+    del vocabulario y exemplars `trace_id`/`span_id`, el scrape en `MANAGEMENT_PORT` en production) y se quita de la
+    frontera; 14d la fila de runtime de .NET en el panel y las alertas, y el `deploy/` de keel-dotnet (imagen multietapa
+    con el SDK y el runtime de ASP.NET, usuario no root, `HEALTHCHECK` sobre `/readyz`); 14e los gates
+    (`check-logging.sh`, `check-telemetry.sh`) con patrones de C#; 14f `telemetry-check` y `deploy-check`.
+  - **Para el 14c, la librería de métricas** (§5, riesgo «nombres de métricas»): el exportador Prometheus de OTel .NET
+    sigue en prerelease. La candidata es **prometheus-net** (MIT): escribe OpenMetrics con exemplars sacados de la traza
+    en curso (`Exemplar.FromTraceContext()`, `trace_id`/`span_id`, las etiquetas que enlaza el Grafana de `deploy/`), con
+    los nombres que pongamos (los de `promMetric`, como keel-nest con su cliente) y con un middleware que solo atiende un
+    puerto (`UseMetricServer(port, …)`). Licencia y versión exactas se leen de nuget.org al entrar en `dotnet-stack.js`.
+  - **14b — los logs, con y sin telemetría.** El `logging.yaml` de keel-nest sale a keel-core
+    (`gen/logging-config.js`, con `ECS_VERSION`): lo comparten keel-nest y keel-dotnet salvo la cabecera, y la línea base
+    de keel-nest sale **idéntica** (41 / 10 050). keel-dotnet emite en `Infrastructure/Logging`:
+    - `LoggingSettings` (formato, los dos niveles con los nombres de logback, los `service.*`; un nivel que no existe no
+      deja arrancar);
+    - `KeelConsoleFormatter`, un `ConsoleFormatter` propio: texto en `local` y `test`
+      (`<instante> <NIVEL> <pid> --- [correlationId] [categoría] mensaje`, la pila debajo) y JSON ECS anidado en
+      `develop` y `production` (`@timestamp`, `log.level/logger`, `process.pid/thread.name`, `service.name/version/
+      environment/node.name`, `message`, `correlationId`, `error.type/message/stack_trace`, `ecs.version`). El
+      `correlationId` lo lee de `CorrelationContext` al escribir, no de un ámbito de log. No es el JSON de serie de .NET,
+      que escribe otra forma (`Timestamp`, `EventId`, `State`);
+    - `AddServiceLogging`: quita los proveedores de serie, `LOG_LEVEL_ROOT` es el mínimo de toda categoría y
+      `LOG_LEVEL_APP` el de las que empiezan por el namespace raíz del servicio (la regla por prefijo de categoría de
+      Microsoft.Extensions.Logging, la misma forma que el `logging.level.<paquete>` de logback). `Program.cs` la instala
+      antes de crear la aplicación. El filtro de las sentencias de EF Core sigue igual: es más específico.
+    - Una sola pila por fallo ya se cumplía: el mediator solo nombra el tipo, la pila la escribe el middleware de la API.
+    - **Medido**: `test/logging.test.js` (el YAML contra el de keel-nest y los niveles contra keel-spring, las claves que
+      lee `LoggingSettings`, el cableado, toda fixture con y sin correlación) y la prueba emitida `ServiceLoggingTests`,
+      que copia la configuración EMITIDA de cada perfil, la lee con el cargador del servicio y escribe con el
+      formateador: la línea ECS, la réplica por las tres vías, la pila una vez, el texto de local, `LOG_FORMAT`, los
+      niveles a través de un proveedor real y el nivel desconocido. Sabotajes de `cs-check`: `log-correlation`,
+      `log-levels` y `log-node`, cada uno rojo en sus pruebas de `ServiceLoggingTests` y solo en ellas. `cs-check`
+      **17/17** (2 964 pruebas), con un paso nuevo, el de keel-nest: la consola del servidor ARRANCADO en develop es
+      JSON ECS línea a línea (23 líneas, también las del arranque de ASP.NET Core).
+    - **Lo que destapó, ajeno a los logs**: en dos pasadas cayó un `HealthTests` de una fixture SIN sabotear con
+      `ObjectDisposedException` del `CancellationTokenSource` en `RabbitConnection.StopAsync` (y en la de
+      `SnsSqsConnection`). Con `WebApplicationFactory`, el `Program` que termina dispone los servicios mientras la fábrica
+      aún está parando el host, y el apagado llegaba a recursos ya dispuestos. En producción `Run()` para y después
+      dispone, en orden; en las pruebas salía una vez cada pocas pasadas. Arreglado en los tres brokers: el apagado se
+      hace UNA vez (`stopped ??= Stop()`), lo pida primero el host o el contenedor, y `Dispose` lo espera antes de soltar
+      nada. `cs-check` 17/17 después; `broker-check` con RabbitMQ entero en verde y falsado. Kafka y SNS/SQS **sin
+      medir** en vivo tras el arreglo: esa pasada se quedó sin memoria en la máquina (podman no arrancaba, `0xC0000142`),
+      aunque `cs-check` compila y prueba sus variantes con el cambio.
 
 ## 5. Riesgos conocidos
 
