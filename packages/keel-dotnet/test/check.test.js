@@ -39,18 +39,19 @@ test('un diseño no listo sale en rojo aunque sea generable, y dice por qué', a
   assert.match(output, /Generable, pero no listo/);
 });
 
-test('lo que está fuera de la frontera (un value object compuesto en una llamada saliente) sale en rojo sin construir nada', async () => {
-  // Desde el 13j ninguna fixture queda fuera: se deriva de catalog-extended un precio compuesto en la respuesta de getPrice.
+test('lo que está fuera de la frontera (un value object compuesto en la URL de una llamada saliente) sale en rojo sin construir nada', async () => {
+  // Ninguna fixture queda fuera: se deriva de catalog-extended un sku compuesto en la ruta de getPrice, que no tiene forma
+  // en una URL y rechazan los tres generadores (en el cuerpo o en la respuesta se genera desde el 16).
   const workspace = makeWorkspace();
   const spec = mountDesign(workspace, 'catalog-extended');
   const domain = path.join(spec, 'domain.keel.yaml');
-  fs.writeFileSync(domain, fs.readFileSync(domain, 'utf8').replace('types:\n', 'types:\n  Price:\n    description: Importe con su moneda.\n    fields:\n      amount: { type: decimal, required: true }\n      currency: { type: string, required: true }\n\n'));
+  fs.writeFileSync(domain, fs.readFileSync(domain, 'utf8').replace('types:\n', 'types:\n  SkuRef:\n    description: Referencia de producto con su catálogo.\n    fields:\n      sku: { type: string, required: true }\n      catalog: { type: string, required: true }\n\n'));
   const clients = path.join(spec, 'http-clients.keel.yaml');
-  fs.writeFileSync(clients, fs.readFileSync(clients, 'utf8').replace('        response:\n          fields:\n            amount:\n              type: decimal', '        response:\n          fields:\n            amount:\n              type: Price'));
+  fs.writeFileSync(clients, fs.readFileSync(clients, 'utf8').replace('          pathParams:\n            sku:\n              type: string', '          pathParams:\n            sku:\n              type: SkuRef'));
   const before = treeDigest(workspace);
   const { exitCode, output } = await runCommand(workspace, check, 'specs/catalog-extended', {});
   assert.equal(exitCode, 1);
-  assert.match(output, /getPrice: amount es un value object compuesto en el cuerpo o en la respuesta/);
+  assert.match(output, /getPrice: sku es un value object compuesto en la ruta, la query o una cabecera/);
   assert.equal(treeDigest(workspace), before);
 });
 

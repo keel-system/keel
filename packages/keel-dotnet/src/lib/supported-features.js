@@ -1,10 +1,9 @@
 // Frontera declarada del generador: qué del DSL sabe mapear keel-dotnet.
 //
-// El DSL es más ancho que cualquier generador, y keel-dotnet se construye por incrementos
-// (PLAN-KEEL-DOTNET.md): su frontera AVANZA EN CÓDIGO. Cada capa que todavía no genera se rechaza aquí
-// con el incremento que la trae, y cada incremento borra su entrada. Lo que no vale es recibir una
-// construcción que no se sabe mapear y producir un proyecto como si nada: el diseñador creería que se
-// generó y nadie se lo desmentiría.
+// El DSL es más ancho que cualquier generador, y keel-dotnet se construyó por incrementos
+// (PLAN-KEEL-DOTNET.md): su frontera avanzó en código, y cerrado el plan (incremento 16) solo rechaza lo que
+// tiene MOTIVO escrito. Lo que no vale es recibir una construcción que no se sabe mapear y producir un
+// proyecto como si nada: el diseñador creería que se generó y nadie se lo desmentiría.
 //
 // Dos niveles, como en keel-spring y keel-nest:
 //   · `errors` impiden generar — la capa entera falta;
@@ -123,9 +122,12 @@ function callerIdentityErrors(layers) {
 }
 
 /**
- * Lo que keel-dotnet todavía no sabe hacer con la mensajería: sin persistencia, porque el puente sale del adaptador de
- * repositorio y el registro de procesados vive en la base (en keel-nest se cerró en su incremento 16). La identidad del
- * emisor resuelta contra las credenciales de un recurso (`identity.resolvedBy`) se genera desde el 12e: el finder.
+ * La mensajería SIN persistencia se rechaza con motivo: los eventos los levanta el agregado y los drena el adaptador de
+ * repositorio al guardarlo, y sin persistencia no hay ni adaptador ni transacción tras la que publicarlos. Medido en el
+ * incremento 16: keel-spring emite un puente que espera un AFTER_COMMIT que nadie dispara, y keel-nest ni puente ni
+ * publisher (el handler dice «no publica nada»); los dos generan un servicio que no publica sin decirlo, y aquí no se
+ * copia. La identidad del emisor resuelta contra las credenciales de un recurso (`identity.resolvedBy`) se genera desde el
+ * 12e: el finder.
  */
 function messagingErrors(declared, layers) {
   if (!declared.includes('messaging')) return [];
@@ -133,42 +135,18 @@ function messagingErrors(declared, layers) {
   if (!layers?.persistence) {
     errors.push(
       'capa messaging sin persistence — keel-dotnet genera la mensajería sobre la persistencia, relacional o documental (incrementos 9 y 12c de PLAN-KEEL-DOTNET.md): ' +
-        'el puente de eventos sale del adaptador de repositorio y el registro de mensajes procesados vive en la base. Genera este diseño con keel-spring o keel-nest.'
+        'los eventos del agregado los drena el adaptador de repositorio al guardarlo, y sin persistencia nadie los publicaría (ni hay registro de mensajes procesados). Declara la persistencia.'
     );
   }
   return errors;
 }
 
-/** ¿Es `field` un value object compuesto del dominio (o una lista de ellos)? */
-function isComposite(layers, field) {
-  const types = layers?.domain?.types ?? {};
-  const type = field?.type ?? field?.items?.type;
-  return Boolean(type && types[type] && (types[type].fields || types[type].kind === 'composite'));
-}
-
 /**
- * Lo que keel-dotnet todavía no sabe hacer con los clientes salientes y las dependencias: los clientes, las activaciones,
- * los needs y OAuth2 se generan (incrementos 11 y 13 de PLAN-KEEL-DOTNET.md); esto, no.
- *   · un value object compuesto en una llamada: en la URL no tiene forma (el rechazo neutral, el mismo que en keel-spring y
- *     keel-nest); en el cuerpo o en la respuesta sí, pero ninguna red de keel-dotnet lo ha medido todavía.
+ * Lo saliente se genera entero: los clientes, las activaciones, los needs y OAuth2 (incrementos 11 y 13 de PLAN-KEEL-DOTNET.md),
+ * y el value object compuesto en el cuerpo y en la respuesta desde el 16 (el cuerpo lo escribe el contrato del cable; la
+ * respuesta se lee con el ValueReaders.Read<Tipo> de la entrada, como keel-nest). Lo único que se rechaza es lo que no
+ * genera ninguno de los tres: un compuesto en la URL o en una cabecera (el rechazo neutral de keel-core).
  */
 function outboundErrors(layers) {
-  const errors = [...compositeUrlParamErrors(layers, 'keel-dotnet')];
-  // Los `needs` se generan enteros: bajo demanda desde el 13i (el cliente en el handler del usedBy y onUnavailable en el
-  // fallback), el último valor conocido y la réplica (proyector, lector y su transacción propia) desde el 13j.
-  for (const [client, definition] of Object.entries(layers?.['http-clients']?.clients ?? {})) {
-    // `auth: oauth2-client-credentials` se genera desde el 13j (ClientCredentials, con la semántica de Spring Security).
-    for (const [call, spec] of Object.entries(definition?.calls ?? {})) {
-      const fields = [...Object.entries(spec?.request?.body ?? {}), ...Object.entries(spec?.response?.fields ?? {})]
-        .filter(([, field]) => isComposite(layers, field))
-        .map(([name]) => name);
-      if (fields.length > 0) {
-        errors.push(
-          `http-clients.${client}.calls.${call}: ${fields.join(', ')} es un value object compuesto en el cuerpo o en la respuesta — keel-dotnet ` +
-            'todavía no lo genera (ninguna de sus redes lo ha medido; llega en el incremento 16 de PLAN-KEEL-DOTNET.md, como en keel-nest). Genera este diseño con keel-spring o keel-nest.'
-        );
-      }
-    }
-  }
-  return errors;
+  return compositeUrlParamErrors(layers, 'keel-dotnet');
 }

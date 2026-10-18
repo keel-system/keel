@@ -24,7 +24,7 @@ test('capa mail: se genera (adelantada al incremento 12e, como en keel-nest)', (
   assert.deepEqual(errors, []);
 });
 
-test('los clientes salientes, las activaciones y los needs (bajo demanda, lastKnown y la réplica) y OAuth2 se generan (11, 13i y 13j); el compuesto en una llamada se rechaza', () => {
+test('los clientes salientes, las activaciones y los needs (bajo demanda, lastKnown y la réplica) y OAuth2 se generan (11, 13i y 13j), y el compuesto en el cuerpo o la respuesta (16); en la URL se rechaza', () => {
   const layers = ['domain', 'use-cases', 'http-clients', 'dependencies'];
   const call = { method: 'GET', path: '/p/{sku}', request: { pathParams: { sku: { type: 'string', required: true } } }, response: { fields: { price: { type: 'decimal' } } } };
   const base = {
@@ -53,9 +53,10 @@ test('los clientes salientes, las activaciones y los needs (bajo demanda, lastKn
   oauth['http-clients'].clients.pricing.auth = { type: 'oauth2-client-credentials', tokenUrl: 'https://auth/token' };
   assert.deepEqual(checkSupportedFeatures(manifestWith(...layers), oauth).errors, []);
 
+  // El compuesto en la respuesta (y en el cuerpo) se genera desde el 16: lo lee el ValueReaders.Read<Tipo> de la entrada.
   const inBody = structuredClone(base);
   inBody['http-clients'].clients.pricing.calls.getPrice.response.fields.price = { type: 'Money' };
-  assert.match(checkSupportedFeatures(manifestWith(...layers), inBody).errors.join('\n'), /getPrice: price es un value object compuesto en el cuerpo o en la respuesta .*incremento 16/);
+  assert.deepEqual(checkSupportedFeatures(manifestWith(...layers), inBody).errors, []);
 
   // En la URL, el rechazo NEUTRAL: el mismo mensaje que keel-spring y keel-nest.
   const inPath = structuredClone(base);

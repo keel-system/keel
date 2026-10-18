@@ -64,6 +64,79 @@ export async function runCommand(workspace, command, ...args) {
   }
 }
 
+/**
+ * Las ramas del DSL que ninguna fixture declara y keel-dotnet genera (incremento 16): un parche en memoria sobre una
+ * fixture real. Las recorren `uncovered-branches.test.js` (la rama en lo emitido, sin red) y cs-check, que las compila
+ * y ejecuta sus pruebas emitidas como variantes DERIVED. `mutate(manifest, layers, name)` es la firma de cs-check: el
+ * nombre del servicio es el namespace raíz, y dos variantes de la misma fixture no pueden chocar.
+ */
+const replicaOf = (layers) => Object.values(layers.dependencies.dependencies.pricing.needs).find((need) => need.replica).replica;
+const DEGRADED_REPLICA = 'Se cotiza sin precio del proveedor y la ficha lo dice.';
+const DEGRADED_ACTIVATION = 'El producto queda sin reindexar hasta el próximo cambio; la búsqueda lo encuentra con sus datos viejos.';
+export const UNCOVERED_BRANCHES = [
+  {
+    name: 'catalog-extended-replica-fail',
+    from: 'catalog-extended',
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      replicaOf(layers).onMiss = { action: 'fail', error: 'PRICE_UNAVAILABLE' };
+    }
+  },
+  {
+    name: 'catalog-extended-replica-degrade',
+    from: 'catalog-extended',
+    prose: DEGRADED_REPLICA,
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      replicaOf(layers).onMiss = { action: 'degrade', degradedTo: DEGRADED_REPLICA };
+    }
+  },
+  {
+    name: 'catalog-extended-activation-degrade',
+    from: 'catalog-extended',
+    prose: DEGRADED_ACTIVATION,
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      layers.dependencies.dependencies['search-index'].activations.indexProduct.onFailure = { action: 'degrade', degradedTo: DEGRADED_ACTIVATION };
+    }
+  },
+  {
+    // Un value object compuesto en el cuerpo y en la respuesta de una llamada saliente (el mismo parche que keel-nest).
+    name: 'stock-reservation-compuesto-saliente',
+    from: 'stock-reservation',
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      layers.domain.types.Refund = {
+        description: 'Importe devuelto.',
+        fields: { amount: { type: 'decimal', required: true }, currency: { type: 'string', required: true } }
+      };
+      const calls = layers['http-clients'].clients.inventory.calls;
+      calls.cancelStock.response.fields.refund = { type: 'Refund' };
+      calls.reportRefund = {
+        contract: 'POST /stock/refunds informa de un reembolso y devuelve { accepted, refunds }.',
+        method: 'POST',
+        path: '/stock/refunds',
+        request: { body: { refund: { type: 'Refund', required: true }, history: { type: 'Refund', list: true } } },
+        response: { fields: { accepted: { type: 'boolean', required: true }, refunds: { type: 'Refund', list: true } } }
+      };
+    }
+  },
+  {
+    // La captura PARCIAL: payment-checkout captura siempre entero porque MercadoPago no la cubre; sobre Stripe sí.
+    name: 'payment-checkout-partial-capture',
+    from: 'payment-checkout',
+    paymentGateway: 'stripe',
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      const operation = layers['use-cases'].operations.capturePayment;
+      operation.input.fields.amount = { ...layers['use-cases'].operations.refundPayment.input.fields.amount };
+      operation.rules = operation.rules.map((rule) => (rule === 'Se captura el importe entero autorizado.' ? 'Se captura el importe pedido, o el entero si no se pide.' : rule));
+      layers.payments.capture.amount = 'amount';
+      layers.payments.capabilities = [...layers.payments.capabilities, 'partial-capture'];
+    }
+  }
+];
+
 /** Las fixtures compartidas (las que tienen manifiesto). */
 export function fixtureNames() {
   return fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));

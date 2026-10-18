@@ -1,0 +1,78 @@
+// Las ramas del DSL que ninguna fixture declara y keel-dotnet genera: las que `capability-coverage.test.js` anota como
+// `soloCadenas`. Sin fixture, cs-check no las compila nunca, así que aquí se derivan de una fixture real parcheando el
+// diseño en memoria —como keel-spring en dependencies.test.js y keel-nest en su uncovered-branches.test.js— y se exige la
+// rama en lo emitido. La compilación y las pruebas emitidas de cada una las pone su variante DERIVED de cs-check, con el
+// MISMO parche (`UNCOVERED_BRANCHES`): las dos redes no pueden mirar diseños distintos.
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import { checkCrossRefs, loadService } from 'keel-core';
+import { FIXTURES_DIR, planFixture, UNCOVERED_BRANCHES } from './helpers/workspace.js';
+
+const branch = (name) => UNCOVERED_BRANCHES.find((candidate) => candidate.name === name);
+
+async function emitted(name) {
+  const { from, mutate } = branch(name);
+  const { files } = await planFixture(from, { mutate: (manifest, layers) => mutate(manifest, layers, from) });
+  return files;
+}
+
+test('catalog-extended: réplica con onMiss fail — el lector lanza el error declarado (replica.onMiss.error)', async () => {
+  const files = await emitted('catalog-extended-replica-fail');
+  const reader = files.find((file) => /Reader\.cs$/.test(file.path) && file.content.includes('PRICE_UNAVAILABLE'));
+  assert.ok(reader, 'ningún lector de réplica falla con el error declarado');
+  assert.match(reader.content, /throw new PriceUnavailable\w*\(/, 'el lector no lanza la excepción del error del diseño');
+});
+
+test('catalog-extended: réplica con onMiss degrade — el lector lleva la prosa del diseño (replica.onMiss.degradedTo)', async () => {
+  const files = await emitted('catalog-extended-replica-degrade');
+  const prose = branch('catalog-extended-replica-degrade').prose;
+  assert.ok(files.some((file) => /Reader\.cs$/.test(file.path) && file.content.includes(prose)), 'la prosa de degradedTo no llega al lector');
+  assert.ok(files.some((file) => /Handler\.cs$/.test(file.path) && file.content.includes(prose)), 'la nota del handler no dice cómo degradar');
+});
+
+test('catalog-extended: activación con onFailure degrade — el fallback deja el TODO con la prosa (activations.onFailure.degradedTo)', async () => {
+  const files = await emitted('catalog-extended-activation-degrade');
+  const prose = branch('catalog-extended-activation-degrade').prose;
+  assert.ok(files.some((file) => file.path.endsWith('.cs') && file.content.includes(prose)), 'la prosa de degradedTo no llega a lo emitido');
+});
+
+test('payment-checkout: captura parcial — el puerto y el adaptador llevan el importe (payments.capture.amount)', async () => {
+  const files = await emitted('payment-checkout-partial-capture');
+  const port = files.find((file) => file.path.endsWith('IPaymentGateway.cs'));
+  assert.ok(port, 'no se emitió el puerto de la pasarela');
+  assert.match(port.content, /Task<GatewayOutcome> Capture\(string reference, string gatewayPaymentId, decimal\? amount, string\? currency,/);
+  const adapter = files.find((file) => file.path.endsWith('StripePaymentGateway.cs'));
+  assert.ok(adapter, 'no se emitió el adaptador de Stripe');
+  assert.match(adapter.content, /"amount_to_capture"/, 'el adaptador no manda el importe a capturar');
+});
+
+test('stock-reservation: un compuesto en la respuesta se lee con el lector de la entrada; en el cuerpo, lo escribe el cable', async () => {
+  const files = await emitted('stock-reservation-compuesto-saliente');
+  const { checkSupportedFeatures } = await import('../src/lib/supported-features.js');
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'stock-reservation'));
+  branch('stock-reservation-compuesto-saliente').mutate(manifest, layers, 'stock-reservation');
+  assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], 'la frontera todavía lo rechaza');
+  const response = files.find((file) => file.path.endsWith('CancelStockResponse.cs'));
+  assert.ok(response.content.includes('ResponseReading.Composite(fields, "refund", "inventory.cancelStock.refund", "un Refund", ValueReaders.ReadRefund)'));
+  const report = files.find((file) => file.path.endsWith('ReportRefundResponse.cs'));
+  assert.ok(report.content.includes('ResponseReading.CompositeList(fields, "refunds"'));
+  const reading = files.find((file) => file.path.endsWith('ResponseReading.cs'));
+  assert.ok(reading.content.includes('public static T RequiredComposite<T>'));
+  const request = files.find((file) => file.path.endsWith('ReportRefundRequest.cs'));
+  assert.ok(request.content.includes('public Refund Refund { get; }'), 'el cuerpo no lleva el value object');
+  // La prueba emitida lo EJECUTA (cs-check): llega como su value object, y lo que no se construye viola el contrato.
+  const tests = files.find((file) => file.path.endsWith('OutboundClientsTests.cs'));
+  assert.ok(tests.content.includes('Assert.Equal(new Refund(12.5m, "x"), result.Refund)'));
+  assert.ok(tests.content.includes('QueNoSeConstruyeViolaElContrato'));
+});
+
+// Cada parche es un diseño VÁLIDO: uno que la validación rechaza no llegaría nunca a build, y su rama no la genera nadie.
+for (const { name, from, mutate } of UNCOVERED_BRANCHES) {
+  test(`${name}: es un diseño válido (si no, build no llegaría a generarlo)`, () => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
+    mutate(manifest, layers, from);
+    assert.deepEqual(checkCrossRefs({ layers, manifest }).errors, []);
+  });
+}

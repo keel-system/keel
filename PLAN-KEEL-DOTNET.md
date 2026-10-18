@@ -1922,6 +1922,35 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
   - De paso: la frontera del README todavía decía que la telemetría se rechazaba; ya no.
   - Siguiente: el 16 (cierre: frontera sin rechazos sin motivo, matriz sin pendientes, `capability-coverage` y la
     corrida de control del par MVP en los tres generadores).
+- **Inc. 16 — en curso (2026-10-18).**
+  - **16a, la cobertura de capacidades (hecho).** Las quince fixtures entran enteras en la frontera. Quedan sin fixture las
+    mismas diez capacidades opcionales que en keel-nest; `test/capability-coverage.test.js` (el enumerador compartido de
+    keel-core) exige su motivo, comprobado contra los emisores de keel-dotnet y no copiado. Las ramas sin fixture son
+    parches en memoria sobre una fixture real (`UNCOVERED_BRANCHES` de `test/helpers/workspace.js`) con DOS redes: la
+    rama en lo emitido (`test/uncovered-branches.test.js`, que exige también que cada parche sea un diseño válido) y su
+    variante en `cs-check`, que la compila y ejecuta sus pruebas emitidas. Una mejora sobre keel-nest: la captura PARCIAL
+    (`payments.capture.amount`), allí un `hueco`, aquí la genera `payment-checkout-partial-capture` sobre Stripe
+    (`amount_to_capture`), con la capacidad `partial-capture` y comprobado que la pasarela la cubre.
+  - **16c, el compuesto en el cuerpo y en la respuesta de una llamada saliente (hecho).** La frontera ya no lo rechaza; el
+    compuesto en la URL o en una cabecera sigue rechazado con el mensaje neutral de los tres. El cuerpo ya salía bien (el
+    value object se escribe por sus propiedades con el contrato del cable). La respuesta se leía con un `Deserialize<T>`
+    genérico, que a un objeto al que le falta un obligatorio le pasa un `0` al constructor; ahora se lee con el MISMO
+    `ValueReaders.Read<Tipo>` de la entrada (`ResponseReading.Composite`, `RequiredComposite`, `CompositeList`), como
+    keel-nest, y lo que rechaza es un `OutboundContractException`. `ValueReaders` se emite también sin API ni
+    suscripciones si una respuesta lo necesita. La prueba emitida `OutboundClientsTests` lo EJECUTA en toda llamada con
+    un compuesto, con resiliencia o sin ella: llega como su value object, igual al construido con los mismos valores, y
+    lo que no es un objeto, el objeto vacío y el que pierde un solo obligatorio violan el contrato; y el compuesto del
+    cuerpo viaja como objeto con los nombres del diseño. Silueta `stock-reservation-compuesto-saliente` (el parche de
+    keel-nest). `cs-check --fixtures`: 15 fixtures y 19 variantes, 204/204 ensamblados y 4 991 pruebas. Falsado con
+    `--sabotage=outbound-composite` (la respuesta leída con `Deserialize`): cae justo el caso del obligatorio que falta.
+  - **16b, la mensajería sin persistencia: NO se cierra, y destapa un defecto de los otros dos.** keel-nest la «cerró» en
+    su 16 porque «el emisor ya la sabía hacer», pero lo que emite no publica: los eventos los levanta el agregado y los
+    drena el adaptador de repositorio, y sin persistencia keel-nest no emite ni puente ni publisher (el handler dice «no
+    publica nada») ni registra la conexión del broker en `app.module.ts`; keel-spring emite un puente que espera un
+    `@TransactionalEventListener(AFTER_COMMIT)` que nadie dispara. Los dos generan, sin decirlo, un servicio que no
+    publica ni consume. keel-dotnet sigue rechazándola, ahora con ese motivo; arreglarlo en los tres es decisión abierta.
+  - Queda: la decisión del 16b, la matriz (sin celdas `sin ejecutar` ni pendientes desde el 14f; tres celdas sin falsar)
+    y la corrida de control del par MVP en los tres generadores.
 
 ## 5. Riesgos conocidos
 

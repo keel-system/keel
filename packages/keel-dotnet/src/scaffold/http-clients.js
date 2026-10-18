@@ -77,7 +77,7 @@ export function generate(model) {
         ...(usesTelemetry(model) ? ['System.Diagnostics', telemetryNamespace(model)] : [])
       ]
     ),
-    support('ResponseReading', responseReadingCs(), ['System.Text.Json', wireNamespace(model)]),
+    support('ResponseReading', responseReadingCs(model), ['System.Text.Json', wireNamespace(model)]),
     support('HttpClientsSettings', settingsCs(model), ['System.Text', configNamespace(model)]),
     registration(model),
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/http-clients.yaml`, content: httpClientsYaml(model, profile) })),
@@ -216,6 +216,17 @@ function response(model, client, call) {
   const reads = fields.map((field) => {
     const where = csString(`${subject}.${field.name}`);
     const what = csString(expected(model, field));
+    if (isComposite(field)) {
+      // El compuesto se lee con el MISMO lector que la entrada (ValueReaders.Read<Tipo>, las guardas de su constructor), como
+      // keel-nest: lo que rechaza viola el contrato del PROVEEDOR, no es un 400 nuestro.
+      const reader = `ValueReaders.Read${elementType(field)}`;
+      if (field.list) return `            ResponseReading.CompositeList(fields, ${csString(field.name)}, ${where}, ${what}, ${reader})`;
+      if (field.required) {
+        const missing = csString(`${subject}: la respuesta no trae '${field.name}', que el contrato declara obligatorio`);
+        return `            ResponseReading.RequiredComposite(fields, ${csString(field.name)}, ${where}, ${what}, ${missing}, ${reader})`;
+      }
+      return `            ResponseReading.Composite(fields, ${csString(field.name)}, ${where}, ${what}, ${reader})`;
+    }
     if (field.list) return `            ResponseReading.List<${elementType(field)}>(fields, ${csString(field.name)}, ${where}, ${what})`;
     if (field.required) {
       const missing = csString(`${subject}: la respuesta no trae '${field.name}', que el contrato declara obligatorio`);
@@ -243,7 +254,15 @@ ${reads.join(',\n')});`
 ${read}
     }
 }`;
-  return { path, content: csFile({ namespace, usings: ['System.Text.Json', ...usingsOf(model, fields)], body }) };
+  const readers = fields.some(isComposite) ? [namespaceOf(model, 'appSupport')] : [];
+  return { path, content: csFile({ namespace, usings: ['System.Text.Json', ...readers, ...usingsOf(model, fields)], body }) };
+}
+
+const isComposite = (field) => field.kind === 'composite';
+
+/** ¿Alguna respuesta trae un value object compuesto? Se lee con su ValueReaders.Read<Tipo>, que emite rest-support.js. */
+export function readsCompositeResponses(model) {
+  return (model.httpClients ?? []).some((client) => client.calls.some((call) => !call.bodiless && call.responseFields.some(isComposite)));
 }
 
 function request(model, client, call) {
@@ -1356,7 +1375,8 @@ public sealed partial class HttpExchange(HttpMessageHandler handler) : IDisposab
 }`;
 }
 
-function responseReadingCs() {
+function responseReadingCs(model) {
+  const composite = readsCompositeResponses(model) ? compositeReadingCs() : '';
   return `/// <summary>
 /// El proveedor —o nuestra petición— viola el contrato que declara el diseño. NO es «el proveedor no está»: no entra al
 /// fallback ni cuenta para el circuito, y sale como 500 con su traza. Si entrara al fallback, el llamante recibiría
@@ -1418,8 +1438,56 @@ public static class ResponseReading
             // petición malformada nuestra.
             throw new OutboundContractException($"{where}: se esperaba {expected}", error);
         }
-    }
+    }${composite}
 }`;
+}
+
+/**
+ * La lectura de un value object COMPUESTO de la respuesta, con el lector de la entrada (ValueReaders.Read<Tipo>): lo que su
+ * constructor rechaza, o lo que no es un objeto, es un OutboundContractException —el contrato roto es del proveedor—.
+ */
+function compositeReadingCs() {
+  return `
+
+    /// <summary>Un value object compuesto opcional: su ausencia, null.</summary>
+    public static T? Composite<T>(JsonElement fields, string name, string where, string expected, Func<JsonElement?, T?> read)
+        where T : class =>
+        TryGet(fields, name, out var value) ? Construct(value, where, expected, read) : null;
+
+    /// <summary>Un value object compuesto que el contrato declara obligatorio.</summary>
+    public static T RequiredComposite<T>(JsonElement fields, string name, string where, string expected, string missing, Func<JsonElement?, T?> read)
+        where T : class =>
+        TryGet(fields, name, out var value) ? Construct(value, where, expected, read) : throw new OutboundContractException(missing);
+
+    /// <summary>Una lista de value objects compuestos: ausente o null es una lista vacía; un null DENTRO, contrato roto.</summary>
+    public static IReadOnlyList<T> CompositeList<T>(JsonElement fields, string name, string where, string expected, Func<JsonElement?, T?> read)
+        where T : class
+    {
+        if (!TryGet(fields, name, out var value))
+        {
+            return [];
+        }
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw new OutboundContractException($"{where}: se esperaba {expected}");
+        }
+        return value.EnumerateArray()
+            .Select(element => element.ValueKind == JsonValueKind.Null ? throw new OutboundContractException($"{where}: se esperaba {expected}") : Construct(element, where, expected, read))
+            .ToList();
+    }
+
+    private static T Construct<T>(JsonElement value, string where, string expected, Func<JsonElement?, T?> read)
+        where T : class
+    {
+        try
+        {
+            return read(value) ?? throw new OutboundContractException($"{where}: se esperaba {expected}");
+        }
+        catch (Exception error) when (error is not OperationCanceledException and not OutboundContractException)
+        {
+            throw new OutboundContractException($"{where}: se esperaba {expected}", error);
+        }
+    }`;
 }
 
 // ─── La prueba emitida ───────────────────────────────────────────────────────────────────────────
@@ -1494,7 +1562,7 @@ function sampleValue(model, field) {
     const first = model.enums?.find((e) => e.name === field.csType)?.values?.[0];
     return first != null ? `default(${field.csType})` : null;
   }
-  if (field.kind === 'composite') return null;
+  if (field.kind === 'composite') return compositeLiteral(model, field);
   return (
     {
       string: '"x"',
@@ -1512,10 +1580,10 @@ function sampleValue(model, field) {
 }
 
 /** Las llamadas que la prueba emitida ejecuta contra un proveedor falso: con método, con resiliencia y argumentos de muestra. */
-function probedCalls(model) {
+function probedCalls(model, which = (call) => call.retry || call.circuitBreaker) {
   return model.httpClients.flatMap((client) =>
     client.calls
-      .filter((call) => call.method && (call.retry || call.circuitBreaker) && client.auth?.type !== 'oauth2-client-credentials')
+      .filter((call) => call.method && which(call) && client.auth?.type !== 'oauth2-client-credentials')
       .map((call) => ({ client, call, args: [...callFields(call).map((field) => sampleValue(model, field)), ...(call.hasBody && !call.requestType ? ['new { }'] : [])] }))
       .filter(({ args }) => args.every((arg) => arg != null))
   );
@@ -1542,8 +1610,18 @@ function emittedTests(model) {
   ];
   const probed = probedCalls(model);
   const probes = probed.map(({ client, call, args }) => adapterProbe(model, client, call, args));
-  if (probed.length > 0) probes.unshift(probeHelpers(model, [...new Set(probed.map(({ client }) => client))]));
+  // El value object compuesto de una respuesta (incremento 16), en toda llamada que lo traiga, con resiliencia o sin ella.
+  const composite = probedCalls(model, (call) => (!call.bodiless && call.responseFields.some(isComposite)) || call.bodyFields.some(isComposite));
+  for (const { client, call, args } of composite) {
+    const name = `${client.adapterClass}${callMethod(call)}`;
+    const invoke = `adapter.${callMethod(call)}(${[...args, 'TestContext.Current.CancellationToken'].join(', ')})`;
+    probes.push(compositeResponseProbe(model, client, call, name, invoke), compositeBodyProbe(model, client, call, name, invoke));
+  }
+  const helped = [...new Set([...probed, ...composite].map(({ client }) => client))];
+  if (helped.length > 0) probes.unshift(probeHelpers(model, helped));
   const usings = ['System.Net', 'System.Net.Http.Headers', 'System.Text', 'System.Text.Json', 'Microsoft.Extensions.Logging.Abstractions', 'Xunit', clientAdaptersNamespace(model), clientsNamespace(model)];
+  // El compuesto de muestra (un argumento o el valor esperado de una respuesta) se construye con su constructor.
+  if ([...probed, ...composite].some(({ call }) => callFields(call).some(isComposite) || call.responseFields.some(isComposite))) usings.push(namespaceOf(model, 'valueObjects'));
   const circuitTheory = circuits.length > 0
     ? `
     /// <summary>
@@ -1870,11 +1948,139 @@ function adapterProbe(model, client, call, args) {
 `;
 }
 
+/**
+ * El value object compuesto de un campo, si se puede construir con valores de muestra sin tropezar con sus guardas: solo
+ * campos escalares sencillos y sin más regla que la presencia (o el texto no vacío). Si no, null (la prueba que lo necesite no se emite).
+ */
+function sampleComposite(model, field) {
+  const vo = (model.valueObjects ?? []).find((candidate) => candidate.name === elementType(field));
+  if (!vo || vo.fields.length === 0) return null;
+  const plain = vo.fields.every(
+    (member) =>
+      !member.list &&
+      member.kind === 'base' &&
+      COMPOSITE_SAMPLES[member.base] &&
+      // Presencia y texto no vacío: los cumple cualquier muestra; una cota o un patrón podrían rechazarla.
+      (member.validation ?? []).every((rule) => rule.rule === 'notNull' || rule.rule === 'notBlank') &&
+      !member.numeric?.scale
+  );
+  return plain ? vo : null;
+}
+
+const COMPOSITE_SAMPLES = {
+  string: { json: 'x', cs: '"x"' },
+  text: { json: 'x', cs: '"x"' },
+  int: { json: 7, cs: '7' },
+  long: { json: 7, cs: '7L' },
+  decimal: { json: 12.5, cs: '12.5m' },
+  boolean: { json: true, cs: 'true' }
+};
+
+function compositeJson(model, field) {
+  const vo = sampleComposite(model, field);
+  return vo ? Object.fromEntries(vo.fields.map((member) => [member.name, COMPOSITE_SAMPLES[member.base].json])) : null;
+}
+
+/** El MISMO valor que compositeJson, construido en C#: lo que el adaptador tiene que devolver al leer ese JSON. */
+function compositeLiteral(model, field) {
+  const vo = sampleComposite(model, field);
+  return vo ? `new ${vo.name}(${vo.fields.map((member) => COMPOSITE_SAMPLES[member.base].cs).join(', ')})` : null;
+}
+
+/**
+ * Un value object compuesto en la respuesta (incremento 16): llega al resultado como su value object, igual al que se
+ * construye con los mismos valores; y lo que no es un objeto, o lo que su constructor rechaza, viola el contrato del
+ * proveedor —un OutboundContractException, no un 400 nuestro ni «el proveedor no está»—.
+ */
+/**
+ * Un value object compuesto en el CUERPO (incremento 16): viaja como objeto JSON con los nombres del diseño y el contrato
+ * del cable (el decimal con su escala), que es lo que escribe WireJson sobre sus propiedades.
+ */
+function compositeBodyProbe(model, client, call, name, invoke) {
+  const composites = call.bodyFields.filter((field) => isComposite(field) && !field.list && compositeJson(model, field));
+  if (composites.length === 0) return '';
+  const answer = {};
+  for (const field of call.responseFields) {
+    const value = sampleJson(model, field);
+    if (value == null) return '';
+    answer[field.wireName ?? field.name] = value;
+  }
+  const checks = composites.map(
+    (field) => `        Assert.Equal(${csString(JSON.stringify(compositeJson(model, field)))}, sent.RootElement.GetProperty(${csString(field.wireName ?? field.name)}).GetRawText());`
+  );
+  return `
+    /// <summary>${client.id}.${call.name}: el compuesto del cuerpo viaja como objeto JSON, con los nombres del diseño.</summary>
+    [Fact]
+    public async Task ${name}EscribeElCompuestoDelCuerpoComoObjeto()
+    {
+        string? body = null;
+        var provider = new FakeProvider(async (request, cancellationToken) =>
+        {
+            body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(${csString(JSON.stringify(answer))}) };
+        });
+        var adapter = ${client.adapterClass}Over(provider);
+        await ${invoke};
+        using var sent = JsonDocument.Parse(body!);
+${checks.join('\n')}
+    }
+`;
+}
+
+const BROKEN = '<compuesto roto>';
+
+function compositeResponseProbe(model, client, call, name, invoke) {
+  const composites = call.responseFields.filter((field) => isComposite(field) && !field.list);
+  if (composites.length === 0 || call.bodiless) return '';
+  const body = {};
+  for (const field of call.responseFields) {
+    const value = sampleJson(model, field);
+    if (value == null) return '';
+    body[field.wireName ?? field.name] = value;
+  }
+  return composites
+    .map((field) => {
+      const key = field.wireName ?? field.name;
+      const member = csMember(field.name);
+      // Lo que no es un objeto; el objeto vacío; y el que solo pierde UN obligatorio con los demás bien, que es el que
+      // distingue el lector de la entrada de un Deserialize genérico (que le pasaría un 0 o un null al constructor).
+      const vo = sampleComposite(model, field);
+      const required = vo.fields.filter((m) => m.required);
+      const sample = compositeJson(model, field);
+      const missingOne = required.length > 0 && vo.fields.length > 1 ? [JSON.stringify(Object.fromEntries(Object.entries(sample).filter(([k]) => k !== required[0].name)))] : [];
+      const broken = ['"doce"', ...(required.length > 0 ? ['{}'] : []), ...missingOne];
+      const bodies = broken.map((value) => csString(JSON.stringify({ ...body, [key]: BROKEN }).replace(JSON.stringify(BROKEN), value)));
+      return `
+    /// <summary>${client.id}.${call.name}.${field.name}: el compuesto llega como su value object, con las guardas de su constructor.</summary>
+    [Fact]
+    public async Task ${name}Lee${member}ComoSuValueObject()
+    {
+        var adapter = ${client.adapterClass}Over(FakeProvider.Status(HttpStatusCode.OK, ${csString(JSON.stringify(body))}));
+        var result = await ${invoke};
+        Assert.Equal(${compositeLiteral(model, field)}, result.${member});
+    }
+
+    /// <summary>${client.id}.${call.name}.${field.name}: lo que no se construye viola el contrato del PROVEEDOR.</summary>
+    [Theory]
+${bodies.map((value) => `    [InlineData(${value})]`).join('\n')}
+    public async Task ${name}Un${member}QueNoSeConstruyeViolaElContrato(string body)
+    {
+        var provider = FakeProvider.Status(HttpStatusCode.OK, body);
+        var adapter = ${client.adapterClass}Over(provider);
+        var error = await Assert.ThrowsAsync<OutboundContractException>(() => ${invoke});
+        Assert.Contains(${csString(`${client.id}.${call.name}.${field.name}`)}, error.Message);
+        Assert.Single(provider.Requests);
+    }
+`;
+    })
+    .join('');
+}
+
 /** Un valor JSON de muestra para un campo de la respuesta, o null si no tiene uno sencillo. */
 function sampleJson(model, field) {
   if (field.list) return [];
   if (field.kind === 'enum') return model.enums?.find((e) => e.name === field.csType)?.values?.[0] ?? null;
-  if (field.kind === 'composite') return null;
+  if (field.kind === 'composite') return compositeJson(model, field);
   return (
     {
       string: 'x',

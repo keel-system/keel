@@ -56,9 +56,15 @@ arranca. Lo que build genera, capa a capa (el detalle de cada una, con sus redes
   la skill entra en modo evolución.
 
 Lo que **rechaza**, nombrando el motivo (`src/lib/supported-features.js`): los motores sin medir (MySQL, MariaDB, SQL
-Server, Oracle), un value object compuesto en el cuerpo o la respuesta de
-una llamada saliente (en el 16, como en keel-nest; en la URL no tiene forma en ningún generador) y una identidad del
-llamante que no sea texto. Avisa de la `idempotency` sin persistencia, que no tiene dónde registrar la clave.
+Server, Oracle), un value object compuesto en la URL o en una cabecera de una llamada saliente (no tiene forma ahí en
+ningún generador; en el cuerpo y en la respuesta se genera desde el 16), una identidad del llamante que no sea texto y la
+mensajería sin persistencia (sin el adaptador de repositorio no hay quién publique los eventos del agregado:
+`PLAN-KEEL-DOTNET.md`, incremento 16). Avisa de la `idempotency` sin persistencia, que no tiene dónde registrar la clave.
+
+Las ramas del DSL que ninguna fixture declara las genera un parche sobre una fixture real (`UNCOVERED_BRANCHES` de
+`test/helpers/workspace.js`): `test/uncovered-branches.test.js` exige la rama en lo emitido y `cs-check` las compila y
+ejecuta sus pruebas emitidas. `test/capability-coverage.test.js` exige que toda capacidad opcional la declare una fixture
+o tenga su motivo escrito.
 
 ## Licencias
 

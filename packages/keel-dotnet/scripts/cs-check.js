@@ -36,7 +36,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
-import { makeWorkspace, mountDesign, runCommand, DOTNET_READY_DESIGN, FIXTURES_DIR } from '../test/helpers/workspace.js';
+import { makeWorkspace, mountDesign, runCommand, DOTNET_READY_DESIGN, FIXTURES_DIR, UNCOVERED_BRANCHES } from '../test/helpers/workspace.js';
 import { planService } from '../src/scaffold/index.js';
 import { solution } from '../src/scaffold/render.js';
 import { build } from '../src/commands/build.js';
@@ -124,6 +124,13 @@ const FIXTURE_SABOTAGES = {
   'telemetry-pool': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'PoolValue("db.client.connection.npgsql.pending_requests", null)', 'PoolValue("db.client.connection.pending_requests", null)'],
   'telemetry-series': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'metrics.CreateGauge("keel_runtime_threadpool_queue_length"', 'metrics.CreateGauge("keel_runtime_threadpool_queue"'],
   'telemetry-log-trace': ['stock-reservation-otel/src/StockReservationOtel.Infrastructure/Logging/KeelConsoleFormatter.cs', 'KeelTelemetry.TraceIds()', '((string, string)?)null'],
+  // El compuesto de una respuesta saliente (16), leído con un Deserialize genérico en vez del lector de la entrada: el
+  // objeto al que le falta un obligatorio pasa con un 0 en el constructor.
+  'outbound-composite': [
+    'stock-reservation-compuesto-saliente/src/StockReservationCompuestoSaliente.Infrastructure/Clients/CancelStockResponse.cs',
+    'ResponseReading.Composite(fields, "refund", "inventory.cancelStock.refund", "un Refund", ValueReaders.ReadRefund)',
+    'ResponseReading.Optional<Refund?>(fields, "refund", "inventory.cancelStock.refund", "un Refund")'
+  ],
   // El need bajo demanda con fail (13i): el fallback deja de lanzar el error del diseño.
   'need-fail': ['asset-vault-need-fail/src/AssetVaultNeedFail.Infrastructure/Clients/RenderingHttpAdapter.cs', 'throw new RenderingUnavailableError(', 'throw new InvalidOperationException('],
   // El último valor conocido y la concesión OAuth2 (13j).
@@ -225,6 +232,9 @@ const DERIVED = [
       manifest.service.name = name;
     }
   })),
+  // Las ramas del DSL que ninguna fixture declara (incremento 16): los MISMOS parches que recorre
+  // test/uncovered-branches.test.js, aquí compilados y con sus pruebas emitidas.
+  ...UNCOVERED_BRANCHES,
   {
     name: 'payment-checkout-round',
     from: 'payment-checkout',

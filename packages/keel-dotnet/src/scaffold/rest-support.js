@@ -24,6 +24,7 @@ import { wireNamespace } from './wire.js';
 import { usesPersistence } from './persistence.js';
 import { valueReaders } from './endpoints.js';
 import { usesMultipart } from './storage.js';
+import { readsCompositeResponses } from './http-clients.js';
 
 /** ¿Expone el servicio una API? Sin capa api, o sin ninguna operación con ruta, no hay nada de esto. */
 export function usesApi(model) {
@@ -50,7 +51,9 @@ export function usesCorrelation(model) {
  * mismo diseño se leen igual.
  */
 export function usesWireReading(model) {
-  return usesApi(model) || (Boolean(model.layersPresent?.messaging) && (model.subscriptions ?? []).length > 0);
+  // También sin API ni suscripciones: un value object compuesto en la respuesta de una llamada saliente se lee con el
+  // mismo ValueReaders.Read<Tipo> que la entrada (incremento 16).
+  return usesApi(model) || (Boolean(model.layersPresent?.messaging) && (model.subscriptions ?? []).length > 0) || readsCompositeResponses(model);
 }
 
 export function generate(model) {
