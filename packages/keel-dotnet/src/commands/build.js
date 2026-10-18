@@ -5,7 +5,18 @@ import { gateDesign } from 'keel-core/gen/design-gate';
 import { STACK_FILE, readStackConfig, writeStackConfig, askStackConfig, describeStack, normalizeTelemetry } from 'keel-core/gen/stack';
 import { writeProjectFiles } from 'keel-core/gen/project-writer';
 import { writeSpecsSeal } from 'keel-core/gen/specs-seal';
-import { checkFails, evolveStack, reportGeneratorDrift } from 'keel-core/gen/evolution';
+import { REFRESH_DIR } from 'keel-core/gen/generated-manifest';
+import {
+  EVOLUTION_MD,
+  checkFails,
+  designDelta,
+  evolveStack,
+  persistEvolution,
+  planEvolution,
+  reportEvolution,
+  reportGeneratorDrift
+} from 'keel-core/gen/evolution';
+import { DOTNET_EVOLUTION } from '../scaffold/evolution.js';
 import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures, checkSupportedStack } from '../lib/supported-features.js';
 import { scaffoldService } from '../scaffold/index.js';
@@ -51,7 +62,9 @@ export async function build(
   const projectDir = path.join(workspace, 'services', `${manifest.service?.name}-dotnet`);
   let stack = readStackConfig(projectDir);
   let stackIsNew = false;
+  let stackChanges = { added: [], removed: [] };
   if (stack) {
+    // Lo nuevo se pregunta (solo eso), lo que dejó de aplicar se anula, y los dos cambios llegan a EVOLUTION.md.
     const evolved = await evolveStack({
       stack,
       layers,
@@ -60,6 +73,7 @@ export async function build(
       ask: (only) => askStackConfig(manifest, layers, { defaults, only })
     });
     stack = evolved.stack;
+    stackChanges = evolved.changes;
     if (evolved.changed && mode !== 'check') stackIsNew = true;
   } else {
     stack = await askStackConfig(manifest, layers, { defaults, telemetry });
@@ -90,6 +104,10 @@ export async function build(
     }
   }
 
+  // El delta del diseño, ANTES de refrescar el snapshot: contra la base congelada de una evolución sin cerrar o, si
+  // no, contra el snapshot, que es el diseño desde el que se completó el proyecto.
+  const design = designDelta(projectDir, dir);
+
   const acceptedUnready = acceptUnready && !readiness.ready;
   const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode, prune, readiness, acceptedUnready });
   if (stackIsNew && mode !== 'check') {
@@ -111,15 +129,23 @@ export async function build(
   );
   reportGeneratorDrift(scaffold, mode, { generator: 'keel-dotnet' });
 
-  // La evolución del proyecto cuando cambia el diseño (EVOLUTION.md) llega en el incremento 15.
+  // El traspaso al pipeline cuando el proyecto ya existía y algo cambió (el diseño, el stack o el generador). En la
+  // primera generación no hay nada que evolucionar.
+  const evolution = planEvolution({ design, manifest, scaffold, stackChanges, mode, prune, projectDir });
+  reportEvolution(evolution, scaffold.outDir, mode);
+
   if (mode === 'check') {
-    if (checkFails(scaffold, null)) process.exitCode = 1;
+    if (checkFails(scaffold, evolution)) process.exitCode = 1;
     return;
   }
 
+  // La base se congela la primera vez que el diseño cambia, ANTES de refrescar el snapshot: si no, un segundo build
+  // compararía el diseño consigo mismo.
+  persistEvolution(evolution, design, projectDir, DOTNET_EVOLUTION);
+
   // Snapshot del diseño y su sello: el proyecto es autosuficiente, y el snapshot se refresca siempre
   // porque el canónico es specs/<servicio> del workspace.
-  const snapshot = copyTree(dir, path.join(projectDir, 'specs'), { force: true });
+  const snapshot = copyTree(dir, design.snapshotDir, { force: true });
   writeSpecsSeal(projectDir);
   console.log(pc.dim(`Snapshot del diseño → ${scaffold.outDir}/specs/ (${snapshot.copied.length} archivo(s), refrescado en cada build)`));
 
@@ -135,4 +161,12 @@ Siguiente paso, dentro del proyecto:
   1. ${pc.cyan(`cd ${scaffold.outDir}`)}
   2. ${pc.cyan('dotnet restore')}
   3. ${pc.cyan(`/${SKILL}`)} ${pc.dim('(sin argumentos: completa el código y lo valida contra los escenarios FL-*)')}`);
+  if (evolution?.pending) {
+    console.log(
+      pc.dim(
+        `Como hay ${REFRESH_DIR}/${EVOLUTION_MD}, la skill entra en modo evolución: trabaja sobre lo que cambió y ` +
+          'puntúa la suite completa como no-regresión.'
+      )
+    );
+  }
 }

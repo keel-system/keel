@@ -77,7 +77,7 @@ export function checkSupportedFeatures(manifest, layers) {
   return { errors, warnings };
 }
 
-/** La telemetría todavía no se genera: se rechaza en el build en vez de estamparla sin efecto. */
+/** Lo que el stack pide y keel-dotnet no genera (un motor o un broker sin medir, una telemetría desconocida): se rechaza en el build en vez de estamparlo sin efecto. */
 export function checkSupportedStack(stack) {
   const errors = [];
   // El motor solo importa con persistencia: sin ella, el cuestionario no lo pregunta y no se estampa.

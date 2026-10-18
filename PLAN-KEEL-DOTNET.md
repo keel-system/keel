@@ -1908,6 +1908,20 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       OTLP de métricas, el pool documental y el retraso del consumidor. Sin medir aquí: el `broker-check` de Kafka y
       SNS/SQS tras el arreglo del apagado (pendiente desde el 14b).
 - **Inc. 14 — cerrado (2026-10-18).** Siguiente: el 15 (evolución del proyecto generado).
+- **Inc. 15 — cerrado (2026-10-18).** La lógica ya era neutral desde el 15 de keel-nest (`keel-core/gen/evolution.js`):
+  keel-dotnet solo pone sus cinco textos de plataforma (`DOTNET_EVOLUTION` en `src/scaffold/evolution.js`) y cablea
+  `build` como keel-nest: delta del diseño antes de refrescar el snapshot, cambios de stack, `planEvolution`,
+  `reportEvolution`, la base congelada con `persistEvolution` y `--check` en rojo con una evolución o una fusión sin
+  cerrar. El modo evolución entra en la skill (`generator-docs.js`), en `keel-dotnet-code`, en `keel-dotnet-tests` y
+  en `orchestration.md`. La versión nueva de un conflicto va a `build/keel-refresh/` también por .NET: un proyecto SDK
+  compila todo `.cs` bajo su carpeta.
+  - **Puerta**: `test/design-evolution.test.js` (7, la misma fixture y la misma evolución que en los otros dos) con
+    **paridad del delta contra keel-spring Y keel-nest**: mismo `delta`, mismas versiones, mismo stack y mismas
+    secciones de `EVOLUTION.md`; y `test/generated-propagation.test.js` (9) portado. Falsado quitando
+    `persistEvolution`: caen 4 de los 7 (el circuito, la segunda pasada, el cambio de stack y la paridad).
+  - De paso: la frontera del README todavía decía que la telemetría se rechazaba; ya no.
+  - Siguiente: el 16 (cierre: frontera sin rechazos sin motivo, matriz sin pendientes, `capability-coverage` y la
+    corrida de control del par MVP en los tres generadores).
 
 ## 5. Riesgos conocidos
 

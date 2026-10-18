@@ -1,0 +1,223 @@
+// Propagar un arreglo del generador a un proyecto que YA existe (incremento 15).
+//
+// El mismo circuito que keel-spring y keel-nest (`test/generated-propagation.test.js`), porque la escritura es la
+// MISMA (keel-core/gen/materialize.js): sin `--force` build omite todo lo que existe, así que un
+// arreglo nunca llega; con `--force` lo sobrescribe todo, incluido el código que escribió el
+// agente. La tercera vía necesita saber qué escribió build la última vez — comparar contenidos no
+// basta, porque «diferente del stub» es exactamente lo esperado en cuanto el agente completa los
+// TODO.
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { digestOf } from 'keel-core';
+import { build } from '../src/commands/build.js';
+import { makeWorkspace, mountDesign, runCommand } from './helpers/workspace.js';
+
+const SPEC = 'product-catalog';
+const SKILL_REL = ['.claude', 'skills', 'keel-generate-dotnet', 'SKILL.md'];
+
+function withFixture() {
+  const workspace = makeWorkspace('keel-dotnet-propagation-');
+  mountDesign(workspace, SPEC);
+  return workspace;
+}
+
+async function runBuild(workspace, options) {
+  // Diseño parcial a propósito: la puerta de «diseño listo» la prueba build.test.js.
+  const { exitCode } = await runCommand(workspace, build, `specs/${SPEC}`, { defaults: true, acceptUnready: true, ...options });
+  return exitCode;
+}
+
+const projectOf = (workspace) => path.join(workspace, 'services', `${SPEC}-dotnet`);
+const manifestPath = (workspace) => path.join(projectOf(workspace), 'keel-generated.json');
+const readManifest = (workspace) => JSON.parse(fs.readFileSync(manifestPath(workspace), 'utf8'));
+const saveManifest = (workspace, manifest) =>
+  fs.writeFileSync(manifestPath(workspace), JSON.stringify(manifest, null, 2));
+
+/** El archivo de build sobre el que se monta cada caso, y su ruta en el manifiesto. */
+const skillPath = (workspace) => path.join(projectOf(workspace), ...SKILL_REL);
+const SKILL_KEY = SKILL_REL.join('/');
+
+test('build registra lo que escribió, que es lo que hace propagable un arreglo', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+
+  const manifest = readManifest(workspace);
+  assert.match(manifest.generator, /^keel-dotnet@/);
+  assert.ok(Object.keys(manifest.files).length > 100, 'el manifiesto no registró el scaffolding');
+  assert.deepEqual(manifest.adopted, [], 'un proyecto recién generado no adopta nada: build lo escribió todo');
+});
+
+test('--check no escribe nada y falla cuando el proyecto se quedó atrás', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+  assert.equal(await runBuild(workspace, { check: true }), undefined, 'un proyecto al día no falla');
+
+  // Un archivo de build al que NADIE ha tocado y que el generador ha cambiado: en disco
+  // sigue estando lo que build escribió, así que su huella casa con el manifiesto.
+  const viejo = 'lo que escribió un build anterior';
+  fs.writeFileSync(skillPath(workspace), viejo);
+  const manifest = readManifest(workspace);
+  manifest.files[SKILL_KEY] = digestOf({ content: viejo });
+  saveManifest(workspace, manifest);
+
+  assert.equal(await runBuild(workspace, { check: true }), 1);
+  assert.equal(fs.readFileSync(skillPath(workspace), 'utf8'), viejo, '--check escribió');
+});
+
+test('--refresh pone al día lo de build y NO toca lo que escribió el agente', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+
+  const alDia = fs.readFileSync(skillPath(workspace), 'utf8');
+  const manifest = readManifest(workspace);
+
+  // (a) De build y sin tocar: refrescable.
+  fs.writeFileSync(skillPath(workspace), 'version vieja');
+  manifest.files[SKILL_KEY] = digestOf({ content: 'version vieja' });
+
+  // (b) Tocado por el agente, con el generador sin cambiar: no hay nada que propagar, y
+  //     pisarlo sería exactamente lo que hace `--force` y esto existe para evitar.
+  const readme = path.join(projectOf(workspace), 'README.md');
+  fs.writeFileSync(readme, `${fs.readFileSync(readme, 'utf8')}\nlo del agente`);
+  saveManifest(workspace, manifest);
+
+  await runBuild(workspace, { refresh: true });
+
+  assert.equal(fs.readFileSync(skillPath(workspace), 'utf8'), alDia, 'lo de build no se puso al día');
+  assert.ok(
+    fs.readFileSync(readme, 'utf8').includes('lo del agente'),
+    'el refresco pisó trabajo del agente: es justo lo que no puede hacer'
+  );
+});
+
+// El borrado es una decisión igual que una edición, y hasta que hubo cubo propio build la
+// deshacía en silencio (lo midió keel-spring): un stub retirado al escribir su implementación
+// real volvía en el refresco siguiente catalogado como «archivo nuevo con TODO». En .NET el
+// síntoma es peor que un arranque roto: dos registros del mismo puerto en el contenedor, y
+// resuelve el último sin avisar.
+test('lo que alguien borró NO vuelve, ni con --refresh ni en un build normal', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+
+  fs.rmSync(skillPath(workspace));
+  await runBuild(workspace, { refresh: true });
+  assert.ok(!fs.existsSync(skillPath(workspace)), '--refresh recreó un archivo que alguien borró');
+
+  await runBuild(workspace);
+  assert.ok(!fs.existsSync(skillPath(workspace)), 'un build normal lo recreó: ahí la regla es «escribe lo que no exista»');
+
+  // La otra mitad, o la regla nueva se comería el caso normal: un archivo que build NO ha
+  // escrito nunca tiene que seguir apareciendo.
+  const manifest = readManifest(workspace);
+  const readme = path.join(projectOf(workspace), 'README.md');
+  fs.rmSync(readme);
+  delete manifest.files['README.md'];
+  saveManifest(workspace, manifest);
+  await runBuild(workspace);
+  assert.ok(fs.existsSync(readme), 'lo que no consta como escrito por build tiene que escribirse');
+});
+
+test('--force devuelve lo borrado: es la escotilla para el borrado que fue un error', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+
+  fs.rmSync(skillPath(workspace));
+  await runBuild(workspace, { force: true });
+  assert.ok(fs.existsSync(skillPath(workspace)), '--force tiene que poder recuperarlo');
+});
+
+test('un conflicto no se toca, y su versión nueva cae fuera de src/', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+
+  // Las TRES versiones distintas: lo que hay, lo que build escribió, y lo que emite hoy.
+  fs.writeFileSync(skillPath(workspace), 'lo que escribió el agente');
+  const manifest = readManifest(workspace);
+  manifest.files[SKILL_KEY] = digestOf({ content: 'lo que build escribió ANTES' });
+  saveManifest(workspace, manifest);
+
+  await runBuild(workspace, { refresh: true });
+
+  assert.equal(
+    fs.readFileSync(skillPath(workspace), 'utf8'),
+    'lo que escribió el agente',
+    'el conflicto se resolvió solo, que es la decisión que no le toca tomar'
+  );
+
+  // Fuera del árbol que leen los gates: check-idempotency.sh y check-domain-guards.sh
+  // hacen `grep -rl` sobre src/, y MSBuild compila todo `.cs` que cuelga de un proyecto, y acabarían juzgando código que no compila nadie.
+  const copia = path.join(projectOf(workspace), 'build', 'keel-refresh', ...SKILL_REL);
+  assert.ok(fs.existsSync(copia), 'no se dejó la versión nueva para poder compararla');
+  assert.notEqual(fs.readFileSync(copia, 'utf8'), 'lo que escribió el agente');
+});
+
+test('un proyecto anterior al mecanismo adopta solo lo que difiere, y no se refresca', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+
+  fs.writeFileSync(skillPath(workspace), 'lo que hubiera escrito un build anterior');
+  fs.rmSync(manifestPath(workspace));
+
+  await runBuild(workspace);
+  const manifest = readManifest(workspace);
+  // Se adopta SOLO lo que ya difiere de lo que el generador emite. Lo byte a byte
+  // idéntico se registra como suyo: adoptarlo todo dejaba a los proyectos que ya
+  // existían sin poder refrescar NUNCA —cada archivo quedaba para siempre «sin
+  // registro»—, cuando ser idéntico a la salida del generador es la prueba más fuerte
+  // que puede haber de que es suya.
+  assert.deepEqual(manifest.adopted, [SKILL_KEY], 'se adoptó más de lo que de verdad difiere');
+  assert.ok(Object.keys(manifest.files).length > 100, 'lo idéntico al generador no se registró');
+
+  // Y refrescar no toca nada: no se sabe cuáles de esos archivos tocó el agente, así que
+  // refrescar cualquiera sería jugársela con su trabajo. El valor es el aviso, no la
+  // escritura.
+  await runBuild(workspace, { refresh: true });
+  assert.equal(fs.readFileSync(skillPath(workspace), 'utf8'), 'lo que hubiera escrito un build anterior');
+});
+
+test('--force reescribe todo y devuelve lo adoptado al registro de build', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+  // Para que haya algo adoptado hace falta que difiera: lo idéntico se registra.
+  fs.writeFileSync(skillPath(workspace), 'lo que hubiera escrito un build anterior');
+  fs.rmSync(manifestPath(workspace));
+  await runBuild(workspace);
+  assert.deepEqual(readManifest(workspace).adopted, [SKILL_KEY]);
+
+  await runBuild(workspace, { force: true });
+  const manifest = readManifest(workspace);
+  assert.deepEqual(manifest.adopted, [], 'tras un --force todo es de build otra vez');
+  assert.ok(Object.keys(manifest.files).length > 100);
+});
+
+// Build deja escrito si el diseño estaba listo y, si no lo estaba, que se generó a sabiendas
+// (--accept-unready, fase 2). Sin esto, una corrida sobre un diseño a medio cerrar y una sobre
+// uno cerrado dejan el mismo rastro, y sus designGaps se leen igual: como huecos del método.
+test('build estampa si el diseño estaba listo, por id y sin timestamps', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+
+  const { design } = readManifest(workspace);
+  assert.equal(design.ready, false, 'la fixture no tiene careo ni DESIGN.md: no está lista');
+  assert.equal(design.acceptedUnready, true, 'solo se generó porque se pidió a sabiendas, y tiene que constar');
+  assert.ok(design.version, 'la versión del diseño que se generó');
+  assert.ok(design.missing.includes('flow-review'));
+  assert.ok(design.missing.includes('design-doc'));
+  // product-catalog lista sin `sort` y tiene api sin security: dos decisiones que el
+  // generador tomaría por su cuenta, y el estampado lo dice.
+  assert.ok(design.missing.includes('undecided'));
+  assert.deepEqual(design.missing, [...design.missing].sort(), 'ordenados: dos builds, mismo archivo');
+
+  // Determinista: un segundo build sobre el mismo diseño deja el manifiesto byte a byte igual.
+  const antes = fs.readFileSync(manifestPath(workspace), 'utf8');
+  await runBuild(workspace);
+  assert.equal(fs.readFileSync(manifestPath(workspace), 'utf8'), antes);
+
+  // Y --check no lo reescribe aunque el estado del diseño haya cambiado.
+  fs.writeFileSync(path.join(workspace, 'specs', SPEC, 'flow-review.yaml'), 'no: es un careo\n');
+  await runBuild(workspace, { check: true });
+  assert.equal(fs.readFileSync(manifestPath(workspace), 'utf8'), antes, '--check escribió el estampado');
+});

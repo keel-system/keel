@@ -30,6 +30,20 @@ Corres **en paralelo** con `keel-dotnet-code`, que está escribiendo la implemen
 La caja negra es además estructural: el proyecto de flujos no ve ningún tipo del servicio, así que una prueba que
 nombre uno no compila (`bash infra/check-flows.sh`).
 
+## Modo evolución
+
+Si el orquestador te pasa la sección 4 de `build/keel-refresh/EVOLUTION.md`, las pruebas ya existen y solo cambian
+las de esos flujos:
+
+- **Añadidos**: prueba nueva, como siempre.
+- **Cambiados**: localiza su clase con `grep -rl '<FL-id>' tests/` y reescribe el caso (o la clase entera, si cambió
+  la familia entera) contra el `Then` NUEVO.
+- **Quitados**: borra su caso, o la clase si era toda suya. Una prueba de un flujo que el diseño retiró falla contra
+  un servidor correcto.
+
+El resto **no se reescribe**: es la no-regresión de lo que ya funcionaba, y la puntuación lo ejecuta entero. La
+independencia no cambia: sigues sin leer `src/`.
+
 ## Proceso
 
 1. Lee, **en este orden**: `{{keel:context}}` y `keel-stack.json`; `specs/validation-scenarios.md` **entero**

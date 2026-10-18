@@ -210,6 +210,16 @@ Se invoca **sin argumentos, con el cwd en esta raíz**; todas las rutas son rela
    \`/keel-design\`), que esta raíz es un repo git (si no, \`git init -b main\`), que está el SDK de .NET 10
    (\`dotnet --list-sdks\`) y que los paquetes se restauran (\`dotnet restore\`). El stack está en
    \`keel-stack.json\`: respétalo.
+
+   **Modo evolución.** Si existe \`build/keel-refresh/EVOLUTION.md\`, este proyecto ya estaba completado y algo
+   cambió desde entonces —el diseño, el stack o el generador—: léelo entero antes de lanzar nada. Es el mismo
+   pipeline con el trabajo acotado: a \`keel-dotnet-code\` le pasas la ruta de ese documento (fusiones pendientes,
+   huérfanos a retirar, cambios del diseño, stubs nuevos y stack); a \`keel-dotnet-tests\`, la ruta y **solo su
+   sección 4** (los \`FL-*\` añadidos, cambiados y quitados: las pruebas de los demás flujos no se reescriben);
+   \`keel-dotnet-infra\` hace lo de siempre. La puntuación, el arbitraje y la calidad **no cambian**:
+   \`score-scenarios.sh\` corre la suite completa, y las pruebas de los flujos que no se tocaron son la
+   no-regresión. Hasta cerrar, nadie borra \`build/\`: se llevaría el documento, la base del delta y las
+   versiones nuevas de los conflictos.
 1. **Fase 1 — en paralelo** (los tres lanzados a la vez, en un único mensaje):
    - \`keel-dotnet-code\`: «Completa el proyecto en \`.\`. Tu proceso, tu alcance y tu criterio de terminado son los de
      tu archivo de agente; \`{{keel:context}}\` es el contexto del repo, no tu lista de tareas.» — hasta \`dotnet build\`
@@ -266,7 +276,11 @@ Se invoca **sin argumentos, con el cwd en esta raíz**; todas las rutas son rela
    tomada por escrito y no se reporta. Sin huecos, no se escribe; sin nada
    que reportar, dilo en una línea.
 7. **Cerrar.** Commit (\`Generado desde specs/${service.name} v${service.version}\`; los \`packages.lock.json\` incluidos) y
-   resumen: matriz, estado de cada agente, ajustes de calidad y huecos del diseño.
+   resumen: matriz, estado de cada agente, ajustes de calidad y huecos del diseño. **En modo evolución**, antes del
+   commit: quita de \`pendingMerge\` en \`keel-generated.json\` las rutas que se fusionaron (la clave entera si no
+   queda ninguna) —mientras quede una, \`keel-dotnet build --check\` sale en rojo, y así debe ser—, borra
+   \`build/keel-refresh/\` entero y añade al resumen el delta aplicado; el commit pasa a ser
+   \`Evolucionado desde specs/${service.name}\` con las dos versiones que nombra \`EVOLUTION.md\`.
 
 ## Conocimiento local
 

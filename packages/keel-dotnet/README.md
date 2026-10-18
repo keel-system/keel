@@ -27,7 +27,7 @@ estampado en `keel-generated.json`, y no escribe nada en el workspace de diseño
 4. **Regla de oro**: el generador nunca inventa ni corrige funcionalidad; lo que no sabe mapear lo
    rechaza o lo avisa en código (`src/lib/supported-features.js`), nunca lo ignora.
 
-## La frontera, hoy (incremento 13 cerrado)
+## La frontera, hoy (incremento 15 cerrado)
 
 Toda fixture compartida se genera entera: el proyecto compila sin un solo warning, pasa sus pruebas emitidas y
 arranca. Lo que build genera, capa a capa (el detalle de cada una, con sus redes, en `PLAN-KEEL-DOTNET.md`):
@@ -50,9 +50,13 @@ arranca. Lo que build genera, capa a capa (el detalle de cada una, con sus redes
   Valkey), **almacenamiento** (S3/MinIO) y **autoría** de las escrituras.
 - El **arnés** de flujos `FL-*`, `infra/`, `score-scenarios.sh`, `check-idempotency.sh`, los agentes y las skills
   `keel-dotnet-<tech>` del stack.
+- **Logs** ECS, **telemetría** con OpenTelemetry y prometheus-net, el panel, las alertas y `deploy/`.
+- La **evolución** de un proyecto ya generado: `build --refresh --prune` deja `build/keel-refresh/EVOLUTION.md` con
+  el delta del diseño contra una base congelada (`keel-core/gen/evolution.js`, la misma lógica que los otros dos), y
+  la skill entra en modo evolución.
 
 Lo que **rechaza**, nombrando el motivo (`src/lib/supported-features.js`): los motores sin medir (MySQL, MariaDB, SQL
-Server, Oracle), la telemetría (llega en el incremento 14), un value object compuesto en el cuerpo o la respuesta de
+Server, Oracle), un value object compuesto en el cuerpo o la respuesta de
 una llamada saliente (en el 16, como en keel-nest; en la URL no tiene forma en ningún generador) y una identidad del
 llamante que no sea texto. Avisa de la `idempotency` sin persistencia, que no tiene dónde registrar la clave.
 
