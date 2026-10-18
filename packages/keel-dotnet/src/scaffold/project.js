@@ -24,6 +24,7 @@ import { usesStorageAdapter } from './storage.js';
 import { usesJwt } from './security.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
+import { usesTelemetry } from 'keel-core/gen/telemetry-vocabulary';
 
 /** Los paquetes que usa ESTA solución: los del esqueleto y los de las capas que el diseño declara. */
 export function packagesFor(model) {
@@ -56,7 +57,9 @@ export function infrastructurePackages(model) {
     // La caché de lectura: el cliente de Redis (y de Valkey, el mismo protocolo).
     ...(usesCache(model) ? ['StackExchange.Redis'] : []),
     // El almacenamiento de binarios: el SDK oficial de AWS para S3 (también habla con MinIO). Lo usa el adaptador del agente.
-    ...(usesStorageAdapter(model) ? ['AWSSDK.S3'] : [])
+    ...(usesStorageAdapter(model) ? ['AWSSDK.S3'] : []),
+    // La telemetría: trazas y logs con OpenTelemetry (OTLP al colector) y las métricas por scrape con prometheus-net.
+    ...(usesTelemetry(model) ? ['OpenTelemetry', 'OpenTelemetry.Exporter.OpenTelemetryProtocol', 'OpenTelemetry.Extensions.Propagators', 'prometheus-net'] : [])
   ];
 }
 

@@ -36,6 +36,7 @@ import { usesPersistence, usesDocument, dbContextClass, persistenceNamespace, ro
 import { credentialFinderName } from './repositories.js';
 import { outboxDocumentLiteral } from './document-stores.js';
 import { jsonRead, rulesArgs } from './endpoints.js';
+import { telemetryNamespace, usesTelemetry } from './telemetry.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -96,10 +97,10 @@ export function generate(model) {
       path: `config/parameters/${profile}/messaging.yaml`,
       content: messagingYaml(model, profile, { outbox: usesDotnetOutbox(model), processedEvents: usesProcessedEvents(model) })
     })),
-    file('messaging', 'EventEnvelope', ['System.Text.Json', wireNamespace(model), namespaceOf(model, 'events')], envelopeBody(model)),
+    file('messaging', 'EventEnvelope', ['System.Text.Json', wireNamespace(model), namespaceOf(model, 'events'), ...observedUsings(model)], envelopeBody(model)),
     file('messaging', 'MessageContractViolation', [], contractViolationBody()),
     file('messaging', 'MessagingSettings', ['System.Globalization', configNamespace(model)], settingsBody(model)),
-    file('messaging', 'InboundContext', [namespaceOf(model, 'events'), namespaceOf(model, 'correlation')], inboundContextBody()),
+    file('messaging', 'InboundContext', [namespaceOf(model, 'events'), namespaceOf(model, 'correlation'), ...observedUsings(model)], inboundContextBody(model)),
     file('messaging', 'BrokerBindings', ['Microsoft.Extensions.DependencyInjection'], bindingsBody(model)),
     registrationFile(model)
   ];
@@ -121,7 +122,13 @@ export function generate(model) {
 
 // ─── La envoltura ────────────────────────────────────────────────────────────────────────────────
 
-function envelopeBody() {
+/** Con telemetría, la envoltura y el consumo usan KeelTelemetry (el traceparent y el span CONSUMER). */
+function observedUsings(model) {
+  return usesTelemetry(model) ? [telemetryNamespace(model)] : [];
+}
+
+function envelopeBody(model) {
+  const telemetry = usesTelemetry(model);
   return `/// <summary>
 /// Envoltura estándar de los eventos: metadata + payload, en el orden del cable (keel-core, WIRE_SHAPES.eventEnvelope). Es
 /// la misma que publican y consumen los servidores de keel-spring y keel-nest del diseño.
@@ -129,7 +136,7 @@ function envelopeBody() {
 /// <remarks>
 /// La metadata es la que el agregado estampó al emitir el evento de dominio: conserva el EventId, que es la clave de
 /// idempotencia del consumidor. Aquí solo se le añaden la correlación y el contexto de traza de la petición, que el
-/// dominio no conoce (este servicio no tiene telemetría: el traceparent viaja a null).
+/// dominio no conoce (${telemetry ? 'el traceparent es el del span en curso: con él el consumidor continúa la traza' : 'este servicio no tiene telemetría: el traceparent viaja a null'}).
 /// </remarks>
 public sealed record EventEnvelope<T>(EventMetadata Metadata, T Data);
 
@@ -140,7 +147,7 @@ public static class EventEnvelope
     public static EventEnvelope<T> Of<T>(EventMetadata metadata, T data, string? correlationId)
     {
         ArgumentNullException.ThrowIfNull(metadata);
-        return new EventEnvelope<T>(metadata.WithContext(correlationId, null), data);
+        return new EventEnvelope<T>(metadata.WithContext(correlationId, ${telemetry ? 'KeelTelemetry.CurrentTraceparent()' : 'null'}), data);
     }
 
     /// <summary>La envoltura en JSON con el contrato del cable (WireJson): lo que viaja y lo que guarda el outbox.</summary>
@@ -233,11 +240,12 @@ public sealed class MessageContractViolation : Exception
 }`;
 }
 
-function inboundContextBody() {
+function inboundContextBody(model) {
+  const telemetry = usesTelemetry(model);
   return `/// <summary>
 /// Abre el contexto de un mensaje consumido con la metadata de su envoltura Keel: la correlación de origen, que heredan
 /// los eventos que provoque. Es lo que el listener envuelve alrededor de TODO el trabajo del mensaje:
-/// <c>await InboundContext.Run(envelope.Metadata, () => ...)</c>.
+/// <c>await InboundContext.Run(envelope.Metadata, () => ...)</c>.${telemetry ? '\n/// Con telemetría abre además el span CONSUMER que continúa la traza del emisor (metadata.traceparent), con su timer.' : ''}
 /// </summary>
 public static class InboundContext
 {
@@ -246,10 +254,15 @@ public static class InboundContext
         ArgumentNullException.ThrowIfNull(metadata);
         ArgumentNullException.ThrowIfNull(action);
         // Sin correlación de origen (o con una que no cumple el formato), una nueva: CorrelationContext.Accept.
-        using (CorrelationContext.Open(metadata.CorrelationId ?? string.Empty))
+        ${telemetry ? `// Lo mismo que la versión con resultado: la correlación y el span del consumo.
+        await Run<bool>(metadata, async () =>
         {
             await action();
-        }
+            return true;
+        });` : `using (CorrelationContext.Open(metadata.CorrelationId ?? string.Empty))
+        {
+            await action();
+        }`}
     }
 
     public static async Task<T> Run<T>(EventMetadata metadata, Func<Task<T>> action)
@@ -258,7 +271,7 @@ public static class InboundContext
         ArgumentNullException.ThrowIfNull(action);
         using (CorrelationContext.Open(metadata.CorrelationId ?? string.Empty))
         {
-            return await action();
+            return ${telemetry ? 'KeelTelemetry.Current is { } telemetry ? await telemetry.Consuming(metadata.EventType, metadata.Traceparent, action) : await action()' : 'await action()'};
         }
     }
 }`;

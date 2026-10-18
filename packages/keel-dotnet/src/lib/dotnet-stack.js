@@ -87,7 +87,17 @@ export const PACKAGES = {
   // El almacenamiento de binarios (incremento 13g): el SDK oficial de AWS para S3, que habla también con MinIO. Lo usa el
   // adaptador que escribe el agente (skill keel-dotnet-s3). La 4.0.103.4 salió el 2026-09-23 y pide AWSSDK.Core
   // [4.0.102.6, 5), lo mismo que SNS y SQS. Verificada el 2026-10-15.
-  'AWSSDK.S3': { version: '4.0.103.4', license: 'Apache-2.0', use: 'almacenamiento de binarios sobre S3 o MinIO (capa storage)' }
+  'AWSSDK.S3': { version: '4.0.103.4', license: 'Apache-2.0', use: 'almacenamiento de binarios sobre S3 o MinIO (capa storage)' },
+  // La telemetría (incremento 14c, `telemetry: otel`): el SDK de OpenTelemetry para las trazas y los logs, su exportador
+  // OTLP (al colector, por HTTP) y sus propagadores (la B3 de entrada). La 1.19.1 salió el 2026-09-21; la 1.20.0 tiene
+  // tres días. Sus dependencias Microsoft.Extensions.* las pone el framework compartido. Verificadas el 2026-10-18.
+  OpenTelemetry: { version: '1.19.1', license: 'Apache-2.0', use: 'trazas y logs de la telemetría (telemetry: otel)' },
+  'OpenTelemetry.Exporter.OpenTelemetryProtocol': { version: '1.19.1', license: 'Apache-2.0', use: 'exportación OTLP de trazas y logs al colector' },
+  'OpenTelemetry.Extensions.Propagators': { version: '1.19.1', license: 'Apache-2.0', use: 'propagador B3 de entrada (además del W3C)' },
+  // Las métricas por SCRAPE, con los nombres del vocabulario neutral y los exemplars en OpenMetrics. Y no el exportador
+  // Prometheus de OpenTelemetry, que sigue en beta (1.19.1-beta.1). La 8.2.1 es la última (2024-01-03), estable. Sus
+  // dependencias Microsoft.Extensions.Http y ObjectPool las pone el framework compartido. Verificada el 2026-10-18.
+  'prometheus-net': { version: '8.2.1', license: 'MIT', use: 'métricas por scrape con exemplars (telemetry: otel)' }
 };
 
 /**

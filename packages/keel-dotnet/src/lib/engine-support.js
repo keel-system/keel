@@ -416,7 +416,23 @@ export const MECHANISMS = {
     }
   },
   'telemetry-store-spans': {
-    pending: 'la telemetría (los spans del almacén con telemetry: otel) llega en el incremento 14 de PLAN-KEEL-DOTNET.md'
+    parity: {
+      skip: 'la telemetría es una elección de STACK (telemetry: otel) y el par se genera sin ella; lo que hay que ver es que el proveedor solo escucha el origen keel (degradado), y lo fija test/telemetry.test.js generando con la opción',
+      test: 'test/telemetry.test.js'
+    },
+    emitter: 'src/scaffold/telemetry.js (los spans que abre el código generado: caso de uso, HTTP de entrada y salida, mensajería, caché, storage y correo)',
+    coverage: {
+      relational: {
+        state: 'degradado',
+        why:
+          'keel-spring cuelga de cada caso de uso los spans de JDBC (datasource-micrometer); keel-dotnet no escucha los de Npgsql: el proveedor solo atiende el origen keel. Npgsql ya publica su ActivitySource, pero escucharlo sin más convertiría cada pasada del relay, del reloj y de las purgas en una traza raíz por segundo, y falta el filtro anti-ruido de keel-spring (solo la sentencia con un padre del servicio). La traza llega hasta el span del caso de uso, con su duración y su desenlace, y ahí se para. El eje de telemetría del plan (las series y sus etiquetas, que consultan el panel y las alertas) no depende de esto. Salida: AddSource("Npgsql") con un procesador que descarte la raíz, y medirlo en telemetry-check'
+      },
+      document: {
+        state: 'degradado',
+        why:
+          'lo mismo con MongoDB.Driver (keel-spring: MongoObservationCommandListener) y con StackExchange.Redis (su instrumentación de OpenTelemetry sigue en beta): sin span del comando, la traza se para en el caso de uso. Salida: el suscriptor de eventos del driver de MongoDB con el mismo filtro anti-ruido'
+      }
+    }
   },
   'folded-text': {
     parity: {

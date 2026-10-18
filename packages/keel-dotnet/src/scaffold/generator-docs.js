@@ -26,6 +26,7 @@ import { usesRelational, usesDocument } from './persistence.js';
 import { usesJwt } from './security.js';
 import { usesSchemaBaseline, baselineCommand } from './schema-baseline.js';
 import { HARNESS_SMOKE_CLASS } from './integration-tests.js';
+import { usesTelemetry } from 'keel-core/gen/telemetry-vocabulary';
 
 const generatorDir = path.join(assetsDir, 'generators', 'dotnet');
 const agentsSourceDir = path.join(assetsDir, 'agents');
@@ -38,6 +39,9 @@ export const GUIDES = ['architecture.md', 'constitution.md', 'orchestration.md']
 
 /** Las convenciones: el único punto de instalación (un archivo nuevo de conventions/ va aquí). */
 export const CONVENTIONS = ['mapping.md', 'project-layout.md', 'domain-modeling.md', 'flow-fidelity.md', 'integration-tests.md', 'infra-validation.md'];
+
+/** Las que solo aplican con una elección del stack: la de observabilidad, con telemetría. */
+export const CONDITIONAL_CONVENTIONS = { 'observability.md': (model) => usesTelemetry(model) };
 
 /** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
 export const AGENTS = ['keel-dotnet-code.md', 'keel-dotnet-infra.md', 'keel-dotnet-tests.md', 'keel-dotnet-validate.md', 'keel-dotnet-quality.md'];
@@ -67,7 +71,9 @@ export function stackSkills(model) {
 export function generate(model) {
   const files = [];
   for (const name of GUIDES) files.push({ path: `${DOCS_DIR}/${name}`, content: docContent(path.join(generatorDir, name)) });
-  for (const name of CONVENTIONS) files.push({ path: `${DOCS_DIR}/conventions/${name}`, content: docContent(path.join(generatorDir, 'conventions', name)) });
+  for (const name of [...CONVENTIONS, ...Object.keys(CONDITIONAL_CONVENTIONS).filter((name) => CONDITIONAL_CONVENTIONS[name](model))]) {
+    files.push({ path: `${DOCS_DIR}/conventions/${name}`, content: docContent(path.join(generatorDir, 'conventions', name)) });
+  }
   // Los documentos de contrato del método, los mismos que instalan keel-spring y keel-nest (keel-core/gen/contract-docs.js).
   for (const doc of contractDocs()) files.push({ path: `${DOCS_DIR}/${doc.name}`, content: doc.content });
   for (const harness of HARNESSES) files.push(...harnessArtifacts(model, harness));

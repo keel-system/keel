@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HARNESSES } from 'keel-core';
-import { AGENTS, CONVENTIONS, GUIDES, DOCS_DIR } from '../src/scaffold/generator-docs.js';
+import { AGENTS, CONVENTIONS, CONDITIONAL_CONVENTIONS, GUIDES, DOCS_DIR } from '../src/scaffold/generator-docs.js';
 import { solution } from '../src/scaffold/render.js';
 import { SKILL } from '../src/lib/assets.js';
 import { loadService } from 'keel-core';
@@ -33,7 +33,7 @@ function assetSources(dir = assets) {
 
 test('todo agente y toda convención de assets/ se instala (las listas son el único punto de instalación)', () => {
   assert.deepEqual([...AGENTS].sort(), fs.readdirSync(path.join(assets, 'agents')).sort());
-  assert.deepEqual([...CONVENTIONS].sort(), fs.readdirSync(path.join(assets, 'generators', 'dotnet', 'conventions')).sort());
+  assert.deepEqual([...CONVENTIONS, ...Object.keys(CONDITIONAL_CONVENTIONS)].sort(), fs.readdirSync(path.join(assets, 'generators', 'dotnet', 'conventions')).sort());
   for (const name of [...GUIDES, ...CONVENTIONS.map((c) => `conventions/${c}`), 'framework-errors.md', 'wire-contract.md']) {
     assert.ok(`${DOCS_DIR}/${name}` in files, `${name} se emite en ${DOCS_DIR}/`);
   }

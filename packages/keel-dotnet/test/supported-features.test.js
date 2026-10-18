@@ -147,7 +147,8 @@ test('una operación con idempotency sin persistencia se acepta avisando del inc
   assert.match(warnings[0], /createThing declara idempotency, pero el diseño no tiene persistencia: .*no se genera ningún mecanismo/);
 });
 
-test('la telemetría se rechaza en vez de estamparse sin efecto', () => {
+test('la telemetría con OpenTelemetry se genera; otra se rechaza en vez de estamparse sin efecto', () => {
   assert.deepEqual(checkSupportedStack({ telemetry: 'none' }).errors, []);
-  assert.match(checkSupportedStack({ telemetry: 'otel' }).errors[0], /incremento 14/);
+  assert.deepEqual(checkSupportedStack({ telemetry: 'otel' }).errors, []);
+  assert.match(checkSupportedStack({ telemetry: 'zipkin' }).errors[0], /telemetry: zipkin/);
 });

@@ -26,8 +26,8 @@ import {
   usesTelemetry
 } from 'keel-core/gen/telemetry-vocabulary';
 import { tsModule } from './render.js';
-import { envWithDefault } from 'keel-core/gen/profile-values';
-import { envFor, runtimeDefault } from 'keel-core/gen/runtime-env';
+import { runtimeDefault } from 'keel-core/gen/runtime-env';
+import { telemetryYaml as neutralTelemetryYaml } from 'keel-core/gen/telemetry-config';
 
 export { usesTelemetry, instrumentationFor };
 
@@ -94,55 +94,9 @@ export function generate(model) {
   ];
 }
 
-/**
- * El fragmento de cada perfil, con las MISMAS variables y defaults que el `telemetry.yaml` de keel-spring: un
- * mismo `.env` despliega los dos servidores. Lo que keel-nest no tiene —el push de métricas por OTLP, que en
- * keel-spring es una salida apagada por defecto— no se declara: una palanca que no mueve nada es peor que no tenerla.
- */
+/** El fragmento de cada perfil: el NEUTRAL de keel-core (keel-core/gen/telemetry-config.js), el mismo que keel-dotnet. */
 export function telemetryYaml(model, profile) {
-  const endpointVar = TELEMETRY_INFRA.endpointVar;
-  const endpoint = profile === 'production' ? `\${${endpointVar}}` : `\${${endpointVar}:${collectorHostEndpoint()}}`;
-  const exportEnabled = `\${TELEMETRY_EXPORT_ENABLED:${profile === 'local' || profile === 'test' ? 'false' : 'true'}}`;
-  const sampling = profile === 'production' ? '0.1' : '1.0';
-  const lines = [
-    `# Generado por keel-nest build. La telemetría en el perfil ${profile}: trazas (y logs, con LOG_EXPORT_OTLP)`,
-    '# por OTLP/HTTP a un colector; las métricas las viene a buscar el colector. Cambiar de backend es cambiar',
-    '# el COLECTOR, no este archivo.',
-    'telemetry:',
-    '  tracing:',
-    '    # Parent-based: se respeta la decisión de quien llama; la proporción solo decide en las raíces.',
-    `    sampling-probability: ${envFor('TRACING_SAMPLING_PROBABILITY', profile, sampling)}`,
-    '  export:',
-    `    enabled: ${exportEnabled}`,
-    `    endpoint: ${endpoint}`,
-    '  logs:',
-    '    # Apagado: el canal primario de los logs es la consola. Encenderlo además de recogerla duplica cada línea.',
-    '    export-enabled: ${LOG_EXPORT_OTLP:false}',
-    '  metrics:',
-    `    prometheus-enabled: ${envWithDefault(profile, METRICS_TRANSPORT.prometheus.envVar, 'true')}`,
-    '  resource:',
-    `    service-version: "${model.service.version}"`,
-    `    deployment-environment: ${envFor('DEPLOYMENT_ENVIRONMENT', profile, profile)}`,
-    // Qué réplica emitió cada señal; en local hay una sola instancia.
-    ...(profile === 'local' ? [] : ['    service-instance-id: ${SERVICE_INSTANCE_ID:${HOSTNAME:unknown}}'])
-  ];
-  if (profile === 'production') {
-    lines.push(
-      'management:',
-      '  server:',
-      `    # Puerto del scrape, distinto del de negocio. NO se publica fuera del pod/host: solo lo alcanza el`,
-      `    # colector que viene a leer ${METRICS_TRANSPORT.scrapePath}.`,
-      `    port: ${envFor('MANAGEMENT_PORT', profile)}`
-    );
-  }
-  const switches = instrumentationFor(model);
-  if (switches.length > 0) {
-    lines.push('keel:', '  telemetry:', '    # Instrumentación opcional: se apaga por ENTORNO y cambia al reiniciar.', '    instrumentation:');
-    for (const entry of switches) {
-      lines.push(`      # ${entry.label}`, `      ${entry.id}:`, `        enabled: ${envWithDefault(profile, entry.envVar, 'true')}`);
-    }
-  }
-  return `${lines.join('\n')}\n`;
+  return neutralTelemetryYaml(model, profile, { generator: 'keel-nest' });
 }
 
 function lifecycleTs() {

@@ -20,6 +20,7 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
 import { csFile, csMember, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
+import { observedRegistration, observedStorageFile, telemetryNamespace, usesTelemetry } from './telemetry.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -79,8 +80,11 @@ export function generate(model) {
       file('storageInfra', 'StorageSettings', ['System.Globalization', configNamespace(model)], settingsBody(model)),
       file('storageInfra', 'ConfiguredStoragePolicies', [domain], configuredPoliciesBody()),
       file('storageInfra', 'S3FileStorage', ['Microsoft.Extensions.Hosting', domain], s3StubBody(model)),
-      file('storageInfra', 'StorageRegistration', ['Microsoft.Extensions.DependencyInjection', domain], registrationBody())
+      file('storageInfra', 'StorageRegistration', ['Microsoft.Extensions.DependencyInjection', domain, ...(usesTelemetry(model) ? [telemetryNamespace(model)] : [])], registrationBody(model))
     );
+    // Con telemetría, el puerto observado (keel.storage), con su interruptor TELEMETRY_INSTRUMENT_STORAGE.
+    const observed = observedStorageFile(model, { ...located(model, 'storageInfra', 'ObservedFileStorage'), usings: [domain] });
+    if (observed) files.push(observed);
     if (usesStorageAdapter(model)) {
       files.push(...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/storage.yaml`, content: storageYaml(model, profile) })));
     }
@@ -473,7 +477,8 @@ ${methods.join('\n\n')}
 }`;
 }
 
-function registrationBody() {
+function registrationBody(model) {
+  const observed = observedRegistration(model, { port: FILE_STORAGE_PORT, adapter: 'S3FileStorage', decorator: 'ObservedFileStorage', instrumentation: 'storage' });
   return `/// <summary>
 /// El almacenamiento de binarios en el contenedor: la configuración, la política de cada bucket y el adaptador del puerto.
 /// Los handlers reciben IFileStorage y StoragePolicies.
@@ -487,7 +492,7 @@ public static class StorageRegistration
         services.AddSingleton<StoragePolicies, ConfiguredStoragePolicies>();
         // Un solo adaptador: es el puerto y el servicio de arranque que aprovisiona los buckets (su StartAsync).
         services.AddSingleton<S3FileStorage>();
-        services.AddSingleton<${FILE_STORAGE_PORT}>(provider => provider.GetRequiredService<S3FileStorage>());
+        ${observed ?? `services.AddSingleton<${FILE_STORAGE_PORT}>(provider => provider.GetRequiredService<S3FileStorage>());`}
         services.AddHostedService(provider => provider.GetRequiredService<S3FileStorage>());
         return services;
     }

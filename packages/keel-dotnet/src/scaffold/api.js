@@ -10,6 +10,7 @@ import { usesMediator } from './mediator.js';
 import { configNamespace } from './config.js';
 import { healthNamespace } from './health.js';
 import { loggingNamespace } from './logging.js';
+import { programTelemetry } from './telemetry.js';
 import { wireNamespace } from './wire.js';
 import { restNamespace, usesApi } from './rest-support.js';
 import { usesRelational, usesPersistence } from './persistence.js';
@@ -60,7 +61,10 @@ function programCs(model) {
   // El almacenamiento de binarios: la política de cada bucket y el adaptador S3.
   const storing = storageProgram(model);
   const persistence = usesPersistence(model);
+  // La telemetría (telemetry: otel): arranca antes que la aplicación, va la primera del pipeline y sirve el scrape.
+  const observing = programTelemetry(model);
   const usings = [
+    ...observing.usings,
     wireNamespace(model),
     configNamespace(model),
     healthNamespace(model),
@@ -132,23 +136,23 @@ builder.Services.AddScheduling(configuration);`
   // La seguridad, detrás de la correlación y de los errores (el 401 lleva su correlationId; un proveedor caído es el 500
   // del contrato) y delante de los endpoints: decide también sobre un camino que no existe, como Spring Security.
   const securityMiddleware = api && usesHttpSecurity(model) ? '\napp.UseMiddleware<HttpSecurityMiddleware>();' : '';
-  const pipeline = api ? `\napp.UseMiddleware<CorrelationMiddleware>();\napp.UseMiddleware<ApiErrorMiddleware>();${idempotency}${securityMiddleware}` : '';
+  const pipeline = observing.pipeline + (api ? `\napp.UseMiddleware<CorrelationMiddleware>();\napp.UseMiddleware<ApiErrorMiddleware>();${idempotency}${securityMiddleware}` : '');
   // Las rutas del diseño: un solo mapa (ApiRoutes, generado).
   const routes = api ? '\napp.MapApiRoutes();' : '';
   return `${[...new Set(usings)].map((using) => `using ${using};`).join('\n')}
 
 // La configuración del perfil activo (PROFILE), cargada y validada antes de crear la aplicación: una
 // variable obligatoria sin valor no deja arrancar, y se listan todas las que faltan.
-var configuration = ServiceConfiguration.Load();
+var configuration = ServiceConfiguration.Load();${observing.start}
 
 var builder = WebApplication.CreateBuilder(args);
 // El resto de la aplicación lee la configuración ya resuelta por la vía estándar de ASP.NET Core.
 builder.Configuration.AddInMemoryCollection(configuration.Values);
 // Los logs del perfil (logging.yaml): texto en local, JSON ECS fuera de él, con LOG_LEVEL_ROOT para el framework y
 // LOG_LEVEL_APP para el servicio (LoggingRegistration, generado).
-builder.Logging.AddServiceLogging(LoggingSettings.From(configuration));
-builder.WebHost.UseUrls($"http://{configuration.Server.Address}:{configuration.Server.Port}");
-builder.Services.AddSingleton(configuration);${parameters}
+builder.Logging.AddServiceLogging(LoggingSettings.From(configuration));${observing.logging}
+builder.WebHost.UseUrls(${observing.urls ?? '$"http://{configuration.Server.Address}:{configuration.Server.Port}"'});
+builder.Services.AddSingleton(configuration);${observing.services}${parameters}
 builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);
@@ -157,7 +161,7 @@ builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.
 
 var app = builder.Build();
 app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);${schema}${pipeline}
-app.MapHealthEndpoints();${routes}${payments.mapping}
+app.MapHealthEndpoints();${observing.mapping}${routes}${payments.mapping}${observing.shutdown}
 app.Run();
 
 /// <summary>Visible para las pruebas, que levantan el servidor en memoria (WebApplicationFactory).</summary>

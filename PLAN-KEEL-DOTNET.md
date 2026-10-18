@@ -1768,6 +1768,54 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       nada. `cs-check` 17/17 después; `broker-check` con RabbitMQ entero en verde y falsado. Kafka y SNS/SQS **sin
       medir** en vivo tras el arreglo: esa pasada se quedó sin memoria en la máquina (podman no arrancaba, `0xC0000142`),
       aunque `cs-check` compila y prueba sus variantes con el cambio.
+  - **14c — la telemetría en keel-dotnet. `telemetry: otel` sale de la frontera.**
+    - **Stack** (nuget.org, 2026-10-18): OpenTelemetry 1.19.1 (Apache-2.0; la 1.20.0 tenía tres días), su exportador OTLP
+      y `Extensions.Propagators` para las trazas y los logs, y **prometheus-net 8.2.1** (MIT) para el scrape. El
+      exportador Prometheus de OpenTelemetry sigue en beta (`1.19.1-beta.1`); prometheus-net no publica desde 2024, pero
+      es estable y hace lo que pide el plan: OpenMetrics con exemplars y los nombres que pongamos. Decidido con el usuario.
+    - **Lo neutral**: el `telemetry.yaml` de keel-nest sale a keel-core (`gen/telemetry-config.js`), el mismo de
+      keel-nest salvo la cabecera; línea base de keel-nest idéntica.
+    - **El núcleo** (`src/scaffold/telemetry.js`, en `Infrastructure/Telemetry`): `TelemetrySettings`, los nombres
+      del vocabulario (`Observations`, `TelemetryAttributes`), `KeelTelemetry` (un `ActivitySource` propio, `keel`, el
+      único que escucha el proveedor; `Observe` con el desenlace y el exemplar; `Publishing`, `Consuming`,
+      `StartClient`/`FinishClient`, `StartServer`/`FinishServer`, `CacheGet`, `RegisterGauge`), el propagador (W3C de
+      salida; de entrada W3C y las dos formas de B3, que en OpenTelemetry .NET son dos propagadores), el middleware HTTP
+      (el primero del pipeline; las sondas cuentan sin abrir traza) y el scrape en `/actuator/prometheus`, en production
+      solo en `MANAGEMENT_PORT` (`RequireHost` sobre el segundo puerto de Kestrel).
+    - **Los puntos de paso**: el mediator (`keel.use-case`, un rechazo del dominio es `rejected` sin marcar el span), la
+      envoltura (`metadata.traceparent` del span en curso), el relay (PRODUCER dentro de la traza de la fila, y el
+      gauge `keel.outbox.dead_lettered`), `InboundContext.Run` (CONSUMER que continúa la del emisor), `HttpExchange`
+      (CLIENT, `traceparent` y `http_client_requests_seconds` con la plantilla), la caché (`cache_gets_total`),
+      storage y correo como decoradores del PUERTO (`ObservedFileStorage`, `ObservedMailSender`, con
+      `TELEMETRY_INSTRUMENT_*`) y el formateador de logs (`trace.id`/`span.id`). Convención `observability.md`, instalada
+      solo con telemetría.
+    - **Tres decisiones propias de .NET**:
+      - **Sin la instrumentación de ASP.NET Core.** El host crea un `Activity` por petición mientras haya logs, aunque
+        nadie lo exporte; un span nuestro que colgara de él quedaría con un padre que el backend no tiene. Los nuestros
+        toman el padre explícito (el de quien llama, el de la fila, el de la envoltura) o ninguno; el contexto vacío pide
+        una traza nueva (con `StartActivity(..., default)` .NET vuelve a colgar del span en curso).
+      - **El transporte no propaga** (`SocketsHttpHandler.ActivityHeadersPropagator = null`, con o sin telemetría): el
+        `traceparent` lo escribe el span CLIENT, y sin telemetría no viaja el del span interno de ASP.NET Core.
+      - **La métrica no puede lanzar.** prometheus-net rechaza un punto con otras etiquetas que las de su serie, y lanzaría
+        en el `finally` del caso de uso, rompiendo la operación de negocio. Cada histograma fija sus etiquetas al nacer y
+        los valores se alinean con ellas. Lo destapó la prueba emitida: dependía del orden de las pruebas.
+    - **Medido**: `test/telemetry.test.js` (el YAML contra keel-nest, las claves que lee `TelemetrySettings`, el
+      vocabulario, el cableado de cada punto de paso, la convención y lo que cita, el proveedor que solo escucha `keel`, y
+      que sin telemetría no se emite nada ni un paquete) y la prueba emitida `TelemetryTests` sobre el servidor en
+      memoria: la entrada HTTP continúa la traza y su exemplar es el de esa petición, las sondas no abren traza, los tres
+      desenlaces con sus series, la raíz frente al span de ASP.NET Core, la llamada saliente, W3C y B3, el log con sus
+      ids, el gauge, la envoltura y el consumo, y la configuración de production. `cs-check` **17/17**: 174 ensamblados
+      con seis variantes con telemetría (las siluetas de keel-nest) y **3 962 pruebas**; licencias de 112 paquetes
+      resueltos, transitivos incluidos. Sabotajes de las fixtures, cada uno rojo en su prueba de `TelemetryTests` y solo
+      en ella: `telemetry-exemplar`, `-parent` (cae también la de la envoltura), `-host`, `-rejection`, `-b3` y
+      `-log-trace`. **`telemetry-rejection` salió verde la primera vez**: con el rechazo y el fallo intercambiados seguía
+      habiendo un `ok`, un `rejected` y un `error`, y la prueba solo contaba eso. Ahora ata cada desenlace al span de la
+      excepción que lo produjo. keel-core 1216, keel-nest 800 y keel-dotnet 608 sin red.
+    - **Matriz**: `telemetry-store-spans` pasa a `degradado` en las dos ramas, con su salida escrita. Npgsql ya publica su
+      `ActivitySource`, pero escucharlo sin el filtro anti-ruido de keel-spring haría de cada pasada del relay una traza
+      raíz por segundo. Queda pendiente `runtime-panel` (14d).
+    - **Queda**: la fila de runtime de .NET (heap, GC, pool de Npgsql) para el panel (14d), los gates (14e) y las redes en
+      vivo (14f, la primera vez que un colector de verdad lee este scrape).
 
 ## 5. Riesgos conocidos
 

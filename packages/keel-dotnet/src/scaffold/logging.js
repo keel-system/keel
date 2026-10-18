@@ -17,6 +17,7 @@
 import { solution, csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { usesCorrelation } from './rest-support.js';
+import { telemetryNamespace, usesTelemetry } from './telemetry.js';
 import { ECS_VERSION, loggingYaml as neutralLoggingYaml } from 'keel-core/gen/logging-config';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -50,7 +51,8 @@ export function generate(model) {
         'Microsoft.Extensions.Logging.Abstractions',
         'Microsoft.Extensions.Logging.Console',
         'Microsoft.Extensions.Options',
-        ...correlation
+        ...correlation,
+        ...(usesTelemetry(model) ? [telemetryNamespace(model)] : [])
       ],
       formatterBody(model)
     ),
@@ -142,6 +144,8 @@ public sealed record LoggingSettings(
 
 function formatterBody(model) {
   const correlationOf = usesCorrelation(model) ? 'CorrelationContext.Get()' : 'null';
+  // Con telemetría, los ids de la traza en curso (los del span del servicio): el enlace de la línea con su traza.
+  const traceOf = usesTelemetry(model) ? 'KeelTelemetry.TraceIds()' : 'null';
   return `/// <summary>Las opciones del formateador: los logs del perfil, ya leídos.</summary>
 public sealed class KeelConsoleFormatterOptions : ConsoleFormatterOptions
 {
@@ -180,11 +184,11 @@ public sealed class KeelConsoleFormatter : ConsoleFormatter
         {
             return;
         }
-        var line = new LogLine(DateTimeOffset.UtcNow, logEntry.LogLevel, logEntry.Category, message ?? string.Empty, logEntry.Exception, ${correlationOf});
+        var line = new LogLine(DateTimeOffset.UtcNow, logEntry.LogLevel, logEntry.Category, message ?? string.Empty, logEntry.Exception, ${correlationOf}, ${traceOf});
         textWriter.Write(settings.Format == LogFormat.Ecs ? Ecs(settings, line) : Text(line));
     }
 
-    private sealed record LogLine(DateTimeOffset Timestamp, LogLevel Level, string Category, string Message, Exception? Error, string? CorrelationId);
+    private sealed record LogLine(DateTimeOffset Timestamp, LogLevel Level, string Category, string Message, Exception? Error, string? CorrelationId, (string TraceId, string SpanId)? Trace);
 
     private static string Instant(DateTimeOffset timestamp) =>
         timestamp.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
@@ -198,6 +202,10 @@ public sealed class KeelConsoleFormatter : ConsoleFormatter
         if (line.CorrelationId is { } correlationId)
         {
             text.Append('[').Append(correlationId).Append("] ");
+        }
+        if (line.Trace is { } trace)
+        {
+            text.Append('[').Append(trace.TraceId).Append(',').Append(trace.SpanId).Append("] ");
         }
         text.Append('[').Append(line.Category).Append("] ").Append(line.Message).Append('\\n');
         if (line.Error is { } error)
@@ -245,6 +253,16 @@ public sealed class KeelConsoleFormatter : ConsoleFormatter
             if (line.CorrelationId is { } correlationId)
             {
                 json.WriteString("correlationId", correlationId);
+            }
+            if (line.Trace is { } trace)
+            {
+                // Los nombres de ECS: con ellos un backend enlaza la línea con su traza.
+                json.WriteStartObject("trace");
+                json.WriteString("id", trace.TraceId);
+                json.WriteEndObject();
+                json.WriteStartObject("span");
+                json.WriteString("id", trace.SpanId);
+                json.WriteEndObject();
             }
             if (line.Error is { } error)
             {

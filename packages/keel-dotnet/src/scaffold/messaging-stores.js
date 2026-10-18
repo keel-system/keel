@@ -16,6 +16,7 @@ import { csFile, csString, located, namespaceOf } from './render.js';
 import { dbContextClass, persistenceNamespace, rowsNamespace, usesDocument } from './persistence.js';
 import { documentGuardBody, documentRelayStoreBody } from './document-stores.js';
 import { usesDotnetOutbox, usesProcessedEvents } from './messaging.js';
+import { telemetryNamespace, usesTelemetry } from './telemetry.js';
 
 export const OUTBOX_ROW = 'OutboxEventRow';
 export const PROCESSED_ROW = 'ProcessedEventRow';
@@ -61,7 +62,12 @@ export function generate(model) {
             ['Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.DependencyInjection', persistenceNamespace(model), rowsNamespace(model)],
             relayStoreBody(model)
           ),
-      file('outbox', 'OutboxRelay', ['Microsoft.Extensions.Hosting', 'Microsoft.Extensions.Logging', persistenceNamespace(model), namespaceOf(model, 'messaging')], relayBody())
+      file(
+        'outbox',
+        'OutboxRelay',
+        ['Microsoft.Extensions.Hosting', 'Microsoft.Extensions.Logging', persistenceNamespace(model), namespaceOf(model, 'messaging'), ...(usesTelemetry(model) ? ['System.Text.Json', telemetryNamespace(model)] : [])],
+        relayBody(model)
+      )
     );
   }
   if (usesProcessedEvents(model)) {
@@ -357,7 +363,8 @@ public sealed class OutboxRelayStore(IServiceScopeFactory scopes)
 }`;
 }
 
-function relayBody() {
+function relayBody(model) {
+  const telemetry = usesTelemetry(model);
   return `/// <summary>
 /// Reenvía al broker las filas pendientes del outbox, ya fuera de la transacción que las creó.
 /// </summary>
@@ -395,7 +402,9 @@ public sealed partial class OutboxRelay(
         if (!database.Enabled)
         {
             return;
-        }
+        }${telemetry ? `
+        // Las filas rendidas, leídas en cada scrape: la señal de que el outbox perdió algo (la alerta del panel).
+        KeelTelemetry.Current?.RegisterGauge(Observations.OutboxDeadLettered, "Eventos del outbox que agotaron sus reintentos", async _ => (double)await CountDeadLettered());` : ''}
         using var registration = stoppingToken.Register(() => stopping = true);
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -442,7 +451,8 @@ public sealed partial class OutboxRelay(
             }
             try
             {
-                await dispatcher.Dispatch(row.Destination, row.RoutingKey, row.EventType, row.Payload);
+${telemetry ? `                // Dentro de la traza de la fila (la que quedó en su envoltura): el relay publica en otro instante.
+                await Publish(row.EventType, row.Payload, () => dispatcher.Dispatch(row.Destination, row.RoutingKey, row.EventType, row.Payload));` : '                await dispatcher.Dispatch(row.Destination, row.RoutingKey, row.EventType, row.Payload);'}
                 await store.MarkPublished(row.Id);
                 LogPublished(row.EventType, row.Id);
             }
@@ -480,7 +490,30 @@ public sealed partial class OutboxRelay(
 
     /// <summary>Las filas rendidas ahora mismo: la señal de que el outbox perdió algo (la mide el arnés).</summary>
     public Task<int> CountDeadLettered() => store.CountDeadLettered(settings.MaxAttempts);
+${telemetry ? `
+    /// <summary>La publicación de una fila en un span PRODUCER que continúa la traza de su envoltura (metadata.traceparent).</summary>
+    private static Task Publish(string eventType, string payload, Func<Task> dispatch) =>
+        KeelTelemetry.Current is { } telemetry ? telemetry.Publishing(eventType, TraceparentOf(payload), dispatch) : dispatch();
 
+    /// <summary>El traceparent de la envoltura guardada en la fila, o null si no lo trae (o no se puede leer).</summary>
+    private static string? TraceparentOf(string payload)
+    {
+        try
+        {
+            using var envelope = JsonDocument.Parse(payload);
+            return envelope.RootElement.TryGetProperty("metadata", out var metadata)
+                && metadata.ValueKind == JsonValueKind.Object
+                && metadata.TryGetProperty("traceparent", out var traceparent)
+                && traceparent.ValueKind == JsonValueKind.String
+                ? traceparent.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+` : ''}
     public override void Dispose()
     {
         pass.Dispose();

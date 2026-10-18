@@ -103,9 +103,23 @@ const SABOTAGES = {
 //   actor-name          con un token, el autor es el nombre del principal y no su sujeto
 //   multipart-limit     la entrada de una subida no corta por la longitud declarada (el 413 no llega)
 //   multipart-empty     una parte obligatoria vacía pasa al handler como si nada (sin FILE_UNREADABLE)
+//   telemetry-exemplar  la métrica no lleva el exemplar de la traza muestreada
+//   telemetry-parent    el span ignora el padre explícito (el traceparent de quien llama o de la envoltura)
+//   telemetry-host      un span del servicio cuelga del que abre ASP.NET Core para cada petición
+//   telemetry-rejection un rechazo del dominio se cuenta como error del caso de uso
+//   telemetry-b3        la entrada solo lee W3C: la traza de quien llama con B3 se corta
+//   telemetry-log-trace la línea de log no lleva los ids de su traza
 const CLIENTS_DIR = 'stock-reservation/src/StockReservation.Infrastructure/Clients';
+// La telemetría (incremento 14c), sobre la variante con mensajería: la prueba emitida TelemetryTests las caza.
+const TELEMETRY_DIR = 'stock-reservation-otel/src/StockReservationOtel.Infrastructure/Telemetry';
 const PAYMENT_DIR = 'payment-checkout/src/PaymentCheckout.Infrastructure/Payment';
 const FIXTURE_SABOTAGES = {
+  'telemetry-exemplar': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'span is { Recorded: true }', 'span is { Recorded: false }'],
+  'telemetry-parent': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'return Source.StartActivity(name, kind, remote);', 'return Source.StartActivity(name, kind);'],
+  'telemetry-host': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, '            Activity.Current = null;\n', ''],
+  'telemetry-rejection': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'options.IsRejection?.Invoke(error) == true', 'options.IsRejection?.Invoke(error) == false'],
+  'telemetry-b3': [`${TELEMETRY_DIR}/W3cOutB3InPropagator.cs`, 'if (fromW3c.ActivityContext.TraceId != default)', 'if (fromW3c.ActivityContext.TraceId != default || fromW3c.ActivityContext.TraceId == default)'],
+  'telemetry-log-trace': ['stock-reservation-otel/src/StockReservationOtel.Infrastructure/Logging/KeelConsoleFormatter.cs', 'KeelTelemetry.TraceIds()', '((string, string)?)null'],
   // El need bajo demanda con fail (13i): el fallback deja de lanzar el error del diseño.
   'need-fail': ['asset-vault-need-fail/src/AssetVaultNeedFail.Infrastructure/Clients/RenderingHttpAdapter.cs', 'throw new RenderingUnavailableError(', 'throw new InvalidOperationException('],
   // El último valor conocido y la concesión OAuth2 (13j).
@@ -198,6 +212,15 @@ const DERIVED = [
       layers.dependencies.dependencies.rendering.needs.thumbnail.onUnavailable = { action: 'fail', error: 'RENDERING_UNAVAILABLE' };
     }
   },
+  // La telemetría (incremento 14c): las siluetas que mide keel-nest con ella, cada una con su prueba emitida TelemetryTests.
+  ...['product-catalog', 'stock-reservation', 'catalog-extended', 'asset-vault', 'notification-mailer', 'notification-mailer-mongo'].map((from) => ({
+    name: `${from}-otel`,
+    from,
+    telemetry: 'otel',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+    }
+  })),
   {
     name: 'payment-checkout-round',
     from: 'payment-checkout',
@@ -481,14 +504,15 @@ function compileAllFixtures() {
   const projects = [];
   const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
   const designs = [...fixtures.map((name) => ({ name, from: name })), ...DERIVED];
-  for (const { name, from, mutate, broker, paymentGateway } of designs) {
+  for (const { name, from, mutate, broker, paymentGateway, telemetry } of designs) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     if (mutate) mutate(manifest, layers, name);
     // Con mensajería, sobre RabbitMQ: es el broker que la frontera admite (el default del stack es Kafka). Con pagos, sobre
     // Stripe salvo que la variante diga otra pasarela: sin una, el stack no la elige y la capa no se emite.
     const stack = {
       ...(layers.messaging ? { broker: broker ?? 'rabbitmq' } : {}),
-      ...(layers.payments ? { paymentGateway: paymentGateway ?? 'stripe' } : {})
+      ...(layers.payments ? { paymentGateway: paymentGateway ?? 'stripe' } : {}),
+      ...(telemetry ? { telemetry } : {})
     };
     const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: Object.keys(stack).length > 0 ? stack : null });
     for (const file of files) {

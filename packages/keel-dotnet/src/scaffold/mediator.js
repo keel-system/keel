@@ -30,6 +30,8 @@ import { mailInfraNamespace, usesMail } from './mail.js';
 import { paymentInfraNamespace, usesPayments } from './payments.js';
 import { cacheNamespace, usesCache } from './cache.js';
 import { storageInfraNamespace, usesStorage } from './storage.js';
+import { telemetryNamespace, usesTelemetry } from './telemetry.js';
+import { usesCorrelation } from './rest-support.js';
 
 /** ¿Hay casos de uso que despachar? Sin operaciones no se genera nada de esto. */
 export function usesMediator(model) {
@@ -58,7 +60,8 @@ export function generate(model) {
       'Microsoft.Extensions.Logging',
       namespaceOf(model, 'abstractions'),
       namespaceOf(model, 'errors'),
-      ...(usesCache(model) ? [namespaceOf(model, 'ports'), cacheNamespace(model)] : [])
+      ...(usesCache(model) ? [namespaceOf(model, 'ports'), cacheNamespace(model)] : []),
+      ...(usesTelemetry(model) ? [telemetryNamespace(model), ...(usesCorrelation(model) ? [namespaceOf(model, 'correlation')] : [])] : [])
     ]),
     infra('UseCaseRegistration', registrationBody(model), registrationUsings(model))
   ];
@@ -187,6 +190,35 @@ const CACHED_RETURNING_HANDLED = `
         }
     }`;
 
+/**
+ * Con telemetría, el caso de uso dentro de un span de keel.use-case y su histograma, con la operación y el desenlace: un
+ * rechazo del dominio es un desenlace esperado (un 4xx), rejected sin marcar el span como error. El log de frontera sigue
+ * dentro, así que sus líneas llevan los ids de la traza.
+ */
+function observed(model) {
+  if (!usesTelemetry(model)) return '';
+  const correlation = usesCorrelation(model)
+    ? '\n                SpanAttributes = new Dictionary<string, string?> { [TelemetryAttributes.CorrelationId] = CorrelationContext.Get() },'
+    : '';
+  return `
+        if (KeelTelemetry.Current is { } telemetry)
+        {
+            var observing = new ObserveOptions
+            {
+                Name = operation,
+                Labels = new Dictionary<string, string> { [TelemetryAttributes.Operation] = operation },${correlation}
+                IsRejection = error => error is DomainException
+            };
+            return await telemetry.Observe(Observations.UseCase, observing, () => Logged(operation, work));
+        }
+        return await Logged(operation, work);
+    }
+
+    /// <summary>El log de frontera del caso de uso: operación, resultado y duración.</summary>
+    private async Task<T> Logged<T>(string operation, Func<Task<T>> work)
+    {`;
+}
+
 function mediatorBody(model) {
   const cache = usesCache(model);
   return `/// <summary>
@@ -244,7 +276,7 @@ ${cache ? CACHED_RETURNING_HANDLED : PLAIN_RETURNING_HANDLED}
 
     private async Task<T> Run<T>(IMessage message, Func<Task<T>> work)
     {
-        var operation = message.GetType().Name;
+        var operation = message.GetType().Name;${observed(model)}
         var started = Stopwatch.GetTimestamp();
         try
         {

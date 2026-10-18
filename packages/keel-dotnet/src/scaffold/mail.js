@@ -22,6 +22,7 @@ import { envFor } from 'keel-core/gen/runtime-env';
 import { COMPILED_TEMPLATES_LIMIT, HTML_ESCAPES, MAIL_HEADER_NAME_CLASS, RESERVED_MAIL_HEADERS } from 'keel-core/gen/mail-message';
 import { csFile, csString, csVerbatim, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
+import { observedMailFile, observedRegistration, telemetryNamespace, usesTelemetry } from './telemetry.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -63,7 +64,9 @@ export function generate(model) {
     file('ports', MAIL_SENDER_PORT, [mailNamespace(model)], mailSenderBody(model)),
     file('mailInfra', 'SmtpMailSender', ['MailKit', 'MailKit.Net.Smtp', 'MailKit.Security', 'Microsoft.Extensions.Logging', 'MimeKit', mailNamespace(model), namespaceOf(model, 'ports')], smtpMailSenderBody(model)),
     file('mailInfra', 'MailSettings', ['System.Globalization', configNamespace(model)], mailSettingsBody(model)),
-    file('mailInfra', 'MailRegistration', ['Microsoft.Extensions.DependencyInjection', namespaceOf(model, 'ports')], mailRegistrationBody(model)),
+    file('mailInfra', 'MailRegistration', ['Microsoft.Extensions.DependencyInjection', namespaceOf(model, 'ports'), ...(usesTelemetry(model) ? [telemetryNamespace(model)] : [])], mailRegistrationBody(model)),
+    // Con telemetría, el puerto observado (keel.mail.send), con su interruptor TELEMETRY_INSTRUMENT_MAIL.
+    ...[observedMailFile(model, { ...located(model, 'mailInfra', 'ObservedMailSender'), usings: [namespaceOf(model, 'ports'), mailNamespace(model)] })].filter(Boolean),
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/mail.yaml`, content: mailYaml(model, profile) }))
   ];
   if (model.mail.templating) {
@@ -661,6 +664,7 @@ public sealed record MailSettings(
 
 function mailRegistrationBody(model) {
   const templating = Boolean(model.mail.templating);
+  const observed = observedRegistration(model, { port: MAIL_SENDER_PORT, adapter: 'SmtpMailSender', decorator: 'ObservedMailSender', instrumentation: 'mail' });
   return `/// <summary>
 /// El correo saliente en el contenedor: el adaptador SMTP${templating ? ' y el renderizador de plantillas' : ''}, con la configuración del perfil.
 /// </summary>
@@ -670,7 +674,8 @@ public static class MailRegistration
     {
         ArgumentNullException.ThrowIfNull(settings);
         services.AddSingleton(settings);
-        services.AddSingleton<${MAIL_SENDER_PORT}, SmtpMailSender>();${templating ? `\n        services.AddSingleton<${TEMPLATE_RENDERER_PORT}, HandlebarsTemplateRenderer>();` : ''}
+        ${observed ? `services.AddSingleton<SmtpMailSender>();
+        ${observed}` : `services.AddSingleton<${MAIL_SENDER_PORT}, SmtpMailSender>();`}${templating ? `\n        services.AddSingleton<${TEMPLATE_RENDERER_PORT}, HandlebarsTemplateRenderer>();` : ''}
         return services;
     }
 }`;

@@ -91,6 +91,8 @@ export const PLACES = {
   correlation: ['infrastructure', 'Correlation'],
   // Los logs del servicio (incremento 14b): la consola con su formateador y los niveles del perfil.
   logging: ['infrastructure', 'Logging'],
+  // La telemetría (incremento 14c, telemetry: otel): trazas, métricas por scrape y la entrada HTTP observada.
+  telemetry: ['infrastructure', 'Telemetry'],
   // La seguridad (capa security): el principal, las reglas como datos, los autenticadores, CORS y la identidad del
   // llamante. El middleware que los usa vive en Api/Rest, junto a los otros de la entrada HTTP.
   security: ['infrastructure', 'Security'],

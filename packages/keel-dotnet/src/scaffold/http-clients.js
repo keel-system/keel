@@ -23,6 +23,7 @@ import { csFile, csLocal, csMember, csString, declType, fieldUsings, located, na
 import { configNamespace } from './config.js';
 import { wireNamespace } from './wire.js';
 import { usesCorrelation } from './rest-support.js';
+import { telemetryNamespace, usesTelemetry } from './telemetry.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -62,7 +63,20 @@ export function generate(model) {
     support('ProviderFailures', providerFailuresCs()),
     support('CircuitBreaker', circuitBreakerCs()),
     support('OutboundResilience', outboundResilienceCs()),
-    support('HttpExchange', httpExchangeCs(), ['System.Globalization', 'System.Net.Http.Headers', 'System.Net.Sockets', 'System.Runtime.CompilerServices', 'System.Text.Json', 'System.Text.RegularExpressions', wireNamespace(model)]),
+    support(
+      'HttpExchange',
+      httpExchangeCs(model),
+      [
+        'System.Globalization',
+        'System.Net.Http.Headers',
+        'System.Net.Sockets',
+        'System.Runtime.CompilerServices',
+        'System.Text.Json',
+        'System.Text.RegularExpressions',
+        wireNamespace(model),
+        ...(usesTelemetry(model) ? ['System.Diagnostics', telemetryNamespace(model)] : [])
+      ]
+    ),
     support('ResponseReading', responseReadingCs(), ['System.Text.Json', wireNamespace(model)]),
     support('HttpClientsSettings', settingsCs(model), ['System.Text', configNamespace(model)]),
     registration(model),
@@ -1140,7 +1154,8 @@ public static class OutboundResilience
 }`;
 }
 
-function httpExchangeCs() {
+function httpExchangeCs(model) {
+  const telemetry = usesTelemetry(model);
   return String.raw`/// <summary>Una petición a un proveedor: la ruta del diseño con sus variables entre llaves (/stock/{orderId}).</summary>
 public sealed record OutboundRequest(string Method, string Path)
 {
@@ -1190,6 +1205,9 @@ public sealed partial class HttpExchange(HttpMessageHandler handler) : IDisposab
     public static SocketsHttpHandler DefaultHandler() => new()
     {
         AllowAutoRedirect = false,
+        // El traceparent no lo pone el transporte: con telemetría lo escribe el span CLIENT de la llamada; sin ella no
+        // viaja (el de la petición de entrada que abre ASP.NET Core no lo exporta nadie).
+        ActivityHeadersPropagator = null,
         ConnectTimeout = TimeSpan.FromMilliseconds(5000),
         ConnectCallback = async (context, cancellationToken) =>
         {
@@ -1248,11 +1266,16 @@ public sealed partial class HttpExchange(HttpMessageHandler handler) : IDisposab
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(client.Timeout);
         int status;
-        string text;
+        string text;${telemetry ? `
+        // La llamada observada: el span CLIENT escribe la traza en las cabeceras, y la métrica lleva la plantilla de la ruta.
+        var telemetry = KeelTelemetry.Current;
+        var started = Stopwatch.GetTimestamp();
+        var span = telemetry?.StartClient(client.Id, request.Method, request.Path, message.Headers);
+        int? observed = null;` : ''}
         try
         {
             using var response = await http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-            status = (int)response.StatusCode;
+            status = (int)response.StatusCode;${telemetry ? '\n            observed = status;' : ''}
             text = await response.Content.ReadAsStringAsync(timeout.Token);
         }
         catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
@@ -1264,7 +1287,11 @@ public sealed partial class HttpExchange(HttpMessageHandler handler) : IDisposab
         catch (Exception error) when (error is HttpRequestException or IOException)
         {
             throw new ProviderTransportException($"{client.Id}: {request.Method} {target.AbsolutePath} sin respuesta ({error.Message})", error);
-        }
+        }${telemetry ? `
+        finally
+        {
+            telemetry?.FinishClient(span, started, client.Id, request.Method, request.Path, observed);
+        }` : ''}
         if (status is < 200 or > 299)
         {
             throw new ProviderStatusException(status, text);

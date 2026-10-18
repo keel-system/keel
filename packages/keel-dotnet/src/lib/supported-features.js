@@ -93,11 +93,8 @@ export function checkSupportedStack(stack) {
         'Elige uno de ellos, o genera este diseño con keel-spring o keel-nest.'
     );
   }
-  if (stack?.telemetry && stack.telemetry !== 'none') {
-    errors.push(
-      `telemetry: ${stack.telemetry} — keel-dotnet todavía no genera telemetría (llega en el incremento 14 de PLAN-KEEL-DOTNET.md). ` +
-        'Genera sin ella (--telemetry none).'
-    );
+  if (stack?.telemetry && !['none', 'otel'].includes(stack.telemetry)) {
+    errors.push(`telemetry: ${stack.telemetry} — keel-dotnet genera la telemetría con OpenTelemetry (otel) o sin ella (none).`);
   }
   return { errors };
 }

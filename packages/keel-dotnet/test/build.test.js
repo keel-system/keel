@@ -97,11 +97,10 @@ test('payments: una pasarela que no cubre lo que el diseño exige no se genera p
   assert.ok(files.some((file) => file.path.endsWith('StripePaymentGateway.cs')));
 });
 
-test('la telemetría pedida por flag se rechaza antes de escribir', async () => {
-  const { workspace, exitCode, output } = await generated({ telemetry: 'otel' });
-  assert.equal(exitCode, 1);
-  assert.match(output, /keel-dotnet todavía no genera telemetría/);
-  assert.ok(!fs.existsSync(path.join(workspace, 'services')));
+test('la telemetría pedida por flag se genera (incremento 14c)', async () => {
+  const { project, exitCode, output } = await generated({ telemetry: 'otel' });
+  assert.equal(exitCode, undefined, output);
+  assert.ok(fs.existsSync(path.join(project, 'src', 'ProductCatalog.Infrastructure', 'Telemetry', 'KeelTelemetry.cs')));
 });
 
 test('una segunda pasada no pisa lo que ya existe, y --check dice que está al día', async () => {

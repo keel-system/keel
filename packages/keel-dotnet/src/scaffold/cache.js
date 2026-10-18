@@ -23,6 +23,7 @@ import { cacheFlushCmd } from 'keel-core/gen/infra-scripts';
 import { csFile, csMember, csString, located, namespaceOf, solution } from './render.js';
 import { configNamespace } from './config.js';
 import { messageComponents, messageNamespace, returnTypeOf } from './services.js';
+import { telemetryNamespace, usesTelemetry } from './telemetry.js';
 import { usesPersistence } from './persistence.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -67,7 +68,7 @@ export function generate(model) {
     file(
       'cache',
       'RedisOperationCache',
-      ['System.Collections.Concurrent', 'System.Text.Json', 'Microsoft.Extensions.Logging', ports, support, ...(persistence ? [namespaceOf(model, 'persistence')] : [])],
+      ['System.Collections.Concurrent', 'System.Text.Json', 'Microsoft.Extensions.Logging', ports, support, ...(persistence ? [namespaceOf(model, 'persistence')] : []), ...(usesTelemetry(model) ? [telemetryNamespace(model)] : [])],
       adapterBody(model)
     ),
     cacheInvalidationsFile(model),
@@ -452,7 +453,9 @@ public sealed partial class RedisOperationCache(CacheState state, ILogger<RedisO
             return await load(cancellationToken);
         }
         var entry = EntryKey(cache, cache.KeyOf(message));
-        var (hit, cached) = await Read<T>(cache, entry);
+        var (hit, cached) = await Read<T>(cache, entry);${usesTelemetry(model) ? `
+        // El ratio de acierto del panel: cache_gets_total{cache,result}, la serie que publica keel-spring.
+        KeelTelemetry.Current?.CacheGet(cache.Name, hit);` : ''}
         if (hit)
         {
             return cached!;
