@@ -2000,6 +2000,9 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       - `harness-stall`, `harness-missing-clock`, `stale-literal` y `uuid-literal`: la sonda del rescate de
         job-dispatch y job-dispatch-cycles.
     - `db-check` limpio, 28/28.
+  - **16f, el cierre de la documentación (hecho, 2026-10-19)**, lo que el §7 asigna al 16:
+    - el `README.md` raíz y el de keel-dotnet ya no lo dan por «en construcción»;
+    - el detalle de `CLAUDE.md` se mueve a `.claude/rules/dotnet-generador.md` (clave `dotnet`), como el de keel-nest.
 
 ## 5. Riesgos conocidos
 

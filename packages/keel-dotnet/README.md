@@ -1,7 +1,7 @@
 # keel-dotnet
 
-Generador .NET para diseños Keel, **en construcción por incrementos** (`PLAN-KEEL-DOTNET.md` en la raíz
-del repo lleva su estado). Su objetivo es el de los otros dos generadores: **el mismo diseño genera con
+Generador .NET para diseños Keel, construido en 16 incrementos medidos (`PLAN-KEEL-DOTNET.md` en la raíz
+del repo lleva su estado), cerrado con la corrida de control del par del MVP en los tres generadores. Su objetivo es el de los otros dos generadores: **el mismo diseño genera con
 keel-spring, keel-nest o keel-dotnet servidores equivalentes** — mismo contrato HTTP, mismo cable, mismos
 eventos, mismas tablas, misma operación.
 
@@ -27,7 +27,7 @@ estampado en `keel-generated.json`, y no escribe nada en el workspace de diseño
 4. **Regla de oro**: el generador nunca inventa ni corrige funcionalidad; lo que no sabe mapear lo
    rechaza o lo avisa en código (`src/lib/supported-features.js`), nunca lo ignora.
 
-## La frontera, hoy (incremento 15 cerrado)
+## La frontera, hoy (incremento 16 cerrado)
 
 Toda fixture compartida se genera entera: el proyecto compila sin un solo warning, pasa sus pruebas emitidas y
 arranca. Lo que build genera, capa a capa (el detalle de cada una, con sus redes, en `PLAN-KEEL-DOTNET.md`):
