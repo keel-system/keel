@@ -99,6 +99,12 @@ independencia no cambia: sigues sin leer `src/`.
   ajena (`test-m2m-bad-aud`, con `validateAudience: true`) y el de control forman la matriz de prueba que siembra
   `infra/`; con Keycloak la describe `{{keel:skills}}/keel-dotnet-keycloak/references/test-clients.md`, y su token se
   pide con `Credentials` del arnés por su nombre, como cualquier cliente. Escribe el test contra ese nombre.
+- **Una afirmación de COSTE tampoco es un `uncovered`.** Un `Then` cuyo trabajo «no crece con el tamaño de la
+  página» (o de la lista) se escribe con `QueryCount()` (sentencias contra la base, contadas por el servidor; solo
+  con persistencia relacional; si el When **escribe**, `QueryExecutions()`, que solo cuenta lecturas) o con
+  `StubCallCount` (llamadas al proveedor de prueba), midiendo **dos tamaños muy distintos** y comparando el salto —
+  nunca contra un número absoluto. Las reglas y el ejemplo: `{{keel:docs}}/conventions/integration-tests.md`
+  § Afirmar el coste.
 - Toda apuesta que dependa de la infraestructura y no puedas verificar en la fase 1 va a `assumptions`, no a un
   comentario en el código.
 - Identificadores en inglés; los títulos de los escenarios y los comentarios, en español.

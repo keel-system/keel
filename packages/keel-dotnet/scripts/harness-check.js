@@ -8,8 +8,12 @@
 // vacía los datos y RESPETA el historial de migraciones, que xUnit escribe el XML que `score-scenarios.sh` sabe
 // leer, y que cada desenlace sale con su código y su evidencia.
 //
-//   node packages/keel-dotnet/scripts/harness-check.js [--keep]
+//   node packages/keel-dotnet/scripts/harness-check.js [--keep] [--sabotage=statement-count]
 //   npm run harness-check --workspace packages/keel-dotnet
+//
+// --sabotage=statement-count quita el interceptor que cuenta las sentencias (statement-count.js) CONSERVANDO la ruta
+// que las sirve: la sonda del coste (FL-PROBE-001-E) tiene que salir en rojo, y solo ella. Medido el 2026-10-19: 3 pasos
+// rojos, la sonda y las dos pasadas siguientes del score (el 2 y el 0), que esperan la matriz en verde y la arrastran.
 //
 // Las pruebas de flujo son SONDAS escritas aquí (los handlers del proyecto recién generado son TODOs): una que pasa,
 // una que falla a propósito, una cuyo flujo no llega a arrancar, una que comprueba el orden de los escenarios y una
@@ -26,6 +30,11 @@ import { resolveRuntime } from '../../keel-nest/scripts/lib/database-container.j
 import { MIGRATIONS_TABLE } from '../src/scaffold/persistence-runtime.js';
 
 const keep = process.argv.includes('--keep');
+const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
+if (sabotage && sabotage !== 'statement-count') {
+  console.error(`Sabotaje desconocido: ${sabotage}. El único es statement-count.`);
+  process.exit(2);
+}
 const isWindows = process.platform === 'win32';
 const results = [];
 
@@ -71,6 +80,46 @@ const generated = await runCommand(workspace, build, `specs/${DOTNET_READY_DESIG
 const projectDir = path.join(workspace, 'services', `${DOTNET_READY_DESIGN.name}-dotnet`);
 if (!step('build genera el proyecto', generated.exitCode === undefined && fs.existsSync(projectDir), generated.exitCode ? generated.output : '')) {
   process.exit(1);
+}
+// La cuenta de sentencias necesita una petición que llegue a la base, y build deja los handlers en TODO: el listado se
+// escribe aquí como lo escribiría el agente (es su archivo).
+fs.writeFileSync(
+  path.join(projectDir, 'src', 'ProductCatalog.Application', 'UseCases', 'ListProductsQueryHandler.cs'),
+  `namespace ProductCatalog.Application.UseCases;
+
+using ProductCatalog.Application.Abstractions;
+using ProductCatalog.Application.Dtos;
+using ProductCatalog.Application.Mappers;
+using ProductCatalog.Application.Queries;
+using ProductCatalog.Domain.Repository;
+
+public sealed class ListProductsQueryHandler(ProductApplicationMapper productApplicationMapper, IProductRepository productRepository) : IQueryHandler<ListProductsQuery, PagedResponse<ListProductsResponseDto>>
+{
+    public async Task<PagedResponse<ListProductsResponseDto>> Handle(ListProductsQuery query, CancellationToken cancellationToken)
+    {
+        var page = await productRepository.List(query.Pageable, cancellationToken);
+        return new PagedResponse<ListProductsResponseDto>
+        {
+            Items = [.. page.Items.Select(productApplicationMapper.ToListProductsResponseDto)],
+            Page = page.Number,
+            Size = page.Size,
+            TotalElements = page.TotalElements,
+            TotalPages = page.TotalPages,
+        };
+    }
+}
+`
+);
+if (sabotage === 'statement-count') {
+  const registration = path.join(projectDir, 'src', 'ProductCatalog.Infrastructure', 'Persistence', 'PersistenceRegistration.cs');
+  const text = fs.readFileSync(registration, 'utf8');
+  const wired = 'options.AddInterceptors(new StatementCountInterceptor());';
+  if (!text.includes(wired)) {
+    console.error('El sabotaje statement-count no se aplica a lo emitido hoy (¿cambió el registro del interceptor?).');
+    process.exit(2);
+  }
+  fs.writeFileSync(registration, text.replace(wired, '_ = options;'));
+  console.log('(sabotaje: statement-count)');
 }
 const compiled = dotnet(projectDir, ['build', 'ProductCatalog.slnx', '-c', 'Debug']);
 if (!step('la solución compila (con el proyecto de flujos)', compiled.ok, compiled.ok ? '' : compiled.output.slice(-1500))) process.exit(1);
@@ -181,6 +230,26 @@ public sealed class ProbeOkFlow : FlowTest
         Assert.ThrowsAny<Exception>(() => AssertJson("""{"motivo":"sin respuesta del almacén","importe":2.5}""", literal));
     }
 
+    // El coste de una petición (statement-count.js): la cuenta la lleva el SERVIDOR, que es otro proceso, y el arnés la
+    // lee por HTTP. Se mide la segunda ejecución, y la página grande no cuesta más que la pequeña.
+    [Scenario("FL-PROBE-001-E: el servidor cuenta las sentencias de una petición y leer la cuenta no cuenta")]
+    public async Task ElCosteSeCuenta()
+    {
+        var route = $"{RouteBase}/products";
+        var warm = await Get(route + "?size=2");
+        Assert.True(warm.Status == 200, warm.ToString());
+        var before = await QueryCount();
+        var reads = await QueryExecutions();
+        Assert.Equal(before, await QueryCount());
+        Assert.True((await Get(route + "?size=2")).Status == 200);
+        var small = await QueryCount() - before;
+        Assert.True(small > 0, "un listado que lee la base no sumó ninguna sentencia");
+        Assert.True(await QueryExecutions() - reads > 0, "las lecturas del listado no cuentan como lecturas");
+        before = await QueryCount();
+        Assert.True((await Get(route + "?size=100")).Status == 200);
+        Assert.True(await QueryCount() - before <= small, "la página grande cuesta más que la pequeña");
+    }
+
     // Un id que el documento no declara: sale AJENO y no puntúa (keel-core/gen/junit-scoring).
     [Scenario("FL-PROBE-099-A: un caso fuera del documento")]
     public void FueraDelDocumento() => Assert.True(true);
@@ -261,11 +330,12 @@ public sealed class ProbeOrderFlow : FlowTest
   const lines = run1.output;
   const has = (pattern) => pattern.test(lines);
   step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/) && has(/OK\s+FL-PROBE-001-D/), has(/OK\s+FL-PROBE-001-D/) ? '' : lines.slice(-2500));
+  step('score: el coste de una petición se cuenta en el servidor (FL-PROBE-001-E)', has(/OK\s+FL-PROBE-001-E/), has(/FL-PROBE-001-E/) ? '' : 'sin fila FL-PROBE-001-E');
   step('score: los escenarios de un flujo corren en el orden escrito', has(/OK\s+FL-PROBE-005-B/), has(/FL-PROBE-005-B/) ? '' : 'sin fila FL-PROBE-005-B');
   step('score: el que falla sale FALLO con la ruta de su evidencia', has(/FALLO\s+FL-PROBE-002-A\s+ProbeFailFlow\s+build\/keel-failures\/FL-PROBE-002-A\.json/));
   step('score: el flujo que no arranca deja sus casos OMITIDOS', has(/OMITIDO\s+FL-PROBE-003-A/), has(/OMITIDO/) ? '' : 'sin fila OMITIDO');
   step('score: y lo nombra como arnés roto, con su causa', has(/ARNÉS/) && has(/ProbeInitFlow\s+\(arranque del flujo\)/) && has(/keel_tabla_que_no_existe/));
-  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && has(/RESULTADO: KO — 7 OK/));
+  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && new RegExp(`RESULTADO: KO — ${sabotage ? 7 : 8} OK`).test(lines));
   step('score: un flujo del documento sin prueba sale NO_EJERC', has(/NO_EJERC\s+FL-PROBE-004/) && !has(/NO_EJERC\s+FL-PROBE-00[1235]/));
   step('score: con algo que arbitrar sale con 1', run1.status === 1, `código ${run1.status}`);
   let report = null;

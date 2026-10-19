@@ -14,6 +14,7 @@ import { programTelemetry } from './telemetry.js';
 import { wireNamespace } from './wire.js';
 import { restNamespace, usesApi } from './rest-support.js';
 import { usesRelational, usesPersistence } from './persistence.js';
+import { usesStatementCount } from './statement-count.js';
 import { usesIdempotencyHeader } from './request-idempotency.js';
 import { securityNamespace, usesHttpSecurity } from './security.js';
 import { messagingNamespace, usesMessaging } from './messaging.js';
@@ -136,7 +137,9 @@ builder.Services.AddScheduling(configuration);`
   // La seguridad, detrás de la correlación y de los errores (el 401 lleva su correlationId; un proveedor caído es el 500
   // del contrato) y delante de los endpoints: decide también sobre un camino que no existe, como Spring Security.
   const securityMiddleware = api && usesHttpSecurity(model) ? '\napp.UseMiddleware<HttpSecurityMiddleware>();' : '';
-  const pipeline = observing.pipeline + (api ? `\napp.UseMiddleware<CorrelationMiddleware>();\napp.UseMiddleware<ApiErrorMiddleware>();${idempotency}${securityMiddleware}` : '');
+  // El coste de las peticiones (StatementCount), delante de todo lo de la entrada: solo con el arnés de flujos.
+  const statements = usesStatementCount(model) ? '\nif (StatementCount.Enabled)\n{\n    app.UseMiddleware<StatementCountMiddleware>();\n}' : '';
+  const pipeline = observing.pipeline + (api ? `${statements}\napp.UseMiddleware<CorrelationMiddleware>();\napp.UseMiddleware<ApiErrorMiddleware>();${idempotency}${securityMiddleware}` : '');
   // Las rutas del diseño: un solo mapa (ApiRoutes, generado).
   const routes = api ? '\napp.MapApiRoutes();' : '';
   return `${[...new Set(usings)].map((using) => `using ${using};`).join('\n')}

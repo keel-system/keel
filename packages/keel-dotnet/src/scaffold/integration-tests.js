@@ -41,6 +41,7 @@ import { httpStubFile, idLiteralMember, reconciliationAgingMembers, usesHttpStub
 import { usesLastKnown } from './http-clients.js';
 import { mailHarnessFile, mailSmokeCase } from './mail-harness.js';
 import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
+import { statementCountHarnessSection, statementCountLaunch, statementCountMembers, statementCountSmokeCase } from './statement-count.js';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
 export const SCORE_SCENARIOS_SH = 'infra/score-scenarios.sh';
@@ -155,6 +156,8 @@ function flowTestCs(model) {
   helpers.push(...cacheHarnessMembers(model));
   // Con storage, la subida y la palanca del almacén caído.
   helpers.push(...storageFlowMembers(model));
+  // Con API y persistencia relacional, el coste de una petición (statement-count.js).
+  helpers.push(...statementCountMembers(model));
   return csFile({
     namespace: supportNamespace(model),
     usings: ['System.Collections.Concurrent', 'Xunit'],
@@ -477,7 +480,7 @@ internal static class FlowServer
         start.Environment["PROFILE"] = Environment.GetEnvironmentVariable("PROFILE") ?? "local";
         start.Environment["SERVER_PORT"] = port.ToString(System.Globalization.CultureInfo.InvariantCulture);
         start.Environment["SERVER_ADDRESS"] = "127.0.0.1";
-        start.Environment["DOTNET_NOLOGO"] = "1";
+        start.Environment["DOTNET_NOLOGO"] = "1";${statementCountLaunch(model)}
         var launched = new Process { StartInfo = start };
         launched.OutputDataReceived += (_, line) => write(line.Data);
         launched.ErrorDataReceived += (_, line) => write(line.Data);
@@ -864,6 +867,8 @@ function harnessCs(model) {
     /// <summary>La sentencia viaja como UN argumento más, nunca armada para un shell.</summary>
     public static string Db(string sql) => Run(ContainerRuntime(), ["exec", DbContainer, .. DbQueryArguments, sql], "¿Está la base arriba (bash infra/up.sh)?");`);
   }
+  const statements = statementCountHarnessSection(model);
+  if (statements) sections.push(statements);
   const mongo = documentProbe(model);
   if (mongo) {
     sections.push(String.raw`    private const string DbContainer = ${csString(mongo.container)};
@@ -1219,7 +1224,9 @@ ${headers}
   if (mailbox) cases.push(mailbox);
   const messaging = messagingSmokeCase(model);
   if (messaging) cases.push(messaging);
-  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null, stub ? 'proveedor de prueba' : null, mailbox ? 'buzón de prueba' : null, messaging ? 'broker' : null].filter(Boolean);
+  const statements = statementCountSmokeCase(model);
+  if (statements) cases.push(statements);
+  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null, stub ? 'proveedor de prueba' : null, mailbox ? 'buzón de prueba' : null, messaging ? 'broker' : null, statements ? 'cuenta de sentencias' : null].filter(Boolean);
   return csFile({
     namespace: solution(model).integrationTests.name,
     header: `// Humo del arnés: la fontanería de la que dependen TODOS los flujos (servidor vivo${plumbing.length > 0 ? `, ${plumbing.join(', ')}` : ''}).

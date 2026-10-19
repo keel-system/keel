@@ -30,6 +30,7 @@ import { configNamespace } from './config.js';
 import { usesRelational, dbContextClass, persistedEntities } from './persistence.js';
 import { repositoryRoots, portClass, adapterClass, repositoriesNamespace } from './repositories.js';
 import { AFTER_COMMIT_REGISTRATION } from './after-commit.js';
+import { usesStatementCount } from './statement-count.js';
 
 /** El historial de migraciones con nombre propio: infra/reset-db.sh lo respeta por nombre. */
 export const MIGRATIONS_TABLE = 'ef_migrations_history';
@@ -655,7 +656,16 @@ ${repositories.join('\n')}
             npgsql => npgsql
                 // Las colecciones del agregado en consultas aparte: con un JOIN, cada hija multiplicaría las filas.
                 .UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)
-                .MigrationsHistoryTable(${csString(MIGRATIONS_TABLE)}));
+                .MigrationsHistoryTable(${csString(MIGRATIONS_TABLE)}));${
+                  usesStatementCount(model)
+                    ? `
+        // El coste de las peticiones para los Then que lo afirman: solo cuando lo enciende el arnés de flujos.
+        if (StatementCount.Enabled)
+        {
+            options.AddInterceptors(new StatementCountInterceptor());
+        }`
+                    : ''
+                }
     }
 
     /// <summary>El perfil sin base de datos: abrir una conexión es un error que lo dice.</summary>

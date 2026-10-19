@@ -32,6 +32,7 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Un flujo 
 | `AssertJson(esperado, response)` | el cuerpo entero contra el JSON esperado, **estricto** (ni una clave de más ni de menos, números por su texto, listas en orden), con los comodines `"<uuid>"`, `"<instant>"` y `"<any>"` para lo que genera el servidor |
 | `RouteBase` | el prefijo de todas las rutas (basePath + versión) |
 | `Db(sql)` | una sentencia contra la base de prueba (solo con persistencia): para lo que no se ve por HTTP |
+| `await QueryCount()` / `await QueryExecutions()` | las sentencias SQL que han emitido las peticiones HTTP, contadas por el propio servidor (solo con API y persistencia relacional): para los `Then` de **coste**. `QueryCount()` cuenta lecturas y escrituras; `QueryExecutions()`, solo lecturas, y es la que va cuando el When **escribe**. El relay, las purgas y los barridos no cuentan: corren fuera de una petición. Ver § Afirmar el coste |
 | `ResetState()` | el reset, a mano (la base ya lo hace al empezar cada flujo) |
 | `Eventually(cond, plazo?, mensaje?)` | espera a que algo asíncrono se cumpla |
 | `BaseUrl` | la URL del servidor arrancado, por si un escenario necesita construir una a mano |
@@ -61,6 +62,36 @@ Una cabecera va en el diccionario del último argumento (`Post(ruta, cuerpo, new
 y dos peticiones **a la vez** se lanzan sin esperar a la primera y se esperan juntas
 (`var responses = await Task.WhenAll(Post(…), Post(…));`): es la única forma de escribir un escenario de carrera, como
 el de dos altas con la misma clave de idempotencia.
+
+## Afirmar el coste
+
+Un `Then` que dice que el trabajo de una operación «no crece con el tamaño de la página» (o de la lista
+del lote) **no es un `uncovered`**, aunque no se vea en la respuesta: se escribe con `QueryCount()` —o
+`QueryExecutions()` si el When escribe— midiendo **dos tamaños muy distintos** y comparando el **salto**,
+nunca contra un número:
+
+```csharp
+[Scenario("FL-SHP-001-K: el coste no crece con la página")]
+public async Task ElCosteNoCreceConLaPagina()
+{
+    await Get($"{RouteBase}/products?size=2");          // calienta: se mide la segunda ejecución
+    var before = await QueryCount();
+    await Get($"{RouteBase}/products?size=2");
+    var small = await QueryCount() - before;
+    before = await QueryCount();
+    await Get($"{RouteBase}/products?size=100");
+    Assert.True(await QueryCount() - before <= small, "el coste crece con la página");
+}
+```
+
+Tres reglas, las mismas que en keel-spring y keel-nest: **se compara la forma** —la grande no cuesta más
+que la pequeña—, nunca contra un número escrito («cuesta 4» se rompe con un índice o una versión de EF Core
+y acaba subiéndose sin mirar); **la petición medida es la única del intervalo** (nada en paralelo; lo de
+segundo plano ya no cuenta, y leer la cuenta tampoco); y **se mide la segunda ejecución**. La cuenta es
+exacta: un comando por viaje al motor (un `SaveChanges` agrupado es uno), sin el control de la transacción.
+Para que el salto signifique algo, el `Given` tiene que dejar más elementos que el tamaño pequeño. El N+1
+de RED —una llamada saliente por elemento— no lo cuenta `QueryCount()`: se mide con `StubCallCount`, con el
+mismo criterio.
 
 ## Una prueba por flujo
 
