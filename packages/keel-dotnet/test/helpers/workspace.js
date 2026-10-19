@@ -154,3 +154,89 @@ export async function planFixture(name, { mutate = null, stack = null } = {}) {
   if (mutate) mutate(manifest, layers);
   return planService({ manifest, layers, workspace: FIXTURES_DIR, stack });
 }
+
+// Las variantes derivadas en memoria de una fixture real, para lo que ninguna declara: las compila cs-check y las parsea
+// cs-syntax.test.js, las dos sobre esta lista. Cada una cambia el
+// nombre del servicio, que es el namespace raíz: dos variantes de la misma fixture no pueden chocar.
+export const CS_VARIANTS = [
+  // La mensajería sobre KAFKA (incremento 9f) y sobre SNS/SQS (9g): las fixtures con mensajería compilan sobre RabbitMQ;
+  // estas dos, con outbox y best-effort, compilan además la conexión, el consumo y el arnés de cada uno.
+  ...['kafka', 'snssqs'].flatMap((broker) =>
+    ['stock-reservation-events', 'metering-digest'].map((from) => ({
+      name: `${from}-${broker}`,
+      from,
+      broker,
+      mutate: (manifest, layers, name) => {
+        manifest.service.name = name;
+      }
+    }))
+  ),
+  {
+    name: 'inspection-reports-reject',
+    from: 'inspection-reports',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+      layers.domain.types.GeoPoint.fields.latitude.constraints.scalePolicy = 'reject';
+    }
+  },
+  {
+    // El decimal ESCALAR de una entrada con `scalePolicy: round` se redondea en el propio mensaje
+    // (`init => field = ...`, C# 14). Ninguna fixture lo declara: las dos ramas, la obligatoria y la opcional.
+    // La pasarela de pago con MERCADOPAGO (incremento 13): payment-checkout compila con Stripe, el default del stack.
+    name: 'payment-checkout-mp',
+    from: 'payment-checkout',
+    paymentGateway: 'mercadopago',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+    }
+  },
+  {
+    // El dato bajo demanda con `onUnavailable: fail` (incremento 13i): ninguna fixture lo declara (asset-vault degrada).
+    // Con el renderizador caído, getAsset falla con su error: lo EJECUTA la prueba emitida del adaptador.
+    name: 'asset-vault-need-fail',
+    from: 'asset-vault',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+      layers['use-cases'].operations.getAsset.errors = [
+        ...(layers['use-cases'].operations.getAsset.errors ?? []),
+        { code: 'RENDERING_UNAVAILABLE', when: 'El renderizador no responde y la ficha no puede salir sin su miniatura.', http: 503 }
+      ];
+      layers.dependencies.dependencies.rendering.needs.thumbnail.onUnavailable = { action: 'fail', error: 'RENDERING_UNAVAILABLE' };
+    }
+  },
+  // La telemetría (incremento 14c): las siluetas que mide keel-nest con ella, cada una con su prueba emitida TelemetryTests.
+  ...['product-catalog', 'stock-reservation', 'catalog-extended', 'asset-vault', 'notification-mailer', 'notification-mailer-mongo'].map((from) => ({
+    name: `${from}-otel`,
+    from,
+    telemetry: 'otel',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+    }
+  })),
+  // Las ramas del DSL que ninguna fixture declara (incremento 16): los MISMOS parches que recorre
+  // test/uncovered-branches.test.js, aquí compilados y con sus pruebas emitidas.
+  ...UNCOVERED_BRANCHES,
+  {
+    name: 'payment-checkout-round',
+    from: 'payment-checkout',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+      for (const operation of ['requestCharge', 'refundPayment']) {
+        layers['use-cases'].operations[operation].input.fields.amount.constraints.scalePolicy = 'round';
+      }
+    }
+  }
+];
+
+/**
+ * El stack con el que se genera una fixture o una variante: con mensajería, RabbitMQ (el default del stack es Kafka); con
+ * pagos, Stripe salvo que la variante diga otra pasarela (sin una, la capa no se emite); y la telemetría que pida la variante.
+ */
+export function variantStack(layers, { broker = null, paymentGateway = null, telemetry = null } = {}) {
+  const stack = {
+    ...(layers.messaging ? { broker: broker ?? 'rabbitmq' } : {}),
+    ...(layers.payments ? { paymentGateway: paymentGateway ?? 'stripe' } : {}),
+    ...(telemetry ? { telemetry } : {})
+  };
+  return Object.keys(stack).length > 0 ? stack : null;
+}

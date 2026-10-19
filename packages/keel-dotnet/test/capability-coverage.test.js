@@ -16,7 +16,7 @@ import { loadService } from 'keel-core';
 import { checkGatewaySupport } from 'keel-core/gen/payment-gateways';
 import { walk, uncovered as uncoveredIn } from '../../keel-core/test/helpers/capability-coverage.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
-import { FIXTURES_DIR, UNCOVERED_BRANCHES, fixtureNames } from './helpers/workspace.js';
+import { CS_VARIANTS, FIXTURES_DIR, UNCOVERED_BRANCHES, fixtureNames } from './helpers/workspace.js';
 
 const MOTIVOS = {
   // keel-dotnet no la lee, o solo la vuelca en un comentario: declararla no cambia ninguna rama de lo emitido.
@@ -116,7 +116,9 @@ test('cada excepción declara un motivo de la tabla y lo explica', () => {
 test('un soloCadenas nombra su parche, el test lo recorre y cs-check lo compila', () => {
   const tests = fs.readFileSync(new URL('./uncovered-branches.test.js', import.meta.url), 'utf8');
   const csCheck = fs.readFileSync(new URL('../scripts/cs-check.js', import.meta.url), 'utf8');
-  assert.match(csCheck, /\.\.\.UNCOVERED_BRANCHES/, 'cs-check no compila los parches de UNCOVERED_BRANCHES');
+  // cs-check compila CS_VARIANTS (la lista que comparte con cs-syntax), y esa lista lleva todos los parches.
+  assert.match(csCheck, /const DERIVED = CS_VARIANTS;/, 'cs-check no compila las variantes de CS_VARIANTS');
+  for (const branch of UNCOVERED_BRANCHES) assert.ok(CS_VARIANTS.includes(branch), `CS_VARIANTS no lleva el parche ${branch.name}`);
   for (const [dataPath, fila] of EXCEPCIONES) {
     if (fila.motivo !== MOTIVOS.soloCadenas) continue;
     const branch = UNCOVERED_BRANCHES.find((candidate) => fila.porque.includes(candidate.name));

@@ -264,7 +264,8 @@ ${cache ? CACHED_RETURNING_HANDLED : PLAIN_RETURNING_HANDLED}
     {
         ArgumentNullException.ThrowIfNull(message);
         var type = message.GetType();
-        return (T)Wrappers.GetOrAdd(type, _ => Activator.CreateInstance(open.MakeGenericType(result is null ? [type] : [type, result]))!);
+        // new Type[] y no una expresión de colección: como rama de un ?: no la entiende tree-sitter-c-sharp (cs-syntax).
+        return (T)Wrappers.GetOrAdd(type, _ => Activator.CreateInstance(open.MakeGenericType(result is null ? new Type[] { type } : new Type[] { type, result }))!);
     }
 
     private async Task Run(IMessage message, Func<Task> work) =>

@@ -36,7 +36,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
-import { makeWorkspace, mountDesign, runCommand, DOTNET_READY_DESIGN, FIXTURES_DIR, UNCOVERED_BRANCHES } from '../test/helpers/workspace.js';
+import { makeWorkspace, mountDesign, runCommand, variantStack, CS_VARIANTS, DOTNET_READY_DESIGN, FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { planService } from '../src/scaffold/index.js';
 import { solution } from '../src/scaffold/render.js';
 import { build } from '../src/commands/build.js';
@@ -175,77 +175,9 @@ const PROBES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'prob
 // El dominio (DomainProbes) y la lectura de peticiones de la API (RestProbes).
 const PROBES = ['DomainProbes', 'RestProbes'];
 
-// Variantes derivadas en memoria de una fixture real, para lo que ninguna declara. Cada una cambia el
-// nombre del servicio, que es el namespace raíz: dos variantes de la misma fixture no pueden chocar.
-const DERIVED = [
-  // La mensajería sobre KAFKA (incremento 9f) y sobre SNS/SQS (9g): las fixtures con mensajería compilan sobre RabbitMQ;
-  // estas dos, con outbox y best-effort, compilan además la conexión, el consumo y el arnés de cada uno.
-  ...['kafka', 'snssqs'].flatMap((broker) =>
-    ['stock-reservation-events', 'metering-digest'].map((from) => ({
-      name: `${from}-${broker}`,
-      from,
-      broker,
-      mutate: (manifest, layers, name) => {
-        manifest.service.name = name;
-      }
-    }))
-  ),
-  {
-    name: 'inspection-reports-reject',
-    from: 'inspection-reports',
-    mutate: (manifest, layers, name) => {
-      manifest.service.name = name;
-      layers.domain.types.GeoPoint.fields.latitude.constraints.scalePolicy = 'reject';
-    }
-  },
-  {
-    // El decimal ESCALAR de una entrada con `scalePolicy: round` se redondea en el propio mensaje
-    // (`init => field = ...`, C# 14). Ninguna fixture lo declara: las dos ramas, la obligatoria y la opcional.
-    // La pasarela de pago con MERCADOPAGO (incremento 13): payment-checkout compila con Stripe, el default del stack.
-    name: 'payment-checkout-mp',
-    from: 'payment-checkout',
-    paymentGateway: 'mercadopago',
-    mutate: (manifest, layers, name) => {
-      manifest.service.name = name;
-    }
-  },
-  {
-    // El dato bajo demanda con `onUnavailable: fail` (incremento 13i): ninguna fixture lo declara (asset-vault degrada).
-    // Con el renderizador caído, getAsset falla con su error: lo EJECUTA la prueba emitida del adaptador.
-    name: 'asset-vault-need-fail',
-    from: 'asset-vault',
-    mutate: (manifest, layers, name) => {
-      manifest.service.name = name;
-      layers['use-cases'].operations.getAsset.errors = [
-        ...(layers['use-cases'].operations.getAsset.errors ?? []),
-        { code: 'RENDERING_UNAVAILABLE', when: 'El renderizador no responde y la ficha no puede salir sin su miniatura.', http: 503 }
-      ];
-      layers.dependencies.dependencies.rendering.needs.thumbnail.onUnavailable = { action: 'fail', error: 'RENDERING_UNAVAILABLE' };
-    }
-  },
-  // La telemetría (incremento 14c): las siluetas que mide keel-nest con ella, cada una con su prueba emitida TelemetryTests.
-  ...['product-catalog', 'stock-reservation', 'catalog-extended', 'asset-vault', 'notification-mailer', 'notification-mailer-mongo'].map((from) => ({
-    name: `${from}-otel`,
-    from,
-    telemetry: 'otel',
-    mutate: (manifest, layers, name) => {
-      manifest.service.name = name;
-    }
-  })),
-  // Las ramas del DSL que ninguna fixture declara (incremento 16): los MISMOS parches que recorre
-  // test/uncovered-branches.test.js, aquí compilados y con sus pruebas emitidas.
-  ...UNCOVERED_BRANCHES,
-  {
-    name: 'payment-checkout-round',
-    from: 'payment-checkout',
-    mutate: (manifest, layers, name) => {
-      manifest.service.name = name;
-      for (const operation of ['requestCharge', 'refundPayment']) {
-        layers['use-cases'].operations[operation].input.fields.amount.constraints.scalePolicy = 'round';
-      }
-    }
-  }
-];
+// Las variantes derivadas en memoria (CS_VARIANTS): viven en test/helpers/workspace.js porque las recorre también la red
+// sin SDK, test/cs-syntax.test.js, y una sola lista es lo que impide que las dos redes miren cosas distintas.
+const DERIVED = CS_VARIANTS;
 const isWindows = process.platform === 'win32';
 const results = [];
 
@@ -521,14 +453,8 @@ function compileAllFixtures() {
   for (const { name, from, mutate, broker, paymentGateway, telemetry } of designs) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     if (mutate) mutate(manifest, layers, name);
-    // Con mensajería, sobre RabbitMQ: es el broker que la frontera admite (el default del stack es Kafka). Con pagos, sobre
-    // Stripe salvo que la variante diga otra pasarela: sin una, el stack no la elige y la capa no se emite.
-    const stack = {
-      ...(layers.messaging ? { broker: broker ?? 'rabbitmq' } : {}),
-      ...(layers.payments ? { paymentGateway: paymentGateway ?? 'stripe' } : {}),
-      ...(telemetry ? { telemetry } : {})
-    };
-    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: Object.keys(stack).length > 0 ? stack : null });
+    // El stack de cada una, con sus defaults (RabbitMQ, Stripe): variantStack de test/helpers/workspace.js.
+    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: variantStack(layers, { broker, paymentGateway, telemetry }) });
     for (const file of files) {
       const target = path.join(root, name, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });

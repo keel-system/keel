@@ -76,7 +76,8 @@ todo lo que NuGet resuelve, transitivos incluidos.
 ## Desarrollo
 
 ```bash
-npm test --workspace packages/keel-dotnet       # sin SDK: el texto emitido, la proyección, la frontera, la paridad con keel-spring y keel-nest
+npm test --workspace packages/keel-dotnet       # sin SDK: el texto emitido, la proyección, la frontera, la paridad con keel-spring y keel-nest,
+                                                 # y cs-syntax: la sintaxis y los using del C# de todas las fixtures y variantes (tree-sitter)
 npm run cs-check --workspace packages/keel-dotnet  # con el SDK 10 y red: restaura, compila, prueba, licencias y arranque, y la solución de TODAS las fixtures
 npm run cs-check --workspace packages/keel-dotnet -- --fixtures  # solo la solución de todas las fixtures y las sondas del dominio
 npm run cs-check --workspace packages/keel-dotnet -- --sabotage=decimal-scale  # falsa la prueba emitida: tiene que salir rojo

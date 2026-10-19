@@ -1703,6 +1703,7 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     la tiene (`productionParameters` de su `readme.js`, con las descripciones a mano); keel-nest tampoco. Es parte del
     `deploy/` del 14, y candidata a salir al catálogo neutral `runtime-env` con su descripción.
   - **Sigue abierto**: la red sin SDK `cs-syntax` (4c), sin decidir. Hoy la sintaxis de C# solo la juzga `cs-check`.
+    (Hecho después, en el 16h.)
   - **Las tres celdas sin ejecutar, cerradas (2026-10-18).** Sondas nuevas y sus sabotajes, cada uno medido rojo en sus
     sondas y solo en ellas:
     - **`transient-write-conflict/relational`**, en `db-check` y en los 12 sujetos: dos ámbitos con su
@@ -2003,6 +2004,16 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
   - **16f, el cierre de la documentación (hecho, 2026-10-19)**, lo que el §7 asigna al 16:
     - el `README.md` raíz y el de keel-dotnet ya no lo dan por «en construcción»;
     - el detalle de `CLAUDE.md` se mueve a `.claude/rules/dotnet-generador.md` (clave `dotnet`), como el de keel-nest.
+  - **16h, la red sin SDK `cs-syntax` (el 4c, hecho, 2026-10-19).** `test/cs-syntax.test.js` con `web-tree-sitter` 0.27.0 y
+    `tree-sitter-c-sharp` 0.23.5 (MIT, de desarrollo y fijadas; la gramática trae su `.wasm` y prebuilds, así que no compila
+    nada nativo) sobre las 15 fixtures y las 19 variantes de `cs-check`. Comprueba la sintaxis y que todo `using` del propio
+    servicio lleve a un namespace emitido (`test/helpers/cs-tree.js`), en unos 5 s.
+    - La lista de variantes pasa de `cs-check.js` a `test/helpers/workspace.js` (`CS_VARIANTS` y `variantStack`), así que
+      las dos redes miran el mismo conjunto.
+    - La duda del §5 queda resuelta: de 2163 archivos solo fallaba una línea, la del mediator
+      (`result is null ? [type] : [type, result]`), que la gramática no lee. Se emite con `new Type[] { … }`.
+    - Falsado: con la expresión de colección otra vez caen las 34 pruebas de diseños, y con un `using` roto en el emisor
+      documental caen exactamente los 8 diseños documentales, con su ruta y su línea.
   - **16g, `broker-check` tras el apagado del 14b (hecho, 2026-10-19).** 67/67 contra RabbitMQ, Kafka y LocalStack
     reales, con sus dos sabotajes por broker cayendo en su flujo y solo en él. Con esto se mide lo que el 14 dejó «sin
     medir aquí»: Kafka y SNS/SQS después del arreglo del apagado.
@@ -2020,7 +2031,8 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
 - **El circuito de Polly** no tiene la semántica de resilience4j, así que va máquina propia.
 - **401 frente a 404** antes de enrutar: depende de la política de reserva. Se mide en el inc. 8.
 - **Sintaxis sin SDK.** Si `tree-sitter-c-sharp` se queda corto en C# 14, la red estricta pasa a
-  `cs-check`.
+  `cs-check`. **Resuelto en el 16h**: entiende el C# 12-14 que se emite; lo único que no leía (una expresión de colección
+  como rama de un `?:`) se emite con `new Type[] { … }`.
 - **SIGTERM en Windows** no ejecuta los hooks, igual que en keel-nest. Lo cubre la prueba emitida
   del drenaje.
 

@@ -185,6 +185,11 @@ al arnés de `tests/`) y el predicado se compara con `partialIndexSpecs` de keel
 
 ## Redes y trampas medidas
 
+Sin SDK, `test/cs-syntax.test.js` (tree-sitter-c-sharp en WebAssembly, `test/helpers/cs-tree.js`) parsea el C# de todas
+las fixtures y de las variantes de `CS_VARIANTS` (`test/helpers/workspace.js`, la MISMA lista que compila `cs-check`) y
+exige que todo `using` del propio servicio lleve a un namespace emitido; se autocomprueba con C# roto. La gramática no lee
+una expresión de colección como rama de un `?:`: se emite `new Type[] { … }`.
+
 `npm run cs-check --workspace packages/keel-dotnet` (SDK 10, red y podman/docker, minutos) es la red que juzga lo emitido:
 genera, restaura, compila sin warnings, prueba, comprueba licencias, genera el baseline con `dotnet ef` y ARRANCA el
 proyecto. Las redes en vivo por mecanismo están en `CLAUDE.md` § Comandos.
