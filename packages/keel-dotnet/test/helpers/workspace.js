@@ -121,6 +121,23 @@ export const UNCOVERED_BRANCHES = [
       };
     }
   },
+  // `optimisticLocking: declared`: la raíz porta el bloqueo en el `lockVersion` que declara su dominio, en los dos
+  // modelos. Declarado `int`, el dominio salía sin null y el `expected is null` del Save no compilaba (corrida
+  // catalog-dotnet del registry, 2026-10-19).
+  // Nombres cortos: la ruta de la variante dentro de cs-check pasa de 260 y Roslyn no deja la DLL (MSB3030).
+  ...[
+    { name: 'product-catalog-declared-lock', from: 'product-catalog', root: 'Product' },
+    { name: 'mailer-mongo-lock', from: 'notification-mailer-mongo', root: 'Template' }
+  ].map(({ name, from, root }) => ({
+    name,
+    from,
+    root,
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      layers.persistence.consistency = { ...(layers.persistence.consistency ?? {}), optimisticLocking: 'declared' };
+      layers.domain.entities[root].fields.lockVersion = { type: 'int', generated: true };
+    }
+  })),
   {
     // La captura PARCIAL: payment-checkout captura siempre entero porque MercadoPago no la cubre; sobre Stripe sí.
     name: 'payment-checkout-partial-capture',

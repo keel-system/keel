@@ -59,7 +59,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { planFixture, makeWorkspace, FIXTURES_DIR } from '../test/helpers/workspace.js';
+import { planFixture, makeWorkspace, FIXTURES_DIR, UNCOVERED_BRANCHES } from '../test/helpers/workspace.js';
 import { dotnetSchema } from '../test/helpers/schema.js';
 import { partialIndexSpecs } from 'keel-core/gen';
 import { expectedSchemaNames } from '../src/scaffold/persistence.js';
@@ -147,8 +147,15 @@ const DERIVED = {
       manifest.service.name = 'product-catalog-authorship';
       layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship: 'all' };
     }
-  }
+  },
+  // `optimisticLocking: declared`: el Save con la versión que declara el dominio (el MISMO parche que compila cs-check).
+  ...uncoveredBranch('product-catalog-declared-lock')
 };
+
+function uncoveredBranch(name) {
+  const branch = UNCOVERED_BRANCHES.find((candidate) => candidate.name === name);
+  return { [name]: { from: branch.from, mutate: (manifest, layers) => branch.mutate(manifest, layers, name) } };
+}
 const SUBJECTS = only ? [only] : [...relational, ...Object.keys(DERIVED)];
 
 const runtime = resolveRuntime();

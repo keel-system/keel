@@ -162,6 +162,11 @@ function renderMethod(model, entity, dto, usings, state) {
       return todo(field, `${field.name}: ${entity.name} lo guarda como ${member.type} y el DTO lo pide como ${declType(field)}`);
     }
     if (field.list) return `[.. ${getter}]`;
+    // El lockVersion declarado es null solo antes de la primera escritura, y una respuesta sale de un agregado ya
+    // guardado o leído: sin versión es un handler que mapea antes de guardar, no un dato que decidir.
+    if (member.declaredLock && !declType(field).endsWith('?')) {
+      return `${getter} ?? throw new InvalidOperationException(${csString(`${entity.name}.${field.name} sin valor: la versión la pone la persistencia al guardar, mapea el agregado que devuelve Save`)})`;
+    }
     if (member.type.endsWith('?') && !declType(field).endsWith('?')) {
       return `${getter} ?? ${todo(field, `${field.name} es opcional en ${entity.name} y obligatorio en el DTO: decide qué sale si falta`)}`;
     }

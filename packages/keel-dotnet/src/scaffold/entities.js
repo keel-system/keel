@@ -10,6 +10,7 @@
 //   · TODOs guiados del factory, de los métodos semánticos y de los invariantes.
 // La persistencia vive aparte (incremento 6): el dominio no sabe cómo se guarda.
 
+import { LOCK_VERSION } from 'keel-core/gen';
 import { memberOf } from './enums.js';
 import { csFile, csLocal, csMember, declType, entityPlace, fieldUsings, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 
@@ -23,13 +24,11 @@ export function generate(model) {
  * keel-spring y keel-nest, con el tipo que se declara en C#.
  */
 export function domainMembers(model, entity) {
-  const members = entity.fields.map((field) => ({
-    kind: 'field',
-    field,
-    name: field.name,
-    type: declType(field),
-    element: field.list ? field.elementCsType : null
-  }));
+  const members = entity.fields.map((field) =>
+    isDeclaredLockVersion(entity, field)
+      ? { kind: 'field', field, name: field.name, type: `${field.csType}?`, element: null, declaredLock: true }
+      : { kind: 'field', field, name: field.name, type: declType(field), element: field.list ? field.elementCsType : null }
+  );
   for (const relation of entity.relations ?? []) {
     // La referencia de vuelta a la raíz no es un miembro del dominio: dentro del agregado el contexto ya es
     // la raíz, y modelarla obligaría a recorrer el ciclo hija → padre → hija.
@@ -46,6 +45,15 @@ export function domainMembers(model, entity) {
     }
   }
   return members;
+}
+
+/**
+ * ¿Es el `lockVersion` que el diseño DECLARA para portar el bloqueo optimista (`optimisticLocking: declared`)? Lo lleva
+ * la persistencia igual que el que añade build: null hasta la primera escritura, que es como el adaptador sabe que el
+ * agregado es nuevo. Declarado `int` a secas, el `expected is null` del Save no compilaba (corrida catalog-dotnet).
+ */
+export function isDeclaredLockVersion(entity, field) {
+  return Boolean(entity.declaresLockVersion && entity.usesOptimisticLocking && field?.name === LOCK_VERSION.field);
 }
 
 function renderEntity(model, entity) {
@@ -146,7 +154,9 @@ function backingField(member) {
 
 function memberDoc(member) {
   const description =
-    member.field?.description ?? member.doc ?? (member.kind === 'externalRef' ? `Id de la raíz del agregado ${member.relation.entity} (otro agregado: solo el id).` : null);
+    member.field?.description ??
+    member.doc ??
+    (member.declaredLock ? 'Versión de concurrencia optimista; la gestiona la persistencia. Null hasta la primera escritura.' : null) ?? (member.kind === 'externalRef' ? `Id de la raíz del agregado ${member.relation.entity} (otro agregado: solo el id).` : null);
   return [description, member.field?.computed ? `TODO computed: ${member.field.computed}` : null];
 }
 

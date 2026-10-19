@@ -222,6 +222,10 @@ export function sampleState(model, entity, ctx, salt, depth = 0) {
       // En relacional build no la mapea (TODO del agente); en un documento es un subdocumento: se muestrea si es obligatoria.
       const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
       value = ctx.document && child && depth <= 2 ? (member.relation.required ? `new ${child.name}(${sampleState(model, child, ctx, `${salt}o`, depth + 1)})` : 'null') : 'null!';
+    } else if (member.declaredLock) {
+      // El lockVersion declarado: null hasta la primera escritura, como el que añade build. Con un número, el
+      // adaptador tomaría la muestra por un agregado ya guardado.
+      value = 'null';
     } else if (member.field.list) {
       value = listOf(model, member.field, ctx, salt);
     } else if (member.field.isId) {

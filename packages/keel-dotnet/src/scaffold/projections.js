@@ -71,6 +71,9 @@ function stateAssignments(model, entity, replica, existing) {
       if (existing) assignments.push(`${name} = existing.${name}`);
       else if (member.field.initializer) assignments.push(`${name} = ${member.field.initializer}`);
       else return null;
+    } else if (member.declaredLock) {
+      // El lockVersion declarado es la versión de la persistencia, nunca un dato de la instantánea.
+      assignments.push(`${name} = ${existing ? `existing.${name}` : 'null'}`);
     } else if (member.name === replica.keyField) {
       assignments.push(`${name} = ${existing ? 'existing' : 'snapshot'}.${name}`);
     } else if (projected.has(member.name)) {

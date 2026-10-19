@@ -325,6 +325,10 @@ function saveMethodBody(model, entity) {
   if (policyAuthorship) lines.push('// La autoría de política: updated_by en cada escritura, created_by solo al nacer.', 'fields["updated_by"] = actor;');
   const onInsert = [policyTimestamps ? '{ "created_at", now }' : null, policyAuthorship ? '{ "created_by", actor }' : null].filter(Boolean);
   const column = LOCK_VERSION.column;
+  // El tipo BSON de la versión: el `long` que añade build, o el del `lockVersion` que declara el diseño (un `int` es
+  // Int32 en el contrato del documento, como el @Version Integer de Spring Data).
+  const declaredLock = entity.declaresLockVersion ? entity.fields.find((field) => field.name === LOCK_VERSION.field) : null;
+  const versionBson = declaredLock?.csType === 'int' ? 'BsonInt32' : 'BsonInt64';
   if (versioned) {
     const created = [policyTimestamps ? 'fields["created_at"] = now;' : null, policyAuthorship ? 'fields["created_by"] = actor;' : null].filter(Boolean);
     lines.push(
@@ -333,7 +337,7 @@ function saveMethodBody(model, entity) {
       '{',
       '    // Agregado nuevo: nace con la versión 0, como el @Version de Spring Data al insertar. Un id que ya existe es una',
       '    // violación del _id, que sale como conflicto de integridad.',
-      `    fields[${csString(column)}] = new BsonInt64(0);`,
+      `    fields[${csString(column)}] = new ${versionBson}(0);`,
       ...created.map((line) => `    ${line}`),
       `    await Collection.InsertOneAsync(session, new BsonDocument(${csString(DOCUMENT_ID)}, id).AddRange(fields), cancellationToken: cancellationToken);`,
       '}',
@@ -341,10 +345,10 @@ function saveMethodBody(model, entity) {
       '{',
       '    // La versión va en el FILTRO: si otra escritura la subió (o borró el documento) no casa nada, y reaplicar esta',
       '    // reharía en silencio una intención obsoleta.',
-      `    fields[${csString(column)}] = new BsonInt64(expected.Value + 1);`,
+      `    fields[${csString(column)}] = new ${versionBson}(expected.Value + 1);`,
       '    var updated = await Collection.UpdateOneAsync(',
       '        session,',
-      `        new BsonDocument { { ${csString(DOCUMENT_ID)}, id }, { ${csString(column)}, new BsonInt64(expected.Value) } },`,
+      `        new BsonDocument { { ${csString(DOCUMENT_ID)}, id }, { ${csString(column)}, new ${versionBson}(expected.Value) } },`,
       '        new BsonDocument("$set", fields),',
       '        cancellationToken: cancellationToken);',
       '    if (updated.MatchedCount == 0)',

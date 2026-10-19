@@ -55,7 +55,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { documentIndexes } from 'keel-core/gen/document';
-import { planFixture, makeWorkspace } from '../test/helpers/workspace.js';
+import { planFixture, makeWorkspace, UNCOVERED_BRANCHES } from '../test/helpers/workspace.js';
 import { docProbeProject, documentDatabaseOf } from './lib/doc-probes.js';
 import { resolveRuntime, startMongo, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
@@ -83,7 +83,13 @@ const SUBJECTS = [
       manifest.service.name = 'job-dispatch-mongo-compare';
       layers.domain.entities.Job.fields.reference.compare = 'ignore-case-accents';
     }
-  }
+  },
+  // `optimisticLocking: declared` sobre documentos: la versión que declara el dominio (el MISMO parche que compila cs-check).
+  ...UNCOVERED_BRANCHES.filter((branch) => branch.name === 'mailer-mongo-lock').map((branch) => ({
+    name: branch.name,
+    from: branch.from,
+    mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name)
+  }))
 ].filter((subject) => !only || subject.name === only);
 
 // Los sabotajes: [archivo (sufijo, en todos los sujetos), texto, sustituto].

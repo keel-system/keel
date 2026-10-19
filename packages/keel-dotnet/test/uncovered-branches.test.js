@@ -68,6 +68,30 @@ test('stock-reservation: un compuesto en la respuesta se lee con el lector de la
   assert.ok(tests.content.includes('QueNoSeConstruyeViolaElContrato'));
 });
 
+for (const name of ['product-catalog-declared-lock', 'mailer-mongo-lock']) {
+  test(`${name}: el lockVersion declarado es nullable en el dominio, como el que añade build (optimisticLocking: declared)`, async () => {
+    const { root } = branch(name);
+    const files = await emitted(name);
+    const aggregate = files.find((file) => file.path.endsWith(`Aggregate/${root}.cs`));
+    assert.ok(aggregate, `no se emitió el agregado ${root}`);
+    assert.match(aggregate.content, /public required int\? LockVersion \{ get; init; \}/, 'el estado lleva el lockVersion sin null');
+    assert.match(aggregate.content, /public int\? LockVersion \{ get; private set; \}/, 'el agregado lleva el lockVersion sin null');
+    const adapter = files.find((file) => file.path.endsWith(`Repositories/${root}Repository.cs`));
+    assert.ok(adapter, `no se emitió el adaptador de ${root}`);
+    assert.ok(adapter.content.includes('if (expected is null)'), 'el Save no distingue el agregado nuevo por la versión');
+    // Sobre documentos, la versión se guarda con el tipo del campo declarado: un `int` es Int32 en el contrato.
+    if (name === 'mailer-mongo-lock') {
+      assert.ok(adapter.content.includes('new BsonInt32(expected.Value + 1)'), 'la versión declarada int se guarda como Int64');
+      assert.ok(!adapter.content.includes('BsonInt64'), 'queda una versión Int64 en el adaptador');
+    }
+    // Una respuesta sale de un agregado guardado: el mapper no deja un TODO por la versión.
+    const mapper = files.find((file) => file.path.endsWith(`Mappers/${root}ApplicationMapper.cs`));
+    assert.ok(mapper, `no se emitió el mapper de ${root}`);
+    assert.ok(mapper.content.includes('LockVersion = entity.LockVersion ?? throw new InvalidOperationException('), 'el mapper no exige la versión');
+    assert.ok(!/Todo\.Value<int>\("lockVersion/.test(mapper.content), 'el mapper deja la versión al agente');
+  });
+}
+
 // Cada parche es un diseño VÁLIDO: uno que la validación rechaza no llegaría nunca a build, y su rama no la genera nadie.
 for (const { name, from, mutate } of UNCOVERED_BRANCHES) {
   test(`${name}: es un diseño válido (si no, build no llegaría a generarlo)`, () => {
