@@ -14,7 +14,7 @@ export const SKILL = 'keel-generate-dotnet';
 // Versiones del DSL keel que este generador sabe mapear. La misma que keel-spring y keel-nest: el
 // método soporta una sola, y dos generadores que aceptaran versiones distintas no podrían recibir el
 // mismo diseño.
-export const SUPPORTED_DSL = ['2.21'];
+export const SUPPORTED_DSL = ['2.22'];
 
 // La plataforma del proyecto generado. Verificada el 2026-10-13 contra el SDK instalado
 // (10.0.401) y contra nuget.org con `dotnet package search`:

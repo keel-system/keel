@@ -36,6 +36,13 @@
             "items": { "$ref": "common.schema.json#/$defs/operationName" },
             "description": "Commands de este servicio que esta operación despacha como parte de su trabajo (un barrido que pone en cuarentena lo que revalida). Es el enlace estructural de una regla «despacha X»: con él, el generador da a esta operación el puerto de despacho y su nota, en vez de dejar la costura en prosa. Solo commands: una lectura no se despacha, se consulta. (2.21)"
           },
+          "where": {
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]*$" },
+            "additionalProperties": { "type": ["string", "boolean", "integer"] },
+            "description": "Filtro FIJO de una query: igualdades sobre campos escalares de la entidad de la salida que se aplican siempre, además de los filtros del input (`where: { status: active }` es «solo las activas»). Es el enlace estructural de una regla «solo devuelve…»: con él, el finder que emite build lo aplica. Solo en queries. (2.22)"
+          },
           "preconditions": {
             "type": "array",
             "items": { "type": "string", "minLength": 5 }

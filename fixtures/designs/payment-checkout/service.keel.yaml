@@ -1,4 +1,4 @@
-keel: "2.21"
+keel: "2.22"
 # La fixture de referencia de la capa payments (DSL 2.19): un servicio de cobros que se diseña UNA
 # vez y se genera con cualquier pasarela del menú de build; el test de paridad entre pasarelas la
 # genera con todas. Está CERRADA: `keel validate --ready` en verde, lo fija test/mvp-ready.test.js

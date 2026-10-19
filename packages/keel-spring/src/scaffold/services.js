@@ -7,6 +7,8 @@
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { textFilterNotes } from 'keel-core/gen/text-filters';
+import { finderNote } from 'keel-core/gen/query-filters';
+import { finderCall } from './finders.js';
 import { listedIdsNote } from 'keel-core/gen/ref-targets';
 import { uploadNotes } from 'keel-core/gen/buckets';
 import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
@@ -535,7 +537,10 @@ function renderHandler(model, service, operation) {
     call: `operationCache.getOrLoad(CachedOperations.{cache}, CachedOperations.${operation.name}Key(${cacheParam}), () -> ...)`
   });
   if (cached) notes.push(cached);
-  for (const note of textFilterNotes(model, operation)) notes.push(note);
+  // La búsqueda con finder (DSL 2.22) ya aplica sus filtros, plegado y patrón incluidos: su nota sustituye a las de texto.
+  const finder = finderNote(operation, { call: operation.finder ? finderCall(operation.finder) : '' });
+  if (finder) notes.push(finder);
+  if (!operation.finder) for (const note of textFilterNotes(model, operation)) notes.push(note);
   const repositoryOf = `${operation.responseDto?.entity ?? ''}Repository`;
   const listed = listedIdsNote(model, operation, { call: `${repositoryOf[0].toLowerCase()}${repositoryOf.slice(1)}.findAllById(query.{ids}())` });
   if (listed) notes.push(listed);

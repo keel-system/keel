@@ -55,6 +55,7 @@
 | updateProduct | FL-PRD-002, FL-AUT-003, FL-AUT-004 | usuarios |
 | listProducts | FL-PRD-003 | usuarios |
 | getProductsByIds | FL-PRD-003 | usuarios |
+| listDraftProducts | FL-PRD-005 | usuarios |
 | retireProduct | FL-PRD-004, FL-CMP-001, FL-AUT-002, FL-RTY-001, FL-RTY-001-B | usuarios |
 | projectSupplierPrice | FL-SUB-001 | interna (suscripción) |
 | reactivateWithdrawnProduct | FL-CMP-001, FL-DLQ-001 | interna (compensación) |
@@ -267,6 +268,40 @@ una con `Idempotency-Key` propio.
 2. El producto sigue en `retired` y **el proveedor no recibe una segunda inscripción**: el
    rechazo ocurre en el agregado, antes de encargar nada. Una implementación que llamara al
    registro y comprobara el estado después inscribiría una retirada por cada reintento.
+
+### FL-PRD-005: los borradores, filtrados por categoría y fecha de alta
+
+**Given**: la categoría `c1` existe.
+
+#### FL-PRD-005-A: preparación
+
+**When**: `createProduct` dos veces, con skus `DRF-1` y `DRF-2` (en ese orden), cada una con
+`Idempotency-Key` propio; después `retireProduct` sobre `DRF-1`.
+**Then**:
+1. Las dos altas devuelven `201`; sus ids son `<d1>` y `<d2>`. La retirada devuelve `200`.
+
+#### FL-PRD-005-B: solo los borradores
+
+**When**: `listDraftProducts` — `GET /api/v1/products/drafts`.
+**Then**:
+1. Status `200`.
+2. La página lleva `<d2>` y no `<d1>`: el retirado ya no es un borrador.
+
+#### FL-PRD-005-C: por categoría
+
+**When**: `GET /api/v1/products/drafts?categoryId=<c1>` y después con un uuid de categoría que no existe.
+**Then**:
+1. Status `200` las dos veces.
+2. La primera lleva `<d2>`; la segunda es la página vacía (`totalElements: 0`): una categoría que
+   no existe no es un error, se aplica igual.
+
+#### FL-PRD-005-D: por fecha de alta, extremos incluidos
+
+**When**: `GET /api/v1/products/drafts?createdFrom=2000-01-01T00:00:00.000Z` y después
+`?createdTo=2000-01-01T00:00:00.000Z`.
+**Then**:
+1. Status `200` las dos veces.
+2. La primera lleva `<d2>` (se dio de alta después de esa fecha); la segunda es la página vacía.
 
 ## Proyección del precio de proveedor
 

@@ -292,6 +292,27 @@ export const CHECKS = {
     title: '`match` fuera del input de una query',
     closes: 'moverlo al filtro de la query: es cómo casa un filtro, y un campo del dominio o de un comando no filtra nada'
   },
+  'CHK-USECASES-FILTER-OUTSIDE-QUERY': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: '`filter` o `where` fuera de una query',
+    closes: 'moverlo a la query que busca, o quitarlo: un command no devuelve filas que restringir'
+  },
+  'CHK-USECASES-FILTER-FIELD-UNKNOWN': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un filtro sobre algo que la entidad de la salida no tiene',
+    closes: 'nombrar un campo escalar de la entidad, el subcampo de uno de sus value objects o una relación a otra raíz'
+  },
+  'CHK-USECASES-FILTER-TYPE': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un filtro cuyo operador o valor no casa con el tipo de lo que restringe',
+    closes: 'el mismo tipo a los dos lados, los operadores de orden solo sobre números e instantes, y en `where` un valor del campo'
+  },
   'CHK-DOMAIN-SCALE-POLICY-WITHOUT-SCALE': {
     layer: 'domain',
     severity: 'error',

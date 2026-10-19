@@ -120,7 +120,12 @@ test('el diseño documental no emite persistencia RELACIONAL: ni filas, ni DbCon
 });
 
 test('la nota del filtro plegado nombra la función y la sombra con la grafía de C#, las que existen en el proyecto', async () => {
-  const { files } = await planFixture('catalog-extended');
+  // Una búsqueda SIN finder (un input que no enlaza): la consulta es del agente y la nota le dice cómo plegar.
+  const { files } = await planFixture('catalog-extended', {
+    mutate: (manifest, layers) => {
+      layers['use-cases'].operations.listProducts.input.fields.search = { type: 'string', constraints: { maxLength: 60 } };
+    }
+  });
   const notes = files.filter((file) => /QueryHandler\.cs$/.test(file.path) && /pliega el parámetro/.test(file.content));
   assert.ok(notes.length > 0);
   for (const file of notes) {
@@ -128,6 +133,18 @@ test('la nota del filtro plegado nombra la función y la sombra con la grafía d
     assert.match(file.content, /\.[A-Z]\w*Normalized, la sombra/, file.path);
     assert.doesNotMatch(file.content, /TextFold\.fold/, file.path);
   }
+});
+
+test('con finder (DSL 2.22), el plegado lo hace el adaptador y la nota del handler ya no lo pide', async () => {
+  const { files } = await planFixture('catalog-extended');
+  const handler = files.find((file) => file.path.endsWith('ListProductsQueryHandler.cs'));
+  assert.doesNotMatch(handler.content, /pliega el parámetro/);
+  // La nota va partida en líneas de comentario: se compara sin los saltos.
+  const note = handler.content.replace(/\n\s*\/\/\s*/g, ' ');
+  assert.ok(note.includes('await productRepository.ListProducts(new ListProductsFilter(query.Name), query.Pageable, cancellationToken)'));
+  const adapter = files.find((file) => file.path.endsWith('Repositories/ProductRepository.cs'));
+  assert.ok(adapter.content.includes('var nameFolded = TextFold.FoldCaseAndAccents(name);'));
+  assert.ok(adapter.content.includes('query = query.Where(r => r.NameNormalized.Contains(nameFolded));'));
 });
 
 test('RowValues.Unmapped solo existe si algún adaptador lo llama: sin uso, es andamiaje que lanza NotImplementedException', async () => {

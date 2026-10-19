@@ -13,39 +13,13 @@ import { loadService } from '../src/index.js';
 import { buildModel } from '../src/lib/gen/model.js';
 import { PROJECTION_MEMBERS, PROJECTION_MESSAGES, assertProjection } from '../src/lib/gen/projection.js';
 import { STACK_DEFAULTS, defaultDatabaseFor } from '../src/lib/gen/infra-catalog.js';
+import { PROBE } from './helpers/probe-projection.js';
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures', 'designs');
 const fixtures = fs
   .readdirSync(FIXTURES_DIR)
   .filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')))
   .sort();
-
-// Una proyección que no es de ningún lenguaje: escribe los tipos como `ref:<nombre>` y no pone
-// anotaciones. Lo único que importa es que cumpla el contrato.
-const nameOf = (resolved) => resolved.name ?? resolved.base;
-const PROBE = {
-  projectSuffix: 'probe',
-  service: () => ({ module: 'probe' }),
-  parameterType: (type) => ({ typeRef: `ref:${type}` }),
-  fieldType: (resolved, { list = false } = {}) => ({ typeRef: `ref:${nameOf(resolved)}${list ? '[]' : ''}` }),
-  elementType: (resolved) => ({ elementRef: `ref:${nameOf(resolved)}` }),
-  namedType: (name, { list = false } = {}) => ({ typeRef: `ref:${name}${list ? '[]' : ''}` }),
-  namedElement: (name) => ({ elementRef: `ref:${name}` }),
-  renamed: (name) => ({ typeRef: `ref:${name}`, elementRef: `ref:${name}` }),
-  typeNameOf: (field) => field?.typeRef?.replace(/^ref:/, ''),
-  carryType: (field) => ({ typeRef: field.typeRef }),
-  uploadType: () => ({ typeRef: 'ref:upload', elementRef: 'ref:upload' }),
-  uploadValidation: (required) => ({ validation: required ? ['required'] : [], inputValidation: required ? ['required'] : [] }),
-  replicaKey: (keyField) => ({ keyRef: keyField?.typeRef ?? 'ref:uuid' }),
-  errorBase: (http) => `error-${http}`,
-  fieldDetails: () => ({ validation: [], numeric: null, inputValidation: [], inheritedPattern: null, columns: [], elementColumns: [], initializer: null }),
-  messages: {
-    lockVersionReserved: (entity) => `lockVersion reservado en ${entity}`,
-    readQueriesRef: (kind) => `lecturas-${kind}`,
-    pathParamFallback: (op, route, name) => `${op}: ${route} sin ${name}`,
-    cognitoEmulated: () => 'cognito emulado'
-  }
-};
 
 function stackFor(layers) {
   const model = layers.persistence?.default?.model;

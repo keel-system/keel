@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './tmp.js';
+import { FINDER_DESIGNS } from '../../../keel-core/test/helpers/finder-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -136,6 +137,16 @@ export const UNCOVERED_BRANCHES = [
       manifest.service.name = name;
       layers.persistence.consistency = { ...(layers.persistence.consistency ?? {}), optimisticLocking: 'declared' };
       layers.domain.entities[root].fields.lockVersion = { type: 'int', generated: true };
+    }
+  })),
+  // Los finders de las búsquedas (DSL 2.22) en las formas que catalog-extended no declara: los diseños de
+  // keel-core/test/helpers/finder-designs.js, los MISMOS que mide keel-nest. Los ejecutan db-check y doc-check.
+  ...FINDER_DESIGNS.map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      design.mutate(layers);
     }
   })),
   {

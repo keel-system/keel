@@ -38,6 +38,10 @@ la auditoría, la unicidad condicionada y la traducción de cada violación de c
   nombre (`HasIndex(…, "idx_…")`): EF identifica un índice sin nombre por sus columnas, y dos sobre las mismas
   columnas se funden en uno.
 - `EnsureCreated` solo en `local`. En `develop` y `production` el esquema es el de las migraciones.
+- Una búsqueda con todos sus inputs enlazados (DSL 2.22: por nombre o con `filter`, más su `where`) ya tiene su
+  **finder de build** en el puerto y en el adaptador, con el record `<Op>Filter`: el handler lo llama y la nota dice
+  con qué. Solo escribes la consulta cuando la nota dice «Sin finder de build»; si una `rule` restringe algo que el
+  finder no aplica, es un designGap, no un `Where` más.
 - Un filtro con `compare: ignore-case` o `ignore-case-accents` (en el campo o solo en la query) va contra la
   columna sombra `<campo>_normalized` que build emite y estampa, con el término plegado por `TextFold`
   (`Persistence/TextFold.cs`). Nunca `ToLower()` en la consulta, `EF.Functions.ILike`, `unaccent()` ni la

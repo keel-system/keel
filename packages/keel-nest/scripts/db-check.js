@@ -38,6 +38,8 @@ import { partialIndexSpecs, discriminatorColumn, orderingFieldOf, persistedMembe
 import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startDatabase } from './lib/database-container.js';
 import { sampleEntity, sampleValue, PROBE_HELPERS } from './lib/samples.js';
+import { finderBlock } from './lib/finder-probes.js';
+import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { usesSchemaBaseline, BASELINE_FILE, MIGRATIONS_DIR } from '../src/scaffold/schema-baseline.js';
@@ -71,11 +73,40 @@ import { idempotencyOutcomeCodes } from 'keel-core/gen';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
 
 const args = process.argv.slice(2);
+
+// --sabotage=<id> rompe lo emitido EN MEMORIA, antes de escribirlo, conservando la forma (sigue compilando): la red
+// tiene que salir en rojo en las comprobaciones de esa regla. [sufijo del archivo, texto o expresión, sustituto].
+const SABOTAGES = {
+  // Los finders (DSL 2.22): el where que no filtra, el texto sin plegar y el patrón LIKE que no escapa % ni _.
+  'finder-where': ['product-repository-impl.ts', /^ {4}and\('[^']+', Equal\(.*\)\);\n/gm, ''],
+  'finder-fold': ['product-repository-impl.ts', /LikePattern\.(\w+)\(TextFold\.\w+\((filter\.\w+)\)\)/g, 'LikePattern.$1($2)'],
+  'finder-literal': ['like-pattern.ts', String.raw`const SPECIAL = /[\\%_]/g;`, String.raw`const SPECIAL = /[\\]/g;`]
+};
+const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
+if (sabotage && !SABOTAGES[sabotage]) {
+  console.error(`No hay ningún sabotaje '${sabotage}'. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);
+  process.exit(2);
+}
+let sabotagesApplied = 0;
+/** El contenido de un archivo emitido, con el sabotaje aplicado si le toca. */
+function sabotaged(file) {
+  if (!sabotage || typeof file.content !== 'string') return file.content;
+  const [suffix, from, to] = SABOTAGES[sabotage];
+  if (!file.path.endsWith(suffix)) return file.content;
+  const content = typeof from === 'string' ? file.content.replaceAll(from, to) : file.content.replace(from, to);
+  if (content !== file.content) sabotagesApplied += 1;
+  return content;
+}
 const keep = args.includes('--keep');
 const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? null;
+// --subject=<nombre>: uno solo de SUBJECTS (para iterar; la red completa es sin él).
+const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder'];
+// Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
+// object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js).
+const DERIVED = Object.fromEntries(FINDER_DESIGNS.filter((design) => design.name === 'product-catalog-finder').map((design) => [design.name, design]));
 const results = [];
 
 function step(name, ok, detail = '') {
@@ -342,6 +373,7 @@ ${finder ? `  const found = await repository.${finder.name}(${finder.params.map(
   }` : ''}
 ${foldedBlock(model, root, index, ctx, finder)}
 ${filterFoldBlock(model, root, index, ctx)}
+${finderBlock(model, root, index, ctx, { sampleEntity })}
 ${idBatchReason(model, root) ? `  {
     // findAllById: UNA consulta con In([...]) — en MySQL el id es binary(16) con transformador, y que TypeORM lo
     // aplique a cada valor del In es lo que aquí se mide (si no, la consulta no casaría nada sin dar error).
@@ -1249,8 +1281,9 @@ for (const engine of ENGINES) {
     continue;
   }
   try {
-    for (const subject of SUBJECTS) {
-      const { manifest, layers } = loadService(path.join(FIXTURES_DIR, subject));
+    for (const subject of SUBJECTS.filter((name) => !onlySubject || name === onlySubject)) {
+      const { manifest, layers } = loadService(path.join(FIXTURES_DIR, DERIVED[subject]?.from ?? subject));
+      DERIVED[subject]?.mutate(layers);
       // Con mensajería, sobre RabbitMQ: el broker que keel-nest genera.
       const { files, model } = planService({ manifest, layers, workspace, stack: { database: engine, ...(layers.messaging ? { broker: 'rabbitmq' } : {}) } });
       if (repositoryRoots(model).length === 0) continue;
@@ -1258,7 +1291,7 @@ for (const engine of ENGINES) {
       for (const file of files) {
         const out = path.join(dir, file.path);
         fs.mkdirSync(path.dirname(out), { recursive: true });
-        fs.writeFileSync(out, file.content);
+        fs.writeFileSync(out, sabotaged(file));
       }
       fs.symlinkSync(path.join(projectDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
       const compiled = run(process.execPath, [tsc, '-p', 'tsconfig.build.json'], { cwd: dir });
@@ -1293,6 +1326,10 @@ if (keep) {
   const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-nest-db-check-'));
   fs.cpSync(path.join(workspace, 'db-check'), kept, { recursive: true, filter: (source) => !source.includes('node_modules') });
   console.log(`Sujetos conservados en ${kept}`);
+}
+if (sabotage && sabotagesApplied === 0) {
+  console.error(`El sabotaje '${sabotage}' no se aplica a lo emitido hoy (¿cambió el texto?).`);
+  process.exit(2);
 }
 const failedSteps = results.filter((result) => !result.ok).length;
 console.log(failedSteps === 0 ? `\ndb-check: ${results.length}/${results.length} en verde.` : `\ndb-check: ${failedSteps} paso(s) en rojo.`);

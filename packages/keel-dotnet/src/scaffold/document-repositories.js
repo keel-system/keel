@@ -13,7 +13,7 @@
 //     `declared`— y `updated_*` se estampa en cada escritura. Guardar es un `$set` del documento entero y no un
 //     reemplazo, para que lo que el dominio no lleva (la auditoría de política) no se pierda.
 
-import { persistedMembers, collectInternalEntities, LOCK_VERSION, orderingFieldOf, orderingTieBreakerOf, claimsForEntity } from 'keel-core/gen';
+import { persistedMembers, collectInternalEntities, LOCK_VERSION, RANGE_OPERATORS, orderingFieldOf, orderingTieBreakerOf, claimsForEntity } from 'keel-core/gen';
 import { documentShape, DOCUMENT_ID } from 'keel-core/gen/document';
 import { snakeCase } from 'keel-core/gen/naming';
 import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, entityPlace, typeUsings } from './render.js';
@@ -24,6 +24,7 @@ import { claimDependencies, guardClaimsFor } from './claim.js';
 import { reconciliationDependencies } from './reconciliation-claim.js';
 import { documentGuardMethods, documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
+import { defaultSortConstant, entityFinders, finderParameters, fixedValue, hasFilter, methodName, needsOrdering, resultType, sortConstants } from './finders.js';
 import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents, credentialFinders, replicaOwnTransaction, replicaDependencies, naturalKeyBatchFinder } from './repositories.js';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────────────────────────
@@ -483,6 +484,10 @@ export function renderDocumentAdapter(model, entity) {
     }`);
   }
 
+  // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre el documento, y solo esos.
+  methods.push(...documentFinderMethods(model, entity));
+  if (entityFinders(model, entity).some((finder) => finder.criteria.some((criterion) => criterion.match !== 'exact'))) usings.push('System.Text.RegularExpressions');
+
   // Los reclamos de barrido y de reconciliación (incremento 12c): el puerto es el mismo en los dos modelos.
   const sweeps = documentSweepClaimMethods(model, entity);
   const reconciliations = documentReconciliationMethods(model, entity);
@@ -515,7 +520,7 @@ export function renderDocumentAdapter(model, entity) {
     ctor.push(`${dep.type} ${dep.name}`);
     usings.push(...dep.usings);
   }
-  const sortable = isPaginated(model, entity) ? sortableBlock(model, entity) : '';
+  const sortable = (isPaginated(model, entity) || needsOrdering(model, entity) ? sortableBlock(model, entity) : '') + sortConstants(model, entity).map((line) => `\n\n${line}`).join('');
   const body = `/// <summary>
 /// Adaptador del puerto ${portClass(entity)} sobre el driver de MongoDB. Toma la sesión de la transacción abierta (la abre
 /// el UseCaseMediator); sin ella, cada lectura va sola y cada escritura abre la suya.
@@ -538,6 +543,81 @@ ${methods.join('\n\n')}
 ${[...entityFns, ...voFns].join('\n\n')}
 }`;
   return { path, content: csFile({ namespace, usings, body }) };
+}
+
+// ─── Los finders de las búsquedas (DSL 2.22) ─────────────────────────────────────────────────────
+
+const MONGO_OPERATOR = { gt: '$gt', gte: '$gte', lt: '$lt', lte: '$lte' };
+
+/** La clave del documento que restringe un criterio, y cómo se escribe su valor (el mismo convertidor con que se guarda). */
+function documentTarget(model, entity, criterion) {
+  const { target } = criterion;
+  if (criterion.shadow) return { key: keyOf(model, entity, criterion.shadow.name), write: (expr) => `BsonValues.Of(${expr})` };
+  if (target.kind === 'relation') return { key: `${snakeCase(target.relation.name)}_id`, write: (expr) => writeScalar(targetIdField(model, target.relation), expr) };
+  if (target.kind === 'vo') return { key: `${keyOf(model, entity, target.field.name)}.${snakeCase(target.sub.name)}`, write: (expr) => writeScalar(target.sub, expr) };
+  return { key: keyOf(model, entity, target.field.name), write: (expr) => writeScalar(target.field, expr) };
+}
+
+function documentCondition(model, entity, criterion) {
+  const local = csLocal(criterion.name).replace(/^@/, '');
+  const { key, write } = documentTarget(model, entity, criterion);
+  const prepared = [];
+  let value = local;
+  if (criterion.shadow) {
+    prepared.push(`var ${local}Folded = TextFold.${criterion.shadow.accents ? 'FoldCaseAndAccents' : 'FoldCase'}(${local});`);
+    value = `${local}Folded`;
+  }
+  // El texto buscado es LITERAL: se escapa antes de componer la expresión, o un punto casaría con cualquier carácter.
+  const condition =
+    criterion.match === 'contains'
+      ? `new BsonDocument(${csString(key)}, new BsonRegularExpression(Regex.Escape(${value})))`
+      : criterion.match === 'prefix'
+        ? `new BsonDocument(${csString(key)}, new BsonRegularExpression("^" + Regex.Escape(${value})))`
+        : RANGE_OPERATORS.has(criterion.op)
+          ? `new BsonDocument(${csString(key)}, new BsonDocument(${csString(MONGO_OPERATOR[criterion.op])}, ${write(value)}))`
+          : `new BsonDocument(${csString(key)}, ${write(value)})`;
+  return { local, prepared, condition };
+}
+
+function documentFinderMethods(model, entity) {
+  return entityFinders(model, entity).map((finder) => {
+    const lines = ['        var conditions = new List<FilterDefinition<BsonDocument>>();'];
+    for (const entry of finder.fixed) {
+      lines.push(`        conditions.Add(new BsonDocument(${csString(keyOf(model, entity, entry.name))}, ${writeScalar(entry.field, fixedValue(model, entry.field, entry.value))}));`);
+    }
+    for (const criterion of finder.criteria) {
+      const { local, prepared, condition } = documentCondition(model, entity, criterion);
+      const member = `filter.${csMember(criterion.name)}`;
+      if (criterion.required) {
+        lines.push(`        var ${local} = ${member};`, ...prepared.map((line) => `        ${line}`), `        conditions.Add(${condition});`);
+      } else {
+        lines.push(`        if (${member} is { } ${local})`, '        {', ...prepared.map((line) => `            ${line}`), `            conditions.Add(${condition});`, '        }');
+      }
+    }
+    lines.push('        var query = conditions.Count == 0 ? FilterDefinition<BsonDocument>.Empty : Builders<BsonDocument>.Filter.And(conditions);');
+    const guards = [hasFilter(finder) ? '        ArgumentNullException.ThrowIfNull(filter);' : null, finder.result === 'page' ? '        ArgumentNullException.ThrowIfNull(pageable);' : null].filter(Boolean);
+    const tail =
+      finder.result === 'page'
+        ? [
+            '        // Una tras otra y no en paralelo: dentro de una transacción la sesión no admite operaciones concurrentes.',
+            '        var total = transactions.Session is { } session',
+            '            ? await Collection.CountDocumentsAsync(session, query, cancellationToken: cancellationToken)',
+            '            : await Collection.CountDocumentsAsync(query, cancellationToken: cancellationToken);',
+            '        var offset = (int)Math.Min((long)pageable.Page * pageable.Size, int.MaxValue);',
+            '        // Un límite 0 en MongoDB es «sin límite»: una página de tamaño 0 no lee nada.',
+            '        var documents = pageable.Size == 0 ? new List<BsonDocument>() : await Find(query).Sort(Ordered(pageable.Sort)).Skip(offset).Limit(pageable.Size).ToListAsync(cancellationToken);',
+            '        var pages = pageable.Size == 0 ? 1 : (int)Math.Ceiling(total / (double)pageable.Size);',
+            `        return new Page<${entity.name}>([.. documents.Select(ToDomain${entity.name})], pageable.Page, pageable.Size, total, pages);`
+          ]
+        : [
+            `        var documents = await Find(query).Sort(Ordered(${defaultSortConstant(finder)})).ToListAsync(cancellationToken);`,
+            `        return [.. documents.Select(ToDomain${entity.name})];`
+          ];
+    return `    public async Task<${resultType(finder, entity)}> ${methodName(finder)}(${finderParameters(finder)})
+    {
+${[...guards, ...lines, ...tail].join('\n')}
+    }`;
+  });
 }
 
 function sortableBlock(model, entity) {

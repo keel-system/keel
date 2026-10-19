@@ -9,7 +9,7 @@
   "scripts": {
     "test": "node --test",
     "payment-check": "node scripts/payment-check.js",
-    "compile-check": "node scripts/compile-check.js && node scripts/compile-check.js asset-vault --broker=snssqs && node scripts/compile-check.js asset-vault --broker=kafka --auth=cognito && node scripts/compile-check.js notification-mailer --broker=snssqs && node scripts/compile-check.js notification-mailer --broker=kafka --auth=cognito && node scripts/compile-check.js job-dispatch && node scripts/compile-check.js job-dispatch-mongo --broker=kafka && node scripts/compile-check.js stock-reservation --broker=kafka && node scripts/compile-check.js notification-mailer-mongo --broker=kafka && node scripts/compile-check.js payout-runs && node scripts/compile-check.js metering-digest --broker=kafka && node scripts/compile-check.js profile-directory --broker=kafka && node scripts/compile-check.js job-dispatch --database=oracle && node scripts/compile-check.js stock-reservation --broker=kafka --telemetry=otel && node scripts/compile-check.js asset-vault --broker=snssqs --telemetry=otel && node scripts/compile-check.js notification-mailer --broker=kafka --telemetry=otel && node scripts/compile-check.js payment-checkout --broker=rabbitmq --payment-gateway=stripe && node scripts/compile-check.js payment-checkout --broker=rabbitmq --payment-gateway=mercadopago",
+    "compile-check": "node scripts/compile-check.js && node scripts/compile-check.js asset-vault --broker=snssqs && node scripts/compile-check.js asset-vault --broker=kafka --auth=cognito && node scripts/compile-check.js notification-mailer --broker=snssqs && node scripts/compile-check.js notification-mailer --broker=kafka --auth=cognito && node scripts/compile-check.js job-dispatch && node scripts/compile-check.js job-dispatch-mongo --broker=kafka && node scripts/compile-check.js stock-reservation --broker=kafka && node scripts/compile-check.js notification-mailer-mongo --broker=kafka && node scripts/compile-check.js payout-runs && node scripts/compile-check.js metering-digest --broker=kafka && node scripts/compile-check.js profile-directory --broker=kafka && node scripts/compile-check.js job-dispatch --database=oracle && node scripts/compile-check.js stock-reservation --broker=kafka --telemetry=otel && node scripts/compile-check.js asset-vault --broker=snssqs --telemetry=otel && node scripts/compile-check.js notification-mailer --broker=kafka --telemetry=otel && node scripts/compile-check.js payment-checkout --broker=rabbitmq --payment-gateway=stripe && node scripts/compile-check.js payment-checkout --broker=rabbitmq --payment-gateway=mercadopago && node scripts/compile-check.js product-catalog-finder --broker=rabbitmq && node scripts/compile-check.js jobs-mongo-finder --broker=kafka",
     "broker-check": "node scripts/broker-check.js",
     "claim-check": "node scripts/claim-check.js && node scripts/claim-check.js job-dispatch --database=mysql && node scripts/claim-check.js job-dispatch --database=mariadb && node scripts/claim-check.js job-dispatch-mongo && node scripts/claim-check.js notification-mailer && node scripts/claim-check.js notification-mailer --database=mysql && node scripts/claim-check.js notification-mailer-mongo",
     "store-check": "node scripts/store-check.js notification-mailer && node scripts/store-check.js notification-mailer --database=mysql && node scripts/store-check.js notification-mailer-mongo && node scripts/store-check.js stock-reservation && node scripts/store-check.js stock-reservation --database=mysql && node scripts/store-check.js asset-vault",
@@ -20,7 +20,8 @@
     "golden": "node scripts/golden-digest.js",
     "mapping-check": "node scripts/mapping-check.js stock-reservation && node scripts/mapping-check.js stock-reservation --database=mysql && node scripts/mapping-check.js job-dispatch && node scripts/mapping-check.js job-dispatch --database=mysql && node scripts/mapping-check.js job-dispatch-mongo && node scripts/mapping-check.js notification-mailer",
     "index-check": "node scripts/index-check.js notification-mailer && node scripts/index-check.js notification-mailer --database=mysql && node scripts/index-check.js notification-mailer-mongo",
-    "deploy-check": "node scripts/deploy-check.js job-dispatch"
+    "deploy-check": "node scripts/deploy-check.js job-dispatch",
+    "finder-check": "node scripts/finder-check.js product-catalog-finder && node scripts/finder-check.js product-catalog-finder --database=mysql && node scripts/finder-check.js jobs-mongo-finder"
   },
   "files": [
     "src",
@@ -28,7 +29,7 @@
     "vendor"
   ],
   "keel": {
-    "dsl": "2.21"
+    "dsl": "2.22"
   },
   "engines": {
     "node": ">=18"

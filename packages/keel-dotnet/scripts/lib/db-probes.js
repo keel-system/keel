@@ -46,6 +46,7 @@ import { projectionNamespace } from '../../src/scaffold/projections.js';
 import { naturalKeyBatchFinder } from '../../src/scaffold/repositories.js';
 import { occurredAtField } from 'keel-core/gen/replica';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
+import { FINDER_PROBE_TEXT, findersOf, finderTextProbes } from 'keel-core/gen/query-filters';
 
 /**
  * Las muestras distintas que necesita cada raíz: ida y vuelta, crudo, versión, la clave natural (×2), la cota, la página
@@ -284,7 +285,9 @@ function probesCs(model, namespace, harness = null) {
     // Las del plegado y, en la primera raíz, las del interbloqueo: después de todas, para no mover ninguna.
     const beforeFold = beforeBatch + (idBatchReason(model, root) ? 2 : 0);
     const beforeDeadlock = beforeFold + foldSampleCount(root);
-    const total = beforeDeadlock + (root === roots[0] ? 2 : 0);
+    // Las de los finders (DSL 2.22), las últimas de todas.
+    const beforeFinders = beforeDeadlock + (root === roots[0] ? 2 : 0);
+    const total = beforeFinders + finderSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -449,6 +452,7 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
     }
     tests.push(...filterFoldProbes(model, root, { state, first: beforeFold + 1 + (foldedKeyMembers(root).length > 0 ? 2 : 0), port, members: allNames, id }));
     if (root === roots[0]) tests.push(...deadlockProbes(model, root, { state, first: beforeDeadlock + 1, port, id, concurrency }));
+    tests.push(...finderProbes(model, root, { state, first: beforeFinders + 1, port, members: allNames, id, usings: ctx.usings }));
     tests.push(...credentialProbes(model, root, { state, sample: 16, port }));
     tests.push(...authorshipProbe(model, root, {
       state,
@@ -816,6 +820,120 @@ ${raw(`sample.${id}`)}
  * La lectura POR LOTE por id (keel-core/gen/ref-targets.js: los embebidos de una página, o la query que recibe la lista de
  * ids): FindAllById trae los que existen, en UNA consulta, y un id que no existe no aparece. Lo usan db-check y doc-check.
  */
+// ─── Los finders de las búsquedas (DSL 2.22) ─────────────────────────────────────────────────────
+
+/** Dos muestras por finder: la que cumple su `where` y la que no. */
+export function finderSampleCount(model, root) {
+  return findersOf(model, root.name).length * 2;
+}
+
+// El texto de la sonda y lo que lo encuentra o no: el vocabulario de keel-core/gen/query-filters.js, el mismo que mide
+// keel-nest. Lleva `%`, `_` y `.`: si el adaptador no tratara el buscado como LITERAL, los de fuera lo encontrarían.
+const FINDER_TEXT = FINDER_PROBE_TEXT;
+
+/**
+ * El FINDER de cada búsqueda contra el motor: una fila que cumple su `where`, releída tras guardarla (la precisión con
+ * que el motor guarda un instante no es la de la muestra), y por cada criterio dos llamadas, una que la encuentra y otra
+ * que no — los extremos de gte/lte incluidos, los de gt/lt fuera, y el texto como literal. Otra fila que no cumple el
+ * `where` no sale nunca. Solo habla con el puerto: vale para los dos modelos de persistencia.
+ */
+export function finderProbes(model, root, { state, first, port, members, id, usings }) {
+  const finders = findersOf(model, root.name);
+  if (finders.length > 0) usings.push(repositoriesNamespace(model));
+  return finders.map((finder, index) => {
+    const [a, b] = [first + index * 2, first + index * 2 + 1];
+    const textCriteria = finder.criteria.filter((criterion) => criterion.match !== 'exact' && (criterion.target.field.textMaxLength ?? Infinity) > FINDER_TEXT.length);
+    const enumOf = (field) => model.enums.find((candidate) => candidate.name === field.namedType);
+    const fixedLiteral = (entry) =>
+      entry.field.kind === 'enum' ? `${enumOf(entry.field).name}.${enumMember(entry.value)}` : typeof entry.value === 'string' ? csString(entry.value) : String(entry.value);
+    const otherThan = (field, expr) =>
+      field.kind === 'enum' ? `Enum.GetValues<${enumOf(field).name}>().First(value => value != ${expr})` : field.base === 'boolean' ? `!${expr}` : `${expr} + "-otro"`;
+    // La fila de fuera lleva otro texto: si el campo es único (una clave natural), el mismo chocaría al guardarla.
+    const overrides = (extra, text = FINDER_TEXT) => Object.fromEntries([...textCriteria.map((criterion) => [criterion.target.field.name, csString(text)]), ...extra]);
+    const build = (source, values) => members.map((name) => `${csMember(name)} = ${values[name] ?? `${source}.${csMember(name)}`},`).join('\n                ');
+    const inside = overrides(finder.fixed.map((entry) => [entry.name, fixedLiteral(entry)]));
+    const outside = overrides(finder.fixed.map((entry) => [entry.name, otherThan(entry.field, fixedLiteral(entry))]), `${FINDER_TEXT}2`);
+
+    // El valor guardado de lo que restringe un criterio, leído de la fila releída.
+    const stored = (criterion) => {
+      const { target } = criterion;
+      if (target.kind === 'relation') return `s.${csMember(`${target.relation.name}Id`)}`;
+      if (target.kind === 'vo') return `s.${csMember(target.field.name)}${target.field.required ? '' : '!'}.${csMember(target.sub.name)}`;
+      return `s.${csMember(target.field.name)}`;
+    };
+    const base = (criterion) => (criterion.target.kind === 'vo' ? criterion.target.sub : criterion.target.field)?.base;
+    const shift = (criterion, value, sign) => {
+      const kind = base(criterion);
+      if (kind === 'timestamp' || kind === 'date') return `${value}.AddDays(${sign})`;
+      return `${value} ${sign > 0 ? '+' : '-'} 1${kind === 'decimal' ? 'm' : ''}`;
+    };
+    // Cada criterio: el valor que encuentra la fila y los que no. Los demás filtros, a null (o al que encuentra si es obligatorio).
+    const locals = [];
+    const cases = finder.criteria.map((criterion, position) => {
+      const local = `v${position}`;
+      if (criterion.match !== 'exact') {
+        if (!textCriteria.includes(criterion)) return null;
+        const { hit, misses } = finderTextProbes(criterion);
+        return { criterion, local: null, hits: [csString(hit)], misses: misses.map((text) => csString(text)) };
+      }
+      const field = criterion.target.kind === 'vo' ? criterion.target.sub : criterion.target.field;
+      // `?? throw` solo sobre lo que puede venir a null: sobre un Guid o un instante obligatorios no compila.
+      const member = domainMembers(model, root).find((candidate) => candidate.name === (criterion.target.kind === 'relation' ? `${criterion.target.relation.name}Id` : criterion.target.field.name));
+      const nullable = criterion.target.kind === 'vo' ? !field.required : Boolean(member?.type.endsWith('?'));
+      locals.push(`            var ${local} = ${stored(criterion)}${nullable ? ` ?? throw new InvalidOperationException("la muestra no tiene ${criterion.target.path}")` : ''};`);
+      if (criterion.target.kind === 'relation' || field?.base === 'uuid') return { criterion, local, hits: [local], misses: ['Guid.CreateVersion7()'] };
+      if (criterion.op === 'eq') {
+        const textual = ['string', 'text'].includes(field?.base);
+        const hit = textual && criterion.compare !== 'exact' ? `${local}.ToUpperInvariant()` : local;
+        return { criterion, local, hits: [hit], misses: [otherThan(field, local)] };
+      }
+      const plus = shift(criterion, local, 1);
+      const minus = shift(criterion, local, -1);
+      const table = { gte: [[local], [plus]], gt: [[minus], [local]], lte: [[local], [minus]], lt: [[plus], [local]] };
+      const [hits, misses] = table[criterion.op];
+      return { criterion, local, hits, misses };
+    }).filter(Boolean);
+
+    const filterOf = (probed, value) =>
+      `new ${finder.filterType}(${finder.criteria
+        .map((criterion, position) => (criterion === probed ? value : criterion.required ? `v${position}` : 'null'))
+        .join(', ')})`;
+    const call = (filter) =>
+      finder.result === 'page'
+        ? `(await InScope(other => other.GetRequiredService<${port}>().${csMember(finder.method)}(${filter ? `${filter}, ` : ''}new Pageable(0, 1000, []), Cancel))).Items`
+        : `await InScope(other => other.GetRequiredService<${port}>().${csMember(finder.method)}(${filter ? `${filter}, ` : ''}Cancel))`;
+    const finds = (filter, target) => `(${call(filter)}).Any(found => found.${id} == ${target}.${id})`;
+    const noFilter = finder.criteria.length > 0 ? filterOf(null, null) : null;
+    const assertions = [`            Assert.True(${finds(noFilter, 's')}, "sin filtros no encuentra la fila");`];
+    for (const { criterion, hits, misses } of cases) {
+      for (const hit of hits) assertions.push(`            Assert.True(${finds(filterOf(criterion, hit), 's')}, ${csString(`${criterion.name} = ${hit} no la encuentra`)});`);
+      for (const miss of misses) assertions.push(`            Assert.False(${finds(filterOf(criterion, miss), 's')}, ${csString(`${criterion.name} = ${miss} la encuentra`)});`);
+    }
+    // El where: la fila que no lo cumple no sale. Con un filtro obligatorio, lo aislaría también ese filtro: no se afirma.
+    const requiredCriteria = finder.criteria.some((criterion) => criterion.required);
+    if (finder.fixed.length > 0 && !requiredCriteria) assertions.push(`            Assert.False(${finds(noFilter, 'outside')}, "la fila que no cumple el where sale");`);
+    return `    [Fact]
+    public async Task ${root.name}_ElFinder${csMember(finder.method)}AplicaLosFiltrosDelDiseño() =>
+        await InScope(async services =>
+        {
+            var one = ${state(a)};
+            var two = ${state(b)};
+            var inside = new ${root.name}(new ${root.name}State
+            {
+                ${build('one', inside)}
+            });
+            var outside = new ${root.name}(new ${root.name}State
+            {
+                ${build('two', outside)}
+            });
+            await InScope(other => other.GetRequiredService<${port}>().Save(inside, Cancel));
+            await InScope(other => other.GetRequiredService<${port}>().Save(outside, Cancel));
+            var s = await InScope(other => other.GetRequiredService<${port}>().FindById(inside.${id}, Cancel)) ?? throw new InvalidOperationException("la fila guardada no se relee");
+${locals.join('\n')}${locals.length > 0 ? '\n' : ''}${assertions.join('\n')}
+        });`;
+  });
+}
+
 export function idBatchProbe(model, root, { state, first, port }) {
   if (!idBatchReason(model, root)) return [];
   const id = csMember(root.idField?.name ?? 'id');

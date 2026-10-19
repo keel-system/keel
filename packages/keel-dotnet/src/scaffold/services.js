@@ -15,6 +15,8 @@
 
 import { carriesEntryGate, dispatchNote, entryGateNote, scheduleDispatch, usesEntryGate } from 'keel-core/gen';
 import { textFilterNotes } from 'keel-core/gen/text-filters';
+import { finderNote } from 'keel-core/gen/query-filters';
+import { finderCall } from './finders.js';
 import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 import { mapperOf } from './mappers.js';
@@ -397,7 +399,10 @@ function handlerNotes(model, operation) {
   if (dispatch) notes.push(dispatch);
   const gate = entryGateNote(model, operation, { read: 'command.EntryGate', value: entryGateMember });
   if (gate) notes.push(gate);
-  for (const note of textFilterNotes(model, operation, { names: (symbol) => symbol[0].toUpperCase() + symbol.slice(1) })) notes.push(note);
+  // La búsqueda con finder (DSL 2.22) ya aplica sus filtros, plegado incluido: su nota sustituye a las de los filtros de texto.
+  const finder = finderNote(operation, { call: operation.finder ? finderCall(model, operation.finder) : '' });
+  if (finder) notes.push(finder);
+  if (!operation.finder) for (const note of textFilterNotes(model, operation, { names: (symbol) => symbol[0].toUpperCase() + symbol.slice(1) })) notes.push(note);
   for (const note of scheduleNotes(model, operation)) notes.push(note);
   for (const note of idempotencyNotes(model, operation)) notes.push(note);
   for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), names: UPLOAD_NOTE_NAMES_CS })) notes.push(note);

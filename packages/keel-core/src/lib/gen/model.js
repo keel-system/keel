@@ -29,6 +29,7 @@ import {
   reconciliationParameters
 } from './reconciliation-stores.js';
 import { assertProjection } from './projection.js';
+import { attachQueryFinders } from './query-filters.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
 
@@ -113,6 +114,8 @@ function interpret({ manifest, layers, stack = null }) {
   const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings, persistenceKind, entities);
   deriveFilterFolds(services, entities, warnings);
   derivePatchNotNull(services, entities);
+  // El finder de cada búsqueda con todos sus inputs enlazados (DSL 2.22), después de las sombras de los filtros.
+  attachQueryFinders({ services, entities, valueObjects, persistence: hasPersistence });
   // DTOs de las entidades hijas proyectadas en algún payload de salida.
   const childDtos = collectChildDtos(layers, services, domainTypes, inlineEnumName, warnings);
   // DTOs de referencia de las relaciones que el diseño marca con embed.
@@ -444,6 +447,8 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     filterFold: null,
     // Cómo casa un filtro de texto (solo en el input de una query; crossrefs lo exige).
     match: field.match ?? 'exact',
+    // Qué restringe este input de una query cuando no se llama como el campo (DSL 2.22): lo lee query-filters.js.
+    filter: field.filter ? { field: field.filter.field, op: field.filter.op } : null,
     ...P.elementType(resolved),
     kind: resolved.kind,
     base: resolved.base ?? null,
@@ -500,7 +505,9 @@ function deriveFilterFolds(services, entities, warnings) {
       if (operation.kind !== 'query') continue;
       for (const input of operation.bodyFields ?? []) {
         if ((input.compare ?? 'exact') === 'exact') continue;
-        const field = entity.fields.find((candidate) => candidate.name === input.name);
+        // El campo que el filtro restringe: el que nombra `filter` (2.22) o, sin él, el que se llama como el input.
+        const target = input.filter && !input.filter.field.includes('.') ? input.filter.field : input.name;
+        const field = entity.fields.find((candidate) => candidate.name === target);
         if (!field || field.fold || field.list || !isTextual(field)) continue;
         const key = `${entity.name}.${field.name}`;
         const entry = wanted.get(key) ?? { field, accents: new Set(), operations: [] };
@@ -1107,6 +1114,8 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       // Los commands que esta operación despacha (2.21): su handler recibe el puerto de despacho y
       // la nota. Nombres de operación; cada generador resuelve sus mensajes.
       dispatches: [...(op.dispatches ?? [])],
+      // Las igualdades fijas de una query (DSL 2.22): el finder las aplica siempre (query-filters.js).
+      where: op.where ? { ...op.where } : null,
       route,
       pathParams,
       hasIdParam: pathParams.length > 0,

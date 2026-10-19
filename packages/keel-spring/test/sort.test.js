@@ -43,8 +43,8 @@ test('sin sort declarado, el adaptador ordena igualmente por id: la paginación 
   // El desempate no se salta si el cliente ya ordenó por id.
   assert.ok(adapter.includes('sort.getOrderFor("id") != null'));
 
-  // Y sin sort declarado no hay constante de orden por operación.
-  assert.ok(!read(CONTROLLER).includes('_ORDER'));
+  // Y sin sort declarado no hay constante de orden para esa operación (listDraftProducts sí declara el suyo).
+  assert.ok(!read(CONTROLLER).includes('LIST_PRODUCTS_ORDER'));
 });
 
 test('sort declarado: constante por operación en el controller, aplicada solo si el cliente no pide orden', () => {
@@ -87,7 +87,7 @@ test('sort sobre un agregado embebido no se traduce: build avisa y lo deja al ag
   );
   // Sin constante: 'category.name' no es una property path de Spring Data, y
   // generarla haría fallar la consulta en tiempo de ejecución.
-  assert.ok(!read(CONTROLLER).includes('_ORDER'));
+  assert.ok(!read(CONTROLLER).includes('LIST_PRODUCTS_ORDER'));
   // La señal llega al sitio donde el agente decide.
   const handler = read(`${JAVA}/application/usecases/ListProductsQueryHandler.java`);
   assert.ok(handler.includes('campo del agregado embebido'));

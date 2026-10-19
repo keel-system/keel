@@ -773,6 +773,54 @@ export const MUTATIONS = [
     expect: ['CHK-USECASES-MATCH-OUTSIDE-QUERY']
   },
   {
+    id: 'M-USECASES-FILTER-OUTSIDE-QUERY',
+    title: 'filter en el input de un command',
+    mutate: (d) => {
+      ops(d).createTicket.input.fields.subject.filter = { field: 'subject', op: 'eq' };
+    },
+    expect: ['CHK-USECASES-FILTER-OUTSIDE-QUERY']
+  },
+  {
+    id: 'M-USECASES-WHERE-OUTSIDE-QUERY',
+    title: 'where en un command',
+    mutate: (d) => {
+      ops(d).createTicket.where = { status: 'open' };
+    },
+    expect: ['CHK-USECASES-FILTER-OUTSIDE-QUERY']
+  },
+  {
+    id: 'M-USECASES-FILTER-FIELD-UNKNOWN',
+    title: 'un filtro sobre un campo que la entidad no tiene',
+    mutate: (d) => {
+      ops(d).listTickets.input = { fields: { minLevel: { type: 'int', filter: { field: 'escalation', op: 'gte' } } } };
+    },
+    expect: ['CHK-USECASES-FILTER-FIELD-UNKNOWN']
+  },
+  {
+    id: 'M-USECASES-WHERE-FIELD-UNKNOWN',
+    title: 'un filtro fijo sobre un campo que la entidad no tiene',
+    mutate: (d) => {
+      ops(d).listTickets.where = { state: 'open' };
+    },
+    expect: ['CHK-USECASES-FILTER-FIELD-UNKNOWN']
+  },
+  {
+    id: 'M-USECASES-FILTER-TYPE',
+    title: 'un operador de orden sobre texto',
+    mutate: (d) => {
+      ops(d).listTickets.input = { fields: { fromSubject: { type: 'string', constraints: { maxLength: 120 }, filter: { field: 'subject', op: 'gte' } } } };
+    },
+    expect: ['CHK-USECASES-FILTER-TYPE']
+  },
+  {
+    id: 'M-USECASES-WHERE-TYPE',
+    title: 'un filtro fijo con un valor que el enum no tiene',
+    mutate: (d) => {
+      ops(d).listTickets.where = { status: 'pending' };
+    },
+    expect: ['CHK-USECASES-FILTER-TYPE']
+  },
+  {
     id: 'M-OBL-IDEM-UNNAMED',
     title: 'idempotency client-key sin nombrar ninguno de sus tres desenlaces',
     mutate: (d) => withClientKey(d, []),

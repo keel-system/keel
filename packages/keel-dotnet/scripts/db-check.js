@@ -100,6 +100,10 @@ const SABOTAGES = {
   'replica-batch': ['Repositories/', 'Where(r => keys.Contains(r.Sku))', 'Where(r => keys.Skip(1).Contains(r.Sku))'],
   // La lectura por lote por id (los embebidos de una página) se deja el primer id.
   'id-batch': ['Repositories/', 'Where(r => keys.Contains(r.Id))', 'Where(r => keys.Skip(1).Contains(r.Id))'],
+  // Los finders (DSL 2.22): el where que no filtra, el extremo inclusivo que deja de serlo y el texto sin plegar.
+  'finder-where': ['Repositories/', 'var query = Graph().AsNoTracking().Where(r => ', 'var query = Graph().AsNoTracking().Where(r => true || '],
+  'finder-range': ['Repositories/', /(query = query\.Where\(r => r\.\w+) >= /g, '$1 > '],
+  'finder-fold': ['Repositories/', /var (\w+)Folded = TextFold\.\w+\((\w+)\);/g, 'var $1Folded = $2;'],
   // El plegado (DSL 2.14): la sombra con otro valor que el de TextFold.
   fold: ['Persistence/TextFold.cs', 'FoldCase(string? value) => value?.ToLowerInvariant();', 'FoldCase(string? value) => value;'],
   'fold-accents': ['Persistence/TextFold.cs', 'return kept.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant();', 'return value.ToLowerInvariant();'],
@@ -149,7 +153,9 @@ const DERIVED = {
     }
   },
   // `optimisticLocking: declared`: el Save con la versión que declara el dominio (el MISMO parche que compila cs-check).
-  ...uncoveredBranch('product-catalog-declared-lock')
+  ...uncoveredBranch('product-catalog-declared-lock'),
+  // El finder de una LISTA con un subcampo de value object y el texto por prefijo (DSL 2.22).
+  ...uncoveredBranch('product-catalog-finder')
 };
 
 function uncoveredBranch(name) {

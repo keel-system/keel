@@ -718,6 +718,78 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     }
   }
 
+  // ─── Los filtros de una query (DSL 2.22) ──────────────────────────────────────
+  //
+  // `filter` dice qué restringe un input que no se llama como el campo, y `where` las igualdades
+  // fijas de la query. Con todos los inputs enlazados el generador emite el finder, así que una
+  // ruta que no existe o un operador que no casa con su tipo saldría como un finder que no
+  // compila o, peor, que compara otra cosa: se paran aquí.
+  const FILTER_NUMERIC = new Set(['int', 'long', 'decimal']);
+  const FILTER_TEMPORAL = new Set(['date', 'timestamp']);
+  const filterFamilyOf = (base) => (FILTER_NUMERIC.has(base) ? 'number' : FILTER_TEMPORAL.has(base) ? base : ['string', 'text'].includes(base) ? 'text' : base);
+  // La ruta de un filtro sobre la entidad: un campo, un subcampo de un value object o una relación a otra raíz.
+  const filterTarget = (entity, path) => {
+    const [head, sub] = path.split('.');
+    const field = entity.fields?.[head];
+    if (field && sub) {
+      const subField = domain.types?.[field.type]?.fields?.[sub];
+      return subField && !subField.list && !domain.types?.[subField.type]?.fields ? { field: subField, base: baseOf(subField) } : null;
+    }
+    if (field) return field.list || domain.types?.[field.type]?.fields ? null : { field, base: baseOf(field) };
+    const relation = sub ? null : entity.relations?.[head];
+    if (relation && ['many-to-one', 'one-to-one'].includes(relation.cardinality)) return { relation, base: 'uuid' };
+    return null;
+  };
+  for (const [opName, op] of Object.entries(operations)) {
+    const filtered = Object.entries(op?.input?.fields ?? {}).filter(([, field]) => field?.filter);
+    if (op?.kind !== 'query') {
+      for (const [name] of filtered) {
+        error('CHK-USECASES-FILTER-OUTSIDE-QUERY', `use-cases: ${opName}.input.fields.${name}.filter: un filtro restringe lo que devuelve una búsqueda, y ${opName} no es una query (kind: query)`);
+      }
+      if (op?.where) error('CHK-USECASES-FILTER-OUTSIDE-QUERY', `use-cases: ${opName}.where: el filtro fijo de una búsqueda, y ${opName} no es una query (kind: query)`);
+      continue;
+    }
+    if (filtered.length === 0 && !op.where) continue;
+    const entityName = typeof op.output === 'object' ? op.output?.entity : null;
+    const entity = entityName ? domain.entities?.[entityName] : null;
+    if (!entity) {
+      error('CHK-USECASES-FILTER-FIELD-UNKNOWN', `use-cases: ${opName}: filter y where restringen la entidad de la salida, y la de ${opName} no es una entidad del dominio (output.entity)`);
+      continue;
+    }
+    for (const [name, input] of filtered) {
+      const where = `use-cases: ${opName}.input.fields.${name}.filter`;
+      const target = filterTarget(entity, input.filter.field);
+      if (!target) {
+        error('CHK-USECASES-FILTER-FIELD-UNKNOWN', `${where}: '${input.filter.field}' no es un campo escalar de ${entityName}, ni el subcampo de uno de sus value objects, ni una relación many-to-one/one-to-one a otra raíz`);
+        continue;
+      }
+      const op_ = input.filter.op;
+      if (op_ !== 'eq' && (input.match !== undefined || input.compare !== undefined)) {
+        error('CHK-USECASES-FILTER-TYPE', `${where}: '${op_}' compara por orden, y match/compare dicen cómo casa una IGUALDAD de texto — quítalos o usa op: eq`);
+      }
+      if (op_ !== 'eq' && !FILTER_NUMERIC.has(target.base) && !FILTER_TEMPORAL.has(target.base)) {
+        error('CHK-USECASES-FILTER-TYPE', `${where}: '${op_}' ordena, y '${input.filter.field}' es ${target.base}: los operadores de orden solo valen sobre números e instantes`);
+      }
+      if (input.list || filterFamilyOf(baseOf(input)) !== filterFamilyOf(target.base)) {
+        error('CHK-USECASES-FILTER-TYPE', `${where}: el input es ${input.list ? 'una lista' : baseOf(input)} y '${input.filter.field}' es ${target.base} — un filtro compara un valor con otro del mismo tipo`);
+      }
+    }
+    for (const [name, value] of Object.entries(op.where ?? {})) {
+      const where = `use-cases: ${opName}.where.${name}`;
+      const field = entity.fields?.[name];
+      if (!field || field.list || domain.types?.[field.type]?.fields) {
+        error('CHK-USECASES-FILTER-FIELD-UNKNOWN', `${where}: '${name}' no es un campo escalar de ${entityName}`);
+        continue;
+      }
+      const values = enumValuesOf(field);
+      const base = baseOf(field);
+      const fits = values ? values.includes(value) : base === 'boolean' ? typeof value === 'boolean' : filterFamilyOf(base) === 'text' ? typeof value === 'string' : FILTER_NUMERIC.has(base) ? Number.isInteger(value) : false;
+      if (!fits) {
+        error('CHK-USECASES-FILTER-TYPE', `${where}: ${JSON.stringify(value)} no es un valor de '${name}' (${values ? `uno de ${values.join(', ')}` : base})`);
+      }
+    }
+  }
+
   // La escala de un decimal de ENTRADA no tiene default seguro. Rechazar rompe al cliente que
   // manda `19.999`; redondear le cambia el importe sin decírselo. Hasta 2.14 el diseño solo podía
   // decirlo en prosa —«la escala se valida, no se ajusta»— y el generador hacía lo único que el

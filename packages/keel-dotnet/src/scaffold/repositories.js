@@ -27,6 +27,7 @@ import {
 } from 'keel-core/gen';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
 import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, typeUsings, xmlDoc, entityPlace } from './render.js';
+import { filterRecordFiles, finderEnums, needsOrdering, portFinderMethods, relationalFinderMethods, sortConstants } from './finders.js';
 import { domainMembers } from './entities.js';
 import { adapterClaimMethods, adapterGuardMethods, claimDependencies, claimUsings, guardDependencies, portClaimMethods, portGuardMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
@@ -81,6 +82,8 @@ export function generate(model) {
   const files = [{ path, content: csFile({ namespace, body: pageBody() }) }];
   for (const entity of roots) {
     files.push(renderPort(model, entity));
+    // Los filtros de cada búsqueda con finder (DSL 2.22), junto al puerto que los recibe.
+    files.push(...filterRecordFiles(model, entity));
     // El adaptador, por modelo: el relacional sobre EF Core y el documental sobre el driver de MongoDB (incremento 12).
     files.push(usesDocument(model) ? renderDocumentAdapter(model, entity) : renderAdapter(model, entity));
   }
@@ -324,6 +327,8 @@ function renderPort(model, entity) {
       `${xmlDoc('Una página de agregados, en el orden pedido y con el id como desempate.', '    ')}    Task<Page<${entity.name}>> List(Pageable pageable, CancellationToken cancellationToken = default);`
     );
   }
+  // Los finders de las búsquedas con todos sus inputs enlazados (DSL 2.22, keel-core/gen/query-filters.js).
+  methods.push(...portFinderMethods(model, entity));
   // Los reclamos de barrido que el modelo decide para esta raíz (incremento 10c).
   methods.push(...portClaimMethods(model, entity));
   // Las guardas de un efecto que no se deshace (mail.sentBy).
@@ -477,6 +482,9 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
         return new Page<${entity.name}>([.. rows.Select(ToDomain)], pageable.Page, pageable.Size, total, pages);
     }`);
   }
+  // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre la fila, y solo esos.
+  methods.push(...relationalFinderMethods(model, entity));
+  if (finderEnums(model, entity)) usings.push(namespaceOf(model, 'enums'));
 
   // Los reclamos de barrido (incremento 10c): SKIP LOCKED + UPDATE condicional por fila, en su propia transacción.
   methods.push(...adapterClaimMethods(model, entity));
@@ -506,8 +514,9 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
     }`);
 
   const includes = includePaths(model, entity).map((pathName) => `.Include(${csString(pathName)})`).join('');
-  const sortable = isPaginated(model, entity) ? sortableBlock(model, entity) : '';
+  const sortable = isPaginated(model, entity) || needsOrdering(model, entity) ? sortableBlock(model, entity) : '';
   const fields = [
+    ...sortConstants(model, entity),
     '    // El agregado entero: lo que se carga con la raíz y se borra con ella. Las colecciones van en consultas',
     '    // aparte (QuerySplittingBehavior.SplitQuery): con un JOIN, cada hija multiplicaría las filas de la página.',
     `    private IQueryable<${row}> Graph() => db.Set<${row}>()${includes};`

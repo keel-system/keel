@@ -147,6 +147,24 @@
           "enum": ["exact", "contains", "prefix"],
           "description": "Cómo casa un filtro de TEXTO: el valor entero, una parte o el principio. Solo en el input de una query. Por defecto exact."
         },
+        "filter": {
+          "type": "object",
+          "required": ["field", "op"],
+          "additionalProperties": false,
+          "description": "Qué filtra este campo del input de una query cuando no se llama como el campo que restringe: la ruta sobre la entidad de la salida y el operador. `minPrice: { type: decimal, filter: { field: price.amount, op: gte } }`. Un input que se llama como un campo de la entidad (o `<relación>Id`) ya es su filtro `eq` sin declararlo. Solo en el input de una query. (2.22)",
+          "properties": {
+            "field": {
+              "type": "string",
+              "pattern": "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)?$",
+              "description": "Un campo de la entidad de la salida, un subcampo de uno de sus value objects (`price.amount`) o una relación a otra raíz por su nombre (`brand`: compara su id)."
+            },
+            "op": {
+              "type": "string",
+              "enum": ["eq", "gt", "gte", "lt", "lte"],
+              "description": "eq: igual (con match/compare si es texto). gt/gte/lt/lte: el valor guardado comparado con el del input, extremos incluidos en gte y lte. Los de orden solo sobre números e instantes."
+            }
+          }
+        },
         "constraints": { "$ref": "#/$defs/constraints" }
       },
       "allOf": [

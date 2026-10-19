@@ -32,6 +32,7 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import { DOC_PKG } from './document-entities.js';
 import { documentValueObjects } from './document-embeddables.js';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
+import { finderFields, mongoFinderMethods } from './finders.js';
 import { textFoldImport } from './text-fold.js';
 
 export function generate(model) {
@@ -202,6 +203,9 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort.and(TIE_BREAKER));
     }`);
   }
+  // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre el documento, con MongoTemplate.
+  const searchFinders = mongoFinderMethods(model, entity, imports);
+  methods.push(...searchFinders);
 
   // Drenaje de eventos de dominio: save() es el único punto por el que pasa todo
   // cambio persistido del agregado. Va dentro de la transacción, que aquí es real
@@ -283,14 +287,15 @@ ${saveBody}
       `    private static final Sort TIE_BREAKER = Sort.by(Sort.Order.asc("${entity.idField?.name ?? 'id'}"));\n`
     );
   }
+  fields.push(...finderFields(model, entity));
   fields.push(...claim.adapterValueFields(model, entity));
   fields.push(...reconciliationClaim.adapterValueFields(model, entity));
   fields.push(`    private final ${entity.name}MongoRepository ${repoField};`);
   const ctorParams = [`${entity.name}MongoRepository ${repoField}`];
   const ctorAssigns = [`        this.${repoField} = ${repoField};`];
-  // MongoTemplate solo donde hay reclamo: los dos lo necesitan porque ni findAndModify ni
-  // una consulta acotada por la marca de espera se expresan con un repositorio derivado.
-  if (claimMethods.length > 0) {
+  // MongoTemplate solo donde hay reclamo o búsqueda: ni findAndModify, ni una consulta acotada por la marca de espera,
+  // ni los filtros de un finder (DSL 2.22) se expresan con un repositorio derivado.
+  if (claimMethods.length > 0 || searchFinders.length > 0) {
     imports.add('org.springframework.data.mongodb.core.MongoTemplate');
     fields.push('    private final MongoTemplate mongoTemplate;');
     ctorParams.push('MongoTemplate mongoTemplate');

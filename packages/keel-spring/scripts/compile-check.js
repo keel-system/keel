@@ -57,6 +57,7 @@ import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { mainCompilable } from '../src/lib/main-compilable.js';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');
@@ -95,14 +96,23 @@ const paymentGatewayArg = args.find((arg) => arg.startsWith('--payment-gateway='
  * multiplican los seis por los tres brokers: eso son minutos por combinación y el código que
  * cambia con el motor no cambia además con el broker.
  */
-if (!fs.existsSync(path.join(fixturesDir, fixture, 'service.keel.yaml'))) {
+// Un diseño DERIVADO por su nombre (los finders de las búsquedas, DSL 2.22): la fixture de la que sale con su parche, el
+// MISMO que miden keel-dotnet y keel-nest (keel-core/test/helpers/finder-designs.js).
+const derived = FINDER_DESIGNS.find((design) => design.name === fixture) ?? null;
+const sourceFixture = derived?.from ?? fixture;
+const loadDesign = () => {
+  const loaded = loadService(path.join(fixturesDir, sourceFixture));
+  derived?.mutate(loaded.layers);
+  return loaded;
+};
+if (!fs.existsSync(path.join(fixturesDir, sourceFixture, 'service.keel.yaml'))) {
   console.error(`No existe la fixture '${fixture}' en ${fixturesDir}`);
   process.exit(2);
 }
 
 // El diseño se carga una vez aquí —y no solo dentro del bucle— porque de él depende qué
 // combinaciones tienen sentido.
-const { layers: fixtureLayers } = loadService(path.join(fixturesDir, fixture));
+const { layers: fixtureLayers } = loadDesign();
 
 // El motor del cuarto combo depende de lo que la fixture DECLARE. Con un diseño documental,
 // pedir MySQL no compila «lo mismo con otro motor»: produce un híbrido que nadie generaría
@@ -129,7 +139,7 @@ let failed = 0;
 for (const { broker, database } of combos) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), `keel-compile-${broker}-`));
   try {
-    const { manifest, layers, errors } = loadService(path.join(fixturesDir, fixture));
+    const { manifest, layers, errors } = loadDesign();
     if (errors.length > 0) {
       console.error(`${fixture}: la fixture no carga:\n  ${errors.join('\n  ')}`);
       process.exit(2);

@@ -28,7 +28,7 @@
     "assets"
   ],
   "keel": {
-    "dsl": "2.21"
+    "dsl": "2.22"
   },
   "engines": {
     "node": ">=18"

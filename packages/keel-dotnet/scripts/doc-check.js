@@ -85,7 +85,7 @@ const SUBJECTS = [
     }
   },
   // `optimisticLocking: declared` sobre documentos: la versión que declara el dominio (el MISMO parche que compila cs-check).
-  ...UNCOVERED_BRANCHES.filter((branch) => branch.name === 'mailer-mongo-lock').map((branch) => ({
+  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder'].includes(branch.name)).map((branch) => ({
     name: branch.name,
     from: branch.from,
     mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name)
@@ -108,6 +108,9 @@ const SABOTAGES = {
   // La autoría de política (13h): created_by se reescribe en cada guardado.
   // La lectura por lote por id (los embebidos de una página) se deja el primer id.
   'id-batch': ['Repositories/', 'new BsonDocument("$in", new BsonArray(keys.Select(', 'new BsonDocument("$in", new BsonArray(keys.Skip(1).Select('],
+  // Los finders (DSL 2.22): el texto buscado como patrón y no como literal, y el where que no filtra.
+  'finder-literal': ['Repositories/', 'new BsonRegularExpression("^" + Regex.Escape(', 'new BsonRegularExpression("^" + ('],
+  'finder-where': ['Repositories/', /conditions\.Add\(new BsonDocument\("status", [^;]+\);\n/g, ''],
   'created-by': ['Repositories/', 'fields["updated_by"] = actor;', 'fields["updated_by"] = actor; fields["created_by"] = actor;'],
   constraint: ['Persistence/PersistenceErrors.cs', 'detail.IndexOf("index: " + index, StringComparison.Ordinal)', 'detail.IndexOf("index: " + index + "-", StringComparison.Ordinal)'],
   partial: ['Persistence/DocumentIndexes.cs', 'PartialFilterExpression = new BsonDocument("status", "', 'PartialFilterExpression = new BsonDocument("status", "x'],
@@ -209,8 +212,10 @@ try {
         for (const file of walk(path.join(root, name, 'src'))) {
           if (!file.replaceAll('\\', '/').includes(suffix)) continue;
           const content = fs.readFileSync(file, 'utf8');
-          if (content.includes(from)) {
-            fs.writeFileSync(file, content.replaceAll(from, to));
+          // Una cadena se sustituye entera; una expresión regular (con su `g`), donde case.
+          const changed = typeof from === 'string' ? content.replaceAll(from, to) : content.replace(from, to);
+          if (changed !== content) {
+            fs.writeFileSync(file, changed);
             applied += 1;
           }
         }

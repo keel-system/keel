@@ -36,6 +36,10 @@ async countActiveByCategory(categoryId: string): Promise<number> {
   prueba y no en producción. La condición va al motor.
 - **Una consulta por elemento** dentro de un bucle sobre una página (N+1): una consulta con `In([...ids])`
   y se indexa el resultado.
+- **Reescribir un finder de build.** Una búsqueda con todos sus inputs enlazados (DSL 2.22: por nombre o con
+  `filter`, más su `where`) ya tiene su método en el puerto y en el adaptador, con la interfaz `<Op>Filter`: el
+  handler lo llama y la nota dice con qué. Solo escribes la consulta cuando la nota dice «Sin finder de build»;
+  si una `rule` restringe algo que el finder no aplica, es un designGap, no un `and(...)` más.
 - **Un patrón LIKE concatenado a mano** (`Like('%' + texto + '%')`): el texto buscado es literal, y un `%`
   o un `_` del parámetro harían de comodín. El patrón de un filtro `match: prefix | contains` lo compone
   `LikePattern.prefix(...)`/`contains(...)` (`infrastructure/persistence/like-pattern.ts`, de build) sobre el

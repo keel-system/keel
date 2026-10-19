@@ -312,6 +312,12 @@ entidad, la estampa en el adaptador con `TextFold`, pone la unicidad sobre ella 
 corrida `catalog`— también **el orden por defecto del listado** (`<OPERACION>_ORDER`).
 No la reintroduzcas ni cambies el `Sort`: ya apunta a la sombra.
 
+Si la búsqueda tiene todos sus inputs enlazados (DSL 2.22: por nombre o con `filter`, más su `where`), build
+emite ya su **finder**: el record `<Op>Filter` en el puerto y una `Specification` en el adaptador, con el
+plegado, el patrón LIKE escapado y el desempate por id. El handler lo llama y la nota dice con qué; si una
+`rule` restringe algo que el finder no aplica, es un designGap, no un predicado más. Lo que sigue a
+continuación vale para la búsqueda **sin** finder (la nota lo dice: «Sin finder de build»).
+
 Lo que sigue siendo tuyo es la **consulta del filtro** contra esa columna
 (`skills/keel-spring-database/references/jpa-mapping.md` § Búsqueda que ignora mayúsculas y
 acentos). Si el `compare` lo declara solo el FILTRO de una query, build emite y estampa igual la

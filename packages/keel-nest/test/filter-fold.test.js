@@ -55,14 +55,20 @@ test('documental: el documento lleva name_normalized y el adaptador lo estampa',
   assert.match(nest(DOCUMENT).read('product-repository-impl.ts'), /name_normalized: TextFold\.foldCaseAndAccents\(entity\.name\)/);
 });
 
+// Una búsqueda SIN finder (DSL 2.22: un input que no enlaza): la consulta es del agente, y la nota le dice cómo plegar.
+// Con todos los inputs enlazados, el finder ya pliega y la nota del handler es la del finder (test/finders.test.js).
+const withoutFinder = (layers) => {
+  layers['use-cases'].operations.listProducts.input.fields.search = { type: 'string', constraints: { maxLength: 60 } };
+};
+
 test('la nota del handler es la MISMA en los dos y manda contra la sombra, nunca con lower()/translate()', () => {
-  const { model } = nest(RELATIONAL);
+  const { model } = nest(RELATIONAL, withoutFinder);
   const operation = model.services.flatMap((s) => s.operations).find((o) => o.name === 'listProducts');
   const [note] = textFilterNotes(model, operation);
   assert.match(note, /pliega el parámetro con TextFold\.foldCaseAndAccents\(\.\.\.\) y compáralo contra Product\.nameNormalized/);
   const flat = (text) => text.replace(/\n\s*\/\/\s*/g, ' ');
-  assert.ok(flat(spring(RELATIONAL).read('/ListProductsQueryHandler.java')).includes('compáralo contra Product.nameNormalized'));
-  assert.ok(flat(nest(RELATIONAL).read('list-products-query-handler.ts')).includes('compáralo contra Product.nameNormalized'));
+  assert.ok(flat(spring(RELATIONAL, withoutFinder).read('/ListProductsQueryHandler.java')).includes('compáralo contra Product.nameNormalized'));
+  assert.ok(flat(nest(RELATIONAL, withoutFinder).read('list-products-query-handler.ts')).includes('compáralo contra Product.nameNormalized'));
 });
 
 test('un campo unique sin compare conserva su unicidad sobre la columna cruda aunque un filtro lo pliegue', () => {
@@ -95,13 +101,13 @@ test('dos filtros con plegados distintos sobre el mismo campo: ninguna sombra, y
 test('un filtro por patrón: el texto buscado es LITERAL, en la nota de los dos y en el LikePattern que emite keel-nest', async () => {
   // El agente de keel-nest escribió su escape con un template literal que nunca interpolaba: ?name=50% buscaba
   // «50${character}», y la barra no se escapaba. Ningún escenario buscaba un comodín (corrida catalog-nest, 2026-10-13).
-  const { model } = nest(RELATIONAL);
+  const { model } = nest(RELATIONAL, withoutFinder);
   const operation = model.services.flatMap((s) => s.operations).find((o) => o.name === 'listProducts');
   const [note] = textFilterNotes(model, operation);
   assert.match(note, /el texto buscado es LITERAL: un %, un _ o una barra invertida/);
   const flat = (text) => text.replace(/\n\s*\/\/\s*/g, ' ');
-  assert.ok(flat(spring(RELATIONAL).read('/ListProductsQueryHandler.java')).includes('el texto buscado es LITERAL'));
-  assert.ok(flat(nest(RELATIONAL).read('list-products-query-handler.ts')).includes('LikePattern.prefix(...)/contains(...)'));
+  assert.ok(flat(spring(RELATIONAL, withoutFinder).read('/ListProductsQueryHandler.java')).includes('el texto buscado es LITERAL'));
+  assert.ok(flat(nest(RELATIONAL, withoutFinder).read('list-products-query-handler.ts')).includes('LikePattern.prefix(...)/contains(...)'));
 
   const { files } = planFixture('catalog-extended', { stack: RELATIONAL });
   const tree = transpileTree(files);

@@ -17,6 +17,8 @@
 
 import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } from './render.js';
 import { textFilterNotes, hasPatternFilter } from 'keel-core/gen/text-filters';
+import { finderNote } from 'keel-core/gen/query-filters';
+import { finderCall } from './finders.js';
 import { usesLikePattern, LIKE_PATTERN_TS } from './persistence-entities.js';
 import { refTargetsOf, listedIdsNote } from 'keel-core/gen/ref-targets';
 import { resolverPath } from './ref-resolvers.js';
@@ -432,8 +434,11 @@ function handlerNotes(model, operation) {
   const cacheParam = operation.messageKind === 'query' ? 'query' : 'command';
   const cached = cacheNote(model, operation, { call: `await this.operationCache.getOrLoad({cache}, ${cacheParam}, () => ...)` });
   if (cached) notes.push(cached);
-  for (const note of textFilterNotes(model, operation)) notes.push(note);
-  if (usesLikePattern(model) && hasPatternFilter(operation)) {
+  // La búsqueda con finder (DSL 2.22) ya aplica sus filtros, plegado y patrón incluidos: su nota sustituye a las de texto.
+  const finder = finderNote(operation, { call: operation.finder ? finderCall(operation.finder) : '' });
+  if (finder) notes.push(finder);
+  if (!operation.finder) for (const note of textFilterNotes(model, operation)) notes.push(note);
+  if (!operation.finder && usesLikePattern(model) && hasPatternFilter(operation)) {
     notes.push(
       `El patrón LIKE de esos filtros lo compone LikePattern.prefix(...)/contains(...) (${LIKE_PATTERN_TS}, de build) sobre el valor ya plegado: ` +
         "nunca '%' concatenado a mano"

@@ -32,8 +32,10 @@ import {
   elementClass,
   unidirectionalParents,
   fkProperty,
-  TEXT_FOLD_TS
+  TEXT_FOLD_TS,
+  LIKE_PATTERN_TS
 } from './persistence-entities.js';
+import { entityFinders, portFinderParts, relationalFinderMethods, sortConstants } from './finders.js';
 
 export const PORT_DIR = 'domain/repository';
 export const REPO_DIR = 'infrastructure/persistence/repositories';
@@ -343,6 +345,10 @@ function renderPort(model, entity) {
     imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true });
     methods.push(`  /** Una página de agregados, en el orden pedido y con el id como desempate. */\n  abstract list(pageable: Pageable): Promise<Page<${entity.name}>>;`);
   }
+  // Los finders de las búsquedas con todos sus inputs enlazados (DSL 2.22, keel-core/gen/query-filters.js).
+  const finderParts = portFinderParts(model, entity, imports);
+  methods.push(...finderParts.methods);
+  if (finderParts.methods.length > 0) imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true });
   // Los reclamos de los barridos que sacan filas de esta raíz (incremento 10c).
   methods.push(...portClaimMethods(model, entity));
   // La guarda de un efecto irreversible (mail.sentBy con estado en vuelo, incremento 12e).
@@ -353,7 +359,7 @@ function renderPort(model, entity) {
     `  /**\n   * Guarda el agregado entero (sus entidades internas y sus listas) y devuelve lo guardado. Con\n   * bloqueo optimista, una versión obsoleta sale como conflicto de concurrencia.\n   */\n  abstract save(entity: ${entity.name}): Promise<${entity.name}>;`,
     `  abstract deleteById(${id?.name ?? 'id'}: ${idType}): Promise<void>;`
   );
-  const body = `/**
+  const body = `${finderParts.declarations.map((declaration) => `${declaration}\n\n`).join('')}/**
  * Puerto de persistencia del agregado ${entity.name}. Clase abstracta y no interfaz: sirve también de
  * token de inyección, sin que el dominio importe nada del framework. El adaptador vive en
  * infrastructure/persistence/repositories.
@@ -488,6 +494,14 @@ function renderAdapter(model, entity) {
   }`);
   }
 
+  // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre la entidad ORM, y solo esos.
+  const finders = relationalFinderMethods(model, entity, imports, { ormClass: ormClass(entity.name), hasRelations, textFold: TEXT_FOLD_TS, likePattern: LIKE_PATTERN_TS });
+  if (finders.length > 0) {
+    imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true }, { symbol: 'FindOptionsOrder', from: 'typeorm', type: true });
+    for (const finder of entityFinders(model, entity)) imports.push(...(finder.criteria.length > 0 ? [{ symbol: finder.filterType, from: portPath(entity), type: true }] : []));
+  }
+  methods.push(...finders);
+
   methods.push(...adapterClaimMethods(model, entity, imports, findOptions));
   methods.push(...adapterGuardMethods(model, entity, imports, findOptions, idType, idName));
   methods.push(...adapterReconciliationMethods(model, entity, imports, findOptions));
@@ -501,7 +515,7 @@ function renderAdapter(model, entity) {
   }`);
 
   const sortable = sortableProperties(model, entity);
-  const body = `${hasRelations ? `/** El agregado entero: lo que se carga con la raíz y se borra con ella. */\nconst RELATIONS = ${literal(relations)} as const;\n\n` : ''}${isPaginated(model, entity) ? stableOrderHelper(entity, sortable) : ''}/**
+  const body = `${hasRelations ? `/** El agregado entero: lo que se carga con la raíz y se borra con ella. */\nconst RELATIONS = ${literal(relations)} as const;\n\n` : ''}${isPaginated(model, entity) || entityFinders(model, entity).length > 0 ? stableOrderHelper(entity, sortable) : ''}${sortConstants(model, entity, imports, PAGE_TS)}/**
  * Adaptador del puerto ${portClass(entity)} sobre TypeORM. Toma el EntityManager de la transacción
  * abierta (la abre el UseCaseMediator); sin ella, cada lectura va sola y cada escritura abre la suya.
  */

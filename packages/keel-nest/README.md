@@ -28,7 +28,7 @@ diseño. `check` imprime además el `design-gaps.yaml` que haya dejado una gener
    (`keel-core/gen/design-gate.js`): un diseño que uno rechaza no lo genera el otro. Un diseño no listo
    (`keel validate --ready` en rojo) solo se genera con `--accept-unready`, que queda estampado en
    `keel-generated.json`.
-2. **DSL soportada**: `2.21`, la misma que keel-spring. El método soporta una sola versión.
+2. **DSL soportada**: `2.22`, la misma que keel-spring. El método soporta una sola versión.
 3. **Salida**: `services/<servicio>-nest/`, un proyecto NestJS 12 sobre **Fastify**, en ESM sobre Node 22.12+,
    con TypeScript 6 en `strict` y Vitest 5. Trae la arquitectura hexagonal con CQRS (`src/domain`,
    `src/application` sin Nest, `src/infrastructure`), el contrato del cable de `keel-core/gen/wire.js`, los perfiles
@@ -109,4 +109,4 @@ npm run matrix --workspace packages/keel-nest           # la matriz de paridad (
 
 | Paquete | DSL Keel | Necesita |
 |---------|----------|----------|
-| keel-nest 0.1.x | `keel: "2.21"` | Node.js >= 18 para el generador; Node.js 22.12+ y Docker o Podman para el proyecto generado |
+| keel-nest 0.1.x | `keel: "2.22"` | Node.js >= 18 para el generador; Node.js 22.12+ y Docker o Podman para el proyecto generado |

@@ -13,6 +13,7 @@ import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
+import { entityFinders, finderFields, jpaFinderMethods, likePatternHelper, portFinderMethods } from './finders.js';
 import { partialUniqueIndexes } from './persistence-members.js';
 import { collectInternalEntities, keyShadow, naturalKeyBatchReason, uniqueFields } from 'keel-core/gen/relational';
 
@@ -390,6 +391,8 @@ export function renderPort(model, entity, paginated, batchLookup) {
   // El reclamo de los barridos. Va en el puerto —y no en un servicio aparte— porque es
   // una consulta de persistencia como las demás, y porque su forma correcta depende del
   // motor: dejarla fuera es dejar que la escriba quien no sabe contra qué corre.
+  // Los finders de las búsquedas con todos sus inputs enlazados (DSL 2.22, keel-core/gen/query-filters.js).
+  methods.push(...portFinderMethods(model, entity, imports));
   methods.push(...claim.portMethods(model, entity, imports));
   // Y la guarda de una fila con un efecto externo irreversible detrás: mismo argumento,
   // sujeto distinto (una fila que el llamante ya eligió, no un lote que se elige aquí).
@@ -497,7 +500,10 @@ ${graph}    @Override
   ];
   if (claimMethods.length > 0) methods += `\n\n${claimMethods.join('\n\n')}`;
 
-  const body = `public interface ${entity.name}JpaRepository extends JpaRepository<${entity.name}Jpa, ${id.javaType}> {${methods}\n}`;
+  // Los finders de las búsquedas (DSL 2.22) son Specification: el repositorio las ejecuta si las sabe ejecutar.
+  const specifications = entityFinders(model, entity).length > 0;
+  if (specifications) imports.add('org.springframework.data.jpa.repository.JpaSpecificationExecutor');
+  const body = `public interface ${entity.name}JpaRepository extends JpaRepository<${entity.name}Jpa, ${id.javaType}>${specifications ? `, JpaSpecificationExecutor<${entity.name}Jpa>` : ''} {${methods}\n}`;
 
   return {
     path: javaPath(model, REPO_PKG, `${entity.name}JpaRepository`),
@@ -608,6 +614,10 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort.and(TIE_BREAKER));
     }`);
   }
+  // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre el espejo JPA, y solo esos.
+  methods.push(...jpaFinderMethods(model, entity, imports, jpaField));
+  const likePattern = likePatternHelper(model, entity);
+  if (likePattern) methods.push(likePattern);
   methods.push(...claim.adapterMethods(model, entity, imports, jpaField));
   methods.push(...claim.guardAdapterMethods(model, entity, imports, jpaField));
   methods.push(...reconciliationClaim.adapterMethods(model, entity, imports, jpaField));
@@ -713,6 +723,7 @@ ${saveBody}
       `    private static final Sort TIE_BREAKER = Sort.by(Sort.Order.asc("${entity.idField?.name ?? 'id'}"));\n`
     );
   }
+  fields.push(...finderFields(model, entity));
   fields.push(...claim.adapterValueFields(model, entity));
   fields.push(...reconciliationClaim.adapterValueFields(model, entity));
   fields.push(`    private final ${entity.name}JpaRepository ${jpaField};`);

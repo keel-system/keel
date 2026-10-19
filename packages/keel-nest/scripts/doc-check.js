@@ -35,6 +35,8 @@ import { foldedShadow } from 'keel-core/gen/relational';
 import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startMongo, stopDatabase } from './lib/database-container.js';
 import { sampleEntity, PROBE_HELPERS } from './lib/samples.js';
+import { finderBlock } from './lib/finder-probes.js';
+import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 import { adapterArgs, storeBlocks, storePreamble } from './lib/document-store-probes.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { AMQPLIB_VERSION, AWS_SDK_VERSION, FASTIFY_MULTIPART_VERSION, JOSE_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION } from '../src/lib/assets.js';
@@ -44,6 +46,30 @@ import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantF
 import { guardClaimsFor } from '../src/scaffold/claim.js';
 
 const keep = process.argv.includes('--keep');
+// --subject=<etiqueta>: uno solo de SUBJECTS (para iterar; la red completa es sin él).
+const onlySubject = process.argv.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
+// --sabotage=<id> rompe lo emitido EN MEMORIA, antes de escribirlo, conservando la forma: la red tiene que salir en rojo
+// en las comprobaciones de esa regla. [sufijo del archivo, texto o expresión, sustituto].
+const SABOTAGES = {
+  // Los finders (DSL 2.22): el texto buscado como patrón y no como literal, y el where que no filtra.
+  'finder-literal': ['job-repository-impl.ts', String.raw`return value.replace(/[.*+?^${'$'}{}()|[\]\\]/g, '\\$&');`, 'return value;'],
+  'finder-where': ['job-repository-impl.ts', /^ {4}conditions\.push\(\{ '[^']+': toEnumName\(.*\) \}\);\n/gm, '']
+};
+const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
+if (sabotage && !SABOTAGES[sabotage]) {
+  console.error(`No hay ningún sabotaje '${sabotage}'. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);
+  process.exit(2);
+}
+let sabotagesApplied = 0;
+/** El contenido de un archivo emitido, con el sabotaje aplicado si le toca. */
+function sabotaged(file) {
+  if (!sabotage || typeof file.content !== 'string') return file.content;
+  const [suffix, from, to] = SABOTAGES[sabotage];
+  if (!file.path.endsWith(suffix)) return file.content;
+  const content = typeof from === 'string' ? file.content.replaceAll(from, to) : file.content.replace(from, to);
+  if (content !== file.content) sabotagesApplied += 1;
+  return content;
+}
 // Los sujetos y lo que cubre cada uno: hijas anidadas en dos niveles, un value object dentro de otro,
 // fechas sin hora y listas de escalares (inspection-reports, sin su mensajería, que es del 12c); el
 // reloj y la clave natural del barrido (job-dispatch-mongo); value objects en listas, sombras plegadas,
@@ -66,7 +92,15 @@ const SUBJECTS = [
     mutate(layers) {
       layers.domain.entities.Job.fields.reference.compare = 'ignore-case-accents';
     }
-  }
+  },
+  // Los finders de las búsquedas sobre documentos (DSL 2.22): la lista y la página con enum, rango exclusivo y texto
+  // por patrón, plegado y sin plegar. El MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js).
+  ...FINDER_DESIGNS.filter((design) => design.name === 'jobs-mongo-finder').map((design) => ({
+    name: design.from,
+    label: design.name,
+    withoutLayers: [],
+    mutate: design.mutate
+  }))
 ];
 const results = [];
 
@@ -339,6 +373,7 @@ ${claim.stampField ? `    check('${name}: ${claim.method} estampa ${claim.stampF
     check('${name}: ${claim.method} CONFIRMÓ la marca (la ve una lectura posterior)', String(reloaded?.${root.lifecycle.field}) === String(first?.${root.lifecycle.field}), JSON.stringify(reloaded?.${root.lifecycle.field}));
   }`).join('\n')}
 ${foldedBlock(model, root, index, ctx, finder)}
+${finderBlock(model, root, index, ctx, { sampleEntity })}
 ${credentialFinders(model, root).map((credential) => `  // La credencial que NO es la primera de la lista: resolver por la clave natural no la encontraría.
   check('${name}: ${credential.name} resuelve por una credencial que no es la primera', (await repository.${credential.name}(original.${credential.field.name}[original.${credential.field.name}.length - 1]))?.id === original.id);
   check('${name}: ${credential.name} con una credencial ajena devuelve null', (await repository.${credential.name}('nadie-' + randomUUID())) == null);`).join('\n')}
@@ -441,7 +476,7 @@ try {
   process.exit(1);
 }
 try {
-  for (const subject of SUBJECTS) {
+  for (const subject of SUBJECTS.filter((candidate) => !onlySubject || (candidate.label ?? candidate.name) === onlySubject)) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, subject.name));
     for (const layer of subject.withoutLayers) {
       delete manifest.layers[layer];
@@ -457,7 +492,7 @@ try {
     for (const file of files) {
       const out = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(out), { recursive: true });
-      fs.writeFileSync(out, file.content);
+      fs.writeFileSync(out, sabotaged(file));
     }
     fs.symlinkSync(path.join(projectDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
     const compiled = run(process.execPath, [tsc, '-p', 'tsconfig.build.json'], { cwd: dir });
@@ -488,6 +523,10 @@ if (keep) {
   const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-nest-doc-check-'));
   fs.cpSync(path.join(workspace, 'doc-check'), kept, { recursive: true, filter: (source) => !source.includes('node_modules') });
   console.log(`Sujetos conservados en ${kept}`);
+}
+if (sabotage && sabotagesApplied === 0) {
+  console.error(`El sabotaje '${sabotage}' no se aplica a lo emitido hoy (¿cambió el texto?).`);
+  process.exit(2);
 }
 const failedSteps = results.filter((result) => !result.ok).length;
 console.log(failedSteps === 0 ? `\ndoc-check: ${results.length}/${results.length} en verde.` : `\ndoc-check: ${failedSteps} paso(s) en rojo.`);

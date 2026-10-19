@@ -17,7 +17,7 @@
 
 import { persistedMembers, collectInternalEntities, LOCK_VERSION, orderingFieldOf, orderingTieBreakerOf } from 'keel-core/gen';
 import { documentShape, DOCUMENT_ID, storageOf } from 'keel-core/gen/document';
-import { snakeCase } from 'keel-core/gen/naming';
+import { screamingSnake, snakeCase } from 'keel-core/gen/naming';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
 import { DIRS, classPath, entityDir, tsModule, tsString } from './render.js';
 import { domainMembers } from './entities.js';
@@ -25,6 +25,7 @@ import { TEXT_FOLD_TS } from './persistence-entities.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
 import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, naturalKeyBatchFinder, occupantFinders, uniqueFieldFinders, constructorOf, emitsDomainEvents, credentialFinders } from './repositories.js';
 import { documentGuardMethods, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
+import { entityFinders, finderSignature, RANGE_OPERATORS, sortConstant, sortConstants } from './finders.js';
 import { AUDIT_ACTOR_TS } from './audit-actor.js';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────
@@ -484,6 +485,15 @@ export function renderDocumentAdapter(model, entity) {
   }`);
   }
 
+  // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre el documento, y solo esos.
+  const searchFinders = documentFinderMethods(model, entity, use, imports);
+  if (searchFinders.length > 0) {
+    imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true }, { symbol: 'Sort', from: 'mongodb', type: true });
+    for (const finder of entityFinders(model, entity)) if (finder.criteria.length > 0) imports.push({ symbol: finder.filterType, from: portPath(entity), type: true });
+  }
+  methods.push(...searchFinders);
+  const literalPatterns = entityFinders(model, entity).some((finder) => finder.criteria.some((criterion) => criterion.match !== 'exact'));
+
   // Los reclamos de los barridos que sacan documentos de esta raíz y los de las reconciliaciones que la esperan.
   methods.push(...documentSweepClaimMethods(model, entity), ...documentReconciliationMethods(model, entity));
   methods.push(...documentGuardMethods(model, entity, idFilter, idType, idName));
@@ -494,7 +504,10 @@ export function renderDocumentAdapter(model, entity) {
   }`);
 
   for (const name of helpers) imports.push({ symbol: name, from: BSON_VALUES_TS });
-  const paginated = isPaginated(model, entity) ? stableOrderHelper(model, entity) : '';
+  const paginated =
+    (isPaginated(model, entity) || searchFinders.length > 0 ? stableOrderHelper(model, entity) : '') +
+    sortConstants(model, entity, imports, PAGE_TS) +
+    (literalPatterns ? LITERAL_PATTERN : '');
   const body = `/** La colección del agregado: el documento de la raíz, con sus hijas dentro. */
 const COLLECTION = ${tsString(entity.collectionName)};
 
@@ -522,6 +535,94 @@ ${methods.join('\n\n')}
 
 ${[...entityFns, ...voFns].join('\n\n')}`;
   return { path: file, content: tsModule(file, imports, body) };
+}
+
+// ─── Los finders de las búsquedas (DSL 2.22) ─────────────────────────────────
+
+const MONGO_OPERATOR = { gt: '$gt', gte: '$gte', lt: '$lt', lte: '$lte' };
+
+// String.raw: la expresión del escape lleva barras que tienen que llegar tal cual.
+const LITERAL_PATTERN = String.raw`/**
+ * El texto buscado como LITERAL dentro de una expresión regular: un punto, un asterisco o un corchete del
+ * parámetro casan consigo mismos. Sin escapar, ?q=5. casaría con cualquier carácter detrás del 5.
+ */
+function literalPattern(value: string): string {
+  return value.replace(/[.*+?^${'$'}{}()|[\]\\]/g, '\\$&');
+}
+
+`;
+
+/** La clave del documento que restringe un criterio, y cómo se escribe su valor (el mismo convertidor con que se guarda). */
+function documentTarget(model, entity, criterion, use) {
+  const { target } = criterion;
+  if (criterion.shadow) return { key: keyOf(model, entity, criterion.shadow.name), write: (expr) => expr };
+  if (target.kind === 'relation') {
+    const member = persistedMembers(model, entity).find((candidate) => candidate.kind === 'externalRef' && candidate.relation.name === target.relation.name);
+    return { key: member?.column ?? `${snakeCase(target.relation.name)}_id`, write: (expr) => use.helper('toUuid', expr) };
+  }
+  if (target.kind === 'vo') return { key: `${keyOf(model, entity, target.field.name)}.${snakeCase(target.sub.name)}`, write: (expr) => writeScalar(target.sub, expr, use) };
+  return { key: keyOf(model, entity, target.field.name), write: (expr) => writeScalar(target.field, expr, use) };
+}
+
+function documentFinderMethods(model, entity, use, imports) {
+  const finders = entityFinders(model, entity);
+  if (finders.length === 0) return [];
+  imports.push({ symbol: 'Filter', from: 'mongodb', type: true });
+  return finders.map((finder) => {
+    const lines = ['    const conditions: Filter<StoredDocument>[] = [];'];
+    for (const entry of finder.fixed) {
+      let value = typeof entry.value === 'string' ? tsString(entry.value) : String(entry.value);
+      if (entry.field.kind === 'enum') {
+        use.enum(entry.field.namedType);
+        value = `${entry.field.namedType}.${screamingSnake(String(entry.value))}`;
+      }
+      lines.push(`    conditions.push({ ${tsString(keyOf(model, entity, entry.name))}: ${writeScalar(entry.field, value, use)} });`);
+    }
+    for (const criterion of finder.criteria) {
+      const { key, write } = documentTarget(model, entity, criterion, use);
+      let value = `filter.${criterion.name}`;
+      if (criterion.shadow) {
+        use.import({ symbol: 'TextFold', from: TEXT_FOLD_TS });
+        value = `TextFold.${criterion.shadow.accents ? 'foldCaseAndAccents' : 'foldCase'}(${value})`;
+      }
+      const condition =
+        criterion.match !== 'exact'
+          ? `{ ${tsString(key)}: { $regex: ${criterion.match === 'prefix' ? "'^' + " : ''}literalPattern(${value}) } }`
+          : RANGE_OPERATORS.has(criterion.op)
+            ? `{ ${tsString(key)}: { ${MONGO_OPERATOR[criterion.op]}: ${write(value)} } }`
+            : `{ ${tsString(key)}: ${write(value)} }`;
+      const statement = `conditions.push(${condition});`;
+      lines.push(criterion.required ? `    ${statement}` : `    if (filter.${criterion.name} != null) ${statement}`);
+    }
+    lines.push('    const query: Filter<StoredDocument> = conditions.length === 0 ? {} : { $and: conditions };');
+    const tail =
+      finder.result === 'page'
+        ? `    // Una tras otra y no en paralelo: dentro de una transacción el driver no admite operaciones
+    // concurrentes sobre la misma sesión.
+    const documents = await this.collection
+      .find(query, { session: this.session })
+      .sort(withStableOrder(pageable))
+      .skip(pageable.page * pageable.size)
+      .limit(pageable.size)
+      .toArray();
+    const total = await this.collection.countDocuments(query, { session: this.session });
+    return {
+      items: documents.map(toDomain${entity.name}),
+      page: pageable.page,
+      size: pageable.size,
+      totalElements: total,
+      totalPages: Math.ceil(total / pageable.size)
+    };`
+        : `    const documents = await this.collection
+      .find(query, { session: this.session })
+      .sort(withStableOrder({ page: 0, size: 0, sort: ${sortConstant(finder)} }))
+      .toArray();
+    return documents.map(toDomain${entity.name});`;
+    return `  async ${finderSignature(finder, entity)} {
+${lines.join('\n')}
+${tail}
+  }`;
+  });
 }
 
 function stableOrderHelper(model, entity) {

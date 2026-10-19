@@ -102,6 +102,26 @@ operations:
       # Marcador operativo del barrido, no algo que el cliente necesite.
       exclude: [recordWithdrawalAwaitingSince]
 
+  # Las tres formas de filtro del DSL 2.22: `categoryId` enlaza por nombre con la relación `category`,
+  # `createdFrom`/`createdTo` declaran con `filter` el rango sobre `createdAt`, y `where` es el filtro
+  # fijo («solo los borradores») que antes habría sido una regla en prosa. Con todos los inputs
+  # enlazados, build emite el finder entero.
+  listDraftProducts:
+    description: Lista los productos aún en borrador, pendientes de publicar, por categoría y fecha de alta.
+    kind: query
+    input:
+      fields:
+        categoryId: { type: uuid }
+        createdFrom: { type: timestamp, filter: { field: createdAt, op: gte } }
+        createdTo: { type: timestamp, filter: { field: createdAt, op: lte } }
+    where: { status: draft }
+    output:
+      entity: Product
+      paginated: true
+      sort: [createdAt:desc]
+      # Marcador operativo del barrido, no algo que el cliente necesite.
+      exclude: [recordWithdrawalAwaitingSince]
+
   getProductsByIds:
     description: Recupera en lote los productos indicados por sus identificadores.
     kind: query
