@@ -1,18 +1,18 @@
-reviewedAt: 2.0.2
+reviewedAt: 2.1.0
 passes: 3
-scenariosSha256: c1854b97a6858c9d2ecae394d608371999f2b08a085ebc1e34d10ec52281f8cb
-conventionsSha256: cc90dc94206bddf5e4445da623a2ed0464f10ab98e814dbc088b227e032ef8a1
+scenariosSha256: f5250cdacdd6a2d45c013e094669e8260ddeb9d4da8cd0a49242ce8c61ace678
+conventionsSha256: 9aa97d4c3a26af547c1ea5730d6d4d01210197759c515834a2cfb76f1c007f07
 flows:
   - { id: FL-APP-001, sha256: fdd7bc028c1c41a79cd4d6aa8af9b6c150bb278514dbf8ba1f0d15bc14e2a445 }
   - { id: FL-APP-001-B, sha256: ebe3b82a12b56f470001f47e899142bb98a48c43fe3d474a39280fac8e8943ae }
-  - { id: FL-TPL-001, sha256: 4356aad96136c13f11bd7bd415d8d52febf6c634a99d4418a8d2e8d7817a3eb9 }
+  - { id: FL-TPL-001, sha256: 119b34e0b204ed8d4c583a1ed4e0c18fd00062e172e06296da523f9c6c487f26 }
   - { id: FL-TPL-002, sha256: 820d5eea9280703e7b0f48118ce0119a9645709ca839a7d7a15278d734034f8c }
   - { id: FL-TPL-003, sha256: d5f42a387f3a73d04db88edd7d3f8c6399d27c759248936e0d44069c34ff6912 }
   - { id: FL-TPL-010, sha256: 211b68bca16d9d1ba08d6b0acd71217bf3b690c835a1c7f615564aedf4b07833 }
   - { id: FL-TPL-010-B, sha256: 70346c8df0b545375b29d2dc54ff531e076c29f67fe09f71164747f530f3ac45 }
   - { id: FL-TPL-011, sha256: a0444b89e0298b06aec8e57c3513bbc065515f0684401c359653a29ca3c31c0a }
   - { id: FL-TPL-012, sha256: d6cb389820456b648873f74646bf73c2c1140f5e1dbf6b662b3942317b9e56c7 }
-  - { id: FL-NTF-001, sha256: 6a32bfd5e022eb0106611f39dcb97011b58a0aed93ff4fce948c2b1129636f82 }
+  - { id: FL-NTF-001, sha256: f73711d015099b56dfe7c82a7e614808eebe6d032eb804f317b2ac0dd6ab2f8d }
   - { id: FL-NTF-001-B, sha256: 0e3a13e94f6eb4622c004fe3f62ba5a9e8c739690a0f767e4c1c8d4ba809aac1 }
   - { id: FL-NTF-001-C, sha256: 06f1b0a12e318a98691153258a302f93887449778955fe800c2275f6c7dbf7e1 }
   - { id: FL-NTF-002, sha256: ec2dc015f7bef8045a0a88e37ea37ece8897bc264c08d5ae2d22b2ae030c8c7f }
@@ -22,141 +22,15 @@ flows:
   - { id: FL-EVT-001-B, sha256: c1a2f65c2174f378b2c60d8bf9875a485dc0d114085ec9e97d671a1b059c491e }
   - { id: FL-EVT-002, sha256: 88560edc14032b50502b17cec3ff5cb3009a2e022ccc48897c116a47a7fb22af }
   - { id: FL-EVT-003, sha256: f0d816f5c16df08c50116055a6f40159f5629e667e0b63fab0c710afc9ac8651 }
-  - { id: FL-DSP-001, sha256: 18ca0c738ba6f228372b7c53424b28364975e97d8f4c7dcad2ae16e848d74f8d }
+  - { id: FL-DSP-001, sha256: 3df13f235e4e7103647ac4d7de002faaec04e023d9af70398c1e880693ed5e50 }
   - { id: FL-CLU-001, sha256: 31dec2eb544b06791cad17ec3b6c7adaed8dda0ba6594f5d253e7d296e4c9218 }
   - { id: FL-OBX-001, sha256: f7989a1c3f960c1b6d0f63baefdafc6ff766d71b190fc16fda7ced9eae48d668 }
   - { id: FL-OBX-002, sha256: b0e2e2c572725c01388821a4026ef1494e5d327ce01711852cd966715a92a85b }
-findings:
-  # --- Heredados de la v1.0.0, aceptados a sabiendas y aún aplicables: se conservan tal cual ---
-  - flow: FL-TPL-001
-    step: "Then 2"
-    kind: other
-    artifact: use-cases.registerTemplate.output
-    evidence: >-
-      El Then fija el cuerpo «exactamente» con `applicationId: <a1>` y con `variables: [{id, name,
-      required, description}, ...]`. registerTemplate (y getTemplate, publishTemplate) declaran
-      `output: { entity: Template }` sin `embed` ni `exclude`, y Template lleva `application` y
-      `variables` como RELACIONES (many-to-one y one-to-many), no como campos. Nada en el diseño
-      fija que la relación a Application salga como un id plano llamado `applicationId`, ni que la
-      colección hija salga incrustada con sus `id`. El mismo cuerpo lo reutilizan FL-TPL-010 Then 2
-      y FL-APP-001 Then 4.
-    proposal: >-
-      En el diseño, declarar la proyección en el output (p. ej. `embed: [variables]` y cómo se
-      expone `application`); o en el escenario, dejar de afirmar la forma exacta de las dos
-      relaciones y fijar solo los campos propios de Template.
-    resolution: accepted
-    reason: "Es la proyección canónica del generador para una salida `entity` sin embed: la relación
-      many-to-one sale como `<relación>Id` y las hijas del agregado, anidadas con su id. El
-      escenario afirma lo que produce un servidor correcto, y es la regla escrita: docs/dsl/use-cases.md
-      (embed y entidades hijas) y la regla de proyección de scenario-authoring.md, que desde el
-      hallazgo 2 de R9 enumera también las relaciones sin embed y las hijas."
-
-  - flow: FL-TPL-001
-    step: "Then 2"
-    kind: other
-    artifact: persistence.consistency.optimisticLocking
-    evidence: >-
-      El Then fija el cuerpo de Template «exactamente» con sus campos de dominio (entre ellos el
-      `version` de negocio), igual que FL-APP-001 Then 3 («no trae ningún campo adicional») y
-      FL-NTF-001 Then 3 para Notification. Persistence declara `optimisticLocking: all`, que añade a
-      cada entidad una marca de versión para el bloqueo, y nada en el diseño dice que esa marca
-      quede fuera de la salida (el comentario de `audit` sí lo dice de los timestamps, no de esta).
-      En Template, además, el nombre natural de esa marca choca con el campo de dominio `version`.
-      Que el cuerpo no traiga la marca, ni que `version` sea el de negocio y no el del bloqueo, no
-      lo fija el diseño.
-    proposal: >-
-      En el diseño, decir (comentario o `exclude` donde el DSL lo permita) que la marca de bloqueo
-      no forma parte del contrato y no se llama `version`; o aceptarlo como hecho del generador y
-      escribirlo en las convenciones del documento.
-    resolution: accepted
-    reason: "Verificado en el proyecto generado: la marca de bloqueo optimista se llama lockVersion
-      (columna lock_version), no choca con el version de negocio y no la proyecta ningún DTO de
-      salida. Los cuerpos exactos se sostienen."
-
-  - flow: FL-TPL-010-B
-    step: "Then 1"
-    kind: other
-    artifact: use-cases.publishTemplate.transitions
-    evidence: >-
-      El Then espera `409 INVALID_STATE_TRANSITION` al publicar `<t2>`, que está en `active`.
-      publishTemplate declara dos transiciones sobre la MISMA entidad Template —`from: [draft] to:
-      active` y `from: [active] to: retired`— sin nada estructurado que diga que la segunda se
-      aplica a OTRA instancia (lo dicen solo su `description` y la precondición en prosa «Y está en
-      borrador», que no tiene error asociado). Leído el campo estructurado, `active` está en el
-      `from` de una transición de la operación, así que el 409 de «estado fuera de `from`» no se
-      deduce: un generador que case la entidad de la petición con esa transición la retiraría y
-      respondería 200.
-    proposal: >-
-      En el diseño, fijar a qué instancia aplica cada transición (p. ej. una `rule` que diga que la
-      plantilla del `templateId` solo puede estar en draft y que active→retired es sobre la versión
-      activa de su clave e idioma, distinta de ella); o en el escenario, no afirmar el code y fijar
-      solo el 409 y que `<t2>` sigue activa.
-    resolution: accepted
-    reason: La arista active → retired de publishTemplate es de la versión que estaba activa, no de la
-      direccionada. Que la direccionada tenga que estar en draft lo dicen la transición draft →
-      active y la precondición «Y está en borrador». El DSL declara transitions por entidad, no por
-      instancia, así que esta distinción no tiene forma estructural. El escenario afirma lo que
-      produce un servidor que respeta las dos.
-
-  - flow: FL-OBX-001
-    step: "Then 4"
-    kind: other
-    artifact: messaging.publishing.reliability
-    evidence: >-
-      El Then afirma que, restablecido el canal, el NotificationSent llega «en ≤ 10 s». El diseño
-      solo declara `reliability: outbox`: ni el intervalo del relay ni su backoff tras fallos
-      consecutivos están en ninguna capa. Tras una indisponibilidad larga, un backoff creciente
-      puede separar el siguiente intento más de 10 s; la cota no se deduce del YAML.
-    proposal: >-
-      En el escenario, una cota que no dependa del ritmo del relay (o derivada de él si se declara);
-      o aceptarlo como parámetro del generador y decirlo en las convenciones.
-    resolution: accepted
-    reason: La cota de 10 s es la del escenario canónico del outbox (validation-scenarios.md § Reglas de
-      cobertura). El ritmo del relay es del generador, igual que el backoff, y el escenario no puede
-      declararlo sin hablar de tecnología. Si un generador no la cumple, el escenario falla, que es
-      lo que se busca.
-
-  - flow: FL-OBX-002
-    step: "Then 1"
-    kind: unobservable
-    artifact: messaging.publishing
-    evidence: >-
-      El When es «se agota el presupuesto de reintentos de ese evento» y el Then «el servidor
-      informa de un evento abandonado» (y FL-OBX-001 Then 5, «ningún evento abandonado»). El diseño
-      no declara ni ese presupuesto (solo `reliability: outbox`) ni ninguna superficie por la que el
-      servidor informe de un evento abandonado (endpoint, métrica, canal). Con solo el YAML no hay
-      forma de provocar el When en un tiempo acotado ni de observar el Then desde fuera.
-    proposal: >-
-      Nombrar en las convenciones del documento la señal y el presupuesto que ofrece el generador (y
-      aceptarlo a sabiendas), o declararlos en el diseño si el DSL tiene dónde.
-    resolution: accepted
-    reason: "Es el escenario canónico FL-OBX-002 de validation-scenarios.md, que habla del presupuesto
-      de reintentos y del evento abandonado sin nombrar el número ni la métrica: los dos son del
-      generador, que da la primitiva para provocarlo y la señal para observarlo (en keel-spring, la
-      cuenta de eventos abandonados por el actuator). El diseño no declara capacidad a propósito."
-
-  # --- Pasada 3 (v2.0.2), incremental sobre FL-APP-001, FL-TPL-001 y FL-DSP-001 ---
-  - flow: FL-DSP-001
-    step: "Then 3"
-    kind: unobservable
-    artifact: use-cases.sendAcceptedNotification
-    evidence: >-
-      El Then 3 afirma que «un segundo ciclo del barrido no lo vuelve a intentar». El Given deja el
-      rechazo del relay activo y global («es global mientras está activo»), y nada en el flujo lo
-      retira antes del segundo ciclo. Con el relay rechazando, un reintento sería indistinguible
-      desde fuera: el buzón seguiría vacío para rebota@cliente.example, no saldría ningún
-      NotificationSent y el estado seguiría en failed. Que no se reintente sí se deduce del YAML
-      (Notification.lifecycle: failed: [], y queueAcceptedNotifications solo reclama from:
-      [accepted]); lo que no se puede es OBSERVARLO tal como está escrito el paso.
-    proposal: >-
-      En el escenario, retirar el rechazo del relay antes del segundo ciclo y afirmar que, pasado
-      ese ciclo, el buzón sigue sin correo para rebota@cliente.example y el envío sigue en failed
-      con el mismo sendingSince; o quitar el Then 3 y dejarlo como consecuencia del lifecycle, sin
-      prometer una medición que la prueba no hace.
-    resolution: accepted
-    reason: >-
-      Cierto, y sin presupuesto de careo en la v2.0.x: reescribir el Then ahora dejaría el careo
-      caducado y agotado. Se decide la prueba, no el escenario: antes del segundo ciclo el agente de
-      pruebas llama a relayAccepts(), y entonces «no lo vuelve a intentar» sí es observable (el buzón
-      sigue sin correo para rebota@cliente.example y el envío sigue en failed con el mismo
-      sendingSince). Reescribir el Given/Then en ese sentido queda para la próxima minor.
+# Pasada 1 (v2.1.0), completa: siete hallazgos, resueltos por el diseñador y retirados en la pasada 2, que
+# los comprobó cerrados (tres en el escenario: uuid sin versión, templateId en las variables, la aplicación
+# antes que la clave; cuatro en el diseño: la clave gana a las credenciales, compilar antes que la variable
+# duplicada, la duplicada antes que la requerida, la repetición devuelve la aceptación).
+# Pasada 2 (v2.1.0), completa: un hallazgo, la convención «Ausencia vs nulo» sobre sendingSince, corregida en
+# el escenario; la pasada 3 lo comprobó cerrado (FL-NTF-001 Then 3 y 5, FL-DSP-001 Then 1 y 3 casan con ella).
+# --- Pasada 3 (v2.1.0), completa ---
+findings: []

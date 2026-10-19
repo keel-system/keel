@@ -1,5 +1,7 @@
+# Reafirmado a mano en v2.1.0 (2026-10-19), por decisión del diseñador: el delta de la minor —el patrón no-blanco
+# de TemplateVariableValue.value, el truncado del asunto y los escenarios FL-NTF-001 y FL-DSP-001— no toca ninguno de estos veredictos.
 reviewedBy: keel-design-review
-reviewedAt: 2.0.0
+reviewedAt: 2.1.0
 findings:
   - id: REV-DOMAIN-PROMISED-STATE
     scope: domain.entities

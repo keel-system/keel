@@ -23,6 +23,10 @@ operations:
     rules:
       - Nace activa. Darla de baja es otra operación, no un campo de esta.
       - >-
+        Con una clave que ya está dada de alta gana APPLICATION_ALREADY_EXISTS, aunque alguna de las
+        credenciales también esté asignada: la clave dice ya quién es, y repetir el alta entera
+        (misma clave, mismas credenciales) es el caso más común de los dos.
+      - >-
         Sin esta operación el servicio no es operable: Application es precondición de todo lo
         demás y ninguna otra la crea, así que un generador honesto se queda sin manera legítima
         de satisfacerla y termina derivándola de una fuente que el diseño no declara.
@@ -91,11 +95,12 @@ operations:
       - Nace en borrador — registrar una plantilla no la pone delante de nadie.
       - La versión es la siguiente de esa aplicación, clave e idioma.
       - Cada variable declarada se guarda como TemplateVariable de esta versión.
-      - Dos variables de la misma versión no pueden llamarse igual.
       - >-
         El asunto y los dos cuerpos se compilan al registrar: una plantilla que no compila no se
         guarda. Descubrirlo al enviar sería tarde y por un camino sin error declarado, con el envío
-        ya aceptado.
+        ya aceptado. Se compila ANTES de mirar las variables: con las dos cosas mal, el error es
+        TEMPLATE_SYNTAX_INVALID.
+      - Dos variables de la misma versión no pueden llamarse igual.
       - >-
         No se contrasta que las llaves del asunto y de los cuerpos coincidan con las variables
         declaradas: el motor es Handlebars sin expresiones y una llave sin variable se renderiza
@@ -151,6 +156,7 @@ operations:
         carácter: si el corte cae en mitad de un par sustituto, se corta antes de él. La petición se
         acepta igual. Es el asunto que el correo lleva y el que se congela.
       - Si la petición omite el idioma, se usa el `defaultLocale` de la aplicación.
+      - Dos variables con el mismo nombre en la misma petición se rechazan, antes de comprobar las requeridas.
       - Toda variable que la plantilla declara como requerida llega con valor.
       - Las variables que la plantilla no declara se ignoran y no se congelan.
       - >-
@@ -158,7 +164,10 @@ operations:
         cada petición sin clave es un envío distinto, que es justo lo que se aceptó en
         OBL-IDEM-KEY-REQUIRED.
       - Dos peticiones con la misma clave de idempotencia producen una sola notificación.
-      - Dos variables con el mismo nombre en la misma petición se rechazan.
+      - >-
+        Repetir la petición con la misma clave devuelve la respuesta de la aceptación,
+        `{notificationId, status: accepted}`, aunque el envío ya haya avanzado: lo que se reproduce
+        es el resultado de aceptar, no el estado de ahora (para eso está getNotification).
       - >-
         La `naturalKey` de Notification es el RESPALDO de esa garantía, no su mecanismo: quien
         arbitra la repetición es el almacén de idempotencia, que reclama la clave antes de tocar

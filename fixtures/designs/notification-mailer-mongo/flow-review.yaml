@@ -1,107 +1,36 @@
-# Careo de flujos (keel-flow-review) de la gemela documental. Pasada 1 completa (v2.0.0); pasada 2 incremental sobre
-# FL-CLU-001; pasada 3 incremental (v2.0.2) sobre FL-APP-001, FL-TPL-001 y FL-DSP-001.
-reviewedAt: 2.0.2
+reviewedAt: 2.1.0
 passes: 3
-scenariosSha256: 8a0910f33fb812ba8c27f105b870432026437b47838914772ddfb109da195167
-conventionsSha256: cc90dc94206bddf5e4445da623a2ed0464f10ab98e814dbc088b227e032ef8a1
+scenariosSha256: 187180dd920d369525d37e5885b9ae226062a9e92cd52801ace4c7d6358ce3ac
+conventionsSha256: 9aa97d4c3a26af547c1ea5730d6d4d01210197759c515834a2cfb76f1c007f07
 flows:
-  - id: FL-APP-001
-    sha256: fdd7bc028c1c41a79cd4d6aa8af9b6c150bb278514dbf8ba1f0d15bc14e2a445
-  - id: FL-APP-001-B
-    sha256: ebe3b82a12b56f470001f47e899142bb98a48c43fe3d474a39280fac8e8943ae
-  - id: FL-TPL-001
-    sha256: 4356aad96136c13f11bd7bd415d8d52febf6c634a99d4418a8d2e8d7817a3eb9
-  - id: FL-TPL-002
-    sha256: 820d5eea9280703e7b0f48118ce0119a9645709ca839a7d7a15278d734034f8c
-  - id: FL-TPL-003
-    sha256: d5f42a387f3a73d04db88edd7d3f8c6399d27c759248936e0d44069c34ff6912
-  - id: FL-TPL-010
-    sha256: 211b68bca16d9d1ba08d6b0acd71217bf3b690c835a1c7f615564aedf4b07833
-  - id: FL-TPL-010-B
-    sha256: 70346c8df0b545375b29d2dc54ff531e076c29f67fe09f71164747f530f3ac45
-  - id: FL-TPL-011
-    sha256: a0444b89e0298b06aec8e57c3513bbc065515f0684401c359653a29ca3c31c0a
-  - id: FL-TPL-012
-    sha256: d6cb389820456b648873f74646bf73c2c1140f5e1dbf6b662b3942317b9e56c7
-  - id: FL-NTF-001
-    sha256: 6a32bfd5e022eb0106611f39dcb97011b58a0aed93ff4fce948c2b1129636f82
-  - id: FL-NTF-001-B
-    sha256: 0e3a13e94f6eb4622c004fe3f62ba5a9e8c739690a0f767e4c1c8d4ba809aac1
-  - id: FL-NTF-001-C
-    sha256: 06f1b0a12e318a98691153258a302f93887449778955fe800c2275f6c7dbf7e1
-  - id: FL-NTF-002
-    sha256: ec2dc015f7bef8045a0a88e37ea37ece8897bc264c08d5ae2d22b2ae030c8c7f
-  - id: FL-NTF-003
-    sha256: 3ace8704b1c435e9451a65774bd754db1b4e36cfb1cdc5a03024451c6c9fcd5b
-  - id: FL-NTF-004
-    sha256: 44834f4466819cb8523488cb6105535753ac2b71986179237eb9836661a2ca3b
-  - id: FL-EVT-001
-    sha256: f1a7c4873594dd345f3334d1d1df89fe6f8a477e92744bf3517b160d03ffc68f
-  - id: FL-EVT-001-B
-    sha256: c1a2f65c2174f378b2c60d8bf9875a485dc0d114085ec9e97d671a1b059c491e
-  - id: FL-EVT-002
-    sha256: 88560edc14032b50502b17cec3ff5cb3009a2e022ccc48897c116a47a7fb22af
-  - id: FL-EVT-003
-    sha256: f0d816f5c16df08c50116055a6f40159f5629e667e0b63fab0c710afc9ac8651
-  - id: FL-DSP-001
-    sha256: 18ca0c738ba6f228372b7c53424b28364975e97d8f4c7dcad2ae16e848d74f8d
-  - id: FL-CLU-001
-    sha256: 31dec2eb544b06791cad17ec3b6c7adaed8dda0ba6594f5d253e7d296e4c9218
-  - id: FL-OBX-001
-    sha256: f7989a1c3f960c1b6d0f63baefdafc6ff766d71b190fc16fda7ced9eae48d668
-  - id: FL-OBX-002
-    sha256: b0e2e2c572725c01388821a4026ef1494e5d327ce01711852cd966715a92a85b
-findings:
-  - flow: FL-TPL-003
-    step: "Then 1"
-    kind: other
-    artifact: use-cases.registerTemplate.errors
-    evidence: >-
-      El Then dice que «los desenlaces admisibles son exactamente dos»: 201/201 con versiones 1 y 2,
-      o 201 y 409 TEMPLATE_VERSION_ALREADY_EXISTS. Con `default.model: document` y la transacción
-      por operación, la segunda inserción que choca con la entrada del índice único de la
-      `naturalKey` [application, key, locale, version] que la primera aún no ha confirmado recibe un
-      conflicto de escritura transitorio; la transacción se reintenta y el perdedor acaba en uno de
-      los dos desenlaces del Then, salvo que se agoten los reintentos, y entonces responde 409
-      CONCURRENT_MODIFICATION. registerTemplate no declara ese code y el Then no lo admite, así que
-      el «exactamente dos» no se deduce en esta gemela: hay un tercer desenlace posible, aunque sea
-      improbable con solo dos peticiones. En FL-TPL-011 el mismo tercer camino sí cabe, porque su
-      Then ya admite CONCURRENT_MODIFICATION.
-    proposal: >-
-      En el escenario, que vale igual para las dos gemelas: admitir también 409
-      CONCURRENT_MODIFICATION para el perdedor (en relacional no aparece nunca, así que no estorba),
-      manteniendo el Then 2 como la aserción que importa. O en el diseño: declarar
-      CONCURRENT_MODIFICATION en registerTemplate. O aceptarlo a sabiendas, porque con dos
-      contendientes el reintento del perdedor no debería agotarse.
-    resolution: accepted
-    reason: "Aceptado: el tercer desenlace existe solo si la transacción perdedora agota sus tres
-      reintentos contra el conflicto transitorio del modelo documental, y con dos peticiones
-      simultáneas la segunda pasa en el primer reintento sobre lo ya confirmado, con el error
-      declarado (MONGO-10 lo mide contra un mongod real). Si llegara a pasar, saldría como 409
-      CONCURRENT_MODIFICATION, el code de framework. El escenario es común a las dos gemelas y no
-      nombra motores."
-  - flow: FL-DSP-001
-    step: "Then 3"
-    kind: unobservable
-    artifact: domain.entities.Notification.lifecycle
-    evidence: >-
-      El Then dice «Un segundo ciclo del barrido no lo vuelve a intentar: failed es terminal». El
-      YAML ya lo garantiza por construcción: failed no tiene transiciones de salida en el lifecycle
-      de Notification y queueAcceptedNotifications solo reclama filas en accepted. Pero como prueba
-      de caja negra no discrimina nada: el Given deja el relay rechazando con un 550 y las notas
-      dicen que ese rechazo es global mientras está activo, y ningún paso lo levanta antes del
-      segundo ciclo. Un reintento sería rechazado igual, no llegaría nada al buzón y el estado
-      seguiría en failed (la transición de vuelta no existe), así que el Then pasa tanto si se
-      reintenta como si no.
-    proposal: >-
-      En el escenario: devolver el relay a su comportamiento normal antes del segundo ciclo y
-      afirmar que, pasado ese ciclo, el buzón no tiene ningún correo para rebota@cliente.example y
-      el envío sigue en failed. O reducir el Then a lo que se observa («sigue en failed tras otro
-      ciclo») y dejar el «no se reintenta» a la terminalidad del lifecycle.
-    resolution: accepted
-    reason: >-
-      Cierto, y sin presupuesto de careo en la v2.0.x: reescribir el Then ahora dejaría el careo
-      caducado y agotado. Se decide la prueba, no el escenario: antes del segundo ciclo el agente de
-      pruebas llama a relayAccepts(), y entonces «no lo vuelve a intentar» sí es observable (el buzón
-      sigue sin correo para rebota@cliente.example y el envío sigue en failed con el mismo
-      sendingSince). Reescribir el Given/Then en ese sentido queda para la próxima minor.
+  - { id: FL-APP-001, sha256: fdd7bc028c1c41a79cd4d6aa8af9b6c150bb278514dbf8ba1f0d15bc14e2a445 }
+  - { id: FL-APP-001-B, sha256: ebe3b82a12b56f470001f47e899142bb98a48c43fe3d474a39280fac8e8943ae }
+  - { id: FL-TPL-001, sha256: 119b34e0b204ed8d4c583a1ed4e0c18fd00062e172e06296da523f9c6c487f26 }
+  - { id: FL-TPL-002, sha256: 820d5eea9280703e7b0f48118ce0119a9645709ca839a7d7a15278d734034f8c }
+  - { id: FL-TPL-003, sha256: d5f42a387f3a73d04db88edd7d3f8c6399d27c759248936e0d44069c34ff6912 }
+  - { id: FL-TPL-010, sha256: 211b68bca16d9d1ba08d6b0acd71217bf3b690c835a1c7f615564aedf4b07833 }
+  - { id: FL-TPL-010-B, sha256: 70346c8df0b545375b29d2dc54ff531e076c29f67fe09f71164747f530f3ac45 }
+  - { id: FL-TPL-011, sha256: a0444b89e0298b06aec8e57c3513bbc065515f0684401c359653a29ca3c31c0a }
+  - { id: FL-TPL-012, sha256: d6cb389820456b648873f74646bf73c2c1140f5e1dbf6b662b3942317b9e56c7 }
+  - { id: FL-NTF-001, sha256: f73711d015099b56dfe7c82a7e614808eebe6d032eb804f317b2ac0dd6ab2f8d }
+  - { id: FL-NTF-001-B, sha256: 0e3a13e94f6eb4622c004fe3f62ba5a9e8c739690a0f767e4c1c8d4ba809aac1 }
+  - { id: FL-NTF-001-C, sha256: 06f1b0a12e318a98691153258a302f93887449778955fe800c2275f6c7dbf7e1 }
+  - { id: FL-NTF-002, sha256: ec2dc015f7bef8045a0a88e37ea37ece8897bc264c08d5ae2d22b2ae030c8c7f }
+  - { id: FL-NTF-003, sha256: 3ace8704b1c435e9451a65774bd754db1b4e36cfb1cdc5a03024451c6c9fcd5b }
+  - { id: FL-NTF-004, sha256: 44834f4466819cb8523488cb6105535753ac2b71986179237eb9836661a2ca3b }
+  - { id: FL-EVT-001, sha256: f1a7c4873594dd345f3334d1d1df89fe6f8a477e92744bf3517b160d03ffc68f }
+  - { id: FL-EVT-001-B, sha256: c1a2f65c2174f378b2c60d8bf9875a485dc0d114085ec9e97d671a1b059c491e }
+  - { id: FL-EVT-002, sha256: 88560edc14032b50502b17cec3ff5cb3009a2e022ccc48897c116a47a7fb22af }
+  - { id: FL-EVT-003, sha256: f0d816f5c16df08c50116055a6f40159f5629e667e0b63fab0c710afc9ac8651 }
+  - { id: FL-DSP-001, sha256: 3df13f235e4e7103647ac4d7de002faaec04e023d9af70398c1e880693ed5e50 }
+  - { id: FL-CLU-001, sha256: 31dec2eb544b06791cad17ec3b6c7adaed8dda0ba6594f5d253e7d296e4c9218 }
+  - { id: FL-OBX-001, sha256: f7989a1c3f960c1b6d0f63baefdafc6ff766d71b190fc16fda7ced9eae48d668 }
+  - { id: FL-OBX-002, sha256: b0e2e2c572725c01388821a4026ef1494e5d327ce01711852cd966715a92a85b }
+# Pasada 1 (v2.1.0), completa: siete hallazgos, resueltos por el diseñador y retirados en la pasada 2, que
+# los comprobó cerrados (tres en el escenario: uuid sin versión, templateId en las variables, la aplicación
+# antes que la clave; cuatro en el diseño: la clave gana a las credenciales, compilar antes que la variable
+# duplicada, la duplicada antes que la requerida, la repetición devuelve la aceptación).
+# Pasada 2 (v2.1.0), completa: un hallazgo, la convención «Ausencia vs nulo» sobre sendingSince, corregida en
+# el escenario; la pasada 3 lo comprobó cerrado (FL-NTF-001 Then 3 y 5, FL-DSP-001 Then 1 y 3 casan con ella).
+# --- Pasada 3 (v2.1.0), completa ---
+findings: []

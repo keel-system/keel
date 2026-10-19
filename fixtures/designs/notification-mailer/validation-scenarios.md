@@ -1,7 +1,7 @@
 # notification-mailer — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/notification-mailer v2.0.3. Contrato de validación para la fase de generación.
+> specs/notification-mailer v2.1.0. Contrato de validación para la fase de generación.
 
 > **El par del MVP, cerrado de punta a punta.** Es la fixture sobre la que el método se ejerce
 > entero —escenarios, careo, revisión, análisis de huecos y registro estructural— y la que fija
@@ -13,12 +13,12 @@
 - **Formato temporal**: instante en UTC ISO-8601 con milisegundos
   (`2026-01-15T10:30:00.000Z`). `requestedAt`, `sentAt`, `sendingSince`, `publishedAt` y el
   `occurredAt` de los eventos se verifican **por forma**, nunca por valor.
-- **Identificadores**: `uuid` v4 canónico, verificados por forma y por reutilización simbólica
+- **Identificadores**: `uuid` canónico en minúsculas —la versión no se afirma—, verificados por forma y por reutilización simbólica
   dentro del flujo (`<t1>`, `<n1>`…): el id que devuelve un escenario es el que usa el siguiente.
 - **Ausencia vs nulo**: un campo sin valor **viaja como nulo**, en las respuestas y en los
   payloads de evento; nunca se omite (`conventions.nulls: include`). `publishedAt` es nulo
-  mientras la plantilla está en borrador; `sentAt` y `sendingSince`, mientras el envío no ha
-  salido.
+  mientras la plantilla está en borrador; `sendingSince`, mientras el envío no se ha reclamado
+  (`accepted`, `queued`), y `sentAt`, mientras no ha salido —también en `failed`, que no sale nunca—.
 - **Direcciones e idiomas**: una dirección es algo con una `@` en medio y hasta 254
   caracteres; un idioma, dos letras y región opcional (`es`, `es-ES`). Los dos se comparan
   **exactos**: `es` y `es-ES` son idiomas distintos, y una petición en `es-ES` no cae en la
@@ -170,9 +170,10 @@ del cliente `orders-service-ci` y el cuerpo de la plantilla de prueba:
 2. El cuerpo es exactamente `{id: <t1>, key: "order-shipped", locale: "es", status: "draft",
    version: 1, subject: "Pedido {{orderNumber}} enviado", bodyHtml: <el enviado>,
    bodyText: <el enviado>, publishedAt: null, applicationId: <a1>, variables: [...]}`, con
-   `variables` de dos elementos, en cualquier orden: `{id: <uuid>, name: "orderNumber",
-   required: true, description: "Número visible del pedido."}` y `{id: <uuid>,
-   name: "customerName", required: true, description: null}`. El asunto y los cuerpos vuelven
+   `variables` de dos elementos, en cualquier orden: `{id: <uuid>, templateId: <t1>,
+   name: "orderNumber", required: true, description: "Número visible del pedido."}` y
+   `{id: <uuid>, templateId: <t1>, name: "customerName", required: true, description: null}` —una
+   entidad hija lleva siempre el id de su raíz—. El asunto y los cuerpos vuelven
    **sin interpolar**.
 3. `getTemplate` — `GET /v1/templates/<t1>` con la misma credencial responde `200` con el
    mismo cuerpo.
@@ -392,9 +393,10 @@ por cada envío que reclama.
    el canal lo leen todos los sistemas.
 
 **Orden de evaluación**:
-1. La misma clave no se está atendiendo ya → `IDEMPOTENCY_KEY_IN_PROGRESS` (`409`); ni llega
+1. La aplicación está registrada y activa → `APPLICATION_INACTIVE` (`403`). Va primero porque la
+   clave de idempotencia se acota a la aplicación (`partitionBy`), que hay que resolver antes.
+2. La misma clave no se está atendiendo ya → `IDEMPOTENCY_KEY_IN_PROGRESS` (`409`); ni llega
    con otro contenido → `IDEMPOTENCY_KEY_REUSED` (`409`). Ver FL-NTF-002 y FL-NTF-001-C.
-2. La aplicación está registrada y activa → `APPLICATION_INACTIVE` (`403`).
 3. Hay plantilla activa con esa clave e idioma para esa aplicación → `TEMPLATE_NOT_FOUND`
    (`422`).
 4. Ninguna variable llega repetida → `TEMPLATE_VARIABLE_DUPLICATED` (`422`).
@@ -409,6 +411,11 @@ por cada envío que reclama.
 **Casos borde**:
 - Sin `recipient` → `400`. `copyRecipients` con 11 direcciones → `400` (`maxItems: 10`).
 - `variables` con 51 elementos → `400`. Un valor de 1001 caracteres → `400`.
+- Un valor vacío (`""`) o solo de espacios (`"   "`) → `400`, también en una variable que la
+  plantilla no declara: un valor en blanco está mal formado, no es una variable que falta.
+- `orderNumber` de 250 caracteres `"X"` → `202`: el asunto interpolado tendría 265 caracteres y se
+  trunca a los 200 primeros. `renderedSubject` es `"Pedido "` seguido de 193 `"X"` (sin el
+  `" enviado"` final), y el correo sale con ese mismo asunto.
 - `recipient: "no-es-una-direccion"` → `400`. `locale: "ES"` → `400`.
 - `customerName: "<b>Ana</b>"` → la parte html lleva `&lt;b&gt;Ana&lt;/b&gt;` y la de texto
   `<b>Ana</b>` tal cual: los valores se escapan en el html y solo ahí.
@@ -612,14 +619,22 @@ de `queueAcceptedNotifications`.
 1. En ≤ 70 s `getNotification` sobre el envío responde con `status: "failed"`, `sentAt: null` y
    `sendingSince` con forma de instante.
 2. `notificationEvents` no recibe ningún `NotificationSent` para ese envío.
-3. Un segundo ciclo del barrido no lo vuelve a intentar: `failed` es terminal.
+
+**When**: el relay de prueba vuelve a aceptar —en el arnés, `relayAccepts()`— y pasa otro ciclo de
+`queueAcceptedNotifications`.
+
+**Then**:
+3. El buzón sigue sin ningún correo para `rebota@cliente.example` y `getNotification` responde
+   igual que en el paso 1, con el **mismo** `sendingSince`: `failed` es terminal y el barrido no
+   lo vuelve a intentar, aunque ahora el relay sí lo entregaría.
 
 **Notas de determinación**: es el único fallo de entrega que este servicio puede observar, y un
 relay que no se alcanza o no contesta a tiempo acaba igual, en `failed`. Un
 rebote posterior —el relay acepta y el destino lo devuelve horas después— queda fuera del
 diseño. El rechazo del relay de prueba es global mientras está activo: el `Then` afirma sobre
-el envío de este flujo, y el `failed` se provoca con el 550 real, nunca se fabrica escribiendo en
-el almacén.
+el envío de este flujo, y se retira antes del segundo ciclo porque, con el relay rechazando, un
+reintento no se distinguiría desde fuera de su ausencia. El `failed` se provoca con el 550 real,
+nunca se fabrica escribiendo en el almacén.
 
 ### FL-CLU-001: con dos réplicas, cada envío sale una vez
 

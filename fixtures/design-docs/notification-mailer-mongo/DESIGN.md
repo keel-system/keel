@@ -1,6 +1,6 @@
 # notification-mailer-mongo — Documento de diseño
 
-> specs/notification-mailer-mongo v2.0.3. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
+> specs/notification-mailer-mongo v2.1.0. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
 
 ## 1. Propósito y alcance
 
@@ -55,15 +55,21 @@ Campos generados: los `id` y `Notification.requestedAt`. `Notification.status` n
 - La `Idempotency-Key` se acota a la aplicación del llamante. Por evento, `dedupeKey` es
   `event:<eventId>`, que no comparte espacio con las claves HTTP. El `eventId` es el de la envoltura
   del mensaje y llega al comando declarado en el diseño, no por convención del listener.
+- Repetir una petición con la misma clave devuelve la respuesta de la aceptación
+  (`{notificationId, status: accepted}`), aunque el envío haya avanzado: el estado de ahora se lee
+  con `getNotification`.
 - Toda variable declarada como requerida llega con valor; las no declaradas se ignoran y no se
-  congelan, y dos con el mismo nombre se rechazan. Por HTTP y por evento, igual.
+  congelan, y dos con el mismo nombre se rechazan antes de mirar las requeridas. Por HTTP y por
+  evento, igual.
 - El valor de una variable nunca va en blanco: vacío o solo de espacios es una petición malformada
   (400), venga o no la variable declarada como requerida.
 - Los valores se escapan como HTML en la parte html; en la de texto van tal cual.
 - El asunto se renderiza al aceptar y el cuerpo al enviar, siempre con la versión y los valores
   congelados. Un asunto interpolado de más de 200 caracteres se trunca a los 200 primeros
   (sin partir un par sustituto) y la petición se acepta igual.
-- Una plantilla que no compila no se registra.
+- Una plantilla que no compila no se registra, y se compila antes de mirar sus variables.
+- Un alta con una clave ya registrada es `APPLICATION_ALREADY_EXISTS`, aunque sus credenciales
+  también estén asignadas.
 - `NotificationSent` se emite solo al pasar a `sent`. Un relay que rechaza, no se alcanza o no
   contesta a tiempo deja el envío en `failed`, sin reintentar: no se sabe si el correo salió.
 

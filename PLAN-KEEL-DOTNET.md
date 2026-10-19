@@ -1975,6 +1975,18 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       - Cerrados los dos en el par v2.0.3 (2026-10-19), decisión del usuario. El valor en blanco se rechaza con un
         `pattern` en `TemplateVariableValue.value`, que da un 400. El asunto de más de 200 se trunca, por regla. Es un
         parche: no toca ningún escenario, así que el careo y la revisión siguen valiendo.
+      - Después, la minor v2.1.0 (2026-10-19). Añade el caso borde del truncado y del blanco en `FL-NTF-001`, y
+        reescribe el Then 3 de `FL-DSP-001`: el relay vuelve a aceptar con `relayAccepts()` antes del segundo ciclo.
+        - Lo sellado por versión se reafirmó a mano contra el delta, por decisión del usuario: decisiones,
+          estructural, revisión y huecos, estos últimos con los dos hallazgos ya decididos.
+        - El careo se rehízo con agente en tres pasadas completas.
+          - La 1 dio siete hallazgos: tres resueltos en el escenario (el uuid sin versión, `templateId` en las
+            variables, la aplicación antes que la clave) y cuatro en el diseño (la clave gana a las credenciales,
+            compilar antes que la duplicada, la duplicada antes que la requerida, la repetición devuelve la
+            aceptación).
+          - La 2 dio uno, la convención de `sendingSince`.
+          - La 3 salió limpia.
+        - Tres de las reglas nuevas solo escriben lo que los seis servidores ya hacían.
     - De paso, el pendiente del inc. 0: `wire-contract.md` nombra ya a los tres generadores. Se regeneraron las dos
       líneas base (solo cambian ese documento y el agente de pruebas de keel-nest).
   - Queda, opcional: tres celdas de la matriz sin falsar (`harness-db-probes/relational`,

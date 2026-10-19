@@ -1,8 +1,10 @@
+# Reafirmado a mano en v2.1.0 (2026-10-19), por decisión del diseñador: el delta de la minor —el patrón no-blanco
+# de TemplateVariableValue.value, el truncado del asunto y los escenarios FL-NTF-001 y FL-DSP-001— no toca ninguna unidad del inventario; añade los dos hallazgos que la corrida de control de los tres generadores destapó.
 # Análisis de huecos de notification-mailer-mongo v1.0.0, hecho por keel-gap-sweep en contexto
 # limpio. Unidades copiadas del criterio `gaps` de `keel validate --ready`. Todo lo encontrado queda
 # `open` salvo lo que el propio diseño ya cierra por escrito (decided/accepted, con la cita).
 reviewedBy: keel-gap-sweep
-reviewedAt: 2.0.0
+reviewedAt: 2.1.0
 
 coverage:
   - class: 1
@@ -160,6 +162,17 @@ findings:
     reason: >-
       Lo fija validation-scenarios.md, FL-NTF-001 Then 2-3: el envío nace en `status: "accepted"`
       con sendingSince y sentAt nulos.
+
+  - class: 3
+    unit: Notification
+    what: >-
+      renderedSubject tiene maxLength 200 y es el asunto YA interpolado, así que unas variables
+      válidas pueden desbordarlo, y nada decía qué pasa entonces: cada servidor generado lo resolvió a
+      su manera (truncar, un fallo sin code, o guardarlo entero).
+    severity: gap
+    state: decided
+    reason: "Corregido en v2.0.3: el asunto interpolado se trunca a los 200 primeros caracteres, por regla de
+      requestNotification y acceptNotificationRequest; en v2.1.0 lo fija un caso borde de FL-NTF-001."
 
   # --- 4. Concurrencia y unicidad
   - class: 4
@@ -349,6 +362,16 @@ findings:
     state: decided
     reason: "Corregido en v2.0.0: el value type EmailAddress, con patrón y cota de 254, en todas las
       direcciones."
+
+  - class: 12
+    unit: service
+    what: >-
+      «Toda variable requerida llega con valor» no decía si un valor vacío o solo de espacios cuenta como
+      valor: los servidores generados dieron tres contratos distintos (corrida de control del 2026-10-18).
+    severity: gap
+    state: decided
+    reason: "Corregido en v2.0.3: TemplateVariableValue.value no admite blancos (patrón), así que es un 400 en
+      el borde; en v2.1.0 lo fija un caso borde de FL-NTF-001."
 
   # --- 13. Ejecuciones programadas
   - class: 13
