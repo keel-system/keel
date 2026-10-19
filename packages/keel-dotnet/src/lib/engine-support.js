@@ -306,9 +306,9 @@ export const MECHANISMS = {
         state: 'verificado',
         net: 'db-check',
         engines: ['postgresql'],
-        falsified: false,
+        falsified: true,
         why:
-          'db-check ejecuta las MISMAS sentencias que StallInFlight, PutInFlight e InFlightWithoutClock (stallSql y missingClockCountSql de keel-core) contra el motor, y exige que el reclamo generado rescate la fila atascada y deje la fresca. Ningún sabotaje rompe la sentencia del arnés en sí: claim-stale rompe el reclamo, no la sonda'
+          'db-check ejecuta las sentencias de StallInFlight, PutInFlight e InFlightWithoutClock TAL COMO LAS EMITE el arnés (el diccionario Rescues de Support/FlowTest.cs, leído del texto emitido) contra el motor, y exige que el reclamo generado rescate la fila atascada y deje la fresca. Falsado con harness-stall (StallInFlight atasca todas menos la pedida) y harness-missing-clock (InFlightWithoutClock cuenta las que sí tienen reloj): cae solo la sonda del rescate de job-dispatch y job-dispatch-cycles'
       },
       document: {
         state: 'verificado',
@@ -404,9 +404,9 @@ export const MECHANISMS = {
       postgresql: {
         state: 'verificado',
         net: 'db-check',
-        falsified: false,
+        falsified: true,
         why:
-          'índice parcial (HasFilter). db-check pregunta al motor el predicado (pg_indexes contra el mapeo emitido) y el invariante: la misma clave en el estado condicionado choca con el error del diseño. Lo que nadie ha roto todavía es el PREDICADO en sí (el sabotaje index cambia el nombre de los únicos sin filtro; constraint rompe el traductor de todos): falta el del literal en minúsculas que keel-nest usó'
+          'índice parcial (HasFilter). db-check pregunta al motor el predicado, contra el DISEÑO (partialIndexSpecs de keel-core) y no contra el mapeo emitido, que se daba la razón a sí mismo, y el invariante: la misma clave en el estado condicionado choca con el error del diseño. Falsado con partial-literal (el literal del diseño en minúsculas, el tropiezo de keel-nest): caen exactamente el predicado del catálogo y la sonda de la unicidad condicionada de notification-mailer'
       }
     }
   },
@@ -433,8 +433,8 @@ export const MECHANISMS = {
       postgresql: {
         state: 'verificado',
         net: 'db-check',
-        falsified: false,
-        why: "TIMESTAMP '1970-01-01 00:00:00' y el uuid entre comillas CASAN: la fila atascada por la sentencia del arnés, montada como la monta el arnés, la rescata el reclamo generado"
+        falsified: true,
+        why: "TIMESTAMP '1970-01-01 00:00:00' y el uuid entre comillas CASAN: la fila atascada por la sentencia del arnés emitido, con el id pegado por su IdLiteral emitido, la rescata el reclamo generado. Falsado con stale-literal (el reloj rancio es CURRENT_TIMESTAMP) y uuid-literal (el id sin comillas): cae solo la sonda del rescate"
       }
     }
   },

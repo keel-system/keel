@@ -46,6 +46,13 @@
 //   fold-accents  TextFold.FoldCaseAndAccents solo baja la caja: la sombra del filtro conserva los acentos
 //   deadlock    el clasificador no reconoce el interbloqueo (40P01): no se repite y sale como 500
 //   retry       la transacción no repite el conflicto transitorio: el interbloqueo pierde una de las dos
+//   partial-literal  el predicado del índice condicionado con el literal del diseño en minúsculas: no cubre ninguna fila
+//   harness-stall          StallInFlight del arnés atasca todas las filas MENOS la pedida
+//   harness-missing-clock  InFlightWithoutClock cuenta las que SÍ tienen reloj
+//   stale-literal          el reloj rancio del arnés es CURRENT_TIMESTAMP: la fila atascada parece recién entrada
+//   uuid-literal           IdLiteral pega el id sin comillas: la sentencia no es SQL válido
+// Los cuatro últimos rompen el ARNÉS emitido (Support/FlowTest.cs), y lo ve la sonda del rescate, que ejecuta sus
+// sentencias tal como salen.
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -54,6 +61,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { planFixture, makeWorkspace, FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { dotnetSchema } from '../test/helpers/schema.js';
+import { partialIndexSpecs } from 'keel-core/gen';
 import { expectedSchemaNames } from '../src/scaffold/persistence.js';
 import { probeProject, databaseOf } from './lib/db-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
@@ -97,7 +105,15 @@ const SABOTAGES = {
   'fold-accents': ['Persistence/TextFold.cs', 'return kept.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant();', 'return value.ToLowerInvariant();'],
   // El reintento del conflicto transitorio: el clasificador o el bucle.
   deadlock: ['Persistence/PersistenceErrors.cs', 'SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.SerializationFailure', 'SqlState is PostgresErrorCodes.SerializationFailure'],
-  retry: ['Persistence/PersistenceTransactions.cs', 'attempt < WriteConflictAttempts &&', 'attempt < 1 &&']
+  retry: ['Persistence/PersistenceTransactions.cs', 'attempt < WriteConflictAttempts &&', 'attempt < 1 &&'],
+  // El predicado del índice único condicionado con el literal del diseño en minúsculas y no la constante almacenada
+  // (el tropiezo de keel-nest): el índice existe, pero no cubre ninguna fila.
+  'partial-literal': ['Persistence/Rows/', /HasFilter\("([^"']*)'([^']+)'"\)/g, (_, column, value) => `HasFilter("${column}'${value.toLowerCase()}'")`],
+  // El arnés (Support/FlowTest.cs), cuyas sentencias ejecuta la sonda del rescate tal como salen.
+  'harness-stall': ['IntegrationTests/Support/FlowTest.cs', ' WHERE id = ", "UPDATE ', ' WHERE id <> ", "UPDATE '],
+  'harness-missing-clock': ['IntegrationTests/Support/FlowTest.cs', ' IS NULL"),', ' IS NOT NULL"),'],
+  'stale-literal': ['IntegrationTests/Support/FlowTest.cs', "TIMESTAMP '1970-01-01 00:00:00'", 'CURRENT_TIMESTAMP'],
+  'uuid-literal': ['IntegrationTests/Support/FlowTest.cs', `? "'" + id + "'"`, '? id']
 };
 
 const results = [];
@@ -160,10 +176,29 @@ let aborted = 0;
 try {
   // ─── Los sujetos y sus sondas, en UNA solución ─────────────────────────────────────────────────
   const projects = [];
+  // El sabotaje se aplica EN MEMORIA y antes de generar las sondas, que leen del arnés emitido las sentencias del rescate:
+  // aplicado después, sobre el disco, un sabotaje del arnés no llegaba a lo que db-check ejecuta.
+  const [suffix, from, to] = sabotage ? (SABOTAGES[sabotage] ?? []) : [];
+  if (sabotage && !suffix) {
+    console.error(`No hay ningún sabotaje '${sabotage}'.`);
+    throw new Abort(2);
+  }
+  let applied = 0;
   for (const name of SUBJECTS) {
     const derived = DERIVED[name];
-    const { model, files } = await planFixture(derived?.from ?? name, { mutate: derived?.mutate ?? null });
-    const probes = probeProject(model);
+    const { model, files: planned } = await planFixture(derived?.from ?? name, { mutate: derived?.mutate ?? null });
+    const files = sabotage
+      ? planned.map((file) => {
+          // Lo de `src/` por sufijo; el arnés, solo si el sabotaje lo nombra (sus sufijos llevan `IntegrationTests/`).
+          const inScope = file.path.includes(suffix) && (file.path.startsWith('src/') || suffix.includes('IntegrationTests/'));
+          if (!inScope || typeof file.content !== 'string') return file;
+          const content = typeof from === 'string' ? file.content.replaceAll(from, to) : file.content.replace(from, to);
+          if (content === file.content) return file;
+          applied += 1;
+          return { ...file, content };
+        })
+      : planned;
+    const probes = probeProject(model, { files });
     for (const file of [...files, ...probes.files]) {
       const target = path.join(root, name, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -174,19 +209,7 @@ try {
     subjects.push({ name, model, files, probes });
   }
   if (sabotage) {
-    const [suffix, from, to] = SABOTAGES[sabotage] ?? [];
-    let applied = 0;
-    for (const { name } of subjects) {
-      for (const file of walk(path.join(root, name, 'src'))) {
-        if (!file.replaceAll('\\', '/').includes(suffix)) continue;
-        const content = fs.readFileSync(file, 'utf8');
-        if (content.includes(from)) {
-          fs.writeFileSync(file, content.replaceAll(from, to));
-          applied += 1;
-        }
-      }
-    }
-    if (!suffix || applied === 0) {
+    if (applied === 0) {
       console.error(`El sabotaje '${sabotage}' no se aplica a lo emitido hoy (¿cambió el texto?).`);
       throw new Abort(2);
     }
@@ -264,11 +287,12 @@ function schemaCheck({ model, files }) {
         if (want.scale != null && have.scale !== want.scale) problems.push(`${table}.${column}: escala ${have.scale}, no ${want.scale}`);
       }
     }
-    for (const [index, predicate] of spec.predicates) {
-      const constant = /'([^']+)'/.exec(predicate)?.[1];
-      const def = indexes.get(index) ?? '';
-      if (!/ WHERE /.test(def) || (constant && !def.includes(`'${constant}'`))) problems.push(`${index}: sin el predicado ${predicate} (${def || 'no existe'})`);
-    }
+  }
+  // El predicado de cada índice único condicionado, contra el DISEÑO (keel-core), no contra lo emitido: comparado con el
+  // mapeo, un predicado mal emitido se daba la razón a sí mismo.
+  for (const spec of partialIndexSpecs(model, 'postgresql')) {
+    const def = indexes.get(spec.name) ?? '';
+    if (!/ WHERE /.test(def) || !def.includes(`'${spec.stored}'`)) problems.push(`${spec.name}: sin el predicado ${spec.predicate} (${def || 'no existe'})`);
   }
   for (const name of expectedSchemaNames(model)) {
     // Una tabla es un nombre más del diseño, pero no un índice ni una constraint.
@@ -278,15 +302,6 @@ function schemaCheck({ model, files }) {
   const foreign = [...names].filter((name) => /^(PK|FK|IX|AK)_/.test(name));
   if (foreign.length > 0) problems.push(`nombres puestos por EF: ${foreign.join(', ')}`);
   return [problems.length === 0, problems.slice(0, 8).join('; ')];
-}
-
-function* walk(dir) {
-  if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) yield* walk(full);
-    else yield full;
-  }
 }
 
 if (aborted) process.exit(aborted);

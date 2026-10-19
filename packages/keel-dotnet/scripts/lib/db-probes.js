@@ -29,8 +29,7 @@ import { registryOperations } from 'keel-core/gen/request-idempotency';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
-import { claimOrderField, claimsForEntity, missingClockCountSql, rescueProbes, screamingSnake, snakeCase, stallSql, sweepClaims, sweepConfig } from 'keel-core/gen';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
+import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from 'keel-core/gen';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
 import { reconciledActivations, reconciliationClaims, reconciliationParameters } from 'keel-core/gen/reconciliation-stores';
@@ -55,7 +54,7 @@ import { idBatchReason } from 'keel-core/gen/ref-targets';
 const SAMPLES = 17;
 
 /** El proyecto de sondas de un sujeto: su .csproj y su clase de pruebas. */
-export function probeProject(model) {
+export function probeProject(model, { files = [] } = {}) {
   const sln = solution(model);
   const name = `${sln.root}.DbProbes`;
   const dir = `tests/${name}`;
@@ -76,7 +75,30 @@ export function probeProject(model) {
 
 </Project>
 `;
-  return { name, files: [{ path: `${dir}/${name}.csproj`, content: csproj }, { path: `${dir}/PersistenceProbes.cs`, content: probesCs(model, name) }] };
+  return { name, files: [{ path: `${dir}/${name}.csproj`, content: csproj }, { path: `${dir}/PersistenceProbes.cs`, content: probesCs(model, name, emittedRescues(files)) }] };
+}
+
+/**
+ * Las sentencias del rescate que EMITE el arnés (`Support/FlowTest.cs`), leídas del texto emitido: el diccionario
+ * `Rescues` (operación → Stall, Put, Missing) y el `IdLiteral` con el que se pega el id, como lista de piezas (un literal,
+ * o `null` donde va el id). Null si no hay arnés. Leerlas de lo emitido, y no recalcularlas desde keel-core, es lo que
+ * deja falsar la sentencia del arnés: con el recálculo, db-check medía la función de keel-core y no lo que ejecuta un
+ * flujo.
+ */
+export function emittedRescues(files) {
+  const flow = files.find((file) => /IntegrationTests\/Support\/FlowTest\.cs$/.test(file.path));
+  if (!flow) return null;
+  const literal = String.raw`"((?:[^"\\]|\\.)*)"`;
+  const unescape = (text) => text.replace(/\\(.)/g, '$1');
+  const rescues = new Map();
+  for (const match of flow.content.matchAll(new RegExp(String.raw`\[${literal}\] = \(${literal}, ${literal}, ${literal}\),`, 'g'))) {
+    rescues.set(unescape(match[1]), { stall: unescape(match[2]), put: unescape(match[3]), missing: unescape(match[4]) });
+  }
+  const body = /static string IdLiteral\(string id\) =>\s*Guid\.TryParseExact\(id, "D", out _\)\s*\?\s*([\s\S]*?)\s*:\s*throw/.exec(flow.content)?.[1];
+  const idLiteral = body
+    ? body.split(/\s*\+\s*/).map((piece) => (piece === 'id' ? null : new RegExp(`^${literal}$`).test(piece) ? unescape(piece.slice(1, -1)) : undefined))
+    : null;
+  return { rescues, idLiteral: idLiteral && !idLiteral.includes(undefined) ? idLiteral : null };
 }
 
 // ─── Muestras ────────────────────────────────────────────────────────────────────────────────────
@@ -239,7 +261,7 @@ function storedEnum(model, entity) {
   return { field, constant: enumDef.values[enumDef.values.length > 1 ? 1 : 0].constant };
 }
 
-function probesCs(model, namespace) {
+function probesCs(model, namespace, harness = null) {
   const roots = repositoryRoots(model);
   const ctx = { usings: [], refs: new Set(), unsampled: [], counter: counter() };
   const concurrency = declaredConcurrencyError(model)?.code ?? FRAMEWORK_ERRORS.concurrency.code;
@@ -436,7 +458,7 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
     }));
     tests.push(...replicaProbes(model, root, { state, first: beforeReplica + 1, port, usings: ctx.usings }));
     tests.push(...idBatchProbe(model, root, { state, first: beforeBatch + 1, port }));
-    tests.push(...claimProbes(model, root, { state, first: SAMPLES + 1, port, context: dbContext(model) }));
+    tests.push(...claimProbes(model, root, { state, first: SAMPLES + 1, port, context: dbContext(model), harness }));
     tests.push(...reconciliationProbes(model, root, { state, first: SAMPLES + 1 + claimSampleCount(model, root), port, context: dbContext(model) }));
     // La guarda de un efecto que no se deshace (mail.sentBy), con sus muestras por encima de las de los reclamos.
     const stateColumn = snakeCase(root.lifecycle?.field ?? 'status');
@@ -1240,7 +1262,7 @@ export function probeSweepSettings(model) {
  * Las sondas de los reclamos de una raíz. `state(n)` es la muestra n (las de los reclamos van por encima de las
  * comunes, a partir de `first`); `repo` y `port`, el puerto en el ámbito de la sonda.
  */
-function claimProbes(model, root, { state, first, port, context }) {
+function claimProbes(model, root, { state, first, port, context, harness }) {
   const claims = claimsForEntity(model, root.name);
   if (claims.length === 0) return [];
   const enumDef = model.enums.find((candidate) => candidate.name === root.lifecycle.enumType);
@@ -1304,10 +1326,18 @@ ${stateOf}
         });`);
       const rescue = rescueProbes(model).find((probe) => probe.operation === sweepClaims(model).find((entry) => entry.claim === claim)?.operation.name);
       if (rescue) {
-        const entry = DATABASES[model.stack?.database ?? 'postgresql'];
         const [stalled, put] = take(2);
-        const stall = stallSql({ ...rescue, clockSql: entry.staleTimestamp });
-        const fresh = stallSql({ ...rescue, clockSql: entry.nowTimestamp ?? 'CURRENT_TIMESTAMP' });
+        // Las sentencias TAL COMO LAS EMITE el arnés (Support/FlowTest.cs), no recalculadas desde keel-core: si no, una
+        // sentencia rota en el arnés no la veía nadie (las celdas harness-db-probes y harness-sql-literals de la matriz).
+        const emitted = harness?.rescues.get(rescue.operation);
+        if (!emitted || !harness.idLiteral) {
+          tests.push(`    [Fact]
+    public void Rescate_${method}_ElArnesEmiteSusSentencias() =>
+        Assert.Fail(${csString(`el arnés emitido no trae ${emitted ? 'IdLiteral' : `el rescate de ${rescue.operation}`} en Support/FlowTest.cs`)});`);
+          continue;
+        }
+        const { stall, put: fresh, missing } = emitted;
+        const idSql = (variable) => harness.idLiteral.map((piece) => (piece === null ? `${variable}.${id}` : csString(piece))).join(' + ');
         tests.push(`    [Fact]
     public async Task Rescate_${method}_LasSentenciasDelArnesFabricanSuPrecondicion() =>
         await InScope(async services =>
@@ -1317,14 +1347,14 @@ ${stateOf}
             var put = new ${root.name}(${state(put)});
             await InScope(other => other.GetRequiredService<${port}>().Save(stalled, Cancel));
             await InScope(other => other.GetRequiredService<${port}>().Save(put, Cancel));
-            // Las MISMAS sentencias que StallInFlight y PutInFlight del arnés (keel-core/gen/scheduling.js).
-            // La sentencia se monta como la monta el arnés (prefijo + literal del id): el id es un Guid, no texto de fuera.
-            var stallSql = ${csString(stall)} + ${csString(entry.uuidLiteral.prefix)} + stalled.${id} + ${csString(entry.uuidLiteral.suffix)};
-            var putSql = ${csString(fresh)} + ${csString(entry.uuidLiteral.prefix)} + put.${id} + ${csString(entry.uuidLiteral.suffix)};
+            // Las sentencias que StallInFlight y PutInFlight del arnés EMITIDO ejecutan, montadas como las monta su
+            // IdLiteral (el id es un Guid, no texto de fuera).
+            var stallSql = ${csString(stall)} + ${idSql('stalled')};
+            var putSql = ${csString(fresh)} + ${idSql('put')};
             await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(stallSql, Cancel));
             await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(putSql, Cancel));
-            // Y la de InFlightWithoutClock: ninguna fila en vuelo sin reloj.
-            Assert.Equal(0L, await InScope(other => other.GetRequiredService<${context}>().Database.SqlQueryRaw<long>(${csString(`SELECT (${missingClockCountSql(rescue)}) AS "Value"`)}).SingleAsync(Cancel)));
+            // Y la de InFlightWithoutClock, emitida: ninguna fila en vuelo sin reloj.
+            Assert.Equal(0L, await InScope(other => other.GetRequiredService<${context}>().Database.SqlQueryRaw<long>(${csString(`SELECT (${missing}) AS "Value"`)}).SingleAsync(Cancel)));
             Assert.Equal([stalled.${id}], (await ${claimVia(method)}).Select(r => r.${id}));
         });`);
       }

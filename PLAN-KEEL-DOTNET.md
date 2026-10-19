@@ -1989,9 +1989,17 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
         - Tres de las reglas nuevas solo escriben lo que los seis servidores ya hacían.
     - De paso, el pendiente del inc. 0: `wire-contract.md` nombra ya a los tres generadores. Se regeneraron las dos
       líneas base (solo cambian ese documento y el agente de pruebas de keel-nest).
-  - Queda, opcional: tres celdas de la matriz sin falsar (`harness-db-probes/relational`,
-    `partial-unique-index/postgresql` y `harness-sql-literals/postgresql`), verificadas con `db-check` pero sin sabotaje
-    medido.
+  - **16e, las tres celdas sin falsar (hecho, 2026-10-19).** La matriz queda sin celdas sin falsar.
+    - Dos de las tres no se podían falsar: `db-check` reconstruía con keel-core las sentencias del rescate en vez de
+      ejecutar las del arnés, y comparaba el predicado del índice parcial con el mapeo emitido.
+    - Ahora la sonda del rescate ejecuta el `Rescues` y el `IdLiteral` del `FlowTest.cs` emitido, el sabotaje se aplica
+      en memoria antes de generar las sondas (así llega al arnés) y el predicado se compara con `partialIndexSpecs` de
+      keel-core.
+    - Cinco sabotajes nuevos, cada uno rojo solo en su sonda:
+      - `partial-literal`: el predicado y la unicidad condicionada de notification-mailer;
+      - `harness-stall`, `harness-missing-clock`, `stale-literal` y `uuid-literal`: la sonda del rescate de
+        job-dispatch y job-dispatch-cycles.
+    - `db-check` limpio, 28/28.
 
 ## 5. Riesgos conocidos
 
