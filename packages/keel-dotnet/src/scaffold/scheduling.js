@@ -16,7 +16,7 @@
 import { scheduledOperations, scheduleCron, scheduleDispatch } from 'keel-core/gen';
 import { csFile, csString, located, namespaceOf, xmlDoc } from './render.js';
 import { usesMediator } from './mediator.js';
-import { messageComponents, messageNamespace } from './services.js';
+import { entryGateAssignment, messageComponents, messageNamespace } from './services.js';
 import { usesCorrelation } from './rest-support.js';
 import { configNamespace } from './config.js';
 import { persistenceNamespace } from './persistence.js';
@@ -342,7 +342,7 @@ function schedulerBody(model, service, operations) {
         throw new NotImplementedException("TODO: despachar ${operation.messageClass} desde el scheduler");
     }`;
     }
-    const dispatch = `await mediator.${mode.withoutTransaction ? 'DispatchWithoutTransaction' : 'Dispatch'}(new ${operation.messageClass}(), cancellationToken);`;
+    const dispatch = `await mediator.${mode.withoutTransaction ? 'DispatchWithoutTransaction' : 'Dispatch'}(new ${operation.messageClass}${scheduleGate(model, operation)}, cancellationToken);`;
     const body = correlated
       ? `        // Una pasada del barrido es una TRAZA nueva: no la origina ninguna petición, así que aquí nace su correlación.
         // Sin esto, todo lo que publique viajaría con correlationId nulo.
@@ -384,4 +384,10 @@ ${tasks.join(',\n')}
 
 ${methods.join('\n\n')}
 }`;
+}
+
+/** El inicializador del mensaje que despacha el reloj: `()`, o `{ EntryGate = EntryGate.Schedule }` si lleva su puerta. */
+function scheduleGate(model, operation) {
+  const gate = entryGateAssignment(model, operation.name, 'SCHEDULE');
+  return gate ? ` { ${gate} }` : '()';
 }

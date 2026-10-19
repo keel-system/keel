@@ -13,7 +13,7 @@
 // lo que cuelga de capas que keel-dotnet todavía no genera (el almacén de idempotencia, el correo, los clientes
 // salientes) llega con su incremento: el handler de hoy solo inyecta lo que existe.
 
-import { dispatchNote, scheduleDispatch } from 'keel-core/gen';
+import { carriesEntryGate, dispatchNote, entryGateNote, scheduleDispatch, usesEntryGate } from 'keel-core/gen';
 import { textFilterNotes } from 'keel-core/gen/text-filters';
 import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
@@ -47,7 +47,38 @@ export function generate(model) {
     }
   }
   if (usesOptional(model)) files.push(optionalFile(model));
+  if (usesEntryGate(model)) files.push(entryGateFile(model));
   return files;
+}
+
+/** La constante C# de una puerta de keel-core (`HTTP` → `EntryGate.Http`). */
+export function entryGateMember(gate) {
+  return `EntryGate.${gate[0]}${gate.slice(1).toLowerCase()}`;
+}
+
+/**
+ * La asignación de la puerta en el inicializador de un mensaje (`EntryGate = EntryGate.Subscription`), o null si el
+ * mensaje de esa operación no la lleva. La usan el endpoint, el reloj y las notas de la suscripción.
+ */
+export function entryGateAssignment(model, operationName, gate) {
+  const operation = (model.services ?? []).flatMap((service) => service.operations ?? []).find((candidate) => candidate.name === operationName);
+  return operation && carriesEntryGate(model, operation) ? `EntryGate = ${entryGateMember(gate)}` : null;
+}
+
+function entryGateFile(model) {
+  const { namespace, path } = located(model, 'abstractions', 'EntryGate');
+  const body = `/// <summary>
+/// La puerta por la que entra una operación. Solo la lleva el mensaje de una operación que entra por HTTP y por alguna
+/// otra: HTTP es la única que puede responder un error a quien llamó, y las reglas del diseño distinguen por ella.
+/// </summary>
+public enum EntryGate
+{
+    Http,
+    Subscription,
+    Dispatch,
+    Schedule,
+}`;
+  return { path, content: csFile({ namespace, usings: [], body }) };
 }
 
 export function messageNamespace(model, operation) {
@@ -170,6 +201,11 @@ function renderMessage(model, operation) {
     const notes = componentNotes(model, operation, component);
     return `${notes}${xmlDoc(component.description, '    ')}    public ${required}${type} ${csMember(component.name)} { get; ${rounding ?? 'init;'} }`;
   });
+  // La puerta por la que llegó (keel-core/gen/entry-gates.js): obligatoria, así que nadie construye el mensaje sin decirla.
+  if (carriesEntryGate(model, operation)) {
+    properties.push(`    /// <summary>La puerta por la que llegó este mensaje. La fija quien lo construye: el endpoint generado pone Http.</summary>
+    public required EntryGate EntryGate { get; init; }`);
+  }
   const scope = idempotencyScope(model, operation);
   if (scope && (operation.idempotency.partitionBy ?? []).length > 0) usings.push('System.Globalization');
   const members = scope ? [...properties, scope] : properties;
@@ -359,6 +395,8 @@ function handlerNotes(model, operation) {
   const notes = [];
   const dispatch = dispatchNote(model, operation, { call: 'await commandDispatcher.{variant}(new {message} { ... }, cancellationToken)' });
   if (dispatch) notes.push(dispatch);
+  const gate = entryGateNote(model, operation, { read: 'command.EntryGate', value: entryGateMember });
+  if (gate) notes.push(gate);
   for (const note of textFilterNotes(model, operation, { names: (symbol) => symbol[0].toUpperCase() + symbol.slice(1) })) notes.push(note);
   for (const note of scheduleNotes(model, operation)) notes.push(note);
   for (const note of idempotencyNotes(model, operation)) notes.push(note);

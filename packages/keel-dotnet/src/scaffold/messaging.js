@@ -37,6 +37,7 @@ import { credentialFinderName, resolvedByOf } from './repositories.js';
 import { outboxDocumentLiteral } from './document-stores.js';
 import { jsonRead, rulesArgs } from './endpoints.js';
 import { telemetryNamespace, usesTelemetry } from './telemetry.js';
+import { entryGateAssignment } from './services.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -730,7 +731,8 @@ function contractDoc(model, sub) {
             : a.component === paymentToken
               ? 'null (por evento no hay cliente delante: solo se cobra un medio guardado)'
               : 'TODO (agente)';
-    const args = sub.triggerArguments.map((a) => `${csMember(a.component)} = ${argument(a)}`).join(', ');
+    const gate = entryGateAssignment(model, sub.trigger, 'SUBSCRIPTION');
+    const args = [...sub.triggerArguments.map((a) => `${csMember(a.component)} = ${argument(a)}`), ...(gate ? [gate] : [])].join(', ');
     const via = callsPaymentGateway(model, sub.trigger)
       ? 'IUseCaseMediator.DispatchWithoutTransaction(...) —llama a la pasarela: registra y confirma antes de llamarla—'
       : 'el IUseCaseMediator, en un ámbito de DI propio por mensaje';

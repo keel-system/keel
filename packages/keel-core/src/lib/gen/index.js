@@ -38,6 +38,7 @@ export {
 } from './dead-letter.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher, dispatchNote } from './dispatch.js';
+export { ENTRY_GATE_FIELD, ENTRY_GATES, entryGates, carriesEntryGate, usesEntryGate, entryGateNote, entryGateFor } from './entry-gates.js';
 export { CONTRACT_DOCS, contractDocs } from './contract-docs.js';
 export {
   HTTP_STUB_ADMIN,

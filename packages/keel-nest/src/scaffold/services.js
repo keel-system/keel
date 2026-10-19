@@ -25,10 +25,10 @@ import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
 import { STORAGE_POLICIES_TS, FILE_STORAGE_TS } from './storage.js';
 import { callerResolution } from './security.js';
 import { mailPorts, sendsMail } from './mail.js';
-import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
+import { ANNOTATIONS_TS, ENTRY_GATE_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyBatchFinder, PAGE_TS } from './repositories.js';
-import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch, dispatchNote } from 'keel-core/gen';
+import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch, dispatchNote, carriesEntryGate, entryGateNote, usesEntryGate } from 'keel-core/gen';
 import { COMMAND_DISPATCHER_TS } from './mediator.js';
 import { OPERATION_CACHE_TS } from './cache.js';
 import { cacheNote } from 'keel-core/gen/cache-plan';
@@ -49,7 +49,31 @@ export function generate(model) {
       files.push(renderHandler(model, operation));
     }
   }
+  if (usesEntryGate(model)) files.push(entryGateFile());
   return files;
+}
+
+/**
+ * La puerta en el inicializador de un mensaje (`entryGate: EntryGate.SUBSCRIPTION`), o null si el mensaje de esa
+ * operación no la lleva. La usan el controlador, el reloj y la nota de la suscripción.
+ */
+export function entryGateAssignment(model, operationName, gate) {
+  const operation = (model.services ?? []).flatMap((service) => service.operations ?? []).find((candidate) => candidate.name === operationName);
+  return operation && carriesEntryGate(model, operation) ? `entryGate: EntryGate.${gate}` : null;
+}
+
+function entryGateFile() {
+  const body = `/**
+ * La puerta por la que entra una operación. Solo la lleva el mensaje de una operación que entra por HTTP y por alguna
+ * otra: HTTP es la única que puede responder un error a quien llamó, y las reglas del diseño distinguen por ella.
+ */
+export enum EntryGate {
+  HTTP = 'HTTP',
+  SUBSCRIPTION = 'SUBSCRIPTION',
+  DISPATCH = 'DISPATCH',
+  SCHEDULE = 'SCHEDULE'
+}`;
+  return { path: ENTRY_GATE_TS, content: tsModule(ENTRY_GATE_TS, [], body) };
 }
 
 export function messagePath(operation) {
@@ -144,9 +168,17 @@ function renderMessage(model, operation) {
     assigns.push(`    this.${component.name} = ${scaleRounded(component, `props.${component.name}`)};`);
   }
 
+  // La puerta por la que llegó (keel-core/gen/entry-gates.js): obligatoria, así que nadie construye el mensaje sin decirla.
+  if (carriesEntryGate(model, operation)) {
+    imports.push({ symbol: 'EntryGate', from: ENTRY_GATE_TS });
+    declarations.push(`  /** La puerta por la que llegó este mensaje. La fija quien lo construye: el controlador generado pone HTTP. */
+  readonly entryGate: EntryGate;`);
+    props.push('    readonly entryGate: EntryGate;');
+    assigns.push('    this.entryGate = props.entryGate;');
+  }
   const scope = idempotencyScope(operation);
   const body = `${tsdoc(operation.description)}export class ${operation.messageClass} extends ${contract.base} {
-${declarations.join('\n')}${declarations.length > 0 ? '\n\n' : ''}  constructor(${components.length > 0 ? `props: {\n${props.join('\n')}\n  }` : ''}) {
+${declarations.join('\n')}${declarations.length > 0 ? '\n\n' : ''}  constructor(${props.length > 0 ? `props: {\n${props.join('\n')}\n  }` : ''}) {
     super();${assigns.length > 0 ? `\n${assigns.join('\n')}` : ''}
   }${scope}
 }`;
@@ -394,7 +426,9 @@ function handlerNotes(model, operation) {
   for (const note of scheduleNotes(model, operation)) notes.push(note);
   for (const note of idempotencyNotes(model, operation)) notes.push(note);
   const dispatch = dispatchNote(model, operation, { call: 'await this.commandDispatcher.{variant}(new {message}(...))' });
+  const gate = entryGateNote(model, operation, { read: 'command.entryGate', value: (entry) => `EntryGate.${entry}` });
   if (dispatch) notes.push(dispatch);
+  if (gate) notes.push(gate);
   const cacheParam = operation.messageKind === 'query' ? 'query' : 'command';
   const cached = cacheNote(model, operation, { call: `await this.operationCache.getOrLoad({cache}, ${cacheParam}, () => ...)` });
   if (cached) notes.push(cached);

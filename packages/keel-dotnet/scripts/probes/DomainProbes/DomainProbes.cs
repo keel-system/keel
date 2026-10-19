@@ -186,7 +186,9 @@ public sealed class DomainProbes
             PayerId = "p-1",
             Amount = amount,
             PaymentToken = null,
-            PaymentMethodRef = null
+            PaymentMethodRef = null,
+            // requestCharge entra por HTTP y por la suscripción: su mensaje lleva la puerta (keel-core/gen/entry-gates.js).
+            EntryGate = PaymentCheckoutRound.Application.Abstractions.EntryGate.Http
         };
         Assert.Equal("10.01", Text(Charge(10.005m).Amount));
         Assert.Equal("10.50", Text(Charge(10.5m).Amount));

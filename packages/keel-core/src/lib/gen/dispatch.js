@@ -9,6 +9,7 @@
 // `operations.<op>.dispatches` es ese enlace.
 
 import { scheduleDispatch } from './scheduling.js';
+import { ENTRY_GATE_FIELD, carriesEntryGate } from './entry-gates.js';
 
 /** Las operaciones internas a las que no llega ningún disparador generado ni nadie declara despachar. */
 export function orphanInternalOperations(model) {
@@ -42,7 +43,9 @@ export function dispatchNote(model, operation, { call }) {
     .filter(Boolean);
   if (targets.length === 0) return null;
   const render = (variant, target) => call.replace('{variant}', variant).replace('{message}', target.messageClass);
-  const listed = targets.map((target) => `${target.name} (${render('dispatch', target)})`).join(', ');
+  // Un invocado que también entra por HTTP lleva su puerta en el mensaje (entry-gates.js): aquí es DISPATCH.
+  const gate = (target) => (carriesEntryGate(model, target) ? `, con ${ENTRY_GATE_FIELD} DISPATCH` : '');
+  const listed = targets.map((target) => `${target.name} (${render('dispatch', target)}${gate(target)})`).join(', ');
   const transaction =
     operation.schedule && scheduleDispatch(model, operation).withoutTransaction
       ? 'Esta operación es un barrido que corre SIN transacción abarcadora: cada dispatch(...) abre y confirma la del invocado, así que un candidato que falla no deshace los demás.'

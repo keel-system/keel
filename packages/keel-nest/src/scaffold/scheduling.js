@@ -17,8 +17,8 @@
 
 import { scheduledOperations, scheduleCron, scheduleDispatch } from 'keel-core/gen';
 import { classPath, tsModule, tsdoc } from './render.js';
-import { MEDIATOR_TS, MODULE_TS as USE_CASE_MODULE_TS, usesMediator } from './mediator.js';
-import { messageComponents, messagePath } from './services.js';
+import { ENTRY_GATE_TS, MEDIATOR_TS, MODULE_TS as USE_CASE_MODULE_TS, usesMediator } from './mediator.js';
+import { entryGateAssignment, messageComponents, messagePath } from './services.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
 import { TABLE_PURGES_TS, usesTablePurges } from './purge.js';
 
@@ -202,7 +202,10 @@ sin confirmar hasta el final del lote: ninguna réplica lo ve y todas actúan so
   }`;
     }
     imports.push({ symbol: operation.messageClass, from: messagePath(operation) });
-    const dispatch = `this.mediator.${mode.withoutTransaction ? 'dispatchWithoutTransaction' : 'dispatch'}(new ${operation.messageClass}())`;
+    // La puerta, si el mensaje la lleva (keel-core/gen/entry-gates.js): el reloj es SCHEDULE.
+    const gate = entryGateAssignment(model, operation.name, 'SCHEDULE');
+    if (gate) imports.push({ symbol: 'EntryGate', from: ENTRY_GATE_TS });
+    const dispatch = `this.mediator.${mode.withoutTransaction ? 'dispatchWithoutTransaction' : 'dispatch'}(new ${operation.messageClass}(${gate ? `{ ${gate} }` : ''}))`;
     const body = correlated
       ? `    // Una pasada del barrido es una TRAZA nueva: no la origina ninguna petición, así que aquí nace su
     // correlación. Sin esto, todo lo que publique viajaría con correlationId nulo.

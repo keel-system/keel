@@ -2358,7 +2358,8 @@ test('suscripción con contract: envoltura de la fuente, alias de campo y contra
   // sería el efecto repitiéndose, y por eso el aviso cambia según el diseño.
   assert.ok(message.includes('processed-event.purge.retention-days'), message);
   assert.ok(message.includes('la transición del agregado sigue rechazándola, y esa no caduca'), message);
-  assert.ok(message.includes('RetireProductCommand(id = payload.productId())'));
+  // retireProduct entra por HTTP y por esta suscripción: su mensaje lleva la puerta (keel-core/gen/entry-gates.js).
+  assert.ok(message.includes('RetireProductCommand(id = payload.productId(), entryGate = EntryGate.SUBSCRIPTION)'), message);
 
   // La envoltura es la de la fuente, no la EventEnvelope de Keel.
   const envelope = read(workspace, `${subsDir}/StockDepletedEnvelope.java`);

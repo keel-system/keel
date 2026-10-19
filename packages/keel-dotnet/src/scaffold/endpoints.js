@@ -22,7 +22,7 @@
 import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
 import { callsPaymentGateway } from 'keel-core/gen/payments-model';
 import { csFile, csLocal, csMember, csString, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
-import { componentType, isPartialUpdate, isThreeState, messageComponents, messageNamespace } from './services.js';
+import { componentType, entryGateAssignment, isPartialUpdate, isThreeState, messageComponents, messageNamespace } from './services.js';
 import { restNamespace, usesApi } from './rest-support.js';
 import { repositoriesNamespace } from './repositories.js';
 import { pageableDefaults } from 'keel-core/gen/pagination';
@@ -367,6 +367,9 @@ function renderReader(model, operation, usings) {
   lines.push(...queryLines);
   const paramChecks = [...pathChecks, ...queryChecks];
   if (paramChecks.length > 0) lines.push('        var paramChecks = new InputViolations(ViolationSource.Params);', ...paramChecks, '        paramChecks.ThrowIfAny();');
+  // La puerta, si el mensaje la lleva (keel-core/gen/entry-gates.js): por aquí entra siempre por HTTP.
+  const gate = entryGateAssignment(model, operation.name, 'HTTP');
+  if (gate) assigns.push(`            ${gate},`);
   const construct = assigns.length > 0 ? `new ${operation.messageClass}\n        {\n${assigns.join('\n')}\n        }` : `new ${operation.messageClass}()`;
   const resolving = resolvesCaller(model, operation);
   const resolved = resolving ? ', Func<Task<string?>> resolveCaller' : '';

@@ -24,7 +24,7 @@ import {
   isPartialUpdate,
   JSON_NULLABLE_IMPORT
 } from './services.js';
-import { MEDIATOR_PKG } from './mediator.js';
+import { INTERFACES_PKG, MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 import { elementAnnotatedType } from './services.js';
 import { uniqueConstraints } from './persistence-entities.js';
@@ -260,6 +260,12 @@ function renderMethod(model, operation, imports) {
     imports.add(`${model.service.basePackage}.infrastructure.configurations.security.CallerIdentity`);
     return callerResolution(model) ? 'callerIdentity.resolve()' : 'CallerIdentity.resolve()';
   };
+  // La puerta (keel-core/gen/entry-gates.js): por aquí entra siempre por HTTP, y como la identidad, no se acepta del
+  // cuerpo (@JsonIgnore): se estampa en todas las ramas.
+  const gateArg = () => {
+    imports.add(`${subPackage(model, INTERFACES_PKG)}.EntryGate`);
+    return 'EntryGate.HTTP';
+  };
 
   if (operation.multipart) {
     // Subida binaria: el endpoint es multipart/form-data, no JSON.
@@ -309,6 +315,7 @@ function renderMethod(model, operation, imports) {
     // Partes del formulario: el binario como @RequestPart, el resto como campos.
     const args = components.map((component) => {
       if (component.resolvedIdentity) return identityArg();
+      if (component.entryGate) return gateArg();
       if (fromPath.has(component.name)) return component.name;
       if (component.file) {
         imports.add('org.springframework.web.bind.annotation.RequestPart');
@@ -360,7 +367,7 @@ function renderMethod(model, operation, imports) {
         return `(command == null ? ${absent} : command.${component.name}())`;
       };
       const args = components.map((c) =>
-        c.resolvedIdentity ? identityArg() : fromPath.has(c.name) ? c.name : read(c)
+        c.resolvedIdentity ? identityArg() : c.entryGate ? gateArg() : fromPath.has(c.name) ? c.name : read(c)
       );
       // Un argumento por línea cuando la fusión es larga (cuerpo opcional con
       // muchos campos): en una sola línea el método es ilegible.
@@ -369,13 +376,13 @@ function renderMethod(model, operation, imports) {
         inline.length > 110
           ? `new ${operation.messageClass}(\n                ${args.join(',\n                ')})`
           : inline;
-    } else if (components.some((component) => component.resolvedIdentity)) {
+    } else if (components.some((component) => component.resolvedIdentity || component.entryGate)) {
       // La identidad del llamante NO se acepta del cuerpo: se reconstruye el record poniendo el
       // valor que resuelve el servidor. Sin esto, el campo llegaría de quien hace la petición —que
       // es exactamente quien no debería elegirlo—, y la alternativa era un segundo campo sintético
       // que alguien tenía que reconciliar a mano.
       const args = components.map((component) =>
-        component.resolvedIdentity ? identityArg() : `command.${component.name}()`
+        component.resolvedIdentity ? identityArg() : component.entryGate ? gateArg() : `command.${component.name}()`
       );
       const inline = `new ${operation.messageClass}(${args.join(', ')})`;
       dispatchArg =
@@ -393,7 +400,7 @@ function renderMethod(model, operation, imports) {
       // identidad elegida por quien hace la petición — en una lectura, leer los datos de otro
       // inquilino con solo poner su clave en la URL. Lo destapó la corrida de evolución de
       // notification-mailer: `listTemplateVersions` fue la primera query con `callerIdentity`.
-      if (component.resolvedIdentity) continue;
+      if (component.resolvedIdentity || component.entryGate) continue;
       if (fromPath.has(component.name)) continue;
       for (const name of component.imports) imports.add(name);
       const typeImport = domainTypeImport(model, component);
@@ -417,6 +424,7 @@ function renderMethod(model, operation, imports) {
     const withOrder = translatableSort(operation).length > 0;
     const args = components.map((c) => {
       if (c.resolvedIdentity) return identityArg();
+      if (c.entryGate) return gateArg();
       return c.name === 'pageable' && withOrder ? `withDefaultOrder(pageable, ${orderConstantName(operation)})` : c.name;
     });
     dispatchArg = `new ${operation.messageClass}(${args.join(', ')})`;

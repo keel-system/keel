@@ -36,6 +36,8 @@ import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
 import { WRITE_CONFLICT_ATTEMPTS } from 'keel-core/gen/transactions';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
+// La puerta por la que entra una operación (keel-core/gen/entry-gates.js), junto a los mensajes que la llevan.
+export const ENTRY_GATE_TS = classPath(DIRS.interfaces, 'EntryGate');
 export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
 export const ANNOTATIONS_TS = classPath(DIRS.annotations, 'ApplicationComponent');
 export const CONTAINER_TS = classPath(DIRS.usecase, 'UseCaseContainer');

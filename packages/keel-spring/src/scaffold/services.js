@@ -16,7 +16,10 @@ import {
   hasScheduledOperations,
   scheduleSeconds,
   scheduleDispatch,
-  dispatchNote
+  dispatchNote,
+  carriesEntryGate,
+  entryGateNote,
+  usesEntryGate
 } from 'keel-core/gen';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { kebabCase } from '../lib/naming.js';
@@ -53,7 +56,35 @@ export function messageComponents(model, operation) {
       components.push({ javaType: 'int', name: 'size', imports: [], validation: [], kind: 'base' });
     }
   }
+  // La puerta por la que llegó (keel-core/gen/entry-gates.js): un componente más del record, que Jackson no bindea
+  // (@JsonIgnore) y que estampa quien lo construye, como la identidad del llamante.
+  if (carriesEntryGate(model, operation)) {
+    components.push({ javaType: 'EntryGate', name: 'entryGate', imports: [`${subPackage(model, INTERFACES_PKG)}.EntryGate`], validation: [], kind: 'base', entryGate: true });
+  }
   return components;
+}
+
+/**
+ * El valor de la puerta en la construcción de un mensaje (`EntryGate.SUBSCRIPTION`), o null si el mensaje de esa
+ * operación no la lleva. La usan el controller, el scheduler y la nota de la suscripción.
+ */
+export function entryGateValue(model, operationName, gate) {
+  const operation = model.services.flatMap((service) => service.operations).find((candidate) => candidate.name === operationName);
+  return operation && carriesEntryGate(model, operation) ? `EntryGate.${gate}` : null;
+}
+
+function entryGateFile(model) {
+  const body = `/**
+ * La puerta por la que entra una operación. Solo la lleva el mensaje de una operación que entra por HTTP y por alguna
+ * otra: HTTP es la única que puede responder un error a quien llamó, y las reglas del diseño distinguen por ella.
+ */
+public enum EntryGate {
+    HTTP,
+    SUBSCRIPTION,
+    DISPATCH,
+    SCHEDULE
+}`;
+  return { path: javaPath(model, INTERFACES_PKG, 'EntryGate'), content: javaFile(subPackage(model, INTERFACES_PKG), [], body) };
 }
 
 // Tipo de retorno de la operación (compartido con controller y handler).
@@ -95,6 +126,7 @@ export function generate(model) {
     const scheduled = service.operations.filter((operation) => operation.schedule);
     if (scheduled.length > 0) files.push(renderScheduler(model, service, scheduled, seconds));
   }
+  if (usesEntryGate(model)) files.push(entryGateFile(model));
   return files;
 }
 
@@ -220,6 +252,13 @@ function renderMessage(model, operation) {
 
   const rendered = components.map((component) => {
     for (const name of component.imports) imports.add(name);
+    if (component.entryGate) {
+      // No llega del cuerpo: sin @JsonIgnore un cliente podría decir por qué puerta entra.
+      imports.add('com.fasterxml.jackson.annotation.JsonIgnore');
+      return `        // La puerta por la que llegó este mensaje (keel-core/gen/entry-gates.js): la estampa quien lo construye,
+        // el controller con HTTP. No se acepta del cuerpo.
+        @JsonIgnore EntryGate entryGate`;
+    }
     const typeImport = domainTypeImport(model, component);
     if (typeImport) imports.add(typeImport);
 
@@ -489,6 +528,8 @@ function renderHandler(model, service, operation) {
   }
   const dispatch = dispatchNote(model, operation, { call: 'commandDispatcher.{variant}(new {message}(...))' });
   if (dispatch) notes.push(dispatch);
+  const gate = entryGateNote(model, operation, { read: 'command.entryGate()', value: (entry) => `EntryGate.${entry}` });
+  if (gate) notes.push(gate);
   const cacheParam = operation.messageKind === 'query' ? 'query' : 'command';
   const cached = cacheNote(model, operation, {
     call: `operationCache.getOrLoad(CachedOperations.{cache}, CachedOperations.${operation.name}Key(${cacheParam}), () -> ...)`
@@ -914,7 +955,10 @@ function renderScheduler(model, service, scheduled, seconds) {
   ]);
 
   const methods = scheduled.map((operation) => {
-    const components = messageComponents(model, operation);
+    // La puerta no es un argumento que construir: el reloj la conoce (SCHEDULE).
+    const components = messageComponents(model, operation).filter((component) => !component.entryGate);
+    const gate = entryGateValue(model, operation.name, 'SCHEDULE');
+    if (gate) imports.add(`${subPackage(model, INTERFACES_PKG)}.EntryGate`);
     // El barrido de una activación saliente NO se despacha dentro de una transacción, y
     // el criterio no es una heurística: `reconciles` lo puebla el modelo desde
     // `dependencies.activations.<a>.reconciledBy`, que es el enlace del DSL que dice
@@ -948,7 +992,7 @@ candidatos.`
     let call;
     if (components.length === 0) {
       imports.add(`${subPackage(model, messagePackage(operation))}.${operation.messageClass}`);
-      const dispatch = `mediator.${sweep ? 'dispatchWithoutTransaction' : 'dispatch'}(new ${operation.messageClass}());`;
+      const dispatch = `mediator.${sweep ? 'dispatchWithoutTransaction' : 'dispatch'}(new ${operation.messageClass}(${gate ?? ''}));`;
       call = correlated
         ? `// Una pasada del barrido es una TRAZA nueva: no la origina ninguna petición, así que
         // aquí nace su correlación. Sin esto el hilo del @Scheduled no tiene ninguna abierta

@@ -1480,7 +1480,7 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     `AddPayments` (keel-dotnet; medido 15/15 rojo → verde) y el rechazo de una acción de seguimiento en el arnés de los
     tres (el adaptador consulta el estado real tras un 4xx; el doble necesita `GatewayReports`, y el agente había
     cambiado el adaptador en su lugar). **Pendiente, de los tres generadores**: el origen de `requestCharge` (HTTP o
-    suscripción) que cinco corridas resolvieron a mano de cinco formas; candidato a pieza neutral.
+    suscripción) que cinco corridas resolvieron a mano de cinco formas; candidato a pieza neutral. (Hecho después: `keel-core/gen/entry-gates.js`, la puerta en el mensaje en los tres generadores.)
   - **13e, Stripe: 25/25 (2026-10-15; `docs/corridas/2026-10-15-payment-checkout-stripe-dotnet.md`).** Con los arreglos de
     la de MercadoPago dentro (`build --refresh` antes de lanzarla), que se confirman: el agente no tocó `UseCasesTests.cs`
     ni el adaptador. Huella 21; quitando el hueco del generador, 20. **Una divergencia del servidor, arreglada**: keel-dotnet

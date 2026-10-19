@@ -17,8 +17,8 @@ import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api
 import { callsPaymentGateway } from 'keel-core/gen/payments-model';
 import { pageableDefaults } from 'keel-core/gen/pagination';
 import { DIRS, classPath, fieldImports, tsModule, tsdoc, tsString } from './render.js';
-import { MEDIATOR_TS } from './mediator.js';
-import { messageComponents, messagePath, returnTypeOf, isPartialUpdate } from './services.js';
+import { ENTRY_GATE_TS, MEDIATOR_TS } from './mediator.js';
+import { entryGateAssignment, messageComponents, messagePath, returnTypeOf, isPartialUpdate } from './services.js';
 import { PAGED_RESPONSE_TS, FILE_UPLOAD_TS } from './dtos.js';
 import { MULTIPART_READING_TS } from './storage.js';
 import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
@@ -413,7 +413,13 @@ function renderReader(model, operation, name, imports) {
   }
   for (const symbol of used) imports.push({ symbol, from: REQUEST_READING_TS });
 
-  const construct = components.length > 0 ? `new ${operation.messageClass}({\n${assigns.join(',\n')}\n  })` : `new ${operation.messageClass}()`;
+  // La puerta, si el mensaje la lleva (keel-core/gen/entry-gates.js): por aquí entra siempre por HTTP.
+  const gate = entryGateAssignment(model, operation.name, 'HTTP');
+  if (gate) {
+    imports.push({ symbol: 'EntryGate', from: ENTRY_GATE_TS });
+    assigns.push(`    ${gate}`);
+  }
+  const construct = assigns.length > 0 ? `new ${operation.messageClass}({\n${assigns.join(',\n')}\n  })` : `new ${operation.messageClass}()`;
   return `/** Lee ${operation.route.method} ${operation.route.path} (${operation.name}) al mensaje de su caso de uso. */
 function ${name}(params: Record<string, string>, query: Record<string, unknown>, body: unknown): ${operation.messageClass} {
 ${ordered.join('\n')}${ordered.length > 0 ? '\n' : ''}  return ${construct};

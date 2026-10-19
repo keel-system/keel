@@ -180,3 +180,12 @@ llamante o sin ella). Sin el enlace, la costura quedaba en prosa y el agente esc
 cada corrida. Cada destino tiene que ser un `command` de este servicio y no la propia operación
 (`CHK-USECASES-DISPATCH-TARGET`): una lectura no se despacha, se consulta. Despachar no sustituye a los demás
 disparadores —`quarantineAsset` sigue teniendo su suscripción—.
+
+**Una operación con varias puertas.** Una misma operación puede entrar por su endpoint, por una suscripción, por un
+despacho y por su reloj. Casi siempre da igual por cuál llega. Pero HTTP es la **única** puerta que puede responder un
+error a quien llamó: por las demás no hay nadie esperando, y lo que por HTTP es un 422 tiene que quedar en el estado (un
+cobro `failed` y su evento). Eso se escribe en las `rules`, nombrando la puerta («Por HTTP, …», «Por la suscripción,
+…»: `requestCharge` de `payment-checkout`). No hace falta declarar nada más. Cuando una operación entra por HTTP y por
+alguna otra, el generador da a su mensaje un campo obligatorio con la puerta por la que llegó: lo fija el endpoint, lo
+dicta la nota de la suscripción o del despacho, y la nota del handler dice que las reglas se deciden con él. Sin ese
+campo, el handler no tenía cómo saberlo, y cada corrida lo resolvía a mano de una forma distinta.

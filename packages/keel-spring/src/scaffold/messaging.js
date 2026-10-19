@@ -26,6 +26,7 @@ import { usesTelemetry, messageTracingImport } from './telemetry.js';
 import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination } from 'keel-core/gen';
 import { acknowledgeNote } from 'keel-core/gen/rejection-notes';
 import { credentialFinderName } from './repositories.js';
+import { entryGateValue } from './services.js';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
 const INTEGRATION_PKG = 'infrastructure.messaging.events';
@@ -651,7 +652,9 @@ function contractJavadoc(sub, model) {
             : a.component === paymentToken
               ? 'null (por evento no hay cliente delante: solo se cobra un medio guardado)'
               : 'TODO (agente)';
-    const args = sub.triggerArguments.map((a) => `${a.component} = ${argument(a)}`).join(', ');
+    // La puerta, si el mensaje la lleva (keel-core/gen/entry-gates.js): por aquí es SUBSCRIPTION.
+    const gate = entryGateValue(model, sub.trigger, 'SUBSCRIPTION');
+    const args = [...sub.triggerArguments.map((a) => `${a.component} = ${argument(a)}`), ...(gate ? [`entryGate = ${gate}`] : [])].join(', ');
     // La misma regla que el controller y el scheduler: lo que llama a la pasarela va sin
     // transacción abarcadora (callsPaymentGateway).
     const via = callsPaymentGateway(model, sub.trigger) ? 'UseCaseMediator.dispatchWithoutTransaction(...) —llama a la pasarela: registra y confirma antes de llamarla—' : 'UseCaseMediator';
