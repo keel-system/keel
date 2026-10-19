@@ -3,7 +3,7 @@
 Cómo viaja en JSON cada tipo del DSL, y la forma de los cuerpos que el diseño no declara (el error, la
 página, la envoltura de eventos). Es contrato observable: lo ve todo consumidor del servicio, y es lo
 que hace que dos servidores generados del mismo diseño con generadores distintos (keel-spring,
-keel-nest) sean intercambiables para quien los llama.
+keel-nest, keel-dotnet) sean intercambiables para quien los llama.
 
 El diseño no lo declara: lo fija el método, igual para cualquier servicio. Lo que sí decide el diseño
 está en sus convenciones de determinación (`conventions.nulls`, la escala de cada `decimal`, el valor de

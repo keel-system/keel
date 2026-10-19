@@ -1922,7 +1922,7 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
   - De paso: la frontera del README todavía decía que la telemetría se rechazaba; ya no.
   - Siguiente: el 16 (cierre: frontera sin rechazos sin motivo, matriz sin pendientes, `capability-coverage` y la
     corrida de control del par MVP en los tres generadores).
-- **Inc. 16 — en curso (2026-10-18).**
+- **Inc. 16 — hecho (2026-10-19), con corrida de control en los tres generadores.**
   - **16a, la cobertura de capacidades (hecho).** Las quince fixtures entran enteras en la frontera. Quedan sin fixture las
     mismas diez capacidades opcionales que en keel-nest; `test/capability-coverage.test.js` (el enumerador compartido de
     keel-core) exige su motivo, comprobado contra los emisores de keel-dotnet y no copiado. Las ramas sin fixture son
@@ -1953,8 +1953,30 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
     dos siluetas «sin persistencia» de `DERIVED_SILHOUETTES`. Ninguna fixture la declara, así que lo emitido no cambia. Lo
     fija `test/messaging-frontier.test.js`: el de keel-core prueba la función, y el de keel-dotnet, que los tres rechazan
     con el mismo mensaje. Suites: keel-core 1224, keel-spring 1664, keel-nest 792 y keel-dotnet 683.
-  - Queda: la matriz (sin celdas `sin ejecutar` ni pendientes desde el 14f; tres celdas sin falsar)
-    y la corrida de control del par MVP en los tres generadores.
+  - **16d, la corrida de control (hecha).** El par del MVP con los TRES generadores desde `5a8143e`: el mismo diseño
+    (v2.0.2), el mismo stack (`postgresql|mongodb · rabbitmq · keycloak`) y seis corridas. Las fichas son
+    `docs/corridas/2026-10-18-notification-mailer[-mongo]-{spring,nest,dotnet}-control.md`; la comparación de las seis
+    está en la de keel-dotnet relacional.
+    - **Las seis salen 23/23 y con huella 17**: la misma lista de archivos en los seis, y la de la serie del par
+      (las cuatro del 2026-10-12 y la documental de keel-dotnet del 2026-10-15). La única excepción es keel-dotnet
+      documental, con 18: el reescrito de más es el `.csproj` de los flujos, por la ruta larga de Windows (`MSB3030`).
+      Es de entorno.
+    - **Dos huecos del generador, arreglados.**
+      - La nota de `resolvedBy` del mensaje del broker salía con `undefined` en keel-dotnet: `messaging.js` leía como
+        objeto el `Entidad.campo` del diseño. Ahora usa `resolvedByOf` de `repositories.js`. Lo fija
+        `test/caller-resolution.test.js`, falsado con el emisor anterior.
+      - Los agentes de pruebas de keel-nest y keel-dotnet no tenían la regla de keel-spring: «un fixture de
+        infraestructura documentado no es un `uncovered`». Con esa falta, dos de los cuatro dejaron sin cubrir el 403
+        por audiencia ajena, con `test-m2m-bad-aud` ya sembrado. La regla está ahora en los dos.
+    - **Dos huecos del diseño, para la próxima minor del par.** Solo los ve la comparación: cada agente decidió sin
+      saber que decidía.
+      - `required-value-blank`: tres contratos distintos para una variable requerida en blanco.
+      - `rendered-subject-bound`: repetido del 2026-10-12, así que es candidato obligatorio a id.
+    - De paso, el pendiente del inc. 0: `wire-contract.md` nombra ya a los tres generadores. Se regeneraron las dos
+      líneas base (solo cambian ese documento y el agente de pruebas de keel-nest).
+  - Queda, opcional: tres celdas de la matriz sin falsar (`harness-db-probes/relational`,
+    `partial-unique-index/postgresql` y `harness-sql-literals/postgresql`), verificadas con `db-check` pero sin sabotaje
+    medido.
 
 ## 5. Riesgos conocidos
 

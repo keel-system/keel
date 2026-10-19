@@ -57,4 +57,11 @@ for (const name of ['notification-mailer', 'notification-mailer-mongo']) {
       assert.match(content, /IApplicationRepository\.FindByCredentialKeysContaining/, file);
     }
   });
+
+  test(`${name}: la nota del mensaje del broker nombra la entidad, el campo y el finder (resolvedBy viene como texto)`, () => {
+    const message = find('/Subscriptions/NotificationRequestedMessage.cs');
+    assert.match(message, /resolvedBy: Application\.credentialKeys/);
+    assert.match(message, /IApplicationRepository\.FindByCredentialKeysContaining\(/);
+    assert.doesNotMatch(message, /undefined/);
+  });
 }

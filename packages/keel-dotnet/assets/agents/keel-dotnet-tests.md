@@ -95,6 +95,10 @@ independencia no cambia: sigues sin leer `src/`.
   para que pase deja el escenario en verde sin haberlo probado.
 - Un escenario que el diseño no permite ejercitar de forma determinista **no se inventa**: va a `uncovered` con su
   motivo.
+- **Un fixture de infraestructura documentado no es un `uncovered`.** El cliente M2M sin scope, el de audiencia
+  ajena (`test-m2m-bad-aud`, con `validateAudience: true`) y el de control forman la matriz de prueba que siembra
+  `infra/`; con Keycloak la describe `{{keel:skills}}/keel-dotnet-keycloak/references/test-clients.md`, y su token se
+  pide con `Credentials` del arnés por su nombre, como cualquier cliente. Escribe el test contra ese nombre.
 - Toda apuesta que dependa de la infraestructura y no puedas verificar en la fase 1 va a `assumptions`, no a un
   comentario en el código.
 - Identificadores en inglés; los títulos de los escenarios y los comentarios, en español.

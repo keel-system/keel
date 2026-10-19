@@ -249,7 +249,8 @@ export function credentialFinderName(field) {
   return `FindBy${csMember(field)}Containing`;
 }
 
-function resolvedByOf(raw) {
+/** `resolvedBy` como `{ entity, field }`: el diseño lo escribe `Entidad.campo`, y una prueba puede pasarlo ya partido. */
+export function resolvedByOf(raw) {
   if (!raw) return null;
   if (typeof raw === 'object') return raw;
   const [entity, field] = String(raw).split('.');
