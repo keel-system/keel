@@ -2003,6 +2003,9 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
   - **16f, el cierre de la documentación (hecho, 2026-10-19)**, lo que el §7 asigna al 16:
     - el `README.md` raíz y el de keel-dotnet ya no lo dan por «en construcción»;
     - el detalle de `CLAUDE.md` se mueve a `.claude/rules/dotnet-generador.md` (clave `dotnet`), como el de keel-nest.
+  - **16g, `broker-check` tras el apagado del 14b (hecho, 2026-10-19).** 67/67 contra RabbitMQ, Kafka y LocalStack
+    reales, con sus dos sabotajes por broker cayendo en su flujo y solo en él. Con esto se mide lo que el 14 dejó «sin
+    medir aquí»: Kafka y SNS/SQS después del arreglo del apagado.
 
 ## 5. Riesgos conocidos
 
