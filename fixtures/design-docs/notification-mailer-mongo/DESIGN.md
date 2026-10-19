@@ -1,6 +1,6 @@
 # notification-mailer-mongo — Documento de diseño
 
-> specs/notification-mailer-mongo v2.0.2. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
+> specs/notification-mailer-mongo v2.0.3. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
 
 ## 1. Propósito y alcance
 
@@ -57,9 +57,12 @@ Campos generados: los `id` y `Notification.requestedAt`. `Notification.status` n
   del mensaje y llega al comando declarado en el diseño, no por convención del listener.
 - Toda variable declarada como requerida llega con valor; las no declaradas se ignoran y no se
   congelan, y dos con el mismo nombre se rechazan. Por HTTP y por evento, igual.
+- El valor de una variable nunca va en blanco: vacío o solo de espacios es una petición malformada
+  (400), venga o no la variable declarada como requerida.
 - Los valores se escapan como HTML en la parte html; en la de texto van tal cual.
 - El asunto se renderiza al aceptar y el cuerpo al enviar, siempre con la versión y los valores
-  congelados.
+  congelados. Un asunto interpolado de más de 200 caracteres se trunca a los 200 primeros
+  (sin partir un par sustituto) y la petición se acepta igual.
 - Una plantilla que no compila no se registra.
 - `NotificationSent` se emite solo al pasar a `sent`. Un relay que rechaza, no se alcanza o no
   contesta a tiempo deja el envío en `failed`, sin reintentar: no se sabe si el correo salió.
@@ -152,6 +155,13 @@ Otras decisiones notables:
   nuevo.
 - **Un canal genérico de peticiones**, en vez de un evento por caso de negocio: el alta de un
   consumidor no es una edición del diseño.
+- **Un valor en blanco es una petición malformada**, no una variable que falta. Con «llega con
+  valor» a secas, cada servidor generado decidió por su cuenta si `""` o `"  "` cuentan, y salieron
+  tres contratos distintos (control del 2026-10-18). Es un 400 en el borde y no un
+  `TEMPLATE_VARIABLE_MISSING`: el valor está mal formado aunque la variable no sea requerida.
+- **El asunto demasiado largo se trunca, no se rechaza.** Lo arma el servicio a partir de dos
+  entradas válidas (la plantilla y los valores), así que el llamante no tiene un error que corregir,
+  y el correo sale con lo que cabe. Rechazarlo haría depender el envío de la longitud de un nombre.
 - **Los 404 del aislamiento.** Decir «existe pero no es tuyo» le contaría a un inquilino qué
   identificadores tiene otro.
 

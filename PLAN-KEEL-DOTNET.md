@@ -1972,6 +1972,9 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
       saber que decidía.
       - `required-value-blank`: tres contratos distintos para una variable requerida en blanco.
       - `rendered-subject-bound`: repetido del 2026-10-12, así que es candidato obligatorio a id.
+      - Cerrados los dos en el par v2.0.3 (2026-10-19), decisión del usuario. El valor en blanco se rechaza con un
+        `pattern` en `TemplateVariableValue.value`, que da un 400. El asunto de más de 200 se trunca, por regla. Es un
+        parche: no toca ningún escenario, así que el careo y la revisión siguen valiendo.
     - De paso, el pendiente del inc. 0: `wire-contract.md` nombra ya a los tres generadores. Se regeneraron las dos
       líneas base (solo cambian ese documento y el agente de pruebas de keel-nest).
   - Queda, opcional: tres celdas de la matriz sin falsar (`harness-db-probes/relational`,

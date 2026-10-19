@@ -90,6 +90,13 @@ movieron la huella, y los designGaps que se arreglaron en el generador (`openapi
 
 ## designGaps
 
+**Los dos quedaron cerrados en el par v2.0.3 (2026-10-19)**, que es un parche: no cambia ningún escenario, así que
+el careo y la revisión siguen valiendo.
+- El valor en blanco se rechaza: `TemplateVariableValue.value` lleva un `pattern` que exige un carácter que no sea
+  espacio. El DSL no tiene `notBlank` como cota; la guarda del value object lo cumple en los tres generadores y lo
+  convierte en un 400.
+- El asunto interpolado de más de 200 se trunca, por regla de `requestNotification` y de `acceptNotificationRequest`.
+
 Ninguno de los dos lo reportó esta corrida. Salen de comparar los seis servidores, que es lo único que los ve: cada
 agente decidió por su cuenta sin creer que decidía.
 

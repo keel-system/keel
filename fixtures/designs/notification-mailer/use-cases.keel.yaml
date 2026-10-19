@@ -146,6 +146,10 @@ operations:
       - Hay una plantilla activa con esa clave e idioma para esa aplicación.
     rules:
       - La versión de plantilla y el asunto ya interpolado se congelan en la notificación.
+      - >-
+        Un asunto interpolado de más de 200 caracteres se trunca a los 200 primeros, sin partir un
+        carácter: si el corte cae en mitad de un par sustituto, se corta antes de él. La petición se
+        acepta igual. Es el asunto que el correo lleva y el que se congela.
       - Si la petición omite el idioma, se usa el `defaultLocale` de la aplicación.
       - Toda variable que la plantilla declara como requerida llega con valor.
       - Las variables que la plantilla no declara se ignoran y no se congelan.
@@ -208,7 +212,7 @@ operations:
       - Un mensaje de una aplicación desconocida, o dada de baja, se descarta sin reintentar.
       - >-
         Lo mismo que por HTTP: sin idioma se usa el `defaultLocale` de la aplicación, la versión y
-        el asunto interpolado se congelan, las variables no declaradas se ignoran y dos con el mismo
+        el asunto interpolado se congelan (truncado a 200 como allí), las variables no declaradas se ignoran y dos con el mismo
         nombre se rechazan.
       - Registrar no es enviar; el correo lo manda sendAcceptedNotification.
       - Las variables se validan igual que por HTTP; un mensaje rechazado no se reintenta y va a la cola de descarte.

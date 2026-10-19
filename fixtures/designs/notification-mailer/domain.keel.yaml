@@ -28,7 +28,9 @@ types:
     description: El valor de una variable de plantilla para un envío concreto.
     fields:
       name: { type: string, required: true, constraints: { maxLength: 64 } }
-      value: { type: string, required: true, constraints: { maxLength: 1000 } }
+      # No en blanco: un valor vacío o solo de espacios es una petición malformada (400), no un
+      # correo con el hueco vacío. El patrón es el notBlank que el DSL no tiene como cota.
+      value: { type: string, required: true, constraints: { maxLength: 1000, pattern: "^[\\s\\S]*\\S[\\s\\S]*$" } }
 
   EmailAddress:
     base: string
