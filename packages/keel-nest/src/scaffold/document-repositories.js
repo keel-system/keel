@@ -300,7 +300,8 @@ function declaredAuditStamps(model, entity) {
       declaredTs && has('createdAt') ? 'node.created_at ??= now;' : null,
       declaredTs && has('updatedAt') ? 'node.updated_at = now;' : null,
       // La autoría declarada (13h): campos del dominio, con el actor de currentActor().
-      declaredBy && has('createdBy') ? 'node.created_by ??= actor;' : null,
+      // Vacía es AUSENTE: el alta la deja en '' (domain-modeling.md).
+      declaredBy && has('createdBy') ? 'node.created_by ||= actor;' : null,
       declaredBy && has('updatedBy') ? 'node.updated_by = actor;' : null
     ]
       .filter(Boolean)

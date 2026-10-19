@@ -227,6 +227,9 @@ export function sampleState(model, entity, ctx, salt, depth = 0) {
       // El lockVersion declarado: null hasta la primera escritura, como el que añade build. Con un número, el
       // adaptador tomaría la muestra por un agregado ya guardado.
       value = 'null';
+    } else if (entity.auditAuthorship === 'declared' && ['createdBy', 'updatedBy'].includes(member.name)) {
+      // La autoría declarada, como la deja el alta (domain-modeling.md): vacía. La estampa el adaptador al guardar.
+      value = '""';
     } else if (member.field.list) {
       value = listOf(model, member.field, ctx, salt);
     } else if (member.field.isId) {
@@ -631,8 +634,8 @@ ${ensures.join('\n\n')}
 
     // ─── Comparación ───
 
-    /// <summary>Lo que pone la persistencia y no quien guarda: la versión y la última modificación.</summary>
-    private static readonly HashSet<string> Ignored = new(StringComparer.Ordinal) { "lockVersion", "updatedAt", "updatedBy" };
+    /// <summary>Lo que pone la persistencia y no quien guarda: la versión, la última modificación y la autoría (la mide su sonda).</summary>
+    private static readonly HashSet<string> Ignored = new(StringComparer.Ordinal) { "lockVersion", "updatedAt", "updatedBy", "createdBy" };
 
     /// <summary>El estado observable de un agregado con el contrato del cable; las hijas sin orden propio, por id.</summary>
     private static string Normalize(object? entity) => Clean(JsonSerializer.SerializeToNode(entity, entity?.GetType() ?? typeof(object), WireJson.Options))?.ToJsonString() ?? "null";
@@ -769,13 +772,14 @@ function deadlockProbes(model, root, { state, first, port, id, concurrency }) {
  * no es la primera— y una credencial ajena no resuelve nada. Lo comparten db-check y doc-check: solo usa el puerto.
  */
 /**
- * La AUTORÍA de política (`persistence.audit.authorship: all`, incremento 13h) contra la base real: quien crea queda en
- * created_by y no cambia al reescribir; quien escribe la última vez, en updated_by. El actor es el de AuditActor: con
+ * La AUTORÍA (`persistence.audit.authorship`, incremento 13h) contra la base real: quien crea queda en created_by y no
+ * cambia al reescribir; quien escribe la última vez, en updated_by. Con `declared`, la muestra nace con la autoría vacía
+ * (la de `sampleState`): vacía es ausente, y la fila guarda el actor. El actor es el de AuditActor: con
  * seguridad, el `sub` del token que abre la sonda; sin ella, el sistema con la correlación (o sin ella). `raw` lee los dos
  * valores crudos de la fila o del documento (`createdBy`, `updatedBy`). Lo usan db-check y doc-check.
  */
 export function authorshipProbe(model, root, { state, sample, port, raw, usings }) {
-  if (root.auditAuthorship !== 'all') return [];
+  if (root.auditAuthorship !== 'all' && root.auditAuthorship !== 'declared') return [];
   const security = usesHttpSecurity(model);
   const correlation = usesCorrelation(model);
   usings.push(namespaceOf(model, 'persistence'));

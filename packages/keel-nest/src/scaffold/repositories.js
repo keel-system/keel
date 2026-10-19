@@ -681,13 +681,14 @@ function auditStamps(model, entity) {
     const hasCreated = ts === 'all' || (ts === 'declared' && candidate.fields.some((field) => field.name === 'createdAt'));
     const hasUpdated = ts === 'all' || (ts === 'declared' && candidate.fields.some((field) => field.name === 'updatedAt'));
     // La autoría (13h): `createdBy` no cambia después de nacer y `updatedBy` se estampa en cada escritura, como
-    // @CreatedBy/@LastModifiedBy; el actor es el de currentActor() (audit-actor.ts).
+    // @CreatedBy/@LastModifiedBy; el actor es el de currentActor() (audit-actor.ts). La autoría vacía es AUSENTE (`||=`):
+    // el dominio no conoce al llamante y en el alta la deja en '' (domain-modeling.md); con `??=` se guardaba ese ''.
     const hasCreatedBy = by === 'all' || (by === 'declared' && candidate.fields.some((field) => field.name === 'createdBy'));
     const hasUpdatedBy = by === 'all' || (by === 'declared' && candidate.fields.some((field) => field.name === 'updatedBy'));
     if (candidate === entity) {
       if (hasCreated) stamp('orm', 'createdAt');
       if (hasUpdated) stamp('orm', 'updatedAt');
-      if (hasCreatedBy) lines.push('orm.createdBy ??= actor;');
+      if (hasCreatedBy) lines.push('orm.createdBy ||= actor;');
       if (hasUpdatedBy) lines.push('orm.updatedBy = actor;');
     } else {
       const path = pathTo(model, entity, candidate);
@@ -695,7 +696,7 @@ function auditStamps(model, entity) {
       const parts = [];
       if (hasCreated) parts.push('child.createdAt ??= now;');
       if (hasUpdated) parts.push('child.updatedAt = now;');
-      if (hasCreatedBy) parts.push('child.createdBy ??= actor;');
+      if (hasCreatedBy) parts.push('child.createdBy ||= actor;');
       if (hasUpdatedBy) parts.push('child.updatedBy = actor;');
       if (parts.length > 0) lines.push(`for (const child of ${walk(path)}) { ${parts.join(' ')} }`);
     }

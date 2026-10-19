@@ -678,8 +678,8 @@ ${ensures.join('\n\n')}
 
     // ─── Comparación ───
 
-    /// <summary>Lo que pone la persistencia y no quien guarda: la versión y la última modificación.</summary>
-    private static readonly HashSet<string> Ignored = new(StringComparer.Ordinal) { "lockVersion", "updatedAt", "updatedBy" };
+    /// <summary>Lo que pone la persistencia y no quien guarda: la versión, la última modificación y la autoría (la mide su sonda).</summary>
+    private static readonly HashSet<string> Ignored = new(StringComparer.Ordinal) { "lockVersion", "updatedAt", "updatedBy", "createdBy" };
 
     /// <summary>
     /// El estado observable de un agregado con el contrato del cable; las hijas sin orden propio, por id. Un instante,

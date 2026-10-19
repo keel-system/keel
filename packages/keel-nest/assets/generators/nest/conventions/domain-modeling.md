@@ -64,6 +64,11 @@ static create(props: { sku: string; name: string; notes: string | null; price: M
 }
 ```
 
+La auditoría que declara el dominio (`persistence.audit: declared`) la estampa el adaptador al guardar, no el
+factory: el dominio no conoce al llamante. En el alta, `createdAt`/`updatedAt` van con el reloj y
+`createdBy`/`updatedBy` **vacíos** (`''`), y el adaptador los rellena con el actor porque vacío cuenta como
+ausente. Nunca un actor inventado (`'system'` se guardaría tal cual).
+
 El factory lanza el `<PascalCode>Error` **declarado en el diseño** para cada caso. Si una regla no tiene
 error declarado, es un hueco del diseño: no inventes un `code`.
 

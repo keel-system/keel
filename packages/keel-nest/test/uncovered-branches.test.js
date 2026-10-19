@@ -7,6 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { planFixture } from './helpers/emitted.js';
 import { checkTree } from './helpers/ts-tree.js';
+import { declaredAuthorship } from './helpers/workspace.js';
 
 const SUBJECT = 'catalog-extended';
 const PRICING = (layers) => layers.dependencies.dependencies.pricing.needs;
@@ -42,3 +43,21 @@ test(`${SUBJECT}: activación con onFailure degrade — el fallback deja el TODO
   });
   assert.ok(files.some((file) => file.content.includes(prose)), 'la prosa de degradedTo no llega a lo emitido');
 });
+
+// La autoría declarada: vacía es AUSENTE. El alta la deja en '' (domain-modeling.md), y con `??=` el adaptador guardaba
+// ese '' en lugar del actor (corrida catalog-dotnet del registry, la misma forma en keel-nest).
+for (const fixture of ['notification-mailer', 'notification-mailer-mongo']) {
+  test(`${fixture}: la autoría declarada vacía se estampa con el actor, en la raíz y en la hija (audit.authorship: declared)`, () => {
+    const { files } = planFixture(fixture, { mutate: declaredAuthorship });
+    assert.deepEqual(checkTree(files), []);
+    const adapter = files.find((file) => file.path.endsWith('template-repository-impl.ts'));
+    assert.ok(adapter, 'no se emitió el adaptador de Template');
+    if (fixture === 'notification-mailer') {
+      assert.match(adapter.content, /orm\.createdBy \|\|= actor;/);
+      assert.match(adapter.content, /child\.createdBy \|\|= actor;/);
+    } else {
+      assert.match(adapter.content, /node\.created_by \|\|= actor;/);
+    }
+    for (const file of files) assert.doesNotMatch(file.content, /created_?[bB]y \?\?= actor/, file.path);
+  });
+}

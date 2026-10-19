@@ -377,3 +377,15 @@ test('las skills de pagos se instalan con la capa, la de la pasarela solo con el
     assert.ok(find('/Payment/PaymentOutcomeApplier.cs').includes('public async Task Apply(GatewayOutcome outcome, CancellationToken cancellationToken = default)'));
   }
 });
+
+// En la fase 1 code y tests corren a la vez: si code compila la solución entera, mide el proyecto de flujos a medio
+// escribir y reporta un `compiles: false` que no es suyo (corrida catalog-dotnet del registry, 2026-10-19).
+test('el agente de código compila src/ por el Api en la fase 1, y la solución solo relanzado en la fase 2', () => {
+  const agent = fs.readFileSync(path.join(assets, 'agents', 'keel-dotnet-code.md'), 'utf8');
+  assert.ok(agent.includes('`dotnet build src/<Raíz>.Api/<Raíz>.Api.csproj`'), 'la verificación de la fase 1 no nombra el proyecto del Api');
+  assert.match(agent, /No compiles la solución entera/);
+  assert.match(agent, /aquí sí la solución entera/);
+  // Que el Api cubra todo src/: referencia Infrastructure (y ésta Application y Domain).
+  const api = files[sln.api.csproj];
+  assert.ok(api.includes(`${sln.infrastructure.name}.csproj`), 'el Api no referencia Infrastructure: compilarlo no cubre src/');
+});

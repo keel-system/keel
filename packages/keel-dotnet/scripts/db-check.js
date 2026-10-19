@@ -38,6 +38,7 @@
 //   credential  el finder de resolvedBy busca solo en la primera credencial de la lista
 //   send-guard  la guarda del envío (mail.sentBy) escribe dentro de la transacción del caso de uso, no en la suya
 //   created-by  el created_by de la autoría de política se reescribe en cada guardado (sujeto product-catalog-authorship)
+//   created-by-empty  la autoría DECLARADA que el alta deja vacía se guarda vacía, sin el actor (sujeto mailer-author)
 //   replica-tx  la copia de una réplica se guarda en la transacción de quien la escribe, no en la suya
 //   replica-order  el proyector aplica un hecho anterior al guardado
 //   replica-batch  la lectura por lote de la réplica no trae nada
@@ -93,6 +94,8 @@ const SABOTAGES = {
   'send-guard': ['Repositories/', 'var own = scope.ServiceProvider.GetRequiredService<', 'var own = db; _ = scope.ServiceProvider.GetRequiredService<'],
   // La autoría de política (13h): created_by se reescribe en cada guardado.
   'created-by': ['Repositories/', 'if (string.IsNullOrEmpty(row.CreatedBy)) { row.CreatedBy = actor; }', 'row.CreatedBy = actor;'],
+  // La autoría declarada: el "" del alta cuenta como valor (el `??=` de la corrida catalog-dotnet).
+  'created-by-empty': ['Repositories/', 'if (string.IsNullOrEmpty(row.CreatedBy)) { row.CreatedBy = actor; }', 'row.CreatedBy ??= actor;'],
   // La réplica (13j): la copia se guarda en la transacción de quien la escribe; el proyector aplica un hecho anterior; el
   // lote no trae nada.
   'replica-tx': ['Repositories/', 'return await own.SaveHere(entity, cancellationToken);', 'return await SaveHere(entity, cancellationToken);'],
@@ -154,6 +157,8 @@ const DERIVED = {
   },
   // `optimisticLocking: declared`: el Save con la versión que declara el dominio (el MISMO parche que compila cs-check).
   ...uncoveredBranch('product-catalog-declared-lock'),
+  // `audit.authorship: declared`: el alta deja la autoría vacía y el adaptador la estampa (raíz e hija).
+  ...uncoveredBranch('mailer-author'),
   // El finder de una LISTA con un subcampo de value object y el texto por prefijo (DSL 2.22).
   ...uncoveredBranch('product-catalog-finder')
 };

@@ -68,6 +68,11 @@ public static Product Create(string sku, string name, string? notes, Money price
 }
 ```
 
+La auditoría que declara el dominio (`persistence.audit: declared`) la estampa el adaptador al guardar, no el
+factory: el dominio no conoce al llamante. En el alta, `CreatedAt`/`UpdatedAt` van con el reloj y
+`CreatedBy`/`UpdatedBy` **vacíos** (`string.Empty`), y el adaptador los rellena con el actor porque vacío cuenta
+como ausente. Nunca `null!` (le miente al compilador) ni un actor inventado (`"system"` se guardaría tal cual).
+
 El factory lanza el `<PascalCode>Error` **declarado en el diseño** para cada caso. Si una regla no tiene error
 declarado, es un hueco del diseño: no inventes un `code`.
 

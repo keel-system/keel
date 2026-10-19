@@ -92,6 +92,28 @@ for (const name of ['product-catalog-declared-lock', 'mailer-mongo-lock']) {
   });
 }
 
+// La autoría declarada: el campo es `generated` y no `required`, así que su columna es nullable; el alta la deja vacía, y
+// vacía es AUSENTE. Con `??=` el adaptador guardaba el "" del dominio en lugar del actor (corrida catalog-dotnet).
+test('mailer-author: la autoría declarada vacía se estampa con el actor, en la raíz y en la hija (audit.authorship: declared)', async () => {
+  const files = await emitted('mailer-author');
+  const adapter = files.find((file) => file.path.endsWith('Repositories/TemplateRepository.cs'));
+  assert.ok(adapter, 'no se emitió el adaptador de Template');
+  assert.match(adapter.content, /if \(string\.IsNullOrEmpty\(row\.CreatedBy\)\) \{ row\.CreatedBy = actor; \}\s+row\.UpdatedBy = actor;/);
+  assert.match(adapter.content, /if \(string\.IsNullOrEmpty\(child\.CreatedBy\)\) \{ child\.CreatedBy = actor; \} child\.UpdatedBy = actor;/);
+  for (const file of files.filter((candidate) => candidate.path.endsWith('.cs'))) {
+    assert.doesNotMatch(file.content, /CreatedBy \?\?= actor/, file.path);
+  }
+});
+
+test('mailer-mongo-author: en un documento, la autoría declarada vacía también es ausente', async () => {
+  const files = await emitted('mailer-mongo-author');
+  const adapter = files.find((file) => file.path.endsWith('Repositories/TemplateRepository.cs'));
+  assert.ok(adapter, 'no se emitió el adaptador de Template');
+  assert.ok(adapter.content.includes('BsonValues.StampCreated(node, "created_by", actor);'), 'created_by no pasa por StampCreated');
+  const values = files.find((file) => file.path.endsWith('/BsonValues.cs'));
+  assert.ok(values?.content.includes('current is BsonString { Value: "" }'), 'StampCreated no trata "" como ausente');
+});
+
 // Cada parche es un diseño VÁLIDO: uno que la validación rechaza no llegaría nunca a build, y su rama no la genera nadie.
 for (const { name, from, mutate } of UNCOVERED_BRANCHES) {
   test(`${name}: es un diseño válido (si no, build no llegaría a generarlo)`, () => {

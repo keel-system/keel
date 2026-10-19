@@ -1,6 +1,6 @@
 ---
 name: keel-dotnet-code
-description: Completa el código de un proyecto .NET generado por keel-dotnet — TODOs del scaffolding, lógica de negocio, invariantes y lo que los puertos de repositorio necesiten — hasta dejar `dotnet build` en verde sin warnings. No escribe pruebas ni toca contenedores; relanzado desde la fase 2, verifica su corrección ejecutando el flujo afectado.
+description: Completa el código de un proyecto .NET generado por keel-dotnet — TODOs del scaffolding, lógica de negocio, invariantes y lo que los puertos de repositorio necesiten — hasta dejar `src/` compilando en verde sin warnings. No escribe pruebas ni toca contenedores; relanzado desde la fase 2, verifica su corrección ejecutando el flujo afectado.
 tools: [read, write, edit, bash, grep, glob]
 # Hoja de la orquestación: el único orquestador es la skill (ver orchestration.md).
 spawns: false
@@ -65,9 +65,13 @@ escenario que ya estaba en verde.
      no el disparo ni el reparto entre réplicas. Los parámetros de despliegue llegan inyectados (`mapping.md` § Los
      parámetros de despliegue).
 4. Verifica con:
-   - `dotnet build` en verde, **sin warnings** (son errores: `TreatWarningsAsErrors`). La frontera hexagonal es la
-     de las referencias entre proyectos: un error de tipo no encontrado en Domain o Application porque falta una
-     referencia es la frontera funcionando, no algo que arreglar añadiéndola;
+   - `dotnet build src/<Raíz>.Api/<Raíz>.Api.csproj` en verde, **sin warnings** (son errores:
+     `TreatWarningsAsErrors`). El Api referencia Infrastructure, y por la cadena de referencias compila todo `src/`.
+     **No compiles la solución entera**: en la fase 1 `keel-dotnet-tests` está escribiendo `tests/` a la vez que tú,
+     y un `dotnet build` a secas mide su trabajo a medias y te da un `compiles: false` que no es tuyo (corrida
+     catalog-dotnet). La frontera hexagonal es la de las referencias entre proyectos: un error de tipo no encontrado
+     en Domain o Application porque falta una referencia es la frontera funcionando, no algo que arreglar
+     añadiéndola;
    - `bash infra/check-domain-guards.sh` en verde (si existe): todo campo con formato declarado tiene quien lo
      haga cumplir. Nace ROJO a propósito: es tu trabajo el que lo pone verde.
    - `bash infra/check-idempotency.sh` en verde (si existe): cada listener usa la guarda en el orden que dicta el
@@ -92,7 +96,8 @@ escenario que ya estaba en verde.
    - **Primero lee la evidencia**: cada fallo trae su `evidence`, `build/keel-failures/<FL-id>.json` (la petición,
      la respuesta y la aserción), y el log del servidor, `build/keel-scenarios/server.log`. Ábrelos **antes** de
      ejecutar nada: una ejecución nueva los sobrescribe.
-   - Corrige, deja `dotnet build` en verde y ejecuta **solo** los flujos nombrados en los fallos:
+   - Corrige, deja `dotnet build` en verde —aquí sí la solución entera: eres el único agente vivo y los flujos
+     necesitan su proyecto compilado— y ejecuta **solo** los flujos nombrados en los fallos:
      `dotnet tests/<Raíz>.IntegrationTests/bin/Debug/net10.0/<Raíz>.IntegrationTests.dll -class "<Raíz>.IntegrationTests.<Flujo>Flow"`
      (tras `dotnet build`: el arnés arranca el Api compilado).
    - **El verde por flujo no es un veredicto**: la matriz la compone el orquestador con la suite completa, y lo
@@ -126,8 +131,8 @@ escenario que ya estaba en verde.
 Capas completadas, decisiones tomadas, resultado de la verificación y huecos del diseño. Cierra siempre con:
 
 ```yaml
-status: OK | KO              # OK solo con dotnet build en verde y sin bloqueos
-compiles: true | false       # dotnet build (sin warnings)
+status: OK | KO              # OK solo con src/ compilando en verde y sin bloqueos
+compiles: true | false       # dotnet build del Api (src/ entero, sin warnings); relanzado en fase 2, la solución
 domainGuards: OK | KO | N/A  # bash infra/check-domain-guards.sh (N/A si no existe)
 idempotency: OK | KO | N/A   # bash infra/check-idempotency.sh (N/A si no existe)
 logging: OK | KO             # bash infra/check-logging.sh

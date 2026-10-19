@@ -725,10 +725,12 @@ function auditStamps(model, entity, helpers) {
       else helpers.actor = true;
       // updated_* en cada escritura; created_* no cambia después de nacer (el listener de Spring Data).
       if (updatable) return `{target}.${property} = ${value};`;
-      if (nullable) return `{target}.${property} ??= ${value};`;
-      return value === 'now'
-        ? `if ({target}.${property} == default) { {target}.${property} = ${value}; }`
-        : `if (string.IsNullOrEmpty({target}.${property})) { {target}.${property} = ${value}; }`;
+      // La autoría vacía es AUSENTE, sea nula o no la columna: el dominio no conoce al llamante y en el alta la deja
+      // en `string.Empty` (domain-modeling.md). Un `??=` guardaba ese "" en lugar del actor (corrida catalog-dotnet).
+      if (value === 'actor') return `if (string.IsNullOrEmpty({target}.${property})) { {target}.${property} = ${value}; }`;
+      return nullable
+        ? `{target}.${property} ??= ${value};`
+        : `if ({target}.${property} == default) { {target}.${property} = ${value}; }`;
     });
     if (candidate === entity) {
       lines.push(...parts.map((part) => part.replaceAll('{target}', 'row')));

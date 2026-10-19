@@ -96,6 +96,8 @@ export async function mountOutsideFrontier(workspace) {
  * capas o añadiendo lo justo, y las compilan ts-syntax (sin red) y ts-check (con strict y sus pruebas emitidas).
  * Cada una es un diseño VÁLIDO (ts-syntax lo exige): una silueta que la validación rechaza no llega nunca a build.
  *   · un value object compuesto en el cuerpo y en la respuesta de una llamada saliente.
+ *   · la autoría DECLARADA (`audit.authorship: declared`) en la raíz y en su hija, relacional y documental: el alta la
+ *     deja vacía y el adaptador la estampa (corrida catalog-dotnet del registry, 2026-10-19).
  * La mensajería SIN persistencia estuvo aquí hasta el incremento 16 de keel-dotnet, que midió que no publicaba: sin
  * adaptador de repositorio no se emitía ni puente ni publisher. Ahora la rechazan los tres (keel-core/gen/messaging-frontier.js).
  */
@@ -119,8 +121,23 @@ export const DERIVED_SILHOUETTES = [
         response: { fields: { accepted: { type: 'boolean', required: true }, refunds: { type: 'Refund', list: true } } }
       };
     }
-  }
+  },
+  ...['notification-mailer', 'notification-mailer-mongo'].map((fixture) => ({
+    name: fixture === 'notification-mailer' ? 'mailer-author' : 'mailer-mongo-author',
+    fixture,
+    withoutLayers: [],
+    mutate: declaredAuthorship
+  }))
 ];
+
+/** La autoría declarada por el dominio de Template y de su hija TemplateVariable (la misma que keel-dotnet). */
+export function declaredAuthorship(layers) {
+  layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship: 'declared' };
+  for (const entity of ['Template', 'TemplateVariable']) {
+    layers.domain.entities[entity].fields.createdBy = { type: 'string', generated: true };
+    layers.domain.entities[entity].fields.updatedBy = { type: 'string', generated: true };
+  }
+}
 
 /** El manifiesto y las capas de una silueta derivada, ya derivados. */
 export function derivedDesign(silhouette, load) {

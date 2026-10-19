@@ -27,6 +27,7 @@
 //   created     el created_at DECLARADO (un campo del dominio) se reescribe en cada guardado
 //   created-policy  el created_at de la auditoría de POLÍTICA (que el dominio no lleva) se reescribe en cada guardado
 //   created-by  el created_by de la autoría de política se reescribe en cada guardado
+//   created-by-empty  la autoría DECLARADA que el alta deja vacía se guarda vacía, sin el actor (sujeto mailer-mongo-author)
 //   id-batch    la lectura por lote por id (FindAllById) se deja el primer id
 //   enum        el enum se guarda por su miembro de C# y no por la constante del diseño
 //   day         el día se guarda en la zona del proceso, no a medianoche UTC
@@ -85,7 +86,7 @@ const SUBJECTS = [
     }
   },
   // `optimisticLocking: declared` sobre documentos: la versión que declara el dominio (el MISMO parche que compila cs-check).
-  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder'].includes(branch.name)).map((branch) => ({
+  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author'].includes(branch.name)).map((branch) => ({
     name: branch.name,
     from: branch.from,
     mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name)
@@ -112,6 +113,8 @@ const SABOTAGES = {
   'finder-literal': ['Repositories/', 'new BsonRegularExpression("^" + Regex.Escape(', 'new BsonRegularExpression("^" + ('],
   'finder-where': ['Repositories/', /conditions\.Add\(new BsonDocument\("status", [^;]+\);\n/g, ''],
   'created-by': ['Repositories/', 'fields["updated_by"] = actor;', 'fields["updated_by"] = actor; fields["created_by"] = actor;'],
+  // La autoría declarada: el "" del alta cuenta como valor.
+  'created-by-empty': ['Persistence/BsonValues.cs', 'if (current.IsBsonNull || current is BsonString { Value: "" }', 'if (current.IsBsonNull'],
   constraint: ['Persistence/PersistenceErrors.cs', 'detail.IndexOf("index: " + index, StringComparison.Ordinal)', 'detail.IndexOf("index: " + index + "-", StringComparison.Ordinal)'],
   partial: ['Persistence/DocumentIndexes.cs', 'PartialFilterExpression = new BsonDocument("status", "', 'PartialFilterExpression = new BsonDocument("status", "x'],
   created: ['Persistence/BsonValues.cs', 'if (current.IsBsonNull || current is BsonString { Value: "" }', 'if (true || current.IsBsonNull || current is BsonString { Value: "" }'],

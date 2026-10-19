@@ -19,7 +19,7 @@ test('authorship: all — el adaptador estampa created_by al nacer y updated_by 
   const files = Object.fromEntries(withAuthorship('all').files.map((file) => [file.path, file.content]));
   const adapter = Object.entries(files).find(([file]) => file.endsWith('product-repository-impl.ts'))[1];
   assert.match(adapter, /import \{ currentActor \} from '\.\.\/audit-actor\.js';/);
-  assert.match(adapter, /const actor = currentActor\(\);\n\s+orm\.createdAt \?\?= now;\n\s+orm\.updatedAt = now;\n\s+orm\.createdBy \?\?= actor;\n\s+orm\.updatedBy = actor;/);
+  assert.match(adapter, /const actor = currentActor\(\);\n\s+orm\.createdAt \?\?= now;\n\s+orm\.updatedAt = now;\n\s+orm\.createdBy \|\|= actor;\n\s+orm\.updatedBy = actor;/);
   const auditable = files['src/infrastructure/persistence/entities/auditable-orm.ts'] ?? Object.entries(files).find(([file]) => file.endsWith('auditable-orm.ts'))[1];
   assert.match(auditable, /name: 'created_by'[^)]*update: false/);
   assert.match(auditable, /name: 'updated_by'/);

@@ -38,7 +38,7 @@ flowchart TB
     PRE["⚙ Precondiciones: specs/validation-scenarios.md · keel-stack.json · repo git · dotnet restore"]
     PRE --> F1
     subgraph F1["Fase 1 — tres agentes en paralelo"]
-        CODE(["🤖 keel-dotnet-code<br/>TODOs, negocio<br/>hasta dotnet build en verde"])
+        CODE(["🤖 keel-dotnet-code<br/>TODOs, negocio<br/>hasta src/ compilando en verde"])
         INFRA(["🤖 keel-dotnet-infra<br/>bash infra/up.sh + validate-infra.sh"])
         TESTS(["🤖 keel-dotnet-tests<br/>escenarios FL-* → tests/…IntegrationTests/<br/>hasta infra/check-flows.sh en verde"])
     end
@@ -131,7 +131,7 @@ diseño, ni aquí ni en el workspace: un `culprit: design` se **propone** en `de
 
 | Agente | Responsabilidad | Qué NO hace |
 |---|---|---|
-| `keel-dotnet-code` | TODOs, lógica de negocio, invariantes, ampliar puertos de repositorio, hasta `dotnet build` en verde sin warnings y el gate del formato. Antes de cada handler, la auditoría de `conventions/flow-fidelity.md`. Relanzado desde la fase 2, lee la evidencia cruda y verifica su fix con el flujo afectado. | No escribe pruebas, no toca `tests/`, no levanta contenedores, no añade paquetes ni referencias. Su verde por flujo no aprueba escenarios. |
+| `keel-dotnet-code` | TODOs, lógica de negocio, invariantes, ampliar puertos de repositorio, hasta `dotnet build` del Api (todo `src/`, no la solución: `tests/` lo escribe otro a la vez) en verde sin warnings y el gate del formato. Antes de cada handler, la auditoría de `conventions/flow-fidelity.md`. Relanzado desde la fase 2, lee la evidencia cruda y verifica su fix con el flujo afectado. | No escribe pruebas, no toca `tests/`, no levanta contenedores, no añade paquetes ni referencias. Su verde por flujo no aprueba escenarios. |
 | `keel-dotnet-infra` | Levanta `infra/` (`bash infra/up.sh`) y la sondea (`bash infra/validate-infra.sh`); la deja arriba. | No edita código ni scripts de `infra/`. |
 | `keel-dotnet-tests` | Traduce **una vez** los escenarios a `tests/<Raíz>.IntegrationTests/<Flujo>Flow.cs`, en caja negra, hasta `bash infra/check-flows.sh` en verde. | **No lee `src/`**, no implementa negocio, no ejecuta las pruebas en la fase 1. |
 | `keel-dotnet-validate` | **Árbitro**: decide, contra el `Then` original y los volcados de `build/keel-failures/`, si cada fallo es `code`, `test`, `harness` o `design`. Solo corre si hay rojo. | No ejecuta la suite ni compone la matriz; no corrige código ni pruebas. |
@@ -150,7 +150,7 @@ heredaría.
 
 | Campo | Lo emite | Lo consume | Para qué |
 |---|---|---|---|
-| `compiles` / `failures` | code | orquestador | relanzar code con sus errores (máx. 2 ciclos en fase 1) |
+| `compiles` / `failures` | code | orquestador | relanzar code con sus errores (máx. 2 ciclos en fase 1). Si los errores son solo de `tests/`, no son de code: es que compiló la solución mientras tests escribía; se le relanza igual, y el orquestador no compila por su cuenta (§ Un solo actor) |
 | `status: PENDIENTE`, `runtime` | infra | orquestador | detenerse sin docker/podman; el runtime del `down` final |
 | `files` / `uncovered` / `assumptions` | tests | orquestador, validate | qué flujos se tradujeron, qué no y por qué, y qué se dio por cierto de la infraestructura |
 | matriz + `exit code` | ⚙ `score-scenarios.sh` | orquestador | `0` → fase 3 · `1` → árbitro · `2` → según la causa |

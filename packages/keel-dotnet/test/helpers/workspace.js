@@ -122,6 +122,24 @@ export const UNCOVERED_BRANCHES = [
       };
     }
   },
+  // `audit.authorship: declared`: la autoría la declara el dominio (raíz e hija) y el adaptador la estampa. El alta la deja
+  // vacía, y vacía es AUSENTE: con `??=` se guardaba "" en lugar del actor (corrida catalog-dotnet del registry,
+  // 2026-10-19). La miden db-check y doc-check.
+  ...[
+    { name: 'mailer-author', from: 'notification-mailer' },
+    { name: 'mailer-mongo-author', from: 'notification-mailer-mongo' }
+  ].map(({ name, from }) => ({
+    name,
+    from,
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship: 'declared' };
+      for (const entity of ['Template', 'TemplateVariable']) {
+        layers.domain.entities[entity].fields.createdBy = { type: 'string', generated: true };
+        layers.domain.entities[entity].fields.updatedBy = { type: 'string', generated: true };
+      }
+    }
+  })),
   // `optimisticLocking: declared`: la raíz porta el bloqueo en el `lockVersion` que declara su dominio, en los dos
   // modelos. Declarado `int`, el dominio salía sin null y el `expected is null` del Save no compilaba (corrida
   // catalog-dotnet del registry, 2026-10-19).
