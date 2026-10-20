@@ -10,7 +10,7 @@ qué se midió cada uno, está en [`PLAN-KEEL-NEST.md`](../../PLAN-KEEL-NEST.md)
 ## Uso
 
 ```bash
-npm i -g keel-nest
+npm i -g @keel-system/keel-nest   # comando `keel-nest`
 
 keel-nest check specs/<servicio>   # opcional, antes de cerrar el diseño: no escribe nada
 keel-nest build specs/<servicio>   # en el workspace de diseño; pregunta el stack

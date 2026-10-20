@@ -210,7 +210,7 @@ Este repo es un **monorepo npm workspaces** con dos tipos de paquete:
 ```bash
 npm i -g keel-core     # comando `keel`
 npm i -g keel-spring   # comando `keel-spring` (el generador de la tecnología que uses)
-npm i -g keel-nest     # comando `keel-nest`, si generas en NestJS
+npm i -g @keel-system/keel-nest   # comando `keel-nest`, si generas en NestJS
 ```
 
 El core y cada generador son paquetes independientes: se instala el core más los generadores que se vayan a usar.
