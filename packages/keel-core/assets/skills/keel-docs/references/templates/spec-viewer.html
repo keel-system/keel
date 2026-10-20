@@ -109,9 +109,11 @@ var KEEL_RENDERER = "__KEEL_RENDERER__";
 (function () {
   'use strict';
 
+  // Versiones fijadas, nunca `latest`: Redoc 3 publicó como `latest` un bundle standalone con
+  // `import.meta`, que como <script> clásico no carga y dejaba todos los visores en el fallback.
   var VIEWERS = {
     redoc: {
-      js: 'https://cdn.redocly.com/redoc/latest/bundles/redoc.standalone.js',
+      js: 'https://cdn.jsdelivr.net/npm/redoc@2.5.4/bundles/redoc.standalone.js',
       css: '',
       global: 'Redoc',
       rawFile: 'openapi.yaml',
@@ -120,8 +122,8 @@ var KEEL_RENDERER = "__KEEL_RENDERER__";
       mount: function (spec, node) { window.Redoc.init(spec, { hideDownloadButton: true }, node); }
     },
     asyncapi: {
-      js: 'https://unpkg.com/@asyncapi/react-component@latest/browser/standalone/index.js',
-      css: 'https://unpkg.com/@asyncapi/react-component@latest/styles/default.min.css',
+      js: 'https://unpkg.com/@asyncapi/react-component@3.2.2/browser/standalone/index.js',
+      css: 'https://unpkg.com/@asyncapi/react-component@3.2.2/styles/default.min.css',
       global: 'AsyncApiStandalone',
       rawFile: 'asyncapi.yaml',
       editor: 'https://studio.asyncapi.com/',
