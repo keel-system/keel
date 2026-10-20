@@ -1,10 +1,10 @@
 # keel-core
 
-**Diseña un servidor una vez. Genéralo en cualquier tecnología.**
+**Diseña un servidor una vez. Genéralo en Spring Boot, NestJS o .NET.**
 
-`keel-core` es el núcleo de [Keel](https://github.com/keel-system/keel): la CLI `keel` más el **DSL Keel** que define cómo se describe un servicio sin nombrar framework, ORM, broker ni lenguaje. Siembra el workspace de diseño, crea y valida servicios, y expone su validación como librería para que cada generador (`keel-spring`, y los que vengan) la reutilice en vez de duplicarla.
+`keel-core` es el núcleo de [Keel](https://github.com/keel-system/keel): la CLI `keel` más el **DSL Keel** que define cómo se describe un servicio sin nombrar framework, ORM, broker ni lenguaje. Siembra el workspace de diseño, crea y valida servicios, y expone su validación como librería para que cada generador (`keel-spring`, `@keel-system/keel-nest` y `keel-dotnet`) la reutilice en vez de duplicarla, junto con `keel-core/gen`, el núcleo neutral que interpreta el diseño igual para los tres.
 
-El diseño de un servicio vive en `specs/<servicio>/`: un manifiesto más **un artefacto YAML por capa** — dominio, casos de uso, API, seguridad, mensajería, clientes HTTP, dependencias, persistencia, almacenamiento, correo. Cada capa se itera por separado, cabe en un diff y se relaciona con las demás por nombre. Ese diseño es la fuente de verdad: el código final no lo genera JavaScript, lo genera un agente leyendo el spec validado.
+El diseño de un servicio vive en `specs/<servicio>/`: un manifiesto más **un artefacto YAML por capa** — dominio, casos de uso, API, seguridad, mensajería, clientes HTTP, dependencias, persistencia, almacenamiento, correo, pagos. Cada capa se itera por separado, cabe en un diff y se relaciona con las demás por nombre. Ese diseño es la fuente de verdad: el código final no lo genera JavaScript, lo genera un agente leyendo el spec validado.
 
 ## Instalación
 
@@ -27,16 +27,19 @@ keel new mi-servicio --from registry:catalog   # …o lo deriva, con linaje en `
 
 keel new mi-servicio             # …o de cero: manifiesto + domain + use-cases
 keel validate specs/mi-servicio  # schemas por capa + referencias cruzadas, offline
+keel validate specs/mi-servicio --ready   # ¿listo para generar? la checklist completa del cierre
 ```
 
 El diseño capa a capa lo conduce un agente con las skills que `keel init` siembra (`/keel-design`, `/keel-validate`, `/keel-docs`, `/keel-handoff`…), y la generación la hace el generador de la tecnología elegida:
 
 ```bash
-npm i -g keel-spring
+npm i -g keel-spring               # o @keel-system/keel-nest, o keel-dotnet
 keel-spring build specs/mi-servicio    # → services/mi-servicio-spring/
 cd services/mi-servicio-spring
 # y en Claude Code, abierto en esa raíz: /keel-generate-spring
 ```
+
+Con keel-nest o keel-dotnet el flujo es el mismo cambiando `spring` por `nest` o `dotnet`: el mismo diseño genera con cualquiera de los tres servidores equivalentes.
 
 Cuando el encargo no es un servicio sino un **sistema**, hay una fase previa: `/keel-decompose` decide las fronteras con el humano y escribe el mapa `system.yaml`, y `keel system` calcula en qué orden se construyen los servicios —quien publica contrato va antes que quien lo consume— y contrasta ese mapa contra los diseños reales.
 
@@ -46,8 +49,9 @@ Cuando el encargo no es un servicio sino un **sistema**, hay una fase previa: `/
 |---------|----------|
 | `keel init [--force] [--check]` | Siembra el workspace de diseño: skills del agente, schemas por capa, plantillas, docs y el archivo de contexto. Nunca sobrescribe sin `--force`. Con `--check` no escribe y falla si alguna copia del payload quedó atrás respecto a la CLI instalada. |
 | `keel new <servicio> [--from <origen>]` | Crea `specs/<servicio>/` con manifiesto + capas obligatorias. Con `--from` deriva de un diseño existente (nombre local, ruta o `registry:<diseño>`) estampando el linaje en `service.basedOn`. |
-| `keel validate <ruta>` | Valida un servicio: JSON Schema de cada capa + referencias cruzadas entre artefactos. Offline, reportando todos los errores de una vez. |
+| `keel validate <ruta> [--ready]` | Valida un servicio: JSON Schema de cada capa + referencias cruzadas entre artefactos. Offline, reportando todos los errores de una vez. Con `--ready`, el veredicto de «diseño listo para generar», el mismo que exige `build`. |
 | `keel describe <servicio>` | Resume un diseño para leerlo o reutilizarlo: identidad, estado, capas, contenido y frescura de sus derivados. |
+| `keel seals <servicio>` | Imprime los sellos del careo de flujos (`flow-review.yaml`) de un diseño. |
 | `keel index [--check]` | Genera el índice de diseños del workspace: la tabla del `README.md` (solo entre marcadores) y `index.json`. Determinista: `--check` es la puerta de CI de un registry. |
 | `keel system [show \| check]` | Lee el mapa del sistema. `show` muestra las olas de construcción —orden topológico de las aristas bloqueantes, no declarado—; `check` es la **única validación cross-servicio** del método y llega a cruzar dos specs. Ninguno escribe nada. |
 | `keel registry [list \| search \| show \| get]` | Explora y materializa diseños reutilizables. Fuente configurable con `--source` o `KEEL_REGISTRY_URL`; caché en `~/.keel/registry/` con `--refresh` y `--offline`. |
@@ -83,7 +87,7 @@ if (!result.ok) {
 
 | Paquete | DSL Keel |
 |---------|----------|
-| keel-core 0.3.x | `keel: "2.20"` |
+| keel-core 0.4.x | `keel: "2.22"` |
 
 Se soporta **una sola versión** del DSL. Los schemas no gatean primitivos por versión, así que aceptar las anteriores haría que el campo `keel` de un manifiesto declarase una intención que nada comprueba. El razonamiento completo está en `docs/dsl-reference.md § Historial de versiones` del workspace sembrado.
 

@@ -1,180 +1,214 @@
 # Keel
 
-**Diseña un servidor una vez. Genéralo en cualquier tecnología.**
+**Diseña un servidor una vez. Genéralo en Spring Boot, NestJS o .NET.**
 
-## El problema
+Keel es una metodología para construir servicios de backend con agentes: el diseño se escribe una
+sola vez, sin tecnología dentro, en un DSL tipado que se valida con exit code; y un generador por
+tecnología lo convierte en un servidor que compila, arranca y pasa el **100 %** de los escenarios del
+diseño contra infraestructura real.
 
-Encargarle un servidor a un agente funciona hasta que hay que operarlo. Lo que falla no es la sintaxis del código: son cuatro cosas que no se ven al leer el diff.
+La prueba de que la promesa se cumple está en este repo. El mismo diseño (`notification-mailer`, en
+su variante relacional y en la documental) se generó con los tres generadores —seis proyectos— y los
+seis cerraron **23 de 23 escenarios** con el agente tocando **17 archivos de ~300** que escribió el
+generador ([corridas de control](docs/corridas/), 2026-10-18).
 
-- **Las decisiones estructurales se toman en silencio.** Outbox o publicación en línea, qué operación se puede repetir sin cobrar dos veces, cuánto puede llegar rancio de una caché, qué transacción envuelve qué, qué pasa cuando el proveedor del que dependemos no responde. Nadie las escribe, así que las decide el agente en el momento de teclear —y un valor decidido y uno asumido se escriben igual—. En Keel son **obligaciones con id estable** que `keel validate` deja en rojo hasta que se declaran en el DSL o se aceptan por escrito, con su motivo, en `specs/<servicio>/decisions.yaml`. Ver [design-obligations.md](packages/keel-core/assets/core/docs/design-obligations.md).
+## Qué ganas desarrollando con Keel
 
-- **Una especificación en prosa no se puede comprobar.** Un Markdown que dice «devuelve 409 si ya existe» no sabe si ese conflicto está en el catálogo de errores del servicio, si el rol que alcanza ese endpoint existe, ni si el evento que promete publicar lo consume alguien. El diseño Keel es un directorio de YAML tipado —una capa por preocupación— y `keel validate` lo comprueba offline y con exit code: **JSON Schema por capa + referencias cruzadas entre capas**.
+Cinco cosas, y cada una se comprueba con un comando desde este repo.
 
-- **La especificación nace atada al stack.** En cuanto el plan dice «PostgreSQL y Redis», deja de ser reutilizable: cambiar de motor, de broker o de lenguaje es reescribirla. En Keel el stack **no entra al diseño**; se pregunta al generar y se persiste en `keel-stack.json` del proyecto generado. El mismo diseño se regenera en otra tecnología sin tocar una línea.
+### 1. Eliges la tecnología al final — y puedes cambiarla
 
-- **«Terminado» es la palabra del agente.** El criterio aquí es ejecutable: `./gradlew build -x test` en verde **más** `./gradlew integrationTest` con el **100 %** de los escenarios `FL-*` del diseño pasando contra la infraestructura real (base de datos, broker, proveedor de identidad, todo en contenedores), puntuado por un script determinista y no por un juicio.
+El diseño Keel no lleva ni lenguaje, ni framework, ni ORM, ni broker, ni base de datos. La tecnología
+se pregunta al generar (`keel-<tech> build`) y se guarda en el proyecto generado, no en el diseño. Hoy
+hay tres generadores publicados, gobernados por una sola regla: **el mismo diseño genera servidores
+equivalentes**. Equivalentes quiere decir medido, no parecido:
+
+- el **mismo contrato HTTP**: el `docs/openapi.yaml` que deriva cada generador es el mismo byte a
+  byte (`keel-core/src/lib/gen/openapi.js`, comprobado en `keel-nest/test/openapi.test.js`);
+- el **mismo cable**: cómo viaja cada tipo en JSON, la forma del error, la página y la envoltura son
+  datos compartidos (`keel-core/src/lib/gen/wire.js`) que la prueba emitida de cada servidor ejecuta;
+- los **mismos eventos y destinos**, las **mismas tablas, columnas, índices y FK**, los **mismos
+  errores y mensajes**, las **mismas variables de entorno** y las **mismas series de telemetría**.
+
+Lo que no depende del lenguaje no lo reescribe cada generador: vive una vez en el núcleo neutral
+`keel-core/gen`, y un test (`gen-neutral.test.js`) impide que ahí entre el nombre de un lenguaje.
+
+| | keel-spring | keel-nest | keel-dotnet |
+|---|---|---|---|
+| Plataforma | Spring Boot 3.5 · Java 21 · Gradle | NestJS 12 · Fastify · Node 22 · TypeScript strict | .NET 10 · un proyecto por capa · xUnit v3 |
+| Relacional | PostgreSQL, MySQL, MariaDB, SQL Server, Oracle | PostgreSQL, MySQL | PostgreSQL (EF Core) |
+| Documental | MongoDB | MongoDB | MongoDB |
+| Brokers | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS |
+| Identidad | Keycloak · Cognito | Keycloak · Cognito | Keycloak · Cognito |
+| Caché · storage · correo | Redis/Valkey · S3/MinIO · SMTP | Redis/Valkey · S3/MinIO · SMTP | Redis/Valkey · S3/MinIO · SMTP |
+| Pagos | Stripe · MercadoPago | Stripe · MercadoPago | Stripe · MercadoPago |
+
+Lo que un generador aún no sostiene **no lo genera a medias: lo rechaza en `build` diciendo por qué**
+(`src/lib/supported-features.js` de cada uno). Los motores que faltan en NestJS y .NET faltan porque
+ninguna red los ha ejecutado todavía, no porque se hayan olvidado. Y en .NET, ningún paquete con
+licencia comercial: versión exacta y SPDX de cada uno en `keel-dotnet/src/lib/dotnet-stack.js`,
+comprobado contra nuget.org con los transitivos.
+
+Cambiar de stack —de PostgreSQL a MongoDB, de RabbitMQ a Kafka, de Java a TypeScript o a C#— es volver
+a ejecutar `build`, no rediseñar.
+
+### 2. Lo derivable no lo escribe un agente
+
+Casi todo lo que hay en un servicio de backend **se deduce del diseño**: si el dominio declara un
+agregado con sus invariantes y los casos de uso declaran la operación que lo toca, entonces el
+controller, el DTO, el comando, el handler, el puerto, el espejo de persistencia, el mapeo de
+columnas, la jerarquía de errores, la config por perfiles y la infraestructura de prueba **no son
+decisiones**: son consecuencias. Pedírselas a un agente es pagar tokens, tiempo y varianza por
+recalcular lo que una función calcula siempre igual.
+
+Así que no se piden. `keel-<tech> build` genera de forma determinista **todo lo transversal al
+stack** —más de 70 módulos de scaffolding en cada generador— y el proyecto compila y arranca antes de
+que ningún agente lo haya visto. Al agente le queda lo que el diseño genuinamente no determina: la
+lógica de negocio y la frontera que depende de la infraestructura elegida.
+
+El proyecto lleva un manifiesto, `keel-generated.json`, que registra cada archivo que escribió
+`build`; comparándolo con el árbol final se mide la **huella del agente**:
+
+| Corrida de control (2026-10-18) | Archivos de `build` | Reescritos por el agente | Escenarios |
+|---|---|---|---|
+| notification-mailer · spring | 320 | 17 | 23/23 |
+| notification-mailer · nest | 304 | 17 | 23/23 |
+| notification-mailer · dotnet | 329 | 17 | 23/23 |
+| notification-mailer-mongo · spring | 305 | 17 | 23/23 |
+| notification-mailer-mongo · nest | 294 | 17 | 23/23 |
+| notification-mailer-mongo · dotnet | 318 | 18 | 23/23 |
+
+La huella es la misma en los tres lenguajes porque es la huella **del diseño**, no del stack. La
+serie completa —64 corridas— la imprime `node packages/keel-spring/scripts/corrida-metrics.js series`.
+
+**Los árbitros tampoco son agentes.** Quien puntúa los escenarios es un script
+(`infra/score-scenarios.sh`, desde el XML de JUnit), y con la suite al 100 % el pipeline pasa a la
+fase de calidad **sin invocar a ningún árbitro**. Un agente solo se convoca cuando algo está en rojo
+y hay que decidir de quién es la culpa.
+
+### 3. Las decisiones se toman a la vista, y antes de generar
+
+Outbox o publicación en línea, qué operación se puede repetir sin cobrar dos veces, cuánto puede
+llegar rancia una caché, qué pasa cuando el proveedor del que dependemos no responde: si nadie las
+escribe, las decide el agente al teclear, y un valor decidido y uno asumido se escriben igual.
+
+En Keel son **obligaciones con id estable** que `keel validate` deja en rojo hasta que se declaran en
+el DSL o se aceptan por escrito, con su motivo, en `decisions.yaml`
+([design-obligations.md](packages/keel-core/assets/core/docs/design-obligations.md)). Encima,
+`keel validate --ready` compone el veredicto de «diseño listo»: validación estricta, obligaciones,
+análisis de huecos, escenarios, careo de flujos y `DESIGN.md`. **`build` se niega a generar un diseño
+que no esté listo**; saltárselo exige `--accept-unready`, que queda estampado en el proyecto (4 de 63
+corridas lo usaron).
+
+El humano no aprende el DSL: conversa con `/keel-design` capa a capa y revisa el resultado en el panel
+`overview.html` y en `DESIGN.md`. El YAML es la interlingua entre agentes —uno diseña, otro genera,
+otro valida— y su ventaja sobre un prompt es que es legible, versionable y revisable en un diff.
+
+### 4. Los patrones difíciles vienen puestos — y medidos
+
+Esta es la parte que no se arregla escribiendo mejores prompts. Los mecanismos de fiabilidad
+distribuida comparten un rasgo: **cuando están mal, no falla nada visible**. Un relay de outbox cuyo
+predicado no casa se comporta igual que un outbox vacío. Una clave de deduplicación a la que le falta
+un campo descarta en silencio mensajes que nadie procesó. Una guarda que confirma después del efecto
+manda un segundo correo a una persona real y responde 2xx las dos veces.
+
+Por eso en Keel se **derivan del diseño**, los genera `build` enteros en los tres generadores, y cada
+uno tiene detrás una red que se ha roto a propósito para comprobar que se pone roja.
+
+| Mecanismo | Qué evita |
+|---|---|
+| **Outbox** + relay con lease, backoff, purga y rendición | publicar un evento que la transacción revirtió, o perderlo sin enterarse |
+| **Idempotencia de petición** | que el reintento del cliente ejecute el cobro dos veces |
+| **Deduplicación de reentrega** del broker | que la segunda entrega del mismo mensaje vuelva a aplicar el efecto |
+| **Idempotencia saliente** | que *nuestro* reintento duplique el cargo en el proveedor |
+| **Compensación** | trabajo encargado a un tercero que se queda hecho cuando el flujo se cae |
+| **Reconciliación** | la fila que espera para siempre un desenlace que nunca llegó |
+| **Reclamo de barrido** y **rescate** con cota temporal | dos réplicas procesando la misma fila, o la fila que una réplica muerta dejó a medias |
+| **Guarda de efecto externo irreversible** | el segundo correo real, el segundo envío |
+| **Unicidad condicionada al estado** | dos filas activas a la vez por una carrera que el handler no cierra |
+| **Eventos de dominio** con envoltura y correlación end-to-end | el evento sin hecho, y la traza que se corta al salir del proceso |
+| **Circuit breaker + retry** con fallback tipado | que un proveedor caído se lleve por delante el servicio |
+| **Caché** con TTL y degradación a miss | servir datos rancios sin que nadie haya dicho cuánto es demasiado |
+| **Seguridad**: realm aprovisionado, matriz M2M, identidad del llamante, alcance por recurso | que el llamante elija de qué inquilino lee |
+| **Pagos** con pasarela, avisos verificados y conciliación | cobrar dos veces, o dar por cobrado lo que la pasarela rechazó |
+
+Nada de esto se comprueba leyendo código: **se ejecuta**. Un JPQL que no casa con ninguna fila es
+JPQL válido; un `updateOne` con el campo equivocado no falla, modifica cero documentos. La única red
+que ve eso es un motor de verdad respondiendo, así que cada generador tiene sus redes en vivo contra
+bases de datos, brokers, Keycloak, WireMock, Mailpit y Redis en contenedores.
+
+**Y la disciplina que lo sostiene: medición por mutación.** Una red que nadie ha roto no distingue
+«no hay errores» de «no mira». Cada generador lleva su **matriz de paridad**, celda por mecanismo y
+motor, con qué red la ejecuta y si se ha falsado:
+
+| Generador | Matriz (`npm run matrix --workspace packages/<gen>`) |
+|---|---|
+| keel-spring | 54 celdas · 36 verificadas contra un motor real, 33 de ellas falsadas · 12 sin ejecutar · 2 degradadas |
+| keel-nest | 38 celdas · 33 verificadas · 3 degradadas · 0 pendientes |
+| keel-dotnet | 34 celdas · 29 verificadas, ninguna sin falsar · 3 degradadas · 0 pendientes |
+
+Lo que un motor **no** sostiene —la unicidad condicionada en MariaDB y en Oracle, por ejemplo— se
+declara `degradado`, con la garantía que se pierde y las salidas disponibles, en vez de fingirse.
+
+### 5. Todos los servicios salen iguales, y el diseño se reutiliza
+
+La arquitectura del proyecto generado no la elige el agente: hexagonal + CQRS, los mismos paquetes,
+los mismos nombres, la misma `infra/` de prueba, el mismo `deploy/`, el mismo `docs/keel/`. En .NET la
+frontera hexagonal la impone el compilador (un proyecto por capa). Está escrita y viaja **dentro de
+cada proyecto** —`constitution.md`, `architecture.md` y las conventions de su generador—, así que:
+
+- **leer el servicio número N cuesta lo que costó leer el primero**, y quien sabe moverse por un
+  servicio Keel sabe moverse por todos;
+- **el proyecto es autosuficiente**: lleva el snapshot sellado del diseño, los contratos, la skill del
+  generador y sus agentes, y se termina sin el workspace de diseño.
+
+Y el diseño, al no llevar tecnología, se reutiliza en tres direcciones:
+
+- **Entre stacks y lenguajes**: el mismo `specs/<servicio>/`, otro `build`.
+- **Entre organizaciones**: los diseños se publican en **registries** —repos con forma de workspace—.
+  `keel registry get <x>` **adopta** un diseño tal cual; `keel new <mío> --from registry:<x>` lo
+  **deriva** con el linaje estampado. El oficial es
+  [keel-system/keel-registry](https://github.com/keel-system/keel-registry)
+  ([design-registry.md](packages/keel-core/assets/core/docs/design-registry.md)).
+- **Hacia los proyectos ya generados**: `keel-generated.json` distingue lo que escribió `build` de lo
+  que escribió el agente, así que `build --refresh --prune` propaga un arreglo del generador **sin
+  pisar la lógica de negocio**, y `--check` falla en CI si un proyecto quedó atrás. Cuando lo que
+  cambia es el diseño, `build` calcula el delta y escribe `EVOLUTION.md`: el pipeline trabaja solo
+  sobre lo que cambió.
+
+Un nivel por encima, `/keel-decompose` reparte un encargo en servicios y `keel system` calcula **en
+qué orden se construyen** —orden topológico de las dependencias bloqueantes—, para que varias personas
+diseñen en paralelo
+([system-decomposition.md](packages/keel-core/assets/core/docs/system-decomposition.md)).
 
 ## Qué lo hace distinto de la SDD tradicional
 
-[spec-kit](https://github.com/github/spec-kit) y [OpenSpec](https://github.com/fission-ai/openspec) especifican **un cambio sobre un repositorio que ya existe**: en prosa, y su salida es un parche sobre ese código. Keel especifica **un servicio entero**, tipado y sin tecnología dentro, y su salida es el servidor. No compiten por el mismo hueco —de hecho, para lo que ellas hacen, Keel no sirve (ver la sección siguiente)—, pero la diferencia de objeto arrastra casi todo lo demás:
+[spec-kit](https://github.com/github/spec-kit) y [OpenSpec](https://github.com/fission-ai/openspec)
+especifican **un cambio sobre un repositorio que ya existe**, en prosa, y su salida es un parche.
+Keel especifica **un servicio entero**, tipado y sin tecnología dentro, y su salida es el servidor. No
+compiten por el mismo hueco, pero la diferencia de objeto arrastra casi todo lo demás:
 
 | | spec-kit / OpenSpec | Keel |
 |---|---|---|
 | Objeto de la spec | un cambio o feature sobre un repo vivo | un servicio completo, o un sistema de servicios |
 | Formato | Markdown en prosa | YAML tipado, una capa por preocupación |
-| Validación | estructura del documento + juicio del agente | JSON Schema + referencias cruzadas + obligaciones abiertas, con exit code |
-| Tecnología | entra en el plan (el stack se pasa a `/plan`) | fuera del diseño; se elige al generar |
-| Salida | tareas que el agente implementa | proyecto generado: scaffolding determinista + el código que depende de la infra |
+| Validación | estructura del documento + juicio del agente | JSON Schema + referencias cruzadas + obligaciones abiertas + `--ready`, con exit code |
+| Tecnología | entra en el plan | fuera del diseño; se elige al generar |
+| Salida | tareas que el agente implementa | proyecto generado: scaffolding determinista + lo que depende de la infra |
 | Terminado | la checklist de tareas | suite de integración al 100 % contra infraestructura real |
-| Reutilización | dentro del repo | entre stacks **y entre organizaciones** (registry de diseños) |
+| Reutilización | dentro del repo | entre stacks, **entre lenguajes** y entre organizaciones |
 | Alcance | una feature | un sistema: descomposición, olas de construcción y validación cross-servicio |
 
-Y tres cosas que la tabla no dice:
-
-**El diseño sigue siendo la fuente de verdad después de generar.** Un cambio funcional se hace en el diseño y se regenera; nunca en el código generado. Eso es sostenible porque el proyecto lleva un manifiesto (`keel-generated.json`) que distingue lo que escribió el generador de lo que escribió el agente: un arreglo del generador se propaga con `--refresh --prune` sin pisar la lógica de negocio, y `--check` falla en CI si quedó atrás. En la SDD clásica el código se edita a mano y la especificación se sincroniza después —o se archiva—.
-
-**Nadie aprende el DSL.** El YAML es interlingua entre agentes (uno diseña, otro genera, otro valida); su ventaja sobre un prompt es que es legible, versionable y revisable en un diff pequeño. El humano conversa con `/keel-design` capa a capa y revisa el resultado en el panel `overview.html` y en `DESIGN.md`, no en el YAML.
-
-**Las puertas son ejecutables, no convenciones escritas.** `keel validate`, `keel index --check`, `keel system check`, `infra/check-idempotency.sh`, la suite `FL-*`: lo que sostiene la calidad no es que el agente haya leído una guía, es que algo se pone rojo si no está.
-
-## Qué ganas con Keel
-
-Cuatro cosas, y las cuatro son comprobables con un comando desde este repo.
-
-### Lo derivable no lo escribe un agente
-
-Casi todo lo que hay en un servicio de backend **se deduce del diseño**: si el dominio declara un
-agregado con sus invariantes y la capa de casos de uso declara la operación que lo toca, entonces el
-controller, el DTO, el comando, el handler, el puerto, el espejo de persistencia, el mapeo de
-columnas, la jerarquía de errores, la config por perfiles y la infraestructura de prueba **no son
-decisiones**: son consecuencias. Pedírselas a un agente es pagar tokens, tiempo y varianza por
-recalcular cada vez lo que una función calcula igual siempre.
-
-Así que no se piden. `keel-spring build` genera de forma determinista **todo lo transversal al
-stack** —63 módulos de scaffolding en `packages/keel-spring/src/scaffold/`— y el proyecto compila y
-arranca antes de que ningún agente lo haya visto. Al agente le queda solo lo que el diseño
-genuinamente no determina: la frontera que depende de la infraestructura elegida (publishers y
-listeners del broker, adaptador de storage) y la lógica de negocio con sus invariantes. El reparto
-está escrito en [orchestration.md](packages/keel-spring/assets/generators/spring/orchestration.md).
-
-Qué forma tiene eso en la práctica: en la corrida `customer-refunds`, el manifiesto
-`keel-generated.json` registró **232 archivos escritos por `build`** frente a **33 tocados por el
-agente** — y esos 33 son exactamente la huella de lo no derivable.
-
-**Los árbitros tampoco son agentes.** Quien puntúa los escenarios es un script
-(`infra/score-scenarios.sh`, matriz determinista desde el XML de JUnit), y con la suite al 100 % el
-pipeline pasa a la fase de calidad **sin invocar a ningún árbitro**. Lo mismo `keel validate`,
-`keel index --check`, `keel system check`, `infra/check-idempotency.sh` y
-`infra/check-domain-guards.sh`: puertas ejecutables con exit code, no juicios. Un agente solo se
-convoca cuando algo está en rojo y hay que decidir de quién es.
-
-Y el corolario: lo determinista es reproducible y **gratis de repetir**. Regenerar el mismo diseño
-en otro motor, con otro broker o —cuando haya más generadores— en otro lenguaje no vuelve a costar
-ni el diseño ni el andamiaje.
-
-### El diseño se reutiliza, no se repite
-
-El diseño Keel no lleva tecnología dentro: ni ORM, ni framework, ni broker, ni base de datos. Eso lo
-hace reutilizable en tres direcciones, y cada una ahorra un trabajo distinto.
-
-- **Entre stacks.** El mismo `specs/<servicio>/` se vuelve a generar eligiendo otro stack. Hoy: 5
-  motores relacionales (PostgreSQL, MySQL, MariaDB, SQL Server, Oracle) más MongoDB, 3 brokers
-  (Kafka, RabbitMQ, SNS/SQS), 2 proveedores de identidad, 2 cachés y 2 backends de storage.
-- **Entre organizaciones.** Los diseños se publican en **registries** —repos con forma de workspace
-  Keel—, y hay dos puertas con dos intenciones: `keel registry get <x>` **adopta** el diseño tal
-  cual, con sus derivados al día y listo para generar; `keel new <mío> --from registry:<x>` lo
-  **deriva**, renombrando y reseteando a `0.1.0` con el linaje estampado en `service.basedOn`. Ver
-  [design-registry.md](packages/keel-core/assets/core/docs/design-registry.md).
-- **Hacia los proyectos que ya generaste.** Un arreglo del generador no se queda en la versión
-  nueva: el manifiesto `keel-generated.json` distingue lo que escribió `build` de lo que escribió el
-  agente, así que `build --refresh --prune` propaga el arreglo **sin pisar la lógica de negocio**, y
-  `--check` falla en CI si un proyecto quedó atrás. Cuando lo que cambia es el **diseño**, `build`
-  calcula el delta y escribe `EVOLUTION.md`: el pipeline entra en modo evolución y trabaja solo
-  sobre lo que cambió, no sobre el servicio entero.
-
-Un nivel por encima está el reparto del encargo: `/keel-decompose` decide con el humano qué
-servicios hay y dónde está cada frontera, y `keel system` calcula **en qué orden se construyen**
-—orden topológico de las dependencias bloqueantes, no declarado a mano—, así que varias personas
-diseñan en paralelo sin pisarse. Ver
-[system-decomposition.md](packages/keel-core/assets/core/docs/system-decomposition.md).
-
-### Todos los servicios salen iguales
-
-La arquitectura del proyecto generado no es negociable y no la elige el agente: hexagonal + CQRS,
-los mismos paquetes, los mismos nombres (`<Agregado>V1Controller`, `<Evento>IntegrationEvent`,
-`<Raíz>RefResolver`…), la misma `infra/` de prueba, el mismo `deploy/`, el mismo `docs/keel/`. Está
-escrita y viaja **dentro de cada proyecto generado**:
-[constitution.md](packages/keel-spring/assets/generators/spring/constitution.md) con las reglas
-inviolables, `architecture.md` con la función de cada paquete y **11 conventions** con el detalle
-—mapeo, composición de lecturas, modelado de dominio, concurrencia, pruebas de integración…—.
-
-Lo que eso compra:
-
-- **Leer el servicio número N cuesta lo que costó leer el primero.** No hay estilo personal de quien
-  lo generó: no aparece un servicio con `shared/`, otro con Modulith y otro con el repositorio
-  llamando al controller.
-- **La rotación es barata.** Quien sabe moverse por un servicio Keel sabe moverse por todos, y una
-  revisión de seguridad o de arquitectura sabe de antemano en qué archivo mirar.
-- **Cambiar de motor o de broker no cambia la forma del proyecto** — cambian los adaptadores, no la
-  disposición ni los nombres.
-- **El proyecto es autosuficiente**: se clona y se termina sin el workspace de diseño, porque lleva
-  dentro el snapshot del diseño, los contratos, la skill del generador, sus agentes y las
-  conventions.
-
-### Los patrones difíciles vienen puestos — y medidos
-
-Esta es la parte que no se arregla escribiendo mejores prompts. Los mecanismos de fiabilidad
-distribuida comparten un rasgo: **cuando están mal, no falla nada visible**. Un relay de outbox cuyo
-predicado no casa se comporta exactamente igual que un outbox vacío. Una clave de deduplicación a la
-que le falta un campo descarta en silencio mensajes que nadie procesó. Una guarda que confirma
-después del efecto manda un segundo correo a una persona real y responde 2xx las dos veces. No hay
-excepción, ni log, ni métrica — y no hay escenario de caja negra que lo vea.
-
-Por eso en Keel se **derivan del diseño**, los genera `build` enteros, y cada uno tiene detrás una
-red que se ha roto a propósito para comprobar que se pone roja.
-
-| Mecanismo | Qué evita | Quién lo escribe | Qué lo verifica |
-|---|---|---|---|
-| **Outbox** + relay con lease, backoff, purga y rendición (gauge `keel.outbox.dead_lettered`) | publicar un evento que la transacción acabó revirtiendo — o perderlo y no enterarse | `build` entero; el envío al broker, el agente | `store-check` · escenario de canal indisponible · familia `outboxDelivery` |
-| **Idempotencia de petición** (`idempotency_record` + `CommandSignature`) | que el reintento del cliente ejecute el cobro dos veces | `build` entero | `store-check` · familia `commandIdempotency` |
-| **Deduplicación de reentrega** del broker (`processed_event` + `IdempotencyGuard`, con sus dos órdenes) | que la segunda entrega del mismo mensaje vuelva a aplicar el efecto | `build` entero | `store-check` · familia `dedupe` |
-| **Idempotencia saliente** (`OutboundIdempotency`) | que *nuestro* reintento duplique el cargo en el proveedor | `build`, incluido su uso | familia `outboundIdempotency` |
-| **Compensación** (`dependencies.*.compensations`) | trabajo ya encargado a un tercero que se queda hecho cuando el flujo se cae | el agente, en handler y agregado | familia `compensation` |
-| **Reconciliación** (`activations.*.reconciledBy`) | la fila que espera para siempre un desenlace que nunca llegó | `build` genera el reclamo | `store-check` · familia `reconciliation` · escenario de espera agotada |
-| **Reclamo de barrido** y **rescate** de filas en vuelo con cota temporal | dos réplicas procesando la misma fila; y la fila que una réplica muerta dejó a medias | `build` entero | `claim-check` · familia `sweepClaim` |
-| **Guarda de efecto externo irreversible** sobre una fila | el segundo correo real, el segundo envío: el efecto que no se puede deshacer | `build` entero | `claim-check` · familia `mailDelivery` |
-| **Unicidad condicionada al estado** (índice parcial, columna generada o `partialFilterExpression`) | dos filas activas a la vez por una carrera que la comprobación previa del handler no cierra | `build` entero | `index-check` · familia `conditionalUniqueness` |
-| **Eventos de dominio** con buffer `raise`/`pull`, `EventEnvelope` y correlación end-to-end | el evento que se publica sin que el hecho haya ocurrido, y la traza que se corta al salir del proceso | `build` entero | familia `domainEvent` |
-| **Circuit breaker + retry** con fallback tipado y la política `onFailure` del diseño | que un proveedor caído se lleve por delante el servicio entero | `build` entero | escenarios `FL-*` contra un proveedor de prueba (WireMock) |
-| **Caché** con TTL por caché y degradación a miss | servir datos rancios sin que nadie haya dicho cuánto es demasiado | `build` entero | escenarios `FL-*` |
-| **Seguridad**: realm aprovisionado, matriz M2M, identidad del llamante, alcance por recurso | que el llamante elija de qué inquilino lee | `build` entero | `compile-check --auth=` · tests que **ejecutan** el script de aprovisionamiento |
-
-El gate `infra/check-idempotency.sh` que el proyecto generado lleva dentro cubre **11 familias** y
-cierra el tramo donde `build` pone el mecanismo y el agente escribe el uso: sale rojo sobre el árbol
-recién generado y tiene que estar verde para cerrar.
-
-Nada de esto se comprueba leyendo código: **se ejecuta**. Un JPQL que no casa con ninguna fila es
-JPQL válido y `javac` lo da por bueno; un `updateOne` con el nombre de campo equivocado no falla,
-modifica cero documentos. La única red que ve eso es un motor de verdad respondiendo, así que tanto
-la validación del servicio generado como las 8 redes del propio generador **necesitan Docker o
-Podman** —y eso es una dependencia real de Keel, no un detalle de CI—.
-
-**Y la disciplina que lo sostiene: medición por mutación.** Una red que nadie ha roto nunca no
-distingue «no hay errores» de «no mira» — algo que aquí ya ha pasado, y por eso se mide.
-`npm run matrix` imprime la matriz de paridad del generador: hoy **46 celdas, 31 verificadas
-ejecutándolas contra un motor real, y 30 de esas 31 falsadas** rompiendo el mecanismo a propósito y
-comprobando que su red se pone roja. Las 9 que nadie ha ejecutado aún salen listadas como tales, y
-lo que un motor **no** sostiene —la unicidad condicionada en MariaDB y en Oracle— se declara
-`degradado`, con la garantía que se pierde y las salidas disponibles, en vez de fingirse. El
-catálogo de mutaciones canónicas está en
-[orchestration.md § Medición por mutación](packages/keel-spring/assets/generators/spring/orchestration.md).
+**El diseño sigue siendo la fuente de verdad después de generar.** Un cambio funcional se hace en el
+diseño y se regenera, nunca en el código generado. En la SDD clásica el código se edita a mano y la
+especificación se sincroniza después —o se archiva—.
 
 ## Cuándo usar Keel — y cuándo no
 
 **Sí:**
 - un servicio de backend **nuevo**, que aún no tiene código;
 - un encargo con **varios servicios** dentro y fronteras por decidir;
-- el mismo dominio en **más de un stack** (o migrando de uno a otro);
+- el mismo dominio en **más de un stack o lenguaje**, o migrando de uno a otro;
 - un diseño que alguien tiene que **aprobar antes** de que exista código.
 
 **No** (y ahí spec-kit u OpenSpec encajan mejor):
@@ -182,143 +216,77 @@ catálogo de mutaciones canónicas está en
 - frontend, scripts, trabajo exploratorio;
 - un cambio de una tarde sobre algo que ya funciona.
 
-## Cómo funciona, en un minuto
+## Empezar
 
-1. **Diseño agnóstico por capas** — la funcionalidad del servicio se condensa en un directorio de **artefactos declarativos relacionados** (`specs/<servicio>/`): un manifiesto más una capa por preocupación —dominio, casos de uso, API, seguridad, mensajería, clientes HTTP, persistencia…—. Cada capa se itera con el humano por separado y ninguna menciona framework, ORM, broker ni lenguaje.
-2. **Generación dirigida por agentes** — el generador de una tecnología valida el diseño, pregunta el stack y genera de forma determinista todo lo que no depende de la infra elegida; un agente completa el resto y lo verifica contra los escenarios del diseño.
-3. **Documentación derivada** — al cerrar el diseño salen solos el documento reutilizable (`DESIGN.md`), el índice del workspace y, cuando hace falta integrar, la guía de integración, OpenAPI/AsyncAPI y el panel visual.
-
-El mismo diseño se regenera tantas veces como se quiera, en tecnologías distintas, sin re-diseñar nada.
-
-Cuando el encargo no es un servicio sino un **sistema**, hay una fase previa: `/keel-decompose` decide con el humano qué servicios hay y dónde está la frontera de cada uno, `keel system` calcula **en qué orden se construyen** —quien publica contrato va antes que quien lo consume— y contrasta el mapa contra los diseños reales. Cada servicio sale con su propio *brief*, así que varias personas diseñan en paralelo. Ver [system-decomposition.md](packages/keel-core/assets/core/docs/system-decomposition.md).
-
-Y como un diseño sin tecnología dentro es reutilizable **entre organizaciones**, no solo entre stacks, los diseños se publican en **registries**: repositorios con la forma de un workspace Keel de los que se descubre y deriva un diseño existente en vez de empezar en blanco. El oficial es [keel-system/keel-registry](https://github.com/keel-system/keel-registry); crear uno privado es `keel init` + `keel index`. Ver [design-registry.md](packages/keel-core/assets/core/docs/design-registry.md).
-
-## Paquetes
-
-Este repo es un **monorepo npm workspaces** con dos tipos de paquete:
-
-| Paquete | CLI | Qué hace |
-|---------|-----|----------|
-| `packages/keel-core` | `keel` | El core: siembra workspaces, crea servicios y valida diseños. Define el DSL (schemas, docs, plantillas) y expone su validación como librería para los generadores. |
-| `packages/keel-spring` | `keel-spring` | Generador Spring Boot: `build` valida el diseño, pregunta el stack y genera `services/<servicio>-spring/` con el scaffolding transversal (el proyecto arranca) más el `.claude/` de ese proyecto —skill, agentes, conventions y skills del stack—; en el workspace de diseño no escribe nada. El código dependiente de la infra elegida y la lógica de negocio los completa el agente. Futuro: `keel-fastapi`, … |
-| `packages/keel-nest` | `keel-nest` | Generador NestJS: el mismo flujo y el mismo reparto build/agente que keel-spring, y la misma regla: **el mismo diseño genera con uno u otro servidores equivalentes** (contrato HTTP, cable, eventos, tablas, fiabilidad, operación y telemetría). `build` genera `services/<servicio>-nest/`, un proyecto NestJS 12 sobre Fastify (ESM, TypeScript strict, Vitest), y `/keel-generate-nest` lo completa con cinco agentes. Comparte con keel-spring el núcleo neutral `keel-core/gen`; lo que aún rechaza o degrada lo dice con su motivo (su README, § La frontera). Construido por incrementos medidos: `PLAN-KEEL-NEST.md`. |
-| `packages/keel-dotnet` | `keel-dotnet` | Generador .NET: el mismo flujo, el mismo reparto build/agente y la misma regla que los otros dos, **el mismo diseño genera servidores equivalentes**. `build` genera `services/<servicio>-dotnet/`, una solución .NET 10 con un proyecto por capa (la frontera hexagonal la impone el compilador) y pruebas xUnit v3, y `/keel-generate-dotnet` la completa con cinco agentes. Solo paquetes con licencia permisiva, comprobado en código y contra nuget.org. Comparte con los otros dos el núcleo neutral `keel-core/gen`; lo que rechaza lo dice con su motivo (su README, § La frontera). Construido en 16 incrementos medidos (`PLAN-KEEL-DOTNET.md`), cerrado con la corrida de control del par del MVP en los tres generadores. |
-
-## Instalación
+### Instalación
 
 ```bash
-npm i -g keel-core     # comando `keel`
-npm i -g keel-spring   # comando `keel-spring` (el generador de la tecnología que uses)
-npm i -g @keel-system/keel-nest   # comando `keel-nest`, si generas en NestJS
+npm i -g keel-core                 # comando `keel`: diseñar y validar
+npm i -g keel-spring               # comando `keel-spring`, si generas en Spring Boot
+npm i -g @keel-system/keel-nest    # comando `keel-nest`, si generas en NestJS
+npm i -g keel-dotnet               # comando `keel-dotnet`, si generas en .NET
 ```
 
-El core y cada generador son paquetes independientes: se instala el core más los generadores que se vayan a usar.
-
-**Requisitos, y son dos listas distintas** — porque diseñar y generar no cuestan lo mismo que validar:
+El core y cada generador son paquetes independientes: el core más los generadores que vayas a usar.
 
 | Para… | Hace falta |
 |---|---|
-| Diseñar (`keel init`, `/keel-design`, `keel validate`, `keel system`, `keel registry`) y **generar** (`keel-spring build`) | **Node.js >= 18** y nada más. Todo es offline y determinista; el registry es lo único que toca la red. |
-| **Completar y validar** el proyecto generado (`/keel-generate-<tech>`) | Lo anterior más el toolchain de la tecnología —**JDK 21** para keel-spring, **Node.js >= 22.12** para keel-nest, el **SDK de .NET 10** para keel-dotnet— y un **runtime de contenedores: Docker o Podman**. |
+| Diseñar (`keel init`, `/keel-design`, `keel validate`, `keel system`, `keel registry`) y **generar** (`keel-<tech> build`) | **Node.js >= 18** y nada más. Todo es offline y determinista; el registry es lo único que toca la red. |
+| **Completar y validar** el proyecto generado (`/keel-generate-<tech>`) | El toolchain de la tecnología —**JDK 21** para keel-spring, **Node.js >= 22.12** para keel-nest, **SDK de .NET 10** para keel-dotnet— y un **runtime de contenedores: Docker o Podman**. |
 
-Ese segundo requisito no es accidental ni evitable: **es el precio de que «terminado» signifique
-algo**. La validación de Keel no se hace con dobles ni con mocks de la fontanería — levanta la
-infraestructura de verdad (`infra/docker-compose.yaml`: base de datos, broker, proveedor de
-identidad, caché, storage y el proveedor HTTP de prueba) y ejecuta contra ella los escenarios `FL-*`
-del diseño. Sin contenedores, el pipeline puede generar y compilar el proyecto, pero **no puede
-puntuar un solo escenario**, y el agente de infraestructura lo reporta como `PENDIENTE` en vez de
-fingir un verde.
+El segundo requisito **es el precio de que «terminado» signifique algo**: la validación no usa dobles
+de la fontanería, levanta la infraestructura de verdad (`infra/docker-compose.yaml`) y ejecuta contra
+ella los escenarios `FL-*`. Sin contenedores el pipeline genera y compila, pero no puntúa un solo
+escenario, y lo reporta como `PENDIENTE` en vez de fingir un verde. El runtime se detecta solo
+—`docker` primero, `podman` si no— y se fuerza con `CONTAINER_RUNTIME=podman`.
 
-Detalles: el runtime se detecta solo —`docker` primero, `podman` si no— y se fuerza con
-`CONTAINER_RUNTIME=podman`; `infra/up.sh` resuelve además el *frontend* de compose (`podman compose`,
-con `podman-compose` de respaldo). Con Podman rootless todos los puertos publicados van por encima de
-1024. **Gradle no hace falta instalarlo**: el wrapper viaja vendorizado dentro del proyecto generado.
-
-Para trabajar sobre **este repo** (desarrollo del propio Keel):
-
-```bash
-git clone https://github.com/keel-system/keel.git && cd keel
-npm install
-npm link --workspace packages/keel-core          # comando `keel`
-npm link --workspace packages/keel-spring        # comando `keel-spring`
-npm link --workspace packages/keel-nest          # comando `keel-nest`
-npm link --workspace packages/keel-dotnet        # comando `keel-dotnet`
-```
-
-## Uso
+### Uso
 
 ```bash
 mkdir mi-proyecto && cd mi-proyecto
+keel init                                  # siembra el workspace: skills, schemas, plantillas, docs
 
-keel init            # siembra el workspace: skills, schemas, plantillas, docs
+# ¿Ya existe un diseño que resuelva esto? Adoptarlo no cuesta nada; derivarlo, una revisión.
+keel registry search catalogo
+keel registry get catalog                  # lo adopta tal cual, listo para generar
+keel new mi-servicio --from registry:catalog   # o lo deriva, con linaje en service.basedOn
 
-# ¿El encargo es un SISTEMA (varios dominios) y no un servicio? Descomponerlo primero.
-# En Claude Code, dentro del workspace:
-#   /keel-decompose docs/system/tdr.md       decide fronteras con el humano y escribe
-#                                            system.yaml (el mapa), docs/system/SYSTEM.md (el porqué)
-#                                            y un docs/system/briefs/<servicio>.md por servicio
-keel system                               # olas de construcción: quién se puede diseñar ya, y en paralelo
-keel system check                         # ¿el mapa sigue coincidiendo con los diseños? (puerta de CI)
+keel new mi-servicio                       # …o de cero: specs/mi-servicio/
 
-# ¿Ya existe un diseño que resuelva esto? Adoptarlo no cuesta nada; derivarlo, una
-# revisión; diseñarlo de cero, una sesión de entrevista capa a capa.
-keel registry search catalogo             # busca en el registry de diseños reutilizables
-keel registry show catalog                # su ficha, sin descargarlo
-keel registry get catalog                 # ¿sirve tal cual? lo adopta sin tocarlo, con sus
-                                          # derivados al día: listo para generar
-keel new mi-servicio --from registry:catalog   # ¿hay que cambiarlo? lo deriva con linaje basedOn:
-                                          # solo el spec, porque el diseño se va a completar
+# En Claude Code (u opencode), dentro del workspace:
+#   /keel-decompose docs/system/tdr.md     si el encargo es un SISTEMA: fronteras, mapa y briefs
+#   /keel-design specs/mi-servicio         diseña capa a capa; al cerrar deriva escenarios y DESIGN.md
+#   /keel-docs specs/mi-servicio           openapi.yaml, asyncapi.yaml, Postman y el panel overview.html
+keel validate specs/mi-servicio --ready    # ¿listo para generar? la checklist completa del cierre
 
-keel new mi-servicio # …o de cero: specs/mi-servicio/ (manifiesto + domain + use-cases)
-
-# En Claude Code, dentro del workspace:
-#   /keel-design specs/mi-servicio           diseña capa a capa; al cerrar genera
-#                                            validation-scenarios.md, docs/mi-servicio/DESIGN.md
-#                                            y actualiza el índice README.md del workspace
-keel validate specs/mi-servicio              # schemas por capa + referencias cruzadas
-
-#   /keel-docs specs/mi-servicio             → openapi.yaml, asyncapi.yaml, Postman y overview.html
-#   /keel-handoff specs/mi-servicio          → regenera DESIGN.md + índice si el spec cambió
-
-# Antes de cerrar: preguntarle al generador si puede con el diseño (no escribe nada).
-keel-spring check specs/mi-servicio   # qué no materializa, y qué deja como trabajo del agente
-
-# Generar: dos pasos, con un cd en medio.
-keel-spring build specs/mi-servicio   # valida, pregunta el stack y genera services/mi-servicio-spring/
-cd services/mi-servicio-spring
-# En Claude Code, abierto en esa raíz:
-#   /keel-generate-spring                    → sin argumentos; completa el proyecto y valida los escenarios
+# Generar: dos pasos, con un cd en medio. <tech> es spring, nest o dotnet.
+keel-<tech> check specs/mi-servicio        # opcional: no escribe nada, dice si es generable
+keel-<tech> build specs/mi-servicio        # pregunta el stack y genera services/mi-servicio-<tech>/
+cd services/mi-servicio-<tech>
+#   /keel-generate-<tech>                  sin argumentos; completa el proyecto y valida los escenarios
 ```
 
 ## Cómo se genera: cinco agentes iterando
 
-Dentro del proyecto generado, `/keel-generate-spring` **no escribe código**: orquesta cinco
-subagentes y decide el avance (*gating*) sobre el bloque estructurado —`status`, `blockers`,
-`failures`— con el que cada uno cierra su reporte. En el diagrama, los nodos **redondeados con
-🤖** son sesiones de agente (cuestan contexto y tiempo) y los **rectos con ⚙** son deterministas
-—un script o una decisión del orquestador— y no cuestan nada: el camino verde va del script a la
-fase 3 **sin invocar a ningún árbitro**.
-
-Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el
-**100 %** de los escenarios `FL-*` en OK contra la infraestructura real. Esa fase **requiere JDK 21 y
-Docker o Podman**: el agente `keel-spring-infra` levanta `infra/` en contenedores y sin eso no hay
-escenario que puntuar (ver [Instalación](#instalación)).
+Dentro del proyecto generado, `/keel-generate-<tech>` **no escribe código**: orquesta cinco subagentes
+y decide el avance sobre el bloque estructurado —`status`, `blockers`, `failures`— con el que cada uno
+cierra su reporte. Los nodos **redondeados con 🤖** son sesiones de agente (cuestan contexto y tiempo);
+los **rectos con ⚙** son deterministas y no cuestan nada.
 
 ```mermaid
 flowchart TB
-    BUILD["⚙ keel-spring build (en el workspace)<br/>scaffolding transversal + snapshot del diseño"]
+    BUILD["⚙ keel-{tech} build (en el workspace)<br/>scaffolding transversal + snapshot del diseño"]
     BUILD --> F1
 
-    subgraph F1["/keel-generate-spring · fase 1 — tres agentes en paralelo"]
-        CODE(["🤖 keel-spring-code<br/>TODOs, negocio, adaptadores del stack"])
-        INFRA(["🤖 keel-spring-infra<br/>compose up + validate-infra.sh"])
-        TESTS(["🤖 keel-spring-tests<br/>escenarios FL-* → JUnit, en caja negra"])
+    subgraph F1["/keel-generate-{tech} · fase 1 — tres agentes en paralelo"]
+        CODE(["🤖 keel-{tech}-code<br/>TODOs, negocio, adaptadores del stack"])
+        INFRA(["🤖 keel-{tech}-infra<br/>compose up + validate-infra.sh"])
+        TESTS(["🤖 keel-{tech}-tests<br/>escenarios FL-* → pruebas, en caja negra"])
     end
 
     F1 --> SCORE["⚙ fase 2a — infra/score-scenarios.sh<br/>matriz FL-* → OK · FALLO · NO_EJERCITADO<br/>determinista, desde el XML de JUnit"]
 
-    SCORE -->|"1 · hay rojo"| VALIDATE(["🤖 fase 2b — keel-spring-validate<br/>arbitra contra el Then original<br/>culprit: code · test · harness · design"])
+    SCORE -->|"1 · hay rojo"| VALIDATE(["🤖 fase 2b — keel-{tech}-validate<br/>arbitra contra el Then original<br/>culprit: code · test · harness · design"])
     SCORE -->|"0 · matriz al 100%"| QUALITY
     SCORE -->|"2 · arnés roto · 3 · entorno bloqueado"| TESTS
 
@@ -329,75 +297,105 @@ flowchart TB
     CODE -.->|"tras el fix se vuelve SIEMPRE al script"| SCORE
     TESTS -.-> SCORE
 
-    QUALITY(["🤖 fase 3 — keel-spring-quality<br/>higiene no-conductual + no-regresión<br/>+ baseline del esquema"])
+    QUALITY(["🤖 fase 3 — keel-{tech}-quality<br/>higiene no-conductual + no-regresión<br/>+ baseline del esquema"])
     QUALITY --> CLOSE["⚙ cierre: INFORME-GENERACION.md<br/>compose down + commit"]
 ```
 
-El pipeline completo —gating, handoffs campo a campo, ciclos de fix y su cupo— está en
-[orchestration.md](packages/keel-spring/assets/generators/spring/orchestration.md).
+**Criterio de terminado**: el proyecto compila en verde (`./gradlew build`, `npm run build` o
+`dotnet build`) y el **100 %** de los escenarios `FL-*` del diseño pasa contra la infraestructura real,
+puntuado por el script y no por un juicio. El pipeline completo de cada generador —gating, handoffs,
+ciclos de fix y su cupo— está en su `orchestration.md`:
+[spring](packages/keel-spring/assets/generators/spring/orchestration.md) ·
+[nest](packages/keel-nest/assets/generators/nest/orchestration.md) ·
+[dotnet](packages/keel-dotnet/assets/generators/dotnet/orchestration.md).
 
-## Comandos
+## Paquetes
+
+Monorepo npm workspaces; los cuatro paquetes están publicados en npm.
+
+| Paquete | CLI | Qué hace |
+|---|---|---|
+| [`keel-core`](packages/keel-core/README.md) | `keel` | Siembra workspaces, crea, valida y describe diseños, el mapa del sistema y el registry. Define el DSL (schemas, docs, plantillas) y expone `keel-core/gen`, el núcleo neutral que comparten los generadores. |
+| [`keel-spring`](packages/keel-spring/README.md) | `keel-spring` | Generador Spring Boot 3.5 / Java 21: `services/<servicio>-spring/`, con el wrapper de Gradle vendorizado. |
+| [`@keel-system/keel-nest`](packages/keel-nest/README.md) | `keel-nest` | Generador NestJS 12 sobre Fastify, ESM, TypeScript strict y Vitest: `services/<servicio>-nest/`. Construido por incrementos medidos (`PLAN-KEEL-NEST.md`). |
+| [`keel-dotnet`](packages/keel-dotnet/README.md) | `keel-dotnet` | Generador .NET 10, un proyecto por capa, sin librerías de licencia comercial: `services/<servicio>-dotnet/`. Construido en 16 incrementos medidos (`PLAN-KEEL-DOTNET.md`). |
+
+El detalle de cada generador —qué genera `build`, qué deja al agente y su frontera— está en su README.
+
+## Referencia
+
+### Comandos
 
 | Comando | Qué hace |
-|---------|----------|
-| `keel init [--force] [--check]` | Copia al directorio actual todo lo necesario: skills del agente, schemas por capa, plantillas, docs y `CLAUDE.md`. Nunca sobrescribe sin `--force`. Con `--check` no escribe y falla si alguna copia del payload quedó atrás respecto a la CLI instalada (ignora los archivos que el workspace puede editar). |
-| `keel new <servicio> [--from <origen>]` | Crea `specs/<servicio>/` con manifiesto + capas obligatorias desde plantillas. Con `--from` deriva de un diseño existente (nombre local, ruta, o `registry:<diseño>`) estampando el linaje en `service.basedOn`. |
-| `keel list` | Lista los generadores conocidos y su paquete npm. |
-| `keel validate <ruta>` | Valida un servicio (directorio o manifiesto): schema de cada capa + referencias cruzadas entre artefactos (offline, con todos los errores). |
-| `keel describe <servicio>` | Resume un diseño para leerlo o reutilizarlo: identidad, estado, capas, contenido por capa y frescura de sus derivados. |
-| `keel index [--check]` | Genera el índice de diseños del workspace: la tabla del `README.md` (solo entre marcadores) y `index.json`. Con `--check` no escribe y falla si quedó atrás — es la puerta de CI de un registry. |
-| `keel system [show \| check]` | Lee el mapa del sistema (`system.yaml`, de `/keel-decompose`). `show` (por defecto, con `--json`) muestra las **olas de construcción** —calculadas como orden topológico de las aristas bloqueantes, no declaradas—, el estado de cada servicio, el mapa de contextos y quién puede diseñarse ya. `check` contrasta el mapa contra los diseños reales: es la **única comprobación cross-servicio** (`keel validate` no ve más allá de un servicio) y llega a cruzar dos specs — que el proveedor publique de verdad el evento que el mapa promete a su consumidor. Ninguno escribe nada. |
-| `keel registry [list\|search\|show]` | Explora el registry de diseños reutilizables. Fuente configurable con `--source` o `KEEL_REGISTRY_URL`; caché en `~/.keel/registry/` con `--refresh` y `--offline`. |
-| `keel-spring build <ruta> [--force] [--defaults]` | Comprueba la compatibilidad DSL, valida el diseño, pregunta el stack (persistido en `keel-stack.json`) y genera en `services/<servicio>-spring/` el scaffolding transversal al stack más el `.claude/` del agente (skill, agentes, conventions, skills del stack) y los snapshots de `specs/` y `docs/`. No escribe nada en el workspace de diseño. |
+|---|---|
+| `keel init [--force] [--check]` | Siembra el workspace: skills del flujo de diseño (proyectadas a cada harness), schemas, plantillas, docs y `AGENTS.md`/`CLAUDE.md`. Con `--check` falla si el payload quedó atrás respecto a la CLI instalada. |
+| `keel new <servicio> [--from <origen>]` | Crea `specs/<servicio>/` desde plantillas, o lo deriva de un diseño local o `registry:<diseño>` con linaje en `service.basedOn`. |
+| `keel validate <ruta> [--ready]` | Schema de cada capa + referencias cruzadas + obligaciones. Con `--ready`, la checklist completa de «diseño listo para generar». |
+| `keel describe <servicio>` | Resume un diseño: identidad, capas, contenido y frescura de sus derivados. |
+| `keel seals <servicio>` | Imprime los sellos del careo de flujos (`flow-review.yaml`). |
+| `keel index [--check]` | Índice de diseños del workspace (`README.md` entre marcadores e `index.json`). Con `--check`, puerta de CI de un registry. |
+| `keel system [show \| check]` | El mapa del sistema (`system.yaml`): olas de construcción calculadas y la única comprobación cross-servicio. |
+| `keel registry [list \| search \| show \| get]` | Explora y adopta diseños del registry. Fuente con `--source` o `KEEL_REGISTRY_URL`; caché en `~/.keel/registry/`. |
+| `keel list` | Los generadores conocidos y su paquete npm. |
+| `keel-<tech> check <ruta>` | Pasada en seco: si el diseño es generable y qué quedará como trabajo del agente. No escribe nada. |
+| `keel-<tech> build <ruta>` | Valida, exige el diseño listo, pregunta el stack y genera `services/<servicio>-<tech>/`. `--refresh --prune` propaga arreglos a un proyecto ya generado; `--check` falla si quedó atrás. Nunca escribe en el workspace de diseño. |
 
-## El workspace sembrado
+### El workspace sembrado
 
 ```
 mi-proyecto/
 ├── AGENTS.md / CLAUDE.md     # el flujo, para el agente — un archivo de contexto por harness
-├── README.md                 # índice de servicios diseñados (enlaza cada DESIGN.md) — página de entrada del repo
-├── .claude/skills/           # las ocho skills del flujo de diseño, proyectadas a cada harness
-├── .opencode/skills/         # soportado desde una fuente única: keel-decompose, keel-design,
-│                             # keel-consume, keel-validate, keel-docs, keel-integrate,
-│                             # keel-handoff, keel-evolve
+├── README.md                 # índice de servicios diseñados (enlaza cada DESIGN.md)
+├── .claude/skills/           # las ocho skills del flujo de diseño, proyectadas desde una fuente
+├── .opencode/skills/         # única: keel-decompose, keel-design, keel-consume, keel-validate,
+│                             # keel-docs, keel-integrate, keel-handoff, keel-evolve
 ├── schema/                   # un JSON Schema por capa + common.schema.json
 ├── system.yaml               # el mapa del sistema, si hay más de un servicio (de /keel-decompose)
-│                             # NO es una capa del DSL: reparte el encargo, no describe un servicio
 ├── specs/<servicio>/         # el diseño de cada servicio, un artefacto por capa — la fuente de verdad
 │   ├── service.keel.yaml     #   manifiesto: identidad + capas declaradas
 │   ├── domain.keel.yaml      #   entidades, types, invariantes (obligatoria)
 │   ├── use-cases.keel.yaml   #   operaciones, idempotencia, caché (obligatoria)
-│   └── *.keel.yaml           #   api, security, messaging, http-clients, dependencies, persistence (opcionales)
+│   └── *.keel.yaml           #   api, security, messaging, http-clients, dependencies,
+│                             #   persistence, storage, mail, payments (opcionales)
 ├── templates/service/        # una plantilla por capa
-├── contracts/<proveedor>/    # INTEGRATION.md de servidores externos de los que dependemos (entrada de /keel-consume)
-├── index.json                # índice máquina de los diseños (keel index) — lo consume `keel registry`
-├── docs/                     # methodology, dsl-reference (índice), dsl/<capa>.md, building-a-generator,
-│                             # design-registry (diseños reutilizables), system-decomposition (el mapa)
-├── docs/system/              # el encargo y su descomposición: tdr.md, SYSTEM.md (fronteras y su porqué)
-│                             # y briefs/<servicio>.md — un encargo por servicio, entrada de /keel-design
-└── services/<servicio>-<tech>/  # servicios generados por `keel-<tech> build` (un repo git propio cada uno)
-    ├── .claude/              #   la skill del generador, sus agentes y conventions — el flujo de generación
-    └── specs/                #   snapshot del diseño: el proyecto se completa sin el workspace
+├── contracts/<proveedor>/    # INTEGRATION.md de servidores externos de los que dependemos
+├── index.json                # índice máquina de los diseños (keel index)
+├── docs/                     # methodology, dsl-reference, dsl/<capa>.md, building-a-generator…
+└── services/<servicio>-<tech>/  # proyectos generados por `keel-<tech> build` (un repo git cada uno)
 ```
 
-El workspace es **solo diseño**: no aloja skills ni convenciones de generadores. Todo el conocimiento de generación vive dentro de cada proyecto generado.
+El workspace es **solo diseño**: todo el conocimiento de generación vive dentro de cada proyecto generado.
 
-## Principios
+### Principios
 
-- **El diseño es la fuente de verdad.** Todo lo que un generador necesita saber está en los artefactos; ninguna decisión de negocio queda implícita.
-- **Ninguna decisión estructural sin respuesta.** Outbox, idempotencia, caché, superficie M2M, frontera transaccional, política de fallo: el agente recomienda con su porqué, el humano decide, y lo que queda sin decidir bloquea la validación hasta que se declara o se acepta por escrito en `decisions.yaml`.
-- **Cero tecnología en el diseño.** ORM, framework, broker, proveedor de auth o base de datos concreta se deciden al generar, nunca al diseñar.
-- **Iterable por humanos y agentes, capa a capa.** Cada artefacto es YAML legible y pequeño: un humano revisa una capa en un diff, un agente la produce y la consume; las capas se relacionan por nombre y `keel validate` comprueba las referencias.
-- **Regenerable.** Cambiar de stack es re-ejecutar la generación, no reescribir el diseño.
+- **El diseño es la fuente de verdad.** Todo lo que un generador necesita saber está en los artefactos.
+- **Ninguna decisión estructural sin respuesta.** El agente recomienda con su porqué, el humano decide,
+  y lo que queda sin decidir bloquea la validación hasta que se declara o se acepta por escrito.
+- **Cero tecnología en el diseño.** Lenguaje, framework, ORM, broker, proveedor de identidad o base de
+  datos se deciden al generar.
+- **Lo que no se sabe generar se rechaza, no se ignora.** Cada generador dice qué no sostiene y por qué.
+- **Regenerable.** Cambiar de stack o de lenguaje es volver a ejecutar la generación.
 
 ## Estado y roadmap
 
-- **DSL Keel 2.13**: diez capas (dos obligatorias, ocho opcionales) con validación en tres niveles — JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente.
-- **CLI `keel` completa**: `init`, `new`, `list`, `validate`, `describe`, `index`, `system` y `registry`, más las ocho skills del flujo de diseño que siembra `keel init`.
-- **Tres generadores**: `keel-spring` (Spring Boot 3.5 / Java 21) — **63 módulos de scaffolding determinista**, 6 motores de base de datos (5 relacionales + MongoDB), 3 brokers, 2 proveedores de identidad, 2 cachés y 2 backends de storage, con **11 skills por tecnología** y orquestación de cinco subagentes con puntuación determinista de escenarios. Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el 100% de los escenarios `FL-*` en OK contra la infraestructura real. Y `keel-nest` (NestJS 12 / Node 22, `PLAN-KEEL-NEST.md`), que genera del mismo diseño un servidor equivalente sobre PostgreSQL, MySQL o MongoDB, los tres brokers, los dos proveedores de identidad, las dos cachés, S3 y las dos pasarelas de pago, con su propia matriz de paridad (`npm run matrix --workspace packages/keel-nest`) y doce redes en vivo. Y `keel-dotnet` (.NET 10, `PLAN-KEEL-DOTNET.md`), sobre PostgreSQL (EF Core) o MongoDB, con los mismos brokers, identidad, cachés, storage, correo y pagos, sin ninguna librería de licencia comercial, su matriz de paridad sin celdas sin falsar (`npm run matrix --workspace packages/keel-dotnet`) y sus propias redes en vivo.
-- **Verificación del propio generador**: **87 suites de test** (`npm test`), **11 fixtures de diseño** —4 de modelo documental y 7 relacional, dos de ellas **pares byte a byte** que solo se diferencian en el modelo de persistencia, que es lo que impide que una rama se quede atrás en silencio— y **8 redes que ejecutan de verdad** contra motores, brokers y buzones en contenedores —requieren Docker o Podman, y `compile-check` además JDK— (`compile-check`, `claim-check`, `store-check`, `index-check`, `mapping-check`, `broker-check`, `mail-check`, `mongo-check`). Su estado, celda a celda, lo imprime `npm run matrix`: **46 celdas · 31 verificadas · 30 falsadas · 9 sin ejecutar · 2 degradadas**.
-- **Publicado en npm**: [`keel-core`](https://www.npmjs.com/package/keel-core) y [`keel-spring`](https://www.npmjs.com/package/keel-spring), instalables con `npm i -g`.
-- **Pendiente**: más generadores (`keel-fastapi`); MariaDB, SQL Server y Oracle medidos en vivo (hoy keel-nest los rechaza por eso); detección de drift entre spec y **código generado** —la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`—; sincronización inversa.
+- **DSL Keel 2.22**: once capas (dos obligatorias, nueve opcionales) con validación en tres niveles
+  —JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente— y el veredicto
+  `--ready`.
+- **CLI `keel` completa**: `init`, `new`, `list`, `validate`, `describe`, `seals`, `index`, `system` y
+  `registry`, más las ocho skills del flujo de diseño.
+- **Tres generadores publicados** en npm —[`keel-spring`](https://www.npmjs.com/package/keel-spring),
+  [`@keel-system/keel-nest`](https://www.npmjs.com/package/@keel-system/keel-nest) y
+  [`keel-dotnet`](https://www.npmjs.com/package/keel-dotnet)— sobre
+  [`keel-core`](https://www.npmjs.com/package/keel-core), cerrados con la corrida de control del par
+  del MVP: 6 × 23/23, huella 17.
+- **Verificación del propio Keel**: 292 suites de test (`npm test`), 15 fixtures de diseño —entre ellas
+  pares que solo se diferencian en el modelo de persistencia— y redes en vivo por generador contra
+  motores, brokers, proveedores de identidad y buzones en contenedores (ver `CLAUDE.md § Comandos`).
+  64 corridas registradas en [docs/corridas](docs/corridas/).
+- **Pendiente**: `keel-recover`, ingeniería inversa de un servicio existente a un diseño Keel
+  (`PLAN-KEEL-RECOVER.md`); MySQL, MariaDB, SQL Server y Oracle medidos en vivo en keel-nest y
+  keel-dotnet; las pasarelas de pago contra su sandbox real; detección de drift entre spec y código
+  generado.
 
 ## Contribuir: estructura de este repo
 
@@ -405,24 +403,29 @@ El workspace es **solo diseño**: no aloja skills ni convenciones de generadores
 keel/
 ├── package.json                  # raíz privada: workspaces packages/*
 └── packages/
-    ├── keel-core/                 # el core (Node 18+, ESM, sin build step)
-    │   ├── src/
-    │   │   ├── cli.js            # entry (commander): init, new, list, validate
-    │   │   ├── index.js          # API pública para generadores (validateService, loadService, …)
-    │   │   ├── commands/
-    │   │   └── lib/              # assets, copia, carga multi-artefacto, referencias cruzadas
-    │   └── assets/core/          # lo que `keel init` siembra (skills, schemas, plantillas, docs)
-    └── keel-spring/              # generador Spring Boot
-        ├── src/                  # CLI: comando build + scaffolding transversal (src/scaffold, src/lib)
-        └── assets/               # lo que `keel-spring build` instala (skill + agentes + conventions + skills por tecnología)
+    ├── keel-core/                # el core (Node 18+, ESM, sin build step)
+    │   ├── src/cli.js            # entry (commander)
+    │   ├── src/lib/              # validación, referencias cruzadas, readiness, registry, sistema
+    │   ├── src/lib/gen/          # el núcleo NEUTRAL de los generadores (keel-core/gen)
+    │   └── assets/               # lo que `keel init` siembra (skills, schemas, plantillas, docs)
+    ├── keel-spring/              # generador Spring Boot
+    ├── keel-nest/                # generador NestJS
+    └── keel-dotnet/              # generador .NET
+        ├── src/                  # cada uno: build, check y su scaffolding (src/scaffold, src/lib)
+        └── assets/               # lo que build instala en el proyecto (skill, agentes, conventions…)
 ```
 
-Los assets **son** la metodología: el DSL se documenta en `packages/keel-core/assets/core/docs/dsl-reference.md`, el schema vive en `packages/keel-core/assets/core/schema/`, y cada generador en su propio paquete `packages/keel-<tech>/`. Para crear un generador nuevo: [building-a-generator.md](packages/keel-core/assets/core/docs/building-a-generator.md). La metodología completa, en [methodology.md](packages/keel-core/assets/core/docs/methodology.md).
-
-Y una guía aparte para lo que se opera en vez de leerse: [OBSERVABILIDAD.md](OBSERVABILIDAD.md) explica la telemetría opcional de un servicio generado —cómo se activa, dónde se miran las trazas, las métricas y los logs, cómo se cambia de backend tocando solo el colector y cómo se opera—. Es la misma guía que build instala en `docs/keel/observabilidad.md` de cada proyecto que la lleva.
+Los assets **son** la metodología: el DSL se documenta en
+[dsl-reference.md](packages/keel-core/assets/core/docs/dsl-reference.md) y la metodología completa en
+[methodology.md](packages/keel-core/assets/core/docs/methodology.md). Para crear un generador nuevo:
+[building-a-generator.md](packages/keel-core/assets/core/docs/building-a-generator.md). La guía
+de operación de la telemetría opcional está en [OBSERVABILIDAD.md](OBSERVABILIDAD.md).
 
 ## Autor y licencia
 
-Keel lo diseña y mantiene **[asuridev](https://github.com/asuridev)** — el DSL, la metodología, la CLI y el generador Spring.
+Keel lo diseña y mantiene **[asuridev](https://github.com/asuridev)** — el DSL, la metodología, la CLI y
+los generadores.
 
-Publicado bajo licencia [MIT](LICENSE). Si lo usas en un proyecto o construyes un generador sobre él, la atribución se agradece; las [issues](https://github.com/keel-system/keel/issues) y las propuestas de generador, más.
+Publicado bajo licencia [MIT](LICENSE). Si lo usas en un proyecto o construyes un generador sobre él,
+la atribución se agradece; las [issues](https://github.com/keel-system/keel/issues) y las propuestas de
+generador, más.
