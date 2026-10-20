@@ -42,7 +42,10 @@ territorio del agente (ni `infra/`, ni `tests/` de build, ni la solución). Dos 
    se escapó: ahora lo cubren las ramas sin fixture `mailer-author` y `mailer-mongo-author`
    (`UNCOVERED_BRANCHES` de keel-dotnet, `DERIVED_SILHOUETTES` de keel-nest). Lo miden `db-check` y `doc-check` de
    keel-dotnet con la sonda de autoría ampliada a `declared`, cuya muestra nace con la autoría vacía, y lo falsa
-   `--sabotage=created-by-empty`.
+   `--sabotage=created-by-empty`. El `db-check` de keel-nest no medía la autoría de ninguna forma. Ahora lleva la
+   misma sonda, en PostgreSQL y MySQL, con los sujetos `mailer-author` (declarada, raíz e hija leída por el dominio)
+   y `product-catalog-authorship` (política). La falsan `--sabotage=created-by-empty` y
+   `--sabotage=actor-correlation` (el actor sin petición pierde la correlación).
 2. **El agente de código compilaba la solución en la fase 1** (keel-dotnet). code, infra y tests corren en paralelo,
    y un `dotnet build` a secas compila también `tests/…IntegrationTests` mientras se escribe. Ahora compila
    `src/<Raíz>.Api/<Raíz>.Api.csproj`, que cubre todo `src/` por la cadena de referencias, como el `-x test` de

@@ -19,6 +19,8 @@
 //   unicidad     un segundo agregado con la misma clave natural sale como el error que el diseño
 //                declara para ella (translatePersistenceError);
 //   página       list(pageable) con su total; deleteById borra el grafo;
+//   autoría      created_by es de quien crea y no cambia, updated_by del último que escribe, con el actor de
+//                currentActor(); con la autoría DECLARADA, el alta la deja vacía y vacía es ausente (raíz e hija);
 //   mensajería   el puente escribe el outbox en la transacción del cambio; el reclamo del relay (orden,
 //                lote, lease, SKIP LOCKED), el backoff y la rendición; el registro de procesados (la
 //                repetición, la transacción propia y la carrera). Lo que en keel-spring mide store-check.
@@ -40,7 +42,9 @@ import { DB_NAME, run, resolveRuntime, startDatabase } from './lib/database-cont
 import { sampleEntity, sampleValue, PROBE_HELPERS } from './lib/samples.js';
 import { finderBlock } from './lib/finder-probes.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
-import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
+import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN, declaredAuthorship } from '../test/helpers/workspace.js';
+import { SECURITY_CONTEXT_TS, usesHttpSecurity } from '../src/scaffold/security.js';
+import { CORRELATION_TS, usesApi, usesCorrelation } from '../src/scaffold/rest-support.js';
 import { build } from '../src/commands/build.js';
 import { usesSchemaBaseline, BASELINE_FILE, MIGRATIONS_DIR } from '../src/scaffold/schema-baseline.js';
 import { AMQPLIB_VERSION, JOSE_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION, AWS_SDK_VERSION, FASTIFY_MULTIPART_VERSION } from '../src/lib/assets.js';
@@ -80,7 +84,11 @@ const SABOTAGES = {
   // Los finders (DSL 2.22): el where que no filtra, el texto sin plegar y el patrón LIKE que no escapa % ni _.
   'finder-where': ['product-repository-impl.ts', /^ {4}and\('[^']+', Equal\(.*\)\);\n/gm, ''],
   'finder-fold': ['product-repository-impl.ts', /LikePattern\.(\w+)\(TextFold\.\w+\((filter\.\w+)\)\)/g, 'LikePattern.$1($2)'],
-  'finder-literal': ['like-pattern.ts', String.raw`const SPECIAL = /[\\%_]/g;`, String.raw`const SPECIAL = /[\\]/g;`]
+  'finder-literal': ['like-pattern.ts', String.raw`const SPECIAL = /[\\%_]/g;`, String.raw`const SPECIAL = /[\\]/g;`],
+  // La autoría declarada: el '' del alta cuenta como valor (el `??=` de la corrida catalog-dotnet).
+  'created-by-empty': ['-repository-impl.ts', 'createdBy ||= actor;', 'createdBy ??= actor;'],
+  // El actor sin petición autenticada pierde la correlación: queda `system` a secas (sujeto product-catalog-authorship).
+  'actor-correlation': ['audit-actor.ts', 'correlationId != null ? `${SYSTEM_ACTOR}:${correlationId}` : SYSTEM_ACTOR', 'SYSTEM_ACTOR']
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -103,10 +111,21 @@ const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ??
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
-// object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js).
-const DERIVED = Object.fromEntries(FINDER_DESIGNS.filter((design) => design.name === 'product-catalog-finder').map((design) => [design.name, design]));
+// object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
+// fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
+// los mismos parches que mide el db-check de keel-dotnet.
+const DERIVED = {
+  ...Object.fromEntries(FINDER_DESIGNS.filter((design) => design.name === 'product-catalog-finder').map((design) => [design.name, design])),
+  'product-catalog-authorship': {
+    from: 'product-catalog',
+    mutate: (layers) => {
+      layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship: 'all' };
+    }
+  },
+  'mailer-author': { from: 'notification-mailer', mutate: declaredAuthorship }
+};
 const results = [];
 
 function step(name, ok, detail = '') {
@@ -239,7 +258,10 @@ const values = {
   'database.url': 'jdbc:${engine}://127.0.0.1:${db.port}/${DB_NAME}',
   'database.username': '${DB_NAME}',
   'database.password': '${db.password}',
-  'database.synchronize': true,
+  // Sin sincronizar al arrancar: alteraría el esquema del sujeto ANTERIOR, que comparte motor y a veces tablas, y una
+  // columna NOT NULL nueva sobre filas viejas no entra (product-catalog-authorship tras product-catalog). El esquema
+  // limpio lo crea el synchronize(true) de abajo, que borra antes.
+  'database.synchronize': false,
   'database.transaction-timeout': '30s'
 };
 const settings = databaseSettings({ get: (key) => values[key], application: { name: 'db-check' } });
@@ -382,6 +404,7 @@ ${idBatchReason(model, root) ? `  {
     check('${name}: findAllById con la lista vacía no consulta y devuelve vacío', (await repository.findAllById([])).length === 0);
   }` : ''}
 ${conditionalBlock(model, root, index, ctx)}
+${authorshipBlock(model, root, index, ctx)}
 ${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [] });
   check('${name}: list devuelve la página con su total', page.totalElements >= 1 && page.items.length >= 1 && page.totalPages >= 1, JSON.stringify({ total: page.totalElements, n: page.items.length }));` : ''}
 ${guardClaimsFor(model, root.name).map((claim) => `  // La guarda del efecto irreversible (mail.sentBy): la primera ejecución se lleva la fila y la deja en
@@ -401,6 +424,48 @@ ${credentialFinders(model, root).map((credential) => `  // La credencial que NO 
   await repository.deleteById(original.id);
   check('${name}: deleteById borra el agregado y su grafo', (await repository.findById(original.id)) == null);
 }`;
+}
+
+/**
+ * La AUTORÍA (`persistence.audit.authorship`, incremento 13h) contra el motor: quien crea queda en created_by y no
+ * cambia al reescribir; quien escribe la última vez, en updated_by. El actor es el de currentActor(): con seguridad, el
+ * `sub` del token; sin ella, el sistema con la correlación (o sin ella). Con la autoría DECLARADA la muestra nace con
+ * ella vacía (la de sampleEntity), y la hija también tiene que salir con el actor: se lee por el dominio, que la expone.
+ * La misma sonda que el db-check de keel-dotnet (authorshipProbe).
+ */
+function authorshipBlock(model, root, index, ctx) {
+  if (root.auditAuthorship !== 'all' && root.auditAuthorship !== 'declared') return '';
+  const security = usesHttpSecurity(model);
+  const correlation = usesApi(model) || usesCorrelation(model);
+  if (security) ctx.imports.add(`SecurityContext|${SECURITY_CONTEXT_TS}`);
+  else if (correlation) ctx.imports.add(`CorrelationContext|${CORRELATION_TS}`);
+  const writer = security
+    ? "SecurityContext.runWith({ kind: 'token', name: 'nombre-' + who, authorities: new Set(), claims: { sub: who } }, action)"
+    : correlation
+      ? 'CorrelationContext.runWith(who, action)'
+      : 'action()';
+  const expected = security ? 'who' : correlation ? "'system:' + who" : "'system'";
+  const column = (name) => root.fields.find((field) => field.name === name)?.columns?.name ?? (name === 'createdBy' ? 'created_by' : 'updated_by');
+  // Las hijas que declaran su autoría la exponen en el dominio: así se mide el `child.createdBy` del adaptador.
+  const children = root.auditAuthorship === 'declared'
+    ? (root.relations ?? [])
+        .filter((relation) => relation.internal && relation.cardinality === 'one-to-many' && !relation.backReference)
+        .filter((relation) => model.entities.find((entity) => entity.name === relation.entity)?.fields.some((field) => field.name === 'createdBy'))
+    : [];
+  const name = root.name;
+  return `  {
+    const writeAs = (who, action) => ${writer};
+    const actorOf = (who) => ${expected};
+    const sample = ${sampleEntity(model, root, ctx, `${index}w`)};
+    await writeAs('autor-que-crea', () => repository.save(sample));
+    const read = await repository.findById(sample.id);
+${children.map((relation) => `    check('${name}.${relation.name}: la hija nace con created_by de quien crea', (read?.${relation.name} ?? []).length > 0 && read.${relation.name}.every((child) => child.createdBy === actorOf('autor-que-crea')), JSON.stringify((read?.${relation.name} ?? []).map((child) => child.createdBy)));`).join('\n')}
+    await writeAs('autor-que-modifica', () => repository.save(read));
+    const stored = await rawRow('${root.tableName}', sample.id);
+    check('${name}: created_by es de quien crea y no cambia al reescribir', stored?.['${column('createdBy')}'] === actorOf('autor-que-crea'), stored?.['${column('createdBy')}']);
+    check('${name}: updated_by es del último que escribe', stored?.['${column('updatedBy')}'] === actorOf('autor-que-modifica'), stored?.['${column('updatedBy')}']);
+    await repository.deleteById(sample.id);
+  }`;
 }
 
 /**

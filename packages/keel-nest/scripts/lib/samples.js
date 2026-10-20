@@ -197,6 +197,9 @@ export function sampleEntity(model, entity, ctx, salt, depth = 0) {
     } else if (member.kind === 'relationOne') {
       const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
       value = depth > 2 || !child ? 'null' : sampleEntity(model, child, ctx, `${salt}o`, depth + 1);
+    } else if (entity.auditAuthorship === 'declared' && ['createdBy', 'updatedBy'].includes(member.name)) {
+      // La autoría declarada, como la deja el alta (domain-modeling.md): vacía. La estampa el adaptador al guardar.
+      value = "''";
     } else if (member.field.list) {
       const values = [1, 2].map((n) => sampleValue(model, { ...member.field, list: false, kind: member.field.kind }, ctx, `${salt}${n}`));
       value = values.some((v) => v == null) ? '[]' : `[${values.join(', ')}]`;
@@ -244,7 +247,7 @@ function snapshot(value) {
     const out = {};
     // La versión y la última modificación las pone la persistencia, no quien guarda.
     for (const key of Object.keys(own).sort()) {
-      if (key === 'lockVersion' || key === 'updatedAt' || key === 'updatedBy') continue;
+      if (key === 'lockVersion' || key === 'updatedAt' || key === 'updatedBy' || key === 'createdBy') continue;
       const item = snapshot(own[key]);
       out[key] = UNORDERED.has(key) && Array.isArray(item) ? [...item].sort((a, b) => String(a?.id).localeCompare(String(b?.id))) : item;
     }
