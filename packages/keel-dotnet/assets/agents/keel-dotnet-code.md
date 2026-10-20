@@ -49,7 +49,9 @@ escenario que ya estaba en verde.
    - **Los handlers** (`<Raíz>.Application/UseCases/`): la lógica, en el orden de las notas del diseño que dejó
      build, sustituyendo el `throw new NotImplementedException("TODO: …")`. Lanzan el `<PascalCode>Error` del
      diseño; nunca construyen una respuesta de error. No abren transacciones (lo hace el mediator). Una
-     dependencia nueva es un parámetro más del constructor primario.
+     dependencia nueva es un parámetro más del constructor primario. Antes de lanzar I/O a la vez en un handler
+     (`Task.WhenAll`) consulta `{{keel:docs}}/conventions/concurrency.md`: solo en query handlers, y como mucho una
+     rama contra la persistencia (el `DbContext` no admite dos operaciones a la vez).
    - **La idempotencia de petición**, si la operación la declara: el registro, la firma, el contexto de la cabecera,
      el ámbito del comando y los dos errores de conflicto **ya están generados** y el puerto `IIdempotencyStore` está
      inyectado. Tú escribes el uso en el handler, con el algoritmo de la nota del stub y de `mapping.md` § La

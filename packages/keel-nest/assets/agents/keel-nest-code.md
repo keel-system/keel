@@ -53,7 +53,9 @@ corto a romper un escenario que ya estaba en verde.
    - **Los handlers** (`src/application/usecases/`): la lógica, en el orden de las notas del diseño
      que dejó build. Lanzan el `<PascalCode>Error` del diseño; nunca construyen una respuesta de error.
      No abren transacciones (lo hace el mediator). Una dependencia nueva se añade a `static readonly
-     inject` **y** al constructor, en el mismo orden.
+     inject` **y** al constructor, en el mismo orden. Antes de lanzar I/O a la vez en un handler
+     (`Promise.all`) consulta `{{keel:docs}}/conventions/concurrency.md`: solo en query handlers, y como
+     mucho una rama contra la persistencia, que comparte la conexión de la transacción.
    - **La idempotencia de petición**, si la operación la declara: el registro, la firma, el contexto de
      la cabecera y los dos errores de conflicto **ya están generados** y el puerto `IdempotencyStore` está
      inyectado. Tú escribes el uso en el handler, con el algoritmo de la nota del stub y de `mapping.md` §

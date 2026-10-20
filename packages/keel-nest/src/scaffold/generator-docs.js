@@ -42,6 +42,7 @@ export const CONVENTIONS = [
   'project-layout.md',
   'domain-modeling.md',
   'flow-fidelity.md',
+  'concurrency.md',
   'integration-tests.md',
   'infra-validation.md'
 ];
@@ -283,8 +284,8 @@ completo, con sus porqués: \`{{keel:docs}}/orchestration.md\`.
 - \`{{keel:docs}}/architecture.md\` y \`{{keel:docs}}/constitution.md\` — la arquitectura y sus reglas inviolables.
 - \`{{keel:docs}}/conventions/\` — mapeo diseño → código (\`mapping.md\`, estricto), estructura y comandos
   (\`project-layout.md\`), el dominio (\`domain-modeling.md\`), la auditoría de cada handler
-  (\`flow-fidelity.md\`), las pruebas de los escenarios (\`integration-tests.md\`) y la infraestructura
-  (\`infra-validation.md\`).${techSkillsBullet}
+  (\`flow-fidelity.md\`), la I/O concurrente en un handler (\`concurrency.md\`), las pruebas de los escenarios
+  (\`integration-tests.md\`) y la infraestructura (\`infra-validation.md\`).${techSkillsBullet}
 
 **Un solo actor sobre el proyecto, en todo momento.** Mientras un subagente esté vivo, tú no ejecutas
 nada sobre este directorio: el script sobrescribe la evidencia que el árbitro lee y el reset vacía la base

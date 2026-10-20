@@ -48,7 +48,8 @@ El código de persistencia sale entero de build, sobre el driver oficial (`Mongo
   proyecto Application no referencia el de Infrastructure (el compilador lo impide).
 - El adaptador opera en la sesión de la transacción abierta (`transactions.Session`): sin ella la operación va fuera de
   la transacción y un aborto no la desharía. Las búsquedas pasan por el `Find(...)` del propio adaptador, que ya la toma.
-- Nada de operaciones en paralelo (`Task.WhenAll`) dentro de una transacción: la sesión no las admite.
+- Nada de operaciones en paralelo (`Task.WhenAll`) dentro de una transacción: la sesión no las admite. En un handler,
+  como mucho una rama de un `Task.WhenAll` toca un repositorio (ver la convención `concurrency.md`).
 - Los nombres de los índices son **contrato**: el traductor de errores traduce por ellos al `code` del diseño, y
   keel-spring y keel-nest usan los mismos. No se renombran ni se crean a mano.
 - Las claves del documento son las de `ToDocument<Raíz>` (las del contrato): un `$set` sobre un nombre que no existe NO

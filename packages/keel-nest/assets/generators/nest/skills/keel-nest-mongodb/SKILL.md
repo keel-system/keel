@@ -49,7 +49,8 @@ El código de persistencia sale entero de build, sobre el driver oficial y sin O
 - El adaptador pasa **siempre** `{ session: this.session }` (la de la transacción abierta por el mediator):
   sin ella la operación va fuera de la transacción y un aborto no la desharía.
 - Nada de operaciones en paralelo (`Promise.all`) dentro de una transacción: el driver no las admite sobre
-  la misma sesión.
+  la misma sesión. En un handler, como mucho una rama de un `Promise.all` toca un repositorio (ver la
+  convención `concurrency.md`).
 - Los nombres de los índices son **contrato**: el filtro de errores traduce por ellos al `code` del diseño,
   y keel-spring usa los mismos. No se renombran ni se crean a mano.
 - Las claves del documento son las de `documentShape` (las que ya usa el adaptador): un `$set` sobre un

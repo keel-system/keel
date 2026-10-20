@@ -389,3 +389,20 @@ test('el agente de código compila src/ por el Api en la fase 1, y la solución 
   const api = files[sln.api.csproj];
   assert.ok(api.includes(`${sln.infrastructure.name}.csproj`), 'el Api no referencia Infrastructure: compilarlo no cubre src/');
 });
+
+// La convención de I/O concurrente se apoya en dos hechos de lo emitido: la Query corre en una transacción de solo
+// lectura y todos los adaptadores de la petición comparten el DbContext del ámbito. Si alguno deja de ser verdad, la
+// regla «una sola rama contra la persistencia» enseña algo que ya no pasa.
+test('la convención de I/O concurrente se instala, el agente de código la cita y lo que da por hecho se emite', () => {
+  const convention = files[`${DOCS_DIR}/conventions/concurrency.md`];
+  for (const words of ['Task.WhenAll', 'como mucho UNA rama contra la persistencia', 'solo en query handlers', 'A second operation was started', 'IDbContextFactory']) {
+    assert.ok(convention.includes(words), `concurrency.md: ${words}`);
+  }
+  const codeAgents = Object.entries(files).filter(([file]) => file.includes('keel-dotnet-code') && !file.startsWith(DOCS_DIR));
+  assert.ok(codeAgents.length > 0);
+  for (const [file, content] of codeAgents) assert.ok(content.includes('conventions/concurrency.md'), file);
+  const emitted = Object.values(files).join('\n');
+  assert.match(emitted, /Dispatch<TResult>\(IQuery<TResult>[^\n]*\n[^\n]*readOnly: true/, 'la Query ya no abre transacción de solo lectura');
+  assert.match(emitted, /services\.AddDbContext</, 'el DbContext ya no es el del ámbito');
+  assert.ok(emitted.includes('UnsafeQueueUserWorkItem'), 'la regla context de check-logging.sh ya no veta las formas Unsafe');
+});

@@ -372,3 +372,20 @@ test('el cierre no reporta como hueco lo que el diseño ya aceptó por escrito (
     for (const words of ['`specs/gaps.yaml`', '`specs/decisions.yaml`', '`state: accepted`', 'no se reporta']) assert.ok(files[file].includes(words), `${file}: ${words}`);
   }
 });
+
+// La convención de I/O concurrente se apoya en dos hechos de lo emitido: la Query corre en una transacción
+// de solo lectura y esa transacción viaja por AsyncLocalStorage a toda rama de un Promise.all. Si alguno deja
+// de ser verdad, la regla «una sola rama contra la persistencia» enseña algo que ya no pasa.
+test('la convención de I/O concurrente se instala, el agente de código la cita y lo que da por hecho se emite', () => {
+  const convention = files[`${DOCS_DIR}/conventions/concurrency.md`];
+  for (const words of ['Promise.all', 'como mucho UNA rama contra la persistencia', 'solo en query handlers', 'worker_threads']) {
+    assert.ok(convention.includes(words), `concurrency.md: ${words}`);
+  }
+  const codeAgents = Object.entries(files).filter(([file]) => file.includes('keel-nest-code') && !file.startsWith(DOCS_DIR));
+  assert.ok(codeAgents.length > 0);
+  for (const [file, content] of codeAgents) assert.ok(content.includes('conventions/concurrency.md'), file);
+  const emitted = Object.values(files).join('\n');
+  assert.ok(emitted.includes('const readOnly = message instanceof Query;'), 'la Query ya no abre transacción de solo lectura');
+  assert.ok(emitted.includes('AsyncLocalStorage'), 'la transacción ya no viaja por AsyncLocalStorage');
+  assert.ok(files['infra/check-logging.sh'].includes(JSON.stringify(String.raw`\bnew\s+Worker\s*\(`)),'la regla context de check-logging.sh ya no veta worker_threads');
+});

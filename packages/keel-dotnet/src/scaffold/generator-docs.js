@@ -38,7 +38,7 @@ export const DOCS_DIR = 'docs/keel';
 export const GUIDES = ['architecture.md', 'constitution.md', 'orchestration.md'];
 
 /** Las convenciones: el único punto de instalación (un archivo nuevo de conventions/ va aquí). */
-export const CONVENTIONS = ['mapping.md', 'project-layout.md', 'domain-modeling.md', 'flow-fidelity.md', 'integration-tests.md', 'infra-validation.md'];
+export const CONVENTIONS = ['mapping.md', 'project-layout.md', 'domain-modeling.md', 'flow-fidelity.md', 'concurrency.md', 'integration-tests.md', 'infra-validation.md'];
 
 /** Las que solo aplican con una elección del stack: la de observabilidad, con telemetría. */
 export const CONDITIONAL_CONVENTIONS = { 'observability.md': (model) => usesTelemetry(model) };
@@ -288,8 +288,9 @@ Se invoca **sin argumentos, con el cwd en esta raíz**; todas las rutas son rela
 - \`{{keel:docs}}/orchestration.md\` — el pipeline: fases, códigos, agentes, handoffs y ciclos.
 - \`{{keel:docs}}/architecture.md\` y \`{{keel:docs}}/constitution.md\` — la arquitectura y sus reglas inviolables.
 - \`{{keel:docs}}/conventions/\` — mapeo diseño → código (\`mapping.md\`, estricto), estructura y comandos
-  (\`project-layout.md\`), el dominio (\`domain-modeling.md\`), la auditoría de cada handler (\`flow-fidelity.md\`), las
-  pruebas de los escenarios (\`integration-tests.md\`) y la infraestructura (\`infra-validation.md\`).${techSkillsBullet}
+  (\`project-layout.md\`), el dominio (\`domain-modeling.md\`), la auditoría de cada handler (\`flow-fidelity.md\`), la
+  I/O concurrente en un handler (\`concurrency.md\`), las pruebas de los escenarios (\`integration-tests.md\`) y la
+  infraestructura (\`infra-validation.md\`).${techSkillsBullet}
 - Un flujo suelto, con la solución compilada: \`${flowsCommand(model, '<Flujo>Flow')}\`; el humo,
   \`${flowsCommand(model, HARNESS_SMOKE_CLASS)}\`.
 
