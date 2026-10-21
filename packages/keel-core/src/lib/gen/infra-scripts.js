@@ -136,7 +136,7 @@ export function dockerfileDevtools(selected, platform) {
     );
   }
   if (ids.has('minio')) {
-    // mc (MinIO client): binario estático de la release; no hay paquete apk. La URL
+    // mc (MinIO client): tarball de la release del fork; no hay paquete apk. La URL
     // sale del catálogo —misma versión que la imagen del sidecar minio-init— y
     // NO de dl.min.io, que devuelve 410 desde que MinIO archivó esa distribución.
     //
@@ -144,10 +144,14 @@ export function dockerfileDevtools(selected, platform) {
     // y sale 0, así que la imagen se horneaba con una página HTML marcada como
     // ejecutable y el fallo aparecía dentro de validate-infra.sh, sin mencionar la
     // descarga. Con `-f`, un origen roto mata el build de la imagen, que es donde se
-    // puede leer.
+    // puede leer. Por eso se descarga a un archivo y no por tubería a `tar`: en una
+    // tubería el código que manda es el de `tar`, y el `-f` de curl dejaría de valer.
     lines.push(
-      `RUN curl -fsSL ${MC_BINARY_URL} -o /usr/local/bin/mc \\`,
-      ' && chmod +x /usr/local/bin/mc'
+      `RUN curl -fsSL ${MC_BINARY_URL} -o /tmp/mc.tar.gz \\`,
+      ' && tar -xzf /tmp/mc.tar.gz -C /tmp mcli \\',
+      ' && mv /tmp/mcli /usr/local/bin/mc \\',
+      ' && chmod +x /usr/local/bin/mc \\',
+      ' && rm /tmp/mc.tar.gz'
     );
   }
 

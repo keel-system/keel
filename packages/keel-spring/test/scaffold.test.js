@@ -1500,24 +1500,27 @@ test('capa storage: gradle con SDK S3, compose con MinIO y fragmento de config p
   assert.ok(buildGradle.includes('software.amazon.awssdk:s3'));
 
   const compose = read(workspace, 'infra/docker-compose.yaml');
-  assert.ok(compose.includes('minio/minio'));
+  assert.ok(compose.includes('pgsty/minio'));
   assert.ok(compose.includes('minio-data')); // volumen persistente registrado
 
   // MinIO ya no se sirve desde donde se servía, y las dos mitades fallan en SILENCIO:
-  // Docker Hub deniega el pull anónimo de `minio/minio` y `minio/mc` enteros (también
-  // `latest`), y `dl.min.io` devuelve 410 — pero un `curl` sin `-f` descarga la página de
-  // error y la marca ejecutable, así que el toolbox se hornea con HTML dentro y el rojo
-  // aparece dentro de validate-infra.sh, hablando de un MinIO que funciona perfectamente.
-  assert.ok(compose.includes('quay.io/minio/minio'), 'el compose apunta a un registro que deniega el pull');
-  assert.ok(compose.includes('quay.io/minio/mc'), 'el sidecar apunta a un registro que deniega el pull');
+  // Docker Hub y quay.io deniegan el pull anónimo de `minio/minio` y `minio/mc` enteros
+  // (también `latest`), y `dl.min.io` devuelve 410 — pero un `curl` sin `-f` descarga la
+  // página de error y la marca ejecutable, así que el toolbox se hornea con HTML dentro y
+  // el rojo aparece dentro de validate-infra.sh, hablando de un MinIO que funciona.
+  assert.ok(!compose.includes('quay.io/minio'), 'el compose apunta a un registro que deniega el pull');
+  assert.ok(compose.includes('docker.io/pgsty/minio'), 'el servidor no sale del fork publicado');
+  assert.ok(compose.includes('docker.io/pgsty/mc'), 'el sidecar no sale del fork publicado');
 
   const dockerfile = read(workspace, 'infra/docker/Dockerfile');
   assert.ok(!dockerfile.includes('dl.min.io'), 'el binario mc se descarga de una URL muerta');
+  assert.ok(!dockerfile.includes('github.com/minio/mc'), 'el binario mc no es el del fork del sidecar');
   assert.ok(dockerfile.includes('curl -fsSL'), 'sin -f, un origen roto se hornea como binario');
+  assert.ok(dockerfile.includes('-o /tmp/mc.tar.gz'), 'por tubería a tar, el -f de curl no manda');
   // Una sola versión: el mc del toolbox y el del sidecar hablan con el mismo MinIO, y dos
   // números que tienen que coincidir escritos en dos sitios coinciden hasta que alguien
   // toca uno.
-  const [, releaseCompose] = compose.match(/quay[.]io[/]minio[/]mc:(\S+)/);
+  const [, releaseCompose] = compose.match(/pgsty[/]mc:(\S+)/);
   assert.ok(dockerfile.includes(releaseCompose), 'el mc del toolbox no es la versión del sidecar');
 
   const localStorage = read(workspace, 'src/main/resources/parameters/local/storage.yaml');

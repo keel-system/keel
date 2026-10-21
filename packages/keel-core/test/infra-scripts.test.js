@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { infraFiles, concreteCmd } from '../src/lib/gen/infra-scripts.js';
-import { DATABASES } from '../src/lib/gen/infra-catalog.js';
+import { DATABASES, MC_IMAGE, MINIO_IMAGE, MC_RELEASE, MC_BINARY_URL } from '../src/lib/gen/infra-catalog.js';
 
 const PROBE = {
   generator: 'keel-probe',
@@ -78,4 +78,16 @@ test('el README del stub HTTP es de la plataforma y solo existe con integracione
 test('sin contenedores que levantar, infra/ no existe', () => {
   const model = { ...modelFor('postgresql'), layersPresent: {} };
   assert.deepEqual(infraFiles(model, PROBE), []);
+});
+
+// MinIO dejó de publicar imágenes en Docker Hub y en quay.io: las dos piezas salen del fork
+// `pgsty`, y el `mc` del toolbox y el del sidecar tienen que ser la MISMA release.
+test('el mc del toolbox y el del sidecar son la misma release del fork, y ninguno sale de minio', () => {
+  assert.ok(MC_IMAGE.startsWith('docker.io/pgsty/mc:'), MC_IMAGE);
+  assert.ok(MINIO_IMAGE.startsWith('docker.io/pgsty/minio:'), MINIO_IMAGE);
+  assert.ok(MC_IMAGE.endsWith(`:${MC_RELEASE}`));
+  const stamp = MC_RELEASE.replace(/^RELEASE\./, '').replace(/[^0-9]/g, '');
+  assert.match(stamp, /^\d{14}$/);
+  assert.ok(MC_BINARY_URL.includes(`/download/${MC_RELEASE}/mcli_${stamp}.0.0_linux_amd64.tar.gz`), MC_BINARY_URL);
+  assert.ok(!/quay[.]io|github[.]com[/]minio[/]/.test(`${MC_IMAGE} ${MINIO_IMAGE} ${MC_BINARY_URL}`));
 });

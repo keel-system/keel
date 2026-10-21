@@ -715,24 +715,39 @@ export const CACHES = {
 //   · Docker Hub deniega el pull anónimo de `minio/minio` y `minio/mc` **enteros**,
 //     no de estos tags: `latest` contesta el mismo 401. No es una máquina, es
 //     cualquier entorno sin credenciales.
+//   · quay.io, que fue el relevo, hace lo mismo desde 2026-10: 401 en cualquier tag
+//     de los dos repositorios, y `ghcr.io/minio` contesta 403. MinIO ya no publica
+//     imágenes en ningún registro anónimo.
 //
-// quay.io sirve los dos repositorios con los MISMOS tags, y las releases de GitHub
-// siguen publicando el binario estático. La VERSIÓN de `mc` es una sola constante:
-// el del toolbox y el del sidecar hablan con el mismo MinIO, y dos números que
-// tienen que coincidir escritos en dos sitios coinciden hasta que alguien toca uno.
+// Las dos piezas salen del fork comunitario `pgsty` (Pigsty), que sigue compilando
+// MinIO y `mc` con la misma licencia, el mismo binario y los mismos flags, y los
+// publica en Docker Hub con tags `RELEASE.*` fijables y en releases de GitHub. Se
+// descartó `cgr.dev/chainguard/minio`: su nivel gratuito solo sirve `latest`, y un
+// compose sin versión fijada cambia de servidor sin que nadie toque el generador.
+// El registro va EXPLÍCITO (`docker.io/…`): podman sin `unqualified-search-registries`
+// no resuelve un nombre corto.
+//
+// La VERSIÓN de `mc` es una sola constante: el del toolbox y el del sidecar hablan
+// con el mismo MinIO, y dos números que tienen que coincidir escritos en dos sitios
+// coinciden hasta que alguien toca uno.
 
-export const MC_RELEASE = 'RELEASE.2024-10-08T09-37-26Z';
-export const MC_IMAGE = `quay.io/minio/mc:${MC_RELEASE}`;
-export const MINIO_IMAGE = 'quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z';
+export const MC_RELEASE = 'RELEASE.2026-09-16T00-00-00Z';
+export const MC_IMAGE = `docker.io/pgsty/mc:${MC_RELEASE}`;
+export const MINIO_IMAGE = 'docker.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z';
+
+// `RELEASE.2026-09-16T00-00-00Z` → `20260916000000`: el fork nombra sus tarballs por
+// la fecha compacta de la release, no por la etiqueta.
+const MC_RELEASE_STAMP = MC_RELEASE.replace(/^RELEASE\./, '').replace(/[^0-9]/g, '');
 
 /**
- * El mismo `mc`, como binario para el toolbox alpine (no hay paquete apk).
+ * El mismo `mc`, como tarball para el toolbox alpine (no hay paquete apk). Dentro
+ * viene el binario con el nombre `mcli`; el Dockerfile lo instala como `mc`.
  *
  * Se descarga de la release en vez de copiarse de `MC_IMAGE` con un
  * `COPY --from=…` porque es la forma que ya usa `sqlcmd` en esa misma función y
  * porque no depende de adivinar en qué ruta guarda el binario una imagen ajena.
  */
-export const MC_BINARY_URL = `https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}`;
+export const MC_BINARY_URL = `https://github.com/pgsty/mc/releases/download/${MC_RELEASE}/mcli_${MC_RELEASE_STAMP}.0.0_linux_amd64.tar.gz`;
 
 // Sidecar que deja el MinIO de prueba con los buckets del diseño ya creados y
 // con su policy aplicada, antes de que arranque el servicio.
