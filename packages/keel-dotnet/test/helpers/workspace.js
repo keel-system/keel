@@ -233,6 +233,19 @@ export const CS_VARIANTS = [
     }))
   ),
   {
+    // Un servicio que PUBLICA sin suscribirse, sobre SNS/SQS y MySQL: la forma del catálogo del registry. Ninguna fixture
+    // la tenía, y la corrida catalog-dotnet-mysql-sns (2026-10-21) encontró un [Theory] sin filas que no compilaba y la
+    // marca del aparcado del outbox con una zona que MySQL rechaza.
+    name: 'catalog-extended-publish-snssqs',
+    from: 'catalog-extended',
+    broker: 'snssqs',
+    database: 'mysql',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+      layers.messaging.subscriptions = {};
+    }
+  },
+  {
     name: 'inspection-reports-reject',
     from: 'inspection-reports',
     mutate: (manifest, layers, name) => {

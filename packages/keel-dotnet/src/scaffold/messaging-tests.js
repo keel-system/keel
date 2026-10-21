@@ -241,12 +241,17 @@ function snsSqsRetryTests(model) {
       rows.push(`    [InlineData(${index}, ${received}, ${seconds})]`);
     }
   });
-  return `    [Theory]
+  // Un servicio que solo publica no tiene curva que comprobar: un [Theory] sin filas no compila (xUnit1003).
+  const curve =
+    rows.length === 0
+      ? ''
+      : `    [Theory]
 ${rows.join('\n')}
     public void LaVisibilidadTrasUnFalloSigueLaCurvaDelDiseño(int subscription, int received, int expected) =>
         Assert.Equal(expected, SnsSqsConsumption.RetryVisibilitySeconds(SnsSqsConsumption.Subscriptions[subscription], received));
 
-    [Fact]
+`;
+  return `${curve}    [Fact]
     public void ElContratoIncumplidoNoSeReintentaEnSqs()
     {
         Assert.False(SnsSqsConsumption.IsRetryable(new MessageContractViolation("x"), retriesNotFound: true));

@@ -245,3 +245,36 @@ test('con SNS/SQS: el consumo es el de keel-core (una cola por suscripción, su 
   const harness = content(generated.files, '.IntegrationTests/Support/Messaging.cs');
   assert.ok(harness.includes('init-messaging.sh'), 'el arnés resiembra la topología al levantar el broker');
 });
+
+test('con SNS/SQS y un servicio que solo PUBLICA: MessagingTests no lleva un [Theory] sin filas (xUnit1003 rompía el build)', () => {
+  // La corrida catalog-dotnet-mysql-sns (2026-10-21): el catálogo publica y no se suscribe a nada. Ninguna fixture tenía
+  // esa forma con SNS/SQS, así que la curva de visibilidad salía como [Theory] vacío y el proyecto no compilaba.
+  const publishing = design('catalog-extended');
+  const onlyPublishes = { ...publishing, layers: { ...publishing.layers, messaging: { ...publishing.layers.messaging, subscriptions: {} } } };
+  const generated = planService({ ...onlyPublishes, workspace: FIXTURES_DIR, stack: { broker: 'snssqs', database: 'mysql' } });
+  assert.equal(snsSqsConsumption(generated.model).length, 0, 'el diseño derivado no consume nada');
+  const tests = content(generated.files, 'tests/CatalogExtended.UnitTests/MessagingTests.cs') ?? content(generated.files, '/MessagingTests.cs');
+  assert.ok(tests, 'MessagingTests se emite');
+  assert.doesNotMatch(tests, /LaVisibilidadTrasUnFalloSigueLaCurvaDelDiseño/);
+  assert.doesNotMatch(tests, /\[Theory\]\s*\n\s*public/, 'ningún [Theory] sin InlineData');
+  assert.match(tests, /ElContratoIncumplidoNoSeReintentaEnSqs/);
+  // Con suscripciones, la curva sigue ahí.
+  const consuming = planService({ ...design('stock-reservation-events'), workspace: FIXTURES_DIR, stack: { broker: 'snssqs', database: 'mysql' } });
+  assert.match(content(consuming.files, '/MessagingTests.cs'), /\[InlineData\(0, 1, \d+\)\]\s*\n(?:\s*\[InlineData[^\n]*\n)*\s*public void LaVisibilidadTrasUnFalloSigueLaCurvaDelDiseño/);
+});
+
+test('con SNS/SQS y outbox relacional: la marca del aparcado no lleva zona y aparcar va dentro del try', () => {
+  // MySQL rechaza '…+00' en un DATETIME (ERROR 1292): la resiembra de la topología moría antes de init-messaging.sh y los
+  // flujos siguientes caían con NonExistentQueue. Y con ParkOutbox fuera del try, una segunda pasada fallida dejaba las
+  // filas de la primera aparcadas para siempre.
+  for (const database of ['mysql', 'postgresql']) {
+    const generated = planService({ ...design('stock-reservation-events'), workspace: FIXTURES_DIR, stack: { broker: 'snssqs', database } });
+    const harness = content(generated.files, '.IntegrationTests/Support/Messaging.cs');
+    assert.match(harness, /private const string Parked = "2999-01-01 00:00:00";/, database);
+    const connected = /public static async Task AwaitServerConnectedAsync\(\)\s*\{([\s\S]*?)\n    \}\n/.exec(harness)[1];
+    const tryAt = connected.indexOf('try');
+    assert.ok(tryAt >= 0 && tryAt < connected.indexOf('ParkOutbox();'), `${database}: ParkOutbox dentro del try`);
+    assert.ok(connected.indexOf('ParkOutbox();') < connected.indexOf('init-messaging.sh'), `${database}: se aparca antes de resembrar`);
+    assert.match(connected, /finally\s*\{\s*UnparkOutbox\(\);/, `${database}: el finally devuelve lo aparcado`);
+  }
+});

@@ -807,12 +807,13 @@ ${commonPlumbing(model, broker)}
     /// vuelve con su backoff cuando su intento falla (el topic aún no existe), y la segunda pasada la recoge.` : ''}
     /// </summary>
     public static async Task AwaitServerConnectedAsync()
-    {${outbox ? `
-        ParkOutbox();
-        await Task.Delay(TimeSpan.FromSeconds(4));
-        ParkOutbox();` : ''}
+    {
+        // Aparcar va DENTRO del try: si la segunda pasada falla, la primera ya dejó filas aparcadas que solo el finally devuelve.
         try
-        {
+        {${outbox ? `
+            ParkOutbox();
+            await Task.Delay(TimeSpan.FromSeconds(4));
+            ParkOutbox();` : ''}
             Harness.Run(Harness.BashExecutable(), ["infra/init-messaging.sh"], "La topología no quedó sembrada tras levantar el broker, así que el escenario siguiente fallará por «destino inexistente» y no por lo que prueba.");${probe && probeChannel ? `
             await AwaitTopologyWired();` : ''}
         }
@@ -948,8 +949,10 @@ function parkOutbox(model) {
         Harness.MongoEval(${csString(`db.getCollection("${collection}").updateMany({ next_attempt_at: ${parked} }, { $set: { next_attempt_at: null } }).modifiedCount`)});
 `;
   }
+  // Sin zona: MySQL rechaza el sufijo «+00» en un DATETIME (ERROR 1292), y PostgreSQL lee la misma marca en la zona de la
+  // sesión al aparcar y al devolver, así que la igualdad del UnparkOutbox se cumple en los dos.
   return `    /// <summary>La marca de las filas aparcadas: una fecha que ningún backoff alcanza.</summary>
-    private const string Parked = "2999-01-01 00:00:00+00";
+    private const string Parked = "2999-01-01 00:00:00";
 
     private static void ParkOutbox() =>
         Harness.Db($"UPDATE outbox_event SET next_attempt_at = '{Parked}' WHERE published_at IS NULL AND attempts < {MaxAttempts}");
