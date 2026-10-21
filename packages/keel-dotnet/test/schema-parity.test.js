@@ -73,3 +73,85 @@ test('product-catalog con el precio OPCIONAL: sus columnas aplanadas admiten nul
     assert.equal(dotnet.get('products').columns.get(column).nullable, true, `keel-dotnet: ${column}`);
   }
 });
+
+// ─── MySQL ───────────────────────────────────────────────────────────────────────────────────────
+//
+// El mismo esquema sobre el otro motor, generando los dos con `database: mysql`. Lo que cambia es la unicidad
+// condicionada: MySQL no tiene índices parciales, y los dos generadores la escriben como una columna GENERADA
+// `<índice>_flag` (1 dentro de la condición, NULL fuera) al final de un índice único. keel-spring la declara en
+// db/partial-indexes.sql, que su lector de anotaciones no ve: se lee aquí, y se compara la expresión de la columna y el
+// lugar de la columna en el índice.
+
+/** La unicidad condicionada que escribe keel-spring para MySQL: por índice, su columna generada y su expresión. */
+function springMysqlDiscriminators(files) {
+  const sql = files.find((file) => file.path.endsWith('db/partial-indexes.sql'))?.content ?? '';
+  const flags = new Map();
+  for (const match of sql.matchAll(/ADD COLUMN `(\w+)_flag` TINYINT GENERATED ALWAYS AS \((.*?)\) STORED'\)/g)) {
+    flags.set(match[1], { flag: `${match[1]}_flag`, expression: match[2].replaceAll("''", "'") });
+  }
+  for (const match of sql.matchAll(/CREATE UNIQUE INDEX (\w+) ON (\w+) \(([^)]*)\)'\)/g)) {
+    const columns = match[3].split(',').map((column) => column.trim().replaceAll('`', ''));
+    flags.set(match[1], { ...flags.get(match[1]), table: match[2], last: columns.at(-1) });
+  }
+  return flags;
+}
+
+/** La de keel-dotnet: la propiedad sombra con su HasComputedColumnSql y el índice que la lleva al final. */
+function dotnetMysqlDiscriminators(files) {
+  const flags = new Map();
+  for (const file of files.filter((candidate) => /\/Persistence\/Rows\/\w+\.cs$/.test(candidate.path))) {
+    for (const match of file.content.matchAll(/Property<sbyte\?>\("(\w+)_flag"\)[^\n]*HasComputedColumnSql\("((?:[^"\\]|\\.)*)", stored: true\)/g)) {
+      flags.set(match[1], { flag: `${match[1]}_flag`, expression: match[2] });
+    }
+    for (const match of file.content.matchAll(/row\.HasIndex\(\[([^\]]*)\], "(\w+)"\)\.IsUnique\(\)/g)) {
+      flags.set(match[2], { ...flags.get(match[2]), last: match[1].split(',').at(-1).trim().replaceAll('"', '') });
+    }
+  }
+  return flags;
+}
+
+for (const name of relational) {
+  test(`${name}: sobre MySQL, el esquema de keel-dotnet es el de keel-spring`, async () => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+    const springFiles = planSpring({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'mysql' } }).files;
+    const spring = springSchema(springFiles);
+    for (const [tableName, fks] of springCrossAggregateForeignKeys(springFiles)) for (const fk of fks) schemaTable(spring, tableName).names.add(fk);
+    const springFlags = springMysqlDiscriminators(springFiles);
+    for (const [index, { table }] of springFlags) schemaTable(spring, table).names.add(index);
+    const dotnetFiles = (await planFixture(name, { stack: { database: 'mysql' } })).files;
+    const dotnet = dotnetSchema(dotnetFiles);
+    assert.deepEqual([...dotnet.keys()].sort(), [...spring.keys()].sort(), 'las mismas tablas');
+    for (const [tableName, want] of spring) {
+      const got = dotnet.get(tableName);
+      assert.deepEqual([...got.names].sort(), [...want.names].sort(), `${tableName}: los mismos nombres de constraint, índice y FK`);
+      assert.deepEqual([...got.columns.keys()].sort(), [...want.columns.keys()].sort(), `${tableName}: las mismas columnas`);
+      // Ningún índice parcial: el motor no los tiene.
+      assert.deepEqual(Object.fromEntries(got.predicates), {}, `${tableName}: sin HasFilter en MySQL`);
+      for (const [column, spec] of want.columns) {
+        const have = got.columns.get(column);
+        if (spec.length != null) assert.equal(have.length, spec.length, `${tableName}.${column}: la cota declarada`);
+        if (spec.scale != null) assert.equal(have.scale, spec.scale, `${tableName}.${column}: la escala declarada`);
+        assert.equal(have.nullable, spec.nullable, `${tableName}.${column}: ${spec.nullable ? 'admite null' : 'NOT NULL'}`);
+      }
+    }
+    // La unicidad condicionada: la misma columna generada, con la MISMA expresión (la constante almacenada), y al final
+    // de su índice único.
+    const dotnetFlags = dotnetMysqlDiscriminators(dotnetFiles);
+    assert.deepEqual([...dotnetFlags.keys()].sort(), [...springFlags.keys()].sort(), 'los mismos índices condicionados');
+    for (const [index, want] of springFlags) {
+      const got = dotnetFlags.get(index);
+      assert.equal(got.expression, want.expression, `${index}: la expresión de ${want.flag}`);
+      assert.equal(got.last, want.flag, `${index}: ${want.flag} es la última columna del índice`);
+      assert.equal(want.last, want.flag, `${index}: (keel-spring) ${want.flag} es la última columna del índice`);
+    }
+  });
+}
+
+test('MySQL: hay al menos una fixture con unicidad condicionada, o la comparación de arriba no mide nada', async () => {
+  const counted = [];
+  for (const name of relational) {
+    const files = (await planFixture(name, { stack: { database: 'mysql' } })).files;
+    if (dotnetMysqlDiscriminators(files).size > 0) counted.push(name);
+  }
+  assert.ok(counted.length > 0);
+});

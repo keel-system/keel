@@ -36,7 +36,7 @@ Lo que no depende del lenguaje no lo reescribe cada generador: vive una vez en e
 | | keel-spring | keel-nest | keel-dotnet |
 |---|---|---|---|
 | Plataforma | Spring Boot 3.5 · Java 21 · Gradle | NestJS 12 · Fastify · Node 22 · TypeScript strict | .NET 10 · un proyecto por capa · xUnit v3 |
-| Relacional | PostgreSQL, MySQL, MariaDB, SQL Server, Oracle | PostgreSQL, MySQL | PostgreSQL (EF Core) |
+| Relacional | PostgreSQL, MySQL, MariaDB, SQL Server, Oracle | PostgreSQL, MySQL | PostgreSQL, MySQL (EF Core) |
 | Documental | MongoDB | MongoDB | MongoDB |
 | Brokers | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS |
 | Identidad | Keycloak · Cognito | Keycloak · Cognito | Keycloak · Cognito |
@@ -393,7 +393,7 @@ El workspace es **solo diseño**: todo el conocimiento de generación vive dentr
   motores, brokers, proveedores de identidad y buzones en contenedores (ver `CLAUDE.md § Comandos`).
   64 corridas registradas en [docs/corridas](docs/corridas/).
 - **Pendiente**: `keel-recover`, ingeniería inversa de un servicio existente a un diseño Keel
-  (`PLAN-KEEL-RECOVER.md`); MySQL, MariaDB, SQL Server y Oracle medidos en vivo en keel-nest y
+  (`PLAN-KEEL-RECOVER.md`); MariaDB, SQL Server y Oracle medidos en vivo en keel-nest y
   keel-dotnet; las pasarelas de pago contra su sandbox real; detección de drift entre spec y código
   generado.
 

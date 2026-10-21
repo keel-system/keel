@@ -6,7 +6,7 @@
 |---|---|---|
 | Plataforma | .NET 10 (LTS), C# 14; `global.json` fija la banda del SDK | un proyecto por capa: la frontera hexagonal la impone el compilador |
 | HTTP | ASP.NET Core con **APIs mínimas** y un solo mapa de rutas (`ApiRoutes`) | un único punto de lectura y escritura de JSON (`WireJson`), que es donde se cumple el contrato del cable |
-| Persistencia | **EF Core 10** + Npgsql (PostgreSQL), mapeo fluente con nombres explícitos | todo índice y constraint lleva el nombre que fija el diseño |
+| Persistencia | **EF Core 10** + Npgsql (PostgreSQL) o Microting.EntityFrameworkCore.MySql con MySqlConnector (MySQL), mapeo fluente con nombres explícitos | todo índice y constraint lleva el nombre que fija el diseño |
 | Migraciones | `dotnet ef` como herramienta local (`.config/dotnet-tools.json`) | el baseline sale del modelo, no se escribe a mano |
 | Pruebas | xUnit v3 (Microsoft.Testing.Platform en `dotnet test`; runner propio en los flujos) | sin licencias comerciales: ni FluentAssertions ni MediatR |
 | Paquetes | versión exacta en `Directory.Packages.props`, `packages.lock.json` por proyecto, NuGet Audit | una restauración no cambia nada por sorpresa |
@@ -76,7 +76,7 @@ los tres perfiles de despliegue**, nunca como literal en el código ni leyendo `
 | `production` | `${DB_URL}` obligatoria | las migraciones |
 | `test` | ninguna (`database.enabled: false`) | — |
 
-La URL de la base admite la JDBC de keel-spring tal cual (`jdbc:postgresql://host:puerto/base`): el mismo `.env`
+La URL de la base admite la JDBC de keel-spring tal cual (`jdbc:postgresql://host:puerto/base`, o `jdbc:mysql://…`): el mismo `.env`
 sirve para los tres servidores del diseño.
 
 ## Qué genera build y qué completa el agente

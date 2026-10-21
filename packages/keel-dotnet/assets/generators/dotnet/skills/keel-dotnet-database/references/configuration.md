@@ -15,9 +15,11 @@
 El perfil `test` no tiene base (`database.enabled: false`): las pruebas de `tests/<Raíz>.UnitTests` arrancan sin
 infraestructura, y un repositorio usado ahí falla diciéndolo.
 
-`DB_URL` admite la URL JDBC de keel-spring tal cual (`jdbc:postgresql://host:5432/base`): el mismo `.env` sirve
-para los tres servidores del diseño. La traduce `DatabaseSettings` a la cadena de conexión de Npgsql; los
-parámetros de la URL no se trasladan, los que importan tienen su clave.
+`DB_URL` admite la URL JDBC de keel-spring tal cual (`jdbc:postgresql://host:5432/base` o
+`jdbc:mysql://host:3306/base`): el mismo `.env` sirve para los tres servidores del diseño. La traduce
+`DatabaseSettings` a la cadena de conexión del driver (Npgsql o MySqlConnector); los parámetros de la URL no se
+trasladan, los que importan tienen su clave. En MySQL el tope de transacción es la espera de bloqueo
+(`innodb_lock_wait_timeout`) y el de cada lectura (`max_execution_time`): no hay tope por sentencia para las escrituras.
 
 Un parámetro nuevo va en los **tres** perfiles de despliegue, con su gradiente, y su clave se lee de la
 `ServiceConfiguration` inyectada.

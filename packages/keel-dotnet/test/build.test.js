@@ -59,15 +59,15 @@ test('un diseño no listo NO se genera sin --accept-unready, y no se escribe nad
 });
 
 test('lo que está fuera de la frontera (aquí, un motor que ninguna red ha medido) se rechaza nombrando keel-dotnet, antes de escribir nada', async () => {
-  // Desde el 13j ninguna fixture queda fuera de la frontera: lo que sigue fuera es del STACK (MySQL, la telemetría).
+  // Desde el 13j ninguna fixture queda fuera de la frontera: lo que sigue fuera es del STACK (MariaDB y los demás motores sin medir).
   const workspace = makeWorkspace();
   mountDesign(workspace, DOTNET_READY_DESIGN.name, DOTNET_READY_DESIGN);
   const project = projectOf(workspace);
   fs.mkdirSync(project, { recursive: true });
-  fs.writeFileSync(path.join(project, 'keel-stack.json'), JSON.stringify({ database: 'mysql', telemetry: 'none' }));
+  fs.writeFileSync(path.join(project, 'keel-stack.json'), JSON.stringify({ database: 'mariadb', telemetry: 'none' }));
   const { exitCode, output } = await runCommand(workspace, build, SPEC, { defaults: true, acceptUnready: true });
   assert.equal(exitCode, 1);
-  assert.match(output, /database: mysql — keel-dotnet genera la persistencia sobre postgresql, mongodb/);
+  assert.match(output, /database: mariadb — keel-dotnet genera la persistencia sobre postgresql, mysql, mongodb/);
   assert.deepEqual(fs.readdirSync(project), ['keel-stack.json']);
 });
 

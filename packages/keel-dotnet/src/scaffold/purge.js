@@ -23,6 +23,7 @@ import { usesDotnetOutbox, usesProcessedEvents } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { reconciliationPurge } from './reconciliation-claim.js';
 import { RECONCILIATION_CLAIM } from 'keel-core/gen/reconciliation-stores';
+import { valueAlias } from './relational-engine.js';
 
 export function purgeNamespace(model) {
   return namespaceOf(model, 'purge');
@@ -335,7 +336,7 @@ function tablePurgesBody(model, purges) {
             schedule.MaxBatches,
             cutoff,
             position => Read(db => db.Database
-                .SqlQuery<DateTimeOffset>($"SELECT ${purge.column} AS \\"Value\\" FROM ${purge.table} WHERE ${where} ORDER BY ${purge.column} OFFSET {position} LIMIT 1")
+                .SqlQuery<DateTimeOffset>($"SELECT ${purge.column} ${valueAlias(model)} FROM ${purge.table} WHERE ${where} ORDER BY ${purge.column} LIMIT 1 OFFSET {position}")
                 .ToListAsync(cancellationToken), cancellationToken),
             upTo => Delete(db => db.Database
                 .ExecuteSqlAsync($"DELETE FROM ${purge.table} WHERE ${where} AND ${purge.column} <= {upTo.ToUniversalTime()}", cancellationToken), cancellationToken),

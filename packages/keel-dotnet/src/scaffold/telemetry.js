@@ -24,6 +24,7 @@ import { csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { usesCorrelation } from './rest-support.js';
 import { usesRelational } from './persistence.js';
+import { poolMeter } from './relational-engine.js';
 
 /**
  * Las series del RUNTIME de .NET, que consultan la fila de runtime del panel y su alerta de heap (incremento 14d). Las
@@ -34,8 +35,8 @@ import { usesRelational } from './persistence.js';
  *     contenedor), no contra el tamaño actual del heap, que el GC hace crecer a demanda;
  *   · el tiempo total en pausas de GC, como contador (el panel mira su ritmo);
  *   · la cola del thread pool: el síntoma propio de .NET, el de un código que bloquea hilos (`.Result`, `.Wait()`);
- *   · el pool de Npgsql, leído de su Meter (`db.client.connection.*`): Npgsql no tiene otra API de estadísticas. Con los
- *     mismos nombres que el de keel-nest.
+ *   · el pool del driver (Npgsql o MySqlConnector), leído de su Meter: ninguno de los dos tiene otra API de estadísticas.
+ *     Con los mismos nombres de serie que el de keel-nest.
  */
 export const DOTNET_RUNTIME = {
   heapUsed: 'keel_runtime_heap_used_bytes',
@@ -200,20 +201,20 @@ ${constants(ATTRIBUTES)}
 // ─── KeelTelemetry ───────────────────────────────────────────────────────────────────────────────
 
 /**
- * El pool de Npgsql: lo que publica su Meter (`db.client.connection.count` por estado y `.max`, observables, y
- * `db.client.connection.npgsql.pending_requests`, un UpDownCounter propio de Npgsql: medidos con un MeterListener sobre
- * Npgsql 10.0.3 el 2026-10-18; sin el prefijo npgsql, la serie de saturación saldría siempre a 0 y su alerta no dispararía),
- * escuchado con un MeterListener y volcado en las series del panel en cada scrape. Un instrumento observable da su valor;
- * uno que no lo es da incrementos, y se acumulan.
+ * El pool del driver: lo que publica su Meter (los instrumentos de POOL_METERS, en relational-engine.js: en Npgsql
+ * `db.client.connection.count` por estado y `.max`, observables, y `db.client.connection.npgsql.pending_requests`; en
+ * MySqlConnector `db.client.connections.usage` por estado, `.max` y `.pending_requests`; sin el nombre exacto, la serie de
+ * saturación saldría siempre a 0 y su alerta no dispararía), escuchado con un MeterListener y volcado en las series del
+ * panel en cada scrape. Un instrumento observable da su valor; uno que no lo es da incrementos, y se acumulan.
  */
-const POOL_MEMBERS = `
+const poolMembers = (meter) => `
     private readonly ConcurrentDictionary<string, double> pool = new(StringComparer.Ordinal);
 
     private MeterListener? poolListener;
 
     /// <summary>
-    /// El pool de conexiones de Npgsql: en uso, libres, máximo y peticiones ESPERANDO una conexión (la serie de la alerta
-    /// de saturación). Npgsql no tiene otra API de estadísticas que su Meter.
+    /// El pool de conexiones de ${meter.meter}: en uso, libres, máximo y peticiones ESPERANDO una conexión (la serie de la
+    /// alerta de saturación). ${meter.meter} no tiene otra API de estadísticas que su Meter.
     /// </summary>
     private void RegisterConnectionPool()
     {
@@ -221,7 +222,7 @@ const POOL_MEMBERS = `
         {
             InstrumentPublished = (instrument, subscription) =>
             {
-                if (instrument.Meter.Name == "Npgsql" && instrument.Name.StartsWith("db.client.connection.", StringComparison.Ordinal))
+                if (instrument.Meter.Name == "${meter.meter}" && instrument.Name.StartsWith("${meter.prefix}", StringComparison.Ordinal))
                 {
                     subscription.EnableMeasurementEvents(instrument);
                 }
@@ -244,10 +245,10 @@ const POOL_MEMBERS = `
                 pool[key] = 0;
             }
             poolListener?.RecordObservableInstruments();
-            active.Set(PoolValue("db.client.connection.count", "used"));
-            idle.Set(PoolValue("db.client.connection.count", "idle"));
-            max.Set(PoolValue("db.client.connection.max", null));
-            pending.Set(PoolValue("db.client.connection.npgsql.pending_requests", null));
+            active.Set(PoolValue("${meter.count}", "used"));
+            idle.Set(PoolValue("${meter.count}", "idle"));
+            max.Set(PoolValue("${meter.max}", null));
+            pending.Set(PoolValue("${meter.pending}", null));
         });
     }
 
@@ -256,7 +257,7 @@ const POOL_MEMBERS = `
         string? state = null;
         foreach (var tag in tags)
         {
-            if (tag.Key is "db.client.connection.state" or "state")
+            if (tag.Key is "${meter.stateTag}")
             {
                 state = tag.Value as string;
             }
@@ -600,7 +601,7 @@ public sealed class KeelTelemetry
             queue.Set(ThreadPool.PendingWorkItemCount);
         });
     }
-${pool ? POOL_MEMBERS : ''}
+${pool ? poolMembers(poolMeter(model)) : ''}
     /// <summary>El contexto que continúa la traza de un <c>traceparent</c> recibido (la envoltura de un evento); sin él, ninguno.</summary>
     public static ActivityContext? ContextFrom(string? traceparent) =>
         traceparent is not null && ActivityContext.TryParse(traceparent, null, isRemote: true, out var context) ? context : null;

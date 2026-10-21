@@ -36,11 +36,11 @@ test('el comprobador detecta C# roto (autocomprobación)', async () => {
 });
 
 const designs = [...fixtureNames().map((name) => ({ name, from: name })), ...CS_VARIANTS];
-for (const { name, from, mutate, broker, paymentGateway, telemetry } of designs) {
+for (const { name, from, mutate, broker, paymentGateway, telemetry, database } of designs) {
   test(`${name}: el C# emitido parsea y sus using del servicio llevan a un namespace emitido`, async () => {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     if (mutate) mutate(manifest, layers, name);
-    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: variantStack(layers, { broker, paymentGateway, telemetry }) });
+    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: variantStack(layers, { broker, paymentGateway, telemetry, database }) });
     assert.ok(files.some((file) => file.path.endsWith('.cs')), 'emite C#');
     assert.deepEqual(await checkCsTree(files), []);
   });

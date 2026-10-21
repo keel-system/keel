@@ -115,3 +115,16 @@ test('el arnés fabrica la precondición del rescate con las mismas sentencias q
   // Sin rescate en el diseño, no hay helpers del rescate.
   assert.doesNotMatch(content(plan('payout-runs').files, 'Support/FlowTest.cs'), /StallInFlight/);
 });
+
+test('MySQL: el reclamo y la purga con el alias entre acentos graves, el reclamo en READ COMMITTED y la purga con LIMIT antes de OFFSET', () => {
+  const { files } = planService({ ...design('job-dispatch'), workspace: FIXTURES_DIR, stack: { database: 'mysql' } });
+  const adapter = content(files, 'Repositories/JobRepository.cs');
+  assert.match(adapter, /SELECT id AS `Value` FROM jobs WHERE status IN \('QUEUED'\) ORDER BY [a-z_]+ LIMIT \{batch\} FOR UPDATE SKIP LOCKED/);
+  assert.doesNotMatch(adapter, /AS \\"Value\\"/);
+  assert.match(adapter, /cancellationToken,\s*PersistenceTransactions\.ClaimIsolation\);/);
+  const purges = content(files, 'Purge/TablePurges.cs');
+  if (purges) {
+    // MySQL no admite OFFSET antes de LIMIT; PostgreSQL admite los dos órdenes, así que va el mismo en los dos.
+    assert.match(purges, /AS `Value` FROM \w+ WHERE [^"]* LIMIT 1 OFFSET \{position\}/);
+  }
+});

@@ -1,5 +1,6 @@
 // El RECLAMO de un barrido (incremento 10c): llevarse un lote de filas pendientes de forma que dos réplicas nunca se
-// lleven la misma. Es el mismo mecanismo que generan keel-spring y keel-nest, sobre EF Core y PostgreSQL.
+// lleven la misma. Es el mismo mecanismo que generan keel-spring y keel-nest, sobre EF Core y PostgreSQL o MySQL (en
+// MySQL la transacción del reclamo va en READ COMMITTED: ver relational-engine.js).
 //
 // Por qué lo genera build y no el agente: el reloj dispara el barrido en TODAS las réplicas, y el camino de menor
 // resistencia para quien escribe el handler a mano —leer el lote con un finder por estado y marcarlo después— sale
@@ -25,6 +26,7 @@ import { csFile, csMember, csString, located, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
 import { usesPersistence } from './persistence.js';
 import { parametersClass, parametersNamespace } from './service-parameters.js';
+import { valueAlias } from './relational-engine.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -215,7 +217,7 @@ ${setup.join('\n')}
                 // Los candidatos, del más antiguo al más nuevo. SKIP LOCKED: cada réplica recibe candidatos DISTINTOS en vez
                 // de pelearse por la misma página; el bloqueo dura lo que esta transacción, que termina al reclamar.
                 var candidates = await db.Database
-                    .SqlQuery<${idType}>($"SELECT ${idColumn} AS \\"Value\\" FROM ${table} WHERE ${where} ORDER BY ${order} LIMIT {batch} FOR UPDATE SKIP LOCKED")
+                    .SqlQuery<${idType}>($"SELECT ${idColumn} ${valueAlias(model)} FROM ${table} WHERE ${where} ORDER BY ${order} LIMIT {batch} FOR UPDATE SKIP LOCKED")
                     .ToListAsync(cancellationToken);
                 var claimed = new List<${entity.name}>();
                 foreach (var id in candidates)
@@ -237,7 +239,8 @@ ${setup.join('\n')}
                 return claimed;
             },
             readOnly: false,
-            cancellationToken);
+            cancellationToken,
+            PersistenceTransactions.ClaimIsolation);
     }`;
   });
   methods.push(`    /// <summary>

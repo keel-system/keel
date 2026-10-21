@@ -36,6 +36,7 @@ import { trafficPath } from 'keel-core/gen/deploy-probes';
 import { planService } from '../src/scaffold/index.js';
 import { solution } from '../src/scaffold/render.js';
 import { DOTNET_RUNTIME } from '../src/scaffold/telemetry.js';
+import { poolMeter } from '../src/scaffold/relational-engine.js';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { freePort, resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
@@ -47,7 +48,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // [archivo relativo al proyecto, texto que se sustituye, sustituto]. Si el texto ya no está, el check sale sin veredicto.
 const SABOTAGES = {
-  'pool-name': (sln) => [`${sln.infrastructure.dir}/Telemetry/KeelTelemetry.cs`, 'PoolValue("db.client.connection.max", null)', 'PoolValue("db.client.connection.maximum", null)'],
+  // El máximo del pool de cada driver (POOL_METERS), con un nombre que su Meter no publica.
+  'pool-name': (sln, model) => [`${sln.infrastructure.dir}/Telemetry/KeelTelemetry.cs`, `PoolValue("${poolMeter(model).max}", null)`, `PoolValue("${poolMeter(model).max}imum", null)`],
   management: (sln) => [`${sln.infrastructure.dir}/Telemetry/TelemetryRegistration.cs`, 'scrape.RequireHost(', '_ = ('],
   'server-parent': (sln) => [`${sln.infrastructure.dir}/Telemetry/KeelTelemetry.cs`, 'var span = Begin(method + " " + path, ActivityKind.Server, parent);', 'var span = Begin(method + " " + path, ActivityKind.Server, null);']
 };
@@ -63,7 +65,7 @@ const CASES = {
   'TEL-4': 'el correlationId no es etiqueta de métrica',
   'TEL-5': 'http_server_requests lleva la plantilla de la ruta, no la URL con sus valores',
   'TEL-6': 'el runtime de .NET: heap usado, su límite, el tiempo en GC y la cola del thread pool',
-  'TEL-7': 'el pool de Npgsql real, con el tamaño configurado',
+  'TEL-7': 'el pool del driver real (Npgsql o MySqlConnector), con el tamaño configurado',
   'TEL-8': 'la traza llega al colector y continúa la de quien llamó',
   'TEL-9': 'los logs de consola (ECS) llevan el trace.id y el correlationId de la petición',
   'TEL-10': 'production: el scrape vive en el puerto de gestión y no en el principal; las sondas, en el principal',
@@ -95,10 +97,10 @@ async function get(url, headers = {}) {
  * Escribe el proyecto de una fixture, aplica el sabotaje, lo compila y crea su baseline con `dotnet ef`, como el pase
  * de calidad: sin él, develop no arranca (EF se niega a migrar un modelo con cambios pendientes).
  */
-function materialize(root, name, stack) {
+function materialize(root, name, stack, dirName = name) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
   const { files, model } = planService({ manifest, layers, workspace: root, stack });
-  const dir = path.join(root, name);
+  const dir = path.join(root, dirName);
   for (const file of files) {
     const out = path.join(dir, file.path);
     fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -106,7 +108,7 @@ function materialize(root, name, stack) {
   }
   const sln = solution(model);
   if (sabotage) {
-    const [file, from, to] = SABOTAGES[sabotage](sln);
+    const [file, from, to] = SABOTAGES[sabotage](sln, model);
     const target = path.join(dir, file);
     const text = fs.readFileSync(target, 'utf8');
     if (!text.includes(from)) throw new Error(`el sabotaje '${sabotage}' no se aplica a lo emitido hoy (${file})`);
@@ -255,6 +257,8 @@ try {
   process.stdout.write('compilando job-dispatch y profile-directory con telemetría… ');
   const project = materialize(root, 'job-dispatch', { database: 'postgresql', telemetry: 'otel' });
   const secured = materialize(root, 'profile-directory', { database: 'postgresql', telemetry: 'otel', auth: 'keycloak' });
+  // El mismo servicio sobre MySQL: el pool es otro driver (MySqlConnector), con otros nombres en su Meter.
+  const onMysql = materialize(root, 'job-dispatch', { database: 'mysql', telemetry: 'otel' }, 'job-dispatch-mysql');
   console.log('OK');
 
   const postgres = await startDatabase(runtime, 'postgresql');
@@ -278,6 +282,28 @@ try {
     await developCases('job-dispatch@postgresql', app, project.model, receiver, trace, correlationId, poolMax);
   } finally {
     await app.stop();
+  }
+
+  const mysql = await startDatabase(runtime, 'mysql');
+  databases.push(mysql);
+  const mysqlApp = await startApp(onMysql, {
+    PROFILE: 'develop',
+    DB_URL: mysql.url,
+    DB_USERNAME: mysql.user,
+    DB_PASSWORD: mysql.password,
+    DB_POOL_MAX_SIZE: String(poolMax),
+    OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint,
+    TELEMETRY_EXPORT_ENABLED: 'true'
+  });
+  try {
+    const trace = caller();
+    const correlationId = `tel-check-${randomBytes(4).toString('hex')}`;
+    for (let i = 0; i < 3; i++) {
+      await get(`${mysqlApp.base}${trafficPath(onMysql.model)}`, { traceparent: trace.traceparent, 'x-correlation-id': correlationId });
+    }
+    await developCases('job-dispatch@mysql', mysqlApp, onMysql.model, receiver, trace, correlationId, poolMax);
+  } finally {
+    await mysqlApp.stop();
   }
 
   // production: el scrape solo en el puerto de gestión.
@@ -315,7 +341,8 @@ try {
   if (keep) console.log(`  (--keep) proyectos en ${root}`);
 }
 
-const expected = 11;
+// Los nueve casos de develop en cada motor, production y la seguridad.
+const expected = 20;
 const failed = results.filter((result) => !result.ok).length;
 if (fatal) {
   console.error(`\nsin veredicto: ${fatal}`);

@@ -11,7 +11,7 @@
 // una línea del agente. El tráfico va a un GET del diseño: el handler recién generado lanza su TODO (500), y da igual,
 // la observación se cierra con desenlace `error`, que es lo que se mide.
 //
-//   node packages/keel-dotnet/scripts/deploy-check.js [fixture] [--keep]
+//   node packages/keel-dotnet/scripts/deploy-check.js [fixture] [--keep] [--database=mysql]
 //   npm run deploy-check --workspace packages/keel-dotnet
 //
 // Códigos de salida: 0 todo OK · 1 hay casos rojos · 2 el arnés no pudo correr (sin veredicto). Necesita el SDK de .NET
@@ -34,6 +34,8 @@ import { FIXTURES_DIR, makeWorkspace, mountDesign, runCommand } from '../test/he
 const args = process.argv.slice(2);
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'job-dispatch';
 const keep = args.includes('--keep');
+// El motor relacional del sujeto (sin él, el del modelo de persistencia: PostgreSQL).
+const database = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? null;
 
 function run(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options });
@@ -80,6 +82,12 @@ let projectDir = null;
 try {
   const workspace = makeWorkspace('kd-deploy-');
   mountDesign(workspace, fixture);
+  if (database) {
+    // El motor, en el keel-stack.json del proyecto: build lo lee antes de preguntar.
+    const target = path.join(workspace, 'services', `${fixture}-dotnet`);
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'keel-stack.json'), JSON.stringify({ database }));
+  }
   const generated = await runCommand(workspace, build, `specs/${fixture}`, { defaults: true, acceptUnready: true, telemetry: 'otel' });
   projectDir = path.join(workspace, 'services', `${fixture}-dotnet`);
   if (generated.exitCode !== undefined || !fs.existsSync(projectDir)) throw new Error(`build no generó el proyecto:\n${generated.output}`);
@@ -92,7 +100,7 @@ try {
   const { model } = planService({ manifest, layers, workspace, stack: JSON.parse(fs.readFileSync(path.join(projectDir, 'keel-stack.json'), 'utf8')) });
   console.log(`sujeto: ${fixture} (${model.stack.database ?? 'sin persistencia'}) con telemetría`);
 
-  if (model.stack.database === 'postgresql') {
+  if (['postgresql', 'mysql'].includes(model.stack.database)) {
     process.stdout.write('dotnet ef: el baseline del esquema (sin él, la app no arranca en develop)… ');
     const env = { ...process.env, DOTNET_NOLOGO: '1', DOTNET_CLI_TELEMETRY_OPTOUT: '1' };
     for (const step of [['restore'], ['tool', 'restore'], ['ef', 'migrations', 'add', 'Baseline', '--project', solution(model).infrastructure.dir]]) {

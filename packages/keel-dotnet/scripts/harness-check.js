@@ -8,8 +8,10 @@
 // vacía los datos y RESPETA el historial de migraciones, que xUnit escribe el XML que `score-scenarios.sh` sabe
 // leer, y que cada desenlace sale con su código y su evidencia.
 //
-//   node packages/keel-dotnet/scripts/harness-check.js [--keep] [--sabotage=statement-count]
+//   node packages/keel-dotnet/scripts/harness-check.js [--keep] [--sabotage=statement-count] [--database=mysql]
 //   npm run harness-check --workspace packages/keel-dotnet
+//
+// --database=mysql genera el proyecto sobre MySQL: la misma cadena con su CLI, su reset y sus literales (UUID_TO_BIN).
 //
 // --sabotage=statement-count quita el interceptor que cuenta las sentencias (statement-count.js) CONSERVANDO la ruta
 // que las sirve: la sonda del coste (FL-PROBE-001-E) tiene que salir en rojo, y solo ella. Medido el 2026-10-19: 3 pasos
@@ -74,10 +76,16 @@ function dotnet(projectDir, args) {
   return { ok: result.status === 0, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
 }
 
+const engine = process.argv.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? 'postgresql';
 const workspace = makeWorkspace('keel-dotnet-harness-');
 mountDesign(workspace, DOTNET_READY_DESIGN.name, DOTNET_READY_DESIGN);
-const generated = await runCommand(workspace, build, `specs/${DOTNET_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
 const projectDir = path.join(workspace, 'services', `${DOTNET_READY_DESIGN.name}-dotnet`);
+if (engine !== 'postgresql') {
+  // El motor, en el keel-stack.json del proyecto: build lo lee antes de preguntar.
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'keel-stack.json'), JSON.stringify({ database: engine }));
+}
+const generated = await runCommand(workspace, build, `specs/${DOTNET_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
 if (!step('build genera el proyecto', generated.exitCode === undefined && fs.existsSync(projectDir), generated.exitCode ? generated.output : '')) {
   process.exit(1);
 }
@@ -384,7 +392,7 @@ public sealed class ProbeOrderFlow : FlowTest
   const modelSql = path.join(projectDir, 'build', 'schema', 'model.sql');
   step(
     'export-schema.sh escribe el DDL del modelo sin tocar ninguna base',
-    exported.status === 0 && fs.existsSync(modelSql) && /CREATE TABLE products/i.test(fs.readFileSync(modelSql, 'utf8')),
+    exported.status === 0 && fs.existsSync(modelSql) && /CREATE TABLE [`"]?products[`"]? /i.test(fs.readFileSync(modelSql, 'utf8')),
     exported.status === 0 ? '' : exported.output.slice(-1200)
   );
   const empty = bash(projectDir, 'infra/verify-baseline.sh');

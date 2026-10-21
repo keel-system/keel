@@ -13,6 +13,12 @@
 // Lo propio de .NET sobre PostgreSQL: la marca se pone con UNA sentencia (`INSERT … ON CONFLICT DO UPDATE … WHERE
 // claimed_at <= caducidad`), no con el UPDATE y el INSERT de keel-nest capturando la violación de clave: en PostgreSQL un
 // error aborta la transacción entera, y el reclamo de cada candidato va dentro de la de la tanda.
+//
+// Sobre MySQL no hay sentencia equivalente que diga quién ganó: `ON DUPLICATE KEY UPDATE` cuenta 1, 2 o 0 filas según lo
+// que hizo, y el proveedor cuenta las filas ENCONTRADAS (UseAffectedRows=false, lo que el bloqueo optimista de EF
+// necesita). Así que va el par de keel-nest: el UPDATE condicional sobre la marca caducada y, si no casó, `INSERT IGNORE`,
+// donde la clave primaria deja una sola réplica (la otra espera su commit y no inserta nada). Un error no aborta la
+// transacción en MySQL, y no hay error que capturar.
 
 import { RECONCILIATION_CLAIM, RECONCILIATION_PURGE, reconciledActivations, reconciliationClaims, reconciliationParameters, reconciliationYaml } from 'keel-core/gen/reconciliation-stores';
 import { screamingSnake, snakeCase } from 'keel-core/gen';
@@ -21,6 +27,7 @@ import { configNamespace } from './config.js';
 import { dbContextClass, usesPersistence, usesDocument } from './persistence.js';
 import { documentReconciliationStoreBody } from './document-stores.js';
 import { rowFile } from './messaging-stores.js';
+import { usesMySql, valueAlias } from './relational-engine.js';
 
 export const RECONCILIATION_ROW = 'ReconciliationClaimRow';
 const STORE = 'ReconciliationClaimStore';
@@ -146,6 +153,40 @@ ${entries.join('\n')}
 
 // ─── La tienda del reclamo ───────────────────────────────────────────────────────────────────────
 
+/** Cómo dice cada motor quién se lleva la marca. */
+function claimStatement(model, table) {
+  if (usesMySql(model)) {
+    return `        // La marca caducada se renueva (1 = encontrada y mía)…
+        var renewed = await db.Database.ExecuteSqlAsync(
+            $"UPDATE ${table} SET claimed_at = {claimedAt} WHERE activation = {activation} AND entity_id = {entityId} AND claimed_at <= {expired}",
+            cancellationToken);
+        if (renewed == 1)
+        {
+            return true;
+        }
+        // …y sin marca, la inserción es el reclamo: si otra réplica la tiene (viva o recién puesta), no inserta nada.
+        var inserted = await db.Database.ExecuteSqlAsync(
+            $"INSERT IGNORE INTO ${table} (activation, entity_id, claimed_at) VALUES ({activation}, {entityId}, {claimedAt})",
+            cancellationToken);
+        return inserted == 1;`;
+  }
+  return `        var won = await db.Database.ExecuteSqlAsync(
+            $"INSERT INTO ${table} (activation, entity_id, claimed_at) VALUES ({activation}, {entityId}, {claimedAt}) ON CONFLICT (activation, entity_id) DO UPDATE SET claimed_at = EXCLUDED.claimed_at WHERE ${table}.claimed_at <= {expired}",
+            cancellationToken);
+        return won == 1;`;
+}
+
+function claimRemarks(model) {
+  if (usesMySql(model)) {
+    return `/// Dos sentencias: el UPDATE de la marca caducada y, si no casó, INSERT IGNORE. ON DUPLICATE KEY UPDATE no diría quién
+/// ganó (cuenta filas encontradas, no cambiadas). La clave primaria deja una sola réplica: la otra espera su commit y
+/// no inserta nada.`;
+  }
+  return `/// UNA sentencia: INSERT … ON CONFLICT DO UPDATE … WHERE. Una fila afectada = la marca es mía; cero = otra réplica la tiene
+/// viva. No se captura una violación de clave para decidirlo, como en keel-nest: en PostgreSQL un error aborta la
+/// transacción entera, y este reclamo va dentro de la de su tanda.`;
+}
+
 function storeBody(model) {
   const table = RECONCILIATION_CLAIM.table;
   return `/// <summary>
@@ -154,9 +195,7 @@ function storeBody(model) {
 /// (claimed_at &lt;= la caducidad). Y si dos réplicas van a la vez a por el mismo candidato, la clave primaria deja una sola.
 /// </summary>
 /// <remarks>
-/// UNA sentencia: INSERT … ON CONFLICT DO UPDATE … WHERE. Una fila afectada = la marca es mía; cero = otra réplica la tiene
-/// viva. No se captura una violación de clave para decidirlo, como en keel-nest: en PostgreSQL un error aborta la
-/// transacción entera, y este reclamo va dentro de la de su tanda. Usa el DbContext del ámbito: corre en la transacción
+${claimRemarks(model)} Usa el DbContext del ámbito: corre en la transacción
 /// que haya abierta, y la marca existe para las demás réplicas cuando esa transacción confirma — ANTES de llamar al
 /// proveedor.
 /// </remarks>
@@ -171,10 +210,7 @@ public sealed class ${STORE}(${dbContextClass(model)} db)
     {
         var claimedAt = now.ToUniversalTime();
         var expired = expiredBefore.ToUniversalTime();
-        var won = await db.Database.ExecuteSqlAsync(
-            $"INSERT INTO ${table} (activation, entity_id, claimed_at) VALUES ({activation}, {entityId}, {claimedAt}) ON CONFLICT (activation, entity_id) DO UPDATE SET claimed_at = EXCLUDED.claimed_at WHERE ${table}.claimed_at <= {expired}",
-            cancellationToken);
-        return won == 1;
+${claimStatement(model, table)}
     }
 }`;
 }
@@ -252,7 +288,7 @@ export function adapterReconciliationMethods(model, entity, { ownTransactionHelp
                 // candidatos: sin excluirlos, la cabeza de la cola —reclamada y aún sin resolver— ocuparía el lote de cada
                 // pasada hasta caducar, y los que esperan detrás no se reconciliarían nunca antes.
                 var candidates = await db.Database
-                    .SqlQuery<${idType}>($"SELECT e.${idColumn} AS \\"Value\\" FROM ${table} e WHERE e.${stateColumn} IN (${states}) AND e.${awaiting} < {unansweredBefore} AND NOT EXISTS (SELECT 1 FROM ${RECONCILIATION_CLAIM.table} c WHERE c.activation = ${"'"}${claim.activation}${"'"} AND c.entity_id = e.${idColumn} AND c.claimed_at > {claimExpiredBefore}) ORDER BY e.${awaiting} LIMIT {window.BatchSize} FOR UPDATE OF e SKIP LOCKED")
+                    .SqlQuery<${idType}>($"SELECT e.${idColumn} ${valueAlias(model)} FROM ${table} e WHERE e.${stateColumn} IN (${states}) AND e.${awaiting} < {unansweredBefore} AND NOT EXISTS (SELECT 1 FROM ${RECONCILIATION_CLAIM.table} c WHERE c.activation = ${"'"}${claim.activation}${"'"} AND c.entity_id = e.${idColumn} AND c.claimed_at > {claimExpiredBefore}) ORDER BY e.${awaiting} LIMIT {window.BatchSize} FOR UPDATE OF e SKIP LOCKED")
                     .ToListAsync(cancellationToken);
                 var claimed = new List<${entity.name}>();
                 foreach (var id in candidates)
@@ -271,7 +307,8 @@ export function adapterReconciliationMethods(model, entity, { ownTransactionHelp
                 return claimed;
             },
             readOnly: false,
-            cancellationToken);
+            cancellationToken,
+            PersistenceTransactions.ClaimIsolation);
     }`;
   });
   if (ownTransactionHelper) {

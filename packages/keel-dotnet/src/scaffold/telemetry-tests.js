@@ -8,6 +8,7 @@ import { loggingNamespace } from './logging.js';
 import { messagingNamespace, usesMessaging } from './messaging.js';
 import { DOTNET_RUNTIME, telemetryNamespace, usesTelemetry } from './telemetry.js';
 import { usesRelational } from './persistence.js';
+import { poolMeter } from './relational-engine.js';
 import { DOTNET_OBSERVABILITY } from './observability-assets.js';
 import { observabilityAssets } from 'keel-core/gen/observability-assets';
 import { parse as parseYaml } from 'yaml';
@@ -59,11 +60,12 @@ export function generate(model) {
     telemetryNamespace(model),
     ...(messaging ? [messagingNamespace(model), namespaceOf(model, 'events')] : [])
   ];
-  return [{ path: `${sln.unitTests.dir}/TelemetryTests.cs`, content: csFile({ namespace: sln.unitTests.name, usings, body: body(messaging, usesRelational(model), consultedSeries(model)) }) }];
+  return [{ path: `${sln.unitTests.dir}/TelemetryTests.cs`, content: csFile({ namespace: sln.unitTests.name, usings, body: body(messaging, usesRelational(model) ? poolMeter(model) : null, consultedSeries(model)) }) }];
 }
 
-function body(messaging, relational, consulted) {
-  const series = [DOTNET_RUNTIME.heapUsed, DOTNET_RUNTIME.heapLimit, DOTNET_RUNTIME.gcSeconds, DOTNET_RUNTIME.threadPoolQueue, ...(relational ? Object.values(DOTNET_RUNTIME.pool) : [])];
+/** `pool`: el Meter del pool del driver (relational-engine.js), o null sin persistencia relacional. */
+function body(messaging, pool, consulted) {
+  const series = [DOTNET_RUNTIME.heapUsed, DOTNET_RUNTIME.heapLimit, DOTNET_RUNTIME.gcSeconds, DOTNET_RUNTIME.threadPoolQueue, ...(pool ? Object.values(DOTNET_RUNTIME.pool) : [])];
   return String.raw`/// <summary>
 /// La telemetría EJECUTADA sin red: el servidor en memoria del perfil test, los spans del origen keel y el scrape. Lo que
 /// se afirma es lo que hacen keel-spring y keel-nest: la entrada HTTP continúa la traza de quien llama y mide
@@ -362,29 +364,32 @@ public sealed class TelemetryTests : IDisposable
         return root;
     }
 
-    private sealed class PruebaRechazo() : DomainException("rechazo de prueba");${messaging ? ENVELOPE_TESTS : ''}${relational ? POOL_TESTS : ''}
+    private sealed class PruebaRechazo() : DomainException("rechazo de prueba");${messaging ? ENVELOPE_TESTS : ''}${pool ? poolTests(pool) : ''}
 }`;
 }
 
-// El pool de Npgsql, con los instrumentos y los NOMBRES que publica Npgsql 10.0.3 (medidos con un MeterListener el
-// 2026-10-18): los observables db.client.connection.count (por estado) y .max, y el UpDownCounter propio
-// db.client.connection.npgsql.pending_requests. Un Meter de prueba con el mismo nombre los publica; cada uno tiene que
-// acabar en su serie del panel. La saturación en reposo es 0, así que telemetry-check no la distingue de un nombre
-// equivocado: esto sí.
-const POOL_TESTS = String.raw`
+// El pool del driver, con los instrumentos y los NOMBRES que publica (POOL_METERS de relational-engine.js, medidos con un
+// MeterListener). Un Meter de prueba con el mismo nombre los publica, con la MISMA forma que el driver —observable o con
+// incrementos—; cada uno tiene que acabar en su serie del panel. La saturación en reposo es 0, así que telemetry-check no
+// la distingue de un nombre equivocado: esto sí.
+const poolTests = (meter) => String.raw`
 
     [Fact]
-    public async Task ElPoolSeLeeDeLosInstrumentosQuePublicaNpgsql()
+    public async Task ElPoolSeLeeDeLosInstrumentosQuePublica${meter.meter}()
     {
         var telemetry = Started();
-        using var meter = new System.Diagnostics.Metrics.Meter("Npgsql");
-        meter.CreateObservableUpDownCounter("db.client.connection.count", () => new[]
+        using var meter = new System.Diagnostics.Metrics.Meter("${meter.meter}");
+${meter.countObservable
+  ? `        meter.CreateObservableUpDownCounter("${meter.count}", () => new[]
         {
-            new System.Diagnostics.Metrics.Measurement<int>(3, new KeyValuePair<string, object?>("db.client.connection.state", "idle")),
-            new System.Diagnostics.Metrics.Measurement<int>(2, new KeyValuePair<string, object?>("db.client.connection.state", "used"))
-        });
-        meter.CreateObservableUpDownCounter("db.client.connection.max", () => 9);
-        var pending = meter.CreateUpDownCounter<int>("db.client.connection.npgsql.pending_requests");
+            new System.Diagnostics.Metrics.Measurement<int>(3, new KeyValuePair<string, object?>("${meter.stateTag}", "idle")),
+            new System.Diagnostics.Metrics.Measurement<int>(2, new KeyValuePair<string, object?>("${meter.stateTag}", "used"))
+        });`
+  : `        var usage = meter.CreateUpDownCounter<int>("${meter.count}");
+        usage.Add(3, new KeyValuePair<string, object?>("${meter.stateTag}", "idle"));
+        usage.Add(2, new KeyValuePair<string, object?>("${meter.stateTag}", "used"));`}
+        meter.CreateObservableUpDownCounter("${meter.max}", () => 9);
+        var pending = meter.CreateUpDownCounter<int>("${meter.pending}");
         pending.Add(4);
         pending.Add(-1);
         var exposition = await Exposition(telemetry);

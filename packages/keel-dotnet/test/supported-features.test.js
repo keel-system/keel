@@ -113,13 +113,12 @@ test('la mensajería se genera sobre persistencia relacional con los tres broker
   assert.match(checkSupportedStack({ broker: 'pulsar' }).errors[0], /broker: pulsar .*rabbitmq/);
 });
 
-test('el motor: PostgreSQL y MongoDB entran; cualquier otro se rechaza hasta que una red lo mida', () => {
-  assert.deepEqual(checkSupportedStack({ database: 'postgresql' }).errors, []);
-  assert.deepEqual(checkSupportedStack({ database: 'mongodb' }).errors, []);
-  for (const database of ['mysql', 'mariadb', 'sqlserver', 'oracle']) {
+test('el motor: PostgreSQL, MySQL y MongoDB entran; cualquier otro se rechaza hasta que una red lo mida', () => {
+  for (const database of ['postgresql', 'mysql', 'mongodb']) assert.deepEqual(checkSupportedStack({ database }).errors, [], database);
+  for (const database of ['mariadb', 'sqlserver', 'oracle']) {
     const { errors } = checkSupportedStack({ database });
     assert.equal(errors.length, 1, database);
-    assert.match(errors[0], new RegExp(`database: ${database} .*postgresql, mongodb`));
+    assert.match(errors[0], new RegExp(`database: ${database} .*postgresql, mysql, mongodb`));
   }
 });
 

@@ -38,7 +38,7 @@ arranca. Lo que build genera, capa a capa (el detalle de cada una, con sus redes
   un handler por operación (el handler nace con su TODO y las notas del diseño) y un mediator propio, sin MediatR.
 - **API REST** con Minimal APIs, `ErrorResponse`, paginación, `Location`, entrada multipart y el `docs/openapi.yaml`
   derivado, el mismo byte a byte que el de los otros dos.
-- **Persistencia relacional** con EF Core 10 sobre PostgreSQL, y **documental** sobre MongoDB.Driver sin mapeo de
+- **Persistencia relacional** con EF Core 10 sobre PostgreSQL o MySQL (proveedor de Microting, MIT), y **documental** sobre MongoDB.Driver sin mapeo de
   clases; con los almacenes del generador (outbox, mensajes procesados, idempotencia de petición, reclamos, rescate,
   reconciliación y purgas por lotes) en los dos modelos.
 - **Seguridad** con un middleware propio delante de los endpoints (Keycloak y Cognito), alcance por recurso,
@@ -55,7 +55,7 @@ arranca. Lo que build genera, capa a capa (el detalle de cada una, con sus redes
   el delta del diseño contra una base congelada (`keel-core/gen/evolution.js`, la misma lógica que los otros dos), y
   la skill entra en modo evolución.
 
-Lo que **rechaza**, nombrando el motivo (`src/lib/supported-features.js`): los motores sin medir (MySQL, MariaDB, SQL
+Lo que **rechaza**, nombrando el motivo (`src/lib/supported-features.js`): los motores sin medir (MariaDB, SQL
 Server, Oracle), un value object compuesto en la URL o en una cabecera de una llamada saliente (no tiene forma ahí en
 ningún generador; en el cuerpo y en la respuesta se genera desde el 16), una identidad del llamante que no sea texto y la
 mensajería sin persistencia (sin el adaptador de repositorio no hay quién publique los eventos del agregado:
@@ -98,7 +98,7 @@ Las redes en vivo (SDK 10 y podman/docker), una por mecanismo; todas aceptan `--
 
 | Check | Qué mide |
 |---|---|
-| `db-check` | los adaptadores relacionales contra PostgreSQL real, con sondas generadas desde el modelo |
+| `db-check` | los adaptadores relacionales contra PostgreSQL y MySQL reales, con sondas generadas desde el modelo |
 | `doc-check` | la persistencia documental contra MongoDB en replica set |
 | `harness-check` / `doc-harness-check` | el arnés de flujos contra la `infra/` real, y cada código de `score-scenarios.sh` |
 | `security-check` | la seguridad contra un Keycloak real |
@@ -106,5 +106,5 @@ Las redes en vivo (SDK 10 y podman/docker), una por mecanismo; todas aceptan `--
 | `stub-check` | el proveedor de prueba y la pasarela de pago contra un WireMock real |
 | `cache-check` | la caché contra Redis y Valkey |
 | `mail-check` | el correo contra un Mailpit real |
-| `telemetry-check` | la telemetría con la app arrancada contra PostgreSQL y un colector OTLP falso |
+| `telemetry-check` | la telemetría con la app arrancada contra PostgreSQL y MySQL y un colector OTLP falso |
 | `deploy-check` | `deploy/` entero y las preguntas al backend que comparten los tres generadores |

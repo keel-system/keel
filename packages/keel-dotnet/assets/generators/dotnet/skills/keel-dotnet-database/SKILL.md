@@ -1,9 +1,9 @@
 ---
 name: keel-dotnet-database
-description: Guía de la base de datos relacional en un proyecto generado por keel-dotnet — ampliar un puerto de repositorio y su adaptador EF Core, el baseline de migraciones (crearlo con dotnet ef, revisarlo y verificarlo en vivo), la configuración por perfiles y los fallos típicos; el código de persistencia (filas, mapeo fluente, adaptadores, transacción, traducción de constraints) ya lo genera build. Usar cuando keel-stack.json declara database "postgresql".
+description: Guía de la base de datos relacional en un proyecto generado por keel-dotnet — ampliar un puerto de repositorio y su adaptador EF Core, el baseline de migraciones (crearlo con dotnet ef, revisarlo y verificarlo en vivo), la configuración por perfiles y los fallos típicos; el código de persistencia (filas, mapeo fluente, adaptadores, transacción, traducción de constraints) ya lo genera build. Usar cuando keel-stack.json declara database "postgresql" o "mysql".
 ---
 
-# Base de datos relacional (EF Core 10 + PostgreSQL)
+# Base de datos relacional (EF Core 10 + PostgreSQL o MySQL)
 
 El código de persistencia sale entero de build: las filas (`Persistence/Rows/<Entidad>Row.cs`) con su mapeo
 fluente (`IEntityTypeConfiguration`) sobre el esquema neutral de Keel —los mismos nombres de tabla, columna,
@@ -12,6 +12,13 @@ por raíz (`Persistence/Repositories/<Raíz>Repository.cs`, con `ToDomain`/`Appl
 fábrica de tiempo de diseño, la transacción que abre el mediator (`IUseCaseTransactions`), el bloqueo optimista,
 la auditoría, la unicidad condicionada y la traducción de cada violación de constraint al error del diseño
 (`PersistenceErrors`, por el nombre de la constraint). **No rehagas ese patrón**: extiéndelo.
+
+El motor lo dice `keel-stack.json`. Sobre PostgreSQL el proveedor es Npgsql; sobre MySQL, Microting.EntityFrameworkCore.MySql
+(el fork MIT de Pomelo para EF Core 10) con MySqlConnector. Lo que cambia en MySQL ya lo resuelve build, y no se
+deshace: el uuid va en `binary(16)` con los bytes en el orden del texto (`GuidFormat=Binary16`, lo fija el registro);
+la unicidad condicionada es una columna generada `<índice>_flag` al final del índice único, no un índice parcial;
+las columnas únicas de texto llevan `utf8mb4_bin`; los reclamos corren en READ COMMITTED; y el nombre de la
+constraint violada sale del mensaje del motor (la clave primaria se llama siempre `PRIMARY`).
 
 ## Antes de empezar
 

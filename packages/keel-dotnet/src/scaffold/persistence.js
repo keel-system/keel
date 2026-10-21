@@ -17,7 +17,9 @@
 //   · el bloqueo optimista es un token de concurrencia (`IsConcurrencyToken`) que sube el adaptador: EF sí comprueba
 //     la versión esperada (`WHERE lock_version = @original`), a diferencia de TypeORM.
 //
-// Solo PostgreSQL (Npgsql). MySQL espera a que `db-check` lo mida (PLAN-KEEL-DOTNET.md § 5).
+// Sobre PostgreSQL (Npgsql) o MySQL (Microting.EntityFrameworkCore.MySql): lo que cambia entre los dos está en
+// relational-engine.js. El esquema es el mismo salvo la unicidad condicionada, que MySQL no sabe expresar con un índice
+// parcial (ver tableIndexes).
 
 import {
   persistedMembers,
@@ -34,6 +36,7 @@ import {
   parentColumnOf,
   crossAggregateForeignKeys,
   partialIndexSpecs,
+  discriminatorColumn,
   uniqueConstraints,
   keyShadow,
   LOCK_VERSION,
@@ -47,6 +50,7 @@ import { storeRows, storeSchemaNames } from './messaging-stores.js';
 import { RECONCILIATION_ROW, reconciliationSchemaNames, usesReconciliationClaims } from './reconciliation-claim.js';
 import { csFile, csMember, csString, located, namespaceOf, solution, typeUsings, xmlDoc } from './render.js';
 import { usesUnmapped } from './repositories.js';
+import { MYSQL_GUID_FORMAT, placeholderConnection, relationalEngine, useProvider, usesMySql } from './relational-engine.js';
 
 /** ¿El diseño persiste en un motor relacional? Es lo que genera todo este módulo. */
 export function usesRelational(model) {
@@ -378,8 +382,20 @@ function tableIndexes(model, entity, members, props) {
     if (probe.length > 0) continue;
     lines.push(`        row.HasIndex(${selector(columns)}, ${csString(indexName(entity, index))})${index.unique ? '.IsUnique()' : ''}.HasDatabaseName(${csString(indexName(entity, index))});`);
   }
-  for (const spec of partialIndexSpecs(model, 'postgresql').filter((candidate) => candidate.entity === entity.name)) {
+  for (const spec of partialIndexSpecs(model, relationalEngine(model)).filter((candidate) => candidate.entity === entity.name)) {
     const columns = spec.fields.flatMap((name) => columnsFor(model, entity, members, name));
+    if (usesMySql(model)) {
+      // MySQL no tiene índices parciales: una columna GENERADA que vale 1 dentro de la condición y NULL fuera, al final
+      // del índice único (un índice único no restringe las filas con NULL). Declarada, no una parte funcional anónima del
+      // índice, que la introspección del esquema no ve: la misma forma que keel-spring y keel-nest. Es una propiedad
+      // SOMBRA: el dominio no la conoce y nadie la escribe; EF la relee tras guardar, porque la calcula el motor.
+      const flag = discriminatorColumn(spec);
+      lines.push(
+        `        row.Property<sbyte?>(${csString(flag)}).HasColumnName(${csString(flag)}).HasColumnType("tinyint").HasComputedColumnSql(${csString(`CASE WHEN ${spec.predicate} THEN 1 END`)}, stored: true);`,
+        `        row.HasIndex([${[...columns.map((column) => props.get(column) ?? csMember(column)), flag].map(csString).join(', ')}], ${csString(spec.name)}).IsUnique().HasDatabaseName(${csString(spec.name)});`
+      );
+      continue;
+    }
     lines.push(`        row.HasIndex(${selector(columns)}, ${csString(spec.name)}).IsUnique().HasFilter(${csString(spec.predicate)}).HasDatabaseName(${csString(spec.name)});`);
   }
   for (const column of foreignKeyIndexColumns(model, entity, members)) {
@@ -747,6 +763,16 @@ export function expectedSchemaNames(model) {
 }
 
 /**
+ * En MySQL, el uuid en binary(16) y no en el char(36) que el proveedor pone por defecto: el formato sale de la cadena de
+ * conexión (`GuidFormat`), y sin él el arnés, que escribe `UUID_TO_BIN('…')`, no encontraría ninguna fila.
+ */
+const MYSQL_UUID_FACT = `    /// <summary>El uuid en binary(16) (GuidFormat=${MYSQL_GUID_FORMAT}), el de keel-spring y keel-nest: nunca char(36).</summary>
+    [Fact]
+    public void ElUuidEsBinary16() => Assert.DoesNotContain("char(36)", Ddl.Value, StringComparison.OrdinalIgnoreCase);
+
+`;
+
+/**
  * La prueba del MODELO, sin base de datos: EF lo construye entero (relaciones, claves, conversores) y genera el DDL,
  * que tiene que llevar cada tabla, constraint, índice y FK del diseño con su nombre. Compilar no basta: una relación
  * mal declarada solo falla al construir el modelo, que es en la primera petición. Lo que el motor hace con el DDL lo
@@ -761,7 +787,7 @@ function schemaTestFile(model) {
     private static readonly Lazy<string> Ddl = new(() =>
     {
         // Sin conectar: el DDL se genera del modelo, y para construirlo no hace falta ninguna base.
-        var options = new DbContextOptionsBuilder<${context}>().UseNpgsql("Host=unused").Options;
+        var options = new DbContextOptionsBuilder<${context}>().${useProvider(model, csString(placeholderConnection(model, 'unused')))}.Options;
         using var db = new ${context}(options);
         return db.Database.GenerateCreateScript();
     });
@@ -776,7 +802,7 @@ function schemaTestFile(model) {
     [Fact]
     public void NingunNombreLoPoneEfPorSuCuenta() => Assert.DoesNotMatch(@"\\b(PK|FK|IX|AK)_\\w+", Ddl.Value);
 
-    [Theory]
+${usesMySql(model) ? MYSQL_UUID_FACT : ''}    [Theory]
 ${rows.join('\n')}
     public void ElEsquemaLlevaCadaNombreDelDiseño(string name) => Assert.Matches($@"\\b{name}\\b", Ddl.Value);
 }`;

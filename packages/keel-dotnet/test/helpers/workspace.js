@@ -201,6 +201,21 @@ export async function planFixture(name, { mutate = null, stack = null } = {}) {
   return planService({ manifest, layers, workspace: FIXTURES_DIR, stack });
 }
 
+/** Las fixtures RELACIONALES (las documentales declaran `model: document` y van a MongoDB): las que se generan también sobre MySQL. */
+export const MYSQL_FIXTURES = [
+  'catalog-extended',
+  'job-dispatch',
+  'job-dispatch-cycles',
+  'metering-digest',
+  'notification-mailer',
+  'payment-checkout',
+  'payout-runs',
+  'product-catalog',
+  'profile-directory',
+  'stock-reservation',
+  'stock-reservation-events'
+];
+
 // Las variantes derivadas en memoria de una fixture real, para lo que ninguna declara: las compila cs-check y las parsea
 // cs-syntax.test.js, las dos sobre esta lista. Cada una cambia el
 // nombre del servicio, que es el namespace raíz: dos variantes de la misma fixture no pueden chocar.
@@ -262,6 +277,26 @@ export const CS_VARIANTS = [
   // Las ramas del DSL que ninguna fixture declara (incremento 16): los MISMOS parches que recorre
   // test/uncovered-branches.test.js, aquí compilados y con sus pruebas emitidas.
   ...UNCOVERED_BRANCHES,
+  // MySQL: toda fixture relacional, otra vez sobre el otro motor (el proveedor, el uuid en binary(16), la unicidad
+  // condicionada con su columna generada, los reclamos en READ COMMITTED, la reconciliación sin ON CONFLICT y los errores
+  // por errno), y una con telemetría (el pool de MySqlConnector, con sus nombres).
+  ...MYSQL_FIXTURES.map((from) => ({
+    name: `${from}-mysql`,
+    from,
+    database: 'mysql',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+    }
+  })),
+  {
+    name: 'stock-reservation-mysql-otel',
+    from: 'stock-reservation',
+    database: 'mysql',
+    telemetry: 'otel',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+    }
+  },
   {
     name: 'payment-checkout-round',
     from: 'payment-checkout',
@@ -275,11 +310,13 @@ export const CS_VARIANTS = [
 ];
 
 /**
- * El stack con el que se genera una fixture o una variante: con mensajería, RabbitMQ (el default del stack es Kafka); con
+ * El stack con el que se genera una fixture o una variante: el motor si la variante lo pide (si no, el del modelo de
+ * persistencia: PostgreSQL o MongoDB); con mensajería, RabbitMQ (el default del stack es Kafka); con
  * pagos, Stripe salvo que la variante diga otra pasarela (sin una, la capa no se emite); y la telemetría que pida la variante.
  */
-export function variantStack(layers, { broker = null, paymentGateway = null, telemetry = null } = {}) {
+export function variantStack(layers, { broker = null, paymentGateway = null, telemetry = null, database = null } = {}) {
   const stack = {
+    ...(database ? { database } : {}),
     ...(layers.messaging ? { broker: broker ?? 'rabbitmq' } : {}),
     ...(layers.payments ? { paymentGateway: paymentGateway ?? 'stripe' } : {}),
     ...(telemetry ? { telemetry } : {})

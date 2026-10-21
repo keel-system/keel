@@ -18,10 +18,18 @@ test('todo paquete y herramienta de la tabla tiene versión exacta y licencia pe
 
 test('todo paquete que emite el proyecto está en la tabla, con persistencia relacional o sin ella', () => {
   const relational = { layersPresent: { persistence: true }, persistenceKind: 'relational' };
-  for (const model of [{ layersPresent: {} }, relational]) {
+  const mysql = { ...relational, stack: { database: 'mysql' } };
+  for (const model of [{ layersPresent: {} }, relational, mysql]) {
     for (const id of packagesFor(model)) assert.ok(PACKAGES[id], `${id} se emite sin estar en dotnet-stack.js`);
   }
+  // Cada motor, su proveedor y solo el suyo.
   assert.ok(packagesFor(relational).includes('Npgsql.EntityFrameworkCore.PostgreSQL'));
+  assert.ok(!packagesFor(relational).includes('Microting.EntityFrameworkCore.MySql'));
+  assert.ok(packagesFor(mysql).includes('Microting.EntityFrameworkCore.MySql'));
+  assert.ok(packagesFor(mysql).includes('MySqlConnector'));
+  assert.ok(!packagesFor(mysql).includes('Npgsql.EntityFrameworkCore.PostgreSQL'));
+  // El de Oracle no: GPL-2.0 (MySql.EntityFrameworkCore 10.0.9, leída en nuget.org el 2026-10-20).
+  assert.match(licenseProblems({ id: 'MySql.EntityFrameworkCore', version: '10.0.9', license: 'GPL-2.0-only WITH Universal-FOSS-exception-1.0' }).join(), /fuera de/);
 });
 
 test('la regla se pone roja con lo que pasó a licencia comercial, por versión', () => {

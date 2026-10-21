@@ -2,7 +2,9 @@
 
 | Síntoma | Causa habitual | Qué hacer |
 |---|---|---|
-| El servidor no arranca: `Failed to connect` / `NpgsqlException` (en `build/keel-scenarios/server.log`) | la base no está arriba | `bash infra/up.sh && bash infra/validate-infra.sh` |
+| El servidor no arranca: `Failed to connect` / `NpgsqlException` / `MySqlException` (en `build/keel-scenarios/server.log`) | la base no está arriba | `bash infra/up.sh && bash infra/validate-infra.sh` |
+| MySQL: un `UPDATE … WHERE id = '…'` escrito a mano no toca ninguna fila y no falla | el id es `binary(16)`: un literal de texto no casa con nada | `UUID_TO_BIN('…')` (el `IdLiteral` del arnés ya lo hace) |
+| MySQL: dos réplicas a la vez se llevan menos que dos lotes | con el orden resuelto por filesort, InnoDB bloquea todas las filas que examina y la otra réplica se las salta | nada: no se repite ninguna, y lo que quedó lo recoge la pasada siguiente |
 | El servidor no arranca: faltan variables (`faltan N variable(s)`) | el perfil exige `${VAR}` sin default | exportar las que lista, o arrancar en `local` |
 | 409 `OPTIMISTIC_LOCK_CONFLICT` en un camino feliz | dos escrituras del mismo agregado en una operación, o el agregado se cargó dos veces | cargar una vez, mutar, `Save` una vez |
 | 409 con el `code` de una unicidad que no debería chocar | el valor no se normalizó antes de buscar/guardar como dice el diseño | normalizar como dice el diseño (`TextFold` si el campo pliega) |

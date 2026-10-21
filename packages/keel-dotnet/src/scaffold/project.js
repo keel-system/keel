@@ -26,6 +26,7 @@ import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
 import { usesTelemetry } from 'keel-core/gen/telemetry-vocabulary';
 import { DOCKERIGNORE } from './deploy.js';
+import { PROVIDER_PACKAGES, relationalEngine } from './relational-engine.js';
 
 /** Los paquetes que usa ESTA solución: los del esqueleto y los de las capas que el diseño declara. */
 export function packagesFor(model) {
@@ -33,13 +34,13 @@ export function packagesFor(model) {
 }
 
 /**
- * Los paquetes del proyecto Infrastructure: la configuración y, con persistencia relacional, EF Core, Npgsql y el
+ * Los paquetes del proyecto Infrastructure: la configuración y, con persistencia relacional, EF Core, el proveedor del motor y el
  * paquete de diseño de EF (solo para `dotnet ef`: no viaja con el servicio); con seguridad por token, la validación del JWT.
  */
 export function infrastructurePackages(model) {
   return [
     'YamlDotNet',
-    ...(usesRelational(model) ? ['Microsoft.EntityFrameworkCore', 'Microsoft.EntityFrameworkCore.Relational', 'Npgsql.EntityFrameworkCore.PostgreSQL', DESIGN_PACKAGE] : []),
+    ...(usesRelational(model) ? ['Microsoft.EntityFrameworkCore', 'Microsoft.EntityFrameworkCore.Relational', ...PROVIDER_PACKAGES[relationalEngine(model)], DESIGN_PACKAGE] : []),
     // La persistencia documental: el driver oficial de MongoDB, sin mapeo de clases (el adaptador escribe el documento).
     ...(usesDocument(model) ? ['MongoDB.Driver'] : []),
     // La seguridad con token: la validación del JWT (capa security).

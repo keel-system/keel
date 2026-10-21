@@ -152,7 +152,7 @@ test('se purga cada tabla del generador que el diseño usa, y solo esas: las mis
 test('la purga del outbox no toca lo pendiente; la del registro de idempotencia corta por su caducidad', () => {
   const purges = content(plan('stock-reservation-events').files, 'Purge/TablePurges.cs');
   assert.match(purges, /DELETE FROM outbox_event WHERE published_at IS NOT NULL AND published_at < \{cutoff\} AND published_at <= /);
-  assert.match(purges, /SELECT published_at AS \\"Value\\" FROM outbox_event WHERE published_at IS NOT NULL AND published_at < \{cutoff\} ORDER BY published_at OFFSET \{position\} LIMIT 1/);
+  assert.match(purges, /SELECT published_at AS \\"Value\\" FROM outbox_event WHERE published_at IS NOT NULL AND published_at < \{cutoff\} ORDER BY published_at LIMIT 1 OFFSET \{position\}/);
   assert.match(purges, /PurgeIdempotencyRecords\([\s\S]*?var cutoff = instant;/);
   assert.match(purges, /DELETE FROM idempotency_record WHERE expires_at < \{cutoff\}/);
 });

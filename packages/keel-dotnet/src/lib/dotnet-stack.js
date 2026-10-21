@@ -46,6 +46,13 @@ export const PACKAGES = {
   // Fijado a mano: el proveedor de Npgsql lo pide como `[10.0.4, 11)` y NuGet resuelve la MÍNIMA, mientras EF Core y
   // su paquete de diseño traen la 10.0.13. Sin fijarlo, el proyecto mezclaba las dos (MSB3277, medido).
   'Microsoft.EntityFrameworkCore.Relational': { version: '10.0.13', license: 'MIT', use: 'EF Core relacional (fijado a la versión de EF Core)' },
+  // El proveedor de MySQL: Microting.EntityFrameworkCore.MySql, el fork de Pomelo (MIT) que publica para EF Core 10 —Pomelo
+  // no tiene versión para EF 10 y el de Oracle, MySql.EntityFrameworkCore, es GPL-2.0—. Pide Relational [10.0.12, 10.0.999]
+  // (la fijada arriba cabe) y MySqlConnector >= 2.6.2, que se fija aquí para no depender de la mínima que resuelva NuGet.
+  // La 10.0.13 de Microting tiene cinco días: va la 10.0.12 (2026-09-18). MySqlConnector 2.6.2 es de 2026-08-11; sus
+  // dependencias Microsoft.Extensions.*.Abstractions las pone el framework compartido. Verificadas el 2026-10-20.
+  'Microting.EntityFrameworkCore.MySql': { version: '10.0.12', license: 'MIT', use: 'proveedor de MySQL para EF Core' },
+  MySqlConnector: { version: '2.6.2', license: 'MIT', use: 'driver de MySQL (lo trae el proveedor; fijado)' },
   // Solo en tiempo de diseño (PrivateAssets: no viaja con el servicio): lo que usa `dotnet ef` para generar las
   // migraciones desde el modelo.
   'Microsoft.EntityFrameworkCore.Design': { version: '10.0.13', license: 'MIT', use: 'generación de migraciones (tiempo de diseño)' },

@@ -17,11 +17,11 @@ import { messagingWithoutPersistenceErrors } from 'keel-core/gen/messaging-front
 const PENDING_LAYERS = {};
 
 /**
- * Los motores que keel-dotnet genera: PostgreSQL (incremento 6) y MongoDB (incremento 12). MySQL espera a que
- * `db-check` lo mida (con EF Core el uuid binario y el proveedor van por detrás: PLAN-KEEL-DOTNET.md § 5); los demás,
- * como en keel-nest.
+ * Los motores que keel-dotnet genera: PostgreSQL (incremento 6), MongoDB (incremento 12) y MySQL, con el proveedor de
+ * Microting (el fork MIT de Pomelo para EF Core 10) y el uuid en binary(16) big-endian, medido con `db-check
+ * --database=mysql` (PLAN-KEEL-DOTNET.md § 5). Los demás, como en keel-nest: ninguna red los ha arrancado.
  */
-export const SUPPORTED_DATABASES = ['postgresql', 'mongodb'];
+export const SUPPORTED_DATABASES = ['postgresql', 'mysql', 'mongodb'];
 
 /** Los brokers que keel-dotnet genera: RabbitMQ (incremento 9), Kafka (9f) y SNS/SQS (9g), los tres de keel-nest. */
 export const SUPPORTED_BROKERS = ['rabbitmq', 'kafka', 'snssqs'];
@@ -84,7 +84,7 @@ export function checkSupportedStack(stack) {
   // El motor solo importa con persistencia: sin ella, el cuestionario no lo pregunta y no se estampa.
   if (stack?.database && !SUPPORTED_DATABASES.includes(stack.database)) {
     errors.push(
-      `database: ${stack.database} — keel-dotnet genera la persistencia sobre ${SUPPORTED_DATABASES.join(', ')} (incrementos 6 y 12 de PLAN-KEEL-DOTNET.md): ` +
+      `database: ${stack.database} — keel-dotnet genera la persistencia sobre ${SUPPORTED_DATABASES.join(', ')} (PLAN-KEEL-DOTNET.md: incrementos 6 y 12, y § 5): ` +
         'ninguna red de keel-dotnet ha medido otro motor todavía. Elige uno de ellos, o genera este diseño con keel-spring o keel-nest.'
     );
   }

@@ -3,7 +3,7 @@
 // Son los NEUTRALES de `keel-core/gen/observability-assets.js`, los mismos que generan keel-spring y keel-nest para el
 // mismo diseño: la regla de equivalencia es que el mismo panel tenga datos con los tres servidores. Lo único de esta
 // plataforma es la fila de RUNTIME (.NET: el heap gestionado contra su límite, el tiempo en pausas de GC, la cola del
-// thread pool y el pool de Npgsql), con las series de `DOTNET_RUNTIME` (telemetry.js).
+// thread pool y el pool del driver), con las series de `DOTNET_RUNTIME` (telemetry.js).
 //
 // Lo que no hay, dicho en voz alta, como en keel-nest: el pool del modelo DOCUMENTAL (MongoDB.Driver no lo publica sin
 // suscribirse a sus eventos) y el retraso del consumidor (librdkafka lo calcula en sus estadísticas, pero ningún
@@ -14,6 +14,7 @@ import { observabilityAssets, dashboardUid } from 'keel-core/gen/observability-a
 import { DOTNET_RUNTIME, usesTelemetry } from './telemetry.js';
 import { usesDotnetOutbox } from './messaging.js';
 import { usesRelational } from './persistence.js';
+import { poolMeter } from './relational-engine.js';
 
 export { dashboardUid };
 
@@ -39,7 +40,7 @@ export const DOTNET_OBSERVABILITY = {
         targets: [{ expr: `max(${DOTNET_RUNTIME.threadPoolQueue})`, legend: 'en cola' }]
       }
     ],
-    pool: (model) => (usesRelational(model) ? { label: 'npgsql', ...DOTNET_RUNTIME.pool } : null),
+    pool: (model) => (usesRelational(model) ? { label: poolMeter(model).label, ...DOTNET_RUNTIME.pool } : null),
     consumerLag: () => null
   }
 };

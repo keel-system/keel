@@ -119,3 +119,32 @@ test('la frontera ya no avisa de la reconciliación ni de la compensación', asy
   const { manifest, layers } = design('stock-reservation');
   assert.deepEqual(checkSupportedFeatures(manifest, layers), { errors: [], warnings: [] });
 });
+
+// ─── MySQL ───────────────────────────────────────────────────────────────────────────────────────
+
+const MYSQL = { database: 'mysql', broker: 'rabbitmq' };
+const planMysql = (name) => planService({ ...design(name), workspace: FIXTURES_DIR, stack: MYSQL });
+
+test('MySQL: la marca es el UPDATE de la caducada y, si no casó, INSERT IGNORE; sin ON CONFLICT ni ON DUPLICATE KEY', () => {
+  const store = content(planMysql('stock-reservation').files, '/Persistence/ReconciliationClaimStore.cs');
+  // El MISMO `<=` de keel-core: la marca que caduca justo en el límite es reclamable.
+  assert.match(store, /UPDATE reconciliation_claim SET claimed_at = \{claimedAt\} WHERE activation = \{activation\} AND entity_id = \{entityId\} AND claimed_at <= \{expired\}/);
+  assert.match(store, /INSERT IGNORE INTO reconciliation_claim \(activation, entity_id, claimed_at\) VALUES \(\{activation\}, \{entityId\}, \{claimedAt\}\)/);
+  assert.match(store, /if \(renewed == 1\)[\s\S]*return inserted == 1;/);
+  // ON DUPLICATE KEY UPDATE cuenta filas ENCONTRADAS (1, 2 o 0): no diría quién ganó. En el CÓDIGO; el comentario lo nombra.
+  const method = store.slice(store.indexOf('public async Task<bool> Claim'));
+  assert.doesNotMatch(method, /ON CONFLICT|ON DUPLICATE KEY/);
+  assert.doesNotMatch(method, /catch/, 'la carrera la resuelve la clave primaria, no una excepción');
+});
+
+test('MySQL: los candidatos con el alias entre acentos graves y la tanda en READ COMMITTED', () => {
+  const { files } = planMysql('stock-reservation');
+  const adapter = content(files, '/Repositories/ReservationRepository.cs');
+  assert.match(adapter, /SELECT e\.id AS `Value` FROM reservations e WHERE/);
+  assert.match(adapter, /FOR UPDATE OF e SKIP LOCKED/);
+  assert.match(adapter, /readOnly: false,\s*cancellationToken,\s*PersistenceTransactions\.ClaimIsolation\);/);
+  const transactions = content(files, '/Persistence/PersistenceTransactions.cs');
+  assert.match(transactions, /public static readonly IsolationLevel\? ClaimIsolation = IsolationLevel\.ReadCommitted;/);
+  // Y en PostgreSQL, el aislamiento por defecto (ya es READ COMMITTED).
+  assert.match(content(plan('stock-reservation').files, '/Persistence/PersistenceTransactions.cs'), /public static readonly IsolationLevel\? ClaimIsolation = null;/);
+});

@@ -31,6 +31,7 @@ import { usesRelational, dbContextClass, persistedEntities } from './persistence
 import { repositoryRoots, portClass, adapterClass, repositoriesNamespace } from './repositories.js';
 import { AFTER_COMMIT_REGISTRATION } from './after-commit.js';
 import { usesStatementCount } from './statement-count.js';
+import { driverNamespace, placeholderConnection, relationalEngine, useProvider, usesMySql, MYSQL_GUID_FORMAT } from './relational-engine.js';
 
 /** El historial de migraciones con nombre propio: infra/reset-db.sh lo respeta por nombre. */
 export const MIGRATIONS_TABLE = 'ef_migrations_history';
@@ -44,19 +45,20 @@ export function generate(model) {
   };
   return [
     ...['local', 'develop', 'production', 'test'].map((profile) => ({ path: `config/parameters/${profile}/db.yaml`, content: dbYaml(model, profile, dbName) })),
-    file('DatabaseSettings', ['System.Globalization', 'System.Text.RegularExpressions', 'Npgsql', configNamespace(model)], databaseSettingsBody(model)),
+    file('DatabaseSettings', ['System.Globalization', 'System.Text.RegularExpressions', driverNamespace(model), configNamespace(model)], databaseSettingsBody(model)),
     file(
       'PersistenceTransactions',
-      ['System.Globalization', 'Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.Logging', namespaceOf(model, 'useCaseInfra')],
+      ['System.Data', 'System.Globalization', 'Microsoft.EntityFrameworkCore', 'Microsoft.EntityFrameworkCore.Storage', 'Microsoft.Extensions.Logging', namespaceOf(model, 'useCaseInfra')],
       transactionsBody(model)
     ),
-    file('PersistenceErrors', ['Microsoft.EntityFrameworkCore', 'Npgsql', namespaceOf(model, 'errors')], errorsBody(model)),
+    file('PersistenceErrors', ['Microsoft.EntityFrameworkCore', driverNamespace(model), namespaceOf(model, 'errors')], errorsBody(model)),
     file(
       'PersistenceRegistration',
       [
         'System.Data.Common',
         'Microsoft.EntityFrameworkCore',
         'Microsoft.EntityFrameworkCore.Diagnostics',
+        ...(usesMySql(model) ? ['MySqlConnector'] : []),
         'Microsoft.Extensions.DependencyInjection',
         'Microsoft.Extensions.DependencyInjection.Extensions',
         namespaceOf(model, 'useCaseInfra'),
@@ -89,7 +91,7 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<${c
     public ${context} CreateDbContext(string[] args)
     {
         var options = new DbContextOptionsBuilder<${context}>()
-            .UseNpgsql("Host=localhost;Database=design_time", npgsql => npgsql.MigrationsHistoryTable(${csString(MIGRATIONS_TABLE)}))
+            .${useProvider(model, csString(placeholderConnection(model, 'localhost')), `provider => provider.MigrationsHistoryTable(${csString(MIGRATIONS_TABLE)})`)}
             .Options;
         return new ${context}(options);
     }
@@ -217,7 +219,7 @@ export function localDatabaseUrl(engine, dbName) {
 }
 
 function dbYaml(model, profile, dbName) {
-  const engine = 'postgresql';
+  const engine = relationalEngine(model);
   const db = DATABASES[engine];
   if (profile === 'test') {
     return `# El perfil test no tiene base de datos: las pruebas de build arrancan sin infraestructura, y un
@@ -233,8 +235,8 @@ database:
   username: ${envFor('DB_USERNAME', profile, db.user(dbName))}
   password: ${envFor('DB_PASSWORD', profile, db.password)}
   pool:
-    # El nombre de la aplicación en pg_stat_activity: con el de por defecto, dos servicios en el mismo backend no
-    # se distinguen.
+    # El nombre de la aplicación ${engine === 'mysql' ? 'en los atributos de la conexión (performance_schema)' : 'en pg_stat_activity'}: con el de por defecto, dos servicios en el mismo
+    # backend no se distinguen.
     name: ${model.service.name}-pool
     max-size: ${envFor('DB_POOL_MAX_SIZE', profile)}
     # Cuánto espera una petición a que haya conexión libre: fallar rápido con el pool agotado en vez de acumular
@@ -249,8 +251,47 @@ database:
 `;
 }
 
+/**
+ * La cadena de conexión de cada motor desde la URL y las variables del perfil. Lo que cambia es el constructor del driver
+ * y sus unidades; las variables y sus defaults, no.
+ */
+function connectionBuilder(model, engine) {
+  if (usesMySql(model)) {
+    return `        var builder = new MySqlConnectionStringBuilder
+        {
+            Server = match.Groups["host"].Value,
+            Port = match.Groups["port"].Success ? uint.Parse(match.Groups["port"].Value, CultureInfo.InvariantCulture) : ${engine.port},
+            Database = Uri.UnescapeDataString(match.Groups["database"].Value),
+            UserID = configuration.Get("database:username") ?? "",
+            Password = configuration.Get("database:password") ?? "",
+            ApplicationName = configuration.Get("database:pool:name") ?? configuration.ApplicationName,
+            MaximumPoolSize = (uint)Positive(configuration.Get("database:pool:max-size"), 10),
+            // MySqlConnector mide en segundos: la espera por una conexión (también la del pool) y la vida máxima de una conexión.
+            ConnectionTimeout = (uint)Seconds(Positive(configuration.Get("database:pool:connection-timeout-ms"), 5000)),
+            ConnectionLifeTime = (uint)Seconds(Positive(configuration.Get("database:pool:max-lifetime-ms"), 1800000))
+        };`;
+  }
+  return `        var builder = new NpgsqlConnectionStringBuilder
+        {
+            Host = match.Groups["host"].Value,
+            Port = match.Groups["port"].Success ? int.Parse(match.Groups["port"].Value, CultureInfo.InvariantCulture) : ${engine.port},
+            Database = Uri.UnescapeDataString(match.Groups["database"].Value),
+            Username = configuration.Get("database:username"),
+            Password = configuration.Get("database:password"),
+            ApplicationName = configuration.Get("database:pool:name") ?? configuration.ApplicationName,
+            MaxPoolSize = Positive(configuration.Get("database:pool:max-size"), 10),
+            // Npgsql mide en segundos: la espera por una conexión libre del pool y la vida máxima de una conexión.
+            Timeout = Seconds(Positive(configuration.Get("database:pool:connection-timeout-ms"), 5000)),
+            ConnectionLifetime = Seconds(Positive(configuration.Get("database:pool:max-lifetime-ms"), 1800000))
+        };`;
+}
+
+/** Las URL que admite cada motor: la JDBC de keel-spring y la forma sin `jdbc:`. */
+const URL_SCHEMES = { postgresql: '(?:postgresql|postgres)', mysql: 'mysql' };
+
 function databaseSettingsBody(model) {
-  const engine = DATABASES.postgresql;
+  const id = relationalEngine(model);
+  const engine = DATABASES[id];
   return `/// <summary>Cómo se gobierna el esquema al arrancar.</summary>
 public enum SchemaMode
 {
@@ -285,21 +326,9 @@ public sealed partial record DatabaseSettings(bool Enabled, string? ConnectionSt
         var match = DatabaseUrl().Match(url.Trim());
         if (!match.Success)
         {
-            throw new InvalidOperationException($"database.url no es una URL de ${engine.label}: '{url}' (usa jdbc:postgresql://host:puerto/base)");
+            throw new InvalidOperationException($"database.url no es una URL de ${engine.label}: '{url}' (usa jdbc:${id}://host:puerto/base)");
         }
-        var builder = new NpgsqlConnectionStringBuilder
-        {
-            Host = match.Groups["host"].Value,
-            Port = match.Groups["port"].Success ? int.Parse(match.Groups["port"].Value, CultureInfo.InvariantCulture) : ${engine.port},
-            Database = Uri.UnescapeDataString(match.Groups["database"].Value),
-            Username = configuration.Get("database:username"),
-            Password = configuration.Get("database:password"),
-            ApplicationName = configuration.Get("database:pool:name") ?? configuration.ApplicationName,
-            MaxPoolSize = Positive(configuration.Get("database:pool:max-size"), 10),
-            // Npgsql mide en segundos: la espera por una conexión libre del pool y la vida máxima de una conexión.
-            Timeout = Seconds(Positive(configuration.Get("database:pool:connection-timeout-ms"), 5000)),
-            ConnectionLifetime = Seconds(Positive(configuration.Get("database:pool:max-lifetime-ms"), 1800000))
-        };
+${connectionBuilder(model, engine)}
         var schema = configuration.Get("database:schema") switch
         {
             "create" => SchemaMode.Create,
@@ -314,16 +343,82 @@ public sealed partial record DatabaseSettings(bool Enabled, string? ConnectionSt
 
     private static int Seconds(int milliseconds) => Math.Max(1, (milliseconds + 999) / 1000);
 
-    /// <summary><c>jdbc:postgresql://host:puerto/base?…</c> o <c>postgresql://host:puerto/base</c>. Los parámetros de la URL no se trasladan: los que importan tienen su propia variable.</summary>
-    [GeneratedRegex(@"^(?:jdbc:)?(?:postgresql|postgres)://(?<host>[^/:?]+)(?::(?<port>\\d+))?/(?<database>[^?;]+)", RegexOptions.IgnoreCase)]
+    /// <summary><c>jdbc:${id}://host:puerto/base?…</c> o <c>${id}://host:puerto/base</c>. Los parámetros de la URL no se trasladan: los que importan tienen su propia variable.</summary>
+    [GeneratedRegex(@"^(?:jdbc:)?${URL_SCHEMES[id]}://(?<host>[^/:?]+)(?::(?<port>\\d+))?/(?<database>[^?;]+)", RegexOptions.IgnoreCase)]
     private static partial Regex DatabaseUrl();
 }`;
 }
 
 // ─── La transacción ──────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Lo que cada motor hace al abrir la transacción: el tope y el modo de acceso. En PostgreSQL, DENTRO de la transacción
+ * (`SET TRANSACTION` y `SET LOCAL`); en MySQL, ANTES de abrirla —`SET TRANSACTION` afecta a la SIGUIENTE— y sobre la
+ * conexión que la va a llevar, abierta a mano: EF la abriría y la soltaría al pool por cada sentencia, y la sesión
+ * configurada sería otra.
+ */
+function transactionPlatform(model) {
+  if (usesMySql(model)) {
+    return {
+      remarks: `/// El tope: DB_TRANSACTION_TIMEOUT como espera de bloqueo (<c>innodb_lock_wait_timeout</c>, 1205) y como tope de cada
+/// lectura (<c>max_execution_time</c>, 3024), en la sesión, al abrir. MySQL no tiene un tope por sentencia para las
+/// escrituras; lo cortado sale como 503.`,
+      field: `    private readonly string sessionTimeouts = string.Create(
+        CultureInfo.InvariantCulture,
+        $"SET SESSION innodb_lock_wait_timeout = {Math.Max(1, (long)Math.Ceiling(settings.TransactionTimeout.TotalSeconds))}, SESSION max_execution_time = {(long)settings.TransactionTimeout.TotalMilliseconds}");`,
+      claimIsolation: `    /// <summary>
+    /// El aislamiento de los reclamos (SKIP LOCKED): READ COMMITTED. En el REPEATABLE READ por defecto de MySQL una lectura
+    /// con bloqueo toma también los HUECOS entre claves, y frena los INSERT de filas nuevas hasta el lock wait timeout.
+    /// </summary>
+    public static readonly IsolationLevel? ClaimIsolation = IsolationLevel.ReadCommitted;`,
+      once: `    private async Task<T> Once<T>(Func<Task<T>> work, bool readOnly, IsolationLevel? isolation, CancellationToken cancellationToken)
+    {
+        // La sesión se configura en la conexión que llevará la transacción: abierta aquí y soltada al terminar.
+        await db.Database.OpenConnectionAsync(cancellationToken);
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(sessionTimeouts, cancellationToken);
+            // SET TRANSACTION afecta a la SIGUIENTE transacción: va antes de abrirla.
+            await db.Database.ExecuteSqlRawAsync(readOnly ? "SET TRANSACTION READ ONLY" : "SET TRANSACTION READ WRITE", cancellationToken);
+            await using var transaction = isolation is { } level
+                ? await db.Database.BeginTransactionAsync(level, cancellationToken)
+                : await db.Database.BeginTransactionAsync(cancellationToken);
+            return await Committed(transaction, work, cancellationToken);
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
+    }`
+    };
+  }
+  return {
+    remarks: `/// El tope: <c>SET LOCAL statement_timeout</c> con DB_TRANSACTION_TIMEOUT, al abrir. Es por SENTENCIA (espera de bloqueo
+/// incluida), no por la transacción entera, como el setQueryTimeout de Hibernate; lo cortado sale como 503.`,
+    field: `    private readonly string statementTimeout = string.Create(
+        CultureInfo.InvariantCulture,
+        $"SET LOCAL statement_timeout = {(long)settings.TransactionTimeout.TotalMilliseconds}");`,
+    claimIsolation: `    /// <summary>El aislamiento de los reclamos (SKIP LOCKED): el de por defecto, READ COMMITTED en PostgreSQL.</summary>
+    public static readonly IsolationLevel? ClaimIsolation = null;`,
+    once: `    private async Task<T> Once<T>(Func<Task<T>> work, bool readOnly, IsolationLevel? isolation, CancellationToken cancellationToken)
+    {
+        await using var transaction = isolation is { } level
+            ? await db.Database.BeginTransactionAsync(level, cancellationToken)
+            : await db.Database.BeginTransactionAsync(cancellationToken);
+        // Solo lectura primero: SET TRANSACTION tiene que ir antes de cualquier consulta.
+        if (readOnly)
+        {
+            await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", cancellationToken);
+        }
+        await db.Database.ExecuteSqlRawAsync(statementTimeout, cancellationToken);
+        return await Committed(transaction, work, cancellationToken);
+    }`
+  };
+}
+
 function transactionsBody(model) {
   const context = dbContextClass(model);
+  const platform = transactionPlatform(model);
   return `/// <summary>
 /// La transacción del caso de uso sobre el DbContext del ámbito: la abre el UseCaseMediator (las consultas en solo
 /// lectura) y los adaptadores de repositorio se UNEN a ella sin verla. Una escritura sin transacción abarcadora (un
@@ -331,8 +426,7 @@ function transactionsBody(model) {
 /// </summary>
 /// <remarks>
 /// <para>
-/// El tope: <c>SET LOCAL statement_timeout</c> con DB_TRANSACTION_TIMEOUT, al abrir. Es por SENTENCIA (espera de bloqueo
-/// incluida), no por la transacción entera, como el setQueryTimeout de Hibernate; lo cortado sale como 503.
+${platform.remarks}
 /// </para>
 /// <para>
 /// Un interbloqueo o un fallo de serialización se arreglan repitiendo la transacción ENTERA —el caso de uso otra vez,
@@ -349,9 +443,9 @@ public sealed partial class PersistenceTransactions(${context} db, DatabaseSetti
     /// <summary>Lo que espera al commit de la transacción abierta (null: no hay ninguna abierta por esta instancia).</summary>
     private List<Func<Task>>? afterCommit;
 
-    private readonly string statementTimeout = string.Create(
-        CultureInfo.InvariantCulture,
-        $"SET LOCAL statement_timeout = {(long)settings.TransactionTimeout.TotalMilliseconds}");
+${platform.field}
+
+${platform.claimIsolation}
 
     public Task<T> Run<T>(Func<Task<T>> work, bool readOnly, CancellationToken cancellationToken) => InTransaction(work, readOnly, cancellationToken);
 
@@ -392,7 +486,7 @@ public sealed partial class PersistenceTransactions(${context} db, DatabaseSetti
     /// defecto de Spring) o una nueva, que confirma si termina y revierte si lanza. Los fallos del motor salen ya
     /// traducidos al contrato (PersistenceErrors).
     /// </summary>
-    public async Task<T> InTransaction<T>(Func<Task<T>> work, bool readOnly, CancellationToken cancellationToken)
+    public async Task<T> InTransaction<T>(Func<Task<T>> work, bool readOnly, CancellationToken cancellationToken, IsolationLevel? isolation = null)
     {
         ArgumentNullException.ThrowIfNull(work);
         if (db.Database.CurrentTransaction is not null)
@@ -403,7 +497,7 @@ public sealed partial class PersistenceTransactions(${context} db, DatabaseSetti
         {
             try
             {
-                return await Once(work, readOnly, cancellationToken);
+                return await Once(work, readOnly, isolation, cancellationToken);
             }
             catch (Exception error) when (!readOnly && attempt < WriteConflictAttempts && PersistenceErrors.IsTransientWriteConflict(error))
             {
@@ -424,20 +518,15 @@ public sealed partial class PersistenceTransactions(${context} db, DatabaseSetti
         }
     }
 
-    private async Task<T> Once<T>(Func<Task<T>> work, bool readOnly, CancellationToken cancellationToken)
+${platform.once}
+
+    private async Task<T> Committed<T>(IDbContextTransaction transaction, Func<Task<T>> work, CancellationToken cancellationToken)
     {
-        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         // Lo que espera al commit es de ESTE intento: uno que se revierte (y se repite) no deja nada pendiente.
         var pending = new List<Func<Task>>();
         afterCommit = pending;
         try
         {
-            // Solo lectura primero: SET TRANSACTION tiene que ir antes de cualquier consulta.
-            if (readOnly)
-            {
-                await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", cancellationToken);
-            }
-            await db.Database.ExecuteSqlRawAsync(statementTimeout, cancellationToken);
             var result = await work();
             await transaction.CommitAsync(cancellationToken);
             afterCommit = null;
@@ -475,7 +564,85 @@ public sealed partial class PersistenceTransactions(${context} db, DatabaseSetti
 
 // ─── Errores del motor ───────────────────────────────────────────────────────────────────────────
 
+/**
+ * Cómo se lee un fallo de cada motor: la excepción del driver, qué es transitorio, qué es el tope y qué es una violación
+ * de integridad, y dónde viaja el nombre de la constraint. PostgreSQL lo da en `ConstraintName`; MySQL solo en el texto
+ * del mensaje (`for key 'tabla.nombre'`, `CONSTRAINT \`nombre\``), y su clave primaria se llama siempre PRIMARY.
+ */
+function engineErrors(model) {
+  if (usesMySql(model)) {
+    return {
+      exception: 'MySqlException',
+      transient: `    /// <summary>¿Un interbloqueo (1213)? Se arregla repitiendo la transacción entera.</summary>
+    public static bool IsTransientWriteConflict(Exception error) => EngineError(error)?.Number is 1213;`,
+      helpers: `    /// <summary>¿Una violación de unicidad (1062), de cualquier índice único?</summary>
+    public static bool IsUniqueViolation(Exception error) => EngineError(error)?.Number is 1062;
+
+    /// <summary>¿La violación de la clave primaria de <paramref name="table"/>? En MySQL la clave se llama siempre PRIMARY.</summary>
+    public static bool IsPrimaryKeyViolation(Exception error, string table) =>
+        EngineError(error) is { Number: 1062 } engine && engine.Message.Contains($"'{table}.PRIMARY'", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// La constraint conocida que nombra el mensaje del motor, o null. MySQL no la da aparte: va en el texto, como
+    /// <c>for key 'tabla.nombre'</c> (unicidad) o <c>CONSTRAINT \`nombre\`</c> (FK). Se busca con sus delimitadores para que
+    /// un nombre no case dentro de otro más largo.
+    /// </summary>
+    private static string? ConstraintIn(string message)
+    {
+        var text = message.ToLowerInvariant();
+        foreach (var name in ConstraintToError.Keys)
+        {
+            if (text.Contains($".{name}'", StringComparison.Ordinal) || text.Contains($"'{name}'", StringComparison.Ordinal) || text.Contains($"\`{name}\`", StringComparison.Ordinal))
+            {
+                return name;
+            }
+        }
+        return null;
+    }`,
+      translate: `        // Espera de bloqueo agotada (innodb_lock_wait_timeout) o lectura cortada por max_execution_time.
+        if (engine.Number is 1205 or 3024)
+        {
+            return new TransactionTimeoutException(error);
+        }
+        // Violaciones de integridad: unicidad, FK (padre referenciado, hija sin padre), NOT NULL y CHECK. Las mismas que la
+        // clase 23 de PostgreSQL.
+        if (engine.Number is 1062 or 1451 or 1452 or 1216 or 1217 or 1048 or 1364 or 3819)
+        {
+            var constraint = ConstraintIn(engine.Message);
+            return constraint is not null && ConstraintToError.TryGetValue(constraint, out var build) ? build() : new IntegrityViolationException(error);
+        }
+        return null;`
+    };
+  }
+  return {
+    exception: 'PostgresException',
+    transient: `    /// <summary>¿Un interbloqueo o un fallo de serialización? Se arregla repitiendo la transacción entera.</summary>
+    public static bool IsTransientWriteConflict(Exception error) =>
+        EngineError(error)?.SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.SerializationFailure;`,
+    helpers: `    /// <summary>¿Una violación de unicidad, de cualquier índice único?</summary>
+    public static bool IsUniqueViolation(Exception error) => EngineError(error)?.SqlState == PostgresErrorCodes.UniqueViolation;
+
+    /// <summary>¿La violación de la clave primaria de <paramref name="table"/> (<c>&lt;tabla&gt;_pkey</c>)?</summary>
+    public static bool IsPrimaryKeyViolation(Exception error, string table) =>
+        EngineError(error) is { SqlState: PostgresErrorCodes.UniqueViolation } engine
+            && string.Equals(engine.ConstraintName, $"{table}_pkey", StringComparison.OrdinalIgnoreCase);`,
+    translate: `        // Sentencia cancelada por statement_timeout (también la espera de un bloqueo).
+        if (engine.SqlState is PostgresErrorCodes.QueryCanceled or PostgresErrorCodes.LockNotAvailable)
+        {
+            return new TransactionTimeoutException(error);
+        }
+        // Clase 23: violaciones de integridad (unicidad, FK, NOT NULL, CHECK).
+        if (engine.SqlState.StartsWith("23", StringComparison.Ordinal))
+        {
+            var constraint = engine.ConstraintName?.ToLowerInvariant();
+            return constraint is not null && ConstraintToError.TryGetValue(constraint, out var build) ? build() : new IntegrityViolationException(error);
+        }
+        return null;`
+  };
+}
+
 function errorsBody(model) {
+  const platform = engineErrors(model);
   const entries = constraintErrors(model);
   const concurrency = declaredConcurrencyError(model);
   const build = (declared, message, code) => {
@@ -537,12 +704,12 @@ public static class PersistenceErrors
 ${rows.join('\n')}
     };
 
-    /// <summary>El error de PostgreSQL de la cadena de causas, o null.</summary>
-    public static PostgresException? EngineError(Exception error)
+    /// <summary>El error del motor de la cadena de causas, o null.</summary>
+    public static ${platform.exception}? EngineError(Exception error)
     {
         for (Exception? cause = error; cause is not null; cause = cause.InnerException)
         {
-            if (cause is PostgresException engine)
+            if (cause is ${platform.exception} engine)
             {
                 return engine;
             }
@@ -550,9 +717,9 @@ ${rows.join('\n')}
         return null;
     }
 
-    /// <summary>¿Un interbloqueo o un fallo de serialización? Se arregla repitiendo la transacción entera.</summary>
-    public static bool IsTransientWriteConflict(Exception error) =>
-        EngineError(error)?.SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.SerializationFailure;
+${platform.transient}
+
+${platform.helpers}
 
     /// <summary>
     /// El error del contrato de un fallo de persistencia, o null si no es de persistencia:
@@ -571,18 +738,7 @@ ${rows.join('\n')}
         {
             return null;
         }
-        // Sentencia cancelada por statement_timeout (también la espera de un bloqueo).
-        if (engine.SqlState is PostgresErrorCodes.QueryCanceled or PostgresErrorCodes.LockNotAvailable)
-        {
-            return new TransactionTimeoutException(error);
-        }
-        // Clase 23: violaciones de integridad (unicidad, FK, NOT NULL, CHECK).
-        if (engine.SqlState.StartsWith("23", StringComparison.Ordinal))
-        {
-            var constraint = engine.ConstraintName?.ToLowerInvariant();
-            return constraint is not null && ConstraintToError.TryGetValue(constraint, out var build) ? build() : new IntegrityViolationException(error);
-        }
-        return null;
+${platform.translate}
     }
 }`;
 }
@@ -648,15 +804,25 @@ ${repositories.join('\n')}
         {
             // Sin base en este perfil: el contexto se construye (los handlers se resuelven) y falla al conectar,
             // diciéndolo.
-            options.UseNpgsql("Host=database-disabled").AddInterceptors(new DisabledDatabase());
+            options.${useProvider(model, csString(placeholderConnection(model, 'database-disabled')))}.AddInterceptors(new DisabledDatabase());
             return;
         }
-        options.UseNpgsql(
-            settings.ConnectionString,
-            npgsql => npgsql
+${
+          usesMySql(model)
+            ? `        // El uuid en binary(16) con los bytes en el orden del texto (UUID_TO_BIN sin intercambio): el de keel-spring y
+        // keel-nest, y el que escribe el arnés. Se fija AQUÍ, sobre cualquier cadena que llegue: el proveedor decide de ella
+        // el tipo de la columna, y con el formato por defecto el mismo id se guardaría con otros bytes sin que nada falle.
+        var connection = new MySqlConnectionStringBuilder(settings.ConnectionString ?? "") { GuidFormat = MySqlGuidFormat.${MYSQL_GUID_FORMAT} }.ConnectionString;
+`
+            : ''
+        }        options.${useProvider(
+          model,
+          usesMySql(model) ? '\n            connection' : '\n            settings.ConnectionString',
+          `\n            provider => provider
                 // Las colecciones del agregado en consultas aparte: con un JOIN, cada hija multiplicaría las filas.
                 .UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)
-                .MigrationsHistoryTable(${csString(MIGRATIONS_TABLE)}));${
+                .MigrationsHistoryTable(${csString(MIGRATIONS_TABLE)})`
+        )};${
                   usesStatementCount(model)
                     ? `
         // El coste de las peticiones para los Then que lo afirman: solo cuando lo enciende el arnés de flujos.

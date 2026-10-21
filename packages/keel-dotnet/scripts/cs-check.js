@@ -9,10 +9,13 @@
 // `compile-check` de keel-spring, y como ellos se lanza antes de dar por bueno cualquier cambio en lo que
 // se emite.
 //
-//   node packages/keel-dotnet/scripts/cs-check.js [--keep] [--sabotage=<id>] [--fixtures]
+//   node packages/keel-dotnet/scripts/cs-check.js [--keep] [--sabotage=<id>] [--fixtures] [--database=mysql]
 //   npm run cs-check --workspace packages/keel-dotnet
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo.
+//
+// --database=mysql genera el proyecto de referencia sobre MySQL (el proveedor de Microting, el baseline de `dotnet ef`
+// contra su dialecto) y lo arranca contra un MySQL de verdad. Sin él, sobre PostgreSQL.
 //
 // --sabotage=<id> rompe lo emitido CONSERVANDO LA FORMA (sigue compilando) y el check tiene que salir rojo
 // en las pruebas, con las de esa regla y solo esas:
@@ -46,6 +49,11 @@ import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nes
 
 const keep = process.argv.includes('--keep');
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
+const engine = process.argv.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? 'postgresql';
+if (!['postgresql', 'mysql'].includes(engine)) {
+  console.error(`--database=${engine}: el proyecto de referencia se genera sobre postgresql o mysql.`);
+  process.exit(2);
+}
 
 // Los sabotajes: [archivo, texto que se sustituye, sustituto]. Si el texto ya no está, el check lo dice y sale
 // rojo: un sabotaje que dejó de aplicarse no puede pasar por medido.
@@ -111,6 +119,7 @@ const SABOTAGES = {
 //   telemetry-log-trace la línea de log no lleva los ids de su traza
 //   telemetry-series    una serie del runtime sale con otro nombre que el que consultan el panel y las alertas
 //   telemetry-pool      la saturación del pool se lee de db.client.connection.pending_requests (sin el prefijo npgsql)
+//   telemetry-pool-mysql  la del pool de MySqlConnector, con el nombre de Npgsql (db.client.connection.*, en singular)
 const CLIENTS_DIR = 'stock-reservation/src/StockReservation.Infrastructure/Clients';
 // La telemetría (incremento 14c), sobre la variante con mensajería: la prueba emitida TelemetryTests las caza.
 const TELEMETRY_DIR = 'stock-reservation-otel/src/StockReservationOtel.Infrastructure/Telemetry';
@@ -122,6 +131,11 @@ const FIXTURE_SABOTAGES = {
   'telemetry-rejection': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'options.IsRejection?.Invoke(error) == true', 'options.IsRejection?.Invoke(error) == false'],
   'telemetry-b3': [`${TELEMETRY_DIR}/W3cOutB3InPropagator.cs`, 'if (fromW3c.ActivityContext.TraceId != default)', 'if (fromW3c.ActivityContext.TraceId != default || fromW3c.ActivityContext.TraceId == default)'],
   'telemetry-pool': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'PoolValue("db.client.connection.npgsql.pending_requests", null)', 'PoolValue("db.client.connection.pending_requests", null)'],
+  'telemetry-pool-mysql': [
+    'stock-reservation-mysql-otel/src/StockReservationMysqlOtel.Infrastructure/Telemetry/KeelTelemetry.cs',
+    'PoolValue("db.client.connections.pending_requests", null)',
+    'PoolValue("db.client.connection.pending_requests", null)'
+  ],
   'telemetry-series': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'metrics.CreateGauge("keel_runtime_threadpool_queue_length"', 'metrics.CreateGauge("keel_runtime_threadpool_queue"'],
   'telemetry-log-trace': ['stock-reservation-otel/src/StockReservationOtel.Infrastructure/Logging/KeelConsoleFormatter.cs', 'KeelTelemetry.TraceIds()', '((string, string)?)null'],
   // El compuesto de una respuesta saliente (16), leído con un Deserialize genérico en vez del lector de la entrada: el
@@ -280,8 +294,13 @@ if (process.argv.includes('--fixtures')) {
 
 const workspace = makeWorkspace('keel-dotnet-cs-check-');
 mountDesign(workspace, DOTNET_READY_DESIGN.name, DOTNET_READY_DESIGN);
-const generated = await runCommand(workspace, build, `specs/${DOTNET_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
 const projectDir = path.join(workspace, 'services', `${DOTNET_READY_DESIGN.name}-dotnet`);
+if (engine !== 'postgresql') {
+  // El motor se elige como lo elige el diseñador: en el keel-stack.json del proyecto, que build lee antes de preguntar.
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'keel-stack.json'), JSON.stringify({ database: engine }));
+}
+const generated = await runCommand(workspace, build, `specs/${DOTNET_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
 if (!step('build genera el proyecto', generated.exitCode === undefined && fs.existsSync(projectDir), generated.exitCode ? generated.output : '')) {
   process.exit(1);
 }
@@ -341,9 +360,9 @@ if (results.every((result) => result.ok)) {
   if (!runtime) step('podman o docker disponible para la base del arranque', false, 'instala podman (o docker) y arráncalo');
   else {
     try {
-      database = await startDatabase(runtime, 'postgresql');
+      database = await startDatabase(runtime, engine);
     } catch (error) {
-      step('PostgreSQL en contenedor', false, error.message);
+      step(`${engine} en contenedor`, false, error.message);
     }
   }
 }
@@ -385,7 +404,10 @@ if (results.every((result) => result.ok) && database) {
   );
 
   // El arranque aplicó el baseline: las tablas del diseño y el historial de migraciones con su nombre propio.
-  const tables = run(runtime, ['exec', database.name, 'psql', '-U', database.user, '-d', 'keel_db_check', '-At', '-c', "SELECT string_agg(table_name, ',' ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'public'"]);
+  const tables =
+    engine === 'mysql'
+      ? run(runtime, ['exec', database.name, 'mysql', '-u', database.user, `-p${database.password}`, '-N', '-B', 'keel_db_check', '-e', "SELECT GROUP_CONCAT(table_name ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'keel_db_check'"])
+      : run(runtime, ['exec', database.name, 'psql', '-U', database.user, '-d', 'keel_db_check', '-At', '-c', "SELECT string_agg(table_name, ',' ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'public'"]);
   step(
     'el arranque aplica el baseline (products y ef_migrations_history en la base)',
     tables.status === 0 && tables.stdout.trim().split(',').includes('products') && tables.stdout.trim().split(',').includes('ef_migrations_history'),
@@ -450,11 +472,11 @@ function compileAllFixtures() {
   const projects = [];
   const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
   const designs = [...fixtures.map((name) => ({ name, from: name })), ...DERIVED];
-  for (const { name, from, mutate, broker, paymentGateway, telemetry } of designs) {
+  for (const { name, from, mutate, broker, paymentGateway, telemetry, database } of designs) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     if (mutate) mutate(manifest, layers, name);
     // El stack de cada una, con sus defaults (RabbitMQ, Stripe): variantStack de test/helpers/workspace.js.
-    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: variantStack(layers, { broker, paymentGateway, telemetry }) });
+    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: variantStack(layers, { broker, paymentGateway, telemetry, database }) });
     for (const file of files) {
       const target = path.join(root, name, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });

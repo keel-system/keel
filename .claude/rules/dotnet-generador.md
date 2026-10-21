@@ -32,14 +32,28 @@ incluidos. MimeKit trae `System.Security.Cryptography.Pkcs`, fijada a mano en la
 
 ## Persistencia relacional (incremento 6)
 
-**EF Core 10 sobre PostgreSQL** (solo ese motor). Filas con mapeo fluente sobre `keel-core/gen/relational.js`
+**EF Core 10 sobre PostgreSQL o MySQL**. Filas con mapeo fluente sobre `keel-core/gen/relational.js`
 (`src/scaffold/persistence.js`; `test/schema-parity.test.js` compara su esquema con lo que EMITE keel-spring, con el lector
 compartido `keel-spring/test/helpers/schema-table.js`). Puerto en `Domain/Repository` con adaptador de mapeo explícito
 (`repositories.js`), transacción del caso de uso abierta por el mediator a través de `IUseCaseTransactions`, y errores del
 motor traducidos por el nombre de la constraint (`persistence-runtime.js`). **Todo índice va NOMBRADO** en EF: sin nombre,
 dos índices sobre las mismas columnas se funden. El baseline lo genera `dotnet ef` (herramienta local en
 `.config/dotnet-tools.json`). La prueba emitida `PersistenceModelTests` construye el modelo de EF y su DDL sin base;
-`npm run db-check` ejecuta los adaptadores contra PostgreSQL real.
+`npm run db-check` ejecuta los adaptadores contra PostgreSQL y MySQL reales.
+
+**MySQL** con Microting.EntityFrameworkCore.MySql (el fork MIT de Pomelo, el único proveedor de EF Core 10 que no es GPL:
+el de Oracle lo es) sobre MySqlConnector. Lo que cambia entre motores vive en `src/scaffold/relational-engine.js`
+(proveedor, alias de `SqlQuery`, aislamiento de los reclamos, Meter del pool); el resto lo dice el catálogo de keel-core.
+Las decisiones medidas: el uuid en binary(16) con los bytes del texto (`GuidFormat=Binary16`, fijado al REGISTRAR el
+contexto, no en `DatabaseSettings`: así vale para cualquier cadena, la de las sondas incluida); la versión del servidor
+fija (`AutoDetect` conecta, y `dotnet ef` no tiene base); la unicidad condicionada como columna generada `<índice>_flag`
+(propiedad sombra) al final del índice único; el prólogo de la transacción ANTES de abrirla y sobre la conexión abierta a
+mano (EF la soltaría al pool); los reclamos en READ COMMITTED (`ClaimIsolation`); la reconciliación con UPDATE + `INSERT
+IGNORE` (MySqlConnector cuenta filas ENCONTRADAS, y `ON DUPLICATE KEY` no diría quién ganó); la purga con `LIMIT … OFFSET`
+en ese orden; y el nombre de la constraint sacado del mensaje (la clave primaria es `PRIMARY`). Medido también: con
+filesort, InnoDB bloquea todas las filas que examina y no solo las del LIMIT, así que dos réplicas a la vez pueden
+llevarse menos que dos lotes (sin repetir: la sonda de la carrera cuenta la pasada siguiente). Los mismos nombres del
+Meter del pool NO valen: MySqlConnector usa `db.client.connections.*` (plural) y `state`.
 
 ## Persistencia documental (incremento 12)
 

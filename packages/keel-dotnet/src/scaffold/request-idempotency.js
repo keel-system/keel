@@ -509,8 +509,7 @@ public sealed class ${ADAPTER}(${context} db, PersistenceTransactions transactio
                 {
                     await db.SaveChangesAsync(cancellationToken);
                 }
-                catch (DbUpdateException error) when (PersistenceErrors.EngineError(error) is { SqlState: PostgresErrorCodes.UniqueViolation } engine
-                    && string.Equals(engine.ConstraintName, ${csString(`${IDEMPOTENCY_RECORD.table}_pkey`)}, StringComparison.OrdinalIgnoreCase))
+                catch (DbUpdateException error) when (PersistenceErrors.IsPrimaryKeyViolation(error, ${csString(IDEMPOTENCY_RECORD.table)}))
                 {
                     db.Entry(row).State = EntityState.Detached;
                     throw new IdempotencyConflictException(scope, idempotencyKey);
@@ -523,7 +522,7 @@ public sealed class ${ADAPTER}(${context} db, PersistenceTransactions transactio
 }`;
   return {
     path,
-    content: csFile({ namespace, usings: ['Microsoft.EntityFrameworkCore', 'Npgsql', idempotencyNamespace(model), rowsNamespace(model)], body })
+    content: csFile({ namespace, usings: ['Microsoft.EntityFrameworkCore', idempotencyNamespace(model), rowsNamespace(model)], body })
   };
 }
 

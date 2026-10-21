@@ -22,7 +22,8 @@ las CLIs del stack) o del propio contenedor de la base. Un `FALLO` que persiste 
 antes de darlo por bueno o por malo: una sentencia contra la base, por ejemplo:
 
 ```bash
-docker exec <servicio>-devtools sh -c "PGPASSWORD=changeme psql -h db -U <base> -d <base> -c 'SELECT 1'"
+docker exec <servicio>-devtools sh -c "PGPASSWORD=changeme psql -h db -U <base> -d <base> -c 'SELECT 1'"   # PostgreSQL
+docker exec <servicio>-devtools sh -c "mysql -h db -u <base> -pchangeme -e 'SELECT 1' <base>"            # MySQL
 ```
 
 Si el efecto es correcto y el check falla, el sondeo del generador está desalineado: es un defecto del

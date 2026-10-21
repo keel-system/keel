@@ -2024,6 +2024,11 @@ El orden y los contenidos son los de keel-nest. Lo que cambia es dónde está el
   .NET serializa con orden de bytes mixto, y el `binary(16)` de keel-spring es big-endian. En el
   inc. 6 entra solo PostgreSQL. MySQL va rechazado con motivo en `supported-features.js` hasta que
   `db-check` lo mida.
+  **Cerrado (2026-10-20).** Pomelo no publicó para EF 10 y el proveedor de Oracle es GPL-2.0: entra
+  Microting.EntityFrameworkCore.MySql 10.0.12 (MIT, sobre MySqlConnector 2.6.2), con `GuidFormat=Binary16`
+  fijado en el registro. Lo miden `db-check --database=mysql` (los 15 sujetos, falsado con guid-format,
+  discriminator, collation, read-committed y los sabotajes de siempre), `schema-parity` contra keel-spring,
+  `cs-check --database=mysql`, `harness-check --database=mysql` y `telemetry-check` (el pool de MySqlConnector).
 - **Nombres de métricas.** OTel .NET emite `http.server.request.duration` y el panel espera las
   series de Micrometer. Se necesitan *views* que renombren contra `telemetry-vocabulary.js`. Además,
   el exportador Prometheus de OTel .NET sigue en prerelease, así que se evalúa en el inc. 14 frente

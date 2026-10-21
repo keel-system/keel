@@ -13,12 +13,14 @@
 //     es el que caza una migración editada a mano: el snapshot del modelo no cambia con ella, así que el segundo
 //     no la ve.
 //
-// Solo PostgreSQL, como la frontera de la persistencia relacional de keel-dotnet.
+// Sobre PostgreSQL y MySQL, los dos motores relacionales de keel-dotnet: lo que cambia es el cliente con el que se crean
+// las bases aparte y el catálogo con el que se comparan (baselinePlatform).
 
 import { DATABASES } from 'keel-core/gen/infra-catalog';
 import { MIGRATIONS_TABLE } from './persistence-runtime.js';
 import { usesRelational } from './persistence.js';
 import { solution } from './render.js';
+import { MYSQL_GUID_FORMAT, relationalEngine, usesMySql } from './relational-engine.js';
 
 export const EXPORT_SCHEMA_SH = 'infra/export-schema.sh';
 export const VERIFY_BASELINE_SH = 'infra/verify-baseline.sh';
@@ -26,7 +28,7 @@ export const VERIFY_BASELINE_SH = 'infra/verify-baseline.sh';
 export const MIGRATIONS_DIR = 'Persistence/Migrations';
 
 export function usesSchemaBaseline(model) {
-  return usesRelational(model) && (model.stack?.database ?? 'postgresql') === 'postgresql';
+  return usesRelational(model);
 }
 
 /** El comando que crea el baseline, el mismo en la skill, el agente de calidad y las redes del paquete. */
@@ -71,16 +73,49 @@ echo "DDL del modelo → build/schema/model.sql"
 `;
 }
 
-function verifyBaselineScript(model) {
-  const infrastructure = solution(model).infrastructure.dir;
-  const entry = DATABASES.postgresql;
-  const dbName = model.service.name.replaceAll('-', '_');
+/**
+ * Lo que el script necesita de cada motor: el cliente con el que habla con la base dentro del contenedor, la base
+ * desde la que crea y borra las de prueba, la cadena de conexión de `dotnet ef` y el CATÁLOGO del esquema en UNA columna
+ * ordenada: columnas (tipo, cota, escala, nulabilidad; en MySQL también la collation y la expresión de una columna
+ * generada), índices (columnas, unicidad y, en PostgreSQL, predicado) y constraints. El historial de migraciones no es
+ * del modelo: fuera de los dos catálogos.
+ */
+function baselinePlatform(model, dbName) {
+  const entry = DATABASES[relationalEngine(model)];
+  if (usesMySql(model)) {
+    // Con root: crear y borrar bases no es del usuario del servicio, que solo tiene la suya. La contraseña de root es la
+    // del compose del catálogo.
+    const password = entry.composeService(dbName).environment.MYSQL_ROOT_PASSWORD;
+    const catalog = [
+      'SELECT x FROM (',
+      "  SELECT CONCAT('column ', table_name, '.', column_name, ' ', column_type, ' ', is_nullable, ' ', COALESCE(collation_name, '-'), ' ', COALESCE(NULLIF(generation_expression, ''), '-')) AS x",
+      `    FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name <> '${MIGRATIONS_TABLE}'`,
+      "  UNION ALL SELECT CONCAT('index ', table_name, ' ', index_name, ' ', IF(non_unique = 0, 'unique', 'non-unique'), ' (', GROUP_CONCAT(column_name ORDER BY seq_in_index), ')')",
+      `    FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name <> '${MIGRATIONS_TABLE}' GROUP BY table_name, index_name, non_unique`,
+      "  UNION ALL SELECT CONCAT('constraint ', table_name, ' ', constraint_name, ' ', constraint_type)",
+      `    FROM information_schema.table_constraints WHERE table_schema = DATABASE() AND table_name <> '${MIGRATIONS_TABLE}'`,
+      "  UNION ALL SELECT CONCAT('reference ', table_name, ' ', constraint_name, ' ', referenced_table_name, ' ', delete_rule)",
+      '    FROM information_schema.referential_constraints WHERE constraint_schema = DATABASE()',
+      ') catalog ORDER BY x'
+    ].join(' ');
+    return {
+      client: `db_in() {
+  local database="$1"
+  shift
+  if [ -n "$database" ]; then set -- "$@" "$database"; fi
+  "$RUNTIME" exec -i "$CONTAINER" mysql -h db -u root -p'${password}' -N -B "$@"
+}`,
+      admin: 'db_in ""',
+      onDatabase: (database) => `db_in "${database}"`,
+      execute: (sql) => `-e "${sql}"`,
+      applyFile: '',
+      connection: `Server=localhost;Port=${entry.port};Database=$FROM_MIGRATIONS;User ID=root;Password=${password};GuidFormat=${MYSQL_GUID_FORMAT}`,
+      errorPattern: 'error|exception',
+      catalog
+    };
+  }
   const user = entry.user(dbName);
   const password = entry.password;
-  const container = `${model.service.name}-db`;
-  // El catálogo del esquema, en UNA columna ordenada: columnas (tipo, cota, escala, nulabilidad), índices (su
-  // definición entera: columnas, unicidad y predicado) y constraints (PK, FK, CHECK y UNIQUE con su definición).
-  // El historial de migraciones no es del modelo: fuera.
   const catalog = [
     'SELECT x FROM (',
     "  SELECT 'column ' || table_name || '.' || column_name || ' ' || data_type || coalesce('(' || character_maximum_length || ')', '') || coalesce(' ' || numeric_precision || ',' || numeric_scale, '') || ' ' || is_nullable AS x",
@@ -91,6 +126,27 @@ function verifyBaselineScript(model) {
     `    FROM pg_constraint WHERE connamespace = 'public'::regnamespace AND conrelid::regclass::text <> '${MIGRATIONS_TABLE}'`,
     ') catalog ORDER BY x'
   ].join(' ');
+  return {
+    client: `db_in() {
+  local database="$1"
+  shift
+  "$RUNTIME" exec -i "$CONTAINER" env PGPASSWORD='${password}' psql -h db -U '${user}' -d "$database" -v ON_ERROR_STOP=1 -q -t -A "$@"
+}`,
+    admin: 'db_in postgres',
+    onDatabase: (database) => `db_in "${database}"`,
+    execute: (sql) => `-c "${sql}"`,
+    applyFile: ' -f -',
+    connection: `Host=localhost;Port=${entry.port};Database=$FROM_MIGRATIONS;Username=${user};Password=${password}`,
+    errorPattern: 'error|exception|42[0-9A-Z]{3}',
+    catalog
+  };
+}
+
+function verifyBaselineScript(model) {
+  const infrastructure = solution(model).infrastructure.dir;
+  const dbName = model.service.name.replaceAll('-', '_');
+  const container = `${model.service.name}-db`;
+  const platform = baselinePlatform(model, dbName);
   return `#!/usr/bin/env bash
 # verify-baseline.sh — comprueba que las migraciones de EF Core de ${model.service.name} crean EXACTAMENTE el
 # esquema del modelo, que es lo que el arranque aplica en develop y production.
@@ -125,15 +181,11 @@ ko() {
   exit 1
 }
 
-psql_in() {
-  local database="$1"
-  shift
-  "$RUNTIME" exec -i "$CONTAINER" env PGPASSWORD='${password}' psql -h db -U '${user}' -d "$database" -v ON_ERROR_STOP=1 -q -t -A "$@"
-}
+${platform.client}
 
 drop_scratch() {
-  psql_in postgres -c "DROP DATABASE IF EXISTS $FROM_MIGRATIONS" >/dev/null 2>&1
-  psql_in postgres -c "DROP DATABASE IF EXISTS $FROM_MODEL" >/dev/null 2>&1
+  ${platform.admin} ${platform.execute('DROP DATABASE IF EXISTS $FROM_MIGRATIONS')} >/dev/null 2>&1
+  ${platform.admin} ${platform.execute('DROP DATABASE IF EXISTS $FROM_MODEL')} >/dev/null 2>&1
 }
 
 if ! ls "$MIGRATIONS"/*.cs >/dev/null 2>&1; then
@@ -155,28 +207,28 @@ if ! dotnet ef migrations has-pending-model-changes --project ${infrastructure} 
 fi
 
 # 3. En vivo: las migraciones sobre una base vacía, y el DDL del modelo sobre otra.
-if ! psql_in postgres -c "SELECT 1" >/dev/null 2>&1; then
+if ! ${platform.admin} ${platform.execute('SELECT 1')} >/dev/null 2>&1; then
   echo "baseline: KO — la base de prueba no responde: bash infra/up.sh && bash infra/validate-infra.sh"
   exit 1
 fi
 drop_scratch
-psql_in postgres -c "CREATE DATABASE $FROM_MIGRATIONS" >/dev/null || ko "no se pudo crear la base $FROM_MIGRATIONS"
-psql_in postgres -c "CREATE DATABASE $FROM_MODEL" >/dev/null || ko "no se pudo crear la base $FROM_MODEL"
+${platform.admin} ${platform.execute('CREATE DATABASE $FROM_MIGRATIONS')} >/dev/null || ko "no se pudo crear la base $FROM_MIGRATIONS"
+${platform.admin} ${platform.execute('CREATE DATABASE $FROM_MODEL')} >/dev/null || ko "no se pudo crear la base $FROM_MODEL"
 
-connection="Host=localhost;Port=${entry.port};Database=$FROM_MIGRATIONS;Username=${user};Password=${password}"
+connection="${platform.connection}"
 if ! dotnet ef database update --project ${infrastructure} --connection "$connection" >build/schema/update.log 2>&1; then
-  ko "las migraciones no se aplican sobre una base vacía:" "$(grep -iE 'error|exception|42[0-9A-Z]{3}' build/schema/update.log | head -10)"
+  ko "las migraciones no se aplican sobre una base vacía:" "$(grep -iE '${platform.errorPattern}' build/schema/update.log | head -10)"
 fi
 if ! dotnet ef dbcontext script --project ${infrastructure} --output build/schema/model.sql >build/schema/export.log 2>&1; then
   ko "dotnet ef no pudo derivar el DDL del modelo" "$(tail -10 build/schema/export.log)"
 fi
-if ! psql_in "$FROM_MODEL" -f - <build/schema/model.sql >build/schema/model-apply.log 2>&1; then
+if ! ${platform.onDatabase('$FROM_MODEL')}${platform.applyFile} <build/schema/model.sql >build/schema/model-apply.log 2>&1; then
   ko "el DDL del modelo no se aplica:" "$(tail -10 build/schema/model-apply.log)"
 fi
 
-CATALOG="${catalog}"
-psql_in "$FROM_MIGRATIONS" -c "$CATALOG" | tr -d '\\r' >build/schema/catalog-migrations.txt
-psql_in "$FROM_MODEL" -c "$CATALOG" | tr -d '\\r' >build/schema/catalog-model.txt
+CATALOG="${platform.catalog}"
+${platform.onDatabase('$FROM_MIGRATIONS')} ${platform.execute('$CATALOG')} | tr -d '\\r' >build/schema/catalog-migrations.txt
+${platform.onDatabase('$FROM_MODEL')} ${platform.execute('$CATALOG')} | tr -d '\\r' >build/schema/catalog-model.txt
 if ! diff -u build/schema/catalog-model.txt build/schema/catalog-migrations.txt >build/schema/catalog.diff; then
   echo "baseline: KO — las migraciones no crean el esquema del modelo (- modelo, + migraciones):"
   grep -E '^[-+][^-+]' build/schema/catalog.diff | head -30 | sed 's/^/  /'

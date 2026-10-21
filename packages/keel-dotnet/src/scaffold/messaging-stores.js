@@ -59,7 +59,7 @@ export function generate(model) {
         : file(
             'outbox',
             'OutboxRelayStore',
-            ['Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.DependencyInjection', persistenceNamespace(model), rowsNamespace(model)],
+            ['System.Data', 'Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.DependencyInjection', persistenceNamespace(model), rowsNamespace(model)],
             relayStoreBody(model)
           ),
       file(
@@ -79,7 +79,7 @@ export function generate(model) {
         file(
           'messageIdempotency',
           'IdempotencyGuard',
-          ['Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.Logging', 'Npgsql', persistenceNamespace(model), rowsNamespace(model)],
+          ['Microsoft.EntityFrameworkCore', 'Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.Logging', persistenceNamespace(model), rowsNamespace(model)],
           guardBody(model)
         )
       );
@@ -300,7 +300,9 @@ public sealed class OutboxRelayStore(IServiceScopeFactory scopes)
                 return [.. rows.Select(row => new ClaimedOutboxEvent(row.Id, row.Destination, row.RoutingKey, row.EventType, row.Payload))];
             },
             readOnly: false,
-            cancellationToken);
+            cancellationToken,
+            // El aislamiento de un reclamo con SKIP LOCKED (READ COMMITTED en MySQL: sin él toma los huecos entre claves).
+            PersistenceTransactions.ClaimIsolation);
 
     public Task MarkPublished(Guid id, CancellationToken cancellationToken = default) =>
         InNewTransaction(
@@ -353,12 +355,12 @@ public sealed class OutboxRelayStore(IServiceScopeFactory scopes)
             readOnly: true,
             cancellationToken);
 
-    private async Task<T> InNewTransaction<T>(Func<${context}, Task<T>> work, bool readOnly, CancellationToken cancellationToken)
+    private async Task<T> InNewTransaction<T>(Func<${context}, Task<T>> work, bool readOnly, CancellationToken cancellationToken, IsolationLevel? isolation = null)
     {
         await using var scope = scopes.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<${context}>();
         var transactions = scope.ServiceProvider.GetRequiredService<PersistenceTransactions>();
-        return await transactions.InTransaction(() => work(db), readOnly, cancellationToken);
+        return await transactions.InTransaction(() => work(db), readOnly, cancellationToken, isolation);
     }
 }`;
 }
@@ -595,7 +597,7 @@ public sealed partial class IdempotencyGuard(IServiceScopeFactory scopes, ILogge
                 cancellationToken);
             return true;
         }
-        catch (Exception error) when (PersistenceErrors.EngineError(error)?.SqlState == PostgresErrorCodes.UniqueViolation)
+        catch (Exception error) when (PersistenceErrors.IsUniqueViolation(error))
         {
             LogDuplicate(handlerId, eventId, "carrera resuelta en la clave");
             return false;

@@ -1,5 +1,6 @@
 // Las SONDAS de `db-check`: un proyecto xUnit por sujeto, escrito a partir del modelo, que EJECUTA los adaptadores
-// de repositorio y el DbContext que genera keel-dotnet contra un PostgreSQL real. Es C# de verdad compilado contra
+// de repositorio y el DbContext que genera keel-dotnet contra un motor real (PostgreSQL o MySQL: lo que cambia entre los
+// dos en el SQL de las sondas está en `sqlDialect`). Es C# de verdad compilado contra
 // lo emitido, no una plantilla del proyecto generado: el agente nunca lo ve.
 //
 // Por raíz de agregado:
@@ -8,7 +9,8 @@
 //   crudo         la fila guarda el enum por su CONSTANTE y el decimal con la escala de la columna;
 //   versión       guardar dos veces la MISMA lectura: la segunda es el conflicto de concurrencia del contrato;
 //   unicidad      otro agregado con la misma clave natural sale como el error que el diseño declara, con su mensaje;
-//   cota          un texto más largo que su `maxLength` lo rechaza el MOTOR (22001);
+//   cota          un texto más largo que su `maxLength` lo rechaza el MOTOR (22001 en PostgreSQL, 1406 en MySQL);
+//   uuid          (MySQL) el id en la fila son los bytes de UUID_TO_BIN, los del texto: lo que escribe el arnés a mano;
 //   página        List(pageable) con su total y el tamaño pedido; DeleteById borra el grafo;
 //   plegado       la clave natural con `compare` en MAYÚSCULAS es la misma clave, y la sombra de un filtro guarda el
 //                 valor plegado por TextFold sin llevar la unicidad del campo.
@@ -47,12 +49,90 @@ import { naturalKeyBatchFinder } from '../../src/scaffold/repositories.js';
 import { occurredAtField } from 'keel-core/gen/replica';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
 import { FINDER_PROBE_TEXT, findersOf, finderTextProbes } from 'keel-core/gen/query-filters';
+import { driverNamespace, usesMySql, valueAlias } from '../../src/scaffold/relational-engine.js';
+
+/**
+ * El SQL de las sondas que cambia de un motor a otro: el alias que lee SqlQuery<T> (dentro de un `$"…"` y en un literal
+ * crudo), un valor como texto, el instante actual en UTC, «uno de estos dos ids» (MySQL no tiene arrays) y el código con
+ * que el motor rechaza un texto por encima de su cota.
+ */
+export function sqlDialect(model) {
+  const mysql = usesMySql(model);
+  return {
+    alias: valueAlias(model),
+    rawAlias: mysql ? 'AS `Value`' : 'AS "Value"',
+    text: (column) => (mysql ? `CAST(${column} AS CHAR)` : `${column}::text`),
+    now: mysql ? 'UTC_TIMESTAMP(6)' : 'now()',
+    firstTwo: (ids) => (mysql ? `IN ({${ids}[0]}, {${ids}[1]})` : `= ANY({${ids}.Take(2).ToArray()})`),
+    tooLong: mysql ? 'Assert.Equal(1406, PersistenceErrors.EngineError(error)?.Number);' : 'Assert.Equal("22001", PersistenceErrors.EngineError(error)?.SqlState);',
+    // El interbloqueo SINTÉTICO de la sonda que agota los intentos. Los constructores de MySqlException son internos: por
+    // reflexión, que es de la sonda y no del emitido.
+    deadlock: mysql
+      ? '(MySqlException)Activator.CreateInstance(typeof(MySqlException), BindingFlags.Instance | BindingFlags.NonPublic, null, [MySqlErrorCode.LockDeadlock, "Deadlock found when trying to get lock"], null)!'
+      : 'new PostgresException("deadlock detected", "ERROR", "ERROR", PostgresErrorCodes.DeadlockDetected)'
+  };
+}
 
 /**
  * Las muestras distintas que necesita cada raíz: ida y vuelta, crudo, versión, la clave natural (×2), la cota, la página
  * (×3) y dos por cada índice único condicionado. Cada prueba usa las suyas: una muestra repetida chocaría en la PK.
  */
 const SAMPLES = 17;
+
+/** La base del sujeto en PostgreSQL: borrada a la fuerza y creada de nuevo. */
+const POSTGRESQL_SUBJECT_DATABASE = String.raw`        await using (var connection = new NpgsqlConnection(admin))
+        {
+            await connection.OpenAsync();
+            await using var drop = new NpgsqlCommand("DROP DATABASE IF EXISTS " + Database + " WITH (FORCE)", connection);
+            await drop.ExecuteNonQueryAsync();
+            // Los sujetos crean su base a la vez, y PostgreSQL no copia template1 mientras otro lo está copiando
+            // (55006): se reintenta.
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    await using var create = new NpgsqlCommand("CREATE DATABASE " + Database, connection);
+                    await create.ExecuteNonQueryAsync();
+                    break;
+                }
+                catch (PostgresException error) when (error.SqlState == PostgresErrorCodes.ObjectInUse && attempt < 20)
+                {
+                    await Task.Delay(250 * attempt);
+                }
+            }
+        }
+        var target = new NpgsqlConnectionStringBuilder(admin) { Database = Database };`;
+
+/**
+ * La base del sujeto en MySQL, con el usuario de administración (root). La cadena NO lleva el formato del uuid: lo fija
+ * el registro emitido (AddPersistence), y es lo que la sonda del uuid tiene que ver.
+ */
+const MYSQL_SUBJECT_DATABASE = String.raw`        await using (var connection = new MySqlConnection(admin))
+        {
+            await connection.OpenAsync();
+            await using var drop = new MySqlCommand("DROP DATABASE IF EXISTS " + Database, connection);
+            await drop.ExecuteNonQueryAsync();
+            await using var create = new MySqlCommand("CREATE DATABASE " + Database, connection);
+            await create.ExecuteNonQueryAsync();
+        }
+        var target = new MySqlConnectionStringBuilder(admin) { Database = Database };`;
+
+/**
+ * La carrera de dos réplicas en MySQL: cada una se lleva un lote DISTINTO, pero no siempre llenan entre las dos todos
+ * los candidatos. Con el orden resuelto por filesort (varios estados de partida, o ningún índice que dé el orden), InnoDB
+ * bloquea TODAS las filas que examina y no solo las que devuelve el LIMIT —medido en `performance_schema.data_locks`—, así
+ * que la otra réplica se salta también las que la primera no se llevó. Es la optimización (SKIP LOCKED), no el reclamo:
+ * la exclusión es el UPDATE condicional. Lo que se afirma es lo que el reclamo garantiza: ninguna fila dos veces y
+ * ninguna perdida, contando la pasada siguiente.
+ */
+const MYSQL_RACE_REST = (claim, id) => `
+            // MySQL: lo que la carrera no repartió (bloqueado por la otra réplica sin llevárselo) es de la pasada siguiente.
+            taken.AddRange((await ${claim}).Select(r => r.${id}));`;
+
+/** ¿Lleva esta raíz la sonda del id en la fila? En MySQL, con id uuid: es donde el orden de los bytes importa. */
+function uuidProbe(model, root) {
+  return usesMySql(model) && (root.idField?.csType ?? 'Guid') === 'Guid';
+}
 
 /** El proyecto de sondas de un sujeto: su .csproj y su clase de pruebas. */
 export function probeProject(model, { files = [] } = {}) {
@@ -290,7 +370,9 @@ function probesCs(model, namespace, harness = null) {
     const beforeDeadlock = beforeFold + foldSampleCount(root);
     // Las de los finders (DSL 2.22), las últimas de todas.
     const beforeFinders = beforeDeadlock + (root === roots[0] ? 2 : 0);
-    const total = beforeFinders + finderSampleCount(model, root);
+    // Y en MySQL, la del id en la fila (uuidProbe): la última, para no mover ninguna.
+    const beforeUuid = beforeFinders + finderSampleCount(model, root);
+    const total = beforeUuid + (uuidProbe(model, root) ? 1 : 0);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -317,6 +399,23 @@ function probesCs(model, namespace, harness = null) {
             Assert.Equal(Normalize(saved), Normalize(read));
         });`);
 
+    if (uuidProbe(model, root)) {
+      // El id en la fila, leído por el MOTOR: BIN_TO_UUID de lo guardado tiene que ser el id en texto. Con el Guid en otro
+      // orden de bytes (el de .NET, o el formato por defecto del proveedor) la ida y vuelta sigue bien —el driver deshace lo
+      // que hizo— y lo que no casa es lo que escribe el arnés a mano con UUID_TO_BIN('…').
+      tests.push(`    [Fact]
+    public async Task ${root.name}_ElIdEnLaFilaSonLosBytesDeUuidToBin() =>
+        await InScope(async services =>
+        {
+            var sample = new ${root.name}(${state(beforeUuid + 1)});
+            await ${repo}.Save(sample, Cancel);
+            var db = services.GetRequiredService<${dbContext(model)}>();
+            var text = sample.${id}.ToString("D");
+            var found = await db.Database.SqlQuery<string>($"SELECT BIN_TO_UUID(${root.idField?.columns?.name ?? 'id'}) ${sqlDialect(model).alias} FROM ${root.tableName} WHERE ${root.idField?.columns?.name ?? 'id'} = UUID_TO_BIN({text})").ToListAsync(Cancel);
+            Assert.Equal([text], found);
+        });`);
+    }
+
     const stored = storedEnum(model, root);
     if (stored) {
       tests.push(`    [Fact]
@@ -326,7 +425,7 @@ function probesCs(model, namespace, harness = null) {
             var sample = new ${root.name}(${state(2)});
             await ${repo}.Save(sample, Cancel);
             var db = services.GetRequiredService<${dbContext(model)}>();
-            var stored = await db.Database.SqlQuery<string>($"SELECT ${stored.field.columns.name}::text AS \\"Value\\" FROM ${root.tableName} WHERE ${root.idField?.columns?.name ?? 'id'} = {sample.${id}}").SingleAsync(Cancel);
+            var stored = await db.Database.SqlQuery<string>($"SELECT ${sqlDialect(model).text(`${stored.field.columns.name}`)} ${sqlDialect(model).alias} FROM ${root.tableName} WHERE ${root.idField?.columns?.name ?? 'id'} = {sample.${id}}").SingleAsync(Cancel);
             Assert.Equal(${csString(stored.constant)}, stored);
         });`);
     }
@@ -431,7 +530,7 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
                   .join('\n                ')}
             };
             var error = await Assert.ThrowsAnyAsync<Exception>(() => ${repo}.Save(new ${root.name}(tooLong), Cancel));
-            Assert.Equal("22001", PersistenceErrors.EngineError(error)?.SqlState);
+            ${sqlDialect(model).tooLong}
         });`);
     }
 
@@ -464,7 +563,7 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
       usings: ctx.usings,
       raw: (id) =>
         ['createdBy', 'updatedBy']
-          .map((name) => `            var ${name} = await InScope(other => other.GetRequiredService<${dbContext(model)}>().Database.SqlQuery<string>($"SELECT ${snakeCase(name)} AS \\"Value\\" FROM ${root.tableName} WHERE ${root.idField?.columns?.name ?? 'id'} = {${id}}").SingleAsync(Cancel));`)
+          .map((name) => `            var ${name} = await InScope(other => other.GetRequiredService<${dbContext(model)}>().Database.SqlQuery<string>($"SELECT ${snakeCase(name)} ${sqlDialect(model).alias} FROM ${root.tableName} WHERE ${root.idField?.columns?.name ?? 'id'} = {${id}}").SingleAsync(Cancel));`)
           .join('\n')
     }));
     tests.push(...replicaProbes(model, root, { state, first: beforeReplica + 1, port, usings: ctx.usings }));
@@ -480,10 +579,10 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
         first: SAMPLES + 1 + claimSampleCount(model, root) + reconciliationSampleCount(model, root),
         port,
         seed: (row, stateName) => `${sql(`ExecuteSqlAsync($"UPDATE ${root.tableName} SET ${stateColumn} = '${storedState(model, root, stateName)}' WHERE id = {${row}}", Cancel)`)};`,
-        stateOf: (row) => sql(`SqlQuery<string>($"SELECT ${stateColumn}::text AS \\"Value\\" FROM ${root.tableName} WHERE id = {${row}}").SingleAsync(Cancel)`),
+        stateOf: (row) => sql(`SqlQuery<string>($"SELECT ${sqlDialect(model).text(`${stateColumn}`)} ${sqlDialect(model).alias} FROM ${root.tableName} WHERE id = {${row}}").SingleAsync(Cancel)`),
         stampOf: (row) => {
           const claim = guardClaimsFor(model, root.name).find((candidate) => candidate.stampField);
-          return sql(`SqlQuery<bool>($"SELECT ${snakeCase(claim?.stampField ?? 'id')} IS NOT NULL AS \\"Value\\" FROM ${root.tableName} WHERE id = {${row}}").SingleAsync(Cancel)`);
+          return sql(`SqlQuery<bool>($"SELECT ${snakeCase(claim?.stampField ?? 'id')} IS NOT NULL ${sqlDialect(model).alias} FROM ${root.tableName} WHERE id = {${row}}").SingleAsync(Cancel)`);
         }
       })
     );
@@ -531,7 +630,8 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     'System.Text.Json.Nodes',
     'Microsoft.EntityFrameworkCore',
     'Microsoft.Extensions.DependencyInjection',
-    'Npgsql',
+    driverNamespace(model),
+    ...(usesMySql(model) ? ['System.Reflection'] : []),
     'Xunit',
     repositoriesNamespace(model),
     namespaceOf(model, 'persistence'),
@@ -555,28 +655,7 @@ public sealed class PersistenceFixture : IAsyncLifetime
         var admin = Environment.GetEnvironmentVariable("DB_CHECK_CONNECTION")
             ?? throw new InvalidOperationException("DB_CHECK_CONNECTION: la cadena de conexión de la base de administración");
         const string Database = ${csString(databaseOf(model))};
-        await using (var connection = new NpgsqlConnection(admin))
-        {
-            await connection.OpenAsync();
-            await using var drop = new NpgsqlCommand("DROP DATABASE IF EXISTS " + Database + " WITH (FORCE)", connection);
-            await drop.ExecuteNonQueryAsync();
-            // Los sujetos crean su base a la vez, y PostgreSQL no copia template1 mientras otro lo está copiando
-            // (55006): se reintenta.
-            for (var attempt = 1; ; attempt++)
-            {
-                try
-                {
-                    await using var create = new NpgsqlCommand("CREATE DATABASE " + Database, connection);
-                    await create.ExecuteNonQueryAsync();
-                    break;
-                }
-                catch (PostgresException error) when (error.SqlState == PostgresErrorCodes.ObjectInUse && attempt < 20)
-                {
-                    await Task.Delay(250 * attempt);
-                }
-            }
-        }
-        var target = new NpgsqlConnectionStringBuilder(admin) { Database = Database };
+${usesMySql(model) ? MYSQL_SUBJECT_DATABASE : POSTGRESQL_SUBJECT_DATABASE}
         var services = new ServiceCollection();
         services.AddLogging();${usesSweepClaims(model) ? `
         // Los barridos con lotes de DOS: con tres filas, dos pasadas. AddPersistence no pisa estos (TryAdd).
@@ -695,7 +774,7 @@ function filterFoldProbes(model, root, { state, first, port, members, id }) {
                 ${build('one', 'Ñandú Ærø Portátil')}
             };
             await InScope(other => other.GetRequiredService<${port}>().Save(new ${root.name}(named), Cancel));
-            var shadow = await InScope(other => other.GetRequiredService<${dbContext(model)}>().Database.SqlQuery<string>($"SELECT ${column} AS \\"Value\\" FROM ${root.tableName} WHERE ${root.idField?.columns?.name ?? 'id'} = {named.${id}}").SingleAsync(Cancel));
+            var shadow = await InScope(other => other.GetRequiredService<${dbContext(model)}>().Database.SqlQuery<string>($"SELECT ${column} ${sqlDialect(model).alias} FROM ${root.tableName} WHERE ${root.idField?.columns?.name ?? 'id'} = {named.${id}}").SingleAsync(Cancel));
             Assert.Equal(${csString(expected)}, shadow);
             var twin = new ${root.name}State
             {
@@ -715,7 +794,7 @@ function filterFoldProbes(model, root, { state, first, port, members, id }) {
  */
 function deadlockProbes(model, root, { state, first, port, id, concurrency }) {
   const idColumn = root.idField?.columns?.name ?? 'id';
-  const lock = (variable) => `await db.Database.SqlQuery<Guid>($"SELECT ${idColumn} AS \\"Value\\" FROM ${root.tableName} WHERE ${idColumn} = {${variable}} FOR UPDATE").ToListAsync(Cancel);`;
+  const lock = (variable) => `await db.Database.SqlQuery<Guid>($"SELECT ${idColumn} ${sqlDialect(model).alias} FROM ${root.tableName} WHERE ${idColumn} = {${variable}} FOR UPDATE").ToListAsync(Cancel);`;
   return [
     `    [Fact]
     public async Task Concurrencia_ElInterbloqueoSeRepiteHastaQueLasDosTransaccionesTerminan()
@@ -756,7 +835,7 @@ function deadlockProbes(model, root, { state, first, port, id, concurrency }) {
                 () =>
                 {
                     attempts++;
-                    throw new PostgresException("deadlock detected", "ERROR", "ERROR", PostgresErrorCodes.DeadlockDetected);
+                    throw ${sqlDialect(model).deadlock};
                 },
                 readOnly: false,
                 Cancel));
@@ -1139,7 +1218,7 @@ function outboxBlock(model) {
         await InScope(async other =>
         {
             var db = other.GetRequiredService<${context}>();
-            await db.Database.ExecuteSqlRawAsync("UPDATE outbox_event SET published_at = now() WHERE published_at IS NULL", Cancel);
+            await db.Database.ExecuteSqlRawAsync("UPDATE outbox_event SET published_at = ${sqlDialect(model).now} WHERE published_at IS NULL", Cancel);
             for (var i = 0; i < count; i++)
             {
                 var id = Guid.CreateVersion7();
@@ -1220,7 +1299,7 @@ function outboxBlock(model) {
         // Rendida: no se reclama nunca más, ni con el backoff vencido.
         await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync("UPDATE outbox_event SET next_attempt_at = NULL", Cancel));
         Assert.Empty(await Relay.ClaimBatch(maxAttempts: 2, batchSize: 10, claimTimeoutMs: 60000, Cancel));
-        await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync("UPDATE outbox_event SET published_at = now() WHERE published_at IS NULL", Cancel));
+        await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync("UPDATE outbox_event SET published_at = ${sqlDialect(model).now} WHERE published_at IS NULL", Cancel));
     }
 
     [Fact]
@@ -1373,7 +1452,8 @@ ${tests.join('\n\n')}`;
 
 /** Cuántas muestras propias necesitan los reclamos de una raíz: cada sonda guarda las suyas, que no se reutilizan. */
 export function claimSampleCount(model, root) {
-  return claimsForEntity(model, root.name).reduce((total, claim) => total + (claim.stalled ? 5 : 9), 0);
+  // En MySQL, una más por reclamo de cola: la de la sonda del aislamiento.
+  return claimsForEntity(model, root.name).reduce((total, claim) => total + (claim.stalled ? 5 : usesMySql(model) ? 10 : 9), 0);
 }
 
 /** Las SweepSettings de las sondas: lotes de DOS (con tres filas, dos pasadas) y los plazos de los defaults. */
@@ -1420,7 +1500,7 @@ ${samples
                 var instant = instants[i];
                 await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlAsync($"UPDATE ${table} SET ${stateColumn} = '${constant(stateName)}'${column ? `, ${column} = {instant}` : ''} WHERE id = {row}", Cancel));
             }`;
-  const stateOf = `            async Task<string> StateOf(Guid row) => await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<string>($"SELECT ${stateColumn}::text AS \\"Value\\" FROM ${table} WHERE id = {row}").SingleAsync(Cancel));`;
+  const stateOf = `            async Task<string> StateOf(Guid row) => await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<string>($"SELECT ${sqlDialect(model).text(`${stateColumn}`)} ${sqlDialect(model).alias} FROM ${table} WHERE id = {row}").SingleAsync(Cancel));`;
   const claimVia = (method) => `InScope(other => other.GetRequiredService<${port}>().${method}(Cancel))`;
 
   for (const claim of claims) {
@@ -1443,9 +1523,9 @@ ${stateOf}
             {
                 Assert.Equal(${csString(constant(claim.stalled.state))}, await StateOf(row));
             }
-            var clocks = await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<DateTimeOffset>($"SELECT ${clock} AS \\"Value\\" FROM ${table} WHERE id = {ids[2]}").SingleAsync(Cancel));
+            var clocks = await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<DateTimeOffset>($"SELECT ${clock} ${sqlDialect(model).alias} FROM ${table} WHERE id = {ids[2]}").SingleAsync(Cancel));
             Assert.True(Math.Abs((clocks - now).TotalSeconds) < 1, "el fresco conserva su reloj");
-            var renewed = await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<DateTimeOffset>($"SELECT ${clock} AS \\"Value\\" FROM ${table} WHERE id = {ids[0]}").SingleAsync(Cancel));
+            var renewed = await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<DateTimeOffset>($"SELECT ${clock} ${sqlDialect(model).alias} FROM ${table} WHERE id = {ids[0]}").SingleAsync(Cancel));
             Assert.True(renewed >= now.AddSeconds(-1), "el rescatado lleva el reloj renovado: está arrendado");
             // Arrendado: la pasada siguiente no vuelve a llevárselo.
             Assert.Empty(await ${claimVia(method)});
@@ -1480,7 +1560,7 @@ ${stateOf}
             await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(stallSql, Cancel));
             await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(putSql, Cancel));
             // Y la de InFlightWithoutClock, emitida: ninguna fila en vuelo sin reloj.
-            Assert.Equal(0L, await InScope(other => other.GetRequiredService<${context}>().Database.SqlQueryRaw<long>(${csString(`SELECT (${missing}) AS "Value"`)}).SingleAsync(Cancel)));
+            Assert.Equal(0L, await InScope(other => other.GetRequiredService<${context}>().Database.SqlQueryRaw<long>(${csString(`SELECT (${missing}) ${sqlDialect(model).rawAlias}`)}).SingleAsync(Cancel)));
             Assert.Equal([stalled.${id}], (await ${claimVia(method)}).Select(r => r.${id}));
         });`);
       }
@@ -1491,7 +1571,7 @@ ${stateOf}
     const stamp = claim.stamps
       ? `
             // El reloj que vigila el rescate, estampado en el MISMO UPDATE que el cambio de estado.
-            Assert.Equal(0L, await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<long>($"SELECT COUNT(*) AS \\"Value\\" FROM ${table} WHERE id = ANY({ids.Take(2).ToArray()}) AND ${snakeCase(claim.stamps.field)} IS NULL").SingleAsync(Cancel)));`
+            Assert.Equal(0L, await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<long>($"SELECT COUNT(*) ${sqlDialect(model).alias} FROM ${table} WHERE id ${sqlDialect(model).firstTwo('ids')} AND ${snakeCase(claim.stamps.field)} IS NULL").SingleAsync(Cancel)));`
       : '';
     tests.push(`    [Fact]
     public async Task Reclamo_${method}_SeLlevaElLoteEnOrdenAlDestinoYLaPasadaSiguienteSigue() =>
@@ -1517,7 +1597,7 @@ ${stateOf}
             var origin = DateTimeOffset.UtcNow.AddHours(-1);
 ${seed(race, claim.from[0], order === 'id' ? null : order, (i) => `origin.AddSeconds(${i})`)}
             var replicas = await Task.WhenAll(Task.Run(() => ${claimVia(method)}), Task.Run(() => ${claimVia(method)}));
-            var taken = replicas.SelectMany(batch => batch.Select(r => r.${id})).ToList();
+            var taken = replicas.SelectMany(batch => batch.Select(r => r.${id})).ToList();${usesMySql(model) ? MYSQL_RACE_REST(claimVia(method), id) : ''}
             Assert.Equal(taken.Count, taken.Distinct().Count());
             Assert.Equal(ids.OrderBy(row => row), taken.OrderBy(row => row));
         });`);
@@ -1551,6 +1631,32 @@ ${seed([held, free], claim.from[0], order === 'id' ? null : order, (i) => `origi
                 await holder;
             }
         });`);
+    if (usesMySql(model)) {
+      const [pending] = take(1);
+      // El AISLAMIENTO del reclamo (MySQL): la lectura con bloqueo del lote no toma los HUECOS entre claves. En el REPEATABLE
+      // READ por defecto los toma (next-key y gap locks), y un INSERT cuya clave caiga en uno espera hasta el lock wait
+      // timeout: una petición colgada mientras corre un barrido, y solo para algunas claves, así que no se puede afirmar
+      // con un INSERT. Se mira la causa: los bloqueos de ESTA transacción en performance_schema.data_locks son todos de
+      // registro (REC_NOT_GAP). La transacción se abre con el aislamiento de los reclamos emitidos (ClaimIsolation).
+      tests.push(`    [Fact]
+    public async Task Reclamo_${method}_ElLoteSeBloqueaSinTomarLosHuecosEntreClaves() =>
+        await InScope(async services =>
+        {
+            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(${csString(parkSql(claim.from))}, Cancel));
+            var origin = DateTimeOffset.UtcNow.AddHours(-1);
+${seed([pending], claim.from[0], order === 'id' ? null : order, (i) => `origin.AddSeconds(${i})`)}
+            var locks = await InScope(other => other.GetRequiredService<PersistenceTransactions>().InTransaction(async () =>
+            {
+                var db = other.GetRequiredService<${context}>();
+                await db.Database.ExecuteSqlAsync($"SELECT id FROM ${table} WHERE ${stateColumn} IN (${claim.from.map((st) => `'${constant(st)}'`).join(', ')}) ORDER BY ${order} LIMIT 2 FOR UPDATE SKIP LOCKED", Cancel);
+                return await db.Database
+                    .SqlQueryRaw<string>("SELECT LOCK_MODE AS \`Value\` FROM performance_schema.data_locks WHERE THREAD_ID = PS_CURRENT_THREAD_ID() AND LOCK_TYPE = 'RECORD'")
+                    .ToListAsync(Cancel);
+            }, readOnly: false, Cancel, PersistenceTransactions.ClaimIsolation));
+            Assert.NotEmpty(locks);
+            Assert.All(locks, mode => Assert.Contains("REC_NOT_GAP", mode, StringComparison.Ordinal));
+        });`);
+    }
   }
   const firstMethod = csMember(claims[0].method);
   tests.push(`    [Fact]
@@ -1606,7 +1712,7 @@ function reconciliationStoreBlock(model) {
         // Caducada justo en el límite: claimed_at <= la caducidad.
         Assert.True(await ClaimMark(activation, entity, now.AddSeconds(2), now), "la marca en el límite de la caducidad ya caducó");
         Assert.Equal(now.AddSeconds(2), await InScope(other => other.GetRequiredService<${dbContext(model)}>().Database
-            .SqlQuery<DateTimeOffset>($"SELECT claimed_at AS \\"Value\\" FROM reconciliation_claim WHERE activation = {activation} AND entity_id = {entity}")
+            .SqlQuery<DateTimeOffset>($"SELECT claimed_at ${sqlDialect(model).alias} FROM reconciliation_claim WHERE activation = {activation} AND entity_id = {entity}")
             .SingleAsync(Cancel)));
         // Por activación: la misma entidad esperando otro desenlace tiene su propia marca.
         Assert.True(await ClaimMark(activation + "-otra", entity, now, now.AddMinutes(-5)));
@@ -1667,7 +1773,7 @@ ${park}
             var now = DateTimeOffset.UtcNow;
             // Tres que llevan horas sin desenlace (el umbral de los defaults es de ${claim.unansweredAfterSeconds} s) y uno recién encargado.
 ${seed(pass, (i) => (i < 3 ? `now.AddSeconds(-${claim.unansweredAfterSeconds} - 3600 + ${i})` : 'now'))}
-            async Task<string> StateOf(Guid row) => await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<string>($"SELECT ${stateColumn}::text AS \\"Value\\" FROM ${table} WHERE id = {row}").SingleAsync(Cancel));
+            async Task<string> StateOf(Guid row) => await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<string>($"SELECT ${sqlDialect(model).text(`${stateColumn}`)} ${sqlDialect(model).alias} FROM ${table} WHERE id = {row}").SingleAsync(Cancel));
             var first = await ${claimVia};
             Assert.Equal(ids.Take(2), first.Select(r => r.${id}));
             // El reclamo marca, no mueve: siguen esperando el desenlace.
@@ -1675,7 +1781,7 @@ ${seed(pass, (i) => (i < 3 ? `now.AddSeconds(-${claim.unansweredAfterSeconds} - 
             {
                 Assert.Equal(${csString(waitState)}, await StateOf(row));
             }
-            Assert.Equal(2L, await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<long>($"SELECT COUNT(*) AS \\"Value\\" FROM reconciliation_claim WHERE activation = ${"'"}${claim.activation}${"'"} AND entity_id = ANY({ids.Take(2).ToArray()})").SingleAsync(Cancel)));
+            Assert.Equal(2L, await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<long>($"SELECT COUNT(*) ${sqlDialect(model).alias} FROM reconciliation_claim WHERE activation = ${"'"}${claim.activation}${"'"} AND entity_id ${sqlDialect(model).firstTwo('ids')}").SingleAsync(Cancel)));
             // La pasada siguiente: el tercero; los marcados no vuelven y el recién encargado no ha superado el umbral.
             Assert.Equal([ids[2]], (await ${claimVia}).Select(r => r.${id}));
             Assert.Empty(await ${claimVia});

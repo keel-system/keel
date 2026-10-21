@@ -26,7 +26,7 @@ src/
 │   ├── Dtos/                 # <Op>ResponseDto (records) + PagedResponse<T>
 │   ├── Mappers/              # <Raíz>ApplicationMapper (dominio → ResponseDto)
 │   └── Support/              # WireJson + conversores: el contrato del cable; Optional<T>; Todo
-├── <Raíz>.Infrastructure/    # → Application. Los adaptadores: el único sitio que conoce EF Core y Npgsql
+├── <Raíz>.Infrastructure/    # → Application. Los adaptadores: el único sitio que conoce EF Core y el driver de la base (Npgsql o MySqlConnector)
 │   ├── UseCase/              # UseCaseMediator (frontera transaccional) + UseCaseRegistration (el cableado)
 │   ├── Persistence/          # DbContext, Rows/ (filas + mapeo fluente), Repositories/ (adaptadores),
 │   │                         #   PersistenceTransactions, PersistenceErrors (traducción de constraints), RowSync
