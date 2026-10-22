@@ -1,6 +1,6 @@
 {
   "name": "@keel-system/keel-nest",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Generador NestJS para diseños Keel: valida el diseño agnóstico y genera services/<servicio>-nest/ con el scaffolding transversal al stack. Equivalente a keel-spring: el mismo diseño produce servidores con el mismo contrato observable.",
   "type": "module",
   "bin": {
