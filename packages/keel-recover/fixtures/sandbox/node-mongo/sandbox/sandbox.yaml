@@ -1,0 +1,20 @@
+kind: sandbox
+schema: 1
+compose: compose.yaml
+app:
+  service: app
+  base: http://stock:4000
+  startup_seconds: 90
+tool:
+  service: tool
+database:
+  service: stock-db
+  tech: mongodb
+  name: stock
+coverage:
+  kind: v8
+  dir: /coverage
+  include: /app/src/
+judge:
+  read: { method: GET, path: /items, expect: [200] }
+  write: { method: POST, path: /items, body: { sku: "verify-{{nonce}}", quantity: 1 }, expect: [201] }

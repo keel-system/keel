@@ -256,10 +256,10 @@ golpe).
 
 ## 4. Incrementos
 
-**Estado (2026-10-22):** incrementos 0, 1 y 2 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
+**Estado (2026-10-22):** incrementos 0, 1, 2 y 3 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
 (paso 0, paso 1, pasos 3-5 y paso 7). Su laboratorio es el repo `../keel-recover-lab`: sandboxes,
 grabaciones, el diseño `conduit` y los prototipos `tools/*.mjs` que los incrementos 4, 6 y 7 reescriben
-dentro del paquete. **El siguiente es el 3.**
+dentro del paquete. **El siguiente es el 4.**
 
 Incremento 2, hecho: `packages/keel-recover` con `fingerprint` y `env-deps`, adaptadores Maven, Gradle y
 Node, y los schemas `runtime`/`environment` en `assets/schema/`. Puerta: las tres fixtures de
@@ -273,12 +273,32 @@ herramienta sí: el `scripts/build.sh` de Sock Shop construía con `maven:3.2-jd
 Maven del repo), su Travis usaba `oraclejdk11` contra un objetivo 1.8 (`consistent: false`), su compose
 levanta `orders-db` con `mongo` sin versión, y la spec de orders documenta 2 operaciones.
 
+Incremento 3, hecho: `keel-recover init` (prepara `legacy/<servicio>/` con `legacy.yaml`, `runtime.yaml`,
+`environment.yaml` —al repetirlo conserva `adaptations` y la imagen de cada `provision`—, la instrumentación y
+la skill `/keel-recover-sandbox` de 0c-0e) y `keel-recover verify` (0f) sobre un contrato nuevo,
+`sandbox.yaml` (schema `sandbox.schema.json`): qué servicio es la app y dónde escucha, la herramienta por la
+que pasan las sondas, la base, el medidor de cobertura y las dos sondas del juez. Diez criterios de id estable
+(`VER-COMPOSE`, `VER-NET-INTERNAL`, `VER-DIGEST`, `VER-NO-BUILD`, `VER-ENGINE`, `VER-UP`, `VER-EGRESS`,
+`VER-READ`, `VER-WRITE`, `VER-DB-TRACE`, `VER-COVERAGE`); solo los dos primeros impiden arrancar. Puerta:
+`npm run verify-check` sobre el sandbox real de `fixtures/sandbox/node-mongo`, en verde tal cual y en rojo con
+exactamente su criterio en cuatro sabotajes (red con salida, sin cobertura, base caída con el `/health` en 200,
+escritura sin rastro). El egreso, que en vivo no se puede falsar porque con la red abierta no se arranca, lo
+falsa `test/verify.test.js` con un doble del runtime. `npm run bench-verify` juzga los tres sandboxes del inc. 1:
+orders (JaCoCo, 295/524 líneas) y RealWorld (nyc, 145/361 sentencias) en verde; shipping en rojo **solo** por
+`VER-ENGINE`: su RabbitMQ 3.13 se justificó en un comentario del compose y nunca en `environment.yaml`. Dos
+reglas medidas al construirlo: podman-compose mete los servicios en un pod, así que la sonda de egreso se
+engancha a las redes de la app en vez de a su espacio de red (`--network container:` no vale desde fuera del
+pod); y Node escribe la cobertura con permisos `600`, así que se vuelca como root. Fuera de alcance, con
+motivo: el rastro de escritura y el snapshot solo para MongoDB (el banco no tiene relacional; otro motor es
+un rechazo de `sandbox.schema.json` hasta medirlo), y la compatibilidad del driver con el motor no se juzga:
+solo la versión de la CI y las adaptaciones escritas.
+
 | # | Qué | Puerta |
 |---|---|---|
 | 0 | Copiar este plan a `PLAN-KEEL-RECOVER.md` | — |
 | 1 | **Prueba manual, sin código**: pasos 0, 1, 5 y 7 a mano sobre los legacys del banco (`docs/recover-bench/`: `realworld-node`, `sockshop-orders` y `sockshop-shipping`), regenerando uno con keel-dotnet. Cada fila de sus hojas de respuestas pasa de `read` a `measured` o `refuted` | Corrida en `docs/recover-bench/corridas/` (no en `docs/corridas/`, cuya serie es la de los generadores) con intentos de 0d/0e, adaptaciones, cobertura por ronda, `keep` que fallan la primera vez y la tabla de paridad. **Decide si el paso 0 es viable antes de construirlo**, y deja la línea base del banco |
 | 2 | Paquete `keel-recover`: `fingerprint` (0a) y `env-deps` (0b) con adaptadores Java/Maven, Java/Gradle y Node; schemas `runtime`/`environment` fuera del DSL | Deterministas byte a byte sobre fixtures de legacy mínimas (`fixtures/legacy/java8-maven`, `java8-gradle`, `node14`). **Hecho** |
-| 3 | Skill del sandbox (0c–0e) + `verify` (0f) | `verify` falsado: rojo con salida a internet, con cobertura vacía y con 5xx |
+| 3 | Skill del sandbox (0c–0e) + `verify` (0f) | `verify` falsado: rojo con salida a internet, con cobertura vacía y con 5xx. **Hecho** |
 | 4 | `introspect` (1a) + `probe` (1b): restauración, captura de efectos, normalización y cobertura. Reutiliza WireMock, Mailpit, `keel-core/src/lib/gen/broker-probes.js` y la `infra/` neutral | Una app legacy de fixture, en vivo como los `*-check`: cada efecto capturado y uno saboteado por tipo (por ejemplo, la cola espía sin enlazar sale en rojo) |
 | 5 | Skill `/keel-recover` (pasos 3 y 4) + `provenance.yaml` (fila en `SPEC_SIDE_FILES`) + `origin`/`evidence` en `structural-register.js` | `npm test` en keel-core; un `inferred` en el diseño final sale en rojo, y **también todo elemento del DSL sin fila en `provenance.yaml`**: en el inc. 1 se coló un rol copiado de la forma de una fixture, sin fila, y no lo habría cazado una puerta que solo mira lo que el agente declara |
 | 6 | Criterio `characterized` en `readiness.js` + `FIDELITY.md` | `test/readiness.test.js`: romper el sello apaga `characterized` y solo ese criterio |

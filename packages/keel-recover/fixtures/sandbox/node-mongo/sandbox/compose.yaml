@@ -1,0 +1,28 @@
+# Paso 0c: sandbox del legacy de fixture. Red interna: el runtime no sale a internet.
+name: rec-fixture
+services:
+  app:
+    container_name: rec-fixture-app
+    # la imagen la construye build.sh (con red); aquí solo se ejecuta
+    image: localhost/recover/fixture:sandbox
+    environment:
+      MONGO_URL: mongodb://stock-db:27017
+      NODE_V8_COVERAGE: /coverage
+      NODE_OPTIONS: --require /recover/v8-coverage-exit.cjs
+    volumes: ["cov:/coverage", "./instrument:/recover:ro,Z"]
+    networks: { sandbox: { aliases: [stock] } }
+    depends_on: [stock-db]
+  stock-db:
+    # mongo 7.0, la de su CI (.github/workflows/ci.yml)
+    container_name: rec-fixture-db
+    image: docker.io/library/mongo:7.0.14@sha256:acd1a7d01d28cbf058e0fd04ef744fc5263c004d0f36a37330f465abf5007be0
+    networks: { sandbox: { aliases: [stock-db] } }
+  tool:
+    container_name: rec-fixture-tool
+    image: docker.io/curlimages/curl:8.10.1@sha256:fcff5cf7a4b895da7bd2933c914938db2b05d2113fa0d6c55b6d29930408f661
+    command: ["sleep", "infinity"]
+    networks: [sandbox]
+networks:
+  sandbox: { internal: true }
+volumes:
+  cov: {}

@@ -4,11 +4,15 @@ Ingeniería inversa de un servicio existente hacia un diseño [Keel](https://git
 única entrada es el **repo** del legacy, con su historial de git; la herramienta lo lee y **nunca lo
 modifica**. Plan completo y estado, incremento a incremento: [`PLAN-KEEL-RECOVER.md`](../../PLAN-KEEL-RECOVER.md).
 
-Hoy (incremento 2) trae los dos pasos deterministas del sandbox:
+Hoy (incremento 3) trae el paso 0 entero: los dos pasos deterministas, la preparación del workspace, la skill
+que monta el sandbox y el juez:
 
 ```bash
 keel-recover fingerprint <legacy> [-o runtime.yaml]       # paso 0a: huella del runtime
 keel-recover env-deps    <legacy> [-o environment.yaml]   # paso 0b: dependencias del entorno
+keel-recover init <legacy> --name <servicio>              # en el workspace de diseño: prepara legacy/<servicio>/
+/keel-recover-sandbox legacy/<servicio>                   # el agente: Dockerfile, compose y bucles (0c-0e)
+keel-recover verify legacy/<servicio>/sandbox             # paso 0f: el juez
 ```
 
 `-o` se niega a escribir dentro del legacy. `--check <archivo>` no escribe y sale en rojo si el archivo no es lo
@@ -40,6 +44,28 @@ compone en tiempo de ejecución queda como llamada sin resolver en `outbound_htt
 código es candidata (no dependencia), y una variable con pinta de destino que no casa con nada sale como
 dependencia `unknown` con `provision: ask`.
 
+## El sandbox y el juez
+
+`init` deja en `legacy/<servicio>/` el `legacy.yaml` (dónde está el repo), `runtime.yaml`, `environment.yaml`
+(al repetirlo conserva lo que puso el agente: `adaptations` y la imagen de cada `provision`), la instrumentación
+(`sandbox/instrument/v8-coverage-exit.cjs`) y la skill `/keel-recover-sandbox`, proyectada para cada harness.
+La skill escribe `sandbox/` (Dockerfile multi-etapa, `build.sh` con red, `compose.yaml` en red interna y
+`sandbox.yaml`, el contrato con el juez: schema `assets/schema/sandbox.schema.json`).
+
+`verify` decide si lo que se grabe en el sandbox será comportamiento del legacy. Escribe `verify.json` y, en
+verde, toma el snapshot de la base:
+
+| Id | Qué exige |
+|---|---|
+| `VER-COMPOSE` | la app, la herramienta y la base existen y tienen `container_name` |
+| `VER-NET-INTERNAL` | toda red `internal: true`: si falla (o `VER-COMPOSE`), el sandbox no se arranca |
+| `VER-DIGEST`, `VER-NO-BUILD` | imágenes por digest; el compose solo ejecuta |
+| `VER-ENGINE` | cada motor en la versión de la CI, o con una adaptación que lo nombre |
+| `VER-UP`, `VER-EGRESS` | la app responde; desde sus redes no se llega a internet |
+| `VER-READ`, `VER-WRITE` | una lectura y una escritura del dominio con el estado esperado: no basta «sin 5xx» |
+| `VER-DB-TRACE` | la escritura deja rastro en la base (MongoDB, por su `dbHash`); la salud del legacy no cuenta |
+| `VER-COVERAGE` | la cobertura (JaCoCo, nyc o V8) graba código de la app |
+
 ## Adaptadores
 
 Java/Maven (`pom.xml`, `.mvn/wrapper`), Java/Gradle (`build.gradle[.kts]`, `gradle.properties`, `settings`,
@@ -52,6 +78,15 @@ wrapper) y Node (`package.json`, `.nvmrc`, `.node-version`, `.tool-versions`, to
   salen **byte a byte** como `fixtures/expected/`, dos ejecuciones dan los mismos bytes y nada depende de la ruta
   ni de lo que un build dejó en el árbol. Las fixtures viven fuera de `test/` a propósito: `node --test` ejecuta
   todo `.js` bajo un directorio `test`. Un cambio deliberado se acepta con `npm run golden` y se revisa en el diff.
+- `npm run verify-check` (podman o docker, red para el build, ~5 min): el juez contra el sandbox real de
+  `fixtures/sandbox/node-mongo` (Node + MongoDB, cobertura V8), tal cual en verde y con cuatro sabotajes que
+  conservan la forma, cada uno en rojo con exactamente su criterio: red no interna (`VER-NET-INTERNAL`, sin
+  arrancar), sin cobertura (`VER-COVERAGE`), base inalcanzable con el `/health` del legacy en 200 (`VER-READ`,
+  `VER-WRITE`, `VER-DB-TRACE`) y escritura que no deja rastro donde el sandbox cree (`VER-DB-TRACE`). La sonda de
+  egreso no se puede falsar en vivo (con la red abierta no se arranca): la falsa `test/verify.test.js` con un
+  doble del runtime.
+- `npm run bench-verify` (podman o docker, las imágenes del inc. 1): el juez contra los tres sandboxes del banco
+  en `../keel-recover-lab`, desde copias. Ejercita JaCoCo (sockshop) y nyc en Node 8 (RealWorld).
 - `npm run bench-check`: las dos órdenes sobre los tres legacys del banco en `../keel-recover-lab`, contra los
   `runtime.yaml`/`environment.yaml` escritos a mano en el incremento 1 y las filas ENV/ASSET de las hojas de
   `docs/recover-bench/`. Lista aparte lo que en esas referencias es trabajo del agente.

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/recover/sandbox.schema.json",
+  "title": "Sandbox de un legacy (sandbox.yaml)",
+  "description": "Pasos 0c-0f de keel-recover. No forma parte del DSL: el contrato entre el sandbox que monta el agente (Dockerfile, compose.yaml, build.sh) y el juez determinista `keel-recover verify`. Dice qué servicio del compose es la app y dónde escucha, con qué contenedor se habla desde la red del sandbox, qué base hay detrás, cómo se lee la cobertura y cuáles son las dos sondas del juez: una lectura y una escritura REALES del dominio, nunca el endpoint de salud del legacy.",
+  "type": "object",
+  "required": ["kind", "schema", "compose", "app", "tool", "coverage", "judge"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "sandbox" },
+    "schema": { "const": 1 },
+    "compose": { "type": "string", "minLength": 1, "description": "Ruta del compose del runtime, relativa a este archivo. Solo ejecuta: el build va aparte (build.sh), con red." },
+    "runtime": { "type": "string", "description": "Ruta de runtime.yaml (por defecto ../runtime.yaml): de ahí salen las versiones del motor que declara la CI." },
+    "environment": { "type": "string", "description": "Ruta de environment.yaml (por defecto ../environment.yaml): sus `adaptations` justifican una imagen que no es la que declara la CI." },
+    "app": {
+      "type": "object",
+      "required": ["service", "base"],
+      "additionalProperties": false,
+      "properties": {
+        "service": { "type": "string", "minLength": 1 },
+        "base": { "type": "string", "pattern": "^https?://", "description": "URL de la app DESDE la red del sandbox, con el alias y el puerto que salen de environment.yaml (listen), nunca de una plantilla." },
+        "startup_seconds": { "type": "integer", "minimum": 1, "default": 180 }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "required": ["service"],
+      "additionalProperties": false,
+      "description": "Contenedor con sh y curl en la red del sandbox: por él pasan las sondas, porque la red es interna y el host no la alcanza.",
+      "properties": { "service": { "type": "string", "minLength": 1 } }
+    },
+    "database": {
+      "type": "object",
+      "required": ["service", "tech", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "service": { "type": "string", "minLength": 1 },
+        "tech": { "enum": ["mongodb"], "description": "Motores cuyo rastro de escritura y snapshot sabe leer verify. Otro motor es un rechazo con motivo hasta que se mida." },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "description": "jacoco: agente en tcpserver, se vuelca sin reiniciar. nyc y v8: escriben al salir (una ronda = un arranque); `dir` es el directorio de la app donde lo dejan, montado en un volumen.",
+      "properties": {
+        "kind": { "enum": ["jacoco", "nyc", "v8"] },
+        "cli": { "type": "string", "description": "jacoco: ruta de jacococli.jar dentro de la imagen de la app." },
+        "classes": { "type": "string", "description": "jacoco: clases compiladas de la app dentro de la imagen." },
+        "port": { "type": "integer", "default": 6300 },
+        "dir": { "type": "string", "description": "nyc/v8: directorio de la cobertura dentro del contenedor de la app." },
+        "include": { "type": "string", "description": "v8: prefijo de la ruta del código de la app dentro de la imagen (por defecto, todo file:// fuera de node_modules)." }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "jacoco" } } }, "then": { "required": ["cli", "classes"] } },
+        { "if": { "properties": { "kind": { "enum": ["nyc", "v8"] } } }, "then": { "required": ["dir"] } }
+      ]
+    },
+    "judge": {
+      "type": "object",
+      "required": ["read", "write"],
+      "additionalProperties": false,
+      "description": "Las dos sondas con las que el juez decide que la app está conectada a su base. La escritura puede llevar `{{nonce}}`, que verify sustituye por un valor nuevo en cada ejecución (un registro repetido daría 422 con razón).",
+      "properties": {
+        "read": { "$ref": "#/$defs/probe" },
+        "write": { "$ref": "#/$defs/probe" }
+      }
+    },
+    "egress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "targets": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^https?://" }, "description": "Destinos de internet que el espacio de red de la app NO tiene que alcanzar (por defecto, https://example.com y https://registry.npmjs.org)." }
+      }
+    }
+  },
+  "$defs": {
+    "probe": {
+      "type": "object",
+      "required": ["method", "path", "expect"],
+      "additionalProperties": false,
+      "properties": {
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+        "path": { "type": "string", "pattern": "^/" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "body": { "description": "Objeto (va como JSON) o texto." },
+        "expect": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 100, "maximum": 499 }, "description": "Estados que cuentan como acierto. Nunca un 5xx, y no basta «sin 5xx»: RealWorld contra un Mongo 7 respondía 422 a un usuario nuevo." }
+      }
+    }
+  }
+}
