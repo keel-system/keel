@@ -1,0 +1,8 @@
+language: java
+jdk:
+  - oraclejdk11
+services:
+  - mongodb
+  - rabbitmq
+script:
+  - mvn -B package

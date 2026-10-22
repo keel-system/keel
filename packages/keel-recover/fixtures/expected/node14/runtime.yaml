@@ -1,0 +1,73 @@
+# Huella del runtime del legacy (paso 0a). La escribe `keel-recover fingerprint` leyendo solo el repo:
+# es determinista, así que no se edita a mano. Cada hecho lleva su archivo:línea.
+kind: runtime
+schema: 1
+stacks:
+  - node
+language:
+  name: node
+  version: 14.17.0
+  evidence: .github/workflows/ci.yml:8
+  consistent: true
+  declarations:
+    - version: "14"
+      via: nvmrc
+      evidence: .nvmrc:1
+    - version: "14"
+      via: dockerfile
+      image: node:14-alpine
+      evidence: Dockerfile:1
+    - version: 14.17.0
+      via: github-actions
+      evidence: .github/workflows/ci.yml:8
+engines: null
+package_manager:
+  name: npm
+  version: null
+  via: lockfile
+  evidence: package-lock.json
+lockfiles:
+  - file: package-lock.json
+    manager: npm
+    format: npm
+    lockfileVersion: 1
+framework:
+  name: express
+  version: ^4.17.1
+  evidence: package.json:13
+entrypoint:
+  command: node src/server.js
+  via: scripts.start
+  evidence: package.json:6
+registries:
+  - url: https://npm.internal.example.com
+    evidence: .npmrc:1
+    private: true
+  - url: https://registry.npmjs.org
+    evidence: package-lock.json (resolved)
+    private: false
+dockerfiles:
+  - path: Dockerfile
+    role: app
+    stages:
+      - image: node:14-alpine
+        pinned: false
+        evidence: Dockerfile:1
+ci:
+  - file: .github/workflows/ci.yml
+    system: github-actions
+services:
+  - tech: postgresql
+    version: "12"
+    image: postgres:12
+    pinned: false
+    via: github-actions
+    alias: postgres
+    evidence: .github/workflows/ci.yml:11
+  - tech: postgresql
+    version: null
+    image: postgres
+    pinned: false
+    via: script
+    note: scripts.db:start
+    evidence: package.json:7

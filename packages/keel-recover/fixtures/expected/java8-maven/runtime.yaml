@@ -1,0 +1,106 @@
+# Huella del runtime del legacy (paso 0a). La escribe `keel-recover fingerprint` leyendo solo el repo:
+# es determinista, así que no se edita a mano. Cada hecho lleva su archivo:línea.
+kind: runtime
+schema: 1
+stacks:
+  - maven
+language:
+  name: java
+  version: "1.8"
+  evidence: pom.xml:16
+  consistent: false
+  declarations:
+    - version: "1.8"
+      via: maven java.version
+      evidence: pom.xml:16
+    - version: "8"
+      via: dockerfile
+      image: maven:3.6-jdk-8
+      evidence: docker/Dockerfile:1
+    - version: "8"
+      via: dockerfile
+      image: openjdk:8-jre
+      evidence: docker/Dockerfile:5
+    - version: "11"
+      via: travis
+      note: oraclejdk11
+      evidence: .travis.yml:3
+    - version: "8"
+      via: script
+      image: maven:3.5-jdk-8
+      evidence: scripts/build.sh:3
+build:
+  tool: maven
+  wrapper: false
+  version: "3.6"
+  evidence: docker/Dockerfile:1
+  declarations:
+    - version: "3.6"
+      via: dockerfile
+      image: maven:3.6-jdk-8
+      evidence: docker/Dockerfile:1
+    - version: "3.5"
+      via: script
+      image: maven:3.5-jdk-8
+      evidence: scripts/build.sh:3
+framework:
+  name: spring-boot
+  version: 1.5.22.RELEASE
+  evidence: pom.xml:11-12
+packaging:
+  kind: jar
+  name: inventory-service
+  evidence: pom.xml:7,49
+server:
+  name: tomcat
+  embedded: true
+  evidence: pom.xml:22
+repositories:
+  - id: jcenter
+    url: http://jcenter.bintray.com
+    for: dependencies
+    evidence: pom.xml:54,56
+    risks:
+      - insecure-http
+      - sunset
+dockerfiles:
+  - path: docker/Dockerfile
+    role: app
+    stages:
+      - image: maven:3.6-jdk-8
+        pinned: false
+        stage: build
+        evidence: docker/Dockerfile:1
+      - image: openjdk:8-jre
+        pinned: false
+        evidence: docker/Dockerfile:5
+ci:
+  - file: .travis.yml
+    system: travis
+services:
+  - tech: mongodb
+    version: null
+    image: null
+    pinned: false
+    via: travis
+    evidence: .travis.yml:5
+  - tech: mongodb
+    version: "3.6"
+    image: mongo:3.6
+    pinned: false
+    via: compose
+    alias: inventory-db
+    evidence: docker-compose.yml:6
+  - tech: rabbitmq
+    version: null
+    image: null
+    pinned: false
+    via: travis
+    evidence: .travis.yml:6
+  - tech: rabbitmq
+    version: "3.6"
+    image: rabbitmq:3.6-management
+    pinned: false
+    via: compose
+    alias: rabbitmq
+    evidence: docker-compose.yml:8

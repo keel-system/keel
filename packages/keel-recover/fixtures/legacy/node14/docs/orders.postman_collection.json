@@ -1,0 +1,7 @@
+{
+  "info": { "name": "Orders", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+  "item": [
+    { "name": "Crear", "request": { "method": "POST", "url": "{{baseUrl}}/orders" } },
+    { "name": "Carpeta", "item": [{ "name": "Listar", "request": { "method": "GET", "url": "{{baseUrl}}/orders" } }] }
+  ]
+}

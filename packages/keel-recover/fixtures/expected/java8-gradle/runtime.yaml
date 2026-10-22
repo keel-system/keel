@@ -1,0 +1,76 @@
+# Huella del runtime del legacy (paso 0a). La escribe `keel-recover fingerprint` leyendo solo el repo:
+# es determinista, así que no se edita a mano. Cada hecho lleva su archivo:línea.
+kind: runtime
+schema: 1
+stacks:
+  - gradle
+language:
+  name: java
+  version: "1.8"
+  evidence: build.gradle:12
+  consistent: true
+  declarations:
+    - version: "1.8"
+      via: gradle sourceCompatibility
+      evidence: build.gradle:12
+    - version: "8"
+      via: gitlab-ci
+      image: gradle:4.10-jdk8
+      evidence: .gitlab-ci.yml:1
+build:
+  tool: gradle
+  wrapper: true
+  version: 4.10.3
+  evidence: gradle/wrapper/gradle-wrapper.properties:3
+  declarations:
+    - version: 4.10.3
+      via: gradle-wrapper
+      evidence: gradle/wrapper/gradle-wrapper.properties:3
+    - version: "4.10"
+      via: gitlab-ci
+      image: gradle:4.10-jdk8
+      evidence: .gitlab-ci.yml:1
+framework:
+  name: spring-boot
+  version: 2.0.9.RELEASE
+  evidence: build.gradle:2
+packaging:
+  kind: war
+  name: billing-service
+  evidence: build.gradle:4,15
+server:
+  name: tomcat
+  embedded: true
+  evidence: build.gradle:24
+repositories:
+  - id: jcenter
+    url: https://jcenter.bintray.com
+    for: dependencies
+    evidence: build.gradle:19
+    risks:
+      - sunset
+  - id: null
+    url: https://repo.spring.io/libs-milestone
+    for: dependencies
+    evidence: build.gradle:20
+    risks:
+      - requires-auth
+dockerfiles: []
+ci:
+  - file: .gitlab-ci.yml
+    system: gitlab-ci
+services:
+  - tech: postgresql
+    version: "9.6"
+    image: postgres:9.6
+    pinned: false
+    via: gitlab-ci
+    alias: postgres
+    evidence: .gitlab-ci.yml:4
+  - tech: redis
+    version: "4"
+    image: redis:4
+    pinned: false
+    via: gitlab-ci
+    alias: cache
+    evidence: .gitlab-ci.yml:5

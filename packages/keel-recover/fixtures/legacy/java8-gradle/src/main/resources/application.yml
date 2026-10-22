@@ -1,0 +1,13 @@
+server:
+  port: ${PORT:9090}
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:billing-db}:5432/billing
+    username: billing
+    password: ${DB_PASSWORD:billing}
+  redis:
+    host: ${REDIS_HOST:cache}
+  kafka:
+    bootstrap-servers: kafka:9092
+tax:
+  url: ${TAX_URL:http://tax-service/rates}

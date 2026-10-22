@@ -1,0 +1,212 @@
+# Dependencias del entorno del legacy (paso 0b). La escribe `keel-recover env-deps` leyendo solo el repo.
+# Lo que decide el agente al montar el sandbox (imagen elegida, adaptaciones y su motivo) se añade
+# en `provision` y `adaptations`; lo demás lo regenera la herramienta.
+kind: environment
+schema: 1
+stack: maven
+listen:
+  port: 8081
+  key: port
+  env: PORT
+  evidence: src/main/resources/application.properties:2
+config:
+  - key: REGION
+    env: REGION
+    default: null
+    via:
+      - getenv
+    evidence: src/main/java/com/example/inventory/web/StockController.java:17
+  - key: db
+    env: DB
+    default: inventory-db
+    via:
+      - placeholder
+    feeds:
+      - spring.data.mongodb.uri
+    evidence: src/main/resources/application.properties:3
+  - key: http.timeout
+    env: HTTP_TIMEOUT
+    default: "5"
+    via:
+      - value-annotation
+    evidence: src/main/java/com/example/inventory/web/StockController.java:13
+  - key: mail_host
+    env: MAIL_HOST
+    default: smtp
+    via:
+      - placeholder
+    feeds:
+      - spring.mail.host
+    evidence: src/main/resources/application.properties:5
+  - key: port
+    env: PORT
+    default: "8081"
+    via:
+      - placeholder
+    feeds:
+      - server.port
+    evidence: src/main/resources/application.properties:2
+  - key: pricing.url
+    env: PRICING_URL
+    default: null
+    via:
+      - value-annotation
+    evidence: src/main/java/com/example/inventory/web/StockController.java:10
+  - key: spring.rabbitmq.host
+    env: SPRING_RABBITMQ_HOST
+    default: null
+    via:
+      - value-annotation
+    evidence: src/main/java/com/example/inventory/config/RabbitConfig.java:14
+  - key: warehouse.default-code
+    env: WAREHOUSE_DEFAULTCODE
+    default: MAD-1
+    via:
+      - configuration-properties
+    evidence: src/main/java/com/example/inventory/config/WarehouseProperties.java:8
+  - key: warehouse.max-items
+    env: WAREHOUSE_MAXITEMS
+    default: "50"
+    via:
+      - configuration-properties
+    evidence: src/main/java/com/example/inventory/config/WarehouseProperties.java:9
+  - key: zipkin_enabled
+    env: ZIPKIN_ENABLED
+    default: "false"
+    via:
+      - placeholder
+    feeds:
+      - spring.zipkin.enabled
+    evidence: src/main/resources/application.properties:8
+  - key: zipkin_host
+    env: ZIPKIN_HOST
+    default: zipkin
+    via:
+      - placeholder
+    feeds:
+      - spring.zipkin.baseUrl
+    evidence: src/main/resources/application.properties:7
+dependencies:
+  - kind: database
+    tech: mongodb
+    endpoints:
+      - host: localhost
+        port: 27017
+        database: stock-dev
+        key: spring.data.mongodb.uri
+        profile: dev
+        url: mongodb://localhost:27017/stock-dev
+        evidence: src/main/resources/application-dev.yml:4
+      - host: inventory-db
+        host_key: db
+        port: 27017
+        database: stock
+        key: spring.data.mongodb.uri
+        url: mongodb://${db:inventory-db}:27017/stock
+        evidence: src/main/resources/application.properties:3
+    clients:
+      - library: org.springframework.boot:spring-boot-starter-data-mongodb
+        version: null
+        evidence: pom.xml:26
+    provision:
+      via: container
+      aliases:
+        - inventory-db
+  - kind: broker
+    tech: rabbitmq
+    endpoints:
+      - host: rabbitmq
+        key: spring.rabbitmq.host
+        evidence: src/main/resources/application.properties:4
+    clients:
+      - library: org.springframework.boot:spring-boot-starter-amqp
+        version: null
+        evidence: pom.xml:30
+    credentials:
+      - user: guest
+        password: guest
+        hardcoded: true
+        where: code
+        evidence: src/main/java/com/example/inventory/config/RabbitConfig.java:20-21
+    provision:
+      via: container
+      aliases:
+        - rabbitmq
+  - kind: smtp
+    tech: smtp
+    endpoints:
+      - host: smtp
+        host_key: mail_host
+        port: 1025
+        key: spring.mail.host, spring.mail.port
+        evidence: src/main/resources/application.properties:5-6
+    clients:
+      - library: org.springframework.boot:spring-boot-starter-mail
+        version: null
+        evidence: pom.xml:34
+    provision:
+      via: mailpit
+      aliases:
+        - smtp
+  - kind: http
+    tech: http
+    endpoints:
+      - host: pricing
+        path: /prices
+        key: pricing.url
+        url: http://pricing/prices
+        evidence: src/main/resources/application.properties:9
+    clients: []
+    provision:
+      via: wiremock
+      aliases:
+        - pricing
+  - kind: tracing
+    tech: zipkin
+    endpoints:
+      - host: zipkin
+        host_key: zipkin_host
+        port: 9411
+        path: /
+        key: spring.zipkin.baseUrl
+        url: http://${zipkin_host:zipkin}:9411/
+        evidence: src/main/resources/application.properties:7
+    clients:
+      - library: org.springframework.cloud:spring-cloud-starter-zipkin
+        version: 1.3.6.RELEASE
+        evidence: pom.xml:38
+    enabled_by_default: false
+    enabled:
+      key: zipkin_enabled
+      evidence: src/main/resources/application.properties:8
+    provision:
+      via: none
+      reason: apagado por defecto
+outbound_http:
+  clients: []
+  call_sites:
+    - client: RestTemplate
+      call: restTemplate.getForObject
+      evidence: src/main/java/com/example/inventory/web/StockController.java:21
+  urls: []
+assets:
+  - kind: api-spec
+    path: api-spec/inventory.yaml
+    format: swagger 2.0
+    paths: 2
+  - kind: compose
+    path: docker-compose.yml
+  - kind: script
+    path: scripts/build.sh
+  - kind: stub
+    path: src/test/resources/mappings/pricing.json
+    format: wiremock
+  - kind: test
+    path: src/test/java/com/example/inventory/ITStockController.java
+    language: java
+    level: integration
+  - kind: test
+    path: src/test/java/com/example/inventory/UnitStock.java
+    language: java
+    level: unit
+adaptations: []

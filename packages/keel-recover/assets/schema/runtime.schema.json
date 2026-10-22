@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/recover/runtime.schema.json",
+  "title": "Huella del runtime de un legacy (runtime.yaml)",
+  "description": "Paso 0a de keel-recover. No forma parte del DSL: describe con qué se construía y ejecutaba un servicio existente, leído solo de su repo. Lo escribe `keel-recover fingerprint` y es determinista; cada hecho lleva su archivo:línea.",
+  "type": "object",
+  "required": ["kind", "schema", "stacks", "dockerfiles", "ci", "services"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "runtime" },
+    "schema": { "const": 1 },
+    "source": { "$ref": "#/$defs/source" },
+    "stacks": { "type": "array", "items": { "$ref": "#/$defs/stack" } },
+    "other_stacks": { "type": "array", "items": { "$ref": "#/$defs/stack" } },
+    "unsupported": { "type": "string", "minLength": 1, "description": "Motivo por el que ningún adaptador reconoce el repo." },
+    "language": {
+      "type": "object",
+      "required": ["name", "version", "evidence", "consistent", "declarations"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "enum": ["java", "node"] },
+        "version": { "type": ["string", "null"], "description": "La elegida: la fuente más fuerte fija la versión mayor y, dentro de ella, gana la más específica." },
+        "evidence": { "$ref": "#/$defs/evidenceOrNull" },
+        "consistent": { "type": "boolean", "description": "false si alguna declaración exacta dice otra versión mayor: el juez (0f) tiene que cruzarlas." },
+        "declarations": { "type": "array", "items": { "$ref": "#/$defs/declaration" } }
+      }
+    },
+    "build": {
+      "type": "object",
+      "required": ["tool", "wrapper", "version", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "enum": ["maven", "gradle"] },
+        "wrapper": { "type": "boolean" },
+        "version": { "type": ["string", "null"] },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "declarations": { "type": "array", "items": { "$ref": "#/$defs/declaration" } }
+      }
+    },
+    "framework": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["name", "version", "evidence"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "version": { "type": ["string", "null"] },
+            "evidence": { "$ref": "#/$defs/evidence" }
+          }
+        }
+      ]
+    },
+    "packaging": {
+      "type": "object",
+      "required": ["kind", "name", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "name": { "type": ["string", "null"] },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    },
+    "server": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["name", "embedded", "evidence"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": ["string", "null"], "description": "null con embedded: false: un war sin Spring Boot necesita un servidor de aplicaciones que el repo no nombra." },
+            "embedded": { "type": "boolean" },
+            "evidence": { "$ref": "#/$defs/evidenceOrNull" }
+          }
+        }
+      ]
+    },
+    "repositories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "url", "for", "evidence", "risks"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": ["string", "null"] },
+          "url": { "type": ["string", "null"] },
+          "for": { "enum": ["dependencies", "plugins"] },
+          "evidence": { "$ref": "#/$defs/evidence" },
+          "risks": { "type": "array", "items": { "enum": ["insecure-http", "sunset", "requires-auth"] } }
+        }
+      }
+    },
+    "modules": { "type": "array", "items": { "type": "string" } },
+    "engines": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["range", "evidence"],
+          "additionalProperties": false,
+          "properties": { "range": { "type": "string" }, "evidence": { "$ref": "#/$defs/evidence" } }
+        }
+      ]
+    },
+    "package_manager": {
+      "type": "object",
+      "required": ["name", "version", "via", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "version": { "type": ["string", "null"] },
+        "via": { "enum": ["packageManager", "lockfile", "default"] },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "note": { "type": "string" }
+      }
+    },
+    "lockfiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "manager", "format"],
+        "additionalProperties": false,
+        "properties": {
+          "file": { "type": "string" },
+          "manager": { "enum": ["npm", "yarn", "pnpm"] },
+          "format": { "type": "string" },
+          "lockfileVersion": { "type": ["integer", "string", "null"] }
+        }
+      }
+    },
+    "entrypoint": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["command", "via", "evidence"],
+          "additionalProperties": false,
+          "properties": {
+            "command": { "type": "string" },
+            "via": { "enum": ["scripts.start", "main"] },
+            "evidence": { "$ref": "#/$defs/evidence" }
+          }
+        }
+      ]
+    },
+    "registries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["url", "evidence", "private"],
+        "additionalProperties": false,
+        "properties": {
+          "url": { "type": "string" },
+          "evidence": { "$ref": "#/$defs/evidence" },
+          "private": { "type": "boolean", "description": "true: un registro que no es el público. Sin credenciales en el repo es un rechazo con motivo del paso 0d." }
+        }
+      }
+    },
+    "dockerfiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "role", "stages"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "role": { "enum": ["app", "test"] },
+          "stages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["image", "pinned", "evidence"],
+              "additionalProperties": false,
+              "properties": {
+                "image": { "type": "string" },
+                "pinned": { "type": "boolean", "description": "true solo con digest (@sha256:…)." },
+                "stage": { "type": "string" },
+                "evidence": { "$ref": "#/$defs/evidence" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ci": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "system"],
+        "additionalProperties": false,
+        "properties": {
+          "file": { "type": "string" },
+          "system": { "enum": ["travis", "circleci", "github-actions", "gitlab-ci", "bitbucket", "azure-pipelines", "jenkins"] }
+        }
+      }
+    },
+    "services": {
+      "type": "array",
+      "description": "Motores y servicios de apoyo con los que el propio repo se probaba o se levantaba: CI, compose y scripts. Es la primera fuente de la versión de cada imagen del sandbox (plan, paso 0c).",
+      "items": {
+        "type": "object",
+        "required": ["tech", "version", "image", "pinned", "via", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "tech": { "type": "string" },
+          "version": { "type": ["string", "null"] },
+          "image": { "type": ["string", "null"] },
+          "pinned": { "type": "boolean" },
+          "via": { "type": "string" },
+          "alias": { "type": "string" },
+          "note": { "type": "string" },
+          "evidence": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "stack": { "enum": ["maven", "gradle", "node"] },
+    "evidence": { "type": "string", "minLength": 1 },
+    "evidenceOrNull": { "type": ["string", "null"], "minLength": 1 },
+    "source": {
+      "type": "object",
+      "required": ["commit", "date"],
+      "additionalProperties": false,
+      "properties": {
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "build_changed": {
+          "type": "object",
+          "required": ["date", "files"],
+          "additionalProperties": false,
+          "description": "Última vez que se tocó el build: fecha la época de las dependencias mejor que el último commit.",
+          "properties": {
+            "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+            "files": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "declaration": {
+      "type": "object",
+      "required": ["version", "via", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": ["string", "null"] },
+        "via": { "type": "string", "minLength": 1 },
+        "image": { "type": "string" },
+        "note": { "type": "string" },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    }
+  }
+}

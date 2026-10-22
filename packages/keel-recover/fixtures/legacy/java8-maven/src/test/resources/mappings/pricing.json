@@ -1,0 +1,4 @@
+{
+  "request": { "method": "GET", "urlPattern": "/prices/.*" },
+  "response": { "status": 200, "jsonBody": { "amount": 10 } }
+}

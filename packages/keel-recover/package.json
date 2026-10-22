@@ -1,0 +1,47 @@
+{
+  "name": "@keel-system/keel-recover",
+  "version": "0.0.1",
+  "description": "Ingeniería inversa de un servicio existente hacia un diseño Keel: lee el repo del legacy, levanta su sandbox y recupera artefactos de diseño con su procedencia. Hoy: la huella del runtime (fingerprint) y las dependencias del entorno (env-deps).",
+  "type": "module",
+  "bin": {
+    "keel-recover": "src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "golden": "node scripts/golden.js",
+    "bench-check": "node scripts/bench-check.js"
+  },
+  "files": [
+    "src",
+    "assets"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "keel",
+    "legacy",
+    "reverse-engineering",
+    "agents"
+  ],
+  "author": "asuridev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keel-system/keel.git",
+    "directory": "packages/keel-recover"
+  },
+  "homepage": "https://github.com/keel-system/keel/tree/main/packages/keel-recover#readme",
+  "bugs": {
+    "url": "https://github.com/keel-system/keel/issues"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "commander": "^14.0.0",
+    "picocolors": "^1.1.1",
+    "yaml": "^2.8.0"
+  }
+}

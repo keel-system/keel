@@ -1,0 +1,1 @@
+CREATE TABLE invoice (id UUID PRIMARY KEY, amount NUMERIC(12, 2) NOT NULL);

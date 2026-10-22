@@ -1,0 +1,171 @@
+# Dependencias del entorno del legacy (paso 0b). La escribe `keel-recover env-deps` leyendo solo el repo.
+# Lo que decide el agente al montar el sandbox (imagen elegida, adaptaciones y su motivo) se añade
+# en `provision` y `adaptations`; lo demás lo regenera la herramienta.
+kind: environment
+schema: 1
+stack: node
+listen:
+  port: 3000
+  env: PORT
+  evidence: src/server.js:16
+config:
+  - key: AMQP_URL
+    env: AMQP_URL
+    default: amqp://guest:guest@rabbitmq:5672
+    via:
+      - process-env
+    evidence: src/routes/orders.js:8
+  - key: CATALOG_URL
+    env: CATALOG_URL
+    default: null
+    via:
+      - process-env
+    evidence: src/routes/orders.js:7
+  - key: DATABASE_URL
+    env: DATABASE_URL
+    default: postgres://orders:orders@localhost:5432/orders
+    via:
+      - env-example
+      - process-env
+    evidence: .env.example:3; src/routes/orders.js:5
+  - key: JWT_SECRET
+    env: JWT_SECRET
+    default: changeme
+    via:
+      - env-example
+    evidence: .env.example:4
+  - key: NODE_ENV
+    env: NODE_ENV
+    default: null
+    via:
+      - process-env
+    compared_with:
+      - production
+    evidence: src/server.js:5
+  - key: PORT
+    env: PORT
+    default: "3000"
+    via:
+      - env-example
+      - process-env
+    evidence: .env.example:2; src/server.js:6
+  - key: SMTP_HOST
+    env: SMTP_HOST
+    default: mailpit
+    via:
+      - process-env
+    evidence: src/routes/orders.js:7
+dependencies:
+  - kind: database
+    tech: postgresql
+    endpoints:
+      - host: localhost
+        port: 5432
+        database: orders
+        key: DATABASE_URL
+        url: postgres://orders:orders@localhost:5432/orders
+        evidence: .env.example:3
+      - env: DATABASE_URL
+        evidence: src/routes/orders.js:5
+    clients:
+      - library: knex
+        version: ^0.21.1
+        evidence: package.json:14
+      - library: pg
+        version: ^8.0.3
+        evidence: package.json:16
+    credentials:
+      - user: orders
+        password: orders
+        hardcoded: true
+        where: url
+        evidence: .env.example:3
+    provision:
+      via: container
+      aliases: []
+  - kind: broker
+    tech: rabbitmq
+    endpoints:
+      - host: rabbitmq
+        port: 5672
+        key: AMQP_URL
+        url: amqp://guest:guest@rabbitmq:5672
+        evidence: src/routes/orders.js:8
+    clients:
+      - library: amqplib
+        version: ^0.5.6
+        evidence: package.json:11
+    credentials:
+      - user: guest
+        password: guest
+        hardcoded: true
+        where: url
+        evidence: src/routes/orders.js:8
+    provision:
+      via: container
+      aliases:
+        - rabbitmq
+  - kind: smtp
+    tech: smtp
+    endpoints:
+      - host: mailpit
+        env: SMTP_HOST
+        evidence: src/routes/orders.js:7
+    clients:
+      - library: nodemailer
+        version: ^6.4.6
+        evidence: package.json:15
+    provision:
+      via: mailpit
+      aliases:
+        - mailpit
+  - kind: unknown
+    tech: null
+    endpoints:
+      - key: CATALOG_URL
+        evidence: src/routes/orders.js:7
+    clients: []
+    provision:
+      via: ask
+      reason: "dependencia sin provisión conocida: la decide el humano"
+outbound_http:
+  clients:
+    - library: axios
+      version: ^0.19.2
+      evidence: package.json:12
+  call_sites:
+    - client: axios
+      call: axios.get
+      evidence: src/routes/orders.js:13
+  urls:
+    - url: https://cdn.example.invalid/default.png
+      host: cdn.example.invalid
+      evidence: src/routes/orders.js:19
+assets:
+  - kind: collection
+    path: docs/orders.postman_collection.json
+    format: postman
+    requests: 2
+  - kind: migration
+    path: migrations/20200101000000_init.js
+  - kind: script
+    path: package.json
+    name: scripts.start
+    command: node src/server.js
+    evidence: package.json:6
+  - kind: script
+    path: package.json
+    name: scripts.db:start
+    command: docker run -d --name orders-pg -p 5432:5432 postgres
+    evidence: package.json:7
+  - kind: script
+    path: package.json
+    name: scripts.test
+    command: jest
+    evidence: package.json:8
+  - kind: seed
+    path: seeds/01_orders.js
+  - kind: test
+    path: spec/orders.spec.js
+    language: javascript
+adaptations: []

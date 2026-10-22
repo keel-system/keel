@@ -256,17 +256,28 @@ golpe).
 
 ## 4. Incrementos
 
-**Estado (2026-10-22):** incrementos 0 y 1 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
+**Estado (2026-10-22):** incrementos 0, 1 y 2 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
 (paso 0, paso 1, pasos 3-5 y paso 7). Su laboratorio es el repo `../keel-recover-lab`: sandboxes,
 grabaciones, el diseño `conduit` y los prototipos `tools/*.mjs` que los incrementos 4, 6 y 7 reescriben
-dentro del paquete. **El siguiente es el 2.** Sus fixtures de referencia son los `runtime.yaml` y
-`environment.yaml` escritos a mano en el laboratorio para los tres legacys del banco.
+dentro del paquete. **El siguiente es el 3.**
+
+Incremento 2, hecho: `packages/keel-recover` con `fingerprint` y `env-deps`, adaptadores Maven, Gradle y
+Node, y los schemas `runtime`/`environment` en `assets/schema/`. Puerta: las tres fixtures de
+`fixtures/legacy/` (`java8-maven`, `java8-gradle`, `node14`) salen byte a byte como `fixtures/expected/`
+(`npm test`, 31 pruebas). Contraste con la línea base: `npm run bench-check` da en verde los 37 hechos
+deterministas de los `runtime.yaml`/`environment.yaml` a mano y de las filas ENV/ASSET de las hojas. Lo
+que esas referencias traen y es del agente (la imagen elegida, `adaptations`, los hosts de payment y
+shipping que orders compone en tiempo de ejecución, el `only_in: production` de RealWorld) queda fuera de
+la herramienta y se lista aparte: es 0c-0e, del incremento 3. Hallazgos que el inc. 1 no tenía y la
+herramienta sí: el `scripts/build.sh` de Sock Shop construía con `maven:3.2-jdk-8` (la única versión de
+Maven del repo), su Travis usaba `oraclejdk11` contra un objetivo 1.8 (`consistent: false`), su compose
+levanta `orders-db` con `mongo` sin versión, y la spec de orders documenta 2 operaciones.
 
 | # | Qué | Puerta |
 |---|---|---|
 | 0 | Copiar este plan a `PLAN-KEEL-RECOVER.md` | — |
 | 1 | **Prueba manual, sin código**: pasos 0, 1, 5 y 7 a mano sobre los legacys del banco (`docs/recover-bench/`: `realworld-node`, `sockshop-orders` y `sockshop-shipping`), regenerando uno con keel-dotnet. Cada fila de sus hojas de respuestas pasa de `read` a `measured` o `refuted` | Corrida en `docs/recover-bench/corridas/` (no en `docs/corridas/`, cuya serie es la de los generadores) con intentos de 0d/0e, adaptaciones, cobertura por ronda, `keep` que fallan la primera vez y la tabla de paridad. **Decide si el paso 0 es viable antes de construirlo**, y deja la línea base del banco |
-| 2 | Paquete `keel-recover`: `fingerprint` (0a) y `env-deps` (0b) con adaptadores Java/Maven, Java/Gradle y Node; schemas `runtime`/`environment` fuera del DSL | Deterministas byte a byte sobre fixtures de legacy mínimas (`fixtures/legacy/java8-maven`, `node14`) |
+| 2 | Paquete `keel-recover`: `fingerprint` (0a) y `env-deps` (0b) con adaptadores Java/Maven, Java/Gradle y Node; schemas `runtime`/`environment` fuera del DSL | Deterministas byte a byte sobre fixtures de legacy mínimas (`fixtures/legacy/java8-maven`, `java8-gradle`, `node14`). **Hecho** |
 | 3 | Skill del sandbox (0c–0e) + `verify` (0f) | `verify` falsado: rojo con salida a internet, con cobertura vacía y con 5xx |
 | 4 | `introspect` (1a) + `probe` (1b): restauración, captura de efectos, normalización y cobertura. Reutiliza WireMock, Mailpit, `keel-core/src/lib/gen/broker-probes.js` y la `infra/` neutral | Una app legacy de fixture, en vivo como los `*-check`: cada efecto capturado y uno saboteado por tipo (por ejemplo, la cola espía sin enlazar sale en rojo) |
 | 5 | Skill `/keel-recover` (pasos 3 y 4) + `provenance.yaml` (fila en `SPEC_SIDE_FILES`) + `origin`/`evidence` en `structural-register.js` | `npm test` en keel-core; un `inferred` en el diseño final sale en rojo, y **también todo elemento del DSL sin fila en `provenance.yaml`**: en el inc. 1 se coló un rol copiado de la forma de una fixture, sin fila, y no lo habría cazado una puerta que solo mira lo que el agente declara |

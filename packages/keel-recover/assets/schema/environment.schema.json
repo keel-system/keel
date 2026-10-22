@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/recover/environment.schema.json",
+  "title": "Dependencias del entorno de un legacy (environment.yaml)",
+  "description": "Paso 0b de keel-recover. No forma parte del DSL: qué lee del entorno un servicio existente, de qué dependencias externas vive, cómo se provisiona cada una en el sandbox y qué activos trae su repo. `keel-recover env-deps` escribe todo salvo lo que decide el agente al montar el sandbox: la imagen y el alias de cada `provision` y la lista `adaptations`, cada una con su motivo.",
+  "type": "object",
+  "required": ["kind", "schema", "assets"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "environment" },
+    "schema": { "const": 1 },
+    "source": {
+      "type": "object",
+      "required": ["commit"],
+      "additionalProperties": false,
+      "properties": { "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" } }
+    },
+    "stack": { "enum": ["maven", "gradle", "node"] },
+    "unsupported": { "type": "string", "minLength": 1 },
+    "listen": {
+      "description": "Puerto en el que escucha la app y la clave que lo cambia: el sandbox lo saca de aquí, nunca de una plantilla (inc. 1: orders escucha en 8082, no en 8080).",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["port", "evidence"],
+          "additionalProperties": false,
+          "properties": {
+            "port": { "type": ["integer", "null"] },
+            "key": { "type": "string" },
+            "env": { "type": "string" },
+            "via": { "const": "framework-default" },
+            "evidence": { "$ref": "#/$defs/evidenceOrNull" }
+          }
+        }
+      ]
+    },
+    "config": {
+      "type": "array",
+      "description": "Cada punto de variación que el código lee del entorno o de su configuración.",
+      "items": {
+        "type": "object",
+        "required": ["key", "env", "default", "via", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "key": { "type": "string", "minLength": 1 },
+          "env": { "type": ["string", "null"], "description": "Variable de entorno que la fija (en Spring, por el binding relajado)." },
+          "default": { "type": ["string", "null"] },
+          "defaults": { "type": "array", "items": { "type": "string" } },
+          "via": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "enum": ["placeholder", "value-annotation", "configuration-properties", "getenv", "system-property", "process-env", "env-example", "dotenv"] }
+          },
+          "feeds": { "type": "array", "items": { "type": "string" }, "description": "Propiedades en cuyo valor aparece como placeholder." },
+          "compared_with": { "type": "array", "items": { "type": "string" }, "description": "Valores con los que el código la compara: el modo cambia la conducta (NODE_ENV)." },
+          "profiles": { "type": "array", "items": { "type": "string" } },
+          "masked": { "const": true, "description": "Leída de un .env versionado con nombre de secreto: el valor no se copia." },
+          "evidence": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "tech", "endpoints", "clients", "provision"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "enum": ["database", "cache", "broker", "smtp", "http", "tracing", "discovery", "unknown"] },
+          "tech": { "type": ["string", "null"] },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["evidence"],
+              "additionalProperties": false,
+              "properties": {
+                "host": { "type": ["string", "null"] },
+                "host_key": { "type": "string", "description": "Clave de configuración que cambia el host: el sandbox publica el contenedor con el alias que el legacy ya espera, sin tocar su configuración." },
+                "port": { "type": "integer" },
+                "database": { "type": ["string", "null"] },
+                "path": { "type": "string" },
+                "embedded": { "const": true },
+                "key": { "type": "string" },
+                "env": { "type": "string" },
+                "default": { "type": "string" },
+                "profile": { "type": "string" },
+                "url": { "type": "string" },
+                "evidence": { "$ref": "#/$defs/evidence" }
+              }
+            }
+          },
+          "clients": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["library", "version", "evidence"],
+              "additionalProperties": false,
+              "properties": {
+                "library": { "type": "string" },
+                "version": { "type": ["string", "null"], "description": "null: la gestiona el BOM o el padre (Spring Boot)." },
+                "evidence": { "$ref": "#/$defs/evidence" }
+              }
+            }
+          },
+          "credentials": { "type": "array", "items": { "$ref": "#/$defs/credential" } },
+          "enabled_by_default": { "type": "boolean" },
+          "enabled": {
+            "type": "object",
+            "required": ["evidence"],
+            "additionalProperties": false,
+            "properties": { "key": { "type": "string" }, "evidence": { "$ref": "#/$defs/evidence" } }
+          },
+          "provision": {
+            "type": "object",
+            "required": ["via"],
+            "description": "La clase la fija la herramienta; la imagen, su versión y su motivo los añade el agente en 0c (por eso admite más campos).",
+            "properties": {
+              "via": { "enum": ["container", "wiremock", "mailpit", "none", "ask"] },
+              "aliases": { "type": "array", "items": { "type": "string" } },
+              "reason": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "credentials": {
+      "type": "array",
+      "description": "Credenciales fijas sin una dependencia a la que atribuirlas.",
+      "items": {
+        "allOf": [{ "$ref": "#/$defs/credential" }],
+        "properties": { "tech": { "type": ["string", "null"] } }
+      }
+    },
+    "outbound_http": {
+      "type": "object",
+      "required": ["clients", "call_sites", "urls"],
+      "additionalProperties": false,
+      "description": "Llamadas HTTP salientes cuyo destino no se puede leer (lo compone el código o llega en el cuerpo) y URLs http literales del código: candidatas que el agente cruza con las llamadas.",
+      "properties": {
+        "clients": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["library", "version", "evidence"],
+            "additionalProperties": false,
+            "properties": { "library": { "type": "string" }, "version": { "type": ["string", "null"] }, "evidence": { "$ref": "#/$defs/evidence" } }
+          }
+        },
+        "call_sites": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["client", "call", "evidence"],
+            "additionalProperties": false,
+            "properties": { "client": { "type": "string" }, "call": { "type": "string" }, "evidence": { "$ref": "#/$defs/evidence" } }
+          }
+        },
+        "urls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["url", "host", "evidence"],
+            "additionalProperties": false,
+            "properties": { "url": { "type": "string" }, "host": { "type": ["string", "null"] }, "evidence": { "$ref": "#/$defs/evidence" } }
+          }
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "description": "Activos del repo: entrada para la herramienta y afirmaciones de sus autores, que pasan a medidas solo cuando una sonda las confirma (principio 7).",
+      "items": {
+        "type": "object",
+        "required": ["kind", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "enum": ["test", "api-spec", "contract-test", "collection", "collection-environment", "stub", "seed", "migration", "compose", "script"] },
+          "path": { "type": "string" },
+          "format": { "type": "string" },
+          "language": { "type": "string" },
+          "level": { "enum": ["unit", "integration"] },
+          "requests": { "type": "integer" },
+          "paths": { "type": "integer" },
+          "operations": { "type": "integer" },
+          "seeds": { "const": true },
+          "name": { "type": "string" },
+          "command": { "type": "string" },
+          "evidence": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "adaptations": {
+      "type": "array",
+      "description": "Lo que el agente cambió del ENTORNO para construir o arrancar el legacy (nunca de su código), cada cosa con su motivo.",
+      "items": {
+        "type": "object",
+        "required": ["what", "why"],
+        "properties": {
+          "what": { "type": "string", "minLength": 1 },
+          "why": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "evidence": { "type": "string", "minLength": 1 },
+    "evidenceOrNull": { "type": ["string", "null"], "minLength": 1 },
+    "credential": {
+      "type": "object",
+      "required": ["hardcoded", "where", "evidence"],
+      "properties": {
+        "tech": { "type": ["string", "null"] },
+        "user": { "type": ["string", "null"] },
+        "password": { "type": ["string", "null"] },
+        "user_key": { "type": "string" },
+        "password_key": { "type": "string" },
+        "hardcoded": { "type": "boolean" },
+        "where": { "enum": ["code", "config", "url"] },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    }
+  }
+}

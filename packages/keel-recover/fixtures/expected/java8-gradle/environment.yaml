@@ -1,0 +1,153 @@
+# Dependencias del entorno del legacy (paso 0b). La escribe `keel-recover env-deps` leyendo solo el repo.
+# Lo que decide el agente al montar el sandbox (imagen elegida, adaptaciones y su motivo) se añade
+# en `provision` y `adaptations`; lo demás lo regenera la herramienta.
+kind: environment
+schema: 1
+stack: gradle
+listen:
+  port: 9090
+  key: PORT
+  env: PORT
+  evidence: src/main/resources/application.yml:2
+config:
+  - key: DB_HOST
+    env: DB_HOST
+    default: billing-db
+    via:
+      - placeholder
+    feeds:
+      - spring.datasource.url
+    evidence: src/main/resources/application.yml:5
+  - key: DB_PASSWORD
+    env: DB_PASSWORD
+    default: billing
+    via:
+      - placeholder
+    feeds:
+      - spring.datasource.password
+    evidence: src/main/resources/application.yml:7
+  - key: PORT
+    env: PORT
+    default: "9090"
+    via:
+      - placeholder
+    feeds:
+      - server.port
+    evidence: src/main/resources/application.yml:2
+  - key: REDIS_HOST
+    env: REDIS_HOST
+    default: cache
+    via:
+      - placeholder
+    feeds:
+      - spring.redis.host
+    evidence: src/main/resources/application.yml:9
+  - key: TAX_URL
+    env: TAX_URL
+    default: http://tax-service/rates
+    via:
+      - placeholder
+    feeds:
+      - tax.url
+    evidence: src/main/resources/application.yml:13
+  - key: billing.currency
+    env: BILLING_CURRENCY
+    default: EUR
+    via:
+      - value-annotation
+    evidence: src/main/java/com/example/billing/TaxClient.java:11
+  - key: tax.url
+    env: TAX_URL
+    default: null
+    via:
+      - value-annotation
+    evidence: src/main/java/com/example/billing/TaxClient.java:8
+dependencies:
+  - kind: database
+    tech: postgresql
+    endpoints:
+      - host: billing-db
+        host_key: DB_HOST
+        port: 5432
+        database: billing
+        key: spring.datasource.url
+        url: jdbc:postgresql://${DB_HOST:billing-db}:5432/billing
+        evidence: src/main/resources/application.yml:5
+    clients:
+      - library: org.postgresql:postgresql
+        version: 42.2.5
+        evidence: build.gradle:28
+      - library: org.springframework.boot:spring-boot-starter-data-jpa
+        version: null
+        evidence: build.gradle:25
+    credentials:
+      - user: billing
+        password: billing
+        password_key: DB_PASSWORD
+        hardcoded: false
+        where: config
+        evidence: src/main/resources/application.yml:6-7
+    provision:
+      via: container
+      aliases:
+        - billing-db
+  - kind: cache
+    tech: redis
+    endpoints:
+      - host: cache
+        host_key: REDIS_HOST
+        key: spring.redis.host
+        evidence: src/main/resources/application.yml:9
+    clients:
+      - library: org.springframework.boot:spring-boot-starter-data-redis
+        version: null
+        evidence: build.gradle:26
+    provision:
+      via: container
+      aliases:
+        - cache
+  - kind: broker
+    tech: kafka
+    endpoints:
+      - host: kafka
+        key: spring.kafka.bootstrap-servers
+        evidence: src/main/resources/application.yml:11
+    clients:
+      - library: org.springframework.kafka:spring-kafka
+        version: 2.1.10.RELEASE
+        evidence: build.gradle:27
+    provision:
+      via: container
+      aliases:
+        - kafka
+  - kind: http
+    tech: http
+    endpoints:
+      - host: tax-service
+        path: /rates
+        key: tax.url
+        url: http://tax-service/rates
+        evidence: src/main/resources/application.yml:13
+    clients: []
+    provision:
+      via: wiremock
+      aliases:
+        - tax-service
+outbound_http:
+  clients: []
+  call_sites:
+    - client: RestTemplate
+      call: restTemplate.postForEntity
+      evidence: src/main/java/com/example/billing/TaxClient.java:17
+  urls: []
+assets:
+  - kind: migration
+    path: src/main/resources/db/migration/V1__init.sql
+    format: flyway
+  - kind: seed
+    path: src/main/resources/data.sql
+  - kind: test
+    path: src/test/java/com/example/billing/BillingApplicationTests.java
+    language: java
+    level: unit
+adaptations: []

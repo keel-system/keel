@@ -1,0 +1,10 @@
+image: gradle:4.10-jdk8
+
+services:
+  - postgres:9.6
+  - name: redis:4
+    alias: cache
+
+test:
+  script:
+    - ./gradlew test

@@ -1,0 +1,31 @@
+plugins {
+    id 'org.springframework.boot' version '2.0.9.RELEASE'
+    id 'java'
+    id 'war'
+}
+
+ext {
+    kafkaVersion = '2.1.10.RELEASE'
+}
+
+group = 'com.example'
+sourceCompatibility = 1.8
+
+bootWar {
+    archiveBaseName = 'billing-service'
+}
+
+repositories {
+    jcenter()
+    maven { url 'https://repo.spring.io/libs-milestone' }
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    implementation "org.springframework.kafka:spring-kafka:${kafkaVersion}"
+    runtimeOnly 'org.postgresql:postgresql:42.2.5'
+    providedRuntime 'org.springframework.boot:spring-boot-starter-tomcat'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}

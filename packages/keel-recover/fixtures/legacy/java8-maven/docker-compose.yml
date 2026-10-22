@@ -1,0 +1,8 @@
+version: '2'
+services:
+  inventory:
+    image: example/inventory
+  inventory-db:
+    image: mongo:3.6
+  rabbitmq:
+    image: rabbitmq:3.6-management

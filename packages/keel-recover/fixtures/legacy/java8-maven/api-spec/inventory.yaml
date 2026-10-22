@@ -1,0 +1,12 @@
+swagger: "2.0"
+info:
+  title: Inventory
+paths:
+  /stock:
+    get:
+      responses:
+        "200": { description: ok }
+  /stock/{sku}:
+    get:
+      responses:
+        "200": { description: ok }
