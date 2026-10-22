@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/recover/target.schema.json",
+  "title": "El servicio regenerado contra el que se mide la paridad (target.yaml)",
+  "description": "Dónde está en marcha el servicio que un generador de Keel regeneró desde el diseño recuperado (paso 7), y lo justo para ejecutar contra él los mismos flujos que contra el legacy: desde qué contenedor salen las peticiones, cómo se vacía su base entre flujos y cómo obtiene su token cada actor. Lo levanta el humano con el `deploy/` del proyecto generado; `keel-recover parity` no lo arranca. Solo valores de prueba: nunca credenciales de producción.",
+  "type": "object",
+  "required": ["kind", "schema", "name", "base", "tool"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "target" },
+    "schema": { "const": 1 },
+    "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "description": "Nombre corto (`conduit-dotnet`): da nombre a PARITY-<name>.md y a sus grabaciones." },
+    "project": { "type": "string", "description": "El proyecto generado, relativo al workspace (`services/conduit-dotnet`). Informativo." },
+    "base": { "type": "string", "pattern": "^https?://", "description": "La URL del servicio vista desde el contenedor de herramientas." },
+    "tool": {
+      "type": "object",
+      "required": ["container"],
+      "additionalProperties": false,
+      "description": "El contenedor con curl desde el que salen las peticiones. Si no existe y se da `network`, se crea en esa red (curl fijado por digest) y se borra al terminar.",
+      "properties": {
+        "container": { "type": "string", "minLength": 1 },
+        "network": { "type": "string", "minLength": 1 }
+      }
+    },
+    "database": {
+      "type": "object",
+      "required": ["container", "tech", "name"],
+      "additionalProperties": false,
+      "description": "La base del regenerado. Cada flujo parte de ella VACÍA (el servicio nuevo no tiene datos que conservar), y se comprueba que lo está.",
+      "properties": {
+        "container": { "type": "string", "minLength": 1 },
+        "tech": { "const": "mongodb", "description": "Solo MongoDB, como el resto de keel-recover hasta medir otro motor." },
+        "name": { "type": "string", "minLength": 1 },
+        "auth": {
+          "type": "object",
+          "required": ["user", "password"],
+          "additionalProperties": false,
+          "properties": {
+            "user": { "type": "string" },
+            "password": { "type": "string" },
+            "authDb": { "type": "string" }
+          }
+        }
+      }
+    },
+    "idp": {
+      "type": "object",
+      "required": ["tokenUrl", "clientId", "password"],
+      "additionalProperties": false,
+      "description": "El proveedor OIDC de prueba del deploy, para los actores `via: idp`: password grant con un usuario por actor (el nombre del actor, salvo que `users` diga otro).",
+      "properties": {
+        "tokenUrl": { "type": "string", "pattern": "^https?://" },
+        "clientId": { "type": "string", "minLength": 1 },
+        "clientSecret": { "type": "string" },
+        "password": { "type": "string" },
+        "users": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    }
+  }
+}

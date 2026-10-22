@@ -8,6 +8,7 @@ import { verify } from './commands/verify.js';
 import { init } from './commands/init.js';
 import { introspect, probe } from './commands/observe.js';
 import { characterize } from './commands/characterize.js';
+import { parity } from './commands/parity.js';
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const program = new Command();
@@ -98,5 +99,16 @@ program
   .option('--only <ids>', 'solo estos flujos, separados por comas (no escribe ni el sello ni FIDELITY.md)')
   .option('--runtime <podman|docker>', 'runtime de contenedores (por defecto, el primero en marcha)')
   .action((legacy, options) => characterize(legacy, options));
+
+program
+  .command('parity')
+  .description(
+    'Paso 7: ejecuta los mismos flujos contra el servicio regenerado (en marcha con el deploy/ de su proyecto, descrito en target.yaml) y compara todos los datos de cada paso con los que grabó characterize del legacy, traducidos por contract-map.yaml. Sale en rojo con un keep, fix o new en rojo, con una diferencia de datos sin declarar (declaredDifferences) o sin nada que comparar. Escribe PARITY-<destino>.md'
+  )
+  .argument('<legacy>', 'directorio legacy/<servicio>/ del workspace')
+  .requiredOption('--target <archivo>', 'target.yaml del servicio regenerado')
+  .option('--spec <dir>', 'el diseño recuperado (por defecto, specs/<servicio> del mismo workspace)')
+  .option('--runtime <podman|docker>', 'runtime de contenedores (por defecto, el primero en marcha)')
+  .action((legacy, options) => parity(legacy, options));
 
 await program.parseAsync();

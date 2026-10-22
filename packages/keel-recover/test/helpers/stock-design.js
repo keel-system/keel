@@ -100,6 +100,12 @@ steps:
 **Given**: ningún artículo.
 **When**: \`listItems\`.
 **Then**: Status \`200\`; una página vacía.
+
+\`\`\`keel-flow
+steps:
+  - op: listItems
+    expect: { status: ok, body: { items.length: 0, totalElements: 0 } }
+\`\`\`
 `;
 
 export const PROVENANCE = {
@@ -122,6 +128,19 @@ export const CONTRACT_MAP = {
       createItem: { method: 'POST', path: '/items' },
     },
   },
+  keel: {
+    statusClasses: { ok: 200, created: 201 },
+    errorCode: 'code',
+    operations: {
+      listItems: { method: 'GET', path: '/api/v1/items', page: { items: 'items', total: 'totalElements' } },
+      createItem: { method: 'POST', path: '/api/v1/items' },
+    },
+  },
+  declaredDifferences: [
+    { kind: 'solo-keel', path: String.raw`^(items\[\]\.)?id$`, reason: 'fix-wire: Keel expone el id del recurso' },
+    { kind: 'solo-keel', path: '^quantity$', ops: ['createItem'], reason: 'fix-wire: el alta devuelve el recurso entero (el legacy, solo el sku)' },
+    { kind: 'solo-keel', path: '^totalElements$', ops: ['listItems'], reason: 'fix-wire: la página lleva su total' },
+  ],
 };
 
 /** Escribe el diseño y el mapa en un workspace: `{ legacyDir, specDir }`. */
@@ -135,6 +154,41 @@ export function writeStockDesign(root, { scenarios = SCENARIOS, provenance = PRO
   fs.writeFileSync(path.join(legacyDir, 'contract-map.yaml'), YAML.stringify(map));
   fs.writeFileSync(path.join(legacyDir, 'legacy.yaml'), YAML.stringify({ kind: 'legacy', schema: 1, name: 'stock', repo: '../../repo' }));
   return { legacyDir, specDir };
+}
+
+/**
+ * El stock regenerado: el contrato de Keel (prefijo /api/v1, página, 400 con code, id expuesto) y el
+ * mismo comportamiento que el legacy salvo el fix. `sabotage` rompe la paridad conservando la forma:
+ *   subject   expone un campo que el legacy no tiene (el `sub` de quien lo creó)
+ *   default   pierde la cantidad por defecto (null en vez de 0)
+ *   second    el segundo elemento del listado pierde su sku (solo lo ve quien compara TODA la lista)
+ *   unfixed   conserva el defecto del fix (422 sin code)
+ *   status    un alta responde 200
+ */
+export function fakeStockKeel({ sabotage = null } = {}) {
+  let items = [];
+  let seq = 0;
+  return {
+    reset: async () => {
+      items = [];
+      return { ok: true };
+    },
+    http: async ({ method, url, body }) => {
+      const { pathname } = new URL(url);
+      if (method === 'GET' && pathname === '/api/v1/items') {
+        const page = items.map((i, n) => (sabotage === 'second' && n === 1 ? { id: i.id, quantity: i.quantity } : { ...i }));
+        return { status: 200, body: { items: page, page: 0, size: 20, totalElements: items.length, totalPages: 1 } };
+      }
+      if (method === 'POST' && pathname === '/api/v1/items') {
+        if (!body?.sku) return sabotage === 'unfixed' ? { status: 422, body: { error: 'sku is required' } } : { status: 400, body: { status: 400, code: 'SKU_REQUIRED', message: 'sku' } };
+        if (typeof body.quantity === 'string') return { status: 400, body: { status: 400, code: 'VALIDATION_FAILED' } };
+        const item = { id: `id-${++seq}`, sku: body.sku, quantity: body.quantity ?? (sabotage === 'default' ? null : 0), ...(sabotage === 'subject' ? { subject: 'u-1' } : {}) };
+        items.push(item);
+        return { status: sabotage === 'status' ? 200 : 201, body: { ...item } };
+      }
+      return { status: 404, body: { code: 'NOT_FOUND' } };
+    },
+  };
 }
 
 /** Un stock en memoria que se porta como fixtures/sandbox/node-mongo/repo/src/server.js. */

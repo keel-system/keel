@@ -65,14 +65,14 @@ export function loadContractMap(file) {
  * Los flujos que se ejecutan contra el legacy, con su marca (las del paso 4, que lee keel-core) y su
  * bloque ejecutable. `marked` es provenance.characterization.flows.
  */
-export function plannedFlows(scenariosText, marked) {
+export function plannedFlows(scenariosText, marked, { marks = EXECUTED_MARKS } = {}) {
   const markOf = new Map(marked.map((flow) => [flow.id, flow]));
   const digests = new Map(flowDigests(scenariosText).map((entry) => [entry.id, entry.digest]));
   const out = [];
   for (const block of splitScenarioBlocks(scenariosText)) {
     const id = scenarioIdOf(block);
     const marking = markOf.get(id);
-    if (!marking || !EXECUTED_MARKS.includes(marking.mark)) continue;
+    if (!marking || !marks.includes(marking.mark)) continue;
     const { flow, error } = readFlowBlock(block);
     out.push({ id, mark: marking.mark, ref: marking.ref, sha256: digests.get(id), flow, error });
   }
@@ -100,10 +100,22 @@ function matches(actual, expected, absentIsNull) {
   if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
     if ('startsWith' in expected) return typeof actual === 'string' && actual.startsWith(expected.startsWith);
     if ('sameMembers' in expected) {
+      // Un miembro objeto casa por los campos que afirma: el mismo flujo sirve al legacy y al regenerado,
+      // que añade lo suyo (el id del recurso). Los escalares, enteros.
+      const member = (x, y) =>
+        x && typeof x === 'object' && !Array.isArray(x) && y && typeof y === 'object'
+          ? Object.entries(x).every(([k, v]) => JSON.stringify(y[k]) === JSON.stringify(v))
+          : JSON.stringify(y) === JSON.stringify(x);
+      const used = new Set();
       return (
         Array.isArray(actual) &&
         actual.length === expected.sameMembers.length &&
-        expected.sameMembers.every((x) => actual.some((y) => JSON.stringify(y) === JSON.stringify(x)))
+        expected.sameMembers.every((x) => {
+          const i = actual.findIndex((y, n) => !used.has(n) && member(x, y));
+          if (i < 0) return false;
+          used.add(i);
+          return true;
+        })
       );
     }
   }
@@ -180,7 +192,10 @@ async function credentials(ctx, flow, vars) {
     if (!how) throw new Error(`la clase de actor «${kind}» (${actor}) no está en contract-map.yaml → ${ctx.sideName}.actors`);
     if (how.via === 'none') tokens[actor] = null;
     else if (how.via === 'forge') tokens[actor] = forgeToken(how.secret, fill(how.claims, { actor, random: ctx.random() }));
-    else {
+    else if (how.via === 'idp') {
+      if (!ctx.idpToken) throw new Error(`la clase de actor «${kind}» pide un token del proveedor OIDC y el destino no declara \`idp\``);
+      tokens[actor] = await ctx.idpToken(actor);
+    } else {
       const r = await call(ctx, { op: how.op, input: fill(how.input, { actor }) }, vars, tokens);
       const token = pick(r.data, how.token);
       if (r.status >= 300 || typeof token !== 'string') {
@@ -188,31 +203,37 @@ async function credentials(ctx, flow, vars) {
       }
       tokens[actor] = token;
     }
+    if (how.setup) {
+      const r = await call(ctx, { op: how.setup.op, as: actor, input: fill(how.setup.input, { actor }) }, vars, tokens);
+      if (r.status === 0 || r.status >= 300) throw new Error(`no se pudo preparar a ${actor} con ${how.setup.op}: status ${r.status}, ${JSON.stringify(r.raw).slice(0, 160)}`);
+    }
   }
   return tokens;
 }
 
-/** Errores que impiden ejecutar el flujo, antes de tocar el legacy. */
-export function flowDefects(planned) {
+/** Qué expectativa vale en un paso: contra el legacy, un fix comprueba su `legacy:`. */
+const expectationOf = (planned, step, sideName) => (sideName === 'legacy' && planned.mark === 'fix' && step.legacy ? step.legacy : step.expect);
+
+/** Errores que impiden ejecutar el flujo, antes de tocar el lado. */
+export function flowDefects(planned, sideName = 'legacy') {
   if (planned.error) return [planned.error];
   const steps = planned.flow.steps;
   if (planned.mark === 'fix' && !steps.some((s) => s.legacy)) {
     return ['es un fix y ningún paso dice qué hace el legacy (`legacy:`): no demuestra que el defecto exista'];
   }
   if (planned.mark !== 'fix' && steps.some((s) => s.legacy)) return [`es ${planned.mark} y trae \`legacy:\`, que solo tiene sentido en un fix`];
-  const exp = (s) => (planned.mark === 'fix' && s.legacy ? s.legacy : s.expect);
-  if (!steps.some((s) => exp(s))) return ['ningún paso afirma nada (`expect`): un flujo sin expectativas no demuestra nada'];
+  if (!steps.some((s) => expectationOf(planned, s, sideName))) return ['ningún paso afirma nada (`expect`): un flujo sin expectativas no demuestra nada'];
   return [];
 }
 
 /**
  * Ejecuta un flujo planificado contra un lado. `ctx` = `{ side, sideName, semantics, base, http,
- * reset, random }`: `http({ method, url, headers, body })` → `{ status, body }` y `reset()` →
+ * reset, random, idpToken? }`: `http({ method, url, headers, body })` → `{ status, body }` y `reset()` →
  * `{ ok, error }` vienen de fuera, para poder falsar el comprobador sin contenedores.
  */
 export async function runFlow(ctx, planned) {
   const record = { id: planned.id, mark: planned.mark, ...(planned.ref ? { ref: planned.ref } : {}), sha256: planned.sha256, ok: false, failures: [], steps: [] };
-  const defects = flowDefects(planned);
+  const defects = flowDefects(planned, ctx.sideName);
   if (defects.length) {
     record.failures.push(...defects);
     return record;
@@ -228,7 +249,7 @@ export async function runFlow(ctx, planned) {
     for (const [i, step] of planned.flow.steps.entries()) {
       const res = await call(ctx, step, vars, tokens);
       for (const [k, p] of Object.entries(step.save ?? {})) vars[k] = pick(res.data, p);
-      const expectation = planned.mark === 'fix' && step.legacy ? step.legacy : step.expect;
+      const expectation = expectationOf(planned, step, ctx.sideName);
       const fails = expectation
         ? check(fill(expectation, vars), res, { side: ctx.side, semantics: ctx.semantics })
         : res.status === 0 || res.status >= 500
@@ -257,9 +278,9 @@ export async function runCharacterization(ctx, planned, { log = () => {} } = {})
 }
 
 /** Cuántos de cada marca, y cuántos en verde. */
-export function tally(records) {
+export function tally(records, marks = EXECUTED_MARKS) {
   const out = {};
-  for (const mark of EXECUTED_MARKS) {
+  for (const mark of marks) {
     const of = records.filter((r) => r.mark === mark);
     out[mark] = { ok: of.filter((r) => r.ok).length, total: of.length };
   }

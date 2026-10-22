@@ -11,10 +11,14 @@ function tail(text, n = 300) {
   return t.length > n ? `…${t.slice(-n)}` : t;
 }
 
-/** `{ ok, value (última línea), out (todo stdout) }` o `{ ok: false, error }`. */
-export function mongoEval(rt, db, js) {
+/**
+ * `{ ok, value (última línea), out (todo stdout) }` o `{ ok: false, error }`. `auth` para una base con
+ * credenciales (la del servicio regenerado; los sandboxes del legacy no las llevan).
+ */
+export function mongoEval(rt, db, js, { auth = null } = {}) {
+  const creds = auth ? ['-u', auth.user, '-p', auth.password, '--authenticationDatabase', auth.authDb ?? 'admin'] : [];
   for (const shell of ['mongosh', 'mongo']) {
-    const r = rt.exec(db, [shell, '--quiet', '--eval', js]);
+    const r = rt.exec(db, [shell, '--quiet', ...creds, '--eval', js]);
     if (r.status === 0) return { ok: true, value: r.stdout.trim().split(/\r?\n/).pop(), out: r.stdout };
     if (!/not found|no such file|executable file|exec failed/i.test(r.stderr + r.stdout)) return { ok: false, error: tail(r.stderr || r.stdout) };
   }

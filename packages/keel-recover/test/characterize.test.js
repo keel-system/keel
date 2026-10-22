@@ -222,3 +222,12 @@ test('el sello no se escribe con un subconjunto (--only), y lleva la huella de l
   assert.deepEqual(doc.legacy, { name: 'stock' }, 'lo que no se sabe no se escribe');
   assert.ok(doc.flows.every((f) => /^[0-9a-f]{64}$/.test(f.sha256)));
 });
+
+test('el diseño se llama como su directorio, aunque no se llame como el legacy (conduit ← realworld-node)', () => {
+  const root = tmpDir('keel-recover-characterize-spec-');
+  const { legacyDir, specDir } = writeStockDesign(root);
+  const other = path.join(root, 'specs', 'almacen');
+  fs.cpSync(specDir, other, { recursive: true });
+  const prep = prepareCharacterization(legacyDir, { spec: other, sandbox: false });
+  assert.deepEqual([prep.name, prep.service, prep.legacy.name], ['stock', 'almacen', 'stock']);
+});

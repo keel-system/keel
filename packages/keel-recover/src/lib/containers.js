@@ -41,7 +41,7 @@ export function resolveRuntime() {
   return null;
 }
 
-/** Operaciones del runtime que usan verify, introspect y probe. */
+/** Operaciones del runtime que usan verify, introspect, probe, characterize y parity. */
 export function containerRuntime(runtime) {
   const rt = (args, opts) => exec(runtime, args, opts);
   return {
@@ -51,6 +51,9 @@ export function containerRuntime(runtime) {
     execAsync: (container, args, opts) => execAsync(runtime, ['exec', ...(opts?.input !== undefined ? ['-i'] : []), container, ...args], opts),
     logs: (container) => rt(['logs', container]),
     run: (args, opts) => rt(['run', '--rm', ...args], opts),
+    runDetached: (args, opts) => rt(['run', '-d', ...args], opts),
+    remove: (container) => rt(['rm', '-f', container]),
+    exists: (container) => rt(['inspect', '--format', '{{.Id}}', container]).status === 0,
     stop: (container) => rt(['stop', '-t', '20', container]),
     start: (container) => rt(['start', container]),
     image: (container) => rt(['inspect', '--format', '{{.Config.Image}}', container]).stdout.trim(),

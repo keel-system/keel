@@ -256,11 +256,38 @@ golpe).
 
 ## 4. Incrementos
 
-**Estado (2026-10-22):** incrementos 0 a 6 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
+**Estado (2026-10-22):** incrementos 0 a 7 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
 (paso 0, paso 1, pasos 3-5 y paso 7). Su laboratorio es el repo `../keel-recover-lab`: sandboxes,
 grabaciones, el diseño `conduit` y los prototipos `tools/*.mjs` que los incrementos 6 y 7 reescriben
-dentro del paquete (el 4 reescribió `probe.mjs` y `express-routes.js`; el 6, `flows.mjs` del lado legacy).
-**El siguiente es el 7.**
+dentro del paquete (el 4 reescribió `probe.mjs` y `express-routes.js`; el 6, `flows.mjs`; el 7, `parity.mjs`).
+**Queda el 8** (DSL 2.23, autorización por propietario).
+
+Incremento 7, hecho: `keel-recover parity legacy/<servicio> --target <target.yaml>` (paso 7). Ejecuta los mismos
+flujos de `validation-scenarios.md` —todas las marcas, `new` incluido— contra el servicio regenerado, que el humano
+levanta con el `deploy/` de su proyecto y describe en `target.yaml` (schema `target.schema.json`: la URL vista desde
+un contenedor de herramientas que la herramienta crea en la red del deploy si no existe y borra al terminar, la base,
+que cada flujo encuentra VACÍA y se comprueba, y el proveedor OIDC de prueba). El lado del legacy **no se vuelve a
+ejecutar**: se lee de lo que grabó `characterize`, y por eso se exige su sello al día y en verde, y cada grabación
+del texto de hoy. `contract-map.yaml` gana el lado `keel` (los actores `via: idp`, con `setup` para dar de alta el
+perfil con su propio token), `declaredDifferences` y `semantics.volatile` (lo que el prototipo llevaba fijo en el
+código). El comparador (`src/lib/parity.js`) es el del prototipo con dos cambios: compara **todos** los elementos de
+cada lista, no solo el primero, y no compara una frontera que el regenerado no cumple, porque esa diferencia es la
+frontera misma. Sale en rojo con un `keep`, `fix` o `new` en rojo, con una diferencia de datos sin declarar y sin
+nada que comparar. Escribe `PARITY-<destino>.md` (determinista) y las grabaciones. Un cambio en el ejecutor del 6:
+un miembro objeto de `sameMembers` casa por los campos que el escenario afirma, porque el mismo flujo sirve a los
+dos lados y el regenerado añade el `id`. **Puerta: la corrida de control** (`docs/recover-bench/corridas/
+2026-10-22-inc7-paridad-con-la-herramienta.md`): `characterize` y `parity` sobre RealWorld y su regeneración en
+keel-dotnet dan **la misma tabla** que el inc. 1 a mano, número a número —`keep` 19/19 en los dos lados, `fix` 5/5,
+`new` 1/1, `frontier` 2/2, 52 pasos, 66 diferencias, 33 declaradas y 33 sin declarar, que son los mismos tres
+defectos (9 `subject`, 11 `image`, 13 `favorited`/`following`)—, y la repiten en una segunda ejecución. Para
+llegar, conduit se migró al formato de la herramienta sin cambiar el diseño (bloques `keel-flow` desde la misma
+fuente, el mapa y una `provenance.yaml` que cumple su schema, con las 4 `operator` como `inferred` anotadas). La
+corrida cazó un defecto de la herramienta: con `--spec`, el diseño salía con el nombre del legacy. Además,
+`test/parity.test.js` falsa el comparador sin contenedores (un campo expuesto que ningún flujo afirma —el caso del
+`sub`—, un valor por defecto perdido, un campo ausente solo en el segundo elemento, un fix sin corregir, un keep
+roto, nada que comparar). Fuera de alcance: la red en vivo de `parity` es la corrida del banco, no una fixture
+(no hay un «regenerado» de fixture), y el lado `keel` del mapa se escribe a mano: derivarlo de `api.keel.yaml` es
+posible y no se ha hecho.
 
 Incremento 6, hecho: `keel-recover characterize legacy/<servicio>` (paso 5) y el criterio `characterized` de
 `keel validate --ready`. **La decisión que lo hace puerta**: los pasos ejecutables de cada flujo `keep`, `fix` o
@@ -385,7 +412,7 @@ solo la versión de la CI y las adaptaciones escritas.
 | 4 | `introspect` (1a) + `probe` (1b): restauración, captura de efectos, normalización y cobertura. Reutiliza WireMock, Mailpit, `keel-core/src/lib/gen/broker-probes.js` y la `infra/` neutral | Una app legacy de fixture, en vivo como los `*-check`: cada efecto capturado y uno saboteado por tipo (por ejemplo, la cola espía sin enlazar sale en rojo). **Hecho** (`npm run probe-check`) |
 | 5 | Skill `/keel-recover` (pasos 3 y 4) + `provenance.yaml` (fila en `SPEC_SIDE_FILES`) + `origin`/`evidence` en `structural-register.js` | `npm test` en keel-core; un `inferred` en el diseño final sale en rojo, y **también todo elemento del DSL sin fila en `provenance.yaml`**: en el inc. 1 se coló un rol copiado de la forma de una fixture, sin fila, y no lo habría cazado una puerta que solo mira lo que el agente declara. **Hecho** (criterio `provenance`) |
 | 6 | Criterio `characterized` en `readiness.js` + `FIDELITY.md` | `test/readiness.test.js`: romper el sello apaga `characterized` y solo ese criterio. **Hecho** (más `npm run characterize-check`) |
-| 7 | Paridad legacy ↔ regenerado (paso 7) | La corrida de control del incremento 1, repetida con la herramienta: la misma tabla |
+| 7 | Paridad legacy ↔ regenerado (paso 7) | La corrida de control del incremento 1, repetida con la herramienta: la misma tabla. **Hecho** |
 | 8 | **DSL 2.23: autorización por propietario.** Encontrada en el inc. 1 sobre RealWorld: «solo el autor edita o borra» no se puede declarar, porque `scoping` acota por un claim y no por un campo del recurso. `OBL-RESOURCE-SCOPE` no admite aceptarse y **bloquea la generación**. Sin embargo la acotación es producible con `callerIdentity`, igual que el detector ya reconoce para el nivel `service`: falta decir qué campo del recurso guarda al propietario (`Article.author` → `Profile.subject`) y con qué `code` se rechaza. Toca el schema de `security`, `crossrefs.js` (la obligación se cierra con la declaración), una mutación, los tres generadores y una fixture (conduit) | La fixture con propiedad genera en los tres generadores y su 403 sale en una red en vivo; el inc. 1 vuelve a ejecutar FL-ART-004 y FL-COM-002 contra el regenerado |
 
 ## 5. Riesgos

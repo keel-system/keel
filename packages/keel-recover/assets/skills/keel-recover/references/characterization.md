@@ -86,3 +86,7 @@ Con el sandbox en verde (`verify.json` con snapshot), cada flujo parte del snaps
 - `legacy/<servicio>/FIDELITY.md`: corrección, cobertura, rutas del legacy que ninguna operación recoge, lo no observado, procedencia, `fix` y frontera.
 
 `--only FL-A,FL-B` ejecuta un subconjunto para iterar, sin sello ni informe. **Si un `keep` falla, el diseño dice algo que el legacy no hace: se corrige el diseño, no el escenario.** Ajustar la expectativa hasta que pase convierte el escenario en una descripción de lo que salió, que es lo contrario de caracterizar.
+
+## Después de regenerar: `keel-recover parity`
+
+El mismo documento sirve para el paso 7. Con el servicio regenerado en marcha (su `deploy/`) y descrito en un `target.yaml`, `keel-recover parity legacy/<servicio> --target target.yaml` ejecuta contra él los mismos flujos —los `new` también— por el lado `keel` de `contract-map.yaml`, y compara **todos** los datos de cada paso con lo que grabó `characterize` del legacy. Por eso los bloques se escriben en operaciones del diseño y nunca en rutas de un lado. Una diferencia que la comparación encuentra y nadie ha declarado es un defecto del diseño recuperado hasta que se explique: se corrige el diseño, o se declara en `contract-map.yaml → declaredDifferences` con el `fix-*` o el `F-*` que la explica.

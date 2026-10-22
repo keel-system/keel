@@ -23,15 +23,16 @@ const readYaml = (file) => (fs.existsSync(file) ? YAML.parse(fs.readFileSync(fil
  * Todo lo que hace falta para ejecutar, sin tocar ningún contenedor. `errors` no vacío = no se
  * puede caracterizar (no es un flujo en rojo: es que no hay contra qué).
  */
-export function prepareCharacterization(legacyArg, { spec = null } = {}) {
+export function prepareCharacterization(legacyArg, { spec = null, sandbox: withSandbox = true } = {}) {
   const legacyDir = path.resolve(legacyArg);
   const errors = [];
   const legacyDoc = readYaml(path.join(legacyDir, 'legacy.yaml'));
   const name = legacyDoc?.name ?? path.basename(legacyDir);
   const specDir = spec ? path.resolve(spec) : path.resolve(legacyDir, '..', '..', 'specs', name);
 
-  const sandbox = loadSandbox(path.join(legacyDir, 'sandbox'));
-  errors.push(...sandbox.errors);
+  // La paridad no toca el legacy (lee lo que grabó characterize): no necesita su sandbox.
+  const sandbox = withSandbox ? loadSandbox(path.join(legacyDir, 'sandbox')) : null;
+  if (sandbox) errors.push(...sandbox.errors);
   const { map, errors: mapErrors } = loadContractMap(path.join(legacyDir, 'contract-map.yaml'));
   errors.push(...mapErrors);
 
@@ -48,6 +49,8 @@ export function prepareCharacterization(legacyArg, { spec = null } = {}) {
   return {
     errors,
     name,
+    // El diseño se llama como su directorio: con --spec puede no llamarse como el legacy (conduit ← realworld-node).
+    service: path.basename(specDir),
     legacyDir,
     specDir,
     sandbox,
@@ -123,7 +126,7 @@ export function writeCharacterization(prep, records, { seal = true, snapshotHash
   fs.writeFileSync(
     fidelityFile,
     renderFidelity({
-      service: prep.name,
+      service: prep.service,
       legacy: prep.legacy,
       records,
       newFlows: prep.newFlows,

@@ -4,10 +4,11 @@ Ingeniería inversa de un servicio existente hacia un diseño [Keel](https://git
 única entrada es el **repo** del legacy, con su historial de git; la herramienta lo lee y **nunca lo
 modifica**. Plan completo y estado, incremento a incremento: [`PLAN-KEEL-RECOVER.md`](../../PLAN-KEEL-RECOVER.md).
 
-Hoy (incremento 6) trae el paso 0 entero, la observación del paso 1, la recuperación del diseño (pasos 3 y 4) y
-la medida de su fidelidad (paso 5): los dos pasos deterministas, la preparación del workspace, la skill que monta
+Hoy (incremento 7) trae el paso 0 entero, la observación del paso 1, la recuperación del diseño (pasos 3 y 4), la
+medida de su fidelidad (paso 5) y la paridad con el servicio regenerado (paso 7): los dos pasos deterministas, la preparación del workspace, la skill que monta
 el sandbox, el juez, la introspección, el ejecutor de sondas, la skill que escribe el diseño con su procedencia y
-el ejecutor de los escenarios de caracterización contra el legacy:
+el ejecutor de los escenarios de caracterización contra el legacy y contra el regenerado, con la comparación de
+todos sus datos:
 
 ```bash
 keel-recover fingerprint <legacy> [-o runtime.yaml]       # paso 0a: huella del runtime
@@ -20,6 +21,7 @@ keel-recover probe legacy/<servicio>/probes/round-1.yaml  # paso 1b: una ronda d
 /keel-recover specs/<servicio>                            # el agente: el diseño, su procedencia y la caracterización
 keel-recover characterize legacy/<servicio>               # paso 5: los escenarios contra el legacy, sello y FIDELITY.md
 keel validate --ready specs/<servicio>                    # criterios provenance y characterized
+keel-recover parity legacy/<servicio> --target target.yaml   # paso 7: los mismos flujos contra el regenerado, PARITY-<destino>.md
 ```
 
 `-o` se niega a escribir dentro del legacy. `--check <archivo>` no escribe y sale en rojo si el archivo no es lo
@@ -144,6 +146,20 @@ legacy que ninguna operación del mapa recoge, lo no observado, procedencia, `fi
 **dentro** del flujo para que el sello del flujo —el mismo del careo— cubra lo ejecutado: tocar un paso o su prosa
 después de ejecutarlo lo deja sin ejecutar, y el criterio `characterized` de `keel validate --ready` sale en rojo.
 
+## La paridad (paso 7)
+
+Tras `keel-<tech> build` y `/keel-generate-<tech>`, el humano levanta el servicio regenerado con su `deploy/` y lo
+describe en un `target.yaml` (schema `assets/schema/target.schema.json`): su URL vista desde un contenedor de
+herramientas en la red del deploy (si no existe y se da `tool.network`, la herramienta lo crea y lo borra al
+terminar), su base, que cada flujo encuentra vacía, y su proveedor OIDC de prueba. `keel-recover parity
+legacy/<servicio> --target target.yaml` ejecuta contra él los mismos flujos —`new` incluidos— traducidos por el lado
+`keel` de `contract-map.yaml`, y compara **todos** los datos de cada paso con los que grabó `characterize` del
+legacy, cuyo sello exige al día y en verde. Cada diferencia es equivalente (`null` frente a ausente con
+`absentIsNull`, o un campo `volatile`), declarada (`declaredDifferences`, con su fix o su frontera) o sin declarar.
+Sale en rojo con un `keep`, `fix` o `new` en rojo, con una diferencia sin declarar y sin nada que comparar, y escribe
+`PARITY-<destino>.md`. Los escenarios no bastan: en el inc. 1 el regenerado de RealWorld pasó todos y llevaba tres
+defectos del diseño recuperado que solo vio esta comparación.
+
 ## Adaptadores
 
 Java/Maven (`pom.xml`, `.mvn/wrapper`), Java/Gradle (`build.gradle[.kts]`, `gradle.properties`, `settings`,
@@ -177,6 +193,9 @@ wrapper) y Node (`package.json`, `.nvmrc`, `.node-version`, `.tool-versions`, to
   con el sello leído por keel-core sin nada pendiente y `FIDELITY.md`. Cuatro sabotajes, cada uno en rojo con
   exactamente sus flujos: un `keep` que afirma otro status, un `fix` cuyo defecto no existiría, el snapshot borrado
   y una base restaurada con otra huella.
+- La red en vivo de `parity` es la corrida de control del banco (`docs/recover-bench/corridas/`): `characterize` y
+  `parity` sobre RealWorld y su regeneración en keel-dotnet dan la misma tabla que el inc. 1 a mano. Sin
+  contenedores, `test/parity.test.js` falsa el comparador con un regenerado falso saboteado.
 - `npm run bench-verify` (podman o docker, las imágenes del inc. 1): el juez contra los tres sandboxes del banco
   en `../keel-recover-lab`, desde copias. Ejercita JaCoCo (sockshop) y nyc en Node 8 (RealWorld).
 - `npm run bench-check`: las dos órdenes sobre los tres legacys del banco en `../keel-recover-lab`, contra los
