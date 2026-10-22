@@ -256,10 +256,37 @@ golpe).
 
 ## 4. Incrementos
 
-**Estado (2026-10-22):** incrementos 0, 1, 2 y 3 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
+**Estado (2026-10-22):** incrementos 0, 1, 2, 3 y 4 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
 (paso 0, paso 1, pasos 3-5 y paso 7). Su laboratorio es el repo `../keel-recover-lab`: sandboxes,
-grabaciones, el diseño `conduit` y los prototipos `tools/*.mjs` que los incrementos 4, 6 y 7 reescriben
-dentro del paquete. **El siguiente es el 4.**
+grabaciones, el diseño `conduit` y los prototipos `tools/*.mjs` que los incrementos 6 y 7 reescriben
+dentro del paquete (el 4 ya reescribió `probe.mjs` y `express-routes.js`). **El siguiente es el 5.**
+
+Incremento 4, hecho: `keel-recover introspect` (1a) y `keel-recover probe` (1b). `introspect` pregunta al runtime
+las rutas del framework (precarga `express-routes.cjs`, que `init` siembra junto a la de cobertura; las líneas
+`Mapped` del log de Spring 4 / Boot 1.x, o `/actuator/mappings` de Boot 2+), las colecciones con sus índices y sus
+columnas de estado y la topología del broker, y lo funde en `surface.yaml` con la pasada en que apareció cada
+elemento (`seen`) o dejó de verse (`absent`). `probe` ejecuta una ronda (schema `probes.schema.json`, que admite
+las rondas a mano del inc. 1) desde el snapshot de verify, con los efectos de cada sonda: diff de MongoDB, diario
+de WireMock, publicaciones en RabbitMQ y correo de Mailpit, normalizados; repite las sondas de concurrencia y
+cuenta sus desenlaces, y vuelca la cobertura de la ronda con lo que queda sin cubrir por archivo. `sandbox.yaml`
+gana las secciones `broker`, `stubs`, `mail`, `introspection` y `probe`. Tres decisiones que no estaban en el
+prototipo: (1) el broker se espía con el **firehose** de RabbitMQ en una cola propia, no leyendo las colas del
+legacy (eso le robaba el mensaje a su consumidor y no veía un exchange sin colas); (2) cada canal lleva un
+**canario** por sonda, al abrir y al cerrar la ventana, por el mismo camino que el efecto del legacy, porque un
+canal roto graba silencio y el silencio se lee como «el legacy no hace eso»; (3) la cobertura de la ronda se mide
+**sola** (JaCoCo con `dump --reset`; nyc y V8 con un archivo testigo), porque el acumulado de antes enmascara un
+medidor que dejó de grabar. De keel-core reutiliza el vocabulario de WireMock y de Mailpit (`gen/http-stub-probes.js`, `gen/mail-probes.js`); no el de `gen/broker-probes.js` ni la `infra/` neutral, que la tabla preveía: aquel lee colas del arnés y el espía aquí es otro, y la `infra/` levanta las imágenes modernas que el legacy no puede usar. Criterios `PRB-VERIFY`, `PRB-CHANNELS`, `PRB-RESTORE`, `PRB-BROKER`, `PRB-STUBS`,
+`PRB-MAIL` y `PRB-COVERAGE`; la huella del snapshot la toma ahora verify (`snapshot.hash`). Puerta:
+`npm run probe-check` sobre `fixtures/sandbox/node-effects` (Express + MongoDB + RabbitMQ + WireMock + Mailpit):
+en verde, 36 comprobaciones (cada efecto donde la fixture lo produce, la superficie y la repetibilidad: dos
+ejecuciones de las mismas sondas graban lo mismo) y cinco sabotajes que conservan la forma, cada uno en rojo con
+exactamente su criterio: cola espía sin enlace, WireMock sin diario, un Mailpit que no es al que envía el legacy,
+snapshot borrado y la app reiniciada sin la precarga que escribe la cobertura al parar. Medido al construirlo: la
+superficie es perezosa también en el broker (tras verify el exchange no existía si RabbitMQ arrancó después de la
+escritura del juez; aparece tras la ronda), y una convención «las claves `_…` no se comparan» se comía el `_id` de
+MongoDB. Fuera de alcance, con motivo: base solo MongoDB y broker solo RabbitMQ (los del banco); JaCoCo y nyc se
+vuelcan por ronda pero la red en vivo solo ejercita V8; el bucle de exploración (el agente que lee
+`surface.yaml` y lo no cubierto y escribe la ronda siguiente) no tiene skill propia todavía.
 
 Incremento 2, hecho: `packages/keel-recover` con `fingerprint` y `env-deps`, adaptadores Maven, Gradle y
 Node, y los schemas `runtime`/`environment` en `assets/schema/`. Puerta: las tres fixtures de
@@ -299,7 +326,7 @@ solo la versión de la CI y las adaptaciones escritas.
 | 1 | **Prueba manual, sin código**: pasos 0, 1, 5 y 7 a mano sobre los legacys del banco (`docs/recover-bench/`: `realworld-node`, `sockshop-orders` y `sockshop-shipping`), regenerando uno con keel-dotnet. Cada fila de sus hojas de respuestas pasa de `read` a `measured` o `refuted` | Corrida en `docs/recover-bench/corridas/` (no en `docs/corridas/`, cuya serie es la de los generadores) con intentos de 0d/0e, adaptaciones, cobertura por ronda, `keep` que fallan la primera vez y la tabla de paridad. **Decide si el paso 0 es viable antes de construirlo**, y deja la línea base del banco |
 | 2 | Paquete `keel-recover`: `fingerprint` (0a) y `env-deps` (0b) con adaptadores Java/Maven, Java/Gradle y Node; schemas `runtime`/`environment` fuera del DSL | Deterministas byte a byte sobre fixtures de legacy mínimas (`fixtures/legacy/java8-maven`, `java8-gradle`, `node14`). **Hecho** |
 | 3 | Skill del sandbox (0c–0e) + `verify` (0f) | `verify` falsado: rojo con salida a internet, con cobertura vacía y con 5xx. **Hecho** |
-| 4 | `introspect` (1a) + `probe` (1b): restauración, captura de efectos, normalización y cobertura. Reutiliza WireMock, Mailpit, `keel-core/src/lib/gen/broker-probes.js` y la `infra/` neutral | Una app legacy de fixture, en vivo como los `*-check`: cada efecto capturado y uno saboteado por tipo (por ejemplo, la cola espía sin enlazar sale en rojo) |
+| 4 | `introspect` (1a) + `probe` (1b): restauración, captura de efectos, normalización y cobertura. Reutiliza WireMock, Mailpit, `keel-core/src/lib/gen/broker-probes.js` y la `infra/` neutral | Una app legacy de fixture, en vivo como los `*-check`: cada efecto capturado y uno saboteado por tipo (por ejemplo, la cola espía sin enlazar sale en rojo). **Hecho** (`npm run probe-check`) |
 | 5 | Skill `/keel-recover` (pasos 3 y 4) + `provenance.yaml` (fila en `SPEC_SIDE_FILES`) + `origin`/`evidence` en `structural-register.js` | `npm test` en keel-core; un `inferred` en el diseño final sale en rojo, y **también todo elemento del DSL sin fila en `provenance.yaml`**: en el inc. 1 se coló un rol copiado de la forma de una fixture, sin fila, y no lo habría cazado una puerta que solo mira lo que el agente declara |
 | 6 | Criterio `characterized` en `readiness.js` + `FIDELITY.md` | `test/readiness.test.js`: romper el sello apaga `characterized` y solo ese criterio |
 | 7 | Paridad legacy ↔ regenerado (paso 7) | La corrida de control del incremento 1, repetida con la herramienta: la misma tabla |

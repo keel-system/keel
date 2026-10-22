@@ -91,3 +91,29 @@ judge:
 ```
 
 Si el legacy no tiene ninguna ruta de salud (RealWorld), mejor: el juez nunca la usa.
+
+### Los canales del paso 1
+
+El paso 1 (`keel-recover introspect` y `probe`) lee en el sandbox **cada efecto** del legacy, y `sandbox.yaml` dice dónde. Cada dependencia de `environment.yaml` que produce un efecto necesita su sección, o `probe` se niega (`PRB-CHANNELS`): sin ella grabaría silencio donde el legacy sí hace algo.
+
+```yaml
+broker:                                    # dependencia kind: broker (hoy solo RabbitMQ)
+  service: <servicio del broker>
+  tech: rabbitmq
+  api: http://<alias>:15672/api            # la imagen, en su variante -management (misma versión)
+  # user/password/vhost: los de desarrollo del repo, por defecto guest/guest y /
+stubs:                                     # dependencias provision.via: wiremock
+  service: <servicio del WireMock>
+  admin: http://<alias>:<puerto>/__admin
+  hosts: [http://payment:<puerto>]         # las bases con las que LLAMA el legacy, una por alias
+mail:                                      # dependencia kind: smtp
+  service: <servicio del Mailpit>
+  api: http://<alias>:8025/api/v1
+  smtp: <host>:<puerto>                    # con el que ENVÍA el legacy
+introspection:
+  routes: { kind: express, file: /coverage/keel-recover-routes.json }   # o spring-log, o actuator con path
+```
+
+- `hosts` y `smtp` son las direcciones **del legacy**, no las del espía: el canario de cada sonda viaja por ellas, y si no acaban en el WireMock o el Mailpit que se lee, la sonda sale en rojo.
+- RabbitMQ se espía con su firehose (`rabbitmqctl trace_on`), que necesita la API de gestión: por eso la variante `-management` de la **misma** versión que pide la evidencia, con una adaptación que lo diga.
+- Rutas de Express: monta también la precarga `express-routes.cjs` de `sandbox/instrument` (`NODE_OPTIONS=--require /recover/v8-coverage-exit.cjs --require /recover/express-routes.cjs`) y dale con `RECOVER_ROUTES_OUT` un archivo dentro del volumen de la cobertura. Spring 4 / Boot 1.x: `spring-log` (las líneas `Mapped "{[...]}"` del arranque, que listan también Spring Data REST); Boot 2+: `actuator` con `path: /actuator/mappings`.

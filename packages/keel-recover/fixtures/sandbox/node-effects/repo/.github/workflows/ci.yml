@@ -1,0 +1,16 @@
+name: ci
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7.0
+      rabbitmq:
+        image: rabbitmq:3.13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.18.0
+      - run: npm install

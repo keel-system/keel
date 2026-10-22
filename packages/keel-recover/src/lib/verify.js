@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { composeProject, containerOf } from './sandbox.js';
 import { staticCriteria } from './verify-static.js';
 import { parseJsonFiles, readIstanbul, readJacocoCsv, readV8, splitDump } from './coverage.js';
+import { dbHash, takeSnapshot } from './mongo.js';
 
 // Paso 0f: el juez del sandbox. Decide si el legacy está levantado de forma que lo que se grabe
 // después sea comportamiento y no un síntoma del entorno. Las dos reglas que midió el inc. 1:
@@ -10,7 +11,8 @@ import { parseJsonFiles, readIstanbul, readJacocoCsv, readV8, splitDump } from '
 //      OK con todas las consultas en 500);
 //   2. «sin 5xx» no basta: cada sonda declara qué estados son acierto (RealWorld contra Mongo 7
 //      daba 422 a un usuario nuevo), y la versión del motor se cruza con la de la CI.
-// Si todo sale en verde, toma el snapshot de la base: el estado de partida de las sondas.
+// Si todo sale en verde, toma el snapshot de la base: el estado de partida de las sondas, con su
+// huella (`snapshot.hash`), que el paso 1 compara tras cada restauración.
 
 // Los estáticos que impiden arrancar: con la red abierta el legacy dispararía efectos en internet
 // (principio 5), y sin sus servicios no hay a quién preguntar. El resto (un digest, el motor) se
@@ -87,7 +89,7 @@ export async function verify(sandbox, rt, { up = true, snapshot = true, log = ()
 
   report.ok = report.criteria.every((c) => c.ok);
   if (report.ok && snapshot && spec.database) {
-    const s = takeSnapshot(rt, db, spec.database);
+    const s = takeSnapshot(rt, db, spec.database.name);
     report.snapshot = s;
     if (!s.ok) report.ok = false;
   }
@@ -136,7 +138,7 @@ export function probe(rt, tool, base, p, nonce) {
   };
 }
 
-async function waitReady(rt, tool, spec, pollMs) {
+export async function waitReady(rt, tool, spec, pollMs) {
   const deadline = Date.now() + (spec.app.startup_seconds ?? 180) * 1000;
   let last = '';
   for (;;) {
@@ -175,26 +177,9 @@ export function egressCriterion(rt, app, tool, targets) {
 
 // ── base ──────────────────────────────────────────────────────────────────────────────────────
 
-// dbHash cambia con cualquier escritura y existe desde los Mongo 3.x; el shell es `mongosh` en
-// las imágenes modernas y `mongo` en las antiguas.
-function mongoEval(rt, db, js) {
-  for (const shell of ['mongosh', 'mongo']) {
-    const r = rt.exec(db, [shell, '--quiet', '--eval', js]);
-    if (r.status === 0) return { ok: true, value: r.stdout.trim().split(/\r?\n/).pop() };
-    if (!/not found|no such file|executable file|exec failed/i.test(r.stderr + r.stdout)) return { ok: false, error: tail(r.stderr || r.stdout) };
-  }
-  return { ok: false, error: 'ni mongosh ni mongo en el contenedor de la base' };
-}
-
 export function dbFingerprint(rt, db, database) {
   if (database.tech !== 'mongodb') return { ok: false, error: `rastro de escritura sin implementar para ${database.tech}` };
-  return mongoEval(rt, db, `print(db.getSiblingDB(${JSON.stringify(database.name)}).runCommand({dbHash: 1}).md5)`);
-}
-
-function takeSnapshot(rt, db, database) {
-  const archive = '/tmp/recover-snapshot.archive';
-  const r = rt.exec(db, ['mongodump', '--quiet', `--db=${database.name}`, `--archive=${archive}`]);
-  return r.status === 0 ? { ok: true, where: `${db}:${archive}` } : { ok: false, error: tail(r.stderr || r.stdout) };
+  return dbHash(rt, db, database.name);
 }
 
 // ── cobertura ─────────────────────────────────────────────────────────────────────────────────

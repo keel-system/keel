@@ -1,0 +1,45 @@
+# Ronda 1 del legacy de fixture del paso 1: una sonda por efecto y una por clase. La puerta
+# (scripts/probe-check.js) sabe qué tiene que grabar cada una.
+x-steps:
+  create: &create { name: alta, request: { method: POST, path: /api/orders, body: { customer: ana, email: ana@shop.invalid, amount: 30 } }, capture: { id: id } }
+probes:
+  - id: P-001
+    why: lectura sin efectos
+    steps: [ { name: listado, request: { method: GET, path: /api/orders } } ]
+  - id: P-002
+    why: alta con sus cuatro efectos (base, cobro, evento y correo)
+    steps: [ *create, { name: lectura, request: { method: GET, path: "/api/orders/{{id}}" } } ]
+  - id: P-003
+    why: alta inválida
+    steps: [ { name: alta-sin-importe, request: { method: POST, path: /api/orders, body: { customer: ana, email: ana@shop.invalid } } } ]
+  - id: P-004
+    class: outbound-failure
+    why: el cobro responde 500
+    setup:
+      stubs:
+        - { request: { method: POST, url: /payments }, response: { status: 500 } }
+    steps: [ *create ]
+  - id: P-005
+    class: lifecycle
+    why: cancelar dos veces
+    steps:
+      - *create
+      - { name: cancelar, request: { method: POST, path: "/api/orders/{{id}}/cancel" } }
+      - { name: cancelar-otra-vez, request: { method: POST, path: "/api/orders/{{id}}/cancel" } }
+  - id: P-006
+    class: broker-down
+    why: alta con el broker parado (¿se pierde el evento?)
+    setup: { broker: down }
+    steps: [ *create ]
+  - id: P-007
+    class: concurrency
+    why: dos cancelaciones a la vez
+    repeat: 3
+    steps: [ *create ]
+    then_parallel:
+      - { name: cancelar-1, request: { method: POST, path: "/api/orders/{{id}}/cancel" } }
+      - { name: cancelar-2, request: { method: POST, path: "/api/orders/{{id}}/cancel" } }
+  - id: P-008
+    why: un evento entrante que nadie consume
+    steps:
+      - { name: publicar, publish: { exchange: orders, routingKey: order.audited, payload: { id: x } } }

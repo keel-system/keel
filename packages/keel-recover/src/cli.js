@@ -6,6 +6,7 @@ import { fingerprint } from './lib/fingerprint.js';
 import { envDeps } from './lib/env-deps.js';
 import { verify } from './commands/verify.js';
 import { init } from './commands/init.js';
+import { introspect, probe } from './commands/observe.js';
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const program = new Command();
@@ -63,5 +64,27 @@ program
   .option('--down', 'baja el compose (y sus volúmenes) al terminar', false)
   .option('--runtime <podman|docker>', 'runtime de contenedores (por defecto, el primero en marcha)')
   .action((sandbox, options) => verify(sandbox, options));
+
+program
+  .command('introspect')
+  .description(
+    'Paso 1a: la superficie del legacy preguntada al runtime (rutas del framework, colecciones con índices y columnas de estado, topología del broker). Funde el resultado en surface.yaml'
+  )
+  .argument('[sandbox]', 'sandbox.yaml o su directorio', '.')
+  .option('-o, --out <archivo>', 'surface.yaml (por defecto, junto al directorio del sandbox)')
+  .option('--runtime <podman|docker>', 'runtime de contenedores (por defecto, el primero en marcha)')
+  .action((sandbox, options) => introspect(sandbox, options));
+
+program
+  .command('probe')
+  .description(
+    'Paso 1b: ejecuta una ronda de sondas (probes/round-N.yaml) contra el sandbox en verde. Cada sonda parte del snapshot y graba sus respuestas y sus efectos (diff de la base, llamadas a WireMock, publicaciones en el broker y correo), normalizados; un canario por canal prueba que cada efecto se está capturando. Vuelca la cobertura de la ronda y vuelve a preguntar la superficie'
+  )
+  .argument('<ronda>', 'archivo de la ronda (legacy/<servicio>/probes/round-N.yaml)')
+  .option('--sandbox <dir>', 'sandbox.yaml o su directorio (por defecto, ../sandbox desde la ronda)')
+  .option('--only <ids>', 'solo estas sondas, separadas por comas (no cuenta para la serie de cobertura)')
+  .option('--out <dir>', 'dónde escribir las grabaciones (por defecto, recordings/<ronda>/)')
+  .option('--runtime <podman|docker>', 'runtime de contenedores (por defecto, el primero en marcha)')
+  .action((round, options) => probe(round, options));
 
 await program.parseAsync();

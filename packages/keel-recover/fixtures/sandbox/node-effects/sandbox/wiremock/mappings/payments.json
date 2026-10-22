@@ -1,0 +1,8 @@
+{
+  "request": { "method": "POST", "url": "/payments" },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": { "id": "pay-0001", "status": "AUTHORIZED" }
+  }
+}

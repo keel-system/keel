@@ -14,7 +14,7 @@ import { envDeps } from './env-deps.js';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const SKILLS = ['keel-recover-sandbox'];
-const INSTRUMENTS = ['v8-coverage-exit.cjs'];
+const INSTRUMENTS = ['v8-coverage-exit.cjs', 'express-routes.cjs'];
 
 export function kebab(name) {
   return String(name)

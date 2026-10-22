@@ -4,8 +4,8 @@ Ingeniería inversa de un servicio existente hacia un diseño [Keel](https://git
 única entrada es el **repo** del legacy, con su historial de git; la herramienta lo lee y **nunca lo
 modifica**. Plan completo y estado, incremento a incremento: [`PLAN-KEEL-RECOVER.md`](../../PLAN-KEEL-RECOVER.md).
 
-Hoy (incremento 3) trae el paso 0 entero: los dos pasos deterministas, la preparación del workspace, la skill
-que monta el sandbox y el juez:
+Hoy (incremento 4) trae el paso 0 entero y la observación del paso 1: los dos pasos deterministas, la
+preparación del workspace, la skill que monta el sandbox, el juez, la introspección y el ejecutor de sondas:
 
 ```bash
 keel-recover fingerprint <legacy> [-o runtime.yaml]       # paso 0a: huella del runtime
@@ -13,6 +13,8 @@ keel-recover env-deps    <legacy> [-o environment.yaml]   # paso 0b: dependencia
 keel-recover init <legacy> --name <servicio>              # en el workspace de diseño: prepara legacy/<servicio>/
 /keel-recover-sandbox legacy/<servicio>                   # el agente: Dockerfile, compose y bucles (0c-0e)
 keel-recover verify legacy/<servicio>/sandbox             # paso 0f: el juez
+keel-recover introspect legacy/<servicio>/sandbox         # paso 1a: la superficie, preguntada al runtime
+keel-recover probe legacy/<servicio>/probes/round-1.yaml  # paso 1b: una ronda de sondas con sus efectos
 ```
 
 `-o` se niega a escribir dentro del legacy. `--check <archivo>` no escribe y sale en rojo si el archivo no es lo
@@ -66,6 +68,43 @@ verde, toma el snapshot de la base:
 | `VER-DB-TRACE` | la escritura deja rastro en la base (MongoDB, por su `dbHash`); la salud del legacy no cuenta |
 | `VER-COVERAGE` | la cobertura (JaCoCo, nyc o V8) graba código de la app |
 
+## La observación (paso 1)
+
+`introspect` pregunta la superficie al **runtime**, no al código: la tabla de rutas del framework (Express por
+la precarga `express-routes.cjs`, que la lee del proceso; Spring 4 / Boot 1.x por las líneas `Mapped "{[...]}"`
+del arranque; Boot 2+ por `/actuator/mappings`), las colecciones con sus índices y sus columnas de estado (texto
+con pocos valores) y la topología del broker. La funde en `legacy/<servicio>/surface.yaml`, y cada ronda la vuelve
+a preguntar: la superficie se declara de forma perezosa (una colección nace con su primer documento, un exchange
+con la primera publicación), así que cada elemento guarda en qué pasada apareció (`seen`) y en cuál dejó de verse
+(`absent`).
+
+`probe` ejecuta una ronda (`probes/round-N.yaml`, schema `assets/schema/probes.schema.json`: pasos HTTP o
+publicaciones en el broker, capturas, `setup` por clase —stubs, broker caído, base caída—, pasos paralelos y
+`repeat` para las carreras) contra el sandbox en verde. Cada sonda parte del snapshot de verify y graba en
+`recordings/<ronda>/<id>.json` la respuesta de cada paso y sus **efectos**: el diff de la base, las llamadas que
+recibió WireMock, lo que se publicó en el broker (por el firehose de RabbitMQ en una cola espía propia: no consume
+de las del legacy y ve también el exchange por defecto) y el correo de Mailpit, normalizados (JWT por sus claims,
+ids por orden de aparición, fechas fuera, más las reglas del legacy en `sandbox.yaml#probe.normalize`). Al final
+vuelca la cobertura de la ronda (`recordings/coverage.json` lleva la serie y dice si se estanca) y lo que queda sin
+cubrir, por archivo, para la ronda siguiente.
+
+Un canal que no captura graba **silencio**, y el silencio se lee como «el legacy no hace eso». Por eso cada canal
+lleva un canario en cada sonda, por el mismo camino que el efecto del legacy (las bases con las que llama, el
+`host:puerto` con el que envía), al abrir la ventana y al cerrarla. Si falta, la grabación sale marcada
+(`untrusted`) y la ronda en rojo:
+
+| Id | Qué exige |
+|---|---|
+| `PRB-VERIFY` | `verify.json` en verde y con snapshot: si no, no se sondea |
+| `PRB-CHANNELS` | cada dependencia de `environment.yaml` que produce un efecto tiene su sección en `sandbox.yaml` (`database`, `broker`, `stubs`, `mail`) |
+| `PRB-RESTORE` | tras cada restauración, la base tiene la huella del snapshot |
+| `PRB-BROKER`, `PRB-STUBS`, `PRB-MAIL` | los dos canarios de cada sonda llegaron a la cola espía, al diario de WireMock y al buzón |
+| `PRB-COVERAGE` | la ronda grabó código de la app **ella sola**: el acumulado de antes no cuenta |
+
+Límites de hoy, con su motivo: la base es solo MongoDB y el broker solo RabbitMQ (los del banco); los demás son un
+rechazo de `sandbox.schema.json` hasta medirlos. JaCoCo y nyc se vuelcan por ronda, pero la red en vivo del paso 1
+solo ejercita V8.
+
 ## Adaptadores
 
 Java/Maven (`pom.xml`, `.mvn/wrapper`), Java/Gradle (`build.gradle[.kts]`, `gradle.properties`, `settings`,
@@ -85,6 +124,14 @@ wrapper) y Node (`package.json`, `.nvmrc`, `.node-version`, `.tool-versions`, to
   `VER-WRITE`, `VER-DB-TRACE`) y escritura que no deja rastro donde el sandbox cree (`VER-DB-TRACE`). La sonda de
   egreso no se puede falsar en vivo (con la red abierta no se arranca): la falsa `test/verify.test.js` con un
   doble del runtime.
+- `npm run probe-check` (podman o docker, red para el build, ~15 min): `introspect` y `probe` contra el sandbox
+  real de `fixtures/sandbox/node-effects` (Express + MongoDB + RabbitMQ + un tercero en WireMock + Mailpit). En
+  verde, la superficie trae las rutas del router montado y, tras la ronda, el exchange que el legacy declara al
+  publicar; la ronda graba cada efecto donde la fixture lo produce (36 comprobaciones) y dos ejecuciones de las
+  mismas sondas graban lo mismo. Cinco sabotajes que conservan la forma, cada uno en rojo con exactamente su
+  criterio: la cola espía sin enlace (`PRB-BROKER`), WireMock sin diario (`PRB-STUBS`), un Mailpit que no es al
+  que envía el legacy (`PRB-MAIL`), el snapshot borrado (`PRB-RESTORE`) y la app reiniciada sin la precarga que
+  escribe la cobertura al parar, con el acumulado de antes intacto (`PRB-COVERAGE`).
 - `npm run bench-verify` (podman o docker, las imágenes del inc. 1): el juez contra los tres sandboxes del banco
   en `../keel-recover-lab`, desde copias. Ejercita JaCoCo (sockshop) y nyc en Node 8 (RealWorld).
 - `npm run bench-check`: las dos órdenes sobre los tres legacys del banco en `../keel-recover-lab`, contra los

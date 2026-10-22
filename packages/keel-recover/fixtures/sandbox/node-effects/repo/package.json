@@ -1,0 +1,15 @@
+{
+  "name": "orders-legacy",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "amqplib": "0.10.4",
+    "express": "4.21.1",
+    "mongodb": "6.10.0",
+    "nodemailer": "6.9.15"
+  }
+}

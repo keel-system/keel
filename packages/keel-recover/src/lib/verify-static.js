@@ -19,14 +19,14 @@ export function staticCriteria(sandbox) {
   const out = [];
 
   // Los servicios que el juez usa existen y tienen nombre fijo de contenedor.
-  const used = [spec.app.service, spec.tool.service, ...(spec.database ? [spec.database.service] : [])];
+  const used = [spec.app.service, spec.tool.service, ...['database', 'broker', 'stubs', 'mail'].filter((k) => spec[k]).map((k) => spec[k].service)];
   const missing = used.filter((s) => !services[s]);
   const unnamed = used.filter((s) => services[s] && !services[s].container_name);
   out.push(
     criterion(
       'VER-COMPOSE',
       missing.length === 0 && unnamed.length === 0,
-      missing.length ? `servicios que sandbox.yaml nombra y el compose no tiene: ${missing.join(', ')}` : unnamed.length ? `sin container_name: ${unnamed.join(', ')}` : 'app, herramienta y base declaradas'
+      missing.length ? `servicios que sandbox.yaml nombra y el compose no tiene: ${missing.join(', ')}` : unnamed.length ? `sin container_name: ${unnamed.join(', ')}` : 'app, herramienta, base y canales declarados'
     )
   );
 

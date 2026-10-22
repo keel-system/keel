@@ -1,0 +1,48 @@
+# Paso 0c: sandbox del legacy de fixture del paso 1. Red interna: el runtime no sale a internet.
+name: rec-effects
+services:
+  app:
+    container_name: rec-effects-app
+    # la imagen la construye build.sh (con red); aquí solo se ejecuta
+    image: localhost/recover/orders-fixture:sandbox
+    environment:
+      MONGO_URL: mongodb://orders-db:27017
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+      PAYMENT_URL: http://payment:8080
+      SMTP_HOST: mail
+      SMTP_PORT: "1025"
+      NODE_V8_COVERAGE: /coverage
+      RECOVER_ROUTES_OUT: /coverage/keel-recover-routes.json
+      NODE_OPTIONS: --require /recover/v8-coverage-exit.cjs --require /recover/express-routes.cjs
+    volumes: ["cov:/coverage", "./instrument:/recover:ro,Z"]
+    networks: { sandbox: { aliases: [orders] } }
+    depends_on: [orders-db, rabbitmq, payment, mail]
+  orders-db:
+    # mongo 7.0, la de su CI (.github/workflows/ci.yml)
+    container_name: rec-effects-db
+    image: docker.io/library/mongo:7.0.14@sha256:acd1a7d01d28cbf058e0fd04ef744fc5263c004d0f36a37330f465abf5007be0
+    networks: { sandbox: { aliases: [orders-db] } }
+  rabbitmq:
+    # rabbitmq 3.13, la de su CI; la variante management trae la API con la que se espía
+    container_name: rec-effects-broker
+    image: docker.io/library/rabbitmq:3.13-management@sha256:e582c0bc7766f3342496d8485efb5a1df782b5ce3886ad017e2eaae442311f69
+    networks: { sandbox: { aliases: [rabbitmq] } }
+  payment:
+    # el tercero HTTP del legacy, con el stub que deriva de su uso (paso 0b)
+    container_name: rec-effects-stubs
+    image: docker.io/wiremock/wiremock:3.13.1@sha256:d61e7720f89483fdef5366843b58d1dfd06bcce5828179c9f2f54de5c28354b0
+    volumes: ["./wiremock:/home/wiremock:Z"]
+    networks: { sandbox: { aliases: [payment] } }
+  mail:
+    container_name: rec-effects-mail
+    image: docker.io/axllent/mailpit:v1.31@sha256:23fe39e81bde596a918000b3135c0f85dc8bb4c9ea6be274b051143f3e300387
+    networks: { sandbox: { aliases: [mail] } }
+  tool:
+    container_name: rec-effects-tool
+    image: docker.io/curlimages/curl:8.10.1@sha256:fcff5cf7a4b895da7bd2933c914938db2b05d2113fa0d6c55b6d29930408f661
+    command: ["sleep", "infinity"]
+    networks: [sandbox]
+networks:
+  sandbox: { internal: true }
+volumes:
+  cov: {}

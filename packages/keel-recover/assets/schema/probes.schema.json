@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/recover/probes.schema.json",
+  "title": "Ronda de sondas (probes/round-N.yaml)",
+  "description": "Paso 1b de keel-recover. No forma parte del DSL: las sondas que el agente propone en una ronda y que `keel-recover probe` ejecuta contra el sandbox, cada una desde el snapshot de la base y con sus efectos grabados. Las claves `x-*` son libres (anclas YAML de pasos que se repiten).",
+  "type": "object",
+  "required": ["probes"],
+  "additionalProperties": false,
+  "patternProperties": { "^x-": {} },
+  "properties": {
+    "vars": { "type": "object", "description": "Variables de la ronda, disponibles como {{nombre}} en todas las sondas." },
+    "probes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/probe" } }
+  },
+  "$defs": {
+    "probe": {
+      "type": "object",
+      "required": ["id", "steps"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+        "class": { "enum": ["basic", "authz", "concurrency", "repeat", "lifecycle", "outbound-failure", "outbound-target", "broker-down", "db-down"], "default": "basic", "description": "Las sondas de clase del plan (paso 1b): autorización, concurrencia, repetición, ciclo de vida, fallo saliente, el destino de una llamada saliente que decide la entrada (outbound-target) y broker o base caídos." },
+        "why": { "type": "string" },
+        "vars": { "type": "object" },
+        "setup": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Lo que se cambia del sandbox SOLO durante esta sonda; se deshace antes de leer los efectos.",
+          "properties": {
+            "stubs": { "type": "array", "items": { "type": "object" }, "description": "Mappings de WireMock (prioridad 1) que se quitan al terminar." },
+            "broker": { "const": "down" },
+            "db": { "const": "down" }
+          }
+        },
+        "parallel": { "type": "boolean", "description": "Dispara todos los pasos a la vez." },
+        "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/step" } },
+        "then_parallel": { "type": "array", "items": { "$ref": "#/$defs/step" }, "description": "Tras los pasos en serie, estos a la vez." },
+        "after": { "type": "array", "items": { "$ref": "#/$defs/step" }, "description": "Tras los paralelos, estos en serie (la lectura del desenlace)." },
+        "repeat": { "type": "integer", "minimum": 1, "description": "Una sonda de concurrencia no tiene un desenlace sino una distribución: se repite y se cuentan los desenlaces." },
+        "outcome": { "type": "string", "description": "Campo de la última respuesta que entra en la clave del desenlace." },
+        "settleMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [{ "required": ["request"] }, { "required": ["publish"] }],
+      "properties": {
+        "name": { "type": "string" },
+        "request": {
+          "type": "object",
+          "required": ["method", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "method": { "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] },
+            "path": { "type": "string", "description": "Relativa a app.base (o una URL entera de la red del sandbox)." },
+            "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+            "body": { "description": "Objeto (va como JSON) o texto." },
+            "timeout": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "publish": {
+          "type": "object",
+          "required": ["exchange", "routingKey", "payload"],
+          "additionalProperties": false,
+          "description": "Un evento entrante, publicado por la API de gestión del broker. Se graba como mensaje de origen `probe`, no como efecto del legacy.",
+          "properties": {
+            "exchange": { "type": "string", "description": "Vacío para el exchange por defecto." },
+            "routingKey": { "type": "string" },
+            "payload": { "description": "Objeto (va como JSON) o texto." },
+            "headers": { "type": "object" }
+          }
+        },
+        "capture": { "type": "object", "additionalProperties": { "type": "string" }, "description": "variable: ruta con puntos dentro del cuerpo de la respuesta." }
+      }
+    }
+  }
+}

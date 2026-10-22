@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://keel.dev/schema/recover/sandbox.schema.json",
   "title": "Sandbox de un legacy (sandbox.yaml)",
-  "description": "Pasos 0c-0f de keel-recover. No forma parte del DSL: el contrato entre el sandbox que monta el agente (Dockerfile, compose.yaml, build.sh) y el juez determinista `keel-recover verify`. Dice qué servicio del compose es la app y dónde escucha, con qué contenedor se habla desde la red del sandbox, qué base hay detrás, cómo se lee la cobertura y cuáles son las dos sondas del juez: una lectura y una escritura REALES del dominio, nunca el endpoint de salud del legacy.",
+  "description": "Pasos 0c-0f de keel-recover. No forma parte del DSL: el contrato entre el sandbox que monta el agente (Dockerfile, compose.yaml, build.sh) y el juez determinista `keel-recover verify`. Dice qué servicio del compose es la app y dónde escucha, con qué contenedor se habla desde la red del sandbox, qué base hay detrás, cómo se lee la cobertura y cuáles son las dos sondas del juez: una lectura y una escritura REALES del dominio, nunca el endpoint de salud del legacy. Las secciones `broker`, `stubs`, `mail`, `introspection` y `probe` son del paso 1 (`keel-recover introspect` y `probe`): dónde se lee cada efecto.",
   "type": "object",
   "required": ["kind", "schema", "compose", "app", "tool", "coverage", "judge"],
   "additionalProperties": false,
@@ -39,6 +39,43 @@
         "name": { "type": "string", "minLength": 1 }
       }
     },
+    "broker": {
+      "type": "object",
+      "required": ["service", "tech", "api"],
+      "additionalProperties": false,
+      "description": "Paso 1: el broker del legacy. Las sondas leen lo que publica por el firehose de RabbitMQ (`rabbitmqctl trace_on`) en una cola espía propia: no consumen de las colas del legacy y ven también lo publicado al exchange por defecto. Exige la variante management de la imagen (la misma versión, con la API).",
+      "properties": {
+        "service": { "type": "string", "minLength": 1 },
+        "tech": { "enum": ["rabbitmq"], "description": "Brokers cuyo espía sabe montar probe. Otro es un rechazo con motivo hasta que se mida." },
+        "api": { "type": "string", "pattern": "^https?://", "description": "API de gestión DESDE la red del sandbox (http://rabbitmq:15672/api)." },
+        "user": { "type": "string", "default": "guest" },
+        "password": { "type": "string", "default": "guest" },
+        "vhost": { "type": "string", "default": "/" },
+        "startup_seconds": { "type": "integer", "minimum": 1, "default": 90 }
+      }
+    },
+    "stubs": {
+      "type": "object",
+      "required": ["service", "admin", "hosts"],
+      "additionalProperties": false,
+      "description": "Paso 1: el WireMock que hace de terceros HTTP. Se lee su diario de peticiones.",
+      "properties": {
+        "service": { "type": "string", "minLength": 1 },
+        "admin": { "type": "string", "pattern": "^https?://", "description": "API de administración desde la red del sandbox (http://payment:8080/__admin)." },
+        "hosts": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^https?://" }, "description": "Las bases con las que el LEGACY llama al stub (los alias de environment.yaml). El canario de cada sonda viaja por cada una: así se sabe que lo que el legacy manda acaba en el diario que se lee." }
+      }
+    },
+    "mail": {
+      "type": "object",
+      "required": ["service", "api", "smtp"],
+      "additionalProperties": false,
+      "description": "Paso 1: el Mailpit que recibe el correo del legacy.",
+      "properties": {
+        "service": { "type": "string", "minLength": 1 },
+        "api": { "type": "string", "pattern": "^https?://", "description": "API de Mailpit desde la red del sandbox (http://mail:8025/api/v1)." },
+        "smtp": { "type": "string", "pattern": "^[^:/]+:\\d+$", "description": "host:puerto con el que el LEGACY envía (el alias de environment.yaml): el canario va por ahí." }
+      }
+    },
     "coverage": {
       "type": "object",
       "required": ["kind"],
@@ -53,8 +90,20 @@
         "include": { "type": "string", "description": "v8: prefijo de la ruta del código de la app dentro de la imagen (por defecto, todo file:// fuera de node_modules)." }
       },
       "allOf": [
-        { "if": { "properties": { "kind": { "const": "jacoco" } } }, "then": { "required": ["cli", "classes"] } },
-        { "if": { "properties": { "kind": { "enum": ["nyc", "v8"] } } }, "then": { "required": ["dir"] } }
+        {
+          "if": {
+            "properties": { "kind": { "const": "jacoco" } }
+          },
+          "then": { "required": ["cli", "classes"] }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": { "enum": ["nyc", "v8"] }
+            }
+          },
+          "then": { "required": ["dir"] }
+        }
       ]
     },
     "judge": {
@@ -62,16 +111,62 @@
       "required": ["read", "write"],
       "additionalProperties": false,
       "description": "Las dos sondas con las que el juez decide que la app está conectada a su base. La escritura puede llevar `{{nonce}}`, que verify sustituye por un valor nuevo en cada ejecución (un registro repetido daría 422 con razón).",
-      "properties": {
-        "read": { "$ref": "#/$defs/probe" },
-        "write": { "$ref": "#/$defs/probe" }
-      }
+      "properties": { "read": { "$ref": "#/$defs/probe" }, "write": { "$ref": "#/$defs/probe" } }
     },
     "egress": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "targets": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^https?://" }, "description": "Destinos de internet que el espacio de red de la app NO tiene que alcanzar (por defecto, https://example.com y https://registry.npmjs.org)." }
+      }
+    },
+    "introspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Paso 1a: de dónde sale la tabla de rutas. express: el archivo que escribe la precarga express-routes.cjs; spring-log: las líneas `Mapped \"{[...]}\"` del log de arranque (Spring 4 / Boot 1.x, que sí las lista enteras); actuator: el JSON de /mappings (Boot 1.x) o /actuator/mappings (Boot 2+).",
+      "properties": {
+        "routes": {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["express", "spring-log", "actuator"] },
+            "file": { "type": "string", "description": "express: ruta del archivo dentro del contenedor de la app." },
+            "path": { "type": "string", "pattern": "^/", "description": "actuator: ruta del endpoint de mappings." }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "kind": { "const": "express" } }
+              },
+              "then": { "required": ["file"] }
+            },
+            {
+              "if": {
+                "properties": { "kind": { "const": "actuator" } }
+              },
+              "then": { "required": ["path"] }
+            }
+          ]
+        }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Paso 1b: ajustes del ejecutor de sondas para este legacy.",
+      "properties": {
+        "settle_ms": { "type": "integer", "minimum": 0, "default": 1500, "description": "Espera tras la última petición de una sonda antes de leer sus efectos." },
+        "normalize": {
+          "type": "array",
+          "description": "Reglas propias del legacy además de las comunes (JWT por claims, uuid, ObjectId, fechas, epoch-ms): lo aleatorio del framework, como el sufijo de un slug. `replace: tag` etiqueta cada valor distinto (<v#1>, <v#2>…).",
+          "items": {
+            "type": "object",
+            "required": ["pattern", "replace"],
+            "additionalProperties": false,
+            "properties": { "pattern": { "type": "string" }, "replace": { "type": "string" } }
+          }
+        }
       }
     }
   },
@@ -85,7 +180,12 @@
         "path": { "type": "string", "pattern": "^/" },
         "headers": { "type": "object", "additionalProperties": { "type": "string" } },
         "body": { "description": "Objeto (va como JSON) o texto." },
-        "expect": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 100, "maximum": 499 }, "description": "Estados que cuentan como acierto. Nunca un 5xx, y no basta «sin 5xx»: RealWorld contra un Mongo 7 respondía 422 a un usuario nuevo." }
+        "expect": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "integer", "minimum": 100, "maximum": 499 },
+          "description": "Estados que cuentan como acierto. Nunca un 5xx, y no basta «sin 5xx»: RealWorld contra un Mongo 7 respondía 422 a un usuario nuevo."
+        }
       }
     }
   }

@@ -1,7 +1,7 @@
 {
   "name": "@keel-system/keel-recover",
   "version": "0.0.1",
-  "description": "Ingeniería inversa de un servicio existente hacia un diseño Keel: lee el repo del legacy, levanta su sandbox y recupera artefactos de diseño con su procedencia. Hoy: la huella del runtime (fingerprint), las dependencias del entorno (env-deps), la preparación del workspace (init) y el juez del sandbox (verify).",
+  "description": "Ingeniería inversa de un servicio existente hacia un diseño Keel: lee el repo del legacy, levanta su sandbox y recupera artefactos de diseño con su procedencia. Hoy: la huella del runtime (fingerprint), las dependencias del entorno (env-deps), la preparación del workspace (init), el juez del sandbox (verify), la superficie preguntada al runtime (introspect) y el ejecutor de sondas con sus efectos (probe).",
   "type": "module",
   "bin": {
     "keel-recover": "src/cli.js"
@@ -11,7 +11,8 @@
     "golden": "node scripts/golden.js",
     "bench-check": "node scripts/bench-check.js",
     "verify-check": "node scripts/verify-check.js",
-    "bench-verify": "node scripts/bench-verify.js"
+    "bench-verify": "node scripts/bench-verify.js",
+    "probe-check": "node scripts/probe-check.js"
   },
   "files": [
     "src",
