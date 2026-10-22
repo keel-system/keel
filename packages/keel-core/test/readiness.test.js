@@ -15,8 +15,8 @@ import { LAYERS, supportedDsl } from '../src/lib/assets.js';
 import { READINESS_CRITERIA, assessReadiness } from '../src/lib/readiness.js';
 import { applicableReviews } from '../src/lib/reviews.js';
 import { GAP_CLASSES, gapInventory } from '../src/lib/gap-classes.js';
-import { flowDigests, scenariosDigest } from '../src/lib/flow-review.js';
-import { DECISIONS_FILE, FLOW_REVIEW_FILE, GAPS_FILE, PROVENANCE_FILE, REVIEW_FILE, SCENARIOS_FILE } from '../src/lib/spec-files.js';
+import { conventionsDigest, flowDigests, scenariosDigest } from '../src/lib/flow-review.js';
+import { CHARACTERIZED_FILE, DECISIONS_FILE, FLOW_REVIEW_FILE, GAPS_FILE, PROVENANCE_FILE, REVIEW_FILE, SCENARIOS_FILE } from '../src/lib/spec-files.js';
 import { provenanceInventory } from '../src/lib/provenance.js';
 import { validateService } from '../src/lib/validate-service.js';
 import { validate } from '../src/commands/validate.js';
@@ -95,6 +95,9 @@ function workspace({
   // por elemento del inventario y el registro estructural con su `origin`, salvo lo que el modo rompa.
   provenance = null,
   structuralOrigin = provenance !== null,
+  // El sello de la ejecución contra el legacy (characterized.yaml), sobre el texto FINAL de los
+  // escenarios. `null` = no hay archivo; 'full' = todo flujo marcado ejecutado en verde.
+  characterized = provenance !== null ? 'full' : null,
   underSpecs = true
 } = {}) {
   const root = tmpDir('keel-readiness-');
@@ -194,6 +197,28 @@ function workspace({
     );
   }
   if (Object.keys(decisionsDoc).length > 0) write(path.join(dir, DECISIONS_FILE), YAML.stringify(decisionsDoc));
+
+  if (characterized) {
+    const markOf = mark?.match(/^`([a-z]+)`/)?.[1];
+    const flows = ['keep', 'fix', 'frontier'].includes(markOf)
+      ? flowDigests(text).map((entry) => ({ id: entry.id, mark: markOf, sha256: entry.digest, ok: true }))
+      : [];
+    if (characterized === 'seal') flows[0].sha256 = '0'.repeat(64);
+    if (characterized === 'red') Object.assign(flows[0], { ok: false, failures: ['paso 1: status 422, se esperaba 201'] });
+    if (characterized === 'mark') flows[0].mark = 'frontier';
+    if (characterized === 'not-run') flows.pop();
+    if (characterized === 'orphan') flows.push({ id: 'FL-INV-099', mark: 'keep', sha256: '1'.repeat(64), ok: true });
+    write(
+      path.join(dir, CHARACTERIZED_FILE),
+      YAML.stringify({
+        kind: 'characterized',
+        schema: 1,
+        legacy: { name: characterized === 'legacy' ? 'otro' : 'billing', commit: 'ba04b70', snapshot: 'abc123' },
+        conventionsSha256: characterized === 'conventions' ? '2'.repeat(64) : conventionsDigest(text),
+        flows
+      })
+    );
+  }
 
   if (designStamp) {
     write(path.join(root, 'docs', 'billing', 'DESIGN.md'), `# billing\n\n> specs/billing v${designStamp}. Documento de diseño.\n`);
@@ -449,8 +474,35 @@ test('un diseño recuperado con procedencia entera está listo; cada rotura apag
   assert.match(missing.fix, /keel-recover/);
 });
 
+test('la caracterización ejecutada contra el legacy: cada rotura del sello apaga characterized y solo ese', () => {
+  assert.deepEqual(failing(assessReadiness(workspace({ provenance: 'fix-cited' }))), [], 'un fix ejecutado: el defecto sigue en el legacy');
+  for (const mode of [null, 'seal', 'red', 'mark', 'not-run', 'orphan', 'conventions', 'legacy']) {
+    const result = assessReadiness(workspace({ provenance: 'full', characterized: mode }));
+    assert.deepEqual(failing(result), ['characterized'], String(mode));
+  }
+  const detail = (mode) => assessReadiness(workspace({ provenance: 'full', characterized: mode })).criteria.find((c) => c.id === 'characterized');
+  assert.match(detail(null).detail, new RegExp(`no hay ${CHARACTERIZED_FILE}`));
+  assert.match(detail(null).fix, /keel-recover characterize legacy\/billing/);
+  assert.match(detail('seal').detail, /cambiado\(s\) desde la ejecución: FL-INV-001/);
+  assert.match(detail('red').detail, /en rojo contra el legacy: FL-INV-001 \(keep\)/);
+  assert.match(detail('red').fix, /corrige el diseño, no el escenario/);
+  assert.match(detail('not-run').detail, /sin ejecutar: FL-INV-001/);
+  assert.match(detail('conventions').detail, /convenciones/);
+  // Tocar el flujo después de ejecutarlo lo deja sin ejecutar. Sin careo, que también caducaría.
+  const dir = workspace({ provenance: 'full', flowReview: false });
+  const file = path.join(dir, SCENARIOS_FILE);
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Se crea la factura.', 'Se crea la factura con su total.'));
+  assert.deepEqual(failing(assessReadiness(dir)), ['characterized', 'flow-review']);
+});
+
+test('a un diseño hacia delante no le aplica characterized, aunque traiga un sello suelto', () => {
+  const result = assessReadiness(workspace({ characterized: 'legacy' }));
+  assert.deepEqual(failing(result), []);
+});
+
 test('el registro estructural que habla de un legacy delata un diseño recuperado sin procedencia', () => {
-  const result = assessReadiness(workspace({ structuralOrigin: true }));
+  // Con el sello presente, para que la única pieza rota sea la procedencia.
+  const result = assessReadiness(workspace({ structuralOrigin: true, characterized: 'full' }));
   assert.deepEqual(failing(result), ['provenance']);
   assert.ok(result.criteria.find((c) => c.id === 'provenance').detail.includes(`no hay ${PROVENANCE_FILE}`));
 });

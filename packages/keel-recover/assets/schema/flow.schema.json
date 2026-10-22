@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/recover/flow.schema.json",
+  "title": "Pasos ejecutables de un escenario de caracterización (bloque ```keel-flow)",
+  "description": "El bloque ```keel-flow``` que lleva cada flujo keep, fix o frontier de validation-scenarios.md en un diseño recuperado: los mismos pasos que cuenta su Given/When/Then, en operaciones del DISEÑO (nunca rutas del legacy: las traduce contract-map.yaml). Vive dentro del bloque del flujo para que el sello del flujo cubra lo que se ejecuta: tocar un paso después de ejecutarlo deja el flujo sin ejecutar. `keel-recover characterize` lo ejecuta contra el legacy en marcha.",
+  "type": "object",
+  "required": ["steps"],
+  "additionalProperties": false,
+  "properties": {
+    "actors": {
+      "type": "object",
+      "description": "Las personas del flujo y su clase (`alice: profile`). Cómo obtiene cada clase su credencial en cada lado lo dice contract-map.yaml → <lado>.actors.",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["op"],
+        "additionalProperties": false,
+        "properties": {
+          "op": { "type": "string", "minLength": 1, "description": "La operación del diseño (use-cases)." },
+          "as": { "type": "string", "description": "El actor cuya credencial viaja; sin `as`, la petición va sin credencial." },
+          "params": { "type": "object", "description": "Los parámetros de ruta de la operación ({{var}} admite lo guardado antes)." },
+          "query": { "type": "object" },
+          "input": { "description": "El cuerpo, en la forma del diseño." },
+          "save": {
+            "type": "object",
+            "description": "Lo que se guarda de la respuesta para los pasos siguientes: `{ slug: slug }` guarda el `slug` de los datos como {{slug}}.",
+            "additionalProperties": { "type": "string" }
+          },
+          "expect": { "$ref": "#/$defs/expectation", "description": "Lo que el escenario afirma (en keep y frontier, contra el legacy; en todos, contra el servicio nuevo)." },
+          "legacy": { "$ref": "#/$defs/expectation", "description": "Solo en un flujo fix: lo que hace el legacy hoy, que es el defecto que el diseño corrige. Contra el legacy se comprueba esto en vez de `expect`." }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "oneOf": [{ "type": "integer", "minimum": 100, "maximum": 599 }, { "type": "string", "minLength": 1 }],
+          "description": "Un número, o una clase (`ok`, `created`, `no-content`…) que contract-map.yaml traduce en cada lado: un alta es 200 en muchos legacys y 201 en Keel."
+        },
+        "code": { "type": "string", "description": "El `code` del error. Contra el legacy solo se compara si contract-map.yaml dice dónde lo lleva (`errorCode`)." },
+        "body": {
+          "type": "object",
+          "description": "Ruta con puntos → valor, sobre los DATOS de la respuesta ya sin la envoltura del lado (`items.length`, `author.username`). `null` casa con ausente si contract-map.yaml lo dice (`semantics.absentIsNull`); `{ startsWith: … }` y `{ sameMembers: [...] }` comparan sin depender de lo aleatorio ni del orden."
+        }
+      }
+    }
+  }
+}

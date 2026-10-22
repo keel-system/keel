@@ -7,6 +7,7 @@ import { envDeps } from './lib/env-deps.js';
 import { verify } from './commands/verify.js';
 import { init } from './commands/init.js';
 import { introspect, probe } from './commands/observe.js';
+import { characterize } from './commands/characterize.js';
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const program = new Command();
@@ -86,5 +87,16 @@ program
   .option('--out <dir>', 'dónde escribir las grabaciones (por defecto, recordings/<ronda>/)')
   .option('--runtime <podman|docker>', 'runtime de contenedores (por defecto, el primero en marcha)')
   .action((round, options) => probe(round, options));
+
+program
+  .command('characterize')
+  .description(
+    'Paso 5: ejecuta los escenarios de caracterización (los flujos keep, fix y frontier de specs/<servicio>/validation-scenarios.md, con sus pasos en el bloque ```keel-flow```) contra el legacy en marcha, traducidos por contract-map.yaml. Cada flujo parte del snapshot de verify. Escribe el sello specs/<servicio>/characterized.yaml (criterio characterized de keel validate --ready), las grabaciones y FIDELITY.md'
+  )
+  .argument('<legacy>', 'directorio legacy/<servicio>/ del workspace')
+  .option('--spec <dir>', 'el diseño recuperado (por defecto, specs/<servicio> del mismo workspace)')
+  .option('--only <ids>', 'solo estos flujos, separados por comas (no escribe ni el sello ni FIDELITY.md)')
+  .option('--runtime <podman|docker>', 'runtime de contenedores (por defecto, el primero en marcha)')
+  .action((legacy, options) => characterize(legacy, options));
 
 await program.parseAsync();

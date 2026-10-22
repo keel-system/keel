@@ -21,6 +21,7 @@ export const REVIEW_FILE = 'review.yaml';
 export const FLOW_REVIEW_FILE = 'flow-review.yaml';
 export const GAPS_FILE = 'gaps.yaml';
 export const PROVENANCE_FILE = 'provenance.yaml';
+export const CHARACTERIZED_FILE = 'characterized.yaml';
 
 /**
  * - `publish` — entra en el `files[]` del índice, que es exactamente lo que
@@ -54,6 +55,10 @@ export const SPEC_SIDE_FILES = [
   // ni al derivar: cita rutas y commits de un código privado, y lo que afirma es del legacy del que
   // salió. Quien adopta el diseño recibe un diseño; la evidencia de dónde salió se queda en casa.
   { file: PROVENANCE_FILE, publish: false, derive: false },
+  // `characterized.yaml` (el sello de la ejecución de los escenarios de caracterización contra el
+  // legacy en marcha, que escribe `keel-recover characterize`) tampoco viaja: es evidencia del mismo
+  // legacy, y está sellado con el texto de los escenarios, que un derivado reescribe.
+  { file: CHARACTERIZED_FILE, publish: false, derive: false },
   { file: SCENARIOS_FILE, publish: 'derivative', derive: 'rewrite' }
 ];
 

@@ -11,6 +11,7 @@ import { gapInventory } from './gap-classes.js';
 import { loadGaps, resolveGaps, emptyGaps } from './gaps-state.js';
 import { resolveStructural, emptyStructural } from './structural-register.js';
 import { loadProvenance, resolveProvenance, emptyProvenance } from './provenance.js';
+import { emptyCharacterized, loadCharacterized, resolveCharacterized } from './characterized.js';
 import { SCENARIOS_FILE } from './spec-files.js';
 import { checkFor } from './checks.js';
 import { checkDerivedCoherence } from './derived-coherence.js';
@@ -119,7 +120,8 @@ export function validateService(dir, { wip = false } = {}) {
     reviews: { covered: [], missing: [], open: [], accepted: [], stale: false, reviewedAt: null, reviewedBy: null, orphans: [], errors: [] },
     gaps: emptyGaps(),
     structural: emptyStructural(),
-    provenance: emptyProvenance()
+    provenance: emptyProvenance(),
+    characterized: emptyCharacterized()
   };
 
   const { manifest, layers, errors: loadErrors } = loadService(dir);
@@ -261,7 +263,20 @@ export function validateService(dir, { wip = false } = {}) {
   // un diseño hacia delante no le aplica.
   const scenariosFile = path.join(dir, SCENARIOS_FILE);
   const scenariosText = fs.existsSync(scenariosFile) ? fs.readFileSync(scenariosFile, 'utf8') : null;
-  result.provenance = resolveProvenance(loadProvenance(dir), effectiveLayers, doc, scenariosText);
+  const provenanceFile = loadProvenance(dir);
+  result.provenance = resolveProvenance(provenanceFile, effectiveLayers, doc, scenariosText);
+
+  // Capa 8: la ejecución de los escenarios de caracterización contra el legacy (characterized.yaml),
+  // sellada por flujo. Solo en un diseño recuperado, y tampoco toca `ok`: es el criterio
+  // `characterized` de --ready.
+  if (result.provenance.applies) {
+    result.characterized = resolveCharacterized(
+      loadCharacterized(dir),
+      scenariosText,
+      result.provenance.characterization.flows,
+      provenanceFile.doc?.legacy?.name ?? null
+    );
+  }
 
   result.ok = errors.length === 0 && (wip || (!obligationsBlock && !reviewsBlock));
   return result;

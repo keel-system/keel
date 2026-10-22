@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/recover/contract-map.schema.json",
+  "title": "Mapa de contrato legacy → Keel (contract-map.yaml)",
+  "description": "Cómo se pide cada operación del diseño a cada lado y dónde están sus datos (paridad semántica, PLAN-KEEL-RECOVER.md § Paso 7). Los escenarios de caracterización se escriben una vez, en operaciones del diseño; este mapa los traduce al legacy (paso 5) y, en el incremento 7, al servicio regenerado. Cada diferencia de forma entre los dos lados es un fix declarado. Vive en legacy/<servicio>/, junto a la evidencia: cita rutas del legacy.",
+  "type": "object",
+  "required": ["kind", "schema", "legacy"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "contract-map" },
+    "schema": { "const": 1 },
+    "semantics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "absentIsNull": { "type": "boolean", "description": "Un `null` esperado casa también con un campo ausente (el legacy omite lo que Keel manda como null)." }
+      }
+    },
+    "legacy": { "$ref": "#/$defs/side" },
+    "keel": { "$ref": "#/$defs/side" }
+  },
+  "$defs": {
+    "side": {
+      "type": "object",
+      "required": ["operations"],
+      "additionalProperties": false,
+      "properties": {
+        "statusClasses": {
+          "type": "object",
+          "description": "Lo que significa cada clase de status en este lado (`created: 200`).",
+          "additionalProperties": { "type": "integer", "minimum": 100, "maximum": 599 }
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "header": { "type": "string", "minLength": 1, "description": "Por defecto, Authorization." },
+            "scheme": { "type": "string", "description": "Lo que va delante del token (`Bearer`, `Token`); vacío, el token solo." }
+          }
+        },
+        "errorCode": { "type": "string", "description": "Dónde lleva este lado el `code` del error en el cuerpo (ruta con puntos). Sin él, el `code` esperado no se compara en este lado." },
+        "actors": {
+          "type": "object",
+          "description": "Cómo obtiene su credencial cada clase de actor.",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["via", "op", "token"],
+                "additionalProperties": false,
+                "description": "Por la propia API: una operación del diseño (el registro, el login) cuyo resultado trae el token.",
+                "properties": {
+                  "via": { "const": "op" },
+                  "op": { "type": "string" },
+                  "input": { "description": "{{actor}} es el nombre del actor." },
+                  "token": { "type": "string", "description": "Ruta del token en los datos de la respuesta." }
+                }
+              },
+              {
+                "type": "object",
+                "required": ["via", "secret", "claims"],
+                "additionalProperties": false,
+                "description": "Un JWT HS256 firmado con el secreto de la configuración de desarrollo del repo (nunca uno de producción): un token válido de alguien que no existe.",
+                "properties": {
+                  "via": { "const": "forge" },
+                  "secret": { "type": "string", "minLength": 1 },
+                  "claims": { "type": "object", "description": "{{actor}} y {{random}} (24 hex) se rellenan." }
+                }
+              },
+              {
+                "type": "object",
+                "required": ["via"],
+                "additionalProperties": false,
+                "properties": { "via": { "const": "none" } }
+              }
+            ]
+          }
+        },
+        "operations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["method", "path"],
+            "additionalProperties": false,
+            "properties": {
+              "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+              "path": { "type": "string", "pattern": "^/", "description": "Con `{param}` para los parámetros de ruta del paso." },
+              "wrap": { "type": "string", "description": "La envoltura del cuerpo de la petición (`{ user: … }`)." },
+              "extraInput": { "type": "object", "description": "Campos que este lado exige y el diseño no tiene; {{campo}} admite los del input." },
+              "result": { "type": "string", "description": "Dónde está el recurso en la respuesta." },
+              "page": {
+                "type": "object",
+                "required": ["items", "total"],
+                "additionalProperties": false,
+                "description": "Una página: se traduce a `{ items, totalElements }`.",
+                "properties": { "items": { "type": "string" }, "total": { "type": "string" } }
+              },
+              "list": { "type": "string", "description": "Una lista: se traduce a `{ items }`; vacío, la respuesta entera es la lista." }
+            }
+          }
+        }
+      }
+    }
+  }
+}

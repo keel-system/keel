@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/characterized.schema.json",
+  "title": "Caracterización ejecutada contra el legacy (characterized.yaml)",
+  "description": "El sello de la última ejecución de los escenarios de caracterización de un diseño recuperado contra el legacy en marcha (paso 5 de keel-recover). Lo escribe `keel-recover characterize`, nunca el agente. No forma parte del DSL: no describe lo que el servicio hace, sino qué flujos se comprobaron contra el sistema del que salió el diseño. Cada flujo va sellado con el sha256 de su bloque de validation-scenarios.md (el mismo sello que el careo), así que tocar un flujo después de ejecutarlo lo deja sin ejecutar. Lo lee el criterio `characterized` de `keel validate --ready`. No viaja al publicar ni al derivar.",
+  "type": "object",
+  "required": ["kind", "schema", "legacy", "conventionsSha256", "flows"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "characterized" },
+    "schema": { "const": 1 },
+    "legacy": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "description": "El legacy contra el que se ejecutó: el mismo `legacy.name` que provenance.yaml, el commit observado y la huella del snapshot de la base del que partió cada flujo.",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" },
+        "snapshot": { "type": "string", "minLength": 1 }
+      }
+    },
+    "conventionsSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 de la sección «Convenciones de determinación» en el momento de la ejecución: rigen todos los Then, así que cambiarla deja sin ejecutar el documento entero."
+    },
+    "flows": {
+      "type": "array",
+      "description": "Un flujo por cada escenario marcado keep, fix o frontier. Los `new` no se ejecutan contra el legacy: no existen en él.",
+      "items": {
+        "type": "object",
+        "required": ["id", "mark", "sha256", "ok"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^FL-[A-Za-z0-9-]+$" },
+          "mark": {
+            "enum": ["keep", "fix", "frontier"],
+            "description": "keep y frontier comprueban lo que el escenario afirma; fix comprueba que el defecto que el diseño corrige sigue en el legacy."
+          },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "ok": { "type": "boolean" },
+          "failures": {
+            "type": "array",
+            "description": "Por qué salió en rojo, paso a paso.",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

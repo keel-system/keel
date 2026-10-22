@@ -13,7 +13,8 @@
 // Regla para añadir un criterio: que tenga artefacto que leer. Uno que no se puede evaluar no se
 // pinta ni en verde ni en rojo. Así entraron las decisiones no tomadas de los avisos (R2, con
 // decisions.yaml), el análisis de huecos (R3, con gaps.yaml) y el registro de decisiones
-// estructurales (R4.2, con `structural:` en decisions.yaml).
+// estructurales (R4.2, con `structural:` en decisions.yaml) y, en un diseño recuperado, la ejecución
+// de los escenarios contra el legacy (keel-recover inc. 6, con characterized.yaml).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,8 +22,9 @@ import { validateService, workspaceRootOf } from './validate-service.js';
 import { listDerivatives } from './derivatives.js';
 import { flowReviewPlan, FLOW_REVIEW_FILE } from './flow-review.js';
 import { parseCoverageMatrix } from './scenario-blocks.js';
-import { SCENARIOS_FILE, REVIEW_FILE, DECISIONS_FILE, GAPS_FILE, PROVENANCE_FILE } from './spec-files.js';
+import { SCENARIOS_FILE, REVIEW_FILE, DECISIONS_FILE, GAPS_FILE, PROVENANCE_FILE, CHARACTERIZED_FILE } from './spec-files.js';
 import { emptyProvenance, loadProvenance } from './provenance.js';
+import { emptyCharacterized } from './characterized.js';
 import { unwalkedCount, GAPS_AGENT } from './gaps-state.js';
 import { REVIEW_AGENT } from './review-state.js';
 
@@ -51,6 +53,7 @@ export const READINESS_CRITERIA = [
   { id: 'incoherences', title: 'sin incoherencias en los avisos, o declaradas falso positivo y vigentes' },
   { id: 'structural', title: 'registro de decisiones estructurales completo, vigente y coherente con el diseño' },
   { id: 'provenance', title: 'procedencia de cada elemento de un diseño recuperado, sin inferencias' },
+  { id: 'characterized', title: 'escenarios de caracterización ejecutados contra el legacy, en verde y sobre el texto de hoy' },
   { id: 'review', title: 'revisión semántica completa y vigente' },
   { id: 'gaps', title: 'análisis de huecos completo, vigente y sin hallazgos abiertos' },
   { id: 'scenarios', title: 'escenarios de validación de esta versión' },
@@ -244,6 +247,43 @@ export function assessReadiness(dir, { validation = null } = {}) {
       provenanceProblems.length === 0,
       provenanceProblems.join(', '),
       `/keel-recover ${spec}: mide lo inferred o conviértelo en hueco declarado, y da fila en ${PROVENANCE_FILE} a cada elemento`
+    )
+  );
+
+  // 2e — La caracterización ejecutada contra el legacy en marcha (paso 5 de keel-recover), solo en un
+  // diseño recuperado. Lo que se comprueba es lo que `characterized.yaml` sella por flujo: todo `keep`,
+  // `fix` y `frontier` ejecutado sobre el texto de HOY y en verde. Las marcas que faltan o citan algo
+  // inexistente son de `provenance`; aquí solo cuenta lo marcado.
+  const characterized = result.characterized ?? emptyCharacterized();
+  const runCommand = `keel-recover characterize legacy/${name}`;
+  const characterizedProblems = !recovered ? [] : !evaluated ? [notEvaluated] : [
+    characterized.applies && !characterized.present
+      ? `no hay ${CHARACTERIZED_FILE}: ningún flujo se ha ejecutado contra el legacy`
+      : null,
+    characterized.present && characterized.notRun.length > 0
+      ? `${characterized.notRun.length} sin ejecutar: ${listSome(characterized.notRun)}`
+      : null,
+    characterized.conventionsChanged
+      ? 'las convenciones de determinación cambiaron desde la ejecución: nada de lo ejecutado vale'
+      : characterized.changed.length > 0
+        ? `${characterized.changed.length} cambiado(s) desde la ejecución: ${listSome(characterized.changed)}`
+        : null,
+    characterized.failed.length > 0
+      ? `${characterized.failed.length} en rojo contra el legacy: ${listSome(characterized.failed.map((flow) => `${flow.id} (${flow.mark})`))}`
+      : null,
+    characterized.orphans.length > 0
+      ? `${characterized.orphans.length} fila(s) de flujos que el documento ya no ejecuta: ${listSome(characterized.orphans)}`
+      : null,
+    characterized.errors.length > 0 ? `${characterized.errors.length} error(es): ${characterized.errors[0]}` : null
+  ].filter(Boolean);
+  criteria.push(
+    criterion(
+      'characterized',
+      characterizedProblems.length === 0,
+      characterizedProblems.join(', '),
+      characterized.failed.length > 0
+        ? `un keep en rojo es el diseño diciendo algo que el legacy no hace: corrige el diseño, no el escenario; después, ${runCommand}`
+        : runCommand
     )
   );
 

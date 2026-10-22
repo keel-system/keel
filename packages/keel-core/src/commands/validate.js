@@ -279,6 +279,7 @@ function printReadiness(dir) {
     if (entry.id === 'gaps') printGapInventory(validation.gaps);
     if (entry.id === 'structural') printStructuralPending(validation.structural);
     if (entry.id === 'provenance') printProvenancePending(validation.provenance);
+    if (entry.id === 'characterized') printCharacterizedPending(validation.characterized);
   }
 
   console.log();
@@ -346,6 +347,20 @@ function printProvenancePending(provenance) {
   ];
   for (const [label, ids] of rows) for (const id of ids) console.log(pc.dim(`        ${id}: ${label}`));
   for (const message of provenance.errors) console.log(pc.dim(`        ${message}`));
+}
+
+/**
+ * Lo que falta de la caracterización contra el legacy, flujo a flujo y con el primer motivo de cada
+ * rojo: un `keep` en rojo se corrige en el diseño, y para eso hay que saber qué paso no casó.
+ */
+function printCharacterizedPending(characterized) {
+  for (const flow of characterized.failed) {
+    console.log(pc.dim(`        ${flow.id} (${flow.mark}): ${flow.failures[0] ?? 'en rojo'}${flow.failures.length > 1 ? ` y ${flow.failures.length - 1} más` : ''}`));
+  }
+  for (const id of characterized.changed) console.log(pc.dim(`        ${id}: cambiado desde la ejecución`));
+  for (const id of characterized.notRun) console.log(pc.dim(`        ${id}: sin ejecutar`));
+  for (const id of characterized.orphans) console.log(pc.dim(`        ${id}: ya no se ejecuta`));
+  for (const message of characterized.errors) console.log(pc.dim(`        ${message}`));
 }
 
 /**

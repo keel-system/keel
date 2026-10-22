@@ -4,9 +4,10 @@ Ingeniería inversa de un servicio existente hacia un diseño [Keel](https://git
 única entrada es el **repo** del legacy, con su historial de git; la herramienta lo lee y **nunca lo
 modifica**. Plan completo y estado, incremento a incremento: [`PLAN-KEEL-RECOVER.md`](../../PLAN-KEEL-RECOVER.md).
 
-Hoy (incremento 5) trae el paso 0 entero, la observación del paso 1 y la recuperación del diseño (pasos 3 y 4):
-los dos pasos deterministas, la preparación del workspace, la skill que monta el sandbox, el juez, la
-introspección, el ejecutor de sondas y la skill que escribe el diseño con su procedencia:
+Hoy (incremento 6) trae el paso 0 entero, la observación del paso 1, la recuperación del diseño (pasos 3 y 4) y
+la medida de su fidelidad (paso 5): los dos pasos deterministas, la preparación del workspace, la skill que monta
+el sandbox, el juez, la introspección, el ejecutor de sondas, la skill que escribe el diseño con su procedencia y
+el ejecutor de los escenarios de caracterización contra el legacy:
 
 ```bash
 keel-recover fingerprint <legacy> [-o runtime.yaml]       # paso 0a: huella del runtime
@@ -17,7 +18,8 @@ keel-recover verify legacy/<servicio>/sandbox             # paso 0f: el juez
 keel-recover introspect legacy/<servicio>/sandbox         # paso 1a: la superficie, preguntada al runtime
 keel-recover probe legacy/<servicio>/probes/round-1.yaml  # paso 1b: una ronda de sondas con sus efectos
 /keel-recover specs/<servicio>                            # el agente: el diseño, su procedencia y la caracterización
-keel validate --ready specs/<servicio>                    # criterio provenance: cada elemento con su fila
+keel-recover characterize legacy/<servicio>               # paso 5: los escenarios contra el legacy, sello y FIDELITY.md
+keel validate --ready specs/<servicio>                    # criterios provenance y characterized
 ```
 
 `-o` se niega a escribir dentro del legacy. `--check <archivo>` no escribe y sale en rojo si el archivo no es lo
@@ -125,6 +127,23 @@ recuperado (el que trae `provenance.yaml`, o cuyo registro estructural habla de 
 permisos, reglas de acceso, eventos…— y sale en rojo con cualquiera sin fila, aunque ninguna fila escrita mienta:
 en el inc. 1 se coló un rol copiado de una fixture que una puerta sobre las filas no habría visto.
 
+## La fidelidad (paso 5)
+
+Cada flujo `keep`, `fix` o `frontier` de `validation-scenarios.md` lleva sus pasos en un bloque ```` ```keel-flow ````
+(schema `assets/schema/flow.schema.json`), en operaciones del **diseño**; `legacy/<servicio>/contract-map.yaml`
+(schema `contract-map.schema.json`) dice cómo se pide cada una al legacy: ruta, envoltura, dónde están los datos,
+qué significa cada clase de status y cómo obtiene su credencial cada clase de actor (la propia API, un JWT firmado
+con el secreto de desarrollo del repo, o ninguna). `keel-recover characterize legacy/<servicio>` ejecuta cada flujo
+desde el snapshot de verify (comprobando su huella tras restaurar): un `keep` y un `frontier` comprueban lo que el
+escenario afirma; un `fix`, lo que hace el legacy hoy (`legacy:`), porque un fix describe un cambio real solo si el
+defecto sigue ahí. Un paso sin expectativa sale en rojo con un 5xx.
+
+Escribe el sello `specs/<servicio>/characterized.yaml` (schema de keel-core, no viaja), las grabaciones de cada
+flujo en `recordings/characterization/` y `FIDELITY.md`: corrección por marca, cobertura acumulada, rutas del
+legacy que ninguna operación del mapa recoge, lo no observado, procedencia, `fix` y frontera. El bloque vive
+**dentro** del flujo para que el sello del flujo —el mismo del careo— cubra lo ejecutado: tocar un paso o su prosa
+después de ejecutarlo lo deja sin ejecutar, y el criterio `characterized` de `keel validate --ready` sale en rojo.
+
 ## Adaptadores
 
 Java/Maven (`pom.xml`, `.mvn/wrapper`), Java/Gradle (`build.gradle[.kts]`, `gradle.properties`, `settings`,
@@ -152,6 +171,12 @@ wrapper) y Node (`package.json`, `.nvmrc`, `.node-version`, `.tool-versions`, to
   criterio: la cola espía sin enlace (`PRB-BROKER`), WireMock sin diario (`PRB-STUBS`), un Mailpit que no es al
   que envía el legacy (`PRB-MAIL`), el snapshot borrado (`PRB-RESTORE`) y la app reiniciada sin la precarga que
   escribe la cobertura al parar, con el acumulado de antes intacto (`PRB-COVERAGE`).
+- `npm run characterize-check` (podman o docker, red para el build, minutos): `characterize` contra el sandbox real de
+  `fixtures/sandbox/node-mongo` con el diseño de juguete de `test/helpers/stock-design.js` (el mismo que usa
+  `test/characterize.test.js` contra un legacy falso en memoria). En verde, dos `keep`, un `fix` y un `frontier`,
+  con el sello leído por keel-core sin nada pendiente y `FIDELITY.md`. Cuatro sabotajes, cada uno en rojo con
+  exactamente sus flujos: un `keep` que afirma otro status, un `fix` cuyo defecto no existiría, el snapshot borrado
+  y una base restaurada con otra huella.
 - `npm run bench-verify` (podman o docker, las imágenes del inc. 1): el juez contra los tres sandboxes del banco
   en `../keel-recover-lab`, desde copias. Ejercita JaCoCo (sockshop) y nyc en Node 8 (RealWorld).
 - `npm run bench-check`: las dos órdenes sobre los tres legacys del banco en `../keel-recover-lab`, contra los

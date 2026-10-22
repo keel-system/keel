@@ -256,10 +256,46 @@ golpe).
 
 ## 4. Incrementos
 
-**Estado (2026-10-22):** incrementos 0, 1, 2, 3, 4 y 5 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
+**Estado (2026-10-22):** incrementos 0 a 6 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
 (paso 0, paso 1, pasos 3-5 y paso 7). Su laboratorio es el repo `../keel-recover-lab`: sandboxes,
 grabaciones, el diseño `conduit` y los prototipos `tools/*.mjs` que los incrementos 6 y 7 reescriben
-dentro del paquete (el 4 ya reescribió `probe.mjs` y `express-routes.js`). **El siguiente es el 6.**
+dentro del paquete (el 4 reescribió `probe.mjs` y `express-routes.js`; el 6, `flows.mjs` del lado legacy).
+**El siguiente es el 7.**
+
+Incremento 6, hecho: `keel-recover characterize legacy/<servicio>` (paso 5) y el criterio `characterized` de
+`keel validate --ready`. **La decisión que lo hace puerta**: los pasos ejecutables de cada flujo `keep`, `fix` o
+`frontier` viven en un bloque ```` ```keel-flow ```` (schema `flow.schema.json` de keel-recover) **dentro** del bloque
+del flujo en `validation-scenarios.md`, y no en un `characterization.yaml` aparte como en el prototipo. Así el
+sello por flujo —el mismo `flowDigests` del careo— cubre exactamente lo que se ejecutó: tocar un paso o la prosa de
+un flujo después de ejecutarlo lo deja sin ejecutar. Con dos fuentes, editar la prosa sin tocar el YAML habría
+dado un verde sobre algo que no se ejecutó (en el prototipo el documento se renderizaba desde el YAML; aquí no hay
+renderizador que mantener). Medido: el bloque dentro de los flujos de conduit no cambia ningún hallazgo de
+`keel validate` (5 = 5). Una línea del bloque que empiece por `# ` es un encabezado de Markdown y cortaría el flujo y
+su sello: se rechaza con su motivo. Los pasos van en operaciones del diseño y `legacy/<servicio>/contract-map.yaml`
+(schema `contract-map.schema.json`, con un lado `legacy` obligatorio y un lado `keel` para el inc. 7) los traduce:
+ruta, envoltura, datos (recurso, página o lista), clases de status y credenciales por clase de actor (la propia
+API, un JWT HS256 con el secreto de desarrollo del repo, o ninguna). Qué se comprueba según la marca: `keep` y
+`frontier`, el `expect`; `fix`, su `legacy:` (que el defecto sigue ahí; un `fix` sin `legacy:` no se ejecuta). Un
+paso sin expectativa sale en rojo con un 5xx (la lección de la colección de RealWorld), y un flujo sin ninguna no se
+ejecuta. Cada flujo parte del snapshot de verify y se comprueba la huella de la base restaurada. Escribe
+`specs/<servicio>/characterized.yaml` (schema de keel-core, fila en `SPEC_SIDE_FILES` que no viaja; `--only` no lo
+escribe), las grabaciones con los datos de cada paso en la forma del diseño (`recordings/characterization/`, para la
+paridad del 7) y `FIDELITY.md`, determinista: corrección por marca con el primer motivo de cada rojo, cobertura
+acumulada de `coverage.json`, rutas de `surface.yaml` que ninguna operación del mapa recoge, `unobserved.yaml`,
+procedencia por nivel, `fix` con los flujos que los demuestran y frontera. El criterio (`keel-core/src/lib/
+characterized.js`, solo en un diseño recuperado) sale en rojo sin sello, con un flujo marcado sin ejecutar, en
+rojo, cambiado desde la ejecución o con otra marca, con las convenciones de determinación cambiadas, con filas de
+flujos que ya no se ejecutan y con el sello de otro legacy. Puertas: `test/readiness.test.js` (ocho roturas del
+sello, cada una apaga `characterized` y solo ese; tocar un flujo apaga `characterized` y el careo, que también lo
+sella), `keel-recover/test/characterize.test.js` (el comprobador falsado sin contenedores con cinco expectativas
+saboteadas —un status, un valor, un miembro, el defecto de un fix y una plantilla—, cada una en rojo con su flujo y
+solo el suyo; el orden, el reset ausente o roto, el 5xx sin expectativa, las credenciales y el sello leído por
+keel-core) y `npm run characterize-check` sobre el sandbox real de `fixtures/sandbox/node-mongo`: en verde los dos
+`keep`, el `fix` y el `frontier`, con el sello limpio para keel-core y `FIDELITY.md`, y cuatro sabotajes en rojo con
+exactamente sus flujos (un `keep` con otro status, un `fix` cuyo defecto no existiría, el snapshot borrado y otra
+huella de la base). Fuera de alcance: la corrida de control sobre conduit con la herramienta —migrar su
+`characterization.yaml` a bloques y ejecutar contra el sandbox de RealWorld— es el banco del inc. 7, que además
+añade el lado `keel` y la comparación de datos (`parity.mjs`).
 
 Incremento 5, hecho: la skill `/keel-recover` (pasos 3 y 4, en `packages/keel-recover/assets/skills/keel-recover/`,
 que `init` siembra junto a la del sandbox) y la procedencia en keel-core. `specs/<servicio>/provenance.yaml`
@@ -348,7 +384,7 @@ solo la versión de la CI y las adaptaciones escritas.
 | 3 | Skill del sandbox (0c–0e) + `verify` (0f) | `verify` falsado: rojo con salida a internet, con cobertura vacía y con 5xx. **Hecho** |
 | 4 | `introspect` (1a) + `probe` (1b): restauración, captura de efectos, normalización y cobertura. Reutiliza WireMock, Mailpit, `keel-core/src/lib/gen/broker-probes.js` y la `infra/` neutral | Una app legacy de fixture, en vivo como los `*-check`: cada efecto capturado y uno saboteado por tipo (por ejemplo, la cola espía sin enlazar sale en rojo). **Hecho** (`npm run probe-check`) |
 | 5 | Skill `/keel-recover` (pasos 3 y 4) + `provenance.yaml` (fila en `SPEC_SIDE_FILES`) + `origin`/`evidence` en `structural-register.js` | `npm test` en keel-core; un `inferred` en el diseño final sale en rojo, y **también todo elemento del DSL sin fila en `provenance.yaml`**: en el inc. 1 se coló un rol copiado de la forma de una fixture, sin fila, y no lo habría cazado una puerta que solo mira lo que el agente declara. **Hecho** (criterio `provenance`) |
-| 6 | Criterio `characterized` en `readiness.js` + `FIDELITY.md` | `test/readiness.test.js`: romper el sello apaga `characterized` y solo ese criterio |
+| 6 | Criterio `characterized` en `readiness.js` + `FIDELITY.md` | `test/readiness.test.js`: romper el sello apaga `characterized` y solo ese criterio. **Hecho** (más `npm run characterize-check`) |
 | 7 | Paridad legacy ↔ regenerado (paso 7) | La corrida de control del incremento 1, repetida con la herramienta: la misma tabla |
 | 8 | **DSL 2.23: autorización por propietario.** Encontrada en el inc. 1 sobre RealWorld: «solo el autor edita o borra» no se puede declarar, porque `scoping` acota por un claim y no por un campo del recurso. `OBL-RESOURCE-SCOPE` no admite aceptarse y **bloquea la generación**. Sin embargo la acotación es producible con `callerIdentity`, igual que el detector ya reconoce para el nivel `service`: falta decir qué campo del recurso guarda al propietario (`Article.author` → `Profile.subject`) y con qué `code` se rechaza. Toca el schema de `security`, `crossrefs.js` (la obligación se cierra con la declaración), una mutación, los tres generadores y una fixture (conduit) | La fixture con propiedad genera en los tres generadores y su 403 sale en una red en vivo; el inc. 1 vuelve a ejecutar FL-ART-004 y FL-COM-002 contra el regenerado |
 
