@@ -1,0 +1,142 @@
+# Hoja de respuestas de sockshop-shipping. Ver README.md: qué es cada campo y cómo se puntúa.
+# Escrita leyendo el código el 2026-10-22; todas las filas en `read` hasta que el inc. 1 las mida.
+# Rutas de evidencia relativas a src/main/java/works/weave/socks/shipping/ salvo que digan otra cosa.
+legacy: sockshop-shipping
+repo: https://github.com/microservices-demo/shipping
+commit: 9c0fbfa31895dd029d44d3434de93f64cd71f87b
+assets:          # entrada: está en el repo y la herramienta la ve
+  - src/test/java/.../ITShippingController.java
+external_oracles: [] # el consumidor (microservices-demo/queue-master) está sin fijar
+
+facts:
+  # ── Entorno (paso 0) ────────────────────────────────────────────────────────
+  - id: SH-ENV-01
+    category: environment
+    fact: "Java 8, Maven y Spring Boot 1.4.0.RELEASE."
+    evidence: "pom.xml:17-22"
+    observable: "solo por lectura"
+    expect: "runtime.yaml"
+    status: measured
+    note: "build verde con maven:3.6.3-jdk-8 (inc. 1, 2026-10-22)"
+  - id: SH-ENV-02
+    category: environment
+    fact: "El host de RabbitMQ es `rabbitmq` (spring.rabbitmq.host) y las credenciales guest/guest están fijas en el código, no en la configuración."
+    evidence: "src/main/resources/application.properties:2, configuration/RabbitMqConfiguration.java:20-30"
+    observable: "grep (0b)"
+    expect: "compose con alias rabbitmq; las credenciales fijas, como hecho del legacy y `fix`"
+    status: measured
+    note: "conecta a un RabbitMQ con alias rabbitmq y guest/guest sin configurar nada"
+  - id: SH-ENV-03
+    category: environment
+    fact: "No hay base de datos."
+    evidence: "pom.xml"
+    observable: "introspección (no hay datasource)"
+    expect: "sin capa persistence"
+    status: measured
+    note: "introspección: sin datasource ni colecciones"
+
+  # ── Superficie ──────────────────────────────────────────────────────────────
+  - id: SH-SURF-01
+    category: surface
+    fact: "POST /shipping (201, devuelve el Shipment recibido), GET /shipping (texto fijo \"GET ALL Shipping Resource.\"), GET /shipping/{id} (texto fijo \"GET Shipping Resource with id: <id>\") y GET /health."
+    evidence: "controllers/ShippingController.java:26-80"
+    observable: "tabla de mappings"
+    expect: "POST como operación; los dos GET, como endpoints FALSOS (no consultan nada) → rechazo o `fix`, nunca una query inventada"
+    status: measured
+    note: "log de arranque + recordings/round-1/S1-001..003: POST 201, GET /shipping y /shipping/abc 200 con texto fijo"
+
+  # ── Mensajería ──────────────────────────────────────────────────────────────
+  - id: SH-MSG-01
+    category: effect
+    fact: "POST /shipping publica el Shipment en JSON (Jackson2JsonMessageConverter) en el exchange POR DEFECTO con routing key `shipping-task`, así que llega directo a la cola shipping-task. El TopicExchange shipping-task-exchange y su binding existen pero esta ruta no los usa."
+    evidence: "controllers/ShippingController.java:43, configuration/RabbitMqConfiguration.java:39-63"
+    observable: "la cola espía en shipping-task recibe el mensaje; una cola espía enlazada solo a shipping-task-exchange no recibe nada"
+    expect: "evento en messaging con su destino real; el exchange sin uso, como hecho del legacy"
+    status: measured
+    note: "recordings/round-1/S1-001: exchange \"\" y routing key shipping-task; shipping-task-exchange existe y está enlazado, pero no se usa"
+  - id: SH-MSG-02
+    category: effect
+    fact: "La cola shipping-task es NO durable (new Queue(name, false)) y la declara este servicio al arrancar (RabbitAdmin)."
+    evidence: "configuration/RabbitMqConfiguration.java:51-53"
+    observable: "introspección del broker; tras reiniciar RabbitMQ la cola y sus mensajes desaparecen"
+    expect: "hecho de la topología; decisión sobre la durabilidad en el servicio nuevo"
+    status: measured
+    note: "rabbitmqctl: durable false; recordings/round-1/S1-009: tras reiniciar el broker la cola no existe hasta que la app redeclara"
+  - id: SH-MSG-03
+    category: effect
+    fact: "Con el broker caído, la publicación falla, se escribe un aviso por stdout (\"...Accepting anyway. Don't do this for real!\") y se responde 201 igualmente. El evento se PIERDE (best-effort explícito, sin outbox)."
+    evidence: "controllers/ShippingController.java:42-47"
+    observable: "la sonda de broker caído da 201 y ningún mensaje al volver el broker"
+    expect: "decisión estructural `observed` (best-effort) → pregunta `omitted` sobre outbox"
+    status: measured
+    note: "recordings/round-1/S1-009: 201 en 14 ms con el broker parado; ningún mensaje al volver"
+  - id: SH-MSG-04
+    category: effect
+    fact: "El mensaje lleva las cabeceras de Spring AMQP (__TypeId__ con works.weave.socks.shipping.entities.Shipment). El consumidor (queue-master) depende de esa clase."
+    evidence: "configuration/RabbitMqConfiguration.java:39-48"
+    observable: "propiedades del mensaje en la cola espía"
+    expect: "contrato del mensaje con la cabecera; o `fix` declarado si el servicio nuevo no la pone (rompe a queue-master)"
+    status: measured
+    note: "recordings/round-1/S1-001: __TypeId__ works.weave.socks.shipping.entities.Shipment, content_type application/json, delivery_mode 2"
+
+  # ── Seguridad, concurrencia, defectos ──────────────────────────────────────
+  - id: SH-SEC-01
+    category: security
+    fact: "Sin autenticación."
+    evidence: "pom.xml"
+    observable: "sonda sin token da 201"
+    expect: "security vacía `observed`"
+    status: measured
+    note: "todas las sondas sin token: 2xx"
+  - id: SH-CONC-01
+    category: concurrency
+    fact: "No es idempotente. Repetir el POST publica dos mensajes con el mismo id."
+    evidence: "controllers/ShippingController.java:37-49"
+    observable: "la sonda de repetición deja dos mensajes en la cola espía"
+    expect: "decisión `observed`; la deduplicación se decide en el consumidor"
+    status: measured
+    note: "recordings/round-1/S1-007 y S1-008: dos 201 y dos mensajes con el mismo id"
+  - id: SH-DEF-01
+    category: defect
+    fact: "Acepta cualquier cuerpo (sin validación) y lo reenvía tal cual."
+    evidence: "controllers/ShippingController.java:40"
+    observable: "POST con {} da 201 y publica {id:null,name:null}"
+    expect: "`fix`"
+    status: refuted
+    note: "recordings/round-1/S1-004: {} da 201 pero publica un UUID NUEVO y name \"\" (el constructor por defecto de Shipment genera el id), no {id:null,name:null}. Ver SH-DEF-03"
+  - id: SH-DEF-02
+    category: defect
+    fact: "/health da siempre 200, aunque rabbitmq esté en \"err\"."
+    evidence: "controllers/ShippingController.java:51-80"
+    observable: "sonda con el broker parado"
+    expect: "verify (0f) lo tiene en cuenta; nunca se toma el 200 como «conectado»"
+    status: measured
+    note: "recordings/round-1/S1-010: 200 con shipping-rabbitmq \"err\""
+
+  # ── Activos del repo ──────────────────────────────────────────────────────
+  - id: SH-ASSET-01
+    category: asset
+    fact: "El repo trae una prueba de integración del controlador."
+    evidence: "src/test/java/works/weave/socks/shipping/controllers/ITShippingController.java"
+    observable: "leerla para la forma del Shipment"
+    expect: "`read`; la forma la confirma la sonda"
+    status: read
+    note: "no hizo falta: el DTO bastó para la forma"
+  - id: SH-DEF-03
+    category: defect
+    fact: "POST /shipping con {} responde 201 y publica un Shipment con un UUID generado por el servicio y name \"\"."
+    evidence: "entities/Shipment.java (constructor por defecto)"
+    observable: "recordings/round-1/S1-004"
+    expect: "`fix` (validación); escenario de caracterización del comportamiento actual"
+    status: measured
+    note: "corrige SH-DEF-01"
+    found_by: operator
+  - id: SH-SURF-02
+    category: surface
+    fact: "Actuator expuesto sin autenticación, incluidos POST /env, /restart, /pause, /refresh y GET /heapdump, /dump, /trace, /env."
+    evidence: "pom.xml (spring-boot-starter-actuator)"
+    observable: "log de arranque (EndpointMvcAdapter, GenericPostableMvcEndpoint)"
+    expect: "`fix` obligado; nunca `keep`; fuera del diseño de negocio"
+    status: measured
+    note: "introspección del paso 1a"
+    found_by: operator

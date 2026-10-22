@@ -1,0 +1,392 @@
+# Hoja de respuestas de sockshop-orders. Ver README.md: qué es cada campo y cómo se puntúa.
+# Escrita leyendo el código el 2026-10-22; todas las filas en `read` hasta que el inc. 1 las mida.
+# Rutas de evidencia relativas a src/main/java/works/weave/socks/orders/ salvo que digan otra cosa.
+legacy: sockshop-orders
+repo: https://github.com/microservices-demo/orders
+commit: 546a10c92d1ff9998c21f3849f5b95a0f14430a0
+assets:          # entrada: está en el repo y la herramienta la ve
+  - api-spec/orders.json         # Swagger 2
+  - api-spec/hooks.js            # Dredd, con seed
+  - test/json-server/server.py   # stub Flask de user y carts
+external_oracles: # fuera del repo: la herramienta no la ve
+  - https://github.com/microservices-demo/payment @ 384e33447dda5334187517dda09566c9a17fd6af
+
+facts:
+  # ── Entorno (paso 0) ────────────────────────────────────────────────────────
+  - id: OR-ENV-01
+    category: environment
+    fact: "Java 8 (java.version 1.8), Maven sin wrapper y padre spring-boot-starter-parent 1.4.4.RELEASE."
+    evidence: "pom.xml:16-22"
+    observable: "solo por lectura"
+    expect: "runtime.yaml con archivo:línea"
+    status: measured
+    note: "build verde con maven:3.6.3-jdk-8"
+  - id: OR-ENV-02
+    category: environment
+    fact: "Las pruebas usan de.flapdoodle.embed.mongo 1.50.5, que DESCARGA los binarios de Mongo al ejecutarse. Sin salida a internet, `mvn package` con pruebas falla."
+    evidence: "pom.xml:66-67"
+    observable: "el build en el sandbox aislado falla en la fase test"
+    expect: "environment.yaml con -DskipTests (o build en una etapa con red) y su motivo"
+    status: refuted
+    note: "flapdoodle está en el pom pero ninguna prueba lo usa (solo UnitPojo): el build no descarga nada"
+  - id: OR-ENV-03
+    category: environment
+    fact: "La imagen base del Dockerfile del repo es weaveworksdemos/msd-java:jre-latest, sin fijar y de una organización abandonada."
+    evidence: "docker/orders/Dockerfile:1"
+    observable: "el pull puede fallar o traer algo distinto"
+    expect: "el sandbox no la usa, o la fija por digest; la sustitución queda en environment.yaml"
+    status: read
+  - id: OR-ENV-04
+    category: environment
+    fact: "Configuración: puerto `port` (8082 por defecto; el Dockerfile pasa --port=80), host de Mongo `db` (orders-db por defecto, base `data`), `http.timeout` (5 s), `domain` (sufijo DNS de payment y shipping), `proxy.host`/`proxy.port` opcionales y zipkin apagado por defecto."
+    evidence: "src/main/resources/application.properties:1-9, controllers/OrdersController.java:46, config/RestProxyTemplate.java"
+    observable: "grep de @Value y properties (0b)"
+    expect: "environment.yaml con cada variable y su valor de prueba"
+    status: read
+  - id: OR-ENV-05
+    category: environment
+    fact: "Las dependencias salientes de host fijo son http://payment/paymentAuth y http://shipping/shipping (más .<domain> si se da). El sandbox necesita esos nombres DNS apuntando a WireMock."
+    evidence: "config/OrdersConfigurationProperties.java:13-19"
+    observable: "sin esos nombres, todo POST /orders da 500 tras el timeout"
+    expect: "compose con alias payment y shipping hacia WireMock; los stubs, derivados de PaymentRequest/PaymentResponse y Shipment del propio repo (`read`), y el comportamiento real de esos servicios, en unobserved.yaml como asunción"
+    status: read
+  - id: OR-ENV-06
+    category: environment
+    fact: "hipótesis: el driver de Mongo de Spring Boot 1.4 (3.2/3.4) usa OP_QUERY y no habla con MongoDB 5.1+/6.0. Hace falta un Mongo antiguo (3.x o 4.x)."
+    evidence: "pom.xml:33"
+    observable: "contra Mongo moderno la app arranca pero /health da orders-db \"err\" y todo acceso a la base falla"
+    expect: "environment.yaml fija la imagen de Mongo con motivo"
+    status: measured
+    note: "mongo:7.0 → toda consulta 500 \"Unsupported OP_QUERY command\" (352); mongo:4.4 funciona. /health dice OK igualmente (OR-ENV-07)"
+
+  # ── Superficie ──────────────────────────────────────────────────────────────
+  - id: OR-SURF-01
+    category: surface
+    fact: "POST /orders es el único handler escrito a mano (@RepositoryRestController)."
+    evidence: "controllers/OrdersController.java:50-125"
+    observable: "tabla de mappings"
+    expect: "operación de creación"
+    status: measured
+    note: "log de arranque: OrdersController.newOrder en POST /orders"
+  - id: OR-SURF-02
+    category: surface
+    fact: "Spring Data REST EXPONE SOLO, sin código de controlador, GET /orders (paginado HAL, con page, size y sort), GET/PUT/PATCH/DELETE /orders/{id}, GET /orders/search y GET /orders/search/customerId?custId=, más / (raíz HAL), /profile y /profile/orders (ALPS) y el navegador HAL en /browser/index.html."
+    evidence: "repositories/CustomerOrderRepository.java:11-15, pom.xml:29,57"
+    observable: "SOLO por introspección o sondeo (la raíz HAL lista los enlaces); leer el controlador no las muestra"
+    expect: "surface.yaml con todas. Es la fila que más distingue `measured` de `read`"
+    status: measured
+    note: "log + raíz HAL. Pero NO todas funcionan: PUT/PATCH dan 400 siempre (setItems sobrecargado, recordings/round-1/O1-005), el POST genérico lo sombrea el propio (recordings/round-1/O1-006), y GET da 200 o 500 según el cliente guardado (OR-DEF-06). /mappings de actuator no las lista"
+  - id: OR-SURF-03
+    category: surface
+    fact: "GET /health propio, que comprueba Mongo con buildInfo y devuelve {health:[{service:orders,status},{service:orders-db,status}]}. El health de actuator está apagado."
+    evidence: "controllers/HealthCheckController.java, src/main/resources/application.properties:3"
+    observable: "GET /health con Mongo parado da 200 con orders-db \"err\" (nunca 503)"
+    expect: "verify (0f) lo usa con su particularidad; el servicio nuevo tiene sus propias sondas"
+    status: measured
+    note: "recordings/round-2/O2-007 y O2-008: 200 con la base caída, solo cambia orders-db a \"err\""
+  - id: OR-SURF-04
+    category: surface
+    fact: "hipótesis: /metrics con formato Prometheus (simpleclient), con un interceptor que mide toda petición."
+    evidence: "config/PrometheusAutoConfiguration.java:31, middleware/HTTPMonitoringInterceptor.java"
+    observable: "GET /metrics"
+    expect: "fuera del diseño de negocio; anotado como observabilidad del legacy"
+    status: read
+
+  # ── Modelo ──────────────────────────────────────────────────────────────────
+  - id: OR-MODEL-01
+    category: model
+    fact: "CustomerOrder (colección customerOrder, con _class) tiene id, customerId, customer, address, card, items[], shipment, date y total(float). customer, address, card e items son COPIAS embebidas de lo que devolvieron los otros servicios en ese momento."
+    evidence: "entities/CustomerOrder.java"
+    observable: "diff de la base tras un POST /orders"
+    expect: "un agregado con value objects embebidos (snapshot), no referencias"
+    status: measured
+    note: "recordings/round-1/O1-001: un documento customerOrder con _class y las copias embebidas"
+  - id: OR-MODEL-02
+    category: model
+    fact: "El customer embebido incluye sus listas addresses y cards (DBRef lazy en la clase, pero aquí llega por JSON y se guarda tal cual)."
+    evidence: "entities/Customer.java"
+    observable: "el documento guardado, comparado con la respuesta de WireMock"
+    expect: "decidido qué se conserva; candidato a `fix` (datos de más)"
+    status: measured
+    note: "recordings/round-1/O1-001: customer.addresses y customer.cards se guardan como DBRef a colecciones address/card que no existen en esta base (ver OR-DEF-06)"
+  - id: OR-MODEL-03
+    category: model
+    fact: "El id del pedido es un ObjectId de Mongo. El id del envío es un UUID que genera ORDERS (no shipping) y su name es el customerId."
+    evidence: "entities/Shipment.java:14, controllers/OrdersController.java:101"
+    observable: "cuerpo enviado a WireMock shipping"
+    expect: "regla en el diseño; el UUID, normalizado"
+    status: measured
+    note: "recordings/round-1/O1-001: shipment.id UUID generado por orders y name = customerId, en el cuerpo enviado a shipping"
+  - id: OR-MODEL-04
+    category: model
+    fact: "No hay índices propios más allá de _id (findByCustomerId sin índice)."
+    evidence: "repositories/CustomerOrderRepository.java"
+    observable: "introspección de índices de la colección"
+    expect: "indexes sin unicidad; el índice por customerId, como decisión"
+    status: measured
+    note: "introspección: customerOrder solo con el índice _id"
+
+  # ── Reglas ──────────────────────────────────────────────────────────────────
+  - id: OR-RULE-01
+    category: rule
+    fact: "total = Σ(quantity × unitPrice) + 4.99 de envío fijo, calculado en float."
+    evidence: "controllers/OrdersController.java:154-160"
+    observable: "items de WireMock con precios conocidos; el total grabado tiene error de float"
+    expect: "regla con el 4.99; el float, como decisión (`fix` a decimal)"
+    status: measured
+    note: "recordings/round-2/O2-002: carrito vacío → 4.99 (guardado 4.989999771118164); O2-003: 145.22 (guardado 145.22000122070312)"
+  - id: OR-RULE-02
+    category: rule
+    fact: "customerId sale del último segmento de _links.self.href del customer (regex [\\w-]+$), no de un campo."
+    evidence: "controllers/OrdersController.java:100, 128-135"
+    observable: "cambiar el href en WireMock cambia el customerId guardado"
+    expect: "regla con referencia al código"
+    status: measured
+    note: "recordings/round-2/O2-004: href sin id → 500 \"Could not parse user ID from: http://user/customers/\""
+  - id: OR-RULE-03
+    category: rule
+    fact: "Orden del flujo: cuatro GET en paralelo (@Async) → POST a payment → si authorised, POST a shipping → save. El total se calcula antes del pago."
+    evidence: "controllers/OrdersController.java:60-117"
+    observable: "orden de las llamadas en el diario de WireMock"
+    expect: "use-case con sus pasos; http-clients para payment y shipping"
+    status: measured
+    note: "diario de WireMock en recordings/round-1/O1-001: los cuatro GET (en orden variable), luego paymentAuth, luego shipping"
+  - id: OR-RULE-04
+    category: rule
+    fact: "Validación de entrada: solo comprueba que los cuatro campos no sean null; @URL está anotado pero no se aplica (no hay @Valid)."
+    evidence: "controllers/OrdersController.java:56-58, resources/NewOrderResource.java"
+    observable: "customer \"no-es-url\" no da 406 de validación sino otro error"
+    expect: "input con los cuatro obligatorios; la @URL sin aplicar, como hecho"
+    status: measured
+    note: "recordings/round-1/O1-002: 406; O1-003: un campo que no es URL da 500 \"unspecified IO error\", no 406"
+  - id: OR-RULE-05
+    category: rule
+    fact: "La fecha del pedido es la hora del servidor al crearlo."
+    evidence: "controllers/OrdersController.java:113"
+    observable: "normalizada en la grabación"
+    expect: "campo con su origen"
+    status: measured
+    note: "campo date con la hora del servidor (normalizado)"
+
+  # ── Saliente ────────────────────────────────────────────────────────────────
+  - id: OR-OUT-01
+    category: effect
+    fact: "Los cuatro GET van a las URLs que llegan en el CUERPO de la petición (customer, address y card en HAL; items en JSON plano). El destino lo elige el cliente."
+    evidence: "controllers/OrdersController.java:60-75, services/AsyncGetService.java"
+    observable: "el diario de WireMock muestra las URLs del cuerpo"
+    expect: "frontera (OR-FRONT-01), porque http-clients exige una base fija; es también un SSRF (OR-DEF-04)"
+    status: measured
+    note: "recordings/round-1/O1-017: GET a http://user/internal/admin?token=x tal como vino en el cuerpo"
+  - id: OR-OUT-02
+    category: effect
+    fact: "POST payment: {address, card, customer, amount} → {authorised, message}. Si la respuesta es null da 406 \"Unable to parse authorisation packet\"; si authorised es false, 406 con el message de payment."
+    evidence: "controllers/OrdersController.java:79-97, values/PaymentRequest.java, values/PaymentResponse.java"
+    observable: "WireMock con authorised false"
+    expect: "http-client payment + error 406 declarado"
+    status: measured
+    note: "recordings/round-1/O1-010: 406 con el message de payment; O1-013: cuerpo vacío → 406 \"Unable to parse authorisation packet\"; recordings/round-2/O2-005: sin authorised → 406 con el message que venga (\"ok\")"
+  - id: OR-OUT-03
+    category: effect
+    fact: "POST shipping: {id: uuid, name: customerId} → Shipment, que se guarda dentro del pedido."
+    evidence: "controllers/OrdersController.java:100-102"
+    observable: "cuerpo recibido por WireMock shipping"
+    expect: "http-client shipping"
+    status: measured
+    note: "diario de recordings/round-1/O1-001"
+  - id: OR-OUT-04
+    category: effect
+    fact: "El timeout es de http.timeout (5 s) POR cada Future.get, no total. RestTemplate no tiene timeout propio, así que un saliente colgado retiene un hilo para siempre. El executor de @Async es el SimpleAsyncTaskExecutor por defecto (un hilo nuevo por tarea, sin límite)."
+    evidence: "controllers/OrdersController.java:46, OrderApplication.java:8, config/RestProxyTemplate.java:24-26"
+    observable: "WireMock con un retraso de 6 s da 500 \"...due to timeout from one of the services.\""
+    expect: "resiliencia del http-client decidida (`observed`: timeout 5 s sin reintento ni circuito)"
+    status: measured
+    note: "recordings/round-1/O1-012: pago a 7 s → 500 \"...timeout from one of the services.\" (el executor y el hilo retenido, solo por lectura)"
+  - id: OR-OUT-05
+    category: effect
+    fact: "Un 4xx o 5xx de cualquier saliente da ExecutionException → 500 \"Unable to create order due to unspecified IO error.\""
+    evidence: "controllers/OrdersController.java:123-124"
+    observable: "WireMock payment en 500"
+    expect: "errors + decisión de la resiliencia"
+    status: measured
+    note: "recordings/round-1/O1-011 (pago 500) y O1-015 (carrito 404) → 500 \"unspecified IO error\""
+
+  # ── Errores ─────────────────────────────────────────────────────────────────
+  - id: OR-ERR-01
+    category: error
+    fact: "Una petición incompleta da 406 Not Acceptable (no 400 ni 422), con message \"Invalid order request. Order requires customer, address, card and items.\""
+    evidence: "controllers/OrdersController.java:56-58, 169-175"
+    observable: "POST /orders con {}"
+    expect: "error con su http 406 (y decisión `fix` de status)"
+    status: measured
+    note: "recordings/round-1/O1-002"
+  - id: OR-ERR-02
+    category: error
+    fact: "El cuerpo de error es el de Spring Boot 1.4, {timestamp,status,error,exception,message,path}, y EXPONE el nombre de la clase de la excepción."
+    evidence: "(comportamiento del framework)"
+    observable: "cualquier 406 o 500"
+    expect: "frontera de contrato (OR-FRONT-02); `exception` es una fuga → `fix`"
+    status: measured
+    note: "todas las respuestas 406/500 llevan `exception` con la clase"
+
+  # ── Seguridad ───────────────────────────────────────────────────────────────
+  - id: OR-SEC-01
+    category: security
+    fact: "No hay autenticación ni autorización en ninguna ruta, incluidas PUT/PATCH/DELETE /orders/{id}."
+    evidence: "pom.xml (sin spring-security)"
+    observable: "la sonda sin token da 2xx en todo"
+    expect: "security vacía como hecho `observed`; la decisión sobre el servicio nuevo, preguntada"
+    status: measured
+    note: "todas las sondas sin token; DELETE 204 (recordings/round-2/O2-006)"
+
+  # ── Concurrencia y repetición ───────────────────────────────────────────────
+  - id: OR-CONC-01
+    category: concurrency
+    fact: "POST /orders no es idempotente. Repetirlo cobra dos veces, crea dos envíos y guarda dos pedidos."
+    evidence: "controllers/OrdersController.java:50-125"
+    observable: "la sonda de repetición deja dos llamadas a payment y dos a shipping en WireMock y dos documentos"
+    expect: "decisión estructural `observed` (sin idempotencia) → pregunta `omitted` con su riesgo"
+    status: measured
+    note: "recordings/round-1/O1-008 y O1-009: dos pedidos y 12 llamadas salientes (dos cobros, dos envíos)"
+  - id: OR-CONC-02
+    category: concurrency
+    fact: "No hay campo de versión. PUT/PATCH concurrentes sobre /orders/{id}: gana el último."
+    evidence: "entities/CustomerOrder.java"
+    observable: "la sonda de concurrencia da 200 y 200"
+    expect: "decisión `observed`"
+    status: refuted
+    note: "PUT y PATCH dan 400 siempre (recordings/round-1/O1-005): no hay escritura concurrente posible que «gane»"
+
+  # ── Defectos (candidatos a `fix`) ───────────────────────────────────────────
+  - id: OR-DEF-01
+    category: defect
+    fact: "El envío se pide ANTES de guardar el pedido y sin compensación. Si el save falla, queda un envío (y un cobro) sin pedido. Tampoco se compensa el cobro si shipping falla."
+    evidence: "controllers/OrdersController.java:100-117"
+    observable: "la sonda con Mongo parado tras el pago deja la llamada a shipping hecha y ningún pedido"
+    expect: "`fix` (orden o compensación decididos); escenario de caracterización del comportamiento actual"
+    status: measured
+    note: "recordings/round-1/O1-016: base caída → paymentAuth y shipping llamados y 500 sin pedido; O1-014: shipping 500 con el pago ya hecho, sin compensación"
+  - id: OR-DEF-02
+    category: defect
+    fact: "Guarda y DEVUELVE el número de tarjeta completo (longNum) y el CCV en el pedido."
+    evidence: "entities/Card.java:10-12, entities/CustomerOrder.java"
+    observable: "la respuesta del POST y del GET /orders/{id} llevan ccv"
+    expect: "`fix` obligado (PCI); nunca `keep`"
+    status: measured
+    note: "recordings/round-1/O1-001: la respuesta lleva longNum y ccv"
+  - id: OR-DEF-03
+    category: defect
+    fact: "PUT/PATCH/DELETE /orders/{id} expuestos sin autenticación permiten reescribir o borrar cualquier pedido."
+    evidence: "repositories/CustomerOrderRepository.java:11"
+    observable: "ver OR-SURF-02 y OR-SEC-01"
+    expect: "`fix` (quitar las operaciones o protegerlas)"
+    status: refuted
+    note: "PUT/PATCH no reescriben (400 siempre); sí se puede BORRAR sin autenticación: ver OR-DEF-07"
+  - id: OR-DEF-04
+    category: defect
+    fact: "SSRF. El servicio hace GET a cualquier URL que mande el cliente."
+    evidence: "controllers/OrdersController.java:60-75"
+    observable: "customer apuntando a un host interno del compose"
+    expect: "`fix`"
+    status: measured
+    note: "recordings/round-1/O1-017"
+  - id: OR-DEF-05
+    category: defect
+    fact: "Importes en float."
+    evidence: "entities/CustomerOrder.java (total), entities/Item.java (unitPrice)"
+    observable: "ver OR-RULE-01"
+    expect: "`fix` a decimal"
+    status: measured
+    note: "ver OR-RULE-01"
+
+  # ── Frontera del DSL ────────────────────────────────────────────────────────
+  - id: OR-FRONT-01
+    category: frontier
+    fact: "Salientes con destino dinámico (la URL viene en la petición); http-clients del DSL tiene base fija."
+    evidence: "ver OR-OUT-01"
+    observable: "ver OR-OUT-01"
+    expect: "rechazo con motivo, o `fix` que lo convierta en clientes de base fija (users, carts) con el id en la ruta"
+    status: measured
+    note: "ver OR-OUT-01"
+  - id: OR-FRONT-02
+    category: frontier
+    fact: "Respuestas HAL (_links, _embedded, page) de Spring Data REST y cuerpo de error de Spring Boot 1.4; no son el contrato del cable de Keel."
+    evidence: "pom.xml:29"
+    observable: "cualquier GET /orders"
+    expect: "diferencia de contrato declarada; la paridad compara datos y status, no la envoltura HAL"
+    status: measured
+    note: "respuestas HAL en recordings/round-2/O2-001"
+
+  # ── Activos del repo y canarios ───────────────────────────────────────────
+  - id: OR-ASSET-01
+    category: asset
+    fact: "test/json-server/server.py es un stub Flask de los servicios user y carts, con la forma HAL de customer, address y card (_links.self.href) y los items."
+    evidence: "test/json-server/server.py"
+    observable: "arrancarlo, o traducirlo a WireMock"
+    expect: "los stubs de WireMock de los cuatro GET se derivan de él (procedencia `read`), no se inventan"
+    status: measured
+    note: "traducido a WireMock (sandbox/wiremock/mappings) y usado en todas las sondas"
+  - id: OR-ASSET-02
+    category: asset
+    fact: "api-spec/orders.json solo documenta POST y GET /orders; la superficie real tiene muchas más rutas (OR-SURF-02)."
+    evidence: "api-spec/orders.json"
+    observable: "comparar con la raíz HAL en marcha"
+    expect: "la spec del repo se usa pero NO se toma como superficie completa: manda lo medido"
+    status: measured
+    note: "la spec documenta 2 rutas; el runtime sirve más de 10 de negocio"
+  - id: OR-ASSET-03
+    category: asset
+    fact: "api-spec/hooks.js trae un seed (customer, address, card, cart, item) con ids fijos."
+    evidence: "api-spec/hooks.js:1-55"
+    observable: "sembrarlo en la base o en los stubs"
+    expect: "datos de la ronda 0"
+    status: read
+  - id: OR-CANARY-01
+    category: canary
+    fact: "El payment real rechaza los importes por encima de 105 (flag -decline) con \"Payment declined: amount exceeds 105.00\", y da 500 con importe 0 o negativo. Nada de eso está en el repo de orders."
+    evidence: "payment@384e334 service.go:41-60, cmd/paymentsvc/main.go:28"
+    observable: "no observable: la herramienta no ve payment"
+    expect: "el diseño NO contiene el umbral ni esos mensajes; el contrato de payment va a unobserved.yaml como asunción. Si aparecen, es contaminación"
+    status: read
+  - id: OR-CANARY-02
+    category: canary
+    fact: "El payment real responde a un error con 500 y cuerpo JSON; orders lo convierte en 500 \"unspecified IO error\" (OR-OUT-05)."
+    evidence: "payment@384e334 transport.go:47-50"
+    observable: "no observable desde orders salvo con WireMock en 500"
+    expect: "el comportamiento ante el 500 se mide con WireMock; que payment lo produzca con importe 0 es contaminación si aparece"
+    status: read
+  - id: OR-ENV-07
+    category: environment
+    fact: "/health declara orders-db OK con un motor en el que ninguna consulta funciona: buildInfo sobrevive a la retirada de OP_QUERY."
+    evidence: "controllers/HealthCheckController.java:35"
+    observable: "/health 200 OK mientras GET /orders da 500"
+    expect: "el juez (0f) comprueba la base con una lectura real del dominio, nunca con la salud del legacy"
+    status: measured
+    note: "encontrado en el inc. 1 con mongo:7.0"
+    found_by: operator
+  - id: OR-DEF-06
+    category: defect
+    fact: "Con el cliente que devuelve el stub del repo (direcciones y tarjetas embebidas), el pedido se guarda con DBRef(lazy) a colecciones address/card inexistentes y TODA lectura posterior (GET /orders/{id}, listado, búsqueda) da 500 NullPointerException al serializar."
+    evidence: "entities/Customer.java (@DBRef(lazy = true))"
+    observable: "recordings/round-1/O1-004 (500) frente a recordings/round-2/O2-001 (200 con un cliente sin direcciones ni tarjetas)"
+    expect: "escenario de caracterización con las dos ramas + asunción en unobserved.yaml sobre la forma real del servicio de usuarios"
+    status: measured
+    note: "depende de un contrato de fuera del repo"
+    found_by: operator
+  - id: OR-DEF-07
+    category: defect
+    fact: "DELETE /orders/{id} sin autenticación borra cualquier pedido (204), aunque su lectura esté rota."
+    evidence: "repositories/CustomerOrderRepository.java:11"
+    observable: "recordings/round-2/O2-006"
+    expect: "`fix` (quitar la operación o protegerla)"
+    status: measured
+    note: "sustituye a OR-DEF-03"
+    found_by: operator
+  - id: OR-SURF-05
+    category: surface
+    fact: "Actuator expuesto sin autenticación, incluidos POST /env, /restart, /pause, /refresh y GET /heapdump, /dump, /trace, /env."
+    evidence: "pom.xml (simpleclient_spring_boot y spring-cloud traen actuator)"
+    observable: "log de arranque y /mappings"
+    expect: "`fix` obligado; fuera del diseño de negocio"
+    status: measured
+    note: "introspección del paso 1a"
+    found_by: operator

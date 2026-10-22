@@ -11,7 +11,11 @@ en cualquier tecnología con keel-spring, keel-nest o keel-dotnet.
 Supuestos de partida, que son los del peor caso:
 - solo se conoce la tecnología (por ejemplo Java 8 o Node 14), no la arquitectura;
 - el humano puede no tener ese entorno instalado;
-- puede no haber pruebas de integración ni documentación.
+- puede no haber pruebas de integración ni documentación;
+- **la única entrada es el repo** del legacy o del servicio que se quiere refactorizar, con su
+  historial de git. No hay base de producción ni dumps, ni documentación fuera del repo, ni acceso a
+  los repos de los servicios con los que habla. El humano sigue ahí para **decidir** (`keep`/`fix`,
+  las estructurales `omitted`), pero no aporta artefactos.
 
 El primer paso de la implementación es copiar este plan a la raíz del repo como
 `PLAN-KEEL-RECOVER.md`, para llevar su estado incremento a incremento, como `PLAN-KEEL-NEST.md` y
@@ -58,6 +62,13 @@ diseño incorrecto que parece completo».
 6. **La frontera del DSL se declara.** Lo que el legacy hace y el DSL no puede decir (lógica en
    triggers, sesiones con estado, colas con orden global) va a una lista de rechazos con su motivo,
    como `supported-features.js` en los generadores.
+7. **El repo es la única fuente, y lo que trae son afirmaciones, no medidas.** Las pruebas, specs,
+   colecciones, stubs y seeds del repo se aprovechan, pero las escribieron sus autores y pueden estar
+   desfasados. Entran como `read` y solo pasan a `measured` cuando una sonda lo confirma.
+8. **Lo que está fuera del repo no se sabe.** El contrato de una dependencia sale solo de cómo la usa
+   el legacy (sus DTO de cliente, sus stubs de test), con procedencia `read`. Su comportamiento real
+   (umbrales, errores, latencias) no se puede observar y va a `unobserved.yaml` como asunción. Tampoco
+   vale lo que el agente «sepa» de un proyecto público por su entrenamiento: eso es `inferred`.
 
 ## 2. Dónde vive
 
@@ -81,12 +92,12 @@ Un paquete nuevo, **`packages/keel-recover`** (CLI `keel-recover`), que depende 
 
 | Sub | Qué | Quién |
 |---|---|---|
-| 0a | **Huella del runtime**: versión del lenguaje y de la herramienta de build, empaquetado y servidor de aplicaciones, leídos de `pom.xml`, `build.gradle` + wrapper, `package.json#engines`, `.nvmrc`, `.tool-versions`, `lockfileVersion` y un Dockerfile si existe. Sale `runtime.yaml` con `archivo:línea` | determinista |
-| 0b | **Dependencias externas**: grep de lo que el código lee del entorno (`System.getenv`, `process.env`, `@Value`, `application*.yml`, `.env.example`). Clasificación: base o broker → su contenedor; tercero HTTP → WireMock; SMTP → Mailpit; desconocido → pregunta | grep determinista + agente |
-| 0c | **Dockerfile multi-etapa** con la cadena antigua (`maven:3.6-jdk-8`, `node:14`), medidor de cobertura (JaCoCo, c8/`NODE_V8_COVERAGE`) e imágenes fijadas por digest, más `compose.yaml` con lo de 0b | agente |
-| 0d | **Bucle de build** con presupuesto. Fallos conocidos: Maven por http o jcenter desaparecido (mirror en `settings.xml`), npm despublicado, `node-gyp` con python2, Debian EOL (`archive.debian.org`), registro privado (credenciales del humano). Cada adaptación queda en `environment.yaml` con su motivo | agente |
-| 0e | **Bucle de arranque** con presupuesto: variables que faltan, esquema (las migraciones de la app; si no hay, un dump del humano) y seed (derivado del esquema y sus FK, o un dump anonimizado) | agente + humano |
-| 0f | **Juez** `keel-recover verify`: la app responde sin 5xx, está conectada a la base, la cobertura graba y **el runtime no tiene salida a internet**. Si pasa, toma el snapshot de la base | determinista |
+| 0a | **Huella del runtime**: versión del lenguaje y de la herramienta de build, empaquetado y servidor de aplicaciones, leídos de `pom.xml`, `build.gradle` + wrapper, `package.json#engines`, `.nvmrc`, `.tool-versions`, `lockfileVersion` (y la existencia de **cualquier** lockfile: `yarn.lock`, `package-lock.json`, `pnpm-lock.yaml`), un Dockerfile si existe y **la configuración de CI** (`.travis.yml`, `.circleci/`, `.github/workflows/`, `.gitlab-ci.yml`), que en el inc. 1 fue la única fuente de la versión de Node y del motor. Sale `runtime.yaml` con `archivo:línea` | determinista |
+| 0b | **Dependencias externas**: grep de lo que el código lee del entorno (`System.getenv`, `process.env`, `@Value`, `application*.yml`, `.env.example`). Clasificación: base o broker → su contenedor; tercero HTTP → WireMock, con stubs derivados de los DTO de cliente y de los stubs de test que traiga el repo; SMTP → Mailpit; desconocido → pregunta. **Inventario de activos del repo**: pruebas, specs (OpenAPI, Swagger, Dredd), colecciones (Postman), stubs de dependencias, seeds y scripts de arranque | grep determinista + agente |
+| 0c | **Dockerfile multi-etapa** con la cadena antigua (`maven:3.6-jdk-8`, `node:14`), medidor de cobertura e imágenes fijadas por digest, más `compose.yaml` con lo de 0b. Cobertura: JaCoCo en `tcpserver` (se vuelca por ronda sin reiniciar); en Node ≥10.12, c8/`NODE_V8_COVERAGE`; en Node <10 no existe, así que nyc, que escribe al salir (**una ronda = un arranque**). Reglas del `compose.yaml`: (1) la **versión** de cada imagen sale de la evidencia, por este orden: la CI del repo, la compatibilidad del driver y la época de las dependencias. **Nunca la última por defecto**: en el inc. 1 la moderna arrancaba y mentía. (2) Cada servicio se publica con el **alias que el legacy ya espera** (`orders-db`, `rabbitmq`, `payment`), para no tocar su configuración. (3) La red de ejecución es `internal: true`; el build va aparte, con red solo para las dependencias. (4) Todas las imágenes van fijadas por **digest**. (5) Los terceros HTTP comparten un WireMock con un alias por host. Parte del catálogo neutral de `keel-core/src/lib/gen/infra-catalog.js` e `infra-scripts.js`, al que se añaden versiones antiguas | agente |
+| 0d | **Bucle de build** con presupuesto. Fallos conocidos: Maven por http o jcenter desaparecido (mirror en `settings.xml`), npm despublicado, `node-gyp` con python2, Debian EOL (`archive.debian.org`), pruebas que descargan binarios en el build. Un registro privado sin credenciales en el repo es un **rechazo con motivo**, porque no hay otra entrada. Cada adaptación queda en `environment.yaml` con su motivo. La red solo se abre para resolver dependencias del build, nunca para buscar información | agente |
+| 0e | **Bucle de arranque** con presupuesto: variables que faltan (con los valores de desarrollo del propio repo, nunca uno de producción), esquema (las migraciones de la app; si no hay, el que crea el ORM al arrancar; si tampoco, el derivado de las entidades, `read`) y datos (los seeds y fixtures del repo, o creados por la propia API en una ronda 0 de sondas) | agente |
+| 0f | **Juez** `keel-recover verify`: la app responde sin 5xx, está conectada a la base, la cobertura graba y **el runtime no tiene salida a internet**. Si pasa, toma el snapshot de la base. Dos reglas medidas en el inc. 1. (1) La conexión a la base se comprueba con una **lectura y una escritura reales del dominio**, nunca con la salud del legacy: con el motor equivocado, el `/health` de orders decía OK mientras toda consulta fallaba. (2) Con el motor equivocado no todo es 5xx: RealWorld contra Mongo 7 respondía **422 «is already taken»** a un usuario nuevo. Por eso el juez cruza la versión del motor con la que declaran la CI y el driver, y no se conforma con «sin 5xx» | determinista |
 
 **Se rechaza con su motivo** lo que no se puede contenerizar: .NET Framework sobre Windows,
 middleware con licencia (WebLogic, IBM MQ) y mainframes.
@@ -96,7 +107,17 @@ middleware con licencia (WebLogic, IBM MQ) y mainframes.
 - **1a. Introspección** (determinista). Rutas con su handler (`/actuator/mappings`, la tabla del
   router, ApiExplorer), `information_schema` (tablas, únicos, FK, índices, valores distintos de las
   columnas de estado) y la API del broker (exchanges, colas, bindings, listeners). Sale
-  `surface.yaml`.
+  `surface.yaml`. Medido en el inc. 1:
+  - El `/mappings` de actuator 1.x **no lista** ni Spring Data REST ni los `@RepositoryRestController`. La
+    tabla completa está en las líneas `Mapped "{[...]}"` del log de arranque, y `{repository}` se expande
+    con la raíz HAL.
+  - En Express no hay endpoint que pregunte por las rutas. Se leen del proceso con un módulo de precarga
+    (`NODE_OPTIONS=--require`) que recorre `app._router.stack`, sin tocar el legacy.
+  - La superficie de datos y de broker se declara de forma **perezosa**: colecciones que nacen con el
+    primer documento y colas que `RabbitAdmin` declara en la primera conexión. Por eso la introspección se
+    repite al final de cada ronda.
+  - La introspección encuentra superficie que la lectura no ve, como actuator abierto sin autenticación
+    con `POST /env` y `/restart`.
 - **1b. Exploración por rondas**, con presupuesto:
   1. El agente lee **solo** los handlers y DTO que nombra `surface.yaml` (y las ramas sin cubrir) y
      escribe `probes/round-N.yaml`. La forma de cada petición se descubre por el DSL del framework
@@ -110,12 +131,30 @@ middleware con licencia (WebLogic, IBM MQ) y mainframes.
      - el correo de Mailpit.
   3. Se vuelca la cobertura de la ronda.
 
-  El bucle para cuando la cobertura se estanca o se agota el presupuesto.
+  El bucle para cuando la cobertura se estanca o se agota el presupuesto. Medido en el inc. 1 (prototipo
+  en `../keel-recover-lab/tools/probe.mjs`):
+  - La **ronda 0** sale de los activos del repo cuando los hay: la colección Postman de RealWorld dio el
+    88 % de líneas sola. Pero su verde no es una prueba, porque «pasaba» con un 500 dentro de una
+    petición sin aserciones. Se lee el status de cada petición.
+  - Los efectos se leen **después** de restaurar el setup de la sonda (con el broker otra vez arriba).
+    Así se ve, por ejemplo, que una cola no durable ha desaparecido.
+  - Una sonda de concurrencia no tiene un desenlace, sino una **distribución**: se repite (`repeat`) y
+    se cuentan los desenlaces con una clave que no depende del orden de los pasos paralelos. Lo estable
+    es el conjunto de desenlaces, no sus frecuencias.
+  - Normalización: el JWT se identifica por sus claims sin `iat`/`exp`. Los hashes y lo aleatorio del
+    framework (el sufijo del slug) llevan regla por legacy. Los tiempos se graban (`_timeSeconds`) pero
+    no se comparan. Con eso, dos ejecuciones de la misma ronda dieron 22 de 24 grabaciones idénticas, y
+    las 2 restantes eran de concurrencia.
+  - Una misma sonda puede dar 200 o 500 según **la forma de la respuesta de una dependencia** (en orders,
+    si el cliente trae direcciones embebidas). Se sondean las dos formas y se declara la asunción.
+  - Lo que queda sin cubrir al estancarse se clasifica: código muerto, configuración inactiva, modo
+    (desarrollo frente a producción) o carrera no reproducida. Cada caso va a `unobserved.yaml` con su
+    motivo.
 - **Sondas de clase**, que cubren lo que una petición suelta no ve:
 
   | Qué | Cómo se sondea |
   |---|---|
-  | Autorización | La misma sonda con cada rol de las credenciales de prueba, y sin token |
+  | Autorización | La misma sonda con cada rol y sin token. Las credenciales salen del repo: registro por la propia API, el secreto de firma de la configuración de desarrollo, usuarios de los seeds |
   | Concurrencia | Dos sondas iguales en paralelo: ¿409, último gana o duplicado? |
   | Repetición | La misma sonda dos veces: ¿idempotente? |
   | Ciclo de vida | Cada transición sobre cada estado observado en la columna de estado |
@@ -129,7 +168,8 @@ middleware con licencia (WebLogic, IBM MQ) y mainframes.
 
 `/keel-decompose` con `surface.yaml` y las grabaciones como insumo. Los grupos de tablas por FK y las
 rutas que las escriben sugieren las fronteras, y una base compartida entre esas fronteras es un
-hallazgo de `system.yaml`. El humano confirma. Después se ejecuta un `/keel-recover` por servicio.
+hallazgo de `system.yaml`. Los servicios de fuera del repo entran en `system.yaml` solo como
+proveedores o consumidores con el contrato que se ve desde dentro. El humano confirma. Después se ejecuta un `/keel-recover` por servicio.
 
 ### Paso 3. Recuperar el diseño (`/keel-recover specs/<servicio>`)
 
@@ -183,21 +223,56 @@ grabaciones con las del legacy: respuestas **y** efectos (las filas, los eventos
 salientes). El resultado esperado es igual en los `keep`, con la diferencia declarada en los `fix`.
 Se registra en `docs/corridas/`.
 
+**La paridad es semántica, no literal** (decisión del 2026-10-22, inc. 1). El contrato del cable
+(`wire-contract.md`) lo fija el método: forma del error, sobre de la página, cuerpos sin envoltura y
+autenticación delegada en un proveedor OIDC. Un legacy casi nunca lo cumple; RealWorld envuelve los
+cuerpos, pagina con `limit`/`offset` y emite sus propios tokens. Por eso los clientes del legacy
+**migran** al contrato canónico, y el paso 7 compara:
+- el **status**, con la tabla de diferencias declaradas;
+- los **datos**, a través de un **mapa de contrato** legacy → Keel (`contract-map.yaml`: rutas,
+  envolturas, campos, parámetros de página, forma del error, cómo se obtiene un token en cada lado);
+- los **efectos**.
+
+Nunca se compara el cuerpo literal. Cada diferencia de forma es un `fix` declarado en `decisions.yaml`,
+con su entrada en el mapa.
+
+**Los escenarios no bastan: se comparan todos los datos** (medido en el inc. 1). El servicio regenerado de
+RealWorld pasó 73 de 73 escenarios, 91 pruebas y los 19 `keep`, y aun así llevaba tres defectos del diseño
+recuperado que ninguno afirmaba:
+- el `sub` del token de cada autor expuesto en todo artículo y comentario;
+- la imagen por defecto perdida en las proyecciones del autor;
+- `favorited` y `following` ausentes en respuestas autenticadas.
+
+Los encontró `tools/parity.mjs`, que compara paso a paso **todo** lo que devuelven los dos lados (ya
+traducido por el mapa): campos que solo tiene uno, valores distintos y `null` frente a ausente según la
+semántica del mapa. Clasifica cada diferencia como equivalente, **declarada** (`declaredDifferences` del
+mapa, con su motivo) o **sin declarar**, y sale en rojo con cualquier diferencia sin declarar y si no ha
+comparado ningún paso: un comparador sin nada que comparar no puede salir en verde. Lo que el legacy hace y el contrato canónico no puede decir (la
+autenticación opcional que personaliza una lectura pública, el login propio) es frontera, con su
+motivo. Una fachada que conserve el contrato del legacy queda fuera de este plan.
+
 **Queda fuera de este plan:** migrar los datos y el corte de tráfico (estrangulamiento o cambio de
 golpe).
 
 ## 4. Incrementos
 
+**Estado (2026-10-22):** incrementos 0 y 1 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
+(paso 0, paso 1, pasos 3-5 y paso 7). Su laboratorio es el repo `../keel-recover-lab`: sandboxes,
+grabaciones, el diseño `conduit` y los prototipos `tools/*.mjs` que los incrementos 4, 6 y 7 reescriben
+dentro del paquete. **El siguiente es el 2.** Sus fixtures de referencia son los `runtime.yaml` y
+`environment.yaml` escritos a mano en el laboratorio para los tres legacys del banco.
+
 | # | Qué | Puerta |
 |---|---|---|
 | 0 | Copiar este plan a `PLAN-KEEL-RECOVER.md` | — |
-| 1 | **Prueba manual, sin código**: pasos 0, 1, 5 y 7 a mano sobre dos legacys reales (uno Java 8 + Maven, uno Node 14), regenerando uno con keel-dotnet | Corrida en `docs/corridas/` con intentos de 0d/0e, adaptaciones, cobertura por ronda, `keep` que fallan la primera vez y la tabla de paridad. **Decide si el paso 0 es viable antes de construirlo** |
+| 1 | **Prueba manual, sin código**: pasos 0, 1, 5 y 7 a mano sobre los legacys del banco (`docs/recover-bench/`: `realworld-node`, `sockshop-orders` y `sockshop-shipping`), regenerando uno con keel-dotnet. Cada fila de sus hojas de respuestas pasa de `read` a `measured` o `refuted` | Corrida en `docs/recover-bench/corridas/` (no en `docs/corridas/`, cuya serie es la de los generadores) con intentos de 0d/0e, adaptaciones, cobertura por ronda, `keep` que fallan la primera vez y la tabla de paridad. **Decide si el paso 0 es viable antes de construirlo**, y deja la línea base del banco |
 | 2 | Paquete `keel-recover`: `fingerprint` (0a) y `env-deps` (0b) con adaptadores Java/Maven, Java/Gradle y Node; schemas `runtime`/`environment` fuera del DSL | Deterministas byte a byte sobre fixtures de legacy mínimas (`fixtures/legacy/java8-maven`, `node14`) |
 | 3 | Skill del sandbox (0c–0e) + `verify` (0f) | `verify` falsado: rojo con salida a internet, con cobertura vacía y con 5xx |
 | 4 | `introspect` (1a) + `probe` (1b): restauración, captura de efectos, normalización y cobertura. Reutiliza WireMock, Mailpit, `keel-core/src/lib/gen/broker-probes.js` y la `infra/` neutral | Una app legacy de fixture, en vivo como los `*-check`: cada efecto capturado y uno saboteado por tipo (por ejemplo, la cola espía sin enlazar sale en rojo) |
-| 5 | Skill `/keel-recover` (pasos 3 y 4) + `provenance.yaml` (fila en `SPEC_SIDE_FILES`) + `origin`/`evidence` en `structural-register.js` | `npm test` en keel-core; un `inferred` en el diseño final sale en rojo |
+| 5 | Skill `/keel-recover` (pasos 3 y 4) + `provenance.yaml` (fila en `SPEC_SIDE_FILES`) + `origin`/`evidence` en `structural-register.js` | `npm test` en keel-core; un `inferred` en el diseño final sale en rojo, y **también todo elemento del DSL sin fila en `provenance.yaml`**: en el inc. 1 se coló un rol copiado de la forma de una fixture, sin fila, y no lo habría cazado una puerta que solo mira lo que el agente declara |
 | 6 | Criterio `characterized` en `readiness.js` + `FIDELITY.md` | `test/readiness.test.js`: romper el sello apaga `characterized` y solo ese criterio |
 | 7 | Paridad legacy ↔ regenerado (paso 7) | La corrida de control del incremento 1, repetida con la herramienta: la misma tabla |
+| 8 | **DSL 2.23: autorización por propietario.** Encontrada en el inc. 1 sobre RealWorld: «solo el autor edita o borra» no se puede declarar, porque `scoping` acota por un claim y no por un campo del recurso. `OBL-RESOURCE-SCOPE` no admite aceptarse y **bloquea la generación**. Sin embargo la acotación es producible con `callerIdentity`, igual que el detector ya reconoce para el nivel `service`: falta decir qué campo del recurso guarda al propietario (`Article.author` → `Profile.subject`) y con qué `code` se rechaza. Toca el schema de `security`, `crossrefs.js` (la obligación se cierra con la declaración), una mutación, los tres generadores y una fixture (conduit) | La fixture con propiedad genera en los tres generadores y su 403 sale en una red en vivo; el inc. 1 vuelve a ejecutar FL-ART-004 y FL-COM-002 contra el regenerado |
 
 ## 5. Riesgos
 
@@ -209,6 +284,14 @@ golpe).
   que no se pueda normalizar se declara.
 - **Seguridad del build.** Un legacy trae dependencias viejas con CVE y scripts de `postinstall`. El
   build corre aislado y el runtime sin red externa. Nunca se usan secretos de producción.
+
+## Banco de medida
+
+`docs/recover-bench/` fija tres legacys reales y abandonados por commit, con una hoja de respuestas
+cada uno (109 hechos, con `archivo:línea`, más canarios de contaminación), las métricas de fidelidad y de esfuerzo y el protocolo para
+medir. El incremento 1 mide a mano la línea base, y el 7 repite la medida con la herramienta. La
+medida final añade un legacy **retenido** que elige el humano, contra el sobreajuste. Lo que el banco
+no cubre (relacional, `lifecycle`, roles, correo, cron, consumo) está escrito en su README.
 
 ## Verificación
 

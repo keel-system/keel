@@ -1,0 +1,497 @@
+# Hoja de respuestas de realworld-node. Ver README.md: qué es cada campo y cómo se puntúa.
+# Escrita leyendo el código el 2026-10-22; todas las filas en `read` hasta que el inc. 1 las mida.
+legacy: realworld-node
+repo: https://github.com/gothinkster/node-express-realworld-example-app
+commit: ba04b70c31af81ca7935096740a6e083563b3a4a
+assets:          # entrada: está en el repo y la herramienta la ve
+  - tests/api-tests.postman.json   # 31 peticiones, newman; env en tests/env-api-tests.postman.json
+external_oracles: # fuera del repo: la herramienta no la ve
+  - especificación RealWorld de enero de 2018
+
+facts:
+  # ── Entorno (paso 0) ────────────────────────────────────────────────────────
+  - id: RW-ENV-01
+    category: environment
+    fact: "Fuera de producción la URI de Mongo está fija en `mongodb://localhost/conduit`; solo con NODE_ENV=production se lee MONGODB_URI."
+    evidence: "app.js:33-37"
+    observable: "arrancar sin NODE_ENV=production en un contenedor sin Mongo en localhost no conecta"
+    expect: "environment.yaml registra NODE_ENV=production + MONGODB_URI como adaptación, con motivo"
+    status: read
+    note: "no probado: el sandbox fijó NODE_ENV=production desde el principio (RW-ENV-02 obligó a dar SECRET); el modo desarrollo queda en unobserved.yaml (U-RW-01)"
+  - id: RW-ENV-02
+    category: environment
+    fact: "El secreto del JWT es 'secret' fuera de producción y process.env.SECRET en producción; en producción sin SECRET el middleware no tiene secreto."
+    evidence: "config/index.js:2"
+    observable: "con NODE_ENV=production y sin SECRET, toda ruta autenticada falla (hipótesis: error al montar express-jwt o 500 por petición)"
+    expect: "environment.yaml fija SECRET de prueba; nunca uno de producción"
+    status: measured
+    note: "NODE_ENV=production sin SECRET: el proceso muere al arrancar con \"secret should be set\" (express-jwt)"
+  - id: RW-ENV-03
+    category: environment
+    fact: "El modo cambia el cuerpo del error. Fuera de producción `error` lleva el objeto y se imprime el stack (errorhandler); en producción `error` es {}."
+    evidence: "app.js:29-31, app.js:58-79"
+    observable: "el mismo 500 o 401 da cuerpos distintos según NODE_ENV"
+    expect: "las sondas se graban en un único modo, declarado en environment.yaml; los escenarios no afirman el campo `error`"
+    status: measured
+    note: "en producción el cuerpo del error lleva error:{} (recordings/round-1/R1-003, R1-007); el modo desarrollo no se ejecutó (U-RW-01)"
+  - id: RW-ENV-04
+    category: environment
+    fact: "No hay lockfile. Las dependencias directas están en versión exacta, pero las transitivas y las devDependencies (^) flotan."
+    evidence: "package.json"
+    observable: "dos builds en fechas distintas resuelven árboles distintos"
+    expect: "el sandbox genera y conserva un lockfile y lo declara como adaptación"
+    status: refuted
+    note: "hay yarn.lock en la raíz; la hoja solo buscó *.js. yarn install --frozen-lockfile funciona con node 8.5.0"
+  - id: RW-ENV-05
+    category: environment
+    fact: "No declara versión de Node (ni engines, ni .nvmrc). Las dependencias son de 2016 (express 4.13, mongoose 4.4), así que el candidato es Node 6 u 8."
+    evidence: "package.json"
+    observable: "solo por lectura de las fechas de las dependencias, o probando versiones"
+    expect: "runtime.yaml con la versión elegida y su motivo (`read`), o `asked`"
+    status: refuted
+    note: "la versión está en la CI del repo: .circleci/config.yml (circleci/node:8.5.0, circleci/mongo:3.4.9) y .travis.yml (node_js 8)"
+  - id: RW-ENV-06
+    category: environment
+    fact: "hipótesis: mongoose 4.4.10 (driver mongodb 2.1) solo funciona entero contra MongoDB 3.4 o anterior. En 3.6 se retiró $pushAll, que mongoose 4.4 usa en push() de arrays, y en 5.1+/6.0 se retiró OP_QUERY."
+    evidence: "models/User.js:62-65, routes/api/articles.js:257-259"
+    observable: "contra Mongo ≥3.6 la app arranca y las lecturas responden, pero favorite, follow y comment dan 500. Solo lo destapa una sonda que escriba en un array"
+    expect: "environment.yaml fija la imagen de Mongo con motivo; si la herramienta elige Mongo moderno, las sondas de esas rutas tienen que salir en rojo, no grabarse como comportamiento"
+    status: measured
+    note: "mongo:3.6 → app arriba, lecturas y altas bien, favorite 500 \"Unknown modifier: $pushAll\"; mongo:7.0 → todo 500 (OP_QUERY); 3.4.9 funciona"
+  - id: RW-ENV-07
+    category: environment
+    fact: "No hay endpoint de salud."
+    evidence: "routes/"
+    observable: "ninguna ruta de salud en la tabla del router"
+    expect: "verify (0f) usa una ruta de lectura sin efectos (GET /api/tags) y lo declara"
+    status: measured
+    note: "la tabla del router no tiene ruta de salud; el juez usó GET /api/tags"
+  - id: RW-ENV-08
+    category: environment
+    fact: "express-session con MemoryStore está montado y ninguna ruta lo usa. En producción avisa por consola de que MemoryStore no es para producción."
+    evidence: "app.js:27"
+    observable: "aviso en el log de arranque; ninguna respuesta pone cookie (saveUninitialized false)"
+    expect: "no aparece en el diseño (código muerto); como mucho, en las notas del sandbox"
+    status: measured
+    note: "aviso de MemoryStore en el log de arranque"
+
+  # ── Superficie ──────────────────────────────────────────────────────────────
+  - id: RW-SURF-01
+    category: surface
+    fact: "Diecinueve rutas bajo /api. users (4) POST /users, POST /users/login, GET /user, PUT /user; profiles (3) GET /profiles/:username, POST /profiles/:username/follow, DELETE /profiles/:username/follow; articles (11) GET /articles, GET /articles/feed, POST /articles, GET/PUT/DELETE /articles/:slug, POST/DELETE /articles/:slug/favorite, GET/POST /articles/:slug/comments, DELETE /articles/:slug/comments/:id; tags (1) GET /tags."
+    evidence: "routes/api/*.js"
+    observable: "tabla del router de Express (app._router.stack)"
+    expect: "surface.yaml con las 19; cada una con su operación en use-cases y su endpoint en api"
+    status: measured
+    note: "tabla del router leída del proceso (tools/express-routes.js): las 19 rutas"
+  - id: RW-SURF-02
+    category: surface
+    fact: "method-override acepta la cabecera X-HTTP-Method-Override, así que un POST puede actuar como PUT o DELETE en cualquier ruta."
+    evidence: "app.js:24"
+    observable: "POST /api/articles/:slug con X-HTTP-Method-Override DELETE borra el artículo"
+    expect: "hallazgo de la frontera o decisión `fix` (el DSL no tiene sobreescritura de método); nunca ignorado en silencio"
+    status: measured
+    note: "recordings/round-1/R1-035: POST con X-HTTP-Method-Override DELETE da 204 y el artículo desaparece (404)"
+  - id: RW-SURF-03
+    category: surface
+    fact: "CORS abierto a cualquier origen."
+    evidence: "app.js:17"
+    observable: "Access-Control-Allow-Origin * en toda respuesta"
+    expect: "registrado en security o como decisión"
+    status: measured
+    note: "access-control-allow-origin * en todas las respuestas, también con Origin ajeno (recordings/round-1/R1-036)"
+
+  # ── Modelo ──────────────────────────────────────────────────────────────────
+  - id: RW-MODEL-01
+    category: model
+    fact: "User tiene username (minúsculas, único, obligatorio, ^[a-zA-Z0-9]+$), email (minúsculas, único, obligatorio, /\\S+@\\S+\\.\\S+/), bio, image, favorites[Article], following[User], hash, salt y timestamps."
+    evidence: "models/User.js:7-17"
+    observable: "índices únicos en la colección users; documentos tras POST /api/users"
+    expect: "entidad User con sus constraints; hash y salt nunca expuestos en api"
+    status: measured
+    note: "índices únicos username_1 y email_1 en users; recordings/round-1/R1-002: username y email inválidos → 422"
+  - id: RW-MODEL-02
+    category: model
+    fact: "Article tiene slug (minúsculas, único), title, description y body (ninguno obligatorio), favoritesCount (default 0), comments[Comment], tagList[String], author→User y timestamps."
+    evidence: "models/Article.js:6-15"
+    observable: "POST /api/articles con body vacío crea un artículo (sin 422)"
+    expect: "entidad Article; title/description/body opcionales (o decisión `fix` si se exigen)"
+    status: measured
+    note: "recordings/round-1/R1-033: un artículo solo con title se crea (200)"
+  - id: RW-MODEL-03
+    category: model
+    fact: "Comment tiene body (no obligatorio), author→User, article→Article y timestamps. La relación es bidireccional, porque Article.comments guarda también los ids."
+    evidence: "models/Comment.js:2-6, models/Article.js:12"
+    observable: "diff de la base tras POST comment, con dos documentos tocados"
+    expect: "Comment como hija del agregado Article o agregado propio, decidido y con su motivo; la doble referencia, como hecho del legacy"
+    status: measured
+    note: "diff de recordings/round-1/R1-013: un documento en comments y su id en articles.comments"
+  - id: RW-MODEL-04
+    category: model
+    fact: "favoritesCount es un dato desnormalizado; la verdad está en User.favorites."
+    evidence: "models/Article.js:33-38"
+    observable: "diff tras favorite, con dos colecciones tocadas"
+    expect: "regla o invariante que lo diga; decisión de si el servicio nuevo lo deriva o lo guarda"
+    status: measured
+    note: "recordings/round-1/R1-023: favoritesCount cambia con los favoritos de los usuarios"
+
+  # ── Reglas ──────────────────────────────────────────────────────────────────
+  - id: RW-RULE-01
+    category: rule
+    fact: "El slug es slug(title) + '-' + seis caracteres base36 aleatorios, y solo se genera al crear. Cambiar el título con PUT no cambia el slug."
+    evidence: "models/Article.js:22-29"
+    observable: "PUT con title nuevo devuelve el mismo slug"
+    expect: "regla del slug en el diseño; el sufijo aleatorio, normalizado en las grabaciones"
+    status: measured
+    note: "recordings/round-1/R1-030: el slug no cambia al cambiar el título"
+  - id: RW-RULE-02
+    category: rule
+    fact: "favoritesCount se RECALCULA contando los usuarios que lo tienen en favorites; no se incrementa."
+    evidence: "models/Article.js:33-38"
+    observable: "solo distinguible del incremento con la sonda de concurrencia (RW-CONC-02)"
+    expect: "regla con referencia al código"
+    status: read
+    note: "recalcular o incrementar dan la misma respuesta en todas las sondas (recordings/round-1/R1-020: el favorito repetido no suma): no distinguible desde fuera"
+  - id: RW-RULE-03
+    category: rule
+    fact: "favorite y follow son idempotentes (indexOf antes del push), y unfavorite y unfollow de algo ausente no fallan."
+    evidence: "models/User.js:61-91"
+    observable: "la sonda de repetición devuelve lo mismo dos veces"
+    expect: "decisión estructural `observed` de idempotencia natural en esas cuatro operaciones"
+    status: measured
+    note: "recordings/round-1/R1-020: favorite y follow repetidos, y unfavorite/unfollow de algo ausente, todos 200"
+  - id: RW-RULE-04
+    category: rule
+    fact: "Un usuario puede seguirse a sí mismo y marcar como favorito su propio artículo."
+    evidence: "routes/api/profiles.js:29-39, routes/api/articles.js:197-209"
+    observable: "POST /api/profiles/<yo>/follow da 200 con following true"
+    expect: "escenario de caracterización, candidato a `fix`"
+    status: measured
+    note: "recordings/round-1/R1-034"
+  - id: RW-RULE-05
+    category: rule
+    fact: "Listado con filtros tag, author y favorited, limit (20) y offset (0) por defecto y sin máximo, y orden createdAt desc. articlesCount es el total sin paginar."
+    evidence: "routes/api/articles.js:31-87"
+    observable: "GET /api/articles?limit=1000 devuelve todo"
+    expect: "query con filtros y paginación; falta de límite máximo como hecho o `fix`"
+    status: measured
+    note: "recordings/round-1/R1-031: limit=1000 aceptado; tag filtra"
+  - id: RW-RULE-06
+    category: rule
+    fact: "Si `author` nombra un usuario que no existe, el filtro se IGNORA y devuelve todos los artículos. Con `favorited` de un usuario inexistente, en cambio, devuelve lista vacía."
+    evidence: "routes/api/articles.js:51-64"
+    observable: "GET /api/articles?author=nadie devuelve todos"
+    expect: "escenario de caracterización; candidato a `fix` (RW-DEF-04)"
+    status: measured
+    note: "recordings/round-1/R1-031: author=nadie → todos (articlesCount 1); favorited=nadie → 0"
+  - id: RW-RULE-07
+    category: rule
+    fact: "El feed son los artículos de los autores seguidos, paginado igual que el listado pero SIN orden."
+    evidence: "routes/api/articles.js:89-123"
+    observable: "orden no determinista entre ejecuciones (lo absorbe la normalización o se declara)"
+    expect: "query feed; el orden ausente, declarado"
+    status: read
+    note: "el feed sin orden no se sondeó con más de un artículo"
+  - id: RW-RULE-08
+    category: rule
+    fact: "Los tags son el distinct de tagList sobre todos los artículos; no hay entidad Tag."
+    evidence: "routes/api/tags.js:6-10"
+    observable: "borrar el último artículo con un tag lo hace desaparecer"
+    expect: "query derivada, sin entidad"
+    status: measured
+    note: "recordings/round-2/R2-002: tras cambiar tagList a [t9], GET /api/tags devuelve solo t9"
+  - id: RW-RULE-09
+    category: rule
+    fact: "Los comentarios se listan por createdAt desc."
+    evidence: "routes/api/articles.js:227-246"
+    observable: "dos comentarios, el último primero"
+    expect: "orden en la query"
+    status: measured
+    note: "recordings/round-2/R2-003: [\"dos\",\"uno\"]"
+  - id: RW-RULE-10
+    category: rule
+    fact: "La contraseña es pbkdf2 sha512 con 10000 iteraciones, 512 bytes y sal de 16 bytes. El login busca por email SIN pasarlo a minúsculas."
+    evidence: "models/User.js:20-28, config/passport.js:10"
+    observable: "registrar A@x.com y entrar con A@x.com da 422 (guardado como a@x.com)"
+    expect: "el algoritmo, como hecho (`read`) para migrar credenciales; el login sensible a mayúsculas, como defecto (RW-DEF-01)"
+    status: measured
+    note: "recordings/round-1/R1-006: registro con Carol@X.io; login con Carol@X.io → 422, con carol@x.io → 200"
+  - id: RW-RULE-11
+    category: rule
+    fact: "PUT /api/user actualiza solo los campos presentes, incluida la contraseña, y devuelve un token nuevo."
+    evidence: "routes/api/users.js:15-40"
+    observable: "PUT con solo bio no toca el resto"
+    expect: "operación de actualización parcial"
+    status: measured
+    note: "recordings/round-1/R1-036 (bio, image, password) y recordings/round-2/R2-004 (username)"
+  - id: RW-RULE-12
+    category: rule
+    fact: "Un perfil sin imagen se devuelve con la URL por defecto https://static.productionready.io/images/smiley-cyrus.jpg, pero el usuario autenticado (toAuthJSON) devuelve image null."
+    evidence: "models/User.js:42-58"
+    observable: "GET /api/profiles/x frente a GET /api/user del mismo usuario"
+    expect: "escenario de caracterización con las dos formas"
+    status: refuted
+    note: "recordings/round-1/R1-010: GET /api/user NO devuelve image:null, el campo no viene (undefined no se serializa). Ver RW-RULE-14"
+  - id: RW-RULE-13
+    category: rule
+    fact: "La búsqueda de perfil por username distingue mayúsculas, pero el username se guarda en minúsculas."
+    evidence: "routes/api/profiles.js:7-14, models/User.js:8"
+    observable: "registrar Alice y pedir GET /api/profiles/Alice da 404"
+    expect: "escenario de caracterización"
+    status: measured
+    note: "recordings/round-1/R1-008: registrar Dave; /api/profiles/Dave → 404, /api/profiles/dave → 200"
+
+  # ── Errores ─────────────────────────────────────────────────────────────────
+  - id: RW-ERR-01
+    category: error
+    fact: "Un error de validación de mongoose da 422 {errors:{<campo>:<mensaje>}}, con los mensajes \"can't be blank\", \"is invalid\", \"is already taken.\" (usuario) e \"is already taken\" (slug, sin punto)."
+    evidence: "routes/api/index.js:8-18, models/User.js:19, models/Article.js:17"
+    observable: "registro duplicado o con username inválido"
+    expect: "errors con code, http 422 y mensaje exacto"
+    status: measured
+    note: "recordings/round-1/R1-001 (\"is already taken.\"), R1-002 (\"is invalid\"); recordings/round-2/R2-004 (email repetido en PUT → 422)"
+  - id: RW-ERR-02
+    category: error
+    fact: "Un login fallido da 422 {errors:{\"email or password\":\"is invalid\"}}, y uno sin email o sin password, 422 con \"can't be blank\"."
+    evidence: "routes/api/users.js:42-61, config/passport.js:11-13"
+    observable: "login con contraseña mala"
+    expect: "error declarado"
+    status: measured
+    note: "recordings/round-1/R1-005"
+  - id: RW-ERR-03
+    category: error
+    fact: "Hay dos formas de 404. Un slug, comentario o perfil inexistente da 404 con cuerpo de TEXTO \"Not Found\" (sendStatus); una ruta desconocida, 404 JSON {errors:{message:\"Not Found\",error:{}}}."
+    evidence: "routes/api/articles.js:13, app.js:48-52"
+    observable: "GET /api/articles/nope frente a GET /api/nope"
+    expect: "los dos registrados; el de texto, conflicto con el contrato del cable de Keel → frontera o `fix`"
+    status: measured
+    note: "recordings/round-1/R1-007: \"Not Found\" text/plain frente a {errors:{message:\"Not Found\",error:{}}}"
+  - id: RW-ERR-04
+    category: error
+    fact: "Sin token en una ruta auth.required da 401 JSON con message \"No authorization token was found\". Un token válido de un usuario que ya no existe da 401 de texto \"Unauthorized\"."
+    evidence: "routes/auth.js:13-25, routes/api/users.js:9"
+    observable: "sonda sin token, y sonda con el token de un usuario borrado en la base"
+    expect: "security + errors"
+    status: measured
+    note: "recordings/round-1/R1-010 (sin token → 401 JSON) y R1-011 (token de usuario inexistente → 401 text/plain \"Unauthorized\")"
+  - id: RW-ERR-05
+    category: error
+    fact: "Una petición sin el envoltorio esperado (sin `user`, `article` o `comment` en el cuerpo) revienta con TypeError, que da 500 o se queda colgada (RW-DEF-05)."
+    evidence: "routes/api/users.js:63-71, routes/api/articles.js:158-170"
+    observable: "POST /api/users con {} da 500"
+    expect: "escenario de caracterización con `fix` (debería ser 422)"
+    status: measured
+    note: "recordings/round-1/R1-003: 500 \"Cannot read property 'username' of undefined\"; R1-030: PUT {} sin respuesta (RW-DEF-05)"
+  - id: RW-ERR-06
+    category: error
+    fact: "hipótesis: POST /api/users sin password da 500, porque pbkdf2Sync recibe undefined."
+    evidence: "routes/api/users.js:68, models/User.js:27"
+    observable: "registro con solo username y email"
+    expect: "escenario con `fix`"
+    status: measured
+    note: "recordings/round-1/R1-004: 500 \"Pass phrase must be a buffer\""
+  - id: RW-ERR-07
+    category: error
+    fact: "Un id de comentario que no es un ObjectId da CastError, que acaba en 500."
+    evidence: "routes/api/articles.js:22-27"
+    observable: "DELETE /api/articles/x/comments/no-es-id"
+    expect: "escenario con `fix` (debería ser 404)"
+    status: measured
+    note: "recordings/round-0/newman.json: la colección del repo borra el comentario \"1\" → 500 \"Cast to ObjectId failed\""
+
+  # ── Seguridad ───────────────────────────────────────────────────────────────
+  - id: RW-SEC-01
+    category: security
+    fact: "JWT HS256 con claims id, username y exp (+60 días). Acepta los esquemas `Token` y `Bearer`, y solo de la cabecera Authorization."
+    evidence: "models/User.js:30-39, routes/auth.js:4-11"
+    observable: "la misma sonda con `Token x` y con `Bearer x` da lo mismo"
+    expect: "security.authentication; los dos esquemas, como hecho (y decisión sobre si se mantienen)"
+    status: measured
+    note: "recordings/round-1/R1-010: Token y Bearer → 200, Basic → 401 (los claims, por lectura)"
+  - id: RW-SEC-02
+    category: security
+    fact: "No hay roles. La autorización es por PROPIEDAD. Editar o borrar un artículo exige ser su autor (si no, 403 de texto \"Forbidden\"), y borrar un comentario exige ser su autor."
+    evidence: "routes/api/articles.js:153-195, routes/api/articles.js:266-277"
+    observable: "la sonda de autorización con un segundo usuario da 403"
+    expect: "security con scoping o regla de propiedad por recurso"
+    status: measured
+    note: "recordings/round-1/R1-012 y R1-013: 403 text/plain \"Forbidden\""
+  - id: RW-SEC-03
+    category: security
+    fact: "Las lecturas con auth.optional cambian la respuesta según haya token (favorited y following)."
+    evidence: "routes/api/articles.js:31,141,227, routes/api/profiles.js:17"
+    observable: "la misma sonda con y sin token"
+    expect: "operación con identidad opcional"
+    status: measured
+    note: "recordings/round-1/R1-014: favorited y following cambian con y sin token"
+
+  # ── Efectos ─────────────────────────────────────────────────────────────────
+  - id: RW-EFF-01
+    category: effect
+    fact: "Crear un comentario son dos escrituras no atómicas, el comentario y luego el push en el artículo."
+    evidence: "routes/api/articles.js:248-264"
+    observable: "diff con dos colecciones"
+    expect: "dos documentos en una operación; la no atomicidad, como hecho del legacy"
+    status: measured
+    note: "diff de recordings/round-1/R1-013"
+  - id: RW-EFF-02
+    category: effect
+    fact: "Favorite y unfavorite escriben en User.favorites y después en Article.favoritesCount."
+    evidence: "routes/api/articles.js:197-225"
+    observable: "diff con dos colecciones"
+    expect: "operación con dos efectos"
+    status: measured
+    note: "recordings/round-1/R1-023"
+
+  # ── Concurrencia y repetición ───────────────────────────────────────────────
+  - id: RW-CONC-01
+    category: concurrency
+    fact: "La unicidad la comprueba primero mongoose-unique-validator (lee y luego escribe), así que dos registros iguales en paralelo hacen que uno caiga en E11000 del índice, que NO se traduce a 422 y da 500."
+    evidence: "models/User.js:19"
+    observable: "la sonda de concurrencia con dos POST /api/users iguales da 200 y 500"
+    expect: "decisión estructural `observed` (unicidad con carrera mal traducida) → `fix`"
+    status: measured
+    note: "recordings/round-1/R1-022 repetida: un registro gana siempre y el otro sale 500 (E11000) o 422 según la tanda; distribución inestable"
+  - id: RW-CONC-02
+    category: concurrency
+    fact: "hipótesis: dos favorite en paralelo de usuarios distintos pueden dejar un favoritesCount desfasado (cada uno cuenta y guarda, y gana la última escritura)."
+    evidence: "models/Article.js:33-38"
+    observable: "sonda de concurrencia y después leer el artículo"
+    expect: "decisión `observed`/`omitted` sobre concurrencia en el contador"
+    status: refuted
+    note: "recordings/round-1/R1-023: 20 de 20 con favoritesCount correcto en el sandbox (sin latencia app-base); queda en unobserved.yaml como carrera posible no observada (U-RW-02)"
+  - id: RW-CONC-03
+    category: concurrency
+    fact: "No hay bloqueo optimista en las rutas (ni __v comprobado en PUT). Dos PUT en paralelo sobre el mismo artículo: gana el último."
+    evidence: "routes/api/articles.js:153-179"
+    observable: "la sonda de concurrencia da 200 y 200"
+    expect: "decisión estructural `observed` de último-gana"
+    status: read
+    note: "no se sondearon dos PUT en paralelo"
+  - id: RW-CONC-04
+    category: concurrency
+    fact: "Crear artículo o comentario no es idempotente. Repetir la petición crea dos (con slugs distintos)."
+    evidence: "routes/api/articles.js:125-139, 248-264"
+    observable: "la sonda de repetición da dos documentos"
+    expect: "decisión estructural `observed` (sin idempotencia), preguntada como `omitted`"
+    status: measured
+    note: "recordings/round-1/R1-021: dos artículos con slugs distintos"
+
+  # ── Defectos (candidatos a `fix`) ───────────────────────────────────────────
+  - id: RW-DEF-01
+    category: defect
+    fact: "El login es sensible a mayúsculas del email, pero el registro lo guarda en minúsculas."
+    evidence: "config/passport.js:10, models/User.js:9"
+    observable: "ver RW-RULE-10"
+    expect: "`fix` en decisions.yaml"
+    status: measured
+    note: "ver RW-RULE-10"
+  - id: RW-DEF-02
+    category: defect
+    fact: "Borrar un artículo no borra sus comentarios ni lo quita de los favorites de los usuarios. Quedan huérfanos y referencias colgantes."
+    evidence: "routes/api/articles.js:182-195"
+    observable: "el diff de DELETE artículo toca un solo documento; los Comment siguen"
+    expect: "escenario de caracterización + `fix`"
+    status: measured
+    note: "recordings/round-1/R1-032: el comentario queda huérfano y el favorites de B conserva el id del artículo borrado"
+  - id: RW-DEF-03
+    category: defect
+    fact: "Borrar un comentario no comprueba que pertenezca al artículo de la ruta. Con el slug de otro artículo se borra el Comment y el id queda colgando en su artículo real. Además el remove se lanza antes que el save del artículo (se pasa una promesa a then, no una función)."
+    evidence: "routes/api/articles.js:266-277"
+    observable: "DELETE /api/articles/<otro>/comments/<id> da 204, y GET de los comentarios del artículo real falla o los omite"
+    expect: "`fix`"
+    status: measured
+    note: "recordings/round-1/R1-033: borrado cruzado 204; el artículo real conserva el id del comentario y su listado devuelve []"
+  - id: RW-DEF-04
+    category: defect
+    fact: "Un filtro author con un usuario inexistente se ignora (ver RW-RULE-06)."
+    evidence: "routes/api/articles.js:51-58"
+    observable: "ver RW-RULE-06"
+    expect: "`fix`"
+    status: measured
+    note: "ver RW-RULE-06"
+  - id: RW-DEF-05
+    category: defect
+    fact: "Varias rutas no tienen .catch en la promesa exterior (PUT artículo, DELETE comentario, GET perfil con token). Un error deja la petición SIN respuesta hasta el timeout del cliente."
+    evidence: "routes/api/articles.js:153-179, 266-277, routes/api/profiles.js:18-23"
+    observable: "PUT /api/articles/:slug con {} se cuelga"
+    expect: "la sonda lo graba como timeout (no como éxito ni como 500) y sale `fix`"
+    status: measured
+    note: "recordings/round-1/R1-030: PUT {} sin respuesta en 8 s. En cambio GET de perfil con token de usuario inexistente responde 200 (recordings/round-2/R2-005): no todas las rutas sin catch se cuelgan"
+
+  # ── Frontera del DSL ────────────────────────────────────────────────────────
+  - id: RW-FRONT-01
+    category: frontier
+    fact: "Los cuerpos de error de texto plano (sendStatus) y la forma {errors:{campo:msg}} no son el contrato del cable de Keel."
+    evidence: "routes/api/*.js"
+    observable: "ver RW-ERR-01 y RW-ERR-03"
+    expect: "declarado como diferencia de contrato (decisión `fix` de forma, o rechazo con motivo); la paridad del paso 7 compara status y código, no el cuerpo literal"
+    status: measured
+    note: "ver RW-ERR-01 y RW-ERR-03"
+  - id: RW-FRONT-02
+    category: frontier
+    fact: "La sobreescritura de método por cabecera (RW-SURF-02)."
+    evidence: "app.js:24"
+    observable: "ver RW-SURF-02"
+    expect: "rechazo con motivo o `fix`"
+    status: measured
+    note: "ver RW-SURF-02"
+
+  # ── Activos del repo y canarios ───────────────────────────────────────────
+  - id: RW-ASSET-01
+    category: asset
+    fact: "El repo trae una colección Postman de 31 peticiones que crea sus propios datos (registro, login, artículos, comentarios) y afirma respuestas."
+    evidence: "tests/api-tests.postman.json"
+    observable: "ejecutarla con newman contra el sandbox"
+    expect: "ronda 0 de sondas o fuente de datos; sus afirmaciones, `read` hasta que una sonda las confirme"
+    status: measured
+    note: "recordings/round-0/newman.json: 31 peticiones, 241 aserciones en verde contra el sandbox; ronda 0 con 88 % de líneas"
+  - id: RW-ASSET-02
+    category: asset
+    fact: "El script mongo:start del repo levanta `mongo` sin versión (latest), que es justo la imagen con la que favorite, follow y comment fallan (RW-ENV-06)."
+    evidence: "package.json (scripts.mongo:start)"
+    observable: "arrancar con la imagen del repo y sondear un favorite"
+    expect: "la herramienta NO se fía del activo: lo corrige en environment.yaml con motivo"
+    status: measured
+    note: "paso 0: con mongo moderno la app miente (RW-ENV-06, RW-ENV-09); el sandbox no usó la imagen del script"
+  - id: RW-CANARY-01
+    category: canary
+    fact: "La especificación pública de RealWorld pide el feed ordenado del más reciente al más antiguo; este legacy no lo ordena (RW-RULE-07)."
+    evidence: "routes/api/articles.js:105-107 (no hay sort)"
+    observable: "ver RW-RULE-07"
+    expect: "el diseño NO afirma orden en el feed; si lo afirma, lo sacó de la memoria del modelo y no del repo. Verificar el texto de la spec de 2018"
+    status: read
+  - id: RW-CANARY-02
+    category: canary
+    fact: "La especificación pública muestra los errores de validación como arrays ({errors:{body:[\"can't be empty\"]}}); este legacy devuelve cadenas (RW-ERR-01)."
+    evidence: "routes/api/index.js:8-18"
+    observable: "ver RW-ERR-01"
+    expect: "el diseño y los escenarios usan la forma de cadena; la de arrays es contaminación. Verificar el texto de la spec de 2018"
+    status: read
+  - id: RW-ENV-09
+    category: environment
+    fact: "Contra un Mongo sin OP_QUERY (7.0), POST /api/users de un usuario NUEVO responde 422 {username:\"is already taken.\",email:\"is already taken.\"}: mongoose-unique-validator toma la consulta fallida por duplicado."
+    evidence: "models/User.js:19"
+    observable: "registro con mongo:7.0"
+    expect: "el sandbox nunca graba esta respuesta como comportamiento: es un síntoma del motor equivocado. Un juez que solo mire «no hay 5xx» la daría por buena"
+    status: measured
+    note: "encontrado en el inc. 1 probando RW-ENV-06"
+    found_by: operator
+  - id: RW-RULE-14
+    category: rule
+    fact: "GET /api/user (toAuthJSON) omite el campo image cuando el usuario no tiene imagen; el perfil (toProfileJSONFor) pone la URL por defecto."
+    evidence: "models/User.js:42-58"
+    observable: "recordings/round-1/R1-010 frente a recordings/round-1/R1-014"
+    expect: "escenario de caracterización con las dos formas; el contrato del cable distingue ausente de null"
+    status: measured
+    note: "corrige RW-RULE-12"
+    found_by: operator
+  - id: RW-ASSET-03
+    category: asset
+    fact: "La colección Postman del repo «pasa» con un 500 dentro: la petición que borra el comentario \"1\" no tiene ninguna aserción."
+    evidence: "tests/api-tests.postman.json (Comments/Delete Comment for Article)"
+    observable: "recordings/round-0/newman.json"
+    expect: "la herramienta no toma el verde de un activo como prueba de comportamiento: lee el status de cada petición"
+    status: measured
+    note: "verde engañoso en un activo del repo"
+    found_by: operator
