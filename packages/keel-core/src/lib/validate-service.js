@@ -10,6 +10,7 @@ import { applicableReviews } from './reviews.js';
 import { gapInventory } from './gap-classes.js';
 import { loadGaps, resolveGaps, emptyGaps } from './gaps-state.js';
 import { resolveStructural, emptyStructural } from './structural-register.js';
+import { loadProvenance, resolveProvenance, emptyProvenance } from './provenance.js';
 import { SCENARIOS_FILE } from './spec-files.js';
 import { checkFor } from './checks.js';
 import { checkDerivedCoherence } from './derived-coherence.js';
@@ -117,7 +118,8 @@ export function validateService(dir, { wip = false } = {}) {
     incoherences: { open: [], excused: [], stale: [], orphans: [], errors: [] },
     reviews: { covered: [], missing: [], open: [], accepted: [], stale: false, reviewedAt: null, reviewedBy: null, orphans: [], errors: [] },
     gaps: emptyGaps(),
-    structural: emptyStructural()
+    structural: emptyStructural(),
+    provenance: emptyProvenance()
   };
 
   const { manifest, layers, errors: loadErrors } = loadService(dir);
@@ -253,6 +255,13 @@ export function validateService(dir, { wip = false } = {}) {
   // Capa 6: el registro de decisiones estructurales (decisions.yaml → structural), cruzado con las
   // secciones del catálogo que aplican. Tampoco toca `ok`: es el criterio `structural` de --ready.
   result.structural = resolveStructural(doc, effectiveLayers, manifest?.service?.version);
+
+  // Capa 7: la procedencia de un diseño recuperado (provenance.yaml), cruzada con el inventario de
+  // elementos que deriva la máquina. Tampoco toca `ok`: es el criterio `provenance` de --ready, y a
+  // un diseño hacia delante no le aplica.
+  const scenariosFile = path.join(dir, SCENARIOS_FILE);
+  const scenariosText = fs.existsSync(scenariosFile) ? fs.readFileSync(scenariosFile, 'utf8') : null;
+  result.provenance = resolveProvenance(loadProvenance(dir), effectiveLayers, doc, scenariosText);
 
   result.ok = errors.length === 0 && (wip || (!obligationsBlock && !reviewsBlock));
   return result;

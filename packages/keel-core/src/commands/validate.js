@@ -278,6 +278,7 @@ function printReadiness(dir) {
     if (entry.fix) console.log(pc.dim(`      → ${entry.fix}`));
     if (entry.id === 'gaps') printGapInventory(validation.gaps);
     if (entry.id === 'structural') printStructuralPending(validation.structural);
+    if (entry.id === 'provenance') printProvenancePending(validation.provenance);
   }
 
   console.log();
@@ -329,6 +330,22 @@ function printGapInventory(gaps) {
   for (const finding of gaps.open) {
     console.log(pc.dim(`        abierto — clase ${finding.class}, ${finding.unit}: ${finding.what}`));
   }
+}
+
+/**
+ * Lo que falta de la procedencia de un diseño recuperado, ENTERO y con el id que lleva la fila: es
+ * la lista con la que /keel-recover rellena provenance.yaml sin derivar el inventario a mano.
+ */
+function printProvenancePending(provenance) {
+  const rows = [
+    ['sin fila', provenance.missing],
+    ['inferred', provenance.inferred],
+    ['read sin archivo:línea', provenance.unsourced],
+    ['de otro diseño', provenance.orphans],
+    ['estructural sin origin', provenance.structuralUnsourced]
+  ];
+  for (const [label, ids] of rows) for (const id of ids) console.log(pc.dim(`        ${id}: ${label}`));
+  for (const message of provenance.errors) console.log(pc.dim(`        ${message}`));
 }
 
 /**

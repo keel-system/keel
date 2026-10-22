@@ -256,10 +256,30 @@ golpe).
 
 ## 4. Incrementos
 
-**Estado (2026-10-22):** incrementos 0, 1, 2, 3 y 4 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
+**Estado (2026-10-22):** incrementos 0, 1, 2, 3, 4 y 5 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
 (paso 0, paso 1, pasos 3-5 y paso 7). Su laboratorio es el repo `../keel-recover-lab`: sandboxes,
 grabaciones, el diseño `conduit` y los prototipos `tools/*.mjs` que los incrementos 6 y 7 reescriben
-dentro del paquete (el 4 ya reescribió `probe.mjs` y `express-routes.js`). **El siguiente es el 5.**
+dentro del paquete (el 4 ya reescribió `probe.mjs` y `express-routes.js`). **El siguiente es el 6.**
+
+Incremento 5, hecho: la skill `/keel-recover` (pasos 3 y 4, en `packages/keel-recover/assets/skills/keel-recover/`,
+que `init` siembra junto a la del sandbox) y la procedencia en keel-core. `specs/<servicio>/provenance.yaml`
+(schema `provenance.schema.json`, fila en `SPEC_SIDE_FILES` que no viaja ni al publicar ni al derivar) lleva una
+fila por elemento con su nivel y su evidencia, los `fixes` y la `frontier`. El registro estructural de
+`decisions.yaml` gana `origin` (`observed`/`omitted`/`contradicted`) y `evidence`, obligatoria salvo en
+`omitted`. El lector es `keel-core/src/lib/provenance.js` y lo compone un criterio nuevo de `keel validate
+--ready`, `provenance`, que solo aplica a un diseño recuperado (con `provenance.yaml`, o con algún `origin` en el
+registro, que sin procedencia sale en rojo). La decisión que lo hace puerta: el **inventario** de elementos lo
+deriva la máquina de las capas (108 en conduit: entidades y sus campos, agregados, operaciones y sus errores,
+endpoints, roles, permisos, reglas de acceso, eventos…), así que un elemento sin fila sale en rojo aunque ninguna
+fila escrita mienta. Rojo también con un `inferred`, un `read` sin `archivo:línea`, una fila de un elemento que el
+diseño ya no declara, una decisión estructural sin `origin` y, del paso 4, un flujo sin su marca
+`**Caracterización**: keep|fix|frontier|new`, una marca que cita un `fix-*` o un `F-*` inexistente y un `fix` que
+ningún flujo demuestra. Desviación de la tabla: los `fix` viven en `provenance.yaml` y no en `decisions.yaml`,
+porque citan grabaciones del legacy y no deben viajar con el diseño. Puerta: `test/readiness.test.js` (un diseño
+recuperado entero está listo, y cada una de ocho roturas apaga `provenance` y solo ese) y
+`test/provenance.test.js`. Fuera de alcance: el bucle de exploración del paso 1 (el agente que escribe la ronda
+siguiente) sigue sin skill; y la procedencia de conduit del inc. 1, escrita en texto libre, no se ha migrado al
+formato nuevo.
 
 Incremento 4, hecho: `keel-recover introspect` (1a) y `keel-recover probe` (1b). `introspect` pregunta al runtime
 las rutas del framework (precarga `express-routes.cjs`, que `init` siembra junto a la de cobertura; las líneas
@@ -327,7 +347,7 @@ solo la versión de la CI y las adaptaciones escritas.
 | 2 | Paquete `keel-recover`: `fingerprint` (0a) y `env-deps` (0b) con adaptadores Java/Maven, Java/Gradle y Node; schemas `runtime`/`environment` fuera del DSL | Deterministas byte a byte sobre fixtures de legacy mínimas (`fixtures/legacy/java8-maven`, `java8-gradle`, `node14`). **Hecho** |
 | 3 | Skill del sandbox (0c–0e) + `verify` (0f) | `verify` falsado: rojo con salida a internet, con cobertura vacía y con 5xx. **Hecho** |
 | 4 | `introspect` (1a) + `probe` (1b): restauración, captura de efectos, normalización y cobertura. Reutiliza WireMock, Mailpit, `keel-core/src/lib/gen/broker-probes.js` y la `infra/` neutral | Una app legacy de fixture, en vivo como los `*-check`: cada efecto capturado y uno saboteado por tipo (por ejemplo, la cola espía sin enlazar sale en rojo). **Hecho** (`npm run probe-check`) |
-| 5 | Skill `/keel-recover` (pasos 3 y 4) + `provenance.yaml` (fila en `SPEC_SIDE_FILES`) + `origin`/`evidence` en `structural-register.js` | `npm test` en keel-core; un `inferred` en el diseño final sale en rojo, y **también todo elemento del DSL sin fila en `provenance.yaml`**: en el inc. 1 se coló un rol copiado de la forma de una fixture, sin fila, y no lo habría cazado una puerta que solo mira lo que el agente declara |
+| 5 | Skill `/keel-recover` (pasos 3 y 4) + `provenance.yaml` (fila en `SPEC_SIDE_FILES`) + `origin`/`evidence` en `structural-register.js` | `npm test` en keel-core; un `inferred` en el diseño final sale en rojo, y **también todo elemento del DSL sin fila en `provenance.yaml`**: en el inc. 1 se coló un rol copiado de la forma de una fixture, sin fila, y no lo habría cazado una puerta que solo mira lo que el agente declara. **Hecho** (criterio `provenance`) |
 | 6 | Criterio `characterized` en `readiness.js` + `FIDELITY.md` | `test/readiness.test.js`: romper el sello apaga `characterized` y solo ese criterio |
 | 7 | Paridad legacy ↔ regenerado (paso 7) | La corrida de control del incremento 1, repetida con la herramienta: la misma tabla |
 | 8 | **DSL 2.23: autorización por propietario.** Encontrada en el inc. 1 sobre RealWorld: «solo el autor edita o borra» no se puede declarar, porque `scoping` acota por un claim y no por un campo del recurso. `OBL-RESOURCE-SCOPE` no admite aceptarse y **bloquea la generación**. Sin embargo la acotación es producible con `callerIdentity`, igual que el detector ya reconoce para el nivel `service`: falta decir qué campo del recurso guarda al propietario (`Article.author` → `Profile.subject`) y con qué `code` se rechaza. Toca el schema de `security`, `crossrefs.js` (la obligación se cierra con la declaración), una mutación, los tres generadores y una fixture (conduit) | La fixture con propiedad genera en los tres generadores y su 403 sale en una red en vivo; el inc. 1 vuelve a ejecutar FL-ART-004 y FL-COM-002 contra el regenerado |

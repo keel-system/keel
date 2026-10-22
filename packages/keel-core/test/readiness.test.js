@@ -16,7 +16,8 @@ import { READINESS_CRITERIA, assessReadiness } from '../src/lib/readiness.js';
 import { applicableReviews } from '../src/lib/reviews.js';
 import { GAP_CLASSES, gapInventory } from '../src/lib/gap-classes.js';
 import { flowDigests, scenariosDigest } from '../src/lib/flow-review.js';
-import { DECISIONS_FILE, FLOW_REVIEW_FILE, GAPS_FILE, REVIEW_FILE, SCENARIOS_FILE } from '../src/lib/spec-files.js';
+import { DECISIONS_FILE, FLOW_REVIEW_FILE, GAPS_FILE, PROVENANCE_FILE, REVIEW_FILE, SCENARIOS_FILE } from '../src/lib/spec-files.js';
+import { provenanceInventory } from '../src/lib/provenance.js';
 import { validateService } from '../src/lib/validate-service.js';
 import { validate } from '../src/commands/validate.js';
 
@@ -50,12 +51,14 @@ const MATRIX = `## Matriz de cobertura
 | createInvoice | FL-INV-001 | interna |
 `;
 
-function scenariosText({ stamp = VERSION, matrix = true, emptyRow = false } = {}) {
+function scenariosText({ stamp = VERSION, matrix = true, emptyRow = false, mark = null } = {}) {
   const table = emptyRow ? MATRIX.replace('| createInvoice | FL-INV-001 |', '| createInvoice | todos |') : MATRIX;
   return (
     `# Escenarios de validación — billing\n\n> specs/billing v${stamp}. Contrato de equivalencia.\n\n` +
     (matrix ? `${table}\n` : '') +
-    '## Flujos\n\n### FL-INV-001: alta de una factura\n**Given**: nada.\n**When**: `createInvoice`\n**Then**:\n1. Se crea la factura.\n'
+    '## Flujos\n\n### FL-INV-001: alta de una factura\n' +
+    (mark ? `**Caracterización**: ${mark}. Evidencia: recordings/round-1/P-001.\n` : '') +
+    '**Given**: nada.\n**When**: `createInvoice`\n**Then**:\n1. Se crea la factura.\n'
   );
 }
 
@@ -88,6 +91,10 @@ function workspace({
   decisions = null,
   structural = true,
   structuralStamp = VERSION,
+  // Diseño recuperado (keel-recover): `null` = hacia delante, sin provenance.yaml. Si no, una fila
+  // por elemento del inventario y el registro estructural con su `origin`, salvo lo que el modo rompa.
+  provenance = null,
+  structuralOrigin = provenance !== null,
   underSpecs = true
 } = {}) {
   const root = tmpDir('keel-readiness-');
@@ -109,7 +116,9 @@ function workspace({
   write(path.join(dir, 'domain.keel.yaml'), domain);
   write(path.join(dir, 'use-cases.keel.yaml'), useCases);
 
-  const text = scenariosText({ stamp: scenarioStamp, matrix, emptyRow });
+  const MARKS = { 'fix-unknown': '`fix` (`fix-nada`)', 'fix-cited': '`fix` (`fix-total`)', unmarked: null };
+  const mark = !provenance ? null : provenance in MARKS ? MARKS[provenance] : '`keep`';
+  const text = scenariosText({ stamp: scenarioStamp, matrix, emptyRow, mark });
   if (scenarios) write(path.join(dir, SCENARIOS_FILE), text);
   if (scenarios && flowReview) {
     write(
@@ -160,8 +169,29 @@ function workspace({
       chosen: 'lo que se eligió',
       discarded: 'la alternativa',
       reason: 'Se preguntó con la consecuencia observable delante.',
-      since: structuralStamp
+      since: structuralStamp,
+      ...(structuralOrigin ? { origin: 'observed', evidence: 'recordings/round-1/P-001' } : {})
     }));
+    if (provenance === 'structural-unsourced') {
+      delete decisionsDoc.structural[0].origin;
+      delete decisionsDoc.structural[0].evidence;
+    }
+  }
+
+  if (provenance) {
+    const ids = provenanceInventory({ domain: YAML.parse(domain), 'use-cases': YAML.parse(useCases) });
+    const elements = ids.map((element) => ({ element, level: 'measured', evidence: 'recordings/round-1/P-001.json' }));
+    if (provenance === 'missing') elements.pop();
+    if (provenance === 'inferred') elements[0].level = 'inferred';
+    if (provenance === 'unsourced') Object.assign(elements[0], { level: 'read', evidence: 'el código lo dice' });
+    if (provenance === 'orphan') elements.push({ element: 'security.roles.admin', level: 'measured', evidence: 'recordings/round-1/P-002.json' });
+    const fixes = ['fix-cited', 'fix-unused'].includes(provenance)
+      ? [{ id: 'fix-total', legacy: 'el legacy redondea el total', reason: 'el humano decidió no redondear (2026-10-22)', evidence: 'recordings/round-1/P-003.json' }]
+      : [];
+    write(
+      path.join(dir, PROVENANCE_FILE),
+      YAML.stringify({ kind: 'provenance', schema: 1, legacy: { name: 'billing', commit: 'ba04b70' }, elements, ...(fixes.length ? { fixes } : {}) })
+    );
   }
   if (Object.keys(decisionsDoc).length > 0) write(path.join(dir, DECISIONS_FILE), YAML.stringify(decisionsDoc));
 
@@ -403,4 +433,24 @@ test('una incoherencia declarada falso positivo deja de faltar; con otro match o
     ]
   });
   assert.ok(failing(assessReadiness(workspace({ domain: SENSITIVE_DOMAIN, decisions: malPuesta }))).includes('obligations'));
+});
+
+// ── procedencia (diseños recuperados con keel-recover) ─────────────────────────────────────
+
+test('un diseño recuperado con procedencia entera está listo; cada rotura apaga provenance y solo ese', () => {
+  assert.deepEqual(failing(assessReadiness(workspace({ provenance: 'full' }))), []);
+  assert.deepEqual(failing(assessReadiness(workspace({ provenance: 'fix-cited' }))), [], 'un fix declarado y demostrado por un flujo');
+  for (const mode of ['missing', 'inferred', 'unsourced', 'orphan', 'structural-unsourced', 'unmarked', 'fix-unknown', 'fix-unused']) {
+    const result = assessReadiness(workspace({ provenance: mode }));
+    assert.deepEqual(failing(result), ['provenance'], mode);
+  }
+  const missing = assessReadiness(workspace({ provenance: 'missing' })).criteria.find((c) => c.id === 'provenance');
+  assert.match(missing.detail, /sin fila: use-cases\.operations\.createInvoice/, 'nombra lo que falta');
+  assert.match(missing.fix, /keel-recover/);
+});
+
+test('el registro estructural que habla de un legacy delata un diseño recuperado sin procedencia', () => {
+  const result = assessReadiness(workspace({ structuralOrigin: true }));
+  assert.deepEqual(failing(result), ['provenance']);
+  assert.ok(result.criteria.find((c) => c.id === 'provenance').detail.includes(`no hay ${PROVENANCE_FILE}`));
 });

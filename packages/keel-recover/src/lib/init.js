@@ -13,7 +13,7 @@ import { envDeps } from './env-deps.js';
 // monta y la skill que lo construye; el sandbox lo escribe el agente.
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-export const SKILLS = ['keel-recover-sandbox'];
+export const SKILLS = ['keel-recover-sandbox', 'keel-recover'];
 const INSTRUMENTS = ['v8-coverage-exit.cjs', 'express-routes.cjs'];
 
 export function kebab(name) {

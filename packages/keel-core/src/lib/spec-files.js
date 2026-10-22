@@ -20,6 +20,7 @@ export const SCENARIOS_FILE = 'validation-scenarios.md';
 export const REVIEW_FILE = 'review.yaml';
 export const FLOW_REVIEW_FILE = 'flow-review.yaml';
 export const GAPS_FILE = 'gaps.yaml';
+export const PROVENANCE_FILE = 'provenance.yaml';
 
 /**
  * - `publish` — entra en el `files[]` del índice, que es exactamente lo que
@@ -49,6 +50,10 @@ export const SPEC_SIDE_FILES = [
   // cerraron— y NO al derivar: el análisis de huecos no se hereda (/keel-design § derivación),
   // porque un cambio pequeño sobre un diseño heredado abre huecos que el origen no tenía.
   { file: GAPS_FILE, publish: true, derive: false },
+  // `provenance.yaml` (diseños recuperados de un legacy con keel-recover) no viaja ni al publicar
+  // ni al derivar: cita rutas y commits de un código privado, y lo que afirma es del legacy del que
+  // salió. Quien adopta el diseño recibe un diseño; la evidencia de dónde salió se queda en casa.
+  { file: PROVENANCE_FILE, publish: false, derive: false },
   { file: SCENARIOS_FILE, publish: 'derivative', derive: 'rewrite' }
 ];
 

@@ -4,8 +4,9 @@ Ingeniería inversa de un servicio existente hacia un diseño [Keel](https://git
 única entrada es el **repo** del legacy, con su historial de git; la herramienta lo lee y **nunca lo
 modifica**. Plan completo y estado, incremento a incremento: [`PLAN-KEEL-RECOVER.md`](../../PLAN-KEEL-RECOVER.md).
 
-Hoy (incremento 4) trae el paso 0 entero y la observación del paso 1: los dos pasos deterministas, la
-preparación del workspace, la skill que monta el sandbox, el juez, la introspección y el ejecutor de sondas:
+Hoy (incremento 5) trae el paso 0 entero, la observación del paso 1 y la recuperación del diseño (pasos 3 y 4):
+los dos pasos deterministas, la preparación del workspace, la skill que monta el sandbox, el juez, la
+introspección, el ejecutor de sondas y la skill que escribe el diseño con su procedencia:
 
 ```bash
 keel-recover fingerprint <legacy> [-o runtime.yaml]       # paso 0a: huella del runtime
@@ -15,6 +16,8 @@ keel-recover init <legacy> --name <servicio>              # en el workspace de d
 keel-recover verify legacy/<servicio>/sandbox             # paso 0f: el juez
 keel-recover introspect legacy/<servicio>/sandbox         # paso 1a: la superficie, preguntada al runtime
 keel-recover probe legacy/<servicio>/probes/round-1.yaml  # paso 1b: una ronda de sondas con sus efectos
+/keel-recover specs/<servicio>                            # el agente: el diseño, su procedencia y la caracterización
+keel validate --ready specs/<servicio>                    # criterio provenance: cada elemento con su fila
 ```
 
 `-o` se niega a escribir dentro del legacy. `--check <archivo>` no escribe y sale en rojo si el archivo no es lo
@@ -104,6 +107,23 @@ lleva un canario en cada sonda, por el mismo camino que el efecto del legacy (la
 Límites de hoy, con su motivo: la base es solo MongoDB y el broker solo RabbitMQ (los del banco); los demás son un
 rechazo de `sandbox.schema.json` hasta medirlos. JaCoCo y nyc se vuelcan por ronda, pero la red en vivo del paso 1
 solo ejercita V8.
+
+## El diseño recuperado (pasos 3 y 4)
+
+La skill `/keel-recover` (sembrada por `init` junto a la del sandbox) escribe `specs/<servicio>/` capa a capa
+desde las grabaciones, con la **procedencia** de cada elemento en `specs/<servicio>/provenance.yaml` (schema
+`provenance.schema.json` de keel-core): `measured` (una grabación), `read` (`archivo:línea` del legacy) o
+`asked` (lo decidió el humano). `inferred` no se admite en el diseño final. Las decisiones estructurales de
+`decisions.yaml` llevan `origin` (`observed`, `omitted` o `contradicted`) y su `evidence`, y las `omitted` se
+preguntan. Cada flujo de `validation-scenarios.md` lleva su marca `keep`, `fix`, `frontier` o `new`; los `fix`
+(el backlog de un refactor) y la frontera del DSL viven en `provenance.yaml`, que no viaja al publicar ni al
+derivar porque cita un código privado.
+
+La puerta es de keel-core: el criterio `provenance` de `keel validate --ready`, que solo aplica a un diseño
+recuperado (el que trae `provenance.yaml`, o cuyo registro estructural habla de `origin`). Deriva de las capas el
+**inventario** de elementos —entidades y sus campos, agregados, operaciones y sus errores, endpoints, roles,
+permisos, reglas de acceso, eventos…— y sale en rojo con cualquiera sin fila, aunque ninguna fila escrita mienta:
+en el inc. 1 se coló un rol copiado de una fixture que una puerta sobre las filas no habría visto.
 
 ## Adaptadores
 

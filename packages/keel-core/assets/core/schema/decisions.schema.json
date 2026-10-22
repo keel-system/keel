@@ -74,8 +74,21 @@
             "type": "string",
             "pattern": "^\\d+\\.\\d+\\.\\d+$",
             "description": "service.version en el que se decidió. Caduca con el minor o el major, como las aceptaciones: hay que reafirmarla."
+          },
+          "origin": {
+            "enum": ["observed", "omitted", "contradicted"],
+            "description": "Solo en un diseño recuperado de un servicio existente (keel-recover): qué hacía el legacy con esta decisión. observed: el legacy la tomaba y el diseño la conserva; omitted: el legacy no la tomaba (no tenía idempotencia, no reintentaba) y el humano decidió qué hará el servicio nuevo; contradicted: el diseño hace otra cosa que el legacy, a propósito. Comportamiento observado no es decisión tomada: las omitted se preguntan. En un diseño con provenance.yaml toda entrada lo lleva."
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 3,
+            "description": "Con `origin`: la grabación (measured) o el archivo:línea (read) que muestra lo que hacía el legacy. Obligatoria salvo en omitted, donde no hay nada que citar."
           }
-        }
+        },
+        "allOf": [
+          { "if": { "required": ["origin"], "properties": { "origin": { "enum": ["observed", "contradicted"] } } }, "then": { "required": ["evidence"] } },
+          { "if": { "required": ["evidence"] }, "then": { "required": ["origin"] } }
+        ]
       }
     },
     "falsePositives": {

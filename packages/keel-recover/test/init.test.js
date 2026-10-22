@@ -19,16 +19,24 @@ function workspace() {
   return ws;
 }
 
-test('init escribe legacy/<servicio>/ y la skill del sandbox para cada harness', () => {
+test('init escribe legacy/<servicio>/ y las skills del sandbox y del diseño para cada harness', () => {
   const ws = workspace();
   const plan = planInit({ workspace: ws, repo: path.join(LEGACY_DIR, 'node14'), name: 'Orders API' });
   assert.equal(plan.service, 'orders-api');
   const paths = plan.files.map((f) => f.path);
-  for (const p of ['legacy/orders-api/legacy.yaml', 'legacy/orders-api/runtime.yaml', 'legacy/orders-api/environment.yaml', 'legacy/orders-api/sandbox/instrument/v8-coverage-exit.cjs']) {
+  for (const p of ['legacy/orders-api/legacy.yaml', 'legacy/orders-api/runtime.yaml', 'legacy/orders-api/environment.yaml', 'legacy/orders-api/sandbox/instrument/v8-coverage-exit.cjs', 'legacy/orders-api/sandbox/instrument/express-routes.cjs']) {
     assert.ok(paths.includes(p), p);
   }
-  assert.ok(paths.some((p) => p.startsWith('.claude/skills/keel-recover-sandbox/')));
-  assert.ok(paths.some((p) => p.startsWith('.opencode/') && p.includes('keel-recover-sandbox')));
+  // las dos skills: la del sandbox (pasos 0c-0e) y la del diseño (pasos 3 y 4), con sus referencias
+  for (const skill of ['keel-recover-sandbox', 'keel-recover']) {
+    assert.ok(paths.includes(`.claude/skills/${skill}/SKILL.md`), skill);
+    assert.ok(paths.some((p) => p.startsWith('.opencode/') && p.includes(`/${skill}/`)), skill);
+  }
+  assert.ok(paths.includes('.claude/skills/keel-recover/references/characterization.md'));
+  // sin rutas de harness ni tokens sin proyectar en lo que se siembra
+  for (const f of plan.files.filter((x) => x.path.includes('/keel-recover/'))) {
+    assert.ok(!/\{\{keel:/.test(f.content), `${f.path} con un token sin proyectar`);
+  }
   const legacy = YAML.parse(plan.files.find((f) => f.path.endsWith('legacy.yaml')).content);
   assert.equal(path.resolve(ws, 'legacy/orders-api', legacy.repo), path.join(LEGACY_DIR, 'node14'));
 });

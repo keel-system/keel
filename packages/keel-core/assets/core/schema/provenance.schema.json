@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/provenance.schema.json",
+  "title": "Procedencia de un diseño recuperado (provenance.yaml)",
+  "description": "De dónde sale cada elemento de un diseño recuperado de un servicio existente (keel-recover, /keel-recover). No forma parte del DSL: no describe lo que el servicio hace, sino con qué evidencia se afirma. Su presencia en specs/<servicio>/ declara que el diseño es recuperado, y entonces el criterio `provenance` de `keel validate --ready` exige una fila por cada elemento que el diseño declara (el inventario lo deriva la máquina de las capas, no lo elige el agente) y ninguna `inferred`. No viaja al publicar ni al derivar: cita rutas de un código privado.",
+  "type": "object",
+  "required": ["kind", "schema", "legacy", "elements"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "provenance" },
+    "schema": { "const": 1 },
+    "legacy": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "description": "El legacy del que sale el diseño: el directorio legacy/<servicio>/ del workspace y el commit observado.",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" }
+      }
+    },
+    "elements": {
+      "type": "array",
+      "description": "Una fila por elemento, o por varios con la misma evidencia (`elements`). Los ids son los del inventario que imprime `keel validate --ready` (`domain.entities.Article.fields.slug`, `use-cases.operations.createArticle.errors.ARTICLE_NOT_FOUND`, `security.roles.admin`…).",
+      "items": {
+        "type": "object",
+        "required": ["level", "evidence"],
+        "additionalProperties": false,
+        "oneOf": [
+          { "required": ["element"] },
+          { "required": ["elements"] }
+        ],
+        "properties": {
+          "element": { "type": "string", "minLength": 1 },
+          "elements": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "level": {
+            "enum": ["measured", "read", "asked", "inferred"],
+            "description": "measured: una grabación del sistema en marcha (cita la grabación). read: lectura del código, con archivo:línea. asked: lo decidió el humano (cita la decisión). inferred: el agente lo supuso sin evidencia; no se admite en el diseño final, se convierte en hueco declarado."
+          },
+          "evidence": { "type": "string", "minLength": 3 },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "fixes": {
+      "type": "array",
+      "description": "Los defectos del legacy que el diseño corrige a propósito (paso 4: los flujos marcados `fix`). Para un refactor, esta lista ES su backlog. Cada uno lo decide el humano: dice qué hace el legacy, con su evidencia, y por qué el servicio nuevo hará otra cosa. Todo `fix` lo cita al menos un flujo de validation-scenarios.md, y todo flujo `fix` cita uno de aquí.",
+      "items": {
+        "type": "object",
+        "required": ["id", "legacy", "reason", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^fix-[a-z0-9-]+$" },
+          "legacy": { "type": "string", "minLength": 5, "description": "Lo que hace el legacy (lo que el escenario comprueba que sigue siendo así)." },
+          "reason": { "type": "string", "minLength": 10, "description": "Por qué el servicio nuevo hace otra cosa, y quién lo decidió." },
+          "evidence": { "type": "string", "minLength": 3 }
+        }
+      }
+    },
+    "frontier": {
+      "type": "array",
+      "description": "Lo que el legacy hace y el DSL no puede decir, con su motivo (principio 6 de PLAN-KEEL-RECOVER.md).",
+      "items": {
+        "type": "object",
+        "required": ["id", "what", "why", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^F-[A-Z0-9-]+$" },
+          "what": { "type": "string", "minLength": 5 },
+          "why": { "type": "string", "minLength": 10 },
+          "evidence": { "type": "string", "minLength": 3 }
+        }
+      }
+    }
+  }
+}

@@ -21,7 +21,8 @@ import { validateService, workspaceRootOf } from './validate-service.js';
 import { listDerivatives } from './derivatives.js';
 import { flowReviewPlan, FLOW_REVIEW_FILE } from './flow-review.js';
 import { parseCoverageMatrix } from './scenario-blocks.js';
-import { SCENARIOS_FILE, REVIEW_FILE, DECISIONS_FILE, GAPS_FILE } from './spec-files.js';
+import { SCENARIOS_FILE, REVIEW_FILE, DECISIONS_FILE, GAPS_FILE, PROVENANCE_FILE } from './spec-files.js';
+import { emptyProvenance, loadProvenance } from './provenance.js';
 import { unwalkedCount, GAPS_AGENT } from './gaps-state.js';
 import { REVIEW_AGENT } from './review-state.js';
 
@@ -49,6 +50,7 @@ export const READINESS_CRITERIA = [
   { id: 'undecided', title: 'decisiones de los avisos tomadas en el DSL o aceptadas y vigentes' },
   { id: 'incoherences', title: 'sin incoherencias en los avisos, o declaradas falso positivo y vigentes' },
   { id: 'structural', title: 'registro de decisiones estructurales completo, vigente y coherente con el diseño' },
+  { id: 'provenance', title: 'procedencia de cada elemento de un diseño recuperado, sin inferencias' },
   { id: 'review', title: 'revisión semántica completa y vigente' },
   { id: 'gaps', title: 'análisis de huecos completo, vigente y sin hallazgos abiertos' },
   { id: 'scenarios', title: 'escenarios de validación de esta versión' },
@@ -69,6 +71,11 @@ function readText(file) {
   } catch {
     return null;
   }
+}
+
+/** Los primeros de una lista larga: la checklist nombra, el detalle lo da `keel validate`. */
+function listSome(items, n = 4) {
+  return items.length > n ? `${items.slice(0, n).join(', ')} y ${items.length - n} más` : items.join(', ');
 }
 
 /** Por qué un derivado no está al día, en una frase con la versión delante. */
@@ -204,6 +211,39 @@ export function assessReadiness(dir, { validation = null } = {}) {
       structuralProblems.length === 0,
       structuralProblems.join(', '),
       `/keel-design ${spec}: cada § 3.x aplicable, con elegido, descartado y porqué, en ${DECISIONS_FILE} (structural:)`
+    )
+  );
+
+  // 2d — La procedencia, solo en un diseño recuperado de un legacy (keel-recover): una fila por cada
+  // elemento que las capas declaran —el inventario lo deriva provenance.js, no lo elige el agente— y
+  // ninguna `inferred`. A un diseño hacia delante no le aplica y sale en verde sin detalle.
+  const provenance = result.provenance ?? emptyProvenance();
+  const recovered = provenance.applies || loadProvenance(dir).present;
+  const provenanceProblems = !recovered ? [] : !evaluated ? [notEvaluated] : [
+    provenance.missing.length > 0
+      ? `${provenance.inventory.length - provenance.missing.length}/${provenance.inventory.length} elementos con procedencia (sin fila: ${listSome(provenance.missing)})`
+      : null,
+    provenance.inferred.length > 0 ? `${provenance.inferred.length} inferred: ${listSome(provenance.inferred)}` : null,
+    provenance.unsourced.length > 0 ? `${provenance.unsourced.length} read sin archivo:línea: ${listSome(provenance.unsourced)}` : null,
+    provenance.orphans.length > 0 ? `${provenance.orphans.length} fila(s) de elementos que el diseño no declara: ${listSome(provenance.orphans)}` : null,
+    provenance.structuralUnsourced.length > 0
+      ? `${provenance.structuralUnsourced.length} decisión(es) estructural(es) sin origin: ${listSome(provenance.structuralUnsourced)}`
+      : null,
+    provenance.characterization.unmarked.length > 0
+      ? `${provenance.characterization.unmarked.length} flujo(s) sin caracterizar (keep/fix/frontier/new): ${listSome(provenance.characterization.unmarked)}`
+      : null,
+    ...provenance.characterization.unknown,
+    provenance.characterization.unusedFixes.length > 0
+      ? `fix sin flujo que lo demuestre: ${listSome(provenance.characterization.unusedFixes)}`
+      : null,
+    provenance.errors.length > 0 ? `${provenance.errors.length} error(es): ${provenance.errors[0]}` : null
+  ].filter(Boolean);
+  criteria.push(
+    criterion(
+      'provenance',
+      provenanceProblems.length === 0,
+      provenanceProblems.join(', '),
+      `/keel-recover ${spec}: mide lo inferred o conviértelo en hueco declarado, y da fila en ${PROVENANCE_FILE} a cada elemento`
     )
   );
 
