@@ -24,14 +24,16 @@ facts:
     evidence: "backend/pom.xml:8,18,67-96; api/CartController.java:60"
     observable: "solo por lectura"
     expect: "runtime.yaml con Java 11 y el padre SNAPSHOT con archivo:línea"
-    status: read
+    status: measured
+    note: "build verde con maven:3.6.3-jdk-11; en el jar: spring-boot 2.2.0.BUILD-SNAPSHOT, spring-core 5.2.0, hibernate-core 5.4.6, postgresql 42.2.8, lombok 1.18.10 (2026-10-23)"
   - id: SA-ENV-02
     category: environment
     fact: "hipótesis: el SNAPSHOT todavía se resuelve (el 2026-10-23 repo.spring.io/snapshot servía el maven-metadata del padre, build 20191016.163452-713), pero es frágil: fijarlo a 2.2.0.RELEASE es la adaptación natural y cambia el código que se ejecuta."
     evidence: "backend/pom.xml:8,67-96"
     observable: "el build en 0d: descarga o 404 del SNAPSHOT"
     expect: "environment.yaml dice qué se usó; si se fijó a RELEASE, la adaptación con su motivo"
-    status: read
+    status: measured
+    note: "el SNAPSHOT se resolvió sin tocar el pom (build de 418 s, 2026-10-23); no hizo falta fijarlo a RELEASE. fingerprint lo deja con risks: []"
   - id: SA-ENV-03
     category: environment
     fact: "El wrapper de Maven está roto: hay backend/mvnw y mvnw.cmd pero no backend/.mvn/wrapper/ (la rama `backend` del mismo repo sí lo tiene)."
@@ -52,7 +54,8 @@ facts:
     evidence: "backend/src/test/java/me/zhulin/shopapi/ShopApiApplicationTests.java:7-16; service/impl/OrderServiceImplTest.java:25-34"
     observable: "build sin base en marcha"
     expect: "environment.yaml no salta las pruebas sin motivo"
-    status: read
+    status: measured
+    note: "mvn -B -q package con pruebas, sin ninguna base en marcha: verde"
   - id: SA-ENV-06
     category: environment
     fact: "Configuración: perfil por defecto contra jdbc:postgresql://localhost/postgres; perfil `docker` contra db:5432/postgres; usuario postgres, contraseña root; contexto /api, puerto 8080 por defecto; jwtSecret y jwtExpiration en el YAML. Ninguna variable de entorno propia: solo perfiles (y el binding relajado de Spring)."
