@@ -79,7 +79,23 @@ legacy:
 `wrap` mete el input del diseño en un objeto (`{ user: … }`); `unwrap` hace lo contrario: manda solo un campo del input,
 porque el legacy recibe una lista o un escalar sin envoltura. Los parámetros de la ruta van en `params` del paso.
 
-Las credenciales salen del repo y nunca de producción: la propia API (`via: op`), un JWT firmado con el secreto de desarrollo (`via: forge`) o ninguna (`via: none`).
+Las credenciales salen del repo y nunca de producción: la propia API (`via: op`), un JWT firmado con el secreto de desarrollo (`via: forge`) o ninguna (`via: none`). Del lado `keel`, el regenerado delega la identidad (`via: idp`), y si el diseño identifica al llamante por un claim que no es el `sub` (el email), el actor lo dice: `customer: { via: idp, email: customer1@email.com, roles: [customer] }` (`email: null`, una persona sin email). La paridad la da de alta así en el proveedor del regenerado.
+
+### El estado de partida: `data` y `keel-recover fixtures`
+
+Cada flujo parte del snapshot del legacy, y lo que haya en él (un seed, los registros de referencia) es su estado de partida. Si algún `Given` cuenta con esos datos —un producto del seed, un pedido con su id—, el regenerado tiene que partir de lo mismo, y eso viaja en `specs/<servicio>/fixtures.yaml`. No se escribe a mano: se dice en `contract-map.yaml → data` de qué tabla sale cada entidad, solo con las excepciones, y `keel-recover fixtures legacy/<servicio>` lo deriva del snapshot.
+
+```yaml
+data:
+  ProductCategory: { table: product_category, reference: true }   # ninguna operación crea categorías
+  User:            { table: users, drop: [password, role] }       # la identidad pasa al proveedor
+  Cart:            { table: cart, columns: { cartId: user_id, user: user_id } }
+  OrderMain:       { table: order_main, values: { orderStatus: { 0: NEW, 1: FINISHED, 2: CANCELED } } }
+  ProductInfo:     { table: product_info, values: { productStatus: { 0: UP, 1: DOWN } }, defaults: { version: 0 } }
+  ProductInOrder:  { table: product_in_order, columns: { cart: cart_user_id } }
+```
+
+Un campo es su columna en snake_case y una relación a-uno, `<relación>_id`; `columns` dice las que no. Toda columna del legacy se lleva o se descarta en `drop`, y todo valor guardado con otro nombre se traduce en `values`: lo que quede sin decidir es un error y `fixtures.yaml` no se escribe. Lo que sale lo cruza keel-core con las capas, y los generadores lo cargan en `infra/reset-db.sh` tras vaciar; la paridad carga ese mismo `infra/fixtures.sql`.
 
 ## Ejecutarlos: `keel-recover characterize legacy/<servicio>`
 

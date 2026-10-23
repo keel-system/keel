@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/fixtures.schema.json",
+  "title": "Estado de partida de los escenarios (fixtures.yaml)",
+  "description": "Archivo lateral de specs/<servicio>/, fuera de las capas del DSL: los registros que existen ANTES de cada flujo de validation-scenarios.md, escritos con los nombres del diseño (entidades, campos y valores de enum), nunca con los de una base concreta. Lo cargan los generadores tras vaciar la base entre flujos (infra/reset-db.sh) y la paridad de keel-recover. En un diseño recuperado lo escribe `keel-recover fixtures` desde el snapshot del legacy; nadie lo escribe a mano.",
+  "type": "object",
+  "required": ["kind", "schema", "entities"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "fixtures" },
+    "schema": { "const": 1 },
+    "source": {
+      "type": "object",
+      "description": "De dónde salieron los registros (en un diseño recuperado: el legacy y la huella de su snapshot). Solo informativo.",
+      "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+    },
+    "entities": {
+      "type": "object",
+      "description": "Registros por entidad del dominio. El orden de carga lo decide quien la hace (las relaciones), no el del archivo.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["records"],
+        "additionalProperties": false,
+        "properties": {
+          "reference": {
+            "type": "boolean",
+            "description": "Dato de referencia que el servicio necesita también en producción (categorías que ninguna operación crea), frente a estado de prueba. Hoy solo se carga en las pruebas; queda escrito para cuando la migración de producción lo lleve."
+          },
+          "description": { "type": "string" },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Un registro: campo del diseño → valor. Una relación a-uno lleva el id del registro al que apunta (null si no apunta a ninguno); una a-muchos no se escribe, la lleva el otro lado."
+            }
+          }
+        }
+      }
+    }
+  }
+}

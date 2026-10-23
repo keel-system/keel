@@ -62,6 +62,12 @@ export async function verify(sandbox, rt, { up = true, snapshot = true, log = ()
   const read = probe(rt, tool, spec.app.base, spec.judge.read, nonce);
   push(criterion('VER-READ', read.ok, read.detail));
 
+  // El snapshot es el estado de partida de cada sonda y de cada flujo, y desde fixtures.yaml también el del regenerado:
+  // se toma ANTES de la escritura del juez, que deja en la base un registro suyo (en shop-api, el usuario
+  // verify-<nonce>@example.com, que acababa en el diseño). Solo vale si el juez sale en verde.
+  const pending = snapshot && spec.database
+    ? databaseAdapter(spec.database.tech)?.takeSnapshot(rt, db, spec.database) ?? { ok: false, error: `snapshot sin implementar para ${spec.database.tech}` }
+    : null;
   const before = spec.database ? dbFingerprint(rt, db, spec.database) : null;
   const write = probe(rt, tool, spec.app.base, spec.judge.write, nonce);
   push(criterion('VER-WRITE', write.ok, write.detail));
@@ -88,10 +94,9 @@ export async function verify(sandbox, rt, { up = true, snapshot = true, log = ()
   push(cov.criterion);
 
   report.ok = report.criteria.every((c) => c.ok);
-  if (report.ok && snapshot && spec.database) {
-    const s = databaseAdapter(spec.database.tech)?.takeSnapshot(rt, db, spec.database) ?? { ok: false, error: `snapshot sin implementar para ${spec.database.tech}` };
-    report.snapshot = s;
-    if (!s.ok) report.ok = false;
+  if (report.ok && pending) {
+    report.snapshot = pending;
+    if (!pending.ok) report.ok = false;
   }
   return report;
 }

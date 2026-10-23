@@ -192,7 +192,7 @@ export function resolveStack(stack, layers, manifest) {
  * No lee nada del proyecto generado —ni manifiesto, ni digests— a propósito: eso es
  * estado del destino, y aquí todavía no hay destino.
  */
-export function planService({ manifest, layers, workspace, stack = null }) {
+export function planService({ manifest, layers, fixtures = null, workspace, stack = null }) {
   const resolved = resolveStack(stack, layers, manifest);
   // La pasarela elegida tiene que cubrir lo que el diseño exige (gateway-support.js). Se
   // comprueba aquí y no solo en build para que NINGÚN camino genere un adaptador a medias.
@@ -206,6 +206,8 @@ export function planService({ manifest, layers, workspace, stack = null }) {
   // build.js los copia a docs/ del proyecto (la copia no pasa por writeFiles
   // aquí porque se refresca siempre, al margen de --force).
   model.docs = listKeelDocs(workspace, model.service.name);
+  // El estado de partida de los escenarios (specs/<servicio>/fixtures.yaml): lo carga infra/reset-db.sh.
+  model.fixtures = fixtures;
   // El motor elegido puede no repartir candidatos entre réplicas. No impide generar
   // —el reclamo sigue siendo correcto— pero el diseñador tiene que saberlo antes de
   // desplegar replicado, que es lo único que hace un barrido.
@@ -216,6 +218,7 @@ export function planService({ manifest, layers, workspace, stack = null }) {
 export function scaffoldService({
   manifest,
   layers,
+  fixtures = null,
   workspace,
   force = false,
   stack = null,
@@ -224,7 +227,7 @@ export function scaffoldService({
   readiness = null,
   acceptedUnready = false
 }) {
-  const { model, files } = planService({ manifest, layers, workspace, stack });
+  const { model, files } = planService({ manifest, layers, fixtures, workspace, stack });
   const outDir = path.join('services', model.service.projectName);
   const projectDir = path.join(workspace, outDir);
 

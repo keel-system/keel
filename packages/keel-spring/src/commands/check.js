@@ -17,7 +17,7 @@
 // DISEÑO puede generarse, y corre cuando todavía no hay proyecto ninguno.
 import path from 'node:path';
 import pc from 'picocolors';
-import { isKeelWorkspace, resolveServiceDir, loadService, validateService, assessReadiness, classifyWarnings } from 'keel-core';
+import { isKeelWorkspace, resolveServiceDir, loadService, loadFixtures, validateService, assessReadiness, classifyWarnings } from 'keel-core';
 import { SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { planService } from '../scaffold/index.js';
@@ -179,7 +179,7 @@ export function check(inputPath, { database = null, paymentGateway = null, stric
     let plan;
     try {
       const stack = { ...(database ? { database } : {}), ...(servingGateway ? { paymentGateway: servingGateway } : {}) };
-      plan = planService({ manifest, layers, workspace, stack: Object.keys(stack).length > 0 ? stack : null });
+      plan = planService({ manifest, layers, fixtures: loadFixtures(dir).doc, workspace, stack: Object.keys(stack).length > 0 ? stack : null });
     } catch (error) {
       bullet('red', `el generador no puede construir el proyecto: ${error.message}`);
       blocking += 1;

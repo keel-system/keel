@@ -80,7 +80,7 @@ export async function build(
     acceptUnready
   });
   if (!gate) return;
-  const { dir, manifest, layers, readiness } = gate;
+  const { dir, manifest, layers, fixtures, readiness } = gate;
 
   // Stack tecnológico: keel-stack.json del proyecto generado manda; si no
   // existe, cuestionario condicionado por las capas del diseño (o defaults).
@@ -130,7 +130,7 @@ export async function build(
       return;
     }
   }
-  const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode, prune, readiness, acceptedUnready });
+  const scaffold = scaffoldService({ manifest, layers, fixtures, workspace, force, stack, mode, prune, readiness, acceptedUnready });
   const stackChanged = stackChanges.added.length + stackChanges.removed.length > 0;
   if (stackIsNew || (stackChanged && mode !== 'check')) {
     writeStackConfig(projectDir, scaffold.stack);

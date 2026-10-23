@@ -16,6 +16,7 @@
 //   diff(before, after)                 → { <colección|tabla>: { added, removed, changed } }
 //   introspect(rt, c, db)               → { ok, value }    la sección `data` de surface.yaml, sin tech ni nombre
 //   empty(rt, c, db)                    → { ok, remaining } vacía la base del regenerado (paridad)
+//   loadScript(rt, c, db, sql)          → { ok }           carga el infra/fixtures.sql del regenerado, en una transacción
 //   snapshotFile                        string             dónde vive el snapshot dentro del contenedor
 //   rowNoun                             string             cómo se llaman sus filas en los mensajes
 
@@ -39,6 +40,8 @@ const ADAPTERS = {
       return r.ok ? { ok: true, value: { collections: r.value } } : r;
     },
     empty: (rt, c, db) => mongodb.emptyDatabase(rt, c, db.name, { auth: db.auth ?? null }),
+    // Los generadores no emiten fixtures en un diseño documental (keel-core/gen/fixtures.js): no hay script que cargar.
+    loadScript: () => ({ ok: false, error: 'el estado de partida (fixtures.yaml) todavía no se carga en MongoDB' }),
   },
   postgresql: {
     tech: 'postgresql',
@@ -53,6 +56,10 @@ const ADAPTERS = {
     diff: postgresql.dbDiff,
     introspect: postgresql.introspectDb,
     empty: postgresql.emptyDatabase,
+    loadScript: (rt, c, db, sql) => postgresql.psql(rt, c, db, `begin;
+${sql}
+commit;
+`),
   },
 };
 
@@ -60,7 +67,7 @@ const ADAPTERS = {
 export const DATABASE_TECHS = Object.keys(ADAPTERS);
 
 /** Las piezas que todo adaptador tiene que traer (lo comprueba test/db.test.js). */
-export const ADAPTER_FUNCTIONS = ['fingerprint', 'takeSnapshot', 'hasSnapshot', 'noSnapshot', 'restoreSnapshot', 'exportDb', 'diff', 'introspect', 'empty'];
+export const ADAPTER_FUNCTIONS = ['fingerprint', 'takeSnapshot', 'hasSnapshot', 'noSnapshot', 'restoreSnapshot', 'exportDb', 'diff', 'introspect', 'empty', 'loadScript'];
 
 /** El adaptador del motor, o null si keel-recover no sabe leerlo. */
 export function databaseAdapter(tech) {

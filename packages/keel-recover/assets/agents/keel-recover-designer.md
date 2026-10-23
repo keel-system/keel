@@ -45,7 +45,11 @@ se cuenta en el reporte no la confirma nadie (medido en la corrida shop-api: onc
 
 1. **`design`**: las capas, `provenance.yaml`, `decisions.yaml → structural` (con `origin`), los escenarios marcados
    con su bloque `keel-flow`, y `legacy/<servicio>/contract-map.yaml`. Un cuerpo desnudo del legacy (una lista o un
-   escalar donde el diseño tiene un objeto) lleva `unwrap: <campo>` en su operación desde el principio. Termina con
+   escalar donde el diseño tiene un objeto) lleva `unwrap: <campo>` en su operación desde el principio. Si algún `Given`
+   cuenta con datos del snapshot (el seed del legacy, registros que ninguna operación crea), escribe también
+   `contract-map.yaml → data` (de qué tabla sale cada entidad, solo las excepciones; ver `references/characterization.md`)
+   y los actores del lado `keel` con su `email` y sus `roles` si el llamante se identifica por email. No escribas
+   `fixtures.yaml`: lo deriva `keel-recover fixtures`. Termina con
    `keel validate --ready specs/<servicio>` y deja el criterio `provenance` sin nada que decir, salvo lo que espera respuesta.
 2. **`apply`**: por cada pregunta con `answer` y sin `applied`:
    - aplica la respuesta donde toque (un `fix` a `provenance.yaml → fixes` y su flujo; un `asked` a su fila y su capa;

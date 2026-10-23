@@ -107,6 +107,9 @@ export const DATABASES = {
       "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c \"DO \\$\\$ DECLARE stmt text; BEGIN SELECT 'TRUNCATE TABLE ' || string_agg(quote_ident(tablename), ', ') || ' RESTART IDENTITY CASCADE' INTO stmt FROM pg_tables WHERE schemaname = 'public' AND tablename <> '{history}'; IF stmt IS NOT NULL THEN EXECUTE stmt; END IF; END \\$\\$;\"",
     cliDropSchemaCmd:
       "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'",
+    // Un script SQL por la entrada estándar, en UNA transacción y parando al primer error: lo usa reset-db.sh para cargar
+    // infra/fixtures.sql (el estado de partida de los escenarios). Ausente ⇒ el motor no carga fixtures.
+    cliScriptCmd: "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -1 -f -",
     alpinePackages: ['postgresql-client'],
     composeService: (db) => ({
       image: 'postgres:16-alpine',
@@ -136,6 +139,7 @@ export const DATABASES = {
       "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name <> \"{history}\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     cliDropSchemaCmd:
       "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"DROP TABLE IF EXISTS \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
+    cliScriptCmd: "mysql -h db -u {user} -p'{pass}' {db}",
     // `mysql-client` en Alpine es el cliente de MariaDB, y ese binario NO trae
     // `caching_sha2_password.so` — que es el plugin de autenticación por defecto de
     // MySQL 8, la imagen que este mismo catálogo levanta abajo. Sin el connector, TODO

@@ -22,6 +22,7 @@ export const FLOW_REVIEW_FILE = 'flow-review.yaml';
 export const GAPS_FILE = 'gaps.yaml';
 export const PROVENANCE_FILE = 'provenance.yaml';
 export const CHARACTERIZED_FILE = 'characterized.yaml';
+export const FIXTURES_FILE = 'fixtures.yaml';
 
 /**
  * - `publish` — entra en el `files[]` del índice, que es exactamente lo que
@@ -59,7 +60,12 @@ export const SPEC_SIDE_FILES = [
   // legacy en marcha, que escribe `keel-recover characterize`) tampoco viaja: es evidencia del mismo
   // legacy, y está sellado con el texto de los escenarios, que un derivado reescribe.
   { file: CHARACTERIZED_FILE, publish: false, derive: false },
-  { file: SCENARIOS_FILE, publish: 'derivative', derive: 'rewrite' }
+  { file: SCENARIOS_FILE, publish: 'derivative', derive: 'rewrite' },
+  // `fixtures.yaml` es el estado de partida de los escenarios (los registros que existen antes de cada flujo), con los
+  // nombres del DISEÑO: viaja con ellos al publicar y al derivar, porque sin él los escenarios que lo dan por supuesto
+  // no se pueden ejecutar. En un diseño recuperado lo deriva keel-recover del snapshot del legacy (corrida de control de
+  // shop-api: sin él, 71 de 92 escenarios fallaron por precondición).
+  { file: FIXTURES_FILE, publish: true, derive: true }
 ];
 
 /**

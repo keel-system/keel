@@ -16,6 +16,7 @@ import path from 'node:path';
 import pc from 'picocolors';
 import { isKeelWorkspace } from '../assets.js';
 import { resolveServiceDir, loadService } from '../loader.js';
+import { loadFixtures } from '../fixtures.js';
 import { validateService } from '../validate-service.js';
 import { assessReadiness } from '../readiness.js';
 import { DECISIONS_FILE, classifyWarnings } from '../decisions.js';
@@ -194,7 +195,8 @@ export function gateDesign({ inputPath, workspace, generator, mode = null, accep
   }
   reportReadiness(readiness, spec, mode === 'check' ? 'inform' : 'accepted');
 
-  return { dir, spec, manifest, layers, validation, readiness };
+  // El estado de partida de los escenarios: ya validado arriba (sus errores tumban la validación); aquí solo se lee.
+  return { dir, spec, manifest, layers, fixtures: loadFixtures(dir).doc, validation, readiness };
 }
 
 /**

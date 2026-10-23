@@ -71,6 +71,7 @@ El **flujo** (`FL-*`) es la unidad de aislamiento:
 - Los escenarios **dentro** de un flujo se ejecutan **en orden** y pueden encadenar estado: el primero crea los datos que los siguientes verifican. Un escenario puede dar por hecho lo que dejó el anterior **de su mismo flujo**.
 - Cada flujo es **auto-contenido**: ningún `Given` puede depender de la ejecución de **otro** flujo. Tras el reset, ese estado no existiría.
 - El estado previo de un flujo se alcanza **por la propia API** (o por los datos de arranque que el diseño declare). Si un `Given` describe un estado al que ninguna operación puede llegar, no es un escenario: es un hueco del diseño.
+- **Los datos de arranque se declaran en `fixtures.yaml`**, junto a las capas: los registros que existen antes de CADA flujo, con los nombres del diseño (entidades, campos y valores de enum). Los generadores los cargan tras el reset (`infra/fixtures.sql`), así que un `Given` puede contar con ellos como con lo que crea la API. Hacen falta cuando hay datos que ninguna operación crea (categorías de referencia) o, en un diseño recuperado, cuando los flujos parten del seed del legacy: ahí los deriva `keel-recover fixtures` del snapshot y nadie los escribe a mano. `keel validate` los cruza con las capas.
 
 Escribir los escenarios asumiendo aislamiento por escenario los vuelve repetitivos y lentos; asumir dependencias entre flujos los vuelve inejecutables. El punto medio —flujo auto-contenido, escenarios encadenados dentro de él— es el contrato.
 

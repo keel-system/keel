@@ -26,6 +26,7 @@ import YAML from 'yaml';
 import { declaredBuckets } from './buckets.js';
 import { deadLetterDestination, deadLetterSubscriptions, subscriptionDestination } from './dead-letter.js';
 import { scopingClaimChecks } from './identity-realm.js';
+import { fixturesSql } from './fixtures.js';
 import {
   DATABASES,
   BROKERS,
@@ -336,6 +337,14 @@ function bucketChecks(selected, service, model) {
 // siguiente recibe la respuesta del anterior. Solo se genera si la BD declara
 // cliResetCmd, si hay caché o si hay broker con
 // primitiva de purga.
+/** ¿Lleva este proyecto infra/fixtures.sql? Con fixtures en el diseño y un motor que sepa cargar un script. */
+export function loadsFixtures(model, db) {
+  const doc = model?.fixtures;
+  if (!doc || Object.keys(doc.entities ?? {}).length === 0) return false;
+  if (!db?.entry?.cliScriptCmd) throw new Error(`specs/fixtures.yaml: el motor ${db?.entry?.label ?? 'elegido'} no sabe cargar un script SQL (cliScriptCmd); medidos: PostgreSQL y MySQL`);
+  return true;
+}
+
 export function resetDbScript(selected, service, model, platform) {
   const db = selected.find((s) => s.category === 'database' && s.entry.cliResetCmd);
   const cache = selected.find((s) => s.category === 'cache');
@@ -390,12 +399,25 @@ export function resetDbScript(selected, service, model, platform) {
     // modelo, así que el texto lo pone la plataforma.
     const drop = db.entry.cliDropSchemaCmd ? concreteCmd(db.entry, dbName, db.entry.cliDropSchemaCmd, platform) : null;
     const rebuiltBy = platform.schemaRebuiltBy[kind];
-    const dataStep = `if $RUNTIME exec ${sq(container)} sh -c ${sq(cmd)}; then
+    let dataStep = `if $RUNTIME exec ${sq(container)} sh -c ${sq(cmd)}; then
   echo "Datos reseteados (${db.entry.label})."
 else
   echo "FALLO al resetear los datos. ¿Está la infraestructura arriba ('bash infra/up.sh')?" >&2
   exit 1
 fi`;
+    // El estado de partida de los escenarios (specs/fixtures.yaml → infra/fixtures.sql), cargado tras vaciar: sin él,
+    // los flujos que lo dan por supuesto fallan por precondición (71 de 92 en la corrida de control de shop-api).
+    const fixtures = loadsFixtures(model, db) ? concreteCmd(db.entry, dbName, db.entry.cliScriptCmd, platform) : null;
+    const fixturesStep = fixtures
+      ? `if $RUNTIME exec -i ${sq(container)} sh -c ${sq(fixtures)} < "$(dirname "$0")/fixtures.sql"; then
+  echo "Estado de partida cargado (infra/fixtures.sql)."
+else
+  echo "FALLO al cargar infra/fixtures.sql: ¿casa specs/fixtures.yaml con el esquema?" >&2
+  exit 1
+fi`
+      : null;
+    if (fixturesStep) dataStep = `${dataStep}
+${fixturesStep}`;
     if (!drop) {
       steps.push(dataStep);
     } else {
@@ -651,6 +673,11 @@ export function infraFiles(model, platform) {
   }
   // Reset de estado entre flujos: datos de la BD, claves de la caché y destinos
   // de mensajería declarados (el modelo aporta los canales a purgar).
+  // El estado de partida de los escenarios: un solo SQL para el arnés y para la paridad de keel-recover.
+  const dbEntry = layersPresent.persistence && stack.database ? DATABASES[stack.database] : null;
+  if (loadsFixtures(model, dbEntry ? { entry: dbEntry } : null)) {
+    files.push({ path: 'infra/fixtures.sql', content: fixturesSql(model, model.fixtures, { dialect: stack.database, uuidLiteral: dbEntry.uuidLiteral ?? null }) });
+  }
   const reset = resetDbScript(selected, service, model, platform);
   if (reset) {
     files.push({ path: 'infra/reset-db.sh', content: reset });

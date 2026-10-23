@@ -85,7 +85,7 @@ const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, 
  * avisos y el árbol de archivos ya renderizado en memoria. Lo comparten `build` (para escribir) y `check`
  * (para no escribir): si se duplicara, las dos pasadas opinarían distinto del mismo diseño.
  */
-export function planService({ manifest, layers, workspace, stack = null }) {
+export function planService({ manifest, layers, fixtures = null, workspace, stack = null }) {
   const resolved = resolveStack(stack, layers);
   // La pasarela elegida tiene que cubrir lo que el diseño exige (la matriz neutral de keel-core). Aquí y no solo en build,
   // para que NINGÚN camino genere un adaptador a medias. La misma puerta que keel-spring y keel-nest.
@@ -97,12 +97,15 @@ export function planService({ manifest, layers, workspace, stack = null }) {
   model.stack = resolved;
   // Contratos de /keel-docs presentes en el workspace: build los copia a docs/ del proyecto.
   model.docs = listKeelDocs(workspace, model.service.name);
+  // El estado de partida de los escenarios (specs/<servicio>/fixtures.yaml): lo carga infra/reset-db.sh.
+  model.fixtures = fixtures;
   return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };
 }
 
 export function scaffoldService({
   manifest,
   layers,
+  fixtures = null,
   workspace,
   force = false,
   stack = null,
@@ -111,7 +114,7 @@ export function scaffoldService({
   readiness = null,
   acceptedUnready = false
 }) {
-  const { model, files } = planService({ manifest, layers, workspace, stack });
+  const { model, files } = planService({ manifest, layers, fixtures, workspace, stack });
   const outDir = path.join('services', model.service.projectName);
   const projectDir = path.join(workspace, outDir);
   const written = materializeProject({

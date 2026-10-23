@@ -62,7 +62,7 @@ export async function build(
     acceptUnready
   });
   if (!gate) return;
-  const { dir, manifest, layers, readiness } = gate;
+  const { dir, manifest, layers, fixtures, readiness } = gate;
 
   // Stack: keel-stack.json del proyecto manda; si no existe, cuestionario condicionado por las
   // capas del diseño (o defaults). Una categoría que el diseño empezó a pedir se pregunta sola.
@@ -118,7 +118,7 @@ export async function build(
   const design = designDelta(projectDir, dir);
 
   const acceptedUnready = acceptUnready && !readiness.ready;
-  const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode, prune, readiness, acceptedUnready });
+  const scaffold = scaffoldService({ manifest, layers, fixtures, workspace, force, stack, mode, prune, readiness, acceptedUnready });
   if (stackIsNew && mode !== 'check') {
     writeStackConfig(projectDir, scaffold.stack);
     console.log();

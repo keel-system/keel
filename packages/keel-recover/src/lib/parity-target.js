@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { loadCharacterized, readCharacterization, resolveCharacterized } from 'keel-core';
+import { loadCharacterized, loadFixtures, readCharacterization, resolveCharacterized } from 'keel-core';
 import { validateAs } from './schema.js';
 import { toolRequestAsync } from './tool-http.js';
 import { databaseAdapter } from './db/index.js';
@@ -66,10 +66,26 @@ export function prepareParity(legacyArg, { spec = null, targetFile }) {
     if (r.sha256 !== p.sha256) errors.push(`la grabación de ${p.id} es de otro texto del flujo: pasa antes keel-recover characterize`);
     legacyRecords.push(r);
   }
+  // El estado de partida de los flujos en el regenerado: el MISMO infra/fixtures.sql que carga su arnés tras vaciar
+  // (keel-core/gen/fixtures.js), leído del proyecto. Sin él, la base vacía no es la del legacy restaurado a su snapshot.
+  const workspace = path.resolve(prep.legacyDir, '..', '..');
+  const fixturesFile = target?.project ? path.join(workspace, target.project, 'infra', 'fixtures.sql') : null;
+  const fixturesSql = fixturesFile && fs.existsSync(fixturesFile) ? fs.readFileSync(fixturesFile, 'utf8') : null;
+  // Los dos lados tienen que partir del MISMO estado: el que caracterizó el legacy (su snapshot) y el que derivó
+  // fixtures.yaml. Con otro snapshot, la paridad compararía flujos que partieron de datos distintos.
+  const fixturesDoc = loadFixtures(prep.specDir).doc;
+  const sealed = loadCharacterized(prep.specDir).doc?.legacy?.snapshot ?? null;
+  if (fixturesDoc?.source?.snapshot && sealed && fixturesDoc.source.snapshot !== sealed) {
+    errors.push(`fixtures.yaml es del snapshot ${fixturesDoc.source.snapshot} y la caracterización del ${sealed}: vuelve a derivarlo con keel-recover fixtures`);
+  }
+  if (fixturesDoc && !fixturesSql) {
+    errors.push(`el diseño declara fixtures.yaml y el proyecto no tiene infra/fixtures.sql (${fixturesFile ?? 'target.yaml sin project'}): regenera con build --refresh`);
+  }
   return {
     errors,
     prep,
     target,
+    fixturesSql,
     legacyRecords,
     planned: plannedFlows(prep.scenariosText, marks, { marks: TARGET_MARKS }),
     legacyTally: tally(legacyRecords),
@@ -130,7 +146,7 @@ export function seedPersona(rt, seed, username, password, session = { open: fals
 }
 
 /** El contexto de ejecución contra el regenerado: cada flujo parte de su base VACÍA, comprobada. */
-export function targetContext(target, map, rt) {
+export function targetContext(target, map, rt, { fixturesSql = null } = {}) {
   const { database: db, idp } = target;
   const seeded = new Set();
   const session = { open: false };
@@ -150,7 +166,10 @@ export function targetContext(target, map, rt) {
       if (!dba) return { ok: false, error: `no se pudo vaciar la base del regenerado: keel-recover no sabe vaciar ${db.tech}` };
       const r = dba.empty(rt, db.container, { name: db.name, auth: db.auth ?? null });
       if (!r.ok) return { ok: false, error: `no se pudo vaciar la base del regenerado: ${r.error}` };
-      return r.remaining === '0' ? { ok: true } : { ok: false, error: `la base del regenerado no quedó vacía (${r.remaining} ${dba.rowNoun})` };
+      if (r.remaining !== '0') return { ok: false, error: `la base del regenerado no quedó vacía (${r.remaining} ${dba.rowNoun})` };
+      if (!fixturesSql) return { ok: true };
+      const loaded = dba.loadScript(rt, db.container, { name: db.name, auth: db.auth ?? null }, fixturesSql);
+      return loaded.ok ? { ok: true } : { ok: false, error: `no se pudo cargar el estado de partida (infra/fixtures.sql): ${loaded.error}` };
     },
     idpToken: idp
       ? async (actor, how = {}) => {

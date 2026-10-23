@@ -15,6 +15,7 @@ import { emptyCharacterized, loadCharacterized, resolveCharacterized } from './c
 import { SCENARIOS_FILE } from './spec-files.js';
 import { checkFor } from './checks.js';
 import { checkDerivedCoherence } from './derived-coherence.js';
+import { loadFixtures, checkFixtures } from './fixtures.js';
 import { FLOW_REVIEW_FILE, MAX_PASSES, flowReviewPlan } from './flow-review.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
@@ -182,6 +183,10 @@ export function validateService(dir, { wip = false } = {}) {
     manifest
   });
   result.crossRefErrors = errors;
+  // El estado de partida de los escenarios (fixtures.yaml), cruzado con las capas: un registro que no casa con el dominio
+  // se corrige, igual que una referencia rota.
+  const fixtures = loadFixtures(dir);
+  result.crossRefErrors.push(...fixtures.errors, ...checkFixtures(effectiveLayers, fixtures.doc));
   result.warnings = warnings;
   // Los hallazgos CON id: lo que permite citar una comprobación sin depender de su
   // redacción. Lo consume el cruce diseño↔generación de keel-spring.

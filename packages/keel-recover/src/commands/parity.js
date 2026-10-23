@@ -27,7 +27,7 @@ export async function parity(legacyArg, options) {
     process.exit(1);
   }
   try {
-    const ctx = targetContext(pp.target, pp.prep.map, rt);
+    const ctx = targetContext(pp.target, pp.prep.map, rt, { fixturesSql: pp.fixturesSql });
     const records = await runCharacterization(ctx, pp.planned, {
       log: (r) => console.log(`${r.ok ? pc.green('✓') : r.mark === 'frontier' ? pc.yellow('·') : pc.red('✗')} ${r.id.padEnd(12)} ${r.mark.padEnd(8)}${r.ok ? '' : `  ${r.failures[0]}`}`),
     });

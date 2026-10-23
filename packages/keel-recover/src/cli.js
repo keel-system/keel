@@ -8,6 +8,7 @@ import { verify } from './commands/verify.js';
 import { init } from './commands/init.js';
 import { introspect, probe } from './commands/observe.js';
 import { characterize } from './commands/characterize.js';
+import { fixtures } from './commands/fixtures.js';
 import { parity } from './commands/parity.js';
 import { status } from './commands/status.js';
 import { target } from './commands/target.js';
@@ -101,6 +102,16 @@ program
   .option('--only <ids>', 'solo estos flujos, separados por comas (no escribe ni el sello ni FIDELITY.md)')
   .option('--runtime <podman|docker>', 'runtime de contenedores (por defecto, el primero en marcha)')
   .action((legacy, options) => characterize(legacy, options));
+
+program
+  .command('fixtures')
+  .description(
+    'El estado de partida de los escenarios: restaura la base del legacy al snapshot de verify, la exporta y la traduce con contract-map.yaml → data a specs/<servicio>/fixtures.yaml, con los nombres del diseño. Lo cargan el arnés del proyecto generado (infra/reset-db.sh) y la paridad. No escribe nada si algo no casa con el diseño'
+  )
+  .argument('<legacy>', 'directorio legacy/<servicio>/ del workspace')
+  .option('--spec <dir>', 'el diseño recuperado (por defecto, specs/<servicio> del mismo workspace)')
+  .option('--runtime <podman|docker>', 'runtime de contenedores (por defecto, el primero en marcha)')
+  .action((legacy, options) => fixtures(legacy, options));
 
 program
   .command('parity')

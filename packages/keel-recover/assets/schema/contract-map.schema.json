@@ -41,6 +41,38 @@
     "keel": {
       "$ref": "#/$defs/side"
     },
+    "data": {
+      "type": "object",
+      "description": "De qué tabla del legacy sale cada entidad del diseño en el estado de partida de los escenarios: lo que traduce `keel-recover fixtures` del snapshot a specs/<servicio>/fixtures.yaml. Solo las excepciones: un campo es su columna en snake_case y una relación a-uno, `<relación>_id`. Toda columna del legacy se mapea o se descarta en `drop`; ninguna se pierde en silencio.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["table"],
+        "additionalProperties": false,
+        "properties": {
+          "table": { "type": "string", "minLength": 1, "description": "La tabla (o colección) del legacy." },
+          "reference": { "type": "boolean", "description": "Dato de referencia que el servicio necesita también en producción (fixtures.yaml → reference)." },
+          "columns": {
+            "type": "object",
+            "description": "Campo o relación del diseño → columna del legacy, cuando no es la de la convención.",
+            "additionalProperties": { "type": "string", "minLength": 1 }
+          },
+          "values": {
+            "type": "object",
+            "description": "Campo del diseño → { valor del legacy: valor del diseño }: un estado guardado como 0, 1, 2 que el diseño llama NEW, FINISHED, CANCELED.",
+            "additionalProperties": { "type": "object", "additionalProperties": true }
+          },
+          "defaults": {
+            "type": "object",
+            "description": "Campo del diseño → valor, para lo que el legacy no guarda y el diseño sí (la versión de un producto empieza en 0)."
+          },
+          "drop": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Columnas del legacy que el diseño no lleva, a sabiendas (una contraseña cuando la identidad pasa a un proveedor)."
+          }
+        }
+      }
+    },
     "declaredDifferences": {
       "type": "array",
       "description": "Las diferencias de datos entre el legacy y el servicio regenerado que son buscadas: un fix de forma o de comportamiento, o la frontera. Lo que casa aquí no cuenta como regresión en `keel-recover parity`; lo que no, sí.",
