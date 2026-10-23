@@ -131,7 +131,7 @@ export function targetContext(target, map, rt) {
       if (!db) return { ok: true };
       const dba = databaseAdapter(db.tech);
       if (!dba) return { ok: false, error: `no se pudo vaciar la base del regenerado: keel-recover no sabe vaciar ${db.tech}` };
-      const r = dba.empty(rt, db.container, db.name, { auth: db.auth ?? null });
+      const r = dba.empty(rt, db.container, { name: db.name, auth: db.auth ?? null });
       if (!r.ok) return { ok: false, error: `no se pudo vaciar la base del regenerado: ${r.error}` };
       return r.remaining === '0' ? { ok: true } : { ok: false, error: `la base del regenerado no quedó vacía (${r.remaining} ${dba.rowNoun})` };
     },

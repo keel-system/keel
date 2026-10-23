@@ -83,7 +83,7 @@ schema: 1
 compose: compose.yaml
 app: { service: app, base: "http://<alias>:<listen.port>" }
 tool: { service: tool }
-database: { service: <servicio de la base>, tech: mongodb, name: <base que usa la app> }
+database: { service: <servicio de la base>, tech: mongodb | postgresql, name: <base que usa la app> }   # postgresql admite user (por defecto postgres)
 coverage: { kind: v8, dir: /coverage, include: /app/src/ }
 judge:
   read:  { method: GET,  path: /items, expect: [200] }

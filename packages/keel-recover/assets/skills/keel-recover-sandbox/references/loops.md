@@ -44,6 +44,8 @@ La app arranca y parece sana: por eso el juez mira lecturas y escrituras reales,
 | toda consulta da 500 `Unsupported OP_QUERY command` y `/health` dice OK | driver de Mongo antiguo contra MongoDB ≥ 6.0 |
 | solo fallan las escrituras en arrays (`Unknown modifier: $pushAll`) | mongoose 4 contra MongoDB ≥ 3.6 |
 | un usuario nuevo recibe 422 «is already taken» | mongoose-unique-validator toma la consulta fallida por duplicado |
+| reiniciar la app devuelve la base a su seed | el esquema lo crea el ORM al arrancar (`ddl-auto: create`): no reinicies la app entre el snapshot y las sondas |
+| el juez de un PostgreSQL antiguo no ve la escritura | no lo uses: `verify` mide la huella del contenido, no los contadores de `pg_stat_user_tables` (en 9.4 llegan segundos tarde) |
 
 ## Al agotar el presupuesto
 

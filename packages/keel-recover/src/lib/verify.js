@@ -89,7 +89,7 @@ export async function verify(sandbox, rt, { up = true, snapshot = true, log = ()
 
   report.ok = report.criteria.every((c) => c.ok);
   if (report.ok && snapshot && spec.database) {
-    const s = databaseAdapter(spec.database.tech)?.takeSnapshot(rt, db, spec.database.name) ?? { ok: false, error: `snapshot sin implementar para ${spec.database.tech}` };
+    const s = databaseAdapter(spec.database.tech)?.takeSnapshot(rt, db, spec.database) ?? { ok: false, error: `snapshot sin implementar para ${spec.database.tech}` };
     report.snapshot = s;
     if (!s.ok) report.ok = false;
   }
@@ -180,7 +180,7 @@ export function egressCriterion(rt, app, tool, targets) {
 export function dbFingerprint(rt, db, database) {
   const adapter = databaseAdapter(database.tech);
   if (!adapter) return { ok: false, error: `rastro de escritura sin implementar para ${database.tech}` };
-  return adapter.fingerprint(rt, db, database.name);
+  return adapter.fingerprint(rt, db, database);
 }
 
 // ── cobertura ─────────────────────────────────────────────────────────────────────────────────

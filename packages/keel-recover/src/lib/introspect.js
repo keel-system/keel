@@ -59,7 +59,7 @@ export function introspect(sandbox, rt) {
 
   if (spec.database) {
     const adapter = databaseAdapter(spec.database.tech);
-    const db = adapter ? adapter.introspect(rt, containerOf(sandbox, spec.database.service), spec.database.name) : { ok: false, error: `introspección sin implementar para ${spec.database.tech}` };
+    const db = adapter ? adapter.introspect(rt, containerOf(sandbox, spec.database.service), spec.database) : { ok: false, error: `introspección sin implementar para ${spec.database.tech}` };
     if (!db.ok) errors.push(`base: ${db.error}`);
     else surface.data = { tech: spec.database.tech, database: spec.database.name, ...db.value };
   }
@@ -77,6 +77,9 @@ const KEYS = {
   'http.routes': (r) => `${r.method} ${r.path}`,
   'http.middleware': (m) => `${m.name}@${m.mount}`,
   'data.collections': (c) => c.name,
+  'data.tables': (t) => t.name,
+  'data.sequences': (s) => s.name,
+  'data.types': (t) => t.name,
   'broker.exchanges': (e) => e.name,
   'broker.queues': (q) => q.name,
   'broker.bindings': (b) => `${b.source}|${b.destination}|${b.routing_key}`,

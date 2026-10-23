@@ -90,10 +90,10 @@ export function legacyContext(prep, rt, { snapshotHash = null } = {}) {
     },
     reset: async () => {
       if (!db) return { ok: true };
-      const r = dba.restoreSnapshot(rt, db, spec.database.name);
+      const r = dba.restoreSnapshot(rt, db, spec.database);
       if (!r.ok) return r;
       if (!snapshotHash) return { ok: true };
-      const h = dba.fingerprint(rt, db, spec.database.name);
+      const h = dba.fingerprint(rt, db, spec.database);
       if (!h.ok) return { ok: false, error: `no se pudo leer la huella de la base: ${h.error}` };
       return h.value === snapshotHash ? { ok: true } : { ok: false, error: `la base restaurada (${h.value}) no es el snapshot de verify (${snapshotHash})` };
     },

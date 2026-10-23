@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // verify-check: la puerta del incremento 3. El juez (keel-recover verify) contra un sandbox REAL
-// del legacy de fixture (fixtures/sandbox/node-mongo: Node + MongoDB, cobertura v8), tal cual y
-// saboteado. Cada sabotaje rompe el sandbox conservando su forma, y verify tiene que salir en rojo
+// del legacy de fixture (fixtures/sandbox/node-mongo: Node + MongoDB, cobertura v8; con
+// --database=postgresql, su gemelo fixtures/sandbox/node-postgres), tal cual y saboteado. Cada sabotaje rompe el sandbox conservando su forma, y verify tiene que salir en rojo
 // con EXACTAMENTE el criterio que lo mide:
 //
 //   egress     la red del compose sin `internal: true`        → VER-NET-INTERNAL (y no se arranca)
@@ -11,7 +11,7 @@
 //   trace      sandbox.yaml cree que la app escribe en otra
 //              base: la escritura responde 201 y no deja rastro → VER-DB-TRACE
 //
-//   npm run verify-check --workspace packages/keel-recover [-- --only=<id>] [-- --keep]
+//   npm run verify-check --workspace packages/keel-recover [-- --only=<id>] [-- --keep] [-- --database=postgresql]
 //
 // Necesita podman o docker, y red para construir la imagen y bajar las de la base y la herramienta.
 import fs from 'node:fs';
@@ -29,7 +29,19 @@ import { verify } from '../src/lib/verify.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, '..');
-const fixture = path.join(pkgRoot, 'fixtures', 'sandbox', 'node-mongo');
+// Un legacy de fixture por motor, con lo que cada sabotaje necesita saber de él.
+const FIXTURES = {
+  mongodb: { dir: 'node-mongo', project: 'rec-fixture', prefix: 'rec-fixture', urlEnv: 'MONGO_URL', nowhere: 'mongodb://nowhere:27017', otherDb: 'stock_legacy_old' },
+  // la base equivocada existe (la de mantenimiento de PostgreSQL): la del sandbox responde, pero vacía
+  postgresql: { dir: 'node-postgres', project: 'rec-fixture-pg', prefix: 'rec-fixture-pg', urlEnv: 'DATABASE_URL', nowhere: 'postgres://postgres:postgres@nowhere:5432/stock', otherDb: 'postgres' },
+};
+const database = process.argv.find((a) => a.startsWith('--database='))?.split('=')[1] ?? 'mongodb';
+const fx = FIXTURES[database];
+if (!fx) {
+  console.error(`--database=${database}: hay fixture para ${Object.keys(FIXTURES).join(', ')}`);
+  process.exit(2);
+}
+const fixture = path.join(pkgRoot, 'fixtures', 'sandbox', fx.dir);
 const only = process.argv.find((a) => a.startsWith('--only='))?.split('=')[1] ?? null;
 const keep = process.argv.includes('--keep');
 
@@ -64,14 +76,14 @@ const SCENARIOS = [
     red: ['VER-READ', 'VER-WRITE', 'VER-DB-TRACE'],
     healthLies: true,
     compose: (c) => {
-      c.services.app.environment.MONGO_URL = 'mongodb://nowhere:27017';
+      c.services.app.environment[fx.urlEnv] = fx.nowhere;
     },
   },
   {
     id: 'trace',
     red: ['VER-DB-TRACE'],
     sandbox: (s) => {
-      s.database.name = 'stock_legacy_old';
+      s.database.name = fx.otherDb;
     },
   },
 ];
@@ -79,7 +91,7 @@ const SCENARIOS = [
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-recover-verify-'));
 fs.cpSync(fixture, work, { recursive: true });
 fs.mkdirSync(path.join(work, 'sandbox', 'instrument'), { recursive: true });
-fs.copyFileSync(path.join(pkgRoot, 'assets', 'sandbox', 'v8-coverage-exit.cjs'), path.join(work, 'sandbox', 'instrument', 'v8-coverage-exit.cjs'));
+for (const f of ['v8-coverage-exit.cjs', 'express-routes.cjs']) fs.copyFileSync(path.join(pkgRoot, 'assets', 'sandbox', f), path.join(work, 'sandbox', 'instrument', f));
 // Los pasos 0a y 0b, con la propia herramienta: de ahí cruza verify la versión del motor.
 fs.writeFileSync(path.join(work, 'runtime.yaml'), renderDoc(fingerprint(path.join(work, 'repo'))).text);
 const env = renderDoc(envDeps(path.join(work, 'repo'))).plain;
@@ -90,8 +102,9 @@ const composeFile = path.join(work, 'sandbox', 'compose.yaml');
 const sandboxFile = path.join(work, 'sandbox', 'sandbox.yaml');
 const pristineCompose = fs.readFileSync(composeFile, 'utf8');
 const pristineSandbox = fs.readFileSync(sandboxFile, 'utf8');
-const down = () => rt.compose(composeFile, 'rec-fixture', ['down', '-v']);
+const down = () => rt.compose(composeFile, fx.project, ['down', '-v']);
 
+console.log(`base: ${database} (fixtures/sandbox/${fx.dir})`);
 console.log(`runtime: ${runtime}\ntrabajo: ${work}\n── build (con red, aparte del runtime)`);
 const build = spawnSync('bash', [path.join(work, 'sandbox', 'build.sh')], { stdio: 'inherit', env: { ...process.env, RUNTIME: runtime, MSYS_NO_PATHCONV: '1' } });
 if (build.status !== 0) {
@@ -121,11 +134,11 @@ for (const sc of SCENARIOS.filter((s) => !only || s.id === only)) {
   const red = report.criteria.filter((c) => !c.ok && !c.skipped).map((c) => c.id).sort();
   const skipped = report.criteria.filter((c) => c.skipped).map((c) => c.id);
   let ok = JSON.stringify(red) === JSON.stringify([...sc.red].sort()) && report.ok === (sc.red.length === 0);
-  if (sc.notRun) ok = ok && skipped.length > 0 && !exec(runtime, ['inspect', 'rec-fixture-app']).stdout.includes('"Running": true');
+  if (sc.notRun) ok = ok && skipped.length > 0 && !exec(runtime, ['inspect', `${fx.prefix}-app`]).stdout.includes('"Running": true');
   if (sc.id === 'base') ok = ok && report.snapshot?.ok === true;
   if (sc.healthLies) {
     // La salud del legacy miente: el juez no la usa, y por eso sale en rojo con /health en 200.
-    const h = exec(runtime, ['exec', 'rec-fixture-tool', 'curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', 'http://stock:4000/health']).stdout.trim();
+    const h = exec(runtime, ['exec', `${fx.prefix}-tool`, 'curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', 'http://stock:4000/health']).stdout.trim();
     console.log(`  /health del legacy: ${h}`);
     ok = ok && h === '200';
   }

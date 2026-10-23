@@ -1,0 +1,38 @@
+# Ronda 1 del legacy de fixture con PostgreSQL: una sonda por cosa que solo tiene una base relacional y
+# que el ejecutor tiene que grabar bien. La puerta (scripts/probe-check.js --database=postgresql) sabe
+# qué tiene que grabar cada una.
+x-steps:
+  create: &create { name: alta, request: { method: POST, path: /items, body: { sku: a, quantity: 2 } } }
+probes:
+  - id: Q-001
+    why: lectura sin efectos
+    steps: [ { name: listado, request: { method: GET, path: /items } } ]
+  - id: Q-002
+    why: "alta: el artículo, su movimiento y las dos secuencias"
+    steps: [ *create, { name: lectura, request: { method: GET, path: /items/a } } ]
+  - id: Q-003
+    why: alta inválida, sin nada en la base
+    steps: [ { name: alta-sin-sku, request: { method: POST, path: /items, body: { quantity: 1 } } } ]
+  - id: Q-004
+    class: repeat
+    why: "el mismo sku dos veces: la UNIQUE rechaza el segundo, que aun así consume un id de la secuencia"
+    steps: [ *create, *create ]
+  - id: Q-005
+    class: lifecycle
+    why: "agotar el artículo lo pasa a SOLD (el CHECK lo declara); sacar más se rechaza"
+    steps:
+      - *create
+      - { name: sacar-todo, request: { method: POST, path: /items/a/take, body: { n: 2 } } }
+      - { name: sacar-mas, request: { method: POST, path: /items/a/take, body: { n: 1 } } }
+      - { name: lectura, request: { method: GET, path: /items/a } }
+  - id: Q-006
+    class: concurrency
+    why: "dos salidas de una unidad a la vez (lee, comprueba y escribe sin bloqueo: con las dos juntas se pierde una)"
+    repeat: 10
+    outcome: quantity
+    steps: [ *create ]
+    then_parallel:
+      - { name: sacar-1, request: { method: POST, path: /items/a/take, body: { n: 1 } } }
+      - { name: sacar-2, request: { method: POST, path: /items/a/take, body: { n: 1 } } }
+    after:
+      - { name: lectura, request: { method: GET, path: /items/a } }

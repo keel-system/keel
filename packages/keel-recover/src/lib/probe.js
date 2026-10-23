@@ -115,7 +115,7 @@ function context(sandbox, rt, options) {
 
 async function waitDb(ctx) {
   for (let i = 0; i < 60; i++) {
-    if (ctx.dba.fingerprint(ctx.rt, ctx.db, ctx.spec.database.name).ok) return true;
+    if (ctx.dba.fingerprint(ctx.rt, ctx.db, ctx.spec.database).ok) return true;
     await sleep(ctx.pollMs);
   }
   return false;
@@ -216,10 +216,10 @@ export async function runProbe(ctx, probe, roundVars, tag) {
 
   // 1. la base, al snapshot, y su huella comprobada
   if (ctx.db) {
-    const r = ctx.dba.restoreSnapshot(rt, ctx.db, spec.database.name);
+    const r = ctx.dba.restoreSnapshot(rt, ctx.db, spec.database);
     if (!r.ok) fail('PRB-RESTORE', `no se pudo restaurar el snapshot: ${r.error}`);
     else {
-      const h = ctx.dba.fingerprint(rt, ctx.db, spec.database.name);
+      const h = ctx.dba.fingerprint(rt, ctx.db, spec.database);
       if (!h.ok) fail('PRB-RESTORE', h.error);
       else if (ctx.baselineHash === null) ctx.baselineHash = h.value;
       else if (h.value !== ctx.baselineHash) fail('PRB-RESTORE', `la base restaurada (${h.value}) no es la del snapshot (${ctx.baselineHash})`);
@@ -245,7 +245,7 @@ export async function runProbe(ctx, probe, roundVars, tag) {
   }
 
   // 3. la base de antes, el setup y los pasos
-  const before = ctx.db ? ctx.dba.exportDb(rt, ctx.db, spec.database.name) : null;
+  const before = ctx.db ? ctx.dba.exportDb(rt, ctx.db, spec.database) : null;
   if (before && !before.ok) fail('PRB-RESTORE', `no se pudo exportar la base: ${before.error}`);
   const teardown = await applySetup(ctx, probe.setup, fail);
   const vars = { ...roundVars, ...(probe.vars ?? {}) };
@@ -311,7 +311,7 @@ export async function runProbe(ctx, probe, roundVars, tag) {
     }
   }
   if (ctx.db) {
-    const after = ctx.dba.exportDb(rt, ctx.db, spec.database.name);
+    const after = ctx.dba.exportDb(rt, ctx.db, spec.database);
     if (!after.ok) fail('PRB-RESTORE', `no se pudo exportar la base: ${after.error}`);
     else if (before?.ok) effects.db = ctx.dba.diff(before.value, after.value);
   }

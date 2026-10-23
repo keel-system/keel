@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // characterize-check: la puerta en vivo del incremento 6. `keel-recover characterize` contra un
-// sandbox REAL del legacy de fixture (fixtures/sandbox/node-mongo: Node + MongoDB), con el diseño
+// sandbox REAL del legacy de fixture (fixtures/sandbox/node-mongo: Node + MongoDB; con
+// --database=postgresql, su gemelo fixtures/sandbox/node-postgres, que por HTTP se porta igual), con el diseño
 // recuperado de juguete de test/helpers/stock-design.js: dos keep, un fix y un frontier, con sus
 // pasos en bloques ```keel-flow```, y un new que no se ejecuta.
 //
@@ -17,9 +18,10 @@
 //                 huella): el verde dependería de lo que dejó otro      → todos
 //
 // El estado de partida es la base VACÍA: verify escribe un artículo para medir VER-WRITE, así que
-// tras verify se vacía la colección y se toma el snapshot otra vez, con su huella en verify.json.
+// tras verify se vacía la base (con el adaptador del motor) y se toma el snapshot otra vez, con su
+// huella en verify.json.
 //
-//   npm run characterize-check --workspace packages/keel-recover [-- --only=<id>] [-- --keep]
+//   npm run characterize-check --workspace packages/keel-recover [-- --only=<id>] [-- --keep] [-- --database=postgresql]
 //
 // Necesita podman o docker, y red para construir la imagen y bajar las de la base y la herramienta.
 import fs from 'node:fs';
@@ -35,14 +37,22 @@ import { envDeps } from '../src/lib/env-deps.js';
 import { loadSandbox } from '../src/lib/sandbox.js';
 import { containerRuntime, resolveRuntime } from '../src/lib/containers.js';
 import { verify } from '../src/lib/verify.js';
-import { SNAPSHOT_ARCHIVE, mongoEval, takeSnapshot } from '../src/lib/db/mongodb.js';
+import { databaseAdapter } from '../src/lib/db/index.js';
 import { runCharacterization } from '../src/lib/characterize.js';
 import { legacyContext, prepareCharacterization, verifyGate, writeCharacterization } from '../src/lib/characterize-legacy.js';
 import { SCENARIOS as STOCK_SCENARIOS, writeStockDesign } from '../test/helpers/stock-design.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, '..');
-const fixture = path.join(pkgRoot, 'fixtures', 'sandbox', 'node-mongo');
+const FIXTURES = { mongodb: { dir: 'node-mongo', project: 'rec-fixture' }, postgresql: { dir: 'node-postgres', project: 'rec-fixture-pg' } };
+const database = process.argv.find((a) => a.startsWith('--database='))?.split('=')[1] ?? 'mongodb';
+const fx = FIXTURES[database];
+if (!fx) {
+  console.error(`--database=${database}: hay fixture para ${Object.keys(FIXTURES).join(', ')}`);
+  process.exit(2);
+}
+const dba = databaseAdapter(database);
+const fixture = path.join(pkgRoot, 'fixtures', 'sandbox', fx.dir);
 const only = process.argv.find((a) => a.startsWith('--only='))?.split('=')[1] ?? null;
 const keep = process.argv.includes('--keep');
 
@@ -58,7 +68,7 @@ const SCENARIOS = [
   { id: 'base', red: [] },
   { id: 'expect', red: ['FL-ITM-001'], scenarios: (s) => s.replace('expect: { status: created, body: { sku: a } }', 'expect: { status: ok, body: { sku: a } }') },
   { id: 'fix-gone', red: ['FL-ITM-002'], scenarios: (s) => s.replace('legacy: { status: 422 }', 'legacy: { status: 400 }') },
-  { id: 'snapshot-gone', red: ALL, message: /no se pudo restaurar el estado de partida/, before: (db) => rt.exec(db, ['rm', '-f', SNAPSHOT_ARCHIVE]) },
+  { id: 'snapshot-gone', red: ALL, message: /no se pudo restaurar el estado de partida/, before: (db) => rt.exec(db, ['rm', '-f', dba.snapshotFile]) },
   { id: 'snapshot-drift', red: ALL, message: /no es el snapshot de verify/, snapshotHash: 'f'.repeat(32) },
 ];
 
@@ -67,7 +77,7 @@ const legacyDir = path.join(work, 'legacy', 'stock');
 fs.mkdirSync(legacyDir, { recursive: true });
 fs.cpSync(fixture, legacyDir, { recursive: true });
 fs.mkdirSync(path.join(legacyDir, 'sandbox', 'instrument'), { recursive: true });
-fs.copyFileSync(path.join(pkgRoot, 'assets', 'sandbox', 'v8-coverage-exit.cjs'), path.join(legacyDir, 'sandbox', 'instrument', 'v8-coverage-exit.cjs'));
+for (const f of ['v8-coverage-exit.cjs', 'express-routes.cjs']) fs.copyFileSync(path.join(pkgRoot, 'assets', 'sandbox', f), path.join(legacyDir, 'sandbox', 'instrument', f));
 fs.writeFileSync(path.join(legacyDir, 'runtime.yaml'), renderDoc(fingerprint(path.join(legacyDir, 'repo'))).text);
 const env = renderDoc(envDeps(path.join(legacyDir, 'repo'))).plain;
 env.adaptations = [{ what: 'red internal: true', why: 'el runtime no sale a internet (principio 5)' }];
@@ -75,8 +85,9 @@ fs.writeFileSync(path.join(legacyDir, 'environment.yaml'), YAML.stringify(env));
 const { specDir } = writeStockDesign(work);
 
 const composeFile = path.join(legacyDir, 'sandbox', 'compose.yaml');
-const down = () => rt.compose(composeFile, 'rec-fixture', ['down', '-v']);
+const down = () => rt.compose(composeFile, fx.project, ['down', '-v']);
 
+console.log(`base: ${database} (fixtures/sandbox/${fx.dir})`);
 console.log(`runtime: ${runtime}\ntrabajo: ${work}\n── build (con red, aparte del runtime)`);
 const build = spawnSync('bash', [path.join(legacyDir, 'sandbox', 'build.sh')], { stdio: 'inherit', env: { ...process.env, RUNTIME: runtime, MSYS_NO_PATHCONV: '1' } });
 if (build.status !== 0) {
@@ -86,16 +97,16 @@ if (build.status !== 0) {
 
 const sandbox = loadSandbox(path.join(legacyDir, 'sandbox'));
 if (sandbox.errors.length) throw new Error(sandbox.errors.join('; '));
-const db = 'rec-fixture-db';
+const db = `${fx.project}-db`;
 
 /** verify en verde, y el estado de partida de los flujos: la base vacía, con su snapshot. */
 async function freshSandbox() {
   down();
   const report = await verify(sandbox, rt, { log: (c) => !c.ok && console.log(`  ROJO ${c.id}  ${c.detail}`) });
   if (!report.ok) throw new Error('verify salió en rojo: la puerta no puede medir characterize');
-  const clear = mongoEval(rt, db, `db.getSiblingDB('stock').items.deleteMany({})`);
+  const clear = dba.empty(rt, db, sandbox.spec.database);
   if (!clear.ok) throw new Error(`no se pudo vaciar la base: ${clear.error}`);
-  report.snapshot = takeSnapshot(rt, db, 'stock');
+  report.snapshot = dba.takeSnapshot(rt, db, sandbox.spec.database);
   if (!report.snapshot.ok) throw new Error(`snapshot: ${report.snapshot.error}`);
   fs.writeFileSync(path.join(legacyDir, 'sandbox', 'verify.json'), JSON.stringify(report, null, 2));
 }
