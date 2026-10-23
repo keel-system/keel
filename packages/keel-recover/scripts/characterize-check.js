@@ -35,7 +35,7 @@ import { envDeps } from '../src/lib/env-deps.js';
 import { loadSandbox } from '../src/lib/sandbox.js';
 import { containerRuntime, resolveRuntime } from '../src/lib/containers.js';
 import { verify } from '../src/lib/verify.js';
-import { SNAPSHOT_ARCHIVE, mongoEval, takeSnapshot } from '../src/lib/mongo.js';
+import { SNAPSHOT_ARCHIVE, mongoEval, takeSnapshot } from '../src/lib/db/mongodb.js';
 import { runCharacterization } from '../src/lib/characterize.js';
 import { legacyContext, prepareCharacterization, verifyGate, writeCharacterization } from '../src/lib/characterize-legacy.js';
 import { SCENARIOS as STOCK_SCENARIOS, writeStockDesign } from '../test/helpers/stock-design.js';

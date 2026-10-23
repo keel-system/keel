@@ -103,7 +103,7 @@ test('characterize dice UNA vez que falta el snapshot, antes del primer flujo', 
     map: { legacy: {} },
     sandbox: {
       dir: path.join('legacy', 'stock', 'sandbox'),
-      spec: { tool: { service: 'tool' }, database: { service: 'db', name: 'stock' }, app: { base: 'http://app:3000' } },
+      spec: { tool: { service: 'tool' }, database: { service: 'db', tech: 'mongodb', name: 'stock' }, app: { base: 'http://app:3000' } },
       compose: { services: { tool: { container_name: 'rec-stock-tool' }, db: { container_name: 'rec-stock-db' } } }
     }
   };

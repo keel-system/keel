@@ -12,7 +12,8 @@
 //   journal-off     WireMock arranca con --no-request-journal               → PRB-STUBS
 //   mail-wrong-box  sandbox.yaml lee un Mailpit que no es al que envía el
 //                   legacy (los dos existen y responden)                    → PRB-MAIL
-//   snapshot-gone   el archivo del snapshot desaparece tras verify          → PRB-RESTORE
+//   snapshot-gone   el archivo del snapshot desaparece tras verify: la ronda
+//                   lo dice una vez, antes de la primera sonda (inc. 9)    → PRB-VERIFY
 //   coverage-off    tras verify, la app se reinicia sin la precarga que convierte
 //                   SIGTERM en una salida ordenada (inc. 3): Node deja de
 //                   escribir la cobertura, y el acumulado de antes sigue ahí → PRB-COVERAGE
@@ -44,7 +45,7 @@ import { containerRuntime, resolveRuntime } from '../src/lib/containers.js';
 import { verify, waitReady } from '../src/lib/verify.js';
 import { introspect, mergeSurface } from '../src/lib/introspect.js';
 import { loadRound, runRound } from '../src/lib/probe.js';
-import { SNAPSHOT_ARCHIVE } from '../src/lib/mongo.js';
+import { SNAPSHOT_ARCHIVE } from '../src/lib/db/mongodb.js';
 import { comparable } from '../src/lib/normalize.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -88,7 +89,8 @@ const SCENARIOS = [
   },
   {
     id: 'snapshot-gone',
-    red: ['PRB-RESTORE'],
+    red: ['PRB-VERIFY'],
+    expect: (report) => [['PRB-VERIFY dice que falta el snapshot', /no hay snapshot en rec-effects-db/.test(report.criteria.find((c) => c.id === 'PRB-VERIFY')?.detail ?? '')]],
     afterVerify: async () => rt.exec('rec-effects-db', ['rm', '-f', SNAPSHOT_ARCHIVE]),
   },
   { id: 'parallel-exec', red: [], faults: ['parallel-exec'], only: new Set(['P-007']), expect: (report) => [raceCheck(report, false)] },
@@ -287,7 +289,7 @@ for (const sc of SCENARIOS.filter((s) => !only || s.id === only)) {
     if (ch && ch !== 'PRB-COVERAGE') checks.push([`grabaciones marcadas sin fiar por ${ch}`, report.recordings.every((r) => r.recording.untrusted?.includes(ch))]);
   }
   for (const [what, ok] of checks) if (!ok) console.log(`  ✗ ${what}`);
-  const red = report.criteria.filter((c) => !c.ok).map((c) => c.id).sort();
+  const red = report.criteria.filter((c) => !c.ok && !c.skipped).map((c) => c.id).sort();
   const ok = JSON.stringify(red) === JSON.stringify([...sc.red].sort()) && report.ok === (sc.red.length === 0) && checks.every(([, x]) => x);
   results.push({ id: sc.id, ok, red });
   console.log(`  ${ok ? '✓' : '✗'} ${sc.id}: rojo en [${red.join(', ')}], se esperaba [${sc.red.join(', ')}]; ${checks.filter(([, x]) => x).length}/${checks.length} comprobaciones`);

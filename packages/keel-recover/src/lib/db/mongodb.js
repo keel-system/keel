@@ -123,6 +123,16 @@ export function restoreSnapshot(rt, db, name) {
   return r.status === 0 ? { ok: true } : { ok: false, error: `mongorestore salió con ${r.status} sobre ${SNAPSHOT_ARCHIVE}${tail(r.stderr || r.stdout) ? `: ${tail(r.stderr || r.stdout)}` : ''}` };
 }
 
+/**
+ * Vacía todas las colecciones (sin las de sistema) y cuenta lo que queda: lo que necesita la paridad
+ * para que cada flujo parta de la base vacía del regenerado. `{ ok, remaining }` o `{ ok: false, error }`.
+ */
+export function emptyDatabase(rt, db, name, { auth = null } = {}) {
+  const js = `var d = ${dbRef(name)}; var cs = d.getCollectionNames().filter(function (c) { return c.indexOf('system.') !== 0; }); cs.forEach(function (c) { d[c].deleteMany({}); }); print(cs.reduce(function (n, c) { return n + d[c].countDocuments({}); }, 0));`;
+  const r = mongoEval(rt, db, js, { auth });
+  return r.ok ? { ok: true, remaining: r.value } : r;
+}
+
 /** Lo que cambió en la base entre dos exportaciones, por `_id`. */
 export function dbDiff(before, after) {
   const diff = {};

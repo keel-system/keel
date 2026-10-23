@@ -7,7 +7,7 @@ import YAML from 'yaml';
 import { tmpDir } from './helpers/tmp.js';
 import { comparable, normalizer } from '../src/lib/normalize.js';
 import { actuatorRoutes, expressRoutes, parseSpringPredicate, springHandler, springLogRoutes } from '../src/lib/routes.js';
-import { dbDiff, fromExtendedJson, parseShellDoc, shapeCollection, tojsonToJson } from '../src/lib/mongo.js';
+import { dbDiff, fromExtendedJson, parseShellDoc, shapeCollection, tojsonToJson } from '../src/lib/db/mongodb.js';
 import { shapeTopology, traceToMessage } from '../src/lib/rabbit.js';
 import { journalEntry } from '../src/lib/stubs.js';
 import { mailEntry } from '../src/lib/mail.js';

@@ -5,7 +5,7 @@ import YAML from 'yaml';
 import { loadCharacterized, readCharacterization, resolveCharacterized } from 'keel-core';
 import { validateAs } from './schema.js';
 import { toolRequestAsync } from './tool-http.js';
-import { mongoEval } from './mongo.js';
+import { databaseAdapter } from './db/index.js';
 import { plannedFlows, tally } from './characterize.js';
 import { prepareCharacterization } from './characterize-legacy.js';
 import { TARGET_MARKS, compareRecords, parityVerdict, renderParity } from './parity.js';
@@ -87,8 +87,6 @@ export function ensureTool(rt, target) {
   return r.status === 0 ? { ok: true, created: true } : { ok: false, created: false, error: r.stderr.trim() };
 }
 
-const COLLECTIONS = (name) => `var d = db.getSiblingDB(${JSON.stringify(name)}); var cs = d.getCollectionNames().filter(function (c) { return c.indexOf('system.') !== 0; });`;
-
 const KCADM = '/opt/keycloak/bin/kcadm.sh';
 
 /**
@@ -131,10 +129,11 @@ export function targetContext(target, map, rt) {
     },
     reset: async () => {
       if (!db) return { ok: true };
-      const js = `${COLLECTIONS(db.name)} cs.forEach(function (c) { d[c].deleteMany({}); }); print(cs.reduce(function (n, c) { return n + d[c].countDocuments({}); }, 0));`;
-      const r = mongoEval(rt, db.container, js, { auth: db.auth ?? null });
+      const dba = databaseAdapter(db.tech);
+      if (!dba) return { ok: false, error: `no se pudo vaciar la base del regenerado: keel-recover no sabe vaciar ${db.tech}` };
+      const r = dba.empty(rt, db.container, db.name, { auth: db.auth ?? null });
       if (!r.ok) return { ok: false, error: `no se pudo vaciar la base del regenerado: ${r.error}` };
-      return r.value === '0' ? { ok: true } : { ok: false, error: `la base del regenerado no quedó vacía (${r.value} documentos)` };
+      return r.remaining === '0' ? { ok: true } : { ok: false, error: `la base del regenerado no quedó vacía (${r.remaining} ${dba.rowNoun})` };
     },
     idpToken: idp
       ? async (actor) => {

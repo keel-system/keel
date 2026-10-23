@@ -5,7 +5,7 @@ import { containerOf } from './sandbox.js';
 import { validateAs } from './schema.js';
 import { keepHeaders, toolRequestAsync, toolRequestsParallel } from './tool-http.js';
 import { normalizer } from './normalize.js';
-import { NO_SNAPSHOT, dbDiff, dbHash, exportDb, hasSnapshot, restoreSnapshot } from './mongo.js';
+import { DATABASE_TECHS, databaseAdapter } from './db/index.js';
 import * as rabbit from './rabbit.js';
 import * as stubs from './stubs.js';
 import * as mail from './mail.js';
@@ -70,7 +70,7 @@ export function channelsCriterion(sandbox) {
     const section = d.provision?.via === 'wiremock' ? 'stubs' : CHANNEL_OF[d.kind];
     if (section && !sandbox.spec[section]) missing.push(`${d.kind}/${d.tech} (${d.endpoints?.[0]?.evidence ?? 'environment.yaml'}) sin \`${section}\` en sandbox.yaml`);
   }
-  if (sandbox.spec.database && sandbox.spec.database.tech !== 'mongodb') missing.push(`base ${sandbox.spec.database.tech}: el diff y la restauración solo existen para mongodb`);
+  if (sandbox.spec.database && !databaseAdapter(sandbox.spec.database.tech)) missing.push(`base ${sandbox.spec.database.tech}: el diff y la restauración solo existen para ${DATABASE_TECHS.join(', ')}`);
   return criterion('PRB-CHANNELS', missing.length === 0, missing.length ? `efectos del legacy sin canal de captura: ${missing.join('; ')}` : 'cada dependencia del legacy tiene su canal');
 }
 
@@ -105,6 +105,7 @@ function context(sandbox, rt, options) {
     tool: containerOf(sandbox, spec.tool.service),
     app: containerOf(sandbox, spec.app.service),
     db: spec.database ? containerOf(sandbox, spec.database.service) : null,
+    dba: spec.database ? databaseAdapter(spec.database.tech) : null,
     brokerC: spec.broker ? containerOf(sandbox, spec.broker.service) : null,
     faults: options.faults ?? new Set(),
     pollMs: options.pollMs ?? 2000,
@@ -114,7 +115,7 @@ function context(sandbox, rt, options) {
 
 async function waitDb(ctx) {
   for (let i = 0; i < 60; i++) {
-    if (dbHash(ctx.rt, ctx.db, ctx.spec.database.name).ok) return true;
+    if (ctx.dba.fingerprint(ctx.rt, ctx.db, ctx.spec.database.name).ok) return true;
     await sleep(ctx.pollMs);
   }
   return false;
@@ -215,10 +216,10 @@ export async function runProbe(ctx, probe, roundVars, tag) {
 
   // 1. la base, al snapshot, y su huella comprobada
   if (ctx.db) {
-    const r = restoreSnapshot(rt, ctx.db, spec.database.name);
+    const r = ctx.dba.restoreSnapshot(rt, ctx.db, spec.database.name);
     if (!r.ok) fail('PRB-RESTORE', `no se pudo restaurar el snapshot: ${r.error}`);
     else {
-      const h = dbHash(rt, ctx.db, spec.database.name);
+      const h = ctx.dba.fingerprint(rt, ctx.db, spec.database.name);
       if (!h.ok) fail('PRB-RESTORE', h.error);
       else if (ctx.baselineHash === null) ctx.baselineHash = h.value;
       else if (h.value !== ctx.baselineHash) fail('PRB-RESTORE', `la base restaurada (${h.value}) no es la del snapshot (${ctx.baselineHash})`);
@@ -244,7 +245,7 @@ export async function runProbe(ctx, probe, roundVars, tag) {
   }
 
   // 3. la base de antes, el setup y los pasos
-  const before = ctx.db ? exportDb(rt, ctx.db, spec.database.name) : null;
+  const before = ctx.db ? ctx.dba.exportDb(rt, ctx.db, spec.database.name) : null;
   if (before && !before.ok) fail('PRB-RESTORE', `no se pudo exportar la base: ${before.error}`);
   const teardown = await applySetup(ctx, probe.setup, fail);
   const vars = { ...roundVars, ...(probe.vars ?? {}) };
@@ -310,9 +311,9 @@ export async function runProbe(ctx, probe, roundVars, tag) {
     }
   }
   if (ctx.db) {
-    const after = exportDb(rt, ctx.db, spec.database.name);
+    const after = ctx.dba.exportDb(rt, ctx.db, spec.database.name);
     if (!after.ok) fail('PRB-RESTORE', `no se pudo exportar la base: ${after.error}`);
-    else if (before?.ok) effects.db = dbDiff(before.value, after.value);
+    else if (before?.ok) effects.db = ctx.dba.diff(before.value, after.value);
   }
 
   const rec = { id: probe.id, class: probe.class ?? 'basic', why: probe.why, ...(probe.setup ? { setup: probe.setup } : {}), steps, effects };
@@ -335,8 +336,8 @@ export async function runRound(sandbox, rt, round, { tag, only = null, faults, l
   const ctx = context(sandbox, rt, { faults, pollMs, snapshotHash: v.snapshotHash });
   const { spec } = sandbox;
   // Sin snapshot, ninguna sonda puede partir del estado de verify: se dice una vez, en el criterio de verify.
-  if (ctx.db && !hasSnapshot(rt, ctx.db)) {
-    report.criteria[0] = criterion(v.id, false, NO_SNAPSHOT(ctx.db, path.relative(process.cwd(), sandbox.dir).replace(/\\/g, '/')));
+  if (ctx.db && !ctx.dba.hasSnapshot(rt, ctx.db)) {
+    report.criteria[0] = criterion(v.id, false, ctx.dba.noSnapshot(ctx.db, path.relative(process.cwd(), sandbox.dir).replace(/\\/g, '/')));
     for (const id of PROBE_CRITERIA.slice(2)) report.criteria.push(criterion(id, false, 'no se ejecutó: el sandbox no está listo para sondear', { skipped: true }));
     return { ...report, recordings: [] };
   }

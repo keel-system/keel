@@ -6,7 +6,7 @@ import { CHARACTERIZED_FILE, SCENARIOS_FILE, loadProvenance, readCharacterizatio
 import { loadSandbox, containerOf } from './sandbox.js';
 import { verifyCriterion } from './probe.js';
 import { toolRequestAsync } from './tool-http.js';
-import { NO_SNAPSHOT, dbHash, hasSnapshot, restoreSnapshot } from './mongo.js';
+import { databaseAdapter } from './db/index.js';
 import { loadContractMap, plannedFlows, sealDocument } from './characterize.js';
 import { renderFidelity } from './fidelity.js';
 
@@ -72,10 +72,13 @@ export function legacyContext(prep, rt, { snapshotHash = null } = {}) {
   const { spec } = prep.sandbox;
   const tool = containerOf(prep.sandbox, spec.tool.service);
   const db = spec.database ? containerOf(prep.sandbox, spec.database.service) : null;
+  const dba = spec.database ? databaseAdapter(spec.database.tech) : null;
   return {
     // Antes del primer flujo: sin snapshot, todos fallarían por lo mismo.
     preflight: () =>
-      db && !hasSnapshot(rt, db) ? { ok: false, error: NO_SNAPSHOT(db, path.relative(process.cwd(), prep.sandbox.dir).replace(/\\/g, '/')) } : { ok: true },
+      db && !dba
+        ? { ok: false, error: `keel-recover no sabe restaurar ${spec.database.tech}: sin snapshot no hay estado de partida` }
+        : db && !dba.hasSnapshot(rt, db) ? { ok: false, error: dba.noSnapshot(db, path.relative(process.cwd(), prep.sandbox.dir).replace(/\\/g, '/')) } : { ok: true },
     side: prep.map.legacy,
     sideName: 'legacy',
     semantics: prep.map.semantics ?? {},
@@ -87,10 +90,10 @@ export function legacyContext(prep, rt, { snapshotHash = null } = {}) {
     },
     reset: async () => {
       if (!db) return { ok: true };
-      const r = restoreSnapshot(rt, db, spec.database.name);
+      const r = dba.restoreSnapshot(rt, db, spec.database.name);
       if (!r.ok) return r;
       if (!snapshotHash) return { ok: true };
-      const h = dbHash(rt, db, spec.database.name);
+      const h = dba.fingerprint(rt, db, spec.database.name);
       if (!h.ok) return { ok: false, error: `no se pudo leer la huella de la base: ${h.error}` };
       return h.value === snapshotHash ? { ok: true } : { ok: false, error: `la base restaurada (${h.value}) no es el snapshot de verify (${snapshotHash})` };
     },

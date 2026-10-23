@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { composeProject, containerOf } from './sandbox.js';
 import { staticCriteria } from './verify-static.js';
 import { parseJsonFiles, readIstanbul, readJacocoCsv, readV8, splitDump } from './coverage.js';
-import { dbHash, takeSnapshot } from './mongo.js';
+import { databaseAdapter } from './db/index.js';
 
 // Paso 0f: el juez del sandbox. Decide si el legacy está levantado de forma que lo que se grabe
 // después sea comportamiento y no un síntoma del entorno. Las dos reglas que midió el inc. 1:
@@ -89,7 +89,7 @@ export async function verify(sandbox, rt, { up = true, snapshot = true, log = ()
 
   report.ok = report.criteria.every((c) => c.ok);
   if (report.ok && snapshot && spec.database) {
-    const s = takeSnapshot(rt, db, spec.database.name);
+    const s = databaseAdapter(spec.database.tech)?.takeSnapshot(rt, db, spec.database.name) ?? { ok: false, error: `snapshot sin implementar para ${spec.database.tech}` };
     report.snapshot = s;
     if (!s.ok) report.ok = false;
   }
@@ -178,8 +178,9 @@ export function egressCriterion(rt, app, tool, targets) {
 // ── base ──────────────────────────────────────────────────────────────────────────────────────
 
 export function dbFingerprint(rt, db, database) {
-  if (database.tech !== 'mongodb') return { ok: false, error: `rastro de escritura sin implementar para ${database.tech}` };
-  return dbHash(rt, db, database.name);
+  const adapter = databaseAdapter(database.tech);
+  if (!adapter) return { ok: false, error: `rastro de escritura sin implementar para ${database.tech}` };
+  return adapter.fingerprint(rt, db, database.name);
 }
 
 // ── cobertura ─────────────────────────────────────────────────────────────────────────────────

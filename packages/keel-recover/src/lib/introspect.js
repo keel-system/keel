@@ -1,7 +1,7 @@
 import { containerOf } from './sandbox.js';
 import { toolRequest } from './tool-http.js';
 import { actuatorRoutes, expressRoutes, springLogRoutes } from './routes.js';
-import { introspectDb } from './mongo.js';
+import { databaseAdapter } from './db/index.js';
 import { brokerTopology } from './rabbit.js';
 import { cmp } from './repo.js';
 
@@ -58,9 +58,10 @@ export function introspect(sandbox, rt) {
   else if (routes.value) surface.http = routes.value;
 
   if (spec.database) {
-    const db = introspectDb(rt, containerOf(sandbox, spec.database.service), spec.database.name);
+    const adapter = databaseAdapter(spec.database.tech);
+    const db = adapter ? adapter.introspect(rt, containerOf(sandbox, spec.database.service), spec.database.name) : { ok: false, error: `introspección sin implementar para ${spec.database.tech}` };
     if (!db.ok) errors.push(`base: ${db.error}`);
-    else surface.data = { tech: spec.database.tech, database: spec.database.name, collections: db.value };
+    else surface.data = { tech: spec.database.tech, database: spec.database.name, ...db.value };
   }
   if (spec.broker) {
     const b = brokerTopology(rt, tool, spec.broker);
