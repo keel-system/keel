@@ -16,10 +16,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.resolve(here, '..', '..', '..', 'fixtures', 'designs');
 const STACK = { database: 'mongodb', auth: 'keycloak', broker: null, cache: null, storage: null, paymentGateway: null, telemetry: 'none' };
 
-async function deployOf(generator) {
+async function deployOf(generator, stack = {}) {
   const { planService } = await import(`../../${generator}/src/scaffold/index.js`);
   const { manifest, layers } = loadService(path.join(FIXTURES, 'conduit'));
-  const files = planService({ manifest, layers, workspace: FIXTURES, stack: STACK }).files;
+  const files = planService({ manifest, layers, workspace: FIXTURES, stack: { ...STACK, ...stack } }).files;
   const read = (suffix) => files.find((file) => file.path.endsWith(suffix))?.content;
   return { compose: YAML.parse(read('deploy/docker-compose.yaml')), realm: JSON.parse(read('deploy/keycloak/realm-export.json')) };
 }
@@ -54,10 +54,20 @@ test('un deploy sin levantar, o con otra base, es un error que lo dice', async (
   const { compose, realm } = await deployOf('keel-dotnet');
   const down = planTarget({ compose, realm, name: 'conduit-dotnet', projectRel: 'x', containerOf: () => null, networkOf: () => [] });
   assert.match(down.errors.join('\n'), /no hay contenedor del servicio 'app'.*bash deploy\/up\.sh/);
-  const postgres = { ...compose, services: { ...compose.services, db: { ...compose.services.db, image: 'postgres:17' } } };
-  const other = planTarget({ compose: postgres, realm, name: 'c', projectRel: 'x', containerOf: () => 'c', networkOf: () => ['n'] });
-  assert.match(other.errors.join('\n'), /postgres:17: la paridad solo sabe vaciar MongoDB/);
+  const mysql = { ...compose, services: { ...compose.services, db: { ...compose.services.db, image: 'mysql:8.4' } } };
+  const other = planTarget({ compose: mysql, realm, name: 'c', projectRel: 'x', containerOf: () => 'c', networkOf: () => ['n'] });
+  assert.match(other.errors.join('\n'), /mysql:8\.4: la paridad solo sabe vaciar mongodb y postgresql/);
 });
+
+for (const [generator, tech] of [['keel-dotnet', 'dotnet'], ['keel-nest', 'nest'], ['keel-spring', 'spring']]) {
+  test(`${generator}: con PostgreSQL, el target lleva la base, el usuario y la contraseña de su deploy/`, async () => {
+    const { compose, realm } = await deployOf(generator, { database: 'postgresql' });
+    const project = `conduit-${tech}-deploy`;
+    const { doc, errors } = planTarget({ compose, realm, name: `conduit-${tech}`, projectRel: 'x', containerOf: podmanCompose(project), networkOf: () => ['n'] });
+    assert.deepEqual(errors, []);
+    assert.deepEqual(doc.database, { container: `${project}_db_1`, tech: 'postgresql', name: 'conduit', auth: { user: 'conduit', password: 'changeme' } });
+  });
+}
 
 /** Un kcadm falso: guarda los usuarios del realm y registra cada llamada. */
 function fakeKeycloak(existing = []) {

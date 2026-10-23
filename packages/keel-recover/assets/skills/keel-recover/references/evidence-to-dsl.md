@@ -18,6 +18,33 @@ Qué grabación sostiene cada elemento del diseño, y con qué trampas. Una fila
 | Lógica que el código tiene y el DSL solo dice en prosa | `rules` / `invariants`, con la referencia al código | `read` |
 | Un `@Scheduled`, un cron, un trigger | `read` y a `unobserved.yaml`, salvo que el humano permita invocarlo | `read` |
 
+## Base relacional (`surface.yaml → data.tables`)
+
+El esquema que lee `introspect` es evidencia **de la base**, no del dominio: lo escribió un ORM, una migración o un DBA, con sus defaults. Cada columna dice qué guarda la base; qué exige el dominio lo dicen los flujos grabados.
+
+| Evidencia | Elemento del DSL | Nivel |
+|---|---|---|
+| `columns[].type`, `precision`/`scale` | el tipo del campo; la escala del dinero sale de `numeric(p,s)` | `measured` |
+| `columns[].length` | **no** es una cota del dominio por sí sola: `varchar(255)` es el default de casi todos los ORM. Solo entra como `maxLength` si una sonda la ve rechazar (y con qué código) | `read` sin sonda |
+| `columns[].nullable` | la obligatoriedad **no** sale de aquí: una columna NOT NULL puede deberse a un default del ORM, y una anulable ser obligatoria por la validación de la app (anotaciones que no llegan al DDL). Obligatorio es lo que una sonda ve rechazar ausente o vacío | `measured` con sonda; `read` sin ella |
+| `primaryKey` con `default nextval(…)` | el id lo genera la base. Su VALOR no es comparable: un intento fallido también consume la secuencia (se ve en `_sequences` del diff). En `contract-map.yaml`, una diferencia declarada si el regenerado usa otro tipo de id | `measured` |
+| `primaryKey` de texto que manda el cliente | id asignado por el cliente: es su clave natural | `measured` |
+| `unique` | `naturalKey` o un índice `unique`, con el rechazo del duplicado grabado (status y cuerpo) | `measured` |
+| `indexes` con `WHERE` | un índice con `when` (unicidad condicionada al estado) | `measured` |
+| `checks` de cota (`x >= 0`) | la cota del campo | `measured` |
+| `checks` sobre una columna de estado, o un tipo de `types` (ENUM) | los ESTADOS del `lifecycle`, con sus nombres. Las transiciones no: solo las que una sonda `lifecycle` recorre | `measured` los estados; las transiciones, con sonda |
+| `states` (columna de estado por su forma, sin CHECK ni ENUM) | los valores son `measured`; si son números, sus nombres salen del código (`read`) o de una pregunta | `measured` / `read` |
+| `foreignKeys` | una relación. Si las filas se escriben juntas (diff de una sonda) y se borran en cascada, la hija es parte del agregado; si solo se referencia por id, son dos agregados. Sin diff que lo muestre, la frontera es `inferred` y no entra | `measured` con diff |
+| una referencia por valor SIN clave ajena (un código en una columna de texto) | referencia entre agregados sin integridad: borrar el referido no toca a quien lo nombra. Grábalo con una sonda de borrado; es `keep` o `fix` a sabiendas | `measured` con diff |
+| `onDelete: cascade`, un trigger, un procedimiento | comportamiento que vive en la base. Una sonda de borrado lo graba en el diff; si ningún flujo HTTP lo ve, el `fix` lleva `noFlow` con esa prueba | `measured` con diff |
+| `_sequences` en el diff | no es un elemento del diseño: es un efecto técnico | — |
+
+Trampas de una base relacional:
+
+- **El esquema puede crearlo la app al arrancar** (un ORM con `ddl-auto`, `synchronize` o equivalente): no hay migraciones que leer y reiniciar la app devuelve la base a su seed. El esquema del diseño sale de la introspección y de los flujos.
+- **Una lista sin `ORDER BY` no tiene orden**, aunque dos grabaciones coincidan. Si repetir la misma sonda cambia el orden de una colección de la respuesta, compárala como conjunto y no afirmes orden.
+- **El seed también es evidencia**: los datos de partida (un `import.sql`, un `data.sql`, unas migraciones con `INSERT`) son `read`, y lo que se ve de ellos en las grabaciones, `measured`.
+
 ## Trampas medidas en el incremento 1 (RealWorld y Sock Shop)
 
 - **El framework añade superficie.** Spring Data REST expone `PUT`, `PATCH`, `DELETE` y búsquedas que nadie escribió; actuator abierto expone `POST /env`. Que una ruta exista no la hace operación del diseño: pregunta si es contrato o accidente, y si es accidente, es un `fix` (se elimina) con su flujo.

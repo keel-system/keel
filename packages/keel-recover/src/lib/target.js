@@ -11,6 +11,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { TEST_USER_PASSWORD } from 'keel-core/gen/identity-realm';
 import { validateDoc } from './schema.js';
+import { DATABASE_TECHS } from './db/index.js';
 
 const env = (service) => {
   const raw = service?.environment ?? {};
@@ -24,6 +25,25 @@ const containerPort = (service) => {
   return /^\d+$/.test(port) ? Number(port) : null;
 };
 const byImage = (services, pattern) => Object.entries(services).find(([, service]) => pattern.test(String(service?.image ?? '')));
+
+// La base del regenerado, por la imagen de su servicio en el deploy: de qué motor es, cómo se llama y con qué
+// credenciales entra la paridad a vaciarla. Las variables son las de la imagen oficial de cada motor, que es la que
+// emiten los tres generadores. Cada motor tiene su adaptador en src/lib/db/ (DATABASE_TECHS).
+const ENGINES = [
+  {
+    tech: 'mongodb',
+    image: /(^|\/)mongo:/,
+    database: (e, realm, name) => ({
+      name: e.MONGO_INITDB_DATABASE ?? realm?.realm ?? name,
+      ...(e.MONGO_INITDB_ROOT_USERNAME ? { auth: { user: e.MONGO_INITDB_ROOT_USERNAME, password: e.MONGO_INITDB_ROOT_PASSWORD ?? '', authDb: 'admin' } } : {}),
+    }),
+  },
+  {
+    tech: 'postgresql',
+    image: /(^|\/)postgres:/,
+    database: (e) => ({ name: e.POSTGRES_DB ?? e.POSTGRES_USER ?? 'postgres', auth: { user: e.POSTGRES_USER ?? 'postgres', password: e.POSTGRES_PASSWORD ?? '' } }),
+  },
+].filter((engine) => DATABASE_TECHS.includes(engine.tech));
 
 /**
  * El documento target.yaml, sin tocar el runtime. `containerOf(servicio)` da el nombre real del contenedor de un
@@ -41,13 +61,15 @@ export function planTarget({ compose, realm, name, projectRel, containerOf, netw
   const appPort = containerPort(app);
   if (!app || !appPort) errors.push('deploy/docker-compose.yaml no tiene el servicio `app` con su puerto publicado');
 
-  const [dbService, db] = byImage(services, /(^|\/)mongo:/) ?? [];
+  const engine = ENGINES.find((e) => byImage(services, e.image));
+  const [dbService, db] = engine ? byImage(services, engine.image) : [];
   if (!db) {
-    const engines = Object.values(services).map((s) => String(s?.image ?? '')).filter((image) => /postgres|mysql|mariadb|mssql|oracle/.test(image));
+    const engines = Object.values(services).map((s) => String(s?.image ?? '')).filter((image) => /mysql|mariadb|mssql|oracle/.test(image));
+    const known = ENGINES.map((e) => e.tech).join(' y ');
     errors.push(
       engines.length
-        ? `la base del regenerado es ${engines.join(', ')}: la paridad solo sabe vaciar MongoDB (keel-recover no ha medido otro motor)`
-        : 'deploy/docker-compose.yaml no tiene la base de MongoDB'
+        ? `la base del regenerado es ${engines.join(', ')}: la paridad solo sabe vaciar ${known} (keel-recover no ha medido otro motor)`
+        : `deploy/docker-compose.yaml no tiene una base que la paridad sepa vaciar (${known})`
     );
   }
 
@@ -79,14 +101,7 @@ export function planTarget({ compose, realm, name, projectRel, containerOf, netw
     base: `http://app:${appPort}`,
     // El curl de la paridad sale de un contenedor propio en la red del deploy, que parity crea y borra.
     tool: { container: `keel-recover-tool-${name}`, network },
-    database: {
-      container: dbContainer,
-      tech: 'mongodb',
-      name: dbEnv.MONGO_INITDB_DATABASE ?? realm?.realm ?? name,
-      ...(dbEnv.MONGO_INITDB_ROOT_USERNAME
-        ? { auth: { user: dbEnv.MONGO_INITDB_ROOT_USERNAME, password: dbEnv.MONGO_INITDB_ROOT_PASSWORD ?? '', authDb: 'admin' } }
-        : {})
-    },
+    database: { container: dbContainer, tech: engine.tech, ...engine.database(dbEnv, realm, name) },
     ...(keycloak
       ? {
           idp: {
