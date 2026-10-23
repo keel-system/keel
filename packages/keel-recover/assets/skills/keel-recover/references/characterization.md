@@ -77,7 +77,18 @@ legacy:
 ```
 
 `wrap` mete el input del diseño en un objeto (`{ user: … }`); `unwrap` hace lo contrario: manda solo un campo del input,
-porque el legacy recibe una lista o un escalar sin envoltura. Los parámetros de la ruta van en `params` del paso.
+porque el legacy recibe una lista o un escalar sin envoltura. Los parámetros de la ruta van en `params` del paso. En la
+respuesta, `result` elige dónde está el recurso, y `resultAs: <campo>` pone un cuerpo desnudo del legacy (un `true`, una
+lista) en el campo del diseño: `addToCart: { …, resultAs: added }` cuando el legacy responde `true` y el diseño `{ added }`.
+
+Dos piezas más que la paridad necesita y que se escriben al diseñar, no al ver la paridad en rojo:
+
+- `semantics.unordered`: las colecciones que el legacy NO ordena (`^products\[\]$`, `^items\[\]\.products\[\]$`), por su
+  ruta normalizada. Si repetir una sonda cambia el orden de una lista, o el código la guarda en un conjunto, va aquí: la
+  paridad la compara como conjunto y no elemento a elemento. El diseño puede fijar un orden; el legacy no lo tenía.
+- `declaredDifferences[].flows`: la consecuencia de un `fix` en una lectura POSTERIOR del mismo flujo (el legacy rechaza
+  la edición y la lectura que sigue devuelve el producto sin editar) se declara solo para ese flujo, con el `fix` que la
+  explica, sin tapar la misma ruta en los demás.
 
 Las credenciales salen del repo y nunca de producción: la propia API (`via: op`), un JWT firmado con el secreto de desarrollo (`via: forge`) o ninguna (`via: none`). Del lado `keel`, el regenerado delega la identidad (`via: idp`), y si el diseño identifica al llamante por un claim que no es el `sub` (el email), el actor lo dice: `customer: { via: idp, email: customer1@email.com, roles: [customer] }` (`email: null`, una persona sin email). La paridad la da de alta así en el proveedor del regenerado.
 

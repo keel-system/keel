@@ -32,6 +32,14 @@
             "minLength": 1
           },
           "description": "Expresiones regulares sobre la ruta de un campo (`items[].slug`, `token`) cuyo VALOR cambia entre dos ejecuciones aunque el comportamiento sea el mismo (ids, fechas, lo aleatorio). La paridad compara que estén en los dos lados, no su valor."
+        },
+        "unordered": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Expresiones regulares sobre la ruta normalizada de una colección (`products[]`, `items[].products[]`) que el legacy no ordena: la paridad la compara como conjunto, ordenando sus elementos en los dos lados por su contenido sin los campos volátiles."
         }
       }
     },
@@ -46,20 +54,35 @@
       "description": "De qué tabla del legacy sale cada entidad del diseño en el estado de partida de los escenarios: lo que traduce `keel-recover fixtures` del snapshot a specs/<servicio>/fixtures.yaml. Solo las excepciones: un campo es su columna en snake_case y una relación a-uno, `<relación>_id`. Toda columna del legacy se mapea o se descarta en `drop`; ninguna se pierde en silencio.",
       "additionalProperties": {
         "type": "object",
-        "required": ["table"],
+        "required": [
+          "table"
+        ],
         "additionalProperties": false,
         "properties": {
-          "table": { "type": "string", "minLength": 1, "description": "La tabla (o colección) del legacy." },
-          "reference": { "type": "boolean", "description": "Dato de referencia que el servicio necesita también en producción (fixtures.yaml → reference)." },
+          "table": {
+            "type": "string",
+            "minLength": 1,
+            "description": "La tabla (o colección) del legacy."
+          },
+          "reference": {
+            "type": "boolean",
+            "description": "Dato de referencia que el servicio necesita también en producción (fixtures.yaml → reference)."
+          },
           "columns": {
             "type": "object",
             "description": "Campo o relación del diseño → columna del legacy, cuando no es la de la convención.",
-            "additionalProperties": { "type": "string", "minLength": 1 }
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            }
           },
           "values": {
             "type": "object",
             "description": "Campo del diseño → { valor del legacy: valor del diseño }: un estado guardado como 0, 1, 2 que el diseño llama NEW, FINISHED, CANCELED.",
-            "additionalProperties": { "type": "object", "additionalProperties": true }
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true
+            }
           },
           "defaults": {
             "type": "object",
@@ -67,7 +90,10 @@
           },
           "drop": {
             "type": "array",
-            "items": { "type": "string", "minLength": 1 },
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
             "description": "Columnas del legacy que el diseño no lleva, a sabiendas (una contraseña cuando la identidad pasa a un proveedor)."
           }
         }
@@ -110,6 +136,14 @@
             "type": "string",
             "minLength": 5,
             "description": "El fix-* o el F-* que la explica."
+          },
+          "flows": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Solo en estos flujos: la consecuencia de un fix en una lectura posterior de ESE flujo (FL-SEL-018 edita sin categoría y la lectura que sigue ya no es la del legacy), sin tapar la misma ruta en los demás."
           }
         }
       }
@@ -248,12 +282,18 @@
                     "const": "idp"
                   },
                   "email": {
-                    "type": ["string", "null"],
+                    "type": [
+                      "string",
+                      "null"
+                    ],
                     "description": "El email de la persona en el proveedor, cuando el diseño identifica al llamante por él ({{actor}} es el nombre del actor). null: una persona sin email. Sin él, <actor>@example.com."
                   },
                   "roles": {
                     "type": "array",
-                    "items": { "type": "string", "minLength": 1 },
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
                     "description": "Los roles del realm que se le asignan al darla de alta."
                   },
                   "setup": {
@@ -365,6 +405,11 @@
               "list": {
                 "type": "string",
                 "description": "Una lista: se traduce a `{ items }`; vacío, la respuesta entera es la lista."
+              },
+              "resultAs": {
+                "type": "string",
+                "minLength": 1,
+                "description": "El campo del diseño en el que va un cuerpo de respuesta desnudo de este lado (un `true`, una lista): `addToCart` responde `true` y el diseño `{ added }`."
               }
             }
           }

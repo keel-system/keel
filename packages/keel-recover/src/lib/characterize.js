@@ -178,7 +178,9 @@ async function call(ctx, step, vars, tokens) {
   }
   const res = await ctx.http({ method: m.method, url, headers, body });
   let data = res.body;
-  if (res.status > 0 && res.status < 300 && data && typeof data === 'object') {
+  // Un cuerpo desnudo del lado (`true`, una lista) donde el diseño tiene un objeto: `resultAs` lo pone en su campo.
+  if (m.resultAs && res.status > 0 && res.status < 300) data = { [m.resultAs]: data };
+  else if (res.status > 0 && res.status < 300 && data && typeof data === 'object') {
     if (m.result) data = pick(data, m.result);
     else if (m.page) data = { items: pick(data, m.page.items), totalElements: pick(data, m.page.total) };
     else if (m.list !== undefined) data = { items: pick(data, m.list) };

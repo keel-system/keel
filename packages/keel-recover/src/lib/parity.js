@@ -27,6 +27,35 @@ export function flatten(v, prefix = '', out = {}) {
 const normPath = (p) => p.replace(/\[\d+\]/g, '[]');
 
 /**
+ * Una colección que el legacy no ordena (`semantics.unordered`, por su ruta normalizada: `products[]`) se compara como
+ * conjunto: sus elementos se ordenan en los dos lados por su contenido, sin los campos volátiles. En shop-api las líneas
+ * de un carrito o de un pedido salían en orden aleatorio (un HashSet), y la paridad las daba por distintas elemento a
+ * elemento: 14 de sus 23 diferencias.
+ */
+export function canonical(value, unordered, volatile = [], path = '') {
+  if (Array.isArray(value)) {
+    const items = value.map((item) => canonical(item, unordered, volatile, `${path}[]`));
+    if (!unordered.some((re) => re.test(`${path}[]`))) return items;
+    const key = (item) => JSON.stringify(stripVolatile(item, volatile, `${path}[]`));
+    return [...items].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+  }
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, canonical(v, unordered, volatile, path ? `${path}.${k}` : k)]));
+  return value;
+}
+
+function stripVolatile(value, volatile, path) {
+  if (Array.isArray(value)) return value.map((item) => stripVolatile(item, volatile, `${path}[]`));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([k]) => !volatile.some((re) => re.test(`${path}.${k}`)))
+        .map(([k, v]) => [k, stripVolatile(v, volatile, `${path}.${k}`)])
+    );
+  }
+  return value;
+}
+
+/**
  * Compara, paso a paso, los datos de los flujos que salieron bien en los dos lados.
  *
  * @param {object} input
@@ -42,6 +71,7 @@ export function compareRecords({ legacy, target, planned, map }) {
   const volatile = (map.semantics?.volatile ?? []).map((re) => new RegExp(re));
   const declared = (map.declaredDifferences ?? []).map((d) => ({ ...d, re: new RegExp(d.path) }));
   const absentIsNull = Boolean(map.semantics?.absentIsNull);
+  const unordered = (map.semantics?.unordered ?? []).map((re) => new RegExp(re));
   const findings = new Map();
   let compared = 0;
 
@@ -58,8 +88,8 @@ export function compareRecords({ legacy, target, planned, map }) {
       // El paso de un fix con expectativa propia del legacy ES la diferencia declarada.
       if (plannedById.get(t.id)?.mark === 'fix' && flow?.steps[i]?.legacy) return;
       compared++;
-      const lf = flatten(ls.data);
-      const tf = flatten(ts.data);
+      const lf = flatten(canonical(ls.data, unordered, volatile));
+      const tf = flatten(canonical(ts.data, unordered, volatile));
       for (const p of new Set([...Object.keys(lf), ...Object.keys(tf)])) {
         const norm = normPath(p);
         const inL = p in lf && lf[p] !== undefined;
@@ -69,8 +99,9 @@ export function compareRecords({ legacy, target, planned, map }) {
         else if (inL && !inT) kind = 'solo-legacy';
         else if (!volatile.some((re) => re.test(norm)) && JSON.stringify(lf[p]) !== JSON.stringify(tf[p])) kind = 'valor';
         if (!kind) continue;
-        const why = declared.find((d) => d.kind === kind && d.re.test(norm) && (!d.ops || d.ops.includes(ts.op)));
-        const key = `${kind}|${ts.op}|${norm}`;
+        const why = declared.find((d) => d.kind === kind && d.re.test(norm) && (!d.ops || d.ops.includes(ts.op)) && (!d.flows || d.flows.includes(t.id)));
+        // Con la declaración en la clave: la misma ruta puede estar declarada en un flujo y no en otro.
+        const key = `${kind}|${ts.op}|${norm}|${why?.reason ?? ""}`;
         const f = findings.get(key) ?? { kind, op: ts.op, path: norm, legacy: lf[p], keel: tf[p], declared: why?.reason ?? null, flows: [] };
         if (!f.flows.includes(t.id)) f.flows.push(t.id);
         findings.set(key, f);
@@ -102,7 +133,7 @@ const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
 const show = (v) => (v === undefined ? '—' : `\`${cell(JSON.stringify(v))}\``);
 
 /** PARITY-<destino>.md: determinista, sin fechas. */
-export function renderParity({ service, legacy, target, records, legacyTally, comparison, verdict }) {
+export function renderParity({ service, legacy, target, records, legacyTally, comparison, verdict, unblockedNew = [] }) {
   const out = [];
   const add = (...lines) => out.push(...lines);
   const t = (mark) => {
@@ -128,6 +159,9 @@ export function renderParity({ service, legacy, target, records, legacyTally, co
     `| \`frontier\` | ${legacyTally.frontier.ok}/${legacyTally.frontier.total} | ${t('frontier')} | informativo: el DSL no lo puede declarar |`,
     ''
   );
+  if (unblockedNew.length) {
+    add(`Sin ejecutar aquí por no traer bloque \`keel-flow\` (un \`new\` no lo necesita: lo mide el arnés del proyecto generado): ${unblockedNew.map((id) => `\`${id}\``).join(', ')}.`, '');
+  }
   const red = records.filter((r) => !r.ok);
   if (red.length) {
     add('En rojo contra el regenerado:', '');

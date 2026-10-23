@@ -81,13 +81,18 @@ export function prepareParity(legacyArg, { spec = null, targetFile }) {
   if (fixturesDoc && !fixturesSql) {
     errors.push(`el diseño declara fixtures.yaml y el proyecto no tiene infra/fixtures.sql (${fixturesFile ?? 'target.yaml sin project'}): regenera con build --refresh`);
   }
+  // Un `new` sin bloque keel-flow no se ejecuta aquí: la skill no lo exige (no existe en el legacy) y lo mide el arnés del
+  // proyecto generado. Se dice en el informe, no se cuenta en rojo (corrida de control de shop-api: 19 así).
+  const targetPlanned = plannedFlows(prep.scenariosText, marks, { marks: TARGET_MARKS });
+  const unblockedNew = targetPlanned.filter((p) => p.mark === 'new' && !p.flow && /no trae su bloque/.test(p.error ?? '')).map((p) => p.id);
   return {
     errors,
     prep,
     target,
     fixturesSql,
     legacyRecords,
-    planned: plannedFlows(prep.scenariosText, marks, { marks: TARGET_MARKS }),
+    planned: targetPlanned.filter((p) => !unblockedNew.includes(p.id)),
+    unblockedNew,
     legacyTally: tally(legacyRecords),
   };
 }
@@ -220,7 +225,7 @@ export function writeParity(pp, records) {
   fs.writeFileSync(summary, `${JSON.stringify({ target: target.name, compared: comparison.compared, verdict, rows: comparison.rows }, null, 2)}\n`);
   written.push(summary);
   const report = path.join(prep.legacyDir, `PARITY-${target.name}.md`);
-  fs.writeFileSync(report, renderParity({ service: prep.service, legacy: prep.legacy, target, records, legacyTally: pp.legacyTally, comparison, verdict }));
+  fs.writeFileSync(report, renderParity({ service: prep.service, legacy: prep.legacy, target, records, legacyTally: pp.legacyTally, comparison, verdict, unblockedNew: pp.unblockedNew ?? [] }));
   written.push(report);
   return { comparison, verdict, written };
 }

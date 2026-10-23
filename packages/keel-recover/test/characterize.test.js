@@ -172,6 +172,14 @@ test('unwrap: el lado recibe un campo del input como cuerpo desnudo (una lista o
   assert.equal(seen[1].body, 3, 'el escalar desnudo');
 });
 
+test('resultAs: una respuesta desnuda del lado (`true`) va al campo del diseño (`{ added }`)', async () => {
+  const side = { statusClasses: { ok: 200 }, operations: { addToCart: { method: 'POST', path: '/api/cart/add', resultAs: 'added' } } };
+  const planned = { id: 'FL-CRT-003', mark: 'keep', sha256: '0'.repeat(64), flow: { steps: [{ op: 'addToCart', input: { productId: 'B1', quantity: 1 }, expect: { status: 'ok', body: { added: true } } }] } };
+  const record = await runFlow({ side, sideName: 'legacy', semantics: {}, base: 'http://x', http: async () => ({ status: 200, body: true }), reset: async () => ({ ok: true }) }, planned);
+  assert.deepEqual(record.failures, []);
+  assert.deepEqual(record.steps[0].data, { added: true });
+});
+
 test('el code solo se compara en el lado que dice dónde lo lleva', () => {
   const res = { status: 409, raw: { error: { code: 'TAKEN' } }, data: null };
   assert.deepEqual(check({ status: 409, code: 'USERNAME_TAKEN' }, res, { side: { statusClasses: {} } }), []);

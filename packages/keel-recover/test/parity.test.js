@@ -93,6 +93,23 @@ test('null frente a ausente es equivalente solo si el mapa lo dice, y lo voláti
   assert.equal(compareRecords({ legacy: rec({}), target: rec({ x: 1 }), planned, map }).undeclared.length, 1);
 });
 
+// shop-api: las líneas de un carrito o un pedido salían del legacy en orden aleatorio (un HashSet), y la paridad las daba
+// por distintas elemento a elemento (14 de 23 diferencias). Y la consecuencia de un fix en una lectura posterior de un
+// flujo se declara para ESE flujo, sin tapar la misma ruta en los demás.
+test('una colección que el legacy no ordena se compara como conjunto, y una declarada puede acotarse a sus flujos', () => {
+  const planned = [{ id: 'F', mark: 'keep', flow: { steps: [{ op: 'o' }] } }, { id: 'G', mark: 'keep', flow: { steps: [{ op: 'o' }] } }];
+  const rec = (id, data) => ({ id, steps: [{ op: 'o', status: 200, data }] });
+  const lines = (...ids) => ({ products: ids.map((productId, i) => ({ id: 100 + i, productId })) });
+  const semantics = { volatile: ['(^|\\.)id$'], unordered: ['^products\\[\\]$'] };
+  const cmp = (map, l, t) => compareRecords({ legacy: [rec('F', l)], target: [rec('F', t)], planned, map }).rows.map((r) => `${r.kind}:${r.path}`);
+  assert.deepEqual(cmp({ semantics }, lines('F0001', 'B0005'), lines('B0005', 'F0001')), [], 'el mismo conjunto en otro orden');
+  assert.ok(cmp({ semantics: { volatile: semantics.volatile } }, lines('F0001', 'B0005'), lines('B0005', 'F0001')).length > 0, 'sin declararlo, el orden cuenta');
+  assert.deepEqual(cmp({ semantics }, lines('F0001', 'B0005'), lines('B0005', 'C0001')), ['valor:products[].productId'], 'un elemento distinto sigue siendo una diferencia');
+  const map = { declaredDifferences: [{ kind: 'valor', path: '^x$', flows: ['F'], reason: 'fix-x en la lectura de F' }] };
+  const both = compareRecords({ legacy: [rec('F', { x: 1 }), rec('G', { x: 1 })], target: [rec('F', { x: 2 }), rec('G', { x: 2 })], planned, map });
+  assert.deepEqual(both.undeclared.map((r) => r.flows), [['G']], 'declarada en F, no en G');
+});
+
 test('el paso de un fix con expectativa del legacy no se compara: es la diferencia declarada', async () => {
   const { comparison } = await both({ sabotage: 'subject' });
   assert.ok(comparison.rows.every((r) => !r.flows.includes('FL-ITM-002')));
@@ -140,6 +157,15 @@ test('parity exige la caracterización del legacy al día y en verde, y el lado 
   assert.deepEqual(errorsOf(), [], 'un flujo new no está en el sello');
   fs.writeFileSync(scenariosFile, SCENARIOS.replace('`a` con cantidad `2`', '`a` con cantidad dos'));
   assert.match(errorsOf().join('\n'), /cambiados desde la ejecución: FL-ITM-001/);
+  fs.writeFileSync(scenariosFile, SCENARIOS);
+
+  // Un `new` sin bloque keel-flow no se ejecuta en la paridad ni cuenta en rojo: la skill no lo exige (corrida de
+  // control de shop-api: 19 así). Se dice en el informe.
+  const NEW_BLOCK = '```keel-flow\nsteps:\n  - op: listItems\n    expect: { status: ok, body: { items.length: 0, totalElements: 0 } }\n```\n';
+  assert.ok(SCENARIOS.includes(NEW_BLOCK));
+  fs.writeFileSync(scenariosFile, SCENARIOS.replace(NEW_BLOCK, ''));
+  const unblocked = prepareParity(legacyDir, { targetFile });
+  assert.deepEqual([unblocked.errors, unblocked.unblockedNew, unblocked.planned.some((p) => p.id === 'FL-ITM-005')], [[], ['FL-ITM-005'], false]);
   fs.writeFileSync(scenariosFile, SCENARIOS);
 
   const { keel, ...legacyOnly } = CONTRACT_MAP;
