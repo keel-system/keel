@@ -40,7 +40,8 @@ facts:
     evidence: "backend/mvnw:207; ausencia de backend/.mvn/"
     observable: "./mvnw falla sin descargar nada"
     expect: "el sandbox construye con una imagen de Maven y JDK 11, no con mvnw; environment.yaml lo dice"
-    status: read
+    status: measured
+    note: "./mvnw -v: intenta descargar el wrapper, curl falla al escribir en .mvn/ y Java da ClassNotFoundException MavenWrapperMain"
   - id: SA-ENV-04
     category: environment
     fact: "hipótesis: Lombok sin versión propia (la de Boot 2.2, 1.18.10) no compila en JDK 16+; el build necesita un JDK 11."
@@ -113,14 +114,16 @@ facts:
     evidence: "frontend/src/app/pages/login/login.component.html:49-55; backend/src/main/java/me/zhulin/shopapi/api/test.http:23-24; backend/src/main/resources/import.sql:67-70"
     observable: "POST /api/login con cada una"
     expect: "las sondas de un segundo cliente REGISTRAN uno (ver SA-SEC-05) o declaran la limitación; nadie adivina la contraseña de customer2"
-    status: read
+    status: measured
+    note: "customer1, employee1 y manager1 inician sesión con 123 en las tres rondas; los pedidos de customer2 se usaron como ajenos sin su contraseña"
   - id: SA-ASSET-03
     category: asset
     fact: "test.http trae 15 peticiones de ejemplo, una de ellas mal: `GET /order/finish/…` cuando el endpoint es PATCH."
     evidence: "backend/src/main/java/me/zhulin/shopapi/api/test.http:77; api/OrderController.java:55"
     observable: "esa petición → 405"
     expect: "ronda 0 traducida desde test.http; la petición errónea no se graba como comportamiento"
-    status: read
+    status: measured
+    note: "keel-recover-lab/shop-api/recordings/round-0: las 17 peticiones traducidas; S0-011 (GET /order/finish/…) → 405 «Request method GET not supported»"
   - id: SA-ASSET-04
     category: asset
     fact: "El cliente Angular registra con `active: true` y `role: ROLE_CUSTOMER` puestos por él: es el cliente, no el servidor, quien hace que un registro normal funcione."
@@ -136,21 +139,24 @@ facts:
     evidence: "api/*.java"
     observable: "log `Mapped` o introspección del framework (1a)"
     expect: "surface.yaml con los 20 y api.endpoints del diseño con los que se conserven"
-    status: read
+    status: measured
+    note: "los 20 endpoints respondieron en las rondas 0-1 con un código distinto de 404"
   - id: SA-SURF-02
     category: surface
     fact: "ProductService.onSale/offSale, findUpAll, OrderService.findByStatus/findByBuyerPhone y UserService.findByRole no tienen endpoint: código muerto, no superficie."
     evidence: "service/impl/ProductServiceImpl.java:36-39,75-103; service/impl/OrderServiceImpl.java:43-56"
     observable: "la cobertura nunca los pisa"
     expect: "no aparecen como operaciones del diseño (o van a unobserved.yaml como inalcanzables)"
-    status: read
+    status: measured
+    note: "tras las tres rondas (84 % de líneas) siguen sin ejecutar onSale/offSale, findUpAll, findByStatus, findByBuyerPhone y ProductStatusEnum"
   - id: SA-SURF-03
     category: surface
     fact: "La regla `/profiles/**` de seguridad no corresponde a ningún controlador."
     evidence: "security/SpringSecurityConfig.java:72"
     observable: "GET /api/profiles/x → 404 (con o sin token)"
     expect: "ninguna operación nace de esa regla"
-    status: read
+    status: measured
+    note: "S1-005: GET /api/profiles/x con token → 404"
 
   # ── Modelo (introspección relacional) ──────────────────────────────────────
   - id: SA-MODEL-01
@@ -175,7 +181,8 @@ facts:
     evidence: "entity/ProductInOrder.java:25-33; service/impl/CartServiceImpl.java:93-98"
     observable: "information_schema (dos FK anulables); diff del checkout: UPDATE de cart_user_id a NULL y de order_id"
     expect: "el diseño separa línea de carrito y línea de pedido (o lo decide por escrito); la tabla compartida no se copia sin decisión"
-    status: read
+    status: measured
+    note: "S1-030: las dos líneas del carrito acaban con cart_user_id null y order_id del pedido nuevo"
   - id: SA-MODEL-04
     category: model
     fact: "product_in_order.product_id y product_info.category_type son referencias por valor SIN clave foránea: borrar un producto o una categoría no toca nada más."
@@ -183,14 +190,15 @@ facts:
     observable: "information_schema (sin FK); diff de DELETE /seller/product/{id}/delete"
     expect: "referencias entre agregados sin integridad referencial, `measured` por el diff"
     status: measured
-    note: "information_schema: product_in_order solo tiene FK a cart(user_id) y order_main(order_id); product_id y category_type sin FK. El efecto de borrar un producto, pendiente del paso 1"
+    note: "information_schema: sin FK en product_id ni category_type. S1-045: borrar F0001 no toca ninguna línea, y cancelar el pedido que la contiene se salta su stock sin error"
   - id: SA-MODEL-05
     category: model
     fact: "La línea copia nombre, descripción, icono, categoría, precio y stock del producto en el momento de AÑADIRLA al carrito (instantánea), no al pagar."
     evidence: "entity/ProductInOrder.java:78-87; api/CartController.java:60-62"
     observable: "cambiar el precio tras añadir al carrito y antes del checkout: el pedido usa el viejo"
     expect: "regla de instantánea explícita en el diseño, con su momento; decisión keep/fix"
-    status: read
+    status: measured
+    note: "S1-031: añadir B0001 a 30, subir el precio a 99 y pagar: el pedido sale de 30"
   - id: SA-MODEL-06
     category: model
     fact: "Unicidades: users.email (@NaturalId) y product_category.category_type (@NaturalId) llevan restricción única; product_info.product_id es la PK y es un código de negocio que pone el cliente (B0001), no generado."
@@ -221,7 +229,8 @@ facts:
     evidence: "entity/OrderMain.java:69-73"
     observable: "PUT /profile tras un checkout y GET /order/{id}"
     expect: "regla de instantánea del comprador en el diseño"
-    status: read
+    status: measured
+    note: "S1-021: tras cambiar nombre y dirección, GET /order/2147483642 sigue con customer1 y 3200 West Road"
   - id: SA-MODEL-10
     category: model
     fact: "Los ids del seed están junto a 2^31 (2147483640-2147483649) y la secuencia empieza en 1: las filas nuevas tienen ids pequeños y, al ser una sola secuencia, no correlativos dentro de una tabla."
@@ -247,70 +256,89 @@ facts:
     evidence: "service/impl/CartServiceImpl.java:85-100; api/CartController.java:84-89"
     observable: "diff: INSERT order_main, UPDATE product_in_order, UPDATE product_info"
     expect: "operación checkout con sus tres efectos y la respuesta vacía (decisión: keep o devolver el pedido)"
-    status: read
+    status: measured
+    note: "S1-030: checkout 200 con cuerpo vacío; pedido NEW de 170 (5×30 + 2×10), stock de B0001 y C0001 descontado, carrito vacío después"
   - id: SA-RULE-02
     category: rule
     fact: "Ciclo de vida del pedido: solo desde NEW se pasa a FINISHED (finish) o a CANCELED (cancel); cualquier otra transición lanza ORDER_STATUS_ERROR."
     evidence: "service/impl/OrderServiceImpl.java:67-101; backend/src/test/java/me/zhulin/shopapi/service/impl/OrderServiceImplTest.java:63-130"
     observable: "finish y cancel sobre pedidos del seed en los tres estados"
     expect: "lifecycle de Order con NEW → FINISHED | CANCELED, estados terminales, `measured`"
-    status: read
+    status: measured
+    note: "S1-043: finish de NEW 200 y luego cancel 500; finish de FINISHED y cancel de CANCELED 500 «Status is not correct». S1-042: el cliente cancela su propio pedido NEW (200)"
   - id: SA-RULE-03
     category: rule
     fact: "Cancelar devuelve al stock la cantidad de cada línea cuyo producto todavía existe; si el producto se borró, la línea se salta en silencio."
     evidence: "service/impl/OrderServiceImpl.java:92-98"
     observable: "diff de cancel: UPDATE product_info.product_stock; y cancel tras borrar un producto"
     expect: "compensación del stock en el diseño, con el caso del producto borrado decidido"
-    status: read
+    status: measured
+    note: "S1-044: cancelar 2147483649 sube en 1 el stock de C0001, C0002, F0001 y F0002. S1-045: con F0001 borrado, las otras tres"
   - id: SA-RULE-04
     category: rule
     fact: "Añadir al carrito un producto que ya está suma las cantidades en la misma línea."
     evidence: "service/impl/CartServiceImpl.java:55-59"
     observable: "POST /cart/add dos veces con el mismo productId"
     expect: "regla de fusión en el diseño"
-    status: read
+    status: measured
+    note: "S1-030: añadir B0001 ×2 y ×3 deja una línea con count 5"
   - id: SA-RULE-05
     category: rule
     fact: "Los listados incluyen los productos en DOWN (findAll, no findUpAll; el filtro está comentado) y GET /product/{id} también los devuelve: el estado DOWN no oculta nada."
     evidence: "service/impl/ProductServiceImpl.java:41-44; api/ProductController.java:37-48"
     observable: "GET /api/product incluye B0003 (DOWN en el seed)"
     expect: "el diseño NO filtra por estado en las lecturas salvo decisión `fix`"
-    status: read
+    status: measured
+    note: "S1-001: la primera página es B0001, B0002 y B0003 (en DOWN); S0-015: GET /product/B0003 → 200 con el producto"
   - id: SA-RULE-06
     category: rule
     fact: "Ni añadir al carrito ni el checkout miran product_status: se puede comprar un producto en DOWN."
     evidence: "api/CartController.java:58-67; service/impl/CartServiceImpl.java:85-100"
     observable: "añadir B0003 y pagar"
     expect: "decisión keep/fix explícita sobre comprar lo retirado"
-    status: read
+    status: measured
+    note: "S1-035: B0003 (DOWN) se añade y se paga (200, pedido creado, stock descontado)"
   - id: SA-RULE-07
     category: rule
     fact: "GET /order: el cliente ve solo los suyos (por buyer_email), empleado y gerente ven todos; orden por estado ascendente y fecha de creación descendente; paginación desde 1, 10 por defecto."
     evidence: "api/OrderController.java:30-42; service/impl/OrderServiceImpl.java:38-51"
     observable: "GET /api/order con cada rol"
     expect: "query con el filtro por propietario según rol y el orden compuesto"
-    status: read
+    status: measured
+    note: "S1-040: customer1 ve sus 3 pedidos (estados 1,2,2); employee1 ve los 8 (0,0,0,1,2,2,2,2)"
   - id: SA-RULE-08
     category: rule
     fact: "Paginación desde 1 con tamaños por defecto distintos: 3 en /product y /category/{type}, 10 en /order."
     evidence: "api/ProductController.java:30-35; api/CategoryController.java:34-45; api/OrderController.java:31-34"
     observable: "GET sin parámetros"
     expect: "valores por defecto de la paginación en el diseño"
-    status: read
+    status: measured
+    note: "size 3 en /product y /category/0; size 10 en /order"
   - id: SA-RULE-09
     category: rule
     fact: "PUT /profile cambia nombre, teléfono, dirección y CONTRASEÑA, que se vuelve a cifrar siempre: hay que enviar la contraseña en cada actualización. El email (la identidad) no cambia."
     evidence: "service/impl/UserServiceImpl.java:61-70; api/UserController.java:65-74"
     observable: "PUT /profile sin password → 400 (SA-ERR-05)"
     expect: "operación de perfil con la contraseña obligatoria (decisión keep/fix)"
-    status: read
+    status: measured
+    note: "S1-021: PUT /profile sin password → 400 vacío; con password → 200"
   - id: SA-RULE-10
     category: rule
     fact: "El estado de un producto solo cambia por PUT /seller/product/{id}/edit con cualquier valor ≤ 1 (incluidos negativos): no hay guarda de transición UP↔DOWN alcanzable por HTTP."
     evidence: "service/impl/ProductServiceImpl.java:105-116; api/ProductController.java:65-77"
     observable: "edit con productStatus 1, 0 y -1"
     expect: "el lifecycle del producto NO se recupera de onSale/offSale (código muerto, SA-SURF-02); se decide si es lifecycle o un campo editable"
-    status: read
+    status: measured
+    note: "S1-055: edit con productStatus -1 → 200 y se guarda; con 2 → 500 «Status is incorrect!»"
+  - id: SA-RULE-11
+    category: rule
+    fact: "Las líneas de un carrito o de un pedido salen en orden ALEATORIO entre ejecuciones: products es un HashSet y ProductInOrder.hashCode() incluye super.hashCode(), la identidad del objeto."
+    evidence: "entity/ProductInOrder.java:119-123; entity/Cart.java:31-34; entity/OrderMain.java:35-38"
+    observable: "repetir la misma sonda: el orden de products cambia (S1-030, S1-044, S1-045)"
+    expect: "el diseño no afirma orden en las líneas; la normalización y los escenarios las comparan como conjunto"
+    status: measured
+    note: "medido al repetir 10 sondas de la ronda 1: 7 iguales, 3 distintas solo en el orden de products"
+    found_by: operator
 
   # ── Errores ─────────────────────────────────────────────────────────────────
   - id: SA-ERR-01
@@ -319,56 +347,64 @@ facts:
     evidence: "exception/MyException.java:9-23; enums/ResultEnum.java:12-27"
     observable: "GET /api/order/1 (inexistente), finish sobre un FINISHED"
     expect: "los escenarios keep afirman 500 o el diseño lo marca `fix` con su código; nunca un 404/409 inventado sin decisión"
-    status: read
+    status: measured
+    note: "500 con {timestamp,status,error,message,path} y el mensaje del enum: «OrderMain is not exit!», «Status is not correct», «Category does not exit!», «Not enough products in stock!», «Product does not exit!»"
   - id: SA-ERR-02
     category: error
     fact: "GET /product/{id} de un producto inexistente responde 200 con cuerpo vacío."
     evidence: "api/ProductController.java:37-48"
     observable: "GET /api/product/NOPE"
     expect: "keep o fix (404) decidido"
-    status: read
+    status: measured
+    note: "S1-002: GET /product/NOPE → 200 con cuerpo vacío"
   - id: SA-ERR-03
     category: error
     fact: "Registro con email repetido o con campos que violan Bean Validation al persistir → 400 sin cuerpo: el controlador traga la excepción."
     evidence: "api/UserController.java:56-63; service/impl/UserServiceImpl.java:44-58"
     observable: "POST /api/register con customer1@email.com"
     expect: "error de unicidad del email con su respuesta (400 vacía como keep, o fix)"
-    status: read
+    status: measured
+    note: "S1-012 (email repetido) y S1-013 (sin nombre) → 400 vacío"
   - id: SA-ERR-04
     category: error
     fact: "Sin token en una ruta protegida → 401 sin cuerpo (JwtEntryPoint solo pone el estado). Un token inválido en una ruta pública se ignora: la petición sigue como anónima."
     evidence: "security/JWT/JwtEntryPoint.java:24-32; security/JWT/JwtFilter.java:29-50"
     observable: "GET /api/cart sin token; GET /api/product con token basura"
     expect: "401 vacío en los escenarios de seguridad"
-    status: read
+    status: measured
+    note: "S0-002/S1-016: sin token → 401 vacío; token basura en ruta pública → 200; en ruta protegida → 401 vacío"
   - id: SA-ERR-05
     category: error
     fact: "PUT /profile o GET /profile/{email} sobre otro usuario → 400 vacío (no 403); PUT /profile sin password → 400 (encode(null) lanza)."
     evidence: "api/UserController.java:65-84; service/impl/UserServiceImpl.java:65"
     observable: "las tres peticiones"
     expect: "keep o fix decidido"
-    status: read
+    status: measured
+    note: "S1-020: perfil ajeno → 400 vacío; S1-021: PUT sin password o con otro email → 400 vacío"
   - id: SA-ERR-06
     category: error
     fact: "PUT /seller/product/{id}/edit con el id de la ruta distinto del cuerpo → 400 con el texto plano `Id Not Matched`; el alta con un productId existente → 400 con el BindingResult serializado."
     evidence: "api/ProductController.java:50-77"
     observable: "las dos peticiones"
     expect: "errores de validación del alta y de la edición en el diseño"
-    status: read
+    status: refuted
+    note: "S1-053: id distinto → 400 «Id Not Matched» (cierto). Pero S1-052: alta con productId existente → 500, no 400: Jackson no sabe serializar el BindingResult (InvalidDefinitionException sobre DefaultMessageCodesResolver)"
   - id: SA-ERR-07
     category: error
     fact: "hipótesis: page=0 → PageRequest.of(-1, …) lanza IllegalArgumentException → 500."
     evidence: "api/OrderController.java:34; api/ProductController.java:33"
     observable: "GET /api/product?page=0"
     expect: "keep (500) o fix (400) decidido"
-    status: read
+    status: measured
+    note: "S1-003: GET /product?page=0 → 500"
   - id: SA-ERR-08
     category: error
     fact: "POST /cart/add de un producto inexistente → 200 con cuerpo `false` (el NPE se traga); POST /cart traga cualquier fallo y responde 200 con el carrito (el badRequest de la línea 46 no se devuelve)."
     evidence: "api/CartController.java:40-49,58-67"
     observable: "POST /api/cart/add con productId NOPE"
     expect: "respuesta booleana de /cart/add en el contrato (keep) o fix"
-    status: read
+    status: measured
+    note: "S1-036: /cart/add con NOPE → 200 false; S1-038: POST /cart con una línea de count 0 → 200 y no añade nada"
 
   # ── Seguridad ───────────────────────────────────────────────────────────────
   - id: SA-SEC-01
@@ -377,49 +413,56 @@ facts:
     evidence: "security/SpringSecurityConfig.java:63-76"
     observable: "matriz de cada endpoint protegido × cada rol"
     expect: "security.roles con los tres y una regla por operación, `measured` con la matriz"
-    status: read
+    status: measured
+    note: "S0-005..010: manager en /cart → 403; S1-050: alta por cliente y empleado → 403, edición por cliente → 403 y por empleado → 200, borrado por empleado → 403 y por gerente → 200"
   - id: SA-SEC-02
     category: security
     fact: "hipótesis: un rol que no basta → 403 por el AccessDeniedHandler por defecto (cuerpo JSON de error de Boot), distinto del 401 vacío de no autenticado. Por eso el control de cliente en finish es código muerto: el matcher responde antes."
     evidence: "security/SpringSecurityConfig.java:70,79; api/OrderController.java:57-59"
     observable: "PATCH /api/order/finish/{id} con token de cliente"
     expect: "403 en el escenario, no el 401 que dice el controlador"
-    status: read
+    status: measured
+    note: "S1-042: PATCH /order/finish con token de cliente → 403 con el JSON de error de Boot; sin token → 401 vacío"
   - id: SA-SEC-03
     category: security
     fact: "Propiedad: un cliente solo ve o cancela sus pedidos (buyer_email = su email); empleado y gerente ven y cancelan cualquiera."
     evidence: "api/OrderController.java:45-53,63-73"
     observable: "GET y cancel del pedido de otro cliente con cada rol"
     expect: "security.ownership sobre Order.buyerEmail exento para EMPLOYEE y MANAGER (DSL 2.23)"
-    status: read
+    status: measured
+    note: "S1-041: el cliente sobre el pedido de customer2 → 401 al leer y al cancelar; S1-044: el empleado cancela ese mismo pedido → 200"
   - id: SA-SEC-04
     category: security
     fact: "Autenticación propia: POST /login con email y contraseña (BCrypt, consulta JDBC sobre users) devuelve un JWT HS512 con el email como subject, válido 86400 s, firmado con un secreto fijo en el YAML; el rol se lee de la base en cada petición, no del token."
     evidence: "api/UserController.java:38-53; security/JWT/JwtProvider.java:27-36; security/JWT/JwtFilter.java:34-43; backend/src/main/resources/application.yml:36-37,42-43"
     observable: "login y cambiar el rol en la base con un token vivo"
     expect: "frontera: la emisión de tokens no se regenera (el regenerado usa un IdP); unobserved.yaml/decisions lo dice"
-    status: read
+    status: measured
+    note: "S1-018: con customer1 cambiado a ROLE_MANAGER en la base, su token vivo da 403 en /cart y 200 al borrar un producto: el rol sale de la base en cada petición"
   - id: SA-SEC-05
     category: security
     fact: "hipótesis: el servidor no pone `active`: un registro sin `\"active\": true` crea un usuario deshabilitado que nunca puede iniciar sesión (la consulta de login lee active como enabled → 401)."
     evidence: "entity/User.java:40-41; backend/src/main/resources/application.yml:36; api/UserController.java:56-63"
     observable: "POST /register sin active y POST /login con ese usuario"
     expect: "regla medida; las sondas de registro envían active como el cliente (SA-ASSET-04)"
-    status: read
+    status: measured
+    note: "S1-010: registro sin active → 200, y su login → 401"
   - id: SA-SEC-06
     category: security
     fact: "Un usuario desactivado conserva el acceso con un token ya emitido: JwtFilter no mira active."
     evidence: "security/JWT/JwtFilter.java:32-43"
     observable: "UPDATE users SET active=false y GET /api/cart con el token anterior"
     expect: "defecto o frontera declarado"
-    status: read
+    status: measured
+    note: "S1-017: con active=false, el token ya emitido sigue dando 200 en /cart; el login nuevo → 401"
   - id: SA-SEC-07
     category: security
     fact: "CORS abierto a cualquier origen en todas las rutas."
     evidence: "ShopApiApplication.java:20-28; api/*.java (@CrossOrigin)"
     observable: "OPTIONS con Origin cualquiera"
     expect: "decisión explícita (keep o restringir)"
-    status: read
+    status: measured
+    note: "S1-006: preflight y GET con Origin http://evil.test → Access-Control-Allow-Origin: *"
 
   # ── Efectos ─────────────────────────────────────────────────────────────────
   - id: SA-EFFECT-01
@@ -445,6 +488,15 @@ facts:
     expect: "el sandbox no reinicia la app entre sondas sin restaurar después; el snapshot se toma tras el arranque; FIDELITY.md lo menciona"
     status: measured
     note: "registrar un usuario y reiniciar la app: users vuelve de 6 a 4 y hibernate_sequence a last_value=1, is_called=f"
+  - id: SA-EFFECT-04
+    category: effect
+    fact: "Un registro que falla (email repetido o validación) consume igualmente un valor de hibernate_sequence: el id se pide antes del INSERT y la secuencia no vuelve atrás con el rollback."
+    evidence: "entity/User.java:24-26; service/impl/UserServiceImpl.java:44-58"
+    observable: "S1-012 y S1-013: 400 y _sequences cambia (is_called false → true)"
+    expect: "los ids dependen de los intentos fallidos: la paridad y la normalización no comparan ids de secuencia como valores"
+    status: measured
+    note: "S1-012, S1-013"
+    found_by: operator
 
   # ── Concurrencia ────────────────────────────────────────────────────────────
   - id: SA-CONC-01
@@ -453,21 +505,33 @@ facts:
     evidence: "service/impl/ProductServiceImpl.java:62-73; entity/ProductInfo.java (sin @Version)"
     observable: "dos clientes con el mismo producto, checkout a la vez, N repeticiones: stock final > esperado en algún desenlace"
     expect: "decisión fix con el mecanismo (bloqueo o decremento condicionado) y escenario de carrera"
-    status: read
+    status: measured
+    note: "con curl -Z en el mismo proceso, 10/10: los dos pagos 200, dos pedidos y el stock de F0002 en 21 (no 20). Con un podman exec por petición (S2-001) salía 20 en 10/10: ese paralelismo no lo era"
   - id: SA-CONC-02
     category: concurrency
     fact: "finish y cancel simultáneos sobre el mismo pedido NEW pueden tener éxito los dos: el pedido acaba FINISHED (o CANCELED) y el stock devuelto igualmente."
     evidence: "service/impl/OrderServiceImpl.java:67-101; entity/OrderMain.java (sin @Version)"
     observable: "las dos peticiones a la vez, N repeticiones; contar desenlaces"
     expect: "decisión fix con concurrencia optimista sobre Order"
-    status: read
+    status: measured
+    note: "con curl -Z, 10/10 las dos 200; 9 veces acaba CANCELED y 1 FINISHED, y en las 10 el stock de C0001 vuelve (110)"
   - id: SA-CONC-03
     category: concurrency
     fact: "hipótesis: dos registros simultáneos con el mismo email: la restricción única deja uno; el otro → 400."
     evidence: "entity/User.java:28-30; api/UserController.java:56-63"
     observable: "registro concurrente"
     expect: "la unicidad del email la sostiene la base, `measured`"
-    status: read
+    status: measured
+    note: "S2-003: 10/10 {200,400}: la UNIQUE deja uno"
+  - id: SA-CONC-04
+    category: concurrency
+    fact: "El mismo cliente con checkout dos veces a la vez: los dos 200 y DOS pedidos con el importe del carrito, pero una sola línea entre los dos; se cobra dos veces un artículo."
+    evidence: "service/impl/CartServiceImpl.java:85-100; entity/OrderMain.java:74-76"
+    observable: "dos POST /cart/checkout en paralelo real (curl -Z) con una línea de B0001"
+    expect: "decisión fix: checkout idempotente o con el carrito bloqueado; escenario de doble envío"
+    status: measured
+    note: "8/8 con curl -Z: dos pedidos de 30.00, una línea; stock de B0001 95 (7 veces) o 94 (1 vez)"
+    found_by: operator
 
   # ── Defectos ────────────────────────────────────────────────────────────────
   - id: SA-DEF-01
@@ -476,7 +540,8 @@ facts:
     evidence: "api/UserController.java:56-63; entity/User.java:42-43"
     observable: "registrar con ROLE_MANAGER, iniciar sesión y crear un producto"
     expect: "fix: el registro fija el rol de cliente"
-    status: read
+    status: measured
+    note: "S1-011: registro con ROLE_MANAGER → 200, login y alta de producto con su token → 200"
   - id: SA-DEF-02
     category: defect
     fact: "El hash BCrypt de la contraseña sale en las respuestas de /register, PUT /profile y GET /profile/{email} (User no ignora password)."
@@ -484,63 +549,71 @@ facts:
     observable: "cualquiera de las tres respuestas"
     expect: "fix: la contraseña nunca está en la respuesta"
     status: measured
-    note: "visto en la respuesta de POST /register (password con el hash bcrypt $2a$10$…); /profile, pendiente del paso 1"
+    note: "en POST /register (S1-010) y GET /profile/{email} (S0-013): password con el hash bcrypt"
   - id: SA-DEF-03
     category: defect
     fact: "No se pueden comprar las últimas unidades: decreaseStock rechaza `stock - cantidad <= 0`, no `< 0`."
     evidence: "service/impl/ProductServiceImpl.java:68-69"
     observable: "checkout de F0002 con cantidad 22 (stock 22 en el seed) → 500"
     expect: "fix con escenario en el límite"
-    status: read
+    status: measured
+    note: "S1-033: comprar las 22 de F0002 → 500 «Not enough products in stock!»; S1-034: 21 → 200 y stock 1"
   - id: SA-DEF-04
     category: defect
     fact: "El pedido de otro cliente responde 401 (no 403): indistinguible de no estar autenticado."
     evidence: "api/OrderController.java:48-50,67-69"
     observable: "GET /api/order/{id} ajeno con token de cliente"
     expect: "fix (403, o 404 para no revelar existencia) decidido"
-    status: read
+    status: measured
+    note: "S1-041: 401 vacío al leer y al cancelar el pedido ajeno"
   - id: SA-DEF-05
     category: defect
     fact: "Checkout con el carrito vacío crea un pedido NEW de importe 0 sin líneas."
     evidence: "service/impl/CartServiceImpl.java:87-90; entity/OrderMain.java:74-76"
     observable: "POST /api/cart/checkout con el carrito vacío; diff: INSERT order_main"
     expect: "fix: rechazo del checkout vacío"
-    status: read
+    status: measured
+    note: "S1-032: checkout con el carrito vacío → 200 y un pedido NEW de importe 0 sin líneas"
   - id: SA-DEF-06
     category: defect
     fact: "Editar un producto inexistente lo CREA (save hace merge con id asignado): el empleado, que no puede dar de alta, crea productos por la puerta de edición."
     evidence: "api/ProductController.java:65-77; service/impl/ProductServiceImpl.java:105-116; security/SpringSecurityConfig.java:73,75"
     observable: "PUT /api/seller/product/NEW1/edit con token de empleado; diff: INSERT product_info"
     expect: "fix: la edición exige que exista"
-    status: read
+    status: measured
+    note: "S1-054: PUT /seller/product/NEW1/edit con token de empleado → 200 y product_info gana NEW1"
   - id: SA-DEF-07
     category: defect
     fact: "hipótesis: editar un producto sin createTime en el cuerpo lo deja a NULL (merge del objeto entero)."
     evidence: "entity/ProductInfo.java:56-59; service/impl/ProductServiceImpl.java:115"
     observable: "diff de un edit: create_time pasa a NULL"
     expect: "fix: la fecha de alta es inmutable"
-    status: read
+    status: measured
+    note: "S0-016 (la petición del propio test.http): la edición deja create_time a null"
   - id: SA-DEF-08
     category: defect
     fact: "hipótesis: dar de alta un producto sin productStatus → NPE al comparar `> 1` → 500 (el @ColumnDefault solo vale en el DDL)."
     evidence: "service/impl/ProductServiceImpl.java:110; entity/ProductInfo.java:48-49"
     observable: "POST /api/seller/product/new sin productStatus"
     expect: "fix: estado inicial UP por defecto"
-    status: read
+    status: measured
+    note: "S1-051: alta sin productStatus → 500 «No message available» (NPE)"
   - id: SA-DEF-09
     category: defect
     fact: "hipótesis: la cantidad no se valida a la entrada (ItemForm tiene @Min(1) pero no hay @Valid); la validación al persistir de ProductInOrder (@Min(1)) la rechaza tarde: /cart/add con 0 responde true sin añadir nada, PUT /cart/{item} con 0 → 500."
     evidence: "form/ItemForm.java:13-14; api/CartController.java:58-74; entity/ProductInOrder.java:74-75"
     observable: "las dos peticiones con cantidad 0 y -1"
     expect: "fix: validación de la cantidad a la entrada"
-    status: read
+    status: measured
+    note: "S1-037: /cart/add con 0 y con -1 → 200 true y el carrito no cambia; PUT /cart/{item} con 0 → 500 (RollbackException al confirmar)"
   - id: SA-DEF-10
     category: defect
     fact: "@Size(min = 3) de la contraseña se comprueba contra el hash ya cifrado: nunca falla, y una contraseña vacía se acepta."
     evidence: "entity/User.java:31-33; service/impl/UserServiceImpl.java:46"
     observable: "POST /register con password \"\" y login con ella"
     expect: "fix: la longitud se valida antes de cifrar"
-    status: read
+    status: measured
+    note: "S1-014: registro con password vacía → 200 y login con ella → 200"
 
   # ── Frontera ────────────────────────────────────────────────────────────────
   - id: SA-FRONT-01
