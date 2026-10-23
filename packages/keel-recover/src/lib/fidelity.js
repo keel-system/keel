@@ -102,9 +102,11 @@ export function renderFidelity({ service, legacy, records, newFlows = 0, provena
   );
   if (coverage?.cumulative) {
     const c = coverage.cumulative;
-    const unit = { lines: 'líneas', statements: 'sentencias', functions: 'funciones' }[c.unit] ?? c.unit;
+    const unit = { lines: 'líneas', statements: 'sentencias', functions: 'funciones' }[c.unit ?? coverage.unit] ?? c.unit ?? coverage.unit;
+    // Hasta la corrida shop-api la serie guardaba la cobertura de la ronda en `round` y perdía la etiqueta.
+    const upTo = typeof coverage.round === 'string' ? `hasta \`${coverage.round}\`` : 'hasta la última ronda';
     const branches = c.branches?.total ? `, ${c.branches.covered}/${c.branches.total} ramas (${pct(c.branches.covered, c.branches.total)})` : '';
-    add(`- **Cobertura del legacy bajo las sondas** (acumulada hasta \`${coverage.round}\`): ${c.covered}/${c.total} ${unit} (${pct(c.covered, c.total)})${branches}.`);
+    add(`- **Cobertura del legacy bajo las sondas** (acumulada ${upTo}): ${c.covered}/${c.total} ${unit} (${pct(c.covered, c.total)})${branches}.`);
   } else add('- **Cobertura del legacy bajo las sondas**: sin serie (`recordings/coverage.json`); ninguna ronda la volcó.');
   const routes = routesWithoutOperation(surface, map);
   if (routes === null) add('- **Rutas del legacy sin operación en el diseño**: sin `surface.yaml` con rutas; no se puede saber.');

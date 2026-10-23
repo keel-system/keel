@@ -22,7 +22,8 @@ export function validateDoc(doc) {
 export function validateAs(kind, doc) {
   if (!validators.has(kind)) {
     if (!fs.existsSync(schemaPath(kind))) return [`kind desconocido: ${kind}`];
-    const ajv = new Ajv2020({ allErrors: true, strict: false });
+    // `date` (AAAA-MM-DD) a mano: sin ajv-formats, Ajv avisa «unknown format» en cada llamada y no lo comprueba.
+    const ajv = new Ajv2020({ allErrors: true, strict: false, formats: { date: /^\d{4}-\d{2}-\d{2}$/ } });
     validators.set(kind, ajv.compile(JSON.parse(fs.readFileSync(schemaPath(kind), 'utf8'))));
   }
   const validate = validators.get(kind);

@@ -89,6 +89,24 @@ test('rutas de Spring 4: las líneas Mapped del log de arranque, Spring Data RES
   assert.equal(springHandler('public void a.b.C.d()'), 'C.d');
 });
 
+test('rutas del log de Boot 2+ a TRACE, con el context path de la línea de arranque (medido en shop-api, Boot 2.2)', () => {
+  const log = fs.readFileSync(path.join(here, '..', 'fixtures', 'logs', 'spring-boot-2.2-trace.txt'), 'utf8');
+  const { routes } = springLogRoutes(log);
+  const keys = routes.map((r) => `${r.method} ${r.path} ${r.handler}`);
+  assert.equal(routes.filter((r) => r.method !== '*').length, 20, 'las 20 rutas de los cinco controladores');
+  for (const k of [
+    'DELETE /api/cart/{itemId} CartController.deleteItem',
+    'GET /api/product/{productId} ProductController.showOne',
+    'PATCH /api/order/finish/{id} OrderController.finish',
+    'POST /api/login UserController.login',
+  ]) assert.ok(keys.includes(k), k);
+  assert.ok(routes.some((r) => r.method === '*' && r.path === '/api/error'), 'la de error, sin método');
+  assert.ok(routes.every((r) => r.path.startsWith('/api/')), 'el context path delante de todas');
+  // Sin context path declarado, las rutas quedan tal cual; las dos formas del predicado de Spring 5.
+  const bare = springLogRoutes('\tx.A:\n\t{GET, POST [/a, /b], produces [application/json]}: f(String)\n');
+  assert.deepEqual(bare.routes.map((r) => `${r.method} ${r.path}`), ['GET /a', 'POST /a', 'GET /b', 'POST /b']);
+});
+
 test('rutas de actuator: /mappings de Boot 1.x (claves predicado) y /actuator/mappings de Boot 2+', () => {
   const v1 = actuatorRoutes({
     '/webjars/**': { bean: 'resourceHandlerMapping' },

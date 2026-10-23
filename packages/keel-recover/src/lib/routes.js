@@ -44,14 +44,43 @@ export function springHandler(signature) {
 
 const expand = (paths, methods, handler) => paths.flatMap((path) => (methods.length ? methods : ['*']).map((method) => ({ method, path, handler })));
 
-/** Las líneas `Mapped "{[...]}" onto <método>` del log de arranque (Spring MVC 4, Boot 1.x). */
+/**
+ * La tabla de rutas del log de arranque. Dos formas:
+ * - Spring MVC 4 / Boot 1.x, a INFO: líneas `Mapped "{[...]}" onto <método>`;
+ * - Spring 5 / Boot 2+, solo con `RequestMappingHandlerMapping` a TRACE: un bloque por controlador
+ *   (`\tm.z.s.a.CartController:` y debajo `\t{DELETE /cart/{itemId}}: deleteItem(String,Principal)`).
+ * Las rutas del log no llevan el context path (`server.servlet.context-path`): sale de la línea de arranque
+ * del contenedor web (`… started on port(s): 8080 (http) with context path '/api'`) y se antepone.
+ */
 export function springLogRoutes(log) {
+  const text = String(log);
   const routes = [];
-  for (const m of String(log).matchAll(/Mapped "(\{.*?\})" onto (.+)$/gm)) {
+  for (const m of text.matchAll(/Mapped "(\{.*?\})" onto (.+)$/gm)) {
     const { paths, methods } = parseSpringPredicate(m[1]);
     routes.push(...expand(paths, methods, springHandler(m[2])));
   }
-  return { routes: sortRoutes(routes) };
+  let controller = null;
+  for (const line of text.split(/\r?\n/)) {
+    const owner = /^\s+([\w$.]+):\s*$/.exec(line);
+    if (owner) {
+      controller = owner[1].split('.').at(-1);
+      continue;
+    }
+    const m = /^\s+\{(.*)\}: ([\w$]+)\(/.exec(line);
+    if (!m || !controller) continue;
+    const { paths, methods } = parsePredicate5(m[1]);
+    routes.push(...expand(paths, methods, `${controller}.${m[2]}`));
+  }
+  const context = [...text.matchAll(/started on port\(s\).*with context path '([^']*)'/g)].at(-1)?.[1] ?? '';
+  const prefix = context.replace(/\/$/, '');
+  return { routes: sortRoutes(prefix ? routes.map((r) => ({ ...r, path: `${prefix}${r.path}` })) : routes) };
+}
+
+// Spring 5 (log a TRACE): `GET /a`, `GET, POST /a || /b`, ` /error, produces [text/html]`, `GET [/a, /b]`.
+function parsePredicate5(text) {
+  const m = /^((?:[A-Z]+)(?:\s*,\s*[A-Z]+)*)?\s*\[?([^[\]]*?)\]?(?:,\s*(?:produces|consumes|params|headers)\b.*)?$/.exec(String(text).trim());
+  if (!m) return { paths: [], methods: [] };
+  return { paths: m[2].split(/\s*\|\|\s*|\s*,\s*/).filter(Boolean), methods: (m[1] ?? '').split(/\s*,\s*/).filter(Boolean) };
 }
 
 /** El JSON de `/mappings` (Boot 1.x: claves predicado) o de `/actuator/mappings` (Boot 2+). */

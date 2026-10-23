@@ -292,6 +292,10 @@
                 "type": "string",
                 "description": "La envoltura del cuerpo de la petición (`{ user: … }`)."
               },
+              "unwrap": {
+                "type": "string",
+                "description": "El campo del input del diseño que este lado recibe como cuerpo sin envoltura (una lista o un escalar desnudo)."
+              },
               "extraInput": {
                 "type": "object",
                 "description": "Campos que este lado exige y el diseño no tiene; {{campo}} admite los del input."

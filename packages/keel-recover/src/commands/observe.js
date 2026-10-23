@@ -51,7 +51,9 @@ export function introspect(target, options) {
   const s = r.surface;
   console.log(`${pc.green('✓')} ${path.relative(process.cwd(), r.file)}`);
   if (s.http) console.log(`  http     ${s.http.routes.length} ruta(s) (${s.http.source})`);
-  if (s.data) console.log(`  datos    ${s.data.collections.length} colección(es) en ${s.data.database}`);
+  if (s.data?.tables) console.log(`  datos    ${s.data.tables.length} tabla(s) en ${s.data.database}`);
+  else if (s.data) console.log(`  datos    ${s.data.collections.length} colección(es) en ${s.data.database}`);
+  if (!s.http && !sandbox.spec.introspection?.routes) console.warn(pc.yellow('⚠ sin `introspection.routes` en sandbox.yaml: sin tabla de rutas, FIDELITY.md no podrá decir qué rutas del legacy se quedan sin operación'));
   if (s.broker) console.log(`  broker   ${s.broker.exchanges.length} exchange(s), ${s.broker.queues.length} cola(s), ${s.broker.bindings.length} enlace(s)`);
   for (const e of r.errors) console.error(pc.red(`✗ ${e}`));
   process.exit(r.ok ? 0 : 1);
@@ -86,7 +88,10 @@ export async function probe(roundFile, options) {
   const { recordings, ...round } = report;
   fs.writeFileSync(path.join(outDir, 'round.json'), `${JSON.stringify(round, null, 2)}\n`);
   if (report.coverage && !options.only) {
-    const next = [...history.filter((h) => h.round !== tag), { round: tag, ...report.coverage }];
+    // `report.coverage.round` es la cobertura de la ronda sola: va como `thisRound`, porque `round` es la etiqueta
+    // con la que se reemplaza la entrada al repetir la ronda y la que cita FIDELITY.md.
+    const { round: thisRound, ...coverage } = report.coverage;
+    const next = [...history.filter((h) => h.round !== tag), { round: tag, ...coverage, thisRound }];
     fs.writeFileSync(historyFile, `${JSON.stringify(next, null, 2)}\n`);
   }
   if (report.recordings.length) {

@@ -166,6 +166,7 @@ async function call(ctx, step, vars, tokens) {
   if (Object.keys(query).length) url += `?${new URLSearchParams(query).toString()}`;
   let input = fill(step.input, vars);
   if (input !== undefined && m.extraInput && input && typeof input === 'object') input = { ...fill(m.extraInput, input), ...input };
+  if (m.unwrap && input && typeof input === 'object') input = input[m.unwrap];
   const body = input === undefined ? (['POST', 'PUT', 'PATCH'].includes(m.method) ? (m.wrap ? { [m.wrap]: {} } : {}) : undefined) : m.wrap ? { [m.wrap]: input } : input;
   const headers = {};
   if (step.as) {

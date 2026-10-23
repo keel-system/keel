@@ -29,8 +29,8 @@ sigue con `legacy/<servicio>`. Si `init` sale con 2, el legacy no encaja: muestr
 | `sandbox` | Lanza el subagente `keel-recover-sandbox` con la ruta `legacy/<servicio>` | `status: OK`. Con `REJECTED` o un `blocker` de tipo `question`, **para** y explícalo: es del humano |
 | `observe` | `keel-recover introspect legacy/<servicio>/sandbox` y lanza `keel-recover-explorer` con `round-0` (o `round-1`) | la ronda en verde |
 | `explore` | Lanza `keel-recover-explorer` con la ronda siguiente, **una a la vez**. Presupuesto: 5 rondas, o hasta que una ronda suba la cobertura acumulada menos de 2 puntos | → **punto de decisión 1** |
-| `design` | Sin diseño: lanza `keel-recover-designer` con `task: design`. Con preguntas sin contestar → **punto de decisión 2**. Con respuestas sin aplicar: `keel-recover-designer` con `task: apply`. Presupuesto: 3 pasadas | `status` deja de decir `design` |
-| `characterize` | `keel-recover characterize legacy/<servicio>`. Un `keep` en rojo: `keel-recover-designer` con `task: repair`, el flujo y su fallo. Un `fix` en rojo: el defecto ya no está en el legacy, pregúntalo | caracterización en verde |
+| `design` | Sin diseño: lanza `keel-recover-designer` con `task: design`. Con preguntas sin contestar → **punto de decisión 2**. Con respuestas sin aplicar: `keel-recover-designer` con `task: apply`. Si su reporte trae `readExpectations` o `blockers` de tipo `probe`, lanza antes de caracterizar `keel-recover-explorer` con una ronda corta de exactamente esas sondas: convierte las lecturas del código en grabaciones. Presupuesto: 3 pasadas de `design`/`repair` (cada tanda de respuestas lleva su `apply`) | `status` deja de decir `design` |
+| `characterize` | `keel-recover characterize legacy/<servicio>`. Un `keep` en rojo: `keel-recover-designer` con `task: repair`, el flujo y su fallo. Un `fix` en rojo: si falla una expectativa del lado `legacy` que el diseñador estimó leyendo el código (`readExpectations`), es `repair`; si no, el defecto ya no está en el legacy: pregúntalo. Nunca corriges tú los escenarios ni `contract-map.yaml` | caracterización en verde |
 | `close` | **Punto de decisión 3** (cierre y stack) | — |
 | `build` | `keel-<tech> build specs/<servicio>` con el stack elegido | el proyecto existe |
 | `generate` | **Para**: imprime exactamente qué lanzar (abajo) | — |
@@ -60,6 +60,12 @@ Son los únicos momentos en que preguntas. En cada uno, primero el resumen en un
 2. **Las decisiones del diseño** (`design` con preguntas abiertas).
    - **Origen:** todas las de `legacy/<servicio>/questions.yaml` sin `answer`, en tandas: primero los `fix`, luego
      `asked`, luego `omitted`.
+   - **Primero las que impone el método** (el contrato del cable, la paginación, la identidad en un proveedor OIDC, el
+     409 de una unicidad, el 400 de validación: su evidencia cita la doc del método y no un defecto del legacy), juntas
+     en UNA pregunta de confirmación: «el método fija estas N; ¿alguna se rechaza?».
+   - **Después las globales**, las que reescriben a otras (el orden de las guardas, los estados con nombre, el estilo
+     del error), diciendo qué más cierran; las locales al final. Una decisión global contestada tarde reabre hallazgos
+     en todas las operaciones que toca.
    - **Cada pregunta**, tal como la escribió el diseñador: su evidencia y su recomendación.
    - **Por cada respuesta**, escribe `answer` (el `label` o el texto libre) y `date` en la misma entrada, y relanza
      `keel-recover-designer` con `task: apply`.
@@ -67,13 +73,19 @@ Son los únicos momentos en que preguntas. En cada uno, primero el resumen en un
 3. **Cerrar y generar** (`close`, o `build` si `--ready` ya está en verde).
    - **Muestra:** lo que falta de `keel validate --ready specs/<servicio>`.
    - **Pregunta** dos cosas:
-     - **Cierre:** «cerrar el diseño ahora» (recomendado) o «generar sin cerrar» (`--accept-unready`, queda estampado
-       en el proyecto).
+     - **Cierre:** «cerrar el diseño y generar» (recomendado), «cerrar solo el diseño» (termina en `DESIGN.md` y
+       `keel index`, sin stack: se retoma con este mismo comando) o «generar sin cerrar» (`--accept-unready`, queda
+       estampado en el proyecto).
      - **Generador y stack:** `keel-spring`, `keel-nest` o `keel-dotnet`, y las opciones que `environment.yaml` no
        fija ya: el motor y el broker del legacy se conservan salvo que el humano diga otra cosa.
    - **Para cerrar**, lanza en paralelo los agentes de keel-core `keel-design-review`, `keel-gap-sweep` y
      `keel-flow-review` (`{{keel:agents}}/…`) con la ruta `specs/<servicio>/`. Sus hallazgos se deciden con el humano
-     en una tanda más. Después, el flujo de `/keel-handoff` para `DESIGN.md`.
+     en una tanda más, ordenada como la del punto 2. Después, el flujo de `/keel-handoff` para `DESIGN.md`.
+   - **El orden de una vuelta de cierre:** `apply` → `characterize` → (en verde) las revisiones. Un hallazgo del careo
+     cerrado con `resolution: design` caduca el careo entero y el presupuesto es de 3 pasadas por versión: cierra antes
+     los que se resuelven en el escenario, agrupa los de diseño en una sola `apply`, y relanza `keel-flow-review` solo
+     cuando el YAML ya no vaya a cambiar. Cada vuelta de decisiones abre superficie nueva (medido en shop-api: 39, 19 y
+     1 hallazgos del barrido en tres vueltas).
    - **Para generar**, escribe `services/<servicio>-<tech>/keel-stack.json` con el stack elegido y ejecuta
      `keel-<tech> build specs/<servicio>` (con `--accept-unready` si se eligió así).
 

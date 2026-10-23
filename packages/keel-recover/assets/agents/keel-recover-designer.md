@@ -36,19 +36,31 @@ Cada pregunta lleva:
 Mientras una pregunta no tenga respuesta, el elemento queda como lo hace el legacy (un `keep`), y la fila de procedencia
 dice que está pendiente de esa pregunta.
 
+**Lo que decides tú sin que lo diga ninguna respuesta también es una pregunta.** Al aplicar una respuesta aparecen
+decisiones que no contesta (un 400 o un 422 para el valor fuera del enum nuevo, qué claim identifica al dueño, una cota
+máxima): cada una va a `questions.yaml` con su recomendación, no a una nota del reporte. Una «extrapolación» que solo
+se cuenta en el reporte no la confirma nadie (medido en la corrida shop-api: once quedaron sin validar).
+
 ## Las tres tareas
 
 1. **`design`**: las capas, `provenance.yaml`, `decisions.yaml → structural` (con `origin`), los escenarios marcados
-   con su bloque `keel-flow`, y `legacy/<servicio>/contract-map.yaml`. Termina con `keel validate --ready specs/<servicio>`
-   y deja el criterio `provenance` sin nada que decir, salvo lo que espera respuesta.
+   con su bloque `keel-flow`, y `legacy/<servicio>/contract-map.yaml`. Un cuerpo desnudo del legacy (una lista o un
+   escalar donde el diseño tiene un objeto) lleva `unwrap: <campo>` en su operación desde el principio. Termina con
+   `keel validate --ready specs/<servicio>` y deja el criterio `provenance` sin nada que decir, salvo lo que espera respuesta.
 2. **`apply`**: por cada pregunta con `answer` y sin `applied`:
    - aplica la respuesta donde toque (un `fix` a `provenance.yaml → fixes` y su flujo; un `asked` a su fila y su capa;
      un `omitted` a `decisions.yaml` con `origin: omitted`);
    - marca la pregunta `applied: true`;
    - vuelve a pasar `keel validate --ready`.
 3. **`repair`**: un `keep` en rojo es el diseño diciendo algo que el legacy no hace.
-   - Corrige el **diseño**, nunca la expectativa del escenario.
+   - Corrige el **diseño**, nunca la expectativa del escenario. La excepción es una expectativa de `readExpectations`
+     (o un `fix` cuyo lado `legacy` estimaste): ahí lo refutado es tu lectura del código, y se corrige con lo que
+     grabó `characterize`, diciéndolo en el reporte.
    - Si hace falta una grabación nueva, pídela en `blockers` con la sonda que la daría.
+
+En `design` y en `apply`, una expectativa del lado `legacy` que sale de LEER el código y no de una grabación (el flujo
+afirma algo que ninguna sonda grabó) es una hipótesis: nombra su flujo en `readExpectations` del reporte y pide en
+`blockers` (`kind: probe`) la sonda que la grabaría. El orquestador la graba antes de caracterizar.
 
 ## Lo que no haces
 
@@ -65,5 +77,6 @@ task: design | apply | repair
 provenance: { measured: N, read: N, asked: N, inferred: 0 }
 questions: { written: N, applied: N, open: N }
 ready: { provenance: OK | KO, characterized: OK | KO | SIN-EJECUTAR }
+readExpectations: [FL-…]      # flujos con expectativas del legacy leídas del código, sin grabación
 blockers: [...]               # p. ej. { kind: probe, detail: "falta grabar…", probe: "…" }
 ```

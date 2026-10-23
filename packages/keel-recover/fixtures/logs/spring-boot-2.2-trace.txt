@@ -1,0 +1,36 @@
+2026-10-23 20:00:03.230 TRACE 1 --- [           main] s.w.s.m.m.a.RequestMappingHandlerMapping : 
+	m.z.s.a.CartController:
+	{DELETE /cart/{itemId}}: deleteItem(String,Principal)
+	{POST /cart}: mergeCart(Collection,Principal)
+	{GET /cart}: getCart(Principal)
+	{POST /cart/add}: addToCart(ItemForm,Principal)
+	{PUT /cart/{itemId}}: modifyItem(String,Integer,Principal)
+	{POST /cart/checkout}: checkout(Principal)
+2026-10-23 20:00:03.237 TRACE 1 --- [           main] s.w.s.m.m.a.RequestMappingHandlerMapping : 
+	m.z.s.a.ProductController:
+	{DELETE /seller/product/{id}/delete}: delete(String)
+	{POST /seller/product/new}: create(ProductInfo,BindingResult)
+	{GET /product}: findAll(Integer,Integer)
+	{PUT /seller/product/{id}/edit}: edit(String,ProductInfo,BindingResult)
+	{GET /product/{productId}}: showOne(String)
+2026-10-23 20:00:03.241 TRACE 1 --- [           main] s.w.s.m.m.a.RequestMappingHandlerMapping : 
+	m.z.s.a.CategoryController:
+	{GET /category/{type}}: showOne(Integer,Integer,Integer)
+2026-10-23 20:00:03.243 TRACE 1 --- [           main] s.w.s.m.m.a.RequestMappingHandlerMapping : 
+	m.z.s.a.OrderController:
+	{PATCH /order/finish/{id}}: finish(Long,Authentication)
+	{PATCH /order/cancel/{id}}: cancel(Long,Authentication)
+	{GET /order/{id}}: show(Long,Authentication)
+	{GET /order}: orderList(Integer,Integer,Authentication)
+2026-10-23 20:00:03.245 TRACE 1 --- [           main] s.w.s.m.m.a.RequestMappingHandlerMapping : 
+	m.z.s.a.UserController:
+	{PUT /profile}: update(User,Principal)
+	{POST /register}: save(User)
+	{POST /login}: login(LoginForm)
+	{GET /profile/{email}}: getProfile(String,Principal)
+2026-10-23 20:00:03.249 TRACE 1 --- [           main] s.w.s.m.m.a.RequestMappingHandlerMapping : 
+	o.s.b.a.w.s.e.BasicErrorController:
+	{ /error}: error(HttpServletRequest)
+	{ /error, produces [text/html]}: errorHtml(HttpServletRequest,HttpServletResponse)
+2026-10-23 20:00:03.250 DEBUG 1 --- [           main] s.w.s.m.m.a.RequestMappingHandlerMapping : 22 mappings in 'requestMappingHandlerMapping'
+2026-10-23 20:00:03.550  INFO 1 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 8080 (http) with context path '/api'

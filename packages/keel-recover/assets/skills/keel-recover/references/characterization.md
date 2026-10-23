@@ -73,7 +73,11 @@ legacy:
     registerProfile: { method: POST, path: /api/users, wrap: user, extraInput: { email: "{{username}}@x.io", password: pw }, result: user }
     getProfile: { method: GET, path: "/api/profiles/{username}", result: profile }
     listArticles: { method: GET, path: /api/articles, page: { items: articles, total: articlesCount } }
+    mergeCart: { method: POST, path: /api/cart, unwrap: items }   # el legacy recibe la lista desnuda, no { items: […] }
 ```
+
+`wrap` mete el input del diseño en un objeto (`{ user: … }`); `unwrap` hace lo contrario: manda solo un campo del input,
+porque el legacy recibe una lista o un escalar sin envoltura. Los parámetros de la ruta van en `params` del paso.
 
 Las credenciales salen del repo y nunca de producción: la propia API (`via: op`), un JWT firmado con el secreto de desarrollo (`via: forge`) o ninguna (`via: none`).
 

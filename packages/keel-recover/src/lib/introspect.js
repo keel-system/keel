@@ -38,7 +38,7 @@ function readRoutes(rt, sandbox) {
   if (src.kind === 'spring-log') {
     const r = rt.logs(app);
     const out = springLogRoutes(`${r.stdout}\n${r.stderr}`);
-    if (out.routes.length === 0) return { ok: false, error: 'el log de arranque no trae líneas Mapped "{[...]}": en Boot 2+ salen a TRACE, usa actuator' };
+    if (out.routes.length === 0) return { ok: false, error: 'el log de arranque no trae la tabla de rutas: en Boot 1.x son las líneas Mapped "{[...]}"; en Boot 2+ solo salen con RequestMappingHandlerMapping a TRACE (SPRING_APPLICATION_JSON en el servicio de la app, ver sandbox-files.md)' };
     return { ok: true, value: { source: 'spring-log', ...out } };
   }
   const r = toolRequest(rt, tool, { method: 'GET', url: `${sandbox.spec.app.base.replace(/\/$/, '')}${src.path}` });

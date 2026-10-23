@@ -124,7 +124,7 @@
     "introspection": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Paso 1a: de dónde sale la tabla de rutas. express: el archivo que escribe la precarga express-routes.cjs; spring-log: las líneas `Mapped \"{[...]}\"` del log de arranque (Spring 4 / Boot 1.x, que sí las lista enteras); actuator: el JSON de /mappings (Boot 1.x) o /actuator/mappings (Boot 2+).",
+      "description": "Paso 1a: de dónde sale la tabla de rutas. express: el archivo que escribe la precarga express-routes.cjs; spring-log: la tabla del log de arranque, con el context path de la línea del contenedor web (Spring 4 / Boot 1.x: las líneas `Mapped \"{[...]}\"`, que listan también Spring Data REST; Boot 2+: el bloque por controlador que RequestMappingHandlerMapping solo escribe a TRACE, y que se enciende sin tocar el repo con SPRING_APPLICATION_JSON); actuator: el JSON de /mappings (Boot 1.x) o /actuator/mappings (Boot 2+), solo si el legacy ya trae actuator.",
       "properties": {
         "routes": {
           "type": "object",

@@ -177,16 +177,20 @@ export function validate(inputPath, options = {}) {
         `${pc.yellow('⚠')} Revisión semántica incompleta: ${reviews.covered.length}/${total} ids con veredicto en ${REVIEW_FILE}. ` +
           `Ejecuta /keel-validate para recorrer los ${reviews.missing.length} que faltan`
       );
-      for (const item of reviews.missing.slice(0, 5)) {
+      // Todos, sin recortar: la lista es la entrada del agente de revisión, que no tiene otra
+      // fuente de los ids que aplican a este diseño (medido en la corrida shop-api).
+      for (const item of reviews.missing) {
         console.warn(pc.dim(`    ${item.id} — ${item.title}`));
       }
-      if (reviews.missing.length > 5) console.warn(pc.dim(`    …y ${reviews.missing.length - 5} más`));
     }
     if (reviews.stale) {
       console.warn(
         `${pc.yellow('⚠')} ${REVIEW_FILE}: la revisión es de la v${reviews.reviewedAt} y el diseño va por ` +
           `v${manifest?.service?.version} — lo que se juzgó puede haber dejado de ser cierto; rehazla`
       );
+      for (const item of reviews.covered) {
+        console.warn(pc.dim(`    ${item.id} — ${item.title}`));
+      }
     }
     for (const entry of reviews.orphans) {
       console.warn(

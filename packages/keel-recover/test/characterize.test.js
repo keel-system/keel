@@ -149,6 +149,29 @@ test('las credenciales de los actores: por la propia API, forjadas con el secret
   assert.equal(seen[3].headers.Authorization, undefined, 'el actor sin credencial no manda cabecera');
 });
 
+test('unwrap: el lado recibe un campo del input como cuerpo desnudo (una lista o un escalar), y la ruta sigue saliendo de params', async () => {
+  const seen = [];
+  const http = async (req) => (seen.push(req), { status: 200, body: {} });
+  const side = {
+    statusClasses: { ok: 200 },
+    operations: {
+      mergeCart: { method: 'POST', path: '/api/cart', unwrap: 'items' },
+      modifyCartItem: { method: 'PUT', path: '/api/cart/{productId}', unwrap: 'quantity' },
+    },
+  };
+  const planned = {
+    id: 'FL-CRT-001',
+    mark: 'keep',
+    sha256: '0'.repeat(64),
+    flow: { steps: [{ op: 'mergeCart', input: { items: [{ productId: 'B1', count: 2 }] }, expect: { status: 'ok' } }, { op: 'modifyCartItem', params: { productId: 'B1' }, input: { quantity: 3 }, expect: { status: 'ok' } }] },
+  };
+  const record = await runFlow({ side, sideName: 'legacy', semantics: {}, base: 'http://x', http, reset: async () => ({ ok: true }) }, planned);
+  assert.deepEqual(record.failures, []);
+  assert.deepEqual(seen[0].body, [{ productId: 'B1', count: 2 }], 'la lista, sin el objeto que la envuelve');
+  assert.equal(seen[1].url, 'http://x/api/cart/B1');
+  assert.equal(seen[1].body, 3, 'el escalar desnudo');
+});
+
 test('el code solo se compara en el lado que dice dónde lo lleva', () => {
   const res = { status: 409, raw: { error: { code: 'TAKEN' } }, data: null };
   assert.deepEqual(check({ status: 409, code: 'USERNAME_TAKEN' }, res, { side: { statusClasses: {} } }), []);
@@ -162,7 +185,7 @@ test('el sello lo lee el criterio characterized de keel-core: en verde, y un flu
   const root = tmpDir('keel-recover-characterize-');
   const { legacyDir, specDir } = writeStockDesign(root);
   fs.mkdirSync(path.join(legacyDir, 'recordings'), { recursive: true });
-  fs.writeFileSync(path.join(legacyDir, 'recordings', 'coverage.json'), JSON.stringify([{ round: 'round-1', cumulative: { unit: 'lines', covered: 20, total: 25, files: 1 } }]));
+  fs.writeFileSync(path.join(legacyDir, 'recordings', 'coverage.json'), JSON.stringify([{ round: 'round-1', unit: 'lines', cumulative: { covered: 20, total: 25, files: 1 }, thisRound: { covered: 20, total: 25, files: 1 } }]));
   fs.writeFileSync(path.join(legacyDir, 'surface.yaml'), YAML.stringify({ http: { routes: [{ method: 'GET', path: '/items' }, { method: 'POST', path: '/items/' }, { method: 'GET', path: '/health' }] } }));
   fs.writeFileSync(path.join(legacyDir, 'unobserved.yaml'), YAML.stringify({ races: [{ id: 'U-1', what: 'dos altas del mismo sku', why: 'sin unicidad: no observada' }] }));
 
@@ -188,7 +211,8 @@ test('el sello lo lee el criterio characterized de keel-core: en verde, y un flu
   assert.match(fidelity, /\| `fix` \| \*\*1 \/ 1\*\* \|/);
   assert.match(fidelity, /\| `frontier` \| \*\*1 \/ 1\*\* \|/);
   assert.match(fidelity, /\| `new` \| no aplica \| 1 flujo/);
-  assert.match(fidelity, /20\/25 líneas \(80,0 %\)/);
+  // La forma real de la serie (la escribe observe.js): la unidad fuera de `cumulative` y la etiqueta en `round`.
+  assert.match(fidelity, /acumulada hasta `round-1`\): 20\/25 líneas \(80,0 %\)/);
   assert.match(fidelity, /Rutas del legacy sin operación en el diseño\*\* \(1\)[^\n]*\n {2}- `GET \/health`/);
   assert.match(fidelity, /races: `U-1` — dos altas del mismo sku — sin unicidad/);
   assert.match(fidelity, /`fix-validation-400`: el legacy responde 422 a un alta sin sku → .*\(FL-ITM-002\)/);
