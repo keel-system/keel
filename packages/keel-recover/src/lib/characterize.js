@@ -195,7 +195,7 @@ async function credentials(ctx, flow, vars) {
     else if (how.via === 'forge') tokens[actor] = forgeToken(how.secret, fill(how.claims, { actor, random: ctx.random() }));
     else if (how.via === 'idp') {
       if (!ctx.idpToken) throw new Error(`la clase de actor «${kind}» pide un token del proveedor OIDC y el destino no declara \`idp\``);
-      tokens[actor] = await ctx.idpToken(actor);
+      tokens[actor] = await ctx.idpToken(actor, how);
     } else {
       const r = await call(ctx, { op: how.op, input: fill(how.input, { actor }) }, vars, tokens);
       const token = pick(r.data, how.token);

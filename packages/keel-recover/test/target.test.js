@@ -99,6 +99,23 @@ test('parity da de alta a cada persona una vez, abre la sesión de administraci�
   assert.equal(calls.filter((c) => c.includes('set-password')).length, 2, 'la contraseña se fija siempre: es la del target');
 });
 
+// shop-api identifica al llamante por el claim email: la persona tiene que salir con el email del seed, sin él cuando el
+// escenario pide un token sin email, y con su rol del realm.
+test('la persona lleva el email y los roles que dice su actor idp, y sin email cuando es null', () => {
+  const seed = { container: 'kc', realm: 'shop', admin: { user: 'admin', password: 'admin' } };
+  const { rt, calls } = fakeKeycloak();
+  const session = { open: false };
+  assert.deepEqual(seedPersona(rt, seed, 'c1', 'password', session, { email: 'customer1@email.com', roles: ['customer'] }), { ok: true });
+  assert.deepEqual(seedPersona(rt, seed, 'anon', 'password', session, { email: null }), { ok: true });
+  assert.deepEqual(seedPersona(rt, seed, 'plain', 'password', session), { ok: true });
+  const created = (name) => calls.find((c) => c.startsWith('kc create users') && c.includes(`username=${name} `));
+  assert.match(created('c1'), /email=customer1@email\.com/);
+  assert.doesNotMatch(created('anon'), /email=/, 'sin email: el claim no sale');
+  assert.match(created('plain'), /email=plain@example\.com/, 'sin decirlo, el de siempre');
+  assert.ok(calls.includes('kc add-roles -r shop --uusername c1 --rolename customer'));
+  assert.equal(calls.filter((c) => c.includes('add-roles')).length, 1);
+});
+
 test('una administración que falla para con su motivo, sin pedir tokens a ciegas', () => {
   const seed = { container: 'kc', realm: 'conduit', admin: { user: 'admin', password: 'mala' } };
   const rt = { exec: () => ({ status: 1, stdout: '', stderr: 'Invalid user credentials' }) };

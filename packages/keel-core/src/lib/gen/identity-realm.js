@@ -146,14 +146,16 @@ export function userTestClient(model) {
  * (conduit, recuperado de RealWorld: «solo el autor edita su artículo») necesita dos personas
  * distintas más que nadie, y hasta el DSL 2.23 se quedaba sin cliente de usuario y sin `tokenAs` —
  * el agente de pruebas del inc. 1 de keel-recover escribió su propio emisor de personas a mano.
+ *
+ * Y no solo con el `sub`: con la identidad en OTRO claim (`email`, en shop-api, recuperado de un legacy que identificaba
+ * por email) los escenarios nombran a sus actores por ese valor («customer1@email.com», «un token sin email», «Bob@x.io
+ * frente a bob@x.io»), y los usuarios del realm, con su `<rol>@example.com`, no los pueden dar. La persona lleva el claim
+ * como cualquier otro (`kp_<claim>` con su mapper), y un claim quitado da el token sin él. La corrida de control de
+ * shop-api dejó así 12 escenarios sin poder pedir su token.
  */
 export function usesPersonaTokens(model) {
   const identity = model.security?.callerIdentity;
-  return (
-    model.stack.auth === 'keycloak' &&
-    identity?.source === 'claim' &&
-    (identity.claim ?? 'sub') === 'sub'
-  );
+  return model.stack.auth === 'keycloak' && identity?.source === 'claim';
 }
 
 /**

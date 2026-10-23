@@ -93,19 +93,36 @@ const KCADM = '/opt/keycloak/bin/kcadm.sh';
  * Da de alta a una persona en el Keycloak del deploy (idempotente): el deploy de keel no trae usuarios fijos —el diseño
  * identifica al llamante por su `sub`—, y hasta el inc. 9 las sembraba a mano un script del laboratorio
  * (`seed-keel-idp.sh`). `session` lleva si ya se abrió la sesión de administración en ese contenedor.
+ *
+ * `persona` es lo que dice el actor `idp` de contract-map.yaml: su `email` cuando el diseño identifica al llamante por él
+ * (`null`, una persona sin email; sin decirlo, `<usuario>@example.com`) y sus `roles` del realm. Hasta la corrida de
+ * control de shop-api la persona salía siempre con `<usuario>@example.com` y sin roles: con la identidad en el claim
+ * email, el regenerado no la habría reconocido como la del seed.
  */
-export function seedPersona(rt, seed, username, password, session = { open: false }) {
+export function seedPersona(rt, seed, username, password, session = { open: false }, persona = {}) {
   const kc = (args) => rt.exec(seed.container, [KCADM, ...args]);
   if (!session.open) {
     const login = kc(['config', 'credentials', '--server', 'http://localhost:8080', '--realm', 'master', '--user', seed.admin.user, '--password', seed.admin.password]);
     if (login.status !== 0) return { ok: false, error: `no se pudo administrar el realm en ${seed.container}: ${(login.stderr || login.stdout).trim()}` };
     session.open = true;
   }
-  const found = kc(['get', 'users', '-r', seed.realm, '-q', `username=${username}`, '-q', 'exact=true', '--fields', 'username']);
+  const email = persona.email === undefined ? `${username}@example.com` : persona.email;
+  // Una persona sin email no lleva la propiedad: el claim no sale en su token.
+  const emailArgs = email === null ? [] : ['-s', `email=${email}`];
+  const found = kc(['get', 'users', '-r', seed.realm, '-q', `username=${username}`, '-q', 'exact=true', '--fields', 'id,username']);
   if (found.status !== 0) return { ok: false, error: `no se pudo buscar a ${username}: ${found.stderr.trim()}` };
   if (!found.stdout.includes(`"${username}"`)) {
-    const created = kc(['create', 'users', '-r', seed.realm, '-s', `username=${username}`, '-s', 'enabled=true', '-s', 'emailVerified=true', '-s', `email=${username}@example.com`, '-s', `firstName=${username}`, '-s', 'lastName=Test']);
+    const created = kc(['create', 'users', '-r', seed.realm, '-s', `username=${username}`, '-s', 'enabled=true', '-s', 'emailVerified=true', ...emailArgs, '-s', `firstName=${username}`, '-s', 'lastName=Test']);
     if (created.status !== 0) return { ok: false, error: `no se pudo dar de alta a ${username}: ${(created.stderr || created.stdout).trim()}` };
+  } else if (persona.email !== undefined) {
+    // Ya existía (de otra ejecución): el email es el de ESTE actor, no el que tuviera.
+    const id = /"id"\s*:\s*"([^"]+)"/.exec(found.stdout)?.[1];
+    const updated = id ? kc(['update', `users/${id}`, '-r', seed.realm, '-s', `email=${email ?? ''}`]) : { status: 1, stderr: 'sin id en la respuesta' };
+    if (updated.status !== 0) return { ok: false, error: `no se pudo poner el email de ${username}: ${(updated.stderr || updated.stdout).trim()}` };
+  }
+  for (const role of persona.roles ?? []) {
+    const added = kc(['add-roles', '-r', seed.realm, '--uusername', username, '--rolename', role]);
+    if (added.status !== 0) return { ok: false, error: `no se pudo dar el rol ${role} a ${username}: ${(added.stderr || added.stdout).trim()}` };
   }
   const reset = kc(['set-password', '-r', seed.realm, '--username', username, '--new-password', password]);
   if (reset.status !== 0) return { ok: false, error: `no se pudo poner la contraseña de ${username}: ${reset.stderr.trim()}` };
@@ -136,10 +153,14 @@ export function targetContext(target, map, rt) {
       return r.remaining === '0' ? { ok: true } : { ok: false, error: `la base del regenerado no quedó vacía (${r.remaining} ${dba.rowNoun})` };
     },
     idpToken: idp
-      ? async (actor) => {
+      ? async (actor, how = {}) => {
           const username = idp.users?.[actor] ?? actor;
           if (idp.seed && !seeded.has(username)) {
-            const r = seedPersona(rt, idp.seed, username, idp.password, session);
+            const persona = {
+              ...(how.email !== undefined ? { email: how.email === null ? null : String(how.email).replaceAll('{{actor}}', actor) } : {}),
+              ...(how.roles ? { roles: how.roles } : {}),
+            };
+            const r = seedPersona(rt, idp.seed, username, idp.password, session, persona);
             if (!r.ok) throw new Error(r.error);
             seeded.add(username);
           }

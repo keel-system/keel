@@ -64,6 +64,18 @@ test('sin roles y con la identidad en el sub: cliente de usuario y personas, sin
   assert.doesNotMatch(sinPersonas['infra/init-keycloak.sh'], /USER_CLIENT/);
 });
 
+// shop-api (recuperado de un legacy que identificaba por email): la identidad es el claim `email` y los escenarios
+// nombran a sus actores por ese valor. Con los usuarios del realm (`<rol>@example.com`) no había forma de pedir el token
+// de `customer1@email.com`, ni uno sin email: la corrida de control dejó así 12 escenarios sin token.
+test('con la identidad en otro claim (email) también hay personas: el escenario pide el valor que nombra', () => {
+  const files = byPath(identityProvisioningFiles(modelFor('keycloak', { callerIdentity: { field: 'callerEmail', source: 'claim', claim: 'email', resolvedBy: null } }), PROBE));
+  assert.match(files['infra/test-credentials.env'], /tokenAs\(sub, claims\) y tokenWithScope\(rol, valores\) de PROBE-HARNESS/);
+  assert.match(files['infra/test-credentials.env'], /^AUTH_ADMIN_USER=/m);
+  // Sin identidad por claim (un servicio que solo atiende a clientes máquina) sigue sin personas.
+  const machine = byPath(identityProvisioningFiles(modelFor('keycloak', { callerIdentity: { field: 'app', source: 'serviceClient', resolvedBy: null }, scoping: undefined }), PROBE));
+  assert.doesNotMatch(machine['infra/test-credentials.env'], /tokenAs/);
+});
+
 test('con Cognito: credenciales y emulador, sin script de kcadm', () => {
   const files = byPath(identityProvisioningFiles(modelFor('cognito'), PROBE));
   assert.deepEqual(Object.keys(files).sort(), ['infra/cognito/mock-oauth2-config.json', 'infra/test-credentials.env']);

@@ -215,6 +215,15 @@
                   "via": {
                     "const": "idp"
                   },
+                  "email": {
+                    "type": ["string", "null"],
+                    "description": "El email de la persona en el proveedor, cuando el diseño identifica al llamante por él ({{actor}} es el nombre del actor). null: una persona sin email. Sin él, <actor>@example.com."
+                  },
+                  "roles": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "description": "Los roles del realm que se le asignan al darla de alta."
+                  },
                   "setup": {
                     "type": "object",
                     "required": [
