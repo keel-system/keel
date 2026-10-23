@@ -62,28 +62,41 @@ facts:
     evidence: "backend/src/main/resources/application.yml:5-7,40,42-43; application-docker.yml:7; backend/Dockerfile:4"
     observable: "grep de propiedades (0b)"
     expect: "environment.yaml con la base (postgresql, alias db), el perfil docker o SPRING_DATASOURCE_URL, y el contexto /api"
-    status: read
+    status: measured
+    note: "con SPRING_PROFILES_ACTIVE=docker la app arranca contra db:5432/postgres y escucha en 8080 con contexto /api (log de Tomcat)"
   - id: SA-ENV-07
     category: environment
     fact: "El compose del repo usa postgres:9.4.5 y el Dockerfile openjdk:11-oracle (imagen retirada), que copia un jar construido fuera."
     evidence: "docker-compose.yml:4; backend/Dockerfile:1-3"
     observable: "pull de las dos imágenes"
     expect: "environment.yaml justifica la versión de PostgreSQL elegida (la del compose u otra con motivo) y sustituye la imagen de Java"
-    status: read
+    status: measured
+    note: "postgres:9.4.5 todavía se descarga y arranca; openjdk:11-oracle sustituida por eclipse-temurin:11-jre en el sandbox"
   - id: SA-ENV-08
     category: environment
     fact: "hipótesis: el driver de Boot 2.2 (42.2.x) y PostgreSQL9Dialect funcionan contra un PostgreSQL moderno (16/17), incluida la autenticación SCRAM."
     evidence: "backend/pom.xml:34-38; backend/src/main/resources/application.yml:21"
     observable: "arranque y una escritura contra postgres:17 y contra postgres:9.4"
     expect: "si funciona con los dos, environment.yaml elige uno con motivo; si no, la versión queda fijada por la medida"
-    status: read
+    status: measured
+    note: "arranque, lectura y registro en verde contra postgres:9.4.5 y contra postgres:17.11 (password_encryption scram-sha-256). El sandbox se queda con 9.4.5, la que declara el compose del repo"
   - id: SA-ENV-09
     category: environment
     fact: "No hay actuator ni ningún endpoint de salud: el juez necesita una lectura de negocio como sonda (GET /api/product)."
     evidence: "backend/pom.xml:21-56 (sin spring-boot-starter-actuator)"
     observable: "GET /api/actuator/health → 404"
     expect: "sandbox.yaml usa una sonda de lectura de negocio y otra de escritura"
-    status: read
+    status: measured
+    note: "GET /api/actuator/health → 404 con el cuerpo de error de Boot; el juez usó GET /api/product (200) y POST /api/register como sondas"
+  - id: SA-ENV-10
+    category: environment
+    fact: "El rastro de escritura por pg_stat_user_tables depende del motor: con 9.4 el contador aparece entre 1 y 6 s después (el pool de Hikari deja 10 sesiones ociosas y el colector de estadísticas va con retraso); con 17 aparece al instante. Un snapshot por CREATE DATABASE … TEMPLATE es imposible con la app conectada (\"source database is being accessed by other users\"); pg_dump -Fc + pg_restore --clean sí funciona con ella en marcha (1-2 s cada uno)."
+    evidence: "sandbox medido (keel-recover-lab/shop-api/LOG.md, filas 4-7)"
+    observable: "registro y lectura inmediata del contador; create database … template postgres con la app arriba"
+    expect: "el juez espera al contador o usa una huella del volcado; el snapshot es pg_dump/pg_restore, no una plantilla"
+    status: measured
+    note: "medido el 2026-10-23 con postgres:9.4.5 y postgres:17.11"
+    found_by: operator
 
   # ── Activos del repo ────────────────────────────────────────────────────────
   - id: SA-ASSET-01
@@ -92,7 +105,8 @@ facts:
     evidence: "backend/src/main/resources/import.sql:6-13,21-24,30-44,50-61,67-70,75-78"
     observable: "tras el arranque, la base ya tiene datos"
     expect: "el snapshot de verify parte del seed; las sondas lo usan en vez de inventar datos"
-    status: read
+    status: measured
+    note: "tras el arranque: users 4, cart 4, order_main 8 (estados 0×3, 1×1, 2×4), product_in_order 15, product_info 12 (solo B0003 en 1), product_category 4"
   - id: SA-ASSET-02
     category: asset
     fact: "Las credenciales de demo (contraseña `123`) están en el repo para customer1, employee1 y manager1; la de customer2 NO (su hash es otro y no aparece en claro en ningún sitio)."
@@ -145,14 +159,16 @@ facts:
     evidence: "entity/*.java (GenerationType.AUTO); backend/src/main/resources/application.yml:15"
     observable: "information_schema.tables y pg_sequences"
     expect: "surface.yaml → data.tables con las 6; la secuencia se ve y no se confunde con una entidad"
-    status: read
+    status: measured
+    note: "information_schema: las 6 tablas y una sola secuencia, hibernate_sequence, con incremento 1"
   - id: SA-MODEL-02
     category: model
     fact: "cart comparte la clave primaria con users (@MapsId): su PK es user_id y a la vez FK a users(id). Uno a uno, el carrito nace con el usuario."
     evidence: "entity/Cart.java:20-29; service/impl/UserServiceImpl.java:48-53"
     observable: "information_schema: PK y FK sobre la misma columna; diff de /register: una fila en users y otra en cart"
     expect: "persistence/domain: el carrito es parte del usuario (o hija 1:1), no un agregado independiente con id propio"
-    status: read
+    status: measured
+    note: "cart.user_id es a la vez PRIMARY KEY y FOREIGN KEY a users(id) (NO ACTION); el registro de prueba creó users.id=1 y cart.user_id=1"
   - id: SA-MODEL-03
     category: model
     fact: "product_in_order es a la vez línea de carrito y línea de pedido: FK cart_user_id → cart y FK order_id → order_main, las dos anulables; el checkout la MUEVE de una a otra."
@@ -166,7 +182,8 @@ facts:
     evidence: "entity/ProductInOrder.java:36-37,59-60; entity/ProductInfo.java:52-54"
     observable: "information_schema (sin FK); diff de DELETE /seller/product/{id}/delete"
     expect: "referencias entre agregados sin integridad referencial, `measured` por el diff"
-    status: read
+    status: measured
+    note: "information_schema: product_in_order solo tiene FK a cart(user_id) y order_main(order_id); product_id y category_type sin FK. El efecto de borrar un producto, pendiente del paso 1"
   - id: SA-MODEL-05
     category: model
     fact: "La línea copia nombre, descripción, icono, categoría, precio y stock del producto en el momento de AÑADIRLA al carrito (instantánea), no al pagar."
@@ -180,21 +197,24 @@ facts:
     evidence: "entity/User.java:28-30; entity/ProductCategory.java:26-27; entity/ProductInfo.java:24-25"
     observable: "information_schema (UNIQUE); registro duplicado (SA-ERR-03)"
     expect: "naturalKey/indexes únicos en persistence; el id de producto como clave asignada por el cliente"
-    status: read
+    status: measured
+    note: "UNIQUE en users.email y en product_category.category_type; product_info.product_id es la PK (varchar 255)"
   - id: SA-MODEL-07
     category: model
     fact: "Las columnas de estado son enteros sin CHECK ni ENUM: order_main.order_status (0 NEW, 1 FINISHED, 2 CANCELED, default 0) y product_info.product_status (0 UP, 1 DOWN, default 0). Los significados solo están en el código."
     evidence: "enums/OrderStatusEnum.java:6-9; enums/ProductStatusEnum.java:9-11; entity/OrderMain.java:59-61; entity/ProductInfo.java:46-49"
     observable: "information_schema (int4 con default 0, sin CHECK); valores distintos en el seed: {0,1,2} y {0,1}"
     expect: "introspección los marca como columnas de estado por su forma; el lifecycle sale de los flujos, y los NOMBRES de estado son `read` (del enum), no `measured`"
-    status: read
+    status: measured
+    note: "order_status integer NOT NULL default 0, product_status integer anulable default 0, ninguna de las dos con CHECK; valores en el seed {0,1,2} y {0,1}"
   - id: SA-MODEL-08
     category: model
     fact: "hipótesis: tipos por defecto de Hibernate: varchar(255) para todo texto, numeric(19,2) para precios e importes, timestamp sin zona, bool para users.active."
     evidence: "entity/*.java (sin @Column)"
     observable: "information_schema.columns"
     expect: "persistence con escala 2 en dinero; varchar(255) NO se convierte en una regla de negocio de longitud máxima sin decisión"
-    status: read
+    status: measured
+    note: "confirmado: varchar(255), numeric(19,2), timestamp without time zone, boolean. Ver SA-MODEL-11 para la nulabilidad"
   - id: SA-MODEL-09
     category: model
     fact: "El pedido copia los datos del comprador (email, nombre, teléfono, dirección) al crearse: cambiar el perfil después no cambia los pedidos."
@@ -208,7 +228,17 @@ facts:
     evidence: "backend/src/main/resources/import.sql:6-13,67-70; entity/OrderMain.java:30-33"
     observable: "dos registros seguidos y un checkout: ids 1, 2, 3… repartidos entre users, cart, order_main y product_in_order"
     expect: "la normalización trata los ids generados como volátiles; restaurar el snapshot devuelve también la secuencia (si no, la segunda ejecución da otros ids)"
-    status: read
+    status: measured
+    note: "los registros de prueba recibieron ids 1, 2, 3 junto a los del seed (2147483641…); pg_restore --clean devuelve hibernate_sequence a last_value=1 y la misma sonda vuelve a dar el mismo id"
+  - id: SA-MODEL-11
+    category: model
+    fact: "Hibernate lleva Bean Validation al DDL de forma desigual: @Min se convierte en CHECK (product_info.product_stock >= 0, product_in_order.product_stock >= 0, product_in_order.count >= 1) y @NotNull en NOT NULL, pero @NotEmpty no deja rastro: users.email, buyer_email y el resto de textos @NotEmpty son anulables en la base."
+    evidence: "entity/ProductInfo.java:36-38; entity/ProductInOrder.java:71-75; entity/User.java:28-30; information_schema"
+    observable: "pg_constraint (contype c) e information_schema.columns.is_nullable"
+    expect: "el diseño toma la obligatoriedad de los textos de la validación (o de los flujos), no de la nulabilidad de la columna; los CHECK son evidencia measured de cotas"
+    status: measured
+    note: "medido el 2026-10-23 en el esquema que crea Hibernate 5.4.6"
+    found_by: operator
 
   # ── Reglas ──────────────────────────────────────────────────────────────────
   - id: SA-RULE-01
@@ -405,14 +435,16 @@ facts:
     evidence: "service/impl/UserServiceImpl.java:44-58"
     observable: "diff de la base"
     expect: "efecto de registro con su carrito"
-    status: read
+    status: measured
+    note: "el registro escribe users y cart con la misma clave y consume UN valor de la secuencia (el carrito usa el id del usuario)"
   - id: SA-EFFECT-03
     category: effect
     fact: "Cada arranque de la app BORRA y recrea el esquema y recarga import.sql (ddl-auto: create): reiniciar el contenedor es un reset implícito de la base."
     evidence: "backend/src/main/resources/application.yml:15"
     observable: "escribir, reiniciar la app y leer"
     expect: "el sandbox no reinicia la app entre sondas sin restaurar después; el snapshot se toma tras el arranque; FIDELITY.md lo menciona"
-    status: read
+    status: measured
+    note: "registrar un usuario y reiniciar la app: users vuelve de 6 a 4 y hibernate_sequence a last_value=1, is_called=f"
 
   # ── Concurrencia ────────────────────────────────────────────────────────────
   - id: SA-CONC-01
@@ -451,7 +483,8 @@ facts:
     evidence: "entity/User.java:31-33; api/UserController.java:56-84"
     observable: "cualquiera de las tres respuestas"
     expect: "fix: la contraseña nunca está en la respuesta"
-    status: read
+    status: measured
+    note: "visto en la respuesta de POST /register (password con el hash bcrypt $2a$10$…); /profile, pendiente del paso 1"
   - id: SA-DEF-03
     category: defect
     fact: "No se pueden comprar las últimas unidades: decreaseStock rechaza `stock - cantidad <= 0`, no `< 0`."
