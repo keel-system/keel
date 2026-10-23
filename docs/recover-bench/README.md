@@ -1,8 +1,8 @@
 # Banco de medida de `keel-recover`
 
-Tres servicios **reales y abandonados**, fijados por commit, con una **hoja de respuestas** cada uno.
+Cuatro servicios **reales y abandonados**, fijados por commit, con una **hoja de respuestas** cada uno.
 Sirve para medir `keel-recover` cuando el plan (`PLAN-KEEL-RECOVER.md`) esté terminado. La prueba
-manual del incremento 1 usa los mismos tres, así que la línea base (a mano) y la medida final (con la
+manual del incremento 1 usa los tres primeros, así que la línea base (a mano) y la medida final (con la
 herramienta) son comparables fila a fila.
 
 | Legacy | Repo y commit | Pila | Qué ejercita del plan |
@@ -10,19 +10,21 @@ herramienta) son comparables fila a fila.
 | `realworld-node` | [gothinkster/node-express-realworld-example-app](https://github.com/gothinkster/node-express-realworld-example-app) `ba04b70c31af81ca7935096740a6e083563b3a4a` (2018-01-31, el último antes de la migración a TypeScript/Prisma) | Node (era 6/8, **sin `engines`**), Express 4.13, Mongoose 4.4, JWT, **sin lockfile** | Huella del runtime sin pistas, entorno que cambia con `NODE_ENV`, unicidad, propiedad por recurso (403), errores 422, superficie oculta (`method-override`), defectos de borrado en cascada, una carrera de unicidad |
 | `sockshop-orders` | [microservices-demo/orders](https://github.com/microservices-demo/orders) `546a10c92d1ff9998c21f3849f5b95a0f14430a0` (repo archivado) | Java 8, Maven, Spring Boot 1.4.4, Spring Data REST, MongoDB | Superficie que **solo la introspección ve** (Spring Data REST), seis llamadas salientes (cuatro a URLs que llegan en el cuerpo), fallo y timeout del saliente, ausencia de idempotencia y de compensación, datos de tarjeta persistidos |
 | `sockshop-shipping` | [microservices-demo/shipping](https://github.com/microservices-demo/shipping) `9c0fbfa31895dd029d44d3434de93f64cd71f87b` (repo archivado) | Java 8, Maven, Spring Boot 1.4.0, RabbitMQ | Emisión a broker, **broker caído aceptado en silencio** (best-effort explícito), cola no durable, endpoints falsos |
+| `shop-api` | [zhulinn/SpringBoot-Angular7-Online-Shopping-Store](https://github.com/zhulinn/SpringBoot-Angular7-Online-Shopping-Store) `d05739d5c2df89344e524c2cc10d94c99d01a6ed` (2024-05-29; último código 2021-10-05), **solo `backend/`** | Java 11, Maven (wrapper roto), Spring Boot 2.2.0.**BUILD-SNAPSHOT**, JPA/Hibernate con `ddl-auto: create`, **PostgreSQL** (9.4.5 en su compose), JWT propio | **Introspección relacional** (esquema solo en `information_schema`: sin migraciones), secuencia compartida y snapshot que debe restaurarla, clave compartida carrito-usuario, tabla que hace de línea de carrito y de pedido, **`lifecycle`** de pedido (NEW → FINISHED | CANCELED) en una columna entera sin CHECK, **tres roles** más propiedad, escalada de privilegios en el registro, dos carreras (stock y transición) |
 
 `orders` llama a `shipping` por HTTP: juntos son el sistema mínimo para el paso 2 (descomponer) si se
 quiere ejercitarlo, aunque el banco los mide por separado.
 
 ## Lo que el banco NO cubre
 
-Ningún legacy real pequeño cubre todo el plan. Lo que queda **sin medir** con estos tres:
+Ningún legacy real pequeño cubre todo el plan. Lo que queda **sin medir** con estos cuatro (`shop-api`
+entró el 2026-10-23 para cubrir las tres primeras filas, que antes faltaban):
 
 | Mecanismo del plan | Por qué falta |
 |---|---|
-| `information_schema` (introspección relacional) | Los tres son MongoDB o sin base |
-| `lifecycle` (columna de estado y transiciones) | Ninguno tiene máquina de estados |
-| Roles (`security` por rol) | RealWorld solo tiene propiedad; Sock Shop, nada |
+| MySQL/MariaDB | `shop-api` es PostgreSQL; la introspección de MySQL queda sin legacy |
+| `lifecycle` declarado en la base (CHECK o ENUM) | El de `shop-api` es un entero sin restricción: solo se reconoce por su forma |
+| Migraciones versionadas (Flyway, Liquibase) | `shop-api` genera el esquema con Hibernate |
 | Correo (Mailpit) | Ninguno envía correo |
 | `@Scheduled`/cron → `unobserved.yaml` | Ninguno tiene trabajo programado |
 | Consumo de mensajes (listener) | `queue-master` consume, pero no está en el banco |
@@ -68,6 +70,7 @@ Oráculo es lo que está **fuera** del repo y la herramienta no puede ver:
 | `realworld-node` | `tests/api-tests.postman.json` (31 peticiones, newman) | La especificación pública de RealWorld **de enero de 2018** (la actual cambió) |
 | `sockshop-orders` | `api-spec/orders.json` (Swagger 2), `api-spec/hooks.js` (Dredd, con seed), `test/json-server/server.py` (stub Flask de los servicios de usuarios y carritos) | Los repos de las dependencias: [payment](https://github.com/microservices-demo/payment) `384e33447dda5334187517dda09566c9a17fd6af` (y user y carts, sin fijar aún) |
 | `sockshop-shipping` | `ITShippingController.java` | El consumidor de la cola, `microservices-demo/queue-master` (sin fijar aún) |
+| `shop-api` | `import.sql` (seed), `api/test.http` (REST Client), pruebas unitarias de Mockito y el cliente Angular de `frontend/` | El esquema dibujado que enlaza su README (`db.png`, fuera del repo) y el antecesor [zhulinn/Online-Shopping-Store](https://github.com/zhulinn/Online-Shopping-Store) |
 
 El oráculo externo mide **lo que la herramienta asumió** de las dependencias. Lo correcto es que lo
 declare como asunción en `unobserved.yaml`, no que acierte.
@@ -149,6 +152,6 @@ caen mucho respecto a los tres del banco, la herramienta está sobreajustada.
 
 ## Conservación
 
-Los tres repos están archivados o abandonados y pueden desaparecer. Antes del incremento 1 conviene
+Los cuatro repos están archivados o abandonados y pueden desaparecer. Antes del incremento 1 conviene
 copiarlos (fork o espejo) en un sitio propio. La hoja cita `archivo:línea` contra el commit fijado,
 que es lo que sostiene la evidencia.
