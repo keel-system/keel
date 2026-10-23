@@ -530,7 +530,7 @@ facts:
     observable: "dos POST /cart/checkout en paralelo real (curl -Z) con una línea de B0001"
     expect: "decisión fix: checkout idempotente o con el carrito bloqueado; escenario de doble envío"
     status: measured
-    note: "8/8 con curl -Z: dos pedidos de 30.00, una línea; stock de B0001 95 (7 veces) o 94 (1 vez)"
+    note: "8/8 con curl -Z: dos pedidos de 30.00, una línea; stock de B0001 95 (7 veces) o 94 (1 vez). Remedido el 2026-10-23 en el sandbox de la corrida de control con la clave del desenlace que incluye la base: 10/10 dos pedidos de 60 con una sola línea y el stock descontado una vez (R0-066 x10)"
     found_by: operator
 
   # ── Defectos ────────────────────────────────────────────────────────────────
@@ -614,6 +614,26 @@ facts:
     expect: "fix: la longitud se valida antes de cifrar"
     status: measured
     note: "S1-014: registro con password vacía → 200 y login con ella → 200"
+
+  - id: SA-DEF-11
+    category: defect
+    fact: "POST /cart guarda cada línea con el nombre, la descripción, la categoría y el PRECIO que manda el cliente, y el checkout cobra con el precio guardado en la línea: el comprador decide lo que paga."
+    evidence: "service/impl/CartServiceImpl.java:51-69"
+    observable: "POST /cart con una línea de B0001 a otro precio y checkout: el pedido se cobra al precio enviado"
+    expect: "fix: la línea toma los datos y el precio del catálogo"
+    status: measured
+    note: "lo encontró la corrida de control (R0-034; fix-cart-client-price, FL-CRT-012 en verde contra el legacy)"
+    found_by: tool
+
+  - id: SA-DEF-12
+    category: defect
+    fact: "La línea exige descripción y categoría (@NotNull): con un producto sin descripción, /cart/add y POST /cart no guardan la línea y responden 200 igualmente (el controlador traga la excepción)."
+    evidence: "entity/ProductInOrder.java:41-44,53-55; api/CartController.java:40-61"
+    observable: "alta de un producto sin descripción y /cart/add con él"
+    expect: "fix: un producto sin descripción se puede comprar (o se rechaza su alta)"
+    status: measured
+    note: "lo encontró la corrida de control (fix-cart-line-nullable-fields, FL-CRT-020 en verde contra el legacy)"
+    found_by: tool
 
   # ── Frontera ────────────────────────────────────────────────────────────────
   - id: SA-FRONT-01

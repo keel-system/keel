@@ -73,6 +73,18 @@ test('java8-maven: objetivo 1.8 del pom frente al JDK 11 de la CI, sin wrapper y
   assert.equal(doc.source, undefined, 'una fixture dentro de otro repo no hereda su commit');
 });
 
+test('mvnw sin .mvn/wrapper/ es un wrapper roto, no un wrapper (medido en shop-api)', () => {
+  const dir = tmpDir('keel-recover-mvnw-');
+  fs.cpSync(path.join(LEGACY_DIR, 'java8-maven'), dir, { recursive: true, filter: (src) => !src.includes(`${path.sep}target`) });
+  fs.writeFileSync(path.join(dir, 'mvnw'), '#!/bin/sh\n');
+  const broken = fingerprint(dir);
+  assert.equal(broken.build.wrapper, false);
+  fs.mkdirSync(path.join(dir, '.mvn', 'wrapper'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.mvn', 'wrapper', 'maven-wrapper.properties'), 'distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.6.3/apache-maven-3.6.3-bin.zip\n');
+  const whole = fingerprint(dir);
+  assert.deepEqual([whole.build.wrapper, whole.build.version], [true, '3.6.3']);
+});
+
 test('java8-gradle: wrapper, war, toolchain de la CI y servicios con su alias', () => {
   const doc = fp('java8-gradle');
   assert.deepEqual([doc.build.tool, doc.build.wrapper, doc.build.version], ['gradle', true, '4.10.3']);

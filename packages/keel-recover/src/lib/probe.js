@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
@@ -88,11 +89,21 @@ export const fill = (v, vars) =>
 export const pick = (obj, p) => String(p).split('.').reduce((o, k) => (o == null ? o : o[k]), obj);
 
 /** La clave del desenlace de una sonda repetida: no depende del orden de los pasos paralelos. */
+// La huella del diff de la base de una repetición, sin las secuencias (un efecto técnico). Sin ella, una carrera que
+// solo se ve en la base (dos pedidos del mismo carrito, uno lleno y otro vacío, o los dos llenos) daba la misma clave en
+// todas las repeticiones: medido en la corrida de control de shop-api, donde R0-066 salió 5/5 «200,200» y la
+// distribución de lo que quedó en la base se perdió.
+const dbDigest = (db) => {
+  const rest = Object.fromEntries(Object.entries(db ?? {}).filter(([table]) => table !== '_sequences'));
+  return Object.keys(rest).length ? crypto.createHash('sha256').update(JSON.stringify(rest)).digest('hex').slice(0, 8) : 'none';
+};
+
 export function outcomeKey(rec, outcomeField) {
   const serial = rec.steps.filter((x) => !x.parallel).map((x) => x.response?.status ?? (x.response?.routed !== undefined ? `routed=${x.response.routed}` : '?'));
   const par = rec.steps.filter((x) => x.parallel).map((x) => x.response?.status).sort();
   const extra = outcomeField ? `|${outcomeField}=${JSON.stringify(pick(rec.steps.at(-1)?.response?.body, outcomeField))}` : '';
-  return [...serial, ...(par.length ? [`{${par.join(',')}}`] : [])].join(',') + extra;
+  const db = rec.effects?.db ? `|db=${dbDigest(rec.effects.db)}` : '';
+  return [...serial, ...(par.length ? [`{${par.join(',')}}`] : [])].join(',') + db + extra;
 }
 
 // ── la ronda ─────────────────────────────────────────────────────────────────────────────────
@@ -363,15 +374,22 @@ export async function runRound(sandbox, rt, round, { tag, only = null, faults, l
     const untrusted = Object.keys(first.failures);
     const rec = norm(first.rec);
     if ((probe.repeat ?? 1) > 1) {
-      const outcomes = { [outcomeKey(first.rec, probe.outcome)]: 1 };
+      // La clave se calcula sobre la grabación NORMALIZADA (fechas y volátiles fuera), y de cada desenlace distinto se
+      // guarda el diff de la base de su primera repetición: es lo que el diseñador necesita para leer la distribución.
+      const firstKey = outcomeKey(rec, probe.outcome);
+      const outcomes = { [firstKey]: 1 };
+      const outcomeEffects = { [firstKey]: rec.effects?.db ?? null };
       for (let i = 1; i < probe.repeat; i++) {
         const again = await runProbe(ctx, probe, roundVars, `${tag}-r${i + 1}`);
         note(probe.id, again.failures);
         untrusted.push(...Object.keys(again.failures));
-        const k = outcomeKey(again.rec, probe.outcome);
+        const normalized = norm(again.rec);
+        const k = outcomeKey(normalized, probe.outcome);
         outcomes[k] = (outcomes[k] ?? 0) + 1;
+        if (!(k in outcomeEffects)) outcomeEffects[k] = normalized.effects?.db ?? null;
       }
       rec.outcomes = Object.fromEntries(Object.entries(outcomes).sort());
+      if (ctx.db && Object.keys(outcomes).length > 1) rec.outcomeEffects = Object.fromEntries(Object.entries(outcomeEffects).sort());
     }
     if (untrusted.length) rec.untrusted = [...new Set(untrusted)].sort();
     recordings.push({ id: probe.id, recording: rec });

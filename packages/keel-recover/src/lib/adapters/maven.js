@@ -110,7 +110,7 @@ export function read(repo) {
       tool: 'maven',
       wrapper: wrapper.present,
       version: wrapper.version,
-      evidence: wrapper.present ? wrapper.evidence : `${file} (sin mvnw)`,
+      evidence: wrapper.present ? wrapper.evidence : wrapper.evidence ?? `${file} (sin mvnw)`,
     },
     framework: springBoot(boot),
     packaging,
@@ -123,8 +123,10 @@ export function read(repo) {
 
 function mavenWrapper(repo) {
   const props = '.mvn/wrapper/maven-wrapper.properties';
-  const present = repo.has('mvnw') || repo.has(props);
-  if (!repo.has(props)) return { present, version: null, evidence: present ? 'mvnw' : null };
+  // mvnw sin .mvn/wrapper/ no arranca: el script lee de ahí la distribución (medido en shop-api, que trae mvnw y
+  // mvnw.cmd pero no el directorio). Un wrapper roto no es un wrapper: el build va con la imagen de Maven.
+  if (!repo.has(props)) return { present: false, version: null, evidence: repo.has('mvnw') ? 'mvnw sin .mvn/wrapper/maven-wrapper.properties: el wrapper está roto' : null };
+  const present = true;
   const lines = repo.lines(props);
   const i = lines.findIndex((l) => /^distributionUrl\s*=/.test(l));
   const m = i >= 0 ? /apache-maven-([\d.]+)-bin/.exec(lines[i]) : null;

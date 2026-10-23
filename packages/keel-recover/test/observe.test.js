@@ -248,6 +248,18 @@ test('ronda: plantillas, capturas y la clave del desenlace, que no depende del o
   assert.equal(outcomeKey(rec(409, 200)), outcomeKey(rec(200, 409)));
   assert.equal(outcomeKey(rec(200, 409)), '201,{200,409}');
   assert.equal(outcomeKey(rec(200, 409), 'status'), '201,{200,409}|status="X"');
+  // La base entra en la clave (corrida de control de shop-api): dos checkouts del mismo carrito con los mismos status
+  // dejan en la base cosas distintas (un pedido lleno y otro vacío, o dos llenos), y las secuencias no cuentan.
+  const withDb = (amounts, seq) => ({
+    steps: [{ parallel: true, response: { status: 200 } }, { parallel: true, response: { status: 200 } }],
+    effects: { db: { _sequences: { changed: [{ after: { last_value: seq } }] }, order_main: { added: amounts.map((a) => ({ order_amount: a })) } } },
+  });
+  const serial = outcomeKey(withDb([60, 0], 4));
+  assert.notEqual(serial, outcomeKey(withDb([60, 60], 4)), 'la carrera se distingue por lo que deja en la base');
+  assert.equal(serial, outcomeKey(withDb([60, 0], 9)), 'las secuencias no distinguen desenlaces');
+  assert.match(serial, /^\{200,200\}\|db=[0-9a-f]{8}$/);
+  assert.match(outcomeKey({ ...withDb([], 1), effects: { db: { _sequences: {} } } }), /\|db=none$/);
+  assert.match(outcomeKey(withDb([60], 1), 'quantity'), /\|db=[0-9a-f]{8}\|quantity=/, 'el campo sigue al final: probe-check casa con endsWith');
 });
 
 test('curl paralelo: un solo proceso, una transferencia por petición, cabeceras como argumentos y cuerpo desde archivo', () => {

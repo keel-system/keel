@@ -48,6 +48,7 @@ probes:
 Otras piezas del schema:
 - `setup.stubs` (WireMock solo durante la sonda) y `setup.broker: down` / `setup.db: down`.
 - `then_parallel` y `after`, para los pasos a la vez y la lectura del desenlace. Los pasos a la vez salen de UN curl en el contenedor de herramientas (`-Z --parallel-immediate`), porque con una petición por proceso llegan en serie y la carrera no se ve nunca. Una sonda de concurrencia con un único desenlace en todas sus repeticiones no prueba que no haya carrera: mira si el legacy serializa de verdad (bloqueo, versión, restricción) antes de decidir. Y calienta su pool de conexiones antes de la carrera (unas lecturas en `then_parallel` previas, o en `steps`): un pool que abre la conexión en el momento retrasa la segunda petición lo justo para que la primera termine, y la carrera no se ve (medido en la fixture `node-postgres`: 0/10 con el pool frío, 10/10 caliente).
+- Una sonda con `repeat` graba `outcomes`: cuántas repeticiones dieron cada desenlace. La clave lleva los status y la huella de lo que quedó en la base (`|db=…`, sin las secuencias), así que una carrera que solo se ve en la base (dos pedidos del mismo carrito) sale como desenlaces distintos con el mismo status. `outcomeEffects` trae el diff de la base de cada desenlace: léelo antes de describir lo que pasa, porque `effects` es solo el de la primera repetición.
 - `publish`: un evento entrante por la API de gestión del broker.
 - `settleMs`.
 
