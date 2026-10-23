@@ -17,6 +17,14 @@
 //                   SIGTERM en una salida ordenada (inc. 3): Node deja de
 //                   escribir la cobertura, y el acumulado de antes sigue ahí → PRB-COVERAGE
 //
+// Y uno que no es de un canal sino de la concurrencia: la carrera de P-007 (dos cancelaciones de un
+// pedido que la fixture lee, comprueba y escribe sin bloqueo) solo se ve si las dos peticiones llegan
+// juntas. En verde salen de un solo curl y la carrera aparece; con el fallo parallel-exec (un exec
+// por petición, como antes) llegan en serie y deja de verse. Sin este sabotaje, una sonda de
+// concurrencia que nunca ve la carrera pasaría por buena (medido en shop-api: 10/10 un desenlace).
+//
+//   parallel-exec   los pasos paralelos vuelven a un exec por petición     → la carrera de P-007 no se ve
+//
 // En verde, además, dos ejecuciones de las mismas sondas graban lo mismo una vez normalizado.
 //
 //   npm run probe-check --workspace packages/keel-recover [-- --only=<id>] [-- --keep]
@@ -83,6 +91,7 @@ const SCENARIOS = [
     red: ['PRB-RESTORE'],
     afterVerify: async () => rt.exec('rec-effects-db', ['rm', '-f', SNAPSHOT_ARCHIVE]),
   },
+  { id: 'parallel-exec', red: [], faults: ['parallel-exec'], only: new Set(['P-007']), expect: (report) => [raceCheck(report, false)] },
   {
     id: 'coverage-off',
     red: ['PRB-COVERAGE'],
@@ -140,12 +149,27 @@ const EXPECT = {
     ['broker caído: el evento se pierde', legacyMessages(r).length === 0],
     ['el pedido y el correo sí', added(r, 'orders').length === 1 && r.effects.mail.length === 1],
   ],
-  'P-007': (r) => [['tres desenlaces contados', Object.values(r.outcomes ?? {}).reduce((a, b) => a + b, 0) === 3]],
+  'P-007': (r) => [['diez desenlaces contados', Object.values(r.outcomes ?? {}).reduce((a, b) => a + b, 0) === 10], raceCheck({ recordings: [{ id: 'P-007', recording: r }] }, true)],
   'P-008': (r) => [
     ['el evento entrante, como de la sonda', (r.effects.messages ?? []).filter((m) => m.origin === 'probe').length === 1 && legacyMessages(r).length === 0],
     ['publicado en orders', r.effects.messages?.[0]?.exchange === 'orders' && r.effects.messages[0].routingKeys[0] === 'order.audited'],
   ],
 };
+
+// La carrera de P-007: cuántas de las repeticiones dieron las dos cancelaciones en 200.
+const RACE_MIN = 0.5;
+const RACE_MAX_SERIAL = 0.2;
+function raceShare(rec) {
+  const total = Object.values(rec?.outcomes ?? {}).reduce((a, b) => a + b, 0);
+  const race = Object.entries(rec?.outcomes ?? {}).filter(([k]) => k.includes('{200,200}')).reduce((a, [, v]) => a + v, 0);
+  return total ? race / total : 0;
+}
+function raceCheck(report, visible) {
+  const share = raceShare(report.recordings.find((x) => x.id === 'P-007')?.recording);
+  return visible
+    ? [`la carrera se ve (${Math.round(share * 100)} % de las repeticiones, mínimo ${RACE_MIN * 100} %)`, share >= RACE_MIN]
+    : [`sin un curl paralelo la carrera no se ve (${Math.round(share * 100)} %, máximo ${RACE_MAX_SERIAL * 100} %)`, share <= RACE_MAX_SERIAL];
+}
 
 function checkSurface(s) {
   const routes = new Set((s.http?.routes ?? []).map((r) => `${r.method} ${r.path}`));
@@ -240,7 +264,7 @@ for (const sc of SCENARIOS.filter((s) => !only || s.id === only)) {
 
   const report = await runRound(loadSandbox(sandboxFile), rt, round, {
     tag: `check-${sc.id}`,
-    only: sc.id === 'base' ? null : SABOTAGE_PROBES,
+    only: sc.only ?? (sc.id === 'base' ? null : SABOTAGE_PROBES),
     faults: new Set(sc.faults ?? []),
     log: (p) => console.log(`  ${p.id.padEnd(6)} [${p.codes}] ${p.effects}${p.outcomes ? ` ${JSON.stringify(p.outcomes)}` : ''}${p.untrusted ? `  sin fiar: ${p.untrusted.join(', ')}` : ''}`),
   });
@@ -259,7 +283,8 @@ for (const sc of SCENARIOS.filter((s) => !only || s.id === only)) {
   } else {
     // el canal saboteado marca sus grabaciones como no fiables
     const ch = sc.red[0];
-    if (ch !== 'PRB-COVERAGE') checks.push([`grabaciones marcadas sin fiar por ${ch}`, report.recordings.every((r) => r.recording.untrusted?.includes(ch))]);
+    if (sc.expect) checks.push(...sc.expect(report));
+    if (ch && ch !== 'PRB-COVERAGE') checks.push([`grabaciones marcadas sin fiar por ${ch}`, report.recordings.every((r) => r.recording.untrusted?.includes(ch))]);
   }
   for (const [what, ok] of checks) if (!ok) console.log(`  ✗ ${what}`);
   const red = report.criteria.filter((c) => !c.ok).map((c) => c.id).sort();

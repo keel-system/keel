@@ -26,7 +26,7 @@
       "type": "object",
       "required": ["service"],
       "additionalProperties": false,
-      "description": "Contenedor con sh y curl en la red del sandbox: por él pasan las sondas, porque la red es interna y el host no la alcanza.",
+      "description": "Contenedor con sh y curl en la red del sandbox: por él pasan las sondas, porque la red es interna y el host no la alcanza. Su curl tiene que ser 7.68 o posterior: los pasos paralelos de una sonda salen de un solo curl con --parallel-immediate.",
       "properties": { "service": { "type": "string", "minLength": 1 } }
     },
     "database": {

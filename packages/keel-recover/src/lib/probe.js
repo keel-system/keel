@@ -3,7 +3,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { containerOf } from './sandbox.js';
 import { validateAs } from './schema.js';
-import { keepHeaders, toolRequestAsync } from './tool-http.js';
+import { keepHeaders, toolRequestAsync, toolRequestsParallel } from './tool-http.js';
 import { normalizer } from './normalize.js';
 import { NO_SNAPSHOT, dbDiff, dbHash, exportDb, hasSnapshot, restoreSnapshot } from './mongo.js';
 import * as rabbit from './rabbit.js';
@@ -175,6 +175,33 @@ async function runStep(ctx, probe, step, vars, n, parallel) {
   return { name: step.name, ...(parallel ? { parallel: true } : {}), request: req, response };
 }
 
+/**
+ * Los pasos de un grupo paralelo. Las peticiones salen juntas de UN curl en el contenedor de
+ * herramientas (`toolRequestsParallel`): con un exec por petición llegaban en serie y ninguna carrera
+ * se veía. Las publicaciones al broker van a la vez por su propio canal. El fallo `parallel-exec`
+ * vuelve al exec por paso: es el sabotaje de probe-check que prueba que la diferencia se mide.
+ */
+async function runParallel(ctx, probe, list, vars, base) {
+  if (ctx.faults.has('parallel-exec')) return Promise.all(list.map((s, i) => runStep(ctx, probe, s, vars, base + i + 1, true)));
+  const http = list.map((s, i) => ({ s, i })).filter(({ s }) => !s.publish);
+  const reqs = http.map(({ s }) => {
+    const req = fill(s.request, vars);
+    const url = /^https?:/.test(req.path) ? req.path : ctx.spec.app.base.replace(/\/$/, '') + req.path;
+    return { req, wire: { method: req.method, url, headers: req.headers ?? {}, body: req.body, timeoutSeconds: req.timeout ?? 15 } };
+  });
+  const [responses, ...published] = await Promise.all([
+    reqs.length ? toolRequestsParallel(ctx.rt, ctx.tool, reqs.map((r) => r.wire)) : [],
+    ...list.map((s, i) => (s.publish ? runStep(ctx, probe, s, vars, base + i + 1, true) : null)),
+  ]);
+  const out = list.map((s, i) => published[i]);
+  http.forEach(({ s, i }, k) => {
+    const r = responses[k];
+    for (const [key, p] of Object.entries(s.capture ?? {})) vars[key] = pick(r.body, p);
+    out[i] = { name: s.name, parallel: true, request: reqs[k].req, response: { status: r.status, _timeSeconds: r.timeSeconds, headers: keepHeaders(r.headers), body: r.body } };
+  });
+  return out;
+}
+
 /** Una ejecución de una sonda: `{ rec, failures }`, sin normalizar. */
 export async function runProbe(ctx, probe, roundVars, tag) {
   const { rt, spec, tool } = ctx;
@@ -230,7 +257,7 @@ export async function runProbe(ctx, probe, roundVars, tag) {
     const parallel = async (list) => {
       const base = n;
       n += list.length;
-      steps.push(...(await Promise.all(list.map((s, i) => runStep(ctx, probe, s, vars, base + i + 1, true)))));
+      steps.push(...(await runParallel(ctx, probe, list, vars, base)));
     };
     if (probe.parallel) await parallel(probe.steps);
     else await serial(probe.steps);

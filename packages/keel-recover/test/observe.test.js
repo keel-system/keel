@@ -11,7 +11,7 @@ import { dbDiff, fromExtendedJson, parseShellDoc, shapeCollection, tojsonToJson 
 import { shapeTopology, traceToMessage } from '../src/lib/rabbit.js';
 import { journalEntry } from '../src/lib/stubs.js';
 import { mailEntry } from '../src/lib/mail.js';
-import { parseCurlOutput } from '../src/lib/tool-http.js';
+import { buildParallel, parseCurlOutput, parseParallelOutput } from '../src/lib/tool-http.js';
 import { channelsCriterion, fill, loadRound, outcomeKey, pick, runRound, verifyCriterion } from '../src/lib/probe.js';
 import { mergeSurface } from '../src/lib/introspect.js';
 import { istanbulUncovered, jacocoUncovered, v8Uncovered } from '../src/lib/coverage.js';
@@ -232,6 +232,44 @@ test('ronda: plantillas, capturas y la clave del desenlace, que no depende del o
   assert.equal(outcomeKey(rec(200, 409), 'status'), '201,{200,409}|status="X"');
 });
 
+test('curl paralelo: un solo proceso, una transferencia por petición, cabeceras como argumentos y cuerpo desde archivo', () => {
+  const args = buildParallel(
+    [
+      { method: 'POST', url: 'http://app/a', headers: { Authorization: 'Bearer "t"' }, body: { x: 1 } },
+      { method: 'PATCH', url: 'http://app/b', body: 'crudo', timeoutSeconds: 3 },
+    ],
+    'ab12'
+  );
+  assert.deepEqual(args.slice(0, 2), ['sh', '-c']);
+  assert.match(args[2], /^curl -s -Z --parallel-immediate --parallel-max 2 "\$@";/);
+  assert.doesNotMatch(args[2], /Bearer|app\/a/, 'nada de la petición pasa por el intérprete');
+  const rest = args.slice(4);
+  assert.equal(rest.filter((a) => a === '--next').length, 1);
+  const [first, second] = [rest.slice(0, rest.indexOf('--next')), rest.slice(rest.indexOf('--next') + 1)];
+  assert.deepEqual(first, ['-m', '15', '-D', '/tmp/kr-ab12-0.h', '-o', '/tmp/kr-ab12-0.b', '-X', 'POST', '-H', 'Authorization: Bearer "t"', '-H', 'Content-Type: application/json', '--data-binary', '@/tmp/kr-ab12-0.in', 'http://app/a']);
+  assert.deepEqual(second, ['-m', '3', '-D', '/tmp/kr-ab12-1.h', '-o', '/tmp/kr-ab12-1.b', '-X', 'PATCH', '--data-binary', '@/tmp/kr-ab12-1.in', 'http://app/b'], 'un cuerpo de texto va sin Content-Type forzado');
+
+  const out = [
+    '<<<R 0',
+    'HTTP/1.1 100 Continue',
+    '',
+    'HTTP/1.1 200 OK',
+    'Content-Type: application/json',
+    '',
+    '<<<B',
+    '{"ok":true}',
+    '<<<R 1',
+    '<<<B',
+    '',
+  ].join('\n');
+  const [a, b] = parseParallelOutput(out, 2);
+  assert.equal(a.status, 200, 'vale el último bloque de cabeceras');
+  assert.deepEqual(a.body, { ok: true });
+  assert.equal(a.headers['content-type'], 'application/json');
+  assert.equal(b.status, 0, 'sin respuesta (timeout o conexión rechazada)');
+  assert.equal(parseParallelOutput('', 1)[0].status, 0);
+});
+
 function effectsSandbox({ environment, verifyReport } = {}) {
   const root = tmpDir('recover-probe-');
   fs.cpSync(path.join(fixture, 'sandbox'), path.join(root, 'sandbox'), { recursive: true });
@@ -261,6 +299,30 @@ test('ronda: sin verify.json en verde con snapshot no se sondea (PRB-VERIFY)', a
   assert.equal(report.ok, false);
   assert.deepEqual(report.criteria.filter((c) => !c.ok && !c.skipped).map((c) => c.id), ['PRB-VERIFY']);
   assert.deepEqual(calls, [], 'no toca el sandbox');
+});
+
+test('ronda: los pasos paralelos salen de UN curl; el fallo parallel-exec vuelve a un exec por paso', async () => {
+  const run = async (faults) => {
+    const shots = [];
+    const ok = { status: 0, stdout: '', stderr: '' };
+    const rt = new Proxy({}, {
+      get: (_, k) => (container, args = []) => {
+        if (k === 'execAsync') {
+          shots.push(args.includes('-Z') || String(args[2]).includes(' -Z ') ? 'paralelo' : 'uno');
+          return Promise.resolve({ status: 0, stdout: '<<<R 0\nHTTP/1.1 200 OK\n\n<<<B\n\n<<<R 1\nHTTP/1.1 409 Conflict\n\n<<<B\n\n', stderr: '' });
+        }
+        return ok;
+      },
+    });
+    const round = { probes: [{ id: 'C', class: 'concurrency', steps: [], then_parallel: [{ name: 'a', request: { method: 'POST', path: '/x', body: { n: 1 } } }, { name: 'b', request: { method: 'POST', path: '/x' } }] }] };
+    const report = await runRound(effectsSandbox({ verifyReport: { ok: true, criteria: [], snapshot: { ok: true, hash: 'h1' } } }), rt, round, { tag: 'r', faults: new Set(faults), pollMs: 1 });
+    return { shots, steps: report.recordings[0]?.recording.steps ?? [] };
+  };
+  const fixed = await run([]);
+  assert.deepEqual(fixed.shots, ['paralelo']);
+  assert.deepEqual(fixed.steps.map((s) => [s.name, s.parallel, s.response.status]), [['a', true, 200], ['b', true, 409]]);
+  const sabotaged = await run(['parallel-exec']);
+  assert.deepEqual(sabotaged.shots, ['uno', 'uno']);
 });
 
 test('ronda: un efecto del legacy sin canal de captura grabaría silencio (PRB-CHANNELS)', () => {

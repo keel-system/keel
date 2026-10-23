@@ -33,8 +33,8 @@ probes:
     steps: [ *create ]
   - id: P-007
     class: concurrency
-    why: dos cancelaciones a la vez
-    repeat: 3
+    why: "dos cancelaciones a la vez (la fixture lee, comprueba y escribe sin bloqueo: con las dos juntas, las dos dan 200)"
+    repeat: 10
     steps: [ *create ]
     then_parallel:
       - { name: cancelar-1, request: { method: POST, path: "/api/orders/{{id}}/cancel" } }

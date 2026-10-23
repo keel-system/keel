@@ -31,7 +31,7 @@
             "db": { "const": "down" }
           }
         },
-        "parallel": { "type": "boolean", "description": "Dispara todos los pasos a la vez." },
+        "parallel": { "type": "boolean", "description": "Dispara todos los pasos a la vez, desde un solo curl en el contenedor de herramientas (-Z --parallel-immediate): con una petición por proceso llegarían en serie." },
         "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/step" } },
         "then_parallel": { "type": "array", "items": { "$ref": "#/$defs/step" }, "description": "Tras los pasos en serie, estos a la vez." },
         "after": { "type": "array", "items": { "$ref": "#/$defs/step" }, "description": "Tras los paralelos, estos en serie (la lectura del desenlace)." },

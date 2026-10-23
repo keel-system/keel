@@ -47,7 +47,7 @@ probes:
 
 Otras piezas del schema:
 - `setup.stubs` (WireMock solo durante la sonda) y `setup.broker: down` / `setup.db: down`.
-- `then_parallel` y `after`, para los pasos a la vez y la lectura del desenlace.
+- `then_parallel` y `after`, para los pasos a la vez y la lectura del desenlace. Los pasos a la vez salen de UN curl en el contenedor de herramientas (`-Z --parallel-immediate`), porque con una petición por proceso llegan en serie y la carrera no se ve nunca. Una sonda de concurrencia con un único desenlace en todas sus repeticiones no prueba que no haya carrera: mira si el legacy serializa de verdad (bloqueo, versión, restricción) antes de decidir.
 - `publish`: un evento entrante por la API de gestión del broker.
 - `settleMs`.
 
