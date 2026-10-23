@@ -66,5 +66,12 @@ export function containerRuntime(runtime) {
       }
     },
     running: (container) => rt(['inspect', '--format', '{{.State.Running}}', container]).stdout.trim() === 'true',
+    // El contenedor de un servicio de compose por sus etiquetas, que ponen igual podman-compose y docker compose: el
+    // nombre no (`<proyecto>_<servicio>_1` frente a `<proyecto>-<servicio>-1`).
+    composeContainer: (project, service) =>
+      rt(['ps', '-a', '--filter', `label=com.docker.compose.project=${project}`, '--filter', `label=com.docker.compose.service=${service}`, '--format', '{{.Names}}'])
+        .stdout.split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)[0] ?? null,
   };
 }

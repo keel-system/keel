@@ -19,7 +19,7 @@ estampado en `keel-generated.json`, y no escribe nada en el workspace de diseño
 
 1. **Entrada**: el diseño multi-artefacto de `specs/<servicio>/` (manifiesto + capas), validado y listo
    (`keel validate --ready`; con `--accept-unready` se genera igual y queda estampado).
-2. **Compatibilidad**: DSL `2.22`, la misma que keel-spring y keel-nest. Ante otra, se detiene.
+2. **Compatibilidad**: DSL `2.23`, la misma que keel-spring y keel-nest. Ante otra, se detiene.
 3. **Salida**: `services/<servicio>-dotnet/`, una solución .NET 10 con un proyecto por capa (Domain,
    Application, Infrastructure, Api y pruebas), la configuración por perfiles en `config/` con el mismo
    formato y las mismas variables que los otros dos servidores, sus sondas `/livez` y `/readyz`, el

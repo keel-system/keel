@@ -142,16 +142,27 @@ export function userTestClient(model) {
  *
  * Solo Keycloak: el emulador de Cognito (mock-oauth2-server) fija los claims en su configuración
  * con plantillas de valores conocidos (`${clientId}`, `${username}`), no por petición, así que
- * ahí el método no se emite. Y sin roles no hay cliente de usuario contra el que pedir el token.
+ * ahí el método no se emite. No hace falta ningún rol: un diseño sin roles cuya identidad es el `sub`
+ * (conduit, recuperado de RealWorld: «solo el autor edita su artículo») necesita dos personas
+ * distintas más que nadie, y hasta el DSL 2.23 se quedaba sin cliente de usuario y sin `tokenAs` —
+ * el agente de pruebas del inc. 1 de keel-recover escribió su propio emisor de personas a mano.
  */
 export function usesPersonaTokens(model) {
   const identity = model.security?.callerIdentity;
   return (
     model.stack.auth === 'keycloak' &&
     identity?.source === 'claim' &&
-    (identity.claim ?? 'sub') === 'sub' &&
-    (model.security?.roles ?? []).length > 0
+    (identity.claim ?? 'sub') === 'sub'
   );
+}
+
+/**
+ * ¿Lleva el realm el cliente público de los tokens de usuario? Con roles (sus usuarios piden token
+ * por él) o con personas (`tokenAs` también): fuente única de las tres proyecciones del realm y de
+ * `test-credentials.env`.
+ */
+export function usesUserClient(model) {
+  return (model.security?.roles ?? []).length > 0 || usesPersonaTokens(model);
 }
 
 /**
@@ -238,7 +249,7 @@ export function realmSpec(model) {
     // Sin roles no hay a quién pedirle un token de usuario —el arnés ni emite `tokenFor`—, así que
     // tampoco hay cliente público ni usuarios. Antes el script los prometía en su cabecera y en
     // `test-credentials.env` sin crear ninguno (corrida notification-mailer R8).
-    userClient: roles.length > 0 ? userTestClient(model) : null,
+    userClient: usesUserClient(model) ? userTestClient(model) : null,
     roles,
     // DOS usuarios por rol (`<rol>` y `<rol>-2`) más uno sin ninguno: el 403 por rol
     // insuficiente necesita un sujeto autenticado, y la titularidad («solo el que lo creó»)

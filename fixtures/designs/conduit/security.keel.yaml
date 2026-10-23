@@ -1,0 +1,37 @@
+# El legacy emitía sus propios JWT (HS256, 60 días, esquemas Token y Bearer). El servicio nuevo valida los
+# de un proveedor OIDC (decisions.yaml: fix-identity). El legacy NO tiene roles ni permisos (medido: toda
+# ruta con token válido pasa; los únicos 403 son de propiedad, R1-012/R1-013): el acceso es «token válido»
+# y la autorización por propiedad (autor del artículo o del comentario) va en ownership (DSL 2.23).
+authentication:
+  protocol: oidc
+  tokenLocation: header
+  callerIdentity:
+    field: callerSubject
+    from: { source: claim, name: sub }
+    description: El titular es el claim sub del token; nunca sale del cuerpo ni de la ruta.
+
+cors:
+  description: Consumido desde el navegador por el frontend de Conduit (el legacy abría CORS a todo origen).
+  allowCredentials: false
+  allowedHeaders: [Authorization, Content-Type]
+
+access:
+  default: { level: required }
+  rules:
+    getProfile:   { level: public }
+    listArticles: { level: public }
+    getArticle:   { level: public }
+    listComments: { level: public }
+    listTags:     { level: public }
+
+# Solo el autor edita o borra su artículo, y solo el autor borra su comentario (medido: R1-012, R1-013; los
+# únicos 403 del legacy). El dueño es el subject del perfil autor, el mismo valor que estampa callerIdentity.
+ownership:
+  Article:
+    owner: author.subject
+    error: NOT_ARTICLE_AUTHOR
+    operations: [updateArticle, deleteArticle]
+  Comment:
+    owner: author.subject
+    error: NOT_COMMENT_AUTHOR
+    operations: [deleteComment]

@@ -265,7 +265,18 @@ function rulesLiteral(rules) {
   return `[${rules.map((rule) => `{ ${Object.entries(rule).map(([key, v]) => `${key}: ${value(v)}`).join(', ')} }`).join(', ')}]`;
 }
 
+// El nombre de la variable local de un campo en el lector de su operación. Un campo que se llama como un
+// parámetro o una variable del propio lector (`params`, `query`, `body`, `fields`, `files`, la página) o como
+// lo que importa (`text`, `json`…) lo redeclaraba: `Article.body` de conduit no compilaba (ts-check, DSL 2.23).
+// El sufijo `_` no choca con nada, porque el DSL no admite `_` en el nombre de un campo.
+const READER_RESERVED = new Set(['params', 'query', 'body', 'fields', 'files', 'page', 'size', 'text', 'json',
+  'bodyObject', 'requireParameter', 'requirePart', 'readPageable', 'CallerIdentity', 'EntryGate', 'Violations']);
+function readerLocal(name) {
+  return READER_RESERVED.has(name) ? `${name}_` : name;
+}
+
 function renderReader(model, operation, name, imports) {
+  const local = readerLocal;
   const shape = requestShape(operation);
   // Una subida no tiene cuerpo JSON: sus campos simples vienen del formulario, mezclados con la query.
   const asBody = shape.asBody && !operation.multipart;
@@ -286,10 +297,10 @@ function renderReader(model, operation, name, imports) {
   for (const param of operation.pathParams ?? []) {
     for (const imp of readerImports(model, param)) imports.push(imp);
     use('text');
-    lines.push(`  const ${param.name} = ${readerOf(param, 'text')}(params[${tsString(param.name)}]);`);
+    lines.push(`  const ${local(param.name)} = ${readerOf(param, 'text')}(params[${tsString(param.name)}]);`);
     // En la ruta la presencia no dice nada: el segmento existe o la ruta no casa.
     const rules = (param.inputValidation ?? []).filter((rule) => !['notNull', 'notBlank', 'notEmpty'].includes(rule.rule));
-    if (rules.length > 0) pathChecks.push(`    .check(${tsString(`${operation.name}.${param.name}`)}, ${param.name}, ${rulesLiteral(rules)})`);
+    if (rules.length > 0) pathChecks.push(`    .check(${tsString(`${operation.name}.${param.name}`)}, ${local(param.name)}, ${rulesLiteral(rules)})`);
   }
 
   // 2. Cuerpo.
@@ -321,19 +332,19 @@ function renderReader(model, operation, name, imports) {
       // La lista opcional también: ausente es «no tocar» y null o [] la vacían (list-never-null, keel-core/gen/wire.js).
       const threeState = partial && !component.required;
       lines.push(threeState
-        ? `  const ${component.name} = ${tsString(component.name)} in fields ? ${read} : undefined;`
-        : `  const ${component.name} = ${read};`);
-      if (rules.length > 0) bodyChecks.push(`    .check(${tsString(component.name)}, ${component.name}, ${rulesLiteral(rules)})`);
-      if (each.length > 0) bodyChecks.push(`    .checkEach(${tsString(component.name)}, ${component.name}, ${rulesLiteral(each)})`);
+        ? `  const ${local(component.name)} = ${tsString(component.name)} in fields ? ${read} : undefined;`
+        : `  const ${local(component.name)} = ${read};`);
+      if (rules.length > 0) bodyChecks.push(`    .check(${tsString(component.name)}, ${local(component.name)}, ${rulesLiteral(rules)})`);
+      if (each.length > 0) bodyChecks.push(`    .checkEach(${tsString(component.name)}, ${local(component.name)}, ${rulesLiteral(each)})`);
     } else {
       use('text');
       if (component.required) {
         use('requireParameter');
         missing.push(component.name);
       }
-      lines.push(`  const ${component.name} = ${readerOf(component, 'text')}(query[${tsString(component.name)}]);`);
-      if (rules.length > 0) queryChecks.push(`    .check(${tsString(`${operation.name}.${component.name}`)}, ${component.name}, ${rulesLiteral(rules)})`);
-      if (each.length > 0) queryChecks.push(`    .checkEach(${tsString(`${operation.name}.${component.name}`)}, ${component.name}, ${rulesLiteral(each)})`);
+      lines.push(`  const ${local(component.name)} = ${readerOf(component, 'text')}(query[${tsString(component.name)}]);`);
+      if (rules.length > 0) queryChecks.push(`    .check(${tsString(`${operation.name}.${component.name}`)}, ${local(component.name)}, ${rulesLiteral(rules)})`);
+      if (each.length > 0) queryChecks.push(`    .checkEach(${tsString(`${operation.name}.${component.name}`)}, ${local(component.name)}, ${rulesLiteral(each)})`);
     }
   }
 
@@ -364,18 +375,19 @@ function renderReader(model, operation, name, imports) {
       imports.push({ symbol: 'CallerIdentity', from: CALLER_IDENTITY_TS });
     } else if (component.file) {
       // El binario, por su nombre de parte. Uno vacío llega null, como el MultipartFile vacío de keel-spring.
-      value = component.required ? `${component.name}!` : component.name;
+      value = component.required ? `${local(component.name)}!` : local(component.name);
     } else if (component.pageable) {
+      // La variable la escribe el propio lector (`const pageable = readPageable(...)`): no lleva sufijo.
       value = component.name;
     } else if (partial && asBody && !fromPath.has(component.name) && !component.required) {
       // En un PATCH el opcional del cuerpo llega tal cual: undefined (ausente) conserva y null vacía.
-      value = component.name;
+      value = local(component.name);
     } else if (component.list) {
-      value = `${component.name} ?? []`;
+      value = `${local(component.name)} ?? []`;
     } else if (component.required && !component.initializer) {
-      value = `${component.name}!`;
+      value = `${local(component.name)}!`;
     } else {
-      value = component.name;
+      value = local(component.name);
     }
     assigns.push(`    ${component.name}: ${value}`);
   }
@@ -387,7 +399,7 @@ function renderReader(model, operation, name, imports) {
     imports.push({ symbol: 'FileUpload', from: FILE_UPLOAD_TS, type: true });
     ordered.push('  const files = body as Readonly<Record<string, FileUpload | null>>;');
   }
-  const pathLines = lines.filter((line) => (operation.pathParams ?? []).some((p) => line.startsWith(`  const ${p.name} =`)));
+  const pathLines = lines.filter((line) => (operation.pathParams ?? []).some((p) => line.startsWith(`  const ${local(p.name)} =`)));
   const otherLines = lines.filter((line) => !pathLines.includes(line));
   ordered.push(...pathLines);
   if (asBody) {
@@ -401,8 +413,8 @@ function renderReader(model, operation, name, imports) {
       if (typeof entry === 'string') ordered.push(`  requireParameter(query, ${tsString(entry)});`);
       else if (entry.required) {
         imports.push({ symbol: 'requirePart', from: MULTIPART_READING_TS });
-        ordered.push(`  const ${entry.part} = requirePart(files, ${tsString(entry.part)});`);
-      } else ordered.push(`  const ${entry.part} = files[${tsString(entry.part)}] ?? null;`);
+        ordered.push(`  const ${local(entry.part)} = requirePart(files, ${tsString(entry.part)});`);
+      } else ordered.push(`  const ${local(entry.part)} = files[${tsString(entry.part)}] ?? null;`);
     }
     ordered.push(...otherLines);
   }

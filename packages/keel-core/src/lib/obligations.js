@@ -130,7 +130,7 @@ export const OBLIGATIONS = {
     waivable: false,
     title: 'un 403 que nada de lo declarado puede producir',
     closes:
-      '`authentication.scoping` con el claim que acota, o retirar ese 403 si el permiso no se acota por recurso',
+      '`authentication.scoping` con el claim que acota, `ownership` con el campo del dueño (2.23), o retirar ese 403 si el permiso no se acota por recurso',
     doc: 'dsl/security.md'
   },
 

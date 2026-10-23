@@ -1,0 +1,24 @@
+# Rutas del legacy conservadas bajo el contrato canónico (sin envoltura, página con page/size). El mapa
+# legacy → Keel de cada ruta está en ../../../realworld-node/contract-map.yaml.
+style: rest
+basePath: /api
+endpoints:
+  registerProfile:   { method: POST, path: /users, successStatus: 201 }
+  getMyProfile:      { method: GET, path: /user }
+  updateMyProfile:   { method: PUT, path: /user, successStatus: 200 }
+  getProfile:        { method: GET, path: "/profiles/{username}" }
+  followProfile:     { method: POST, path: "/profiles/{username}/follow", successStatus: 200 }
+  unfollowProfile:   { method: DELETE, path: "/profiles/{username}/follow", successStatus: 200 }
+  listArticles:      { method: GET, path: /articles }
+  listFeed:          { method: GET, path: /articles/feed }
+  createArticle:     { method: POST, path: /articles, successStatus: 201 }
+  getArticle:        { method: GET, path: "/articles/{slug}" }
+  updateArticle:     { method: PUT, path: "/articles/{slug}", successStatus: 200 }
+  deleteArticle:     { method: DELETE, path: "/articles/{slug}", successStatus: 204 }
+  favoriteArticle:   { method: POST, path: "/articles/{slug}/favorite", successStatus: 200 }
+  unfavoriteArticle: { method: DELETE, path: "/articles/{slug}/favorite", successStatus: 200 }
+  listComments:      { method: GET, path: "/articles/{slug}/comments" }
+  addComment:        { method: POST, path: "/articles/{slug}/comments", successStatus: 201 }
+  deleteComment:     { method: DELETE, path: "/articles/{slug}/comments/{commentId}", successStatus: 204 }
+  listTags:          { method: GET, path: /tags }
+pagination: { style: offset, defaultSize: 20, maxSize: 100 }

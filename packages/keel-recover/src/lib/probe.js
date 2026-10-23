@@ -5,7 +5,7 @@ import { containerOf } from './sandbox.js';
 import { validateAs } from './schema.js';
 import { keepHeaders, toolRequestAsync } from './tool-http.js';
 import { normalizer } from './normalize.js';
-import { dbDiff, dbHash, exportDb, restoreSnapshot } from './mongo.js';
+import { NO_SNAPSHOT, dbDiff, dbHash, exportDb, hasSnapshot, restoreSnapshot } from './mongo.js';
 import * as rabbit from './rabbit.js';
 import * as stubs from './stubs.js';
 import * as mail from './mail.js';
@@ -307,6 +307,12 @@ export async function runRound(sandbox, rt, round, { tag, only = null, faults, l
   }
   const ctx = context(sandbox, rt, { faults, pollMs, snapshotHash: v.snapshotHash });
   const { spec } = sandbox;
+  // Sin snapshot, ninguna sonda puede partir del estado de verify: se dice una vez, en el criterio de verify.
+  if (ctx.db && !hasSnapshot(rt, ctx.db)) {
+    report.criteria[0] = criterion(v.id, false, NO_SNAPSHOT(ctx.db, path.relative(process.cwd(), sandbox.dir).replace(/\\/g, '/')));
+    for (const id of PROBE_CRITERIA.slice(2)) report.criteria.push(criterion(id, false, 'no se ejecutó: el sandbox no está listo para sondear', { skipped: true }));
+    return { ...report, recordings: [] };
+  }
   const failures = {};
   const note = (probeId, f) => {
     for (const [id, list] of Object.entries(f)) for (const d of list) (failures[id] ??= []).push(`${probeId}: ${d}`);

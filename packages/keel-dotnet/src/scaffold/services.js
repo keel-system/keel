@@ -13,7 +13,7 @@
 // lo que cuelga de capas que keel-dotnet todavía no genera (el almacén de idempotencia, el correo, los clientes
 // salientes) llega con su incremento: el handler de hoy solo inyecta lo que existe.
 
-import { carriesEntryGate, dispatchNote, entryGateNote, scheduleDispatch, usesEntryGate } from 'keel-core/gen';
+import { carriesEntryGate, dispatchNote, entryGateNote, ownershipNotes, scheduleDispatch, usesEntryGate } from 'keel-core/gen';
 import { textFilterNotes } from 'keel-core/gen/text-filters';
 import { finderNote } from 'keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
@@ -418,6 +418,9 @@ function handlerNotes(model, operation) {
         (error ? ` — ${located(model, 'errors', error.exceptionClass).path}` : '')
     );
   }
+  // La propiedad (DSL 2.23): nota neutral, la misma en los tres generadores.
+  const ownerParam = operation.messageKind === 'query' ? 'query' : 'command';
+  for (const note of ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field[0].toUpperCase()}${field.slice(1)}` })) notes.push(note);
   const scoping = model.security?.scoping;
   if (scopedOperation(model, operation)) {
     const exempt = [...scoping.exemptRoles, ...(scoping.exemptClients ?? []).map((client) => `cliente ${client}`)];

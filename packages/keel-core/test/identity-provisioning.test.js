@@ -46,6 +46,24 @@ test('con Keycloak: el script y las credenciales llevan los textos de la platafo
   for (const [file, content] of Object.entries(files)) assert.doesNotMatch(content, FOREIGN, file);
 });
 
+// conduit (recuperado de RealWorld): sin roles, con la identidad en el `sub` y dos personas por escenario («solo el
+// autor edita su artículo»). Hasta el DSL 2.23 el realm salía sin cliente de usuario —así que sin `tokenAs`— y el
+// agente de pruebas del inc. 1 de keel-recover escribió su propio emisor de personas.
+test('sin roles y con la identidad en el sub: cliente de usuario y personas, sin usuarios fijos', () => {
+  const sinRoles = { roles: [], scopes: [], serviceAuth: undefined, serviceClients: [], scoping: undefined };
+  const files = byPath(identityProvisioningFiles(modelFor('keycloak', sinRoles), PROBE));
+  const script = files['infra/init-keycloak.sh'];
+  assert.match(files['infra/test-credentials.env'], /^AUTH_TEST_CLIENT=ticket-desk-probe-test$/m);
+  assert.match(files['infra/test-credentials.env'], /tokenAs\(sub, claims\) de PROBE-HARNESS/);
+  assert.match(script, /^USER_CLIENT=ticket-desk-probe-test /m);
+  assert.match(script, /create clients -r \$REALM -s clientId=\$USER_CLIENT/);
+  assert.doesNotMatch(script, /create users/, 'las personas las da de alta el arnés, no el script');
+  // Sin la identidad en el sub no hay personas: el realm sigue sin cliente de usuario.
+  const sinPersonas = byPath(identityProvisioningFiles(modelFor('keycloak', { ...sinRoles, callerIdentity: undefined }), PROBE));
+  assert.doesNotMatch(sinPersonas['infra/test-credentials.env'], /AUTH_TEST_CLIENT/);
+  assert.doesNotMatch(sinPersonas['infra/init-keycloak.sh'], /USER_CLIENT/);
+});
+
 test('con Cognito: credenciales y emulador, sin script de kcadm', () => {
   const files = byPath(identityProvisioningFiles(modelFor('cognito'), PROBE));
   assert.deepEqual(Object.keys(files).sort(), ['infra/cognito/mock-oauth2-config.json', 'infra/test-credentials.env']);

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/recover/questions.schema.json",
+  "title": "Las decisiones del humano pendientes de una recuperación (questions.yaml)",
+  "description": "Lo que solo puede decidir el humano —cada fix, cada decisión asked, las estructurales que el legacy no tomaba (omitted) y cuándo dejar de explorar—, escrito por los subagentes de /keel-recover-run, que no pueden preguntar. El orquestador las pregunta en tandas, escribe answer y date, y el diseñador las aplica y marca applied. keel-recover status no deja pasar de la fase design con una pregunta sin contestar o sin aplicar.",
+  "type": "object",
+  "required": ["kind", "schema", "questions"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "questions" },
+    "schema": { "const": 1 },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "question", "options", "recommendation", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "description": "Estable: el id del fix (fix-unique-409), del elemento o de la sección estructural (structural-3.2)." },
+          "kind": {
+            "enum": ["fix", "asked", "omitted", "explore"],
+            "description": "fix: corregir a propósito algo que el legacy hace; asked: un elemento del diseño que el legacy no fija; omitted: una decisión estructural que el legacy no tomaba; explore: si seguir observando."
+          },
+          "question": { "type": "string", "minLength": 10, "description": "La pregunta, con la consecuencia observable de cada respuesta." },
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 4,
+            "items": {
+              "type": "object",
+              "required": ["label", "description"],
+              "additionalProperties": false,
+              "properties": {
+                "label": { "type": "string", "minLength": 1, "maxLength": 40 },
+                "description": { "type": "string", "minLength": 5 }
+              }
+            }
+          },
+          "recommendation": { "type": "string", "minLength": 1, "description": "El label de la opción recomendada, y por qué en una frase." },
+          "evidence": { "type": "string", "minLength": 3, "description": "La grabación (recordings/<ronda>/<id>.json) o el archivo:línea que muestra lo que hace el legacy." },
+          "answer": { "type": ["string", "null"], "description": "Lo que contestó el humano: el label de una opción o su texto libre. Lo escribe el orquestador." },
+          "date": { "type": "string", "format": "date", "description": "Cuándo lo contestó (AAAA-MM-DD)." },
+          "applied": { "type": "boolean", "description": "true cuando el diseñador ya lo aplicó al diseño (provenance.yaml, decisions.yaml o las capas)." }
+        }
+      }
+    }
+  }
+}

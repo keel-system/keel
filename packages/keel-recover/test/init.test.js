@@ -27,14 +27,20 @@ test('init escribe legacy/<servicio>/ y las skills del sandbox y del diseño par
   for (const p of ['legacy/orders-api/legacy.yaml', 'legacy/orders-api/runtime.yaml', 'legacy/orders-api/environment.yaml', 'legacy/orders-api/sandbox/instrument/v8-coverage-exit.cjs', 'legacy/orders-api/sandbox/instrument/express-routes.cjs']) {
     assert.ok(paths.includes(p), p);
   }
-  // las dos skills: la del sandbox (pasos 0c-0e) y la del diseño (pasos 3 y 4), con sus referencias
-  for (const skill of ['keel-recover-sandbox', 'keel-recover']) {
+  // las tres skills: la del sandbox (pasos 0c-0e), la del diseño (pasos 3 y 4) y la orquestadora, con sus referencias
+  for (const skill of ['keel-recover-sandbox', 'keel-recover', 'keel-recover-run']) {
     assert.ok(paths.includes(`.claude/skills/${skill}/SKILL.md`), skill);
     assert.ok(paths.some((p) => p.startsWith('.opencode/') && p.includes(`/${skill}/`)), skill);
   }
   assert.ok(paths.includes('.claude/skills/keel-recover/references/characterization.md'));
+  assert.ok(paths.includes('.claude/skills/keel-recover/references/exploration.md'));
+  // los subagentes de /keel-recover-run, en los dos harnesses
+  for (const agent of ['keel-recover-sandbox', 'keel-recover-explorer', 'keel-recover-designer']) {
+    assert.ok(paths.includes(`.claude/agents/${agent}.md`), agent);
+    assert.ok(paths.some((p) => p.startsWith('.opencode/') && p.endsWith(`/${agent}.md`)), agent);
+  }
   // sin rutas de harness ni tokens sin proyectar en lo que se siembra
-  for (const f of plan.files.filter((x) => x.path.includes('/keel-recover/'))) {
+  for (const f of plan.files.filter((x) => /keel-recover/.test(x.path) && !x.path.startsWith('legacy/'))) {
     assert.ok(!/\{\{keel:/.test(f.content), `${f.path} con un token sin proyectar`);
   }
   const legacy = YAML.parse(plan.files.find((f) => f.path.endsWith('legacy.yaml')).content);

@@ -53,7 +53,23 @@
         "clientId": { "type": "string", "minLength": 1 },
         "clientSecret": { "type": "string" },
         "password": { "type": "string" },
-        "users": { "type": "object", "additionalProperties": { "type": "string" } }
+        "users": { "type": "object", "additionalProperties": { "type": "string" } },
+        "seed": {
+          "type": "object",
+          "required": ["container", "realm", "admin"],
+          "additionalProperties": false,
+          "description": "Si está, parity da de alta antes de empezar a cada persona de los flujos (los actores `via: idp`) en el Keycloak del deploy, con su administración por kcadm dentro del contenedor y la contraseña `password`. Lo escribe `keel-recover target`; sin él, las personas tienen que existir ya (el deploy de keel no las trae: el diseño no tiene usuarios fijos).",
+          "properties": {
+            "container": { "type": "string", "minLength": 1 },
+            "realm": { "type": "string", "minLength": 1 },
+            "admin": {
+              "type": "object",
+              "required": ["user", "password"],
+              "additionalProperties": false,
+              "properties": { "user": { "type": "string" }, "password": { "type": "string" } }
+            }
+          }
+        }
       }
     }
   }

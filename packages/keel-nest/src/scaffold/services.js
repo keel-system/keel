@@ -30,7 +30,7 @@ import { mailPorts, sendsMail } from './mail.js';
 import { ANNOTATIONS_TS, ENTRY_GATE_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyBatchFinder, PAGE_TS } from './repositories.js';
-import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch, dispatchNote, carriesEntryGate, entryGateNote, usesEntryGate } from 'keel-core/gen';
+import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch, dispatchNote, carriesEntryGate, entryGateNote, usesEntryGate, ownershipNotes } from 'keel-core/gen';
 import { COMMAND_DISPATCHER_TS } from './mediator.js';
 import { OPERATION_CACHE_TS } from './cache.js';
 import { cacheNote } from 'keel-core/gen/cache-plan';
@@ -467,6 +467,9 @@ function handlerNotes(model, operation) {
         (error ? ` — ${classPath(DIRS.errors, error.exceptionClass)}` : '')
     );
   }
+  // La propiedad (DSL 2.23): nota neutral, la misma en los tres generadores.
+  const ownerParam = operation.messageKind === 'query' ? 'query' : 'command';
+  for (const note of ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field}` })) notes.push(note);
   const scoping = model.security?.scoping;
   if (scopedOperation(model, operation)) {
     notes.push(

@@ -41,6 +41,8 @@ export function closingCredentialExpression(model) {
       return 'new() { ["X-API-Key"] = ApiKey() }';
     case 'role':
       return `Bearer(await TokenFor(${csString(credential.name)}))`;
+    case 'persona':
+      return `Bearer(await TokenAs(${csString(credential.name)}))`;
     default:
       return machineKeys(model)
         ? `new() { ["X-API-Key"] = ServiceCredential(${csString(credential.name)}) }`

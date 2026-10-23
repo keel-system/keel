@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/recover/exploration.schema.json",
+  "title": "El cierre de la exploración de un legacy (exploration.yaml)",
+  "description": "Que el humano dio por cerrada la observación del paso 1 y con qué: cuántas rondas, la cobertura acumulada y el motivo. Lo escribe /keel-recover-run en su primer punto de decisión; sin él, keel-recover status sigue en la fase explore. Lo que quedó sin observar va a unobserved.yaml, no aquí.",
+  "type": "object",
+  "required": ["kind", "schema", "stopped"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "exploration" },
+    "schema": { "const": 1 },
+    "stopped": {
+      "type": "object",
+      "required": ["date", "rounds", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "rounds": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Las rondas grabadas al cerrar (round-1, round-2…)." },
+        "coverage": { "type": ["number", "null"], "minimum": 0, "maximum": 100, "description": "La cobertura acumulada de líneas o sentencias al cerrar, en %." },
+        "reason": { "type": "string", "minLength": 5, "description": "Por qué se cierra: la cobertura dejó de subir, el presupuesto de rondas, lo que queda es código muerto…" }
+      }
+    }
+  }
+}

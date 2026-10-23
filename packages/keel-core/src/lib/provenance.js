@@ -174,6 +174,9 @@ export function readCharacterization(scenariosText, doc) {
   const out = emptyCharacterization();
   if (!scenariosText) return out;
   const fixes = new Set((doc?.fixes ?? []).map((f) => f.id));
+  // Un fix que ningún flujo HTTP puede ver lo dice con `noFlow` (por qué y cuál es la otra prueba):
+  // no cuenta como cambio sin escenario, y que un flujo lo cite contradice lo declarado.
+  const withoutFlow = new Set((doc?.fixes ?? []).filter((f) => f.noFlow).map((f) => f.id));
   const frontier = new Set((doc?.frontier ?? []).map((f) => f.id));
   const cited = new Set();
   for (const block of splitScenarioBlocks(scenariosText)) {
@@ -188,8 +191,9 @@ export function readCharacterization(scenariosText, doc) {
     if (mark === 'fix' && !fixes.has(ref)) out.unknown.push(`${id}: fix ${ref ?? '(sin id)'} no está en ${PROVENANCE_FILE} → fixes`);
     if (mark === 'frontier' && !frontier.has(ref)) out.unknown.push(`${id}: frontier ${ref ?? '(sin id)'} no está en ${PROVENANCE_FILE} → frontier`);
     if (mark === 'fix' && ref) cited.add(ref);
+    if (mark === 'fix' && withoutFlow.has(ref)) out.unknown.push(`${id}: fix ${ref} declara noFlow en ${PROVENANCE_FILE} y este flujo lo demuestra`);
   }
-  out.unusedFixes = [...fixes].filter((id) => !cited.has(id));
+  out.unusedFixes = [...fixes].filter((id) => !cited.has(id) && !withoutFlow.has(id));
   return out;
 }
 

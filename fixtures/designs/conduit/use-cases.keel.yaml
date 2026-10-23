@@ -1,0 +1,288 @@
+# Casos de uso recuperados de realworld-node. Una operación por ruta del legacy salvo login y registro con
+# contraseña, que pasan al proveedor de identidad (decisions.yaml: fix-identity). Procedencia: provenance.yaml.
+operations:
+
+  # ── Perfil del titular del token (legacy: /api/users, /api/user) ──────────────
+  registerProfile:
+    description: Da de alta el perfil del titular del token (antes, el registro con contraseña).
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+        username: { type: Username, required: true }
+        bio: { type: text, constraints: { maxLength: 2000 } }
+        image: { type: string, constraints: { maxLength: 2048 } }
+    output: { entity: Profile, exclude: [subject, following] }
+    rules:
+      - El username se pasa a minúsculas antes de comprobar la unicidad y de guardarse.
+      - Un titular tiene como máximo un perfil.
+    errors:
+      - { code: USERNAME_ALREADY_EXISTS, when: Ya existe un perfil con ese username., http: 409 }
+      - { code: PROFILE_ALREADY_EXISTS, when: El titular del token ya tiene perfil., http: 409 }
+
+  getMyProfile:
+    description: Devuelve el perfil del titular del token.
+    kind: query
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+    output: { entity: Profile, exclude: [subject, following] }
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+
+  updateMyProfile:
+    description: Actualiza los campos presentes del perfil del titular del token.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+        username: { type: Username }
+        bio: { type: text, constraints: { maxLength: 2000 } }
+        image: { type: string, constraints: { maxLength: 2048 } }
+    output: { entity: Profile, exclude: [subject, following] }
+    rules:
+      - Solo cambia los campos que llegan; un campo ausente conserva su valor.
+      - Un username nuevo se pasa a minúsculas y tiene que estar libre.
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+      - { code: USERNAME_ALREADY_EXISTS, when: Ya existe otro perfil con ese username., http: 409 }
+
+  # ── Perfiles ajenos (legacy: /api/profiles) ──────────────────────────────────
+  getProfile:
+    description: Devuelve el perfil público de un username.
+    kind: query
+    input:
+      fields:
+        username: { type: Username, required: true }
+    output: { entity: Profile, exclude: [subject] }
+    rules:
+      - El username se busca en minúsculas.
+      - Un perfil sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg.
+      - "following sale false, sin personalizar aunque llegue un token (frontera F-OPTIONAL-AUTH)."
+    errors:
+      - { code: PROFILE_NOT_FOUND, when: No existe un perfil con ese username., http: 404 }
+
+  followProfile:
+    description: El titular del token pasa a seguir a otro perfil.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+        username: { type: Username, required: true }
+    output: { entity: Profile, exclude: [subject] }
+    rules:
+      - Crea el Follow del par (perfil del titular, perfil seguido); si ya existe, no cambia nada y responde igual.
+      - Seguirse a uno mismo está permitido.
+      - "Un perfil sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
+      - "following se calcula para el titular del token tras la operación (PARITY v0.1.0: faltaba)."
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+      - { code: PROFILE_NOT_FOUND, when: No existe un perfil con ese username., http: 404 }
+
+  unfollowProfile:
+    description: El titular del token deja de seguir a otro perfil.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+        username: { type: Username, required: true }
+    output: { entity: Profile, exclude: [subject] }
+    rules:
+      - Borra el Follow del par; si no existe, no cambia nada y responde igual.
+      - "Un perfil sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
+      - "following se calcula para el titular del token tras la operación (PARITY v0.1.0: faltaba)."
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+      - { code: PROFILE_NOT_FOUND, when: No existe un perfil con ese username., http: 404 }
+
+  # ── Artículos (legacy: /api/articles) ────────────────────────────────────────
+  listArticles:
+    description: Lista artículos, filtrables por etiqueta, autor y favoritos de un perfil.
+    kind: query
+    input:
+      fields:
+        tag: { type: string, description: Solo artículos con esta etiqueta. }
+        author: { type: Username, description: Solo artículos de este username. }
+        favorited: { type: Username, description: Solo artículos que este username tiene en favoritos. }
+    output: { entity: Article, paginated: true, sort: [createdAt:desc], embed: [author], exclude: [comments] }
+    rules:
+      - Un author que no existe deja la lista vacía (el legacy ignoraba el filtro; decisions.yaml fix-author-filter).
+      - Un favorited que no existe deja la lista vacía.
+      - Los filtros presentes se combinan con AND.
+      - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
+      - "Lectura pública: favorited y author.following salen false, sin personalizar aunque llegue un token (frontera F-OPTIONAL-AUTH)."
+
+  listFeed:
+    description: Artículos de los perfiles que sigue el titular del token.
+    kind: query
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+    output: { entity: Article, paginated: true, sort: [createdAt:desc], embed: [author], exclude: [comments] }
+    rules:
+      - Solo artículos cuyo autor sigue el titular (hay un Follow con el titular de follower y el autor de followed).
+      - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
+      - "favorited y author.following se calculan para el titular del token (PARITY v0.1.0: faltaban)."
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+
+  createArticle:
+    description: Publica un artículo del titular del token.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+        title: { type: string, required: true, constraints: { maxLength: 300 } }
+        description: { type: string, constraints: { maxLength: 1000 } }
+        body: { type: text, constraints: { maxLength: 100000 } }
+        tagList: { type: string, list: true, constraints: { maxItems: 20 } }
+    output: { entity: Article, embed: [author], exclude: [comments] }
+    rules:
+      - El autor es el perfil del titular del token.
+      - Publicar dos veces el mismo contenido crea dos artículos con slugs distintos.
+      - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
+      - "favorited y author.following se calculan para el titular del token (PARITY v0.1.0: faltaban)."
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+
+  getArticle:
+    description: Devuelve un artículo por su slug.
+    kind: query
+    input:
+      fields:
+        slug: { type: string, required: true }
+    output: { entity: Article, embed: [author], exclude: [comments] }
+    rules:
+      - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
+      - "Lectura pública: favorited y author.following salen false, sin personalizar aunque llegue un token (frontera F-OPTIONAL-AUTH)."
+    errors:
+      - { code: ARTICLE_NOT_FOUND, when: No existe un artículo con ese slug., http: 404 }
+
+  updateArticle:
+    description: Edita los campos presentes de un artículo propio.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+        slug: { type: string, required: true }
+        title: { type: string, constraints: { maxLength: 300 } }
+        description: { type: string, constraints: { maxLength: 1000 } }
+        body: { type: text, constraints: { maxLength: 100000 } }
+        tagList: { type: string, list: true, constraints: { maxItems: 20 } }
+    output: { entity: Article, embed: [author], exclude: [comments] }
+    rules:
+      - Solo cambia los campos que llegan.
+      - El slug no cambia aunque cambie el title.
+      - Solo el autor puede editarlo (security.ownership); un artículo que no existe es 404 antes que 403.
+      - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
+      - "favorited y author.following se calculan para el titular del token (PARITY v0.1.0: faltaban)."
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+      - { code: ARTICLE_NOT_FOUND, when: No existe un artículo con ese slug., http: 404 }
+      - { code: NOT_ARTICLE_AUTHOR, when: Quien llama no es el autor del artículo., http: 403 }
+
+  deleteArticle:
+    description: Borra un artículo propio con sus comentarios.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+        slug: { type: string, required: true }
+    output: "void"
+    rules:
+      - Solo el autor puede borrarlo (security.ownership); un artículo que no existe es 404 antes que 403.
+      - Borra también sus comentarios y los Favorite que lo apuntan (decisions.yaml fix-delete-cascade).
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+      - { code: ARTICLE_NOT_FOUND, when: No existe un artículo con ese slug., http: 404 }
+      - { code: NOT_ARTICLE_AUTHOR, when: Quien llama no es el autor del artículo., http: 403 }
+
+  favoriteArticle:
+    description: El titular del token marca un artículo como favorito.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+        slug: { type: string, required: true }
+    output: { entity: Article, embed: [author], exclude: [comments] }
+    rules:
+      - Crea el Favorite del par (perfil del titular, artículo); si ya existe, no cambia nada y responde igual.
+      - favoritesCount es el número de perfiles que lo tienen en favoritos tras la operación.
+      - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
+      - "favorited y author.following se calculan para el titular del token (PARITY v0.1.0: faltaban)."
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+      - { code: ARTICLE_NOT_FOUND, when: No existe un artículo con ese slug., http: 404 }
+
+  unfavoriteArticle:
+    description: El titular del token quita un artículo de sus favoritos.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+        slug: { type: string, required: true }
+    output: { entity: Article, embed: [author], exclude: [comments] }
+    rules:
+      - Borra el Favorite del par; si no existe, no cambia nada y responde igual.
+      - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
+      - "favorited y author.following se calculan para el titular del token (PARITY v0.1.0: faltaban)."
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+      - { code: ARTICLE_NOT_FOUND, when: No existe un artículo con ese slug., http: 404 }
+
+  # ── Comentarios (legacy: /api/articles/:slug/comments) ───────────────────────
+  listComments:
+    description: Comentarios de un artículo, del más reciente al más antiguo.
+    kind: query
+    input:
+      fields:
+        slug: { type: string, required: true }
+    output: { entity: Comment, list: true, sort: [createdAt:desc], embed: [author] }
+    rules:
+      - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
+      - "Lectura pública: author.following sale false, sin personalizar aunque llegue un token (frontera F-OPTIONAL-AUTH)."
+    errors:
+      - { code: ARTICLE_NOT_FOUND, when: No existe un artículo con ese slug., http: 404 }
+
+  addComment:
+    description: El titular del token comenta un artículo.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+        slug: { type: string, required: true }
+        body: { type: text, required: true, constraints: { maxLength: 5000 } }
+    output: { entity: Comment, embed: [author] }
+    rules:
+      - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
+      - "author.following se calcula para el titular del token (PARITY v0.1.0: faltaba)."
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+      - { code: ARTICLE_NOT_FOUND, when: No existe un artículo con ese slug., http: 404 }
+
+  deleteComment:
+    description: Borra un comentario propio de un artículo.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: Claim sub del token. }
+        slug: { type: string, required: true }
+        commentId: { type: uuid, required: true }
+    output: "void"
+    rules:
+      - El comentario tiene que pertenecer al artículo del slug (decisions.yaml fix-comment-ownership).
+      - Solo el autor del comentario puede borrarlo (security.ownership); el 404 del artículo y del comentario van antes que el 403.
+    errors:
+      - { code: PROFILE_NOT_REGISTERED, when: El titular del token no tiene perfil., http: 401 }
+      - { code: ARTICLE_NOT_FOUND, when: No existe un artículo con ese slug., http: 404 }
+      - { code: COMMENT_NOT_FOUND, when: El artículo no tiene un comentario con ese id., http: 404 }
+      - { code: NOT_COMMENT_AUTHOR, when: Quien llama no es el autor del comentario., http: 403 }
+
+  # ── Etiquetas (legacy: /api/tags) ─────────────────────────────────────────────
+  listTags:
+    description: Todas las etiquetas distintas usadas por algún artículo.
+    kind: query
+    input: "void"
+    output: { fields: { tags: { type: string, list: true } } }
+    rules:
+      - Es el conjunto de etiquetas distintas de todos los artículos; no hay entidad Tag.

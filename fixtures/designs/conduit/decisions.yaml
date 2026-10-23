@@ -1,0 +1,98 @@
+decisions:
+  - id: CHK-API-CREATED-NO-READ
+    scope: api.endpoints.registerProfile
+    reason: >
+      El legacy tampoco devolvía Location: el perfil se lee por username (GET /profiles/{username}), no por
+      id, y el cliente ya tiene el username en la respuesta del alta.
+    since: 0.1.0
+  - id: CHK-API-CREATED-NO-READ
+    scope: api.endpoints.createArticle
+    reason: >
+      El artículo se lee por slug (GET /articles/{slug}), que llega en la respuesta del alta; el legacy no
+      devolvía Location.
+    since: 0.1.0
+  - id: CHK-API-CREATED-NO-READ
+    scope: api.endpoints.addComment
+    reason: >
+      Un comentario no se lee suelto: se lista con su artículo. El legacy no devolvía Location.
+    since: 0.1.0
+  - id: OBL-ENTITY-UNREACHABLE
+    scope: domain
+    reason: >
+      Favorite lo crean y lo borran favoriteArticle y unfavoriteArticle (sus rules lo dicen) y lo borra
+      deleteArticle en cascada; ninguna operación lo devuelve porque el contrato expone el favorito como
+      favoritesCount del artículo, igual que el legacy. Follow igual: lo crean y lo borran followProfile y
+      unfollowProfile, y el contrato lo expone como following del perfil.
+    since: 0.1.0
+  - id: CHK-PERSIST-BOUNDARY-DEFAULT
+    scope: persistence.consistency.transactionalBoundary
+    reason: >
+      Elegido, no heredado de la plantilla: deleteArticle confirma el artículo y sus Favorite juntos
+      (structural §3.7).
+    since: 0.1.0
+
+structural:
+  - section: '3.2'
+    chosen: sin idempotency en ninguna operación
+    discarded: idempotency con keySource client-key en createArticle y addComment
+    reason: >-
+      Observado (recordings/round-1/R1-021): publicar dos veces crea dos artículos con slugs distintos.
+      favorite/follow son idempotentes por su clave natural. El legacy no tenía idempotencia y el humano
+      decidió conservarlo así el 2026-10-22: un reintento del cliente crea un duplicado, como en el legacy.
+    since: 0.1.0
+    origin: omitted
+  - section: '3.7'
+    scope: persistence.consistency.transactionalBoundary
+    chosen: per-operation
+    discarded: per-aggregate
+    reason: >-
+      deleteArticle borra el artículo y los Favorite que lo apuntan, que son otro agregado: tienen que
+      confirmar juntos o quedarían favoritos colgando (el defecto RW-DEF-02 del legacy).
+    origin: contradicted
+    evidence: "recordings/round-1/R1-032.json (el legacy dejaba huérfanos los comentarios y favoritos: fix-delete-cascade)"
+    since: 0.1.0
+  - section: '3.9'
+    scope: persistence.consistency.optimisticLocking
+    chosen: none
+    discarded: all
+    reason: >-
+      Observado por lectura (RW-CONC-03): el legacy no comprueba versión y gana la última escritura.
+      Conservado: solo el autor edita su artículo.
+    origin: observed
+    evidence: "src/routes/api/articles.js:153-179 (RW-CONC-03)"
+    since: 0.1.0
+  - section: '3.9b'
+    scope: persistence.audit.timestamps
+    chosen: declared
+    discarded: all
+    reason: >-
+      createdAt y updatedAt de Article y Comment salen en las respuestas del legacy (toJSONFor): son contrato.
+    origin: observed
+    evidence: "src/models/Article.js:15 y src/models/Comment.js:7 (timestamps: true); salen en toJSONFor (src/models/Article.js:47-48)"
+    since: 0.1.0
+  - section: '3.9b'
+    scope: persistence.audit.authorship
+    chosen: none
+    discarded: all
+    reason: El autor del artículo y del comentario es una relación del dominio, no auditoría.
+    origin: observed
+    evidence: "src/models/Article.js:14 y src/models/Comment.js:5 (author es una referencia, no auditoría)"
+    since: 0.1.0
+  - section: '3.3'
+    chosen: sin caché en ninguna query
+    discarded: cache en getArticle y listTags
+    reason: >-
+      El legacy no cachea (lectura directa de Mongo en cada petición) y el autor espera ver su edición al
+      instante. El legacy no cacheaba y el humano decidió seguir sin caché el 2026-10-22.
+    since: 0.1.0
+    origin: omitted
+  - section: '3.8'
+    scope: api.pagination
+    chosen: offset, 20 por defecto, máximo 100
+    discarded: sin máximo (el legacy aceptaba limit=1000, RW-RULE-05)
+    reason: >-
+      El sobre canónico de Keel sustituye a limit/offset + articlesCount (contract-map.yaml). El 20 por
+      defecto es el del legacy; el tope es un fix (fix-page-max).
+    origin: contradicted
+    evidence: "recordings/round-1/R1-031.json (limit sin tope: RW-RULE-05; fix-page-max)"
+    since: 0.1.0

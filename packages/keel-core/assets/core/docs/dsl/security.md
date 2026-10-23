@@ -101,6 +101,36 @@ authentication:
 - Qué recurso alcanza cada usuario **de prueba** no es del diseño: el generador siembra el proveedor de identidad con un valor convencional y lo publica para el arnés (en keel-spring, `AUTH_SCOPED_RESOURCE` de `infra/test-credentials.env`).
 - La comprobación en sí se escribe como `rule` en cada operación acotada — el DSL declara de dónde sale el alcance, no el algoritmo que lo aplica.
 
+## Autorización por propietario (`ownership`, 2.23)
+
+`scoping` acota por un claim **del token**. Lo que muchos servicios necesitan es acotar por un campo **del recurso**: «solo el autor edita o borra su artículo», «solo el agente que abrió el ticket lo cierra». Eso es `ownership`:
+
+```yaml
+authentication:
+  protocol: oidc
+  callerIdentity:
+    field: callerSubject
+    from: { source: claim, name: sub }
+
+ownership:
+  Article:
+    owner: author.subject        # la relación author lleva a Profile, cuyo subject es el titular
+    error: NOT_ARTICLE_AUTHOR    # el 403 que declara cada operación de la lista
+    operations: [updateArticle, deleteArticle]
+  Comment:
+    owner: author.subject
+    error: NOT_COMMENT_AUTHOR
+    operations: [deleteComment]
+    exemptRoles: [moderator]     # opcional: roles que operan sobre cualquier recurso
+```
+
+- `owner` dice dónde está el dueño **desde la entidad**: un campo suyo (`openedBy`), o relaciones `many-to-one`/`one-to-one` hasta un campo de otra (`author.subject`). Ese campo guarda el mismo valor que estampa `callerIdentity`, y es contra él con lo que se compara: nunca contra algo que mande el cliente.
+- Exige `authentication.callerIdentity`, y que cada operación de `operations` reciba su campo en el input: sin saber quién llama no hay nada que comparar.
+- `error` es un `code` que cada operación de la lista declara en sus `errors` con `http: 403`; ahí viven su `when` y su status, que son contrato público. Un 403 de propiedad así declarado cierra `OBL-RESOURCE-SCOPE` para esa operación.
+- `exemptRoles` se enumera uno a uno, como en `scoping`: la exención es la parte peligrosa.
+- **El orden lo deciden las reglas de la operación**: si el recurso no existe es su 404, y si existe y no es tuyo, este 403. La comprobación la escribe el handler; el generador le deja la nota con la entidad, el camino al dueño, el campo del llamante y el `code`.
+- En las pruebas, dos personas distintas: el arnés emite `tokenAs(sub)` cuando la identidad del llamante es el claim `sub` (con Keycloak), haya roles o no.
+
 ## Clientes máquina (M2M)
 
 Cuando otros servidores consumen endpoints del servicio (capa `api` con `audience: services` o `both`), la seguridad se modela con tres piezas:

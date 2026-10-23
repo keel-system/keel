@@ -256,11 +256,44 @@ golpe).
 
 ## 4. Incrementos
 
-**Estado (2026-10-22):** incrementos 0 a 7 **cerrados**. El 1 se registró en `docs/recover-bench/corridas/`
+**Estado (2026-10-22):** incrementos 0 a 8 **cerrados**; el 9 (`/keel-recover-run`), **construido** y sin su corrida de control. El 1 se registró en `docs/recover-bench/corridas/`
 (paso 0, paso 1, pasos 3-5 y paso 7). Su laboratorio es el repo `../keel-recover-lab`: sandboxes,
 grabaciones, el diseño `conduit` y los prototipos `tools/*.mjs` que los incrementos 6 y 7 reescriben
 dentro del paquete (el 4 reescribió `probe.mjs` y `express-routes.js`; el 6, `flows.mjs`; el 7, `parity.mjs`).
-**Queda el 8** (DSL 2.23, autorización por propietario).
+El 8 (DSL 2.23, autorización por propietario) se cerró con su corrida: conduit v0.1.1 regenerado desde cero con
+keel-dotnet, 33/33 escenarios, y la paridad en **verde** (55 pasos, 27 diferencias, todas declaradas; el inc. 7 dejaba
+33 sin declarar). Registro: `docs/recover-bench/corridas/2026-10-22-inc8-propiedad-y-v011.md`. **No queda ningún
+incremento del plan.**
+
+Incremento 9, construido (2026-10-22): **`/keel-recover-run`, el recorrido en un solo comando reanudable**, pedido
+por el usuario al ver la guía («son muchos pasos manuales»). Decisiones del usuario: un solo comando que se retoma
+igual, y las decisiones del humano agrupadas en tres puntos de parada. Las piezas:
+- `keel-recover status`: la fase siguiente, derivada del disco. Por eso el orquestador no guarda estado.
+- Tres subagentes hoja: `keel-recover-sandbox`, `keel-recover-explorer` (el que faltaba: escribe las rondas) y
+  `keel-recover-designer`.
+- `questions.yaml` y `exploration.yaml`: el handoff de lo que solo decide el humano.
+- `keel-recover target`, que escribe el `target.yaml` del `deploy/`.
+- La siembra de personas dentro de `parity`.
+- La comprobación del snapshot al empezar `characterize` y `probe`.
+
+La generación no se anida (sus subagentes no pueden lanzar otros): el orquestador hace el `build` y para. Medido sin
+contenedores (`status.test.js`, `target.test.js`) y, en vivo, la fase de paridad del laboratorio rehecha solo con las
+piezas nuevas: 55 pasos y 0 sin declarar, con un Keycloak sin usuarios. Falta su corrida de control:
+`/keel-recover-run` desde cero, contando paradas y preguntas.
+
+Incremento 8, hecho (2026-10-22): `security.ownership` en el DSL 2.23 —una entrada por entidad con `owner` (un
+campo suyo o relaciones a-uno hasta un campo de otra, comparado con la identidad del llamante), `operations`, `error`
+y `exemptRoles`—, siete `CHK-SECURITY-OWNERSHIP-*` con su mutación, y el 403 de propiedad declarado deja de abrir
+`OBL-RESOURCE-SCOPE`. Los tres generadores escriben la misma nota en el handler (`keel-core/gen/ownership.js`; la
+compara `keel-dotnet/test/ownership.test.js`, falsada quitándola de uno). conduit es fixture del monorepo
+(`fixtures/designs/conduit`), así que las tres redes de sintaxis lo generan. Tres cosas que salieron al hacerlo:
+(1) un diseño sin roles con la identidad en el `sub` no tenía cliente de usuario ni `tokenAs`, y el 403 de propiedad
+necesita dos personas: el agente del inc. 1 escribió su propio `People.cs` (`usesUserClient` en
+`keel-core/gen/identity-realm.js`); (2) `CHK-DOMAIN-COLLECTION-CROSSES-AGGREGATE` no veía la auto-referencia a-muchos
+de una raíz (`Profile.follows → Profile`), que el generador dejaba sin campo al agente: conduit gana el agregado
+`Follow`, como `Favorite` (decidido por el humano); (3) para un `fix` que ningún flujo HTTP puede ver, `noFlow`
+(`why` y `proof`) en `provenance.yaml`. Con eso conduit v0.1.1 sale con `provenance` y `characterized` en verde
+(9 de 13 en `--ready`): keep 21/21, fix 6/6, frontera 0.
 
 Incremento 7, hecho: `keel-recover parity legacy/<servicio> --target <target.yaml>` (paso 7). Ejecuta los mismos
 flujos de `validation-scenarios.md` —todas las marcas, `new` incluido— contra el servicio regenerado, que el humano
@@ -413,7 +446,8 @@ solo la versión de la CI y las adaptaciones escritas.
 | 5 | Skill `/keel-recover` (pasos 3 y 4) + `provenance.yaml` (fila en `SPEC_SIDE_FILES`) + `origin`/`evidence` en `structural-register.js` | `npm test` en keel-core; un `inferred` en el diseño final sale en rojo, y **también todo elemento del DSL sin fila en `provenance.yaml`**: en el inc. 1 se coló un rol copiado de la forma de una fixture, sin fila, y no lo habría cazado una puerta que solo mira lo que el agente declara. **Hecho** (criterio `provenance`) |
 | 6 | Criterio `characterized` en `readiness.js` + `FIDELITY.md` | `test/readiness.test.js`: romper el sello apaga `characterized` y solo ese criterio. **Hecho** (más `npm run characterize-check`) |
 | 7 | Paridad legacy ↔ regenerado (paso 7) | La corrida de control del incremento 1, repetida con la herramienta: la misma tabla. **Hecho** |
-| 8 | **DSL 2.23: autorización por propietario.** Encontrada en el inc. 1 sobre RealWorld: «solo el autor edita o borra» no se puede declarar, porque `scoping` acota por un claim y no por un campo del recurso. `OBL-RESOURCE-SCOPE` no admite aceptarse y **bloquea la generación**. Sin embargo la acotación es producible con `callerIdentity`, igual que el detector ya reconoce para el nivel `service`: falta decir qué campo del recurso guarda al propietario (`Article.author` → `Profile.subject`) y con qué `code` se rechaza. Toca el schema de `security`, `crossrefs.js` (la obligación se cierra con la declaración), una mutación, los tres generadores y una fixture (conduit) | La fixture con propiedad genera en los tres generadores y su 403 sale en una red en vivo; el inc. 1 vuelve a ejecutar FL-ART-004 y FL-COM-002 contra el regenerado |
+| 8 | **DSL 2.23: autorización por propietario.** Encontrada en el inc. 1 sobre RealWorld: «solo el autor edita o borra» no se puede declarar, porque `scoping` acota por un claim y no por un campo del recurso. `OBL-RESOURCE-SCOPE` no admite aceptarse y **bloquea la generación**. Sin embargo la acotación es producible con `callerIdentity`, igual que el detector ya reconoce para el nivel `service`: falta decir qué campo del recurso guarda al propietario (`Article.author` → `Profile.subject`) y con qué `code` se rechaza. Toca el schema de `security`, `crossrefs.js` (la obligación se cierra con la declaración), una mutación, los tres generadores y una fixture (conduit) | La fixture con propiedad genera en los tres generadores y su 403 sale en una red en vivo; el inc. 1 vuelve a ejecutar FL-ART-004 y FL-COM-002 contra el regenerado. **Hecho**: genera en los tres; corrida 33/33 y paridad en verde |
+| 9 | **`/keel-recover-run`: el recorrido en un solo comando reanudable.** `keel-recover status` (la fase, del disco), subagentes `keel-recover-{sandbox,explorer,designer}`, `questions.yaml`/`exploration.yaml`, `keel-recover target` y la siembra de personas en `parity` | Un recorrido desde cero sobre un legacy del banco con la única intervención humana en los tres puntos de decisión y la generación; `characterized` y la paridad en verde. **Construido**; falta la corrida |
 
 ## 5. Riesgos
 

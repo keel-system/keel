@@ -27,6 +27,11 @@ export async function characterize(legacyArg, options) {
   const only = options.only ? new Set(String(options.only).split(',')) : null;
   const planned = only ? prep.planned.filter((p) => only.has(p.id)) : prep.planned;
   const ctx = legacyContext(prep, containerRuntime(runtime), { snapshotHash: gate.snapshotHash });
+  const pre = ctx.preflight();
+  if (!pre.ok) {
+    console.error(pc.red(`✗ ${pre.error}`));
+    process.exit(1);
+  }
 
   const records = await runCharacterization(ctx, planned, {
     log: (r) => console.log(`${r.ok ? pc.green('✓') : pc.red('✗')} ${r.id.padEnd(12)} ${r.mark.padEnd(8)}${r.ok ? '' : pc.red(`  ${r.failures[0]}`)}`),

@@ -44,6 +44,18 @@ Si falta algo de esto, para y dilo: sin grabaciones, todo lo que escribas sería
 6. **Ejecutarlos contra el legacy** (paso 5): `keel-recover characterize legacy/<servicio>`. Escribe el sello `specs/<servicio>/characterized.yaml` y `legacy/<servicio>/FIDELITY.md`. **Un `keep` en rojo es el diseño diciendo algo que el legacy no hace: se corrige el diseño (y su escenario sale de una grabación nueva si hace falta), nunca la expectativa para que pase.** Tampoco se edita el sello: lo escribe la herramienta.
 7. **La puerta.** `keel validate --ready specs/<servicio>`: el criterio `provenance` deriva el inventario de elementos de las capas e imprime **entero** lo que no tiene fila, lo `inferred`, el `read` sin `archivo:línea`, las filas de elementos que el diseño ya no declara, las decisiones estructurales sin `origin` y los flujos sin caracterizar; el criterio `characterized`, los flujos sin ejecutar, en rojo o tocados desde la última ejecución. No los cierres a mano: vuelve a ellos hasta que no digan nada. Lo que falte del resto del cierre (revisión, análisis de huecos, careo, `DESIGN.md`) es el de `/keel-design`.
 
+## Cuando corres como subagente
+
+Lanzado por `/keel-recover-run` (agente `keel-recover-designer`) no tienes al humano delante. Donde este flujo dice
+«pregunta» (cada `fix`, cada `asked`, cada `omitted`), escribe la pregunta en `legacy/<servicio>/questions.yaml`
+(schema `questions.schema.json` de keel-recover). Cada entrada lleva:
+- 2 a 4 opciones con su consecuencia observable;
+- tu recomendación;
+- la evidencia.
+
+El orquestador las pregunta en tanda y escribe `answer`. Tú las aplicas en la pasada siguiente y marcas `applied: true`.
+`keel-recover status` no deja pasar de la fase de diseño con una pregunta sin contestar o sin aplicar.
+
 ## `provenance.yaml`
 
 Junto a las capas, en `specs/<servicio>/` (schema `provenance.schema.json`). **No viaja** al publicar ni al derivar: cita rutas y commits de un código privado. Su presencia declara que el diseño es recuperado.
@@ -59,6 +71,11 @@ elements:
   - { element: security.authentication, level: asked, evidence: "2026-10-22: la identidad pasa a un proveedor OIDC (fix-identity)" }
 fixes:
   - { id: fix-unique-409, legacy: "un username repetido responde 422", reason: "una unicidad es un conflicto (409); decidido por el humano el 2026-10-22", evidence: "recordings/round-1/R1-001.json" }
+  - id: fix-delete-cascade
+    legacy: "deja huérfanos los comentarios de un artículo borrado"
+    reason: "el artículo se borra con su agregado; decidido por el humano el 2026-10-22"
+    evidence: "recordings/round-1/R1-032.json"
+    noFlow: { why: "los huérfanos solo se ven en la base, no por HTTP", proof: "recordings/round-1/R1-032.json (diff de mongo)" }
 frontier:
   - { id: F-OWNERSHIP, what: "solo el autor edita su artículo", why: "scoping acota por un claim, no por un campo del recurso", evidence: "recordings/round-1/R1-012.json" }
 ```

@@ -1,0 +1,104 @@
+# Dominio recuperado de realworld-node. Procedencia de cada elemento: provenance.yaml.
+types:
+  Username:
+    base: string
+    description: Nombre público del autor; solo letras y dígitos, guardado en minúsculas.
+    constraints: { pattern: "^[a-zA-Z0-9]+$", maxLength: 60 }
+
+entities:
+  Profile:
+    description: >-
+      Perfil público de una persona: lo que el legacy guardaba en User salvo la credencial, que ahora
+      vive en el proveedor de identidad.
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      subject:
+        type: string
+        required: true
+        unique: true
+        sensitive: true
+        constraints: { maxLength: 255 }
+        description: >-
+          Claim sub del titular; nunca sale del cuerpo ni de la ruta, ni en el perfil ni en el autor
+          embebido de un artículo o un comentario (PARITY v0.1.0: salía en author.subject).
+      username: { type: Username, required: true, unique: true }
+      bio: { type: text, constraints: { maxLength: 2000 } }
+      image: { type: string, constraints: { maxLength: 2048 } }
+      following:
+        type: boolean
+        computed: >-
+          Relativo a quien pregunta: true si el titular del token sigue a este perfil; false sin
+          titular (lectura pública) o si no lo sigue (un Follow del par). No se guarda.
+    invariants:
+      - El username se guarda en minúsculas.
+
+  Article:
+    description: Artículo publicado por un perfil.
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      slug:
+        type: string
+        unique: true
+        computed: >-
+          Se deriva del title al crear: el title en kebab-case y en minúsculas, un guion y seis
+          caracteres base36 aleatorios. No cambia al editar el title.
+      title: { type: string, required: true, constraints: { maxLength: 300 } }
+      description: { type: string, constraints: { maxLength: 1000 } }
+      body: { type: text, constraints: { maxLength: 100000 } }
+      tagList: { type: string, list: true, constraints: { maxItems: 20 } }
+      favoritesCount:
+        type: int
+        computed: Número de Favorite que apuntan al artículo.
+      favorited:
+        type: boolean
+        computed: >-
+          Relativo a quien pregunta: true si el titular del token tiene el artículo en favoritos; false
+          sin titular (lectura pública) o si no lo tiene. No se guarda.
+      createdAt: { type: timestamp, generated: true }
+      updatedAt: { type: timestamp, generated: true }
+    relations:
+      author: { entity: Profile, cardinality: many-to-one }
+      comments: { entity: Comment, cardinality: one-to-many }
+
+  Comment:
+    description: Comentario de un perfil sobre un artículo.
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      body: { type: text, required: true, constraints: { maxLength: 5000 } }
+      createdAt: { type: timestamp, generated: true }
+      updatedAt: { type: timestamp, generated: true }
+    relations:
+      author: { entity: Profile, cardinality: many-to-one }
+
+  Favorite:
+    description: Que un perfil tiene un artículo entre sus favoritos; agregado propio, no es de ninguno de los dos.
+    fields:
+      id: { type: uuid, id: true, generated: true }
+    relations:
+      profile: { entity: Profile, cardinality: many-to-one }
+      article: { entity: Article, cardinality: many-to-one }
+
+  Follow:
+    description: >-
+      Que un perfil sigue a otro; agregado propio, como Favorite (cada perfil es su propio agregado, así que la
+      lista de seguidos dentro de Profile era composición encubierta). Seguirse a uno mismo está permitido.
+    fields:
+      id: { type: uuid, id: true, generated: true }
+    relations:
+      follower: { entity: Profile, cardinality: many-to-one, description: Quien sigue. }
+      followed: { entity: Profile, cardinality: many-to-one, description: A quién sigue. }
+
+aggregates:
+  Profile:
+    description: El perfil público de una persona.
+    root: Profile
+  Article:
+    description: El artículo posee sus comentarios; borrar el artículo los borra.
+    root: Article
+    entities: [Comment]
+  Favorite:
+    description: Un favorito; se crea y se borra solo.
+    root: Favorite
+  Follow:
+    description: Un seguimiento; se crea y se borra solo.
+    root: Follow

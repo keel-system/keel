@@ -104,6 +104,17 @@ export function takeSnapshot(rt, db, name) {
   return r.status === 0 ? { ok: true, where: `${db}:${SNAPSHOT_ARCHIVE}`, hash: hash.value } : { ok: false, error: tail(r.stderr || r.stdout) };
 }
 
+/**
+ * ¿Sigue el snapshot de verify en el contenedor de la base? Vive en su /tmp, así que recrear el sandbox lo pierde, y sin
+ * comprobarlo antes cada sonda o flujo fallaba por su cuenta con «mongorestore salió con 1».
+ */
+export function hasSnapshot(rt, db) {
+  return rt.exec(db, ['test', '-s', SNAPSHOT_ARCHIVE]).status === 0;
+}
+
+export const NO_SNAPSHOT = (db, sandboxRel) =>
+  `no hay snapshot en ${db}:${SNAPSHOT_ARCHIVE} (se pierde al recrear el sandbox): vuelve a pasar keel-recover verify ${sandboxRel} --no-up`;
+
 /** Vuelve la base al snapshot: lo que creó la sonda anterior (colecciones incluidas) desaparece. */
 export function restoreSnapshot(rt, db, name) {
   const drop = mongoEval(rt, db, `${dbRef(name)}.dropDatabase()`);

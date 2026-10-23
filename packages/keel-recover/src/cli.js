@@ -9,6 +9,8 @@ import { init } from './commands/init.js';
 import { introspect, probe } from './commands/observe.js';
 import { characterize } from './commands/characterize.js';
 import { parity } from './commands/parity.js';
+import { status } from './commands/status.js';
+import { target } from './commands/target.js';
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const program = new Command();
@@ -110,5 +112,25 @@ program
   .option('--spec <dir>', 'el diseño recuperado (por defecto, specs/<servicio> del mismo workspace)')
   .option('--runtime <podman|docker>', 'runtime de contenedores (por defecto, el primero en marcha)')
   .action((legacy, options) => parity(legacy, options));
+
+program
+  .command('status')
+  .description(
+    'En qué paso está la recuperación de un legacy (init, sandbox, observe, explore, design, characterize, close, build, generate, parity, done), derivado de lo que hay en disco: el veredicto de verify, las rondas grabadas, exploration.yaml y questions.yaml, los criterios de keel validate --ready, el proyecto generado y el resultado de parity. Es lo que lee /keel-recover-run para seguir donde se quedó'
+  )
+  .argument('<legacy>', 'directorio legacy/<servicio>/ del workspace')
+  .option('--spec <dir>', 'el diseño recuperado (por defecto, specs/<servicio> del mismo workspace)')
+  .option('--json', 'el estado como JSON (lo que lee el orquestador)', false)
+  .action((legacy, options) => status(legacy, options));
+
+program
+  .command('target')
+  .description(
+    'Paso 7: escribe el target.yaml de la paridad desde el deploy/ del proyecto generado, ya en marcha (bash deploy/up.sh): la URL del servicio, la base que se vacía entre flujos, el proveedor de identidad y cómo dar de alta a las personas de los flujos. Los contenedores se preguntan al runtime por sus etiquetas de compose'
+  )
+  .argument('<proyecto>', 'el proyecto generado (services/<servicio>-<tech>)')
+  .option('-o, --out <archivo>', 'dónde escribirlo (por defecto, lo imprime)')
+  .option('--runtime <podman|docker>', 'runtime de contenedores (por defecto, el primero en marcha)')
+  .action((project, options) => target(project, options));
 
 await program.parseAsync();

@@ -48,7 +48,7 @@
     },
     "fixes": {
       "type": "array",
-      "description": "Los defectos del legacy que el diseño corrige a propósito (paso 4: los flujos marcados `fix`). Para un refactor, esta lista ES su backlog. Cada uno lo decide el humano: dice qué hace el legacy, con su evidencia, y por qué el servicio nuevo hará otra cosa. Todo `fix` lo cita al menos un flujo de validation-scenarios.md, y todo flujo `fix` cita uno de aquí.",
+      "description": "Los defectos del legacy que el diseño corrige a propósito (paso 4: los flujos marcados `fix`). Para un refactor, esta lista ES su backlog. Cada uno lo decide el humano: dice qué hace el legacy, con su evidencia, y por qué el servicio nuevo hará otra cosa. Todo `fix` lo cita al menos un flujo de validation-scenarios.md —salvo los que declaran `noFlow`—, y todo flujo `fix` cita uno de aquí.",
       "items": {
         "type": "object",
         "required": ["id", "legacy", "reason", "evidence"],
@@ -57,7 +57,17 @@
           "id": { "type": "string", "pattern": "^fix-[a-z0-9-]+$" },
           "legacy": { "type": "string", "minLength": 5, "description": "Lo que hace el legacy (lo que el escenario comprueba que sigue siendo así)." },
           "reason": { "type": "string", "minLength": 10, "description": "Por qué el servicio nuevo hace otra cosa, y quién lo decidió." },
-          "evidence": { "type": "string", "minLength": 3 }
+          "evidence": { "type": "string", "minLength": 3 },
+          "noFlow": {
+            "type": "object",
+            "description": "Un fix que ningún flujo de validation-scenarios.md puede demostrar, porque los flujos solo ven HTTP: el defecto vive en la base (huérfanos), necesita un volumen que un escenario no carga (más de una página máxima) o es de arquitectura (dónde vive la identidad). Lo decide el humano, y dice por qué y cuál es la otra prueba. Un fix con noFlow que un flujo sí cita es una contradicción.",
+            "required": ["why", "proof"],
+            "additionalProperties": false,
+            "properties": {
+              "why": { "type": "string", "minLength": 10, "description": "Por qué un flujo HTTP no lo ve." },
+              "proof": { "type": "string", "minLength": 3, "description": "La prueba que lo sustituye: una grabación de efectos, archivo:línea o la decisión." }
+            }
+          }
         }
       }
     },

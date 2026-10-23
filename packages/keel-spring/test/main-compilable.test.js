@@ -31,6 +31,8 @@ const layersOf = (fixture) => {
 // guarda del correo y el reclamo de la reconciliación, que hasta ahora no los compilaba nadie.
 const COMPILAN = [
   'asset-vault',
+  // Recuperada de RealWorld por keel-recover (DSL 2.23): la propiedad y el arnés con personas sin roles.
+  'conduit',
   'inspection-reports',
   'job-dispatch',
   // La variante del reloj (incremento 10e de keel-nest): el barrido con reclamo, rescate y parámetro.

@@ -241,10 +241,17 @@ export function documentIndexSpecs(model, entity, warnings) {
     });
   }
   for (const index of entity.indexes ?? []) {
+    // Un índice único declarado sobre un campo que el dominio ya marca `unique` es el MISMO índice (mismo nombre,
+    // mismas claves): el diseño lo declara para darle su `error`. Repetirlo lo creaba dos veces en los tres
+    // generadores (corrida conduit, inc. 8 de keel-recover: `uk_profiles_username`).
+    const name = indexName(entity, index);
+    const paths = index.fields.flatMap((field) => documentPathsFor(model, entity, members, field, warnings));
+    const same = specs.find((spec) => spec.name === name);
+    if (same && !index.when && same.unique === Boolean(index.unique) && same.paths.join() === paths.join()) continue;
     specs.push({
-      name: indexName(entity, index),
+      name,
       unique: index.unique,
-      paths: index.fields.flatMap((field) => documentPathsFor(model, entity, members, field, warnings)),
+      paths,
       // La unicidad condicionada al estado es un `partialFilterExpression`. El valor es el
       // ALMACENADO, no el literal del diseño: un filtro con el literal de un enum no casaría con
       // ningún documento y el índice parcial no indexaría nada.

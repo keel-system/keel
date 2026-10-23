@@ -235,6 +235,42 @@
           "additionalProperties": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/accessRule" }
         }
       }
+    },
+    "ownership": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Autorización por propietario (2.23): solo el dueño de un recurso opera sobre él («solo el autor edita su artículo»). access decide si puedes ejecutar la operación y scoping acota por un claim del token; esto acota por un campo DEL RECURSO, comparado con la identidad del llamante (authentication.callerIdentity). Una entrada por entidad: de qué campo sale su dueño, qué operaciones lo exigen y con qué code se rechaza. Sin este bloque, el 403 de «no es tuyo» describe una discriminación que nada de lo declarado evalúa (OBL-RESOURCE-SCOPE).",
+      "propertyNames": { "pattern": "^[A-Z][A-Za-z0-9]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["owner", "error", "operations"],
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "type": "string",
+            "pattern": "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)*$",
+            "description": "Dónde está el dueño, desde la entidad: un campo suyo que guarda la identidad del llamante (openedBy), o relaciones a-uno hasta ese campo en otra entidad (author.subject: la relación author lleva a Profile, cuyo subject es el valor que estampa callerIdentity). Se compara con la identidad resuelta del llamante, nunca con algo que mande el cliente."
+          },
+          "error": {
+            "$ref": "common.schema.json#/$defs/errorCode",
+            "description": "El code del rechazo cuando quien llama no es el dueño. Cada operación de la lista lo declara en sus errors con http 403: ahí viven su status y su when, y es contrato público."
+          },
+          "operations": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+            "description": "Las operaciones que solo el dueño puede ejecutar sobre un recurso de esta entidad. Cada una recibe la identidad del llamante en su input (el campo de callerIdentity)."
+          },
+          "exemptRoles": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "$ref": "common.schema.json#/$defs/roleName" },
+            "description": "Roles que operan sobre cualquier recurso aunque no sean su dueño (un moderador). Uno a uno, como en scoping: la exención es la parte peligrosa."
+          },
+          "description": { "type": "string" }
+        }
+      }
     }
   }
 }

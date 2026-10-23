@@ -15,7 +15,7 @@
 | `frontier` (`F-*`) | el legacy lo hace y el DSL **no lo puede decir** | una entrada en `provenance.yaml → frontier`; contra el nuevo se informa sin contar |
 | `new` | solo existe en el servicio nuevo (una decisión `asked` que el legacy no tenía) | la decisión del humano |
 
-`keel validate --ready` (criterio `provenance`) sale en rojo con un flujo sin marca, con un `fix` o un `F-*` que no existen en `provenance.yaml`, y con un `fix` que ningún flujo demuestra: un cambio sin escenario no es un cambio.
+`keel validate --ready` (criterio `provenance`) sale en rojo con un flujo sin marca, con un `fix` o un `F-*` que no existen en `provenance.yaml`, y con un `fix` que ningún flujo demuestra: un cambio sin escenario no es un cambio. La única salida es `noFlow` en la entrada del `fix` (`why` y `proof`), para lo que un flujo HTTP no puede ver: un defecto que solo vive en la base (huérfanos), uno que necesita más volumen del que carga un escenario (más de una página máxima) o uno de arquitectura (dónde vive la credencial). Lo decide el humano como el propio `fix`, y un flujo que cite un `fix` con `noFlow` es una contradicción que la puerta también caza.
 
 ## Cómo se decide
 

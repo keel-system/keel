@@ -1,0 +1,295 @@
+# Procedencia de cada elemento del diseño de conduit (PLAN-KEEL-RECOVER.md §0). Niveles: measured (una
+# grabación del sistema en marcha), read (lectura del código, archivo:línea), asked (lo decidió el humano).
+# `inferred` no se admite.
+# Rutas: recordings/ y src/ relativas a ../../../realworld-node/.
+kind: provenance
+schema: 1
+legacy:
+  name: realworld-node
+  commit: ba04b70c31af81ca7935096740a6e083563b3a4a
+elements:
+  - elements:
+      - domain.entities.Profile
+      - domain.aggregates.Profile
+      - persistence.entities.Profile
+    level: measured
+    evidence: users en mongo (introspección); recordings/round-1/R1-001
+  - element: domain.types.Username
+    level: asked
+    evidence: "patrón medido (R1-002: 422 is invalid; src/models/User.js:8); la cota de 60 la confirmado por el humano el 2026-10-22 (el legacy no acota)"
+  - elements:
+      - domain.entities.Profile.fields.username
+      - domain.entities.Profile.invariants
+    level: measured
+    evidence: índice username_1; R1-002 (422 is invalid); R1-008 (Dave→dave)
+  - element: domain.entities.Profile.fields.subject
+    level: asked
+    evidence: "decisión fix-identity (2026-10-22): la identidad pasa al proveedor OIDC; sensitive (no sale en el autor embebido): decidido por el humano el 2026-10-22 sobre PARITY-conduit-dotnet.md (v0.1.0)"
+  - elements:
+      - domain.entities.Profile.fields.bio
+      - domain.entities.Profile.fields.image
+    level: asked
+    evidence: campos medidos en R1-036 (PUT /api/user); las cotas (2000 y 2048) las confirmado por el humano el 2026-10-22 (el legacy no acota)
+  - element: domain.entities.Profile.fields.following
+    level: measured
+    evidence: "recordings/characterization/FL-FOL-001.json (true tras seguir, false sin seguir); toProfileJSONFor en src/models/User.js:57; faltaba en el regenerado, corregido en v0.1.1: decidido por el humano el 2026-10-22 sobre PARITY-conduit-dotnet.md (v0.1.0)"
+  - elements:
+      - domain.entities.Article
+      - domain.aggregates.Article
+      - persistence.entities.Article
+    level: measured
+    evidence: R1-030, R2-002; título solo → 200 (R1-033); los comentarios son del artículo (diff de R1-013)
+  - element: domain.entities.Article.fields.slug
+    level: measured
+    evidence: "R1-030; sufijo aleatorio: src/models/Article.js:27-29 (read)"
+  - elements:
+      - domain.entities.Article.fields.title
+      - domain.entities.Article.fields.description
+      - domain.entities.Article.fields.body
+      - domain.entities.Article.fields.tagList
+    level: asked
+    evidence: campos medidos en R1-030 y R2-002; las cotas las confirmado por el humano el 2026-10-22 (el legacy no acota)
+  - element: domain.entities.Article.fields.favoritesCount
+    level: measured
+    evidence: R1-023 (20/20), R1-020
+  - element: domain.entities.Article.fields.favorited
+    level: measured
+    evidence: "recordings/characterization/FL-FAV-001.json (true tras marcar); toJSONFor en src/models/Article.js:50; faltaba en el regenerado, corregido en v0.1.1: decidido por el humano el 2026-10-22 sobre PARITY-conduit-dotnet.md (v0.1.0)"
+  - elements:
+      - domain.entities.Article.fields.createdAt
+      - domain.entities.Article.fields.updatedAt
+      - domain.entities.Comment.fields.createdAt
+    level: measured
+    evidence: cuerpos de R1-012 y R1-013
+  - elements:
+      - domain.entities.Comment
+      - domain.entities.Comment.fields.body
+    level: asked
+    evidence: diff de R1-013; la cota de 5000 la confirmado por el humano el 2026-10-22 (el legacy no acota)
+  - element: domain.entities.Comment.fields.updatedAt
+    level: read
+    evidence: "timestamps: true en src/models/Comment.js:7 (el legacy lo guarda y no lo expone: F-WIRE)"
+  - elements:
+      - domain.entities.Profile.fields.id
+      - domain.entities.Article.fields.id
+      - domain.entities.Comment.fields.id
+      - domain.entities.Favorite.fields.id
+      - domain.entities.Follow.fields.id
+    level: asked
+    evidence: "F-WIRE: el id del recurso es uuid del servidor (decisión de paridad semántica, 2026-10-22); el legacy usa el _id de mongo"
+  - elements:
+      - domain.entities.Favorite
+      - domain.aggregates.Favorite
+      - persistence.entities.Favorite
+    level: asked
+    evidence: "confirmado por el humano el 2026-10-22 (era una decisión provisional del operador del inc. 1): CHK-DOMAIN-COLLECTION-CROSSES-AGGREGATE: el many-to-many del legacy (User.favorites) cruza agregados"
+  - elements:
+      - domain.entities.Follow
+      - domain.aggregates.Follow
+      - persistence.entities.Follow
+    level: asked
+    evidence: "decidido por el humano el 2026-10-22 (inc. 8): CHK-DOMAIN-COLLECTION-CROSSES-AGGREGATE, ya extendido a la auto-referencia: el following del legacy (User.following, src/models/User.js) es una lista de otros perfiles, como User.favorites; follow idempotente medido en R1-020"
+  - element: use-cases.operations.registerProfile
+    level: asked
+    evidence: "fix-identity: sustituye a POST /api/users con contraseña (R1-001..004)"
+  - elements:
+      - use-cases.operations.registerProfile.errors.USERNAME_ALREADY_EXISTS
+      - use-cases.operations.updateMyProfile.errors.USERNAME_ALREADY_EXISTS
+    level: asked
+    evidence: "R1-001; el legacy daba 422 y una unicidad es 409: fix-unique-409"
+  - element: use-cases.operations.registerProfile.errors.PROFILE_ALREADY_EXISTS
+    level: asked
+    evidence: "fix-identity: un titular, un perfil (FL-PRF-008, mark new)"
+  - elements:
+      - use-cases.operations.getMyProfile
+      - use-cases.operations.updateMyProfile
+    level: measured
+    evidence: R1-010, R1-036, R2-004
+  - elements:
+      - use-cases.operations.getMyProfile.errors.PROFILE_NOT_REGISTERED
+      - use-cases.operations.updateMyProfile.errors.PROFILE_NOT_REGISTERED
+      - use-cases.operations.followProfile.errors.PROFILE_NOT_REGISTERED
+      - use-cases.operations.unfollowProfile.errors.PROFILE_NOT_REGISTERED
+      - use-cases.operations.listFeed.errors.PROFILE_NOT_REGISTERED
+      - use-cases.operations.createArticle.errors.PROFILE_NOT_REGISTERED
+      - use-cases.operations.updateArticle.errors.PROFILE_NOT_REGISTERED
+      - use-cases.operations.deleteArticle.errors.PROFILE_NOT_REGISTERED
+      - use-cases.operations.favoriteArticle.errors.PROFILE_NOT_REGISTERED
+      - use-cases.operations.unfavoriteArticle.errors.PROFILE_NOT_REGISTERED
+      - use-cases.operations.addComment.errors.PROFILE_NOT_REGISTERED
+      - use-cases.operations.deleteComment.errors.PROFILE_NOT_REGISTERED
+    level: measured
+    evidence: R1-011, R2-005 (token de usuario inexistente → 401)
+  - element: use-cases.operations.getProfile
+    level: measured
+    evidence: R1-014 (imagen por defecto), R1-008 (fix-profile-case)
+  - elements:
+      - use-cases.operations.getProfile.errors.PROFILE_NOT_FOUND
+      - use-cases.operations.followProfile.errors.PROFILE_NOT_FOUND
+      - use-cases.operations.unfollowProfile.errors.PROFILE_NOT_FOUND
+      - use-cases.operations.getArticle.errors.ARTICLE_NOT_FOUND
+      - use-cases.operations.updateArticle.errors.ARTICLE_NOT_FOUND
+      - use-cases.operations.deleteArticle.errors.ARTICLE_NOT_FOUND
+      - use-cases.operations.favoriteArticle.errors.ARTICLE_NOT_FOUND
+      - use-cases.operations.unfavoriteArticle.errors.ARTICLE_NOT_FOUND
+      - use-cases.operations.listComments.errors.ARTICLE_NOT_FOUND
+      - use-cases.operations.addComment.errors.ARTICLE_NOT_FOUND
+      - use-cases.operations.deleteComment.errors.ARTICLE_NOT_FOUND
+    level: measured
+    evidence: R1-007
+  - elements:
+      - use-cases.operations.followProfile
+      - use-cases.operations.unfollowProfile
+    level: measured
+    evidence: R1-020, R1-034
+  - element: use-cases.operations.listArticles
+    level: measured
+    evidence: "R1-031 (author=nadie → todos en el legacy: fix-author-filter), postman round-0; orden: src/routes/api/articles.js:69"
+  - element: use-cases.operations.listFeed
+    level: asked
+    evidence: "confirmado por el humano el 2026-10-22 (era una decisión provisional del operador del inc. 1): el legacy no ordena (src/routes/api/articles.js:105, RW-RULE-07): fix-feed-order"
+  - elements:
+      - use-cases.operations.createArticle
+      - use-cases.operations.getArticle
+      - use-cases.operations.updateArticle
+      - use-cases.operations.deleteArticle
+    level: measured
+    evidence: postman round-0, R1-012, R1-030, R1-032
+  - elements:
+      - use-cases.operations.favoriteArticle
+      - use-cases.operations.unfavoriteArticle
+    level: measured
+    evidence: R1-020
+  - element: use-cases.operations.listComments
+    level: measured
+    evidence: R2-003
+  - element: use-cases.operations.addComment
+    level: measured
+    evidence: diff de R1-013
+  - element: use-cases.operations.deleteComment
+    level: measured
+    evidence: R1-013, R1-033
+  - element: use-cases.operations.deleteComment.errors.COMMENT_NOT_FOUND
+    level: asked
+    evidence: "R1-033 (el legacy no comprobaba la pertenencia al artículo): fix-comment-ownership"
+  - element: use-cases.operations.listTags
+    level: measured
+    evidence: R2-002
+  - element: persistence.default
+    level: measured
+    evidence: mongo 3.4.9 en el sandbox
+  - element: persistence.audit
+    level: read
+    evidence: "timestamps: true en src/models/Article.js:15 y src/models/Comment.js:7; el autor es una relación del dominio"
+  - element: persistence.consistency
+    level: asked
+    evidence: "frontera transaccional: fix-delete-cascade (el legacy dejaba huérfanos, R1-032); sin bloqueo optimista como el legacy: src/routes/api/articles.js:153-179 (RW-CONC-03)"
+  - elements:
+      - api.style
+      - api.basePath
+      - api.endpoints.registerProfile
+      - api.endpoints.getMyProfile
+      - api.endpoints.updateMyProfile
+      - api.endpoints.getProfile
+      - api.endpoints.followProfile
+      - api.endpoints.unfollowProfile
+      - api.endpoints.listArticles
+      - api.endpoints.listFeed
+      - api.endpoints.createArticle
+      - api.endpoints.getArticle
+      - api.endpoints.updateArticle
+      - api.endpoints.deleteArticle
+      - api.endpoints.favoriteArticle
+      - api.endpoints.unfavoriteArticle
+      - api.endpoints.listComments
+      - api.endpoints.addComment
+      - api.endpoints.deleteComment
+      - api.endpoints.listTags
+    level: measured
+    evidence: surface.yaml (tabla del router)
+  - element: api.pagination
+    level: asked
+    evidence: "decisión de paridad semántica (2026-10-22); 20 por defecto medido en R1-031; el tope: fix-page-max"
+  - elements:
+      - security.ownership
+      - use-cases.operations.updateArticle.errors.NOT_ARTICLE_AUTHOR
+      - use-cases.operations.deleteArticle.errors.NOT_ARTICLE_AUTHOR
+      - use-cases.operations.deleteComment.errors.NOT_COMMENT_AUTHOR
+    level: measured
+    evidence: "R1-012, R1-013 (los únicos 403 del legacy: solo el autor edita o borra; era la frontera F-OWNERSHIP hasta el DSL 2.23)"
+  - element: security.authentication
+    level: asked
+    evidence: fix-identity
+  - element: security.cors
+    level: measured
+    evidence: access-control-allow-origin * (R1-036)
+  - element: security.access.default
+    level: measured
+    evidence: R1-010 (sin token → 401)
+  - elements:
+      - security.access.rules.getProfile
+      - security.access.rules.listArticles
+      - security.access.rules.getArticle
+      - security.access.rules.listComments
+      - security.access.rules.listTags
+    level: measured
+    evidence: postman round-0 'Articles' sin auth; R1-014
+fixes:
+  - id: fix-unique-409
+    legacy: responde 422 a un username repetido
+    reason: "una unicidad es un conflicto: el método exige 409 (decidido por el humano el 2026-10-22)"
+    evidence: recordings/round-1/R1-001.json
+  - id: fix-validation-400
+    legacy: responde 422 a una entrada inválida
+    reason: la validación de entrada es 400 en el contrato canónico (decidido por el humano el 2026-10-22)
+    evidence: recordings/round-1/R1-002.json
+  - id: fix-profile-case
+    legacy: "busca el perfil distinguiendo mayúsculas: Alice da 404"
+    reason: el username se guarda en minúsculas y se busca igual (decidido por el humano el 2026-10-22)
+    evidence: recordings/round-1/R1-008.json
+  - id: fix-author-filter
+    legacy: con el filtro author de alguien que no existe devuelve todos los artículos
+    reason: un filtro por un autor inexistente devuelve una página vacía (decidido por el humano el 2026-10-22)
+    evidence: recordings/round-1/R1-031.json
+  - id: fix-comment-ownership
+    legacy: borra un comentario aunque no pertenezca al artículo de la ruta
+    reason: el comentario se busca dentro de su artículo (decidido por el humano el 2026-10-22)
+    evidence: recordings/round-1/R1-033.json
+  - id: fix-delete-cascade
+    legacy: deja huérfanos los comentarios y favoritos de un artículo borrado
+    reason: el artículo se borra con su agregado (decidido por el humano el 2026-10-22)
+    evidence: recordings/round-1/R1-032.json
+    noFlow:
+      why: "los huérfanos del legacy solo se ven en la base: un flujo HTTP no puede afirmarlos (decidido por el humano el 2026-10-22)"
+      proof: "recordings/round-1/R1-032.json (diff de mongo: comments y favorites del artículo borrado siguen ahí)"
+  - id: fix-feed-order
+    legacy: el feed no ordena
+    reason: el feed se ordena por createdAt descendente, como el listado (decidido por el humano el 2026-10-22); lo demuestra FL-FOL-004
+    evidence: src/routes/api/articles.js:105
+  - id: fix-page-max
+    legacy: limit sin tope
+    reason: la página tiene tamaño máximo (decisions.yaml); el defecto de 20 es el del legacy
+    evidence: recordings/round-1/R1-031.json
+    noFlow:
+      why: "solo se ve con más artículos que la página máxima (101): un flujo que los cree no cabe en el documento de escenarios (decidido por el humano el 2026-10-22)"
+      proof: "recordings/round-1/R1-031.json (limit=1000 aceptado); api.pagination.maxSize 100 en api.keel.yaml"
+  - id: fix-identity
+    legacy: emite sus propios JWT con usuario y contraseña (POST /api/users, /api/users/login)
+    reason: la identidad se delega en un proveedor OIDC (decidido por el humano el 2026-10-22)
+    evidence: recordings/round-1/R1-001.json
+    noFlow:
+      why: "es de arquitectura (dónde vive la credencial), no una respuesta distinta de una operación: la cubren los actores de contract-map.yaml en los dos lados (decidido por el humano el 2026-10-22)"
+      proof: "decisión fix-identity; recordings/round-1/R1-001.json; FL-PRF-008 (mark new)"
+frontier:
+  - id: F-OPTIONAL-AUTH
+    what: lecturas públicas que con token personalizan la respuesta (favorited, author.following)
+    why: el DSL no tiene un nivel de acceso «opcional»; las lecturas quedan public y sin personalizar
+    evidence: R1-014 (RW-SEC-03)
+  - id: F-METHOD-OVERRIDE
+    what: X-HTTP-Method-Override
+    why: no es contrato expresable ni deseable; se elimina (fix)
+    evidence: R1-035
+  - id: F-WIRE
+    what: envolturas {user}/{article}, errores {errors:{campo:msg}}, 404/403/401 en texto plano, limit/offset + articlesCount
+    why: el contrato del cable lo fija el método (paridad semántica, contract-map.yaml)
+    evidence: R1-001, R1-007, R1-012, R1-031

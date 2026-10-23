@@ -33,6 +33,10 @@ const MOTIVOS = {
 
 const EXCEPCIONES = new Map([
   [
+    'security.ownership.*.exemptRoles',
+    { motivo: MOTIVOS.informativo, porque: 'solo entra en el texto de la nota del handler (keel-core/gen/ownership.js, «Exentos…»): no emite código; lo mide keel-core/test/ownership.test.js.' }
+  ],
+  [
     'security.cors.maxAgeSeconds',
     { motivo: MOTIVOS.conDefault, porque: 'keel-core/gen/model.js aplica 3600 si falta y security.js lo escribe tal cual en MaxAgeSeconds: declararlo cambia el número emitido, no el camino.' }
   ],

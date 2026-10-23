@@ -131,6 +131,57 @@ export const CHECKS = {
     title: 'un cliente exento del alcance que no está en serviceClients',
     closes: 'declarar el cliente en serviceClients, o quitarlo de scoping.exemptClients'
   },
+  // Autorización por propietario (2.23): todas son errores porque el generador escribe la nota del
+  // handler con ellas, y con una pieza que no existe la escribiría sobre nada.
+  'CHK-SECURITY-OWNERSHIP-ENTITY': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una regla de propiedad sobre una entidad que domain no declara',
+    closes: 'nombrar en ownership una entidad de domain'
+  },
+  'CHK-SECURITY-OWNERSHIP-OWNER-PATH': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el dueño de una regla de propiedad no llega a un campo por relaciones a-uno',
+    closes: 'escribir en owner un campo de la entidad, o relaciones many-to-one/one-to-one hasta un campo de otra'
+  },
+  'CHK-SECURITY-OWNERSHIP-NO-CALLER': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una regla de propiedad sin identidad del llamante con la que comparar al dueño',
+    closes: 'declarar authentication.callerIdentity'
+  },
+  'CHK-SECURITY-OWNERSHIP-OPERATION': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una regla de propiedad nombra una operación que use-cases no declara',
+    closes: 'nombrar en ownership.<E>.operations operaciones de use-cases'
+  },
+  'CHK-SECURITY-OWNERSHIP-CALLER-NOT-RECEIVED': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una operación acotada por propiedad no recibe la identidad del llamante',
+    closes: 'añadir el campo de callerIdentity al input de la operación'
+  },
+  'CHK-SECURITY-OWNERSHIP-ERROR-UNDECLARED': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una operación acotada por propiedad no declara el error del rechazo con 403',
+    closes: 'declarar en los errors de la operación el code de ownership.<E>.error con http 403'
+  },
+  'CHK-SECURITY-OWNERSHIP-EXEMPT-ROLE-UNKNOWN': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un rol exento de una regla de propiedad que no está en el catálogo de roles',
+    closes: 'declarar el rol en roles, o quitarlo de ownership.<E>.exemptRoles'
+  },
   'CHK-USECASES-STALLED-AFTER-INVALID': {
     layer: 'use-cases',
     severity: 'error',

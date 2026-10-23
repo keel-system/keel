@@ -176,6 +176,18 @@ test('los índices: la clave natural por la sombra plegada, el único y el parci
   assert.deepEqual(partial.partialFilter, { path: 'status', equals: 'OPEN' });
 });
 
+// Corrida conduit (inc. 8 de keel-recover): `Profile.username` es `unique` en el dominio y la persistencia declara además
+// su índice único para darle el `error`. Es el MISMO índice, y los tres generadores lo creaban dos veces.
+test('un índice único declarado sobre un campo ya único no se repite; con otras claves o condicionado, sí', () => {
+  const m = model();
+  const order = m.entities[0];
+  order.fields.push(scalar('code', 'string', { unique: true }));
+  order.indexes.push({ fields: ['code'], unique: true, error: 'CODE_TAKEN' }, { fields: ['code', 'status'], unique: true });
+  const names = documentIndexSpecs(m, order, m.warnings).map((spec) => spec.name);
+  assert.equal(names.filter((name) => name === 'uk_orders_code').length, 1, names.join(', '));
+  assert.ok(names.includes('uk_orders_code_status'));
+});
+
 test('una hija con clave natural no crea índice: se avisa de dónde queda la garantía', () => {
   const m = model();
   const [warning] = nestedIndexWarnings(m);

@@ -229,6 +229,29 @@ function withScoping(d) {
 }
 
 /**
+ * Autorización por propietario (2.23): solo el agente que abrió un ticket lo cierra. El dueño es un
+ * campo del propio ticket (`openedBy`), comparado con la identidad del llamante (el `sub`).
+ */
+function withOwnership(d) {
+  d.layers.security.authentication.callerIdentity = { field: 'callerSubject', from: { source: 'claim', name: 'sub' } };
+  entity(d, 'Ticket').fields.openedBy = { type: 'string', description: 'El sub del agente que lo abrió.' };
+  const caller = { type: 'string', required: true, description: 'Claim sub del token.' };
+  ops(d).createTicket.input.fields.callerSubject = { ...caller };
+  ops(d).closeTicket.input.fields.callerSubject = { ...caller };
+  ops(d).closeTicket.errors.push({ code: 'TICKET_NOT_OWNED', when: 'Quien llama no abrió el ticket.', http: 403 });
+  d.layers.security.ownership = { Ticket: { owner: 'openedBy', error: 'TICKET_NOT_OWNED', operations: ['closeTicket'] } };
+  insertScenarioBefore(
+    d,
+    '### FL-ESC-001',
+    `### FL-OWN-001: un agente cierra un ticket que abrió otro
+
+**Given** un ticket en \`open\` que abrió otro agente.
+**When** el agente llama a \`closeTicket\`.
+**Then** responde 403 con \`code\` = \`"TICKET_NOT_OWNED"\`; el ticket sigue en \`open\`.`
+  );
+}
+
+/**
  * Entrega garantizada: `publishing.reliability: outbox`, con los dos escenarios que la
  * distinguen de best-effort —el canal caído y el relay que se rinde—.
  */
@@ -574,6 +597,7 @@ export const EXTENSIONS = {
   payments: withPayments,
   m2m: withM2m,
   scoping: withScoping,
+  ownership: withOwnership,
   replica: withReplica,
   outbox: withOutbox,
   escalation: withEscalation,
@@ -629,6 +653,14 @@ export const MUTATIONS = [
     title: 'una colección one-to-many hacia la raíz de otro agregado',
     mutate: (d) => {
       entity(d, 'Queue').relations = { tickets: { entity: 'Ticket', cardinality: 'one-to-many' } };
+    },
+    expect: ['CHK-DOMAIN-COLLECTION-CROSSES-AGGREGATE']
+  },
+  {
+    id: 'M-DOMAIN-COLLECTION-SELF',
+    title: 'una colección many-to-many de una raíz hacia sí misma (cada otra instancia es otro agregado)',
+    mutate: (d) => {
+      entity(d, 'Queue').relations = { overflowTo: { entity: 'Queue', cardinality: 'many-to-many' } };
     },
     expect: ['CHK-DOMAIN-COLLECTION-CROSSES-AGGREGATE']
   },
@@ -1614,6 +1646,103 @@ export const MUTATIONS = [
       d.layers.security.authentication.scoping.exemptClients = ['ghost-bot'];
     },
     expect: ['CHK-SECURITY-SCOPING-EXEMPT-CLIENT-UNKNOWN']
+  },
+  // ── autorización por propietario (2.23) ──
+  {
+    id: 'M-SECURITY-OWNERSHIP-ENTITY',
+    title: 'una regla de propiedad sobre una entidad que no existe',
+    extends: 'ownership',
+    mutate: (d) => {
+      d.layers.security.ownership.Incident = { ...d.layers.security.ownership.Ticket };
+    },
+    expect: ['CHK-SECURITY-OWNERSHIP-ENTITY']
+  },
+  {
+    id: 'M-SECURITY-OWNERSHIP-OWNER-FIELD',
+    title: 'el dueño es un campo que la entidad no tiene',
+    extends: 'ownership',
+    mutate: (d) => {
+      d.layers.security.ownership.Ticket.owner = 'openedByAgent';
+    },
+    expect: ['CHK-SECURITY-OWNERSHIP-OWNER-PATH']
+  },
+  {
+    id: 'M-SECURITY-OWNERSHIP-OWNER-TO-MANY',
+    title: 'el camino al dueño cruza una relación a-muchos',
+    extends: 'ownership',
+    mutate: (d) => {
+      d.layers.security.ownership.Ticket.owner = 'notes.body';
+    },
+    expect: ['CHK-SECURITY-OWNERSHIP-OWNER-PATH']
+  },
+  {
+    id: 'M-SECURITY-OWNERSHIP-NO-CALLER',
+    title: 'una regla de propiedad sin identidad del llamante',
+    extends: 'ownership',
+    mutate: (d) => {
+      delete d.layers.security.authentication.callerIdentity;
+      // Sin callerIdentity, el campo del input es uno más y no se estampa: se quita para medir solo la regla.
+      delete ops(d).createTicket.input.fields.callerSubject;
+      delete ops(d).closeTicket.input.fields.callerSubject;
+    },
+    expect: ['CHK-SECURITY-OWNERSHIP-NO-CALLER']
+  },
+  {
+    id: 'M-SECURITY-OWNERSHIP-OPERATION',
+    title: 'una regla de propiedad nombra una operación que no existe',
+    extends: 'ownership',
+    mutate: (d) => {
+      d.layers.security.ownership.Ticket.operations.push('reopenTicket');
+    },
+    expect: ['CHK-SECURITY-OWNERSHIP-OPERATION']
+  },
+  {
+    id: 'M-SECURITY-OWNERSHIP-CALLER-NOT-RECEIVED',
+    title: 'una operación acotada por propiedad no recibe la identidad del llamante',
+    extends: 'ownership',
+    mutate: (d) => {
+      delete ops(d).closeTicket.input.fields.callerSubject;
+    },
+    expect: ['CHK-SECURITY-OWNERSHIP-CALLER-NOT-RECEIVED']
+  },
+  {
+    id: 'M-SECURITY-OWNERSHIP-ERROR-NOT-403',
+    title: 'el error de propiedad declarado con otro status',
+    extends: 'ownership',
+    mutate: (d) => {
+      ops(d).closeTicket.errors.find((e) => e.code === 'TICKET_NOT_OWNED').http = 409;
+      replaceIn(d, 'responde 403 con `code` = `"TICKET_NOT_OWNED"`', 'responde 409 con `code` = `"TICKET_NOT_OWNED"`');
+    },
+    expect: ['CHK-SECURITY-OWNERSHIP-ERROR-UNDECLARED']
+  },
+  {
+    id: 'M-SECURITY-OWNERSHIP-ERROR-UNDECLARED',
+    title: 'una operación acotada por propiedad no declara el error: su 403 ya no lo produce nada',
+    extends: 'ownership',
+    mutate: (d) => {
+      d.layers.security.ownership.Ticket.operations.push('getTicket');
+      d.layers['use-cases'].operations.getTicket.input.fields.callerSubject = { type: 'string', required: true, description: 'Claim sub del token.' };
+    },
+    expect: ['CHK-SECURITY-OWNERSHIP-ERROR-UNDECLARED']
+  },
+  {
+    id: 'M-SECURITY-OWNERSHIP-EXEMPT-ROLE-UNKNOWN',
+    title: 'un rol exento de la propiedad que no está en el catálogo',
+    extends: 'ownership',
+    mutate: (d) => {
+      d.layers.security.ownership.Ticket.exemptRoles = ['supervisor'];
+    },
+    expect: ['CHK-SECURITY-OWNERSHIP-EXEMPT-ROLE-UNKNOWN']
+  },
+  {
+    id: 'M-OBL-RESOURCE-SCOPE-OWNERSHIP-ELSEWHERE',
+    title: 'un 403 de propiedad en una operación que la regla de propiedad no nombra',
+    extends: 'ownership',
+    mutate: (d) => {
+      ops(d).getTicket.errors.push({ code: 'TICKET_NOT_OWNED', when: 'Quien llama no abrió el ticket.', http: 403 });
+      replaceIn(d, '503 con `DIRECTORY_UNAVAILABLE`.', '503 con `DIRECTORY_UNAVAILABLE`; si no lo abrió, 403 con `TICKET_NOT_OWNED`.');
+    },
+    expect: ['OBL-RESOURCE-SCOPE']
   },
   {
     id: 'M-USECASES-DISPATCH-UNKNOWN',

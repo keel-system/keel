@@ -543,7 +543,7 @@ function harnessSmokeTs(model) {
     reset ? 'resetState' : null,
     probe ? 'db' : null,
     documentDb ? 'mongoEval' : null,
-    ...['bearer', 'tokenFor', 'serviceCredential', 'apiKey'].filter((name) => `${credential ?? ''}${identity ?? ''}`.includes(`${name}(`))
+    ...['bearer', 'tokenFor', 'tokenAs', 'serviceCredential', 'apiKey'].filter((name) => `${credential ?? ''}${identity ?? ''}`.includes(`${name}(`))
   ].filter(Boolean);
   const cases = [];
   if (reset) {

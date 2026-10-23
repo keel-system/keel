@@ -15,6 +15,7 @@
 
 import { PAYMENT_NOTICE_PATH } from './payment-gateways.js';
 import { METRICS_TRANSPORT, usesTelemetry } from './telemetry-vocabulary.js';
+import { usesPersonaTokens } from './identity-realm.js';
 
 /** Las rutas técnicas abiertas: las sondas del servicio. No cuentan nada del negocio. */
 export const TECHNICAL_OPEN_PATHS = ['/livez', '/readyz'];
@@ -190,6 +191,9 @@ export function closingCredentialOf(model) {
   if (candidates.length > 0) return candidates[0];
   if (roles[0]) return asRole(roles[0]);
   if (clients[0]) return asClient(clients[0]);
+  // Sin roles ni clientes, con la identidad en el `sub`: cualquier persona autenticada pasa la regla de cierre. Sin
+  // esto el humo de la API pedía sin token y recibía 401 donde esperaba 404 (corrida conduit, inc. 8 de keel-recover).
+  if (usesPersonaTokens(model)) return { kind: 'persona', name: 'keel-smoke' };
   return null;
 }
 

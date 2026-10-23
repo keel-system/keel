@@ -4,7 +4,12 @@ Ingeniería inversa de un servicio existente hacia un diseño [Keel](https://git
 única entrada es el **repo** del legacy, con su historial de git; la herramienta lo lee y **nunca lo
 modifica**. Plan completo y estado, incremento a incremento: [`PLAN-KEEL-RECOVER.md`](../../PLAN-KEEL-RECOVER.md).
 
-Hoy (incremento 7) trae el paso 0 entero, la observación del paso 1, la recuperación del diseño (pasos 3 y 4), la
+**Lo normal es no llamar a ninguno de estos comandos a mano**: `keel-recover init <legacy> --name <servicio>` y
+después `/keel-recover-run legacy/<servicio>` en el agente, que hace el recorrido entero, se puede cortar y retomar
+con la misma llamada, y solo para en tres puntos de decisión y en la generación (incremento 9). Guía de uso:
+[`GUIA-KEEL-RECOVER.md`](../../GUIA-KEEL-RECOVER.md).
+
+Hoy (incremento 9) trae el paso 0 entero, la observación del paso 1, la recuperación del diseño (pasos 3 y 4), la
 medida de su fidelidad (paso 5) y la paridad con el servicio regenerado (paso 7): los dos pasos deterministas, la preparación del workspace, la skill que monta
 el sandbox, el juez, la introspección, el ejecutor de sondas, la skill que escribe el diseño con su procedencia y
 el ejecutor de los escenarios de caracterización contra el legacy y contra el regenerado, con la comparación de
@@ -21,7 +26,10 @@ keel-recover probe legacy/<servicio>/probes/round-1.yaml  # paso 1b: una ronda d
 /keel-recover specs/<servicio>                            # el agente: el diseño, su procedencia y la caracterización
 keel-recover characterize legacy/<servicio>               # paso 5: los escenarios contra el legacy, sello y FIDELITY.md
 keel validate --ready specs/<servicio>                    # criterios provenance y characterized
+keel-recover target services/<servicio>-<tech> -o target.yaml   # paso 7: el target.yaml, del deploy/ en marcha
 keel-recover parity legacy/<servicio> --target target.yaml   # paso 7: los mismos flujos contra el regenerado, PARITY-<destino>.md
+keel-recover status legacy/<servicio> [--json]            # en qué paso está la recuperación, derivado del disco
+/keel-recover-run legacy/<servicio>                       # el agente: todo lo anterior, reanudable
 ```
 
 `-o` se niega a escribir dentro del legacy. `--check <archivo>` no escribe y sale en rojo si el archivo no es lo
@@ -201,3 +209,55 @@ wrapper) y Node (`package.json`, `.nvmrc`, `.node-version`, `.tool-versions`, to
 - `npm run bench-check`: las dos órdenes sobre los tres legacys del banco en `../keel-recover-lab`, contra los
   `runtime.yaml`/`environment.yaml` escritos a mano en el incremento 1 y las filas ENV/ASSET de las hojas de
   `docs/recover-bench/`. Lista aparte lo que en esas referencias es trabajo del agente.
+
+## El orquestador: `/keel-recover-run` (incremento 9)
+
+`init` siembra en cada harness, junto a las dos skills de arriba, la orquestadora `/keel-recover-run` y sus tres
+subagentes (`assets/agents/`, neutrales y hojas: `spawns: false`):
+
+| Subagente | Pasos | Devuelve |
+|---|---|---|
+| `keel-recover-sandbox` | 0c-0f, con la skill del sandbox | `status`, el resultado de `verify` y los `blockers` (un rechazo con motivo es un resultado) |
+| `keel-recover-explorer` | 1b, una ronda por llamada (formato: `assets/skills/keel-recover/references/exploration.md`) | la ronda, la cobertura y su delta, los canales sin fiar y lo no observado |
+| `keel-recover-designer` | 3-4, con la skill del diseño (`design`, `apply`, `repair`) | la procedencia por nivel y las preguntas escritas, aplicadas y abiertas |
+
+El orquestador **no guarda dónde se quedó**: `keel-recover status` (`src/lib/status.js`) lo deriva de lo que hay en
+disco, en fases con id estable:
+
+| Fase | Artefacto que la cierra |
+|---|---|
+| `init` | `legacy.yaml` |
+| `sandbox` | `verify.json` en verde |
+| `observe` | `surface.yaml` y una ronda en verde |
+| `explore` | `exploration.yaml`: el humano cierra la exploración |
+| `design` | el diseño, `questions.yaml` contestado y aplicado, y el criterio `provenance` |
+| `characterize` | el criterio `characterized` |
+| `close` | el resto de `--ready` |
+| `build` | `services/<servicio>-<tech>/keel-generated.json` |
+| `generate` | el `design-gaps.yaml` con el que cierra el pipeline del generador |
+| `parity` | `recordings/parity/<destino>.json` en verde |
+
+Los subagentes no pueden preguntar al humano. Lo que es suyo lo escriben en `legacy/<servicio>/questions.yaml` (schema
+`questions.schema.json`, con opciones, recomendación y evidencia), y el orquestador lo pregunta en tanda. Para en tres
+puntos de decisión:
+1. al cerrar la exploración, que escribe `exploration.yaml`;
+2. con las preguntas del diseño;
+3. antes de generar: el cierre y el stack.
+
+Y para en la generación, que no se anida: `/keel-generate-<tech>` lanza sus propios subagentes.
+
+Lo determinista que el orquestador necesitaba y antes era manual:
+- **`keel-recover target`** (`src/lib/target.js`) escribe el `target.yaml` desde el `deploy/` en marcha.
+  - Del compose y del realm saca la URL interna, la base y el proveedor de identidad.
+  - Los contenedores los pregunta al runtime por sus etiquetas de compose, que valen para podman-compose y docker
+    compose.
+- **`parity` da de alta a las personas** de los flujos en el Keycloak del deploy (`idp.seed`, `seedPersona` en
+  `parity-target.js`).
+- **`characterize` y `probe` comprueban el snapshot al empezar**, y lo dicen una sola vez.
+
+Lo miden, sin contenedores:
+- `test/status.test.js`: una fase por artefacto, sobre la fixture `conduit`, falsado;
+- `test/target.test.js`: el `deploy/` de conduit de los tres generadores, la siembra con un kcadm falso y la
+  comprobación del snapshot.
+
+En vivo, la paridad del laboratorio se rehízo así desde un Keycloak sin usuarios, con el mismo resultado que a mano.

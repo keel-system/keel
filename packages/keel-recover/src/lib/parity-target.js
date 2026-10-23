@@ -89,9 +89,36 @@ export function ensureTool(rt, target) {
 
 const COLLECTIONS = (name) => `var d = db.getSiblingDB(${JSON.stringify(name)}); var cs = d.getCollectionNames().filter(function (c) { return c.indexOf('system.') !== 0; });`;
 
+const KCADM = '/opt/keycloak/bin/kcadm.sh';
+
+/**
+ * Da de alta a una persona en el Keycloak del deploy (idempotente): el deploy de keel no trae usuarios fijos —el diseño
+ * identifica al llamante por su `sub`—, y hasta el inc. 9 las sembraba a mano un script del laboratorio
+ * (`seed-keel-idp.sh`). `session` lleva si ya se abrió la sesión de administración en ese contenedor.
+ */
+export function seedPersona(rt, seed, username, password, session = { open: false }) {
+  const kc = (args) => rt.exec(seed.container, [KCADM, ...args]);
+  if (!session.open) {
+    const login = kc(['config', 'credentials', '--server', 'http://localhost:8080', '--realm', 'master', '--user', seed.admin.user, '--password', seed.admin.password]);
+    if (login.status !== 0) return { ok: false, error: `no se pudo administrar el realm en ${seed.container}: ${(login.stderr || login.stdout).trim()}` };
+    session.open = true;
+  }
+  const found = kc(['get', 'users', '-r', seed.realm, '-q', `username=${username}`, '-q', 'exact=true', '--fields', 'username']);
+  if (found.status !== 0) return { ok: false, error: `no se pudo buscar a ${username}: ${found.stderr.trim()}` };
+  if (!found.stdout.includes(`"${username}"`)) {
+    const created = kc(['create', 'users', '-r', seed.realm, '-s', `username=${username}`, '-s', 'enabled=true', '-s', 'emailVerified=true', '-s', `email=${username}@example.com`, '-s', `firstName=${username}`, '-s', 'lastName=Test']);
+    if (created.status !== 0) return { ok: false, error: `no se pudo dar de alta a ${username}: ${(created.stderr || created.stdout).trim()}` };
+  }
+  const reset = kc(['set-password', '-r', seed.realm, '--username', username, '--new-password', password]);
+  if (reset.status !== 0) return { ok: false, error: `no se pudo poner la contraseña de ${username}: ${reset.stderr.trim()}` };
+  return { ok: true };
+}
+
 /** El contexto de ejecución contra el regenerado: cada flujo parte de su base VACÍA, comprobada. */
 export function targetContext(target, map, rt) {
   const { database: db, idp } = target;
+  const seeded = new Set();
+  const session = { open: false };
   return {
     side: map.keel,
     sideName: 'keel',
@@ -111,11 +138,17 @@ export function targetContext(target, map, rt) {
     },
     idpToken: idp
       ? async (actor) => {
+          const username = idp.users?.[actor] ?? actor;
+          if (idp.seed && !seeded.has(username)) {
+            const r = seedPersona(rt, idp.seed, username, idp.password, session);
+            if (!r.ok) throw new Error(r.error);
+            seeded.add(username);
+          }
           const form = new URLSearchParams({
             grant_type: 'password',
             client_id: idp.clientId,
             ...(idp.clientSecret ? { client_secret: idp.clientSecret } : {}),
-            username: idp.users?.[actor] ?? actor,
+            username,
             password: idp.password,
             scope: 'openid',
           }).toString();

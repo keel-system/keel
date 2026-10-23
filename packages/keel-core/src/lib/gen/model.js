@@ -2033,6 +2033,21 @@ function collectSecurity(layers, services, routeBase, warnings) {
       }
     : null;
 
+  // Autorización por propietario (2.23): una entrada por entidad, con el camino al dueño ya partido
+  // (relaciones y el campo final). Lo consume la nota neutral del handler (ownership.js).
+  const ownership = Object.entries(sec.ownership ?? {}).map(([entity, rule]) => {
+    const path = String(rule.owner).split('.');
+    return {
+      entity,
+      owner: rule.owner,
+      relations: path.slice(0, -1),
+      field: path[path.length - 1],
+      error: rule.error,
+      operations: rule.operations ?? [],
+      exemptRoles: rule.exemptRoles ?? []
+    };
+  });
+
   // Permisos que otorga cada rol (security.roleGrants): derivable al 100% del
   // diseño, se materializa como mapa estático en el JwtAuthConverter para que
   // hasAnyAuthority("<recurso>:<accion>") funcione con IdPs que solo emiten roles.
@@ -2067,6 +2082,7 @@ function collectSecurity(layers, services, routeBase, warnings) {
     serviceAuth,
     callerIdentity,
     scoping,
+    ownership,
     serviceClients,
     roleGrants,
     roles,

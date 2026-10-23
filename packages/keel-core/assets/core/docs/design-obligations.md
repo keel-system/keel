@@ -52,7 +52,9 @@ agente y la validación mecánica hablen del mismo hueco con el mismo nombre.
 
 `OBL-RESOURCE-SCOPE` va aparte porque es la única que **no admite aceptación**. Se cierra
 declarando `authentication.scoping` —de dónde sale la acotación por recurso: el claim del
-token, qué identifica al recurso, qué error rechaza y qué roles quedan exentos— o retirando
+token, qué identifica al recurso, qué error rechaza y qué roles quedan exentos—, declarando
+`ownership` cuando lo que acota es el dueño del recurso (2.23: el campo que lo guarda, comparado
+con la identidad del llamante), o retirando
 ese 403 si el permiso no se acota por recurso. Aceptarla significaría que el generador decide
 quién alcanza qué, y lo que decide por omisión es que todo el mundo alcanza todo.
 

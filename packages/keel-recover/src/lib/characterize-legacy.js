@@ -6,7 +6,7 @@ import { CHARACTERIZED_FILE, SCENARIOS_FILE, loadProvenance, readCharacterizatio
 import { loadSandbox, containerOf } from './sandbox.js';
 import { verifyCriterion } from './probe.js';
 import { toolRequestAsync } from './tool-http.js';
-import { dbHash, restoreSnapshot } from './mongo.js';
+import { NO_SNAPSHOT, dbHash, hasSnapshot, restoreSnapshot } from './mongo.js';
 import { loadContractMap, plannedFlows, sealDocument } from './characterize.js';
 import { renderFidelity } from './fidelity.js';
 
@@ -73,6 +73,9 @@ export function legacyContext(prep, rt, { snapshotHash = null } = {}) {
   const tool = containerOf(prep.sandbox, spec.tool.service);
   const db = spec.database ? containerOf(prep.sandbox, spec.database.service) : null;
   return {
+    // Antes del primer flujo: sin snapshot, todos fallarían por lo mismo.
+    preflight: () =>
+      db && !hasSnapshot(rt, db) ? { ok: false, error: NO_SNAPSHOT(db, path.relative(process.cwd(), prep.sandbox.dir).replace(/\\/g, '/')) } : { ok: true },
     side: prep.map.legacy,
     sideName: 'legacy',
     semantics: prep.map.semantics ?? {},

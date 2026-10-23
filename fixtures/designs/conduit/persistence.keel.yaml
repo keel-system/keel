@@ -1,0 +1,33 @@
+# El legacy es MongoDB (Mongoose 4.4); el modelo se conserva documental.
+default:
+  model: document
+
+entities:
+  Profile:
+    persisted: true
+    naturalKey: [subject]
+    naturalKeyError: PROFILE_ALREADY_EXISTS
+    indexes:
+      - fields: [username]
+        unique: true
+        error: USERNAME_ALREADY_EXISTS
+  Article:
+    persisted: true
+    naturalKey: [slug]
+    indexes: [[author], [createdAt], [tagList]]
+  Favorite:
+    persisted: true
+    naturalKey: [profile, article]
+    indexes: [[article]]
+  Follow:
+    persisted: true
+    naturalKey: [follower, followed]
+    indexes: [[followed]]
+
+audit:
+  timestamps: declared     # createdAt/updatedAt de Article y Comment son contrato (RW: toJSONFor)
+  authorship: none
+
+consistency:
+  transactionalBoundary: per-operation
+  optimisticLocking: none  # observado: dos PUT concurrentes, gana el último (RW-CONC-03, por lectura)

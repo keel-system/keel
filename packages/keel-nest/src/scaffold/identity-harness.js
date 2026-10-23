@@ -36,6 +36,8 @@ export function closingCredential(model) {
       return `{ 'X-API-Key': apiKey() }`;
     case 'role':
       return `bearer(await tokenFor(${tsString(credential.name)}))`;
+    case 'persona':
+      return `bearer(await tokenAs(${tsString(credential.name)}))`;
     default:
       return `bearer(await serviceCredential(${tsString(credential.name)}))`;
   }

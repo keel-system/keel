@@ -13,7 +13,9 @@ import { envDeps } from './env-deps.js';
 // monta y la skill que lo construye; el sandbox lo escribe el agente.
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-export const SKILLS = ['keel-recover-sandbox', 'keel-recover'];
+export const SKILLS = ['keel-recover-sandbox', 'keel-recover', 'keel-recover-run'];
+// Los subagentes de /keel-recover-run: hojas (`spawns: false`), el único orquestador es la skill.
+export const AGENTS = ['keel-recover-sandbox', 'keel-recover-explorer', 'keel-recover-designer'];
 const INSTRUMENTS = ['v8-coverage-exit.cjs', 'express-routes.cjs'];
 
 export function kebab(name) {
@@ -66,7 +68,10 @@ export function planInit({ workspace, repo, name }) {
     { path: `${base}/runtime.yaml`, content: runtime.text },
     { path: `${base}/environment.yaml`, content: env.text },
     ...INSTRUMENTS.map((f) => ({ path: `${base}/sandbox/instrument/${f}`, content: fs.readFileSync(path.join(packageRoot, 'assets', 'sandbox', f), 'utf8') })),
-    ...emitHarnessFiles({ skills: SKILLS.map((s) => path.join(packageRoot, 'assets', 'skills', s)) }),
+    ...emitHarnessFiles({
+      skills: SKILLS.map((s) => path.join(packageRoot, 'assets', 'skills', s)),
+      agents: AGENTS.map((a) => path.join(packageRoot, 'assets', 'agents', `${a}.md`))
+    }),
   ];
   return { service, base, files, unsupported: runtime.plain.unsupported ?? null };
 }

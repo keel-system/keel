@@ -146,3 +146,26 @@ test('paso 4: cada flujo dice keep, fix, frontier o new, y lo que cita existe', 
   assert.deepEqual(c.unusedFixes, ['fix-huerfano'], 'un cambio sin escenario no es un cambio');
   assert.deepEqual(readCharacterization(null, doc), { flows: [], unmarked: [], unknown: [], unusedFixes: [] });
 });
+
+test('paso 4: un fix que ningún flujo HTTP ve lo dice con noFlow, y un flujo que lo cita lo contradice', () => {
+  const noFlow = { why: 'los huérfanos solo se ven en la base', proof: 'recordings/round-1/R1-032.json' };
+  const doc = { fixes: [{ id: 'fix-409' }, { id: 'fix-cascada', noFlow }, { id: 'fix-identidad', noFlow }], frontier: [] };
+  const text = [
+    '### FL-A-001: uno\n**Caracterización**: `fix` (`fix-409`).',
+    '### FL-A-002: dos\n**Caracterización**: `fix` (`fix-identidad`).',
+  ].join('\n\n');
+  const c = readCharacterization(text, doc);
+  assert.deepEqual(c.unusedFixes, [], 'fix-cascada no tiene flujo y lo declara');
+  assert.deepEqual(c.unknown, [`FL-A-002: fix fix-identidad declara noFlow en ${PROVENANCE_FILE} y este flujo lo demuestra`]);
+  const sinDeclarar = readCharacterization(text, { ...doc, fixes: [{ id: 'fix-409' }, { id: 'fix-cascada' }] });
+  assert.deepEqual(sinDeclarar.unusedFixes, ['fix-cascada'], 'sin noFlow sigue siendo un cambio sin escenario');
+});
+
+test('el schema exige el porqué y la otra prueba de un noFlow', () => {
+  const base = { kind: 'provenance', schema: 1, legacy: { name: 'x', commit: 'abc1234' }, elements: [], frontier: [] };
+  const fix = { id: 'fix-cascada', legacy: 'deja huérfanos', reason: 'decidido por el humano', evidence: 'R1-032' };
+  const ok = loadProvenance(dirWith({ ...base, fixes: [{ ...fix, noFlow: { why: 'solo se ve en la base', proof: 'R1-032' } }] }));
+  assert.deepEqual(ok.errors, []);
+  const bad = loadProvenance(dirWith({ ...base, fixes: [{ ...fix, noFlow: { why: 'solo se ve en la base' } }] }));
+  assert.ok(bad.errors.some((e) => /proof/.test(e)), bad.errors.join('; '));
+});

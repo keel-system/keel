@@ -30,6 +30,7 @@ import {
   tokenUrl,
   userTestClient,
   usesPersonaTokens,
+  usesUserClient,
   usesScopedTokens,
   keycloakAdminCredentials,
   realmSpec
@@ -84,7 +85,7 @@ function credentialsEnv(model, platform) {
     );
   }
   lines.push(`AUTH_TOKEN_URL=${tokenUrl(model)}`);
-  if (security?.roles?.length) {
+  if (usesUserClient(model)) {
     lines.push(`AUTH_TEST_CLIENT=${userTestClient(model)}`, `AUTH_TEST_PASSWORD=${PASSWORD}`);
   }
 
@@ -171,9 +172,13 @@ done
 echo "== Realm =="
 run "create realms -s realm=$REALM -s enabled=true"`);
 
-  if (roles.length > 0) {
+  // El cliente de usuario va con roles Y con personas (`tokenAs`): un diseño sin roles cuya identidad
+  // es el `sub` no tiene usuarios fijos, pero el arnés da de alta a cada persona y le pide token por aquí.
+  if (usesUserClient(model)) {
     blocks.push(`echo "== Cliente publico para tokens de usuario (password grant) =="
 run "create clients -r $REALM -s clientId=$USER_CLIENT -s enabled=true -s publicClient=true -s directAccessGrantsEnabled=true"`);
+  }
+  if (roles.length > 0) {
     blocks.push(`echo "== Roles del diseno (security.keel.yaml) =="
 ${roles.map((role) => `run "create roles -r $REALM -s name=${role}"`).join('\n')}
 
@@ -312,7 +317,7 @@ ${assignments.join('\n')}`);
   const verifyUser = roles[0] ?? NO_ROLE_USER;
   const content = `#!/usr/bin/env bash
 # Prepara el realm de prueba "${realm}" en el Keycloak de infra/docker-compose.yaml:
-# ${roles.length > 0 ? 'realm + roles + usuarios de prueba (grant password) + clientes maquina' : 'realm + clientes maquina (el diseno no declara roles: no hay usuarios de prueba)'}. Generado
+# ${roles.length > 0 ? 'realm + roles + usuarios de prueba (grant password) + clientes maquina' : usesUserClient(model) ? 'realm + cliente de usuario + clientes maquina (el diseno no declara roles: las personas las da de alta el arnes con tokenAs)' : 'realm + clientes maquina (el diseno no declara roles: no hay usuarios de prueba)'}. Generado
 # por ${platform.generator} build a partir de specs/security.keel.yaml: los nombres y secretos
 # son los mismos que infra/test-credentials.env entrega a ${platform.identity.harness}, y por eso
 # no se editan aqui a mano — si algo tiene que cambiar, cambia en el diseno.
@@ -343,7 +348,7 @@ ${composeResolution(['-f', 'infra/docker-compose.yaml'])}
 KC="\${COMPOSE[*]} exec -T keycloak /opt/keycloak/bin/kcadm.sh"
 REALM=${realm}
 SVC=${audience}                     # audiencia del servicio (security.serviceAuth.audience)
-${roles.length > 0 ? `USER_CLIENT=${userTestClient(model)} # cliente publico para tokens de usuario
+${usesUserClient(model) ? `USER_CLIENT=${userTestClient(model)} # cliente publico para tokens de usuario
 ` : ''}PASSWORD=${PASSWORD}
 
 # El script es IDEMPOTENTE: re-ejecutarlo sobre un realm ya sembrado devuelve 409 en

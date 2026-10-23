@@ -378,7 +378,7 @@ El workspace es **solo diseño**: todo el conocimiento de generación vive dentr
 
 ## Estado y roadmap
 
-- **DSL Keel 2.22**: once capas (dos obligatorias, nueve opcionales) con validación en tres niveles
+- **DSL Keel 2.23**: once capas (dos obligatorias, nueve opcionales) con validación en tres niveles
   —JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente— y el veredicto
   `--ready`.
 - **CLI `keel` completa**: `init`, `new`, `list`, `validate`, `describe`, `seals`, `index`, `system` y

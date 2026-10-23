@@ -21,6 +21,7 @@ import {
   dispatchNote,
   carriesEntryGate,
   entryGateNote,
+  ownershipNotes,
   usesEntryGate
 } from 'keel-core/gen';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
@@ -556,6 +557,9 @@ function renderHandler(model, service, operation) {
   }
   // El alcance por recurso: el puerto y su adaptador JWT ya los generó build. Lo que queda es
   // USARLO, en el punto que dicen las reglas, y los finders acotados de los listados.
+  // La propiedad (DSL 2.23): nota neutral, la misma en los tres generadores.
+  const ownerParam = operation.messageKind === 'query' ? 'query' : 'command';
+  for (const note of ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field}()` })) notes.push(note);
   const scoping = model.security?.scoping;
   if (scoping && operation.errors.includes(scoping.error)) {
     notes.push(

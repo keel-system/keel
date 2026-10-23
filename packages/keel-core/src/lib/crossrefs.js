@@ -581,15 +581,21 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         // transaccional y su propio ciclo de vida—. Lo que el generador materializa a
         // partir de ahí es una relación navegable entre agregados, que es justo lo que la
         // arquitectura prohíbe: la lectura conjunta se resuelve proyectando, no navegando.
+        // La auto-referencia a-muchos de una raíz (Profile.follows → Profile) es el mismo caso: apunta a OTRAS
+        // instancias, y cada una es su propio agregado. Se escapaba porque las dos puntas son el mismo agregado
+        // por nombre, y el generador la dejaba sin campo al agente (conduit, inc. 8 de keel-recover).
+        const selfCollection = rel.entity === entityName;
         if (
           targetAgg !== undefined &&
           roots.has(rel.entity) &&
-          aggregateOf.get(entityName) !== targetAgg &&
+          (aggregateOf.get(entityName) !== targetAgg || selfCollection) &&
           (rel.cardinality === 'one-to-many' || rel.cardinality === 'many-to-many')
         ) {
           warn(
             'CHK-DOMAIN-COLLECTION-CROSSES-AGGREGATE',
-            `domain: ${entityName}.relations.${relName}: es una colección '${rel.cardinality}' hacia '${rel.entity}', que es la raíz de OTRO agregado ('${targetAgg}') — eso es composición encubierta: cada raíz tiene su propia frontera. Si de verdad son suyas, están en el mismo agregado; si no, la relación va por id y la lectura conjunta se proyecta`
+            selfCollection
+              ? `domain: ${entityName}.relations.${relName}: es una colección '${rel.cardinality}' hacia '${rel.entity}' mismo — cada otra instancia es su propio agregado, así que es composición encubierta igual que hacia otra raíz. La relación entre instancias es una entidad propia (un agregado con dos referencias por id), y la lectura conjunta se proyecta`
+              : `domain: ${entityName}.relations.${relName}: es una colección '${rel.cardinality}' hacia '${rel.entity}', que es la raíz de OTRO agregado ('${targetAgg}') — eso es composición encubierta: cada raíz tiene su propia frontera. Si de verdad son suyas, están en el mismo agregado; si no, la relación va por id y la lectura conjunta se proyecta`
           );
         }
       }
@@ -1592,6 +1598,75 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       }
     }
 
+    // Autorización por propietario (2.23). `scoping` acota por un claim del token; esto acota por
+    // un campo DEL RECURSO comparado con la identidad del llamante, que es lo que «solo el autor
+    // edita su artículo» necesita y no se podía decir: el inc. 1 de keel-recover lo dejó como
+    // frontera (F-OWNERSHIP) y OBL-RESOURCE-SCOPE, que no se acepta, bloqueaba la generación.
+    // Todo lo que se comprueba aquí es lo que el generador necesita para escribir la nota del
+    // handler sin adivinar: la entidad, el camino hasta el dueño, quién llama y con qué se rechaza.
+    const ownershipErrors = new Map(); // operación → codes de propiedad que declara
+    const callerField = security.authentication?.callerIdentity?.field;
+    for (const [entityName, rule] of Object.entries(security.ownership ?? {})) {
+      const where = `security: ownership.${entityName}`;
+      const entity = domain.entities?.[entityName];
+      if (!entity) {
+        error('CHK-SECURITY-OWNERSHIP-ENTITY', `${where}: la entidad '${entityName}' no existe en domain — no hay recurso del que ser dueño`);
+      } else {
+        // El camino: relaciones a-uno hasta una entidad, y un campo suyo al final. Una relación a-muchos
+        // no tiene UN dueño, y una relación al final no es un valor que comparar con la identidad.
+        let current = entityName;
+        const segments = String(rule.owner).split('.');
+        for (const [index, segment] of segments.entries()) {
+          const node = domain.entities?.[current];
+          const last = index === segments.length - 1;
+          const relation = node?.relations?.[segment];
+          if (!last && relation && ['many-to-one', 'one-to-one'].includes(relation.cardinality) && domain.entities?.[relation.entity]) {
+            current = relation.entity;
+            continue;
+          }
+          if (last && Object.hasOwn(node?.fields ?? {}, segment)) break;
+          error('CHK-SECURITY-OWNERSHIP-OWNER-PATH',
+            `${where}.owner: '${rule.owner}' no llega a un campo — '${segment}' ${last ? `no es un campo de '${current}'` : `no es una relación a-uno de '${current}'`}; el dueño es un campo que guarda la identidad del llamante, al que se llega por relaciones many-to-one o one-to-one`
+          );
+          break;
+        }
+      }
+      if (!callerField) {
+        error('CHK-SECURITY-OWNERSHIP-NO-CALLER',
+          `${where}: no hay authentication.callerIdentity — el dueño se compara con la identidad resuelta del llamante, y sin ella la comparación sería contra lo que mande el cliente`
+        );
+      }
+      for (const opName of rule.operations ?? []) {
+        const op = operations[opName];
+        if (!op) {
+          error('CHK-SECURITY-OWNERSHIP-OPERATION', `${where}.operations: '${opName}' no es una operación de use-cases`);
+          continue;
+        }
+        const inputFields = op.input && typeof op.input === 'object' ? (op.input.fields ?? {}) : {};
+        if (callerField && !Object.hasOwn(inputFields, callerField)) {
+          error('CHK-SECURITY-OWNERSHIP-CALLER-NOT-RECEIVED',
+            `${where}.operations: '${opName}' no recibe '${callerField}' en su input — el handler no sabría quién llama para compararlo con el dueño`
+          );
+        }
+        const declared = (op.errors ?? []).find((e) => e.code === rule.error);
+        if (!declared || declared.http !== 403) {
+          error('CHK-SECURITY-OWNERSHIP-ERROR-UNDECLARED',
+            `${where}.error: '${opName}' ${declared ? `declara '${rule.error}' con http ${declared.http}, no 403` : `no declara '${rule.error}' en sus errors`} — ahí viven su status y su when, que son contrato público`
+          );
+        } else {
+          if (!ownershipErrors.has(opName)) ownershipErrors.set(opName, new Set());
+          ownershipErrors.get(opName).add(rule.error);
+        }
+      }
+      for (const role of rule.exemptRoles ?? []) {
+        if (!Object.hasOwn(security.roles ?? {}, role)) {
+          error('CHK-SECURITY-OWNERSHIP-EXEMPT-ROLE-UNKNOWN',
+            `${where}.exemptRoles: el rol '${role}' no está en el catálogo de roles — la exención es la parte peligrosa y tiene que nombrar un rol que exista`
+          );
+        }
+      }
+    }
+
     // Un 403 que nada de lo declarado puede producir.
     //
     // Roles, permissions y scopes son GLOBALES: quien tiene el rol lo tiene para todo, así
@@ -1610,8 +1685,10 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // El error del alcance por recurso SÍ es producible: `authentication.scoping` declara de
       // dónde sale la acotación, el generador la aprovisiona y su escenario es implementable.
       // Es la respuesta que este aviso llevaba pidiendo sin que el DSL tuviera dónde darla.
+      // Y el de propiedad (2.23), declarado en `ownership` para ESTA operación: también lo produce algo.
       const forbidden = (op.errors ?? []).filter(
-        (error) => error.http === 403 && !(scoping && error.code === scoping.error)
+        (error) =>
+          error.http === 403 && !(scoping && error.code === scoping.error) && !ownershipErrors.get(opName)?.has(error.code)
       );
       if (forbidden.length === 0) continue;
       const rule = security.access?.rules?.[opName] ?? security.access?.default;
@@ -1641,7 +1718,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           `el error '${code}' (403) que declara ${ops.length === 1 ? 'la operación' : 'las operaciones'} ` +
             `${listed} no lo puede producir nada de lo declarado — roles, permissions y scopes son globales, ` +
             `así que quien pasa la regla de acceso pasa para todos los recursos. Si el permiso se acota por recurso o ` +
-            `por inquilino, declara con qué se acota (el claim del token, la asignación que lo resuelve); si no se ` +
+            `por inquilino, declara con qué se acota (el claim del token en authentication.scoping, el campo del dueño ` +
+            `en ownership); si no se ` +
             `acota, ese 403 sobra y su escenario no será implementable`
         );
       }
