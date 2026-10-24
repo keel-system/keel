@@ -31,7 +31,10 @@ export function domainMembers(model, entity) {
     if (relation.backReference) continue;
     const toMany = relation.cardinality === 'one-to-many' || relation.cardinality === 'many-to-many';
     if (!relation.internal && model.layersPresent?.persistence) {
-      members.push({ kind: 'externalRef', relation, name: `${relation.name}Id`, type: relation.required ? 'string' : 'string | null' });
+      // Del tipo del id de la raíz a la que apunta (un legacy trae ids `long`: bigint), como keel-spring y keel-dotnet.
+      const target = model.entities.find((candidate) => candidate.name === relation.entity);
+      const idType = target?.fields.find((candidate) => candidate.isId)?.tsType ?? 'string';
+      members.push({ kind: 'externalRef', relation, name: `${relation.name}Id`, type: relation.required ? idType : `${idType} | null` });
     } else if (toMany) {
       members.push({ kind: 'relationMany', relation, name: relation.name, type: `readonly ${relation.entity}[]` });
     } else {

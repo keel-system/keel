@@ -33,13 +33,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { loadService } from 'keel-core';
 import { DATABASES } from 'keel-core/gen/infra-catalog';
 import { partialIndexSpecs, discriminatorColumn, orderingFieldOf, persistedMembers, uniqueConstraints, crossAggregateForeignKeys, elementTable, foreignKeyIndexColumns, foreignKeyIndexName, indexName, collectionIndexesOf, columnsFor, foreignKeyName, joinColumnOf, usesAuditableEntity, AUDIT_COLUMNS, LOCK_VERSION, foldedShadow } from 'keel-core/gen';
 import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startDatabase } from './lib/database-container.js';
-import { sampleEntity, sampleValue, PROBE_HELPERS } from './lib/samples.js';
+import { freshIdLiteral, idFieldOf, sampleEntity, sampleValue, PROBE_HELPERS } from './lib/samples.js';
 import { finderBlock } from './lib/finder-probes.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN, declaredAuthorship } from '../test/helpers/workspace.js';
@@ -74,6 +74,7 @@ import {
 } from '../src/scaffold/messaging.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { idempotencyOutcomeCodes } from 'keel-core/gen';
+import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
 
 const args = process.argv.slice(2);
@@ -81,6 +82,10 @@ const args = process.argv.slice(2);
 // --sabotage=<id> rompe lo emitido EN MEMORIA, antes de escribirlo, conservando la forma (sigue compilando): la red
 // tiene que salir en rojo en las comprobaciones de esa regla. [sufijo del archivo, texto o expresión, sustituto].
 const SABOTAGES = {
+  // El orden por un enum (shop-api): la sombra de rango con la posición ALFABÉTICA, que es ordenar por el nombre.
+  'rank-sort': ['-repository-impl.ts', /Object\.values\((\w+)\)\.indexOf\(/g, 'Object.values($1).sort().indexOf('],
+  // La lectura por la FK inversa (shop-api) se deja una de las filas de su dueño.
+  'inverse-finder': ['-repository-impl.ts', /(const found = await this\.manager\.find\(\w+Orm, \{ where: \{ \w+Id \} \}\);\n\s+return found)\.map/g, '$1.slice(1).map'],
   // Los finders (DSL 2.22): el where que no filtra, el texto sin plegar y el patrón LIKE que no escapa % ni _.
   'finder-where': ['product-repository-impl.ts', /^ {4}and\('[^']+', Equal\(.*\)\);\n/gm, ''],
   'finder-fold': ['product-repository-impl.ts', /LikePattern\.(\w+)\(TextFold\.\w+\((filter\.\w+)\)\)/g, 'LikePattern.$1($2)'],
@@ -111,7 +116,7 @@ const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ??
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
 // object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
 // fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
@@ -326,10 +331,10 @@ await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
 
 /** La fila tal como la guarda el motor, sin pasar por el ORM. */
-async function rawRow(table, id) {
+async function rawRow(table, id, column = 'id', uuid = true) {
   ${engine === 'postgresql'
-    ? "const rows = await dataSource.query(`SELECT * FROM \"${table}\" WHERE id = $1`, [id]);"
-    : "const rows = await dataSource.query(`SELECT * FROM \\`${table}\\` WHERE id = UUID_TO_BIN(?)`, [id]);"}
+    ? "const rows = await dataSource.query(`SELECT * FROM \"${table}\" WHERE \"${column}\" = $1`, [String(id)]);"
+    : "const rows = await dataSource.query(`SELECT * FROM \\`${table}\\` WHERE \\`${column}\\` = ${uuid ? 'UUID_TO_BIN(?)' : '?'}`, [String(id)]);"}
   return rows[0] ?? null;
 }
 
@@ -340,6 +345,9 @@ ${PROBE_HELPERS}
 
 /** Lo que se comprueba de una raíz: ida y vuelta, la fila en crudo, versión, unicidad, página y borrado. */
 function rootBlock(model, engine, root, index, ctx) {
+  // El id de la raíz por su nombre y su columna: un legacy no lo llama `id` (shop-api: `cartId`, long).
+  const idName = root.idField?.name ?? 'id';
+  const idRow = `'${root.idField?.columns?.name ?? 'id'}', ${(root.idField?.base ?? 'uuid') === 'uuid'}`;
   const first = sampleEntity(model, root, ctx, `${index}a`);
   const second = sampleEntity(model, root, ctx, `${index}b`);
   const finder = naturalKeyFinder(model, root);
@@ -365,11 +373,11 @@ function rootBlock(model, engine, root, index, ctx) {
   const repository = new ${adapterClass(root)}(tx, eventSink);
   const original = ${first};
   await repository.save(original);
-  const loaded = await repository.findById(original.id);
+  const loaded = await repository.findById(original.${idName});
   check('${name}: findById devuelve lo que se guardó', loaded != null);
   const diff = differences(snapshot(original), snapshot(loaded));
   check('${name}: ida y vuelta sin perder nada (escala, uuid, fechas, enums, orden)', diff.length === 0, diff.slice(0, 6).join(' | '));
-  const row = await rawRow('${root.tableName}', original.id);
+  const row = await rawRow('${root.tableName}', original.${idName}, ${idRow});
   check('${name}: la fila está en ${root.tableName}', row != null);
 ${raw.join('\n')}
 ${root.usesOptimisticLocking ? `  check('${name}: nace con la versión 0', loaded?.lockVersion === 0, loaded?.lockVersion);
@@ -383,7 +391,7 @@ ${root.usesOptimisticLocking ? `  check('${name}: nace con la versión 0', loade
     check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia', error instanceof OptimisticLockConflict && translated?.httpStatus === 409, translated?.code ?? error?.message);
   }` : ''}
 ${finder ? `  const found = await repository.${finder.name}(${finder.params.map((param) => `original.${param.name}`).join(', ')});
-  check('${name}: el finder de la clave natural encuentra el agregado', found?.id === original.id);
+  check('${name}: el finder de la clave natural encuentra el agregado', found?.${idName} === original.${idName});
   const rival = ${second};
   const clash = new ${name}({ ...stateOf(rival), ${finder.params.map((param) => `${param.name}: original.${param.name}`).join(', ')} });
   try {
@@ -396,11 +404,13 @@ ${finder ? `  const found = await repository.${finder.name}(${finder.params.map(
 ${foldedBlock(model, root, index, ctx, finder)}
 ${filterFoldBlock(model, root, index, ctx)}
 ${finderBlock(model, root, index, ctx, { sampleEntity })}
+${rankBlock(model, root, index, ctx, paginated)}
+${inverseBlock(model, root, index, ctx)}
 ${idBatchReason(model, root) ? `  {
     // findAllById: UNA consulta con In([...]) — en MySQL el id es binary(16) con transformador, y que TypeORM lo
     // aplique a cada valor del In es lo que aquí se mide (si no, la consulta no casaría nada sin dar error).
-    const batch = await repository.findAllById([original.id, randomUUID()]);
-    check('${name}: findAllById devuelve la raíz guardada y omite el id que no existe', batch.length === 1 && String(batch[0]?.id) === String(original.id), JSON.stringify(batch.map((item) => item.id)));
+    const batch = await repository.findAllById([original.${idName}, ${freshIdLiteral(root.idField)}]);
+    check('${name}: findAllById devuelve la raíz guardada y omite el id que no existe', batch.length === 1 && String(batch[0]?.${idName}) === String(original.${idName}), JSON.stringify(batch.map((item) => String(item.${idName}))));
     check('${name}: findAllById con la lista vacía no consulta y devuelve vacío', (await repository.findAllById([])).length === 0);
   }` : ''}
 ${conditionalBlock(model, root, index, ctx)}
@@ -410,20 +420,73 @@ ${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: []
 ${guardClaimsFor(model, root.name).map((claim) => `  // La guarda del efecto irreversible (mail.sentBy): la primera ejecución se lleva la fila y la deja en
   // ${claim.to}; la SEGUNDA no se la lleva — esa es toda la promesa, y su fallo es un segundo correo real.
   {
-    const guarded = await repository.findById(original.id);
-    const first = await repository.${claim.method}(guarded.id);
-    check('${name}: ${claim.method} se lleva la fila y la pasa a ${claim.to}', first != null && String(first.id) === String(guarded.id) && String(first.${root.lifecycle.field}) !== String(guarded.${root.lifecycle.field}), JSON.stringify(first?.${root.lifecycle.field}));
-${claim.stampField ? `    check('${name}: ${claim.method} estampa ${claim.stampField} en el mismo reclamo', first?.${claim.stampField} instanceof Date, String(first?.${claim.stampField}));\n` : ''}    const second = await repository.${claim.method}(guarded.id);
+    const guarded = await repository.findById(original.${idName});
+    const first = await repository.${claim.method}(guarded.${idName});
+    check('${name}: ${claim.method} se lleva la fila y la pasa a ${claim.to}', first != null && String(first.${idName}) === String(guarded.${idName}) && String(first.${root.lifecycle.field}) !== String(guarded.${root.lifecycle.field}), JSON.stringify(first?.${root.lifecycle.field}));
+${claim.stampField ? `    check('${name}: ${claim.method} estampa ${claim.stampField} en el mismo reclamo', first?.${claim.stampField} instanceof Date, String(first?.${claim.stampField}));\n` : ''}    const second = await repository.${claim.method}(guarded.${idName});
     check('${name}: ${claim.method} por segunda vez devuelve null (la carrera perdida)', second == null, JSON.stringify(second?.${root.lifecycle.field}));
-    const reloaded = await repository.findById(guarded.id);
+    const reloaded = await repository.findById(guarded.${idName});
     check('${name}: ${claim.method} CONFIRMÓ la marca (la ve una lectura posterior)', String(reloaded?.${root.lifecycle.field}) === String(first?.${root.lifecycle.field}), JSON.stringify(reloaded?.${root.lifecycle.field}));
   }`).join('\n')}
 ${credentialFinders(model, root).map((credential) => `  // La credencial que NO es la primera de la lista: resolver por la clave natural no la encontraría.
-  check('${name}: ${credential.name} resuelve por una credencial que no es la primera', (await repository.${credential.name}(original.${credential.field.name}[original.${credential.field.name}.length - 1]))?.id === original.id);
+  check('${name}: ${credential.name} resuelve por una credencial que no es la primera', (await repository.${credential.name}(original.${credential.field.name}[original.${credential.field.name}.length - 1]))?.${idName} === original.${idName});
   check('${name}: ${credential.name} con una credencial ajena devuelve null', (await repository.${credential.name}('nadie-' + randomUUID())) == null);`).join('\n')}
-  await repository.deleteById(original.id);
-  check('${name}: deleteById borra el agregado y su grafo', (await repository.findById(original.id)) == null);
+  await repository.deleteById(original.${idName});
+  check('${name}: deleteById borra el agregado y su grafo', (await repository.findById(original.${idName})) == null);
 }`;
+}
+
+/**
+ * El orden por un enum: va por la posición en que el diseño declara sus valores (la sombra de rango de keel-core,
+ * `rankShadow`), no por su nombre. Una muestra por valor, guardadas en el orden INVERSO de la declaración, y la página
+ * pedida por la sombra las devuelve en el de la declaración. La misma sonda que el db-check de keel-dotnet (rankProbes).
+ */
+function rankBlock(model, root, index, ctx, paginated) {
+  if (!paginated) return '';
+  const member = persistedMembers(model, root).find((candidate) => candidate.kind === 'scalar' && candidate.ranked);
+  const enumDef = member && model.enums.find((candidate) => candidate.name === member.field.namedType);
+  if (!enumDef || enumDef.values.length < 2) return '';
+  ctx.imports.add(`${enumDef.name}|${classPath(DIRS.enums, enumDef.name)}`);
+  const idName = root.idField?.name ?? 'id';
+  const samples = enumDef.values.map((_, k) => sampleEntity(model, root, ctx, `${index}r${k}`));
+  return `  {
+    const declared = Object.values(${enumDef.name});
+    const samples = [${samples.join(', ')}];
+    const mine = [];
+    for (const [k, value] of [...declared].reverse().entries()) {
+      const sample = new ${root.name}({ ...stateOf(samples[k]), ${member.name}: value });
+      await repository.save(sample);
+      mine.push(String(sample.${idName}));
+    }
+    const page = await repository.list({ page: 0, size: 1000, sort: [{ property: '${member.ranked.name}', direction: 'asc' }] });
+    const got = page.items.filter((item) => mine.includes(String(item.${idName}))).map((item) => item.${member.name});
+    check('${root.name}: ordena por ${member.name} en el orden de su declaración y no por su nombre', JSON.stringify(got) === JSON.stringify(declared), JSON.stringify(got));
+  }`;
+}
+
+/**
+ * La lectura por la FK inversa (`findAllBy<Inversa>Id`): un dueño nuevo con exactamente dos filas, y el finder devuelve
+ * esas dos y ninguna más; para un id que no existe, nada. La misma sonda que el db-check de keel-dotnet.
+ */
+function inverseBlock(model, root, index, ctx) {
+  const idName = root.idField?.name ?? 'id';
+  return inverseFindersOf(model, root.name).map((inverse, k) => {
+    const owner = model.entities.find((entity) => entity.name === inverse.owner);
+    const ownerId = owner.idField?.name ?? 'id';
+    const row = (salt) => `new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}i${k}${salt}`)}), ${inverse.relation}Id: owner.${ownerId} })`;
+    return `  {
+    const owner = ${sampleEntity(model, owner, ctx, `${index}o${k}`)};
+    await new ${adapterClass(owner)}(tx, eventSink).save(owner);
+    const a = ${row('a')};
+    const b = ${row('b')};
+    await repository.save(a);
+    await repository.save(b);
+    const found = await repository.${inverse.finder}(owner.${ownerId});
+    const got = found.map((item) => String(item.${idName})).sort();
+    check('${root.name}: ${inverse.finder} devuelve las filas de su ${inverse.owner} y ninguna más', JSON.stringify(got) === JSON.stringify([String(a.${idName}), String(b.${idName})].sort()), JSON.stringify(got));
+    check('${root.name}: ${inverse.finder} con un id que no existe no devuelve nada', (await repository.${inverse.finder}(${freshIdLiteral(owner.idField)})).length === 0);
+  }`;
+  }).join('\n');
 }
 
 /**
@@ -453,18 +516,20 @@ function authorshipBlock(model, root, index, ctx) {
         .filter((relation) => model.entities.find((entity) => entity.name === relation.entity)?.fields.some((field) => field.name === 'createdBy'))
     : [];
   const name = root.name;
+  const idName = root.idField?.name ?? 'id';
+  const idRow = `'${root.idField?.columns?.name ?? 'id'}', ${(root.idField?.base ?? 'uuid') === 'uuid'}`;
   return `  {
     const writeAs = (who, action) => ${writer};
     const actorOf = (who) => ${expected};
     const sample = ${sampleEntity(model, root, ctx, `${index}w`)};
     await writeAs('autor-que-crea', () => repository.save(sample));
-    const read = await repository.findById(sample.id);
+    const read = await repository.findById(sample.${idName});
 ${children.map((relation) => `    check('${name}.${relation.name}: la hija nace con created_by de quien crea', (read?.${relation.name} ?? []).length > 0 && read.${relation.name}.every((child) => child.createdBy === actorOf('autor-que-crea')), JSON.stringify((read?.${relation.name} ?? []).map((child) => child.createdBy)));`).join('\n')}
     await writeAs('autor-que-modifica', () => repository.save(read));
-    const stored = await rawRow('${root.tableName}', sample.id);
+    const stored = await rawRow('${root.tableName}', sample.${idName}, ${idRow});
     check('${name}: created_by es de quien crea y no cambia al reescribir', stored?.['${column('createdBy')}'] === actorOf('autor-que-crea'), stored?.['${column('createdBy')}']);
     check('${name}: updated_by es del último que escribe', stored?.['${column('updatedBy')}'] === actorOf('autor-que-modifica'), stored?.['${column('updatedBy')}']);
-    await repository.deleteById(sample.id);
+    await repository.deleteById(sample.${idName});
   }`;
 }
 
@@ -479,7 +544,11 @@ ${children.map((relation) => `    check('${name}.${relation.name}: la hija nace 
  */
 function concurrencyBlock(model, engine, root, ctx) {
   if (!root) return '';
-  const pick = engine === 'postgresql' ? `SELECT id FROM "${root.tableName}" WHERE id = $1 FOR UPDATE` : `SELECT id FROM \`${root.tableName}\` WHERE id = UUID_TO_BIN(?) FOR UPDATE`;
+  // El id por su nombre, su columna y su tipo: un legacy no lo llama `id` ni lo hace uuid (shop-api).
+  const idName = root.idField?.name ?? 'id';
+  const idColumn = root.idField?.columns?.name ?? 'id';
+  const param = engine === 'postgresql' ? '$1' : (root.idField?.base ?? 'uuid') === 'uuid' ? 'UUID_TO_BIN(?)' : '?';
+  const pick = engine === 'postgresql' ? `SELECT "${idColumn}" FROM "${root.tableName}" WHERE "${idColumn}" = ${param} FOR UPDATE` : `SELECT \`${idColumn}\` FROM \`${root.tableName}\` WHERE \`${idColumn}\` = ${param} FOR UPDATE`;
   return `
 // ═══ Concurrencia: interbloqueo y tope de transacción ═══
 {
@@ -488,13 +557,13 @@ function concurrencyBlock(model, engine, root, ctx) {
   const b = ${sampleEntity(model, root, ctx, 'xb')};
   await repository.save(a);
   await repository.save(b);
-  const lock = (manager, id) => manager.query(${JSON.stringify(pick)}, [id]);
+  const lock = (manager, id) => manager.query(${JSON.stringify(pick)}, [String(id)]);
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   // Interbloqueo: T1 toma a y luego b; T2 toma b y luego a.
   const outcomes = await Promise.allSettled([
-    tx.inTransaction(async (manager) => { await lock(manager, a.id); await pause(400); await lock(manager, b.id); }),
-    new TransactionContext(dataSource, settings).inTransaction(async (manager) => { await lock(manager, b.id); await pause(400); await lock(manager, a.id); })
+    tx.inTransaction(async (manager) => { await lock(manager, a.${idName}); await pause(400); await lock(manager, b.${idName}); }),
+    new TransactionContext(dataSource, settings).inTransaction(async (manager) => { await lock(manager, b.${idName}); await pause(400); await lock(manager, a.${idName}); })
   ]);
   const lost = outcomes.filter((outcome) => outcome.status === 'rejected').map((outcome) => outcome.reason);
   check('interbloqueo: el motor aborta una de las dos', lost.length === 1, lost.map((error) => error?.message).join(' | '));
@@ -503,9 +572,9 @@ function concurrencyBlock(model, engine, root, ctx) {
   // Tope: una transacción con tope de 1 s espera una fila que otra retiene 4 s.
   const hurried = new TransactionContext(dataSource, { ...settings, transactionTimeoutMs: 1000 });
   let release;
-  const holder = tx.inTransaction(async (manager) => { await lock(manager, a.id); await new Promise((resolve) => { release = resolve; setTimeout(resolve, 4000); }); });
+  const holder = tx.inTransaction(async (manager) => { await lock(manager, a.${idName}); await new Promise((resolve) => { release = resolve; setTimeout(resolve, 4000); }); });
   await pause(300);
-  const waited = await hurried.inTransaction((manager) => lock(manager, a.id)).then(() => null, (error) => error);
+  const waited = await hurried.inTransaction((manager) => lock(manager, a.${idName})).then(() => null, (error) => error);
   release?.();
   await holder;
   check('tope: la espera de bloqueo se corta', waited != null, 'la sentencia esperó más que su tope');
@@ -1109,6 +1178,9 @@ ${imports}
  * filas convivirían.
  */
 function foldedBlock(model, root, index, ctx, finder) {
+  // El id de la raíz por su nombre y su columna: un legacy no lo llama `id` (shop-api: long).
+  const idName = root.idField?.name ?? 'id';
+  const idRow = `'${root.idField?.columns?.name ?? 'id'}', ${(root.idField?.base ?? 'uuid') === 'uuid'}`;
   if (!finder) return '';
   const folded = finder.params.map((param) => root.fields.find((field) => field.name === param.name && field.fold)).filter(Boolean);
   if (folded.length === 0) return '';
@@ -1127,6 +1199,9 @@ function foldedBlock(model, root, index, ctx, finder) {
  * NO lleva la unicidad del campo: dos nombres que solo difieren en mayúsculas conviven.
  */
 function filterFoldBlock(model, root, index, ctx) {
+  // El id de la raíz por su nombre y su columna: un legacy no lo llama `id` (shop-api: long).
+  const idName = root.idField?.name ?? 'id';
+  const idRow = `'${root.idField?.columns?.name ?? 'id'}', ${(root.idField?.base ?? 'uuid') === 'uuid'}`;
   const blocks = [];
   for (const field of root.fields.filter((candidate) => candidate.filterFold)) {
     const { column, accents } = foldedShadow(field);
@@ -1135,13 +1210,13 @@ function filterFoldBlock(model, root, index, ctx) {
     blocks.push(`  {
     const named = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}n`)}), ${field.name}: 'Ñandú Ærø Portátil' });
     await repository.save(named);
-    const raw = await rawRow('${root.tableName}', named.id);
+    const raw = await rawRow('${root.tableName}', named.${idName}, ${idRow});
     check('${root.name}.${field.name}: la sombra del filtro guarda el valor plegado por TextFold', raw?.['${column}'] === ${expected}, raw?.['${column}']);
     const twin = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}m`)}), ${field.name}: 'ÑANDÚ ÆRØ PORTÁTIL' });
     const clash = await repository.save(twin).then(() => null, (error) => error);
     check('${root.name}.${field.name}: la sombra del filtro no lleva unicidad (el mismo nombre en mayúsculas convive)', clash == null, clash?.message);
-    await repository.deleteById(named.id);
-    if (clash == null) await repository.deleteById(twin.id);
+    await repository.deleteById(named.${idName});
+    if (clash == null) await repository.deleteById(twin.${idName});
   }`);
   }
   return blocks.join('\n');
@@ -1154,6 +1229,9 @@ function filterFoldBlock(model, root, index, ctx) {
  * error y no casa con ninguna fila (el predicado con el literal del diseño) deja pasar la segunda.
  */
 function conditionalBlock(model, root, index, ctx) {
+  // El id de la raíz por su nombre y su columna: un legacy no lo llama `id` (shop-api: long).
+  const idName = root.idField?.name ?? 'id';
+  const idRow = `'${root.idField?.columns?.name ?? 'id'}', ${(root.idField?.base ?? 'uuid') === 'uuid'}`;
   const blocks = [];
   for (const occupant of occupantFinders(model, root)) {
     const whenIndex = (root.indexes ?? []).find((candidate) => candidate.unique && candidate.when?.equals === occupant.state);
@@ -1183,9 +1261,9 @@ function conditionalBlock(model, root, index, ctx) {
     const third = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}e`)}), ${sameKeys}, ${state(outside.constant)} });
     // Sin la condición (la unicidad normal, el invariante CONTRARIO) es esta la que el motor rechaza.
     const kept = await repository.save(third).then(() => null, (error) => error);
-    check('${root.name}: la misma clave en otro estado (${outside.literal}) sí convive', kept == null && (await repository.findById(third.id)) != null, kept?.message);
+    check('${root.name}: la misma clave en otro estado (${outside.literal}) sí convive', kept == null && (await repository.findById(third.${idName})) != null, kept?.message);
     const occupant = await repository.${occupant.name}(${keys.map((param) => `first.${param.name}`).join(', ')}, ${enumDef.name}.${inside.constant});
-    check('${root.name}: ${occupant.name} encuentra la que ocupa ${occupant.state}', occupant?.id === first.id, occupant?.id);
+    check('${root.name}: ${occupant.name} encuentra la que ocupa ${occupant.state}', occupant?.${idName} === first.${idName}, occupant?.${idName});
   }`);
   }
   return blocks.join('\n');
@@ -1215,7 +1293,8 @@ function boundedColumn(model, root) {
         required.push([sub.column, literal]);
       }
     } else if (member.kind === 'externalRef' && member.relation.required) {
-      required.push([member.column, uuidLiteral(model)]);
+      const target = idFieldOf(model, member.relation.entity);
+      required.push([member.column, target && ['long', 'int'].includes(target.base) ? String(randomInt(1, 2 ** 31 - 1)) : uuidLiteral(model)]);
     }
   }
   if (root.auditTimestamps === 'all') for (const audit of AUDIT_COLUMNS.timestamps) required.push([audit.column, 'CURRENT_TIMESTAMP']);

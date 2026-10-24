@@ -2,7 +2,22 @@
 // entero con valores que casan con las cotas y los patrones del diseño, y los ayudantes con los que la
 // sonda compara lo guardado con lo leído. Las dos ramas de persistencia se miden con las MISMAS muestras.
 
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
+
+/** El id de una raíz: el de su campo id (uuid salvo que el diseño diga otro: un legacy trae ids long, shop-api). */
+export function idFieldOf(model, entityName) {
+  return model.entities.find((entity) => entity.name === entityName)?.fields.find((field) => field.isId) ?? null;
+}
+
+/**
+ * Un id nuevo del tipo de `field`, como literal JS. El long y el int son aleatorios y no un contador: las sondas guardan
+ * sin vaciar entre pasadas, y dos muestras con el mismo id serían la misma fila.
+ */
+export function freshIdLiteral(field) {
+  if (field?.base === 'long') return `${randomInt(1, 2 ** 47)}n`;
+  if (field?.base === 'int') return String(randomInt(1, 2 ** 31 - 1));
+  return `'${randomUUID()}'`;
+}
 import { LOCK_VERSION } from 'keel-core/gen';
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../../src/scaffold/render.js';
@@ -190,7 +205,7 @@ export function sampleEntity(model, entity, ctx, salt, depth = 0) {
   const state = [];
   for (const member of domainMembers(model, entity)) {
     let value;
-    if (member.kind === 'externalRef') value = `'${randomUUID()}'`;
+    if (member.kind === 'externalRef') value = freshIdLiteral(idFieldOf(model, member.relation.entity));
     else if (member.kind === 'relationMany') {
       const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
       value = depth > 2 || !child ? '[]' : `[${[1, 2].map((n) => sampleEntity(model, child, ctx, `${salt}${n}`, depth + 1)).join(', ')}]`;
@@ -204,7 +219,7 @@ export function sampleEntity(model, entity, ctx, salt, depth = 0) {
       const values = [1, 2].map((n) => sampleValue(model, { ...member.field, list: false, kind: member.field.kind }, ctx, `${salt}${n}`));
       value = values.some((v) => v == null) ? '[]' : `[${values.join(', ')}]`;
     } else if (member.field.isId) {
-      value = `'${randomUUID()}'`;
+      value = freshIdLiteral(member.field);
     } else {
       value = sampleValue(model, member.field, ctx, salt);
       if (value == null) value = 'null';

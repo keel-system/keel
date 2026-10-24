@@ -12,6 +12,7 @@ const js = (value) => JSON.stringify(value);
 
 /** El bloque de la raíz, con `repository`, `stateOf` y `check` del script de la sonda. */
 export function finderBlock(model, root, index, ctx, { sampleEntity }) {
+  const idName = root.idField?.name ?? 'id';
   const finders = findersOf(model, root.name);
   return finders
     .map((finder, position) => {
@@ -21,7 +22,7 @@ export function finderBlock(model, root, index, ctx, { sampleEntity }) {
       };
       const fixedLiteral = (entry) => (entry.field.kind === 'enum' ? `${enumOf(entry.field)}.${screamingSnake(String(entry.value))}` : js(entry.value));
       const otherThan = (field, expr) =>
-        field.kind === 'enum' ? `Object.values(${enumOf(field)}).find((value) => value !== ${expr})` : field.base === 'boolean' ? `!${expr}` : `${expr} + '-otro'`;
+        field.kind === 'enum' ? `Object.values(${enumOf(field)}).find((value) => value !== ${expr})` : field.base === 'boolean' ? `!${expr}` : field.base === 'long' ? `${expr} + 1n` : field.base === 'int' ? `${expr} + 1` : `${expr} + '-otro'`;
       const textCriteria = finder.criteria.filter((criterion) => criterion.match !== 'exact' && (criterion.target.field.textMaxLength ?? Infinity) > FINDER_PROBE_TEXT.length);
       const overrides = (entries, text) => [...textCriteria.map((criterion) => `${criterion.target.field.name}: ${js(text)}`), ...entries].join(', ');
       const inside = overrides(finder.fixed.map((entry) => `${entry.name}: ${fixedLiteral(entry)}`), FINDER_PROBE_TEXT);
@@ -53,7 +54,9 @@ export function finderBlock(model, root, index, ctx, { sampleEntity }) {
           const local = `v${at}`;
           locals.push(`    const ${local} = ${stored(criterion)};`);
           const field = criterion.target.kind === 'vo' ? criterion.target.sub : criterion.target.field;
-          if (criterion.target.kind === 'relation' || field?.base === 'uuid') return { criterion, hits: [local], misses: ['randomUUID()'] };
+          // El id que no existe, del tipo del id de la raíz a la que apunta (un legacy trae ids long).
+          const pointsTo = criterion.target.kind === 'relation' ? model.entities.find((entity) => entity.name === criterion.target.relation.entity)?.idField?.base ?? 'uuid' : field?.base === 'uuid' ? 'uuid' : null;
+          if (pointsTo) return { criterion, hits: [local], misses: [pointsTo === 'long' ? `${local} + 1n` : pointsTo === 'int' ? `${local} + 1` : 'randomUUID()'] };
           if (criterion.op === 'eq') {
             const textual = ['string', 'text'].includes(field?.base);
             return { criterion, hits: [textual && criterion.compare !== 'exact' ? `${local}.toUpperCase()` : local], misses: [otherThan(field, local)] };
@@ -73,7 +76,7 @@ export function finderBlock(model, root, index, ctx, { sampleEntity }) {
         finder.result === 'page'
           ? `(await repository.${finder.method}(${filter ? `${filter}, ` : ''}{ page: 0, size: 1000, sort: [] })).items`
           : `(await repository.${finder.method}(${filter ?? ''}))`;
-      const finds = (filter, target) => `${call(filter)}.some((found) => found.id === ${target}.id)`;
+      const finds = (filter, target) => `${call(filter)}.some((found) => found.${idName} === ${target}.${idName})`;
       const noFilter = finder.criteria.length > 0 ? filterOf(null, null) : null;
       const label = `${root.name}.${finder.method}`;
       const checks = [`    check(${js(`${label}: sin filtros encuentra la fila`)}, ${finds(noFilter, 's')});`];
@@ -91,10 +94,10 @@ export function finderBlock(model, root, index, ctx, { sampleEntity }) {
     const outside = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}r${position}`)}), ${outside} });
     await repository.save(inside);
     await repository.save(outside);
-    const s = await repository.findById(inside.id);
+    const s = await repository.findById(inside.${idName});
 ${locals.join('\n')}${locals.length > 0 ? '\n' : ''}${checks.join('\n')}
-    await repository.deleteById(inside.id);
-    await repository.deleteById(outside.id);
+    await repository.deleteById(inside.${idName});
+    await repository.deleteById(outside.${idName});
   }`;
     })
     .join('\n');

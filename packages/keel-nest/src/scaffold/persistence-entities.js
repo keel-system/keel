@@ -365,11 +365,13 @@ function renderEntity(model, entity) {
       }
     } else if (member.kind === 'externalRef') {
       // Otro agregado: solo su id, sin asociación (una navegable rompería la frontera del agregado).
-      // La FK entre agregados va en el baseline (crossAggregateForeignKeys), no aquí.
+      // La FK entre agregados va en el baseline (crossAggregateForeignKeys), no aquí. Del tipo del id de la raíz a la
+      // que apunta: TypeORM saca el tipo de la columna del spec, y un legacy trae ids `long` (shop-api).
+      const targetId = model.entities.find((candidate) => candidate.name === member.relation.entity)?.fields.find((candidate) => candidate.isId);
       addColumn({
         name: member.column,
-        spec: { base: 'uuid', propertyName: member.name },
-        tsType: 'string',
+        spec: { base: targetId?.columns?.base ?? 'uuid', propertyName: member.name },
+        tsType: targetId?.tsType ?? 'string',
         nullable: !member.relation.required,
         comment: `Id de la raíz de ${member.relation.entity} (otro agregado).`
       });

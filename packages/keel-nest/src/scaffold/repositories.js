@@ -158,7 +158,7 @@ function keyFinder(model, entity, keys) {
   const params = keys.map((key) => {
     const member = members.find((m) => m.name === key || m.relation?.name === key);
     if (!member) return { name: key, type: 'string', where: [[key, key]], imports: [] };
-    if (member.kind === 'externalRef') return { name: member.name, type: 'string', where: [[member.name, member.name]], imports: [] };
+    if (member.kind === 'externalRef') return { name: member.name, type: member.type.replace(/ \| null$/, ''), where: [[member.name, member.name]], imports: [] };
     const field = member.field;
     if (field?.kind === 'composite') {
       const vo = persisted.find((m) => m.kind === 'vo' && m.name === field.name);
