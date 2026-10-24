@@ -197,6 +197,17 @@ function renderJpaEntity(model, entity) {
         );
         pushAccessor(shadow.name, 'String');
       }
+      if (member.ranked) {
+        imports.add('jakarta.persistence.Column');
+        declarations.push(
+          [
+            `    // Posición de ${field.name} en la declaración de su enum: se ordena por ella y no por el nombre (lo estampa el adaptador).`,
+            `    @Column(name = "${member.ranked.column}"${member.ranked.required ? ', nullable = false' : ''})`,
+            `    private Integer ${member.ranked.name};`
+          ].join('\n')
+        );
+        pushAccessor(member.ranked.name, 'Integer');
+      }
     } else if (member.kind === 'vo') {
       if (member.subs.length === 0) {
         declarations.push(`    // TODO (agente): mapear el value object ${member.field.javaType} a columnas.`);

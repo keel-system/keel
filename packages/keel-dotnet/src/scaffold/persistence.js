@@ -168,6 +168,7 @@ export function columnProperties(model, entity, members = persistedMembers(model
     if (member.kind === 'scalar') {
       map.set(member.field.columns?.name ?? member.name, csMember(member.name));
       if (member.folded) map.set(member.folded.column, csMember(member.folded.name));
+      if (member.ranked) map.set(member.ranked.column, csMember(member.ranked.name));
     } else if (member.kind === 'vo') {
       for (const sub of member.subs) map.set(sub.column, csMember(sub.name));
     } else if (member.kind === 'externalRef') {
@@ -236,6 +237,11 @@ function renderRowFile(model, entity) {
         const shadowSpec = { name: shadow.column, base: 'string', textual: true, length: shadow.maxLength ?? 255, nullable: !shadow.required };
         properties.push(rowProperty(csMember(shadow.name), shadow.required ? 'string' : 'string?', `${field.name} plegado (compare: ${field.compare}): lo estampa el adaptador con TextFold al guardar.`));
         config.push(columnChain(csMember(shadow.name), shadowSpec));
+      }
+      if (member.ranked) {
+        const rankSpec = { name: member.ranked.column, base: 'int', nullable: !member.ranked.required };
+        properties.push(rowProperty(csMember(member.ranked.name), member.ranked.required ? 'int' : 'int?', `Posición de ${field.name} en la declaración de su enum: se ordena por ella y no por el nombre (la estampa el adaptador).`));
+        config.push(columnChain(csMember(member.ranked.name), rankSpec));
       }
     } else if (member.kind === 'vo') {
       for (const sub of member.subs) {

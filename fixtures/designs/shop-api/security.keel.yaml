@@ -1,0 +1,70 @@
+# Capa security — la identidad se delega en un proveedor OIDC (fix-identity-oidc); el legacy emitía sus propios JWT
+# (SpringSecurityConfig.java, JwtFilter.java, JwtProvider.java) y de ahí salen los roles, los permisos y las reglas de acceso.
+# La identidad del llamante es el claim email del token (callerIdentity). Un token sin ese claim se rechaza con 401
+# (UNAUTHENTICATED) y no se exige que el proveedor haya verificado el email (decisión del cierre, 2026-10-23).
+authentication:
+  protocol: oidc
+  tokenLocation: header
+  callerIdentity:
+    field: callerEmail
+    from: { source: claim, name: email }
+
+ownership:
+  OrderMain:
+    owner: buyerEmail
+    error: ORDER_NOT_OWNED
+    operations: [getOrder, cancelOrder]
+    exemptRoles: [employee, manager]
+  User:
+    owner: email
+    error: PROFILE_NOT_OWNED
+    operations: [getProfile, updateProfile]
+
+roles:
+  customer: { description: Cliente que compra. }
+  employee: { description: Empleado que mantiene el catálogo y finaliza pedidos. }
+  manager:  { description: Vendedor con todos los privilegios del catálogo. }
+
+permissions:
+  cart:use:         { description: Usar el carrito y hacer checkout. }
+  order:finish:     { description: Finalizar pedidos. }
+  product:create:   { description: Dar de alta productos. }
+  product:edit:     { description: Editar productos. }
+  product:delete:   { description: Borrar productos. }
+
+# El navegador llama a la API directamente (el legacy ya lo permitía con @CrossOrigin en sus controladores). Los orígenes
+# permitidos no se declaran aquí: son configuración de despliegue del servicio.
+cors:
+  description: Consumido desde el navegador por el frontend de la tienda.
+  allowCredentials: false
+  allowedHeaders: [Authorization, Content-Type, Idempotency-Key]
+  exposedHeaders: [X-Correlation-Id]
+  maxAgeSeconds: 3600
+
+roleGrants:
+  customer: [cart:use]
+  employee: [order:finish, product:edit]
+  manager:  [order:finish, product:create, product:edit, product:delete]
+
+access:
+  default: { level: required }
+  rules:
+    listProducts:           { level: public }
+    getProduct:             { level: public }
+    listProductsByCategory: { level: public }
+    register:               { level: required }
+    getProfile:             { level: required }
+    updateProfile:          { level: required }
+    getCart:                { level: required, permissions: [cart:use] }
+    mergeCart:              { level: required, permissions: [cart:use] }
+    addToCart:              { level: required, permissions: [cart:use] }
+    modifyCartItem:         { level: required, permissions: [cart:use] }
+    removeCartItem:         { level: required, permissions: [cart:use] }
+    checkout:               { level: required, permissions: [cart:use] }
+    listOrders:             { level: required, roles: [customer, employee, manager] }
+    getOrder:               { level: required }
+    cancelOrder:            { level: required }
+    finishOrder:            { level: required, permissions: [order:finish] }
+    createProduct:          { level: required, permissions: [product:create] }
+    updateProduct:          { level: required, permissions: [product:edit] }
+    deleteProduct:          { level: required, permissions: [product:delete] }

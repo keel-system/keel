@@ -203,6 +203,7 @@ export function columnProperties(model, entity, members = persistedMembers(model
     if (member.kind === 'scalar') {
       map.set(snakeCase(member.name), member.name);
       if (member.folded) map.set(member.folded.column, member.folded.name);
+      if (member.ranked) map.set(member.ranked.column, member.ranked.name);
     } else if (member.kind === 'vo') {
       for (const sub of member.subs) map.set(sub.column, sub.name);
     } else if (member.kind === 'externalRef') {
@@ -325,6 +326,15 @@ function renderEntity(model, entity) {
           tsType: 'string',
           nullable: !shadow.required,
           comment: `${field.name} plegado (compare: ${field.compare}): lo estampa el adaptador con TextFold al guardar.`
+        });
+      }
+      if (member.ranked) {
+        addColumn({
+          name: member.ranked.column,
+          spec: { base: 'int', propertyName: member.ranked.name },
+          tsType: 'number',
+          nullable: !member.ranked.required,
+          comment: `Posición de ${field.name} en la declaración de su enum: se ordena por ella y no por el nombre (la estampa el adaptador).`
         });
       }
     } else if (member.kind === 'vo') {

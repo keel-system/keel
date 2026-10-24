@@ -204,6 +204,16 @@ function renderDocument(model, entity) {
         );
         pushAccessor(member.folded.name, 'String');
       }
+      if (member.ranked) {
+        declarations.push(
+          [
+            `    // Posición de ${field.name} en la declaración de su enum: se ordena por ella y no por el nombre (lo estampa el adaptador).`,
+            ...documentAnnotations(member.ranked.name, 'int').map((annotation) => `    ${annotation}`),
+            `    private Integer ${member.ranked.name};`
+          ].join('\n')
+        );
+        pushAccessor(member.ranked.name, 'Integer');
+      }
     } else if (member.kind === 'vo') {
       // Value object: subdocumento anidado, no columnas con prefijo. Y como es un
       // objeto de verdad, un value object DENTRO de otro no tiene nada de especial:

@@ -119,6 +119,10 @@ export function documentShape(model, entity) {
       if (member.folded) {
         shape.push({ name: snakeCase(member.folded.name), member: member.folded.name, kind: 'folded', storage: 'string', of: member.name });
       }
+      if (member.ranked) {
+        // La posición del valor en la declaración de su enum: por ella se ordena (relational.js, `rankShadow`).
+        shape.push({ name: snakeCase(member.ranked.name), member: member.ranked.name, kind: 'rank', storage: 'int', of: member.name, enum: member.ranked.enum });
+      }
     } else if (member.kind === 'vo') {
       shape.push({ name: snakeCase(member.name), member: member.name, kind: 'subdocument', valueObject: member.field.namedType, field: member.field });
     } else if (member.kind === 'externalRef') {

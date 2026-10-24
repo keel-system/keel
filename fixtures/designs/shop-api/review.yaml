@@ -1,0 +1,96 @@
+reviewedBy: keel-design-review
+reviewedAt: 0.1.0
+findings:
+  - id: REV-DOMAIN-VAGUE-INVARIANT
+    scope: domain.entities.OrderMain
+    verdict: ok
+    note: >-
+      La unica invariante declarada es OrderMain.invariants[0]: orderAmount es la suma de productPrice por count de
+      las lineas en el momento del checkout. Es verificable contra los datos y checkout la repite como rule
+      ("suma de precio por cantidad ... con el precio guardado en la linea"). Ninguna operacion modifica lineas de un
+      pedido despues, asi que "en el momento del checkout" no deja ambiguedad. La frase de ProductInOrder ("una linea
+      es de un carrito o de un pedido, nunca de los dos") esta en la description de la entidad, no en invariants, y la
+      sostienen las relaciones cart y order, ambas opcionales y documentadas como excluyentes; no la trato como
+      invariante vaga.
+  - id: REV-DOMAIN-ENUM-NO-LIFECYCLE
+    scope: domain.entities.ProductInfo
+    verdict: accepted
+    note: >-
+      ProductInfo.productStatus es el enum ProductStatus (UP, DOWN) y la entidad no declara lifecycle, mientras que
+      OrderMain si lo declara para orderStatus. Aceptado por escrito en decisions.yaml (structural 3.9, scope
+      domain.entities.ProductInfo.productStatus: UP y DOWN se alternan sin restriccion, tambien DOWN a DOWN) y en la
+      description de ProductStatus ("sin lifecycle, por decision"). updateProduct, que reemplaza todos los campos,
+      es la unica via de cambio y su regla coincide (productStatus no enviado vuelve a UP).
+  - id: REV-DOMAIN-INVARIANT-IS-TRANSITION
+    scope: domain.entities.OrderMain
+    verdict: ok
+    note: >-
+      La invariante de OrderMain (orderAmount) es de calculo, no de transicion. Las transiciones de orderStatus ya
+      estan en lifecycle (NEW a FINISHED o CANCELED; los dos finales sin salida) y en transitions de cancelOrder
+      (NEW a CANCELED) y finishOrder (NEW a FINISHED).
+  - id: REV-DOMAIN-COMPUTED-NOT-DERIVABLE
+    scope: domain.entities.Cart.cartId
+    verdict: ok
+    note: >-
+      Cart.cartId es computed ("el id del usuario propietario del carrito"). Cart tiene la relacion one-to-one
+      required con User, y User.id es long como cartId, asi que el valor se deriva de campos y relaciones existentes.
+  - id: REV-DOMAIN-PROMISED-STATE
+    scope: domain.entities
+    verdict: ok
+    note: >-
+      deleteProduct borra de verdad y promete que pedidos y carritos no cambian; lo sostiene que ProductInOrder
+      guarda su propia copia (productName, productPrice, categoryType, productStock...). cancelOrder "omite" un
+      producto ya inexistente, coherente con productId por valor sin integridad referencial; checkout rechaza las
+      lineas de productos borrados con PRODUCT_NOT_AVAILABLE. listProducts devuelve tambien los DOWN, representados
+      por productStatus. La nueva exclusividad cart/order de ProductInOrder se apoya en las dos relaciones. Ninguna
+      promesa queda sin campo que la sostenga.
+  - id: REV-USECASES-INTERNAL-REPEAT
+    scope: use-cases.operations.mergeCart
+    verdict: accepted
+    note: >-
+      mergeCart es un command HTTP sin idempotency cuyo efecto acumula ("suma las cantidades"): un reintento por
+      timeout duplica cantidades. Aceptado en decisions.yaml (structural 3.2, scopes use-cases.mergeCart.idempotency,
+      use-cases.addToCart.idempotency y use-cases.createProduct.idempotency): el carrito es un borrador corregible con
+      modifyCartItem o removeCartItem, nada sale del proceso y la clave solo vive en checkout, donde se mueve el
+      dinero. updateProduct (version) y createProduct (PRODUCT_ID_ALREADY_EXISTS) frenan su repeticion por otra via.
+  - id: REV-USECASES-GUARD-ORDER
+    scope: use-cases.operations
+    verdict: fixed
+    note: >-
+      Corregido en la segunda vuelta del cierre (2026-10-23) con el orden global que decidio el humano: propiedad
+      (403), existencia (404, con CART_NOT_FOUND primero y despues los demas *_NOT_FOUND) y estado y stock (409), con
+      CONCURRENT_MODIFICATION el ultimo; la forma de la peticion (400) va antes de todas. Esta en las rules y en el orden
+      de errors de checkout (CART_NOT_FOUND, CART_EMPTY, PRODUCT_NOT_AVAILABLE, PRODUCT_NOT_ENOUGH), modifyCartItem,
+      removeCartItem (404 CART_NOT_FOUND sin carrito), mergeCart (CART_NOT_FOUND, PRODUCT_NOT_FOUND,
+      PRODUCT_NOT_AVAILABLE, con la existencia de todas las lineas antes que su estado), addToCart, cancelOrder
+      (ORDER_NOT_OWNED, ORDER_NOT_FOUND, transicion invalida), finishOrder, createProduct (CATEGORY_NOT_FOUND antes que
+      PRODUCT_ID_ALREADY_EXISTS) y updateProduct (ID_NOT_MATCHED, PRODUCT_NOT_FOUND, CATEGORY_NOT_FOUND,
+      CONCURRENT_MODIFICATION). Ya no se acepta sin fijar en createProduct ni en updateProduct: el bloque de
+      decisions.yaml se reescribio y los flujos FL-CRT-018, FL-CRT-019, FL-ORD-025, FL-SEL-020 y FL-SEL-021 lo ejercitan.
+  - id: REV-API-DELETE-BODY
+    scope: api.endpoints
+    verdict: ok
+    note: >-
+      Los dos DELETE (removeCartItem, /cart/{productId}, y deleteProduct, /seller/product/{id}/delete) tienen output
+      "void", successStatus 204 y su input son solo parametros de ruta mas callerEmail (del token); no declaran
+      cuerpo.
+  - id: REV-SEC-RESOURCE-SCOPE
+    scope: security.roles
+    verdict: accepted
+    note: >-
+      Alcance por recurso: getOrder y cancelOrder lo cubren con security.ownership (OrderMain.buyerEmail,
+      exemptRoles employee y manager) y getProfile/updateProfile con ownership de User.email. El listado de
+      listOrders (un cliente solo ve los suyos) no cabe en ownership; el diseno lo declara en las rules de listOrders,
+      en security.access.rules.listOrders (roles customer, employee, manager, 403 ACCESS_DENIED al resto), como
+      frontera F-ORDER-LIST-SCOPING en provenance.yaml y en el bloque de decisions.yaml. Se acepta por esa
+      explicacion en prosa. El carrito se acota por callerEmail, tomado del claim email.
+  - id: REV-PERSIST-MISSING-INDEX
+    scope: persistence
+    verdict: ok
+    note: >-
+      persistence declara indices para las consultas que filtran: ProductInfo [categoryType] para
+      listProductsByCategory; OrderMain [buyerEmail, orderStatus, createTime] para listOrders de un cliente;
+      ProductInOrder unico [cart, productId] para la linea del carrito (addToCart y mergeCart), con las relaciones
+      cart y order ya declaradas en domain. Las busquedas por clave natural (User.email, ProductCategory.categoryType)
+      estan en naturalKey. El listado de empleados y vendedores (sin filtro, orden por orderStatus, createTime) no
+      tiene indice propio, pero no es un filtro y no lo considero hallazgo.

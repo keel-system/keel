@@ -4509,6 +4509,28 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     }
   }
 
+  // Un input derivado de la entidad (`input: { entity }`) lleva sus campos con `default`: el cliente puede mandarlos y
+  // sobreescribir el valor del dominio. A veces es lo querido (una preferencia, `currency: EUR`) y a veces es estado que
+  // decide el dominio (un contador, un estado de venta), y build no lo adivina: lo deja en la entrada y AVISA. El aviso
+  // se decide mirando solo el YAML, así que es de aquí (corrida de control de shop-api: `createProduct` dejaba al
+  // cliente fijar `productStatus`, y lo avisaba el generador, no la validación). El campo del lifecycle no entra: lo
+  // mueve la máquina de estados y el generador ya lo saca de la entrada.
+  for (const [opName, op] of Object.entries(operations)) {
+    const inputEntity = op.input?.entity;
+    if (!inputEntity) continue;
+    const entity = domain.entities?.[inputEntity];
+    const excluded = new Set(op.input?.exclude ?? []);
+    for (const [fieldName, field] of Object.entries(entity?.fields ?? {})) {
+      if (field?.default === undefined || field.generated || field.computed || excluded.has(fieldName)) continue;
+      if (fieldName === entity.lifecycle?.field) continue;
+      warnIn(
+        `use-cases.${opName}.input.${fieldName}`,
+        'CHK-USECASES-INPUT-DEFAULT-OVERRIDABLE',
+        `use-cases: ${opName}.input: deriva de '${inputEntity}', y su campo '${fieldName}' tiene default — el cliente puede mandarlo y sobreescribir el valor del dominio. Si es estado que decide el dominio, sácalo con 'input.exclude'; si el cliente puede elegirlo, acéptalo en decisions.yaml`
+      );
+    }
+  }
+
   // El mismo `code` con dos status distintos es diseño válido —una misma condición puede
   // ser 404 en una lectura y 422 en una escritura— pero es contrato público y casi nunca
   // está decidido: sale de haber copiado el code de otra operación sin mirar su status.

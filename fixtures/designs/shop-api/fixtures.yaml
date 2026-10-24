@@ -1,0 +1,444 @@
+# Lo escribe `keel-recover fixtures` desde el snapshot del legacy (contract-map.yaml → data): el estado de partida de
+# los escenarios, con los nombres del diseño. No se edita a mano: se cambia el mapa y se vuelve a derivar.
+kind: fixtures
+schema: 1
+source:
+  legacy: shop-api
+  commit: d05739d5c2df89344e524c2cc10d94c99d01a6ed
+  snapshot: 85741836667aa4670bd0a52bd6c16caf
+  by: keel-recover fixtures
+entities:
+  Cart:
+    records:
+      - cartId: 2147483641
+        user: 2147483641
+      - cartId: 2147483642
+        user: 2147483642
+      - cartId: 2147483643
+        user: 2147483643
+      - cartId: 2147483645
+        user: 2147483645
+  OrderMain:
+    records:
+      - orderId: 2147483640
+        buyerEmail: customer1@email.com
+        buyerName: customer1
+        buyerPhone: "123456789"
+        buyerAddress: 3200 West Road
+        orderAmount: 20
+        orderStatus: CANCELED
+        createTime: 2018-03-15T13:01:16.271
+        updateTime: 2018-03-15T13:02:52.067
+      - orderId: 2147483641
+        buyerEmail: customer2@email.com
+        buyerName: customer2
+        buyerPhone: "2343456"
+        buyerAddress: 3100 Western Road A
+        orderAmount: 180
+        orderStatus: CANCELED
+        createTime: 2018-03-15T12:52:07.428
+        updateTime: 2018-03-15T12:52:53.664
+      - orderId: 2147483642
+        buyerEmail: customer1@email.com
+        buyerName: customer1
+        buyerPhone: "123456789"
+        buyerAddress: 3200 West Road
+        orderAmount: 4
+        orderStatus: CANCELED
+        createTime: 2018-03-15T13:01:21.135
+        updateTime: 2018-03-15T13:02:09.023
+      - orderId: 2147483643
+        buyerEmail: customer2@email.com
+        buyerName: customer2
+        buyerPhone: "2343456"
+        buyerAddress: 3100 Western Road A
+        orderAmount: 100
+        orderStatus: NEW
+        createTime: 2018-03-15T12:52:20.439
+        updateTime: 2018-03-15T12:52:20.439
+      - orderId: 2147483645
+        buyerEmail: customer2@email.com
+        buyerName: customer2
+        buyerPhone: "2343456"
+        buyerAddress: 3100 Western Road A
+        orderAmount: 4
+        orderStatus: NEW
+        createTime: 2018-03-15T12:52:29.007
+        updateTime: 2018-03-15T12:52:29.007
+      - orderId: 2147483647
+        buyerEmail: customer2@email.com
+        buyerName: customer2
+        buyerPhone: "2343456"
+        buyerAddress: 3100 Western Road A
+        orderAmount: 2
+        orderStatus: CANCELED
+        createTime: 2018-03-15T12:52:35.289
+        updateTime: 2018-03-15T12:52:55.919
+      - orderId: 2147483648
+        buyerEmail: customer1@email.com
+        buyerName: customer1
+        buyerPhone: "123456789"
+        buyerAddress: 3200 West Road
+        orderAmount: 134
+        orderStatus: FINISHED
+        createTime: 2018-03-15T13:01:06.943
+        updateTime: 2018-03-15T13:02:56.498
+      - orderId: 2147483649
+        buyerEmail: customer2@email.com
+        buyerName: customer2
+        buyerPhone: "2343456"
+        buyerAddress: 3100 Western Road A
+        orderAmount: 150
+        orderStatus: NEW
+        createTime: 2018-03-15T12:58:23.824
+        updateTime: 2018-03-15T12:58:23.824
+  ProductCategory:
+    reference: true
+    records:
+      - categoryId: 2147483641
+        categoryName: Books
+        categoryType: 0
+        createTime: 2018-03-09T23:03:26
+        updateTime: 2018-03-10T00:15:27
+      - categoryId: 2147483642
+        categoryName: Clothes
+        categoryType: 2
+        createTime: 2018-03-10T00:15:02
+        updateTime: 2018-03-10T00:15:21
+      - categoryId: 2147483644
+        categoryName: Drink
+        categoryType: 3
+        createTime: 2018-03-10T01:01:09
+        updateTime: 2018-03-10T01:01:09
+      - categoryId: 2147483645
+        categoryName: Food
+        categoryType: 1
+        createTime: 2018-03-10T00:26:05
+        updateTime: 2018-03-10T00:26:05
+  ProductInfo:
+    records:
+      - productId: B0001
+        productName: Core Java
+        productPrice: 30
+        productStock: 96
+        productDescription: Books for learning Java
+        productIcon: https://images-na.ssl-images-amazon.com/images/I/41f6Rd6ZEPL._SX363_BO1,204,203,200_.jpg
+        productStatus: UP
+        categoryType: 0
+        version: 0
+        createTime: 2018-03-10T06:44:25
+        updateTime: 2018-03-10T06:44:25
+      - productId: B0002
+        productName: Spring In Action
+        productPrice: 20
+        productStock: 195
+        productDescription: Learn Spring
+        productIcon: https://images-na.ssl-images-amazon.com/images/I/51gHy16h5TL._SX397_BO1,204,203,200_.jpg
+        productStatus: UP
+        categoryType: 0
+        version: 0
+        createTime: 2018-03-10T10:35:43
+        updateTime: 2018-03-10T10:35:43
+      - productId: B0003
+        productName: Head First
+        productPrice: 10
+        productStock: 200
+        productDescription: Java EE
+        productIcon: https://covers.oreillystatic.com/images/9780596516680/lrg.jpg
+        productStatus: DOWN
+        categoryType: 0
+        version: 0
+        createTime: 2018-03-10T10:37:39
+        updateTime: 2018-03-10T19:42:02
+      - productId: B0004
+        productName: Effective Java
+        productPrice: 30
+        productStock: 199
+        productDescription: Java SE
+        productIcon: https://www.pearsonhighered.com/assets/bigcovers/0/1/3/2/0132778041.jpg
+        productStatus: UP
+        categoryType: 0
+        version: 0
+        createTime: 2018-03-10T10:39:29
+        updateTime: 2018-03-10T10:39:32
+      - productId: B0005
+        productName: Thinking in Java
+        productPrice: 30
+        productStock: 199
+        productDescription: Java SE
+        productIcon: https://images-na.ssl-images-amazon.com/images/I/51S8VRHA2FL._SX357_BO1,204,203,200_.jpg
+        productStatus: UP
+        categoryType: 0
+        version: 0
+        createTime: 2018-03-10T10:40:35
+        updateTime: 2018-03-10T10:40:35
+      - productId: C0001
+        productName: T-shirt
+        productPrice: 10
+        productStock: 109
+        productDescription: Under Armour
+        productIcon: https://assets.academy.com/mgen/33/20088533.jpg?is=500,500
+        productStatus: UP
+        categoryType: 2
+        version: 0
+        createTime: 2018-03-10T12:09:41
+        updateTime: 2018-03-10T12:09:41
+      - productId: C0002
+        productName: Shirts
+        productPrice: 13
+        productStock: 108
+        productDescription: Boys Clothes
+        productIcon: https://d2ul0w83gls0j4.cloudfront.net/taxonomy/300/0102/20171024151632.jpg
+        productStatus: UP
+        categoryType: 2
+        version: 0
+        createTime: 2018-03-10T12:11:51
+        updateTime: 2018-03-10T12:11:51
+      - productId: C0003
+        productName: Coats
+        productPrice: 22
+        productStock: 222
+        productDescription: Mans
+        productIcon: https://img1.newchic.com/thumb/view/oaupload/newchic/images/00/30/df8a1f83-035c-4942-93d6-49933ac52a34.jpg
+        productStatus: UP
+        categoryType: 2
+        version: 0
+        createTime: 2018-03-10T12:12:46
+        updateTime: 2018-03-10T12:12:46
+      - productId: D0001
+        productName: Coca Cola
+        productPrice: 1
+        productStock: 100
+        productDescription: Everyone likes it
+        productIcon: https://www.thesun.co.uk/wp-content/uploads/2017/03/nintchdbpict000277254629.jpg?strip=all&w=676
+        productStatus: UP
+        categoryType: 3
+        version: 0
+        createTime: 2018-03-10T06:51:03
+        updateTime: 2018-03-10T12:04:13
+      - productId: D0002
+        productName: Starbucks Violet Drink
+        productPrice: 2
+        productStock: 200
+        productDescription: Awesome
+        productIcon: https://starbuckssecretmenu.net/wp-content/uploads/2017/06/Starbucks-Violet-Drink.jpg
+        productStatus: UP
+        categoryType: 3
+        version: 0
+        createTime: 2018-03-10T12:08:17
+        updateTime: 2018-03-10T12:08:17
+      - productId: F0001
+        productName: Chicken
+        productPrice: 4
+        productStock: 57
+        productDescription: Kids Party Food
+        productIcon: http://asset1.marksandspencer.com/is/image/mands/MS_FD_F04C_00398503_NC_X_EC_0?$PDP_MAXI_ZOOM_NEW$
+        productStatus: UP
+        categoryType: 1
+        version: 0
+        createTime: 2018-03-10T12:15:05
+        updateTime: 2018-03-10T12:15:10
+      - productId: F0002
+        productName: McDonald‘s Food
+        productPrice: 20
+        productStock: 22
+        productDescription: Family s
+        productIcon: http://cdn1.thecomeback.com/wp-content/uploads/2017/05/mcdonalds_food-832x447.png
+        productStatus: UP
+        categoryType: 1
+        version: 0
+        createTime: 2018-03-10T12:16:44
+        updateTime: 2018-03-10T12:16:44
+  ProductInOrder:
+    records:
+      - id: 2147483631
+        productId: F0002
+        productName: McDonald‘s Food
+        productDescription: Family s
+        productIcon: http://cdn1.thecomeback.com/wp-content/uploads/2017/05/mcdonalds_food-832x447.png
+        categoryType: 1
+        productPrice: 20
+        productStock: 22
+        count: 1
+        cart: null
+        order: 2147483640
+      - id: 2147483632
+        productId: F0002
+        productName: McDonald‘s Food
+        productDescription: Family s
+        productIcon: http://cdn1.thecomeback.com/wp-content/uploads/2017/05/mcdonalds_food-832x447.png
+        categoryType: 1
+        productPrice: 20
+        productStock: 22
+        count: 1
+        cart: null
+        order: 2147483649
+      - id: 2147483633
+        productId: F0001
+        productName: Chicken
+        productDescription: Kids Party Food
+        productIcon: http://asset1.marksandspencer.com/is/image/mands/MS_FD_F04C_00398503_NC_X_EC_0?$PDP_MAXI_ZOOM_NEW$
+        categoryType: 1
+        productPrice: 4
+        productStock: 57
+        count: 1
+        cart: null
+        order: 2147483642
+      - id: 2147483634
+        productId: C0001
+        productName: T-shirt
+        productDescription: Under Armour
+        productIcon: https://assets.academy.com/mgen/33/20088533.jpg?is=500,500
+        categoryType: 2
+        productPrice: 10
+        productStock: 109
+        count: 1
+        cart: null
+        order: 2147483649
+      - id: 2147483636
+        productId: B0005
+        productName: Thinking in Java
+        productDescription: Java SE
+        productIcon: https://images-na.ssl-images-amazon.com/images/I/51S8VRHA2FL._SX357_BO1,204,203,200_.jpg
+        categoryType: 0
+        productPrice: 30
+        productStock: 199
+        count: 1
+        cart: null
+        order: 2147483645
+      - id: 2147483638
+        productId: B0004
+        productName: Effective Java
+        productDescription: Java SE
+        productIcon: https://www.pearsonhighered.com/assets/bigcovers/0/1/3/2/0132778041.jpg
+        categoryType: 0
+        productPrice: 30
+        productStock: 199
+        count: 1
+        cart: null
+        order: 2147483645
+      - id: 2147483640
+        productId: F0001
+        productName: Chicken
+        productDescription: Kids Party Food
+        productIcon: http://asset1.marksandspencer.com/is/image/mands/MS_FD_F04C_00398503_NC_X_EC_0?$PDP_MAXI_ZOOM_NEW$
+        categoryType: 1
+        productPrice: 4
+        productStock: 57
+        count: 1
+        cart: null
+        order: 2147483649
+      - id: 2147483641
+        productId: C0002
+        productName: Shirts
+        productDescription: Boys Clothes
+        productIcon: https://d2ul0w83gls0j4.cloudfront.net/taxonomy/300/0102/20171024151632.jpg
+        categoryType: 2
+        productPrice: 13
+        productStock: 108
+        count: 1
+        cart: null
+        order: 2147483649
+      - id: 2147483642
+        productId: B0001
+        productName: Core Java
+        productDescription: Books for learning Java
+        productIcon: https://images-na.ssl-images-amazon.com/images/I/41f6Rd6ZEPL._SX363_BO1,204,203,200_.jpg
+        categoryType: 0
+        productPrice: 30
+        productStock: 96
+        count: 1
+        cart: null
+        order: 2147483641
+      - id: 2147483643
+        productId: B0001
+        productName: Core Java
+        productDescription: Books for learning Java
+        productIcon: https://images-na.ssl-images-amazon.com/images/I/41f6Rd6ZEPL._SX363_BO1,204,203,200_.jpg
+        categoryType: 0
+        productPrice: 30
+        productStock: 96
+        count: 1
+        cart: null
+        order: 2147483648
+      - id: 2147483644
+        productId: B0002
+        productName: Spring In Action
+        productDescription: Learn Spring
+        productIcon: https://images-na.ssl-images-amazon.com/images/I/51gHy16h5TL._SX397_BO1,204,203,200_.jpg
+        categoryType: 0
+        productPrice: 20
+        productStock: 195
+        count: 1
+        cart: null
+        order: 2147483643
+      - id: 2147483646
+        productId: F0001
+        productName: Chicken
+        productDescription: Kids Party Food
+        productIcon: http://asset1.marksandspencer.com/is/image/mands/MS_FD_F04C_00398503_NC_X_EC_0?$PDP_MAXI_ZOOM_NEW$
+        categoryType: 1
+        productPrice: 4
+        productStock: 57
+        count: 1
+        cart: null
+        order: 2147483645
+      - id: 2147483647
+        productId: D0002
+        productName: Starbucks Violet Drink
+        productDescription: Awesome
+        productIcon: https://starbuckssecretmenu.net/wp-content/uploads/2017/06/Starbucks-Violet-Drink.jpg
+        categoryType: 3
+        productPrice: 2
+        productStock: 200
+        count: 1
+        cart: null
+        order: 2147483645
+      - id: 2147483648
+        productId: D0002
+        productName: Starbucks Violet Drink
+        productDescription: Awesome
+        productIcon: https://starbuckssecretmenu.net/wp-content/uploads/2017/06/Starbucks-Violet-Drink.jpg
+        categoryType: 3
+        productPrice: 2
+        productStock: 200
+        count: 1
+        cart: null
+        order: 2147483647
+      - id: 2147483649
+        productId: B0001
+        productName: Core Java
+        productDescription: Books for learning Java
+        productIcon: https://images-na.ssl-images-amazon.com/images/I/41f6Rd6ZEPL._SX363_BO1,204,203,200_.jpg
+        categoryType: 0
+        productPrice: 30
+        productStock: 96
+        count: 1
+        cart: null
+        order: 2147483645
+  User:
+    records:
+      - id: 2147483641
+        email: customer1@email.com
+        name: customer1
+        phone: "123456789"
+        address: 3200 West Road
+        active: true
+      - id: 2147483642
+        email: manager1@email.com
+        name: manager1
+        phone: "987654321"
+        address: 2000 John Road
+        active: true
+      - id: 2147483643
+        email: employee1@email.com
+        name: employee1
+        phone: "123123122"
+        address: "222 East Drive "
+        active: true
+      - id: 2147483645
+        email: customer2@email.com
+        name: customer2
+        phone: "2343456"
+        address: 3100 Western Road A
+        active: true

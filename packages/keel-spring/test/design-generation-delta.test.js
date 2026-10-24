@@ -62,6 +62,11 @@ const FAMILIAS = [
     anticipa: 'CHK-USECASES-CHILD-NOT-IN-INPUT'
   },
   {
+    nombre: 'campo con default en la entrada derivada',
+    match: "con 'default' declarado en domain",
+    anticipa: 'CHK-USECASES-INPUT-DEFAULT-OVERRIDABLE'
+  },
+  {
     nombre: 'mismo code con status distintos',
     match: 'se declara con status distinto',
     anticipa: 'CHK-USECASES-CODE-MULTI-STATUS'

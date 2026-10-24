@@ -747,9 +747,13 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       // toJpa(raíz) → toJpa(hija) es recursión infinita.
       const { kind, backReference } = classifyRelation(name, rel, internalOf, hasPersistence);
       if (kind === 'unsupported') {
-        warnings.push(
-          `Relación ${name}.${relName} (${rel.cardinality} hacia ${rel.entity}, otro agregado): no se genera campo; el agente debe modelarla.`
-        );
+        // Con la relación inversa en el destino, no es un hueco: la colección no es del agregado (sus filas son de la
+        // otra raíz) y sale en las respuestas leída por esa FK (relationPayloadFields, inverse-collections.js).
+        if (!inverseRelationOf(domain?.entities, name, rel)) {
+          warnings.push(
+            `Relación ${name}.${relName} (${rel.cardinality} hacia ${rel.entity}, otro agregado): no se genera campo; el agente debe modelarla.`
+          );
+        }
         continue;
       }
       relations.push({
@@ -1018,6 +1022,15 @@ function resolveSort(opName, op, domainEntities, entities, warnings, persistence
     // que es el fallo más caro de diagnosticar. La corrida `catalog` lo pagó en tres
     // controllers, y la convención se lo pedía al agente en vez de emitirlo.
     const folded = nested ? null : entities?.find((e) => e.name === entityName)?.fields?.find((f) => f.name === head)?.fold;
+    // Un ENUM se ordena por la posición en que el diseño declara sus valores (NEW, FINISHED, CANCELED), no por su nombre,
+    // que es lo que guarda la columna: ordenar por ella es alfabético. Se ordena por una sombra de RANGO (la posición) que el
+    // adaptador escribe al guardar, como la sombra plegada de un texto. Hasta la corrida de control de shop-api los tres
+    // generadores ordenaban listOrders alfabéticamente, y el agente de keel-dotnet lo cambió a mano por un CASE.
+    const enumField = nested ? null : entities?.find((e) => e.name === entityName)?.fields?.find((f) => f.name === head && f.kind === 'enum' && !f.list);
+    if (enumField) {
+      enumField.rank ??= { shadow: `${head}Rank` };
+      return { path, direction, embedded: false, relation: null, field: head, property: enumField.rank.shadow, folded: false, ranked: true };
+    }
     if (folded) {
       return { path, direction, embedded: false, relation: null, field: head, property: folded.shadow, folded: true };
     }

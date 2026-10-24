@@ -439,6 +439,7 @@ function renderToDocument(model, entity, imports) {
           `        doc.set${capitalize(member.folded.name)}(TextFold.${member.folded.accents ? 'foldCaseAndAccents' : 'foldCase'}(${getter}));`
         );
       }
+      if (member.ranked) lines.push(`        doc.set${capitalize(member.ranked.name)}(${getter} != null ? ${getter}.ordinal() : null);`);
     }
   }
   if (entity.usesOptimisticLocking && !entity.declaresLockVersion) {

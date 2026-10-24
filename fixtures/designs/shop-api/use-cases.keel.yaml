@@ -1,0 +1,348 @@
+# Capa use-cases — recuperada de legacy/shop-api. Cada operación recoge una ruta del legacy con comportamiento propio.
+# Aplicadas las respuestas de legacy/shop-api/questions.yaml del 2026-10-23: cada diferencia con el legacy es un fix de
+# provenance.yaml → fixes, con su flujo en validation-scenarios.md. Las decisiones del cierre (gaps.yaml, review.yaml y
+# flow-review.yaml, 2026-10-23) están aplicadas aquí y en decisions.yaml.
+#
+# Orden global de las guardas (decisión del humano, segunda vuelta del cierre, 2026-10-23). Cuando una petición incumple
+# varias a la vez, sale la primera de esta lista, y cada operación lo repite en sus rules y en el orden de sus errors:
+#   1. la forma de la petición (400: validación de los campos y ID_NOT_MATCHED), que no lee nada;
+#   2. la propiedad (403 ORDER_NOT_OWNED, PROFILE_NOT_OWNED);
+#   3. la existencia (404): CART_NOT_FOUND primero, y después los demás *_NOT_FOUND;
+#   4. el estado y el stock (409), con CONCURRENT_MODIFICATION siempre el último.
+# Un recurso que no existe no tiene dueño que comparar, así que su 404 sale sin llegar a la propiedad.
+
+operations:
+  # ---------------------------------------------------------------- catálogo (público)
+  listProducts:
+    description: Lista el catálogo completo de productos, también los que están fuera de venta.
+    kind: query
+    input: "void"
+    output: { entity: ProductInfo, paginated: true, sort: [productId:asc] }
+
+  getProduct:
+    description: Recupera un producto por su código.
+    kind: query
+    input:
+      fields:
+        productId: { type: string, required: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" } }
+    output: { entity: ProductInfo }
+    errors:
+      - { code: PRODUCT_NOT_FOUND, when: No existe un producto con ese código., http: 404 }
+
+  listProductsByCategory:
+    description: Lista, de forma paginada, los productos de una categoría por su tipo.
+    kind: query
+    input:
+      fields:
+        categoryType: { type: int, required: true }
+    output: { entity: ProductInfo, paginated: true, sort: [productId:asc] }
+    preconditions:
+      - Existe una categoría con ese tipo.
+    rules:
+      - Aplica el mismo filtro de estado que listProducts, que no filtra - incluye también los productos fuera de venta (DOWN).
+    errors:
+      - { code: CATEGORY_NOT_FOUND, when: No existe una categoría con ese tipo., http: 404 }
+
+  # ---------------------------------------------------------------- cuenta
+  register:
+    description: Da de alta el perfil del usuario ya autenticado en el proveedor de identidad y le crea su carrito vacío.
+    kind: command
+    input:
+      fields:
+        callerEmail: { type: string, required: true }
+        name:        { type: string, required: true, constraints: { minLength: 1, maxLength: 255 } }
+        phone:       { type: string, required: true, constraints: { minLength: 1, maxLength: 255 } }
+        address:     { type: string, required: true, constraints: { minLength: 1, maxLength: 255 } }
+    output: { entity: User }
+    rules:
+      - El email del perfil es el de la identidad autenticada; el solicitante no lo manda.
+      - Un token sin el claim email se rechaza con 401 (UNAUTHENTICATED), aquí y en toda operación que lo necesita; no se exige que el proveedor haya verificado el email, basta con que el claim venga.
+      - El servicio no guarda contraseña ni rol - la identidad y los roles son del proveedor, y toda cuenta nueva nace como cliente.
+      - El solicitante no manda active - toda cuenta nueva nace con active true (fix-register-active-true).
+      - Cualquier identidad autenticada, con el rol que tenga o sin ninguno, da de alta su propio perfil; el alta no concede ningún permiso.
+      - Crea el carrito del usuario en la misma operación.
+    errors:
+      - { code: EMAIL_ALREADY_EXISTS, when: Ya existe un perfil con ese email., http: 409 }
+
+  getProfile:
+    description: Devuelve el perfil del propio usuario autenticado.
+    kind: query
+    input:
+      fields:
+        email:       { type: string, required: true, constraints: { minLength: 1, maxLength: 255 } }
+        callerEmail: { type: string, required: true }
+    output: { entity: User }
+    errors:
+      - { code: PROFILE_NOT_OWNED, when: El perfil pedido no es el del usuario autenticado., http: 403 }
+      - { code: PROFILE_NOT_FOUND, when: El usuario autenticado todavía no tiene perfil porque no ha llamado a register., http: 404 }
+
+  updateProfile:
+    description: Actualiza nombre, teléfono y dirección del propio usuario.
+    kind: command
+    input:
+      fields:
+        email:       { type: string, required: true, constraints: { minLength: 1, maxLength: 255 } }
+        name:        { type: string, constraints: { minLength: 1, maxLength: 255 } }
+        phone:       { type: string, constraints: { minLength: 1, maxLength: 255 } }
+        address:     { type: string, constraints: { minLength: 1, maxLength: 255 } }
+        callerEmail: { type: string, required: true }
+    output: { entity: User }
+    rules:
+      - No modifica el email.
+      - Un campo que no llega (name, phone o address) se conserva; solo cambian los que llegan (fix-profile-partial-update).
+    errors:
+      - { code: PROFILE_NOT_OWNED, when: El perfil que se actualiza no es el del usuario autenticado., http: 403 }
+      - { code: PROFILE_NOT_FOUND, when: El usuario autenticado todavía no tiene perfil porque no ha llamado a register., http: 404 }
+      - { code: CONCURRENT_MODIFICATION, when: Otra escritura cambió el perfil entre su lectura y su guardado., http: 409 }
+
+  # ---------------------------------------------------------------- carrito (solo clientes)
+  getCart:
+    description: Devuelve el carrito del cliente autenticado.
+    kind: query
+    input:
+      fields:
+        callerEmail: { type: string, required: true }
+    output: { entity: Cart, exclude: [user] }
+    rules:
+      - Las líneas (products) salen ordenadas por id ascendente.
+    errors:
+      - { code: CART_NOT_FOUND, when: El usuario autenticado todavía no tiene carrito porque no ha llamado a register., http: 404 }
+
+  mergeCart:
+    description: Fusiona en el carrito del cliente las líneas de su carrito local y devuelve el carrito resultante.
+    kind: command
+    input:
+      fields:
+        callerEmail: { type: string, required: true }
+        items:       { type: CartItemInput, list: true, constraints: { maxItems: 100 } }
+    output: { entity: Cart, exclude: [user] }
+    rules:
+      - Orden de las guardas - primero CART_NOT_FOUND; después PRODUCT_NOT_FOUND; después PRODUCT_NOT_AVAILABLE; y CONCURRENT_MODIFICATION el último. La existencia de todas las líneas se comprueba antes que su estado - si items mezcla un productId inexistente y uno fuera de venta, sale PRODUCT_NOT_FOUND, sea cual sea su posición en items.
+      - De cada línea solo se usan productId y count; el nombre, la descripción, el icono, la categoría, el precio y el stock de la línea son los del producto del catálogo, copiados tal cual - si el producto no tiene descripción o categoría, la línea guarda null (fix-cart-line-nullable-fields).
+      - Si el carrito ya tiene una línea con ese productId, suma las cantidades; si no, añade la línea. Si items trae varias líneas del mismo productId, también se suman - el carrito nunca tiene dos líneas del mismo producto.
+      - Al sumar a una línea existente solo cambia su cantidad; el resto de sus datos se conserva como estaba.
+      - Un productId que no existe en el catálogo rechaza la operación entera.
+      - Un productId de un producto fuera de venta (DOWN) rechaza la operación entera (fix-product-not-available).
+      - Las líneas (products) salen ordenadas por id ascendente.
+    errors:
+      - { code: CART_NOT_FOUND, when: El usuario autenticado todavía no tiene carrito porque no ha llamado a register., http: 404 }
+      - { code: PRODUCT_NOT_FOUND, when: Alguna línea nombra un producto que no existe en el catálogo., http: 404 }
+      - { code: PRODUCT_NOT_AVAILABLE, when: Alguna línea nombra un producto fuera de venta (DOWN)., http: 409 }
+      - { code: CONCURRENT_MODIFICATION, when: Otra escritura cambió el carrito o alguna de sus líneas entre su lectura y su guardado., http: 409 }
+
+  addToCart:
+    description: Añade una cantidad de un producto del catálogo al carrito del cliente.
+    kind: command
+    input:
+      fields:
+        callerEmail: { type: string, required: true }
+        productId:   { type: string, required: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" } }
+        quantity:    { type: int, required: true, constraints: { min: 1, max: 1000000 } }
+    output:
+      fields:
+        added: { type: boolean }
+    rules:
+      - Orden de las guardas - primero CART_NOT_FOUND, sin mirar el producto (ni siquiera para responder added false); después el producto, que si no existe responde added false y si está fuera de venta es PRODUCT_NOT_AVAILABLE; y CONCURRENT_MODIFICATION el último.
+      - Copia a la línea del carrito los datos y el precio vigentes del producto, tal cual - si el producto no tiene descripción o categoría, la línea guarda null (fix-cart-line-nullable-fields); si ya hay una línea de ese producto solo suma la cantidad y el resto de sus datos se conserva como estaba.
+      - Responde added false solo si el producto no existe.
+      - Un producto fuera de venta (DOWN) se rechaza (fix-product-not-available).
+      - No comprueba el stock disponible - el stock se decide en el checkout.
+    errors:
+      - { code: CART_NOT_FOUND, when: El usuario autenticado todavía no tiene carrito porque no ha llamado a register., http: 404 }
+      - { code: PRODUCT_NOT_AVAILABLE, when: El producto existe pero está fuera de venta (DOWN)., http: 409 }
+      - { code: CONCURRENT_MODIFICATION, when: Otra escritura cambió el carrito o su línea entre su lectura y su guardado., http: 409 }
+
+  modifyCartItem:
+    description: Cambia la cantidad de una línea del carrito y devuelve la línea.
+    kind: command
+    input:
+      fields:
+        callerEmail: { type: string, required: true }
+        productId:   { type: string, required: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" } }
+        quantity:    { type: int, required: true, constraints: { min: 1, max: 1000000 } }
+    output: { entity: ProductInOrder }
+    preconditions:
+      - El carrito tiene una línea de ese producto.
+    rules:
+      - Una cantidad menor que 1 es un 400 de validación, antes de buscar la línea; quitar una línea es removeCartItem (fix-cart-modify-quantity-min).
+      - Orden de las guardas, tras la validación - primero CART_NOT_FOUND (sin carrito no hay línea que buscar), después CART_ITEM_NOT_FOUND, y CONCURRENT_MODIFICATION el último.
+    errors:
+      - { code: CART_NOT_FOUND, when: El usuario autenticado todavía no tiene carrito porque no ha llamado a register., http: 404 }
+      - { code: CART_ITEM_NOT_FOUND, when: El carrito del cliente no tiene una línea de ese producto., http: 404 }
+      - { code: CONCURRENT_MODIFICATION, when: Otra escritura cambió la línea entre su lectura y su guardado., http: 409 }
+
+  removeCartItem:
+    description: Quita la línea de un producto del carrito del cliente.
+    kind: command
+    input:
+      fields:
+        callerEmail: { type: string, required: true }
+        productId:   { type: string, required: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" } }
+    output: "void"
+    rules:
+      - Sin carrito responde 404 CART_NOT_FOUND, que se comprueba primero; con carrito, si no tiene esa línea no hace nada y responde igual.
+    errors:
+      - { code: CART_NOT_FOUND, when: El usuario autenticado todavía no tiene carrito porque no ha llamado a register., http: 404 }
+      - { code: CONCURRENT_MODIFICATION, when: Otra escritura cambió el carrito o su línea entre su lectura y su guardado., http: 409 }
+
+  checkout:
+    description: Convierte el carrito en un pedido nuevo, descuenta el stock de cada producto y vacía el carrito.
+    kind: command
+    input:
+      fields:
+        callerEmail: { type: string, required: true }
+    output: "void"
+    idempotency: { keySource: client-key, ttlSeconds: 86400, partitionBy: [callerEmail] }
+    preconditions:
+      - El carrito tiene al menos una línea.
+    rules:
+      - Orden de las guardas - primero CART_NOT_FOUND (sin carrito no hay líneas que contar); después CART_EMPTY; después PRODUCT_NOT_AVAILABLE; después el stock (PRODUCT_NOT_ENOUGH); después ORDER_AMOUNT_EXCEEDED; y CONCURRENT_MODIFICATION el último.
+      - Con el carrito vacío rechaza el checkout y no crea pedido; es el primer rechazo de estado que se evalúa, justo después de comprobar que el carrito existe.
+      - Si alguna línea es de un producto fuera de venta (DOWN) o que ya no existe en el catálogo, rechaza el checkout entero antes de descontar nada (fix-product-not-available); es el segundo rechazo de estado que se evalúa.
+      - Crea un pedido nuevo con estado NEW, con el email del comprador (el claim email del token, que es callerEmail) y el nombre, teléfono y dirección actuales del cliente.
+      - orderAmount es la suma de precio por cantidad de las líneas del carrito, con el precio guardado en la línea.
+      - Si orderAmount supera 1.000.000.000, rechaza el checkout entero con 409 ORDER_AMOUNT_EXCEEDED, sin crear pedido ni descontar stock; el carrito conserva sus líneas (fix-order-amount-max).
+      - Mueve las líneas al pedido y deja el carrito vacío.
+      - Descuenta de cada producto la cantidad comprada; comprar exactamente el stock disponible es válido y deja 0; si el stock restante fuera menor que 0, rechaza el checkout entero.
+      - Un reintento con la misma Idempotency-Key devuelve la respuesta original sin crear otro pedido.
+      - Toda la operación es una transacción; si falla, no cambia nada.
+      - Responde 204 sin cuerpo - el cliente consulta sus pedidos con listOrders para conocer el id del nuevo.
+    errors:
+      - { code: CART_NOT_FOUND, when: El usuario autenticado todavía no tiene carrito porque no ha llamado a register., http: 404 }
+      - { code: CART_EMPTY, when: El carrito del cliente no tiene líneas., http: 409 }
+      - { code: PRODUCT_NOT_AVAILABLE, when: Alguna línea es de un producto fuera de venta (DOWN) o que ya no existe en el catálogo., http: 409 }
+      - { code: PRODUCT_NOT_ENOUGH, when: El stock de algún producto es menor que la cantidad pedida., http: 409 }
+      - { code: ORDER_AMOUNT_EXCEEDED, when: El importe del pedido (suma de precio por cantidad de las líneas) supera 1.000.000.000., http: 409 }
+      - { code: CONCURRENT_MODIFICATION, when: Otra escritura cambió el carrito o el stock de un producto entre su lectura y su guardado., http: 409 }
+
+  # ---------------------------------------------------------------- pedidos
+  listOrders:
+    description: Lista los pedidos - los propios si quien pregunta es cliente, todos si es empleado o vendedor.
+    kind: query
+    input:
+      fields:
+        callerEmail: { type: string, required: true }
+    output: { entity: OrderMain, paginated: true, sort: [orderStatus:asc, createTime:desc, orderId:asc] }
+    rules:
+      - Un cliente (rol customer) solo ve los pedidos cuyo buyerEmail es el suyo; empleados (employee) y vendedores (manager) ven todos (frontera F-ORDER-LIST-SCOPING).
+      - Una identidad autenticada que no tiene ninguno de los tres roles conocidos (customer, employee, manager) no ve ningún pedido - responde 403 ACCESS_DENIED.
+      - orderStatus ordena por la posición de declaración del enum (NEW, FINISHED, CANCELED) y no por su nombre; dos pedidos con el mismo estado y el mismo createTime se ordenan por orderId ascendente, así que el orden es total.
+      - Las líneas (products) de cada pedido salen ordenadas por id ascendente.
+
+  getOrder:
+    description: Recupera un pedido por su id.
+    kind: query
+    input:
+      fields:
+        orderId:     { type: long, required: true }
+        callerEmail: { type: string, required: true }
+    output: { entity: OrderMain }
+    rules:
+      - Un cliente solo puede ver un pedido cuyo buyerEmail es el suyo; empleados y vendedores ven cualquiera.
+      - Las líneas (products) salen ordenadas por id ascendente.
+    errors:
+      - { code: ORDER_NOT_FOUND, when: No existe un pedido con ese id., http: 404 }
+      - { code: ORDER_NOT_OWNED, when: Un cliente pide el pedido de otro., http: 403 }
+
+  cancelOrder:
+    description: Cancela un pedido nuevo y devuelve al catálogo el stock de sus líneas.
+    kind: command
+    input:
+      fields:
+        orderId:     { type: long, required: true }
+        callerEmail: { type: string, required: true }
+    output: { entity: OrderMain }
+    transitions:
+      - entity: OrderMain
+        from: [NEW]
+        to: CANCELED
+    rules:
+      - Orden de las guardas - primero la propiedad (ORDER_NOT_OWNED), después la existencia (ORDER_NOT_FOUND) y después el estado (la transición inválida); un cliente que cancela el pedido de otro recibe 403 sea cual sea su estado, y así no sabe en qué estado está. Un pedido que no existe no tiene dueño que comparar, así que responde 404. CONCURRENT_MODIFICATION es el último.
+      - Un cliente solo puede cancelar un pedido cuyo buyerEmail es el suyo; empleados y vendedores cancelan cualquiera.
+      - Pasa el pedido a CANCELED; un pedido que no está en NEW se rechaza con la transición inválida del ciclo de vida.
+      - Suma a cada producto de las líneas su cantidad; si el producto ya no existe en el catálogo, lo omite. El máximo de productStock (1.000.000) no limita esta devolución - el stock puede quedar por encima.
+    errors:
+      - { code: ORDER_NOT_OWNED, when: Un cliente cancela el pedido de otro., http: 403 }
+      - { code: ORDER_NOT_FOUND, when: No existe un pedido con ese id., http: 404 }
+      - { code: CONCURRENT_MODIFICATION, when: Otra escritura cambió el pedido o el stock de un producto entre su lectura y su guardado., http: 409 }
+
+  finishOrder:
+    description: Marca un pedido nuevo como finalizado.
+    kind: command
+    input:
+      fields:
+        orderId: { type: long, required: true }
+    output: { entity: OrderMain }
+    transitions:
+      - entity: OrderMain
+        from: [NEW]
+        to: FINISHED
+    rules:
+      - Orden de las guardas - primero la existencia (ORDER_NOT_FOUND), después el estado (la transición inválida) y CONCURRENT_MODIFICATION el último. No hay propiedad que comparar - solo empleados y vendedores finalizan.
+      - Pasa el pedido a FINISHED; un pedido que no está en NEW se rechaza con la transición inválida del ciclo de vida.
+    errors:
+      - { code: ORDER_NOT_FOUND, when: No existe un pedido con ese id., http: 404 }
+      - { code: CONCURRENT_MODIFICATION, when: Otra escritura cambió el pedido entre su lectura y su guardado., http: 409 }
+
+  # ---------------------------------------------------------------- mantenimiento del catálogo (vendedores)
+  createProduct:
+    description: Da de alta un producto en el catálogo con el código que manda el solicitante.
+    kind: command
+    input: { entity: ProductInfo }
+    output: { entity: ProductInfo }
+    preconditions:
+      - Existe una categoría con el categoryType indicado.
+    rules:
+      - Orden de las guardas - tras la validación de la forma, primero la existencia de la categoría (CATEGORY_NOT_FOUND) y después el código repetido (PRODUCT_ID_ALREADY_EXISTS); con las dos a la vez sale el 404 (fix-create-product-guard-order).
+      - categoryType es obligatorio al crear - sin él, la petición es un 400 de validación y no un CATEGORY_NOT_FOUND (fix-product-category-required).
+      - Rechaza un productId que ya existe en el catálogo.
+      - Si no llega productStatus, el producto queda a la venta (UP).
+    errors:
+      - { code: CATEGORY_NOT_FOUND, when: No existe una categoría con ese categoryType., http: 404 }
+      - { code: PRODUCT_ID_ALREADY_EXISTS, when: Ya existe un producto con ese productId., http: 409 }
+
+  updateProduct:
+    description: Sustituye el producto del código de la ruta, salvo su fecha de alta; si no existe es un 404, porque dar de alta es createProduct.
+    kind: command
+    input:
+      fields:
+        id:                 { type: string, required: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" } }
+        productId:          { type: string, required: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" } }
+        productName:        { type: string, required: true, constraints: { maxLength: 255 } }
+        productPrice:       { type: decimal, required: true, constraints: { scale: 2, scalePolicy: reject, max: 1000000 } }
+        productStock:       { type: int, required: true, constraints: { min: 0, max: 1000000 } }
+        productDescription: { type: string, constraints: { maxLength: 255 } }
+        productIcon:        { type: string, constraints: { maxLength: 255 } }
+        productStatus:      { type: ProductStatus }
+        categoryType:       { type: int }
+        version:            { type: int, required: true, constraints: { min: 0 } }
+    output: { entity: ProductInfo }
+    preconditions:
+      - Existe un producto con el código de la ruta.
+      - Si llega categoryType, existe una categoría con ese tipo.
+    rules:
+      - Orden de las guardas - primero ID_NOT_MATCHED, que no lee nada; después la existencia, el producto de la ruta (PRODUCT_NOT_FOUND) antes que la categoría del cuerpo (CATEGORY_NOT_FOUND); y CONCURRENT_MODIFICATION el último, así que una version vieja con una categoría inexistente sale como 404.
+      - El productId del cuerpo debe ser el id de la ruta.
+      - Solo reemplaza un producto que ya existe - nunca lo crea.
+      - La version del cuerpo debe ser la vigente del producto; si otra escritura (otra edición o un checkout que le descontó stock) la cambió desde que el solicitante leyó el producto, se rechaza y no se pisa nada (fix-update-product-version).
+      - Reemplaza los campos con los del cuerpo; los que no llegan quedan vacíos (null), salvo createTime y categoryType, que se conservan, y productStatus, que vuelve a UP.
+      - categoryType es opcional al editar - si no llega se conserva el del producto, y CATEGORY_NOT_FOUND solo sale si llega y no existe (fix-product-category-required).
+    errors:
+      - { code: ID_NOT_MATCHED, when: El productId del cuerpo no es el id de la ruta., http: 400 }
+      - { code: PRODUCT_NOT_FOUND, when: No existe un producto con el código de la ruta., http: 404 }
+      - { code: CATEGORY_NOT_FOUND, when: Llega un categoryType y no existe una categoría con ese tipo., http: 404 }
+      - { code: CONCURRENT_MODIFICATION, when: La version del cuerpo no es la vigente del producto., http: 409 }
+
+  deleteProduct:
+    description: Borra un producto del catálogo.
+    kind: command
+    input:
+      fields:
+        id: { type: string, required: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" } }
+    output: "void"
+    rules:
+      - Los pedidos y carritos que ya tienen una línea de ese producto no cambian.
+      - Orden de las guardas - primero la existencia (PRODUCT_NOT_FOUND) y CONCURRENT_MODIFICATION el último.
+    errors:
+      - { code: PRODUCT_NOT_FOUND, when: No existe un producto con ese código., http: 404 }
+      - { code: CONCURRENT_MODIFICATION, when: Otra escritura cambió el producto entre su lectura y su borrado., http: 409 }

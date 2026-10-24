@@ -146,6 +146,9 @@ function entityFunctions(model, entity, collection) {
     else if (entry.kind === 'folded') {
       const folded = members.find((m) => m.kind === 'scalar' && m.name === entry.of)?.folded;
       expression = `BsonValues.Of(TextFold.${folded?.accents ? 'FoldCaseAndAccents' : 'FoldCase'}(entity.${csMember(entry.of)}))`;
+    } else if (entry.kind === 'rank') {
+      const required = members.find((m) => m.kind === 'scalar' && m.name === entry.of)?.ranked?.required;
+      expression = required ? `BsonValues.Of((int)entity.${csMember(entry.of)})` : `entity.${csMember(entry.of)} is { } rank ? BsonValues.Of((int)rank) : BsonNull.Value`;
     } else if (entry.kind === 'ref') expression = writeScalar(targetIdField(model, entry.relation), value);
     else if (entry.kind === 'subdocument' && entry.valueObject) expression = writeField(entry.field, value);
     else if (entry.kind === 'subdocument' && entry.entity) {

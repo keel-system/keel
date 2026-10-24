@@ -1,0 +1,18 @@
+# Manifiesto del servicio — punto de entrada del diseño (recuperado de legacy/shop-api).
+keel: "2.23"
+
+service:
+  name: shop-api
+  version: 0.1.0
+  description: Tienda en línea de libros, ropa y comida - catálogo de productos, registro y perfil de clientes, carrito, pedidos y mantenimiento del catálogo por vendedores.
+  domain: commerce
+
+conventions:
+  nulls: include
+
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  api: api.keel.yaml
+  security: security.keel.yaml
+  persistence: persistence.keel.yaml

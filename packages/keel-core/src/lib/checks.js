@@ -322,6 +322,13 @@ export const CHECKS = {
     title: 'el input deriva de una entidad con hijas, y las hijas no viajan en él',
     closes: 'declarar el input con `fields` si la operación recibe las hijas anidadas, o decir que no las recibe'
   },
+  'CHK-USECASES-INPUT-DEFAULT-OVERRIDABLE': {
+    layer: 'use-cases',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'el input deriva de la entidad y lleva un campo con default que el cliente puede sobreescribir',
+    closes: 'sacarlo con input.exclude si es estado del dominio, o aceptar en decisions.yaml que el cliente lo elige'
+  },
   'CHK-USECASES-CODE-MULTI-STATUS': {
     layer: 'use-cases',
     severity: 'warning',

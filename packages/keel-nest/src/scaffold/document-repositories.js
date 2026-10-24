@@ -132,6 +132,11 @@ function entityFunctions(model, entity, use, vos) {
       const folded = members.find((m) => m.kind === 'scalar' && m.name === entry.of)?.folded;
       use.import({ symbol: 'TextFold', from: TEXT_FOLD_TS });
       writes.push(`    ${entry.name}: TextFold.${folded?.accents ? 'foldCaseAndAccents' : 'foldCase'}(entity.${entry.of})`);
+    } else if (entry.kind === 'rank') {
+      use.import({ symbol: entry.enum, from: classPath(DIRS.enums, entry.enum) });
+      const ranked = members.find((m) => m.kind === 'scalar' && m.name === entry.of)?.ranked;
+      const position = `Object.values(${entry.enum}).indexOf(${value})`;
+      writes.push(`    ${entry.name}: ${ranked?.required ? position : `${value} == null ? null : ${position}`}`);
     } else if (entry.kind === 'ref') {
       writes.push(`    ${entry.name}: ${use.helper('toUuid', value)}`);
     } else if (entry.kind === 'subdocument' && entry.valueObject) {

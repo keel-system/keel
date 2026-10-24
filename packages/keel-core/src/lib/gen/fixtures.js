@@ -74,6 +74,11 @@ function rowOf(model, entity, record, dialect, uuidLiteral) {
       const field = member.field;
       put(snakeCase(member.name), literal(record[member.name], field, enumOf(field), uuidLiteral));
       if (member.folded) put(member.folded.column, literal(fold(record[member.name], member.folded.accents), { kind: 'base', base: 'string' }, null, null));
+      // La sombra de rango: la posición del valor en su enum, que es por lo que se ordena (relational.js, `rankShadow`).
+      if (member.ranked) {
+        const position = (enumOf(field)?.values ?? []).findIndex((value) => value.literal === record[member.name]);
+        put(member.ranked.column, record[member.name] == null || position < 0 ? 'NULL' : String(position));
+      }
     } else if (member.kind === 'vo') {
       const value = record[member.name];
       if (!value) continue;

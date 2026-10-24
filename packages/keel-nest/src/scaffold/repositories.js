@@ -570,6 +570,7 @@ function sortableProperties(model, entity) {
     if (member.kind === 'scalar') {
       props.push(member.name);
       if (member.folded) props.push(member.folded.name);
+      if (member.ranked) props.push(member.ranked.name);
     } else if (member.kind === 'externalRef') props.push(member.name);
     else if (member.kind === 'vo') for (const sub of member.subs) if (sub.subKind !== 'composite') props.push(sub.name);
   }
@@ -853,6 +854,11 @@ function toOrmFunction(model, entity, root, imports, helpers) {
       if (member.folded) {
         imports.push({ symbol: 'TextFold', from: TEXT_FOLD_TS });
         lines.push(`  orm.${member.folded.name} = TextFold.${member.folded.accents ? 'foldCaseAndAccents' : 'foldCase'}(entity.${member.name});`);
+      }
+      if (member.ranked && member.ranked.enum) {
+        imports.push({ symbol: member.ranked.enum, from: classPath(DIRS.enums, member.ranked.enum) });
+        const position = `Object.values(${member.ranked.enum}).indexOf(entity.${member.name})`;
+        lines.push(`  orm.${member.ranked.name} = ${member.ranked.required ? position : `entity.${member.name} == null ? null : ${position}`};`);
       }
     } else if (member.kind === 'vo') {
       for (const sub of member.subs) {

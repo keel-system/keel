@@ -385,6 +385,7 @@ function sortableProperties(model, entity) {
     if (member.kind === 'scalar') {
       props.push(member.name);
       if (member.folded) props.push(member.folded.name);
+      if (member.ranked) props.push(member.ranked.name);
     } else if (member.kind === 'externalRef') props.push(member.name);
     else if (member.kind === 'vo') for (const sub of member.subs) if (sub.subKind !== 'composite' && sub.sub.columns) props.push(sub.name);
   }
@@ -873,6 +874,8 @@ function applyMethod(model, entity, root, helpers) {
         helpers.usings.push(persistenceNamespace(model));
         lines.push(`        row.${csMember(member.folded.name)} = TextFold.${member.folded.accents ? 'FoldCaseAndAccents' : 'FoldCase'}(entity.${csMember(field.name)});`);
       }
+      // La posición del enum es su valor entero: los miembros se declaran en el orden del diseño y sin valores explícitos.
+      if (member.ranked) lines.push(`        row.${csMember(member.ranked.name)} = ${member.ranked.required ? `(int)entity.${csMember(field.name)}` : `(int?)entity.${csMember(field.name)}`};`);
     } else if (member.kind === 'vo') {
       for (const sub of member.subs) {
         if (sub.subKind === 'composite' || !sub.sub.columns) {

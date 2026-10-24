@@ -950,6 +950,10 @@ function renderToJpa(model, entity, imports, needsFactory = false) {
           `        jpa.set${capitalize(member.folded.name)}(TextFold.${member.folded.accents ? 'foldCaseAndAccents' : 'foldCase'}(domain.get${capitalize(member.name)}()));`
         );
       }
+      if (member.ranked) {
+        const value = `domain.get${capitalize(member.name)}()`;
+        lines.push(`        jpa.set${capitalize(member.ranked.name)}(${value} != null ? ${value}.ordinal() : null);`);
+      }
     }
   }
   // Devuelve la versión al espejo JPA para que Hibernate compruebe la concurrencia

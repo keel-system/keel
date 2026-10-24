@@ -149,6 +149,15 @@ export function foldedShadow(field) {
   };
 }
 
+/**
+ * La sombra de RANGO de un enum por el que se ordena (model.js, `resolveSort`): la posición de su valor en la declaración del
+ * enum, entera, que escribe el adaptador al guardar. Se ordena por ella y no por la columna del enum, que guarda el nombre.
+ */
+export function rankShadow(field) {
+  if (!field?.rank) return null;
+  return { name: field.rank.shadow, source: field.name, column: snakeCase(field.rank.shadow), required: Boolean(field.required), enum: field.namedType ?? null };
+}
+
 /** La sombra que lleva la UNICIDAD y las búsquedas por clave del campo: solo la de su propio `compare`. */
 export function keyShadow(field) {
   const shadow = foldedShadow(field);
@@ -221,7 +230,7 @@ export function persistedMembers(model, entity) {
         }))
       });
     } else {
-      members.push({ kind: 'scalar', field, name: field.name, folded: foldedShadow(field) });
+      members.push({ kind: 'scalar', field, name: field.name, folded: foldedShadow(field), ranked: rankShadow(field) });
     }
   }
   for (const relation of entity.relations) {

@@ -45,15 +45,18 @@ test('la nota sale en las operaciones que nombra ownership y solo en esas, en lo
       plan(generator, name)
         .flatMap((file) => [...flat(file.content).matchAll(NOTE)].map((m) => `${path.basename(file.path).replace(/[-.].*$/, '').toLowerCase()}:${m[1]}`))
         .sort();
-    const expected =
-      name === 'conduit'
-        ? ['deletearticlecommandhandler:Article', 'deletecommentcommandhandler:Comment', 'updatearticlecommandhandler:Article']
-        : [];
+    // shop-api (recuperado de un legacy) acota por propietario el pedido y el perfil, con exentos en el pedido.
+    const EXPECTED = {
+      conduit: ['deletearticlecommandhandler:Article', 'deletecommentcommandhandler:Comment', 'updatearticlecommandhandler:Article'],
+      'shop-api': ['cancelordercommandhandler:OrderMain', 'getorderqueryhandler:OrderMain', 'getprofilequeryhandler:User', 'updateprofilecommandhandler:User']
+    };
+    const expected = EXPECTED[name] ?? [];
     assert.deepEqual(noted(planDotnet), expected, `${name} (keel-dotnet)`);
     assert.deepEqual(noted(planSpring), expected, `${name} (keel-spring)`);
+    // keel-nest nombra sus archivos en kebab-case: el basename se corta en el primer guion.
     assert.deepEqual(
       noted(planNest),
-      expected.map((entry) => entry.replace(/^(delete|update)(article|comment)commandhandler/, '$1')),
+      expected.map((entry) => entry.replace(/^(delete|update|cancel|get)[a-z]*(command|query)handler/, '$1')).sort(),
       `${name} (keel-nest)`
     );
   }

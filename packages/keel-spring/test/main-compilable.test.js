@@ -38,6 +38,8 @@ const COMPILAN = [
   // La variante del reloj (incremento 10e de keel-nest): el barrido con reclamo, rescate y parámetro.
   'job-dispatch-cycles',
   'job-dispatch-mongo',
+  // Recuperada de un legacy con PostgreSQL (shop-api): ids long, clave asignada por el cliente y colecciones por FK inversa.
+  'shop-api',
   'metering-digest',
   'notification-mailer',
   'notification-mailer-mongo',

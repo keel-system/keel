@@ -1,0 +1,46 @@
+# Capa persistence — recuperada de legacy/shop-api (entidades JPA y esquema introspectado).
+default:
+  model: relational
+
+entities:
+  User:
+    persisted: true
+    naturalKey: [email]
+  Cart:
+    persisted: true
+  ProductInOrder:
+    persisted: true
+    indexes:
+      # A lo sumo una línea por producto en un carrito: addToCart y mergeCart suman a la existente, y esta unicidad cierra la
+      # ventana de dos peticiones simultáneas. Las líneas de un pedido no tienen carrito, así que no se ven afectadas.
+      - fields: [cart, productId]
+        unique: true
+        description: Un carrito no tiene dos líneas del mismo producto.
+      # Las líneas de un pedido se leen por su relación order (getOrder, listOrders, cancelOrder, finishOrder).
+      - [order]
+  OrderMain:
+    persisted: true
+    indexes:
+      # listOrders de un cliente: filtra por buyerEmail y ordena por estado y fecha.
+      - fields: [buyerEmail, orderStatus, createTime]
+        description: "listOrders de un cliente: orderStatus ascendente y createTime descendente (el DSL no declara direcciones: frontera F-INDEX-DIRECTIONS)."
+      # listOrders de empleados y vendedores: sin filtro, con el mismo orden.
+      - fields: [orderStatus, createTime]
+        description: "listOrders de empleados y vendedores: todos los pedidos, orderStatus ascendente y createTime descendente (el DSL no declara direcciones: frontera F-INDEX-DIRECTIONS)."
+  ProductInfo:
+    persisted: true
+    indexes:
+      # listProductsByCategory: filtra por categoryType.
+      - [categoryType]
+  ProductCategory:
+    persisted: true
+    naturalKey: [categoryType]
+
+audit:
+  timestamps: none
+  authorship: all
+
+consistency:
+  transactionalBoundary: per-operation
+  # El control de versión de la raíz es el mismo contador que ProductInfo.version en el dominio, no otro.
+  optimisticLocking: all

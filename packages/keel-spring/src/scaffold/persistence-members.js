@@ -105,7 +105,7 @@ export function persistedMembers(model, entity) {
       };
     }
     if (member.kind === 'scalar') {
-      return { kind: 'scalar', field: member.field, name: member.name, javaType: member.field.javaType, folded: foldedShadow(member.field) };
+      return { kind: 'scalar', field: member.field, name: member.name, javaType: member.field.javaType, folded: foldedShadow(member.field), ranked: member.ranked ?? null };
     }
     if (member.kind === 'externalRef') {
       return { kind: 'externalRef', relation: member.relation, name: member.name, ...refIdJava(model, member.relation.entity) };

@@ -1,0 +1,172 @@
+# Decisiones del diseño recuperado de legacy/shop-api. Las filas `origin: omitted` y `contradicted` son decisiones que
+# tomó el humano en legacy/shop-api/questions.yaml (2026-10-23); las `observed` son lo que el legacy ya hacía.
+#
+# Cierre del diseño (2026-10-23): el humano resolvió los hallazgos de gaps.yaml, review.yaml y flow-review.yaml. Lo que
+# tiene sitio en este esquema (obligaciones, avisos y decisiones estructurales) está abajo como entrada; lo que no lo
+# tiene queda escrito aquí, en este bloque, y su motivo completo en el hallazgo que cierra:
+#
+#   - Alcance de listOrders (gaps clase 9, listOrders): un cliente (customer) solo ve los pedidos cuyo buyerEmail es el
+#     suyo; empleados (employee) y vendedores (manager) ven todos; una identidad autenticada sin ninguno de los tres
+#     roles recibe 403 ACCESS_DENIED. Está en security.access.rules.listOrders (roles: customer, employee, manager) y en
+#     las rules de listOrders. La acotación del cliente a sus pedidos no cabe en ownership (que acota una operación por
+#     un campo del recurso, no un listado según el rol) y sigue siendo la frontera F-ORDER-LIST-SCOPING de provenance.yaml.
+#   - Orden de las guardas: fijado para todas las operaciones (segunda vuelta del cierre, REV-USECASES-GUARD-ORDER,
+#     2026-10-23); ya no se acepta sin fijar en createProduct ni en updateProduct. Cuando una petición incumple varias a la
+#     vez sale la primera de esta lista: la forma de la petición (400), la propiedad (403), la existencia (404, con
+#     CART_NOT_FOUND primero) y el estado y el stock (409, con CONCURRENT_MODIFICATION el último). Está en las rules y en
+#     el orden de errors de cada operación (cabecera de use-cases.keel.yaml) y en los flujos FL-CRT-018, FL-CRT-019,
+#     FL-ORD-025, FL-SEL-020 y FL-SEL-021.
+#   - updateTime (OrderMain, ProductInfo): el legacy lo mueve en cada escritura (@UpdateTimestamp, OrderMain.java:66 y
+#     ProductInfo.java:58) y el servicio nuevo hace lo mismo; los escenarios solo comprueban su forma, nunca su valor.
+#   - Retención de pedidos: no hay política. Ninguna operación borra pedidos y el volumen no justifica archivar hoy;
+#     se reabre si el volumen lo pide.
+#   - Mensaje del error (message): no es contrato. Los clientes programan contra status y code; el texto puede cambiar de
+#     idioma y de redacción sin subir de versión (el cuerpo de error es el del contrato del cable de Keel).
+#   - Fechas (createTime, updateTime): instantes UTC en ISO-8601 con milisegundos y Z, que es el contrato del cable
+#     (docs/wire-contract.md § Tipos); se declara en la descripción de cada campo.
+#   - Categorías: ninguna operación las crea; se cargan como datos iniciales (seed) y su categoryType es la clave natural.
+#     La autoría (authorship all) de esa carga es el valor centinela del generador (no nace de una petición).
+#   - CORS: el servicio se consume desde el navegador; security.cors lo declara y los orígenes permitidos son
+#     configuración de despliegue, no del diseño.
+#   - getProfile lleva el email en la ruta además de en el token: es la ruta del legacy (/profile/{email}) y el servicio
+#     comprueba que coincide con la identidad (PROFILE_NOT_OWNED). Aceptado.
+#   - updateProfile y el bloqueo optimista: la edición concurrente del mismo perfil la frena el bloqueo optimista de la raíz
+#     (409 CONCURRENT_MODIFICATION); el cliente reintenta. El perfil no lleva versión en el input.
+decisions:
+  - { id: OBL-IDEM-KEY-REQUIRED, scope: use-cases, since: 0.1.0, reason: "La cabecera Idempotency-Key del checkout es opcional (structural-3-2): el legacy acepta un checkout sin ella y exigirla rompería a todo cliente actual. Sin cabecera el checkout se ejecuta sin deduplicar, igual que hoy." }
+  - { id: OBL-IDEM-RACE-CODE, scope: use-cases, since: 0.1.0, reason: "Se acepta IDEMPOTENCY_KEY_IN_PROGRESS (409) como contrato público de dos checkouts simultáneos con la misma clave; el legacy no tenía idempotencia y no hay un code propio que conservar." }
+  - { id: OBL-IDEM-REUSE-CODE, scope: use-cases, since: 0.1.0, reason: "Se acepta IDEMPOTENCY_KEY_REUSED (409) como contrato público de la misma clave con un cuerpo distinto; el legacy no tenía idempotencia y no hay un code propio que conservar." }
+
+structural:
+  - section: "3.2"
+    scope: use-cases.checkout.idempotency
+    chosen: "idempotency client-key en checkout"
+    discarded: "sin idempotencia; client-key también en el alta de usuario"
+    reason: "El legacy no deduplica nada: un checkout repetido crea otro pedido (R0-042). El humano eligió Idempotency-Key solo en el checkout (structural-3-2, 2026-10-23): el reintento con la misma clave devuelve la respuesta original sin segundo pedido; addToCart y register no cambian. La clave se acota por callerEmail para que dos clientes no se vean (consecuencia mecánica, no preguntada)."
+    since: 0.1.0
+    origin: omitted
+  - section: "3.2"
+    scope: use-cases.mergeCart.idempotency
+    chosen: "sin idempotencia en mergeCart"
+    discarded: "idempotency client-key en mergeCart"
+    reason: "El carrito es un borrador del cliente, igual que con addToCart: un reintento por timeout suma otra vez las cantidades, el cliente lo ve en el carrito y lo corrige con modifyCartItem o removeCartItem, y nada sale del proceso (ni evento ni cobro). El dinero solo se mueve en el checkout, que lleva la clave. Decidido por el humano al cerrar el diseño (REV-USECASES-INTERNAL-REPEAT, 2026-10-23)."
+    since: 0.1.0
+    origin: omitted
+  - section: "3.2"
+    scope: use-cases.addToCart.idempotency
+    chosen: "sin idempotencia en addToCart"
+    discarded: "idempotency client-key en addToCart"
+    reason: "Mismo motivo que mergeCart: el carrito es un borrador del cliente y un reintento suma de más sin consecuencia fuera del proceso; la cantidad se corrige con modifyCartItem. Ya lo decía structural-3-2 (addToCart no cambia); aquí queda con su entrada propia (gaps clase 16, 2026-10-23)."
+    since: 0.1.0
+    origin: omitted
+  - section: "3.2"
+    scope: use-cases.createProduct.idempotency
+    chosen: "sin idempotencia en createProduct"
+    discarded: "idempotency client-key en createProduct"
+    reason: "El código del producto lo manda quien lo da de alta y es la clave del producto: un reintento recibe 409 PRODUCT_ID_ALREADY_EXISTS en vez de crear un duplicado, así que la clave natural ya frena la repetición. Decidido por el humano al cerrar el diseño (gaps clase 16, 2026-10-23)."
+    since: 0.1.0
+    origin: omitted
+  - section: "3.2"
+    scope: use-cases.register.idempotency
+    chosen: "sin idempotencia en register"
+    discarded: "idempotency client-key en register"
+    reason: "El email es la clave natural del perfil (persistence naturalKey [email]) y la unicidad frena la repetición: un reintento recibe 409 EMAIL_ALREADY_EXISTS en vez de crear un segundo perfil (FL-ACC-005), así que la clave natural ya hace de guarda. Aceptado por el humano en la segunda vuelta del cierre (gaps clase 16, 2026-10-23)."
+    since: 0.1.0
+    origin: omitted
+  - section: "3.2"
+    scope: use-cases.cancelOrder.idempotency
+    chosen: "sin idempotencia en cancelOrder"
+    discarded: "idempotency client-key en cancelOrder"
+    reason: "El estado hace al comando idempotente en su efecto: CANCELED no tiene salida, así que un reintento no devuelve el stock dos veces y responde 409 INVALID_STATE_TRANSITION (FL-ORD-013); lo único que cambia es la respuesta del reintento, y el cliente puede leer el pedido con getOrder. Aceptado por el humano en la segunda vuelta del cierre (gaps clase 16, 2026-10-23)."
+    since: 0.1.0
+    origin: omitted
+  - section: "3.2"
+    scope: use-cases.finishOrder.idempotency
+    chosen: "sin idempotencia en finishOrder"
+    discarded: "idempotency client-key en finishOrder"
+    reason: "Mismo motivo que cancelOrder: FINISHED no tiene salida, un reintento no repite ningún efecto y responde 409 INVALID_STATE_TRANSITION (FL-ORD-010); el cliente puede leer el pedido con getOrder. Aceptado por el humano en la segunda vuelta del cierre (gaps clase 16, 2026-10-23)."
+    since: 0.1.0
+    origin: omitted
+  - section: "3.3"
+    chosen: "sin caché en ninguna query"
+    discarded: "cache con TTL en getProduct"
+    reason: "El legacy lee la base en cada petición (ProductServiceImpl.java:30-48) y no declara caché. El humano eligió no cachear (structural-3-3, 2026-10-23): el stock cambia con cada checkout y el catálogo siempre está al día."
+    since: 0.1.0
+    origin: omitted
+  - section: "3.7"
+    scope: persistence.consistency.transactionalBoundary
+    chosen: "per-operation"
+    discarded: "per-aggregate"
+    reason: "El checkout toca el carrito, el pedido y el stock de los productos en una sola transacción: cuando el stock no alcanza, el pedido no queda creado (R0-041 sin order_main en el diff). La conserva el diseño."
+    since: 0.1.0
+    origin: observed
+    evidence: "recordings/round-0/R0-041.json; src/main/java/me/zhulin/shopapi/service/impl/CartServiceImpl.java:86-87"
+  - section: "3.7"
+    scope: domain.aggregates
+    chosen: "sin aggregates declarados"
+    discarded: "aggregates Cart y OrderMain con ProductInOrder como entidad interna"
+    reason: "ProductInOrder es una sola entidad que cambia de propietario (del carrito al pedido) en el checkout, así que no cabe como interna de dos agregados a la vez, y la frontera transaccional es per-operation de todos modos. Aceptado por el humano al cerrar el diseño (gaps clase 6, 2026-10-23): cada entidad es su frontera implícita y las líneas se gestionan solo a través del carrito o del pedido."
+    since: 0.1.0
+    origin: observed
+    evidence: "surface.yaml (tabla product_in_order con cart_user_id y order_id); src/main/java/me/zhulin/shopapi/service/impl/CartServiceImpl.java:86-100"
+  - section: "3.8"
+    scope: api.pagination
+    chosen: "offset con defaultSize 10 y maxSize 100"
+    discarded: "defaultSize 3 sin maxSize (el legacy); defaultSize 3 con maxSize 100"
+    reason: "El legacy pagina con page y size sin acotar el size y con un tamaño por defecto de 3 en productos y de 10 en pedidos (ProductController.java:30-35). El humano fijó un único defaultSize 10 y un maxSize 100 (api-pagination, 2026-10-23): el catálogo pasa de 3 a 10 por página y un size mayor que 100 se recorta."
+    since: 0.1.0
+    origin: contradicted
+    evidence: "recordings/round-0/R0-001.json; recordings/round-0/R0-045.json; src/main/java/me/zhulin/shopapi/api/OrderController.java:30-34"
+  - section: "3.8"
+    scope: domain.entities.Cart.products
+    chosen: "líneas del carrito sin paginar"
+    discarded: "paginar las líneas de getCart"
+    reason: "El legacy devuelve el carrito entero con todas sus líneas (R0-029) y el tamaño está acotado: el carrito tiene a lo sumo una línea por producto del catálogo (índice único cart, productId), mergeCart admite 100 líneas por llamada y el checkout lo vacía. Aceptado por el humano en la segunda vuelta del cierre (gaps clase 16, 2026-10-23); se reabre si el catálogo crece hasta que un carrito pese."
+    since: 0.1.0
+    origin: observed
+    evidence: "recordings/round-0/R0-028.json; recordings/round-0/R0-029.json"
+  - section: "3.8"
+    scope: domain.entities.OrderMain.products
+    chosen: "líneas de cada pedido sin paginar"
+    discarded: "paginar las líneas de getOrder y listOrders"
+    reason: "El legacy devuelve cada pedido con todas sus líneas (R0-046) y el tamaño está acotado: las líneas de un pedido son las que tenía el carrito al hacer el checkout, que a su vez tiene a lo sumo una por producto; listOrders ya pagina los pedidos. Aceptado por el humano en la segunda vuelta del cierre (gaps clase 16, 2026-10-23)."
+    since: 0.1.0
+    origin: observed
+    evidence: "recordings/round-0/R0-045.json; recordings/round-0/R0-046.json"
+  - section: "3.9"
+    scope: persistence.consistency.optimisticLocking
+    chosen: "all"
+    discarded: "none"
+    reason: "Ninguna entidad del legacy lleva control de versión: el stock se lee y se escribe sin bloqueo (ProductServiceImpl.java:64-73) y gana la última escritura. El humano eligió bloqueo optimista en todas las raíces (structural-3-9, 2026-10-23): una escritura sobre una versión vieja responde 409 CONCURRENT_MODIFICATION y vender de más deja de ser posible."
+    since: 0.1.0
+    origin: omitted
+  - section: "3.9"
+    scope: use-cases.updateProduct.version
+    chosen: "version en el cuerpo de updateProduct, con bloqueo optimista"
+    discarded: "edición sin versión (el último gana)"
+    reason: "El producto reemplaza todos sus campos, también el stock, y un checkout puede descontarlo entre la lectura y la edición del vendedor: sin versión la edición pisaría esa venta. El humano decidió al cerrar el diseño (gaps clase 4, updateProduct, 2026-10-23) que updateProduct lleve la version del producto y responda 409 CONCURRENT_MODIFICATION si no es la vigente (fix-update-product-version)."
+    since: 0.1.0
+    origin: omitted
+  - section: "3.9"
+    scope: domain.entities.ProductInfo.productStatus
+    chosen: "UP y DOWN se alternan sin restricción (sin lifecycle)"
+    discarded: "lifecycle de ProductStatus con transiciones restringidas"
+    reason: "Las transiciones son libres de hecho: la única forma de cambiar el estado es updateProduct, que reemplaza todos los campos, y el legacy tampoco restringe ese cambio (sus guardas offSale y onSale no cuelgan de ninguna ruta). Aceptado por el humano al cerrar el diseño (REV-DOMAIN-ENUM-NO-LIFECYCLE, 2026-10-23): pasar de UP a DOWN y de DOWN a UP son siempre válidos, también DOWN a DOWN. La consecuencia observable de DOWN está en fix-product-not-available."
+    since: 0.1.0
+    origin: observed
+    evidence: "src/main/java/me/zhulin/shopapi/service/impl/ProductServiceImpl.java:106-116; recordings/round-0/R0-061.json"
+  - section: "3.9b"
+    scope: persistence.audit.timestamps
+    chosen: "none"
+    discarded: "all"
+    reason: "Las fechas createTime y updateTime solo existen en producto, pedido y categoría, y viajan en la respuesta como campos propios del dominio (R0-057); users, cart y product_in_order no llevan ninguna."
+    since: 0.1.0
+    origin: observed
+    evidence: "surface.yaml (tablas product_info, order_main, product_category, users); recordings/round-0/R0-057.json"
+  - section: "3.9b"
+    scope: persistence.audit.authorship
+    chosen: "all"
+    discarded: "none; declared"
+    reason: "El legacy no registra quién crea o modifica un producto, un pedido o un perfil. El humano eligió registrar la autoría con el sub del token sin sacarla en las respuestas (structural-3-9b, 2026-10-23)."
+    since: 0.1.0
+    origin: omitted

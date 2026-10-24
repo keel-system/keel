@@ -1,0 +1,28 @@
+# Capa api — recuperada de legacy/shop-api. El legacy sirve todo bajo /api (server.servlet.contextPath); Keel añade /v1.
+style: rest
+basePath: /api
+auto: false
+defaultAudience: users
+
+endpoints:
+  listProducts:           { method: GET,    path: /product }
+  getProduct:             { method: GET,    path: "/product/{productId}" }
+  listProductsByCategory: { method: GET,    path: "/category/{categoryType}" }
+  register:               { method: POST,   path: /register, successStatus: 200 }
+  getProfile:             { method: GET,    path: "/profile/{email}" }
+  updateProfile:          { method: PUT,    path: /profile }
+  getCart:                { method: GET,    path: /cart }
+  mergeCart:              { method: POST,   path: /cart, successStatus: 200 }
+  addToCart:              { method: POST,   path: /cart/add, successStatus: 200 }
+  modifyCartItem:         { method: PUT,    path: "/cart/{productId}" }
+  removeCartItem:         { method: DELETE, path: "/cart/{productId}", successStatus: 204 }
+  checkout:               { method: POST,   path: /cart/checkout, successStatus: 204 }
+  listOrders:             { method: GET,    path: /order }
+  getOrder:               { method: GET,    path: "/order/{orderId}" }
+  cancelOrder:            { method: PATCH,  path: "/order/cancel/{orderId}" }
+  finishOrder:            { method: PATCH,  path: "/order/finish/{orderId}" }
+  createProduct:          { method: POST,   path: /seller/product/new, successStatus: 200 }
+  updateProduct:          { method: PUT,    path: "/seller/product/{id}/edit" }
+  deleteProduct:          { method: DELETE, path: "/seller/product/{id}/delete", successStatus: 204 }
+
+pagination: { style: offset, defaultSize: 10, maxSize: 100 }

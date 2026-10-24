@@ -776,9 +776,19 @@ export const MUTATIONS = [
     id: 'M-USECASES-CHILD-NOT-IN-INPUT',
     title: 'un command cuyo input deriva de una entidad con colección de hijas',
     mutate: (d) => {
-      ops(d).createTicket.input = { entity: 'Ticket' };
+      // escalationLevel tiene default: fuera, para que la mutación mida solo las hijas.
+      ops(d).createTicket.input = { entity: 'Ticket', exclude: ['escalationLevel'] };
     },
     expect: ['CHK-USECASES-CHILD-NOT-IN-INPUT']
+  },
+  {
+    id: 'M-USECASES-INPUT-DEFAULT-OVERRIDABLE',
+    title: 'un input derivado de la entidad que deja al cliente fijar un campo con default',
+    mutate: (d) => {
+      // Las hijas fuera, para que la mutación mida solo el default (escalationLevel: 0).
+      ops(d).createTicket.input = { entity: 'Ticket', exclude: ['notes'] };
+    },
+    expect: ['CHK-USECASES-INPUT-DEFAULT-OVERRIDABLE']
   },
   {
     id: 'M-USECASES-CODE-MULTI-STATUS',

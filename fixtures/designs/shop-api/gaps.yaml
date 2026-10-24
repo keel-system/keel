@@ -1,0 +1,604 @@
+reviewedBy: keel-gap-sweep
+reviewedAt: 0.1.0
+
+coverage:
+  - class: 1
+    units: [OrderMain, ProductInfo]
+    result: findings
+  - class: 2
+    units: [register, updateProfile, mergeCart, addToCart, modifyCartItem, removeCartItem, checkout, cancelOrder, finishOrder, createProduct, updateProduct, deleteProduct]
+    result: findings
+  - class: 3
+    units: [User, Cart, ProductInOrder, OrderMain, ProductInfo, ProductCategory]
+    result: findings
+  - class: 4
+    units: [register, updateProfile, mergeCart, addToCart, modifyCartItem, removeCartItem, checkout, cancelOrder, finishOrder, createProduct, updateProduct, deleteProduct]
+    result: findings
+  - class: 5
+    units: [listProducts, getProduct, listProductsByCategory, getProfile, getCart, listOrders, getOrder]
+    result: findings
+  - class: 6
+    units: [User, Cart, ProductInOrder, OrderMain, ProductInfo, ProductCategory]
+    result: findings
+  - class: 9
+    units: [listProducts, getProduct, listProductsByCategory, register, getProfile, updateProfile, getCart, mergeCart, addToCart, modifyCartItem, removeCartItem, checkout, listOrders, getOrder, cancelOrder, finishOrder, createProduct, updateProduct, deleteProduct]
+    result: findings
+  - class: 12
+    units: [service]
+    result: findings
+  - class: 14
+    units: [User, Cart, ProductInOrder, OrderMain, ProductInfo, ProductCategory]
+    result: findings
+  - class: 15
+    units: [listProducts, getProduct, listProductsByCategory, register, getProfile, updateProfile, getCart, mergeCart, addToCart, modifyCartItem, removeCartItem, checkout, listOrders, getOrder, cancelOrder, finishOrder, createProduct, updateProduct, deleteProduct]
+    result: findings
+  - class: 16
+    units: ["3.2", "3.3", "3.7", "3.8", "3.9", "3.9b"]
+    result: findings
+
+findings:
+  # ================================================================ HALLAZGOS NUEVOS (open)
+  - class: 2
+    unit: checkout
+    what: "Un usuario sin perfil (y por tanto sin carrito) puede disparar a la vez CART_NOT_FOUND (404) y CART_EMPTY (409): las rules solo fijan que CART_EMPTY es el primer rechazo, pero no dicen si va antes o después de CART_NOT_FOUND. Dos stacks darían status distintos al mismo cliente."
+    severity: gap
+    state: decided
+    reason: "Orden global de las guardas - propiedad, existencia y después estado y stock - y CART_NOT_FOUND primero: checkout evalúa CART_NOT_FOUND, CART_EMPTY, PRODUCT_NOT_AVAILABLE y PRODUCT_NOT_ENOUGH, en las rules y en el orden de errors (use-cases checkout; FL-CRT-014). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 2
+    unit: cancelOrder
+    what: "La restitución suma a productStock la cantidad de cada línea, pero ProductInfo.productStock tiene máximo 1000000: un producto con stock alto al que se devuelven unidades puede superar la cota. Ninguna guarda ni error dice qué ve quien cancela (rechazo, tope o stock por encima de la cota)."
+    severity: gap
+    state: decided
+    reason: "El máximo de 1.000.000 acota lo que manda quien crea o edita el producto y no limita la devolución de stock de cancelOrder: el stock puede quedar por encima y no se rechaza ni se recorta (rules de cancelOrder, description de ProductInfo.productStock; FL-ORD-026). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre). Deja abierto el hallazgo nuevo sobre la copia del stock a la línea."
+  - class: 2
+    unit: cancelOrder
+    what: "Un cliente que cancela el pedido de otro y que además no está en NEW dispara a la vez ORDER_NOT_OWNED (403) e INVALID_STATE_TRANSITION (409): no se dice qué se evalúa antes. Fija si el estado de un pedido ajeno se filtra a quien no es su dueño."
+    severity: risk
+    state: decided
+    reason: "La propiedad se evalúa antes que la existencia y el estado: ORDER_NOT_OWNED primero en errors y en las rules de cancelOrder, así que un cliente nunca averigua el estado del pedido de otro (FL-ORD-025). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 2
+    unit: mergeCart
+    what: "Varias guardas pueden fallar a la vez y el orden no está fijado: CART_NOT_FOUND frente a los errores de producto, y PRODUCT_NOT_FOUND frente a PRODUCT_NOT_AVAILABLE cuando items mezcla una línea inexistente y otra fuera de venta. El cliente ve uno u otro según el stack."
+    severity: risk
+    state: decided
+    reason: "mergeCart evalúa CART_NOT_FOUND, PRODUCT_NOT_FOUND y PRODUCT_NOT_AVAILABLE, con la existencia de todas las líneas antes que su estado: items con un producto inexistente y uno fuera de venta responde PRODUCT_NOT_FOUND sea cual sea su posición (rules y errors de mergeCart; FL-CRT-018 y FL-CRT-019). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 2
+    unit: addToCart
+    what: "Si el usuario no tiene carrito y el producto no existe, no se dice si responde 404 CART_NOT_FOUND o 200 con added false; tampoco el orden entre CART_NOT_FOUND y PRODUCT_NOT_AVAILABLE."
+    severity: risk
+    state: decided
+    reason: "addToCart evalúa CART_NOT_FOUND primero, sin mirar el producto, y después el producto: inexistente responde added false y fuera de venta 409 PRODUCT_NOT_AVAILABLE (rules y errors de addToCart; FL-CRT-018). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 3
+    unit: ProductInOrder
+    what: "La línea exige productDescription y categoryType, pero en ProductInfo ambos son opcionales (productDescription sin required, categoryType sin required). addToCart y mergeCart copian esos datos del catálogo y no dicen qué se copia cuando el producto los tiene nulos: ¿cadena vacía, rechazo, línea con nulo pese a required?"
+    severity: gap
+    state: decided
+    reason: "La línea acepta null en productDescription y categoryType y los copia tal cual del producto (domain ProductInOrder, rules de addToCart y mergeCart; fix-cart-line-nullable-fields; FL-CRT-020). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 3
+    unit: ProductInfo
+    what: "categoryType es opcional en el dominio, y updateProduct dice que los campos que no llegan quedan null, pero la misma operación (y createProduct) responde 404 CATEGORY_NOT_FOUND si categoryType no se manda. Un producto nunca puede quedar sin categoría, así que o el campo es obligatorio o la regla de 'queda null' no se aplica a él; el diseño dice las dos cosas."
+    severity: gap
+    state: decided
+    reason: "categoryType es obligatorio al crear (400 si falta) y se conserva al editar sin mandarlo; CATEGORY_NOT_FOUND solo sale si llega y no existe (domain ProductInfo.categoryType required, rules de createProduct y updateProduct; fix-product-category-required; FL-SEL-017 y FL-SEL-018). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 3
+    unit: OrderMain
+    what: "checkout dice de dónde salen buyerName, buyerPhone y buyerAddress (los actuales del cliente) pero no buyerEmail, que es además el campo del que cuelga la propiedad del pedido (ownership.OrderMain.owner). Es requerido y no llega en ningún input."
+    severity: risk
+    state: decided
+    reason: "buyerEmail del pedido es el claim email del token (callerEmail), que es también el campo del que cuelga la propiedad (rules de checkout; FL-ORD-001 comprueba buyerEmail). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 4
+    unit: register
+    what: "La decisión previa citaba OBL-CONCURRENCY-CODE en decisions.yaml, que ya no existe. Con optimisticLocking all, cualquier escritura de checkout, cancelOrder, finishOrder, updateProfile, addToCart, mergeCart, modifyCartItem y deleteProduct puede devolver 409 CONCURRENT_MODIFICATION, y solo updateProduct lo declara en errors; para el resto el status de la carrera lo fija únicamente la prosa de decisions.yaml 3.9."
+    severity: risk
+    state: decided
+    reason: "CONCURRENT_MODIFICATION (409) queda declarado en errors de updateProfile, mergeCart, addToCart, modifyCartItem, removeCartItem, checkout, cancelOrder, finishOrder y deleteProduct, que se suman a updateProduct, siempre el último en el orden de las guardas. Decidido por el humano el 2026-10-23 (segunda vuelta del cierre); removeCartItem entra por el mismo criterio (borra una línea versionada), que es una lectura del arqueólogo de 'las operaciones que escriben entidades versionadas'."
+  - class: 5
+    unit: listProductsByCategory
+    what: "listProducts dice que incluye los productos fuera de venta (DOWN), pero listProductsByCategory y getProduct no dicen si los devuelven o los filtran. Quien navega por categoría puede ver productos que no se pueden comprar o no verlos, según el stack."
+    severity: risk
+    state: decided
+    reason: "listProductsByCategory aplica el mismo filtro de estado que listProducts, que no filtra: incluye los productos fuera de venta (rules de listProductsByCategory; FL-CAT-009, con totalElements 5 medido en R0-008). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre). getProduct ya devuelve un producto fuera de venta en FL-CAT-003."
+  - class: 9
+    unit: register
+    what: "El email del perfil sale del claim email del token, pero el diseño no dice qué pasa si el token no lo trae o si el proveedor no lo ha verificado: ni un error declarado ni una exigencia de email verificado. Una identidad con un email sin verificar puede registrarse, o actuar sobre pedidos y perfil, como otro cliente."
+    severity: gap
+    state: decided
+    reason: "Un token sin el claim email se rechaza con 401 y no se exige que el proveedor haya verificado el email (rules de register y cabecera de security.keel.yaml; FL-ACC-016). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 12
+    unit: service
+    what: "User.email no declara compare: exact en el dominio, aunque los escenarios (convenciones) dicen que el email se compara tal cual. La unicidad de EMAIL_ALREADY_EXISTS, ownership por email (getProfile, updateProfile, getOrder, cancelOrder) y el filtro de listOrders por buyerEmail dependen de si 'Bob@x.com' y 'bob@x.com' son el mismo email, y eso solo está en prosa de los escenarios."
+    severity: gap
+    state: decided
+    reason: "User.email declara compare exact: la unicidad, la propiedad por email y el filtro por buyerEmail distinguen mayúsculas (domain User.email; FL-ACC-017). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 12
+    unit: service
+    what: "orderAmount (decimal) no declara máximo y es la suma de precio por cantidad de un número de líneas sin cota (precio máximo 1000000 por cantidad máxima 1000000 por línea); el desbordamiento de la columna no tiene error. Además no hay moneda declarada en ningún precio ni importe: se supone una sola, sin decirlo."
+    severity: gap
+    state: decided
+    reason: "orderAmount lleva máximo 1.000.000.000 y una sola moneda implícita, escrita en su description (domain OrderMain.orderAmount). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre). El checkout que supere el máximo se rechaza entero con 409 ORDER_AMOUNT_EXCEEDED, sin pedido ni descuento de stock (fix-order-amount-max, tercera vuelta del cierre, 2026-10-23; FL-ORD-027)."
+  - class: 14
+    unit: OrderMain
+    what: "El índice (buyerEmail, orderStatus, createTime) sostiene el listado del cliente, pero listOrders de empleados y vendedores (todos los pedidos, orden orderStatus asc, createTime desc, orderId asc) no tiene índice que lo sostenga, y createTime va descendente frente a orderStatus ascendente en el orden de la query sin que el índice declare direcciones."
+    severity: risk
+    state: decided
+    reason: "persistence declara el índice (orderStatus, createTime) para el listado de empleados y vendedores y las direcciones del orden (orderStatus ascendente, createTime descendente) en la description de los dos índices de pedidos; el DSL no declara direcciones y queda como frontera F-INDEX-DIRECTIONS. Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 14
+    unit: ProductInfo
+    what: "ProductInfo.version es un contador propio del dominio (sube con cada escritura, también con el descuento de stock del checkout) y a la vez persistence declara optimisticLocking all, que lleva su propio control de versión. No se dice si son el mismo contador o dos distintos, ni cuál es el que provoca el 409 CONCURRENT_MODIFICATION."
+    severity: risk
+    state: decided
+    reason: "La version del dominio es el contador del bloqueo optimista de la raíz, el mismo y no otro, y es la que provoca el 409 CONCURRENT_MODIFICATION (description de ProductInfo.version y comentario de persistence.consistency). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 14
+    unit: ProductInOrder
+    what: "Las líneas de un pedido se leen por su relación order (getOrder, listOrders, cancelOrder) y no hay índice sobre order; solo el único (cart, productId) sostiene las lecturas por carrito."
+    severity: risk
+    state: decided
+    reason: "persistence declara el índice [order] en ProductInOrder (persistence.keel.yaml). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 15
+    unit: getProduct
+    what: "productId ya tiene un máximo de 64 caracteres, pero sigue siendo un texto libre sin patrón que viaja en la ruta en getProduct, modifyCartItem, removeCartItem, updateProduct y deleteProduct: un código con '/', '%' o espacios no se puede direccionar y el comportamiento queda al stack."
+    severity: risk
+    state: decided
+    reason: "productId lleva el patrón [A-Za-z0-9_-] y hasta 64 caracteres (domain ProductInfo, ProductInOrder y CartItemInput; use-cases en todas las operaciones que lo reciben): cualquier otro carácter da 400 al crear y en la ruta (fix-product-id-charset; FL-SEL-022). Decidido por el humano el 2026-10-23 (tercera vuelta del cierre)."
+  - class: 16
+    unit: "3.2"
+    what: "El registro de 3.2 no tiene entrada de register, cancelOrder ni finishOrder, y la decisión anterior da a register por frenado por la clave natural sin que esté escrita como entrada. cancelOrder y finishOrder son PATCH que, repetidos, no devuelven lo mismo (la segunda llamada es 409 INVALID_STATE_TRANSITION), así que el reintento tras un timeout no es transparente y no consta que se preguntara."
+    severity: gap
+    state: accepted
+    reason: "decisions.yaml structural 3.2 tiene ahora entrada para register (la unicidad del email frena el reintento: 409 EMAIL_ALREADY_EXISTS), cancelOrder y finishOrder (el estado terminal hace al comando idempotente en su efecto: el reintento no repite el stock ni el cambio y responde 409 INVALID_STATE_TRANSITION). Aceptado por el humano el 2026-10-23 (segunda vuelta del cierre)."
+  - class: 16
+    unit: "3.8"
+    what: "El registro de 3.8 solo cubre api.pagination (tamaños de página). Las colecciones sin paginar, las líneas de getCart (sin cota de líneas por carrito más allá de una por producto) y las de cada pedido, no tienen entrada que diga que se decidió no paginarlas con la cota esperada delante."
+    severity: risk
+    state: accepted
+    reason: "decisions.yaml structural 3.8 tiene ahora entrada para las líneas de getCart (domain Cart.products) y las de cada pedido (domain OrderMain.products), sin paginar por tamaño acotado: una línea por producto en el carrito, mergeCart con 100 líneas por llamada y el carrito vaciado en el checkout. Aceptado por el humano el 2026-10-23 (segunda vuelta del cierre)."
+
+  - class: 3
+    unit: ProductInOrder
+    what: "La línea copia productStock del producto y lo acota a un máximo de 1000000, pero la devolución de stock de cancelOrder, que no está limitada por ese máximo, puede dejar el producto por encima: la siguiente copia a una línea (addToCart, mergeCart) no cabría en el campo y el diseño no dice qué ve quien añade ese producto."
+    severity: gap
+    state: decided
+    reason: "El stock copiado en la línea (ProductInOrder.productStock) no lleva máximo de entrada, por ser dato derivado del producto: la devolución de stock de cancelOrder, que puede dejar el producto por encima de 1000000, nunca rompe addToCart ni mergeCart (domain ProductInOrder.productStock; FL-ORD-026). Decidido por el humano el 2026-10-23 (tercera vuelta del cierre)."
+
+  # ================================================================ DECISIONES PREVIAS VIGENTES (se conservan)
+  # ---------------------------------------------------------------- 1. Ciclo de vida
+  - class: 1
+    unit: ProductInfo
+    what: "productStatus (UP/DOWN) es un campo de estado enum sin lifecycle: estado inicial, significado de DOWN para quien compra."
+    severity: gap
+    state: decided
+    reason: "productStatus tiene default UP (domain ProductInfo.productStatus: required, default UP) y un producto DOWN o borrado no se compra: addToCart, mergeCart y checkout responden 409 PRODUCT_NOT_AVAILABLE (fix-product-not-available; FL-CRT-013, FL-ORD-022, FL-ORD-023, FL-SEL-015). Decidido por el humano el 2026-10-23 (hueco 6). Que UP y DOWN se alternan sin restricción lo recoge decisions.yaml 3.9 (REV-DOMAIN-ENUM-NO-LIFECYCLE)."
+  - class: 1
+    unit: OrderMain
+    what: "El estado inicial (NEW) y las transiciones están completos y alcanzables; falta decidir qué operaciones quedan prohibidas en FINISHED y CANCELED."
+    severity: risk
+    state: decided
+    reason: "Las únicas operaciones sobre un pedido son finishOrder y cancelOrder, y ambas rechazan lo que no está en NEW con INVALID_STATE_TRANSITION 409 (validation-scenarios.md FL-ORD-010, FL-ORD-011, FL-ORD-013); no hay otra operación que modifique un pedido."
+
+  # ---------------------------------------------------------------- 2. Guardas y errores
+  - class: 2
+    unit: updateProfile
+    what: "Usuario autenticado sin perfil y significado de omitir name, phone o address."
+    severity: gap
+    state: decided
+    reason: "Un usuario autenticado sin perfil recibe 404 PROFILE_NOT_FOUND y un campo omitido (name, phone o address) se conserva (use-cases updateProfile; fix-profile-partial-update; FL-ACC-013 y FL-ACC-015). Decidido por el humano el 2026-10-23 (hueco 7)."
+  - class: 2
+    unit: mergeCart
+    what: "Operaciones de carrito para un usuario sin carrito (sin register)."
+    severity: gap
+    state: decided
+    reason: "Sin perfil no hay carrito: todas las operaciones del carrito declaran 404 CART_NOT_FOUND (use-cases getCart, mergeCart, addToCart, modifyCartItem, removeCartItem y checkout; FL-CRT-014). Decidido por el humano el 2026-10-23 (hueco 7)."
+  - class: 2
+    unit: addToCart
+    what: "quantity sin obligatoriedad y producto existente pero fuera de venta."
+    severity: gap
+    state: decided
+    reason: "quantity es obligatoria con mínimo 1 y máximo 1000000 (400 si falta o no cumple; fix-cart-quantity-validation y la cota del cierre, hueco 8) y un producto DOWN responde 409 PRODUCT_NOT_AVAILABLE (fix-product-not-available; FL-CRT-013). Decidido por el humano el 2026-10-23."
+  - class: 2
+    unit: modifyCartItem
+    what: "quantity sin mínimo y significado de cantidad 0."
+    severity: gap
+    state: decided
+    reason: "quantity exige mínimo 1 y falla con 400 antes de buscar la línea; la cantidad 0 no borra la línea, porque quitarla es removeCartItem (fix-cart-modify-quantity-min; FL-CRT-016 y FL-CRT-017). Decidido por el humano el 2026-10-23 (hueco 8)."
+  - class: 2
+    unit: checkout
+    what: "Línea de un producto borrado o DOWN."
+    severity: gap
+    state: decided
+    reason: "Una línea de un producto borrado o DOWN rechaza el checkout entero con 409 PRODUCT_NOT_AVAILABLE, que se evalúa después de CART_EMPTY y antes del stock (use-cases checkout; fix-product-not-available; FL-ORD-022 y FL-ORD-023). Decidido por el humano el 2026-10-23 (hueco 6)."
+  - class: 2
+    unit: createProduct
+    what: "Orden de evaluación de PRODUCT_ID_ALREADY_EXISTS (409) y CATEGORY_NOT_FOUND (404)."
+    severity: risk
+    state: decided
+    reason: "Cuando el productId repetido y la categoría inexistente fallan a la vez sale el 404 CATEGORY_NOT_FOUND: la existencia va antes que el conflicto (use-cases createProduct, rules y orden de errors; fix-create-product-guard-order; FL-SEL-020). Antes aceptado sin fijar (hueco 12); decidido por el humano el 2026-10-23 en la segunda vuelta del cierre, que fija el orden de todas las guardas."
+  - class: 2
+    unit: updateProduct
+    what: "Orden de evaluación de varias guardas a la vez y upsert."
+    severity: risk
+    state: decided
+    reason: "Orden fijado: ID_NOT_MATCHED, PRODUCT_NOT_FOUND, CATEGORY_NOT_FOUND y CONCURRENT_MODIFICATION el último (use-cases updateProduct, rules y orden de errors; FL-SEL-021); la parte del upsert quedó decidida con fix-update-product-no-upsert (200 al reemplazar, 404 si no existe, nunca crea). Antes aceptado sin fijar (hueco 12); decidido por el humano el 2026-10-23 en la segunda vuelta del cierre, que fija el orden de todas las guardas."
+  - class: 2
+    unit: cancelOrder
+    what: "El error de transición inválida no está declarado en errors, pero lo fija INVALID_STATE_TRANSITION 409 en los escenarios."
+    severity: risk
+    state: decided
+    reason: "validation-scenarios.md FL-ORD-013 y FL-ORD-014 fijan status 409 y code INVALID_STATE_TRANSITION; es el error derivado del lifecycle de OrderMain."
+  - class: 2
+    unit: finishOrder
+    what: "El error de transición inválida no está declarado en errors, pero lo fija INVALID_STATE_TRANSITION 409 en los escenarios."
+    severity: risk
+    state: decided
+    reason: "validation-scenarios.md FL-ORD-010 y FL-ORD-011 fijan status 409 y code INVALID_STATE_TRANSITION."
+  - class: 2
+    unit: removeCartItem
+    what: "Quitar una línea inexistente no falla."
+    severity: risk
+    state: decided
+    reason: "use-cases removeCartItem rules: con carrito, si no tiene esa línea no hace nada y responde igual (el legacy responde igual, R0-038; fix-not-found-404 no alcanza al borrado); sin carrito responde 404 CART_NOT_FOUND, que se evalúa primero (orden global de las guardas, segunda vuelta del cierre, 2026-10-23); FL-CRT-011 y FL-CRT-014 lo cubren. La referencia anterior a CHK-USECASES-COMMAND-NO-ERRORS en decisions.yaml ya no aplica: la operación declara CART_NOT_FOUND."
+
+  # ---------------------------------------------------------------- 3. Determinación del estado
+  - class: 3
+    unit: User
+    what: "active aceptado en el input de register sin decir quién lo pone a true."
+    severity: gap
+    state: decided
+    reason: "active deja de ser input de register y se fija a true: el campo tiene default true, ninguna operación lo cambia ni lo lee, y el cliente no puede registrarse inactivo (fix-register-active-true; FL-ACC-014). Decidido por el humano el 2026-10-23 (hueco 10)."
+  - class: 3
+    unit: ProductInOrder
+    what: "count y productStock requeridos, y si el precio de una línea existente se refresca al sumar."
+    severity: gap
+    state: decided
+    reason: "count y productStock son obligatorios en la línea (siempre se copian al crearla: count de quantity o de count, mínimo 1, y productStock del catálogo; una línea con campos nulos es un 400 por fix-cart-quantity-validation). Al sumar a una línea existente solo cambia count y el resto de sus datos, el precio incluido, se conserva, que es lo que hace el legacy (CartServiceImpl.java:55-60). Decidido el 2026-10-23 con los huecos 8 y 11; la conservación de los datos de la línea es lectura del legacy sin sonda: confirmar."
+  - class: 3
+    unit: OrderMain
+    what: "Cuándo se recalcula updateTime."
+    severity: risk
+    state: accepted
+    reason: "updateTime lo mueve la infraestructura en cada escritura del pedido, como el legacy (@UpdateTimestamp, OrderMain.java:66); los escenarios solo comprueban su forma y nunca su valor. Aceptado por el humano el 2026-10-23 (hueco 12, updateTime; decisions.yaml)."
+  - class: 3
+    unit: ProductInfo
+    what: "Campos opcionales que no llegan en updateProduct y recálculo de updateTime."
+    severity: risk
+    state: accepted
+    reason: "Un campo opcional que no llega al editar queda null (updateProduct rules, FL-SEL-006), productStatus vuelve a UP (default), y createTime y categoryType se conservan (fix-product-category-required); updateTime lo mueve la infraestructura en cada escritura, como el legacy (@UpdateTimestamp, ProductInfo.java:58). Aceptado por el humano el 2026-10-23 (hueco 12, updateTime; decisions.yaml)."
+  - class: 3
+    unit: Cart
+    what: "cartId es computed como el id del usuario propietario, y el momento está dicho (se crea en register)."
+    severity: risk
+    state: decided
+    reason: "domain.keel.yaml Cart.cartId (computed: id del usuario propietario) y use-cases register (rules: Crea el carrito del usuario en la misma operación)."
+  - class: 3
+    unit: ProductCategory
+    what: "Cómo se asignan categoryId y categoryType sin operación que cree categorías."
+    severity: risk
+    state: decided
+    reason: "Las categorías se cargan por seed (ninguna operación las crea) y categoryType es obligatorio y único, así que un tipo nulo no es válido; la autoría de esa carga es el valor centinela del generador porque no nace de una petición (domain ProductCategory; decisions.yaml). Decidido por el humano el 2026-10-23 (hueco 12, categorías por seed)."
+
+  # ---------------------------------------------------------------- 4. Concurrencia y unicidad
+  - class: 4
+    unit: register
+    what: "Dos registros simultáneos con el mismo email."
+    severity: risk
+    state: decided
+    reason: "domain User.email unique + persistence naturalKey [email] + EMAIL_ALREADY_EXISTS 409 (la carrera se resuelve por unicidad)."
+  - class: 4
+    unit: addToCart
+    what: "Leer-sumar-escribir de la línea sin unicidad (carrito, productId)."
+    severity: gap
+    state: decided
+    reason: "Unicidad (carrito, productId) en persistence (índice único en ProductInOrder) y ProductInOrder.cart como relación: dos peticiones simultáneas no crean dos líneas del mismo producto (persistence.keel.yaml; hueco 8). El bloqueo optimista all sigue cubriendo la escritura concurrente con 409 CONCURRENT_MODIFICATION. Decidido por el humano el 2026-10-23."
+  - class: 4
+    unit: mergeCart
+    what: "Mismo patrón de leer-sumar-escribir, y líneas repetidas dentro de items."
+    severity: gap
+    state: decided
+    reason: "Misma unicidad (carrito, productId) en persistence, y las líneas repetidas de items se suman (use-cases mergeCart rules; FL-CRT-015). Decidido por el humano el 2026-10-23 (hueco 8)."
+  - class: 4
+    unit: checkout
+    what: "Dos checkouts que compiten por el mismo stock pueden dar 409 CONCURRENT_MODIFICATION con stock suficiente."
+    severity: risk
+    state: decided
+    reason: "decisions.yaml structural 3.9 (optimisticLocking all): una escritura sobre una versión vieja responde 409 CONCURRENT_MODIFICATION y vender de más deja de ser posible; la misma clave se resuelve con OBL-IDEM-RACE-CODE."
+  - class: 4
+    unit: updateProduct
+    what: "Reemplazo del producto entero sin versión pisa el stock descontado por un checkout."
+    severity: gap
+    state: decided
+    reason: "La edición lleva la version del producto y responde 409 CONCURRENT_MODIFICATION si no es la vigente, así que no pisa el stock que descontó un checkout; y updateProduct ya no crea, de modo que no compite con createProduct (fix-update-product-version, fix-update-product-no-upsert; FL-SEL-016 y FL-SEL-009). Decidido por el humano el 2026-10-23 (hueco 9)."
+  - class: 4
+    unit: updateProfile
+    what: "Dos actualizaciones simultáneas del mismo perfil."
+    severity: risk
+    state: accepted
+    reason: "La edición concurrente del mismo perfil la frena el bloqueo optimista de la raíz con 409 CONCURRENT_MODIFICATION y el cliente reintenta; el perfil no lleva versión en el input porque pisar nombre, teléfono o dirección no tiene el coste de pisar un saldo. Aceptado como riesgo menor por el humano el 2026-10-23 (hueco 12, demás riesgos; decisions.yaml)."
+  - class: 4
+    unit: cancelOrder
+    what: "Cancelar y finalizar el mismo pedido a la vez, y la restitución de stock concurrente con un checkout."
+    severity: risk
+    state: decided
+    reason: "validation-scenarios.md FL-ORD-021 fija que exactamente una gana y la otra responde INVALID_STATE_TRANSITION o CONCURRENT_MODIFICATION; el stock lo cubre structural 3.9."
+  - class: 4
+    unit: finishOrder
+    what: "Finalizar y cancelar el mismo pedido a la vez."
+    severity: risk
+    state: decided
+    reason: "validation-scenarios.md FL-ORD-021: exactamente una de las dos responde 200."
+  - class: 4
+    unit: createProduct
+    what: "productId repetido simultáneo."
+    severity: risk
+    state: decided
+    reason: "ProductInfo.productId es id y PRODUCT_ID_ALREADY_EXISTS 409 está declarado; la carrera se resuelve por unicidad del id."
+
+  # ---------------------------------------------------------------- 5. Consultas
+  - class: 5
+    unit: listOrders
+    what: "Orden no total y dependencia del orden del enum."
+    severity: gap
+    state: decided
+    reason: "El orden es total y no depende de un alfabeto: orderStatus ordena por la posición de declaración del enum (NEW, FINISHED, CANCELED), createTime descendente y orderId ascendente como desempate, declarado en sort y en las rules de listOrders y en la descripción de OrderStatus (FL-ORD-006 con los createTime del seed en su Given). Decidido por el humano el 2026-10-23 (huecos 1 y 11)."
+  - class: 5
+    unit: getOrder
+    what: "Orden de las líneas (products) del pedido."
+    severity: gap
+    state: decided
+    reason: "Las líneas (products) salen ordenadas por id ascendente: declarado en la relación OrderMain.products y en las rules de getOrder. Decidido por el humano el 2026-10-23 (hueco 11)."
+  - class: 5
+    unit: getCart
+    what: "Orden de las líneas del carrito y usuario sin carrito."
+    severity: gap
+    state: decided
+    reason: "Las líneas (products) salen ordenadas por id ascendente (relación Cart.products y rules de getCart) y un usuario sin carrito recibe 404 CART_NOT_FOUND. Decidido por el humano el 2026-10-23 (huecos 7 y 11)."
+  - class: 5
+    unit: getProfile
+    what: "Usuario autenticado sin perfil."
+    severity: gap
+    state: decided
+    reason: "Un usuario autenticado que consulta su propio email sin tener perfil recibe 404 PROFILE_NOT_FOUND (use-cases getProfile; FL-ACC-015). Decidido por el humano el 2026-10-23 (hueco 7)."
+  - class: 5
+    unit: listProducts
+    what: "Orden total por productId:asc y paginado con defaultSize 10 y maxSize 100; la colección vacía es una página vacía."
+    severity: risk
+    state: decided
+    reason: "use-cases.listProducts (paginated, sort productId:asc, id único) y structural 3.8; FL-CAT-001 y FL-CAT-002."
+  - class: 5
+    unit: listProductsByCategory
+    what: "Orden por productId:asc y paginado; categoría inexistente es 404 y categoría vacía una página vacía."
+    severity: risk
+    state: decided
+    reason: "use-cases.listProductsByCategory (sort productId:asc, CATEGORY_NOT_FOUND 404) y FL-CAT-005, FL-CAT-006."
+
+  # ---------------------------------------------------------------- 6. Fronteras del agregado
+  - class: 6
+    unit: ProductInOrder
+    what: "Es hija de Cart y de OrderMain a la vez y no hay aggregates declarados."
+    severity: gap
+    state: accepted
+    reason: "ProductInOrder queda sin aggregates: es una sola entidad que cambia de propietario del carrito al pedido en el checkout (la misma fila deja el carrito y entra en el pedido, ver su descripción en domain), no cabe como interna de dos agregados y la frontera transaccional es per-operation de todas formas. Aceptado por el humano el 2026-10-23 (hueco 12; decisions.yaml 3.7, domain.aggregates)."
+  - class: 6
+    unit: OrderMain
+    what: "Sin aggregates declarados en un dominio con relaciones; no hay borrado de pedidos."
+    severity: risk
+    state: accepted
+    reason: "Sin aggregates declarados: ninguna operación borra pedidos (no hay cascada) y las líneas se gestionan solo a través del pedido; la frontera es per-operation. Aceptado por el humano el 2026-10-23 (hueco 12; decisions.yaml 3.7, domain.aggregates)."
+  - class: 6
+    unit: ProductInfo
+    what: "El borrado es físico y las referencias por valor (líneas de carrito y de pedido) quedan colgantes a propósito."
+    severity: risk
+    state: decided
+    reason: "use-cases.deleteProduct (rules: los pedidos y carritos con una línea de ese producto no cambian); cancelOrder omite el producto borrado (FL-ORD-015) y checkout rechaza la línea con PRODUCT_NOT_AVAILABLE (FL-ORD-022)."
+  - class: 6
+    unit: Cart
+    what: "Ningún borrado del usuario ni del carrito."
+    severity: risk
+    state: decided
+    reason: "use-cases.mergeCart (suma por productId) y checkout (Mueve las líneas al pedido y deja el carrito vacío)."
+  - class: 6
+    unit: User
+    what: "No hay operación de borrado de usuario y los pedidos guardan buyerEmail por valor."
+    severity: risk
+    state: decided
+    reason: "domain.OrderMain copia los datos de contacto (buyerEmail, buyerName...) y no hay operaciones de baja de User."
+  - class: 6
+    unit: ProductCategory
+    what: "Sin operaciones sobre categorías ni borrado; la referencia desde ProductInfo es por valor."
+    severity: risk
+    state: decided
+    reason: "domain.ProductInfo.categoryType descrito como categoría referenciada por valor; ninguna operación borra categorías."
+
+  # ---------------------------------------------------------------- 9. Autorización a nivel de dato
+  - class: 9
+    unit: listOrders
+    what: "Alcance del listado: cliente solo lo suyo, resto de roles todo."
+    severity: gap
+    state: decided
+    reason: "El alcance está declarado en security (access.rules.listOrders exige customer, employee o manager, así que una identidad sin ninguno recibe 403 ACCESS_DENIED), en las rules de listOrders y en decisions.yaml; el cliente solo ve sus pedidos y empleados y vendedores ven todos, que sigue siendo la frontera F-ORDER-LIST-SCOPING porque ownership no acota listados (FL-ORD-005, FL-ORD-024). Decidido por el humano el 2026-10-23 (hueco 10)."
+  - class: 9
+    unit: updateProduct
+    what: "El permiso product:edit autorizaba a crear por upsert."
+    severity: gap
+    state: decided
+    reason: "updateProduct solo reemplaza y responde 404 si el producto no existe, así que product:edit ya no autoriza crear: dar de alta es createProduct con product:create, que solo tiene el vendedor (fix-update-product-no-upsert; FL-SEL-009). Decidido por el humano el 2026-10-23 (hueco 9)."
+  - class: 9
+    unit: register
+    what: "Qué rol puede crear un perfil y si active es input."
+    severity: gap
+    state: decided
+    reason: "active deja de ser input y se fija a true (fix-register-active-true), y cualquier identidad autenticada, con el rol que tenga o sin ninguno, da de alta su propio perfil: el email sale del token y el alta no concede ningún permiso (use-cases register rules, security.access.rules.register en nivel required). Decidido por el humano el 2026-10-23 (hueco 10) en lo de active; lo del rol es lectura del diseño ya materializado: confirmar."
+  - class: 9
+    unit: getProfile
+    what: "ownership.User sin roles exentos: empleados y vendedores no leen perfiles ajenos."
+    severity: risk
+    state: decided
+    reason: "security.keel.yaml ownership.User (operations getProfile, updateProfile, sin exemptRoles) y FL-ACC-008, FL-ACC-009."
+  - class: 9
+    unit: updateProfile
+    what: "Propiedad del perfil por email del token."
+    severity: risk
+    state: decided
+    reason: "security.keel.yaml ownership.User y FL-ACC-011."
+  - class: 9
+    unit: getOrder
+    what: "Propiedad por buyerEmail con exentos employee y manager."
+    severity: risk
+    state: decided
+    reason: "security.keel.yaml ownership.OrderMain y FL-ORD-009."
+  - class: 9
+    unit: cancelOrder
+    what: "Propiedad por buyerEmail con exentos employee y manager."
+    severity: risk
+    state: decided
+    reason: "security.keel.yaml ownership.OrderMain y FL-ORD-014."
+  - class: 9
+    unit: getCart
+    what: "El carrito sale de la identidad con permiso cart:use; no hay forma de pedir el de otro."
+    severity: risk
+    state: decided
+    reason: "security.keel.yaml authentication.callerIdentity y access getCart; FL-CRT-002."
+  - class: 9
+    unit: checkout
+    what: "Solo opera sobre el carrito del titular del token con cart:use."
+    severity: risk
+    state: decided
+    reason: "security.keel.yaml callerIdentity y access.checkout."
+  - class: 9
+    unit: deleteProduct
+    what: "Borrado de catálogo restringido a product:delete, que solo tiene manager."
+    severity: risk
+    state: decided
+    reason: "security.keel.yaml roleGrants.manager y access.deleteProduct; FL-SEL-001 en adelante."
+
+  # ---------------------------------------------------------------- 12. Zonas grises
+  - class: 12
+    unit: service
+    what: "Zona y formato de las marcas de tiempo."
+    severity: gap
+    state: decided
+    reason: "createTime y updateTime son instantes UTC en ISO-8601 con milisegundos y Z, que es el contrato del cable (docs/wire-contract.md); queda escrito en la descripción de cada campo timestamp de domain y en las convenciones de los escenarios. Decidido por el humano el 2026-10-23 (hueco 12)."
+  - class: 12
+    unit: service
+    what: "Cotas ausentes en textos, items de mergeCart y numéricos."
+    severity: gap
+    state: decided
+    reason: "Los textos llevan maxLength 255 (la longitud de las columnas del legacy, surface.yaml) y mergeCart acota items a 100; count, quantity y productStock llevan máximo 1000000 y productPrice máximo 1000000 (domain y use-cases). Decidido por el humano el 2026-10-23 (hueco 12, cotas razonables); los valores numéricos son una elección del cierre: confirmar."
+  - class: 12
+    unit: service
+    what: "Idioma y formato del mensaje de error."
+    severity: gap
+    state: decided
+    reason: "message no es contrato: los clientes programan contra status y code y el texto, con su idioma, puede cambiar (convención de los escenarios y decisions.yaml). Decidido por el humano el 2026-10-23 (hueco 12)."
+  - class: 12
+    unit: service
+    what: "Mayúsculas en productId y categoryName."
+    severity: gap
+    state: decided
+    reason: "productId distingue mayúsculas (B0001 y b0001 son dos códigos): compare exact declarado en ProductInfo.productId, ProductInOrder.productId, CartItemInput.productId y en los inputs de use-cases que lo reciben; categoryName no se usa para buscar ni para unicidad. Decidido por el humano el 2026-10-23 (hueco 12). El email lo cerró la segunda vuelta del cierre: User.email declara compare exact."
+
+  # ---------------------------------------------------------------- 14. Estado persistido
+  - class: 14
+    unit: ProductInOrder
+    what: "Unicidad (carrito, productId) e índices de una entidad compartida entre carrito y pedido."
+    severity: gap
+    state: decided
+    reason: "Índice único (cart, productId) en persistence, con las relaciones cart y order en ProductInOrder; las líneas de un pedido no tienen carrito, así que no se ven afectadas (persistence.keel.yaml). Decidido por el humano el 2026-10-23 (huecos 5 y 8)."
+  - class: 14
+    unit: OrderMain
+    what: "Índice del filtro y orden de listOrders del cliente y retención de pedidos."
+    severity: risk
+    state: decided
+    reason: "Índice (buyerEmail, orderStatus, createTime) en persistence para el filtro y el orden de listOrders. No hay política de retención de pedidos, aceptado por el humano el 2026-10-23 (hueco 12; decisions.yaml): ninguna operación borra pedidos y el volumen no justifica archivar hoy."
+  - class: 14
+    unit: ProductInfo
+    what: "listProductsByCategory filtra por categoryType sin índice."
+    severity: risk
+    state: decided
+    reason: "Índice (categoryType) en persistence para listProductsByCategory (persistence.keel.yaml). Decidido por el humano el 2026-10-23 (hueco 5)."
+  - class: 14
+    unit: ProductCategory
+    what: "Origen de la carga de categorías y autoría sin usuario."
+    severity: gap
+    state: decided
+    reason: "Las categorías se cargan como datos iniciales (seed) y categoryType es su clave natural, única y obligatoria; la autoría de la carga es el valor centinela del generador. Decidido por el humano el 2026-10-23 (hueco 12, categorías por seed; domain ProductCategory y decisions.yaml)."
+  - class: 14
+    unit: User
+    what: "naturalKey email con EMAIL_ALREADY_EXISTS; optimisticLocking all y authorship all explícitos."
+    severity: risk
+    state: decided
+    reason: "persistence.keel.yaml (naturalKey [email]) y decisions.yaml structural 3.9 y 3.9b; use-cases.register errors."
+  - class: 14
+    unit: Cart
+    what: "Persistida, bloqueo optimista all, sin timestamps."
+    severity: risk
+    state: decided
+    reason: "decisions.yaml structural 3.9b (timestamps none, observed: users, cart y product_in_order no llevan fechas)."
+
+  # ---------------------------------------------------------------- 15. Superficie HTTP
+  - class: 15
+    unit: checkout
+    what: "Crea un pedido pero responde void con 204: el cliente no recibe el orderId."
+    severity: gap
+    state: accepted
+    reason: "Checkout se queda en 204 sin cuerpo: el cliente conoce el id del pedido nuevo consultando listOrders, donde el más reciente de los NEW va primero. Aceptado por el humano el 2026-10-23 (hueco 11); fix-void-204 ya decidió el 204."
+  - class: 15
+    unit: updateProduct
+    what: "Status de éxito al crear frente a reemplazar."
+    severity: risk
+    state: decided
+    reason: "updateProduct ya no crea (fix-update-product-no-upsert), así que su único éxito es 200 al reemplazar y no hay un 201 que distinguir. Decidido por el humano el 2026-10-23 (hueco 9)."
+  - class: 15
+    unit: listProducts
+    what: "La API se consume desde navegador y cors no estaba declarado."
+    severity: risk
+    state: decided
+    reason: "security.cors declara que el navegador llama a la API (el legacy ya aceptaba cualquier origen con @CrossOrigin): cabeceras Authorization, Content-Type e Idempotency-Key, X-Correlation-Id expuesta, sin credenciales; los orígenes permitidos son configuración de despliegue (security.keel.yaml). Decidido por el humano el 2026-10-23 (hueco 12, cors configurable)."
+  - class: 15
+    unit: getProfile
+    what: "El email viaja en la ruta además de en el token."
+    severity: risk
+    state: accepted
+    reason: "El email viaja en la ruta (/profile/{email}) además de en el token porque es la ruta del legacy y fix-wire-contract conserva las rutas; el servicio compara los dos y responde PROFILE_NOT_OWNED si no coinciden. Aceptado como riesgo menor por el humano el 2026-10-23 (hueco 12, demás riesgos; decisions.yaml)."
+  - class: 15
+    unit: register
+    what: "Creación con successStatus 200 que devuelve el User con id."
+    severity: risk
+    state: decided
+    reason: "api.keel.yaml register successStatus 200 explícito, caracterizado contra el legacy (FL-ACC-001 keep)."
+  - class: 15
+    unit: createProduct
+    what: "Creación con successStatus 200 que devuelve el producto con su productId."
+    severity: risk
+    state: decided
+    reason: "api.keel.yaml createProduct successStatus 200 explícito, caracterizado contra el legacy (FL-SEL-002)."
+
+  # ---------------------------------------------------------------- 16. Decisiones estructurales
+  - class: 16
+    unit: "3.2"
+    what: "Idempotencia de los commands POST expuestos distintos de checkout."
+    severity: gap
+    state: decided
+    reason: "decisions.yaml structural tiene entrada de 3.2 para checkout (client-key), mergeCart, addToCart y createProduct (sin idempotencia, con su motivo); los PUT y DELETE son idempotentes por el protocolo. Decidido por el humano el 2026-10-23 (hueco 4). register, cancelOrder y finishOrder tienen su entrada desde la segunda vuelta del cierre."
+  - class: 16
+    unit: "3.3"
+    what: "Caché de las queries."
+    severity: risk
+    state: decided
+    reason: "decisions.yaml structural 3.3: sin caché en ninguna query, decidido por el humano (structural-3-3, 2026-10-23) con el stock cambiando en cada checkout como motivo."
+  - class: 16
+    unit: "3.7"
+    what: "Frontera transaccional y agregados."
+    severity: risk
+    state: decided
+    reason: "decisions.yaml structural 3.7: per-operation (checkout toca carrito, pedido y stock en una transacción) y sin aggregates declarados, aceptado por el humano al cerrar el diseño (2026-10-23)."
+  - class: 16
+    unit: "3.9"
+    what: "Concurrencia: bloqueo optimista, version de updateProduct y ciclo de vida libre de productStatus."
+    severity: risk
+    state: decided
+    reason: "decisions.yaml structural 3.9 tiene tres entradas: optimisticLocking all (structural-3-9), version en updateProduct (hueco 9) y productStatus sin lifecycle (REV-DOMAIN-ENUM-NO-LIFECYCLE), todas del humano el 2026-10-23."
+  - class: 16
+    unit: "3.9b"
+    what: "Auditoría: timestamps y authorship."
+    severity: risk
+    state: decided
+    reason: "decisions.yaml structural 3.9b: timestamps none (observed) y authorship all (elegido por el humano en structural-3-9b, 2026-10-23, sin sacarla en las respuestas)."

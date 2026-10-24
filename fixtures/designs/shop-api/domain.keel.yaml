@@ -1,0 +1,107 @@
+# Capa domain — recuperada de legacy/shop-api (ver provenance.yaml para la evidencia de cada elemento).
+# Aplicadas las respuestas de legacy/shop-api/questions.yaml del 2026-10-23 y las decisiones del cierre (mismo día):
+# gaps.yaml, review.yaml y flow-review.yaml. Segunda vuelta del cierre (2026-10-23): datos, identidad y persistencia.
+
+types:
+  OrderStatus:
+    description: >-
+      Estado de un pedido; el legacy lo guarda como 0, 1 y 2 y aquí viaja con nombre (fix-status-names). Un enum se ordena
+      por la posición de su declaración y no por su nombre: NEW va antes que FINISHED y FINISHED antes que CANCELED
+      (orden que usa listOrders).
+    values: [NEW, FINISHED, CANCELED]
+
+  ProductStatus:
+    description: >-
+      Estado de venta de un producto; el legacy lo guarda como 0 y 1 y aquí viaja con nombre (fix-status-names). UP es a la
+      venta y DOWN fuera de venta; un producto puede pasar de uno a otro sin restricción (sin lifecycle, por decisión).
+    values: [UP, DOWN]
+
+  CartItemInput:
+    description: Línea de carrito tal como la manda el cliente al fusionar su carrito local; el resto de datos de la línea sale del catálogo (fix-cart-client-price).
+    fields:
+      productId: { type: string, required: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" } }
+      count:     { type: int, required: true, constraints: { min: 1, max: 1000000 } }
+
+entities:
+  User:
+    description: Perfil de una persona registrada en la tienda; la identidad y los roles viven en el proveedor OIDC (fix-identity-oidc).
+    fields:
+      id:       { type: long, id: true, generated: true }
+      email:    { type: string, required: true, unique: true, compare: exact, constraints: { minLength: 1, maxLength: 255 }, description: "Es el email de la identidad autenticada y la clave natural del perfil; se compara tal cual, distinguiendo mayúsculas (Bob@x.com y bob@x.com son dos emails distintos), también en la unicidad, en la propiedad y en el filtro por comprador." }
+      name:     { type: string, required: true, constraints: { minLength: 1, maxLength: 255 } }
+      phone:    { type: string, required: true, constraints: { minLength: 1, maxLength: 255 } }
+      address:  { type: string, required: true, constraints: { minLength: 1, maxLength: 255 } }
+      active:   { type: boolean, required: true, default: true, description: "Lo fija el alta a true y ninguna operación lo cambia ni lo lee; el cliente no lo manda (fix-register-active-true)." }
+
+  Cart:
+    description: Carrito de compra de un cliente; existe uno por usuario, creado al registrarse.
+    fields:
+      cartId: { type: long, id: true, computed: Es el id del usuario propietario del carrito. }
+    relations:
+      user:     { entity: User, cardinality: one-to-one, required: true }
+      products: { entity: ProductInOrder, cardinality: one-to-many, description: "Líneas del carrito, a lo sumo una por productId; salen ordenadas por id ascendente." }
+
+  ProductInOrder:
+    description: >-
+      Línea de producto con la copia de sus datos; vive en un carrito y pasa a un pedido al hacer checkout (la misma fila
+      cambia de propietario: deja el carrito y entra en el pedido). Una línea es de un carrito o de un pedido, nunca de los dos.
+    fields:
+      id:                 { type: long, id: true, generated: true }
+      productId:          { type: string, required: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" }, description: "Código del producto de catálogo, por valor y sin integridad referencial; distingue mayúsculas." }
+      productName:        { type: string, required: true, constraints: { maxLength: 255 } }
+      productDescription: { type: string, constraints: { maxLength: 255 }, description: "Copia de la descripción del producto, tal cual: si el producto no tiene, la línea guarda null." }
+      productIcon:        { type: string, constraints: { maxLength: 255 } }
+      categoryType:       { type: int, description: "Copia del tipo de categoría del producto, tal cual: si el producto no lo tiene, la línea guarda null." }
+      productPrice:       { type: decimal, required: true, constraints: { scale: 2, scalePolicy: reject, max: 1000000 } }
+      productStock:       { type: int, required: true, constraints: { min: 0 }, description: "Stock del producto cuando se copió la línea; dato derivado, sin máximo de entrada: la devolución de cancelOrder puede dejar el producto por encima de 1000000 y la copia no se rechaza." }
+      count:              { type: int, required: true, constraints: { min: 1, max: 1000000 } }
+    relations:
+      cart:  { entity: Cart, cardinality: many-to-one, description: "El carrito al que pertenece la línea; vacío cuando la línea ya está en un pedido." }
+      order: { entity: OrderMain, cardinality: many-to-one, description: "El pedido al que pertenece la línea; vacío mientras la línea está en un carrito." }
+
+  OrderMain:
+    description: Pedido de un cliente; guarda una copia de sus datos de contacto y las líneas compradas.
+    fields:
+      orderId:      { type: long, id: true, generated: true }
+      buyerEmail:   { type: string, required: true, constraints: { maxLength: 255 } }
+      buyerName:    { type: string, required: true, constraints: { maxLength: 255 } }
+      buyerPhone:   { type: string, required: true, constraints: { maxLength: 255 } }
+      buyerAddress: { type: string, required: true, constraints: { maxLength: 255 } }
+      orderAmount:  { type: decimal, required: true, constraints: { scale: 2, scalePolicy: reject, max: 1000000000 }, description: "Importe del pedido en una sola moneda, implícita: ningún precio ni importe del servicio lleva moneda. Máximo 1.000.000.000." }
+      orderStatus:  { type: OrderStatus, required: true, default: NEW }
+      createTime:   { type: timestamp, generated: true, description: Instante UTC de alta en ISO-8601 con milisegundos y Z (contrato del cable). }
+      updateTime:   { type: timestamp, generated: true, description: Instante UTC de la última escritura en ISO-8601 con milisegundos y Z (contrato del cable). }
+    relations:
+      products: { entity: ProductInOrder, cardinality: one-to-many, description: "Líneas del pedido; salen ordenadas por id ascendente." }
+    lifecycle:
+      field: orderStatus
+      transitions:
+        NEW:      [FINISHED, CANCELED]
+        FINISHED: []
+        CANCELED: []
+    invariants:
+      - orderAmount es la suma de productPrice por count de las líneas del pedido en el momento del checkout.
+
+  ProductInfo:
+    description: Producto del catálogo; su código lo asigna quien lo da de alta.
+    fields:
+      productId:          { type: string, id: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" }, description: Código del producto; distingue mayúsculas (B0001 y b0001 son dos códigos distintos). }
+      productName:        { type: string, required: true, constraints: { maxLength: 255 } }
+      productPrice:       { type: decimal, required: true, constraints: { scale: 2, scalePolicy: reject, max: 1000000 } }
+      productStock:       { type: int, required: true, constraints: { min: 0, max: 1000000 }, description: "El máximo acota lo que manda quien crea o edita el producto; la devolución de stock de cancelOrder no lo limita y puede dejar el stock por encima." }
+      productDescription: { type: string, constraints: { maxLength: 255 } }
+      productIcon:        { type: string, constraints: { maxLength: 255 } }
+      productStatus:      { type: ProductStatus, required: true, default: UP, description: "Un producto nuevo, o editado sin mandar el estado, queda a la venta (UP); uno DOWN o borrado no se compra (fix-product-not-available)." }
+      categoryType:       { type: int, required: true, description: "Tipo de la categoría, referenciada por valor; obligatorio al crear y se conserva al editar sin mandarlo (fix-product-category-required)." }
+      version:            { type: int, generated: true, description: "Contador de escrituras del producto; vale 0 al crearlo y sube 1 con cada escritura. Es el mismo contador del bloqueo optimista de la raíz (persistence.consistency.optimisticLocking), no otro: updateProduct lo pide para detectar una edición sobre una lectura vieja (fix-update-product-version) y cualquier otra escritura sobre una versión vieja responde 409 CONCURRENT_MODIFICATION." }
+      createTime:         { type: timestamp, generated: true, description: Instante UTC de alta en ISO-8601 con milisegundos y Z (contrato del cable). }
+      updateTime:         { type: timestamp, generated: true, description: Instante UTC de la última escritura en ISO-8601 con milisegundos y Z (contrato del cable). }
+
+  ProductCategory:
+    description: Categoría del catálogo; se identifica por su tipo numérico. Ninguna operación las crea, edita ni borra - se cargan como datos iniciales (seed).
+    fields:
+      categoryId:   { type: int, id: true, generated: true }
+      categoryName: { type: string, constraints: { maxLength: 255 } }
+      categoryType: { type: int, required: true, unique: true }
+      createTime:   { type: timestamp, generated: true }
+      updateTime:   { type: timestamp, generated: true }
