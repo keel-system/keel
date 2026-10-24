@@ -16,7 +16,7 @@ export {
   RECONCILIATION_BATCH_SIZE,
   reconciliationClaimTimeoutMs
 } from 'keel-core/gen/model';
-export { sharedExceptionFor, UUID_V7_CALL } from './java-projection.js';
+export { sharedExceptionFor, UUID_V7_CALL, LONG_ID_CALL } from './java-projection.js';
 
 export function buildModel({ manifest, layers, stack = null }) {
   return interpretDesign({ manifest, layers, stack, projection: JAVA_PROJECTION });

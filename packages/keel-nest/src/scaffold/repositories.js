@@ -17,6 +17,7 @@
 import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, keyShadow, naturalKeyBatchReason, uniqueFields } from 'keel-core/gen';
 import { pluralize } from 'keel-core/gen/naming';
 import { idBatchReason, listedIdQueries } from 'keel-core/gen/ref-targets';
+import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
@@ -284,6 +285,18 @@ function renderPort(model, entity) {
 ` + `  abstract findAllById(ids: readonly ${idType}[]): Promise<${entity.name}[]>;`
     );
   }
+  for (const inverse of inverseFindersOf(model, entity.name)) {
+    const ownerId = model.entities.find((candidate) => candidate.name === inverse.owner)?.idField;
+    const ownerType = ownerId?.tsType ?? 'string';
+    const param = `${inverse.relation}Id`;
+    methods.push(
+      `  /**
+   * Las raíces cuya relación ${inverse.relation} apunta a ese ${inverse.owner}: la colección que su respuesta lleva y que el
+   * agregado ${inverse.owner} no guarda. Una consulta, sea cual sea el número de filas.
+   */
+` + `  abstract ${inverse.finder}(${param}: ${ownerType}): Promise<${entity.name}[]>;`
+    );
+  }
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) imports.push(...param.imports);
@@ -431,6 +444,15 @@ function renderAdapter(model, entity) {
     methods.push(`  async findAllById(ids: readonly ${idType}[]): Promise<${entity.name}[]> {
     if (ids.length === 0) return [];
     const found = await this.manager.find(${ormClass(entity.name)}, ${findOptions(`{ ${idName}: In([...ids]) }`)});
+    return found.map(toDomain${entity.name});
+  }`);
+  }
+  for (const inverse of inverseFindersOf(model, entity.name)) {
+    const ownerId = model.entities.find((candidate) => candidate.name === inverse.owner)?.idField;
+    const ownerType = ownerId?.tsType ?? 'string';
+    const param = `${inverse.relation}Id`;
+    methods.push(`  async ${inverse.finder}(${param}: ${ownerType}): Promise<${entity.name}[]> {
+    const found = await this.manager.find(${ormClass(entity.name)}, ${findOptions(`{ ${param} }`)});
     return found.map(toDomain${entity.name});
   }`);
   }

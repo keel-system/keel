@@ -101,7 +101,7 @@ function renderEntity(model, entity) {
     : '';
   const initial = entity.fields.filter((field) => field.initializer);
   const initialTodo = initial.length
-    ? `\n  // Valores iniciales del diseño: ${initial.map((field) => `${field.name} = ${field.initializer}`).join(', ')}.${initial.some((field) => field.initializer.includes('Uuids.v7()')) ? `\n  // Uuids.v7() vive en ${classPath(DIRS.identity, 'Uuids')}: los ids de una raíz nacen con la versión 7.` : ''}`
+    ? `\n  // Valores iniciales del diseño: ${initial.map((field) => `${field.name} = ${field.initializer}`).join(', ')}.${initial.some((field) => field.initializer.includes('Uuids.v7()')) ? `\n  // Uuids.v7() vive en ${classPath(DIRS.identity, 'Uuids')}: los ids de una raíz nacen con la versión 7.` : ''}${initial.some((field) => field.initializer.includes('LongIds.next()')) ? `\n  // LongIds.next() vive en ${classPath(DIRS.identity, 'LongIds')}: un id long lo crea la aplicación al nacer la raíz.` : ''}`
     : '';
   parts.push(`  // TODO (agente): factory \`static create(...)\` que aplique los invariantes, derive los campos
   // generated/computed y fije el estado inicial del lifecycle. La mutación va por métodos de

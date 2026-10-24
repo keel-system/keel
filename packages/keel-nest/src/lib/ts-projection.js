@@ -41,6 +41,8 @@ const PARAM_TS_TYPES = { string: 'string', int: 'number', long: 'bigint', decima
 
 /** Cómo se crea un uuid que genera el servidor: versión 7, igual que keel-spring. */
 export const UUID_V7_CALL = 'Uuids.v7()';
+/** El id `long` que genera la aplicación (keel-core/gen/ids.js), igual que keel-spring (`LongIds.next()`). */
+export const LONG_ID_CALL = 'LongIds.next()';
 
 function toTs(resolved) {
   if (resolved.kind === 'enum' || resolved.kind === 'composite') {
@@ -64,6 +66,7 @@ function initializer(field, ts) {
   }
   if (field.generated) {
     if (ts.base === 'uuid') return UUID_V7_CALL;
+    if (ts.base === 'long' && field.id) return LONG_ID_CALL;
     if (ts.base === 'timestamp') return 'new Date()';
   }
   return null;

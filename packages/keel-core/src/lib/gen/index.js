@@ -40,7 +40,7 @@ export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher, dispatchNote } from './dispatch.js';
 export { RANGE_OPERATORS, FINDER_PROBE_TEXT, queryFinder, findersOf, criterionText, finderNote, finderTextProbes } from './query-filters.js';
 export { ENTRY_GATE_FIELD, ENTRY_GATES, entryGates, carriesEntryGate, usesEntryGate, entryGateNote, entryGateFor } from './entry-gates.js';
-export { ownershipRulesOf, ownershipNotes } from './ownership.js';
+export { ownershipRulesOf, ownershipNotes, usesCallerRoles } from './ownership.js';
 export { CONTRACT_DOCS, contractDocs } from './contract-docs.js';
 export {
   HTTP_STUB_ADMIN,

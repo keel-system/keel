@@ -23,7 +23,7 @@ import { mapperClasses } from './mappers.js';
 import { projectionClasses, projectionNamespace } from './projections.js';
 import { resolverClasses } from './ref-resolvers.js';
 import { contractOf, messageNamespace } from './services.js';
-import { securityNamespace, usesCallerScope } from './security.js';
+import { securityNamespace, usesCallerScope, usesRoleCheck } from './security.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from './service-parameters.js';
 import { clientAdaptersNamespace, usesHttpClients } from './http-clients.js';
 import { mailInfraNamespace, usesMail } from './mail.js';
@@ -412,7 +412,9 @@ function useCasesTest(model) {
   // Con alcance por recurso, los handlers que declaran su error lo reciben: el registro real, sin la entrada HTTP.
   const scope = usesCallerScope(model);
   if (scope) usings.push(securityNamespace(model));
-  const scopeLine = scope ? '\n        services.AddCallerScope();' : '';
+  const roles = usesRoleCheck(model);
+  if (roles && !scope) usings.push(securityNamespace(model));
+  const scopeLine = (scope ? '\n        services.AddCallerScope();' : '') + (roles ? '\n        services.AddCallerRoles();' : '');
   // Con parámetros de despliegue, los que reciben (el rescate que lee su plazo de uno) los tienen con su valor de prueba.
   const parameters = usesServiceParameters(model);
   if (parameters) usings.push(parametersNamespace(model));

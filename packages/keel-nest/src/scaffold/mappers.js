@@ -112,6 +112,13 @@ function renderMethod(model, entity, dto, imports) {
   const refFields = dto.fields.filter((field) => field.kind === 'refDto');
   const needFields = dto.fields.filter((field) => field.kind === 'needDto');
   const parentFields = dto.fields.filter((field) => field.kind === 'parentId');
+  // Las filas de OTRA raíz que la respuesta lleva, leídas por su FK inversa (keel-core/gen/inverse-collections.js): el
+  // agregado no las guarda, así que entran como parámetro, como un RefDto. Las mapea el método de su DTO.
+  const inverseFields = dto.fields.filter((field) => field.kind === 'childDto' && field.inverse);
+  for (const inverse of inverseFields) {
+    const target = model.entities.find((candidate) => candidate.name === inverse.childEntity);
+    if (target) imports.push({ symbol: target.name, from: classPath(entityDir(target), target.name), type: true });
+  }
   // Con recorte el campo es una variante <E>SummaryDto, pero el parámetro sigue siendo el <E>RefDto
   // completo que da el resolver: el recorte se hace aquí.
   const refParamType = (ref) => {
@@ -128,7 +135,8 @@ function renderMethod(model, entity, dto, imports) {
     `entity: ${entity.name}`,
     ...refFields.map((ref) => `${ref.name}: ${refParamType(ref)}`),
     ...needFields.map((need) => `${need.name}: ${declType(need)}`),
-    ...parentFields.map((parent) => `${parent.name}: ${declType(parent)}`)
+    ...parentFields.map((parent) => `${parent.name}: ${declType(parent)}`),
+    ...inverseFields.map((inverse) => `${inverse.name}: readonly ${inverse.childEntity}[]`)
   ].join(', ');
 
   const gettable = new Set(domainMembers(model, entity).map((m) => m.name));
@@ -140,6 +148,7 @@ function renderMethod(model, entity, dto, imports) {
   const values = dto.fields.map((field) => {
     if (field.kind === 'refDto' && field.refSource) return `${field.tsType}.from(${field.name})`;
     if (field.kind === 'refDto' || field.kind === 'needDto' || field.kind === 'parentId') return field.name;
+    if (field.kind === 'childDto' && field.inverse) return `${field.name}.map((row) => this.to${field.elementTsType}(row))`;
     if (!gettable.has(field.name)) return todo(`${field.name} no es getter directo de ${entity.name}; mapéalo (¿subcampo de value object?)`);
     const getter = `entity.${field.name}`;
     // Un `file` de bucket público expone la URL, no la key: la resuelve FileStorage con el bucket del diseño (sus

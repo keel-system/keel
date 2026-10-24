@@ -35,7 +35,7 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Lo que tr
 | `bearer(token)` | la cabecera `Authorization` de un token (solo con capa `security`) |
 | `tokenFor(rol, n?)` | token de usuario del rol; `n = 2` es el segundo usuario del mismo rol (titularidad) y `tokenFor('no-role')` el autenticado sin roles |
 | `serviceCredential(cliente)` | token `client_credentials` de un cliente del diseño o de la matriz `test-m2m-*`; con `serviceAuth: api-key`, su clave |
-| `tokenAs(sub, claims?, rol?)` | una persona con el `sub` exacto del escenario y sus claims (`null` quita uno); solo cuando la identidad del llamante es el claim `sub`, con Keycloak |
+| `tokenAs(sub, claims?, rol?)` | una persona con el `sub` exacto del escenario y sus claims (`null` quita uno); cuando la identidad del llamante es un claim (`sub`, `email`…), con Keycloak |
 | `scopedResource()` | el recurso al que alcanzan los usuarios no exentos del alcance por recurso |
 | `tokenWithScope(rol, ...valores)` | un usuario del rol cuyo claim del alcance enumera EXACTAMENTE esos valores (ninguno: sin el claim), para «un titular con `vaults = ["OTRO"]`»; solo con alcance por recurso y Keycloak. No es un `designGap` ni se arregla editando el realm |
 | `apiKey()` | la clave del perfil local con `protocol: api-key` |
@@ -49,6 +49,8 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Lo que tr
 | `await abandonOutboxEvent(evento)`, `clearAbandonedOutboxEvents()` | agota los reintentos de un evento pendiente (la rendición, sin esperar 40 intentos) y lo retira después |
 | `await pauseOutboxRelay()` / `resumeOutboxRelay()` | deja filas pendientes sin entregar mientras el escenario lo necesite |
 | `queryCount()` / `queryExecutions()` | las sentencias SQL que han emitido las peticiones HTTP (solo con API y persistencia relacional): para los `Then` de **coste**. `queryCount()` cuenta lecturas y escrituras; `queryExecutions()`, solo lecturas, y es la que va cuando el When **escribe**. El relay, las purgas y los barridos no cuentan: corren fuera de una petición. Ver § Afirmar el coste |
+
+**Un actor con identidad concreta pide su token con la persona, nunca con el realm.** Si el escenario nombra al actor por el valor de su identidad (un `sub`, un email como `customer1@email.com`, un token sin email), ese valor va en los claims de la persona con su rol. No se cambian los usuarios de `infra/init-keycloak.sh` ni el realm: son de build, se regeneran, y los escenarios de otro flujo cuentan con ellos tal cual (en la corrida de control de shop-api el agente de pruebas metió los emails del seed en el script y `--refresh` lo habría pisado).
 
 Las credenciales salen de `infra/test-credentials.env` (lo escribe build junto a `init-keycloak.sh`):
 **no escribas ningún secreto, cliente ni usuario a mano**. Y pide el token **en cada petición**

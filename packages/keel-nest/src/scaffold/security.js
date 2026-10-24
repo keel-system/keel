@@ -19,6 +19,7 @@
 //     (`scoping`) como un puerto de la aplicación con su adaptador.
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import { usesCallerRoles, ownershipRulesOf } from 'keel-core/gen/ownership';
 import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
 import { accessPlan, audienceOf, tokenClaims, usesTokenProtocol } from 'keel-core/gen/access-plan';
 import { classPath, DIRS, tsModule, tsString } from './render.js';
@@ -37,6 +38,8 @@ export const CORS_POLICY_TS = `${DIR}/cors-policy.ts`;
 export const HTTP_SECURITY_TS = `${DIR}/http-security.ts`;
 export const CALLER_IDENTITY_TS = `${DIR}/caller-identity.ts`;
 export const JWT_CALLER_SCOPE_TS = `${DIR}/jwt-caller-scope.ts`;
+export const CALLER_ROLES_TS = classPath(DIRS.appSupport, 'CallerRoles');
+export const JWT_CALLER_ROLES_TS = `${DIR}/jwt-caller-roles.ts`;
 export const SECURITY_MODULE_TS = `${DIR}/security-module.ts`;
 export const CALLER_SCOPE_TS = classPath(DIRS.appSupport, 'CallerScope');
 const CONFIGURATION_TS = 'src/infrastructure/config/configuration.ts';
@@ -111,7 +114,17 @@ export function callerResolution(model) {
 
 /** ¿Hay módulo de seguridad? Con el alcance por recurso o con la resolución de la identidad del llamante. */
 export function usesSecurityModule(model) {
-  return usesCallerScope(model) || callerResolution(model) != null;
+  return usesCallerScope(model) || usesRoleCheck(model) || callerResolution(model) != null;
+}
+
+/** ¿Emite CallerRoles? Con una regla de propiedad que declara exentos (keel-core/gen/ownership.js) y un token que leer. */
+export function usesRoleCheck(model) {
+  return Boolean(usesJwt(model) && usesCallerRoles(model));
+}
+
+/** Las operaciones cuyo handler recibe CallerRoles: las de una regla de propiedad con exentos. */
+export function roleCheckedOperation(model, operation) {
+  return usesRoleCheck(model) && ownershipRulesOf(model, operation).some((rule) => rule.exemptRoles.length > 0);
 }
 
 export function usesCallerScope(model) {
@@ -136,6 +149,7 @@ export function generate(model) {
   if (model.security?.cors) files.push({ path: CORS_POLICY_TS, content: corsPolicy(model) });
   if (usesCallerIdentity(model)) files.push({ path: CALLER_IDENTITY_TS, content: callerIdentity(model) });
   if (usesCallerScope(model)) files.push(...callerScope(model));
+  if (usesRoleCheck(model)) files.push(...callerRoles());
   if (usesSecurityModule(model)) files.push({ path: SECURITY_MODULE_TS, content: securityModuleFile(model) });
   files.push(...configFragments(model));
   return files;
@@ -792,7 +806,8 @@ export const CallerIdentity = {
     }
 ${extract}
     if (value == null || value.trim() === '') {
-      throw new Error("La credencial no identifica ningún recurso para '${identity.field}'.");
+      // Un token válido sin el claim de la identidad no identifica a nadie: es un 401, no un fallo del servidor.
+      throw new UnauthorizedException('${FW.unauthenticated.message}', { code: '${FRAMEWORK_ERRORS.unauthenticated.code}', httpStatus: ${FW.unauthenticated.status} });
     }
     return value;
   }
@@ -805,7 +820,8 @@ function text(value: unknown): string | null {
   return null;
 }`;
   const resolution = callerResolution(model);
-  if (!resolution) return tsModule(CALLER_IDENTITY_TS, [{ symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS }], body);
+  const unauthorized = { symbol: 'UnauthorizedException', from: classPath(DIRS.errors, 'UnauthorizedException') };
+  if (!resolution) return tsModule(CALLER_IDENTITY_TS, [{ symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS }, unauthorized], body);
   const resolver = `
 
 /**
@@ -836,6 +852,7 @@ export class CallerIdentityResolver {
       { symbol: 'Inject', from: '@nestjs/common' },
       { symbol: 'Injectable', from: '@nestjs/common' },
       { symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS },
+      unauthorized,
       { symbol: resolution.port, from: resolution.portPath }
     ],
     body + resolver
@@ -921,6 +938,34 @@ function textClaim(value: unknown): string | null {
   ];
 }
 
+// ─── Los roles del llamante (exentos de security.ownership): CallerRoles ─────
+
+function callerRoles() {
+  const port = `/**
+ * Los roles del llamante en la petición en curso, para las exenciones de una regla de propiedad (security.ownership):
+ * quien tiene un rol exento opera sobre cualquier recurso. Es un puerto para que los handlers no sepan de tokens; lo
+ * implementa JwtCallerRoles en infrastructure. Solo tiene sentido dentro de una petición HTTP.
+ */
+export abstract class CallerRoles {
+  /** ¿Tiene el llamante este rol del diseño (\`employee\`)? */
+  abstract has(role: string): boolean;
+}`;
+  const adapter = `/** Los roles del llamante leídos de las authorities del principal en curso: el rol \`x\` es \`ROLE_x\`, como en keel-spring. */
+export class JwtCallerRoles extends CallerRoles {
+  has(role: string): boolean {
+    const principal = SecurityContext.current();
+    return principal != null && principal.authorities.has(\`ROLE_\${role}\`);
+  }
+}`;
+  return [
+    { path: CALLER_ROLES_TS, content: tsModule(CALLER_ROLES_TS, [], port) },
+    {
+      path: JWT_CALLER_ROLES_TS,
+      content: tsModule(JWT_CALLER_ROLES_TS, [{ symbol: 'CallerRoles', from: CALLER_ROLES_TS }, { symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS }], adapter)
+    }
+  ];
+}
+
 // ─── security-module.ts ──────────────────────────────────────────────────────
 
 /**
@@ -939,6 +984,11 @@ function securityModuleFile(model) {
     imports.push({ symbol: 'CallerScope', from: CALLER_SCOPE_TS }, { symbol: 'JwtCallerScope', from: JWT_CALLER_SCOPE_TS });
     providers.push('{ provide: CallerScope, useClass: JwtCallerScope }');
     exported.push('CallerScope');
+  }
+  if (usesRoleCheck(model)) {
+    imports.push({ symbol: 'CallerRoles', from: CALLER_ROLES_TS }, { symbol: 'JwtCallerRoles', from: JWT_CALLER_ROLES_TS });
+    providers.push('{ provide: CallerRoles, useClass: JwtCallerRoles }');
+    exported.push('CallerRoles');
   }
   if (callerResolution(model)) {
     imports.push({ symbol: 'CallerIdentityResolver', from: CALLER_IDENTITY_TS });

@@ -115,6 +115,13 @@ function renderMethod(model, entity, dto, usings, state) {
   const refFields = dto.fields.filter((field) => field.kind === 'refDto');
   const needFields = dto.fields.filter((field) => field.kind === 'needDto');
   const parentFields = dto.fields.filter((field) => field.kind === 'parentId');
+  // Las filas de OTRA raíz que la respuesta lleva, leídas por su FK inversa (keel-core/gen/inverse-collections.js): el
+  // agregado no las guarda, así que entran como parámetro, como un RefDto.
+  const inverseFields = dto.fields.filter((field) => field.kind === 'childDto' && field.inverse);
+  for (const inverse of inverseFields) {
+    const target = model.entities.find((candidate) => candidate.name === inverse.childEntity);
+    if (target) usings.push(namespaceOf(model, entityPlace(target)));
+  }
   // Con recorte el campo es una variante <E>SummaryDto, pero el parámetro sigue siendo el <E>RefDto completo que
   // da el resolver: el recorte se hace aquí.
   const refParamType = (ref) => {
@@ -130,7 +137,8 @@ function renderMethod(model, entity, dto, usings, state) {
     `${entity.name} entity`,
     ...refFields.map((ref) => `${refParamType(ref)} ${csLocal(ref.name)}`),
     ...needFields.map((need) => `${declType(need)} ${csLocal(need.name)}`),
-    ...parentFields.map((parent) => `${declType(parent)} ${csLocal(parent.name)}`)
+    ...parentFields.map((parent) => `${declType(parent)} ${csLocal(parent.name)}`),
+    ...inverseFields.map((inverse) => `IReadOnlyList<${inverse.childEntity}> ${csLocal(inverse.name)}`)
   ].join(', ');
 
   const members = new Map(domainMembers(model, entity).map((member) => [member.name, member]));
@@ -146,6 +154,7 @@ function renderMethod(model, entity, dto, usings, state) {
       return isNullable(field) ? `${csLocal(field.name)} is null ? null : ${variant}` : variant;
     }
     if (field.kind === 'refDto' || field.kind === 'needDto' || field.kind === 'parentId') return csLocal(field.name);
+    if (field.kind === 'childDto' && field.inverse) return `[.. ${csLocal(field.name)}.Select(row => To${field.elementCsType}(row))]`;
     const member = members.get(field.name);
     if (!member) return todo(field, `${field.name} no es miembro directo de ${entity.name}; mapéalo (¿subcampo de value object?)`);
     const getter = `entity.${csMember(member.name)}`;

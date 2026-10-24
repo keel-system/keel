@@ -13,6 +13,7 @@
 //     `declared`— y `updated_*` se estampa en cada escritura. Guardar es un `$set` del documento entero y no un
 //     reemplazo, para que lo que el dominio no lleva (la auditoría de política) no se pierda.
 
+import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
 import { persistedMembers, collectInternalEntities, LOCK_VERSION, RANGE_OPERATORS, orderingFieldOf, orderingTieBreakerOf, claimsForEntity } from 'keel-core/gen';
 import { documentShape, DOCUMENT_ID } from 'keel-core/gen/document';
 import { snakeCase } from 'keel-core/gen/naming';
@@ -427,6 +428,19 @@ export function renderDocumentAdapter(model, entity) {
             return [];
         }
         var found = await Find(new BsonDocument(${csString(DOCUMENT_ID)}, new BsonDocument("$in", new BsonArray(keys.Select(key => ${idValue}))))).ToListAsync(cancellationToken);
+        return [.. found.Select(ToDomain${entity.name})];
+    }`);
+  }
+  for (const inverse of inverseFindersOf(model, entity.name)) {
+    const ownerId = model.entities.find((candidate) => candidate.name === inverse.owner)?.idField;
+    const ownerType = ownerId?.csType ?? 'Guid';
+    const param = csLocal(`${inverse.relation}Id`);
+    const finder = `${inverse.finder[0].toUpperCase()}${inverse.finder.slice(1)}`;
+    const field = `${inverse.relation.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}_id`;
+    const value = ownerId ? writeScalar(ownerId, param) : `BsonValues.Of(${param})`;
+    methods.push(`    public async Task<IReadOnlyList<${entity.name}>> ${finder}(${ownerType} ${param}, CancellationToken cancellationToken = default)
+    {
+        var found = await Find(new BsonDocument(${csString(field)}, ${value})).ToListAsync(cancellationToken);
         return [.. found.Select(ToDomain${entity.name})];
     }`);
   }

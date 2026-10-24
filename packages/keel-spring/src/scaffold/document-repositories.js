@@ -32,6 +32,9 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import { DOC_PKG } from './document-entities.js';
 import { documentValueObjects } from './document-embeddables.js';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
+import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
+import { inverseAdapterMethods } from './repositories.js';
+import { refIdJava } from './persistence-members.js';
 import { finderFields, mongoFinderMethods } from './finders.js';
 import { textFoldImport } from './text-fold.js';
 
@@ -94,6 +97,12 @@ function renderMongoRepository(model, entity) {
     for (const name of batchFinder.imports) imports.add(name);
     methods += `\n\n    List<${entity.name}Document> ${batchFinder.name}(${batchFinder.signature});`;
   }
+  for (const inverse of inverseFindersOf(model, entity.name)) {
+    const owner = refIdJava(model, inverse.owner);
+    imports.add('java.util.List');
+    for (const name of owner.imports) imports.add(name);
+    methods += `\n\n    List<${entity.name}Document> ${inverse.finder}(${owner.javaType} ${inverse.relation}Id);`;
+  }
 
   const body = `public interface ${entity.name}MongoRepository extends MongoRepository<${entity.name}Document, ${id.javaType}> {${methods}\n}`;
 
@@ -136,6 +145,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return ${repoField}.findAllById(ids).stream().map(this::toDomain).toList();
     }`);
   }
+  methods.push(...inverseAdapterMethods(model, entity, repoField, imports));
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);

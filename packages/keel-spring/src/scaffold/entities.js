@@ -7,7 +7,8 @@
 // que escribe el agente. La persistencia vive aparte en
 // infrastructure/persistence (XxxJpa + adaptador).
 
-import { usesUuids, uuidsImport } from './ids.js';
+import { idHelperImports } from './ids.js';
+import { refIdJava } from './persistence-members.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 
 // Subpaquete de una entidad de dominio según su rol en el agregado.
@@ -47,7 +48,7 @@ export function domainMembers(model, entity) {
     if (relation.backReference) continue;
     const toMany = relation.cardinality === 'one-to-many' || relation.cardinality === 'many-to-many';
     if (!relation.internal && model.layersPresent.persistence) {
-      members.push({ kind: 'externalRef', relation, name: `${relation.name}Id`, javaType: 'UUID' });
+      members.push({ kind: 'externalRef', relation, name: `${relation.name}Id`, ...refIdJava(model, relation.entity) });
     } else {
       members.push({
         kind: toMany ? 'relationMany' : 'relationOne',
@@ -82,13 +83,13 @@ function renderEntity(model, entity) {
         lines.push(`    private ${field.javaType} ${field.name} = new ArrayList<>();`);
       } else {
         const init = field.initializer ? ` = ${field.initializer}` : '';
-        if (usesUuids(field.initializer)) imports.add(uuidsImport(model));
+        for (const imported of idHelperImports(model, field.initializer)) imports.add(imported);
         lines.push(`    private ${field.javaType} ${field.name}${init};`);
       }
     } else if (member.kind === 'externalRef') {
-      imports.add('java.util.UUID');
+      for (const imported of member.imports) imports.add(imported);
       lines.push(`    // Referencia a la raíz del agregado ${member.relation.entity} (otro agregado: solo el id).`);
-      lines.push(`    private UUID ${member.name};`);
+      lines.push(`    private ${member.javaType} ${member.name};`);
     } else {
       imports.add(relatedImport(model, member.relation.entity));
       if (member.kind === 'relationMany') {

@@ -10,6 +10,7 @@ import { textFilterNotes } from 'keel-core/gen/text-filters';
 import { finderNote } from 'keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
 import { listedIdsNote } from 'keel-core/gen/ref-targets';
+import { inverseCollectionsNote } from 'keel-core/gen/inverse-collections';
 import { uploadNotes } from 'keel-core/gen/buckets';
 import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
 import {
@@ -545,6 +546,8 @@ function renderHandler(model, service, operation) {
   const repositoryOf = `${operation.responseDto?.entity ?? ''}Repository`;
   const listed = listedIdsNote(model, operation, { call: `${repositoryOf[0].toLowerCase()}${repositoryOf.slice(1)}.findAllById(query.{ids}())` });
   if (listed) notes.push(listed);
+  const inverse = inverseCollectionsNote(operation, { port: (name) => `${name[0].toLowerCase()}${name.slice(1)}Repository`, id: '<id del agregado>' });
+  if (inverse) notes.push(inverse);
   for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge) })) notes.push(note);
   for (const text of operation.preconditions) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules) notes.push(`Regla (en orden): ${text}`);
@@ -559,7 +562,10 @@ function renderHandler(model, service, operation) {
   // USARLO, en el punto que dicen las reglas, y los finders acotados de los listados.
   // La propiedad (DSL 2.23): nota neutral, la misma en los tres generadores.
   const ownerParam = operation.messageKind === 'query' ? 'query' : 'command';
-  for (const note of ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field}()` })) notes.push(note);
+  // Los exentos se comprueban con CallerRoles (application.support), que build genera junto al adaptador JWT.
+  const ownership = ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field}()`, hasRole: (role) => `callerRoles.has("${role}")` });
+  for (const note of ownership) notes.push(note);
+  if (ownership.some((note) => note.includes('callerRoles.has'))) notes.push('Inyecta CallerRoles (application.support) en este handler: es como se sabe el rol del llamante sin importar Spring Security.');
   const scoping = model.security?.scoping;
   if (scoping && operation.errors.includes(scoping.error)) {
     notes.push(

@@ -25,7 +25,7 @@ import { FRAMEWORK_ERRORS } from 'keel-core';
 import { idempotencyOutcomeCode } from 'keel-core/gen';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_PORT, idempotencyNamespace, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
-import { CALLER_SCOPE_PORT, callerResolution, scopedOperation } from './security.js';
+import { CALLER_SCOPE_PORT, CALLER_ROLES_PORT, callerResolution, roleCheckedOperation, scopedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
 import { callMethod, clientPort, clientsNamespace } from './http-clients.js';
 import { mailNamespace, mailPorts, sendsMail } from './mail.js';
@@ -33,6 +33,7 @@ import { OPERATION_CACHE_PORT, cacheCall, cachesOperation } from './cache.js';
 import { cacheNote } from 'keel-core/gen/cache-plan';
 import { projectionNamespace, projectionNotes, projectionsFedBy, readerLocal } from './projections.js';
 import { refTargetsOf, listedIdsNote } from 'keel-core/gen/ref-targets';
+import { inverseCollectionsNote } from 'keel-core/gen/inverse-collections';
 import { resolverClass } from './ref-resolvers.js';
 import { usesPersistence } from './persistence.js';
 import { naturalKeyBatchFinder } from './repositories.js';
@@ -305,6 +306,11 @@ function renderHandler(model, operation) {
     usings.push(namespaceOf(model, 'appSupport'));
     dependencies.push(CALLER_SCOPE_PORT);
   }
+  // Los exentos de una regla de propiedad: el puerto ya está generado con su adaptador.
+  if (roleCheckedOperation(model, operation)) {
+    usings.push(namespaceOf(model, 'appSupport'));
+    dependencies.push(CALLER_ROLES_PORT);
+  }
   // El despacho de otro caso de uso (use-cases.dispatches, DSL 2.21): el diseño dice que esta operación ejecuta
   // otra, así que recibe el puerto delante y la nota de cómo. El mismo criterio que keel-spring y keel-nest.
   if ((operation.dispatches ?? []).length > 0) {
@@ -420,7 +426,7 @@ function handlerNotes(model, operation) {
   }
   // La propiedad (DSL 2.23): nota neutral, la misma en los tres generadores.
   const ownerParam = operation.messageKind === 'query' ? 'query' : 'command';
-  for (const note of ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field[0].toUpperCase()}${field.slice(1)}` })) notes.push(note);
+  for (const note of ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field[0].toUpperCase()}${field.slice(1)}`, hasRole: (role) => `callerRoles.Has("${role}")` })) notes.push(note);
   const scoping = model.security?.scoping;
   if (scopedOperation(model, operation)) {
     const exempt = [...scoping.exemptRoles, ...(scoping.exemptClients ?? []).map((client) => `cliente ${client}`)];
@@ -643,6 +649,9 @@ function embedNotes(model, operation) {
   const repository = operation.responseDto?.entity ? `${operation.responseDto.entity[0].toLowerCase()}${operation.responseDto.entity.slice(1)}Repository` : 'repository';
   const listed = listedIdsNote(model, operation, { call: `await ${repository}.FindAllById(query.{ids}, cancellationToken)` });
   if (listed) notes.push(listed);
+  // Los finders del puerto van en PascalCase en C#: FindAllByCartId.
+  const inverse = inverseCollectionsNote(operation, { port: (name) => `await ${name[0].toLowerCase()}${name.slice(1)}Repository`, id: '<id del agregado>, cancellationToken' });
+  if (inverse) notes.push(inverse.replace(/.findAllBy/g, '.FindAllBy'));
   return notes;
 }
 

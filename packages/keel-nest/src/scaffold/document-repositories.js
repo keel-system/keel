@@ -16,6 +16,7 @@
 //     lo que el dominio no lleva (la auditoría de política) no se pierda.
 
 import { persistedMembers, collectInternalEntities, LOCK_VERSION, orderingFieldOf, orderingTieBreakerOf } from 'keel-core/gen';
+import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
 import { documentShape, DOCUMENT_ID, storageOf } from 'keel-core/gen/document';
 import { screamingSnake, snakeCase } from 'keel-core/gen/naming';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
@@ -429,6 +430,17 @@ export function renderDocumentAdapter(model, entity) {
     const found = await this.collection
       .find({ ${DOCUMENT_ID}: { $in: ids.map((value) => ${id ? writeScalar(id, 'value', use) : 'value'}) } }, { session: this.session })
       .toArray();
+    return found.map(toDomain${entity.name});
+  }`);
+  }
+  // La FK inversa es el campo `<relación>_id` del documento, escrito como el id de su dueño.
+  for (const inverse of inverseFindersOf(model, entity.name)) {
+    const ownerId = model.entities.find((candidate) => candidate.name === inverse.owner)?.idField;
+    const ownerType = ownerId?.tsType ?? 'string';
+    const param = `${inverse.relation}Id`;
+    const field = `${inverse.relation.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}_id`;
+    methods.push(`  async ${inverse.finder}(${param}: ${ownerType}): Promise<${entity.name}[]> {
+    const found = await this.collection.find({ ${field}: ${ownerId ? writeScalar(ownerId, param, use) : param} }, { session: this.session }).toArray();
     return found.map(toDomain${entity.name});
   }`);
   }

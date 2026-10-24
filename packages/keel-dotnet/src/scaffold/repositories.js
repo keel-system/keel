@@ -12,6 +12,7 @@
 // el agregado es el valor ORIGINAL del token de concurrencia y la fila sube a la siguiente: EF escribe
 // `UPDATE … WHERE lock_version = @leída`, y cero filas es otra escritura que ganó (un 409).
 
+import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
 import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
 import {
   persistedMembers,
@@ -273,6 +274,13 @@ function renderPort(model, entity) {
   if (idBatchReason(model, entity)) {
     methods.push(`${xmlDoc('Los agregados de varios id en UNA consulta; los que no existen no están. El orden no está garantizado.', '    ')}    Task<IReadOnlyList<${entity.name}>> FindAllById(IReadOnlyCollection<${idType}> ids, CancellationToken cancellationToken = default);`);
   }
+  for (const inverse of inverseFindersOf(model, entity.name)) {
+    const ownerId = model.entities.find((candidate) => candidate.name === inverse.owner)?.idField;
+    const ownerType = ownerId?.csType ?? 'Guid';
+    const param = csLocal(`${inverse.relation}Id`);
+    const finder = `${inverse.finder[0].toUpperCase()}${inverse.finder.slice(1)}`;
+    methods.push(`${xmlDoc(`Los ${entity.name} cuya relación ${inverse.relation} apunta a ese ${inverse.owner}: la colección que su respuesta lleva y que el agregado ${inverse.owner} no guarda. Una consulta, sea cual sea el número de filas.`, '    ')}    Task<IReadOnlyList<${entity.name}>> ${finder}(${ownerType} ${param}, CancellationToken cancellationToken = default);`);
+  }
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) usings.push(...param.usings);
@@ -419,6 +427,18 @@ function renderAdapter(model, entity) {
             return [];
         }
         var found = await Graph().AsNoTracking().Where(r => keys.Contains(r.${idProp})).ToListAsync(cancellationToken);
+        return [.. found.Select(ToDomain)];
+    }`);
+  }
+  // La FK inversa es la columna de la referencia (`<Relación>Id` en la fila).
+  for (const inverse of inverseFindersOf(model, entity.name)) {
+    const ownerId = model.entities.find((candidate) => candidate.name === inverse.owner)?.idField;
+    const ownerType = ownerId?.csType ?? 'Guid';
+    const param = csLocal(`${inverse.relation}Id`);
+    const finder = `${inverse.finder[0].toUpperCase()}${inverse.finder.slice(1)}`;
+    methods.push(`    public async Task<IReadOnlyList<${entity.name}>> ${finder}(${ownerType} ${param}, CancellationToken cancellationToken = default)
+    {
+        var found = await Graph().AsNoTracking().Where(r => r.${csMember(`${inverse.relation}Id`)} == ${param}).ToListAsync(cancellationToken);
         return [.. found.Select(ToDomain)];
     }`);
   }

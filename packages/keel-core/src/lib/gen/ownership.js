@@ -18,7 +18,17 @@ export function ownershipRulesOf(model, operation) {
  * lenguaje del generador el campo del mensaje que lleva la identidad del llamante (`command.callerSubject()`,
  * `command.callerSubject`, `command.CallerSubject`).
  */
-export function ownershipNotes(model, operation, { read }) {
+/**
+ * ¿Hace falta el puerto CallerRoles (`has(rol)`)? Cuando alguna regla de propiedad declara exentos: el handler tiene que
+ * saber si el llamante tiene ese rol, y la capa de aplicación no ve el token. Hasta la corrida de control de shop-api los tres
+ * generadores escribían la nota «exentos: el rol employee» sin camino para comprobarlo, y el agente de código de keel-dotnet
+ * añadió el puerto, su adaptador y su registro a mano.
+ */
+export function usesCallerRoles(model) {
+  return (model.security?.ownership ?? []).some((rule) => (rule.exemptRoles ?? []).length > 0);
+}
+
+export function ownershipNotes(model, operation, { read, hasRole = null }) {
   const caller = model.security?.callerIdentity?.field;
   if (!caller) return [];
   return ownershipRulesOf(model, operation).map((rule) => {
@@ -26,7 +36,7 @@ export function ownershipNotes(model, operation, { read }) {
       ? `sigue ${rule.relations.join(' → ')} hasta ${rule.field} (${rule.owner})`
       : `su campo ${rule.field}`;
     const exempt = rule.exemptRoles.length
-      ? ` Exentos, que operan sobre cualquier ${rule.entity}: ${rule.exemptRoles.map((role) => `el rol ${role}`).join(', ')}.`
+      ? ` Exentos, que operan sobre cualquier ${rule.entity}: ${rule.exemptRoles.map((role) => `el rol ${role}`).join(', ')}${hasRole ? ` (compruébalo con ${rule.exemptRoles.map(hasRole).join(' || ')}, que build ya generó)` : ''}.`
       : '';
     return (
       `Propiedad (security.ownership.${rule.entity}): solo el dueño del ${rule.entity} ejecuta esta operación. Carga el ` +

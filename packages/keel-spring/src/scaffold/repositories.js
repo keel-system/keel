@@ -8,6 +8,8 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, domainTypeImport, capitalize } from './entities.js';
 import { jpaMembers, backReferenceTo, JPA_PKG } from './persistence-entities.js';
 import { idBatchReason, listedIdQueries } from 'keel-core/gen/ref-targets';
+import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
+import { refIdJava } from './persistence-members.js';
 import { pluralize } from '../lib/naming.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
@@ -329,6 +331,7 @@ export function renderPort(model, entity, paginated, batchLookup) {
      */
     List<${entity.name}> findAllById(Collection<${id.javaType}> ids);`);
   }
+  methods.push(...inversePortMethods(model, entity, imports));
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
@@ -473,6 +476,13 @@ function renderJpaRepository(model, entity) {
 
 ${graph}    Optional<${entity.name}Jpa> ${credential.name}(${credential.javaType} ${credential.field.replace(/s$/, '')});`;
   }
+  for (const inverse of inverseFindersOf(model, entity.name)) {
+    const owner = refIdJava(model, inverse.owner);
+    imports.add('java.util.List');
+    for (const name of owner.imports) imports.add(name);
+    // Derivado sobre la columna de la FK inversa (`<relación>Id`), que es un miembro del espejo.
+    methods += `\n\n    List<${entity.name}Jpa> ${inverse.finder}(${owner.javaType} ${inverse.relation}Id);`;
+  }
   const batchFinder = naturalKeyBatchFinder(model, entity);
   if (batchFinder) {
     imports.add('java.util.Collection');
@@ -547,6 +557,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return ${jpaField}.findAllById(ids).stream().map(this::toDomain).toList();
     }`);
   }
+  methods.push(...inverseAdapterMethods(model, entity, jpaField, imports));
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
@@ -963,4 +974,34 @@ function renderToJpa(model, entity, imports, needsFactory = false) {
   return `${factory}    private void applyToJpa(${entity.name} domain, ${entity.name}Jpa jpa) {
 ${lines.join('\n')}
     }`;
+}
+
+/**
+ * Los finders por la FK INVERSA que gana el puerto de esta raíz (keel-core/gen/inverse-collections.js): las filas que otra
+ * raíz proyecta como su colección (`Cart.products` → `ProductInOrder.cart`), leídas por lote y no una a una.
+ */
+export function inversePortMethods(model, entity, imports) {
+  return inverseFindersOf(model, entity.name).map((inverse) => {
+    const owner = refIdJava(model, inverse.owner);
+    imports.add('java.util.List');
+    for (const name of owner.imports) imports.add(name);
+    return `    /**
+     * Las raíces cuya relación ${inverse.relation} apunta a ese ${inverse.owner}: la colección que su respuesta lleva y que el
+     * agregado ${inverse.owner} no guarda. Una consulta, sea cual sea el número de filas.
+     */
+    List<${entity.name}> ${inverse.finder}(${owner.javaType} ${inverse.relation}Id);`;
+  });
+}
+
+/** Su implementación en un adaptador (relacional o documental), delegando en el finder derivado del almacén. */
+export function inverseAdapterMethods(model, entity, storeField, imports) {
+  return inverseFindersOf(model, entity.name).map((inverse) => {
+    const owner = refIdJava(model, inverse.owner);
+    imports.add('java.util.List');
+    for (const name of owner.imports) imports.add(name);
+    return `    @Override
+    public List<${entity.name}> ${inverse.finder}(${owner.javaType} ${inverse.relation}Id) {
+        return ${storeField}.${inverse.finder}(${inverse.relation}Id).stream().map(this::toDomain).toList();
+    }`;
+  });
 }

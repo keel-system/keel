@@ -515,6 +515,8 @@ es el `sub` del token (`subOf(<credencial>)`), no su nombre de usuario.
   `src/main/resources/parameters/local/security.yaml`: se usan tal cual (`apiKey()`,
   `serviceCredential(...)`), no se inventan ni se edita el YAML.
 
+**Un actor con identidad concreta pide su token con la persona, nunca con el realm.** Si el escenario nombra al actor por el valor de su identidad (un `sub`, un email como `customer1@email.com`, un token sin email), ese valor va en los claims de la persona con su rol. No se cambian los usuarios de `infra/init-keycloak.sh` ni el realm: son de build, se regeneran, y los escenarios de otro flujo cuentan con ellos tal cual (en la corrida de control de shop-api el agente de pruebas metió los emails del seed en el script y `--refresh` lo habría pisado).
+
 ## CORS: los dos escenarios que no se parecen entre sí
 
 Con bloque `cors` en el diseño, la base trae dos helpers y **elegir mal es lo que hace que el

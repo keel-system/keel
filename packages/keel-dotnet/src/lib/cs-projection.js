@@ -47,6 +47,8 @@ export function enumMember(literal) {
 
 /** Cómo se crea un uuid que genera el servidor: versión 7 (ordenado por tiempo), como los otros dos. */
 export const UUID_V7_CALL = 'Guid.CreateVersion7()';
+/** El id `long` que genera la aplicación (keel-core/gen/ids.js), gemelo del `LongIds.next()` de keel-spring y keel-nest. */
+export const LONG_ID_CALL = 'LongIds.Next()';
 
 function toCs(resolved) {
   if (resolved.kind === 'enum' || resolved.kind === 'composite') {
@@ -73,6 +75,7 @@ function initializer(field, cs) {
   }
   if (field.generated) {
     if (cs.base === 'uuid') return UUID_V7_CALL;
+    if (cs.base === 'long' && field.id) return LONG_ID_CALL;
     if (cs.base === 'timestamp') return 'DateTimeOffset.UtcNow';
   }
   return null;

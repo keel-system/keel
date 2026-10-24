@@ -3116,7 +3116,9 @@ function payloadFields(opName, payload, { direction, domainEntities, domainTypes
   const defaulted = [];
   for (const [fieldName, field] of Object.entries(entity.fields ?? {})) {
     if (exclude.has(fieldName)) continue;
-    if (direction === 'input' && (field.id || field.generated || field.computed)) continue;
+    // Un id que nadie genera ni calcula lo asigna QUIEN da de alta (el código de producto B0001 de shop-api): es
+    // entrada. Descartarlo, como a un id generado, dejaba el alta sin su clave en los tres generadores.
+    if (direction === 'input' && (field.generated || field.computed)) continue;
     if (fieldName === lifecycleField) continue;
     if (direction === 'output' && field.sensitive) continue;
     // Lo que no se puede decidir mecánicamente: un campo con `default` puede ser una
@@ -3125,7 +3127,9 @@ function payloadFields(opName, payload, { direction, domainEntities, domainTypes
     // entrada, que es lo que dice el diseño— pero lo enumera: si el diseñador quería lo
     // segundo, la respuesta está en el DSL (`input.exclude`) y no en el código.
     if (direction === 'input' && field.default !== undefined) defaulted.push(fieldName);
-    fields.push(asPayloadField(resolveField(payload.entity, fieldName, field, domainTypes, inlineEnumName, { persisted: false }), direction));
+    // Y en la entrada es obligatorio, aunque el dominio no lo diga (un id no lleva `required`): sin él no hay alta.
+    const declared = direction === 'input' && field.id ? { ...field, required: true } : field;
+    fields.push(asPayloadField(resolveField(payload.entity, fieldName, declared, domainTypes, inlineEnumName, { persisted: false }), direction));
   }
   if (defaulted.length > 0) {
     warnings.push(
@@ -3141,7 +3145,7 @@ function payloadFields(opName, payload, { direction, domainEntities, domainTypes
   // sin images) sin que el diseño hubiera declarado ningún exclude.
   const consumed = new Set();
   fields.push(
-    ...relationPayloadFields(opName, payload, entity, { direction, relations: relationCtx, exclude, nestedPaths, consumed, warnings })
+    ...relationPayloadFields(opName, payload, entity, { direction, relations: relationCtx, exclude, nestedPaths, consumed, warnings, domainEntities, domainTypes })
   );
   for (const path of nestedPaths) {
     if (!consumed.has(path)) warnings.push(nestedExcludeWarning(opName, payload.entity, path, entity, domainTypes));
@@ -3149,8 +3153,32 @@ function payloadFields(opName, payload, { direction, domainEntities, domainTypes
   return fields;
 }
 
+/**
+ * El tipo con el que viaja la referencia a una entidad: el de SU id, reducido a su base (un value type escalar viaja
+ * como su base). Sin id declarado, uuid, que es lo que el generador le pone. Hasta la corrida de control de shop-api
+ * toda referencia salía uuid, y con una raíz de id `long` los tres generadores emitían `Guid?`/`UUID`/`string` donde
+ * el dominio guardaba un número: el mapper no cerraba y el agente lo cambió a mano.
+ */
+function refIdBase(domainEntities, domainTypes, entityName) {
+  const id = Object.values(domainEntities?.[entityName]?.fields ?? {}).find((field) => field?.id);
+  const resolved = resolveType(id?.type ?? 'uuid', domainTypes);
+  return resolved.kind === 'base' || resolved.kind === 'scalar-vt' ? resolved.base : 'uuid';
+}
+
+/**
+ * La relación INVERSA de una uno-a-muchos hacia otra raíz: la many-to-one (o one-to-one) del destino que apunta de vuelta
+ * al origen (`ProductInOrder.cart` para `Cart.products`). Es la FK por la que se leen las filas. Si hay varias, ninguna:
+ * elegir una sería adivinar.
+ */
+export function inverseRelationOf(domainEntities, ownerName, rel) {
+  const candidates = Object.entries(domainEntities?.[rel.entity]?.relations ?? {}).filter(
+    ([, other]) => other?.entity === ownerName && (other.cardinality === 'many-to-one' || other.cardinality === 'one-to-one')
+  );
+  return candidates.length === 1 ? { relation: candidates[0][0], entity: rel.entity, owner: ownerName } : null;
+}
+
 // Proyección de las relaciones de la entidad sobre el payload.
-function relationPayloadFields(opName, payload, entity, { direction, relations: relationCtx, exclude, nestedPaths = [], consumed = new Set(), warnings }) {
+function relationPayloadFields(opName, payload, entity, { direction, relations: relationCtx, exclude, nestedPaths = [], consumed = new Set(), warnings, domainEntities = {}, domainTypes = {} }) {
   if (!relationCtx) return [];
   const { internalOf, hasPersistence } = relationCtx;
   const embed = new Set(payload.embed ?? []);
@@ -3159,7 +3187,36 @@ function relationPayloadFields(opName, payload, entity, { direction, relations: 
   for (const [relName, rel] of Object.entries(entity.relations ?? {})) {
     if (exclude.has(relName)) continue;
     const { kind, backReference } = classifyRelation(payload.entity, rel, internalOf, hasPersistence);
-    if (kind === 'unsupported') continue;
+    if (kind === 'unsupported') {
+      // Una uno-a-muchos hacia OTRA raíz («el carrito y sus líneas», cuando la línea es raíz porque cambia de dueño al
+      // hacer el pedido). No la guarda el agregado —sus filas son de la otra raíz—, pero es parte de la respuesta: se
+      // proyecta como la lista de `<Destino>Dto`, leída por lote por la relación INVERSA del destino (su many-to-one
+      // hacia aquí), y el mapper la recibe como parámetro, como un `RefDto`. Hasta la corrida de control de shop-api se
+      // saltaba en silencio y la respuesta de getCart salía sin sus líneas en los tres generadores.
+      const inverse = direction === 'output' ? inverseRelationOf(domainEntities, payload.entity, rel) : null;
+      if (inverse) {
+        if (exclude.has(relName)) continue;
+        const dtoName = `${rel.entity}Dto`;
+        projected.push(
+          relationField({
+            name: relName,
+            type: P.namedType(dtoName, { list: true }),
+            element: P.namedElement(dtoName),
+            kind: 'childDto',
+            childEntity: rel.entity,
+            list: true,
+            inverse,
+            required: false,
+            description: rel.description
+          })
+        );
+      } else if (direction === 'output' && hasPersistence) {
+        warnings.push(
+          `${payload.entity}.${relName}: es ${rel.cardinality} hacia la raíz ${rel.entity} y ${rel.entity} no tiene la relación inversa (una many-to-one hacia ${payload.entity}): no hay por dónde leerla y no sale en la respuesta. Declara la inversa en ${rel.entity}, o haz de ${rel.entity} una entidad interna del agregado.`
+        );
+      }
+      continue;
+    }
     if (backReference) {
       // Apuntar al padre no se proyecta como objeto —eso encadenaría hija → raíz → hijas
       // y devolvería el agregado entero dos veces—, pero SU ID sí es parte del recurso.
@@ -3172,16 +3229,17 @@ function relationPayloadFields(opName, payload, entity, { direction, relations: 
       if (direction !== 'output') continue;
       const parentId = `${relName}Id`;
       if (exclude.has(parentId)) continue;
+      const parentBase = refIdBase(domainEntities, domainTypes, rel.entity);
       projected.push(
         relationField({
           name: parentId,
-          type: P.fieldType(resolveType('uuid')),
+          type: P.fieldType(resolveType(parentBase)),
           // `parentId` y no `base`: el mapper no puede derivarlo de la entidad —el dominio
           // es puro y una hija no guarda un puntero a su raíz, la FK vive en persistencia—,
           // así que entra como PARÁMETRO del método, igual que un `refDto`. Es lo que hace
           // que el compilador no deje olvidarlo en vez de dejar un TODO que sale a null.
           kind: 'parentId',
-          base: 'uuid',
+          base: parentBase,
           parentEntity: rel.entity,
           required: Boolean(rel.required),
           description: rel.description
@@ -3223,13 +3281,14 @@ function relationPayloadFields(opName, payload, entity, { direction, relations: 
       }
       const name = `${relName}Id`;
       if (exclude.has(name)) continue;
-      const reference = relationField({ name, type: P.fieldType(resolveType('uuid')), kind: 'base', base: 'uuid', required: Boolean(rel.required), description: rel.description });
+      const refBase = refIdBase(domainEntities, domainTypes, rel.entity);
+      const reference = relationField({ name, type: P.fieldType(resolveType(refBase)), kind: 'base', base: refBase, required: Boolean(rel.required), description: rel.description });
       // En la ENTRADA, una relación obligatoria es presencia como la de cualquier campo: sin la regla,
       // un alta sin `categoryId` llegaba al handler con null y respondía 500 en vez de 400 (corrida catalog
       // de keel-nest; keel-spring tampoco ponía el @NotNull). Las reglas salen de la proyección, igual que
       // las de un campo propio.
       if (direction === 'input' && rel.required) {
-        const { validation, inputValidation } = P.fieldDetails({ name, type: 'uuid', required: true }, resolveType('uuid'), { fieldName: name });
+        const { validation, inputValidation } = P.fieldDetails({ name, type: refBase, required: true }, resolveType(refBase), { fieldName: name });
         Object.assign(reference, { validation, inputValidation });
       }
       projected.push(reference);
@@ -3265,9 +3324,11 @@ function relationPayloadFields(opName, payload, entity, { direction, relations: 
 // resueltos por resolveField (todo render interpola estas propiedades).
 // `type` y `element` son propiedades de la proyección: el tipo del campo y el de su elemento
 // (por defecto, el mismo).
-function relationField({ name, type, element = null, kind, base = null, childEntity = null, refEntity = null, parentEntity = null, list = false, required = false, description = null }) {
+function relationField({ name, type, element = null, kind, base = null, childEntity = null, refEntity = null, parentEntity = null, list = false, required = false, description = null, inverse = null }) {
   return {
     name,
+    // La relación del destino por la que se leen las filas de una colección hacia otra raíz (inverse-collections.js).
+    ...(inverse ? { inverse } : {}),
     ...type,
     list,
     ...(element ?? P.namedElement(P.typeNameOf(type))),

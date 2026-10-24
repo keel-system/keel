@@ -230,12 +230,13 @@ function renderJpaEntity(model, entity) {
       }
     } else if (member.kind === 'externalRef') {
       imports.add('jakarta.persistence.Column');
-      imports.add('java.util.UUID');
+      for (const imported of member.imports ?? ['java.util.UUID']) imports.add(imported);
+      const refType = member.javaType ?? 'UUID';
       const nullable = member.relation.required ? ', nullable = false' : '';
       declarations.push(
-        `    @Column(name = "${quoteIdentifier(`${snakeCase(member.relation.name)}_id`)}"${nullable})\n    private UUID ${member.name};`
+        `    @Column(name = "${quoteIdentifier(`${snakeCase(member.relation.name)}_id`)}"${nullable})\n    private ${refType} ${member.name};`
       );
-      pushAccessor(member.name, 'UUID');
+      pushAccessor(member.name, refType);
     } else if (member.kind === 'elementCollection') {
       // Tabla de elementos: <entidad>_<campo>, FK <entidad>_id a la raíz.
       imports.add('jakarta.persistence.ElementCollection');

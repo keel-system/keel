@@ -134,7 +134,12 @@ test('la identidad del llamante y el alcance leen el principal de la petición e
   const token = { kind: 'token', name: 'ana', authorities: new Set(), claims: { sub: 'sub-ana-001' } };
   assert.equal(SecurityContext.runWith(token, () => CallerIdentity.resolve()), 'sub-ana-001');
   assert.throws(() => CallerIdentity.resolve(), /No hay credencial/);
-  assert.throws(() => SecurityContext.runWith({ ...token, claims: {} }, () => CallerIdentity.resolve()), /no identifica/);
+  // Un token válido sin el claim de la identidad no identifica a nadie: 401 UNAUTHENTICATED, no un 500 (corrida de control
+  // de shop-api, FL-ACC-016).
+  assert.throws(
+    () => SecurityContext.runWith({ ...token, claims: {} }, () => CallerIdentity.resolve()),
+    (error) => error.name === 'UnauthorizedException' && error.code === 'UNAUTHENTICATED' && error.httpStatus === 401
+  );
 
   const vault = planFixture('asset-vault', { ...ASSET_VAULT, stack: { auth: 'keycloak' } });
   const scoping = vault.model.security.scoping;

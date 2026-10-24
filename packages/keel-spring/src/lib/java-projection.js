@@ -39,6 +39,8 @@ const PARAM_JAVA_TYPES = {
  * `UUID.randomUUID()`. Vive en la proyección porque es la forma Java del inicializador.
  */
 export const UUID_V7_CALL = 'Uuids.v7()';
+/** El id `long` que genera la aplicación (keel-core/gen/ids.js): 41 bits de milisegundos y 12 aleatorios. */
+export const LONG_ID_CALL = 'LongIds.next()';
 
 function fieldInitializer(field, java) {
   if (field.default !== undefined) {
@@ -49,6 +51,7 @@ function fieldInitializer(field, java) {
   }
   if (field.generated) {
     if (java.base === 'uuid') return UUID_V7_CALL;
+    if (java.base === 'long' && field.id) return LONG_ID_CALL;
     if (java.base === 'timestamp') return 'Instant.now()';
   }
   return null;

@@ -20,6 +20,7 @@
 //     puerto de la aplicación con su adaptador.
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import { usesCallerRoles, ownershipRulesOf } from 'keel-core/gen/ownership';
 import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
 import { accessPlan, audienceOf, tokenClaims, usesTokenProtocol } from 'keel-core/gen/access-plan';
 import { envRequired } from 'keel-core/gen/profile-values';
@@ -37,6 +38,7 @@ export const localClientApiKey = (client) => `local-${client}-key`;
 export const TEST_JWKS_VARIABLE = 'SECURITY_TEST_JWKS';
 /** El puerto del alcance por recurso, en Application/Support. */
 export const CALLER_SCOPE_PORT = 'ICallerScope';
+export const CALLER_ROLES_PORT = 'ICallerRoles';
 
 /** El plan de autorización, o null sin capa security o sin API que proteger. */
 export function securityPlan(model) {
@@ -99,6 +101,16 @@ export function usesCallerScope(model) {
   return Boolean(usesJwt(model) && model.security?.scoping);
 }
 
+/** ¿Emite ICallerRoles? Con una regla de propiedad que declara exentos (keel-core/gen/ownership.js) y un token que leer. */
+export function usesRoleCheck(model) {
+  return Boolean(usesJwt(model) && usesCallerRoles(model));
+}
+
+/** Las operaciones cuyo handler recibe ICallerRoles: las de una regla de propiedad con exentos. */
+export function roleCheckedOperation(model, operation) {
+  return usesRoleCheck(model) && ownershipRulesOf(model, operation).some((rule) => rule.exemptRoles.length > 0);
+}
+
 /** Las operaciones cuyo handler recibe el alcance: las que declaran su error. */
 export function scopedOperation(model, operation) {
   const scoping = model.security?.scoping;
@@ -131,7 +143,7 @@ export function generate(model) {
   if (model.security?.cors) {
     files.push(file(model, 'security', 'CorsPolicy', corsPolicyBody(model), ['System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', configNamespace(model)]));
   }
-  if (usesCallerIdentity(model)) files.push(file(model, 'security', 'CallerIdentity', callerIdentityBody(model)));
+  if (usesCallerIdentity(model)) files.push(file(model, 'security', 'CallerIdentity', callerIdentityBody(model), [namespaceOf(model, 'errors')]));
   const resolution = callerResolution(model);
   if (resolution) {
     files.push(file(model, 'security', 'CallerIdentityResolver', callerIdentityResolverBody(model, resolution), [repositoriesNamespace(model), 'System.Globalization']));
@@ -139,6 +151,10 @@ export function generate(model) {
   if (usesCallerScope(model)) {
     files.push(file(model, 'appSupport', CALLER_SCOPE_PORT, callerScopePortBody(model)));
     files.push(file(model, 'security', 'JwtCallerScope', jwtCallerScopeBody(model), ['System.Text.Json', namespaceOf(model, 'appSupport')]));
+  }
+  if (usesRoleCheck(model)) {
+    files.push(file(model, 'appSupport', CALLER_ROLES_PORT, callerRolesPortBody()));
+    files.push(file(model, 'security', 'JwtCallerRoles', jwtCallerRolesBody(), [namespaceOf(model, 'appSupport')]));
   }
   files.push(registration(model));
   files.push(middleware(model));
@@ -822,7 +838,9 @@ public static class CallerIdentity
 ${extract}
         if (string.IsNullOrWhiteSpace(value))
         {
-            throw new InvalidOperationException(${csString(`La credencial no identifica ningún recurso para '${identity.field}'.`)});
+            // Un token válido sin el claim de la identidad no identifica a nadie: es un 401, no un fallo del servidor
+            // (con un 500, la corrida de control de shop-api lo arregló a mano para FL-ACC-016).
+            throw new UnauthorizedException(${csString(FW.unauthenticated.message)}, ${csString(FRAMEWORK_ERRORS.unauthenticated.code)}, ${FW.unauthenticated.status});
         }
         return value;
     }
@@ -941,6 +959,29 @@ public sealed class JwtCallerScope : ${CALLER_SCOPE_PORT}
 }`;
 }
 
+// ─── Los roles del llamante (exentos de security.ownership): ICallerRoles ────────────────────────
+
+function callerRolesPortBody() {
+  return `/// <summary>
+/// Los roles del llamante en la petición en curso, para las exenciones de una regla de propiedad (security.ownership): quien
+/// tiene un rol exento opera sobre cualquier recurso. Es un puerto para que los handlers no sepan de tokens; lo implementa
+/// JwtCallerRoles en Infrastructure. Solo tiene sentido dentro de una petición HTTP.
+/// </summary>
+public interface ${CALLER_ROLES_PORT}
+{
+    /// <summary>¿Tiene el llamante este rol del diseño (<c>employee</c>)?</summary>
+    bool Has(string role);
+}`;
+}
+
+function jwtCallerRolesBody() {
+  return `/// <summary>Los roles del llamante leídos de las authorities del principal en curso: el rol <c>x</c> es <c>ROLE_x</c>, como en keel-spring.</summary>
+public sealed class JwtCallerRoles : ${CALLER_ROLES_PORT}
+{
+    public bool Has(string role) => SecurityContext.Get() is { } principal && principal.Authorities.Contains($"ROLE_{role}");
+}`;
+}
+
 // ─── SecurityRegistration.cs ────────────────────────────────────────────────────────────────────
 
 function registration(model) {
@@ -954,6 +995,10 @@ function registration(model) {
   if (usesCallerScope(model)) {
     lines.push('        services.AddCallerScope();');
     usings.push(namespaceOf(model, 'appSupport'));
+  }
+  if (usesRoleCheck(model)) {
+    lines.push('        services.AddCallerRoles();');
+    if (!usings.includes(namespaceOf(model, 'appSupport'))) usings.push(namespaceOf(model, 'appSupport'));
   }
   const body = `/// <summary>
 /// La seguridad del servicio en el contenedor: lo que necesita el middleware de la entrada HTTP${usesCallerScope(model) ? ' y el alcance por recurso que reciben los handlers' : ''}.
@@ -975,6 +1020,20 @@ ${lines.join('\n')}${lines.length > 0 ? '\n' : ''}        return services;
     public static IServiceCollection AddCallerScope(this IServiceCollection services)
     {
         services.AddSingleton<${CALLER_SCOPE_PORT}, JwtCallerScope>();
+        return services;
+    }`
+        : ''
+    }${
+      usesRoleCheck(model)
+        ? `
+
+    /// <summary>
+    /// Los roles del llamante que reciben los handlers con exentos de una regla de propiedad (${CALLER_ROLES_PORT}). Aparte y sin
+    /// configuración, como el alcance: lo registra también la prueba del cableado de los casos de uso.
+    /// </summary>
+    public static IServiceCollection AddCallerRoles(this IServiceCollection services)
+    {
+        services.AddSingleton<${CALLER_ROLES_PORT}, JwtCallerRoles>();
         return services;
     }`
         : ''

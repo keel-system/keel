@@ -217,11 +217,12 @@ function renderDocument(model, entity) {
       // Frontera del agregado: el id del otro, nunca una referencia navegable.
       // @DBRef parecería un join y no lo es (el driver hace una consulta por
       // documento), además de romper la frontera — ver la skill.
-      imports.add('java.util.UUID');
+      for (const imported of member.imports ?? ['java.util.UUID']) imports.add(imported);
+      const refType = member.javaType ?? 'UUID';
       declarations.push(
-        `    @Field(name = "${snakeCase(member.relation.name)}_id")\n    private UUID ${member.name};`
+        `    @Field(name = "${snakeCase(member.relation.name)}_id")\n    private ${refType} ${member.name};`
       );
-      pushAccessor(member.name, 'UUID');
+      pushAccessor(member.name, refType);
     } else if (member.kind === 'elementCollection') {
       imports.add('java.util.List');
       imports.add('java.util.ArrayList');

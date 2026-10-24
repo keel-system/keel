@@ -103,7 +103,10 @@ function renderEntity(model, entity) {
     : '';
   if (formatGuards.length > 0) usings.push(namespaceOf(model, 'valueObjects'));
   const initial = entity.fields.filter((field) => field.initializer);
-  const initialTodo = initial.length ? `\n    // Valores iniciales del diseño: ${initial.map((field) => `${csMember(field.name)} = ${field.initializer}`).join(', ')}.` : '';
+  const longIds = initial.some((field) => field.initializer.includes('LongIds.Next()'))
+    ? `\n    // LongIds.Next() está en ${namespaceOf(model, 'domainSupport')}: un id long lo crea la aplicación al nacer la raíz.`
+    : '';
+  const initialTodo = initial.length ? `\n    // Valores iniciales del diseño: ${initial.map((field) => `${csMember(field.name)} = ${field.initializer}`).join(', ')}.${longIds}` : '';
   parts.push(`    // TODO (agente): factory \`public static ${entity.name} Create(...)\` que aplique los invariantes, derive los
     // campos generated/computed y fije el estado inicial del lifecycle. La mutación va por métodos de
     // negocio, no por setters.${initialTodo}${guardTodo}`);

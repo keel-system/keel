@@ -21,6 +21,7 @@ import { finderNote } from 'keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
 import { usesLikePattern, LIKE_PATTERN_TS } from './persistence-entities.js';
 import { refTargetsOf, listedIdsNote } from 'keel-core/gen/ref-targets';
+import { inverseCollectionsNote } from 'keel-core/gen/inverse-collections';
 import { resolverPath } from './ref-resolvers.js';
 import { uploadNotes } from 'keel-core/gen/buckets';
 import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
@@ -37,7 +38,7 @@ import { cacheNote } from 'keel-core/gen/cache-plan';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
-import { CALLER_SCOPE_TS, scopedOperation } from './security.js';
+import { CALLER_SCOPE_TS, scopedOperation, CALLER_ROLES_TS, roleCheckedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
 import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
 import { portPath as clientPortPath } from './http-clients.js';
@@ -286,6 +287,11 @@ function renderHandler(model, operation) {
     imports.push({ symbol: 'CallerScope', from: CALLER_SCOPE_TS });
     dependencies.push({ type: 'CallerScope', name: 'callerScope' });
   }
+  // Los exentos de una regla de propiedad: el puerto ya está generado con su adaptador.
+  if (roleCheckedOperation(model, operation)) {
+    imports.push({ symbol: 'CallerRoles', from: CALLER_ROLES_TS });
+    dependencies.push({ type: 'CallerRoles', name: 'callerRoles' });
+  }
   // El trabajo que el diseño le atribuye a esta operación en otro servidor (`dependencies.activations`, por
   // `triggeredBy`): el puerto del cliente se inyecta, o el camino de menor resistencia es no llamarlo. Solo
   // el canal síncrono: `via.publishes` lo emite el agregado.
@@ -454,6 +460,8 @@ function handlerNotes(model, operation) {
   }
   const listed = listedIdsNote(model, operation, { call: `await this.${decap(`${operation.responseDto?.entity}Repository`)}.findAllById(query.{ids})` });
   if (listed) notes.push(listed);
+  const inverse = inverseCollectionsNote(operation, { port: (name) => `await this.${decap(`${name}Repository`)}`, id: '<id del agregado>' });
+  if (inverse) notes.push(inverse);
   for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge) })) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
@@ -469,7 +477,7 @@ function handlerNotes(model, operation) {
   }
   // La propiedad (DSL 2.23): nota neutral, la misma en los tres generadores.
   const ownerParam = operation.messageKind === 'query' ? 'query' : 'command';
-  for (const note of ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field}` })) notes.push(note);
+  for (const note of ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field}`, hasRole: (role) => `this.callerRoles.has('${role}')` })) notes.push(note);
   const scoping = model.security?.scoping;
   if (scopedOperation(model, operation)) {
     notes.push(

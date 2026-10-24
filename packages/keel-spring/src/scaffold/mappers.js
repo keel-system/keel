@@ -147,13 +147,24 @@ function renderMethod(model, entity, dto, imports) {
   // la proyecta ANIDADA lo pasa solo (es el `entity` de ese mapper); quien la devuelve
   // SUELTA —`output: { entity: <Hija> }`— es un handler, y el compilador se lo recuerda.
   const parentFields = dto.fields.filter((field) => field.kind === 'parentId');
-  if (parentFields.length > 0) imports.add('java.util.UUID');
+
+  // Las filas de OTRA raíz que la respuesta lleva (una uno-a-muchos leída por su FK inversa, keel-core/gen/inverse-
+  // collections.js): el agregado no las guarda, así que entran como parámetro y el handler las lee con el finder del
+  // puerto del destino. Mismo motivo que un RefDto: que el compilador no deje olvidarlas.
+  const inverseFields = dto.fields.filter((field) => field.kind === 'childDto' && field.inverse);
+  if (inverseFields.length > 0) imports.add('java.util.List');
+  for (const inverse of inverseFields) {
+    const target = model.entities.find((candidate) => candidate.name === inverse.childEntity);
+    if (target) imports.add(`${subPackage(model, domainSubPackage(target))}.${target.name}`);
+  }
+  for (const parent of parentFields) for (const imported of parent.imports ?? ['java.util.UUID']) imports.add(imported);
 
   const params = [
     `${entity.name} entity`,
     ...refFields.map((ref) => `${refParamType(ref)} ${ref.name}`),
     ...needFields.map((need) => `${need.javaType} ${need.name}`),
-    ...parentFields.map((parent) => `UUID ${parent.name}`)
+    ...parentFields.map((parent) => `${parent.javaType ?? 'UUID'} ${parent.name}`),
+    ...inverseFields.map((inverse) => `List<${inverse.childEntity}> ${inverse.name}`)
   ].join(', ');
 
   // Getters directos disponibles en la entidad de dominio; un campo del DTO que
@@ -173,6 +184,9 @@ function renderMethod(model, entity, dto, imports) {
       return `${getter} != null ? fileStorage.publicUrl(StoragePolicies.${screamingSnake(field.bucket)}, ${getter}) : null`;
     }
     // Entidad hija: se proyecta con su propio DTO, nunca con el del padre.
+    if (field.kind === 'childDto' && field.inverse) {
+      return `${field.name}.stream().map(this::to${field.elementJavaType}).toList()`;
+    }
     if (field.kind === 'childDto') {
       // Si el DTO de la hija lleva el id de su padre, el padre es justo `entity`: se le
       // pasa aquí. Y entonces ya no vale la referencia a método (`this::toX`), porque el

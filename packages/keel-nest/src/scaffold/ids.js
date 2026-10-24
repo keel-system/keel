@@ -11,16 +11,63 @@
 
 import { DIRS, classPath, tsModule } from './render.js';
 import { UUID_V7_CALL } from '../lib/ts-projection.js';
+import { LONG_ID_EPOCH_MS, LONG_ID_RANDOM_BITS, usesGeneratedLongIds } from 'keel-core/gen/ids';
 
 export const UUIDS_CLASS = 'Uuids';
 export const UUIDS_TS = classPath(DIRS.identity, UUIDS_CLASS);
+export const LONG_IDS_CLASS = 'LongIds';
+export const LONG_IDS_TS = classPath(DIRS.identity, LONG_IDS_CLASS);
 
 export function generate(model) {
   if ((model.entities ?? []).length === 0) return [];
   return [
     { path: UUIDS_TS, content: tsModule(UUIDS_TS, [{ symbol: 'randomBytes', from: 'node:crypto' }], uuidsBody()) },
-    { path: 'test/domain/uuids.test.ts', content: uuidsTest() }
+    { path: 'test/domain/uuids.test.ts', content: uuidsTest() },
+    ...(usesGeneratedLongIds(model)
+      ? [
+          { path: LONG_IDS_TS, content: tsModule(LONG_IDS_TS, [{ symbol: 'randomInt', from: 'node:crypto' }], longIdsBody()) },
+          { path: 'test/domain/long-ids.test.ts', content: longIdsTest() }
+        ]
+      : [])
   ];
+}
+
+// El id `long` que genera la aplicación, con la forma de keel-core/gen/ids.js (la misma que `LongIds.java` de keel-spring):
+// 41 bits de milisegundos desde 2020 y 12 aleatorios. Un `bigint`, como todo `long` del diseño en keel-nest.
+function longIdsBody() {
+  return `/**
+ * Identificadores \`long\` que crea la aplicación al nacer la raíz, como \`Uuids\` para un uuid: 41 bits de milisegundos
+ * desde 2020-01-01 y ${LONG_ID_RANDOM_BITS} aleatorios. Son 53 bits (cabe en un number de JavaScript, así que ningún
+ * cliente del JSON lo trunca) y van ordenados por tiempo. Dos altas del mismo milisegundo en réplicas distintas chocan
+ * con probabilidad 1/${2 ** LONG_ID_RANDOM_BITS}: la clave primaria lo convierte en un conflicto, nunca en una fila pisada.
+ */
+export class ${LONG_IDS_CLASS} {
+  private constructor() {}
+
+  /** Un id nuevo. */
+  static next(): bigint {
+    return (BigInt(Date.now() - ${LONG_ID_EPOCH_MS}) << ${LONG_ID_RANDOM_BITS}n) | BigInt(randomInt(${2 ** LONG_ID_RANDOM_BITS}));
+  }
+}`;
+}
+
+function longIdsTest() {
+  return `import { describe, expect, it } from 'vitest';
+import { LongIds } from '../../src/domain/identity/long-ids.js';
+
+// La forma del id (keel-core/gen/ids.js): 53 bits como mucho y ordenado por tiempo.
+describe('LongIds.next', () => {
+  it('cabe en un number de JavaScript', () => {
+    expect(LongIds.next() <= BigInt(Number.MAX_SAFE_INTEGER)).toBe(true);
+  });
+
+  it('lleva delante los milisegundos de su creación', () => {
+    const before = BigInt(Date.now() - ${LONG_ID_EPOCH_MS});
+    const id = LongIds.next();
+    expect(id >> ${LONG_ID_RANDOM_BITS}n >= before).toBe(true);
+  });
+});
+`;
 }
 
 /** ¿Usa este inicializador el helper? */

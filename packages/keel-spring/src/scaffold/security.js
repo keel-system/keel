@@ -9,6 +9,7 @@
 
 import { PAYMENT_NOTICE_PATH } from './payments.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import { usesCallerRoles } from 'keel-core/gen/ownership';
 import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
 import {
   audienceOf,
@@ -103,7 +104,48 @@ export function generate(model) {
   if (needsServiceApiKeyFilter(sec)) files.push(renderServiceApiKeyFilter(model));
   if (sec.callerIdentity) files.push(renderCallerIdentity(model, sec.callerIdentity));
   if (sec.scoping && jwt) files.push(...renderCallerScope(model, sec));
+  if (usesCallerRoles(model) && jwt) files.push(...renderCallerRoles(model));
   return files;
+}
+
+// ─── Los roles del llamante (exentos de security.ownership) ──────────────────
+//
+// Una regla de propiedad con exentos (`exemptRoles: [employee, manager]`) necesita que el handler sepa si el llamante
+// tiene ese rol, y application no importa Spring Security: un puerto, como CallerScope, y su adaptador sobre las
+// authorities de la petición en curso (`ROLE_<rol>`, las que pone el conversor del JWT). keel-core/gen/ownership.js.
+function renderCallerRoles(model) {
+  const portPkg = subPackage(model, SCOPE_PORT_PKG);
+  const port = `/**
+ * Los roles del llamante en la petición en curso, para las exenciones de una regla de propiedad (security.ownership):
+ * quien tiene un rol exento opera sobre cualquier recurso. Es un puerto para que los handlers no importen Spring Security;
+ * lo implementa {@code JwtCallerRoles} en infrastructure. Solo tiene sentido dentro de una petición HTTP.
+ */
+public interface CallerRoles {
+
+    /** ¿Tiene el llamante este rol del diseño ({@code employee})? */
+    boolean has(String role);
+}`;
+  const adapter = `/** Los roles del llamante leídos de las authorities de la petición en curso: el rol {@code x} es {@code ROLE_x}. */
+@Component
+public class JwtCallerRoles implements CallerRoles {
+
+    @Override
+    public boolean has(String role) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) {
+            return false;
+        }
+        String wanted = "ROLE_" + role;
+        return authentication.getAuthorities().stream().anyMatch(authority -> wanted.equals(authority.getAuthority()));
+    }
+}`;
+  return [
+    { path: javaPath(model, SCOPE_PORT_PKG, 'CallerRoles'), content: javaFile(portPkg, [], port) },
+    {
+      path: javaPath(model, SECURITY_PKG, 'JwtCallerRoles'),
+      content: javaFile(subPackage(model, SECURITY_PKG), [`${portPkg}.CallerRoles`, 'org.springframework.security.core.Authentication', 'org.springframework.security.core.context.SecurityContextHolder', 'org.springframework.stereotype.Component'], adapter)
+    }
+  ];
 }
 
 // ─── Alcance por recurso (security.authentication.scoping) ───────────────────
@@ -1049,7 +1091,8 @@ function renderCallerIdentity(model, callerIdentity) {
     'org.springframework.security.core.Authentication',
     'org.springframework.security.core.context.SecurityContextHolder',
     'org.springframework.security.oauth2.jwt.Jwt',
-    'org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken'
+    'org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken',
+    `${subPackage(model, 'domain.errors')}.UnauthorizedException`
   ];
 
   // Con `serviceClient` el identificador ES el cliente de la credencial. Keycloak lo pone en `azp`
@@ -1075,8 +1118,10 @@ function renderCallerIdentity(model, callerIdentity) {
         Jwt jwt = token.getToken();
 ${extract}
         if (value == null || value.isBlank()) {
-            throw new IllegalStateException(
-                "La credencial no identifica ningún recurso para '${callerIdentity.field}'.");
+            // Un token válido sin el claim de la identidad no identifica a nadie: es un 401, no un fallo del servidor
+            // (con un 500, la corrida de control de shop-api lo arregló a mano para FL-ACC-016).
+            throw new UnauthorizedException(
+                "${FW.unauthenticated.message}", "${FRAMEWORK_ERRORS.unauthenticated.code}", ${FW.unauthenticated.status}, null);
         }
         return value;`;
 

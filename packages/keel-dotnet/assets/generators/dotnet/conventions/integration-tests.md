@@ -39,7 +39,7 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Un flujo 
 | `Bearer(token)` | las cabeceras con `Authorization` de un token (solo con capa `security`); añade otras al mismo diccionario |
 | `TokenFor(rol, n?)` | token de usuario del rol; `n = 2` es el segundo usuario del mismo rol (titularidad) y `TokenFor("no-role")` el autenticado sin roles |
 | `ServiceCredential(cliente)` | token `client_credentials` de un cliente del diseño o de la matriz `test-m2m-*`; con `serviceAuth: api-key`, su clave |
-| `TokenAs(sub, claims?, rol?)` | una persona con el `sub` exacto del escenario y sus claims (`null` quita uno); solo cuando la identidad del llamante es el claim `sub`, con Keycloak |
+| `TokenAs(sub, claims?, rol?)` | una persona con el `sub` exacto del escenario y sus claims (`null` quita uno); cuando la identidad del llamante es un claim (`sub`, `email`…), con Keycloak |
 | `ScopedResource()` | el recurso al que alcanzan los usuarios no exentos del alcance por recurso |
 | `TokenWithScope(rol, valores…)` | un usuario del rol cuyo claim del alcance enumera EXACTAMENTE esos valores (ninguno: sin el claim); solo con alcance por recurso y Keycloak. No es un `designGap` ni se arregla editando el realm |
 | `ApiKey()` | la clave del perfil local con `protocol: api-key` |
@@ -51,6 +51,8 @@ Lo genera build y **no se edita** (ver § El arnés es del generador). Un flujo 
 | `await StopBroker()` / `await StartBroker()` | el canal indisponible: lo para, y lo levanta esperando a que el servidor vuelva a estar conectado |
 | `DeadLetteredEvents()` | cuántos eventos se rindió el outbox (solo con `reliability: outbox`): el Then natural de casi cualquier escenario del outbox es que siga en 0 |
 | `AbandonOutboxEvent(evento)` / `ClearAbandonedOutboxEvents()` | agota el presupuesto de reintentos del evento pendiente de ese tipo (la precondición de la rendición) y lo retira después |
+
+**Un actor con identidad concreta pide su token con la persona, nunca con el realm.** Si el escenario nombra al actor por el valor de su identidad (un `sub`, un email como `customer1@email.com`, un token sin email), ese valor va en los claims de la persona con su rol. No se cambian los usuarios de `infra/init-keycloak.sh` ni el realm: son de build, se regeneran, y los escenarios de otro flujo cuentan con ellos tal cual (en la corrida de control de shop-api el agente de pruebas metió los emails del seed en el script y `--refresh` lo habría pisado).
 
 Nada de FluentAssertions (licencia comercial desde la 8): las aserciones son las de xUnit y `AssertJson`.
 

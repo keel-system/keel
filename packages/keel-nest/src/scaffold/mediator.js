@@ -24,7 +24,7 @@ import { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher 
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
 import { usesPersistence } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
-import { usesCallerScope } from './security.js';
+import { usesCallerScope, usesRoleCheck } from './security.js';
 import { usesMessaging } from './messaging.js';
 import { usesServiceParameters } from './service-parameters.js';
 import { usesHttpClients } from './http-clients.js';
@@ -132,7 +132,7 @@ function useCasesTest(model) {
     ? "\nimport { PersistenceModule } from '../src/infrastructure/persistence/persistence-module.js';\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';"
     : '';
   // El alcance por recurso (global) también es dependencia de los handlers que lo declaran.
-  const scope = usesCallerScope(model);
+  const scope = usesCallerScope(model) || usesRoleCheck(model);
   const scopeImport = scope ? "\nimport { SecurityModule } from '../src/infrastructure/security/security-module.js';" : '';
   // Con mensajería, los adaptadores de repositorio entregan al puente de eventos: también es dependencia.
   const messaging = usesPersistence(model) && usesMessaging(model);

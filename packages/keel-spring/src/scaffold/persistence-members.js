@@ -26,6 +26,16 @@ import {
 } from 'keel-core/gen/relational';
 import { quoteIdentifier } from '../lib/sql-reserved.js';
 
+/**
+ * El tipo Java de la referencia a otra raíz: el de SU id (`Long` en shop-api, recuperado de un legacy con ids de
+ * secuencia), y UUID si no declara ninguno. Fuente única del dominio, del espejo JPA, del documento y del mapper:
+ * hasta la corrida de control de shop-api los cuatro decían UUID a fuego.
+ */
+export function refIdJava(model, entityName) {
+  const id = (model.entities ?? []).find((candidate) => candidate.name === entityName)?.idField;
+  return id?.javaType ? { javaType: id.javaType, imports: id.imports ?? [] } : { javaType: 'UUID', imports: ['java.util.UUID'] };
+}
+
 export {
   orderingFieldOf,
   orderingTieBreakerOf,
@@ -98,7 +108,7 @@ export function persistedMembers(model, entity) {
       return { kind: 'scalar', field: member.field, name: member.name, javaType: member.field.javaType, folded: foldedShadow(member.field) };
     }
     if (member.kind === 'externalRef') {
-      return { kind: 'externalRef', relation: member.relation, name: member.name, javaType: 'UUID' };
+      return { kind: 'externalRef', relation: member.relation, name: member.name, ...refIdJava(model, member.relation.entity) };
     }
     return member;
   });

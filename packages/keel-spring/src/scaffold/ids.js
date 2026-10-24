@@ -17,14 +17,53 @@
 // hay dependencia que añadir ni puerto que inyectar. El contrato no cambia: sigue siendo un UUID.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { UUID_V7_CALL } from '../lib/model.js';
+import { UUID_V7_CALL, LONG_ID_CALL } from '../lib/model.js';
+import { LONG_ID_EPOCH_MS, LONG_ID_RANDOM_BITS, usesGeneratedLongIds } from 'keel-core/gen/ids';
 
 export const IDS_PKG = 'domain.identity';
 export const IDS_CLASS = 'Uuids';
+export const LONG_IDS_CLASS = 'LongIds';
 
 export function generate(model) {
   if ((model.entities ?? []).length === 0) return [];
-  return [renderUuids(model)];
+  return [renderUuids(model), ...(usesGeneratedLongIds(model) ? [renderLongIds(model)] : [])];
+}
+
+/** Los imports del helper que nombra un inicializador (`fieldInitializer` de model.js), para quien lo usa. */
+export function idHelperImports(model, initializer) {
+  if (typeof initializer !== 'string') return [];
+  return [
+    ...(initializer.includes(UUID_V7_CALL) ? [uuidsImport(model)] : []),
+    ...(initializer.includes(LONG_ID_CALL) ? [`${subPackage(model, IDS_PKG)}.${LONG_IDS_CLASS}`] : [])
+  ];
+}
+
+// El id `long` que genera la aplicación, con la forma de keel-core/gen/ids.js: 41 bits de milisegundos desde 2020 y 12
+// aleatorios, 53 en total para que ningún cliente JavaScript del JSON lo trunque.
+function renderLongIds(model) {
+  const body = `/**
+ * Identificadores {@code long} que crea la aplicación al nacer la raíz, como {@link Uuids} para un uuid: 41 bits de
+ * milisegundos desde 2020-01-01 y ${LONG_ID_RANDOM_BITS} aleatorios. Son 53 bits, así que el id cabe en un number de
+ * JavaScript y ningún cliente del JSON lo trunca, y van ordenados por tiempo: cada alta cae al final del índice de la PK.
+ *
+ * <p>Sin coordinación entre réplicas, dos altas del mismo milisegundo chocan con probabilidad 1/${2 ** LONG_ID_RANDOM_BITS};
+ * la clave primaria lo convierte en un conflicto de unicidad, nunca en una fila pisada.
+ */
+public final class ${LONG_IDS_CLASS} {
+
+    private static final long EPOCH_MS = ${LONG_ID_EPOCH_MS}L;
+    private static final int RANDOM_BITS = ${LONG_ID_RANDOM_BITS};
+    private static final SecureRandom RANDOM = new SecureRandom();
+
+    private ${LONG_IDS_CLASS}() {
+    }
+
+    /** Un id nuevo. */
+    public static long next() {
+        return ((System.currentTimeMillis() - EPOCH_MS) << RANDOM_BITS) | RANDOM.nextInt(1 << RANDOM_BITS);
+    }
+}`;
+  return { path: javaPath(model, IDS_PKG, LONG_IDS_CLASS), content: javaFile(subPackage(model, IDS_PKG), ['java.security.SecureRandom'], body) };
 }
 
 /** El import del helper, para quien lo llama. */
