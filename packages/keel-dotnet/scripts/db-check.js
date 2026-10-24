@@ -46,6 +46,8 @@
 //   replica-order  el proyector aplica un hecho anterior al guardado
 //   replica-batch  la lectura por lote de la réplica no trae nada
 //   id-batch    la lectura por lote por id (FindAllById) se deja el primer id
+//   rank-sort   el orden por un enum va por su nombre y no por la sombra de rango (el defecto D5 de shop-api)
+//   inverse-finder  la lectura por la FK inversa (FindAllBy<Inversa>Id) se deja una fila (shop-api)
 //   fold        TextFold.FoldCase no pliega: la clave natural con `compare` en mayúsculas pasa por otra (catalog-extended)
 //   fold-accents  TextFold.FoldCaseAndAccents solo baja la caja: la sombra del filtro conserva los acentos
 //   deadlock    el clasificador no reconoce el interbloqueo (40P01 / 1213): no se repite y sale como 500
@@ -118,6 +120,10 @@ const SABOTAGES = {
   'replica-batch': ['Repositories/', 'Where(r => keys.Contains(r.Sku))', 'Where(r => keys.Skip(1).Contains(r.Sku))'],
   // La lectura por lote por id (los embebidos de una página) se deja el primer id.
   'id-batch': ['Repositories/', 'Where(r => keys.Contains(r.Id))', 'Where(r => keys.Skip(1).Contains(r.Id))'],
+  // El orden por un enum (shop-api): la sombra de rango mapeada a la columna del nombre, que es ordenar alfabéticamente.
+  'rank-sort': ['Repositories/', /\["(\w+)Rank"\] = r => r\.(\w+)Rank,/g, '["$1Rank"] = r => r.$2,'],
+  // La lectura por la FK inversa (shop-api) se deja una de las filas de su dueño.
+  'inverse-finder': ['Repositories/', /(\.Where\(r => r\.\w+Id == \w+Id\))\.ToListAsync/g, '$1.Skip(1).ToListAsync'],
   // Los finders (DSL 2.22): el where que no filtra, el extremo inclusivo que deja de serlo y el texto sin plegar.
   'finder-where': ['Repositories/', 'var query = Graph().AsNoTracking().Where(r => ', 'var query = Graph().AsNoTracking().Where(r => true || '],
   'finder-range': ['Repositories/', /(query = query\.Where\(r => r\.\w+) >= /g, '$1 > '],

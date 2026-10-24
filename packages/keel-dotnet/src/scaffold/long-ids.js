@@ -23,9 +23,10 @@ public static class ${LONG_IDS_CLASS}
     private const long EpochMs = ${LONG_ID_EPOCH_MS}L;
     private const int RandomBits = ${LONG_ID_RANDOM_BITS};
 
+    // El aleatorio pasa por uint: un int en un OR con long se extiende con signo y el compilador lo rechaza (CS0675).
     /// <summary>Un id nuevo.</summary>
     public static long Next() =>
-        ((DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - EpochMs) << RandomBits) | System.Security.Cryptography.RandomNumberGenerator.GetInt32(1 << RandomBits);
+        ((DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - EpochMs) << RandomBits) | (uint)System.Security.Cryptography.RandomNumberGenerator.GetInt32(1 << RandomBits);
 }`;
   return [{ path, content: csFile({ namespace, body }) }];
 }

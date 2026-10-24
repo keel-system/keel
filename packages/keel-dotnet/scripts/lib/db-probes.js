@@ -25,7 +25,23 @@
 // Las muestras respetan las cotas y los patrones del diseño (el texto de un patrón lo da `sampleFor`, el mismo de las
 // sondas de keel-nest), y cada una es distinta: dos muestras no comparten clave natural.
 
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
+
+/**
+ * El tipo C# del id de una raíz (Guid salvo que el diseño diga otro: un legacy trae ids long o int, shop-api) y un id
+ * nuevo de ese tipo para una muestra. El long y el int son aleatorios y no un contador: las sondas guardan sin vaciar
+ * entre pasadas, y dos muestras con el mismo id serían la misma fila.
+ */
+export function idCsType(model, entityName) {
+  return model.entities.find((entity) => entity.name === entityName)?.idField?.csType ?? 'Guid';
+}
+
+function freshId(field, salt) {
+  if (field.base === 'uuid' || field.csType === 'Guid') return `Guid.Parse("${randomUUID()}")`;
+  if (field.csType === 'long') return `${randomInt(1, 2 ** 47)}L`;
+  if (field.csType === 'int') return String(randomInt(1, 2 ** 31 - 1));
+  return csString(`id-${salt}`);
+}
 import { constraintErrors, declaredConcurrencyError, foldedShadow, idempotencyOutcomeCode, LOCK_VERSION, persistedMembers, partialUniqueIndexes, indexName } from 'keel-core/gen';
 import { registryOperations } from 'keel-core/gen/request-idempotency';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
@@ -46,6 +62,7 @@ import { securityNamespace, usesHttpSecurity } from '../../src/scaffold/security
 import { usesCorrelation } from '../../src/scaffold/rest-support.js';
 import { projectionNamespace } from '../../src/scaffold/projections.js';
 import { naturalKeyBatchFinder } from '../../src/scaffold/repositories.js';
+import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
 import { occurredAtField } from 'keel-core/gen/replica';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
 import { FINDER_PROBE_TEXT, findersOf, finderTextProbes } from 'keel-core/gen/query-filters';
@@ -313,7 +330,7 @@ export function sampleState(model, entity, ctx, salt, depth = 0) {
     } else if (member.field.list) {
       value = listOf(model, member.field, ctx, salt);
     } else if (member.field.isId) {
-      value = member.field.base === 'uuid' || member.field.csType === 'Guid' ? `Guid.Parse("${randomUUID()}")` : csString(`id-${salt}`);
+      value = freshId(member.field, salt);
     } else {
       value = sampleValue(model, member.field, ctx, salt) ?? (member.type.endsWith('?') ? 'null' : 'default!');
     }
@@ -372,11 +389,14 @@ function probesCs(model, namespace, harness = null) {
     const beforeFinders = beforeDeadlock + (root === roots[0] ? 2 : 0);
     // Y en MySQL, la del id en la fila (uuidProbe): la última, para no mover ninguna.
     const beforeUuid = beforeFinders + finderSampleCount(model, root);
-    const total = beforeUuid + (uuidProbe(model, root) ? 1 : 0);
+    // Las del orden por rango y las de las inversas, detrás de todas: no mueven ninguna.
+    const beforeRank = beforeUuid + (uuidProbe(model, root) ? 1 : 0);
+    const beforeInverse = beforeRank + rankSampleCount(model, root);
+    const total = beforeInverse + inverseSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
-    const params = refs.map((ref) => `Guid ${csLocal(`${ref}Id`)}`).join(', ');
+    const params = refs.map((ref) => `${idCsType(model, ref)} ${csLocal(`${ref}Id`)}`).join(', ');
     const args = refs.map((ref) => `await Ensure${ref}(services)`).join(', ');
     states.forEach((state, index) => {
       samples.push(`    private static ${root.name}State ${root.name}State${index + 1}(${params}) =>\n        ${state};`);
@@ -555,6 +575,8 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
     tests.push(...filterFoldProbes(model, root, { state, first: beforeFold + 1 + (foldedKeyMembers(root).length > 0 ? 2 : 0), port, members: allNames, id }));
     if (root === roots[0]) tests.push(...deadlockProbes(model, root, { state, first: beforeDeadlock + 1, port, id, concurrency }));
     tests.push(...finderProbes(model, root, { state, first: beforeFinders + 1, port, members: allNames, id, usings: ctx.usings }));
+    tests.push(...rankProbes(model, root, { state, first: beforeRank + 1, port, members: allNames, id, usings: ctx.usings }));
+    tests.push(...inverseFinderProbes(model, root, { state, first: beforeInverse + 1, port, id, members: allNames, ctx }));
     tests.push(...credentialProbes(model, root, { state, sample: 16, port }));
     tests.push(...authorshipProbe(model, root, {
       state,
@@ -610,9 +632,10 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
     const refs = [...inner.refs].filter((ref) => ref !== name);
     queue.push(...refs);
     const lets = refs.map((ref) => `        var ${csLocal(`${ref}Id`)} = await Ensure${ref}(services);`).join('\n');
-    ensures.push(`    private static Guid? saved${name};
+    const idType = idCsType(model, name);
+    ensures.push(`    private static ${idType}? saved${name};
 
-    private static async Task<Guid> Ensure${name}(IServiceProvider services)
+    private static async Task<${idType}> Ensure${name}(IServiceProvider services)
     {
         if (saved${name} is { } known)
         {
@@ -794,7 +817,8 @@ function filterFoldProbes(model, root, { state, first, port, members, id }) {
  */
 function deadlockProbes(model, root, { state, first, port, id, concurrency }) {
   const idColumn = root.idField?.columns?.name ?? 'id';
-  const lock = (variable) => `await db.Database.SqlQuery<Guid>($"SELECT ${idColumn} ${sqlDialect(model).alias} FROM ${root.tableName} WHERE ${idColumn} = {${variable}} FOR UPDATE").ToListAsync(Cancel);`;
+  const idType = idCsType(model, root.name);
+  const lock = (variable) => `await db.Database.SqlQuery<${idType}>($"SELECT ${idColumn} ${sqlDialect(model).alias} FROM ${root.tableName} WHERE ${idColumn} = {${variable}} FOR UPDATE").ToListAsync(Cancel);`;
   return [
     `    [Fact]
     public async Task Concurrencia_ElInterbloqueoSeRepiteHastaQueLasDosTransaccionesTerminan()
@@ -804,7 +828,7 @@ function deadlockProbes(model, root, { state, first, port, id, concurrency }) {
         await InScope(other => other.GetRequiredService<${port}>().Save(a, Cancel));
         await InScope(other => other.GetRequiredService<${port}>().Save(b, Cancel));
         var attempts = 0;
-        async Task Cross(Guid firstId, Guid secondId)
+        async Task Cross(${idType} firstId, ${idType} secondId)
         {
             await using var scope = root.CreateAsyncScope();
             var transactions = scope.ServiceProvider.GetRequiredService<PersistenceTransactions>();
@@ -930,7 +954,7 @@ export function finderProbes(model, root, { state, first, port, members, id, usi
     const fixedLiteral = (entry) =>
       entry.field.kind === 'enum' ? `${enumOf(entry.field).name}.${enumMember(entry.value)}` : typeof entry.value === 'string' ? csString(entry.value) : String(entry.value);
     const otherThan = (field, expr) =>
-      field.kind === 'enum' ? `Enum.GetValues<${enumOf(field).name}>().First(value => value != ${expr})` : field.base === 'boolean' ? `!${expr}` : `${expr} + "-otro"`;
+      field.kind === 'enum' ? `Enum.GetValues<${enumOf(field).name}>().First(value => value != ${expr})` : field.base === 'boolean' ? `!${expr}` : ['int', 'long', 'decimal'].includes(field.base) ? `${expr} + 1` : `${expr} + "-otro"`;
     // La fila de fuera lleva otro texto: si el campo es único (una clave natural), el mismo chocaría al guardarla.
     const overrides = (extra, text = FINDER_TEXT) => Object.fromEntries([...textCriteria.map((criterion) => [criterion.target.field.name, csString(text)]), ...extra]);
     const build = (source, values) => members.map((name) => `${csMember(name)} = ${values[name] ?? `${source}.${csMember(name)}`},`).join('\n                ');
@@ -964,7 +988,9 @@ export function finderProbes(model, root, { state, first, port, members, id, usi
       const member = domainMembers(model, root).find((candidate) => candidate.name === (criterion.target.kind === 'relation' ? `${criterion.target.relation.name}Id` : criterion.target.field.name));
       const nullable = criterion.target.kind === 'vo' ? !field.required : Boolean(member?.type.endsWith('?'));
       locals.push(`            var ${local} = ${stored(criterion)}${nullable ? ` ?? throw new InvalidOperationException("la muestra no tiene ${criterion.target.path}")` : ''};`);
-      if (criterion.target.kind === 'relation' || field?.base === 'uuid') return { criterion, local, hits: [local], misses: ['Guid.CreateVersion7()'] };
+      // El id que no existe: del tipo del id de la raíz a la que apunta (un legacy trae ids long).
+      const pointsTo = criterion.target.kind === 'relation' ? idCsType(model, criterion.target.relation.entity) : field?.base === 'uuid' ? 'Guid' : null;
+      if (pointsTo) return { criterion, local, hits: [local], misses: [pointsTo === 'Guid' ? 'Guid.CreateVersion7()' : `${local} + 1`] };
       if (criterion.op === 'eq') {
         const textual = ['string', 'text'].includes(field?.base);
         const hit = textual && criterion.compare !== 'exact' ? `${local}.ToUpperInvariant()` : local;
@@ -1017,7 +1043,101 @@ ${locals.join('\n')}${locals.length > 0 ? '\n' : ''}${assertions.join('\n')}
   });
 }
 
+/**
+ * La sombra de RANGO por la que se ordena una raíz paginada (el sort de un enum va por la posición en que el diseño
+ * declara sus valores, no por su nombre: `rankShadow` de keel-core), o null. Hacen falta dos valores para que haya orden.
+ */
+function rankedSort(model, root) {
+  if (!isPaginated(model, root)) return null;
+  const member = persistedMembers(model, root).find((candidate) => candidate.kind === 'scalar' && candidate.ranked);
+  const enumDef = member && model.enums.find((candidate) => candidate.name === member.field.namedType);
+  return enumDef && enumDef.values.length >= 2 ? { member, enumDef } : null;
+}
+
+export function rankSampleCount(model, root) {
+  return rankedSort(model, root)?.enumDef.values.length ?? 0;
+}
+
+/**
+ * El orden por un enum: una muestra por valor, guardadas en el orden INVERSO de la declaración, y la página pedida por la
+ * sombra de rango tiene que devolverlas en el de la declaración. Por nombre saldrían en orden alfabético, y en shop-api
+ * (NEW, FINISHED, CANCELED) eso no es ni el uno ni el otro: es el fallo que destapó su corrida de control.
+ */
+export function rankProbes(model, root, { state, first, port, members, id, usings }) {
+  const ranked = rankedSort(model, root);
+  if (!ranked) return [];
+  const { member, enumDef } = ranked;
+  usings.push(...typeUsings(model, [enumDef.name]), repositoriesNamespace(model));
+  const values = enumDef.values.map((value) => `${enumDef.name}.${enumMember(value.literal)}`);
+  const saves = [...values].reverse().map((value, k) => `            var raw${k} = ${state(first + k)};
+            var s${k} = new ${root.name}(new ${root.name}State
+            {
+                ${members.map((name) => `${csMember(name)} = ${name === member.name ? value : `raw${k}.${csMember(name)}`},`).join('\n                ')}
+            });
+            await InScope(other => other.GetRequiredService<${port}>().Save(s${k}, Cancel));`);
+  const ids = values.map((_, k) => `s${k}.${id}`).join(', ');
+  return [`    [Fact]
+    public async Task ${root.name}_OrdenaPor${csMember(member.name)}EnElOrdenDeSuDeclaraciónYNoPorSuNombre() =>
+        await InScope(async services =>
+        {
+${saves.join('\n')}
+            var mine = new[] { ${ids} };
+            var page = await InScope(other => other.GetRequiredService<${port}>().List(new Pageable(0, 1000, [new SortOrder(${csString(member.ranked.name)}, SortDirection.Asc)]), Cancel));
+            Assert.Equal(new[] { ${values.join(', ')} }, page.Items.Where(found => mine.Contains(found.${id})).Select(found => found.${csMember(member.name)}).ToArray());
+        });`];
+}
+
+/** Las inversas de las que esta raíz es el destino (`ProductInOrder.cart`): dos muestras por cada una. */
+export function inverseSampleCount(model, root) {
+  return inverseFindersOf(model, root.name).length * 2;
+}
+
+/**
+ * La lectura por la FK inversa (`findAllBy<Inversa>Id`): un dueño NUEVO con exactamente dos filas, y el finder devuelve
+ * esas dos y ninguna más; para un id que no existe, nada. El dueño es de la sonda y no el de `Ensure<Dueño>`, que
+ * comparten todas las muestras: con ese, el finder que se deja una fila seguía devolviendo las dos de la sonda (medido con
+ * el sabotaje `inverse-finder`).
+ */
+export function inverseFinderProbes(model, root, { state, first, port, id, members, ctx }) {
+  return inverseFindersOf(model, root.name).map((inverse, index) => {
+    const [a, b] = [first + index * 2, first + index * 2 + 1];
+    const keyName = `${inverse.relation}Id`;
+    const key = csMember(keyName);
+    const owner = model.entities.find((entity) => entity.name === inverse.owner);
+    const ownerId = idCsType(model, inverse.owner);
+    const missing = ownerId === 'Guid' ? 'Guid.CreateVersion7()' : `${ownerId}.MaxValue`;
+    const finder = csMember(inverse.finder);
+    // El dueño, con sus propias referencias guardadas de verdad (las de Ensure, que no importa compartir).
+    const inner = { usings: ctx.usings, refs: new Set(), unsampled: ctx.unsampled, counter: ctx.counter };
+    const ownerState = sampleState(model, owner, inner, `${inverse.owner.toLowerCase()}inv${index}`);
+    const ownerRefs = [...inner.refs].filter((ref) => ref !== inverse.owner);
+    for (const ref of ownerRefs) ctx.refs.add(ref);
+    const lets = ownerRefs.map((ref) => `            var ${csLocal(`${ref}Id`)} = await Ensure${ref}(services);\n`).join('');
+    const row = (n, local) => `            var raw${local} = ${state(n)};
+            var ${local} = new ${root.name}(new ${root.name}State
+            {
+                ${members.map((name) => `${csMember(name)} = ${name === keyName ? `owner.${csMember(owner.idField?.name ?? 'id')}` : `raw${local}.${csMember(name)}`},`).join('\n                ')}
+            });
+            await InScope(other => other.GetRequiredService<${port}>().Save(${local}, Cancel));`;
+    return `    [Fact]
+    public async Task ${root.name}_${finder}DevuelveLasFilasDeSu${inverse.owner}() =>
+        await InScope(async services =>
+        {
+${lets}            var owner = new ${inverse.owner}(${ownerState.replaceAll('\n', '\n        ')});
+            await InScope(other => other.GetRequiredService<${portClass(owner)}>().Save(owner, Cancel));
+${row(a, 'a')}
+${row(b, 'b')}
+            var found = await InScope(other => other.GetRequiredService<${port}>().${finder}(owner.${csMember(owner.idField?.name ?? 'id')}, Cancel));
+            Assert.Equal(new[] { a.${id}, b.${id} }.Order(), found.Select(row => row.${id}).Order());
+            Assert.Empty(await InScope(other => other.GetRequiredService<${port}>().${finder}(${missing}, Cancel)));
+        });`;
+  });
+}
+
 export function idBatchProbe(model, root, { state, first, port }) {
+  const idType = idCsType(model, root.name);
+  // Un id que ninguna muestra tiene: los long e int de freshId salen de [1, 2^47), así que el máximo queda fuera.
+  const missingId = idType === 'Guid' ? 'Guid.CreateVersion7()' : `${idType}.MaxValue`;
   if (!idBatchReason(model, root)) return [];
   const id = csMember(root.idField?.name ?? 'id');
   return [`    [Fact]
@@ -1028,9 +1148,9 @@ export function idBatchProbe(model, root, { state, first, port }) {
             var second = new ${root.name}(${state(first + 1)});
             await InScope(other => other.GetRequiredService<${port}>().Save(first, Cancel));
             await InScope(other => other.GetRequiredService<${port}>().Save(second, Cancel));
-            var found = await InScope(other => other.GetRequiredService<${port}>().FindAllById(new[] { first.${id}, second.${id}, first.${id}, Guid.CreateVersion7() }, Cancel));
+            var found = await InScope(other => other.GetRequiredService<${port}>().FindAllById(new[] { first.${id}, second.${id}, first.${id}, ${missingId} }, Cancel));
             Assert.Equal(new[] { first.${id}, second.${id} }.OrderBy(value => value), found.Select(root => root.${id}).OrderBy(value => value));
-            Assert.Empty(await InScope(other => other.GetRequiredService<${port}>().FindAllById(Array.Empty<Guid>(), Cancel)));
+            Assert.Empty(await InScope(other => other.GetRequiredService<${port}>().FindAllById(Array.Empty<${idType}>(), Cancel)));
         });`];
 }
 
