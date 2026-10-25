@@ -36,6 +36,7 @@ import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startMongo, stopDatabase } from './lib/database-container.js';
 import { sampleEntity, PROBE_HELPERS } from './lib/samples.js';
 import { finderBlock } from './lib/finder-probes.js';
+import { rankBlock, inverseBlock } from './lib/rank-inverse-probes.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 import { adapterArgs, storeBlocks, storePreamble } from './lib/document-store-probes.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
@@ -53,7 +54,11 @@ const onlySubject = process.argv.find((arg) => arg.startsWith('--subject='))?.sp
 const SABOTAGES = {
   // Los finders (DSL 2.22): el texto buscado como patrón y no como literal, y el where que no filtra.
   'finder-literal': ['job-repository-impl.ts', String.raw`return value.replace(/[.*+?^${'$'}{}()|[\]\\]/g, '\\$&');`, 'return value;'],
-  'finder-where': ['job-repository-impl.ts', /^ {4}conditions\.push\(\{ '[^']+': toEnumName\(.*\) \}\);\n/gm, '']
+  'finder-where': ['job-repository-impl.ts', /^ {4}conditions\.push\(\{ '[^']+': toEnumName\(.*\) \}\);\n/gm, ''],
+  // El orden por un enum (shop-api-mongo): la sombra de rango mapeada a la clave del nombre, que es ordenar alfabéticamente.
+  'rank-sort': ['-repository-impl.ts', /\['(\w+)Rank', '(\w+)_rank'\]/g, "['$1Rank', '$2']"],
+  // La lectura por la FK inversa (shop-api-mongo) se deja una de las filas de su dueño.
+  'inverse-finder': ['-repository-impl.ts', /(const found = await this\.collection\.find\(\{ \w+_id: \w+\(\w+Id\) \}, \{ session: this\.session \}\)\.toArray\(\);\n\s+return found)\.map/g, '$1.slice(1).map']
 };
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -91,6 +96,17 @@ const SUBJECTS = [
     withoutLayers: [],
     mutate(layers) {
       layers.domain.entities.Job.fields.reference.compare = 'ignore-case-accents';
+    }
+  },
+  // La silueta de un legacy sobre documentos: ids `long`, el orden por un enum (la sombra de rango) y la lectura por la
+  // FK inversa. Ninguna fixture documental la tiene; se deriva de shop-api cambiando solo el modelo (la misma derivada
+  // que el doc-check de keel-dotnet).
+  {
+    name: 'shop-api',
+    label: 'shop-api-mongo',
+    withoutLayers: [],
+    mutate(layers) {
+      layers.persistence.default.model = 'document';
     }
   },
   // Los finders de las búsquedas sobre documentos (DSL 2.22): la lista y la página con enum, rango exclusivo y texto
@@ -281,6 +297,8 @@ function memberOf(entity, field) {
 /** Lo que se comprueba de una raíz. */
 function rootBlock(model, root, index, ctx) {
   const name = root.name;
+  // El id por su nombre: un legacy no lo llama `id` (shop-api: `cartId`, long).
+  const idName = root.idField?.name ?? 'id';
   const first = sampleEntity(model, root, ctx, `${index}a`);
   const second = sampleEntity(model, root, ctx, `${index}b`);
   const finder = naturalKeyFinder(model, root);
@@ -298,7 +316,7 @@ try {
   const collection = database.collection('${root.collectionName}');
   const original = ${first};
   await repository.save(original);
-  const loaded = await repository.findById(original.id);
+  const loaded = await repository.findById(original.${idName});
   check('${name}: findById devuelve lo que se guardó', loaded != null);
   const diff = differences(snapshot(original), snapshot(loaded));
   check('${name}: ida y vuelta sin perder nada (escala, uuid, fechas, enums, orden)', diff.length === 0, diff.slice(0, 6).join(' | '));
@@ -310,7 +328,7 @@ ${policyAudit ? `  const born = raw?.created_at;
   await repository.save(loaded);
   const rewritten = await collection.findOne({ _id: raw._id });
   check('${name}: reescribir conserva created_at y mueve updated_at', born instanceof Date && rewritten?.created_at?.getTime() === born.getTime() && rewritten?.updated_at > raw.updated_at, JSON.stringify({ born, now: rewritten?.created_at }));
-  const current = await repository.findById(original.id);` : '  const current = loaded;'}
+  const current = await repository.findById(original.${idName});` : '  const current = loaded;'}
 ${root.usesOptimisticLocking ? `  check('${name}: nace con la versión 0', loaded?.lockVersion === 0, loaded?.lockVersion);
   await repository.save(current);
   try {
@@ -321,7 +339,7 @@ ${root.usesOptimisticLocking ? `  check('${name}: nace con la versión 0', loade
     check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia', error instanceof OptimisticLockConflict && translated?.httpStatus === 409, translated?.code ?? error?.message);
   }` : ''}
 ${finder ? `  const found = await repository.${finder.name}(${finder.params.map((param) => `original.${param.name}`).join(', ')});
-  check('${name}: el finder de la clave natural encuentra el agregado', found?.id === original.id);
+  check('${name}: el finder de la clave natural encuentra el agregado', found?.${idName} === original.${idName});
   const rival = ${second};
   const clash = new ${name}({ ...stateOf(rival), ${finder.params.map((param) => `${param.name}: original.${param.name}`).join(', ')} });
   try {
@@ -351,10 +369,10 @@ ${partial && occupant && otherState ? `  // El índice condicionado (${partial.n
       check('${name}: dentro del estado ${partial.when.equals} la clave repetida sale como el error del diseño', translated && translated !== 'integrity' && translated.httpStatus === 409, translated?.code ?? translated ?? error?.message);
     }
     const occupying = await repository.${occupant.name}(${occupant.params.map((param) => (param.name === partial.when.field ? JSON.stringify(partial.when.equals) : `a.${param.name}`)).join(', ')});
-    check('${name}: el finder del índice condicionado encuentra al que lo ocupa', occupying?.id === a.id, occupying?.id);
+    check('${name}: el finder del índice condicionado encuentra al que lo ocupa', occupying?.${idName} === a.${idName}, occupying?.${idName});
   }` : ''}
-${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [{ property: 'id', direction: 'desc' }] });
-  check('${name}: list devuelve la página con su total y en el orden pedido', page.totalElements >= 1 && page.items.length >= 1 && page.items.every((item, i, all) => i === 0 || String(all[i - 1].id) >= String(item.id)), JSON.stringify({ total: page.totalElements, n: page.items.length }));
+${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [{ property: '${idName}', direction: 'desc' }] });
+  check('${name}: list devuelve la página con su total y en el orden pedido', page.totalElements >= 1 && page.items.length >= 1 && page.items.every((item, i, all) => i === 0 || (typeof item.${idName} === 'string' ? String(all[i - 1].${idName}) >= String(item.${idName}) : all[i - 1].${idName} >= item.${idName})), JSON.stringify({ total: page.totalElements, n: page.items.length }));
   try {
     await repository.list({ page: 0, size: 5, sort: [{ property: 'noExiste', direction: 'asc' }] });
     check('${name}: ordenar por una propiedad que no existe es un error', false, 'ordenó');
@@ -364,21 +382,23 @@ ${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [{
 ${guardClaimsFor(model, root.name).map((claim) => `  // La guarda del efecto irreversible (mail.sentBy): la primera ejecución se lleva la fila y la deja en
   // ${claim.to}; la SEGUNDA no se la lleva — esa es toda la promesa, y su fallo es un segundo correo real.
   {
-    const guarded = await repository.findById(original.id);
-    const first = await repository.${claim.method}(guarded.id);
-    check('${name}: ${claim.method} se lleva la fila y la pasa a ${claim.to}', first != null && String(first.id) === String(guarded.id) && String(first.${root.lifecycle.field}) !== String(guarded.${root.lifecycle.field}), JSON.stringify(first?.${root.lifecycle.field}));
-${claim.stampField ? `    check('${name}: ${claim.method} estampa ${claim.stampField} en el mismo reclamo', first?.${claim.stampField} instanceof Date, String(first?.${claim.stampField}));\n` : ''}    const second = await repository.${claim.method}(guarded.id);
+    const guarded = await repository.findById(original.${idName});
+    const first = await repository.${claim.method}(guarded.${idName});
+    check('${name}: ${claim.method} se lleva la fila y la pasa a ${claim.to}', first != null && String(first.${idName}) === String(guarded.${idName}) && String(first.${root.lifecycle.field}) !== String(guarded.${root.lifecycle.field}), JSON.stringify(first?.${root.lifecycle.field}));
+${claim.stampField ? `    check('${name}: ${claim.method} estampa ${claim.stampField} en el mismo reclamo', first?.${claim.stampField} instanceof Date, String(first?.${claim.stampField}));\n` : ''}    const second = await repository.${claim.method}(guarded.${idName});
     check('${name}: ${claim.method} por segunda vez devuelve null (la carrera perdida)', second == null, JSON.stringify(second?.${root.lifecycle.field}));
-    const reloaded = await repository.findById(guarded.id);
+    const reloaded = await repository.findById(guarded.${idName});
     check('${name}: ${claim.method} CONFIRMÓ la marca (la ve una lectura posterior)', String(reloaded?.${root.lifecycle.field}) === String(first?.${root.lifecycle.field}), JSON.stringify(reloaded?.${root.lifecycle.field}));
   }`).join('\n')}
 ${foldedBlock(model, root, index, ctx, finder)}
 ${finderBlock(model, root, index, ctx, { sampleEntity })}
+${rankBlock(model, root, index, ctx, { paginated, sampleEntity })}
+${inverseBlock(model, root, index, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` })}
 ${credentialFinders(model, root).map((credential) => `  // La credencial que NO es la primera de la lista: resolver por la clave natural no la encontraría.
-  check('${name}: ${credential.name} resuelve por una credencial que no es la primera', (await repository.${credential.name}(original.${credential.field.name}[original.${credential.field.name}.length - 1]))?.id === original.id);
+  check('${name}: ${credential.name} resuelve por una credencial que no es la primera', (await repository.${credential.name}(original.${credential.field.name}[original.${credential.field.name}.length - 1]))?.${idName} === original.${idName});
   check('${name}: ${credential.name} con una credencial ajena devuelve null', (await repository.${credential.name}('nadie-' + randomUUID())) == null);`).join('\n')}
-  await repository.deleteById(original.id);
-  check('${name}: deleteById borra el documento', (await repository.findById(original.id)) == null && (await collection.countDocuments({ _id: raw._id })) === 0);
+  await repository.deleteById(original.${idName});
+  check('${name}: deleteById borra el documento', (await repository.findById(original.${idName})) == null && (await collection.countDocuments({ _id: raw._id })) === 0);
 } catch (error) {
   // Un fallo inesperado es una comprobación roja con su causa, no una sonda muerta sin resumen.
   check('${name}: la sonda recorre la raíz sin un error inesperado', false, String(error?.stack ?? error).slice(0, 400));

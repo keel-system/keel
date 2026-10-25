@@ -27,7 +27,7 @@ import { repositoryRoots, portClass, repositoriesNamespace, isPaginated } from '
 import { isNullable } from '../../src/scaffold/render.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
-import { authorshipProbe, finderProbes, finderSampleCount, idBatchProbe, counter, credentialProbes, guardProbes, guardSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
+import { authorshipProbe, finderProbes, finderSampleCount, idCsType, inverseFinderProbes, inverseSampleCount, rankProbes, rankSampleCount, idBatchProbe, counter, credentialProbes, guardProbes, guardSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
 import { documentProbeSupport, storeKeyBlock, documentOutboxBlock, documentBridgeBlock, documentReconciliationStoreBlock, documentClaimProbes, documentReconciliationProbes, documentPurgeBlock } from './doc-store-probes.js';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { bridgeClass, messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
@@ -124,7 +124,11 @@ export function documentRules(model, entity, seen = new Set([entity.name])) {
         rules[entry.name] = { t: 'string', nullable: true };
         break;
       case 'ref':
-        rules[entry.name] = { t: 'uuid', nullable: !entry.relation.required };
+        // Con el almacenamiento del id de la raíz a la que apunta (el contrato lo dice: un legacy trae ids long).
+        rules[entry.name] = { t: entry.storage, nullable: !entry.relation.required };
+        break;
+      case 'rank':
+        rules[entry.name] = { t: 'int', nullable: !entity.fields.find((field) => field.name === entry.of)?.required };
         break;
       case 'version':
         rules[entry.name] = { t: 'long', nullable: false };
@@ -243,11 +247,14 @@ function probesCs(model, namespace) {
     const beforeFold = beforeBatch + (idBatchReason(model, root) ? 2 : 0);
     const beforeFinders = beforeFold + (foldedKeyMembers(root).length > 0 ? 2 : 0);
     // Las de los finders (DSL 2.22), las últimas de todas.
-    const total = beforeFinders + finderSampleCount(model, root);
+    // Las del orden por rango y las de las inversas, detrás de todas: no mueven ninguna.
+    const beforeRank = beforeFinders + finderSampleCount(model, root);
+    const beforeInverse = beforeRank + rankSampleCount(model, root);
+    const total = beforeInverse + inverseSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
-    const params = refs.map((ref) => `Guid ${ref[0].toLowerCase()}${ref.slice(1)}Id`).join(', ');
+    const params = refs.map((ref) => `${idCsType(model, ref)} ${ref[0].toLowerCase()}${ref.slice(1)}Id`).join(', ');
     const args = refs.map((ref) => `await Ensure${ref}(services)`).join(', ');
     states.forEach((state, index) => {
       samples.push(`    private static ${root.name}State ${root.name}State${index + 1}(${params}) =>\n        ${state};`);
@@ -438,6 +445,8 @@ function probesCs(model, namespace) {
     tests.push(...credentialProbes(model, root, { state, sample: 18, port }));
     tests.push(...idBatchProbe(model, root, { state, first: beforeBatch + 1, port }));
     tests.push(...finderProbes(model, root, { state, first: beforeFinders + 1, port, members: allNames, id, usings: ctx.usings }));
+    tests.push(...rankProbes(model, root, { state, first: beforeRank + 1, port, members: allNames, id, usings: ctx.usings }));
+    tests.push(...inverseFinderProbes(model, root, { state, first: beforeInverse + 1, port, id, members: allNames, ctx }));
     tests.push(...authorshipProbe(model, root, {
       state,
       sample: 19,
@@ -500,9 +509,10 @@ function probesCs(model, namespace) {
     const refs = [...inner.refs].filter((ref) => ref !== name);
     queue.push(...refs);
     const lets = refs.map((ref) => `        var ${ref[0].toLowerCase()}${ref.slice(1)}Id = await Ensure${ref}(services);`).join('\n');
-    ensures.push(`    private static Guid? saved${name};
+    const idType = idCsType(model, name);
+    ensures.push(`    private static ${idType}? saved${name};
 
-    private static async Task<Guid> Ensure${name}(IServiceProvider services)
+    private static async Task<${idType}> Ensure${name}(IServiceProvider services)
     {
         if (saved${name} is { } known)
         {

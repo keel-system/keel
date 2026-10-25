@@ -31,6 +31,14 @@ import { AUDIT_ACTOR_TS } from './audit-actor.js';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────
 
+/**
+ * El campo id de la raíz a la que apunta una referencia: la referencia se guarda y se lee con SU convertidor. Con un uuid
+ * fijo, una referencia a una raíz con id `long` (un legacy: shop-api) se escribía como binario y no se leía.
+ */
+function refIdField(model, relation) {
+  return model.entities.find((candidate) => candidate.name === relation.entity)?.fields.find((field) => field.isId) ?? { base: 'uuid', kind: 'base' };
+}
+
 /** La expresión que lleva un valor ESCALAR del dominio al documento (`expr` es el valor del dominio). */
 function writeScalar(field, expr, use) {
   if (field.kind === 'enum') {
@@ -133,12 +141,14 @@ function entityFunctions(model, entity, use, vos) {
       use.import({ symbol: 'TextFold', from: TEXT_FOLD_TS });
       writes.push(`    ${entry.name}: TextFold.${folded?.accents ? 'foldCaseAndAccents' : 'foldCase'}(entity.${entry.of})`);
     } else if (entry.kind === 'rank') {
+      // La posición del valor del CAMPO (`entry.of`), no de la sombra: `entity.<sombra>` no existe en el dominio.
       use.import({ symbol: entry.enum, from: classPath(DIRS.enums, entry.enum) });
       const ranked = members.find((m) => m.kind === 'scalar' && m.name === entry.of)?.ranked;
-      const position = `Object.values(${entry.enum}).indexOf(${value})`;
-      writes.push(`    ${entry.name}: ${ranked?.required ? position : `${value} == null ? null : ${position}`}`);
+      const source = `entity.${entry.of}`;
+      const position = `Object.values(${entry.enum}).indexOf(${source})`;
+      writes.push(`    ${entry.name}: ${ranked?.required ? position : `${source} == null ? null : ${position}`}`);
     } else if (entry.kind === 'ref') {
-      writes.push(`    ${entry.name}: ${use.helper('toUuid', value)}`);
+      writes.push(`    ${entry.name}: ${writeScalar(refIdField(model, entry.relation), value, use)}`);
     } else if (entry.kind === 'subdocument' && entry.valueObject) {
       vos.add(entry.valueObject);
       writes.push(`    ${entry.name}: ${entry.field.required ? `toDocument${entry.valueObject}(${value})` : `${value} == null ? null : toDocument${entry.valueObject}(${value})`}`);
@@ -160,7 +170,7 @@ function entityFunctions(model, entity, use, vos) {
     const key = keyOf(model, entity, member.name);
     const source = `document.${key}`;
     if (member.kind === 'externalRef') {
-      reads.push(`    ${member.name}: ${use.helper('fromUuid', source)}`);
+      reads.push(`    ${member.name}: ${readScalar(refIdField(model, member.relation), source, use, Boolean(member.relation.required))}`);
     } else if (member.kind === 'relationMany') {
       // El orden de un array de Mongo es el de inserción, que tras reordenar ya no es el del diseño: con un campo de
       // posición, el mapeo lo restablece —y desempata por id—, como el Comparator de keel-spring y la consulta
@@ -220,7 +230,7 @@ function keyFilter(model, entity, finder, use) {
   for (const param of finder.params) {
     const member = members.find((m) => m.name === param.name || (m.kind === 'externalRef' && m.name === param.name));
     if (member?.kind === 'externalRef') {
-      conditions.push(`${tsString(member.column)}: ${use.helper('toUuid', param.name)}`);
+      conditions.push(`${tsString(member.column)}: ${writeScalar(refIdField(model, member.relation), param.name, use)}`);
     } else if (member?.kind === 'vo') {
       const vo = member.vo;
       for (const sub of vo?.fields ?? []) {
@@ -576,7 +586,7 @@ function documentTarget(model, entity, criterion, use) {
   if (criterion.shadow) return { key: keyOf(model, entity, criterion.shadow.name), write: (expr) => expr };
   if (target.kind === 'relation') {
     const member = persistedMembers(model, entity).find((candidate) => candidate.kind === 'externalRef' && candidate.relation.name === target.relation.name);
-    return { key: member?.column ?? `${snakeCase(target.relation.name)}_id`, write: (expr) => use.helper('toUuid', expr) };
+    return { key: member?.column ?? `${snakeCase(target.relation.name)}_id`, write: (expr) => writeScalar(refIdField(model, target.relation), expr, use) };
   }
   if (target.kind === 'vo') return { key: `${keyOf(model, entity, target.field.name)}.${snakeCase(target.sub.name)}`, write: (expr) => writeScalar(target.sub, expr, use) };
   return { key: keyOf(model, entity, target.field.name), write: (expr) => writeScalar(target.field, expr, use) };

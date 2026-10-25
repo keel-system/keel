@@ -85,6 +85,16 @@ const SUBJECTS = [
       layers.domain.entities.Job.fields.reference.compare = 'ignore-case-accents';
     }
   },
+  // La silueta de un legacy sobre documentos: ids `long`, el orden por un enum (la sombra de rango) y la lectura por la FK
+  // inversa. Ninguna fixture documental la tiene; se deriva de shop-api (relacional) cambiando solo el modelo.
+  {
+    name: 'shop-api-mongo',
+    from: 'shop-api',
+    mutate(manifest, layers) {
+      manifest.service.name = 'shop-api-mongo';
+      layers.persistence.default.model = 'document';
+    }
+  },
   // `optimisticLocking: declared` sobre documentos: la versión que declara el dominio (el MISMO parche que compila cs-check).
   ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author'].includes(branch.name)).map((branch) => ({
     name: branch.name,
@@ -97,6 +107,10 @@ const SUBJECTS = [
 // El fin de línea de lo emitido (la llamada sigue en la línea siguiente).
 const NL = String.fromCharCode(10);
 const SABOTAGES = {
+  // El orden por un enum (shop-api-mongo): la sombra de rango mapeada a la clave del nombre, que es ordenar alfabéticamente.
+  'rank-sort': ['Repositories/', /\["(\w+)Rank"\] = "(\w+)_rank"/g, '["$1Rank"] = "$2"'],
+  // La lectura por la FK inversa (shop-api-mongo) se deja una de las filas de su dueño.
+  'inverse-finder': ['Repositories/', /(var found = await Find\(new BsonDocument\("\w+_id", BsonValues\.Of\(\w+Id\)\)\)\.ToListAsync\(cancellationToken\);\s+return \[\.\. found)\.Select/g, '$1.Skip(1).Select'],
   decimal: ['Persistence/BsonValues.cs', 'public static BsonValue Of(decimal value) => new BsonDecimal128(new Decimal128(value));', 'public static BsonValue Of(decimal value) => new BsonString(value.ToString(System.Globalization.CultureInfo.InvariantCulture));'],
   uuid: [
     'Persistence/BsonValues.cs',

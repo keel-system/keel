@@ -126,7 +126,10 @@ export function documentShape(model, entity) {
     } else if (member.kind === 'vo') {
       shape.push({ name: snakeCase(member.name), member: member.name, kind: 'subdocument', valueObject: member.field.namedType, field: member.field });
     } else if (member.kind === 'externalRef') {
-      shape.push({ name: `${snakeCase(member.relation.name)}_id`, member: member.name, kind: 'ref', storage: 'uuid', relation: member.relation });
+      // Con el almacenamiento del id de la raíz a la que apunta: un legacy trae ids `long` (shop-api), y un uuid fijo
+      // hacía que el contrato pidiera un binario donde el documento guarda un Int64.
+      const targetId = (model.entities ?? []).find((candidate) => candidate.name === member.relation.entity)?.fields.find((field) => field.isId);
+      shape.push({ name: `${snakeCase(member.relation.name)}_id`, member: member.name, kind: 'ref', storage: targetId ? storageOf(targetId) : 'uuid', relation: member.relation });
     } else if (member.kind === 'elementCollection') {
       const { field } = member;
       const element = field.kind === 'composite' ? { valueObject: field.namedType } : { storage: storageOf(field) };

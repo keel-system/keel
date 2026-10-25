@@ -74,7 +74,7 @@ import {
 } from '../src/scaffold/messaging.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { idempotencyOutcomeCodes } from 'keel-core/gen';
-import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
+import { rankBlock, inverseBlock } from './lib/rank-inverse-probes.js';
 import { idBatchReason } from 'keel-core/gen/ref-targets';
 
 const args = process.argv.slice(2);
@@ -404,8 +404,8 @@ ${finder ? `  const found = await repository.${finder.name}(${finder.params.map(
 ${foldedBlock(model, root, index, ctx, finder)}
 ${filterFoldBlock(model, root, index, ctx)}
 ${finderBlock(model, root, index, ctx, { sampleEntity })}
-${rankBlock(model, root, index, ctx, paginated)}
-${inverseBlock(model, root, index, ctx)}
+${rankBlock(model, root, index, ctx, { paginated, sampleEntity })}
+${inverseBlock(model, root, index, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(tx, eventSink)` })}
 ${idBatchReason(model, root) ? `  {
     // findAllById: UNA consulta con In([...]) — en MySQL el id es binary(16) con transformador, y que TypeORM lo
     // aplique a cada valor del In es lo que aquí se mide (si no, la consulta no casaría nada sin dar error).
@@ -434,59 +434,6 @@ ${credentialFinders(model, root).map((credential) => `  // La credencial que NO 
   await repository.deleteById(original.${idName});
   check('${name}: deleteById borra el agregado y su grafo', (await repository.findById(original.${idName})) == null);
 }`;
-}
-
-/**
- * El orden por un enum: va por la posición en que el diseño declara sus valores (la sombra de rango de keel-core,
- * `rankShadow`), no por su nombre. Una muestra por valor, guardadas en el orden INVERSO de la declaración, y la página
- * pedida por la sombra las devuelve en el de la declaración. La misma sonda que el db-check de keel-dotnet (rankProbes).
- */
-function rankBlock(model, root, index, ctx, paginated) {
-  if (!paginated) return '';
-  const member = persistedMembers(model, root).find((candidate) => candidate.kind === 'scalar' && candidate.ranked);
-  const enumDef = member && model.enums.find((candidate) => candidate.name === member.field.namedType);
-  if (!enumDef || enumDef.values.length < 2) return '';
-  ctx.imports.add(`${enumDef.name}|${classPath(DIRS.enums, enumDef.name)}`);
-  const idName = root.idField?.name ?? 'id';
-  const samples = enumDef.values.map((_, k) => sampleEntity(model, root, ctx, `${index}r${k}`));
-  return `  {
-    const declared = Object.values(${enumDef.name});
-    const samples = [${samples.join(', ')}];
-    const mine = [];
-    for (const [k, value] of [...declared].reverse().entries()) {
-      const sample = new ${root.name}({ ...stateOf(samples[k]), ${member.name}: value });
-      await repository.save(sample);
-      mine.push(String(sample.${idName}));
-    }
-    const page = await repository.list({ page: 0, size: 1000, sort: [{ property: '${member.ranked.name}', direction: 'asc' }] });
-    const got = page.items.filter((item) => mine.includes(String(item.${idName}))).map((item) => item.${member.name});
-    check('${root.name}: ordena por ${member.name} en el orden de su declaración y no por su nombre', JSON.stringify(got) === JSON.stringify(declared), JSON.stringify(got));
-  }`;
-}
-
-/**
- * La lectura por la FK inversa (`findAllBy<Inversa>Id`): un dueño nuevo con exactamente dos filas, y el finder devuelve
- * esas dos y ninguna más; para un id que no existe, nada. La misma sonda que el db-check de keel-dotnet.
- */
-function inverseBlock(model, root, index, ctx) {
-  const idName = root.idField?.name ?? 'id';
-  return inverseFindersOf(model, root.name).map((inverse, k) => {
-    const owner = model.entities.find((entity) => entity.name === inverse.owner);
-    const ownerId = owner.idField?.name ?? 'id';
-    const row = (salt) => `new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}i${k}${salt}`)}), ${inverse.relation}Id: owner.${ownerId} })`;
-    return `  {
-    const owner = ${sampleEntity(model, owner, ctx, `${index}o${k}`)};
-    await new ${adapterClass(owner)}(tx, eventSink).save(owner);
-    const a = ${row('a')};
-    const b = ${row('b')};
-    await repository.save(a);
-    await repository.save(b);
-    const found = await repository.${inverse.finder}(owner.${ownerId});
-    const got = found.map((item) => String(item.${idName})).sort();
-    check('${root.name}: ${inverse.finder} devuelve las filas de su ${inverse.owner} y ninguna más', JSON.stringify(got) === JSON.stringify([String(a.${idName}), String(b.${idName})].sort()), JSON.stringify(got));
-    check('${root.name}: ${inverse.finder} con un id que no existe no devuelve nada', (await repository.${inverse.finder}(${freshIdLiteral(owner.idField)})).length === 0);
-  }`;
-  }).join('\n');
 }
 
 /**

@@ -154,11 +154,12 @@ export function databaseOf(raw: string): string {
 
 function bsonValuesFile() {
   const body = `/**
- * Un documento guardado: su \`_id\` es el id del agregado (un uuid binario, o el texto de un id que no es
- * uuid) y no el ObjectId que el driver da por defecto; el resto de claves, las del contrato.
+ * Un documento guardado: su \`_id\` es el id del agregado (un uuid binario, un Int64 o un Int32 si el id es \`long\` o
+ * \`int\` —un legacy: shop-api—, o el texto de un id que no es uuid) y no el ObjectId que el driver da por defecto; el
+ * resto de claves, las del contrato.
  */
 export interface StoredDocument {
-  _id: UUID | string;
+  _id: UUID | bigint | number | string;
   [key: string]: any;
 }
 

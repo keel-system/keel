@@ -1082,7 +1082,7 @@ export function rankProbes(model, root, { state, first, port, members, id, using
         {
 ${saves.join('\n')}
             var mine = new[] { ${ids} };
-            var page = await InScope(other => other.GetRequiredService<${port}>().List(new Pageable(0, 1000, [new SortOrder(${csString(member.ranked.name)}, SortDirection.Asc)]), Cancel));
+            var page = await InScope(other => other.GetRequiredService<${port}>().List(new Pageable(0, 1000, [new SortOrder(${csString(member.ranked.name)}, ${repositoriesNamespace(model)}.SortDirection.Asc)]), Cancel));
             Assert.Equal(new[] { ${values.join(', ')} }, page.Items.Where(found => mine.Contains(found.${id})).Select(found => found.${csMember(member.name)}).ToArray());
         });`];
 }
@@ -1108,7 +1108,7 @@ export function inverseFinderProbes(model, root, { state, first, port, id, membe
     const missing = ownerId === 'Guid' ? 'Guid.CreateVersion7()' : `${ownerId}.MaxValue`;
     const finder = csMember(inverse.finder);
     // El dueño, con sus propias referencias guardadas de verdad (las de Ensure, que no importa compartir).
-    const inner = { usings: ctx.usings, refs: new Set(), unsampled: ctx.unsampled, counter: ctx.counter };
+    const inner = { ...ctx, refs: new Set() };
     const ownerState = sampleState(model, owner, inner, `${inverse.owner.toLowerCase()}inv${index}`);
     const ownerRefs = [...inner.refs].filter((ref) => ref !== inverse.owner);
     for (const ref of ownerRefs) ctx.refs.add(ref);
