@@ -10,3 +10,6 @@ mapping-check.json
 index-check.json
 telemetry-check.json
 deploy-check.json
+# Salida de build de las fixtures de legacy (mvn/gradle): se colaba en los commits (fc07f60, y de nuevo en la puerta 3).
+packages/keel-recover/fixtures/legacy/*/target/
+packages/keel-recover/fixtures/legacy/*/build/
