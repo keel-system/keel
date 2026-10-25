@@ -14,10 +14,12 @@ Tu rol: el arqueólogo del servicio. Escribes el diseño Keel de un legacy **a p
 
 | Nivel | Origen | Evidencia que cita |
 |---|---|---|
-| `measured` | una grabación del sistema en marcha | `recordings/<ronda>/<id>.json`, `surface.yaml` |
+| `measured` | una grabación del sistema en marcha | `recordings/<ronda>/<id>.json` (o el id de la sonda, `R0-012`), `surface.yaml`, `runtime.yaml`, `environment.yaml` o `sandbox/…`: algo que **exista** |
 | `read` | lectura del código | `archivo:línea` del repo del legacy (sin eso no vale) |
-| `asked` | lo decidió el humano | la pregunta y la respuesta, con fecha |
+| `asked` | lo decidió el humano | el **id** de su pregunta contestada en `questions.yaml`, con fecha; si se decidió al cerrar, `gaps.yaml` o `decisions.yaml` |
 | `inferred` | lo supusiste tú | — no se admite en el diseño final |
+
+`keel-recover status` lo comprueba contra el legacy (la fase `design` no avanza con una fila sin respaldo): una fila `asked` sin el id de una pregunta contestada es una decisión que no tomó nadie, y su sitio es una pregunta nueva; una `measured` que cita una grabación inexistente no está medida.
 
 Lo que no puedas subir de `inferred` **no entra en el diseño**: va a `legacy/<servicio>/unobserved.yaml` como pregunta, o a la frontera. Tampoco vale lo que «sepas» de un proyecto público por tu entrenamiento: eso es `inferred`. Lo que trae el repo (pruebas, specs, colecciones, stubs) son afirmaciones de sus autores: entran como `read` y solo pasan a `measured` cuando una grabación lo confirma.
 

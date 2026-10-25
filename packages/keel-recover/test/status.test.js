@@ -112,6 +112,24 @@ test('una pregunta sin contestar, o contestada y sin aplicar, retiene la fase de
   save({ ...question, answer: 'Como el legacy', date: '2026-10-22' });
   assert.match(w.status().reason, /1 respuesta\(s\) sin aplicar/);
   save({ ...question, answer: 'Como el legacy', date: '2026-10-22', applied: true });
+  // Con questions.yaml, la procedencia necesita respaldo: las filas asked de conduit (recuperado a mano, antes de que
+  // existiera questions.yaml) no citan ninguna pregunta ni el cierre.
+  assert.equal(w.status().phase, 'design');
+  assert.match(w.status().reason, /fila\(s\) asked sin una pregunta contestada/);
+  const provenanceFile = path.join(w.spec, 'provenance.yaml');
+  const provenance = YAML.parse(fs.readFileSync(provenanceFile, 'utf8'));
+  for (const row of provenance.elements) if (row.level === 'asked') row.evidence = `${row.evidence}; decisions.yaml`;
+  fs.writeFileSync(provenanceFile, yaml(provenance));
+  // Y las measured, una grabación que exista: el workspace de la prueba no trae las que cita conduit.
+  assert.match(w.status().reason, /fila\(s\) measured sin una grabación que exista/);
+  for (const row of provenance.elements.filter((r) => r.level === 'measured')) {
+    for (const [id] of String(row.evidence).matchAll(/\bR\d+-\d+\b/g)) write(path.join(w.legacy, 'recordings', 'round-1', `${id}.json`), {});
+    for (const [ref] of String(row.evidence).matchAll(/recordings\/[^\s,;)"']+/g)) write(path.join(w.legacy, ref.endsWith('.json') ? ref : `${ref}.json`), {});
+  }
+  // «mongo 3.4.9 en el sandbox» es una medida del entorno: su respaldo es el juez del sandbox.
+  assert.match(w.status().reason, /1 fila\(s\) measured/);
+  for (const row of provenance.elements) if (row.element === 'persistence.default') row.evidence = `${row.evidence} (sandbox/verify.json)`;
+  fs.writeFileSync(provenanceFile, yaml(provenance));
   assert.equal(w.status().phase, 'characterize');
   // Un questions.yaml roto tampoco deja pasar: lo dice su schema.
   save({ id: 'x', kind: 'quizá' });

@@ -11,6 +11,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { assessReadiness, scenarioIdOf, splitScenarioBlocks } from 'keel-core';
 import { readFlowBlock } from './characterize.js';
+import { provenanceBacking } from './backing.js';
 import { validateAs } from './schema.js';
 
 /** Las fases, en orden. La primera sin cumplir es la siguiente. */
@@ -158,6 +159,18 @@ export function recoveryStatus(legacyDir, { spec, assess = assessReadiness } = {
       open.length ? 'preguntar al humano y escribir answer' : 'aplicar las respuestas al diseño (applied: true)',
       { details: { open: open.map((q) => q.id), unapplied: unapplied.map((q) => q.id) } }
     );
+  }
+  // La procedencia con respaldo (backing.js): lo que dice preguntado cita una pregunta contestada o el cierre, y lo que
+  // dice medido, una grabación que existe. Una decisión del diseñador sin pregunta no pasa por decisión del humano.
+  const backing = provenanceBacking(specDir, legacy, questions);
+  if (backing.asked.length || backing.measured.length) {
+    const parts = [
+      ...(backing.asked.length ? [`${backing.asked.length} fila(s) asked sin una pregunta contestada que la respalde`] : []),
+      ...(backing.measured.length ? [`${backing.measured.length} fila(s) measured sin una grabación que exista`] : [])
+    ];
+    return out('design', `provenance.yaml: ${parts.join(' y ')}`, 'citar en cada fila asked el id de su pregunta contestada (o gaps.yaml/decisions.yaml si se decidió al cerrar) y en cada measured la grabación; una decisión que nadie tomó es una pregunta nueva en questions.yaml', {
+      details: { unbackedAsked: backing.asked.map((r) => r.element), unbackedMeasured: backing.measured.map((r) => r.element) }
+    });
   }
   const readiness = assess(specDir);
   const red = (ids) => readiness.criteria.filter((c) => ids.includes(c.id) && !c.ok);
