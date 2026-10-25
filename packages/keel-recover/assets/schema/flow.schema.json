@@ -31,7 +31,12 @@
             "additionalProperties": { "type": "string" }
           },
           "expect": { "$ref": "#/$defs/expectation", "description": "Lo que el escenario afirma (en keep y frontier, contra el legacy; en todos, contra el servicio nuevo)." },
-          "legacy": { "$ref": "#/$defs/expectation", "description": "Solo en un flujo fix: lo que hace el legacy hoy, que es el defecto que el diseño corrige. Contra el legacy se comprueba esto en vez de `expect`." }
+          "legacy": { "$ref": "#/$defs/expectation", "description": "Solo en un flujo fix: lo que hace el legacy hoy, que es el defecto que el diseño corrige. Contra el legacy se comprueba esto en vez de `expect`." },
+          "hypothesis": {
+            "type": "string",
+            "pattern": "\\S+:\\d+",
+            "description": "La expectativa del LADO LEGACY de este paso (`legacy` en un fix, `expect` en keep y frontier) no sale de una grabación sino de leer el código en `archivo:línea`. Es una hipótesis: `keel-recover characterize` la confirma (y pasa a estar medida) o la informa como «hipótesis refutada» con lo que hizo el legacy de verdad, en vez de un rojo sin más. Sin la marca, una expectativa leída del código pasa por medida hasta que falla."
+          }
         }
       }
     }

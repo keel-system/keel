@@ -226,6 +226,9 @@ export function flowDefects(planned, sideName = 'legacy') {
   }
   if (planned.mark !== 'fix' && steps.some((s) => s.legacy)) return [`es ${planned.mark} y trae \`legacy:\`, que solo tiene sentido en un fix`];
   if (!steps.some((s) => expectationOf(planned, s, sideName))) return ['ningún paso afirma nada (`expect`): un flujo sin expectativas no demuestra nada'];
+  // Una hipótesis sin expectativa del lado legacy no dice qué se supone: no hay nada que confirmar ni que refutar.
+  const empty = steps.findIndex((s) => s.hypothesis && !expectationOf(planned, s, 'legacy'));
+  if (empty >= 0) return [`paso ${empty + 1} (${steps[empty].op}): marca una hipótesis (${steps[empty].hypothesis}) y no dice qué espera del legacy`];
   return [];
 }
 
@@ -235,7 +238,7 @@ export function flowDefects(planned, sideName = 'legacy') {
  * `{ ok, error }` vienen de fuera, para poder falsar el comprobador sin contenedores.
  */
 export async function runFlow(ctx, planned) {
-  const record = { id: planned.id, mark: planned.mark, ...(planned.ref ? { ref: planned.ref } : {}), sha256: planned.sha256, ok: false, failures: [], steps: [] };
+  const record = { id: planned.id, mark: planned.mark, ...(planned.ref ? { ref: planned.ref } : {}), sha256: planned.sha256, ok: false, failures: [], steps: [], hypotheses: { confirmed: [], refuted: [] } };
   const defects = flowDefects(planned, ctx.sideName);
   if (defects.length) {
     record.failures.push(...defects);
@@ -258,7 +261,16 @@ export async function runFlow(ctx, planned) {
         : res.status === 0 || res.status >= 500
           ? [`status ${res.status || 'sin respuesta'} en un paso sin expectativa`]
           : [];
-      record.failures.push(...fails.map((f) => `paso ${i + 1} (${step.op}): ${f}`));
+      // Contra el legacy, una expectativa leída del código (`hypothesis`) se confirma o se refuta: refutada, el flujo sigue
+      // en rojo —el diseño dice algo que el legacy no hace—, pero el motivo lo dice y trae lo que el legacy hizo de verdad.
+      const hypothesis = ctx.sideName === 'legacy' && expectation ? step.hypothesis : null;
+      if (hypothesis && fails.length) {
+        record.hypotheses.refuted.push({ step: i + 1, op: step.op, at: hypothesis, observed: { status: res.status, data: res.data } });
+        record.failures.push(...fails.map((f) => `paso ${i + 1} (${step.op}): hipótesis refutada (${hypothesis}): ${f}`));
+      } else {
+        if (hypothesis) record.hypotheses.confirmed.push({ step: i + 1, op: step.op, at: hypothesis });
+        record.failures.push(...fails.map((f) => `paso ${i + 1} (${step.op}): ${f}`));
+      }
       // Los datos se guardan siempre: la paridad del paso 7 compara todo, no solo lo afirmado.
       record.steps.push({ op: step.op, ...(step.as ? { as: step.as } : {}), request: res.request, status: res.status, data: res.data, ...(fails.length ? { raw: res.raw, fails } : {}) });
     }
@@ -288,6 +300,13 @@ export function tally(records, marks = EXECUTED_MARKS) {
     out[mark] = { ok: of.filter((r) => r.ok).length, total: of.length };
   }
   return out;
+}
+
+/** Las hipótesis (expectativas leídas del código) de todos los flujos: cuántas confirmó el legacy y cuáles refutó. */
+export function hypothesisTally(records) {
+  const refuted = records.flatMap((r) => (r.hypotheses?.refuted ?? []).map((h) => ({ id: r.id, ...h })));
+  const confirmed = records.reduce((n, r) => n + (r.hypotheses?.confirmed?.length ?? 0), 0);
+  return { confirmed, refuted };
 }
 
 /** El documento characterized.yaml que lee el criterio `characterized` de keel-core. */

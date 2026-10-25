@@ -143,3 +143,19 @@ test('un proyecto de otro nombre no cuenta como generado (conduit-dotnet-v010)',
   write(path.join(w.root, 'services', 'conduit-dotnet-v010', 'keel-generated.json'), {});
   assert.equal(w.status({ assess: () => ({ criteria: [] }) }).phase, 'build');
 });
+
+test('en characterize, status lista los pasos marcados como hipótesis: la ronda dirigida sale del disco, no del reporte', () => {
+  const w = workspace();
+  w.upTo('characterize');
+  assert.equal(w.status().phase, 'characterize');
+  assert.deepEqual(w.status().details.hypotheses, [], 'sin marcas, nada que grabar');
+  const file = path.join(w.spec, 'validation-scenarios.md');
+  const text = fs.readFileSync(file, 'utf8');
+  const marked = text.replace(/```keel-flow\n([\s\S]*?\n)(\s*)- op: (\S+)\n/, (all, head, indent, op) => `${all}${indent}  hypothesis: src/routes/articles.js:42\n`);
+  assert.notEqual(marked, text, 'el escenario de conduit tiene un paso que marcar');
+  fs.writeFileSync(file, marked);
+  const hypotheses = w.status().details.hypotheses;
+  assert.equal(hypotheses.length, 1);
+  assert.match(hypotheses[0].id, /^FL-/);
+  assert.deepEqual({ step: hypotheses[0].step, at: hypotheses[0].at }, { step: 1, at: 'src/routes/articles.js:42' });
+});

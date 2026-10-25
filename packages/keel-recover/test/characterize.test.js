@@ -12,7 +12,7 @@ import YAML from 'yaml';
 import { loadCharacterized, loadProvenance, readCharacterization, resolveCharacterized } from 'keel-core';
 import { tmpDir } from './helpers/tmp.js';
 import { CONTRACT_MAP, PROVENANCE, SCENARIOS, fakeStock, writeStockDesign } from './helpers/stock-design.js';
-import { check, forgeToken, plannedFlows, readFlowBlock, runCharacterization, runFlow, sealDocument, tally } from '../src/lib/characterize.js';
+import { check, forgeToken, hypothesisTally, plannedFlows, readFlowBlock, runCharacterization, runFlow, sealDocument, tally } from '../src/lib/characterize.js';
 import { prepareCharacterization, writeCharacterization } from '../src/lib/characterize-legacy.js';
 import { renderFidelity, routeKey, routesWithoutOperation } from '../src/lib/fidelity.js';
 
@@ -262,4 +262,60 @@ test('el diseño se llama como su directorio, aunque no se llame como el legacy 
   fs.cpSync(specDir, other, { recursive: true });
   const prep = prepareCharacterization(legacyDir, { spec: other, sandbox: false });
   assert.deepEqual([prep.name, prep.service, prep.legacy.name], ['stock', 'almacen', 'stock']);
+});
+
+// ─── Hipótesis: una expectativa del lado legacy leída del código (`hypothesis`) ─────────────────────────────────────
+// La corrida de control de shop-api (2026-10-23): FL-ORD-027 salió en rojo DOS veces porque su `legacy:` venía de leer el
+// código y nada lo decía; el legacy dejaba el stock en 2000, no en 999. Con la marca, characterize lo dice como hipótesis
+// refutada y trae lo que el legacy hizo de verdad.
+
+const hypothesisSide = { statusClasses: { ok: 200 }, operations: { buy: { method: 'POST', path: '/api/buy' } } };
+const hypothesisFlow = (step) => ({ id: 'FL-ORD-027', mark: 'fix', sha256: '0'.repeat(64), flow: { steps: [{ op: 'buy', expect: { status: 'ok' }, ...step }] } });
+const hypothesisCtx = (body, sideName = 'legacy') => ({ side: hypothesisSide, sideName, semantics: {}, base: 'http://x', http: async () => ({ status: 200, body }), reset: async () => ({ ok: true }) });
+
+test('una hipótesis que el legacy contradice sale como «hipótesis refutada», con lo que el legacy hizo de verdad', async () => {
+  const planned = hypothesisFlow({ legacy: { status: 'ok', body: { stock: 999 } }, hypothesis: 'src/main/java/OrderService.java:88' });
+  const record = await runFlow(hypothesisCtx({ stock: 2000 }), planned);
+  assert.equal(record.ok, false, 'refutada, el flujo sigue en rojo: el diseño dice algo que el legacy no hace');
+  assert.match(record.failures[0], /^paso 1 \(buy\): hipótesis refutada \(src\/main\/java\/OrderService\.java:88\): /);
+  assert.deepEqual(record.hypotheses.refuted, [{ step: 1, op: 'buy', at: 'src/main/java/OrderService.java:88', observed: { status: 200, data: { stock: 2000 } } }]);
+  assert.deepEqual(record.hypotheses.confirmed, []);
+  assert.deepEqual(hypothesisTally([record]), { confirmed: 0, refuted: [{ id: 'FL-ORD-027', ...record.hypotheses.refuted[0] }] });
+});
+
+test('una hipótesis que el legacy cumple queda confirmada, y sin la marca el mismo rojo no dice que era una hipótesis', async () => {
+  const confirmed = await runFlow(hypothesisCtx({ stock: 999 }), hypothesisFlow({ legacy: { status: 'ok', body: { stock: 999 } }, hypothesis: 'src/A.java:1' }));
+  assert.equal(confirmed.ok, true);
+  assert.deepEqual(confirmed.hypotheses.confirmed, [{ step: 1, op: 'buy', at: 'src/A.java:1' }]);
+  const unmarked = await runFlow(hypothesisCtx({ stock: 2000 }), hypothesisFlow({ legacy: { status: 'ok', body: { stock: 999 } } }));
+  assert.equal(unmarked.ok, false);
+  assert.doesNotMatch(unmarked.failures[0], /hipótesis/);
+  assert.deepEqual(unmarked.hypotheses.refuted, []);
+});
+
+test('la hipótesis es del lado legacy: contra el servicio regenerado (paridad) no cuenta', async () => {
+  const record = await runFlow(hypothesisCtx({}, 'keel'), hypothesisFlow({ legacy: { status: 'ok' }, hypothesis: 'src/A.java:1', expect: { status: 'ok', body: { stock: 1 } } }));
+  assert.equal(record.ok, false);
+  assert.doesNotMatch(record.failures[0], /hipótesis/);
+  assert.deepEqual(record.hypotheses, { confirmed: [], refuted: [] });
+});
+
+test('una hipótesis sin expectativa del lado legacy, o sin archivo:línea, es un defecto del flujo', async () => {
+  const keep = { id: 'FL-X-001', mark: 'keep', sha256: '0'.repeat(64), flow: { steps: [{ op: 'buy', expect: { status: 'ok' } }, { op: 'buy', hypothesis: 'src/A.java:1' }] } };
+  let touched = false;
+  const record = await runFlow({ ...hypothesisCtx({}), reset: async () => ((touched = true), { ok: true }) }, keep);
+  assert.equal(touched, false, 'el defecto se dice antes de tocar el legacy');
+  assert.match(record.failures[0], /paso 2 \(buy\): marca una hipótesis \(src\/A\.java:1\) y no dice qué espera del legacy/);
+  const block = '#### FL-X-002 — x\n\n```keel-flow\nsteps:\n  - op: buy\n    expect: { status: ok }\n    hypothesis: "lo leí en el servicio"\n```\n';
+  assert.match(readFlowBlock(block).error, /hypothesis/);
+});
+
+test('FIDELITY.md cuenta las hipótesis y nombra cada refutada con lo que respondió el legacy', () => {
+  const records = [
+    { id: 'FL-ORD-027', mark: 'fix', ok: false, failures: ['paso 1 (buy): hipótesis refutada (src/A.java:88): body.stock'], hypotheses: { confirmed: [], refuted: [{ step: 1, op: 'buy', at: 'src/A.java:88', observed: { status: 200, data: { stock: 2000 } } }] } },
+    { id: 'FL-ORD-001', mark: 'keep', ok: true, failures: [], hypotheses: { confirmed: [{ step: 2, op: 'buy', at: 'src/A.java:40' }], refuted: [] } }
+  ];
+  const md = renderFidelity({ service: 's', legacy: { name: 'l' }, records, map: { legacy: { operations: {} } } });
+  assert.match(md, /\*\*Hipótesis\*\* \(expectativas leídas del código, `hypothesis` en el paso\): 1 confirmada\(s\) por el legacy, 1 refutada\(s\)\./);
+  assert.match(md, /- `FL-ORD-027` paso 1 \(`buy`\): src\/A\.java:88 no es lo que hace el legacy, que respondió 200 con \{"stock":2000\}/);
 });

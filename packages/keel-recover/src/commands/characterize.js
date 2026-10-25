@@ -1,7 +1,7 @@
 import path from 'node:path';
 import pc from 'picocolors';
 import { containerRuntime, resolveRuntime } from '../lib/containers.js';
-import { runCharacterization, tally } from '../lib/characterize.js';
+import { hypothesisTally, runCharacterization, tally } from '../lib/characterize.js';
 import { legacyContext, prepareCharacterization, verifyGate, writeCharacterization } from '../lib/characterize-legacy.js';
 
 // Paso 5: `keel-recover characterize legacy/<servicio>`. Ejecuta los flujos keep, fix y frontier de
@@ -41,6 +41,11 @@ export async function characterize(legacyArg, options) {
 
   const t = tally(records);
   console.log(`\nkeep ${t.keep.ok}/${t.keep.total} · fix ${t.fix.ok}/${t.fix.total} (el defecto sigue en el legacy) · frontier ${t.frontier.ok}/${t.frontier.total} · new ${prep.newFlows} (no aplica)`);
+  const hypotheses = hypothesisTally(records);
+  if (hypotheses.confirmed || hypotheses.refuted.length) {
+    console.log(`hipótesis leídas del código: ${hypotheses.confirmed} confirmada(s) por el legacy · ${hypotheses.refuted.length} refutada(s)`);
+    for (const h of hypotheses.refuted) console.log(pc.yellow(`  ${h.id} paso ${h.step} (${h.op}): ${h.at} no es lo que hace el legacy — corrige el flujo con lo observado (status ${h.observed.status})`));
+  }
   for (const f of written.filter((w) => !w.includes(`${path.sep}characterization${path.sep}`))) console.log(pc.dim(`  ${path.relative(process.cwd(), f)}`));
   const ok = records.every((r) => r.ok);
   console.log(ok ? pc.green('\ncaracterización en verde') : pc.red('\ncaracterización en rojo: un keep en rojo se corrige en el diseño, no en el escenario'));

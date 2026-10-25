@@ -93,6 +93,16 @@ export function renderFidelity({ service, legacy, records, newFlows = 0, provena
     for (const r of red) add(`- \`${r.id}\` (${r.mark}): ${cell(r.failures[0])}${r.failures.length > 1 ? ` (y ${r.failures.length - 1} más)` : ''}`);
     add('');
   }
+  const refuted = records.flatMap((r) => (r.hypotheses?.refuted ?? []).map((h) => ({ id: r.id, ...h })));
+  const confirmed = records.reduce((n, r) => n + (r.hypotheses?.confirmed?.length ?? 0), 0);
+  if (refuted.length || confirmed) {
+    add(`**Hipótesis** (expectativas leídas del código, \`hypothesis\` en el paso): ${confirmed} confirmada(s) por el legacy, ${refuted.length} refutada(s).`, '');
+    for (const h of refuted) {
+      const observed = JSON.stringify(h.observed.data ?? null).slice(0, 160);
+      add(`- \`${h.id}\` paso ${h.step} (\`${h.op}\`): ${cell(h.at)} no es lo que hace el legacy, que respondió ${h.observed.status} con ${cell(observed)}`);
+    }
+    if (refuted.length) add('');
+  }
   add(
     'Un `keep` en verde demuestra que el escenario describe al legacy, no que el diseño lo cubra entero: para eso',
     'está la completitud.',

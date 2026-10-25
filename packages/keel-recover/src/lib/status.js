@@ -9,7 +9,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { assessReadiness } from 'keel-core';
+import { assessReadiness, scenarioIdOf, splitScenarioBlocks } from 'keel-core';
+import { readFlowBlock } from './characterize.js';
 import { validateAs } from './schema.js';
 
 /** Las fases, en orden. La primera sin cumplir es la siguiente. */
@@ -24,6 +25,24 @@ const CHARACTERIZE_CRITERIA = ['characterized'];
 
 const readJson = (file) => (fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null);
 const readYaml = (file) => (fs.existsSync(file) ? YAML.parse(fs.readFileSync(file, 'utf8')) : null);
+
+/**
+ * Los pasos marcados como hipótesis (`hypothesis`: su expectativa del lado legacy salió de leer el código) en los flujos
+ * de `validation-scenarios.md`: `[{ id, step, op, at }]`. Es lo que la ronda dirigida del explorador graba antes de
+ * caracterizar; sale del disco, no del reporte del diseñador, que no queda en ninguna parte.
+ */
+export function flowHypotheses(specDir) {
+  const file = path.join(specDir, 'validation-scenarios.md');
+  if (!fs.existsSync(file)) return [];
+  const out = [];
+  for (const block of splitScenarioBlocks(fs.readFileSync(file, 'utf8'))) {
+    const id = scenarioIdOf(block);
+    if (!id || !block.includes('```keel-flow')) continue;
+    const { flow } = readFlowBlock(block);
+    for (const [i, step] of (flow?.steps ?? []).entries()) if (step.hypothesis) out.push({ id, step: i + 1, op: step.op, at: step.hypothesis });
+  }
+  return out;
+}
 
 /** Las preguntas de `questions.yaml` (vacío si no hay archivo) y sus errores de schema. */
 export function loadQuestions(legacyDir) {
@@ -149,7 +168,10 @@ export function recoveryStatus(legacyDir, { spec, assess = assessReadiness } = {
     });
   }
   if (red(CHARACTERIZE_CRITERIA).length) {
-    return out('characterize', 'criterio characterized en rojo', `keel-recover characterize ${rel(legacy)}${spec ? ` --spec ${rel(specDir)}` : ''}`);
+    const hypotheses = flowHypotheses(specDir);
+    return out('characterize', 'criterio characterized en rojo', `keel-recover characterize ${rel(legacy)}${spec ? ` --spec ${rel(specDir)}` : ''}`, {
+      details: { hypotheses }
+    });
   }
 
   // close, build y generate: el resto de --ready, el proyecto generado y el cierre de su pipeline. Un proyecto ya

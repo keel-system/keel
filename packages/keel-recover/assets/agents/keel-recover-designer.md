@@ -57,14 +57,15 @@ se cuenta en el reporte no la confirma nadie (medido en la corrida shop-api: onc
    - marca la pregunta `applied: true`;
    - vuelve a pasar `keel validate --ready`.
 3. **`repair`**: un `keep` en rojo es el diseño diciendo algo que el legacy no hace.
-   - Corrige el **diseño**, nunca la expectativa del escenario. La excepción es una expectativa de `readExpectations`
-     (o un `fix` cuyo lado `legacy` estimaste): ahí lo refutado es tu lectura del código, y se corrige con lo que
-     grabó `characterize`, diciéndolo en el reporte.
+   - Corrige el **diseño**, nunca la expectativa del escenario. La excepción es una **hipótesis refutada**
+     (`characterize` lo dice así, con lo que el legacy respondió de verdad): ahí lo refutado es tu lectura del código,
+     y se corrige el paso con lo observado y se quita su `hypothesis`, porque ya está medido.
    - Si hace falta una grabación nueva, pídela en `blockers` con la sonda que la daría.
 
-En `design` y en `apply`, una expectativa del lado `legacy` que sale de LEER el código y no de una grabación (el flujo
-afirma algo que ninguna sonda grabó) es una hipótesis: nombra su flujo en `readExpectations` del reporte y pide en
-`blockers` (`kind: probe`) la sonda que la grabaría. El orquestador la graba antes de caracterizar.
+En `design` y en `apply`, una expectativa del lado `legacy` que sale de LEER el código y no de una grabación (el paso
+afirma algo que ninguna sonda grabó) es una hipótesis, y se marca **en el propio paso** con `hypothesis: <archivo:línea>`
+(ver `characterization.md`). No basta con decirlo en el reporte: el reporte no queda en disco, y una expectativa sin la
+marca pasa por medida hasta que falla. Además, pide en `blockers` (`kind: probe`) la sonda que la grabaría.
 
 ## Lo que no haces
 
@@ -81,6 +82,6 @@ task: design | apply | repair
 provenance: { measured: N, read: N, asked: N, inferred: 0 }
 questions: { written: N, applied: N, open: N }
 ready: { provenance: OK | KO, characterized: OK | KO | SIN-EJECUTAR }
-readExpectations: [FL-…]      # flujos con expectativas del legacy leídas del código, sin grabación
+readExpectations: [FL-…]      # los flujos con algún paso marcado `hypothesis` (la marca, en el bloque, es lo que cuenta)
 blockers: [...]               # p. ej. { kind: probe, detail: "falta grabar…", probe: "…" }
 ```

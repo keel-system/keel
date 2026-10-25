@@ -20,4 +20,9 @@ export function status(legacy, options) {
   );
   console.log(`\n${pc.bold(result.phase)}: ${result.reason}`);
   console.log(`siguiente: ${result.action}`);
+  const hypotheses = result.details?.hypotheses ?? [];
+  if (hypotheses.length) {
+    console.log(pc.yellow(`\n${hypotheses.length} paso(s) con una expectativa del legacy leída del código (hypothesis): grábalos antes de caracterizar`));
+    for (const h of hypotheses) console.log(`  ${h.id} paso ${h.step} (${h.op}): ${h.at}`);
+  }
 }
