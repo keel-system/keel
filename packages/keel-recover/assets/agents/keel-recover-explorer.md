@@ -17,7 +17,10 @@ ha visto hacer, y que quede grabado.
    repo del legacy (`legacy.yaml#repo`) trae una colección Postman o pruebas de API, esa es tu ronda 0: tradúcela.
 2. **Elige a qué vas**: el código sin cubrir que hay detrás de una ruta (validaciones, ramas de error, permisos de otro
    usuario, idempotencia de repetir, recursos que no existen, el borrado y lo que deja detrás) y las preguntas de clase
-   que la superficie sugiere (una columna de estado → sus transiciones; un índice único → el duplicado).
+   que la superficie sugiere (una columna de estado → sus transiciones; un índice único → el duplicado). Las que faltan
+   las lista `keel-recover status legacy/<servicio>` (`details.pending`, con su clave): entran en la ronda con su
+   `class` (`lifecycle` que **cambie** la columna, `concurrency` que **inserte** en la tabla), porque es la clase y el
+   efecto grabado lo que las da por hechas.
 3. **Escribe `probes/round-N.yaml`** con el formato de `{{keel:skills}}/keel-recover/references/exploration.md`: cada
    sonda con su `why`, pasos encadenados con `capture`, y como mucho ~40 sondas por ronda.
 4. **Ejecútala**: `keel-recover probe legacy/<servicio>/probes/round-N.yaml`. Si sale en rojo por un canal (`PRB-*`), lo

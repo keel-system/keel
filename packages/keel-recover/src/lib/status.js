@@ -12,6 +12,7 @@ import YAML from 'yaml';
 import { assessReadiness, scenarioIdOf, splitScenarioBlocks } from 'keel-core';
 import { readFlowBlock } from './characterize.js';
 import { provenanceBacking } from './backing.js';
+import { pendingClassProbes } from './class-probes.js';
 import { validateAs } from './schema.js';
 
 /** Las fases, en orden. La primera sin cumplir es la siguiente. */
@@ -133,10 +134,17 @@ export function recoveryStatus(legacyDir, { spec, assess = assessReadiness } = {
         { details: { rounds: recorded } }
       );
     }
+    // Las sondas de clase que pide la superficie (class-probes.js): se graban o se descartan con su motivo antes de cerrar.
+    const pending = pendingClassProbes(legacy);
     if (!exploration.stopped) {
       const coverage = readJson(path.join(legacy, 'recordings', 'coverage.json')) ?? [];
       return out('explore', 'el humano no ha cerrado la exploración (exploration.yaml)', 'otra ronda, o cerrar la exploración', {
-        details: { rounds: recorded, coverage: coverage.at(-1) ?? null, errors: exploration.errors }
+        details: { rounds: recorded, coverage: coverage.at(-1) ?? null, errors: exploration.errors, pending }
+      });
+    }
+    if (pending.length) {
+      return out('explore', `${pending.length} sonda(s) de clase que pide la superficie sin grabar ni descartar`, 'una ronda con esas sondas, o descartarlas con su motivo en exploration.yaml (waived)', {
+        details: { rounds: recorded, pending }
       });
     }
   }

@@ -19,6 +19,19 @@
         "coverage": { "type": ["number", "null"], "minimum": 0, "maximum": 100, "description": "La cobertura acumulada de líneas o sentencias al cerrar, en %." },
         "reason": { "type": "string", "minLength": 5, "description": "Por qué se cierra: la cobertura dejó de subir, el presupuesto de rondas, lo que queda es código muerto…" }
       }
+    },
+    "waived": {
+      "type": "array",
+      "description": "Las sondas de clase que la superficie pide y no se grabaron, cada una con su motivo. keel-recover status las deriva de surface.yaml y de las grabaciones (un índice único en una tabla que se escribe pide una sonda de concurrencia; una columna de estado, una de ciclo de vida) y no da la exploración por cerrada mientras quede alguna sin grabar ni descartar aquí.",
+      "items": {
+        "type": "object",
+        "required": ["key", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "key": { "type": "string", "pattern": "^(concurrency|lifecycle):\\S+$", "description": "La clave que imprime status: `concurrency:<tabla>` o `lifecycle:<tabla>.<columna>`." },
+          "reason": { "type": "string", "minLength": 5, "description": "Por qué no se graba: ninguna operación mueve esa columna, la tabla solo se siembra…" }
+        }
+      }
     }
   }
 }

@@ -47,14 +47,20 @@ Son los únicos momentos en que preguntas. En cada uno, primero el resumen en un
 
 1. **Cerrar la exploración** (`explore`).
    - **Muestra:** la serie de cobertura ronda a ronda, lo que queda sin cubrir y por qué (código muerto, ramas que solo
-     dispara un fallo interno), y `unobserved.yaml`.
-   - **Pregunta:** ¿otra ronda o cerrar?
+     dispara un fallo interno), `unobserved.yaml` y **las sondas de clase pendientes** que lista `keel-recover status`
+     (`details.pending`: un índice único en una tabla que se escribe pide su carrera; una columna de estado, su ciclo
+     de vida). No son opcionales: `status` no da la exploración por cerrada mientras quede alguna sin grabar ni
+     descartar.
+   - **Pregunta:** ¿otra ronda (con las pendientes dentro) o cerrar? Si cerrar, cada pendiente se descarta con su
+     motivo.
    - **Al cerrar**, escribe `legacy/<servicio>/exploration.yaml`:
 
      ```yaml
      kind: exploration
      schema: 1
      stopped: { date: AAAA-MM-DD, rounds: [round-0, round-1, …], coverage: 97.7, reason: "…" }
+     waived:                      # solo las pendientes que el humano decide no grabar, cada una con su motivo
+       - { key: lifecycle:product_info.product_status, reason: "…" }
      ```
 
 2. **Las decisiones del diseño** (`design` con preguntas abiertas).

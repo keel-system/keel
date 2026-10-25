@@ -20,6 +20,11 @@ export function status(legacy, options) {
   );
   console.log(`\n${pc.bold(result.phase)}: ${result.reason}`);
   console.log(`siguiente: ${result.action}`);
+  const pending = result.details?.pending ?? [];
+  if (pending.length) {
+    console.log(pc.yellow(`\n${pending.length} sonda(s) de clase que pide la superficie, sin grabar ni descartar (exploration.yaml → waived):`));
+    for (const probe of pending) console.log(`  ${probe.key}: ${probe.why}`);
+  }
   const hypotheses = result.details?.hypotheses ?? [];
   if (hypotheses.length) {
     console.log(pc.yellow(`\n${hypotheses.length} paso(s) con una expectativa del legacy leída del código (hypothesis): grábalos antes de caracterizar`));
