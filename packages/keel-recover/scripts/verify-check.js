@@ -8,6 +8,8 @@
 //   coverage   la app sin NODE_V8_COVERAGE                     → VER-COVERAGE
 //   5xx        la app apunta a una base que no existe; su
 //              /health sigue en 200, como el de orders         → VER-READ, VER-WRITE, VER-DB-TRACE
+//   routes     sandbox.yaml no declara de dónde salen las rutas
+//              (introspection.routes)                      → VER-ROUTES
 //   trace      sandbox.yaml cree que la app escribe en otra
 //              base: la escritura responde 201 y no deja rastro → VER-DB-TRACE
 //
@@ -77,6 +79,13 @@ const SCENARIOS = [
     healthLies: true,
     compose: (c) => {
       c.services.app.environment[fx.urlEnv] = fx.nowhere;
+    },
+  },
+  {
+    id: 'routes',
+    red: ['VER-ROUTES'],
+    sandbox: (s) => {
+      delete s.introspection;
     },
   },
   {

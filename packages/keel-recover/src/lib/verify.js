@@ -3,6 +3,7 @@ import { composeProject, containerOf } from './sandbox.js';
 import { staticCriteria } from './verify-static.js';
 import { parseJsonFiles, readIstanbul, readJacocoCsv, readV8, splitDump } from './coverage.js';
 import { databaseAdapter } from './db/index.js';
+import { readRoutes } from './introspect.js';
 
 // Paso 0f: el juez del sandbox. Decide si el legacy está levantado de forma que lo que se grabe
 // después sea comportamiento y no un síntoma del entorno. Las dos reglas que midió el inc. 1:
@@ -18,7 +19,7 @@ import { databaseAdapter } from './db/index.js';
 // (principio 5), y sin sus servicios no hay a quién preguntar. El resto (un digest, el motor) se
 // juzga igual en rojo, pero no esconde lo que diría el sandbox en marcha.
 export const BLOCKING = new Set(['VER-COMPOSE', 'VER-NET-INTERNAL']);
-export const LIVE_CRITERIA = ['VER-UP', 'VER-EGRESS', 'VER-READ', 'VER-WRITE', 'VER-DB-TRACE', 'VER-COVERAGE'];
+export const LIVE_CRITERIA = ['VER-UP', 'VER-ROUTES', 'VER-EGRESS', 'VER-READ', 'VER-WRITE', 'VER-DB-TRACE', 'VER-COVERAGE'];
 const DEFAULT_EGRESS = ['https://example.com', 'https://registry.npmjs.org'];
 // curl sin salida: 6 (no resuelve), 7 (no conecta), 28 (plazo), 35/60 (TLS sin llegar).
 const BLOCKED_CURL = new Set([6, 7, 28, 35, 60]);
@@ -56,6 +57,7 @@ export async function verify(sandbox, rt, { up = true, snapshot = true, log = ()
   }
   const ready = await waitReady(rt, tool, spec, pollMs);
   if (!push(criterion('VER-UP', ready.ok, ready.detail))) return skip('la app no responde');
+  push(routesCriterion(rt, sandbox));
 
   push(egressCriterion(rt, app, tool, spec.egress?.targets ?? DEFAULT_EGRESS));
 
@@ -161,6 +163,22 @@ export async function waitReady(rt, tool, spec, pollMs) {
 // tiene otra salida porque VER-NET-INTERNAL ya prohibió `network_mode` y las redes no internas.
 // (`--network container:<app>` sería más directo, pero podman-compose mete los servicios en un
 // pod y podman no deja compartir la red de un contenedor de un pod desde fuera de él.)
+
+/**
+ * VER-ROUTES: el sandbox dice de dónde sale la tabla de rutas (`introspection.routes`) y de ahí sale al menos una, o
+ * declara que no hay de dónde (`none`, con su motivo: un router a mano sobre http nativo). Sin declararlo `introspect` no
+ * ve las rutas y la exploración no sabe qué hay: en la corrida de control de shop-api el sandbox no lo declaró y se
+ * arregló a mano después. Lo comprueba el juez, con la app ya en pie, y no la skill.
+ */
+export function routesCriterion(rt, sandbox) {
+  const declared = sandbox.spec.introspection?.routes;
+  if (!declared) return criterion('VER-ROUTES', false, 'sandbox.yaml no declara introspection.routes: sin la tabla de rutas, introspect no ve qué expone el legacy (si no hay de dónde leerla, kind: none con su reason)');
+  if (declared.kind === 'none') return criterion('VER-ROUTES', true, `sin tabla de rutas que leer, declarado: ${declared.reason}`);
+  const read = readRoutes(rt, sandbox);
+  if (!read.ok) return criterion('VER-ROUTES', false, read.error);
+  const routes = read.value?.routes ?? [];
+  return criterion('VER-ROUTES', routes.length > 0, routes.length > 0 ? `${routes.length} ruta(s) desde ${read.value.source}` : `${read.value.source} no trae ninguna ruta`);
+}
 
 export function egressCriterion(rt, app, tool, targets) {
   const image = rt.image(tool);

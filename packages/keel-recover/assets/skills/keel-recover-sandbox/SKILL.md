@@ -47,6 +47,7 @@ Lleva un diario en `sandbox/LOG.md`, una fila por intento: paso, qué probaste, 
 | `VER-NO-BUILD` | el compose no construye: solo ejecuta |
 | `VER-ENGINE` | cada motor en la versión de la CI, o con una adaptación que lo nombre y lo justifique |
 | `VER-UP` | la app responde en `app.base` antes de `startup_seconds` |
+| `VER-ROUTES` | `sandbox.yaml` declara de dónde sale la tabla de rutas (`introspection.routes`: la precarga `express-routes.cjs`, el log de arranque de Spring o el actuator) y de ahí sale al menos una ruta; o, si el legacy no tiene ningún framework del que leerla (un router a mano sobre http nativo), `kind: none` con su `reason`. Sin declararlo `introspect` no ve qué expone el legacy |
 | `VER-EGRESS` | desde las redes de la app no se llega a internet |
 | `VER-READ`, `VER-WRITE` | las dos sondas responden con un estado de su `expect`: no basta «sin 5xx» |
 | `VER-DB-TRACE` | la escritura deja rastro en la base que `sandbox.yaml` nombra (la salud del legacy no cuenta) |

@@ -34,12 +34,16 @@ const order = {
   items: 'http://carts/carts/57a98d98e4b00679b4a830b5/items',
 };
 const jacoco = { kind: 'jacoco', cli: '/opt/jacoco/jacococli.jar', classes: '/opt/app/classes' };
+// Las rutas de sockshop (Spring 4) salen de las líneas Mapped del log de arranque: el /mappings de su actuator no lista
+// ni el POST /orders propio ni Spring Data REST (surface.yaml del inc. 1).
+const springLog = { routes: { kind: 'spring-log' } };
 
 // El sandbox.yaml de cada legacy, desde lo que midió el inc. 1 (probe.json, rondas y LOG.md).
 const SANDBOXES = {
   'sockshop-shipping': {
     app: { service: 'app', base: 'http://shipping:8080' },
     coverage: jacoco,
+    introspection: springLog,
     judge: {
       read: { method: 'GET', path: '/shipping', expect: [200] },
       write: { method: 'POST', path: '/shipping', body: { id: '{{nonce}}', name: 'verify' }, expect: [201] },
@@ -49,6 +53,7 @@ const SANDBOXES = {
     app: { service: 'app', base: 'http://orders:8082' },
     database: { service: 'orders-db', tech: 'mongodb', name: 'data' },
     coverage: jacoco,
+    introspection: springLog,
     judge: {
       read: { method: 'GET', path: '/orders', expect: [200] },
       write: { method: 'POST', path: '/orders', body: order, expect: [201] },
@@ -58,6 +63,15 @@ const SANDBOXES = {
     app: { service: 'app', base: 'http://conduit:3000' },
     database: { service: 'mongo', tech: 'mongodb', name: 'conduit' },
     coverage: { kind: 'nyc', dir: '/coverage' },
+    // La precarga que ya carga su compose (NODE_OPTIONS). El compose del inc. 1 la escribe en /tmp, que introspect no
+    // alcanza (lee por --volumes-from): en la COPIA va a un volumen propio, fuera de /coverage porque nyc lee todo *.json
+    // de ahí. Es lo que el sandbox de la herramienta tiene que hacer para pasar VER-ROUTES (medido: con /tmp, en rojo).
+    introspection: { routes: { kind: 'express', file: '/recover-routes/routes.json' } },
+    compose: (c) => {
+      c.services.app.environment.RECOVER_ROUTES_OUT = '/recover-routes/routes.json';
+      c.services.app.volumes.push('routes:/recover-routes');
+      c.volumes.routes = {};
+    },
     judge: {
       read: { method: 'GET', path: '/api/tags', expect: [200] },
       write: {
@@ -92,7 +106,14 @@ for (const [legacy, partial] of Object.entries(SANDBOXES)) {
   const env = renderDoc(envDeps(src)).plain;
   env.adaptations = YAML.parse(fs.readFileSync(path.join(lab, legacy, 'environment.yaml'), 'utf8')).adaptations ?? [];
   fs.writeFileSync(path.join(dir, 'environment.yaml'), YAML.stringify(env));
-  fs.writeFileSync(path.join(dir, 'sandbox', 'sandbox.yaml'), YAML.stringify({ kind: 'sandbox', schema: 1, compose: 'compose.yaml', tool: { service: 'tool' }, ...partial }));
+  const { compose: patchCompose, ...spec } = partial;
+  if (patchCompose) {
+    const composeFile = path.join(dir, 'sandbox', 'compose.yaml');
+    const compose = YAML.parse(fs.readFileSync(composeFile, 'utf8'));
+    patchCompose(compose);
+    fs.writeFileSync(composeFile, YAML.stringify(compose));
+  }
+  fs.writeFileSync(path.join(dir, 'sandbox', 'sandbox.yaml'), YAML.stringify({ kind: 'sandbox', schema: 1, compose: 'compose.yaml', tool: { service: 'tool' }, ...spec }));
 
   console.log(`\n── ${legacy}`);
   const sandbox = loadSandbox(path.join(dir, 'sandbox'));

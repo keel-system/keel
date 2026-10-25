@@ -19,9 +19,11 @@ function tail(text, n = 300) {
   return t.length > n ? `…${t.slice(-n)}` : t;
 }
 
-function readRoutes(rt, sandbox) {
+/** La tabla de rutas de la fuente que declara sandbox.yaml (`introspection.routes`): `{ ok, value | error }`, y value null si no declara ninguna. */
+export function readRoutes(rt, sandbox) {
   const src = sandbox.spec.introspection?.routes;
-  if (!src) return { ok: true, value: null };
+  // `none`: declarado sin fuente (un router a mano sobre http nativo); la superficie HTTP sale de las sondas.
+  if (!src || src.kind === 'none') return { ok: true, value: null };
   const app = containerOf(sandbox, sandbox.spec.app.service);
   const tool = containerOf(sandbox, sandbox.spec.tool.service);
   if (src.kind === 'express') {

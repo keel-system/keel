@@ -31,6 +31,7 @@ const SPEC = {
   tool: { service: 'tool' },
   database: { service: 'db', tech: 'mongodb', name: 'conduit' },
   coverage: { kind: 'jacoco', cli: '/opt/jacoco/jacococli.jar', classes: '/opt/app/classes' },
+  introspection: { routes: { kind: 'spring-log' } },
   judge: {
     read: { method: 'GET', path: '/api/tags', expect: [200] },
     write: { method: 'POST', path: '/api/users', body: { user: { email: 'v-{{nonce}}@x.invalid' } }, expect: [200] },
@@ -66,6 +67,7 @@ function fakeRuntime(over = {}) {
     networks: () => ['rec-t_sandbox'],
     stop: () => ({ status: 0 }),
     start: () => ({ status: 0 }),
+    logs: () => ({ status: 0, stdout: over.logs ?? 'Mapped "{[/api/tags],methods=[GET]}" onto public Tags TagsController.list()\n', stderr: '' }),
     run: (args) => {
       calls.push(['run', ...args]);
       return over.egress ? over.egress(args) : { status: 6, stdout: '000', stderr: 'Could not resolve host' };
@@ -148,7 +150,7 @@ test('un sandbox que no pasa los estáticos no se arranca', async () => {
   const report = await verify(writeSandbox({ compose }), rt, { pollMs: 1 });
   assert.equal(started, false);
   assert.equal(byId(report.criteria, 'VER-NET-INTERNAL').ok, false);
-  assert.ok(report.criteria.filter((c) => c.skipped).length === 6);
+  assert.ok(report.criteria.filter((c) => c.skipped).length === 7);
 });
 
 test('un estático que no es de seguridad (el motor) sale en rojo pero no impide arrancar', async () => {
@@ -232,4 +234,28 @@ test('sandbox.yaml que no cumple su schema no se juzga', () => {
   spec.judge.write.expect = [500];
   fs.writeFileSync(sb.file, YAML.stringify(spec));
   assert.ok(loadSandbox(sb.file).errors.some((e) => /expect/.test(e)));
+});
+
+test('VER-ROUTES: sin introspection.routes, o sin ninguna ruta en su fuente, el sandbox sale en rojo (y solo por eso)', async () => {
+  const red = (report) => report.criteria.filter((c) => !c.ok).map((c) => c.id);
+  assert.deepEqual(red(await verify(writeSandbox(), fakeRuntime(), { pollMs: 1 })), [], 'con la tabla del log de arranque, verde');
+  const { introspection, ...undeclared } = SPEC;
+  const missing = await verify(writeSandbox({ spec: undeclared }), fakeRuntime(), { pollMs: 1 });
+  assert.deepEqual(red(missing), ['VER-ROUTES']);
+  assert.match(byId(missing.criteria, 'VER-ROUTES').detail, /no declara introspection\.routes/);
+  const empty = await verify(writeSandbox(), fakeRuntime({ logs: 'Started Application in 4.2 seconds\n' }), { pollMs: 1 });
+  assert.deepEqual(red(empty), ['VER-ROUTES']);
+  assert.match(byId(empty.criteria, 'VER-ROUTES').detail, /no trae la tabla de rutas/);
+});
+
+test('VER-ROUTES: un legacy sin framework de rutas lo declara (none, con su motivo) y sale en verde; sin motivo no valida', async () => {
+  const none = { ...SPEC, introspection: { routes: { kind: 'none', reason: 'router a mano sobre http nativo' } } };
+  const report = await verify(writeSandbox({ spec: none }), fakeRuntime({ logs: '' }), { pollMs: 1 });
+  assert.equal(byId(report.criteria, 'VER-ROUTES').ok, true);
+  assert.match(byId(report.criteria, 'VER-ROUTES').detail, /declarado: router a mano/);
+  const root = tmpDir('recover-verify-none-');
+  fs.mkdirSync(path.join(root, 'sandbox'));
+  fs.writeFileSync(path.join(root, 'sandbox', 'compose.yaml'), YAML.stringify(COMPOSE));
+  fs.writeFileSync(path.join(root, 'sandbox', 'sandbox.yaml'), YAML.stringify({ ...SPEC, introspection: { routes: { kind: 'none' } } }));
+  assert.ok(loadSandbox(path.join(root, 'sandbox')).errors.some((e) => /reason/.test(e)));
 });

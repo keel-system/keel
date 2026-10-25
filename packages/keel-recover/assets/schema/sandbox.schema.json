@@ -131,11 +131,18 @@
           "required": ["kind"],
           "additionalProperties": false,
           "properties": {
-            "kind": { "enum": ["express", "spring-log", "actuator"] },
+            "kind": { "enum": ["express", "spring-log", "actuator", "none"], "description": "none: el legacy no tiene ningún framework del que leer la tabla (un router a mano sobre http nativo); se declara con su `reason` y la superficie HTTP sale de las sondas y del código." },
             "file": { "type": "string", "description": "express: ruta del archivo dentro del contenedor de la app." },
-            "path": { "type": "string", "pattern": "^/", "description": "actuator: ruta del endpoint de mappings." }
+            "path": { "type": "string", "pattern": "^/", "description": "actuator: ruta del endpoint de mappings." },
+            "reason": { "type": "string", "minLength": 5, "description": "none: por qué no hay de dónde leer las rutas." }
           },
           "allOf": [
+            {
+              "if": {
+                "properties": { "kind": { "const": "none" } }
+              },
+              "then": { "required": ["reason"] }
+            },
             {
               "if": {
                 "properties": { "kind": { "const": "express" } }

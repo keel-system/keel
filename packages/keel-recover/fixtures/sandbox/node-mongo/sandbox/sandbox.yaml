@@ -15,6 +15,9 @@ coverage:
   kind: v8
   dir: /coverage
   include: /app/src/
+introspection:
+  # el legacy enruta a mano sobre http nativo (src/server.js): no hay framework del que leer la tabla
+  routes: { kind: none, reason: "router a mano sobre http.createServer, sin framework" }
 judge:
   read: { method: GET, path: /items, expect: [200] }
   write: { method: POST, path: /items, body: { sku: "verify-{{nonce}}", quantity: 1 }, expect: [201] }
