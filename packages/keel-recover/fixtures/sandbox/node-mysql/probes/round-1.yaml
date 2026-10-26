@@ -36,7 +36,7 @@ probes:
     after:
       - { name: lectura, request: { method: GET, path: /items/a } }
   - id: Q-007
-    class: repeat
+    class: collation
     why: "el mismo sku con otra caja: la collation _ci de la UNIQUE los hace iguales y el segundo es un 409 (M-07)"
     steps:
       - *create
@@ -45,3 +45,9 @@ probes:
   - id: Q-008
     why: "una salida de un artículo que ya estaba: la fila cambia, y updated_at con ella sin que el flujo la nombre (M-09)"
     steps: [ { name: sacar-uno, request: { method: POST, path: /items/seed-1/take, body: { n: 1 } } } ]
+  - id: Q-009
+    class: overflow
+    why: "un sku de 70 caracteres en una columna de 64: con el sql_mode del servidor (sin STRICT_TRANS_TABLES) se trunca, el alta sale 201 con el sku entero y luego no se encuentra (M-08)"
+    steps:
+      - { name: alta-larga, request: { method: POST, path: /items, body: { sku: oooooo-012345678901234567890123456789012345678901234567890123456789abc, quantity: 1 } } }
+      - { name: lectura-larga, request: { method: GET, path: /items/oooooo-012345678901234567890123456789012345678901234567890123456789abc } }

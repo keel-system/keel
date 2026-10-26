@@ -84,7 +84,7 @@ schema: 1
 compose: compose.yaml
 app: { service: app, base: "http://<alias>:<listen.port>" }
 tool: { service: tool }
-database: { service: <servicio de la base>, tech: mongodb | postgresql, name: <base que usa la app> }   # postgresql admite user (por defecto postgres)
+database: { service: <servicio de la base>, tech: mongodb | postgresql | mysql, name: <base que usa la app> }   # postgresql y mysql admiten user (ver abajo)
 coverage: { kind: v8, dir: /coverage, include: /app/src/ }
 judge:
   read:  { method: GET,  path: /items, expect: [200] }
@@ -92,6 +92,32 @@ judge:
 ```
 
 Si el legacy no tiene ninguna ruta de salud (RealWorld), mejor: el juez nunca la usa.
+
+### La base
+
+La herramienta entra en la base **dentro de su contenedor**, con el cliente de la imagen (`mongosh`/`mongo`, `psql`,
+`mysql`/`mysqldump`), así que la imagen tiene que ser la oficial del motor o traer su cliente.
+
+- **PostgreSQL**: `user` (por defecto `postgres`) entra por el socket local sin contraseña, como en la imagen oficial.
+- **MySQL** (8.0 o posterior: 5.7 y anteriores son rechazo con motivo). Sin `user`, la herramienta entra como root con el
+  `MYSQL_ROOT_PASSWORD` del contenedor; con `user`, con el `MYSQL_PASSWORD` del contenedor (el del `MYSQL_USER` de la
+  imagen oficial). Entra como root si el esquema tiene triggers o rutinas: su `DEFINER` suele ser root, y el usuario
+  de la app no puede volcarlos ni recrearlos al restaurar. El usuario de la app, en cambio, basta para el resto: el
+  volcado va con `--no-tablespaces` porque no tiene `PROCESS` (M-13).
+- **MySQL, el servidor como el de producción.** La zona (`--default-time-zone`) y el `sql_mode` (`--sql-mode`) son
+  comportamiento: un `sql_mode` no estricto trunca en vez de rechazar, y uno viejo admite las fechas cero que el
+  esquema pueda tener. Fíjalos en `command:` del servicio de la base con lo que diga la evidencia (la CI, el compose del
+  repo, la configuración de producción) y escríbelos como adaptación si no salen del repo. El esquema y los datos de
+  partida que la app no crea van por `/docker-entrypoint-initdb.d/`.
+- **MySQL, el driver viejo (M-12).** El plugin de autenticación por defecto de 8.0 es `caching_sha2_password`, que
+  Connector/J anterior a 8.0 y el paquete `mysql` 2.x de Node no hablan: la app no conecta y verify lo ve como base
+  caída. La adaptación es `command: ["--default-authentication-plugin=mysql_native_password"]` en el servicio de la base
+  (junto a la zona y el `sql_mode`), con su motivo en `environment.yaml#adaptations`. Connector/J 8.0 y `mysql2` lo
+  hablan y no la necesitan (medido: show-ticketing con Connector/J 8.0.22, y la fixture `node-mysql` con `mysql2` 3.11).
+  La adaptación con un driver viejo, sin medir en el banco.
+- **MySQL, una transacción abierta.** La restauración del snapshot espera el *metadata lock* de cada tabla 20 s
+  (`lock_wait_timeout`) y sale en rojo con la sesión que la retiene (M-01). Un pool sin transacciones abiertas no la
+  bloquea.
 
 ### Los canales del paso 1
 

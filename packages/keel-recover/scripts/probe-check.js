@@ -60,6 +60,7 @@ import { introspect, mergeSurface } from '../src/lib/introspect.js';
 import { loadRound, runRound } from '../src/lib/probe.js';
 import { comparable } from '../src/lib/normalize.js';
 import { databaseAdapter } from '../src/lib/db/index.js';
+import { pendingClassProbes } from '../src/lib/class-probes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, '..');
@@ -299,14 +300,14 @@ const POSTGRESQL = {
 // rechazada, M-03), y lo que solo tiene MySQL: la UNIQUE sobre una collation _ci (otra caja es el mismo
 // sku, M-07), el ENUM del ciclo de vida, la fecha cero que el flujo rellena, la columna que el motor
 // reescribe en cada UPDATE (se graba como suya, M-09), el trigger que escribe en una tabla MyISAM sin su
-// FK (M-10, M-11) y el procedimiento que vive en la base.
+// FK (M-10, M-11), el procedimiento que vive en la base y el texto que el sql_mode no estricto trunca (M-08).
 const ai = (r, name) => (r.effects.db?._auto_increment?.changed ?? []).find((c) => c.after.name === name);
 const ZERO_DATETIME = '0000-00-00T00:00:00';
 const MYSQL = {
   dir: 'node-mysql',
   prefix: 'rec-fixture-my',
   sabotageProbes: new Set(['Q-001', 'Q-002']),
-  repeatable: new Set(['Q-002', 'Q-004', 'Q-005', 'Q-007', 'Q-008']),
+  repeatable: new Set(['Q-002', 'Q-004', 'Q-005', 'Q-007', 'Q-008', 'Q-009']),
   adaptations: [],
   race: { probe: 'Q-006', isRace: (k) => k.endsWith('|quantity=1') },
   scenarios: [],
@@ -363,6 +364,15 @@ const MYSQL = {
         ['su movimiento y su fila de movement_log', added(r, 'movements').length === 1 && added(r, 'movements')[0].delta === -1 && added(r, 'movement_log').length === 1],
       ];
     },
+    'Q-009': (r) => {
+      const sent = r.steps[0].request.body.sku;
+      const item = added(r, 'items')[0];
+      return [
+        ['estados: el alta larga sale bien y no se encuentra', codes(r) === '201,404'],
+        ['la respuesta devuelve el sku entero', r.steps[0].response.body?.sku === sent && sent.length === 70],
+        ['la base guarda los 64 primeros (M-08)', added(r, 'items').length === 1 && item.sku === sent.slice(0, 64)],
+      ];
+    },
   },
   checkSurface: (s) => {
     const routes = new Set((s.http?.routes ?? []).map((r) => `${r.method} ${r.path}`));
@@ -379,8 +389,13 @@ const MYSQL = {
       ['movements: el trigger que escribe en movement_log (M-11)', JSON.stringify((movements?.triggers ?? []).map((t) => [t.name, t.timing, t.event])) === '[["movement_logged","after","insert"]]' && /movement_log/.test(movements.triggers[0].statement)],
       ['movement_log: MyISAM y sin la FK que declara su DDL (M-10)', log?.engine === 'MyISAM' && !log?.foreignKeys],
       ['el procedimiento de la base (M-11)', JSON.stringify(s.data?.routines) === '[{"name":"restock","type":"procedure"}]'],
+      ['el sql_mode del servidor, el de compose.yaml (M-08)', s.data?.sqlMode === 'NO_ENGINE_SUBSTITUTION'],
     ];
   },
+  // las sondas de clase que pide la superficie. Queda una: Q-005 da de alta y agota en la misma sonda, así que su
+  // diff es una fila AÑADIDA en SOLD y no un cambio de estado (la puerta lo dice bien: la transición no está grabada).
+  // Sin las dos de MySQL, esas dos más.
+  classProbes: { all: ['lifecycle:items.status'], without: { probes: ['Q-007', 'Q-009'], pending: ['collation:items', 'lifecycle:items.status', 'overflow:items'] } },
   checkMergedSurface: (s) => [
     ['las tablas conservan la pasada en que aparecieron', (s.data?.tables ?? []).length === 3 && s.data.tables.every((t) => t.seen === 'introspect')],
     ['las rutinas también', (s.data?.routines ?? []).length === 1 && s.data.routines[0].seen === 'introspect'],
@@ -402,6 +417,16 @@ const REPEATABLE = fx.repeatable;
 const EXPECT = fx.expect;
 const { checkSurface, checkMergedSurface } = fx;
 const SCENARIOS = [{ id: 'base', red: [] }, ...fx.scenarios, ...commonScenarios(fx)];
+
+/** Un legacy en disco con la superficie y las grabaciones de una ronda, para preguntarle las sondas de clase. */
+function legacyOf(surface, recordings) {
+  const dir = fs.mkdtempSync(path.join(work, 'class-probes-'));
+  fs.writeFileSync(path.join(dir, 'surface.yaml'), YAML.stringify(surface));
+  fs.mkdirSync(path.join(dir, 'recordings', 'round-1'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'recordings', 'round-1', 'round.json'), JSON.stringify({ ok: true }));
+  for (const { id, recording } of recordings) fs.writeFileSync(path.join(dir, 'recordings', 'round-1', `${id}.json`), JSON.stringify(recording));
+  return dir;
+}
 
 // ── preparación ───────────────────────────────────────────────────────────────────────────────
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-recover-probe-'));
@@ -494,6 +519,15 @@ for (const sc of SCENARIOS.filter((s) => !only || s.id === only)) {
     }
     const again = introspect(sandbox, rt);
     checks.push(['introspect tras la ronda sin errores', again.ok], ...checkMergedSurface(mergeSurface(surface, again.surface, 'check-base')));
+    if (fx.classProbes) {
+      const pending = (skip) => pendingClassProbes(legacyOf(surface, report.recordings.filter((r) => !skip.includes(r.id)))).map((p) => p.key).sort();
+      const { all, without } = fx.classProbes;
+      const [now, cut] = [pending([]), pending(without.probes)];
+      checks.push(
+        [`sondas de clase pendientes: [${all.join(', ')}] (salen [${now.join(', ')}])`, JSON.stringify(now) === JSON.stringify(all)],
+        [`sin ${without.probes.join(' ni ')}, pendientes [${without.pending.join(', ')}] (salen [${cut.join(', ')}])`, JSON.stringify(cut) === JSON.stringify(without.pending)]
+      );
+    }
   } else {
     // el canal saboteado marca sus grabaciones como no fiables
     const ch = sc.red[0];

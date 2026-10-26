@@ -86,3 +86,90 @@ test('status no da la exploración por cerrada con sondas de clase pendientes, s
   const waived = base({ kind: 'exploration', schema: 1, stopped, waived: [{ key: 'lifecycle:product_info.product_status', reason: 'ninguna operación mueve el estado del producto' }] });
   assert.equal(waived.phase, 'design');
 });
+
+// MySQL (PLAN-KEEL-RECOVER-MYSQL.md, M4): una UNIQUE sobre texto _ci pide el duplicado con otra caja, y una tabla con
+// texto de longitud fija, el texto que no cabe. La superficie, la de fixtures/sandbox/node-mysql en pequeño.
+const MYSQL_SURFACE = {
+  kind: 'surface',
+  schema: 1,
+  data: {
+    tech: 'mysql',
+    sqlMode: 'NO_ENGINE_SUBSTITUTION',
+    tables: [
+      {
+        name: 'items',
+        columns: [{ name: 'id', type: 'int' }, { name: 'sku', type: 'varchar', length: 64, collation: 'utf8mb4_0900_ai_ci' }, { name: 'note', type: 'varchar', length: 255, collation: 'utf8mb4_0900_ai_ci' }],
+        unique: [['sku']],
+      },
+      { name: 'codes', columns: [{ name: 'code', type: 'varchar', length: 8, collation: 'utf8mb4_bin' }], unique: [['code']] },
+    ],
+  },
+};
+
+function mysqlLegacyWith(recordings, surface = MYSQL_SURFACE) {
+  const legacy = path.join(tmpDir('keel-recover-class-my-'), 'legacy', 'stock');
+  write(path.join(legacy, 'surface.yaml'), YAML.stringify(surface));
+  write(path.join(legacy, 'recordings', 'round-1', 'round.json'), { ok: true, criteria: [] });
+  for (const recording of recordings) write(path.join(legacy, 'recordings', 'round-1', `${recording.id}.json`), recording);
+  return legacy;
+}
+
+const sending = (recording, ...bodies) => ({ ...recording, steps: bodies.map((body) => ({ request: { method: 'POST', path: '/items', body } })) });
+const LONG_SKU = 'o'.repeat(65);
+
+test('mysql: una UNIQUE sobre texto _ci pide el alta con otra caja; la que solo repite la misma caja no la cumple', () => {
+  const alta = sending(insert('Q-002', 'basic', 'items'), { sku: 'a', quantity: 2 });
+  const pending = pendingClassProbes(mysqlLegacyWith([alta]));
+  const probe = pending.find((p) => p.key === 'collation:items');
+  assert.match(probe.why, /sku: utf8mb4_0900_ai_ci/);
+  assert.ok(!pending.some((p) => p.key === 'collation:codes'), 'una collation _bin distingue la caja, y codes no la escribe nadie');
+
+  const sameCase = sending(insert('Q-004', 'collation', 'items'), { sku: 'a' }, { sku: 'a' });
+  assert.ok(pendingClassProbes(mysqlLegacyWith([alta, sameCase])).some((p) => p.key === 'collation:items'), 'el mismo valor dos veces es la repetición, no la caja');
+  const otherClass = sending(insert('Q-007', 'repeat', 'items'), { sku: 'a' }, { sku: 'A' });
+  assert.ok(pendingClassProbes(mysqlLegacyWith([alta, otherClass])).some((p) => p.key === 'collation:items'), 'tiene que ser de clase collation');
+  const done = sending(insert('Q-007', 'collation', 'items'), { sku: 'a' }, { sku: 'A' });
+  assert.ok(!pendingClassProbes(mysqlLegacyWith([alta, done])).some((p) => p.key === 'collation:items'));
+});
+
+test('mysql: una tabla que se escribe con texto de longitud fija pide un texto más largo que la columna más corta', () => {
+  const alta = sending(insert('Q-002', 'basic', 'items'), { sku: 'a' });
+  const probe = pendingClassProbes(mysqlLegacyWith([alta])).find((p) => p.key === 'overflow:items');
+  assert.match(probe.why, /sku\(64\), note\(255\)\): un texto de más de 64 caracteres/);
+  assert.ok(!pendingClassProbes(mysqlLegacyWith([alta])).some((p) => p.key === 'overflow:codes'), 'codes no la escribe ninguna sonda');
+
+  const fits = sending(insert('Q-009', 'overflow', 'items'), { sku: 'o'.repeat(64) });
+  assert.ok(pendingClassProbes(mysqlLegacyWith([alta, fits])).some((p) => p.key === 'overflow:items'), '64 caracteres caben');
+  // la rechazada (modo estricto) no deja diff: cuenta lo que manda, no lo que escribe
+  const rejected = { ...sending({ id: 'Q-009', class: 'overflow', effects: { db: {} } }, { sku: LONG_SKU }) };
+  assert.ok(!pendingClassProbes(mysqlLegacyWith([alta, rejected])).some((p) => p.key === 'overflow:items'));
+
+  const postgres = { ...MYSQL_SURFACE, data: { ...MYSQL_SURFACE.data, tech: 'postgresql' } };
+  assert.ok(!pendingClassProbes(mysqlLegacyWith([alta], postgres)).some((p) => p.class === 'overflow'), 'en PostgreSQL el exceso es siempre un error del motor');
+});
+
+test('mysql: status no cierra la exploración con el duplicado con otra caja o el texto largo sin grabar ni descartar', () => {
+  const alta = sending(insert('Q-002', 'basic', 'items'), { sku: 'a' });
+  const stopped = { date: '2026-10-26', rounds: ['round-1'], coverage: 90, reason: 'la cobertura dejó de subir' };
+  const status = (exploration, recordings = [alta]) => {
+    const legacy = mysqlLegacyWith(recordings);
+    if (exploration) write(path.join(legacy, 'exploration.yaml'), YAML.stringify(exploration));
+    write(path.join(legacy, 'legacy.yaml'), YAML.stringify({ kind: 'legacy', schema: 1, name: 'stock', repo: '../../repo' }));
+    write(path.join(legacy, 'sandbox', 'verify.json'), { kind: 'verify', schema: 1, ok: true, criteria: [] });
+    return recoveryStatus(legacy, { assess: () => ({ criteria: [] }) });
+  };
+  const open = status({ kind: 'exploration', schema: 1, stopped });
+  assert.equal(open.phase, 'explore');
+  assert.deepEqual(open.details.pending.map((p) => p.key).sort(), ['collation:items', 'concurrency:items', 'overflow:items']);
+  const recorded = [
+    alta,
+    sending(insert('Q-006', 'concurrency', 'items'), { sku: 'a' }),
+    sending(insert('Q-007', 'collation', 'items'), { sku: 'a' }, { sku: 'A' }),
+    sending(insert('Q-009', 'overflow', 'items'), { sku: LONG_SKU }),
+  ];
+  assert.equal(status({ kind: 'exploration', schema: 1, stopped }, recorded).phase, 'design');
+  const waived = status({ kind: 'exploration', schema: 1, stopped, waived: [
+    { key: 'collation:items', reason: 'r' }, { key: 'concurrency:items', reason: 'r' }, { key: 'overflow:items', reason: 'la app valida la longitud antes de escribir' },
+  ] });
+  assert.equal(waived.phase, 'design');
+});

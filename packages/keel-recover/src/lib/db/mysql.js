@@ -236,6 +236,11 @@ export const TRIGGERS_SQL = `select event_object_table, trigger_name, lower(acti
 
 export const ROUTINES_SQL = `select lower(routine_type), routine_name from information_schema.routines where routine_schema = database() order by 1, 2;`;
 
+// El sql_mode del servidor (M-08): sin STRICT_TRANS_TABLES, un texto más largo que su columna se trunca y la
+// escritura sale bien. Es el GLOBAL: el driver de la app puede fijar otro en su sesión, así que lo que de verdad
+// pasa lo dice la sonda de clase `overflow` (src/lib/class-probes.js), no esta línea.
+export const SQL_MODE_SQL = `select @@global.sql_mode;`;
+
 // Los índices que no son de una restricción (PK, UNIQUE): los de una FK sí salen, porque InnoDB los crea solos
 // con el nombre de la restricción y son índices de verdad.
 export const INDEXES_SQL = `select s.table_name, s.index_name, max(s.non_unique), group_concat(s.column_name order by s.seq_in_index)
@@ -293,7 +298,8 @@ export function shapeStates(samples) {
 
 /**
  * Paso 1a, datos: tablas con motor, columnas (collation, AUTO_INCREMENT y ON UPDATE incluidos), claves,
- * restricciones, índices, triggers y columnas de estado; y las rutinas de la base (M-11), si hay.
+ * restricciones, índices, triggers y columnas de estado; las rutinas de la base (M-11), si hay, y el sql_mode
+ * del servidor (M-08).
  */
 export function introspectDb(rt, c, database) {
   const q = (sql) => mysql(rt, c, database, sql);
@@ -306,7 +312,8 @@ export function introspectDb(rt, c, database) {
   const indexes = q(INDEXES_SQL);
   const triggers = q(TRIGGERS_SQL);
   const routines = q(ROUTINES_SQL);
-  const failed = [counts, columns, constraints, indexes, triggers, routines].find((r) => !r.ok);
+  const sqlMode = q(SQL_MODE_SQL);
+  const failed = [counts, columns, constraints, indexes, triggers, routines, sqlMode].find((r) => !r.ok);
   if (failed) return failed;
   const countOf = Object.fromEntries(rows(counts.out));
   const tables = shapeTables({ tables: names.map(([t, engine]) => [t, engine, countOf[t] ?? '0']), columns: rows(columns.out), constraints: rows(constraints.out), indexes: rows(indexes.out), triggers: rows(triggers.out) });
@@ -331,7 +338,8 @@ export function introspectDb(rt, c, database) {
     (t.states ??= []).push({ column: st.column, values: st.values });
   }
   const routineList = rows(routines.out).map(([type, name]) => ({ name, type }));
-  return { ok: true, value: { tables, ...(routineList.length ? { routines: routineList } : {}) } };
+  // un sql_mode vacío también es un valor (el menos estricto de todos): la clave va siempre
+  return { ok: true, value: { tables, ...(routineList.length ? { routines: routineList } : {}), sqlMode: lines(sqlMode.out)[0]?.trim() ?? '' } };
 }
 
 // ── paridad ──────────────────────────────────────────────────────────────────────────────────

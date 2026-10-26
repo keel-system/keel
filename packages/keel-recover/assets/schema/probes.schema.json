@@ -18,7 +18,7 @@
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
-        "class": { "enum": ["basic", "authz", "concurrency", "repeat", "lifecycle", "outbound-failure", "outbound-target", "broker-down", "db-down"], "default": "basic", "description": "Las sondas de clase del plan (paso 1b): autorización, concurrencia, repetición, ciclo de vida, fallo saliente, el destino de una llamada saliente que decide la entrada (outbound-target) y broker o base caídos." },
+        "class": { "enum": ["basic", "authz", "concurrency", "repeat", "lifecycle", "collation", "overflow", "outbound-failure", "outbound-target", "broker-down", "db-down"], "default": "basic", "description": "Las sondas de clase del plan (paso 1b): autorización, concurrencia, repetición, ciclo de vida, el mismo valor con otra caja sobre una unicidad _ci (collation), un texto más largo que su columna (overflow), fallo saliente, el destino de una llamada saliente que decide la entrada (outbound-target) y broker o base caídos." },
         "why": { "type": "string" },
         "vars": { "type": "object" },
         "setup": {

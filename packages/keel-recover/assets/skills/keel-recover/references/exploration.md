@@ -30,7 +30,7 @@ probes:
     why: registro duplicado                # la pregunta que hace la sonda
     steps: [ *regA, *regA ]
   - id: R2-002
-    class: authz                           # basic | authz | concurrency | repeat | lifecycle | outbound-failure | outbound-target | broker-down | db-down
+    class: authz                           # basic | authz | concurrency | repeat | lifecycle | collation | overflow | outbound-failure | outbound-target | broker-down | db-down
     why: un usuario borra el artículo de otro
     steps:
       - *regA
@@ -67,7 +67,51 @@ Otras piezas del schema:
    - un índice único → el duplicado y la carrera (`concurrency`);
    - una operación que se reintenta → su repetición (`repeat`);
    - una llamada saliente → su fallo y su destino (`outbound-*`);
-   - un broker o una base → caídos (`broker-down`, `db-down`).
+   - un broker o una base → caídos (`broker-down`, `db-down`);
+   - en MySQL, una UNIQUE sobre texto con collation `_ci` → el mismo valor con otra caja (`collation`);
+   - en MySQL, una tabla que se escribe con columnas de texto de longitud fija → un texto más largo que la más corta
+     (`overflow`).
+
+   `keel-recover status` deriva de `surface.yaml` y de las grabaciones las que faltan (`concurrency:<tabla>`,
+   `lifecycle:<tabla>.<columna>`, `collation:<tabla>`, `overflow:<tabla>`) y no cierra la exploración hasta que cada una
+   esté grabada o descartada con su motivo en `exploration.yaml` (`waived`).
+
+### Las dos sondas de clase de MySQL
+
+Lo que graban es comportamiento del MOTOR que la app hereda sin escribirlo, y que el regenerado no tendrá si el diseño no
+lo dice (`evidence-to-dsl.md`, § MySQL).
+
+- **`collation`: el duplicado con otra caja.** Un alta, y otra con el mismo valor en otra caja; y la lectura por esa
+  clave con la otra caja. Con `_ci`, el segundo alta choca con la UNIQUE (un 409 o lo que haga la app con
+  `ER_DUP_ENTRY`) y la lectura encuentra la fila: «A» es «a». Cuenta como hecha la sonda de clase `collation` que
+  inserta en la tabla y manda dos textos que solo difieren en la caja.
+
+  ```yaml
+  - id: R1-020
+    class: collation
+    why: el mismo sku con otra caja (sku es UNIQUE sobre utf8mb4_0900_ai_ci)
+    steps:
+      - { request: { method: POST, path: /items, body: { sku: a, quantity: 2 } } }
+      - { request: { method: POST, path: /items, body: { sku: A, quantity: 1 } } }
+      - { request: { method: GET, path: /items/A } }
+  ```
+
+- **`overflow`: el texto más largo que la columna.** Un alta con un texto que no cabe, y la lectura de lo que quedó. Sin
+  `STRICT_TRANS_TABLES` en la sesión de la app, MySQL lo trunca y la escritura sale bien: la respuesta puede devolver el
+  texto entero, la base guarda el corto y la lectura con el texto enviado no lo encuentra (medido en la fixture
+  `node-mysql`: 201 y 404). Con modo estricto, el motor lo rechaza (un 500, o lo que haga la app con el error). El
+  `sqlMode` de `surface.yaml` es el del servidor y no basta: el driver puede fijar otro, y por eso hace falta la
+  sonda. Cuenta como hecha la sonda de clase `overflow` que manda un texto más largo que la columna de texto más corta
+  de la tabla.
+
+  ```yaml
+  - id: R1-021
+    class: overflow
+    why: un sku de 70 caracteres en varchar(64)
+    steps:
+      - { request: { method: POST, path: /items, body: { sku: "oooooo-012345678901234567890123456789012345678901234567890123456789abc", quantity: 1 } } }
+      - { request: { method: GET, path: "/items/oooooo-012345678901234567890123456789012345678901234567890123456789abc" } }
+  ```
 
 ## Cuándo parar
 
