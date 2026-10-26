@@ -13,7 +13,8 @@
     "verify-check": "node scripts/verify-check.js",
     "bench-verify": "node scripts/bench-verify.js",
     "probe-check": "node scripts/probe-check.js",
-    "characterize-check": "node scripts/characterize-check.js"
+    "characterize-check": "node scripts/characterize-check.js",
+    "target-db-check": "node scripts/target-db-check.js"
   },
   "files": [
     "src",

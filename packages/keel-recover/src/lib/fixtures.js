@@ -8,11 +8,42 @@
 // solo las excepciones: lo demás va por convención (el campo `buyerEmail` es la columna `buyer_email`, la relación
 // `cart` es `cart_id`). Una columna que no se mapea ni se descarta a sabiendas es un error: el dato del legacy no se
 // pierde en silencio.
+//
+// Los valores viajan como los exporta el adaptador del motor, y los que el diseño tipa de otra forma se traducen por el
+// TIPO del campo (M-06 de PLAN-KEEL-RECOVER-MYSQL.md): un `boolean` que MySQL guarda en `tinyint` llega como 0/1, un
+// `uuid` en `binary(16)` llega en hex (32 dígitos, en el orden de los bytes: un legacy que lo guardó con
+// `UUID_TO_BIN(x, 1)` necesita su mapa en `values`) y la fecha cero (`0000-00-00`) es el «sin fecha» del legacy, que en
+// el diseño es null. Lo que no casa con la forma esperada se deja tal cual: lo dice checkFixtures de keel-core. El decimal
+// en texto (para no perder la escala) ya es un número para keel-core.
 
 import { isTechnicalKey } from './db/relational.js';
 
 const snake = (name) => String(name).replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 const isToMany = (relation) => relation?.cardinality === 'one-to-many' || relation?.cardinality === 'many-to-many';
+const TIME = new Set(['timestamp', 'date', 'datetime', 'instant']);
+const HEX_UUID = /^[0-9a-f]{32}$/i;
+const ZERO_DATE = /^0000-00-00/;
+
+/** El tipo base de un campo (un alias escalar se sigue hasta el suyo; un enum o un compuesto no tienen). */
+function baseType(types, name, seen = new Set()) {
+  const declared = types?.[name];
+  if (!declared) return name;
+  if (Array.isArray(declared.values) || declared.fields || seen.has(name) || !declared.type) return null;
+  seen.add(name);
+  return baseType(types, declared.type, seen);
+}
+
+/** El valor exportado, en la forma del tipo del diseño (`type`, ya resuelto a su base). */
+export function fromExport(type, raw) {
+  if (raw === null || raw === undefined) return raw;
+  if (type === 'boolean' && (raw === 0 || raw === 1)) return raw === 1;
+  if (type === 'uuid' && typeof raw === 'string' && HEX_UUID.test(raw)) {
+    const h = raw.toLowerCase();
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  if (TIME.has(type) && typeof raw === 'string' && ZERO_DATE.test(raw)) return null;
+  return raw;
+}
 
 /**
  * Los registros del diseño desde la exportación del legacy. `exported` es lo que da `dba.exportDb` (tabla → filas);
@@ -40,6 +71,15 @@ export function deriveFixtures({ exported, data, layers, source = {} }) {
       ...Object.keys(entity.fields ?? {}).filter((field) => !entity.fields[field]?.list),
       ...Object.entries(entity.relations ?? {}).filter(([, relation]) => !isToMany(relation)).map(([relation]) => relation),
     ];
+    // El tipo de cada destino: el del campo, o el del id de la entidad a la que apunta una relación.
+    const types = layers?.domain?.types ?? {};
+    const typeOf = (target) => {
+      const field = entity.fields?.[target];
+      if (field) return baseType(types, field.type);
+      const pointed = entities[entity.relations?.[target]?.entity];
+      const id = Object.values(pointed?.fields ?? {}).find((f) => f?.id);
+      return id ? baseType(types, id.type) : null;
+    };
     const columnOf = (target) => spec.columns?.[target] ?? (entity.relations?.[target] ? `${snake(target)}_id` : snake(target));
     for (const target of Object.keys(spec.columns ?? {})) {
       if (!targets.includes(target)) errors.push(`data.${name}.columns.${target}: no es un campo ni una relación a-uno de ${name}`);
@@ -57,7 +97,7 @@ export function deriveFixtures({ exported, data, layers, source = {} }) {
           if (mapped && raw !== null) {
             if (!(String(raw) in mapped)) errors.push(`data.${name}.values.${target}: el legacy guarda ${JSON.stringify(raw)} en ${spec.table}.${column} y el mapa no dice qué valor del diseño es`);
             record[target] = mapped[String(raw)];
-          } else record[target] = raw;
+          } else record[target] = fromExport(typeOf(target), raw);
         } else if (spec.defaults && target in spec.defaults) record[target] = spec.defaults[target];
       }
       records.push(record);

@@ -78,3 +78,51 @@ test('nada se pierde en silencio: columna sin decidir, valor sin traducción, ta
   has(/^data\.Ghost: no es una entidad del dominio$/);
   has(/^data\.Line: el legacy no tiene la tabla lines \(las que hay: cart, order_main, product_in_order, users\)$/);
 });
+
+// MySQL (M-06): lo que exporta el adaptador con la forma de su motor —tinyint para el booleano, el uuid de binary(16) en
+// hex, el decimal en texto, la fecha cero— y el diseño con sus tipos.
+test('mysql: los valores exportados se traducen por el tipo del campo del diseño, también en una relación', () => {
+  const myLayers = {
+    domain: {
+      types: { Flag: { type: 'boolean' } },
+      entities: {
+        Item: {
+          fields: {
+            id: { type: 'uuid', id: true },
+            price: { type: 'decimal', required: true },
+            active: { type: 'boolean', required: true },
+            featured: { type: 'Flag' },
+            stock: { type: 'int', required: true },
+            lastSoldAt: { type: 'timestamp' },
+            restockOn: { type: 'date' },
+          },
+          relations: { owner: { entity: 'Owner', cardinality: 'many-to-one' } },
+        },
+        Owner: { fields: { id: { type: 'uuid', id: true } } },
+      },
+    },
+    persistence: { default: { model: 'relational' }, entities: {} },
+  };
+  const exportedMy = {
+    items: [{ id: '0190C0DE00007000800000000000000A', price: '12.50', active: 1, featured: 0, stock: 1, last_sold_at: '0000-00-00T00:00:00', restock_on: '2024-04-01', owner_id: '0190C0DE00007000800000000000000B' }],
+    owners: [{ id: '0190C0DE00007000800000000000000B' }],
+    _auto_increment: [],
+  };
+  const { doc, errors } = deriveFixtures({ exported: exportedMy, data: { Item: { table: 'items' }, Owner: { table: 'owners' } }, layers: myLayers });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(doc.entities.Item.records, [{
+    id: '0190c0de-0000-7000-8000-00000000000a',
+    price: '12.50',
+    active: true,
+    featured: false,
+    stock: 1,
+    lastSoldAt: null,
+    restockOn: '2024-04-01',
+    owner: '0190c0de-0000-7000-8000-00000000000b',
+  }], 'el int sigue siendo 1: solo el boolean (también por alias) lo lee como verdad');
+  assert.deepEqual(doc.entities.Owner.records, [{ id: '0190c0de-0000-7000-8000-00000000000b' }]);
+  assert.deepEqual(checkFixtures(myLayers, doc), [], 'y lo que sale casa con el diseño');
+  // lo que no tiene la forma esperada se deja tal cual, y lo dice keel-core
+  const odd = deriveFixtures({ exported: { ...exportedMy, items: [{ ...exportedMy.items[0], active: 2 }] }, data: { Item: { table: 'items' }, Owner: { table: 'owners' } }, layers: myLayers });
+  assert.match(checkFixtures(myLayers, odd.doc).join('\n'), /active es boolean y no trae true\/false \(2\)/);
+});
