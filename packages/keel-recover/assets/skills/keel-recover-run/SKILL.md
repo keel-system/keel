@@ -40,6 +40,16 @@ sigue con `legacy/<servicio>`. Si `init` sale con 2, el legacy no encaja: muestr
 Un subagente cada vez sobre el sandbox: el explorador y characterize comparten la base y su snapshot. Si un comando dice
 que no hay snapshot, `keel-recover verify legacy/<servicio>/sandbox --no-up` y repite.
 
+**Cada tarea, un subagente NUEVO.** «Lanza» es siempre una llamada nueva al subagente, nunca un mensaje a uno que ya
+terminó su tarea: `design`, cada `apply`, cada `repair` y cada ronda del explorador empiezan en contexto limpio, porque
+todo lo que necesitan está en disco (las capas, `provenance.yaml`, `questions.yaml`, las grabaciones) y el prompt dice
+la tarea. Un subagente al que se le manda la tarea siguiente arrastra todo lo que leyó y escribió en las anteriores, y
+cada turno vuelve a pagarlo entero. Medido en la corrida de control de show-ticketing: un solo diseñador encadenó
+`design`, tres `apply` y un `repair` en 159 turnos, con el contexto creciendo de 16k a 850k tokens; se llevó el 75 % de
+los tokens de la corrida, y las tareas posteriores a `design` costaron unos 50M de tokens leídos que en un agente nuevo
+habrían sido una fracción. Lo único que se reanuda con un mensaje es la **misma** tarea cortada a medias (un límite de la
+API): esa sí necesita lo que llevaba hecho.
+
 ## Los tres puntos de decisión
 
 Son los únicos momentos en que preguntas. En cada uno, primero el resumen en una tabla corta y luego `AskUserQuestion`

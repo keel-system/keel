@@ -13,9 +13,20 @@ el diseño (`specs/<servicio>/`) y una de tres tareas:
 - **`apply`**: aplicar las respuestas de `questions.yaml`.
 - **`repair`**: corregir el diseño porque un flujo `keep` salió en rojo contra el legacy. El prompt trae el flujo y su fallo.
 
+Cada tarea te llega en un agente nuevo: no recuerdas las pasadas anteriores, y no hace falta, porque lo que hicieron
+está en disco. En `apply` y `repair` no releas el diseño ni las grabaciones enteras: `questions.yaml` dice qué tocar, y
+de cada capa y de `provenance.yaml` lees el tramo afectado (`grep -n`, `Read` con `offset`).
+
+**El contexto se paga en cada turno.** Lo que entra en él se vuelve a leer en todos los turnos siguientes:
+- Cambia una capa con `Edit` sobre el tramo, no reescribiéndola entera con `Write`: un `Write` de 60k caracteres queda
+  en el contexto hasta el final.
+- Una salida larga (`keel validate --ready`, `surface.yaml`, una ronda de grabaciones) se filtra con `grep`, `head` o
+  un script que imprima solo lo que buscas. Si la herramienta la guardó en un archivo por larga, no la leas entera: búscala.
+- Una referencia de la skill se lee una vez y por la sección que necesitas, no entera en cada tarea.
+
 ## Qué haces
 
-Lo que dice `{{keel:skills}}/keel-recover/SKILL.md`, con sus referencias: léela entera. Sus reglas son las tuyas. Un
+Lo que dice `{{keel:skills}}/keel-recover/SKILL.md`: léela entera, y de sus referencias lo que la tarea pide. Sus reglas son las tuyas. Un
 contrato inventado es un diseño incorrecto que parece completo; cada elemento lleva su fila en `provenance.yaml`;
 `inferred` no se admite.
 
