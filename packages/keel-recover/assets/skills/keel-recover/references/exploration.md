@@ -46,6 +46,24 @@ probes:
 ```
 
 Otras piezas del schema:
+- **La sesión por cookie.** Cada sonda lleva su almacén de cookies, como un navegador: lo que fija el login (la
+  `SESSION` de Spring Session, el `connect.sid` de express-session) viaja en los pasos siguientes sin escribir nada. Una
+  sonda no hereda la sesión de otra, ni una repetición la de la anterior. Dos personas en la misma sonda son dos sesiones
+  con nombre (`session: gestor` en sus pasos, `session: usuario` en los otros); `session: none` manda el paso sin
+  cookies (lo mismo sin sesión) y no guarda las que reciba. Si un legacy da 401 en todo lo que hay detrás del login,
+  mira antes si la sonda hizo login en la misma sesión que el paso.
+
+  ```yaml
+  - id: R1-030
+    why: el gestor da de alta un recinto y un usuario general no puede
+    steps:
+      - { session: gestor, request: { method: POST, path: /login, body: { userId: admin1, password: "Pw1!" } } }
+      - { session: usuario, request: { method: POST, path: /login, body: { userId: user1, password: "Pw1!" } } }
+      - { session: gestor, request: { method: POST, path: /venues, body: { name: Sala A } } }
+      - { session: usuario, request: { method: POST, path: /venues, body: { name: Sala B } } }
+      - { session: none, request: { method: GET, path: /my-page } }
+  ```
+- `capture` lee el cuerpo (ruta con puntos), una cookie (`cookie:SESSION`) o una cabecera (`header:Location`).
 - `setup.stubs` (WireMock solo durante la sonda) y `setup.broker: down` / `setup.db: down`.
 - `then_parallel` y `after`, para los pasos a la vez y la lectura del desenlace. Los pasos a la vez salen de UN curl en el contenedor de herramientas (`-Z --parallel-immediate`), porque con una petición por proceso llegan en serie y la carrera no se ve nunca. Una sonda de concurrencia con un único desenlace en todas sus repeticiones no prueba que no haya carrera: mira si el legacy serializa de verdad (bloqueo, versión, restricción) antes de decidir. Y calienta su pool de conexiones antes de la carrera (unas lecturas en `then_parallel` previas, o en `steps`): un pool que abre la conexión en el momento retrasa la segunda petición lo justo para que la primera termine, y la carrera no se ve (medido en la fixture `node-postgres`: 0/10 con el pool frío, 10/10 caliente).
 - Una sonda con `repeat` graba `outcomes`: cuántas repeticiones dieron cada desenlace. La clave lleva los status y la huella de lo que quedó en la base (`|db=…`, sin las secuencias), así que una carrera que solo se ve en la base (dos pedidos del mismo carrito) sale como desenlaces distintos con el mismo status. `outcomeEffects` trae el diff de la base de cada desenlace: léelo antes de describir lo que pasa, porque `effects` es solo el de la primera repetición.

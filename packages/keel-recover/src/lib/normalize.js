@@ -12,6 +12,7 @@
 //   - las claves de medida de la herramienta (`_timeSeconds`, `_timestamp`) no se tocan y no se
 //     comparan. Es una lista cerrada y no «todo lo que empiece por `_`»: el `_id` de MongoDB es
 //     justo lo que más hay que normalizar;
+//   - el valor de la cabecera `set-cookie` se etiqueta como un uuid (<cookie#1>): un id de sesión cambia en cada login;
 //   - el legacy añade sus reglas en sandbox.yaml (`probe.normalize`): lo aleatorio de su framework.
 
 /** Lo que se graba pero no se compara entre dos ejecuciones. */
@@ -57,11 +58,13 @@ export function normalizer(extra = []) {
     ...extra.map(({ pattern, replace }) => [new RegExp(pattern, 'g'), (m) => (replace === 'tag' ? tag('v', m) : replace)]),
   ];
   const str = (s) => rules.reduce((acc, [re, fn]) => acc.replace(re, fn), s);
+  // el valor de una cookie que fija la respuesta (el id de sesión) es aleatorio; su nombre y sus atributos, no
+  const cookie = (s) => s.replace(/^([^=;\s]+)=([^;]*)/, (_, name, value) => `${name}=${value === '' ? '' : tag('cookie', value)}`);
   const walk = (v) => {
     if (typeof v === 'string') return str(v);
     if (typeof v === 'number' && EPOCH_MS_NUMBER.test(String(v))) return '<epoch-ms>';
     if (Array.isArray(v)) return v.map(walk);
-    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, UNCOMPARED.has(k) ? x : walk(x)]));
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, UNCOMPARED.has(k) ? x : k === 'set-cookie' && typeof x === 'string' ? str(cookie(x)) : walk(x)]));
     return v;
   };
   return walk;

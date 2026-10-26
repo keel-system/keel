@@ -6,6 +6,7 @@ import { CHARACTERIZED_FILE, SCENARIOS_FILE, loadProvenance, readCharacterizatio
 import { loadSandbox, containerOf } from './sandbox.js';
 import { verifyCriterion } from './probe.js';
 import { toolRequestAsync } from './tool-http.js';
+import { flushCaches } from './caches.js';
 import { databaseAdapter } from './db/index.js';
 import { loadContractMap, plannedFlows, sealDocument } from './characterize.js';
 import { renderFidelity } from './fidelity.js';
@@ -86,16 +87,20 @@ export function legacyContext(prep, rt, { snapshotHash = null } = {}) {
     random: () => crypto.randomBytes(12).toString('hex'),
     http: async ({ method, url, headers, body }) => {
       const r = await toolRequestAsync(rt, tool, { method, url, headers, body, timeoutSeconds: 20 });
-      return { status: r.status, body: r.body };
+      return { status: r.status, body: r.body, cookies: r.cookies ?? {} };
     },
     reset: async () => {
-      if (!db) return { ok: true };
-      const r = dba.restoreSnapshot(rt, db, spec.database);
-      if (!r.ok) return r;
-      if (!snapshotHash) return { ok: true };
-      const h = dba.fingerprint(rt, db, spec.database);
-      if (!h.ok) return { ok: false, error: `no se pudo leer la huella de la base: ${h.error}` };
-      return h.value === snapshotHash ? { ok: true } : { ok: false, error: `la base restaurada (${h.value}) no es el snapshot de verify (${snapshotHash})` };
+      if (db) {
+        const r = dba.restoreSnapshot(rt, db, spec.database);
+        if (!r.ok) return r;
+        if (snapshotHash) {
+          const h = dba.fingerprint(rt, db, spec.database);
+          if (!h.ok) return { ok: false, error: `no se pudo leer la huella de la base: ${h.error}` };
+          if (h.value !== snapshotHash) return { ok: false, error: `la base restaurada (${h.value}) no es el snapshot de verify (${snapshotHash})` };
+        }
+      }
+      // la caché y la sesión, vacías: si no, un flujo leería lo que cacheó el anterior
+      return flushCaches(rt, prep.sandbox);
     },
   };
 }

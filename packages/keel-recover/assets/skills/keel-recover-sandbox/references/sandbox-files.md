@@ -137,10 +137,17 @@ mail:                                      # dependencia kind: smtp
   service: <servicio del Mailpit>
   api: http://<alias>:8025/api/v1
   smtp: <host>:<puerto>                    # con el que ENVÍA el legacy
+caches:                                    # dependencias kind: cache, y todo Redis del legacy (la sesión también)
+  - { service: <servicio del Redis de caché>, tech: redis }
+  - { service: <servicio del Redis de sesión>, tech: redis }   # password: la de desarrollo, si la pide
 introspection:
   routes: { kind: express, file: /coverage/keel-recover-routes.json }   # o spring-log, o actuator con path
 ```
 
+- `caches` no es un canal que se lea: es estado que el snapshot de la base no cubre. `probe` y `characterize` lo vacían
+  (`FLUSHALL`) en cada restauración, después de la base; sin él, una sonda leería lo que cacheó la anterior (un
+  `@Cacheable`) o la sesión de otra. Una dependencia `kind: cache` sin `caches` deja `PRB-CHANNELS` en rojo; un Redis de
+  sesión que `environment.yaml` no clasificó (`kind: unknown`) va también aquí.
 - `hosts` y `smtp` son las direcciones **del legacy**, no las del espía: el canario de cada sonda viaja por ellas, y si no acaban en el WireMock o el Mailpit que se lee, la sonda sale en rojo.
 - RabbitMQ se espía con su firehose (`rabbitmqctl trace_on`), que necesita la API de gestión: por eso la variante `-management` de la **misma** versión que pide la evidencia, con una adaptación que lo diga.
 - Rutas de Express: monta también la precarga `express-routes.cjs` de `sandbox/instrument` (`NODE_OPTIONS=--require /recover/v8-coverage-exit.cjs --require /recover/express-routes.cjs`) y dale con `RECOVER_ROUTES_OUT` un archivo dentro del volumen de la cobertura. Spring 4 / Boot 1.x: `spring-log` (las líneas `Mapped "{[...]}"` del arranque, que listan también Spring Data REST). Boot 2+: también `spring-log`, encendiendo el log de las rutas en el servicio de la app del compose con `SPRING_APPLICATION_JSON: '{"logging.level.org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping":"TRACE"}'` — no con `LOGGING_LEVEL_…`: la variable de entorno se pasa a minúsculas y no alcanza un logger con nombre de clase (medido en shop-api, Boot 2.2). El context path (`server.servlet.context-path`) lo antepone la herramienta desde la línea de arranque del contenedor web. `actuator` con `path: /actuator/mappings` solo si el legacy ya lo trae: añadirlo es tocar su build. Sin `introspection.routes`, `FIDELITY.md` no puede decir qué rutas se quedan sin operación: no la dejes fuera.

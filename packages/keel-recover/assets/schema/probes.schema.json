@@ -70,7 +70,8 @@
             "headers": { "type": "object" }
           }
         },
-        "capture": { "type": "object", "additionalProperties": { "type": "string" }, "description": "variable: ruta con puntos dentro del cuerpo de la respuesta." }
+        "session": { "type": "string", "minLength": 1, "description": "La sesión del paso: el almacén de cookies de la sonda con el que va (las que fijó una respuesta anterior de esa sesión, como el login) y en el que guarda las que reciba. Por defecto `default`; dos personas en una sonda son dos nombres (`gestor`, `usuario`). `none`: sin cookies, y sin guardar las que reciba. Cada sonda (y cada repetición) empieza sin ninguna." },
+        "capture": { "type": "object", "additionalProperties": { "type": "string" }, "description": "variable: ruta con puntos dentro del cuerpo de la respuesta, `cookie:<nombre>` (una cookie que fija la respuesta) o `header:<nombre>` (una cabecera de la respuesta)." }
       }
     }
   }

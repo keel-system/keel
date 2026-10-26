@@ -77,6 +77,21 @@
         "smtp": { "type": "string", "pattern": "^[^:/]+:\\d+$", "description": "host:puerto con el que el LEGACY envía (el alias de environment.yaml): el canario va por ahí." }
       }
     },
+    "caches": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Los almacenes en memoria del legacy (una caché, la sesión) que el snapshot de la base no cubre: se vacían en cada restauración, o una sonda leería lo que cacheó la anterior. Uno por servicio.",
+      "items": {
+        "type": "object",
+        "required": ["service", "tech"],
+        "additionalProperties": false,
+        "properties": {
+          "service": { "type": "string", "minLength": 1 },
+          "tech": { "enum": ["redis"], "description": "Los que sabe vaciar keel-recover: redis (FLUSHALL con el redis-cli de su contenedor). Otro es un rechazo con motivo." },
+          "password": { "type": "string", "description": "La de desarrollo del repo, si el servidor la pide (va por REDISCLI_AUTH, no por la línea de comandos)." }
+        }
+      }
+    },
     "coverage": {
       "type": "object",
       "required": ["kind"],

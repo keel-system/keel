@@ -14,6 +14,37 @@ const tryJson = (s) => {
 // Las cabeceras que dicen algo del comportamiento; el resto (fecha, longitud, servidor) es ruido.
 export const KEPT_HEADERS = ['content-type', 'location', 'access-control-allow-origin', 'set-cookie', 'www-authenticate', 'allow', 'retry-after'];
 
+/**
+ * Las cookies de las líneas `Set-Cookie` de una respuesta (todas: la cabecera se repite), `{ nombre: valor }`. Una que
+ * el servidor borra (`Max-Age=0`, o una caducidad en el pasado, como el logout de Spring Session) va con null.
+ */
+export function parseSetCookies(lines) {
+  const out = {};
+  for (const line of lines) {
+    const [pair, ...attrs] = line.split(';').map((x) => x.trim());
+    const eq = pair.indexOf('=');
+    if (eq <= 0) continue;
+    const expires = attrs.find((a) => /^expires=/i.test(a));
+    const gone = attrs.some((a) => /^max-age=(0|-\d+)$/i.test(a)) || (expires && Date.parse(expires.slice(8)) < Date.now());
+    out[pair.slice(0, eq)] = gone ? null : pair.slice(eq + 1);
+  }
+  return out;
+}
+
+/** Las cabeceras de un bloque de respuesta, y sus cookies. */
+function readHeaders(lines) {
+  const headers = {};
+  const setCookies = [];
+  for (const line of lines) {
+    const i = line.indexOf(':');
+    if (i <= 0) continue;
+    const name = line.slice(0, i).trim().toLowerCase();
+    headers[name] = line.slice(i + 1).trim();
+    if (name === 'set-cookie') setCookies.push(headers[name]);
+  }
+  return { headers, cookies: parseSetCookies(setCookies) };
+}
+
 function build({ method = 'GET', url, headers = {}, body, user, timeoutSeconds = 15 }) {
   // $0 es el método y "$@" el resto: así ninguna cabecera pasa por el intérprete de sh.
   const script =
@@ -32,7 +63,7 @@ function build({ method = 'GET', url, headers = {}, body, user, timeoutSeconds =
   return { args, input };
 }
 
-/** Lee la salida de `build`: `{ status, timeSeconds, headers, raw, body }`; status 0 si no hubo respuesta. */
+/** Lee la salida de `build`: `{ status, timeSeconds, headers, cookies, raw, body }`; status 0 si no hubo respuesta. */
 export function parseCurlOutput(out) {
   const text = String(out);
   const nl = text.indexOf('\n');
@@ -43,12 +74,8 @@ export function parseCurlOutput(out) {
   const raw = b >= 0 ? text.slice(b + 5) : '';
   // Con redirecciones o 100-continue hay varios bloques: vale el último.
   const blocks = headersRaw.split(/\r?\n\r?\n/).filter((x) => x.trim());
-  const headers = {};
-  for (const line of (blocks.at(-1) ?? '').split(/\r?\n/).slice(1)) {
-    const i = line.indexOf(':');
-    if (i > 0) headers[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim();
-  }
-  return { status: Number(code) || 0, timeSeconds: Number(time) || 0, headers, raw, body: raw === '' ? null : tryJson(raw) };
+  const { headers, cookies } = readHeaders((blocks.at(-1) ?? '').split(/\r?\n/).slice(1));
+  return { status: Number(code) || 0, timeSeconds: Number(time) || 0, headers, cookies, raw, body: raw === '' ? null : tryJson(raw) };
 }
 
 export function toolRequest(rt, tool, req) {
@@ -99,7 +126,7 @@ export function parseParallelOutput(out, n) {
   const text = String(out);
   return Array.from({ length: n }, (_, i) => {
     const start = text.indexOf(`<<<R ${i}\n`);
-    if (start < 0) return { status: 0, timeSeconds: 0, headers: {}, raw: '', body: null };
+    if (start < 0) return { status: 0, timeSeconds: 0, headers: {}, cookies: {}, raw: '', body: null };
     const end = text.indexOf(`<<<R ${i + 1}\n`, start);
     const block = text.slice(start + `<<<R ${i}\n`.length, end < 0 ? undefined : end);
     const b = block.indexOf('<<<B\n');
@@ -107,13 +134,9 @@ export function parseParallelOutput(out, n) {
     const raw = (b >= 0 ? block.slice(b + 5) : '').replace(/\n$/, '');
     const blocks = headersRaw.split(/\r?\n\r?\n/).filter((x) => x.trim());
     const last = (blocks.at(-1) ?? '').split(/\r?\n/);
-    const headers = {};
-    for (const line of last.slice(1)) {
-      const k = line.indexOf(':');
-      if (k > 0) headers[line.slice(0, k).trim().toLowerCase()] = line.slice(k + 1).trim();
-    }
+    const { headers, cookies } = readHeaders(last.slice(1));
     const status = Number(/^HTTP\/[\d.]+ (\d{3})/.exec(last[0] ?? '')?.[1]) || 0;
-    return { status, timeSeconds: 0, headers, raw, body: raw === '' ? null : tryJson(raw) };
+    return { status, timeSeconds: 0, headers, cookies, raw, body: raw === '' ? null : tryJson(raw) };
   });
 }
 
@@ -123,7 +146,7 @@ export async function toolRequestsParallel(rt, tool, reqs) {
   for (const [i, r] of reqs.entries()) {
     if (r.body === undefined) continue;
     const staged = rt.exec(tool, ['sh', '-c', `cat > ${tmp(token, i, 'in')}`], { input: typeof r.body === 'string' ? r.body : JSON.stringify(r.body) });
-    if (staged.status !== 0) return reqs.map(() => ({ status: 0, timeSeconds: 0, headers: {}, raw: '', body: null, error: `no se pudo dejar el cuerpo en el contenedor: ${staged.stderr}` }));
+    if (staged.status !== 0) return reqs.map(() => ({ status: 0, timeSeconds: 0, headers: {}, cookies: {}, raw: '', body: null, error: `no se pudo dejar el cuerpo en el contenedor: ${staged.stderr}` }));
   }
   const r = await rt.execAsync(tool, buildParallel(reqs, token));
   // curl sale con el código del último fallo: una transferencia sin respuesta lleva status 0 y el error

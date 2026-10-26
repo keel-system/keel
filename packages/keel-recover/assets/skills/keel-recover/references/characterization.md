@@ -93,6 +93,19 @@ Dos piezas más que la paridad necesita y que se escriben al diseñar, no al ver
 
 Las credenciales salen del repo y nunca de producción: la propia API (`via: op`), un JWT firmado con el secreto de desarrollo (`via: forge`) o ninguna (`via: none`). Del lado `keel`, el regenerado delega la identidad (`via: idp`), y si el diseño identifica al llamante por un claim que no es el `sub` (el email), el actor lo dice: `customer: { via: idp, email: customer1@email.com, roles: [customer] }` (`email: null`, una persona sin email). La paridad la da de alta así en el proveedor del regenerado.
 
+Un legacy con **sesión por cookie** (Spring Session, express-session) no tiene token: la credencial de cada actor es su
+cookie, y se dice en el lado con `auth: { cookie: SESSION }` y en el actor con `token: cookie:SESSION`:
+
+```yaml
+legacy:
+  auth: { cookie: SESSION }              # Cookie: SESSION=<la del login del actor>
+  actors:
+    member: { via: op, op: login, input: { userId: "{{actor}}", password: pw }, token: cookie:SESSION, setup: … }
+```
+
+Cada actor lleva su propia sesión, así que dos actores en un flujo son dos sesiones. Si una respuesta renueva la cookie o
+la borra (el logout), los pasos siguientes de ese actor van con la nueva; tras un logout, sin sesión.
+
 ### El estado de partida: `data` y `keel-recover fixtures`
 
 Cada flujo parte del snapshot del legacy, y lo que haya en él (un seed, los registros de referencia) es su estado de partida. Si algún `Given` cuenta con esos datos —un producto del seed, un pedido con su id—, el regenerado tiene que partir de lo mismo, y eso viaja en `specs/<servicio>/fixtures.yaml`. No se escribe a mano: se dice en `contract-map.yaml → data` de qué tabla sale cada entidad, solo con las excepciones, y `keel-recover fixtures legacy/<servicio>` lo deriva del snapshot.

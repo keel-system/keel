@@ -172,11 +172,17 @@ async function call(ctx, step, vars, tokens) {
   if (step.as) {
     if (!(step.as in tokens)) throw new Error(`el actor ${step.as} no está en \`actors\` del flujo`);
     if (tokens[step.as] !== null) {
-      const scheme = ctx.side.auth?.scheme ?? 'Bearer';
-      headers[ctx.side.auth?.header ?? 'Authorization'] = scheme ? `${scheme} ${tokens[step.as]}` : tokens[step.as];
+      // una sesión por cookie (Spring Session, express-session): la credencial del actor es el valor de su cookie
+      if (ctx.side.auth?.cookie) headers.Cookie = `${ctx.side.auth.cookie}=${tokens[step.as]}`;
+      else {
+        const scheme = ctx.side.auth?.scheme ?? 'Bearer';
+        headers[ctx.side.auth?.header ?? 'Authorization'] = scheme ? `${scheme} ${tokens[step.as]}` : tokens[step.as];
+      }
     }
   }
   const res = await ctx.http({ method: m.method, url, headers, body });
+  // Un login que renueva la sesión (o un logout que la borra) cambia la cookie del actor para los pasos siguientes.
+  if (step.as && ctx.side.auth?.cookie && ctx.side.auth.cookie in (res.cookies ?? {})) tokens[step.as] = res.cookies[ctx.side.auth.cookie] ?? '';
   let data = res.body;
   // Un cuerpo desnudo del lado (`true`, una lista) donde el diseño tiene un objeto: `resultAs` lo pone en su campo.
   if (m.resultAs && res.status > 0 && res.status < 300) data = { [m.resultAs]: data };
@@ -185,8 +191,11 @@ async function call(ctx, step, vars, tokens) {
     else if (m.page) data = { items: pick(data, m.page.items), totalElements: pick(data, m.page.total) };
     else if (m.list !== undefined) data = { items: pick(data, m.list) };
   }
-  return { request: { method: m.method, url, ...(body !== undefined ? { body } : {}) }, status: res.status, raw: res.body, data };
+  return { request: { method: m.method, url, ...(body !== undefined ? { body } : {}) }, status: res.status, raw: res.body, data, cookies: res.cookies ?? {} };
 }
+
+/** La credencial que trae el resultado de una operación: una ruta de sus datos, o `cookie:<nombre>` (la que fija la respuesta). */
+const credentialFrom = (r, path) => (String(path).startsWith('cookie:') ? r.cookies[String(path).slice(7)] : pick(r.data, path));
 
 async function credentials(ctx, flow, vars) {
   const tokens = {};
@@ -200,7 +209,7 @@ async function credentials(ctx, flow, vars) {
       tokens[actor] = await ctx.idpToken(actor, how);
     } else {
       const r = await call(ctx, { op: how.op, input: fill(how.input, { actor }) }, vars, tokens);
-      const token = pick(r.data, how.token);
+      const token = credentialFrom(r, how.token);
       if (r.status >= 300 || typeof token !== 'string') {
         throw new Error(`no se obtuvo la credencial de ${actor} con ${how.op}: status ${r.status}, ${JSON.stringify(r.raw).slice(0, 160)}`);
       }

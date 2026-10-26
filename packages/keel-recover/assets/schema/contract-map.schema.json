@@ -178,6 +178,11 @@
             "scheme": {
               "type": "string",
               "description": "Lo que va delante del token (`Bearer`, `Token`); vacío, el token solo."
+            },
+            "cookie": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Una sesión por cookie (Spring Session: `SESSION`; express-session: `connect.sid`): la credencial del actor va como `Cookie: <nombre>=<valor>` en vez de en `header`, y la sacas del login con `token: cookie:<nombre>`. Si una respuesta la renueva o la borra (el logout), el actor sigue con la nueva."
             }
           }
         },
@@ -211,7 +216,7 @@
                   },
                   "token": {
                     "type": "string",
-                    "description": "Ruta del token en los datos de la respuesta."
+                    "description": "Ruta del token en los datos de la respuesta, o `cookie:<nombre>`: la cookie que fija la respuesta (una sesión por cookie, con `auth.cookie`)."
                   },
                   "setup": {
                     "type": "object",

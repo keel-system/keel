@@ -12,6 +12,7 @@ import * as rabbit from './rabbit.js';
 import * as stubs from './stubs.js';
 import * as mail from './mail.js';
 import { dumpRound, markRound } from './coverage-round.js';
+import { CACHE_TECHS, flushCaches } from './caches.js';
 
 // Paso 1b: el ejecutor de una ronda de sondas. Por sonda: restaura el snapshot de la base, vacía
 // los espías, aplica el `setup`, ejecuta los pasos, espera a que el sistema esté quieto, deshace el
@@ -63,7 +64,9 @@ export function verifyCriterion(sandbox) {
 
 // La clase de dependencia de environment.yaml (paso 0b) → la sección de sandbox.yaml que dice dónde
 // se lee su efecto. Sin ella, la sonda grabaría silencio donde el legacy sí hace algo.
-const CHANNEL_OF = { database: 'database', broker: 'broker', smtp: 'mail' };
+// Una caché no es un efecto que se lea, sino estado que la restauración tiene que vaciar (`caches`): sin ella, una sonda
+// lee lo que cacheó la anterior.
+const CHANNEL_OF = { database: 'database', broker: 'broker', smtp: 'mail', cache: 'caches' };
 
 export function channelsCriterion(sandbox) {
   const deps = sandbox.environment?.dependencies ?? [];
@@ -73,6 +76,7 @@ export function channelsCriterion(sandbox) {
     if (section && !sandbox.spec[section]) missing.push(`${d.kind}/${d.tech} (${d.endpoints?.[0]?.evidence ?? 'environment.yaml'}) sin \`${section}\` en sandbox.yaml`);
   }
   if (sandbox.spec.database && !databaseAdapter(sandbox.spec.database.tech)) missing.push(`base ${sandbox.spec.database.tech}: el diff y la restauración solo existen para ${DATABASE_TECHS.join(', ')}`);
+  for (const c of sandbox.spec.caches ?? []) if (!CACHE_TECHS.includes(c.tech)) missing.push(`caché ${c.tech} (${c.service}): solo se sabe vaciar ${CACHE_TECHS.join(', ')}`);
   return criterion('PRB-CHANNELS', missing.length === 0, missing.length ? `efectos del legacy sin canal de captura: ${missing.join('; ')}` : 'cada dependencia del legacy tiene su canal');
 }
 
@@ -88,6 +92,47 @@ export const fill = (v, vars) =>
         : v;
 
 export const pick = (obj, p) => String(p).split('.').reduce((o, k) => (o == null ? o : o[k]), obj);
+
+/**
+ * Lo que captura un paso de su respuesta: una ruta con puntos del cuerpo, o `cookie:<nombre>` (la que fija la
+ * respuesta) o `header:<nombre>` (una cabecera, sin distinguir mayúsculas).
+ */
+export function captureFrom(r, p) {
+  const s = String(p);
+  if (s.startsWith('cookie:')) return r.cookies?.[s.slice(7)] ?? null;
+  if (s.startsWith('header:')) return r.headers?.[s.slice(7).toLowerCase()] ?? null;
+  return pick(r.body, s);
+}
+
+// ── la sesión entre pasos ────────────────────────────────────────────────────────────────────
+// Un legacy con sesión por cookie (Spring Session, express-session) solo deja pasar al paso siguiente si este reenvía la
+// cookie que fijó el login: sin ella, todo lo que hay detrás del login se grababa como su 401 (corrida de control de
+// show-ticketing, ronda 0: 25 de 31 rutas). Cada sonda lleva sus almacenes de cookies, como un navegador, y empiezan
+// vacíos: una sonda no hereda la sesión de otra. `session` en un paso elige el almacén (`default` si no lo dice): dos
+// personas en la misma sonda son dos sesiones con nombre (`gestor`, `usuario`); `none` manda el paso sin cookies y no
+// guarda las que reciba. Un paso que pone su propia cabecera `Cookie` no recibe las del almacén.
+
+export const NO_SESSION = 'none';
+
+/** Las cabeceras del paso con las cookies de su sesión, y los nombres que se mandaron (lo que se graba, sin valores). */
+export function withSession(jars, step, headers) {
+  const name = step.session ?? 'default';
+  const jar = name === NO_SESSION ? {} : (jars[name] ?? {});
+  const names = Object.keys(jar);
+  if (!names.length || Object.keys(headers).some((h) => h.toLowerCase() === 'cookie')) return { headers, sent: [] };
+  return { headers: { ...headers, Cookie: names.map((k) => `${k}=${jar[k]}`).join('; ') }, sent: names };
+}
+
+/** Guarda en la sesión del paso las cookies que fija la respuesta (null: el servidor la borra). */
+export function keepSession(jars, step, cookies) {
+  const name = step.session ?? 'default';
+  if (name === NO_SESSION) return;
+  const jar = (jars[name] ??= {});
+  for (const [k, v] of Object.entries(cookies ?? {})) {
+    if (v === null) delete jar[k];
+    else jar[k] = v;
+  }
+}
 
 /** La clave del desenlace de una sonda repetida: no depende del orden de los pasos paralelos. */
 // La huella del diff de la base de una repetición, sin el contador de ids (un efecto técnico). Sin ella, una carrera que
@@ -114,6 +159,7 @@ function context(sandbox, rt, options) {
   return {
     rt,
     spec,
+    sandbox,
     tool: containerOf(sandbox, spec.tool.service),
     app: containerOf(sandbox, spec.app.service),
     db: spec.database ? containerOf(sandbox, spec.database.service) : null,
@@ -172,7 +218,16 @@ async function applySetup(ctx, setup = {}, fail) {
   };
 }
 
-async function runStep(ctx, probe, step, vars, n, parallel) {
+/** Lo que se graba de un paso HTTP: la petición, la sesión con la que fue (nombres de cookie, no valores) y la respuesta. */
+const stepRecord = (step, parallel, req, sent, r) => ({
+  name: step.name,
+  ...(parallel ? { parallel: true } : {}),
+  request: req,
+  ...(sent.length ? { session: { name: step.session ?? 'default', cookies: sent } } : {}),
+  response: { status: r.status, _timeSeconds: r.timeSeconds, headers: keepHeaders(r.headers), body: r.body },
+});
+
+async function runStep(ctx, probe, step, vars, jars, n, parallel) {
   if (step.publish) {
     const p = fill(step.publish, vars);
     const r = ctx.spec.broker
@@ -182,10 +237,11 @@ async function runStep(ctx, probe, step, vars, n, parallel) {
   }
   const req = fill(step.request, vars);
   const url = /^https?:/.test(req.path) ? req.path : ctx.spec.app.base.replace(/\/$/, '') + req.path;
-  const r = await toolRequestAsync(ctx.rt, ctx.tool, { method: req.method, url, headers: req.headers ?? {}, body: req.body, timeoutSeconds: req.timeout ?? 15 });
-  const response = { status: r.status, _timeSeconds: r.timeSeconds, headers: keepHeaders(r.headers), body: r.body };
-  for (const [k, p] of Object.entries(step.capture ?? {})) vars[k] = pick(r.body, p);
-  return { name: step.name, ...(parallel ? { parallel: true } : {}), request: req, response };
+  const { headers, sent } = withSession(jars, step, req.headers ?? {});
+  const r = await toolRequestAsync(ctx.rt, ctx.tool, { method: req.method, url, headers, body: req.body, timeoutSeconds: req.timeout ?? 15 });
+  keepSession(jars, step, r.cookies);
+  for (const [k, p] of Object.entries(step.capture ?? {})) vars[k] = captureFrom(r, p);
+  return stepRecord(step, parallel, req, sent, r);
 }
 
 /**
@@ -194,23 +250,26 @@ async function runStep(ctx, probe, step, vars, n, parallel) {
  * se veía. Las publicaciones al broker van a la vez por su propio canal. El fallo `parallel-exec`
  * vuelve al exec por paso: es el sabotaje de probe-check que prueba que la diferencia se mide.
  */
-async function runParallel(ctx, probe, list, vars, base) {
-  if (ctx.faults.has('parallel-exec')) return Promise.all(list.map((s, i) => runStep(ctx, probe, s, vars, base + i + 1, true)));
+async function runParallel(ctx, probe, list, vars, jars, base) {
+  if (ctx.faults.has('parallel-exec')) return Promise.all(list.map((s, i) => runStep(ctx, probe, s, vars, jars, base + i + 1, true)));
   const http = list.map((s, i) => ({ s, i })).filter(({ s }) => !s.publish);
+  // las cookies de cada paso son las de su sesión ANTES de la carrera: lo que fijen las respuestas se guarda después
   const reqs = http.map(({ s }) => {
     const req = fill(s.request, vars);
     const url = /^https?:/.test(req.path) ? req.path : ctx.spec.app.base.replace(/\/$/, '') + req.path;
-    return { req, wire: { method: req.method, url, headers: req.headers ?? {}, body: req.body, timeoutSeconds: req.timeout ?? 15 } };
+    const { headers, sent } = withSession(jars, s, req.headers ?? {});
+    return { req, sent, wire: { method: req.method, url, headers, body: req.body, timeoutSeconds: req.timeout ?? 15 } };
   });
   const [responses, ...published] = await Promise.all([
     reqs.length ? toolRequestsParallel(ctx.rt, ctx.tool, reqs.map((r) => r.wire)) : [],
-    ...list.map((s, i) => (s.publish ? runStep(ctx, probe, s, vars, base + i + 1, true) : null)),
+    ...list.map((s, i) => (s.publish ? runStep(ctx, probe, s, vars, jars, base + i + 1, true) : null)),
   ]);
   const out = list.map((s, i) => published[i]);
   http.forEach(({ s, i }, k) => {
     const r = responses[k];
-    for (const [key, p] of Object.entries(s.capture ?? {})) vars[key] = pick(r.body, p);
-    out[i] = { name: s.name, parallel: true, request: reqs[k].req, response: { status: r.status, _timeSeconds: r.timeSeconds, headers: keepHeaders(r.headers), body: r.body } };
+    keepSession(jars, s, r.cookies);
+    for (const [key, p] of Object.entries(s.capture ?? {})) vars[key] = captureFrom(r, p);
+    out[i] = stepRecord(s, true, reqs[k].req, reqs[k].sent, r);
   });
   return out;
 }
@@ -237,6 +296,9 @@ export async function runProbe(ctx, probe, roundVars, tag) {
       else if (h.value !== ctx.baselineHash) fail('PRB-RESTORE', `la base restaurada (${h.value}) no es la del snapshot (${ctx.baselineHash})`);
     }
   }
+  // y la caché y la sesión, vacías: el snapshot no las cubre (caches.js)
+  const flushed = flushCaches(rt, ctx.sandbox);
+  if (!flushed.ok) fail('PRB-RESTORE', flushed.error);
   // 2. los espías, vacíos, y el canario de apertura
   if (spec.stubs) {
     const r = stubs.resetJournal(rt, tool, spec.stubs);
@@ -262,15 +324,17 @@ export async function runProbe(ctx, probe, roundVars, tag) {
   const teardown = await applySetup(ctx, probe.setup, fail);
   const vars = { ...roundVars, ...(probe.vars ?? {}) };
   const steps = [];
+  // las sesiones de esta ejecución: vacías, como cada repetición
+  const jars = {};
   let n = 0;
   try {
     const serial = async (list) => {
-      for (const s of list ?? []) steps.push(await runStep(ctx, probe, s, vars, ++n, false));
+      for (const s of list ?? []) steps.push(await runStep(ctx, probe, s, vars, jars, ++n, false));
     };
     const parallel = async (list) => {
       const base = n;
       n += list.length;
-      steps.push(...(await runParallel(ctx, probe, list, vars, base)));
+      steps.push(...(await runParallel(ctx, probe, list, vars, jars, base)));
     };
     if (probe.parallel) await parallel(probe.steps);
     else await serial(probe.steps);
