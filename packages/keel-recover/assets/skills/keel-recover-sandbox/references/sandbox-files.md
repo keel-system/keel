@@ -113,7 +113,7 @@ La herramienta entra en la base **dentro de su contenedor**, con el cliente de l
   Connector/J anterior a 8.0 y el paquete `mysql` 2.x de Node no hablan: la app no conecta y verify lo ve como base
   caída. La adaptación es `command: ["--default-authentication-plugin=mysql_native_password"]` en el servicio de la base
   (junto a la zona y el `sql_mode`), con su motivo en `environment.yaml#adaptations`. Connector/J 8.0 y `mysql2` lo
-  hablan y no la necesitan (medido: show-ticketing con Connector/J 8.0.22, y la fixture `node-mysql` con `mysql2` 3.11).
+  hablan y no la necesitan (medido con Connector/J 8.0 y con `mysql2` 3.11).
   La adaptación con un driver viejo, sin medir en el banco.
 - **MySQL, una transacción abierta.** La restauración del snapshot espera el *metadata lock* de cada tabla 20 s
   (`lock_wait_timeout`) y sale en rojo con la sesión que la retiene (M-01). Un pool sin transacciones abiertas no la

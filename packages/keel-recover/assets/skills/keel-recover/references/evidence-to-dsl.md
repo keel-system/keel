@@ -44,7 +44,7 @@ El esquema que lee `introspect` es evidencia **de la base**, no del dominio: lo 
 
 ### MySQL
 
-Lo que solo tiene MySQL, medido con `show-ticketing` y la fixture `node-mysql` (`PLAN-KEEL-RECOVER-MYSQL.md`, M-01 a M-13). Las dos primeras filas piden una sonda de clase cada una, y `keel-recover status` no cierra la exploración sin ellas (`collation:<tabla>` y `overflow:<tabla>`; ver `exploration.md`).
+Lo que solo tiene MySQL, medido sobre MySQL 8.0. Las dos primeras filas piden una sonda de clase cada una, y `keel-recover status` no cierra la exploración sin ellas (`collation:<tabla>` y `overflow:<tabla>`; ver `exploration.md`).
 
 | Evidencia | Elemento del DSL | Nivel |
 |---|---|---|
