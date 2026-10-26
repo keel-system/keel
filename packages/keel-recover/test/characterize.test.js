@@ -12,7 +12,7 @@ import YAML from 'yaml';
 import { loadCharacterized, loadProvenance, readCharacterization, resolveCharacterized } from 'keel-core';
 import { tmpDir } from './helpers/tmp.js';
 import { CONTRACT_MAP, PROVENANCE, SCENARIOS, fakeStock, writeStockDesign } from './helpers/stock-design.js';
-import { check, forgeToken, hypothesisTally, plannedFlows, readFlowBlock, runCharacterization, runFlow, sealDocument, tally } from '../src/lib/characterize.js';
+import { abortedBy, check, forgeToken, hypothesisTally, plannedFlows, readFlowBlock, runCharacterization, runFlow, sealDocument, tally } from '../src/lib/characterize.js';
 import { prepareCharacterization, writeCharacterization } from '../src/lib/characterize-legacy.js';
 import { renderFidelity, routeKey, routesWithoutOperation } from '../src/lib/fidelity.js';
 
@@ -68,7 +68,11 @@ test('sin restaurar el estado entre flujos, el verde de un flujo dependería del
   const records = await run(SCENARIOS, leaky);
   assert.ok(records.some((r) => !r.ok), 'sin reset, FL-ITM-001 deja su artículo y el siguiente listado ya no es el esperado');
   const broken = { ...legacy, reset: async () => ({ ok: false, error: 'mongorestore salió con 1' }) };
-  for (const r of await run(SCENARIOS, broken)) assert.match(r.failures[0], /no se pudo restaurar el estado de partida: mongorestore/);
+  // una restauración rota para la ejecución en el primer flujo: los demás fallarían igual y el sello mentiría
+  const stopped = await run(SCENARIOS, broken);
+  assert.equal(stopped.length, 1);
+  assert.match(abortedBy(stopped).failures[0], /no se pudo restaurar el estado de partida: mongorestore/);
+  assert.equal(abortedBy(await run(SCENARIOS)), null);
 });
 
 test('un paso sin expectativa no es un paso sin comprobar: un 5xx lo saca en rojo', async () => {

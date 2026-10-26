@@ -1,7 +1,7 @@
 import path from 'node:path';
 import pc from 'picocolors';
 import { containerRuntime, resolveRuntime } from '../lib/containers.js';
-import { hypothesisTally, runCharacterization, tally } from '../lib/characterize.js';
+import { abortedBy, hypothesisTally, runCharacterization, tally } from '../lib/characterize.js';
 import { legacyContext, prepareCharacterization, verifyGate, writeCharacterization } from '../lib/characterize-legacy.js';
 
 // Paso 5: `keel-recover characterize legacy/<servicio>`. Ejecuta los flujos keep, fix y frontier de
@@ -36,6 +36,13 @@ export async function characterize(legacyArg, options) {
   const records = await runCharacterization(ctx, planned, {
     log: (r) => console.log(`${r.ok ? pc.green('✓') : pc.red('✗')} ${r.id.padEnd(12)} ${r.mark.padEnd(8)}${r.ok ? '' : pc.red(`  ${r.failures[0]}`)}`),
   });
+  const aborted = abortedBy(records);
+  if (aborted) {
+    console.error(pc.red(`
+✗ parado en ${aborted.id}: ${aborted.failures[0]}`));
+    console.error('  Es el entorno, no el diseño: el sello y FIDELITY.md quedan como estaban. Arregla el sandbox y relanza.');
+    process.exit(2);
+  }
   // Con --only no hay sello ni informe: un sello parcial diría que lo no ejecutado no existe.
   const written = writeCharacterization(prep, records, { seal: !only, snapshotHash: gate.snapshotHash });
 

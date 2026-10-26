@@ -14,9 +14,11 @@
 //   fix-gone      un fix dice que el legacy ya hace lo que el diseño
 //                 corrige (el defecto no existiría)                     → FL-ITM-002
 //   snapshot-gone el archivo del snapshot desaparece tras verify: ningún
-//                 flujo puede partir del estado de partida              → todos
+//                 flujo puede partir del estado de partida              → para en el primero
 //   snapshot-drift la base restaurada no es la que verify sella (otra
-//                 huella): el verde dependería de lo que dejó otro      → todos
+//                 huella): el verde dependería de lo que dejó otro      → para en el primero
+//
+// Los dos últimos son el entorno y no el diseño: la ejecución para en el primer flujo, sin sello.
 //
 // El estado de partida es la base VACÍA: verify escribe un artículo para medir VER-WRITE, así que
 // tras verify se vacía la base (con el adaptador del motor) y se toma el snapshot otra vez, con su
@@ -39,7 +41,7 @@ import { loadSandbox } from '../src/lib/sandbox.js';
 import { containerRuntime, resolveRuntime } from '../src/lib/containers.js';
 import { verify } from '../src/lib/verify.js';
 import { databaseAdapter } from '../src/lib/db/index.js';
-import { runCharacterization } from '../src/lib/characterize.js';
+import { abortedBy, runCharacterization } from '../src/lib/characterize.js';
 import { legacyContext, prepareCharacterization, verifyGate, writeCharacterization } from '../src/lib/characterize-legacy.js';
 import { SCENARIOS as STOCK_SCENARIOS, writeStockDesign } from '../test/helpers/stock-design.js';
 
@@ -69,8 +71,9 @@ const SCENARIOS = [
   { id: 'base', red: [] },
   { id: 'expect', red: ['FL-ITM-001'], scenarios: (s) => s.replace('expect: { status: created, body: { sku: a } }', 'expect: { status: ok, body: { sku: a } }') },
   { id: 'fix-gone', red: ['FL-ITM-002'], scenarios: (s) => s.replace('legacy: { status: 422 }', 'legacy: { status: 400 }') },
-  { id: 'snapshot-gone', red: ALL, message: /no se pudo restaurar el estado de partida/, before: (db) => rt.exec(db, ['rm', '-f', dba.snapshotFile]) },
-  { id: 'snapshot-drift', red: ALL, message: /no es el snapshot de verify/, snapshotHash: 'f'.repeat(32) },
+  // una restauración que falla para la ejecución en el primer flujo, sin sello: es el entorno, no el diseño
+  { id: 'snapshot-gone', aborts: true, message: /no se pudo restaurar el estado de partida/, before: (db) => rt.exec(db, ['rm', '-f', dba.snapshotFile]) },
+  { id: 'snapshot-drift', aborts: true, message: /no es el snapshot de verify/, snapshotHash: 'f'.repeat(32) },
 ];
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-recover-characterize-'));
@@ -130,9 +133,16 @@ for (const sc of SCENARIOS.filter((s) => !only || s.id === only)) {
   const records = await runCharacterization(ctx, prep.planned, {
     log: (r) => console.log(`  ${r.ok ? 'OK   ' : 'ROJO '} ${r.id} ${r.mark}${r.ok ? '' : `  ${r.failures[0]}`}`),
   });
+  const red = records.filter((r) => !r.ok).map((r) => r.id);
+  if (sc.aborts) {
+    const stop = abortedBy(records);
+    const ok = records.length === 1 && Boolean(stop) && sc.message.test(stop.failures[0]);
+    if (sc.before) await freshSandbox();
+    results.push({ id: sc.id, ok, red });
+    continue;
+  }
   writeCharacterization(prep, records, { snapshotHash: gate.snapshotHash });
 
-  const red = records.filter((r) => !r.ok).map((r) => r.id);
   let ok = JSON.stringify(red) === JSON.stringify(sc.red) && records.length === ALL.length;
   if (sc.message) ok = ok && records.every((r) => sc.message.test(r.failures.join('\n')));
   // El sello lo lee keel-core igual que `keel validate --ready`: en verde no queda nada pendiente,

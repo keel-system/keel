@@ -1,7 +1,7 @@
 import path from 'node:path';
 import pc from 'picocolors';
 import { containerRuntime, resolveRuntime } from '../lib/containers.js';
-import { runCharacterization } from '../lib/characterize.js';
+import { abortedBy, runCharacterization } from '../lib/characterize.js';
 import { ensureTool, prepareParity, targetContext, writeParity } from '../lib/parity-target.js';
 
 // Paso 7: `keel-recover parity legacy/<servicio> --target <target.yaml>`. Ejecuta los flujos contra el
@@ -31,6 +31,14 @@ export async function parity(legacyArg, options) {
     const records = await runCharacterization(ctx, pp.planned, {
       log: (r) => console.log(`${r.ok ? pc.green('✓') : r.mark === 'frontier' ? pc.yellow('·') : pc.red('✗')} ${r.id.padEnd(12)} ${r.mark.padEnd(8)}${r.ok ? '' : `  ${r.failures[0]}`}`),
     });
+    const aborted = abortedBy(records);
+    if (aborted) {
+      console.error(pc.red(`
+✗ parado en ${aborted.id}: ${aborted.failures[0]}`));
+      console.error('  Es el entorno, no el regenerado: PARITY no se escribe. Arregla su base y relanza.');
+      process.exitCode = 2;
+      return;
+    }
     const { comparison, verdict, written } = writeParity(pp, records);
     console.log(`\n${comparison.compared} paso(s) comparados; ${comparison.rows.length} diferencia(s), ${comparison.undeclared.length} sin declarar`);
     for (const r of comparison.undeclared.slice(0, 20)) console.log(pc.red(`  ${r.kind.padEnd(14)} ${r.op.padEnd(20)} ${r.path}`));

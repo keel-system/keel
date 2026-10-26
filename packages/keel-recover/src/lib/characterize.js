@@ -256,6 +256,7 @@ export async function runFlow(ctx, planned) {
   const reset = await ctx.reset();
   if (!reset.ok) {
     record.failures.push(`no se pudo restaurar el estado de partida: ${reset.error}`);
+    record.aborted = true;
     return record;
   }
   const vars = {};
@@ -290,15 +291,25 @@ export async function runFlow(ctx, planned) {
   return record;
 }
 
-/** Todos los flujos, en orden. `log(record)` por flujo. */
+/**
+ * Todos los flujos, en orden. `log(record)` por flujo. Una restauración que falla para la ejecución: es el entorno, no
+ * el flujo, y los siguientes fallarían igual. En la corrida de control de show-ticketing, cancelar el comando dejó 25
+ * flujos en rojo por `mysql salió con 3221225794` y un sello que mandaba a reparar un diseño que no tenía nada.
+ */
 export async function runCharacterization(ctx, planned, { log = () => {} } = {}) {
   const records = [];
   for (const p of planned) {
     const record = await runFlow(ctx, p);
     records.push(record);
     log(record);
+    if (record.aborted) break;
   }
   return records;
+}
+
+/** El flujo en que la restauración falló y paró la ejecución, o null. Con él no se escribe sello ni informe. */
+export function abortedBy(records) {
+  return records.find((r) => r.aborted) ?? null;
 }
 
 /** Cuántos de cada marca, y cuántos en verde. */
