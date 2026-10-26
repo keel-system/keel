@@ -1,6 +1,6 @@
 # Banco de medida de `keel-recover`
 
-Cuatro servicios **reales y abandonados**, fijados por commit, con una **hoja de respuestas** cada uno.
+Cinco servicios **reales y abandonados**, fijados por commit, con una **hoja de respuestas** cada uno.
 Sirve para medir `keel-recover` cuando el plan (`PLAN-KEEL-RECOVER.md`) esté terminado. La prueba
 manual del incremento 1 usa los tres primeros, así que la línea base (a mano) y la medida final (con la
 herramienta) son comparables fila a fila.
@@ -11,20 +11,22 @@ herramienta) son comparables fila a fila.
 | `sockshop-orders` | [microservices-demo/orders](https://github.com/microservices-demo/orders) `546a10c92d1ff9998c21f3849f5b95a0f14430a0` (repo archivado) | Java 8, Maven, Spring Boot 1.4.4, Spring Data REST, MongoDB | Superficie que **solo la introspección ve** (Spring Data REST), seis llamadas salientes (cuatro a URLs que llegan en el cuerpo), fallo y timeout del saliente, ausencia de idempotencia y de compensación, datos de tarjeta persistidos |
 | `sockshop-shipping` | [microservices-demo/shipping](https://github.com/microservices-demo/shipping) `9c0fbfa31895dd029d44d3434de93f64cd71f87b` (repo archivado) | Java 8, Maven, Spring Boot 1.4.0, RabbitMQ | Emisión a broker, **broker caído aceptado en silencio** (best-effort explícito), cola no durable, endpoints falsos |
 | `shop-api` | [zhulinn/SpringBoot-Angular7-Online-Shopping-Store](https://github.com/zhulinn/SpringBoot-Angular7-Online-Shopping-Store) `d05739d5c2df89344e524c2cc10d94c99d01a6ed` (2024-05-29; último código 2021-10-05), **solo `backend/`** | Java 11, Maven (wrapper roto), Spring Boot 2.2.0.**BUILD-SNAPSHOT**, JPA/Hibernate con `ddl-auto: create`, **PostgreSQL** (9.4.5 en su compose), JWT propio | **Introspección relacional** (esquema solo en `information_schema`: sin migraciones), secuencia compartida y snapshot que debe restaurarla, clave compartida carrito-usuario, tabla que hace de línea de carrito y de pedido, **`lifecycle`** de pedido (NEW → FINISHED | CANCELED) en una columna entera sin CHECK, **tres roles** más propiedad, escalada de privilegios en el registro, dos carreras (stock y transición) |
+| `show-ticketing` | [f-lab-edu/show-ticketing-service](https://github.com/f-lab-edu/show-ticketing-service) `9c8e8c8d85c28a4a63c31511ce5f422825d45ecb` (2021-08-24, repo archivado) | Java 8 + Kotlin 1.4, Maven, Spring Boot 2.4.2, **MyBatis** (SQL a mano, sin ORM), **MySQL 8** (sin versión declarada: solo la collation `utf8mb4_0900_ai_ci`) maestro y réplica, sesión y caché en Redis | **Introspección de MySQL** (`AUTO_INCREMENT`, `TINYINT(1)`, collation `_ci`, ninguna UNIQUE: toda la unicidad está en la app), esquema que carga el sandbox desde `etc/` y **sin seed**, `@Transactional` probablemente muerto (sin gestor de transacciones) y sus escrituras parciales, **doble venta** de asientos, caché con TTL e invalidación que falta, dos roles excluyentes por sesión, escalada en el alta, semántica de fechas del motor (`DATE(x) - 1`) |
 
 `orders` llama a `shipping` por HTTP: juntos son el sistema mínimo para el paso 2 (descomponer) si se
 quiere ejercitarlo, aunque el banco los mide por separado.
 
 ## Lo que el banco NO cubre
 
-Ningún legacy real pequeño cubre todo el plan. Lo que queda **sin medir** con estos cuatro (`shop-api`
-entró el 2026-10-23 para cubrir las tres primeras filas, que antes faltaban):
+Ningún legacy real pequeño cubre todo el plan. Lo que queda **sin medir** con estos cinco (`shop-api`
+entró el 2026-10-23 para cubrir las tres primeras filas, que antes faltaban, y `show-ticketing` el 2026-10-26
+para cubrir MySQL):
 
 | Mecanismo del plan | Por qué falta |
 |---|---|
-| MySQL/MariaDB | `shop-api` es PostgreSQL; la introspección de MySQL queda sin legacy |
-| `lifecycle` declarado en la base (CHECK o ENUM) | El de `shop-api` es un entero sin restricción: solo se reconoce por su forma |
-| Migraciones versionadas (Flyway, Liquibase) | `shop-api` genera el esquema con Hibernate |
+| MariaDB | `show-ticketing` es MySQL 8; MariaDB queda fuera del plan de MySQL con motivo (`PLAN-KEEL-RECOVER-MYSQL.md`) |
+| `lifecycle` declarado en la base (CHECK o ENUM) | El de `shop-api` es un entero sin restricción, y `show-ticketing` no tiene ciclo de vida (el asiento es un booleano): solo se reconoce por su forma |
+| Migraciones versionadas (Flyway, Liquibase) | `shop-api` genera el esquema con Hibernate y `show-ticketing` lo trae en un único `.sql` |
 | Correo (Mailpit) | Ninguno envía correo |
 | `@Scheduled`/cron → `unobserved.yaml` | Ninguno tiene trabajo programado |
 | Consumo de mensajes (listener) | `queue-master` consume, pero no está en el banco |
@@ -71,6 +73,7 @@ Oráculo es lo que está **fuera** del repo y la herramienta no puede ver:
 | `sockshop-orders` | `api-spec/orders.json` (Swagger 2), `api-spec/hooks.js` (Dredd, con seed), `test/json-server/server.py` (stub Flask de los servicios de usuarios y carritos) | Los repos de las dependencias: [payment](https://github.com/microservices-demo/payment) `384e33447dda5334187517dda09566c9a17fd6af` (y user y carts, sin fijar aún) |
 | `sockshop-shipping` | `ITShippingController.java` | El consumidor de la cola, `microservices-demo/queue-master` (sin fijar aún) |
 | `shop-api` | `import.sql` (seed), `api/test.http` (REST Client), pruebas unitarias de Mockito y el cliente Angular de `frontend/` | El esquema dibujado que enlaza su README (`db.png`, fuera del repo) y el antecesor [zhulinn/Online-Shopping-Store](https://github.com/zhulinn/Online-Shopping-Store) |
+| `show-ticketing` | `etc/show_ticketing_service.sql` (el DDL, sin datos), las pruebas unitarias de Mockito y las de controlador (excluidas del build), el `Jenkinsfile` | La [wiki del repo](https://github.com/f-lab-edu/show-ticketing-service/wiki) `a9f8b2fc4d69e446016683d1a36ce12db02b6506`: funciones por rol y el ERD (de ahí salen sus dos canarios) |
 
 El oráculo externo mide **lo que la herramienta asumió** de las dependencias. Lo correcto es que lo
 declare como asunción en `unobserved.yaml`, no que acierte.
@@ -152,6 +155,6 @@ caen mucho respecto a los tres del banco, la herramienta está sobreajustada.
 
 ## Conservación
 
-Los cuatro repos están archivados o abandonados y pueden desaparecer. Antes del incremento 1 conviene
+Los cinco repos están archivados o abandonados y pueden desaparecer. Antes del incremento 1 conviene
 copiarlos (fork o espejo) en un sitio propio. La hoja cita `archivo:línea` contra el commit fijado,
 que es lo que sostiene la evidencia.

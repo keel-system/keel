@@ -1,0 +1,493 @@
+# Hoja de respuestas de show-ticketing. Ver README.md: qué es cada campo y cómo se puntúa.
+# Escrita leyendo el código el 2026-10-26; todas las filas en `read` hasta que una corrida las mida.
+# Es el legacy del banco para MySQL (PLAN-KEEL-RECOVER-MYSQL.md, incremento M0): las filas M-* de ese plan
+# se contestan aquí con id ST-*, y la columna `note` de cada una dirá con qué versión se midió.
+# Rutas de evidencia relativas a src/main/java/com/show/showticketingservice/ salvo que empiecen por:
+#   kotlin/…    → src/main/kotlin/com/show/showticketingservice/…
+#   resources/… → src/main/resources/…
+#   la raíz del repo (pom.xml, Jenkinsfile, etc/…, src/test/…)
+legacy: show-ticketing
+repo: https://github.com/f-lab-edu/show-ticketing-service
+commit: 9c8e8c8d85c28a4a63c31511ce5f422825d45ecb   # 2021-08-24, rama develop (HEAD del repo archivado)
+assets:          # entrada: está en el repo y la herramienta la ve
+  - etc/show_ticketing_service.sql                     # el DDL de las 9 tablas, sin datos (no hay seed en ningún sitio)
+  - src/test/java/com/show/showticketingservice/       # unitarias de servicio con Mockito; las de controlador, excluidas del build
+  - Jenkinsfile                                        # la única CI: Maven con JDK 1.8, sin base ni versión de MySQL
+external_oracles: # fuera del repo: la herramienta no la ve
+  - https://github.com/f-lab-edu/show-ticketing-service/wiki @ a9f8b2fc4d69e446016683d1a36ce12db02b6506   # definición de funciones por rol y el ERD (2021-08-29)
+  - https://ovenapp.io/view/cNr1OqmrrV2axhFd2BSPT7ZWaogTax6s/                                               # el prototipo de UI que enlaza README.md:28
+
+facts:
+  # ── Entorno (paso 0) ────────────────────────────────────────────────────────
+  - id: ST-ENV-01
+    category: environment
+    fact: "Java 8 (java.version 1.8) con Kotlin 1.4.10 en el mismo módulo (UserService y los modelos de usuario son Kotlin), Maven con wrapper 3.6.3 completo (.mvn/wrapper con su jar), padre spring-boot-starter-parent 2.4.2."
+    evidence: "pom.xml:5-10,17-20,94-104,133-168; .mvn/wrapper/maven-wrapper.properties:1"
+    observable: "solo por lectura"
+    expect: "runtime.yaml con Java 8, Kotlin 1.4.10 y Boot 2.4.2 con archivo:línea"
+    status: read
+  - id: ST-ENV-02
+    category: environment
+    fact: "La única CI es un Jenkinsfile con `jdk 'JDK 1.8'` y `mvn clean package -DskipTests=true`; no declara base, ni Redis, ni versión de nada más."
+    evidence: "Jenkinsfile:4-7,19,27"
+    observable: "solo por lectura"
+    expect: "fingerprint lee el Jenkinsfile como declaración de JDK; la versión de MySQL queda sin declarar"
+    status: read
+  - id: ST-ENV-03
+    category: environment
+    fact: "La versión de MySQL no está declarada en ningún sitio (ni compose, ni Dockerfile, ni CI). La única pista es la collation `utf8mb4_0900_ai_ci` de la tabla `user`, que existe desde MySQL 8.0.1; el driver es el de Boot 2.4.2 (mysql-connector-java 8.0.x)."
+    evidence: "etc/show_ticketing_service.sql:12; pom.xml:53-56"
+    observable: "solo por lectura; el DDL falla en un MySQL 5.7 (collation desconocida)"
+    expect: "environment.yaml elige un MySQL 8.0 y cita la collation como motivo; no inventa una versión declarada"
+    status: read
+  - id: ST-ENV-04
+    category: environment
+    fact: "Dependencias de infraestructura: MySQL maestro (localhost:3306, usuario flab/flab1234) y réplica (localhost:3307, root/456456), ambos con base show_ticketing_service, `serverTimezone=Asia/Seoul` y `allowMultiQueries=true`; Redis de sesión (6379) y Redis de caché (6380), dos instancias distintas; subida de imágenes a `files/performanceImages` en disco local."
+    evidence: "resources/application-local.properties:2-37"
+    observable: "grep de propiedades (0b)"
+    expect: "environment.yaml con las cuatro dependencias (dos bases, dos Redis) y el directorio de subida"
+    status: read
+  - id: ST-ENV-05
+    category: environment
+    fact: "No hay variables de entorno propias: todo va en application-local.properties con el perfil `local` fijado en application.properties. Las propiedades de las bases son a medida (`spring.datasource.master.jdbc-url`), así que se sobrescriben por el binding relajado (SPRING_DATASOURCE_MASTER_JDBCURL…), y la URL nueva tiene que conservar `allowMultiQueries=true` (ST-DEF-08) y la zona."
+    evidence: "resources/application.properties:12; resources/application-local.properties:2-23; config/DataSourceConfig.java:20-30"
+    observable: "arranque del sandbox con las URL sobrescritas"
+    expect: "environment.yaml dice cómo se apunta a las bases del sandbox y conserva los parámetros de la URL, con motivo"
+    status: read
+  - id: ST-ENV-06
+    category: environment
+    fact: "No hay seed: el DDL de etc/ no trae INSERT, la app no crea el esquema (MyBatis, sin ORM) y nada carga datos. El esquema lo tiene que cargar el sandbox desde etc/, y los datos de partida solo salen de la API (ST-SEC-02, ST-DEF-01)."
+    evidence: "etc/show_ticketing_service.sql:1-116 (solo CREATE); resources/application.properties:1-12"
+    observable: "tras el arranque, la base está vacía"
+    expect: "el sandbox carga etc/show_ticketing_service.sql como adaptación con motivo; el snapshot parte de los datos que sembraron las sondas"
+    status: read
+  - id: ST-ENV-07
+    category: environment
+    fact: "No hay actuator ni endpoint de salud; la lectura pública más barata es GET /performances, que con la base vacía NO da 200 (ST-ERR-03). El juez necesita una lectura de negocio que sí conteste con base vacía, o sembrar antes."
+    evidence: "pom.xml:22-107 (sin actuator); controller/PerformanceController.java:62-66"
+    observable: "GET /actuator/health → 404"
+    expect: "sandbox.yaml con una sonda de lectura que dé 200 en el estado de partida"
+    status: read
+  - id: ST-ENV-08
+    category: environment
+    fact: "hipótesis: el driver 8.0.x de Boot 2.4.2 habla caching_sha2_password, el default de MySQL 8, así que no hace falta el plugin nativo (pregunta M-12 del plan de MySQL)."
+    evidence: "pom.xml:5-10,53-56"
+    observable: "arranque contra mysql:8.0 sin tocar el plugin de autenticación"
+    expect: "environment.yaml no lleva la adaptación del plugin si no hace falta"
+    status: read
+  - id: ST-ENV-09
+    category: environment
+    fact: "hipótesis: no hay gestor de transacciones. Hay cuatro beans DataSource (master, slave, routing y lazyRouting) y ninguno es @Primary, así que DataSourceTransactionManagerAutoConfiguration (@ConditionalOnSingleCandidate) no crea ninguno, TransactionAutoConfiguration no activa la gestión de transacciones y todos los @Transactional se ignoran: cada sentencia de MyBatis se confirma sola."
+    evidence: "config/DataSourceConfig.java:20-58; config/MyBatisConfig.java:20-30; ausencia de @Primary y de TransactionManager en src/main"
+    observable: "log del arranque (ningún DataSourceTransactionManager) y los efectos parciales de ST-EFF-02 y ST-EFF-03"
+    expect: "la herramienta no asume atomicidad por leer @Transactional: la atomicidad que entra en el diseño es la que el diff de las sondas muestra"
+    status: read
+  - id: ST-ENV-10
+    category: environment
+    fact: "hipótesis: la réplica nunca se usa. El enrutado elige SLAVE solo si la transacción en curso es de solo lectura (RoutingDataSource), y sin gestor de transacciones (ST-ENV-09) nunca hay una; además MyBatis usa `routingDataSource` directo y no el proxy perezoso. El sandbox puede apuntar las dos URL a la misma base sin cambiar lo observable, pero solo si se mide."
+    evidence: "tool/util/datasource/RoutingDataSource.java:20-28; config/MyBatisConfig.java:21; config/DataSourceConfig.java:55-58"
+    observable: "con réplica real y replicación parada: una lectura después de una escritura ve el dato (va al maestro)"
+    expect: "environment.yaml justifica una sola base con la medida, o monta la réplica; no la quita sin decirlo"
+    status: read
+
+  # ── Activos del repo ────────────────────────────────────────────────────────
+  - id: ST-ASSET-01
+    category: asset
+    fact: "etc/show_ticketing_service.sql es el esquema entero (9 tablas, 3 índices, 13 FK) y es la única fuente del DDL."
+    evidence: "etc/show_ticketing_service.sql:2-116"
+    observable: "introspección tras cargarlo"
+    expect: "el sandbox lo carga tal cual; la introspección de la base coincide con él"
+    status: read
+  - id: ST-ASSET-02
+    category: asset
+    fact: "Las pruebas de controlador (@SpringBootTest + MockMvc) existen pero el surefire las excluye (`**/*ControllerTest.java`, `**/*ApplicationTests.java`); solo corren las unitarias con Mockito, que no tocan base ni Redis."
+    evidence: "pom.xml:123-132; src/test/java/com/show/showticketingservice/controller/UserControllerTest.java:28-30; src/test/java/com/show/showticketingservice/service/ReservationServiceTest.java:24"
+    observable: "mvn package con pruebas sin base en marcha"
+    expect: "environment.yaml no salta las pruebas sin motivo; las de controlador sirven de evidencia `read` de las peticiones, no de comportamiento medido"
+    status: read
+  - id: ST-ASSET-03
+    category: asset
+    fact: "Los mensajes de error y de validación están en coreano en el código (excepciones y anotaciones), y son el `message` literal de las respuestas."
+    evidence: "exception/authentication/UserNotLoggedInException.java:5-7; service/ReservationService.java:42; kotlin/model/user/UserRequest.kt:12-38"
+    observable: "cualquier 4xx de negocio"
+    expect: "los escenarios afirman el mensaje grabado, no una traducción"
+    status: read
+
+  # ── Superficie ──────────────────────────────────────────────────────────────
+  - id: ST-SURF-01
+    category: surface
+    fact: "30 endpoints sin prefijo de contexto: POST /login, GET /logout, POST /users, GET /user-exists/{userId}; POST /my-infos/unregister, PUT /my-infos; POST /performances, PUT /performances/{id}/image, POST /performances/{id}/times, POST /performances/{id}/prices, PUT /performances/{id}, GET /performances/{id}, GET /performances, DELETE /performances/{id}/times, DELETE /performances/{id}, GET /performances/{id}/times, GET /performances/{id}/times/{perfTimeId}; POST /picks, DELETE /picks/{performanceId}, DELETE /picks, GET /picks; POST /reservations, DELETE /reservations; GET /search; GET /seats; POST /venues, PUT /venues/{id}, DELETE /venues/{id}, GET /venues, GET /venues/{id}."
+    evidence: "controller/*.java"
+    observable: "log `Mapped` o introspección del framework (1a)"
+    expect: "surface.yaml con los 30; el diseño con una operación por cada uno que se observe"
+    status: read
+  - id: ST-SURF-02
+    category: surface
+    fact: "Cerrar sesión es GET /logout (un método seguro con efecto) y darse de baja es POST con la contraseña en la query (`@RequestParam passwordRequest`), no en el cuerpo."
+    evidence: "controller/UserController.java:38-42; controller/MyPageController.java:20-24"
+    observable: "GET /logout invalida la sesión; POST /my-infos/unregister?passwordRequest=…"
+    expect: "decisión explícita: keep a sabiendas o fix con su flujo (la contraseña en la URL acaba en los logs)"
+    status: read
+  - id: ST-SURF-03
+    category: surface
+    fact: "GET /user-exists/{userId} responde 200 sin cuerpo si el id está libre y 409 si existe: enumeración de usuarios sin sesión."
+    evidence: "controller/UserController.java:50-53; kotlin/service/UserService.kt:33-38; tool/advice/AuthenticationExceptionAdvice.java:37-42"
+    observable: "GET con un id registrado → 409; con uno libre → 200"
+    expect: "operación del diseño con sus dos desenlaces, o fix decidido"
+    status: read
+
+  # ── Modelo ──────────────────────────────────────────────────────────────────
+  - id: ST-MODEL-01
+    category: model
+    fact: "Nueve tablas: user, venue, venueHall, performance, performanceTime, seatPrice, seat, pick y reservation; todos los ids son INT UNSIGNED AUTO_INCREMENT."
+    evidence: "etc/show_ticketing_service.sql:2-116"
+    observable: "introspección"
+    expect: "entidades del diseño desde la introspección; los ids como generados por la base"
+    status: read
+  - id: ST-MODEL-02
+    category: model
+    fact: "Ninguna unicidad está en la base: ni user.userId, ni venue.name, ni (performance.title, showType), ni (pick.userId, performanceId), ni el nombre de sala por recinto. Todas son comprobaciones de la app antes de insertar (ver ST-CONC-02 y ST-CONC-03)."
+    evidence: "etc/show_ticketing_service.sql:2-116 (sin UNIQUE); resources/mybatis/mappers/UserMapper.xml:11-14; VenueMapper.xml:15-18; PerformanceMapper.xml:11-17; PickMapper.xml:11-17"
+    observable: "introspección (ningún índice único fuera de las PK)"
+    expect: "las unicidades del diseño salen de los flujos (status y cuerpo del duplicado), no del esquema; y la carrera queda medida"
+    status: read
+  - id: ST-MODEL-03
+    category: model
+    fact: "Los enumerados viajan como enteros: userType 1 GENERAL / 2 MANAGER, showType 1 MUSICAL / 2 THEATRICAL / 3 CONCERT, ratingType 1 VIP / 2 S / 3 A. En la base son INT sin CHECK; en el JSON son números (@JsonValue), no nombres."
+    evidence: "model/enumerations/UserType.java:10-33; ShowType.java:10-36; RatingType.java:10-36; tool/handler/EnumTypeHandler.java:19-22; etc/show_ticketing_service.sql:10,44,74"
+    observable: "POST /login devuelve {\"userType\":1}; la introspección ve columnas de estado por su forma"
+    expect: "enumerados del diseño con sus nombres sacados del código (`read`) y sus valores medidos"
+    status: read
+  - id: ST-MODEL-04
+    category: model
+    fact: "El asiento es una fila por (función, fila, columna) creada al dar de alta las funciones, con `reserved TINYINT(1)` como booleano. La reserva es una fila por asiento con `reserveDate DATE` puesta por la base (DATE(NOW()))."
+    evidence: "etc/show_ticketing_service.sql:82-95,107-116; service/PerformanceService.java:202-243; resources/mybatis/mappers/ReservationMapper.xml:4-10"
+    observable: "diff de POST /performances/{id}/times y de POST /reservations"
+    expect: "el booleano del asiento sale de los flujos (`read` sin ellos: TINYINT(1) no es booleano por sí solo); la fecha de reserva, como valor volátil"
+    status: read
+  - id: ST-MODEL-05
+    category: model
+    fact: "Los asientos de una función se generan del cruce de los rangos de fila de cada precio (startRowNum-endRowNum) con las columnas de la sala; exigen que la función tenga precios y que los rangos cubran todas las filas de la sala sin solaparse."
+    evidence: "service/PerformanceService.java:202-243; service/SeatPriceService.java:29-100"
+    observable: "contar las filas de seat tras dar de alta funciones en una sala de R×C con precios"
+    expect: "regla del diseño con su escenario; el número de asientos medido"
+    status: read
+  - id: ST-MODEL-06
+    category: model
+    fact: "Las fechas de función viajan como texto de 14 dígitos (yyyyMMddHHmmss) y se guardan en DATETIME; MySQL las interpreta en la zona de la sesión, y la URL fija `serverTimezone=Asia/Seoul`."
+    evidence: "model/performance/PerformanceTimeRequest.java:15-21; etc/show_ticketing_service.sql:55-65; resources/application-local.properties:3"
+    observable: "POST de una función y lectura de GET /performances/{id}"
+    expect: "el tipo del campo en el diseño (fecha y hora) y la zona como decisión; la forma de 14 dígitos como contrato observado de entrada"
+    status: read
+
+  # ── Reglas ──────────────────────────────────────────────────────────────────
+  - id: ST-RULE-01
+    category: rule
+    fact: "Una reserva admite como mucho 4 asientos por petición (`service.value.max-reservation-quantity`); no hay tope por usuario ni por función."
+    evidence: "resources/application.properties:9; service/ReservationService.java:40-43"
+    observable: "POST /reservations con 5 asientos → 400; dos peticiones de 4 → 200 las dos"
+    expect: "la regla con su parámetro y sus dos escenarios"
+    status: read
+  - id: ST-RULE-02
+    category: rule
+    fact: "Solo se reservan asientos libres de la función indicada: si alguno está reservado, es de otra función o no existe, se rechaza la petición entera con 400."
+    evidence: "service/ReservationService.java:46-52; resources/mybatis/mappers/SeatMapper.xml:28-36"
+    observable: "POST /reservations con un asiento ya reservado o de otra función → 400"
+    expect: "regla e invariante con su escenario"
+    status: read
+  - id: ST-RULE-03
+    category: rule
+    fact: "Cancelar exige que todas las reservas indicadas sean del usuario y de esa función y espectáculo; libera los asientos y borra las reservas."
+    evidence: "service/ReservationService.java:57-72; resources/mybatis/mappers/ReservationMapper.xml:11-28; SeatMapper.xml:37-49"
+    observable: "DELETE /reservations con una reserva ajena → 400; con las propias → 200 y asientos libres"
+    expect: "propiedad por recurso (security.ownership) y la regla de cancelación con sus escenarios"
+    status: read
+  - id: ST-RULE-04
+    category: rule
+    fact: "Las funciones de un mismo envío no pueden solaparse entre sí ni empezar antes de terminar; tampoco con las ya guardadas en la misma sala en una ventana de ±1 día; y una función no puede durar más de 24 h (ver ST-DEF-04 y ST-DEF-05)."
+    evidence: "service/PerformanceService.java:93-200; resources/mybatis/mappers/PerformanceTimeMapper.xml:19-33"
+    observable: "POST /performances/{id}/times con solapes → 400 con su mensaje"
+    expect: "reglas del diseño con escenarios, separadas de los defectos de su cálculo"
+    status: read
+  - id: ST-RULE-05
+    category: rule
+    fact: "Validaciones de alta de usuario: userId `^[\\w]{6,20}$`, contraseña de 6-20 con dígito, letra y especial, teléfono `010-NNNN-NNNN`, email, nombre ≤15, dirección ≤100, userType obligatorio."
+    evidence: "kotlin/model/user/UserRequest.kt:10-38"
+    observable: "POST /users con cada campo inválido → 400 (si el alta funciona: ST-DEF-01)"
+    expect: "cotas y formatos del input con su procedencia; sin escenario, `read`"
+    status: read
+  - id: ST-RULE-06
+    category: rule
+    fact: "Los listados de espectáculos paginan por cursor (`lastPerfId`, orden por id descendente, 10 por página); el de recintos, por número de página (10 por página), y una página fuera de rango devuelve la primera."
+    evidence: "model/criteria/PerformancePagingCriteria.java:5-15; resources/mybatis/mappers/PerformanceMapper.xml:159-180; service/VenueService.java:78-101"
+    observable: "GET /venues?page=99 con 3 recintos → la página 1"
+    expect: "la paginación como contrato observado o fix (el contrato del cable lo fija el método)"
+    status: read
+  - id: ST-RULE-07
+    category: rule
+    fact: "La búsqueda hace LIKE '%palabra%' sobre el título del espectáculo o el nombre del recinto, sin escapar `%` ni `_`; la palabra vacía o en blanco da 400."
+    evidence: "service/PerformanceService.java:379-384; resources/mybatis/mappers/PerformanceMapper.xml:212-234"
+    observable: "GET /search?keyword=% devuelve todo; keyword=%20 → 400"
+    expect: "filtro del diseño (DSL 2.22: `compare`/`match`) y el comodín como keep o fix"
+    status: read
+  - id: ST-RULE-08
+    category: rule
+    fact: "Dar de alta un recinto exige un nombre que no exista y salas con nombres distintos dentro del envío; editarlo admite a la vez cambiar los datos, editar salas y borrar salas."
+    evidence: "service/VenueService.java:31-63; service/VenueHallService.java:25-93"
+    observable: "POST /venues con dos salas de igual nombre → 400"
+    expect: "reglas con su escenario"
+    status: read
+
+  # ── Errores ─────────────────────────────────────────────────────────────────
+  - id: ST-ERR-01
+    category: error
+    fact: "El cuerpo de error de negocio es `{message, content}`, donde `content` es `uri=<ruta>` (WebRequest.getDescription(false)). Las validaciones de Bean Validation caen en el manejador por defecto de Boot (otra forma de cuerpo)."
+    evidence: "model/responses/ExceptionResponse.java:6-14; tool/advice/*.java"
+    observable: "cualquier 4xx de negocio frente a un 400 de validación"
+    expect: "dos formas de error grabadas; el contrato del cable las reescribe como fix declarado"
+    status: read
+  - id: ST-ERR-02
+    category: error
+    fact: "Casi todo el negocio responde 400: no existe, ya existe (salvo el usuario), solape, cupo superado, sin precios. Solo el usuario duplicado y la sesión ya abierta dan 409, y la falta de sesión o de rol dan 401."
+    evidence: "tool/advice/PerformanceExceptionAdvice.java:20-80; VenueExceptionAdvice.java:20-53; ReservationExceptionAdvice.java:18-37; PickExceptionAdvice.java:16-21; AuthenticationExceptionAdvice.java:16-56"
+    observable: "un 404 de negocio llega como 400"
+    expect: "códigos medidos por flujo; cambiarlos a 404/409 es fix con su flujo"
+    status: read
+  - id: ST-ERR-03
+    category: error
+    fact: "GET /performances sin espectáculos (o con un showType sin ninguno) responde 400 «no existe» en vez de una lista vacía: antes de listar comprueba que exista alguno."
+    evidence: "service/PerformanceService.java:312-321; resources/mybatis/mappers/PerformanceMapper.xml:130-144"
+    observable: "GET /performances con la base vacía → 400"
+    expect: "keep a sabiendas o fix con su flujo; el juez de verify no puede usarla de lectura con la base vacía (ST-ENV-07)"
+    status: read
+  - id: ST-ERR-04
+    category: error
+    fact: "hipótesis: un valor de enumerado desconocido (userType 3, showType=9 en la query, ratingType 4) lanza AssertionError, que es un Error y no una Exception: ningún manejador lo recoge y responde 500."
+    evidence: "model/enumerations/UserType.java:17-27; ShowType.java:18-30; tool/converter/StringToShowTypeConverter.java:10-14"
+    observable: "GET /performances?showType=9 → 500"
+    expect: "fix declarado (400) con su flujo"
+    status: read
+  - id: ST-ERR-05
+    category: error
+    fact: "hipótesis: una ruta inexistente responde 500 y no 404. El interceptor de sesión hace `(HandlerMethod) handler` sin comprobar el tipo, y para una ruta sin controlador el handler es el de recursos estáticos: ClassCastException."
+    evidence: "tool/interceptor/LoginCheckInterceptor.java:27-29; config/WebMvcConfig.java:25-28"
+    observable: "GET /no-existe → 500"
+    expect: "fix declarado con su flujo; la superficie de introspección no ve rutas fantasma"
+    status: read
+  - id: ST-ERR-06
+    category: error
+    fact: "hipótesis: las entradas sin validar acaban en 500: POST /reservations sin seatIds (NPE) o con [] (`WHERE id IN ()`, error de sintaxis de MySQL); POST /performances sin venueId o hallId (int a 0, violación de FK sin manejador)."
+    evidence: "model/reservation/ReservationRequest.java:8-16; controller/ReservationController.java:22-26; model/performance/PerformanceRequest.java:35-39; resources/mybatis/mappers/SeatMapper.xml:28-36"
+    observable: "esas tres peticiones → 500"
+    expect: "fix declarados (400) con sus flujos"
+    status: read
+
+  # ── Seguridad ───────────────────────────────────────────────────────────────
+  - id: ST-SEC-01
+    category: security
+    fact: "Sesión de servidor guardada en Redis (Spring Session), por cookie; una anotación por método exige sesión y, opcionalmente, rol GENERAL o MANAGER. Los roles son excluyentes: un MANAGER no puede reservar ni marcar favoritos, y un GENERAL no gestiona."
+    evidence: "config/RedisSessionConfig.java:14-37; tool/interceptor/LoginCheckInterceptor.java:26-51; tool/annotation/UserAuthenticationNecessary.java:10-16"
+    observable: "POST /reservations con sesión de MANAGER → 401"
+    expect: "roles del diseño con su matriz; las credenciales del contract-map son `la propia API` (login con cookie)"
+    status: read
+  - id: ST-SEC-02
+    category: security
+    fact: "Escalada de privilegios en el alta: el cliente elige `userType` en POST /users, así que cualquiera se registra como MANAGER."
+    evidence: "kotlin/model/user/UserRequest.kt:37-38; resources/mybatis/mappers/UserMapper.xml:6-9"
+    observable: "POST /users con userType 2 y login → {\"userType\":2} (si el alta funciona: ST-DEF-01)"
+    expect: "fix decidido con su flujo, o keep a sabiendas; nunca en silencio"
+    status: read
+  - id: ST-SEC-03
+    category: security
+    fact: "La falta de rol responde 401 (UserHaveNoAuthorityException), no 403."
+    evidence: "tool/advice/AuthenticationExceptionAdvice.java:51-56"
+    observable: "endpoint de MANAGER con sesión de GENERAL → 401"
+    expect: "fix declarado (403) con su flujo"
+    status: read
+  - id: ST-SEC-04
+    category: security
+    fact: "Cambiar la contraseña (PUT /my-infos) no pide la actual; darse de baja sí la pide."
+    evidence: "kotlin/service/UserService.kt:54-69"
+    observable: "PUT /my-infos con sesión → 200 y la contraseña nueva vale para login"
+    expect: "keep o fix decidido"
+    status: read
+  - id: ST-SEC-05
+    category: security
+    fact: "Abrir sesión con una ya abierta responde 409 (UserAlreadyLoggedInException), aunque sea con otro usuario."
+    evidence: "service/SessionLoginService.java:23-37; tool/advice/AuthenticationExceptionAdvice.java:30-35"
+    observable: "dos POST /login seguidos con la misma cookie → 200 y 409"
+    expect: "regla del diseño o fix"
+    status: read
+  - id: ST-SEC-06
+    category: security
+    fact: "Las lecturas públicas sin sesión son: GET /performances, GET /performances/{id}, GET /search, GET /user-exists/{id}; las de recintos (GET /venues…) exigen MANAGER, y las de funciones, asientos y plazas libres exigen GENERAL."
+    evidence: "controller/PerformanceController.java:57-90; controller/SearchController.java:21-25; controller/VenueController.java:40-50; controller/SeatController.java:18-22"
+    observable: "cada una sin cookie: 200 o 401"
+    expect: "reglas de acceso del diseño por operación"
+    status: read
+
+  # ── Efectos ─────────────────────────────────────────────────────────────────
+  - id: ST-EFF-01
+    category: effect
+    fact: "Reservar escribe dos tablas: marca `reserved = TRUE` en los asientos e inserta una fila de reserva por asiento con la fecha de hoy de la base."
+    evidence: "service/ReservationService.java:39-49; resources/mybatis/mappers/SeatMapper.xml:21-27; ReservationMapper.xml:4-10"
+    observable: "diff de POST /reservations"
+    expect: "el diff grabado; el agregado de la reserva decidido con él"
+    status: read
+  - id: ST-EFF-02
+    category: effect
+    fact: "hipótesis (depende de ST-ENV-09): dar de alta funciones sin precios inserta las funciones y DESPUÉS responde 400 «sin precios»: quedan funciones sin asientos."
+    evidence: "service/PerformanceService.java:93-102,239-243; service/SeatPriceService.java:113-118"
+    observable: "POST /performances/{id}/times de un espectáculo sin precios → 400 y filas nuevas en performanceTime"
+    expect: "fix con su flujo (atomicidad), visto en el diff"
+    status: read
+  - id: ST-EFF-03
+    category: effect
+    fact: "hipótesis (depende de ST-ENV-09): dar de alta un recinto con dos salas del mismo nombre inserta el recinto y DESPUÉS responde 400: queda un recinto sin salas."
+    evidence: "service/VenueService.java:31-38; service/VenueHallService.java:25-44"
+    observable: "POST /venues con salas repetidas → 400 y una fila nueva en venue"
+    expect: "fix con su flujo, visto en el diff"
+    status: read
+  - id: ST-EFF-04
+    category: effect
+    fact: "Las cascadas de la base borran en silencio: borrar un espectáculo arrastra funciones, precios, asientos, favoritos y reservas; borrar funciones arrastra sus asientos y las reservas de esos asientos; borrar un recinto con espectáculos falla (FK sin cascada desde performance)."
+    evidence: "etc/show_ticketing_service.sql:38-116"
+    observable: "diff de DELETE /performances/{id}; DELETE /venues/{id} con espectáculos → 500"
+    expect: "comportamiento que vive en la base, grabado en el diff; las reservas borradas sin aviso, keep o fix decidido"
+    status: read
+  - id: ST-EFF-05
+    category: effect
+    fact: "La subida del cartel guarda el archivo en disco con un UUID delante del nombre original, borra el anterior y guarda la ruta absoluta del contenedor en la base, que luego sale en las respuestas (`imageFilePath`)."
+    evidence: "service/PerformanceService.java:70-82; service/LocalFileService.java:22-49; tool/util/FileUtil.java:10-20"
+    observable: "PUT /performances/{id}/image y GET /performances/{id}"
+    expect: "la ruta como valor volátil; exponer la ruta del servidor como fix o frontera"
+    status: read
+  - id: ST-EFF-06
+    category: effect
+    fact: "La caché de Redis guarda listados y detalle con TTL (1 h la portada, 30 min el detalle, 3 s los asientos y las plazas libres); las altas, ediciones y borrados de espectáculos la vacían, pero reservar no (ST-DEF-06)."
+    evidence: "config/RedisCacheConfig.java:48-72; service/PerformanceService.java:44-361; service/SeatService.java:19-23"
+    observable: "lectura, cambio por otra vía y lectura antes del TTL"
+    expect: "cache del diseño (use-cases.<op>.cache) con sus TTL medidos, y la invalidación que falta como fix"
+    status: read
+
+  # ── Concurrencia ────────────────────────────────────────────────────────────
+  - id: ST-CONC-01
+    category: concurrency
+    fact: "hipótesis: doble venta. Reservar cuenta los asientos libres y después hace `UPDATE seat SET reserved = TRUE` sin `FOR UPDATE` y sin condición sobre `reserved`; con REPEATABLE READ (default de InnoDB) y sin transacciones (ST-ENV-09), dos reservas simultáneas del mismo asiento pasan las dos y dejan dos filas de reserva."
+    evidence: "service/ReservationService.java:39-52; resources/mybatis/mappers/SeatMapper.xml:21-36"
+    observable: "sonda repetida: N peticiones paralelas del mismo asiento con el pool caliente; desenlaces y diff"
+    expect: "la distribución medida (outcomes); la decisión §3.9 se pregunta; el regenerado no la reproduce si se decide fix"
+    status: read
+  - id: ST-CONC-02
+    category: concurrency
+    fact: "hipótesis: carrera de alta de usuario. La unicidad de userId es un SELECT EXISTS antes del INSERT y no hay UNIQUE: dos altas simultáneas del mismo id crean dos usuarios, y el login de ese id falla después (getUserByUserId espera una fila)."
+    evidence: "kotlin/service/UserService.kt:23-31; resources/mybatis/mappers/UserMapper.xml:6-20; etc/show_ticketing_service.sql:2-12"
+    observable: "altas paralelas del mismo id; después POST /login → 500 (TooManyResultsException)"
+    expect: "la carrera medida y su consecuencia; fix con unicidad en la base"
+    status: read
+  - id: ST-CONC-03
+    category: concurrency
+    fact: "hipótesis: carreras iguales en favoritos (pick duplicado) y en nombres de recinto o de espectáculo: comprobación y escritura separadas, sin restricción."
+    evidence: "service/PickService.java:22-36; service/VenueService.java:31-44; service/PerformanceService.java:51-60"
+    observable: "POST /picks paralelos del mismo espectáculo → dos filas"
+    expect: "medidas; fix con unicidad declarada"
+    status: read
+
+  # ── Defectos ────────────────────────────────────────────────────────────────
+  - id: ST-DEF-01
+    category: defect
+    fact: "hipótesis: el alta de usuario no funciona. UserRequest es una data class de Kotlin sin constructor vacío, el pom no trae jackson-module-kotlin ni kotlin-reflect, y kotlinc no emite los nombres de parámetro sin `-java-parameters`: Jackson no puede construirla y POST /users responde 400 siempre. Se pasó a Kotlin cinco días antes del último commit (#129) y la prueba que lo cubría (UserControllerTest) está excluida del build."
+    evidence: "kotlin/model/user/UserRequest.kt:10-40; pom.xml:94-104,123-168; src/test/java/com/show/showticketingservice/controller/UserControllerTest.java:57-60; git log: «[#129] 자바와 코틀린 코드를 별도 디렉토리로 분리» (2021-08-19)"
+    observable: "POST /users con un cuerpo válido → 400 (HttpMessageNotReadableException en el log)"
+    expect: "si se mide: frontera o fix decidido, y los usuarios de las sondas sembrados en la base (con el hash BCrypt) como adaptación con motivo; nadie da por buena el alta sin grabarla"
+    status: read
+  - id: ST-DEF-02
+    category: defect
+    fact: "Borrar un usuario borra en cascada sus reservas y favoritos, pero sus asientos se quedan con `reserved = TRUE` para siempre."
+    evidence: "kotlin/service/UserService.kt:54-63; etc/show_ticketing_service.sql:107-116 (reservation → user ON DELETE CASCADE; seat.reserved sin tocar)"
+    observable: "diff de POST /my-infos/unregister de un usuario con reservas; GET /seats sigue dándolos por ocupados"
+    expect: "fix con su flujo"
+    status: read
+  - id: ST-DEF-03
+    category: defect
+    fact: "Colisión de claves en la caché de plazas libres: la clave es `#performanceId + #perfTimeId`, una SUMA de enteros, así que (1,5) y (2,4) comparten entrada durante el TTL de 3 s."
+    evidence: "service/PerformanceService.java:356-361; service/ReservationService.java:53-60"
+    observable: "GET /performances/1/times/5 y, antes de 3 s, GET /performances/2/times/4 → la respuesta de la primera"
+    expect: "fix con su flujo (la caché del diseño lleva la clave compuesta)"
+    status: read
+  - id: ST-DEF-04
+    category: defect
+    fact: "La duración máxima de 24 h se calcula restando los números yyyyMMddHHmmss (MAX_SCHEDULE_TIME = 24_00_00): una función que cruza la medianoche (23:00 → 01:00) da 780000 y se rechaza como «más de 24 h»."
+    evidence: "service/PerformanceService.java:30,182-200"
+    observable: "POST /performances/{id}/times con 20210824230000 → 20210825010000 → 400"
+    expect: "fix con su flujo"
+    status: read
+  - id: ST-DEF-05
+    category: defect
+    fact: "La ventana de ±1 día contra las funciones guardadas es aritmética de enteros sobre DATE en MySQL (`DATE(x) - 1`, `DATE(x) + 1`): el 1 de agosto da 20210800 y no ve el 31 de julio, así que en el borde de mes no detecta un solape."
+    evidence: "resources/mybatis/mappers/PerformanceTimeMapper.xml:19-33"
+    observable: "una función el 31 a las 23:00-02:00 y otra el 1 a las 00:30 en la misma sala → la segunda se acepta"
+    expect: "fix con su flujo; solo se ve contra MySQL real (la semántica es del motor)"
+    status: read
+  - id: ST-DEF-06
+    category: defect
+    fact: "Reservar no invalida la caché de asientos ni la de plazas libres (cancelar sí): hasta 3 s después, GET /seats y las plazas libres siguen mostrando libres los asientos recién reservados."
+    evidence: "service/ReservationService.java:39-49 (sin @CacheEvict) frente a 53-60; service/SeatService.java:19-23"
+    observable: "GET /seats, POST /reservations y GET /seats antes de 3 s"
+    expect: "fix con su flujo, o keep declarado como lectura eventualmente consistente"
+    status: read
+  - id: ST-DEF-07
+    category: defect
+    fact: "La comprobación de nombres de sala duplicados al editar tiene mal la precedencia: `(c1) OR (c2) … AND venueId = X` deja la primera condición sin acotar al recinto, así que un nombre que exista en OTRO recinto se rechaza."
+    evidence: "resources/mybatis/mappers/VenueHallMapper.xml:20-27"
+    observable: "PUT /venues/{id} renombrando una sala con un nombre usado en otro recinto → 400"
+    expect: "fix con su flujo"
+    status: read
+  - id: ST-DEF-08
+    category: defect
+    fact: "Editar varias salas a la vez manda varias sentencias en una (`separator=\";\"`) y solo funciona con `allowMultiQueries=true` en la URL: sin él, 500."
+    evidence: "resources/mybatis/mappers/VenueHallMapper.xml:29-40; resources/application-local.properties:15"
+    observable: "PUT /venues/{id} con dos salas; con y sin el parámetro"
+    expect: "environment.yaml conserva el parámetro (ST-ENV-05); el diseño no hereda el mecanismo"
+    status: read
+  - id: ST-DEF-09
+    category: defect
+    fact: "GET /venues/{id} de un recinto inexistente responde 200 con `venueResponse: null` y salas vacías; el resto de lecturas por id responden 400."
+    evidence: "service/VenueService.java:103-112"
+    observable: "GET /venues/9999 con sesión de MANAGER → 200"
+    expect: "fix declarado (404) con su flujo"
+    status: read
+
+  # ── Frontera ────────────────────────────────────────────────────────────────
+  - id: ST-FRONT-01
+    category: frontier
+    fact: "Las dos instancias de Redis y la réplica de MySQL son infraestructura, no dominio: la caché y la sesión se ven solo por sus efectos en HTTP."
+    evidence: "config/RedisCacheConfig.java; config/RedisSessionConfig.java; config/DataSourceConfig.java"
+    observable: "solo por lectura"
+    expect: "la sesión no entra en el diseño como entidad; la caché entra como cache de operación; la réplica, en unobserved.yaml si no se monta"
+    status: read
+  - id: ST-FRONT-02
+    category: frontier
+    fact: "No hay forma de listar las reservas de un usuario ni de ver su perfil: la API solo reserva y cancela por id. El que cancela tiene que conocer los ids de reserva, que ninguna respuesta devuelve (POST /reservations responde 200 sin cuerpo)."
+    evidence: "controller/ReservationController.java:15-34; controller/MyPageController.java:13-32"
+    observable: "solo por lectura; ninguna respuesta lleva un id de reserva"
+    expect: "la limitación declarada: los flujos de cancelación sacan el id del diff de la base, no de la API"
+    status: read
+
+  # ── Canarios de contaminación ───────────────────────────────────────────────
+  # La wiki del repo (fuera del repo: la herramienta no la ve) define más de lo que el código hace. Lo que
+  # es cierto en la wiki y no está en el código, si aparece en el diseño, salió de fuera del repo.
+  - id: ST-CANARY-01
+    category: canary
+    fact: "La wiki enumera cuatro géneros (뮤지컬, 연극, 콘서트, 영화: musical, teatro, concierto y CINE) y un orden por «ranking total»; el código solo tiene tres tipos y ordena por id."
+    evidence: "model/enumerations/ShowType.java:10-14; wiki: 일반-회원-기능-정의.md (공연 정보 확인)"
+    observable: "solo por lectura"
+    expect: "el diseño NO tiene un tipo de cine ni un orden por ranking"
+    status: read
+  - id: ST-CANARY-02
+    category: canary
+    fact: "La wiki promete consultar el perfil y el historial de reservas con su detalle (예매 내역 확인); el código no tiene esas lecturas (ST-FRONT-02)."
+    evidence: "controller/*.java (sin GET de reservas ni de perfil); wiki: 일반-회원-기능-정의.md (My Page)"
+    observable: "solo por lectura"
+    expect: "el diseño NO tiene una operación de listar reservas ni de leer el perfil"
+    status: read
