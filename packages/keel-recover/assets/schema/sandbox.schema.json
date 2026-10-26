@@ -88,7 +88,8 @@
         "properties": {
           "service": { "type": "string", "minLength": 1 },
           "tech": { "enum": ["redis"], "description": "Los que sabe vaciar keel-recover: redis (FLUSHALL con el redis-cli de su contenedor). Otro es un rechazo con motivo." },
-          "password": { "type": "string", "description": "La de desarrollo del repo, si el servidor la pide (va por REDISCLI_AUTH, no por la línea de comandos)." }
+          "password": { "type": "string", "description": "La de desarrollo del repo, si el servidor la pide (va por REDISCLI_AUTH, no por la línea de comandos)." },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "El puerto del servidor dentro de su contenedor. Sin él, el `--port` del command del servicio en el compose y, sin ese, el de la imagen (6379)." }
         }
       }
     },

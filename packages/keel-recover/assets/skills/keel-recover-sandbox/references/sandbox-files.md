@@ -140,6 +140,7 @@ mail:                                      # dependencia kind: smtp
 caches:                                    # dependencias kind: cache, y todo Redis del legacy (la sesión también)
   - { service: <servicio del Redis de caché>, tech: redis }
   - { service: <servicio del Redis de sesión>, tech: redis }   # password: la de desarrollo, si la pide
+  # port: el del servidor en su contenedor; sin él, el --port de su command en el compose, o 6379
 introspection:
   routes: { kind: express, file: /coverage/keel-recover-routes.json }   # o spring-log, o actuator con path
 ```

@@ -92,7 +92,7 @@ test('la restauración vacía cada caché con redis-cli, la contraseña por ento
 
 test('un vaciado que no contesta OK es un error, aunque redis-cli salga con 0', () => {
   const noauth = { exec: () => ({ status: 0, stdout: '(error) NOAUTH Authentication required.\n', stderr: '' }) };
-  assert.match(flushCaches(noauth, SANDBOX).error, /no se pudo vaciar redis-cache: \(error\) NOAUTH/);
+  assert.match(flushCaches(noauth, SANDBOX).error, /no se pudo vaciar redis-cache en el puerto 6379: \(error\) NOAUTH/);
   const ghost = { ...SANDBOX, spec: { caches: [{ service: 'otro', tech: 'redis' }] } };
   assert.match(flushCaches(noauth, ghost).error, /el servicio otro no está en el compose/);
 });
@@ -159,4 +159,25 @@ test('characterize: la credencial de un actor es su cookie de sesión, sacada de
   // sin la cookie en el lado, el actor no tendría con qué entrar
   const bearer = await runFlow({ ...ctx, side: { ...SIDE, auth: {} } }, planned);
   assert.equal(bearer.ok, false);
+});
+
+test('el vaciado va al puerto del servidor: el de la entrada, el --port del compose o el 6379 de la imagen', async () => {
+  const { cachePort, composePort } = await import('../src/lib/caches.js');
+  const sent = [];
+  const rt = { exec: (c, args) => (sent.push([c, args]), { status: 0, stdout: 'OK\n', stderr: '' }) };
+  // la caché de show-ticketing: redis-server --port 6380, el de application-local.properties
+  const sandbox = {
+    compose: { services: {
+      'redis-cache': { container_name: 'rc', command: ['redis-server', '--port', '6380'] },
+      'redis-session': { container_name: 'rs' },
+      other: { container_name: 'ro', command: 'redis-server --port=6390 --appendonly yes' },
+    } },
+    spec: { caches: [{ service: 'redis-cache', tech: 'redis' }, { service: 'redis-session', tech: 'redis' }, { service: 'other', tech: 'redis', port: 7000 }] },
+  };
+  assert.deepEqual(flushCaches(rt, sandbox), { ok: true });
+  assert.deepEqual(sent, [['rc', ['redis-cli', '-p', '6380', 'FLUSHALL']], ['rs', ['redis-cli', 'FLUSHALL']], ['ro', ['redis-cli', '-p', '7000', 'FLUSHALL']]]);
+  assert.equal(composePort(sandbox.compose.services.other), 6390, 'también --port=N en un command de texto');
+  assert.equal(cachePort(sandbox, { service: 'redis-session', tech: 'redis' }), 6379);
+  const refused = { exec: () => ({ status: 1, stdout: '', stderr: 'Could not connect to Redis at 127.0.0.1:6379: Connection refused' }) };
+  assert.match(flushCaches(refused, { compose: { services: { r: { container_name: 'r' } } }, spec: { caches: [{ service: 'r', tech: 'redis' }] } }).error, /en el puerto 6379: Could not connect .*`port` en su entrada de caches/);
 });
