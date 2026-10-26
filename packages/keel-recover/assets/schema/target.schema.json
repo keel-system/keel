@@ -29,7 +29,7 @@
       "description": "La base del regenerado. Cada flujo parte de ella VACÍA (el servicio nuevo no tiene datos que conservar), y se comprueba que lo está.",
       "properties": {
         "container": { "type": "string", "minLength": 1 },
-        "tech": { "enum": ["mongodb", "postgresql"], "description": "Los motores con adaptador en src/lib/db/: el vaciado entre flujos es de cada uno (en PostgreSQL, TRUNCATE … RESTART IDENTITY sin tocar el historial de migraciones)." },
+        "tech": { "enum": ["mongodb", "postgresql", "mysql"], "description": "Los motores con adaptador en src/lib/db/: el vaciado entre flujos es de cada uno (en PostgreSQL, TRUNCATE … RESTART IDENTITY; en MySQL, TRUNCATE con las FK desactivadas en la sesión; en los dos sin tocar el historial de migraciones)." },
         "name": { "type": "string", "minLength": 1 },
         "auth": {
           "type": "object",

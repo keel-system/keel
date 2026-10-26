@@ -1,6 +1,6 @@
 // La base del legacy (y la del regenerado, en la paridad) detrás de una sola interfaz, un adaptador
 // por motor. Lo que verify, introspect, probe, characterize y parity le preguntan a la base es lo
-// mismo para todos los motores; cómo se pregunta es de cada uno (el shell de Mongo, psql…). Un motor
+// mismo para todos los motores; cómo se pregunta es de cada uno (el shell de Mongo, psql, mysql…). Un motor
 // sin adaptador es un rechazo con motivo, igual que en `sandbox.schema.json`: hasta medirlo contra un
 // legacy real no se sabe si su snapshot devuelve el estado entero ni si su rastro de escritura llega
 // a tiempo (en PostgreSQL 9.4 el contador de escrituras llega segundos tarde: docs/recover-bench).
@@ -22,6 +22,7 @@
 
 import * as mongodb from './mongodb.js';
 import * as postgresql from './postgresql.js';
+import * as mysql from './mysql.js';
 
 const ADAPTERS = {
   mongodb: {
@@ -60,6 +61,21 @@ const ADAPTERS = {
 ${sql}
 commit;
 `),
+  },
+  mysql: {
+    tech: 'mysql',
+    snapshotFile: mysql.SNAPSHOT_FILE,
+    rowNoun: 'filas',
+    fingerprint: mysql.fingerprint,
+    takeSnapshot: mysql.takeSnapshot,
+    hasSnapshot: mysql.hasSnapshot,
+    noSnapshot: mysql.NO_SNAPSHOT,
+    restoreSnapshot: mysql.restoreSnapshot,
+    exportDb: mysql.exportDb,
+    diff: mysql.dbDiff,
+    introspect: mysql.introspectDb,
+    empty: mysql.emptyDatabase,
+    loadScript: mysql.loadScript,
   },
 };
 

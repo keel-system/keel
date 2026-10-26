@@ -7,6 +7,7 @@ import { validateAs } from './schema.js';
 import { keepHeaders, toolRequestAsync, toolRequestsParallel } from './tool-http.js';
 import { normalizer } from './normalize.js';
 import { DATABASE_TECHS, databaseAdapter } from './db/index.js';
+import { COUNTER_TABLES } from './db/relational.js';
 import * as rabbit from './rabbit.js';
 import * as stubs from './stubs.js';
 import * as mail from './mail.js';
@@ -89,12 +90,12 @@ export const fill = (v, vars) =>
 export const pick = (obj, p) => String(p).split('.').reduce((o, k) => (o == null ? o : o[k]), obj);
 
 /** La clave del desenlace de una sonda repetida: no depende del orden de los pasos paralelos. */
-// La huella del diff de la base de una repetición, sin las secuencias (un efecto técnico). Sin ella, una carrera que
+// La huella del diff de la base de una repetición, sin el contador de ids (un efecto técnico). Sin ella, una carrera que
 // solo se ve en la base (dos pedidos del mismo carrito, uno lleno y otro vacío, o los dos llenos) daba la misma clave en
 // todas las repeticiones: medido en la corrida de control de shop-api, donde R0-066 salió 5/5 «200,200» y la
 // distribución de lo que quedó en la base se perdió.
 const dbDigest = (db) => {
-  const rest = Object.fromEntries(Object.entries(db ?? {}).filter(([table]) => table !== '_sequences'));
+  const rest = Object.fromEntries(Object.entries(db ?? {}).filter(([table]) => !COUNTER_TABLES.includes(table)));
   return Object.keys(rest).length ? crypto.createHash('sha256').update(JSON.stringify(rest)).digest('hex').slice(0, 8) : 'none';
 };
 

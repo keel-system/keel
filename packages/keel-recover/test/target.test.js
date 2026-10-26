@@ -54,9 +54,9 @@ test('un deploy sin levantar, o con otra base, es un error que lo dice', async (
   const { compose, realm } = await deployOf('keel-dotnet');
   const down = planTarget({ compose, realm, name: 'conduit-dotnet', projectRel: 'x', containerOf: () => null, networkOf: () => [] });
   assert.match(down.errors.join('\n'), /no hay contenedor del servicio 'app'.*bash deploy\/up\.sh/);
-  const mysql = { ...compose, services: { ...compose.services, db: { ...compose.services.db, image: 'mysql:8.4' } } };
-  const other = planTarget({ compose: mysql, realm, name: 'c', projectRel: 'x', containerOf: () => 'c', networkOf: () => ['n'] });
-  assert.match(other.errors.join('\n'), /mysql:8\.4: la paridad solo sabe vaciar mongodb y postgresql/);
+  const mariadb = { ...compose, services: { ...compose.services, db: { ...compose.services.db, image: 'mariadb:11.4' } } };
+  const other = planTarget({ compose: mariadb, realm, name: 'c', projectRel: 'x', containerOf: () => 'c', networkOf: () => ['n'] });
+  assert.match(other.errors.join('\n'), /mariadb:11\.4: la paridad solo sabe vaciar mongodb, postgresql y mysql/);
 });
 
 for (const [generator, tech] of [['keel-dotnet', 'dotnet'], ['keel-nest', 'nest'], ['keel-spring', 'spring']]) {
@@ -66,6 +66,14 @@ for (const [generator, tech] of [['keel-dotnet', 'dotnet'], ['keel-nest', 'nest'
     const { doc, errors } = planTarget({ compose, realm, name: `conduit-${tech}`, projectRel: 'x', containerOf: podmanCompose(project), networkOf: () => ['n'] });
     assert.deepEqual(errors, []);
     assert.deepEqual(doc.database, { container: `${project}_db_1`, tech: 'postgresql', name: 'conduit', auth: { user: 'conduit', password: 'changeme' } });
+  });
+
+  test(`${generator}: con MySQL, el target lleva la base y el usuario de la imagen oficial de su deploy/`, async () => {
+    const { compose, realm } = await deployOf(generator, { database: 'mysql' });
+    const project = `conduit-${tech}-deploy`;
+    const { doc, errors } = planTarget({ compose, realm, name: `conduit-${tech}`, projectRel: 'x', containerOf: podmanCompose(project), networkOf: () => ['n'] });
+    assert.deepEqual(errors, []);
+    assert.deepEqual(doc.database, { container: `${project}_db_1`, tech: 'mysql', name: 'conduit', auth: { user: 'conduit', password: 'changeme' } });
   });
 }
 

@@ -35,9 +35,9 @@
       "additionalProperties": false,
       "properties": {
         "service": { "type": "string", "minLength": 1 },
-        "tech": { "enum": ["mongodb", "postgresql"], "description": "Motores cuyo rastro de escritura y snapshot sabe leer verify (un adaptador por motor en src/lib/db/). Otro motor es un rechazo con motivo hasta que se mida." },
+        "tech": { "enum": ["mongodb", "postgresql", "mysql"], "description": "Motores cuyo rastro de escritura y snapshot sabe leer verify (un adaptador por motor en src/lib/db/). Otro motor es un rechazo con motivo hasta que se mida." },
         "name": { "type": "string", "minLength": 1 },
-        "user": { "type": "string", "minLength": 1, "description": "Usuario con el que la herramienta entra en la base dentro de su contenedor (PostgreSQL: por el socket local, sin contraseña, como en la imagen oficial). Por defecto, postgres." }
+        "user": { "type": "string", "minLength": 1, "description": "Usuario con el que la herramienta entra en la base dentro de su contenedor (PostgreSQL: por el socket local, sin contraseña, como en la imagen oficial). Por defecto, postgres. MySQL: con usuario, entra con el MYSQL_PASSWORD del contenedor (el del MYSQL_USER de la imagen oficial); sin él, root con MYSQL_ROOT_PASSWORD." }
       }
     },
     "broker": {

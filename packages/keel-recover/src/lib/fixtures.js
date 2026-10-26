@@ -9,6 +9,8 @@
 // `cart` es `cart_id`). Una columna que no se mapea ni se descarta a sabiendas es un error: el dato del legacy no se
 // pierde en silencio.
 
+import { isTechnicalKey } from './db/relational.js';
+
 const snake = (name) => String(name).replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 const isToMany = (relation) => relation?.cardinality === 'one-to-many' || relation?.cardinality === 'many-to-many';
 
@@ -30,7 +32,7 @@ export function deriveFixtures({ exported, data, layers, source = {} }) {
     }
     const rows = exported?.[spec.table];
     if (!Array.isArray(rows)) {
-      errors.push(`data.${name}: el legacy no tiene la tabla ${spec.table} (las que hay: ${Object.keys(exported ?? {}).filter((t) => !t.startsWith('$') && t !== '_sequences').sort().join(', ')})`);
+      errors.push(`data.${name}: el legacy no tiene la tabla ${spec.table} (las que hay: ${Object.keys(exported ?? {}).filter((t) => !isTechnicalKey(t)).sort().join(', ')})`);
       continue;
     }
     // Campo del diseño → columna del legacy: lo que dice `columns`, y si no, la convención.

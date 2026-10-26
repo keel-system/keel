@@ -13,23 +13,17 @@
 // Todo va por psql con `-f -` (el SQL por stdin): en Windows el cliente de contenedores se come las
 // comillas de la línea de comandos. Sirve desde 9.4 (json_agg ordenado, json_build_object).
 
-import crypto from 'node:crypto';
+import { HISTORY_TABLES, contentHash, dbDiff, lines, rows, tail } from './relational.js';
+
+export { dbDiff };
 
 export const SNAPSHOT_FILE = '/tmp/recover-snapshot.pgdump';
-
-/** Las tablas de historial de migraciones de los generadores de keel y de las herramientas habituales: la paridad no las vacía. */
-export const HISTORY_TABLES = ['flyway_schema_history', 'typeorm_migrations', 'ef_migrations_history', 'databasechangelog', 'databasechangeloglock', 'SequelizeMeta', 'knex_migrations', 'knex_migrations_lock', 'schema_migrations'];
 
 // Las columnas de estado se reconocen por su forma, igual que en MongoDB: pocos valores distintos en
 // más de una fila. Aquí también los enteros, porque un legacy relacional guarda así su estado
 // (shop-api: order_status 0/1/2, sin CHECK ni ENUM).
 export const ENUM_MAX_VALUES = 12;
 const STATE_TYPES = new Set(['text', 'character varying', 'character', 'integer', 'smallint']);
-
-function tail(text, n = 300) {
-  const t = String(text).trim();
-  return t.length > n ? `…${t.slice(-n)}` : t;
-}
 
 const userOf = (database) => database.auth?.user ?? database.user ?? 'postgres';
 
@@ -45,9 +39,6 @@ export function psql(rt, c, database, sql) {
   const r = rt.exec(c, args, { input: sql });
   return r.status === 0 ? { ok: true, out: r.stdout } : { ok: false, error: tail(r.stderr || r.stdout) || `psql salió con ${r.status}` };
 }
-
-const lines = (out) => String(out).split(/\r?\n/).filter((l) => l !== '');
-const rows = (out) => lines(out).map((l) => l.split('\t'));
 
 // ── catálogo ────────────────────────────────────────────────────────────────────────────────
 
@@ -117,24 +108,7 @@ export function exportDb(rt, c, database) {
 export function fingerprint(rt, c, database) {
   const e = exportDb(rt, c, database);
   if (!e.ok) return e;
-  const { $keys, ...content } = e.value;
-  return { ok: true, value: crypto.createHash('md5').update(JSON.stringify(content)).digest('hex') };
-}
-
-/** Lo que cambió entre dos exportaciones, por clave primaria (una tabla sin ella, por la fila entera; una secuencia, por su nombre). */
-export function dbDiff(before, after) {
-  const keys = { ...(before?.$keys ?? {}), ...(after?.$keys ?? {}) };
-  const keyOf = (t, row) => JSON.stringify(t === '_sequences' ? row.name : keys[t]?.length ? keys[t].map((k) => row[k]) : row);
-  const diff = {};
-  for (const t of [...new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])].filter((k) => k !== '$keys').sort()) {
-    const b = new Map((before?.[t] ?? []).map((r) => [keyOf(t, r), r]));
-    const a = new Map((after?.[t] ?? []).map((r) => [keyOf(t, r), r]));
-    const added = [...a].filter(([k]) => !b.has(k)).map(([, r]) => r);
-    const removed = [...b].filter(([k]) => !a.has(k)).map(([, r]) => r);
-    const changed = [...a].filter(([k, r]) => b.has(k) && JSON.stringify(b.get(k)) !== JSON.stringify(r)).map(([k, r]) => ({ before: b.get(k), after: r }));
-    if (added.length || removed.length || changed.length) diff[t] = { added, removed, changed };
-  }
-  return diff;
+  return { ok: true, value: contentHash(e.value) };
 }
 
 // ── snapshot ─────────────────────────────────────────────────────────────────────────────────

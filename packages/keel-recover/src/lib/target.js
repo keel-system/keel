@@ -43,6 +43,14 @@ const ENGINES = [
     image: /(^|\/)postgres:/,
     database: (e) => ({ name: e.POSTGRES_DB ?? e.POSTGRES_USER ?? 'postgres', auth: { user: e.POSTGRES_USER ?? 'postgres', password: e.POSTGRES_PASSWORD ?? '' } }),
   },
+  {
+    tech: 'mysql',
+    image: /(^|\/)mysql:/,
+    database: (e) => ({
+      name: e.MYSQL_DATABASE ?? 'mysql',
+      auth: e.MYSQL_USER ? { user: e.MYSQL_USER, password: e.MYSQL_PASSWORD ?? '' } : { user: 'root', password: e.MYSQL_ROOT_PASSWORD ?? '' },
+    }),
+  },
 ].filter((engine) => DATABASE_TECHS.includes(engine.tech));
 
 /**
@@ -64,8 +72,9 @@ export function planTarget({ compose, realm, name, projectRel, containerOf, netw
   const engine = ENGINES.find((e) => byImage(services, e.image));
   const [dbService, db] = engine ? byImage(services, engine.image) : [];
   if (!db) {
-    const engines = Object.values(services).map((s) => String(s?.image ?? '')).filter((image) => /mysql|mariadb|mssql|oracle/.test(image));
-    const known = ENGINES.map((e) => e.tech).join(' y ');
+    const engines = Object.values(services).map((s) => String(s?.image ?? '')).filter((image) => /mariadb|mssql|oracle/.test(image));
+    const techs = ENGINES.map((e) => e.tech);
+    const known = techs.length > 1 ? `${techs.slice(0, -1).join(', ')} y ${techs.at(-1)}` : techs.join('');
     errors.push(
       engines.length
         ? `la base del regenerado es ${engines.join(', ')}: la paridad solo sabe vaciar ${known} (keel-recover no ha medido otro motor)`

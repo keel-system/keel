@@ -13,7 +13,7 @@ La herramienta solo hace lo que se ha medido. Hoy:
 |---|---|---|
 | Lenguaje y build (`fingerprint`) | Java con Maven o Gradle, Node | sin adaptador: no hay huella |
 | Rutas del legacy (`introspect`) | Express, Spring 4 (por su log), Spring con actuator | la superficie hay que escribirla a mano |
-| Base de datos (snapshot y rastro de escrituras) | MongoDB y PostgreSQL (desde 9.4: `pg_dump`/`pg_restore`, secuencias incluidas) | otro motor, `sandbox.yaml` lo rechaza |
+| Base de datos (snapshot y rastro de escrituras) | MongoDB, PostgreSQL (desde 9.4: `pg_dump`/`pg_restore`, secuencias incluidas) y MySQL (desde 8.0: `mysqldump`, AUTO_INCREMENT incluido; adaptador medido contra `show-ticketing`, todavía sin fixture ni redes en vivo: `PLAN-KEEL-RECOVER-MYSQL.md`, M2) | otro motor, `sandbox.yaml` lo rechaza |
 | Broker | **solo RabbitMQ** | `sandbox.yaml` lo rechaza |
 | Cobertura | nyc y V8 (medidas en vivo); JaCoCo se vuelca pero el paso 1 no lo ha ejercitado | |
 | Probado de punta a punta | **un legacy**: RealWorld (Node + MongoDB) | |

@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { ADAPTER_FUNCTIONS, DATABASE_TECHS, databaseAdapter } from '../src/lib/db/index.js';
 import { emptyDatabase } from '../src/lib/db/mongodb.js';
 import * as pg from '../src/lib/db/postgresql.js';
+import * as my from '../src/lib/db/mysql.js';
+import { COUNTER_TABLES, isTechnicalKey } from '../src/lib/db/relational.js';
 
 // La base detrás de un adaptador por motor: la interfaz completa en cada uno, y los schemas que
 // aceptan un motor diciendo lo mismo que el registro (un motor en el schema sin adaptador fallaría
@@ -23,7 +25,7 @@ test('cada motor con adaptador trae la interfaz entera', () => {
     assert.equal(typeof a.snapshotFile, 'string');
     assert.equal(typeof a.rowNoun, 'string');
   }
-  assert.equal(databaseAdapter('mysql'), null, 'sin medir, sin adaptador');
+  assert.equal(databaseAdapter('mariadb'), null, 'sin medir, sin adaptador');
   assert.equal(databaseAdapter('toString'), null, 'solo claves propias del registro');
 });
 
@@ -175,4 +177,141 @@ test('postgresql: la paridad vacía todo menos el historial de migraciones, rein
   const sql = rt.sent.at(-1).sql;
   assert.match(sql, /^truncate table "orders" restart identity cascade;/);
   assert.doesNotMatch(sql, /flyway_schema_history|typeorm_migrations/);
+});
+
+test('relacional: el contador de ids de cada motor no es una tabla del legacy', () => {
+  assert.deepEqual(COUNTER_TABLES, ['_sequences', '_auto_increment']);
+  assert.ok(isTechnicalKey('_auto_increment') && isTechnicalKey('_sequences') && isTechnicalKey('$keys'));
+  assert.ok(!isTechnicalKey('user') && !isTechnicalKey('auto_increment'));
+});
+
+// ── MySQL, sin contenedores: el SQL que se envía y la lectura de lo que mysql devuelve ──────────
+// Las salidas están grabadas del cliente `mysql -N -B -r` contra show-ticketing (MySQL 8.0.26,
+// keel-recover-lab/show-ticketing/sandbox), con el snapshot de la ronda 0.
+
+const MY_COLUMNS = 'seat\tid\tint\nseat\tperfTimeId\tint\nseat\treserved\ttinyint\nseatPrice\tid\tint\nseatPrice\tperformanceId\tint\nseatPrice\tprice\tint\nseatPrice\tratingType\tint\nseatPrice\tstartRowNum\tint\nseatPrice\tendRowNum\tint\n';
+const MY_PKS = 'seat\tid\nseatPrice\tid\n';
+const myExport = (pickNext) =>
+  'seatPrice\t{"id": 1, "price": 150000, "endRowNum": 1, "ratingType": 1, "startRowNum": 1, "performanceId": 1}\n' +
+  'seatPrice\t{"id": 2, "price": 90000, "endRowNum": 3, "ratingType": 2, "startRowNum": 2, "performanceId": 1}\n' +
+  `_auto_increment\t{"name": "pick", "next": ${pickNext}}\n_auto_increment\t{"name": "seatPrice", "next": 3}\n`;
+const MY_CATALOG = [
+  [/information_schema\.columns c/, MY_COLUMNS],
+  [/constraint_name = 'PRIMARY'/, MY_PKS],
+];
+
+test('mysql: el cliente lleva el SQL por stdin y la contraseña por entorno, la de la base o la de la imagen', () => {
+  const rt = pgRuntime([]);
+  my.mysql(rt, 'db1', { name: 'shop', auth: { user: 'svc', password: 'p w' } }, 'select 1;');
+  assert.deepEqual(rt.sent[0].args, ['env', 'MYSQL_PWD=p w', 'mysql', '-u', 'svc', '-N', '-B', '-r', '--default-character-set=utf8mb4', 'shop']);
+  assert.match(rt.sent[0].sql, /^set session information_schema_stats_expiry = 0;\nset session time_zone = '\+00:00';\nselect 1;$/, 'contador fresco y TIMESTAMP en UTC');
+  // sandbox.yaml sin contraseña: la del MYSQL_USER de la imagen, o root
+  my.mysql(rt, 'db1', { name: 'shop', user: 'flab' }, 'select 1;');
+  assert.deepEqual(rt.sent[1].args.slice(0, 7), ['sh', '-c', 'MYSQL_PWD=$MYSQL_PASSWORD exec "$0" "$@"', 'mysql', '-u', 'flab', '-N']);
+  my.mysql(rt, 'db1', { name: 'shop' }, 'select 1;');
+  assert.deepEqual(rt.sent[2].args.slice(0, 6), ['sh', '-c', 'MYSQL_PWD=$MYSQL_ROOT_PASSWORD exec "$0" "$@"', 'mysql', '-u', 'root']);
+  const old = { exec: () => ({ status: 1, stdout: '', stderr: "ERROR 1193 (HY000) at line 1: Unknown system variable 'information_schema_stats_expiry'" }) };
+  assert.match(my.mysql(old, 'db1', { name: 'shop' }, 'select 1;').error, /^MySQL anterior a 8\.0 \(sin medir/);
+  assert.equal(my.ident('a`b'), '`a``b`');
+  assert.equal(my.literal("o'k\\x"), "'o''k\\\\x'", 'la barra es un escape en los literales de MySQL');
+});
+
+test('mysql: una línea de JSON_OBJECT por fila, en orden de la clave, con DECIMAL a texto, binario a hex y fechas ISO', () => {
+  const cat = my.shapeCatalog([['items', 'id', 'int'], ['items', 'price', 'decimal'], ['items', 'photo', 'varbinary'], ['items', 'at', 'datetime'], ['notes', 'text', 'varchar']], [['items', 'id']]);
+  assert.deepEqual(cat, { items: { columns: [['id', 'int'], ['price', 'decimal'], ['photo', 'varbinary'], ['at', 'datetime']], pk: ['id'] }, notes: { columns: [['text', 'varchar']], pk: [] } });
+  const sql = my.exportSql({ tables: cat });
+  assert.match(sql, /select 'items', json_object\('id', `id`, 'price', cast\(`price` as char\), 'photo', hex\(`photo`\), 'at', replace\(cast\(`at` as char\), ' ', 'T'\)\) from `items` order by `id`;/);
+  assert.match(sql, /from `notes` order by cast\(json_object\('text', `text`\) as char\);/, 'sin clave, por la fila entera');
+  assert.match(sql, /'_auto_increment', json_object\('name', table_name, 'next', auto_increment\) from information_schema\.tables/);
+  // grabado: así llegan esas tres expresiones desde 8.0.26
+  assert.deepEqual(my.parseExport('items\t{"b": "0102FF", "d": "12.50", "t": "2027-01-01T10:00:00.250"}\n', ['items']).items, [{ b: '0102FF', d: '12.50', t: '2027-01-01T10:00:00.250' }]);
+});
+
+test('mysql: la exportación grabada se lee con las tablas vacías presentes y el AUTO_INCREMENT aparte', () => {
+  const doc = my.parseExport(myExport(1), ['pick', 'seatPrice']);
+  assert.deepEqual(doc.pick, [], 'una tabla vacía no da líneas y está igual');
+  assert.equal(doc.seatPrice.length, 2);
+  assert.deepEqual(doc.seatPrice[1], { id: 2, price: 90000, endRowNum: 3, ratingType: 2, startRowNum: 2, performanceId: 1 });
+  assert.deepEqual(doc._auto_increment, [{ name: 'pick', next: 1 }, { name: 'seatPrice', next: 3 }]);
+  assert.throws(() => my.parseExport('ghost\t{}\n', ['pick']), /tabla que el catálogo no tiene: ghost/);
+  const e = my.exportDb(pgRuntime([...MY_CATALOG, [/json_object/, myExport(1)]]), 'db1', { name: 'show' });
+  assert.deepEqual(e.value.$keys, { seat: ['id'], seatPrice: ['id'] });
+  assert.deepEqual(e.value.seat, []);
+});
+
+test('mysql: la huella es la del contenido y cambia con el AUTO_INCREMENT que consume una escritura fallida (ST-ENV-11)', () => {
+  const rt = pgRuntime([...MY_CATALOG, [/json_object/, myExport(1)]]);
+  const a = my.fingerprint(rt, 'db1', { name: 'show' });
+  const b = my.fingerprint(pgRuntime([...MY_CATALOG, [/json_object/, myExport(1)]]), 'db1', { name: 'show' });
+  const c = my.fingerprint(pgRuntime([...MY_CATALOG, [/json_object/, myExport(2)]]), 'db1', { name: 'show' });
+  assert.ok(a.ok && /^[0-9a-f]{32}$/.test(a.value));
+  assert.equal(a.value, b.value);
+  assert.notEqual(a.value, c.value, 'el insert que falla por FK consume el contador de pick');
+  assert.ok(!rt.sent.some((s) => /table_rows|update_time/.test(s.sql ?? '')), 'nada de las estadísticas cacheadas');
+  // y el diff lo trae como efecto, casado por nombre
+  const before = { ...my.parseExport(myExport(1), ['pick', 'seatPrice']), $keys: { pick: ['id'], seatPrice: ['id'] } };
+  const after = { ...my.parseExport(myExport(2), ['pick', 'seatPrice']), $keys: before.$keys };
+  assert.deepEqual(my.dbDiff(before, after), { _auto_increment: { added: [], removed: [], changed: [{ before: { name: 'pick', next: 1 }, after: { name: 'pick', next: 2 } }] } });
+});
+
+test('mysql: snapshot con mysqldump sin tablespaces a un archivo, y restauración con source dentro del contenedor', () => {
+  const rt = pgRuntime([...MY_CATALOG, [/json_object/, myExport(1)]]);
+  const s = my.takeSnapshot(rt, 'db1', { name: 'show', user: 'flab' });
+  assert.equal(s.ok, true);
+  assert.equal(s.where, 'db1:/tmp/recover-snapshot.sql');
+  assert.deepEqual(rt.sent.at(-1).args.slice(3), ['mysqldump', '-u', 'flab', '--single-transaction', '--routines', '--triggers', '--no-tablespaces', '--set-gtid-purged=OFF', '--result-file=/tmp/recover-snapshot.sql', 'show']);
+  my.restoreSnapshot(rt, 'db1', { name: 'show', user: 'flab' });
+  assert.match(rt.sent.at(-1).sql, /\nsource \/tmp\/recover-snapshot\.sql\n$/);
+  const failing = { exec: () => ({ status: 1, stdout: '', stderr: "ERROR 1146 (42S02) at line 2 in file: '/tmp/recover-snapshot.sql'" }) };
+  assert.match(my.restoreSnapshot(failing, 'db1', { name: 'show' }).error, /la restauración de \/tmp\/recover-snapshot\.sql falló: ERROR 1146/);
+});
+
+test('mysql: la introspección grabada lleva motor, collation, AUTO_INCREMENT, FK con su acción, índices y estados', () => {
+  const tables = my.shapeTables({
+    tables: [['user', 'InnoDB', '2'], ['seatPrice', 'InnoDB', '2'], ['performance', 'MyISAM', '1']],
+    columns: [
+      ['user', 'id', 'int', '', '10', '0', 'NO', '', '', 'auto_increment', 'int unsigned'],
+      ['user', 'userId', 'varchar', '45', '', '', 'NO', '', 'utf8mb4_0900_ai_ci', '', 'varchar(45)'],
+      ['performance', 'status', 'enum', '7', '', '', 'NO', 'DRAFT', 'utf8mb4_0900_ai_ci', '', "enum('DRAFT','ON','O''K')"],
+      ['performance', 'price', 'decimal', '', '10', '2', 'YES', '', '', '', 'decimal(10,2)'],
+    ],
+    constraints: [
+      ['seatPrice', 'seatPrice_ibfk_1', 'FOREIGN KEY', 'performanceId', 'performance', 'id', 'CASCADE', ''],
+      ['seatPrice', 'PRIMARY', 'PRIMARY KEY', 'id', '', '', '', ''],
+      ['performance', 'performance_chk_1', 'CHECK', '', '', '', '', '(`price` >= 0)'],
+      ['user', 'user_uk', 'UNIQUE', 'userId', '', '', '', ''],
+    ],
+    indexes: [['performance', 'hallId', '1', 'hallId'], ['performance', 'performance_Index', '1', 'title']],
+  });
+  assert.deepEqual(tables[0], {
+    name: 'user', rows: 2, engine: 'InnoDB',
+    columns: [
+      { name: 'id', type: 'int', nullable: false, autoIncrement: true, unsigned: true },
+      { name: 'userId', type: 'varchar', nullable: false, length: 45, collation: 'utf8mb4_0900_ai_ci' },
+    ],
+    unique: [['userId']],
+  });
+  assert.deepEqual(tables[1].foreignKeys, [{ name: 'seatPrice_ibfk_1', columns: ['performanceId'], references: { table: 'performance', columns: ['id'] }, onDelete: 'cascade' }]);
+  assert.deepEqual(tables[1].primaryKey, ['id']);
+  const perf = tables[2];
+  assert.equal(perf.engine, 'MyISAM', 'el motor de cada tabla: MyISAM no aplica las FK (M-10)');
+  assert.deepEqual(perf.columns[0].values, ['DRAFT', 'ON', "O'K"], 'los valores de un ENUM, de COLUMN_TYPE, sin el escape de la comilla');
+  assert.deepEqual(perf.columns[1], { name: 'price', type: 'decimal', nullable: true, precision: 10, scale: 2 });
+  assert.deepEqual(perf.checks, ['(`price` >= 0)']);
+  assert.deepEqual(perf.indexes, [{ name: 'hallId', definition: 'INDEX hallId (hallId)' }, { name: 'performance_Index', definition: 'INDEX performance_Index (title)' }]);
+  // JSON_ARRAYAGG no ordena: los valores salen ordenados, los números como números
+  assert.deepEqual(
+    my.shapeStates([['seat', 'reserved', '12', '2', '[1, 0]'], ['user', 'userType', '2', '2', '[2, 1]'], ['performanceTime', 'id', '1', '1', '[1]'], ['t', 's', '5', '2', '["ON", "DRAFT"]']]),
+    [{ table: 'seat', column: 'reserved', values: [0, 1] }, { table: 't', column: 's', values: ['DRAFT', 'ON'] }]
+  );
+});
+
+test('mysql: la paridad vacía con TRUNCATE y las FK desactivadas, sin tocar el historial de migraciones, y carga en una transacción', () => {
+  const rt = pgRuntime([[/information_schema\.columns c/, 'flyway_schema_history\tinstalled_rank\tint\norders\tid\tbinary\ntypeorm_migrations\tid\tint\n'], [/constraint_name = 'PRIMARY'/, 'orders\tid\n'], [/truncate/, '0\n']]);
+  assert.deepEqual(my.emptyDatabase(rt, 'db1', { name: 'shop', auth: { user: 'svc', password: 'x' } }), { ok: true, remaining: '0' });
+  const sql = rt.sent.at(-1).sql;
+  assert.match(sql, /set foreign_key_checks = 0;\ntruncate table `orders`;\nset foreign_key_checks = 1;/);
+  assert.doesNotMatch(sql, /flyway_schema_history|typeorm_migrations/);
+  my.loadScript(rt, 'db1', { name: 'shop', auth: { user: 'svc', password: 'x' } }, "insert into `orders` values (1);");
+  assert.match(rt.sent.at(-1).sql, /start transaction;\ninsert into `orders` values \(1\);\ncommit;\n$/);
 });
