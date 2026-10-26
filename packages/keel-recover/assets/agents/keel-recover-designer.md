@@ -31,7 +31,9 @@ contrato inventado es un diseño incorrecto que parece completo; cada elemento l
 Cada pregunta lleva:
 - la consecuencia observable de cada opción (2 a 4, con `label` corto);
 - tu `recommendation`;
-- su `evidence`: la grabación o el `archivo:línea`.
+- su `evidence`: la grabación o el `archivo:línea`;
+- su `scope` (`method`, `global` o `local`) y, en una `global`, `reaches` con lo que su respuesta reescribe. El
+  orquestador pregunta en ese orden: una global contestada después de las locales que toca las reabre.
 
 Mientras una pregunta no tenga respuesta, el elemento queda como lo hace el legacy (un `keep`), y la fila de procedencia
 dice que está pendiente de esa pregunta.
@@ -49,12 +51,19 @@ se cuenta en el reporte no la confirma nadie (medido en la corrida shop-api: onc
    cuenta con datos del snapshot (el seed del legacy, registros que ninguna operación crea), escribe también
    `contract-map.yaml → data` (de qué tabla sale cada entidad, solo las excepciones; ver `references/characterization.md`)
    y los actores del lado `keel` con su `email` y sus `roles` si el llamante se identifica por email. No escribas
-   `fixtures.yaml`: lo deriva `keel-recover fixtures`. Termina con
-   `keel validate --ready specs/<servicio>` y deja el criterio `provenance` sin nada que decir, salvo lo que espera respuesta.
-2. **`apply`**: por cada pregunta con `answer` y sin `applied`:
+   `fixtures.yaml`: lo deriva `keel-recover fixtures`.
+   **Antes de los escenarios, el pre-barrido de huecos** (paso 4b de la skill): todas las clases y unidades que imprime
+   `keel validate --ready`, cada hueco cerrado en la capa si el legacy lo responde o convertido en pregunta si no. No
+   escribas `gaps.yaml`. Todas las preguntas salen en esta pasada: el cierre no debería encontrar ninguna nueva.
+   Termina con `keel validate --ready specs/<servicio>` y deja el criterio `provenance` sin nada que decir, salvo lo que
+   espera respuesta.
+2. **`apply`**: por cada pregunta con `answer` y sin `applied`, empezando por las `global`:
    - aplica la respuesta donde toque (un `fix` a `provenance.yaml → fixes` y su flujo; un `asked` a su fila y su capa;
      un `omitted` a `decisions.yaml` con `origin: omitted`);
    - marca la pregunta `applied: true`;
+   - **vuelve a barrer lo que la respuesta tocó**: una respuesta crea superficie (un campo `version`, una relación, un
+     error nuevo) y sus huecos —el orden del error nuevo entre las guardas que ya había, el índice de la relación— son
+     de esta pasada, no de la siguiente vuelta de cierre. Solo las clases y unidades afectadas, no el inventario entero;
    - vuelve a pasar `keel validate --ready`.
 3. **`repair`**: un `keep` en rojo es el diseño diciendo algo que el legacy no hace.
    - Corrige el **diseño**, nunca la expectativa del escenario. La excepción es una **hipótesis refutada**
@@ -80,7 +89,8 @@ Las capas escritas, los elementos por nivel de procedencia, los `fix` propuestos
 status: OK | KO
 task: design | apply | repair
 provenance: { measured: N, read: N, asked: N, inferred: 0 }
-questions: { written: N, applied: N, open: N }
+questions: { written: N, applied: N, open: N, global: N }
+preSweep: { classes: N, units: N, closedFromEvidence: N, asked: N }   # el pre-barrido de esta pasada
 ready: { provenance: OK | KO, characterized: OK | KO | SIN-EJECUTAR }
 readExpectations: [FL-…]      # los flujos con algún paso marcado `hypothesis` (la marca, en el bloque, es lo que cuenta)
 blockers: [...]               # p. ej. { kind: probe, detail: "falta grabar…", probe: "…" }

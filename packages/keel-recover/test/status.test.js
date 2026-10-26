@@ -131,6 +131,11 @@ test('una pregunta sin contestar, o contestada y sin aplicar, retiene la fase de
   for (const row of provenance.elements) if (row.element === 'persistence.default') row.evidence = `${row.evidence} (sandbox/verify.json)`;
   fs.writeFileSync(provenanceFile, yaml(provenance));
   assert.equal(w.status().phase, 'characterize');
+  // El alcance (scope/reaches) es opcional, pero si viene, del vocabulario cerrado.
+  save({ ...question, answer: 'Como el legacy', date: '2026-10-22', applied: true, scope: 'global', reaches: ['createArticle'] });
+  assert.equal(w.status().phase, 'characterize');
+  save({ ...question, answer: 'Como el legacy', date: '2026-10-22', applied: true, scope: 'todas' });
+  assert.match(w.status().reason, /questions\.yaml/);
   // Un questions.yaml roto tampoco deja pasar: lo dice su schema.
   save({ id: 'x', kind: 'quizá' });
   assert.equal(w.status().phase, 'design');

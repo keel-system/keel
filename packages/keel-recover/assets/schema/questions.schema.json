@@ -21,6 +21,15 @@
             "enum": ["fix", "asked", "omitted", "explore"],
             "description": "fix: corregir a propósito algo que el legacy hace; asked: un elemento del diseño que el legacy no fija; omitted: una decisión estructural que el legacy no tomaba; explore: si seguir observando."
           },
+          "scope": {
+            "enum": ["method", "global", "local"],
+            "description": "Qué alcanza la respuesta, para que el orquestador pregunte en orden: method (la fija el método, no un defecto del legacy: el contrato del cable, el 409 de una unicidad…), global (reescribe a otras: el orden de las guardas, el estilo del error, la identidad) o local (una operación o un elemento). Una global contestada después de las locales que toca las reabre: medido en shop-api, la mitad de los hallazgos de la segunda vuelta de cierre."
+          },
+          "reaches": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "description": "En una global: lo que su respuesta cierra o reescribe (operaciones, ids de otras preguntas), para decírselo al humano al preguntar."
+          },
           "question": { "type": "string", "minLength": 10, "description": "La pregunta, con la consecuencia observable de cada respuesta." },
           "options": {
             "type": "array",

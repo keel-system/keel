@@ -66,12 +66,14 @@ Son los únicos momentos en que preguntas. En cada uno, primero el resumen en un
 2. **Las decisiones del diseño** (`design` con preguntas abiertas).
    - **Origen:** todas las de `legacy/<servicio>/questions.yaml` sin `answer`, en tandas: primero los `fix`, luego
      `asked`, luego `omitted`.
-   - **Primero las que impone el método** (el contrato del cable, la paginación, la identidad en un proveedor OIDC, el
-     409 de una unicidad, el 400 de validación: su evidencia cita la doc del método y no un defecto del legacy), juntas
-     en UNA pregunta de confirmación: «el método fija estas N; ¿alguna se rechaza?».
-   - **Después las globales**, las que reescriben a otras (el orden de las guardas, los estados con nombre, el estilo
-     del error), diciendo qué más cierran; las locales al final. Una decisión global contestada tarde reabre hallazgos
-     en todas las operaciones que toca.
+   - **El orden lo da el `scope` de cada pregunta**, que escribe el diseñador. Una pregunta sin `scope` la clasificas
+     tú con el mismo criterio antes de preguntar.
+   - **Primero las `method`**, las que impone el método (el contrato del cable, la paginación, la identidad en un
+     proveedor OIDC, el 409 de una unicidad, el 400 de validación: su evidencia cita la doc del método y no un defecto
+     del legacy), juntas en UNA pregunta de confirmación: «el método fija estas N; ¿alguna se rechaza?».
+   - **Después las `global`**, las que reescriben a otras (el orden de las guardas, los estados con nombre, el estilo
+     del error), diciendo qué más cierran (su `reaches`); las `local` al final. Una decisión global contestada tarde
+     reabre hallazgos en todas las operaciones que toca.
    - **Cada pregunta**, tal como la escribió el diseñador: su evidencia y su recomendación.
    - **Por cada respuesta**, escribe `answer` (el `label` o el texto libre) y `date` en la misma entrada, y relanza
      `keel-recover-designer` con `task: apply`.
@@ -84,14 +86,21 @@ Son los únicos momentos en que preguntas. En cada uno, primero el resumen en un
        estampado en el proyecto).
      - **Generador y stack:** `keel-spring`, `keel-nest` o `keel-dotnet`, y las opciones que `environment.yaml` no
        fija ya: el motor y el broker del legacy se conservan salvo que el humano diga otra cosa.
-   - **Para cerrar**, lanza en paralelo los agentes de keel-core `keel-design-review`, `keel-gap-sweep` y
-     `keel-flow-review` (`{{keel:agents}}/…`) con la ruta `specs/<servicio>/`. Sus hallazgos se deciden con el humano
-     en una tanda más, ordenada como la del punto 2. Después, el flujo de `/keel-handoff` para `DESIGN.md`.
-   - **El orden de una vuelta de cierre:** `apply` → `characterize` → (en verde) las revisiones. Un hallazgo del careo
-     cerrado con `resolution: design` caduca el careo entero y el presupuesto es de 3 pasadas por versión: cierra antes
-     los que se resuelven en el escenario, agrupa los de diseño en una sola `apply`, y relanza `keel-flow-review` solo
-     cuando el YAML ya no vaya a cambiar. Cada vuelta de decisiones abre superficie nueva (medido en shop-api: 39, 19 y
-     1 hallazgos del barrido en tres vueltas).
+   - **Para cerrar, en dos tiempos.** El careo va al final y una sola vez, porque un hallazgo cerrado con
+     `resolution: design` lo caduca entero (presupuesto: 3 pasadas por versión), y careados antes de que el YAML deje
+     de cambiar, los flujos se carean para nada.
+     1. **Lo que puede cambiar el YAML:** lanza en paralelo `keel-design-review` y `keel-gap-sweep`
+        (`{{keel:agents}}/…`) con la ruta `specs/<servicio>/`. Sus hallazgos se deciden con el humano en UNA tanda,
+        ordenada como la del punto 2, y se aplican en UNA `apply` → `characterize`. Gracias al pre-barrido del
+        diseñador, el de `keel-gap-sweep` debería salir casi vacío: si encuentra más de un puñado, dilo en el resumen
+        con las clases donde se concentra, porque es el pre-barrido el que falló.
+     2. **El careo:** con la caracterización en verde y el YAML quieto, `keel-flow-review`. Lo que se resuelve en el
+        escenario no caduca nada. Lo que pide `resolution: design` se agrupa en una sola `apply` → `characterize`, y
+        solo entonces se relanza el careo sobre los flujos que cambiaron.
+
+     Después, el flujo de `/keel-handoff` para `DESIGN.md`. La referencia de lo que se evita: en la corrida de control
+     de shop-api, con las tres revisiones lanzadas juntas tras cada `apply`, hicieron falta tres vueltas (39, 19 y 1
+     hallazgos del barrido) y el 71 % de los tokens se fue en las pasadas del diseñador.
    - **Para generar**, escribe `services/<servicio>-<tech>/keel-stack.json` con el stack elegido y ejecuta
      `keel-<tech> build specs/<servicio>` (con `--accept-unready` si se eligió así).
 

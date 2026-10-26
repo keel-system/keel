@@ -269,6 +269,11 @@ Es el cierre de cualquier diseño Keel: `/keel-validate` (revisión semántica),
 (`keel-flow-review`) y `DESIGN.md`. Mientras falte, `--ready` sigue en rojo y la generación pide `--accept-unready`
 (queda estampado en el proyecto generado).
 
+En un diseño recuperado, el análisis de huecos ya se hizo una vez al escribir las capas (el pre-barrido del paso 4b de
+`/keel-recover`), así que el de cierre debería salir casi vacío. Y el orden importa: primero la revisión y el barrido,
+que pueden cambiar el YAML, con sus decisiones en una sola tanda; el careo, al final y con el YAML quieto, porque cerrar
+un hallazgo cambiando el diseño lo caduca entero.
+
 ### Paso 7: regenerar y medir la paridad
 
 1. Generar, como siempre:
