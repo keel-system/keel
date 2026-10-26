@@ -1,8 +1,8 @@
 # Hoja de respuestas de show-ticketing. Ver README.md: qué es cada campo y cómo se puntúa.
-# Escrita leyendo el código el 2026-10-26 y medida a mano el mismo día (paso 0 y sondas sueltas, diario en
-# ../keel-recover-lab/show-ticketing/LOG.md) con MySQL 8.0.26 y Redis 6.2.5.
+# Escrita leyendo el código el 2026-10-26 y medida a mano el mismo día (paso 0, sondas sueltas y la ronda 0 del
+# paso 1 con tools/probe.mjs; diario en ../keel-recover-lab/show-ticketing/LOG.md) con MySQL 8.0.26 y Redis 6.2.5.
 # Es el legacy del banco para MySQL (PLAN-KEEL-RECOVER-MYSQL.md, incremento M0): las preguntas M-* de ese plan
-# se contestan aquí, sobre todo en ST-ENV-11.
+# se contestan aquí, sobre todo en ST-ENV-11 y ST-ENV-12.
 #
 # Commit: se fijó primero 9c8e8c8 (2021-08-24, HEAD del repo archivado) y se REPINÓ a 7eacae8, el merge anterior,
 # porque en 9c8e8c8 el login responde siempre 500 (ST-DEF-10): la migración a Kotlin del PR #130 dejó UserSession
@@ -114,6 +114,15 @@ facts:
     expect: "db/mysql.js con la huella del contenido, el contador leído con stats_expiry 0 y el snapshot por mysqldump (PLAN-KEEL-RECOVER-MYSQL.md, M-01 a M-04, M-08 y M-13)"
     status: measured
     note: "medido el 2026-10-26. M-01 (restaurar con la app conectada) sin bloqueo: la app no abre transacciones (ST-ENV-09), así que el caso de una transacción abierta reteniendo el metadata lock queda sin medir en este legacy"
+    found_by: operator
+  - id: ST-ENV-12
+    category: environment
+    fact: "La exportación del contenido para la huella y el diff (M-05, M-06): una línea de `JSON_OBJECT` por fila en orden de la clave primaria es determinista; el cliente tiene que ir con `-r` (`-B` reescapa las barras del JSON y lo deja inválido); `DECIMAL` sale como número JSON y pierde la escala al parsearlo, así que va a texto con `CAST(… AS CHAR)`; un valor binario sale como \"base64:type15:…\", así que va con `HEX()`; `DATETIME` sale como \"2027-03-10 21:00:00.000000\", `DATE` como \"2026-10-26\", `TINYINT(1)` como 0/1 (la API lo da como booleano) e `INT UNSIGNED` como número. JSON_OBJECT ordena las claves por longitud y no por posición. `_auto_increment` (nombre y siguiente valor, leído con stats_expiry 0) hace de `_sequences`."
+    evidence: "sandbox medido (keel-recover-lab/show-ticketing/LOG.md; tools/probe.mjs, rama MySQL; recordings/round-0)"
+    observable: "ronda 0 dos veces sobre el mismo snapshot: 30/30 grabaciones iguales; S0-025 graba el contador consumido sin fila"
+    expect: "db/mysql.js exporta por fila con -r, DECIMAL a texto y binario a hex; parseExport probado con estas salidas (PLAN-KEEL-RECOVER-MYSQL.md, M1)"
+    status: measured
+    note: "DECIMAL y binario medidos con literales (`CAST('12.50' AS DECIMAL(10,2))`, `CAST(x'0102ff' AS BINARY(3))`): el esquema del legacy no los tiene. La fecha cero y `TIMESTAMP` en otra zona, sin medir (sql_mode estricto con NO_ZERO_DATE; ninguna columna TIMESTAMP): se miden con la fixture de M2"
     found_by: operator
 
   # ── Activos del repo ────────────────────────────────────────────────────────
@@ -424,7 +433,7 @@ facts:
     observable: "diff de DELETE /performances/{id}; DELETE /venues/{id} con espectáculos → 500"
     expect: "comportamiento que vive en la base, grabado en el diff; las reservas borradas sin aviso, keep o fix decidido"
     status: measured
-    note: "DELETE /performances/1 → 200 y se van 3 funciones, 24 asientos, 9 reservas, 1 favorito y 2 precios; DELETE /venues/1 → 500. El borrado de funciones sueltas, sin sonda"
+    note: "DELETE /performances/1 → 200 y se van 3 funciones, 24 asientos, 9 reservas, 1 favorito y 2 precios; DELETE /venues/1 → 500. DELETE /performances/1/times [1] → 200 y se van la función y sus 12 asientos (ronda 0, S0-019)"
   - id: ST-EFF-05
     category: effect
     fact: "La subida del cartel guarda el archivo en disco con un UUID delante del nombre original, borra el anterior y guarda la ruta absoluta del contenedor en la base, que luego sale en las respuestas (`imageFilePath`)."
@@ -439,8 +448,8 @@ facts:
     evidence: "config/RedisCacheConfig.java:48-72; service/PerformanceService.java:44-361; service/SeatService.java:19-23"
     observable: "lectura, cambio por otra vía y lectura antes del TTL"
     expect: "cache del diseño (use-cases.<op>.cache) con sus TTL medidos, y la invalidación que falta como fix"
-    status: read
-    note: "medido solo el TTL de 3 s de asientos y plazas libres (ST-DEF-03, ST-DEF-06); los de listados y detalle, sin sonda"
+    status: measured
+    note: "TTL leídos en Redis: portada 3597 s, portada por tipo y detalle 1797 s; PUT /performances/1 vacía las tres claves y reservar no las toca; ronda 0, S0-024: tras reservar, GET /seats sigue con reserved:false. El listado paginado (10 min), sin sonda: lastPerfId de un espectáculo inexistente no deja clave"
   - id: ST-EFF-07
     category: effect
     fact: "El tipo del cartel se decide solo por el Content-Type que declara el cliente (image/jpeg, png o gif), sin mirar el contenido; y borrar el espectáculo deja el archivo en disco."
