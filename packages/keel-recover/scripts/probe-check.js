@@ -215,6 +215,9 @@ const MONGODB = {
 // devolviera las secuencias, Q-002 dejaría de grabarse igual dos veces), la UNIQUE que rechaza y
 // aun así consume un id, el CHECK del ciclo de vida y la clave ajena.
 const seq = (r, name) => (r.effects.db?._sequences?.changed ?? []).find((c) => c.after.name === name);
+// El id que da la secuencia en su siguiente nextval: una sin estrenar (is_called false, como en el snapshot, que verify
+// toma con la base vacía) da su last_value; una ya usada, el siguiente.
+const nextId = (s) => (s.is_called ? s.last_value + 1 : s.last_value);
 const PG_TABLE = (s, name) => (s.data?.tables ?? []).find((t) => t.name === name);
 const POSTGRESQL = {
   dir: 'node-postgres',
@@ -234,7 +237,7 @@ const POSTGRESQL = {
       return [
         ['estados', codes(r) === '201,200'],
         ['base: el artículo y su movimiento', added(r, 'items').length === 1 && item.sku === 'a' && item.quantity === 2 && item.status === 'AVAILABLE' && mov?.item_id === item.id && mov?.delta === 2],
-        ['el id es el que dio la secuencia', s && s.after.last_value === item.id && s.after.last_value === s.before.last_value + 1],
+        ['el id es el que dio la secuencia', s && nextId(s.before) === item.id && s.after.last_value === item.id && s.after.is_called],
         ['las dos secuencias, como efecto', (r.effects.db._sequences?.changed ?? []).length === 2],
       ];
     },
@@ -244,7 +247,7 @@ const POSTGRESQL = {
       return [
         ['estados', codes(r) === '201,409'],
         ['un solo artículo', added(r, 'items').length === 1 && added(r, 'movements').length === 1],
-        ['el alta rechazada consumió un id', s && s.after.last_value === s.before.last_value + 2],
+        ['el alta rechazada consumió un id', s && s.after.last_value === nextId(s.before) + 1],
       ];
     },
     'Q-005': (r) => [
