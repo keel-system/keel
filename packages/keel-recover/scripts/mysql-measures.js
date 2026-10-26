@@ -122,11 +122,14 @@ const MEASURES = {
     await sleep(1100); // TIMESTAMP tiene segundos: en el mismo segundo, ON UPDATE no cambia nada visible
     http(ctx, 'POST', '/items/m09/take', { n: 1 }, [200]);
     const after = exported(ctx);
+    // La exportación es fiel (el valor cambia); el diff lo graba como del motor y no como del flujo.
+    const [b, a] = [item(before, 'm09'), item(after, 'm09')];
     const diff = ctx.adapter.diff(before, after);
     const changed = diff.items?.changed.find((c) => c.after.sku === 'm09');
     const logged = (diff.movement_log?.added ?? []).filter((r) => r.delta === -1).length;
-    const ok = changed && changed.before.updated_at !== changed.after.updated_at && logged === 1;
-    return { ok, detail: changed ? `updated_at ${changed.before.updated_at} → ${changed.after.updated_at} sin que /take la nombre; movement_log +${logged} por el trigger` : 'el take no cambió la fila' };
+    const marked = changed?.before.updated_at === '<on-update>' && changed?.after.updated_at === '<on-update>';
+    const ok = b && a && b.updated_at !== a.updated_at && marked && logged === 1;
+    return { ok, detail: b && a ? `updated_at ${b.updated_at} → ${a.updated_at} sin que /take la nombre, ${marked ? 'grabada en el diff como del motor' : `y en el diff ${changed?.after.updated_at}`}; movement_log +${logged} por el trigger` : 'el take no dejó la fila' };
   },
 
   restore(ctx) {

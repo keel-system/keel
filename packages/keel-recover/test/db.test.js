@@ -7,7 +7,7 @@ import { ADAPTER_FUNCTIONS, DATABASE_TECHS, databaseAdapter } from '../src/lib/d
 import { emptyDatabase } from '../src/lib/db/mongodb.js';
 import * as pg from '../src/lib/db/postgresql.js';
 import * as my from '../src/lib/db/mysql.js';
-import { COUNTER_TABLES, isTechnicalKey } from '../src/lib/db/relational.js';
+import { COUNTER_TABLES, ON_UPDATE_MARK, contentHash, isTechnicalKey } from '../src/lib/db/relational.js';
 
 // La base detrás de un adaptador por motor: la interfaz completa en cada uno, y los schemas que
 // aceptan un motor diciendo lo mismo que el registro (un motor en el schema sin adaptador fallaría
@@ -218,7 +218,7 @@ test('mysql: el cliente lleva el SQL por stdin y la contraseña por entorno, la 
 
 test('mysql: una línea de JSON_OBJECT por fila, en orden de la clave, con DECIMAL a texto, binario a hex y fechas ISO', () => {
   const cat = my.shapeCatalog([['items', 'id', 'int'], ['items', 'price', 'decimal'], ['items', 'photo', 'varbinary'], ['items', 'at', 'datetime'], ['notes', 'text', 'varchar']], [['items', 'id']]);
-  assert.deepEqual(cat, { items: { columns: [['id', 'int'], ['price', 'decimal'], ['photo', 'varbinary'], ['at', 'datetime']], pk: ['id'] }, notes: { columns: [['text', 'varchar']], pk: [] } });
+  assert.deepEqual(cat, { items: { columns: [['id', 'int'], ['price', 'decimal'], ['photo', 'varbinary'], ['at', 'datetime']], pk: ['id'], onUpdate: [] }, notes: { columns: [['text', 'varchar']], pk: [], onUpdate: [] } });
   const sql = my.exportSql({ tables: cat });
   assert.match(sql, /select 'items', json_object\('id', `id`, 'price', cast\(`price` as char\), 'photo', hex\(`photo`\), 'at', replace\(cast\(`at` as char\), ' ', 'T'\)\) from `items` order by `id`;/);
   assert.match(sql, /from `notes` order by cast\(json_object\('text', `text`\) as char\);/, 'sin clave, por la fila entera');
@@ -319,6 +319,57 @@ test('mysql: la introspección grabada lleva motor, collation, AUTO_INCREMENT, F
     my.shapeStates([['seat', 'reserved', '12', '2', '[1, 0]'], ['user', 'userType', '2', '2', '[2, 1]'], ['performanceTime', 'id', '1', '1', '[1]'], ['t', 's', '5', '2', '["ON", "DRAFT"]']]),
     [{ table: 'seat', column: 'reserved', values: [0, 1] }, { table: 't', column: 's', values: ['DRAFT', 'ON'] }]
   );
+});
+
+// De fixtures/sandbox/node-mysql (8.0.26): EXTRA de un TIMESTAMP con DEFAULT y ON UPDATE, y su trigger.
+const ON_UPDATE_EXTRA = 'DEFAULT_GENERATED on update CURRENT_TIMESTAMP';
+
+test('mysql: ON UPDATE y los triggers llegan a la superficie, y las rutinas aparte (M-09, M-11)', () => {
+  const [items, movements] = my.shapeTables({
+    tables: [['items', 'InnoDB', '2'], ['movements', 'InnoDB', '3']],
+    columns: [
+      ['items', 'updated_at', 'timestamp', '', '', '', 'NO', 'CURRENT_TIMESTAMP', '', ON_UPDATE_EXTRA, 'timestamp'],
+      ['items', 'created_at', 'timestamp', '', '', '', 'NO', 'CURRENT_TIMESTAMP', '', 'DEFAULT_GENERATED', 'timestamp'],
+    ],
+    constraints: [],
+    indexes: [],
+    triggers: [['movements', 'movement_logged', 'after', 'insert', 'insert into movement_log (movement_id, delta) values (new.id, new.delta)']],
+  });
+  assert.deepEqual(items.columns[0], { name: 'updated_at', type: 'timestamp', nullable: false, default: 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' });
+  assert.equal(items.columns[1].onUpdate, undefined, 'un DEFAULT CURRENT_TIMESTAMP solo no es ON UPDATE');
+  assert.equal(items.triggers, undefined);
+  assert.deepEqual(movements.triggers, [{ name: 'movement_logged', timing: 'after', event: 'insert', statement: 'insert into movement_log (movement_id, delta) values (new.id, new.delta)' }]);
+  // el cuerpo del trigger viaja en una línea: la salida es una fila por línea
+  assert.match(my.TRIGGERS_SQL, /replace\(replace\(replace\(action_statement, '\\r', ' '\), '\\n', ' '\), '\\t', ' '\)/);
+
+  const rt = pgRuntime([
+    [/from information_schema\.tables\s+where table_schema = database\(\) and table_type/, 'items\tInnoDB\n'],
+    [/count\(\*\)/, 'items\t2\n'],
+    [/from information_schema\.routines/, 'procedure\trestock\n'],
+  ]);
+  const r = my.introspectDb(rt, 'db1', { name: 'stock' });
+  assert.ok(r.ok);
+  assert.deepEqual(r.value.routines, [{ name: 'restock', type: 'procedure' }]);
+  assert.equal(my.introspectDb(pgRuntime([[/table_type = 'BASE TABLE' order by table_name/, 'items\tInnoDB\n']]), 'db1', { name: 'stock' }).value.routines, undefined, 'sin rutinas, sin la clave');
+});
+
+test('mysql: las columnas con ON UPDATE viajan en $onUpdate, no cuentan en la huella y el diff las graba como del motor (M-09)', () => {
+  const columns = `items\tid\tint\tauto_increment\nitems\tquantity\tjson\t\nitems\tupdated_at\ttimestamp\t${ON_UPDATE_EXTRA}\nmovements\tid\tint\tauto_increment\n`;
+  const catalog = [[/information_schema\.columns c/, columns], [/constraint_name = 'PRIMARY'/, 'items\tid\nmovements\tid\n']];
+  const rowAt = (q, at) => `items\t{"id": 1, "quantity": ${q}, "updated_at": "${at}"}\n_auto_increment\t{"name": "items", "next": 2}\n`;
+  const before = my.exportDb(pgRuntime([...catalog, [/json_object/, rowAt(5, '2026-10-26T13:31:31')]]), 'db1', { name: 'stock' }).value;
+  const after = my.exportDb(pgRuntime([...catalog, [/json_object/, rowAt(4, '2026-10-26T13:31:34')]]), 'db1', { name: 'stock' }).value;
+  assert.deepEqual(before.$onUpdate, { items: ['updated_at'] }, 'solo las tablas que las tienen');
+  assert.equal(before.items[0].updated_at, '2026-10-26T13:31:31', 'la exportación es fiel: el valor está');
+  const { $onUpdate, ...plain } = before;
+  assert.equal(contentHash(before), contentHash(plain), 'la huella no cuenta lo que describe la base');
+
+  const diff = my.dbDiff(before, after);
+  assert.deepEqual(diff.items.changed, [{ before: { id: 1, quantity: 5, updated_at: ON_UPDATE_MARK }, after: { id: 1, quantity: 4, updated_at: ON_UPDATE_MARK } }]);
+  // una fila que solo cambia en la columna del motor no es un cambio del flujo
+  const touched = my.exportDb(pgRuntime([...catalog, [/json_object/, rowAt(5, '2026-10-26T13:31:40')]]), 'db1', { name: 'stock' }).value;
+  assert.deepEqual(my.dbDiff(before, touched), {});
+  assert.equal(my.exportDb(pgRuntime([[/information_schema\.columns c/, 'items\tid\tint\tauto_increment\n'], [/PRIMARY/, 'items\tid\n']]), 'db1', { name: 'stock' }).value.$onUpdate, undefined);
 });
 
 test('mysql: la paridad vacía con TRUNCATE y las FK desactivadas, sin tocar el historial de migraciones, y carga en una transacción', () => {

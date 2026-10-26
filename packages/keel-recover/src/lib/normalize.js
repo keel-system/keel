@@ -7,7 +7,8 @@
 //     segundos distintos son el mismo token a efectos de comportamiento;
 //   - uuid y ObjectId se etiquetan por orden de aparición (<oid#1>, <oid#2>…): lo que importa es
 //     qué valores son el mismo, no cuáles son;
-//   - las fechas y los epoch en milisegundos se borran;
+//   - las fechas y los epoch en milisegundos se borran, menos la fecha cero de MySQL (`0000-00-00T00:00:00`):
+//     es el «sin fecha» del legacy, la misma en cada ejecución, y borrarla esconde cuándo el flujo la rellena;
 //   - las claves de medida de la herramienta (`_timeSeconds`, `_timestamp`) no se tocan y no se
 //     comparan. Es una lista cerrada y no «todo lo que empiece por `_`»: el `_id` de MongoDB es
 //     justo lo que más hay que normalizar;
@@ -19,7 +20,7 @@ export const UNCOMPARED = new Set(['_timeSeconds', '_timestamp']);
 const JWT = /eyJ[\w-]+\.[\w-]+\.[\w-]+/g;
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const OID = /\b[0-9a-f]{24}\b/g;
-const DATE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?/g;
+const DATE = /(?!0000-00-00T00:00:00)\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?/g;
 const EPOCH_MS = /\b1[6-9]\d{11}\b/g;
 const EPOCH_MS_NUMBER = /^1[6-9]\d{11}$/;
 

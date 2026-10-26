@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // characterize-check: la puerta en vivo del incremento 6. `keel-recover characterize` contra un
 // sandbox REAL del legacy de fixture (fixtures/sandbox/node-mongo: Node + MongoDB; con
-// --database=postgresql, su gemelo fixtures/sandbox/node-postgres, que por HTTP se porta igual), con el diseño
+// --database=postgresql o --database=mysql, sus gemelos fixtures/sandbox/node-postgres y node-mysql, que por
+// HTTP se portan igual), con el diseño
 // recuperado de juguete de test/helpers/stock-design.js: dos keep, un fix y un frontier, con sus
 // pasos en bloques ```keel-flow```, y un new que no se ejecuta.
 //
@@ -21,7 +22,7 @@
 // tras verify se vacía la base (con el adaptador del motor) y se toma el snapshot otra vez, con su
 // huella en verify.json.
 //
-//   npm run characterize-check --workspace packages/keel-recover [-- --only=<id>] [-- --keep] [-- --database=postgresql]
+//   npm run characterize-check --workspace packages/keel-recover [-- --only=<id>] [-- --keep] [-- --database=postgresql|mysql]
 //
 // Necesita podman o docker, y red para construir la imagen y bajar las de la base y la herramienta.
 import fs from 'node:fs';
@@ -44,7 +45,7 @@ import { SCENARIOS as STOCK_SCENARIOS, writeStockDesign } from '../test/helpers/
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, '..');
-const FIXTURES = { mongodb: { dir: 'node-mongo', project: 'rec-fixture' }, postgresql: { dir: 'node-postgres', project: 'rec-fixture-pg' } };
+const FIXTURES = { mongodb: { dir: 'node-mongo', project: 'rec-fixture' }, postgresql: { dir: 'node-postgres', project: 'rec-fixture-pg' }, mysql: { dir: 'node-mysql', project: 'rec-fixture-my' } };
 const database = process.argv.find((a) => a.startsWith('--database='))?.split('=')[1] ?? 'mongodb';
 const fx = FIXTURES[database];
 if (!fx) {

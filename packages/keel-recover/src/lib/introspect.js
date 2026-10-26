@@ -82,6 +82,7 @@ const KEYS = {
   'data.tables': (t) => t.name,
   'data.sequences': (s) => s.name,
   'data.types': (t) => t.name,
+  'data.routines': (r) => `${r.type} ${r.name}`,
   'broker.exchanges': (e) => e.name,
   'broker.queues': (q) => q.name,
   'broker.bindings': (b) => `${b.source}|${b.destination}|${b.routing_key}`,

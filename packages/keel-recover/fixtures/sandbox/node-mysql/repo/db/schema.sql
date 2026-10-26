@@ -8,7 +8,8 @@
 --     y la base corre en otra zona horaria (-05:00, en compose.yaml), así que su valor depende de la sesión;
 --   - fechas cero (0000-00-00) como «sin fecha», que el sql_mode viejo del servidor admite (compose.yaml);
 --   - una tabla MyISAM rellenada por un trigger (M-10 y M-11): sin transacciones, y su clave ajena declarada
---     no se aplica.
+--     no se aplica;
+--   - un procedimiento que la app ya no llama (M-11): vive en la base y viaja en el volcado.
 
 create table items (
   id int not null auto_increment primary key,
@@ -37,6 +38,9 @@ create table movement_log (
 
 create trigger movement_logged after insert on movements
   for each row insert into movement_log (movement_id, delta) values (new.id, new.delta);
+
+create procedure restock(in p_sku varchar(64), in n int)
+  update items set quantity = cast(json_extract(quantity, '$') + n as json), status = 'AVAILABLE' where sku = p_sku;
 
 insert into items (sku, quantity) values ('seed-1', '5');
 insert into items (sku, quantity, status, last_sold_at, restock_on, updated_at)

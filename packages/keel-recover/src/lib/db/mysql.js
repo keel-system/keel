@@ -32,6 +32,9 @@ export { dbDiff };
 export const SNAPSHOT_FILE = '/tmp/recover-snapshot.sql';
 
 export const ENUM_MAX_VALUES = 12;
+// EXTRA de una columna que el motor reescribe en cada UPDATE (`on update CURRENT_TIMESTAMP`, con o sin
+// `DEFAULT_GENERATED` delante): la expresión, para la superficie.
+const ON_UPDATE = /\bon update (\S+)/i;
 const STATE_TYPES = new Set(['varchar', 'char', 'enum', 'int', 'tinyint', 'smallint', 'mediumint']);
 
 /** Un identificador entre comillas invertidas. */
@@ -63,14 +66,14 @@ export function mysql(rt, c, database, sql) {
 
 // ── catálogo ────────────────────────────────────────────────────────────────────────────────
 
-export const COLUMNS_SQL = `select c.table_name, c.column_name, c.data_type from information_schema.columns c
+export const COLUMNS_SQL = `select c.table_name, c.column_name, c.data_type, c.extra from information_schema.columns c
   join information_schema.tables t on t.table_schema = c.table_schema and t.table_name = c.table_name and t.table_type = 'BASE TABLE'
   where c.table_schema = database() order by c.table_name, c.ordinal_position;`;
 
 export const PRIMARY_KEYS_SQL = `select table_name, column_name from information_schema.key_column_usage
   where table_schema = database() and constraint_name = 'PRIMARY' order by table_name, ordinal_position;`;
 
-/** `{ tables: { nombre: { columns: [[columna, tipo]…], pk: [columna…] } } }` de la base. */
+/** `{ tables: { nombre: { columns: [[columna, tipo]…], pk: [columna…], onUpdate: [columna…] } } }` de la base. */
 export function catalog(rt, c, database) {
   const cols = mysql(rt, c, database, COLUMNS_SQL);
   if (!cols.ok) return cols;
@@ -79,10 +82,14 @@ export function catalog(rt, c, database) {
   return { ok: true, value: { tables: shapeCatalog(rows(cols.out), rows(pks.out)) } };
 }
 
-/** Las filas del catálogo a `{ tabla: { columns, pk } }` (puro). */
+/** Las filas del catálogo a `{ tabla: { columns, pk, onUpdate } }` (puro). */
 export function shapeCatalog(columns, pks) {
   const tables = {};
-  for (const [t, col, type] of columns) (tables[t] ??= { columns: [], pk: [] }).columns.push([col, type.toLowerCase()]);
+  for (const [t, col, type, extra = ''] of columns) {
+    const table = (tables[t] ??= { columns: [], pk: [], onUpdate: [] });
+    table.columns.push([col, type.toLowerCase()]);
+    if (ON_UPDATE.test(extra)) table.onUpdate.push(col);
+  }
   for (const [t, col] of pks) tables[t]?.pk.push(col);
   return tables;
 }
@@ -126,7 +133,10 @@ export function parseExport(out, tableNames) {
   return doc;
 }
 
-/** El contenido entero como JSON plano; las claves primarias viajan en `$keys` (el diff las usa y no se comparan). */
+/**
+ * El contenido entero como JSON plano. Las claves primarias viajan en `$keys` y las columnas con ON UPDATE en
+ * `$onUpdate` (solo si las hay): el diff las usa y la huella no las cuenta.
+ */
 export function exportDb(rt, c, database) {
   const cat = catalog(rt, c, database);
   if (!cat.ok) return cat;
@@ -134,7 +144,8 @@ export function exportDb(rt, c, database) {
   if (!r.ok) return r;
   try {
     const $keys = Object.fromEntries(Object.entries(cat.value.tables).map(([t, { pk }]) => [t, pk]));
-    return { ok: true, value: { ...parseExport(r.out, Object.keys(cat.value.tables)), $keys } };
+    const $onUpdate = Object.fromEntries(Object.entries(cat.value.tables).filter(([, { onUpdate }]) => onUpdate.length).map(([t, { onUpdate }]) => [t, onUpdate]));
+    return { ok: true, value: { ...parseExport(r.out, Object.keys(cat.value.tables)), $keys, ...(Object.keys($onUpdate).length ? { $onUpdate } : {}) } };
   } catch (err) {
     return { ok: false, error: `la salida de mysql no se pudo leer: ${err.message}` };
   }
@@ -218,6 +229,13 @@ export const CONSTRAINTS_SQL = `select tc.table_name, tc.constraint_name, tc.con
   left join information_schema.referential_constraints rc on rc.constraint_schema = tc.constraint_schema and rc.table_name = tc.table_name and rc.constraint_name = tc.constraint_name
   where tc.table_schema = database() order by tc.table_name, tc.constraint_type, tc.constraint_name;`;
 
+// El cuerpo de un trigger puede tener saltos de línea y tabuladores: en una línea, para la salida por filas.
+export const TRIGGERS_SQL = `select event_object_table, trigger_name, lower(action_timing), lower(event_manipulation),
+    replace(replace(replace(action_statement, '\\r', ' '), '\\n', ' '), '\\t', ' ')
+  from information_schema.triggers where trigger_schema = database() order by 1, action_order, 2;`;
+
+export const ROUTINES_SQL = `select lower(routine_type), routine_name from information_schema.routines where routine_schema = database() order by 1, 2;`;
+
 // Los índices que no son de una restricción (PK, UNIQUE): los de una FK sí salen, porque InnoDB los crea solos
 // con el nombre de la restricción y son índices de verdad.
 export const INDEXES_SQL = `select s.table_name, s.index_name, max(s.non_unique), group_concat(s.column_name order by s.seq_in_index)
@@ -229,7 +247,7 @@ export const INDEXES_SQL = `select s.table_name, s.index_name, max(s.non_unique)
 const CONSTRAINT_TYPES = { 'PRIMARY KEY': 'p', UNIQUE: 'u', 'FOREIGN KEY': 'f', CHECK: 'c' };
 
 /** Las filas del catálogo, a la forma de surface.yaml (puro: lo prueba test/db.test.js con salidas grabadas). */
-export function shapeTables({ tables, columns, constraints, indexes }) {
+export function shapeTables({ tables, columns, constraints, indexes, triggers = [] }) {
   return tables.map(([name, engine, count]) => {
     const t = { name, rows: Number(count), engine, columns: [] };
     for (const [table, col, type, length, precision, scale, nullable, def, collation, extra, columnType] of columns) {
@@ -239,6 +257,8 @@ export function shapeTables({ tables, columns, constraints, indexes }) {
       if (precision && /decimal|numeric/.test(type)) Object.assign(c, { precision: Number(precision), scale: Number(scale) });
       if (def) c.default = def;
       if (/auto_increment/i.test(extra)) c.autoIncrement = true;
+      const onUpdate = ON_UPDATE.exec(extra);
+      if (onUpdate) c.onUpdate = onUpdate[1];
       if (/unsigned/.test(columnType)) c.unsigned = true;
       if (type === 'enum' || type === 'set') c.values = columnType.slice(type.length + 2, -2).split("','").map((v) => v.replace(/''/g, "'"));
       if (collation) c.collation = collation;
@@ -256,6 +276,9 @@ export function shapeTables({ tables, columns, constraints, indexes }) {
     for (const [table, idx, nonUnique, cols] of indexes) {
       if (table === name) (t.indexes ??= []).push({ name: idx, definition: `${nonUnique === '0' ? 'UNIQUE ' : ''}INDEX ${idx} (${cols})` });
     }
+    for (const [table, trigger, timing, event, statement] of triggers) {
+      if (table === name) (t.triggers ??= []).push({ name: trigger, timing, event, statement });
+    }
     return t;
   });
 }
@@ -268,7 +291,10 @@ export function shapeStates(samples) {
     .map(([table, column, , , values]) => ({ table, column, values: JSON.parse(values).sort(order) }));
 }
 
-/** Paso 1a, datos: tablas con motor, columnas (collation y AUTO_INCREMENT incluidos), claves, restricciones, índices y columnas de estado. */
+/**
+ * Paso 1a, datos: tablas con motor, columnas (collation, AUTO_INCREMENT y ON UPDATE incluidos), claves,
+ * restricciones, índices, triggers y columnas de estado; y las rutinas de la base (M-11), si hay.
+ */
 export function introspectDb(rt, c, database) {
   const q = (sql) => mysql(rt, c, database, sql);
   const list = q(TABLES_SQL);
@@ -278,10 +304,12 @@ export function introspectDb(rt, c, database) {
   const columns = q(INTROSPECT_COLUMNS_SQL);
   const constraints = q(CONSTRAINTS_SQL);
   const indexes = q(INDEXES_SQL);
-  const failed = [counts, columns, constraints, indexes].find((r) => !r.ok);
+  const triggers = q(TRIGGERS_SQL);
+  const routines = q(ROUTINES_SQL);
+  const failed = [counts, columns, constraints, indexes, triggers, routines].find((r) => !r.ok);
   if (failed) return failed;
   const countOf = Object.fromEntries(rows(counts.out));
-  const tables = shapeTables({ tables: names.map(([t, engine]) => [t, engine, countOf[t] ?? '0']), columns: rows(columns.out), constraints: rows(constraints.out), indexes: rows(indexes.out) });
+  const tables = shapeTables({ tables: names.map(([t, engine]) => [t, engine, countOf[t] ?? '0']), columns: rows(columns.out), constraints: rows(constraints.out), indexes: rows(indexes.out), triggers: rows(triggers.out) });
   // las candidatas a estado: texto o entero, sin ser clave primaria, ajena ni única (esas no son un estado)
   const candidates = tables.flatMap((t) => {
     const keyed = new Set([...(t.primaryKey ?? []), ...(t.foreignKeys ?? []).flatMap((f) => f.columns), ...(t.unique ?? []).filter((u) => u.length === 1).flat()]);
@@ -302,7 +330,8 @@ export function introspectDb(rt, c, database) {
     const t = tables.find((x) => x.name === st.table);
     (t.states ??= []).push({ column: st.column, values: st.values });
   }
-  return { ok: true, value: { tables } };
+  const routineList = rows(routines.out).map(([type, name]) => ({ name, type }));
+  return { ok: true, value: { tables, ...(routineList.length ? { routines: routineList } : {}) } };
 }
 
 // ── paridad ──────────────────────────────────────────────────────────────────────────────────

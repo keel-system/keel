@@ -21,18 +21,27 @@
 // Y uno que no es de un canal sino de la concurrencia: la carrera de P-007 (dos cancelaciones de un
 // pedido que la fixture lee, comprueba y escribe sin bloqueo) solo se ve si las dos peticiones llegan
 // juntas. En verde salen de un solo curl y la carrera aparece; con el fallo parallel-exec (un exec
-// por petición, como antes) llegan en serie y deja de verse. Sin este sabotaje, una sonda de
+// por petición, como antes) llegan separadas y se ve mucho menos. Sin este sabotaje, una sonda de
 // concurrencia que nunca ve la carrera pasaría por buena (medido en shop-api: 10/10 un desenlace).
+// El criterio es relativo y en el mismo sandbox: primero la sonda con un solo curl (el control) y
+// después con el fallo, que tiene que ver la carrera como mucho en la mitad de repeticiones. Un umbral
+// fijo no vale para todos los motores: dos podman exec llegan con 0,5-170 ms de desfase, variable en
+// el tiempo, y la ventana de la carrera es el commit del UPDATE, de 3-24 ms en MySQL 8 (dos fsync)
+// frente a menos en PostgreSQL. En node-mysql el fallo la deja en un 10-30 %, y el control en 10/10.
 //
-//   parallel-exec   los pasos paralelos vuelven a un exec por petición     → la carrera de P-007 no se ve
+//   parallel-exec   los pasos paralelos vuelven a un exec por petición     → la carrera se ve en la
+//                                                                            mitad o menos que con un curl
 //
 // En verde, además, dos ejecuciones de las mismas sondas graban lo mismo una vez normalizado.
 //
-//   npm run probe-check --workspace packages/keel-recover [-- --only=<id>] [-- --keep] [-- --database=postgresql]
+//   npm run probe-check --workspace packages/keel-recover [-- --only=<id>] [-- --keep] [-- --database=postgresql|mysql]
 //
 // Con --database=postgresql la fixture es fixtures/sandbox/node-postgres (solo base, sin broker, stubs
 // ni correo): el diff por clave primaria, las secuencias como efecto, la introspección relacional y
-// los sabotajes que no son de un canal (snapshot-gone, parallel-exec y coverage-off).
+// los sabotajes que no son de un canal (snapshot-gone, parallel-exec y coverage-off). Con
+// --database=mysql, fixtures/sandbox/node-mysql, con los mismos sabotajes: el AUTO_INCREMENT como
+// efecto, el duplicado con otra caja (collation _ci), ON UPDATE, el trigger sobre MyISAM y la
+// fecha cero.
 //
 // Necesita podman o docker, y red para construir la imagen y bajar las de los servicios.
 import fs from 'node:fs';
@@ -74,19 +83,28 @@ const noDbEffects = (r) => Object.keys(r.effects.db ?? {}).length === 0;
 
 // La carrera de cada fixture: cuántas de las repeticiones de su sonda de concurrencia la muestran.
 const RACE_MIN = 0.5;
-const RACE_MAX_SERIAL = 0.2;
+// con un exec por petición, como mucho esta fracción de lo que se ve con un solo curl
+const RACE_SERIAL_RATIO = 0.5;
 function raceShare(rec, isRace) {
   const total = Object.values(rec?.outcomes ?? {}).reduce((a, b) => a + b, 0);
   const race = Object.entries(rec?.outcomes ?? {}).filter(([k]) => isRace(k)).reduce((a, [, v]) => a + v, 0);
   return total ? race / total : 0;
 }
-function raceCheck(report, visible) {
-  const share = raceShare(report.recordings.find((x) => x.id === fx.race.probe)?.recording, fx.race.isRace);
-  return visible
-    ? [`la carrera se ve (${Math.round(share * 100)} % de las repeticiones, mínimo ${RACE_MIN * 100} %)`, share >= RACE_MIN]
-    : [`sin un curl paralelo la carrera no se ve (${Math.round(share * 100)} %, máximo ${RACE_MAX_SERIAL * 100} %)`, share <= RACE_MAX_SERIAL];
+const shareOf = (report) => raceShare(report.recordings.find((x) => x.id === fx.race.probe)?.recording, fx.race.isRace);
+const pct = (x) => `${Math.round(x * 100)} %`;
+function raceCheck(report) {
+  const share = shareOf(report);
+  return [`la carrera se ve (${pct(share)} de las repeticiones, mínimo ${pct(RACE_MIN)})`, share >= RACE_MIN];
 }
-const raceExpect = (id) => (r) => [['diez desenlaces contados', Object.values(r.outcomes ?? {}).reduce((a, b) => a + b, 0) === 10], raceCheck({ recordings: [{ id, recording: r }] }, true)];
+/** El fallo frente a su control, los dos del mismo sandbox: el control ve la carrera y el fallo, la mitad o menos. */
+function serialRaceChecks(report, control) {
+  const [c, s] = [shareOf(control), shareOf(report)];
+  return [
+    [`con un solo curl, el control ve la carrera (${pct(c)}, mínimo ${pct(RACE_MIN)})`, c >= RACE_MIN],
+    [`con un exec por petición se ve mucho menos (${pct(s)}, máximo ${pct(c * RACE_SERIAL_RATIO)}: la mitad del control)`, s <= c * RACE_SERIAL_RATIO],
+  ];
+}
+const raceExpect = (id) => (r) => [['diez desenlaces contados', Object.values(r.outcomes ?? {}).reduce((a, b) => a + b, 0) === 10], raceCheck({ recordings: [{ id, recording: r }] })];
 
 // Los sabotajes que no son de un canal: valen igual para cualquier motor.
 function commonScenarios(f) {
@@ -97,7 +115,7 @@ function commonScenarios(f) {
       expect: (report) => [['PRB-VERIFY dice que falta el snapshot', new RegExp(`no hay snapshot en ${f.prefix}-db`).test(report.criteria.find((c) => c.id === 'PRB-VERIFY')?.detail ?? '')]],
       afterVerify: async () => rt.exec(`${f.prefix}-db`, ['rm', '-f', databaseAdapter(database).snapshotFile]),
     },
-    { id: 'parallel-exec', red: [], faults: ['parallel-exec'], only: new Set([f.race.probe]), expect: (report) => [raceCheck(report, false)] },
+    { id: 'parallel-exec', red: [], faults: ['parallel-exec'], only: new Set([f.race.probe]), control: true, expect: serialRaceChecks },
     {
       id: 'coverage-off',
       red: ['PRB-COVERAGE'],
@@ -276,7 +294,102 @@ const POSTGRESQL = {
   ],
 };
 
-const FIXTURES = { mongodb: MONGODB, postgresql: POSTGRESQL };
+// ── MySQL: node-mysql, solo base ──────────────────────────────────────────────────────────────
+// Lo de PostgreSQL con el AUTO_INCREMENT en el papel de las secuencias (también lo consume el alta
+// rechazada, M-03), y lo que solo tiene MySQL: la UNIQUE sobre una collation _ci (otra caja es el mismo
+// sku, M-07), el ENUM del ciclo de vida, la fecha cero que el flujo rellena, la columna que el motor
+// reescribe en cada UPDATE (se graba como suya, M-09), el trigger que escribe en una tabla MyISAM sin su
+// FK (M-10, M-11) y el procedimiento que vive en la base.
+const ai = (r, name) => (r.effects.db?._auto_increment?.changed ?? []).find((c) => c.after.name === name);
+const ZERO_DATETIME = '0000-00-00T00:00:00';
+const MYSQL = {
+  dir: 'node-mysql',
+  prefix: 'rec-fixture-my',
+  sabotageProbes: new Set(['Q-001', 'Q-002']),
+  repeatable: new Set(['Q-002', 'Q-004', 'Q-005', 'Q-007', 'Q-008']),
+  adaptations: [],
+  race: { probe: 'Q-006', isRace: (k) => k.endsWith('|quantity=1') },
+  scenarios: [],
+  expect: {
+    'Q-001': (r) => [['estados', codes(r) === '200'], ['sin efectos', noDbEffects(r)]],
+    'Q-002': (r) => {
+      const item = added(r, 'items')[0];
+      const mov = added(r, 'movements')[0];
+      const log = added(r, 'movement_log')[0];
+      const s = ai(r, 'items');
+      return [
+        ['estados', codes(r) === '201,200'],
+        ['base: el artículo y su movimiento', added(r, 'items').length === 1 && item.sku === 'a' && item.quantity === 2 && item.status === 'AVAILABLE' && mov?.item_id === item.id && mov?.delta === 2],
+        ['las fechas cero, tal cual', item?.last_sold_at === ZERO_DATETIME && item?.restock_on === '0000-00-00'],
+        ['updated_at, del motor', item?.updated_at === '<on-update>'],
+        ['el trigger escribió en movement_log', added(r, 'movement_log').length === 1 && log.movement_id === mov?.id && log.delta === 2],
+        ['el id es el que dio el AUTO_INCREMENT', s && s.before.next === item.id && s.after.next === item.id + 1],
+        ['los tres AUTO_INCREMENT, como efecto', (r.effects.db._auto_increment?.changed ?? []).length === 3],
+      ];
+    },
+    'Q-003': (r) => [['estados', codes(r) === '422'], ['sin efectos (ni el AUTO_INCREMENT)', noDbEffects(r)]],
+    'Q-004': (r) => {
+      const s = ai(r, 'items');
+      return [
+        ['estados', codes(r) === '201,409'],
+        ['un solo artículo', added(r, 'items').length === 1 && added(r, 'movements').length === 1],
+        ['el alta rechazada consumió un AUTO_INCREMENT (M-03)', s && s.after.next === s.before.next + 2],
+      ];
+    },
+    'Q-005': (r) => {
+      const item = added(r, 'items')[0];
+      return [
+        ['estados', codes(r) === '201,200,409,200'],
+        ['base: agotado y en SOLD', added(r, 'items').length === 1 && item.status === 'SOLD' && item.quantity === 0],
+        ['la fecha cero, rellenada al agotar', item?.last_sold_at === '<date>' && item?.restock_on === '0000-00-00'],
+        ['los dos movimientos', added(r, 'movements').map((m) => m.delta).sort().join(',') === '-2,2'],
+      ];
+    },
+    'Q-006': raceExpect('Q-006'),
+    'Q-007': (r) => {
+      const s = ai(r, 'items');
+      return [
+        ['estados', codes(r) === '201,409,200'],
+        ['«A» es «a»: un solo artículo, y se lee con la otra caja', added(r, 'items').length === 1 && added(r, 'items')[0].sku === 'a' && r.steps[2].response.body?.sku === 'a'],
+        ['el alta rechazada consumió un AUTO_INCREMENT', s && s.after.next === s.before.next + 2],
+      ];
+    },
+    'Q-008': (r) => {
+      const c = changed(r, 'items');
+      return [
+        ['estados', codes(r) === '200'],
+        ['la fila sembrada cambia de cantidad', c.length === 1 && c[0].before.sku === 'seed-1' && c[0].before.quantity === 5 && c[0].after.quantity === 4],
+        ['updated_at, del motor a los dos lados (M-09)', c[0]?.before.updated_at === '<on-update>' && c[0]?.after.updated_at === '<on-update>'],
+        ['su movimiento y su fila de movement_log', added(r, 'movements').length === 1 && added(r, 'movements')[0].delta === -1 && added(r, 'movement_log').length === 1],
+      ];
+    },
+  },
+  checkSurface: (s) => {
+    const routes = new Set((s.http?.routes ?? []).map((r) => `${r.method} ${r.path}`));
+    const items = PG_TABLE(s, 'items');
+    const movements = PG_TABLE(s, 'movements');
+    const log = PG_TABLE(s, 'movement_log');
+    const col = (t, name) => t?.columns.find((c) => c.name === name);
+    return [
+      ['rutas de la app', ['GET /items', 'GET /items/:sku', 'POST /items', 'POST /items/:sku/take', 'GET /health'].every((r) => routes.has(r))],
+      ['items: InnoDB, clave primaria con AUTO_INCREMENT y UNIQUE de sku sobre _ci', items?.engine === 'InnoDB' && JSON.stringify(items?.primaryKey) === '["id"]' && col(items, 'id')?.autoIncrement === true && JSON.stringify(items?.unique) === '[["sku"]]' && /_ci$/.test(col(items, 'sku')?.collation ?? '')],
+      ['items: el ENUM del estado con sus valores', JSON.stringify(col(items, 'status')?.values) === '["AVAILABLE","SOLD"]'],
+      ['items: updated_at con ON UPDATE (M-09)', col(items, 'updated_at')?.onUpdate === 'CURRENT_TIMESTAMP' && !col(items, 'last_sold_at')?.onUpdate],
+      ['movements: clave ajena a items en cascada y el CHECK de delta', movements?.foreignKeys?.some((f) => f.references.table === 'items' && f.onDelete === 'cascade') && (movements?.checks ?? []).some((c) => /delta/.test(c))],
+      ['movements: el trigger que escribe en movement_log (M-11)', JSON.stringify((movements?.triggers ?? []).map((t) => [t.name, t.timing, t.event])) === '[["movement_logged","after","insert"]]' && /movement_log/.test(movements.triggers[0].statement)],
+      ['movement_log: MyISAM y sin la FK que declara su DDL (M-10)', log?.engine === 'MyISAM' && !log?.foreignKeys],
+      ['el procedimiento de la base (M-11)', JSON.stringify(s.data?.routines) === '[{"name":"restock","type":"procedure"}]'],
+    ];
+  },
+  checkMergedSurface: (s) => [
+    ['las tablas conservan la pasada en que aparecieron', (s.data?.tables ?? []).length === 3 && s.data.tables.every((t) => t.seen === 'introspect')],
+    ['las rutinas también', (s.data?.routines ?? []).length === 1 && s.data.routines[0].seen === 'introspect'],
+    ['las rutas conservan la pasada en que aparecieron', (s.http?.routes ?? []).every((r) => r.seen === 'introspect')],
+    ['las dos pasadas registradas', JSON.stringify(s.passes) === JSON.stringify(['introspect', 'check-base'])],
+  ],
+};
+
+const FIXTURES = { mongodb: MONGODB, postgresql: POSTGRESQL, mysql: MYSQL };
 const fx = FIXTURES[database];
 if (!fx) {
   console.error(`--database=${database}: hay fixture para ${Object.keys(FIXTURES).join(', ')}`);
@@ -359,6 +472,10 @@ for (const sc of SCENARIOS.filter((s) => !only || s.id === only)) {
     if (r.status !== 0) throw new Error(`el sabotaje ${sc.id} no se aplicó: ${r.stderr}`);
   }
 
+  // el control: la misma sonda en el mismo sandbox, justo antes y sin el fallo
+  const control = sc.control
+    ? await runRound(loadSandbox(sandboxFile), rt, round, { tag: `check-${sc.id}-control`, only: sc.only, log: (p) => console.log(`  ${p.id.padEnd(6)} control ${JSON.stringify(p.outcomes)}`) })
+    : null;
   const report = await runRound(loadSandbox(sandboxFile), rt, round, {
     tag: `check-${sc.id}`,
     only: sc.only ?? (sc.id === 'base' ? null : SABOTAGE_PROBES),
@@ -380,7 +497,7 @@ for (const sc of SCENARIOS.filter((s) => !only || s.id === only)) {
   } else {
     // el canal saboteado marca sus grabaciones como no fiables
     const ch = sc.red[0];
-    if (sc.expect) checks.push(...sc.expect(report));
+    if (sc.expect) checks.push(...sc.expect(report, control));
     if (ch && ch !== 'PRB-COVERAGE') checks.push([`grabaciones marcadas sin fiar por ${ch}`, report.recordings.every((r) => r.recording.untrusted?.includes(ch))]);
   }
   for (const [what, ok] of checks) if (!ok) console.log(`  ✗ ${what}`);

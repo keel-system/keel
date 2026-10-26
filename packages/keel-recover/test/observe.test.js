@@ -47,6 +47,13 @@ test('normalización: el JWT por sus claims sin iat/exp, ids por orden y el _id 
   assert.equal(comparable(n).steps[0].response._timeSeconds, undefined, 'y no se compara');
 });
 
+test('normalización: la fecha cero de MySQL se graba tal cual, y cuándo el flujo la rellena se ve', () => {
+  const n = normalizer()({ before: { last_sold_at: '0000-00-00T00:00:00', restock_on: '0000-00-00' }, after: { last_sold_at: '2026-10-26T13:31:34' } });
+  assert.equal(n.before.last_sold_at, '0000-00-00T00:00:00', 'el «sin fecha» del legacy es el mismo en cada ejecución');
+  assert.equal(n.before.restock_on, '0000-00-00');
+  assert.equal(n.after.last_sold_at, '<date>');
+});
+
 test('normalización: las reglas propias del legacy, con sustitución fija o etiqueta', () => {
   const n = normalizer([
     { pattern: '-[a-z0-9]{6}$', replace: '-<slug>' },
