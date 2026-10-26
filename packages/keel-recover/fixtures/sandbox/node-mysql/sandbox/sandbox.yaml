@@ -1,0 +1,24 @@
+kind: sandbox
+schema: 1
+compose: compose.yaml
+app:
+  service: app
+  base: http://stock:4000
+  startup_seconds: 120
+tool:
+  service: tool
+# sin user: la herramienta entra como root (MYSQL_ROOT_PASSWORD del contenedor), que puede volcar y
+# restaurar el trigger (su DEFINER es root)
+database:
+  service: stock-db
+  tech: mysql
+  name: stock
+coverage:
+  kind: v8
+  dir: /coverage
+  include: /app/src/
+introspection:
+  routes: { kind: express, file: /coverage/keel-recover-routes.json }
+judge:
+  read: { method: GET, path: /items, expect: [200] }
+  write: { method: POST, path: /items, body: { sku: "verify-{{nonce}}", quantity: 1 }, expect: [201] }

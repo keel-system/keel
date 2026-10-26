@@ -1,0 +1,39 @@
+# Paso 0c: sandbox del legacy de fixture con MySQL. Red interna: el runtime no sale a internet.
+name: rec-fixture-my
+services:
+  app:
+    container_name: rec-fixture-my-app
+    # la imagen la construye build.sh (con red); aquí solo se ejecuta
+    image: localhost/recover/fixture-my:sandbox
+    environment:
+      DATABASE_URL: mysql://stock:stock@stock-db:3306/stock
+      NODE_V8_COVERAGE: /coverage
+      RECOVER_ROUTES_OUT: /coverage/keel-recover-routes.json
+      NODE_OPTIONS: --require /recover/v8-coverage-exit.cjs --require /recover/express-routes.cjs
+    volumes: ["cov:/coverage", "./instrument:/recover:ro,Z"]
+    networks: { sandbox: { aliases: [stock] } }
+    depends_on: [stock-db]
+  stock-db:
+    # mysql 8.0.26, la de su CI (.github/workflows/ci.yml) y la de show-ticketing (M0). El servidor, como el de
+    # producción del legacy: en -05:00 y con el sql_mode de 5.6 (sin NO_ZERO_DATE ni STRICT_TRANS_TABLES), que es
+    # lo que admite las fechas cero del esquema.
+    container_name: rec-fixture-my-db
+    image: docker.io/library/mysql:8.0.26@sha256:882e55f40d61034a2bb8a1abab1353571ad2a33866f382350788eb34740528b5
+    command: ["--default-time-zone=-05:00", "--sql-mode=NO_ENGINE_SUBSTITUTION"]
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: stock
+      MYSQL_USER: stock
+      MYSQL_PASSWORD: stock
+    # el esquema y los datos de partida los trae el repo y la app no los crea: se cargan al iniciar la base
+    volumes: ["../repo/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro,Z"]
+    networks: { sandbox: { aliases: [stock-db] } }
+  tool:
+    container_name: rec-fixture-my-tool
+    image: docker.io/curlimages/curl:8.10.1@sha256:fcff5cf7a4b895da7bd2933c914938db2b05d2113fa0d6c55b6d29930408f661
+    command: ["sleep", "infinity"]
+    networks: [sandbox]
+networks:
+  sandbox: { internal: true }
+volumes:
+  cov: {}

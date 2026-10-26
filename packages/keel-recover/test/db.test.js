@@ -261,9 +261,24 @@ test('mysql: snapshot con mysqldump sin tablespaces a un archivo, y restauració
   assert.equal(s.where, 'db1:/tmp/recover-snapshot.sql');
   assert.deepEqual(rt.sent.at(-1).args.slice(3), ['mysqldump', '-u', 'flab', '--single-transaction', '--routines', '--triggers', '--no-tablespaces', '--set-gtid-purged=OFF', '--result-file=/tmp/recover-snapshot.sql', 'show']);
   my.restoreSnapshot(rt, 'db1', { name: 'show', user: 'flab' });
-  assert.match(rt.sent.at(-1).sql, /\nsource \/tmp\/recover-snapshot\.sql\n$/);
+  assert.match(rt.sent.at(-1).sql, /\nset session lock_wait_timeout = 20;\nsource \/tmp\/recover-snapshot\.sql\n$/, 'con tope: el metadata lock esperaría un año (M-01)');
   const failing = { exec: () => ({ status: 1, stdout: '', stderr: "ERROR 1146 (42S02) at line 2 in file: '/tmp/recover-snapshot.sql'" }) };
   assert.match(my.restoreSnapshot(failing, 'db1', { name: 'show' }).error, /la restauración de \/tmp\/recover-snapshot\.sql falló: ERROR 1146/);
+});
+
+test('mysql: una transacción abierta retiene la tabla y la restauración sale en rojo con quién la tiene (M-01)', () => {
+  // grabado de fixtures/sandbox/node-mysql: una sesión con un SELECT dentro de una transacción abierta
+  const locked = (open) => ({
+    exec: (c, args, opts) =>
+      /source/.test(opts.input)
+        ? { status: 1, stdout: '', stderr: "ERROR 1205 (HY000) at line 22 in file: '/tmp/recover-snapshot.sql': Lock wait timeout exceeded; try restarting transaction" }
+        : { status: 0, stdout: open, stderr: '' },
+  });
+  const r = my.restoreSnapshot(locked('32\troot\tlocalhost\t11\n'), 'db1', { name: 'stock' });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /esperó 20 s el metadata lock de una tabla y no lo obtuvo: una transacción abierta la retiene \(sesión 32 de root@localhost, abierta hace 11 s\)/);
+  assert.match(r.error, /a medias: cuando se cierre, vuelve a restaurar \(ERROR 1205/);
+  assert.match(my.restoreSnapshot(locked(''), 'db1', { name: 'stock' }).error, /sin ninguna en innodb_trx: un LOCK TABLES o una sesión sobre MyISAM/);
 });
 
 test('mysql: la introspección grabada lleva motor, collation, AUTO_INCREMENT, FK con su acción, índices y estados', () => {

@@ -4,8 +4,9 @@
 //   - El snapshot es `mysqldump --single-transaction --no-tablespaces` y la restauración `source` de ese
 //     archivo: funcionan con la app conectada (sesiones ociosas del pool) y devuelven AUTO_INCREMENT, el
 //     consumido por una escritura fallida incluido. Sin `--no-tablespaces`, el usuario de la app (sin el
-//     privilegio PROCESS) no puede volcar. Con una transacción abierta, sin medir (M-01: ese legacy no abre
-//     ninguna).
+//     privilegio PROCESS) no puede volcar. Con una transacción abierta sobre una tabla, el DROP TABLE del
+//     volcado espera su metadata lock (M-01, medido con fixtures/sandbox/node-mysql): la restauración lleva un
+//     tope y sale en rojo con quién la retiene.
 //   - La huella es la del CONTENIDO más el AUTO_INCREMENT de cada tabla, y el contador se lee con
 //     `information_schema_stats_expiry = 0`: por defecto information_schema lo cachea un día y la huella no
 //     vería la inserción (el mismo problema que pg_stat en PostgreSQL 9.4).
@@ -14,7 +15,9 @@
 //   - Una fila es una línea de JSON_OBJECT en orden de la clave primaria, con `-r`: `-B` solo reescapa las
 //     barras del JSON y lo deja inválido. DECIMAL va a texto (como número JSON pierde la escala), el
 //     binario a hex (JSON_OBJECT lo da como "base64:type15:…") y DATETIME/TIMESTAMP a la forma ISO que da
-//     PostgreSQL, con la sesión en UTC.
+//     PostgreSQL, con la sesión en UTC. Las fechas cero salen como texto literal ("0000-00-00",
+//     "0000-00-00T00:00:00") y una TIMESTAMP en UTC aunque el servidor corra en otra zona (medido con
+//     fixtures/sandbox/node-mysql: el servidor en -05:00 y con el sql_mode de 5.6).
 //
 // El SQL va por stdin y la contraseña por entorno (`MYSQL_PWD`): el cliente de contenedores se come las
 // comillas de la línea de comandos. Sin credenciales en la sección `database` (sandbox.yaml), se entra con
@@ -162,14 +165,35 @@ export function hasSnapshot(rt, c) {
 export const NO_SNAPSHOT = (c, sandboxRel) =>
   `no hay snapshot en ${c}:${SNAPSHOT_FILE} (se pierde al recrear el sandbox): vuelve a pasar keel-recover verify ${sandboxRel} --no-up`;
 
+// Cuánto espera cada DROP TABLE del volcado el metadata lock de su tabla. El de MySQL es un año: con una
+// transacción abierta sobre la tabla (de la app o de otra sesión), la restauración se quedaría colgada (M-01,
+// medido con fixtures/sandbox/node-mysql). Una restauración normal tarda segundos.
+export const RESTORE_LOCK_WAIT_SECONDS = 20;
+
+// Las transacciones abiertas, con quién las tiene y desde hace cuánto: el motivo de una restauración que no
+// consigue el metadata lock.
+export const OPEN_TRANSACTIONS_SQL = `select t.trx_mysql_thread_id, coalesce(p.user, ''), coalesce(p.host, ''), timestampdiff(second, t.trx_started, now())
+  from information_schema.innodb_trx t left join information_schema.processlist p on p.id = t.trx_mysql_thread_id order by t.trx_started;`;
+
 /**
  * Vuelve la base al snapshot: el volcado borra y recrea cada tabla con sus filas y su AUTO_INCREMENT. El
  * cliente lo lee dentro del contenedor (`source`) y en modo batch para en el primer error. Una tabla que la
- * sonda creara fuera del volcado sobreviviría, pero la huella de después la delata.
+ * sonda creara fuera del volcado sobreviviría, pero la huella de después la delata. Si una transacción abierta
+ * retiene una tabla, sale en rojo a los RESTORE_LOCK_WAIT_SECONDS con quién la tiene, en vez de colgarse.
  */
 export function restoreSnapshot(rt, c, database) {
-  const r = mysql(rt, c, database, `source ${SNAPSHOT_FILE}\n`);
-  return r.ok ? { ok: true } : { ok: false, error: `la restauración de ${SNAPSHOT_FILE} falló: ${r.error}` };
+  const r = mysql(rt, c, database, `set session lock_wait_timeout = ${RESTORE_LOCK_WAIT_SECONDS};\nsource ${SNAPSHOT_FILE}\n`);
+  if (r.ok) return { ok: true };
+  if (!/ERROR 1205\b/.test(r.error)) return { ok: false, error: `la restauración de ${SNAPSHOT_FILE} falló: ${r.error}` };
+  const open = mysql(rt, c, database, OPEN_TRANSACTIONS_SQL);
+  const who = open.ok ? rows(open.out).map(([id, user, host, age]) => `sesión ${id}${user ? ` de ${user}@${host}` : ''}, abierta hace ${age} s`) : [];
+  return {
+    ok: false,
+    error:
+      `la restauración de ${SNAPSHOT_FILE} esperó ${RESTORE_LOCK_WAIT_SECONDS} s el metadata lock de una tabla y no lo obtuvo: una transacción abierta la retiene ` +
+      `(${who.length ? who.join('; ') : 'sin ninguna en innodb_trx: un LOCK TABLES o una sesión sobre MyISAM'}). La base puede haber quedado a medias: ` +
+      `cuando se cierre, vuelve a restaurar (${r.error})`,
+  };
 }
 
 // ── introspección ────────────────────────────────────────────────────────────────────────────

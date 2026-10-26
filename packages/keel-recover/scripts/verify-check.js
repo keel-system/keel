@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // verify-check: la puerta del incremento 3. El juez (keel-recover verify) contra un sandbox REAL
 // del legacy de fixture (fixtures/sandbox/node-mongo: Node + MongoDB, cobertura v8; con
-// --database=postgresql, su gemelo fixtures/sandbox/node-postgres), tal cual y saboteado. Cada sabotaje rompe el sandbox conservando su forma, y verify tiene que salir en rojo
+// --database=postgresql o --database=mysql, sus gemelos fixtures/sandbox/node-postgres y node-mysql), tal cual
+// y saboteado. Cada sabotaje rompe el sandbox conservando su forma, y verify tiene que salir en rojo
 // con EXACTAMENTE el criterio que lo mide:
 //
 //   egress     la red del compose sin `internal: true`        → VER-NET-INTERNAL (y no se arranca)
@@ -13,7 +14,16 @@
 //   trace      sandbox.yaml cree que la app escribe en otra
 //              base: la escritura responde 201 y no deja rastro → VER-DB-TRACE
 //
-//   npm run verify-check --workspace packages/keel-recover [-- --only=<id>] [-- --keep] [-- --database=postgresql]
+// Con --database=mysql, uno más y las medidas de la fixture:
+//
+//   cached-counter  la huella lee el AUTO_INCREMENT de information_schema sin
+//                   information_schema_stats_expiry = 0: en caché, no ve
+//                   la escritura (M-02)                          → VER-DB-TRACE
+//   base            además, tras el juez en verde, las medidas de scripts/mysql-measures.js
+//                   (ENUM, CHECK, fecha cero, TIMESTAMP en otra zona, ON UPDATE, MyISAM y trigger,
+//                   y la restauración con una transacción abierta, M-01), todas en verde
+//
+//   npm run verify-check --workspace packages/keel-recover [-- --only=<id>] [-- --keep] [-- --database=postgresql|mysql]
 //
 // Necesita podman o docker, y red para construir la imagen y bajar las de la base y la herramienta.
 import fs from 'node:fs';
@@ -28,6 +38,9 @@ import { envDeps } from '../src/lib/env-deps.js';
 import { loadSandbox } from '../src/lib/sandbox.js';
 import { containerRuntime, exec, resolveRuntime } from '../src/lib/containers.js';
 import { verify } from '../src/lib/verify.js';
+import { databaseAdapter } from '../src/lib/db/index.js';
+import { clientArgs } from '../src/lib/db/mysql.js';
+import { mysqlMeasures } from './mysql-measures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, '..');
@@ -36,6 +49,8 @@ const FIXTURES = {
   mongodb: { dir: 'node-mongo', project: 'rec-fixture', prefix: 'rec-fixture', urlEnv: 'MONGO_URL', nowhere: 'mongodb://nowhere:27017', otherDb: 'stock_legacy_old' },
   // la base equivocada existe (la de mantenimiento de PostgreSQL): la del sandbox responde, pero vacía
   postgresql: { dir: 'node-postgres', project: 'rec-fixture-pg', prefix: 'rec-fixture-pg', urlEnv: 'DATABASE_URL', nowhere: 'postgres://postgres:postgres@nowhere:5432/stock', otherDb: 'postgres' },
+  // la base equivocada es sys: existe, la herramienta entra como root, y su única tabla no cambia
+  mysql: { dir: 'node-mysql', project: 'rec-fixture-my', prefix: 'rec-fixture-my', urlEnv: 'DATABASE_URL', nowhere: 'mysql://stock:stock@nowhere:3306/stock', otherDb: 'sys' },
 };
 const database = process.argv.find((a) => a.startsWith('--database='))?.split('=')[1] ?? 'mongodb';
 const fx = FIXTURES[database];
@@ -95,6 +110,30 @@ const SCENARIOS = [
       s.database.name = fx.otherDb;
     },
   },
+  // La huella que una implementación ingenua leería: el contador y las filas de information_schema.tables, con la
+  // caché de un día por defecto. Además de salir en rojo, la lectura fresca de los mismos números tiene que cambiar:
+  // el rojo es de la caché, no de una escritura que no llegó.
+  {
+    id: 'cached-counter',
+    only: 'mysql',
+    red: ['VER-DB-TRACE'],
+    adapter: (dba) => {
+      const sql = 'select table_name, auto_increment, table_rows from information_schema.tables where table_schema = database() order by 1;';
+      const readings = [];
+      const read = (rt, c, db, fresh) => rt.exec(c, clientArgs(db, 'mysql', ['-N', '-B', db.name]), { input: (fresh ? 'set session information_schema_stats_expiry = 0;\n' : '') + sql }).stdout;
+      dba.fingerprint = (rt, c, db) => {
+        const cached = read(rt, c, db, false);
+        readings.push({ cached, fresh: read(rt, c, db, true) });
+        return { ok: true, value: cached };
+      };
+      return () => {
+        const [before, after] = readings.slice(-2);
+        const ok = before.cached === after.cached && before.fresh !== after.fresh;
+        console.log(`  contador en caché ${before.cached === after.cached ? 'igual' : 'distinto'} y fresco ${before.fresh !== after.fresh ? 'distinto' : 'igual'} tras la escritura`);
+        return ok;
+      };
+    },
+  },
 ];
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-recover-verify-'));
@@ -122,7 +161,9 @@ if (build.status !== 0) {
 }
 
 const results = [];
-for (const sc of SCENARIOS.filter((s) => !only || s.id === only)) {
+const dba = databaseAdapter(database);
+const pristineFingerprint = dba.fingerprint;
+for (const sc of SCENARIOS.filter((s) => (!only || s.id === only) && (!s.only || s.only === database))) {
   console.log(`\n── ${sc.id}`);
   fs.writeFileSync(composeFile, pristineCompose);
   fs.writeFileSync(sandboxFile, pristineSandbox);
@@ -137,6 +178,8 @@ for (const sc of SCENARIOS.filter((s) => !only || s.id === only)) {
     fs.writeFileSync(sandboxFile, YAML.stringify(s));
   }
   down();
+  dba.fingerprint = pristineFingerprint;
+  const sabotaged = sc.adapter ? sc.adapter(dba) : null;
   const sandbox = loadSandbox(sandboxFile);
   if (sandbox.errors.length) throw new Error(sandbox.errors.join('; '));
   const report = await verify(sandbox, rt, { log: (c) => console.log(`  ${c.ok ? 'OK   ' : c.skipped ? '·    ' : 'ROJO '} ${c.id}  ${c.detail}`) });
@@ -150,6 +193,12 @@ for (const sc of SCENARIOS.filter((s) => !only || s.id === only)) {
     const h = exec(runtime, ['exec', `${fx.prefix}-tool`, 'curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', 'http://stock:4000/health']).stdout.trim();
     console.log(`  /health del legacy: ${h}`);
     ok = ok && h === '200';
+  }
+  if (sabotaged) ok = ok && sabotaged();
+  if (sc.id === 'base' && database === 'mysql' && report.snapshot?.ok) {
+    const measures = await mysqlMeasures({ rt, db: `${fx.prefix}-db`, tool: `${fx.prefix}-tool`, base: sandbox.spec.app.base, database: sandbox.spec.database, adapter: dba, snapshotHash: report.snapshot.hash });
+    for (const m of measures) console.log(`  ${m.ok ? 'OK   ' : 'ROJO '} ${m.id}  ${m.detail}`);
+    ok = ok && measures.every((m) => m.ok);
   }
   results.push({ id: sc.id, ok, red });
   console.log(`  ${ok ? '✓' : '✗'} ${sc.id}: rojo en [${red.join(', ')}], se esperaba [${sc.red.join(', ')}]`);

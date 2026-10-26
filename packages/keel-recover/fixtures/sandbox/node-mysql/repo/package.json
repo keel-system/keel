@@ -1,0 +1,13 @@
+{
+  "name": "stock-legacy-mysql",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "4.21.1",
+    "mysql2": "3.11.3"
+  }
+}
