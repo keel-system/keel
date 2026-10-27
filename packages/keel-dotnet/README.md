@@ -6,6 +6,8 @@ keel-spring, keel-nest o keel-dotnet servidores equivalentes** — mismo contrat
 eventos, mismas tablas, misma operación.
 
 ```bash
+npm i -g @keel-system/keel-dotnet   # comando `keel-dotnet`
+
 keel-dotnet check specs/<servicio>   # opcional: no escribe nada, dice si el diseño es generable
 keel-dotnet build specs/<servicio>   # desde el workspace de diseño; el diseñador elige el stack a mano
 cd services/<servicio>-dotnet

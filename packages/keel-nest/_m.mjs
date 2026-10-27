@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { loadService } from 'keel-core';
-import { buildModel } from 'keel-core/gen/model';
+import { loadService } from '@keel-system/keel-core';
+import { buildModel } from '@keel-system/keel-core/gen/model';
 import { TS_PROJECTION } from './src/lib/ts-projection.js';
 const dir = process.argv[2];
 const { manifest, layers } = loadService(dir);

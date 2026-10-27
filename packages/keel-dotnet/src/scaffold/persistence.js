@@ -42,8 +42,8 @@ import {
   LOCK_VERSION,
   AUDIT_COLUMNS,
   DECIMAL_PRECISION
-} from 'keel-core/gen';
-import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
+} from '@keel-system/keel-core/gen';
+import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
 import { enumMember } from '../lib/cs-projection.js';
 import { IDEMPOTENCY_ROW, usesRequestIdempotency } from './request-idempotency.js';
 import { storeRows, storeSchemaNames } from './messaging-stores.js';

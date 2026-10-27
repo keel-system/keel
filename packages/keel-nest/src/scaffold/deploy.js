@@ -1,6 +1,6 @@
 // Contenedorización del servicio para PRUEBAS MANUALES del diseñador (`deploy/`, incremento 14d de PLAN-KEEL-NEST.md).
 //
-// Es el `deploy/` NEUTRAL de `keel-core/gen/deploy.js`, el mismo que genera keel-spring para el mismo diseño: la
+// Es el `deploy/` NEUTRAL de `@keel-system/keel-core/gen/deploy.js`, el mismo que genera keel-spring para el mismo diseño: la
 // infraestructura, el colector y el backend de telemetría, el realm de Keycloak, el environment de Postman y los
 // scripts up.sh/down.sh. Lo de esta plataforma:
 //
@@ -11,8 +11,8 @@
 //     ve quien pide el token es localhost:8180; el que alcanza la app, keycloak:8080);
 //   · `/readyz` como sonda de up.sh, y las sondas como URLs propias (no hay actuator ni Swagger).
 
-import { deployFiles, publishedUrls as neutralPublishedUrls, postmanEnvironmentPath } from 'keel-core/gen/deploy';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
+import { deployFiles, publishedUrls as neutralPublishedUrls, postmanEnvironmentPath } from '@keel-system/keel-core/gen/deploy';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { NODE_VERSION } from '../lib/assets.js';
 import { LOCAL_API_KEY, LOCAL_CORS_ORIGINS, localClientApiKey } from './security.js';
 

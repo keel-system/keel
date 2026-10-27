@@ -17,10 +17,10 @@
 // Lo que NO genera: la lógica de los casos de uso (cuándo se llama al puerto y qué transición aplica cada handler), que
 // es del diseño y la escribe el agente con la skill de la pasarela.
 
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, paymentIdempotencyKey, savedMethodIdempotencyKey, SAVED_METHOD_SEPARATOR } from 'keel-core/gen/payment-gateways';
-import { PAYMENT_SWEEP_PARAMETERS } from 'keel-core/gen/payments-model';
-import { paymentsYaml } from 'keel-core/gen/payments-config';
-import { UNREACHABLE_BASE_URL } from 'keel-core/gen/infra-catalog';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, paymentIdempotencyKey, savedMethodIdempotencyKey, SAVED_METHOD_SEPARATOR } from '@keel-system/keel-core/gen/payment-gateways';
+import { PAYMENT_SWEEP_PARAMETERS } from '@keel-system/keel-core/gen/payments-model';
+import { paymentsYaml } from '@keel-system/keel-core/gen/payments-config';
+import { UNREACHABLE_BASE_URL } from '@keel-system/keel-core/gen/infra-catalog';
 import { enumMember } from '../lib/cs-projection.js';
 import { csFile, csString, located, namespaceOf, solution } from './render.js';
 import { componentType, messageComponents, messageNamespace } from './services.js';

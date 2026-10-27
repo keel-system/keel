@@ -38,13 +38,13 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { makeWorkspace, mountDesign, runCommand, variantStack, CS_VARIANTS, DOTNET_READY_DESIGN, FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { planService } from '../src/scaffold/index.js';
 import { solution } from '../src/scaffold/render.js';
 import { build } from '../src/commands/build.js';
 import { licenseProblems, verifiedLicense } from '../src/lib/dotnet-stack.js';
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const keep = process.argv.includes('--keep');

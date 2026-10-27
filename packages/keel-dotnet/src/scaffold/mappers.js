@@ -9,7 +9,7 @@
 // la entidad lo admite null y el DTO no— sale como `Todo.Value<T>(...)`, que COMPILA y falla en ejecución
 // nombrando el campo, en vez de inventar un valor.
 
-import { isPublicBucket } from 'keel-core/gen';
+import { isPublicBucket } from '@keel-system/keel-core/gen';
 import { domainMembers } from './entities.js';
 import { csFile, csLocal, csMember, csString, declType, entityPlace, isNullable, located, namespaceOf, typeUsings } from './render.js';
 import { FILE_STORAGE_PORT, bucketConstant, storageNamespace } from './storage.js';

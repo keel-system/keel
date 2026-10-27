@@ -1,10 +1,10 @@
 // Lo saliente que EMITE keel-spring es lo que declara keel-core, para que el servidor de keel-nest del
 // mismo diseño haga lo mismo:
 //
-//   · la resiliencia (`keel-core/gen/outbound-resilience.js`): qué reintenta el retry, qué cuenta el
+//   · la resiliencia (`@keel-system/keel-core/gen/outbound-resilience.js`): qué reintenta el retry, qué cuenta el
 //     circuito, qué atiende el fallback y con qué números, en el YAML de resilience4j y en las
 //     sobrecargas del adaptador;
-//   · el almacén de la reconciliación (`keel-core/gen/reconciliation-stores.js`): la tabla
+//   · el almacén de la reconciliación (`@keel-system/keel-core/gen/reconciliation-stores.js`): la tabla
 //     `reconciliation_claim` —nombre, columnas, cota, clave e índice— en las dos ramas, y los
 //     parámetros del barrido y de su purga —clave, variable y default— en el YAML de cada perfil y en
 //     el respaldo de los @Value.
@@ -16,15 +16,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { loadService } from 'keel-core';
-import { PROVIDER_FAILURES, fallbackFailures, recordedFailures, resiliencePolicy } from 'keel-core/gen/outbound-resilience';
+import { loadService } from '@keel-system/keel-core';
+import { PROVIDER_FAILURES, fallbackFailures, recordedFailures, resiliencePolicy } from '@keel-system/keel-core/gen/outbound-resilience';
 import {
   RECONCILIATION_CLAIM,
   RECONCILIATION_PURGE,
   reconciledActivations,
   reconciliationClaimDocumentId,
   reconciliationParameters
-} from 'keel-core/gen/reconciliation-stores';
+} from '@keel-system/keel-core/gen/reconciliation-stores';
 import { buildModel } from '../src/lib/model.js';
 import { exceptionFor, ignoredExceptions, providerFailures } from '../src/lib/outbound-failures.js';
 import { planService } from '../src/scaffold/index.js';

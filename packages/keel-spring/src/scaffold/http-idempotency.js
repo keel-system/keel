@@ -17,10 +17,10 @@
 // entrega de la cabecera al handler. Lo que escribe el agente es el uso dentro
 // del handler, guiado por conventions/mapping.md.
 
-import { FRAMEWORK_ERRORS } from 'keel-core';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
-import { idempotencyOutcomeCodes } from 'keel-core/gen';
-import { IDEMPOTENCY_RECORD_PURGE } from 'keel-core/gen/request-idempotency';
+import { idempotencyOutcomeCodes } from '@keel-system/keel-core/gen';
+import { IDEMPOTENCY_RECORD_PURGE } from '@keel-system/keel-core/gen/request-idempotency';
 import { javaFile, javaPath, subPackage } from './render.js';
 
 const PORT_PKG = 'domain.idempotency';

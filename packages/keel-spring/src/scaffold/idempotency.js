@@ -9,7 +9,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
-import { PROCESSED_EVENT_PURGE, usesMessageDeduplication } from 'keel-core/gen/messaging-stores';
+import { PROCESSED_EVENT_PURGE, usesMessageDeduplication } from '@keel-system/keel-core/gen/messaging-stores';
 
 const IDEMPOTENCY_PKG = 'infrastructure.messaging.idempotency';
 

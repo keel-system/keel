@@ -23,7 +23,7 @@ import {
   deadLetterSubscriptions,
   publishedDestination,
   subscriptionDestination,
-  usesDeadLetter, subscriptionGroupId } from 'keel-core/gen';
+  usesDeadLetter, subscriptionGroupId } from '@keel-system/keel-core/gen';
 import { needsMessagingProvisioning } from './messaging-provisioning.js';
 import {
   setStateScript,
@@ -35,7 +35,7 @@ import {
   clearAbandonedScript,
   CLOCK,
   PRINT_WRAPPER
-} from 'keel-core/gen/mongo-probes';
+} from '@keel-system/keel-core/gen/mongo-probes';
 import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens } from './auth-provisioning.js';
 // La forma de la tabla y el SQL con el que el arnés fabrica la precondición del rescate:
 // fuente única con scripts/claim-check.js, que ejecuta AMBOS contra el motor junto al reclamo
@@ -43,7 +43,7 @@ import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens } from '.
 // copia — se vio rompiendo esto a propósito y viendo el check seguir en verde.
 import { stallSql, missingClockCountSql, rescueShape } from '../lib/claim-probes.js';
 import { declaresIdempotency } from './http-idempotency.js';
-import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from 'keel-core/gen/junit-scoring';
+import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from '@keel-system/keel-core/gen/junit-scoring';
 import { KAFKA_LOCAL_PRODUCER_TIMEOUTS } from './config.js';
 // Fuente única de los comandos de broker: lo que se emite aquí es lo mismo que
 // `scripts/broker-check.js` ejecuta contra los brokers reales.
@@ -70,8 +70,8 @@ import {
   shellQuote,
   UNKNOWN_TOPIC
 } from '../lib/broker-probes.js';
-import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
-import { PROBE_BODY_FILE } from 'keel-core/gen/broker-probes';
+import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenarios';
+import { PROBE_BODY_FILE } from '@keel-system/keel-core/gen/broker-probes';
 
 // El reset por script existe con las mismas condiciones con las que docker.js lo
 // genera: una BD con cliResetCmd, una caché que vaciar, o destinos de mensajería
@@ -4024,7 +4024,7 @@ function bodyFileHelper(model) {
 // y son cláusulas que importan — distinguen «el duplicado se frenó con una guarda» de
 // «el duplicado reventó y el broker lo apartó», que desde el estado propio se ven igual.
 //
-// El destino sale de `keel-core/gen` (dead-letter.js), el mismo sitio del que lo toman la topología
+// El destino sale de `@keel-system/keel-core/gen` (dead-letter.js), el mismo sitio del que lo toman la topología
 // y `broker-check`: si el arnés leyera un nombre compuesto aquí, un día leería una cola
 // distinta de la que el servicio alimenta y la aserción negativa saldría verde sin
 // haber mirado nada.

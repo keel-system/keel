@@ -1,11 +1,11 @@
 import pc from 'picocolors';
-import { gateDesign } from 'keel-core/gen/design-gate';
-import { readDesignGaps } from 'keel-core/gen/design-gaps';
+import { gateDesign } from '@keel-system/keel-core/gen/design-gate';
+import { readDesignGaps } from '@keel-system/keel-core/gen/design-gaps';
 import { SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { planService } from '../scaffold/index.js';
-import { gatewayCoverage } from 'keel-core/gen/payment-gateways';
-import { PAYMENT_GATEWAYS } from 'keel-core/gen/infra-catalog';
+import { gatewayCoverage } from '@keel-system/keel-core/gen/payment-gateways';
+import { PAYMENT_GATEWAYS } from '@keel-system/keel-core/gen/infra-catalog';
 
 /**
  * La pasada en seco: el mismo tronco que `build` —la puerta del diseño y `planService`— sin

@@ -10,10 +10,10 @@
 //   · ejecutado por archivo, mongosh NO imprime el valor de la última expresión: sin el envoltorio
 //     `print(...)` un countDocuments devuelve cadena vacía, y la cadena vacía se parece a un cero.
 
-import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { PRINT_WRAPPER, CLOCK, setStateScript, ageClockScript, holdClockScript, missingClockCountScript } from 'keel-core/gen/mongo-probes';
-import { rescueProbes } from 'keel-core/gen';
-import { documentShape } from 'keel-core/gen/document';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { PRINT_WRAPPER, CLOCK, setStateScript, ageClockScript, holdClockScript, missingClockCountScript } from '@keel-system/keel-core/gen/mongo-probes';
+import { rescueProbes } from '@keel-system/keel-core/gen';
+import { documentShape } from '@keel-system/keel-core/gen/document';
 import { tsString } from './render.js';
 import { usesDocument } from './persistence-entities.js';
 

@@ -10,7 +10,7 @@ import { DOTNET_RUNTIME, telemetryNamespace, usesTelemetry } from './telemetry.j
 import { usesRelational } from './persistence.js';
 import { poolMeter } from './relational-engine.js';
 import { DOTNET_OBSERVABILITY } from './observability-assets.js';
-import { observabilityAssets } from 'keel-core/gen/observability-assets';
+import { observabilityAssets } from '@keel-system/keel-core/gen/observability-assets';
 import { parse as parseYaml } from 'yaml';
 
 const PROMQL_WORDS = new Set(['sum', 'max', 'min', 'rate', 'by', 'le', 'histogram_quantile', 'clamp_min', 'max_over_time', 'irate', 'avg', 'count', 'without', 'on']);

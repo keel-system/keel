@@ -7,8 +7,8 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, domainTypeImport, capitalize } from './entities.js';
 import { jpaMembers, backReferenceTo, JPA_PKG } from './persistence-entities.js';
-import { idBatchReason, listedIdQueries } from 'keel-core/gen/ref-targets';
-import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
+import { idBatchReason, listedIdQueries } from '@keel-system/keel-core/gen/ref-targets';
+import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
 import { refIdJava } from './persistence-members.js';
 import { pluralize } from '../lib/naming.js';
 import * as claim from './claim.js';
@@ -17,7 +17,7 @@ import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
 import { entityFinders, finderFields, jpaFinderMethods, likePatternHelper, portFinderMethods } from './finders.js';
 import { partialUniqueIndexes } from './persistence-members.js';
-import { collectInternalEntities, keyShadow, naturalKeyBatchReason, uniqueFields } from 'keel-core/gen/relational';
+import { collectInternalEntities, keyShadow, naturalKeyBatchReason, uniqueFields } from '@keel-system/keel-core/gen/relational';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';

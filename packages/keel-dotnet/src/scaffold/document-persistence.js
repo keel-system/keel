@@ -21,12 +21,12 @@
 //
 // El perfil `test` no tiene base de datos, como en la rama relacional.
 
-import { constraintErrors, declaredConcurrencyError, CONCURRENT_MODIFICATION_MESSAGE, UNKNOWN_INTEGRITY_MESSAGE, TRANSACTION_TIMEOUT_MESSAGE } from 'keel-core/gen';
-import { WRITE_CONFLICT_ATTEMPTS } from 'keel-core/gen/transactions';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { documentIndexes, documentValueObjects, exportIndexesScript } from 'keel-core/gen/document';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { envFor } from 'keel-core/gen/runtime-env';
+import { constraintErrors, declaredConcurrencyError, CONCURRENT_MODIFICATION_MESSAGE, UNKNOWN_INTEGRITY_MESSAGE, TRANSACTION_TIMEOUT_MESSAGE } from '@keel-system/keel-core/gen';
+import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { documentIndexes, documentValueObjects, exportIndexesScript } from '@keel-system/keel-core/gen/document';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { envFor } from '@keel-system/keel-core/gen/runtime-env';
 import { enumMember } from '../lib/cs-projection.js';
 import { csFile, csString, located, namespaceOf, typeUsings } from './render.js';
 import { configNamespace } from './config.js';

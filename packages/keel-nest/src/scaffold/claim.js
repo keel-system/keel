@@ -17,12 +17,12 @@
 // Qué reclama cada barrido, en qué orden y de qué claves salen el lote y el plazo lo decide keel-core
 // (`operation.claim[]`, `claimOrderField`, `sweepConfig`): las mismas decisiones que en keel-spring.
 
-import { claimOrderField, claimsForEntity, screamingSnake, sweepClaims, sweepConfig } from 'keel-core/gen';
+import { claimOrderField, claimsForEntity, screamingSnake, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { engineOf, ormClass, usesPersistence } from './persistence-entities.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
-import { envWithDefault } from 'keel-core/gen/profile-values';
-import { needsReadCommitted } from 'keel-core/gen/infra-catalog';
+import { envWithDefault } from '@keel-system/keel-core/gen/profile-values';
+import { needsReadCommitted } from '@keel-system/keel-core/gen/infra-catalog';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 export const SWEEP_SETTINGS_TS = 'src/infrastructure/persistence/sweep-settings.ts';

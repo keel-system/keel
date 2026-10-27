@@ -1,7 +1,7 @@
 // README del proyecto generado: de dónde sale, cómo se arranca y qué falta. Pensado también para quien
 // no conoce .NET: cada comando dice qué hace.
 
-import { describeStack } from 'keel-core/gen/stack';
+import { describeStack } from '@keel-system/keel-core/gen/stack';
 import { SKILL } from '../lib/assets.js';
 import { solution } from './render.js';
 import { postmanEnvironmentPath, publishedUrls } from './deploy.js';

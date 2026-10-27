@@ -5,9 +5,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
-import { ERROR_BASES } from 'keel-core/gen/error-bases';
+import { loadService } from '@keel-system/keel-core';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
+import { ERROR_BASES } from '@keel-system/keel-core/gen/error-bases';
 import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
 import { apiCases as nestApiCases } from '../../keel-nest/src/scaffold/api-tests.js';
 import { apiCases } from '../src/scaffold/api-tests.js';

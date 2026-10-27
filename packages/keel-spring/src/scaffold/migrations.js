@@ -17,7 +17,7 @@
 import { uniqueConstraints } from './persistence-entities.js';
 import { crossAggregateForeignKeys } from './persistence-members.js';
 import { sqlContract } from './conditional-uniqueness.js';
-import { partialIndexSpecs, sqlLiteral, discriminatorColumn } from 'keel-core/gen/relational';
+import { partialIndexSpecs, sqlLiteral, discriminatorColumn } from '@keel-system/keel-core/gen/relational';
 
 const MIGRATIONS_DIR = 'src/main/resources/db/migration';
 const BASELINE_SQL = 'build/schema/baseline.sql';

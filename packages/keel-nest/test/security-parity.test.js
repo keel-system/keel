@@ -14,7 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planService as planNest } from '../src/scaffold/index.js';
 import { transpileTree } from './helpers/emitted.js';

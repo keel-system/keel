@@ -25,7 +25,7 @@
 // `notification-mailer-mongo` pasó en verde con el mismo diseño.
 
 import { partialUniqueIndexes } from './persistence-members.js';
-import { relievingOperations as neutralRelieving } from 'keel-core/gen/relational';
+import { relievingOperations as neutralRelieving } from '@keel-system/keel-core/gen/relational';
 import { occupantFinders } from './repositories.js';
 
 /** Las entidades cuyo diseño declara al menos una unicidad condicionada. */

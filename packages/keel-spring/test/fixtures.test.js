@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateService } from 'keel-core';
+import { validateService } from '@keel-system/keel-core';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const fixturesDir = path.join(FIXTURES_DIR);

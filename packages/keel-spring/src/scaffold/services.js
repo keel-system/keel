@@ -5,14 +5,14 @@
 // donde el agente implementa la lógica. Los handlers dependen del PUERTO de
 // dominio (domain/repository) y del mapper de aplicación, nunca del JPA.
 
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { textFilterNotes } from 'keel-core/gen/text-filters';
-import { finderNote } from 'keel-core/gen/query-filters';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
+import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
-import { listedIdsNote } from 'keel-core/gen/ref-targets';
-import { inverseCollectionsNote } from 'keel-core/gen/inverse-collections';
-import { uploadNotes } from 'keel-core/gen/buckets';
-import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
+import { listedIdsNote } from '@keel-system/keel-core/gen/ref-targets';
+import { inverseCollectionsNote } from '@keel-system/keel-core/gen/inverse-collections';
+import { uploadNotes } from '@keel-system/keel-core/gen/buckets';
+import { effectiveErrorCode } from '@keel-system/keel-core/gen/declared-errors';
 import {
   idempotencyOutcomeCode,
   declaredUniquenessErrorFor,
@@ -24,7 +24,7 @@ import {
   entryGateNote,
   ownershipNotes,
   usesEntryGate
-} from 'keel-core/gen';
+} from '@keel-system/keel-core/gen';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { kebabCase } from '../lib/naming.js';
 import { INTERFACES_PKG, ANNOTATIONS_PKG, MEDIATOR_PKG } from './mediator.js';
@@ -32,11 +32,11 @@ import { domainTypeImport } from './entities.js';
 import { refTargetsOf } from './ref-resolvers.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
 import { claimMechanism } from './claim.js';
-import { cacheNote } from 'keel-core/gen/cache-plan';
+import { cacheNote } from '@keel-system/keel-core/gen/cache-plan';
 import { naturalKeyBatchFinder } from './repositories.js';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 import { callerResolution } from './security.js';
-import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
+import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { rawJsonAnnotations } from './jackson.js';
 
 // Componentes del record mensaje: parámetros de ruta (en el orden del path) +

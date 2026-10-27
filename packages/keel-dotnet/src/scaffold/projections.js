@@ -14,7 +14,7 @@
 // propio —las garantiza su dueño—, así que el proyector construye la copia con el constructor de rehidratación del
 // agregado. No queda TODO en la escritura.
 
-import { occurredAtField } from 'keel-core/gen/replica';
+import { occurredAtField } from '@keel-system/keel-core/gen/replica';
 import { csFile, csLocal, csMember, csString, declType, entityPlace, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 import { domainMembers } from './entities.js';
 import { naturalKeyBatchFinder, naturalKeyFinder, portClass, repositoriesNamespace } from './repositories.js';

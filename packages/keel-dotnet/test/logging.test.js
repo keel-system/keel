@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planService } from '../src/scaffold/index.js';

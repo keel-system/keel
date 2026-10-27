@@ -14,7 +14,7 @@ import { DIRS, capitalize, classPath, decapitalize, entityDir, tsModule } from '
 import { portPath as clientPortPath } from './http-clients.js';
 import { ANNOTATIONS_TS } from './mediator.js';
 import { PORT_DIR, naturalKeyBatchFinder } from './repositories.js';
-import { occurredAtField } from 'keel-core/gen/replica';
+import { occurredAtField } from '@keel-system/keel-core/gen/replica';
 
 const PROJECTION_DIR = 'application/projection';
 

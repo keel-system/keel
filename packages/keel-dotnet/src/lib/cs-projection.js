@@ -11,8 +11,8 @@
 // Las propiedades que esta proyección pone en cada campo son de keel-dotnet: `csType`, `usings` (los
 // namespaces del framework que el tipo necesita) y `elementCsType`. El modelo nunca las nombra.
 
-import { pascalCase, numericConstraints, inheritedFormat, textConstraints, validationRules, elementValidationRules, columnSpec } from 'keel-core/gen';
-import { errorBaseFor } from 'keel-core/gen/error-bases';
+import { pascalCase, numericConstraints, inheritedFormat, textConstraints, validationRules, elementValidationRules, columnSpec } from '@keel-system/keel-core/gen';
+import { errorBaseFor } from '@keel-system/keel-core/gen/error-bases';
 
 const BASE_CS_TYPES = {
   string: { csType: 'string', usings: [] },

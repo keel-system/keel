@@ -13,9 +13,9 @@
 // obligatorio, de keel-core/gen/api-contract.js. Sin class-validator: no vería los tipos del cable
 // (Decimal, bigint) y sus decoradores tendrían que ir en los mensajes de la capa application.
 
-import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
-import { callsPaymentGateway } from 'keel-core/gen/payments-model';
-import { pageableDefaults } from 'keel-core/gen/pagination';
+import { requestShape, returnsLocation, locationTarget } from '@keel-system/keel-core/gen/api-contract';
+import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
+import { pageableDefaults } from '@keel-system/keel-core/gen/pagination';
 import { DIRS, classPath, fieldImports, tsModule, tsdoc, tsString } from './render.js';
 import { ENTRY_GATE_TS, MEDIATOR_TS } from './mediator.js';
 import { entryGateAssignment, messageComponents, messagePath, returnTypeOf, isPartialUpdate } from './services.js';

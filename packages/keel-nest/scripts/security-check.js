@@ -25,8 +25,8 @@ import { spawnSync } from 'node:child_process';
 import { makeWorkspace, mountDesign, runCommand } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { resolveRuntime } from './lib/database-container.js';
-import { loadService } from 'keel-core';
-import { resolveStack, writeStackConfig } from 'keel-core/gen/stack';
+import { loadService } from '@keel-system/keel-core';
+import { resolveStack, writeStackConfig } from '@keel-system/keel-core/gen/stack';
 
 const DESIGN = 'profile-directory';
 const keep = process.argv.includes('--keep');

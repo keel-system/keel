@@ -12,9 +12,9 @@
 // referencia de keel-core) y las tres purgas con su reloj y su configuración (`table-purges.ts`), con las
 // mismas claves, variables y defaults que keel-spring.
 
-import { BATCHED_PURGE, batchedPurgeParameters } from 'keel-core/gen';
-import { OUTBOX_EVENT, OUTBOX_PURGE, PROCESSED_EVENT, PROCESSED_EVENT_PURGE } from 'keel-core/gen/messaging-stores';
-import { IDEMPOTENCY_RECORD, IDEMPOTENCY_RECORD_PURGE } from 'keel-core/gen/request-idempotency';
+import { BATCHED_PURGE, batchedPurgeParameters } from '@keel-system/keel-core/gen';
+import { OUTBOX_EVENT, OUTBOX_PURGE, PROCESSED_EVENT, PROCESSED_EVENT_PURGE } from '@keel-system/keel-core/gen/messaging-stores';
+import { IDEMPOTENCY_RECORD, IDEMPOTENCY_RECORD_PURGE } from '@keel-system/keel-core/gen/request-idempotency';
 import { tsModule, tsString } from './render.js';
 import { usesPersistence, usesDocument } from './persistence-entities.js';
 import { DOCUMENT_PURGE_PREDICATES, documentPurgeMethod } from './document-stores.js';
@@ -23,7 +23,7 @@ import { usesRequestIdempotency } from './request-idempotency.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 import { SCHEDULING_TS } from './scheduling.js';
 import { reconciliationPurge } from './reconciliation-claim.js';
-import { RECONCILIATION_CLAIM } from 'keel-core/gen/reconciliation-stores';
+import { RECONCILIATION_CLAIM } from '@keel-system/keel-core/gen/reconciliation-stores';
 
 const PURGE_DIR = 'src/infrastructure/persistence/purge';
 export const BATCHED_PURGE_TS = `${PURGE_DIR}/batched-purge.ts`;

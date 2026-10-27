@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService, scaffoldService } from '../src/scaffold/index.js';
 import { buildModel } from '../src/lib/model.js';
 import { generate as generateScheduling, scheduledTaskCount } from '../src/scaffold/scheduling.js';

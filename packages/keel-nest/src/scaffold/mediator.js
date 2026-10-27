@@ -20,7 +20,7 @@
 // mismo despacho, y existe igual para que el scheduler (scheduling.js) no pregunte por la capa.
 
 import { DIRS, classPath, tsModule } from './render.js';
-import { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher } from 'keel-core/gen';
+import { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher } from '@keel-system/keel-core/gen';
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
 import { usesPersistence } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
@@ -33,7 +33,7 @@ import { usesCache, mediatorCacheImports } from './cache.js';
 import { usesStorage } from './storage.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
-import { WRITE_CONFLICT_ATTEMPTS } from 'keel-core/gen/transactions';
+import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 // La puerta por la que entra una operación (keel-core/gen/entry-gates.js), junto a los mensajes que la llevan.
@@ -525,7 +525,7 @@ function elapsed(start: number): number {
 }
 
 // Las operaciones internas sin disparador y las que declaran `dispatches` (2.21) las decide keel-core
-// (`keel-core/gen/dispatch.js`), igual para keel-spring: un handler no llama a otro handler.
+// (`@keel-system/keel-core/gen/dispatch.js`), igual para keel-spring: un handler no llama a otro handler.
 export { orphanInternalOperations, usesCommandDispatcher };
 
 function commandDispatcher(model) {

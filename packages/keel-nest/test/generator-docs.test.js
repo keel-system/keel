@@ -3,13 +3,13 @@
 // se rompe en silencio: un asset que existe y nadie instala, un token sin resolver que el agente lee
 // literal, o una doc compartida que cita la ruta de UN harness y miente al que usa el otro.
 
-import { contractDocs } from 'keel-core/gen/contract-docs';
+import { contractDocs } from '@keel-system/keel-core/gen/contract-docs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HARNESSES } from 'keel-core';
+import { HARNESSES } from '@keel-system/keel-core';
 import { AGENTS, CONVENTIONS, CONDITIONAL_CONVENTIONS, GUIDES, DOCS_DIR } from '../src/scaffold/generator-docs.js';
 import { planFixture } from './helpers/emitted.js';
 import { NEST_READY_DESIGN } from './helpers/workspace.js';

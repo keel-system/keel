@@ -17,7 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { FIXTURES_DIR, READY_FIXTURES, mountDesign } from './helpers/workspace.js';
-import { validateService } from 'keel-core';
+import { validateService } from '@keel-system/keel-core';
 import { check } from '../src/commands/check.js';
 
 const fixturesDir = path.join(FIXTURES_DIR);

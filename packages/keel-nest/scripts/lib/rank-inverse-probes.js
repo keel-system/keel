@@ -3,8 +3,8 @@
 // gemelas de `rankProbes` e `inverseFinderProbes` del db-check de keel-dotnet. Se ejecutan dentro del bloque de la
 // raíz, donde `repository` es su adaptador.
 
-import { persistedMembers } from 'keel-core/gen';
-import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
+import { persistedMembers } from '@keel-system/keel-core/gen';
+import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
 import { classPath, DIRS } from '../../src/scaffold/render.js';
 import { freshIdLiteral } from './samples.js';
 

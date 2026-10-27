@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FRAMEWORK_ERRORS } from 'keel-core';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 
 const generatorDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

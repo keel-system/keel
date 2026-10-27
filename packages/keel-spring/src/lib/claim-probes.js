@@ -1,4 +1,4 @@
-import { claimOrderField, rescueShape, stallSql, missingClockCountSql } from 'keel-core/gen';
+import { claimOrderField, rescueShape, stallSql, missingClockCountSql } from '@keel-system/keel-core/gen';
 // Las sentencias del rescate son neutrales: las lanza también el arnés de keel-nest.
 export { rescueShape, stallSql, missingClockCountSql };
 // El Java con el que `claim-check` ejercita el reclamo, y de dónde salen sus nombres.

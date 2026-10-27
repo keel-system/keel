@@ -10,7 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { mappingSubject, hasSubject } from '../src/lib/mapping-probes.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

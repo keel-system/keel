@@ -15,7 +15,7 @@
 //     las mismas que toma keel-spring para el mismo diseño.
 //   · Las purgas (`purge.js`) se registran en el mismo `Scheduling`.
 
-import { scheduledOperations, scheduleCron, scheduleDispatch } from 'keel-core/gen';
+import { scheduledOperations, scheduleCron, scheduleDispatch } from '@keel-system/keel-core/gen';
 import { classPath, tsModule, tsdoc } from './render.js';
 import { ENTRY_GATE_TS, MEDIATOR_TS, MODULE_TS as USE_CASE_MODULE_TS, usesMediator } from './mediator.js';
 import { entryGateAssignment, messageComponents, messagePath } from './services.js';

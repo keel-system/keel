@@ -10,7 +10,7 @@
  * lo mismo. Aquí queda solo la proyección de cada fallo a su excepción de Spring.
  */
 
-import { fallbackFailures, neverRetriedFailures, recordedFailures as recordedFailureKinds, retriedFailures } from 'keel-core/gen/outbound-resilience';
+import { fallbackFailures, neverRetriedFailures, recordedFailures as recordedFailureKinds, retriedFailures } from '@keel-system/keel-core/gen/outbound-resilience';
 
 /**
  * El nombre Java de cada fallo del proveedor. QUÉ fallos atiende el fallback, cuáles cuenta el

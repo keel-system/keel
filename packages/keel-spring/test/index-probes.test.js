@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { resolveStack } from '../src/scaffold/index.js';
 import { generate } from '../src/scaffold/migrations.js';

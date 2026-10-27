@@ -2,12 +2,12 @@
 
 Ingeniería inversa de un servicio existente hacia un diseño [Keel](https://github.com/keel-system/keel). La
 única entrada es el **repo** del legacy, con su historial de git; la herramienta lo lee y **nunca lo
-modifica**. Plan completo y estado, incremento a incremento: [`PLAN-KEEL-RECOVER.md`](../../PLAN-KEEL-RECOVER.md).
+modifica**. Plan completo y estado, incremento a incremento: [`PLAN-KEEL-RECOVER.md`](https://github.com/keel-system/keel/blob/main/PLAN-KEEL-RECOVER.md).
 
 **Lo normal es no llamar a ninguno de estos comandos a mano**: `keel-recover init <legacy> --name <servicio>` y
 después `/keel-recover-run legacy/<servicio>` en el agente, que hace el recorrido entero, se puede cortar y retomar
 con la misma llamada, y solo para en tres puntos de decisión y en la generación (incremento 9). Guía de uso:
-[`GUIA-KEEL-RECOVER.md`](../../GUIA-KEEL-RECOVER.md).
+[`GUIA-KEEL-RECOVER.md`](https://github.com/keel-system/keel/blob/main/GUIA-KEEL-RECOVER.md).
 
 Hoy (incremento 9) trae el paso 0 entero, la observación del paso 1, la recuperación del diseño (pasos 3 y 4), la
 medida de su fidelidad (paso 5) y la paridad con el servicio regenerado (paso 7): los dos pasos deterministas, la preparación del workspace, la skill que monta
@@ -16,6 +16,8 @@ el ejecutor de los escenarios de caracterización contra el legacy y contra el r
 todos sus datos:
 
 ```bash
+npm i -g @keel-system/keel-recover   # comando `keel-recover`
+
 keel-recover fingerprint <legacy> [-o runtime.yaml]       # paso 0a: huella del runtime
 keel-recover env-deps    <legacy> [-o environment.yaml]   # paso 0b: dependencias del entorno
 keel-recover init <legacy> --name <servicio>              # en el workspace de diseño: prepara legacy/<servicio>/

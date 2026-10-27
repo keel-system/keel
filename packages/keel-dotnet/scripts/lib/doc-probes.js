@@ -18,15 +18,15 @@
 // Las muestras son las de db-check (db-probes.js), con los value objects anidados y las hijas uno-a-uno que solo existen
 // en el documento.
 
-import { constraintErrors, declaredConcurrencyError, LOCK_VERSION, partialUniqueIndexes, indexName, snakeCase } from 'keel-core/gen';
-import { documentShape, documentValueObjects, valueObjectShape } from 'keel-core/gen/document';
-import { FRAMEWORK_ERRORS } from 'keel-core';
+import { constraintErrors, declaredConcurrencyError, LOCK_VERSION, partialUniqueIndexes, indexName, snakeCase } from '@keel-system/keel-core/gen';
+import { documentShape, documentValueObjects, valueObjectShape } from '@keel-system/keel-core/gen/document';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { csMember, csString, namespaceOf, solution, typeUsings } from '../../src/scaffold/render.js';
 import { repositoryRoots, portClass, repositoriesNamespace, isPaginated } from '../../src/scaffold/repositories.js';
 import { isNullable } from '../../src/scaffold/render.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
-import { idBatchReason } from 'keel-core/gen/ref-targets';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { authorshipProbe, finderProbes, finderSampleCount, idCsType, inverseFinderProbes, inverseSampleCount, rankProbes, rankSampleCount, idBatchProbe, counter, credentialProbes, guardProbes, guardSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
 import { documentProbeSupport, storeKeyBlock, documentOutboxBlock, documentBridgeBlock, documentReconciliationStoreBlock, documentClaimProbes, documentReconciliationProbes, documentPurgeBlock } from './doc-store-probes.js';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { readCharacterization } from 'keel-core';
+import { readCharacterization } from '@keel-system/keel-core';
 import { recoveryStatus, PHASES } from '../src/lib/status.js';
 import { plannedFlows, sealDocument } from '../src/lib/characterize.js';
 import { tmpDir } from './helpers/tmp.js';

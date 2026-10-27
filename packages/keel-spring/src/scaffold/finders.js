@@ -3,9 +3,9 @@
 // MongoDB). Qué restringe cada input lo decide keel-core/gen/query-filters.js, el mismo para los tres generadores: aquí
 // solo se escribe. Los nombres son los de keel-dotnet y keel-nest en la grafía de Java.
 
-import { findersOf } from 'keel-core/gen';
-import { persistedMembers } from 'keel-core/gen/relational';
-import { screamingSnake } from 'keel-core/gen/naming';
+import { findersOf } from '@keel-system/keel-core/gen';
+import { persistedMembers } from '@keel-system/keel-core/gen/relational';
+import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 import { subPackage } from './render.js';
 import { textFoldImport } from './text-fold.js';
 

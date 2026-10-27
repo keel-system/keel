@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { checkCrossRefs, loadService } from 'keel-core';
+import { checkCrossRefs, loadService } from '@keel-system/keel-core';
 import { FIXTURES_DIR, planFixture, UNCOVERED_BRANCHES } from './helpers/workspace.js';
 
 const branch = (name) => UNCOVERED_BRANCHES.find((candidate) => candidate.name === name);

@@ -16,7 +16,7 @@
 // motor al contrato.
 
 import { messagingNamespace, usesBridge } from './messaging.js';
-import { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher } from 'keel-core/gen';
+import { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher } from '@keel-system/keel-core/gen';
 import { csFile, located, namespaceOf, solution, typeUsings } from './render.js';
 import { usesPersistence } from './persistence.js';
 import { mapperClasses } from './mappers.js';

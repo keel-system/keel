@@ -28,7 +28,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadService, validateService } from 'keel-core';
+import { loadService, validateService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

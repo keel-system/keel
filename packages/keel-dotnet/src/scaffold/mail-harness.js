@@ -22,7 +22,7 @@ import {
   REJECTED_DOMAIN,
   MAIL_AWAIT,
   mailAwaitSeconds
-} from 'keel-core/gen/mail-probes';
+} from '@keel-system/keel-core/gen/mail-probes';
 import { csFile, csString, solution } from './render.js';
 import { usesMail } from './mail.js';
 

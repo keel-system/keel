@@ -14,11 +14,11 @@
 // proveedor de la tabla neutral; lo demás —un bug del adaptador, un cuerpo que viola el contrato— se propaga con su
 // traza sin que nadie lo capture.
 
-import { fallbackFailures, hasCallFallback, recordedFailures, resiliencePolicy, retryWaitMs, circuitBreakerReference, PROVIDER_FAILURES } from 'keel-core/gen/outbound-resilience';
-import { httpClientsYaml } from 'keel-core/gen/http-clients-config';
-import { LAST_KNOWN_MAX_ENTRIES, lastKnownNeeds, servesLastKnown } from 'keel-core/gen/last-known';
-import { UNREACHABLE_BASE_URL } from 'keel-core/gen/infra-catalog';
-import { pascalCase } from 'keel-core/gen';
+import { fallbackFailures, hasCallFallback, recordedFailures, resiliencePolicy, retryWaitMs, circuitBreakerReference, PROVIDER_FAILURES } from '@keel-system/keel-core/gen/outbound-resilience';
+import { httpClientsYaml } from '@keel-system/keel-core/gen/http-clients-config';
+import { LAST_KNOWN_MAX_ENTRIES, lastKnownNeeds, servesLastKnown } from '@keel-system/keel-core/gen/last-known';
+import { UNREACHABLE_BASE_URL } from '@keel-system/keel-core/gen/infra-catalog';
+import { pascalCase } from '@keel-system/keel-core/gen';
 import { csFile, csLocal, csMember, csString, declType, fieldUsings, located, namespaceOf, solution, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
 import { wireNamespace } from './wire.js';

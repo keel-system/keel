@@ -194,7 +194,7 @@ export function fixtureNames() {
  * `mutate(manifest, layers)` deriva una variante en memoria.
  */
 export async function planFixture(name, { mutate = null, stack = null } = {}) {
-  const { loadService } = await import('keel-core');
+  const { loadService } = await import('@keel-system/keel-core');
   const { planService } = await import('../../src/scaffold/index.js');
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
   if (mutate) mutate(manifest, layers);

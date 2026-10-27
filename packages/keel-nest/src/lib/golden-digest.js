@@ -1,13 +1,13 @@
 // Huella de lo que genera keel-nest, para demostrar que un refactor no cambia nada.
 //
-// La mecánica es neutral (`keel-core/gen/golden-digest.js`, la misma que usa keel-spring). Nació aquí en
+// La mecánica es neutral (`@keel-system/keel-core/gen/golden-digest.js`, la misma que usa keel-spring). Nació aquí en
 // el incremento 1 de PLAN-KEEL-DOTNET.md: sacar a keel-core lo que keel-nest todavía duplica con
 // keel-spring solo es medible si la salida de keel-nest tiene línea base, como la tuvo keel-spring
 // antes de su propia extracción.
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { listFixtures, normalizeCombos } from 'keel-core/gen/golden-digest';
+import { listFixtures, normalizeCombos } from '@keel-system/keel-core/gen/golden-digest';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const GOLDEN_FILE = path.join(here, '..', '..', 'test', 'golden', 'digests.json');

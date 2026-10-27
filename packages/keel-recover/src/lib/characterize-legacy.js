@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { CHARACTERIZED_FILE, SCENARIOS_FILE, loadProvenance, readCharacterization } from 'keel-core';
+import { CHARACTERIZED_FILE, SCENARIOS_FILE, loadProvenance, readCharacterization } from '@keel-system/keel-core';
 import { loadSandbox, containerOf } from './sandbox.js';
 import { verifyCriterion } from './probe.js';
 import { toolRequestAsync } from './tool-http.js';

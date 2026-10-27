@@ -16,15 +16,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parse as parseYaml } from 'yaml';
-import { loadService } from 'keel-core';
-import { documentShape, documentValueObjects, valueObjectShape, documentIndexes } from 'keel-core/gen/document';
+import { loadService } from '@keel-system/keel-core';
+import { documentShape, documentValueObjects, valueObjectShape, documentIndexes } from '@keel-system/keel-core/gen/document';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { sampleEntity, PROBE_HELPERS } from '../scripts/lib/samples.js';
 import { repositoryRoots, adapterClass, adapterPath, emitsDomainEvents } from '../src/scaffold/repositories.js';
-import { claimsForEntity } from 'keel-core/gen';
-import { reconciliationClaims } from 'keel-core/gen/reconciliation-stores';
+import { claimsForEntity } from '@keel-system/keel-core/gen';
+import { reconciliationClaims } from '@keel-system/keel-core/gen/reconciliation-stores';
 
 // Las fixtures documentales enteras, salvo el correo de notification-mailer-mongo (incremento 13).
 const SUBJECTS = [

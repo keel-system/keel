@@ -34,9 +34,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomInt, randomUUID } from 'node:crypto';
-import { loadService } from 'keel-core';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { partialIndexSpecs, discriminatorColumn, orderingFieldOf, persistedMembers, uniqueConstraints, crossAggregateForeignKeys, elementTable, foreignKeyIndexColumns, foreignKeyIndexName, indexName, collectionIndexesOf, columnsFor, foreignKeyName, joinColumnOf, usesAuditableEntity, AUDIT_COLUMNS, LOCK_VERSION, foldedShadow } from 'keel-core/gen';
+import { loadService } from '@keel-system/keel-core';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { partialIndexSpecs, discriminatorColumn, orderingFieldOf, persistedMembers, uniqueConstraints, crossAggregateForeignKeys, elementTable, foreignKeyIndexColumns, foreignKeyIndexName, indexName, collectionIndexesOf, columnsFor, foreignKeyName, joinColumnOf, usesAuditableEntity, AUDIT_COLUMNS, LOCK_VERSION, foldedShadow } from '@keel-system/keel-core/gen';
 import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startDatabase } from './lib/database-container.js';
 import { freshIdLiteral, idFieldOf, sampleEntity, sampleValue, PROBE_HELPERS } from './lib/samples.js';
@@ -52,12 +52,12 @@ import { domainMembers } from '../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
 import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, credentialFinders, emitsDomainEvents } from '../src/scaffold/repositories.js';
 import { guardClaimsFor } from '../src/scaffold/claim.js';
-import { claimsForEntity, claimOrderField, screamingSnake, rescueProbes, stallSql, missingClockCountSql } from 'keel-core/gen';
+import { claimsForEntity, claimOrderField, screamingSnake, rescueProbes, stallSql, missingClockCountSql } from '@keel-system/keel-core/gen';
 import { ormPath, ormClass, unidirectionalParents } from '../src/scaffold/persistence-entities.js';
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_IMPL_TS, IDEMPOTENCY_CONFLICT_TS } from '../src/scaffold/request-idempotency.js';
-import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
-import { OUTBOX_EVENT, PROCESSED_EVENT } from 'keel-core/gen/messaging-stores';
-import { RECONCILIATION_CLAIM, reconciliationClaims } from 'keel-core/gen/reconciliation-stores';
+import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
+import { OUTBOX_EVENT, PROCESSED_EVENT } from '@keel-system/keel-core/gen/messaging-stores';
+import { RECONCILIATION_CLAIM, reconciliationClaims } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { RECONCILIATION_CLAIM_ORM_TS, RECONCILIATION_CLAIM_STORE_TS } from '../src/scaffold/reconciliation-claim.js';
 import { TABLE_PURGES_TS, tablePurges } from '../src/scaffold/purge.js';
 import { IDEMPOTENCY_RECORD_ORM_TS } from '../src/scaffold/request-idempotency.js';
@@ -72,10 +72,10 @@ import {
   OUTBOX_RELAY_STORE_TS,
   IDEMPOTENCY_GUARD_TS
 } from '../src/scaffold/messaging.js';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { idempotencyOutcomeCodes } from 'keel-core/gen';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { idempotencyOutcomeCodes } from '@keel-system/keel-core/gen';
 import { rankBlock, inverseBlock } from './lib/rank-inverse-probes.js';
-import { idBatchReason } from 'keel-core/gen/ref-targets';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 
 const args = process.argv.slice(2);
 

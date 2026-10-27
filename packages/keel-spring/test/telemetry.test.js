@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { tmpDir } from './helpers/tmp.js';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
 import { askStackConfig, normalizeTelemetry, stackDrift, describeStack } from '../src/lib/stack-config.js';
 import { TELEMETRY_INFRA, collectorEndpoint, collectorHostEndpoint } from '../src/lib/stack-catalog.js';

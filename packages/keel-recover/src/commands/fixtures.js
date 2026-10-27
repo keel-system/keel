@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import pc from 'picocolors';
-import { FIXTURES_FILE, checkFixtures, loadService } from 'keel-core';
+import { FIXTURES_FILE, checkFixtures, loadService } from '@keel-system/keel-core';
 import { containerRuntime, resolveRuntime } from '../lib/containers.js';
 import { containerOf } from '../lib/sandbox.js';
 import { databaseAdapter } from '../lib/db/index.js';

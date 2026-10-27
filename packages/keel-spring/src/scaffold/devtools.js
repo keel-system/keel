@@ -4,7 +4,7 @@
 // textos que nombran Flyway, Hibernate, Gradle o el arnés JUnit, y la topología de mensajería que
 // siembra— y los envoltorios que la fijan para el resto del scaffolding.
 
-import * as infra from 'keel-core/gen/infra-scripts';
+import * as infra from '@keel-system/keel-core/gen/infra-scripts';
 import { messagingProvisioning, messagingTopologyChecks } from './messaging-provisioning.js';
 
 export const SPRING_INFRA = {

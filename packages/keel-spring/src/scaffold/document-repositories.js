@@ -14,7 +14,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { persistedMembers, orderingFieldOf, usesAuditableEntity } from './persistence-members.js';
-import { orderingTieBreakerOf } from 'keel-core/gen/relational';
+import { orderingTieBreakerOf } from '@keel-system/keel-core/gen/relational';
 import {
   renderPort,
   naturalKeyFinder,
@@ -31,8 +31,8 @@ import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import { DOC_PKG } from './document-entities.js';
 import { documentValueObjects } from './document-embeddables.js';
-import { idBatchReason } from 'keel-core/gen/ref-targets';
-import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
+import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
 import { inverseAdapterMethods } from './repositories.js';
 import { refIdJava } from './persistence-members.js';
 import { finderFields, mongoFinderMethods } from './finders.js';

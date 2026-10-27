@@ -11,7 +11,7 @@
 // Cada transacción corta usa un DbContext propio (un ámbito de DI nuevo): en EF Core una transacción es de UNA conexión,
 // y la del caso de uso no puede ser la del relay ni la de la guarda, que tiene que sobrevivir al fallo del handler.
 
-import { OUTBOX_EVENT, PROCESSED_EVENT, OUTBOX_LAST_ERROR_LENGTH, storeColumns } from 'keel-core/gen/messaging-stores';
+import { OUTBOX_EVENT, PROCESSED_EVENT, OUTBOX_LAST_ERROR_LENGTH, storeColumns } from '@keel-system/keel-core/gen/messaging-stores';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { dbContextClass, persistenceNamespace, rowsNamespace, usesDocument } from './persistence.js';
 import { documentGuardBody, documentRelayStoreBody } from './document-stores.js';

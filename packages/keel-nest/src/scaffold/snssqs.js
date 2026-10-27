@@ -18,7 +18,7 @@
 // keel-nest-snssqs) es lo mismo que en keel-spring: el dispatcher del outbox o los publishers best-effort sobre
 // `SnsSqsConnection.publish`, y un listener por suscripción sobre `SnsSqsConnection.consume`.
 
-import { SNSSQS_RECONNECT_INTERVAL_MS, SNS_MAX_ATTEMPTS, SNS_REQUEST_TIMEOUT_MS, SQS_MAX_MESSAGES, SQS_POLL_WAIT_SECONDS, snsSqsConsumption, snssqsYaml } from 'keel-core/gen/messaging-plan';
+import { SNSSQS_RECONNECT_INTERVAL_MS, SNS_MAX_ATTEMPTS, SNS_REQUEST_TIMEOUT_MS, SQS_MAX_MESSAGES, SQS_POLL_WAIT_SECONDS, snsSqsConsumption, snssqsYaml } from '@keel-system/keel-core/gen/messaging-plan';
 import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, SNSSQS_CONNECTION_TS, SNSSQS_CONSUMPTION_TS, usesSnsSqs } from './messaging.js';

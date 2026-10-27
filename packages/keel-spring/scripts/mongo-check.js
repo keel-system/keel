@@ -14,7 +14,7 @@
 // `stallInFlight` que no atasca ninguna fila, una espera al drenaje del outbox que vuelve al
 // instante porque cuenta cero.
 //
-// Los scripts NO se escriben aquí: salen de `keel-core/src/lib/gen/mongo-probes.js`, el mismo módulo del que
+// Los scripts NO se escriben aquí: salen de `@keel-system/keel-core/src/lib/gen/mongo-probes.js`, el mismo módulo del que
 // el arnés renderiza su Java. Un runner con scripts propios comprobaría que Mongo responde,
 // que no es lo mismo que comprobar que el generador acierta.
 //
@@ -37,7 +37,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { DATABASES } from '../src/lib/stack-catalog.js';
@@ -53,7 +53,7 @@ import {
   abandonOutboxScript,
   clearAbandonedScript,
   printed
-} from 'keel-core/gen/mongo-probes';
+} from '@keel-system/keel-core/gen/mongo-probes';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');

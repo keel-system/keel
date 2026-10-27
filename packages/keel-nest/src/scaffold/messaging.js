@@ -24,8 +24,8 @@
 // Solo con persistencia RELACIONAL o sin persistencia: la documental llega con el incremento 12, y ahí
 // el puente y el outbox son otra rama entera.
 
-import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination as destinationOf, subscriptionGroupId } from 'keel-core/gen';
-import { consumerUnits, consumesFromQueue, messagingYaml as neutralMessagingYaml, routingKeyName, subscriptionKey } from 'keel-core/gen/messaging-plan';
+import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination as destinationOf, subscriptionGroupId } from '@keel-system/keel-core/gen';
+import { consumerUnits, consumesFromQueue, messagingYaml as neutralMessagingYaml, routingKeyName, subscriptionKey } from '@keel-system/keel-core/gen/messaging-plan';
 import { DIRS, classPath, fieldImports, tsModule, tsString, decapitalize } from './render.js';
 import { DOMAIN_EVENT_TS, EVENT_METADATA_TS } from './events.js';
 import { usesPersistence, usesDocument } from './persistence-entities.js';
@@ -35,10 +35,10 @@ import { CORRELATION_TS, REQUEST_READING_TS, REQUEST_ERRORS_TS, usesApi } from '
 import { readerOf, readerImports, valueReaders } from './controllers.js';
 import { MODULE_TS as USE_CASE_MODULE_TS } from './mediator.js';
 import { entryGateAssignment } from './services.js';
-import { acknowledgeNote } from 'keel-core/gen/rejection-notes';
-import { callsPaymentGateway } from 'keel-core/gen/payments-model';
+import { acknowledgeNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
-import { OUTBOX_RELAY } from 'keel-core/gen/messaging-stores';
+import { OUTBOX_RELAY } from '@keel-system/keel-core/gen/messaging-stores';
 
 const MESSAGING_DIR = 'infrastructure/messaging';
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';

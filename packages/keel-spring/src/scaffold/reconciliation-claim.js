@@ -25,7 +25,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
 import { claimSelectionSnippet, claimTransaction } from '../lib/claim-sql.js';
-import { reconciliationClaims, RECONCILIATION_PURGE } from 'keel-core/gen/reconciliation-stores';
+import { reconciliationClaims, RECONCILIATION_PURGE } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
 
 const CLAIM_PKG = 'infrastructure.persistence.reconciliation';

@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import path from 'node:path';
 import { DOTNET_READY_DESIGN, FIXTURES_DIR, planFixture } from './helpers/workspace.js';
 

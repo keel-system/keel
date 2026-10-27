@@ -20,8 +20,8 @@
 //   partial   el adaptador da por bueno un envío con destinatarios rechazados
 //   fallback  el adaptador ignora el remitente de respaldo
 
-import { MAIL_SINK } from 'keel-core/gen/infra-catalog';
-import { HTTP_PORT, SMTP_PORT, ROUTES } from 'keel-core/gen/mail-probes';
+import { MAIL_SINK } from '@keel-system/keel-core/gen/infra-catalog';
+import { HTTP_PORT, SMTP_PORT, ROUTES } from '@keel-system/keel-core/gen/mail-probes';
 import { run, resolveRuntime, freePort } from './lib/database-container.js';
 import { planFixture, transpileTree } from '../test/helpers/emitted.js';
 import { MAIL_HARNESS_TS } from '../src/scaffold/mail-harness.js';

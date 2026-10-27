@@ -6,7 +6,7 @@
 // dominio, sin nada de Nest ni del broker. El orden de los campos de EventMetadata es el del cable
 // (WIRE_SHAPES.eventMetadata de keel-core): la envoltura del incremento 9 la serializa tal cual.
 
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { DIRS, classPath, declType, fieldImports, tsModule, tsdoc, tsString } from './render.js';
 
 export const DOMAIN_EVENT_TS = classPath(DIRS.events, 'DomainEvent');

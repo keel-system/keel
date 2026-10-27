@@ -16,9 +16,9 @@
 // Lo que NO genera: la lógica de los casos de uso (cuándo se llama al puerto y qué transición aplica cada
 // handler), que es del diseño y la escribe el agente con la skill de la pasarela.
 
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH } from 'keel-core/gen/payment-gateways';
-import { paymentsYaml } from 'keel-core/gen/payments-config';
-import { PAYMENT_SWEEP_PARAMETERS } from 'keel-core/gen/payments-model';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH } from '@keel-system/keel-core/gen/payment-gateways';
+import { paymentsYaml } from '@keel-system/keel-core/gen/payments-config';
+import { PAYMENT_SWEEP_PARAMETERS } from '@keel-system/keel-core/gen/payments-model';
 import { DIRS, classPath, declType, tsModule, tsString } from './render.js';
 import { COMMAND_DISPATCHER_TS } from './mediator.js';
 import { DECIMAL_TS, RAW_JSON_TS } from './wire.js';

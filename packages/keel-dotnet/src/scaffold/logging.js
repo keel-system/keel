@@ -18,7 +18,7 @@ import { solution, csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { usesCorrelation } from './rest-support.js';
 import { telemetryNamespace, usesTelemetry } from './telemetry.js';
-import { ECS_VERSION, loggingYaml as neutralLoggingYaml } from 'keel-core/gen/logging-config';
+import { ECS_VERSION, loggingYaml as neutralLoggingYaml } from '@keel-system/keel-core/gen/logging-config';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 

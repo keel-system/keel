@@ -8,4 +8,4 @@ export {
   gatewayRequirements,
   checkGatewaySupport,
   gatewayCoverage
-} from 'keel-core/gen/payment-gateways';
+} from '@keel-system/keel-core/gen/payment-gateways';

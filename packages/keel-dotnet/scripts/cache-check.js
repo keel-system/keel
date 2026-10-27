@@ -25,8 +25,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { CACHES } from 'keel-core/gen/infra-catalog';
-import { cacheFlushCmd } from 'keel-core/gen/infra-scripts';
+import { CACHES } from '@keel-system/keel-core/gen/infra-catalog';
+import { cacheFlushCmd } from '@keel-system/keel-core/gen/infra-scripts';
 import { run, resolveRuntime, freePort } from '../../keel-nest/scripts/lib/database-container.js';
 import { planFixture, makeWorkspace } from '../test/helpers/workspace.js';
 

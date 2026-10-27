@@ -11,9 +11,9 @@
 // Support/HttpStub.cs, y lo ejecuta contra un WireMock real con el adaptador emitido. Los dos helpers que MANDAN el aviso
 // necesitan el Post del flujo, así que van en FlowTest.cs (`paymentNoticeMembers`).
 
-import { paymentProbesFor } from 'keel-core/gen/payment-probes';
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation } from 'keel-core/gen/payment-gateways';
-import { paymentTestCurrency } from 'keel-core/gen/payments-config';
+import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { paymentTestCurrency } from '@keel-system/keel-core/gen/payments-config';
 import { csFile, csString, solution } from './render.js';
 
 export function usesPaymentHarness(model) {

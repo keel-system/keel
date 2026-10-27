@@ -34,10 +34,10 @@ import {
   UNKNOWN_INTEGRITY_MESSAGE,
   TRANSACTION_TIMEOUT_MESSAGE,
   persistedMembers
-} from 'keel-core/gen';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
+} from '@keel-system/keel-core/gen';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
-import { FRAMEWORK_ERRORS } from 'keel-core';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
 import { usesRelational, engineOf, ormClass, ormPath, elementClass } from './persistence-entities.js';
@@ -50,7 +50,7 @@ import {
   TRANSACTION_CONTEXT_TS,
   PERSISTENCE_ERRORS_TS
 } from './repositories.js';
-import { envFor, runtimeDefault } from 'keel-core/gen/runtime-env';
+import { envFor, runtimeDefault } from '@keel-system/keel-core/gen/runtime-env';
 
 export const DATA_SOURCE_OPTIONS_TS = 'src/infrastructure/persistence/data-source-options.ts';
 export const PERSISTENCE_MODULE_TS = 'src/infrastructure/persistence/persistence-module.ts';

@@ -28,10 +28,10 @@ import {
   CONCURRENT_MODIFICATION_MESSAGE,
   UNKNOWN_INTEGRITY_MESSAGE,
   TRANSACTION_TIMEOUT_MESSAGE
-} from 'keel-core/gen';
-import { documentIndexes, exportIndexesScript } from 'keel-core/gen/document';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { FRAMEWORK_ERRORS } from 'keel-core';
+} from '@keel-system/keel-core/gen';
+import { documentIndexes, exportIndexesScript } from '@keel-system/keel-core/gen/document';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
 import { usesDocument, usesTextFold, textFoldFile, TEXT_FOLD_TS } from './persistence-entities.js';

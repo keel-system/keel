@@ -3,9 +3,9 @@
 // keel-core/gen/infra-scripts.js. Aquí solo está la plataforma de keel-nest: los textos que nombran
 // sus herramientas y la tabla de historial de sus migraciones.
 
-import { infraFiles } from 'keel-core/gen/infra-scripts';
-import { identityProvisioningFiles } from 'keel-core/gen/identity-provisioning';
-import { messagingProvisioning, messagingTopologyChecks } from 'keel-core/gen/messaging-provisioning';
+import { infraFiles } from '@keel-system/keel-core/gen/infra-scripts';
+import { identityProvisioningFiles } from '@keel-system/keel-core/gen/identity-provisioning';
+import { messagingProvisioning, messagingTopologyChecks } from '@keel-system/keel-core/gen/messaging-provisioning';
 
 /**
  * La tabla de historial de las migraciones de TypeORM. Explícita (`migrationsTableName` del

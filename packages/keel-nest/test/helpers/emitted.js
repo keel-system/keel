@@ -11,7 +11,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService } from '../../src/scaffold/index.js';
 import { FIXTURES_DIR } from './workspace.js';
 import { tmpDir } from './tmp.js';

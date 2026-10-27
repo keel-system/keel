@@ -5,7 +5,7 @@ Un generador convierte specs Keel en servicios de una tecnología concreta repar
 1. **Scaffolding transversal al stack** (comando `build`): tras el cuestionario de stack (BD, broker, auth… — solo lo que el diseño necesita; persistido en `keel-stack.json`), genera de forma determinista todo lo necesario para **levantar el proyecto**: dependencias en función del stack elegido, configuración por perfiles, infraestructura de prueba, y toda la estructura cuyo código es idéntico sea cual sea la opción de infra puntual (dominio puro, puertos, contratos, controllers, mediator, manejo de errores, stubs).
 2. **Conocimiento para el agente**: una skill orquestadora, convenciones y **skills por tecnología** (`skills/keel-<tech>-<infra>/SKILL.md`, instaladas condicionalmente en el proyecto generado según el stack elegido) con las que el agente escribe el código cuya implementación depende de la infra elegida (adaptadores del broker/storage…), la lógica de negocio y los tests.
 
-Cada generador es un **paquete npm independiente con CLI propia** (`keel-<tech>`, ej. `keel-spring`): se instala con `npm i -g keel-<tech>` y su comando `build` genera el proyecto. Los generadores conocidos se ven con `keel list`. Referencia viva: el paquete `keel-spring`.
+Cada generador es un **paquete npm independiente con CLI propia** (`keel-<tech>`, ej. `keel-spring`): se instala con `npm i -g @keel-system/keel-<tech>` y su comando `build` genera el proyecto. Los generadores conocidos se ven con `keel list`. Referencia viva: el paquete `keel-spring`.
 
 ## El flujo de generación: dos pasos, con cambio de directorio en medio
 

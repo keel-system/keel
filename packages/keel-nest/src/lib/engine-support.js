@@ -13,7 +13,7 @@
 // y MySQL y RECHAZA en build los demás del catálogo (`SUPPORTED_DATABASES`), así que sus celdas no son
 // `degradado` —nada se emite que prometa menos— sino fuera de la frontera, y la matriz las imprime así.
 
-import { MECHANISM_CATALOG, STATES } from 'keel-core/gen/mechanisms';
+import { MECHANISM_CATALOG, STATES } from '@keel-system/keel-core/gen/mechanisms';
 import { SUPPORTED_DATABASES } from './supported-features.js';
 
 export { MECHANISM_CATALOG, STATES };

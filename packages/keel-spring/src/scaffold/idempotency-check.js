@@ -23,7 +23,7 @@
 // siendo juicio, y ese lo pone el agente de calidad — que ahora ejecuta esto en vez de
 // leer el árbol a mano.
 
-import { renderIdempotencyGate } from 'keel-core/gen/idempotency-gate';
+import { renderIdempotencyGate } from '@keel-system/keel-core/gen/idempotency-gate';
 import { declaresIdempotency, idempotentOperations, naturalKeyGuardedOperations } from './http-idempotency.js';
 import { relievingOperations, portMethodName } from './conditional-uniqueness.js';
 import { naturalKeyFinder } from './repositories.js';

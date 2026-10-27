@@ -17,13 +17,13 @@
 // DISEÑO puede generarse, y corre cuando todavía no hay proyecto ninguno.
 import path from 'node:path';
 import pc from 'picocolors';
-import { isKeelWorkspace, resolveServiceDir, loadService, loadFixtures, validateService, assessReadiness, classifyWarnings } from 'keel-core';
+import { isKeelWorkspace, resolveServiceDir, loadService, loadFixtures, validateService, assessReadiness, classifyWarnings } from '@keel-system/keel-core';
 import { SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { planService } from '../scaffold/index.js';
 import { DATABASES, PAYMENT_GATEWAYS } from '../lib/stack-catalog.js';
 import { gatewayCoverage } from '../lib/gateway-support.js';
-import { readDesignGaps } from 'keel-core/gen/design-gaps';
+import { readDesignGaps } from '@keel-system/keel-core/gen/design-gaps';
 
 // El archivo que el cierre del pipeline escribe en la raíz del proyecto generado.
 

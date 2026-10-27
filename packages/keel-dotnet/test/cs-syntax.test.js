@@ -12,7 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { checkCsTree } from './helpers/cs-tree.js';
 import { CS_VARIANTS, FIXTURES_DIR, fixtureNames, variantStack } from './helpers/workspace.js';

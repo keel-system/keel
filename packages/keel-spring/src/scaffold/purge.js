@@ -16,7 +16,7 @@
 // La rama documental no pasa por aquí, y no es asimetría: el `deleteMany` de Mongo no abre
 // transacción, va documento a documento y no retiene bloqueos que escalen.
 
-import { BATCHED_PURGE } from 'keel-core/gen';
+import { BATCHED_PURGE } from '@keel-system/keel-core/gen';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';

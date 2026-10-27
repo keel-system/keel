@@ -17,7 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import YAML from 'yaml';
-import { loadService, FRAMEWORK_ERRORS } from 'keel-core';
+import { loadService, FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { DB_TRANSACTION_TIMEOUT } from '../src/scaffold/config.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

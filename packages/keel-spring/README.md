@@ -5,7 +5,7 @@ Generador **Spring Boot** para diseños [Keel](https://github.com/keel-system/ke
 ## Uso
 
 ```bash
-npm i -g keel-spring
+npm i -g @keel-system/keel-spring
 
 # 0) antes de cerrar el diseño — no escribe nada, y contesta lo que hasta ahora
 #    solo se veía al generar: qué del diseño no materializa keel-spring, y qué va a
@@ -55,7 +55,7 @@ cd services/<servicio>-spring
 
 | Paquete | DSL Keel |
 |---------|----------|
-| keel-spring 0.1.x | `keel: "2.23"` |
+| keel-spring 0.2.x | `keel: "2.23"` |
 
 Una sola versión, en espejo de lo que acepta `keel validate`: los schemas del DSL no gatean primitivos por versión, así que aceptar las anteriores haría que el campo `keel` de un manifiesto declarase una intención que nada comprueba. El razonamiento completo, en `docs/dsl-reference.md § Historial de versiones`.
 

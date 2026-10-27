@@ -24,7 +24,7 @@ import {
   SQS_POLL_WAIT_SECONDS,
   snsSqsConsumption,
   snssqsYaml
-} from 'keel-core/gen/messaging-plan';
+} from '@keel-system/keel-core/gen/messaging-plan';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { usesSnsSqs, messagingNamespace } from './messaging.js';

@@ -4,7 +4,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { messagingWithoutPersistenceErrors } from 'keel-core/gen/messaging-frontier';
+import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { checkSupportedFeatures as spring } from '../../keel-spring/src/lib/supported-features.js';
 import { checkSupportedFeatures as nest } from '../../keel-nest/src/lib/supported-features.js';
 import { checkSupportedFeatures as dotnet } from '../src/lib/supported-features.js';

@@ -16,7 +16,7 @@
 
 import { tsModule } from './render.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
-import { ECS_VERSION, loggingYaml as neutralLoggingYaml } from 'keel-core/gen/logging-config';
+import { ECS_VERSION, loggingYaml as neutralLoggingYaml } from '@keel-system/keel-core/gen/logging-config';
 
 export const LOGGER_TS = 'src/infrastructure/logging/keel-logger.ts';
 

@@ -15,7 +15,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
-import { loadService, supportedDsl } from 'keel-core';
+import { loadService, supportedDsl } from '@keel-system/keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { SPECS_SEAL_FILE, writeSpecsSeal } from '../src/lib/specs-seal.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

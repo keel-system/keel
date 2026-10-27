@@ -9,12 +9,12 @@
 // @RestControllerAdvice central en infrastructure/rest.
 
 import { callsPaymentGateway } from '../lib/payments-model.js';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { DOMAIN_ERROR_RESPONSES as DOMAIN, FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { DOMAIN_ERROR_RESPONSES as DOMAIN, FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
 import { callerResolution } from './security.js';
-import { declaredErrorFor } from 'keel-core/gen';
-import { translatableSort } from 'keel-core/gen/pagination';
-import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
+import { declaredErrorFor } from '@keel-system/keel-core/gen';
+import { translatableSort } from '@keel-system/keel-core/gen/pagination';
+import { requestShape, returnsLocation, locationTarget } from '@keel-system/keel-core/gen/api-contract';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import {
   messageComponents,
@@ -34,7 +34,7 @@ import {
   CONCURRENT_MODIFICATION_MESSAGE,
   UNKNOWN_INTEGRITY_MESSAGE,
   TRANSACTION_TIMEOUT_MESSAGE
-} from 'keel-core/gen/constraint-errors';
+} from '@keel-system/keel-core/gen/constraint-errors';
 import { escapeJava } from '../lib/type-mapper.js';
 
 // Los textos del ApiExceptionHandler son contrato y los comparten los generadores (keel-core/gen/api-errors.js).

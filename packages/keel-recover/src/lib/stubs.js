@@ -1,5 +1,5 @@
 import { toolRequest } from './tool-http.js';
-import { HTTP_STUB_ENDPOINTS } from 'keel-core/gen/http-stub-probes';
+import { HTTP_STUB_ENDPOINTS } from '@keel-system/keel-core/gen/http-stub-probes';
 
 // Los terceros HTTP del legacy, servidos por WireMock (paso 1b): su diario de peticiones es el
 // efecto «llamada saliente». Se lee por la API de administración desde el contenedor de

@@ -4,7 +4,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compareGolden, computeGolden, listFixtures } from 'keel-core/gen/golden-digest';
+import { compareGolden, computeGolden, listFixtures } from '@keel-system/keel-core/gen/golden-digest';
 import { goldenCombos } from '../src/lib/golden-digest.js';
 import { planService } from '../src/scaffold/index.js';
 

@@ -6,8 +6,8 @@
 // infraestructura es la misma. Lo único de Java es la pregunta de identidad del proyecto —el
 // grupo (groupId)—, que se le pasa al cuestionario como `identity`.
 
-import { askStackConfig as askNeutralStackConfig } from 'keel-core/gen/stack';
-import { promptText } from 'keel-core/gen/prompt';
+import { askStackConfig as askNeutralStackConfig } from '@keel-system/keel-core/gen/stack';
+import { promptText } from '@keel-system/keel-core/gen/prompt';
 import { defaultGroup, isValidPackage } from './naming.js';
 
 export {
@@ -18,7 +18,7 @@ export {
   stackDrift,
   normalizeTelemetry,
   describeStack
-} from 'keel-core/gen/stack';
+} from '@keel-system/keel-core/gen/stack';
 
 /** El cuestionario del stack, con la pregunta del grupo de Java delante. */
 export async function askStackConfig(manifest, layers, options = {}) {

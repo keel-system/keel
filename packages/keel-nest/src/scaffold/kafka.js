@@ -18,9 +18,9 @@
 // `KafkaConnection.consume`. No crea topics: los autocrea el broker de infra/ y en producción los gobierna
 // la plataforma (la skill keel-spring-kafka, § Topología).
 
-import { KAFKA_PRODUCER_TIMEOUTS } from 'keel-core/gen/infra-catalog';
-import { KAFKA_DEFAULT_METADATA_REFRESH_MS, KAFKA_RECONNECT_INTERVAL_MS, kafkaConsumption, kafkaYaml } from 'keel-core/gen/messaging-plan';
-import { kafkaListenerRetry } from 'keel-core/gen';
+import { KAFKA_PRODUCER_TIMEOUTS } from '@keel-system/keel-core/gen/infra-catalog';
+import { KAFKA_DEFAULT_METADATA_REFRESH_MS, KAFKA_RECONNECT_INTERVAL_MS, kafkaConsumption, kafkaYaml } from '@keel-system/keel-core/gen/messaging-plan';
+import { kafkaListenerRetry } from '@keel-system/keel-core/gen';
 import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { KAFKA_CONNECTION_TS, KAFKA_CONSUMPTION_TS, MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, usesKafka } from './messaging.js';

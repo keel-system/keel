@@ -9,7 +9,7 @@ El diseño de un servicio vive en `specs/<servicio>/`: un manifiesto más **un a
 ## Instalación
 
 ```bash
-npm i -g keel-core     # comando `keel`
+npm i -g @keel-system/keel-core     # comando `keel`
 ```
 
 Requiere Node.js >= 18. Sin build step: ESM puro.
@@ -33,7 +33,7 @@ keel validate specs/mi-servicio --ready   # ¿listo para generar? la checklist c
 El diseño capa a capa lo conduce un agente con las skills que `keel init` siembra (`/keel-design`, `/keel-validate`, `/keel-docs`, `/keel-handoff`…), y la generación la hace el generador de la tecnología elegida:
 
 ```bash
-npm i -g keel-spring               # o @keel-system/keel-nest, o keel-dotnet
+npm i -g @keel-system/keel-spring   # o @keel-system/keel-nest, o @keel-system/keel-dotnet
 keel-spring build specs/mi-servicio    # → services/mi-servicio-spring/
 cd services/mi-servicio-spring
 # y en Claude Code, abierto en esa raíz: /keel-generate-spring
@@ -72,7 +72,7 @@ Lo que no es una incoherencia sino **una decisión que el diseño no ha tomado**
 Los generadores consumen la API pública en vez de reimplementar la validación:
 
 ```js
-import { validateService, summarizeService, supportedDsl } from 'keel-core';
+import { validateService, summarizeService, supportedDsl } from '@keel-system/keel-core';
 
 const result = validateService('specs/mi-servicio');
 if (!result.ok) {
@@ -87,7 +87,7 @@ if (!result.ok) {
 
 | Paquete | DSL Keel |
 |---------|----------|
-| keel-core 0.4.x | `keel: "2.23"` |
+| keel-core 0.5.x | `keel: "2.23"` |
 
 Se soporta **una sola versión** del DSL. Los schemas no gatean primitivos por versión, así que aceptar las anteriores haría que el campo `keel` de un manifiesto declarase una intención que nada comprueba. El razonamiento completo está en `docs/dsl-reference.md § Historial de versiones` del workspace sembrado.
 

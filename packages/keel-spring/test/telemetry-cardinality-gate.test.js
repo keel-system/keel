@@ -18,7 +18,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { ATTRIBUTES } from '../src/lib/telemetry-probes.js';
 import { allowedTagKeys } from '../src/scaffold/telemetry-gate.js';

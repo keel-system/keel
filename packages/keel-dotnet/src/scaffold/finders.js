@@ -2,11 +2,11 @@
 // el del adaptador, relacional (LINQ sobre la fila de EF Core) y documental (el filtro BSON del driver). Qué restringe
 // cada input lo decide keel-core/gen/query-filters.js, el mismo para los tres generadores: aquí solo se escribe.
 
-import { findersOf, RANGE_OPERATORS } from 'keel-core/gen';
-import { persistedMembers } from 'keel-core/gen/relational';
+import { findersOf, RANGE_OPERATORS } from '@keel-system/keel-core/gen';
+import { persistedMembers } from '@keel-system/keel-core/gen/relational';
 import { memberOf } from './enums.js';
 import { csFile, csLocal, csMember, csString, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
-import { screamingSnake } from 'keel-core/gen/naming';
+import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 
 /** Los finders de la raíz, en el orden de las operaciones. */
 export function entityFinders(model, entity) {

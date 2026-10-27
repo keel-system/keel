@@ -10,9 +10,9 @@
 //   · ejecutado por archivo, mongosh NO imprime el valor de la última expresión: sin el envoltorio `print(...)` un
 //     countDocuments devuelve cadena vacía, y la cadena vacía se parece a un cero.
 
-import { CLOCK, setStateScript, ageClockScript, holdClockScript, missingClockCountScript } from 'keel-core/gen/mongo-probes';
-import { rescueProbes } from 'keel-core/gen';
-import { documentShape } from 'keel-core/gen/document';
+import { CLOCK, setStateScript, ageClockScript, holdClockScript, missingClockCountScript } from '@keel-system/keel-core/gen/mongo-probes';
+import { rescueProbes } from '@keel-system/keel-core/gen';
+import { documentShape } from '@keel-system/keel-core/gen/document';
 import { csString } from './render.js';
 
 /** Las marcas de espera que envejece `AgeForReconciliation`, por activación, con su colección y su clave del documento. */

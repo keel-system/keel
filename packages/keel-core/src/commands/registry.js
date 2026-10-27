@@ -213,7 +213,7 @@ export async function showRegistryDesign(slug, options = {}) {
     console.log(pc.bold(pc.red('No derivable con esta CLI:')));
     console.log(
       `  El diseño usa el DSL keel ${service.dsl} y esta CLI soporta ${supportedDsl().join(', ')}.\n` +
-        `  Actualiza keel-core: ${pc.cyan('npm i -g keel-core@latest')}`
+        `  Actualiza keel-core: ${pc.cyan('npm i -g @keel-system/keel-core@latest')}`
     );
     return;
   }

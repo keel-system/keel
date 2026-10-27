@@ -9,8 +9,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
-import { textFilterNotes } from 'keel-core/gen/text-filters';
+import { loadService } from '@keel-system/keel-core';
+import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

@@ -15,8 +15,8 @@
 
 import { screamingSnake, basePackage } from './naming.js';
 import { toJava, beanValidationAnnotations, elementBeanValidationAnnotations, columnAnnotations } from './type-mapper.js';
-import { numericConstraints, inheritedFormat } from 'keel-core/gen/constraints';
-import { errorBaseFor } from 'keel-core/gen/error-bases';
+import { numericConstraints, inheritedFormat } from '@keel-system/keel-core/gen/constraints';
+import { errorBaseFor } from '@keel-system/keel-core/gen/error-bases';
 
 // http declarado en el diseño → excepción base de shared/exception que extiende
 // el error generado; los status sin subclase dedicada extienden DomainException

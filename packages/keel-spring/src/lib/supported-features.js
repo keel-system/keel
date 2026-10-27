@@ -8,8 +8,8 @@
 //
 // Al añadir soporte para una de estas capacidades, se borra su entrada de aquí.
 
-import { compositeUrlParamErrors } from 'keel-core/gen/outbound-params';
-import { messagingWithoutPersistenceErrors } from 'keel-core/gen/messaging-frontier';
+import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
+import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 
 /**
  * Comprueba el diseño contra la frontera de keel-spring.

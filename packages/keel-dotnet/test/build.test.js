@@ -122,7 +122,7 @@ test('un archivo del generador que se quedó atrás: --check en rojo, --refresh 
   const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
   const readme = path.join(project, 'README.md');
   fs.writeFileSync(readme, 'versión anterior del generador\n');
-  const { digestOf } = await import('keel-core');
+  const { digestOf } = await import('@keel-system/keel-core');
   manifest.files['README.md'] = digestOf({ content: 'versión anterior del generador\n' });
   fs.writeFileSync(manifestFile, JSON.stringify(manifest, null, 2));
 

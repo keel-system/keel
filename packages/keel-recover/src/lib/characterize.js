@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import YAML from 'yaml';
-import { EXECUTED_MARKS, conventionsDigest, flowDigests, scenarioBody, scenarioIdOf, splitScenarioBlocks } from 'keel-core';
+import { EXECUTED_MARKS, conventionsDigest, flowDigests, scenarioBody, scenarioIdOf, splitScenarioBlocks } from '@keel-system/keel-core';
 import { validateAs } from './schema.js';
 
 // Paso 5: los escenarios de caracterización, ejecutados contra el legacy en marcha (prototipo:

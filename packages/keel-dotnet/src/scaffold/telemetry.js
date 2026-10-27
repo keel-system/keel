@@ -5,7 +5,7 @@
 // a `/actuator/prometheus`, que es lo que conserva los EXEMPLARS. Cambiar de backend es cambiar el colector.
 //
 // La regla de equivalencia manda en los NOMBRES: observaciones, atributos, desenlaces y series salen de
-// `keel-core/gen/telemetry-vocabulary.js`, así que el mismo panel y las mismas alertas tienen datos con los tres servidores.
+// `@keel-system/keel-core/gen/telemetry-vocabulary.js`, así que el mismo panel y las mismas alertas tienen datos con los tres servidores.
 //
 //   · Trazas: el SDK de OpenTelemetry sobre un `ActivitySource` propio (`keel`), con los spans abiertos por el código
 //     generado donde ya es dueño del punto de paso (la entrada HTTP, el mediator, el relay, el consumo, los clientes
@@ -17,9 +17,9 @@
 //     `span_id` en OpenMetrics, y no el exportador Prometheus de OpenTelemetry, que sigue en beta.
 //   · Los spans de los drivers (SQL, Mongo, Redis) son otro tramo: `telemetry-store-spans` de la matriz.
 
-import { collectorHostEndpoint } from 'keel-core/gen/infra-catalog';
-import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, OUTBOX_DEAD_LETTERED, instrumentationFor, promGauge, usesTelemetry } from 'keel-core/gen/telemetry-vocabulary';
-import { telemetryYaml as neutralTelemetryYaml } from 'keel-core/gen/telemetry-config';
+import { collectorHostEndpoint } from '@keel-system/keel-core/gen/infra-catalog';
+import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, OUTBOX_DEAD_LETTERED, instrumentationFor, promGauge, usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { telemetryYaml as neutralTelemetryYaml } from '@keel-system/keel-core/gen/telemetry-config';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { usesCorrelation } from './rest-support.js';

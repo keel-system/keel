@@ -28,8 +28,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { HTTP_STUB } from 'keel-core/gen/infra-catalog';
-import { HTTP_STUB_FAULT, HTTP_STUB_INITIAL_STATE } from 'keel-core/gen/http-stub-probes';
+import { HTTP_STUB } from '@keel-system/keel-core/gen/infra-catalog';
+import { HTTP_STUB_FAULT, HTTP_STUB_INITIAL_STATE } from '@keel-system/keel-core/gen/http-stub-probes';
 import { run, resolveRuntime, freePort } from '../../keel-nest/scripts/lib/database-container.js';
 import { planFixture, makeWorkspace } from '../test/helpers/workspace.js';
 

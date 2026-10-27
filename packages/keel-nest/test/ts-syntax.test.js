@@ -14,7 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { checkCrossRefs, loadService } from 'keel-core';
+import { checkCrossRefs, loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { checkTree } from './helpers/ts-tree.js';
 import { DERIVED_SILHOUETTES, FIXTURES_DIR, derivedDesign } from './helpers/workspace.js';

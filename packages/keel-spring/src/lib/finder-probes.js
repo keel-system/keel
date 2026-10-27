@@ -5,9 +5,9 @@
 // un valor que la encuentra y otros que no — los extremos de gte/lte dentro, los de gt/lt fuera y el texto como literal.
 // La escribe scripts/finder-check.js; no forma parte del proyecto generado.
 
-import { findersOf, FINDER_PROBE_TEXT, finderTextProbes } from 'keel-core/gen';
-import { screamingSnake } from 'keel-core/gen/naming';
-import { LOCK_VERSION } from 'keel-core/gen/relational';
+import { findersOf, FINDER_PROBE_TEXT, finderTextProbes } from '@keel-system/keel-core/gen';
+import { screamingSnake } from '@keel-system/keel-core/gen/naming';
+import { LOCK_VERSION } from '@keel-system/keel-core/gen/relational';
 import { domainMembers } from '../scaffold/entities.js';
 
 export const CLASS_NAME = 'FinderCheckTest';

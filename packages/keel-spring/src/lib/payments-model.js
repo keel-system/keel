@@ -5,4 +5,4 @@
 // pasa la proyección Java (java-projection.js) y se reexporta lo que el scaffolding ya importaba
 // de este módulo.
 
-export { GATEWAY_STATUSES, OUTCOME_STATUS, collectPayments, callsPaymentGateway } from 'keel-core/gen/payments-model';
+export { GATEWAY_STATUSES, OUTCOME_STATUS, collectPayments, callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';

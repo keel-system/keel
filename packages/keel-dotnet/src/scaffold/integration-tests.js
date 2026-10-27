@@ -20,15 +20,15 @@
 //
 // Aquí NO se genera ninguna prueba de flujo: eso es derivado del diseño y lo escribe el agente.
 
-import { DATABASES, selectedInfra } from 'keel-core/gen/infra-catalog';
-import { missingClockCountSql, rescueProbes, stallSql } from 'keel-core/gen';
-import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from 'keel-core/gen/junit-scoring';
-import { resetDbScript } from 'keel-core/gen/infra-scripts';
+import { DATABASES, selectedInfra } from '@keel-system/keel-core/gen/infra-catalog';
+import { missingClockCountSql, rescueProbes, stallSql } from '@keel-system/keel-core/gen';
+import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from '@keel-system/keel-core/gen/junit-scoring';
+import { resetDbScript } from '@keel-system/keel-core/gen/infra-scripts';
 import { TARGET_FRAMEWORK } from '../lib/assets.js';
 import { DOTNET_INFRA } from './infra.js';
 import { usesApi } from './rest-support.js';
 import { usesRelational, usesDocument } from './persistence.js';
-import { PRINT_WRAPPER } from 'keel-core/gen/mongo-probes';
+import { PRINT_WRAPPER } from '@keel-system/keel-core/gen/mongo-probes';
 import { documentFlowMembers, documentSmokeCase } from './document-harness.js';
 import { csFile, csString, solution } from './render.js';
 import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
@@ -40,7 +40,7 @@ import { storageFlowMembers, uploadHarnessSection, uploadPartRecord, usesMultipa
 import { httpStubFile, idLiteralMember, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
 import { usesLastKnown } from './http-clients.js';
 import { mailHarnessFile, mailSmokeCase } from './mail-harness.js';
-import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
+import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenarios';
 import { statementCountHarnessSection, statementCountLaunch, statementCountMembers, statementCountSmokeCase } from './statement-count.js';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';

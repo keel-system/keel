@@ -5,7 +5,7 @@
 
 import net from 'node:net';
 import { spawnSync } from 'node:child_process';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 
 export const DB_NAME = 'keel_db_check';
 

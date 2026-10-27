@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService, scaffoldService } from '../src/scaffold/index.js';
 import { PAYMENT_GATEWAYS } from '../src/lib/stack-catalog.js';
 import { tmpDir } from '../test/helpers/tmp.js';

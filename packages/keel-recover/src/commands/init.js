@@ -1,6 +1,6 @@
 import path from 'node:path';
 import pc from 'picocolors';
-import { isKeelWorkspace } from 'keel-core';
+import { isKeelWorkspace } from '@keel-system/keel-core';
 import { planInit, writePlan } from '../lib/init.js';
 
 /** `keel-recover init <repo>`: prepara legacy/<servicio>/ y siembra la skill del sandbox. */

@@ -12,16 +12,16 @@
 // La configuración (config/parameters/<perfil>/storage.yaml) es la neutral de keel-core (gen/storage-config.js), con las
 // MISMAS variables y el mismo gradiente que el storage.yaml de keel-spring: un mismo .env sirve para los tres servidores.
 
-import { CONTENT_SIGNATURES } from 'keel-core/gen/content-signatures';
-import { declaredErrorFor } from 'keel-core/gen/declared-errors';
-import { STORAGE, devtoolsContainer, storageContainer } from 'keel-core/gen/infra-catalog';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
-import { screamingSnake } from 'keel-core/gen';
+import { CONTENT_SIGNATURES } from '@keel-system/keel-core/gen/content-signatures';
+import { declaredErrorFor } from '@keel-system/keel-core/gen/declared-errors';
+import { STORAGE, devtoolsContainer, storageContainer } from '@keel-system/keel-core/gen/infra-catalog';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
+import { screamingSnake } from '@keel-system/keel-core/gen';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { FILE_UPLOAD_TS } from './dtos.js';
 import { TELEMETRY_TS, instrumentationFor } from './telemetry.js';
-import { storageYaml, multipartFileLimitBytes } from 'keel-core/gen/storage-config';
+import { storageYaml, multipartFileLimitBytes } from '@keel-system/keel-core/gen/storage-config';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const STORAGE_DIR = 'domain/storage';

@@ -23,17 +23,17 @@ import {
   cacheInvalidations,
   CACHE_ENTRY_SEPARATOR,
   CACHE_KEY_PART_SEPARATOR
-} from 'keel-core/gen/cache-plan';
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
-import { CACHES, devtoolsContainer } from 'keel-core/gen/infra-catalog';
-import { cacheFlushCmd } from 'keel-core/gen/infra-scripts';
+} from '@keel-system/keel-core/gen/cache-plan';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
+import { CACHES, devtoolsContainer } from '@keel-system/keel-core/gen/infra-catalog';
+import { cacheFlushCmd } from '@keel-system/keel-core/gen/infra-scripts';
 import { DIRS, classPath, fieldImports, isNullable, tsModule, tsString } from './render.js';
 import { messageComponents, messagePath, returnTypeOf } from './services.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { usesPersistence } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
-import { cacheYaml } from 'keel-core/gen/cache-config';
+import { cacheYaml } from '@keel-system/keel-core/gen/cache-config';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const WIRE_TS = 'src/application/support/wire.ts';

@@ -10,7 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import path from 'node:path';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { identitySection } from '../src/scaffold/identity-harness.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';

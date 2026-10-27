@@ -6,9 +6,9 @@
 // solo queda cómo se escribe eso en el arnés Java: los literales, los cuerpos con expresiones
 // intercaladas y los predicados como expresión sobre una lectura.
 
-import { renderParts, spliceBody, hole, rabbitProbeBody, rabbitPublishBody } from 'keel-core/gen/broker-probes';
+import { renderParts, spliceBody, hole, rabbitProbeBody, rabbitPublishBody } from '@keel-system/keel-core/gen/broker-probes';
 
-export * from 'keel-core/gen/broker-probes';
+export * from '@keel-system/keel-core/gen/broker-probes';
 
 /** `["kcat", "-C", …]` → `"kcat", "-C", …`, con las expresiones sin comillas. */
 export function javaArgs(parts) {

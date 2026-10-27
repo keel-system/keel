@@ -10,8 +10,8 @@
 //   · `warnings` dejan seguir — la capa se acepta pero lo que el diseño declara en ella todavía no se
 //     emite, y el aviso dice cuándo llega.
 
-import { compositeUrlParamErrors } from 'keel-core/gen/outbound-params';
-import { messagingWithoutPersistenceErrors } from 'keel-core/gen/messaging-frontier';
+import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
+import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {};

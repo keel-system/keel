@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { mainCompilable } from '../src/lib/main-compilable.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 

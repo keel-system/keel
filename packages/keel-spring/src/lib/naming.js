@@ -6,7 +6,7 @@
 // el scaffolding las siga pidiendo a un solo módulo. Lo que queda escrito en este archivo es lo
 // propio de Java: el grupo y el paquete base.
 
-export { pascalCase, camelCase, kebabCase, snakeCase, screamingSnake, pluralize, brokerSafeName } from 'keel-core/gen';
+export { pascalCase, camelCase, kebabCase, snakeCase, screamingSnake, pluralize, brokerSafeName } from '@keel-system/keel-core/gen';
 
 // Grupo por defecto (groupId): com.<domain> (ver project-layout.md). Es el
 // default que sugiere el cuestionario cuando el usuario no introduce otro.

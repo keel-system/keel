@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadService, supportedDsl } from 'keel-core';
+import { loadService, supportedDsl } from '@keel-system/keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { generate as generateReconciliationClaim } from '../src/scaffold/reconciliation-claim.js';
 import { generate as generateRepositories } from '../src/scaffold/repositories.js';

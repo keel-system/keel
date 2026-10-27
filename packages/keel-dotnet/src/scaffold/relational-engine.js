@@ -13,7 +13,7 @@
 //   · la versión del servidor es FIJA y no `ServerVersion.AutoDetect`: `dotnet ef` y la prueba del modelo construyen el
 //     modelo sin base, y AutoDetect conecta.
 
-import { needsReadCommitted } from 'keel-core/gen/infra-catalog';
+import { needsReadCommitted } from '@keel-system/keel-core/gen/infra-catalog';
 
 /** El motor relacional del diseño: el que pide el stack, o PostgreSQL. */
 export function relationalEngine(model) {

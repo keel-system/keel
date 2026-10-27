@@ -15,7 +15,7 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { domainSubPackage } from './entities.js';
 import { rootId } from './repositories.js';
 import { ANNOTATIONS_PKG } from './mediator.js';
-import { refTargets } from 'keel-core/gen/ref-targets';
+import { refTargets } from '@keel-system/keel-core/gen/ref-targets';
 
 const SUPPORT_PKG = 'application.support';
 const PORT_PKG = 'domain.repository';
@@ -24,7 +24,7 @@ const DTO_PKG = 'application.dtos';
 
 // Qué raíces embebe un payload y cuáles embebe una operación: neutral, lo comparte keel-nest
 // (keel-core/gen/ref-targets.js).
-export { refTargets, isRefTarget, refTargetsOf } from 'keel-core/gen/ref-targets';
+export { refTargets, isRefTarget, refTargetsOf } from '@keel-system/keel-core/gen/ref-targets';
 
 export function generate(model) {
   if (!model.layersPresent.persistence) return [];

@@ -17,12 +17,12 @@
 // procesados en su PROPIA transacción, y escribir los registros como INSERT —un reemplazo o un upsert
 // sobre un `_id` presente pisaría en silencio el registro de la otra petición en vez de perder la carrera—.
 
-import { screamingSnake, claimOrderField, claimsForEntity } from 'keel-core/gen';
-import { OUTBOX_EVENT, PROCESSED_EVENT } from 'keel-core/gen/messaging-stores';
-import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
-import { RECONCILIATION_CLAIM, reconciliationClaims } from 'keel-core/gen/reconciliation-stores';
-import { documentShape, storeDocumentKey } from 'keel-core/gen/document';
-import { snakeCase } from 'keel-core/gen/naming';
+import { screamingSnake, claimOrderField, claimsForEntity } from '@keel-system/keel-core/gen';
+import { OUTBOX_EVENT, PROCESSED_EVENT } from '@keel-system/keel-core/gen/messaging-stores';
+import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
+import { RECONCILIATION_CLAIM, reconciliationClaims } from '@keel-system/keel-core/gen/reconciliation-stores';
+import { documentShape, storeDocumentKey } from '@keel-system/keel-core/gen/document';
+import { snakeCase } from '@keel-system/keel-core/gen/naming';
 import { tsModule, tsString } from './render.js';
 import { guardClaimsFor } from './claim.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';

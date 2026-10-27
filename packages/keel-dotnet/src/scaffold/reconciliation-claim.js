@@ -20,8 +20,8 @@
 // donde la clave primaria deja una sola réplica (la otra espera su commit y no inserta nada). Un error no aborta la
 // transacción en MySQL, y no hay error que capturar.
 
-import { RECONCILIATION_CLAIM, RECONCILIATION_PURGE, reconciledActivations, reconciliationClaims, reconciliationParameters, reconciliationYaml } from 'keel-core/gen/reconciliation-stores';
-import { screamingSnake, snakeCase } from 'keel-core/gen';
+import { RECONCILIATION_CLAIM, RECONCILIATION_PURGE, reconciledActivations, reconciliationClaims, reconciliationParameters, reconciliationYaml } from '@keel-system/keel-core/gen/reconciliation-stores';
+import { screamingSnake, snakeCase } from '@keel-system/keel-core/gen';
 import { csFile, csMember, csString, located, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
 import { dbContextClass, usesPersistence, usesDocument } from './persistence.js';

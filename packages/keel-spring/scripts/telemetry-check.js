@@ -43,7 +43,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { resolveStack, scaffoldService } from '../src/scaffold/index.js';
 import { tmpDir } from '../test/helpers/tmp.js';
 import {

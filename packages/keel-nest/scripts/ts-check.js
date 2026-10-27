@@ -31,7 +31,7 @@ import { TELEMETRY_DEPENDENCIES } from '../src/scaffold/telemetry.js';
 
 /** Las fixtures que se compilan además con telemetría: cada pieza instrumentada, en los dos modelos. */
 const TELEMETRY_SUBJECTS = ['product-catalog', 'stock-reservation', 'catalog-extended', 'asset-vault', 'notification-mailer', 'notification-mailer-mongo'];
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { DERIVED_SILHOUETTES, FIXTURES_DIR, derivedDesign } from '../test/helpers/workspace.js';
 import { resolveRuntime, startDatabase, stopDatabase } from './lib/database-container.js';
 import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION, AWS_SDK_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION, FASTIFY_MULTIPART_VERSION } from '../src/lib/assets.js';

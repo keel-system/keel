@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import YAML from 'yaml';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
 import { planFixture, fixtureNames, FIXTURES_DIR } from './helpers/workspace.js';

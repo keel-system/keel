@@ -11,7 +11,7 @@
 
 import { DIRS, classPath, tsModule } from './render.js';
 import { UUID_V7_CALL } from '../lib/ts-projection.js';
-import { LONG_ID_EPOCH_MS, LONG_ID_RANDOM_BITS, usesGeneratedLongIds } from 'keel-core/gen/ids';
+import { LONG_ID_EPOCH_MS, LONG_ID_RANDOM_BITS, usesGeneratedLongIds } from '@keel-system/keel-core/gen/ids';
 
 export const UUIDS_CLASS = 'Uuids';
 export const UUIDS_TS = classPath(DIRS.identity, UUIDS_CLASS);

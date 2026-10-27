@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { TEST_USER_PASSWORD } from 'keel-core/gen/identity-realm';
+import { TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
 import { validateDoc } from './schema.js';
 import { DATABASE_TECHS } from './db/index.js';
 

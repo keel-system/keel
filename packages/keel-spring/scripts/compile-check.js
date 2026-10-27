@@ -54,7 +54,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { mainCompilable } from '../src/lib/main-compilable.js';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';

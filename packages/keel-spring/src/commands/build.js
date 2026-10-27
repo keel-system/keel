@@ -1,7 +1,7 @@
 import path from 'node:path';
 import pc from 'picocolors';
-import { copyTree } from 'keel-core';
-import { gateDesign } from 'keel-core/gen/design-gate';
+import { copyTree } from '@keel-system/keel-core';
+import { gateDesign } from '@keel-system/keel-core/gen/design-gate';
 import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { checkGatewaySupport } from '../lib/gateway-support.js';
@@ -27,7 +27,7 @@ import {
   planEvolution,
   reportEvolution,
   reportGeneratorDrift
-} from 'keel-core/gen/evolution';
+} from '@keel-system/keel-core/gen/evolution';
 import { SPRING_EVOLUTION } from '../scaffold/evolution.js';
 
 export async function build(

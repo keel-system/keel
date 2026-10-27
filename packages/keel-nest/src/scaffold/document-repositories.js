@@ -15,11 +15,11 @@
 //     auditoría de Spring Data. Guardar es un `$set` del documento entero y no un reemplazo, para que
 //     lo que el dominio no lleva (la auditoría de política) no se pierda.
 
-import { persistedMembers, collectInternalEntities, LOCK_VERSION, orderingFieldOf, orderingTieBreakerOf } from 'keel-core/gen';
-import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
-import { documentShape, DOCUMENT_ID, storageOf } from 'keel-core/gen/document';
-import { screamingSnake, snakeCase } from 'keel-core/gen/naming';
-import { idBatchReason } from 'keel-core/gen/ref-targets';
+import { persistedMembers, collectInternalEntities, LOCK_VERSION, orderingFieldOf, orderingTieBreakerOf } from '@keel-system/keel-core/gen';
+import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
+import { documentShape, DOCUMENT_ID, storageOf } from '@keel-system/keel-core/gen/document';
+import { screamingSnake, snakeCase } from '@keel-system/keel-core/gen/naming';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { DIRS, classPath, entityDir, tsModule, tsString } from './render.js';
 import { domainMembers } from './entities.js';
 import { TEXT_FOLD_TS } from './persistence-entities.js';

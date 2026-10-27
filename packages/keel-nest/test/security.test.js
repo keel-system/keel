@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SignJWT, exportJWK, generateKeyPair } from 'jose';
-import { accessPlan } from 'keel-core/gen/access-plan';
+import { accessPlan } from '@keel-system/keel-core/gen/access-plan';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 
 const byPath = (files) => Object.fromEntries(files.map((file) => [file.path, file.content]));

@@ -31,7 +31,7 @@ import {
   promMetric,
   promGauge,
   promTag
-} from 'keel-core/gen/telemetry-vocabulary';
+} from '@keel-system/keel-core/gen/telemetry-vocabulary';
 export {
   usesTelemetry,
   OBSERVATIONS,

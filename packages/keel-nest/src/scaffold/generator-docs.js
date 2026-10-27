@@ -11,10 +11,10 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { HARNESSES, applyTokens, emitHarnessFiles } from 'keel-core';
-import { contractDocs } from 'keel-core/gen/contract-docs';
+import { HARNESSES, applyTokens, emitHarnessFiles } from '@keel-system/keel-core';
+import { contractDocs } from '@keel-system/keel-core/gen/contract-docs';
 import { usesIdempotencyCheck } from './idempotency-check.js';
-import { describeStack } from 'keel-core/gen/stack';
+import { describeStack } from '@keel-system/keel-core/gen/stack';
 import { assetsDir, SKILL } from '../lib/assets.js';
 import { usesDocument, usesRelational } from './persistence-entities.js';
 import { usesJwt } from './security.js';

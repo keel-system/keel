@@ -7,11 +7,11 @@
 // Las peticiones las elige del DISEÑO keel-core/gen/api-cases.js, la misma elección que en keel-nest: si un caso
 // no tiene operación que lo ejercite, no se emite.
 
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { FRAMEWORK_RESPONSES as FW, missingParameterMessage, missingPartMessage } from 'keel-core/gen/api-errors';
-import { declaredErrorFor } from 'keel-core/gen/declared-errors';
-import { apiCases as neutralApiCases, securityCases as neutralSecurityCases } from 'keel-core/gen/api-cases';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { FRAMEWORK_RESPONSES as FW, missingParameterMessage, missingPartMessage } from '@keel-system/keel-core/gen/api-errors';
+import { declaredErrorFor } from '@keel-system/keel-core/gen/declared-errors';
+import { apiCases as neutralApiCases, securityCases as neutralSecurityCases } from '@keel-system/keel-core/gen/api-cases';
 import { csFile, csString, solution } from './render.js';
 import { messageComponents } from './services.js';
 import { usesApi } from './rest-support.js';

@@ -21,7 +21,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
 import { scopingClaimChecks } from '../src/scaffold/auth-provisioning.js';
 import { buildModel } from '../src/lib/model.js';

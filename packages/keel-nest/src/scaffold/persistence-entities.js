@@ -41,8 +41,8 @@ import {
   camelCase,
   partialIndexSpecs,
   discriminatorColumn
-} from 'keel-core/gen';
-import { hasPatternFilter } from 'keel-core/gen/text-filters';
+} from '@keel-system/keel-core/gen';
+import { hasPatternFilter } from '@keel-system/keel-core/gen/text-filters';
 import { DIRS, classPath, capitalize, decapitalize, isNullable, tsModule, tsString } from './render.js';
 
 export const ORM_DIR = 'infrastructure/persistence/entities';

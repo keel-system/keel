@@ -10,7 +10,7 @@
 // Lo marcado VERIFICAR EN SANDBOX es lo que la matriz declara `unverified`: build lo genera con la lectura más
 // probable, avisando.
 
-import { gatewayTranslation, paymentIdempotencyKey, savedMethodIdempotencyKey, SAVED_METHOD_SEPARATOR } from 'keel-core/gen/payment-gateways';
+import { gatewayTranslation, paymentIdempotencyKey, savedMethodIdempotencyKey, SAVED_METHOD_SEPARATOR } from '@keel-system/keel-core/gen/payment-gateways';
 import { DIRS, classPath, tsModule, tsString } from '../render.js';
 
 const TRANSLATION = gatewayTranslation('mercadopago');

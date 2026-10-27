@@ -18,7 +18,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { UUID_V7_CALL, LONG_ID_CALL } from '../lib/model.js';
-import { LONG_ID_EPOCH_MS, LONG_ID_RANDOM_BITS, usesGeneratedLongIds } from 'keel-core/gen/ids';
+import { LONG_ID_EPOCH_MS, LONG_ID_RANDOM_BITS, usesGeneratedLongIds } from '@keel-system/keel-core/gen/ids';
 
 export const IDS_PKG = 'domain.identity';
 export const IDS_CLASS = 'Uuids';

@@ -5,7 +5,7 @@
 //     keel-core (PURGE_CASES, que test/scheduling.test.js vuelve a calcular con batchedPurgeReference).
 // Lo que habla con la base (las purgas de verdad) lo juzga `db-check`.
 
-import { BATCHED_PURGE, batchedPurgeParameters, scheduleCron } from 'keel-core/gen';
+import { BATCHED_PURGE, batchedPurgeParameters, scheduleCron } from '@keel-system/keel-core/gen';
 import { csFile, csString, namespaceOf, solution } from './render.js';
 import { scheduledServices, schedulerClass, usesScheduling } from './scheduling.js';
 import { PURGE_CASES, PURGE_CASES_CUTOFF, purgeNamespace, tablePurges } from './purge.js';

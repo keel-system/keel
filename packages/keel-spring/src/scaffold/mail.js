@@ -24,7 +24,7 @@
 // de gradle.js). Eso tampoco se delega.
 
 import { javaFile, javaPath } from './render.js';
-import { COMPILED_TEMPLATES_LIMIT, HTML_ESCAPES, MAIL_HEADER_NAME_CLASS, RESERVED_MAIL_HEADERS } from 'keel-core/gen/mail-message';
+import { COMPILED_TEMPLATES_LIMIT, HTML_ESCAPES, MAIL_HEADER_NAME_CLASS, RESERVED_MAIL_HEADERS } from '@keel-system/keel-core/gen/mail-message';
 
 const DOMAIN_PKG = 'domain.mail';
 const PORT_PKG = 'application.port.out';

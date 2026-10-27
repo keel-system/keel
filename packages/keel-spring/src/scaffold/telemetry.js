@@ -30,7 +30,7 @@
 //     de trazas vacías y el muestreo en producción descarta las que importan.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { instrumentationFor } from 'keel-core/gen/telemetry-vocabulary';
+import { instrumentationFor } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import {
   ATTRIBUTES,
   INSTRUMENTATION,

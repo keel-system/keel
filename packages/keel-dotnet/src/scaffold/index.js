@@ -6,12 +6,12 @@
 // renderizadores de abajo.
 
 import path from 'node:path';
-import { buildModel } from 'keel-core/gen/model';
-import { materializeProject } from 'keel-core/gen/materialize';
-import { resolveStack } from 'keel-core/gen/stack';
-import { checkGatewaySupport } from 'keel-core/gen/payment-gateways';
-import { listKeelDocs } from 'keel-core/gen/keel-docs';
-import { derivedOpenapiFiles } from 'keel-core/gen/openapi';
+import { buildModel } from '@keel-system/keel-core/gen/model';
+import { materializeProject } from '@keel-system/keel-core/gen/materialize';
+import { resolveStack } from '@keel-system/keel-core/gen/stack';
+import { checkGatewaySupport } from '@keel-system/keel-core/gen/payment-gateways';
+import { listKeelDocs } from '@keel-system/keel-core/gen/keel-docs';
+import { derivedOpenapiFiles } from '@keel-system/keel-core/gen/openapi';
 import { packageVersion } from '../lib/assets.js';
 import { CS_PROJECTION } from '../lib/cs-projection.js';
 import * as project from './project.js';

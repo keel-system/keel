@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { buildModel } from '../src/lib/model.js';
 // Los nombres del espejo del registro de claves salen del generador, no de este test: es la
 // misma fuente que consume store-probes.js para emitir el JUnit.

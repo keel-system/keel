@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { assessReadiness, scenarioIdOf, splitScenarioBlocks } from 'keel-core';
+import { assessReadiness, scenarioIdOf, splitScenarioBlocks } from '@keel-system/keel-core';
 import { readFlowBlock } from './characterize.js';
 import { provenanceBacking } from './backing.js';
 import { pendingClassProbes } from './class-probes.js';

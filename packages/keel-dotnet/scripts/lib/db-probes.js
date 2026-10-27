@@ -42,17 +42,17 @@ function freshId(field, salt) {
   if (field.csType === 'int') return String(randomInt(1, 2 ** 31 - 1));
   return csString(`id-${salt}`);
 }
-import { constraintErrors, declaredConcurrencyError, foldedShadow, idempotencyOutcomeCode, LOCK_VERSION, persistedMembers, partialUniqueIndexes, indexName } from 'keel-core/gen';
-import { registryOperations } from 'keel-core/gen/request-idempotency';
+import { constraintErrors, declaredConcurrencyError, foldedShadow, idempotencyOutcomeCode, LOCK_VERSION, persistedMembers, partialUniqueIndexes, indexName } from '@keel-system/keel-core/gen';
+import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
-import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from 'keel-core/gen';
+import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
-import { reconciledActivations, reconciliationClaims, reconciliationParameters } from 'keel-core/gen/reconciliation-stores';
+import { reconciledActivations, reconciliationClaims, reconciliationParameters } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
-import { FRAMEWORK_ERRORS } from 'keel-core';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { sampleFor } from '../../../keel-nest/scripts/lib/samples.js';
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { csLocal, csMember, csString, entityPlace, namespaceOf, solution, typeUsings } from '../../src/scaffold/render.js';
@@ -62,10 +62,10 @@ import { securityNamespace, usesHttpSecurity } from '../../src/scaffold/security
 import { usesCorrelation } from '../../src/scaffold/rest-support.js';
 import { projectionNamespace } from '../../src/scaffold/projections.js';
 import { naturalKeyBatchFinder } from '../../src/scaffold/repositories.js';
-import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
-import { occurredAtField } from 'keel-core/gen/replica';
-import { idBatchReason } from 'keel-core/gen/ref-targets';
-import { FINDER_PROBE_TEXT, findersOf, finderTextProbes } from 'keel-core/gen/query-filters';
+import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
+import { occurredAtField } from '@keel-system/keel-core/gen/replica';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
+import { FINDER_PROBE_TEXT, findersOf, finderTextProbes } from '@keel-system/keel-core/gen/query-filters';
 import { driverNamespace, usesMySql, valueAlias } from '../../src/scaffold/relational-engine.js';
 
 /**

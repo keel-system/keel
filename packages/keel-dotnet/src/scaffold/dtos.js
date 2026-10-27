@@ -8,7 +8,7 @@
 // `conventions.nulls: omit` llevan [OmitNulls] (Application/Support), el @JsonInclude(NON_NULL) por clase de
 // keel-spring: por clase y nunca global, porque el cuerpo de error tiene forma fija.
 
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { csFile, csMember, csString, declType, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
 
 export function generate(model) {

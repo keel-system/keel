@@ -19,7 +19,7 @@ import {
   retryInitialDelayMs,
   retryMaxDelayMs,
   missingTargetRetryDestinations
-} from 'keel-core/gen';
+} from '@keel-system/keel-core/gen';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
 

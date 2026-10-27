@@ -9,11 +9,11 @@
 // (sus handlers seguían importando @Transactional).
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { orphanInternalOperations, dispatchingOperations } from 'keel-core/gen';
+import { orphanInternalOperations, dispatchingOperations } from '@keel-system/keel-core/gen';
 import { mediatorCacheInvalidations, OPERATION_CACHE_PKG, CACHED_OPERATIONS_PKG } from './cache.js';
 import { usesTelemetry, OBSERVATIONS } from './telemetry.js';
 import { ATTRIBUTES } from '../lib/telemetry-probes.js';
-import { WRITE_CONFLICT_ATTEMPTS } from 'keel-core/gen/transactions';
+import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
 
 export const INTERFACES_PKG = 'application.interfaces';
 export const ANNOTATIONS_PKG = 'application.annotations';
@@ -744,7 +744,7 @@ public class UseCaseAutoRegister implements CommandLineRunner {
 const PORT_PKG = 'application.port.out';
 
 // Las operaciones internas sin disparador y las que declaran `dispatches` (2.21) las decide keel-core
-// (`keel-core/gen/dispatch.js`), igual para keel-nest: un handler no puede llamar a otro handler
+// (`@keel-system/keel-core/gen/dispatch.js`), igual para keel-nest: un handler no puede llamar a otro handler
 // (constitution.md), así que ese enlace necesita un puerto, que si build no lo genera se inventa el agente.
 
 /**

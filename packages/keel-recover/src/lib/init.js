@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { emitHarnessFiles } from 'keel-core';
+import { emitHarnessFiles } from '@keel-system/keel-core';
 import { renderDoc } from './emit.js';
 import { fingerprint } from './fingerprint.js';
 import { envDeps } from './env-deps.js';

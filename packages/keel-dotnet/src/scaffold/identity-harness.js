@@ -11,8 +11,8 @@
 // que pedir un token, sin `serviceAuth` no hay clientes máquina. Qué credencial satisface la regla de cierre (la del humo)
 // lo decide keel-core (`closingCredentialOf`), la misma para los tres generadores.
 
-import { closingCredentialOf, usesTokenProtocol } from 'keel-core/gen/access-plan';
-import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from 'keel-core/gen/identity-realm';
+import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
+import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
 import { csFile, csString } from './render.js';
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
 

@@ -23,8 +23,8 @@ import { rawJsonAnnotations } from './jackson.js';
 import { usesOutbox, outboxNames } from './outbox.js';
 import { correlationImport } from './correlation.js';
 import { usesTelemetry, messageTracingImport } from './telemetry.js';
-import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination } from 'keel-core/gen';
-import { acknowledgeNote } from 'keel-core/gen/rejection-notes';
+import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination } from '@keel-system/keel-core/gen';
+import { acknowledgeNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { credentialFinderName } from './repositories.js';
 import { entryGateValue } from './services.js';
 

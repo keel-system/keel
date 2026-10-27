@@ -44,12 +44,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { resolveStack, scaffoldService } from '../src/scaffold/index.js';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { ALERTING, TELEMETRY_INFRA } from '../src/lib/stack-catalog.js';
 import { METRICS_TRANSPORT } from '../src/lib/telemetry-probes.js';
-import { DEPLOY_CASES, probeDeployBackend } from 'keel-core/gen/deploy-probes';
+import { DEPLOY_CASES, probeDeployBackend } from '@keel-system/keel-core/gen/deploy-probes';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');

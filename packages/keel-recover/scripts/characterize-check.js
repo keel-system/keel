@@ -33,7 +33,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { loadCharacterized, loadProvenance, readCharacterization, resolveCharacterized } from 'keel-core';
+import { loadCharacterized, loadProvenance, readCharacterization, resolveCharacterized } from '@keel-system/keel-core';
 import { renderDoc } from '../src/lib/emit.js';
 import { fingerprint } from '../src/lib/fingerprint.js';
 import { envDeps } from '../src/lib/env-deps.js';

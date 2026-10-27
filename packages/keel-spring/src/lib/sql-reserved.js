@@ -15,7 +15,7 @@
 
 // La lista vive en keel-core/gen (relational.js): el mismo diseño se genera con keel-spring o con
 // keel-nest, y el nombre de columna no puede depender del generador más que del motor.
-import { isReservedSqlWord, quoteIdentifierFor } from 'keel-core/gen/relational';
+import { isReservedSqlWord, quoteIdentifierFor } from '@keel-system/keel-core/gen/relational';
 
 export function isReserved(name) {
   return isReservedSqlWord(name);

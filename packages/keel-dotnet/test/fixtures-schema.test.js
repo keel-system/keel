@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { springSchema } from '../../keel-spring/test/helpers/schema-table.js';

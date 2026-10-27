@@ -21,7 +21,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { assessReadiness } from 'keel-core';
+import { assessReadiness } from '@keel-system/keel-core';
 import { tmpDir } from './helpers/tmp.js';
 import { FIXTURES_DIR, READY_FIXTURES, mountDesign } from './helpers/workspace.js';
 

@@ -29,7 +29,7 @@ import {
   foreignKeyIndexName,
   foreignKeyIndexColumns as neutralForeignKeyIndexColumns,
   tableOf
-} from 'keel-core/gen/relational';
+} from '@keel-system/keel-core/gen/relational';
 
 export const JPA_PKG = 'infrastructure.persistence.entities';
 

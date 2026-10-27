@@ -23,13 +23,13 @@ import {
   OUTBOX_LAST_ERROR_LENGTH,
   PROCESSED_EVENT,
   storeColumns
-} from 'keel-core/gen/messaging-stores';
+} from '@keel-system/keel-core/gen/messaging-stores';
 import { classPath, tsModule, tsString } from './render.js';
 import { TRANSFORMERS_TS, engineOf, optionsLiteral, physicalColumn, usesDocument } from './persistence-entities.js';
 import { documentGuard, documentRelayStore } from './document-stores.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
-import { OUTBOX_DEAD_LETTERED } from 'keel-core/gen/telemetry-vocabulary';
+import { OUTBOX_DEAD_LETTERED } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import {
   IDEMPOTENCY_GUARD_TS,
   MESSAGING_SETTINGS_TS,
@@ -43,7 +43,7 @@ import {
   usesNestOutbox,
   usesProcessedEvents
 } from './messaging.js';
-import { needsReadCommitted } from 'keel-core/gen/infra-catalog';
+import { needsReadCommitted } from '@keel-system/keel-core/gen/infra-catalog';
 
 export function generate(model) {
   const files = [];

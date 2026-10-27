@@ -50,9 +50,9 @@
 // las cuatro), y eso es un inventario de corridas, no de ramas. Meterlo aquí mezclaría dos cosas
 // que se comprueban de formas distintas y dejaría media tabla sin poder verificar.
 
-import { MECHANISM_CATALOG } from 'keel-core/gen/mechanisms';
+import { MECHANISM_CATALOG } from '@keel-system/keel-core/gen/mechanisms';
 
-export { MODELS, STATES, NETS, PAIRS, MECHANISM_CATALOG } from 'keel-core/gen/mechanisms';
+export { MODELS, STATES, NETS, PAIRS, MECHANISM_CATALOG } from '@keel-system/keel-core/gen/mechanisms';
 
 /**
  * El `title` y el `axis` de cada fila viven en el catálogo neutral (keel-core/gen/mechanisms), que

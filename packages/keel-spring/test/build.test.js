@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { FIXTURES_DIR, READY_FIXTURES, mountDesign } from './helpers/workspace.js';
-import { HARNESSES, loadService, validateService } from 'keel-core';
+import { HARNESSES, loadService, validateService } from '@keel-system/keel-core';
 import { build } from '../src/commands/build.js';
 import { assetsDir, SUPPORTED_DSL } from '../src/lib/assets.js';
 

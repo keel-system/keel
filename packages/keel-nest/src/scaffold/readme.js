@@ -1,6 +1,6 @@
 // README del proyecto generado: de dónde sale, cómo se arranca y qué falta.
 
-import { describeStack } from 'keel-core/gen/stack';
+import { describeStack } from '@keel-system/keel-core/gen/stack';
 import { postmanEnvironmentPath, publishedUrls } from './deploy.js';
 
 export function generate(model) {

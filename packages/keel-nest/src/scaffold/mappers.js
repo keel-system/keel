@@ -8,10 +8,10 @@
 // sale como `todo(...)`, que COMPILA y falla en ejecución nombrando el campo: en Java es un `null`
 // con comentario, pero en TypeScript estricto un null no cabe en un campo obligatorio.
 
-import { isPublicBucket } from 'keel-core/gen';
+import { isPublicBucket } from '@keel-system/keel-core/gen';
 import { DIRS, classPath, declType, entityDir, isNullable, tsModule } from './render.js';
 import { FILE_STORAGE_TS, STORAGE_POLICIES_TS } from './storage.js';
-import { screamingSnake } from 'keel-core/gen';
+import { screamingSnake } from '@keel-system/keel-core/gen';
 import { ANNOTATIONS_TS } from './mediator.js';
 import { domainMembers } from './entities.js';
 

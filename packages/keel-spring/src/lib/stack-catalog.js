@@ -6,4 +6,4 @@
 // sitio. Lo que la opción añade al proyecto Java (dependencias Gradle, módulo Flyway, cadena de
 // conexión de Spring) está en java-stack.js.
 
-export * from 'keel-core/gen/infra-catalog';
+export * from '@keel-system/keel-core/gen/infra-catalog';

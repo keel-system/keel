@@ -6,7 +6,7 @@
 // la corrida asset-vault escribió la lectura a mano (`FindAllByIdIn` en el puerto, el adaptador y el handler), como las
 // primeras corridas de keel-nest. Qué raíces se resuelven lo decide keel-core (`refTargets`).
 
-import { refTargets } from 'keel-core/gen/ref-targets';
+import { refTargets } from '@keel-system/keel-core/gen/ref-targets';
 import { csFile, csLocal, located, namespaceOf, entityPlace } from './render.js';
 import { portClass, repositoriesNamespace } from './repositories.js';
 import { usesPersistence } from './persistence.js';

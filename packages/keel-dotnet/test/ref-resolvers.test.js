@@ -5,7 +5,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { refTargets } from 'keel-core/gen/ref-targets';
+import { refTargets } from '@keel-system/keel-core/gen/ref-targets';
 import { planFixture } from './helpers/workspace.js';
 
 const content = (files, suffix) => files.find((file) => file.path.endsWith(suffix))?.content;

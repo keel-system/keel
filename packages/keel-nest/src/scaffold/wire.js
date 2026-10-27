@@ -16,7 +16,7 @@
 //     `application/support/wire.ts`: TypeScript puro, los usan los DTO y la infraestructura;
 //   · la infraestructura (`http-platform.ts`) solo los conecta a Fastify.
 
-import { WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS } from 'keel-core/gen/wire';
+import { WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS } from '@keel-system/keel-core/gen/wire';
 
 export const DECIMAL_TS = 'src/domain/support/decimal.ts';
 export const RAW_JSON_TS = 'src/domain/support/raw-json.ts';

@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planTarget } from '../src/lib/target.js';
 import { seedPersona } from '../src/lib/parity-target.js';
 

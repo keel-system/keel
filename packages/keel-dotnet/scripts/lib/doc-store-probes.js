@@ -11,11 +11,11 @@
 // Lo que en relacional mide SKIP LOCKED (otra réplica reteniendo una fila) no tiene gemelo: aquí no hay lock de fila, y el
 // reparto lo hace la operación atómica sobre el documento, que mide la carrera.
 
-import { claimOrderField, claimsForEntity, screamingSnake, snakeCase } from 'keel-core/gen';
-import { reconciliationClaims } from 'keel-core/gen/reconciliation-stores';
-import { documentShape, storeDocumentKey, storeDocumentFields } from 'keel-core/gen/document';
-import { OUTBOX_EVENT, PROCESSED_EVENT } from 'keel-core/gen/messaging-stores';
-import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
+import { claimOrderField, claimsForEntity, screamingSnake, snakeCase } from '@keel-system/keel-core/gen';
+import { reconciliationClaims } from '@keel-system/keel-core/gen/reconciliation-stores';
+import { documentShape, storeDocumentKey, storeDocumentFields } from '@keel-system/keel-core/gen/document';
+import { OUTBOX_EVENT, PROCESSED_EVENT } from '@keel-system/keel-core/gen/messaging-stores';
+import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
 import { csMember, csString } from '../../src/scaffold/render.js';
 import { usesReconciliationClaims } from '../../src/scaffold/reconciliation-claim.js';
 import { purgeSettings } from './db-probes.js';

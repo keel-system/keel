@@ -38,16 +38,16 @@ import {
   renderParts,
   shellQuote,
   spliceBody
-} from 'keel-core/gen/broker-probes';
-import { BROKERS, KAFKA_PRODUCER_TIMEOUTS, brokerContainer, devtoolsContainer } from 'keel-core/gen/infra-catalog';
-import { deadLetterDestination, subscriptionDestination } from 'keel-core/gen';
-import { OUTBOX_RELAY, parameterValue } from 'keel-core/gen/messaging-stores';
-import { groupEnv, kafkaConsumption, publishedChannels, queueEnv, snsSqsConsumption, topicEnv } from 'keel-core/gen/messaging-plan';
-import { harnessQueueName } from 'keel-core/gen/messaging-provisioning';
+} from '@keel-system/keel-core/gen/broker-probes';
+import { BROKERS, KAFKA_PRODUCER_TIMEOUTS, brokerContainer, devtoolsContainer } from '@keel-system/keel-core/gen/infra-catalog';
+import { deadLetterDestination, subscriptionDestination } from '@keel-system/keel-core/gen';
+import { OUTBOX_RELAY, parameterValue } from '@keel-system/keel-core/gen/messaging-stores';
+import { groupEnv, kafkaConsumption, publishedChannels, queueEnv, snsSqsConsumption, topicEnv } from '@keel-system/keel-core/gen/messaging-plan';
+import { harnessQueueName } from '@keel-system/keel-core/gen/messaging-provisioning';
 import { csFile, csMember, csString } from './render.js';
 import { usesDotnetOutbox, usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesDocument } from './persistence.js';
-import { OUTBOX, clearAbandonedScript } from 'keel-core/gen/mongo-probes';
+import { OUTBOX, clearAbandonedScript } from '@keel-system/keel-core/gen/mongo-probes';
 
 /** ¿Lleva el arnés la mensajería? Con los brokers que keel-dotnet genera. */
 export function usesMessagingHarness(model) {

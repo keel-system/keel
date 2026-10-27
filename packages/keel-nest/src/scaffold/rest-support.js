@@ -13,9 +13,9 @@
 //     constructor rechaza) es 400 «Petición malformada» sin details — en Spring eso es
 //     HttpMessageNotReadableException, que no distingue la causa.
 
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { FRAMEWORK_RESPONSES as FW, domainErrorResponses } from 'keel-core/gen/api-errors';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { FRAMEWORK_RESPONSES as FW, domainErrorResponses } from '@keel-system/keel-core/gen/api-errors';
 import { tsModule } from './render.js';
 import { DOMAIN_EXCEPTION_TS, BASE_SUBCLASSES } from './exceptions.js';
 import { usesPersistence } from './persistence-entities.js';

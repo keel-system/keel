@@ -1,4 +1,4 @@
-// El documento que ESCRIBE keel-spring es el que declara keel-core (`keel-core/gen/document.js`), para
+// El documento que ESCRIBE keel-spring es el que declara keel-core (`@keel-system/keel-core/gen/document.js`), para
 // que el servidor de keel-nest del mismo diseño lea y escriba el mismo documento: los nombres de cada
 // campo en el orden del diseño, el `_id`, lo que va anidado, la colección de cada raíz y qué campos se
 // guardan como Decimal128.
@@ -9,11 +9,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
-import { documentShape, documentValueObjects, valueObjectShape, storeDocumentKey, storeDocumentFields } from 'keel-core/gen/document';
-import { OUTBOX_EVENT, PROCESSED_EVENT } from 'keel-core/gen/messaging-stores';
-import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
-import { RECONCILIATION_CLAIM } from 'keel-core/gen/reconciliation-stores';
+import { loadService } from '@keel-system/keel-core';
+import { documentShape, documentValueObjects, valueObjectShape, storeDocumentKey, storeDocumentFields } from '@keel-system/keel-core/gen/document';
+import { OUTBOX_EVENT, PROCESSED_EVENT } from '@keel-system/keel-core/gen/messaging-stores';
+import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
+import { RECONCILIATION_CLAIM } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { buildModel } from '../src/lib/model.js';
 import { planService } from '../src/scaffold/index.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

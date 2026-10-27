@@ -11,10 +11,10 @@
 // stub): por eso se puede EJECUTAR en las pruebas de keel-nest contra un admin falso. `flow.ts` lo reexporta, y los
 // flujos siguen importando solo de `flow.ts`.
 
-import { paymentProbesFor } from 'keel-core/gen/payment-probes';
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation } from 'keel-core/gen/payment-gateways';
+import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
 import { tsString } from './render.js';
-import { paymentTestCurrency } from 'keel-core/gen/payments-config';
+import { paymentTestCurrency } from '@keel-system/keel-core/gen/payments-config';
 
 export const PAYMENT_HARNESS_TS = 'test/integration/support/payment-gateway.ts';
 

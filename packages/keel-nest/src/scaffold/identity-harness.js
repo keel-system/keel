@@ -10,8 +10,8 @@
 // usuarios a los que pedir un token (`tokenFor` no existiría y su promesa sería mentira), sin
 // `serviceAuth` no hay clientes máquina.
 
-import { closingCredentialOf, usesTokenProtocol } from 'keel-core/gen/access-plan';
-import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from 'keel-core/gen/identity-realm';
+import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
+import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
 import { tsString } from './render.js';
 

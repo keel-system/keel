@@ -19,8 +19,8 @@
 // outbox o los publishers best-effort sobre `RabbitConnection.publish`, y los listeners sobre
 // `RabbitConnection.consume`. No declara topología.
 
-import { rabbitListenerRetry } from 'keel-core/gen';
-import { RABBIT_CONFIRM_TIMEOUT_MS, RABBIT_PREFETCH, RABBIT_RECOVERY_INTERVAL_MS, publishedChannels, rabbitTopology, rabbitYaml } from 'keel-core/gen/messaging-plan';
+import { rabbitListenerRetry } from '@keel-system/keel-core/gen';
+import { RABBIT_CONFIRM_TIMEOUT_MS, RABBIT_PREFETCH, RABBIT_RECOVERY_INTERVAL_MS, publishedChannels, rabbitTopology, rabbitYaml } from '@keel-system/keel-core/gen/messaging-plan';
 import { DOMAIN_EXCEPTION_TS, NOT_FOUND_EXCEPTION_TS } from './exceptions.js';
 import { tsModule, tsString } from './render.js';
 import { MESSAGE_CONTRACT_TS, MESSAGING_SETTINGS_TS, RABBIT_CONNECTION_TS, RABBIT_TOPOLOGY_TS, usesRabbitMq } from './messaging.js';

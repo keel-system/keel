@@ -1,7 +1,7 @@
 // Huella de lo que genera keel-spring, para demostrar que un refactor no cambia nada.
 //
 // La mecánica (huella por archivo, comparación, el cuerpo del script) es neutral y vive en
-// `keel-core/gen/golden-digest.js` desde el incremento 1 de PLAN-KEEL-DOTNET.md: la comparten los
+// `@keel-system/keel-core/gen/golden-digest.js` desde el incremento 1 de PLAN-KEEL-DOTNET.md: la comparten los
 // generadores. Aquí queda lo que es de keel-spring: su `planService`, sus combinaciones fixture × stack
 // y dónde guarda su línea base.
 
@@ -15,7 +15,7 @@ import {
   listFixtures,
   normalizeCombos,
   serializeGolden
-} from 'keel-core/gen/golden-digest';
+} from '@keel-system/keel-core/gen/golden-digest';
 import { planService } from '../scaffold/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));

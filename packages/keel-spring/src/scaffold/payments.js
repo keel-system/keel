@@ -21,8 +21,8 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { pascalCase } from '../lib/naming.js';
-import { PAYMENT_NOTICE_PATH } from 'keel-core/gen/payment-gateways';
-import { PAYMENT_SWEEP_PARAMETERS } from 'keel-core/gen/payments-model';
+import { PAYMENT_NOTICE_PATH } from '@keel-system/keel-core/gen/payment-gateways';
+import { PAYMENT_SWEEP_PARAMETERS } from '@keel-system/keel-core/gen/payments-model';
 import * as stripe from './payment-gateways/stripe.js';
 import * as mercadopago from './payment-gateways/mercadopago.js';
 

@@ -155,7 +155,7 @@ test('con persistencia, la idempotencia de petición se genera y no se avisa', (
 });
 
 test('capas http-clients y dependencies (11b, 11c, 13i, 13j, 16): se generan enteras; solo un compuesto en la URL se rechaza, como en keel-spring', async () => {
-  const { loadService } = await import('keel-core');
+  const { loadService } = await import('@keel-system/keel-core');
   const path = await import('node:path');
   const { FIXTURES_DIR } = await import('./helpers/workspace.js');
   const load = (name) => loadService(path.join(FIXTURES_DIR, name));

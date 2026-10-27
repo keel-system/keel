@@ -5,7 +5,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkFixtures } from 'keel-core';
+import { checkFixtures } from '@keel-system/keel-core';
 import { deriveFixtures } from '../src/lib/fixtures.js';
 
 const layers = {

@@ -28,8 +28,8 @@ import {
   CHAOS_REJECT_RECIPIENTS,
   CHAOS_OFF,
   REJECTED_DOMAIN
-} from 'keel-core/gen/mail-probes';
-import { MAIL_AWAIT, mailAwaitSeconds } from 'keel-core/gen/mail-probes';
+} from '@keel-system/keel-core/gen/mail-probes';
+import { MAIL_AWAIT, mailAwaitSeconds } from '@keel-system/keel-core/gen/mail-probes';
 
 // Un literal de cadena Java: los cuerpos JSON de chaos llevan comillas dobles.
 const javaString = (value) => `"${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;

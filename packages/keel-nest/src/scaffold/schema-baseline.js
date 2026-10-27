@@ -21,8 +21,8 @@
 
 import { DATA_SOURCE_OPTIONS_TS } from './persistence-runtime.js';
 import { usesRelational } from './persistence-entities.js';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { crossAggregateForeignKeys } from 'keel-core/gen/relational';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { crossAggregateForeignKeys } from '@keel-system/keel-core/gen/relational';
 
 export const SCHEMA_BASELINE_TS = 'src/infrastructure/persistence/schema-baseline.ts';
 export const MIGRATIONS_DIR = 'src/migrations';

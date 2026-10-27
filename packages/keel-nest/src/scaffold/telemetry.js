@@ -6,7 +6,7 @@
 // de backend es cambiar el colector, nunca el código.
 //
 // La regla de equivalencia manda en los NOMBRES: las observaciones, los atributos, los desenlaces y las series
-// salen de `keel-core/gen/telemetry-vocabulary.js`, el mismo vocabulario con el que keel-spring publica, así que el
+// salen de `@keel-system/keel-core/gen/telemetry-vocabulary.js`, el mismo vocabulario con el que keel-spring publica, así que el
 // mismo panel y las mismas alertas tienen datos con los dos servidores. Lo que no se comparte es el runtime (Node
 // frente a la JVM).
 //
@@ -15,7 +15,7 @@
 // de Fastify, el mediator, el relay del outbox, el consumo, los clientes salientes, los puertos de storage y
 // correo). Los spans de los drivers (SQL, Mongo, Redis) son otro tramo: `telemetry-store-spans` de la matriz.
 
-import { collectorHostEndpoint, TELEMETRY_INFRA } from 'keel-core/gen/infra-catalog';
+import { collectorHostEndpoint, TELEMETRY_INFRA } from '@keel-system/keel-core/gen/infra-catalog';
 import {
   ATTRIBUTES,
   INSTRUMENTATION,
@@ -24,10 +24,10 @@ import {
   instrumentationFor,
   promTag,
   usesTelemetry
-} from 'keel-core/gen/telemetry-vocabulary';
+} from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { tsModule } from './render.js';
-import { runtimeDefault } from 'keel-core/gen/runtime-env';
-import { telemetryYaml as neutralTelemetryYaml } from 'keel-core/gen/telemetry-config';
+import { runtimeDefault } from '@keel-system/keel-core/gen/runtime-env';
+import { telemetryYaml as neutralTelemetryYaml } from '@keel-system/keel-core/gen/telemetry-config';
 
 export { usesTelemetry, instrumentationFor };
 

@@ -19,13 +19,13 @@
 // MultipartReading (Api/Rest; 415, 413 y FILE_UNREADABLE antes de convertir nada, como el DispatcherServlet de Spring),
 // después la ruta, y los campos y las partes en su orden, que es el de los argumentos del controlador de keel-spring.
 
-import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
-import { callsPaymentGateway } from 'keel-core/gen/payments-model';
+import { requestShape, returnsLocation, locationTarget } from '@keel-system/keel-core/gen/api-contract';
+import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
 import { csFile, csLocal, csMember, csString, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
 import { componentType, entryGateAssignment, isPartialUpdate, isThreeState, messageComponents, messageNamespace } from './services.js';
 import { restNamespace, usesApi } from './rest-support.js';
 import { repositoriesNamespace } from './repositories.js';
-import { pageableDefaults } from 'keel-core/gen/pagination';
+import { pageableDefaults } from '@keel-system/keel-core/gen/pagination';
 import { callerResolution, securityNamespace } from './security.js';
 
 // Los tipos base que en C# son tipos de VALOR: un ausente se escribe `T?` (Nullable<T>), no una referencia nula.

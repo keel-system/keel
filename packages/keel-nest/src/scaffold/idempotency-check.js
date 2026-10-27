@@ -16,13 +16,13 @@
 // Las familias de lo que keel-nest todavía no genera (compensación, reconciliación, idempotencia saliente,
 // correo, contexto de telemetría) llegan con sus incrementos.
 
-import { renderIdempotencyGate } from 'keel-core/gen/idempotency-gate';
-import { kebabCase, screamingSnake } from 'keel-core/gen';
-import { registryOperations } from 'keel-core/gen/request-idempotency';
+import { renderIdempotencyGate } from '@keel-system/keel-core/gen/idempotency-gate';
+import { kebabCase, screamingSnake } from '@keel-system/keel-core/gen';
+import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
 import { capitalize, fileName } from './render.js';
 import { usesPersistence, usesDocument } from './persistence-entities.js';
 import { naturalKeyFinder, occupantFinders, repositoryRoots } from './repositories.js';
-import { relievingOperations } from 'keel-core/gen';
+import { relievingOperations } from '@keel-system/keel-core/gen';
 import { usesNestOutbox, usesProcessedEvents, usesMessaging } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 

@@ -8,9 +8,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
-import { WIRE_SHAPES, WIRE_OUTPUT_CASES } from 'keel-core/gen/wire';
-import { resolveType } from 'keel-core/gen/types';
+import { loadService } from '@keel-system/keel-core';
+import { WIRE_SHAPES, WIRE_OUTPUT_CASES } from '@keel-system/keel-core/gen/wire';
+import { resolveType } from '@keel-system/keel-core/gen/types';
 import { planService } from '../src/scaffold/index.js';
 import { JAVA_PROJECTION } from '../src/lib/java-projection.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

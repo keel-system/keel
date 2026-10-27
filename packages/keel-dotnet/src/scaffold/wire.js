@@ -16,8 +16,8 @@
 // no arrastra ASP.NET Core; los DTO y la infraestructura lo comparten. Program.cs lo instala en las
 // opciones JSON de las APIs mínimas: un solo punto de lectura y escritura, como Fastify en keel-nest.
 
-import { WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS } from 'keel-core/gen/wire';
-import { pascalCase } from 'keel-core/gen';
+import { WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS } from '@keel-system/keel-core/gen/wire';
+import { pascalCase } from '@keel-system/keel-core/gen';
 import { solution, csFile, csString } from './render.js';
 import { testsNamespace } from './tests.js';
 

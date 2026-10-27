@@ -8,9 +8,9 @@
 // es enteramente derivable del diseño.
 
 import { PAYMENT_NOTICE_PATH } from './payments.js';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { usesCallerRoles } from 'keel-core/gen/ownership';
-import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { usesCallerRoles } from '@keel-system/keel-core/gen/ownership';
+import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
 import {
   audienceOf,
   checksAudience,
@@ -18,7 +18,7 @@ import {
   tokenClaims,
   serviceMatchers as serviceMatchersOf,
   usesServiceApiKeys as needsServiceApiKeyFilter
-} from 'keel-core/gen/access-plan';
+} from '@keel-system/keel-core/gen/access-plan';
 import { camelCase } from '../lib/naming.js';
 import { credentialFinderName } from './repositories.js';
 import { javaFile, javaPath, subPackage } from './render.js';

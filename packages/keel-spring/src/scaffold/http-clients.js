@@ -13,7 +13,7 @@
 // (api-key, bearer, basic, oauth2 client-credentials) se aplica en el bean
 // RestClient; las credenciales llegan por configuración, nunca del diseño.
 
-import { servesLastKnown } from 'keel-core/gen/last-known';
+import { servesLastKnown } from '@keel-system/keel-core/gen/last-known';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
 import { rawJsonAnnotations } from './jackson.js';
@@ -21,7 +21,7 @@ import { outboundIdempotentCalls } from './http-idempotency.js';
 import { providerFailures } from '../lib/outbound-failures.js';
 import { callPolicy, clientRemembers } from './last-known.js';
 import { usesTelemetry } from './telemetry.js';
-import { hasCallFallback } from 'keel-core/gen/outbound-resilience';
+import { hasCallFallback } from '@keel-system/keel-core/gen/outbound-resilience';
 
 const PORT_PKG = 'domain.clients';
 const HTTP_PKG = 'infrastructure.http';

@@ -17,12 +17,12 @@
 // transacción del caso de uso, y escribir los registros como INSERT —un reemplazo o un upsert sobre un `_id` presente
 // pisaría en silencio el registro de la otra petición en vez de perder la carrera—.
 
-import { claimOrderField, claimsForEntity, screamingSnake } from 'keel-core/gen';
-import { OUTBOX_EVENT, PROCESSED_EVENT } from 'keel-core/gen/messaging-stores';
-import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
-import { RECONCILIATION_CLAIM, reconciliationClaims } from 'keel-core/gen/reconciliation-stores';
-import { documentShape, storeDocumentKey, storeDocumentFields } from 'keel-core/gen/document';
-import { snakeCase } from 'keel-core/gen/naming';
+import { claimOrderField, claimsForEntity, screamingSnake } from '@keel-system/keel-core/gen';
+import { OUTBOX_EVENT, PROCESSED_EVENT } from '@keel-system/keel-core/gen/messaging-stores';
+import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
+import { RECONCILIATION_CLAIM, reconciliationClaims } from '@keel-system/keel-core/gen/reconciliation-stores';
+import { documentShape, storeDocumentKey, storeDocumentFields } from '@keel-system/keel-core/gen/document';
+import { snakeCase } from '@keel-system/keel-core/gen/naming';
 import { csMember, csString } from './render.js';
 
 /** El valor GUARDADO de un estado del ciclo de vida: la constante del enum, no el literal del diseño. */

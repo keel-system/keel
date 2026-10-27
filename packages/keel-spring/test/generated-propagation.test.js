@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
-import { digestOf } from 'keel-core';
+import { digestOf } from '@keel-system/keel-core';
 import { build } from '../src/commands/build.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 

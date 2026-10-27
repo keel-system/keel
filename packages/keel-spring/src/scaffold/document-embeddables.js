@@ -18,7 +18,7 @@ import { documentAnnotations, needsFieldType } from '../lib/type-mapper.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { capitalize } from './entities.js';
 import { DOC_PKG } from './document-entities.js';
-import { documentValueObjects } from 'keel-core/gen/document';
+import { documentValueObjects } from '@keel-system/keel-core/gen/document';
 
 export function generate(model) {
   if (!model.layersPresent.persistence || model.persistenceKind !== 'document') return [];

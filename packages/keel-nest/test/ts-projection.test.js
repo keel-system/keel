@@ -7,10 +7,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadService } from 'keel-core';
-import { assertProjection } from 'keel-core/gen/projection';
-import { buildModel } from 'keel-core/gen/model';
-import { resolveStack } from 'keel-core/gen/stack';
+import { loadService } from '@keel-system/keel-core';
+import { assertProjection } from '@keel-system/keel-core/gen/projection';
+import { buildModel } from '@keel-system/keel-core/gen/model';
+import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { TS_PROJECTION } from '../src/lib/ts-projection.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 

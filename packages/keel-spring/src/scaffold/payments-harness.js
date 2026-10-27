@@ -6,10 +6,10 @@
 // No es un doble dentro de la JVM: el servidor habla HTTP con WireMock por el mismo socket que con la
 // pasarela real, con el mismo adaptador. Lo que se mide es el servidor.
 
-import { paymentProbesFor } from 'keel-core/gen/payment-probes';
+import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
 import { PAYMENT_TEST_SECRETS } from './config.js';
 import { PAYMENT_NOTICE_PATH } from './payments.js';
-import { paymentTestCurrency as testCurrency } from 'keel-core/gen/payments-config';
+import { paymentTestCurrency as testCurrency } from '@keel-system/keel-core/gen/payments-config';
 
 export function usesPaymentHarness(model) {
   return Boolean(model.payments);

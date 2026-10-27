@@ -16,10 +16,10 @@
 // Aquí NO se genera ninguna prueba de flujo: eso es derivado del diseño y lo escribe el agente.
 
 import path from 'node:path';
-import { DATABASES, selectedInfra } from 'keel-core/gen/infra-catalog';
-import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from 'keel-core/gen/junit-scoring';
-import { resetDbScript } from 'keel-core/gen/infra-scripts';
-import { missingClockCountSql, rescueProbes, stallSql } from 'keel-core/gen';
+import { DATABASES, selectedInfra } from '@keel-system/keel-core/gen/infra-catalog';
+import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from '@keel-system/keel-core/gen/junit-scoring';
+import { resetDbScript } from '@keel-system/keel-core/gen/infra-scripts';
+import { missingClockCountSql, rescueProbes, stallSql } from '@keel-system/keel-core/gen';
 import { NEST_INFRA } from './infra.js';
 import { usesApi, CORRELATION_TS } from './rest-support.js';
 import { usesRelational, engineOf } from './persistence-entities.js';
@@ -31,7 +31,7 @@ import * as httpStubHarness from './http-stub-harness.js';
 import * as mailHarness from './mail-harness.js';
 import * as paymentHarness from './payment-harness.js';
 import { documentHarnessSection, documentProbe } from './document-harness.js';
-import { usesClusterScenarios } from 'keel-core/gen/cluster-scenarios';
+import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenarios';
 import { cacheHarnessSection } from './cache.js';
 import { storageHarnessSection, usesMultipart } from './storage.js';
 

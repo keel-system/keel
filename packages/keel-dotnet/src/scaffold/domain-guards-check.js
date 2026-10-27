@@ -7,7 +7,7 @@
 // acepta por esas puertas valores que el diseño declara imposibles. Se comprueba que la clase exista y que
 // ALGUIEN la llame desde código vivo, no DÓNDE.
 
-import { guardedFields, domainGuardsScript } from 'keel-core/gen/domain-guards';
+import { guardedFields, domainGuardsScript } from '@keel-system/keel-core/gen/domain-guards';
 import { located } from './render.js';
 
 export function generate(model) {

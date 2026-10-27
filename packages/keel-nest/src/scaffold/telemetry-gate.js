@@ -11,7 +11,7 @@
 // forma corta o `[ATTRIBUTES.x]`—; una clave que llegue por una variable no la ve, igual que el de keel-spring no ve
 // una constante. La salida de un hallazgo no es quitar el dato: es llevarlo al span (`spanAttributes`).
 
-import { ATTRIBUTES, promTag, usesTelemetry } from 'keel-core/gen/telemetry-vocabulary';
+import { ATTRIBUTES, promTag, usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { sourceGate } from './logging-check.js';
 
 /** Las claves de etiqueta de las series que publica la telemetría generada fuera del vocabulario `keel.*`. */

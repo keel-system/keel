@@ -3,9 +3,9 @@
 // restringe cada input lo decide keel-core/gen/query-filters.js, el mismo para los tres generadores: aquí solo se
 // escribe. Los nombres son los de keel-dotnet en camelCase: la misma API sobre otro lenguaje.
 
-import { findersOf, RANGE_OPERATORS } from 'keel-core/gen';
-import { persistedMembers } from 'keel-core/gen/relational';
-import { screamingSnake } from 'keel-core/gen/naming';
+import { findersOf, RANGE_OPERATORS } from '@keel-system/keel-core/gen';
+import { persistedMembers } from '@keel-system/keel-core/gen/relational';
+import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 import { classPath, DIRS, fieldImports, tsString } from './render.js';
 
 export const entityFinders = (model, entity) => findersOf(model, entity.name);

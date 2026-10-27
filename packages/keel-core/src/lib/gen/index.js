@@ -1,5 +1,5 @@
 // Núcleo NEUTRAL de los generadores: lo que interpreta el diseño sin saber en qué lenguaje
-// se va a escribir. Se importa como `keel-core/gen`.
+// se va a escribir. Se importa como `@keel-system/keel-core/gen`.
 //
 // Existe para que dos generadores del mismo diseño (keel-spring, keel-nest) tomen cada
 // decisión en UN sitio: el nombre físico de una cola, el `code` que sustituye a un canónico,

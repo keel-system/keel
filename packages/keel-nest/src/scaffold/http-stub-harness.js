@@ -13,9 +13,9 @@ import {
   HTTP_STUB_ENDPOINTS,
   HTTP_STUB_FAULT,
   HTTP_STUB_INITIAL_STATE
-} from 'keel-core/gen/http-stub-probes';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { snakeCase } from 'keel-core/gen';
+} from '@keel-system/keel-core/gen/http-stub-probes';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { snakeCase } from '@keel-system/keel-core/gen';
 import { tsString } from './render.js';
 import { engineOf, usesRelational } from './persistence-entities.js';
 

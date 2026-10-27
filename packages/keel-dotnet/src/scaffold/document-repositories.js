@@ -13,10 +13,10 @@
 //     `declared`— y `updated_*` se estampa en cada escritura. Guardar es un `$set` del documento entero y no un
 //     reemplazo, para que lo que el dominio no lleva (la auditoría de política) no se pierda.
 
-import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
-import { persistedMembers, collectInternalEntities, LOCK_VERSION, RANGE_OPERATORS, orderingFieldOf, orderingTieBreakerOf, claimsForEntity } from 'keel-core/gen';
-import { documentShape, DOCUMENT_ID } from 'keel-core/gen/document';
-import { snakeCase } from 'keel-core/gen/naming';
+import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
+import { persistedMembers, collectInternalEntities, LOCK_VERSION, RANGE_OPERATORS, orderingFieldOf, orderingTieBreakerOf, claimsForEntity } from '@keel-system/keel-core/gen';
+import { documentShape, DOCUMENT_ID } from '@keel-system/keel-core/gen/document';
+import { snakeCase } from '@keel-system/keel-core/gen/naming';
 import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, entityPlace, typeUsings } from './render.js';
 import { domainMembers } from './entities.js';
 import { persistenceNamespace } from './persistence.js';
@@ -24,7 +24,7 @@ import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
 import { claimDependencies, guardClaimsFor } from './claim.js';
 import { reconciliationDependencies } from './reconciliation-claim.js';
 import { documentGuardMethods, documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
-import { idBatchReason } from 'keel-core/gen/ref-targets';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { defaultSortConstant, entityFinders, finderParameters, fixedValue, hasFilter, methodName, needsOrdering, resultType, sortConstants } from './finders.js';
 import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents, credentialFinders, replicaOwnTransaction, replicaDependencies, naturalKeyBatchFinder } from './repositories.js';
 

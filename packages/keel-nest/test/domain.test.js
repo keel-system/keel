@@ -9,8 +9,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService, FRAMEWORK_ERRORS } from 'keel-core';
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
+import { loadService, FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

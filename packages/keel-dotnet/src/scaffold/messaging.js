@@ -24,11 +24,11 @@
 // Solo con persistencia RELACIONAL: el puente sale del adaptador de repositorio y el registro de procesados vive en la
 // base. La documental llega con el incremento 12.
 
-import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination, subscriptionGroupId } from 'keel-core/gen';
-import { OUTBOX_RELAY } from 'keel-core/gen/messaging-stores';
-import { consumerUnits, consumesFromQueue, messagingYaml, routingKeyName, subscriptionKey } from 'keel-core/gen/messaging-plan';
-import { acknowledgeNote } from 'keel-core/gen/rejection-notes';
-import { callsPaymentGateway } from 'keel-core/gen/payments-model';
+import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination, subscriptionGroupId } from '@keel-system/keel-core/gen';
+import { OUTBOX_RELAY } from '@keel-system/keel-core/gen/messaging-stores';
+import { consumerUnits, consumesFromQueue, messagingYaml, routingKeyName, subscriptionKey } from '@keel-system/keel-core/gen/messaging-plan';
+import { acknowledgeNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
 import { csFile, csLocal, csMember, csString, declType, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
 import { wireNamespace } from './wire.js';

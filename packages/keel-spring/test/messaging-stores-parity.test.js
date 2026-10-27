@@ -1,5 +1,5 @@
 // Los almacenes de la mensajería que EMITE keel-spring son los que declara keel-core
-// (`keel-core/gen/messaging-stores.js`): la tabla del outbox y la de los mensajes procesados —nombre,
+// (`@keel-system/keel-core/gen/messaging-stores.js`): la tabla del outbox y la de los mensajes procesados —nombre,
 // columnas, nulabilidad, cota, clave e índice— y los parámetros del relay y de las purgas —clave,
 // variable de entorno y default, en el YAML de cada perfil y en el respaldo de los @Value—.
 //
@@ -11,7 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import {
   OUTBOX_EVENT,
   OUTBOX_PURGE,
@@ -20,7 +20,7 @@ import {
   PROCESSED_EVENT_PURGE,
   parameterValue,
   storeColumns
-} from 'keel-core/gen/messaging-stores';
+} from '@keel-system/keel-core/gen/messaging-stores';
 import { planService } from '../src/scaffold/index.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 

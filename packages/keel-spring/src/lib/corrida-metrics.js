@@ -14,7 +14,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { digestOf } from 'keel-core';
+import { digestOf } from '@keel-system/keel-core';
 import { MANIFEST_FILE } from './generated-manifest.js';
 
 /**

@@ -18,8 +18,8 @@
 // Las claves de config/parameters/<perfil>/mail.yaml y sus VARIABLES de entorno son las de keel-spring y keel-nest
 // (MAIL_HOST, MAIL_PORT…): el mismo .env sirve para los tres servidores del diseño.
 
-import { envFor } from 'keel-core/gen/runtime-env';
-import { COMPILED_TEMPLATES_LIMIT, HTML_ESCAPES, MAIL_HEADER_NAME_CLASS, RESERVED_MAIL_HEADERS } from 'keel-core/gen/mail-message';
+import { envFor } from '@keel-system/keel-core/gen/runtime-env';
+import { COMPILED_TEMPLATES_LIMIT, HTML_ESCAPES, MAIL_HEADER_NAME_CLASS, RESERVED_MAIL_HEADERS } from '@keel-system/keel-core/gen/mail-message';
 import { csFile, csString, csVerbatim, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { observedMailFile, observedRegistration, telemetryNamespace, usesTelemetry } from './telemetry.js';

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { loadCharacterized, loadFixtures, readCharacterization, resolveCharacterized } from 'keel-core';
+import { loadCharacterized, loadFixtures, readCharacterization, resolveCharacterized } from '@keel-system/keel-core';
 import { validateAs } from './schema.js';
 import { toolRequestAsync } from './tool-http.js';
 import { databaseAdapter } from './db/index.js';

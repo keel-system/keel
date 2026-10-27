@@ -6,7 +6,7 @@
 // sus dos corridas de asset-vault escribieron la lectura a mano (`findAllByIds`, `findAllByIdIn`). Qué raíces se
 // resuelven lo decide keel-core (`refTargets`), igual que para keel-spring.
 
-import { refTargets } from 'keel-core/gen/ref-targets';
+import { refTargets } from '@keel-system/keel-core/gen/ref-targets';
 import { DIRS, classPath, decapitalize, entityDir, tsModule } from './render.js';
 import { ANNOTATIONS_TS } from './mediator.js';
 import { portClass, portPath } from './repositories.js';

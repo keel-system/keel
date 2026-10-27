@@ -18,8 +18,8 @@
 //   ttl         la entrada se guarda sin caducidad
 //   reconnect   el cliente deja de reconectar tras la caída
 
-import { CACHES } from 'keel-core/gen/infra-catalog';
-import { cacheFlushCmd } from 'keel-core/gen/infra-scripts';
+import { CACHES } from '@keel-system/keel-core/gen/infra-catalog';
+import { cacheFlushCmd } from '@keel-system/keel-core/gen/infra-scripts';
 import { run, resolveRuntime, freePort } from './lib/database-container.js';
 import { planFixture, transpileTree } from '../test/helpers/emitted.js';
 

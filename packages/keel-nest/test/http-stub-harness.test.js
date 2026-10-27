@@ -10,7 +10,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import {
   HTTP_STUB_ADMIN,
   HTTP_STUB_ENDPOINTS,
@@ -22,8 +22,8 @@ import {
   stubOkResponse,
   stubSequenceMappings,
   stubSlowResponse
-} from 'keel-core/gen/http-stub-probes';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
+} from '@keel-system/keel-core/gen/http-stub-probes';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planFixture } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

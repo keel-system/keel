@@ -20,7 +20,7 @@
 // lección (a) de check-idempotency.sh: un check que pide la implementación incorrecta
 // tiene como camino de menor resistencia romper el código para callarlo.
 
-import { guardedFields } from 'keel-core/gen/domain-guards';
+import { guardedFields } from '@keel-system/keel-core/gen/domain-guards';
 
 /**
  * ¿Hay algo que comprobar? Sin ningún campo de entidad tipado con un value type escalar

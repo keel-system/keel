@@ -18,7 +18,7 @@ export function freshIdLiteral(field) {
   if (field?.base === 'int') return String(randomInt(1, 2 ** 31 - 1));
   return `'${randomUUID()}'`;
 }
-import { LOCK_VERSION } from 'keel-core/gen';
+import { LOCK_VERSION } from '@keel-system/keel-core/gen';
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../../src/scaffold/render.js';
 

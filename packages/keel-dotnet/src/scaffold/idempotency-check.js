@@ -14,12 +14,12 @@
 //     afirmable es que el handler busque la fila ocupante con el finder que build generó.
 // La compensación, la reconciliación y la idempotencia saliente llegaron con el incremento 11c; el correo llega con el 13.
 
-import { renderIdempotencyGate } from 'keel-core/gen/idempotency-gate';
-import { kebabCase, relievingOperations } from 'keel-core/gen';
+import { renderIdempotencyGate } from '@keel-system/keel-core/gen/idempotency-gate';
+import { kebabCase, relievingOperations } from '@keel-system/keel-core/gen';
 import { enumMember } from '../lib/cs-projection.js';
 import { clientPort } from './http-clients.js';
 import { schedulerClass } from './scheduling.js';
-import { registryOperations } from 'keel-core/gen/request-idempotency';
+import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
 import { csMember } from './render.js';
 import { usesPersistence, usesDocument } from './persistence.js';
 import { naturalKeyFinder, occupantFinders, repositoryRoots } from './repositories.js';

@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planFixture } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

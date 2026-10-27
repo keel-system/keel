@@ -15,7 +15,7 @@
 // Lo que queda para el agente es DÓNDE se consulta: en el handler, después de lo que dependa de quién
 // llama (skill keel-spring-redis).
 
-import { cachedOperations, cacheInvalidations, CACHE_KEY_PART_SEPARATOR } from 'keel-core/gen/cache-plan';
+import { cachedOperations, cacheInvalidations, CACHE_KEY_PART_SEPARATOR } from '@keel-system/keel-core/gen/cache-plan';
 import { returnTypeOf, returnTypeImports, messagePackage } from './services.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { timestampModuleImport } from './jackson.js';

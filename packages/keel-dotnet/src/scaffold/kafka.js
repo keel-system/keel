@@ -16,9 +16,9 @@
 // publishers best-effort sobre `KafkaConnection.Publish`, y un listener por SUSCRIPCIÓN sobre `KafkaConnection.Consume`.
 // No crea topics: los autocrea el broker de infra/ con el primer mensaje y en producción los gobierna la plataforma.
 
-import { KAFKA_PRODUCER_TIMEOUTS } from 'keel-core/gen/infra-catalog';
-import { kafkaListenerRetry } from 'keel-core/gen';
-import { KAFKA_DEFAULT_METADATA_REFRESH_MS, KAFKA_RECONNECT_INTERVAL_MS, kafkaConsumption, kafkaYaml } from 'keel-core/gen/messaging-plan';
+import { KAFKA_PRODUCER_TIMEOUTS } from '@keel-system/keel-core/gen/infra-catalog';
+import { kafkaListenerRetry } from '@keel-system/keel-core/gen';
+import { KAFKA_DEFAULT_METADATA_REFRESH_MS, KAFKA_RECONNECT_INTERVAL_MS, kafkaConsumption, kafkaYaml } from '@keel-system/keel-core/gen/messaging-plan';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { usesKafka, messagingNamespace } from './messaging.js';

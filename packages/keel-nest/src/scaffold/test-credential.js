@@ -7,7 +7,7 @@
 // red ni proveedor. Sin variable publicada, el perfil test no acepta ningún token, así que no hay ninguna
 // clave en el repositorio que un despliegue con el perfil equivocado aceptara.
 
-import { fullAccessClaims as neutralFullAccessClaims } from 'keel-core/gen/access-plan';
+import { fullAccessClaims as neutralFullAccessClaims } from '@keel-system/keel-core/gen/access-plan';
 import { securityPlan, usesJwt, TEST_JWKS_VARIABLE, LOCAL_API_KEY } from './security.js';
 import { tsString } from './render.js';
 

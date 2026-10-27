@@ -26,7 +26,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadService, loadFixtures } from 'keel-core';
+import { loadService, loadFixtures } from '@keel-system/keel-core';
 import { containerRuntime, resolveRuntime } from '../src/lib/containers.js';
 import { databaseAdapter } from '../src/lib/db/index.js';
 import { mysql } from '../src/lib/db/mysql.js';

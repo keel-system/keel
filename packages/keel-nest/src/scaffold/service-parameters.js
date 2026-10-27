@@ -8,7 +8,7 @@
 // puebla desde la configuración es un módulo de infraestructura. Misma clave (`<artifactId>.<key>`),
 // misma variable de entorno y mismo gradiente por perfil (keel-core/gen/service-parameters.js).
 
-import { parameterProfileValue, parameterProperty } from 'keel-core/gen/service-parameters';
+import { parameterProfileValue, parameterProperty } from '@keel-system/keel-core/gen/service-parameters';
 import { classPath, tsModule, tsString } from './render.js';
 import { DECIMAL_TS } from './wire.js';
 

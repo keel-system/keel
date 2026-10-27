@@ -23,7 +23,7 @@ import {
   crossAggregateForeignKeys,
   uniqueConstraints,
   usesAuditableEntity
-} from 'keel-core/gen/relational';
+} from '@keel-system/keel-core/gen/relational';
 import { quoteIdentifier } from '../lib/sql-reserved.js';
 
 /**

@@ -17,14 +17,14 @@ import {
   reconciliationClaims,
   reconciliationParameters,
   reconciliationYaml
-} from 'keel-core/gen/reconciliation-stores';
-import { screamingSnake } from 'keel-core/gen';
+} from '@keel-system/keel-core/gen/reconciliation-stores';
+import { screamingSnake } from '@keel-system/keel-core/gen';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { ORM_DIR, engineOf, ormClass, usesPersistence, usesDocument, usesRelational } from './persistence-entities.js';
 import { documentReconciliationStore } from './document-stores.js';
 import { storeEntity } from './messaging-stores.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
-import { needsReadCommitted } from 'keel-core/gen/infra-catalog';
+import { needsReadCommitted } from '@keel-system/keel-core/gen/infra-catalog';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const RECONCILIATION_DIR = 'src/infrastructure/persistence/reconciliation';

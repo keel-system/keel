@@ -8,7 +8,7 @@
 // que ALGUIEN la llame desde código vivo, no DÓNDE — un check que exige una ubicación concreta tiene
 // como camino de menor resistencia romper el código para callarlo.
 
-import { guardedFields, domainGuardsScript } from 'keel-core/gen/domain-guards';
+import { guardedFields, domainGuardsScript } from '@keel-system/keel-core/gen/domain-guards';
 import { DIRS, classPath } from './render.js';
 
 export function usesDomainGuardsCheck(model) {

@@ -4,7 +4,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { makeWorkspace, mountDesign, DOTNET_READY_DESIGN } from './helpers/workspace.js';
 import { planService } from '../src/scaffold/index.js';
 import { PACKAGES } from '../src/lib/dotnet-stack.js';
@@ -149,7 +149,7 @@ test('el proyecto se llama <servicio>-dotnet y el modelo es el de keel-core/gen 
 });
 
 test('el contrato del cable: la prueba emitida lleva TODOS los casos de keel-core/gen/wire.js', async () => {
-  const { WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS } = await import('keel-core/gen/wire');
+  const { WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS } = await import('@keel-system/keel-core/gen/wire');
   const tests = byPath.get('tests/ProductCatalog.UnitTests/WireContractTests.cs');
   // Las filas de los casos compartidos llevan id, tipo y valor; las de las pruebas propias de .NET, menos.
   const rows = [...tests.matchAll(/^\s*\[InlineData\("([^"]+)", "[^"]*", "/gm)].map(([, id]) => id);

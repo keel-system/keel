@@ -9,7 +9,7 @@
 // cambio intencional del generador también la pone roja: entonces se regenera a sabiendas,
 // en un commit propio, nunca dentro del refactor que mide.
 
-import { runGolden } from 'keel-core/gen/golden-digest';
+import { runGolden } from '@keel-system/keel-core/gen/golden-digest';
 import { GOLDEN_FILE, goldenCombos } from '../src/lib/golden-digest.js';
 import { planService } from '../src/scaffold/index.js';
 

@@ -6,8 +6,8 @@
 // lifecycle no declarada y el valor que incumple su value object. Ninguno conoce ASP.NET Core: el manejador
 // de errores de la API (incremento 5) es quien traduce una DomainException a la respuesta.
 
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { ERROR_BASES } from 'keel-core/gen/error-bases';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { ERROR_BASES } from '@keel-system/keel-core/gen/error-bases';
 import { csFile, csString, located, xmlDoc } from './render.js';
 
 export function generate(model) {

@@ -221,10 +221,10 @@ especificación se sincroniza después —o se archiva—.
 ### Instalación
 
 ```bash
-npm i -g keel-core                 # comando `keel`: diseñar y validar
-npm i -g keel-spring               # comando `keel-spring`, si generas en Spring Boot
+npm i -g @keel-system/keel-core    # comando `keel`: diseñar y validar
+npm i -g @keel-system/keel-spring  # comando `keel-spring`, si generas en Spring Boot
 npm i -g @keel-system/keel-nest    # comando `keel-nest`, si generas en NestJS
-npm i -g keel-dotnet               # comando `keel-dotnet`, si generas en .NET
+npm i -g @keel-system/keel-dotnet  # comando `keel-dotnet`, si generas en .NET
 ```
 
 El core y cada generador son paquetes independientes: el core más los generadores que vayas a usar.

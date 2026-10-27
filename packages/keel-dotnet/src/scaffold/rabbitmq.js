@@ -18,8 +18,8 @@
 // publishers best-effort sobre `RabbitConnection.Publish`, y los listeners sobre `RabbitConnection.Consume`. No declara
 // topología.
 
-import { rabbitListenerRetry } from 'keel-core/gen';
-import { RABBIT_CONFIRM_TIMEOUT_MS, RABBIT_PREFETCH, RABBIT_RECOVERY_INTERVAL_MS, publishedChannels, rabbitTopology, rabbitYaml } from 'keel-core/gen/messaging-plan';
+import { rabbitListenerRetry } from '@keel-system/keel-core/gen';
+import { RABBIT_CONFIRM_TIMEOUT_MS, RABBIT_PREFETCH, RABBIT_RECOVERY_INTERVAL_MS, publishedChannels, rabbitTopology, rabbitYaml } from '@keel-system/keel-core/gen/messaging-plan';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { usesRabbitMq, messagingNamespace } from './messaging.js';

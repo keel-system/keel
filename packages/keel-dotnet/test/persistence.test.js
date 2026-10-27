@@ -11,8 +11,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService, FRAMEWORK_ERRORS } from 'keel-core';
-import { constraintErrors } from 'keel-core/gen';
+import { loadService, FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { constraintErrors } from '@keel-system/keel-core/gen';
 import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
 import { FIXTURES_DIR, planFixture } from './helpers/workspace.js';
 import { repositoryRoots, portClass, adapterClass } from '../src/scaffold/repositories.js';

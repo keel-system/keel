@@ -220,7 +220,7 @@ export function dslMismatchMessage(design, { supported = supportedDsl() } = {}) 
   const dsl = design.service?.dsl;
   const masNuevo = typeof dsl === 'string' && supported.every((version) => compareDsl(dsl, version) > 0);
   const salida = masNuevo
-    ? '  Actualiza keel-core para poder derivarlo (`npm i -g keel-core@latest`).'
+    ? '  Actualiza keel-core para poder derivarlo (`npm i -g @keel-system/keel-core@latest`).'
     : '  Es una versión anterior a la que esta CLI acepta: hay que migrar el diseño al DSL vigente.';
 
   return `El diseño '${design.slug}' usa el DSL keel ${dsl} y esta CLI soporta: ${supported.join(', ')}.\n${salida}`;

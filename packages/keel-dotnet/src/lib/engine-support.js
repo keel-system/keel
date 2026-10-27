@@ -17,7 +17,7 @@
 // ejecutaba (`transient-write-conflict` en relacional y `folded-text` en las dos ramas); el mismo tramo les dio sus
 // sondas y sus sabotajes en db-check y doc-check.
 
-import { MECHANISM_CATALOG, STATES } from 'keel-core/gen/mechanisms';
+import { MECHANISM_CATALOG, STATES } from '@keel-system/keel-core/gen/mechanisms';
 import { SUPPORTED_DATABASES } from './supported-features.js';
 
 export { MECHANISM_CATALOG, STATES };

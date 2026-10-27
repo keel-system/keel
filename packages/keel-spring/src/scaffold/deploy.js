@@ -1,12 +1,12 @@
 // Contenedorización del servicio para PRUEBAS MANUALES del diseñador (`deploy/`).
 //
-// Desde el incremento 14d de PLAN-KEEL-NEST.md el `deploy/` es NEUTRAL (`keel-core/gen/deploy.js`): la misma
+// Desde el incremento 14d de PLAN-KEEL-NEST.md el `deploy/` es NEUTRAL (`@keel-system/keel-core/gen/deploy.js`): la misma
 // infraestructura, el mismo colector, el mismo realm y los mismos scripts que genera keel-nest para el mismo diseño.
 // Aquí queda lo único que es de esta plataforma: la imagen de la app (el jar explotado en las capas de Spring Boot),
 // la URL JDBC de la base vista desde la red del compose, la variable con la que Spring lee el JWKS directo, la sonda
 // de readiness y las URLs del actuator y de Swagger que imprime up.sh.
 
-import { deployFiles, publishedUrls as neutralPublishedUrls, postmanEnvironmentPath, builtinScopes } from 'keel-core/gen/deploy';
+import { deployFiles, publishedUrls as neutralPublishedUrls, postmanEnvironmentPath, builtinScopes } from '@keel-system/keel-core/gen/deploy';
 import { JAVA_VERSION } from '../lib/assets.js';
 import { JAVA_DATABASES } from '../lib/java-stack.js';
 import { LOCAL_API_KEY, LOCAL_CORS_ORIGINS, localClientApiKey } from './config.js';

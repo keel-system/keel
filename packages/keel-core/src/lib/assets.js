@@ -66,9 +66,9 @@ export const CUSTOMIZABLE_PAYLOAD = [
 // Se instalan con `npm i -g <paquete>` y se preparan con `<comando> build specs/<servicio>`;
 // el comando es el nombre del paquete sin su scope (`@keel-system/keel-nest` → `keel-nest`).
 export const KNOWN_GENERATORS = {
-  spring: 'keel-spring',
+  spring: '@keel-system/keel-spring',
   nest: '@keel-system/keel-nest',
-  dotnet: 'keel-dotnet'
+  dotnet: '@keel-system/keel-dotnet'
 };
 
 export function isKeelWorkspace(dir) {

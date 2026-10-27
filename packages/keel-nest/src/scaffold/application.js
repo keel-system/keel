@@ -26,7 +26,7 @@ import { usesServiceParameters } from './service-parameters.js';
 import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
 import { paymentControllers, usesPayments } from './payments.js';
-import { PAYMENT_NOTICE_PATH } from 'keel-core/gen/payment-gateways';
+import { PAYMENT_NOTICE_PATH } from '@keel-system/keel-core/gen/payment-gateways';
 import { usesCache } from './cache.js';
 import { usesMultipart, multipartFileLimitBytes, usesStorage } from './storage.js';
 import { mainTelemetry, usesTelemetry } from './telemetry.js';

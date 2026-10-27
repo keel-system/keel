@@ -10,7 +10,7 @@
 //   · TODOs guiados del factory, de los métodos semánticos y de los invariantes.
 // La persistencia vive aparte (incremento 6): el dominio no sabe cómo se guarda.
 
-import { LOCK_VERSION } from 'keel-core/gen';
+import { LOCK_VERSION } from '@keel-system/keel-core/gen';
 import { memberOf } from './enums.js';
 import { csFile, csLocal, csMember, declType, entityPlace, fieldUsings, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 

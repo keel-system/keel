@@ -7,7 +7,7 @@
 // (WIRE_SHAPES.eventMetadata de keel-core): System.Text.Json escribe las propiedades de un record en el
 // orden en que se declaran, y la envoltura del incremento 9 la serializa tal cual.
 
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { csFile, csLocal, csMember, csString, declType, fieldUsings, located, xmlDoc } from './render.js';
 
 /**

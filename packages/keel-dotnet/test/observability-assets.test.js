@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planService } from '../src/scaffold/index.js';
 import { DOTNET_RUNTIME } from '../src/scaffold/telemetry.js';

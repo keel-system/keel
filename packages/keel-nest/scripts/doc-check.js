@@ -29,9 +29,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadService } from 'keel-core';
-import { documentShape, documentValueObjects, valueObjectShape, documentIndexes, partialDocumentIndexSpecs } from 'keel-core/gen/document';
-import { foldedShadow } from 'keel-core/gen/relational';
+import { loadService } from '@keel-system/keel-core';
+import { documentShape, documentValueObjects, valueObjectShape, documentIndexes, partialDocumentIndexSpecs } from '@keel-system/keel-core/gen/document';
+import { foldedShadow } from '@keel-system/keel-core/gen/relational';
 import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startMongo, stopDatabase } from './lib/database-container.js';
 import { sampleEntity, PROBE_HELPERS } from './lib/samples.js';

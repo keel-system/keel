@@ -17,12 +17,12 @@
 import { idempotencyRegistration, idempotencyRegistrationUsings } from './request-idempotency.js';
 import { usesSweepClaims } from './claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from './reconciliation-claim.js';
-import { constraintErrors, declaredConcurrencyError, CONCURRENT_MODIFICATION_MESSAGE, UNKNOWN_INTEGRITY_MESSAGE, TRANSACTION_TIMEOUT_MESSAGE } from 'keel-core/gen';
-import { WRITE_CONFLICT_ATTEMPTS } from 'keel-core/gen/transactions';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { envFor } from 'keel-core/gen/runtime-env';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { SYSTEM_ACTOR } from 'keel-core/gen/relational';
+import { constraintErrors, declaredConcurrencyError, CONCURRENT_MODIFICATION_MESSAGE, UNKNOWN_INTEGRITY_MESSAGE, TRANSACTION_TIMEOUT_MESSAGE } from '@keel-system/keel-core/gen';
+import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { envFor } from '@keel-system/keel-core/gen/runtime-env';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
 import { csFile, csString, located, namespaceOf, solution } from './render.js';
 import { usesCorrelation } from './rest-support.js';
 import { securityNamespace, usesHttpSecurity } from './security.js';

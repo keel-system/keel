@@ -13,7 +13,7 @@ import { usesPersistence } from './persistence-entities.js';
 import { usesApi, CORRELATION_TS, usesCorrelation } from './rest-support.js';
 import { SECURITY_CONTEXT_TS, usesHttpSecurity } from './security.js';
 import { tsModule, tsString } from './render.js';
-import { SYSTEM_ACTOR } from 'keel-core/gen/relational';
+import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
 
 export const AUDIT_ACTOR_TS = 'src/infrastructure/persistence/audit-actor.ts';
 

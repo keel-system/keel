@@ -9,8 +9,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
-import { HTML_ESCAPES, RESERVED_MAIL_HEADERS, COMPILED_TEMPLATES_LIMIT } from 'keel-core/gen/mail-message';
+import { loadService } from '@keel-system/keel-core';
+import { HTML_ESCAPES, RESERVED_MAIL_HEADERS, COMPILED_TEMPLATES_LIMIT } from '@keel-system/keel-core/gen/mail-message';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planFixture, FIXTURES_DIR } from './helpers/workspace.js';
 import { PACKAGES } from '../src/lib/dotnet-stack.js';

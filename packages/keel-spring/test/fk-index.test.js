@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { foreignKeyIndexColumns } from '../src/scaffold/persistence-entities.js';
 import { scaffoldService } from '../src/scaffold/index.js';

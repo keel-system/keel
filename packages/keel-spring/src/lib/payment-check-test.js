@@ -6,8 +6,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { paymentProbesFor } from 'keel-core/gen/payment-probes';
-import { CURRENCY_MINOR_UNITS } from 'keel-core/gen/payment-gateways';
+import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { CURRENCY_MINOR_UNITS } from '@keel-system/keel-core/gen/payment-gateways';
 import { PAYMENT_TEST_SECRETS } from '../scaffold/config.js';
 import { isRawJsonField } from '../scaffold/jackson.js';
 

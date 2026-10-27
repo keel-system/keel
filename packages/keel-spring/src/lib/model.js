@@ -5,7 +5,7 @@
 // pasa la proyección Java (java-projection.js) y se reexporta lo que el scaffolding ya importaba
 // de este módulo.
 
-import { buildModel as interpretDesign } from 'keel-core/gen/model';
+import { buildModel as interpretDesign } from '@keel-system/keel-core/gen/model';
 import { JAVA_PROJECTION } from './java-projection.js';
 
 export {
@@ -15,7 +15,7 @@ export {
   accessAuthority,
   RECONCILIATION_BATCH_SIZE,
   reconciliationClaimTimeoutMs
-} from 'keel-core/gen/model';
+} from '@keel-system/keel-core/gen/model';
 export { sharedExceptionFor, UUID_V7_CALL, LONG_ID_CALL } from './java-projection.js';
 
 export function buildModel({ manifest, layers, stack = null }) {

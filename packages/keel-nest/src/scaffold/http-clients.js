@@ -12,8 +12,8 @@
 //
 // `src/infrastructure/http/` es la plataforma de ENTRADA (Fastify): lo saliente va a `infrastructure/clients`.
 
-import { LAST_KNOWN_MAX_ENTRIES, servesLastKnown } from 'keel-core/gen/last-known';
-import { fallbackFailures, resiliencePolicy, RESILIENCE_DEFAULTS } from 'keel-core/gen/outbound-resilience';
+import { LAST_KNOWN_MAX_ENTRIES, servesLastKnown } from '@keel-system/keel-core/gen/last-known';
+import { fallbackFailures, resiliencePolicy, RESILIENCE_DEFAULTS } from '@keel-system/keel-core/gen/outbound-resilience';
 import { DIRS, classPath, declType, fieldImports, fileName, tsModule, tsString, tsdoc } from './render.js';
 import { DECIMAL_TS, RAW_JSON_TS, WIRE_TS } from './wire.js';
 import { COMMAND_SIGNATURE_TS } from './request-idempotency.js';
@@ -21,9 +21,9 @@ import { CORRELATION_TS, usesApi, usesCorrelation } from './rest-support.js';
 import { VALUE_READERS_TS, valueReaders } from './controllers.js';
 import { usesSubscriptionMessages } from './messaging.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
-import { httpClientsYaml } from 'keel-core/gen/http-clients-config';
-import { hasCallFallback } from 'keel-core/gen/outbound-resilience';
-import { LOCAL_STUB_BASE_URL } from 'keel-core/gen/infra-catalog';
+import { httpClientsYaml } from '@keel-system/keel-core/gen/http-clients-config';
+import { hasCallFallback } from '@keel-system/keel-core/gen/outbound-resilience';
+import { LOCAL_STUB_BASE_URL } from '@keel-system/keel-core/gen/infra-catalog';
 
 const CLIENTS_DIR = 'infrastructure/clients';
 export const PROVIDER_FAILURES_TS = `src/${CLIENTS_DIR}/provider-failures.ts`;

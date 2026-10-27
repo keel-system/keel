@@ -13,32 +13,32 @@
 // lo que cuelga de capas que keel-dotnet todavía no genera (el almacén de idempotencia, el correo, los clientes
 // salientes) llega con su incremento: el handler de hoy solo inyecta lo que existe.
 
-import { carriesEntryGate, dispatchNote, entryGateNote, ownershipNotes, scheduleDispatch, usesEntryGate } from 'keel-core/gen';
-import { textFilterNotes } from 'keel-core/gen/text-filters';
-import { finderNote } from 'keel-core/gen/query-filters';
+import { carriesEntryGate, dispatchNote, entryGateNote, ownershipNotes, scheduleDispatch, usesEntryGate } from '@keel-system/keel-core/gen';
+import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
+import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
-import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
+import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 import { mapperOf } from './mappers.js';
 import { repositoryRoots, repositoryOf, portClass, repositoriesNamespace } from './repositories.js';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { idempotencyOutcomeCode } from 'keel-core/gen';
-import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen';
+import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from '@keel-system/keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_PORT, idempotencyNamespace, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_SCOPE_PORT, CALLER_ROLES_PORT, callerResolution, roleCheckedOperation, scopedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
 import { callMethod, clientPort, clientsNamespace } from './http-clients.js';
 import { mailNamespace, mailPorts, sendsMail } from './mail.js';
 import { OPERATION_CACHE_PORT, cacheCall, cachesOperation } from './cache.js';
-import { cacheNote } from 'keel-core/gen/cache-plan';
+import { cacheNote } from '@keel-system/keel-core/gen/cache-plan';
 import { projectionNamespace, projectionNotes, projectionsFedBy, readerLocal } from './projections.js';
-import { refTargetsOf, listedIdsNote } from 'keel-core/gen/ref-targets';
-import { inverseCollectionsNote } from 'keel-core/gen/inverse-collections';
+import { refTargetsOf, listedIdsNote } from '@keel-system/keel-core/gen/ref-targets';
+import { inverseCollectionsNote } from '@keel-system/keel-core/gen/inverse-collections';
 import { resolverClass } from './ref-resolvers.js';
 import { usesPersistence } from './persistence.js';
 import { naturalKeyBatchFinder } from './repositories.js';
-import { uploadNotes } from 'keel-core/gen/buckets';
-import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
+import { uploadNotes } from '@keel-system/keel-core/gen/buckets';
+import { effectiveErrorCode } from '@keel-system/keel-core/gen/declared-errors';
 import { FILE_STORAGE_PORT, UPLOAD_NOTE_NAMES_CS, storageNamespace } from './storage.js';
 
 export function generate(model) {

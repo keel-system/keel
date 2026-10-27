@@ -22,8 +22,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { MAIL_SINK } from 'keel-core/gen/infra-catalog';
-import { HTTP_PORT, SMTP_PORT, ROUTES } from 'keel-core/gen/mail-probes';
+import { MAIL_SINK } from '@keel-system/keel-core/gen/infra-catalog';
+import { HTTP_PORT, SMTP_PORT, ROUTES } from '@keel-system/keel-core/gen/mail-probes';
 import { run, resolveRuntime, freePort } from '../../keel-nest/scripts/lib/database-container.js';
 import { planFixture, makeWorkspace } from '../test/helpers/workspace.js';
 

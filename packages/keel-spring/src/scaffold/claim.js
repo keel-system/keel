@@ -42,7 +42,7 @@
 // destino la hace el dominio, que es quien fija los campos que ese estado exige. Moverla
 // aquí dejaba `failed` sin `failureReason` ni `failedAt` (corrida notifications, 2026-09-30).
 
-import { SWEEP_BATCH_DEFAULT } from 'keel-core/gen';
+import { SWEEP_BATCH_DEFAULT } from '@keel-system/keel-core/gen';
 import { subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
 import { claimSelectionSnippet, claimTransaction, supportsSkipLocked, unsupportedClaimWarning } from '../lib/claim-sql.js';

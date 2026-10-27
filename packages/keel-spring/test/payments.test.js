@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { PAYMENT_GATEWAYS } from '../src/lib/stack-catalog.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

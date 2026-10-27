@@ -28,7 +28,7 @@
 // y el barrido de reconciliación). Un `@Lock` escrito a mano en cualquiera de ellos
 // vuelve a partir la decisión en dos, que es de donde venía el bug del relay.
 
-import { needsReadCommitted } from 'keel-core/gen/infra-catalog';
+import { needsReadCommitted } from '@keel-system/keel-core/gen/infra-catalog';
 
 /**
  * Sufijo que se añade al SELECT de candidatos para que dos réplicas no se lleven la

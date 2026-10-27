@@ -24,10 +24,10 @@ import {
   partialDocumentIndexSpecs as neutralPartialSpecs,
   exportIndexesScript as neutralExportIndexesScript,
   INDEX_EXPORT_FILE
-} from 'keel-core/gen/document';
+} from '@keel-system/keel-core/gen/document';
 
 // Qué índices hay, sobre qué rutas, con qué nombre y con qué filtro parcial es una lectura del
-// diseño que comparte keel-nest (`keel-core/gen/document.js`); aquí solo se escribe como Java.
+// diseño que comparte keel-nest (`@keel-system/keel-core/gen/document.js`); aquí solo se escribe como Java.
 export { documentPathsFor, INDEX_EXPORT_FILE };
 
 const CONFIG_PKG = 'infrastructure.persistence.config';

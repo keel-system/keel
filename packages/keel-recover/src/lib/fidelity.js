@@ -8,7 +8,7 @@
 // determinista, sin fechas: la fecha está en el historial de git, y un informe que cambia cada vez que
 // se escribe no se puede comparar.
 
-import { EXECUTED_MARKS, PROVENANCE_LEVELS } from 'keel-core';
+import { EXECUTED_MARKS, PROVENANCE_LEVELS } from '@keel-system/keel-core';
 
 const MEANING = {
   keep: 'el legacy hace lo que el diseño afirma',

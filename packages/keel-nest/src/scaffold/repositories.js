@@ -14,10 +14,10 @@
 //     guardar el grafo; cero filas es otra escritura que ganó (o un borrado), y sale como conflicto;
 //   · la AUDITORÍA: `created_*`/`updated_*` los estampa el adaptador, como el listener de Spring Data.
 
-import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, keyShadow, naturalKeyBatchReason, uniqueFields } from 'keel-core/gen';
-import { pluralize } from 'keel-core/gen/naming';
-import { idBatchReason, listedIdQueries } from 'keel-core/gen/ref-targets';
-import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
+import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, keyShadow, naturalKeyBatchReason, uniqueFields } from '@keel-system/keel-core/gen';
+import { pluralize } from '@keel-system/keel-core/gen/naming';
+import { idBatchReason, listedIdQueries } from '@keel-system/keel-core/gen/ref-targets';
+import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';

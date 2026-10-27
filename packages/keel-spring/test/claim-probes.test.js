@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { claimScenarios, claimTestClass, harnessProbes, requiredLiterals, BATCH_SIZE, CLASS_NAME } from '../src/lib/claim-probes.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

@@ -10,8 +10,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
-import { idBatchReason } from 'keel-core/gen/ref-targets';
+import { loadService } from '@keel-system/keel-core';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

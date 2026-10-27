@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { footprint, byDirectory, parseCorrida, series, verdict } from '../src/lib/corrida-metrics.js';
 import { tmpDir } from './helpers/tmp.js';

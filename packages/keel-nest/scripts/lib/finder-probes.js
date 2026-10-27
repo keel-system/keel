@@ -4,8 +4,8 @@
 // muestra) y otra que no; por cada criterio, un valor que la encuentra y otros que no —los extremos de gte/lte
 // incluidos, los de gt/lt fuera, y el texto como literal—. Solo habla con el puerto: vale para los dos almacenes.
 
-import { findersOf, FINDER_PROBE_TEXT, finderTextProbes } from 'keel-core/gen';
-import { screamingSnake } from 'keel-core/gen/naming';
+import { findersOf, FINDER_PROBE_TEXT, finderTextProbes } from '@keel-system/keel-core/gen';
+import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 import { classPath, DIRS } from '../../src/scaffold/render.js';
 
 const js = (value) => JSON.stringify(value);

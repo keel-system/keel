@@ -12,7 +12,7 @@
 // el agregado es el valor ORIGINAL del token de concurrencia y la fila sube a la siguiente: EF escribe
 // `UPDATE … WHERE lock_version = @leída`, y cero filas es otra escritura que ganó (un 409).
 
-import { inverseFindersOf } from 'keel-core/gen/inverse-collections';
+import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
 import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
 import {
   persistedMembers,
@@ -25,8 +25,8 @@ import {
   LOCK_VERSION,
   claimsForEntity,
   naturalKeyBatchReason
-} from 'keel-core/gen';
-import { idBatchReason } from 'keel-core/gen/ref-targets';
+} from '@keel-system/keel-core/gen';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, typeUsings, xmlDoc, entityPlace } from './render.js';
 import { filterRecordFiles, finderEnums, needsOrdering, portFinderMethods, relationalFinderMethods, sortConstants } from './finders.js';
 import { domainMembers } from './entities.js';

@@ -25,13 +25,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { loadService } from 'keel-core';
-import { resolveStack, writeStackConfig } from 'keel-core/gen/stack';
+import { loadService } from '@keel-system/keel-core';
+import { resolveStack, writeStackConfig } from '@keel-system/keel-core/gen/stack';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { planService } from '../src/scaffold/index.js';
 import { resolveRuntime } from './lib/database-container.js';
-import { documentIndexes, INDEX_EXPORT_FILE } from 'keel-core/gen/document';
+import { documentIndexes, INDEX_EXPORT_FILE } from '@keel-system/keel-core/gen/document';
 
 const keep = process.argv.includes('--keep');
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;

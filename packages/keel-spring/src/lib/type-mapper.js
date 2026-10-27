@@ -4,9 +4,9 @@
 
 import { snakeCase } from './naming.js';
 import { quoteIdentifier } from './sql-reserved.js';
-import { resolveType as resolveDslType, isBaseType as isDslBaseType } from 'keel-core/gen/types';
-import { validationRules, elementValidationRules, DECIMAL_PRECISION } from 'keel-core/gen/constraints';
-import { columnSpec } from 'keel-core/gen/relational';
+import { resolveType as resolveDslType, isBaseType as isDslBaseType } from '@keel-system/keel-core/gen/types';
+import { validationRules, elementValidationRules, DECIMAL_PRECISION } from '@keel-system/keel-core/gen/constraints';
+import { columnSpec } from '@keel-system/keel-core/gen/relational';
 
 const BASE_TYPES = {
   string: { javaType: 'String', imports: [] },
@@ -133,7 +133,7 @@ export { DECIMAL_PRECISION };
 
 // Las cotas numéricas y el formato heredado son decisiones del DISEÑO: viven en keel-core/gen para
 // que keel-spring y keel-nest hagan cumplir lo mismo (constraints.js).
-export { numericConstraints, inheritedTypePattern } from 'keel-core/gen/constraints';
+export { numericConstraints, inheritedTypePattern } from '@keel-system/keel-core/gen/constraints';
 
 /**
  * Anotaciones JPA de columna para un campo de entidad persistida.

@@ -11,7 +11,7 @@ import {
   messagingTopologyChecks,
   needsMessagingProvisioning,
   subscriptionQueues
-} from 'keel-core/gen/messaging-provisioning';
+} from '@keel-system/keel-core/gen/messaging-provisioning';
 
 export { harnessQueueName, messagingTopologyChecks, needsMessagingProvisioning, subscriptionQueues };
 

@@ -1,4 +1,4 @@
-// El núcleo de `keel-core/gen` lo consumen todos los generadores, así que no puede saber en
+// El núcleo de `@keel-system/keel-core/gen` lo consumen todos los generadores, así que no puede saber en
 // qué lenguaje escribe ninguno. La regla se vigila sobre el CÓDIGO, sin comentarios: la prosa
 // puede (y suele) nombrar a keel-spring o a keel-nest para explicar por qué algo vive aquí.
 
@@ -40,7 +40,7 @@ test('ningún módulo de keel-core/gen nombra un lenguaje, un framework ni sus t
   assert.deepEqual(findings, []);
 });
 
-test('keel-core/gen solo importa de keel-core, de node: y de sus dependencias declaradas (nunca de un generador)', () => {
+test('@keel-system/keel-core/gen solo importa de keel-core, de node: y de sus dependencias declaradas (nunca de un generador)', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(genDir, '..', '..', '..', 'package.json'), 'utf8'));
   const declared = new Set(Object.keys(pkg.dependencies ?? {}));
   const findings = [];
@@ -66,12 +66,12 @@ test('el detector ve lo que tiene que ver (se autocomprueba)', () => {
 });
 
 test('el subpath keel-core/gen expone lo mismo que su índice', async () => {
-  const viaPackage = await import('keel-core/gen');
+  const viaPackage = await import('@keel-system/keel-core/gen');
   assert.deepEqual(Object.keys(viaPackage).sort(), Object.keys(gen).sort());
 });
 
 test('el catálogo de mecanismos: ids estables, título y eje conocido', async () => {
-  const { MECHANISM_CATALOG, MODELS, STATES } = await import('keel-core/gen/mechanisms');
+  const { MECHANISM_CATALOG, MODELS, STATES } = await import('@keel-system/keel-core/gen/mechanisms');
   assert.ok(Object.keys(MECHANISM_CATALOG).length >= 10);
   for (const [id, { title, axis }] of Object.entries(MECHANISM_CATALOG)) {
     assert.match(id, /^[a-z][a-z0-9-]*$/, `${id}: id no estable`);

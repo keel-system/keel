@@ -18,16 +18,16 @@
 //   · la identidad del llamante (`callerIdentity`) en un único punto, y el alcance por recurso
 //     (`scoping`) como un puerto de la aplicación con su adaptador.
 
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { usesCallerRoles, ownershipRulesOf } from 'keel-core/gen/ownership';
-import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
-import { accessPlan, audienceOf, tokenClaims, usesTokenProtocol } from 'keel-core/gen/access-plan';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { usesCallerRoles, ownershipRulesOf } from '@keel-system/keel-core/gen/ownership';
+import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
+import { accessPlan, audienceOf, tokenClaims, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
 import { classPath, DIRS, tsModule, tsString } from './render.js';
 import { usesApi, ERROR_RESPONSE_TS } from './rest-support.js';
 import { credentialFinderName, portClass, portPath } from './repositories.js';
 import { entityDir } from './render.js';
-import { envRequired } from 'keel-core/gen/profile-values';
-import { envFor, runtimeDefault } from 'keel-core/gen/runtime-env';
+import { envRequired } from '@keel-system/keel-core/gen/profile-values';
+import { envFor, runtimeDefault } from '@keel-system/keel-core/gen/runtime-env';
 
 const DIR = 'src/infrastructure/security';
 export const SECURITY_CONTEXT_TS = `${DIR}/security-context.ts`;

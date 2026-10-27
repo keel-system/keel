@@ -9,7 +9,7 @@
 // la explique: en el diseño, o en el mapa con su motivo. Y un comparador sin nada que comparar no puede
 // salir en verde: con el sandbox del legacy caído, el prototipo dijo «0 diferencias».
 
-import { EXECUTED_MARKS } from 'keel-core';
+import { EXECUTED_MARKS } from '@keel-system/keel-core';
 
 export const KINDS = ['solo-keel', 'valor', 'solo-legacy', 'solo-keel-null'];
 

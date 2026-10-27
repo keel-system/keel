@@ -7,7 +7,7 @@
 // publicada, el perfil test no acepta ningún token, así que no hay ninguna clave en el repositorio que un despliegue con
 // el perfil equivocado aceptara. La misma decisión que keel-nest; los claims de acceso total son los de keel-core.
 
-import { fullAccessClaims } from 'keel-core/gen/access-plan';
+import { fullAccessClaims } from '@keel-system/keel-core/gen/access-plan';
 import { csFile, csString, solution } from './render.js';
 import { securityPlan, usesJwt, TEST_JWKS_VARIABLE, LOCAL_API_KEY, localClientApiKey } from './security.js';
 

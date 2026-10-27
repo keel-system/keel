@@ -12,12 +12,12 @@
 // La configuración (config/parameters/<perfil>/storage.yaml) es la neutral de keel-core (gen/storage-config.js): las
 // MISMAS variables y el mismo gradiente que el storage.yaml de keel-spring y el de keel-nest.
 
-import { CONTENT_SIGNATURES } from 'keel-core/gen/content-signatures';
-import { declaredErrorFor } from 'keel-core/gen/declared-errors';
-import { storageYaml, multipartFileLimitBytes } from 'keel-core/gen/storage-config';
-import { STORAGE, devtoolsContainer, storageContainer } from 'keel-core/gen/infra-catalog';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
+import { CONTENT_SIGNATURES } from '@keel-system/keel-core/gen/content-signatures';
+import { declaredErrorFor } from '@keel-system/keel-core/gen/declared-errors';
+import { storageYaml, multipartFileLimitBytes } from '@keel-system/keel-core/gen/storage-config';
+import { STORAGE, devtoolsContainer, storageContainer } from '@keel-system/keel-core/gen/infra-catalog';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
 import { csFile, csMember, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { observedRegistration, observedStorageFile, telemetryNamespace, usesTelemetry } from './telemetry.js';

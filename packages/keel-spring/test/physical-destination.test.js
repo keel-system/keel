@@ -16,10 +16,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { harnessQueueName } from '../src/scaffold/messaging-provisioning.js';
-import { publishedDestination } from 'keel-core/gen';
+import { publishedDestination } from '@keel-system/keel-core/gen';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const fixturesDir = path.join(FIXTURES_DIR);

@@ -13,7 +13,7 @@
 //     NEUTRALES (keel-core/gen/scheduling.js), las mismas que toman keel-spring y keel-nest para el mismo diseño.
 //   · Las purgas (`purge.js`) se registran en el mismo `Scheduling`.
 
-import { scheduledOperations, scheduleCron, scheduleDispatch } from 'keel-core/gen';
+import { scheduledOperations, scheduleCron, scheduleDispatch } from '@keel-system/keel-core/gen';
 import { csFile, csString, located, namespaceOf, xmlDoc } from './render.js';
 import { usesMediator } from './mediator.js';
 import { entryGateAssignment, messageComponents, messageNamespace } from './services.js';

@@ -16,8 +16,8 @@
 // Las reglas son datos (exportadas): el test recorre esta misma lista y la falsa regla a regla, con su forma prohibida
 // (`sample`) y su forma correcta (`allowed`), así que una regla nueva no entra sin su caso.
 
-import { sourceGate } from 'keel-core/gen/source-gate';
-import { usesTelemetry } from 'keel-core/gen/telemetry-vocabulary';
+import { sourceGate } from '@keel-system/keel-core/gen/source-gate';
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 
 /** Dónde busca el gate y cómo son los comentarios de C#: la plataforma del motor neutral. */
 export const CS_SOURCE = { root: 'src', extension: 'cs', excludeDirs: ['bin', 'obj'], lineComment: '//', blockComment: ['/*', '*/'] };

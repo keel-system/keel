@@ -16,31 +16,31 @@
 // inyecta lo que existe.
 
 import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } from './render.js';
-import { textFilterNotes, hasPatternFilter } from 'keel-core/gen/text-filters';
-import { finderNote } from 'keel-core/gen/query-filters';
+import { textFilterNotes, hasPatternFilter } from '@keel-system/keel-core/gen/text-filters';
+import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
 import { usesLikePattern, LIKE_PATTERN_TS } from './persistence-entities.js';
-import { refTargetsOf, listedIdsNote } from 'keel-core/gen/ref-targets';
-import { inverseCollectionsNote } from 'keel-core/gen/inverse-collections';
+import { refTargetsOf, listedIdsNote } from '@keel-system/keel-core/gen/ref-targets';
+import { inverseCollectionsNote } from '@keel-system/keel-core/gen/inverse-collections';
 import { resolverPath } from './ref-resolvers.js';
-import { uploadNotes } from 'keel-core/gen/buckets';
-import { effectiveErrorCode } from 'keel-core/gen/declared-errors';
+import { uploadNotes } from '@keel-system/keel-core/gen/buckets';
+import { effectiveErrorCode } from '@keel-system/keel-core/gen/declared-errors';
 import { STORAGE_POLICIES_TS, FILE_STORAGE_TS } from './storage.js';
 import { callerResolution } from './security.js';
 import { mailPorts, sendsMail } from './mail.js';
 import { ANNOTATIONS_TS, ENTRY_GATE_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyBatchFinder, PAGE_TS } from './repositories.js';
-import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch, dispatchNote, carriesEntryGate, entryGateNote, usesEntryGate, ownershipNotes } from 'keel-core/gen';
+import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch, dispatchNote, carriesEntryGate, entryGateNote, usesEntryGate, ownershipNotes } from '@keel-system/keel-core/gen';
 import { COMMAND_DISPATCHER_TS } from './mediator.js';
 import { OPERATION_CACHE_TS } from './cache.js';
-import { cacheNote } from 'keel-core/gen/cache-plan';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
+import { cacheNote } from '@keel-system/keel-core/gen/cache-plan';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from '@keel-system/keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_SCOPE_TS, scopedOperation, CALLER_ROLES_TS, roleCheckedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
-import { followUpRejectionNote } from 'keel-core/gen/rejection-notes';
+import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { portPath as clientPortPath } from './http-clients.js';
 import { projectorPath, readerPath, replicas } from './projections.js';
 

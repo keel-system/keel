@@ -12,7 +12,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
-import { SYSTEM_ACTOR } from 'keel-core/gen/relational';
+import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
 
 const AUDIT_PKG = 'infrastructure.configurations.audit';
 

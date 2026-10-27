@@ -12,8 +12,8 @@
 // líneas, no lo ve, igual que el de keel-spring no ve una constante. La salida de un hallazgo no es quitar el dato: es
 // llevarlo al span (`SpanAttributes`).
 
-import { ATTRIBUTES, promTag, usesTelemetry } from 'keel-core/gen/telemetry-vocabulary';
-import { sourceGate } from 'keel-core/gen/source-gate';
+import { ATTRIBUTES, promTag, usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { sourceGate } from '@keel-system/keel-core/gen/source-gate';
 import { CS_SOURCE } from './logging-check.js';
 
 /** Las claves de etiqueta de las series que publica la telemetría generada fuera del vocabulario `keel.*`. */

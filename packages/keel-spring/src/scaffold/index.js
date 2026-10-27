@@ -2,11 +2,11 @@
 // diseño validado y renderiza todos los artefactos en services/<name>-spring/.
 // Regeneración segura: sin force solo se escriben archivos que no existen.
 
-import { derivedOpenapiFiles } from 'keel-core/gen/openapi';
+import { derivedOpenapiFiles } from '@keel-system/keel-core/gen/openapi';
 import path from 'node:path';
 import { buildModel } from '../lib/model.js';
-import { materializeProject } from 'keel-core/gen/materialize';
-import { resolveStack as resolveNeutralStack } from 'keel-core/gen/stack';
+import { materializeProject } from '@keel-system/keel-core/gen/materialize';
+import { resolveStack as resolveNeutralStack } from '@keel-system/keel-core/gen/stack';
 import { listKeelDocs } from '../lib/keel-docs.js';
 import { packageVersion } from '../lib/assets.js';
 import { checkGatewaySupport } from '../lib/gateway-support.js';

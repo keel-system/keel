@@ -14,7 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { walk, uncovered as uncoveredIn } from '../../keel-core/test/helpers/capability-coverage.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

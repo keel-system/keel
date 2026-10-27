@@ -19,11 +19,11 @@
 //   purgas      lo caducado sale por lotes con tope, la pasada siguiente sigue, y lo vigente y lo PENDIENTE
 //               del outbox no se tocan.
 
-import { claimsForEntity, claimOrderField, screamingSnake } from 'keel-core/gen';
-import { storeDocumentKey, storeDocumentFields, documentShape } from 'keel-core/gen/document';
-import { OUTBOX_EVENT, PROCESSED_EVENT } from 'keel-core/gen/messaging-stores';
-import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
-import { RECONCILIATION_CLAIM, reconciliationClaims } from 'keel-core/gen/reconciliation-stores';
+import { claimsForEntity, claimOrderField, screamingSnake } from '@keel-system/keel-core/gen';
+import { storeDocumentKey, storeDocumentFields, documentShape } from '@keel-system/keel-core/gen/document';
+import { OUTBOX_EVENT, PROCESSED_EVENT } from '@keel-system/keel-core/gen/messaging-stores';
+import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
+import { RECONCILIATION_CLAIM, reconciliationClaims } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { classPath, DIRS } from '../../src/scaffold/render.js';
 import { repositoryRoots, adapterClass, emitsDomainEvents } from '../../src/scaffold/repositories.js';
 import { usesNestOutbox, usesProcessedEvents, bridgeClass, bridgePath, MESSAGING_SETTINGS_TS, OUTBOX_RELAY_STORE_TS, IDEMPOTENCY_GUARD_TS } from '../../src/scaffold/messaging.js';

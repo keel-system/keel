@@ -15,8 +15,8 @@
 // `elementTsType` y `text` (formato y longitud del campo, que son las guardas de un value object).
 // El modelo nunca las nombra.
 
-import { screamingSnake, numericConstraints, inheritedFormat, textConstraints, validationRules, elementValidationRules, columnSpec } from 'keel-core/gen';
-import { errorBaseFor } from 'keel-core/gen/error-bases';
+import { screamingSnake, numericConstraints, inheritedFormat, textConstraints, validationRules, elementValidationRules, columnSpec } from '@keel-system/keel-core/gen';
+import { errorBaseFor } from '@keel-system/keel-core/gen/error-bases';
 
 const BASE_TS_TYPES = {
   string: { tsType: 'string', imports: [] },

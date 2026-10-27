@@ -2,7 +2,7 @@
 // La RUTA DE PRODUCCIÓN de la telemetría de keel-dotnet (incremento 14f de PLAN-KEEL-DOTNET.md): levanta `deploy/`
 // ENTERO —la app en contenedor, el colector y el backend de prueba— con su propio `up.sh` y le pregunta AL BACKEND.
 //
-// Las preguntas (DEP-2 a DEP-8) son las de keel-spring y keel-nest, en `keel-core/gen/deploy-probes.js`: el backend, el
+// Las preguntas (DEP-2 a DEP-8) son las de keel-spring y keel-nest, en `@keel-system/keel-core/gen/deploy-probes.js`: el backend, el
 // panel, las alertas y el contacto son los mismos. Lo de esta plataforma es cómo se prepara la app (antes de construir
 // la imagen se crea el baseline del esquema con `dotnet ef`, como lo hace el pase de calidad: sin él, EF se niega a
 // migrar y la app no arranca en develop) y la serie de runtime que su scrape tiene que traer (DEP-1).
@@ -21,10 +21,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { loadService } from 'keel-core';
-import { ALERTING, TELEMETRY_INFRA } from 'keel-core/gen/infra-catalog';
-import { METRICS_TRANSPORT } from 'keel-core/gen/telemetry-vocabulary';
-import { DEPLOY_CASES, httpRead, probeDeployBackend, trafficPath } from 'keel-core/gen/deploy-probes';
+import { loadService } from '@keel-system/keel-core';
+import { ALERTING, TELEMETRY_INFRA } from '@keel-system/keel-core/gen/infra-catalog';
+import { METRICS_TRANSPORT } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { DEPLOY_CASES, httpRead, probeDeployBackend, trafficPath } from '@keel-system/keel-core/gen/deploy-probes';
 import { build } from '../src/commands/build.js';
 import { planService } from '../src/scaffold/index.js';
 import { solution } from '../src/scaffold/render.js';

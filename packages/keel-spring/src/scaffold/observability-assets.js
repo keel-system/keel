@@ -1,12 +1,12 @@
 // El panel y las alertas del servicio generado (solo con `telemetry: otel`).
 //
 // Desde el incremento 14d de PLAN-KEEL-NEST.md el panel y las alertas son NEUTRALES
-// (`keel-core/gen/observability-assets.js`): keel-nest genera los mismos para el mismo diseño, porque la regla de
+// (`@keel-system/keel-core/gen/observability-assets.js`): keel-nest genera los mismos para el mismo diseño, porque la regla de
 // equivalencia es que el MISMO panel tenga datos con los dos servidores. Aquí queda lo único que es de esta
 // plataforma: la fila de runtime de la JVM (heap y pausas de GC, el pool de Hikari o del driver de Mongo) y el
 // retraso del consumidor que publica el cliente de Kafka.
 
-import { observabilityAssets, dashboardUid } from 'keel-core/gen/observability-assets';
+import { observabilityAssets, dashboardUid } from '@keel-system/keel-core/gen/observability-assets';
 import { RUNTIME_JVM, consumerLagFor, promMetric, runtimePool } from '../lib/telemetry-probes.js';
 import { usesOutbox } from './outbox.js';
 

@@ -9,11 +9,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HARNESSES } from 'keel-core';
+import { HARNESSES } from '@keel-system/keel-core';
 import { AGENTS, CONVENTIONS, CONDITIONAL_CONVENTIONS, GUIDES, DOCS_DIR } from '../src/scaffold/generator-docs.js';
 import { solution } from '../src/scaffold/render.js';
 import { SKILL } from '../src/lib/assets.js';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { DOTNET_READY_DESIGN, FIXTURES_DIR, planFixture } from './helpers/workspace.js';
 

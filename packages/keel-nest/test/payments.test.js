@@ -9,10 +9,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createHmac } from 'node:crypto';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import path from 'node:path';
-import { paymentProbesFor } from 'keel-core/gen/payment-probes';
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, paymentIdempotencyKey } from 'keel-core/gen/payment-gateways';
+import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, paymentIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
@@ -449,7 +449,7 @@ test('la clave de idempotencia emitida es la de keel-core', async () => {
 // llegar iguales a los stubs de los dos generadores: con la decisión fuera de la nota, las corridas del 2026-10-09
 // eligieron una por generador.
 test('las notas del «no» (onRejected y acknowledgeOn) llegan iguales a keel-spring y a keel-nest', async () => {
-  const { followUpRejectionNote, acknowledgeNote } = await import('keel-core/gen/rejection-notes');
+  const { followUpRejectionNote, acknowledgeNote } = await import('@keel-system/keel-core/gen/rejection-notes');
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, SUBJECT));
   const stack = { paymentGateway: 'stripe', broker: 'rabbitmq' };
   const nest = plan('stripe');

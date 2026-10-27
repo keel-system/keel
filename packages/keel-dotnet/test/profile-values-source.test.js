@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RUNTIME_ENV } from 'keel-core/gen/runtime-env';
+import { RUNTIME_ENV } from '@keel-system/keel-core/gen/runtime-env';
 
 const scaffoldDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'scaffold');
 const sources = fs

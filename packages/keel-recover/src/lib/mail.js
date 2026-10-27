@@ -1,4 +1,4 @@
-import { ROUTES } from 'keel-core/gen/mail-probes';
+import { ROUTES } from '@keel-system/keel-core/gen/mail-probes';
 import { toolRequest } from './tool-http.js';
 
 // El correo del legacy, recogido por Mailpit (paso 1b). Las rutas de su API son las del

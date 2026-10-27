@@ -5,7 +5,7 @@ gobierna una sola regla: **el mismo diseño genera, con uno u otro, servidores e
 decir el mismo contrato HTTP y el mismo cable, los mismos eventos y destinos, las mismas tablas, la misma semántica
 de fiabilidad, la misma operación y las mismas series de telemetría. Lo que no depende del lenguaje no lo escribe
 keel-nest: lo comparte con keel-spring desde `keel-core/gen`. Cómo se construyó, incremento a incremento y con
-qué se midió cada uno, está en [`PLAN-KEEL-NEST.md`](../../PLAN-KEEL-NEST.md).
+qué se midió cada uno, está en [`PLAN-KEEL-NEST.md`](https://github.com/keel-system/keel/blob/main/PLAN-KEEL-NEST.md).
 
 ## Uso
 

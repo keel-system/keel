@@ -10,8 +10,8 @@ import { sharedExceptionFor } from '../lib/model.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
 // El `code` de un error del FRAMEWORK no se escribe a mano: sale del catálogo del
 // método (keel-core), que es su única definición.
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { ERROR_BASES } from 'keel-core/gen/error-bases';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { ERROR_BASES } from '@keel-system/keel-core/gen/error-bases';
 
 const ERRORS_PKG = 'domain.errors';
 

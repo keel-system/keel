@@ -24,7 +24,7 @@ import { usesStorageAdapter } from './storage.js';
 import { usesJwt } from './security.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
-import { usesTelemetry } from 'keel-core/gen/telemetry-vocabulary';
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { DOCKERIGNORE } from './deploy.js';
 import { PROVIDER_PACKAGES, relationalEngine } from './relational-engine.js';
 

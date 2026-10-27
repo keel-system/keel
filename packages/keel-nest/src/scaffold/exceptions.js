@@ -7,9 +7,9 @@
 // coinciden con las excepciones HTTP de Nest a propósito (son los de la arquitectura compartida), y
 // el filtro de la API (incremento 5) es quien traduce DomainException a la respuesta.
 
-import { FRAMEWORK_ERRORS } from 'keel-core';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { DIRS, classPath, tsModule, tsdoc, tsString } from './render.js';
-import { ERROR_BASES } from 'keel-core/gen/error-bases';
+import { ERROR_BASES } from '@keel-system/keel-core/gen/error-bases';
 
 // Subclases base y el status al que responde cada una (el mismo reparto que keel-spring).
 export const BASE_SUBCLASSES = ERROR_BASES;

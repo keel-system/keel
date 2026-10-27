@@ -3,7 +3,7 @@
 // uuid no hace falta nada: `Guid.CreateVersion7()` es de la librería base. Salió con shop-api (2026-10-23), donde el
 // agente de código escribió a mano un `Identifiers.NextLong()` porque la raíz nacía con 0.
 
-import { LONG_ID_EPOCH_MS, LONG_ID_RANDOM_BITS, usesGeneratedLongIds } from 'keel-core/gen/ids';
+import { LONG_ID_EPOCH_MS, LONG_ID_RANDOM_BITS, usesGeneratedLongIds } from '@keel-system/keel-core/gen/ids';
 import { csFile, located } from './render.js';
 
 export const LONG_IDS_CLASS = 'LongIds';

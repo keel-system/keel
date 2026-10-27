@@ -1,6 +1,6 @@
 // La idempotencia de PETICIÓN (`use-cases.<op>.idempotency`): la que evita que reintentar una petición ejecute el caso
 // de uso dos veces. Es el mismo mecanismo que el de keel-spring y keel-nest, con su misma tabla
-// (`keel-core/gen/request-idempotency.js`, `IDEMPOTENCY_RECORD`):
+// (`@keel-system/keel-core/gen/request-idempotency.js`, `IDEMPOTENCY_RECORD`):
 //
 //   · build genera TODO lo transversal: el puerto `IIdempotencyStore` (Domain/Idempotency), su adaptador EF Core con la
 //     tabla `idempotency_record`, la firma canónica del comando (`CommandSignature`), el contexto que lleva la cabecera
@@ -14,9 +14,9 @@
 // Se adelantó del incremento 10 por lo mismo que en keel-nest: su primera corrida enseñó que un aviso de frontera no
 // frena al agente cuando un escenario exige el mecanismo, y que el suyo sale con otra tabla y otro algoritmo.
 
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { idempotencyOutcomeCodes } from 'keel-core/gen';
-import { IDEMPOTENCY_RECORD, IDEMPOTENCY_HEADER, registryOperations, usesRequestIdempotency as usesRegistryInDesign } from 'keel-core/gen/request-idempotency';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { idempotencyOutcomeCodes } from '@keel-system/keel-core/gen';
+import { IDEMPOTENCY_RECORD, IDEMPOTENCY_HEADER, registryOperations, usesRequestIdempotency as usesRegistryInDesign } from '@keel-system/keel-core/gen/request-idempotency';
 import { csFile, csString, located, namespaceOf, solution } from './render.js';
 import { usesPersistence, usesDocument, rowsNamespace, persistenceNamespace } from './persistence.js';
 import { documentIdempotencyStoreBody } from './document-stores.js';

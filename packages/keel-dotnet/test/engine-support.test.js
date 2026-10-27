@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MECHANISMS, MECHANISM_CATALOG, STATES, NETS, RELATIONAL_ENGINES, cells, pending, unverified } from '../src/lib/engine-support.js';
-import { MODELS } from 'keel-core/gen/mechanisms';
+import { MODELS } from '@keel-system/keel-core/gen/mechanisms';
 
 test('una fila por cada mecanismo del catálogo neutral, y ninguna inventada', () => {
   assert.deepEqual(Object.keys(MECHANISMS).sort(), Object.keys(MECHANISM_CATALOG).sort());

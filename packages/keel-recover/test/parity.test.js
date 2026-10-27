@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { readCharacterization } from 'keel-core';
+import { readCharacterization } from '@keel-system/keel-core';
 import { tmpDir } from './helpers/tmp.js';
 import { CONTRACT_MAP, PROVENANCE, SCENARIOS, fakeStock, fakeStockKeel, writeStockDesign } from './helpers/stock-design.js';
 import { plannedFlows, runCharacterization } from '../src/lib/characterize.js';

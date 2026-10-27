@@ -126,7 +126,7 @@ Próximos pasos:
   1. ${pc.cyan('keel new mi-servicio')}    crea specs/mi-servicio/ (manifiesto + capas obligatorias)
   2. Abre tu agente aquí y ejecuta ${pc.cyan('/keel-design specs/mi-servicio')}
   3. ${pc.cyan('keel validate specs/mi-servicio')}
-  4. Instala el generador de tu tecnología: ${pc.cyan('npm i -g keel-spring')} (${pc.cyan('keel list')} para ver los conocidos)
+  4. Instala el generador de tu tecnología: ${pc.cyan('npm i -g @keel-system/keel-spring')} (${pc.cyan('keel list')} para ver los conocidos)
   5. ${pc.cyan('keel-spring build specs/mi-servicio')}  elige el stack y genera services/mi-servicio-spring/
   6. ${pc.cyan('cd services/mi-servicio-spring')}
   7. Abre tu agente ahí y ejecuta ${pc.cyan('/keel-generate-spring')} ${pc.dim('(sin argumentos)')}

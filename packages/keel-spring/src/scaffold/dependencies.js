@@ -17,7 +17,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainSubPackage, domainTypeImport } from './entities.js';
 import { naturalKeyBatchFinder } from './repositories.js';
-import { occurredAtField } from 'keel-core/gen/replica';
+import { occurredAtField } from '@keel-system/keel-core/gen/replica';
 
 const PROJECTION_PKG = 'application.projection';
 const ANNOTATIONS_PKG = 'application.annotations';

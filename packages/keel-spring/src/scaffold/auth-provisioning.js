@@ -6,10 +6,10 @@
 // del mismo diseño se prueban contra el mismo realm. Aquí solo está la plataforma de keel-spring:
 // los textos que nombran su arnés (AbstractFlowIT) y su skill.
 
-import { identityProvisioningFiles } from 'keel-core/gen/identity-provisioning';
+import { identityProvisioningFiles } from '@keel-system/keel-core/gen/identity-provisioning';
 import { SPRING_INFRA } from './devtools.js';
 
-export { cognitoMockConfig } from 'keel-core/gen/identity-provisioning';
+export { cognitoMockConfig } from '@keel-system/keel-core/gen/identity-provisioning';
 export {
   secondUserOf,
   serviceClientSecret,
@@ -21,7 +21,7 @@ export {
   usesScopedTokens,
   keycloakAdminCredentials,
   realmSpec
-} from 'keel-core/gen/identity-realm';
+} from '@keel-system/keel-core/gen/identity-realm';
 
 export function generate(model) {
   return identityProvisioningFiles(model, SPRING_INFRA);

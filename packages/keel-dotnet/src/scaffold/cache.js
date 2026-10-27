@@ -16,10 +16,10 @@
 // Las claves en el store son las de RedisCacheManager de keel-spring (`<servicio>:<operación>::<clave>`): el mismo
 // `infra/reset-db.sh` y el mismo `ClearCache()` del arnés las borran en los tres servidores.
 
-import { cachedOperations, cacheInvalidations, CACHE_ENTRY_SEPARATOR, CACHE_KEY_PART_SEPARATOR } from 'keel-core/gen/cache-plan';
-import { cacheYaml } from 'keel-core/gen/cache-config';
-import { CACHES, devtoolsContainer } from 'keel-core/gen/infra-catalog';
-import { cacheFlushCmd } from 'keel-core/gen/infra-scripts';
+import { cachedOperations, cacheInvalidations, CACHE_ENTRY_SEPARATOR, CACHE_KEY_PART_SEPARATOR } from '@keel-system/keel-core/gen/cache-plan';
+import { cacheYaml } from '@keel-system/keel-core/gen/cache-config';
+import { CACHES, devtoolsContainer } from '@keel-system/keel-core/gen/infra-catalog';
+import { cacheFlushCmd } from '@keel-system/keel-core/gen/infra-scripts';
 import { csFile, csMember, csString, located, namespaceOf, solution } from './render.js';
 import { configNamespace } from './config.js';
 import { messageComponents, messageNamespace, returnTypeOf } from './services.js';

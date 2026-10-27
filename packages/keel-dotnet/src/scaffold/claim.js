@@ -20,8 +20,8 @@
 // del estado son del generador, y solo los instantes, el lote y el id viajan como parámetro. Ninguno de los tres
 // generadores sube la versión del bloqueo optimista en el reclamo.
 
-import { claimOrderField, claimsForEntity, screamingSnake, snakeCase, sweepClaims, sweepConfig } from 'keel-core/gen';
-import { envWithDefault } from 'keel-core/gen/profile-values';
+import { claimOrderField, claimsForEntity, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
+import { envWithDefault } from '@keel-system/keel-core/gen/profile-values';
 import { csFile, csMember, csString, located, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
 import { usesPersistence } from './persistence.js';

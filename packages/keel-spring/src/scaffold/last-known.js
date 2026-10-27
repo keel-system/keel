@@ -16,7 +16,7 @@
 // justo el que no puede tener dependencias nuevas.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { LAST_KNOWN_MAX_ENTRIES } from 'keel-core/gen/last-known';
+import { LAST_KNOWN_MAX_ENTRIES } from '@keel-system/keel-core/gen/last-known';
 
 const HTTP_PKG = 'infrastructure.http';
 

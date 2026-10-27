@@ -16,9 +16,9 @@
 // Sin FluentValidation ni el enlace de parámetros de las APIs mínimas: cada operación tiene un lector GENERADO
 // que convierte y valida en el orden del binding de Spring, con las reglas neutrales de keel-core/gen.
 
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { FRAMEWORK_RESPONSES as FW, domainErrorResponses } from 'keel-core/gen/api-errors';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { FRAMEWORK_RESPONSES as FW, domainErrorResponses } from '@keel-system/keel-core/gen/api-errors';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { wireNamespace } from './wire.js';
 import { usesPersistence } from './persistence.js';

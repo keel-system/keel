@@ -10,8 +10,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
+import { loadService } from '@keel-system/keel-core';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
 import { FIXTURES_DIR, fixtureNames, planFixture } from './helpers/workspace.js';
 import { contractOf } from '../src/scaffold/services.js';

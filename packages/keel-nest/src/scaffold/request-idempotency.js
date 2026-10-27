@@ -1,6 +1,6 @@
 // La idempotencia de PETICIÓN (`use-cases.<op>.idempotency`): la que evita que reintentar una
 // petición ejecute el caso de uso dos veces. Es el mismo mecanismo que el de keel-spring, con su misma
-// tabla (`keel-core/gen/request-idempotency.js`, `IDEMPOTENCY_RECORD`):
+// tabla (`@keel-system/keel-core/gen/request-idempotency.js`, `IDEMPOTENCY_RECORD`):
 //
 //   · build genera TODO lo transversal: el puerto `IdempotencyStore` (dominio), su adaptador TypeORM con
 //     la tabla `idempotency_record`, la firma canónica del comando (`CommandSignature`), el contexto
@@ -16,14 +16,14 @@
 // La primera corrida de keel-nest (product-catalog, 2026-10-06) es el motivo de que esto exista ya:
 // sin el mecanismo, el agente escribió el suyo con otra tabla y SQL de un solo motor.
 
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { idempotencyOutcomeCodes } from 'keel-core/gen';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { idempotencyOutcomeCodes } from '@keel-system/keel-core/gen';
 import {
   IDEMPOTENCY_RECORD,
   IDEMPOTENCY_HEADER,
   usesRequestIdempotency as usesRegistryInDesign,
   usesIdempotencyHeader as usesHeaderInDesign
-} from 'keel-core/gen/request-idempotency';
+} from '@keel-system/keel-core/gen/request-idempotency';
 import { DIRS, classPath, tsModule } from './render.js';
 import { ORM_DIR, engineOf, physicalColumn, usesPersistence, usesDocument } from './persistence-entities.js';
 import { documentIdempotencyStore } from './document-stores.js';

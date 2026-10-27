@@ -5,13 +5,13 @@
 // TypeScript, y la escritura es la misma (`materializeProject`): lo único de este paquete son los
 // renderizadores de abajo.
 
-import { derivedOpenapiFiles } from 'keel-core/gen/openapi';
+import { derivedOpenapiFiles } from '@keel-system/keel-core/gen/openapi';
 import path from 'node:path';
-import { buildModel } from 'keel-core/gen/model';
-import { materializeProject } from 'keel-core/gen/materialize';
-import { resolveStack } from 'keel-core/gen/stack';
-import { listKeelDocs } from 'keel-core/gen/keel-docs';
-import { checkGatewaySupport } from 'keel-core/gen/payment-gateways';
+import { buildModel } from '@keel-system/keel-core/gen/model';
+import { materializeProject } from '@keel-system/keel-core/gen/materialize';
+import { resolveStack } from '@keel-system/keel-core/gen/stack';
+import { listKeelDocs } from '@keel-system/keel-core/gen/keel-docs';
+import { checkGatewaySupport } from '@keel-system/keel-core/gen/payment-gateways';
 import { packageVersion } from '../lib/assets.js';
 import { TS_PROJECTION } from '../lib/ts-projection.js';
 import * as project from './project.js';

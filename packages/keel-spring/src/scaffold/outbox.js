@@ -8,7 +8,7 @@
 // que sale por el puerto OutboxDispatcher; su implementación la escribe el
 // agente siguiendo la skill keel-spring-<broker>.
 
-import { OUTBOX_DEAD_LETTERED } from 'keel-core/gen/telemetry-vocabulary';
+import { OUTBOX_DEAD_LETTERED } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { claimSelectionSnippet, claimTransaction, supportsSkipLocked } from '../lib/claim-sql.js';
 import { usesTelemetry, tracedDispatch, messageTracingImport, TRACED_DISPATCH_IMPORTS } from './telemetry.js';
@@ -18,7 +18,7 @@ import {
   OUTBOX_PURGE,
   OUTBOX_RELAY,
   usesOutbox
-} from 'keel-core/gen/messaging-stores';
+} from '@keel-system/keel-core/gen/messaging-stores';
 
 const OUTBOX_PKG = 'infrastructure.messaging.outbox';
 

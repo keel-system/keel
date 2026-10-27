@@ -16,7 +16,7 @@
 // Sobre PostgreSQL y MySQL, los dos motores relacionales de keel-dotnet: lo que cambia es el cliente con el que se crean
 // las bases aparte y el catálogo con el que se comparan (baselinePlatform).
 
-import { DATABASES } from 'keel-core/gen/infra-catalog';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { MIGRATIONS_TABLE } from './persistence-runtime.js';
 import { usesRelational } from './persistence.js';
 import { solution } from './render.js';

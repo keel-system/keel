@@ -4,7 +4,7 @@
 // Keel). Especializado por servicio: solo las capas declaradas del diseño y las
 // skills por tecnología del stack.
 
-import { emitHarnessFiles } from 'keel-core';
+import { emitHarnessFiles } from '@keel-system/keel-core';
 import { packageVersion, SKILL } from '../lib/assets.js';
 import { selectedInfra } from '../lib/stack-catalog.js';
 import { describeStack } from '../lib/stack-config.js';

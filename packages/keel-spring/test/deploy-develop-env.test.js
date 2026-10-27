@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { tmpDir } from './helpers/tmp.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { generate as valueTypeFiles } from '../src/scaffold/value-types.js';
 import { generate as exceptionFiles } from '../src/scaffold/exceptions.js';

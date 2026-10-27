@@ -19,12 +19,12 @@
 //   · la identidad del llamante (`callerIdentity`) en un único punto, y el alcance por recurso (`scoping`) como un
 //     puerto de la aplicación con su adaptador.
 
-import { FRAMEWORK_ERRORS } from 'keel-core';
-import { usesCallerRoles, ownershipRulesOf } from 'keel-core/gen/ownership';
-import { FRAMEWORK_RESPONSES as FW } from 'keel-core/gen/api-errors';
-import { accessPlan, audienceOf, tokenClaims, usesTokenProtocol } from 'keel-core/gen/access-plan';
-import { envRequired } from 'keel-core/gen/profile-values';
-import { envFor, runtimeDefault } from 'keel-core/gen/runtime-env';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { usesCallerRoles, ownershipRulesOf } from '@keel-system/keel-core/gen/ownership';
+import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
+import { accessPlan, audienceOf, tokenClaims, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
+import { envRequired } from '@keel-system/keel-core/gen/profile-values';
+import { envFor, runtimeDefault } from '@keel-system/keel-core/gen/runtime-env';
 import { csFile, csMember, csString, located, namespaceOf } from './render.js';
 import { credentialFinderName, portClass, repositoriesNamespace } from './repositories.js';
 import { configNamespace } from './config.js';

@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { loadCharacterized, loadProvenance, readCharacterization, resolveCharacterized } from 'keel-core';
+import { loadCharacterized, loadProvenance, readCharacterization, resolveCharacterized } from '@keel-system/keel-core';
 import { tmpDir } from './helpers/tmp.js';
 import { CONTRACT_MAP, PROVENANCE, SCENARIOS, fakeStock, writeStockDesign } from './helpers/stock-design.js';
 import { abortedBy, check, forgeToken, hypothesisTally, plannedFlows, readFlowBlock, runCharacterization, runFlow, sealDocument, tally } from '../src/lib/characterize.js';

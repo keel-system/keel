@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { generate as generateOutbox } from '../src/scaffold/outbox.js';
 import { generate as generateRepositories } from '../src/scaffold/repositories.js';

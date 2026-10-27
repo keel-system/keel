@@ -1,7 +1,7 @@
 import path from 'node:path';
 import pc from 'picocolors';
-import { copyTree } from 'keel-core';
-import { gateDesign } from 'keel-core/gen/design-gate';
+import { copyTree } from '@keel-system/keel-core';
+import { gateDesign } from '@keel-system/keel-core/gen/design-gate';
 import {
   STACK_FILE,
   readStackConfig,
@@ -9,14 +9,14 @@ import {
   askStackConfig,
   describeStack,
   normalizeTelemetry
-} from 'keel-core/gen/stack';
-import { writeProjectFiles } from 'keel-core/gen/project-writer';
-import { writeSpecsSeal } from 'keel-core/gen/specs-seal';
-import { REFRESH_DIR } from 'keel-core/gen/generated-manifest';
+} from '@keel-system/keel-core/gen/stack';
+import { writeProjectFiles } from '@keel-system/keel-core/gen/project-writer';
+import { writeSpecsSeal } from '@keel-system/keel-core/gen/specs-seal';
+import { REFRESH_DIR } from '@keel-system/keel-core/gen/generated-manifest';
 import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures, checkSupportedStack } from '../lib/supported-features.js';
 import { scaffoldService } from '../scaffold/index.js';
-import { checkGatewaySupport } from 'keel-core/gen/payment-gateways';
+import { checkGatewaySupport } from '@keel-system/keel-core/gen/payment-gateways';
 import {
   EVOLUTION_MD,
   checkFails,
@@ -26,7 +26,7 @@ import {
   planEvolution,
   reportEvolution,
   reportGeneratorDrift
-} from 'keel-core/gen/evolution';
+} from '@keel-system/keel-core/gen/evolution';
 import { NEST_EVOLUTION } from '../scaffold/evolution.js';
 
 export async function build(

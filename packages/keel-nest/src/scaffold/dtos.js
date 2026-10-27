@@ -7,7 +7,7 @@
 // @OmitNulls() (application/support/wire.ts), el equivalente del @JsonInclude(NON_NULL) por clase
 // de keel-spring: por clase y nunca global, porque el cuerpo de error tiene forma fija.
 
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { DIRS, classPath, declType, fieldImports, tsModule, tsdoc } from './render.js';
 
 export const PAGED_RESPONSE_TS = classPath(DIRS.dtos, 'PagedResponse');

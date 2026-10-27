@@ -10,7 +10,7 @@
 //   * Stripe-Signature: t=…,v1=…[,v1=…]: HMAC-SHA256 de `${t}.${cuerpo crudo}`; solo cuenta v1, puede
 //     haber varias durante la rotación del secreto, y se compara en tiempo constante.
 
-import { gatewayTranslation } from 'keel-core/gen/payment-gateways';
+import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
 import { javaFile, javaPath, subPackage } from '../render.js';
 
 // Un corte de conexión a mitad de la respuesta no llega como ResourceAccessException sino como

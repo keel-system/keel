@@ -36,14 +36,14 @@ import {
   renderParts,
   spliceBody,
   expr
-} from 'keel-core/gen/broker-probes';
-import { BROKERS, brokerContainer, devtoolsContainer } from 'keel-core/gen/infra-catalog';
-import { deadLetterDestination, subscriptionDestination } from 'keel-core/gen';
-import { harnessQueueName } from 'keel-core/gen/messaging-provisioning';
+} from '@keel-system/keel-core/gen/broker-probes';
+import { BROKERS, brokerContainer, devtoolsContainer } from '@keel-system/keel-core/gen/infra-catalog';
+import { deadLetterDestination, subscriptionDestination } from '@keel-system/keel-core/gen';
+import { harnessQueueName } from '@keel-system/keel-core/gen/messaging-provisioning';
 import { tsString } from './render.js';
-import { publishedChannels } from 'keel-core/gen/messaging-plan';
-import { kafkaConsumption } from 'keel-core/gen/messaging-plan';
-import { snsSqsConsumption } from 'keel-core/gen/messaging-plan';
+import { publishedChannels } from '@keel-system/keel-core/gen/messaging-plan';
+import { kafkaConsumption } from '@keel-system/keel-core/gen/messaging-plan';
+import { snsSqsConsumption } from '@keel-system/keel-core/gen/messaging-plan';
 import {
   usesKafka,
   usesNestOutbox,
@@ -57,7 +57,7 @@ import {
 } from './messaging.js';
 import { usesDocument } from './persistence-entities.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
-import { PROBE_BODY_FILE } from 'keel-core/gen/broker-probes';
+import { PROBE_BODY_FILE } from '@keel-system/keel-core/gen/broker-probes';
 
 /** ¿Lleva el arnés la mensajería? Con los tres brokers que keel-nest genera. */
 export function usesMessagingHarness(model) {

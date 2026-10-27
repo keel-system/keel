@@ -12,9 +12,9 @@
 // defaults que keel-spring. El SQL de cada purga va LITERAL: la tabla y la columna son del generador, y lo único que
 // viaja como parámetro son los instantes.
 
-import { BATCHED_PURGE, batchedPurgeParameters } from 'keel-core/gen';
-import { OUTBOX_EVENT, OUTBOX_PURGE, PROCESSED_EVENT, PROCESSED_EVENT_PURGE } from 'keel-core/gen/messaging-stores';
-import { IDEMPOTENCY_RECORD, IDEMPOTENCY_RECORD_PURGE } from 'keel-core/gen/request-idempotency';
+import { BATCHED_PURGE, batchedPurgeParameters } from '@keel-system/keel-core/gen';
+import { OUTBOX_EVENT, OUTBOX_PURGE, PROCESSED_EVENT, PROCESSED_EVENT_PURGE } from '@keel-system/keel-core/gen/messaging-stores';
+import { IDEMPOTENCY_RECORD, IDEMPOTENCY_RECORD_PURGE } from '@keel-system/keel-core/gen/request-idempotency';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { dbContextClass, persistenceNamespace, usesPersistence, usesDocument } from './persistence.js';
@@ -22,7 +22,7 @@ import { documentPurgeMethod } from './document-stores.js';
 import { usesDotnetOutbox, usesProcessedEvents } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { reconciliationPurge } from './reconciliation-claim.js';
-import { RECONCILIATION_CLAIM } from 'keel-core/gen/reconciliation-stores';
+import { RECONCILIATION_CLAIM } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { valueAlias } from './relational-engine.js';
 
 export function purgeNamespace(model) {

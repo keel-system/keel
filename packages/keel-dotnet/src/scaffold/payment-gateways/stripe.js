@@ -8,8 +8,8 @@
 //   * Stripe-Signature: t=…,v1=…[,v1=…]: HMAC-SHA256 de `${t}.${cuerpo}`; solo cuenta v1, puede haber varias durante la
 //     rotación del secreto, y se compara en tiempo constante.
 
-import { gatewayTranslation } from 'keel-core/gen/payment-gateways';
-import { paymentProbesFor } from 'keel-core/gen/payment-probes';
+import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
 import { csFile, csString, located, namespaceOf } from '../render.js';
 import { PAYMENT_GATEWAY_PORT, NOTICE_VERIFIER_PORT, paymentInfraNamespace, paymentNamespace, reasonMember } from '../payments.js';
 

@@ -7,12 +7,12 @@
 //   · el backoff del relay contra la referencia de keel-core, y la curva del reintento del listener.
 // Lo que habla con el broker o la base lo juzgan `db-check` y `broker-check`.
 
-import { WIRE_SHAPES } from 'keel-core/gen/wire';
-import { outboxBackoffMs } from 'keel-core/gen/messaging-stores';
-import { kafkaListenerRetry, rabbitListenerRetry } from 'keel-core/gen';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
+import { outboxBackoffMs } from '@keel-system/keel-core/gen/messaging-stores';
+import { kafkaListenerRetry, rabbitListenerRetry } from '@keel-system/keel-core/gen';
 import { csFile, csMember, csString, namespaceOf, solution } from './render.js';
 import { messagingNamespace, usesDotnetOutbox, usesKafka, usesMessaging, usesRabbitMq, usesSnsSqs } from './messaging.js';
-import { snsSqsConsumption } from 'keel-core/gen/messaging-plan';
+import { snsSqsConsumption } from '@keel-system/keel-core/gen/messaging-plan';
 
 export function generate(model) {
   if (!usesMessaging(model)) return [];

@@ -11,7 +11,7 @@
 // Lo marcado VERIFICAR EN SANDBOX es lo que la matriz de gateway-support.js declara `unverified`: la
 // documentación no fija la forma exacta y build lo genera con la lectura más probable, avisando.
 
-import { gatewayTranslation } from 'keel-core/gen/payment-gateways';
+import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
 import { javaFile, javaPath, subPackage } from '../render.js';
 
 // Un corte de conexión a mitad de la respuesta no llega como ResourceAccessException sino como

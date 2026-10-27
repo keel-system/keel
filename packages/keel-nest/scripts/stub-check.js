@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
-import { HTTP_STUB } from 'keel-core/gen/infra-catalog';
+import { HTTP_STUB } from '@keel-system/keel-core/gen/infra-catalog';
 import { run, resolveRuntime, freePort } from './lib/database-container.js';
 import { planFixture, transpileTree } from '../test/helpers/emitted.js';
 import { tmpDir } from '../test/helpers/tmp.js';

@@ -9,7 +9,7 @@
 // Infrastructure. Misma clave (`<artifactId>.<key>`), misma variable de entorno, mismo gradiente por perfil
 // (keel-core/gen/service-parameters.js) y las mismas frases de error.
 
-import { parameterProfileValue, parameterProperty } from 'keel-core/gen/service-parameters';
+import { parameterProfileValue, parameterProperty } from '@keel-system/keel-core/gen/service-parameters';
 import { csFile, csLocal, csMember, csString, located, namespaceOf, solution, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
 

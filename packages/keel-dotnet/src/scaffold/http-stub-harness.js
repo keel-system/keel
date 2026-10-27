@@ -7,9 +7,9 @@
 // `Support/HttpStub.cs` no usa nada del resto del arnés —solo HttpClient y System.Text.Json—, así que `stub-check` lo
 // compila SOLO y lo ejecuta contra un WireMock real. Los flujos llegan a los helpers por FlowTest, de la que es una parte.
 
-import { HTTP_STUB_ADMIN, HTTP_STUB_ENDPOINTS, HTTP_STUB_FAULT, HTTP_STUB_INITIAL_STATE } from 'keel-core/gen/http-stub-probes';
-import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { snakeCase } from 'keel-core/gen';
+import { HTTP_STUB_ADMIN, HTTP_STUB_ENDPOINTS, HTTP_STUB_FAULT, HTTP_STUB_INITIAL_STATE } from '@keel-system/keel-core/gen/http-stub-probes';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { snakeCase } from '@keel-system/keel-core/gen';
 import { csFile, csString, solution } from './render.js';
 import { usesRelational } from './persistence.js';
 

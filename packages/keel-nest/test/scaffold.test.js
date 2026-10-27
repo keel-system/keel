@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { loadService } from 'keel-core';
+import { loadService } from '@keel-system/keel-core';
 import { makeWorkspace, mountDesign, NEST_READY_DESIGN } from './helpers/workspace.js';
 import { planService } from '../src/scaffold/index.js';
 import { NODE_ENGINE } from '../src/lib/assets.js';
@@ -97,7 +97,7 @@ test('el proyecto se llama <servicio>-nest y el modelo es el de keel-core/gen co
 });
 
 test('la prueba del contrato del cable trae TODOS los casos de keel-core/gen/wire.js', async () => {
-  const { WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS } = await import('keel-core/gen/wire');
+  const { WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS } = await import('@keel-system/keel-core/gen/wire');
   const emitted = byPath.get('test/wire-contract.test.ts');
   for (const entry of [...WIRE_OUTPUT_CASES, ...WIRE_INPUT_CASES, ...WIRE_REJECTED_INPUTS]) {
     assert.ok(emitted.includes(`"id": "${entry.id}"`), `falta el caso ${entry.id}`);

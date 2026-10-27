@@ -11,7 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { digestOf } from 'keel-core';
+import { digestOf } from '@keel-system/keel-core';
 import { build } from '../src/commands/build.js';
 import { makeWorkspace, mountDesign, runCommand } from './helpers/workspace.js';
 
