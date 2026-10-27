@@ -60,7 +60,7 @@
           "evidence": { "type": "string", "minLength": 3 },
           "noFlow": {
             "type": "object",
-            "description": "Un fix que ningún flujo de validation-scenarios.md puede demostrar, porque los flujos solo ven HTTP: el defecto vive en la base (huérfanos), necesita un volumen que un escenario no carga (más de una página máxima) o es de arquitectura (dónde vive la identidad). Lo decide el humano, y dice por qué y cuál es la otra prueba. Un fix con noFlow que un flujo sí cita es una contradicción.",
+            "description": "Un fix que ningún flujo de validation-scenarios.md puede demostrar, porque los flujos solo ven HTTP: el defecto vive en la base (huérfanos), necesita un volumen que un escenario no carga (más de una página máxima), es una carrera (los pasos de un flujo van en serie) o es de arquitectura (dónde vive la identidad). Lo decide el humano, y dice por qué y cuál es la otra prueba. Un flujo puede citarlo sin bloque ```keel-flow``` (el escenario del servicio nuevo, que mide el arnés del generado); uno que lo ejecuta, con bloque, es una contradicción.",
             "required": ["why", "proof"],
             "additionalProperties": false,
             "properties": {

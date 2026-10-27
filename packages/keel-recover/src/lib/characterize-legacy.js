@@ -61,6 +61,7 @@ export function prepareCharacterization(legacyArg, { spec = null, sandbox: withS
     legacy: { name: provenance.doc?.legacy?.name ?? name, commit: provenance.doc?.legacy?.commit ?? null },
     planned,
     newFlows: marks.filter((f) => f.mark === 'new').length,
+    proseOnlyFixes: marks.filter((f) => f.proseOnly).length,
   };
 }
 
@@ -141,6 +142,7 @@ export function writeCharacterization(prep, records, { seal = true, snapshotHash
       legacy: prep.legacy,
       records,
       newFlows: prep.newFlows,
+      proseOnlyFixes: prep.proseOnlyFixes,
       provenance: prep.provenance,
       coverage: history.at(-1) ?? null,
       surface: readYaml(path.join(prep.legacyDir, 'surface.yaml')),

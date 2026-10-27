@@ -84,7 +84,11 @@ export function prepareParity(legacyArg, { spec = null, targetFile }) {
   // Un `new` sin bloque keel-flow no se ejecuta aquí: la skill no lo exige (no existe en el legacy) y lo mide el arnés del
   // proyecto generado. Se dice en el informe, no se cuenta en rojo (corrida de control de shop-api: 19 así).
   const targetPlanned = plannedFlows(prep.scenariosText, marks, { marks: TARGET_MARKS });
-  const unblockedNew = targetPlanned.filter((p) => p.mark === 'new' && !p.flow && /no trae su bloque/.test(p.error ?? '')).map((p) => p.id);
+  // Lo mismo un fix con noFlow sin bloque (una carrera: el ejecutor no dispara pasos a la vez), que plannedFlows no planifica.
+  const unblockedNew = [
+    ...targetPlanned.filter((p) => p.mark === 'new' && !p.flow && /no trae su bloque/.test(p.error ?? '')).map((p) => p.id),
+    ...marks.filter((f) => f.proseOnly).map((f) => f.id),
+  ];
   return {
     errors,
     prep,

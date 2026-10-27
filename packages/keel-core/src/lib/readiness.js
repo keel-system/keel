@@ -246,7 +246,7 @@ export function assessReadiness(dir, { validation = null } = {}) {
       'provenance',
       provenanceProblems.length === 0,
       provenanceProblems.join(', '),
-      `/keel-recover ${spec}: mide lo inferred o conviértelo en hueco declarado, y da fila en ${PROVENANCE_FILE} a cada elemento`
+      `/keel-recover ${spec}: mide lo inferred o conviértelo en hueco declarado, da fila en ${PROVENANCE_FILE} a cada elemento y marca cada flujo por lo que hace el legacy (lo que cambia lo grabado es un fix)`
     )
   );
 

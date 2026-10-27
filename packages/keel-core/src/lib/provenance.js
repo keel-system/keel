@@ -164,6 +164,11 @@ export function emptyProvenance() {
 
 export const CHARACTERIZATION_MARKS = ['keep', 'fix', 'frontier', 'new'];
 const MARK = /\*\*Caracterizaci[oó]n\*\*:\s*`([a-z]+)`(?:\s*\(`([^`]+)`)?/;
+const MARK_LINE = /\*\*Caracterizaci[oó]n\*\*:[^\n]*/;
+// Una grabación del legacy citada en la línea de la marca: la ruta o el id de una sonda (R0-034).
+const LEGACY_EVIDENCE = /recordings\/|\bR\d+-\d{3}\b/;
+// El bloque ejecutable de keel-recover (```keel-flow): sin él, el flujo es solo prosa para el arnés del generado.
+const FLOW_FENCE = /^```keel-flow[ \t]*$/m;
 
 export function emptyCharacterization() {
   return { flows: [], unmarked: [], unknown: [], unusedFixes: [] };
@@ -187,11 +192,20 @@ export function readCharacterization(scenariosText, doc) {
       continue;
     }
     const [, mark, ref = null] = m;
-    out.flows.push({ id, mark, ref });
+    // Un fix con noFlow puede tener su escenario en prosa, sin bloque: describe el servicio nuevo para el arnés del
+    // generado, y la prueba contra el legacy es la de `noFlow.proof`. Con bloque, lo ejecutaría: contradicción.
+    const proseOnly = mark === 'fix' && withoutFlow.has(ref) && !FLOW_FENCE.test(block);
+    out.flows.push({ id, mark, ref, ...(proseOnly ? { proseOnly: true } : {}) });
     if (mark === 'fix' && !fixes.has(ref)) out.unknown.push(`${id}: fix ${ref ?? '(sin id)'} no está en ${PROVENANCE_FILE} → fixes`);
     if (mark === 'frontier' && !frontier.has(ref)) out.unknown.push(`${id}: frontier ${ref ?? '(sin id)'} no está en ${PROVENANCE_FILE} → frontier`);
     if (mark === 'fix' && ref) cited.add(ref);
-    if (mark === 'fix' && withoutFlow.has(ref)) out.unknown.push(`${id}: fix ${ref} declara noFlow en ${PROVENANCE_FILE} y este flujo lo demuestra`);
+    if (mark === 'fix' && withoutFlow.has(ref) && !proseOnly) out.unknown.push(`${id}: fix ${ref} declara noFlow en ${PROVENANCE_FILE} y este flujo lo ejecuta (trae bloque \`\`\`keel-flow)`);
+    // `new` es lo que el legacy no tenía. Si la marca cita lo que el legacy hace (una grabación), el legacy lo tenía de
+    // otra manera: es un fix, y la lista de fixes es el backlog del refactor. En la corrida show-ticketing la doble
+    // reserva del mismo asiento, medida en R0-034 a R0-041, quedó como `new` y fuera de FIDELITY.md.
+    if (mark === 'new' && LEGACY_EVIDENCE.test(MARK_LINE.exec(block)[0])) {
+      out.unknown.push(`${id}: es new y su marca cita una grabación del legacy: si el legacy hace otra cosa, es un fix (con noFlow si un flujo HTTP no lo ve); si hace lo mismo, keep`);
+    }
   }
   out.unusedFixes = [...fixes].filter((id) => !cited.has(id) && !withoutFlow.has(id));
   return out;

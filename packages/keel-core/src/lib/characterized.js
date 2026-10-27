@@ -79,7 +79,7 @@ export function resolveCharacterized(loaded, scenariosText, marked, legacyName =
   result.applies = true;
   result.present = loaded.present;
   result.errors.push(...loaded.errors);
-  result.expected = marked.filter((flow) => EXECUTED_MARKS.includes(flow.mark));
+  result.expected = marked.filter((flow) => EXECUTED_MARKS.includes(flow.mark) && !flow.proseOnly);
   if (!loaded.doc) {
     result.notRun = loaded.present ? [] : result.expected.map((flow) => flow.id);
     return result;

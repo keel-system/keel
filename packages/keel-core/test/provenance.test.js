@@ -8,6 +8,7 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService } from '../src/lib/loader.js';
 import { PROVENANCE_FILE, loadProvenance, provenanceInventory, readCharacterization, resolveProvenance } from '../src/lib/provenance.js';
 import { SPEC_SIDE_FILES, sideFilesOf } from '../src/lib/spec-files.js';
+import { resolveCharacterized } from '../src/lib/characterized.js';
 
 // La procedencia de un diseño recuperado (keel-recover, PLAN-KEEL-RECOVER.md § 0). Lo que importa
 // es el inventario: lo deriva la máquina de las capas, así que un elemento que el agente añadió sin
@@ -147,18 +148,40 @@ test('paso 4: cada flujo dice keep, fix, frontier o new, y lo que cita existe', 
   assert.deepEqual(readCharacterization(null, doc), { flows: [], unmarked: [], unknown: [], unusedFixes: [] });
 });
 
-test('paso 4: un fix que ningún flujo HTTP ve lo dice con noFlow, y un flujo que lo cita lo contradice', () => {
+test('paso 4: un fix que ningún flujo HTTP ve lo dice con noFlow, y un flujo que lo EJECUTA lo contradice', () => {
   const noFlow = { why: 'los huérfanos solo se ven en la base', proof: 'recordings/round-1/R1-032.json' };
-  const doc = { fixes: [{ id: 'fix-409' }, { id: 'fix-cascada', noFlow }, { id: 'fix-identidad', noFlow }], frontier: [] };
+  const doc = { fixes: [{ id: 'fix-409' }, { id: 'fix-cascada', noFlow }, { id: 'fix-identidad', noFlow }, { id: 'fix-carrera', noFlow }], frontier: [] };
+  const fence = '```';
   const text = [
     '### FL-A-001: uno\n**Caracterización**: `fix` (`fix-409`).',
-    '### FL-A-002: dos\n**Caracterización**: `fix` (`fix-identidad`).',
+    `### FL-A-002: dos\n**Caracterización**: \`fix\` (\`fix-identidad\`).\n\n${fence}keel-flow\nsteps:\n  - {op: a}\n${fence}`,
+    '### FL-A-003: tres\n**Caracterización**: `fix` (`fix-carrera`).\n**Then**: solo una reserva gana.',
   ].join('\n\n');
   const c = readCharacterization(text, doc);
   assert.deepEqual(c.unusedFixes, [], 'fix-cascada no tiene flujo y lo declara');
-  assert.deepEqual(c.unknown, [`FL-A-002: fix fix-identidad declara noFlow en ${PROVENANCE_FILE} y este flujo lo demuestra`]);
-  const sinDeclarar = readCharacterization(text, { ...doc, fixes: [{ id: 'fix-409' }, { id: 'fix-cascada' }] });
+  assert.deepEqual(c.unknown, [`FL-A-002: fix fix-identidad declara noFlow en ${PROVENANCE_FILE} y este flujo lo ejecuta (trae bloque ${fence}keel-flow)`]);
+  // sin bloque, el flujo es el escenario del servicio nuevo (lo mide el arnés del generado) y no se ejecuta contra el legacy
+  assert.deepEqual(c.flows.find((f) => f.id === 'FL-A-003'), { id: 'FL-A-003', mark: 'fix', ref: 'fix-carrera', proseOnly: true });
+  assert.equal(c.flows.find((f) => f.id === 'FL-A-001').proseOnly, undefined, 'sin noFlow, un fix sin bloque tiene que ejecutarse');
+  const sinDeclarar = readCharacterization(text, { ...doc, fixes: [{ id: 'fix-409' }, { id: 'fix-cascada' }, { id: 'fix-identidad' }, { id: 'fix-carrera' }] });
   assert.deepEqual(sinDeclarar.unusedFixes, ['fix-cascada'], 'sin noFlow sigue siendo un cambio sin escenario');
+});
+
+test('un fix solo en prosa (noFlow, sin bloque) no tiene que estar en el sello de characterize', () => {
+  const marked = [{ id: 'FL-A-001', mark: 'fix', ref: 'fix-carrera', proseOnly: true }, { id: 'FL-A-002', mark: 'keep', ref: null }];
+  const r = resolveCharacterized({ present: false, doc: null, errors: [] }, '', marked);
+  assert.deepEqual(r.notRun, ['FL-A-002']);
+});
+
+test('paso 4: un new que cita una grabación del legacy es un fix o un keep, no un new', () => {
+  const text = [
+    '### FL-C-001: carrera\n**Caracterización**: `new` (`structural-3-9`: el legacy deja pasar la doble reserva, R0-034 a R0-041).',
+    '### FL-C-002: sin perfil\n**Caracterización**: `new` (`ask-no-profile`: el legacy no tenía personas sin perfil).\n**Then**: como recordings/round-0/R0-005.json, sin sesión.',
+    '### FL-C-003: otra\n**Caracterización**: `new`. Evidencia: recordings/round-1/R1-002.json.',
+  ].join('\n\n');
+  const c = readCharacterization(text, { fixes: [], frontier: [] });
+  assert.deepEqual(c.unknown.map((u) => u.split(':')[0]), ['FL-C-001', 'FL-C-003'], 'solo cuenta la línea de la marca: la prosa cita lo que quiera');
+  assert.match(c.unknown[0], /es new y su marca cita una grabación del legacy/);
 });
 
 test('el schema exige el porqué y la otra prueba de un noFlow', () => {

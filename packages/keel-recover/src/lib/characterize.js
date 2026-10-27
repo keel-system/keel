@@ -72,7 +72,8 @@ export function plannedFlows(scenariosText, marked, { marks = EXECUTED_MARKS } =
   for (const block of splitScenarioBlocks(scenariosText)) {
     const id = scenarioIdOf(block);
     const marking = markOf.get(id);
-    if (!marking || !marks.includes(marking.mark)) continue;
+    // Un fix con noFlow y sin bloque es el escenario del servicio nuevo: su prueba contra el legacy es noFlow.proof.
+    if (!marking || !marks.includes(marking.mark) || marking.proseOnly) continue;
     const { flow, error } = readFlowBlock(block);
     out.push({ id, mark: marking.mark, ref: marking.ref, sha256: digests.get(id), flow, error });
   }

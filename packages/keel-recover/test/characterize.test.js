@@ -244,6 +244,7 @@ test('FIDELITY.md nombra los flujos en rojo con su primer motivo', () => {
 
 test('una ruta del legacy es la misma con :param, {param} o barra final', () => {
   assert.equal(routeKey('get', '/api/profiles/:username/'), routeKey('GET', '/api/profiles/{name}'));
+  assert.equal(routeKey('POST', '/my-infos/unregister?passwordRequest=x'), routeKey('POST', '/my-infos/unregister'), 'la consulta fija del mapa no es parte de la ruta');
   assert.deepEqual(routesWithoutOperation({ http: { routes: [{ method: '*', path: '/x' }] } }, { legacy: { operations: {} } }), [], 'un * es un middleware, no una operación');
 });
 
@@ -322,4 +323,13 @@ test('FIDELITY.md cuenta las hipótesis y nombra cada refutada con lo que respon
   const md = renderFidelity({ service: 's', legacy: { name: 'l' }, records, map: { legacy: { operations: {} } } });
   assert.match(md, /\*\*Hipótesis\*\* \(expectativas leídas del código, `hypothesis` en el paso\): 1 confirmada\(s\) por el legacy, 1 refutada\(s\)\./);
   assert.match(md, /- `FL-ORD-027` paso 1 \(`buy`\): src\/A\.java:88 no es lo que hace el legacy, que respondió 200 con \{"stock":2000\}/);
+});
+
+test('un fix con noFlow y sin bloque (una carrera) no se planifica contra el legacy y FIDELITY.md lo cuenta aparte', () => {
+  const doc = { fixes: [{ id: 'fix-carrera', noFlow: { why: 'una carrera no se ve en serie', proof: 'R0-034' } }], frontier: [] };
+  const text = '### FL-CON-001: dos reservas a la vez\n**Caracterización**: `fix` (`fix-carrera`).\n**Then**: solo una gana.';
+  const flows = readCharacterization(text, doc).flows;
+  assert.deepEqual(plannedFlows(text, flows), [], 'su prueba contra el legacy es noFlow.proof');
+  const md = renderFidelity({ service: 's', legacy: { name: 'l' }, records: [], proseOnlyFixes: 1, map: { legacy: { operations: {} } } });
+  assert.match(md, /\| `fix` con `noFlow` \| no aplica \| 1 flujo\(s\)/);
 });

@@ -19,9 +19,13 @@ const MEANING = {
 const pct = (covered, total) => (total ? `${((100 * covered) / total).toFixed(1).replace('.', ',')} %` : '—');
 const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
-/** `/api/profiles/:username/` y `/api/profiles/{username}` son la misma ruta. */
+/**
+ * `/api/profiles/:username/` y `/api/profiles/{username}` son la misma ruta. La consulta no es parte de la ruta: el
+ * mapa la fija cuando el legacy pide en ella lo que el diseño ya no manda (show-ticketing: `unregister` con
+ * `?passwordRequest=…`), y con ella la ruta salía en FIDELITY.md como superficie sin operación.
+ */
 export const routeKey = (method, path) =>
-  `${String(method).toUpperCase()} ${String(path).replace(/:[^/]+|\{[^}]+\}/g, '{}').replace(/(.)\/$/, '$1')}`;
+  `${String(method).toUpperCase()} ${String(path).replace(/\?.*$/, '').replace(/:[^/]+|\{[^}]+\}/g, '{}').replace(/(.)\/$/, '$1')}`;
 
 /** Las rutas del legacy que ninguna operación del mapa traduce: superficie que el diseño no recoge. */
 export function routesWithoutOperation(surface, map) {
@@ -60,13 +64,14 @@ export function levelCounts(provenance) {
  * @param {{name, commit?}} input.legacy
  * @param {object[]} input.records      lo que devolvió runCharacterization
  * @param {number} input.newFlows       flujos `new` (no se ejecutan contra el legacy)
+ * @param {number} input.proseOnlyFixes flujos `fix` de un fix con `noFlow`, sin bloque (tampoco se ejecutan)
  * @param {object|null} input.provenance provenance.yaml
  * @param {object|null} input.coverage  la última entrada de recordings/coverage.json
  * @param {object|null} input.surface   surface.yaml
  * @param {object|null} input.unobserved unobserved.yaml
  * @param {object} input.map            contract-map.yaml
  */
-export function renderFidelity({ service, legacy, records, newFlows = 0, provenance = null, coverage = null, surface = null, unobserved = null, map }) {
+export function renderFidelity({ service, legacy, records, newFlows = 0, proseOnlyFixes = 0, provenance = null, coverage = null, surface = null, unobserved = null, map }) {
   const out = [];
   const add = (...lines) => out.push(...lines);
   add(
@@ -86,6 +91,7 @@ export function renderFidelity({ service, legacy, records, newFlows = 0, provena
     if (of.length === 0 && mark !== 'keep') continue;
     add(`| \`${mark}\` | **${of.filter((r) => r.ok).length} / ${of.length}** | ${MEANING[mark]} |`);
   }
+  if (proseOnlyFixes) add(`| \`fix\` con \`noFlow\` | no aplica | ${proseOnlyFixes} flujo(s) que un flujo HTTP no demuestra contra el legacy: su prueba es la de \`noFlow\` |`);
   add(`| \`new\` | no aplica | ${newFlows} flujo(s) que solo existen en el servicio nuevo |`, '');
   const red = records.filter((r) => !r.ok);
   if (red.length) {

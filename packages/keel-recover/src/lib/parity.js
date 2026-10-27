@@ -160,7 +160,7 @@ export function renderParity({ service, legacy, target, records, legacyTally, co
     ''
   );
   if (unblockedNew.length) {
-    add(`Sin ejecutar aquí por no traer bloque \`keel-flow\` (un \`new\` no lo necesita: lo mide el arnés del proyecto generado): ${unblockedNew.map((id) => `\`${id}\``).join(', ')}.`, '');
+    add(`Sin ejecutar aquí por no traer bloque \`keel-flow\` (un \`new\`, o un \`fix\` con \`noFlow\`, no lo necesita: lo mide el arnés del proyecto generado): ${unblockedNew.map((id) => `\`${id}\``).join(', ')}.`, '');
   }
   const red = records.filter((r) => !r.ok);
   if (red.length) {
