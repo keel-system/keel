@@ -255,7 +255,9 @@ test('telemetría: el OTLP de logs tiene su propio interruptor, apagado, y el ap
     assert.ok(yaml.includes('enabled: ${LOG_EXPORT_OTLP:false}'), profile);
   }
   const config = project.find('/TelemetryConfig.java');
-  assert.match(config, /@ConditionalOnProperty\(name = "management\.otlp\.logging\.export\.enabled", havingValue = "true"\)\s+public InitializingBean openTelemetryLogAppender/);
+  // La clave de Boot 4 (management.logging.export.otlp.enabled): con la de Boot 3 el appender no se
+  // instalaba nunca y los logs no salían (DEP-5 de deploy-check).
+  assert.match(config, /@ConditionalOnProperty\(name = "management\.logging\.export\.otlp\.enabled", havingValue = "true"\)\s+public InitializingBean openTelemetryLogAppender/);
   // En deploy/ nada recoge stdout: ahí sí se exportan.
   assert.equal(YAML.parse(project.read('deploy/docker-compose.yaml')).services.app.environment.LOG_EXPORT_OTLP, 'true');
 });
