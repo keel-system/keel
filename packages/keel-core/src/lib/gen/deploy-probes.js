@@ -144,12 +144,24 @@ export async function probeDeployBackend({ grafanaUrl, sinkUrl, serviceName, rec
 
   // DEP-5. Los logs. En deploy/ van por OTLP a propósito, porque allí nadie recoge la consola.
   if (lokiUid) {
+    // Con reintentos, por lo mismo que DEP-4: los logs viajan por OTLP con dos lotes por delante (el
+    // procesador del SDK y el del colector) y Loki tarda en hacerlos consultables. Una sola consulta
+    // daba KO o OK según la pasada con el mismo servidor (medido al subir keel-spring a Boot 4).
+    // Vacío al cabo de un minuto sí es un fallo. El fin de la ventana se recalcula en cada intento.
     const query = `{service_name="${serviceName}"}`;
-    const logs = await grafana(
-      `/api/datasources/proxy/uid/${lokiUid}/loki/api/v1/query_range?query=${encodeURIComponent(query)}&start=${(now - 900) * 1e9}&end=${now * 1e9}&limit=5`
-    );
-    const lines = (logs.json?.data?.result ?? []).flatMap((item) => item.values ?? []);
-    record('DEP-5', lines.length > 0, lines.length > 0 ? '' : 'Loki no tiene logs del servicio: ¿LOG_EXPORT_OTLP?');
+    const readLogs = async () => {
+      const end = Math.floor(Date.now() / 1000);
+      const logs = await grafana(
+        `/api/datasources/proxy/uid/${lokiUid}/loki/api/v1/query_range?query=${encodeURIComponent(query)}&start=${(now - 900) * 1e9}&end=${end * 1e9}&limit=5`
+      );
+      return (logs.json?.data?.result ?? []).flatMap((item) => item.values ?? []);
+    };
+    let lines = await readLogs();
+    for (let attempt = 0; attempt < 12 && lines.length === 0; attempt++) {
+      await sleep(5000);
+      lines = await readLogs();
+    }
+    record('DEP-5', lines.length > 0, lines.length > 0 ? '' : 'Loki no tiene logs del servicio tras un minuto: ¿LOG_EXPORT_OTLP?');
   } else {
     record('DEP-5', false, 'no hay datasource de logs');
   }
