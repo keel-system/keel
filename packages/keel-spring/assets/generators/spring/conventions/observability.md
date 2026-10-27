@@ -8,7 +8,7 @@ Este documento solo existe si el proyecto se generó con telemetría (`telemetry
 
 El servicio emite **trazas y logs por OTLP/HTTP a un colector OpenTelemetry**, y lo único que sabe de él es su dirección: la variable `OTEL_EXPORTER_OTLP_ENDPOINT`. Las **métricas van al revés**: no se empujan, las viene a buscar el colector a `/actuator/prometheus`. A qué backend va cada señal (Tempo, Jaeger, Loki, Prometheus, un proveedor SaaS) lo decide **la configuración del colector**, no el servicio.
 
-El motivo del scrape es único y son los **exemplars** —el enlace de un punto de una métrica a una traza de ejemplo—: viajan pegados a los cubos del histograma en el formato de exposición de Prometheus, y el registro OTLP de Micrometer no sabe emitirlos con la versión que gestiona Boot 3.5. El push por OTLP sigue disponible con `METRICS_EXPORT_OTLP=true` para quien no pueda scrapear; los dos a la vez duplican cada serie.
+El motivo del scrape es único y son los **exemplars** —el enlace de un punto de una métrica a una traza de ejemplo—: viajan pegados a los cubos del histograma en el formato de exposición de Prometheus, y el registro OTLP de Micrometer no supo emitirlos hasta la 1.17; el scrape es el camino medido y el que lee el panel, y se queda. El push por OTLP sigue disponible con `METRICS_EXPORT_OTLP=true` para quien no pueda scrapear; los dos a la vez duplican cada serie.
 
 Consecuencia práctica, y es la razón de todo el diseño: **cambiar de backend no toca el código ni la configuración de la aplicación**. Se edita el bloque `exporters` del colector (en pruebas manuales, `deploy/otel/collector.yaml`) y se reinicia el colector.
 

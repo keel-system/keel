@@ -39,7 +39,7 @@ validación/reset de datos.
 ## Qué dejó listo build
 
 - `build.gradle`: `spring-boot-starter-data-jpa` + driver del dialecto elegido
-  + `flyway-core` y su módulo de dialecto + `com.h2database:h2` como
+  + `spring-boot-starter-flyway` y su módulo de dialecto + `com.h2database:h2` como
   `testRuntimeOnly` (el perfil test corre en H2 aunque el stack declare otra BD).
 - `parameters/<perfil>/db.yaml`: URL/credenciales con gradiente por perfil,
   `ddl-auto` (`update` solo en local, `validate` en develop/production) y

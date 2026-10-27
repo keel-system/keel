@@ -97,8 +97,8 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   const application = read(workspace, 'src/main/java/com/commerce/productcatalog/ProductCatalogApplication.java');
   assert.ok(application.includes('@EnableJpaAuditing'));
 
-  // @LogExceptions implementada con su aspecto (AOP).
-  assert.ok(buildGradle.includes('spring-boot-starter-aop'));
+  // @LogExceptions implementada con su aspecto (AOP: en Boot 4 el starter es `aspectj`).
+  assert.ok(buildGradle.includes('spring-boot-starter-aspectj'));
   const aspect = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/logging/LogExceptionsAspect.java');
   assert.ok(aspect.includes('@Around("@annotation(logExceptions)")'));
   assert.ok(fs.existsSync(path.join(workspace, 'services', 'product-catalog-spring', 'src/main/java/com/commerce/productcatalog/application/annotations/LogExceptions.java')));
@@ -594,7 +594,7 @@ test('scaffolding de integración: AbstractFlowIT y FailureCapture, sin clases d
   assert.ok(abstractFlow.includes('protected String toJson(Object value)'));
   assert.ok(abstractFlow.includes('JSON.writeValueAsString(value)'));
   assert.equal(
-    abstractFlow.split('\n').filter((line) => line === 'import com.fasterxml.jackson.databind.ObjectMapper;').length,
+    abstractFlow.split('\n').filter((line) => line === 'import tools.jackson.databind.json.JsonMapper;').length,
     1
   );
   assert.ok(abstractFlow.includes('protected void await(Duration timeout, BooleanSupplier condition)'));
@@ -1721,7 +1721,7 @@ test('capa security (oidc): SecurityFilterChain con matchers por ruta + JwtAuthC
 
   const buildGradle = read(workspace, 'build.gradle');
   assert.ok(buildGradle.includes('spring-boot-starter-security'));
-  assert.ok(buildGradle.includes('spring-boot-starter-oauth2-resource-server'));
+  assert.ok(buildGradle.includes('spring-boot-starter-security-oauth2-resource-server'));
   assert.ok(read(workspace, 'src/main/resources/parameters/local/oauth2.yaml').includes('issuer-uri'));
 
   // Perfil test: build NO genera ningún JwtDecoder (el decoder lo autoconfigura
@@ -2030,7 +2030,7 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
   assert.ok(wire.includes('public record GetPriceResponse()'));
 
   // resilience4j en gradle + fragmento de config con instancias derivadas del diseño.
-  assert.ok(read(workspace, 'build.gradle').includes('resilience4j-spring-boot3'));
+  assert.ok(read(workspace, 'build.gradle').includes('resilience4j-spring-boot4'));
   const hc = read(workspace, 'src/main/resources/parameters/local/http-clients.yaml');
   // Literal solo en local, y apuntando al proveedor de prueba del compose: el
   // proveedor real no está en infra/, y sin stub ningún flujo que lo atraviese
@@ -2136,7 +2136,7 @@ test('capa http-clients estructurada: records tipados, mapper ACL completo y aut
   const shared = read(workspace, `${httpDir}/HttpClientsOAuth2Config.java`);
   assert.ok(shared.includes('AuthorizedClientServiceOAuth2AuthorizedClientManager'));
   assert.ok(shared.includes('.clientCredentials()'));
-  assert.ok(read(workspace, 'build.gradle').includes('spring-boot-starter-oauth2-client'));
+  assert.ok(read(workspace, 'build.gradle').includes('spring-boot-starter-security-oauth2-client'));
 
   // Properties: credenciales por env var + registration oauth2 estándar.
   const hc = read(workspace, 'src/main/resources/parameters/local/http-clients.yaml');
@@ -2306,8 +2306,9 @@ test('capa messaging (subscriptions): payload record transversal, sin listener d
 
   // El listener depende del broker: lo escribe el agente, no build.
   assert.ok(!exists(workspace, `${subsDir}/StockDepletedListener.java`));
-  // Broker por defecto (kafka): spring-kafka en gradle para el código del agente.
-  assert.ok(read(workspace, 'build.gradle').includes('spring-kafka'));
+  // Broker por defecto (kafka): el starter de Kafka en gradle para el código del agente (en Boot 4
+  // `spring-kafka` a secas no trae la autoconfiguración).
+  assert.ok(read(workspace, 'build.gradle').includes("implementation 'org.springframework.boot:spring-boot-starter-kafka'"));
 });
 
 test('suscripción con contract: envoltura de la fuente, alias de campo y contrato en el javadoc', () => {
@@ -3810,9 +3811,10 @@ test('migraciones: mecanismo Flyway completo y baseline a cargo del agente', () 
   const workspace = makeWorkspace();
   scaffoldService({ ...loadFixture(), workspace });
 
-  // Motor + módulo del dialecto elegido (Flyway 10+ saca cada dialecto de core).
+  // Starter de Flyway (en Boot 4 su autoconfiguración es un módulo propio) + módulo del dialecto
+  // elegido (Flyway 10+ saca cada dialecto de core).
   const buildGradle = read(workspace, 'build.gradle');
-  assert.ok(buildGradle.includes("implementation 'org.flywaydb:flyway-core'"));
+  assert.ok(buildGradle.includes("implementation 'org.springframework.boot:spring-boot-starter-flyway'"));
   assert.ok(buildGradle.includes("runtimeOnly 'org.flywaydb:flyway-database-postgresql'"));
 
   // El directorio existe (con su README, que Flyway ignora por no ser .sql) pero

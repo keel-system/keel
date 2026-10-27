@@ -15,7 +15,8 @@ import {
   describeStack,
   normalizeTelemetry
 } from '../lib/stack-config.js';
-import { REFRESH_DIR } from '../lib/generated-manifest.js';
+import { REFRESH_DIR, readManifest } from '../lib/generated-manifest.js';
+import { platformMismatch } from '../lib/platform.js';
 import { writeSpecsSeal } from '../lib/specs-seal.js';
 import {
   EVOLUTION_MD,
@@ -85,6 +86,17 @@ export async function build(
   // Stack tecnológico: keel-stack.json del proyecto generado manda; si no
   // existe, cuestionario condicionado por las capas del diseño (o defaults).
   const projectDir = path.join(workspace, 'services', `${manifest.service?.name}-spring`);
+
+  // Un proyecto generado sobre otra línea de Spring Boot no se refresca ni se completa: se
+  // regenera (src/lib/platform.js). Se mira ANTES de preguntar el stack o escribir nada, y
+  // también con --check, que es justo el modo que tiene que decirlo.
+  const mismatch = platformMismatch(readManifest(projectDir)?.generator);
+  if (mismatch) {
+    console.error(pc.red(`✘ ${mismatch}`));
+    process.exitCode = 1;
+    return;
+  }
+
   let stack = readStackConfig(projectDir);
   let stackIsNew = false;
   let stackChanges = { added: [], removed: [] };

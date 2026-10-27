@@ -60,7 +60,7 @@ export function isRawJsonField(field) {
 export function rawJsonAnnotations(model, field, imports) {
   if (!isRawJsonField(field)) return '';
   imports.add('com.fasterxml.jackson.annotation.JsonRawValue');
-  imports.add('com.fasterxml.jackson.databind.annotation.JsonDeserialize');
+  imports.add('tools.jackson.databind.annotation.JsonDeserialize');
   imports.add(`${subPackage(model, RAW_JSON_PKG)}.RawJsonDeserializer`);
   return '@JsonRawValue @JsonDeserialize(using = RawJsonDeserializer.class) ';
 }
@@ -92,15 +92,15 @@ function renderRawJsonDeserializer(model) {
  * cadena también se acepta, y se toma como el documento ya serializado, para no romper a
  * un emisor que todavía lo mande escapado.
  */
-public class RawJsonDeserializer extends JsonDeserializer<String> {
+public class RawJsonDeserializer extends ValueDeserializer<String> {
 
     @Override
-    public String deserialize(JsonParser parser, DeserializationContext context) throws IOException {
-        JsonNode node = parser.readValueAsTree();
+    public String deserialize(JsonParser parser, DeserializationContext context) {
+        JsonNode node = context.readTree(parser);
         if (node == null || node.isNull()) {
             return null;
         }
-        return node.isTextual() ? node.textValue() : node.toString();
+        return node.isString() ? node.stringValue() : node.toString();
     }
 }`;
 
@@ -109,11 +109,10 @@ public class RawJsonDeserializer extends JsonDeserializer<String> {
     content: javaFile(
       subPackage(model, RAW_JSON_PKG),
       [
-        'com.fasterxml.jackson.core.JsonParser',
-        'com.fasterxml.jackson.databind.DeserializationContext',
-        'com.fasterxml.jackson.databind.JsonDeserializer',
-        'com.fasterxml.jackson.databind.JsonNode',
-        'java.io.IOException'
+        'tools.jackson.core.JsonParser',
+        'tools.jackson.databind.DeserializationContext',
+        'tools.jackson.databind.JsonNode',
+        'tools.jackson.databind.ValueDeserializer'
       ],
       body
     )
@@ -140,10 +139,9 @@ public class TimestampModule extends SimpleModule {
             .toFormatter();
 
     public TimestampModule() {
-        addSerializer(Instant.class, new JsonSerializer<Instant>() {
+        addSerializer(Instant.class, new ValueSerializer<Instant>() {
             @Override
-            public void serialize(Instant value, JsonGenerator gen, SerializerProvider serializers)
-                    throws IOException {
+            public void serialize(Instant value, JsonGenerator gen, SerializationContext context) {
                 gen.writeString(ISO_MILLIS.format(value));
             }
         });
@@ -155,11 +153,10 @@ public class TimestampModule extends SimpleModule {
     content: javaFile(
       subPackage(model, SERIALIZATION_PKG),
       [
-        'com.fasterxml.jackson.core.JsonGenerator',
-        'com.fasterxml.jackson.databind.JsonSerializer',
-        'com.fasterxml.jackson.databind.SerializerProvider',
-        'com.fasterxml.jackson.databind.module.SimpleModule',
-        'java.io.IOException',
+        'tools.jackson.core.JsonGenerator',
+        'tools.jackson.databind.SerializationContext',
+        'tools.jackson.databind.ValueSerializer',
+        'tools.jackson.databind.module.SimpleModule',
         'java.time.Instant',
         'java.time.format.DateTimeFormatter',
         'java.time.format.DateTimeFormatterBuilder'
@@ -171,11 +168,18 @@ public class TimestampModule extends SimpleModule {
 
 function renderConfig(model) {
   const body = `/**
- * Instala {@link TimestampModule} en el ObjectMapper de la aplicación.
+ * Instala {@link TimestampModule} en el JsonMapper de la aplicación.
  *
  * Ese mapper es el que usan las respuestas REST y —por autoconfiguración— el
  * MessageConverter del broker, así que el formato de los instantes es el mismo
  * en el cuerpo de una respuesta y en el payload de un evento de integración.
+ *
+ * Los defaults de Jackson 2 los pone {@code spring.jackson.use-jackson2-defaults}
+ * (application.yaml) salvo uno: en Boot 3 los nombres de los parámetros de un
+ * constructor los leía el ParameterNamesModule que registraba Boot, y en Jackson 3
+ * ese módulo es {@code MapperFeature.DETECT_PARAMETER_NAMES}, que
+ * {@code configureForJackson2()} apaga. Se vuelve a encender aquí para que un
+ * constructor sin {@code @JsonCreator} se siga pudiendo usar al leer.
  *
  * Deliberadamente NO se toca la inclusión de propiedades nulas: "ausencia vs.
  * nulo" es una convención de determinación del diseño y se implementa con
@@ -186,8 +190,10 @@ function renderConfig(model) {
 public class JacksonConfig {
 
     @Bean
-    public Jackson2ObjectMapperBuilderCustomizer timestampPrecisionCustomizer() {
-        return builder -> builder.modulesToInstall(TimestampModule.class);
+    public JsonMapperBuilderCustomizer timestampPrecisionCustomizer() {
+        return builder -> builder
+                .addModule(new TimestampModule())
+                .enable(MapperFeature.DETECT_PARAMETER_NAMES);
     }
 }`;
 
@@ -196,7 +202,8 @@ public class JacksonConfig {
     content: javaFile(
       subPackage(model, SERIALIZATION_PKG),
       [
-        'org.springframework.boot.autoconfigure.jackson.Jackson2ObjectMapperBuilderCustomizer',
+        'org.springframework.boot.jackson.autoconfigure.JsonMapperBuilderCustomizer',
+        'tools.jackson.databind.MapperFeature',
         'org.springframework.context.annotation.Bean',
         'org.springframework.context.annotation.Configuration'
       ],

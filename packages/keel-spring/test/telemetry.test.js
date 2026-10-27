@@ -122,13 +122,20 @@ test('telemetría: gradiente por perfil — local sin exportar, production con e
   assert.ok(yaml('production').includes('${TRACING_SAMPLING_PROBABILITY:0.1}'));
   for (const profile of ['local', 'develop', 'production']) {
     const parsed = YAML.parse(yaml(profile).replace(/\$\{[^}]*\}/g, 'X'));
-    assert.ok(parsed.management.otlp.tracing && parsed.management.otlp.logging && parsed.management.otlp.metrics.export, profile);
+    // Boot 4: el destino de trazas y logs en management.opentelemetry.*, su interruptor en
+    // management.<señal>.export.otlp; las métricas OTLP siguen en management.otlp.metrics.
+    const otel = parsed.management.opentelemetry;
+    assert.ok(otel.tracing.export.otlp.endpoint && otel.logging.export.otlp.endpoint, profile);
+    assert.ok(parsed.management.tracing.export.otlp.enabled && parsed.management.logging.export.otlp.enabled, profile);
+    assert.ok(parsed.management.otlp.metrics.export, profile);
+    assert.equal(parsed.management.otlp.tracing, undefined, `${profile}: management.otlp.tracing ya no enlaza en Boot 4`);
     assert.deepEqual(parsed.spring.kafka, { template: { 'observation-enabled': true }, listener: { 'observation-enabled': true } });
     assert.ok(project.read(`src/main/resources/application-${profile}.yaml`).includes(`parameters/${profile}/telemetry.yaml`));
   }
   const testYaml = YAML.parse(yaml('test'));
-  assert.equal(testYaml.management.tracing.enabled, false);
-  assert.equal(testYaml.management.otlp.tracing.export.enabled, false);
+  assert.equal(testYaml.management.tracing.export.enabled, false);
+  assert.equal(testYaml.management.tracing.export.otlp.enabled, false);
+  assert.equal(testYaml.management.logging.export.otlp.enabled, false);
 
   // Logs: traceId en el patrón siempre, JSON (ECS) fuera de local.
   assert.ok(project.read('src/main/resources/parameters/local/logging.yaml').includes('%X{traceId:-},%X{spanId:-}'));
@@ -516,4 +523,21 @@ test('logs: JSON ECS fuera de local también SIN telemetría, con versión, ento
     }
     assert.ok(!project.read('src/main/resources/parameters/local/logging.yaml').includes('structured'), 'local sigue en texto');
   }
+});
+
+// El appender OTLP de logs lo instala TelemetryConfig solo si la propiedad que conmuta los logs está
+// encendida. Esa propiedad la escribe telemetry.yaml y la LEE el @ConditionalOnProperty: si las dos no
+// dicen la misma clave, el appender no se instala nunca y los logs no llegan al backend, sin error
+// (pasó al subir a Boot 4: el YAML pasó a management.logging.export.otlp.enabled y la condición se
+// quedó en la clave de Boot 3; lo destapó DEP-5 de deploy-check).
+test('telemetría: la condición del appender de logs lee la MISMA clave que escribe telemetry.yaml', () => {
+  const project = generate('stock-reservation', { broker: 'kafka', telemetry: 'otel' });
+  const config = project.find('/TelemetryConfig.java');
+  const condition = config.match(/@ConditionalOnProperty\(name = "([^"]+)", havingValue = "true"\)\s+public\s+\S+\s+\w*[Ll]og/);
+  assert.ok(condition, 'TelemetryConfig no condiciona el appender de logs');
+  const key = condition[1];
+  assert.equal(key, 'management.logging.export.otlp.enabled');
+  const yaml = YAML.parse(project.read('src/main/resources/parameters/develop/telemetry.yaml').replace(/\$\{[^}]*\}/g, 'X'));
+  const value = key.split('.').reduce((node, part) => node?.[part], yaml);
+  assert.notEqual(value, undefined, `telemetry.yaml no escribe ${key}: el appender no se instalaría nunca`);
 });

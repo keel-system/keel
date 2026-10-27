@@ -68,9 +68,9 @@ haber reintentado.
 **Este bloque ya lo escribe build** en `parameters/<perfil>/rabbitmq.yaml`, con los números de
 `onFailure.retry` del diseño (y `default-requeue-rejected: false` con cualquier suscripción). No lo
 dupliques ni cambies los números: salen del diseño. Lo que no se reintenta —`DomainException` y
-`AmqpRejectAndDontRequeueException`, recorriendo causas— lo marca el `RabbitRetryTemplateCustomizer`
+`AmqpRejectAndDontRequeueException`, recorriendo causas— lo marca el `RabbitListenerRetrySettingsCustomizer`
 que build emite en `RabbitTopologyConfig`: no escribas otro, porque dos customizers se aplican en
-orden y el segundo pisa la política del primero. Tu parte es que el factory pase por el configurer
+orden y el segundo pisa el predicado del primero. Tu parte es que el factory pase por el configurer
 (arriba), sin eso nada de esto llega al contenedor.
 
 ```yaml
@@ -81,7 +81,7 @@ spring:
         default-requeue-rejected: false
         retry:
           enabled: true
-          max-attempts: 5          # onFailure.retry.maxAttempts
+          max-retries: 4           # onFailure.retry.maxAttempts - 1: Boot 4 cuenta REINTENTOS
           initial-interval: 1000ms # initialDelayMs
           multiplier: 1.5          # exponential (1.0 con fixed)
           max-interval: 30000ms    # maxDelayMs, o 30 s si no lo declara
@@ -104,7 +104,7 @@ Consecuencias, según el orden que el javadoc del `<Evento>Message` te haya pres
 - Con `tryRecord(...)` antes de despachar: el registro ya está escrito cuando entra el
   primer reintento, así que agotar los intentos **pierde el mensaje igual**. Es el precio
   declarado de ese orden (lo elige el diseño al no declarar `transitions`), pero conviene
-  saberlo antes de subir `max-attempts` creyendo que compra durabilidad: no la compra.
+  saberlo antes de subir `max-retries` creyendo que compra durabilidad: no la compra.
 
 Regla corta: **el orden del guard lo dicta el diseño y no se ajusta para acomodar el
 retry**. Si el orden prescrito y la durabilidad que necesitas no encajan, lo que falta es

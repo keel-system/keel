@@ -1536,18 +1536,21 @@ test('RabbitMQ: onFailure.retry llega al listener, y el rechazo de negocio no se
   for (const perfil of ['local', 'develop', 'production']) {
     const yaml = generado.file(path.join('parameters', perfil, 'rabbitmq.yaml'));
     assert.match(yaml, /default-requeue-rejected: false/, `${perfil}: sin él, la DLQ no recibe nada`);
-    assert.match(yaml, /retry:\s+enabled: true\s+max-attempts: 5\s+initial-interval: 1000ms\s+multiplier: 1\.5\s+max-interval: 30000ms/,
+    // Boot 4 cuenta REINTENTOS: los 5 intentos del diseño son 4 reintentos.
+    assert.match(yaml, /retry:\s+enabled: true\s+max-retries: 4\s+initial-interval: 1000ms\s+multiplier: 1\.5\s+max-interval: 30000ms/,
       `${perfil}: el reintento no es el del diseño`);
   }
 
   const topology = generado.file('RabbitTopologyConfig.java');
-  assert.match(topology, /RabbitRetryTemplateCustomizer businessRejectionIsNotRetried\(/);
+  assert.match(topology, /RabbitListenerRetrySettingsCustomizer businessRejectionIsNotRetried\(\)/);
+  assert.match(topology, /settings\.setExceptionPredicate\(RabbitTopologyConfig::isRetryable\)/);
   // Las dos mitades: la excepción de dominio y la envoltura con la que el listener la rechaza.
-  assert.match(topology, /DomainException\.class, false/);
-  assert.match(topology, /AmqpRejectAndDontRequeueException\.class, false/);
-  // traverseCauses: el contenedor lo entrega todo dentro de ListenerExecutionFailedException.
-  assert.match(topology, /new SimpleRetryPolicy\(maxAttempts, retryable, true, true\)/);
-  assert.match(topology, /Target\.LISTENER/);
+  assert.match(topology, /cause instanceof DomainException/);
+  assert.match(topology, /cause instanceof AmqpRejectAndDontRequeueException/);
+  // Toda la cadena de causas: el contenedor lo entrega todo dentro de ListenerExecutionFailedException.
+  assert.match(topology, /for \(Throwable cause = failure; cause != null;/);
+  // Nada de Spring Retry: Spring AMQP 4 reintenta con el RetryPolicy de Spring Framework.
+  assert.doesNotMatch(topology, /org\.springframework\.retry/);
 });
 
 test('generate_statistics viene con el logger que silencia su volcado, y bajo level', () => {
@@ -2229,7 +2232,10 @@ test('un campo json viaja embebido como objeto en los registros del cable, no en
   // El deserializador vive en application (lo anotan DTOs y commands) y acepta objeto y cadena.
   const deserializer = find('/application/support/RawJsonDeserializer.java');
   assert.ok(deserializer, 'build no emite el deserializador');
-  assert.match(deserializer, /node\.isTextual\(\) \? node\.textValue\(\) : node\.toString\(\)/);
+  assert.match(deserializer, /node\.isString\(\) \? node\.stringValue\(\) : node\.toString\(\)/);
+  // Jackson 3: el deserializador es un ValueDeserializer y lee el árbol por el contexto.
+  assert.match(deserializer, /extends ValueDeserializer<String>/);
+  assert.match(deserializer, /import tools\.jackson\.databind\.ValueDeserializer;/);
 
   // Dentro del proceso no cambia nada: ni el agregado, ni el evento de dominio, ni la columna.
   for (const suffix of ['/domain/aggregate/Payment.java', '/PaymentActionRequiredEvent.java', '/PaymentJpa.java']) {

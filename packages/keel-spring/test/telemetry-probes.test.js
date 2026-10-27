@@ -112,8 +112,9 @@ test('cada caso del runner tiene id único y su método está en la clase que lo
   assert.ok(down.includes(`class ${DOWN_CLASS}`));
   // El colector caído: los TRES exportadores encendidos contra un puerto cerrado. Con uno solo, el
   // caso diría que el servicio sobrevive a perder las trazas, no al colector.
-  for (const signal of ['tracing.export.enabled=true', 'logging.export.enabled=true', 'metrics.export.enabled=true']) {
-    assert.ok(down.includes(`management.otlp.${signal}`), signal);
+  // Claves de Boot 4: el interruptor de trazas y logs es management.<señal>.export.otlp.enabled.
+  for (const key of ['management.tracing.export.otlp.enabled=true', 'management.logging.export.otlp.enabled=true', 'management.otlp.metrics.export.enabled=true']) {
+    assert.ok(down.includes(key), key);
   }
 });
 

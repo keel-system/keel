@@ -1,6 +1,6 @@
 # Migraciones de esquema (Flyway)
 
-Build ya dejó el **mecanismo** completo: dependencias (`flyway-core` + el módulo
+Build ya dejó el **mecanismo** completo: dependencias (`spring-boot-starter-flyway` + el módulo
 del dialecto), el directorio `src/main/resources/db/migration/`, la config por
 perfil y los dos perfiles auxiliares (`schema-export`, `migrations`). Lo que
 falta es el contenido: **el baseline**. Sin él, `develop` y `production` no

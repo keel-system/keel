@@ -48,7 +48,7 @@ function gatewayShapes(gateway) {
       probes,
       adapter: 'StripePaymentGateway',
       verifier: 'StripeNoticeVerifier',
-      verifierArgs: 'properties(), new ObjectMapper(), clock',
+      verifierArgs: 'properties(), JsonMapper.builder().configureForJackson2().build(), clock',
       authorized: stripeObject(probes, 'ch-1', 'AUTHORIZED'),
       captured: stripeObject(probes, 'ch-9', 'CAPTURED'),
       declineStatus: 402,
@@ -167,7 +167,8 @@ import ${base}.infrastructure.payment.PaymentGatewayHttpConfig;
 import ${base}.infrastructure.payment.PaymentGatewayProperties;
 import ${base}.infrastructure.payment.${gateway}.${shapes.adapter};
 import ${base}.infrastructure.payment.${gateway}.${shapes.verifier};
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -256,7 +257,7 @@ class PaymentCheckTest {
 
     private static PaymentGateway gateway() {
         return new ${shapes.adapter}(new PaymentGatewayHttpConfig().paymentGatewayRestClient(properties()), properties(),
-                new ObjectMapper());
+                JsonMapper.builder().configureForJackson2().build());
     }
 
     private static ChargeRequest charge(String reference, String amount) {
@@ -431,7 +432,7 @@ function rawJsonEvent(model) {
 function rawJsonTest({ eventClass, field }) {
   return `    @Test
     void unCampoJsonSaleEmbebidoYSeLeeComoObjeto() throws Exception {
-        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        ObjectMapper mapper = JsonMapper.builder().configureForJackson2().findAndAddModules().build();
         String action = "{\\"type\\":\\"redirect\\",\\"url\\":\\"https://example.test/3ds\\"}";
         ${eventClass} event = mapper.readValue("{\\"${field}\\": " + action + "}", ${eventClass}.class);
         assertEquals(action, event.${field}(), "el objeto del cable se guarda como su texto");

@@ -117,7 +117,7 @@ public class Sns<Evento>Publisher implements <Evento>Publisher {
             snsTemplate.send(topic, MessageBuilder.withPayload(payload)
                     .setHeader("eventType", EVENT_TYPE)
                     .build());
-        } catch (JsonProcessingException exception) {
+        } catch (JacksonException exception) {   // tools.jackson.core: Jackson 3
             throw new IllegalStateException("No se pudo serializar " + EVENT_TYPE, exception);
         }
     }

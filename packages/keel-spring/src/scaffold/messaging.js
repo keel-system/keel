@@ -146,8 +146,8 @@ function renderBridge(model, outbox) {
   if (outbox) {
     imports.add('org.springframework.beans.factory.annotation.Value');
     imports.add('org.springframework.context.event.EventListener');
-    imports.add('com.fasterxml.jackson.core.JsonProcessingException');
-    imports.add('com.fasterxml.jackson.databind.ObjectMapper');
+    imports.add('tools.jackson.core.JacksonException');
+    imports.add('tools.jackson.databind.ObjectMapper');
     // El espejo persistido del outbox cambia de nombre con el modelo (Jpa /
     // Document), pero el bridge lo usa igual: escribe la fila y se acabó.
     const outboxTypes = outboxNames(model);
@@ -268,7 +268,7 @@ function renderOutboxAppend(model) {
                     0,
                     null,
                     null));
-        } catch (JsonProcessingException ex) {
+        } catch (JacksonException ex) {
             // Serializar un evento propio no puede fallar: si falla, el diseño
             // del payload está roto y la transacción debe revertir.
             throw new IllegalStateException("No se pudo serializar el evento " + eventType, ex);

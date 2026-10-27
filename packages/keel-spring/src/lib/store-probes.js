@@ -200,9 +200,11 @@ function relationalOutboxClass(model, { datasource, packages }) {
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import(OutboxRelayStore.class)
-// La que aplica spring.transaction.* al gestor. @DataJpaTest NO la trae (medido en
+// La que aplica spring.transaction.* al gestor. @DataJpaTest NO la traía (medido en
 // spring-boot-test-autoconfigure 3.5.3) y la aplicación completa sí: sin ella la propiedad de abajo
-// no llegaría al gestor y el caso del tope mediría su ausencia.
+// no llegaría al gestor y el caso del tope mediría su ausencia. En Boot 4 la importa
+// @AutoConfigureJdbc, pero que @DataJpaTest la arrastre está sin medir, y pedirla dos veces no
+// cambia nada: se queda explícita.
 @ImportAutoConfiguration(TransactionManagerCustomizationAutoConfiguration.class)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class ${CLASS_OUTBOX} {
@@ -482,14 +484,14 @@ class ${CLASS_OUTBOX} {
       'java.util.concurrent.TimeUnit',
       'org.springframework.dao.QueryTimeoutException',
       'org.springframework.boot.autoconfigure.ImportAutoConfiguration',
-      'org.springframework.boot.autoconfigure.transaction.TransactionManagerCustomizationAutoConfiguration',
+      'org.springframework.boot.transaction.autoconfigure.TransactionManagerCustomizationAutoConfiguration',
       'org.springframework.transaction.TransactionTimedOutException',
       'static org.junit.jupiter.api.Assertions.assertThrows',
       'org.junit.jupiter.api.BeforeEach',
       'org.junit.jupiter.api.Test',
       'org.springframework.beans.factory.annotation.Autowired',
-      'org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase',
-      'org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest',
+      'org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase',
+      'org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest',
       'org.springframework.context.annotation.Import',
       'org.springframework.data.domain.PageRequest',
       'org.springframework.transaction.PlatformTransactionManager',
@@ -654,8 +656,8 @@ class ${CLASS_MEDIATOR} {
       'org.junit.jupiter.api.BeforeEach',
       'org.junit.jupiter.api.Test',
       'org.springframework.beans.factory.annotation.Autowired',
-      'org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase',
-      'org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest',
+      'org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase',
+      'org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest',
       'org.springframework.dao.QueryTimeoutException',
       'org.springframework.orm.ObjectOptimisticLockingFailureException',
       'org.springframework.transaction.PlatformTransactionManager',
@@ -673,7 +675,7 @@ class ${CLASS_MEDIATOR} {
 function documentOutboxClass(model, { datasource, packages }) {
   const { entity: entityClass, repository: repoClass } = outboxNames(model);
   const properties = [
-    `"spring.data.mongodb.uri=${datasource.uri}"`,
+    `"spring.mongodb.uri=${datasource.uri}"`,
     '"spring.profiles.active="',
     `"outbox.relay.batch-size=${BATCH_SIZE}"`,
     `"outbox.relay.max-attempts=${MAX_ATTEMPTS}"`,
@@ -866,7 +868,7 @@ ${midiendoElContenedor(model)}
       'org.junit.jupiter.api.Test',
       'org.springframework.beans.factory.annotation.Autowired',
       'org.springframework.boot.autoconfigure.ImportAutoConfiguration',
-      'org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest',
+      'org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest',
       'org.springframework.boot.test.context.TestConfiguration',
       'org.springframework.context.annotation.Bean',
       'org.springframework.context.annotation.Import',
@@ -941,8 +943,8 @@ ${commandMembers(subjects, registro)}${registroDeHelper(subjects, registro)}${de
       'org.junit.jupiter.api.BeforeEach',
       'org.junit.jupiter.api.Test',
       'org.springframework.beans.factory.annotation.Autowired',
-      'org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase',
-      'org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest',
+      'org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase',
+      'org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest',
       'org.springframework.context.annotation.Import',
       ...(subjects.dedupe ? [`${packages.purge}.BatchedPurge`, 'org.springframework.data.domain.PageRequest'] : []),
       'org.springframework.transaction.PlatformTransactionManager',
@@ -963,7 +965,7 @@ ${commandMembers(subjects, registro)}${registroDeHelper(subjects, registro)}${de
 function documentIdempotencyClass(model, subjects, { datasource, packages }) {
   const { entity: processedClass, repository: processedRepo } = processedEventNames(model);
   const registro = idempotencyRecordNames(model);
-  const properties = [`"spring.data.mongodb.uri=${datasource.uri}"`, '"spring.profiles.active="'];
+  const properties = [`"spring.mongodb.uri=${datasource.uri}"`, '"spring.profiles.active="'];
 
   const importados = [
     ...(subjects.dedupe ? ['IdempotencyGuard.class', 'ProcessedEventWriter.class'] : []),
@@ -1013,7 +1015,7 @@ ${commandMembers(subjects, registro)}${registroDeHelper(subjects, registro)}${de
       'org.junit.jupiter.api.Test',
       'org.springframework.beans.factory.annotation.Autowired',
       'org.springframework.boot.autoconfigure.ImportAutoConfiguration',
-      'org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest',
+      'org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest',
       'org.springframework.context.annotation.Import',
       'org.springframework.data.mongodb.core.MongoTemplate',
       'static org.junit.jupiter.api.Assertions.assertEquals',
@@ -1580,8 +1582,8 @@ ${reconciliationSweepTests(claim, estadoDeEspera(claim, enumType), otroEstado(en
       'org.junit.jupiter.api.BeforeEach',
       'org.junit.jupiter.api.Test',
       'org.springframework.beans.factory.annotation.Autowired',
-      'org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase',
-      'org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest',
+      'org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase',
+      'org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest',
       'org.springframework.context.annotation.Import',
       'org.springframework.transaction.PlatformTransactionManager',
       ...(aislamiento ? ['org.springframework.transaction.TransactionDefinition'] : []),
@@ -1603,7 +1605,7 @@ function documentReconciliationClass(model, subjects, { datasource, packages }) 
   const entity = entidadDe(model, claim);
   const enumType = entity.lifecycle.enumType;
   const properties = [
-    `"spring.data.mongodb.uri=${datasource.uri}"`,
+    `"spring.mongodb.uri=${datasource.uri}"`,
     '"spring.profiles.active="',
     ...parametrosDelBarrido(claim)
   ];
@@ -1683,7 +1685,7 @@ ${reconciliationSweepTests(claim, estadoDeEspera(claim, enumType), otroEstado(en
       'org.junit.jupiter.api.Test',
       'org.springframework.beans.factory.annotation.Autowired',
       'org.springframework.boot.autoconfigure.ImportAutoConfiguration',
-      'org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest',
+      'org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest',
       'org.springframework.context.annotation.Import',
       'org.springframework.data.mongodb.core.MongoTemplate',
       'org.springframework.data.mongodb.core.query.Query',

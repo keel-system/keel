@@ -91,7 +91,7 @@ for (const name of SUBJECTS) {
     const spring = planSpring({ manifest, layers, workspace: FIXTURES_DIR });
     const springLocal = parseYaml(spring.files.find((file) => file.path.endsWith('parameters/local/db.yaml')).content);
     const dotnet = (profile) => parseYaml(byPath[`config/parameters/${profile}/db.yaml`]).database;
-    assert.equal(dotnet('local').url, springLocal.spring.data.mongodb.uri);
+    assert.equal(dotnet('local').url, springLocal.spring.mongodb.uri); // Boot 4: spring.mongodb.uri
     assert.equal(dotnet('production').url, '${DB_URL}');
     assert.match(dotnet('develop').url, /^\$\{DB_URL:mongodb:\/\//);
     assert.equal(dotnet('test').enabled, false);

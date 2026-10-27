@@ -45,6 +45,15 @@ import { mappingSubject, mappingTestClass, hasSubject, PACKAGE_LEAF, CLASS_NAME 
 import { requiredLiterals } from '../src/lib/claim-probes.js';
 import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
 
+// La URI del Mongo del perfil `local`, leída del db.yaml GENERADO. En Boot 4 la conexión del cliente
+// es `spring.mongodb.uri` (antes `spring.data.mongodb.uri`). Si no aparece, el runner se para aquí:
+// pasarla `undefined` al contexto daba un rojo en todos los casos que no hablaba de su causa.
+function mongoUriOf(db) {
+  const uri = db?.spring?.mongodb?.uri;
+  if (!uri) throw new Error('el db.yaml generado no trae spring.mongodb.uri: ¿cambió la clave de la conexión?');
+  return uri;
+}
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');
 
@@ -137,7 +146,7 @@ function prepare() {
   // misma que usa el proyecto contra su propia infraestructura, y si build la cambia este runner
   // la sigue.
   const db = YAML.parse(fs.readFileSync(path.join(projectDir, 'src/main/resources/parameters/local/db.yaml'), 'utf8'));
-  const datasource = document ? { uri: db?.spring?.data?.mongodb?.uri } : (db?.spring?.datasource ?? {});
+  const datasource = document ? { uri: mongoUriOf(db) } : (db?.spring?.datasource ?? {});
 
   // El paquete de cada clase se LEE del proyecto generado en vez de suponerse: si el scaffold
   // reorganiza el layout, este runner lo sigue en vez de escribir un import que no existe.

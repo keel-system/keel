@@ -62,9 +62,12 @@ public class RabbitMqConfig {
                 BindingBuilder.bind(<canal>).to(domainEventsExchange).with(<evento>Key));
     }
 
+    // Jackson 3 (Spring AMQP 4): el convertidor recibe el JsonMapper de la aplicación —el
+    // de JacksonConfig, con TimestampModule—. Jackson2JsonMessageConverter es de Jackson 2,
+    // que este proyecto no trae.
     @Bean
-    public MessageConverter jsonMessageConverter(ObjectMapper objectMapper) {
-        return new Jackson2JsonMessageConverter(objectMapper);
+    public MessageConverter jsonMessageConverter(JsonMapper jsonMapper) {
+        return new JacksonJsonMessageConverter(jsonMapper);
     }
 
     @Bean
@@ -299,7 +302,7 @@ cola vacía: el escenario daría por bueno un descarte que sí ocurrió.
 
 **El reintento también es de build**: `spring.rabbitmq.listener.simple.retry` en
 `parameters/<perfil>/rabbitmq.yaml` con los números de `onFailure.retry`, más
-`default-requeue-rejected: false`, y en `RabbitTopologyConfig` el `RabbitRetryTemplateCustomizer`
+`default-requeue-rejected: false`, y en `RabbitTopologyConfig` el `RabbitListenerRetrySettingsCustomizer`
 que marca como no reintentables `DomainException` y `AmqpRejectAndDontRequeueException`
 —salvo el `NotFoundException` en las colas de `RETRIES_NOT_FOUND`, que sí se reintenta aunque vaya
 envuelto: el javadoc del `<Evento>Message` te dice si es tu caso—.
@@ -347,7 +350,7 @@ en silencio y el equipo emisor no ve ningún error en ningún sitio. Lo verifica
 
 Y en las dos ramas, un fallo **de negocio** (uno de los `errors` declarados) no se registra ni se
 reintenta: se rechaza sin reencolar para que vaya al descarte, que es donde el emisor lo ve.
-- **`format: avro|protobuf`** — sustituye el `Jackson2JsonMessageConverter` por el
+- **`format: avro|protobuf`** — sustituye el `JacksonJsonMessageConverter` por el
   converter del formato; `schemaRef` identifica el schema en el registry de la fuente.
 - **Canal `external: true`** — el nombre real de la cola/exchange lo pone su dueño: va en
   `parameters/<perfil>`, nunca hardcodeado, y no lo declares tú en la topología.

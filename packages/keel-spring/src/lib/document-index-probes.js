@@ -126,7 +126,7 @@ export function documentIndexTestClass(model, spec, { datasource, packages }) {
     'org.springframework.beans.factory.annotation.Autowired',
     'org.springframework.boot.ApplicationRunner',
     'org.springframework.boot.autoconfigure.ImportAutoConfiguration',
-    'org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest',
+    'org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest',
     'org.springframework.context.annotation.Import',
     'org.springframework.data.mongodb.core.MongoTemplate',
     'com.mongodb.MongoWriteException',
@@ -139,7 +139,7 @@ export function documentIndexTestClass(model, spec, { datasource, packages }) {
   ];
 
   const properties = [
-    `"spring.data.mongodb.uri=${datasource.uri}"`,
+    `"spring.mongodb.uri=${datasource.uri}"`,
     // El perfil `test` trae el mongod EMBEBIDO (flapdoodle), standalone y en memoria. Sin
     // apagarlo esta suite mediría otra base y saldría verde sin tocar el contenedor. El primer
     // caso es lo que hace fallable la decisión.

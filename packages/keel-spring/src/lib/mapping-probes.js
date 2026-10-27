@@ -26,7 +26,7 @@
 // exceso con nota.
 
 import { snakeCase } from './naming.js';
-import { claimScenarios } from './claim-probes.js';
+import { claimScenarios, rescueTiming } from './claim-probes.js';
 
 /**
  * La cota que el DISEÑO pidió, leída de la validación y NO del `@Column`.
@@ -177,6 +177,9 @@ function documentSubject(model) {
     enumType: scenarios.enumType,
     statusField: scenarios.statusField,
     claim,
+    // El rescate de la misma entidad, si lo hay: el adaptador lee su plazo al construirse, así que
+    // el contexto no arranca sin él (ver la propiedad en documentClass).
+    rescue: scenarios.rescue ?? null,
     javaName,
     storedName: snakeCase(javaName)
   };
@@ -220,8 +223,8 @@ function relationalClass(model, subject, { datasource, packages, requiredLiteral
     'java.time.Instant',
     'org.junit.jupiter.api.Test',
     'org.springframework.beans.factory.annotation.Autowired',
-    'org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase',
-    'org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest',
+    'org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase',
+    'org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest',
     `${packages.entities}.${espejo}`,
     `${packages.jpaRepositories}.${repo}`,
     // Import con comodín a propósito: la siembra nombra los enums del diseño que la entidad
@@ -450,7 +453,7 @@ function documentClass(model, subject, { datasource, packages, requiredLiterals 
     'org.junit.jupiter.api.Test',
     'org.springframework.beans.factory.annotation.Autowired',
     'org.springframework.boot.autoconfigure.ImportAutoConfiguration',
-    'org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest',
+    'org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest',
     'org.springframework.context.annotation.Import',
     'org.springframework.data.mongodb.core.MongoTemplate',
     'de.flapdoodle.embed.mongo.spring.autoconfigure.EmbeddedMongoAutoConfiguration',
@@ -466,9 +469,13 @@ function documentClass(model, subject, { datasource, packages, requiredLiterals 
   // que sin esto el @Value del adaptador se queda a 0 y el reclamo no recorre ninguna vuelta — un
   // rojo que habla del contexto de prueba y no del mapeo.
   const propiedades = [
-    `"spring.data.mongodb.uri=${datasource.uri}"`,
+    `"spring.mongodb.uri=${datasource.uri}"`,
     '"spring.profiles.active="',
-    `"sweep.${claim.sweepKey}.batch-size=5"`
+    `"sweep.${claim.sweepKey}.batch-size=5"`,
+    // El plazo del rescate, por la misma razón que el lote: el adaptador lo lee con @Value al
+    // construirse, y si el diseño lo enlaza a un parámetro de servicio (DSL 2.18) es la propiedad
+    // de ESE parámetro — sin ella el contexto ni arranca. La da la misma función que claim-check.
+    ...(subject.rescue ? [rescueTiming(subject.rescue).property] : [])
   ];
 
   return {

@@ -811,7 +811,7 @@ public class SecurityErrorHandlers implements AuthenticationEntryPoint, AccessDe
     content: javaFile(
       subPackage(model, SECURITY_PKG),
       [
-        'com.fasterxml.jackson.databind.ObjectMapper',
+        'tools.jackson.databind.ObjectMapper',
         'jakarta.servlet.http.HttpServletRequest',
         'jakarta.servlet.http.HttpServletResponse',
         'java.io.IOException',

@@ -23,9 +23,11 @@ export function generate(model) {
   const { service, layersPresent, stack } = model;
 
   const dependencies = [
-    "implementation 'org.springframework.boot:spring-boot-starter-web'",
+    // Boot 4 es modular: el starter de Spring MVC es `webmvc` (el viejo `web` queda deprecado) y
+    // el de AOP es `aspectj`. Los dos traen lo mismo que sus nombres de Boot 3.
+    "implementation 'org.springframework.boot:spring-boot-starter-webmvc'",
     "implementation 'org.springframework.boot:spring-boot-starter-validation'",
-    "implementation 'org.springframework.boot:spring-boot-starter-aop'",
+    "implementation 'org.springframework.boot:spring-boot-starter-aspectj'",
     // Actuator: health con probes liveness/readiness (Kubernetes) + info/metrics.
     // Los health indicators de BD/broker/redis los aportan sus starters.
     "implementation 'org.springframework.boot:spring-boot-starter-actuator'",
@@ -38,12 +40,15 @@ export function generate(model) {
       // el ciclo de vida del contexto. No hay dependencia de migraciones porque no
       // hay esquema que migrar — los índices los crea MongoIndexConfig.
       //
-      // El artefacto es `spring3x`, el genérico para Spring Boot 3.x, y no uno de los
-      // `spring3Nx`: esos están congelados en la línea de Boot que los nombra
-      // (`spring30x` se quedó en 4.11.0) y pedir la versión al día de uno de ellos no
-      // resuelve. Es un fallo que no se ve compilando `main` —el arnés sí lo arrastra
-      // por el classpath— y que solo caza `npm run compile-check`.
-      `testImplementation 'de.flapdoodle.embed:de.flapdoodle.embed.mongo.spring3x:${FLAPDOODLE_SPRING_VERSION}'`
+      // El artefacto es `spring4x`, el genérico para Spring Boot 4.x, y no uno de los
+      // `spring4Nx`: esos están congelados en la línea de Boot que los nombra y pedir la
+      // versión al día de uno de ellos no resuelve. Es un fallo que no se ve compilando
+      // `main` —el arnés sí lo arrastra por el classpath— y que solo caza
+      // `npm run compile-check`.
+      `testImplementation 'de.flapdoodle.embed:de.flapdoodle.embed.mongo.spring4x:${FLAPDOODLE_SPRING_VERSION}'`,
+      // En Boot 4 `spring-boot-starter-test` ya no trae los test slices: @DataMongoTest vive
+      // en su propio módulo, y lo usan las sondas de los checks del generador.
+      "testImplementation 'org.springframework.boot:spring-boot-starter-data-mongodb-test'"
     );
   } else if (layersPresent.persistence) {
     dependencies.push(
@@ -59,7 +64,10 @@ export function generate(model) {
       // esquema en develop/production (ahí Hibernate solo valida); en local están
       // apagadas mientras se itera con ddl-auto: update.
       ...(JAVA_DATABASES[stack.database]?.flywayDependencies ?? []),
-      "testRuntimeOnly 'com.h2database:h2'"
+      "testRuntimeOnly 'com.h2database:h2'",
+      // @DataJpaTest y @AutoConfigureTestDatabase salen de `spring-boot-starter-test` en Boot 4:
+      // cada slice es un módulo. Lo usan las sondas de los checks del generador.
+      "testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'"
     );
   }
   if (layersPresent.messaging) {
@@ -71,7 +79,7 @@ export function generate(model) {
     // api-key/none usan filtro propio o quedan abiertos.
     const protocol = model.security?.protocol;
     if (protocol === 'oidc' || protocol === 'jwt') {
-      dependencies.push("implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'");
+      dependencies.push("implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'");
     }
   }
   if (stack.cache) {
@@ -100,11 +108,11 @@ export function generate(model) {
     }
   }
   if (layersPresent.httpClients) {
-    // RestClient (starter-web) + resilience4j sobre AOP (starter-aop ya presente)
+    // RestClient (starter-webmvc) + resilience4j sobre AOP (starter-aspectj ya presente)
     // para @Retry/@CircuitBreaker de los clientes salientes.
-    dependencies.push(`implementation 'io.github.resilience4j:resilience4j-spring-boot3:${RESILIENCE4J_VERSION}'`);
+    dependencies.push(`implementation 'io.github.resilience4j:resilience4j-spring-boot4:${RESILIENCE4J_VERSION}'`);
     if (model.httpClients?.some((client) => client.auth?.type === 'oauth2-client-credentials')) {
-      dependencies.push("implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'");
+      dependencies.push("implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-client'");
     }
   }
   if (usesContextExecutors(model)) {
@@ -115,8 +123,11 @@ export function generate(model) {
   if (usesTelemetry(model)) {
     dependencies.push(
       // Las tres señales por OTLP a un colector, con la instrumentación nativa de Boot
-      // (Micrometer Observation): el puente de Micrometer Tracing al SDK de OpenTelemetry, el
-      // exportador de trazas y el registro de métricas OTLP. Versiones del BOM de Boot.
+      // (Micrometer Observation). En Boot 4 la autoconfiguración de trazas y de OTLP vive en sus
+      // propios módulos, y el starter `opentelemetry` es el que los trae junto con lo que en Boot 3
+      // se declaraba suelto: el puente de Micrometer Tracing al SDK de OpenTelemetry, el exportador
+      // de trazas y el registro de métricas OTLP. Versiones del BOM de Boot.
+      "implementation 'org.springframework.boot:spring-boot-starter-opentelemetry'",
       "implementation 'io.micrometer:micrometer-tracing-bridge-otel'",
       "implementation 'io.opentelemetry:opentelemetry-exporter-otlp'",
       // El propagador B3: el servicio EMITE W3C pero ACEPTA también B3 al recibir, que es lo que
@@ -127,13 +138,17 @@ export function generate(model) {
       // El registro de PROMETHEUS, que es por donde salen las métricas por defecto: el colector
       // viene a buscarlas a /actuator/prometheus. Está aquí por una sola razón, los EXEMPLARS —el
       // enlace de un punto de una métrica a una traza de ejemplo—, que el registro OTLP de
-      // Micrometer no sabe emitir hasta la 1.17 y Boot 3.5 gestiona la 1.15. El de OTLP se queda
-      // al lado a propósito: volver al push tiene que ser una variable de entorno
-      // (METRICS_EXPORT_OTLP=true), nunca recompilar.
+      // Micrometer no sabía emitir hasta la 1.17. Boot 4.1 ya gestiona la 1.17, pero el camino
+      // medido —y el que lee el panel— es el scrape, y cambiarlo cambiaría lo que el servicio
+      // publica. El de OTLP se queda al lado a propósito: volver al push tiene que ser una variable
+      // de entorno (METRICS_EXPORT_OTLP=true), nunca recompilar.
       "implementation 'io.micrometer:micrometer-registry-prometheus'",
       // Logs por OTLP. Boot exporta el SDK de logs pero no trae el appender de logback: lo
       // instala TelemetryConfig por código (ver por qué ahí). Alineado con el SDK de Boot.
-      `implementation 'io.opentelemetry.instrumentation:opentelemetry-logback-appender-1.0:${OTEL_LOGBACK_APPENDER_VERSION}'`
+      `implementation 'io.opentelemetry.instrumentation:opentelemetry-logback-appender-1.0:${OTEL_LOGBACK_APPENDER_VERSION}'`,
+      // @AutoConfigureMetrics y @AutoConfigureTracing (las sondas de telemetry-check): en Boot 4
+      // son módulos de test propios.
+      "testImplementation 'org.springframework.boot:spring-boot-starter-opentelemetry-test'"
     );
     // Spans de JDBC (conexión, consulta, result set) sin tocar el código de persistencia: se
     // engancha al DataSource por autoconfiguración. La rama documental lo cubre con el
@@ -147,7 +162,12 @@ export function generate(model) {
     dependencies.push(`implementation 'org.openapitools:jackson-databind-nullable:${JACKSON_NULLABLE_VERSION}'`);
   }
   dependencies.push(
-    "testImplementation 'org.springframework.boot:spring-boot-starter-test'",
+    // El de test de webmvc trae `spring-boot-starter-test` y el módulo del TestRestTemplate con el
+    // que AbstractFlowIT habla con el servidor (en Boot 4 ya no viene en `spring-boot-test`). Su
+    // autoconfiguración lo construye con el RestTemplateBuilder de `spring-boot-restclient`, que
+    // va solo en test: el código de main construye sus RestClient sin el Builder de Boot.
+    "testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'",
+    "testImplementation 'org.springframework.boot:spring-boot-restclient'",
     "testRuntimeOnly 'org.junit.platform:junit-platform-launcher'"
   );
 

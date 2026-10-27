@@ -103,7 +103,7 @@ public class KafkaProductCreatedPublisher implements ProductCreatedPublisher {
         var envelope = EventEnvelope.of(event.metadata(), toIntegration(event), correlationId);
         try {
             kafkaTemplate.send(destination, routingKey, objectMapper.writeValueAsString(envelope));
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {   // tools.jackson.core: Jackson 3, no comprobada
             throw new IllegalStateException("No se pudo serializar " + event.metadata().eventType(), e);
         }
     }

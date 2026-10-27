@@ -104,9 +104,9 @@ function renderAdapter(model, ctx) {
         } catch (RestClientException noAnswer) {
             throw unavailable("refund", noAnswer);
         }
-        return switch (refund.path("status").asText()) {
+        return switch (refund.path("status").asString()) {
             case "succeeded" -> GatewayOutcome.refunded(reference, gatewayPaymentId,
-                    MoneyAmounts.fromMinorUnits(refund.path("amount").asLong(), refund.path("currency").asText().toUpperCase(Locale.ROOT)));
+                    MoneyAmounts.fromMinorUnits(refund.path("amount").asLong(), refund.path("currency").asString().toUpperCase(Locale.ROOT)));
             case "pending", "requires_action" -> GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
             default -> GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId);
         };
@@ -158,7 +158,7 @@ function renderAdapter(model, ctx) {
                     .body(customerForm)
                     .retrieve()
                     .body(String.class));
-            String customerId = customer.path("id").asText();
+            String customerId = customer.path("id").asString();
             MultiValueMap<String, String> attachForm = new LinkedMultiValueMap<>();
             attachForm.add("customer", customerId);
             http.post().uri("/v1/payment_methods/{pm}/attach", token)
@@ -277,14 +277,14 @@ ${methods.join('\n\n')}
     // ─── Traducción ──────────────────────────────────────────────────────────
 
     private GatewayOutcome outcomeOf(JsonNode intent, String reference) {
-        String id = intent.path("id").asText(null);
-        String ref = intent.path("metadata").path(REFERENCE_KEY).asText(reference);
+        String id = intent.path("id").asString(null);
+        String ref = intent.path("metadata").path(REFERENCE_KEY).asString(reference);
         JsonNode charge = intent.path("latest_charge");
         if (charge.isObject() && charge.path("amount_refunded").asLong() > 0) {
             return GatewayOutcome.refunded(ref, id, MoneyAmounts.fromMinorUnits(charge.path("amount_refunded").asLong(),
-                    charge.path("currency").asText().toUpperCase(Locale.ROOT)));
+                    charge.path("currency").asString().toUpperCase(Locale.ROOT)));
         }
-        return switch (intent.path("status").asText()) {
+        return switch (intent.path("status").asString()) {
             case "requires_capture" -> GatewayOutcome.of(GatewayStatus.AUTHORIZED, ref, id);
             case "succeeded" -> GatewayOutcome.of(GatewayStatus.CAPTURED, ref, id);
             case "requires_action" -> GatewayOutcome.actionRequired(ref, id, customerAction(intent));
@@ -303,8 +303,8 @@ ${methods.join('\n\n')}
     private GatewayOutcome declined(RestClientResponseException rejected, String reference) {
         JsonNode error = json(rejected.getResponseBodyAsString()).path("error");
         JsonNode intent = error.path("payment_intent");
-        String id = intent.path("id").asText(null);
-        String code = error.path("decline_code").asText(error.path("code").asText(""));
+        String id = intent.path("id").asString(null);
+        String code = error.path("decline_code").asString(error.path("code").asString(""));
         if ("authentication_required".equals(code) && intent.isObject()) {
             // Un cobro sin el cliente delante que el emisor quiere autenticar: no es un fallo, es una
             // acción del cliente pendiente (docs/dsl/payments.md § Dos puertas).
@@ -315,13 +315,13 @@ ${methods.join('\n\n')}
 
     private String customerAction(JsonNode intent) {
         ObjectNode action = mapper.createObjectNode();
-        action.put("clientSecret", intent.path("client_secret").asText(null));
+        action.put("clientSecret", intent.path("client_secret").asString(null));
         action.set("nextAction", intent.path("next_action"));
         return action.toString();
     }
 
     private ${F} reasonOf(JsonNode error) {
-        String code = error.path("decline_code").asText(error.path("code").asText(""));
+        String code = error.path("decline_code").asString(error.path("code").asString(""));
         return switch (code) {
 ${declineCases}
             default -> ${F}.${ctx.failureConstant('declined')};
@@ -331,7 +331,7 @@ ${declineCases}
     private JsonNode json(String body) {
         try {
             return mapper.readTree(body == null || body.isBlank() ? "{}" : body);
-        } catch (JsonProcessingException unreadable) {
+        } catch (JacksonException unreadable) {
             throw new IllegalStateException("Stripe devolvió un cuerpo que no es JSON", unreadable);
         }
     }
@@ -351,10 +351,10 @@ ${declineCases}
     `${ctx.portPkg}.PaymentGateway`,
     `${ctx.infraPkg}.MoneyAmounts`,
     `${ctx.infraPkg}.PaymentGatewayProperties`,
-    'com.fasterxml.jackson.core.JsonProcessingException',
-    'com.fasterxml.jackson.databind.JsonNode',
-    'com.fasterxml.jackson.databind.ObjectMapper',
-    'com.fasterxml.jackson.databind.node.ObjectNode',
+    'tools.jackson.core.JacksonException',
+    'tools.jackson.databind.JsonNode',
+    'tools.jackson.databind.ObjectMapper',
+    'tools.jackson.databind.node.ObjectNode',
     'java.util.Locale',
     'org.springframework.http.HttpHeaders',
     'org.springframework.http.MediaType',
@@ -438,11 +438,11 @@ public class StripeNoticeVerifier implements PaymentNoticeVerifier {
     private Optional<String> paymentIntentOf(byte[] body) {
         try {
             JsonNode object = mapper.readTree(body).path("data").path("object");
-            if ("payment_intent".equals(object.path("object").asText())) {
-                return Optional.ofNullable(object.path("id").asText(null));
+            if ("payment_intent".equals(object.path("object").asString())) {
+                return Optional.ofNullable(object.path("id").asString(null));
             }
-            return Optional.ofNullable(object.path("payment_intent").asText(null));
-        } catch (java.io.IOException unreadable) {
+            return Optional.ofNullable(object.path("payment_intent").asString(null));
+        } catch (tools.jackson.core.JacksonException unreadable) {
             throw new InvalidPaymentNoticeException("el cuerpo no es JSON");
         }
     }
@@ -461,8 +461,8 @@ public class StripeNoticeVerifier implements PaymentNoticeVerifier {
     `${ctx.infraPkg}.InvalidPaymentNoticeException`,
     `${ctx.infraPkg}.PaymentGatewayProperties`,
     `${ctx.infraPkg}.PaymentNoticeVerifier`,
-    'com.fasterxml.jackson.databind.JsonNode',
-    'com.fasterxml.jackson.databind.ObjectMapper',
+    'tools.jackson.databind.JsonNode',
+    'tools.jackson.databind.ObjectMapper',
     'java.nio.charset.StandardCharsets',
     'java.security.MessageDigest',
     'java.time.Clock',

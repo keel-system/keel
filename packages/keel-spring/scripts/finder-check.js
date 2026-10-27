@@ -32,6 +32,15 @@ import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
 import { CLASS_NAME, PACKAGE_LEAF, finderTestClass, namedTypes } from '../src/lib/finder-probes.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 
+// La URI del Mongo del perfil `local`, leída del db.yaml GENERADO. En Boot 4 la conexión del cliente
+// es `spring.mongodb.uri` (antes `spring.data.mongodb.uri`). Si no aparece, el runner se para aquí:
+// pasarla `undefined` al contexto daba un rojo en todos los casos que no hablaba de su causa.
+function mongoUriOf(db) {
+  const uri = db?.spring?.mongodb?.uri;
+  if (!uri) throw new Error('el db.yaml generado no trae spring.mongodb.uri: ¿cambió la clave de la conexión?');
+  return uri;
+}
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');
 const args = process.argv.slice(2);
@@ -148,7 +157,7 @@ if (sabotage) {
 }
 
 const db = YAML.parse(fs.readFileSync(path.join(projectDir, 'src/main/resources/parameters/local/db.yaml'), 'utf8'));
-const datasource = document ? { uri: db?.spring?.data?.mongodb?.uri } : (db?.spring?.datasource ?? {});
+const datasource = document ? { uri: mongoUriOf(db) } : (db?.spring?.datasource ?? {});
 const roots = model.entities.filter((entity) => entity.persisted && entity.isAggregateRoot);
 const anyRoot = roots[0].name;
 const packages = {

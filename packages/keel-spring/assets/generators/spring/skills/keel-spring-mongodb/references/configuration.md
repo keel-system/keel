@@ -8,9 +8,10 @@ escenario concreto pida más.
 
 ```yaml
 spring:
+  mongodb:          # Boot 4: la conexión del cliente es spring.mongodb.* (spring.data.mongodb.uri ya no enlaza)
+    uri: mongodb://<db>:changeme@localhost:27017/<db>?authSource=admin&directConnection=true&uuidRepresentation=standard
   data:
-    mongodb:
-      uri: mongodb://<db>:changeme@localhost:27017/<db>?authSource=admin&directConnection=true&uuidRepresentation=standard
+    mongodb:        # lo que es de Spring Data se queda en spring.data.mongodb.*
       auto-index-creation: false
 ```
 

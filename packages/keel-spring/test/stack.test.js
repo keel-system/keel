@@ -137,8 +137,8 @@ test('cada dialecto RELACIONAL declara su módulo Flyway y protege el historial 
     const java = JAVA_DATABASES[id];
     assert.ok(Array.isArray(java.flywayDependencies), `${id}: falta flywayDependencies`);
     assert.ok(
-      java.flywayDependencies.some((dep) => dep.includes('org.flywaydb:flyway-core')),
-      `${id}: flywayDependencies debe incluir flyway-core`
+      java.flywayDependencies.some((dep) => dep.includes('org.springframework.boot:spring-boot-starter-flyway')),
+      `${id}: flywayDependencies debe incluir el starter de Flyway (en Boot 4, sin él Flyway no se ejecuta)`
     );
     // El reset entre flujos vacía datos, no el historial de migraciones: si lo
     // truncara, el arranque siguiente reaplicaría el baseline y fallaría. El catálogo es
@@ -152,7 +152,7 @@ test('cada dialecto RELACIONAL declara su módulo Flyway y protege el historial 
     }
   }
   // Todo motor relacional del catálogo declara AHORA su módulo de dialecto: el único que se
-  // apoyaba solo en flyway-core era H2, y se retiró.
+  // apoyaba solo en el motor de Flyway era H2, y se retiró.
   for (const [id, entry] of Object.entries(DATABASES)) {
     if (entry.kind !== 'relational') continue;
     assert.ok(JAVA_DATABASES[id].flywayDependencies.length >= 2, `${id}: sin módulo de dialecto propio`);

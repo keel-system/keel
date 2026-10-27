@@ -238,7 +238,7 @@ ${locals.join('\n')}${locals.length > 0 ? '\n' : ''}${checks.join('\n')}
   const adapters = roots.map((entity) => `${entity.name}RepositoryImpl.class`).join(', ');
   const header = document
     ? `@DataMongoTest(properties = {
-        ${java(`spring.data.mongodb.uri=${datasource.uri}`)},
+        ${java(`spring.mongodb.uri=${datasource.uri}`)},
         // El perfil test arranca un mongod EMBEBIDO: sin apagarlo, la sonda mediría una base en memoria. El local trae
         // además los parámetros que el adaptador lee (los plazos de sus barridos).
         "spring.profiles.active=local"
@@ -257,12 +257,12 @@ ${locals.join('\n')}${locals.length > 0 ? '\n' : ''}${checks.join('\n')}
 // Sin transacción de test: el adaptador guarda con la suya, y la del finder lee lo confirmado.
 @Transactional(propagation = Propagation.NOT_SUPPORTED)`;
   if (document) {
-    imports.add('org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest');
+    imports.add('org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest');
     imports.add('org.springframework.boot.autoconfigure.ImportAutoConfiguration');
     imports.add('de.flapdoodle.embed.mongo.spring.autoconfigure.EmbeddedMongoAutoConfiguration');
   } else {
-    imports.add('org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest');
-    imports.add('org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase');
+    imports.add('org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest');
+    imports.add('org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase');
     imports.add('org.springframework.transaction.annotation.Propagation');
     imports.add('org.springframework.transaction.annotation.Transactional');
   }

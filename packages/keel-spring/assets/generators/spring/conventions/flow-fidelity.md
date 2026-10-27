@@ -98,7 +98,7 @@ así que recórrelos antes de reportar `status`, aunque nada esté marcado con u
   todavía. La back-reference la estampa el padre al mapear su colección.
 - **Un solo `ObjectMapper` por comportamiento**: toda configuración que serialice
   objetos del servicio (caché, cliente HTTP, mensajería) usa el `ObjectMapper` de la
-  aplicación o replica su configuración, `JavaTimeModule` incluido. Un componente
+  aplicación o replica su configuración (defaults de Jackson 2 y `TimestampModule`). Un componente
   serializador escrito «aislado» rompe en el primer campo `Instant`/`LocalDate`, en
   runtime.
 - **Claims y credenciales externas**: ningún cambio que dependa del **nombre o la

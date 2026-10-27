@@ -244,3 +244,27 @@ test('build estampa si el diseño estaba listo, por id y sin timestamps', async 
   await runBuild(workspace, { check: true });
   assert.equal(fs.readFileSync(manifestPath(workspace), 'utf8'), antes, '--check escribió el estampado');
 });
+
+// Un salto de línea de Spring Boot no se refresca (src/lib/platform.js): los archivos del agente
+// siguen escritos para la línea anterior, y refrescar los de build dejaría el proyecto sin compilar.
+// Se rechaza en los tres modos —también con --check, que es el que tiene que decirlo— y sin escribir.
+test('un proyecto generado sobre Boot 3 no se refresca ni se completa: se rechaza sin escribir', async () => {
+  const workspace = withFixture();
+  assert.equal(await runBuild(workspace, { defaults: true }), undefined);
+  const manifest = readManifest(workspace);
+  manifest.generator = 'keel-spring@0.1.7';
+  saveManifest(workspace, manifest);
+  const gradle = path.join(projectOf(workspace), 'build.gradle');
+  fs.writeFileSync(gradle, 'el build.gradle de Boot 3');
+
+  for (const options of [{ refresh: true }, { check: true }, {}]) {
+    assert.equal(await runBuild(workspace, { defaults: true, ...options }), 1, JSON.stringify(options));
+    assert.equal(fs.readFileSync(gradle, 'utf8'), 'el build.gradle de Boot 3', JSON.stringify(options));
+    assert.equal(readManifest(workspace).generator, 'keel-spring@0.1.7');
+  }
+
+  // Control: con la firma de esta línea el refresco sí escribe.
+  manifest.generator = `keel-spring@${JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version}`;
+  saveManifest(workspace, manifest);
+  assert.notEqual(await runBuild(workspace, { defaults: true, refresh: true }), 1);
+});

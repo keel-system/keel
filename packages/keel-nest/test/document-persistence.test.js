@@ -185,7 +185,7 @@ for (const subject of SUBJECTS) {
     const spring = planSpring({ manifest, layers, workspace: FIXTURES_DIR });
     const springLocal = parseYaml(spring.files.find((file) => file.path.endsWith('parameters/local/db.yaml')).content);
     const nest = (profile) => parseYaml(byPath[`config/parameters/${profile}/db.yaml`]).database;
-    assert.equal(nest('local').url, springLocal.spring.data.mongodb.uri);
+    assert.equal(nest('local').url, springLocal.spring.mongodb.uri); // Boot 4: spring.mongodb.uri
     assert.equal(nest('production').url, '${DB_URL}');
     assert.match(nest('develop').url, /^\$\{DB_URL:mongodb:\/\//);
     assert.equal(nest('test').enabled, false);

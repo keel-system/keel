@@ -416,7 +416,7 @@ por posición (`$.images[0].url`) y deja que el STRICT de `assertBody` cubra el 
 La trampa más cara de las de este bloque, porque **no falla donde está**. Un `$.campo` escalar
 devuelve el `String`/`Integer` que se espera, pero un nodo **objeto o array** lo materializa el
 proveedor por defecto de JsonPath como `LinkedHashMap`/`List` (jackson-databind está en el
-classpath vía `spring-boot-starter-web`), y `Object.toString()` sobre ellos da sintaxis de Java
+classpath vía `spring-boot-starter-webmvc`), y `Object.toString()` sobre ellos da sintaxis de Java
 —`{clave=valor}`—, no JSON. El texto resultante parece correcto en un log y es basura para
 cualquier lector de JSON:
 

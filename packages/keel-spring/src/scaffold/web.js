@@ -173,17 +173,18 @@ function renderWebConfig(model, { hasEnums, partial }) {
   if (partial) {
     imports.push(
       'org.springframework.context.annotation.Bean',
-      'org.openapitools.jackson.nullable.JsonNullableModule'
+      'org.openapitools.jackson.nullable.JsonNullableJackson3Module'
     );
     declarations.push(`
     /**
      * (De)serialización de JsonNullable: un campo ausente queda undefined y un
      * null explícito queda presente con valor null, que es la distinción que
-     * exige el contrato de las actualizaciones parciales.
+     * exige el contrato de las actualizaciones parciales. Es el módulo de Jackson 3:
+     * el de Jackson 2 (JsonNullableModule) Boot 4 no lo registra en su mapper.
      */
     @Bean
-    public JsonNullableModule jsonNullableModule() {
-        return new JsonNullableModule();
+    public JsonNullableJackson3Module jsonNullableModule() {
+        return new JsonNullableJackson3Module();
     }`);
   }
 

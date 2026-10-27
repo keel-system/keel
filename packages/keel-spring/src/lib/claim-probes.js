@@ -456,7 +456,7 @@ function documentClaimTestClass(model, scenarios, { datasource, packages }) {
   const constant = (state) => `${enumType}.${screamingSnake(state)}`;
 
   const properties = [
-    `"spring.data.mongodb.uri=${datasource.uri}"`,
+    `"spring.mongodb.uri=${datasource.uri}"`,
     // El perfil `test` trae el mongod EMBEBIDO (flapdoodle) y su gestor de transacciones no-op.
     // Sin apagarlo, esta suite mediría una base en memoria y saldría en verde sin haber tocado
     // el contenedor — el gemelo exacto del `@AutoConfigureTestDatabase(Replace.NONE)` de la
@@ -488,7 +488,7 @@ function documentClaimTestClass(model, scenarios, { datasource, packages }) {
     'org.junit.jupiter.api.Test',
     'org.springframework.beans.factory.annotation.Autowired',
     'org.springframework.boot.autoconfigure.ImportAutoConfiguration',
-    'org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest',
+    'org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest',
     'org.springframework.context.annotation.Import',
     'org.springframework.data.mongodb.core.MongoTemplate',
     'org.springframework.data.mongodb.core.query.Query',
@@ -758,8 +758,8 @@ function relationalClaimTestClass(model, scenarios, { datasource, packages, data
     'org.junit.jupiter.api.BeforeEach',
     'org.junit.jupiter.api.Test',
     'org.springframework.beans.factory.annotation.Autowired',
-    'org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase',
-    'org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest',
+    'org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase',
+    'org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest',
     'org.springframework.context.annotation.Import',
     'org.springframework.transaction.PlatformTransactionManager',
     'org.springframework.transaction.annotation.Propagation',

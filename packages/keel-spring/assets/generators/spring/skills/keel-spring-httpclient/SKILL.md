@@ -28,7 +28,7 @@ que build deja como `// TODO (agente)` porque no es derivable del diseño.
 
 ## Qué dejó listo build
 
-- `build.gradle`: `spring-boot-starter-web` (RestClient) + `resilience4j-spring-boot3`
+- `build.gradle`: `spring-boot-starter-webmvc` (RestClient) + `resilience4j-spring-boot4`
   (y oauth2 client si algún cliente usa `oauth2-client-credentials`).
 - `infrastructure/http/<C>ClientConfig`: bean `RestClient` con `base-url`, timeouts
   (connect 5s, read = mayor `timeoutMs` del cliente) y la auth saliente declarada

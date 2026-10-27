@@ -107,7 +107,7 @@ export function generate(model) {
 // comporta como el default (registra y sigue), que es lo que significa no declararlo.
 function kafkaConfig(model, subs) {
   const imports = new Set([
-    'com.fasterxml.jackson.databind.ObjectMapper',
+    'tools.jackson.databind.ObjectMapper',
     'java.nio.charset.StandardCharsets',
     'java.util.Set',
     'org.apache.kafka.common.TopicPartition',
@@ -339,12 +339,8 @@ function rabbitConfig(model, subs) {
   const retry = rabbitListenerRetry(model);
   if (retry) {
     for (const name of [
-      'java.util.Map',
       'org.springframework.amqp.AmqpRejectAndDontRequeueException',
-      'org.springframework.beans.factory.annotation.Value',
-      'org.springframework.boot.autoconfigure.amqp.RabbitRetryTemplateCustomizer',
-      'org.springframework.retry.policy.SimpleRetryPolicy',
-      'org.springframework.retry.RetryContext',
+      'org.springframework.boot.amqp.autoconfigure.RabbitListenerRetrySettingsCustomizer',
       'org.springframework.amqp.rabbit.support.ListenerExecutionFailedException',
       `${subPackage(model, 'domain.errors')}.DomainException`
     ]) {
@@ -363,9 +359,9 @@ function rabbitConfig(model, subs) {
      * que un guard que reclama antes de despachar ({@code tryRecord}) encuentra el evento ya
      * marcado, retorna sin lanzar y el contenedor confirma — el mensaje nunca llega al descarte.
      *
-     * <p>Se marcan las dos formas del rechazo: la excepción de dominio tal cual y la
-     * {@code AmqpRejectAndDontRequeueException} con la que el listener la envuelve.
-     * {@code traverseCauses} hace falta porque el contenedor lo entrega todo dentro de un
+     * <p>Se miran las dos formas del rechazo: la excepción de dominio tal cual y la
+     * {@code AmqpRejectAndDontRequeueException} con la que el listener la envuelve, en toda la
+     * cadena de causas, porque el contenedor lo entrega todo dentro de un
      * {@code ListenerExecutionFailedException}. Agotado (o no reintentable), el recuperador de Boot
      * rechaza sin reencolar y la cola lo lleva a su DLQ si la declara.
      *
@@ -373,35 +369,35 @@ function rabbitConfig(model, subs) {
      * {@code RETRIES_NOT_FOUND}: allí suele ser la carrera de orden de un consumo asíncrono, y
      * el reintento la resuelve. Fuera de ellas, se trata como cualquier otro rechazo.
      *
-     * <p>Sustituye la política que Boot montó desde las propiedades, así que reutiliza su
-     * {@code max-attempts}; el backoff sigue saliendo de ellas. Solo toca el reintento del
-     * LISTENER, no el del {@code RabbitTemplate}.
+     * <p>Solo decide QUÉ se reintenta: cuántas veces ({@code max-retries}) y con qué espera siguen
+     * saliendo de las propiedades. Solo toca el reintento del LISTENER, no el del
+     * {@code RabbitTemplate}. (En Boot 3 era un {@code RabbitRetryTemplateCustomizer} con un
+     * {@code SimpleRetryPolicy} de Spring Retry; Spring AMQP 4 reintenta con el
+     * {@code RetryPolicy} de Spring Framework, y la decisión es la misma.)
      */
     @Bean
-    public RabbitRetryTemplateCustomizer businessRejectionIsNotRetried(
-            @Value("\${spring.rabbitmq.listener.simple.retry.max-attempts:${retry.attempts}}") int maxAttempts) {
-        return (target, retryTemplate) -> {
-            if (target != RabbitRetryTemplateCustomizer.Target.LISTENER) {
-                return;
+    public RabbitListenerRetrySettingsCustomizer businessRejectionIsNotRetried() {
+        return settings -> settings.setExceptionPredicate(RabbitTopologyConfig::isRetryable);
+    }
+
+    /**
+     * ¿Se reintenta este fallo? El «no existe» se decide antes que el rechazo de negocio, y por
+     * COLA: se reintenta solo en RETRIES_NOT_FOUND, vaya o no envuelto en el
+     * AmqpRejectAndDontRequeueException.
+     */
+    static boolean isRetryable(Throwable failure) {
+        if (isMissingTarget(failure)) {
+            String queue = consumerQueue(failure);
+            return queue != null && RETRIES_NOT_FOUND.contains(queue);
+        }
+        for (Throwable cause = failure; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof DomainException
+                    || cause instanceof IllegalArgumentException
+                    || cause instanceof AmqpRejectAndDontRequeueException) {
+                return false;
             }
-            Map<Class<? extends Throwable>, Boolean> retryable = Map.of(
-                    DomainException.class, false,
-                    IllegalArgumentException.class, false,
-                    AmqpRejectAndDontRequeueException.class, false);
-            retryTemplate.setRetryPolicy(new SimpleRetryPolicy(maxAttempts, retryable, true, true) {
-                // El «no existe» se decide antes que la tabla, y por COLA: se reintenta solo en
-                // RETRIES_NOT_FOUND, vaya o no envuelto en el AmqpRejectAndDontRequeueException.
-                @Override
-                public boolean canRetry(RetryContext context) {
-                    Throwable last = context.getLastThrowable();
-                    if (last != null && isMissingTarget(last)) {
-                        String queue = consumerQueue(last);
-                        return queue != null && RETRIES_NOT_FOUND.contains(queue) && context.getRetryCount() < maxAttempts;
-                    }
-                    return super.canRetry(context);
-                }
-            });
-        };
+        }
+        return true;
     }
 
     /** La cola de la que se consumió el mensaje que falló, o null si el fallo no la trae. */

@@ -6,9 +6,10 @@ Síntoma → causa → arreglo. Sondeo básico en
 ## `SerializationException` al cachear algo con fecha/hora
 
 `Java 8 date/time type ... not supported by default` al escribir en la caché un
-DTO con `Instant`, `LocalDate` u `OffsetDateTime`: el `ObjectMapper` que
-serializa los valores no registra `JavaTimeModule`. El `CacheConfig` generado
-por build sí lo registra — el fallo aparece cuando alguien añade **otro**
+DTO con `Instant`, `LocalDate` u `OffsetDateTime`: el serializador de los valores
+no usa el mapper de la caché (en Jackson 3 java.time viene de serie, pero el
+formato de los instantes lo fija `TimestampModule`). El `CacheConfig` generado
+por build lo configura — el fallo aparece cuando alguien añade **otro**
 `CacheManager`, `RedisTemplate` o serializador con un `ObjectMapper` propio.
 Reutiliza el de `CacheConfig` en vez de construir uno nuevo.
 

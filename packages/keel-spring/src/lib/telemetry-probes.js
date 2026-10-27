@@ -493,9 +493,11 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
+import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
+import org.springframework.boot.micrometer.tracing.test.autoconfigure.AutoConfigureTracing;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.resttestclient.TestRestTemplate;
+import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -523,9 +525,12 @@ import org.springframework.test.context.ActiveProfiles;
             // base en memoria y saldría en verde sin tocar el contenedor.
             "spring.autoconfigure.exclude=${spec.excludeAutoConfig}"` : ''}
         })
-// Boot APAGA la observabilidad en los @SpringBootTest (DisableObservabilityContextCustomizer): sin
-// esto no hay registro de métricas ni tracer, y lo que se mediría es un no-op que nunca falla.
-@AutoConfigureObservability
+// Boot APAGA la observabilidad en los @SpringBootTest: sin estas dos no hay registro de métricas
+// ni tracer, y lo que se mediría es un no-op que nunca falla. (En Boot 3 era una sola anotación,
+// @AutoConfigureObservability; Boot 4 la parte en métricas y trazas.)
+@AutoConfigureMetrics
+@AutoConfigureTracing
+@AutoConfigureTestRestTemplate
 @ActiveProfiles("local")
 class ${PROBE_CLASS} {
 
@@ -806,9 +811,11 @@ import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
+import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
+import org.springframework.boot.micrometer.tracing.test.autoconfigure.AutoConfigureTracing;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.resttestclient.TestRestTemplate;
+import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -830,7 +837,9 @@ import org.springframework.test.context.ActiveProfiles;
             "${INSTRUMENTATION.storage.property}=false"${spec.excludeAutoConfig ? `,
             "spring.autoconfigure.exclude=${spec.excludeAutoConfig}"` : ''}
         })
-@AutoConfigureObservability
+@AutoConfigureMetrics
+@AutoConfigureTracing
+@AutoConfigureTestRestTemplate
 @ActiveProfiles("local")
 class ${SWITCH_CLASS} {
 
@@ -887,9 +896,11 @@ import java.lang.reflect.Constructor;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
+import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
+import org.springframework.boot.micrometer.tracing.test.autoconfigure.AutoConfigureTracing;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.resttestclient.TestRestTemplate;
+import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -901,16 +912,18 @@ import org.springframework.test.context.ActiveProfiles;
         classes = { ${spec.appClass}.class${spec.doublesClass ? `, ${spec.doublesClass}.class` : ''} },
         properties = {
             "management.tracing.sampling.probability=1.0",
-            "management.otlp.tracing.export.enabled=true",
-            "management.otlp.tracing.endpoint=${dead}/v1/traces",
-            "management.otlp.logging.export.enabled=true",
-            "management.otlp.logging.endpoint=${dead}/v1/logs",
+            "management.tracing.export.otlp.enabled=true",
+            "management.opentelemetry.tracing.export.otlp.endpoint=${dead}/v1/traces",
+            "management.logging.export.otlp.enabled=true",
+            "management.opentelemetry.logging.export.otlp.endpoint=${dead}/v1/logs",
             "${METRICS_TRANSPORT.otlp.property}=true",
             "management.otlp.metrics.export.url=${dead}/v1/metrics",
             "management.otlp.metrics.export.step=1s"${spec.excludeAutoConfig ? `,
             "spring.autoconfigure.exclude=${spec.excludeAutoConfig}"` : ''}
         })
-@AutoConfigureObservability
+@AutoConfigureMetrics
+@AutoConfigureTracing
+@AutoConfigureTestRestTemplate
 @ActiveProfiles("local")
 class ${DOWN_CLASS} {
 

@@ -66,7 +66,7 @@ conectar desde localhost en instalaciones reales, no en el contenedor de prueba.
 
 ## La conversión JSON falla en el listener (`MessageConversionException`)
 
-El productor no publica JSON (falta `Jackson2JsonMessageConverter` en su
+El productor no publica JSON (falta `JacksonJsonMessageConverter` en su
 template) o el `__TypeId__` no casa con el record destino. En este proyecto el
 conversor está en `RabbitMqConfig` para template y container factory: verifica
 que ambos usan el mismo bean y que el `<Evento>Message` refleja el payload real

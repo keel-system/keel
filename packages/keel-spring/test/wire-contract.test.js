@@ -33,8 +33,29 @@ const checkout = plan('payment-checkout', { broker: 'rabbitmq', paymentGateway: 
 
 test('decimal-plain + timestamp: Jackson escribe BigDecimal en notación plana y las fechas como texto', () => {
   const yaml = fileNamed(catalog.files, 'src/main/resources/application.yaml').content;
-  assert.match(yaml, /generator:\n\s+write-bigdecimal-as-plain: true/);
-  assert.match(yaml, /write-dates-as-timestamps: false/);
+  // Claves de Jackson 3: el decimal plano es un StreamWriteFeature y la fecha un DateTimeFeature.
+  // Las de Boot 3 (`generator.*`, `serialization.write-dates-as-timestamps`) ya no enlazan en Boot 4.
+  assert.match(yaml, /\n {4}write:\n {6}write-bigdecimal-as-plain: true/);
+  assert.match(yaml, /datatype:\n {6}datetime:\n {8}write-dates-as-timestamps: false/);
+  assert.doesNotMatch(yaml, /generator:|serialization:\n\s+write-dates/);
+});
+
+// Jackson 3 cambió defaults que son cable: un enum por su toString(), el cuerpo con algo detrás del
+// JSON rechazado, un null en un primitivo como error, el orden alfabético de las propiedades… El
+// servidor conserva los de Jackson 2 —los de Boot 3— y la caché, que escribe su propio JSON, también.
+test('el mapper de la aplicación y el de la caché conservan los defaults de Jackson 2', () => {
+  const yaml = fileNamed(catalog.files, 'src/main/resources/application.yaml').content;
+  assert.match(yaml, /jackson:\n {4}use-jackson2-defaults: true/);
+  const config = fileNamed(catalog.files, '/JacksonConfig.java').content;
+  assert.match(config, /JsonMapperBuilderCustomizer/);
+  assert.match(config, /\.addModule\(new TimestampModule\(\)\)/);
+  assert.match(config, /\.enable\(MapperFeature\.DETECT_PARAMETER_NAMES\)/);
+  const cache = fileNamed(catalog.files, '/CacheConfig.java').content;
+  assert.match(cache, /JsonMapper\.builder\(\)\s+\.configureForJackson2\(\)/);
+  assert.match(cache, /\.addModule\(new TimestampModule\(\)\)/);
+  for (const file of catalog.files.filter((entry) => entry.path.endsWith('.java'))) {
+    assert.doesNotMatch(file.content, /com\.fasterxml\.jackson\.(databind|core|datatype)/, file.path);
+  }
 });
 
 test('timestamp-utc-millis: el módulo de instantes fija tres decimales en UTC (appendInstant trunca)', () => {

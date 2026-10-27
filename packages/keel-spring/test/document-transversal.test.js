@@ -275,7 +275,7 @@ test('nada del proyecto documental habla de JPA, Flyway ni H2', () => {
     []
   );
   assert.ok(!/flyway|hibernate-|com\.h2database/.test(read('build.gradle')));
-  assert.ok(read('build.gradle').includes('de.flapdoodle.embed.mongo.spring3x:'));
+  assert.ok(read('build.gradle').includes('de.flapdoodle.embed.mongo.spring4x:'));
 
   // Los artefactos del esquema relacional no existen: aquí el esquema son los índices.
   assert.ok(!exists('infra/export-schema.sh'));
@@ -376,7 +376,7 @@ test('el mongod embebido no entra en el classpath de las pruebas de integración
   assert.ok(gradle.includes("integrationTestImplementation.exclude group: 'de.flapdoodle.embed'"));
   assert.ok(gradle.includes("integrationTestRuntimeOnly.exclude group: 'de.flapdoodle.embed'"));
   // Sigue estando en `test`, que es donde sí es la base del perfil.
-  assert.ok(gradle.includes("testImplementation 'de.flapdoodle.embed:de.flapdoodle.embed.mongo.spring3x:"));
+  assert.ok(gradle.includes("testImplementation 'de.flapdoodle.embed:de.flapdoodle.embed.mongo.spring4x:"));
 });
 
 // La caducidad del reclamo solo existe en la rama documental: ahí el relay marca la

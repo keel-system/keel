@@ -246,11 +246,22 @@ function baseYaml(model) {
   // exponencial por debajo de 1E-6 (0.0000001 sale 1E-7). El contrato del cable lo fija
   // (keel-core/gen/wire.js, regla decimal-plain) porque es lo que tiene que emitir también el
   // servidor de cualquier otro generador del mismo diseño.
+  //
+  // Boot 4 trae Jackson 3, y Jackson 3 cambió defaults que son CABLE: escribe un enum con su
+  // toString(), rechaza un cuerpo con algo detrás del JSON, falla con un null en un primitivo, no
+  // falla con un bean vacío… `use-jackson2-defaults` aplica `MapperBuilder.configureForJackson2()`
+  // y encima los ajustes de siempre de Boot, que es exactamente el mapper de Boot 3. Sin él el mismo
+  // diseño respondería distinto a una misma petición según la versión de Boot, y el servidor dejaría
+  // de ser equivalente al de keel-nest y keel-dotnet. Los nombres de las dos claves de abajo son los
+  // de Jackson 3: la fecha es un DateTimeFeature y el decimal plano un StreamWriteFeature (las
+  // claves de Boot 3, `serialization.write-dates-as-timestamps` y `generator.*`, ya no enlazan).
   lines.push(
     '  jackson:',
-    '    serialization:',
-    '      write-dates-as-timestamps: false',
-    '    generator:',
+    '    use-jackson2-defaults: true',
+    '    datatype:',
+    '      datetime:',
+    '        write-dates-as-timestamps: false',
+    '    write:',
     '      write-bigdecimal-as-plain: true'
   );
   // open-in-view es de JPA: cierra la sesión al salir del servicio para que una
@@ -412,6 +423,21 @@ function telemetryYaml(model, profile) {
         ]
       : []),
     `      probability: ${envFor('TRACING_SAMPLING_PROBABILITY', profile, sampling)}`,
+    // Boot 4 separa el INTERRUPTOR de cada señal (management.<señal>.export.otlp.enabled) de su
+    // DESTINO (management.opentelemetry.<señal>.export.otlp.*). Las claves de Boot 3
+    // (management.otlp.tracing/logging.*) ya no enlazan: el arranque las ignoraría y las trazas
+    // saldrían al default del exportador, que no es el colector.
+    '    export:',
+    '      otlp:',
+    `        enabled: ${exportEnabled}`,
+    // Los logs tienen su PROPIO interruptor y va apagado: el canal primario de los logs es la
+    // consola (JSON fuera de local), que la plataforma recoge —en Kubernetes, el colector con
+    // `filelog`—. Encenderlo aquí además duplicaría cada línea en el backend, y un colector caído
+    // más de lo que aguanta su cola los perdería; los de stdout se quedan en el nodo.
+    '  logging:',
+    '    export:',
+    '      otlp:',
+    '        enabled: ${LOG_EXPORT_OTLP:false}',
     '  opentelemetry:',
     '    resource-attributes:',
     // service.name lo pone Boot desde spring.application.name. Las claves llevan corchetes: con
@@ -423,26 +449,22 @@ function telemetryYaml(model, profile) {
     // HOSTNAME es el nombre del pod o del contenedor en cualquier plataforma de contenedores;
     // SERVICE_INSTANCE_ID lo fija a mano donde no lo sea. En local hay una sola instancia.
     ...(profile === 'local' ? [] : ['      "[service.instance.id]": ${SERVICE_INSTANCE_ID:${HOSTNAME:unknown}}']),
-    '  otlp:',
     '    tracing:',
-    `      endpoint: ${endpoint}/v1/traces`,
-    '      compression: gzip',
     '      export:',
-    `        enabled: ${exportEnabled}`,
-    // Los logs tienen su PROPIO interruptor y va apagado: el canal primario de los logs es la
-    // consola (JSON fuera de local), que la plataforma recoge —en Kubernetes, el colector con
-    // `filelog`—. Encenderlo aquí además duplicaría cada línea en el backend, y un colector caído
-    // más de lo que aguanta su cola los perdería; los de stdout se quedan en el nodo.
+    '        otlp:',
+    `          endpoint: ${endpoint}/v1/traces`,
+    '          compression: gzip',
     '    logging:',
-    `      endpoint: ${endpoint}/v1/logs`,
-    '      compression: gzip',
     '      export:',
-    '        enabled: ${LOG_EXPORT_OTLP:false}',
+    '        otlp:',
+    `          endpoint: ${endpoint}/v1/logs`,
+    '          compression: gzip',
+    '  otlp:',
     // Las métricas NO salen por aquí por defecto: las viene a buscar el colector a
-    // /actuator/prometheus. El motivo es único y es el de los EXEMPLARS —el registro OTLP de
-    // Micrometer no sabe de ellos hasta la 1.17 y Boot 3.5 gestiona la 1.15—, así que el push se
-    // queda como salida para quien no pueda scrapear. Es el simétrico de LOG_EXPORT_OTLP y por la
-    // misma razón: los dos caminos a la vez duplican cada serie en el backend.
+    // /actuator/prometheus. El motivo es el de los EXEMPLARS —el registro OTLP de Micrometer no
+    // sabía de ellos hasta la 1.17, y el camino medido y el que lee el panel es el scrape—, así que
+    // el push se queda como salida para quien no pueda scrapear. Es el simétrico de LOG_EXPORT_OTLP
+    // y por la misma razón: los dos caminos a la vez duplican cada serie en el backend.
     '    metrics:',
     '      export:',
     `        url: ${endpoint}/v1/metrics`,
@@ -550,14 +572,15 @@ function testTelemetryYaml(model) {
   return [
     'management:',
     '  tracing:',
-    '    enabled: false',
+    '    export:',
+    '      enabled: false',
+    '      otlp:',
+    '        enabled: false',
+    '  logging:',
+    '    export:',
+    '      otlp:',
+    '        enabled: false',
     '  otlp:',
-    '    tracing:',
-    '      export:',
-    '        enabled: false',
-    '    logging:',
-    '      export:',
-    '        enabled: false',
     '    metrics:',
     '      export:',
     '        enabled: false',
@@ -782,9 +805,13 @@ function documentDbYaml(db, profile, dbName) {
   return (
     [
       'spring:',
+      // Boot 4 separa la conexión del cliente (spring.mongodb.*) de lo que es de Spring Data
+      // (spring.data.mongodb.*): `spring.data.mongodb.uri` ya no enlaza, y el cliente se
+      // conectaría al default de localhost:27017 sin credenciales.
+      '  mongodb:',
+      `    uri: ${envFor('DB_URL', profile, JAVA_DATABASES[db.id].url(dbName))}`,
       '  data:',
       '    mongodb:',
-      `      uri: ${envFor('DB_URL', profile, JAVA_DATABASES[db.id].url(dbName))}`,
       '      # Los índices los crea MongoIndexConfig, que build deriva entero de',
       '      # persistence.keel.yaml: dejar que Spring los infiera de las anotaciones',
       '      # los crearía con nombres suyos, y el ApiExceptionHandler traduce la',
@@ -833,7 +860,9 @@ function flywayLines(profile) {
  * reentrega en bucle todo mensaje que falle, y con él la DLQ que declara `RabbitTopologyConfig`
  * no recibe nunca nada. Y el reintento, solo si alguna suscripción declara `onFailure.retry`,
  * con los números del diseño (`rabbitListenerRetry`). Lo que no se reintenta —el rechazo de
- * negocio— lo marca el customizer de `RabbitTopologyConfig`, que lee de aquí `max-attempts`.
+ * negocio— lo marca el customizer de `RabbitTopologyConfig`. Boot 4 cuenta REINTENTOS
+ * (`max-retries`) y no intentos: los `maxAttempts` del diseño son entregas totales, así que 5 → 4,
+ * la misma cuenta que el BackOff de Kafka.
  * `prefetch` y la concurrencia no están: son tuning y los decide el agente.
  */
 function rabbitListenerLines(model) {
@@ -846,7 +875,7 @@ function rabbitListenerLines(model) {
     '        # listener dentro de la misma entrega; agotado, se rechaza sin reencolar (-> DLQ).',
     '        retry:',
     '          enabled: true',
-    `          max-attempts: ${retry.attempts}`,
+    `          max-retries: ${retry.attempts - 1}`,
     `          initial-interval: ${retry.initialMs}ms`,
     `          multiplier: ${retry.multiplier.toFixed(1)}`
   );
@@ -1634,9 +1663,10 @@ function testDbYaml(model) {
     return (
       [
         'spring:',
+        '  mongodb:',
+        '    database: testdb',
         '  data:',
         '    mongodb:',
-        '      database: testdb',
         '      auto-index-creation: false',
         'de:',
         '  flapdoodle:',

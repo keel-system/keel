@@ -173,9 +173,9 @@ function renderRedisOperationCache(model, caches) {
   const imports = new Set([
     `${subPackage(model, OPERATION_CACHE_PKG)}.OperationCache`,
     `${subPackage(model, CACHED_OPERATIONS_PKG)}.CachedOperations`,
-    'com.fasterxml.jackson.core.type.TypeReference',
-    'com.fasterxml.jackson.databind.JavaType',
-    'com.fasterxml.jackson.databind.ObjectMapper',
+    'tools.jackson.core.type.TypeReference',
+    'tools.jackson.databind.JavaType',
+    'tools.jackson.databind.ObjectMapper',
     'java.util.Map',
     'java.util.concurrent.ConcurrentHashMap',
     'java.util.concurrent.locks.ReentrantLock',
@@ -345,12 +345,11 @@ function imports(model) {
   return [
     timestampModuleImport(model),
     'com.fasterxml.jackson.annotation.JsonAutoDetect',
-    'com.fasterxml.jackson.annotation.JsonCreator',
     'com.fasterxml.jackson.annotation.PropertyAccessor',
-    'com.fasterxml.jackson.databind.ObjectMapper',
-    'com.fasterxml.jackson.databind.SerializationFeature',
-    'com.fasterxml.jackson.datatype.jsr310.JavaTimeModule',
-    'com.fasterxml.jackson.module.paramnames.ParameterNamesModule',
+    'tools.jackson.databind.MapperFeature',
+    'tools.jackson.databind.cfg.ConstructorDetector',
+    'tools.jackson.databind.cfg.DateTimeFeature',
+    'tools.jackson.databind.json.JsonMapper',
     'java.time.Duration',
     'java.util.LinkedHashMap',
     'java.util.Map',
@@ -364,8 +363,9 @@ function imports(model) {
     'org.springframework.context.annotation.Configuration',
     'org.springframework.data.redis.cache.RedisCacheConfiguration',
     'org.springframework.data.redis.cache.RedisCacheManager',
+    'org.springframework.data.redis.cache.RedisCacheWriter',
     'org.springframework.data.redis.connection.RedisConnectionFactory',
-    'org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer',
+    'org.springframework.data.redis.serializer.GenericJacksonJsonRedisSerializer',
     'org.springframework.data.redis.serializer.RedisSerializationContext',
     'org.springframework.data.redis.serializer.StringRedisSerializer'
   ];
@@ -435,12 +435,13 @@ ${constants}
                 .serializeKeysWith(RedisSerializationContext.SerializationPair.fromSerializer(
                         new StringRedisSerializer()))
                 .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(
-                        GenericJackson2JsonRedisSerializer.builder()
-                                .objectMapper(cacheObjectMapper())
+                        GenericJacksonJsonRedisSerializer.builder(CacheConfig::cacheMapperBuilder)
                                 // Deja que el serializador instale su propia información
                                 // de tipo: sin ella la lectura devolvería un LinkedHashMap
-                                // en vez del agregado (o del record) que se cacheó.
-                                .defaultTyping(true)
+                                // en vez del agregado (o del record) que se cacheó. Es el
+                                // mismo tipado sin validador que defaultTyping(true) del
+                                // serializador de Jackson 2.
+                                .enableUnsafeDefaultTyping()
                                 .build()));
 
         Map<String, RedisCacheConfiguration> configurations = new LinkedHashMap<>();
@@ -449,15 +450,20 @@ ${constants}
         }
 
         return RedisCacheManager.builder(connectionFactory)
+                // Escrituras INMEDIATAS: con Lettuce, Spring Data Redis 4 puede escribir en la caché
+                // de forma asíncrona, y entonces un put no está en Redis cuando vuelve — la lectura
+                // que va detrás falla y la caché acierta menos sin que nada lo diga. En Boot 3 el put
+                // era síncrono; esto lo mantiene (lo mide TEL-8 de telemetry-check).
+                .cacheWriter(RedisCacheWriter.create(connectionFactory, writer -> writer.immediateWrites()))
                 .cacheDefaults(defaults)
                 .withInitialCacheConfigurations(configurations)${statisticsLine(model)}
                 .build();
     }
 
     /**
-     * ObjectMapper propio de la caché: JSR-310 registrado (Instant, LocalDate…)
-     * y fechas en ISO-8601. Sin este módulo, cachear cualquier respuesta con un
-     * timestamp de auditoría falla al serializar.
+     * Mapper propio de la caché: java.time (en Jackson 3 viene de serie) y fechas
+     * en ISO-8601, sobre los defaults de Jackson 2 —los mismos que el mapper de la
+     * aplicación, por {@code spring.jackson.use-jackson2-defaults}—.
      *
      * <p>TimestampModule es el mismo que instala JacksonConfig en el mapper de la
      * aplicación: un valor servido desde la caché tiene que ser byte a byte el
@@ -475,25 +481,28 @@ ${constants}
      *       anterior también apaga la detección del constructor, y sin ella
      *       Jackson no encuentra por dónde reconstruir el agregado.</li>
      * </ol>
-     * ParameterNamesModule cierra el círculo: reconoce el constructor de
-     * reconstrucción como creator usando los nombres reales de los parámetros
-     * (el plugin de Spring Boot ya compila con <code>-parameters</code>).
+     * DETECT_PARAMETER_NAMES y el detector de constructores PROPERTIES cierran el
+     * círculo —en Jackson 2 era el ParameterNamesModule en modo PROPERTIES—:
+     * reconocen el constructor de reconstrucción como creator usando los nombres
+     * reales de los parámetros (el plugin de Spring Boot ya compila con
+     * <code>-parameters</code>).
      *
      * <p>Sin esto la caché <b>no falla</b>: el CacheErrorHandler de abajo degrada
      * el error de (de)serialización a un miss y el servicio sirve siempre desde la
      * base de datos. Es decir, una caché que no cachea nada, indistinguible de una
      * sana en cualquier escenario que solo compruebe que los cambios se reflejan.
      */
-    private static ObjectMapper cacheObjectMapper() {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new JavaTimeModule());
-        mapper.registerModule(new TimestampModule());
-        mapper.registerModule(new ParameterNamesModule(JsonCreator.Mode.PROPERTIES));
-        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mapper.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.NONE);
-        mapper.setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY);
-        mapper.setVisibility(PropertyAccessor.CREATOR, JsonAutoDetect.Visibility.ANY);
-        return mapper;
+    private static JsonMapper.Builder cacheMapperBuilder() {
+        return JsonMapper.builder()
+                .configureForJackson2()
+                .disable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)
+                .addModule(new TimestampModule())
+                .enable(MapperFeature.DETECT_PARAMETER_NAMES)
+                .constructorDetector(ConstructorDetector.USE_PROPERTIES_BASED)
+                .changeDefaultVisibility(visibility -> visibility
+                        .withVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.NONE)
+                        .withVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY)
+                        .withVisibility(PropertyAccessor.CREATOR, JsonAutoDetect.Visibility.ANY));
     }
 
     private static Map<String, Duration> ttlByCache() {
@@ -510,7 +519,7 @@ ${ttlEntries}
      * (de)serialización del valor, que no es indisponibilidad. Si un escenario de
      * retención falla —el valor viejo no sobrevive dentro del TTL— y no hay ningún
      * error en la respuesta, el WARN de estos métodos es la única evidencia: revisa
-     * {@link #cacheObjectMapper()} antes que la infraestructura.
+     * {@link #cacheMapperBuilder()} antes que la infraestructura.
      */
     @Override
     @Bean

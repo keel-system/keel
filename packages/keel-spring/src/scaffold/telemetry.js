@@ -116,7 +116,7 @@ function renderConfig(model) {
     'org.springframework.core.env.Environment'
   ]);
   if (document) {
-    imports.add('org.springframework.boot.autoconfigure.mongo.MongoClientSettingsBuilderCustomizer');
+    imports.add('org.springframework.boot.mongodb.autoconfigure.MongoClientSettingsBuilderCustomizer');
     imports.add('org.springframework.data.mongodb.observability.ContextProviderFactory');
     imports.add('org.springframework.data.mongodb.observability.MongoObservationCommandListener');
     imports.add('io.micrometer.observation.ObservationRegistry');
@@ -207,7 +207,7 @@ public class TelemetryConfig {
      * que el appender ni se cuelga del logger raíz si no se va a usar.
      */
     @Bean
-    @ConditionalOnProperty(name = "management.otlp.logging.export.enabled", havingValue = "true")
+    @ConditionalOnProperty(name = "management.logging.export.otlp.enabled", havingValue = "true")
     public InitializingBean openTelemetryLogAppender(ObjectProvider<OpenTelemetry> openTelemetryProvider) {
         return () -> {
             OpenTelemetry openTelemetry = openTelemetryProvider.getIfAvailable();
@@ -492,7 +492,7 @@ public class CacheObservationConfig {
         'io.micrometer.observation.ObservationRegistry',
         'org.springframework.beans.factory.ObjectProvider',
         'org.springframework.boot.autoconfigure.condition.ConditionalOnProperty',
-        'org.springframework.boot.autoconfigure.data.redis.ClientResourcesBuilderCustomizer',
+        'org.springframework.boot.data.redis.autoconfigure.ClientResourcesBuilderCustomizer',
         'org.springframework.context.annotation.Bean',
         'org.springframework.context.annotation.Configuration'
       ],
@@ -529,7 +529,7 @@ public final class MessageTracing {
     /** Observación del consumo de un mensaje con envoltura keel. */
     public static final String MESSAGE_CONSUME = "${OBSERVATIONS.messageConsume}";
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final JsonMapper JSON = JsonMapper.builder().configureForJackson2().build();
 
     private static volatile Tracer tracer;
     private static volatile Propagator propagator;
@@ -571,8 +571,8 @@ public final class MessageTracing {
         }
         try {
             JsonNode value = JSON.readTree(envelopeJson).path("metadata").path(TRACEPARENT);
-            return value.isTextual() ? value.asText() : null;
-        } catch (JsonProcessingException ex) {
+            return value.isString() ? value.asString() : null;
+        } catch (JacksonException ex) {
             return null;
         }
     }
@@ -616,9 +616,9 @@ public final class MessageTracing {
     content: javaFile(
       subPackage(model, TELEMETRY_PKG),
       [
-        'com.fasterxml.jackson.core.JsonProcessingException',
-        'com.fasterxml.jackson.databind.JsonNode',
-        'com.fasterxml.jackson.databind.ObjectMapper',
+        'tools.jackson.core.JacksonException',
+        'tools.jackson.databind.JsonNode',
+        'tools.jackson.databind.json.JsonMapper',
         'io.micrometer.observation.Observation',
         'io.micrometer.observation.ObservationRegistry',
         'io.micrometer.observation.transport.Kind',

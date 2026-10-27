@@ -6,8 +6,11 @@
 // lo que cambia si el servidor no es Spring: las claves son los mismos `id` del catálogo, y
 // `test/stack.test.js` comprueba que no sobra ni falta ninguna.
 
-// Motor de migraciones (común a los seis dialectos relacionales) + su módulo por motor.
-const FLYWAY_CORE = "implementation 'org.flywaydb:flyway-core'";
+// Motor de migraciones (común a los seis dialectos relacionales) + su módulo por motor. En Boot 4
+// la autoconfiguración de Flyway es un módulo propio: con `flyway-core` a secas en el classpath
+// Flyway NO se ejecuta, y el esquema de develop/production se quedaría sin migrar en silencio. El
+// starter trae los dos.
+const FLYWAY_CORE = "implementation 'org.springframework.boot:spring-boot-starter-flyway'";
 
 // gradleDependencies     dependencias del starter/driver de la opción.
 // flywayDependencies     (solo BD relacional) módulo Flyway del motor (Flyway 10+ saca cada
@@ -67,8 +70,10 @@ export const JAVA_DATABASES = {
 
 export const JAVA_BROKERS = {
   kafka: {
+    // En Boot 4 la autoconfiguración de Kafka (KafkaTemplate, el container factory, spring.kafka.*)
+    // es el módulo `spring-boot-kafka`: `spring-kafka` a secas compila pero no autoconfigura nada.
     gradleDependencies: [
-      "implementation 'org.springframework.kafka:spring-kafka'",
+      "implementation 'org.springframework.boot:spring-boot-starter-kafka'",
       "testImplementation 'org.springframework.kafka:spring-kafka-test'"
     ]
   },
@@ -76,9 +81,10 @@ export const JAVA_BROKERS = {
     gradleDependencies: ["implementation 'org.springframework.boot:spring-boot-starter-amqp'"]
   },
   snssqs: {
-    // BOM de Spring Cloud AWS + starters SNS y SQS (mismo SDK contra LocalStack y AWS real).
+    // BOM de Spring Cloud AWS + starters SNS y SQS (mismo SDK contra LocalStack y AWS real). La
+    // línea 4.x es la de Boot 4.
     gradleDependencies: [
-      "implementation platform('io.awspring.cloud:spring-cloud-aws-dependencies:3.3.0')",
+      "implementation platform('io.awspring.cloud:spring-cloud-aws-dependencies:4.2.1')",
       "implementation 'io.awspring.cloud:spring-cloud-aws-starter-sns'",
       "implementation 'io.awspring.cloud:spring-cloud-aws-starter-sqs'"
     ]

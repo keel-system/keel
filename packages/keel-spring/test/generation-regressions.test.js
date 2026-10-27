@@ -235,12 +235,16 @@ test('errores: un code con http distinto por operación recibe el status por con
   assert.ok(single.includes('"PRODUCT_NOT_FOUND", 404'));
 });
 
-test('caché: CacheConfig con JavaTimeModule, TTL del diseño y constante por caché', () => {
+test('caché: CacheConfig con fechas ISO, TTL del diseño y constante por caché', () => {
   const { read } = scaffoldExtended();
   const config = read(`${JAVA}/infrastructure/configurations/cache/CacheConfig.java`);
 
-  assert.ok(config.includes('registerModule(new JavaTimeModule())'));
-  assert.ok(config.includes('SerializationFeature.WRITE_DATES_AS_TIMESTAMPS'));
+  // Jackson 3 trae java.time de serie: lo que queda por fijar es que la fecha no salga como número
+  // (configureForJackson2 la vuelve a encender) y el serializador de Jackson 3 de Spring Data Redis.
+  assert.ok(config.includes('.disable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)'));
+  assert.ok(config.includes('GenericJacksonJsonRedisSerializer.builder(CacheConfig::cacheMapperBuilder)'));
+  // Spring Data Redis 4 puede escribir asíncrono: sin esto un put no está en Redis al volver (TEL-8).
+  assert.ok(config.includes('.cacheWriter(RedisCacheWriter.create(connectionFactory, writer -> writer.immediateWrites()))'));
   assert.ok(config.includes('GET_PRODUCT_BY_SLUG_CACHE = "catalog:get-product-by-slug"'));
   assert.ok(config.includes('Duration.ofSeconds(300)'));
   assert.ok(config.includes('disableCachingNullValues()'));
@@ -596,10 +600,13 @@ test('el ObjectMapper de la caché sabe reconstruir agregados sin setters', () =
   // Las tres piezas son necesarias y ninguna se deduce de la anterior. Sin
   // ellas la caché no falla: el CacheErrorHandler degrada a miss silencioso y
   // nunca retiene nada.
-  assert.ok(cache.includes('mapper.setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY)'));
-  assert.ok(cache.includes('mapper.setVisibility(PropertyAccessor.CREATOR, JsonAutoDetect.Visibility.ANY)'));
-  assert.ok(cache.includes('new ParameterNamesModule(JsonCreator.Mode.PROPERTIES)'));
-  assert.ok(cache.includes('import com.fasterxml.jackson.module.paramnames.ParameterNamesModule;'));
+  assert.ok(cache.includes('.withVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.NONE)'));
+  assert.ok(cache.includes('.withVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY)'));
+  assert.ok(cache.includes('.withVisibility(PropertyAccessor.CREATOR, JsonAutoDetect.Visibility.ANY)'));
+  // El ParameterNamesModule(PROPERTIES) de Jackson 2 es, en Jackson 3, la detección de nombres de
+  // parámetro más el detector de constructores por propiedades.
+  assert.ok(cache.includes('.enable(MapperFeature.DETECT_PARAMETER_NAMES)'));
+  assert.ok(cache.includes('.constructorDetector(ConstructorDetector.USE_PROPERTIES_BASED)'));
 });
 
 test('la violación de unicidad usa el error declarado del diseño cuando lo hay', () => {
@@ -758,7 +765,8 @@ test('C3: PATCH parcial con tri-estado JsonNullable (ausente ≠ null explícito
   assert.ok(!/@NotNull\s+JsonNullable</.test(command), command);
   assert.ok(command.includes('JsonNullable<@NotNull UUID> categoryId'));
   assert.ok(buildGradle.includes('org.openapitools:jackson-databind-nullable'));
-  assert.ok(webConfig.includes('public JsonNullableModule jsonNullableModule()'));
+  // El módulo de Jackson 3: el de Jackson 2 Boot 4 no lo registra en su mapper.
+  assert.ok(webConfig.includes('public JsonNullableJackson3Module jsonNullableModule()'));
   // Y el value extractor, que es lo que permite a Bean Validation desenvolver el
   // contenedor para aplicar la constraint de dentro.
   const extractor = read('src/main/resources/META-INF/services/jakarta.validation.valueextraction.ValueExtractor');
@@ -924,13 +932,13 @@ test('R5b: los instantes salen con precisión de milisegundos, no de plataforma'
   assert.ok(module.includes('addSerializer(Instant.class'));
   assert.ok(
     read(`${JAVA}/infrastructure/serialization/JacksonConfig.java`).includes(
-      'modulesToInstall(TimestampModule.class)'
+      '.addModule(new TimestampModule())'
     )
   );
   // La caché sirve el mismo byte que serviría la base de datos.
   assert.ok(
     read(`${JAVA}/infrastructure/configurations/cache/CacheConfig.java`).includes(
-      'registerModule(new TimestampModule())'
+      '.addModule(new TimestampModule())'
     )
   );
 });
@@ -2476,7 +2484,8 @@ test('Kafka: el NOT_FOUND se reintenta solo en el topic de la suscripción con g
 test('RabbitMQ: la política decide el NOT_FOUND por cola antes que la tabla, vaya envuelto o no', () => {
   const config = scaffoldCatalogWith('rabbitmq')(`${JAVA}/infrastructure/messaging/RabbitTopologyConfig.java`);
   assert.ok(config.includes('private static final Set<String> RETRIES_NOT_FOUND = Set.of("catalog.compliance");'), config);
-  assert.ok(config.includes('if (last != null && isMissingTarget(last)) {'), config);
+  // El «no existe» se decide ANTES que la tabla de rechazos de negocio.
+  assert.ok(/static boolean isRetryable\(Throwable failure\) \{\s+if \(isMissingTarget\(failure\)\) \{\s+String queue = consumerQueue\(failure\);/.test(config), config);
   assert.ok(config.includes('queue != null && RETRIES_NOT_FOUND.contains(queue)'), config);
   assert.ok(config.includes('getMessageProperties().getConsumerQueue()'), config);
 });

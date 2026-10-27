@@ -506,7 +506,7 @@ const PARAMETER_PATTERNS = [
 
 function purposeOf(name, fragment, model) {
   // La misma variable dice cosas distintas según el modelo: en documental DB_URL es la URI de
-  // Mongo (config.js la emite como `spring.data.mongodb.uri`), no una URL JDBC.
+  // Mongo (config.js la emite como `spring.mongodb.uri`), no una URL JDBC.
   if (name === 'DB_URL' && model?.persistenceKind === 'document') {
     return 'URI de conexión de MongoDB (`mongodb://…`, con credenciales y base incluidas).';
   }

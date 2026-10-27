@@ -752,17 +752,17 @@ function personaTokenSection(model) {
     /** User Profile del realm: email y nombre opcionales, y atributos no declarados admitidos. */
     private static void preparePersonaRealm(String admin) {
         try {
-            com.fasterxml.jackson.databind.node.ObjectNode profile = (com.fasterxml.jackson.databind.node.ObjectNode)
+            tools.jackson.databind.node.ObjectNode profile = (tools.jackson.databind.node.ObjectNode)
                 JSON.readTree(personaAdmin(admin, "GET", "/users/profile", null));
-            for (com.fasterxml.jackson.databind.JsonNode attribute : profile.path("attributes")) {
-                String name = attribute.path("name").asText();
+            for (tools.jackson.databind.JsonNode attribute : profile.path("attributes")) {
+                String name = attribute.path("name").asString();
                 if (List.of("email", "firstName", "lastName").contains(name)) {
-                    ((com.fasterxml.jackson.databind.node.ObjectNode) attribute).remove("required");
+                    ((tools.jackson.databind.node.ObjectNode) attribute).remove("required");
                 }
             }
             profile.put("unmanagedAttributePolicy", "ENABLED");
             personaAdmin(admin, "PUT", "/users/profile", profile.toString());
-        } catch (IOException e) {
+        } catch (tools.jackson.core.JacksonException e) {
             throw new IllegalStateException("No se pudo leer el User Profile del realm", e);
         }
     }
@@ -871,8 +871,8 @@ function scopedTokenSection(model) {
         List<String> stored = new java.util.ArrayList<>();
         try {
             JSON.readTree(personaAdmin(admin, "GET", "/users/" + id, null))
-                .path("attributes").path("${claim}").forEach(value -> stored.add(value.asText()));
-        } catch (IOException e) {
+                .path("attributes").path("${claim}").forEach(value -> stored.add(value.asString()));
+        } catch (tools.jackson.core.JacksonException e) {
             throw new IllegalStateException("No se pudo leer el usuario del alcance " + username, e);
         }
         if (!new java.util.HashSet<>(stored).equals(new java.util.HashSet<>(values))) {
@@ -1016,7 +1016,8 @@ function abstractImports(model) {
     'org.junit.jupiter.api.extension.ExtendWith',
     'org.springframework.beans.factory.annotation.Autowired',
     'org.springframework.boot.test.context.SpringBootTest',
-    'org.springframework.boot.test.web.client.TestRestTemplate',
+    'org.springframework.boot.resttestclient.TestRestTemplate',
+    'org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate',
     'org.springframework.http.HttpEntity',
     'org.springframework.http.HttpHeaders',
     'org.springframework.http.HttpMethod',
@@ -1027,7 +1028,7 @@ function abstractImports(model) {
     'com.jayway.jsonpath.JsonPath',
     // Re-serialización de los nodos que extrae JsonPath (`toJson`). No depende del
     // stack: cualquier flujo que compare un fragmento de JSON lo necesita.
-    'com.fasterxml.jackson.databind.ObjectMapper',
+    'tools.jackson.databind.json.JsonMapper',
     'org.skyscreamer.jsonassert.JSONAssert',
     'org.skyscreamer.jsonassert.JSONCompareMode'
   ];
@@ -1068,7 +1069,7 @@ function abstractImports(model) {
   // lista que se devuelve es la que el escenario recorre) y el ObjectMapper para volver a
   // serializar cada mensaje ya deduplicado.
   if (broker?.id === 'snssqs') {
-    imports.push('com.fasterxml.jackson.core.JsonProcessingException', 'java.util.LinkedHashSet', 'java.util.Set');
+    imports.push('tools.jackson.core.JacksonException', 'java.util.LinkedHashSet', 'java.util.Set');
   }
   // La espera al drenaje del outbox declara su propio Set de canales publicados, y se
   // emite con los tres brokers (a diferencia del de arriba, que es solo de Kafka).
@@ -1316,6 +1317,8 @@ function abstractBody(model) {
  * equivalencia entre stacks.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// Boot 4 ya no registra el TestRestTemplate por estar en un @SpringBootTest: se pide.
+@AutoConfigureTestRestTemplate
 @ActiveProfiles("local")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -1325,8 +1328,12 @@ ${layersPresent.api ? `
     /** Prefijo de todas las rutas del servicio (basePath del diseño + versión). */
     protected static final String ROUTE_BASE = "${model.api.routeBase}";
 ` : ''}
-    /** Re-serializa a JSON los nodos que devuelve JsonPath. Ver {@link #toJson}. */
-    private static final ObjectMapper JSON = new ObjectMapper();
+    /**
+     * Re-serializa a JSON los nodos que devuelve JsonPath. Ver {@link #toJson}. Con los defaults
+     * de Jackson 2, los mismos que el mapper del servidor, para que el arnés lea y escriba el
+     * JSON como lo hacía antes de Jackson 3.
+     */
+    private static final JsonMapper JSON = JsonMapper.builder().configureForJackson2().build();
 
     @Autowired
     protected TestRestTemplate rest;
@@ -4407,8 +4414,8 @@ function deadLetteredOutboxSection(model) {
         try {
             return JSON.readTree(response.body()).path("measurements").get(0).path("value").asLong();
         } catch (Exception e) {
-            // Exception y no RuntimeException: readTree declara JsonProcessingException, que es
-            // COMPROBADA. Es de los errores que ni comparar cadenas ni java-syntax ven — solo javac.
+            // Exception y no solo JacksonException: el get(0) de un array vacío es un null y el
+            // path() siguiente un NullPointerException, que también es «respuesta inesperada».
             throw new IllegalStateException("Respuesta inesperada del actuator: " + response.body(), e);
         }
     }
@@ -5337,7 +5344,7 @@ ${physicalDestinationSection(model)}${doc}
         }
         try {
             target.append(JSON.writeValueAsString(message));
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new IllegalStateException("No se pudo re-serializar un mensaje de SQS", e);
         }
     }
@@ -6431,7 +6438,7 @@ function failureCaptureImports() {
     'org.junit.jupiter.api.extension.LifecycleMethodExecutionExceptionHandler',
     'org.junit.jupiter.api.extension.TestWatcher',
     'org.springframework.http.HttpHeaders',
-    'com.fasterxml.jackson.databind.ObjectMapper'
+    'tools.jackson.databind.json.JsonMapper'
   ];
 }
 
@@ -6449,7 +6456,7 @@ function failureCaptureBody() {
 public class FailureCapture implements TestWatcher, LifecycleMethodExecutionExceptionHandler {
 
     private static final Path OUTPUT = Path.of("build", "keel-failures");
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final JsonMapper JSON = JsonMapper.builder().configureForJackson2().build();
     private static final ThreadLocal<Map<String, Object>> LAST = new ThreadLocal<>();
     private static final ThreadLocal<Map<String, Object>> LAST_PROBE = new ThreadLocal<>();
     // Respaldo compartido: la última evidencia venga del hilo que venga.

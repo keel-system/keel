@@ -100,7 +100,7 @@ rastro es una línea de log que nadie está mirando. Lánzalo como no reintentab
 un JSON roto da el mismo JSON roto— y llegará al DLT en el primer intento:
 
 ```java
-} catch (JsonProcessingException malformed) {
+} catch (JacksonException malformed) {   // tools.jackson.core.JacksonException
     throw new IllegalArgumentException("<Evento>: cuerpo no parseable", malformed);
 }
 ```

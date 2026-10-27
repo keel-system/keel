@@ -46,10 +46,10 @@ para que sepas por qué es así y no lo «mejores» a mano:
 - Los TTL por caché salen del **diseño** (`cache.ttlSeconds` de cada operación)
   y se fijan en el `RedisCacheConfiguration` de cada caché — no inventes TTLs ni
   los pongas en YAML desconectados del diseño.
-- Serialización de valores: `GenericJackson2JsonRedisSerializer` con un
-  `ObjectMapper` que registra `JavaTimeModule` y desactiva
-  `WRITE_DATES_AS_TIMESTAMPS`. Sin ese módulo, cachear cualquier DTO con
-  `Instant`/`LocalDate` falla en runtime. El default JDK, además, acopla los
+- Serialización de valores: `GenericJacksonJsonRedisSerializer` (Jackson 3) con
+  un `JsonMapper` de defaults de Jackson 2, el `TimestampModule` y
+  `WRITE_DATES_AS_TIMESTAMPS` desactivado. Sin eso, un `Instant` sale como número
+  y deja de casar con lo que sirve la API. El default JDK, además, acopla los
   bytes a la clase Java: un refactor invalida la caché entera o revienta al leer.
 - Claves siempre `StringRedisSerializer` con prefijo del servicio
   (`<servicio>:...`): inspeccionables con `redis-cli`, borrables de una pasada

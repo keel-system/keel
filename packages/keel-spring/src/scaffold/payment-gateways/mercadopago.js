@@ -96,7 +96,7 @@ function renderAdapter(model, ctx) {
             }
             JsonNode transaction = current.path("transactions").path("payments").path(0);
             ObjectNode partial = body.putArray("transactions").addObject();
-            partial.put("id", transaction.path("id").asText());
+            partial.put("id", transaction.path("id").asString());
             partial.put("amount", MoneyAmounts.toMajorUnits(amount, currency));
         }`
       : '';
@@ -144,7 +144,7 @@ function renderAdapter(model, ctx) {
                     .body(customerBody.toString())
                     .retrieve()
                     .body(String.class));
-            String customerId = customer.path("id").asText();
+            String customerId = customer.path("id").asString();
             ObjectNode cardBody = mapper.createObjectNode();
             cardBody.put("token", token);
             JsonNode card = json(http.post().uri("/v1/customers/{id}/cards", customerId)
@@ -153,7 +153,7 @@ function renderAdapter(model, ctx) {
                     .body(cardBody.toString())
                     .retrieve()
                     .body(String.class));
-            return customerId + "|" + card.path("id").asText();
+            return customerId + "|" + card.path("id").asString();
         } catch (RestClientResponseException rejected) {
             if (rejected.getStatusCode().is5xxServerError()) {
                 throw unavailable("savePaymentMethod", rejected);
@@ -256,15 +256,15 @@ ${methods.join('\n\n')}
     // ─── Traducción ──────────────────────────────────────────────────────────
 
     private GatewayOutcome outcomeOf(JsonNode order, String reference) {
-        String id = order.path("id").asText(null);
-        String ref = order.path("${TRANSLATION.referenceKey}").asText(reference);
+        String id = order.path("id").asString(null);
+        String ref = order.path("${TRANSLATION.referenceKey}").asString(reference);
         JsonNode payment = order.path("transactions").path("payments").path(0);
-        String detail = order.path("status_detail").asText(payment.path("status_detail").asText(""));
-        String status = order.path("status").asText("");
+        String detail = order.path("status_detail").asString(payment.path("status_detail").asString(""));
+        String status = order.path("status").asString("");
         if (status.equals("refunded") || detail.equals("refunded") || detail.equals("partially_refunded")) {
             BigDecimal refunded = BigDecimal.ZERO;
             for (JsonNode refund : order.path("transactions").path("refunds")) {
-                refunded = refunded.add(new BigDecimal(refund.path("amount").asText("0")));
+                refunded = refunded.add(new BigDecimal(refund.path("amount").asString("0")));
             }
             return GatewayOutcome.refunded(ref, id, refunded);
         }
@@ -285,7 +285,7 @@ ${methods.join('\n\n')}
     }
 
     private ${F} reasonOf(JsonNode node) {
-        String detail = node.path("status_detail").asText(node.path("cause").path(0).path("code").asText(""));
+        String detail = node.path("status_detail").asString(node.path("cause").path(0).path("code").asString(""));
         return switch (detail) {
 ${detailCases}
             default -> ${F}.${ctx.failureConstant('declined')};
@@ -295,7 +295,7 @@ ${detailCases}
     private JsonNode json(String body) {
         try {
             return mapper.readTree(body == null || body.isBlank() ? "{}" : body);
-        } catch (JsonProcessingException unreadable) {
+        } catch (JacksonException unreadable) {
             throw new IllegalStateException("MercadoPago devolvió un cuerpo que no es JSON", unreadable);
         }
     }
@@ -314,10 +314,10 @@ ${detailCases}
     `${ctx.portPkg}.PaymentGateway`,
     `${ctx.infraPkg}.MoneyAmounts`,
     `${ctx.infraPkg}.PaymentGatewayProperties`,
-    'com.fasterxml.jackson.core.JsonProcessingException',
-    'com.fasterxml.jackson.databind.JsonNode',
-    'com.fasterxml.jackson.databind.ObjectMapper',
-    'com.fasterxml.jackson.databind.node.ObjectNode',
+    'tools.jackson.core.JacksonException',
+    'tools.jackson.databind.JsonNode',
+    'tools.jackson.databind.ObjectMapper',
+    'tools.jackson.databind.node.ObjectNode',
     'java.math.BigDecimal',
     'org.springframework.http.HttpHeaders',
     'org.springframework.http.MediaType',
