@@ -1,8 +1,8 @@
 // La guía de observabilidad vive en DOS sitios y tiene UNA fuente: el payload
 // (assets/generators/spring/observabilidad.md), que build instala en el proyecto generado, y la
-// copia de la raíz del repo, que es la que se lee desde GitHub.
+// copia de guides/ en el repo, que es la que se lee desde GitHub.
 //
-// Este test existe por lo que le pasa a toda copia: envejece. La de la raíz no la genera nadie al
+// Este test existe por lo que le pasa a toda copia: envejece. La de guides/ no la genera nadie al
 // vuelo, así que sin esto el día que alguien corrija la fuente —o al revés— las dos versiones
 // dirían cosas distintas sobre el mismo colector, y la equivocada sería justo la que se lee
 // primero. Comparar byte a byte es lo único que no admite interpretación.
@@ -22,17 +22,17 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.join(here, '..');
 const repoRoot = path.join(packageRoot, '..', '..');
 const GUIDE = 'observabilidad.md';
-const ROOT_COPY = 'OBSERVABILIDAD.md';
+const ROOT_COPY = path.join('guides', 'OBSERVABILIDAD.md');
 
-test('la guía de observabilidad: la copia de la raíz del repo es la fuente, byte a byte', () => {
+test('la guía de observabilidad: la copia de guides/ es la fuente, byte a byte', () => {
   const source = path.join(packageRoot, 'assets', 'generators', 'spring', GUIDE);
   const copy = path.join(repoRoot, ROOT_COPY);
   assert.ok(fs.existsSync(source), `falta la fuente ${GUIDE}`);
-  assert.ok(fs.existsSync(copy), `falta ${ROOT_COPY} en la raíz del repo`);
+  assert.ok(fs.existsSync(copy), `falta ${ROOT_COPY} en el repo`);
   assert.equal(
     fs.readFileSync(copy, 'utf8'),
     fs.readFileSync(source, 'utf8'),
-    `${ROOT_COPY} y assets/generators/spring/${GUIDE} han divergido: copia la fuente sobre la raíz`
+    `${ROOT_COPY} y assets/generators/spring/${GUIDE} han divergido: copia la fuente sobre guides/`
   );
   assert.deepEqual(TELEMETRY_GUIDES, [GUIDE]);
 });

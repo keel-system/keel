@@ -24,6 +24,7 @@ Un archivo `<AAAA-MM-DD>-<servicio>[-<variante>].md`. Empieza con una tabla de d
 | `Diseño` | servicio, versión, DSL, modelo, capas | `` `notification-mailer` v1.0.0 (DSL 2.15, relacional, 7 capas) `` |
 | `Stack` | lo que eligió el diseñador | `mysql · rabbitmq · keycloak` |
 | `Generador` | versión del paquete | `` `keel-spring@0.1.5` `` |
+| `Modelo del agente` | el modelo de lenguaje del pipeline de generación (orquestador y subagentes). Opcional: las corridas anteriores al 2026-10-27 no lo anotaron, y las que se comprobaron en las transcripciones eran Sonnet | `` `claude-haiku-5-5` `` |
 | `Diseño listo al generar` | `sí`, `no, con --accept-unready (<ids que faltaban>)`, o `anterior a la puerta` para las corridas anteriores al paso 10 | `sí` |
 | `Matriz final` | escenarios OK sobre el total | `**42/42 OK**` |
 | `Huella del agente` | la fila que imprime `footprint`, tal cual | `413 archivos registrados por build, 0 adoptados, **53 reescritos**, 0 borrados` |

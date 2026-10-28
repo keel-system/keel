@@ -70,9 +70,9 @@ de los dos).
 | **Completar y validar** el proyecto generado (`/keel-generate-<tech>`) | El toolchain de la tecnología —**JDK 21** para keel-spring, **Node.js >= 22.12** para keel-nest, **SDK de .NET 10** para keel-dotnet— y un **runtime de contenedores: Docker o Podman**. |
 | **Recuperar** un legacy (`keel-recover`) | Node.js >= 18, Docker o Podman en marcha y el repo git del legacy. En Windows, Git Bash con `export MSYS_NO_PATHCONV=1`. |
 
-El runtime de contenedores **es el precio de que «terminado» signifique algo**: la validación no usa
-dobles de la fontanería, levanta la infraestructura de verdad (`infra/docker-compose.yaml`) y ejecuta
-contra ella los escenarios `FL-*`. Sin contenedores el pipeline genera y compila, pero no puntúa un
+El runtime de contenedores **es el precio de que «terminado» signifique algo**: la validación no
+sustituye la base de datos, el broker ni el proveedor de identidad por mocks en memoria. Levanta los
+de verdad (`infra/docker-compose.yaml`) y ejecuta contra ellos los escenarios `FL-*`. Sin contenedores el pipeline genera y compila, pero no puntúa un
 solo escenario, y lo reporta como `PENDIENTE` en vez de fingir un verde. El runtime se detecta solo
 —`docker` primero, `podman` si no— y se fuerza con `CONTAINER_RUNTIME=podman`.
 
@@ -373,6 +373,12 @@ La huella es la misma en los tres lenguajes porque es la huella **del diseño**,
 árbitros tampoco son agentes: con la suite al 100 % el pipeline pasa a la fase de calidad sin invocar
 a ninguno.
 
+Por lo mismo, **la generación no necesita un modelo grande**. Con todo el pipeline sobre Claude Haiku,
+`catalog` cerró 184/184 escenarios en keel-dotnet, y la huella fue la misma de las corridas con Sonnet,
+archivo por archivo ([corrida](docs/corridas/2026-10-27-catalog-dotnet-haiku.md)). Haiku necesitó más
+vueltas: unas el doble de llamadas. El modelo fuerte se reserva para diseñar, que es donde se toman las
+decisiones.
+
 ### 3. Las decisiones se toman a la vista, y antes de generar
 
 Si nadie escribe una decisión, la toma el agente al teclear, y en el código un valor decidido y uno
@@ -579,7 +585,7 @@ El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera
 - **Verificación del propio Keel**: 318 suites de test (`npm test`), 17 diseños de fixture —entre
   ellos pares que solo se diferencian en el modelo de persistencia— y redes en vivo por generador
   contra motores, brokers, proveedores de identidad y buzones en contenedores (ver
-  `CLAUDE.md § Comandos`). 64 corridas registradas en [docs/corridas](docs/corridas/).
+  `CLAUDE.md § Comandos`). 65 corridas registradas en [docs/corridas](docs/corridas/).
 - **Pendiente**: MariaDB, SQL Server y Oracle medidos en vivo en keel-nest y keel-dotnet; las
   pasarelas de pago contra su sandbox real; brokers distintos de RabbitMQ en keel-recover y las
   corridas de control de keel-recover sobre legacys relacionales.
