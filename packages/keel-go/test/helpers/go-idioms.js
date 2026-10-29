@@ -74,18 +74,26 @@ export const IDIOM_RULES = [
   {
     id: 'no-panic',
     what: 'panic en el código emitido fuera de una función Must…: los errores se devuelven',
-    // La única excepción es la convención de la biblioteca estándar (regexp.MustCompile, template.Must): una
-    // función Must… es para un literal que escribe el programador, y un literal mal escrito es un invariante
-    // imposible, no un error que el llamante pueda tratar (PLAN-KEEL-GO.md § 3.2).
+    // Dos excepciones. La convención de la biblioteca estándar (regexp.MustCompile, template.Must): una función
+    // Must… es para un literal que escribe el programador, y un literal mal escrito es un invariante imposible, no un
+    // error que el llamante pueda tratar (PLAN-KEEL-GO.md § 3.2). Y RELANZAR lo que la misma función recuperó con
+    // recover(): no crea un pánico, deja seguir uno que no era suyo (el http.ErrAbortHandler del borde HTTP).
     check: (file) => {
       if (isTest(file)) return [];
       let current = '';
+      let recovered = null;
       const hits = [];
       codeLines(file.content).forEach((line, index) => {
         const opened = line.match(/^func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)/);
-        if (opened) current = opened[1];
-        else if (/^\S/.test(line)) current = '';
-        if (/(^|[^A-Za-z0-9_.])panic\(/.test(line) && !/^Must[A-Z]/.test(current)) hits.push(index + 1);
+        if (opened) {
+          current = opened[1];
+          recovered = null;
+        } else if (/^\S/.test(line)) current = '';
+        const caught = line.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*recover\(\)/);
+        if (caught) recovered = caught[1];
+        if (!/(^|[^A-Za-z0-9_.])panic\(/.test(line) || /^Must[A-Z]/.test(current)) return;
+        if (recovered && new RegExp(String.raw`(^|[^A-Za-z0-9_.])panic\(${recovered}\)`).test(line)) return;
+        hits.push(index + 1);
       });
       return hits;
     }

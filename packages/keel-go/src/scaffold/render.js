@@ -30,6 +30,9 @@ export function layout(model) {
     httpapi: pkg(module, 'internal/httpapi'),
     config: pkg(module, 'internal/platform/config'),
     health: pkg(module, 'internal/platform/health'),
+    // El correlationId de la petición o del mensaje en curso: lo abre la entrada HTTP, viaja en el contexto y lo
+    // escriben los logs y el cuerpo de error.
+    correlation: pkg(module, 'internal/platform/correlation'),
     // El contrato del cable y los tipos que la biblioteca estándar no tiene (Decimal, Date, Optional[T]). El
     // dominio los usa, así que es lo único de la plataforma que puede importar.
     wire: pkg(module, 'internal/platform/wire'),

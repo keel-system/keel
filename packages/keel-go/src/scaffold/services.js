@@ -86,7 +86,7 @@ const PAGE_COMPONENTS = [
 
 /**
  * Los componentes del mensaje: parámetros de ruta (en el orden del path) + campos del cuerpo + paginación. Los
- * comparte el lector de la API (incremento 5) para construir el mensaje.
+ * comparte el lector de la API (endpoints.js) para construir el mensaje.
  */
 export function messageComponents(operation) {
   const path = (operation.pathParams ?? []).map((param) => ({ ...param, fromPath: true }));
@@ -123,13 +123,14 @@ function fromBody(component) {
 /**
  * `constraints.scalePolicy: round` (DSL 2.14): el decimal escalar se redondea a su escala al ENTRAR. No tiene tipo
  * propio donde normalizarse —el de un compuesto lo pone su value object—, así que va en el mensaje, el primer
- * punto por el que pasa. `reject` no necesita nada aquí: lo dice el lector del borde.
+ * punto por el que pasa. `reject` no necesita nada aquí: lo dice el lector del borde. `target` es la variable del
+ * mensaje: el lector de la API (endpoints.js) lee el cuerpo campo a campo y redondea con la misma línea.
  */
-export function scaleRounding(operation, component) {
+export function scaleRounding(operation, component, target = 'm') {
   const numeric = component.numeric;
   if (component.kind === 'composite' || component.list || !numeric?.decimal || numeric.scalePolicy !== 'round' || numeric.scale == null) return null;
   if (isThreeState(operation, component) || !fromBody(component)) return null;
-  const field = `m.${goExported(component.name)}`;
+  const field = `${target}.${goExported(component.name)}`;
   const rescale = (value) => `${value}.Rescale(${numeric.scale}, wire.RoundHalfUp)`;
   return componentType(operation, component).startsWith('*')
     ? `\tif ${field} != nil {\n\t\trounded := ${rescale(`(*${field})`)}\n\t\t${field} = &rounded\n\t}`

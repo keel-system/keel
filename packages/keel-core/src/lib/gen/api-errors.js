@@ -49,6 +49,12 @@ export const FRAMEWORK_RESPONSES = {
   methodNotAllowed: { status: 405, error: 'Method Not Allowed', message: 'Método HTTP no soportado' },
   /** Ninguna ruta casa con el camino. */
   notFound: { status: 404, error: 'Not Found', message: 'Recurso no encontrado' },
+  /**
+   * El cuerpo de una petición supera el tope de la entrada, sin code. Solo lo emite keel-go: net/http no pone tope
+   * por defecto y el suyo es explícito (`MaxBytesReader`); Tomcat no limita un cuerpo JSON, y el tope de Kestrel o
+   * de Fastify cae en el manejador de cada uno sin texto propio.
+   */
+  bodyTooLarge: { status: 413, error: 'Payload Too Large', message: 'El cuerpo de la petición supera el tamaño permitido' },
   /** Lo que nadie tradujo: el catch-all. */
   internal: { status: 500, error: 'Internal Server Error', message: 'Ocurrió un error inesperado' },
   /** La cadena de seguridad: la petición no trae credencial, o la que trae no vale (code UNAUTHENTICATED). */

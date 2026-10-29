@@ -71,6 +71,28 @@ test('no-panic admite el panic de una función Must… y solo ese', () => {
   ]);
 });
 
+test('no-panic admite relanzar lo que la misma función recuperó, y nada más', () => {
+  const content = [
+    'package httpapi',
+    '',
+    'func recoverPanic() {',
+    '\trecovered := recover()',
+    '\tif recovered == nil {',
+    '\t\treturn',
+    '\t}',
+    '\tpanic(recovered)',
+    '}',
+    '',
+    'func other(recovered any) {',
+    '\tpanic(recovered)',
+    '}',
+    ''
+  ].join('\n');
+  assert.deepEqual(checkGoIdioms([{ path: 'internal/httpapi/x.go', content }]), [
+    'internal/httpapi/x.go:12: no-panic — panic en el código emitido fuera de una función Must…: los errores se devuelven'
+  ]);
+});
+
 test('toda regla de idioma tiene su mutación, y toda mutación nombra una regla', () => {
   assert.deepEqual(Object.keys(MUTATIONS).sort(), IDIOM_RULES.map((rule) => rule.id).sort());
 });

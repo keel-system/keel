@@ -22,13 +22,10 @@ const PENDING_LAYERS = {
   payments: 'incremento 13'
 };
 
-/**
- * Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. El dominio (incremento 4a)
- * y la aplicación (4b: mensajes, handlers, DTOs, mapeos y UseCases) ya se emiten enteros.
- */
-const ACCEPTED_NOT_EMITTED = {
-  api: 'incremento 5 (API REST)'
-};
+/** Las capas que keel-go todavía rechaza: las pruebas de paridad comparan el diseño sin ellas. */
+export function pendingLayers() {
+  return Object.keys(PENDING_LAYERS);
+}
 
 /**
  * Lo que una operación puede declarar y keel-go todavía no genera: el mensaje y el handler salen, pero no el
@@ -54,14 +51,6 @@ export function checkSupportedFeatures(manifest, layers) {
       errors.push(
         `capa ${layer}: keel-go todavía no la genera (llega en el ${PENDING_LAYERS[layer]} de PLAN-KEEL-GO.md). ` +
           'Genera este diseño con keel-spring, keel-nest o keel-dotnet, o espera a que keel-go la cubra.'
-      );
-    }
-  }
-  for (const layer of declared) {
-    if (ACCEPTED_NOT_EMITTED[layer] && layers?.[layer]) {
-      warnings.push(
-        `capa ${layer}: se acepta, pero keel-go aún no emite su código (llega en el ${ACCEPTED_NOT_EMITTED[layer]}): ` +
-          'el proyecto generado arranca y responde a sus sondas, sin nada de esta capa.'
       );
     }
   }

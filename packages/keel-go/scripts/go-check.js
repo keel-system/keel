@@ -28,6 +28,7 @@ import { GO_TOOLCHAIN } from '../src/lib/assets.js';
 import { WIRE_SABOTAGES, applySabotage } from '../test/helpers/wire-sabotages.js';
 import { DOMAIN_SABOTAGES, applySabotage as applyDomainSabotage } from '../test/helpers/domain-sabotages.js';
 import { APPLICATION_SABOTAGES, applySabotage as applyApplicationSabotage } from '../test/helpers/application-sabotages.js';
+import { API_SABOTAGES, applySabotage as applyApiSabotage } from '../test/helpers/api-sabotages.js';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
@@ -251,12 +252,40 @@ for (const sabotage of APPLICATION_SABOTAGES) {
   step(`aplicación falsada: ${sabotage.id} (${sabotage.what}) → ${expected} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
 }
 
-// La frontera hexagonal se falsa: un import plantado del dominio a la entrada HTTP tiene que ponerla en rojo.
+// La API se mide con sus pruebas emitidas (api_test.go, el contrato sobre el enrutador real; edge_test.go, el borde
+// por dentro). Cada sabotaje tiene que tumbar exactamente las pruebas que nombra.
+const apiTests = ['test', '-count=1', './internal/httpapi/'];
+const served = go(projectDir, apiTests);
+if (!step('las pruebas emitidas de la API en verde (contrato, 404/405/413, correlación, borde)', served.ok)) console.error(served.output);
+for (const sabotage of API_SABOTAGES) {
+  const file = path.join(projectDir, sabotage.file);
+  const original = fs.readFileSync(file, 'utf8');
+  const mutated = applyApiSabotage(sabotage, original);
+  if (!mutated) {
+    step(`API falsada: ${sabotage.id}`, false, `el sabotaje ya no se aplica a ${sabotage.file}`);
+    continue;
+  }
+  fs.writeFileSync(file, mutated);
+  const sabotaged = go(projectDir, apiTests);
+  fs.writeFileSync(file, original);
+  const failed = [...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]);
+  const expected = [sabotage.fails, ...(sabotage.alsoFails ?? [])].sort().join(' ');
+  const exact = [...new Set(failed)].sort().join(' ') === expected;
+  step(`API falsada: ${sabotage.id} (${sabotage.what}) → ${expected} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
+}
+
+// La frontera hexagonal se falsa: un import plantado del dominio a otro paquete de la plataforma (solo puede usar
+// wire) tiene que ponerla en rojo. No a httpapi: httpapi importa el dominio, y ese import cerraría un ciclo que Go
+// rechaza antes de que la prueba de arquitectura diga nada.
 const planted = path.join(projectDir, 'internal', 'domain', 'planted.go');
-fs.writeFileSync(planted, `package domain\n\nimport "${GO_READY_DESIGN.name}/internal/httpapi"\n\nvar _ = httpapi.ReadTimeout\n`);
+fs.writeFileSync(planted, `package domain\n\nimport "${GO_READY_DESIGN.name}/internal/platform/health"\n\nvar _ health.Probes\n`);
 const boundary = go(projectDir, ['test', '-count=1', './internal/architecture/']);
 fs.rmSync(planted);
-step('la frontera sale en rojo con un import plantado (dominio → httpapi)', !boundary.ok && /internal\/domain \(domain\) importa internal\/httpapi/.test(boundary.output));
+step(
+  'la frontera sale en rojo con un import plantado (dominio → platform/health)',
+  !boundary.ok && /internal\/domain \(domain\) importa internal\/platform\/health/.test(boundary.output),
+  boundary.ok ? '' : boundary.output.slice(0, 300)
+);
 
 const vuln = go(projectDir, ['tool', 'govulncheck', './...']);
 if (!step('govulncheck sin vulnerabilidades', vuln.ok)) console.error(vuln.output);
@@ -296,7 +325,14 @@ if (fs.existsSync(binary)) {
   const readyz = await get(port, '/readyz');
   step('GET /readyz → 200 {"status":"UP"}', readyz?.status === 200 && readyz.body === '{"status":"UP"}', readyz ? `${readyz.status} ${readyz.body}` : 'sin respuesta');
   const missing = await get(port, '/no-existe');
-  step('una ruta que no existe → 404', missing?.status === 404, missing ? String(missing.status) : 'sin respuesta');
+  step('una ruta que no existe → 404 con ErrorResponse', missing?.status === 404 && /"error":"Not Found"/.test(missing.body), missing ? `${missing.status} ${missing.body}` : 'sin respuesta');
+  // Una operación recién generada llega a su handler, que todavía no está escrito: 500 con ErrorResponse, no un 404.
+  const operation = await get(port, '/api/v1/products/0192f1d2-0000-7000-8000-000000000001');
+  step(
+    'GET /api/v1/products/{id} llega a su handler sin escribir → 500 con ErrorResponse y su correlación',
+    operation?.status === 500 && /"code":null/.test(operation.body) && /"correlationId":"[0-9a-f-]{36}"/.test(operation.body),
+    operation ? `${operation.status} ${operation.body}` : 'sin respuesta'
+  );
 
   app.kill('SIGTERM');
   const end = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 15_000))]);

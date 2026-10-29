@@ -17,11 +17,10 @@ for (const layer of ['persistence', 'security', 'messaging', 'http-clients', 'de
   });
 }
 
-test('dominio, casos de uso y API se aceptan; solo avisa la API, que aún no se emite', () => {
+test('dominio, casos de uso y API se aceptan sin avisos: la API se emite desde el incremento 5', () => {
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api'), layersWith('domain', 'use-cases', 'api'));
   assert.deepEqual(errors, []);
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /^capa api: .*aún no emite su código \(llega en el incremento 5/);
+  assert.deepEqual(warnings, []);
 });
 
 test('una operación con idempotency, schedule o cache avisa nombrándola: sale el handler, no el mecanismo', () => {

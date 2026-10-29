@@ -37,7 +37,7 @@ test('ningún generador escribe a mano un texto de la respuesta de error', () =>
     ...Object.values(FRAMEWORK_RESPONSES).map((entry) => entry.message.split('{name}')[0])
   ];
   const found = [];
-  for (const pkg of ['keel-spring', 'keel-nest', 'keel-dotnet']) {
+  for (const pkg of ['keel-spring', 'keel-nest', 'keel-dotnet', 'keel-go']) {
     for (const file of sources(pkg)) {
       const content = fs.readFileSync(file, 'utf8');
       for (const text of texts) if (content.includes(`'${text}`) || content.includes(`"${text}`)) found.push(`${path.relative(packages, file)}: ${text}`);

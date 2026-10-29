@@ -12,6 +12,7 @@
 // las peticiones en vuelo como máximo `server.shutdown-timeout`. Lo que llegue con las capas siguientes
 // (consumidores, reloj, relay del outbox) se para entre esos pasos, cada uno en su goroutine del errgroup.
 
+import { usesApi } from '@keel-system/keel-core/gen/features';
 import { layout, packageFile } from './render.js';
 
 export function generate(model) {
@@ -39,8 +40,10 @@ function mainGo(model) {
       'syscall',
       'golang.org/x/sync/errgroup',
       { path: `${configFiles.importPath}`, name: 'configfiles' },
+      'internal/application',
       'internal/httpapi',
       'internal/platform/config',
+      'internal/platform/correlation',
       'internal/platform/health'
     ],
     body: `
@@ -64,10 +67,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout 
 	if err != nil {
 		return fmt.Errorf("cargar la configuración: %w", err)
 	}
-	logger := slog.New(slog.NewJSONHandler(stdout, nil))
-
-	probes := &health.Probes{}
-	srv := httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes))
+${usesApi(model) ? API_WIRING : PROBES_WIRING}
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", srv.Addr)
 	if err != nil {
 		return fmt.Errorf("escuchar en %s: %w", srv.Addr, err)
@@ -98,6 +98,19 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout 
 `
   });
 }
+
+const PROBES_WIRING = `	logger := slog.New(slog.NewJSONHandler(stdout, nil))
+
+	probes := &health.Probes{}
+	srv := httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes))`;
+
+// Con la API: cada registro lleva el correlationId de la petición que lo escribe, y la entrada despacha por los casos
+// de uso, cableados aquí y solo aquí.
+const API_WIRING = `	logger := slog.New(correlation.NewLogHandler(slog.NewJSONHandler(stdout, nil)))
+
+	probes := &health.Probes{}
+	useCases := application.NewUseCases(logger)
+	srv := httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes, useCases, logger))`;
 
 function mainTestGo(model) {
   const { server } = layout(model);

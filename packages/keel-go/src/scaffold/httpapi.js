@@ -1,14 +1,16 @@
 // La entrada HTTP: el enrutador del servicio y el `http.Server` con sus límites.
 //
 // net/http sin framework (PLAN-KEEL-GO.md § 2): desde Go 1.22 el enrutador entiende método y patrón
-// (`GET /livez`), y un solo punto de lectura y escritura de JSON es donde se cumplirá el contrato del cable.
-// Las rutas de las operaciones llegan con la API (incremento 5); hoy solo están las sondas.
+// (`GET /livez`, `POST /api/v1/products/{id}/activate`). Con la capa api, `NewHandler` registra cada fila de la tabla
+// `routes` (endpoints.js), un último patrón `/` que responde el 404 y el 405 con ErrorResponse, y envuelve todo con
+// el borde (rest-support.js): correlación, tope del cuerpo y recover.
 //
 // Los límites del servidor (§ 3.6) los fija el código y no la configuración: los otros tres servidores no los
 // declaran en su application.yaml —se quedan con los defaults de Tomcat, Node y Kestrel—, así que añadir
 // claves aquí rompería la igualdad del archivo. Lo que no se puede hacer es dejar los de net/http, que son
 // «sin límite»: un cliente lento retendría la conexión para siempre.
 
+import { usesApi } from '@keel-system/keel-core/gen/features';
 import { layout, packageFile } from './render.js';
 
 export function generate(model) {
@@ -23,7 +25,7 @@ function serverGo(model) {
   const { httpapi } = layout(model);
   return packageFile(model, httpapi, {
     doc: 'Package httpapi es la entrada HTTP del servicio: el enrutador con sus rutas y el servidor con sus\nlímites.',
-    imports: ['net', 'net/http', 'strconv', 'time', 'internal/platform/config', 'internal/platform/health'],
+    imports: ['log/slog', 'net', 'net/http', 'strconv', 'time', 'internal/application', 'internal/platform/config', 'internal/platform/health'],
     body: `
 // Los límites del servidor. Sin ellos, net/http no corta nunca a un cliente lento.
 const (
@@ -39,12 +41,7 @@ const (
 	MaxHeaderBytes = 8 << 10
 )
 
-// NewHandler devuelve el enrutador del servicio.
-func NewHandler(probes *health.Probes) http.Handler {
-	mux := http.NewServeMux()
-	probes.Register(mux)
-	return mux
-}
+${usesApi(model) ? API_HANDLER : PROBES_HANDLER}
 
 // NewServer devuelve el servidor HTTP del servicio, con sus límites, escuchando en la dirección de la
 // configuración.
@@ -63,14 +60,47 @@ func NewServer(settings config.Server, handler http.Handler) *http.Server {
   });
 }
 
+const PROBES_HANDLER = `// NewHandler devuelve el enrutador del servicio.
+func NewHandler(probes *health.Probes) http.Handler {
+	mux := http.NewServeMux()
+	probes.Register(mux)
+	return mux
+}`;
+
+const API_HANDLER = `// api es la entrada HTTP de las operaciones: los casos de uso a los que despacha y el logger del borde.
+type api struct {
+	useCases *application.UseCases
+	logger   *slog.Logger
+}
+
+// NewHandler devuelve la entrada HTTP del servicio: las sondas y una ruta por operación del diseño, detrás del borde
+// (correlación, tope del cuerpo y recover). Lo que ninguna ruta atiende responde 404 o 405 con ErrorResponse.
+func NewHandler(probes *health.Probes, useCases *application.UseCases, logger *slog.Logger) http.Handler {
+	a := &api{useCases: useCases, logger: logger}
+	mux := http.NewServeMux()
+	probes.Register(mux)
+	for _, route := range routes {
+		mux.Handle(route.Method+" "+route.Path, a.endpoint(route.handle))
+	}
+	mux.Handle("/", unrouted(mux))
+	return a.edge(mux)
+}`;
+
+/** La llamada a NewHandler con la que lo construyen las pruebas. */
+export function testHandler(model) {
+  return usesApi(model)
+    ? 'httpapi.NewHandler(&health.Probes{}, application.NewUseCases(slog.New(slog.DiscardHandler)), slog.New(slog.DiscardHandler))'
+    : 'httpapi.NewHandler(&health.Probes{})';
+}
+
 function serverTestGo(model) {
   const { httpapi } = layout(model);
   return packageFile(model, httpapi, {
     test: true,
-    imports: ['testing', 'time', 'internal/httpapi', 'internal/platform/config', 'internal/platform/health'],
+    imports: ['log/slog', 'testing', 'time', 'internal/application', 'internal/httpapi', 'internal/platform/config', 'internal/platform/health'],
     body: `
 func TestNewServerHasLimits(t *testing.T) {
-	srv := httpapi.NewServer(config.Server{Port: 8080, Address: "0.0.0.0", ShutdownTimeout: time.Second}, httpapi.NewHandler(&health.Probes{}))
+	srv := httpapi.NewServer(config.Server{Port: 8080, Address: "0.0.0.0", ShutdownTimeout: time.Second}, ${testHandler(model)})
 	if srv.Addr != "0.0.0.0:8080" {
 		t.Errorf("Addr = %q, quiero 0.0.0.0:8080", srv.Addr)
 	}

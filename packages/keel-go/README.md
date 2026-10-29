@@ -30,11 +30,12 @@ estampado en `keel-generated.json`, y no escribe nada en el workspace de diseño
 4. **Regla de oro**: el generador nunca inventa ni corrige funcionalidad; lo que no sabe mapear lo rechaza o lo
    avisa en código (`src/lib/supported-features.js`), nunca lo ignora.
 
-## La frontera, hoy (incremento 2)
+## La frontera, hoy (incremento 5)
 
-Se aceptan dominio, casos de uso y API, con aviso: el proyecto arranca y responde a sus sondas, sin nada de esas
-capas todavía (llegan en los incrementos 4 y 5). Cualquier otra capa se rechaza nombrando el incremento que la
-trae. La telemetría, también (incremento 14).
+Se aceptan dominio, casos de uso y API, y se emiten enteros: los tipos del dominio, un mensaje y un handler por
+operación con su registro tipado (`UseCases`), y la API REST sobre net/http (una ruta por operación, su lector, el
+contrato de error y el OpenAPI derivado). Una operación con un binario (subida multipart) no se sirve todavía.
+Cualquier otra capa se rechaza nombrando el incremento que la trae. La telemetría, también (incremento 14).
 
 ## Licencias
 

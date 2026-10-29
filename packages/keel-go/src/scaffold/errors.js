@@ -9,7 +9,7 @@
 //     valor que incumple su tipo, el formato y la transición no declarada);
 //   · `Errorf(ErrProductNotFound, "…", args…)` construye una ocurrencia que `errors.Is` reconoce como su
 //     centinela, con su mensaje. Nunca se compara por texto.
-// Nada conoce net/http: el borde HTTP (incremento 5) traduce `*Error` a la respuesta con `errors.As`.
+// Nada conoce net/http: el borde HTTP (internal/httpapi, rest-support.js) traduce `*Error` a la respuesta con `errors.As`.
 
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { ERROR_BASES } from '@keel-system/keel-core/gen/error-bases';

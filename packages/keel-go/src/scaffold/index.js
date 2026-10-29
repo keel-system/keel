@@ -10,6 +10,7 @@ import { buildModel } from '@keel-system/keel-core/gen/model';
 import { materializeProject } from '@keel-system/keel-core/gen/materialize';
 import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { listKeelDocs } from '@keel-system/keel-core/gen/keel-docs';
+import { derivedOpenapiFiles } from '@keel-system/keel-core/gen/openapi';
 import { packageVersion } from '../lib/assets.js';
 import { GO_PROJECTION } from '../lib/go-projection.js';
 import * as project from './project.js';
@@ -26,14 +27,45 @@ import * as dtos from './dtos.js';
 import * as services from './services.js';
 import * as mappers from './mappers.js';
 import * as useCases from './use-cases.js';
+import * as correlation from './correlation.js';
+import * as endpoints from './endpoints.js';
+import * as restSupport from './rest-support.js';
+import * as apiTests from './api-tests.js';
 import * as httpapi from './httpapi.js';
 import * as server from './server.js';
 import * as architecture from './architecture.js';
 import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
-// Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara.
-const GENERATORS = [project, config, health, wire, errors, enums, valueTypes, entities, events, domainGuardsCheck, dtos, services, mappers, useCases, httpapi, server, architecture, readme, generatorDocs];
+// Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara. El primero es el contrato formal de
+// la API, derivado del modelo neutral (el mismo en los cuatro generadores), salvo que el workspace traiga el de
+// /keel-docs: keel-core/gen/openapi.js.
+const GENERATORS = [
+  { generate: derivedOpenapiFiles },
+  project,
+  config,
+  health,
+  correlation,
+  wire,
+  errors,
+  enums,
+  valueTypes,
+  entities,
+  events,
+  domainGuardsCheck,
+  dtos,
+  services,
+  mappers,
+  useCases,
+  endpoints,
+  restSupport,
+  apiTests,
+  httpapi,
+  server,
+  architecture,
+  readme,
+  generatorDocs
+];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus avisos
