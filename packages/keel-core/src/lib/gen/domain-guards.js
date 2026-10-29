@@ -33,10 +33,11 @@ export function guardedFields(model) {
 //   sourceGlob            los archivos de código que se leen ('*.ts', '*.cs')
 //   importPrefix          el principio de una línea de import, que no cuenta como uso ('import ', 'using ')
 //   methods               los dos métodos de la clase, el que lanza primero (['validate', 'matches'])
+//   sourceDir             el directorio del código, desde la raíz del proyecto ('src' salvo en keel-go: 'internal')
 
 const shellQuote = (value) => `'${String(value).replaceAll("'", `'\\''`)}'`;
 
-export function domainGuardsScript(model, { classFile, sourceGlob, importPrefix, methods }) {
+export function domainGuardsScript(model, { classFile, sourceGlob, importPrefix, methods, sourceDir = 'src' }) {
   const rows = guardedFields(model);
   const lines = rows.map((row) => {
     const className = `${row.type}Format`;
@@ -61,7 +62,7 @@ export function domainGuardsScript(model, { classFile, sourceGlob, importPrefix,
 #   1  hay hallazgos → vuelven al agente de código
 set -u
 
-SRC="src"
+SRC="${sourceDir}"
 
 if [ ! -d "$SRC" ]; then
   echo "Ejecuta el script desde la raíz del proyecto (no se encontró $SRC)." >&2

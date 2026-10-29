@@ -417,6 +417,13 @@ func (d Decimal) Cmp(other Decimal) int {
 	return d.at(scale).Cmp(other.at(scale))
 }
 
+// Equal es la igualdad de VALOR, la del equals de BigDecimal: la misma cantidad y la misma escala. 2.5 y 2.50
+// son distintos aquí, porque viajan distinto; por eso un value object normaliza la escala al construirse.
+// go-cmp la usa al comparar.
+func (d Decimal) Equal(other Decimal) bool {
+	return d.scale == other.scale && d.Cmp(other) == 0
+}
+
 // Add es d + other, con la mayor de las dos escalas.
 func (d Decimal) Add(other Decimal) Decimal {
 	scale := max(d.scale, other.scale)

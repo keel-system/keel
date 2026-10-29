@@ -7,7 +7,8 @@
 // paquete: `domain` y `application` son un paquete cada uno a propósito, porque partirlos por agregado abre
 // ciclos de importación en cuanto dos agregados se refieren.
 
-import { goFile } from '../lib/go-source.js';
+import { commentLines, goFile, goString } from '../lib/go-source.js';
+import { goUnexported } from '../lib/go-projection.js';
 
 /** Un paquete del proyecto: su directorio, su ruta de importación y su nombre. */
 function pkg(module, dir, name = dir.split('/').at(-1)) {
@@ -75,4 +76,80 @@ export function packageFile(model, target, { doc = null, imports = [], body, gen
   // Una prueba de caja negra va en el paquete `<nombre>_test`: solo ve lo exportado, como cualquier llamante.
   const pkg = test ? `${target.name}_test` : target.name;
   return goFile({ pkg, doc, imports, body, module: model.service.goModule, generated });
+}
+
+// Los sufijos que Go lee en el NOMBRE de un archivo como restricción de compilación (`x_linux.go` solo se
+// compila en Linux, `x_test.go` es una prueba). Un archivo del dominio que acabara así desaparecería en silencio.
+const GOOS = 'aix android darwin dragonfly freebsd hurd illumos ios js linux nacl netbsd openbsd plan9 solaris wasip1 windows zos';
+const GOARCH = '386 amd64 amd64p32 arm arm64 arm64be armbe loong64 mips mips64 mips64le mips64p32 mips64p32le mipsle ppc ppc64 ppc64le riscv riscv64 s390 s390x sparc sparc64 wasm';
+const CONSTRAINT_SUFFIXES = new Set(['test', ...GOOS.split(' '), ...GOARCH.split(' ')]);
+
+/** El nombre de archivo Go de un tipo: `SKUFormat` → `sku_format`, sin caer en una restricción de compilación. */
+export function goFileName(name) {
+  const base = String(name)
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .toLowerCase();
+  return CONSTRAINT_SUFFIXES.has(base.split('_').at(-1)) ? `${base}_type` : base;
+}
+
+/** La ruta del archivo de un tipo del dominio. */
+export function domainPath(model, name) {
+  return `${layout(model).domain.dir}/${goFileName(name)}.go`;
+}
+
+/**
+ * ¿Puede un campo no tener valor? Lo opcional que no es lista se declara como puntero: en Go un `string` no
+ * puede ser null, y el cable distingue `""` de `null` (el mismo criterio que el `?` de keel-dotnet).
+ */
+export function isOptional(field) {
+  return !(field.required || field.isId || field.generated || field.list);
+}
+
+/**
+ * El tipo Go con el que se DECLARA un campo: la lista ya viene como `[]T` y lo opcional va con `*`. Fuera del
+ * dominio (`qualify`), un enum o un value object se nombra por su paquete: `domain.Money`.
+ */
+export function declType(field, { qualify = false } = {}) {
+  let type = field.goType;
+  if (qualify && (field.kind === 'enum' || field.kind === 'composite')) {
+    type = field.list ? `[]domain.${type.slice(2)}` : `domain.${type}`;
+  }
+  return isOptional(field) ? `*${type}` : type;
+}
+
+/** Los imports que puede necesitar un campo (las rutas propias van relativas al módulo). */
+export function fieldImports(field) {
+  return [...(field.goImports ?? [])];
+}
+
+/**
+ * Un comentario de documentación que empieza por el nombre del identificador, como pide Go: `Product: producto
+ * publicable del catálogo.` La prosa del diseño va tal cual detrás, con su primera letra en minúscula salvo que
+ * sea una sigla.
+ */
+export function docComment(name, text, fallback = null, indent = '') {
+  const prose = String(text ?? fallback ?? '').trim();
+  if (!prose) return '';
+  const lowered = /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]/.test(prose) ? prose[0].toLowerCase() + prose.slice(1) : prose;
+  const sentence = /[.!?:]$/.test(lowered) ? lowered : `${lowered}.`;
+  return `${commentLines(`${name}: ${sentence}`, indent).join('\n')}\n`;
+}
+
+/** Un texto como formato de `Errorf`: el `%` literal se dobla. */
+export function formatString(text) {
+  return goString(String(text).replaceAll('%', '%%'));
+}
+
+// Los paquetes que importa el código del dominio y de la aplicación: un parámetro o una variable local con su
+// nombre los ocultaría dentro de la función (`time := …` y después `time.Now()` no compila).
+const SHADOWED_PACKAGES = new Set([
+  'bytes', 'context', 'errors', 'fmt', 'json', 'jsontext', 'regexp', 'slices', 'strings', 'time', 'utf8', 'uuid', 'wire', 'domain', 'application'
+]);
+
+/** Un nombre del diseño como identificador local o campo sin exportar, sin chocar con un paquete ni una palabra reservada. */
+export function localName(name) {
+  const local = goUnexported(name);
+  return SHADOWED_PACKAGES.has(local) ? `${local}Value` : local;
 }

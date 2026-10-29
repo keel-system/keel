@@ -17,11 +17,12 @@ for (const layer of ['persistence', 'security', 'messaging', 'http-clients', 'de
   });
 }
 
-test('dominio, casos de uso y API se aceptan, avisando de que aún no se emiten', () => {
+test('dominio, casos de uso y API se aceptan; avisan los casos de uso y la API, que aún no se emiten', () => {
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api'), layersWith('domain', 'use-cases', 'api'));
   assert.deepEqual(errors, []);
-  assert.equal(warnings.length, 3);
+  assert.equal(warnings.length, 2);
   for (const warning of warnings) assert.match(warning, /aún no emite su código \(llega en el incremento [45]/);
+  assert.ok(!warnings.some((warning) => warning.startsWith('capa domain:')), 'el dominio ya se emite');
 });
 
 test('la telemetría se rechaza en vez de estamparse sin efecto', () => {

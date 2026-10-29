@@ -10,11 +10,11 @@
 // `cs-check` de keel-dotnet, `ts-check` de keel-nest y `compile-check` de keel-spring, y como ellos se lanza
 // antes de dar por bueno cualquier cambio en lo que se emite.
 //
-//   node packages/keel-go/scripts/go-check.js [--keep] [--no-race]
+//   node packages/keel-go/scripts/go-check.js [--keep] [--no-race] [--fixtures]
 //   npm run go-check --workspace packages/keel-go
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo; --no-race se salta el paso del
-// contenedor (sin podman ni docker).
+// contenedor (sin podman ni docker); --fixtures solo compila y prueba el Go de todas las fixtures.
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -26,8 +26,17 @@ import { build } from '../src/commands/build.js';
 import { ALLOWED_LICENSES, MODULES, TOOLS } from '../src/lib/go-stack.js';
 import { GO_TOOLCHAIN } from '../src/lib/assets.js';
 import { WIRE_SABOTAGES, applySabotage } from '../test/helpers/wire-sabotages.js';
+import { DOMAIN_SABOTAGES, applySabotage as applyDomainSabotage } from '../test/helpers/domain-sabotages.js';
+import { fileURLToPath } from 'node:url';
+import { loadService } from '@keel-system/keel-core';
+import { planService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from '../test/helpers/workspace.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 const keep = process.argv.includes('--keep');
+// --fixtures: solo el paso que compila el Go de TODAS las fixtures (el más largo de iterar).
+const onlyFixtures = process.argv.includes('--fixtures');
 const race = !process.argv.includes('--no-race');
 const isWindows = process.platform === 'win32';
 const results = [];
@@ -99,6 +108,37 @@ if (!step('Go disponible', version.ok && (Number(major) > 1 || Number(minor) >= 
   process.exit(1);
 }
 
+// El Go de TODAS las fixtures, no solo el del diseño de referencia: planService no pasa por la frontera, así que
+// también lo que se emite para un diseño que build todavía rechaza. Una rama que solo sale con cierta silueta (un
+// lifecycle opcional, un value object con listas, un evento sin campos) no compila en otra fixture, y go-syntax no
+// ve tipos. Cada fixture es su propio módulo: tidy (de la caché, tras el primero), gofmt, vet, staticcheck y sus
+// pruebas emitidas.
+const fixturesRoot = makeWorkspace('keel-go-fixtures-');
+for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(path.join(FIXTURES_DIR, entry, 'service.keel.yaml')))) {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+  const dir = path.join(fixturesRoot, name);
+  for (const file of planService({ manifest, layers, workspace: fixturesRoot }).files) {
+    const out = path.join(dir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+  const problems = [];
+  const tidied = go(dir, ['mod', 'tidy']);
+  if (!tidied.ok) problems.push(`tidy: ${tidied.output}`);
+  const unformatted = run('gofmt', ['-l', '.'], dir);
+  if (unformatted.stdout.trim()) problems.push(`gofmt: ${unformatted.stdout.trim()}`);
+  for (const args of [['vet', './...'], ['tool', 'staticcheck', './...'], ['test', '-count=1', './...']]) {
+    const result = go(dir, args);
+    if (!result.ok || (args[1] === 'staticcheck' && result.output.trim())) problems.push(`${args.join(' ')}: ${result.output.trim()}`);
+  }
+  if (!step(`${name}: el Go emitido pasa tidy, gofmt, vet, staticcheck y sus pruebas`, problems.length === 0)) console.error(problems.join('\n').slice(0, 4000));
+}
+if (onlyFixtures) {
+  const failed = results.filter((result) => !result.ok).length;
+  console.log(failed === 0 ? `\ngo-check --fixtures: ${results.length}/${results.length} en verde.` : `\ngo-check --fixtures: ${failed} paso(s) en rojo.`);
+  process.exit(failed === 0 ? 0 : 1);
+}
+
 const workspace = makeWorkspace('keel-go-go-check-');
 mountDesign(workspace, GO_READY_DESIGN.name, GO_READY_DESIGN);
 const generated = await runCommand(workspace, build, `specs/${GO_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
@@ -161,6 +201,31 @@ for (const sabotage of WIRE_SABOTAGES) {
   const failed = [...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1]);
   step(`cable falsado: ${sabotage.id} (${sabotage.what}) → ${sabotage.fails} en rojo`, !sabotaged.ok && failed.includes(sabotage.fails), failed.join(' ').slice(0, 200));
 }
+
+// La sonda del dominio: Go de verdad que ejecuta lo que el texto no deja ver (la escala normalizada, el rechazo con
+// 400, el ancla del formato, la transición negada con 409, los centinelas). Va dentro de internal/domain como
+// prueba interna, y cada sabotaje tiene que tumbar exactamente la prueba que nombra.
+const probe = path.join(projectDir, 'internal', 'domain', 'domain_probe_test.go');
+fs.copyFileSync(path.join(here, 'probes', 'domain_probe_test.go'), probe);
+const probed = go(projectDir, ['test', '-count=1', '-run', 'Probe', './internal/domain/']);
+if (!step('la sonda del dominio en verde (escala, cotas, enum, formato, lifecycle, centinelas)', probed.ok)) console.error(probed.output);
+for (const sabotage of DOMAIN_SABOTAGES) {
+  const file = path.join(projectDir, sabotage.file);
+  const original = fs.readFileSync(file, 'utf8');
+  const mutated = applyDomainSabotage(sabotage, original);
+  if (!mutated) {
+    step(`dominio falsado: ${sabotage.id}`, false, `el sabotaje ya no se aplica a ${sabotage.file}`);
+    continue;
+  }
+  fs.writeFileSync(file, mutated);
+  const sabotaged = go(projectDir, ['test', '-count=1', '-run', 'Probe', './internal/domain/']);
+  fs.writeFileSync(file, original);
+  const failed = [...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]);
+  const expected = [sabotage.fails, ...(sabotage.alsoFails ?? [])].sort().join(' ');
+  const exact = [...new Set(failed)].sort().join(' ') === expected;
+  step(`dominio falsado: ${sabotage.id} (${sabotage.what}) → ${expected} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
+}
+fs.rmSync(probe);
 
 // La frontera hexagonal se falsa: un import plantado del dominio a la entrada HTTP tiene que ponerla en rojo.
 const planted = path.join(projectDir, 'internal', 'domain', 'planted.go');

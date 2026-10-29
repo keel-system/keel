@@ -6,7 +6,7 @@
 //
 // Estado (incremento 2 de PLAN-KEEL-GO.md): la proyección de TIPOS completa —el modelo de cualquier diseño
 // se construye—, con las cotas, las reglas de validación y las columnas como DATOS de keel-core/gen. Los
-// renderizadores que las escriben llegan con el dominio (incremento 4); `Decimal`, `Date` y `Optional[T]`
+// renderizadores las escriben en el dominio (incremento 4: src/scaffold/value-types.js); `Decimal`, `Date` y `Optional[T]`
 // los emite el contrato del cable (src/scaffold/wire.js).
 //
 // Las propiedades que esta proyección pone en cada campo son de keel-go: `goType`, `goImports` (rutas de

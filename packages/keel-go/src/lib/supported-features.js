@@ -22,10 +22,12 @@ const PENDING_LAYERS = {
   payments: 'incremento 13'
 };
 
-/** Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. */
+/**
+ * Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. El dominio ya se emite
+ * entero (incremento 4a): enums, value objects, formatos, entidades, eventos y errores.
+ */
 const ACCEPTED_NOT_EMITTED = {
-  domain: 'incremento 4 (dominio y aplicación)',
-  'use-cases': 'incremento 4 (dominio y aplicación)',
+  'use-cases': 'incremento 4b (la aplicación: mensajes, handlers, DTOs y mediator)',
   api: 'incremento 5 (API REST)'
 };
 
