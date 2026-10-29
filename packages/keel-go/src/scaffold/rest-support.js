@@ -20,7 +20,7 @@
 import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { FRAMEWORK_RESPONSES as FW, domainErrorResponses } from '@keel-system/keel-core/gen/api-errors';
-import { usesApi } from '@keel-system/keel-core/gen/features';
+import { usesApi, usesRelational } from '@keel-system/keel-core/gen/features';
 import { errorKindFor } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { formatString, layout, packageFile } from './render.js';
@@ -33,7 +33,7 @@ export function generate(model) {
   const file = (name, imports, body) => ({ path: `${httpapi.dir}/${name}.go`, content: packageFile(model, httpapi, { imports, body: `\n${body}\n` }) });
   const uses = closure(plan.uses);
   const files = [
-    file('errors', ['errors', 'context', 'fmt', 'net/http', 'time', 'encoding/json/jsontext', 'encoding/json/v2', 'internal/domain', 'internal/platform/correlation'], errorsBody()),
+    file('errors', ['errors', 'context', 'fmt', 'net/http', 'time', 'encoding/json/jsontext', 'encoding/json/v2', 'internal/domain', 'internal/platform/correlation'], errorsBody(model)),
     file('reply', ['fmt', 'net/http', 'net/url', 'strings', 'internal/platform/wire'], pick(REPLY, uses, ['writeJSON'])),
     file('middleware', ['fmt', 'log/slog', 'net/http', 'runtime/debug', 'strings', 'internal/platform/correlation'], MIDDLEWARE_BODY)
   ];
@@ -103,7 +103,24 @@ const ERROR_TYPES = {
   correlationId: '*string'
 };
 
-function errorsBody() {
+/**
+ * El final de writeError: con persistencia relacional, el 503 del tope de transacción lleva Retry-After, como en los
+ * otros tres generadores (la transacción revirtió entera y repetirla es seguro).
+ */
+function retryAfter(model) {
+  const plain = '\twriteErrorResponse(w, a.errorResponse(r, err))\n';
+  if (!usesRelational(model)) return plain;
+  const { code, http } = FRAMEWORK_ERRORS.transactionTimeout;
+  return `	response := a.errorResponse(r, err)
+	// El tope de transacción: revirtió entera, así que repetirla es seguro.
+	if response.Status == ${http} && response.Code != nil && *response.Code == ${goString(code)} {
+		w.Header().Set("Retry-After", "1")
+	}
+	writeErrorResponse(w, response)
+`;
+}
+
+function errorsBody(model) {
   const missing = WIRE_SHAPES.errorResponse.filter((name) => !ERROR_TYPES[name]);
   if (missing.length > 0) throw new Error(`ErrorResponse: el contrato del cable nombra ${missing.join(', ')} y keel-go no lo emite`);
   const goName = (name) => (name === 'correlationId' ? 'CorrelationID' : name[0].toUpperCase() + name.slice(1));
@@ -209,8 +226,7 @@ func (a *api) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		a.logger.ErrorContext(r.Context(), "error tras empezar la respuesta", "error", err)
 		return
 	}
-	writeErrorResponse(w, a.errorResponse(r, err))
-}
+${retryAfter(model)}}
 
 func (a *api) errorResponse(r *http.Request, err error) ErrorResponse {
 	var (
@@ -254,8 +270,12 @@ func domainResponse(r *http.Request, rejected *domain.Error) ErrorResponse {
 	if message == "" {
 		message = fallback
 	}
-	code := rejected.Code()
-	return newErrorResponse(r, status, phrase, &code, message, nil)
+	// Sin code: la violación de integridad que no casa con ninguna constraint conocida (409 sin code, como keel-spring).
+	var code *string
+	if value := rejected.Code(); value != "" {
+		code = &value
+	}
+	return newErrorResponse(r, status, phrase, code, message, nil)
 }
 
 // domainTexts son el error y el mensaje por defecto de cada categoría (keel-core/gen/api-errors.js).

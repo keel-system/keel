@@ -12,8 +12,12 @@
 // las peticiones en vuelo como máximo `server.shutdown-timeout`. Lo que llegue con las capas siguientes
 // (consumidores, reloj, relay del outbox) se para entre esos pasos, cada uno en su goroutine del errgroup.
 
-import { usesApi } from '@keel-system/keel-core/gen/features';
+import { repositoryRoots, usesApi } from '@keel-system/keel-core/gen/features';
+import { goExported } from '../lib/go-projection.js';
+import { alignRows } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
+import { repositoryParam } from './repositories.js';
+import { newUseCasesCall, usesDependencies } from './use-cases.js';
 
 export function generate(model) {
   const { server } = layout(model);
@@ -44,7 +48,9 @@ function mainGo(model) {
       'internal/httpapi',
       'internal/platform/config',
       'internal/platform/correlation',
-      'internal/platform/health'
+      'internal/platform/health',
+      'database/sql',
+      'internal/infrastructure/postgres'
     ],
     body: `
 func main() {
@@ -67,7 +73,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout 
 	if err != nil {
 		return fmt.Errorf("cargar la configuración: %w", err)
 	}
-${usesApi(model) ? API_WIRING : PROBES_WIRING}
+${usesApi(model) ? apiWiring(model) : PROBES_WIRING}
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", srv.Addr)
 	if err != nil {
 		return fmt.Errorf("escuchar en %s: %w", srv.Addr, err)
@@ -105,12 +111,44 @@ const PROBES_WIRING = `	logger := slog.New(slog.NewJSONHandler(stdout, nil))
 	srv := httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes))`;
 
 // Con la API: cada registro lleva el correlationId de la petición que lo escribe, y la entrada despacha por los casos
-// de uso, cableados aquí y solo aquí.
-const API_WIRING = `	logger := slog.New(correlation.NewLogHandler(slog.NewJSONHandler(stdout, nil)))
+// de uso, cableados aquí y solo aquí. Con la persistencia, antes de servir nada: la conexión (sin base no arranca, salvo
+// el perfil test, que no la tiene), las migraciones de goose y un repositorio por agregado sobre las transacciones.
+function apiWiring(model) {
+  const logger = '\tlogger := slog.New(correlation.NewLogHandler(slog.NewJSONHandler(stdout, nil)))\n';
+  const serve = '\tsrv := httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes, useCases, logger))';
+  if (!usesDependencies(model)) {
+    return `${logger}
+	probes := &health.Probes{}
+	useCases := ${newUseCasesCall(model, 'logger')}
+${serve}`;
+  }
+  const repositories = repositoryRoots(model).map((root) => ({ indent: '\t\t', cells: [`${goExported(repositoryParam(root))}:`, `postgres.New${root.name}Repository(transactions),`] }));
+  return `${logger}
+	database, err := postgres.SettingsFrom(cfg)
+	if err != nil {
+		return fmt.Errorf("configuración de la base de datos: %w", err)
+	}
+	var db *sql.DB
+	if database.Enabled {
+		if db, err = postgres.Open(ctx, database); err != nil {
+			return err
+		}
+		// Lo último en cerrarse: después del apagado del servidor, que ya no la usa.
+		defer func() {
+			if err := db.Close(); err != nil {
+				logger.ErrorContext(ctx, "cerrar la base de datos", "error", err)
+			}
+		}()
+		if err := postgres.Migrate(ctx, db, logger); err != nil {
+			return err
+		}
+	}
+	transactions := postgres.NewTransactions(db, database.TransactionTimeout, logger)
 
 	probes := &health.Probes{}
-	useCases := application.NewUseCases(logger)
-	srv := httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes, useCases, logger))`;
+	useCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}
+${serve}`;
+}
 
 function mainTestGo(model) {
   const { server } = layout(model);
@@ -180,7 +218,7 @@ func getStatus(t *testing.T, url string) (int, string) {
 }
 
 func TestRunServesProbesAndStopsInOrder(t *testing.T) {
-	address, done, cancel := started(t, map[string]string{})
+	address, done, cancel := started(t, map[string]string{${usesDependencies(model) ? '"PROFILE": "test"' : ''}})
 	for _, path := range []string{"/livez", "/readyz"} {
 		if code, body := getStatus(t, "http://"+address+path); code != http.StatusOK || body != \`{"status":"UP"}\` {
 			t.Errorf("GET %s = %d %s, quiero 200 {\\"status\\":\\"UP\\"}", path, code, body)

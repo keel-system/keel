@@ -16,7 +16,9 @@
 import { dispatchNote } from '@keel-system/keel-core/gen';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
-import { isPartialUpdate, repositoryRoots } from '@keel-system/keel-core/gen/features';
+import { isPartialUpdate, repositoryOf, repositoryRoots } from '@keel-system/keel-core/gen/features';
+import { portName, repositoryParam } from './repositories.js';
+import { usesDependencies } from './use-cases.js';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, commentLines, goString } from '../lib/go-source.js';
 import { dataImports, wireTag } from './dtos.js';
@@ -203,16 +205,19 @@ function renderHandler(model, operation) {
   const dispatches = (operation.dispatches ?? []).length > 0;
   // El despacho de otro caso de uso (use-cases.dispatches, DSL 2.21): recibe los casos de uso del servicio, ya
   // envueltos con su log de frontera, y despacha por ellos. Nunca a un handler directamente.
-  const fields = dispatches
-    ? `
-	// useCases despacha las operaciones que esta declara en use-cases.dispatches.
-	//
-	//lint:ignore U1000 lo usa la lógica que escribe el agente (el TODO de Handle).
-	useCases *UseCases
-`
+  // El repositorio del agregado de la operación (el de su raíz si opera sobre una hija): sin él, el agente tendría que
+  // inventarse cómo llegar a la persistencia.
+  const root = usesDependencies(model) ? repositoryOf(model, operation) : null;
+  const deps = [];
+  if (root) deps.push({ name: repositoryParam(root), type: `domain.${portName(root)}`, doc: `${repositoryParam(root)} es el repositorio del agregado ${root.name}.` });
+  if (dispatches) deps.push({ name: 'useCases', type: '*UseCases', doc: 'useCases despacha las operaciones que esta declara en use-cases.dispatches.' });
+  const fields = deps.length > 0
+    ? `\n${deps
+        .map((dep) => `\t// ${dep.doc}\n\t//\n\t//lint:ignore U1000 lo usa la lógica que escribe el agente (el TODO de Handle).\n\t${dep.name} ${dep.type}\n`)
+        .join('\n')}`
     : '';
-  const param = dispatches ? 'useCases *UseCases' : '';
-  const init = dispatches ? '{useCases: useCases}' : '{}';
+  const param = deps.map((dep) => `${dep.name} ${dep.type}`).join(', ');
+  const init = deps.length > 0 ? `{${deps.map((dep) => `${dep.name}: ${dep.name}`).join(', ')}}` : '{}';
   const variable = operation.messageKind === 'query' ? 'query' : 'cmd';
   const returns = contract.result ? `(${contract.result}, error)` : 'error';
   const failure = `fmt.Errorf("%w: %s", ErrNotImplemented, ${goString(operation.name)})`;
@@ -234,7 +239,7 @@ ${notes.join('\n')}${notes.length > 0 ? '\n' : ''}	return ${zero}${failure}
 `;
   return {
     path: applicationPath(model, name),
-    content: packageFile(model, application, { imports: ['context', 'fmt'], body: body.replace(`struct {}`, 'struct{}'), generated: false })
+    content: packageFile(model, application, { imports: ['context', 'fmt', 'internal/domain'], body: body.replace(`struct {}`, 'struct{}'), generated: false })
   };
 }
 
@@ -243,7 +248,7 @@ function handlerNotes(model, operation) {
   const dispatch = dispatchNote(model, operation, {
     call: (variant, target) => `h.useCases.${useCaseField(target)}.Handle(ctx, ${messageType(target)}{...})`,
     port: 'h.useCases, el despacho de los casos de uso del servicio que ya recibe el handler',
-    withoutTransaction: 'la variante sin transacción (llega con la persistencia, incremento 6)'
+    withoutTransaction: 'WithoutTransaction(ctx) como contexto del despacho'
   });
   if (dispatch) notes.push(dispatch);
   for (const note of textFilterNotes(model, operation)) notes.push(note);

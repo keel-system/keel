@@ -10,6 +10,11 @@
 //   · `warnings` dejan seguir — la capa se acepta pero lo que el diseño declara en ella todavía no se
 //     emite, y el aviso dice cuándo llega.
 
+import { buildModel } from '@keel-system/keel-core/gen/model';
+import { resolveStack } from '@keel-system/keel-core/gen/stack';
+import { persistedMembers } from '@keel-system/keel-core/gen';
+import { GO_PROJECTION } from './go-projection.js';
+
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
   security: 'incremento 8',
@@ -73,10 +78,7 @@ export function checkSupportedFeatures(manifest, layers) {
         'Genera este diseño con keel-spring, keel-nest o keel-dotnet, o espera a que keel-go la cubra.'
     );
   } else if (declared.includes('persistence')) {
-    warnings.push(
-      'capa persistence: keel-go emite el ESQUEMA (la migración baseline de goose, con las tablas, constraints, índices y FK de ' +
-        'keel-core/gen/relational.js), pero todavía no los repositorios ni la transacción del caso de uso (llegan en el tramo 6b de PLAN-KEEL-GO.md).'
-    );
+    errors.push(...unmeasuredShapes(manifest, layers));
   }
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
@@ -88,6 +90,42 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
   return { errors, warnings };
+}
+
+/**
+ * Las formas del dominio que el adaptador relacional no persiste, con su motivo: ninguna fixture con persistencia las
+ * declara, así que su mapeo no lo mediría ninguna red (keel-dotnet las deja como TODO del agente; aquí no compilaría).
+ * Son la relación interna a-uno SIN vuelta (la FK la pondría la dueña sobre la hija), la many-to-many dentro del
+ * agregado y el value object persistido con otro value object dentro o con un campo opcional. Se leen del MODELO, que
+ * es quien sabe qué relación es interna.
+ */
+function unmeasuredShapes(manifest, layers) {
+  let model;
+  try {
+    model = buildModel({ manifest, layers, stack: resolveStack(null, layers), projection: GO_PROJECTION });
+  } catch {
+    // Un diseño que no da modelo lo rechazan las otras puertas, con su mensaje.
+    return [];
+  }
+  const why = 'ninguna fixture con persistencia la declara: sin red que mida su mapeo';
+  const errors = [];
+  for (const entity of model.entities.filter((candidate) => candidate.persisted)) {
+    for (const member of persistedMembers(model, entity)) {
+      if (member.kind === 'relationOne' && !member.relation.backReference) {
+        errors.push(`persistence: ${entity.name}.${member.name} es una relación interna a-uno sin vuelta; keel-go no la persiste (${why}).`);
+      } else if (member.kind === 'relationMany' && member.relation.cardinality === 'many-to-many') {
+        errors.push(`persistence: ${entity.name}.${member.name} es una many-to-many dentro del agregado; keel-go no la persiste (${why}).`);
+      } else if (member.kind === 'vo' || (member.kind === 'elementCollection' && member.element.kind === 'vo')) {
+        const vo = model.valueObjects.find((candidate) => candidate.name === member.field.namedType);
+        for (const sub of vo?.fields ?? []) {
+          if (sub.kind === 'composite' || !sub.required) {
+            errors.push(`persistence: ${entity.name}.${member.name} guarda ${vo.name}, que lleva ${sub.kind === 'composite' ? 'otro value object' : 'un campo opcional'} (${sub.name}); keel-go no lo aplana (${why}).`);
+          }
+        }
+      }
+    }
+  }
+  return errors;
 }
 
 /** Lo que el stack pide y keel-go no genera (un motor sin medir, la telemetría): se rechaza en el build en vez de estamparlo sin efecto. */

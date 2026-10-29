@@ -64,7 +64,7 @@ export function generate(model) {
     {
       path: `${postgres.dir}/doc.go`,
       content: packageFile(model, postgres, {
-        doc: 'Package postgres es el adaptador de PostgreSQL del servicio: el esquema (las migraciones de goose, embebidas)\ny, desde el tramo 6b, los repositorios y la transacción del caso de uso. Implementa los puertos del dominio.',
+        doc: 'Package postgres es el adaptador de PostgreSQL del servicio: el esquema (las migraciones de goose, embebidas),\nlos repositorios, la transacción del caso de uso y la traducción de los errores del motor. Implementa los\npuertos del dominio y el application.Transactor.',
         body: ''
       })
     },
@@ -94,6 +94,13 @@ function pageableFile(model) {
     { indent: '\t', cells: ['Size', 'int32'] },
     { indent: '\t', cells: ['Sort', '[]SortOrder'] }
   ]);
+  const pageResultFields = alignRows([
+    { indent: '\t', cells: ['Items', '[]T'] },
+    { indent: '\t', cells: ['Number', 'int32'] },
+    { indent: '\t', cells: ['Size', 'int32'] },
+    { indent: '\t', cells: ['TotalElements', 'int64'] },
+    { indent: '\t', cells: ['TotalPages', 'int32'] }
+  ]);
   const body = `
 // Pageable es la página que pide un listado: el Pageable de Spring Data (?page=&size=&sort=), con el mismo contrato en
 // los cuatro generadores. La lee el borde HTTP con sus defaults y su tope, y la recibe el puerto del repositorio.
@@ -104,6 +111,29 @@ ${pageFields.join('\n')}
 // Offset es la primera fila de la página.
 func (p Pageable) Offset() int64 {
 	return int64(p.Page) * int64(p.Size)
+}
+
+// Page es una página de resultados con sus totales: la Page de Spring Data.
+type Page[T any] struct {
+${pageResultFields.join('\n')}
+}
+
+// NewPage construye la página de items dentro de pageable, de un total de filas.
+func NewPage[T any](items []T, pageable Pageable, total int64) Page[T] {
+	pages := int32(1)
+	if pageable.Size > 0 {
+		pages = int32((total + int64(pageable.Size) - 1) / int64(pageable.Size))
+	}
+	return Page[T]{Items: items, Number: pageable.Page, Size: pageable.Size, TotalElements: total, TotalPages: pages}
+}
+
+// MapPage es la misma página con sus elementos transformados (la del dominio → la del contrato).
+func MapPage[T, R any](page Page[T], convert func(T) R) Page[R] {
+	items := make([]R, len(page.Items))
+	for i, item := range page.Items {
+		items[i] = convert(item)
+	}
+	return Page[R]{Items: items, Number: page.Number, Size: page.Size, TotalElements: page.TotalElements, TotalPages: page.TotalPages}
 }
 
 // SortOrder es un criterio de orden: la propiedad del dominio y su dirección.

@@ -13,6 +13,8 @@
 
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { ERROR_BASES } from '@keel-system/keel-core/gen/error-bases';
+import { constraintErrors, declaredConcurrencyError } from '@keel-system/keel-core/gen/constraint-errors';
+import { usesRelational } from '@keel-system/keel-core/gen/features';
 import { goExported, errorKindFor } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { docComment, domainPath, layout, packageFile } from './render.js';
@@ -45,7 +47,48 @@ export function frameworkSentinels(model) {
       ...FRAMEWORK_ERRORS.invalidTransition
     }
   ];
-  return list.filter((entry) => entry.needed);
+  return [...list.filter((entry) => entry.needed), ...persistenceSentinels(model)];
+}
+
+/**
+ * Los errores que pone la persistencia relacional cuando el diseño no los nombra (docs/framework-errors.md): el
+ * conflicto de concurrencia, el tope de transacción, la violación de integridad desconocida (409 SIN code, como
+ * keel-spring) y el code CANÓNICO de cada unicidad que el diseño no declara (`<ENTIDAD>_<CAMPOS>_ALREADY_EXISTS`). Los
+ * construye el adaptador de PostgreSQL al traducir el error del motor; la tabla de qué constraint es qué error es
+ * keel-core/gen/constraint-errors.js, la misma de los otros tres.
+ */
+export function persistenceSentinels(model) {
+  if (!usesRelational(model)) return [];
+  const list = [];
+  if (!declaredConcurrencyError(model)) {
+    list.push({
+      name: 'ErrConcurrentModification',
+      doc: 'otra escritura cambió el agregado (o lo borró) entre que este caso de uso lo leyó y lo guardó, o un conflicto de escritura transitorio agotó sus reintentos. No se reintenta: el cliente decide con el estado nuevo.',
+      ...FRAMEWORK_ERRORS.concurrency
+    });
+  }
+  list.push(
+    {
+      name: 'ErrTransactionTimeout',
+      doc: 'el motor cortó la transacción por su tope (DB_TRANSACTION_TIMEOUT): revirtió entera y es transitorio, así que la API responde 503 con Retry-After.',
+      ...FRAMEWORK_ERRORS.transactionTimeout
+    },
+    {
+      name: 'ErrIntegrityViolation',
+      doc: 'una violación de integridad que no casa con ninguna constraint conocida: 409 sin code.',
+      code: '',
+      http: 409
+    }
+  );
+  const seen = new Set(list.map((entry) => entry.name));
+  for (const entry of constraintErrors(model)) {
+    if (entry.declared) continue;
+    const name = sentinelOf(entry.code);
+    if (seen.has(name)) continue;
+    seen.add(name);
+    list.push({ name, doc: `la unicidad de ${entry.entity}.${entry.fields.join(', ')}, que el diseño no nombra: su code canónico.`, code: entry.code, http: 409 });
+  }
+  return list;
 }
 
 export function generate(model) {

@@ -9,12 +9,18 @@
 // herramienta»: si build declarase uno de más, de menos o en otra versión, tidy lo movería.
 
 import { GO_MIN_VERSION, GO_TOOLCHAIN } from '../lib/assets.js';
-import { MODULES, SKELETON_REQUIRES, TOOLS } from '../lib/go-stack.js';
+import { usesRelational } from '@keel-system/keel-core/gen/features';
+import { MODULES, RELATIONAL_REQUIRES, SKELETON_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
+import { foldKinds } from './persistence-runtime.js';
 import { layout, packageFile } from './render.js';
 
-/** Los módulos de ejecución que el proyecto importa. Crece con cada capa que se genera. */
-export function requiresFor() {
-  return [...SKELETON_REQUIRES];
+/** Los módulos de ejecución que el proyecto importa, en el orden de go.mod. Crece con cada capa que se genera. */
+export function requiresFor(model = null) {
+  return [
+    ...SKELETON_REQUIRES,
+    ...(model && usesRelational(model) ? RELATIONAL_REQUIRES : []),
+    ...(model && foldKinds(model).has('accents') ? TEXT_FOLD_REQUIRES : [])
+  ].sort();
 }
 
 /** Las herramientas (`go tool <nombre>`): todas, siempre. */
@@ -40,7 +46,7 @@ function docFile(model, target, text) {
 // El módulo de una herramienta va también en `require`, marcado `// indirect` como lo deja `go get -tool`: sin
 // él, `go mod tidy` lo resolvería a la ÚLTIMA versión publicada, no a la fijada en go-stack.js.
 function goMod(model) {
-  const requires = requiresFor().map((path) => `\t${path} ${MODULES[path].version}`);
+  const requires = requiresFor(model).map((path) => `\t${path} ${MODULES[path].version}`);
   const toolModules = TOOLS.slice()
     .sort()
     .map((path) => `\t${path} ${MODULES[path].version} // indirect`);

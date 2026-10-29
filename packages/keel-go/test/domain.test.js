@@ -19,6 +19,7 @@ import { planService as planSpring } from '../../keel-spring/src/scaffold/index.
 import { planService as planDotnet } from '../../keel-dotnet/src/scaffold/index.js';
 import { goExported, enumConstant } from '../src/lib/go-projection.js';
 import { domainMembers } from '../src/scaffold/entities.js';
+import { persistenceSentinels } from '../src/scaffold/errors.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { tmpDir } from './helpers/tmp.js';
 
@@ -70,7 +71,10 @@ const withoutValidation = (set) => [...set].filter((entry) => !entry.startsWith(
 
 for (const name of fixtures) {
   test(`${name}: los errores del dominio (code y status) son los que emiten keel-dotnet y keel-spring`, () => {
-    const go = goErrors(plans.get(name).files);
+    // Los de la persistencia (concurrencia, tope, integridad y la unicidad canónica) no son clases del dominio en los
+    // otros: los pone su traductor de errores del motor. Su paridad la mide test/repositories.test.js.
+    const persistence = new Set(persistenceSentinels(plans.get(name).model).map((entry) => `${entry.code}:${entry.http}`));
+    const go = new Set([...goErrors(plans.get(name).files)].filter((entry) => !persistence.has(entry)));
     assert.ok(go.size > 0, 'keel-go emite errores para este diseño');
     assert.deepEqual(withoutValidation(go), withoutValidation(dotnetErrors(other(planDotnet, name))));
     assert.deepEqual(withoutValidation(go), withoutValidation(springErrors(other(planSpring, name))));

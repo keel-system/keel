@@ -28,8 +28,8 @@ export const APPLICATION_SABOTAGES = [
     id: 'result',
     what: 'el decorador de una consulta devuelve el valor cero en vez del resultado',
     file: `${APPLICATION}/usecase.go`,
-    find: '\t\treturn result, err\n',
-    replace: '\t\t_ = result\n\t\tvar zero R\n\t\treturn zero, err\n',
+    find: '\t\treturn result, nil\n',
+    replace: '\t\t_ = result\n\t\tvar zero R\n\t\treturn zero, nil\n',
     fails: 'TestObserveDejaPasarResultadoYError'
   },
   {

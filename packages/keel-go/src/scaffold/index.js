@@ -28,6 +28,8 @@ import * as services from './services.js';
 import * as mappers from './mappers.js';
 import * as useCases from './use-cases.js';
 import * as persistence from './persistence.js';
+import * as persistenceRuntime from './persistence-runtime.js';
+import * as repositories from './repositories.js';
 import * as correlation from './correlation.js';
 import * as endpoints from './endpoints.js';
 import * as restSupport from './rest-support.js';
@@ -59,6 +61,8 @@ const GENERATORS = [
   mappers,
   useCases,
   persistence,
+  persistenceRuntime,
+  repositories,
   endpoints,
   restSupport,
   apiTests,

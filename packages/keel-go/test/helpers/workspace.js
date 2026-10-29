@@ -42,8 +42,8 @@ export function mountDesign(workspace, name, { withoutLayers = [] } = {}) {
   return specDir;
 }
 
-/** El diseño que keel-go sabe generar hoy: product-catalog sin persistencia (incremento 2). */
-export const GO_READY_DESIGN = { name: 'product-catalog', withoutLayers: ['persistence'] };
+/** El diseño que mide go-check: product-catalog entero, con su persistencia relacional (tramo 6b). */
+export const GO_READY_DESIGN = { name: 'product-catalog', withoutLayers: [] };
 
 /** Ejecuta un comando de la CLI en `workspace`, en silencio, y devuelve su exitCode y lo que imprimió. */
 export async function runCommand(workspace, command, ...args) {

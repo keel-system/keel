@@ -33,7 +33,7 @@ const sorted = (map) => Object.fromEntries([...map].sort(([a], [b]) => a.localeC
 function goMessages(files) {
   const wiring = app(files, 'use_cases');
   const messages = new Map();
-  for (const [, call, name, kind] of wiring.matchAll(/^\tuc\.\w+ = (observe|observeCommand)\(logger, "(\w+)"(?:, (Kind\w+))?,/gm)) {
+  for (const [, call, name, kind] of wiring.matchAll(/^\tuc\.\w+ = (observe|observeCommand)\(logger, tx, "(\w+)"(?:, (Kind\w+))?,/gm)) {
     messages.set(name, call === 'observeCommand' ? 'command' : kind === 'KindQuery' ? 'query' : 'returningCommand');
   }
   return messages;

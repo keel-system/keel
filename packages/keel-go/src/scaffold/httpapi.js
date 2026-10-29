@@ -12,6 +12,7 @@
 
 import { usesApi } from '@keel-system/keel-core/gen/features';
 import { layout, packageFile } from './render.js';
+import { newUseCasesCall } from './use-cases.js';
 
 export function generate(model) {
   const { httpapi } = layout(model);
@@ -89,7 +90,7 @@ func NewHandler(probes *health.Probes, useCases *application.UseCases, logger *s
 /** La llamada a NewHandler con la que lo construyen las pruebas. */
 export function testHandler(model) {
   return usesApi(model)
-    ? 'httpapi.NewHandler(&health.Probes{}, application.NewUseCases(slog.New(slog.DiscardHandler)), slog.New(slog.DiscardHandler))'
+    ? `httpapi.NewHandler(&health.Probes{}, ${newUseCasesCall(model, 'slog.New(slog.DiscardHandler)')}, slog.New(slog.DiscardHandler))`
     : 'httpapi.NewHandler(&health.Probes{})';
 }
 

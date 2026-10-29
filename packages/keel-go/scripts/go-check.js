@@ -31,6 +31,7 @@ import { APPLICATION_SABOTAGES, applySabotage as applyApplicationSabotage } from
 import { API_SABOTAGES, applySabotage as applyApiSabotage } from '../test/helpers/api-sabotages.js';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
+import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { planService } from '../src/scaffold/index.js';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 
@@ -311,9 +312,12 @@ if (race) {
   }
 }
 
-if (fs.existsSync(binary)) {
+// El binario arranca contra un PostgreSQL de verdad (el diseño tiene persistencia): sin base no arranca, y al arrancar
+// aplica las migraciones de goose. En el perfil develop, que toma DB_URL del entorno.
+const database = await startDatabase();
+if (fs.existsSync(binary) && database) {
   const port = await freePort();
-  const app = spawn(binary, [], { cwd: workspace, env: { ...process.env, PROFILE: 'local', SERVER_PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const app = spawn(binary, [], { cwd: workspace, env: { ...process.env, ...database.env, PROFILE: 'develop', SERVER_PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
   let appOutput = '';
   app.stdout.on('data', (chunk) => (appOutput += chunk));
   app.stderr.on('data', (chunk) => (appOutput += chunk));
@@ -322,6 +326,8 @@ if (fs.existsSync(binary)) {
   // El binario se lanza desde OTRO directorio: la configuración va embebida, no se lee del de trabajo.
   const livez = await waitFor(port, '/livez', 30_000);
   step('el binario arranca fuera del proyecto y GET /livez → 200 {"status":"UP"}', livez?.status === 200 && livez.body === '{"status":"UP"}', livez ? `${livez.status} ${livez.body}` : 'no respondió en 30 s');
+  const applied = database.query('SELECT count(*) FROM goose_db_version WHERE version_id > 0; SELECT count(*) FROM information_schema.tables WHERE table_name = \'products\';');
+  step('al arrancar, goose aplica la baseline (goose_db_version y la tabla products)', applied.ok && applied.stdout.trim().split(/\s+/).join(',') === '1,1', applied.output.trim().slice(0, 300));
   const readyz = await get(port, '/readyz');
   step('GET /readyz → 200 {"status":"UP"}', readyz?.status === 200 && readyz.body === '{"status":"UP"}', readyz ? `${readyz.status} ${readyz.body}` : 'sin respuesta');
   const missing = await get(port, '/no-existe');
@@ -346,6 +352,26 @@ if (fs.existsSync(binary)) {
   }
   if (!end) app.kill('SIGKILL');
   if (results.some((result) => !result.ok)) console.error(appOutput);
+}
+database?.stop();
+
+/** Un PostgreSQL efímero en un puerto libre, o null (con su paso en rojo) si no hay contenedores. */
+async function startDatabase() {
+  const runtime = containerRuntime();
+  if (!step('podman o docker para el PostgreSQL del arranque', Boolean(runtime))) return null;
+  const engine = DATABASES.postgresql;
+  const dbPort = await freePort();
+  const name = `keel-go-check-${process.pid}`;
+  const started = run(runtime, ['run', '-d', '--rm', '--name', name, '-p', `${dbPort}:5432`, '-e', `POSTGRES_PASSWORD=${engine.password}`, engine.image], process.cwd());
+  if (!step(`PostgreSQL (${engine.image}) en el puerto ${dbPort}`, started.ok, started.output.slice(0, 300))) return null;
+  const query = (sql) => run(runtime, ['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-t', '-A', '-c', sql], process.cwd());
+  const until = Date.now() + 60_000;
+  while (Date.now() < until && !query('SELECT 1').ok) await new Promise((resolve) => setTimeout(resolve, 500));
+  return {
+    env: { DB_URL: `jdbc:postgresql://127.0.0.1:${dbPort}/postgres`, DB_USERNAME: 'postgres', DB_PASSWORD: engine.password },
+    query,
+    stop: () => run(runtime, ['rm', '-f', name], process.cwd())
+  };
 }
 
 const failed = results.filter((result) => !result.ok).length;

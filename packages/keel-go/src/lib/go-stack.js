@@ -44,6 +44,17 @@ export const MODULES = {
   'github.com/google/uuid': { version: 'v1.6.0', license: 'BSD-3-Clause', kind: 'require', use: 'uuid (v7 y forma del cable)' },
   // El ciclo de vida: errgroup para que ninguna goroutine quede sin dueño (§ 3.5). La v0.24.0 es de 2026-09-23.
   'golang.org/x/sync': { version: 'v0.24.0', license: 'BSD-3-Clause', kind: 'require', use: 'errgroup: servidores y trabajos con dueño' },
+  // El driver de PostgreSQL, por su adaptador de database/sql (`pgx/v5/stdlib`): los repositorios escriben SQL sobre
+  // la interfaz estándar y el error del motor llega como `*pgconn.PgError`, con el NOMBRE de la constraint aparte. La
+  // v5.11.0 es de 2026-09-07.
+  'github.com/jackc/pgx/v5': { version: 'v5.11.0', license: 'MIT', kind: 'require', use: 'driver de PostgreSQL (database/sql)' },
+  // Las migraciones al arrancar, embebidas en el binario (Provider sobre un fs.FS, sin el registro global). Su
+  // paquete raíz no importa los dialectos de otros motores: los módulos que su go.mod nombra (ClickHouse, MSSQL…)
+  // no entran en el binario. La v3.29.0 es de 2026-10-11.
+  'github.com/pressly/goose/v3': { version: 'v3.29.0', license: 'MIT', kind: 'require', use: 'migraciones del esquema al arrancar' },
+  // La descomposición de Unicode (NFD) para plegar los acentos de una sombra (`compare: ignore-case-accents`). Es la
+  // misma versión que piden pgx y goose en el grafo, así que tidy no la mueve. La v0.43.0 es de 2026-10-09.
+  'golang.org/x/text': { version: 'v0.43.0', license: 'BSD-3-Clause', kind: 'require', use: 'pliegue de acentos (NFD)' },
 
   // Herramientas, por la directiva `tool` de go.mod (`go tool <nombre>`): el proyecto no exige nada instalado
   // aparte de Go.
@@ -63,6 +74,12 @@ export const MODULES = {
  * contrato del cable (inc. 3), que lo prueba aunque el diseño no declare ningún uuid.
  */
 export const SKELETON_REQUIRES = ['github.com/google/uuid', 'go.yaml.in/yaml/v3', 'golang.org/x/sync'];
+
+/** El pliegue sin acentos (`compare: ignore-case-accents`) necesita la descomposición de Unicode (NFD). */
+export const TEXT_FOLD_REQUIRES = ['golang.org/x/text'];
+
+/** Los módulos de la persistencia relacional (incremento 6): el driver y las migraciones. */
+export const RELATIONAL_REQUIRES = ['github.com/jackc/pgx/v5', 'github.com/pressly/goose/v3'];
 
 /** Las herramientas: todas, siempre. */
 export const TOOLS = Object.entries(MODULES)
