@@ -32,10 +32,18 @@ test('go.mod: módulo, versión mínima, toolchain, requisitos directos exactos 
   assert.doesNotMatch(goMod, /golangci/);
 });
 
-test('todo .go que escribe build lleva la cabecera de código generado y empieza por ella', () => {
+test('todo .go que escribe build lleva la cabecera de código generado y empieza por ella; lo que completa el agente, no', () => {
+  // Del agente: el handler de cada operación y el mapeo que build no supo derivar entero (devuelve ErrNotImplemented).
+  const agents = (path, content) => /_handler\.go$/.test(path) || (/_mapper\.go$/.test(path) && content.includes('ErrNotImplemented'));
+  let handlers = 0;
   for (const [path, content] of byPath) {
-    if (path.endsWith('.go')) assert.ok(content.startsWith(`${GENERATED_HEADER}\n\n`), path);
+    if (!path.endsWith('.go')) continue;
+    if (agents(path, content)) {
+      handlers++;
+      assert.ok(!content.includes(GENERATED_HEADER), `${path}: lo completa el agente y lleva la cabecera de código generado`);
+    } else assert.ok(content.startsWith(`${GENERATED_HEADER}\n\n`), path);
   }
+  assert.ok(handlers > 0, 'el diseño de referencia tiene operaciones: algún handler tenía que salir');
 });
 
 test('config/application.yaml dice lo mismo que el de keel-nest y keel-dotnet para el mismo diseño', async () => {

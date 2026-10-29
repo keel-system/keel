@@ -35,14 +35,22 @@ export function usesCommandDispatcher(model) {
 
 /**
  * La nota del handler que despacha. `call` es cómo se escribe la llamada en el lenguaje del generador, con
- * `{variant}` y `{message}` por sustituir (`commandDispatcher.{variant}(new {message}(...))`).
+ * `{variant}` y `{message}` por sustituir (`commandDispatcher.{variant}(new {message}(...))`), o una función
+ * `(variant, target)` cuando la llamada nombra algo más que el mensaje. `port` y `withoutTransaction` nombran el
+ * puerto y la variante sin transacción donde el generador no los llama así (keel-go despacha por sus casos de uso
+ * tipados, sin un puerto genérico).
  */
-export function dispatchNote(model, operation, { call }) {
+export function dispatchNote(
+  model,
+  operation,
+  { call, port = 'el CommandDispatcher, que ya está inyectado', withoutTransaction = 'dispatchWithoutTransaction(...)' }
+) {
   const targets = (operation.dispatches ?? [])
     .map((name) => allOperations(model).find((candidate) => candidate.name === name))
     .filter(Boolean);
   if (targets.length === 0) return null;
-  const render = (variant, target) => call.replace('{variant}', variant).replace('{message}', target.messageClass);
+  const render = (variant, target) =>
+    typeof call === 'function' ? call(variant, target) : call.replace('{variant}', variant).replace('{message}', target.messageClass);
   // Un invocado que también entra por HTTP lleva su puerta en el mensaje (entry-gates.js): aquí es DISPATCH.
   const gate = (target) => (carriesEntryGate(model, target) ? `, con ${ENTRY_GATE_FIELD} DISPATCH` : '');
   const listed = targets.map((target) => `${target.name} (${render('dispatch', target)}${gate(target)})`).join(', ');
@@ -51,9 +59,9 @@ export function dispatchNote(model, operation, { call }) {
       ? 'Esta operación es un barrido que corre SIN transacción abarcadora: cada dispatch(...) abre y confirma la del invocado, así que un candidato que falla no deshace los demás.'
       : 'dispatch(...) une el invocado a la transacción de esta operación: atómico con su trabajo, y si una de las dos falla, revierten las dos.';
   return (
-    `Despacha (use-cases.dispatches): ${listed}. Construye su mensaje y pásalo por el CommandDispatcher, que ya está inyectado; ` +
+    `Despacha (use-cases.dispatches): ${listed}. Construye su mensaje y pásalo por ${port}; ` +
     'nunca llames a su handler directamente ni repitas aquí su lógica: sus guardas, su idempotencia y los eventos que emite son suyos. ' +
-    `${transaction} Usa dispatchWithoutTransaction(...) cuando el invocado haga I/O externo (un correo, una llamada a un proveedor) ` +
+    `${transaction} Usa ${withoutTransaction} cuando el invocado haga I/O externo (un correo, una llamada a un proveedor) ` +
     'y no deba retener la transacción ni la conexión durante esa latencia. Cuándo despachar y con qué datos lo dicen las reglas.'
   );
 }

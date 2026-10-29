@@ -35,7 +35,8 @@ Guide* (decisiones y buenas prácticas) y *Go Proverbs*. Las reglas de Go de est
 - `domain` y `application` son **un paquete cada uno**. No se parten por agregado: dos agregados que se refieren
   abrirían un ciclo de importación, y Go no los admite.
 - Los adaptadores devuelven structs concretos; las interfaces (los puertos) se declaran donde se consumen.
-- Un handler **nunca llama a otro handler**: si necesita otro caso de uso, despacha su mensaje por el mediator.
+- Un handler **nunca llama a otro handler**: si necesita otro caso de uso (`use-cases.dispatches`), despacha su
+  mensaje por el campo de `UseCases` que lo atiende (`h.useCases.X.Handle(ctx, …)`), que lleva su log de frontera.
 - La entrada HTTP **solo traduce**: el lector generado valida, el handler HTTP despacha. Cero lógica de negocio.
 - Datos de **otro servicio** llegan por `http-clients` o por eventos de `messaging`, nunca leyendo su base.
 

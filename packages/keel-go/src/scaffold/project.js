@@ -28,7 +28,7 @@ export function generate(model) {
     { path: 'go.mod', content: goMod(model) },
     { path: '.gitignore', content: gitignore() },
     docFile(model, pkgs.domain, 'Package domain contiene el modelo del dominio del servicio: agregados, value objects, enums, eventos,\nerrores y los puertos que la aplicación necesita. Solo depende de la biblioteca estándar y de su lista\nblanca (ver internal/architecture). Lo que el diseño no puede decir (constructores, métodos de negocio)\nlo escribe el agente siguiendo los TODO de cada tipo.'),
-    docFile(model, pkgs.application, 'Package application contiene los casos de uso del servicio: un archivo por operación, con su mensaje,\nsu handler, su DTO y su mapeo. Solo ve el dominio. Su código llega en el incremento 4 de keel-go.'),
+    docFile(model, pkgs.application, 'Package application contiene los casos de uso del servicio: por cada operación su mensaje (lo escribe\nbuild) y su handler (lo completa el agente), los DTO de respuesta y los mapeos desde el dominio. UseCases\nes la única puerta de despacho. Solo ve el dominio.'),
     docFile(model, pkgs.architecture, 'Package architecture comprueba la frontera hexagonal del servicio: qué capa puede importar a cuál.\nNo tiene código de producción; su prueba falla si un import cruza una frontera.')
   ];
 }

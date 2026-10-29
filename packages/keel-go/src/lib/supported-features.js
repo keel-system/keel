@@ -23,13 +23,22 @@ const PENDING_LAYERS = {
 };
 
 /**
- * Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. El dominio ya se emite
- * entero (incremento 4a): enums, value objects, formatos, entidades, eventos y errores.
+ * Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. El dominio (incremento 4a)
+ * y la aplicación (4b: mensajes, handlers, DTOs, mapeos y UseCases) ya se emiten enteros.
  */
 const ACCEPTED_NOT_EMITTED = {
-  'use-cases': 'incremento 4b (la aplicación: mensajes, handlers, DTOs y mediator)',
   api: 'incremento 5 (API REST)'
 };
+
+/**
+ * Lo que una operación puede declarar y keel-go todavía no genera: el mensaje y el handler salen, pero no el
+ * mecanismo. Se avisa por operación, nombrándolas, como keel-dotnet en su incremento 4.
+ */
+const PENDING_OPERATION_FEATURES = [
+  { key: 'idempotency', what: 'idempotency (el almacén, la firma del comando y el gate check-idempotency.sh)', increment: 'incremento 10' },
+  { key: 'schedule', what: 'schedule (el reloj que dispara la operación)', increment: 'incremento 10' },
+  { key: 'cache', what: 'cache (la caché de la consulta)', increment: 'incremento 13' }
+];
 
 /**
  * Comprueba el diseño contra la frontera de keel-go. Devuelve { errors, warnings } de strings ya redactados
@@ -55,6 +64,15 @@ export function checkSupportedFeatures(manifest, layers) {
           'el proyecto generado arranca y responde a sus sondas, sin nada de esta capa.'
       );
     }
+  }
+  const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
+  for (const feature of PENDING_OPERATION_FEATURES) {
+    const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
+    if (names.length === 0) continue;
+    warnings.push(
+      `use-cases: ${names.join(', ')} declara${names.length === 1 ? '' : 'n'} ${feature.what}; keel-go genera el mensaje y el handler, ` +
+        `pero no el mecanismo (llega en el ${feature.increment} de PLAN-KEEL-GO.md).`
+    );
   }
   return { errors, warnings };
 }

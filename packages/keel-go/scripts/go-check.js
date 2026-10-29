@@ -27,6 +27,7 @@ import { ALLOWED_LICENSES, MODULES, TOOLS } from '../src/lib/go-stack.js';
 import { GO_TOOLCHAIN } from '../src/lib/assets.js';
 import { WIRE_SABOTAGES, applySabotage } from '../test/helpers/wire-sabotages.js';
 import { DOMAIN_SABOTAGES, applySabotage as applyDomainSabotage } from '../test/helpers/domain-sabotages.js';
+import { APPLICATION_SABOTAGES, applySabotage as applyApplicationSabotage } from '../test/helpers/application-sabotages.js';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
@@ -226,6 +227,29 @@ for (const sabotage of DOMAIN_SABOTAGES) {
   step(`dominio falsado: ${sabotage.id} (${sabotage.what}) → ${expected} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
 }
 fs.rmSync(probe);
+
+// La APLICACIÓN se mide con su propia prueba emitida (use_cases_test.go: cada operación cableada, el decorador del
+// log de frontera deja pasar resultado y error, y un rechazo del dominio va a Info con su code). Cada sabotaje tiene
+// que tumbar exactamente las pruebas que nombra.
+const appTests = ['test', '-count=1', '-run', 'TestNewUseCases|TestObserve', './internal/application/'];
+const wired = go(projectDir, appTests);
+if (!step('la prueba emitida del cableado de la aplicación en verde', wired.ok)) console.error(wired.output);
+for (const sabotage of APPLICATION_SABOTAGES) {
+  const file = path.join(projectDir, sabotage.file);
+  const original = fs.readFileSync(file, 'utf8');
+  const mutated = applyApplicationSabotage(sabotage, original);
+  if (!mutated) {
+    step(`aplicación falsada: ${sabotage.id}`, false, `el sabotaje ya no se aplica a ${sabotage.file}`);
+    continue;
+  }
+  fs.writeFileSync(file, mutated);
+  const sabotaged = go(projectDir, appTests);
+  fs.writeFileSync(file, original);
+  const failed = [...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]);
+  const expected = [sabotage.fails, ...(sabotage.alsoFails ?? [])].sort().join(' ');
+  const exact = [...new Set(failed)].sort().join(' ') === expected;
+  step(`aplicación falsada: ${sabotage.id} (${sabotage.what}) → ${expected} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
+}
 
 // La frontera hexagonal se falsa: un import plantado del dominio a la entrada HTTP tiene que ponerla en rojo.
 const planted = path.join(projectDir, 'internal', 'domain', 'planted.go');

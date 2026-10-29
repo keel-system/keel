@@ -8,7 +8,7 @@
 // ciclos de importación en cuanto dos agregados se refieren.
 
 import { commentLines, goFile, goString } from '../lib/go-source.js';
-import { goUnexported } from '../lib/go-projection.js';
+import { goExported, goUnexported } from '../lib/go-projection.js';
 
 /** Un paquete del proyecto: su directorio, su ruta de importación y su nombre. */
 function pkg(module, dir, name = dir.split('/').at(-1)) {
@@ -87,9 +87,12 @@ const CONSTRAINT_SUFFIXES = new Set(['test', ...GOOS.split(' '), ...GOARCH.split
 /** El nombre de archivo Go de un tipo: `SKUFormat` → `sku_format`, sin caer en una restricción de compilación. */
 export function goFileName(name) {
   const base = String(name)
+    // Una sigla en plural es una palabra: `GetProductsByIDsQuery` → `get_products_by_ids_query`.
+    .replace(/([A-Z]{2,})s(?=[A-Z]|$)/g, (_, initialism) => `_${initialism.toLowerCase()}s_`)
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
     .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
     .toLowerCase();
   return CONSTRAINT_SUFFIXES.has(base.split('_').at(-1)) ? `${base}_type` : base;
 }
@@ -116,6 +119,33 @@ export function declType(field, { qualify = false } = {}) {
   if (qualify && (field.kind === 'enum' || field.kind === 'composite')) {
     type = field.list ? `[]domain.${type.slice(2)}` : `domain.${type}`;
   }
+  return isOptional(field) ? `*${type}` : type;
+}
+
+/** La ruta del archivo de un tipo de la aplicación. */
+export function applicationPath(model, name) {
+  return `${layout(model).application.dir}/${goFileName(name)}.go`;
+}
+
+/**
+ * El nombre Go de una clase que nombra el modelo (`GetByUrlQuery`, `CreateProductResponseDto`): el modelo los
+ * compone al estilo de Java, y en Go una sigla va en un solo caso (`GetByURLQuery`).
+ */
+export function goTypeName(name) {
+  return goExported(name);
+}
+
+/**
+ * El tipo Go con el que la APLICACIÓN declara un campo de un mensaje o un DTO: los enums y value objects por su
+ * paquete (`domain.Money`), los DTO de la propia aplicación con su nombre Go, la lista como `[]T` y lo opcional
+ * como puntero.
+ */
+export function appType(field) {
+  const element = field.list ? field.goType.slice(2) : field.goType;
+  let base = element;
+  if (field.kind === 'enum' || field.kind === 'composite') base = `domain.${element}`;
+  else if (field.kind === 'childDto' || field.kind === 'refDto' || field.kind === 'needDto') base = goTypeName(element);
+  const type = field.list ? `[]${base}` : base;
   return isOptional(field) ? `*${type}` : type;
 }
 

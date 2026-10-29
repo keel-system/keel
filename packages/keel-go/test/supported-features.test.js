@@ -17,12 +17,22 @@ for (const layer of ['persistence', 'security', 'messaging', 'http-clients', 'de
   });
 }
 
-test('dominio, casos de uso y API se aceptan; avisan los casos de uso y la API, que aún no se emiten', () => {
+test('dominio, casos de uso y API se aceptan; solo avisa la API, que aún no se emite', () => {
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api'), layersWith('domain', 'use-cases', 'api'));
   assert.deepEqual(errors, []);
-  assert.equal(warnings.length, 2);
-  for (const warning of warnings) assert.match(warning, /aún no emite su código \(llega en el incremento [45]/);
-  assert.ok(!warnings.some((warning) => warning.startsWith('capa domain:')), 'el dominio ya se emite');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^capa api: .*aún no emite su código \(llega en el incremento 5/);
+});
+
+test('una operación con idempotency, schedule o cache avisa nombrándola: sale el handler, no el mecanismo', () => {
+  const layers = layersWith('domain', 'api');
+  layers['use-cases'] = { operations: { pay: { idempotency: {} }, sweep: { schedule: {} }, find: { cache: {} }, plain: {} } };
+  const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api'), layers);
+  assert.deepEqual(errors, []);
+  assert.match(warnings.find((w) => w.includes('idempotency')), /^use-cases: pay declara idempotency .*incremento 10/);
+  assert.match(warnings.find((w) => w.includes('schedule (')), /^use-cases: sweep declara schedule .*incremento 10/);
+  assert.match(warnings.find((w) => w.includes('cache (')), /^use-cases: find declara cache .*incremento 13/);
+  assert.ok(!warnings.some((w) => w.includes('plain')));
 });
 
 test('la telemetría se rechaza en vez de estamparse sin efecto', () => {

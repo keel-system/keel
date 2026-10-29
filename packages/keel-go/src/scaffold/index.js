@@ -22,6 +22,10 @@ import * as valueTypes from './value-types.js';
 import * as entities from './entities.js';
 import * as events from './events.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
+import * as dtos from './dtos.js';
+import * as services from './services.js';
+import * as mappers from './mappers.js';
+import * as useCases from './use-cases.js';
 import * as httpapi from './httpapi.js';
 import * as server from './server.js';
 import * as architecture from './architecture.js';
@@ -29,7 +33,7 @@ import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara.
-const GENERATORS = [project, config, health, wire, errors, enums, valueTypes, entities, events, domainGuardsCheck, httpapi, server, architecture, readme, generatorDocs];
+const GENERATORS = [project, config, health, wire, errors, enums, valueTypes, entities, events, domainGuardsCheck, dtos, services, mappers, useCases, httpapi, server, architecture, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus avisos
