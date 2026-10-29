@@ -1,0 +1,294 @@
+{
+ "captured": "gofmt de go1.27.3, 2026-10-29",
+ "keyed": {
+  "cortas": {
+   "pairs": [
+    [
+     "K",
+     "1"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKK",
+     "2"
+    ],
+    [
+     "KKKKK",
+     "3"
+    ]
+   ],
+   "expected": [
+    "\tK:                 1,",
+    "\tKKKKKKKKKKKKKKKKK: 2,",
+    "\tKKKKK:             3,"
+   ]
+  },
+  "larga tras cortas": {
+   "pairs": [
+    [
+     "KKK",
+     "1"
+    ],
+    [
+     "KKKK",
+     "2"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "3"
+    ],
+    [
+     "KKKKK",
+     "4"
+    ]
+   ],
+   "expected": [
+    "\tKKK:  1,",
+    "\tKKKK: 2,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK: 3,",
+    "\tKKKKK: 4,"
+   ]
+  },
+  "dos largas parecidas": {
+   "pairs": [
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "1"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "2"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "3"
+    ]
+   ],
+   "expected": [
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK:      1,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK: 2,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK:   3,"
+   ]
+  },
+  "larga y luego mucho más larga": {
+   "pairs": [
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "1"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "2"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "3"
+    ]
+   ],
+   "expected": [
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK: 1,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK: 2,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK: 3,"
+   ]
+  },
+  "corta tras largas": {
+   "pairs": [
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "1"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "2"
+    ],
+    [
+     "KKKK",
+     "3"
+    ],
+    [
+     "KKKKKK",
+     "4"
+    ]
+   ],
+   "expected": [
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK:           1,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK: 2,",
+    "\tKKKK:   3,",
+    "\tKKKKKK: 4,"
+   ]
+  },
+  "frontera de 40": {
+   "pairs": [
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "1"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "2"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "3"
+    ]
+   ],
+   "expected": [
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK:  1,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK: 2,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK:   3,"
+   ]
+  },
+  "mezcla": {
+   "pairs": [
+    [
+     "KK",
+     "1"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "2"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "3"
+    ],
+    [
+     "KKKKKKKKK",
+     "4"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "5"
+    ],
+    [
+     "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+     "6"
+    ]
+   ],
+   "expected": [
+    "\tKK: 1,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK: 2,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK:  3,",
+    "\tKKKKKKKKK: 4,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK: 5,",
+    "\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK:   6,"
+   ]
+  }
+ },
+ "rows": {
+  "comentario corta": {
+   "rows": [
+    {
+     "text": "\t// a"
+    },
+    {
+     "indent": "\t",
+     "cells": [
+      "A",
+      "int",
+      "`json:\"a\"`"
+     ]
+    },
+    {
+     "text": "\t// bb"
+    },
+    {
+     "indent": "\t",
+     "cells": [
+      "Bbbbbbb",
+      "string",
+      "`json:\"bbbbbbb\"`"
+     ]
+    },
+    {
+     "indent": "\t",
+     "cells": [
+      "Cc",
+      "[]int"
+     ]
+    },
+    null,
+    {
+     "indent": "\t",
+     "cells": [
+      "D",
+      "bool"
+     ]
+    }
+   ],
+   "expected": [
+    "\t// a",
+    "\tA int `json:\"a\"`",
+    "\t// bb",
+    "\tBbbbbbb string `json:\"bbbbbbb\"`",
+    "\tCc      []int",
+    "",
+    "\tD bool"
+   ]
+  },
+  "bloque de columna cortado": {
+   "rows": [
+    {
+     "indent": "\t",
+     "cells": [
+      "A",
+      "int",
+      "`json:\"a\"`"
+     ]
+    },
+    {
+     "indent": "\t",
+     "cells": [
+      "Bb",
+      "string"
+     ]
+    },
+    {
+     "indent": "\t",
+     "cells": [
+      "Ccccc",
+      "bool",
+      "`json:\"ccccc\"`"
+     ]
+    }
+   ],
+   "expected": [
+    "\tA     int `json:\"a\"`",
+    "\tBb    string",
+    "\tCcccc bool `json:\"ccccc\"`"
+   ]
+  },
+  "tags": {
+   "rows": [
+    {
+     "indent": "\t",
+     "cells": [
+      "ID",
+      "uuid.UUID",
+      "`json:\"id\"`"
+     ]
+    },
+    {
+     "indent": "\t",
+     "cells": [
+      "CustomerName",
+      "string",
+      "`json:\"customerName\"`"
+     ]
+    },
+    {
+     "indent": "\t",
+     "cells": [
+      "Total",
+      "wire.Decimal",
+      "`json:\"total\"`"
+     ]
+    }
+   ],
+   "expected": [
+    "\tID           uuid.UUID    `json:\"id\"`",
+    "\tCustomerName string       `json:\"customerName\"`",
+    "\tTotal        wire.Decimal `json:\"total\"`"
+   ]
+  }
+ }
+}

@@ -68,7 +68,8 @@ export const CUSTOMIZABLE_PAYLOAD = [
 export const KNOWN_GENERATORS = {
   spring: '@keel-system/keel-spring',
   nest: '@keel-system/keel-nest',
-  dotnet: '@keel-system/keel-dotnet'
+  dotnet: '@keel-system/keel-dotnet',
+  go: '@keel-system/keel-go'
 };
 
 export function isKeelWorkspace(dir) {

@@ -566,6 +566,7 @@ Monorepo npm workspaces; los cinco paquetes están publicados en npm con el scop
 | [`@keel-system/keel-spring`](packages/keel-spring/README.md) | `keel-spring` | 0.2.0 | Generador Spring Boot 4.1.2 / Java 21: `services/<servicio>-spring/`, con el wrapper de Gradle vendorizado. |
 | [`@keel-system/keel-nest`](packages/keel-nest/README.md) | `keel-nest` | 0.1.0 | Generador NestJS 12 sobre Fastify, ESM, TypeScript strict y Vitest: `services/<servicio>-nest/`. |
 | [`@keel-system/keel-dotnet`](packages/keel-dotnet/README.md) | `keel-dotnet` | 0.1.0 | Generador .NET 10, un proyecto por capa, sin librerías de licencia comercial: `services/<servicio>-dotnet/`. |
+| [`@keel-system/keel-go`](packages/keel-go/README.md) | `keel-go` | 0.1.0 | Generador Go, **en construcción por incrementos** (`PLAN-KEEL-GO.md`): hoy un módulo Go que compila sin cgo, pasa vet y staticcheck, arranca y responde a sus sondas; rechaza nombrando el incremento todo lo que todavía no genera. `services/<servicio>-go/`. |
 | [`@keel-system/keel-recover`](packages/keel-recover/README.md) | `keel-recover` | 0.0.1 | Ingeniería inversa de un servicio existente hacia un diseño Keel, con la fidelidad y la paridad medidas. |
 
 El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera— está en su README.

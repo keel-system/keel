@@ -1,0 +1,54 @@
+{
+  "name": "@keel-system/keel-go",
+  "version": "0.1.0",
+  "description": "Generador Go para diseños Keel: valida el diseño agnóstico y genera services/<servicio>-go/ con el scaffolding transversal al stack. Equivalente a keel-spring, keel-nest y keel-dotnet: el mismo diseño produce servidores con el mismo contrato observable.",
+  "type": "module",
+  "bin": {
+    "keel-go": "src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "go-check": "node scripts/go-check.js"
+  },
+  "files": [
+    "src",
+    "assets"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keel": {
+    "dsl": "2.23"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "keel",
+    "go",
+    "golang",
+    "codegen",
+    "agents",
+    "dsl"
+  ],
+  "author": "asuridev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keel-system/keel.git",
+    "directory": "packages/keel-go"
+  },
+  "homepage": "https://github.com/keel-system/keel/tree/main/packages/keel-go#readme",
+  "bugs": {
+    "url": "https://github.com/keel-system/keel/issues"
+  },
+  "dependencies": {
+    "@keel-system/keel-core": "^0.5.0",
+    "commander": "^14.0.0",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "tree-sitter-go": "0.25.0",
+    "web-tree-sitter": "0.27.0"
+  }
+}
