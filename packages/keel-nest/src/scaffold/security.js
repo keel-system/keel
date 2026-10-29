@@ -21,14 +21,16 @@
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { usesCallerRoles, ownershipRulesOf } from '@keel-system/keel-core/gen/ownership';
 import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
-import { accessPlan, audienceOf, tokenClaims, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
+import { audienceOf, tokenClaims } from '@keel-system/keel-core/gen/access-plan';
 import { classPath, DIRS, tsModule, tsString } from './render.js';
-import { usesApi, ERROR_RESPONSE_TS } from './rest-support.js';
+import { ERROR_RESPONSE_TS } from './rest-support.js';
 import { credentialFinderName, portClass, portPath } from './repositories.js';
 import { entityDir } from './render.js';
 import { envRequired } from '@keel-system/keel-core/gen/profile-values';
 import { envFor, runtimeDefault } from '@keel-system/keel-core/gen/runtime-env';
 import { localIssuer } from '@keel-system/keel-core/gen/identity-realm';
+import { securityPlan, usesHttpSecurity, usesJwt, usesCallerScope } from '@keel-system/keel-core/gen/features';
+export { securityPlan, usesHttpSecurity, usesJwt, usesCallerScope };
 export { localIssuer };
 
 const DIR = 'src/infrastructure/security';
@@ -53,22 +55,6 @@ export const localClientApiKey = (client) => `local-${client}-key`;
 export const LOCAL_CORS_ORIGINS = runtimeDefault('SECURITY_CORS_ALLOWED_ORIGINS');
 /** La variable con la que las pruebas del perfil `test` publican el JWKS con el que firman. */
 export const TEST_JWKS_VARIABLE = 'SECURITY_TEST_JWKS';
-
-/** El plan de autorización, o null sin capa security o sin API que proteger. */
-export function securityPlan(model) {
-  if (!usesApi(model)) return null;
-  return accessPlan(model);
-}
-
-/** ¿Hay que instalar el hook en la entrada HTTP? Con el protocolo `none`, solo si hay CORS. */
-export function usesHttpSecurity(model) {
-  const plan = securityPlan(model);
-  return Boolean(plan && (!plan.open || model.security?.cors));
-}
-
-export function usesJwt(model) {
-  return Boolean(securityPlan(model)) && usesTokenProtocol(model.security);
-}
 
 function apiKeyClients(model) {
   const plan = securityPlan(model);
@@ -127,10 +113,6 @@ export function usesRoleCheck(model) {
 /** Las operaciones cuyo handler recibe CallerRoles: las de una regla de propiedad con exentos. */
 export function roleCheckedOperation(model, operation) {
   return usesRoleCheck(model) && ownershipRulesOf(model, operation).some((rule) => rule.exemptRoles.length > 0);
-}
-
-export function usesCallerScope(model) {
-  return Boolean(usesJwt(model) && model.security?.scoping);
 }
 
 /** Las operaciones cuyo handler recibe el alcance: las que declaran su error. */

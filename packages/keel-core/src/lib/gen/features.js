@@ -3,9 +3,12 @@
 // inc. 1 de PLAN-KEEL-GO.md); una pregunta que cambia de respuesta en uno solo es un servidor que deja de
 // ser equivalente sin que nada lo diga.
 //
-// Solo están las que tienen el MISMO cierre en los generadores: un predicado que llama a otro que difiere
-// (`usesMessaging`, `usesJwt`) no es neutral aunque su cuerpo lo parezca, y se queda en el generador
-// hasta que se decida cuál de los dos es el bueno.
+// Solo están las que tienen el MISMO cierre en los generadores. `usesMessaging` y `usesJwt` se escribían
+// distinto en keel-nest y keel-dotnet y entraron al abrir el inc. 2 de keel-go, cuando se vio que respondían
+// lo mismo sobre todo diseño válido (ver cada uno). `usesCallerIdentity` sigue en cada generador: ahí la
+// diferencia (`!plan.open`) sí cambia la respuesta si un diseño declara la identidad con el protocolo `none`.
+
+import { accessPlan, usesTokenProtocol } from './access-plan.js';
 
 /** ¿Expone el servicio una API? Sin capa api, o sin ninguna operación con ruta, no hay nada de esto. */
 export function usesApi(model) {
@@ -127,4 +130,69 @@ export function usesServiceParameters(model) {
 /** ¿Cuenta el arnés las sentencias de una petición? Con API y persistencia relacional. */
 export function usesStatementCount(model) {
   return usesApi(model) && usesRelational(model);
+}
+
+// ─── Mensajería ─────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * ¿Hay mensajería que generar? Publica o consume, sobre la persistencia que tenga (relacional o documental). Sin
+ * persistencia no: nadie publicaría los eventos, y los tres generadores rechazan ese diseño con el motivo de
+ * `messaging-frontier.js`. keel-nest la admitía aquí, una rama muerta desde ese rechazo.
+ */
+export function usesMessaging(model) {
+  if (!model.layersPresent?.messaging) return false;
+  if ((model.events ?? []).length === 0 && (model.subscriptions ?? []).length === 0) return false;
+  return usesPersistence(model);
+}
+
+/** ¿Hay puente? Los eventos salen del adaptador de repositorio. */
+export function usesBridge(model) {
+  return usesMessaging(model) && (model.events ?? []).length > 0;
+}
+
+/** ¿Hay registro de mensajes procesados? Toda suscripción, sobre la persistencia que tenga. */
+export function usesProcessedEvents(model) {
+  return usesMessaging(model) && (model.subscriptions ?? []).length > 0;
+}
+
+/** ¿El stack es RabbitMQ? */
+export function usesRabbitMq(model) {
+  return usesMessaging(model) && model.stack?.broker === 'rabbitmq';
+}
+
+/** ¿El stack es Kafka? */
+export function usesKafka(model) {
+  return usesMessaging(model) && model.stack?.broker === 'kafka';
+}
+
+/** ¿El stack es SNS/SQS? */
+export function usesSnsSqs(model) {
+  return usesMessaging(model) && model.stack?.broker === 'snssqs';
+}
+
+// ─── Seguridad de la entrada HTTP ───────────────────────────────────────────────────────────────
+
+/** El plan de autorización, o null sin capa security o sin API que proteger. */
+export function securityPlan(model) {
+  if (!usesApi(model)) return null;
+  return accessPlan(model);
+}
+
+/** ¿Hay que proteger la entrada HTTP? Con el protocolo `none`, solo si hay CORS. */
+export function usesHttpSecurity(model) {
+  const plan = securityPlan(model);
+  return Boolean(plan && (!plan.open || model.security?.cors));
+}
+
+/**
+ * ¿Se valida un token? keel-dotnet exigía además `!plan.open`, que no cambia nada: el plan solo es abierto con el
+ * protocolo `none`, y entonces no hay protocolo de token.
+ */
+export function usesJwt(model) {
+  return Boolean(securityPlan(model)) && usesTokenProtocol(model.security);
+}
+
+/** ¿Hay alcance por recurso con su puerto? Solo sobre un token: es un claim. */
+export function usesCallerScope(model) {
+  return Boolean(usesJwt(model) && model.security?.scoping);
 }

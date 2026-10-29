@@ -39,6 +39,8 @@ import { acknowledgeNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { OUTBOX_RELAY } from '@keel-system/keel-core/gen/messaging-stores';
+import { usesMessaging, usesBridge, usesProcessedEvents, usesRabbitMq, usesKafka, usesSnsSqs } from '@keel-system/keel-core/gen/features';
+export { usesMessaging, usesBridge, usesProcessedEvents, usesRabbitMq, usesKafka, usesSnsSqs };
 
 const MESSAGING_DIR = 'infrastructure/messaging';
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
@@ -57,46 +59,14 @@ const PROFILES = ['local', 'develop', 'production', 'test'];
 
 // ─── Qué se genera ───────────────────────────────────────────────────────────
 
-/** ¿Hay mensajería que generar? Publica o consume, sobre la persistencia que tenga (relacional o documental) o sin ella. */
-export function usesMessaging(model) {
-  if (!model.layersPresent?.messaging) return false;
-  if ((model.events ?? []).length === 0 && (model.subscriptions ?? []).length === 0) return false;
-  return usesPersistence(model) || !model.layersPresent?.persistence;
-}
-
-/** ¿Hay puente? Solo con persistencia: los eventos salen del adaptador de repositorio. */
-export function usesBridge(model) {
-  return usesMessaging(model) && usesPersistence(model) && (model.events ?? []).length > 0;
-}
-
 /** ¿Va por el outbox? Lo decide el diseño (`reliability: outbox`), y necesita la transacción del cambio. */
 export function usesNestOutbox(model) {
   return usesBridge(model) && model.messaging?.reliability === 'outbox';
 }
 
-/** ¿Hay registro de mensajes procesados? Toda suscripción con persistencia (de los dos modelos). */
-export function usesProcessedEvents(model) {
-  return usesMessaging(model) && usesPersistence(model) && (model.subscriptions ?? []).length > 0;
-}
-
 /** ¿Hay mensajes que leer? Las suscripciones necesitan los lectores de valores del cable. */
 export function usesSubscriptionMessages(model) {
   return usesMessaging(model) && (model.subscriptions ?? []).length > 0;
-}
-
-/** ¿El stack es RabbitMQ? */
-export function usesRabbitMq(model) {
-  return usesMessaging(model) && model.stack?.broker === 'rabbitmq';
-}
-
-/** ¿El stack es Kafka (incremento 9f)? */
-export function usesKafka(model) {
-  return usesMessaging(model) && model.stack?.broker === 'kafka';
-}
-
-/** ¿El stack es SNS/SQS (incremento 9g)? */
-export function usesSnsSqs(model) {
-  return usesMessaging(model) && model.stack?.broker === 'snssqs';
 }
 
 

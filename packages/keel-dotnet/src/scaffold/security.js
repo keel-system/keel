@@ -22,15 +22,16 @@
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { usesCallerRoles, ownershipRulesOf } from '@keel-system/keel-core/gen/ownership';
 import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
-import { accessPlan, audienceOf, tokenClaims, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
+import { audienceOf, tokenClaims } from '@keel-system/keel-core/gen/access-plan';
 import { envRequired } from '@keel-system/keel-core/gen/profile-values';
 import { envFor, runtimeDefault } from '@keel-system/keel-core/gen/runtime-env';
 import { csFile, csMember, csString, located, namespaceOf } from './render.js';
 import { credentialFinderName, portClass, repositoriesNamespace } from './repositories.js';
 import { configNamespace } from './config.js';
-import { usesApi } from './rest-support.js';
 import { wireNamespace } from './wire.js';
 import { localIssuer } from '@keel-system/keel-core/gen/identity-realm';
+import { securityPlan, usesHttpSecurity, usesJwt, usesCallerScope } from '@keel-system/keel-core/gen/features';
+export { securityPlan, usesHttpSecurity, usesJwt, usesCallerScope };
 export { localIssuer };
 
 /** Clave de API del perfil local (catálogo neutral: keel-core/gen/runtime-env). */
@@ -41,23 +42,6 @@ export const TEST_JWKS_VARIABLE = 'SECURITY_TEST_JWKS';
 /** El puerto del alcance por recurso, en Application/Support. */
 export const CALLER_SCOPE_PORT = 'ICallerScope';
 export const CALLER_ROLES_PORT = 'ICallerRoles';
-
-/** El plan de autorización, o null sin capa security o sin API que proteger. */
-export function securityPlan(model) {
-  if (!usesApi(model)) return null;
-  return accessPlan(model);
-}
-
-/** ¿Hay middleware en la entrada HTTP? Con el protocolo `none`, solo si hay CORS. */
-export function usesHttpSecurity(model) {
-  const plan = securityPlan(model);
-  return Boolean(plan && (!plan.open || model.security?.cors));
-}
-
-export function usesJwt(model) {
-  const plan = securityPlan(model);
-  return Boolean(plan && !plan.open) && usesTokenProtocol(model.security);
-}
 
 /** Los clientes que autentican con clave de API, con la clave de configuración y sus authorities. */
 export function apiKeyClients(model) {
@@ -96,11 +80,6 @@ export function callerResolution(model) {
   if (!field || !field.list) return null;
   const keyField = entity.fields.find((candidate) => candidate.name === entity.naturalKey[0]);
   return { entity, field: resolvedBy.field, keyField: entity.naturalKey[0], keyType: keyField?.csType ?? 'string', finder: credentialFinderName(resolvedBy.field), port: portClass(entity) };
-}
-
-/** ¿Hay alcance por recurso con su puerto? Solo sobre un token: es un claim. */
-export function usesCallerScope(model) {
-  return Boolean(usesJwt(model) && model.security?.scoping);
 }
 
 /** ¿Emite ICallerRoles? Con una regla de propiedad que declara exentos (keel-core/gen/ownership.js) y un token que leer. */

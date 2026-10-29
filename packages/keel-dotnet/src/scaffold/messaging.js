@@ -26,13 +26,15 @@
 
 import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination, subscriptionGroupId } from '@keel-system/keel-core/gen';
 import { OUTBOX_RELAY } from '@keel-system/keel-core/gen/messaging-stores';
+import { usesMessaging, usesBridge, usesProcessedEvents, usesRabbitMq, usesKafka, usesSnsSqs } from '@keel-system/keel-core/gen/features';
+export { usesMessaging, usesBridge, usesProcessedEvents, usesRabbitMq, usesKafka, usesSnsSqs };
 import { consumerUnits, consumesFromQueue, messagingYaml, routingKeyName, subscriptionKey } from '@keel-system/keel-core/gen/messaging-plan';
 import { acknowledgeNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
 import { csFile, csLocal, csMember, csString, declType, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
 import { wireNamespace } from './wire.js';
-import { usesPersistence, usesDocument, dbContextClass, persistenceNamespace, rowsNamespace } from './persistence.js';
+import { usesDocument, dbContextClass, persistenceNamespace, rowsNamespace } from './persistence.js';
 import { credentialFinderName, resolvedByOf } from './repositories.js';
 import { outboxDocumentLiteral } from './document-stores.js';
 import { jsonRead, rulesArgs } from './endpoints.js';
@@ -43,41 +45,9 @@ const PROFILES = ['local', 'develop', 'production', 'test'];
 
 // ─── Qué se genera ───────────────────────────────────────────────────────────────────────────────
 
-/** ¿Hay mensajería que generar? Publica o consume, sobre persistencia (relacional o, desde el incremento 12c, documental). */
-export function usesMessaging(model) {
-  if (!model.layersPresent?.messaging) return false;
-  if ((model.events ?? []).length === 0 && (model.subscriptions ?? []).length === 0) return false;
-  return usesPersistence(model);
-}
-
-/** ¿Hay puente? Los eventos salen del adaptador de repositorio. */
-export function usesBridge(model) {
-  return usesMessaging(model) && (model.events ?? []).length > 0;
-}
-
 /** ¿Va por el outbox? Lo decide el diseño (`reliability: outbox`). */
 export function usesDotnetOutbox(model) {
   return usesBridge(model) && model.messaging?.reliability === 'outbox';
-}
-
-/** ¿Hay registro de mensajes procesados? Toda suscripción con persistencia. */
-export function usesProcessedEvents(model) {
-  return usesMessaging(model) && (model.subscriptions ?? []).length > 0;
-}
-
-/** ¿El stack es RabbitMQ? */
-export function usesRabbitMq(model) {
-  return usesMessaging(model) && model.stack?.broker === 'rabbitmq';
-}
-
-/** ¿El stack es Kafka (incremento 9f)? */
-export function usesKafka(model) {
-  return usesMessaging(model) && model.stack?.broker === 'kafka';
-}
-
-/** ¿El stack es SNS/SQS (incremento 9g)? */
-export function usesSnsSqs(model) {
-  return usesMessaging(model) && model.stack?.broker === 'snssqs';
 }
 
 export const bridgeClass = (model) => `${model.service.rootNamespace}DomainEventBridge`;

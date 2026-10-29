@@ -235,9 +235,15 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
     - De ellos cuelgan `usesKafka`, `usesRabbitMq`, `usesSnsSqs`, `usesProcessedEvents`, `usesCallerScope` y `usesRoleCheck`.
     - Tampoco se extrae `internalDatabaseUrl`, que emite una URL `jdbc:`: keel-go necesitará otro DSN.
 
-- **Para retomar (cada incremento empieza en un contexto nuevo):** el siguiente es el **inc. 2** (esqueleto). Antes de empezarlo:
-  - **Decisión pendiente del usuario: las dos divergencias del inc. 1**, `usesMessaging` y `usesJwt` (ver arriba). keel-go necesita esos predicados ya en el inc. 2 (seguridad y mensajería van detrás, pero `usesJwt` decide el middleware); lo limpio es decidir cuál es el bueno, extraerlo a `gen/features.js` y añadirlo a `gen-extracted.test.js`.
-  - Comprobar que el inc. 1 está commiteado (`git log`): si no, commitear primero el inc. 0 (golden de keel-nest + el plan) y luego el inc. 1.
+- **Cierre de las divergencias del inc. 1 (2026-10-29, al abrir el inc. 2).** No hacía falta decidir cuál era la buena: las dos respuestas coinciden en todo diseño válido.
+  - `usesMessaging`: la rama de keel-nest (`|| !layersPresent.persistence`) solo se alcanza con mensajería sin persistencia, que los tres rechazan antes de generar (`messaging-frontier.js`). Entra la de keel-dotnet.
+  - `usesJwt`: `accessPlan` solo devuelve `open: true` con el protocolo `none`, y entonces `usesTokenProtocol` ya es falso. El `!plan.open` de keel-dotnet no cambiaba nada; entra la de keel-nest.
+  - Extraídos a `gen/features.js` con lo que colgaba de ellos y tenía el mismo cierre: `usesBridge`, `usesProcessedEvents`, `usesRabbitMq`, `usesKafka`, `usesSnsSqs`, `securityPlan`, `usesHttpSecurity` y `usesCallerScope`. Como `gen-extracted.test.js` enumera las exportaciones de `features.js`, ya vigila que no vuelvan a copiarse.
+  - **Se queda fuera `usesCallerIdentity`**: ahí `!plan.open` sí cambia la respuesta si un diseño declara `callerIdentity` con el protocolo `none` (el schema no lo impide). Tampoco `usesRoleCheck` ni `usesSubscriptionMessages` (este último solo existe en keel-nest).
+  - Golden de keel-spring (46) y keel-nest (43) idénticos a la línea base.
+- **Para retomar (cada incremento empieza en un contexto nuevo):** el siguiente es el **inc. 2** (esqueleto), sin decisiones pendientes. Al abrirlo:
+  - Verificar versiones con `ctx7` (Go 1.27.x, gotestsum, staticcheck, goose, el lector YAML) antes de escribir `go-stack.js`.
+  - Decidir `usesCallerIdentity` cuando keel-go llegue a seguridad (inc. 8), no antes.
   - El patrón de la extracción: comparar cuerpos de funciones homónimas entre generadores y mover solo lo que tiene el mismo CIERRE, con `golden --check` de keel-spring y keel-nest antes y después.
 
 MariaDB, SQL Server y Oracle se quedan rechazados con su motivo hasta que una red los mida, como en keel-nest.
