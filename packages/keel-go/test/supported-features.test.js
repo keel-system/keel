@@ -9,7 +9,23 @@ import { checkSupportedFeatures, checkSupportedStack } from '../src/lib/supporte
 const manifestWith = (...layers) => ({ layers: Object.fromEntries(layers.map((layer) => [layer, `${layer}.keel.yaml`])) });
 const layersWith = (...layers) => Object.fromEntries(layers.map((layer) => [layer, {}]));
 
-for (const layer of ['persistence', 'security', 'messaging', 'http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
+test('la persistencia relacional se acepta avisando de lo que falta; la documental se rechaza con su incremento', () => {
+  const persisted = (model) => ({ ...layersWith('domain', 'use-cases'), persistence: { default: { model } } });
+  const relational = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), persisted('relational'));
+  assert.deepEqual(relational.errors, []);
+  assert.match(relational.warnings.join('\n'), /capa persistence: keel-go emite el ESQUEMA .*tramo 6b/);
+  const document = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), persisted('document'));
+  assert.equal(document.errors.length, 1);
+  assert.match(document.errors[0], /persistencia documental .*incremento 12/);
+});
+
+test('solo PostgreSQL: los demás motores se rechazan en el build con su tramo', () => {
+  assert.deepEqual(checkSupportedStack({ database: 'postgresql' }).errors, []);
+  assert.match(checkSupportedStack({ database: 'mysql' }).errors[0], /tramo 6d/);
+  assert.match(checkSupportedStack({ database: 'mongodb' }).errors[0], /incremento 12/);
+});
+
+for (const layer of ['security', 'messaging', 'http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);

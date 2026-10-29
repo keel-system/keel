@@ -12,7 +12,6 @@
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  persistence: 'incremento 6 (relacional sobre database/sql) y 12 (documental)',
   security: 'incremento 8',
   messaging: 'incremento 9',
   'http-clients': 'incremento 11',
@@ -22,9 +21,23 @@ const PENDING_LAYERS = {
   payments: 'incremento 13'
 };
 
-/** Las capas que keel-go todavía rechaza: las pruebas de paridad comparan el diseño sin ellas. */
-export function pendingLayers() {
-  return Object.keys(PENDING_LAYERS);
+/**
+ * Los motores sobre los que keel-go genera la persistencia. MySQL llega en el tramo 6d y MongoDB en el incremento 12;
+ * MariaDB, SQL Server y Oracle se quedan fuera hasta que una red los mida, como en keel-nest y keel-dotnet.
+ */
+export const SUPPORTED_DATABASES = ['postgresql'];
+
+/** ¿Declara el diseño persistencia DOCUMENTAL? Llega en el incremento 12. */
+function documentPersistence(layers) {
+  return layers?.persistence?.default?.model === 'document';
+}
+
+/**
+ * Las capas que keel-go todavía rechaza en ESTE diseño: las pruebas de paridad lo comparan sin ellas. La persistencia
+ * solo cuando es documental: la relacional se genera desde el incremento 6.
+ */
+export function pendingLayers(layers = null) {
+  return [...Object.keys(PENDING_LAYERS), ...(documentPersistence(layers) ? ['persistence'] : [])];
 }
 
 /**
@@ -54,6 +67,17 @@ export function checkSupportedFeatures(manifest, layers) {
       );
     }
   }
+  if (declared.includes('persistence') && documentPersistence(layers)) {
+    errors.push(
+      'capa persistence: keel-go todavía no genera la persistencia documental (llega en el incremento 12 de PLAN-KEEL-GO.md). ' +
+        'Genera este diseño con keel-spring, keel-nest o keel-dotnet, o espera a que keel-go la cubra.'
+    );
+  } else if (declared.includes('persistence')) {
+    warnings.push(
+      'capa persistence: keel-go emite el ESQUEMA (la migración baseline de goose, con las tablas, constraints, índices y FK de ' +
+        'keel-core/gen/relational.js), pero todavía no los repositorios ni la transacción del caso de uso (llegan en el tramo 6b de PLAN-KEEL-GO.md).'
+    );
+  }
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
@@ -66,9 +90,16 @@ export function checkSupportedFeatures(manifest, layers) {
   return { errors, warnings };
 }
 
-/** La telemetría todavía no se genera: se rechaza en el build en vez de estamparla sin efecto. */
+/** Lo que el stack pide y keel-go no genera (un motor sin medir, la telemetría): se rechaza en el build en vez de estamparlo sin efecto. */
 export function checkSupportedStack(stack) {
   const errors = [];
+  // El motor solo importa con persistencia: sin ella, el cuestionario no lo pregunta y no se estampa.
+  if (stack?.database && !SUPPORTED_DATABASES.includes(stack.database)) {
+    errors.push(
+      `database: ${stack.database} — keel-go genera la persistencia sobre ${SUPPORTED_DATABASES.join(', ')} (MySQL llega en el tramo 6d y MongoDB en el ` +
+        'incremento 12 de PLAN-KEEL-GO.md). Elige uno de ellos, o genera este diseño con keel-spring, keel-nest o keel-dotnet.'
+    );
+  }
   if (stack?.telemetry && stack.telemetry !== 'none') {
     errors.push(
       `telemetry: ${stack.telemetry} — keel-go todavía no genera telemetría (llega en el incremento 14 de PLAN-KEEL-GO.md). ` +

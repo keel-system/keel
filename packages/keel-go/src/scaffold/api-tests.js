@@ -37,7 +37,7 @@ export function apiCases(model) {
     ...model,
     services: (model.services ?? []).map((service) => ({ ...service, operations: (service.operations ?? []).filter((op) => !op.route || servedOperation(op)) }))
   };
-  return neutralApiCases(served, { components: (operation) => messageComponents(operation) });
+  return neutralApiCases(served, { components: (operation) => messageComponents(operation, model) });
 }
 
 const send = (entry, body = '""') => `send(t, server, ${goString(entry.method)}, ${goString(entry.url)}, ${body}, nil)`;

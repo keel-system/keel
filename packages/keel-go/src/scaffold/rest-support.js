@@ -42,7 +42,7 @@ export function generate(model) {
     files.push(
       file(
         'reading',
-        ['bytes', 'errors', 'io', 'net/http', 'regexp', 'strconv', 'strings', 'time', 'unicode', 'encoding/json/jsontext', 'encoding/json/v2', 'github.com/google/uuid', 'internal/domain', 'internal/platform/wire'],
+        ['bytes', 'errors', 'io', 'math', 'net/http', 'regexp', 'strconv', 'strings', 'time', 'unicode', 'encoding/json/jsontext', 'encoding/json/v2', 'github.com/google/uuid', 'internal/domain', 'internal/platform/wire'],
         reading
       )
     );
@@ -639,6 +639,78 @@ func textEnum[T ~string](raw string, values ...T) (T, error) {
 	}
 	var zero T
 	return zero, malformed(nil)
+}`
+  },
+  pageableParam: {
+    deps: ['boundedParam', 'sortParam'],
+    code: `
+// pageableParam lee ?page=&size=&sort=prop,dir como el PageableHandlerMethodArgumentResolver de Spring Data, que es
+// indulgente a propósito: una página o un tamaño que no se pueden leer no son un 400 sino su valor por defecto, una
+// página negativa es la 0 y un tamaño por encima del tope es el tope. Sin ?sort=, el orden del diseño.
+func pageableParam(r *http.Request, defaultSize, maxSize int32, defaultSort []domain.SortOrder) domain.Pageable {
+	query := r.URL.Query()
+	page, ok := boundedParam(query.Get("page"), math.MaxInt32)
+	if !ok {
+		page = 0
+	}
+	size, ok := boundedParam(query.Get("size"), maxSize)
+	if !ok || size < 1 {
+		size = defaultSize
+	}
+	sort := sortParam(query["sort"])
+	if len(sort) == 0 {
+		sort = defaultSort
+	}
+	return domain.Pageable{Page: page, Size: size, Sort: sort}
+}`
+  },
+  boundedParam: {
+    code: `
+// boundedParam lee un entero de la página con los límites de Spring Data: sin texto no hay valor (ok es false); lo
+// que no es un entero de 32 bits se lee como 0; negativo, 0; por encima del tope, el tope.
+func boundedParam(text string, upper int32) (int32, bool) {
+	if strings.TrimSpace(text) == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(text, 10, 32)
+	switch {
+	case err != nil, n < 0:
+		return 0, true
+	case n > int64(upper):
+		return upper, true
+	}
+	return int32(n), true
+}`
+  },
+  sortParam: {
+    code: `
+// sortParam lee ?sort= repetido o con varias propiedades: name,desc o status,name. La última pieza es la dirección si
+// lo es (sin distinguir mayúsculas) y vale para todas las propiedades de ese valor; si no, el orden es ascendente.
+func sortParam(values []string) []domain.SortOrder {
+	var orders []domain.SortOrder
+	for _, value := range values {
+		var parts []string
+		for part := range strings.SplitSeq(value, ",") {
+			if strings.TrimSpace(part) != "" {
+				parts = append(parts, part)
+			}
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		direction := domain.SortAsc
+		switch strings.ToLower(strings.TrimSpace(parts[len(parts)-1])) {
+		case "asc":
+			parts = parts[:len(parts)-1]
+		case "desc":
+			direction = domain.SortDesc
+			parts = parts[:len(parts)-1]
+		}
+		for _, property := range parts {
+			orders = append(orders, domain.SortOrder{Property: property, Direction: direction})
+		}
+	}
+	return orders
 }`
   },
   queryValue: {

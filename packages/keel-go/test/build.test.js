@@ -60,11 +60,11 @@ test('un diseño no listo NO se genera sin --accept-unready, y no se escribe nad
 
 test('una capa fuera de la frontera se rechaza nombrando keel-go, antes de escribir nada', async () => {
   const workspace = makeWorkspace();
-  mountDesign(workspace, 'product-catalog');
-  const { exitCode, output } = await runCommand(workspace, build, 'specs/product-catalog', { defaults: true, acceptUnready: true });
+  mountDesign(workspace, 'notification-mailer-mongo');
+  const { exitCode, output } = await runCommand(workspace, build, 'specs/notification-mailer-mongo', { defaults: true, acceptUnready: true });
   assert.equal(exitCode, 1);
   assert.match(output, /capacidades que keel-go no genera/);
-  assert.match(output, /capa persistence: keel-go todavía no la genera/);
+  assert.match(output, /capa persistence: keel-go todavía no genera la persistencia documental/);
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 

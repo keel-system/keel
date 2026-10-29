@@ -8,7 +8,8 @@
   },
   "scripts": {
     "test": "node --test",
-    "go-check": "node scripts/go-check.js"
+    "go-check": "node scripts/go-check.js",
+    "db-check": "node scripts/db-check.js"
   },
   "files": [
     "src",

@@ -1,0 +1,382 @@
+// La persistencia relacional: el ESQUEMA (la migración baseline de goose) y la página que pide un listado.
+//
+// En los otros tres el esquema SALE de un ORM (Hibernate, TypeORM, EF Core) que lee las anotaciones o el mapeo
+// fluente; keel-go no tiene ORM (PLAN-KEEL-GO.md § 2), así que lo escribe build entero, en SQL, desde los mismos datos:
+// tablas, columnas, cotas, constraints únicas, índices, FK y predicados salen de keel-core/gen/relational.js, y el
+// esquema de los cuatro servidores del mismo diseño lleva los mismos nombres —que es lo que leen el traductor de
+// errores, los scripts del arnés y `infra/fixtures.sql`—. `test/schema-parity.test.js` lo compara con lo que EMITE
+// keel-spring.
+//
+// Lo único de aquí es el TIPO FÍSICO de cada columna, que en los otros tres lo pone el ORM: el que Hibernate da al
+// mismo tipo Java en PostgreSQL (un texto sin cota es `varchar(255)`, un decimal sin escala declarada
+// `numeric(38,2)`, un instante `timestamp(6) with time zone`, un enum su CONSTANTE en `varchar(255)`), para que la
+// base de un servicio keel-go sea la de su gemelo de keel-spring.
+//
+// Tres decisiones que no son obvias:
+//   · la unicidad de la clave natural y de un campo `unique` es una CONSTRAINT de tabla, como el @UniqueConstraint de
+//     keel-spring; la de un índice declarado, un índice único con nombre. Las dos llegan al traductor igual: por el
+//     NOMBRE que el motor pone en el error;
+//   · las FK DENTRO del agregado (hija → padre, elemento → raíz) borran en cascada: el agregado se borra entero, como
+//     el `DeleteBehavior.Cascade` de keel-dotnet. Las que van a OTRO agregado no (NO ACTION, la del baseline de
+//     keel-spring): borrar la raíz referenciada es un conflicto que el diseño traduce, no un efecto que se propaga;
+//   · las FK se añaden al final con ALTER TABLE, así que el orden de las tablas no importa (dos agregados pueden
+//     referirse entre sí).
+
+import {
+  AUDIT_COLUMNS,
+  DECIMAL_PRECISION,
+  LOCK_VERSION,
+  backReferenceTo,
+  collectionIndexesOf,
+  columnsFor,
+  crossAggregateForeignKeys,
+  elementTable,
+  foreignKeyIndexColumns,
+  foreignKeyIndexName,
+  foreignKeyName,
+  indexName,
+  joinColumnOf,
+  keyShadow,
+  parentColumnOf,
+  partialIndexSpecs,
+  persistedMembers,
+  quoteIdentifierFor,
+  uniqueFields
+} from '@keel-system/keel-core/gen';
+import { repositoryRoots, usesRelational } from '@keel-system/keel-core/gen/features';
+import { GENERATED_HEADER, alignRows } from '../lib/go-source.js';
+import { domainPath, layout, packageFile } from './render.js';
+
+export { usesRelational };
+
+/** La migración baseline: la primera de goose, con el esquema entero del diseño. */
+export const BASELINE_FILE = '00001_baseline.sql';
+
+/** El motor de este tramo: PostgreSQL (MySQL llega en el 6d de PLAN-KEEL-GO.md, y lo rechaza la frontera). */
+const DIALECT = 'postgresql';
+
+export function generate(model) {
+  const files = [];
+  if (repositoryRoots(model).length > 0) files.push(pageableFile(model));
+  if (!usesRelational(model)) return files;
+  const { postgres } = layout(model);
+  files.push(
+    {
+      path: `${postgres.dir}/doc.go`,
+      content: packageFile(model, postgres, {
+        doc: 'Package postgres es el adaptador de PostgreSQL del servicio: el esquema (las migraciones de goose, embebidas)\ny, desde el tramo 6b, los repositorios y la transacción del caso de uso. Implementa los puertos del dominio.',
+        body: ''
+      })
+    },
+    { path: `${postgres.dir}/migrations/${BASELINE_FILE}`, content: baselineSql(model) },
+    { path: `${postgres.dir}/migrations.go`, content: migrationsGo(model) }
+  );
+  return files;
+}
+
+// ─── La página ───────────────────────────────────────────────────────────────────────────────────
+
+function pageableFile(model) {
+  const { domain } = layout(model);
+  // Un comentario por constante: corta la alineación de gofmt, así que cada una es su propia sección.
+  const constants = [
+    '\t// SortAsc es el orden ascendente, el de un criterio que no dice dirección.',
+    '\tSortAsc SortDirection = "ASC"',
+    '\t// SortDesc es el orden descendente.',
+    '\tSortDesc SortDirection = "DESC"'
+  ];
+  const sortFields = alignRows([
+    { indent: '\t', cells: ['Property', 'string'] },
+    { indent: '\t', cells: ['Direction', 'SortDirection'] }
+  ]);
+  const pageFields = alignRows([
+    { indent: '\t', cells: ['Page', 'int32'] },
+    { indent: '\t', cells: ['Size', 'int32'] },
+    { indent: '\t', cells: ['Sort', '[]SortOrder'] }
+  ]);
+  const body = `
+// Pageable es la página que pide un listado: el Pageable de Spring Data (?page=&size=&sort=), con el mismo contrato en
+// los cuatro generadores. La lee el borde HTTP con sus defaults y su tope, y la recibe el puerto del repositorio.
+type Pageable struct {
+${pageFields.join('\n')}
+}
+
+// Offset es la primera fila de la página.
+func (p Pageable) Offset() int64 {
+	return int64(p.Page) * int64(p.Size)
+}
+
+// SortOrder es un criterio de orden: la propiedad del dominio y su dirección.
+type SortOrder struct {
+${sortFields.join('\n')}
+}
+
+// SortDirection es la dirección de un criterio de orden.
+type SortDirection string
+
+// Las dos direcciones de un orden.
+const (
+${constants.join('\n')}
+)
+`;
+  return { path: domainPath(model, 'Pageable'), content: packageFile(model, domain, { body }) };
+}
+
+// ─── Las migraciones embebidas ──────────────────────────────────────────────────────────────────
+
+function migrationsGo(model) {
+  const { postgres } = layout(model);
+  const body = `
+// Migrations son las migraciones de goose del esquema, embebidas en el binario: el servicio no depende del directorio
+// de trabajo para crear su base. La primera (${BASELINE_FILE}) la escribe build con el esquema entero del diseño.
+//
+//go:embed migrations/*.sql
+var Migrations embed.FS
+`;
+  return packageFile(model, postgres, { imports: ['embed'], body });
+}
+
+// ─── El DDL ──────────────────────────────────────────────────────────────────────────────────────
+
+const quote = (name) => quoteIdentifierFor(DIALECT, name);
+
+/**
+ * El tipo físico de PostgreSQL de una columna (`columnSpec` de relational.js): el que Hibernate da al mismo tipo Java.
+ * El enum va por el NOMBRE de su constante; el `json` embebido, como el texto que llegó.
+ */
+export function physicalType(spec) {
+  if (spec.enum) return 'varchar(255)';
+  if (spec.long) return 'text';
+  switch (spec.base) {
+    case 'uuid':
+      return 'uuid';
+    case 'int':
+      return 'integer';
+    case 'long':
+      return 'bigint';
+    case 'boolean':
+      return 'boolean';
+    case 'decimal':
+      return `numeric(${spec.scale != null ? DECIMAL_PRECISION : 38},${spec.scale ?? 2})`;
+    case 'date':
+      return 'date';
+    case 'timestamp':
+      return 'timestamp(6) with time zone';
+    default:
+      return `varchar(${spec.length ?? 255})`;
+  }
+}
+
+/** Una línea de columna del CREATE TABLE. */
+function columnLine(spec) {
+  const collation = spec.collation ? ` COLLATE "${spec.collation}"` : '';
+  return { name: quote(spec.name), type: `${physicalType(spec)}${collation}`, rest: spec.nullable ? '' : 'NOT NULL' };
+}
+
+/** La columna del id de una entidad, con otro nombre: la de una FK que apunta a ella. */
+function idColumn(model, entityName, name, nullable) {
+  const target = model.entities.find((candidate) => candidate.name === entityName);
+  const spec = target?.idField?.columns ?? { base: 'uuid' };
+  return { ...spec, name, nullable, collation: null };
+}
+
+/** Las columnas de auditoría que la política `all` pone sin que el dominio las nombre. */
+function auditColumns(entity) {
+  return [
+    ...(entity.auditTimestamps === 'all' ? AUDIT_COLUMNS.timestamps : []),
+    ...(entity.auditAuthorship === 'all' ? AUDIT_COLUMNS.authorship : [])
+  ];
+}
+
+/** Las tablas del esquema, como datos: lo que escribe el SQL y lo que relee la prueba de su forma. */
+export function schemaTables(model) {
+  const entities = model.entities.filter((entity) => entity.persisted);
+  const tables = [];
+  const foreignKeys = [];
+  const indexes = [];
+  for (const entity of entities) {
+    const members = persistedMembers(model, entity);
+    const columns = [];
+    const constraints = [];
+    const notes = [];
+    if (entity.idField?.columns) columns.push(entity.idField.columns);
+    for (const member of members) {
+      if (member.kind === 'scalar') {
+        const { field } = member;
+        if (field.isId || !field.columns) continue;
+        columns.push(field.columns);
+        if (member.folded) columns.push({ name: member.folded.column, base: 'string', textual: true, length: member.folded.maxLength ?? 255, nullable: !member.folded.required });
+        if (member.ranked) columns.push({ name: member.ranked.column, base: 'int', nullable: !member.ranked.required });
+      } else if (member.kind === 'vo') {
+        for (const sub of member.subs) {
+          if (sub.subKind === 'composite' || !sub.sub.columns) {
+            notes.push(`${member.field.namedType}.${sub.voAccessor} es un value object anidado: no tiene columnas (lo mapea el agente).`);
+            continue;
+          }
+          // La columna aplanada: las cotas del sub-campo, NOT NULL solo si el value object entero es obligatorio.
+          columns.push({ ...sub.sub.columns, name: sub.column, nullable: !(sub.ownerRequired && !sub.sub.columns.nullable) });
+        }
+      } else if (member.kind === 'externalRef') {
+        columns.push(idColumn(model, member.relation.entity, member.column, !member.relation.required));
+      } else if (member.kind === 'relationOne') {
+        const column = joinColumnOf(member.relation);
+        columns.push(idColumn(model, member.relation.entity, column, !member.relation.required));
+        if (!member.relation.backReference) {
+          const target = model.entities.find((candidate) => candidate.name === member.relation.entity);
+          foreignKeys.push({ name: foreignKeyName(entity.tableName, member.relation.name), table: entity.tableName, column, refTable: target?.tableName, refColumn: target?.idField?.columns?.name ?? 'id', cascade: true });
+        }
+      } else if (member.kind === 'relationMany') {
+        const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
+        if (member.relation.cardinality === 'many-to-many' || !child) {
+          notes.push(`${member.name} es many-to-many dentro del agregado: su tabla de unión la escribe el agente.`);
+          continue;
+        }
+        const back = backReferenceTo(model, child.name, entity.name);
+        foreignKeys.push({
+          name: foreignKeyName(child.tableName, back ?? entity.name),
+          table: child.tableName,
+          column: back ? joinColumnOf({ name: back }) : parentColumnOf(entity.name),
+          refTable: entity.tableName,
+          refColumn: entity.idField?.columns?.name ?? 'id',
+          cascade: true
+        });
+      } else if (member.kind === 'elementCollection') {
+        tables.push(elementTableSpec(model, entity, member, foreignKeys, indexes));
+      }
+    }
+    // La FK sintética de un one-to-many UNIDIRECCIONAL del padre: el dominio no la nombra y es nula, como la crea
+    // Hibernate para un one-to-many con @JoinColumn.
+    for (const parent of entities) {
+      for (const relation of parent.relations ?? []) {
+        if (!relation.internal || relation.cardinality !== 'one-to-many' || relation.entity !== entity.name) continue;
+        if (backReferenceTo(model, entity.name, parent.name)) continue;
+        columns.push(idColumn(model, parent.name, parentColumnOf(parent.name), true));
+      }
+    }
+    if (entity.usesOptimisticLocking && !entity.declaresLockVersion) columns.push({ name: LOCK_VERSION.column, base: 'long', nullable: true });
+    for (const column of auditColumns(entity)) {
+      const timestamp = column.field.endsWith('At');
+      columns.push({ name: column.column, base: timestamp ? 'timestamp' : 'string', textual: !timestamp, length: 255, nullable: false });
+    }
+
+    // La unicidad: la clave natural y los campos `unique`, como constraints de tabla con su nombre. La sombra de un
+    // FILTRO (`filterOnly`) no lleva la unicidad del campo: ese se compara exacto.
+    const shadowOf = (name) => keyShadow(members.find((m) => m.kind === 'scalar' && m.name === name)?.field);
+    if (entity.naturalKey?.length > 0) {
+      const keyColumns = entity.naturalKey.flatMap((name) => (shadowOf(name) ? [shadowOf(name).column] : columnsFor(model, entity, members, name)));
+      constraints.push({ name: `uk_${entity.tableName}_natural`, columns: keyColumns });
+    }
+    for (const field of uniqueFields(entity)) {
+      constraints.push({ name: `uk_${entity.tableName}_${field.columns?.name}`, columns: [shadowOf(field.name)?.column ?? field.columns?.name] });
+    }
+    // Los índices declarados (el de una lista va en su tabla de elementos), los condicionados con su predicado y el
+    // de cada FK que no encabeza ya otro índice.
+    const { handled } = collectionIndexesOf(entity, members);
+    for (const index of entity.indexes ?? []) {
+      if (index.when || handled.has(index)) continue;
+      const probe = [];
+      const indexColumns = index.fields.flatMap((name) => columnsFor(model, entity, members, name, probe));
+      // Un índice sobre lo que no es columna de esta tabla rompería el esquema: lo avisa el modelo.
+      if (probe.length > 0) continue;
+      indexes.push({ name: indexName(entity, index), table: entity.tableName, columns: indexColumns, unique: Boolean(index.unique) });
+    }
+    for (const spec of partialIndexSpecs(model, DIALECT).filter((candidate) => candidate.entity === entity.name)) {
+      indexes.push({ name: spec.name, table: entity.tableName, columns: spec.fields.flatMap((name) => columnsFor(model, entity, members, name)), unique: true, predicate: spec.predicate });
+    }
+    for (const column of foreignKeyIndexColumns(model, entity, members)) {
+      indexes.push({ name: foreignKeyIndexName(entity.tableName, column), table: entity.tableName, columns: [column], unique: false });
+    }
+    const idName = entity.idField?.columns?.name ?? 'id';
+    tables.push({ name: entity.tableName, entity: entity.name, columns, primaryKey: { name: `${entity.tableName}_pkey`, columns: [idName] }, constraints, notes });
+  }
+  // Las tablas en el orden del diseño: cada entidad antes que sus tablas de elementos.
+  tables.sort((a, b) => order(a) - order(b));
+  function order(table) {
+    const index = entities.findIndex((entity) => entity.tableName === (table.owner ?? table.name));
+    return index * 2 + (table.owner ? 1 : 0);
+  }
+  for (const fk of crossAggregateForeignKeys(model)) foreignKeys.push({ ...fk, cascade: false });
+  return { tables, foreignKeys, indexes };
+}
+
+/** La tabla de elementos de una lista: clave (raíz, posición), el valor y la FK a la raíz. */
+function elementTableSpec(model, entity, member, foreignKeys, indexes) {
+  const table = elementTable(entity, member);
+  const idName = entity.idField?.columns?.name ?? 'id';
+  const columns = [idColumn(model, entity.name, table.joinColumn, false), { name: table.orderColumn, base: 'int', nullable: false }];
+  const notes = [];
+  if (member.element.kind === 'vo') {
+    const vo = model.valueObjects.find((candidate) => candidate.name === member.field.namedType);
+    for (const sub of vo?.fields ?? []) {
+      if (sub.kind === 'composite' || !sub.columns) {
+        notes.push(`${vo.name}.${sub.name} es un value object anidado: no tiene columnas (lo mapea el agente).`);
+        continue;
+      }
+      columns.push(sub.columns);
+    }
+  } else if (member.field.elementColumns) {
+    columns.push(member.field.elementColumns);
+  }
+  foreignKeys.push({ name: table.foreignKey, table: table.table, column: table.joinColumn, refTable: entity.tableName, refColumn: idName, cascade: true });
+  // El índice que el diseño declara sobre esta lista (valor primero, FK detrás) y, SIEMPRE, el de la FK a la raíz:
+  // cargar la lista de una raíz es un WHERE sobre esa columna.
+  const { byMember } = collectionIndexesOf(entity, persistedMembers(model, entity));
+  for (const index of byMember.get(member.name) ?? []) {
+    indexes.push({ name: indexName(entity, index), table: table.table, columns: [table.valueColumn, table.joinColumn], unique: Boolean(index.unique) });
+  }
+  indexes.push({ name: table.foreignKeyIndex, table: table.table, columns: [table.joinColumn], unique: false });
+  return {
+    name: table.table,
+    owner: entity.tableName,
+    columns,
+    primaryKey: { name: `${table.table}_pkey`, columns: [table.joinColumn, table.orderColumn] },
+    constraints: [],
+    notes
+  };
+}
+
+function createTable(table) {
+  const rows = table.columns.map((spec) => {
+    const line = columnLine(spec);
+    return [line.name, line.type, line.rest];
+  });
+  // Alineado a mano: el SQL no pasa por gofmt, pero se lee y se revisa en un diff.
+  const widths = [0, 1].map((col) => Math.max(...rows.map((row) => row[col].length)));
+  const lines = rows.map((row) => `    ${row[0].padEnd(widths[0])} ${row[2] ? `${row[1].padEnd(widths[1])} ${row[2]}` : row[1]}`.trimEnd());
+  lines.push(`    CONSTRAINT ${table.primaryKey.name} PRIMARY KEY (${table.primaryKey.columns.map(quote).join(', ')})`);
+  for (const constraint of table.constraints) lines.push(`    CONSTRAINT ${constraint.name} UNIQUE (${constraint.columns.map(quote).join(', ')})`);
+  const notes = table.notes.map((note) => `-- ${note}\n`).join('');
+  return `${notes}CREATE TABLE ${quote(table.name)} (\n${lines.join(',\n')}\n);`;
+}
+
+function createIndex(index) {
+  const where = index.predicate ? ` WHERE ${index.predicate}` : '';
+  return `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${index.name} ON ${quote(index.table)} (${index.columns.map(quote).join(', ')})${where};`;
+}
+
+function addForeignKey(fk) {
+  const onDelete = fk.cascade ? ' ON DELETE CASCADE' : '';
+  return `ALTER TABLE ${quote(fk.table)} ADD CONSTRAINT ${fk.name}\n    FOREIGN KEY (${quote(fk.column)}) REFERENCES ${quote(fk.refTable)} (${quote(fk.refColumn)})${onDelete};`;
+}
+
+/** La migración baseline de goose: el esquema entero, y su vuelta atrás. */
+export function baselineSql(model) {
+  const { tables, foreignKeys, indexes } = schemaTables(model);
+  const up = [
+    ...tables.map(createTable),
+    ...indexes.map(createIndex),
+    ...[...foreignKeys].sort((a, b) => a.name.localeCompare(b.name)).map(addForeignKey)
+  ];
+  const down = [...tables].reverse().map((table) => `DROP TABLE IF EXISTS ${quote(table.name)} CASCADE;`);
+  return `-- ${GENERATED_HEADER.replace(/^\/\/ /, '')}
+--
+-- El esquema de ${model.service.name} en PostgreSQL: tablas, constraints, índices y FK con los nombres de
+-- keel-core/gen/relational.js, los mismos que los otros tres generadores. Lo aplica goose al arrancar.
+
+-- +goose Up
+${up.join('\n\n')}
+
+-- +goose Down
+${down.join('\n')}
+`;
+}

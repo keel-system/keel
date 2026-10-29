@@ -16,7 +16,7 @@
 import { dispatchNote } from '@keel-system/keel-core/gen';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
-import { isPartialUpdate } from '@keel-system/keel-core/gen/features';
+import { isPartialUpdate, repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, commentLines, goString } from '../lib/go-source.js';
 import { dataImports, wireTag } from './dtos.js';
@@ -78,19 +78,29 @@ export function contractOf(operation) {
   return { kind: 'KindCommand', handler: `CommandHandler[${message}]`, result: null };
 }
 
-// La página que pide una consulta paginada: viaja en la consulta de la URL, no en el cuerpo.
+// La página que pide una consulta paginada sin persistencia: dos enteros de la consulta de la URL, no del cuerpo.
 const PAGE_COMPONENTS = [
   { name: 'page', goType: 'int32', kind: 'base', base: 'int', required: true, goImports: [], paging: true },
   { name: 'size', goType: 'int32', kind: 'base', base: 'int', required: true, goImports: [], paging: true }
 ];
 
+// Con persistencia, la página es el Pageable de Spring Data (página, tamaño y orden): `?page=&size=&sort=`, el mismo
+// contrato que los otros tres. Lo lee el puerto del repositorio, así que su tipo es del dominio.
+const PAGEABLE_COMPONENT = { name: 'pageable', goType: 'domain.Pageable', kind: 'base', required: true, goImports: [], paging: true, pageable: true };
+
+/** ¿Lee esta operación la página como un Pageable? Con persistencia, como los otros tres generadores. */
+export function usesPageable(model, operation) {
+  return Boolean(operation.paginated) && model != null && repositoryRoots(model).length > 0;
+}
+
 /**
  * Los componentes del mensaje: parámetros de ruta (en el orden del path) + campos del cuerpo + paginación. Los
  * comparte el lector de la API (endpoints.js) para construir el mensaje.
  */
-export function messageComponents(operation) {
+export function messageComponents(operation, model) {
   const path = (operation.pathParams ?? []).map((param) => ({ ...param, fromPath: true }));
-  return [...path, ...(operation.bodyFields ?? []), ...(operation.paginated ? PAGE_COMPONENTS : [])];
+  const paging = !operation.paginated ? [] : usesPageable(model, operation) ? [PAGEABLE_COMPONENT] : PAGE_COMPONENTS;
+  return [...path, ...(operation.bodyFields ?? []), ...paging];
 }
 
 /**
@@ -140,7 +150,7 @@ export function scaleRounding(operation, component, target = 'm') {
 function renderMessage(model, operation) {
   const { application } = layout(model);
   const name = messageType(operation);
-  const components = messageComponents(operation);
+  const components = messageComponents(operation, model);
   const rows = [];
   for (const component of components) {
     const notes = componentNotes(model, component);

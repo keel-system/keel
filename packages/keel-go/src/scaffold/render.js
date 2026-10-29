@@ -36,6 +36,9 @@ export function layout(model) {
     // El contrato del cable y los tipos que la biblioteca estándar no tiene (Decimal, Date, Optional[T]). El
     // dominio los usa, así que es lo único de la plataforma que puede importar.
     wire: pkg(module, 'internal/platform/wire'),
+    // El adaptador de PostgreSQL: el esquema (migraciones de goose embebidas) y los repositorios. Un paquete por
+    // tecnología, como el resto de la infraestructura (PLAN-KEEL-GO.md § 2).
+    postgres: pkg(module, 'internal/infrastructure/postgres'),
     // La prueba de la frontera hexagonal: `internal/` solo protege frente a otros módulos, no entre capas.
     architecture: pkg(module, 'internal/architecture')
   };

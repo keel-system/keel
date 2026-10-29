@@ -132,10 +132,18 @@ test('un PATCH declara sus opcionales con tres estados (wire.Optional) y lo de l
   assert.match(command, /^\tName +wire\.Optional\[string\] +`json:"name,omitzero"`$/m);
 });
 
-test('la consulta paginada recibe page y size fuera del cuerpo', () => {
+test('la consulta paginada recibe la página fuera del cuerpo: un Pageable con persistencia, dos enteros sin ella', () => {
   const query = app(plans.get('product-catalog').files, 'list_products_query');
-  assert.match(query, /^\tPage int32 `json:"-"`$/m);
-  assert.match(query, /^\tSize int32 `json:"-"`$/m);
+  assert.match(query, /^\tPageable domain\.Pageable `json:"-"`$/m);
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'product-catalog'));
+  delete layers.persistence;
+  const { persistence, ...declared } = manifest.layers;
+  assert.ok(persistence);
+  const bare = planService({ manifest: { ...manifest, layers: declared }, layers, workspace: FIXTURES_DIR });
+  const plain = app(bare.files, 'list_products_query');
+  assert.match(plain, /^\tPage int32 `json:"-"`$/m);
+  assert.match(plain, /^\tSize int32 `json:"-"`$/m);
+  assert.ok(!bare.files.some((file) => file.path === 'internal/domain/pageable.go'), 'sin persistencia no hay Pageable');
 });
 
 test('las notas del diseño van en el handler: precondiciones, errores con su centinela, transiciones y eventos', () => {

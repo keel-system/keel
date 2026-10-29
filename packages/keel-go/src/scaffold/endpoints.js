@@ -21,6 +21,7 @@
 // lo usa: staticcheck (U1000) rechaza una función sin usar. Por eso este módulo apunta en `plan.uses` lo que pide.
 
 import { requestShape, returnsLocation, locationTarget } from '@keel-system/keel-core/gen/api-contract';
+import { pageableDefaults } from '@keel-system/keel-core/gen/pagination';
 import { usesApi } from '@keel-system/keel-core/gen/features';
 import { goExported, goUnexported, enumConstant } from '../lib/go-projection.js';
 import { goString } from '../lib/go-source.js';
@@ -296,7 +297,7 @@ function returnErr(expression) {
 
 function renderReader(model, operation, plan) {
   const { asBody, bodyRequired } = requestShape(operation);
-  const components = messageComponents(operation);
+  const components = messageComponents(operation, model);
   const message = messageType(operation);
   const pathLines = [];
   const bodyLines = [];
@@ -325,7 +326,16 @@ function renderReader(model, operation, plan) {
       (asBody ? bodyChecks : queryLines).push(`\t// ${field}: la identidad del llamante la estampa la seguridad desde la credencial, nunca la petición.`);
       continue;
     }
-    // La página de un listado: dos enteros de la query con sus defaults (también con cuerpo).
+    // La página con persistencia: el Pageable de Spring Data (página, tamaño y orden), con el orden del diseño cuando
+    // el cliente no pide uno. Los defaults y el tope: keel-core/gen/pagination.js.
+    if (component.pageable) {
+      plan.uses.add('pageableParam');
+      const { defaultSize, maxSize, defaultSort } = pageableDefaults(model, operation);
+      const sort = defaultSort.map((criterion) => `{Property: ${goString(criterion.property)}, Direction: domain.${criterion.direction === 'desc' ? 'SortDesc' : 'SortAsc'}}`);
+      queryLines.push(`	${field} = pageableParam(r, ${defaultSize}, ${maxSize}, []domain.SortOrder{${sort.join(', ')}})`);
+      continue;
+    }
+    // La página sin persistencia: dos enteros de la query con sus defaults (también con cuerpo).
     if (component.paging) {
       plan.uses.add('pageParam');
       const fallback = component.name === 'size' ? model.pagination?.defaultSize ?? 20 : 0;
@@ -427,11 +437,13 @@ ${out.join('\n')}${out.length > 0 ? '\n' : ''}\treturn msg, nil
 /** La fila del contrato HTTP de una operación: lo que registra `routes` y compara la paridad. */
 export function routeRow(model, operation) {
   const { asBody, bodyRequired } = requestShape(operation);
+  // El Pageable viaja como los tres parámetros de Spring Data.
+  const names = (c) => (c.pageable ? ['page', 'size', 'sort'] : [c.name]);
   const query = asBody
-    ? messageComponents(operation).filter((c) => c.paging).map((c) => c.name)
-    : messageComponents(operation)
+    ? messageComponents(operation, model).filter((c) => c.paging).flatMap(names)
+    : messageComponents(operation, model)
         .filter((c) => !c.fromPath && !c.resolvedIdentity && !isFile(c))
-        .map((c) => c.name);
+        .flatMap(names);
   return {
     operation: operation.name,
     method: operation.route.method,

@@ -35,7 +35,7 @@ export function goRoutes(files) {
  */
 export function goView(name) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
-  const pending = new Set(pendingLayers());
+  const pending = new Set(pendingLayers(layers));
   const strippedLayers = Object.fromEntries(Object.entries(layers).filter(([layer]) => !pending.has(layer)));
   const strippedManifest = { ...manifest, layers: Object.fromEntries(Object.entries(manifest.layers ?? {}).filter(([layer]) => !pending.has(layer))) };
   return { manifest: strippedManifest, layers: strippedLayers };
