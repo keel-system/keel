@@ -25,6 +25,7 @@ import { makeWorkspace, mountDesign, runCommand, GO_READY_DESIGN } from '../test
 import { build } from '../src/commands/build.js';
 import { ALLOWED_LICENSES, MODULES, TOOLS } from '../src/lib/go-stack.js';
 import { GO_TOOLCHAIN } from '../src/lib/assets.js';
+import { WIRE_SABOTAGES, applySabotage } from '../test/helpers/wire-sabotages.js';
 
 const keep = process.argv.includes('--keep');
 const race = !process.argv.includes('--no-race');
@@ -94,7 +95,7 @@ function containerRuntime() {
 
 const version = go(process.cwd(), ['version']);
 const [, major, minor] = version.output.match(/go(\d+)\.(\d+)/) ?? [];
-if (!step('Go disponible', version.ok && (Number(major) > 1 || Number(minor) >= 26), version.ok ? version.output.trim() : 'instala Go: winget install GoLang.Go')) {
+if (!step('Go disponible', version.ok && (Number(major) > 1 || Number(minor) >= 27), version.ok ? version.output.trim() : 'instala Go: winget install GoLang.Go')) {
   process.exit(1);
 }
 
@@ -143,6 +144,23 @@ if (!step('go build ./...', allBuilt.ok)) console.error(allBuilt.output);
 const junit = path.join(projectDir, 'build', 'test-results.xml');
 const tested = go(projectDir, ['tool', 'gotestsum', '--format', 'testname', '--junitfile', junit, '--junitfile-testcase-classname', 'short', '--', '-count=1', './...']);
 if (!step('go test ./... (gotestsum, con su JUnit)', tested.ok && fs.existsSync(junit))) console.error(tested.output);
+
+// El contrato del cable se falsa: cada sabotaje rompe una regla en el Go emitido y su prueba tiene que salir en
+// rojo. Se restaura el archivo pase lo que pase, porque los pasos siguientes miden el proyecto tal cual.
+for (const sabotage of WIRE_SABOTAGES) {
+  const file = path.join(projectDir, sabotage.file);
+  const original = fs.readFileSync(file, 'utf8');
+  const mutated = applySabotage(sabotage, original);
+  if (!mutated) {
+    step(`cable falsado: ${sabotage.id}`, false, `el sabotaje ya no se aplica a ${sabotage.file}`);
+    continue;
+  }
+  fs.writeFileSync(file, mutated);
+  const sabotaged = go(projectDir, ['test', '-count=1', './internal/platform/wire/']);
+  fs.writeFileSync(file, original);
+  const failed = [...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1]);
+  step(`cable falsado: ${sabotage.id} (${sabotage.what}) → ${sabotage.fails} en rojo`, !sabotaged.ok && failed.includes(sabotage.fails), failed.join(' ').slice(0, 200));
+}
 
 // La frontera hexagonal se falsa: un import plantado del dominio a la entrada HTTP tiene que ponerla en rojo.
 const planted = path.join(projectDir, 'internal', 'domain', 'planted.go');

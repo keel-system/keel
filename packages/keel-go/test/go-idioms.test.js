@@ -51,6 +51,26 @@ const MUTATIONS = {
   'server-timeouts': { file: 'internal/httpapi/server.go', edit: (s) => s.replace('\t\tIdleTimeout:       IdleTimeout,\n', '') }
 };
 
+test('no-panic admite el panic de una función Must… y solo ese', () => {
+  const content = [
+    'package wire',
+    '',
+    '// MustX lee un literal.',
+    'func MustX(s string) int {',
+    '\tpanic(s)',
+    '}',
+    '',
+    '// Y no.',
+    'func Y() {',
+    '\tpanic("y")',
+    '}',
+    ''
+  ].join('\n');
+  assert.deepEqual(checkGoIdioms([{ path: 'internal/platform/wire/x.go', content }]), [
+    'internal/platform/wire/x.go:10: no-panic — panic en el código emitido fuera de una función Must…: los errores se devuelven'
+  ]);
+});
+
 test('toda regla de idioma tiene su mutación, y toda mutación nombra una regla', () => {
   assert.deepEqual(Object.keys(MUTATIONS).sort(), IDIOM_RULES.map((rule) => rule.id).sort());
 });

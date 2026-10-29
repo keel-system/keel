@@ -29,7 +29,7 @@ test('los tipos del DSL tienen su representación Go; ningún decimal es float',
   assert.deepEqual(goOf('uuid'), { goType: 'uuid.UUID', goImports: ['github.com/google/uuid'] });
   assert.equal(goOf('date').goType, 'wire.Date');
   assert.deepEqual(goOf('timestamp'), { goType: 'time.Time', goImports: ['time'] });
-  assert.deepEqual(goOf('json'), { goType: 'json.RawMessage', goImports: ['encoding/json'] });
+  assert.deepEqual(goOf('json'), { goType: 'jsontext.Value', goImports: ['encoding/json/jsontext'] });
   assert.equal(GO_PROJECTION.fieldType({ kind: 'base', base: 'string', constraints: {} }, { list: true }).goType, '[]string');
   for (const base of ['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']) {
     assert.doesNotMatch(goOf(base).goType, /float/, base);

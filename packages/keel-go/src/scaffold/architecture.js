@@ -144,7 +144,7 @@ func TestBoundaryCatchesPlantedImports(t *testing.T) {
 		})
 	}
 	allowed := []pkg{
-		{ImportPath: module + "/internal/domain", Imports: []string{"time", "github.com/google/uuid"}},
+		{ImportPath: module + "/internal/domain", Imports: []string{"time", "github.com/google/uuid", module + "/internal/platform/wire"}},
 		{ImportPath: module + "/internal/application", Imports: []string{module + "/internal/domain"}},
 		{ImportPath: module + "/internal/httpapi", Imports: []string{module + "/internal/application", module + "/internal/platform/health"}},
 		{ImportPath: module + "/cmd/server", Imports: []string{module + "/internal/httpapi", module + "/config"}},

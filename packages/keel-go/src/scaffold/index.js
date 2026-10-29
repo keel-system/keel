@@ -15,6 +15,7 @@ import { GO_PROJECTION } from '../lib/go-projection.js';
 import * as project from './project.js';
 import * as config from './config.js';
 import * as health from './health.js';
+import * as wire from './wire.js';
 import * as httpapi from './httpapi.js';
 import * as server from './server.js';
 import * as architecture from './architecture.js';
@@ -22,7 +23,7 @@ import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara.
-const GENERATORS = [project, config, health, httpapi, server, architecture, readme, generatorDocs];
+const GENERATORS = [project, config, health, wire, httpapi, server, architecture, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus avisos

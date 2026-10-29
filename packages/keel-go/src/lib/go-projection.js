@@ -6,8 +6,8 @@
 //
 // Estado (incremento 2 de PLAN-KEEL-GO.md): la proyección de TIPOS completa —el modelo de cualquier diseño
 // se construye—, con las cotas, las reglas de validación y las columnas como DATOS de keel-core/gen. Los
-// renderizadores que las escriben llegan con el dominio (incremento 4); la forma exacta de `Decimal`, `Date`
-// y `Optional[T]` la fija el contrato del cable (incremento 3).
+// renderizadores que las escriben llegan con el dominio (incremento 4); `Decimal`, `Date` y `Optional[T]`
+// los emite el contrato del cable (src/scaffold/wire.js).
 //
 // Las propiedades que esta proyección pone en cada campo son de keel-go: `goType`, `goImports` (rutas de
 // importación; las del propio módulo empiezan por `internal/` y el renderizador les antepone el módulo) y
@@ -106,8 +106,9 @@ const BASE_GO_TYPES = {
   date: { goType: 'wire.Date', goImports: [WIRE_PACKAGE] },
   // Un instante: el contrato del cable lo escribe en UTC con `Z` y tres decimales.
   timestamp: { goType: 'time.Time', goImports: ['time'] },
-  // Viaja embebido (contrato del cable, json-embedded): un árbol JSON tal cual, no un string.
-  json: { goType: 'json.RawMessage', goImports: ['encoding/json'] },
+  // Viaja embebido (contrato del cable, json-embedded): el valor JSON tal cual, no un string. Es el tipo de
+  // encoding/json/v2, con el que el paquete wire lee y escribe todo cuerpo.
+  json: { goType: 'jsontext.Value', goImports: ['encoding/json/jsontext'] },
   file: { goType: 'string', goImports: [] }
 };
 

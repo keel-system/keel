@@ -23,7 +23,7 @@ estampado en `keel-generated.json`, y no escribe nada en el workspace de diseño
 
 1. **Entrada**: el diseño multi-artefacto de `specs/<servicio>/`, validado y listo.
 2. **Compatibilidad**: DSL `2.23`, la misma que los otros tres. Ante otra, se detiene.
-3. **Salida**: `services/<servicio>-go/`, un módulo Go (`go 1.26.0`, `toolchain go1.27.3`) sin cgo, con la
+3. **Salida**: `services/<servicio>-go/`, un módulo Go (`go 1.27.0`, `toolchain go1.27.3`) sin cgo, con la
    configuración por perfiles en `config/` —el mismo formato y las mismas variables que los otros tres, embebida en
    el binario—, sus sondas `/livez` y `/readyz`, la prueba de su frontera hexagonal, el snapshot sellado del
    diseño en `specs/` y lo que el agente necesita para completarlo.

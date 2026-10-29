@@ -38,6 +38,10 @@ export const MODULES = {
   // el resto Apache-2.0. La v3.0.5 es de 2026-07-26. Se prefirió a goccy/go-yaml (MIT, también mantenido) por
   // ser la API que conoce cualquiera que haya leído YAML en Go.
   'go.yaml.in/yaml/v3': { version: 'v3.0.5', license: 'MIT AND Apache-2.0', kind: 'require', use: 'lectura de la configuración YAML' },
+  // Los uuid: `NewV7()` para los ids que genera el servidor y la forma canónica en minúsculas del cable. Es un
+  // [16]byte en big-endian, así que el binary(16) de MySQL sale igual que en keel-spring. La v1.6.0 es de
+  // 2024-01-23 y sigue siendo la última.
+  'github.com/google/uuid': { version: 'v1.6.0', license: 'BSD-3-Clause', kind: 'require', use: 'uuid (v7 y forma del cable)' },
   // El ciclo de vida: errgroup para que ninguna goroutine quede sin dueño (§ 3.5). La v0.24.0 es de 2026-09-23.
   'golang.org/x/sync': { version: 'v0.24.0', license: 'BSD-3-Clause', kind: 'require', use: 'errgroup: servidores y trabajos con dueño' },
 
@@ -54,8 +58,11 @@ export const MODULES = {
   'github.com/google/go-licenses/v2': { version: 'v2.0.1', license: 'Apache-2.0', kind: 'tool', tool: 'github.com/google/go-licenses/v2', use: 'licencias de los transitivos' }
 };
 
-/** Los módulos de ejecución que emite el esqueleto (inc. 2): los que importa el código de `build`. */
-export const SKELETON_REQUIRES = ['go.yaml.in/yaml/v3', 'golang.org/x/sync'];
+/**
+ * Los módulos de ejecución que emite el esqueleto: los que importa el código de `build`. uuid entra con el
+ * contrato del cable (inc. 3), que lo prueba aunque el diseño no declare ningún uuid.
+ */
+export const SKELETON_REQUIRES = ['github.com/google/uuid', 'go.yaml.in/yaml/v3', 'golang.org/x/sync'];
 
 /** Las herramientas: todas, siempre. */
 export const TOOLS = Object.entries(MODULES)

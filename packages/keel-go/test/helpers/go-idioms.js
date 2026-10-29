@@ -73,8 +73,22 @@ export const IDIOM_RULES = [
   },
   {
     id: 'no-panic',
-    what: 'panic en el código emitido: los errores se devuelven',
-    check: (file) => (isTest(file) ? [] : matchLines(file.content, /(^|[^A-Za-z0-9_.])panic\(/))
+    what: 'panic en el código emitido fuera de una función Must…: los errores se devuelven',
+    // La única excepción es la convención de la biblioteca estándar (regexp.MustCompile, template.Must): una
+    // función Must… es para un literal que escribe el programador, y un literal mal escrito es un invariante
+    // imposible, no un error que el llamante pueda tratar (PLAN-KEEL-GO.md § 3.2).
+    check: (file) => {
+      if (isTest(file)) return [];
+      let current = '';
+      const hits = [];
+      codeLines(file.content).forEach((line, index) => {
+        const opened = line.match(/^func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)/);
+        if (opened) current = opened[1];
+        else if (/^\S/.test(line)) current = '';
+        if (/(^|[^A-Za-z0-9_.])panic\(/.test(line) && !/^Must[A-Z]/.test(current)) hits.push(index + 1);
+      });
+      return hits;
+    }
   },
   {
     id: 'no-math-rand',

@@ -29,6 +29,9 @@ export function layout(model) {
     httpapi: pkg(module, 'internal/httpapi'),
     config: pkg(module, 'internal/platform/config'),
     health: pkg(module, 'internal/platform/health'),
+    // El contrato del cable y los tipos que la biblioteca estándar no tiene (Decimal, Date, Optional[T]). El
+    // dominio los usa, así que es lo único de la plataforma que puede importar.
+    wire: pkg(module, 'internal/platform/wire'),
     // La prueba de la frontera hexagonal: `internal/` solo protege frente a otros módulos, no entre capas.
     architecture: pkg(module, 'internal/architecture')
   };
@@ -41,8 +44,13 @@ export function layout(model) {
  */
 export function boundaries() {
   return [
-    { layer: 'domain', prefix: 'internal/domain', allows: [], thirdParty: ['github.com/google/uuid'] },
-    { layer: 'application', prefix: 'internal/application', allows: ['internal/domain'], thirdParty: ['github.com/google/uuid'] },
+    { layer: 'domain', prefix: 'internal/domain', allows: ['internal/platform/wire'], thirdParty: ['github.com/google/uuid'] },
+    {
+      layer: 'application',
+      prefix: 'internal/application',
+      allows: ['internal/domain', 'internal/platform/wire'],
+      thirdParty: ['github.com/google/uuid']
+    },
     { layer: 'platform', prefix: 'internal/platform/', allows: ['internal/platform/'], thirdParty: null },
     {
       layer: 'httpapi',
