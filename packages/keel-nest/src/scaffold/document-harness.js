@@ -16,6 +16,7 @@ import { rescueProbes } from '@keel-system/keel-core/gen';
 import { documentShape } from '@keel-system/keel-core/gen/document';
 import { tsString } from './render.js';
 import { usesDocument } from './persistence-entities.js';
+import { documentAgingTargets as agingTargets } from '@keel-system/keel-core/gen/aging-targets';
 
 /** La base documental de prueba como contenedor al que se le pueden mandar scripts. */
 export function documentProbe(model) {
@@ -30,35 +31,6 @@ export function documentProbe(model) {
     argv: entry.cliQueryArgv({ user: entry.user(dbName), pass: entry.password, db: dbName }).filter((part) => part !== '--eval'),
     label: entry.label
   };
-}
-
-/** Las marcas de espera que envejece `ageForReconciliation`, por activación, con su clave del documento. */
-function agingTargets(model) {
-  const targets = new Map();
-  for (const operation of (model.services ?? []).flatMap((service) => service.operations ?? [])) {
-    for (const { activation, waitingTargets } of operation.reconciles ?? []) {
-      for (const target of waitingTargets ?? []) {
-        const entity = (model.entities ?? []).find((candidate) => candidate.name === target.entity) ?? null;
-        if (!entity?.collectionName || !target.awaitingField) continue;
-        const clockField = documentShape(model, entity).find((entry) => entry.member === target.awaitingField)?.name;
-        if (!clockField) continue;
-        if (!targets.has(activation.name)) targets.set(activation.name, []);
-        targets.get(activation.name).push({ collection: entity.collectionName, clockField });
-      }
-    }
-  }
-  // El barrido de la capa payments: su condición de entrada es la marca de espera del cobro, rancia, y la clave es el
-  // nombre del barrido. Como en keel-spring.
-  const payments = model.payments;
-  if (payments?.reconciliation?.sweep && payments.record?.awaitingSince) {
-    const entity = (model.entities ?? []).find((candidate) => candidate.name === payments.record.entity);
-    const clockField = entity?.collectionName ? documentShape(model, entity).find((entry) => entry.member === payments.record.awaitingSince)?.name : null;
-    if (clockField) {
-      if (!targets.has(payments.reconciliation.sweep)) targets.set(payments.reconciliation.sweep, []);
-      targets.get(payments.reconciliation.sweep).push({ collection: entity.collectionName, clockField });
-    }
-  }
-  return targets;
 }
 
 /** La sección de flow.ts sobre documentos: `mongoEval`, el rescate y la reconciliación. */

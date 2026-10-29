@@ -22,6 +22,8 @@ import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { FILE_UPLOAD_TS } from './dtos.js';
 import { TELEMETRY_TS, instrumentationFor } from './telemetry.js';
 import { storageYaml, multipartFileLimitBytes } from '@keel-system/keel-core/gen/storage-config';
+import { usesMultipart, usesStorage, usesStorageControl } from '@keel-system/keel-core/gen/features';
+export { usesMultipart, usesStorage, usesStorageControl };
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const STORAGE_DIR = 'domain/storage';
@@ -38,15 +40,6 @@ export const CONFIGURED_POLICIES_TS = `${INFRA_DIR}/configured-storage-policies.
 export const S3_FILE_STORAGE_TS = `${INFRA_DIR}/s3-file-storage.ts`;
 export const STORAGE_MODULE_TS = `${INFRA_DIR}/storage-module.ts`;
 export const MULTIPART_READING_TS = 'src/infrastructure/rest/multipart-reading.ts';
-
-export function usesStorage(model) {
-  return Boolean(model.layersPresent?.storage && model.storage);
-}
-
-/** ¿Alguna operación con ruta recibe un binario? Entonces la entrada HTTP lee multipart/form-data. */
-export function usesMultipart(model) {
-  return (model.services ?? []).some((service) => (service.operations ?? []).some((operation) => operation.route && operation.multipart));
-}
 
 export { multipartFileLimitBytes };
 
@@ -579,11 +572,6 @@ export function requirePart(files: Readonly<Record<string, FileUpload | null>>, 
 }
 
 // ─── El arnés: la palanca del almacenamiento caído ───────────────────────────
-
-/** ¿Se puede parar el almacenamiento en un flujo? Solo con un almacén que levanta contenedor (minio). */
-export function usesStorageControl(model) {
-  return usesStorage(model) && model.stack?.storage === 'minio';
-}
 
 /**
  * `stopStorage()`/`startStorage()` en flow.ts: la palanca de los escenarios de «bucket caído», la misma que el

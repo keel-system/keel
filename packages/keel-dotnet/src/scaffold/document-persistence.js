@@ -37,6 +37,8 @@ import { idempotencyRegistration, idempotencyRegistrationUsings } from './reques
 import { usesSweepClaims } from './claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from './reconciliation-claim.js';
 import { AFTER_COMMIT_REGISTRATION } from './after-commit.js';
+import { localMongoUrl } from '@keel-system/keel-core/gen/infra-catalog';
+export { localMongoUrl };
 
 /** La pieza que crea los índices y la que traduce sus violaciones, como las nombra export-indexes.sh. */
 const PLATFORM = { indexCreator: 'DocumentIndexes.cs', errorTranslator: 'PersistenceErrors' };
@@ -81,12 +83,6 @@ export function generate(model) {
 }
 
 // ─── Configuración ───────────────────────────────────────────────────────────────────────────────
-
-/** La URI de local: la MISMA que escribe keel-spring para el mismo servicio (keel-spring/src/lib/java-stack.js). */
-export function localMongoUrl(dbName) {
-  const db = DATABASES.mongodb;
-  return `mongodb://${db.user(dbName)}:${db.password}@localhost:${db.port}/${dbName}?authSource=admin&directConnection=true&uuidRepresentation=standard`;
-}
 
 function dbYaml(profile, dbName) {
   if (profile === 'test') {

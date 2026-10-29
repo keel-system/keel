@@ -12,11 +12,9 @@ import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { snakeCase } from '@keel-system/keel-core/gen';
 import { csFile, csString, solution } from './render.js';
 import { usesRelational } from './persistence.js';
-
-/** ¿Hay proveedor de prueba? Con clientes HTTP salientes (y, cuando llegue, con la capa payments), como en los otros dos. */
-export function usesHttpStub(model) {
-  return Boolean((model.layersPresent?.httpClients && (model.httpClients ?? []).length > 0) || model.payments);
-}
+import { usesHttpStub } from '@keel-system/keel-core/gen/features';
+import { relationalAgingTargets as agingTargets } from '@keel-system/keel-core/gen/aging-targets';
+export { usesHttpStub };
 
 export function httpStubPath(model) {
   return `${solution(model).integrationTests.dir}/Support/HttpStub.cs`;
@@ -299,32 +297,6 @@ public static class HttpStubHarness
 }
 
 // ─── AgeForReconciliation, en FlowTest (usa Db) ──────────────────────────────────────────────────
-
-/** Las tablas y marcas de espera de cada activación con barrido (las de keel-nest). */
-function agingTargets(model) {
-  const targets = new Map();
-  for (const operation of (model.services ?? []).flatMap((service) => service.operations ?? [])) {
-    for (const { activation, waitingTargets } of operation.reconciles ?? []) {
-      for (const target of waitingTargets ?? []) {
-        if (!target.table || !target.awaitingField) continue;
-        if (!targets.has(activation.name)) targets.set(activation.name, []);
-        targets.get(activation.name).push(target);
-      }
-    }
-  }
-  // El barrido de la capa payments no es un `reconciledBy` de activations, pero su condición de entrada es la misma —la
-  // marca de espera del cobro, rancia— y tampoco se alcanza de otra forma. La clave es el nombre del barrido, como en
-  // keel-spring y keel-nest.
-  const payments = model.payments;
-  if (payments?.reconciliation?.sweep && payments.record?.awaitingSince) {
-    const entity = (model.entities ?? []).find((candidate) => candidate.name === payments.record.entity);
-    if (entity?.tableName) {
-      if (!targets.has(payments.reconciliation.sweep)) targets.set(payments.reconciliation.sweep, []);
-      targets.get(payments.reconciliation.sweep).push({ table: entity.tableName, awaitingField: payments.record.awaitingSince });
-    }
-  }
-  return targets;
-}
 
 /**
  * Los miembros de FlowTest con `AgeForReconciliation` y `HoldFromReconciliation`. El mismo criterio que keel-spring y

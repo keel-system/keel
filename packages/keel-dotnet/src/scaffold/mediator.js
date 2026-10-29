@@ -32,11 +32,8 @@ import { cacheNamespace, usesCache } from './cache.js';
 import { storageInfraNamespace, usesStorage } from './storage.js';
 import { telemetryNamespace, usesTelemetry } from './telemetry.js';
 import { usesCorrelation } from './rest-support.js';
-
-/** ¿Hay casos de uso que despachar? Sin operaciones no se genera nada de esto. */
-export function usesMediator(model) {
-  return (model.services ?? []).some((service) => (service.operations ?? []).length > 0);
-}
+import { usesMediator } from '@keel-system/keel-core/gen/features';
+export { usesMediator };
 
 export function generate(model) {
   if (!usesMediator(model)) return [];

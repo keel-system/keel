@@ -43,6 +43,8 @@ import {
   persistenceNamespace,
   auditColumns
 } from './persistence.js';
+import { repositoryRoots, repositoryOf, isPaginated, resolvedByOf } from '@keel-system/keel-core/gen/features';
+export { repositoryRoots, repositoryOf, isPaginated, resolvedByOf };
 
 /** ¿Emite eventos de dominio este agregado? */
 export function emitsEvents(model, entity) {
@@ -51,26 +53,6 @@ export function emitsEvents(model, entity) {
 
 export const portClass = (entity) => `I${entity.name}Repository`;
 export const adapterClass = (entity) => `${entity.name}Repository`;
-
-/** Las raíces que tienen repositorio: persistidas y raíz de su agregado. */
-export function repositoryRoots(model) {
-  if (!usesPersistence(model)) return [];
-  return model.entities.filter((entity) => entity.persisted && entity.isAggregateRoot);
-}
-
-/** ¿Alguna operación de la raíz pagina? Entonces el puerto lleva `List(pageable)`. */
-export function isPaginated(model, entity) {
-  return (model.services ?? []).some((group) => group.entity === entity.name && (group.operations ?? []).some((op) => op.paginated));
-}
-
-/** La raíz persistida del grupo de una operación (la de su raíz si opera sobre una hija), o null. */
-export function repositoryOf(model, operation) {
-  const service = (model.services ?? []).find((group) => (group.operations ?? []).includes(operation));
-  if (!service) return null;
-  const target = model.entities.find((entity) => entity.name === service.entity);
-  const rootName = target?.rootEntity ?? service.entity;
-  return repositoryRoots(model).find((entity) => entity.name === rootName) ?? null;
-}
 
 export function repositoriesNamespace(model) {
   return namespaceOf(model, 'repositories');
@@ -251,14 +233,6 @@ export function credentialFinders(model, entity) {
 /** El nombre del finder de `Entidad.campo`: el de keel-spring y keel-nest, en PascalCase (`FindByCredentialKeysContaining`). */
 export function credentialFinderName(field) {
   return `FindBy${csMember(field)}Containing`;
-}
-
-/** `resolvedBy` como `{ entity, field }`: el diseño lo escribe `Entidad.campo`, y una prueba puede pasarlo ya partido. */
-export function resolvedByOf(raw) {
-  if (!raw) return null;
-  if (typeof raw === 'object') return raw;
-  const [entity, field] = String(raw).split('.');
-  return { entity, field };
 }
 
 // ─── El puerto ───────────────────────────────────────────────────────────────────────────────────

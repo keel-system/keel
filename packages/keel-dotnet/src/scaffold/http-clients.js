@@ -24,13 +24,10 @@ import { configNamespace } from './config.js';
 import { wireNamespace } from './wire.js';
 import { usesCorrelation } from './rest-support.js';
 import { telemetryNamespace, usesTelemetry } from './telemetry.js';
+import { usesHttpClients, usesOAuth2 } from '@keel-system/keel-core/gen/features';
+export { usesHttpClients, usesOAuth2 };
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
-
-/** ¿Genera este diseño clientes salientes? */
-export function usesHttpClients(model) {
-  return Boolean(model.layersPresent?.httpClients && (model.httpClients ?? []).length > 0);
-}
 
 /** ¿Alguna llamada manda clave de idempotencia al proveedor? Entonces hace falta CommandSignature aunque no haya registro. */
 export function usesOutboundIdempotency(model) {
@@ -2131,11 +2128,6 @@ ${locals}
         clock.Advance(TimeSpan.FromSeconds(1));
         await Assert.ThrowsAsync<${namespaceOf(model, 'errors')}.${need.onUnavailable.exceptionClass}>(() => ${invoke('down')});
     }`;
-}
-
-/** ¿Algún cliente se autentica con `oauth2-client-credentials`? */
-export function usesOAuth2(model) {
-  return (model.httpClients ?? []).some((client) => client.auth?.type === 'oauth2-client-credentials');
 }
 
 /**

@@ -25,6 +25,7 @@ import { naturalKeyFinder, occupantFinders, repositoryRoots } from './repositori
 import { relievingOperations } from '@keel-system/keel-core/gen';
 import { usesNestOutbox, usesProcessedEvents, usesMessaging } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
+import { subscriptionsBySource as bySource } from '@keel-system/keel-core/gen/messaging-plan';
 
 /** Dónde están las fuentes y qué archivos son los de los mensajes (nombran a todos los listeners y no son ninguno). */
 // TypeScript deja varios tipos en un archivo (tres listeners en un listeners.ts): el archivo localizado por contenido se
@@ -251,21 +252,6 @@ function stateReadingFinder(model, entityNames) {
   const fields = [...new Set(entityNames.map((name) => (model.entities ?? []).find((entity) => entity.name === name)?.lifecycle?.field).filter(Boolean))];
   const byState = fields.map((field) => '\\.find(All)?By[A-Za-z]*' + capitalize(field) + '[A-Za-z]*\\s*\\(');
   return [['\\.findAll\\s*\\(', ...byState].join('|')];
-}
-
-/**
- * Con RabbitMQ, las suscripciones de la misma fuente comparten cola: UN listener que enruta por el tipo
- * (varios serían consumidores compitiendo). Mismo agrupado que keel-spring, y por lo mismo: ahí un check por
- * evento dejaría de ser atribuible.
- */
-function bySource(model, subscriptions) {
-  if (model.stack?.broker !== 'rabbitmq') return subscriptions.map((sub) => [sub]);
-  const groups = new Map();
-  for (const sub of subscriptions) {
-    if (!groups.has(sub.topicDefault)) groups.set(sub.topicDefault, []);
-    groups.get(sub.topicDefault).push(sub);
-  }
-  return [...groups.values()];
 }
 
 const subjectOf = (subs) => (subs.length > 1 ? `${subs[0].topicDefault} (${subs.map((sub) => sub.name).join(', ')})` : subs[0].name);

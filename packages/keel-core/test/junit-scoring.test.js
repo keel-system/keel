@@ -120,6 +120,78 @@ test('el mensaje de xUnit v3 4.x sale en una línea: el salto CRLF en hexadecima
   assert.doesNotMatch(out, /FL-CAP/);
 });
 
+// El XML de gotestsum 1.13.0 (Go 1.27.3, `--junitfile --junitfile-testcase-classname short`), CAPTURADO de una
+// ejecución real (solo se fijan los tiempos): el runner de keel-go. Frente a los otros tres, el nombre del caso
+// es el de la FUNCIÓN de prueba, que no admite guiones (`TestFL_RES_001`), o la ruta del subtest con los espacios
+// cambiados por `_` (`TestFL_RES_004/FL-RES-004-B:_rechazo…`); el padre de unos subtests es un caso más, que
+// cae en rojo cuando cae un hijo; `message` es siempre «Failed» y lo que dijo la prueba va en el CUERPO del
+// <failure>, entre las líneas `=== RUN` y `--- FAIL`, con las comillas como `&#34;`/`&#39;` y el tabulador
+// como `&#x9;`. Con el awk de antes la matriz salía VACÍA.
+const GOTESTSUM_XML = String.raw`<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="14" failures="7" errors="0" time="0.000000">
+	<testsuite tests="14" failures="7" skipped="2" time="0.000000" name="integration" timestamp="2026-10-29T10:30:00-05:00">
+		<properties>
+			<property name="go.version" value="go1.27.3 windows/amd64"></property>
+		</properties>
+		<testcase classname="integration" name="TestFL_RES_002" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestFL_RES_002&#xA;    flows_test.go:9: esperaba 409 STOCK_EXHAUSTED&#xA;        y llegó 200 &lt;ok&gt; &amp; &#34;x&#34;&#xA;--- FAIL: TestFL_RES_002 (0.00s)&#xA;</failure>
+		</testcase>
+		<testcase classname="integration" name="TestFL_RES_004/FL-RES-004-B:_rechazo_con_&#34;stock&#34;_agotado" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestFL_RES_004/FL-RES-004-B:_rechazo_con_&#34;stock&#34;_agotado&#xA;    flows_test.go:17: esperaba 409&#xA;--- FAIL: TestFL_RES_004/FL-RES-004-B:_rechazo_con_&#34;stock&#34;_agotado (0.00s)&#xA;</failure>
+		</testcase>
+		<testcase classname="integration" name="TestFL_RES_004" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestFL_RES_004&#xA;--- FAIL: TestFL_RES_004 (0.00s)&#xA;</failure>
+		</testcase>
+		<testcase classname="integration" name="TestNotAScenario" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestNotAScenario&#xA;    flows_test.go:27: arranque roto:&#xA;        &#x9;línea 2 con &lt;tag&gt; &amp; &#39;comilla&#39;&#xA;--- FAIL: TestNotAScenario (0.00s)&#xA;</failure>
+		</testcase>
+		<testcase classname="integration" name="TestStockFlows/FL-RES-007:_liberación" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestStockFlows/FL-RES-007:_liberación&#xA;    flows_test.go:32: esperaba 204&#xA;--- FAIL: TestStockFlows/FL-RES-007:_liberación (0.00s)&#xA;</failure>
+		</testcase>
+		<testcase classname="integration" name="TestStockFlows" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestStockFlows&#xA;--- FAIL: TestStockFlows (0.00s)&#xA;</failure>
+		</testcase>
+		<testcase classname="integration" name="TestFL_RES_008" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestFL_RES_008&#xA;    flows_test.go:38: limpieza rota&#xA;--- FAIL: TestFL_RES_008 (0.00s)&#xA;=== RUN   TestFL_RES_008/FL-RES-008-A:_reintento&#xA;--- PASS: TestFL_RES_008/FL-RES-008-A:_reintento (0.00s)&#xA;</failure>
+		</testcase>
+		<testcase classname="integration" name="TestFL_RES_003" time="0.000000">
+			<skipped message="=== RUN   TestFL_RES_003&#xA;    flows_test.go:12: sin broker&#xA;--- SKIP: TestFL_RES_003 (0.00s)&#xA;"></skipped>
+		</testcase>
+		<testcase classname="integration" name="TestReservationFlows/FL-RES-006:_barrido" time="0.000000">
+			<skipped message="=== RUN   TestReservationFlows/FL-RES-006:_barrido&#xA;    flows_test.go:23: sin reloj&#xA;--- SKIP: TestReservationFlows/FL-RES-006:_barrido (0.00s)&#xA;"></skipped>
+		</testcase>
+		<testcase classname="integration" name="TestFL_RES_001" time="0.000000"></testcase>
+		<testcase classname="integration" name="TestFL_RES_004/FL-RES-004-A:_variantes_(n:_1)" time="0.000000"></testcase>
+		<testcase classname="integration" name="TestReservationFlows/FL-RES-005:_alta_de_reserva" time="0.000000"></testcase>
+		<testcase classname="integration" name="TestReservationFlows" time="0.000000"></testcase>
+		<testcase classname="integration" name="TestFL_RES_008/FL-RES-008-A:_reintento" time="0.000000"></testcase>
+	</testsuite>
+</testsuites>
+`;
+
+test('la matriz lee el XML real de gotestsum: función por flujo, subtests y padres que solo agrupan', () => {
+  const rows = runAwk(JUNIT_MATRIX_AWK, GOTESTSUM_XML).trim().split('\n').sort();
+  // TestFL_RES_004 cae por su hijo y TestReservationFlows/TestStockFlows solo agrupan: no puntúan.
+  // TestFL_RES_008 cae por sí mismo con su caso en verde: ese rojo es suyo y no se pierde.
+  assert.deepEqual(rows, [
+    'FALLO\tFL-RES-002\tintegration',
+    'FALLO\tFL-RES-004-B\tintegration',
+    'FALLO\tFL-RES-007\tintegration',
+    'FALLO\tFL-RES-008\tintegration',
+    'OK\tFL-RES-001\tintegration',
+    'OK\tFL-RES-004-A\tintegration',
+    'OK\tFL-RES-005\tintegration',
+    'OK\tFL-RES-008-A\tintegration',
+    'OMITIDO\tFL-RES-003\tintegration',
+    'OMITIDO\tFL-RES-006\tintegration'
+  ]);
+});
+
+test('el rojo de gotestsum que no es escenario sale con lo que dijo la prueba, no con «Failed»', () => {
+  const out = runAwk(JUNIT_NON_SCENARIO_AWK, GOTESTSUM_XML);
+  assert.equal(out, "    TestNotAScenario  (integration)\n      flows_test.go:27: arranque roto: línea 2 con <tag> & 'comilla'\n");
+});
+
 // El cruce con el documento de escenarios, EJECUTADO: lo que no declara el documento no puntúa (las corridas
 // `catalog` de los dos generadores dieron 66 en OK sobre 56 escenarios) y sale aparte, también en rojo.
 function runScoring(document, matrixRows) {

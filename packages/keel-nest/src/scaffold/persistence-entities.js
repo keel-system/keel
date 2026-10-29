@@ -44,31 +44,14 @@ import {
 } from '@keel-system/keel-core/gen';
 import { hasPatternFilter } from '@keel-system/keel-core/gen/text-filters';
 import { DIRS, classPath, capitalize, decapitalize, isNullable, tsModule, tsString } from './render.js';
+import { usesRelational, usesDocument, usesPersistence } from '@keel-system/keel-core/gen/features';
+export { usesRelational, usesDocument, usesPersistence };
 
 export const ORM_DIR = 'infrastructure/persistence/entities';
 export const TRANSFORMERS_TS = 'src/infrastructure/persistence/column-transformers.ts';
 export const AUDITABLE_TS = classPath(ORM_DIR, 'AuditableOrm');
 export const TEXT_FOLD_TS = 'src/infrastructure/persistence/text-fold.ts';
 export const LIKE_PATTERN_TS = 'src/infrastructure/persistence/like-pattern.ts';
-
-/** ¿El diseño persiste en un motor relacional? Es lo que genera todo este módulo. */
-export function usesRelational(model) {
-  return Boolean(model.layersPresent?.persistence) && model.persistenceKind !== 'document';
-}
-
-/** ¿El diseño persiste en documentos (MongoDB, incremento 12)? Lo genera document-persistence.js. */
-export function usesDocument(model) {
-  return Boolean(model.layersPresent?.persistence) && model.persistenceKind === 'document';
-}
-
-/**
- * ¿Hay persistencia, del modelo que sea? Es lo que deciden el mediator (abre la transacción), el filtro
- * de errores (traduce los del almacén) y el módulo raíz: las dos ramas emiten los MISMOS archivos de
- * transacción, errores y módulo, con la misma forma, y lo de encima no distingue cuál tiene debajo.
- */
-export function usesPersistence(model) {
-  return usesRelational(model) || usesDocument(model);
-}
 
 /** ¿Algún campo persistido se compara plegado (`compare`)? Entonces hace falta TextFold, en las dos ramas. */
 export function usesTextFold(model) {

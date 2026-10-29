@@ -308,3 +308,17 @@ export function snssqsYaml(profile) {
   );
   return `${lines.join('\n')}\n`;
 }
+
+/**
+ * Las suscripciones agrupadas por consumidor: con RabbitMQ, las de la misma fuente comparten cola, y es UN listener el
+ * que enruta por el tipo (varios serían consumidores compitiendo); con los otros brokers, una por grupo.
+ */
+export function subscriptionsBySource(model, subscriptions) {
+  if (model.stack?.broker !== 'rabbitmq') return subscriptions.map((sub) => [sub]);
+  const groups = new Map();
+  for (const sub of subscriptions) {
+    if (!groups.has(sub.topicDefault)) groups.set(sub.topicDefault, []);
+    groups.get(sub.topicDefault).push(sub);
+  }
+  return [...groups.values()];
+}

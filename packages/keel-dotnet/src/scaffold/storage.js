@@ -21,24 +21,16 @@ import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors
 import { csFile, csMember, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { observedRegistration, observedStorageFile, telemetryNamespace, usesTelemetry } from './telemetry.js';
+import { usesMultipart, usesStorage, usesStorageControl } from '@keel-system/keel-core/gen/features';
+export { usesMultipart, usesStorage, usesStorageControl };
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
 export const FILE_STORAGE_PORT = 'IFileStorage';
 
-/** ¿Declara el diseño la capa storage? Entonces se emite el contrato, aunque el stack no elija almacén. */
-export function usesStorage(model) {
-  return Boolean(model.layersPresent?.storage && model.storage);
-}
-
 /** ¿Hay un almacén elegido en el stack? Solo entonces hay configuración, adaptador y registro que arrancar. */
 export function usesStorageAdapter(model) {
   return usesStorage(model) && Boolean(model.stack?.storage);
-}
-
-/** ¿Alguna operación con ruta recibe un binario? Entonces la entrada HTTP lee multipart/form-data. */
-export function usesMultipart(model) {
-  return (model.services ?? []).some((service) => (service.operations ?? []).some((operation) => operation.route && operation.multipart));
 }
 
 export function storageNamespace(model) {
@@ -645,11 +637,6 @@ builder.Services.AddStorage(StorageSettings.From(configuration));`
 }
 
 // ─── El arnés: la palanca del almacenamiento caído ───────────────────────────────────────────────
-
-/** ¿Se puede parar el almacenamiento en un flujo? Solo con un almacén que levanta contenedor (minio). */
-export function usesStorageControl(model) {
-  return usesStorage(model) && model.stack?.storage === 'minio';
-}
 
 /**
  * Los miembros de FlowTest: `Upload(...)` con una subida en el diseño (el `multipart(...)` del AbstractFlowIT de

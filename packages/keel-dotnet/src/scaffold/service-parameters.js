@@ -12,6 +12,8 @@
 import { parameterProfileValue, parameterProperty } from '@keel-system/keel-core/gen/service-parameters';
 import { csFile, csLocal, csMember, csString, located, namespaceOf, solution, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
+import { usesServiceParameters } from '@keel-system/keel-core/gen/features';
+export { usesServiceParameters };
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 const SUPPORTED_TYPES = ['string', 'int', 'long', 'decimal', 'bool'];
@@ -20,10 +22,6 @@ export const parametersClass = (model) => `${model.service.className}Parameters`
 
 export function parametersNamespace(model) {
   return namespaceOf(model, 'parameters');
-}
-
-export function usesServiceParameters(model) {
-  return (model.service.parameters ?? []).length > 0;
 }
 
 /** La expresión C# que construye los parámetros con su valor de prueba: la usan las pruebas que montan el contenedor. */

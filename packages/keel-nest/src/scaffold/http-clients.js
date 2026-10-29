@@ -24,6 +24,8 @@ import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { httpClientsYaml } from '@keel-system/keel-core/gen/http-clients-config';
 import { hasCallFallback } from '@keel-system/keel-core/gen/outbound-resilience';
 import { LOCAL_STUB_BASE_URL } from '@keel-system/keel-core/gen/infra-catalog';
+import { usesHttpClients, usesOAuth2 } from '@keel-system/keel-core/gen/features';
+export { usesHttpClients, usesOAuth2 };
 
 const CLIENTS_DIR = 'infrastructure/clients';
 export const PROVIDER_FAILURES_TS = `src/${CLIENTS_DIR}/provider-failures.ts`;
@@ -36,11 +38,6 @@ export const HTTP_CLIENTS_SETTINGS_TS = `src/${CLIENTS_DIR}/http-clients-setting
 export const HTTP_CLIENTS_MODULE_TS = `src/${CLIENTS_DIR}/http-clients-module.ts`;
 export const LAST_KNOWN_TS = `src/${CLIENTS_DIR}/last-known-values.ts`;
 export const OAUTH2_TS = `src/${CLIENTS_DIR}/oauth2-client-credentials.ts`;
-
-/** ¿Algún cliente se autentica con `oauth2-client-credentials`? */
-export function usesOAuth2(model) {
-  return (model.httpClients ?? []).some((client) => client.auth?.type === 'oauth2-client-credentials');
-}
 
 /** Los needs que declaran `onUnavailable: lastKnown`, con la llamada por la que se resuelven (los de keel-spring). */
 export function lastKnownNeeds(model) {
@@ -76,10 +73,6 @@ const PROFILES = ['local', 'develop', 'production', 'test'];
 export { LOCAL_STUB_BASE_URL };
 // El `http-clients.yaml` de cada perfil es neutral (keel-core/gen/http-clients-config.js): el mismo que el de keel-dotnet.
 export { httpClientsYaml };
-
-export function usesHttpClients(model) {
-  return Boolean(model.layersPresent?.httpClients && (model.httpClients ?? []).length > 0);
-}
 
 /** Las llamadas que mandan clave de idempotencia al proveedor. */
 export function outboundIdempotentCalls(model) {

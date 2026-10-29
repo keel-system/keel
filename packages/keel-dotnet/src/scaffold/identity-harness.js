@@ -15,11 +15,8 @@ import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/g
 import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
 import { csFile, csString } from './render.js';
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
-
-/** ¿Lleva el arnés credenciales? */
-export function usesIdentityHarness(model) {
-  return Boolean(model.layersPresent?.security && model.security && model.security.protocol !== 'none');
-}
+import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
+export { usesIdentityHarness };
 
 const tokens = (model) => usesTokenProtocol(model.security);
 const roles = (model) => model.security.roles ?? [];

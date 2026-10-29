@@ -25,11 +25,8 @@ import { usesPersistence } from './persistence.js';
 import { valueReaders } from './endpoints.js';
 import { usesMultipart } from './storage.js';
 import { readsCompositeResponses } from './http-clients.js';
-
-/** ¿Expone el servicio una API? Sin capa api, o sin ninguna operación con ruta, no hay nada de esto. */
-export function usesApi(model) {
-  return Boolean(model.layersPresent?.api) && (model.services ?? []).some((service) => (service.operations ?? []).some((op) => op.route));
-}
+import { usesApi } from '@keel-system/keel-core/gen/features';
+export { usesApi };
 
 export function restNamespace(model) {
   return namespaceOf(model, 'rest');

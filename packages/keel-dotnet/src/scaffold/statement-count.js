@@ -12,13 +12,11 @@
 import { csFile, located, namespaceOf } from './render.js';
 import { usesApi } from './rest-support.js';
 import { usesRelational } from './persistence.js';
+import { usesStatementCount } from '@keel-system/keel-core/gen/features';
+export { usesStatementCount };
 
 export const STATEMENT_COUNT_VARIABLE = 'KEEL_FLOW_STATEMENTS';
 export const STATEMENT_COUNT_PATH = '/__keel/statements';
-
-export function usesStatementCount(model) {
-  return usesApi(model) && usesRelational(model);
-}
 
 export function generate(model) {
   if (!usesStatementCount(model)) return [];

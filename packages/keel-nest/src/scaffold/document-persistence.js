@@ -40,6 +40,8 @@ import { PERSISTENCE_MODULE_TS } from './persistence-runtime.js';
 import { reconciliationBindings } from './reconciliation-claim.js';
 import { SWEEP_SETTINGS_TS, usesSweepClaims } from './claim.js';
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_TS, IDEMPOTENCY_STORE_IMPL_TS } from './request-idempotency.js';
+import { localMongoUrl } from '@keel-system/keel-core/gen/infra-catalog';
+export { localMongoUrl };
 
 export const MONGO_SETTINGS_TS = 'src/infrastructure/persistence/mongo-settings.ts';
 export const DOCUMENT_INDEXES_TS = 'src/infrastructure/persistence/document-indexes.ts';
@@ -70,12 +72,6 @@ export function generate(model) {
 }
 
 // ─── Configuración ───────────────────────────────────────────────────────────
-
-/** La URI de local: la MISMA que escribe keel-spring para el mismo servicio (src/lib/java-stack.js). */
-export function localMongoUrl(dbName) {
-  const db = DATABASES.mongodb;
-  return `mongodb://${db.user(dbName)}:${db.password}@localhost:${db.port}/${dbName}?authSource=admin&directConnection=true&uuidRepresentation=standard`;
-}
 
 function dbYaml(profile, dbName) {
   if (profile === 'test') {

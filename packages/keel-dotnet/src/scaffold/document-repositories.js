@@ -27,6 +27,8 @@ import { documentGuardMethods, documentOwnTransactionHelper, documentReconciliat
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { defaultSortConstant, entityFinders, finderParameters, fixedValue, hasFilter, methodName, needsOrdering, resultType, sortConstants } from './finders.js';
 import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents, credentialFinders, replicaOwnTransaction, replicaDependencies, naturalKeyBatchFinder } from './repositories.js';
+import { sortablePaths } from '@keel-system/keel-core/gen/document';
+export { sortablePaths };
 
 // ─── Valores ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -233,41 +235,6 @@ function keyFilter(model, entity, finder) {
     }
   }
   return `new BsonDocument { ${conditions.map(([key, value]) => `{ ${csString(key)}, ${value} }`).join(', ')} }`;
-}
-
-/**
- * Las propiedades por las que se puede ordenar un listado, con su ruta en el documento. En el modelo documental la
- * propiedad es la RUTA del espejo, la que acepta el `?sort=` de keel-spring sobre su `XxxDocument` y la que el modelo
- * neutral pone en el orden por defecto del diseño: un value object es `location.label` (no el `locationLabel` aplanado
- * de la rama relacional) y una hija anidada también se puede recorrer (`sections.status`). Cada segmento va a su clave
- * del documento: `sections.id` es `sections._id`. El mismo recorrido que keel-nest.
- */
-export function sortablePaths(model, entity) {
-  const paths = [];
-  const visitValueObject = (voName, property, path, seen) => {
-    const vo = model.valueObjects.find((candidate) => candidate.name === voName);
-    if (!vo || seen.has(voName)) return;
-    for (const sub of vo.fields) {
-      const subProperty = `${property}.${sub.name}`;
-      const subPath = `${path}.${snakeCase(sub.name)}`;
-      if (sub.kind === 'composite') visitValueObject(sub.namedType, subProperty, subPath, new Set([...seen, voName]));
-      else paths.push([subProperty, subPath]);
-    }
-  };
-  const visit = (current, prefix, pathPrefix, seen) => {
-    for (const entry of documentShape(model, current)) {
-      if (entry.kind === 'audit' && entry.role !== 'createdDate' && entry.role !== 'lastModifiedDate') continue;
-      const property = prefix ? `${prefix}.${entry.member}` : entry.member;
-      const path = pathPrefix ? `${pathPrefix}.${entry.name}` : entry.name;
-      if (entry.kind === 'subdocument' && entry.valueObject) visitValueObject(entry.valueObject, property, path, new Set());
-      else if ((entry.kind === 'subdocument' || entry.kind === 'array') && (entry.entity ?? entry.element?.entity)) {
-        const child = model.entities.find((candidate) => candidate.name === (entry.entity ?? entry.element.entity));
-        if (child && !seen.has(child.name)) visit(child, property, path, new Set([...seen, child.name]));
-      } else if (entry.kind !== 'array' && entry.kind !== 'version') paths.push([property, path]);
-    }
-  };
-  visit(entity, '', '', new Set([entity.name]));
-  return paths;
 }
 
 // ─── El adaptador ────────────────────────────────────────────────────────────────────────────────

@@ -23,20 +23,13 @@ import { COMPILED_TEMPLATES_LIMIT, HTML_ESCAPES, MAIL_HEADER_NAME_CLASS, RESERVE
 import { csFile, csString, csVerbatim, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { observedMailFile, observedRegistration, telemetryNamespace, usesTelemetry } from './telemetry.js';
+import { usesMail, sendsMail } from '@keel-system/keel-core/gen/features';
+export { usesMail, sendsMail };
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
 export const MAIL_SENDER_PORT = 'IMailSender';
 export const TEMPLATE_RENDERER_PORT = 'ITemplateRenderer';
-
-export function usesMail(model) {
-  return Boolean(model.layersPresent?.mail && model.mail);
-}
-
-/** ¿El diseño le atribuye a esta operación la salida por correo? (`mail.sentBy`) */
-export function sendsMail(model, operation) {
-  return usesMail(model) && (model.mail.sentBy ?? []).includes(operation.name);
-}
 
 /** Los puertos que recibe el handler de una operación de `mail.sentBy`. */
 export function mailPorts(model) {

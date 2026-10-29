@@ -25,6 +25,8 @@ import { DECIMAL_TS, RAW_JSON_TS } from './wire.js';
 import { messageComponents, messagePath } from './services.js';
 import * as stripe from './payment-gateways/stripe.js';
 import * as mercadopago from './payment-gateways/mercadopago.js';
+import { usesPayments } from '@keel-system/keel-core/gen/features';
+export { usesPayments };
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const DOMAIN_DIR = 'domain/payment';
@@ -52,10 +54,6 @@ export const NOTICE_CONTROLLER_TS = classPath(INFRA_DIR, 'PaymentNoticeControlle
 export const PAYMENTS_MODULE_TS = `src/${INFRA_DIR}/payments-module.ts`;
 
 const GATEWAY_MODULES = { stripe, mercadopago };
-
-export function usesPayments(model) {
-  return Boolean(model.payments);
-}
 
 /** Las clases de la capa application que cablea el módulo de casos de uso (como los mappers). */
 export function paymentApplicationClasses(model) {

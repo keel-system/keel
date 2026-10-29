@@ -27,6 +27,8 @@ import { configNamespace } from './config.js';
 import { usesPersistence } from './persistence.js';
 import { parametersClass, parametersNamespace } from './service-parameters.js';
 import { valueAlias } from './relational-engine.js';
+import { guardClaimsFor } from '@keel-system/keel-core/gen/scheduling';
+export { guardClaimsFor };
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -265,14 +267,6 @@ ${setup.join('\n')}
 // correo, y ningún rollback lo deshace: la marca tiene que existir para todo el mundo ANTES del envío. Una transición en
 // memoria no llega a existir hasta el commit del mediator, que cae DESPUÉS del envío; una caída en medio revierte la marca
 // y el ciclo siguiente manda un segundo correo a una persona real. Ningún escenario FL-* puede ver esa ventana.
-
-/** Los reclamos de guarda que apuntan a esta entidad (uno por operación que lo declara). */
-export function guardClaimsFor(model, entityName) {
-  return (model.services ?? [])
-    .flatMap((service) => service.operations ?? [])
-    .map((operation) => operation.guardClaim)
-    .filter((claim) => claim && claim.entity === entityName);
-}
 
 /** El valor GUARDADO de un estado del ciclo de vida de la entidad: la constante de su enum. */
 export function storedState(model, entity, state) {

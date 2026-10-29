@@ -37,6 +37,8 @@ import {
   LIKE_PATTERN_TS
 } from './persistence-entities.js';
 import { entityFinders, portFinderParts, relationalFinderMethods, sortConstants } from './finders.js';
+import { repositoryRoots, isPaginated, resolvedByOf } from '@keel-system/keel-core/gen/features';
+export { repositoryRoots, isPaginated };
 
 export const PORT_DIR = 'domain/repository';
 export const REPO_DIR = 'infrastructure/persistence/repositories';
@@ -48,17 +50,6 @@ export const portClass = (entity) => `${entity.name}Repository`;
 export const portPath = (entity) => classPath(PORT_DIR, portClass(entity));
 export const adapterClass = (entity) => `${entity.name}RepositoryImpl`;
 export const adapterPath = (entity) => classPath(REPO_DIR, adapterClass(entity));
-
-/** Las raíces que tienen repositorio: persistidas y raíz de su agregado (en los dos modelos). */
-export function repositoryRoots(model) {
-  if (!usesPersistence(model)) return [];
-  return model.entities.filter((entity) => entity.persisted && entity.isAggregateRoot);
-}
-
-/** ¿Alguna operación de la raíz pagina? Entonces el puerto lleva `list(pageable)`. */
-export function isPaginated(model, entity) {
-  return (model.services ?? []).some((group) => group.entity === entity.name && (group.operations ?? []).some((op) => op.paginated));
-}
 
 export function generate(model) {
   const roots = repositoryRoots(model);
@@ -215,13 +206,6 @@ export function credentialFinders(model, entity) {
 /** El nombre del finder de `Entidad.campo`: el mismo que keel-spring, y el que nombran las notas al agente. */
 export function credentialFinderName(field) {
   return `findBy${capitalize(field)}Containing`;
-}
-
-function resolvedByOf(raw) {
-  if (!raw) return null;
-  if (typeof raw === 'object') return raw;
-  const [entity, field] = String(raw).split('.');
-  return { entity, field };
 }
 
 // ─── El puerto ───────────────────────────────────────────────────────────────

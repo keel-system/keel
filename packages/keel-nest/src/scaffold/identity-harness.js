@@ -14,11 +14,8 @@ import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/g
 import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
 import { tsString } from './render.js';
-
-/** ¿Lleva el arnés sección de credenciales? */
-export function usesIdentityHarness(model) {
-  return Boolean(model.layersPresent?.security && model.security && model.security.protocol !== 'none');
-}
+import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
+export { usesIdentityHarness };
 
 /**
  * La expresión TypeScript que da una credencial que SATISFACE la regla de cierre del diseño, no una

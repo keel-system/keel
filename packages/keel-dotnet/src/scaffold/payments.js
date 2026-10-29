@@ -27,16 +27,14 @@ import { componentType, messageComponents, messageNamespace } from './services.j
 import { configNamespace } from './config.js';
 import * as stripe from './payment-gateways/stripe.js';
 import * as mercadopago from './payment-gateways/mercadopago.js';
+import { usesPayments } from '@keel-system/keel-core/gen/features';
+export { usesPayments };
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 const GATEWAY_MODULES = { stripe, mercadopago };
 
 export const PAYMENT_GATEWAY_PORT = 'IPaymentGateway';
 export const NOTICE_VERIFIER_PORT = 'IPaymentNoticeVerifier';
-
-export function usesPayments(model) {
-  return Boolean(model.payments);
-}
 
 export function paymentNamespace(model) {
   return namespaceOf(model, 'payment');

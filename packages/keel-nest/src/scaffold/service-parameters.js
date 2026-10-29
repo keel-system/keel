@@ -11,6 +11,8 @@
 import { parameterProfileValue, parameterProperty } from '@keel-system/keel-core/gen/service-parameters';
 import { classPath, tsModule, tsString } from './render.js';
 import { DECIMAL_TS } from './wire.js';
+import { usesServiceParameters } from '@keel-system/keel-core/gen/features';
+export { usesServiceParameters };
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 export const SERVICE_PARAMETERS_MODULE_TS = 'src/infrastructure/config/service-parameters-module.ts';
@@ -18,10 +20,6 @@ const PROFILES = ['local', 'develop', 'production', 'test'];
 
 export const parametersClass = (model) => `${model.service.className}Parameters`;
 export const parametersPath = (model) => classPath('domain/parameters', parametersClass(model));
-
-export function usesServiceParameters(model) {
-  return (model.service.parameters ?? []).length > 0;
-}
 
 export function generate(model) {
   if (!usesServiceParameters(model)) return [];

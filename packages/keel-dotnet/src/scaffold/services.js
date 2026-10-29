@@ -40,6 +40,9 @@ import { naturalKeyBatchFinder } from './repositories.js';
 import { uploadNotes } from '@keel-system/keel-core/gen/buckets';
 import { effectiveErrorCode } from '@keel-system/keel-core/gen/declared-errors';
 import { FILE_STORAGE_PORT, UPLOAD_NOTE_NAMES_CS, storageNamespace } from './storage.js';
+import { isPartialUpdate } from '@keel-system/keel-core/gen/features';
+import { compensationNote } from '@keel-system/keel-core/gen/compensation';
+export { isPartialUpdate };
 
 export function generate(model) {
   const files = [];
@@ -108,11 +111,6 @@ export function contractOf(operation) {
     return { message: `IReturningCommand<${result}>`, handler: `IReturningCommandHandler<${operation.messageClass}, ${result}>`, result };
   }
   return { message: 'ICommand', handler: `ICommandHandler<${operation.messageClass}>`, result: null };
-}
-
-/** ¿Es una actualización parcial (PATCH)? Un opcional del cuerpo tiene TRES estados. */
-export function isPartialUpdate(operation) {
-  return operation.route?.method === 'PATCH';
 }
 
 /**
@@ -547,26 +545,6 @@ function reconciliationOrder(operation, activation, claimGenerated) {
     `ORDEN: son DOS commits y no se confunden — ${first}; (2) llamar al proveedor, FUERA de toda transacción; (3) transición al estado final y confirmar (Save). ` +
     'Si actúas y mueres antes de (3), la marca caduca y la pasada siguiente repite la llamada, que es lo que absorbe la idempotencia saliente. ' +
     'Al revés —confirmar el desenlace y luego actuar— si mueres en medio dejas la entidad resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. Si una regla del diseño fija el orden, manda la regla. '
-  );
-}
-
-/** La nota de una COMPENSACIÓN (incremento 11c), la de keel-spring y keel-nest. */
-function compensationNote(operation) {
-  if (!operation.compensates) return null;
-  const { dependency, undoes, moves, event, deduplicated } = operation.compensates;
-  const restored = new Set((operation.transitions ?? []).map((transition) => transition.entity));
-  const pending = moves.filter((entity) => !restored.has(entity));
-  const guard = (operation.transitions ?? []).length > 0 ? 'transitions' : deduplicated ? 'messageId' : null;
-  return (
-    `Compensación de ${dependency}${undoes ? ` — deshace la activación '${undoes}'` : ''}: la dispara la suscripción a ${event}. ` +
-    (moves.length > 0
-      ? `El trabajo que deshaces movió el lifecycle de ${moves.join(', ')}: devolver ese estado es parte de la compensación, no un extra${pending.length > 0 ? ` (el diseño NO declara transición sobre ${pending.join(', ')} — repórtalo como designGap en vez de inventar el estado destino)` : ''}. `
-      : '') +
-    (guard === 'transitions'
-      ? "Aplicarla dos veces no debe deshacer dos veces: la guarda es la transición del agregado, que rechaza la segunda desde un estado que ya no está en 'from'. Va en el DOMINIO, no en el handler."
-      : guard === 'messageId'
-        ? 'Aplicarla dos veces no debe deshacer dos veces: la guarda es la deduplicación del listener por el id del mensaje (IdempotencyGuard). El handler no añade ninguna otra.'
-        : 'Aplicarla dos veces no debe deshacer dos veces y el diseño no declara guarda: repórtalo como designGap.')
   );
 }
 

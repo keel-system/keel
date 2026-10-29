@@ -279,3 +279,10 @@ export function realmSpec(model) {
     m2mClients
   };
 }
+
+/** El issuer del perfil local: el del proveedor de prueba de infra/, el mismo en todos los generadores. */
+export function localIssuer(model) {
+  if (model.stack?.auth === 'keycloak') return `http://localhost:8180/realms/${model.service.name}`;
+  if (model.stack?.auth === 'cognito') return `http://localhost:9229/${model.service.name}`;
+  return 'https://tu-issuer';
+}

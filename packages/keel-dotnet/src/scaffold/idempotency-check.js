@@ -25,6 +25,7 @@ import { usesPersistence, usesDocument } from './persistence.js';
 import { naturalKeyFinder, occupantFinders, repositoryRoots } from './repositories.js';
 import { usesDotnetOutbox, usesMessaging, usesProcessedEvents } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
+import { subscriptionsBySource as bySource } from '@keel-system/keel-core/gen/messaging-plan';
 
 /** Dónde están las fuentes y qué archivos son los de los mensajes (nombran a todos los listeners y no son ninguno). */
 // `bin` y `obj` viven DENTRO de src/<Proyecto>/: sin podarlas, la búsqueda por contenido elegía una DLL. Y C# deja varios
@@ -74,20 +75,6 @@ function stateReadingFinder(model, entityNames) {
   const fields = [...new Set(entityNames.map((name) => (model.entities ?? []).find((entity) => entity.name === name)?.lifecycle?.field).filter(Boolean))];
   const byState = fields.map((field) => '\\.Find(All)?By[A-Za-z]*' + csMember(field) + '[A-Za-z]*\\s*\\(');
   return [['\\.FindAll\\s*\\(', ...byState].join('|')];
-}
-
-/**
- * Con RabbitMQ, las suscripciones de la misma fuente comparten cola: UN listener que enruta por el tipo (varios serían
- * consumidores compitiendo). El mismo agrupado que keel-spring y keel-nest.
- */
-function bySource(model, subscriptions) {
-  if (model.stack?.broker !== 'rabbitmq') return subscriptions.map((sub) => [sub]);
-  const groups = new Map();
-  for (const sub of subscriptions) {
-    if (!groups.has(sub.topicDefault)) groups.set(sub.topicDefault, []);
-    groups.get(sub.topicDefault).push(sub);
-  }
-  return [...groups.values()];
 }
 
 const subjectOf = (subs) => (subs.length > 1 ? `${subs[0].topicDefault} (${subs.map((sub) => sub.name).join(', ')})` : subs[0].name);

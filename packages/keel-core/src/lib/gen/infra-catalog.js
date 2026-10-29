@@ -1447,3 +1447,9 @@ const GAP_LOCKING_DEFAULTS = ['mysql', 'mariadb'];
 export function needsReadCommitted(database) {
   return GAP_LOCKING_DEFAULTS.includes(database);
 }
+
+/** La URI de MongoDB del perfil local: la misma en todos los generadores para el mismo servicio. */
+export function localMongoUrl(dbName) {
+  const db = DATABASES.mongodb;
+  return `mongodb://${db.user(dbName)}:${db.password}@localhost:${db.port}/${dbName}?authSource=admin&directConnection=true&uuidRepresentation=standard`;
+}

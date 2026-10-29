@@ -23,6 +23,8 @@ import { engineOf, ormClass, usesPersistence } from './persistence-entities.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
 import { envWithDefault } from '@keel-system/keel-core/gen/profile-values';
 import { needsReadCommitted } from '@keel-system/keel-core/gen/infra-catalog';
+import { guardClaimsFor } from '@keel-system/keel-core/gen/scheduling';
+export { guardClaimsFor };
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 export const SWEEP_SETTINGS_TS = 'src/infrastructure/persistence/sweep-settings.ts';
@@ -246,14 +248,6 @@ ${method}`);
 // existir para todo el mundo ANTES del envío. Una transición en memoria no llega a existir hasta el commit
 // del mediator, que cae DESPUÉS del envío; una caída en medio revierte la marca y el ciclo siguiente manda
 // un segundo correo a una persona real. Ningún escenario FL-* puede ver esa ventana.
-
-/** Los reclamos de guarda que apuntan a esta entidad (uno por operación que lo declara). */
-export function guardClaimsFor(model, entityName) {
-  return (model.services ?? [])
-    .flatMap((service) => service.operations ?? [])
-    .map((operation) => operation.guardClaim)
-    .filter((claim) => claim && claim.entity === entityName);
-}
 
 function describeGuard(claim, entityName) {
   return `Reclama ESTE ${entityName} para ${claim.operation}: lo pasa a ${claim.to} solo si sigue en ${claim.from.join(' o ')}${

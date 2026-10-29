@@ -21,6 +21,8 @@ import { DOMAIN_EXCEPTION_TS, BASE_SUBCLASSES } from './exceptions.js';
 import { usesPersistence } from './persistence-entities.js';
 import { PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { usesMessaging, usesSubscriptionMessages } from './messaging.js';
+import { usesApi } from '@keel-system/keel-core/gen/features';
+export { usesApi };
 
 export const CORRELATION_TS = 'src/infrastructure/correlation/correlation-context.ts';
 export const ERROR_RESPONSE_TS = 'src/infrastructure/rest/error-response.ts';
@@ -33,11 +35,6 @@ const DECIMAL_TS = 'src/domain/support/decimal.ts';
 const RAW_JSON_TS = 'src/domain/support/raw-json.ts';
 // Los textos de la respuesta de error son contrato y los comparten los generadores (keel-core/gen/api-errors.js).
 const MISSING_PARAMETER = FW.missingParameter.message.split('{name}');
-
-/** ¿Expone el servicio una API? Sin capa api no hay nada de esto. */
-export function usesApi(model) {
-  return Boolean(model.layersPresent?.api) && (model.services ?? []).some((service) => (service.operations ?? []).some((op) => op.route));
-}
 
 /**
  * ¿Hace falta la correlación sin API? Sí con mensajería: los eventos la llevan en su metadata y los

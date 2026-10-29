@@ -262,3 +262,11 @@ export function rescueProbes(model) {
   }
   return probes;
 }
+
+/** Los reclamos de guarda que apuntan a esta entidad (uno por operación que lo declara). */
+export function guardClaimsFor(model, entityName) {
+  return (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .map((operation) => operation.guardClaim)
+    .filter((claim) => claim && claim.entity === entityName);
+}

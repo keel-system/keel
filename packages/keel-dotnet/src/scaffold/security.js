@@ -30,6 +30,8 @@ import { credentialFinderName, portClass, repositoriesNamespace } from './reposi
 import { configNamespace } from './config.js';
 import { usesApi } from './rest-support.js';
 import { wireNamespace } from './wire.js';
+import { localIssuer } from '@keel-system/keel-core/gen/identity-realm';
+export { localIssuer };
 
 /** Clave de API del perfil local (catálogo neutral: keel-core/gen/runtime-env). */
 export const LOCAL_API_KEY = runtimeDefault('SECURITY_API_KEY');
@@ -1195,13 +1197,6 @@ ${corsBlock}${decision}
 }
 
 // ─── Configuración: config/parameters/<perfil>/security.yaml ───────────────────────────────────
-
-/** El issuer del perfil local: el del proveedor de prueba de infra/, el mismo que en keel-spring y keel-nest. */
-export function localIssuer(model) {
-  if (model.stack?.auth === 'keycloak') return `http://localhost:8180/realms/${model.service.name}`;
-  if (model.stack?.auth === 'cognito') return `http://localhost:9229/${model.service.name}`;
-  return 'https://tu-issuer';
-}
 
 /**
  * Los fragmentos `security.yaml` de cada perfil: las MISMAS claves y variables que keel-nest (y que keel-spring en su

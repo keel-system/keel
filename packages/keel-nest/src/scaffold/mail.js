@@ -20,6 +20,8 @@ import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { TELEMETRY_TS, instrumentationFor } from './telemetry.js';
 import { envFor } from '@keel-system/keel-core/gen/runtime-env';
 import { COMPILED_TEMPLATES_LIMIT, HTML_ESCAPES, MAIL_HEADER_NAME_CLASS, RESERVED_MAIL_HEADERS } from '@keel-system/keel-core/gen/mail-message';
+import { usesMail, sendsMail } from '@keel-system/keel-core/gen/features';
+export { usesMail, sendsMail };
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const MAIL_DIR = 'domain/mail';
@@ -35,15 +37,6 @@ export const SMTP_MAIL_SENDER_TS = `src/${INFRA_DIR}/smtp-mail-sender.ts`;
 export const HANDLEBARS_RENDERER_TS = `src/${INFRA_DIR}/handlebars-template-renderer.ts`;
 export const MAIL_SETTINGS_TS = `src/${INFRA_DIR}/mail-settings.ts`;
 export const MAIL_MODULE_TS = `src/${INFRA_DIR}/mail-module.ts`;
-
-export function usesMail(model) {
-  return Boolean(model.layersPresent?.mail && model.mail);
-}
-
-/** ¿El diseño le atribuye a esta operación la salida por correo? (`mail.sentBy`) */
-export function sendsMail(model, operation) {
-  return usesMail(model) && (model.mail.sentBy ?? []).includes(operation.name);
-}
 
 export function generate(model) {
   if (!usesMail(model)) return [];

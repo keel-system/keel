@@ -51,25 +51,8 @@ import { RECONCILIATION_ROW, reconciliationSchemaNames, usesReconciliationClaims
 import { csFile, csMember, csString, located, namespaceOf, solution, typeUsings, xmlDoc } from './render.js';
 import { usesUnmapped } from './repositories.js';
 import { MYSQL_GUID_FORMAT, placeholderConnection, relationalEngine, useProvider, usesMySql } from './relational-engine.js';
-
-/** ¿El diseño persiste en un motor relacional? Es lo que genera todo este módulo. */
-export function usesRelational(model) {
-  return Boolean(model.layersPresent?.persistence) && model.persistenceKind !== 'document';
-}
-
-/** ¿El diseño persiste en documentos (MongoDB, incremento 12)? Lo genera document-persistence.js. */
-export function usesDocument(model) {
-  return Boolean(model.layersPresent?.persistence) && model.persistenceKind === 'document';
-}
-
-/**
- * ¿Hay persistencia, del modelo que sea? Es lo que mira lo que está ENCIMA de ella —el mediator, Program.cs, el
- * middleware de errores, la página—: las dos ramas emiten los MISMOS nombres (DatabaseSettings, PersistenceTransactions,
- * PersistenceErrors, AddPersistence), así que nada de arriba distingue qué almacén tiene debajo.
- */
-export function usesPersistence(model) {
-  return usesRelational(model) || usesDocument(model);
-}
+import { usesRelational, usesDocument, usesPersistence } from '@keel-system/keel-core/gen/features';
+export { usesRelational, usesDocument, usesPersistence };
 
 export const rowClass = (entityName) => `${entityName}Row`;
 export const rowConfigurationClass = (className) => `${className}Configuration`;

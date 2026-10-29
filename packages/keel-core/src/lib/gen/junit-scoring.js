@@ -1,12 +1,16 @@
 // Puntuar la matriz de escenarios desde el XML JUnit: lo que no depende de con qué se ejecutó la
-// suite. Gradle (keel-spring) y Vitest (keel-nest) escriben el MISMO formato —<testsuites> →
-// <testsuite> → <testcase classname name> con <failure>/<error>/<skipped> dentro—, y cada generador
-// configura su runner para que `name` sea el título del caso (`FL-x: …`) y `classname` no lleve
-// puntos más que el del paquete. Con eso, los dos `score-scenarios.sh` leen la matriz con los mismos
-// dos programas awk, y un escenario no puede puntuar distinto según el generador que lo ejecutó.
+// suite. Gradle (keel-spring), Vitest (keel-nest), xUnit v3 (keel-dotnet) y gotestsum (keel-go)
+// escriben el MISMO formato —<testsuites> → <testsuite> → <testcase classname name> con
+// <failure>/<error>/<skipped> dentro—, y cada generador configura su runner para que `name` lleve el
+// título del caso (`FL-x: …`) y `classname` no lleve puntos más que el del paquete (gotestsum, con
+// `--junitfile-testcase-classname short`, o el `example.com/…` del módulo se los pone). Go es el único
+// que no puede poner el título tal cual: el nombre es el de la función (`TestFL_X_001`) o la ruta del
+// subtest, y lo que eso exige está en `CASE_ID` y `NESTED`. Con eso, todos los `score-scenarios.sh`
+// leen la matriz con los mismos dos programas awk, y un escenario no puede puntuar distinto según el
+// generador que lo ejecutó.
 //
 // También el sello del snapshot `specs/`: la suite no se ejecuta contra un diseño editado desde el
-// proyecto generado, con los dos generadores.
+// proyecto generado, con todos los generadores.
 //
 // Los programas se emiten tal cual dentro de un `awk '…'` de bash: no llevan comillas simples.
 
@@ -43,6 +47,43 @@ if [ -f "${SPECS_SEAL_FILE}" ]; then
 fi`;
 }
 
+// Lo que comparten los dos programas, indentado a cuatro espacios (el cuerpo de la matriz).
+//
+// gotestsum (keel-go) escribe un caso por subtest, con la ruta del padre delante («TestX/FL-1:_a»), y
+// OTRO por el padre, que cae en rojo cuando cae un hijo. Un padre con hijos solo agrupa y no puntúa,
+// salvo que caiga sin que caiga ninguno de ellos: ese rojo es suyo (la limpieza del flujo, por ejemplo)
+// y no se puede perder. Por eso las filas se guardan hasta el END: un caso no se juzga solo. La clave
+// lleva la clase porque dos paquetes pueden repetir el nombre de una prueba.
+const NESTED = `    key[n] = cls SUBSEP name
+    bad[n] = failed
+    rest = name; prefix = ""
+    while ((cut = index(rest, "/")) > 0) {
+      prefix = prefix substr(rest, 1, cut - 1)
+      nested[cls SUBSEP prefix] = 1
+      if (failed) nested_bad[cls SUBSEP prefix] = 1
+      prefix = prefix "/"
+      rest = substr(rest, cut + 1)
+    }`;
+
+// El id del flujo: lo que va delante de los dos puntos del título. De un subtest, el último tramo de su
+// ruta, y eso DESPUÉS de cortar por los dos puntos, porque el título puede llevar una barra. Y una
+// función de prueba de Go no admite guiones: el flujo FL-RES-001 es `TestFL_RES_001`.
+const CASE_ID = `    id = name
+    if (index(id, ":") > 0) id = substr(id, 1, index(id, ":") - 1)
+    sub(/^.*\\//, "", id)
+    gsub(/^[ \\t]+|[ \\t]+$/, "", id)
+    if (id ~ /^TestFL_[A-Za-z0-9_]+$/) { id = substr(id, 5); gsub(/_/, "-", id) }`;
+
+const NESTED_END = `  END {
+    for (i = 1; i <= n; i++) {
+      if (!(i in row)) continue
+      if ((key[i] in nested) && !(bad[i] && !(key[i] in nested_bad))) continue
+      print row[i]
+    }
+  }`;
+
+const deeper = (block) => block.replace(/^/gm, '  ');
+
 /**
  * Programa awk que lee los XML JUnit y escribe una línea `RESULTADO	FL-id	clase` por escenario
  * (`OK`, `FALLO`, `OMITIDO`). Indentado para ir dentro de `matrix="$(awk '…' …)"`.
@@ -59,7 +100,7 @@ export const JUNIT_MATRIX_AWK = `  BEGIN { RS = "<testcase " }
 
     name = ""; cls = ""
     # El atributo EXACTO: un /name=/ a secas casa dentro de classname="…", y el orden de los
-    # dos lo decide el runner (Gradle escribe name primero; Vitest, classname).
+    # dos lo decide el runner (Gradle escribe name primero; Vitest y gotestsum, classname).
     if (match(" " seg, /[ \\t\\n]name="[^"]*"/)) name = substr(" " seg, RSTART + 7, RLENGTH - 8)
     if (match(seg, /classname="[^"]*"/)) cls = substr(seg, RSTART + 11, RLENGTH - 12)
     if (name == "") next
@@ -69,18 +110,20 @@ export const JUNIT_MATRIX_AWK = `  BEGIN { RS = "<testcase " }
     # colarlo duplica la fila y falsea el recuento (9 escenarios donde hay 6).
     if (cls == "") next
 
-    id = name
-    if (index(id, ":") > 0) id = substr(id, 1, index(id, ":") - 1)
-    gsub(/^[ \\t]+|[ \\t]+$/, "", id)
+    n++
+    failed = (seg ~ /<(failure|error)[ >]/)
+${NESTED}
+${CASE_ID}
     # El id es un token, nunca una frase: un @DisplayName de clase como
     # "FL-RES-001 · alta de reserva" no es un escenario.
     if (id !~ /^FL-[A-Za-z0-9-]+$/) next
 
     sub(/^.*\\./, "", cls)
-    if (seg ~ /<(failure|error)[ >]/) print "FALLO\\t" id "\\t" cls
-    else if (seg ~ /<skipped[ \\/>]/) print "OMITIDO\\t" id "\\t" cls
-    else print "OK\\t" id "\\t" cls
-  }`;
+    if (failed) row[n] = "FALLO\\t" id "\\t" cls
+    else if (seg ~ /<skipped[ \\/>]/) row[n] = "OMITIDO\\t" id "\\t" cls
+    else row[n] = "OK\\t" id "\\t" cls
+  }
+${NESTED_END}`;
 
 /**
  * El cruce de la matriz con el documento de escenarios (`$SCENARIOS`), en bash. Parte de `$matrix`
@@ -154,10 +197,11 @@ export const JUNIT_NON_SCENARIO_AWK = `    BEGIN { RS = "<testcase " }
       if (match(" " seg, /[ \\t\\n]name="[^"]*"/)) name = substr(" " seg, RSTART + 7, RLENGTH - 8)
       if (match(seg, /classname="[^"]*"/)) cls = substr(seg, RSTART + 11, RLENGTH - 12)
       if (name == "" || cls == "") next
-      if (seg !~ /<(failure|error)[ >]/) next
-      id = name
-      if (index(id, ":") > 0) id = substr(id, 1, index(id, ":") - 1)
-      gsub(/^[ \\t]+|[ \\t]+$/, "", id)
+      n++
+      failed = (seg ~ /<(failure|error)[ >]/)
+${deeper(NESTED)}
+      if (!failed) next
+${deeper(CASE_ID)}
       if (id ~ /^FL-[A-Za-z0-9-]+$/) next
       sub(/.*\\./, "", cls)
       # El MENSAJE, que es lo único que convierte esta línea en accionable. Estaba aquí desde
@@ -169,16 +213,34 @@ export const JUNIT_NON_SCENARIO_AWK = `    BEGIN { RS = "<testcase " }
         frag = substr(seg, RSTART, RLENGTH)
         if (match(frag, /message="[^"]*"/)) msg = substr(frag, RSTART + 9, RLENGTH - 10)
       }
-      # El salto de línea en decimal (Gradle, Vitest) o en hexadecimal (xUnit v3), y la comilla que
-      # xUnit escapa además con una barra (\\&quot;): antes que &quot; a secas, o la barra se queda.
+      # gotestsum pone siempre message="Failed": lo que dijo la prueba va en el CUERPO, entre las
+      # líneas de go test (=== RUN, --- FAIL, y las de los subtests).
+      if (msg == "Failed" && match(seg, /<(failure|error)[^>]*>/)) {
+        body = substr(seg, RSTART + RLENGTH)
+        if (index(body, "</") > 0) body = substr(body, 1, index(body, "</") - 1)
+        lines = split(body, part, /&#[xX][aA];|&#10;/)
+        msg = ""
+        for (k = 1; k <= lines; k++) {
+          line = part[k]
+          if (line ~ /^(=== |--- )/) continue
+          sub(/^([ \\t]|&#[xX]9;|&#9;)+/, "", line)
+          if (line == "") continue
+          msg = (msg == "" ? line : msg " " line)
+        }
+      }
+      # El salto de línea en decimal (Gradle, Vitest) o en hexadecimal (xUnit v3, gotestsum), y la comilla
+      # que xUnit escapa además con una barra (\\&quot;): antes que &quot; a secas, o la barra se queda.
+      # gotestsum escribe las comillas y el tabulador en numérico.
       gsub(/&#10;/, " ", msg); gsub(/&#13;/, " ", msg)
       gsub(/&#[xX][aA];/, " ", msg); gsub(/&#[xX][dD];/, " ", msg)
+      gsub(/&#[xX]9;/, " ", msg); gsub(/&#9;/, " ", msg)
       gsub(/\\\\&quot;/, "\\"", msg)
-      gsub(/&quot;/, "\\"", msg)
+      gsub(/&quot;/, "\\"", msg); gsub(/&#34;/, "\\"", msg); gsub(/&#39;/, "\\047", msg)
       gsub(/&lt;/, "<", msg); gsub(/&gt;/, ">", msg)
       gsub(/&amp;/, "\\\\&", msg)
       gsub(/  +/, " ", msg)
       if (length(msg) > 400) msg = substr(msg, 1, 400) " [...]"
-      printf "    %s  (%s)\\n", name, cls
-      if (msg != "") printf "      %s\\n", msg
-    }`;
+      row[n] = sprintf("    %s  (%s)", name, cls)
+      if (msg != "") row[n] = row[n] "\\n      " msg
+    }
+${deeper(NESTED_END)}`;

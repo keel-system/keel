@@ -34,6 +34,8 @@ import { usesStorage } from './storage.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
 import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
+import { usesMediator } from '@keel-system/keel-core/gen/features';
+export { usesMediator };
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 // La puerta por la que entra una operación (keel-core/gen/entry-gates.js), junto a los mensajes que la llevan.
@@ -45,11 +47,6 @@ export const MEDIATOR_TS = classPath(DIRS.usecase, 'UseCaseMediator');
 export const MODULE_TS = classPath(DIRS.usecase, 'UseCaseModule');
 export const COMMAND_DISPATCHER_TS = classPath(DIRS.portOut, 'CommandDispatcher');
 export const COMMAND_DISPATCHER_ADAPTER_TS = classPath(DIRS.usecase, 'CommandDispatcherAdapter');
-
-/** ¿Hay casos de uso que despachar? Sin operaciones no se genera nada de esto. */
-export function usesMediator(model) {
-  return (model.services ?? []).some((service) => (service.operations ?? []).length > 0);
-}
 
 /** Las clases de aplicación que el módulo cablea, con su archivo: handlers y mappers. */
 export function applicationClasses(model) {

@@ -34,6 +34,8 @@ import { documentHarnessSection, documentProbe } from './document-harness.js';
 import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenarios';
 import { cacheHarnessSection } from './cache.js';
 import { storageHarnessSection, usesMultipart } from './storage.js';
+import { usesStatementCount } from '@keel-system/keel-core/gen/features';
+export { usesStatementCount };
 
 /** Dónde escribe Vitest el XML JUnit de la suite de integración: lo lee score-scenarios.sh. */
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
@@ -969,11 +971,6 @@ export function inFlightWithoutClock(operation: string): number {
 // en el DataSource sin pasar por un actuator; y solo cuentan las sentencias emitidas DENTRO de una petición
 // HTTP (la correlación que abre el hook de entrada), de modo que el relay del outbox, las purgas y los
 // barridos —que corren en segundo plano y no la abren— no ensucian la medida.
-
-/** ¿Lleva el arnés el contador de sentencias? Las condiciones de queryCountSection en keel-spring. */
-export function usesStatementCount(model) {
-  return usesApi(model) && usesRelational(model);
-}
 
 function statementCountImports(model) {
   if (!usesStatementCount(model)) return '';
