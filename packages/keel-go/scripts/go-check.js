@@ -184,7 +184,8 @@ const fixtureProblems = await pool(fixtureDirs, jobs, async ({ dir }) => {
   if (!tidied.ok) problems.push(`tidy: ${tidied.output}`);
   const unformatted = await runAsync('gofmt', ['-l', '.'], dir);
   if (unformatted.stdout.trim()) problems.push(`gofmt: ${unformatted.stdout.trim()}`);
-  for (const args of [['vet', './...'], ['tool', 'staticcheck', './...'], ['test', '-count=1', './...']]) {
+  // vet y staticcheck, también sobre las pruebas de flujo (tras la restricción integration: sin ella no las ven).
+  for (const args of [['vet', '-tags', 'integration', './...'], ['tool', 'staticcheck', '-tags', 'integration', './...'], ['test', '-count=1', './...']]) {
     const result = await runAsync('go', args, dir);
     if (!result.ok || (args[1] === 'staticcheck' && result.output.trim())) problems.push(`${args.join(' ')}: ${result.output.trim()}`);
   }
@@ -230,9 +231,10 @@ if (!step('go mod verify', verify.ok)) console.error(verify.output);
 
 const unformatted = run('gofmt', ['-l', '.'], projectDir);
 step('gofmt -l vacío', unformatted.ok && unformatted.stdout.trim() === '', unformatted.stdout.trim().split('\n').join(', '));
-const vet = go(projectDir, ['vet', './...']);
-if (!step('go vet ./... limpio', vet.ok)) console.error(vet.output);
-const staticcheck = go(projectDir, ['tool', 'staticcheck', './...']);
+// Con la restricción integration: las pruebas de flujo (tests/integration) también pasan vet y staticcheck.
+const vet = go(projectDir, ['vet', '-tags', 'integration', './...']);
+if (!step('go vet -tags integration ./... limpio', vet.ok)) console.error(vet.output);
+const staticcheck = go(projectDir, ['tool', 'staticcheck', '-tags', 'integration', './...']);
 if (!step('staticcheck sin hallazgos', staticcheck.ok && staticcheck.output.trim() === '')) console.error(staticcheck.output);
 
 const binary = path.join(projectDir, 'bin', isWindows ? 'server.exe' : 'server');

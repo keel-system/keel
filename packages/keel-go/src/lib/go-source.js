@@ -38,10 +38,13 @@ export function packageNameOf(importPath) {
  * relativas (`internal/platform/config`) y se completan con `module`. Solo se escriben las que el cuerpo usa:
  * un import sin usar no compila.
  */
-export function goFile({ pkg, doc = null, imports = [], body, module = null, generated = true }) {
+export function goFile({ pkg, doc = null, imports = [], body, module = null, generated = true, build = null }) {
   const used = collectImports(imports, body, module);
   const parts = [];
   if (generated) parts.push(GENERATED_HEADER, '');
+  // La restricción de compilación va antes de la cláusula package, separada por una línea en blanco: si no, Go la
+  // lee como el comentario del paquete y la ignora.
+  if (build) parts.push(`//go:build ${build}`, '');
   if (doc) parts.push(...commentLines(doc), `package ${pkg}`);
   else parts.push(`package ${pkg}`);
   const code = body.replace(/^\n+/, '').replace(/\s+$/, '');

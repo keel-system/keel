@@ -44,7 +44,9 @@ export function layout(model) {
     // repositorios. Un paquete por tecnología, como el resto de la infraestructura (PLAN-KEEL-GO.md § 2).
     store: pkg(module, storeDir(model)),
     // La prueba de la frontera hexagonal: `internal/` solo protege frente a otros módulos, no entre capas.
-    architecture: pkg(module, 'internal/architecture')
+    architecture: pkg(module, 'internal/architecture'),
+    // Las pruebas de flujo (FL-*), de caja negra y tras la restricción `integration`: `go test ./...` no las ve.
+    integration: pkg(module, 'tests/integration')
   };
 }
 
@@ -82,10 +84,10 @@ export function boundaries() {
  * Un archivo Go de un paquete del mapa: la cabecera de código generado y los imports que el cuerpo usa. Con
  * `test`, la prueba de caja negra del paquete.
  */
-export function packageFile(model, target, { doc = null, imports = [], body, generated = true, test = false }) {
+export function packageFile(model, target, { doc = null, imports = [], body, generated = true, test = false, build = null }) {
   // Una prueba de caja negra va en el paquete `<nombre>_test`: solo ve lo exportado, como cualquier llamante.
   const pkg = test ? `${target.name}_test` : target.name;
-  return goFile({ pkg, doc, imports, body, module: model.service.goModule, generated });
+  return goFile({ pkg, doc, imports, body, module: model.service.goModule, generated, build });
 }
 
 // Los sufijos que Go lee en el NOMBRE de un archivo como restricción de compilación (`x_linux.go` solo se

@@ -37,6 +37,8 @@ import * as apiTests from './api-tests.js';
 import * as httpapi from './httpapi.js';
 import * as server from './server.js';
 import * as architecture from './architecture.js';
+import * as infra from './infra.js';
+import * as integrationTests from './integration-tests.js';
 import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
@@ -69,6 +71,8 @@ const GENERATORS = [
   httpapi,
   server,
   architecture,
+  infra,
+  integrationTests,
   readme,
   generatorDocs
 ];
