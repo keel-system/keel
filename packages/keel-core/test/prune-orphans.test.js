@@ -51,3 +51,15 @@ test('sin registro de quién lo escribió, no se borra', () => {
   assert.deepEqual(result.modificados, ['src/Suelto.java']);
   assert.ok(fs.existsSync(path.join(dir, 'src/Suelto.java')));
 });
+
+// Con la vista de su ruta, lo que añadió la herramienta de la plataforma no hace del huérfano
+// uno tocado (ver `viewOf`), y lo que la vista sí ve lo sigue haciendo.
+test('con vista, el huérfano que solo completó la herramienta se poda', () => {
+  const dir = project({ 'a.mod': 'de build\n+ de la herramienta', 'b.mod': 'editado\n+ de la herramienta' });
+  const view = (text) => text.split('\n').filter((line) => !line.startsWith('+ ')).join('\n');
+  const manifest = { files: { 'a.mod': digestOf({ content: 'de build' }), 'b.mod': digestOf({ content: 'de build' }) } };
+
+  const result = pruneOrphans(['a.mod', 'b.mod'], dir, manifest, { views: { 'a.mod': view, 'b.mod': view } });
+
+  assert.deepEqual(result, { borrados: ['a.mod'], ausentes: [], modificados: ['b.mod'] });
+});

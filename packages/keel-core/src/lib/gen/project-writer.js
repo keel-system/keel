@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { digestOf } from '../write.js';
+import { digestOf, viewOf } from '../write.js';
 
 /**
  * Escribe los archivos de un PROYECTO GENERADO dentro de destDir (keel-core/gen) con el mismo contrato que
@@ -17,9 +17,10 @@ import { digestOf } from '../write.js';
  * destruir trabajo. Con `only`, quien decide es quien sabe de quién es cada archivo.
  *
  * Devuelve también la huella de lo escrito: es lo que alimenta el manifiesto, y
- * calcularla aquí evita volver a leer del disco lo que se acaba de poner.
+ * calcularla aquí evita volver a leer del disco lo que se acaba de poner. `views` son las
+ * vistas por ruta del generador (`viewOf` de write.js), con las que se calcula esa huella.
  */
-export function writeProjectFiles(files, destDir, { force = false, only = null, skip = null } = {}) {
+export function writeProjectFiles(files, destDir, { force = false, only = null, skip = null, views = null } = {}) {
   const copied = [];
   const skipped = [];
   const digests = [];
@@ -48,7 +49,7 @@ export function writeProjectFiles(files, destDir, { force = false, only = null, 
       fs.chmodSync(target, 0o755);
     }
     copied.push(display);
-    digests.push([display, digestOf(entry)]);
+    digests.push([display, digestOf(entry, viewOf(views, display))]);
   }
 
   return { copied, skipped, digests };

@@ -11,7 +11,7 @@
 | Huella del agente | 132 archivos registrados por `build`, 0 adoptados, **8 reescritos**, 0 borrados |
 | Clasificación de la huella | 7 TODO · 0 consulta · 1 generador (`go.mod`, ver abajo) · 0 diseño · 0 puerta |
 | Huecos del diseño | 0 |
-| Huecos del generador | 1, latente: el `go.mod` que reescribe `go mod tidy` cuenta como tocado (sin arreglar, ver § Del generador) |
+| Huecos del generador | 1, latente: el `go.mod` que reescribe `go mod tidy` contaba como tocado (arreglado, ver § Del generador) |
 | Convertidos en id | — |
 | Agujeros de la puerta | 0 |
 
@@ -62,14 +62,16 @@ Fuera de lo registrado por build, el agente añadió lo esperado: cinco archivos
 
 ## Del generador
 
-- **`go.mod` tras `go mod tidy` cuenta como tocado** (latente, sin arreglar). `build` no escribe los indirectos a
-  propósito (los calcula tidy con MVS); el flujo documentado ejecuta tidy, y desde ese momento la huella en disco ya no
-  es la del manifiesto. `--check` dice «al día» mientras el generador no cambie `go.mod`, pero en cuanto un keel-go
-  nuevo suba un directo, `--refresh` lo clasificará como `conflicto` en todos los proyectos, y `footprint` le
-  apunta al agente un archivo que no escribió en cada corrida. Arreglo propuesto: que el digest de `go.mod` sea el de
-  su parte invariante bajo tidy (`module`, `go`, `toolchain`, requisitos directos y `tool`), con un normalizador por
-  ruta que el generador pase a `classifyGenerated`/`nextManifest` de keel-core (neutral: keel-core no nombra Go), y
-  `corrida-metrics.js footprint` usando la misma huella.
+- **`go.mod` tras `go mod tidy` contaba como tocado** (latente; arreglado después de la corrida). `build` no escribe
+  los indirectos a propósito (los calcula tidy con MVS); el flujo documentado ejecuta tidy, y desde ese momento la
+  huella en disco ya no era la del manifiesto. `--check` decía «al día» mientras el generador no cambiara `go.mod`,
+  pero en cuanto un keel-go nuevo subiera un directo, `--refresh` lo habría clasificado como `conflicto` en todos los
+  proyectos, y `footprint` le apuntaba al agente un archivo que no escribió. **Arreglo**: las huellas de una ruta se
+  calculan sobre la VISTA que da el generador (`viewOf` en `keel-core/src/lib/write.js`, neutral: `classifyGenerated`,
+  `pruneOrphans`, el manifiesto y `footprint`). La de keel-go (`src/lib/digest-views.js`) quita los `// indirect` que
+  no son el módulo de una herramienta del bloque `tool` y el bloque `require` que queda vacío; es la identidad sobre
+  lo que emite build, así que los manifiestos ya escritos siguen valiendo. `footprint` carga las vistas del generador
+  que firma el manifiesto: sobre ESTE proyecto, sin regenerar nada, ya da **7 reescritos** (los del agente).
 - **Arreglado antes de la corrida**: el mensaje final de `keel-go build` aún decía que el pipeline «llega en el
   incremento 7»; ahora da `/keel-generate-go` como paso 3, como keel-dotnet.
 

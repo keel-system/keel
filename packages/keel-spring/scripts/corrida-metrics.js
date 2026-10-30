@@ -12,13 +12,13 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { footprint, byDirectory, series } from '../src/lib/corrida-metrics.js';
+import { footprintOf, byDirectory, series } from '../src/lib/corrida-metrics.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const [command, target] = process.argv.slice(2);
 
-function printFootprint(dir) {
-  const result = footprint(dir);
+async function printFootprint(dir) {
+  const result = await footprintOf(dir);
   const design = result.design;
   console.log(`Huella del agente — ${dir}`);
   console.log(`  generador: ${result.generator ?? '(desconocido)'}`);
@@ -82,7 +82,7 @@ function printSeries(dir) {
 }
 
 try {
-  if (command === 'footprint' && target) printFootprint(path.resolve(target));
+  if (command === 'footprint' && target) await printFootprint(path.resolve(target));
   else if (command === 'series') printSeries(path.resolve(target ?? path.join(here, '..', '..', '..', 'docs', 'corridas')));
   else {
     console.error('Uso: corrida-metrics.js footprint <proyecto> | series [docs/corridas]');

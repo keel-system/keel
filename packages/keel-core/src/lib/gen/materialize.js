@@ -7,7 +7,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { classifyGenerated, digestOf, pruneOrphans } from '../write.js';
+import { classifyGenerated, digestOf, pruneOrphans, viewOf } from '../write.js';
 import { writeProjectFiles } from './project-writer.js';
 import { readManifest, nextManifest, writeManifest, designStamp, REFRESH_DIR } from './generated-manifest.js';
 
@@ -19,7 +19,9 @@ const posixOf = (entry) => entry.path.split(/[\\/]/).join('/');
  *   - `refresh`: lo nuevo y lo que es del generador y nadie tocó; la versión nueva de un
  *     conflicto va a REFRESH_DIR; con `prune`, retira los huérfanos intactos;
  *   - `check`: no escribe nada.
- * `generator` es la firma que queda en el manifiesto (`keel-spring@0.1.6`).
+ * `generator` es la firma que queda en el manifiesto (`keel-spring@0.1.6`). `views` son las
+ * vistas por ruta del generador (`viewOf` de write.js): toda huella de esas rutas, la
+ * registrada incluida, se calcula sobre su vista.
  */
 export function materializeProject({
   files,
@@ -29,16 +31,18 @@ export function materializeProject({
   mode = null,
   prune = false,
   readiness = null,
-  acceptedUnready = false
+  acceptedUnready = false,
+  views = null
 }) {
   // Clasificar ANTES de escribir: es lo que separa «este archivo es mío y me he
   // quedado atrás» de «este lo escribió el agente». Con el booleano `force` a solas
   // las dos cosas se ven igual, y por eso un arreglo del generador no podía llegar a un
   // proyecto que ya existe sin destruir trabajo.
   const previous = readManifest(projectDir);
-  const buckets = classifyGenerated(files, projectDir, previous);
+  const buckets = classifyGenerated(files, projectDir, previous, { views });
   const alDia = new Set(buckets.alDia);
-  const alDiaDigests = files.filter((entry) => alDia.has(posixOf(entry))).map((entry) => [posixOf(entry), digestOf(entry)]);
+  const digestFor = (entry) => digestOf(entry, viewOf(views, posixOf(entry)));
+  const alDiaDigests = files.filter((entry) => alDia.has(posixOf(entry))).map((entry) => [posixOf(entry), digestFor(entry)]);
 
   // Qué se escribe en esta pasada, por modo. `check` no escribe nada; `refresh` pone
   // al día lo que es de build y nadie tocó; sin modo, el comportamiento de siempre.
@@ -52,12 +56,13 @@ export function materializeProject({
   const { copied, skipped, digests } = writeProjectFiles(files, projectDir, {
     force,
     only,
-    skip: new Set(buckets.retirados)
+    skip: new Set(buckets.retirados),
+    views
   });
 
   // Los huérfanos que se puede demostrar que son de build (nadie los tocó) se retiran
   // con --prune; los tocados se quedan y pasan al agente vía EVOLUTION.md.
-  const pruned = mode === 'refresh' && prune ? pruneOrphans(buckets.huerfanos, projectDir, previous) : null;
+  const pruned = mode === 'refresh' && prune ? pruneOrphans(buckets.huerfanos, projectDir, previous, { views }) : null;
 
   // Un huérfano que ya NO está en disco no es trabajo de nadie: lo retiró el agente, o un
   // `--prune` anterior. Se olvida en cualquier pasada de escritura, no solo con --prune;
@@ -100,7 +105,7 @@ export function materializeProject({
       // Solo en --refresh: es cuando la versión nueva del conflicto se ha dejado en
       // REFRESH_DIR y la fusión pasa a ser trabajo de alguien con nombre.
       rebase:
-        mode === 'refresh' ? buckets.conflictos.map((relative) => [relative, digestOf(digestByPath.get(relative))]) : [],
+        mode === 'refresh' ? buckets.conflictos.map((relative) => [relative, digestFor(digestByPath.get(relative))]) : [],
       olvidar: [...(pruned ? [...pruned.borrados, ...pruned.ausentes] : []), ...huerfanosAusentes],
       resueltos: buckets.alDia,
       generator,

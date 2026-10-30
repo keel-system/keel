@@ -13,6 +13,7 @@ import { listKeelDocs } from '@keel-system/keel-core/gen/keel-docs';
 import { derivedOpenapiFiles } from '@keel-system/keel-core/gen/openapi';
 import { packageVersion } from '../lib/assets.js';
 import { GO_PROJECTION } from '../lib/go-projection.js';
+import { DIGEST_VIEWS } from '../lib/digest-views.js';
 import * as project from './project.js';
 import * as config from './config.js';
 import * as health from './health.js';
@@ -115,7 +116,9 @@ export function scaffoldService({
     mode,
     prune,
     readiness,
-    acceptedUnready
+    acceptedUnready,
+    // go.mod se compara sin lo que añade `go mod tidy`, el paso que el propio build prescribe.
+    views: DIGEST_VIEWS
   });
   return {
     outDir: outDir.split(path.sep).join('/'),

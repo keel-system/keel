@@ -142,3 +142,63 @@ test('las rutas se comparan en forma POSIX, venga el separador que venga', () =>
   assert.deepEqual(buckets.refrescables, ['src/Relay.java']);
   assert.deepEqual(buckets.huerfanos, []);
 });
+
+// Las VISTAS (`viewOf`): un archivo que una herramienta de la plataforma reescribe porque el
+// propio flujo lo manda —el go.mod que completa `go mod tidy`— se compara sin lo que añade
+// la herramienta. Aquí la herramienta es de juguete: añade líneas que empiezan por `+ `.
+const sinAñadidos = (text) =>
+  text
+    .split('\n')
+    .filter((line) => !line.startsWith('+ '))
+    .join('\n');
+const VIEWS = { 'src/Relay.java': sinAñadidos };
+
+test('con vista, lo que añadió la herramienta no hace del archivo uno tocado', () => {
+  const { dir, manifest } = proyecto({ enDisco: 'v1\n+ de la herramienta', registrado: 'v1' });
+  assert.deepEqual(classifyGenerated(generado('v1'), dir, manifest, { views: VIEWS }).alDia, ['src/Relay.java']);
+  // Sin la vista es el defecto que la motivó: se le atribuye a alguien.
+  assert.deepEqual(classifyGenerated(generado('v1'), dir, manifest).tuyos, ['src/Relay.java']);
+});
+
+test('con vista, un cambio del generador sobre un archivo solo completado por la herramienta es refrescable', () => {
+  const { dir, manifest } = proyecto({ enDisco: 'v1\n+ de la herramienta', registrado: 'v1' });
+  const buckets = classifyGenerated(generado('v2'), dir, manifest, { views: VIEWS });
+  assert.deepEqual(buckets.refrescables, ['src/Relay.java']);
+  assert.deepEqual(buckets.conflictos, []);
+});
+
+test('con vista, lo que la vista SÍ ve sigue contando como tocado', () => {
+  const { dir, manifest } = proyecto({ enDisco: 'v1 editado\n+ de la herramienta', registrado: 'v1' });
+  assert.deepEqual(classifyGenerated(generado('v2'), dir, manifest, { views: VIEWS }).conflictos, ['src/Relay.java']);
+});
+
+test('la vista es solo de su ruta', () => {
+  const { dir, manifest } = proyecto({ enDisco: 'v1\n+ de la herramienta', registrado: 'v1' });
+  const otras = { 'src/Otro.java': sinAñadidos };
+  assert.deepEqual(classifyGenerated(generado('v1'), dir, manifest, { views: otras }).tuyos, ['src/Relay.java']);
+});
+
+// De punta a punta: el manifiesto registra la huella de la vista, --check no ve deriva tras la
+// herramienta y --refresh no reescribe (ni deshace lo que añadió) mientras el generador no cambie.
+test('materializeProject: lo que completa la herramienta sobrevive a --check y a --refresh', async () => {
+  const { materializeProject } = await import('../src/lib/gen/materialize.js');
+  const { readManifest } = await import('../src/lib/gen/generated-manifest.js');
+  const dir = tmpDir('keel-genviews-');
+  const run = (content, mode) =>
+    materializeProject({ files: generado(content), projectDir: dir, generator: 'keel-x@0', mode, views: VIEWS });
+
+  run('v1', null);
+  const target = path.join(dir, 'src/Relay.java');
+  fs.appendFileSync(target, '\n+ de la herramienta');
+
+  const check = run('v1', 'check');
+  assert.deepEqual(check.buckets.alDia, ['src/Relay.java']);
+  const refresh = run('v1', 'refresh');
+  assert.deepEqual(refresh.copied, []);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'v1\n+ de la herramienta');
+  assert.equal(readManifest(dir).files['src/Relay.java'], digestOf({ content: 'v1' }, sinAñadidos));
+
+  // Y el arreglo del generador llega: la vista no lo esconde.
+  assert.deepEqual(run('v2', 'refresh').copied, ['src/Relay.java']);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'v2');
+});

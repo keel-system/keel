@@ -10,7 +10,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
-import { footprint, byDirectory, parseCorrida, series, verdict } from '../src/lib/corrida-metrics.js';
+import { footprint, footprintOf, loadDigestViews, byDirectory, parseCorrida, series, verdict } from '../src/lib/corrida-metrics.js';
+import { scaffoldService as scaffoldGo } from '../../keel-go/src/scaffold/index.js';
 import { tmpDir } from './helpers/tmp.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
@@ -43,6 +44,28 @@ test('lo que el agente reescribe y lo que borra se cuenta aparte, y lo añadido 
   assert.deepEqual(result.deleted, [removed]);
   assert.equal(result.intact, result.registered - result.adopted - 2);
   assert.deepEqual(byDirectory(result.rewritten), [[path.posix.dirname(touched), [path.posix.basename(touched)]]]);
+});
+
+// Las VISTAS del generador que firma el manifiesto: keel-go registra su go.mod sin lo que añade `go mod tidy`, el
+// paso que su propio build prescribe, y la huella tiene que releerlo igual o se lo atribuye al agente en cada corrida
+// (pasó en la 7d de keel-go: 8 reescritos, uno de ellos de tidy).
+test('la huella usa las vistas del generador que firmó el manifiesto', async () => {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'product-catalog'));
+  const workspace = tmpDir('keel-corrida-metrics-go-');
+  const project = path.join(workspace, scaffoldGo({ manifest, layers, workspace, force: true }).outDir);
+  const goMod = path.join(project, 'go.mod');
+  const tidied = fs.readFileSync(goMod, 'utf8').replace('\ntool (', '\nrequire (\n\tgolang.org/x/text v0.43.0 // indirect\n)\n\ntool (');
+  fs.writeFileSync(goMod, tidied);
+
+  assert.deepEqual((await footprintOf(project)).rewritten, []);
+  assert.deepEqual(footprint(project).rewritten, ['go.mod'], 'sin las vistas, tidy cuenta como el agente');
+});
+
+test('un generador sin vistas, o una firma que no es de un generador, compara los bytes tal cual', async () => {
+  assert.equal(await loadDigestViews('keel-spring@0.1.6'), null);
+  assert.equal(await loadDigestViews(null), null);
+  assert.equal(await loadDigestViews('otra-cosa'), null);
+  assert.deepEqual(Object.keys(await loadDigestViews('keel-go@0.1.0')), ['go.mod']);
 });
 
 const corrida = ({ listo, huella, huecos, gaps = [], extra = {} }) =>

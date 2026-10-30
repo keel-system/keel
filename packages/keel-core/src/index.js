@@ -70,7 +70,7 @@ export { copyTree, diffTree } from './lib/copy.js';
 // Harnesses de agente: un generador no debe saber si escribe .claude/ o .opencode/,
 // solo pedir la proyección de sus skills y sus agentes.
 export { HARNESSES, applyTokens, emitHarnessFiles, harnessById, harnessLabels, splitFrontmatter } from './lib/harness.js';
-export { classifyGenerated, diffGenerated, digestOf, pruneOrphans, writeFiles } from './lib/write.js';
+export { classifyGenerated, diffGenerated, digestOf, digestOfProjectFile, pruneOrphans, viewOf, writeFiles } from './lib/write.js';
 // Qué cambió entre dos versiones de un diseño: lo que un generador necesita para
 // evolucionar un proyecto que ya generó sin repetir la generación a ciegas.
 export { diffDesigns } from './lib/design-delta.js';

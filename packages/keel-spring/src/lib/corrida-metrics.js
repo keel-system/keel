@@ -14,8 +14,26 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { digestOf } from '@keel-system/keel-core';
+import { digestOfProjectFile } from '@keel-system/keel-core';
 import { MANIFEST_FILE } from './generated-manifest.js';
+
+/**
+ * Las vistas por ruta del generador que firma un manifiesto (`keel-go@0.1.0`), o null si no
+ * declara ninguna. Se cargan por convención —`src/lib/digest-views.js` del paquete, que exporta
+ * `DIGEST_VIEWS`— y bajo demanda: la huella mide proyectos de los cuatro generadores sin que este
+ * paquete dependa de ninguno. Sin el módulo, las huellas son de los bytes tal cual.
+ */
+export async function loadDigestViews(generatorSignature) {
+  const name = /^(keel-[a-z]+)@/.exec(generatorSignature ?? '')?.[1];
+  if (!name) return null;
+  try {
+    const module = await import(`@keel-system/${name}/src/lib/digest-views.js`);
+    return module.DIGEST_VIEWS ?? null;
+  } catch (error) {
+    if (error?.code === 'ERR_MODULE_NOT_FOUND') return null;
+    throw error;
+  }
+}
 
 /**
  * La huella del agente sobre un proyecto generado: de lo que `build` registró en su manifiesto,
@@ -23,8 +41,11 @@ import { MANIFEST_FILE } from './generated-manifest.js';
  *
  * `rewritten` y `deleted` excluyen lo adoptado: de una ruta adoptada no se sabe quién la escribió,
  * así que no se le puede atribuir al agente ni un cambio ni un borrado.
+ *
+ * `views` son las vistas por ruta del generador que firmó el manifiesto (`loadDigestViews`): el
+ * manifiesto registra la huella de esas rutas sobre su vista, y aquí se compara igual.
  */
-export function footprint(projectDir) {
+export function footprint(projectDir, { views = null } = {}) {
   const manifestPath = path.join(projectDir, MANIFEST_FILE);
   if (!fs.existsSync(manifestPath)) throw new Error(`no hay ${MANIFEST_FILE} en ${projectDir}`);
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
@@ -36,7 +57,7 @@ export function footprint(projectDir) {
     if (adopted.has(relative)) continue;
     const target = path.join(projectDir, relative);
     if (!fs.existsSync(target)) deleted.push(relative);
-    else if (digestOf({ sourceFile: target }) !== digest) rewritten.push(relative);
+    else if (digestOfProjectFile(projectDir, relative, views) !== digest) rewritten.push(relative);
     else intact += 1;
   }
   rewritten.sort();
@@ -51,6 +72,13 @@ export function footprint(projectDir) {
     deleted,
     pendingMerge: Object.keys(manifest.pendingMerge ?? {}).sort()
   };
+}
+
+/** La huella con las vistas del generador que firmó el manifiesto: lo que imprime el script. */
+export async function footprintOf(projectDir) {
+  const manifestPath = path.join(projectDir, MANIFEST_FILE);
+  const generator = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')).generator : null;
+  return footprint(projectDir, { views: await loadDigestViews(generator) });
 }
 
 /** Los reescritos agrupados por directorio, para leerlos de un vistazo: dónde decidió el agente. */

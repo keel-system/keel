@@ -83,15 +83,49 @@ const toPosix = (relative) => relative.split(/[\\/]/).join('/');
  * Huella de lo que se escribiría: el `content` en memoria, o el binario que copiaría
  * `sourceFile` (el jar del wrapper de Gradle es el caso). Se calcula sobre bytes y no
  * sobre texto para que un archivo binario no dependa de una codificación.
+ *
+ * `view` es la VISTA del archivo sobre la que se calcula, cuando el generador la da para
+ * esa ruta (ver `viewOf`): una función texto → texto. Sin ella, los bytes tal cual.
  */
-export function digestOf(entry) {
+export function digestOf(entry, view = null) {
   const bytes = entry.sourceFile ? fs.readFileSync(entry.sourceFile) : Buffer.from(entry.content ?? '', 'utf8');
-  return crypto.createHash('sha256').update(bytes).digest('hex');
+  return hashOf(bytes, view);
 }
 
 /** La misma huella, de un archivo que ya está en disco. */
-function digestOfFile(target) {
-  return crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex');
+function digestOfFile(target, view = null) {
+  return hashOf(fs.readFileSync(target), view);
+}
+
+function hashOf(bytes, view) {
+  const seen = view ? Buffer.from(view(bytes.toString('utf8')), 'utf8') : bytes;
+  return crypto.createHash('sha256').update(seen).digest('hex');
+}
+
+/**
+ * La vista con la que se compara una ruta, o null.
+ *
+ * `views` es `{ <ruta POSIX>: (texto) => texto }` y lo da el GENERADOR, para los archivos
+ * que una herramienta de su plataforma reescribe por prescripción del propio flujo: el
+ * caso es el `go.mod` que `go mod tidy` completa con los requisitos indirectos que build
+ * no escribe a propósito. Sin vista, ese archivo dejaba de casar con el manifiesto en
+ * cuanto alguien seguía las instrucciones de build, así que la huella lo atribuía al
+ * agente en cada corrida y un `--refresh` lo veía como TOCADO para siempre: el arreglo
+ * del generador que lo cambiase no llegaba nunca sin conflicto.
+ *
+ * Dos reglas para quien escribe una vista: (a) sobre lo que emite build tiene que ser la
+ * IDENTIDAD, o los manifiestos ya escritos dejan de casar; (b) solo quita lo que añade la
+ * herramienta, nunca algo que build decide —lo que la vista no ve, un refresco no lo
+ * propaga—. Una sola fuente, aquí, para todos los que comparan: `classifyGenerated`,
+ * `pruneOrphans`, el manifiesto (`materializeProject`) y la huella de una corrida.
+ */
+export function viewOf(views, relative) {
+  return views?.[toPosix(relative)] ?? null;
+}
+
+/** La huella de un archivo de disco con la vista de su ruta: lo que lee la huella de una corrida. */
+export function digestOfProjectFile(projectDir, relative, views = null) {
+  return digestOfFile(path.join(projectDir, relative), viewOf(views, relative));
 }
 
 /**
@@ -131,8 +165,11 @@ function digestOfFile(target) {
  * Aparte, `huerfanos`: rutas del manifiesto que el generador ya no emite. Aquí solo se
  * reportan. Borrarlos lo decide `pruneOrphans`, y solo cuando se puede demostrar que
  * nadie los tocó.
+ *
+ * `views` son las vistas por ruta del generador (`viewOf`): con ella, las tres huellas de
+ * una ruta —disco, nueva y registrada— se comparan sobre la vista.
  */
-export function classifyGenerated(files, destDir, manifest = null) {
+export function classifyGenerated(files, destDir, manifest = null, { views = null } = {}) {
   const registrado = new Map(Object.entries(manifest?.files ?? {}));
   const adoptado = new Set((manifest?.adopted ?? []).map(toPosix));
   const emitidas = new Set();
@@ -161,8 +198,9 @@ export function classifyGenerated(files, destDir, manifest = null) {
       continue;
     }
 
-    const enDisco = digestOfFile(target);
-    const nuevo = digestOf(entry);
+    const view = viewOf(views, relative);
+    const enDisco = digestOfFile(target, view);
+    const nuevo = digestOf(entry, view);
     if (enDisco === nuevo) {
       buckets.alDia.push(relative);
       continue;
@@ -203,9 +241,10 @@ export function classifyGenerated(files, destDir, manifest = null) {
  *   · `modificados` — alguien lo tocó. **No se borra nunca**: retirarlo es trabajo de
  *                     quien lo escribió, que sabe qué más depende de él.
  *
- * `orphans` son rutas POSIX relativas a destDir (el cubo `huerfanos`).
+ * `orphans` son rutas POSIX relativas a destDir (el cubo `huerfanos`); `views`, las del
+ * generador (`viewOf`).
  */
-export function pruneOrphans(orphans, destDir, manifest = null) {
+export function pruneOrphans(orphans, destDir, manifest = null, { views = null } = {}) {
   const registrado = manifest?.files ?? {};
   const result = { borrados: [], ausentes: [], modificados: [] };
   const root = path.resolve(destDir);
@@ -216,7 +255,7 @@ export function pruneOrphans(orphans, destDir, manifest = null) {
       result.ausentes.push(relative);
       continue;
     }
-    if (registrado[relative] === undefined || digestOfFile(target) !== registrado[relative]) {
+    if (registrado[relative] === undefined || digestOfFile(target, viewOf(views, relative)) !== registrado[relative]) {
       result.modificados.push(relative);
       continue;
     }
