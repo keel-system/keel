@@ -54,7 +54,9 @@ independencia no cambia: sigues sin leer `internal/`.
    de `specs/` que necesites para el contrato.
 2. Lee el arnés que generó build en `tests/integration/` (`flow_test.go`, `harness_test.go`,
    `harness_smoke_test.go`): `StartFlow`, `f.Scenario`, los verbos HTTP, `AssertJSON`, `ExpectStatus`, `Db`,
-   `ResetState`, `Eventually`, `RouteBase`. **Úsalo, no lo reimplementes**, y en esta fase es de **solo lectura**
+   `ResetState`, `Eventually`, `RouteBase`; con capa `security`, también `credentials_test.go` (`Bearer`,
+   `TokenFor`, `SecondTokenFor`, `ServiceCredential`, `TokenAs`: § Las credenciales de la convención, y la skill
+   del proveedor del stack). **Úsalo, no lo reimplementes**, y en esta fase es de **solo lectura**
    (lleva la cabecera de código generado): si le falta una pieza transversal, va a `blockers` con la firma que
    propones.
 3. Escribe **una función `Test<Flujo>` por flujo** en `tests/integration/<flujo>_test.go`, que empieza por

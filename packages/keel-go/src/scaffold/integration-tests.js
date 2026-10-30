@@ -31,6 +31,7 @@ import { usesApi, usesRelational } from '@keel-system/keel-core/gen/features';
 import { goString } from '../lib/go-source.js';
 import { GO_INFRA } from './infra.js';
 import { layout, packageFile } from './render.js';
+import { CREDENTIALS_FILE, CREDENTIALS_IMPORTS, closingCredentialExpression, credentialsBody, smokeCredentialsCase } from './identity-harness.js';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
 export const SCORE_SCENARIOS_SH = 'infra/score-scenarios.sh';
@@ -42,6 +43,7 @@ export const HARNESS_SMOKE_TEST = 'TestHarnessSmoke';
 
 export function generate(model) {
   const dir = layout(model).integration.dir;
+  const credentials = credentialsBody(model);
   return [
     { path: `${dir}/doc.go`, content: docGo(model) },
     { path: `${dir}/flow_test.go`, content: flowTestGo(model) },
@@ -50,6 +52,7 @@ export function generate(model) {
     { path: `${dir}/failure_capture_test.go`, content: failureCaptureTestGo(model) },
     { path: `${dir}/json_shape_test.go`, content: jsonShapeTestGo(model) },
     { path: `${dir}/harness_smoke_test.go`, content: harnessSmokeTestGo(model) },
+    ...(credentials ? [{ path: `${dir}/${CREDENTIALS_FILE}`, content: integrationFile(model, { imports: CREDENTIALS_IMPORTS, body: credentials }) }] : []),
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript(model) }
   ];
@@ -263,34 +266,50 @@ func (s *Scenario) BaseURL() string {
 	return server.url()
 }
 
-// Get pide path al servidor del flujo.
-func (s *Scenario) Get(path string) *Response {
+// Get pide path al servidor del flujo, con las cabeceras de headers si las hay (todas juntas): s.Get(ruta) o
+// s.Get(ruta, Bearer(s.TokenFor("rol"))).
+func (s *Scenario) Get(path string, headers ...http.Header) *Response {
 	s.Helper()
-	return s.Exchange(http.MethodGet, path, nil, nil)
+	return s.Exchange(http.MethodGet, path, nil, joinHeaders(headers))
 }
 
-// Post manda body a path: el JSON ya escrito (string o []byte), tal cual viaja, o un valor que se serializa.
-func (s *Scenario) Post(path string, body any) *Response {
+// Post manda body a path: el JSON ya escrito (string o []byte), tal cual viaja, o un valor que se serializa. Las
+// cabeceras, como en Get.
+func (s *Scenario) Post(path string, body any, headers ...http.Header) *Response {
 	s.Helper()
-	return s.Exchange(http.MethodPost, path, body, nil)
+	return s.Exchange(http.MethodPost, path, body, joinHeaders(headers))
 }
 
 // Put manda body a path, como Post.
-func (s *Scenario) Put(path string, body any) *Response {
+func (s *Scenario) Put(path string, body any, headers ...http.Header) *Response {
 	s.Helper()
-	return s.Exchange(http.MethodPut, path, body, nil)
+	return s.Exchange(http.MethodPut, path, body, joinHeaders(headers))
 }
 
 // Patch manda body a path, como Post.
-func (s *Scenario) Patch(path string, body any) *Response {
+func (s *Scenario) Patch(path string, body any, headers ...http.Header) *Response {
 	s.Helper()
-	return s.Exchange(http.MethodPatch, path, body, nil)
+	return s.Exchange(http.MethodPatch, path, body, joinHeaders(headers))
 }
 
-// Delete borra path.
-func (s *Scenario) Delete(path string) *Response {
+// Delete borra path, con las cabeceras como en Get.
+func (s *Scenario) Delete(path string, headers ...http.Header) *Response {
 	s.Helper()
-	return s.Exchange(http.MethodDelete, path, nil, nil)
+	return s.Exchange(http.MethodDelete, path, nil, joinHeaders(headers))
+}
+
+// joinHeaders junta en una las cabeceras de headers; sin ninguna, nil.
+func joinHeaders(headers []http.Header) http.Header {
+	if len(headers) == 0 {
+		return nil
+	}
+	joined := http.Header{}
+	for _, header := range headers {
+		for name, values := range header {
+			joined[http.CanonicalHeaderKey(name)] = append(joined[http.CanonicalHeaderKey(name)], values...)
+		}
+	}
+	return joined
 }
 
 // Exchange es una petición HTTP de verdad al servidor del flujo, con las cabeceras de headers (puede ser nil). Nunca
@@ -1061,8 +1080,12 @@ function harnessSmokeTestGo(model) {
 	})`);
   }
   if (api) {
+    // Con seguridad, con la credencial que satisface la regla de cierre: sin ella, un camino que no existe es 401 (se
+    // decide antes de enrutar) y el humo mediría la autorización, no la API.
+    const credential = closingCredentialExpression(model);
+    const headers = credential ? `${credential}, http.Header{"X-Correlation-Id": {"keel-smoke"}}` : 'http.Header{"X-Correlation-Id": {"keel-smoke"}}';
     cases.push(String.raw`	f.Scenario("SMOKE-4: la API responde con ErrorResponse y correlación", func(s *Scenario) {
-		got := s.Exchange(http.MethodGet, RouteBase+"/keel-smoke-ruta-inexistente", nil, http.Header{"X-Correlation-Id": {"keel-smoke"}})
+		got := s.Get(RouteBase+"/keel-smoke-ruta-inexistente", ${headers})
 		s.ExpectStatus(got, http.StatusNotFound)
 		body, err := got.JSON()
 		if err != nil {
@@ -1076,7 +1099,9 @@ function harnessSmokeTestGo(model) {
 		}
 	})`);
   }
-  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null].filter(Boolean);
+  const identity = smokeCredentialsCase(model);
+  if (identity) cases.push(identity);
+  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null].filter(Boolean);
   return integrationFile(model, {
     imports: ['encoding/json', 'net/http', 'strings', 'testing'],
     body: String.raw`

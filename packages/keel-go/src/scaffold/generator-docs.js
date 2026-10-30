@@ -19,6 +19,7 @@ import { layout } from './render.js';
 import { usesRelational } from './persistence.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { storeDir } from '../lib/relational-engine.js';
+import { usesTokenHarness } from './identity-harness.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'go');
 const agentsSourceDir = path.join(assetsDir, 'agents');
@@ -39,9 +40,11 @@ export const CONVENTIONS = ['naming.md', 'errors.md', 'context.md', 'concurrency
 /** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
 export const AGENTS = ['keel-go-code.md', 'keel-go-infra.md', 'keel-go-tests.md', 'keel-go-validate.md', 'keel-go-quality.md'];
 
-/** Skills por tecnología aplicables al servicio: hoy, la de la base relacional. */
+/** Skills por tecnología aplicables al servicio: la de la base relacional y la del proveedor de identidad. */
 export function stackSkills(model) {
-  return usesRelational(model) ? ['keel-go-database'] : [];
+  const skills = usesRelational(model) ? ['keel-go-database'] : [];
+  if (usesTokenHarness(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-go-${model.stack.auth}`);
+  return skills;
 }
 
 export function generate(model) {

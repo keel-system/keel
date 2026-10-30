@@ -28,12 +28,17 @@ lo que hagas ocurre dentro de esa raíz.
      `validateInfra: FALSO-NEGATIVO`, a `blockers` con el comando de contraste y su salida. No edites
      `validate-infra.sh` para taparlo: es del generador.
    - **El check pasa y el efecto no ocurre** → igual de grave y al mismo sitio.
-6. Si `infra/reset-db.sh` existe, ejecútalo una vez: es lo que cada flujo hará al empezar, y un reset que falla
+6. Si existe `infra/init-keycloak.sh`, ejecútalo **antes** de cualquier flujo: siembra el realm de prueba (roles,
+   usuarios, clientes) con los valores de `infra/test-credentials.env`, que son los que el arnés usará para pedir
+   tokens. Es idempotente; si sale con error, el realm está a medias y es KO. Después vuelve a pasar
+   `validate-infra.sh`. No lo edites: es del generador, y lo que tenga que cambiar cambia en el diseño (skill
+   `keel-go-keycloak`).
+7. Si `infra/reset-db.sh` existe, ejecútalo una vez: es lo que cada flujo hará al empezar, y un reset que falla
    ahora fallaría en todos. Las tablas aún no existen: las crea goose cuando arranca el servidor (el arnés lo
    arranca antes del primer reset de cada suite).
-7. **No detengas la infraestructura al terminar**: la usan los escenarios; bajarla es del orquestador. No
+8. **No detengas la infraestructura al terminar**: la usan los escenarios; bajarla es del orquestador. No
    preguntas al usuario: registra cada bloqueo en `blockers` y termina.
-8. **No lanzas subagentes.** Eres una hoja.
+9. **No lanzas subagentes.** Eres una hoja.
 
 ## Reporte final
 

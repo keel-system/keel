@@ -28,6 +28,9 @@ function planWith(fixture, { stack = null, mutate = null } = {}) {
 
 const files = byPath(planWith('product-catalog').files);
 const mysql = byPath(planWith('product-catalog', { stack: { database: 'mysql' } }).files);
+// Lo que solo existe con seguridad: el diseño con personas, en los dos proveedores.
+const keycloak = byPath(planWith('profile-directory').files);
+const cognito = byPath(planWith('profile-directory', { stack: { auth: 'cognito' } }).files);
 
 /** Todos los markdown de assets/ (agentes, guías, convenciones, skills), recursivo. */
 function assetSources(dir = assets) {
@@ -101,7 +104,7 @@ test('la skill de la base solo se instala con persistencia relacional, y la orqu
 // Las que llevan un marcador (`<entidad>_behavior.go`) son plantillas y no se miran.
 test('cada ruta internal/, cmd/, tests/ e infra/ que citan los assets existe en lo que emite build', () => {
   const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
-  const emitted = [...Object.keys(mysql), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path))];
+  const emitted = [...Object.keys(mysql), ...Object.keys(cognito), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path))];
   // Lo que escriben los agentes (las pruebas de flujo, con nombre de ejemplo).
   const agentWritten = /^tests\/integration\/\w+_test\.go$/;
   const missing = [];
@@ -124,11 +127,11 @@ test('el arnés que enseñan integration-tests.md y el agente de pruebas es el e
   for (const member of [
     'func StartFlow(t *testing.T, given func(s *Scenario)) *Flow',
     'func (f *Flow) Scenario(title string, body func(s *Scenario))',
-    'func (s *Scenario) Get(path string) *Response',
-    'func (s *Scenario) Post(path string, body any) *Response',
-    'func (s *Scenario) Put(path string, body any) *Response',
-    'func (s *Scenario) Patch(path string, body any) *Response',
-    'func (s *Scenario) Delete(path string) *Response',
+    'func (s *Scenario) Get(path string, headers ...http.Header) *Response',
+    'func (s *Scenario) Post(path string, body any, headers ...http.Header) *Response',
+    'func (s *Scenario) Put(path string, body any, headers ...http.Header) *Response',
+    'func (s *Scenario) Patch(path string, body any, headers ...http.Header) *Response',
+    'func (s *Scenario) Delete(path string, headers ...http.Header) *Response',
     'func (s *Scenario) Exchange(method, path string, body any, headers http.Header) *Response',
     'func (s *Scenario) ExchangeAll(requests ...Request) []*Response',
     'func (s *Scenario) ExpectStatus(got *Response, want int)',
@@ -149,6 +152,43 @@ test('el arnés que enseñan integration-tests.md y el agente de pruebas es el e
   assert.match(files['tests/integration/harness_smoke_test.go'], /^func TestHarnessSmoke\(t \*testing\.T\)/m);
   // La captura admite las peticiones a la vez de ExchangeAll.
   assert.match(files['tests/integration/failure_capture_test.go'], /type failureCapture struct \{\n\tmu +sync\.Mutex/);
+});
+
+test('las credenciales que enseñan la convención, el agente de pruebas y las skills del proveedor son las emitidas', () => {
+  const credentials = keycloak['tests/integration/credentials_test.go'];
+  for (const member of [
+    'func Bearer(token string) http.Header',
+    'func (s *Scenario) TokenFor(role string) string',
+    'func (s *Scenario) SecondTokenFor(role string) string',
+    'func (s *Scenario) TokenAs(p Persona) string',
+    'type Persona struct {',
+    '	Sub string',
+    '	Claims map[string]string',
+    '	Without []string',
+    '	Role string'
+  ]) {
+    assert.ok(credentials.includes(member), member);
+  }
+  // ServiceCredential solo existe con clientes máquina: notification-mailer los declara.
+  const machine = byPath(planWith('notification-mailer').files)['tests/integration/credentials_test.go'];
+  assert.ok(machine.includes('func (s *Scenario) ServiceCredential(client string) string'));
+  // Con Cognito no hay personas (el emulador fija los claims en su configuración): la skill lo dice y build no lo emite.
+  assert.doesNotMatch(cognito['tests/integration/credentials_test.go'], /TokenAs|Persona/);
+  // Y sin seguridad, ni el archivo.
+  assert.equal('tests/integration/credentials_test.go' in files, false);
+});
+
+test('la skill del proveedor de identidad se instala con el suyo, y solo con seguridad', () => {
+  for (const harness of HARNESSES) {
+    assert.ok(harness.skillPath('keel-go-keycloak', 'SKILL.md') in keycloak, `${harness.id}: keycloak`);
+    for (const reference of fs.readdirSync(path.join(assets, 'generators', 'go', 'skills', 'keel-go-keycloak', 'references'))) {
+      assert.ok(harness.skillPath('keel-go-keycloak', `references/${reference}`) in keycloak, `${harness.id}: ${reference}`);
+    }
+    assert.ok(!(harness.skillPath('keel-go-cognito', 'SKILL.md') in keycloak));
+    assert.ok(harness.skillPath('keel-go-cognito', 'SKILL.md') in cognito, `${harness.id}: cognito`);
+    assert.ok(!(harness.skillPath('keel-go-keycloak', 'SKILL.md') in cognito));
+  }
+  assert.ok(!Object.keys(files).some((file) => /keel-go-(keycloak|cognito)/.test(file)), 'product-catalog no declara seguridad');
 });
 
 test('el dominio, la aplicación y la persistencia que enseñan las convenciones y la skill son los emitidos', () => {

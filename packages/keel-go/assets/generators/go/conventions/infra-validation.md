@@ -29,6 +29,15 @@ docker exec <servicio>-devtools sh -c "mysql -h db -u <base> -pchangeme -e 'SELE
 Si el efecto es correcto y el check falla, el sondeo del generador está desalineado: es un defecto del
 **generador** (`validateInfra: FALSO-NEGATIVO`), no se parchea `validate-infra.sh` en el proyecto.
 
+## El proveedor de identidad (con capa `security`)
+
+Con Keycloak, el realm de prueba lo siembra `bash infra/init-keycloak.sh` **después** de `up.sh` y antes de
+`validate-infra.sh`: realm, roles, dos usuarios por rol (`<rol>` y `<rol>-2`), `no-role`, los clientes del diseño
+y la matriz `test-m2m-*`. Es idempotente y no se edita. Lo que crea lo escribe build en
+`infra/test-credentials.env`, y es lo que lee el arnés de los flujos: un solo productor, un solo consumidor. Con
+Cognito no hay nada que sembrar: el emulador arranca con su configuración. El detalle, en la skill del proveedor
+(`keel-go-keycloak` o `keel-go-cognito`).
+
 ## El esquema
 
 Lo crean las migraciones de goose embebidas en el binario (`internal/infrastructure/<motor>/migrations/`), que el

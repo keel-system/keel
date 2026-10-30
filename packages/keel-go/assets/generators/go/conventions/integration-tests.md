@@ -37,6 +37,7 @@ Lo genera build en el mismo paquete (`flow_test.go`, `harness_test.go`, `server_
 | `f := StartFlow(t, given)` | prepara el flujo: arranca el servidor (una vez por suite, perfil `local`, en `127.0.0.1` y un puerto libre), **resetea el estado** (`infra/reset-db.sh`) y ejecuta `given`, el Given común a todo el flujo (puede ser `nil`); si algo de eso falla, los escenarios salen OMITIDOS |
 | `f.Scenario("FL-…: …", func(s *Scenario) {…})` | un escenario: un subtest cuyo título es el nombre del caso en el XML; los de un flujo se ejecutan **en el orden en que están escritos** |
 | `s.Get(ruta)`, `s.Post/Put/Patch(ruta, cuerpo)`, `s.Delete(ruta)` | una petición HTTP de verdad; nunca falla por un 4xx/5xx: el status es una aserción. El cuerpo es el JSON ya escrito (`string`), tal cual viaja, o un valor que se serializa |
+| `s.Get(ruta, cabeceras...)` y los demás | las mismas, con cabeceras (`http.Header`) detrás: se juntan todas |
 | `s.Exchange(método, ruta, cuerpo, cabeceras)` | cualquier verbo, con cabeceras (`http.Header`, o `nil`) |
 | `s.ExchangeAll(Request{…}, Request{…})` | varias peticiones **a la vez**, con las respuestas en el orden pedido: la única forma de escribir un escenario de carrera |
 | `got.Status`, `got.Header.Get(n)`, `got.Body` | el intercambio crudo (`*Response`) |
@@ -69,6 +70,34 @@ both := s.ExchangeAll(
 	Request{Method: http.MethodPost, Path: RouteBase + "/products", Body: body, Headers: http.Header{"Idempotency-Key": {key}}},
 )
 ```
+
+## Las credenciales
+
+Con capa `security`, el arnés trae `tests/integration/credentials_test.go`, con lo que siembra el proveedor de
+identidad de prueba (`infra/test-credentials.env`, del mismo productor que el realm). Cada función existe solo si
+el diseño la hace posible:
+
+| Pieza | Cuándo existe | Para qué |
+|---|---|---|
+| `Bearer(token)` | siempre que hay tokens | la cabecera `Authorization`: `s.Get(ruta, Bearer(s.TokenFor("rol")))` |
+| `s.TokenFor(rol)` | con roles | el usuario de prueba del rol; `s.TokenFor("no-role")` es el autenticado sin roles (el 403) |
+| `s.SecondTokenFor(rol)` | con roles | el SEGUNDO usuario del rol: otro titular con los mismos permisos |
+| `s.ServiceCredential(cliente)` | con `serviceAuth` | el token de máquina de un cliente del diseño o de la matriz `test-m2m-*` |
+| `s.TokenAs(Persona{…})` | identidad del llamante en un claim, con Keycloak | una persona con el `sub` exacto y los claims del escenario |
+
+Se llaman **en cada petición** y no se guarda lo que devuelven: el token dura cinco minutos y se renueva solo si se
+le pregunta. Si el proveedor no lo da, el escenario termina ahí con el motivo (no hace falta comprobar el error).
+
+```go
+got := s.Post(RouteBase+"/me/card", body, Bearer(s.TokenFor("card-holder")))
+other := s.Get(RouteBase+"/me/card", Bearer(s.SecondTokenFor("card-holder")))
+ana := Bearer(s.TokenAs(Persona{Sub: "sub-ana-001", Claims: map[string]string{"email": "ana@x.test"}}))
+noEmail := Bearer(s.TokenAs(Persona{Sub: "sub-ana-001", Without: []string{"email"}}))
+both := s.Get(RouteBase+"/me/card", ana, http.Header{"X-Correlation-Id": {"c-1"}})
+```
+
+`Persona.Without` es «el mismo token sin ese claim»; `Persona.Role`, el rol de realm de la persona (vacío, ninguno).
+Un `sub` va en `Persona.Sub`, nunca entre los claims.
 
 ## Una función por flujo
 

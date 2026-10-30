@@ -139,6 +139,52 @@ test('el humo comprueba la fontanería que el diseño usa, y nada más', () => {
   assert.doesNotMatch(bare['tests/integration/harness_test.go'], /bashExecutable|containerRuntime/);
 });
 
+// ── Las credenciales (incremento 8b) ──
+
+for (const name of fixtureNames()) {
+  test(`${name}: las credenciales del arnés leen lo que escribe infra/test-credentials.env, con sus mismos valores`, () => {
+    const files = byPath(planFixture(name).files);
+    const credentials = files['tests/integration/credentials_test.go'];
+    const env = files['infra/test-credentials.env'];
+    if (!credentials) {
+      assert.doesNotMatch(files['tests/integration/harness_smoke_test.go'], /Bearer|SMOKE-5/);
+      return;
+    }
+    const provisioned = Object.fromEntries(
+      env
+        .split('\n')
+        .filter((line) => /^[A-Z_]+=/.test(line))
+        .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)])
+    );
+    // Cada valor con su convencional detrás: el mismo que escribió el productor, o el arnés pediría otro realm.
+    const read = [...credentials.matchAll(/credential\("([A-Z_]+)", ("[^"]*"|[^)]*)\)/g)];
+    assert.ok(read.length > 0);
+    for (const [, variable, fallback] of read) {
+      assert.ok(variable in provisioned, `${variable}: no lo escribe infra/test-credentials.env`);
+      if (fallback.startsWith('"')) assert.equal(JSON.parse(fallback), provisioned[variable], variable);
+    }
+  });
+}
+
+test('el humo pide la API con la credencial que satisface la regla de cierre, y comprueba que el proveedor la da', () => {
+  const smoke = (name, stack) => byPath(planService({ ...loadService(path.join(FIXTURES_DIR, name)), workspace: FIXTURES_DIR, ...(stack ? { stack } : {}) }).files)['tests/integration/harness_smoke_test.go'];
+  // Un rol: el usuario de ese rol, en SMOKE-4 y en SMOKE-5.
+  const role = smoke('profile-directory');
+  assert.match(role, /s\.Get\(RouteBase\+"\/keel-smoke-ruta-inexistente", Bearer\(s\.TokenFor\("card-holder"\)\), http\.Header\{"X-Correlation-Id": \{"keel-smoke"\}\}\)/);
+  assert.match(role, /SMOKE-5: el proveedor de identidad emite credenciales[\s\S]*s\.TokenFor\("card-holder"\)/);
+  // Sin roles ni clientes, con la identidad en un claim: una persona (la lección de conduit). No hay SMOKE-5: nada
+  // que el realm siembre.
+  const persona = smoke('conduit');
+  assert.match(persona, /Bearer\(s\.TokenAs\(Persona\{Sub: "keel-smoke"\}\)\)/);
+  assert.doesNotMatch(persona, /SMOKE-5/);
+  // Con Cognito, el mismo rol.
+  assert.match(smoke('profile-directory', { auth: 'cognito' }), /Bearer\(s\.TokenFor\("card-holder"\)\)/);
+  // Solo clientes máquina: su credencial.
+  assert.match(smoke('notification-mailer'), /SMOKE-5[\s\S]*s\.ServiceCredential\("/);
+  // Sin seguridad, la petición sin credencial.
+  assert.match(smoke(GO_READY_DESIGN.name), /s\.Get\(RouteBase\+"\/keel-smoke-ruta-inexistente", http\.Header\{"X-Correlation-Id": \{"keel-smoke"\}\}\)/);
+});
+
 // ── El script EJECUTADO en modo --score (sin Go: solo lee el XML) ──
 
 const XML = String.raw`<?xml version="1.0" encoding="UTF-8"?>
