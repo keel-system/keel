@@ -72,7 +72,7 @@ en un escenario con id propio, **`FL-CRD-001-G`**, que el documento no declara; 
 inventó keel-spring** el 2026-10-07; keel-dotnet y keel-nest metieron el caso borde dentro de FL-CRD-001-F. No falsea
 nada —el caso se prueba y el documento sigue cubierto entero—, pero la matriz cuenta 14 donde el documento declara
 13, y `score-scenarios.sh` lo puntúa OK porque `junit-scoring.js` da por propio todo id que cuelga del de un flujo
-declarado (`FL-CRD-001-*`). Con dos corridas de cuatro ya no es anecdótico: queda como pendiente, ver § Pendientes.
+declarado (`FL-CRD-001-*`). Con dos corridas de cuatro ya no es anecdótico: ver § Después de la corrida.
 
 ## Reverificado desde fuera
 
@@ -94,10 +94,11 @@ generador.
 
 Ninguno: la corrida no destapó nada en keel-go.
 
-## Pendientes
+## Después de la corrida
 
-- **El caso borde con id propio** (`FL-CRD-001-G`, keel-spring y keel-go). Dos salidas, por decidir: una línea en el
-  `integration-tests.md` de los cuatro generadores («un caso borde va DENTRO del escenario que lo declara; nunca un id
-  que el documento no declara»), o que `junit-scoring.js` (neutral) saque como AJENO un id de escenario que el
-  documento no declara cuando el flujo declara los suyos. La segunda lo hace mecánico, pero cambia la puntuación de
-  los cuatro.
+- **El caso borde con id propio** (`FL-CRD-001-G`, keel-spring y keel-go). Había dos salidas: una línea en el
+  `integration-tests.md` de los cuatro generadores, o que `junit-scoring.js` (neutral) sacara como AJENO un id de
+  escenario que el documento no declara cuando el flujo declara los suyos. Se eligió la primera: los cuatro
+  `conventions/integration-tests.md` dicen ahora que un caso borde va DENTRO del escenario que lo declara, como una
+  aserción más, y nunca con un id que el documento no declara. La puntuación no cambia; si una corrida futura vuelve
+  a inventar el id con la regla escrita, toca la segunda.

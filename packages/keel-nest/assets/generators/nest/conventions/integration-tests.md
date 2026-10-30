@@ -123,6 +123,10 @@ Reglas de forma:
 - **El título de cada caso empieza por su id y dos puntos** (`'FL-PRD-001-A: …'`). De ahí salen la
   matriz de `score-scenarios.sh` y el nombre del volcado de su evidencia. Sin el id, el escenario sale
   `NO_EJERC` aunque se ejecute.
+- **Un caso borde va DENTRO del escenario que lo declara** (la lista **Casos borde** de su bloque), como
+  una aserción más de ese mismo caso. Nunca con un id que el documento no declara (un `FL-PRD-001-G` para
+  el borde de `FL-PRD-001-F`): la matriz contaría un escenario que el diseño no tiene, y
+  `score-scenarios.sh` lo puntuaría igual, porque cuelga de un flujo declarado.
 - **`useFlow()` una vez, dentro del `describe`**. El reset es **por flujo**, no entre escenarios: dentro
   de un flujo el escenario A crea el estado que B verifica. Los casos corren en el orden del archivo:
   escríbelos en el orden del documento, y el estado encadenado vive en variables del `describe`.

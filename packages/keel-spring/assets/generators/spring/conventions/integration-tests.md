@@ -191,6 +191,11 @@ Reglas de forma:
 - **`@DisplayName` con el id exacto delante de los dos puntos** (`FL-PRD-001-A: …`). De ahí
   salen mecánicamente la matriz `scenarios:` del reporte y el nombre del volcado en
   `build/keel-failures/`. Sin el id, el arbitraje pierde la trazabilidad al `Then`.
+- **Un caso borde va DENTRO del escenario que lo declara** (la lista **Casos borde** de su
+  bloque), como una aserción más de ese mismo método. Nunca con un id que el documento no
+  declara (un `FL-PRD-001-G` para el borde de `FL-PRD-001-F`): la matriz contaría un escenario
+  que el diseño no tiene, y `score-scenarios.sh` lo puntuaría igual, porque cuelga de un flujo
+  declarado.
 - **`@Order(n)` en el orden del documento**. La base ya trae
   `@TestMethodOrder(OrderAnnotation.class)` y `@TestInstance(PER_CLASS)`: el estado
   encadenado del flujo vive en campos de instancia.

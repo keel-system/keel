@@ -163,6 +163,10 @@ Reglas de forma:
   salen la matriz de `score-scenarios.sh` y el nombre del volcado de su evidencia. Sin el id, el escenario sale
   `NO_EJERC` aunque se ejecute. El primer escenario de un flujo suele llevar el id del flujo a secas
   (`FL-PRD-001`), como el documento.
+- **Un caso borde va DENTRO del escenario que lo declara** (la lista **Casos borde** de su bloque), como una
+  aserción más de ese mismo `f.Scenario`. Nunca con un id que el documento no declara (un `FL-PRD-001-G` para el
+  borde de `FL-PRD-001-F`): la matriz contaría un escenario que el diseño no tiene, y `score-scenarios.sh` lo
+  puntuaría igual, porque cuelga de un flujo declarado.
 - **El reset es por flujo, no entre escenarios**: dentro de un flujo el escenario A crea el estado que B verifica.
   Los escenarios corren en el orden del archivo: escríbelos en el orden del documento, con el estado encadenado en
   variables de la función del flujo.
