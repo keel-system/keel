@@ -31,6 +31,8 @@ const mysql = byPath(planWith('product-catalog', { stack: { database: 'mysql' } 
 // Lo que solo existe con seguridad: el diseño con personas, en los dos proveedores.
 const keycloak = byPath(planWith('profile-directory').files);
 const cognito = byPath(planWith('profile-directory', { stack: { auth: 'cognito' } }).files);
+// Lo que solo existe con un broker: la mensajería sobre RabbitMQ.
+const rabbit = byPath(planWith('stock-reservation-events', { stack: { broker: 'rabbitmq' } }).files);
 
 /** Todos los markdown de assets/ (agentes, guías, convenciones, skills), recursivo. */
 function assetSources(dir = assets) {
@@ -104,7 +106,7 @@ test('la skill de la base solo se instala con persistencia relacional, y la orqu
 // Las que llevan un marcador (`<entidad>_behavior.go`) son plantillas y no se miran.
 test('cada ruta internal/, cmd/, tests/ e infra/ que citan los assets existe en lo que emite build', () => {
   const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
-  const emitted = [...Object.keys(mysql), ...Object.keys(cognito), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path))];
+  const emitted = [...Object.keys(mysql), ...Object.keys(cognito), ...Object.keys(rabbit), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path))];
   // Lo que escriben los agentes (las pruebas de flujo, con nombre de ejemplo).
   const agentWritten = /^tests\/integration\/\w+_test\.go$/;
   const missing = [];
@@ -312,4 +314,65 @@ test('el agente de código verifica con lo que NO compila las pruebas de flujo, 
   const tests = read('agents', 'keel-go-tests.md');
   assert.ok(tests.includes('`//go:build integration`'));
   assert.ok(tests.includes('**Prohibido leer `internal/` y `cmd/`**'));
+});
+
+// La mensajería (incremento 9d): la skill del broker y la tabla del arnés de integration-tests.md, contra lo emitido.
+
+test('la skill de RabbitMQ se instala con ese broker, y solo con él', () => {
+  for (const harness of HARNESSES) {
+    assert.ok(harness.skillPath('keel-go-rabbitmq', 'SKILL.md') in rabbit, `${harness.id}: rabbitmq`);
+    for (const reference of fs.readdirSync(path.join(assets, 'generators', 'go', 'skills', 'keel-go-rabbitmq', 'references'))) {
+      assert.ok(harness.skillPath('keel-go-rabbitmq', `references/${reference}`) in rabbit, `${harness.id}: ${reference}`);
+    }
+  }
+  assert.ok(!Object.keys(files).some((file) => file.includes('keel-go-rabbitmq')), 'product-catalog no tiene mensajería');
+  const kafka = byPath(planWith('stock-reservation-events', { stack: { broker: 'kafka' } }).files);
+  assert.ok(!Object.keys(kafka).some((file) => file.includes('keel-go-rabbitmq')), 'con Kafka, no');
+});
+
+test('lo que enseñan la skill de RabbitMQ y integration-tests.md de la mensajería es lo emitido', () => {
+  const find = (suffix) => Object.entries(rabbit).find(([file]) => file.endsWith(suffix))?.[1] ?? '';
+  const all = Object.values(rabbit).join('\n');
+  // La conexión y la topología.
+  const connection = find('internal/infrastructure/rabbitmq/connection.go');
+  assert.match(connection, /func \(c \*Connection\) Publish\(ctx context\.Context, exchange, routingKey, eventType, payload string, headers map\[string\]string\) error/);
+  assert.match(connection, /func \(c \*Connection\) Consume\(ctx context\.Context, queue string, handle Handler\) error/);
+  assert.match(connection, /type Handler func\(ctx context\.Context, message Message\) error/);
+  assert.match(connection, /\tHeaders +map\[string\]string/);
+  assert.match(all, /var ErrUnavailable = /);
+  const topology = find('internal/infrastructure/rabbitmq/topology.go');
+  for (const member of ['func IsRetryable(err error, retriesNotFound bool) bool', 'func RetriesNotFoundOn(queue string) bool', 'func ListenerAttempts() int', 'func Queues() []QueueTopology']) {
+    assert.ok(topology.includes(member), member);
+  }
+  // La mensajería neutral y el archivo del agente.
+  assert.match(find('internal/infrastructure/messaging/envelope.go'), /func ParseEnvelope\(text \[\]byte\) \(Envelope\[jsontext\.Value\], error\)/);
+  assert.match(find('internal/infrastructure/messaging/envelope.go'), /func \(e Envelope\[T\]\) Wire\(\) \(string, error\)/);
+  assert.match(find('internal/infrastructure/messaging/inbound.go'), /func Inbound\(ctx context\.Context, metadata domain\.EventMetadata\) context\.Context/);
+  const guard = find('internal/infrastructure/messaging/guard.go');
+  for (const member of ['AlreadyProcessed(ctx context.Context, handlerID, eventID string) (bool, error)', 'Record(ctx context.Context, handlerID, eventID string) error', 'TryRecord(ctx context.Context, handlerID, eventID string) (bool, error)']) {
+    assert.ok(guard.includes(member), member);
+  }
+  assert.match(find('internal/infrastructure/messaging/outbox.go'), /Dispatch\(ctx context\.Context, destination, routingKey, eventType, payload string\) error/);
+  assert.match(find('internal/infrastructure/messaging/stock_reserved_message.go'), /func ReadStockReservedMessage\(data jsontext\.Value\) \(StockReservedMessage, error\)/);
+  assert.match(rabbit['cmd/server/broker.go'], /func brokerAdapters\(settings messaging\.Settings, rabbit \*rabbitmq\.Connection, logger \*slog\.Logger\) \(outbound, error\)/);
+  assert.match(rabbit['cmd/server/broker.go'], /func messageListeners\(deps inbound\) \(\[\]listener, error\)/);
+  assert.ok(!rabbit['cmd/server/broker.go'].startsWith(GENERATED_HEADER), 'broker.go es del agente');
+  assert.match(rabbit['cmd/server/messaging.go'], /\tRabbit +\*rabbitmq\.Connection/);
+  assert.match(all, /ApplyStockReserved CommandHandler\[ApplyStockReservedCommand\]/);
+  for (const name of ['ErrInvalidStateTransition', 'ErrConcurrentModification']) assert.match(find('internal/domain/errors.go'), new RegExp(`var ${name} = `));
+  // El best-effort del ejemplo de la skill, sobre metering-digest.
+  const bestEffort = Object.values(byPath(planWith('metering-digest', { stack: { broker: 'rabbitmq' } }).files)).join('\n');
+  assert.match(bestEffort, /Publish\(ctx context\.Context, event DailyDigestClosedIntegrationEvent\) error/);
+  assert.match(bestEffort, /\tDailyDigestClosed DailyDigestClosedPublisher/);
+  assert.match(bestEffort, /func NewEnvelope\[T any\]\(ctx context\.Context, metadata domain\.EventMetadata, data T\) Envelope\[T\]/);
+  // La tabla del arnés de integration-tests.md: cada método que enseña es uno del escenario.
+  const doc = read('generators', 'go', 'conventions', 'integration-tests.md');
+  const section = doc.slice(doc.indexOf('## La mensajería'), doc.indexOf('## Una función por flujo'));
+  const harness = rabbit['tests/integration/messaging_test.go'];
+  const taught = [...section.matchAll(/`s\.([A-Z]\w*)\(/g)].map((match) => match[1]).filter((name) => name !== 'Deliver');
+  assert.ok(taught.length >= 9, taught.join(', '));
+  for (const name of taught) assert.match(harness + rabbit['tests/integration/flow_test.go'], new RegExp(`func \\(s \\*Scenario\\) ${name}\\(`), name);
+  for (const member of ['RoutingKey string', 'func (m BrokerMessage) EventID() string', 'func (m BrokerMessage) EventType() string', 'func (m BrokerMessage) Type() string', 'func (m BrokerMessage) Payload() map[string]any']) {
+    assert.ok(harness.includes(member), member);
+  }
 });

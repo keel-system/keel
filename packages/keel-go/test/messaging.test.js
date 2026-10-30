@@ -103,6 +103,9 @@ for (const database of ['postgresql', 'mysql']) {
       assert.deepEqual([...got.columns.keys()].sort(), [...want.columns.keys()].sort(), `${table}: las mismas columnas`);
       for (const [column, spec] of want.columns) {
         if (spec.length != null) assert.equal(got.columns.get(column).length, spec.length, `${table}.${column}: la cota`);
+        // El texto SIN cota (el payload: columnDefinition = "text" en keel-spring). Una cota que keel-spring no pone corta
+        // un evento real: broker-check lo encontró el 2026-10-30, el payload del outbox salía como varchar(255).
+        if (spec.text) assert.equal(got.columns.get(column).type, 'text', `${table}.${column}: texto sin cota`);
         assert.equal(got.columns.get(column).nullable, spec.nullable, `${table}.${column}: la nulabilidad`);
       }
     }
@@ -173,6 +176,11 @@ test('cada mensaje de suscripción comprueba la presencia de lo obligatorio y su
   const reserved = content(files, `${MESSAGING}/stock_reserved_message.go`);
   // Sin cotas fuera de la presencia, sin acumulador.
   assert.doesNotMatch(reserved, /violations/);
+  // Una fuente sin envoltura Keel no trae metadata de la que heredar la correlación: el despacho abre una nueva
+  // (la nota decía messaging.Inbound(ctx, envelope.Metadata), que con una envoltura ajena no compila).
+  const wrapped = content(plan('metering-digest'), `${MESSAGING}/meter_reading_captured_message.go`).replaceAll('\n// ', ' ');
+  assert.match(wrapped, /useCases\.RecordReading\.Handle\(correlation\.WithID\(ctx, correlation\.Accept\(""\)\), application\.RecordReadingCommand\{/);
+  assert.doesNotMatch(wrapped, /envelope\.Metadata/);
 });
 
 // ─── RabbitMQ (tramo 9b-2) ───────────────────────────────────────────────────────────────────────

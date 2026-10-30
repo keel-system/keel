@@ -32,6 +32,7 @@ import { goString } from '../lib/go-source.js';
 import { GO_INFRA } from './infra.js';
 import { layout, packageFile } from './render.js';
 import { CREDENTIALS_FILE, CREDENTIALS_IMPORTS, closingCredentialExpression, credentialsBody, smokeCredentialsCase } from './identity-harness.js';
+import { MESSAGING_HARNESS_FILE, messagingHarnessBody, messagingHarnessImports, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
 export const SCORE_SCENARIOS_SH = 'infra/score-scenarios.sh';
@@ -44,6 +45,7 @@ export const HARNESS_SMOKE_TEST = 'TestHarnessSmoke';
 export function generate(model) {
   const dir = layout(model).integration.dir;
   const credentials = credentialsBody(model);
+  const messaging = messagingHarnessBody(model);
   return [
     { path: `${dir}/doc.go`, content: docGo(model) },
     { path: `${dir}/flow_test.go`, content: flowTestGo(model) },
@@ -53,6 +55,7 @@ export function generate(model) {
     { path: `${dir}/json_shape_test.go`, content: jsonShapeTestGo(model) },
     { path: `${dir}/harness_smoke_test.go`, content: harnessSmokeTestGo(model) },
     ...(credentials ? [{ path: `${dir}/${CREDENTIALS_FILE}`, content: integrationFile(model, { imports: CREDENTIALS_IMPORTS, body: credentials }) }] : []),
+    ...(messaging ? [{ path: `${dir}/${MESSAGING_HARNESS_FILE}`, content: integrationFile(model, { imports: messagingHarnessImports(model), body: messaging }) }] : []),
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript(model) }
   ];
@@ -173,6 +176,10 @@ func (f *Flow) prepare(given func(s *Scenario)) error {
 		return err
 	}${reset ? `
 	if err := resetState(f.t.Context()); err != nil {
+		return err
+	}` : ''}${usesMessagingHarness(model) ? `
+	// El broker arriba (un flujo anterior pudo dejarlo parado) y el servidor conectado a él.
+	if err := prepareBroker(f.t.Context()); err != nil {
 		return err
 	}` : ''}
 	if given == nil {
@@ -645,9 +652,10 @@ var dbQueryArgs = []string{${probe.argv.map(goString).join(', ')}}
 func db(ctx context.Context, sql string) (string, error) {
 	args := slices.Concat([]string{"exec", dbContainer}, dbQueryArgs, []string{sql})
 	return runCommand(ctx, containerRuntime(), args, "¿Está la base arriba (bash infra/up.sh)?", "")
-}
-
-// containerRuntime es el runtime de contenedores: CONTAINER_RUNTIME, o docker si está, o podman.
+}`);
+  }
+  if (probe || usesMessagingHarness(model)) {
+    sections.push(String.raw`// containerRuntime es el runtime de contenedores: CONTAINER_RUNTIME, o docker si está, o podman.
 func containerRuntime() string {
 	if configured := os.Getenv("CONTAINER_RUNTIME"); configured != "" {
 		return configured
@@ -1101,7 +1109,9 @@ function harnessSmokeTestGo(model) {
   }
   const identity = smokeCredentialsCase(model);
   if (identity) cases.push(identity);
-  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null].filter(Boolean);
+  const broker = messagingSmokeCase(model);
+  if (broker) cases.push(broker);
+  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null, broker ? 'broker' : null].filter(Boolean);
   return integrationFile(model, {
     imports: ['encoding/json', 'net/http', 'strings', 'testing'],
     body: String.raw`

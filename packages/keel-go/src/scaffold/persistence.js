@@ -196,6 +196,10 @@ export function physicalType(spec, engine = 'postgresql') {
       return 'date';
     case 'timestamp':
       return mysql ? 'datetime(6)' : 'timestamp(6) with time zone';
+    // Texto sin cota: el payload del outbox (keel-core, OUTBOX_EVENT). Es el `columnDefinition = "text"` de keel-spring y el
+    // HasColumnType("text") de keel-dotnet, en los dos motores; con varchar(255) un evento real no cabía.
+    case 'text':
+      return 'text';
     default:
       return `varchar(${spec.length ?? 255})`;
   }

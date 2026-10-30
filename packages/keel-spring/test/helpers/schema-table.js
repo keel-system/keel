@@ -21,7 +21,10 @@ function springColumn(attrs) {
   return {
     nullable: !/nullable = false/.test(attrs),
     length: length == null ? null : Number(length),
-    scale: /scale = (\d+)/.exec(attrs)?.[1] != null ? Number(/scale = (\d+)/.exec(attrs)[1]) : null
+    scale: /scale = (\d+)/.exec(attrs)?.[1] != null ? Number(/scale = (\d+)/.exec(attrs)[1]) : null,
+    // Texto sin cota (el payload del outbox): sin esto, una columna sin `length` se lee igual que el varchar(255) por
+    // defecto de Hibernate, y la paridad no distingue las dos.
+    text: /columnDefinition = "text"/.test(attrs)
   };
 }
 

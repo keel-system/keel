@@ -99,6 +99,37 @@ both := s.Get(RouteBase+"/me/card", ana, http.Header{"X-Correlation-Id": {"c-1"}
 `Persona.Without` es «el mismo token sin ese claim»; `Persona.Role`, el rol de realm de la persona (vacío, ninguno).
 Un `sub` va en `Persona.Sub`, nunca entre los claims.
 
+## La mensajería
+
+Con capa `messaging`, el arnés trae `tests/integration/messaging_test.go`: el broker se maneja desde el escenario por
+el contenedor devtools de `infra/`, y `StartFlow` espera, al abrir cada flujo, a que el broker esté arriba y el servidor
+conectado a él (SMOKE-8 lo comprueba en el humo).
+
+| Pieza | Cuándo existe | Para qué |
+|---|---|---|
+| `s.Deliver<Suscripción>(messageID, payloadJSON)` | por suscripción | entrega un mensaje de esa suscripción en su canal real, con la envoltura de su contrato; el MISMO `messageID` dos veces es la reentrega que el consumidor tiene que absorber |
+| `s.DeliverMessage(canal, clave, cuerpo, cabeceras)` | siempre | un mensaje crudo en un canal (un evento ajeno del canal compartido, un cuerpo roto); falla si el broker no lo enrutó. `cabeceras` puede ser `nil` |
+| `s.PublishedMessages(canal)` | siempre | lo publicado en un canal del diseño desde el reset (`[]BrokerMessage` con `RoutingKey`, `Properties`, `Body`, y `Payload()`, `EventID()`, `EventType()`, `Type()`); con outbox, espera antes a que el relay entregue lo pendiente. Leer no consume |
+| `s.DeadLetterMessages(suscripción)` | siempre | lo que acabó en el descarte de una suscripción: úsalo también para la aserción NEGATIVA (el duplicado absorbido no acaba aquí) |
+| `s.PurgeMessages(canal o suscripción)` | siempre | vacía un canal justo antes de la acción cuyo Then afirma que NO se publica nada |
+| `s.StopBroker()` / `s.StartBroker()` | siempre | el canal indisponible: lo para, y lo levanta esperando a que el servidor vuelva a estar conectado |
+| `s.DeadLetteredEvents()` | con `reliability: outbox` | cuántos eventos se rindió el outbox: el Then natural de casi cualquier escenario del outbox es que siga en 0 |
+| `s.AbandonOutboxEvent(evento)` / `s.ClearAbandonedOutboxEvents()` | con `reliability: outbox` | agota el presupuesto de reintentos del evento pendiente de ese tipo (la precondición de la rendición) y lo retira después |
+
+Lo asíncrono se afirma con `s.Eventually`, nunca con una espera fija:
+
+```go
+s.ExpectStatus(s.Post(RouteBase+"/reservations", body), 201)
+s.Eventually(func() bool {
+	return slices.ContainsFunc(s.PublishedMessages("stockEvents"), func(m BrokerMessage) bool { return m.EventType() == "StockReservationRequested" })
+}, 20*time.Second, "no se publicó la petición de reserva")
+s.DeliverStockReserved(eventID, `{"orderId":"0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"}`)
+```
+
+Los métodos del escenario terminan el escenario si fallan, así que **no se llaman desde una goroutine**: dos entregas a
+la vez se escriben con `s.ExchangeAll` si entran por HTTP, y si entran por el broker, una tras otra (el broker las
+encola igual).
+
 ## Una función por flujo
 
 ```go

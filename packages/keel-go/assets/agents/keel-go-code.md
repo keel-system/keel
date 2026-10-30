@@ -35,7 +35,7 @@ escenario que ya estaba en verde.
    `{{keel:docs}}/architecture.md`, `{{keel:docs}}/constitution.md` (reglas inviolables), `keel-stack.json`, el
    diseño en `specs/` y las convenciones de Go de `{{keel:docs}}/conventions/` (`naming.md`, `errors.md`,
    `context.md`, `concurrency.md`). Con persistencia, lee el SKILL.md de `{{keel:skills}}/keel-go-database/` (sus
-   `references/`, bajo demanda).
+   `references/`, bajo demanda); con broker, el de `{{keel:skills}}/keel-go-<broker>/` (el de `keel-stack.json`).
 2. **Auditoría de fidelidad al flujo**: antes de implementar cada handler, ejecuta la checklist de
    `{{keel:docs}}/conventions/flow-fidelity.md` cruzando `use-cases`, `domain` y los flujos `FL-*` de
    `specs/validation-scenarios.md`. Una contradicción entre artefactos o un caso borde sin error declarado es un
@@ -54,7 +54,7 @@ escenario que ya estaba en verde.
      diseño con `domain.Errorf(domain.Err<Code>, "…")`; nunca construyen una respuesta de error. No abren
      transacciones (las abre `UseCases`). Quita el `//lint:ignore U1000` de cada campo del handler en cuanto lo
      uses. Un campo que el handler necesite y build no le dio es una **dependencia nueva**: decisión del
-     generador, a `blockers` (el cableado `NewUseCases` y `cmd/server` son de build). Antes de lanzar I/O a la vez
+     generador, a `blockers` (el cableado `NewUseCases` y `cmd/server` son de build, salvo `cmd/server/broker.go`). Antes de lanzar I/O a la vez
      en un handler, consulta `{{keel:docs}}/conventions/concurrency.md`.
    - **La idempotencia de petición**, si la operación la declara: el registro (`domain.IdempotencyStore`), la
      firma (`cmd.IdempotencySignature()`), el ámbito (`cmd.IdempotencyScope()`), la clave en el contexto
@@ -64,6 +64,11 @@ escenario que ya estaba en verde.
      endpoint para esto.
    - **Los mapeos**: un `<entidad>_mapper.go` sin la cabecera es uno que build no supo derivar entero; su TODO
      nombra el campo.
+   - **El broker**, si el diseño tiene capa `messaging`: `cmd/server/broker.go` (sin la cabecera) es tuyo y es el
+     ÚNICO sitio del arranque que lo es. `brokerAdapters` devuelve el envío (el `messaging.Dispatcher` del outbox o
+     los publishers best-effort) y `messageListeners`, un listener por cola, con el despacho que escribe el
+     comentario de cada mensaje (`internal/infrastructure/messaging/<evento>_message.go`). La conexión, la topología,
+     el reintento y la DLQ son de build: la skill del broker dice qué no tocar.
    - **Los puertos y sus adaptadores** son de build: salen enteros del diseño (los finders de la clave natural y
      los `where` del DSL). Si una `precondition` o una `rule` necesita una consulta que el puerto no tiene, no la
      escribas sobre el pool por tu cuenta: es un `designGap` (el diseño puede declararla como búsqueda) o, si el

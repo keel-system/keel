@@ -1061,8 +1061,11 @@ function contractDoc(model, sub) {
                 : '<lo decide el agente: el mensaje no lo trae>';
       return `${goExported(a.component)}: ${value}`;
     });
+    // Sin envoltura Keel no hay metadata de la que heredar la correlación: una nueva (el CorrelationContext.Open de
+    // keel-dotnet con la de origen vacía).
+    const dispatchCtx = sub.envelope === 'keel' ? 'messaging.Inbound(ctx, envelope.Metadata)' : 'correlation.WithID(ctx, correlation.Accept(""))';
     lines.push(
-      `Lo consume ${consumer}: lo escribe el agente en cmd/server/broker.go y despacha con useCases.${useCaseField(operation)}.Handle(messaging.Inbound(ctx, envelope.Metadata), application.${messageType(operation)}{${fields.join(', ')}}).`
+      `Lo consume ${consumer}: lo escribe el agente en cmd/server/broker.go y despacha con useCases.${useCaseField(operation)}.Handle(${dispatchCtx}, application.${messageType(operation)}{${fields.join(', ')}}).`
     );
   } else {
     lines.push(`Lo consume ${consumer}: lo escribe el agente en cmd/server/broker.go.`);
