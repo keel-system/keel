@@ -1,93 +1,222 @@
 #!/usr/bin/env node
-// La persistencia de keel-go contra un PostgreSQL REAL. En el tramo 6a mide el ESQUEMA: la migración baseline que
-// escribe build para cada fixture relacional se aplica a una base vacía, y el catálogo del motor (information_schema,
-// pg_constraint, pg_indexes) tiene que decir lo mismo que el SQL emitido —el que compara con keel-spring la paridad
-// de test/schema-parity.test.js—: las mismas tablas y columnas, con su nulabilidad, cota y escala, los mismos nombres
-// de constraint, índice y FK, y cada índice condicionado con su predicado. Después, la vuelta atrás de goose (Down)
-// tiene que dejar la base vacía. Los repositorios y la transacción llegan en el tramo 6c.
+// La persistencia de keel-go contra un PostgreSQL REAL, en dos partes:
 //
-// Por qué hace falta además de la paridad: la paridad lee el texto. Un nombre de más de 63 caracteres que PostgreSQL
-// trunca, una palabra reservada sin citar o un predicado que el motor no acepta pasan la paridad y rompen aquí.
+//   esquema  la migración baseline que escribe build para cada fixture relacional se aplica a una base vacía, y el
+//            catálogo del motor (information_schema, pg_constraint, pg_indexes) tiene que decir lo mismo que el SQL
+//            emitido —el que compara con keel-spring la paridad de test/schema-parity.test.js—: las mismas tablas y
+//            columnas, con su nulabilidad, cota y escala, los mismos nombres de constraint, índice y FK, y cada índice
+//            condicionado con su predicado. Después, la vuelta atrás de goose (Down) tiene que dejar la base vacía;
+//   sondas   por sujeto, una prueba Go generada desde el modelo (scripts/lib/db-probes.js) que EJECUTA los adaptadores
+//            emitidos: arranca como el servicio (Open + Migrate), guarda y relee cada raíz campo a campo, la versión, la
+//            fusión de hijas y listas, cada unicidad con su code y su mensaje, la cota del motor, la página, los finders,
+//            el lote, las inversas, el orden por rango y la transacción (interbloqueo repetido, conflicto agotado, tope).
 //
-//   node packages/keel-go/scripts/db-check.js [--only=<fixture>] [--keep]
+// Por qué hace falta además de las paridades: las paridades leen el texto. Un nombre de más de 63 caracteres que
+// PostgreSQL trunca, un predicado que el motor no acepta, un Scan con las columnas en otro orden o una fusión que no
+// borra la hija quitada pasan la paridad y rompen aquí.
+//
+//   node packages/keel-go/scripts/db-check.js [--only=<fixture>] [--sabotage=<id>] [--keep]
 //   npm run db-check --workspace packages/keel-go
 //
-// Falsado: se aplica una migración sin un índice de FK, y la comparación tiene que verlo.
+// --sabotage=<id> rompe lo emitido EN MEMORIA, antes de escribirlo (una red que reconstruye lo que mide no lo falsa, la
+// lección del 16e de keel-dotnet), conservando la forma: sigue compilando. El check tiene que salir rojo en las sondas
+// que miden ese mecanismo y solo en ellas (`expect`, y `also` para las que caen con él por una dependencia legítima).
+// Sin sabotaje, el esquema se falsa además aplicando una migración sin un índice de FK.
+//
+// Necesita Go, podman o docker y la caché de módulos (o red la primera vez).
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { spawn, spawnSync } from 'node:child_process';
+import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
-import { FIXTURES_DIR } from '../test/helpers/workspace.js';
+import { FIXTURES_DIR, makeWorkspace } from '../test/helpers/workspace.js';
 import { goView } from '../test/helpers/contract.js';
 import { baselineOf, goSchema } from '../test/helpers/schema.js';
+import { probeFile } from './lib/db-probes.js';
+import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
+import { DB_SABOTAGES as SABOTAGES, applyDbSabotage } from '../test/helpers/db-sabotages.js';
+import { resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length) ?? null;
+const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
 const keep = process.argv.includes('--keep');
-const results = [];
 
+if (sabotage && !SABOTAGES[sabotage]) {
+  console.error(`No hay ningún sabotaje '${sabotage}'. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);
+  process.exit(2);
+}
+
+const results = [];
 function step(name, ok, detail = '') {
   results.push({ name, ok });
   console.log(`${ok ? 'OK   ' : 'FALLA'} ${name}${detail ? ` — ${detail}` : ''}`);
   return ok;
 }
 
-function run(command, args, input = undefined) {
-  const result = spawnSync(command, args, { encoding: 'utf8', input, maxBuffer: 64 * 1024 * 1024 });
+function run(command, args, { input, cwd, env } = {}) {
+  const result = spawnSync(command, args, { encoding: 'utf8', input, cwd, env: env ? { ...process.env, ...env } : process.env, maxBuffer: 64 * 1024 * 1024 });
   return { ok: result.status === 0, stdout: result.stdout ?? '', output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
 }
 
-function containerRuntime() {
-  for (const candidate of ['podman', 'docker']) if (run(candidate, ['--version']).ok) return candidate;
-  return null;
-}
-
-const runtime = containerRuntime();
+const runtime = resolveRuntime();
 if (!step('podman o docker disponible', Boolean(runtime))) process.exit(1);
+if (!step('Go disponible', run('go', ['version']).ok)) process.exit(1);
 
-const engine = DATABASES.postgresql;
-const container = `keel-go-db-check-${process.pid}`;
-const started = run(runtime, ['run', '-d', '--rm', '--name', container, '-e', `POSTGRES_PASSWORD=${engine.password}`, engine.image]);
-if (!step(`PostgreSQL en marcha (${engine.image})`, started.ok, started.ok ? '' : started.output.trim())) process.exit(1);
+let database;
+try {
+  database = await startDatabase(runtime, 'postgresql');
+} catch (error) {
+  step('PostgreSQL en marcha', false, error.message);
+  process.exit(1);
+}
+step('PostgreSQL en marcha', true, `puerto ${database.port}`);
 
-const psql = (db, sql, flags = []) => run(runtime, ['exec', '-i', container, 'psql', '-U', 'postgres', '-d', db, '-v', 'ON_ERROR_STOP=1', '-X', '-q', ...flags, '-f', '-'], sql);
+const psql = (db, sql, flags = []) => run(runtime, ['exec', '-i', database.name, 'psql', '-U', database.user, '-d', db, '-v', 'ON_ERROR_STOP=1', '-X', '-q', ...flags, '-f', '-'], { input: sql });
 const query = (db, sql) => psql(db, sql, ['-A', '-t', '-F', '\t']);
+const root = makeWorkspace('keel-go-db-check-');
 
 try {
-  const until = Date.now() + 60_000;
-  while (Date.now() < until && !query('postgres', 'SELECT 1').ok) await new Promise((resolve) => setTimeout(resolve, 500));
-  if (!step('PostgreSQL acepta conexiones', query('postgres', 'SELECT 1').ok)) process.exit(1);
-
-  const relational = fs.readdirSync(FIXTURES_DIR).filter((name) => {
+  const allRelational = fs.readdirSync(FIXTURES_DIR).filter((name) => {
     const file = path.join(FIXTURES_DIR, name, 'persistence.keel.yaml');
-    return fs.existsSync(file) && !/model:\s*document/.test(fs.readFileSync(file, 'utf8')) && (!only || name === only);
+    return fs.existsSync(file) && !/model:\s*document/.test(fs.readFileSync(file, 'utf8'));
   });
+  const relational = allRelational.filter((name) => !only || name === only);
+  // Los sujetos de las sondas: las fixtures relacionales y los diseños DERIVADOS de los finders (DSL 2.22) que comparten
+  // los generadores, los que salen de una fixture relacional (los mismos que miden keel-dotnet y keel-nest).
+  const probeSubjects = [
+    ...relational.map((name) => ({ name, from: name, mutate: null })),
+    ...FINDER_DESIGNS.filter((design) => allRelational.includes(design.from) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: design.mutate }))
+  ];
 
-  for (const name of relational) {
-    const files = planService({ ...goView(name), workspace: FIXTURES_DIR }).files;
-    const sql = baselineOf(files);
-    const differences = applyAndCompare(name.replace(/-/g, '_'), sql, goSchema(files));
-    step(`${name}: el catálogo del motor es el esquema emitido, y Down lo deja vacío`, differences.length === 0, differences.slice(0, 8).join(' | '));
+  // ─── El esquema ─────────────────────────────────────────────────────────────────────────────────
+  if (!sabotage) {
+    for (const name of relational) {
+      const files = planService({ ...goView(name), workspace: FIXTURES_DIR }).files;
+      const differences = applyAndCompare(name.replace(/-/g, '_'), baselineOf(files), goSchema(files));
+      step(`${name}: el catálogo del motor es el esquema emitido, y Down lo deja vacío`, differences.length === 0, differences.slice(0, 8).join(' | '));
+    }
+    // Falsado: sin un índice de FK, la comparación tiene que verlo. Si el sabotaje ya no se aplica, el paso sale rojo.
+    const subject = relational.find((name) => /^CREATE INDEX ix_/m.test(baselineOf(planService({ ...goView(name), workspace: FIXTURES_DIR }).files)));
+    if (subject) {
+      const files = planService({ ...goView(subject), workspace: FIXTURES_DIR }).files;
+      const sql = baselineOf(files);
+      const sabotaged = sql.replace(/^CREATE INDEX ix_\w+ ON .*;\n\n?/m, '');
+      const differences = sabotaged === sql ? [] : applyAndCompare(`${subject.replace(/-/g, '_')}_sabotaged`, sabotaged, goSchema(files));
+      step(`falsado: ${subject} sin un índice de FK → la comparación lo ve`, differences.some((d) => /ix_/.test(d)), differences.slice(0, 3).join(' | ') || 'no vio nada');
+    }
   }
 
-  // Falsado: sin un índice de FK, la comparación tiene que verlo. Si el sabotaje ya no se aplica, el paso sale rojo.
-  const subject = relational.find((name) => /^CREATE INDEX ix_/m.test(baselineOf(planService({ ...goView(name), workspace: FIXTURES_DIR }).files)));
-  if (subject) {
-    const files = planService({ ...goView(subject), workspace: FIXTURES_DIR }).files;
-    const sql = baselineOf(files);
-    const sabotaged = sql.replace(/^CREATE INDEX ix_\w+ ON .*;\n\n?/m, '');
-    const differences = sabotaged === sql ? [] : applyAndCompare(`${subject.replace(/-/g, '_')}_sabotaged`, sabotaged, goSchema(files));
-    step(`falsado: ${subject} sin un índice de FK → la comparación lo ve`, differences.some((d) => /ix_/.test(d)), differences.slice(0, 3).join(' | ') || 'no vio nada');
+  // ─── Las sondas ─────────────────────────────────────────────────────────────────────────────────
+  // Cada sujeto es su módulo y su base: se preparan en orden y se ejecutan de cuatro en cuatro (tidy y la compilación son
+  // lo que tarda), y se informan en orden.
+  let applied = 0;
+  const subjects = [];
+  for (const { name, from, mutate } of probeSubjects) {
+    // Toda la fixture, como go-check --fixtures: planService no pasa por la frontera.
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
+    if (mutate) mutate(layers);
+    const plan = planService({ manifest, layers, workspace: FIXTURES_DIR });
+    let files = plan.files;
+    if (sabotage) {
+      const sabotaged = applyDbSabotage(SABOTAGES[sabotage], files);
+      // Un sabotaje que no toca a este sujeto no dice nada de él.
+      if (sabotaged.changed === 0) continue;
+      applied += sabotaged.changed;
+      files = sabotaged.files;
+    }
+    const probe = probeFile(plan.model);
+    const dir = path.join(root, name);
+    for (const file of [...files, probe]) {
+      const target = path.join(dir, file.path);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, file.content);
+    }
+    if (probe.unsampled.length > 0) console.log(`  (${name}: sin muestra para ${probe.unsampled.join(', ')})`);
+    const db = `${name.replace(/-/g, '_')}_probes`;
+    psql('postgres', `DROP DATABASE IF EXISTS ${db} WITH (FORCE);`);
+    psql('postgres', `CREATE DATABASE ${db};`);
+    subjects.push({ name, dir, db });
+  }
+  const env = (db) => ({ DB_CHECK_URL: `postgresql://127.0.0.1:${database.port}/${db}`, DB_CHECK_USER: database.user, DB_CHECK_PASSWORD: database.password });
+  const outcomes = await pool(subjects, 4, async ({ dir, db }) => {
+    const tidied = await runAsync('go', ['mod', 'tidy'], { cwd: dir });
+    if (!tidied.ok) return { tidied };
+    return { tidied, tested: await runAsync('go', ['test', '-count=1', '-v', './internal/infrastructure/postgres/'], { cwd: dir, env: env(db) }) };
+  });
+  subjects.forEach(({ name }, index) => {
+    const { tidied, tested } = outcomes[index];
+    if (!step(`${name}: go mod tidy`, tidied.ok, tidied.ok ? '' : tidied.output.slice(0, 2000))) return;
+    const failed = [...tested.output.matchAll(/^\s*--- FAIL: (\S+)/gm)].map((m) => m[1]).filter((test) => !test.includes('/'));
+    const passed = [...tested.output.matchAll(/^\s*--- PASS: (\S+)/gm)].map((m) => m[1]);
+    const skipped = [...tested.output.matchAll(/^\s*--- SKIP: (\S+)/gm)].map((m) => m[1]);
+    const ran = failed.length + passed.length;
+    if (!sabotage) {
+      const ok = tested.ok && ran > 0;
+      const detail = ok ? (skipped.length > 0 ? `se saltan ${skipped.join(', ')}` : '') : failed.join(', ') || tested.output.slice(-3000);
+      step(`${name}: los adaptadores guardan, leen y traducen contra PostgreSQL (${passed.length} sondas)`, ok, detail);
+      if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      return;
+    }
+    const { expect, also } = SABOTAGES[sabotage];
+    const expected = failed.filter((test) => expect.test(test));
+    const stray = failed.filter((test) => !expect.test(test) && !(also && also.test(test)));
+    const compiled = ran > 0;
+    // Un sujeto donde el sabotaje toca lo emitido pero ninguna sonda lo mide sale verde y lo dice: se juzga en conjunto.
+    step(
+      `falsado: ${sabotage} en ${name} → ${expected.length > 0 ? `rojo en ${expected.join(', ')}` : 'ninguna sonda lo mide aquí'}`,
+      compiled && stray.length === 0,
+      compiled ? (stray.length > 0 ? `caen además ${stray.join(', ')}` : '') : `no compila: ${tested.output.slice(0, 2000)}`
+    );
+    if (expected.length > 0) results.at(-1).caught = true;
+  });
+  if (sabotage) {
+    if (step(`el sabotaje ${sabotage} se aplica a lo emitido`, applied > 0, applied === 0 ? '¿cambió el texto emitido?' : `${applied} archivo(s)`)) {
+      step(`el sabotaje ${sabotage} lo ve al menos una sonda`, results.some((result) => result.caught));
+    }
   }
 } finally {
-  if (keep) console.log(`\nPostgreSQL sigue en marcha: ${runtime} exec -it ${container} psql -U postgres`);
-  else run(runtime, ['rm', '-f', container]);
+  if (keep) console.log(`\nPostgreSQL sigue en marcha (${runtime} exec -it ${database.name} psql -U ${database.user}); sujetos en ${root}`);
+  else stopDatabase(runtime, database);
 }
 
-const failed = results.filter((result) => !result.ok).length;
-console.log(failed === 0 ? `\ndb-check: ${results.length}/${results.length} en verde.` : `\ndb-check: ${failed} paso(s) en rojo.`);
-process.exitCode = failed === 0 ? 0 : 1;
+const failedSteps = results.filter((result) => !result.ok).length;
+console.log(failedSteps === 0 ? `\ndb-check: ${results.length}/${results.length} en verde.` : `\ndb-check: ${failedSteps} paso(s) en rojo.`);
+process.exitCode = failedSteps === 0 ? 0 : 1;
+
+/** Como run, sin bloquear: para ejecutar varios sujetos a la vez. */
+function runAsync(command, args, { cwd, env } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { cwd, env: env ? { ...process.env, ...env } : process.env });
+    let output = '';
+    child.stdout.on('data', (chunk) => (output += chunk));
+    child.stderr.on('data', (chunk) => (output += chunk));
+    child.on('close', (status) => resolve({ ok: status === 0, output }));
+  });
+}
+
+/** Ejecuta work sobre cada elemento, como mucho size a la vez, y devuelve los resultados en el orden de items. */
+async function pool(items, size, work) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      out[index] = await work(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(size, items.length) }, worker));
+  return out;
+}
+
+/** Las líneas de la salida de go test que explican un rojo. */
+function failureLines(output) {
+  return output
+    .split('\n')
+    .filter((line) => /^\s+\S+_test\.go:\d+:|--- FAIL|panic:/.test(line))
+    .slice(0, 40)
+    .join('\n');
+}
 
 /** Crea la base, aplica Up, compara el catálogo con lo esperado, aplica Down y comprueba que queda vacía. */
 function applyAndCompare(db, sql, expected) {

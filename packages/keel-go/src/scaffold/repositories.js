@@ -29,6 +29,7 @@ import {
   parentColumnOf,
   partialUniqueIndexes,
   persistedMembers,
+  quoteIdentifierFor,
   uniqueFields
 } from '@keel-system/keel-core/gen';
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
@@ -37,7 +38,11 @@ import { enumConstant, goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { isDeclaredLockVersion } from './entities.js';
 import { physicalType } from './persistence.js';
+import { adapterFinderMethods, entityFinders, filtersBlocks, filtersUses, portFinderMethods, filterStructs } from './finders.js';
 import { docComment, domainPath, goFileName, layout, localName, packageFile } from './render.js';
+
+// Un identificador en el SQL del adaptador, citado como en el baseline si es una palabra reservada (`"primary"`).
+const q = (name) => quoteIdentifierFor('postgresql', name);
 
 export function generate(model) {
   if (!usesRelational(model)) return [];
@@ -57,7 +62,7 @@ export function generate(model) {
   for (const file of files) {
     for (const match of file.content.matchAll(/\bparse(\w+)Column\(|\b(\w+)Column\(/g)) uses.add(`enum:${goExported(match[1] ?? match[2])}`);
   }
-  files.push({ path: `${postgres.dir}/values.go`, content: packageFile(model, postgres, { imports: [...ADAPTER_IMPORTS, 'internal/platform/correlation'], body: valuesBody(model, uses) }) });
+  files.push({ path: `${postgres.dir}/values.go`, content: packageFile(model, postgres, { imports: [...ADAPTER_IMPORTS, 'internal/platform/correlation', 'strconv'], body: valuesBody(model, uses, roots) }) });
   return files;
 }
 
@@ -104,13 +109,13 @@ function keyFinder(model, entity, keys) {
     if (member.kind === 'externalRef') {
       const target = model.entities.find((candidate) => candidate.name === member.relation.entity);
       const type = target?.idField?.goType ?? 'uuid.UUID';
-      params.push({ name: member.name, type, where: [{ column: member.column, arg: localName(member.name) }] });
+      params.push({ name: member.name, type, where: [{ column: q(member.column), arg: localName(member.name) }] });
     } else if (member.kind === 'vo') {
       const local = localName(member.name);
       params.push({
         name: member.name,
         type: `domain.${member.field.goType}`,
-        where: member.subs.map((sub) => ({ column: sub.column, arg: writeValue(sub.sub, `${local}.${goExported(sub.voAccessor)}()`, false) }))
+        where: member.subs.map((sub) => ({ column: q(sub.column), arg: writeValue(sub.sub, `${local}.${goExported(sub.voAccessor)}()`, false) }))
       });
     } else if (member.kind === 'scalar') {
       const { field } = member;
@@ -118,7 +123,7 @@ function keyFinder(model, entity, keys) {
       const type = field.kind === 'enum' ? `domain.${field.goType}` : field.goType;
       const shadow = keyShadow(field);
       const arg = shadow ? `${shadow.accents ? 'textfold.CaseAndAccents' : 'textfold.Case'}(${local})` : writeValue(field, local, false);
-      params.push({ name: field.name, type, fold: Boolean(shadow), where: [{ column: shadow ? shadow.column : field.columns.name, arg }] });
+      params.push({ name: field.name, type, fold: Boolean(shadow), where: [{ column: q(shadow ? shadow.column : field.columns.name), arg }] });
     } else return null;
   }
   return { name: `FindBy${params.map((p) => goExported(p.name)).join('And')}`, params };
@@ -197,6 +202,7 @@ function portBody(model, entity) {
       `${batch.name}(ctx context.Context, ${batch.plural} []${batch.param.type}) ([]*${name}, error)`
     );
   }
+  for (const [doc, signature] of portFinderMethods(model, entity)) method(doc, signature);
   if (isPaginated(model, entity)) {
     method('una página de agregados, en el orden pedido y con el id como desempate. Una propiedad de orden que no existe es un error.', `List(ctx context.Context, pageable Pageable) (Page[*${name}], error)`);
   }
@@ -205,8 +211,11 @@ function portBody(model, entity) {
     `Save(ctx context.Context, ${localName(name[0].toLowerCase() + name.slice(1))} *${name}) (*${name}, error)`
   );
   method('borra el agregado entero; no hace nada si no existe.', `DeleteByID(ctx context.Context, ${id.name} ${id.type}) error`);
+  const filters = filterStructs(model, entity).map((struct) => `${struct}
+
+`).join('');
   return `
-${docComment(portName(entity), `el puerto de persistencia del agregado ${name}. El dominio solo ve esto; el adaptador vive en internal/infrastructure/postgres y se une a la transacción que abrió el caso de uso.`)}type ${portName(entity)} interface {
+${filters}${docComment(portName(entity), `el puerto de persistencia del agregado ${name}. El dominio solo ve esto; el adaptador vive en internal/infrastructure/postgres y se une a la transacción que abrió el caso de uso.`)}type ${portName(entity)} interface {
 ${methods.join('\n\n')}
 }
 `;
@@ -242,7 +251,7 @@ function codec(field) {
 }
 
 /** El argumento de SQL de un valor del dominio (`expr`, de tipo T, o *T si `optional`). */
-function writeValue(field, expr, optional) {
+export function writeValue(field, expr, optional) {
   const c = codec(field);
   if (c.direct) return expr;
   if (!optional) return c.write(expr);
@@ -309,7 +318,7 @@ function tableModel(model, entity, parent) {
   const columns = [];
   const children = [];
   const lists = [];
-  const idColumn = entity.idField?.columns?.name ?? 'id';
+  const idColumn = q(entity.idField?.columns?.name ?? 'id');
   let version = null;
   for (const member of members) {
     if (member.kind === 'scalar') {
@@ -317,18 +326,18 @@ function tableModel(model, entity, parent) {
       const method = goExported(field.name);
       const optional = !(field.required || field.isId || field.generated);
       if (isDeclaredLockVersion(entity, field)) {
-        version = { column: field.columns.name, method };
+        version = { column: q(field.columns.name), method };
         continue;
       }
       const read = readValue(field, `state.${method}`, optional, field.columns.name, counter);
-      columns.push({ column: field.columns.name, read, write: writeValue(field, `e.${method}()`, optional), id: field.isId });
+      columns.push({ column: q(field.columns.name), read, write: writeValue(field, `e.${method}()`, optional), id: field.isId });
       if (member.folded) {
         const fold = member.folded.accents ? 'textfold.CaseAndAccents' : 'textfold.Case';
-        columns.push({ column: member.folded.column, write: optional ? `nullable(e.${method}(), func(v string) any { return ${fold}(v) })` : `${fold}(e.${method}())` });
+        columns.push({ column: q(member.folded.column), write: optional ? `nullable(e.${method}(), func(v string) any { return ${fold}(v) })` : `${fold}(e.${method}())` });
       }
       if (member.ranked) {
         const enumName = member.ranked.enum ?? field.goType;
-        columns.push({ column: member.ranked.column, write: optional ? `nullable(e.${method}(), func(v domain.${enumName}) any { return ${rankFunc(enumName)}(v) })` : `${rankFunc(enumName)}(e.${method}())`, rank: enumName });
+        columns.push({ column: q(member.ranked.column), write: optional ? `nullable(e.${method}(), func(v domain.${enumName}) any { return ${rankFunc(enumName)}(v) })` : `${rankFunc(enumName)}(e.${method}())`, rank: enumName });
       }
     } else if (member.kind === 'vo') {
       columns.push(...voColumns(model, member, counter));
@@ -337,11 +346,11 @@ function tableModel(model, entity, parent) {
       const method = goExported(member.name);
       const fake = { name: member.name, goType: target?.idField?.goType ?? 'uuid.UUID', kind: 'scalar' };
       const optional = !member.relation.required;
-      columns.push({ column: member.column, read: readValue(fake, `state.${method}`, optional, member.column, counter), write: writeValue(fake, `e.${method}()`, optional) });
+      columns.push({ column: q(member.column), read: readValue(fake, `state.${method}`, optional, member.column, counter), write: writeValue(fake, `e.${method}()`, optional) });
     } else if (member.kind === 'relationOne') {
       // La referencia de vuelta de una hija: su columna lleva el id del padre, que el dominio no modela.
       if (!member.relation.backReference) throw new Error(`${entity.name}.${member.name}: keel-go no persiste una relación interna a-uno (lo rechaza la frontera)`);
-      columns.push({ column: joinColumnOf(member.relation), parentKey: true });
+      columns.push({ column: q(joinColumnOf(member.relation)), parentKey: true });
     } else if (member.kind === 'relationMany') {
       if (member.relation.cardinality === 'many-to-many') throw new Error(`${entity.name}.${member.name}: keel-go no persiste una many-to-many interna (lo rechaza la frontera)`);
       const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
@@ -351,15 +360,15 @@ function tableModel(model, entity, parent) {
     }
   }
   // La FK de un one-to-many UNIDIRECCIONAL la pone el padre en la tabla de la hija: el dominio no la nombra.
-  if (parent && !backReferenceTo(model, entity.name, parent.name)) columns.push({ column: parentColumnOf(parent.name), parentKey: true });
-  if (entity.usesOptimisticLocking && !entity.declaresLockVersion) version = { column: LOCK_VERSION.column, method: 'LockVersion' };
+  if (parent && !backReferenceTo(model, entity.name, parent.name)) columns.push({ column: q(parentColumnOf(parent.name)), parentKey: true });
+  if (entity.usesOptimisticLocking && !entity.declaresLockVersion) version = { column: q(LOCK_VERSION.column), method: 'LockVersion' };
   // La versión se LEE con el resto (el agregado la porta para el siguiente guardado) y se escribe aparte.
   if (version) columns.push({ column: version.column, read: { decls: [], dest: `&state.${version.method}`, after: [] } });
   const audit = [
-    ...(entity.auditTimestamps === 'all' ? AUDIT_COLUMNS.timestamps.map((column) => ({ ...column, kind: 'time' })) : []),
-    ...(entity.auditAuthorship === 'all' ? AUDIT_COLUMNS.authorship.map((column) => ({ ...column, kind: 'actor' })) : [])
+    ...(entity.auditTimestamps === 'all' ? AUDIT_COLUMNS.timestamps.map((column) => ({ ...column, column: q(column.column), kind: 'time' })) : []),
+    ...(entity.auditAuthorship === 'all' ? AUDIT_COLUMNS.authorship.map((column) => ({ ...column, column: q(column.column), kind: 'actor' })) : [])
   ];
-  return { entity, table: entity.tableName, idColumn, columns, children, lists, version, audit, decls: counter };
+  return { entity, table: q(entity.tableName), idColumn, columns, children, lists, version, audit, decls: counter };
 }
 
 /** El nombre de la función que da el rango de un valor de enum (su posición en la declaración). */
@@ -394,7 +403,7 @@ function voColumns(model, member, counter) {
     ? [`if ${temps.map(({ tmp }) => `${tmp}.Valid`).join(' || ')} {\n${indent([...prep, build, `state.${method} = &v`].join('\n'))}\n}`]
     : [...prep, build, `state.${method} = v`];
   const columns = temps.map(({ sub, tmp }, index) => ({
-    column: sub.column,
+    column: q(sub.column),
     read: { decls: [decls[index]], dest: `&${tmp}`, after: index === temps.length - 1 ? after : [] },
     write: optional
       ? `nullable(e.${method}(), func(v domain.${vo.name}) any { return ${writeValue(sub.sub, `v.${goExported(sub.voAccessor)}()`, false)} })`
@@ -422,7 +431,8 @@ function directNullValue(field) {
 
 /** La tabla de elementos de una lista: dueño, posición y el valor (o las columnas de su value object). */
 function listModel(model, entity, member) {
-  const table = elementTable(entity, member);
+  const raw = elementTable(entity, member);
+  const table = { ...raw, table: q(raw.table), joinColumn: q(raw.joinColumn), orderColumn: q(raw.orderColumn), valueColumn: raw.valueColumn && q(raw.valueColumn) };
   const method = goExported(member.name);
   const counter = { next: 1 };
   if (member.element.kind === 'vo') {
@@ -503,9 +513,10 @@ func (r *${type}) FindAllByID(ctx context.Context, ids []${id.type}) ([]*domain.
     const owner = model.entities.find((candidate) => candidate.name === inverse.owner);
     const param = localName(`${inverse.relation}Id`);
     const column = persistedMembers(model, entity).find((m) => m.kind === 'externalRef' && m.relation.name === inverse.relation)?.column ?? `${inverse.relation}_id`;
+    const quoted = q(column);
     parts.push(`// ${goExported(inverse.finder)} implementa domain.${portName(entity)}.
 func (r *${type}) ${goExported(inverse.finder)}(ctx context.Context, ${param} ${owner?.idField?.goType ?? 'uuid.UUID'}) ([]*domain.${name}, error) {
-	return r.load(ctx, ${goString(`WHERE ${column} = $1`)}, ${param})
+	return r.load(ctx, ${goString(`WHERE ${quoted} = $1`)}, ${param})
 }`);
   }
   for (const finder of keyFinders(model, entity)) {
@@ -529,7 +540,10 @@ func (r *${type}) ${batch.name}(ctx context.Context, ${batch.plural} []${batch.p
 	return r.load(ctx, ${goString(`WHERE ${batch.column} = ANY($1::${batch.cast})`)}, ${batch.plural})
 }`);
   }
+  // El mapa de orden lo usan el listado y los finders; el List, solo una raíz paginada.
+  if (isPaginated(model, entity) || entityFinders(model, entity).length > 0) parts.push(sortableMap(model, entity));
   if (isPaginated(model, entity)) parts.push(listMethod(model, entity, root, type));
+  parts.push(...adapterFinderMethods(model, entity, { type, root, sortable: `${lower(name)}Sortable`, writeValue }));
 
   // ─── Escrituras
   parts.push(saveMethods(model, entity, root, tables, type, uses));
@@ -674,7 +688,7 @@ ${collectIds}	return states, nil
   } else {
     const parentArray = table.parentArray;
     if (parentArray.helper) uses.add(parentArray.helper);
-    const order = table.entity.idField?.columns?.name ?? 'id';
+    const order = q(table.entity.idField?.columns?.name ?? 'id');
     out.push(`// query${name}ByParent lee las ${name} de varios padres en UNA consulta, agrupadas por su padre y en el orden de su id.
 func query${name}ByParent(ctx context.Context, q DBTX, parents []${table.parentIdType}) (map[${table.parentIdType}][]*domain.${name}, error) {
 	if len(parents) == 0 {
@@ -910,17 +924,20 @@ function sortable(model, entity) {
   return props;
 }
 
+/** El mapa de orden de una raíz: lo usan su List y sus finders. */
+function sortableMap(model, entity) {
+  const columns = alignRows(sortable(model, entity).map(([property, column]) => ({ indent: '\t', cells: [`${goString(property)}:`, `${goString(q(column))},`] })));
+  return `// ${lower(entity.name)}Sortable son las propiedades por las que se puede ordenar, con el nombre del contrato, y su columna.
+// Es una lista blanca: el ORDER BY nunca lleva un texto de la petición.
+var ${lower(entity.name)}Sortable = map[string]string{
+${columns.join('\n')}
+}`;
+}
+
 function listMethod(model, entity, root, type) {
   const name = entity.name;
   const idName = entity.idField?.name ?? 'id';
-  const columns = alignRows(sortable(model, entity).map(([property, column]) => ({ indent: '\t', cells: [`${goString(property)}:`, `${goString(column)},`] })));
-  return `// ${lower(name)}Sortable son las propiedades por las que se puede ordenar, con el nombre del contrato, y su columna.
-// Es una lista blanca: el ORDER BY nunca lleva un texto de la petición.
-var ${lower(name)}Sortable = map[string]string{
-${columns.join('\n')}
-}
-
-// List implementa domain.${portName(entity)}.
+  return `// List implementa domain.${portName(entity)}.
 func (r *${type}) List(ctx context.Context, pageable domain.Pageable) (domain.Page[*domain.${name}], error) {
 	order, err := orderBy(pageable.Sort, ${lower(name)}Sortable, ${goString(idName)}, ${goString(root.idColumn)})
 	if err != nil {
@@ -945,7 +962,7 @@ func (r *${type}) List(ctx context.Context, pageable domain.Pageable) (domain.Pa
 // ─── Lo común de los adaptadores ─────────────────────────────────────────────────────────────────
 
 /** values.go: los auxiliares que comparten los adaptadores, solo los que alguno usa (U1000 rechaza el resto). */
-function valuesBody(model, uses) {
+function valuesBody(model, uses, roots) {
   const blocks = [
     `// closeRows cierra un cursor y devuelve el error de la iteración o del cierre, ya traducido.
 func closeRows(rows *sql.Rows) error {
@@ -1036,6 +1053,7 @@ func ${rankFunc(name)}(value domain.${name}) int32 {
 	return int32(slices.Index([]domain.${name}{${order.join(', ')}}, value))
 }`);
   }
+  blocks.push(...filtersBlocks(filtersUses(model, roots)));
   return `\n${blocks.join('\n\n')}\n`;
 }
 

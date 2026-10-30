@@ -15,6 +15,8 @@
 
 import { dispatchNote } from '@keel-system/keel-core/gen';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
+import { finderNote } from '@keel-system/keel-core/gen/query-filters';
+import { finderCall } from './finders.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { isPartialUpdate, repositoryOf, repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { portName, repositoryParam } from './repositories.js';
@@ -251,7 +253,12 @@ function handlerNotes(model, operation) {
     withoutTransaction: 'WithoutTransaction(ctx) como contexto del despacho'
   });
   if (dispatch) notes.push(dispatch);
-  for (const note of textFilterNotes(model, operation)) notes.push(note);
+  // La búsqueda con finder (DSL 2.22) ya aplica sus filtros, plegado incluido: su nota sustituye a las de los filtros de texto.
+  const finder = operation.finder;
+  const entity = finder && model.entities.find((candidate) => candidate.name === finder.entity);
+  const finderText = finderNote(operation, { call: finder ? finderCall(finder, repositoryParam(entity)) : '' });
+  if (finderText) notes.push(finderText);
+  if (!finder) for (const note of textFilterNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la de todos los generadores.
