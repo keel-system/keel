@@ -27,10 +27,10 @@ const PENDING_LAYERS = {
 };
 
 /**
- * Los motores sobre los que keel-go genera la persistencia. MySQL llega en el tramo 6d y MongoDB en el incremento 12;
+ * Los motores sobre los que keel-go genera la persistencia: PostgreSQL y MySQL (tramo 6d). MongoDB llega en el incremento 12;
  * MariaDB, SQL Server y Oracle se quedan fuera hasta que una red los mida, como en keel-nest y keel-dotnet.
  */
-export const SUPPORTED_DATABASES = ['postgresql'];
+export const SUPPORTED_DATABASES = ['postgresql', 'mysql'];
 
 /** ¿Declara el diseño persistencia DOCUMENTAL? Llega en el incremento 12. */
 function documentPersistence(layers) {
@@ -134,8 +134,8 @@ export function checkSupportedStack(stack) {
   // El motor solo importa con persistencia: sin ella, el cuestionario no lo pregunta y no se estampa.
   if (stack?.database && !SUPPORTED_DATABASES.includes(stack.database)) {
     errors.push(
-      `database: ${stack.database} — keel-go genera la persistencia sobre ${SUPPORTED_DATABASES.join(', ')} (MySQL llega en el tramo 6d y MongoDB en el ` +
-        'incremento 12 de PLAN-KEEL-GO.md). Elige uno de ellos, o genera este diseño con keel-spring, keel-nest o keel-dotnet.'
+      `database: ${stack.database} — keel-go genera la persistencia sobre ${SUPPORTED_DATABASES.join(', ')} (MongoDB llega en el ` +
+        'incremento 12 de PLAN-KEEL-GO.md; MariaDB, SQL Server y Oracle, sin medir en ninguna red). Elige uno de ellos, o genera este diseño con keel-spring, keel-nest o keel-dotnet.'
     );
   }
   if (stack?.telemetry && stack.telemetry !== 'none') {

@@ -1,5 +1,5 @@
 // El FINDER de una búsqueda (DSL 2.22) en Go: el struct de sus filtros junto al puerto (`internal/domain`), el método
-// del puerto y el del adaptador de PostgreSQL. Qué restringe cada input, con qué operador y contra qué columna o sombra
+// del puerto y el del adaptador relacional. Qué restringe cada input, con qué operador y contra qué columna o sombra
 // lo decide keel-core/gen/query-filters.js, el mismo para los cuatro generadores: aquí solo se escribe.
 //
 // El adaptador compone el WHERE con un `filters` (values.go) que pone cada valor como PARÁMETRO: nunca se concatena un
@@ -7,12 +7,14 @@
 // `_` y `\` escapados), sobre la sombra plegada si el diseño pide plegarlo.
 
 import { findersOf } from '@keel-system/keel-core/gen';
-import { persistedMembers, quoteIdentifierFor } from '@keel-system/keel-core/gen';
+import { persistedMembers } from '@keel-system/keel-core/gen';
 import { enumConstant, goExported } from '../lib/go-projection.js';
 import { goString } from '../lib/go-source.js';
+import { sqlDialect } from '../lib/relational-engine.js';
 import { docComment, localName } from './render.js';
 
-const q = (name) => quoteIdentifierFor('postgresql', name);
+// Las columnas se citan como en el baseline del motor; `qFor` las cita para el modelo que se escribe.
+const qFor = (model) => (name) => sqlDialect(model).quote(name);
 
 /** Los finders de una raíz, en el orden de las operaciones. */
 export function entityFinders(model, entity) {
@@ -79,18 +81,18 @@ export function portFinderMethods(model, entity) {
 /** La columna que restringe un criterio, y el campo con cuyo códec viaja su valor. */
 function columnOf(model, entity, criterion) {
   const { target } = criterion;
-  if (criterion.shadow) return { column: q(criterion.shadow.column), field: null };
+  if (criterion.shadow) return { column: qFor(model)(criterion.shadow.column), field: null };
   const members = persistedMembers(model, entity);
   if (target.kind === 'relation') {
     const member = members.find((candidate) => candidate.kind === 'externalRef' && candidate.relation.name === target.relation.name);
-    return { column: q(member?.column ?? `${target.relation.name}_id`), field: null };
+    return { column: qFor(model)(member?.column ?? `${target.relation.name}_id`), field: null };
   }
   if (target.kind === 'vo') {
     const member = members.find((candidate) => candidate.kind === 'vo' && candidate.name === target.field.name);
     const sub = member?.subs.find((candidate) => candidate.voAccessor === target.sub.name);
-    return { column: q(sub?.column), field: target.sub };
+    return { column: qFor(model)(sub?.column), field: target.sub };
   }
-  return { column: q(target.field.columns.name), field: target.field };
+  return { column: qFor(model)(target.field.columns.name), field: target.field };
 }
 
 const COMPARISON = { eq: '=', gt: '>', gte: '>=', lt: '<', lte: '<=' };
@@ -108,7 +110,7 @@ function fixedArg(model, entry) {
 
 /** Las líneas que añaden las condiciones de un finder a `f`. */
 function filterLines(model, entity, finder, writeValue) {
-  const lines = finder.fixed.map((entry) => `\tf.add(${goString(q(entry.field.columns.name))}, "=", ${fixedArg(model, entry)})`);
+  const lines = finder.fixed.map((entry) => `\tf.add(${goString(qFor(model)(entry.field.columns.name))}, "=", ${fixedArg(model, entry)})`);
   for (const criterion of finder.criteria) {
     const { column, field } = columnOf(model, entity, criterion);
     const local = localName(criterion.name);
@@ -195,11 +197,15 @@ export function filtersUses(model, roots) {
 }
 
 /** Los bloques de values.go con los que los finders componen su WHERE, solo los que alguno usa. */
-export function filtersBlocks(uses) {
+export function filtersBlocks(uses, d) {
   if (!uses.has('filters')) return [];
   const like = uses.has('contains') || uses.has('prefix');
+  // El parámetro que acaba de añadirse: `$n` en PostgreSQL, `?` en MySQL. Y el escape de LIKE: en una cadena de MySQL
+  // la barra ya escapa, así que el carácter de escape se escribe doblado.
+  const param = d.mysql ? '" ?"' : '" $"+strconv.Itoa(len(f.args))';
+  const likeTail = d.mysql ? `\` LIKE ? ESCAPE '\\\\'\`` : `" LIKE $"+strconv.Itoa(len(f.args))+\` ESCAPE '\\'\``;
   return [
-    `// filters compone el WHERE de un finder: cada condición con su valor como PARÁMETRO ($n), nunca concatenado.
+    `// filters compone el WHERE de un finder: cada condición con su valor como PARÁMETRO (${d.mysql ? '?' : '$n'}), nunca concatenado.
 type filters struct {
 	conditions []string
 	args       []any
@@ -208,19 +214,19 @@ type filters struct {
       `// add restringe column con op contra value.
 func (f *filters) add(column, op string, value any) {
 	f.args = append(f.args, value)
-	f.conditions = append(f.conditions, column+" "+op+" $"+strconv.Itoa(len(f.args)))
+	f.conditions = append(f.conditions, column+" "+op+${param})
 }`,
     uses.has('contains') &&
       `// contains restringe column a los textos que contienen text, LITERAL: sus comodines no lo son.
 func (f *filters) contains(column, text string) {
 	f.args = append(f.args, "%"+likeLiteral(text)+"%")
-	f.conditions = append(f.conditions, column+" LIKE $"+strconv.Itoa(len(f.args))+\` ESCAPE '\\'\`)
+	f.conditions = append(f.conditions, column+${likeTail})
 }`,
     uses.has('prefix') &&
       `// prefix restringe column a los textos que empiezan por text, LITERAL.
 func (f *filters) prefix(column, text string) {
 	f.args = append(f.args, likeLiteral(text)+"%")
-	f.conditions = append(f.conditions, column+" LIKE $"+strconv.Itoa(len(f.args))+\` ESCAPE '\\'\`)
+	f.conditions = append(f.conditions, column+${likeTail})
 }`,
     `// where es la cláusula entera, o "" sin condiciones.
 func (f *filters) where() string {
@@ -233,7 +239,7 @@ func (f *filters) where() string {
       `// page añade el LIMIT y el OFFSET de una página como parámetros: después del count, que no los lleva.
 func (f *filters) page(pageable domain.Pageable) string {
 	f.args = append(f.args, pageable.Size, pageable.Offset())
-	return " LIMIT $" + strconv.Itoa(len(f.args)-1) + " OFFSET $" + strconv.Itoa(len(f.args))
+	return ${d.mysql ? '" LIMIT ? OFFSET ?"' : '" LIMIT $" + strconv.Itoa(len(f.args)-1) + " OFFSET $" + strconv.Itoa(len(f.args))'}
 }`,
     like &&
       `// likeEscaper escapa los comodines de LIKE (y el propio escape) de un texto buscado.

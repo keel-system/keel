@@ -21,6 +21,18 @@ export const ALLOWED_LICENSES = ['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Cla
  */
 export const FORBIDDEN_LICENSES = [/^GPL-/, /^AGPL-/, /^LGPL-/, /^BUSL-/, /^SSPL-/];
 
+/**
+ * Las EXCEPCIONES a la lista blanca, una por módulo y con su motivo: la licencia admitida solo para ese módulo, nunca
+ * en general (PLAN-KEEL-GO.md § 1.6: «MPL-2.0 solo si es inevitable y queda escrito»). go-check la pasa a go-licenses
+ * como el único paquete que se le perdona.
+ */
+export const LICENSE_EXCEPTIONS = {
+  // El único driver de MySQL para Go mantenido y sin cgo. La MPL-2.0 es copyleft por ARCHIVO: obliga a publicar los
+  // cambios a los archivos del driver, y keel-go lo usa sin modificar; el código del servicio no queda afectado.
+  // Aprobada por el usuario el 2026-10-29 (incremento 6d).
+  'github.com/go-sql-driver/mysql': { license: 'MPL-2.0', why: 'el único driver de MySQL para Go mantenido y sin cgo; copyleft por archivo, usado sin modificar' }
+};
+
 /** Lo que no se emite aunque se pida, con su motivo. */
 export const VETOED_MODULES = {
   'github.com/golangci/golangci-lint': 'GPL-3.0: con la directiva tool quedaría registrado en el go.mod del servicio (el lint es go vet + staticcheck)',
@@ -48,6 +60,10 @@ export const MODULES = {
   // la interfaz estándar y el error del motor llega como `*pgconn.PgError`, con el NOMBRE de la constraint aparte. La
   // v5.11.0 es de 2026-09-07.
   'github.com/jackc/pgx/v5': { version: 'v5.11.0', license: 'MIT', kind: 'require', use: 'driver de PostgreSQL (database/sql)' },
+  // El driver de MySQL, sobre database/sql: el error del motor llega como `*mysql.MySQLError`, con el número y el
+  // mensaje (el nombre de la constraint va en el texto). MPL-2.0, con su excepción escrita en LICENSE_EXCEPTIONS. Trae
+  // filippo.io/edwards25519 (BSD-3-Clause). La v1.10.1 es de 2026-09-02.
+  'github.com/go-sql-driver/mysql': { version: 'v1.10.1', license: 'MPL-2.0', kind: 'require', use: 'driver de MySQL (database/sql)' },
   // Las migraciones al arrancar, embebidas en el binario (Provider sobre un fs.FS, sin el registro global). Su
   // paquete raíz no importa los dialectos de otros motores: los módulos que su go.mod nombra (ClickHouse, MSSQL…)
   // no entran en el binario. La v3.29.0 es de 2026-10-11.
@@ -78,8 +94,11 @@ export const SKELETON_REQUIRES = ['github.com/google/uuid', 'go.yaml.in/yaml/v3'
 /** El pliegue sin acentos (`compare: ignore-case-accents`) necesita la descomposición de Unicode (NFD). */
 export const TEXT_FOLD_REQUIRES = ['golang.org/x/text'];
 
-/** Los módulos de la persistencia relacional (incremento 6): el driver y las migraciones. */
-export const RELATIONAL_REQUIRES = ['github.com/jackc/pgx/v5', 'github.com/pressly/goose/v3'];
+/** Los módulos de la persistencia relacional (incremento 6), por motor: el driver y las migraciones. */
+export const RELATIONAL_REQUIRES = {
+  postgresql: ['github.com/jackc/pgx/v5', 'github.com/pressly/goose/v3'],
+  mysql: ['github.com/go-sql-driver/mysql', 'github.com/pressly/goose/v3']
+};
 
 /** Las herramientas: todas, siempre. */
 export const TOOLS = Object.entries(MODULES)
@@ -97,6 +116,8 @@ export function licenseProblems({ path, version, license }) {
     problems.push(`${path} ${version}: no declara licencia SPDX: no se puede comprobar`);
     return problems;
   }
+  // La excepción vale para ESE módulo y esa licencia: si el módulo cambiase de licencia, se vuelve a decidir.
+  if (LICENSE_EXCEPTIONS[path]?.license === license) return problems;
   const forbidden = spdxIds(license).filter((id) => FORBIDDEN_LICENSES.some((pattern) => pattern.test(id)));
   if (forbidden.length > 0 && !licenseAllowed(license)) problems.push(`${path} ${version}: licencia ${license}, prohibida (${forbidden.join(', ')})`);
   else if (!licenseAllowed(license)) problems.push(`${path} ${version}: licencia ${license}, fuera de ${ALLOWED_LICENSES.join(', ')}`);

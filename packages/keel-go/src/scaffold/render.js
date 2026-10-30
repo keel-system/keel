@@ -9,6 +9,7 @@
 
 import { commentLines, goFile, goString } from '../lib/go-source.js';
 import { goExported, goUnexported } from '../lib/go-projection.js';
+import { storeDir } from '../lib/relational-engine.js';
 
 /** Un paquete del proyecto: su directorio, su ruta de importación y su nombre. */
 function pkg(module, dir, name = dir.split('/').at(-1)) {
@@ -39,9 +40,9 @@ export function layout(model) {
     // El pliegue de un texto para comparar como pide el diseño (compare: ignore-case…): el valor de la sombra que guarda
     // la persistencia.
     textfold: pkg(module, 'internal/platform/textfold'),
-    // El adaptador de PostgreSQL: el esquema (migraciones de goose embebidas) y los repositorios. Un paquete por
-    // tecnología, como el resto de la infraestructura (PLAN-KEEL-GO.md § 2).
-    postgres: pkg(module, 'internal/infrastructure/postgres'),
+    // El adaptador del motor relacional (`postgres` o `mysql`): el esquema (migraciones de goose embebidas) y los
+    // repositorios. Un paquete por tecnología, como el resto de la infraestructura (PLAN-KEEL-GO.md § 2).
+    store: pkg(module, storeDir(model)),
     // La prueba de la frontera hexagonal: `internal/` solo protege frente a otros módulos, no entre capas.
     architecture: pkg(module, 'internal/architecture')
   };

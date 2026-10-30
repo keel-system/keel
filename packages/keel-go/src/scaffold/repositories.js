@@ -1,7 +1,7 @@
 // La persistencia hexagonal de cada raíz de agregado, el mismo reparto que los otros tres generadores:
 //   · el PUERTO `<Raíz>Repository` en el dominio (`internal/domain/<raíz>_repository.go`), que solo nombra el dominio,
 //     la página y el contexto;
-//   · el ADAPTADOR en `internal/infrastructure/postgres`, con el SQL escrito por build y el mapeo fila ↔ dominio campo a
+//   · el ADAPTADOR en `internal/infrastructure/<motor>` (`postgres` o `mysql`), con el SQL escrito por build y el mapeo fila ↔ dominio campo a
 //     campo (`Rehydrate<E>` para leer, los accesores para escribir): sin ORM y sin reflexión, como pide el § 3.4.
 //
 // Tres decisiones que no son obvias:
@@ -29,40 +29,44 @@ import {
   parentColumnOf,
   partialUniqueIndexes,
   persistedMembers,
-  quoteIdentifierFor,
   uniqueFields
 } from '@keel-system/keel-core/gen';
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
 import { isPaginated, repositoryRoots, usesRelational } from '@keel-system/keel-core/gen/features';
 import { enumConstant, goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
+import { sqlDialect, storeDir } from '../lib/relational-engine.js';
 import { isDeclaredLockVersion } from './entities.js';
 import { physicalType } from './persistence.js';
 import { adapterFinderMethods, entityFinders, filtersBlocks, filtersUses, portFinderMethods, filterStructs } from './finders.js';
 import { docComment, domainPath, goFileName, layout, localName, packageFile } from './render.js';
 
-// Un identificador en el SQL del adaptador, citado como en el baseline si es una palabra reservada (`"primary"`).
-const q = (name) => quoteIdentifierFor('postgresql', name);
+// Un identificador en el SQL del adaptador, citado como en el baseline si es una palabra reservada (`"primary"` en
+// PostgreSQL, `` `primary` `` en MySQL).
+const sq = (model, name) => sqlDialect(model).quote(name);
+
+// El parámetro n (1-based) del SQL del motor: `$n` en PostgreSQL, `?` en MySQL.
+const ph = (model, n) => sqlDialect(model).param(n);
 
 export function generate(model) {
   if (!usesRelational(model)) return [];
   const roots = repositoryRoots(model);
   if (roots.length === 0) return [];
-  const { domain, postgres } = layout(model);
+  const { domain, store } = layout(model);
   const files = [];
   const uses = new Set();
   for (const entity of roots) {
     files.push({ path: domainPath(model, portName(entity)), content: packageFile(model, domain, { imports: PORT_IMPORTS, body: portBody(model, entity) }) });
     files.push({
-      path: `${postgres.dir}/${goFileName(entity.name)}_repository.go`,
-      content: packageFile(model, postgres, { imports: ADAPTER_IMPORTS, body: adapterBody(model, entity, uses) })
+      path: `${store.dir}/${goFileName(entity.name)}_repository.go`,
+      content: packageFile(model, store, { imports: ADAPTER_IMPORTS, body: adapterBody(model, entity, uses) })
     });
   }
   // Los enums que viajan a una columna: su traducción va en values.go.
   for (const file of files) {
     for (const match of file.content.matchAll(/\bparse(\w+)Column\(|\b(\w+)Column\(/g)) uses.add(`enum:${goExported(match[1] ?? match[2])}`);
   }
-  files.push({ path: `${postgres.dir}/values.go`, content: packageFile(model, postgres, { imports: [...ADAPTER_IMPORTS, 'internal/platform/correlation', 'strconv'], body: valuesBody(model, uses, roots) }) });
+  files.push({ path: `${store.dir}/values.go`, content: packageFile(model, store, { imports: [...ADAPTER_IMPORTS, 'internal/platform/correlation', 'strconv'], body: valuesBody(model, uses, roots) }) });
   return files;
 }
 
@@ -109,13 +113,13 @@ function keyFinder(model, entity, keys) {
     if (member.kind === 'externalRef') {
       const target = model.entities.find((candidate) => candidate.name === member.relation.entity);
       const type = target?.idField?.goType ?? 'uuid.UUID';
-      params.push({ name: member.name, type, where: [{ column: q(member.column), arg: localName(member.name) }] });
+      params.push({ name: member.name, type, where: [{ column: sq(model, member.column), arg: localName(member.name) }] });
     } else if (member.kind === 'vo') {
       const local = localName(member.name);
       params.push({
         name: member.name,
         type: `domain.${member.field.goType}`,
-        where: member.subs.map((sub) => ({ column: q(sub.column), arg: writeValue(sub.sub, `${local}.${goExported(sub.voAccessor)}()`, false) }))
+        where: member.subs.map((sub) => ({ column: sq(model, sub.column), arg: writeValue(sub.sub, `${local}.${goExported(sub.voAccessor)}()`, false) }))
       });
     } else if (member.kind === 'scalar') {
       const { field } = member;
@@ -123,7 +127,7 @@ function keyFinder(model, entity, keys) {
       const type = field.kind === 'enum' ? `domain.${field.goType}` : field.goType;
       const shadow = keyShadow(field);
       const arg = shadow ? `${shadow.accents ? 'textfold.CaseAndAccents' : 'textfold.Case'}(${local})` : writeValue(field, local, false);
-      params.push({ name: field.name, type, fold: Boolean(shadow), where: [{ column: q(shadow ? shadow.column : field.columns.name), arg }] });
+      params.push({ name: field.name, type, fold: Boolean(shadow), where: [{ column: sq(model, shadow ? shadow.column : field.columns.name), arg }] });
     } else return null;
   }
   return { name: `FindBy${params.map((p) => goExported(p.name)).join('And')}`, params };
@@ -215,7 +219,7 @@ function portBody(model, entity) {
 
 `).join('');
   return `
-${filters}${docComment(portName(entity), `el puerto de persistencia del agregado ${name}. El dominio solo ve esto; el adaptador vive en internal/infrastructure/postgres y se une a la transacción que abrió el caso de uso.`)}type ${portName(entity)} interface {
+${filters}${docComment(portName(entity), `el puerto de persistencia del agregado ${name}. El dominio solo ve esto; el adaptador vive en ${storeDir(model)} y se une a la transacción que abrió el caso de uso.`)}type ${portName(entity)} interface {
 ${methods.join('\n\n')}
 }
 `;
@@ -299,11 +303,25 @@ function idArray(entity) {
   throw new Error(`keel-go no sabe buscar por lote un id ${field.goType} (${type})`);
 }
 
-function idsArg(entity, expr, uses) {
-  const array = idArray(entity);
-  if (!array.helper) return expr;
-  uses.add(array.helper);
-  return `${array.helper}(${expr})`;
+/**
+ * Una consulta sobre un LOTE de valores: `<head>= ANY($1::tipo[])<tail>` en PostgreSQL y `<head>IN (?, …)<tail>` en
+ * MySQL, que no tiene arrays (un parámetro por valor, compuesto por `inList`: nunca el valor dentro del texto). `array`
+ * es el tipo de array de PostgreSQL (`idArray`). Devuelve lo que va antes de la llamada (`setup`), la expresión Go del
+ * SQL y la de sus argumentos.
+ */
+function batchQuery(model, head, tail, values, array, uses) {
+  if (sqlDialect(model).mysql) {
+    uses.add('inList');
+    return { setup: `in, args := inList(${values})`, sql: `${goString(`${head}IN (`)}+in+${goString(`)${tail}`)}`, args: 'args...' };
+  }
+  if (array.helper) uses.add(array.helper);
+  return { setup: null, sql: goString(`${head}= ANY($1::${array.cast})${tail}`), args: array.helper ? `${array.helper}(${values})` : values };
+}
+
+/** El cuerpo de un finder por lote: carga las raíces cuya `column` está en `values`. */
+function batchLoad(model, column, entity, values, uses, cast = null) {
+  const query = batchQuery(model, `WHERE ${column} `, '', values, entity ? idArray(entity) : { cast, helper: null }, uses);
+  return `${query.setup ? `\t${query.setup}\n` : ''}\treturn r.load(ctx, ${query.sql}, ${query.args})`;
 }
 
 // ─── El modelo de tabla de cada entidad ──────────────────────────────────────────────────────────
@@ -318,7 +336,7 @@ function tableModel(model, entity, parent) {
   const columns = [];
   const children = [];
   const lists = [];
-  const idColumn = q(entity.idField?.columns?.name ?? 'id');
+  const idColumn = sq(model, entity.idField?.columns?.name ?? 'id');
   let version = null;
   for (const member of members) {
     if (member.kind === 'scalar') {
@@ -326,18 +344,18 @@ function tableModel(model, entity, parent) {
       const method = goExported(field.name);
       const optional = !(field.required || field.isId || field.generated);
       if (isDeclaredLockVersion(entity, field)) {
-        version = { column: q(field.columns.name), method };
+        version = { column: sq(model, field.columns.name), method };
         continue;
       }
       const read = readValue(field, `state.${method}`, optional, field.columns.name, counter);
-      columns.push({ column: q(field.columns.name), read, write: writeValue(field, `e.${method}()`, optional), id: field.isId });
+      columns.push({ column: sq(model, field.columns.name), read, write: writeValue(field, `e.${method}()`, optional), id: field.isId });
       if (member.folded) {
         const fold = member.folded.accents ? 'textfold.CaseAndAccents' : 'textfold.Case';
-        columns.push({ column: q(member.folded.column), write: optional ? `nullable(e.${method}(), func(v string) any { return ${fold}(v) })` : `${fold}(e.${method}())` });
+        columns.push({ column: sq(model, member.folded.column), write: optional ? `nullable(e.${method}(), func(v string) any { return ${fold}(v) })` : `${fold}(e.${method}())` });
       }
       if (member.ranked) {
         const enumName = member.ranked.enum ?? field.goType;
-        columns.push({ column: q(member.ranked.column), write: optional ? `nullable(e.${method}(), func(v domain.${enumName}) any { return ${rankFunc(enumName)}(v) })` : `${rankFunc(enumName)}(e.${method}())`, rank: enumName });
+        columns.push({ column: sq(model, member.ranked.column), write: optional ? `nullable(e.${method}(), func(v domain.${enumName}) any { return ${rankFunc(enumName)}(v) })` : `${rankFunc(enumName)}(e.${method}())`, rank: enumName });
       }
     } else if (member.kind === 'vo') {
       columns.push(...voColumns(model, member, counter));
@@ -346,11 +364,11 @@ function tableModel(model, entity, parent) {
       const method = goExported(member.name);
       const fake = { name: member.name, goType: target?.idField?.goType ?? 'uuid.UUID', kind: 'scalar' };
       const optional = !member.relation.required;
-      columns.push({ column: q(member.column), read: readValue(fake, `state.${method}`, optional, member.column, counter), write: writeValue(fake, `e.${method}()`, optional) });
+      columns.push({ column: sq(model, member.column), read: readValue(fake, `state.${method}`, optional, member.column, counter), write: writeValue(fake, `e.${method}()`, optional) });
     } else if (member.kind === 'relationOne') {
       // La referencia de vuelta de una hija: su columna lleva el id del padre, que el dominio no modela.
       if (!member.relation.backReference) throw new Error(`${entity.name}.${member.name}: keel-go no persiste una relación interna a-uno (lo rechaza la frontera)`);
-      columns.push({ column: q(joinColumnOf(member.relation)), parentKey: true });
+      columns.push({ column: sq(model, joinColumnOf(member.relation)), parentKey: true });
     } else if (member.kind === 'relationMany') {
       if (member.relation.cardinality === 'many-to-many') throw new Error(`${entity.name}.${member.name}: keel-go no persiste una many-to-many interna (lo rechaza la frontera)`);
       const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
@@ -360,15 +378,15 @@ function tableModel(model, entity, parent) {
     }
   }
   // La FK de un one-to-many UNIDIRECCIONAL la pone el padre en la tabla de la hija: el dominio no la nombra.
-  if (parent && !backReferenceTo(model, entity.name, parent.name)) columns.push({ column: q(parentColumnOf(parent.name)), parentKey: true });
-  if (entity.usesOptimisticLocking && !entity.declaresLockVersion) version = { column: q(LOCK_VERSION.column), method: 'LockVersion' };
+  if (parent && !backReferenceTo(model, entity.name, parent.name)) columns.push({ column: sq(model, parentColumnOf(parent.name)), parentKey: true });
+  if (entity.usesOptimisticLocking && !entity.declaresLockVersion) version = { column: sq(model, LOCK_VERSION.column), method: 'LockVersion' };
   // La versión se LEE con el resto (el agregado la porta para el siguiente guardado) y se escribe aparte.
   if (version) columns.push({ column: version.column, read: { decls: [], dest: `&state.${version.method}`, after: [] } });
   const audit = [
-    ...(entity.auditTimestamps === 'all' ? AUDIT_COLUMNS.timestamps.map((column) => ({ ...column, column: q(column.column), kind: 'time' })) : []),
-    ...(entity.auditAuthorship === 'all' ? AUDIT_COLUMNS.authorship.map((column) => ({ ...column, column: q(column.column), kind: 'actor' })) : [])
+    ...(entity.auditTimestamps === 'all' ? AUDIT_COLUMNS.timestamps.map((column) => ({ ...column, column: sq(model, column.column), kind: 'time' })) : []),
+    ...(entity.auditAuthorship === 'all' ? AUDIT_COLUMNS.authorship.map((column) => ({ ...column, column: sq(model, column.column), kind: 'actor' })) : [])
   ];
-  return { entity, table: q(entity.tableName), idColumn, columns, children, lists, version, audit, decls: counter };
+  return { entity, table: sq(model, entity.tableName), idColumn, columns, children, lists, version, audit, decls: counter };
 }
 
 /** El nombre de la función que da el rango de un valor de enum (su posición en la declaración). */
@@ -403,7 +421,7 @@ function voColumns(model, member, counter) {
     ? [`if ${temps.map(({ tmp }) => `${tmp}.Valid`).join(' || ')} {\n${indent([...prep, build, `state.${method} = &v`].join('\n'))}\n}`]
     : [...prep, build, `state.${method} = v`];
   const columns = temps.map(({ sub, tmp }, index) => ({
-    column: q(sub.column),
+    column: sq(model, sub.column),
     read: { decls: [decls[index]], dest: `&${tmp}`, after: index === temps.length - 1 ? after : [] },
     write: optional
       ? `nullable(e.${method}(), func(v domain.${vo.name}) any { return ${writeValue(sub.sub, `v.${goExported(sub.voAccessor)}()`, false)} })`
@@ -432,7 +450,7 @@ function directNullValue(field) {
 /** La tabla de elementos de una lista: dueño, posición y el valor (o las columnas de su value object). */
 function listModel(model, entity, member) {
   const raw = elementTable(entity, member);
-  const table = { ...raw, table: q(raw.table), joinColumn: q(raw.joinColumn), orderColumn: q(raw.orderColumn), valueColumn: raw.valueColumn && q(raw.valueColumn) };
+  const table = { ...raw, table: sq(model, raw.table), joinColumn: sq(model, raw.joinColumn), orderColumn: sq(model, raw.orderColumn), valueColumn: raw.valueColumn && sq(model, raw.valueColumn) };
   const method = goExported(member.name);
   const counter = { next: 1 };
   if (member.element.kind === 'vo') {
@@ -477,7 +495,7 @@ function adapterBody(model, entity, uses) {
   const tables = collectTables(model, root);
   const parts = [];
 
-  parts.push(`${docComment(type, `el adaptador de domain.${portName(entity)} sobre PostgreSQL: el SQL lo escribe build y el mapeo fila ↔ dominio va campo a campo, sin reflexión. Se une a la transacción que abrió el caso de uso; sin ella, cada lectura va sola y cada escritura abre la suya.`)}type ${type} struct {
+  parts.push(`${docComment(type, `el adaptador de domain.${portName(entity)} sobre ${sqlDialect(model).label}: el SQL lo escribe build y el mapeo fila ↔ dominio va campo a campo, sin reflexión. Se une a la transacción que abrió el caso de uso; sin ella, cada lectura va sola y cada escritura abre la suya.`)}type ${type} struct {
 	tx *Transactions
 }
 
@@ -498,25 +516,24 @@ func (r *${type}) ${signature} (*domain.${name}, bool, error) {
 	}
 	return found[0], true, nil
 }`);
-  one('FindByID', `FindByID(ctx context.Context, ${id.name} ${id.type})`, `WHERE ${root.idColumn} = $1`, id.name);
+  one('FindByID', `FindByID(ctx context.Context, ${id.name} ${id.type})`, `WHERE ${root.idColumn} = ${ph(model, 1)}`, id.name);
   if (idBatchReason(model, entity)) {
-    const array = idArray(entity);
     parts.push(`// FindAllByID implementa domain.${portName(entity)}.
 func (r *${type}) FindAllByID(ctx context.Context, ids []${id.type}) ([]*domain.${name}, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	return r.load(ctx, ${goString(`WHERE ${root.idColumn} = ANY($1::${array.cast})`)}, ${idsArg(entity, 'ids', uses)})
+${batchLoad(model, root.idColumn, entity, 'ids', uses)}
 }`);
   }
   for (const inverse of inverseFindersOf(model, name)) {
     const owner = model.entities.find((candidate) => candidate.name === inverse.owner);
     const param = localName(`${inverse.relation}Id`);
     const column = persistedMembers(model, entity).find((m) => m.kind === 'externalRef' && m.relation.name === inverse.relation)?.column ?? `${inverse.relation}_id`;
-    const quoted = q(column);
+    const quoted = sq(model, column);
     parts.push(`// ${goExported(inverse.finder)} implementa domain.${portName(entity)}.
 func (r *${type}) ${goExported(inverse.finder)}(ctx context.Context, ${param} ${owner?.idField?.goType ?? 'uuid.UUID'}) ([]*domain.${name}, error) {
-	return r.load(ctx, ${goString(`WHERE ${quoted} = $1`)}, ${param})
+	return r.load(ctx, ${goString(`WHERE ${quoted} = ${ph(model, 1)}`)}, ${param})
 }`);
   }
   for (const finder of keyFinders(model, entity)) {
@@ -525,7 +542,7 @@ func (r *${type}) ${goExported(inverse.finder)}(ctx context.Context, ${param} ${
     for (const param of finder.params) {
       for (const where of param.where) {
         args.push(where.arg);
-        conditions.push(`${where.column} = $${args.length}`);
+        conditions.push(`${where.column} = ${ph(model, args.length)}`);
       }
     }
     one(finder.name, `${finder.name}(ctx context.Context, ${finder.params.map((p) => `${localName(p.name)} ${p.type}`).join(', ')})`, `WHERE ${conditions.join(' AND ')}`, args.join(', '));
@@ -537,7 +554,7 @@ func (r *${type}) ${batch.name}(ctx context.Context, ${batch.plural} []${batch.p
 	if len(${batch.plural}) == 0 {
 		return nil, nil
 	}
-	return r.load(ctx, ${goString(`WHERE ${batch.column} = ANY($1::${batch.cast})`)}, ${batch.plural})
+${batchLoad(model, batch.column, null, batch.plural, uses, batch.cast)}
 }`);
   }
   // El mapa de orden lo usan el listado y los finders; el List, solo una raíz paginada.
@@ -550,7 +567,7 @@ func (r *${type}) ${batch.name}(ctx context.Context, ${batch.plural} []${batch.p
   parts.push(`// DeleteByID implementa domain.${portName(entity)}. Las filas de las hijas y de las listas caen con la raíz (ON DELETE CASCADE).
 func (r *${type}) DeleteByID(ctx context.Context, ${id.name} ${id.type}) error {
 	return r.tx.write(ctx, func(q DBTX) error {
-		_, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${root.table} WHERE ${root.idColumn} = $1`)}, ${id.name})
+		_, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${root.table} WHERE ${root.idColumn} = ${ph(model, 1)}`)}, ${id.name})
 		return err
 	})
 }`);
@@ -686,15 +703,14 @@ func query${name}(ctx context.Context, q DBTX, where string, args ...any) ([]dom
 ${collectIds}	return states, nil
 }`);
   } else {
-    const parentArray = table.parentArray;
-    if (parentArray.helper) uses.add(parentArray.helper);
-    const order = q(table.entity.idField?.columns?.name ?? 'id');
+    const order = sq(model, table.entity.idField?.columns?.name ?? 'id');
+    const query = batchQuery(model, `SELECT ${selected.join(', ')} FROM ${table.table} WHERE ${parentKey.column} `, ` ORDER BY ${order}`, 'parents', table.parentArray, uses);
     out.push(`// query${name}ByParent lee las ${name} de varios padres en UNA consulta, agrupadas por su padre y en el orden de su id.
 func query${name}ByParent(ctx context.Context, q DBTX, parents []${table.parentIdType}) (map[${table.parentIdType}][]*domain.${name}, error) {
 	if len(parents) == 0 {
 		return nil, nil
 	}
-	rows, err := q.QueryContext(ctx, ${goString(`SELECT ${selected.join(', ')} FROM ${table.table} WHERE ${parentKey.column} = ANY($1::${parentArray.cast}) ORDER BY ${order}`)}, ${parentArray.helper ? `${parentArray.helper}(parents)` : 'parents'})
+${query.setup ? `\t${query.setup}\n` : ''}	rows, err := q.QueryContext(ctx, ${query.sql}, ${query.args})
 	if err != nil {
 		return nil, translate(err)
 	}
@@ -723,29 +739,28 @@ ${collectIds}	byParent := make(map[${table.parentIdType}][]*domain.${name}, len(
   }
 
   // Las listas de valores de esta tabla.
-  for (const list of table.lists) out.push(...listFunctions(table, list, uses));
+  for (const list of table.lists) out.push(...listFunctions(model, table, list, uses));
   // Escribir la fila.
   out.push(writeFunction(model, table, uses));
   return out;
 }
 
-function listFunctions(table, list, uses) {
+function listFunctions(model, table, list, uses) {
   const name = table.entity.name;
   const idType = table.entity.idField?.goType ?? 'uuid.UUID';
-  const array = idArray(table.entity);
-  if (array.helper) uses.add(array.helper);
   const decls = list.columns.flatMap((column) => column.read.decls);
   const declBlock = alignRows([['owner', idType], ['value', list.element], ...decls].map(([n, t]) => ({ indent: '\t\t\t\t', cells: [n, t] })));
   const after = list.columns.flatMap((column) => column.read.after);
   const needsErr = after.some((line) => /, err = /.test(line));
   const convert = after.length > 0 ? `${needsErr ? '\t\tvar err error\n' : ''}${indent(after.join('\n'), '\t\t')}\n` : '';
   const columns = list.columns.map((column) => column.column);
+  const query = batchQuery(model, `SELECT ${[list.joinColumn, ...columns].join(', ')} FROM ${list.table} WHERE ${list.joinColumn} `, ` ORDER BY ${list.joinColumn}, ${list.orderColumn}`, 'owners', idArray(table.entity), uses);
   const read = `// load${name}${list.method} lee la lista ${list.method} de varios ${name} en UNA consulta, en su orden.
 func load${name}${list.method}(ctx context.Context, q DBTX, owners []${idType}) (map[${idType}][]${list.element}, error) {
 	if len(owners) == 0 {
 		return nil, nil
 	}
-	rows, err := q.QueryContext(ctx, ${goString(`SELECT ${[list.joinColumn, ...columns].join(', ')} FROM ${list.table} WHERE ${list.joinColumn} = ANY($1::${array.cast}) ORDER BY ${list.joinColumn}, ${list.orderColumn}`)}, ${array.helper ? `${array.helper}(owners)` : 'owners'})
+${query.setup ? `\t${query.setup}\n` : ''}	rows, err := q.QueryContext(ctx, ${query.sql}, ${query.args})
 	if err != nil {
 		return nil, translate(err)
 	}
@@ -770,10 +785,10 @@ ${convert ? indent(convert.replace(/\n$/, ''), '\t') + '\n' : ''}			byOwner[owne
 	}
 	return byOwner, nil
 }`;
-  const placeholders = [list.joinColumn, list.orderColumn, ...columns].map((_, index) => `$${index + 1}`).join(', ');
+  const placeholders = [list.joinColumn, list.orderColumn, ...columns].map((_, index) => ph(model, index + 1)).join(', ');
   const write = `// write${name}${list.method} reescribe la lista ${list.method} de un ${name} entera, en su orden.
 func write${name}${list.method}(ctx context.Context, q DBTX, owner ${idType}, items []${list.element}) error {
-	if _, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${list.table} WHERE ${list.joinColumn} = $1`)}, owner); err != nil {
+	if _, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${list.table} WHERE ${list.joinColumn} = ${ph(model, 1)}`)}, owner); err != nil {
 		return err
 	}
 	for position, item := range items {
@@ -800,24 +815,24 @@ function writeFunction(model, table, uses) {
   if (table.audit.some((audit) => audit.kind === 'actor')) uses.add('auditActor');
   const versioned = Boolean(table.version) && !parentKey;
   const updatable = insertColumns.filter((column) => column !== table.idColumn && !['created_at', 'created_by'].includes(column));
-  const placeholders = (count, from = 1) => Array.from({ length: count }, (_, i) => `$${i + from}`).join(', ');
+  const placeholders = (count, from = 1) => Array.from({ length: count }, (_, i) => ph(model, i + from)).join(', ');
   const signature = `func write${name}(ctx context.Context, q DBTX, e *domain.${name}${parentKey ? `, parent ${table.parentIdType}` : ''}) error`;
   const prelude = [];
   if (table.audit.some((a) => a.kind === 'time')) prelude.push('\tnow := time.Now().UTC()');
   if (table.audit.some((a) => a.kind === 'actor')) prelude.push('\tactor := auditActor(ctx)');
+  const updateArgs = insertColumns.map((column, index) => ({ column, arg: args[index] })).filter(({ column }) => updatable.includes(column));
+  const idArg = args[insertColumns.indexOf(table.idColumn)];
   let statement;
   if (versioned) {
     const insertAll = [...insertColumns, table.version.column];
-    const setColumns = updatable.map((column, index) => `${column} = $${index + 1}`);
-    const updateArgs = insertColumns.map((column, index) => ({ column, arg: args[index] })).filter(({ column }) => updatable.includes(column));
-    const idArg = args[insertColumns.indexOf(table.idColumn)];
+    const setColumns = updatable.map((column, index) => `${column} = ${ph(model, index + 1)}`);
     statement = `	version := e.${table.version.method}()
 	if version == nil {
 		if _, err := q.ExecContext(ctx, ${goString(`INSERT INTO ${table.table} (${insertAll.join(', ')}) VALUES (${placeholders(insertAll.length)})`)}, ${[...args, '0'].join(', ')}); err != nil {
 			return err
 		}
 	} else {
-		result, err := q.ExecContext(ctx, ${goString(`UPDATE ${table.table} SET ${[...setColumns, `${table.version.column} = ${table.version.column} + 1`].join(', ')} WHERE ${table.idColumn} = $${updatable.length + 1} AND ${table.version.column} = $${updatable.length + 2}`)}, ${[...updateArgs.map((u) => u.arg), idArg, '*version'].join(', ')})
+		result, err := q.ExecContext(ctx, ${goString(`UPDATE ${table.table} SET ${[...setColumns, `${table.version.column} = ${table.version.column} + 1`].join(', ')} WHERE ${table.idColumn} = ${ph(model, updatable.length + 1)} AND ${table.version.column} = ${ph(model, updatable.length + 2)}`)}, ${[...updateArgs.map((u) => u.arg), idArg, '*version'].join(', ')})
 		if err != nil {
 			return err
 		}
@@ -827,6 +842,25 @@ function writeFunction(model, table, uses) {
 		}
 	}`;
     uses.add('errStaleVersion');
+  } else if (sqlDialect(model).mysql) {
+    // MySQL: ON DUPLICATE KEY salta con CUALQUIER índice único, y una clave natural repetida actualizaría la fila de
+    // otro agregado en vez de fallar. Se actualiza por el id y, si no ENCONTRÓ la fila (ClientFoundRows), se inserta.
+    const allColumns = [...insertColumns, ...(table.version ? [table.version.column] : [])];
+    const allArgs = [...args, ...(table.version ? [`nullable(e.${table.version.method}(), func(v int64) any { return v })`] : [])];
+    const setColumns = updatable.length > 0 ? updatable.map((column) => `${column} = ?`) : [`${table.idColumn} = ${table.idColumn}`];
+    statement = `	result, err := q.ExecContext(ctx, ${goString(`UPDATE ${table.table} SET ${setColumns.join(', ')} WHERE ${table.idColumn} = ?`)}, ${[...updateArgs.map((u) => u.arg), idArg].join(', ')})
+	if err != nil {
+		return err
+	}
+	found, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if found == 0 {
+		if _, err := q.ExecContext(ctx, ${goString(`INSERT INTO ${table.table} (${allColumns.join(', ')}) VALUES (${placeholders(allColumns.length)})`)}, ${allArgs.join(', ')}); err != nil {
+			return err
+		}
+	}`;
   } else {
     const conflict = updatable.length > 0 ? `DO UPDATE SET ${updatable.map((column) => `${column} = EXCLUDED.${column}`).join(', ')}` : 'DO NOTHING';
     const lockColumns = table.version ? [table.version.column] : [];
@@ -841,17 +875,36 @@ function writeFunction(model, table, uses) {
   for (const child of table.children) {
     const childTable = child.table;
     const array = childTable.selfArray;
-    if (array.helper) uses.add(array.helper);
     const childParent = childTable.columns.find((column) => column.parentKey).column;
+    const kept = `kept${child.method}`;
+    let prune;
+    if (sqlDialect(model).mysql) {
+      // Sin arrays: `NOT IN (?, …)` con un parámetro por id, y sin ninguno (`NOT IN ()` no es SQL) se borran todas.
+      uses.add('inList');
+      const del = `delete${child.method}`;
+      prune = `	${del} := ${goString(`DELETE FROM ${childTable.table} WHERE ${childParent} = ?`)}
+	${del}Args := []any{${idExpr}}
+	if len(${kept}) > 0 {
+		in, args := inList(${kept})
+		${del} += ${goString(` AND ${childTable.idColumn} NOT IN (`)} + in + ")"
+		${del}Args = append(${del}Args, args...)
+	}
+	if _, err := q.ExecContext(ctx, ${del}, ${del}Args...); err != nil {
+		return err
+	}`;
+    } else {
+      if (array.helper) uses.add(array.helper);
+      prune = `	if _, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${childTable.table} WHERE ${childParent} = $1 AND NOT (${childTable.idColumn} = ANY($2::${array.cast}))`)}, ${idExpr}, ${array.helper ? `${array.helper}(${kept})` : kept}); err != nil {
+		return err
+	}`;
+    }
     after.push(`	// Las ${child.entity.name} que ya no están se borran (con lo que cuelga de ellas); las demás se insertan o se actualizan.
 	${lower(child.method)} := e.${child.method}()
-	kept${child.method} := make([]${child.entity.idField?.goType ?? 'uuid.UUID'}, 0, len(${lower(child.method)}))
+	${kept} := make([]${child.entity.idField?.goType ?? 'uuid.UUID'}, 0, len(${lower(child.method)}))
 	for _, child := range ${lower(child.method)} {
-		kept${child.method} = append(kept${child.method}, child.${goExported(child.entity.idField?.name ?? 'id')}())
+		${kept} = append(${kept}, child.${goExported(child.entity.idField?.name ?? 'id')}())
 	}
-	if _, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${childTable.table} WHERE ${childParent} = $1 AND NOT (${childTable.idColumn} = ANY($2::${array.cast}))`)}, ${idExpr}, ${array.helper ? `${array.helper}(kept${child.method})` : `kept${child.method}`}); err != nil {
-		return err
-	}
+${prune}
 	for _, child := range ${lower(child.method)} {
 		if err := write${child.entity.name}(ctx, q, child, ${idExpr}); err != nil {
 			return err
@@ -890,7 +943,7 @@ func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.$
 		if err := write${name}(ctx, q, ${local}); err != nil {
 			return err
 		}
-		states, err := query${name}(ctx, q, ${goString(`WHERE ${root.idColumn} = $1`)}, ${local}.${id}())
+		states, err := query${name}(ctx, q, ${goString(`WHERE ${root.idColumn} = ${ph(model, 1)}`)}, ${local}.${id}())
 		if err != nil {
 			return err
 		}
@@ -926,7 +979,7 @@ function sortable(model, entity) {
 
 /** El mapa de orden de una raíz: lo usan su List y sus finders. */
 function sortableMap(model, entity) {
-  const columns = alignRows(sortable(model, entity).map(([property, column]) => ({ indent: '\t', cells: [`${goString(property)}:`, `${goString(q(column))},`] })));
+  const columns = alignRows(sortable(model, entity).map(([property, column]) => ({ indent: '\t', cells: [`${goString(property)}:`, `${goString(sq(model, column))},`] })));
   return `// ${lower(entity.name)}Sortable son las propiedades por las que se puede ordenar, con el nombre del contrato, y su columna.
 // Es una lista blanca: el ORDER BY nunca lleva un texto de la petición.
 var ${lower(entity.name)}Sortable = map[string]string{
@@ -951,7 +1004,7 @@ func (r *${type}) List(ctx context.Context, pageable domain.Pageable) (domain.Pa
 	if err := q.QueryRowContext(ctx, ${goString(`SELECT count(*) FROM ${root.table}`)}).Scan(&total); err != nil {
 		return domain.Page[*domain.${name}]{}, translate(err)
 	}
-	found, err := r.load(ctx, "ORDER BY "+order+" LIMIT $1 OFFSET $2", pageable.Size, pageable.Offset())
+	found, err := r.load(ctx, "ORDER BY "+order+" LIMIT ${ph(model, 1)} OFFSET ${ph(model, 2)}", pageable.Size, pageable.Offset())
 	if err != nil {
 		return domain.Page[*domain.${name}]{}, err
 	}
@@ -1002,6 +1055,17 @@ func orderBy(sort []domain.SortOrder, columns map[string]string, idProperty, idC
 	return strings.Join(terms, ", "), nil
 }`
   ];
+  if (uses.has('inList')) {
+    blocks.push(`// inList es la lista de parámetros de un IN de MySQL, que no tiene arrays: un «?» por valor, y los valores como
+// argumentos. Nunca está vacía: quien la pide comprueba antes que hay algún valor.
+func inList[T any](values []T) (string, []any) {
+	args := make([]any, len(values))
+	for i, value := range values {
+		args[i] = value
+	}
+	return strings.Repeat("?, ", len(values)-1) + "?", args
+}`);
+  }
   if (uses.has('uuidTexts')) {
     blocks.push(`// uuidTexts pasa unos uuid a texto para un array de PostgreSQL (\`= ANY($1::uuid[])\`).
 func uuidTexts(ids []uuid.UUID) []string {
@@ -1053,7 +1117,7 @@ func ${rankFunc(name)}(value domain.${name}) int32 {
 	return int32(slices.Index([]domain.${name}{${order.join(', ')}}, value))
 }`);
   }
-  blocks.push(...filtersBlocks(filtersUses(model, roots)));
+  blocks.push(...filtersBlocks(filtersUses(model, roots), sqlDialect(model)));
   return `\n${blocks.join('\n\n')}\n`;
 }
 

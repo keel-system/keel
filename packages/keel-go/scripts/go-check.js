@@ -14,7 +14,8 @@
 //   npm run go-check --workspace packages/keel-go
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo; --no-race se salta el paso del
-// contenedor (sin podman ni docker); --fixtures solo compila y prueba el Go de todas las fixtures; --jobs=<n>
+// contenedor (sin podman ni docker); --fixtures solo compila y prueba el Go de todas las fixtures (las relacionales,
+// también sobre MySQL); --jobs=<n>
 // cuántas fixtures a la vez (4; con poca memoria, 1 o 2). La caché del contenedor de -race son dos volúmenes
 // `keel-go-race-*`: `podman volume rm` los vacía.
 
@@ -25,7 +26,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { makeWorkspace, mountDesign, runCommand, GO_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
-import { ALLOWED_LICENSES, MODULES, TOOLS } from '../src/lib/go-stack.js';
+import { ALLOWED_LICENSES, LICENSE_EXCEPTIONS, MODULES, TOOLS } from '../src/lib/go-stack.js';
 import { GO_TOOLCHAIN } from '../src/lib/assets.js';
 import { WIRE_SABOTAGES, applySabotage } from '../test/helpers/wire-sabotages.js';
 import { DOMAIN_SABOTAGES, applySabotage as applyDomainSabotage } from '../test/helpers/domain-sabotages.js';
@@ -34,6 +35,7 @@ import { API_SABOTAGES, applySabotage as applyApiSabotage } from '../test/helper
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { usesRelational } from '@keel-system/keel-core/gen/features';
 import { planService } from '../src/scaffold/index.js';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 
@@ -158,14 +160,23 @@ if (!step('Go disponible', version.ok && (Number(major) > 1 || Number(minor) >= 
 const fixturesRoot = makeWorkspace('keel-go-fixtures-');
 const fixtureDirs = [];
 for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(path.join(FIXTURES_DIR, entry, 'service.keel.yaml')))) {
-  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
-  const dir = path.join(fixturesRoot, name);
-  for (const file of planService({ manifest, layers, workspace: fixturesRoot }).files) {
-    const out = path.join(dir, file.path);
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out, file.content);
+  // Cada fixture con persistencia relacional, también sobre MySQL (tramo 6d): otro paquete, otro driver y otro SQL. Si es
+  // relacional lo dice su stack por defecto: un MySQL pedido para un diseño documental no es un caso.
+  let relational = false;
+  for (const database of [null, 'mysql']) {
+    if (database && !relational) continue;
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+    const plan = planService({ manifest, layers, workspace: fixturesRoot, ...(database ? { stack: { database } } : {}) });
+    relational ||= usesRelational(plan.model);
+    const label = database ? `${name} (${database})` : name;
+    const dir = path.join(fixturesRoot, database ? `${name}-${database}` : name);
+    for (const file of plan.files) {
+      const out = path.join(dir, file.path);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, file.content);
+    }
+    fixtureDirs.push({ name: label, dir });
   }
-  fixtureDirs.push({ name, dir });
 }
 const fixtureProblems = await pool(fixtureDirs, jobs, async ({ dir }) => {
   const problems = [];
@@ -347,6 +358,27 @@ if (!step('licencias permisivas en el servicio y en las herramientas (go-license
 // Y se falsa: con una licencia que sí aparece fuera de la lista, el mismo check tiene que salir en rojo.
 const narrowed = go(projectDir, ['tool', 'go-licenses', 'check', '--ignore', GO_READY_DESIGN.name, '--allowed_licenses=MIT,Apache-2.0', './...', ...toolPackages]);
 step('el check de licencias sale en rojo sin BSD-3-Clause en la lista (falsado)', !narrowed.ok);
+
+// MySQL: el driver es MPL-2.0, admitido como EXCEPCIÓN de ese módulo (LICENSE_EXCEPTIONS de go-stack.js), nunca en la
+// lista. go-licenses lo perdona por nombre y todo lo demás —transitivos del driver incluidos— cumple la lista; y se
+// falsa: sin perdonarlo, el mismo check sale en rojo.
+const mysqlDir = path.join(makeWorkspace('keel-go-licenses-mysql-'), GO_READY_DESIGN.name);
+{
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, GO_READY_DESIGN.name));
+  for (const file of planService({ manifest, layers, workspace: mysqlDir, stack: { database: 'mysql' } }).files) {
+    const out = path.join(mysqlDir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+}
+const mysqlTidy = go(mysqlDir, ['mod', 'tidy']);
+if (step('MySQL: go mod tidy del diseño de referencia', mysqlTidy.ok, mysqlTidy.ok ? '' : mysqlTidy.output.slice(0, 1000))) {
+  const forgiven = Object.keys(LICENSE_EXCEPTIONS).flatMap((module) => ['--ignore', module]);
+  const mysqlLicenses = go(mysqlDir, ['tool', 'go-licenses', 'check', '--ignore', GO_READY_DESIGN.name, ...forgiven, allowed, './...']);
+  if (!step(`MySQL: licencias permisivas salvo la excepción escrita (${Object.keys(LICENSE_EXCEPTIONS).join(', ')})`, mysqlLicenses.ok)) console.error(mysqlLicenses.output);
+  const unforgiven = go(mysqlDir, ['tool', 'go-licenses', 'check', '--ignore', GO_READY_DESIGN.name, allowed, './...']);
+  step('MySQL: sin perdonar la excepción, el check sale en rojo con MPL-2.0 (falsado)', !unforgiven.ok && /MPL-2\.0/.test(unforgiven.output), unforgiven.ok ? 'salió verde' : '');
+}
 
 if (race) {
   const runtime = containerRuntime();

@@ -10,7 +10,8 @@
 // Lo único de aquí es el TIPO FÍSICO de cada columna, que en los otros tres lo pone el ORM: el que Hibernate da al
 // mismo tipo Java en PostgreSQL (un texto sin cota es `varchar(255)`, un decimal sin escala declarada
 // `numeric(38,2)`, un instante `timestamp(6) with time zone`, un enum su CONSTANTE en `varchar(255)`), para que la
-// base de un servicio keel-go sea la de su gemelo de keel-spring.
+// base de un servicio keel-go sea la de su gemelo de keel-spring. En MySQL, el de keel-dotnet (binary(16) para el
+// uuid, `datetime(6)`, `tinyint(1)`), y la unicidad condicionada como columna generada (ver `schemaTables`).
 //
 // Tres decisiones que no son obvias:
 //   · la unicidad de la clave natural y de un campo `unique` es una CONSTRAINT de tabla, como el @UniqueConstraint de
@@ -40,11 +41,12 @@ import {
   parentColumnOf,
   partialIndexSpecs,
   persistedMembers,
-  quoteIdentifierFor,
   uniqueFields
 } from '@keel-system/keel-core/gen';
+import { discriminatorColumn } from '@keel-system/keel-core/gen/relational';
 import { repositoryRoots, usesRelational } from '@keel-system/keel-core/gen/features';
 import { GENERATED_HEADER, alignRows } from '../lib/go-source.js';
+import { relationalEngine, sqlDialect } from '../lib/relational-engine.js';
 import { domainPath, layout, packageFile } from './render.js';
 
 export { usesRelational };
@@ -52,24 +54,22 @@ export { usesRelational };
 /** La migración baseline: la primera de goose, con el esquema entero del diseño. */
 export const BASELINE_FILE = '00001_baseline.sql';
 
-/** El motor de este tramo: PostgreSQL (MySQL llega en el 6d de PLAN-KEEL-GO.md, y lo rechaza la frontera). */
-const DIALECT = 'postgresql';
-
 export function generate(model) {
   const files = [];
   if (repositoryRoots(model).length > 0) files.push(pageableFile(model));
   if (!usesRelational(model)) return files;
-  const { postgres } = layout(model);
+  const { store } = layout(model);
+  const { label } = sqlDialect(model);
   files.push(
     {
-      path: `${postgres.dir}/doc.go`,
-      content: packageFile(model, postgres, {
-        doc: 'Package postgres es el adaptador de PostgreSQL del servicio: el esquema (las migraciones de goose, embebidas),\nlos repositorios, la transacción del caso de uso y la traducción de los errores del motor. Implementa los\npuertos del dominio y el application.Transactor.',
+      path: `${store.dir}/doc.go`,
+      content: packageFile(model, store, {
+        doc: `Package ${store.name} es el adaptador de ${label} del servicio: el esquema (las migraciones de goose, embebidas),\nlos repositorios, la transacción del caso de uso y la traducción de los errores del motor. Implementa los\npuertos del dominio y el application.Transactor.`,
         body: ''
       })
     },
-    { path: `${postgres.dir}/migrations/${BASELINE_FILE}`, content: baselineSql(model) },
-    { path: `${postgres.dir}/migrations.go`, content: migrationsGo(model) }
+    { path: `${store.dir}/migrations/${BASELINE_FILE}`, content: baselineSql(model) },
+    { path: `${store.dir}/migrations.go`, content: migrationsGo(model) }
   );
   return files;
 }
@@ -155,7 +155,7 @@ ${constants.join('\n')}
 // ─── Las migraciones embebidas ──────────────────────────────────────────────────────────────────
 
 function migrationsGo(model) {
-  const { postgres } = layout(model);
+  const { store } = layout(model);
   const body = `
 // Migrations son las migraciones de goose del esquema, embebidas en el binario: el servicio no depende del directorio
 // de trabajo para crear su base. La primera (${BASELINE_FILE}) la escribe build con el esquema entero del diseño.
@@ -163,44 +163,49 @@ function migrationsGo(model) {
 //go:embed migrations/*.sql
 var Migrations embed.FS
 `;
-  return packageFile(model, postgres, { imports: ['embed'], body });
+  return packageFile(model, store, { imports: ['embed'], body });
 }
 
 // ─── El DDL ──────────────────────────────────────────────────────────────────────────────────────
 
-const quote = (name) => quoteIdentifierFor(DIALECT, name);
-
 /**
- * El tipo físico de PostgreSQL de una columna (`columnSpec` de relational.js): el que Hibernate da al mismo tipo Java.
- * El enum va por el NOMBRE de su constante; el `json` embebido, como el texto que llegó.
+ * El tipo físico de una columna (`columnSpec` de relational.js) en cada motor. En PostgreSQL, el que Hibernate da al
+ * mismo tipo Java; en MySQL, el de keel-dotnet sobre el mismo motor (Hibernate escribe `bit` para un booleano, y
+ * database/sql no lo lee como bool: `tinyint(1)`, el BOOLEAN de MySQL, sí). El enum va por el NOMBRE de su constante;
+ * el `json` embebido, como el texto que llegó. El uuid de MySQL es binary(16) con los bytes del texto.
  */
-export function physicalType(spec) {
+export function physicalType(spec, engine = 'postgresql') {
+  const mysql = engine === 'mysql';
   if (spec.enum) return 'varchar(255)';
-  if (spec.long) return 'text';
+  if (spec.long) return mysql ? 'longtext' : 'text';
   switch (spec.base) {
     case 'uuid':
-      return 'uuid';
+      return mysql ? 'binary(16)' : 'uuid';
     case 'int':
-      return 'integer';
+      return mysql ? 'int' : 'integer';
     case 'long':
       return 'bigint';
     case 'boolean':
-      return 'boolean';
+      return mysql ? 'tinyint(1)' : 'boolean';
     case 'decimal':
-      return `numeric(${spec.scale != null ? DECIMAL_PRECISION : 38},${spec.scale ?? 2})`;
+      return `${mysql ? 'decimal' : 'numeric'}(${spec.scale != null ? DECIMAL_PRECISION : 38},${spec.scale ?? 2})`;
     case 'date':
       return 'date';
     case 'timestamp':
-      return 'timestamp(6) with time zone';
+      return mysql ? 'datetime(6)' : 'timestamp(6) with time zone';
     default:
       return `varchar(${spec.length ?? 255})`;
   }
 }
 
-/** Una línea de columna del CREATE TABLE. */
-function columnLine(spec) {
-  const collation = spec.collation ? ` COLLATE "${spec.collation}"` : '';
-  return { name: quote(spec.name), type: `${physicalType(spec)}${collation}`, rest: spec.nullable ? '' : 'NOT NULL' };
+/**
+ * Una línea de columna del CREATE TABLE. La columna GENERADA (el discriminador de un índice condicionado en MySQL)
+ * lleva su expresión en vez de tipo y nulabilidad: vale 1 dentro de la condición y NULL fuera.
+ */
+function columnLine(spec, d) {
+  if (spec.generatedAs) return { name: d.quote(spec.name), type: `tinyint GENERATED ALWAYS AS (${spec.generatedAs}) STORED`, rest: '' };
+  const collation = spec.collation ? (d.mysql ? ` COLLATE ${spec.collation}` : ` COLLATE "${spec.collation}"`) : '';
+  return { name: d.quote(spec.name), type: `${physicalType(spec, d.engine)}${collation}`, rest: spec.nullable ? '' : 'NOT NULL' };
 }
 
 /** La columna del id de una entidad, con otro nombre: la de una FK que apunta a ella. */
@@ -220,6 +225,7 @@ function auditColumns(entity) {
 
 /** Las tablas del esquema, como datos: lo que escribe el SQL y lo que relee la prueba de su forma. */
 export function schemaTables(model) {
+  const engine = relationalEngine(model);
   const entities = model.entities.filter((entity) => entity.persisted);
   const tables = [];
   const foreignKeys = [];
@@ -310,8 +316,18 @@ export function schemaTables(model) {
       if (probe.length > 0) continue;
       indexes.push({ name: indexName(entity, index), table: entity.tableName, columns: indexColumns, unique: Boolean(index.unique) });
     }
-    for (const spec of partialIndexSpecs(model, DIALECT).filter((candidate) => candidate.entity === entity.name)) {
-      indexes.push({ name: spec.name, table: entity.tableName, columns: spec.fields.flatMap((name) => columnsFor(model, entity, members, name)), unique: true, predicate: spec.predicate });
+    // MySQL no tiene índices parciales: el predicado va en una columna GENERADA `<índice>_flag` (1 dentro de la
+    // condición, NULL fuera) al final del índice único, que no restringe las filas con NULL. Es la forma de keel-spring
+    // y keel-dotnet sobre el mismo motor, con el mismo nombre de columna (discriminatorColumn de keel-core).
+    for (const spec of partialIndexSpecs(model, engine).filter((candidate) => candidate.entity === entity.name)) {
+      const indexColumns = spec.fields.flatMap((name) => columnsFor(model, entity, members, name));
+      if (engine === 'mysql') {
+        const flag = discriminatorColumn(spec);
+        columns.push({ name: flag, generatedAs: `CASE WHEN ${spec.predicate} THEN 1 END` });
+        indexes.push({ name: spec.name, table: entity.tableName, columns: [...indexColumns, flag], unique: true });
+      } else {
+        indexes.push({ name: spec.name, table: entity.tableName, columns: indexColumns, unique: true, predicate: spec.predicate });
+      }
     }
     for (const column of foreignKeyIndexColumns(model, entity, members)) {
       indexes.push({ name: foreignKeyIndexName(entity.tableName, column), table: entity.tableName, columns: [column], unique: false });
@@ -365,48 +381,59 @@ function elementTableSpec(model, entity, member, foreignKeys, indexes) {
   };
 }
 
-function createTable(table) {
+function createTable(table, d) {
   const rows = table.columns.map((spec) => {
-    const line = columnLine(spec);
+    const line = columnLine(spec, d);
     return [line.name, line.type, line.rest];
   });
   // Alineado a mano: el SQL no pasa por gofmt, pero se lee y se revisa en un diff.
   const widths = [0, 1].map((col) => Math.max(...rows.map((row) => row[col].length)));
   const lines = rows.map((row) => `    ${row[0].padEnd(widths[0])} ${row[2] ? `${row[1].padEnd(widths[1])} ${row[2]}` : row[1]}`.trimEnd());
-  lines.push(`    CONSTRAINT ${table.primaryKey.name} PRIMARY KEY (${table.primaryKey.columns.map(quote).join(', ')})`);
-  for (const constraint of table.constraints) lines.push(`    CONSTRAINT ${constraint.name} UNIQUE (${constraint.columns.map(quote).join(', ')})`);
+  // En MySQL la clave primaria se llama siempre PRIMARY: el nombre se escribe igual, y el motor lo ignora.
+  lines.push(`    CONSTRAINT ${table.primaryKey.name} PRIMARY KEY (${table.primaryKey.columns.map(d.quote).join(', ')})`);
+  for (const constraint of table.constraints) lines.push(`    CONSTRAINT ${constraint.name} UNIQUE (${constraint.columns.map(d.quote).join(', ')})`);
   const notes = table.notes.map((note) => `-- ${note}\n`).join('');
-  return `${notes}CREATE TABLE ${quote(table.name)} (\n${lines.join(',\n')}\n);`;
+  return `${notes}CREATE TABLE ${d.quote(table.name)} (\n${lines.join(',\n')}\n);`;
 }
 
-function createIndex(index) {
+function createIndex(index, d) {
   const where = index.predicate ? ` WHERE ${index.predicate}` : '';
-  return `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${index.name} ON ${quote(index.table)} (${index.columns.map(quote).join(', ')})${where};`;
+  return `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${index.name} ON ${d.quote(index.table)} (${index.columns.map(d.quote).join(', ')})${where};`;
 }
 
-function addForeignKey(fk) {
+function addForeignKey(fk, d) {
   const onDelete = fk.cascade ? ' ON DELETE CASCADE' : '';
-  return `ALTER TABLE ${quote(fk.table)} ADD CONSTRAINT ${fk.name}\n    FOREIGN KEY (${quote(fk.column)}) REFERENCES ${quote(fk.refTable)} (${quote(fk.refColumn)})${onDelete};`;
+  return `ALTER TABLE ${d.quote(fk.table)} ADD CONSTRAINT ${fk.name}\n    FOREIGN KEY (${d.quote(fk.column)}) REFERENCES ${d.quote(fk.refTable)} (${d.quote(fk.refColumn)})${onDelete};`;
+}
+
+/**
+ * La vuelta atrás: las tablas en orden inverso. En MySQL una FK de otro agregado impide borrar la tabla a la que
+ * apunta, y DROP no tiene CASCADE: se apagan las comprobaciones durante el Down, en la misma conexión (goose lo ejecuta
+ * en una transacción).
+ */
+function downSql(tables, d) {
+  const drops = [...tables].reverse().map((table) => `DROP TABLE IF EXISTS ${d.quote(table.name)}${d.mysql ? '' : ' CASCADE'};`);
+  return d.mysql ? ['SET FOREIGN_KEY_CHECKS = 0;', ...drops, 'SET FOREIGN_KEY_CHECKS = 1;'] : drops;
 }
 
 /** La migración baseline de goose: el esquema entero, y su vuelta atrás. */
 export function baselineSql(model) {
+  const d = sqlDialect(model);
   const { tables, foreignKeys, indexes } = schemaTables(model);
   const up = [
-    ...tables.map(createTable),
-    ...indexes.map(createIndex),
-    ...[...foreignKeys].sort((a, b) => a.name.localeCompare(b.name)).map(addForeignKey)
+    ...tables.map((table) => createTable(table, d)),
+    ...indexes.map((index) => createIndex(index, d)),
+    ...[...foreignKeys].sort((a, b) => a.name.localeCompare(b.name)).map((fk) => addForeignKey(fk, d))
   ];
-  const down = [...tables].reverse().map((table) => `DROP TABLE IF EXISTS ${quote(table.name)} CASCADE;`);
   return `-- ${GENERATED_HEADER.replace(/^\/\/ /, '')}
 --
--- El esquema de ${model.service.name} en PostgreSQL: tablas, constraints, índices y FK con los nombres de
+-- El esquema de ${model.service.name} en ${d.label}: tablas, constraints, índices y FK con los nombres de
 -- keel-core/gen/relational.js, los mismos que los otros tres generadores. Lo aplica goose al arrancar.
 
 -- +goose Up
 ${up.join('\n\n')}
 
 -- +goose Down
-${down.join('\n')}
+${downSql(tables, d).join('\n')}
 `;
 }

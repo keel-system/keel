@@ -50,7 +50,7 @@ function mainGo(model) {
       'internal/platform/correlation',
       'internal/platform/health',
       'database/sql',
-      'internal/infrastructure/postgres'
+      layout(model).store.dir
     ],
     body: `
 func main() {
@@ -122,15 +122,16 @@ function apiWiring(model) {
 	useCases := ${newUseCasesCall(model, 'logger')}
 ${serve}`;
   }
-  const repositories = repositoryRoots(model).map((root) => ({ indent: '\t\t', cells: [`${goExported(repositoryParam(root))}:`, `postgres.New${root.name}Repository(transactions),`] }));
+  const { store } = layout(model);
+  const repositories = repositoryRoots(model).map((root) => ({ indent: '\t\t', cells: [`${goExported(repositoryParam(root))}:`, `${store.name}.New${root.name}Repository(transactions),`] }));
   return `${logger}
-	database, err := postgres.SettingsFrom(cfg)
+	database, err := ${store.name}.SettingsFrom(cfg)
 	if err != nil {
 		return fmt.Errorf("configuración de la base de datos: %w", err)
 	}
 	var db *sql.DB
 	if database.Enabled {
-		if db, err = postgres.Open(ctx, database); err != nil {
+		if db, err = ${store.name}.Open(ctx, database); err != nil {
 			return err
 		}
 		// Lo último en cerrarse: después del apagado del servidor, que ya no la usa.
@@ -139,11 +140,11 @@ ${serve}`;
 				logger.ErrorContext(ctx, "cerrar la base de datos", "error", err)
 			}
 		}()
-		if err := postgres.Migrate(ctx, db, logger); err != nil {
+		if err := ${store.name}.Migrate(ctx, db, logger); err != nil {
 			return err
 		}
 	}
-	transactions := postgres.NewTransactions(db, database.TransactionTimeout, logger)
+	transactions := ${store.name}.NewTransactions(db, database.TransactionTimeout, logger)
 
 	probes := &health.Probes{}
 	useCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}

@@ -1,6 +1,6 @@
 // Las SONDAS de `db-check`: una prueba Go por sujeto, escrita a partir del modelo, que EJECUTA los adaptadores que emite
-// keel-go contra un PostgreSQL real. Es Go de verdad compilado contra lo emitido (prueba INTERNA del paquete
-// `internal/infrastructure/postgres`, así que ve también `translate`, `openTx` y los rangos de enum), no una plantilla
+// keel-go contra un PostgreSQL o un MySQL real. Es Go de verdad compilado contra lo emitido (prueba INTERNA del paquete
+// `internal/infrastructure/<motor>`, así que ve también `translate`, `openTx` y los rangos de enum), no una plantilla
 // del proyecto generado: el agente nunca la ve.
 //
 // El arranque es el del servicio: `Open` con unas `Settings` y `Migrate` con las migraciones embebidas (goose al
@@ -12,7 +12,7 @@
 //   versión       guardar dos veces la MISMA lectura: la segunda es el 409 de concurrencia del contrato;
 //   unicidad      otro agregado con la misma clave natural (también en MAYÚSCULAS si la clave se pliega) o en el mismo
 //                 estado de un índice condicionado sale con el code y el mensaje de keel-core/gen/constraint-errors.js;
-//   cota          un texto más largo que su columna lo rechaza el MOTOR (22001);
+//   cota          un texto más largo que su columna lo rechaza el MOTOR (SQLSTATE 22001, en los dos);
 //   fusión        guardar otra vez el agregado con una hija quitada, otra cambiada y una nueva, y sus listas en otro
 //                 orden: lo releído es exactamente lo guardado;
 //   lecturas      la página y el borrado, la lectura por lote por id, los finders por clave (también plegados), el
@@ -33,12 +33,15 @@ import { persistedMembers } from '@keel-system/keel-core/gen';
 import { sampleFor } from '../../../keel-nest/scripts/lib/samples.js';
 import { enumConstant, goExported } from '../../src/lib/go-projection.js';
 import { goFile, goString } from '../../src/lib/go-source.js';
+import { STORE_PACKAGES, sqlDialect, storeDir } from '../../src/lib/relational-engine.js';
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { keyFinders, naturalKeyBatchFinder } from '../../src/scaffold/repositories.js';
 import { finderProbes } from './finder-probes.js';
 
 /** La ruta de la sonda dentro del proyecto del sujeto. */
-export const PROBE_FILE = 'internal/infrastructure/postgres/db_probe_test.go';
+export function probePath(model) {
+  return `${storeDir(model)}/db_probe_test.go`;
+}
 
 // Los números de muestra que no usa ninguna prueba: los agregados que se guardan para que una FK apunte a algo real.
 const ENSURE_BASE = 500;
@@ -64,6 +67,7 @@ const IMPORTS = [
   'unicode/utf8',
   'github.com/google/uuid',
   'github.com/jackc/pgx/v5/pgconn',
+  { path: 'github.com/go-sql-driver/mysql', name: 'mysqldriver' },
   'internal/application',
   'internal/domain',
   'internal/platform/wire'
@@ -74,7 +78,8 @@ export function probeFile(model) {
   const ctx = { patterns: new Map(), unsampled: [] };
   const entities = model.entities.filter((entity) => entity.persisted !== false);
   const roots = repositoryRoots(model);
-  const parts = [PRELUDE];
+  const d = sqlDialect(model);
+  const parts = [prelude(d)];
   // Las muestras de toda entidad que se guarda (raíces e hijas, transitivas).
   const sampled = new Set();
   const visit = (entity) => {
@@ -92,11 +97,33 @@ export function probeFile(model) {
   if (roots.length > 0) parts.push(transactionProbes(model, roots[0]));
   parts.push(patternTables(ctx));
   if (entities.length === 0) return null;
-  const content = goFile({ pkg: 'postgres', imports: IMPORTS, body: `\n${parts.filter(Boolean).join('\n\n')}\n`, module: model.service.goModule, generated: false });
-  return { path: PROBE_FILE, content, unsampled: ctx.unsampled };
+  const content = goFile({ pkg: STORE_PACKAGES[d.engine], imports: IMPORTS, body: `\n${parts.filter(Boolean).join('\n\n')}\n`, module: model.service.goModule, generated: false });
+  return { path: probePath(model), content, unsampled: ctx.unsampled };
 }
 
-const PRELUDE = `// La sonda de db-check (scripts/lib/db-probes.js de keel-go): ejecuta los adaptadores emitidos contra un PostgreSQL
+/** El código del motor en un error: el SQLSTATE de PostgreSQL, o el de MySQL (el número lo lleva el mensaje). */
+function engineCodeFunction(d) {
+  if (d.mysql) {
+    return `// engineCode es el SQLSTATE del motor en err, o "".
+func engineCode(err error) string {
+	var engine *mysqldriver.MySQLError
+	if errors.As(err, &engine) {
+		return string(engine.SQLState[:])
+	}
+	return ""
+}`;
+  }
+  return `// engineCode es el SQLSTATE del motor en err, o "".
+func engineCode(err error) string {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		return pg.Code
+	}
+	return ""
+}`;
+}
+
+const prelude = (d) => `// La sonda de db-check (scripts/lib/db-probes.js de keel-go): ejecuta los adaptadores emitidos contra un ${d.label}
 // real. No es parte del proyecto generado.
 
 var (
@@ -109,10 +136,9 @@ func TestMain(m *testing.M) {
 	os.Exit(runProbes(m))
 }
 
-// runProbes abre la base como el servicio (Open + Migrate, con goose) y ejecuta las sondas.
-func runProbes(m *testing.M) int {
-	ctx := context.Background()
-	settings := Settings{
+// probeSettings es la conexión de las sondas, la que el servicio leería de su db.yaml.
+func probeSettings() Settings {
+	return Settings{
 		Enabled:            true,
 		URL:                os.Getenv("DB_CHECK_URL"),
 		Username:           os.Getenv("DB_CHECK_USER"),
@@ -123,6 +149,12 @@ func runProbes(m *testing.M) int {
 		MaxLifetime:        time.Minute,
 		TransactionTimeout: 5 * time.Second,
 	}
+}
+
+// runProbes abre la base como el servicio (Open + Migrate, con goose) y ejecuta las sondas.
+func runProbes(m *testing.M) int {
+	ctx := context.Background()
+	settings := probeSettings()
 	db, err := Open(ctx, settings)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "abrir la base:", err)
@@ -226,14 +258,7 @@ func domainError(t *testing.T, err error) *domain.Error {
 	return de
 }
 
-// engineCode es el SQLSTATE del motor en err, o "".
-func engineCode(err error) string {
-	var pg *pgconn.PgError
-	if errors.As(err, &pg) {
-		return pg.Code
-	}
-	return ""
-}`;
+${engineCodeFunction(d)}`;
 
 // ─── Las muestras ────────────────────────────────────────────────────────────────────────────────
 
@@ -511,7 +536,8 @@ ${expect('state', 'read')}	if want, got := dump${name}(domain.Rehydrate${name}(s
 		t.Fatalf("Save: %v", err)
 	}
 	var stored string
-	if err := probeDB.QueryRowContext(ctx, ${goString(`SELECT ${stored.column} FROM ${root.tableName} WHERE ${idColumn} = $1`)}, state.${id}).Scan(&stored); err != nil {
+	// Por la conexión de los repositorios: en MySQL escribe el uuid como sus 16 bytes.
+	if err := must(probeTx.conn(ctx)).QueryRowContext(ctx, ${goString(`SELECT ${stored.column} FROM ${root.tableName} WHERE ${idColumn} = ${sqlDialect(model).param(1)}`)}, state.${id}).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
 	if stored != ${goString(stored.constant)} {
@@ -908,7 +934,8 @@ function transactionProbes(model, root) {
   const name = root.name;
   const id = goExported(root.idField?.name ?? 'id');
   const idColumn = root.idField?.columns?.name ?? 'id';
-  const touch = `UPDATE ${root.tableName} SET ${idColumn} = ${idColumn} WHERE ${idColumn} = $1`;
+  const d = sqlDialect(model);
+  const touch = `UPDATE ${root.tableName} SET ${idColumn} = ${idColumn} WHERE ${idColumn} = ${d.param(1)}`;
   return `func TestTransaction_DeadlockIsRetried(t *testing.T) {
 	ctx := t.Context()
 	repo := New${name}Repository(probeTx)
@@ -926,7 +953,7 @@ function transactionProbes(model, root) {
 		var once sync.Once
 		return func(ctx context.Context) error {
 			attempts.Add(1)
-			q := openTx(ctx)
+			q := must(probeTx.conn(ctx))
 			if _, err := q.ExecContext(ctx, ${goString(touch)}, first); err != nil {
 				return err
 			}
@@ -956,7 +983,7 @@ func TestTransaction_ExhaustedConflictIsConcurrencyError(t *testing.T) {
 	var attempts atomic.Int32
 	err := probeTx.Within(t.Context(), application.KindCommand, func(context.Context) error {
 		attempts.Add(1)
-		return &pgconn.PgError{Code: "40001"}
+		return ${d.mysql ? '&mysqldriver.MySQLError{Number: 1213}' : '&pgconn.PgError{Code: "40001"}'}
 	})
 	de := domainError(t, err)
 	if de.Code() != ${goString(concurrencyCode(model))} || de.Status() != 409 {
@@ -967,7 +994,11 @@ func TestTransaction_ExhaustedConflictIsConcurrencyError(t *testing.T) {
 	}
 }
 
-func TestTransaction_StatementOverTimeoutIs503(t *testing.T) {
+${d.mysql ? mysqlTimeoutProbe(name, id, touch) : POSTGRES_TIMEOUT_PROBE}`;
+}
+
+// El tope en PostgreSQL: una sentencia que pasa del statement_timeout de la transacción.
+const POSTGRES_TIMEOUT_PROBE = `func TestTransaction_StatementOverTimeoutIs503(t *testing.T) {
 	short := NewTransactions(probeDB, 300*time.Millisecond, slog.New(slog.DiscardHandler))
 	err := short.Within(t.Context(), application.KindCommand, func(ctx context.Context) error {
 		_, err := openTx(ctx).ExecContext(ctx, "SELECT pg_sleep(2)")
@@ -976,6 +1007,58 @@ func TestTransaction_StatementOverTimeoutIs503(t *testing.T) {
 	de := domainError(t, err)
 	if de.Code() != ${goString(FRAMEWORK_ERRORS.transactionTimeout.code)} || de.Status() != 503 {
 		t.Errorf("la sentencia cortada sale %q/%d, no ${FRAMEWORK_ERRORS.transactionTimeout.code}/503", de.Code(), de.Status())
+	}
+}`;
+
+/**
+ * El tope en MySQL: la espera de un bloqueo que pasa del innodb_lock_wait_timeout de la sesión (1205). No con SLEEP():
+ * cortado por max_execution_time devuelve 1 y la sentencia NO falla. El pool corto es otro (el tope va en la sesión de
+ * cada conexión, al abrirla), y la fila la retiene una transacción del pool de las sondas hasta que la otra se rinde.
+ */
+function mysqlTimeoutProbe(name, id, touch) {
+  return `func TestTransaction_StatementOverTimeoutIs503(t *testing.T) {
+	ctx := t.Context()
+	held := sample${name}(t, 92)
+	if _, err := New${name}Repository(probeTx).Save(ctx, domain.Rehydrate${name}(held)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	settings := probeSettings()
+	settings.TransactionTimeout = time.Second
+	db, err := Open(ctx, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	short := NewTransactions(db, settings.TransactionTimeout, slog.New(slog.DiscardHandler))
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	holder := make(chan error, 1)
+	go func() {
+		holder <- probeTx.Within(ctx, application.KindCommand, func(ctx context.Context) error {
+			if _, err := must(probeTx.conn(ctx)).ExecContext(ctx, ${goString(touch)}, held.${id}); err != nil {
+				return err
+			}
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-locked:
+	case err := <-holder:
+		t.Fatalf("la transacción que retiene la fila falló: %v", err)
+	}
+	err = short.Within(ctx, application.KindCommand, func(ctx context.Context) error {
+		_, err := must(short.conn(ctx)).ExecContext(ctx, ${goString(touch)}, held.${id})
+		return err
+	})
+	close(release)
+	if err := <-holder; err != nil {
+		t.Errorf("la transacción que retiene la fila falló: %v", err)
+	}
+	de := domainError(t, err)
+	if de.Code() != ${goString(FRAMEWORK_ERRORS.transactionTimeout.code)} || de.Status() != 503 {
+		t.Errorf("la espera cortada sale %q/%d, no ${FRAMEWORK_ERRORS.transactionTimeout.code}/503", de.Code(), de.Status())
 	}
 }`;
 }

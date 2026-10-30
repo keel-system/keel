@@ -22,9 +22,10 @@ test('la persistencia relacional se acepta sin avisos; la documental se rechaza 
   assert.match(document.errors[0], /persistencia documental .*incremento 12/);
 });
 
-test('solo PostgreSQL: los demás motores se rechazan en el build con su tramo', () => {
+test('PostgreSQL y MySQL: los demás motores se rechazan en el build con su motivo', () => {
   assert.deepEqual(checkSupportedStack({ database: 'postgresql' }).errors, []);
-  assert.match(checkSupportedStack({ database: 'mysql' }).errors[0], /tramo 6d/);
+  assert.deepEqual(checkSupportedStack({ database: 'mysql' }).errors, []);
+  assert.match(checkSupportedStack({ database: 'mariadb' }).errors[0], /postgresql, mysql/);
   assert.match(checkSupportedStack({ database: 'mongodb' }).errors[0], /incremento 12/);
 });
 
