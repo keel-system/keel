@@ -48,6 +48,8 @@ import { repositoryRoots, usesRelational } from '@keel-system/keel-core/gen/feat
 import { GENERATED_HEADER, alignRows } from '../lib/go-source.js';
 import { relationalEngine, sqlDialect } from '../lib/relational-engine.js';
 import { domainPath, layout, packageFile } from './render.js';
+import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
+import { usesRequestIdempotency } from './request-idempotency.js';
 
 export { usesRelational };
 
@@ -342,6 +344,19 @@ export function schemaTables(model) {
     return index * 2 + (table.owner ? 1 : 0);
   }
   for (const fk of crossAggregateForeignKeys(model)) foreignKeys.push({ ...fk, cascade: false });
+  // El registro de idempotencia de petición (request-idempotency.js): la tabla neutral de keel-core, la misma de los
+  // otros tres generadores, con su clave primaria compuesta y el índice de la purga.
+  if (usesRequestIdempotency(model)) {
+    const record = IDEMPOTENCY_RECORD;
+    tables.push({
+      name: record.table,
+      columns: record.columns.map((column) => ({ name: column.name, base: column.base, length: column.length, nullable: column.nullable })),
+      primaryKey: { name: `${record.table}_pkey`, columns: record.columns.filter((column) => column.primary).map((column) => column.name) },
+      constraints: [],
+      notes: []
+    });
+    for (const index of record.indexes) indexes.push({ name: index.name, table: record.table, columns: index.columns, unique: false });
+  }
   return { tables, foreignKeys, indexes };
 }
 

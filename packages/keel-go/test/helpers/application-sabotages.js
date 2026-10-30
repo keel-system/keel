@@ -39,6 +39,33 @@ export const APPLICATION_SABOTAGES = [
     find: 'logger.InfoContext(ctx, "caso de uso: rechazado"',
     replace: 'logger.ErrorContext(ctx, "caso de uso: rechazado"',
     fails: 'TestObserveRegistraElRechazoDelDominioConSuCode'
+  },
+  // La firma del registro de idempotencia (request-idempotency.js): las tres garantías de su forma canónica.
+  {
+    id: 'signature-scale',
+    what: 'la firma conserva los ceros finales de un importe: 1.50 y 1.5 serían dos peticiones distintas',
+    file: `${APPLICATION}/signer.go`,
+    find: '\t\ttext = strings.TrimRight(strings.TrimRight(text, "0"), ".")\n',
+    replace: '\t\ttext += ""\n',
+    fails: 'TestLaEscalaNoEsContenidoYElOrdenDeUnaListaSi'
+  },
+  {
+    id: 'signature-length',
+    what: 'la firma escribe los valores sin su longitud delante: un contenido puede imitar un separador',
+    file: `${APPLICATION}/signer.go`,
+    find: '\ts.text.WriteString(strconv.Itoa(len(value)))\n\ts.text.WriteByte(\':\')\n',
+    replace: '\t_ = strconv.Itoa\n',
+    fails: 'TestLaFormaCanonicaNoDejaQueUnContenidoImiteUnSeparadorNiANull',
+    // Lo compuesto entra por su JSON con la longitud delante: cae con ella.
+    alsoFails: ['TestUnInstanteFirmaIgualEnCualquierZonaYLoCompuestoPorSuJSON']
+  },
+  {
+    id: 'idempotency-code',
+    what: 'la carrera sale con el code de la clave reutilizada: el cliente no distingue «en curso» de «otro contenido»',
+    file: 'internal/domain/idempotency.go',
+    find: 'return Errorf(ErrIdempotencyKeyInProgress, "Otra petición',
+    replace: 'return Errorf(ErrIdempotencyKeyReused, "Otra petición',
+    fails: 'TestCadaConflictoSaleConElCodeDeSuOperacion'
   }
 ];
 

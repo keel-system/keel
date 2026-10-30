@@ -32,7 +32,7 @@ const MYSQL = { database: 'mysql' };
 const STORE = 'internal/infrastructure/mysql';
 
 /** Las tablas de mecanismos de keel-spring que keel-go todavía no genera (las mismas que schema-parity.test.js). */
-const MECHANISM_TABLES = ['idempotency_record', 'reconciliation_claim', 'outbox_event', 'processed_event'];
+const MECHANISM_TABLES = ['reconciliation_claim', 'outbox_event', 'processed_event'];
 
 const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
 const relational = fixtures

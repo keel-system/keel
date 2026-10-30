@@ -18,6 +18,7 @@ import { usesRelational } from '@keel-system/keel-core/gen/features';
 import { goExported, errorKindFor } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { docComment, domainPath, layout, packageFile } from './render.js';
+import { idempotencySentinels } from './request-idempotency.js';
 
 /** El centinela de un `code`: `SKU_ALREADY_EXISTS` → `ErrSKUAlreadyExists`. */
 export function sentinelOf(code) {
@@ -88,6 +89,8 @@ export function persistenceSentinels(model) {
     seen.add(name);
     list.push({ name, doc: `la unicidad de ${entry.entity}.${entry.fields.join(', ')}, que el diseño no nombra: su code canónico.`, code: entry.code, http: 409 });
   }
+  // Los dos conflictos del registro de idempotencia (request-idempotency.js), con su code canónico.
+  for (const entry of idempotencySentinels(model)) if (!seen.has(entry.name)) list.push(entry);
   return list;
 }
 

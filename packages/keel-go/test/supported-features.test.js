@@ -54,6 +54,15 @@ test('una operación con idempotency, schedule o cache avisa nombrándola: sale 
   assert.ok(!warnings.some((w) => w.includes('plain')));
 });
 
+test('con persistencia relacional, la idempotencia ya sale: solo avisa de la purga y del gate del incremento 10', () => {
+  const layers = layersWith('domain', 'api', 'persistence');
+  layers['use-cases'] = { operations: { pay: { idempotency: {} } } };
+  const { warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api', 'persistence'), layers);
+  const warning = warnings.find((w) => w.includes('idempotency'));
+  assert.match(warning, /^use-cases: pay declara idempotency; keel-go genera el registro, la firma del mensaje y la cabecera/);
+  assert.match(warning, /purga .* check-idempotency\.sh .*incremento 10/);
+});
+
 test('la telemetría se rechaza en vez de estamparse sin efecto', () => {
   assert.deepEqual(checkSupportedStack({ telemetry: 'none' }).errors, []);
   assert.match(checkSupportedStack({ telemetry: 'otel' }).errors[0], /incremento 14/);

@@ -18,6 +18,7 @@ import { alignRows } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
 import { repositoryParam } from './repositories.js';
 import { newUseCasesCall, usesDependencies } from './use-cases.js';
+import { IDEMPOTENCY_STORE, usesRequestIdempotency } from './request-idempotency.js';
 
 export function generate(model) {
   const { server } = layout(model);
@@ -124,6 +125,7 @@ ${serve}`;
   }
   const { store } = layout(model);
   const repositories = repositoryRoots(model).map((root) => ({ indent: '\t\t', cells: [`${goExported(repositoryParam(root))}:`, `${store.name}.New${root.name}Repository(transactions),`] }));
+  if (usesRequestIdempotency(model)) repositories.push({ indent: '\t\t', cells: [`${IDEMPOTENCY_STORE.field}:`, `${store.name}.NewIdempotencyStore(transactions),`] });
   return `${logger}
 	database, err := ${store.name}.SettingsFrom(cfg)
 	if err != nil {

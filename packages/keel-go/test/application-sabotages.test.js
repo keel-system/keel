@@ -12,7 +12,11 @@ import { GO_READY_DESIGN, makeWorkspace, mountDesign } from './helpers/workspace
 const workspace = makeWorkspace();
 const { manifest, layers } = loadService(mountDesign(workspace, GO_READY_DESIGN.name, GO_READY_DESIGN));
 const { files } = planService({ manifest, layers, workspace });
-const emittedTest = files.find((file) => file.path === 'internal/application/use_cases_test.go').content;
+// Las pruebas emitidas de la aplicación: el cableado (use_cases_test.go) y, con registro, la firma (idempotency_test.go).
+const emittedTest = files
+  .filter((file) => file.path.startsWith('internal/application/') && file.path.endsWith('_test.go'))
+  .map((file) => file.content)
+  .join('\n');
 
 for (const sabotage of APPLICATION_SABOTAGES) {
   test(`el sabotaje de la aplicación ${sabotage.id} se sigue aplicando a lo emitido y nombra una prueba emitida`, () => {

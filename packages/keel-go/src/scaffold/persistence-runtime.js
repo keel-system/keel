@@ -36,7 +36,7 @@ import { layout, packageFile } from './render.js';
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
 /** El driver de MySQL se importa con otro nombre: su paquete se llama como el del adaptador. */
-const MYSQL_DRIVER = { path: 'github.com/go-sql-driver/mysql', name: 'mysqldriver' };
+export const MYSQL_DRIVER = { path: 'github.com/go-sql-driver/mysql', name: 'mysqldriver' };
 
 export function generate(model) {
   if (!usesRelational(model)) return [];

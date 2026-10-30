@@ -96,7 +96,15 @@ export const DB_SABOTAGES = {
   'finder-range': { files: REPOSITORY, from: /f\.add\(("[^"]+"), ">=", /g, to: 'f.add($1, ">", ', expect: /_Finder/ },
   // Solo en PostgreSQL, por lo mismo que `fold`: en MySQL el LIKE sobre la sombra ya compara sin caja ni acentos.
   'finder-fold': { engines: ['postgresql'], files: REPOSITORY, from: /f\.(prefix|contains)\(("[^"]+"), textfold\.\w+\((\w+)\)\)/g, to: 'f.$1($2, $3)', expect: /_Finder/ },
-  'finder-literal': { files: VALUES, from: 'return likeEscaper.Replace(text)', to: 'return text', expect: /_Finder/ }
+  'finder-literal': { files: VALUES, from: 'return likeEscaper.Replace(text)', to: 'return text', expect: /_Finder/ },
+  // El registro de idempotencia no reconoce su clave primaria repetida: la carrera sale como el 409 sin code de la
+  // violación desconocida, indistinguible de un conflicto de negocio.
+  idempotency: {
+    files: new RegExp(`${STORE}idempotency_store\\.go$`),
+    from: 'if duplicateIdempotencyRecord(err) {',
+    to: 'if duplicateIdempotencyRecord(err) && key == "" {',
+    expect: /_RepeatedKeyIsConflict|_RaceOneWins/
+  }
 };
 
 /** ¿Existe el mecanismo del sabotaje en el motor? */

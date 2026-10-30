@@ -25,6 +25,7 @@ import { goExported } from '../lib/go-projection.js';
 import { alignRows, commentLines, goString } from '../lib/go-source.js';
 import { dataImports, wireTag } from './dtos.js';
 import { sentinelOf } from './errors.js';
+import { IDEMPOTENCY_STORE, idempotencyMethods, idempotencyNotes, usesRegistry } from './request-idempotency.js';
 import { appType, applicationPath, docComment, domainPath, goTypeName, isOptional, layout, packageFile } from './render.js';
 
 export function generate(model) {
@@ -180,7 +181,10 @@ ${rounding.join('\n')}
 	return nil
 }`);
   }
-  const imports = [...dataImports(components), 'encoding/json/v2', 'encoding/json/jsontext'];
+  // Con registro de idempotencia, su ámbito y su firma (request-idempotency.js).
+  const idempotency = idempotencyMethods(model, operation, name, components, (component) => componentType(operation, component));
+  if (idempotency) parts.push(idempotency.methods);
+  const imports = [...dataImports(components), 'encoding/json/v2', 'encoding/json/jsontext', ...(idempotency?.imports ?? [])];
   return { path: applicationPath(model, name), content: packageFile(model, application, { imports, body: `\n${parts.join('\n\n')}\n` }) };
 }
 
@@ -212,6 +216,9 @@ function renderHandler(model, operation) {
   const root = usesDependencies(model) ? repositoryOf(model, operation) : null;
   const deps = [];
   if (root) deps.push({ name: repositoryParam(root), type: `domain.${portName(root)}`, doc: `${repositoryParam(root)} es el repositorio del agregado ${root.name}.` });
+  if (usesRegistry(model, operation)) {
+    deps.push({ name: IDEMPOTENCY_STORE.param, type: IDEMPOTENCY_STORE.port, doc: `${IDEMPOTENCY_STORE.param} es el registro de idempotencia de la operación (idempotency del diseño).` });
+  }
   if (dispatches) deps.push({ name: 'useCases', type: '*UseCases', doc: 'useCases despacha las operaciones que esta declara en use-cases.dispatches.' });
   const fields = deps.length > 0
     ? `\n${deps
@@ -259,6 +266,7 @@ function handlerNotes(model, operation) {
   const finderText = finderNote(operation, { call: finder ? finderCall(finder, repositoryParam(entity)) : '' });
   if (finderText) notes.push(finderText);
   if (!finder) for (const note of textFilterNotes(model, operation)) notes.push(note);
+  notes.push(...idempotencyNotes(model, operation));
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la de todos los generadores.

@@ -290,10 +290,10 @@ for (const sabotage of DOMAIN_SABOTAGES) {
 }
 fs.rmSync(probe);
 
-// La APLICACIÓN se mide con su propia prueba emitida (use_cases_test.go: cada operación cableada, el decorador del
-// log de frontera deja pasar resultado y error, y un rechazo del dominio va a Info con su code). Cada sabotaje tiene
-// que tumbar exactamente las pruebas que nombra.
-const appTests = ['test', '-count=1', '-run', 'TestNewUseCases|TestObserve', './internal/application/'];
+// La APLICACIÓN se mide con sus pruebas emitidas (use_cases_test.go: cada operación cableada, el decorador del log de
+// frontera deja pasar resultado y error, y un rechazo del dominio va a Info con su code; idempotency_test.go: la forma
+// canónica de la firma y el code de cada conflicto). Cada sabotaje tiene que tumbar exactamente las pruebas que nombra.
+const appTests = ['test', '-count=1', './internal/application/'];
 const wired = go(projectDir, appTests);
 if (!step('la prueba emitida del cableado de la aplicación en verde', wired.ok)) console.error(wired.output);
 for (const sabotage of APPLICATION_SABOTAGES) {

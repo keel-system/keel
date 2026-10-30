@@ -117,11 +117,12 @@ try {
       step(`${name}: el catálogo del motor es el esquema emitido, y Down lo deja vacío`, differences.length === 0, differences.slice(0, 8).join(' | '));
     }
     // Falsado: sin un índice de FK, la comparación tiene que verlo. Si el sabotaje ya no se aplica, el paso sale rojo.
-    const subject = relational.find((name) => /^CREATE INDEX ix_/m.test(baselineOf(planService({ ...goView(name), workspace: FIXTURES_DIR, stack }).files)));
+    // El de la purga del registro de idempotencia (ix_idempotency_record_expires_at) no es de una FK: se salta.
+    const subject = relational.find((name) => /^CREATE INDEX ix_(?!idempotency_record_)/m.test(baselineOf(planService({ ...goView(name), workspace: FIXTURES_DIR, stack }).files)));
     if (subject) {
       const files = planService({ ...goView(subject), workspace: FIXTURES_DIR, stack }).files;
       const sql = baselineOf(files);
-      const sabotaged = sql.replace(/^CREATE INDEX ix_\w+ ON .*;\n\n?/m, '');
+      const sabotaged = sql.replace(/^CREATE INDEX ix_(?!idempotency_record_)\w+ ON .*;\n\n?/m, '');
       const differences = sabotaged === sql ? [] : applyAndCompare(`${subject.replace(/-/g, '_')}_sabotaged`, sabotaged, goSchema(files));
       step(`falsado: ${subject} sin un índice de FK → la comparación lo ve`, differences.some((d) => /ix_/.test(d)), differences.slice(0, 3).join(' | ') || 'no vio nada');
     }
@@ -166,7 +167,14 @@ try {
   const outcomes = await pool(subjects, 4, async ({ dir, db }) => {
     const tidied = await runAsync('go', ['mod', 'tidy'], { cwd: dir });
     if (!tidied.ok) return { tidied };
-    return { tidied, tested: await runAsync('go', ['test', '-count=1', '-v', `./${storePath}/`], { cwd: dir, env: env(db) }) };
+    // La sonda se compila aparte (go test -c) y se ejecuta desde el sujeto, como haría go test desde el paquete. No con
+    // go test a secas: en Windows el antivirus denegó («Acceso denegado») el postgres.test.exe que go test enlaza en
+    // %TEMP%\go-build… para un sujeto concreto, de forma repetible, mientras el MISMO binario compilado aquí corría
+    // (medido el 2026-10-30 con stock-reservation).
+    const binary = path.join(dir, process.platform === 'win32' ? 'db-probe.test.exe' : 'db-probe.test');
+    const built = await runAsync('go', ['test', '-c', '-o', binary, `./${storePath}/`], { cwd: dir, env: env(db) });
+    if (!built.ok) return { tidied, tested: built };
+    return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v'], { cwd: path.join(dir, storePath), env: env(db) }) };
   });
   subjects.forEach(({ name }, index) => {
     const { tidied, tested } = outcomes[index];

@@ -22,7 +22,6 @@ import { goSchema } from './helpers/schema.js';
 
 /** Las tablas de mecanismos de keel-spring que keel-go todavía no genera, con el incremento que las trae. */
 const MECHANISM_TABLES = {
-  idempotency_record: 'incremento 10 (la idempotencia de petición)',
   reconciliation_claim: 'incremento 11 (la reconciliación)',
   outbox_event: 'incremento 9 (la mensajería)',
   processed_event: 'incremento 9 (la mensajería)'

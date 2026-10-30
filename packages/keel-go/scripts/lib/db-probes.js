@@ -37,6 +37,9 @@ import { STORE_PACKAGES, sqlDialect, storeDir } from '../../src/lib/relational-e
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { keyFinders, naturalKeyBatchFinder } from '../../src/scaffold/repositories.js';
 import { finderProbes } from './finder-probes.js';
+import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen';
+import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
+import { usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 
 /** La ruta de la sonda dentro del proyecto del sujeto. */
 export function probePath(model) {
@@ -95,6 +98,7 @@ export function probeFile(model) {
   for (const root of roots) parts.push(ensureFunction(root));
   for (const root of roots) parts.push(...rootProbes(model, root));
   if (roots.length > 0) parts.push(transactionProbes(model, roots[0]));
+  if (usesRequestIdempotency(model)) parts.push(idempotencyProbes(model));
   parts.push(patternTables(ctx));
   if (entities.length === 0) return null;
   const content = goFile({ pkg: STORE_PACKAGES[d.engine], imports: IMPORTS, body: `\n${parts.filter(Boolean).join('\n\n')}\n`, module: model.service.goModule, generated: false });
@@ -995,6 +999,135 @@ func TestTransaction_ExhaustedConflictIsConcurrencyError(t *testing.T) {
 }
 
 ${d.mysql ? mysqlTimeoutProbe(name, id, touch) : POSTGRES_TIMEOUT_PROBE}`;
+}
+
+/**
+ * El registro de idempotencia de petición contra el motor: guardar y encontrar (con el recurso y sin él), el ámbito como
+ * parte de la clave, la clave repetida, la CARRERA de dos transacciones (una gana y la otra sale con el code de su
+ * operación), la fila caducada que no cuenta y se sustituye, y el registro que revierte con el comando.
+ */
+function idempotencyProbes(model) {
+  const operation = registryOperations(model)[0];
+  const scope = goString(operation.name);
+  const race = idempotencyOutcomeCode(model, operation.name, FRAMEWORK_ERRORS.idempotencyRace);
+  return `func TestIdempotency_SaveThenFind(t *testing.T) {
+	ctx := t.Context()
+	store := NewIdempotencyStore(probeTx)
+	key := uuid.NewString()
+	resource := uuid.NewString()
+	if err := probeTx.Within(ctx, application.KindCommand, func(ctx context.Context) error {
+		return store.Save(ctx, ${scope}, key, "firma-1", &resource, 60)
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	stored, found, err := store.Find(ctx, ${scope}, key)
+	if err != nil || !found || stored.Signature != "firma-1" || stored.ResourceID == nil || *stored.ResourceID != resource {
+		t.Errorf("Find = %+v, %v, %v; quiero la firma y el recurso guardados", stored, found, err)
+	}
+	if _, found, err := store.Find(ctx, ${scope}+":otra", key); err != nil || found {
+		t.Errorf("la misma clave en otro ámbito se encontró (%v)", err)
+	}
+	if _, found, err := store.Find(ctx, ${scope}, uuid.NewString()); err != nil || found {
+		t.Errorf("una clave que no se guardó se encontró (%v)", err)
+	}
+	bare := uuid.NewString()
+	if err := store.Save(ctx, ${scope}, bare, "firma-2", nil, 60); err != nil {
+		t.Fatalf("Save sin recurso: %v", err)
+	}
+	if stored, found, err := store.Find(ctx, ${scope}, bare); err != nil || !found || stored.ResourceID != nil {
+		t.Errorf("sin recurso, Find = %+v, %v, %v; quiero ResourceID nil", stored, found, err)
+	}
+}
+
+func TestIdempotency_RepeatedKeyIsConflict(t *testing.T) {
+	ctx := t.Context()
+	store := NewIdempotencyStore(probeTx)
+	key := uuid.NewString()
+	if err := store.Save(ctx, ${scope}, key, "firma", nil, 60); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	de := domainError(t, store.Save(ctx, ${scope}, key, "firma", nil, 60))
+	if de.Code() != ${goString(race)} || de.Status() != 409 {
+		t.Errorf("la clave repetida sale %q/%d, no ${race}/409", de.Code(), de.Status())
+	}
+}
+
+func TestIdempotency_RaceOneWinsTheOtherIsConflict(t *testing.T) {
+	ctx := t.Context()
+	store := NewIdempotencyStore(probeTx)
+	key := uuid.NewString()
+	saved := make(chan struct{})
+	release := make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		first <- probeTx.Within(ctx, application.KindCommand, func(ctx context.Context) error {
+			if err := store.Save(ctx, ${scope}, key, "firma", nil, 60); err != nil {
+				return err
+			}
+			close(saved)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-saved:
+	case err := <-first:
+		t.Fatalf("la primera no llegó a guardar: %v", err)
+	}
+	second := make(chan error, 1)
+	go func() {
+		second <- probeTx.Within(ctx, application.KindCommand, func(ctx context.Context) error {
+			return store.Save(ctx, ${scope}, key, "firma", nil, 60)
+		})
+	}()
+	// La segunda espera a la clave primaria de la primera, que todavía no ha confirmado.
+	time.Sleep(500 * time.Millisecond)
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatalf("la primera transacción falló: %v", err)
+	}
+	de := domainError(t, <-second)
+	if de.Code() != ${goString(race)} || de.Status() != 409 {
+		t.Errorf("la que pierde la carrera sale %q/%d, no ${race}/409", de.Code(), de.Status())
+	}
+}
+
+func TestIdempotency_ExpiredRecordIsReplaceable(t *testing.T) {
+	ctx := t.Context()
+	store := NewIdempotencyStore(probeTx)
+	key := uuid.NewString()
+	if err := store.Save(ctx, ${scope}, key, "vieja", nil, 0); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, found, err := store.Find(ctx, ${scope}, key); err != nil || found {
+		t.Errorf("la fila caducada se encontró (%v)", err)
+	}
+	if err := store.Save(ctx, ${scope}, key, "nueva", nil, 60); err != nil {
+		t.Fatalf("la clave caducada no se pudo volver a usar: %v", err)
+	}
+	if stored, found, err := store.Find(ctx, ${scope}, key); err != nil || !found || stored.Signature != "nueva" {
+		t.Errorf("Find = %+v, %v, %v; quiero la firma nueva", stored, found, err)
+	}
+}
+
+func TestIdempotency_RollsBackWithTheCommand(t *testing.T) {
+	ctx := t.Context()
+	store := NewIdempotencyStore(probeTx)
+	key := uuid.NewString()
+	failure := errors.New("el comando falla")
+	err := probeTx.Within(ctx, application.KindCommand, func(ctx context.Context) error {
+		if err := store.Save(ctx, ${scope}, key, "firma", nil, 60); err != nil {
+			return err
+		}
+		return failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Within = %v; quiero el fallo del comando", err)
+	}
+	if _, found, err := store.Find(ctx, ${scope}, key); err != nil || found {
+		t.Errorf("el registro sobrevivió al rollback del comando (%v)", err)
+	}
+}`;
 }
 
 // El tope en PostgreSQL: una sentencia que pasa del statement_timeout de la transacción.

@@ -16,6 +16,7 @@
 
 import { alignRows, goString } from '../lib/go-source.js';
 import { frameworkSentinels, sentinelOf } from './errors.js';
+import { IDEMPOTENCY_STORE, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
 import { applicationPath, layout, packageFile } from './render.js';
 import { contractOf, handlerType, messageType, operations, useCaseField } from './services.js';
 import { repositoryOf, repositoryRoots, usesRelational } from '@keel-system/keel-core/gen/features';
@@ -32,6 +33,7 @@ export function handlerArgs(model, operation, repository) {
   const args = [];
   const root = usesDependencies(model) ? repositoryOf(model, operation) : null;
   if (root) args.push(repository(root));
+  if (usesRegistry(model, operation)) args.push(`deps.${IDEMPOTENCY_STORE.field}`);
   if ((operation.dispatches ?? []).length > 0) args.push('uc');
   return args;
 }
@@ -232,7 +234,13 @@ ${alignRows([
   ...roots.flatMap((root) => [
     { text: `\t// ${goExported(repositoryParam(root))} es el repositorio del agregado ${root.name}.` },
     { indent: '\t', cells: [goExported(repositoryParam(root)), `domain.${portName(root)}`] }
-  ])
+  ]),
+  ...(usesRequestIdempotency(model)
+    ? [
+        { text: '\t// IdempotencyStore es el registro de idempotencia de las operaciones que lo declaran.' },
+        { indent: '\t', cells: [IDEMPOTENCY_STORE.field, IDEMPOTENCY_STORE.port] }
+      ]
+    : [])
 ]).join('\n')}
 }
 `

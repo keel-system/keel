@@ -25,6 +25,7 @@ import { errorKindFor } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { formatString, layout, packageFile } from './render.js';
 import { apiPlan, enumValues } from './endpoints.js';
+import { usesIdempotencyHeader } from './request-idempotency.js';
 
 export function generate(model) {
   if (!usesApi(model)) return [];
@@ -35,7 +36,7 @@ export function generate(model) {
   const files = [
     file('errors', ['errors', 'context', 'fmt', 'net/http', 'time', 'encoding/json/jsontext', 'encoding/json/v2', 'internal/domain', 'internal/platform/correlation'], errorsBody(model)),
     file('reply', ['fmt', 'net/http', 'net/url', 'strings', 'internal/platform/wire'], pick(REPLY, uses, ['writeJSON'])),
-    file('middleware', ['fmt', 'log/slog', 'net/http', 'runtime/debug', 'strings', 'internal/platform/correlation'], MIDDLEWARE_BODY)
+    file('middleware', ['fmt', 'log/slog', 'net/http', 'runtime/debug', 'strings', 'internal/application', 'internal/platform/correlation'], middlewareBody(model))
   ];
   const reading = [pick(READING, uses), ...[...plan.enums].sort().map((name) => enumReader(model, name))].filter(Boolean).join('\n\n');
   if (reading) {
@@ -288,6 +289,21 @@ ${kinds}
 }
 
 // ─── middleware.go ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * El borde, y con el registro de idempotencia por cabecera (keySource: client-key) la clave en el contexto de la
+ * petición: la lee el handler con application.IdempotencyKeyFrom. Va detrás de la correlación, así que un rechazo
+ * posterior sigue llevando su correlationId.
+ */
+function middlewareBody(model) {
+  if (!usesIdempotencyHeader(model)) return MIDDLEWARE_BODY;
+  const anchor = '\t\tr = r.WithContext(correlation.WithID(r.Context(), id))\n';
+  if (!MIDDLEWARE_BODY.includes(anchor)) throw new Error('middleware.go: el borde ya no abre la correlación donde se esperaba');
+  return MIDDLEWARE_BODY.replace(
+    anchor,
+    `${anchor}\t\tr = r.WithContext(application.WithIdempotencyKey(r.Context(), r.Header.Get(application.IdempotencyHeader)))\n`
+  ).replace('vuelve en la cabecera y en el cuerpo de error), pone', 'vuelve en la cabecera y en el cuerpo de error), lleva la clave de idempotencia al contexto, pone');
+}
 
 const MIDDLEWARE_BODY = `
 // MaxBodyBytes es el tope del cuerpo de una petición: net/http no pone ninguno, y un cliente podría mandar uno sin
