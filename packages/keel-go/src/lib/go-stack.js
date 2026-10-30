@@ -72,6 +72,11 @@ export const MODULES = {
   // misma versión que piden pgx y goose en el grafo, así que tidy no la mueve. La v0.43.0 es de 2026-10-09.
   'golang.org/x/text': { version: 'v0.43.0', license: 'BSD-3-Clause', kind: 'require', use: 'pliegue de acentos (NFD)' },
 
+  // La validación de los JWT de la entrada HTTP (incremento 8): firma, algoritmo, exp y nbf con su margen, e iss. El JWKS
+  // lo lee el servicio con la biblioteca estándar (sin keyfunc, que refresca en una goroutine propia). La v5.3.1 es de
+  // 2026-01-28.
+  'github.com/golang-jwt/jwt/v5': { version: 'v5.3.1', license: 'MIT', kind: 'require', use: 'validación de JWT' },
+
   // Herramientas, por la directiva `tool` de go.mod (`go tool <nombre>`): el proyecto no exige nada instalado
   // aparte de Go.
   // El JUnit de las pruebas, que lee keel-core/gen/junit-scoring.js (su XML real se capturó en el inc. 1).
@@ -99,6 +104,9 @@ export const RELATIONAL_REQUIRES = {
   postgresql: ['github.com/jackc/pgx/v5', 'github.com/pressly/goose/v3'],
   mysql: ['github.com/go-sql-driver/mysql', 'github.com/pressly/goose/v3']
 };
+
+/** La validación de tokens de la capa security (incremento 8). */
+export const JWT_REQUIRES = ['github.com/golang-jwt/jwt/v5'];
 
 /** Las herramientas: todas, siempre. */
 export const TOOLS = Object.entries(MODULES)

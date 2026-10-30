@@ -19,6 +19,9 @@ import { layout, packageFile } from './render.js';
 import { repositoryParam } from './repositories.js';
 import { newUseCasesCall, usesDependencies } from './use-cases.js';
 import { IDEMPOTENCY_STORE, usesRequestIdempotency } from './request-idempotency.js';
+import { CALLER_ROLES, SECURITY_IMPORT, settingsFromConfig, usesRoleCheck } from './security.js';
+import { securityCases } from '@keel-system/keel-core/gen/api-cases';
+import { securityPlan } from '@keel-system/keel-core/gen/features';
 
 export function generate(model) {
   const { server } = layout(model);
@@ -50,6 +53,7 @@ function mainGo(model) {
       'internal/platform/config',
       'internal/platform/correlation',
       'internal/platform/health',
+      SECURITY_IMPORT,
       'database/sql',
       layout(model).store.dir
     ],
@@ -116,7 +120,8 @@ const PROBES_WIRING = `	logger := slog.New(slog.NewJSONHandler(stdout, nil))
 // el perfil test, que no la tiene), las migraciones de goose y un repositorio por agregado sobre las transacciones.
 function apiWiring(model) {
   const logger = '\tlogger := slog.New(correlation.NewLogHandler(slog.NewJSONHandler(stdout, nil)))\n';
-  const serve = '\tsrv := httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes, useCases, logger))';
+  const settings = settingsFromConfig(model);
+  const serve = `\tsrv := httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes, useCases, logger${settings ? `, ${settings}` : ''}))`;
   if (!usesDependencies(model)) {
     return `${logger}
 	probes := &health.Probes{}
@@ -125,6 +130,7 @@ ${serve}`;
   }
   const { store } = layout(model);
   const repositories = repositoryRoots(model).map((root) => ({ indent: '\t\t', cells: [`${goExported(repositoryParam(root))}:`, `${store.name}.New${root.name}Repository(transactions),`] }));
+  if (usesRoleCheck(model)) repositories.push({ indent: '\t\t', cells: [`${CALLER_ROLES.field}:`, 'security.CallerRoles{},'] });
   if (usesRequestIdempotency(model)) repositories.push({ indent: '\t\t', cells: [`${IDEMPOTENCY_STORE.field}:`, `${store.name}.NewIdempotencyStore(transactions),`] });
   return `${logger}
 	database, err := ${store.name}.SettingsFrom(cfg)
@@ -227,9 +233,7 @@ func TestRunServesProbesAndStopsInOrder(t *testing.T) {
 			t.Errorf("GET %s = %d %s, quiero 200 {\\"status\\":\\"UP\\"}", path, code, body)
 		}
 	}
-	if code, _ := getStatus(t, "http://"+address+"/no-existe"); code != http.StatusNotFound {
-		t.Errorf("GET /no-existe = %d, quiero 404", code)
-	}
+	${unknownPathCheck(model)}
 
 	cancel()
 	select {
@@ -259,4 +263,16 @@ func TestRunRefusesAnUnknownSubcommand(t *testing.T) {
 }
 `
   });
+}
+
+/**
+ * Un camino que no existe: 404, o 401 si la seguridad cierra la API (decide antes de enrutar, como Spring Security). El
+ * plan de keel-core dice cuál, con el mismo caso que la prueba emitida de la API.
+ */
+function unknownPathCheck(model) {
+  const closed = Boolean(securityCases(model, securityPlan(model))?.protectedPath);
+  const [constant, code] = closed ? ['StatusUnauthorized', 401] : ['StatusNotFound', 404];
+  return `if code, _ := getStatus(t, "http://"+address+"/no-existe"); code != http.${constant} {
+		t.Errorf("GET /no-existe = %d, quiero ${code}", code)
+	}`;
 }

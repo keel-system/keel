@@ -20,6 +20,10 @@ import { layout, packageFile } from './render.js';
 import { messageComponents } from './services.js';
 import { servedOperation } from './endpoints.js';
 import { testHandler } from './httpapi.js';
+import { securityCases } from '@keel-system/keel-core/gen/api-cases';
+import { FRAMEWORK_ERRORS as FW_CODES } from '@keel-system/keel-core';
+import { tokenClaims } from '@keel-system/keel-core/gen/access-plan';
+import { SECURITY_IMPORT, fullAccessLiteral, securityPlan, usesCallerIdentity, usesHttpSecurity, usesJwt } from './security.js';
 import { frameworkSentinels, sentinelOf } from './errors.js';
 
 export function generate(model) {
@@ -50,6 +54,7 @@ function expected(key, code = '') {
 function apiTestGo(model) {
   const { httpapi } = layout(model);
   const cases = apiCases(model);
+  const jwt = usesHttpSecurity(model) && usesJwt(model);
   const validation = FRAMEWORK_ERRORS.validation.code;
   const tests = [];
   if (cases.reachesHandler) {
@@ -143,11 +148,11 @@ var generatedID = regexp.MustCompile(\`^[0-9a-f-]{36}$\`)
 
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(${testHandler(model)})
+	server := httptest.NewServer(${testHandler(model, jwt ? 'security.Settings{JWKS: jwks(t)}' : undefined)})
 	t.Cleanup(server.Close)
 	return server
 }
-
+${jwt ? credentialHelpers(model) : ''}
 type reply struct {
 	status int
 	header http.Header
@@ -166,7 +171,15 @@ func send(t *testing.T, server *httptest.Server, method, url, body string, heade
 	}
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
-	}
+	}${
+    jwt
+      ? `
+	// Sin cabeceras, la credencial de acceso total: las pruebas del contrato miden la lectura, no la autorización.
+	if header == nil {
+		header = bearer(t, fullAccess)
+	}`
+      : ''
+  }
 	for name, values := range header {
 		request.Header[name] = values
 	}
@@ -283,7 +296,7 @@ func TestLaTablaDeRutasNoRepiteOperacionNiRuta(t *testing.T) {
 		operations[route.Operation], patterns[pattern] = true, true
 	}
 }
-${tests.map((test) => `\n${test}`).join('\n')}
+${[...tests, ...(jwt ? securityTests(model) : [])].map((test) => `\n${test}`).join('\n')}
 `;
   return packageFile(model, httpapi, {
     test: true,
@@ -293,15 +306,20 @@ ${tests.map((test) => `\n${test}`).join('\n')}
       'encoding/json/v2',
       'io',
       'log/slog',
+      'maps',
       'net/http',
       'net/http/httptest',
       'regexp',
       'slices',
       'strings',
+      'sync',
       'testing',
+      'time',
       'internal/application',
       'internal/httpapi',
-      'internal/platform/health'
+      'internal/platform/health',
+      SECURITY_IMPORT,
+      'internal/platform/security/securitytest'
     ],
     body
   });
@@ -418,4 +436,141 @@ func TestUnErrorSinTraducirEs500YSeRegistra(t *testing.T) {
     imports: ['bytes', 'fmt', 'log/slog', 'net/http', 'net/http/httptest', 'strings', 'testing', 'internal/application', 'internal/domain', 'internal/platform/wire'],
     body
   });
+}
+
+// ─── La seguridad (incremento 8) ────────────────────────────────────────────────────────────────
+
+/** La credencial de las pruebas: una clave que nace en la prueba (securitytest) y su JWKS, que el handler acepta. */
+function credentialHelpers(model) {
+  return `
+// La credencial de las pruebas: una clave que nace en la prueba (securitytest) y su JWKS, que el handler acepta.
+var testIssuer = sync.OnceValues(securitytest.NewIssuer)
+
+// fullAccess son los claims de un token que satisface toda regla de acceso del diseño (keel-core, fullAccessClaims): el
+// mismo token con el que las pruebas de keel-spring, keel-nest y keel-dotnet pasan la autorización.
+var fullAccess = ${fullAccessLiteral(model)}
+
+func issuer(t *testing.T) *securitytest.Issuer {
+	t.Helper()
+	signer, err := testIssuer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
+}
+
+func jwks(t *testing.T) string {
+	t.Helper()
+	text, err := issuer(t).JWKS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return text
+}
+
+func bearer(t *testing.T, claims map[string]any) http.Header {
+	t.Helper()
+	token, err := issuer(t).Token(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return http.Header{"Authorization": {"Bearer " + token}}
+}
+`;
+}
+
+/**
+ * Las pruebas de la seguridad de la API, con las peticiones de keel-core (securityCases): las mismas que piden las de
+ * keel-nest y keel-dotnet.
+ */
+function securityTests(model) {
+  const cases = securityCases(model, securityPlan(model));
+  if (!cases) return [];
+  const unauthorized = expected('unauthenticated', FW_CODES.unauthenticated.code);
+  const forbidden = expected('accessDenied', FW_CODES.accessDenied.code);
+  const tests = [];
+  const anonymous = [
+    ...(cases.protectedPath ? [{ method: 'GET', url: cases.protectedPath }] : []),
+    ...(cases.forbidden ? [{ method: cases.forbidden.method, url: cases.forbidden.url }] : [])
+  ];
+  if (anonymous.length > 0) {
+    tests.push(`func TestSinCredencialUnCaminoProtegidoEs401ExistaONo(t *testing.T) {
+	server := newServer(t)
+	for _, request := range []struct{ method, url string }{
+${anonymous.map((entry) => `\t\t{${goString(entry.method)}, ${goString(entry.url)}},`).join('\n')}
+	} {
+		got := send(t, server, request.method, request.url, "", http.Header{})
+		expectError(t, got, ${unauthorized})
+	}
+}`);
+  }
+  tests.push(`func TestUnTokenQueNoValidaEs401TambienEnUnaRutaAbierta(t *testing.T) {
+	server := newServer(t)
+	for _, authorization := range []string{"Bearer no-es-un-jwt", "Bearer con espacios", "Bearer "} {
+		got := send(t, server, "GET", "/livez", "", http.Header{"Authorization": {authorization}})
+		expectError(t, got, ${unauthorized})
+	}
+}`);
+  tests.push(`func TestUnTokenCaducadoEs401(t *testing.T) {
+	server := newServer(t)
+	if got := send(t, server, "GET", ${goString(cases.notFound)}, "", nil); got.status != http.StatusNotFound {
+		t.Fatalf("con un token vigente = %d, quiero 404: %s", got.status, got.body)
+	}
+	// Caducado hace más que el margen de reloj (60 s, el de Spring).
+	expired := maps.Clone(fullAccess)
+	expired["exp"] = time.Now().Add(-10 * time.Minute).Unix()
+	got := send(t, server, "GET", ${goString(cases.notFound)}, "", bearer(t, expired))
+	expectError(t, got, ${unauthorized})
+}`);
+  tests.push(`func TestUnTokenFirmadoConOtraClaveEs401(t *testing.T) {
+	server := newServer(t)
+	other, err := securitytest.NewIssuer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := other.Token(fullAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := send(t, server, "GET", ${goString(cases.notFound)}, "", http.Header{"Authorization": {"Bearer " + token}})
+	expectError(t, got, ${unauthorized})
+}`);
+  if (cases.forbidden) {
+    tests.push(`func TestUnaCredencialValidaSinLoQueExigeLaReglaEs403(t *testing.T) {
+	server := newServer(t)
+	// ${cases.forbidden.method} ${cases.forbidden.url} exige ${cases.forbidden.authorities.join(' o ')}.
+	got := send(t, server, ${goString(cases.forbidden.method)}, ${goString(cases.forbidden.url)}, "", bearer(t, map[string]any{"sub": "keel-test"}))
+	expectError(t, got, ${forbidden})
+}`);
+  }
+  const identity = identityCase(model);
+  if (identity) {
+    tests.push(`func TestUnTokenSinLaIdentidadDelLlamanteEs401(t *testing.T) {
+	server := newServer(t)
+	// El claim ${identity.claim} es la identidad del llamante (security.authentication.callerIdentity): sin él, el token no
+	// identifica a nadie.
+	claims := maps.Clone(fullAccess)
+	delete(claims, ${goString(identity.claim)})
+	got := send(t, server, "GET", ${goString(identity.url)}, "", bearer(t, claims))
+	expectError(t, got, ${unauthorized})
+}`);
+  }
+  return tests;
+}
+
+/**
+ * Una operación GET servida que estampa la identidad del llamante desde un claim, con URL concreta: para pedirla con un
+ * token sin ese claim. null si no hay ninguna, o si el claim es el del nombre del principal (sin él, otro lo sustituye).
+ */
+function identityCase(model) {
+  const identity = model.security?.callerIdentity;
+  if (!usesCallerIdentity(model) || identity.source !== 'claim') return null;
+  const claim = identity.claim ?? 'sub';
+  if (claim === tokenClaims(model.stack?.auth).principalClaim) return null;
+  for (const operation of (model.services ?? []).flatMap((service) => service.operations ?? []).filter(servedOperation)) {
+    if (operation.route.method !== 'GET' || !messageComponents(operation, model).some((c) => c.resolvedIdentity)) continue;
+    const url = concretePath(model, operation);
+    if (url) return { claim, url };
+  }
+  return null;
 }

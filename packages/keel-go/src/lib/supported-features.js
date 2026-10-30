@@ -17,7 +17,6 @@ import { GO_PROJECTION } from './go-projection.js';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  security: 'incremento 8',
   messaging: 'incremento 9',
   'http-clients': 'incremento 11',
   dependencies: 'incremento 11',
@@ -72,6 +71,7 @@ export function checkSupportedFeatures(manifest, layers) {
       );
     }
   }
+  if (declared.includes('security')) errors.push(...securityErrors(layers));
   if (declared.includes('persistence') && documentPersistence(layers)) {
     errors.push(
       'capa persistence: keel-go todavía no genera la persistencia documental (llega en el incremento 12 de PLAN-KEEL-GO.md). ' +
@@ -155,3 +155,46 @@ export function checkSupportedStack(stack) {
   }
   return { errors };
 }
+
+/**
+ * Lo que keel-go todavía no genera de la capa security (incremento 8). Las tres cosas las declara, como mucho, una
+ * fixture que keel-go aún rechaza por otras capas, así que ninguna red mediría lo emitido; entran con ella:
+ *   · la clave de API (`protocol: api-key` o `serviceAuth.protocol: api-key`): ninguna fixture la declara;
+ *   · el alcance por recurso (`scoping`): asset-vault, que trae mensajería, clientes salientes y storage;
+ *   · la identidad resuelta contra las credenciales de un recurso (`callerIdentity.from.resolvedBy`):
+ *     notification-mailer, que trae mensajería y correo.
+ * Y un campo de identidad que no es texto: el valor sale de un claim, que es texto, y los otros tres servidores lo
+ * pasan tal cual; en Go el mensaje es tipado y no compilaría.
+ */
+function securityErrors(layers) {
+  const authentication = layers?.security?.authentication ?? {};
+  const errors = [];
+  const why = 'ninguna fixture que keel-go genere lo declara: sin red que mida lo emitido';
+  const elsewhere = 'Genera este diseño con keel-spring, keel-nest o keel-dotnet.';
+  if (authentication.protocol === 'api-key' || authentication.serviceAuth?.protocol === 'api-key') {
+    errors.push(`security: la clave de API (protocol: api-key) — keel-go todavía no la genera (${why}). ${elsewhere}`);
+  }
+  if (authentication.scoping) {
+    errors.push(`security: el alcance por recurso (authentication.scoping) — keel-go todavía no lo genera (${why}; llega con asset-vault). ${elsewhere}`);
+  }
+  const identity = authentication.callerIdentity;
+  if (identity?.from?.resolvedBy) {
+    errors.push(
+      'security: la identidad del llamante resuelta contra las credenciales de un recurso (callerIdentity.from.resolvedBy) — ' +
+        `keel-go todavía no la genera (${why}; llega con el correo, incremento 13). ${elsewhere}`
+    );
+  }
+  if (identity) {
+    for (const [name, operation] of Object.entries(layers?.['use-cases']?.operations ?? {})) {
+      const type = operation?.input?.fields?.[identity.field]?.type;
+      if (type != null && !['string', 'text'].includes(type)) {
+        errors.push(
+          `use-cases.${name}.input.${identity.field}: ${type} — la identidad del llamante sale de la credencial como TEXTO, igual que en keel-spring, ` +
+            'keel-nest y keel-dotnet; keel-go solo la estampa en un campo string o text. Declara el campo como string.'
+        );
+      }
+    }
+  }
+  return errors;
+}
+

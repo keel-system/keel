@@ -27,6 +27,8 @@ import { dataImports, wireTag } from './dtos.js';
 import { sentinelOf } from './errors.js';
 import { IDEMPOTENCY_STORE, idempotencyMethods, idempotencyNotes, usesRegistry } from './request-idempotency.js';
 import { appType, applicationPath, docComment, domainPath, goTypeName, isOptional, layout, packageFile } from './render.js';
+import { ownershipNotes } from '@keel-system/keel-core/gen/ownership';
+import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity } from './security.js';
 
 export function generate(model) {
   const files = [];
@@ -190,6 +192,12 @@ ${rounding.join('\n')}
 
 /** Las notas de un componente que el diseño obliga a decir donde se ve. */
 function componentNotes(model, component) {
+  if (component.resolvedIdentity && usesCallerIdentity(model)) {
+    return commentLines(
+      'Lo resuelve el servidor desde la credencial (security.authentication.callerIdentity): no llega de la\npetición, lo estampa el lector del endpoint.',
+      '\t'
+    );
+  }
   if (component.fromPath || component.list) return [];
   const inherited = component.inheritedPattern;
   if (!inherited || !(model.formatTypes ?? []).some((type) => type.name === component.typeName)) return [];
@@ -218,6 +226,9 @@ function renderHandler(model, operation) {
   if (root) deps.push({ name: repositoryParam(root), type: `domain.${portName(root)}`, doc: `${repositoryParam(root)} es el repositorio del agregado ${root.name}.` });
   if (usesRegistry(model, operation)) {
     deps.push({ name: IDEMPOTENCY_STORE.param, type: IDEMPOTENCY_STORE.port, doc: `${IDEMPOTENCY_STORE.param} es el registro de idempotencia de la operación (idempotency del diseño).` });
+  }
+  if (usesDependencies(model) && roleCheckedOperation(model, operation)) {
+    deps.push({ name: CALLER_ROLES.param, type: CALLER_ROLES.port, doc: `${CALLER_ROLES.param} dice los roles del llamante: los exentos de la regla de propiedad (security.ownership).` });
   }
   if (dispatches) deps.push({ name: 'useCases', type: '*UseCases', doc: 'useCases despacha las operaciones que esta declara en use-cases.dispatches.' });
   const fields = deps.length > 0
@@ -267,6 +278,14 @@ function handlerNotes(model, operation) {
   if (finderText) notes.push(finderText);
   if (!finder) for (const note of textFilterNotes(model, operation)) notes.push(note);
   notes.push(...idempotencyNotes(model, operation));
+  // La autorización por propietario (security.ownership, DSL 2.23): la nota neutral de keel-core.
+  const variable = operation.messageKind === 'query' ? 'query' : 'cmd';
+  notes.push(
+    ...ownershipNotes(model, operation, {
+      read: (field) => `${variable}.${goExported(field)}`,
+      hasRole: usesDependencies(model) && roleCheckedOperation(model, operation) ? (role) => `h.${CALLER_ROLES.param}.HasRole(ctx, ${goString(role)})` : null
+    })
+  );
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la de todos los generadores.

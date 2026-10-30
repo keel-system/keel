@@ -26,6 +26,7 @@ import { usesApi } from '@keel-system/keel-core/gen/features';
 import { goExported, goUnexported, enumConstant } from '../lib/go-projection.js';
 import { goString } from '../lib/go-source.js';
 import { goFileName, layout, packageFile } from './render.js';
+import { usesCallerIdentity } from './security.js';
 import { componentType, isThreeState, messageComponents, messageType, operations, scaleRounding, useCaseField } from './services.js';
 
 // Los imports que puede usar un archivo de endpoints: goFile solo escribe los que el cuerpo usa.
@@ -307,6 +308,7 @@ function renderReader(model, operation, plan) {
   const queryLines = [];
   const queryChecks = [];
   const mustBePresent = [];
+  const identity = [];
   const paramPath = (name) => goString(`${operation.name}.${name}`);
 
   // 1. Ruta. En la ruta la presencia no dice nada: el segmento existe o la ruta no casa.
@@ -321,9 +323,11 @@ function renderReader(model, operation, plan) {
   for (const component of components) {
     if (component.fromPath || isFile(component)) continue;
     const field = `msg.${goExported(component.name)}`;
-    // La identidad del llamante no viaja en la petición: la estampará la seguridad (incremento 8).
+    // La identidad del llamante no viaja en la petición: la estampa el lector desde la credencial, DESPUÉS de leer y
+    // validar la petición (en keel-spring la estampa el controller sobre el comando ya validado).
     if (component.resolvedIdentity) {
-      (asBody ? bodyChecks : queryLines).push(`\t// ${field}: la identidad del llamante la estampa la seguridad desde la credencial, nunca la petición.`);
+      if (usesCallerIdentity(model)) identity.push(...returnErr(`${field}, err = callerIdentity(r.Context())`));
+      else (asBody ? bodyChecks : queryLines).push(`\t// ${field}: la identidad del llamante no se lee de la petición (el diseño no autentica).`);
       continue;
     }
     // La página con persistencia: el Pageable de Spring Data (página, tamaño y orden), con el orden del diseño cuando
@@ -425,6 +429,7 @@ function renderReader(model, operation, plan) {
     plan.uses.add('malformed');
     out.push(`\tif ${mustBePresent.map((name) => `!has(fields, ${goString(name)})`).join(' || ')} {`, '\t\treturn msg, malformed(nil)', '\t}');
   }
+  out.push(...identity);
   return `// ${readerName(operation)} lee ${operation.route.method} ${model.api.routeBase}${operation.route.path} (${operation.name}) al mensaje de su caso de
 // uso, en el orden del binding de keel-spring: la ruta, el cuerpo, la query y después sus reglas.
 func ${readerName(operation)}(r *http.Request) (msg application.${message}, err error) {

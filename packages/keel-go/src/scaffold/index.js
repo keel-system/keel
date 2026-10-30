@@ -35,6 +35,7 @@ import * as requestIdempotency from './request-idempotency.js';
 import * as correlation from './correlation.js';
 import * as endpoints from './endpoints.js';
 import * as restSupport from './rest-support.js';
+import * as security from './security.js';
 import * as apiTests from './api-tests.js';
 import * as httpapi from './httpapi.js';
 import * as server from './server.js';
@@ -70,6 +71,7 @@ const GENERATORS = [
   requestIdempotency,
   endpoints,
   restSupport,
+  security,
   apiTests,
   httpapi,
   server,

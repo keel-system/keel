@@ -26,9 +26,9 @@ import { classPath, DIRS, tsModule, tsString } from './render.js';
 import { ERROR_RESPONSE_TS } from './rest-support.js';
 import { credentialFinderName, portClass, portPath } from './repositories.js';
 import { entityDir } from './render.js';
-import { envRequired } from '@keel-system/keel-core/gen/profile-values';
-import { envFor, runtimeDefault } from '@keel-system/keel-core/gen/runtime-env';
+import { runtimeDefault } from '@keel-system/keel-core/gen/runtime-env';
 import { localIssuer } from '@keel-system/keel-core/gen/identity-realm';
+import { LOCAL_API_KEY, TEST_JWKS_VARIABLE, localClientApiKey, securityConfigFiles } from '@keel-system/keel-core/gen/security-config';
 import { securityPlan, usesHttpSecurity, usesJwt, usesCallerScope } from '@keel-system/keel-core/gen/features';
 export { securityPlan, usesHttpSecurity, usesJwt, usesCallerScope };
 export { localIssuer };
@@ -48,13 +48,10 @@ export const SECURITY_MODULE_TS = `${DIR}/security-module.ts`;
 export const CALLER_SCOPE_TS = classPath(DIRS.appSupport, 'CallerScope');
 const CONFIGURATION_TS = 'src/infrastructure/config/configuration.ts';
 
-/** Clave de API del perfil local (catálogo neutral: keel-core/gen/runtime-env). */
-export const LOCAL_API_KEY = runtimeDefault('SECURITY_API_KEY');
-export const localClientApiKey = (client) => `local-${client}-key`;
+/** Las claves de API del perfil local y la variable del JWKS de las pruebas: keel-core/gen/security-config. */
+export { LOCAL_API_KEY, localClientApiKey, TEST_JWKS_VARIABLE };
 /** Orígenes CORS del perfil local (catálogo neutral). */
 export const LOCAL_CORS_ORIGINS = runtimeDefault('SECURITY_CORS_ALLOWED_ORIGINS');
-/** La variable con la que las pruebas del perfil `test` publican el JWKS con el que firman. */
-export const TEST_JWKS_VARIABLE = 'SECURITY_TEST_JWKS';
 
 function apiKeyClients(model) {
   const plan = securityPlan(model);
@@ -135,7 +132,7 @@ export function generate(model) {
   if (usesCallerScope(model)) files.push(...callerScope(model));
   if (usesRoleCheck(model)) files.push(...callerRoles());
   if (usesSecurityModule(model)) files.push({ path: SECURITY_MODULE_TS, content: securityModuleFile(model) });
-  files.push(...configFragments(model));
+  files.push(...securityConfigFiles(model));
   return files;
 }
 
@@ -992,71 +989,6 @@ function securityModuleFile(model) {
 })
 export class SecurityModule {}`
   );
-}
-
-// ─── Configuración: config/parameters/<perfil>/security.yaml ────────────────
-
-function configFragments(model) {
-  const sec = model.security;
-  const plan = securityPlan(model);
-  return ['local', 'develop', 'production', 'test'].map((profile) => {
-    const lines = ['security:'];
-    if (usesJwt(model)) {
-      lines.push('  oauth2:');
-      if (profile === 'test') {
-        lines.push(
-          '    # Perfil test: no hay proveedor de identidad. Las pruebas firman sus tokens con una clave',
-          `    # propia y publican su JWKS en ${TEST_JWKS_VARIABLE}; sin ella, ningún token vale.`,
-          `    jwks: \${${TEST_JWKS_VARIABLE}:}`
-        );
-      } else {
-        if (profile === 'local') {
-          lines.push(
-            model.stack?.auth === 'keycloak' || model.stack?.auth === 'cognito'
-              ? '    # El proveedor de identidad de prueba de infra/docker-compose.yaml.'
-              : '    # TODO (agente): issuer real del resource server según security.keel.yaml.'
-          );
-        }
-        lines.push(`    issuer-uri: ${envFor('OAUTH2_ISSUER_URI', profile, localIssuer(model))}`);
-        if (profile === 'develop' || profile === 'production') {
-          // El JWKS directo, si se da: gana al discovery del issuer y no comprueba \`iss\`. Es la salida del emisor
-          // PARTIDO de deploy/ (el token lo emite localhost:8180, la app alcanza keycloak:8080), la misma que
-          // keel-spring toma con su jwk-set-uri. Vacía, manda issuer-uri.
-          lines.push(`    jwk-set-uri: \${OAUTH2_JWK_SET_URI:}`);
-        }
-      }
-    }
-    if (plan.protocol === 'api-key') {
-      lines.push(
-        profile === 'production'
-          ? '  # Clave que deben enviar los clientes; obligatoria (sin ella la app no arranca).'
-          : '  # Clave que deben enviar los clientes; esta es la de los escenarios de validación.',
-        `  api-key: ${envFor('SECURITY_API_KEY', profile)}`
-      );
-    }
-    // Como keel-spring: la variable existe siempre que el diseño valida la audiencia (y en production
-    // es obligatoria), aunque hoy ninguna ruta de máquinas la compruebe. Las dos imágenes del mismo
-    // diseño se despliegan con las mismas variables.
-    if (usesJwt(model) && sec.serviceAuth?.validateAudience === true) {
-      lines.push('  # Audiencia que tienen que traer los tokens de los clientes máquina.', `  audience: ${envFor('SECURITY_AUDIENCE', profile, audienceOf(model))}`);
-    }
-    if (plan.serviceApiKeys) {
-      lines.push('  # Clave por cliente máquina del diseño (serviceClients); vacía = cliente deshabilitado.', '  api-keys:');
-      for (const client of sec.serviceClients) {
-        lines.push(`    ${client.name}: ${envRequired(profile, `API_KEY_${client.name.replace(/-/g, '_').toUpperCase()}`, localClientApiKey(client.name))}`);
-      }
-    }
-    if (sec.cors) {
-      lines.push(
-        '  cors:',
-        profile === 'local' || profile === 'test'
-          ? '    # Orígenes del navegador (CSV); estos son los puertos de dev habituales de una SPA.'
-          : '    # Orígenes del navegador (CSV); obligatorio (sin él la app no arranca).',
-        `    allowed-origins: ${envFor('SECURITY_CORS_ALLOWED_ORIGINS', profile)}`
-      );
-    }
-    return lines.length > 1 ? { path: `config/parameters/${profile}/security.yaml`, content: `${lines.join('\n')}\n` } : null;
-  }).filter(Boolean);
 }
 
 export { audienceOf };

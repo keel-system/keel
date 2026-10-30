@@ -18,6 +18,7 @@ import { alignRows, goString } from '../lib/go-source.js';
 import { frameworkSentinels, sentinelOf } from './errors.js';
 import { IDEMPOTENCY_STORE, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
 import { applicationPath, layout, packageFile } from './render.js';
+import { CALLER_ROLES, roleCheckedOperation, usesRoleCheck } from './security.js';
 import { contractOf, handlerType, messageType, operations, useCaseField } from './services.js';
 import { repositoryOf, repositoryRoots, usesRelational } from '@keel-system/keel-core/gen/features';
 import { goExported } from '../lib/go-projection.js';
@@ -34,6 +35,7 @@ export function handlerArgs(model, operation, repository) {
   const root = usesDependencies(model) ? repositoryOf(model, operation) : null;
   if (root) args.push(repository(root));
   if (usesRegistry(model, operation)) args.push(`deps.${IDEMPOTENCY_STORE.field}`);
+  if (usesDependencies(model) && roleCheckedOperation(model, operation)) args.push(`deps.${CALLER_ROLES.field}`);
   if ((operation.dispatches ?? []).length > 0) args.push('uc');
   return args;
 }
@@ -239,6 +241,12 @@ ${alignRows([
     ? [
         { text: '\t// IdempotencyStore es el registro de idempotencia de las operaciones que lo declaran.' },
         { indent: '\t', cells: [IDEMPOTENCY_STORE.field, IDEMPOTENCY_STORE.port] }
+      ]
+    : []),
+  ...(usesRoleCheck(model)
+    ? [
+        { text: `\t// ${CALLER_ROLES.field} dice los roles del llamante de la petición en curso (los exentos de security.ownership).` },
+        { indent: '\t', cells: [CALLER_ROLES.field, CALLER_ROLES.port] }
       ]
     : [])
 ]).join('\n')}

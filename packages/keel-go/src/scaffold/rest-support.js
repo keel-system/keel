@@ -26,6 +26,7 @@ import { alignRows, goString } from '../lib/go-source.js';
 import { formatString, layout, packageFile } from './render.js';
 import { apiPlan, enumValues } from './endpoints.js';
 import { usesIdempotencyHeader } from './request-idempotency.js';
+import { unidentifiedCase } from './security.js';
 
 export function generate(model) {
   if (!usesApi(model)) return [];
@@ -250,7 +251,7 @@ ${targets}
 	// Errores del dominio: su status y su code.
 	case errors.As(err, &rejected):
 		return domainResponse(r, rejected)
-	}
+${unidentifiedCase(model) ?? ''}	}
 	a.logger.ErrorContext(r.Context(), "error no controlado", "error", err)
 	return newErrorResponse(r, ${fw('internal')}, nil, ${goString(FW.internal.message)}, nil)
 }

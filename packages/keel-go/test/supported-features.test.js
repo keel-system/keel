@@ -29,13 +29,32 @@ test('PostgreSQL y MySQL: los demás motores se rechazan en el build con su moti
   assert.match(checkSupportedStack({ database: 'mongodb' }).errors[0], /incremento 12/);
 });
 
-for (const layer of ['security', 'messaging', 'http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
+for (const layer of ['messaging', 'http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);
     assert.match(errors[0], new RegExp(`capa ${layer}: .*incremento \\d+`));
   });
 }
+
+test('capa security: entra (incremento 8); la clave de API, el alcance, resolvedBy y una identidad que no es texto se rechazan con su motivo', () => {
+  const manifest = manifestWith('domain', 'use-cases', 'api', 'security');
+  const withSecurity = (authentication, fields = {}) => ({
+    ...layersWith('domain', 'api'),
+    'use-cases': { operations: { getMine: { input: { fields } } } },
+    security: { authentication }
+  });
+  const oidc = { protocol: 'oidc', callerIdentity: { field: 'caller', from: { source: 'claim', name: 'sub' } } };
+  assert.deepEqual(checkSupportedFeatures(manifest, withSecurity(oidc, { caller: { type: 'string' } })).errors, []);
+  assert.deepEqual(checkSupportedFeatures(manifest, withSecurity({ protocol: 'none' })).errors, []);
+  const rejected = (authentication, fields) => checkSupportedFeatures(manifest, withSecurity(authentication, fields)).errors;
+  assert.match(rejected({ protocol: 'api-key' })[0], /clave de API .*sin red que mida/);
+  assert.match(rejected({ protocol: 'oidc', serviceAuth: { protocol: 'api-key' } })[0], /clave de API/);
+  assert.match(rejected({ protocol: 'oidc', scoping: { claim: 'vaults' } })[0], /alcance por recurso .*asset-vault/);
+  const resolved = { protocol: 'oidc', callerIdentity: { field: 'caller', from: { source: 'serviceClient', resolvedBy: 'Application.keys' } } };
+  assert.match(rejected(resolved)[0], /resolvedBy\) .*incremento 13/);
+  assert.match(rejected(oidc, { caller: { type: 'uuid' } })[0], /use-cases.getMine.input.caller: uuid .*string/);
+});
 
 test('dominio, casos de uso y API se aceptan sin avisos: la API se emite desde el incremento 5', () => {
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api'), layersWith('domain', 'use-cases', 'api'));

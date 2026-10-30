@@ -9,8 +9,8 @@
 // herramienta»: si build declarase uno de más, de menos o en otra versión, tidy lo movería.
 
 import { GO_MIN_VERSION, GO_TOOLCHAIN } from '../lib/assets.js';
-import { usesRelational } from '@keel-system/keel-core/gen/features';
-import { MODULES, RELATIONAL_REQUIRES, SKELETON_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
+import { usesJwt, usesRelational } from '@keel-system/keel-core/gen/features';
+import { JWT_REQUIRES, MODULES, RELATIONAL_REQUIRES, SKELETON_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
 import { relationalEngine } from '../lib/relational-engine.js';
 import { foldKinds } from './persistence-runtime.js';
 import { layout, packageFile } from './render.js';
@@ -20,7 +20,8 @@ export function requiresFor(model = null) {
   return [
     ...SKELETON_REQUIRES,
     ...(model && usesRelational(model) ? RELATIONAL_REQUIRES[relationalEngine(model)] : []),
-    ...(model && foldKinds(model).has('accents') ? TEXT_FOLD_REQUIRES : [])
+    ...(model && foldKinds(model).has('accents') ? TEXT_FOLD_REQUIRES : []),
+    ...(model && usesJwt(model) ? JWT_REQUIRES : [])
   ].sort();
 }
 
