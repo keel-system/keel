@@ -118,7 +118,5 @@ export async function build(
 Siguiente paso, dentro del proyecto:
   1. ${pc.cyan(`cd ${scaffold.outDir}`)}
   2. ${pc.cyan('go mod tidy')} ${pc.dim('(la primera vez: resuelve las dependencias indirectas y escribe go.sum)')}
-  3. ${pc.cyan('go test ./...')}
-
-${pc.dim(`El pipeline de agentes de /${SKILL} llega en el incremento 7 de PLAN-KEEL-GO.md.`)}`);
+  3. ${pc.cyan(`/${SKILL}`)} ${pc.dim('(sin argumentos: completa el código y lo valida contra los escenarios FL-*)')}`);
 }
