@@ -8,21 +8,29 @@
 //   · las colecciones se copian al entrar y al salir (`slices.Clone`): nadie las cambia por la espalda;
 //   · la guarda privada del lifecycle (`transitionTo`) con las transiciones del diseño;
 //   · el buffer de eventos de dominio en las raíces emisoras;
-//   · TODOs guiados del constructor, de los métodos semánticos y de los invariantes.
+//   · TODOs guiados del constructor, de los métodos semánticos y de los invariantes, en un archivo HERMANO
+//     (`<entidad>_behavior.go`, sin la cabecera de código generado): lo que escribe el agente va ahí, en el mismo
+//     paquete, y el archivo de la entidad se puede regenerar sin pisarlo. Es el reparto del mensaje y su handler.
 // Dos piezas (`transitionTo` y `raise`) solo las llama lo que escribe el agente; hasta entonces staticcheck las
-// ve sin uso, y lo dicen con `//lint:ignore U1000` y su motivo (PLAN-KEEL-GO.md § 3.8).
+// ve sin uso, y lo dicen con `//lint:ignore U1000` y su motivo (PLAN-KEEL-GO.md § 3.8). Ya usadas, staticcheck no
+// marca la directiva (medido con la 2025.1 en el inc. 7c).
 // La persistencia vive aparte (incremento 6): el dominio no sabe cómo se guarda.
 
 import { LOCK_VERSION } from '@keel-system/keel-core/gen';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, commentLines, goString, keyedLiteral } from '../lib/go-source.js';
 import { constantOf } from './enums.js';
-import { declType, docComment, domainPath, fieldImports, isOptional, layout, localName, packageFile } from './render.js';
+import { declType, docComment, domainPath, fieldImports, goFileName, isOptional, layout, localName, packageFile } from './render.js';
 
 const IMPORTS = ['slices', 'bytes', 'time', 'encoding/json/jsontext', 'internal/platform/wire'];
 
 export function generate(model) {
-  return (model.entities ?? []).map((entity) => renderEntity(model, entity));
+  return (model.entities ?? []).flatMap((entity) => [renderEntity(model, entity), renderBehavior(model, entity)]);
+}
+
+/** El archivo del agente de una entidad: su constructor, sus métodos de negocio y sus invariantes. */
+export function behaviorPath(model, entity) {
+  return domainPath(model, `${entity.name}Behavior`);
 }
 
 /** ¿Lee alguna entidad un miembro opcional? Entonces su accesor devuelve una copia con `clonePtr`. */
@@ -125,19 +133,15 @@ function renderEntity(model, entity) {
     return `${doc}func (${receiver} *${name}) ${member.method}() ${member.type} {\n\treturn ${result}\n}`;
   });
 
-  // Los TODO de invariantes van en su propio grupo de comentarios ANTES del de documentación: entre éste y su
-  // tipo no puede haber nada, o deja de asociarse.
-  const invariants = (entity.invariants ?? []).map((invariant) => `// TODO invariante (guarda en el constructor y en cada método mutador): ${invariant}`);
   const parts = [];
   parts.push(
-    `${invariants.length > 0 ? `${invariants.join('\n')}\n\n` : ''}${docComment(name, entity.description, `entidad ${name} del diseño`)}type ${name} struct {
+    `${docComment(name, entity.description, `entidad ${name} del diseño`)}type ${name} struct {
 ${struct.join('\n')}
 }`
   );
   parts.push(`${docComment(`${name}State`, `el estado completo de ${name}, tal como lo rehidrata la persistencia.`)}type ${name}State struct {
 ${state.join('\n')}
 }`);
-  parts.push(constructorTodo(model, entity, receiver));
   parts.push(`// Rehydrate${name} reconstruye un ${name} desde la persistencia: el estado ya es válido y no se revalida. La
 // creación de negocio va por su constructor. Las colecciones se copian: quien entrega el estado no puede
 // cambiarlas después por la espalda del agregado.
@@ -151,6 +155,25 @@ ${rehydrate.join('\n')}
   if (emitted.length > 0) parts.push(...renderDomainEvents(emitted, entity, receiver));
 
   return { path: domainPath(model, name), content: packageFile(model, domain, { imports, body: `\n${parts.join('\n\n')}\n` }) };
+}
+
+/**
+ * `<entidad>_behavior.go`: lo que build deja al agente sobre la entidad, como TODOs guiados. Nace solo con comentarios
+ * —compila— y sin la cabecera de código generado: es del agente.
+ */
+function renderBehavior(model, entity) {
+  const receiver = entity.name[0].toLowerCase();
+  const parts = [
+    `// Lo que escribe el agente sobre ${entity.name}: su constructor, sus métodos de negocio y las guardas de sus
+// invariantes. El tipo, su estado y sus accesores están en ${goFileName(entity.name)}.go, que es de build.`
+  ];
+  const invariants = (entity.invariants ?? []).map((invariant) => `// TODO invariante (guarda en el constructor y en cada método mutador): ${invariant}`);
+  if (invariants.length > 0) parts.push(invariants.join('\n'));
+  parts.push(constructorTodo(model, entity, receiver));
+  if (entity.lifecycle) parts.push(lifecycleTodos(model, entity, receiver));
+  const emitted = (model.events ?? []).filter((event) => event.aggregates.includes(entity.name));
+  if (emitted.length > 0) parts.push(eventTodos(emitted, entity, receiver));
+  return { path: behaviorPath(model, entity), content: packageFile(model, layout(model).domain, { body: `\n${parts.join('\n\n')}\n`, generated: false }) };
 }
 
 function constructorTodo(model, entity, receiver) {
@@ -187,16 +210,6 @@ function renderLifecycle(model, entity, receiver) {
     transitions.map(({ from, to }) => [constant(from), `{${to.map(constant).join(', ')}}`]),
     '\t'
   );
-  // El diseño dice qué operación ejecuta cada transición: nombrarla aquí ata el método semántico a su caso de
-  // uso. Sin ella el TODO queda sin destinatario y el estado acaba cambiándose desde fuera.
-  const executedBy = entity.lifecycle.executedBy ?? {};
-  const todos = transitions.flatMap(({ from, to }) =>
-    to.map((target) => {
-      const ops = executedBy[`${from}|${target}`] ?? [];
-      const origin = ops.length ? ` (lo ejecuta ${ops.join(', ')})` : '';
-      return `// TODO (agente): método semántico ${from} → ${target}${origin} que valide la regla del diseño y llame a ${receiver}.transitionTo(${constant(target)}).`;
-    })
-  );
   const fieldDef = entity.fields.find((f) => f.name === field);
   const nullable = fieldDef && isOptional(fieldDef);
   const member = `${receiver}.${localName(field)}`;
@@ -219,10 +232,9 @@ function renderLifecycle(model, entity, receiver) {
 var ${variable} = map[${enumType}][]${enumType}{
 ${entries.join('\n')}
 }`,
-    todos.join('\n'),
     `// transitionTo es la guarda del lifecycle: la llaman los métodos semánticos, nunca un caso de uso.
 //
-//lint:ignore U1000 la llaman los métodos semánticos que escribe el agente (los TODO de arriba).
+//lint:ignore U1000 la llaman los métodos semánticos que escribe el agente (los TODO de ${goFileName(entity.name)}_behavior.go).
 func (${receiver} *${entity.name}) transitionTo(target ${enumType}) error {
 ${guard}
 	return nil
@@ -230,24 +242,47 @@ ${guard}
   ];
 }
 
+/** Un TODO por transición, con la operación que la ejecuta. */
+function lifecycleTodos(model, entity, receiver) {
+  const { enumType, transitions } = entity.lifecycle;
+  const constant = (value) => constantOf(model, enumType, value);
+  // El diseño dice qué operación ejecuta cada transición: nombrarla aquí ata el método semántico a su caso de
+  // uso. Sin ella el TODO queda sin destinatario y el estado acaba cambiándose desde fuera.
+  const executedBy = entity.lifecycle.executedBy ?? {};
+  return transitions
+    .flatMap(({ from, to }) =>
+      to.map((target) => {
+        const ops = executedBy[`${from}|${target}`] ?? [];
+        const origin = ops.length ? ` (lo ejecuta ${ops.join(', ')})` : '';
+        return `// TODO (agente): método semántico ${from} → ${target}${origin} que valide la regla del diseño y llame a ${receiver}.transitionTo(${constant(target)}).`;
+      })
+    )
+    .join('\n');
+}
+
+/** Un TODO por evento que emite la raíz, con la llamada a `raise` ya escrita. */
+function eventTodos(emitted, entity, receiver) {
+  return emitted
+    .map((event) => {
+      const args = event.fields.map((f) => localName(f.name)).join(', ');
+      // Solo las operaciones de ESTE agregado: un evento que emiten dos raíces se genera en las dos, y citarle a
+      // cada una las operaciones de la otra manda el raise al sitio equivocado.
+      const origin = event.emittedBy
+        .filter((e) => e.aggregate === entity.name)
+        .map((e) => e.operation)
+        .join(', ');
+      return `// TODO (agente): emitir ${event.name} en el método de negocio de ${origin || 'la operación que lo declara'}:\n//\n//\t${receiver}.raise(New${event.className}(${args}))`;
+    })
+    .join('\n\n');
+}
+
 // Acumulación de eventos en la raíz: el método de negocio que provoca el cambio hace raise(...); el adaptador de
 // repositorio drena el buffer al persistir. El agregado no conoce el broker.
 function renderDomainEvents(emitted, entity, receiver) {
-  const todos = emitted.map((event) => {
-    const args = event.fields.map((f) => localName(f.name)).join(', ');
-    // Solo las operaciones de ESTE agregado: un evento que emiten dos raíces se genera en las dos, y citarle a
-    // cada una las operaciones de la otra manda el raise al sitio equivocado.
-    const origin = event.emittedBy
-      .filter((e) => e.aggregate === entity.name)
-      .map((e) => e.operation)
-      .join(', ');
-    return `// TODO (agente): emitir ${event.name} en el método de negocio de ${origin || 'la operación que lo declara'}:\n//\n//\t${receiver}.raise(New${event.className}(${args}))`;
-  });
   return [
-    todos.join('\n\n'),
     `// raise acumula un evento de dominio de ${entity.name}; sale por PullEvents al persistir.
 //
-//lint:ignore U1000 la llaman los métodos de negocio que escribe el agente (los TODO de arriba).
+//lint:ignore U1000 la llaman los métodos de negocio que escribe el agente (los TODO de ${goFileName(entity.name)}_behavior.go).
 func (${receiver} *${entity.name}) raise(event Event) {
 	${receiver}.domainEvents = append(${receiver}.domainEvents, event)
 }`,

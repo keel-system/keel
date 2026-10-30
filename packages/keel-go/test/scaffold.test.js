@@ -4,12 +4,14 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { GENERATED_HEADER } from '../src/lib/go-source.js';
 import { GO_MIN_VERSION, GO_TOOLCHAIN } from '../src/lib/assets.js';
 import { MODULES } from '../src/lib/go-stack.js';
-import { makeWorkspace, mountDesign, GO_READY_DESIGN } from './helpers/workspace.js';
+import { makeWorkspace, mountDesign, FIXTURES_DIR, GO_READY_DESIGN } from './helpers/workspace.js';
 
 const workspace = makeWorkspace();
 const dir = mountDesign(workspace, GO_READY_DESIGN.name, GO_READY_DESIGN);
@@ -33,17 +35,39 @@ test('go.mod: módulo, versión mínima, toolchain, requisitos directos exactos 
 });
 
 test('todo .go que escribe build lleva la cabecera de código generado y empieza por ella; lo que completa el agente, no', () => {
-  // Del agente: el handler de cada operación y el mapeo que build no supo derivar entero (devuelve ErrNotImplemented).
-  const agents = (path, content) => /_handler\.go$/.test(path) || (/_mapper\.go$/.test(path) && content.includes('ErrNotImplemented'));
-  let handlers = 0;
+  // Del agente: el handler de cada operación, el comportamiento de cada entidad y el mapeo que build no supo derivar
+  // entero (devuelve ErrNotImplemented).
+  const agents = (path, content) => /_handler\.go$/.test(path) || /_behavior\.go$/.test(path) || (/_mapper\.go$/.test(path) && content.includes('ErrNotImplemented'));
+  const owned = { handler: 0, behavior: 0 };
   for (const [path, content] of byPath) {
     if (!path.endsWith('.go')) continue;
     if (agents(path, content)) {
-      handlers++;
+      if (path.endsWith('_handler.go')) owned.handler++;
+      if (path.endsWith('_behavior.go')) owned.behavior++;
       assert.ok(!content.includes(GENERATED_HEADER), `${path}: lo completa el agente y lleva la cabecera de código generado`);
     } else assert.ok(content.startsWith(`${GENERATED_HEADER}\n\n`), path);
   }
-  assert.ok(handlers > 0, 'el diseño de referencia tiene operaciones: algún handler tenía que salir');
+  assert.ok(owned.handler > 0, 'el diseño de referencia tiene operaciones: algún handler tenía que salir');
+  assert.ok(owned.behavior > 0, 'el diseño de referencia tiene entidades: algún _behavior.go tenía que salir');
+});
+
+// Lo que build deja al agente no puede vivir en un archivo con la cabecera de código generado: el agente no lo
+// puede editar (el siguiente build lo reescribiría), así que un TODO ahí no tiene quien lo cumpla.
+test('ningún TODO del agente queda en un archivo con la cabecera de código generado (las 17 fixtures)', () => {
+  const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
+  assert.ok(fixtures.length >= 17);
+  for (const name of fixtures) {
+    const fixture = loadService(path.join(FIXTURES_DIR, name));
+    for (const file of planService({ ...fixture, workspace: FIXTURES_DIR }).files) {
+      if (file.path.endsWith('.go') && file.content.startsWith(GENERATED_HEADER)) assert.doesNotMatch(file.content, /TODO (\(agente\)|invariante)/, `${name}: ${file.path}`);
+    }
+  }
+  const behavior = byPath.get('internal/domain/product_behavior.go');
+  assert.match(behavior, /TODO \(agente\): constructor `NewProduct\(\.\.\.\) \(\*Product, error\)`/);
+  assert.match(behavior, /TODO invariante/);
+  assert.match(behavior, /SKUFormat\.Validate\(p\.sku\)/);
+  assert.match(behavior, /método semántico DRAFT → ACTIVE \(lo ejecuta activateProduct\)/);
+  assert.match(byPath.get('internal/domain/product.go'), /los TODO de product_behavior\.go/);
 });
 
 test('config/application.yaml dice lo mismo que el de keel-nest y keel-dotnet para el mismo diseño', async () => {

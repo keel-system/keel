@@ -35,6 +35,6 @@
 
 ## Flujos de integración
 
-- Los escenarios `FL-*` son **una función `Test…` por flujo** (`TestFL_RES_001`), con la etiqueta de build
-  `integration`, en caja negra contra la infraestructura real. El JUnit de gotestsum se lee así: un subtest por
-  flujo partiría la matriz.
+- Los escenarios `FL-*` son **una función `Test<Flujo>` por flujo** y un subtest por escenario
+  (`f.Scenario("FL-PRD-001-A: …", …)`), tras la restricción `integration`, en caja negra contra la infraestructura
+  real. La forma entera, el arnés y lo que se afirma: `integration-tests.md`.

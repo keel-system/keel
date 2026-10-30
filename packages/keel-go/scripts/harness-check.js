@@ -244,6 +244,17 @@ func TestProbeOk(t *testing.T) {
 			s.Error("una clave de más casó")
 		}
 	})
+	// ExchangeAll: las peticiones a la vez, con las respuestas en el orden en que se pidieron.
+	f.Scenario("FL-PROBE-001-D: ExchangeAll lanza las peticiones a la vez y devuelve cada respuesta en su sitio", func(s *Scenario) {
+		got := s.ExchangeAll(
+			Request{Method: "GET", Path: RouteBase + "/keel-probe"},
+			Request{Method: "GET", Path: "/livez"},
+			Request{Method: "GET", Path: RouteBase + "/keel-probe-2"},
+		)
+		if len(got) != 3 || got[0].Status != 404 || got[1].Status != 200 || got[2].Status != 404 {
+			s.Fatalf("respuestas fuera de su sitio: %v", got)
+		}
+	})
 	// Un id que el documento no declara: sale AJENO y no puntúa (keel-core/gen/junit-scoring).
 	f.Scenario("FL-PROBE-099-A: un caso fuera del documento", func(s *Scenario) {})
 }
@@ -334,13 +345,13 @@ func TestProbeEarlyPanic(t *testing.T) {
   const run1 = bash(projectDir, 'infra/score-scenarios.sh');
   const lines = run1.output;
   const has = (pattern) => pattern.test(lines);
-  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/), has(/OK\s+FL-PROBE-001-C/) ? '' : lines.slice(-2500));
+  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/) && has(/OK\s+FL-PROBE-001-D/), has(/OK\s+FL-PROBE-001-D/) ? '' : lines.slice(-2500));
   step('score: los escenarios de un flujo corren en el orden escrito', has(/OK\s+FL-PROBE-005-B/), has(/FL-PROBE-005-B/) ? '' : 'sin fila FL-PROBE-005-B');
   step('score: el que falla sale FALLO con la ruta de su evidencia', has(/FALLO\s+FL-PROBE-002-A\s+\S+\s+build\/keel-failures\/FL-PROBE-002-A\.json/));
   step('score: un pánico es el FALLO de su escenario y la suite sigue', has(/FALLO\s+FL-PROBE-006-A/) && has(/OK\s+FL-PROBE-005-A/));
   step('score: el flujo que no arranca deja sus casos OMITIDOS', has(/OMITIDO\s+FL-PROBE-003-A/), has(/OMITIDO/) ? '' : 'sin fila OMITIDO');
   step('score: y lo nombra como arnés roto, con su causa', has(/ARNÉS/) && has(/TestProbeInit\s+\(arranque del flujo\)/) && has(/keel_tabla_que_no_existe/));
-  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && /RESULTADO: KO — 6 OK/.test(lines), lines.match(/RESULTADO:.*/)?.[0] ?? '');
+  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && /RESULTADO: KO — 7 OK/.test(lines), lines.match(/RESULTADO:.*/)?.[0] ?? '');
   step('score: un flujo del documento sin prueba sale NO_EJERC', has(/NO_EJERC\s+FL-PROBE-004/) && !has(/NO_EJERC\s+FL-PROBE-00[12356]/));
   step('score: con algo que arbitrar sale con 1', run1.status === 1, `código ${run1.status}`);
   const readJson = (name) => {

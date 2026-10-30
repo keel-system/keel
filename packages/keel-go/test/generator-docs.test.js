@@ -1,0 +1,275 @@
+// El conocimiento del generador dentro del proyecto (incremento 7c): la skill orquestadora, los cinco agentes, las
+// convenciones y la skill de la base, proyectados a cada harness. Lo que se mide es lo que se rompe en silencio: un
+// asset que existe y nadie instala, un token sin resolver que el agente lee literal, una doc compartida que cita la
+// ruta de UN harness, y —lo que más cuesta— una ruta o un símbolo que la doc enseña y build no emite: el agente
+// escribiría contra algo inventado. Los ejemplos de Go de las docs se juzgan con tree-sitter, como el Go emitido.
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { HARNESSES, loadService } from '@keel-system/keel-core';
+import { AGENTS, CONVENTIONS, DOCS_DIR, GUIDES } from '../src/scaffold/generator-docs.js';
+import { planService } from '../src/scaffold/index.js';
+import { GENERATED_HEADER } from '../src/lib/go-source.js';
+import { SKILL } from '../src/lib/assets.js';
+import { checkGoTree, goParser } from './helpers/go-tree.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
+
+const assets = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets');
+const byPath = (files) => Object.fromEntries(files.map((file) => [file.path, file.content]));
+
+function planWith(fixture, { stack = null, mutate = null } = {}) {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
+  if (mutate) mutate(manifest, layers);
+  return planService({ manifest, layers, workspace: FIXTURES_DIR, stack });
+}
+
+const files = byPath(planWith('product-catalog').files);
+const mysql = byPath(planWith('product-catalog', { stack: { database: 'mysql' } }).files);
+
+/** Todos los markdown de assets/ (agentes, guías, convenciones, skills), recursivo. */
+function assetSources(dir = assets) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    return entry.isDirectory() ? assetSources(full) : entry.name.endsWith('.md') ? [full] : [];
+  });
+}
+
+const read = (...parts) => fs.readFileSync(path.join(assets, ...parts), 'utf8');
+
+test('todo agente, guía y convención de assets/ se instala (las listas son el único punto de instalación)', () => {
+  assert.deepEqual([...AGENTS].sort(), fs.readdirSync(path.join(assets, 'agents')).sort());
+  assert.deepEqual([...CONVENTIONS].sort(), fs.readdirSync(path.join(assets, 'generators', 'go', 'conventions')).sort());
+  const guides = fs.readdirSync(path.join(assets, 'generators', 'go')).filter((name) => name.endsWith('.md'));
+  assert.deepEqual([...GUIDES].sort(), guides.sort());
+  for (const name of [...GUIDES, ...CONVENTIONS.map((c) => `conventions/${c}`), 'framework-errors.md', 'wire-contract.md']) {
+    assert.ok(`${DOCS_DIR}/${name}` in files, `${name} se emite en ${DOCS_DIR}/`);
+  }
+});
+
+test('cada harness recibe su contexto, la skill orquestadora, los cinco agentes y la skill de la base', () => {
+  for (const harness of HARNESSES) {
+    assert.ok(harness.contextFile in files, `${harness.id}: ${harness.contextFile}`);
+    assert.ok(harness.skillPath(SKILL, 'SKILL.md') in files, `${harness.id}: skill orquestadora`);
+    assert.ok(harness.skillPath('keel-go-database', 'SKILL.md') in files, `${harness.id}: skill de la base`);
+    for (const reference of fs.readdirSync(path.join(assets, 'generators', 'go', 'skills', 'keel-go-database', 'references'))) {
+      assert.ok(harness.skillPath('keel-go-database', `references/${reference}`) in files, `${harness.id}: ${reference}`);
+    }
+    for (const agent of AGENTS) {
+      const name = agent.replace(/\.md$/, '');
+      assert.ok(Object.keys(files).some((file) => file.includes(name) && !file.startsWith(DOCS_DIR)), `${harness.id}: agente ${name}`);
+    }
+  }
+});
+
+test('ningún archivo emitido deja un token {{keel:…}} sin resolver', () => {
+  const leftovers = Object.entries(files).filter(([, content]) => /\{\{keel:\w+\}\}/.test(content)).map(([file]) => file);
+  assert.deepEqual(leftovers, []);
+});
+
+test('las docs compartidas y los assets no citan la ruta ni el archivo de contexto de un harness concreto', () => {
+  const harnessPaths = /\.claude\/|\.opencode\/|CLAUDE\.md|AGENTS\.md/;
+  for (const [file, content] of Object.entries(files)) {
+    if (file.startsWith(`${DOCS_DIR}/`)) assert.doesNotMatch(content, harnessPaths, file);
+  }
+  for (const source of assetSources()) assert.doesNotMatch(fs.readFileSync(source, 'utf8'), /\.claude\/|\.opencode\//, path.relative(assets, source));
+});
+
+test('los agentes son hojas: ninguno puede lanzar subagentes', () => {
+  for (const agent of AGENTS) assert.match(read('agents', agent), /^spawns: false$/m, agent);
+});
+
+test('la skill de la base solo se instala con persistencia relacional, y la orquestadora no habla del esquema sin ella', () => {
+  const bare = byPath(
+    planWith('product-catalog', {
+      mutate: (manifest, layers) => {
+        delete manifest.layers.persistence;
+        delete layers.persistence;
+      }
+    }).files
+  );
+  assert.ok(!Object.keys(bare).some((file) => file.includes('keel-go-database')));
+  assert.doesNotMatch(bare[HARNESSES[0].skillPath(SKILL, 'SKILL.md')], /goose|schema: OK/);
+  assert.ok(Object.keys(mysql).some((file) => file.endsWith('skills/keel-go-database/SKILL.md')), 'y con MySQL también');
+});
+
+// Una ruta que la documentación cita y build no emite manda al agente a buscar algo que no existe. Se comprueban
+// todas las de los assets contra lo que build emite para las fixtures (y product-catalog sobre MySQL): una ruta que
+// solo existe con un rasgo del diseño (internal/platform/textfold, con un campo que pliega) cuenta si alguna la emite.
+// Las que llevan un marcador (`<entidad>_behavior.go`) son plantillas y no se miran.
+test('cada ruta internal/, cmd/, tests/ e infra/ que citan los assets existe en lo que emite build', () => {
+  const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
+  const emitted = [...Object.keys(mysql), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path))];
+  // Lo que escriben los agentes (las pruebas de flujo, con nombre de ejemplo).
+  const agentWritten = /^tests\/integration\/\w+_test\.go$/;
+  const missing = [];
+  for (const source of assetSources()) {
+    const text = fs.readFileSync(source, 'utf8');
+    for (const [cited] of text.matchAll(/\b(?:internal|cmd|tests|infra)\/[\w./{},<>*-]+/g)) {
+      const route = cited.replace(/[.,:;]+$/, '');
+      if (/[<{*]/.test(route) || agentWritten.test(route)) continue;
+      const exists = emitted.includes(route) || emitted.some((file) => file.startsWith(route.endsWith('/') ? route : `${route}/`));
+      if (!exists) missing.push(`${path.relative(assets, source)} → ${route}`);
+    }
+  }
+  assert.deepEqual(missing, []);
+});
+
+// Los símbolos y firmas que la documentación ENSEÑA a usar, contra el código emitido.
+test('el arnés que enseñan integration-tests.md y el agente de pruebas es el emitido', () => {
+  const flow = files['tests/integration/flow_test.go'];
+  const harness = files['tests/integration/harness_test.go'];
+  for (const member of [
+    'func StartFlow(t *testing.T, given func(s *Scenario)) *Flow',
+    'func (f *Flow) Scenario(title string, body func(s *Scenario))',
+    'func (s *Scenario) Get(path string) *Response',
+    'func (s *Scenario) Post(path string, body any) *Response',
+    'func (s *Scenario) Put(path string, body any) *Response',
+    'func (s *Scenario) Patch(path string, body any) *Response',
+    'func (s *Scenario) Delete(path string) *Response',
+    'func (s *Scenario) Exchange(method, path string, body any, headers http.Header) *Response',
+    'func (s *Scenario) ExchangeAll(requests ...Request) []*Response',
+    'func (s *Scenario) ExpectStatus(got *Response, want int)',
+    'func (s *Scenario) AssertJSON(expected string, got *Response)',
+    'func (s *Scenario) Eventually(condition func() bool, timeout time.Duration, message string)',
+    'func (s *Scenario) ResetState()',
+    'func (s *Scenario) Db(sql string) string',
+    'func (s *Scenario) BaseURL() string',
+    'const RouteBase = "/api/v1"'
+  ]) {
+    assert.ok(flow.includes(member), member);
+  }
+  assert.match(flow, /type Request struct \{\n\tMethod +string\n\tPath +string\n\tBody +any\n\tHeaders http\.Header\n\}/);
+  for (const member of ['type Response struct {', '\tStatus int', '\tHeader http.Header', '\tBody   string', 'func (r *Response) JSON() (any, error)']) {
+    assert.ok(harness.includes(member), member);
+  }
+  for (const shape of ['"<uuid>"', '"<instant>"', '"<any>"']) assert.ok(flow.includes(shape), shape);
+  assert.match(files['tests/integration/harness_smoke_test.go'], /^func TestHarnessSmoke\(t \*testing\.T\)/m);
+  // La captura admite las peticiones a la vez de ExchangeAll.
+  assert.match(files['tests/integration/failure_capture_test.go'], /type failureCapture struct \{\n\tmu +sync\.Mutex/);
+});
+
+test('el dominio, la aplicación y la persistencia que enseñan las convenciones y la skill son los emitidos', () => {
+  const find = (suffix) => Object.entries(files).find(([file]) => file.endsWith(suffix))?.[1] ?? '';
+  assert.match(find('internal/domain/errors.go'), /func Errorf\(of \*Error, format string, args \.\.\.any\) error/);
+  assert.match(find('internal/domain/errors.go'), /var ErrSkuAlreadyExists = /);
+  assert.match(find('internal/domain/format.go'), /func \(f Format\) Validate\(value string\) error/);
+  assert.match(find('internal/domain/product.go'), /func \(p \*Product\) transitionTo\(target ProductStatus\) error/);
+  assert.match(find('internal/domain/product.go'), /func RehydrateProduct\(state ProductState\) \*Product/);
+  assert.match(find('internal/domain/pageable.go'), /func MapPage\[T, R any\]\(page Page\[T\], convert func\(T\) R\) Page\[R\]/);
+  assert.match(find('internal/domain/pageable.go'), /type Page\[T any\] struct \{\n\tItems +\[\]T\n\tNumber +int32\n\tSize +int32\n\tTotalElements int64\n\tTotalPages +int32/);
+  assert.match(find('internal/application/paged_response.go'), /Items +\[\]T +`json:"items"`/);
+  assert.match(find('internal/application/list_products_query.go'), /Pageable domain\.Pageable `json:"-"`/);
+  assert.match(find('internal/application/usecase.go'), /var ErrNotImplemented = errors\.New\("sin implementar"\)/);
+  assert.match(find('internal/platform/wire/decimal.go'), /func \(d Decimal\) Rescale\(scale int32, mode RoundingMode\) Decimal/);
+  assert.match(find('internal/platform/wire/decimal.go'), /func \(d Decimal\) Quo\(other Decimal, scale int32, mode RoundingMode\) \(Decimal, error\)/);
+  assert.match(find('internal/platform/wire/decimal.go'), /RoundHalfUp RoundingMode = iota/);
+  // La idempotencia de petición: el algoritmo de flow-fidelity.md se escribe con estas piezas.
+  assert.match(find('internal/application/idempotency_key.go'), /func IdempotencyKeyFrom\(ctx context\.Context\) \(string, bool\)/);
+  assert.match(find('internal/application/create_product_command.go'), /func \(m CreateProductCommand\) IdempotencyScope\(\) string/);
+  assert.match(find('internal/application/create_product_command.go'), /func \(m CreateProductCommand\) IdempotencySignature\(\) \(string, error\)/);
+  const store = find('internal/domain/idempotency.go');
+  assert.match(store, /Find\(ctx context\.Context, scope, key string\) \(StoredRequest, bool, error\)/);
+  assert.match(store, /Save\(ctx context\.Context, scope, key, signature string, resourceID \*string, ttlSeconds int\) error/);
+  assert.match(store, /ResourceID \*string/);
+  for (const name of ['IdempotencyConflict', 'IdempotencyReuse']) assert.match(store, new RegExp(`func ${name}\\(scope, key string\\) error`));
+  // El puerto y su uso.
+  const port = find('internal/domain/product_repository.go');
+  for (const member of ['FindByID(ctx context.Context, id uuid.UUID) (*Product, bool, error)', 'FindBySku(ctx context.Context, sku string) (*Product, bool, error)', 'List(ctx context.Context, pageable Pageable) (Page[*Product], error)', 'Save(ctx context.Context, product *Product) (*Product, error)']) {
+    assert.ok(port.includes(member), member);
+  }
+  // goose: el historial que el reset respeta y la migración que se aplica al arrancar en todos los perfiles.
+  assert.match(files['infra/reset-db.sh'], /goose_db_version/);
+  assert.match(find('internal/infrastructure/postgres/database.go'), /Migrate aplica las migraciones de goose que falten, en todos los perfiles/);
+  assert.ok('internal/infrastructure/postgres/migrations/00001_baseline.sql' in files);
+  assert.match(find('internal/domain/errors.go'), /code: "CONCURRENT_MODIFICATION"/);
+});
+
+test('el handler de ejemplo de flow-fidelity.md usa la misma clave que la nota del handler emitido', () => {
+  const doc = read('generators', 'go', 'conventions', 'flow-fidelity.md');
+  const note = files['internal/application/create_product_command_handler.go'];
+  for (const piece of ['IdempotencyKeyFrom(ctx)', 'cmd.IdempotencyScope()', 'cmd.IdempotencySignature()', 'domain.IdempotencyReuse(scope', 'domain.IdempotencyConflict', 'uuid.NewV7()', '86400']) {
+    assert.ok(doc.includes(piece), `flow-fidelity.md: ${piece}`);
+    assert.ok(note.includes(piece.replace('domain.IdempotencyReuse(scope', 'domain.IdempotencyReuse(scope')), `la nota del handler: ${piece}`);
+  }
+  assert.match(note, /RECLAMA\s+(\/\/\s+)?PRIMERO/);
+});
+
+// Los ejemplos de Go de las docs se copian tal cual: tienen que ser Go. Un bloque con su cláusula package se juzga
+// entero (sintaxis e imports usados); un fragmento, como declaraciones de un paquete o, si no, como un cuerpo.
+test('los ejemplos de Go de las convenciones y las skills son sintaxis válida', async () => {
+  const go = await goParser();
+  const parses = (source) => {
+    const tree = go.parse(source);
+    try {
+      return !tree.rootNode.hasError;
+    } finally {
+      tree.delete();
+    }
+  };
+  let blocks = 0;
+  const problems = [];
+  for (const source of assetSources()) {
+    const text = fs.readFileSync(source, 'utf8');
+    for (const [, raw] of text.matchAll(/```go\n([\s\S]*?)```/g)) {
+      blocks++;
+      // Un ejemplo dentro de una lista va sangrado, y `…` marca lo que el ejemplo no escribe.
+      const code = raw.replace(/^ {2}/gm, '').replaceAll('…', '');
+      const where = path.relative(assets, source);
+      if (/^package \w+/m.test(code)) {
+        problems.push(...(await checkGoTree([{ path: 'tests/integration/example_test.go', content: code }], 'product-catalog')).map((p) => `${where}: ${p}`));
+      } else if (!parses(`package example\n\n${code}`) && !parses(`package example\n\nfunc _() {\n${code}\n}\n`)) {
+        problems.push(`${where}: un fragmento que no es Go:\n${code.slice(0, 200)}`);
+      }
+    }
+  }
+  assert.ok(blocks >= 6, `se esperaban los ejemplos de las convenciones (${blocks})`);
+  assert.deepEqual(problems, []);
+});
+
+test('el ejemplo de flujo de integration-tests.md tiene la forma que exige el arnés', () => {
+  const doc = read('generators', 'go', 'conventions', 'integration-tests.md');
+  const [, example] = doc.match(/## Una función por flujo\n\n```go\n([\s\S]*?)```/);
+  assert.ok(example.startsWith('//go:build integration\n\npackage integration\n'), 'la restricción y el paquete');
+  assert.ok(!example.includes(GENERATED_HEADER), 'sin la cabecera de código generado: es del agente');
+  assert.match(example, /f := StartFlow\(t, nil\)/);
+  assert.match(example, /f\.Scenario\("FL-PRD-001: /);
+  assert.doesNotMatch(example, /"product-catalog\//, 'la caja negra: ningún import del servicio');
+});
+
+test('la skill orquestadora y el contexto enseñan los comandos de esta plataforma, no los de otra', () => {
+  for (const harness of HARNESSES) {
+    const skill = files[harness.skillPath(SKILL, 'SKILL.md')];
+    for (const command of ['bash infra/score-scenarios.sh', 'bash infra/check-flows.sh', 'go mod tidy', "go test -tags integration -count=1 -run '^TestHarnessSmoke$' ./tests/integration/", 'keel-go-quality', 'keel-go-validate']) {
+      assert.ok(skill.includes(command), `${harness.id}: ${command}`);
+    }
+    assert.doesNotMatch(skill, /npm |gradlew|vitest|dotnet |check:architecture|Todavía no hay pipeline/i);
+    assert.match(files[harness.contextFile], new RegExp(`/${SKILL}`));
+  }
+  assert.match(files['README.md'], new RegExp(`/${SKILL}`));
+  assert.match(files['README.md'], /_behavior\.go/);
+});
+
+test('el cierre no reporta como hueco lo que el diseño ya aceptó por escrito (specs/gaps.yaml, specs/decisions.yaml)', () => {
+  const docs = [`${DOCS_DIR}/orchestration.md`, ...Object.keys(files).filter((file) => file.endsWith(`${SKILL}/SKILL.md`))];
+  assert.ok(docs.length > 1);
+  for (const file of docs) {
+    for (const words of ['`specs/gaps.yaml`', '`specs/decisions.yaml`', '`state: accepted`', 'no se reporta']) assert.ok(files[file].includes(words), `${file}: ${words}`);
+  }
+});
+
+// En la fase 1 code y tests escriben a la vez: el agente de código no puede medir con algo que compile
+// tests/integration, o reportaría un `compiles: false` que no es suyo (corrida catalog-dotnet del registry).
+test('el agente de código verifica con lo que NO compila las pruebas de flujo, y todo lo que escribe tests lleva la restricción', () => {
+  const code = read('agents', 'keel-go-code.md');
+  assert.ok(code.includes('`go build ./...` y `go vet ./...` limpios. No ven `tests/integration`'));
+  assert.doesNotMatch(code, /go vet -tags integration/);
+  for (const file of Object.keys(files).filter((name) => name.startsWith('tests/integration/'))) {
+    assert.match(files[file], /^(\/\/ Code generated by keel-go\. DO NOT EDIT\.\n\n)?\/\/go:build integration\n\n(\/\/.*\n)*package integration\n/, file);
+  }
+  const tests = read('agents', 'keel-go-tests.md');
+  assert.ok(tests.includes('`//go:build integration`'));
+  assert.ok(tests.includes('**Prohibido leer `internal/` y `cmd/`**'));
+});

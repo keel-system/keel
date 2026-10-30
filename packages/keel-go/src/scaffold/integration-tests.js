@@ -126,7 +126,7 @@ func (s *Scenario) Db(sql string) string {
 }`);
   }
   return integrationFile(model, {
-    imports: ['fmt', 'net/http', 'runtime/debug', 'strings', 'testing', 'time'],
+    imports: ['fmt', 'net/http', 'runtime/debug', 'strings', 'sync', 'testing', 'time'],
     body: String.raw`
 ${api ? `// RouteBase es el prefijo de todas las rutas del servicio (basePath del diseño + versión).
 const RouteBase = ${goString(model.api.routeBase)}
@@ -302,6 +302,38 @@ func (s *Scenario) Exchange(method, path string, body any, headers http.Header) 
 		s.Fatalf("%s %s: %v", method, path, err)
 	}
 	return got
+}
+
+// Request es una petición de ExchangeAll: la de Exchange, como valor.
+type Request struct {
+	Method  string
+	Path    string
+	Body    any
+	Headers http.Header
+}
+
+// ExchangeAll lanza requests A LA VEZ —ninguna espera a otra— y devuelve sus respuestas en el mismo orden. Es la forma
+// de escribir un escenario de carrera (dos altas con la misma clave de idempotencia). Si alguna no llega, el escenario
+// termina aquí, en su goroutine: un Fatal o un pánico desde la goroutine de una petición no lo pararía, y el
+// segundo tumbaría la suite entera.
+func (s *Scenario) ExchangeAll(requests ...Request) []*Response {
+	s.Helper()
+	baseURL := server.url()
+	responses := make([]*Response, len(requests))
+	errs := make([]error, len(requests))
+	var wg sync.WaitGroup
+	for i, request := range requests {
+		wg.Go(func() {
+			responses[i], errs[i] = send(s.Context(), baseURL, request.Method, request.Path, request.Body, request.Headers)
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			s.Fatalf("%s %s: %v", requests[i].Method, requests[i].Path, err)
+		}
+	}
+	return responses
 }
 
 // ExpectStatus marca el escenario en rojo si got no trae el status want, con el cuerpo en el motivo.
@@ -771,7 +803,7 @@ ${sections.length > 0 ? `\n${sections.join('\n\n')}\n` : ''}`
 // Con las etiquetas de los structs: plantilla normal (String.raw dejaría la barra de cada `\``).
 function failureCaptureTestGo(model) {
   return integrationFile(model, {
-    imports: ['encoding/json', 'fmt', 'os', 'path/filepath', 'strings'],
+    imports: ['encoding/json', 'fmt', 'os', 'path/filepath', 'strings', 'sync'],
     body: `
 // requestReport es la petición tal como viajó.
 type requestReport struct {
@@ -809,8 +841,9 @@ type failureReport struct {
 
 // failureCapture guarda el último intercambio y el último sondeo, y los vuelca a build/keel-failures/<escenario>.json
 // cuando un escenario falla: es lo que lee el árbitro junto al XML para decidir culprit: code | test | design. Los
-// flujos corren en serie y cada escenario espera a sus peticiones, así que basta con lo último.
+// flujos corren en serie, así que basta con lo último; el cerrojo es para las peticiones a la vez de ExchangeAll.
 type failureCapture struct {
+	mu       sync.Mutex
 	request  *requestReport
 	response *responseReport
 	probe    *probeReport
@@ -819,14 +852,20 @@ type failureCapture struct {
 var capture failureCapture
 
 func (c *failureCapture) recordExchange(request requestReport, response responseReport) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.request, c.response = &request, &response
 }
 
 func (c *failureCapture) recordProbe(probe probeReport) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.probe = &probe
 }
 
 func (c *failureCapture) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.request, c.response, c.probe = nil, nil, nil
 }
 
@@ -842,7 +881,9 @@ func (c *failureCapture) dumpInit(flow, failure string) {
 }
 
 func (c *failureCapture) dump(report failureReport) {
+	c.mu.Lock()
 	report.Request, report.Response, report.Probe = c.request, c.response, c.probe
+	c.mu.Unlock()
 	c.clear()
 	if err := writeReport(report); err != nil {
 		fmt.Fprintf(os.Stderr, "no se pudo volcar la evidencia de %s: %v\\n", report.Scenario, err)

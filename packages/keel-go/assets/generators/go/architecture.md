@@ -47,6 +47,11 @@ generado: no se edita) y el agente su handler (`<operación>_command_handler.go`
 (`<entidad>_mapper.go`); el que build no sabe derivar entero devuelve además un error con el campo que falta, y
 ese archivo también lo completa el agente.
 
+Con las entidades, el mismo reparto: build escribe el tipo, su estado, sus accesores y la guarda del lifecycle
+(`<entidad>.go`, con la cabecera), y el agente su constructor, sus métodos de negocio y las guardas de sus
+invariantes en el archivo hermano `<entidad>_behavior.go`, del mismo paquete, que build deja con los TODO de lo que
+falta. Así el siguiente build puede reescribir el tipo sin tocar el comportamiento.
+
 ## Por qué `domain` y `application` son un paquete cada uno
 
 Partirlos por agregado abre ciclos de importación en cuanto dos agregados se refieren (una referencia, un
