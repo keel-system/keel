@@ -29,7 +29,32 @@ test('PostgreSQL y MySQL: los demás motores se rechazan en el build con su moti
   assert.match(checkSupportedStack({ database: 'mongodb' }).errors[0], /incremento 12/);
 });
 
-for (const layer of ['messaging', 'http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
+test('capa messaging: entra con persistencia relacional y API (tramo 9b-2); sin persistencia o sin API, rechazada con su motivo', () => {
+  const relational = { persistence: { default: { model: 'relational' } } };
+  const accepted = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api', 'persistence', 'messaging'), { ...layersWith('domain', 'use-cases', 'api', 'messaging'), ...relational });
+  assert.deepEqual(accepted.errors, []);
+  const bare = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api', 'messaging'), layersWith('domain', 'use-cases', 'api', 'messaging'));
+  assert.equal(bare.errors.length, 1);
+  assert.match(bare.errors[0], /capa messaging sin persistence .*keel-go generaría un servicio que no publica/);
+  const headless = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging'), { ...layersWith('domain', 'use-cases', 'messaging'), ...relational });
+  assert.equal(headless.errors.length, 1);
+  assert.match(headless.errors[0], /capa messaging sin api .*incremento 10/);
+  // Las fixtures: metering-digest (sin api) se rechaza; stock-reservation-events entra entera.
+  const fixture = (name) => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+    return checkSupportedFeatures(manifest, layers).errors;
+  };
+  assert.ok(fixture('metering-digest').some((error) => /capa messaging sin api/.test(error)));
+  assert.deepEqual(fixture('stock-reservation-events'), []);
+});
+
+test('RabbitMQ: Kafka y SNS/SQS se rechazan en el build con su tramo', () => {
+  assert.deepEqual(checkSupportedStack({ broker: 'rabbitmq', database: 'postgresql' }).errors, []);
+  assert.match(checkSupportedStack({ broker: 'kafka' }).errors[0], /broker: kafka .*tramo 9f/);
+  assert.match(checkSupportedStack({ broker: 'snssqs' }).errors[0], /broker: snssqs .*tramo 9g/);
+});
+
+for (const layer of ['http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);

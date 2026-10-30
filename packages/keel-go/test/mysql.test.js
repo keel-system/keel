@@ -32,7 +32,7 @@ const MYSQL = { database: 'mysql' };
 const STORE = 'internal/infrastructure/mysql';
 
 /** Las tablas de mecanismos de keel-spring que keel-go todavía no genera (las mismas que schema-parity.test.js). */
-const MECHANISM_TABLES = ['reconciliation_claim', 'outbox_event', 'processed_event'];
+const MECHANISM_TABLES = ['reconciliation_claim'];
 
 const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
 const relational = fixtures
@@ -145,7 +145,8 @@ for (const { name, design, plan } of relational) {
     const transactions = file(plan, `${STORE}/transactions.go`);
     assert.match(transactions, /return bound\{tx\}, nil/);
     assert.match(transactions, /return bound\{t\.db\}, nil/);
-    assert.match(transactions, /fn\(context\.WithValue\(ctx, txKey\{\}, tx\), bound\{tx\}\)/);
+    // Con la mensajería best-effort, el contexto lleva además los hooks de afterCommit.
+    assert.match(transactions, /fn\((?:context\.WithValue\()?context\.WithValue\(ctx, txKey\{\}, tx\)(?:, hooksKey\{\}, hooks\))?, bound\{tx\}\)/);
     assert.match(file(plan, `${STORE}/migrations/00001_baseline.sql`), /^-- \+goose Down\nSET FOREIGN_KEY_CHECKS = 0;/m);
   });
 

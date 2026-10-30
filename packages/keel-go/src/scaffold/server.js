@@ -18,7 +18,8 @@ import { alignRows } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
 import { repositoryArgs, repositoryParam } from './repositories.js';
 import { MESSAGING_IMPORT, usesGoMessaging, usesGoOutbox } from './messaging.js';
-import { brokerFiles, consumes, publishes } from './broker.js';
+import { brokerConnection, brokerFiles, consumes, publishes } from './broker.js';
+import { RABBITMQ_IMPORT } from './rabbitmq.js';
 import { newUseCasesCall, usesDependencies } from './use-cases.js';
 import { IDEMPOTENCY_STORE, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_ROLES, SECURITY_IMPORT, settingsFromConfig, usesRoleCheck } from './security.js';
@@ -64,7 +65,8 @@ function mainGo(model) {
       SECURITY_IMPORT,
       'database/sql',
       layout(model).store.dir,
-      MESSAGING_IMPORT
+      MESSAGING_IMPORT,
+      RABBITMQ_IMPORT
     ],
     body: `
 func main() {
@@ -183,8 +185,17 @@ function messagingWiring(model) {
 	if err != nil {
 		return fmt.Errorf("configuración de la mensajería: %w", err)
 	}`];
+  const connection = brokerConnection(model);
+  if (connection) {
+    lines.push(`	${connection.name}Settings, err := rabbitmq.SettingsFrom(cfg)
+	if err != nil {
+		return fmt.Errorf("configuración de RabbitMQ: %w", err)
+	}
+	// La conexión con el broker: arranca sin él y conecta en segundo plano (su Run va en el errgroup).
+	${connection.name} := rabbitmq.New(${connection.name}Settings, messagingSettings, logger)`);
+  }
   if (publishes(model)) {
-    lines.push(`	adapters, err := brokerAdapters(messagingSettings, logger)
+    lines.push(`	adapters, err := brokerAdapters(messagingSettings, ${connection ? `${connection.name}, ` : ''}logger)
 	if err != nil {
 		return fmt.Errorf("adaptadores del broker: %w", err)
 	}`);
@@ -206,11 +217,16 @@ function listenersWiring(model, store) {
 	relay := messaging.NewRelay(${store.name}.NewOutbox(transactions), dispatcher, *messagingSettings.OutboxRelay, logger)`);
   }
   if (consumes(model)) {
+    const connection = brokerConnection(model);
+    const fields = alignRows([
+      { indent: '\t\t', cells: ['Settings:', 'messagingSettings,'] },
+      ...(connection ? [{ indent: '\t\t', cells: [`${connection.field}:`, `${connection.name},`] }] : []),
+      { indent: '\t\t', cells: ['UseCases:', 'useCases,'] },
+      { indent: '\t\t', cells: ['Guard:', `messaging.NewIdempotencyGuard(${store.name}.NewProcessedEvents(transactions), logger),`] },
+      { indent: '\t\t', cells: ['Logger:', 'logger,'] }
+    ]);
     lines.push(`	listeners, err := messageListeners(inbound{
-		Settings: messagingSettings,
-		UseCases: useCases,
-		Guard:    messaging.NewIdempotencyGuard(${store.name}.NewProcessedEvents(transactions), logger),
-		Logger:   logger,
+${fields.join('\n')}
 	})
 	if err != nil {
 		return fmt.Errorf("listeners de las suscripciones: %w", err)
@@ -219,10 +235,17 @@ function listenersWiring(model, store) {
   return lines.length > 0 ? `${lines.join('\n')}\n` : '';
 }
 
-// Las goroutines de la mensajería en el errgroup: el relay (solo con base: el perfil test no la tiene) y un listener por
-// consumidor. Todos paran al cancelarse el contexto del grupo.
+// Las goroutines de la mensajería en el errgroup: la conexión con el broker, el relay (solo con base: el perfil test no
+// la tiene) y un listener por consumidor. Todos paran al cancelarse el contexto del grupo.
 function workers(model) {
   const parts = [];
+  const connection = brokerConnection(model);
+  if (connection) {
+    parts.push(`
+	group.Go(func() error {
+		return ${connection.name}.Run(groupCtx)
+	})`);
+  }
   if (usesGoOutbox(model)) {
     parts.push(`
 	if database.Enabled {

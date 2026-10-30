@@ -382,6 +382,27 @@ if (step('MySQL: go mod tidy del diseño de referencia', mysqlTidy.ok, mysqlTidy
   step('MySQL: sin perdonar la excepción, el check sale en rojo con MPL-2.0 (falsado)', !unforgiven.ok && /MPL-2\.0/.test(unforgiven.output), unforgiven.ok ? 'salió verde' : '');
 }
 
+// La mensajería con RabbitMQ: el cliente (amqp091-go) y lo que trae, contra la misma lista. El diseño de referencia no
+// tiene mensajería, así que se mide sobre stock-reservation-events.
+const MESSAGING_DESIGN = 'stock-reservation-events';
+const rabbitDir = path.join(makeWorkspace('keel-go-licenses-rabbit-'), MESSAGING_DESIGN);
+{
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, MESSAGING_DESIGN));
+  for (const file of planService({ manifest, layers, workspace: rabbitDir, stack: { broker: 'rabbitmq', database: 'postgresql' } }).files) {
+    const out = path.join(rabbitDir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+}
+const rabbitTidy = go(rabbitDir, ['mod', 'tidy']);
+if (step(`RabbitMQ: go mod tidy de ${MESSAGING_DESIGN}`, rabbitTidy.ok, rabbitTidy.ok ? '' : rabbitTidy.output.slice(0, 1000))) {
+  const rabbitLicenses = go(rabbitDir, ['tool', 'go-licenses', 'check', '--ignore', MESSAGING_DESIGN, allowed, './...']);
+  if (!step('RabbitMQ: licencias permisivas con el cliente amqp091-go', rabbitLicenses.ok)) console.error(rabbitLicenses.output);
+  // Falsado: amqp091-go es BSD-2-Clause, la única con ella en el grafo; sin ella en la lista, rojo.
+  const narrowedRabbit = go(rabbitDir, ['tool', 'go-licenses', 'check', '--ignore', MESSAGING_DESIGN, `--allowed_licenses=${ALLOWED_LICENSES.filter((id) => id !== 'BSD-2-Clause').join(',')}`, './...']);
+  step('RabbitMQ: sin BSD-2-Clause en la lista, el check sale en rojo con amqp091-go (falsado)', !narrowedRabbit.ok && /amqp091-go/.test(narrowedRabbit.output), narrowedRabbit.ok ? 'salió verde' : '');
+}
+
 if (race) {
   const runtime = containerRuntime();
   if (!runtime) step('go test -race en contenedor', false, 'sin podman ni docker (o --no-race)');

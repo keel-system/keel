@@ -10,9 +10,10 @@
 
 import { GO_MIN_VERSION, GO_TOOLCHAIN } from '../lib/assets.js';
 import { usesJwt, usesRelational } from '@keel-system/keel-core/gen/features';
-import { JWT_REQUIRES, MODULES, RELATIONAL_REQUIRES, SKELETON_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
+import { BROKER_REQUIRES, JWT_REQUIRES, MODULES, RELATIONAL_REQUIRES, SKELETON_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
 import { relationalEngine } from '../lib/relational-engine.js';
 import { foldKinds } from './persistence-runtime.js';
+import { usesGoMessaging } from './messaging.js';
 import { layout, packageFile } from './render.js';
 
 /** Los módulos de ejecución que el proyecto importa, en el orden de go.mod. Crece con cada capa que se genera. */
@@ -21,7 +22,8 @@ export function requiresFor(model = null) {
     ...SKELETON_REQUIRES,
     ...(model && usesRelational(model) ? RELATIONAL_REQUIRES[relationalEngine(model)] : []),
     ...(model && foldKinds(model).has('accents') ? TEXT_FOLD_REQUIRES : []),
-    ...(model && usesJwt(model) ? JWT_REQUIRES : [])
+    ...(model && usesJwt(model) ? JWT_REQUIRES : []),
+    ...(model && usesGoMessaging(model) ? (BROKER_REQUIRES[model.stack?.broker] ?? []) : [])
   ].sort();
 }
 

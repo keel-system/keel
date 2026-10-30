@@ -11,6 +11,8 @@ import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { loadService } from '@keel-system/keel-core';
 import { OUTBOX_EVENT, PROCESSED_EVENT, OUTBOX_RELAY } from '@keel-system/keel-core/gen/messaging-stores';
+import { rabbitTopology } from '@keel-system/keel-core/gen/messaging-plan';
+import { rabbitListenerRetry } from '@keel-system/keel-core/gen';
 import { planService as planDotnet } from '../../keel-dotnet/src/scaffold/index.js';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { springSchema } from '../../keel-spring/test/helpers/schema-table.js';
@@ -136,7 +138,10 @@ test('el arranque cablea la mensajería y deja al agente un solo archivo, sin la
   const files = plan('stock-reservation-events');
   const main = content(files, 'cmd/server/main.go');
   assert.match(main, /messagingSettings, err := messaging\.SettingsFrom\(cfg\)/);
-  assert.match(main, /adapters, err := brokerAdapters\(messagingSettings, logger\)/);
+  assert.match(main, /rabbit := rabbitmq\.New\(rabbitSettings, messagingSettings, logger\)/);
+  assert.match(main, /adapters, err := brokerAdapters\(messagingSettings, rabbit, logger\)/);
+  assert.match(main, /return rabbit\.Run\(groupCtx\)/);
+  assert.match(main, /Rabbit:   rabbit,/);
   assert.match(main, /messaging\.NewDispatcherFallback\(cfg\.Profiles, logger\)/);
   assert.match(main, /return relay\.Run\(groupCtx\)/);
   assert.match(main, /listeners, err := messageListeners\(inbound\{/);
@@ -145,12 +150,16 @@ test('el arranque cablea la mensajería y deja al agente un solo archivo, sin la
   assert.ok(main.indexOf('useCases := ') < main.indexOf('messageListeners('));
   const broker = content(files, 'cmd/server/broker.go');
   assert.ok(!broker.startsWith(GENERATED_HEADER), 'broker.go es del agente');
-  assert.match(broker, /func brokerAdapters\(settings messaging\.Settings, logger \*slog\.Logger\) \(outbound, error\)/);
+  assert.match(broker, /func brokerAdapters\(settings messaging\.Settings, rabbit \*rabbitmq\.Connection, logger \*slog\.Logger\) \(outbound, error\)/);
+  assert.match(content(files, 'cmd/server/messaging.go'), /\tRabbit   \*rabbitmq\.Connection\n/);
   assert.match(broker, /func messageListeners\(deps inbound\) \(\[\]listener, error\)/);
   assert.match(broker, /UNO POR COLA/);
   assert.ok(content(files, 'cmd/server/messaging.go').startsWith(GENERATED_HEADER), 'los tipos son de build');
-  // Con Kafka, un listener por suscripción.
-  assert.match(content(plan('stock-reservation-events', { broker: 'kafka' }), 'cmd/server/broker.go'), /UNO POR SUSCRIPCIÓN/);
+  // Con Kafka, un listener por suscripción, y sin la conexión de RabbitMQ (la suya llega en el 9f).
+  const kafka = plan('stock-reservation-events', { broker: 'kafka' });
+  assert.match(content(kafka, 'cmd/server/broker.go'), /UNO POR SUSCRIPCIÓN/);
+  assert.match(content(kafka, 'cmd/server/broker.go'), /func brokerAdapters\(settings messaging\.Settings, logger \*slog\.Logger\)/);
+  assert.equal(kafka.find((file) => file.path.startsWith('internal/infrastructure/rabbitmq/')), undefined);
 });
 
 test('cada mensaje de suscripción comprueba la presencia de lo obligatorio y sus cotas, y nombra al consumidor', () => {
@@ -164,4 +173,94 @@ test('cada mensaje de suscripción comprueba la presencia de lo obligatorio y su
   const reserved = content(files, `${MESSAGING}/stock_reserved_message.go`);
   // Sin cotas fuera de la presencia, sin acumulador.
   assert.doesNotMatch(reserved, /violations/);
+});
+
+// ─── RabbitMQ (tramo 9b-2) ───────────────────────────────────────────────────────────────────────
+
+const RABBIT = 'internal/infrastructure/rabbitmq';
+
+/** La topología que declara RabbitTopologyConfig de keel-spring: una entrada por @Bean (el lector de keel-dotnet). */
+function springTopology(files) {
+  const java = files.find((file) => file.path.endsWith('/RabbitTopologyConfig.java'))?.content ?? '';
+  return java
+    .split('@Bean')
+    .slice(1)
+    .filter((block) => block.includes('new TopicExchange('))
+    .map((block) => ({
+      source: /new TopicExchange\("([^"]+)"/.exec(block)[1],
+      queue: /QueueBuilder\.durable\("([^"]+)"\)/.exec(block)[1],
+      deadLetter: /"x-dead-letter-routing-key", "([^"]+)"/.exec(block)?.[1] ?? null
+    }));
+}
+
+/** Las colas que declara topology.go: `{Source: "…", Queue: "…", DeadLetter: "…", …}`. */
+function goTopology(files) {
+  const go = content(files, `${RABBIT}/topology.go`);
+  const queues = /\tqueues = \[\]QueueTopology\{([\s\S]*?)\n\t\}\n/.exec(go)?.[1] ?? '';
+  return [...queues.matchAll(/\{Source: "([^"]+)", Queue: "([^"]+)"(?:, DeadLetter: "([^"]+)")?/g)].map((m) => ({ source: m[1], queue: m[2], deadLetter: m[3] ?? null }));
+}
+
+test('stock-reservation-events: la conexión con RabbitMQ, su configuración y el cliente en go.mod', () => {
+  const files = plan('stock-reservation-events');
+  for (const name of ['doc', 'topology', 'settings', 'connection', 'rabbitmq_test']) assert.ok(content(files, `${RABBIT}/${name}.go`), name);
+  assert.match(content(files, 'go.mod'), /\tgithub\.com\/rabbitmq\/amqp091-go v1\.15\.0\n/);
+  const connection = content(files, `${RABBIT}/connection.go`);
+  // Publicación con confirmación y mandatory; consumo sin autoack y descarte sin reencolar.
+  assert.match(connection, /PublishWithDeferredConfirmWithContext\(confirmCtx, exchange, routingKey, true, false, message\)/);
+  assert.match(connection, /ch\.Confirm\(false\)/);
+  assert.match(connection, /ConsumeWithContext\(ctx, queue, "", false, false, false, false, nil\)/);
+  assert.match(connection, /delivery\.Nack\(false, false\)/);
+  assert.match(connection, /connectionName = "stock-reservation-events"/);
+  // Sin la recuperación automática de la biblioteca: la reconexión es el bucle de Run.
+  assert.doesNotMatch(connection, /Recovery:/);
+  // Sin RabbitMQ, ni el paquete ni el módulo.
+  const kafka = plan('stock-reservation-events', { broker: 'kafka' });
+  assert.doesNotMatch(content(kafka, 'go.mod'), /amqp091/);
+  assert.equal(content(kafka, 'config/parameters/local/rabbitmq.yaml'), undefined);
+});
+
+for (const name of MESSAGING_FIXTURES) {
+  test(`${name}: rabbitmq.yaml es el de keel-dotnet, byte a byte, en los cuatro perfiles`, () => {
+    const ours = plan(name);
+    const dotnet = plan(name, { broker: 'rabbitmq' }, planDotnet);
+    for (const profile of PROFILES) {
+      const file = `config/parameters/${profile}/rabbitmq.yaml`;
+      assert.ok(content(ours, file), file);
+      assert.equal(content(ours, file), content(dotnet, file), file);
+    }
+  });
+
+  test(`${name}: toda clave que lee rabbitmq.SettingsFrom existe en su rabbitmq.yaml`, () => {
+    const files = plan(name);
+    const yaml = flatten(parseYaml(content(files, 'config/parameters/local/rabbitmq.yaml')));
+    const settings = content(files, `${RABBIT}/settings.go`);
+    const keys = [...settings.matchAll(/"(rabbitmq\.[a-z0-9.-]+)"/g)].map((match) => match[1]);
+    assert.ok(keys.length >= 7, keys.join(', '));
+    for (const key of keys) assert.ok(yaml.has(key), `${key} no está en rabbitmq.yaml`);
+  });
+
+  test(`${name}: la topología de RabbitMQ es la de keel-spring, y el reintento del «no existe» va por cola`, () => {
+    const { model, files } = planService({ ...design(name), workspace: FIXTURES_DIR, stack: { broker: 'rabbitmq' } });
+    assert.deepEqual(goTopology(files), springTopology(plan(name, { broker: 'rabbitmq' }, planSpring)));
+    const go = content(files, `${RABBIT}/topology.go`);
+    for (const entry of rabbitTopology(model)) {
+      const row = new RegExp(`\\{Source: "${entry.source}", Queue: "${entry.queue}"[^\\n]*\\}`).exec(go)?.[0];
+      assert.ok(row, entry.queue);
+      assert.equal(/RetriesNotFound: true/.test(row), entry.retriesNotFound, `${entry.queue}: RetriesNotFound`);
+    }
+  });
+}
+
+test('el reintento del listener es el de keel-core (rabbitListenerRetry), y sin onFailure.retry un solo intento', () => {
+  for (const name of MESSAGING_FIXTURES) {
+    const { model, files } = planService({ ...design(name), workspace: FIXTURES_DIR, stack: { broker: 'rabbitmq' } });
+    const go = content(files, `${RABBIT}/topology.go`);
+    const retry = rabbitListenerRetry(model);
+    if (!retry) {
+      assert.match(go, /\tretry = nil\n/, name);
+      continue;
+    }
+    const multiplier = Number.isInteger(retry.multiplier) ? `${retry.multiplier}\\.0` : String(retry.multiplier).replace('.', '\\.');
+    assert.match(go, new RegExp(`retry = &ListenerRetry\\{Attempts: ${retry.attempts}, Initial: ${retry.initialMs} \\* time\\.Millisecond, Multiplier: ${multiplier}[,}]`), name);
+  }
 });

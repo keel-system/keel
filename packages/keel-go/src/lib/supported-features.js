@@ -13,11 +13,11 @@
 import { buildModel } from '@keel-system/keel-core/gen/model';
 import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { persistedMembers } from '@keel-system/keel-core/gen';
+import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { GO_PROJECTION } from './go-projection.js';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  messaging: 'incremento 9',
   'http-clients': 'incremento 11',
   dependencies: 'incremento 11',
   storage: 'incremento 13',
@@ -30,6 +30,10 @@ const PENDING_LAYERS = {
  * MariaDB, SQL Server y Oracle se quedan fuera hasta que una red los mida, como en keel-nest y keel-dotnet.
  */
 export const SUPPORTED_DATABASES = ['postgresql', 'mysql'];
+
+/** Los brokers sobre los que keel-go genera la mensajería: RabbitMQ (tramo 9b-2). Kafka llega en el 9f y SNS/SQS en el 9g. */
+export const SUPPORTED_BROKERS = ['rabbitmq'];
+const PENDING_BROKERS = { kafka: 'tramo 9f', snssqs: 'tramo 9g' };
 
 /** ¿Declara el diseño persistencia DOCUMENTAL? Llega en el incremento 12. */
 function documentPersistence(layers) {
@@ -72,6 +76,7 @@ export function checkSupportedFeatures(manifest, layers) {
     }
   }
   if (declared.includes('security')) errors.push(...securityErrors(layers));
+  if (declared.includes('messaging')) errors.push(...messagingErrors(manifest, layers, declared));
   if (declared.includes('persistence') && documentPersistence(layers)) {
     errors.push(
       'capa persistence: keel-go todavía no genera la persistencia documental (llega en el incremento 12 de PLAN-KEEL-GO.md). ' +
@@ -137,6 +142,25 @@ function unmeasuredShapes(manifest, layers) {
   return errors;
 }
 
+/**
+ * Lo que keel-go todavía no genera de la capa messaging. La mensajería sin persistencia la rechazan los cuatro generadores
+ * con el mismo motivo (keel-core/gen/messaging-frontier.js); la documental cae con la persistencia documental. Y sin la
+ * capa api: el arranque de keel-go abre la base y cablea los repositorios, el puente y los listeners desde la entrada
+ * HTTP, así que sin ella saldría un servicio que ni publica ni consume. La única fixture así es metering-digest, que
+ * también trae el reloj: entra con él.
+ */
+function messagingErrors(manifest, layers, declared) {
+  const errors = messagingWithoutPersistenceErrors(manifest, layers, 'keel-go');
+  if (errors.length === 0 && !declared.includes('api') && !documentPersistence(layers)) {
+    errors.push(
+      'capa messaging sin api — keel-go cablea la persistencia, el puente de los eventos y los listeners desde el arranque de la entrada HTTP, ' +
+        'y sin ella generaría un servicio que ni publica ni consume (llega con el reloj, incremento 10 de PLAN-KEEL-GO.md). ' +
+        'Genera este diseño con keel-spring, keel-nest o keel-dotnet.'
+    );
+  }
+  return errors;
+}
+
 /** Lo que el stack pide y keel-go no genera (un motor sin medir, la telemetría): se rechaza en el build en vez de estamparlo sin efecto. */
 export function checkSupportedStack(stack) {
   const errors = [];
@@ -145,6 +169,13 @@ export function checkSupportedStack(stack) {
     errors.push(
       `database: ${stack.database} — keel-go genera la persistencia sobre ${SUPPORTED_DATABASES.join(', ')} (MongoDB llega en el ` +
         'incremento 12 de PLAN-KEEL-GO.md; MariaDB, SQL Server y Oracle, sin medir en ninguna red). Elige uno de ellos, o genera este diseño con keel-spring, keel-nest o keel-dotnet.'
+    );
+  }
+  if (stack?.broker && !SUPPORTED_BROKERS.includes(stack.broker)) {
+    errors.push(
+      `broker: ${stack.broker} — keel-go genera la mensajería sobre ${SUPPORTED_BROKERS.join(', ')}` +
+        `${PENDING_BROKERS[stack.broker] ? ` (${stack.broker} llega en el ${PENDING_BROKERS[stack.broker]} de PLAN-KEEL-GO.md)` : ''}. ` +
+        'Elige otro, o genera este diseño con keel-spring, keel-nest o keel-dotnet.'
     );
   }
   if (stack?.telemetry && stack.telemetry !== 'none') {

@@ -12,6 +12,16 @@ import { consumerUnits } from '@keel-system/keel-core/gen/messaging-plan';
 import { alignRows } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
 import { MESSAGING_IMPORT, publisherPort, usesBestEffort, usesGoOutbox } from './messaging.js';
+import { RABBITMQ_IMPORT, usesGoRabbitMq } from './rabbitmq.js';
+
+/**
+ * La conexión del broker que build genera y que recibe lo del agente (en brokerAdapters y en inbound), o null si build
+ * no genera ninguna para ese broker.
+ */
+export function brokerConnection(model) {
+  if (usesGoRabbitMq(model)) return { name: 'rabbit', field: 'Rabbit', type: '*rabbitmq.Connection', import: RABBITMQ_IMPORT, method: 'Publish', consume: 'Consume' };
+  return null;
+}
 
 /** ¿Publica el servicio? Entonces hay adaptadores de salida. */
 export function publishes(model) {
@@ -26,9 +36,11 @@ export function consumes(model) {
 export function brokerFiles(model) {
   const { server } = layout(model);
   const broker = model.stack?.broker ?? '<broker>';
+  const connection = brokerConnection(model);
+  const own = connection ? [connection.import] : [];
   return [
-    { path: `${server.dir}/messaging.go`, content: packageFile(model, server, { imports: ['context', 'log/slog', 'internal/application', MESSAGING_IMPORT], body: typesBody(model) }) },
-    { path: `${server.dir}/broker.go`, content: packageFile(model, server, { imports: ['log/slog', MESSAGING_IMPORT], body: agentBody(model, broker), generated: false }) }
+    { path: `${server.dir}/messaging.go`, content: packageFile(model, server, { imports: ['context', 'log/slog', 'internal/application', MESSAGING_IMPORT, ...(consumes(model) ? own : [])], body: typesBody(model) }) },
+    { path: `${server.dir}/broker.go`, content: packageFile(model, server, { imports: ['log/slog', MESSAGING_IMPORT, ...(publishes(model) ? own : [])], body: agentBody(model, broker), generated: false }) }
   ];
 }
 
@@ -45,14 +57,17 @@ ${alignRows(rows).join('\n')}
 }`);
   }
   if (consumes(model)) {
+    const connection = brokerConnection(model);
     const rows = [
       { indent: '\t', cells: ['Settings', 'messaging.Settings'] },
+      ...(connection ? [{ indent: '\t', cells: [connection.field, connection.type] }] : []),
       { indent: '\t', cells: ['UseCases', '*application.UseCases'] },
       { indent: '\t', cells: ['Guard', '*messaging.IdempotencyGuard'] },
       { indent: '\t', cells: ['Logger', '*slog.Logger'] }
     ];
     parts.push(`// inbound es lo que reciben los listeners: la mensajería del perfil (el topic, la cola o el grupo de cada
-// suscripción), los casos de uso que despachan, la guarda de los mensajes procesados y el logger.
+// suscripción)${connection ? `, la conexión con el broker (${connection.field}: se consume con ${connection.field}.${connection.consume})` : ''}, los casos de uso que
+// despachan, la guarda de los mensajes procesados y el logger.
 type inbound struct {
 ${alignRows(rows).join('\n')}
 }
@@ -64,6 +79,7 @@ type listener func(ctx context.Context) error`);
 }
 
 function agentBody(model, broker) {
+  const connection = brokerConnection(model);
   const parts = [`// Lo que el agente escribe para el broker de keel-stack.json (${broker}), con la skill keel-go-${broker}: el envío y la
 // recepción. Build siembra este archivo una vez y no lo pisa; los tipos que se intercambian están en messaging.go.`];
   if (publishes(model)) {
@@ -73,8 +89,14 @@ function agentBody(model, broker) {
     parts.push(`// brokerAdapters son las implementaciones de los puertos de salida del broker:
 ${ports.map((port) => `//   - ${port}`).join('\n')}
 //
-// Lo que se deje a nil es el respaldo de build. Se llama ANTES de construir los repositorios, que reciben el puente.
-func brokerAdapters(settings messaging.Settings, logger *slog.Logger) (outbound, error) {
+// Lo que se deje a nil es el respaldo de build. Se llama ANTES de construir los repositorios, que reciben el puente.${
+      connection
+        ? `
+// ${connection.name} es la conexión con el broker que mantiene build: se publica con ${connection.name}.${connection.method}, que vuelve cuando el
+// broker confirma.`
+        : ''
+    }
+func brokerAdapters(settings messaging.Settings, ${connection ? `${connection.name} ${connection.type}, ` : ''}logger *slog.Logger) (outbound, error) {
 	// TODO (agente): una implementación por puerto, con la skill keel-go-${broker}.
 	return outbound{}, nil
 }`);

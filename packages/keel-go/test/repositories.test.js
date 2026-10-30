@@ -18,7 +18,7 @@ import { planService } from '../src/scaffold/index.js';
 import { planService as planDotnet } from '../../keel-dotnet/src/scaffold/index.js';
 import { pendingLayers } from '../src/lib/supported-features.js';
 import { foldKinds } from '../src/scaffold/persistence-runtime.js';
-import { portName, repositoryParam } from '../src/scaffold/repositories.js';
+import { portName, repositoryArgs, repositoryParam } from '../src/scaffold/repositories.js';
 import { handlerType, operations } from '../src/scaffold/services.js';
 import { sentinelOf } from '../src/scaffold/errors.js';
 import { FIXTURES_DIR, makeWorkspace, mountDesign } from './helpers/workspace.js';
@@ -84,7 +84,8 @@ for (const { name, loaded, plan } of relational) {
       const adapter = plan.files.find((candidate) => candidate.path.startsWith('internal/infrastructure/postgres/') && candidate.content.includes(`var _ domain.${portName(root)} = (*${root.name}Repository)(nil)`));
       assert.ok(adapter, `${root.name}: el adaptador no declara que implementa el puerto`);
       // Sin API, el arranque todavía no construye los casos de uso (los despachará el reloj, incremento 10).
-      if (usesApi(model)) assert.match(main, new RegExp(`\\t\\t[A-Z]\\w*:\\s+postgres\\.New${root.name}Repository\\(transactions\\),`));
+      // La raíz que emite eventos recibe también el puente de la mensajería.
+      if (usesApi(model)) assert.ok(main.includes(`postgres.New${root.name}Repository(${repositoryArgs(model, root, 'transactions', 'bridge')}),`), root.name);
     }
     if (usesApi(model)) assert.match(main, /postgres\.Migrate\(ctx, db, logger\)/);
   });

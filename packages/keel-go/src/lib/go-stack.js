@@ -77,6 +77,13 @@ export const MODULES = {
   // 2026-01-28.
   'github.com/golang-jwt/jwt/v5': { version: 'v5.3.1', license: 'MIT', kind: 'require', use: 'validación de JWT' },
 
+  // El cliente de RabbitMQ (incremento 9), el que mantiene el equipo de RabbitMQ. Su recuperación automática (Config.Recovery,
+  // de 2026-07 a 2026-09 y con arreglos de corrección en cada versión) NO se usa: la reconexión es un bucle propio del
+  // servicio (internal/infrastructure/rabbitmq), que redeclara la topología y rearranca los consumidores. Solo trae
+  // go.uber.org/goleak (MIT) para sus pruebas. La v1.15.0 es de 2026-09-15 (la v1.16.0, de 2026-10-19, no tiene aún
+  // las dos semanas).
+  'github.com/rabbitmq/amqp091-go': { version: 'v1.15.0', license: 'BSD-2-Clause', kind: 'require', use: 'cliente de RabbitMQ (AMQP 0-9-1)' },
+
   // Herramientas, por la directiva `tool` de go.mod (`go tool <nombre>`): el proyecto no exige nada instalado
   // aparte de Go.
   // El JUnit de las pruebas, que lee keel-core/gen/junit-scoring.js (su XML real se capturó en el inc. 1).
@@ -107,6 +114,11 @@ export const RELATIONAL_REQUIRES = {
 
 /** La validación de tokens de la capa security (incremento 8). */
 export const JWT_REQUIRES = ['github.com/golang-jwt/jwt/v5'];
+
+/** El cliente del broker de la mensajería (incremento 9), por broker. */
+export const BROKER_REQUIRES = {
+  rabbitmq: ['github.com/rabbitmq/amqp091-go']
+};
 
 /** Las herramientas: todas, siempre. */
 export const TOOLS = Object.entries(MODULES)

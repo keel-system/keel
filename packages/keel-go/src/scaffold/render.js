@@ -46,6 +46,8 @@ export function layout(model) {
     // Lo de la mensajería que no depende del broker ni del motor (incremento 9): envoltura, eventos de integración,
     // puente, mensajes de suscripción, relay del outbox y guarda. El adaptador del motor implementa sus puertos.
     messaging: pkg(module, 'internal/infrastructure/messaging'),
+    // La conexión con RabbitMQ (incremento 9): topología, reconexión, publicación confirmada y consumo con reintento.
+    rabbitmq: pkg(module, 'internal/infrastructure/rabbitmq'),
     // La prueba de la frontera hexagonal: `internal/` solo protege frente a otros módulos, no entre capas.
     architecture: pkg(module, 'internal/architecture'),
     // Las pruebas de flujo (FL-*), de caja negra y tras la restricción `integration`: `go test ./...` no las ve.
