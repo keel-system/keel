@@ -10,11 +10,13 @@
 // `cs-check` de keel-dotnet, `ts-check` de keel-nest y `compile-check` de keel-spring, y como ellos se lanza
 // antes de dar por bueno cualquier cambio en lo que se emite.
 //
-//   node packages/keel-go/scripts/go-check.js [--keep] [--no-race] [--fixtures]
+//   node packages/keel-go/scripts/go-check.js [--keep] [--no-race] [--fixtures] [--jobs=<n>]
 //   npm run go-check --workspace packages/keel-go
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo; --no-race se salta el paso del
-// contenedor (sin podman ni docker); --fixtures solo compila y prueba el Go de todas las fixtures.
+// contenedor (sin podman ni docker); --fixtures solo compila y prueba el Go de todas las fixtures; --jobs=<n>
+// cuántas fixtures a la vez (4; con poca memoria, 1 o 2). La caché del contenedor de -race son dos volúmenes
+// `keel-go-race-*`: `podman volume rm` los vacía.
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -41,6 +43,13 @@ const keep = process.argv.includes('--keep');
 // --fixtures: solo el paso que compila el Go de TODAS las fixtures (el más largo de iterar).
 const onlyFixtures = process.argv.includes('--fixtures');
 const race = !process.argv.includes('--no-race');
+// --jobs=<n>: cuántas fixtures se comprueban a la vez (4 por defecto). Con poca memoria, --jobs=1 es el paso en serie.
+const jobsArg = process.argv.find((arg) => arg.startsWith('--jobs='));
+const jobs = jobsArg ? Number(jobsArg.slice('--jobs='.length)) : 4;
+if (!Number.isInteger(jobs) || jobs < 1) {
+  console.error(`--jobs=${jobsArg?.slice('--jobs='.length)}: tiene que ser un entero mayor que 0.`);
+  process.exit(2);
+}
 const isWindows = process.platform === 'win32';
 const results = [];
 
@@ -56,6 +65,33 @@ function run(command, args, cwd, env = {}) {
 }
 
 const go = (cwd, args, env) => run('go', args, cwd, env);
+
+/** Como run, sin bloquear: para comprobar varias fixtures a la vez. */
+function runAsync(command, args, cwd) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { cwd, env: process.env });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => (stdout += chunk));
+    child.stderr.on('data', (chunk) => (stderr += chunk));
+    child.on('error', (error) => resolve({ ok: false, output: String(error), stdout: '' }));
+    child.on('close', (status) => resolve({ ok: status === 0, output: `${stdout}${stderr}`, stdout }));
+  });
+}
+
+/** Ejecuta work sobre cada elemento, como mucho size a la vez, y devuelve los resultados en el orden de items. */
+async function pool(items, size, work) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      out[index] = await work(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(size, items.length)) }, worker));
+  return out;
+}
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -116,7 +152,11 @@ if (!step('Go disponible', version.ok && (Number(major) > 1 || Number(minor) >= 
 // lifecycle opcional, un value object con listas, un evento sin campos) no compila en otra fixture, y go-syntax no
 // ve tipos. Cada fixture es su propio módulo: tidy (de la caché, tras el primero), gofmt, vet, staticcheck y sus
 // pruebas emitidas.
+//
+// Las fixtures se generan en orden y se comprueban de `jobs` en `jobs` (cada una en su módulo: no comparten nada salvo
+// las cachés de Go, que admiten acceso concurrente), y se informan en orden. Es el paso largo: en serie eran ~11 min.
 const fixturesRoot = makeWorkspace('keel-go-fixtures-');
+const fixtureDirs = [];
 for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(path.join(FIXTURES_DIR, entry, 'service.keel.yaml')))) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
   const dir = path.join(fixturesRoot, name);
@@ -125,17 +165,24 @@ for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out, file.content);
   }
+  fixtureDirs.push({ name, dir });
+}
+const fixtureProblems = await pool(fixtureDirs, jobs, async ({ dir }) => {
   const problems = [];
-  const tidied = go(dir, ['mod', 'tidy']);
+  const tidied = await runAsync('go', ['mod', 'tidy'], dir);
   if (!tidied.ok) problems.push(`tidy: ${tidied.output}`);
-  const unformatted = run('gofmt', ['-l', '.'], dir);
+  const unformatted = await runAsync('gofmt', ['-l', '.'], dir);
   if (unformatted.stdout.trim()) problems.push(`gofmt: ${unformatted.stdout.trim()}`);
   for (const args of [['vet', './...'], ['tool', 'staticcheck', './...'], ['test', '-count=1', './...']]) {
-    const result = go(dir, args);
+    const result = await runAsync('go', args, dir);
     if (!result.ok || (args[1] === 'staticcheck' && result.output.trim())) problems.push(`${args.join(' ')}: ${result.output.trim()}`);
   }
+  return problems;
+});
+fixtureDirs.forEach(({ name }, index) => {
+  const problems = fixtureProblems[index];
   if (!step(`${name}: el Go emitido pasa tidy, gofmt, vet, staticcheck y sus pruebas`, problems.length === 0)) console.error(problems.join('\n').slice(0, 4000));
-}
+});
 if (onlyFixtures) {
   const failed = results.filter((result) => !result.ok).length;
   console.log(failed === 0 ? `\ngo-check --fixtures: ${results.length}/${results.length} en verde.` : `\ngo-check --fixtures: ${failed} paso(s) en rojo.`);
@@ -305,9 +352,13 @@ if (race) {
   const runtime = containerRuntime();
   if (!runtime) step('go test -race en contenedor', false, 'sin podman ni docker (o --no-race)');
   else {
-    // -race exige cgo, y en Windows no hay gcc: se ejecuta en la imagen oficial, con el mismo toolchain.
+    // -race exige cgo, y en Windows no hay gcc: se ejecuta en la imagen oficial, con el mismo toolchain. Los módulos y
+    // la caché de compilación van en volúmenes con nombre, que sobreviven al contenedor: sin ellos, cada corrida volvía a
+    // descargar el grafo entero y a recompilar con la instrumentación de -race la stdlib y todas las dependencias. Un
+    // volumen por toolchain, para que una caché de otra versión no se cruce.
     const image = `docker.io/library/golang:${GO_TOOLCHAIN.replace(/^go/, '')}`;
-    const raced = run(runtime, ['run', '--rm', '-v', `${projectDir}:/src`, '-w', '/src', '-e', 'GOFLAGS=-mod=mod', image, 'go', 'test', '-race', '-count=1', './...'], projectDir);
+    const caches = ['-v', `keel-go-race-mod-${GO_TOOLCHAIN}:/go/pkg/mod`, '-v', `keel-go-race-build-${GO_TOOLCHAIN}:/root/.cache/go-build`];
+    const raced = run(runtime, ['run', '--rm', '-v', `${projectDir}:/src`, ...caches, '-w', '/src', '-e', 'GOFLAGS=-mod=mod', image, 'go', 'test', '-race', '-count=1', './...'], projectDir);
     if (!step(`go test -race ./... en ${image}`, raced.ok)) console.error(raced.output.slice(-4000));
   }
 }
