@@ -44,9 +44,15 @@ export function repositoryRoots(model) {
 export function repositoryOf(model, operation) {
   const service = (model.services ?? []).find((group) => (group.operations ?? []).includes(operation));
   if (!service) return null;
+  const roots = repositoryRoots(model);
+  // Una operación sin señal de entidad (ni payload de entidad, ni nombre, ni transiciones: `noteStockCount` anota un
+  // recuento sobre una reserva) cae en un grupo sin entidad. Con UN solo agregado persistido no hay otro sobre el que
+  // pueda actuar: recibe su repositorio. Sin esto, keel-go la dejaba sin repositorio y sin forma de implementarla (su
+  // cableado es de build; en los demás generadores el agente lo añadía al constructor). Corrida 9e, 2026-10-30.
+  if (!service.entity) return roots.length === 1 ? roots[0] : null;
   const target = model.entities.find((entity) => entity.name === service.entity);
   const rootName = target?.rootEntity ?? service.entity;
-  return repositoryRoots(model).find((entity) => entity.name === rootName) ?? null;
+  return roots.find((entity) => entity.name === rootName) ?? null;
 }
 
 /** ¿Alguna operación de la raíz pagina? Entonces su puerto lista por página. */

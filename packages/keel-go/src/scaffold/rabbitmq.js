@@ -23,7 +23,7 @@
 
 import { rabbitListenerRetry } from '@keel-system/keel-core/gen';
 import { RABBIT_CONFIRM_TIMEOUT_MS, RABBIT_PREFETCH, RABBIT_RECOVERY_INTERVAL_MS, publishedChannels, rabbitTopology, rabbitYaml } from '@keel-system/keel-core/gen/messaging-plan';
-import { goString } from '../lib/go-source.js';
+import { alignRows, goString } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
 import { MESSAGING_IMPORT, usesGoMessaging } from './messaging.js';
 
@@ -85,7 +85,8 @@ function topologyBody(model) {
   const retryLiteral = retry
     ? `&ListenerRetry{Attempts: ${retry.attempts}, Initial: ${retry.initialMs} * time.Millisecond, Multiplier: ${multiplier}${retry.maxDelayMs != null ? `, MaxDelay: ${retry.maxDelayMs} * time.Millisecond` : ''}}`
     : 'nil';
-  const list = (rows, type) => (rows.length === 0 ? `[]${type}{}` : `[]${type}{\n${rows.join('\n')}\n}`);
+  // Dentro del bloque `var (…)`: las filas un nivel más adentro y la llave de cierre al de la declaración (gofmt).
+  const list = (rows, type) => (rows.length === 0 ? `[]${type}{}` : `[]${type}{\n${rows.map((row) => `\t${row}`).join('\n')}\n\t}`);
   return `
 // QueueTopology es la topología de consumo de una cola de este servicio: Source es el exchange (topic) del canal de
 // origen, el del emisor; Queue, la cola PROPIA de este servicio, enlazada al exchange con '#'; DeadLetter, su descarte,
@@ -714,7 +715,7 @@ func TestListenerRetry(t *testing.T) {
 		t.Errorf("ListenerAttempts() = %d, quiero ${retry ? retry.attempts : 1}", got)
 	}
 	for attempt, want := range map[int]time.Duration{
-${[1, 2, 3, 5, 12].map((attempt) => `		${attempt}: ${backoff(attempt)} * time.Millisecond,`).join('\n')}
+${alignRows([1, 2, 3, 5, 12].map((attempt) => ({ indent: '\t\t', cells: [`${attempt}:`, `${backoff(attempt)} * time.Millisecond,`] }))).join('\n')}
 	} {
 		// La referencia es entera en milisegundos; la curva, en nanosegundos.
 		if got := rabbitmq.ListenerBackoff(attempt).Truncate(time.Millisecond); got != want {

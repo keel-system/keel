@@ -104,3 +104,26 @@ for (const fixture of fixtures) {
     assert.equal(groups.flat().length, (model.subscriptions ?? []).length);
   });
 }
+
+// Una operación sin señal de entidad cae en un grupo sin entidad (corrida 9e de keel-go, 2026-10-30): `noteStockCount`
+// anota un recuento sobre una reserva sin payload de entidad, sin transiciones y con un nombre que no la nombra. Con un
+// solo agregado persistido, actúa sobre él; con varios, no hay de dónde elegir y no recibe ninguno.
+test('repositoryOf: una operación de un grupo sin entidad recibe el ÚNICO agregado persistido, y ninguno si hay varios', () => {
+  const root = { name: 'Reservation' };
+  const operation = { name: 'noteStockCount' };
+  const model = (roots) => ({
+    services: [{ entity: null, operations: [operation] }],
+    entities: roots.map((entity) => ({ ...entity, persisted: true, isAggregateRoot: true })),
+    layersPresent: { persistence: true }
+  });
+  const one = model([root]);
+  assert.equal(features.repositoryRoots(one).length, 1, 'el modelo sintético persiste su raíz');
+  assert.equal(features.repositoryOf(one, operation)?.name, 'Reservation');
+  const two = model([root, { name: 'Order' }]);
+  assert.equal(features.repositoryOf(two, operation), null);
+  // Sobre la fixture real: el handler recibe el repositorio de Reservation.
+  const design = loadService(path.join(FIXTURES_DIR, 'stock-reservation-events'));
+  const real = buildModel({ ...design, projection: PROBE, stack: { database: 'postgresql', broker: 'rabbitmq' } });
+  const note = real.services.flatMap((group) => group.operations).find((candidate) => candidate.name === 'noteStockCount');
+  assert.equal(features.repositoryOf(real, note)?.name, 'Reservation');
+});

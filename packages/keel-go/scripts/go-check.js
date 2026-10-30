@@ -166,7 +166,10 @@ for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(
   for (const database of [null, 'mysql']) {
     if (database && !relational) continue;
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
-    const plan = planService({ manifest, layers, workspace: fixturesRoot, ...(database ? { stack: { database } } : {}) });
+    // Con capa messaging, con el broker que keel-go conecta (RabbitMQ): sin broker en el stack no se emite su paquete,
+    // y su gofmt no lo miraba nadie (corrida 9e, 2026-10-30: topology.go y rabbitmq_test.go sin formatear).
+    const stack = { ...(database ? { database } : {}), ...(layers.messaging ? { broker: 'rabbitmq' } : {}) };
+    const plan = planService({ manifest, layers, workspace: fixturesRoot, ...(Object.keys(stack).length > 0 ? { stack } : {}) });
     relational ||= usesRelational(plan.model);
     const label = database ? `${name} (${database})` : name;
     const dir = path.join(fixturesRoot, database ? `${name}-${database}` : name);
