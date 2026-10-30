@@ -10,7 +10,8 @@
     "test": "node --test",
     "go-check": "node scripts/go-check.js",
     "db-check": "node scripts/db-check.js",
-    "harness-check": "node scripts/harness-check.js"
+    "harness-check": "node scripts/harness-check.js",
+    "security-check": "node scripts/security-check.js"
   },
   "files": [
     "src",
