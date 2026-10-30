@@ -104,6 +104,27 @@ export const DB_SABOTAGES = {
     from: 'if duplicateIdempotencyRecord(err) {',
     to: 'if duplicateIdempotencyRecord(err) && key == "" {',
     expect: /_RepeatedKeyIsConflict|_RaceOneWins/
+  },
+  // La mensajería (incremento 9). El lease del reclamo en el PASADO: lo reclamado vuelve a salir en la pasada siguiente.
+  lease: { files: new RegExp(`${STORE}outbox\\.go$`), from: 'now.Add(lease), event.ID)', to: 'now.Add(-lease), event.ID)', expect: /^TestOutbox_ClaimsInArrivalOrderWithLease$/ },
+  // El reclamo sin SKIP LOCKED: espera a la fila retenida en vez de saltarla.
+  'skip-locked': { files: new RegExp(`${STORE}outbox\\.go$`), from: ' FOR UPDATE SKIP LOCKED', to: ' FOR UPDATE', expect: /^TestOutbox_SkipLockedSkipsHeldRows$/ },
+  // La guarda no reconoce la clave primaria repetida: el duplicado y la carrera salen como un error.
+  guard: { files: new RegExp(`${STORE}processed_events\\.go$`), from: 'if duplicateProcessedEvent(err) {', to: 'if duplicateProcessedEvent(err) && handlerID == "" {', expect: /^TestProcessed_(RecordIsKeyedByHandlerAndEvent|ConcurrentDeliveriesOneWins)$/ },
+  // Lo que espera al commit se ejecuta en el acto, dentro de la transacción: un evento best-effort sale aunque el caso de
+  // uso revierta después.
+  'after-commit': {
+    files: TRANSACTIONS,
+    from: 'hooks.pending = append(hooks.pending, fn)\n\t\treturn',
+    to: '_ = hooks\n\t\tfn(ctx)\n\t\treturn',
+    expect: /^TestTransaction_AfterCommitRunsOnlyOnCommit$/
+  },
+  // El registro se une a la transacción del caso de uso en vez de ir en la suya: el rollback del handler lo deshace.
+  apart: {
+    files: TRANSACTIONS,
+    from: 'return t.fresh(ctx, options, func(_ context.Context, q DBTX) error {',
+    to: 'return t.within(ctx, options.ReadOnly, func(_ context.Context, q DBTX) error {',
+    expect: /^TestProcessed_SurvivesTheCallerRollback$/
   }
 };
 

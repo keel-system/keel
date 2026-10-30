@@ -83,7 +83,7 @@ func text${name}(raw string) (domain.${name}, error) {
 }`;
 }
 
-function patternsBlock(plan) {
+export function patternsBlock(plan) {
   if (plan.patterns.size === 0) return '';
   // Como el matches() de Java: la expresión entera, sin el salto de línea final que admitiría un `$` suelto.
   const rows = [...plan.patterns].map(([regexp, name]) => ({ indent: '\t', cells: [name, `= regexp.MustCompile(${goString(`\\A(?:${regexp})\\z`)})`] }));
@@ -861,7 +861,7 @@ func pageParam(r *http.Request, name string, fallback int32) (int32, error) {
 
 // ─── validation.go ──────────────────────────────────────────────────────────────────────────────
 
-const VALIDATION = {
+export const VALIDATION = {
   violations: {
     code: `
 // violations acumula lo que una petición incumple y lo devuelve de una vez, como Bean Validation: cada detalle es

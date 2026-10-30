@@ -6,12 +6,15 @@
 // El formato aceptado es el de los otros tres: el valor llega de FUERA y acaba en logs, cabeceras y eventos, así que
 // lo que no lo cumple se sustituye por uno nuevo (nunca se trunca: saldrían ids que se confunden entre sí).
 
-import { usesApi } from '@keel-system/keel-core/gen/features';
+import { usesApi, usesMessaging, usesRelational } from '@keel-system/keel-core/gen/features';
 import { layout, packageFile } from './render.js';
 
-/** ¿Se emite la correlación? Hoy la abre solo la entrada HTTP; la mensajería (incremento 9) también la abrirá. */
+/**
+ * ¿Se emite la correlación? La abren la entrada HTTP y el consumo de un mensaje (la de su envoltura), y la llevan los
+ * eventos que salen (incremento 9; la mensajería, sobre la persistencia relacional, como en messaging.js).
+ */
 export function usesCorrelation(model) {
-  return usesApi(model);
+  return usesApi(model) || (usesMessaging(model) && usesRelational(model));
 }
 
 export function generate(model) {

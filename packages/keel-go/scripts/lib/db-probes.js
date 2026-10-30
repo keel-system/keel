@@ -35,7 +35,9 @@ import { enumConstant, goExported } from '../../src/lib/go-projection.js';
 import { goFile, goString } from '../../src/lib/go-source.js';
 import { STORE_PACKAGES, sqlDialect, storeDir } from '../../src/lib/relational-engine.js';
 import { domainMembers } from '../../src/scaffold/entities.js';
-import { keyFinders, naturalKeyBatchFinder } from '../../src/scaffold/repositories.js';
+import { keyFinders, naturalKeyBatchFinder, repositoryArgs } from '../../src/scaffold/repositories.js';
+import { usesGoOutbox, usesGoProcessedEvents } from '../../src/scaffold/messaging.js';
+import { messagingProbes } from './messaging-probes.js';
 import { finderProbes } from './finder-probes.js';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen';
 import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
@@ -72,6 +74,7 @@ const IMPORTS = [
   'github.com/jackc/pgx/v5/pgconn',
   { path: 'github.com/go-sql-driver/mysql', name: 'mysqldriver' },
   'internal/application',
+  'internal/infrastructure/messaging',
   'internal/domain',
   'internal/platform/wire'
 ];
@@ -95,10 +98,11 @@ export function probeFile(model) {
   };
   for (const root of roots) visit(root);
   for (const vo of usedValueObjects(model, [...sampled])) parts.push(dumpValueObject(model, vo));
-  for (const root of roots) parts.push(ensureFunction(root));
+  for (const root of roots) parts.push(ensureFunction(model, root));
   for (const root of roots) parts.push(...rootProbes(model, root));
   if (roots.length > 0) parts.push(transactionProbes(model, roots[0]));
   if (usesRequestIdempotency(model)) parts.push(idempotencyProbes(model));
+  if (usesGoOutbox(model) || usesGoProcessedEvents(model)) parts.push(messagingProbes(model));
   parts.push(patternTables(ctx));
   if (entities.length === 0) return null;
   const content = goFile({ pkg: STORE_PACKAGES[d.engine], imports: IMPORTS, body: `\n${parts.filter(Boolean).join('\n\n')}\n`, module: model.service.goModule, generated: false });
@@ -478,12 +482,20 @@ func dump${vo.name}(v domain.${vo.name}) string {
 }
 
 /** `ensure<R>(t)`: guarda una muestra de la raíz y devuelve su id, para las FK que apuntan a ella. */
-function ensureFunction(root) {
+/**
+ * El adaptador de una raíz sobre las transacciones de la sonda. La que emite eventos recibe el puente a nil: las muestras
+ * se rehidratan, y una raíz rehidratada no emite nada (la mensajería la miden sus propias sondas).
+ */
+function repository(model, root) {
+  return `New${root.name}Repository(${repositoryArgs(model, root, 'probeTx', 'nil')})`;
+}
+
+function ensureFunction(model, root) {
   const idMethod = goExported(root.idField?.name ?? 'id');
   return `// ensure${root.name} guarda un ${root.name} nuevo y devuelve su id: el destino de una FK.
 func ensure${root.name}(t *testing.T) ${root.idField?.goType ?? 'uuid.UUID'} {
 	t.Helper()
-	saved, err := New${root.name}Repository(probeTx).Save(t.Context(), domain.Rehydrate${root.name}(sample${root.name}(t, ${ENSURE_BASE}+int(probeSeq.Add(1)))))
+	saved, err := ${repository(model, root)}.Save(t.Context(), domain.Rehydrate${root.name}(sample${root.name}(t, ${ENSURE_BASE}+int(probeSeq.Add(1)))))
 	if err != nil {
 		t.Fatalf("guardar el ${root.name} al que apunta la muestra: %v", err)
 	}
@@ -499,7 +511,7 @@ function concurrencyCode(model) {
 
 function rootProbes(model, root) {
   const name = root.name;
-  const repo = `New${name}Repository(probeTx)`;
+  const repo = repository(model, root);
   const id = goExported(root.idField?.name ?? 'id');
   const idColumn = root.idField?.columns?.name ?? 'id';
   const versioned = Boolean(root.usesOptimisticLocking);
@@ -942,7 +954,7 @@ function transactionProbes(model, root) {
   const touch = `UPDATE ${root.tableName} SET ${idColumn} = ${idColumn} WHERE ${idColumn} = ${d.param(1)}`;
   return `func TestTransaction_DeadlockIsRetried(t *testing.T) {
 	ctx := t.Context()
-	repo := New${name}Repository(probeTx)
+	repo := ${repository(model, root)}
 	a := sample${name}(t, 90)
 	b := sample${name}(t, 91)
 	for _, s := range []domain.${name}State{a, b} {
@@ -998,7 +1010,7 @@ func TestTransaction_ExhaustedConflictIsConcurrencyError(t *testing.T) {
 	}
 }
 
-${d.mysql ? mysqlTimeoutProbe(name, id, touch) : POSTGRES_TIMEOUT_PROBE}`;
+${d.mysql ? mysqlTimeoutProbe(name, id, touch, repository(model, root)) : POSTGRES_TIMEOUT_PROBE}`;
 }
 
 /**
@@ -1148,11 +1160,11 @@ const POSTGRES_TIMEOUT_PROBE = `func TestTransaction_StatementOverTimeoutIs503(t
  * cortado por max_execution_time devuelve 1 y la sentencia NO falla. El pool corto es otro (el tope va en la sesión de
  * cada conexión, al abrirla), y la fila la retiene una transacción del pool de las sondas hasta que la otra se rinde.
  */
-function mysqlTimeoutProbe(name, id, touch) {
+function mysqlTimeoutProbe(name, id, touch, repo) {
   return `func TestTransaction_StatementOverTimeoutIs503(t *testing.T) {
 	ctx := t.Context()
 	held := sample${name}(t, 92)
-	if _, err := New${name}Repository(probeTx).Save(ctx, domain.Rehydrate${name}(held)); err != nil {
+	if _, err := ${repo}.Save(ctx, domain.Rehydrate${name}(held)); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	settings := probeSettings()

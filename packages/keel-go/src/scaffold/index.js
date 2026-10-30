@@ -32,6 +32,8 @@ import * as persistence from './persistence.js';
 import * as persistenceRuntime from './persistence-runtime.js';
 import * as repositories from './repositories.js';
 import * as requestIdempotency from './request-idempotency.js';
+import * as messaging from './messaging.js';
+import * as messagingStores from './messaging-stores.js';
 import * as correlation from './correlation.js';
 import * as endpoints from './endpoints.js';
 import * as restSupport from './rest-support.js';
@@ -69,6 +71,8 @@ const GENERATORS = [
   persistenceRuntime,
   repositories,
   requestIdempotency,
+  messaging,
+  messagingStores,
   endpoints,
   restSupport,
   security,

@@ -40,6 +40,7 @@ import { isDeclaredLockVersion } from './entities.js';
 import { physicalType } from './persistence.js';
 import { adapterFinderMethods, entityFinders, filtersBlocks, filtersUses, portFinderMethods, filterStructs } from './finders.js';
 import { docComment, domainPath, goFileName, layout, localName, packageFile } from './render.js';
+import { emitsEvents, usesGoOutbox } from './messaging.js';
 
 // Un identificador en el SQL del adaptador, citado como en el baseline si es una palabra reservada (`"primary"` en
 // PostgreSQL, `` `primary` `` en MySQL).
@@ -83,8 +84,17 @@ const ADAPTER_IMPORTS = [
   'github.com/google/uuid',
   'internal/domain',
   'internal/platform/textfold',
-  'internal/platform/wire'
+  'internal/platform/wire',
+  'internal/infrastructure/messaging'
 ];
+
+/**
+ * Los argumentos del constructor del adaptador de una raíz: las transacciones y, si la raíz emite eventos, el puente de
+ * la mensajería (messaging.js). Lo usan el arranque y las sondas de db-check, que pasan `nil` (rehidratan, no emiten).
+ */
+export function repositoryArgs(model, entity, tx, bridge) {
+  return emitsEvents(model, entity) ? `${tx}, ${bridge}` : tx;
+}
 
 /** El nombre del puerto de una raíz: `ProductRepository`. */
 export function portName(entity) {
@@ -495,13 +505,17 @@ function adapterBody(model, entity, uses) {
   const tables = collectTables(model, root);
   const parts = [];
 
-  parts.push(`${docComment(type, `el adaptador de domain.${portName(entity)} sobre ${sqlDialect(model).label}: el SQL lo escribe build y el mapeo fila ↔ dominio va campo a campo, sin reflexión. Se une a la transacción que abrió el caso de uso; sin ella, cada lectura va sola y cada escritura abre la suya.`)}type ${type} struct {
-	tx *Transactions
+  const events = emitsEvents(model, entity);
+  const eventsDoc = events
+    ? ` Al guardar, entrega al puente de la mensajería los eventos que drena del agregado: ${usesGoOutbox(model) ? 'sus filas del outbox van en la MISMA transacción del cambio' : 'se publican DESPUÉS del commit'}.`
+    : '';
+  parts.push(`${docComment(type, `el adaptador de domain.${portName(entity)} sobre ${sqlDialect(model).label}: el SQL lo escribe build y el mapeo fila ↔ dominio va campo a campo, sin reflexión. Se une a la transacción que abrió el caso de uso; sin ella, cada lectura va sola y cada escritura abre la suya.${eventsDoc}`)}type ${type} struct {
+${events ? '\ttx     *Transactions\n\tevents *messaging.Bridge' : '\ttx *Transactions'}
 }
 
-// New${type} construye el adaptador sobre las transacciones del servicio.
-func New${type}(tx *Transactions) *${type} {
-	return &${type}{tx: tx}
+// New${type} construye el adaptador sobre las transacciones del servicio${events ? ' y el puente de la mensajería' : ''}.
+func New${type}(${events ? 'tx *Transactions, events *messaging.Bridge' : 'tx *Transactions'}) *${type} {
+	return &${type}{${events ? 'tx: tx, events: events' : 'tx: tx'}}
 }
 
 var _ domain.${portName(entity)} = (*${type})(nil)`);
@@ -935,14 +949,24 @@ function saveMethods(model, entity, root, tables, type) {
     }
   }
   const local = localName(lower(name));
+  const events = emitsEvents(model, entity);
+  const outbox = events && usesGoOutbox(model);
   return `// Save implementa domain.${portName(entity)}: escribe el agregado entero en una transacción (la abierta, o una
-// suya) y lo relee en ella.
-func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.${name}, error) {
+// suya) y lo relee en ella.${outbox ? ' Las filas del outbox de sus eventos van en esa misma transacción.' : events ? ' Sus eventos se publican cuando esa transacción confirma.' : ''}
+func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.${name}, error) {${events ? `
+	events := ${local}.PullEvents()` : ''}
 	var saved *domain.${name}
 	err := r.tx.write(ctx, func(q DBTX) error {
 		if err := write${name}(ctx, q, ${local}); err != nil {
 			return err
+		}${outbox ? `
+		records, err := r.events.Route(ctx, events)
+		if err != nil {
+			return err
 		}
+		if err := appendOutbox(ctx, q, records); err != nil {
+			return err
+		}` : ''}
 		states, err := query${name}(ctx, q, ${goString(`WHERE ${root.idColumn} = ${ph(model, 1)}`)}, ${local}.${id}())
 		if err != nil {
 			return err
@@ -955,7 +979,12 @@ func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.$
 	})
 	if err != nil {
 		return nil, err
-	}
+	}${events && !outbox ? `
+	if len(events) > 0 {
+		r.tx.afterCommit(ctx, func(ctx context.Context) {
+			r.events.Deliver(ctx, events)
+		})
+	}` : ''}
 	return saved, nil
 }`;
 }

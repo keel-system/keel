@@ -49,6 +49,7 @@ import { GENERATED_HEADER, alignRows } from '../lib/go-source.js';
 import { relationalEngine, sqlDialect } from '../lib/relational-engine.js';
 import { domainPath, layout, packageFile } from './render.js';
 import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
+import { storeTables } from './messaging-stores.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 
 export { usesRelational };
@@ -356,6 +357,17 @@ export function schemaTables(model) {
       notes: []
     });
     for (const index of record.indexes) indexes.push({ name: index.name, table: record.table, columns: index.columns, unique: false });
+  }
+  // Los almacenes de la mensajería (messaging-stores.js): outbox_event y processed_event, las tablas neutrales de keel-core.
+  for (const store of storeTables(model)) {
+    tables.push({
+      name: store.table,
+      columns: store.columns.map((column) => ({ name: column.name, base: column.base, length: column.length, nullable: column.nullable })),
+      primaryKey: { name: `${store.table}_pkey`, columns: store.columns.filter((column) => column.primary).map((column) => column.name) },
+      constraints: [],
+      notes: []
+    });
+    for (const index of store.indexes) indexes.push({ name: index.name, table: store.table, columns: index.columns, unique: false });
   }
   return { tables, foreignKeys, indexes };
 }

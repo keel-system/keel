@@ -16,7 +16,9 @@ import { repositoryRoots, usesApi } from '@keel-system/keel-core/gen/features';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
-import { repositoryParam } from './repositories.js';
+import { repositoryArgs, repositoryParam } from './repositories.js';
+import { MESSAGING_IMPORT, usesGoMessaging, usesGoOutbox } from './messaging.js';
+import { brokerFiles, consumes, publishes } from './broker.js';
 import { newUseCasesCall, usesDependencies } from './use-cases.js';
 import { IDEMPOTENCY_STORE, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_ROLES, SECURITY_IMPORT, settingsFromConfig, usesRoleCheck } from './security.js';
@@ -27,8 +29,14 @@ export function generate(model) {
   const { server } = layout(model);
   return [
     { path: `${server.dir}/main.go`, content: mainGo(model) },
-    { path: `${server.dir}/main_test.go`, content: mainTestGo(model) }
+    { path: `${server.dir}/main_test.go`, content: mainTestGo(model) },
+    ...(wiresMessaging(model) ? brokerFiles(model) : [])
   ];
+}
+
+/** ¿Cablea el arranque la mensajería? Con la API y los repositorios: el puente sale del adaptador de repositorio. */
+export function wiresMessaging(model) {
+  return usesGoMessaging(model) && usesApi(model) && usesDependencies(model);
 }
 
 function mainGo(model) {
@@ -55,7 +63,8 @@ function mainGo(model) {
       'internal/platform/health',
       SECURITY_IMPORT,
       'database/sql',
-      layout(model).store.dir
+      layout(model).store.dir,
+      MESSAGING_IMPORT
     ],
     body: `
 func main() {
@@ -91,7 +100,7 @@ ${usesApi(model) ? apiWiring(model) : PROBES_WIRING}
 			return fmt.Errorf("servir HTTP: %w", err)
 		}
 		return nil
-	})
+	})${wiresMessaging(model) ? workers(model) : ''}
 	group.Go(func() error {
 		<-groupCtx.Done()
 		probes.StartDraining()
@@ -132,6 +141,13 @@ ${serve}`;
   const repositories = repositoryRoots(model).map((root) => ({ indent: '\t\t', cells: [`${goExported(repositoryParam(root))}:`, `${store.name}.New${root.name}Repository(transactions),`] }));
   if (usesRoleCheck(model)) repositories.push({ indent: '\t\t', cells: [`${CALLER_ROLES.field}:`, 'security.CallerRoles{},'] });
   if (usesRequestIdempotency(model)) repositories.push({ indent: '\t\t', cells: [`${IDEMPOTENCY_STORE.field}:`, `${store.name}.NewIdempotencyStore(transactions),`] });
+  const messaging = wiresMessaging(model);
+  if (messaging) {
+    for (const row of repositories) {
+      const root = repositoryRoots(model).find((candidate) => row.cells[0] === `${goExported(repositoryParam(candidate))}:`);
+      if (root) row.cells[1] = `${store.name}.New${root.name}Repository(${repositoryArgs(model, root, 'transactions', 'bridge')}),`;
+    }
+  }
   return `${logger}
 	database, err := ${store.name}.SettingsFrom(cfg)
 	if err != nil {
@@ -153,10 +169,77 @@ ${serve}`;
 		}
 	}
 	transactions := ${store.name}.NewTransactions(db, database.TransactionTimeout, logger)
-
+${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
 	useCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}
-${serve}`;
+${messaging ? listenersWiring(model, store) : ''}${serve}`;
+}
+
+// La mensajería en el arranque (incremento 9): la configuración del perfil, los adaptadores del broker que escribe el
+// agente (cmd/server/broker.go) y el puente, que necesitan los repositorios. Va antes de los casos de uso.
+function messagingWiring(model) {
+  const lines = [`
+	messagingSettings, err := messaging.SettingsFrom(cfg)
+	if err != nil {
+		return fmt.Errorf("configuración de la mensajería: %w", err)
+	}`];
+  if (publishes(model)) {
+    lines.push(`	adapters, err := brokerAdapters(messagingSettings, logger)
+	if err != nil {
+		return fmt.Errorf("adaptadores del broker: %w", err)
+	}`);
+    lines.push(usesGoOutbox(model) ? '\tbridge := messaging.NewBridge(messagingSettings)' : '\tbridge := messaging.NewBridge(adapters.Publishers, logger)');
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+// Lo que necesita los casos de uso: el relay del outbox (con el dispatcher del agente o el respaldo) y los listeners.
+function listenersWiring(model, store) {
+  const lines = [];
+  if (usesGoOutbox(model)) {
+    lines.push(`	dispatcher := adapters.Dispatcher
+	if dispatcher == nil {
+		if dispatcher, err = messaging.NewDispatcherFallback(cfg.Profiles, logger); err != nil {
+			return err
+		}
+	}
+	relay := messaging.NewRelay(${store.name}.NewOutbox(transactions), dispatcher, *messagingSettings.OutboxRelay, logger)`);
+  }
+  if (consumes(model)) {
+    lines.push(`	listeners, err := messageListeners(inbound{
+		Settings: messagingSettings,
+		UseCases: useCases,
+		Guard:    messaging.NewIdempotencyGuard(${store.name}.NewProcessedEvents(transactions), logger),
+		Logger:   logger,
+	})
+	if err != nil {
+		return fmt.Errorf("listeners de las suscripciones: %w", err)
+	}`);
+  }
+  return lines.length > 0 ? `${lines.join('\n')}\n` : '';
+}
+
+// Las goroutines de la mensajería en el errgroup: el relay (solo con base: el perfil test no la tiene) y un listener por
+// consumidor. Todos paran al cancelarse el contexto del grupo.
+function workers(model) {
+  const parts = [];
+  if (usesGoOutbox(model)) {
+    parts.push(`
+	if database.Enabled {
+		group.Go(func() error {
+			return relay.Run(groupCtx)
+		})
+	}`);
+  }
+  if (consumes(model)) {
+    parts.push(`
+	for _, listen := range listeners {
+		group.Go(func() error {
+			return listen(groupCtx)
+		})
+	}`);
+  }
+  return parts.join('');
 }
 
 function mainTestGo(model) {

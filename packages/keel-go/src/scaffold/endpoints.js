@@ -250,7 +250,7 @@ function presenceChecks(rules, present, value) {
  * Todas las comprobaciones de un componente: `present` es la expresión que dice si llegó (null: siempre llega),
  * `value` la del valor y `pathOf` la del campo en el detalle (un literal Go).
  */
-function componentChecks(component, { rules, each, present, value, sink, path, plan, indent = '\t' }) {
+export function componentChecks(component, { rules, each, present, value, sink, path, plan, indent = '\t' }) {
   const type = elementType(component);
   const lines = [];
   lines.push(...checkLines(presenceChecks(rules, present, value), sink, path, indent));

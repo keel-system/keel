@@ -27,6 +27,7 @@ import {
   declaredConcurrencyError
 } from '@keel-system/keel-core/gen/constraint-errors';
 import { usesRelational } from '@keel-system/keel-core/gen/features';
+import { usesBestEffort, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { alignRows, goString } from '../lib/go-source.js';
 import { relationalEngine, sqlDialect } from '../lib/relational-engine.js';
@@ -47,7 +48,7 @@ export function generate(model) {
   const engineError = d.mysql ? MYSQL_DRIVER : 'github.com/jackc/pgx/v5/pgconn';
   files.push(
     { path: `${store.dir}/database.go`, content: packageFile(model, store, { imports: databaseImports(d), body: databaseBody(d) }) },
-    { path: `${store.dir}/transactions.go`, content: packageFile(model, store, { imports: [...TRANSACTION_IMPORTS, engineError, 'github.com/google/uuid'], body: transactionsBody(d) }) },
+    { path: `${store.dir}/transactions.go`, content: packageFile(model, store, { imports: [...TRANSACTION_IMPORTS, engineError, 'github.com/google/uuid'], body: transactionsBody(d, transactionNeeds(model)) }) },
     { path: `${store.dir}/errors.go`, content: packageFile(model, store, { imports: ['errors', 'strings', engineError, 'internal/domain'], body: errorsBody(model, d) }) }
   );
   if (usesTextFold(model)) {
@@ -402,8 +403,49 @@ func bind(args []any) []any {
   }
 };
 
-function transactionsBody(d) {
+/**
+ * Lo que la mensajería pide a la unidad de trabajo (incremento 9), y solo si la usa: `apart`, una transacción PROPIA
+ * aunque el contexto traiga otra (el relay del outbox y el registro de procesados), y `afterCommit`, lo que se ejecuta
+ * cuando confirma la transacción abierta (la publicación best-effort).
+ */
+function transactionNeeds(model) {
+  return { apart: usesGoOutbox(model) || usesGoProcessedEvents(model), afterCommit: usesBestEffort(model) };
+}
+
+function transactionsBody(d, { apart = false, afterCommit = false } = {}) {
   const p = TRANSACTION_PLATFORM[d.engine];
+  const hooksType = afterCommit
+    ? `
+
+// commitHooks es lo que espera a que confirme la transacción abierta en el contexto.
+type commitHooks struct {
+	pending []func(context.Context)
+}
+
+// hooksKey es la clave de los commitHooks de la transacción abierta en el contexto.
+type hooksKey struct{}
+
+// afterCommit ejecuta fn cuando confirma la transacción abierta en ctx, o ya si no hay ninguna (la escritura que acaba
+// de terminar confirmó la suya). Si la transacción revierte, fn no se ejecuta.
+func (t *Transactions) afterCommit(ctx context.Context, fn func(context.Context)) {
+	if hooks, ok := ctx.Value(hooksKey{}).(*commitHooks); ok && openTx(ctx) != nil {
+		hooks.pending = append(hooks.pending, fn)
+		return
+	}
+	fn(ctx)
+}`
+    : '';
+  const apartMethod = apart
+    ? `
+
+// apart ejecuta fn en una transacción PROPIA aunque ctx traiga una abierta, con sus opciones: lo que se confirma aparte
+// del caso de uso (el relay del outbox, el registro de un mensaje procesado).
+func (t *Transactions) apart(ctx context.Context, options sql.TxOptions, fn func(DBTX) error) error {
+	return t.fresh(ctx, options, func(_ context.Context, q DBTX) error {
+		return fn(q)
+	})
+}`
+    : '';
   return `
 // writeConflictAttempts son los intentos de una transacción de escritura que pierde un conflicto transitorio
 // (keel-core/gen/transactions.js).
@@ -478,12 +520,18 @@ func (t *Transactions) within(ctx context.Context, readOnly bool, fn func(contex
 	if tx := openTx(ctx); tx != nil {
 		return translate(fn(ctx, ${p.wrap('tx')}))
 	}
+	return t.fresh(ctx, sql.TxOptions{ReadOnly: readOnly}, fn)
+}
+
+// fresh ejecuta fn en una transacción nueva, que confirma si fn termina bien y revierte si no. Un conflicto transitorio
+// la repite entera; los errores del motor salen ya traducidos al contrato.
+func (t *Transactions) fresh(ctx context.Context, options sql.TxOptions, fn func(context.Context, DBTX) error) error {
 	if t.db == nil {
 		return errDisabled
 	}
 	for attempt := 1; ; attempt++ {
-		err := t.once(ctx, readOnly, fn)
-		if err == nil || readOnly || !transient(err) {
+		err := t.once(ctx, options, fn)
+		if err == nil || options.ReadOnly || !transient(err) {
 			return translate(err)
 		}
 		if attempt == writeConflictAttempts {
@@ -494,8 +542,8 @@ func (t *Transactions) within(ctx context.Context, readOnly bool, fn func(contex
 }
 
 // once es un intento: ${p.once}; cualquier fallo revierte.
-func (t *Transactions) once(ctx context.Context, readOnly bool, fn func(context.Context, DBTX) error) (err error) {
-	tx, err := t.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: readOnly})
+func (t *Transactions) once(ctx context.Context, options sql.TxOptions, fn func(context.Context, DBTX) error) (err error) {
+	tx, err := t.db.BeginTx(ctx, &options)
 	if err != nil {
 		return err
 	}
@@ -505,11 +553,22 @@ func (t *Transactions) once(ctx context.Context, readOnly bool, fn func(context.
 			_ = tx.Rollback()
 		}
 	}()
-${p.prologue}	if err = fn(context.WithValue(ctx, txKey{}, tx), ${p.wrap('tx')}); err != nil {
+${p.prologue}${afterCommit ? `	hooks := &commitHooks{}
+	if err = fn(context.WithValue(context.WithValue(ctx, txKey{}, tx), hooksKey{}, hooks), ${p.wrap('tx')}); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	for _, hook := range hooks.pending {
+		hook(ctx)
+	}
+	return nil
+}` : `	if err = fn(context.WithValue(ctx, txKey{}, tx), ${p.wrap('tx')}); err != nil {
 		return err
 	}
 	return tx.Commit()
-}
+}`}${apartMethod}${hooksType}
 
 ${p.transient}${p.binding}
 `;
