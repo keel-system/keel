@@ -20,6 +20,7 @@ import { repositoryArgs, repositoryParam } from './repositories.js';
 import { MESSAGING_IMPORT, usesGoMessaging, usesGoOutbox } from './messaging.js';
 import { brokerConnection, brokerFiles, consumes, publishes } from './broker.js';
 import { RABBITMQ_IMPORT } from './rabbitmq.js';
+import { KAFKA_IMPORT } from './kafka.js';
 import { newUseCasesCall, usesDependencies } from './use-cases.js';
 import { IDEMPOTENCY_STORE, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_ROLES, SECURITY_IMPORT, settingsFromConfig, usesRoleCheck } from './security.js';
@@ -66,7 +67,8 @@ function mainGo(model) {
       'database/sql',
       layout(model).store.dir,
       MESSAGING_IMPORT,
-      RABBITMQ_IMPORT
+      RABBITMQ_IMPORT,
+      KAFKA_IMPORT
     ],
     body: `
 func main() {
@@ -187,12 +189,12 @@ function messagingWiring(model) {
 	}`];
   const connection = brokerConnection(model);
   if (connection) {
-    lines.push(`	${connection.name}Settings, err := rabbitmq.SettingsFrom(cfg)
+    lines.push(`	${connection.name}Settings, err := ${connection.pkg}.SettingsFrom(cfg)
 	if err != nil {
-		return fmt.Errorf("configuración de RabbitMQ: %w", err)
+		return fmt.Errorf("configuración de ${connection.label}: %w", err)
 	}
 	// La conexión con el broker: arranca sin él y conecta en segundo plano (su Run va en el errgroup).
-	${connection.name} := rabbitmq.New(${connection.name}Settings, messagingSettings, logger)`);
+	${connection.name} := ${connection.pkg}.New(${connection.name}Settings, messagingSettings, logger)`);
   }
   if (publishes(model)) {
     lines.push(`	adapters, err := brokerAdapters(messagingSettings, ${connection ? `${connection.name}, ` : ''}logger)

@@ -48,9 +48,9 @@ test('capa messaging: entra con persistencia relacional y API (tramo 9b-2); sin 
   assert.deepEqual(fixture('stock-reservation-events'), []);
 });
 
-test('RabbitMQ: Kafka y SNS/SQS se rechazan en el build con su tramo', () => {
+test('RabbitMQ y Kafka entran; SNS/SQS se rechaza en el build con su tramo', () => {
   assert.deepEqual(checkSupportedStack({ broker: 'rabbitmq', database: 'postgresql' }).errors, []);
-  assert.match(checkSupportedStack({ broker: 'kafka' }).errors[0], /broker: kafka .*tramo 9f/);
+  assert.deepEqual(checkSupportedStack({ broker: 'kafka', database: 'postgresql' }).errors, []);
   assert.match(checkSupportedStack({ broker: 'snssqs' }).errors[0], /broker: snssqs .*tramo 9g/);
 });
 

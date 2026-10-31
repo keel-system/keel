@@ -13,13 +13,18 @@ import { alignRows } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
 import { MESSAGING_IMPORT, publisherPort, usesBestEffort, usesGoOutbox } from './messaging.js';
 import { RABBITMQ_IMPORT, usesGoRabbitMq } from './rabbitmq.js';
+import { KAFKA_IMPORT, usesGoKafka } from './kafka.js';
 
 /**
  * La conexión del broker que build genera y que recibe lo del agente (en brokerAdapters y en inbound), o null si build
  * no genera ninguna para ese broker.
  */
 export function brokerConnection(model) {
-  if (usesGoRabbitMq(model)) return { name: 'rabbit', field: 'Rabbit', type: '*rabbitmq.Connection', import: RABBITMQ_IMPORT, method: 'Publish', consume: 'Consume' };
+  if (usesGoRabbitMq(model)) {
+    return { name: 'rabbit', field: 'Rabbit', type: '*rabbitmq.Connection', pkg: 'rabbitmq', label: 'RabbitMQ', import: RABBITMQ_IMPORT, method: 'Publish', consume: 'Consume' };
+  }
+  // `kafkaConn` y no `kafka`: el nombre del paquete quedaría tapado en el resto de la función.
+  if (usesGoKafka(model)) return { name: 'kafkaConn', field: 'Kafka', type: '*kafka.Connection', pkg: 'kafka', label: 'Kafka', import: KAFKA_IMPORT, method: 'Publish', consume: 'Consume' };
   return null;
 }
 

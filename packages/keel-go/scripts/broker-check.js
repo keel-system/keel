@@ -1,18 +1,19 @@
 #!/usr/bin/env node
-// La MENSAJERÍA de keel-go contra un RabbitMQ real (incremento 9c): lo único que dice que la conexión, la topología, la
-// publicación con confirmación y `mandatory`, el consumo con su reintento y su descarte, la reconexión, el relay del
-// outbox y los helpers del arnés funcionan juntos. Es el broker-check de keel-dotnet, keel-nest y keel-spring para este
-// generador.
+// La MENSAJERÍA de keel-go contra un RabbitMQ y un Kafka reales (tramos 9c y 9f): lo único que dice que la conexión, la
+// topología (o el consumo por grupo), la publicación con confirmación, el consumo con su reintento y su descarte, la
+// reconexión, el relay del outbox y los helpers del arnés funcionan juntos. Es el broker-check de keel-dotnet, keel-nest
+// y keel-spring para este generador.
 //
 // Por qué no está en `npm test`: necesita Go, red (proxy.golang.org la primera vez), podman o docker, y minutos.
 //
-//   node packages/keel-go/scripts/broker-check.js [--keep] [--only-sabotage=<id>]
+//   node packages/keel-go/scripts/broker-check.js [--broker=rabbitmq,kafka] [--keep] [--only-sabotage=<id>]
 //   npm run broker-check --workspace packages/keel-go
 //
-// El sujeto es stock-reservation-events: outbox, y tres suscripciones Keel de la misma fuente que comparten cola, con
-// reintento y descarte. Lo que en el proyecto escribiría el agente se escribe aquí como SONDA, donde lo escribiría él
-// (cmd/server/broker.go): un messaging.Dispatcher sobre Connection.Publish y un listener sobre Connection.Consume cuyo
-// comportamiento lo decide el eventId (7e000000-… falla de forma transitoria, b0000000-… es un rechazo de negocio, el
+// El sujeto es stock-reservation-events: outbox, y tres suscripciones Keel de la misma fuente (en RabbitMQ comparten
+// cola; en Kafka cada una tiene su consumer group), con reintento y descarte. Lo que en el proyecto escribiría el agente
+// se escribe aquí como SONDA, donde lo escribiría él (cmd/server/broker.go): un messaging.Dispatcher sobre
+// Connection.Publish y un listener sobre Connection.Consume (en Kafka, uno por suscripción) cuyo comportamiento lo decide
+// el eventId (7e000000-… falla de forma transitoria, b0000000-… es un rechazo de negocio, el
 // resto se procesa con IdempotencyGuard.TryRecord). Como el servidor es un proceso aparte, el listener anota cada
 // intento en build/broker-probe/attempts.log, que los flujos leen.
 //
@@ -26,7 +27,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
-import { rabbitListenerRetry } from '@keel-system/keel-core/gen';
+import { kafkaListenerRetry, rabbitListenerRetry } from '@keel-system/keel-core/gen';
 import { resolveStack, writeStackConfig } from '@keel-system/keel-core/gen/stack';
 import { makeWorkspace, mountDesign, runCommand } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
@@ -37,6 +38,8 @@ import { resolveRuntime } from '../../keel-nest/scripts/lib/database-container.j
 const DESIGN = 'stock-reservation-events';
 const keep = process.argv.includes('--keep');
 const onlySabotage = process.argv.find((arg) => arg.startsWith('--only-sabotage='))?.split('=')[1] ?? null;
+const brokerArg = process.argv.find((arg) => arg.startsWith('--broker='));
+const BROKERS = brokerArg ? brokerArg.slice('--broker='.length).split(',') : ['rabbitmq', 'kafka'];
 const isWindows = process.platform === 'win32';
 const results = [];
 
@@ -76,17 +79,21 @@ function go(projectDir, args) {
   return { ok: result.status === 0, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
 }
 
+async function checkBroker(broker) {
+const kafka = broker === 'kafka';
+const label = { rabbitmq: 'RabbitMQ', kafka: 'Kafka' }[broker];
+console.log(`\n── ${label} ──`);
 // ── El proyecto, generado por build como en una corrida ──────────────────────────────────────────
-const stack = { database: 'postgresql', broker: 'rabbitmq' };
-const workspace = makeWorkspace('keel-go-broker-');
+const stack = { database: 'postgresql', broker };
+const workspace = makeWorkspace(`keel-go-broker-${broker}-`);
 const specDir = mountDesign(workspace, DESIGN);
 const projectDir = path.join(workspace, 'services', `${DESIGN}-go`);
 fs.mkdirSync(projectDir, { recursive: true });
 const design = loadService(specDir);
 writeStackConfig(projectDir, resolveStack(stack, design.layers));
 const generated = await runCommand(workspace, build, `specs/${DESIGN}`, { defaults: true, acceptUnready: true });
-if (!step('build genera el proyecto', generated.exitCode === undefined && fs.existsSync(path.join(projectDir, 'go.mod')), generated.exitCode ? generated.output : '')) {
-  process.exit(1);
+if (!step(`${label}: build genera el proyecto`, generated.exitCode === undefined && fs.existsSync(path.join(projectDir, 'go.mod')), generated.exitCode ? generated.output : '')) {
+  return;
 }
 const { model } = planService({ ...design, workspace, stack });
 const module = /^module\s+(\S+)/m.exec(fs.readFileSync(path.join(projectDir, 'go.mod'), 'utf8'))[1];
@@ -94,7 +101,21 @@ const sub = model.subscriptions.find((candidate) => candidate.name === 'StockRes
 const event = model.events[0];
 const channel = model.messaging.publishChannels[0];
 const routingKey = event.routingKeyDefault;
-const attempts = rabbitListenerRetry(model).attempts;
+const attempts = kafka ? kafkaListenerRetry(model).attempts : rabbitListenerRetry(model).attempts;
+// Lo que cambia de la sonda entre brokers: la conexión, la publicación, el cuerpo del mensaje y cómo se consume. En
+// Kafka cada suscripción tiene su grupo y su listener: la sonda los registra TODOS (un proyecto completo los tiene, y el
+// arnés espera a sus grupos), y solo el de la suscripción medida actúa.
+const conn = kafka
+  ? { pkg: 'kafka', param: 'kafkaConn', field: 'Kafka', publish: 'd.conn.Publish(ctx, destination, routingKey, payload, nil)', body: 'Value' }
+  : { pkg: 'rabbitmq', param: 'rabbit', field: 'Rabbit', publish: 'd.conn.Publish(ctx, destination, routingKey, eventType, payload, nil)', body: 'Body' };
+const listenersReturn = kafka
+  ? `ignore := func(context.Context, kafka.Message) error { return nil }
+	return []listener{
+${model.subscriptions
+  .map((candidate) => `		func(ctx context.Context) error { return deps.Kafka.Consume(ctx, ${JSON.stringify(candidate.name)}, ${candidate.name === sub.name ? 'handle' : 'ignore'}) },`)
+  .join('\n')}
+	}, nil`
+  : `return []listener{func(ctx context.Context) error { return deps.Rabbit.Consume(ctx, queue, handle) }}, nil`;
 
 // ── Lo del agente, como sonda: cmd/server/broker.go ────────────────────────────────────────────
 fs.writeFileSync(
@@ -111,22 +132,22 @@ import (
 	"sync"
 
 	"${module}/internal/domain"
+	"${module}/internal/infrastructure/${conn.pkg}"
 	"${module}/internal/infrastructure/messaging"
-	"${module}/internal/infrastructure/rabbitmq"
 )
 
 // probeDispatcher es la sonda del dispatcher que escribiría el agente: la fila tal cual, con su tipo, y espera la
 // confirmación del broker.
 type probeDispatcher struct {
-	rabbit *rabbitmq.Connection
+	conn *${conn.pkg}.Connection
 }
 
 func (d probeDispatcher) Dispatch(ctx context.Context, destination, routingKey, eventType, payload string) error {
-	return d.rabbit.Publish(ctx, destination, routingKey, eventType, payload, nil)
+	${kafka ? '_ = eventType // en Kafka el tipo viaja en la envoltura\n\t' : ''}return ${conn.publish}
 }
 
-func brokerAdapters(_ messaging.Settings, rabbit *rabbitmq.Connection, _ *slog.Logger) (outbound, error) {
-	return outbound{Dispatcher: probeDispatcher{rabbit: rabbit}}, nil
+func brokerAdapters(_ messaging.Settings, ${conn.param} *${conn.pkg}.Connection, _ *slog.Logger) (outbound, error) {
+	return outbound{Dispatcher: probeDispatcher{conn: ${conn.param}}}, nil
 }
 
 // attemptsLog guarda los intentos que ve el listener: el servidor es otro proceso, y los flujos los leen del archivo.
@@ -150,17 +171,17 @@ func recordAttempt(eventID string) error {
 	return file.Close()
 }
 
-// messageListeners es la sonda del listener que escribiría el agente, uno para la cola compartida. Lo que hace lo
+// messageListeners es la sonda del listener que escribiría el agente${kafka ? ', uno por suscripción' : ', uno para la cola compartida'}. Lo que hace lo
 // decide el eventId: 7e000000-… falla de forma transitoria (se reintenta y acaba en el descarte), b0000000-… es un
 // rechazo de negocio (descarte sin reintento); el resto se procesa con IdempotencyGuard.TryRecord.
 func messageListeners(deps inbound) ([]listener, error) {
-	queue := deps.Settings.Subscriptions[${JSON.stringify(sub.name)}].Queue
-	handle := func(ctx context.Context, message rabbitmq.Message) error {
-		envelope, err := messaging.ParseEnvelope(message.Body)
+${kafka ? '' : `	queue := deps.Settings.Subscriptions[${JSON.stringify(sub.name)}].Queue
+`}	handle := func(ctx context.Context, message ${conn.pkg}.Message) error {
+		envelope, err := messaging.ParseEnvelope(message.${conn.body})
 		if err != nil {
 			return err
 		}
-		// La cola la comparten varias suscripciones: lo que no es nuestro se confirma SIN efecto.
+		// ${kafka ? 'El grupo recibe el topic entero' : 'La cola la comparten varias suscripciones'}: lo que no es nuestro se confirma SIN efecto.
 		if envelope.Metadata.EventType != ${JSON.stringify(sub.name)} {
 			return nil
 		}
@@ -184,7 +205,7 @@ func messageListeners(deps inbound) ([]listener, error) {
 		_, err = deps.Guard.TryRecord(ctx, "ProbeListener", eventID)
 		return err
 	}
-	return []listener{func(ctx context.Context) error { return deps.Rabbit.Consume(ctx, queue, handle) }}, nil
+	${listenersReturn}
 }
 `
 );
@@ -203,6 +224,55 @@ const foreign = JSON.stringify({
   data: {}
 });
 const q = JSON.stringify;
+// Con Kafka el arranque tras levantar el broker suma el reparto del grupo: más margen.
+const recovery = kafka ? 90 : 30;
+// Lo publicado: en RabbitMQ, la routing key y el tipo nativo; en Kafka, la clave del registro.
+const publishedShape = kafka
+  ? `if message.RoutingKey != ${q(routingKey)} {
+				s.Errorf("clave %q", message.RoutingKey)
+			}`
+  : `if message.RoutingKey != ${q(routingKey)} || message.Type() != ${q(event.name)} {
+				s.Errorf("routing key %q y tipo %q", message.RoutingKey, message.Type())
+			}`;
+// RabbitMQ: lo que no tiene cola (mandatory) no se da por publicado. Kafka crea el topic con el primer mensaje.
+const mandatoryCase = kafka
+  ? ''
+  : `
+	f.Scenario("FL-BRK-002-B: lo que no tiene cola (mandatory) no se da por publicado", func(s *Scenario) {
+		id := probeID("")
+		probeOutboxRow(s, id, "keel.sin-ruta", probeEnvelope(probeID("")))
+		// Hasta que el relay la intente o la dé por publicada: lo segundo es el fallo que se mide, y tiene que decirlo.
+		s.Eventually(func() bool {
+			return probeCount(s, "SELECT COUNT(*) FROM outbox_event WHERE id = '"+id+"' AND (attempts >= 1 OR published_at IS NOT NULL)") == 1
+		}, 20*time.Second, "el relay no lo intentó")
+		if got := probeCount(s, "SELECT COUNT(*) FROM outbox_event WHERE id = '"+id+"' AND published_at IS NULL"); got != 1 {
+			s.Error("se dio por publicada una fila sin cola")
+		}
+		s.Db("DELETE FROM outbox_event WHERE id = '" + id + "'")
+	})`;
+// Kafka: el descarte conserva la clave y lleva los headers de Spring Kafka.
+const deadLetterShape = kafka
+  ? `
+	f.Scenario("FL-BRK-001-I: el descarte conserva la clave y lleva los headers de Spring Kafka (topic de origen y excepción)", func(s *Scenario) {
+		id := probeID("b0000000")
+		s.Deliver${sub.name}(id, probeOrder)
+		s.Eventually(func() bool { return hasEvent(s.DeadLetterMessages(${q(sub.name)}), id) }, 20*time.Second, "no llegó al descarte")
+		for _, dead := range s.DeadLetterMessages(${q(sub.name)}) {
+			if dead.EventID() != id {
+				continue
+			}
+			if dead.RoutingKey != id {
+				s.Errorf("clave %q, quiero %q", dead.RoutingKey, id)
+			}
+			if got := dead.Properties["kafka_dlt-original-topic"]; got != ${q(sub.topicDefault)} {
+				s.Errorf("kafka_dlt-original-topic = %v", got)
+			}
+			if got, _ := dead.Properties["kafka_dlt-exception-message"].(string); !strings.Contains(got, "rechazo de negocio de la sonda") {
+				s.Errorf("kafka_dlt-exception-message = %q", got)
+			}
+		}
+	})`
+  : '';
 const flowsDir = path.join(projectDir, 'tests', 'integration');
 fs.writeFileSync(
   path.join(flowsDir, 'broker_probe_flow_test.go'),
@@ -376,8 +446,8 @@ func TestBrokerConsumption(t *testing.T) {
 		s.StartBroker()
 		id := probeID("")
 		s.DeliverStockReserved(id, probeOrder)
-		s.Eventually(func() bool { return probeProcessed(s, id) == 1 }, 30*time.Second, "el consumidor no volvió tras la reconexión")
-	})
+		s.Eventually(func() bool { return probeProcessed(s, id) == 1 }, ${recovery}*time.Second, "el consumidor no volvió tras la reconexión")
+	})${deadLetterShape}
 }
 
 func TestBrokerPublication(t *testing.T) {
@@ -391,26 +461,13 @@ func TestBrokerPublication(t *testing.T) {
 			if message.EventID() != eventID {
 				continue
 			}
-			if message.RoutingKey != ${q(routingKey)} || message.Type() != ${q(event.name)} {
-				s.Errorf("routing key %q y tipo %q", message.RoutingKey, message.Type())
-			}
+			${publishedShape}
 		}
 		if got := probeCount(s, "SELECT COUNT(*) FROM outbox_event WHERE id = '"+id+"' AND published_at IS NOT NULL"); got != 1 {
 			s.Error("la fila no quedó publicada")
 		}
 	})
-	f.Scenario("FL-BRK-002-B: lo que no tiene cola (mandatory) no se da por publicado", func(s *Scenario) {
-		id := probeID("")
-		probeOutboxRow(s, id, "keel.sin-ruta", probeEnvelope(probeID("")))
-		// Hasta que el relay la intente o la dé por publicada: lo segundo es el fallo que se mide, y tiene que decirlo.
-		s.Eventually(func() bool {
-			return probeCount(s, "SELECT COUNT(*) FROM outbox_event WHERE id = '"+id+"' AND (attempts >= 1 OR published_at IS NOT NULL)") == 1
-		}, 20*time.Second, "el relay no lo intentó")
-		if got := probeCount(s, "SELECT COUNT(*) FROM outbox_event WHERE id = '"+id+"' AND published_at IS NULL"); got != 1 {
-			s.Error("se dio por publicada una fila sin cola")
-		}
-		s.Db("DELETE FROM outbox_event WHERE id = '" + id + "'")
-	})
+${mandatoryCase}
 	f.Scenario("FL-BRK-002-C: con el broker caído la fila espera, y sale al volver sin rendirse", func(s *Scenario) {
 		s.StopBroker()
 		eventID := probeID("")
@@ -420,7 +477,7 @@ func TestBrokerPublication(t *testing.T) {
 			s.Errorf("con el broker caído se leyeron %d mensajes", len(got))
 		}
 		s.StartBroker()
-		s.Eventually(func() bool { return hasEvent(s.PublishedMessages(${q(channel)}), eventID) }, 30*time.Second, "no salió tras levantar el broker")
+		s.Eventually(func() bool { return hasEvent(s.PublishedMessages(${q(channel)}), eventID) }, ${recovery}*time.Second, "no salió tras levantar el broker")
 		if got := s.DeadLetteredEvents(); got != 0 {
 			s.Errorf("rendidos = %d", got)
 		}
@@ -456,13 +513,13 @@ func TestBrokerPublication(t *testing.T) {
 `
 );
 
-const CASES = { 'FL-BRK-001': 'ABCDEFGH', 'FL-BRK-002': 'ABCDE' };
+const CASES = { 'FL-BRK-001': kafka ? 'ABCDEFGHI' : 'ABCDEFGH', 'FL-BRK-002': kafka ? 'ACDE' : 'ABCDE' };
 
 // Cada sabotaje rompe UNA pieza de lo emitido conservando su forma, y compila: un sabotaje que no compila no falsa nada.
 const SABOTAGES = {
   // El rechazo de negocio tratado como reintentable: se reintenta y acaba en el descarte con más de un intento.
   'rejection-retried': {
-    file: 'internal/infrastructure/rabbitmq/topology.go',
+    file: kafka ? 'internal/infrastructure/kafka/consumption.go' : 'internal/infrastructure/rabbitmq/topology.go',
     from: 'return retriesNotFound && rejected.Kind() == domain.KindNotFound',
     to: 'return retriesNotFound || rejected.Kind() != domain.KindNotFound',
     expect: 'FL-BRK-001-D'
@@ -476,33 +533,42 @@ const SABOTAGES = {
     expect: 'FL-BRK-001-G'
   },
   // Sin mandatory, lo que no tiene cola se confirma igual y el relay lo da por publicado.
-  mandatory: {
+  mandatory: kafka ? null : {
     file: 'internal/infrastructure/rabbitmq/connection.go',
     from: 'ch.PublishWithDeferredConfirmWithContext(confirmCtx, exchange, routingKey, true, false, message)',
     to: 'ch.PublishWithDeferredConfirmWithContext(confirmCtx, exchange, routingKey, false, false, message)',
     expect: 'FL-BRK-002-B'
   },
   // El consumidor que no se rearma: al caer la conexión, Consume vuelve y nadie vuelve a consumir.
-  'consumer-not-rearmed': {
+  'consumer-not-rearmed': kafka ? null : {
     file: 'internal/infrastructure/rabbitmq/connection.go',
     from: '\t\tif ctx.Err() != nil {\n\t\t\treturn nil\n\t\t}\n\t\t// Si cayó la conexión',
     to: '\t\tif ctx.Err() == nil {\n\t\t\treturn nil\n\t\t}\n\t\t// Si cayó la conexión',
     expect: 'FL-BRK-001-H'
-  }
+  },
+  // El descarte con el header del topic de origen equivocado: quien vigila los descartes no sabría de dónde vienen.
+  'dlt-headers': kafka
+    ? {
+        file: 'internal/infrastructure/kafka/connection.go',
+        from: 'kgo.RecordHeader{Key: "kafka_dlt-original-topic", Value: []byte(record.Topic)}',
+        to: 'kgo.RecordHeader{Key: "kafka_dlt-original-topic", Value: []byte(group)}',
+        expect: 'FL-BRK-001-I'
+      }
+    : null
 };
 
 const tidy = go(projectDir, ['mod', 'tidy']);
-if (!step('go mod tidy', tidy.ok, tidy.ok ? '' : tidy.output.slice(-1200))) process.exit(1);
+if (!step(`${label}: go mod tidy`, tidy.ok, tidy.ok ? '' : tidy.output.slice(-1200))) return;
 const built = go(projectDir, ['vet', '-tags', 'integration', './...']);
-if (!step('el proyecto con las sondas y los flujos compila y pasa go vet', built.ok, built.ok ? '' : built.output.slice(-2000))) process.exit(1);
+if (!step(`${label}: el proyecto con las sondas y los flujos compila y pasa go vet`, built.ok, built.ok ? '' : built.output.slice(-2000))) return;
 const flows = bash(projectDir, 'infra/check-flows.sh');
-step('check-flows.sh: los flujos sonda respetan la caja negra', flows.status === 0, flows.status === 0 ? '' : flows.output.slice(-800));
+step(`${label}: check-flows.sh: los flujos sonda respetan la caja negra`, flows.status === 0, flows.status === 0 ? '' : flows.output.slice(-800));
 
 const up = bash(projectDir, 'infra/up.sh');
-if (!step('bash infra/up.sh (PostgreSQL y RabbitMQ)', up.status === 0, up.status === 0 ? '' : up.output.slice(-1200))) process.exit(1);
+if (!step(`${label}: bash infra/up.sh (PostgreSQL y el broker)`, up.status === 0, up.status === 0 ? '' : up.output.slice(-1200))) return;
 try {
   const validate = bash(projectDir, 'infra/validate-infra.sh');
-  step('bash infra/validate-infra.sh (el broker incluido)', validate.status === 0, validate.status === 0 ? '' : validate.output.slice(-1200));
+  step(`${label}: bash infra/validate-infra.sh (el broker incluido)`, validate.status === 0, validate.status === 0 ? '' : validate.output.slice(-1200));
 
   // El documento de escenarios declara SOLO las sondas: un id que el documento no declara es AJENO, y su FALLO dejaría
   // el script en 2 (arnés roto), no en 1, así que el falsado no se podría leer. Su línea sale del sello.
@@ -518,37 +584,40 @@ try {
     for (const [flow, ids] of Object.entries(CASES)) {
       for (const id of ids) {
         const ok = new RegExp(`OK\\s+${flow}-${id}`).test(lines);
-        step(`score: ${flow}-${id}`, ok, ok ? '' : (lines.match(new RegExp(`.*${flow}-${id}.*`))?.[0] ?? lines.slice(-1500)));
+        step(`${label}: score: ${flow}-${id}`, ok, ok ? '' : (lines.match(new RegExp(`.*${flow}-${id}.*`))?.[0] ?? lines.slice(-1500)));
       }
     }
     const measured = scored.status === 0 && /Humo del arnés: OK/.test(lines);
-    step('score: el humo del arnés (con SMOKE-8, el broker y la conexión) en verde y el script con 0', measured, measured ? '' : lines.slice(-2500));
+    step(`${label}: score: el humo del arnés (con SMOKE-8, el broker y la conexión) en verde y el script con 0`, measured, measured ? '' : lines.slice(-2500));
   }
 
   for (const [id, sabotage] of Object.entries(SABOTAGES)) {
-    if (onlySabotage && id !== onlySabotage) continue;
+    if (!sabotage || (onlySabotage && id !== onlySabotage)) continue;
     const target = path.join(projectDir, sabotage.file);
     const original = fs.readFileSync(target, 'utf8');
-    if (!step(`falsado ${id}: se aplica a lo emitido`, original.includes(sabotage.from))) continue;
+    if (!step(`${label}: falsado ${id}: se aplica a lo emitido`, original.includes(sabotage.from))) continue;
     fs.writeFileSync(target, original.replace(sabotage.from, sabotage.to));
     try {
       const sabotaged = bash(projectDir, 'infra/score-scenarios.sh');
       const failed = [...sabotaged.output.matchAll(/FALLO\s+(FL-BRK-\d{3}-[A-Z])/g)].map((match) => match[1]);
       const caught = sabotaged.status === 1 && failed.length === 1 && failed[0] === sabotage.expect;
-      step(`falsado ${id}: ${sabotage.expect} sale FALLO (y solo él) y el script con 1`, caught, caught ? '' : `código ${sabotaged.status}, FALLO: ${failed.join(', ') || '(ninguno)'}\n${sabotaged.output.slice(-1500)}`);
+      step(`${label}: falsado ${id}: ${sabotage.expect} sale FALLO (y solo él) y el script con 1`, caught, caught ? '' : `código ${sabotaged.status}, FALLO: ${failed.join(', ') || '(ninguno)'}\n${sabotaged.output.slice(-1500)}`);
     } finally {
       fs.writeFileSync(target, original);
     }
   }
 } finally {
   const down = bash(projectDir, 'infra/down.sh', ['--volumes']);
-  step('bash infra/down.sh --volumes', down.status === 0, down.status === 0 ? '' : down.output.slice(-600));
+  step(`${label}: bash infra/down.sh --volumes`, down.status === 0, down.status === 0 ? '' : down.output.slice(-600));
   if (keep) {
-    const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-go-broker-kept-'));
+    const kept = fs.mkdtempSync(path.join(os.tmpdir(), `keel-go-broker-kept-${broker}-`));
     fs.cpSync(projectDir, kept, { recursive: true });
     console.log(`Proyecto conservado en ${kept}`);
   }
 }
+}
+
+for (const broker of BROKERS) await checkBroker(broker);
 
 const failed = results.filter((result) => !result.ok).length;
 console.log(failed === 0 ? `\nbroker-check: ${results.length}/${results.length} en verde.` : `\nbroker-check: ${failed} paso(s) en rojo.`);

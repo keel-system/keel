@@ -376,3 +376,44 @@ test('lo que enseñan la skill de RabbitMQ y integration-tests.md de la mensajer
     assert.ok(harness.includes(member), member);
   }
 });
+
+// Kafka (tramo 9f): la skill del broker, contra lo emitido.
+
+test('la skill de Kafka se instala con ese broker, y solo con él', () => {
+  const kafka = byPath(planWith('stock-reservation-events', { stack: { broker: 'kafka' } }).files);
+  for (const harness of HARNESSES) {
+    assert.ok(harness.skillPath('keel-go-kafka', 'SKILL.md') in kafka, `${harness.id}: kafka`);
+    for (const reference of fs.readdirSync(path.join(assets, 'generators', 'go', 'skills', 'keel-go-kafka', 'references'))) {
+      assert.ok(harness.skillPath('keel-go-kafka', `references/${reference}`) in kafka, `${harness.id}: ${reference}`);
+    }
+  }
+  assert.ok(!Object.keys(rabbit).some((file) => file.includes('keel-go-kafka')), 'con RabbitMQ, no');
+  assert.ok(!Object.keys(files).some((file) => file.includes('keel-go-kafka')), 'product-catalog no tiene mensajería');
+});
+
+test('lo que enseña la skill de Kafka es lo emitido', () => {
+  const kafka = byPath(planWith('stock-reservation-events', { stack: { broker: 'kafka' } }).files);
+  const find = (suffix) => Object.entries(kafka).find(([file]) => file.endsWith(suffix))?.[1] ?? '';
+  const skill = read('generators', 'go', 'skills', 'keel-go-kafka', 'SKILL.md');
+  const connection = find('internal/infrastructure/kafka/connection.go');
+  assert.match(connection, /func \(c \*Connection\) Publish\(ctx context\.Context, topic, key, payload string, headers map\[string\]string\) error/);
+  assert.match(connection, /func \(c \*Connection\) Consume\(ctx context\.Context, subscription string, handle Handler\) error/);
+  assert.match(connection, /type Handler func\(ctx context\.Context, message Message\) error/);
+  assert.match(connection, /\tValue +\[\]byte/);
+  assert.match(connection, /var ErrUnavailable = /);
+  const consumption = find('internal/infrastructure/kafka/consumption.go');
+  for (const member of ['func IsRetryable(err error, retriesNotFound bool) bool', 'func ListenerAttempts() int', 'func Subscriptions() []SubscriptionConsumption', 'func DeadLetterTopic(topic string) string']) {
+    assert.ok(consumption.includes(member), member);
+  }
+  // Las llamadas de los ejemplos: la firma que enseñan es la emitida.
+  assert.ok(skill.includes('d.kafka.Publish(ctx, destination, routingKey, payload, nil)'));
+  assert.ok(skill.includes('deps.Kafka.Consume(ctx, "StockReserved", handleStockReserved)'));
+  assert.ok(skill.includes('messaging.ParseEnvelope(message.Value)'));
+  assert.match(kafka['cmd/server/broker.go'], /func brokerAdapters\(settings messaging\.Settings, kafkaConn \*kafka\.Connection, logger \*slog\.Logger\) \(outbound, error\)/);
+  assert.match(kafka['cmd/server/messaging.go'], /\tKafka +\*kafka\.Connection/);
+  assert.match(kafka['cmd/server/broker.go'], /con la skill keel-go-kafka/);
+  // Lo que dice el diagnóstico que escribe el log, lo escribe.
+  assert.ok(read('generators', 'go', 'skills', 'keel-go-kafka', 'references', 'troubleshooting.md').includes('el diseño no declara dead-letter para esta suscripción'));
+  assert.ok(connection.includes('el diseño no declara dead-letter para esta suscripción'));
+  assert.ok(find('tests/integration/messaging_test.go').includes('¿falta el listener de su suscripción en cmd/server/broker.go?'));
+});

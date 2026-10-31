@@ -11,8 +11,9 @@ import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { loadService } from '@keel-system/keel-core';
 import { OUTBOX_EVENT, PROCESSED_EVENT, OUTBOX_RELAY } from '@keel-system/keel-core/gen/messaging-stores';
-import { rabbitTopology } from '@keel-system/keel-core/gen/messaging-plan';
-import { rabbitListenerRetry } from '@keel-system/keel-core/gen';
+import { kafkaConsumption, rabbitTopology } from '@keel-system/keel-core/gen/messaging-plan';
+import { kafkaListenerRetry, rabbitListenerRetry } from '@keel-system/keel-core/gen';
+import { retryLiteral } from '../src/scaffold/kafka.js';
 import { planService as planDotnet } from '../../keel-dotnet/src/scaffold/index.js';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { springSchema } from '../../keel-spring/test/helpers/schema-table.js';
@@ -158,10 +159,9 @@ test('el arranque cablea la mensajería y deja al agente un solo archivo, sin la
   assert.match(broker, /func messageListeners\(deps inbound\) \(\[\]listener, error\)/);
   assert.match(broker, /UNO POR COLA/);
   assert.ok(content(files, 'cmd/server/messaging.go').startsWith(GENERATED_HEADER), 'los tipos son de build');
-  // Con Kafka, un listener por suscripción, y sin la conexión de RabbitMQ (la suya llega en el 9f).
+  // Con Kafka, un listener por suscripción, y sin la conexión de RabbitMQ.
   const kafka = plan('stock-reservation-events', { broker: 'kafka' });
   assert.match(content(kafka, 'cmd/server/broker.go'), /UNO POR SUSCRIPCIÓN/);
-  assert.match(content(kafka, 'cmd/server/broker.go'), /func brokerAdapters\(settings messaging\.Settings, logger \*slog\.Logger\)/);
   assert.equal(kafka.find((file) => file.path.startsWith('internal/infrastructure/rabbitmq/')), undefined);
 });
 
@@ -271,4 +271,108 @@ test('el reintento del listener es el de keel-core (rabbitListenerRetry), y sin 
     const multiplier = Number.isInteger(retry.multiplier) ? `${retry.multiplier}\\.0` : String(retry.multiplier).replace('.', '\\.');
     assert.match(go, new RegExp(`retry = &ListenerRetry\\{Attempts: ${retry.attempts}, Initial: ${retry.initialMs} \\* time\\.Millisecond, Multiplier: ${multiplier}[,}]`), name);
   }
+});
+
+// ─── Kafka (tramo 9f) ────────────────────────────────────────────────────────────────────────────
+
+const KAFKA = 'internal/infrastructure/kafka';
+
+/** El consumo que declara consumption.go: `{Subscription: "…", Topic: "…", GroupID: "…", …}`. */
+function goConsumption(files) {
+  const go = content(files, `${KAFKA}/consumption.go`);
+  return [...go.matchAll(/\{Subscription: "([^"]+)", Topic: "([^"]+)", GroupID: "([^"]+)"([^}]*)\}/g)].map((m) => ({
+    subscription: m[1],
+    topic: m[2],
+    groupId: m[3],
+    deadLetter: m[4].includes('DeadLetter: true'),
+    retriesNotFound: m[4].includes('RetriesNotFound: true')
+  }));
+}
+
+/** Lo que decide el servidor de keel-spring con Kafka: los dos conjuntos por topic, la curva del reintento y los grupos. */
+function springKafka(files) {
+  const java = files.find((file) => file.path.endsWith('/DeadLetterConfig.java')).content;
+  const set = (name) => [...(new RegExp(`Set<String> ${name} = Set\\.of\\(([^)]*)\\)`).exec(java)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  const exponential = /setInitialInterval\((\d+)L\);(?:\s*backOff\.setMaxInterval\((\d+)L\);)?\s*backOff\.setMaxAttempts\((\d+)\)/.exec(java);
+  const fixed = /new FixedBackOff\((\d+)L, (\d+)L\)/.exec(java);
+  const retry = exponential
+    ? { initialMs: Number(exponential[1]), maxDelayMs: exponential[2] ? Number(exponential[2]) : 30000, attempts: Number(exponential[3]) + 1 }
+    : { initialMs: Number(fixed[1]), maxDelayMs: null, attempts: Number(fixed[2]) + 1 };
+  const flow = files.find((file) => file.path.endsWith('/AbstractFlowIT.java')).content;
+  const groups = /CONSUMER_GROUP_IDS = List\.of\(([^)]*)\)/.exec(flow)[1];
+  return { deadLettered: set('DEAD_LETTERED'), retriesNotFound: set('RETRIES_NOT_FOUND'), retry, groups: [...groups.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort() };
+}
+
+test('stock-reservation-events: la conexión con Kafka, su configuración y el cliente en go.mod', () => {
+  const files = plan('stock-reservation-events', { broker: 'kafka' });
+  for (const name of ['doc', 'consumption', 'settings', 'connection', 'kafka_test']) assert.ok(content(files, `${KAFKA}/${name}.go`), name);
+  assert.match(content(files, 'go.mod'), /\tgithub\.com\/twmb\/franz-go v1\.22\.2\n/);
+  assert.doesNotMatch(content(files, 'go.mod'), /amqp091|kadm/);
+  const connection = content(files, `${KAFKA}/connection.go`);
+  // El productor crea el topic con el primer mensaje y espera la confirmación; el offset se confirma a mano tras el
+  // desenlace, y un grupo nuevo lee desde el principio.
+  assert.match(connection, /kgo\.AllowAutoTopicCreation\(\)/);
+  // El plazo de delivery.timeout.ms es un tope duro también para el envío en vuelo (FL-BRK-002-D de broker-check).
+  assert.match(connection, /kgo\.AllowIdempotentProduceCancellation\(\)/);
+  assert.match(connection, /producer\.ProduceSync\(ctx, record\)\.FirstErr\(\)/);
+  assert.match(connection, /kgo\.DisableAutoCommit\(\)/);
+  assert.match(connection, /consumer\.CommitRecords\(commitCtx, record\)/);
+  assert.match(connection, /kgo\.ConsumeResetOffset\(kgo\.NewOffset\(\)\.AtStart\(\)\)/);
+  // El descarte con los headers de Spring Kafka.
+  for (const header of ['original-topic', 'original-partition', 'original-offset', 'original-consumer-group', 'exception-fqcn', 'exception-message']) {
+    assert.ok(connection.includes(`"kafka_dlt-${header}"`), header);
+  }
+  assert.match(connection, /clientID = "stock-reservation-events"/);
+  // Sin Kafka, ni el paquete ni el módulo.
+  const rabbit = plan('stock-reservation-events');
+  assert.doesNotMatch(content(rabbit, 'go.mod'), /franz-go/);
+  assert.equal(rabbit.find((file) => file.path.startsWith(`${KAFKA}/`)), undefined);
+});
+
+for (const name of MESSAGING_FIXTURES) {
+  test(`${name}: kafka.yaml es el de keel-dotnet, byte a byte, en los cuatro perfiles`, () => {
+    const ours = plan(name, { broker: 'kafka' });
+    const dotnet = plan(name, { broker: 'kafka' }, planDotnet);
+    for (const profile of PROFILES) {
+      const file = `config/parameters/${profile}/kafka.yaml`;
+      assert.ok(content(ours, file), file);
+      assert.equal(content(ours, file), content(dotnet, file), file);
+    }
+  });
+
+  test(`${name}: toda clave que lee kafka.SettingsFrom existe en su kafka.yaml`, () => {
+    const files = plan(name, { broker: 'kafka' });
+    const yaml = flatten(parseYaml(content(files, 'config/parameters/local/kafka.yaml')));
+    const keys = [...content(files, `${KAFKA}/settings.go`).matchAll(/"(kafka\.[a-z0-9.-]+)"/g)].map((match) => match[1]);
+    assert.ok(keys.length >= 6, keys.join(', '));
+    for (const key of keys) assert.ok(yaml.has(key), `${key} no está en kafka.yaml`);
+  });
+
+  test(`${name}: el consumo de Kafka es el de keel-spring (grupos, descarte y «no existe» por topic, y la curva del reintento)`, () => {
+    const { model, files } = planService({ ...design(name), workspace: FIXTURES_DIR, stack: { broker: 'kafka' } });
+    const consumption = goConsumption(files);
+    assert.deepEqual(consumption, kafkaConsumption(model));
+    if (consumption.length === 0) return;
+    const spring = springKafka(plan(name, { broker: 'kafka' }, planSpring));
+    assert.deepEqual(consumption.map((entry) => entry.groupId).sort(), spring.groups);
+    assert.deepEqual([...new Set(consumption.filter((entry) => entry.deadLetter).map((entry) => entry.topic))].sort(), spring.deadLettered);
+    assert.deepEqual([...new Set(consumption.filter((entry) => entry.retriesNotFound).map((entry) => entry.topic))].sort(), spring.retriesNotFound);
+    const retry = kafkaListenerRetry(model);
+    if (retry.deadLetteredTopics.length > 0) {
+      assert.deepEqual({ initialMs: retry.initialMs, maxDelayMs: retry.maxDelayMs, attempts: retry.attempts }, spring.retry);
+    }
+    assert.ok(content(files, `${KAFKA}/consumption.go`).includes(`\tretry = ${retryLiteral(retry)}\n`), name);
+  });
+}
+
+test('con Kafka, el arranque cablea su conexión y lo del agente la recibe', () => {
+  const files = plan('stock-reservation-events', { broker: 'kafka' });
+  const main = content(files, 'cmd/server/main.go');
+  assert.match(main, /kafkaConnSettings, err := kafka\.SettingsFrom\(cfg\)/);
+  assert.match(main, /kafkaConn := kafka\.New\(kafkaConnSettings, messagingSettings, logger\)/);
+  assert.match(main, /adapters, err := brokerAdapters\(messagingSettings, kafkaConn, logger\)/);
+  assert.match(main, /return kafkaConn\.Run\(groupCtx\)/);
+  assert.match(main, /Kafka: +kafkaConn,/);
+  assert.match(content(files, 'cmd/server/broker.go'), /func brokerAdapters\(settings messaging\.Settings, kafkaConn \*kafka\.Connection, logger \*slog\.Logger\) \(outbound, error\)/);
+  assert.match(content(files, 'cmd/server/messaging.go'), /\tKafka +\*kafka\.Connection\n/);
 });

@@ -48,6 +48,8 @@ export function layout(model) {
     messaging: pkg(module, 'internal/infrastructure/messaging'),
     // La conexión con RabbitMQ (incremento 9): topología, reconexión, publicación confirmada y consumo con reintento.
     rabbitmq: pkg(module, 'internal/infrastructure/rabbitmq'),
+    // La conexión con Kafka (tramo 9f): consumo por suscripción con su grupo, publicación confirmada y descarte en .DLT.
+    kafka: pkg(module, 'internal/infrastructure/kafka'),
     // La prueba de la frontera hexagonal: `internal/` solo protege frente a otros módulos, no entre capas.
     architecture: pkg(module, 'internal/architecture'),
     // Las pruebas de flujo (FL-*), de caja negra y tras la restricción `integration`: `go test ./...` no las ve.

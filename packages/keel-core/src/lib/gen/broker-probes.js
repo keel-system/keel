@@ -246,6 +246,16 @@ export function offsetsParts({ destination, format = OFFSET_FORMAT }) {
   return ['kcat', '-C', '-b', ENDPOINTS.kafka.bootstrap, '-t', destination, '-o', 'beginning', '-e', '-q', '-f', format];
 }
 
+/**
+ * Los miembros de unos consumer groups con sus particiones (`--describe --members`: una fila por miembro, GROUP,
+ * CONSUMER-ID, HOST, CLIENT-ID y #PARTITIONS). Es la espera del arnés a que el servidor —otro proceso— tenga sus
+ * consumidores con particiones, lo que en keel-spring hace el AdminClient. Corre DENTRO del contenedor del broker (devtools
+ * no trae las CLIs de Kafka) contra su listener interno, así que el arnés no necesita un cliente de Kafka. Solo Kafka.
+ */
+export function kafkaGroupMembersParts(groups) {
+  return ['/opt/kafka/bin/kafka-consumer-groups.sh', '--bootstrap-server', 'localhost:29092', '--describe', '--members', ...groups.flatMap((group) => ['--group', group])];
+}
+
 // ─── Purga ───────────────────────────────────────────────────────────────────
 //
 // Kafka no tiene: kcat no borra registros y devtools no trae las CLIs de Kafka.

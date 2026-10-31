@@ -163,22 +163,28 @@ for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(
   // Cada fixture con persistencia relacional, también sobre MySQL (tramo 6d): otro paquete, otro driver y otro SQL. Si es
   // relacional lo dice su stack por defecto: un MySQL pedido para un diseño documental no es un caso.
   let relational = false;
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+  // Con capa messaging, con cada broker que keel-go conecta: sin broker en el stack no se emite su paquete, y su gofmt
+  // no lo miraba nadie (corrida 9e, 2026-10-30: topology.go y rabbitmq_test.go sin formatear). Kafka (9f), solo sobre el
+  // motor por defecto: lo que cambia con el motor no toca la conexión con el broker.
+  const brokers = layers.messaging ? ['rabbitmq', 'kafka'] : [null];
   for (const database of [null, 'mysql']) {
     if (database && !relational) continue;
-    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
-    // Con capa messaging, con el broker que keel-go conecta (RabbitMQ): sin broker en el stack no se emite su paquete,
-    // y su gofmt no lo miraba nadie (corrida 9e, 2026-10-30: topology.go y rabbitmq_test.go sin formatear).
-    const stack = { ...(database ? { database } : {}), ...(layers.messaging ? { broker: 'rabbitmq' } : {}) };
-    const plan = planService({ manifest, layers, workspace: fixturesRoot, ...(Object.keys(stack).length > 0 ? { stack } : {}) });
-    relational ||= usesRelational(plan.model);
-    const label = database ? `${name} (${database})` : name;
-    const dir = path.join(fixturesRoot, database ? `${name}-${database}` : name);
-    for (const file of plan.files) {
-      const out = path.join(dir, file.path);
-      fs.mkdirSync(path.dirname(out), { recursive: true });
-      fs.writeFileSync(out, file.content);
+    for (const broker of brokers) {
+      if (database && broker === 'kafka') continue;
+      const stack = { ...(database ? { database } : {}), ...(broker ? { broker } : {}) };
+      const plan = planService({ manifest, layers, workspace: fixturesRoot, ...(Object.keys(stack).length > 0 ? { stack } : {}) });
+      relational ||= usesRelational(plan.model);
+      const variant = [database, broker === 'kafka' ? broker : null].filter(Boolean);
+      const label = variant.length > 0 ? `${name} (${variant.join(', ')})` : name;
+      const dir = path.join(fixturesRoot, [name, ...variant].join('-'));
+      for (const file of plan.files) {
+        const out = path.join(dir, file.path);
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, file.content);
+      }
+      fixtureDirs.push({ name: label, dir });
     }
-    fixtureDirs.push({ name: label, dir });
   }
 }
 const fixtureProblems = await pool(fixtureDirs, jobs, async ({ dir }) => {
@@ -404,6 +410,27 @@ if (step(`RabbitMQ: go mod tidy de ${MESSAGING_DESIGN}`, rabbitTidy.ok, rabbitTi
   // Falsado: amqp091-go es BSD-2-Clause, la única con ella en el grafo; sin ella en la lista, rojo.
   const narrowedRabbit = go(rabbitDir, ['tool', 'go-licenses', 'check', '--ignore', MESSAGING_DESIGN, `--allowed_licenses=${ALLOWED_LICENSES.filter((id) => id !== 'BSD-2-Clause').join(',')}`, './...']);
   step('RabbitMQ: sin BSD-2-Clause en la lista, el check sale en rojo con amqp091-go (falsado)', !narrowedRabbit.ok && /amqp091-go/.test(narrowedRabbit.output), narrowedRabbit.ok ? 'salió verde' : '');
+}
+
+// Kafka (9f): franz-go y lo que trae (su protocolo y la compresión), contra la misma lista.
+const kafkaDir = path.join(makeWorkspace('keel-go-licenses-kafka-'), MESSAGING_DESIGN);
+{
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, MESSAGING_DESIGN));
+  for (const file of planService({ manifest, layers, workspace: kafkaDir, stack: { broker: 'kafka', database: 'postgresql' } }).files) {
+    const out = path.join(kafkaDir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+}
+const kafkaDeclared = declared(fs.readFileSync(path.join(kafkaDir, 'go.mod'), 'utf8'));
+const kafkaTidy = go(kafkaDir, ['mod', 'tidy']);
+const kafkaMoved = kafkaTidy.ok ? JSON.stringify(declared(fs.readFileSync(path.join(kafkaDir, 'go.mod'), 'utf8'))) !== JSON.stringify(kafkaDeclared) : false;
+if (step(`Kafka: go mod tidy de ${MESSAGING_DESIGN}, sin mover ningún requisito directo`, kafkaTidy.ok && !kafkaMoved, kafkaTidy.ok ? (kafkaMoved ? 'tidy movió un requisito directo' : '') : kafkaTidy.output.slice(0, 1000))) {
+  const kafkaLicenses = go(kafkaDir, ['tool', 'go-licenses', 'check', '--ignore', MESSAGING_DESIGN, allowed, './...']);
+  if (!step('Kafka: licencias permisivas con el cliente franz-go y sus transitivos', kafkaLicenses.ok)) console.error(kafkaLicenses.output);
+  // Falsado: franz-go es BSD-3-Clause; sin ella en la lista, rojo nombrando el módulo.
+  const narrowedKafka = go(kafkaDir, ['tool', 'go-licenses', 'check', '--ignore', MESSAGING_DESIGN, `--allowed_licenses=${ALLOWED_LICENSES.filter((id) => id !== 'BSD-3-Clause').join(',')}`, './...']);
+  step('Kafka: sin BSD-3-Clause en la lista, el check sale en rojo con franz-go (falsado)', !narrowedKafka.ok && /franz-go/.test(narrowedKafka.output), narrowedKafka.ok ? 'salió verde' : '');
 }
 
 if (race) {

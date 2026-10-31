@@ -83,6 +83,11 @@ export const MODULES = {
   // go.uber.org/goleak (MIT) para sus pruebas. La v1.15.0 es de 2026-09-15 (la v1.16.0, de 2026-10-19, no tiene aún
   // las dos semanas).
   'github.com/rabbitmq/amqp091-go': { version: 'v1.15.0', license: 'BSD-2-Clause', kind: 'require', use: 'cliente de RabbitMQ (AMQP 0-9-1)' },
+  // El cliente de Kafka (tramo 9f), en Go puro (confluent-kafka-go necesita cgo y librdkafka). Su productor es idempotente
+  // y espera el ack de todas las réplicas por defecto, lo que kafka-clients 3 trae en Spring. Trae su protocolo
+  // (franz-go/pkg/kmsg, BSD-3-Clause) y la compresión (klauspost/compress y pierrec/lz4, BSD-3-Clause). La v1.22.2 es de
+  // 2026-10-13.
+  'github.com/twmb/franz-go': { version: 'v1.22.2', license: 'BSD-3-Clause', kind: 'require', use: 'cliente de Kafka' },
 
   // Herramientas, por la directiva `tool` de go.mod (`go tool <nombre>`): el proyecto no exige nada instalado
   // aparte de Go.
@@ -117,7 +122,8 @@ export const JWT_REQUIRES = ['github.com/golang-jwt/jwt/v5'];
 
 /** El cliente del broker de la mensajería (incremento 9), por broker. */
 export const BROKER_REQUIRES = {
-  rabbitmq: ['github.com/rabbitmq/amqp091-go']
+  rabbitmq: ['github.com/rabbitmq/amqp091-go'],
+  kafka: ['github.com/twmb/franz-go']
 };
 
 /** Las herramientas: todas, siempre. */

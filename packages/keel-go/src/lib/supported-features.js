@@ -31,9 +31,9 @@ const PENDING_LAYERS = {
  */
 export const SUPPORTED_DATABASES = ['postgresql', 'mysql'];
 
-/** Los brokers sobre los que keel-go genera la mensajería: RabbitMQ (tramo 9b-2). Kafka llega en el 9f y SNS/SQS en el 9g. */
-export const SUPPORTED_BROKERS = ['rabbitmq'];
-const PENDING_BROKERS = { kafka: 'tramo 9f', snssqs: 'tramo 9g' };
+/** Los brokers sobre los que keel-go genera la mensajería: RabbitMQ (tramo 9b-2) y Kafka (9f). SNS/SQS llega en el 9g. */
+export const SUPPORTED_BROKERS = ['rabbitmq', 'kafka'];
+const PENDING_BROKERS = { snssqs: 'tramo 9g' };
 
 /** ¿Declara el diseño persistencia DOCUMENTAL? Llega en el incremento 12. */
 function documentPersistence(layers) {
