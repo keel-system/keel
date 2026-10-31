@@ -56,7 +56,10 @@ independencia no cambia: sigues sin leer `internal/`.
    `harness_smoke_test.go`): `StartFlow`, `f.Scenario`, los verbos HTTP, `AssertJSON`, `ExpectStatus`, `Db`,
    `ResetState`, `Eventually`, `RouteBase`; con capa `security`, también `credentials_test.go` (`Bearer`,
    `TokenFor`, `SecondTokenFor`, `ServiceCredential`, `TokenAs`: § Las credenciales de la convención, y la skill
-   del proveedor del stack). **Úsalo, no lo reimplementes**, y en esta fase es de **solo lectura**
+   del proveedor del stack); con capa `http-clients`, también `http_stub_test.go` (`StubFor`, `StubSequence`,
+   `StubRequests`, `AgeForReconciliation`…: § El proveedor de prueba de la convención, y la skill
+   `keel-go-httpclient`); y con escenarios de clúster, `StartReplica`/`StopReplica`/`OnReplica` (§ Dos réplicas).
+   **Úsalo, no lo reimplementes**, y en esta fase es de **solo lectura**
    (lleva la cabecera de código generado): si le falta una pieza transversal, va a `blockers` con la firma que
    propones.
 3. Escribe **una función `Test<Flujo>` por flujo** en `tests/integration/<flujo>_test.go`, que empieza por

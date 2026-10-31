@@ -202,8 +202,10 @@ try {
     'probe_ok_flow',
     `
 import (
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProbeOk(t *testing.T) {
@@ -254,6 +256,31 @@ func TestProbeOk(t *testing.T) {
 		if len(got) != 3 || got[0].Status != 404 || got[1].Status != 200 || got[2].Status != 404 {
 			s.Fatalf("respuestas fuera de su sitio: %v", got)
 		}
+	})
+	// La segunda réplica (11d): arranca en su puerto, recibe sus peticiones —sola y en ExchangeAll— y se para sin llevarse
+	// el servidor del flujo; parada, deja de responder, y se puede volver a arrancar.
+	f.Scenario("FL-PROBE-001-E: la réplica arranca, responde y se para sin tocar el servidor del flujo", func(s *Scenario) {
+		replicaURL := s.StartReplica()
+		defer s.StopReplica()
+		if replicaURL == "" || replicaURL == s.BaseURL() {
+			s.Fatalf("la réplica no tiene URL propia: %q (la del flujo es %q)", replicaURL, s.BaseURL())
+		}
+		s.ExpectStatus(s.OnReplica("GET", "/livez", nil, nil), 200)
+		both := s.ExchangeAll(Request{Method: "GET", Path: "/livez", OnReplica: true}, Request{Method: "GET", Path: RouteBase + "/keel-probe"})
+		if both[0].Status != 200 || both[1].Status != 404 {
+			s.Fatalf("ExchangeAll con OnReplica: %d y %d, quiero 200 (la réplica) y 404 (el servidor del flujo)", both[0].Status, both[1].Status)
+		}
+		s.StopReplica()
+		probe := &http.Client{Timeout: 2 * time.Second}
+		if response, err := probe.Get(replicaURL + "/livez"); err == nil {
+			_ = response.Body.Close() // Solo importa que respondiera.
+			s.Error("la réplica parada sigue respondiendo")
+		}
+		if again := s.StartReplica(); again == "" {
+			s.Error("la réplica no vuelve a arrancar tras pararla")
+		}
+		s.StopReplica()
+		s.ExpectStatus(s.Get("/livez"), 200)
 	})
 	// Un id que el documento no declara: sale AJENO y no puntúa (keel-core/gen/junit-scoring).
 	f.Scenario("FL-PROBE-099-A: un caso fuera del documento", func(s *Scenario) {})
@@ -345,13 +372,13 @@ func TestProbeEarlyPanic(t *testing.T) {
   const run1 = bash(projectDir, 'infra/score-scenarios.sh');
   const lines = run1.output;
   const has = (pattern) => pattern.test(lines);
-  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/) && has(/OK\s+FL-PROBE-001-D/), has(/OK\s+FL-PROBE-001-D/) ? '' : lines.slice(-2500));
+  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/) && has(/OK\s+FL-PROBE-001-D/) && has(/OK\s+FL-PROBE-001-E/), has(/OK\s+FL-PROBE-001-E/) ? '' : lines.slice(-2500));
   step('score: los escenarios de un flujo corren en el orden escrito', has(/OK\s+FL-PROBE-005-B/), has(/FL-PROBE-005-B/) ? '' : 'sin fila FL-PROBE-005-B');
   step('score: el que falla sale FALLO con la ruta de su evidencia', has(/FALLO\s+FL-PROBE-002-A\s+\S+\s+build\/keel-failures\/FL-PROBE-002-A\.json/));
   step('score: un pánico es el FALLO de su escenario y la suite sigue', has(/FALLO\s+FL-PROBE-006-A/) && has(/OK\s+FL-PROBE-005-A/));
   step('score: el flujo que no arranca deja sus casos OMITIDOS', has(/OMITIDO\s+FL-PROBE-003-A/), has(/OMITIDO/) ? '' : 'sin fila OMITIDO');
   step('score: y lo nombra como arnés roto, con su causa', has(/ARNÉS/) && has(/TestProbeInit\s+\(arranque del flujo\)/) && has(/keel_tabla_que_no_existe/));
-  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && /RESULTADO: KO — 7 OK/.test(lines), lines.match(/RESULTADO:.*/)?.[0] ?? '');
+  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && /RESULTADO: KO — 8 OK/.test(lines), lines.match(/RESULTADO:.*/)?.[0] ?? '');
   step('score: un flujo del documento sin prueba sale NO_EJERC', has(/NO_EJERC\s+FL-PROBE-004/) && !has(/NO_EJERC\s+FL-PROBE-00[12356]/));
   step('score: con algo que arbitrar sale con 1', run1.status === 1, `código ${run1.status}`);
   const readJson = (name) => {

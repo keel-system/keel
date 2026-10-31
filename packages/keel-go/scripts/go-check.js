@@ -15,7 +15,7 @@
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo; --no-race se salta el paso del
 // contenedor (sin podman ni docker); --fixtures solo compila y prueba el Go de todas las fixtures (las relacionales,
-// también sobre MySQL); --jobs=<n> cuántas fixtures a la vez (por defecto, una por cada 2 GiB libres, hasta 4; cada
+// también sobre MySQL); --jobs=<n> cuántas fixtures a la vez (por defecto, una por cada 3 GiB libres, hasta 4; cada
 // una con su parte de las CPU en GOMAXPROCS). Una fixture cuyo Go emitido no cambió desde su última pasada en verde
 // se salta (caché en `node_modules/.cache/keel-go-check/fixtures.json` de la raíz); --no-cache las comprueba todas.
 // La caché del contenedor de -race son dos volúmenes `keel-go-race-*`: `podman volume rm` los vacía.
@@ -51,9 +51,10 @@ const onlyFixtures = process.argv.includes('--fixtures');
 const race = !process.argv.includes('--no-race');
 // --jobs=<n>: cuántas fixtures se comprueban a la vez (4 por defecto). Con poca memoria, --jobs=1 es el paso en serie.
 const jobsArg = process.argv.find((arg) => arg.startsWith('--jobs='));
-// Sin --jobs, una fixture por cada 2 GiB libres, entre 1 y 4: cada una lanza tidy, vet, staticcheck y el enlazado de
-// sus binarios de prueba, y con 4 a la vez y la máquina de podman en marcha se agotaban 16 GB.
-const jobs = jobsArg ? Number(jobsArg.slice('--jobs='.length)) : Math.max(1, Math.min(4, Math.floor(os.freemem() / 2 ** 31)));
+// Sin --jobs, una fixture por cada 3 GiB libres, entre 1 y 4: cada una lanza tidy, vet, staticcheck y el enlazado de
+// sus binarios de prueba, y con 4 a la vez y la máquina de podman en marcha se agotaban 16 GB. Con una por cada 2 GiB,
+// dos a la vez también los agotaron una vez (2026-10-31).
+const jobs = jobsArg ? Number(jobsArg.slice('--jobs='.length)) : Math.max(1, Math.min(4, Math.floor(os.freemem() / (3 * 2 ** 30))));
 // --no-cache: vuelve a comprobar también las fixtures sin cambios desde su última pasada en verde.
 const useCache = !process.argv.includes('--no-cache');
 if (!Number.isInteger(jobs) || jobs < 1) {
@@ -200,7 +201,10 @@ for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(
         fs.writeFileSync(out, file.content);
       }
       const hash = crypto.createHash('sha256').update(version.output);
-      for (const file of [...plan.files].sort((a, b) => (a.path < b.path ? -1 : 1))) hash.update(`\0${file.path}\0${file.content}`);
+      // Sin el markdown (skills, agentes, docs), que ningún paso lee: retocar una doc no vuelve a comprobar el Go. El de
+      // config/ sí entra, porque va embebido en el binario.
+      const checked = plan.files.filter((file) => !file.path.endsWith('.md') || file.path.startsWith('config/'));
+      for (const file of checked.sort((a, b) => (a.path < b.path ? -1 : 1))) hash.update(`\0${file.path}\0${file.content}`);
       fixtureDirs.push({ name: label, dir, digest: hash.digest('hex') });
     }
   }

@@ -130,6 +130,35 @@ Los métodos del escenario terminan el escenario si fallan, así que **no se lla
 la vez se escriben con `s.ExchangeAll` si entran por HTTP, y si entran por el broker, una tras otra (el broker las
 encola igual).
 
+## El proveedor de prueba
+
+Con clientes salientes (capa `http-clients`), el arnés trae `tests/integration/http_stub_test.go`: el WireMock de
+`infra/` hace de proveedor, y el reset de cada flujo lo vacía (SMOKE-6 comprueba en el humo que se deja programar).
+
+| Pieza | Cuándo existe | Para qué |
+|---|---|---|
+| `s.StubFor(método, ruta, status, cuerpo)` | siempre | lo que responde el proveedor en este escenario; la ruta es una regex sobre el path |
+| `s.StubFailure(método, ruta, status)` | siempre | un 5xx o un 4xx sin cuerpo útil |
+| `s.StubConnectionFault(método, ruta)` / `s.StubTimeout(método, ruta, plazo)` | siempre | el proveedor no contesta: corta la conexión, o tarda más que el `timeoutMs` de la llamada |
+| `s.StubSequence(método, ruta, RespondConnectionFault(), RespondOK(200, cuerpo))` | siempre | respuestas distintas para llamadas sucesivas (el reintento); la última se queda pegada, una por ruta y flujo |
+| `s.StubCallCount(método, ruta)` / `s.StubRequests(método, ruta)` | siempre | cuántas veces se llamó y qué se le mandó (`request.Header(n)`, `request.JSON()`) |
+| `s.ResetStubs()` | siempre | el stub vacío, a mano (el reset de cada flujo ya lo hace) |
+| `s.AgeForReconciliation(activación, id)` / `s.HoldFromReconciliation(activación, id)` | con `reconciledBy` y base relacional | la marca de espera de esa fila, rancia (el barrido la toma en su próxima pasada) o en el futuro (no la toca) |
+| `s.RestartServer()` | con un circuito | el servidor reiniciado: la ventana del circuito vacía, para un flujo que cuente sus fallos |
+
+Cómo se escriben los flujos de una llamada saliente, del circuito y del barrido: la skill `keel-go-httpclient`.
+
+## Dos réplicas
+
+Con escenarios de clúster posibles (outbox, operaciones por reloj o registro de idempotencia), el arnés arranca una
+segunda instancia del servicio contra la misma infraestructura.
+
+| Pieza | Para qué |
+|---|---|
+| `s.StartReplica()` | la arranca (si no lo está) y devuelve su URL base; el escenario que la arranca la para con `defer s.StopReplica()`, y cada flujo nuevo la para al empezar |
+| `s.OnReplica(método, ruta, cuerpo, cabeceras)` | una petición a la segunda instancia (con API) |
+| `Request{…, OnReplica: true}` en `s.ExchangeAll` | dos peticiones a la vez, una a cada instancia: la carrera que el registro de idempotencia existe para cerrar |
+
 ## Una función por flujo
 
 ```go

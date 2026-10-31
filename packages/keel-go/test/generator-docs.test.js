@@ -148,7 +148,8 @@ test('el arnés que enseñan integration-tests.md y el agente de pruebas es el e
   ]) {
     assert.ok(flow.includes(member), member);
   }
-  assert.match(flow, /type Request struct \{\n\tMethod +string\n\tPath +string\n\tBody +any\n\tHeaders http\.Header\n\}/);
+  // Con escenarios de clúster, Request gana OnReplica (11d): la petición de ExchangeAll que va a la segunda réplica.
+  assert.match(flow, /type Request struct \{\n\tMethod +string\n\tPath +string\n\tBody +any\n\tHeaders http\.Header\n(\t\/\/ OnReplica[^\n]*\n\tOnReplica bool\n)?\}/);
   for (const member of ['type Response struct {', '\tStatus int', '\tHeader http.Header', '\tBody   string', 'func (r *Response) JSON() (any, error)']) {
     assert.ok(harness.includes(member), member);
   }
@@ -369,7 +370,7 @@ test('lo que enseñan la skill de RabbitMQ y integration-tests.md de la mensajer
   assert.match(bestEffort, /func NewEnvelope\[T any\]\(ctx context\.Context, metadata domain\.EventMetadata, data T\) Envelope\[T\]/);
   // La tabla del arnés de integration-tests.md: cada método que enseña es uno del escenario.
   const doc = read('generators', 'go', 'conventions', 'integration-tests.md');
-  const section = doc.slice(doc.indexOf('## La mensajería'), doc.indexOf('## Una función por flujo'));
+  const section = doc.slice(doc.indexOf('## La mensajería'), doc.indexOf('## El proveedor de prueba'));
   const harness = rabbit['tests/integration/messaging_test.go'];
   const taught = [...section.matchAll(/`s\.([A-Z]\w*)\(/g)].map((match) => match[1]).filter((name) => name !== 'Deliver');
   assert.ok(taught.length >= 9, taught.join(', '));

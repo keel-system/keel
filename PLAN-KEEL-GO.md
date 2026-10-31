@@ -777,9 +777,38 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       una con su parte de las CPU en `GOMAXPROCS` (con 4 a la vez y `-p`=NumCPU se agotaban 16 GB), y una variante cuyo
       Go emitido no cambió desde su última pasada en verde se salta (`--no-cache` las comprueba todas): `--fixtures` 48/48
       en 31 min en serie sin caché, 20 s con ella.
-    - **Sin medir**: la skill (`keel-go-httpclient`, 11d) no cuenta todavía el reclamo.
-- **Para retomar (cada incremento empieza en un contexto nuevo):** el 11d (arnés WireMock, skill `keel-go-httpclient` con el reclamo de
-  reconciliación, `stub-check`) y la corrida 11e. Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
+  - **11d, el arnés del proveedor de prueba y la skill (hecho, 2026-10-31).**
+    - **Lo que emite** (`src/scaffold/http-stub-harness.js`): `tests/integration/http_stub_test.go` con los helpers de
+      los otros tres como métodos del escenario (`StubFor`, `StubFailure`, `StubConnectionFault`, `StubTimeout`,
+      `StubSequence` con su guarda de una secuencia por ruta y flujo, `StubCallCount`, `StubRequests`, `ResetStubs`), las
+      respuestas de una secuencia (`RespondOK`, `RespondFailure`, `RespondTimeout`, `RespondConnectionFault`) y la lectura
+      de lo recibido (`StubRequest.Header`, `.JSON`), sobre el vocabulario de `keel-core/gen/http-stub-probes.js` y con
+      el admin API apuntable por `HTTP_STUB_ADMIN`; `AgeForReconciliation`/`HoldFromReconciliation` con las sentencias
+      de keel-dotnet y el `idLiteral` compartido con el rescate; SMOKE-6. `StartFlow` olvida las secuencias del flujo
+      anterior.
+    - **Adelantado de la 11e de keel-dotnet**, que se paró sin ellos: `RestartServer` (con un circuito: la ventana
+      vacía de verdad) y la segunda réplica (`StartReplica`/`StopReplica`/`OnReplica` y `OnReplica` en `Request` para
+      `ExchangeAll`, con escenarios de clúster, el predicado de `keel-core/gen/cluster-scenarios.js`). `flowServer` es
+      el mismo para las dos instancias, con su log, y el binario se compila UNA vez por suite: en Windows no se puede
+      sobrescribir un ejecutable en marcha. Cada flujo para la réplica al empezar.
+    - **Skill** `keel-go-httpclient` (`SKILL.md` + `references/implementation.md` y `flows.md`), instalada con la capa;
+      `integration-tests.md` gana § El proveedor de prueba y § Dos réplicas, y el agente de pruebas las cita.
+    - **Medido**: `test/http-stub-harness.test.js` (6: el vocabulario, los helpers y el SMOKE-6 contra keel-dotnet, las
+      sentencias del envejecimiento contra las suyas, la réplica y el reinicio solo cuando tocan, cada método que enseñan
+      la convención y la skill es uno del escenario, y la skill solo con clientes); `npm test` 928/928. `npm run
+      stub-check` (nuevo): WireMock real con las sondas de `scripts/probes/stub_probe_test.go` sobre el
+      stock-reservation generado —el arnés y el adaptador con la configuración de `develop`—, **6/6 con 10 sondas** en
+      ~25 s. **Falsado** con `initial-state` (cae la secuencia), `fault` (las tres sondas que programan el corte) y
+      `transport-retry` (keep-alive de vuelta: net/http reenvía por debajo del retry y llegan 4 peticiones en vez de
+      3); cada uno, en exactamente sus sondas. `harness-check` **28/28** con FL-PROBE-001-E: la réplica arranca en su
+      puerto, responde sola y en `ExchangeAll`, se para sin llevarse el servidor del flujo y vuelve a arrancar.
+      `go-check --fixtures` **48/48** (16,5 min con 2 a la vez). El `go-check` entero lo cortó Claude Code por memoria en la
+      fase de fixtures (2 a la vez): por defecto ahora va una por cada 3 GiB libres.
+    - **Sin medir**: `RestartServer` y `AgeForReconciliation`/`HoldFromReconciliation` contra la infra real (los ejecuta
+      la corrida 11e); `harness-check --database=mysql` con la réplica; el `go-check` entero (sabotajes, -race, arranque)
+      sobre el 11d.
+- **Para retomar (cada incremento empieza en un contexto nuevo):** la corrida 11e sobre `stock-reservation` (gemelas:
+  keel-nest 24/24, keel-spring 21/21, keel-dotnet 27/27). Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
   Code mata las tandas largas en segundo plano si se queda sin memoria. El hallazgo neutral de la collation de la
   sombra en MySQL espera su propia tarea en keel-core.
 

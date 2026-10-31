@@ -34,6 +34,8 @@ import { GO_INFRA } from './infra.js';
 import { layout, packageFile } from './render.js';
 import { CREDENTIALS_FILE, CREDENTIALS_IMPORTS, closingCredentialExpression, credentialsBody, smokeCredentialsCase } from './identity-harness.js';
 import { MESSAGING_HARNESS_FILE, messagingHarnessBody, messagingHarnessImports, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
+import { HTTP_STUB_HARNESS_FILE, HTTP_STUB_HARNESS_IMPORTS, httpStubHarnessBody, httpStubSmokeCase, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
+import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenarios';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
 export const SCORE_SCENARIOS_SH = 'infra/score-scenarios.sh';
@@ -47,6 +49,7 @@ export function generate(model) {
   const dir = layout(model).integration.dir;
   const credentials = credentialsBody(model);
   const messaging = messagingHarnessBody(model);
+  const stub = httpStubHarnessBody(model);
   return [
     { path: `${dir}/doc.go`, content: docGo(model) },
     { path: `${dir}/flow_test.go`, content: flowTestGo(model) },
@@ -57,6 +60,7 @@ export function generate(model) {
     { path: `${dir}/harness_smoke_test.go`, content: harnessSmokeTestGo(model) },
     ...(credentials ? [{ path: `${dir}/${CREDENTIALS_FILE}`, content: integrationFile(model, { imports: CREDENTIALS_IMPORTS, body: credentials }) }] : []),
     ...(messaging ? [{ path: `${dir}/${MESSAGING_HARNESS_FILE}`, content: integrationFile(model, { imports: messagingHarnessImports(model), body: messaging }) }] : []),
+    ...(stub ? [{ path: `${dir}/${HTTP_STUB_HARNESS_FILE}`, content: integrationFile(model, { imports: HTTP_STUB_HARNESS_IMPORTS, body: stub }) }] : []),
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript(model) }
   ];
@@ -157,13 +161,91 @@ func (s *Scenario) rescueOf(operation string) rescue {
 		s.Fatalf("no hay rescate para el barrido %q. Los que lo tienen: ${known}", operation)
 	}
 	return statements
-}
-
-// idLiteral es el id como literal de ${entry.label}.
-func idLiteral(id string) string {
-	return ${goString(entry.uuidLiteral.prefix)} + id + ${goString(entry.uuidLiteral.suffix)}
 }`
   ];
+}
+
+/** `idLiteral`: el id de una fila como literal del motor. Lo comparten el rescate y la reconciliación. */
+function idLiteralMember(model) {
+  const entry = DATABASES[model.stack?.database ?? 'postgresql'];
+  return String.raw`// idLiteral es el id como literal de ${entry.label}.
+func idLiteral(id string) string {
+	return ${goString(entry.uuidLiteral.prefix)} + id + ${goString(entry.uuidLiteral.suffix)}
+}`;
+}
+
+// ─── El reinicio del servidor y la segunda réplica ───────────────────────────────────────────────
+
+/**
+ * ¿Guarda el servidor estado en memoria que un flujo anterior le deja? La ventana de un circuito (y, cuando keel-go los
+ * genere, el token de oauth2 y los últimos valores conocidos). Entonces el arnés ofrece `RestartServer`: «cerrar» el
+ * circuito con llamadas buenas deja la ventana llena de éxitos y tarda más de lo que el diseño dice en abrir (corrida
+ * catalog de keel-dotnet).
+ */
+export function inMemoryState(model) {
+  return (model.httpClients ?? []).some((client) => client.auth?.type === 'oauth2-client-credentials' || client.calls.some((call) => call.circuitBreaker));
+}
+
+/**
+ * ¿Hay escenarios de clúster posibles? Lo decide keel-core/gen/cluster-scenarios.js, el mismo predicado que los otros
+ * tres generadores. Sin ellos el arnés no emite la réplica.
+ */
+export function usesReplica(model) {
+  return usesClusterScenarios(model);
+}
+
+function restartMember() {
+  return String.raw`// RestartServer reinicia el servidor del flujo: la ventana de cada circuito vuelve a estar VACÍA y cerrada, y se olvida lo
+// que el proceso guarda en memoria. Llámalo en el Given de StartFlow de un flujo que cuente fallos del circuito: los que
+// dejó un flujo anterior cuentan para el suyo, y «cerrarlo» con llamadas buenas deja la ventana llena de éxitos, que
+// retrasan su apertura. Cuesta un arranque; la base y el broker no se tocan.
+func (s *Scenario) RestartServer() {
+	s.Helper()
+	if err := server.restart(s.Context()); err != nil {
+		s.Fatal(err)
+	}
+}`;
+}
+
+function replicaMembers(model) {
+  const members = [
+    String.raw`// StartReplica arranca una SEGUNDA instancia del servicio contra la misma infraestructura y devuelve su URL base: la
+// palanca de los escenarios de clúster (FL-CLU-*). El escenario que la arranca la para con defer s.StopReplica(): una
+// réplica viva sigue publicando y barriendo. Como red, cada flujo nuevo la para al empezar. Su salida va a
+// build/keel-scenarios/server-replica.log.
+func (s *Scenario) StartReplica() string {
+	s.Helper()
+	if !replica.running() {
+		if err := replica.restart(s.Context()); err != nil {
+			s.Fatalf("la réplica no arrancó: %v", err)
+		}
+	}
+	return replica.url()
+}
+
+// StopReplica para la segunda instancia. Idempotente.
+func (s *Scenario) StopReplica() {
+	replica.stop()
+}`
+  ];
+  if (usesApi(model)) {
+    members.push(String.raw`// OnReplica es Exchange dirigida a la SEGUNDA réplica, no a la del flujo. Para que dos peticiones simultáneas con la
+// misma clave lleguen a instancias distintas —el caso que el registro de idempotencia existe para cerrar—, ExchangeAll
+// con OnReplica: true en una de ellas.
+func (s *Scenario) OnReplica(method, path string, body any, headers http.Header) *Response {
+	s.Helper()
+	baseURL := replica.url()
+	if baseURL == "" {
+		s.Fatal("la réplica no está arrancada: llama antes a s.StartReplica()")
+	}
+	got, err := send(s.Context(), baseURL, method, path, body, headers)
+	if err != nil {
+		s.Fatalf("%s %s en la réplica: %v", method, path, err)
+	}
+	return got
+}`);
+  }
+  return members;
 }
 
 function integrationFile(model, { imports, body, generated = true }) {
@@ -218,7 +300,13 @@ func (s *Scenario) Db(sql string) string {
 	return out
 }`);
   }
-  helpers.push(...rescueMembers(model));
+  const rescue = rescueMembers(model);
+  const aging = reconciliationAgingMembers(model);
+  helpers.push(...rescue, ...aging);
+  if (rescue.length > 0 || aging.length > 0) helpers.push(idLiteralMember(model));
+  if (inMemoryState(model)) helpers.push(restartMember());
+  if (usesReplica(model)) helpers.push(...replicaMembers(model));
+  const replicaApi = usesReplica(model) && api;
   return integrationFile(model, {
     imports: ['fmt', 'net/http', 'runtime/debug', 'strconv', 'strings', 'sync', 'testing', 'time'],
     body: String.raw`
@@ -259,13 +347,17 @@ func StartFlow(t *testing.T, given func(s *Scenario)) *Flow {
 	return f
 }
 
-func (f *Flow) prepare(given func(s *Scenario)) error {
+func (f *Flow) prepare(given func(s *Scenario)) error {${usesReplica(model) ? `
+	// Red: una réplica que el flujo anterior dejó viva seguiría publicando y barriendo sobre este.
+	replica.stop()` : ''}
 	if err := server.ensureStarted(f.t.Context()); err != nil {
 		return err
 	}${reset ? `
 	if err := resetState(f.t.Context()); err != nil {
 		return err
-	}` : ''}${usesMessagingHarness(model) ? `
+	}` : ''}${usesHttpStub(model) ? `
+	// El reset ya vació el proveedor de prueba: se olvidan también las secuencias del flujo anterior.
+	stubSequences.forget()` : ''}${usesMessagingHarness(model) ? `
 	// El broker arriba (un flujo anterior pudo dejarlo parado) y el servidor conectado a él.
 	if err := prepareBroker(f.t.Context()); err != nil {
 		return err
@@ -423,7 +515,9 @@ type Request struct {
 	Method  string
 	Path    string
 	Body    any
-	Headers http.Header
+	Headers http.Header${replicaApi ? `
+	// OnReplica la manda a la SEGUNDA réplica (s.StartReplica) en vez de a la del flujo.
+	OnReplica bool` : ''}
 }
 
 // ExchangeAll lanza requests A LA VEZ —ninguna espera a otra— y devuelve sus respuestas en el mismo orden. Es la forma
@@ -432,13 +526,24 @@ type Request struct {
 // segundo tumbaría la suite entera.
 func (s *Scenario) ExchangeAll(requests ...Request) []*Response {
 	s.Helper()
-	baseURL := server.url()
+	baseURL := server.url()${replicaApi ? `
+	replicaURL := replica.url()
+	for _, request := range requests {
+		if request.OnReplica && replicaURL == "" {
+			s.Fatal("la réplica no está arrancada: llama antes a s.StartReplica()")
+		}
+	}` : ''}
 	responses := make([]*Response, len(requests))
 	errs := make([]error, len(requests))
 	var wg sync.WaitGroup
 	for i, request := range requests {
-		wg.Go(func() {
-			responses[i], errs[i] = send(s.Context(), baseURL, request.Method, request.Path, request.Body, request.Headers)
+		wg.Go(func() {${replicaApi ? `
+			target := baseURL
+			if request.OnReplica {
+				target = replicaURL
+			}
+			responses[i], errs[i] = send(s.Context(), target, request.Method, request.Path, request.Body, request.Headers)` : `
+			responses[i], errs[i] = send(s.Context(), baseURL, request.Method, request.Path, request.Body, request.Headers)`}
 		})
 	}
 	wg.Wait()
@@ -507,6 +612,7 @@ ${helpers.length > 0 ? `\n${helpers.join('\n\n')}\n` : ''}`
 // ─── server_test.go ──────────────────────────────────────────────────────────────────────────────
 
 function serverTestGo(model) {
+  const replica = usesReplica(model);
   return integrationFile(model, {
     imports: ['context', 'fmt', 'net', 'net/http', 'os', 'os/exec', 'path/filepath', 'runtime', 'strconv', 'strings', 'sync', 'testing', 'time'],
     body: String.raw`
@@ -515,24 +621,32 @@ const startTimeout = 90 * time.Second
 
 // flowServer es el servidor del servicio, arrancado UNA vez por suite como un proceso aparte: el mismo binario que se
 // despliega (./cmd/server, compilado a build/keel-scenarios/), bajo el perfil local (o el de PROFILE), escuchando en
-// 127.0.0.1 en un puerto libre. Su salida va a build/keel-scenarios/server.log: es la evidencia de un arranque que no
+// 127.0.0.1 en un puerto libre. Su salida va a build/keel-scenarios/<logName>: es la evidencia de un arranque que no
 // llega o de un 500.
 type flowServer struct {
+	logName string
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	exited  chan struct{}
 	log     *os.File
+	started bool
 	baseURL string
 	failure error
 }
 
-var server flowServer
-
+var server = flowServer{logName: "server.log"}
+${replica ? `
+// replica es la SEGUNDA instancia del servicio, si un escenario de clúster la arrancó: el mismo binario, en otro puerto
+// libre y contra la misma infraestructura. Con dos instancias vivas hay dos relays del outbox y dos barridos compitiendo
+// por las mismas filas, y una petición puede dirigirse a una u otra.
+var replica = flowServer{logName: "server-replica.log"}
+` : ''}
 // TestMain para el servidor al terminar la suite: un proceso que sobreviviera seguiría escuchando y escribiendo en la
 // base de prueba.
 func TestMain(m *testing.M) {
 	code := m.Run()
-	server.stop()
+	server.stop()${replica ? `
+	replica.stop()` : ''}
 	os.Exit(code)
 }
 
@@ -565,32 +679,81 @@ func (fs *flowServer) ensureStarted(ctx context.Context) error {
 	return nil
 }
 
-// start compila el servidor (la caché de go build lo hace casi gratis si no cambió) y lo lanza. El proceso no
-// cuelga del contexto de la prueba: vive toda la suite, y lo para TestMain.
-func (fs *flowServer) start(ctx context.Context) error {
+// restart para la instancia, si vive, y arranca otra en un puerto libre: la ventana de cada circuito y lo que el proceso
+// guarda en memoria vuelven a estar vacíos. La base y el broker no se tocan. El log sigue en el mismo archivo.
+func (fs *flowServer) restart(ctx context.Context) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	fs.stopLocked()
+	fs.failure = nil
+	if err := fs.start(ctx); err != nil {
+		fs.failure = err
+		fs.stopLocked()
+		return err
+	}
+	return nil
+}
+
+// running dice si la instancia está en marcha.
+func (fs *flowServer) running() bool {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if fs.cmd == nil {
+		return false
+	}
+	select {
+	case <-fs.exited:
+		return false
+	default:
+		return true
+	}
+}
+
+// serverBinary compila el servidor UNA vez por suite (la caché de go build lo hace casi gratis si no cambió): los
+// reinicios y la réplica lanzan el mismo ejecutable, y en Windows no se puede sobrescribir uno en marcha.
+var serverBinary = sync.OnceValues(func() (string, error) {
 	root, err := projectRoot()
 	if err != nil {
-		return err
+		return "", err
 	}
 	dir := filepath.Join(root, "build", "keel-scenarios")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("crear %s: %w", dir, err)
+		return "", fmt.Errorf("crear %s: %w", dir, err)
 	}
 	binary := filepath.Join(dir, "server")
 	if runtime.GOOS == "windows" {
 		binary += ".exe"
 	}
-	if _, err := runCommand(ctx, "go", []string{"build", "-o", binary, "./cmd/server"}, "El servidor no compila.", ""); err != nil {
+	if _, err := runCommand(context.Background(), "go", []string{"build", "-o", binary, "./cmd/server"}, "El servidor no compila.", ""); err != nil {
+		return "", err
+	}
+	return binary, nil
+})
+
+// start lanza el servidor. El proceso no cuelga del contexto de la prueba: vive toda la suite, y lo para TestMain.
+func (fs *flowServer) start(ctx context.Context) error {
+	root, err := projectRoot()
+	if err != nil {
+		return err
+	}
+	binary, err := serverBinary()
+	if err != nil {
 		return err
 	}
 	port, err := freePort()
 	if err != nil {
 		return err
 	}
-	log, err := os.Create(filepath.Join(dir, "server.log"))
+	// La primera vez, el log empieza vacío; tras un reinicio, sigue: lo anterior es la evidencia de los flujos previos.
+	flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if fs.started {
+		flags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	}
+	log, err := os.OpenFile(filepath.Join(root, "build", "keel-scenarios", fs.logName), flags, 0o644)
 	if err != nil {
 		return fmt.Errorf("crear el log del servidor: %w", err)
 	}
+	fs.started = true
 	profile := os.Getenv("PROFILE")
 	if profile == "" {
 		profile = "local"
@@ -667,6 +830,7 @@ func (fs *flowServer) stopLocked() {
 	if fs.log != nil {
 		_ = fs.log.Close() // Solo es el log: lo escrito ya está en el archivo.
 	}
+	fs.cmd, fs.exited, fs.log, fs.baseURL = nil, nil, nil, ""
 }
 
 func freePort() (int, error) {
@@ -1197,9 +1361,11 @@ function harnessSmokeTestGo(model) {
   }
   const identity = smokeCredentialsCase(model);
   if (identity) cases.push(identity);
+  const stub = httpStubSmokeCase(model);
+  if (stub) cases.push(stub);
   const broker = messagingSmokeCase(model);
   if (broker) cases.push(broker);
-  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null, broker ? 'broker' : null].filter(Boolean);
+  const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null, stub ? 'proveedor de prueba' : null, broker ? 'broker' : null].filter(Boolean);
   return integrationFile(model, {
     imports: ['encoding/json', 'net/http', 'strings', 'testing'],
     body: String.raw`
