@@ -51,13 +51,11 @@ test('RabbitMQ, Kafka y SNS/SQS entran (tramos 9b-2, 9f y 9g)', () => {
   for (const broker of ['rabbitmq', 'kafka', 'snssqs']) assert.deepEqual(checkSupportedStack({ broker, database: 'postgresql' }).errors, [], broker);
 });
 
-test('http-clients y dependencies entran (incremento 11b): stock-reservation pasa con los dos avisos del 11c', () => {
+test('http-clients, dependencies, la reconciliación y la compensación entran (tramos 11b y 11c): stock-reservation pasa sin avisos', () => {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'stock-reservation'));
   const { errors, warnings } = checkSupportedFeatures(manifest, layers);
   assert.deepEqual(errors, []);
-  assert.equal(warnings.length, 2);
-  assert.match(warnings[0], /reconciledBy: reconcileReservations .*tramo 11c/);
-  assert.match(warnings[1], /compensations .*tramo 11c/);
+  assert.deepEqual(warnings, []);
 });
 
 test('lo saliente que el 11b no genera se rechaza con su motivo: needs, oauth2, compuestos, llamadas sin tipar y clientes sin persistencia relacional', () => {

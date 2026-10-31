@@ -740,8 +740,46 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
     - `go-check --jobs=1` **124/124**: la prueba emitida de los clientes en verde y los siete sabotajes, cada uno en rojo
       con su prueba y solo con ella, ahora desde el script.
     - **Sin medir**: contra un WireMock real (11d) y en corrida (11e).
-- **Para retomar (cada incremento empieza en un contexto nuevo):** el 11c (reconciliación y compensación: el reclamo de `reconciliation_claim`, sus notas y las
-  familias del gate), el 11d (arnés WireMock, skill `keel-go-httpclient`, `stub-check`) y la corrida 11e. Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
+  - **11c, reconciliación y compensación (hecho, 2026-10-31).**
+    - **Lo que emite** (`src/scaffold/reconciliation-claim.js`): en el paquete del motor, `reconciliation.go` con
+      `ReconciliationSettings` (los tres números por activación, defaults de `reconciliationParameters`, un valor no
+      positivo no deja arrancar) y su prueba, el `reconciliation.yaml` neutral en local/develop/production (byte a byte el
+      de keel-nest y keel-dotnet) y la marca `claimReconciliation`: en PostgreSQL UNA sentencia `INSERT … ON CONFLICT DO
+      UPDATE … WHERE claimed_at <= caducidad`; en MySQL el UPDATE de la caducada y, si no casó, `INSERT IGNORE`
+      (go-sql-driver cuenta filas CAMBIADAS). La tabla `reconciliation_claim` entra en el baseline (schema-parity y
+      mysql.test ya no la descuentan) y en las purgas (`NewReconciliationClaimPurge`, la lista de keel-nest). El reclamo va
+      en el puerto y el adaptador de la raíz que espera: candidatos por estado de espera y `awaitingSince`, SIN marca viva
+      (`NOT EXISTS`), `FOR UPDATE OF e SKIP LOCKED`, el lote del perfil, la marca por candidato, el estado intacto, en una
+      transacción nueva y negándose a correr con otra abierta. `claimOptions`, `ownTransaction` y `claimCandidates` salen
+      de `sweep.go` a `claims.go`, que sirve a los dos reclamos. El arranque lee `ReconciliationSettingsFrom` y se lo da al
+      adaptador.
+    - **Las notas** del barrido (el reclamo ya generado, el ORDEN de los commits —aquí deshace con `cancelStock`: la
+      entidad primero—, la carrera reconocida con `errors.Is` sobre `ErrInvalidStateTransition`/`ErrConcurrentModification`)
+      y de la compensación (qué estado devuelve y con qué guarda) son las de los otros tres; la frontera deja de avisar.
+    - **El gate** gana `compensation`, `reconciliation` y `outboundIdempotency` con los sujetos de keel-nest
+      (`idempotency-check.test.js` compara stock-reservation): nacen rojas las dos primeras y verde la tercera; verdes con el
+      uso correcto; rojas otra vez con un finder por estado, un error descartado con `_`, la transición equivocada en el
+      agregado o la clave saliente quitada. En Go el «catch que se lo traga todo» es el `_ =` sobre una llamada de `h.`.
+    - **Medido**: `test/reconciliation.test.js` (6), `npm test` **922/922**. `db-check` **55/55** en PostgreSQL y en MySQL;
+      stock-reservation pasa de 33 a 42 sondas (`scripts/lib/reconciliation-probes.js`: la tienda —inserta, respeta la
+      marca viva, renueva la caducada justo en el límite, por activación, tres réplicas y gana una—, el reclamo —umbral y
+      estado intacto, la pasada siguiente se lleva al de detrás, lo caducado vuelve, dos réplicas sin repetir, transacción
+      abierta— y la purga de `reconciliation_claim`). **Falsado** en los dos motores con `--sabotage=reconciliation-expiry`,
+      `-threshold` y `-head`: cada uno cae en su sonda y solo en ella; `claim-isolation` sigue cayendo desde `claims.go`. A
+      mano sobre stock-reservation (PG y MySQL): tidy, gofmt, vet y staticcheck vacíos y `go test ./...` en verde.
+    - `go-check --fixtures --jobs=1` **48/48** (el primer intento lo mató Claude Code por memoria; relanzado con la máquina
+      descargada).
+    - `go-check` entero **124/124** en 10 min (las 47 variantes de fixture, de la caché). La primera pasada dio 123/124:
+      el sabotaje `idempotency-random` cambiaba la clave con `time.Now().UnixNano()`, y en Windows el reloj de pared
+      avanza a saltos de hasta 15,6 ms: los tres intentos seguidos de la prueba caían en el mismo tic con la MISMA clave
+      y la prueba seguía en verde. Ahora usa `uuid.New()`; la prueba emitida no cambia.
+    - **`go-check` sin agotar la memoria** (34a790d4): sin `--jobs`, una fixture por cada 2 GiB libres (entre 1 y 4), cada
+      una con su parte de las CPU en `GOMAXPROCS` (con 4 a la vez y `-p`=NumCPU se agotaban 16 GB), y una variante cuyo
+      Go emitido no cambió desde su última pasada en verde se salta (`--no-cache` las comprueba todas): `--fixtures` 48/48
+      en 31 min en serie sin caché, 20 s con ella.
+    - **Sin medir**: la skill (`keel-go-httpclient`, 11d) no cuenta todavía el reclamo.
+- **Para retomar (cada incremento empieza en un contexto nuevo):** el 11d (arnés WireMock, skill `keel-go-httpclient` con el reclamo de
+  reconciliación, `stub-check`) y la corrida 11e. Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
   Code mata las tandas largas en segundo plano si se queda sin memoria. El hallazgo neutral de la collation de la
   sombra en MySQL espera su propia tarea en keel-core.
 

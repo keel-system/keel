@@ -31,6 +31,7 @@ import { SCHEDULER_IMPORT, scheduledServices, tasksFunc, usesScheduling } from '
 import { tablePurges } from './purge.js';
 import { PARAMETERS_IMPORT, PARAMETERS_VAR, usesServiceParameters } from './service-parameters.js';
 import { claimDependencies, usesSweepClaims } from './claim.js';
+import { usesReconciliationClaims } from './reconciliation-claim.js';
 import { usesCorrelation } from './correlation.js';
 import { CLIENTS_IMPORT, adapterType, clientField, clientParam, usesGoHttpClients } from './http-clients.js';
 
@@ -210,7 +211,7 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
 		}
 	}
 	transactions := ${store.name}.NewTransactions(db, database.TransactionTimeout, logger)
-${usesSweepClaims(model) ? sweepsWiring(store) : ''}${clients ? clientsWiring(model) : ''}${messaging ? messagingWiring(model) : ''}
+${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
 ${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
 }
@@ -239,6 +240,15 @@ function sweepsWiring(store) {
   return `	sweeps, err := ${store.name}.SweepSettingsFrom(cfg)
 	if err != nil {
 		return fmt.Errorf("configuración de los barridos: %w", err)
+	}
+`;
+}
+
+// Los barridos de reconciliación del perfil (tramo 11c): el umbral, la caducidad del reclamo y el lote de cada activación.
+function reconciliationWiring(store) {
+  return `	reconciliation, err := ${store.name}.ReconciliationSettingsFrom(cfg)
+	if err != nil {
+		return fmt.Errorf("configuración de la reconciliación: %w", err)
 	}
 `;
 }

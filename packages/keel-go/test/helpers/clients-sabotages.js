@@ -40,7 +40,9 @@ export const CLIENTS_SABOTAGES = [
     what: 'la clave de idempotencia saliente cambia en cada intento: el reintento pediría una ejecución nueva',
     file: `${CLIENTS}/inventory_adapter.go`,
     find: 'key, err := outboundKey("cancelStock", orderID)',
-    replace: 'key, err := outboundKey("cancelStock", orderID, time.Now().UnixNano())',
+    // uuid.New() y no time.Now().UnixNano(): en Windows el reloj de pared avanza a saltos de hasta 15,6 ms, y los tres
+    // intentos seguidos de la prueba caían en el mismo tic con la MISMA clave (go-check del 11c, 2026-10-31).
+    replace: 'key, err := outboundKey("cancelStock", orderID, uuid.New())',
     fails: 'TestInventoryHTTPAdapterCancelStockReintentaElTransporteComoDiceSuPolitica'
   },
   {

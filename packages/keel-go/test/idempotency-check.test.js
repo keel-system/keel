@@ -27,11 +27,10 @@ const gateOf = (files) => files.find((file) => file.path === CHECK_IDEMPOTENCY_S
 const rows = (script) => [...(script ?? '').matchAll(/^(unit|impl|claim) '([^']*)' '([^']*)'/gm)].map((match) => `${match[2]} | ${match[3]}`);
 // La escritura de los registros: en TypeORM, insert y no save; en Go, SQL literal. Sujetos con el nombre del archivo.
 const isInsertSubject = (row) => /: la escritura es un INSERT/.test(row);
-// Lo que keel-go todavía no genera no tiene familia aquí: la compensación, la reconciliación y la idempotencia saliente
-// (incremento 11) y el correo (13).
-const PENDING_FAMILIES = new Set(['compensation', 'reconciliation', 'outboundIdempotency', 'mailDelivery']);
+// Lo que keel-go todavía no genera no tiene familia aquí: el correo (incremento 13).
+const PENDING_FAMILIES = new Set(['mailDelivery']);
 
-for (const name of ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'metering-digest', 'stock-reservation-events', 'notification-mailer']) {
+for (const name of ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'metering-digest', 'stock-reservation-events', 'stock-reservation', 'notification-mailer']) {
   for (const broker of ['rabbitmq', 'kafka', 'snssqs']) {
     test(`${name} [${broker}]: las familias y los sujetos del gate son los de keel-nest`, () => {
       const stack = { database: 'postgresql', broker };
@@ -304,4 +303,90 @@ test('conditionalUniqueness: recién generado sale rojo; con la ocupante buscada
       source.replace(`fmt.Errorf("%w: %s", ErrNotImplemented, "${relief.operation.name}")`, `h.${root.name[0].toLowerCase()}${root.name.slice(1)}Repository.${finder.name}(ctx)`)
   });
   assert.equal(verdicts(relieved.out).conditionalUniqueness, 'OK', relieved.out);
+});
+
+// stock-reservation (tramo 11c): la compensación de StockRejected, el barrido de reconciliación y la clave saliente de
+// cancelStock. El uso correcto: el barrido toma el lote con el reclamo generado, deshace en el almacén y libera,
+// reconociendo la carrera con errors.Is; la compensación libera la reserva en el AGREGADO.
+const RECONCILE = 'application/reconcile_reservations_command_handler.go';
+const RELEASE = 'application/release_reservation_command_handler.go';
+const BEHAVIOR = 'domain/reservation_behavior.go';
+const reconciles = (source) =>
+  source.replace(
+    'return fmt.Errorf("%w: %s", ErrNotImplemented, "reconcileReservations")',
+    `reservations, err := h.reservationRepository.ClaimForReconcileReservationsReserveStock(ctx)
+	if err != nil {
+		return err
+	}
+	for _, reservation := range reservations {
+		if err := reservation.Release("sin respuesta del almacén"); err != nil {
+			if errors.Is(err, domain.ErrInvalidStateTransition) {
+				continue
+			}
+			return err
+		}
+		if _, err := h.reservationRepository.Save(ctx, reservation); err != nil {
+			if errors.Is(err, domain.ErrConcurrentModification) {
+				continue
+			}
+			return err
+		}
+		if _, err := h.inventoryClient.CancelStock(ctx, reservation.OrderID()); err != nil {
+			return err
+		}
+	}
+	return nil`
+  );
+const releases = (source) => source.replace('return fmt.Errorf("%w: %s", ErrNotImplemented, "releaseReservation")', 'return h.release(ctx, cmd)');
+const behaves = (source) =>
+  `${source}
+// Release libera la reserva y dice por qué.
+func (r *Reservation) Release(reason string) error {
+	if err := r.transitionTo(ReservationStatusReleased); err != nil {
+		return err
+	}
+	r.releaseReason = &reason
+	return nil
+}
+`;
+
+test('stock-reservation: recién generado, la compensación y la reconciliación salen ROJAS y la clave saliente VERDE (build la deja puesta)', (t) => {
+  const fresh = runGate('stock-reservation');
+  if (fresh === null) return t.skip('sin bash en el PATH');
+  const found = verdicts(fresh.out);
+  assert.equal(found.compensation, 'KO', fresh.out);
+  assert.equal(found.reconciliation, 'KO', fresh.out);
+  assert.equal(found.outboundIdempotency, 'OK', fresh.out);
+  // La nota del handler nombra el reclamo: leída como código, el gate saldría verde por su propia prosa.
+  assert.match(fresh.out, /\[reconciliation\] reconcileReservations · reclamo de inventory\.reserveStock/);
+  assert.match(fresh.out, /\[compensation\] releaseReservation · estado de Reservation/);
+});
+
+test('stock-reservation: con el uso correcto, VERDE; un finder, un error descartado o la clave saliente quitada lo ponen rojo', (t) => {
+  const edits = { [RECONCILE]: reconciles, [RELEASE]: releases, [BEHAVIOR]: behaves };
+  const correct = runGate('stock-reservation', edits);
+  if (correct === null) return t.skip('sin bash en el PATH');
+  const found = verdicts(correct.out);
+  assert.equal(found.compensation, 'OK', correct.out);
+  assert.equal(found.reconciliation, 'OK', correct.out);
+  assert.equal(found.outboundIdempotency, 'OK', correct.out);
+
+  const finder = runGate('stock-reservation', {
+    ...edits,
+    [RECONCILE]: (source) => reconciles(source).replace('reservations, err := h.reservationRepository.ClaimForReconcileReservationsReserveStock(ctx)', 'reservations, err := h.reservationRepository.FindByStatus(ctx, domain.ReservationStatusAwaitingStock)')
+  });
+  assert.equal(verdicts(finder.out).reconciliation, 'KO', finder.out);
+  assert.match(finder.out, /\[reconciliation\] reconcileReservations · reclamo .*NO debe aparecer/);
+
+  const swallowed = runGate('stock-reservation', {
+    ...edits,
+    [RECONCILE]: (source) => reconciles(source).replace('if _, err := h.inventoryClient.CancelStock(ctx, reservation.OrderID()); err != nil {\n\t\t\treturn err\n\t\t}', '_, _ = h.inventoryClient.CancelStock(ctx, reservation.OrderID())')
+  });
+  assert.equal(verdicts(swallowed.out).reconciliation, 'KO', swallowed.out);
+
+  const keyless = runGate('stock-reservation', { ...edits, 'clients/inventory_adapter.go': (source) => source.replaceAll('outboundKey("cancelStock", ', 'outboundKey(randomCall(), ') });
+  assert.equal(verdicts(keyless.out).outboundIdempotency, 'KO', keyless.out);
+
+  const unrestored = runGate('stock-reservation', { ...edits, [BEHAVIOR]: (source) => behaves(source).replace('if err := r.transitionTo(ReservationStatusReleased); err', 'if err := r.transitionTo(ReservationStatusConfirmed); err') });
+  assert.equal(verdicts(unrestored.out).compensation, 'KO', unrestored.out);
 });

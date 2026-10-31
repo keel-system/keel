@@ -119,12 +119,12 @@ try {
       step(`${name}: el catálogo del motor es el esquema emitido, y Down lo deja vacío`, differences.length === 0, differences.slice(0, 8).join(' | '));
     }
     // Falsado: sin un índice de FK, la comparación tiene que verlo. Si el sabotaje ya no se aplica, el paso sale rojo.
-    // El de la purga del registro de idempotencia (ix_idempotency_record_expires_at) no es de una FK: se salta.
-    const subject = relational.find((name) => /^CREATE INDEX ix_(?!idempotency_record_|outbox_event_|processed_event_)/m.test(baselineOf(planService({ ...goView(name), workspace: FIXTURES_DIR, stack }).files)));
+    // El de la purga del registro de idempotencia (ix_idempotency_record_expires_at) no es de una FK, ni el de las marcas de reconciliación: se saltan.
+    const subject = relational.find((name) => /^CREATE INDEX ix_(?!idempotency_record_|outbox_event_|processed_event_|reconciliation_claim_)/m.test(baselineOf(planService({ ...goView(name), workspace: FIXTURES_DIR, stack }).files)));
     if (subject) {
       const files = planService({ ...goView(subject), workspace: FIXTURES_DIR, stack }).files;
       const sql = baselineOf(files);
-      const sabotaged = sql.replace(/^CREATE INDEX ix_(?!idempotency_record_|outbox_event_|processed_event_)\w+ ON .*;\n\n?/m, '');
+      const sabotaged = sql.replace(/^CREATE INDEX ix_(?!idempotency_record_|outbox_event_|processed_event_|reconciliation_claim_)\w+ ON .*;\n\n?/m, '');
       const differences = sabotaged === sql ? [] : applyAndCompare(`${subject.replace(/-/g, '_')}_sabotaged`, sabotaged, goSchema(files));
       step(`falsado: ${subject} sin un índice de FK → la comparación lo ve`, differences.some((d) => /ix_/.test(d)), differences.slice(0, 3).join(' | ') || 'no vio nada');
     }

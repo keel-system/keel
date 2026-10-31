@@ -14,18 +14,19 @@
 //     (`blockDepth: 0`);
 //   · la respuesta de la guarda es un `(bool, error)`: descartarla con `_` es no deduplicar;
 //   · la escritura de los registros es SQL literal: un INSERT sin `ON CONFLICT` ni `INSERT IGNORE`.
-// La compensación, la reconciliación y la idempotencia saliente llegan con el incremento 11, y el correo con el 13: sus
-// familias no tienen todavía mecanismo que vigilar (la frontera los rechaza).
+// La compensación, la reconciliación y la idempotencia saliente llegaron con el incremento 11 (tramo 11c); el correo
+// llega con el 13 y su familia no tiene todavía mecanismo que vigilar (la frontera lo rechaza).
 
 import { renderIdempotencyGate } from '@keel-system/keel-core/gen/idempotency-gate';
-import { relievingOperations } from '@keel-system/keel-core/gen';
+import { kebabCase, relievingOperations } from '@keel-system/keel-core/gen';
 import { usesRelational } from '@keel-system/keel-core/gen/features';
 import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
 import { subscriptionsBySource as bySource } from '@keel-system/keel-core/gen/messaging-plan';
-import { goExported } from '../lib/go-projection.js';
+import { enumConstant, goExported } from '../lib/go-projection.js';
 import { goFileName } from './render.js';
 import { handlerType } from './services.js';
 import { claimMethod } from './claim.js';
+import { callMethod, clientParam, usesGoHttpClients } from './http-clients.js';
 import { messageStruct, usesGoMessaging, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
 import { naturalKeyFinder, occupantFinders } from './repositories.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
@@ -68,7 +69,10 @@ export function checksOf(model) {
     ...commandChecks(model),
     ...naturalKeyChecks(model),
     ...domainEventChecks(model),
+    ...compensationChecks(model),
     ...sweepClaimChecks(model),
+    ...reconciliationChecks(model),
+    ...outboundIdempotencyChecks(model),
     ...outboxChecks(model),
     ...conditionalUniquenessChecks(model)
   ];
@@ -299,6 +303,184 @@ function sweepClaimChecks(model) {
         `así que la escribes tú CON SU COTA TEMPORAL, en el adaptador de ${entities.join(', ')}`
     };
   });
+}
+
+// 3b. Compensación (tramo 11c): el handler no puede quedar a medias; si la vuelta al proveedor es una llamada, tiene que
+//     hacerla; y el estado que el encargo movió vuelve a su sitio EN EL AGREGADO (su <entidad>_behavior.go).
+function compensationChecks(model) {
+  const checks = [];
+  for (const operation of allOperations(model)) {
+    if (!operation.compensates) continue;
+    const leg = returnLegOf(model, operation);
+    checks.push({
+      group: 'compensation',
+      subject: operation.name,
+      class: handlerFile(operation),
+      // Más estricto que nombrar el puerto (ya está en el struct que genera build): que se LLAME.
+      require: leg?.kind === 'client' ? ['\\.' + leg.field + '\\.' + leg.method + '\\s*\\('] : [],
+      forbid: ['TODO', 'ErrNotImplemented'],
+      why:
+        leg?.kind === 'client'
+          ? `compensa ${operation.compensates.dependency}: además de devolver el estado propio avisa al proveedor con h.${leg.field}.${leg.method}(...)`
+          : leg?.kind === 'event'
+            ? `compensa ${operation.compensates.dependency}: la vuelta va por el evento ${leg.event.name}, que emite el AGREGADO (familia domainEvent); aquí, que el handler no quede a medias`
+            : `compensa ${operation.compensates.dependency}: el diseño no declara activación de vuelta, así que solo devuelve el estado propio`
+    });
+    const moved = new Set(operation.compensates.moves ?? []);
+    for (const transition of operation.transitions ?? []) {
+      if (!moved.has(transition.entity)) continue;
+      const entity = (model.entities ?? []).find((candidate) => candidate.name === transition.entity);
+      if (!entity?.lifecycle) continue;
+      const constant = enumConstant(entity.lifecycle.enumType, transition.to);
+      checks.push({
+        group: 'compensation',
+        subject: `${operation.name} · estado de ${transition.entity}`,
+        class: `${goFileName(transition.entity)}_behavior`,
+        require: ['transitionTo\\s*\\(\\s*' + constant + '\\s*\\)'],
+        forbid: [],
+        why:
+          `el encargo que deshace movió el lifecycle de ${transition.entity}: devolverlo a ${transition.to} es parte de la compensación, ` +
+          `y lo hace el método semántico del agregado con transitionTo(${constant})`
+      });
+    }
+  }
+  return checks;
+}
+
+/** La vuelta al proveedor: una llamada (se exige en el handler) o un evento (lo emite el agregado). */
+function returnLegOf(model, operation) {
+  const activations = (operation.dependencyActivations ?? []).map((entry) => entry.activation);
+  const called = activations.find((activation) => activation.http?.clientClass);
+  if (called) {
+    const client = (model.httpClients ?? []).find((candidate) => candidate.clientClass === called.http.clientClass);
+    const call = client?.calls.find((candidate) => candidate.name === called.http.call);
+    return { kind: 'client', field: client ? clientParam(client) : called.http.clientClass, method: call ? callMethod(call) : goExported(called.http.call) };
+  }
+  const published = activations.find((activation) => activation.event?.name);
+  return published ? { kind: 'event', event: published.event } : null;
+}
+
+// 4b. Reconciliación (tramo 11c). La pata del silencio, y la que ningún escenario FL-* ejercita entera: un cron no se
+//     alcanza desde fuera. Las mismas reglas que los otros tres, con lo que en Go es cada pieza.
+function reconciliationChecks(model) {
+  const checks = [];
+  const pending = [];
+  const generated = [];
+  for (const operation of allOperations(model)) {
+    for (const { dependency, activation, claim } of operation.reconciles ?? []) {
+      if (!claim) {
+        if (!pending.some((entry) => entry.activation.name === activation.name)) pending.push({ dependency, activation });
+        continue;
+      }
+      generated.push(goExported(claim.method));
+      checks.push({
+        group: 'reconciliation',
+        subject: `${operation.name} · reclamo de ${dependency}.${activation.name}`,
+        class: handlerFile(operation),
+        require: ['\\.?' + goExported(claim.method) + '\\s*\\('],
+        // La lectura por estado es EXACTAMENTE el patrón que el reclamo evita.
+        forbid: stateReadingFinder(model, [claim.entity]),
+        why:
+          `el barrido corre en TODAS las réplicas: toma su lote con ${goExported(claim.method)}(), que build generó en domain.${claim.entity}Repository ` +
+          '—una marca persistida que caduca, y solo lo que esta réplica se llevó—, no con un finder ni con un reclamo aparte'
+      });
+    }
+  }
+  for (const operation of allOperations(model).filter((candidate) => (candidate.reconciles ?? []).length > 0)) {
+    checks.push({
+      group: 'reconciliation',
+      subject: operation.name,
+      class: handlerFile(operation),
+      // Y sin tragarse los errores: descartar con `_` el error de una llamada al repositorio o al proveedor no distingue
+      // la carrera con el camino feliz de un fallo propio (el `catch` sin tipo de los otros tres). Lo destapó la corrida
+      // stock-reservation de keel-nest (2026-10-08).
+      forbid: ['TODO', 'ErrNotImplemented', '_[[:space:]]*(,[[:space:]]*_[[:space:]]*)?=[[:space:]]*h[.][A-Za-z]+[.][A-Za-z]+[(]'],
+      require: [],
+      why: `barre ${operation.reconciles.map((r) => `${r.dependency}.${r.activation.name}`).join(', ')}: el barrido tiene que estar escrito, no dejado en un stub, y sin descartar errores con _ — la carrera con el camino feliz se reconoce con errors.Is y se devuelve lo demás`
+    });
+  }
+  if (pending.length > 0) {
+    // Los archivos que build genera con el patrón: encontrarlos probaría lo que build hizo.
+    const exclude = '/(reconciliation|claims|sweep|outbox|processed_events|idempotency_store|purges)[.]go';
+    const deny = [...generated, '[)] Save[(]', 'func write[A-Z]', 'interface[[:space:]]*[{]'].join('|');
+    checks.push(
+      {
+        group: 'reconciliation',
+        subject: 'reclamo del barrido',
+        // Sin escapes que awk no entienda: con `scope: method` estos patrones viajan también por awk.
+        claim: 'UPDATE[[:space:]]|claimReconciliation[(]|reconciliation_claim',
+        scope: 'method',
+        deny,
+        bound: '[Cc]laim|[Rr]eclam',
+        exclude,
+        why:
+          'ninguna escritura reclama candidatos con una MARCA PERSISTIDA (claimReconciliation sobre reconciliation_claim, o un UPDATE condicional): ' +
+          'el barrido corre en TODAS las réplicas, y un lock solo aísla mientras dura su transacción, con la llamada al proveedor en medio'
+      },
+      {
+        group: 'reconciliation',
+        subject: 'lote del barrido',
+        claim: 'BatchSize|LIMIT',
+        bound: '[Cc]andidat|[Rr]econcil|[Cc]laim|[Rr]eclam|[Ss]tale',
+        scope: 'method',
+        deny,
+        exclude,
+        why: 'el reclamo del barrido no acota su lote: sin cota, una pasada con 50.000 atascados son 50.000 llamadas al proveedor'
+      }
+    );
+    for (const { dependency, activation } of pending) {
+      checks.push({
+        group: 'reconciliation',
+        subject: `umbral de ${dependency}.${activation.name}`,
+        claim: 'UnansweredAfter',
+        bound: activation.name,
+        exclude: '/reconciliation[.]go',
+        why:
+          `el umbral de espera de ${dependency}.${activation.name} no se lee en ninguna parte: build lo dejó en ` +
+          `ReconciliationSettings.Windows["${activation.name}"] (reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds), y el de OTRO barrido no vale`
+      });
+    }
+  }
+  // El disparador. En Go build lo escribe entero (un mensaje con campos lo rechaza la frontera), pero el sujeto es el
+  // mismo que en los otros tres: que la tarea despache el mensaje del barrido.
+  for (const service of model.services ?? []) {
+    const operations = (service.operations ?? []).filter((operation) => (operation.reconciles ?? []).length > 0);
+    if (operations.length === 0) continue;
+    const owner = service.className.replace(/Service$/, '');
+    checks.push({
+      group: 'reconciliation',
+      subject: `${owner}Scheduler`,
+      class: goFileName(`${owner}Tasks`),
+      require: [operations.map((operation) => goExported(operation.messageClass ?? `${operation.name}Command`)).join('|')],
+      forbid: ['TODO'],
+      why: `el disparador de ${operations.map((operation) => operation.name).join(', ')}: la tarea del reloj despacha su mensaje`
+    });
+  }
+  return checks;
+}
+
+// 4c. La clave de idempotencia SALIENTE (tramo 11b): build la deja cableada en el intento de la llamada; si alguien la
+//     quita, el retry le encarga al proveedor el mismo trabajo otra vez, y eso no falla: duplica.
+function outboundIdempotencyChecks(model) {
+  if (!usesGoHttpClients(model)) return [];
+  return (model.httpClients ?? []).flatMap((client) =>
+    (client.calls ?? [])
+      .filter((call) => call.idempotency)
+      .map((call) => {
+        const factory = call.idempotency.keyFrom === 'correlation' ? 'correlatedKey\\(ctx, ' : 'outboundKey\\(';
+        return {
+          group: 'outboundIdempotency',
+          subject: `${client.id}.${call.name}`,
+          class: `${goFileName(client.id)}_adapter`,
+          // Por LLAMADA: el nombre de la llamada va como argumento de la factoría.
+          require: [factory + '"' + call.name + '"'],
+          forbid: [],
+          why:
+            `la llamada declara idempotency.keyFrom: ${call.idempotency.keyFrom}: la cabecera ${call.idempotency.header} viaja con una clave ESTABLE ` +
+            `entre reintentos — ${factory.replace(/\\/g, '')}"${call.name}", …), que build dejó en el intento de ${callMethod(call)}`
+        };
+      })
+  );
 }
 
 // 5. La entrega del outbox: el respaldo del dispatcher no deja arrancar fuera de local/test, pero en local marca

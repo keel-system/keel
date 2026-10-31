@@ -1,4 +1,5 @@
-// La purga POR LOTES de las tablas del generador (tramo 10b): `outbox_event`, `processed_event` e `idempotency_record`.
+// La purga POR LOTES de las tablas del generador (tramo 10b): `outbox_event`, `processed_event`, `idempotency_record` y
+// `reconciliation_claim` (tramo 11c).
 //
 // Las mismas que purgan los servidores de keel-spring, keel-nest y keel-dotnet del mismo diseño, con la misma forma
 // (keel-core/gen/scheduling.js, `BATCHED_PURGE`): un único DELETE sobre todo lo caducado es una transacción del tamaño
@@ -19,6 +20,8 @@ import { sqlDialect } from '../lib/relational-engine.js';
 import { layout, packageFile } from './render.js';
 import { usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
+import { RECONCILIATION_CLAIM } from '@keel-system/keel-core/gen/reconciliation-stores';
+import { reconciliationPurge } from './reconciliation-claim.js';
 
 /**
  * Las purgas de ESTE diseño, como datos: qué tabla, por qué columna se corta, qué condición propia lleva (lo pendiente
@@ -67,10 +70,13 @@ export function tablePurges(model) {
       retentionDays: null
     });
   }
+  // Las marcas del reclamo de reconciliación (tramo 11c): la misma purga que keel-nest y keel-dotnet.
+  const reconciliation = reconciliationPurge(model);
+  if (reconciliation) purges.push(reconciliation);
   // Las columnas que se nombran tienen que existir en los datos de la tabla: si keel-core renombrara una, la purga
   // borraría por una columna que no está y fallaría cada noche sin que nada lo dijera antes.
   for (const purge of purges) {
-    const table = [OUTBOX_EVENT, PROCESSED_EVENT, IDEMPOTENCY_RECORD].find((candidate) => candidate.table === purge.table);
+    const table = [OUTBOX_EVENT, PROCESSED_EVENT, IDEMPOTENCY_RECORD, RECONCILIATION_CLAIM].find((candidate) => candidate.table === purge.table);
     if (!table.columns.some((column) => column.name === purge.column)) {
       throw new Error(`La purga de ${purge.table} corta por ${purge.column}, que no es columna de la tabla en keel-core`);
     }

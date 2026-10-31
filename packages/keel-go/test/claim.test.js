@@ -124,6 +124,6 @@ test('MySQL: el reclamo con ? posicional y en READ COMMITTED, y el id del arnés
   const adapter = content(files, 'internal/infrastructure/mysql/job_repository.go');
   assert.ok(adapter.includes(`"SELECT id FROM jobs WHERE status IN ('RUNNING') AND running_since < ? ORDER BY running_since LIMIT ? FOR UPDATE SKIP LOCKED", staleBefore, batch)`));
   assert.ok(adapter.includes(`"UPDATE jobs SET running_since = ? WHERE id = ? AND status IN ('RUNNING') AND running_since < ?", claimedAt, id, staleBefore)`));
-  assert.match(content(files, 'internal/infrastructure/mysql/sweep.go'), /var claimOptions = sql\.TxOptions\{Isolation: sql\.LevelReadCommitted\}/);
+  assert.match(content(files, 'internal/infrastructure/mysql/claims.go'), /var claimOptions = sql\.TxOptions\{Isolation: sql\.LevelReadCommitted\}/);
   assert.match(content(files, 'tests/integration/flow_test.go'), /return "UUID_TO_BIN\('" \+ id \+ "'\)"/);
 });

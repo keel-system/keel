@@ -19,7 +19,9 @@
 //                 lote por clave natural, las inversas y el orden por la sombra de rango de un enum.
 //
 // Por sujeto, la TRANSACCIÓN: un interbloqueo real entre dos transacciones se repite hasta que las dos terminan, un
-// conflicto que agota sus intentos sale como el 409 de concurrencia y una sentencia que pasa del tope, como el 503.
+// conflicto que agota sus intentos sale como el 409 de concurrencia y una sentencia que pasa del tope, como el 503. Y
+// los mecanismos del generador, cada uno con su módulo: la mensajería, las purgas, los reclamos de barrido y el de
+// reconciliación (reconciliation-probes.js, tramo 11c).
 //
 // Las muestras respetan las cotas y los patrones del diseño (el texto de un patrón lo da `sampleFor`, el mismo de las
 // sondas de keel-nest y keel-dotnet), y cada número de muestra da valores distintos: dos muestras no comparten clave.
@@ -41,6 +43,7 @@ import { messagingProbes } from './messaging-probes.js';
 import { finderProbes } from './finder-probes.js';
 import { purgeProbes } from './purge-probes.js';
 import { claimProbes } from './claim-probes.js';
+import { PROBE_RECONCILIATION, reconciliationProbes } from './reconciliation-probes.js';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen';
 import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
 import { usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
@@ -108,6 +111,7 @@ export function probeFile(model, files = []) {
   if (usesGoOutbox(model) || usesGoProcessedEvents(model)) parts.push(messagingProbes(model));
   parts.push(purgeProbes(model));
   parts.push(claimProbes(model, files, (root) => repository(model, root)));
+  parts.push(reconciliationProbes(model, (root) => repository(model, root)));
   parts.push(patternTables(ctx));
   if (entities.length === 0) return null;
   const content = goFile({ pkg: STORE_PACKAGES[d.engine], imports: IMPORTS, body: `\n${parts.filter(Boolean).join('\n\n')}\n`, module: model.service.goModule, generated: false });
@@ -492,7 +496,7 @@ func dump${vo.name}(v domain.${vo.name}) string {
  * se rehidratan, y una raíz rehidratada no emite nada (la mensajería la miden sus propias sondas).
  */
 function repository(model, root) {
-  return `New${root.name}Repository(${repositoryArgs(model, root, 'probeTx', 'nil', { sweeps: 'probeSweeps', parameters: 'probeParameters' })})`;
+  return `New${root.name}Repository(${repositoryArgs(model, root, 'probeTx', 'nil', { sweeps: 'probeSweeps', parameters: 'probeParameters', reconciliation: PROBE_RECONCILIATION })})`;
 }
 
 function ensureFunction(model, root) {

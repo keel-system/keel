@@ -42,6 +42,7 @@ import { adapterFinderMethods, entityFinders, filtersBlocks, filtersUses, portFi
 import { docComment, domainPath, goFileName, layout, localName, packageFile } from './render.js';
 import { emitsEvents, usesGoOutbox } from './messaging.js';
 import { adapterClaimMethods, claimDependencies, portClaimMethods } from './claim.js';
+import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { PARAMETERS_VAR } from './service-parameters.js';
 
 // Un identificador en el SQL del adaptador, citado como en el baseline si es una palabra reservada (`"primary"` en
@@ -92,13 +93,15 @@ const ADAPTER_IMPORTS = [
 
 /**
  * Los argumentos del constructor del adaptador de una raíz: las transacciones y, si la raíz emite eventos, el puente de
- * la mensajería (messaging.js) y, si se reclama por barrido, los barridos y los parámetros que lea un rescate (claim.js).
+ * la mensajería (messaging.js), si se reclama por barrido, los barridos y los parámetros que lea un rescate (claim.js), y
+ * si se reclama por reconciliación, sus barridos (reconciliation-claim.js).
  * Lo usan el arranque y las sondas de db-check, que pasan `nil` como puente (rehidratan, no emiten).
  */
-export function repositoryArgs(model, entity, tx, bridge, { sweeps = 'sweeps', parameters = PARAMETERS_VAR } = {}) {
+export function repositoryArgs(model, entity, tx, bridge, { sweeps = 'sweeps', parameters = PARAMETERS_VAR, reconciliation = 'reconciliation' } = {}) {
   const args = [tx];
   if (emitsEvents(model, entity)) args.push(bridge);
   for (const dep of claimDependencies(model, entity)) args.push(dep.field === 'sweeps' ? sweeps : parameters);
+  for (const dep of reconciliationDependencies(model, entity)) if (dep.field === 'reconciliation') args.push(reconciliation);
   return args.join(', ');
 }
 
@@ -239,6 +242,7 @@ function portBody(model, entity) {
   }
   for (const [doc, signature] of portFinderMethods(model, entity)) method(doc, signature);
   for (const [doc, signature] of portClaimMethods(model, entity)) method(doc, signature);
+  for (const [doc, signature] of portReconciliationMethods(model, entity)) method(doc, signature);
   if (isPaginated(model, entity)) {
     method('una página de agregados, en el orden pedido y con el id como desempate. Una propiedad de orden que no existe es un error.', `List(ctx context.Context, pageable Pageable) (Page[*${name}], error)`);
   }
@@ -531,11 +535,12 @@ function adapterBody(model, entity, uses) {
   const eventsDoc = events
     ? ` Al guardar, entrega al puente de la mensajería los eventos que drena del agregado: ${usesGoOutbox(model) ? 'sus filas del outbox van en la MISMA transacción del cambio' : 'se publican DESPUÉS del commit'}.`
     : '';
-  const deps = [{ field: 'tx', type: '*Transactions' }, ...(events ? [{ field: 'events', type: '*messaging.Bridge' }] : []), ...claimDependencies(model, entity)];
+  const deps = [{ field: 'tx', type: '*Transactions' }, ...(events ? [{ field: 'events', type: '*messaging.Bridge' }] : []), ...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)];
   const built = [
     events ? ' y el puente de la mensajería' : '',
     deps.some((dep) => dep.field === 'sweeps') ? ', con los barridos del perfil' : '',
-    deps.some((dep) => dep.field === 'parameters') ? ' y los parámetros de despliegue que lee su rescate' : ''
+    deps.some((dep) => dep.field === 'parameters') ? ' y los parámetros de despliegue que lee su rescate' : '',
+    deps.some((dep) => dep.field === 'reconciliation') ? ', con los barridos de reconciliación del perfil' : ''
   ].join('');
   parts.push(`${docComment(type, `el adaptador de domain.${portName(entity)} sobre ${sqlDialect(model).label}: el SQL lo escribe build y el mapeo fila ↔ dominio va campo a campo, sin reflexión. Se une a la transacción que abrió el caso de uso; sin ella, cada lectura va sola y cada escritura abre la suya.${eventsDoc}`)}type ${type} struct {
 ${alignRows(deps.map((dep) => ({ indent: '\t', cells: [dep.field, dep.type] }))).join('\n')}
@@ -604,6 +609,7 @@ ${batchLoad(model, batch.column, null, batch.plural, uses, batch.cast)}
   if (isPaginated(model, entity)) parts.push(listMethod(model, entity, root, type));
   parts.push(...adapterFinderMethods(model, entity, { type, root, sortable: `${lower(name)}Sortable`, writeValue }));
   parts.push(...adapterClaimMethods(model, entity, type));
+  parts.push(...adapterReconciliationMethods(model, entity, type));
 
   // ─── Escrituras
   parts.push(saveMethods(model, entity, root, tables, type, uses));

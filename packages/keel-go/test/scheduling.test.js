@@ -144,7 +144,7 @@ test('los casos de la prueba emitida de la purga son los que da la referencia de
 // ─── Qué se purga y con qué configuración ────────────────────────────────────
 
 test('se purga cada tabla del generador que el diseño usa, y solo esas: las mismas que keel-nest', () => {
-  for (const name of ['stock-reservation-events', 'product-catalog', 'shop-api', 'payout-runs']) {
+  for (const name of ['stock-reservation-events', 'stock-reservation', 'product-catalog', 'shop-api', 'payout-runs']) {
     const ours = tablePurges(plan(name).model).map((purge) => purge.what);
     const theirs = nestTablePurges(plan(name, planNest).model).map((purge) => purge.what);
     assert.deepEqual(ours, theirs, name);

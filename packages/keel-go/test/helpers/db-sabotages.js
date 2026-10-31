@@ -128,10 +128,35 @@ export const DB_SABOTAGES = {
   // MySQL: el reclamo en el REPEATABLE READ por defecto, que bloquea los huecos entre claves.
   'claim-isolation': {
     engines: ['mysql'],
-    files: new RegExp(`${STORE}sweep\\.go$`),
+    files: new RegExp(`${STORE}claims\\.go$`),
     from: 'sql.TxOptions{Isolation: sql.LevelReadCommitted}',
     to: 'sql.TxOptions{}',
     expect: /^TestClaim_\w+_LocksTheBatchWithoutGaps$/
+  },
+  // La reconciliación (tramo 11c). La marca caducada justo en el límite deja de renovarse (`<` en vez de `<=`).
+  'reconciliation-expiry': {
+    files: new RegExp(`${STORE}reconciliation\\.go$`),
+    from: 'WHERE reconciliation_claim.claimed_at <= $4"',
+    to: 'WHERE reconciliation_claim.claimed_at < $4"',
+    mysql: { from: 'AND claimed_at <= ?"', to: 'AND claimed_at < ?"' },
+    expect: /^TestReconciliationStore_RenewsTheExpiredMarkAtTheLimit$/
+  },
+  // El umbral en el FUTURO: se lleva también lo que acaba de quedarse esperando.
+  'reconciliation-threshold': {
+    files: REPOSITORY,
+    from: 'unansweredBefore := now.Add(-window.UnansweredAfter())',
+    to: 'unansweredBefore := now.Add(window.UnansweredAfter())',
+    expect: /^TestReconcile_\w+_TakesOnlyWhatOutlivedTheThresholdAndLeavesTheState$/
+  },
+  // La lectura de candidatos deja de excluir la marca viva (el parámetro se conserva): la cabeza de la cola, reclamada y
+  // sin resolver, ocupa el lote de cada pasada y los de detrás no salen hasta que caduque. Con dos réplicas en MySQL, las
+  // pasadas que recogen lo que no cupo caen con ella.
+  'reconciliation-head': {
+    files: REPOSITORY,
+    from: /AND NOT EXISTS \(SELECT 1 FROM reconciliation_claim c WHERE c\.activation = '\w+' AND c\.entity_id = e\.\w+ AND (c\.claimed_at > (?:\$2|\?))\)/g,
+    to: 'AND NOT EXISTS (SELECT 1 FROM reconciliation_claim c WHERE $1 AND 1 = 0)',
+    expect: /^TestReconcile_\w+_TheNextPassTakesTheOnesBehind$/,
+    also: /^TestReconcile_\w+_TwoReplicasDoNotRepeat$/
   },
   // El arnés de flujos atasca todas las filas MENOS la pedida: la sonda lee sus sentencias de lo emitido, así que lo ve.
   'harness-stall': { files: /^tests\/integration\/flow_test\.go$/, from: /(UPDATE [^"\n]*) WHERE id = "/g, to: '$1 WHERE id <> "', expect: /^TestRescue_\w+_TheHarnessStatementsBuildItsPrecondition$/ },

@@ -32,6 +32,7 @@ import { sqlDialect } from '../lib/relational-engine.js';
 import { layout, packageFile } from './render.js';
 import { parameterAccessor, parametersType } from './service-parameters.js';
 import { usesDependencies } from './use-cases.js';
+import { usesReconciliationClaims } from './reconciliation-claim.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -43,11 +44,19 @@ export function usesSweepClaims(model) {
 /** El método Go de un reclamo: `ClaimForDispatchJobsRunning`. */
 export const claimMethod = (claim) => goExported(claim.method);
 
+/** ¿Hacen falta los ayudantes de un reclamo (claims.go)? Los usan el de barrido y el de reconciliación. */
+export function usesClaimHelpers(model) {
+  return usesSweepClaims(model) || usesReconciliationClaims(model);
+}
+
 export function generate(model) {
-  if (!usesSweepClaims(model)) return [];
+  const files = [];
   const { store } = layout(model);
+  if (usesClaimHelpers(model)) files.push({ path: `${store.dir}/claims.go`, content: packageFile(model, store, { imports: ['context', 'database/sql', 'fmt'], body: helpersBody(model) }) });
+  if (!usesSweepClaims(model)) return files;
   return [
-    { path: `${store.dir}/sweep.go`, content: packageFile(model, store, { imports: ['context', 'database/sql', 'fmt', 'strconv', 'strings', 'internal/platform/config'], body: sweepBody(model) }) },
+    ...files,
+    { path: `${store.dir}/sweep.go`, content: packageFile(model, store, { imports: ['fmt', 'strconv', 'strings', 'internal/platform/config'], body: sweepBody(model) }) },
     { path: `${store.dir}/sweep_test.go`, content: packageFile(model, store, { test: true, imports: ['strings', 'testing', 'testing/fstest', store.dir, 'internal/platform/config'], body: sweepTest(model) }) },
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/sweep.yaml`, content: sweepYaml(model, profile) }))
   ];
@@ -84,19 +93,10 @@ function entriesOf(model, kind) {
 // ─── sweep.go ────────────────────────────────────────────────────────────────────────────────────
 
 function sweepBody(model) {
-  const d = sqlDialect(model);
   const literal = (kind) => {
     const rows = alignRows(entriesOf(model, kind).map(({ key, entry }) => ({ indent: '\t\t', cells: [`${goString(key)}:`, `${entry.default},`] })));
     return rows.length > 0 ? `map[string]int{\n${rows.join('\n')}\n\t}` : 'map[string]int{}';
   };
-  const isolation = d.mysql
-    ? `// claimOptions son las de la transacción de un reclamo: READ COMMITTED, como en keel-nest y keel-dotnet. En REPEATABLE
-// READ, el aislamiento por defecto de MySQL, el UPDATE condicional bloquea también los huecos del índice que recorre, y
-// dos réplicas a la vez se esperan en vez de repartirse el lote.
-var claimOptions = sql.TxOptions{Isolation: sql.LevelReadCommitted}`
-    : `// claimOptions son las de la transacción de un reclamo: el READ COMMITTED por defecto de PostgreSQL, en el que el
-// UPDATE condicional vuelve a evaluar su WHERE sobre la versión confirmada de la fila.
-var claimOptions = sql.TxOptions{}`;
   return `
 // SweepSettings son los barridos del perfil activo (config/parameters/<perfil>/sweep.yaml), con las claves y los
 // defaults de los servidores de keel-spring, keel-nest y keel-dotnet.
@@ -140,37 +140,6 @@ func SweepSettingsFrom(cfg *config.Config) (SweepSettings, error) {
 		}
 	}
 	return settings, nil
-}
-
-${isolation}
-
-// ownTransaction dice si method puede reclamar: un reclamo confirma en SU transacción antes de devolver las filas, y
-// dentro de otra se uniría a ella; el reclamo no existiría para ninguna otra réplica hasta el commit final, así que todas
-// actuarían sobre los mismos candidatos.
-func ownTransaction(ctx context.Context, method string) error {
-	if openTx(ctx) != nil {
-		return fmt.Errorf("%s confirma en su propia transacción y hay una abierta: despacha la operación con application.WithoutTransaction (el reloj ya lo hace)", method)
-	}
-	return nil
-}
-
-// claimCandidates lee los ids de los candidatos de un reclamo. La consulta los bloquea con SKIP LOCKED hasta el final de
-// la transacción del reclamo, así que otra réplica recibe candidatos DISTINTOS en vez de pelearse por la misma página.
-func claimCandidates[ID any](ctx context.Context, q DBTX, query string, args ...any) ([]ID, error) {
-	rows, err := q.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []ID
-	for rows.Next() {
-		var id ID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
 }
 `;
 }
@@ -216,6 +185,52 @@ func TestSweepSettingsFromRefusesANonPositiveValue(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), ${goString(`sweep.${batch.key}.batch-size`)}) {
 		t.Errorf("SweepSettingsFrom = %v, quiero el error de sweep.${batch.key}.batch-size", err)
 	}
+}
+`;
+}
+
+// ─── claims.go ───────────────────────────────────────────────────────────────────────────────────
+
+function helpersBody(model) {
+  const d = sqlDialect(model);
+  const isolation = d.mysql
+    ? `// claimOptions son las de la transacción de un reclamo: READ COMMITTED, como en keel-nest y keel-dotnet. En REPEATABLE
+// READ, el aislamiento por defecto de MySQL, el UPDATE condicional bloquea también los huecos del índice que recorre, y
+// dos réplicas a la vez se esperan en vez de repartirse el lote.
+var claimOptions = sql.TxOptions{Isolation: sql.LevelReadCommitted}`
+    : `// claimOptions son las de la transacción de un reclamo: el READ COMMITTED por defecto de PostgreSQL, en el que el
+// UPDATE condicional vuelve a evaluar su WHERE sobre la versión confirmada de la fila.
+var claimOptions = sql.TxOptions{}`;
+  return `
+${isolation}
+
+// ownTransaction dice si method puede reclamar: un reclamo confirma en SU transacción antes de devolver las filas, y
+// dentro de otra se uniría a ella; el reclamo no existiría para ninguna otra réplica hasta el commit final, así que todas
+// actuarían sobre los mismos candidatos.
+func ownTransaction(ctx context.Context, method string) error {
+	if openTx(ctx) != nil {
+		return fmt.Errorf("%s confirma en su propia transacción y hay una abierta: despacha la operación con application.WithoutTransaction (el reloj ya lo hace)", method)
+	}
+	return nil
+}
+
+// claimCandidates lee los ids de los candidatos de un reclamo. La consulta los bloquea con SKIP LOCKED hasta el final de
+// la transacción del reclamo, así que otra réplica recibe candidatos DISTINTOS en vez de pelearse por la misma página.
+func claimCandidates[ID any](ctx context.Context, q DBTX, query string, args ...any) ([]ID, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []ID
+	for rows.Next() {
+		var id ID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 `;
 }

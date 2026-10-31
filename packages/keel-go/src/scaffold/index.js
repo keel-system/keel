@@ -35,6 +35,7 @@ import * as repositories from './repositories.js';
 import * as serviceParameters from './service-parameters.js';
 import * as httpClients from './http-clients.js';
 import * as claim from './claim.js';
+import * as reconciliationClaim from './reconciliation-claim.js';
 import * as requestIdempotency from './request-idempotency.js';
 import * as messaging from './messaging.js';
 import * as messagingStores from './messaging-stores.js';
@@ -83,6 +84,7 @@ const GENERATORS = [
   serviceParameters,
   httpClients,
   claim,
+  reconciliationClaim,
   requestIdempotency,
   messaging,
   messagingStores,

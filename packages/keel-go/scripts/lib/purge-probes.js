@@ -10,12 +10,18 @@
 
 import { OUTBOX_EVENT, PROCESSED_EVENT, storeColumns } from '@keel-system/keel-core/gen/messaging-stores';
 import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
+import { RECONCILIATION_CLAIM } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { goString } from '../../src/lib/go-source.js';
 import { sqlDialect } from '../../src/lib/relational-engine.js';
 import { tablePurges } from '../../src/scaffold/purge.js';
 import { usesScheduling } from '../../src/scaffold/scheduling.js';
 
-const TABLES = { [OUTBOX_EVENT.table]: OUTBOX_EVENT, [PROCESSED_EVENT.table]: PROCESSED_EVENT, [IDEMPOTENCY_RECORD.table]: IDEMPOTENCY_RECORD };
+const TABLES = {
+  [OUTBOX_EVENT.table]: OUTBOX_EVENT,
+  [PROCESSED_EVENT.table]: PROCESSED_EVENT,
+  [IDEMPOTENCY_RECORD.table]: IDEMPOTENCY_RECORD,
+  [RECONCILIATION_CLAIM.table]: RECONCILIATION_CLAIM
+};
 
 /** Las sondas de las purgas del sujeto, o null si no tiene ninguna (o no tiene el reloj que las ejecuta). */
 export function purgeProbes(model) {
@@ -58,7 +64,7 @@ func insert${name}PurgeRows(t *testing.T, tag string, instants []time.Time, pend
 			t.Errorf("limpiar ${purge.table}: %v", err)
 		}
 	})
-	for i, at := range instants {
+	for ${values.some((value) => value.includes(', i)')) ? 'i' : '_'}, at := range instants {
 		var cut any = at
 		if pending {
 			cut = nil

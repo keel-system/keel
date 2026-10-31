@@ -87,7 +87,6 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...scheduledWithArguments(manifest, layers));
   errors.push(...parameterErrors(manifest, layers));
   errors.push(...outboundErrors(layers));
-  warnings.push(...outboundWarnings(layers));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     const names = operations
@@ -333,23 +332,3 @@ function outboundErrors(layers) {
   return errors;
 }
 
-/** Lo que se acepta y aún no se emite entero: la reconciliación y la compensación llegan en el tramo 11c. */
-function outboundWarnings(layers) {
-  const warnings = [];
-  for (const [dependency, definition] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
-    for (const [name, activation] of Object.entries(definition?.activations ?? {})) {
-      if (activation?.reconciledBy) {
-        warnings.push(
-          `dependencies.${dependency}.activations.${name}.reconciledBy: ${activation.reconciledBy} — keel-go genera el barrido sin su reclamo de ` +
-            'reconciliación ni su nota (llegan en el tramo 11c del incremento 11 de PLAN-KEEL-GO.md).'
-        );
-      }
-    }
-    if ((definition?.compensations ?? []).length > 0) {
-      warnings.push(
-        `dependencies.${dependency}.compensations — keel-go genera el handler de la compensación sin su nota (llega en el tramo 11c del incremento 11 de PLAN-KEEL-GO.md).`
-      );
-    }
-  }
-  return warnings;
-}

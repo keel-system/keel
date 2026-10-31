@@ -21,9 +21,7 @@ import { goView } from './helpers/contract.js';
 import { goSchema } from './helpers/schema.js';
 
 /** Las tablas de mecanismos de keel-spring que keel-go todavía no genera, con el incremento que las trae. */
-const MECHANISM_TABLES = {
-  reconciliation_claim: 'incremento 11 (la reconciliación)'
-};
+const MECHANISM_TABLES = {};
 
 const relational = fs.readdirSync(FIXTURES_DIR).filter((name) => {
   const file = path.join(FIXTURES_DIR, name, 'persistence.keel.yaml');

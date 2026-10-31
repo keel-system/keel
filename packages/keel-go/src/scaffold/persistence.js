@@ -50,6 +50,7 @@ import { relationalEngine, sqlDialect } from '../lib/relational-engine.js';
 import { domainPath, layout, packageFile } from './render.js';
 import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
 import { storeTables } from './messaging-stores.js';
+import { reconciliationTables } from './reconciliation-claim.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 
 export { usesRelational };
@@ -362,8 +363,9 @@ export function schemaTables(model) {
     });
     for (const index of record.indexes) indexes.push({ name: index.name, table: record.table, columns: index.columns, unique: false });
   }
-  // Los almacenes de la mensajería (messaging-stores.js): outbox_event y processed_event, las tablas neutrales de keel-core.
-  for (const store of storeTables(model)) {
+  // Los almacenes de la mensajería (messaging-stores.js): outbox_event y processed_event, las tablas neutrales de keel-core;
+  // y la marca del reclamo de reconciliación (reconciliation-claim.js, tramo 11c).
+  for (const store of [...storeTables(model), ...reconciliationTables(model)]) {
     tables.push({
       name: store.table,
       columns: store.columns.map((column) => ({ name: column.name, base: column.base, length: column.length, nullable: column.nullable })),
