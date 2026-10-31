@@ -39,6 +39,7 @@ import { keyFinders, naturalKeyBatchFinder, repositoryArgs } from '../../src/sca
 import { usesGoOutbox, usesGoProcessedEvents } from '../../src/scaffold/messaging.js';
 import { messagingProbes } from './messaging-probes.js';
 import { finderProbes } from './finder-probes.js';
+import { purgeProbes } from './purge-probes.js';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen';
 import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
 import { usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
@@ -75,6 +76,7 @@ const IMPORTS = [
   { path: 'github.com/go-sql-driver/mysql', name: 'mysqldriver' },
   'internal/application',
   'internal/infrastructure/messaging',
+  'internal/infrastructure/scheduler',
   'internal/domain',
   'internal/platform/wire'
 ];
@@ -103,6 +105,7 @@ export function probeFile(model) {
   if (roots.length > 0) parts.push(transactionProbes(model, roots[0]));
   if (usesRequestIdempotency(model)) parts.push(idempotencyProbes(model));
   if (usesGoOutbox(model) || usesGoProcessedEvents(model)) parts.push(messagingProbes(model));
+  parts.push(purgeProbes(model));
   parts.push(patternTables(ctx));
   if (entities.length === 0) return null;
   const content = goFile({ pkg: STORE_PACKAGES[d.engine], imports: IMPORTS, body: `\n${parts.filter(Boolean).join('\n\n')}\n`, module: model.service.goModule, generated: false });

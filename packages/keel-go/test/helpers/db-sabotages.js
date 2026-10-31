@@ -106,6 +106,21 @@ export const DB_SABOTAGES = {
     expect: /_RepeatedKeyIsConflict|_RaceOneWins/
   },
   // La mensajería (incremento 9). El lease del reclamo en el PASADO: lo reclamado vuelve a salir en la pasada siguiente.
+  // La purga del outbox corta por created_at y no por published_at: se lleva también lo PENDIENTE que es viejo.
+  purge: {
+    files: new RegExp(`${STORE}purges\\.go$`),
+    from: /"(?:SELECT|DELETE)[^"]*outbox_event[^"]*"/g,
+    to: (statement) => statement.replaceAll('published_at IS NOT NULL AND ', '').replaceAll('published_at', 'created_at'),
+    expect: /^TestPurge_Outbox_KeepsWhatIsPending$/
+  },
+  // Cada lote borra hasta el corte y no hasta su frontera (la corre un siglo): la pasada se lo lleva todo en el primero y el
+  // tope no corta nada.
+  'purge-batch': {
+    files: /^internal\/infrastructure\/scheduler\/purge\.go$/,
+    from: 'n, err := table.DeleteUpTo(ctx, cutoff, edge)',
+    to: 'n, err := table.DeleteUpTo(ctx, cutoff, edge.AddDate(100, 0, 0))',
+    expect: /^TestPurge_\w+_StopsAtItsCap$/
+  },
   lease: { files: new RegExp(`${STORE}outbox\\.go$`), from: 'now.Add(lease), event.ID)', to: 'now.Add(-lease), event.ID)', expect: /^TestOutbox_ClaimsInArrivalOrderWithLease$/ },
   // El reclamo sin SKIP LOCKED: espera a la fila retenida en vez de saltarla.
   'skip-locked': { files: new RegExp(`${STORE}outbox\\.go$`), from: ' FOR UPDATE SKIP LOCKED', to: ' FOR UPDATE', expect: /^TestOutbox_SkipLockedSkipsHeldRows$/ },

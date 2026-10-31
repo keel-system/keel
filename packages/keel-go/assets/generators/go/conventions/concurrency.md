@@ -22,7 +22,8 @@ El orden es fijo y lo cablea `run`:
 1. `/readyz` pasa a 503: el balanceador deja de mandar tráfico;
 2. `srv.Shutdown(ctx)` con el plazo de `server.shutdown-timeout`: no acepta conexiones nuevas y espera a las
    peticiones en vuelo;
-3. se paran los consumidores y el reloj;
+3. se paran los consumidores y el reloj, que no empieza otra pasada y **espera** a la que está en vuelo (corre sin
+   la cancelación: cortarla a medias dejaría filas reclamadas sin trabajo hecho);
 4. se drena el relay del outbox;
 5. se cierran los clientes y el pool.
 

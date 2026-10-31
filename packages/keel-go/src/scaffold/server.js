@@ -27,6 +27,8 @@ import { IDEMPOTENCY_STORE, usesRequestIdempotency } from './request-idempotency
 import { CALLER_ROLES, SECURITY_IMPORT, settingsFromConfig, usesRoleCheck } from './security.js';
 import { securityCases } from '@keel-system/keel-core/gen/api-cases';
 import { securityPlan } from '@keel-system/keel-core/gen/features';
+import { SCHEDULER_IMPORT, scheduledServices, tasksFunc, usesScheduling } from './scheduling.js';
+import { tablePurges } from './purge.js';
 
 export function generate(model) {
   const { server } = layout(model);
@@ -70,7 +72,8 @@ function mainGo(model) {
       MESSAGING_IMPORT,
       RABBITMQ_IMPORT,
       KAFKA_IMPORT,
-      SNSSQS_IMPORT
+      SNSSQS_IMPORT,
+      SCHEDULER_IMPORT
     ],
     body: `
 func main() {
@@ -106,7 +109,7 @@ ${usesApi(model) ? apiWiring(model) : PROBES_WIRING}
 			return fmt.Errorf("servir HTTP: %w", err)
 		}
 		return nil
-	})${wiresMessaging(model) ? workers(model) : ''}
+	})${wiresMessaging(model) ? workers(model) : ''}${usesScheduling(model) ? CLOCK_WORKER : ''}
 	group.Go(func() error {
 		<-groupCtx.Done()
 		probes.StartDraining()
@@ -178,8 +181,45 @@ ${serve}`;
 ${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
 	useCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}
-${messaging ? listenersWiring(model, store) : ''}${serve}`;
+${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
 }
+
+// El reloj (tramo 10b): las tareas de las operaciones con schedule, que despachan por los casos de uso, y las purgas de
+// las tablas del generador, con el SQL del adaptador del motor. Un cron inválido no deja arrancar.
+function schedulingWiring(model, store) {
+  const lines = [`	schedulingSettings, err := scheduler.SettingsFrom(cfg)
+	if err != nil {
+		return fmt.Errorf("configuración del reloj: %w", err)
+	}
+	var tasks []scheduler.Task`];
+  for (const { service } of scheduledServices(model)) lines.push(`	tasks = append(tasks, scheduler.${tasksFunc(service)}(useCases)...)`);
+  const purges = tablePurges(model);
+  if (purges.length > 0) {
+    const tasks = purges.map((purge) => `			scheduler.PurgeTask(${JSON.stringify(purge.what)}, purges.${purge.field}, ${store.name}.${purge.constructor}(transactions), logger),`);
+    lines.push(`	purges, err := scheduler.PurgeSettingsFrom(cfg)
+	if err != nil {
+		return fmt.Errorf("configuración de las purgas: %w", err)
+	}
+	// Las purgas solo con base: el perfil test no la tiene.
+	if database.Enabled {
+		tasks = append(tasks,
+${tasks.join('\n')}
+		)
+	}`);
+  }
+  lines.push(`	clock, err := scheduler.New(schedulingSettings, tasks, logger)
+	if err != nil {
+		return err
+	}`);
+  return `${lines.join('\n')}\n`;
+}
+
+// El reloj en el errgroup: al cancelarse el contexto no empieza otra pasada y espera a la que está en vuelo, antes de que
+// se cierre la base.
+const CLOCK_WORKER = `
+	group.Go(func() error {
+		return clock.Run(groupCtx)
+	})`;
 
 // La mensajería en el arranque (incremento 9): la configuración del perfil, los adaptadores del broker que escribe el
 // agente (cmd/server/broker.go) y el puente, que necesitan los repositorios. Va antes de los casos de uso.

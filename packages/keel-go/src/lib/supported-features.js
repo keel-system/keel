@@ -15,6 +15,7 @@ import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { GO_PROJECTION } from './go-projection.js';
+import { messageComponents } from '../scaffold/services.js';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
@@ -54,7 +55,14 @@ export function pendingLayers(layers = null) {
  */
 const PENDING_OPERATION_FEATURES = [
   { key: 'idempotency', what: 'idempotency (el almacén, la firma del comando y el gate check-idempotency.sh)', increment: 'incremento 10' },
-  { key: 'schedule', what: 'schedule (el reloj que dispara la operación)', increment: 'incremento 10' },
+  // El reloj (tramo 10b) ya se genera; el RECLAMO del lote de un barrido que mueve estados, no todavía (10c): la tarea lo
+  // dispara y el handler sale sin el método que reparte las filas entre réplicas.
+  {
+    key: 'schedule',
+    what: 'un barrido con transiciones (el reclamo de su lote entre réplicas)',
+    increment: 'incremento 10c',
+    applies: (operation) => (operation.transitions ?? []).length > 0
+  },
   { key: 'cache', what: 'cache (la caché de la consulta)', increment: 'incremento 13' }
 ];
 
@@ -85,16 +93,19 @@ export function checkSupportedFeatures(manifest, layers) {
   } else if (declared.includes('persistence')) {
     errors.push(...unmeasuredShapes(manifest, layers));
   }
+  errors.push(...scheduledWithArguments(manifest, layers));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
-    const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
+    const names = operations
+      .filter(([, operation]) => operation?.[feature.key] != null && (feature.applies?.(operation) ?? true))
+      .map(([name]) => name);
     if (names.length === 0) continue;
-    // La idempotencia de petición se adelantó al incremento 7 sobre la persistencia relacional: sale el registro, la
-    // firma y la cabecera. Queda lo que necesita el reloj y el gate.
+    // La idempotencia de petición se adelantó al incremento 7 sobre la persistencia relacional (el registro, la firma y
+    // la cabecera) y su purga llegó con el reloj (10b). Queda el gate.
     if (feature.key === 'idempotency' && declared.includes('persistence') && !documentPersistence(layers)) {
       warnings.push(
         `use-cases: ${names.join(', ')} declara${names.length === 1 ? '' : 'n'} idempotency; keel-go genera el registro, la firma del ` +
-          'mensaje y la cabecera, pero no la purga de las claves caducadas ni el gate check-idempotency.sh (llegan en el incremento 10 de PLAN-KEEL-GO.md).'
+          'mensaje, la cabecera y la purga de las claves caducadas, pero no el gate check-idempotency.sh (llega en el tramo 10d de PLAN-KEEL-GO.md).'
       );
       continue;
     }
@@ -140,6 +151,29 @@ function unmeasuredShapes(manifest, layers) {
     }
   }
   return errors;
+}
+
+/**
+ * Una operación por reloj cuyo mensaje lleva campos: la tarea la despacha sin argumentos, y no hay de dónde sacarlos. En
+ * keel-dotnet sale un TODO en el scheduler; en Go la tarea es código generado, sin TODO posible. Ninguna fixture la declara.
+ */
+function scheduledWithArguments(manifest, layers) {
+  const operations = Object.entries(layers?.['use-cases']?.operations ?? {}).filter(([, operation]) => operation?.schedule);
+  if (operations.length === 0) return [];
+  let model;
+  try {
+    model = buildModel({ manifest, layers, stack: resolveStack(null, layers), projection: GO_PROJECTION });
+  } catch {
+    return [];
+  }
+  return model.services
+    .flatMap((service) => service.operations)
+    .filter((operation) => operation.schedule && messageComponents(operation, model).length > 0)
+    .map(
+      (operation) =>
+        `use-cases: ${operation.name} declara schedule y su mensaje lleva campos (${messageComponents(operation, model).map((c) => c.name).join(', ')}); ` +
+        'el reloj la despacha sin argumentos y keel-go no tiene de dónde sacarlos (ninguna fixture lo declara: sin red que lo mida).'
+    );
 }
 
 /**

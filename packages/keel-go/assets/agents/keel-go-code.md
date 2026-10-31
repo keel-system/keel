@@ -62,6 +62,11 @@ escenario que ya estaba en verde.
      handler, con el algoritmo de su nota y de `flow-fidelity.md` § La idempotencia de petición (reclamar PRIMERO
      con `Save`, reproducir la respuesta sin re-ejecutar). No escribas otro registro ni toques `UseCases` o el
      endpoint para esto.
+   - **Las operaciones por reloj** (`schedule`): la tarea (`internal/infrastructure/scheduler/<grupo>_tasks.go`), su
+     cron con el segundo repartido y el reloj son de build. Tú escribes el handler como cualquier otro, con su nota:
+     corre en TODAS las réplicas a la vez, y si dice SIN TRANSACCIÓN ABARCADORA (la despacha con
+     `application.WithoutTransaction(ctx)`) cada escritura del repositorio confirma la suya. No toques el cron ni el
+     despacho para «arreglar» un flujo.
    - **Los mapeos**: un `<entidad>_mapper.go` sin la cabecera es uno que build no supo derivar entero; su TODO
      nombra el campo.
    - **El broker**, si el diseño tiene capa `messaging`: `cmd/server/broker.go` (sin la cabecera) es tuyo y es el

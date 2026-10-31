@@ -13,7 +13,7 @@
 // que keel-go todavía no genera (el repositorio, la idempotencia, el correo, los clientes salientes) llega con su
 // incremento: el handler de hoy solo recibe lo que existe.
 
-import { dispatchNote } from '@keel-system/keel-core/gen';
+import { dispatchNote, scheduleDispatch } from '@keel-system/keel-core/gen';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
@@ -26,7 +26,7 @@ import { alignRows, commentLines, goString } from '../lib/go-source.js';
 import { dataImports, wireTag } from './dtos.js';
 import { sentinelOf } from './errors.js';
 import { IDEMPOTENCY_STORE, idempotencyMethods, idempotencyNotes, usesRegistry } from './request-idempotency.js';
-import { appType, applicationPath, docComment, domainPath, goTypeName, isOptional, layout, packageFile } from './render.js';
+import { appType, applicationPath, docComment, domainPath, goFileName, goTypeName, isOptional, layout, packageFile } from './render.js';
 import { ownershipNotes } from '@keel-system/keel-core/gen/ownership';
 import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity } from './security.js';
 
@@ -286,6 +286,7 @@ function handlerNotes(model, operation) {
       hasRole: usesDependencies(model) && roleCheckedOperation(model, operation) ? (role) => `h.${CALLER_ROLES.param}.HasRole(ctx, ${goString(role)})` : null
     })
   );
+  notes.push(...scheduleNotes(model, operation));
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la de todos los generadores.
@@ -313,6 +314,27 @@ function handlerNotes(model, operation) {
     );
   }
   return notes.flatMap((note) => wrap(note));
+}
+
+/**
+ * La nota de una operación disparada por reloj: cómo la despacha su tarea (keel-core/gen/scheduling.js, la misma decisión
+ * que keel-spring, keel-nest y keel-dotnet) y lo que eso le cambia al handler. El archivo de la tarea (`<grupo>_tasks.go`)
+ * se compone aquí para no importar el reloj desde los mensajes.
+ */
+function scheduleNotes(model, operation) {
+  if (!operation.schedule || !usesDependencies(model)) return [];
+  const mode = scheduleDispatch(model, operation);
+  const service = model.services.find((candidate) => candidate.operations.includes(operation));
+  const where = `${layout(model).scheduler.dir}/${goFileName(`${service.className.replace(/Service$/, '')}Tasks`)}.go`;
+  return [
+    `Por reloj (cron ${operation.schedule.cron}): la dispara ${where} en TODAS las réplicas a la vez. Lo que ` +
+      'actúa sobre lo que encuentra tiene que RECLAMARLO (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo.',
+    mode.withoutTransaction
+      ? 'SIN TRANSACCIÓN ABARCADORA: la tarea la despacha con application.WithoutTransaction(ctx), así que cada llamada al ' +
+        'repositorio confirma la SUYA. El orden es el de los commits: reclamar y confirmar, actuar fuera de toda transacción, ' +
+        'confirmar el desenlace. Un fallo en una fila no puede revertir las demás.'
+      : 'Corre en UNA transacción, la del caso de uso: no llama a nadie en medio de su trabajo, así que todo o nada.'
+  ];
 }
 
 /** Parte una nota larga en líneas de comentario legibles. */

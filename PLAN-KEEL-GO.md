@@ -555,12 +555,55 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
     001-G en FALLO y solo él.
   - **`go-check` 116/116**: las nueve fixtures con mensajería también con SNS/SQS (tidy, gofmt, vet, staticcheck y sus
     pruebas) y el paso de licencias del SDK (tidy sin mover un directo, go-licenses en verde y falsado sin Apache-2.0).
-- **Para retomar (cada incremento empieza en un contexto nuevo):** el **incremento 10** (idempotencia, reclamos,
-  rescate, purgas por lotes, scheduling y el gate de idempotencia; corrida `job-dispatch`), que abre también
-  `metering-digest` (mensajería sin api, que entra con el reloj). Una corrida de Kafka o de SNS/SQS (como la 9e) es
-  opcional. Las redes pesadas de una en una y con la máquina descargada: Claude Code mata las tandas largas en segundo
-  plano si se queda sin memoria. El hallazgo neutral de la collation de la sombra en MySQL espera su propia tarea en
-  keel-core.
+- **Inc. 10 — en curso (abierto el 2026-10-31).** Tramos como los de keel-nest y keel-dotnet: la idempotencia de
+  petición ya estaba (7e) y la deduplicación de mensajes también (9b); quedan 10b (reloj y purgas), 10c (reclamos de
+  barrido, rescate y parámetros de despliegue), 10d (el gate `check-idempotency.sh`) y 10e (la corrida,
+  `job-dispatch-cycles`). La reconciliación, la compensación y `lastKnown` van al 11.
+  - **10b, reloj y purgas (hecho, 2026-10-31).** Sin cambio en `keel-core`: el segundo repartido, el despacho y la purga
+    por lotes ya eran neutrales (`keel-core/gen/scheduling.js`, `BATCHED_PURGE`).
+    - `src/scaffold/scheduling.js` → paquete `internal/infrastructure/scheduler` (un adaptador de ENTRADA, como
+      httpapi): `Task` (nombre, cron de seis campos y pasada), `Scheduler` (`New` valida el cron con el PARSER de
+      **robfig/cron/v3 v3.0.1**, MIT y sin dependencias, y rechaza un nombre repetido; `Run` va en el errgroup del
+      arranque con una goroutine por tarea; la siguiente ocurrencia se calcula AL TERMINAR la pasada, así que un tick con
+      la anterior en curso se salta; la pasada corre con `context.WithoutCancel`, y `Run` la espera antes de volver, así
+      que la base se cierra después; cada pasada abre su correlación y un error o un pánico no paran el reloj),
+      `SettingsFrom` (`scheduling.enabled`, apagado en `test`; `scheduling.yaml` es el de keel-nest byte a byte) y un
+      `<Grupo>Tasks(uc)` por grupo, que despacha por `UseCases` con `application.WithoutTransaction(ctx)` o sin él según
+      `scheduleDispatch`. El Cron de la biblioteca NO se usa: solapa las pasadas y no espera a la que está en vuelo.
+    - `src/scaffold/purge.js`: las purgas como datos (las de keel-nest) y su SQL LITERAL en el paquete del motor
+      (`purges.go`: `TablePurge` con `Boundary` y `DeleteUpTo`, cada lote en una transacción NUEVA con `fresh`); el bucle
+      `BatchedPurge`, `PurgeSettingsFrom` (claves y defaults de keel-spring; `idempotency.yaml` el de keel-nest) y
+      `PurgeTask` en el reloj, que define el puerto `PurgeTable`. `cmd/server` registra las purgas solo con base.
+    - La nota del handler dice quién lo dispara y cómo; la frontera deja de avisar del `schedule` y avisa solo del barrido
+      con transiciones (su reclamo, 10c), y la idempotencia solo del gate (10d); rechaza, con motivo, una operación por
+      reloj cuyo mensaje lleva campos (la tarea es código generado, sin TODO posible; ninguna fixture la declara). El
+      agente de código y `concurrency.md` lo enseñan.
+    - **Medido:** `test/scheduling.test.js` (13): segundo y despacho contra el `Scheduler.java` que EMITE keel-spring en
+      las tres fixtures con reloj que keel-go acepta (payout-runs, job-dispatch, job-dispatch-cycles), qué se purga
+      contra keel-nest, la configuración contra keel-spring (lo que el YAML declara es lo que lee `PurgeSettingsFrom`),
+      `scheduling.yaml` e `idempotency.yaml` contra keel-nest y los casos de la prueba emitida contra
+      `batchedPurgeReference`; falsado poniendo el segundo a 0 (cae payout-runs, la única con dos barridos). La prueba
+      emitida `scheduler_test.go` ejecuta el bucle con **`testing/synctest`** (sin esperas reales): cada ocurrencia, el
+      tick saltado con la pasada en vuelo, la espera a la pasada al apagar, el error y el pánico que no paran el reloj, el
+      reloj apagado, el cron de cinco campos rechazado, el cron de cada tarea y el bucle de la purga; falsada a mano
+      (pasada en una goroutine suelta, pasada con la cancelación, frontera del lote corrida). `db-check` **55/55** en
+      PostgreSQL y MySQL, con siete sondas de purga por sujeto con las tres tablas (lotes con instantes repetidos, el
+      tope seguido de la pasada siguiente y lo pendiente del outbox intacto aunque sea viejo); falsado con
+      `--sabotage=purge` (el outbox cortado por `created_at`: cae solo `KeepsWhatIsPending`) y `--sabotage=purge-batch`
+      (cada lote hasta el corte: cae solo `StopsAtItsCap`), en los dos motores. `npm test` 831/831. `go-check` 115/116:
+      el único rojo fue `stock-reservation (mysql)` con «Acceso denegado» al lanzar `server.test.exe` desde
+      `%TEMP%\go-build` (la trampa del antivirus ya medida); repetida a mano con `go test -c` fuera de `%TEMP%`, en verde.
+    - Lo que no mide ninguna red: que un tick dispare de verdad el handler contra la base (lo medirá la corrida del 10e)
+      y el apagado con una pasada en vuelo en el proceso entero (en Windows SIGTERM no ejecuta los hooks).
+      `metering-digest` sigue rechazado: el arranque cablea la persistencia desde la entrada HTTP, y sin api no hay
+      `run` que cablee los casos de uso; entra cuando el arranque los cablee sin ella (antes de la corrida del 10e).
+- **Para retomar (cada incremento empieza en un contexto nuevo):** el **tramo 10c** (reclamos de barrido, rescate y
+  parámetros de despliegue, `service.parameters`, DSL 2.15, como el 10c de keel-dotnet: `src/scaffold/claim.js` y
+  `service-parameters.js`; comprobar primero que keel-go no ignora `service.parameters` EN SILENCIO), con
+  `metering-digest` dentro (el arranque sin api). Después 10d (gate) y 10e (corrida `job-dispatch-cycles`). Una corrida
+  de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
+  Code mata las tandas largas en segundo plano si se queda sin memoria. El hallazgo neutral de la collation de la
+  sombra en MySQL espera su propia tarea en keel-core.
 
 MariaDB, SQL Server y Oracle se quedan rechazados con su motivo hasta que una red los mida, como en keel-nest.
 

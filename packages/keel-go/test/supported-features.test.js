@@ -85,24 +85,35 @@ test('dominio, casos de uso y API se aceptan sin avisos: la API se emite desde e
   assert.deepEqual(warnings, []);
 });
 
-test('una operación con idempotency, schedule o cache avisa nombrándola: sale el handler, no el mecanismo', () => {
+test('una operación con idempotency, un barrido con transiciones o cache avisa nombrándola: sale el handler, no el mecanismo', () => {
   const layers = layersWith('domain', 'api');
-  layers['use-cases'] = { operations: { pay: { idempotency: {} }, sweep: { schedule: {} }, find: { cache: {} }, plain: {} } };
+  const sweep = { schedule: { cron: '* * * * *' }, transitions: [{ entity: 'Job', from: ['queued'], to: 'running' }] };
+  layers['use-cases'] = { operations: { pay: { idempotency: {} }, sweep, tick: { schedule: { cron: '* * * * *' } }, find: { cache: {} }, plain: {} } };
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api'), layers);
   assert.deepEqual(errors, []);
   assert.match(warnings.find((w) => w.includes('idempotency')), /^use-cases: pay declara idempotency .*incremento 10/);
-  assert.match(warnings.find((w) => w.includes('schedule (')), /^use-cases: sweep declara schedule .*incremento 10/);
+  // El reloj ya sale (10b): solo avisa del reclamo del barrido que mueve estados (10c).
+  assert.match(warnings.find((w) => w.includes('barrido')), /^use-cases: sweep declara un barrido con transiciones .*incremento 10c/);
+  assert.ok(!warnings.some((w) => w.includes('tick')));
   assert.match(warnings.find((w) => w.includes('cache (')), /^use-cases: find declara cache .*incremento 13/);
   assert.ok(!warnings.some((w) => w.includes('plain')));
 });
 
-test('con persistencia relacional, la idempotencia ya sale: solo avisa de la purga y del gate del incremento 10', () => {
+test('con persistencia relacional, la idempotencia ya sale, con su purga: solo avisa del gate del tramo 10d', () => {
   const layers = layersWith('domain', 'api', 'persistence');
   layers['use-cases'] = { operations: { pay: { idempotency: {} } } };
   const { warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api', 'persistence'), layers);
   const warning = warnings.find((w) => w.includes('idempotency'));
-  assert.match(warning, /^use-cases: pay declara idempotency; keel-go genera el registro, la firma del mensaje y la cabecera/);
-  assert.match(warning, /purga .* check-idempotency\.sh .*incremento 10/);
+  assert.match(warning, /^use-cases: pay declara idempotency; keel-go genera el registro, la firma del mensaje, la cabecera y la purga/);
+  assert.match(warning, /pero no el gate check-idempotency\.sh .*10d/);
+});
+
+test('una operación por reloj cuyo mensaje lleva campos se rechaza: la tarea no tiene de dónde sacarlos', () => {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'payout-runs'));
+  assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, []);
+  const withInput = structuredClone(layers);
+  withInput['use-cases'].operations.closePayoutRuns.input = { fields: { limit: { type: 'int', required: true } } };
+  assert.match(checkSupportedFeatures(manifest, withInput).errors.join('\n'), /closePayoutRuns declara schedule y su mensaje lleva campos \(limit\)/);
 });
 
 test('la telemetría se rechaza en vez de estamparse sin efecto', () => {

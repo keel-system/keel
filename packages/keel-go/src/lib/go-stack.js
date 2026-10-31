@@ -99,6 +99,12 @@ export const MODULES = {
   'github.com/aws/aws-sdk-go-v2/service/sns': { version: 'v1.47.5', license: 'Apache-2.0', kind: 'require', use: 'cliente de SNS' },
   'github.com/aws/aws-sdk-go-v2/service/sqs': { version: 'v1.52.4', license: 'Apache-2.0', kind: 'require', use: 'cliente de SQS' },
 
+  // El cron de seis campos del reloj (tramo 10b): solo su PARSER (cron.NewParser con el campo de segundos) y el
+  // Schedule.Next que da la siguiente ocurrencia. El bucle es propio (internal/infrastructure/scheduler): el Cron de la
+  // biblioteca solapa las pasadas de una tarea consigo misma y no espera a la que está en vuelo al apagar. Sin
+  // dependencias. La v3.0.1 es de 2020-01-04 y sigue siendo la última: el formato del cron no ha cambiado.
+  'github.com/robfig/cron/v3': { version: 'v3.0.1', license: 'MIT', kind: 'require', use: 'parser del cron de seis campos' },
+
   // Herramientas, por la directiva `tool` de go.mod (`go tool <nombre>`): el proyecto no exige nada instalado
   // aparte de Go.
   // El JUnit de las pruebas, que lee keel-core/gen/junit-scoring.js (su XML real se capturó en el inc. 1).
@@ -136,6 +142,9 @@ export const BROKER_REQUIRES = {
   kafka: ['github.com/twmb/franz-go'],
   snssqs: ['github.com/aws/aws-sdk-go-v2', 'github.com/aws/aws-sdk-go-v2/config', 'github.com/aws/aws-sdk-go-v2/credentials', 'github.com/aws/aws-sdk-go-v2/service/sns', 'github.com/aws/aws-sdk-go-v2/service/sqs']
 };
+
+/** El parser del cron del reloj (tramo 10b). */
+export const SCHEDULING_REQUIRES = ['github.com/robfig/cron/v3'];
 
 /** Las herramientas: todas, siempre. */
 export const TOOLS = Object.entries(MODULES)
