@@ -686,7 +686,16 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       con el dispatcher a `nil`, rojo; tres listeners de Kafka en `broker.go`, verdes, y con el orden cruzado en uno, rojo
       SOLO él; conditionalUniqueness, rojo y verde con la ocupante buscada. La frontera deja de avisar del gate. El
       agente de código y el de calidad lo ejecutan (`idempotency:` en su reporte) y las tres skills de broker lo explican.
-- **Para retomar (cada incremento empieza en un contexto nuevo):** 10e (corrida `job-dispatch-cycles`). Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
+  - **10e, la corrida `job-dispatch-cycles` (hecha, 2026-10-31)** (`docs/corridas/2026-10-31-job-dispatch-cycles-go.md`,
+    workspace `spring-live-test/corrida-job-dispatch-cycles-go`). Por la puerta de `--ready`, sin `--accept-unready`:
+    **12/12 a la primera**, huella **6** (los cuatro handlers, `job_behavior.go` y el `README.md`, todos TODO
+    legítimos), los mismos seis que keel-dotnet y keel-nest; sin `harnessPatches`, sin fixes de `infra/` ni de
+    `go.mod`, sin `design-gaps.yaml` y **sin ningún hueco del generador** (las dos gemelas tuvieron uno). Los escenarios
+    del reloj esperaron al cron real (49, 60 y 76 s), el barrido llama a los dos reclamos generados tal cual, el rescate
+    no corta el lote por una fila (lo dice la nota desde el principio), las pruebas del agente no llevan SQL y
+    `check-idempotency.sh` pasó de ROJO a VERDE. **Con esto el incremento 10 queda cerrado.**
+- **Para retomar (cada incremento empieza en un contexto nuevo):** el incremento 11 (clientes HTTP salientes, circuito
+  propio, reconciliación y arnés WireMock; corrida `stock-reservation`). Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
   Code mata las tandas largas en segundo plano si se queda sin memoria. El hallazgo neutral de la collation de la
   sombra en MySQL espera su propia tarea en keel-core.
 
