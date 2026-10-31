@@ -85,15 +85,15 @@ test('dominio, casos de uso y API se aceptan sin avisos: la API se emite desde e
   assert.deepEqual(warnings, []);
 });
 
-test('una operación con idempotency, un barrido con transiciones o cache avisa nombrándola: sale el handler, no el mecanismo', () => {
+test('una operación con idempotency o cache avisa nombrándola; el barrido con transiciones ya no (su reclamo es del 10c)', () => {
   const layers = layersWith('domain', 'api');
   const sweep = { schedule: { cron: '* * * * *' }, transitions: [{ entity: 'Job', from: ['queued'], to: 'running' }] };
   layers['use-cases'] = { operations: { pay: { idempotency: {} }, sweep, tick: { schedule: { cron: '* * * * *' } }, find: { cache: {} }, plain: {} } };
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api'), layers);
   assert.deepEqual(errors, []);
   assert.match(warnings.find((w) => w.includes('idempotency')), /^use-cases: pay declara idempotency .*incremento 10/);
-  // El reloj ya sale (10b): solo avisa del reclamo del barrido que mueve estados (10c).
-  assert.match(warnings.find((w) => w.includes('barrido')), /^use-cases: sweep declara un barrido con transiciones .*incremento 10c/);
+  // El reloj (10b) y el reclamo del barrido que mueve estados (10c) ya salen: ninguno avisa.
+  assert.ok(!warnings.some((w) => w.includes('sweep') || w.includes('barrido')));
   assert.ok(!warnings.some((w) => w.includes('tick')));
   assert.match(warnings.find((w) => w.includes('cache (')), /^use-cases: find declara cache .*incremento 13/);
   assert.ok(!warnings.some((w) => w.includes('plain')));
@@ -106,6 +106,20 @@ test('con persistencia relacional, la idempotencia ya sale, con su purga: solo a
   const warning = warnings.find((w) => w.includes('idempotency'));
   assert.match(warning, /^use-cases: pay declara idempotency; keel-go genera el registro, la firma del mensaje, la cabecera y la purga/);
   assert.match(warning, /pero no el gate check-idempotency\.sh .*10d/);
+});
+
+test('los parámetros de despliegue entran si los lee un rescate (stalledAfter); el que solo lee un handler o de otro tipo, no', () => {
+  for (const name of ['job-dispatch', 'job-dispatch-cycles']) {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+    assert.deepEqual(checkSupportedFeatures(manifest, layers), { errors: [], warnings: [] }, name);
+  }
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'job-dispatch'));
+  const unlinked = structuredClone(manifest);
+  unlinked.parameters.region = { type: 'string', description: 'Región.', testValue: 'eu' };
+  assert.match(checkSupportedFeatures(unlinked, layers).errors.join('\n'), /service\.parameters\.region: keel-go solo cablea un parámetro hasta el rescate/);
+  const decimal = structuredClone(manifest);
+  decimal.parameters.abandonAfterMinutes.type = 'decimal';
+  assert.match(checkSupportedFeatures(decimal, layers).errors.join('\n'), /service\.parameters\.abandonAfterMinutes: decimal — keel-go solo lee parámetros int, long o string/);
 });
 
 test('una operación por reloj cuyo mensaje lleva campos se rechaza: la tarea no tiene de dónde sacarlos', () => {

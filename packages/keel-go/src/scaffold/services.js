@@ -333,7 +333,22 @@ function scheduleNotes(model, operation) {
       ? 'SIN TRANSACCIÓN ABARCADORA: la tarea la despacha con application.WithoutTransaction(ctx), así que cada llamada al ' +
         'repositorio confirma la SUYA. El orden es el de los commits: reclamar y confirmar, actuar fuera de toda transacción, ' +
         'confirmar el desenlace. Un fallo en una fila no puede revertir las demás.'
-      : 'Corre en UNA transacción, la del caso de uso: no llama a nadie en medio de su trabajo, así que todo o nada.'
+      : 'Corre en UNA transacción, la del caso de uso: no llama a nadie en medio de su trabajo, así que todo o nada.',
+    // El reclamo y el rescate ya los genera build (claim.js, tramo 10c): el handler los llama, no los reescribe.
+    ...(operation.claim ?? []).map((claim) => {
+      const call = `h.${repositoryParam({ name: claim.entity })}.${goExported(claim.method)}(ctx)`;
+      return claim.stalled
+        ? `EL RESCATE YA ESTÁ GENERADO: ${call} devuelve los ${claim.entity} que llevan atascados en ` +
+            `${claim.stalled.state} más que su plazo y que ESTA réplica se llevó, SIGUIENDO en ${claim.stalled.state} con ${claim.stalled.stampField} ` +
+            `renovado. La transición a ${claim.to} la haces TÚ con el método del agregado (fija los campos que ${claim.to} exige) y la guardas. ` +
+            'No escribas otro rescate, ni un finder por estado, ni una cota propia. Un fallo en una fila NO corta el lote: cada Save se ' +
+            'comprueba por separado, y un conflicto de versión es la carrera con quien saca la fila del estado a la vez (la ganó él): sigue ' +
+            'con la siguiente. Sin eso, una sola fila que pierde la carrera deja las demás arrendadas sin rescatar hasta que vuelva a vencer su plazo.'
+        : `EL RECLAMO YA ESTÁ GENERADO: toma el lote con ${call}, que devuelve SOLO los ${claim.entity} ` +
+            `que ESTA réplica se llevó, ya en ${claim.to}${claim.stamps ? ` y con ${claim.stamps.field} estampado` : ''}. El tamaño del lote no se pasa: ` +
+            `lo acota el adaptador con sweep.${claim.sweepKey}.batch-size. No escribas otro reclamo (ni un finder por estado ni un lock): ` +
+            'un segundo mecanismo en paralelo no reclama nada. Actúa sobre cada fila y guárdala: un fallo en una no revierte las demás.';
+    })
   ];
 }
 

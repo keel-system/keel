@@ -31,6 +31,8 @@ import * as useCases from './use-cases.js';
 import * as persistence from './persistence.js';
 import * as persistenceRuntime from './persistence-runtime.js';
 import * as repositories from './repositories.js';
+import * as serviceParameters from './service-parameters.js';
+import * as claim from './claim.js';
 import * as requestIdempotency from './request-idempotency.js';
 import * as messaging from './messaging.js';
 import * as messagingStores from './messaging-stores.js';
@@ -75,6 +77,8 @@ const GENERATORS = [
   persistence,
   persistenceRuntime,
   repositories,
+  serviceParameters,
+  claim,
   requestIdempotency,
   messaging,
   messagingStores,

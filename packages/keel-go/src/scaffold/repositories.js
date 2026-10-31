@@ -41,6 +41,8 @@ import { physicalType } from './persistence.js';
 import { adapterFinderMethods, entityFinders, filtersBlocks, filtersUses, portFinderMethods, filterStructs } from './finders.js';
 import { docComment, domainPath, goFileName, layout, localName, packageFile } from './render.js';
 import { emitsEvents, usesGoOutbox } from './messaging.js';
+import { adapterClaimMethods, claimDependencies, portClaimMethods } from './claim.js';
+import { PARAMETERS_VAR } from './service-parameters.js';
 
 // Un identificador en el SQL del adaptador, citado como en el baseline si es una palabra reservada (`"primary"` en
 // PostgreSQL, `` `primary` `` en MySQL).
@@ -90,10 +92,14 @@ const ADAPTER_IMPORTS = [
 
 /**
  * Los argumentos del constructor del adaptador de una raíz: las transacciones y, si la raíz emite eventos, el puente de
- * la mensajería (messaging.js). Lo usan el arranque y las sondas de db-check, que pasan `nil` (rehidratan, no emiten).
+ * la mensajería (messaging.js) y, si se reclama por barrido, los barridos y los parámetros que lea un rescate (claim.js).
+ * Lo usan el arranque y las sondas de db-check, que pasan `nil` como puente (rehidratan, no emiten).
  */
-export function repositoryArgs(model, entity, tx, bridge) {
-  return emitsEvents(model, entity) ? `${tx}, ${bridge}` : tx;
+export function repositoryArgs(model, entity, tx, bridge, { sweeps = 'sweeps', parameters = PARAMETERS_VAR } = {}) {
+  const args = [tx];
+  if (emitsEvents(model, entity)) args.push(bridge);
+  for (const dep of claimDependencies(model, entity)) args.push(dep.field === 'sweeps' ? sweeps : parameters);
+  return args.join(', ');
 }
 
 /** El nombre del puerto de una raíz: `ProductRepository`. */
@@ -217,6 +223,7 @@ function portBody(model, entity) {
     );
   }
   for (const [doc, signature] of portFinderMethods(model, entity)) method(doc, signature);
+  for (const [doc, signature] of portClaimMethods(model, entity)) method(doc, signature);
   if (isPaginated(model, entity)) {
     method('una página de agregados, en el orden pedido y con el id como desempate. Una propiedad de orden que no existe es un error.', `List(ctx context.Context, pageable Pageable) (Page[*${name}], error)`);
   }
@@ -509,13 +516,19 @@ function adapterBody(model, entity, uses) {
   const eventsDoc = events
     ? ` Al guardar, entrega al puente de la mensajería los eventos que drena del agregado: ${usesGoOutbox(model) ? 'sus filas del outbox van en la MISMA transacción del cambio' : 'se publican DESPUÉS del commit'}.`
     : '';
+  const deps = [{ field: 'tx', type: '*Transactions' }, ...(events ? [{ field: 'events', type: '*messaging.Bridge' }] : []), ...claimDependencies(model, entity)];
+  const built = [
+    events ? ' y el puente de la mensajería' : '',
+    deps.some((dep) => dep.field === 'sweeps') ? ', con los barridos del perfil' : '',
+    deps.some((dep) => dep.field === 'parameters') ? ' y los parámetros de despliegue que lee su rescate' : ''
+  ].join('');
   parts.push(`${docComment(type, `el adaptador de domain.${portName(entity)} sobre ${sqlDialect(model).label}: el SQL lo escribe build y el mapeo fila ↔ dominio va campo a campo, sin reflexión. Se une a la transacción que abrió el caso de uso; sin ella, cada lectura va sola y cada escritura abre la suya.${eventsDoc}`)}type ${type} struct {
-${events ? '\ttx     *Transactions\n\tevents *messaging.Bridge' : '\ttx *Transactions'}
+${alignRows(deps.map((dep) => ({ indent: '\t', cells: [dep.field, dep.type] }))).join('\n')}
 }
 
-// New${type} construye el adaptador sobre las transacciones del servicio${events ? ' y el puente de la mensajería' : ''}.
-func New${type}(${events ? 'tx *Transactions, events *messaging.Bridge' : 'tx *Transactions'}) *${type} {
-	return &${type}{${events ? 'tx: tx, events: events' : 'tx: tx'}}
+// New${type} construye el adaptador sobre las transacciones del servicio${built}.
+func New${type}(${deps.map((dep) => `${dep.field} ${dep.type}`).join(', ')}) *${type} {
+	return &${type}{${deps.map((dep) => `${dep.field}: ${dep.field}`).join(', ')}}
 }
 
 var _ domain.${portName(entity)} = (*${type})(nil)`);
@@ -575,6 +588,7 @@ ${batchLoad(model, batch.column, null, batch.plural, uses, batch.cast)}
   if (isPaginated(model, entity) || entityFinders(model, entity).length > 0) parts.push(sortableMap(model, entity));
   if (isPaginated(model, entity)) parts.push(listMethod(model, entity, root, type));
   parts.push(...adapterFinderMethods(model, entity, { type, root, sortable: `${lower(name)}Sortable`, writeValue }));
+  parts.push(...adapterClaimMethods(model, entity, type));
 
   // ─── Escrituras
   parts.push(saveMethods(model, entity, root, tables, type, uses));

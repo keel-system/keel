@@ -28,7 +28,8 @@ import { DATABASES, selectedInfra } from '@keel-system/keel-core/gen/infra-catal
 import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from '@keel-system/keel-core/gen/junit-scoring';
 import { resetDbScript } from '@keel-system/keel-core/gen/infra-scripts';
 import { usesApi, usesRelational } from '@keel-system/keel-core/gen/features';
-import { goString } from '../lib/go-source.js';
+import { alignRows, goString } from '../lib/go-source.js';
+import { missingClockCountSql, rescueProbes, stallSql } from '@keel-system/keel-core/gen';
 import { GO_INFRA } from './infra.js';
 import { layout, packageFile } from './render.js';
 import { CREDENTIALS_FILE, CREDENTIALS_IMPORTS, closingCredentialExpression, credentialsBody, smokeCredentialsCase } from './identity-harness.js';
@@ -77,6 +78,92 @@ export function dbProbe(model) {
     argv: entry.cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName }),
     label: entry.label
   };
+}
+
+// ─── El rescate de un barrido (tramo 10c) ────────────────────────────────────────────────────────
+
+/**
+ * Los helpers con los que un flujo fabrica la precondición del RESCATE: una fila en vuelo que una réplica muerta dejó a
+ * medias (`StallInFlight`), la misma recién entrada en vuelo, que el rescate NO debe tocar (`PutInFlight`), y cuántas
+ * quedaron en vuelo sin reloj (`InFlightWithoutClock`, que vale cero siempre). Los mismos que el AbstractFlowIT de
+ * keel-spring, el flow.ts de keel-nest y el FlowTest.cs de keel-dotnet, con las mismas sentencias
+ * (keel-core/gen/scheduling.js) y los literales del motor de su catálogo. Sin un motor que declare esos literales no se
+ * emiten: un UPDATE que no casa dejaría el escenario verde sin haber atascado nada.
+ */
+export function rescueMembers(model) {
+  if (!dbProbe(model)) return [];
+  const entry = DATABASES[model.stack?.database ?? 'postgresql'];
+  if (!entry?.staleTimestamp || !entry?.uuidLiteral) return [];
+  const probes = rescueProbes(model);
+  if (probes.length === 0) return [];
+  const now = entry.nowTimestamp ?? 'CURRENT_TIMESTAMP';
+  const rows = alignRows(
+    probes.map((probe) => ({
+      indent: '\t',
+      cells: [
+        `${goString(probe.operation)}:`,
+        `{${goString(stallSql({ ...probe, clockSql: entry.staleTimestamp }))}, ${goString(stallSql({ ...probe, clockSql: now }))}, ${goString(missingClockCountSql(probe))}},`
+      ]
+    }))
+  );
+  const known = probes.map((probe) => probe.operation).join(', ');
+  return [
+    String.raw`// rescue son las sentencias del rescate de un barrido: atascar una fila, ponerla en vuelo ahora y contar las que
+// quedaron en vuelo sin reloj. Las dos primeras acaban en «WHERE id = »: el id lo pone idLiteral.
+type rescue struct {
+	stall, put, missing string
+}
+
+// rescues son las sentencias del rescate de cada barrido que lo tiene: ${known}.
+var rescues = map[string]rescue{
+${rows.join('\n')}
+}
+
+// StallInFlight deja la fila id EN VUELO con el reloj infinitamente rancio: el estado exacto en el que queda una réplica
+// que murió con ella en la mano, que es lo que el rescate busca. No dispara el barrido —lo dispara su cron, como en
+// producción— y no siembra la fila: mueve una creada por la API.
+func (s *Scenario) StallInFlight(operation, id string) {
+	s.Helper()
+	s.Db(s.rescueOf(operation).stall + idLiteral(id))
+}
+
+// PutInFlight es lo mismo con el reloj a AHORA: la fila acaba de entrar en vuelo y hay alguien trabajando en ella. Es la
+// mitad que separa rescatar de robarle el trabajo a quien lo está haciendo: un rescate sin cota temporal pasa el
+// escenario del rescate y falla aquí.
+func (s *Scenario) PutInFlight(operation, id string) {
+	s.Helper()
+	s.Db(s.rescueOf(operation).put + idLiteral(id))
+}
+
+// InFlightWithoutClock es cuántas filas quedaron EN VUELO con el reloj sin estampar. Tiene que valer cero siempre: si el
+// reclamo mueve el estado sin estampar la marca en el MISMO UPDATE, la fila que caiga en esa ventana queda irrescatable.
+func (s *Scenario) InFlightWithoutClock(operation string) int {
+	s.Helper()
+	output := strings.Fields(s.Db(s.rescueOf(operation).missing))
+	if len(output) == 0 {
+		s.Fatalf("la cuenta de filas sin reloj de %s salió vacía", operation)
+	}
+	count, err := strconv.Atoi(output[len(output)-1])
+	if err != nil {
+		s.Fatalf("la cuenta de filas sin reloj no es un número: %q", output)
+	}
+	return count
+}
+
+func (s *Scenario) rescueOf(operation string) rescue {
+	s.Helper()
+	statements, ok := rescues[operation]
+	if !ok {
+		s.Fatalf("no hay rescate para el barrido %q. Los que lo tienen: ${known}", operation)
+	}
+	return statements
+}
+
+// idLiteral es el id como literal de ${entry.label}.
+func idLiteral(id string) string {
+	return ${goString(entry.uuidLiteral.prefix)} + id + ${goString(entry.uuidLiteral.suffix)}
+}`
+  ];
 }
 
 function integrationFile(model, { imports, body, generated = true }) {
@@ -131,8 +218,9 @@ func (s *Scenario) Db(sql string) string {
 	return out
 }`);
   }
+  helpers.push(...rescueMembers(model));
   return integrationFile(model, {
-    imports: ['fmt', 'net/http', 'runtime/debug', 'strings', 'sync', 'testing', 'time'],
+    imports: ['fmt', 'net/http', 'runtime/debug', 'strconv', 'strings', 'sync', 'testing', 'time'],
     body: String.raw`
 ${api ? `// RouteBase es el prefijo de todas las rutas del servicio (basePath del diseño + versión).
 const RouteBase = ${goString(model.api.routeBase)}

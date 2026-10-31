@@ -121,6 +121,20 @@ export const DB_SABOTAGES = {
     to: 'n, err := table.DeleteUpTo(ctx, cutoff, edge.AddDate(100, 0, 0))',
     expect: /^TestPurge_\w+_StopsAtItsCap$/
   },
+  // Los reclamos de barrido (tramo 10c). Sin SKIP LOCKED, el reclamo espera a la fila que retiene otra réplica.
+  'claim-skip-locked': { files: REPOSITORY, from: ' FOR UPDATE SKIP LOCKED"', to: ' FOR UPDATE"', expect: /^TestClaim_\w+_SkipsARowHeldByAnotherReplica$/ },
+  // El rescate sin cota temporal (la cota, una hora en el FUTURO): se lleva también lo que acaba de entrar en vuelo.
+  'claim-stale': { files: REPOSITORY, from: 'staleBefore := time.Now().UTC().Add(-', to: 'staleBefore := time.Now().UTC().Add(time.Hour).Add(0 * -', expect: /^TestRescue_\w+_(OnlyWhatIsAbandoned\w+|TheHarnessStatementsBuildItsPrecondition)$/ },
+  // MySQL: el reclamo en el REPEATABLE READ por defecto, que bloquea los huecos entre claves.
+  'claim-isolation': {
+    engines: ['mysql'],
+    files: new RegExp(`${STORE}sweep\\.go$`),
+    from: 'sql.TxOptions{Isolation: sql.LevelReadCommitted}',
+    to: 'sql.TxOptions{}',
+    expect: /^TestClaim_\w+_LocksTheBatchWithoutGaps$/
+  },
+  // El arnés de flujos atasca todas las filas MENOS la pedida: la sonda lee sus sentencias de lo emitido, así que lo ve.
+  'harness-stall': { files: /^tests\/integration\/flow_test\.go$/, from: /(UPDATE [^"\n]*) WHERE id = "/g, to: '$1 WHERE id <> "', expect: /^TestRescue_\w+_TheHarnessStatementsBuildItsPrecondition$/ },
   lease: { files: new RegExp(`${STORE}outbox\\.go$`), from: 'now.Add(lease), event.ID)', to: 'now.Add(-lease), event.ID)', expect: /^TestOutbox_ClaimsInArrivalOrderWithLease$/ },
   // El reclamo sin SKIP LOCKED: espera a la fila retenida en vez de saltarla.
   'skip-locked': { files: new RegExp(`${STORE}outbox\\.go$`), from: ' FOR UPDATE SKIP LOCKED', to: ' FOR UPDATE', expect: /^TestOutbox_SkipLockedSkipsHeldRows$/ },

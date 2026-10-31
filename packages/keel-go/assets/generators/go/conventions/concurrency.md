@@ -29,6 +29,16 @@ El orden es fijo y lo cablea `run`:
 
 En Windows SIGTERM no llega: la prueba emitida del arranque cancela el contexto, que recorre el mismo camino.
 
+## Varias réplicas
+
+El reloj dispara cada tarea en TODAS las réplicas a la vez: es «una vez por instancia», no «una vez en el clúster». Lo
+que actúa sobre las filas que encuentra tiene que **reclamarlas**, no solo leerlas. Para un barrido que mueve estados el
+reclamo ya lo genera build en el puerto y el adaptador de la raíz (`Claim<…>(ctx)`): candidatos con
+`FOR UPDATE SKIP LOCKED`, un `UPDATE` condicional por fila (1 fila afectada = es mía) y su propia transacción, que se
+niega a correr dentro de otra. El rescate de un estado en vuelo no lo cambia: lo ARRIENDA renovando su reloj, y solo se
+lleva lo más viejo que su plazo. Leer el lote con un finder y marcarlo después sale verde con una réplica y se lo da
+entero a todas en producción.
+
 ## Datos compartidos
 
 - Lo que comparten varias goroutines lleva su `sync.Mutex` (o es un `atomic.*`) **al lado**, con un comentario

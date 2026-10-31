@@ -597,11 +597,57 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       y el apagado con una pasada en vuelo en el proceso entero (en Windows SIGTERM no ejecuta los hooks).
       `metering-digest` sigue rechazado: el arranque cablea la persistencia desde la entrada HTTP, y sin api no hay
       `run` que cablee los casos de uso; entra cuando el arranque los cablee sin ella (antes de la corrida del 10e).
-- **Para retomar (cada incremento empieza en un contexto nuevo):** el **tramo 10c** (reclamos de barrido, rescate y
-  parámetros de despliegue, `service.parameters`, DSL 2.15, como el 10c de keel-dotnet: `src/scaffold/claim.js` y
-  `service-parameters.js`; comprobar primero que keel-go no ignora `service.parameters` EN SILENCIO), con
-  `metering-digest` dentro (el arranque sin api). Después 10d (gate) y 10e (corrida `job-dispatch-cycles`). Una corrida
-  de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
+  - **10c, reclamos de barrido, rescate y parámetros de despliegue (hecho salvo metering-digest, 2026-10-31).** Sin
+    cambio en `keel-core`: el orden de los candidatos, las claves de `sweep.*`, las sentencias del rescate y el gradiente
+    de los parámetros ya eran neutrales.
+    - **El hueco de frontera, confirmado y cerrado**: keel-go ignoraba EN SILENCIO `service.parameters` (job-dispatch y
+      job-dispatch-cycles pasaban la frontera sin aviso). `src/scaffold/service-parameters.js` emite el value object de
+      dominio `<Servicio>Parameters` (campos sin exportar, `New<Servicio>Parameters(*T…) (X, error)` con las guardas y
+      las frases de los otros tres en minúscula y sin punto, como pide ST1005), su prueba emitida (el valor de prueba,
+      el ausente y cada cota rota), el lector `internal/infrastructure/parameters` (`From(cfg)`, sin defaults: el
+      gradiente es el del fragmento) con la suya, y el fragmento de cada perfil, el de keel-nest y keel-dotnet byte a
+      byte. El arranque lo lee justo tras la configuración. La frontera rechaza, con motivo, el parámetro que solo leería
+      un handler (los argumentos de su constructor los fija build; llega con catalog-extended y payment-checkout, inc. 13)
+      y el de tipo decimal o boolean.
+    - `src/scaffold/claim.js`: un método por reclamo en el puerto y en el adaptador (`Claim<…>(ctx) ([]*E, error)`):
+      candidatos con `FOR UPDATE SKIP LOCKED` (`claimCandidates[ID]`, genérico) y un UPDATE condicional por fila, SQL
+      literal, en una transacción NUEVA (`Transactions.fresh` con `claimOptions`: READ COMMITTED en MySQL); la cola
+      estampa el reloj en el mismo UPDATE; el rescate solo se lleva lo más viejo que su plazo (del parámetro o de
+      `sweep.*`) y ARRIENDA sin cambiar el estado; ninguno sube la versión. Como en keel-dotnet, **se niega a correr con
+      una transacción abierta en el contexto** (`ownTransaction`). `SweepSettings` en el paquete del motor
+      (`DefaultSweepSettings`, `SweepSettingsFrom`, con prueba emitida) y `sweep.yaml`, el de keel-nest y keel-dotnet
+      byte a byte; el constructor del adaptador recibe los barridos y, si un rescate lo lee, los parámetros
+      (`repositoryArgs`). La nota del handler dice que el reclamo y el rescate ya están generados y cómo se llaman; el
+      arnés gana `StallInFlight`, `PutInFlight` e `InFlightWithoutClock` (con `idLiteral`) con las sentencias de
+      keel-core; la frontera deja de avisar del barrido; `keel-go-code.md` y `concurrency.md` lo enseñan.
+    - **Medido:** `test/claim.test.js` (11) y `test/service-parameters.test.js` (4): el puerto y el adaptador de cada
+      reclamo en las tres fixtures con barrido que keel-go genera, `sweep.yaml` contra keel-nest, keel-dotnet y
+      keel-spring, el rescate que lee su plazo del parámetro, MySQL (`?` posicional, READ COMMITTED, `UUID_TO_BIN`), las
+      sentencias del arnés contra keel-nest y keel-dotnet, los fragmentos contra los tres. Sobre job-dispatch (PG),
+      job-dispatch-cycles (MySQL) y payout-runs: gofmt, vet y staticcheck vacíos con y sin `-tags integration` y las
+      pruebas emitidas en verde. `npm test` 851/851. `db-check` en verde en PostgreSQL (16, 16 y 14 sondas) y en MySQL
+      (17, 17 y 15), con las sondas de `scripts/lib/claim-probes.js`: la cola (orden, lote, destino, reloj estampado y la
+      pasada siguiente), dos réplicas a la vez sin repetir, SKIP LOCKED con otra transacción reteniendo una fila, en
+      MySQL los bloqueos sin huecos (`performance_schema.data_locks`), el rescate (solo lo abandonado, arrienda sin cambiar
+      el estado, renovado no se repite), las sentencias del arnés LEÍDAS de `tests/integration/flow_test.go` emitido
+      (`emittedRescues`, la lección del 16e de keel-dotnet) y la negativa a correr dentro de otra transacción. **Falsado
+      por capas**: `--sabotage=claim-skip-locked` (cae solo la de SKIP LOCKED), `claim-stale` (la cota del rescate en el
+      futuro: caen solo las dos del rescate), `harness-stall` (el arnés atasca todas menos la pedida: cae solo la de las
+      sentencias del arnés) y, en MySQL, `claim-isolation` (REPEATABLE READ: cae solo la de los huecos). `go-check`
+      115/116: el único rojo, `stock-reservation (mysql)`, es otra vez el «Acceso denegado» del antivirus en
+      `%TEMP%\go-build`; repetido con `go test -c` fuera de `%TEMP%`, en verde.
+    - **Lo que destapó `go-check`**: la primera pasada salió con nueve rojos, todos el mismo. go-check genera las fixtures
+      saltándose la frontera, y en las que nadie consume los parámetros (catalog-extended y payment-checkout, que leen el
+      suyo desde un handler; job-dispatch-mongo, documental) `serviceParameters` quedaba declarado sin uso: en Go no
+      compila. Ahora el arranque los valida igual sin variable (`if _, err := parameters.From(cfg)`) cuando ningún
+      adaptador los recibe. Ni `npm test` ni las tres fixtures medidas a mano lo veían.
+    - **Lo que queda del tramo: metering-digest.** Generado saltándose la frontera compila, pero su `main.go` solo sirve
+      las sondas: la persistencia, la mensajería y el reloj se cablean dentro de `apiWiring` (`server.js`), y
+      `wiresMessaging` y `usesScheduling` exigen `usesApi`. Hay que sacar ese cableado de la capa api (el servidor HTTP
+      queda solo con las sondas), quitar el rechazo de `messagingErrors` y medirlo con `go-check` y `broker-check`.
+- **Para retomar (cada incremento empieza en un contexto nuevo):** **metering-digest** (el arranque sin api, el resto
+  del 10c: ver arriba). Después 10d (gate `check-idempotency.sh`, con la familia `sweepClaim` sobre el reclamo
+  generado) y 10e (corrida `job-dispatch-cycles`). Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
   Code mata las tandas largas en segundo plano si se queda sin memoria. El hallazgo neutral de la collation de la
   sombra en MySQL espera su propia tarea en keel-core.
 

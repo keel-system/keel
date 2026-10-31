@@ -40,6 +40,7 @@ import { usesGoOutbox, usesGoProcessedEvents } from '../../src/scaffold/messagin
 import { messagingProbes } from './messaging-probes.js';
 import { finderProbes } from './finder-probes.js';
 import { purgeProbes } from './purge-probes.js';
+import { claimProbes } from './claim-probes.js';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen';
 import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
 import { usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
@@ -82,7 +83,7 @@ const IMPORTS = [
 ];
 
 /** La sonda del sujeto: `{ path, content }`. */
-export function probeFile(model) {
+export function probeFile(model, files = []) {
   const ctx = { patterns: new Map(), unsampled: [] };
   const entities = model.entities.filter((entity) => entity.persisted !== false);
   const roots = repositoryRoots(model);
@@ -106,6 +107,7 @@ export function probeFile(model) {
   if (usesRequestIdempotency(model)) parts.push(idempotencyProbes(model));
   if (usesGoOutbox(model) || usesGoProcessedEvents(model)) parts.push(messagingProbes(model));
   parts.push(purgeProbes(model));
+  parts.push(claimProbes(model, files, (root) => repository(model, root)));
   parts.push(patternTables(ctx));
   if (entities.length === 0) return null;
   const content = goFile({ pkg: STORE_PACKAGES[d.engine], imports: IMPORTS, body: `\n${parts.filter(Boolean).join('\n\n')}\n`, module: model.service.goModule, generated: false });
@@ -490,7 +492,7 @@ func dump${vo.name}(v domain.${vo.name}) string {
  * se rehidratan, y una raíz rehidratada no emite nada (la mensajería la miden sus propias sondas).
  */
 function repository(model, root) {
-  return `New${root.name}Repository(${repositoryArgs(model, root, 'probeTx', 'nil')})`;
+  return `New${root.name}Repository(${repositoryArgs(model, root, 'probeTx', 'nil', { sweeps: 'probeSweeps', parameters: 'probeParameters' })})`;
 }
 
 function ensureFunction(model, root) {

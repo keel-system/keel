@@ -66,7 +66,11 @@ escenario que ya estaba en verde.
      cron con el segundo repartido y el reloj son de build. Tú escribes el handler como cualquier otro, con su nota:
      corre en TODAS las réplicas a la vez, y si dice SIN TRANSACCIÓN ABARCADORA (la despacha con
      `application.WithoutTransaction(ctx)`) cada escritura del repositorio confirma la suya. No toques el cron ni el
-     despacho para «arreglar» un flujo.
+     despacho para «arreglar» un flujo. Si el barrido mueve estados, **el reclamo de su lote ya está generado** en el
+     puerto y el adaptador de la raíz (`Claim<…>(ctx)`, con SKIP LOCKED, la cota de `sweep.<clave>.batch-size` y su
+     propia transacción; el rescate de un estado en vuelo lo ARRIENDA sin cambiarlo y lee su plazo del parámetro de
+     despliegue o de `sweep.<clave>.stalled-after-seconds`): el handler lo llama como dice su nota y aplica la
+     transición con el método del agregado. No escribas otro reclamo, ni un finder por estado, ni un lock.
    - **Los mapeos**: un `<entidad>_mapper.go` sin la cabecera es uno que build no supo derivar entero; su TODO
      nombra el campo.
    - **El broker**, si el diseño tiene capa `messaging`: `cmd/server/broker.go` (sin la cabecera) es tuyo y es el

@@ -29,6 +29,8 @@ import { securityCases } from '@keel-system/keel-core/gen/api-cases';
 import { securityPlan } from '@keel-system/keel-core/gen/features';
 import { SCHEDULER_IMPORT, scheduledServices, tasksFunc, usesScheduling } from './scheduling.js';
 import { tablePurges } from './purge.js';
+import { PARAMETERS_IMPORT, PARAMETERS_VAR, usesServiceParameters } from './service-parameters.js';
+import { claimDependencies, usesSweepClaims } from './claim.js';
 
 export function generate(model) {
   const { server } = layout(model);
@@ -73,7 +75,8 @@ function mainGo(model) {
       RABBITMQ_IMPORT,
       KAFKA_IMPORT,
       SNSSQS_IMPORT,
-      SCHEDULER_IMPORT
+      SCHEDULER_IMPORT,
+      PARAMETERS_IMPORT
     ],
     body: `
 func main() {
@@ -96,7 +99,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout 
 	if err != nil {
 		return fmt.Errorf("cargar la configuración: %w", err)
 	}
-${usesApi(model) ? apiWiring(model) : PROBES_WIRING}
+${usesServiceParameters(model) ? parametersWiring(model) : ''}${usesApi(model) ? apiWiring(model) : PROBES_WIRING}
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", srv.Addr)
 	if err != nil {
 		return fmt.Errorf("escuchar en %s: %w", srv.Addr, err)
@@ -128,6 +131,24 @@ ${usesApi(model) ? apiWiring(model) : PROBES_WIRING}
   });
 }
 
+// Los parámetros de despliegue, antes que nada: un valor mal puesto no deja arrancar (el dominio valida sus cotas). Si
+// ningún adaptador los recibe (hoy, solo el rescate que lee su plazo de uno), se validan igual, sin variable: en Go una
+// sin usar no compila.
+function parametersWiring(model) {
+  const consumed = usesApi(model) && repositoryRoots(model).some((root) => claimDependencies(model, root).some((dep) => dep.field === 'parameters'));
+  if (!consumed) {
+    return `	if _, err := parameters.From(cfg); err != nil {
+		return fmt.Errorf("parámetros de despliegue: %w", err)
+	}
+`;
+  }
+  return `	${PARAMETERS_VAR}, err := parameters.From(cfg)
+	if err != nil {
+		return fmt.Errorf("parámetros de despliegue: %w", err)
+	}
+`;
+}
+
 const PROBES_WIRING = `	logger := slog.New(slog.NewJSONHandler(stdout, nil))
 
 	probes := &health.Probes{}
@@ -147,16 +168,13 @@ function apiWiring(model) {
 ${serve}`;
   }
   const { store } = layout(model);
-  const repositories = repositoryRoots(model).map((root) => ({ indent: '\t\t', cells: [`${goExported(repositoryParam(root))}:`, `${store.name}.New${root.name}Repository(transactions),`] }));
+  const repositories = repositoryRoots(model).map((root) => ({
+    indent: '\t\t',
+    cells: [`${goExported(repositoryParam(root))}:`, `${store.name}.New${root.name}Repository(${repositoryArgs(model, root, 'transactions', 'bridge')}),`]
+  }));
   if (usesRoleCheck(model)) repositories.push({ indent: '\t\t', cells: [`${CALLER_ROLES.field}:`, 'security.CallerRoles{},'] });
   if (usesRequestIdempotency(model)) repositories.push({ indent: '\t\t', cells: [`${IDEMPOTENCY_STORE.field}:`, `${store.name}.NewIdempotencyStore(transactions),`] });
   const messaging = wiresMessaging(model);
-  if (messaging) {
-    for (const row of repositories) {
-      const root = repositoryRoots(model).find((candidate) => row.cells[0] === `${goExported(repositoryParam(candidate))}:`);
-      if (root) row.cells[1] = `${store.name}.New${root.name}Repository(${repositoryArgs(model, root, 'transactions', 'bridge')}),`;
-    }
-  }
   return `${logger}
 	database, err := ${store.name}.SettingsFrom(cfg)
 	if err != nil {
@@ -178,10 +196,20 @@ ${serve}`;
 		}
 	}
 	transactions := ${store.name}.NewTransactions(db, database.TransactionTimeout, logger)
-${messaging ? messagingWiring(model) : ''}
+${usesSweepClaims(model) ? sweepsWiring(store) : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
 	useCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}
 ${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
+}
+
+// Los barridos del perfil (tramo 10c): la cota del lote de cada reclamo y el plazo de cada rescate. Un valor que no es un
+// entero positivo no deja arrancar.
+function sweepsWiring(store) {
+  return `	sweeps, err := ${store.name}.SweepSettingsFrom(cfg)
+	if err != nil {
+		return fmt.Errorf("configuración de los barridos: %w", err)
+	}
+`;
 }
 
 // El reloj (tramo 10b): las tareas de las operaciones con schedule, que despachan por los casos de uso, y las purgas de

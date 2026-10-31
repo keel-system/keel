@@ -56,6 +56,8 @@ export function layout(model) {
     // El reloj (tramo 10b): las operaciones con schedule del diseño y las purgas por lotes de las tablas del generador.
     // Un adaptador de ENTRADA, como httpapi: despacha por los casos de uso.
     scheduler: pkg(module, 'internal/infrastructure/scheduler'),
+    // Los parámetros de despliegue del diseño (tramo 10c): los lee de la configuración y los valida el dominio.
+    parameters: pkg(module, 'internal/infrastructure/parameters'),
     // La prueba de la frontera hexagonal: `internal/` solo protege frente a otros módulos, no entre capas.
     architecture: pkg(module, 'internal/architecture'),
     // Las pruebas de flujo (FL-*), de caja negra y tras la restricción `integration`: `go test ./...` no las ve.

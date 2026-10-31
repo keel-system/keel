@@ -55,14 +55,6 @@ export function pendingLayers(layers = null) {
  */
 const PENDING_OPERATION_FEATURES = [
   { key: 'idempotency', what: 'idempotency (el almacén, la firma del comando y el gate check-idempotency.sh)', increment: 'incremento 10' },
-  // El reloj (tramo 10b) ya se genera; el RECLAMO del lote de un barrido que mueve estados, no todavía (10c): la tarea lo
-  // dispara y el handler sale sin el método que reparte las filas entre réplicas.
-  {
-    key: 'schedule',
-    what: 'un barrido con transiciones (el reclamo de su lote entre réplicas)',
-    increment: 'incremento 10c',
-    applies: (operation) => (operation.transitions ?? []).length > 0
-  },
   { key: 'cache', what: 'cache (la caché de la consulta)', increment: 'incremento 13' }
 ];
 
@@ -94,6 +86,7 @@ export function checkSupportedFeatures(manifest, layers) {
     errors.push(...unmeasuredShapes(manifest, layers));
   }
   errors.push(...scheduledWithArguments(manifest, layers));
+  errors.push(...parameterErrors(manifest, layers));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     const names = operations
@@ -148,6 +141,34 @@ function unmeasuredShapes(manifest, layers) {
           }
         }
       }
+    }
+  }
+  return errors;
+}
+
+/**
+ * Los parámetros de despliegue (DSL 2.15) que keel-go todavía no genera. Los lee el dominio validados y los cablea el
+ * arranque, pero solo hasta el adaptador que los usa: el rescate de un barrido (`stalledAfter`, DSL 2.18). Un handler no
+ * los recibe —los argumentos de su constructor los fija build—, así que un parámetro que solo lee una regla saldría sin
+ * nadie que lo leyera; lo declaran catalog-extended y payment-checkout, que keel-go aún rechaza por otras capas, y entra
+ * con ellas. Y un tipo que keel-go no sabe leer (decimal, boolean): ninguna fixture que genere lo declara.
+ */
+function parameterErrors(manifest, layers) {
+  const declared = Object.entries(manifest?.parameters ?? {});
+  if (declared.length === 0) return [];
+  const linked = new Set(
+    Object.values(layers?.['use-cases']?.operations ?? {}).flatMap((operation) => (operation?.transitions ?? []).map((transition) => transition?.stalledAfter?.parameter).filter(Boolean))
+  );
+  const why = 'ninguna fixture que keel-go genere lo declara: sin red que mida lo emitido';
+  const errors = [];
+  for (const [name, spec] of declared) {
+    if (!['int', 'long', 'string'].includes(spec?.type)) {
+      errors.push(`service.parameters.${name}: ${spec?.type} — keel-go solo lee parámetros int, long o string (${why}). Genera este diseño con keel-spring, keel-nest o keel-dotnet.`);
+    } else if (!linked.has(name)) {
+      errors.push(
+        `service.parameters.${name}: keel-go solo cablea un parámetro hasta el rescate de un barrido que lee su plazo de él (stalledAfter); ` +
+          `todavía no se lo da a un handler (${why}; llega con catalog-extended y payment-checkout, incremento 13). Genera este diseño con keel-spring, keel-nest o keel-dotnet.`
+      );
     }
   }
   return errors;

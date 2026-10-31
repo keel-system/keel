@@ -32,7 +32,7 @@ const subjects = ENGINES.flatMap((engine) =>
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     if (mutate) mutate(layers);
     const plan = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: engine } });
-    const probe = probeFile(plan.model);
+    const probe = probeFile(plan.model, plan.files);
     const probes = [...probe.content.matchAll(/^func (Test\w+)\(t \*testing\.T\)/gm)].map((m) => m[1]);
     return { name, engine, plan, probe, probes };
   })

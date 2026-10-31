@@ -148,7 +148,7 @@ try {
       applied += sabotaged.changed;
       files = sabotaged.files;
     }
-    const probe = probeFile(plan.model);
+    const probe = probeFile(plan.model, files);
     const dir = path.join(root, name);
     for (const file of [...files, probe]) {
       const target = path.join(dir, file.path);
