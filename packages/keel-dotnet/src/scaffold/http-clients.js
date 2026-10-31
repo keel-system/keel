@@ -14,7 +14,7 @@
 // proveedor de la tabla neutral; lo demás —un bug del adaptador, un cuerpo que viola el contrato— se propaga con su
 // traza sin que nadie lo capture.
 
-import { fallbackFailures, hasCallFallback, recordedFailures, resiliencePolicy, retryWaitMs, circuitBreakerReference, PROVIDER_FAILURES } from '@keel-system/keel-core/gen/outbound-resilience';
+import { fallbackFailures, hasCallFallback, recordedFailures, resiliencePolicy, retryWaitMs, circuitScript, PROVIDER_FAILURES } from '@keel-system/keel-core/gen/outbound-resilience';
 import { httpClientsYaml } from '@keel-system/keel-core/gen/http-clients-config';
 import { LAST_KNOWN_MAX_ENTRIES, lastKnownNeeds, servesLastKnown } from '@keel-system/keel-core/gen/last-known';
 import { UNREACHABLE_BASE_URL } from '@keel-system/keel-core/gen/infra-catalog';
@@ -1489,44 +1489,8 @@ function compositeReadingCs() {
 
 // ─── La prueba emitida ───────────────────────────────────────────────────────────────────────────
 
-// Secuencias del circuito contra la REFERENCIA de keel-core: pasos al azar con semilla fija (el mismo texto en cada build).
-const CIRCUIT_STEPS = 600;
-
-function seeded(seed) {
-  let state = seed >>> 0;
-  return () => {
-    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
-    return state / 2 ** 32;
-  };
-}
-
-/**
- * Una secuencia de pasos (`a` pedir paso, `f`/`s` registrar fallo/éxito, `t<ms>` avanzar el reloj) con el estado que la
- * referencia de keel-core deja tras cada uno y lo que contesta cada `a`. Lo recorre la prueba emitida con el circuito de C#.
- */
-export function circuitScript(spec, seed = 7) {
-  const random = seeded(seed);
-  let clock = 0;
-  const reference = circuitBreakerReference(spec, () => clock);
-  const steps = [];
-  for (let i = 0; i < CIRCUIT_STEPS; i++) {
-    const roll = random();
-    if (roll < 0.05) {
-      const ms = Math.floor(random() * spec.waitDurationMs * 1.5);
-      clock += ms;
-      steps.push(`t${ms}`);
-    } else if (roll < 0.45) {
-      steps.push(`a${reference.tryAcquire() ? 1 : 0}`);
-    } else {
-      // Más fallos que éxitos al principio, y al revés después: la secuencia tiene que abrir y volver a cerrar.
-      const failed = random() < (i < CIRCUIT_STEPS / 2 ? 0.7 : 0.3);
-      reference.record(failed);
-      steps.push(failed ? 'f' : 's');
-    }
-    steps[steps.length - 1] += `:${{ closed: 'C', open: 'O', 'half-open': 'H' }[reference.state]}`;
-  }
-  return steps.join(' ');
-}
+// La secuencia del circuito contra la REFERENCIA de keel-core la genera keel-core (circuitScript, outbound-resilience.js).
+export { circuitScript };
 
 /** Los circuitos distintos del diseño (por sus números): cada uno con su secuencia. */
 function circuitSpecs(model) {

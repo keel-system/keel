@@ -32,6 +32,7 @@ import { WIRE_SABOTAGES, applySabotage } from '../test/helpers/wire-sabotages.js
 import { DOMAIN_SABOTAGES, applySabotage as applyDomainSabotage } from '../test/helpers/domain-sabotages.js';
 import { APPLICATION_SABOTAGES, applySabotage as applyApplicationSabotage } from '../test/helpers/application-sabotages.js';
 import { API_SABOTAGES, applySabotage as applyApiSabotage } from '../test/helpers/api-sabotages.js';
+import { CLIENTS_SABOTAGES, CLIENTS_SUBJECT, applySabotage as applyClientsSabotage } from '../test/helpers/clients-sabotages.js';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
@@ -342,6 +343,39 @@ for (const sabotage of API_SABOTAGES) {
   const expected = [sabotage.fails, ...(sabotage.alsoFails ?? [])].sort().join(' ');
   const exact = [...new Set(failed)].sort().join(' ') === expected;
   step(`API falsada: ${sabotage.id} (${sabotage.what}) → ${expected} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
+}
+
+// Los clientes salientes (incremento 11b) se falsan sobre stock-reservation, el único diseño en alcance con http-clients:
+// la prueba emitida en verde y cada sabotaje en rojo con su prueba, y solo ella.
+{
+  const clientsDir = path.join(makeWorkspace('keel-go-clients-'), CLIENTS_SUBJECT);
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, CLIENTS_SUBJECT));
+  for (const file of planService({ manifest, layers, workspace: clientsDir }).files) {
+    const out = path.join(clientsDir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+  const clientsTests = ['test', '-count=1', './internal/infrastructure/clients/'];
+  const tidied = go(clientsDir, ['mod', 'tidy']);
+  const baseline = tidied.ok ? go(clientsDir, clientsTests) : tidied;
+  if (step(`clientes salientes: la prueba emitida de ${CLIENTS_SUBJECT} en verde`, baseline.ok, baseline.ok ? '' : baseline.output.slice(0, 600))) {
+    for (const sabotage of CLIENTS_SABOTAGES) {
+      const file = path.join(clientsDir, sabotage.file);
+      const original = fs.readFileSync(file, 'utf8');
+      const mutated = applyClientsSabotage(sabotage, original);
+      if (!mutated) {
+        step(`clientes falsados: ${sabotage.id}`, false, `el sabotaje ya no se aplica a ${sabotage.file}`);
+        continue;
+      }
+      fs.writeFileSync(file, mutated);
+      const sabotaged = go(clientsDir, clientsTests);
+      fs.writeFileSync(file, original);
+      const failed = [...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]);
+      const expected = [sabotage.fails, ...(sabotage.alsoFails ?? [])].sort().join(' ');
+      const exact = [...new Set(failed)].sort().join(' ') === expected;
+      step(`clientes falsados: ${sabotage.id} (${sabotage.what}) → ${expected} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
+    }
+  }
 }
 
 // La frontera hexagonal se falsa: un import plantado del dominio a otro paquete de la plataforma (solo puede usar

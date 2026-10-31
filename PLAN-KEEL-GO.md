@@ -694,8 +694,54 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
     del reloj esperaron al cron real (49, 60 y 76 s), el barrido llama a los dos reclamos generados tal cual, el rescate
     no corta el lote por una fila (lo dice la nota desde el principio), las pruebas del agente no llevan SQL y
     `check-idempotency.sh` pasó de ROJO a VERDE. **Con esto el incremento 10 queda cerrado.**
-- **Para retomar (cada incremento empieza en un contexto nuevo):** el incremento 11 (clientes HTTP salientes, circuito
-  propio, reconciliación y arnés WireMock; corrida `stock-reservation`). Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
+- **Inc. 11 — en curso (abierto el 2026-10-31).** Tramos como los de keel-nest y keel-dotnet, con el 11a ya hecho en
+  keel-core (`outbound-resilience.js`, `http-clients-config.js`, `reconciliation-stores.js`, `http-stub-probes.js`): 11b
+  clientes HTTP, 11c reconciliación y compensación (con las familias `compensation`, `reconciliation` y
+  `outboundIdempotency` del gate), 11d arnés del proveedor de prueba, skill `keel-go-httpclient` y `stub-check`, 11e la
+  corrida sobre `stock-reservation` (gemelas: keel-nest 24/24, keel-spring 21/21, keel-dotnet 27/27). Es el ÚNICO sujeto
+  en alcance: asset-vault es documental (inc. 12) y catalog-extended trae `needs` y OAuth2 (inc. 13).
+  - **11b, clientes HTTP (hecho, 2026-10-31).**
+    - **Lo neutral**: `circuitScript` (la secuencia que recorren las pruebas emitidas contra `circuitBreakerReference`)
+      pasa de keel-dotnet a `keel-core/gen/outbound-resilience.js`, y keel-dotnet la importa (su texto emitido no cambia:
+      `npm test` de keel-dotnet 819/819).
+    - **Lo que emite** (`src/scaffold/http-clients.js`): el puerto `domain.<Cliente>Client` y los `<Llamada>Result`
+      (campos puntero: el resultado vacío del fallback) en `internal/domain`; en `internal/infrastructure/clients` el
+      soporte —`FailureKind` con la tabla neutral, `*ProviderFailure` y `*ContractError`, `Circuit` (la máquina de
+      resilience4j con `sync.Mutex` y reloj inyectable), `Run[T]` (retry por fuera, circuito por dentro, espera
+      `Wait` inyectable), `Exchange` sobre net/http (sin redirecciones, 5 s para conectar, plazo por intento con la lectura
+      del cuerpo, la cancelación de quien llama devuelta tal cual) y la lectura campo a campo de la respuesta
+      (`required`/`optional`/`list`, el objeto leído con json/v2 SIN las opciones del cable)—, `settings.go` (`SettingsFrom`
+      sobre el `http-clients.yaml` neutral, el de keel-dotnet byte a byte), la clave saliente (`outboundKey`/`correlatedKey`:
+      sha256 del contenido escrito por el cable, igual en cada intento) y un `<cliente>_adapter.go` por cliente con la
+      política literal de `resiliencePolicy`, la lista del fallback, el intento, los tipos del cable y el mapeo. **Sin
+      keep-alive**: net/http reenvía por su cuenta una petición idempotente cuya conexión reutilizada se corta (lo que
+      keel-dotnet midió con SocketsHttpHandler en su 11d); sin medir contra un proveedor real hasta el 11d. La política
+      del fallback va en `<cliente>_fallback.go`, **sin la cabecera de generado** (con TODO cuando el diseño no la
+      decide; `ignore` y `fail` con su error nacen escritos). El handler que activa otro servidor recibe el puerto
+      (`Dependencies`, `handlerArgs`, `main.go`) y las notas de la activación y del orden de los efectos, las de los otros
+      tres; el de `via.publishes`, solo su nota.
+    - **Frontera**: `http-clients` y `dependencies` entran; `reconciledBy` y `compensations` avisan (11c); `needs` y OAuth2
+      (inc. 13), el compuesto en una llamada (el rechazo neutral en la URL; en el cuerpo o la respuesta, sin red), la
+      llamada sin method/path o sin contrato tipado y la respuesta sin campos (no cabe un TODO en el adaptador generado)
+      y los clientes sin persistencia relacional se rechazan con su motivo. `usesGoHttpClients` no emite nada para lo
+      rechazado: go-check genera todas las fixtures saltándose la frontera.
+    - **Medido**: `test/http-clients.test.js` (7: YAML contra keel-dotnet en los cuatro perfiles y claves leídas, política
+      y fallback contra keel-core, la secuencia de la referencia con sus tres estados, cableado, el puerto sin
+      infraestructura, ningún TODO en un archivo generado, nada emitido para lo rechazado), `test/supported-features.test.js`
+      y `test/clients-sabotages.test.js`; `npm test` 905/905, keel-core 1313/1313. A mano sobre `stock-reservation`
+      generado: tidy, gofmt, vet y staticcheck (con `-tags integration`) vacíos, `go test ./...` en verde y la prueba
+      emitida `clients_test.go` 19/19 (clasificación de cada desenlace con un `RoundTripper` falso, circuito contra la
+      referencia, esperas, adaptador contra el proveedor falso: intentos y MISMA clave, contrato roto que no cae al
+      fallback, circuito que se abre). **Falsado** con siete sabotajes (`circuit-strict`, `circuit-4xx`, `retry-all`,
+      `idempotency-random`, `fallback-any`, `cancel-as-timeout`, `contract-missing`): cada uno cae en su prueba y solo en
+      ella, medido a mano; `go-check` gana el bloque que los ejecuta.
+    - `go-check --fixtures --jobs=1` **48/48** (stock-reservation en sus cuatro variantes con los clientes; el intento con
+      `--jobs=2` lo mató Claude Code por memoria).
+    - `go-check --jobs=1` **124/124**: la prueba emitida de los clientes en verde y los siete sabotajes, cada uno en rojo
+      con su prueba y solo con ella, ahora desde el script.
+    - **Sin medir**: contra un WireMock real (11d) y en corrida (11e).
+- **Para retomar (cada incremento empieza en un contexto nuevo):** el 11c (reconciliación y compensación: el reclamo de `reconciliation_claim`, sus notas y las
+  familias del gate), el 11d (arnés WireMock, skill `keel-go-httpclient`, `stub-check`) y la corrida 11e. Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
   Code mata las tandas largas en segundo plano si se queda sin memoria. El hallazgo neutral de la collation de la
   sombra en MySQL espera su propia tarea en keel-core.
 

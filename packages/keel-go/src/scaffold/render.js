@@ -58,6 +58,9 @@ export function layout(model) {
     scheduler: pkg(module, 'internal/infrastructure/scheduler'),
     // Los parámetros de despliegue del diseño (tramo 10c): los lee de la configuración y los valida el dominio.
     parameters: pkg(module, 'internal/infrastructure/parameters'),
+    // Los clientes HTTP salientes (incremento 11b): el adaptador de cada puerto de internal/domain, los tipos del cable del
+    // tercero, el mapeo de anticorrupción y la resiliencia. No en httpapi, que es la plataforma de ENTRADA.
+    clients: pkg(module, 'internal/infrastructure/clients'),
     // La prueba de la frontera hexagonal: `internal/` solo protege frente a otros módulos, no entre capas.
     architecture: pkg(module, 'internal/architecture'),
     // Las pruebas de flujo (FL-*), de caja negra y tras la restricción `integration`: `go test ./...` no las ve.

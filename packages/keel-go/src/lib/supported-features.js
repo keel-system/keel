@@ -14,13 +14,12 @@ import { buildModel } from '@keel-system/keel-core/gen/model';
 import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
+import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { GO_PROJECTION } from './go-projection.js';
 import { messageComponents } from '../scaffold/services.js';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  'http-clients': 'incremento 11',
-  dependencies: 'incremento 11',
   storage: 'incremento 13',
   mail: 'incremento 13',
   payments: 'incremento 13'
@@ -87,6 +86,8 @@ export function checkSupportedFeatures(manifest, layers) {
   }
   errors.push(...scheduledWithArguments(manifest, layers));
   errors.push(...parameterErrors(manifest, layers));
+  errors.push(...outboundErrors(layers));
+  warnings.push(...outboundWarnings(layers));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     const names = operations
@@ -269,3 +270,86 @@ function securityErrors(layers) {
   return errors;
 }
 
+
+/** ¿Es `field` un value object compuesto del dominio (o una lista de ellos)? */
+function isComposite(layers, field) {
+  const types = layers?.domain?.types ?? {};
+  const type = field?.type ?? field?.items?.type;
+  return Boolean(type && types[type] && (types[type].fields || types[type].kind === 'composite'));
+}
+
+/**
+ * Lo que keel-go todavía no sabe hacer con los clientes salientes y las dependencias (incremento 11 de PLAN-KEEL-GO.md):
+ * los clientes, su resiliencia y las activaciones se generan; esto, no, cada cosa con su motivo.
+ *   · `needs` (el dato que se PIDE a otro servidor, bajo demanda o replicado) y `auth: oauth2-client-credentials`: llegan
+ *     en el incremento 13, como en keel-nest y keel-dotnet;
+ *   · un value object compuesto en una llamada: en la URL no tiene forma (el rechazo neutral de los cuatro); en el cuerpo o
+ *     en la respuesta sí, pero ninguna red de keel-go lo ha medido;
+ *   · una llamada sin method/path o sin contrato tipado, o con una respuesta sin campos: el adaptador lleva la cabecera de
+ *     código generado y no puede llevar el TODO que esa llamada necesitaría (keel-dotnet lo deja al agente); ninguna
+ *     fixture en alcance lo declara;
+ *   · los clientes sin persistencia relacional: se cablean en las Dependencies de los casos de uso, que hoy solo existen con
+ *     ella (asset-vault, documental, llega con el incremento 12).
+ */
+function outboundErrors(layers) {
+  const clients = Object.entries(layers?.['http-clients']?.clients ?? {});
+  const errors = [...compositeUrlParamErrors(layers, 'keel-go')];
+  const pending = (what, increment) =>
+    `${what} — keel-go todavía no lo genera (llega en el ${increment} de PLAN-KEEL-GO.md). Genera este diseño con keel-spring, keel-nest o keel-dotnet.`;
+  for (const [dependency, definition] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
+    const needs = Object.keys(definition?.needs ?? {});
+    if (needs.length > 0) errors.push(pending(`dependencies.${dependency}.needs (${needs.join(', ')}): los datos que se piden a otro servidor`, 'incremento 13'));
+  }
+  const unmeasured = 'ninguna fixture que keel-go genere lo declara: sin red que mida lo emitido';
+  for (const [client, definition] of clients) {
+    if (definition?.auth?.type === 'oauth2-client-credentials') {
+      errors.push(pending(`http-clients.${client}.auth: oauth2-client-credentials (la concesión del token)`, 'incremento 13'));
+    }
+    for (const [call, spec] of Object.entries(definition?.calls ?? {})) {
+      const composite = [...Object.entries(spec?.request?.body ?? {}), ...Object.entries(spec?.response?.fields ?? {})]
+        .filter(([, field]) => isComposite(layers, field))
+        .map(([name]) => name);
+      if (composite.length > 0) {
+        errors.push(`http-clients.${client}.calls.${call}: ${composite.join(', ')} es un value object compuesto en el cuerpo o en la respuesta — keel-go todavía no lo genera (${unmeasured}).`);
+      }
+      const typed = Boolean(spec?.request || spec?.response);
+      const method = spec?.method ?? /^\s*([A-Z]+)\s+\S+/.exec(spec?.contract ?? '')?.[1];
+      if (!method || !typed) {
+        errors.push(
+          `http-clients.${client}.calls.${call}: sin method/path o sin request/response tipados — keel-go escribe el adaptador entero y no deja ` +
+            `un TODO en un archivo de código generado (${unmeasured}). Declara method, path y el contrato tipado.`
+        );
+      } else if (spec?.response && Object.keys(spec.response.fields ?? {}).length === 0) {
+        errors.push(`http-clients.${client}.calls.${call}: la respuesta no declara campos — keel-go no deja un TODO en el adaptador generado (${unmeasured}). Declara sus campos.`);
+      }
+    }
+  }
+  if (clients.length > 0 && (!layers?.persistence || documentPersistence(layers))) {
+    errors.push(
+      'http-clients: keel-go cablea los clientes en las Dependencies de los casos de uso, que hoy solo existen con persistencia relacional ' +
+        `(${unmeasured}). Genera este diseño con keel-spring, keel-nest o keel-dotnet.`
+    );
+  }
+  return errors;
+}
+
+/** Lo que se acepta y aún no se emite entero: la reconciliación y la compensación llegan en el tramo 11c. */
+function outboundWarnings(layers) {
+  const warnings = [];
+  for (const [dependency, definition] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
+    for (const [name, activation] of Object.entries(definition?.activations ?? {})) {
+      if (activation?.reconciledBy) {
+        warnings.push(
+          `dependencies.${dependency}.activations.${name}.reconciledBy: ${activation.reconciledBy} — keel-go genera el barrido sin su reclamo de ` +
+            'reconciliación ni su nota (llegan en el tramo 11c del incremento 11 de PLAN-KEEL-GO.md).'
+        );
+      }
+    }
+    if ((definition?.compensations ?? []).length > 0) {
+      warnings.push(
+        `dependencies.${dependency}.compensations — keel-go genera el handler de la compensación sin su nota (llega en el tramo 11c del incremento 11 de PLAN-KEEL-GO.md).`
+      );
+    }
+  }
+  return warnings;
+}

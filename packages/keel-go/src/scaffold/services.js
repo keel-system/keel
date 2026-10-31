@@ -29,6 +29,7 @@ import { IDEMPOTENCY_STORE, idempotencyMethods, idempotencyNotes, usesRegistry }
 import { appType, applicationPath, docComment, domainPath, goFileName, goTypeName, isOptional, layout, packageFile } from './render.js';
 import { ownershipNotes } from '@keel-system/keel-core/gen/ownership';
 import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity } from './security.js';
+import { activationClients, callMethod, clientParam, clientPort, usesGoHttpClients } from './http-clients.js';
 
 export function generate(model) {
   const files = [];
@@ -230,6 +231,11 @@ function renderHandler(model, operation) {
   if (usesDependencies(model) && roleCheckedOperation(model, operation)) {
     deps.push({ name: CALLER_ROLES.param, type: CALLER_ROLES.port, doc: `${CALLER_ROLES.param} dice los roles del llamante: los exentos de la regla de propiedad (security.ownership).` });
   }
+  // El trabajo que el diseño le atribuye a esta operación en otro servidor (dependencies.activations, por triggeredBy):
+  // el puerto del cliente se inyecta, o el camino de menor resistencia es no llamarlo.
+  for (const client of activationClients(model, operation)) {
+    deps.push({ name: clientParam(client), type: `domain.${clientPort(client)}`, doc: `${clientParam(client)} es el cliente saliente ${client.id} (http-clients), con su resiliencia ya puesta.` });
+  }
   if (dispatches) deps.push({ name: 'useCases', type: '*UseCases', doc: 'useCases despacha las operaciones que esta declara en use-cases.dispatches.' });
   const fields = deps.length > 0
     ? `\n${deps
@@ -306,6 +312,7 @@ function handlerNotes(model, operation) {
         'del agregado (que llama a transitionTo), nunca el handler asignando el estado.'
     );
   }
+  notes.push(...activationNotes(model, operation));
   for (const eventName of operation.emits ?? []) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
     const emitters = [...new Set((event?.emittedBy ?? []).filter((e) => e.operation === operation.name && e.aggregate).map((e) => e.aggregate))];
@@ -350,6 +357,69 @@ function scheduleNotes(model, operation) {
             'un segundo mecanismo en paralelo no reclama nada. Actúa sobre cada fila y guárdala: un fallo en una no revierte las demás.';
     })
   ];
+}
+
+/**
+ * Las notas de las activaciones de esta operación (`dependencies.activations`) y el ORDEN de sus efectos: las de los otros
+ * tres generadores, con los nombres de Go. En un barrido de reconciliación el orden es otro y lo dice su propia nota, así
+ * que aquí no se da: dos órdenes opuestos en el mismo handler no son dos consejos, son uno que el agente elegiría al azar.
+ */
+function activationNotes(model, operation) {
+  const notes = [];
+  const sweep = Boolean(operation.schedule);
+  const reconciles = (operation.reconciles ?? []).length > 0;
+  for (const { dependency, activation } of operation.dependencyActivations ?? []) notes.push(activationNote(model, dependency, activation, sweep));
+  const calls = (operation.dependencyActivations ?? []).filter(({ activation }) => activation.http);
+  if ((operation.transitions ?? []).length === 0 || calls.length === 0 || reconciles) return notes;
+  const fromKeys = operation.transitions.flatMap((t) => (t.from ?? []).map((state) => `${t.entity}::${state}`));
+  const branches = fromKeys.some((key, index) => fromKeys.indexOf(key) !== index);
+  const decided = branches ? calls.filter(({ activation }) => activation.awaits === 'outcome') : [];
+  const decidedNames = new Set(decided.map(({ activation }) => activation.name));
+  if (decided.length > 0) {
+    notes.push(
+      `ORDEN de los efectos: ${decided.map(({ dependency, activation }) => `${dependency}.${activation.name}`).join(', ')} es awaits: outcome y su resultado DECIDE la transición. ` +
+        'Comprueba primero la precondición de estado SIN escribir nada, llama después y aplica la transición que corresponda al veredicto. ' +
+        'Si una regla del diseño fija el orden, manda la regla'
+    );
+  }
+  const outgoing = calls.filter(({ activation }) => !decidedNames.has(activation.name));
+  if (outgoing.length > 0) {
+    const guards = operation.transitions.map((t) => `${t.entity}: ${(t.from ?? []).join('|')} → ${t.to}`).join('; ');
+    notes.push(
+      `ORDEN de los efectos: aplica PRIMERO la transición de estado (${guards}) y solo después llama a ${outgoing.map(({ dependency, activation }) => `${dependency}.${activation.name}`).join(', ')}. ` +
+        'La llamada saliente no es transaccional: si sale antes y la guarda del agregado rechaza el cambio, el rollback revierte la fila ' +
+        'pero el trabajo ya está encargado en el otro servidor y nadie lo deshace'
+    );
+  }
+  return notes;
+}
+
+/** La nota de una activación: el trabajo que esta operación delega en otro servidor (la de los otros tres generadores). */
+function activationNote(model, depId, activation, sweep) {
+  if (activation.event) {
+    return `Activación ${depId}.${activation.name}: ${activation.effect} — se delega publicando ${activation.event.name}, que emite el agregado con raise(New${activation.event.className ?? '...'}(...)) dentro del método de negocio. El handler no publica nada, y no esperes respuesta: publicar un evento no devuelve resultado`;
+  }
+  if (!activation.http) {
+    return `Activación ${depId}.${activation.name}: ${activation.effect} — el diseño no resuelve el canal (via.client/call no existe en http-clients). No inventes la llamada: dilo en el reporte`;
+  }
+  const awaits = {
+    outcome: `awaits: outcome — el resultado que devuelve ${depId} condiciona el desenlace de esta operación: no basta con que la llamada no falle. Qué significa un desenlace negativo lo dice el diseño: si specs/decisions.yaml acepta OBL-OUTCOME-NEGATIVE-UNDECIDED, manda esa decisión (y puede que el cuerpo no importe).`,
+    acknowledgement: `awaits: acknowledgement — basta con que ${depId} acuse recibo; no interpretes el cuerpo como parte del desenlace.`,
+    nothing: sweep
+      ? 'awaits: nothing — no se espera nada de vuelta, pero la llamada sigue siendo síncrona y su plazo bloquea la pasada del barrido.'
+      : 'awaits: nothing — no se espera nada de vuelta, pero la llamada sigue siendo síncrona y ocurre DENTRO de la transacción del caso de uso: su plazo la mantiene abierta.'
+  }[activation.awaits];
+  const onFailure = activation.onFailure;
+  const failure = {
+    ignore: `onFailure: ignore — que ${depId} no responda no interrumpe esta operación; el fallback del adaptador ya lo absorbe, lo registra y devuelve el resultado vacío con err == nil. No lo reintentes aquí.`,
+    fail: `onFailure: fail — si ${depId} no responde, esta operación falla con ${onFailure?.error ? `domain.${sentinelOf(onFailure.error)}` : 'el error del diseño'}; el fallback del adaptador ya lo devuelve. Devuélvelo tal cual, sin convertirlo en otra cosa.`,
+    degrade: `onFailure: degrade — si ${depId} no responde, esta operación degrada y el resultado degradado lo escribes TÚ: ${onFailure?.degradedTo}`
+  }[onFailure?.action];
+  const client = (model.httpClients ?? []).find((candidate) => candidate.clientClass === activation.http.clientClass);
+  const call = client?.calls.find((candidate) => candidate.name === activation.http.call);
+  const port = client && usesGoHttpClients(model) ? `h.${clientParam(client)}` : `el cliente ${activation.http.clientClass}`;
+  const method = call ? callMethod(call) : activation.http.call;
+  return `Activación ${depId}.${activation.name}: ${activation.effect} — invoca ${port}.${method}(ctx, ...). El retry y el circuito ya están en el adaptador: no los repitas. ${awaits ?? ''} ${failure ?? ''}`.trim();
 }
 
 /** Parte una nota larga en líneas de comentario legibles. */

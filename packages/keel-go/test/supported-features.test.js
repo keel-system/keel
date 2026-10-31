@@ -51,7 +51,38 @@ test('RabbitMQ, Kafka y SNS/SQS entran (tramos 9b-2, 9f y 9g)', () => {
   for (const broker of ['rabbitmq', 'kafka', 'snssqs']) assert.deepEqual(checkSupportedStack({ broker, database: 'postgresql' }).errors, [], broker);
 });
 
-for (const layer of ['http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
+test('http-clients y dependencies entran (incremento 11b): stock-reservation pasa con los dos avisos del 11c', () => {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'stock-reservation'));
+  const { errors, warnings } = checkSupportedFeatures(manifest, layers);
+  assert.deepEqual(errors, []);
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /reconciledBy: reconcileReservations .*tramo 11c/);
+  assert.match(warnings[1], /compensations .*tramo 11c/);
+});
+
+test('lo saliente que el 11b no genera se rechaza con su motivo: needs, oauth2, compuestos, llamadas sin tipar y clientes sin persistencia relacional', () => {
+  const catalog = loadService(path.join(FIXTURES_DIR, 'catalog-extended'));
+  const catalogErrors = checkSupportedFeatures(catalog.manifest, catalog.layers).errors;
+  assert.ok(catalogErrors.some((error) => /\.needs \(.*incremento 13/.test(error)), catalogErrors.join('\n'));
+  assert.ok(catalogErrors.some((error) => /oauth2-client-credentials .*incremento 13/.test(error)), catalogErrors.join('\n'));
+  const vault = loadService(path.join(FIXTURES_DIR, 'asset-vault'));
+  assert.ok(checkSupportedFeatures(vault.manifest, vault.layers).errors.some((error) => /^http-clients: .*persistencia relacional/.test(error)));
+
+  const sr = loadService(path.join(FIXTURES_DIR, 'stock-reservation'));
+  const withCall = (call) => {
+    const layers = structuredClone(sr.layers);
+    layers['http-clients'].clients.inventory.calls.cancelStock = { ...layers['http-clients'].clients.inventory.calls.cancelStock, ...call };
+    return checkSupportedFeatures(sr.manifest, layers).errors;
+  };
+  assert.match(withCall({ method: undefined, contract: 'anula el bloqueo' }).join('\n'), /sin method\/path o sin request\/response tipados/);
+  assert.match(withCall({ response: { fields: {} } }).join('\n'), /la respuesta no declara campos/);
+  const composite = structuredClone(sr.layers);
+  composite.domain.types = { ...composite.domain.types, Amount: { kind: 'composite', fields: { value: { type: 'decimal', required: true } } } };
+  composite['http-clients'].clients.inventory.calls.cancelStock.response.fields.refunded = { type: 'Amount' };
+  assert.match(checkSupportedFeatures(sr.manifest, composite).errors.join('\n'), /refunded es un value object compuesto en el cuerpo o en la respuesta/);
+});
+
+for (const layer of ['storage', 'mail', 'payments']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);

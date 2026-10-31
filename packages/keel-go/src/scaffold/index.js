@@ -33,6 +33,7 @@ import * as persistence from './persistence.js';
 import * as persistenceRuntime from './persistence-runtime.js';
 import * as repositories from './repositories.js';
 import * as serviceParameters from './service-parameters.js';
+import * as httpClients from './http-clients.js';
 import * as claim from './claim.js';
 import * as requestIdempotency from './request-idempotency.js';
 import * as messaging from './messaging.js';
@@ -80,6 +81,7 @@ const GENERATORS = [
   persistenceRuntime,
   repositories,
   serviceParameters,
+  httpClients,
   claim,
   requestIdempotency,
   messaging,

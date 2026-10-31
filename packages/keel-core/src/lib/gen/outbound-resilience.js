@@ -279,6 +279,50 @@ export function circuitBreakerReference(cb, now = () => Date.now()) {
   };
 }
 
+// ─── La secuencia que recorren las pruebas emitidas ──────────────────────────
+//
+// Cada generador emite una prueba que recorre su circuito paso a paso contra la referencia de arriba. La secuencia la
+// genera build con la referencia (pasos al azar con semilla fija: el mismo texto en cada build). Estaba en keel-dotnet;
+// salió aquí al llegar keel-go (PLAN-KEEL-GO.md, incremento 11b).
+
+const CIRCUIT_STEPS = 600;
+
+function seeded(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 2 ** 32;
+  };
+}
+
+/**
+ * Una secuencia de pasos (`a` pedir paso, `f`/`s` registrar fallo/éxito, `t<ms>` avanzar el reloj) con el estado que la
+ * referencia deja tras cada uno (`C`, `O`, `H`) y lo que contesta cada `a` (`a1`/`a0`), separados por espacios.
+ */
+export function circuitScript(spec, seed = 7) {
+  const random = seeded(seed);
+  let clock = 0;
+  const reference = circuitBreakerReference(spec, () => clock);
+  const steps = [];
+  for (let i = 0; i < CIRCUIT_STEPS; i++) {
+    const roll = random();
+    if (roll < 0.05) {
+      const ms = Math.floor(random() * spec.waitDurationMs * 1.5);
+      clock += ms;
+      steps.push(`t${ms}`);
+    } else if (roll < 0.45) {
+      steps.push(`a${reference.tryAcquire() ? 1 : 0}`);
+    } else {
+      // Más fallos que éxitos al principio, y al revés después: la secuencia tiene que abrir y volver a cerrar.
+      const failed = random() < (i < CIRCUIT_STEPS / 2 ? 0.7 : 0.3);
+      reference.record(failed);
+      steps.push(failed ? 'f' : 's');
+    }
+    steps[steps.length - 1] += `:${{ closed: 'C', open: 'O', 'half-open': 'H' }[reference.state]}`;
+  }
+  return steps.join(' ');
+}
+
 /**
  * ¿Emite la llamada su método de respaldo? Hace falta una RAZÓN —la prosa del `fallback`, un circuito que
  * abra, o un `need` que declare qué ve el cliente con el proveedor caído (`onUnavailable`)— y algo que lo

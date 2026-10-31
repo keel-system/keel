@@ -23,6 +23,7 @@ import { contractOf, handlerType, messageType, operations, useCaseField } from '
 import { repositoryOf, repositoryRoots, usesRelational } from '@keel-system/keel-core/gen/features';
 import { goExported } from '../lib/go-projection.js';
 import { portName, repositoryParam } from './repositories.js';
+import { activationClients, clientField, clientPort, usesGoHttpClients } from './http-clients.js';
 
 /** ¿Reciben los casos de uso adaptadores (Dependencies)? Con la persistencia relacional. */
 export function usesDependencies(model) {
@@ -36,6 +37,7 @@ export function handlerArgs(model, operation, repository) {
   if (root) args.push(repository(root));
   if (usesRegistry(model, operation)) args.push(`deps.${IDEMPOTENCY_STORE.field}`);
   if (usesDependencies(model) && roleCheckedOperation(model, operation)) args.push(`deps.${CALLER_ROLES.field}`);
+  for (const client of activationClients(model, operation)) args.push(`deps.${clientField(client)}`);
   if ((operation.dispatches ?? []).length > 0) args.push('uc');
   return args;
 }
@@ -248,6 +250,12 @@ ${alignRows([
         { text: `\t// ${CALLER_ROLES.field} dice los roles del llamante de la petición en curso (los exentos de security.ownership).` },
         { indent: '\t', cells: [CALLER_ROLES.field, CALLER_ROLES.port] }
       ]
+    : []),
+  ...(usesGoHttpClients(model)
+    ? model.httpClients.flatMap((client) => [
+        { text: `\t// ${clientField(client)} es el cliente saliente ${client.id} (http-clients): su adaptador HTTP, con su resiliencia.` },
+        { indent: '\t', cells: [clientField(client), `domain.${clientPort(client)}`] }
+      ])
     : [])
 ]).join('\n')}
 }

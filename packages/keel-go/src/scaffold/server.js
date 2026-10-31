@@ -32,6 +32,7 @@ import { tablePurges } from './purge.js';
 import { PARAMETERS_IMPORT, PARAMETERS_VAR, usesServiceParameters } from './service-parameters.js';
 import { claimDependencies, usesSweepClaims } from './claim.js';
 import { usesCorrelation } from './correlation.js';
+import { CLIENTS_IMPORT, adapterType, clientField, clientParam, usesGoHttpClients } from './http-clients.js';
 
 export function generate(model) {
   const { server } = layout(model);
@@ -77,7 +78,8 @@ function mainGo(model) {
       KAFKA_IMPORT,
       SNSSQS_IMPORT,
       SCHEDULER_IMPORT,
-      PARAMETERS_IMPORT
+      PARAMETERS_IMPORT,
+      CLIENTS_IMPORT
     ],
     body: `
 func main() {
@@ -182,6 +184,10 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
   }));
   if (usesRoleCheck(model)) repositories.push({ indent: '\t\t', cells: [`${CALLER_ROLES.field}:`, 'security.CallerRoles{},'] });
   if (usesRequestIdempotency(model)) repositories.push({ indent: '\t\t', cells: [`${IDEMPOTENCY_STORE.field}:`, `${store.name}.NewIdempotencyStore(transactions),`] });
+  const clients = usesGoHttpClients(model) && dispatchesUseCases(model);
+  if (clients) {
+    for (const client of model.httpClients) repositories.push({ indent: '\t\t', cells: [`${clientField(client)}:`, `${clientParam(client)},`] });
+  }
   const messaging = wiresMessaging(model);
   return `${logger}
 	database, err := ${store.name}.SettingsFrom(cfg)
@@ -204,9 +210,27 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
 		}
 	}
 	transactions := ${store.name}.NewTransactions(db, database.TransactionTimeout, logger)
-${usesSweepClaims(model) ? sweepsWiring(store) : ''}${messaging ? messagingWiring(model) : ''}
+${usesSweepClaims(model) ? sweepsWiring(store) : ''}${clients ? clientsWiring(model) : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
 ${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
+}
+
+// Los clientes HTTP salientes (incremento 11b): la configuración del perfil (la URL de cada proveedor, obligatoria fuera de
+// local, no deja arrancar sin ella), un solo Exchange para todos y un adaptador por puerto, con su circuito.
+function clientsWiring(model) {
+  const adapters = model.httpClients.map(
+    (client) => `	${clientParam(client)}, err := clients.New${adapterType(client)}(clientSettings, exchange, logger)
+	if err != nil {
+		return err
+	}`
+  );
+  return `	clientSettings, err := clients.SettingsFrom(cfg)
+	if err != nil {
+		return fmt.Errorf("configuración de los clientes HTTP: %w", err)
+	}
+	exchange := clients.NewExchange(nil)
+${adapters.join('\n')}
+`;
 }
 
 // Los barridos del perfil (tramo 10c): la cota del lote de cada reclamo y el plazo de cada rescate. Un valor que no es un
