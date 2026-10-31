@@ -10,18 +10,21 @@
 // `cs-check` de keel-dotnet, `ts-check` de keel-nest y `compile-check` de keel-spring, y como ellos se lanza
 // antes de dar por bueno cualquier cambio en lo que se emite.
 //
-//   node packages/keel-go/scripts/go-check.js [--keep] [--no-race] [--fixtures] [--jobs=<n>]
+//   node packages/keel-go/scripts/go-check.js [--keep] [--no-race] [--fixtures] [--jobs=<n>] [--no-cache]
 //   npm run go-check --workspace packages/keel-go
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo; --no-race se salta el paso del
 // contenedor (sin podman ni docker); --fixtures solo compila y prueba el Go de todas las fixtures (las relacionales,
-// también sobre MySQL); --jobs=<n>
-// cuántas fixtures a la vez (4; con poca memoria, 1 o 2). La caché del contenedor de -race son dos volúmenes
-// `keel-go-race-*`: `podman volume rm` los vacía.
+// también sobre MySQL); --jobs=<n> cuántas fixtures a la vez (por defecto, una por cada 2 GiB libres, hasta 4; cada
+// una con su parte de las CPU en GOMAXPROCS). Una fixture cuyo Go emitido no cambió desde su última pasada en verde
+// se salta (caché en `node_modules/.cache/keel-go-check/fixtures.json` de la raíz); --no-cache las comprueba todas.
+// La caché del contenedor de -race son dos volúmenes `keel-go-race-*`: `podman volume rm` los vacía.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { makeWorkspace, mountDesign, runCommand, GO_READY_DESIGN } from '../test/helpers/workspace.js';
@@ -48,7 +51,11 @@ const onlyFixtures = process.argv.includes('--fixtures');
 const race = !process.argv.includes('--no-race');
 // --jobs=<n>: cuántas fixtures se comprueban a la vez (4 por defecto). Con poca memoria, --jobs=1 es el paso en serie.
 const jobsArg = process.argv.find((arg) => arg.startsWith('--jobs='));
-const jobs = jobsArg ? Number(jobsArg.slice('--jobs='.length)) : 4;
+// Sin --jobs, una fixture por cada 2 GiB libres, entre 1 y 4: cada una lanza tidy, vet, staticcheck y el enlazado de
+// sus binarios de prueba, y con 4 a la vez y la máquina de podman en marcha se agotaban 16 GB.
+const jobs = jobsArg ? Number(jobsArg.slice('--jobs='.length)) : Math.max(1, Math.min(4, Math.floor(os.freemem() / 2 ** 31)));
+// --no-cache: vuelve a comprobar también las fixtures sin cambios desde su última pasada en verde.
+const useCache = !process.argv.includes('--no-cache');
 if (!Number.isInteger(jobs) || jobs < 1) {
   console.error(`--jobs=${jobsArg?.slice('--jobs='.length)}: tiene que ser un entero mayor que 0.`);
   process.exit(2);
@@ -69,10 +76,18 @@ function run(command, args, cwd, env = {}) {
 
 const go = (cwd, args, env) => run('go', args, cwd, env);
 
+// Cada fixture en paralelo recibe su parte de las CPU: GOMAXPROCS fija el -p del comando go (cuántos compile, link y
+// binarios de prueba a la vez) y lo heredan compile y staticcheck. GOMEMLIMIT es un límite blando: más GC, no un fallo.
+const fixtureEnv = {
+  ...process.env,
+  GOMAXPROCS: String(Math.max(1, Math.floor((os.availableParallelism?.() ?? os.cpus().length) / jobs))),
+  GOMEMLIMIT: process.env.GOMEMLIMIT ?? '1536MiB',
+};
+
 /** Como run, sin bloquear: para comprobar varias fixtures a la vez. */
 function runAsync(command, args, cwd) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, env: process.env });
+    const child = spawn(command, args, { cwd, env: fixtureEnv });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => (stdout += chunk));
@@ -184,27 +199,53 @@ for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(
         fs.mkdirSync(path.dirname(out), { recursive: true });
         fs.writeFileSync(out, file.content);
       }
-      fixtureDirs.push({ name: label, dir });
+      const hash = crypto.createHash('sha256').update(version.output);
+      for (const file of [...plan.files].sort((a, b) => (a.path < b.path ? -1 : 1))) hash.update(`\0${file.path}\0${file.content}`);
+      fixtureDirs.push({ name: label, dir, digest: hash.digest('hex') });
     }
   }
 }
-const fixtureProblems = await pool(fixtureDirs, jobs, async ({ dir }) => {
+// Una fixture cuyo Go emitido es byte a byte el de su última pasada en verde, con el mismo `go version`, daría lo mismo:
+// se salta. go.mod fija las versiones de las dependencias y de las herramientas, así que ya entran en la huella.
+const cacheFile = path.join(here, '..', '..', '..', 'node_modules', '.cache', 'keel-go-check', 'fixtures.json');
+let greenCache = {};
+try {
+  if (useCache) greenCache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+} catch {
+  greenCache = {};
+}
+const pending = fixtureDirs.filter(({ name, digest }) => greenCache[name] !== digest);
+console.log(
+  `Fixtures: ${fixtureDirs.length} variantes, ${fixtureDirs.length - pending.length} sin cambios desde su última pasada en verde; ` +
+    `${pending.length} a comprobar, ${jobs} a la vez con GOMAXPROCS=${fixtureEnv.GOMAXPROCS}.`
+);
+const pendingProblems = await pool(pending, jobs, async ({ dir }) => {
   const problems = [];
   const tidied = await runAsync('go', ['mod', 'tidy'], dir);
   if (!tidied.ok) problems.push(`tidy: ${tidied.output}`);
   const unformatted = await runAsync('gofmt', ['-l', '.'], dir);
   if (unformatted.stdout.trim()) problems.push(`gofmt: ${unformatted.stdout.trim()}`);
-  // vet y staticcheck, también sobre las pruebas de flujo (tras la restricción integration: sin ella no las ven).
-  for (const args of [['vet', '-tags', 'integration', './...'], ['tool', 'staticcheck', '-tags', 'integration', './...'], ['test', '-count=1', './...']]) {
+  // vet y staticcheck, también sobre las pruebas de flujo (tras la restricción integration: sin ella no las ven). go test
+  // con -vet=off: el vet entero ya pasó, y el subconjunto que lanza go test lo repetía paquete a paquete.
+  for (const args of [['vet', '-tags', 'integration', './...'], ['tool', 'staticcheck', '-tags', 'integration', './...'], ['test', '-count=1', '-vet=off', './...']]) {
     const result = await runAsync('go', args, dir);
     if (!result.ok || (args[1] === 'staticcheck' && result.output.trim())) problems.push(`${args.join(' ')}: ${result.output.trim()}`);
   }
   return problems;
 });
-fixtureDirs.forEach(({ name }, index) => {
-  const problems = fixtureProblems[index];
-  if (!step(`${name}: el Go emitido pasa tidy, gofmt, vet, staticcheck y sus pruebas`, problems.length === 0)) console.error(problems.join('\n').slice(0, 4000));
-});
+const problemsOf = new Map(pending.map(({ name }, index) => [name, pendingProblems[index]]));
+for (const { name, digest } of fixtureDirs) {
+  const label = `${name}: el Go emitido pasa tidy, gofmt, vet, staticcheck y sus pruebas`;
+  const problems = problemsOf.get(name);
+  if (!problems) step(label, true, 'sin cambios desde su última pasada en verde');
+  else if (step(label, problems.length === 0)) greenCache[name] = digest;
+  else {
+    delete greenCache[name];
+    console.error(problems.join('\n').slice(0, 4000));
+  }
+}
+fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+fs.writeFileSync(cacheFile, `${JSON.stringify(greenCache, null, 2)}\n`);
 if (onlyFixtures) {
   const failed = results.filter((result) => !result.ok).length;
   console.log(failed === 0 ? `\ngo-check --fixtures: ${results.length}/${results.length} en verde.` : `\ngo-check --fixtures: ${failed} paso(s) en rojo.`);
