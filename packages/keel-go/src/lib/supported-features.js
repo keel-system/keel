@@ -76,7 +76,7 @@ export function checkSupportedFeatures(manifest, layers) {
     }
   }
   if (declared.includes('security')) errors.push(...securityErrors(layers));
-  if (declared.includes('messaging')) errors.push(...messagingErrors(manifest, layers, declared));
+  if (declared.includes('messaging')) errors.push(...messagingErrors(manifest, layers));
   if (declared.includes('persistence') && documentPersistence(layers)) {
     errors.push(
       'capa persistence: keel-go todavía no genera la persistencia documental (llega en el incremento 12 de PLAN-KEEL-GO.md). ' +
@@ -199,21 +199,12 @@ function scheduledWithArguments(manifest, layers) {
 
 /**
  * Lo que keel-go todavía no genera de la capa messaging. La mensajería sin persistencia la rechazan los cuatro generadores
- * con el mismo motivo (keel-core/gen/messaging-frontier.js); la documental cae con la persistencia documental. Y sin la
- * capa api: el arranque de keel-go abre la base y cablea los repositorios, el puente y los listeners desde la entrada
- * HTTP, así que sin ella saldría un servicio que ni publica ni consume. La única fixture así es metering-digest, que
- * también trae el reloj: entra con él.
+ * con el mismo motivo (keel-core/gen/messaging-frontier.js); la documental cae con la persistencia documental. Sin la
+ * capa api entra (metering-digest, tramo 10c): el arranque cablea la persistencia, el puente, los listeners y el reloj
+ * sin la entrada HTTP, que solo sirve las sondas.
  */
-function messagingErrors(manifest, layers, declared) {
-  const errors = messagingWithoutPersistenceErrors(manifest, layers, 'keel-go');
-  if (errors.length === 0 && !declared.includes('api') && !documentPersistence(layers)) {
-    errors.push(
-      'capa messaging sin api — keel-go cablea la persistencia, el puente de los eventos y los listeners desde el arranque de la entrada HTTP, ' +
-        'y sin ella generaría un servicio que ni publica ni consume (llega con el reloj, incremento 10 de PLAN-KEEL-GO.md). ' +
-        'Genera este diseño con keel-spring, keel-nest o keel-dotnet.'
-    );
-  }
-  return errors;
+function messagingErrors(manifest, layers) {
+  return messagingWithoutPersistenceErrors(manifest, layers, 'keel-go');
 }
 
 /** Lo que el stack pide y keel-go no genera (un motor sin medir, la telemetría): se rechaza en el build en vez de estamparlo sin efecto. */

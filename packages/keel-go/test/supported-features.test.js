@@ -37,14 +37,13 @@ test('capa messaging: entra con persistencia relacional y API (tramo 9b-2); sin 
   assert.equal(bare.errors.length, 1);
   assert.match(bare.errors[0], /capa messaging sin persistence .*keel-go generaría un servicio que no publica/);
   const headless = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence', 'messaging'), { ...layersWith('domain', 'use-cases', 'messaging'), ...relational });
-  assert.equal(headless.errors.length, 1);
-  assert.match(headless.errors[0], /capa messaging sin api .*incremento 10/);
-  // Las fixtures: metering-digest (sin api) se rechaza; stock-reservation-events entra entera.
+  assert.deepEqual(headless.errors, []);
+  // Las fixtures: metering-digest (sin api, tramo 10c) y stock-reservation-events entran enteras.
   const fixture = (name) => {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
     return checkSupportedFeatures(manifest, layers).errors;
   };
-  assert.ok(fixture('metering-digest').some((error) => /capa messaging sin api/.test(error)));
+  assert.deepEqual(fixture('metering-digest'), []);
   assert.deepEqual(fixture('stock-reservation-events'), []);
 });
 

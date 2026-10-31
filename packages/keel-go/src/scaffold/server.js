@@ -31,6 +31,7 @@ import { SCHEDULER_IMPORT, scheduledServices, tasksFunc, usesScheduling } from '
 import { tablePurges } from './purge.js';
 import { PARAMETERS_IMPORT, PARAMETERS_VAR, usesServiceParameters } from './service-parameters.js';
 import { claimDependencies, usesSweepClaims } from './claim.js';
+import { usesCorrelation } from './correlation.js';
 
 export function generate(model) {
   const { server } = layout(model);
@@ -41,9 +42,9 @@ export function generate(model) {
   ];
 }
 
-/** ¿Cablea el arranque la mensajería? Con la API y los repositorios: el puente sale del adaptador de repositorio. */
+/** ¿Cablea el arranque la mensajería? Con los repositorios: el puente sale del adaptador de repositorio. */
 export function wiresMessaging(model) {
-  return usesGoMessaging(model) && usesApi(model) && usesDependencies(model);
+  return usesGoMessaging(model) && usesDependencies(model);
 }
 
 function mainGo(model) {
@@ -99,7 +100,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout 
 	if err != nil {
 		return fmt.Errorf("cargar la configuración: %w", err)
 	}
-${usesServiceParameters(model) ? parametersWiring(model) : ''}${usesApi(model) ? apiWiring(model) : PROBES_WIRING}
+${usesServiceParameters(model) ? parametersWiring(model) : ''}${wiring(model)}
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", srv.Addr)
 	if err != nil {
 		return fmt.Errorf("escuchar en %s: %w", srv.Addr, err)
@@ -135,7 +136,7 @@ ${usesServiceParameters(model) ? parametersWiring(model) : ''}${usesApi(model) ?
 // ningún adaptador los recibe (hoy, solo el rescate que lee su plazo de uno), se validan igual, sin variable: en Go una
 // sin usar no compila.
 function parametersWiring(model) {
-  const consumed = usesApi(model) && repositoryRoots(model).some((root) => claimDependencies(model, root).some((dep) => dep.field === 'parameters'));
+  const consumed = repositoryRoots(model).some((root) => claimDependencies(model, root).some((dep) => dep.field === 'parameters'));
   if (!consumed) {
     return `	if _, err := parameters.From(cfg); err != nil {
 		return fmt.Errorf("parámetros de despliegue: %w", err)
@@ -149,23 +150,30 @@ function parametersWiring(model) {
 `;
 }
 
-const PROBES_WIRING = `	logger := slog.New(slog.NewJSONHandler(stdout, nil))
+/**
+ * ¿Despacha alguien por los casos de uso? La entrada HTTP, los listeners o el reloj. Sin ninguno, `useCases` quedaría
+ * declarado sin uso, y en Go eso no compila.
+ */
+function dispatchesUseCases(model) {
+  return usesApi(model) || (wiresMessaging(model) && consumes(model)) || usesScheduling(model);
+}
 
-	probes := &health.Probes{}
-	srv := httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes))`;
-
-// Con la API: cada registro lleva el correlationId de la petición que lo escribe, y la entrada despacha por los casos
-// de uso, cableados aquí y solo aquí. Con la persistencia, antes de servir nada: la conexión (sin base no arranca, salvo
-// el perfil test, que no la tiene), las migraciones de goose y un repositorio por agregado sobre las transacciones.
-function apiWiring(model) {
-  const logger = '\tlogger := slog.New(correlation.NewLogHandler(slog.NewJSONHandler(stdout, nil)))\n';
+// El cableado, de arriba abajo. Cada registro lleva el correlationId de la petición o del mensaje que lo escribe. Con la
+// persistencia, antes de servir nada: la conexión (sin base no arranca, salvo el perfil test, que no la tiene), las
+// migraciones de goose y un repositorio por agregado sobre las transacciones; y los casos de uso, cableados aquí y solo
+// aquí. No depende de la capa api: sin ella (metering-digest) la entrada son los listeners y el reloj, y el servidor HTTP
+// solo sirve las sondas.
+function wiring(model) {
+  const logger = usesCorrelation(model)
+    ? '\tlogger := slog.New(correlation.NewLogHandler(slog.NewJSONHandler(stdout, nil)))\n'
+    : '\tlogger := slog.New(slog.NewJSONHandler(stdout, nil))\n';
   const settings = settingsFromConfig(model);
-  const serve = `\tsrv := httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes, useCases, logger${settings ? `, ${settings}` : ''}))`;
+  const handler = usesApi(model) ? `httpapi.NewHandler(probes, useCases, logger${settings ? `, ${settings}` : ''})` : 'httpapi.NewHandler(probes)';
+  const serve = `\tsrv := httpapi.NewServer(cfg.Server, ${handler})`;
   if (!usesDependencies(model)) {
     return `${logger}
 	probes := &health.Probes{}
-	useCases := ${newUseCasesCall(model, 'logger')}
-${serve}`;
+${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${serve}`;
   }
   const { store } = layout(model);
   const repositories = repositoryRoots(model).map((root) => ({
@@ -198,8 +206,7 @@ ${serve}`;
 	transactions := ${store.name}.NewTransactions(db, database.TransactionTimeout, logger)
 ${usesSweepClaims(model) ? sweepsWiring(store) : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
-	useCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}
-${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
+${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
 }
 
 // Los barridos del perfil (tramo 10c): la cota del lote de cada reclamo y el plazo de cada rescate. Un valor que no es un

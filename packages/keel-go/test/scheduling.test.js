@@ -25,7 +25,7 @@ import { scheduledServices, tasksPath } from '../src/scaffold/scheduling.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const STACK = { database: 'postgresql', broker: 'rabbitmq' };
-const SCHEDULED = ['payout-runs', 'job-dispatch', 'job-dispatch-cycles'];
+const SCHEDULED = ['payout-runs', 'job-dispatch', 'job-dispatch-cycles', 'metering-digest'];
 const SCHEDULER = 'internal/infrastructure/scheduler';
 
 const design = (name) => loadService(path.join(FIXTURES_DIR, name));
@@ -221,6 +221,20 @@ test('el reloj va en el errgroup del arranque, después de los casos de uso, y t
   assert.match(main, /if database\.Enabled \{\n\t\ttasks = append\(tasks,\n\t\t\tscheduler\.PurgeTask\("outbox_event", purges\.Outbox, postgres\.NewOutboxPurge\(transactions\), logger\),/);
   assert.match(content(files, 'go.mod'), /\tgithub\.com\/robfig\/cron\/v3 v3\.0\.1\n/);
   assert.match(content(plan('payout-runs').files, 'cmd/server/main.go'), /tasks = append\(tasks, scheduler\.PayoutTasks\(useCases\)\.\.\.\)/);
+});
+
+test('sin la capa api (metering-digest) el arranque cablea igual la base, el broker, los listeners y el reloj; HTTP solo sirve las sondas', () => {
+  const { files } = plan('metering-digest');
+  const main = content(files, 'cmd/server/main.go');
+  for (const wired of ['postgres.Migrate(ctx, db, logger)', 'application.NewUseCases(', 'messageListeners(inbound{', 'scheduler.DailyDigestTasks(useCases)', 'scheduler.PurgeTask("processed_event"']) {
+    assert.ok(main.includes(wired), wired);
+  }
+  for (const worker of ['rabbit.Run(groupCtx)', 'listen(groupCtx)', 'clock.Run(groupCtx)']) assert.ok(main.includes(`return ${worker}`), worker);
+  // Los registros llevan la correlación del mensaje o de la pasada; la entrada HTTP no despacha nada.
+  assert.ok(main.includes('correlation.NewLogHandler'));
+  assert.ok(main.includes('httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes))'));
+  assert.ok(content(files, 'cmd/server/broker.go'), 'el archivo del agente para el broker');
+  assert.ok(content(files, `${SCHEDULER}/daily_digest_tasks.go`).includes('func DailyDigestTasks(uc *application.UseCases) []Task'));
 });
 
 test('sin nada que corra por reloj no se genera el reloj', () => {

@@ -595,9 +595,8 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       `%TEMP%\go-build` (la trampa del antivirus ya medida); repetida a mano con `go test -c` fuera de `%TEMP%`, en verde.
     - Lo que no mide ninguna red: que un tick dispare de verdad el handler contra la base (lo medirá la corrida del 10e)
       y el apagado con una pasada en vuelo en el proceso entero (en Windows SIGTERM no ejecuta los hooks).
-      `metering-digest` sigue rechazado: el arranque cablea la persistencia desde la entrada HTTP, y sin api no hay
-      `run` que cablee los casos de uso; entra cuando el arranque los cablee sin ella (antes de la corrida del 10e).
-  - **10c, reclamos de barrido, rescate y parámetros de despliegue (hecho salvo metering-digest, 2026-10-31).** Sin
+      `metering-digest` seguía rechazado: el arranque cableaba la persistencia desde la entrada HTTP (entró en el 10c).
+  - **10c, reclamos de barrido, rescate y parámetros de despliegue (hecho, 2026-10-31).** Sin
     cambio en `keel-core`: el orden de los candidatos, las claves de `sweep.*`, las sentencias del rescate y el gradiente
     de los parámetros ya eran neutrales.
     - **El hueco de frontera, confirmado y cerrado**: keel-go ignoraba EN SILENCIO `service.parameters` (job-dispatch y
@@ -641,12 +640,27 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       suyo desde un handler; job-dispatch-mongo, documental) `serviceParameters` quedaba declarado sin uso: en Go no
       compila. Ahora el arranque los valida igual sin variable (`if _, err := parameters.From(cfg)`) cuando ningún
       adaptador los recibe. Ni `npm test` ni las tres fixtures medidas a mano lo veían.
-    - **Lo que queda del tramo: metering-digest.** Generado saltándose la frontera compila, pero su `main.go` solo sirve
-      las sondas: la persistencia, la mensajería y el reloj se cablean dentro de `apiWiring` (`server.js`), y
-      `wiresMessaging` y `usesScheduling` exigen `usesApi`. Hay que sacar ese cableado de la capa api (el servidor HTTP
-      queda solo con las sondas), quitar el rechazo de `messagingErrors` y medirlo con `go-check` y `broker-check`.
-- **Para retomar (cada incremento empieza en un contexto nuevo):** **metering-digest** (el arranque sin api, el resto
-  del 10c: ver arriba). Después 10d (gate `check-idempotency.sh`, con la familia `sweepClaim` sobre el reclamo
+    - **metering-digest: el arranque sin api (hecho).** Generado saltándose la frontera compilaba, pero su `main.go` solo
+      servía las sondas: la persistencia, la mensajería y el reloj se cableaban dentro de `apiWiring`, y `wiresMessaging`,
+      `usesScheduling` y el consumo de los parámetros exigían `usesApi`. Ahora `wiring` (`server.js`) cablea la base, el
+      broker, los casos de uso, los listeners y el reloj con api o sin ella; el servidor HTTP sin api solo sirve las sondas
+      (`httpapi.NewHandler(probes)`), el logger lleva la correlación cuando la hay (`usesCorrelation`) y `useCases` solo se
+      declara si alguien despacha por ellos (la API, un listener o el reloj: en Go una variable sin uso no compila). La
+      frontera deja de rechazar la mensajería sin api (`messagingErrors` es solo el motivo neutral de los cuatro).
+      **Medido:** `test/scheduling.test.js` (metering-digest entra en la comparación del segundo y del despacho con el
+      `Scheduler.java` de keel-spring, y una prueba del arranque sin api, falsada devolviendo `usesApi` a
+      `wiresMessaging`); `npm test` 860/860. El plan de TODAS las fixtures con los tres brokers y MySQL, comparado con
+      HEAD: solo cambia metering-digest (14 archivos por variante: el reloj, `cmd/server/broker.go` y el arranque).
+      `go-check` 115/116, con metering-digest verde en sus cuatro variantes (rabbitmq, kafka, snssqs, mysql); el único
+      rojo, `stock-reservation (mysql)`, es el «Acceso denegado» del antivirus en `%TEMP%go-build` sobre una salida
+      idéntica a HEAD. **En vivo, a mano**, el binario contra un PostgreSQL y un RabbitMQ reales en el perfil develop:
+      goose aplica la baseline, la topología se declara (colas, DLQ y exchanges), `/readyz` 200, una ruta cualquiera 404,
+      y con `PROCESSED_EVENT_PURGE_CRON` cada 2 s la purga del reloj borra las dos filas plantadas de hace 20 y 30 días y
+      deja la reciente, con su `correlationId` en el log. No se pasó `broker-check`: su sujeto es
+      stock-reservation-events y la mensajería de metering-digest es el mismo código (la diferencia era solo el arranque).
+      Lo que no mide ninguna red: los listeners de metering-digest con el broker (son del agente) y `closeDailyDigest`
+      disparado por el reloj (cron de las 02:00 y handler del agente): los medirá una corrida.
+- **Para retomar (cada incremento empieza en un contexto nuevo):** 10d (gate `check-idempotency.sh`, con la familia `sweepClaim` sobre el reclamo
   generado) y 10e (corrida `job-dispatch-cycles`). Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
   Code mata las tandas largas en segundo plano si se queda sin memoria. El hallazgo neutral de la collation de la
   sombra en MySQL espera su propia tarea en keel-core.

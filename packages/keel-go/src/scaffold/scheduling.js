@@ -19,7 +19,6 @@
 
 import { BATCHED_PURGE, batchedPurgeParameters, scheduleCron, scheduleDispatch, scheduledOperations } from '@keel-system/keel-core/gen';
 import { IDEMPOTENCY_RECORD_PURGE } from '@keel-system/keel-core/gen/request-idempotency';
-import { usesApi } from '@keel-system/keel-core/gen/features';
 import { alignRows, commentLines, goString } from '../lib/go-source.js';
 import { goFileName, layout, packageFile } from './render.js';
 import { contractOf, messageComponents, messageType, useCaseField } from './services.js';
@@ -39,10 +38,10 @@ export function scheduledServices(model) {
 
 /**
  * ¿Hay algo que corra por reloj? Operaciones con `schedule` o purgas, con los casos de uso cableados sobre la persistencia.
- * Lo cablea el arranque de la entrada HTTP: sin la capa api (metering-digest) la frontera todavía rechaza el diseño.
+ * Lo cablea el arranque, con la capa api o sin ella (metering-digest).
  */
 export function usesScheduling(model) {
-  return usesApi(model) && usesDependencies(model) && (scheduledServices(model).length > 0 || usesTablePurges(model));
+  return usesDependencies(model) && (scheduledServices(model).length > 0 || usesTablePurges(model));
 }
 
 /** El nombre de un grupo: `PayoutService` → `Payout`. */
