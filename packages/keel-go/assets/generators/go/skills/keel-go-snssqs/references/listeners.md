@@ -106,3 +106,11 @@ y se pasa YA RESUELTO al comando; nunca del payload. Un emisor que no correspond
 El mapeo campo a campo del payload al comando de `triggers` está en el comentario del mensaje: lo obligatorio llega
 como puntero, y `RequireContract` ya garantizó que viene. Despacha por `deps.UseCases.<Operación>.Handle(ctx, comando)`:
 nunca llames a un handler ni a un repositorio desde el listener.
+
+## Lo que comprueba `infra/check-idempotency.sh`
+
+Que cada listener mire la guarda en el orden que dicta el diseño (y su respuesta: `_, err := deps.Guard.TryRecord(...)`
+no deduplica nada), que llame a `RequireContract()` y que no invente la clave con `uuid.New…`. Localiza el listener por
+los mensajes que nombra y lo juzga por la **función de primer nivel** que los nombra, así que escribe cada listener en
+su propia función de `cmd/server/broker.go`: con todos dentro de `messageListeners`, el orden de uno prohibiría el
+de su vecino. Y que `brokerAdapters` devuelva tu `Dispatcher` (no `nil`) cuando el diseño publica con outbox.

@@ -94,14 +94,8 @@ export function checkSupportedFeatures(manifest, layers) {
       .map(([name]) => name);
     if (names.length === 0) continue;
     // La idempotencia de petición se adelantó al incremento 7 sobre la persistencia relacional (el registro, la firma y
-    // la cabecera) y su purga llegó con el reloj (10b). Queda el gate.
-    if (feature.key === 'idempotency' && declared.includes('persistence') && !documentPersistence(layers)) {
-      warnings.push(
-        `use-cases: ${names.join(', ')} declara${names.length === 1 ? '' : 'n'} idempotency; keel-go genera el registro, la firma del ` +
-          'mensaje, la cabecera y la purga de las claves caducadas, pero no el gate check-idempotency.sh (llega en el tramo 10d de PLAN-KEEL-GO.md).'
-      );
-      continue;
-    }
+    // la cabecera), su purga llegó con el reloj (10b) y el gate check-idempotency.sh con el 10d: ya no queda nada.
+    if (feature.key === 'idempotency' && declared.includes('persistence') && !documentPersistence(layers)) continue;
     warnings.push(
       `use-cases: ${names.join(', ')} declara${names.length === 1 ? '' : 'n'} ${feature.what}; keel-go genera el mensaje y el handler, ` +
         `pero no el mecanismo (llega en el ${feature.increment} de PLAN-KEEL-GO.md).`

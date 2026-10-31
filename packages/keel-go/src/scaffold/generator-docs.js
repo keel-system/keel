@@ -18,6 +18,7 @@ import { assetsDir, SKILL } from '../lib/assets.js';
 import { layout } from './render.js';
 import { usesRelational } from './persistence.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
+import { usesIdempotencyCheck } from './idempotency-check.js';
 import { storeDir } from '../lib/relational-engine.js';
 import { usesTokenHarness } from './identity-harness.js';
 import { usesGoRabbitMq } from './rabbitmq.js';
@@ -160,6 +161,10 @@ bash infra/score-scenarios.sh                      # compila + humo del arnés +
 ${
     (model.formatTypes ?? []).length > 0
       ? '\n`infra/check-domain-guards.sh` sale en ROJO recién generado a propósito: el formato de los value types escalares lo hace cumplir `<Tipo>Format.Validate(...)`, y esa llamada es del agente.\n'
+      : ''
+  }${
+    usesIdempotencyCheck(model)
+      ? '\n`infra/check-idempotency.sh` también sale en ROJO recién generado a propósito: comprueba que el código del agente USE los mecanismos de repetición que build generó (la guarda de los listeners, el registro de peticiones, el reclamo de los barridos, el raise de los eventos, el dispatcher del outbox). Es el mismo gate que el de los servidores de keel-spring, keel-nest y keel-dotnet.\n'
       : ''
   }`;
 }

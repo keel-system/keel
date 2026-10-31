@@ -90,6 +90,11 @@ escenario que ya estaba en verde.
      funcionando, no algo que arreglar moviendo un tipo de paquete;
    - `bash infra/check-domain-guards.sh` en verde (si existe): todo campo con formato declarado tiene quien lo
      haga cumplir. Nace ROJO a propósito: es tu trabajo el que lo pone verde.
+   - `bash infra/check-idempotency.sh` en verde (si existe): cada listener usa la guarda en el orden que dicta el
+     diseño (y mira su respuesta: un `_` en su `bool` no deduplica), cada handler idempotente usa el registro, cada
+     barrido reclama su lote, cada evento se emite desde su agregado y el dispatcher del outbox está en
+     `brokerAdapters`. Nace ROJO a propósito, como el anterior, y cada hallazgo dice qué falta y por qué. Cada listener
+     de `cmd/server/broker.go` en su propia función: el gate juzga la función que nombra sus mensajes.
    No ejecutes `bash infra/up.sh`, `go run ./cmd/server` ni escenarios: de eso se encargan otros agentes. Esto vale
    íntegro en la **primera pasada** (fase 1), en paralelo con la infraestructura y con las pruebas.
 5. Con la compilación en verde, la **revisión mecánica final** de `flow-fidelity.md` (ningún `float64` en un
@@ -141,6 +146,7 @@ compiles: true | false       # go build ./... y go vet ./... limpios
 lint: OK | KO                # go tool staticcheck ./... vacío y gofmt -l . vacío
 architecture: OK | KO        # go test ./internal/architecture/
 domainGuards: OK | KO | N/A  # bash infra/check-domain-guards.sh (N/A si no existe)
+idempotency: OK | KO | N/A   # bash infra/check-idempotency.sh (N/A si no existe)
 failures: [...]              # errores: archivo:línea y causa; relanzado, qué corregiste de cada fallo
 verifiedFlows:               # solo relanzado desde la fase 2. Verde aquí NO aprueba el escenario
   - { flow: TestProductCreation, result: OK | KO }

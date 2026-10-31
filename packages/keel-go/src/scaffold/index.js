@@ -24,6 +24,7 @@ import * as valueTypes from './value-types.js';
 import * as entities from './entities.js';
 import * as events from './events.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
+import * as idempotencyCheck from './idempotency-check.js';
 import * as dtos from './dtos.js';
 import * as services from './services.js';
 import * as mappers from './mappers.js';
@@ -70,6 +71,7 @@ const GENERATORS = [
   entities,
   events,
   domainGuardsCheck,
+  idempotencyCheck,
   dtos,
   services,
   mappers,

@@ -176,6 +176,21 @@ export function keyFinders(model, entity) {
   return finders;
 }
 
+/** El finder por la clave natural de una raíz, o null. */
+export function naturalKeyFinder(model, entity) {
+  return keyFinder(model, entity, entity.naturalKey ?? []);
+}
+
+/** Los finders de la fila que OCUPA cada índice único condicionado (los de keyFinders), con el estado del índice. */
+export function occupantFinders(model, entity) {
+  const natural = naturalKeyFinder(model, entity)?.name;
+  return partialUniqueIndexes(entity)
+    .filter((index) => index.when?.field && !index.when.field.includes('.'))
+    .map((index) => ({ finder: keyFinder(model, entity, [...index.fields, index.when.field]), state: index.when.equals }))
+    .filter(({ finder }) => finder && finder.name !== natural)
+    .map(({ finder, state }) => ({ ...finder, state }));
+}
+
 // Las bases que se buscan por lote con `= ANY($1)` sobre el valor tal cual (las mismas que keel-dotnet).
 const BATCHABLE = { string: 'text[]', text: 'text[]', int: 'integer[]', long: 'bigint[]' };
 

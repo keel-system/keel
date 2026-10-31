@@ -19,7 +19,7 @@
 //
 // Se adelantó del incremento 10 por lo mismo que en keel-nest y keel-dotnet: un aviso de frontera no frena al agente
 // cuando un escenario exige el mecanismo, y el suyo sale con otra tabla y otro algoritmo. La purga de las claves
-// caducadas (necesita el reloj) y el gate check-idempotency.sh siguen en el incremento 10.
+// caducadas llegó con el reloj (10b) y el gate check-idempotency.sh con el 10d (idempotency-check.js).
 
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { idempotencyOutcomeCodes, idempotencyOutcomeCode } from '@keel-system/keel-core/gen';

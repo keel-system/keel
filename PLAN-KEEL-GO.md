@@ -660,8 +660,33 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       stock-reservation-events y la mensajería de metering-digest es el mismo código (la diferencia era solo el arranque).
       Lo que no mide ninguna red: los listeners de metering-digest con el broker (son del agente) y `closeDailyDigest`
       disparado por el reloj (cron de las 02:00 y handler del agente): los medirá una corrida.
-- **Para retomar (cada incremento empieza en un contexto nuevo):** 10d (gate `check-idempotency.sh`, con la familia `sweepClaim` sobre el reclamo
-  generado) y 10e (corrida `job-dispatch-cycles`). Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
+  - **10d, el gate `infra/check-idempotency.sh` (hecho, 2026-10-31).** El motor es el de keel-core
+    (`gen/idempotency-gate.js`) y la matriz, con patrones de Go, está en `src/scaffold/idempotency-check.js`: dedupe,
+    payloadContract, la escritura de los dos registros como INSERT (SQL literal: ni `ON CONFLICT`, ni `INSERT IGNORE`, ni
+    `UPDATE`), commandIdempotency (registro y clave natural), domainEvent (el `raise(New<Evento>(...))` en
+    `<entidad>_behavior.go`), sweepClaim, outboxDelivery (el `Dispatcher` en `brokerAdapters`) y conditionalUniqueness
+    (el finder de la ocupante, ahora exportado con `naturalKeyFinder`/`occupantFinders` en `repositories.js`). Las
+    familias de la compensación, la reconciliación y la idempotencia saliente llegan con el 11, y la del correo con el 13.
+    - **Dos parámetros neutrales nuevos en la plataforma del motor**, sin cambio en el texto de los otros gates (su
+      default es el de antes): `blockDepth` (la profundidad desde la que se abre un método; en Go las funciones son de
+      primer nivel, y con 1 el recorte de `scope: method` partía cada cuerpo en sentencias sin su firma, que es lo que
+      nombra la entidad y lo que distingue el bloque de build) y `rootMarker` (las fuentes de Go viven en `cmd/` e
+      `internal/`, así que `srcDir: '.'` y la raíz se reconoce por `go.mod`). Los listeners viven todos en
+      `cmd/server/broker.go`: se localizan por contenido y se recortan a la función que nombra sus mensajes
+      (`typesPerFile: 'many'`). El `deny` del barrido sin reclamo añade lo que en Go también escribe con condición y no
+      reclama: `write<Entidad>` (el UPDATE del bloqueo optimista) y el puerto (`interface {`), que nombra la entidad y los
+      reclamos sin implementar ninguno.
+    - En Go la guarda responde `(bool, error)`: descartar el `bool` con `_` compila y no deduplica, y el gate lo prohíbe.
+    - **Medido:** `test/idempotency-check.test.js`, EJECUTADO con bash: las familias y los sujetos son los de keel-nest
+      en siete fixtures × tres brokers (los mismos registros vigilados con el nombre de archivo de Go), MySQL igual que
+      PostgreSQL, sin gate sin persistencia relacional; recién generado sale ROJO en cada familia con trabajo del agente y
+      la escritura de los registros (de build) verde en los dos motores; fuera de la raíz se niega; el upsert y el
+      `INSERT IGNORE` lo ponen rojo; con el uso correcto, verde, y rojo otra vez leyendo el lote con un finder, con solo
+      la nota del stub o con el reclamo del agente solo en el puerto; el listener con la clave inventada, con el `_` o
+      con el dispatcher a `nil`, rojo; tres listeners de Kafka en `broker.go`, verdes, y con el orden cruzado en uno, rojo
+      SOLO él; conditionalUniqueness, rojo y verde con la ocupante buscada. La frontera deja de avisar del gate. El
+      agente de código y el de calidad lo ejecutan (`idempotency:` en su reporte) y las tres skills de broker lo explican.
+- **Para retomar (cada incremento empieza en un contexto nuevo):** 10e (corrida `job-dispatch-cycles`). Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
   Code mata las tandas largas en segundo plano si se queda sin memoria. El hallazgo neutral de la collation de la
   sombra en MySQL espera su propia tarea en keel-core.
 

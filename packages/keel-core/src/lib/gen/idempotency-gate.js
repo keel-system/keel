@@ -16,7 +16,12 @@
 // corridas de keel-dotnet). Sin declararla, el script no cambia. Y `typesPerFile: 'many'`: el lenguaje deja
 // varios tipos en un archivo (C#), así que un archivo localizado por CONTENIDO se recorta al bloque de primer
 // nivel que nombra los mensajes; sin el recorte, tres listeners en un `Listeners.cs` se prohibían los órdenes unos
-// a otros (corrida stock-reservation-events con SNS/SQS de keel-dotnet, correcta y en rojo).
+// a otros (corrida stock-reservation-events con SNS/SQS de keel-dotnet, correcta y en rojo). Y `blockDepth`: la
+// profundidad de llaves desde la que se abre un MÉTODO, que es la ventana de `scope: method` (por defecto 1, dentro de
+// su clase). En Go las funciones son de primer nivel (0): con 1, cada cuerpo se partía en sentencias sueltas sin su
+// firma, y la firma es lo que nombra la entidad del reclamo y lo que distingue el bloque que generó build. Y
+// `rootMarker`: el archivo que dice que se está en la raíz cuando las fuentes no viven bajo una sola carpeta (en Go,
+// `cmd/` e `internal/` con `srcDir: '.'`, y entonces `go.mod`).
 //
 // Una fila de la matriz es { group, subject, why } más, según su clase:
 //   unit:  { class, require[], forbid[], locate?, confirm? }   (expresiones regulares extendidas, grep -E)
@@ -33,6 +38,7 @@ export function renderIdempotencyGate({ serviceName, platform }, checks) {
   const findPrune = excluded.length > 0 ? ` \\( ${excluded.map((dir) => `-name ${dir}`).join(' -o ')} \\) -prune -o` : '';
   const findPrint = excluded.length > 0 ? ' -print' : '';
   const narrow = platform.typesPerFile === 'many';
+  const base = platform.blockDepth ?? 1;
   const rows = checks.map((check) => {
     if (check.implementors) {
       return `impl ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.implementors)} ${shellQuote(check.exclude)} ${shellQuote(check.why)}`;
@@ -71,8 +77,13 @@ set -u
 
 SRC="${platform.srcDir}"
 
-if [ ! -d "$SRC" ]; then
-  echo "Ejecuta el script desde la raíz del proyecto (no se encontró $SRC)." >&2
+${
+    platform.rootMarker
+      ? `if [ ! -f "${platform.rootMarker}" ]; then
+  echo "Ejecuta el script desde la raíz del proyecto (no se encontró ${platform.rootMarker})." >&2`
+      : `if [ ! -d "$SRC" ]; then
+  echo "Ejecuta el script desde la raíz del proyecto (no se encontró $SRC)." >&2`
+  }
   exit 1
 fi
 
@@ -229,9 +240,9 @@ methodBody() {  # patrón que localiza el reclamo, patrón que lo acompaña, blo
     { line = $0
       t = line; o = gsub(/\\{/, "", t)
       t = line; c = gsub(/\\}/, "", t)
-      if (depth >= 1 && (buf != "" || o > 0)) buf = buf line "\\n"
+      if (depth >= ${base} && (buf != "" || o > 0)) buf = buf line "\\n"
       depth += o - c
-      if (buf != "" && depth <= 1) {
+      if (buf != "" && depth <= ${base}) {
         if (buf ~ pat && buf ~ bound && (deny == "" || buf !~ deny)) { printf "%s", buf; exit }
         buf = ""
       }

@@ -98,13 +98,11 @@ test('una operación con idempotency o cache avisa nombrándola; el barrido con 
   assert.ok(!warnings.some((w) => w.includes('plain')));
 });
 
-test('con persistencia relacional, la idempotencia ya sale, con su purga: solo avisa del gate del tramo 10d', () => {
+test('con persistencia relacional, la idempotencia sale entera (registro, purga y el gate del tramo 10d): no avisa', () => {
   const layers = layersWith('domain', 'api', 'persistence');
   layers['use-cases'] = { operations: { pay: { idempotency: {} } } };
   const { warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api', 'persistence'), layers);
-  const warning = warnings.find((w) => w.includes('idempotency'));
-  assert.match(warning, /^use-cases: pay declara idempotency; keel-go genera el registro, la firma del mensaje, la cabecera y la purga/);
-  assert.match(warning, /pero no el gate check-idempotency\.sh .*10d/);
+  assert.ok(!warnings.some((w) => w.includes('idempotency')), warnings.join('\n'));
 });
 
 test('los parámetros de despliegue entran si los lee un rescate (stalledAfter); el que solo lee un handler o de otro tipo, no', () => {
