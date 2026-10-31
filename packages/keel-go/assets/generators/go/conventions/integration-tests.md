@@ -108,10 +108,10 @@ conectado a él (SMOKE-8 lo comprueba en el humo).
 | Pieza | Cuándo existe | Para qué |
 |---|---|---|
 | `s.Deliver<Suscripción>(messageID, payloadJSON)` | por suscripción | entrega un mensaje de esa suscripción en su canal real, con la envoltura de su contrato; el MISMO `messageID` dos veces es la reentrega que el consumidor tiene que absorber |
-| `s.DeliverMessage(canal, clave, cuerpo, cabeceras)` | siempre | un mensaje crudo en un canal (un evento ajeno del canal compartido, un cuerpo roto); con RabbitMQ falla si el broker no lo enrutó, y con Kafka la clave es la del registro. `cabeceras` puede ser `nil` |
+| `s.DeliverMessage(canal, clave, cuerpo, cabeceras)` | siempre | un mensaje crudo en un canal (un evento ajeno del canal compartido, un cuerpo roto); con RabbitMQ falla si el broker no lo enrutó, con Kafka la clave es la del registro, y con SNS/SQS se publica en el topic con las cabeceras como message attributes (sin `eventType`, el filtro de la suscripción lo deja fuera) y la clave no viaja. `cabeceras` puede ser `nil` |
 | `s.PublishedMessages(canal)` | siempre | lo publicado en un canal del diseño desde el reset (`[]BrokerMessage` con `RoutingKey`, `Properties`, `Body`, y `Payload()`, `EventID()`, `EventType()`, `Type()`); con outbox, espera antes a que el relay entregue lo pendiente. Leer no consume |
 | `s.DeadLetterMessages(suscripción)` | siempre | lo que acabó en el descarte de una suscripción: úsalo también para la aserción NEGATIVA (el duplicado absorbido no acaba aquí) |
-| `s.PurgeMessages(canal o suscripción)` | siempre | vacía un canal justo antes de la acción cuyo Then afirma que NO se publica nada (con Kafka, que no borra, mueve la marca de lectura al final) |
+| `s.PurgeMessages(canal o suscripción)` | siempre | vacía un canal justo antes de la acción cuyo Then afirma que NO se publica nada (con Kafka, que no borra, mueve la marca de lectura al final; con SNS/SQS, lo publicado se lee y se purga en la cola de arnés de cada canal) |
 | `s.StopBroker()` / `s.StartBroker()` | siempre | el canal indisponible: lo para, y lo levanta esperando a que el servidor vuelva a estar conectado |
 | `s.DeadLetteredEvents()` | con `reliability: outbox` | cuántos eventos se rindió el outbox: el Then natural de casi cualquier escenario del outbox es que siga en 0 |
 | `s.AbandonOutboxEvent(evento)` / `s.ClearAbandonedOutboxEvents()` | con `reliability: outbox` | agota el presupuesto de reintentos del evento pendiente de ese tipo (la precondición de la rendición) y lo retira después |

@@ -33,6 +33,8 @@ const keycloak = byPath(planWith('profile-directory').files);
 const cognito = byPath(planWith('profile-directory', { stack: { auth: 'cognito' } }).files);
 // Lo que solo existe con un broker: la mensajería sobre RabbitMQ.
 const rabbit = byPath(planWith('stock-reservation-events', { stack: { broker: 'rabbitmq' } }).files);
+// SNS/SQS (tramo 9g): su conexión e infra/init-messaging.sh solo salen con ese broker.
+const sns = byPath(planWith('stock-reservation-events', { stack: { broker: 'snssqs' } }).files);
 
 /** Todos los markdown de assets/ (agentes, guías, convenciones, skills), recursivo. */
 function assetSources(dir = assets) {
@@ -106,7 +108,7 @@ test('la skill de la base solo se instala con persistencia relacional, y la orqu
 // Las que llevan un marcador (`<entidad>_behavior.go`) son plantillas y no se miran.
 test('cada ruta internal/, cmd/, tests/ e infra/ que citan los assets existe en lo que emite build', () => {
   const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
-  const emitted = [...Object.keys(mysql), ...Object.keys(cognito), ...Object.keys(rabbit), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path))];
+  const emitted = [...Object.keys(mysql), ...Object.keys(cognito), ...Object.keys(rabbit), ...Object.keys(sns), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path))];
   // Lo que escriben los agentes (las pruebas de flujo, con nombre de ejemplo).
   const agentWritten = /^tests\/integration\/\w+_test\.go$/;
   const missing = [];
@@ -416,4 +418,54 @@ test('lo que enseña la skill de Kafka es lo emitido', () => {
   assert.ok(read('generators', 'go', 'skills', 'keel-go-kafka', 'references', 'troubleshooting.md').includes('el diseño no declara dead-letter para esta suscripción'));
   assert.ok(connection.includes('el diseño no declara dead-letter para esta suscripción'));
   assert.ok(find('tests/integration/messaging_test.go').includes('¿falta el listener de su suscripción en cmd/server/broker.go?'));
+});
+
+// SNS/SQS (tramo 9g): la skill del broker, contra lo emitido.
+
+test('la skill de SNS/SQS se instala con ese broker, y solo con él', () => {
+  const snssqs = byPath(planWith('stock-reservation-events', { stack: { broker: 'snssqs' } }).files);
+  for (const harness of HARNESSES) {
+    assert.ok(harness.skillPath('keel-go-snssqs', 'SKILL.md') in snssqs, `${harness.id}: snssqs`);
+    for (const reference of fs.readdirSync(path.join(assets, 'generators', 'go', 'skills', 'keel-go-snssqs', 'references'))) {
+      assert.ok(harness.skillPath('keel-go-snssqs', `references/${reference}`) in snssqs, `${harness.id}: ${reference}`);
+    }
+  }
+  assert.ok(!Object.keys(snssqs).some((file) => file.includes('keel-go-rabbitmq') || file.includes('keel-go-kafka')), 'con SNS/SQS, ni la de RabbitMQ ni la de Kafka');
+  assert.ok(!Object.keys(rabbit).some((file) => file.includes('keel-go-snssqs')), 'con RabbitMQ, no');
+  assert.ok(!Object.keys(files).some((file) => file.includes('keel-go-snssqs')), 'product-catalog no tiene mensajería');
+});
+
+test('lo que enseña la skill de SNS/SQS es lo emitido', () => {
+  const snssqs = byPath(planWith('stock-reservation-events', { stack: { broker: 'snssqs' } }).files);
+  const find = (suffix) => Object.entries(snssqs).find(([file]) => file.endsWith(suffix))?.[1] ?? '';
+  const skill = read('generators', 'go', 'skills', 'keel-go-snssqs', 'SKILL.md');
+  const listeners = read('generators', 'go', 'skills', 'keel-go-snssqs', 'references', 'listeners.md');
+  const troubleshooting = read('generators', 'go', 'skills', 'keel-go-snssqs', 'references', 'troubleshooting.md');
+  const connection = find('internal/infrastructure/snssqs/connection.go');
+  assert.match(connection, /func \(c \*Connection\) Publish\(ctx context\.Context, topic, payload string, attributes map\[string\]string\) error/);
+  assert.match(connection, /func \(c \*Connection\) Consume\(ctx context\.Context, subscription string, handle Handler\) error/);
+  assert.match(connection, /type Handler func\(ctx context\.Context, message Message\) error/);
+  assert.match(connection, /\tBody +\[\]byte/);
+  assert.match(connection, /\tMessageID +string/);
+  assert.match(connection, /func \(m Message\) Attribute\(name string\) string/);
+  assert.match(connection, /var ErrUnavailable = /);
+  const consumption = find('internal/infrastructure/snssqs/consumption.go');
+  for (const member of ['func IsRetryable(err error, retriesNotFound bool) bool', 'func RetryVisibility(consumption SubscriptionConsumption, received int) time.Duration', 'func Subscriptions() []SubscriptionConsumption', '\tMaxReceive ', '\tRetriesNotFound ']) {
+    assert.ok(consumption.includes(member), member);
+  }
+  // Las llamadas de los ejemplos: la firma que enseñan es la emitida.
+  assert.ok(skill.includes('d.snssqs.Publish(ctx, destination, payload, map[string]string{"eventType": eventType, "routingKey": routingKey})'));
+  assert.ok(skill.includes('deps.SNSSQS.Consume(ctx, "StockReserved", handleStockReserved)'));
+  assert.ok(skill.includes('messaging.ParseEnvelope(message.Body)'));
+  assert.ok(listeners.includes('message.Attribute("<name>")'));
+  assert.match(snssqs['cmd/server/broker.go'], /func brokerAdapters\(settings messaging\.Settings, snssqsConn \*snssqs\.Connection, logger \*slog\.Logger\) \(outbound, error\)/);
+  assert.match(snssqs['cmd/server/messaging.go'], /\tSNSSQS +\*snssqs\.Connection/);
+  assert.match(snssqs['cmd/server/broker.go'], /con la skill keel-go-snssqs/);
+  // Lo que dice el diagnóstico que escribe el log, lo escribe.
+  for (const line of ['SQS: no se pudo sondear la cola; se reintenta', 'todavía no tiene ningún suscriptor confirmado', 'SNS: falta el message attribute eventType', 'la suscripción no declara dead-letter']) {
+    assert.ok(troubleshooting.includes(line), `troubleshooting: ${line}`);
+    assert.ok(connection.includes(line), `connection.go: ${line}`);
+  }
+  // La topología que enseña es la que siembra el script.
+  assert.match(find('infra/init-messaging.sh'), /create_queue_with_dlq 'stock-reservation-events-stock-reserved' 5 'stock-reservation-events-stock-reserved-dlq'/);
 });

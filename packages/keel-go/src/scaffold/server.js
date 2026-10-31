@@ -21,6 +21,7 @@ import { MESSAGING_IMPORT, usesGoMessaging, usesGoOutbox } from './messaging.js'
 import { brokerConnection, brokerFiles, consumes, publishes } from './broker.js';
 import { RABBITMQ_IMPORT } from './rabbitmq.js';
 import { KAFKA_IMPORT } from './kafka.js';
+import { SNSSQS_IMPORT } from './snssqs.js';
 import { newUseCasesCall, usesDependencies } from './use-cases.js';
 import { IDEMPOTENCY_STORE, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_ROLES, SECURITY_IMPORT, settingsFromConfig, usesRoleCheck } from './security.js';
@@ -68,7 +69,8 @@ function mainGo(model) {
       layout(model).store.dir,
       MESSAGING_IMPORT,
       RABBITMQ_IMPORT,
-      KAFKA_IMPORT
+      KAFKA_IMPORT,
+      SNSSQS_IMPORT
     ],
     body: `
 func main() {

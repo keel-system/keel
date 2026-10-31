@@ -14,6 +14,7 @@ import { layout, packageFile } from './render.js';
 import { MESSAGING_IMPORT, publisherPort, usesBestEffort, usesGoOutbox } from './messaging.js';
 import { RABBITMQ_IMPORT, usesGoRabbitMq } from './rabbitmq.js';
 import { KAFKA_IMPORT, usesGoKafka } from './kafka.js';
+import { SNSSQS_IMPORT, usesGoSnsSqs } from './snssqs.js';
 
 /**
  * La conexión del broker que build genera y que recibe lo del agente (en brokerAdapters y en inbound), o null si build
@@ -25,6 +26,10 @@ export function brokerConnection(model) {
   }
   // `kafkaConn` y no `kafka`: el nombre del paquete quedaría tapado en el resto de la función.
   if (usesGoKafka(model)) return { name: 'kafkaConn', field: 'Kafka', type: '*kafka.Connection', pkg: 'kafka', label: 'Kafka', import: KAFKA_IMPORT, method: 'Publish', consume: 'Consume' };
+  // `snssqsConn` por lo mismo; el campo, con las dos siglas en mayúsculas.
+  if (usesGoSnsSqs(model)) {
+    return { name: 'snssqsConn', field: 'SNSSQS', type: '*snssqs.Connection', pkg: 'snssqs', label: 'SNS/SQS', import: SNSSQS_IMPORT, method: 'Publish', consume: 'Consume' };
+  }
   return null;
 }
 

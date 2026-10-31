@@ -36,6 +36,7 @@ import * as messaging from './messaging.js';
 import * as messagingStores from './messaging-stores.js';
 import * as rabbitmq from './rabbitmq.js';
 import * as kafka from './kafka.js';
+import * as snssqs from './snssqs.js';
 import * as correlation from './correlation.js';
 import * as endpoints from './endpoints.js';
 import * as restSupport from './rest-support.js';
@@ -77,6 +78,7 @@ const GENERATORS = [
   messagingStores,
   rabbitmq,
   kafka,
+  snssqs,
   endpoints,
   restSupport,
   security,

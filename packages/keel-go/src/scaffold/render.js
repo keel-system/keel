@@ -50,6 +50,9 @@ export function layout(model) {
     rabbitmq: pkg(module, 'internal/infrastructure/rabbitmq'),
     // La conexión con Kafka (tramo 9f): consumo por suscripción con su grupo, publicación confirmada y descarte en .DLT.
     kafka: pkg(module, 'internal/infrastructure/kafka'),
+    // La conexión con SNS/SQS (tramo 9g): publicación en SNS con el tipo como atributo y consumo por cola con reintento por
+    // visibilidad.
+    snssqs: pkg(module, 'internal/infrastructure/snssqs'),
     // La prueba de la frontera hexagonal: `internal/` solo protege frente a otros módulos, no entre capas.
     architecture: pkg(module, 'internal/architecture'),
     // Las pruebas de flujo (FL-*), de caja negra y tras la restricción `integration`: `go test ./...` no las ve.

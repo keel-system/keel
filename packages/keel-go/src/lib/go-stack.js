@@ -88,6 +88,16 @@ export const MODULES = {
   // (franz-go/pkg/kmsg, BSD-3-Clause) y la compresión (klauspost/compress y pierrec/lz4, BSD-3-Clause). La v1.22.2 es de
   // 2026-10-13.
   'github.com/twmb/franz-go': { version: 'v1.22.2', license: 'BSD-3-Clause', kind: 'require', use: 'cliente de Kafka' },
+  // SNS/SQS (tramo 9g): el SDK oficial de AWS para Go, publicado como módulos por servicio que salen JUNTOS en cada
+  // release; se fijan los de la release del 2026-10-09 (la última con las dos semanas) para que tidy no mueva ninguno:
+  // el núcleo (aws, con su transporte HTTP), config (la cadena de credenciales por defecto, para un rol IAM en
+  // producción) y credentials (las estáticas del perfil), y los clientes de sns y sqs. Traen smithy-go y los módulos
+  // internos del SDK (sso, ssooidc, sts, signin, imds…), todos Apache-2.0.
+  'github.com/aws/aws-sdk-go-v2': { version: 'v1.47.3', license: 'Apache-2.0', kind: 'require', use: 'SDK de AWS: núcleo y transporte' },
+  'github.com/aws/aws-sdk-go-v2/config': { version: 'v1.33.9', license: 'Apache-2.0', kind: 'require', use: 'SDK de AWS: configuración y cadena de credenciales' },
+  'github.com/aws/aws-sdk-go-v2/credentials': { version: 'v1.20.9', license: 'Apache-2.0', kind: 'require', use: 'SDK de AWS: credenciales estáticas' },
+  'github.com/aws/aws-sdk-go-v2/service/sns': { version: 'v1.47.5', license: 'Apache-2.0', kind: 'require', use: 'cliente de SNS' },
+  'github.com/aws/aws-sdk-go-v2/service/sqs': { version: 'v1.52.4', license: 'Apache-2.0', kind: 'require', use: 'cliente de SQS' },
 
   // Herramientas, por la directiva `tool` de go.mod (`go tool <nombre>`): el proyecto no exige nada instalado
   // aparte de Go.
@@ -123,7 +133,8 @@ export const JWT_REQUIRES = ['github.com/golang-jwt/jwt/v5'];
 /** El cliente del broker de la mensajería (incremento 9), por broker. */
 export const BROKER_REQUIRES = {
   rabbitmq: ['github.com/rabbitmq/amqp091-go'],
-  kafka: ['github.com/twmb/franz-go']
+  kafka: ['github.com/twmb/franz-go'],
+  snssqs: ['github.com/aws/aws-sdk-go-v2', 'github.com/aws/aws-sdk-go-v2/config', 'github.com/aws/aws-sdk-go-v2/credentials', 'github.com/aws/aws-sdk-go-v2/service/sns', 'github.com/aws/aws-sdk-go-v2/service/sqs']
 };
 
 /** Las herramientas: todas, siempre. */

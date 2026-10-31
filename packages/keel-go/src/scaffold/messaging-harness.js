@@ -17,12 +17,17 @@
 // Kafka no tiene purga (kcat no borra registros): el aislamiento entre flujos es una MARCA DE OFFSET por canal y por
 // topic de descarte, que se fija al abrir cada flujo — la misma que los arneses de los otros tres generadores.
 //
-// RabbitMQ (9c) y Kafka (9f); SNS/SQS llega con su conexión (tramo 9g).
+// En SNS/SQS de un topic no se lee: lo publicado se lee de las COLAS DE ARNÉS que siembra infra/init-messaging.sh, una
+// por canal; y LocalStack sirve la topología de MEMORIA, así que levantar el broker la resiembra.
+//
+// RabbitMQ (9c), Kafka (9f) y SNS/SQS (9g).
 
 import {
   ENDPOINTS,
   PROBE_BODY_FILE,
+  READ_BATCH_LIMIT,
   RECORD_FORMAT,
+  SQS_SWEEP_VISIBILITY,
   UNKNOWN_TOPIC,
   deliverParts,
   deliverShell,
@@ -30,10 +35,12 @@ import {
   hole,
   kafkaGroupMembersParts,
   offsetsParts,
+  prefix,
   purgeParts,
   rabbitProbeBody,
   rabbitPublishBody,
   readParts,
+  releaseParts,
   renderParts,
   shellQuote,
   spliceBody
@@ -41,19 +48,21 @@ import {
 import { BROKERS, KAFKA_PRODUCER_TIMEOUTS, brokerContainer, devtoolsContainer } from '@keel-system/keel-core/gen/infra-catalog';
 import { deadLetterDestination, subscriptionDestination } from '@keel-system/keel-core/gen';
 import { OUTBOX_RELAY, parameterValue } from '@keel-system/keel-core/gen/messaging-stores';
-import { groupEnv, kafkaConsumption, publishedChannels, topicEnv } from '@keel-system/keel-core/gen/messaging-plan';
+import { groupEnv, kafkaConsumption, publishedChannels, queueEnv, snsSqsConsumption, topicEnv } from '@keel-system/keel-core/gen/messaging-plan';
+import { harnessQueueName } from '@keel-system/keel-core/gen/messaging-provisioning';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { usesGoOutbox } from './messaging.js';
 import { connectionName, usesGoRabbitMq } from './rabbitmq.js';
 import { usesGoKafka } from './kafka.js';
+import { usesGoSnsSqs } from './snssqs.js';
 
 /** El archivo del arnés: lo nombra la documentación neutral de infra/ (GO_INFRA.messaging.harnessReaders). */
 export const MESSAGING_HARNESS_FILE = 'messaging_test.go';
 
 /** ¿Lleva el arnés la mensajería? Con los brokers cuya conexión genera keel-go. */
 export function usesMessagingHarness(model) {
-  return usesGoRabbitMq(model) || usesGoKafka(model);
+  return usesGoRabbitMq(model) || usesGoKafka(model) || usesGoSnsSqs(model);
 }
 
 // Muy por encima de cualquier `outbox.relay.max-attempts`: el abandono no depende del perfil (el mismo número que los
@@ -74,7 +83,8 @@ export function messagingHarnessImports(model) {
 /** El cuerpo de tests/integration/messaging_test.go, o null sin mensajería. */
 export function messagingHarnessBody(model) {
   if (!usesMessagingHarness(model)) return null;
-  const sections = [scenarioMethods(model), messageType(model), plumbing(model), usesGoKafka(model) ? kafkaBody(model) : rabbitBody(model), usesGoOutbox(model) ? outboxBody(model) : ''];
+  const broker = usesGoKafka(model) ? kafkaBody(model) : usesGoSnsSqs(model) ? snsSqsBody(model) : rabbitBody(model);
+  const sections = [scenarioMethods(model), messageType(model), plumbing(model), broker, usesGoOutbox(model) ? outboxBody(model) : ''];
   return `\n${sections.map((section) => section.trim()).filter(Boolean).join('\n\n')}\n`;
 }
 
@@ -92,13 +102,20 @@ export function messagingSmokeCase(model) {
 function scenarioMethods(model) {
   const outbox = usesGoOutbox(model);
   const kafka = usesGoKafka(model);
+  const snssqs = usesGoSnsSqs(model);
   const deliverDoc = kafka
     ? `// DeliverMessage publica un registro crudo en un topic (el de una fuente), con key como su clave y headers como sus
 // headers. El cuerpo viaja en UNA línea: kcat publica un registro por línea.`
-    : `// DeliverMessage publica un mensaje crudo en un exchange (el canal de una fuente), con key como message_id y routing
+    : snssqs
+      ? `// DeliverMessage publica un mensaje crudo en el TOPIC de una fuente —no en la cola—, que es como llega uno de verdad:
+// por la suscripción SNS→SQS con su filtro por eventType, con headers como sus message attributes. Sin el eventType, el
+// filtro lo deja fuera de la cola sin ningún error. key no viaja: SNS no tiene clave de mensaje.`
+      : `// DeliverMessage publica un mensaje crudo en un exchange (el canal de una fuente), con key como message_id y routing
 // key y headers como sus cabeceras. Falla si RabbitMQ no lo enrutó a ninguna cola: lo acepta con 200 y "routed":false,
 // y sin esto el escenario moriría mucho después en una espera que habla de otra cosa.`;
-  const purgeDoc = kafka
+  const purgeDoc = snssqs
+    ? '// PurgeMessages vacía un canal publicado (su cola de arnés), el descarte de una suscripción o su cola (por el nombre de\n// la suscripción).'
+    : kafka
     ? `// PurgeMessages «vacía» un canal publicado o el descarte de una suscripción: Kafka no borra, así que mueve su marca al
 // final y lo anterior deja de leerse (el topic de una suscripción no se toca: lo que publicó la fuente, ahí sigue).`
     : '// PurgeMessages vacía un canal publicado, el descarte de una suscripción o su cola (por el nombre de la suscripción).';
@@ -257,7 +274,9 @@ func (s *Scenario) ClearAbandonedOutboxEvents() {
 function messageType(model) {
   const what = usesGoKafka(model)
     ? '// BrokerMessage es un registro leído del broker: su routing key (la clave del registro), sus propiedades (sus headers)\n// y su cuerpo.'
-    : '// BrokerMessage es un mensaje leído del broker: su routing key, sus propiedades (las de AMQP: type, message_id,\n// headers…) y su cuerpo.';
+    : usesGoSnsSqs(model)
+      ? '// BrokerMessage es un mensaje leído de una cola: su cuerpo (SNS no tiene routing key, y la lectura no trae los\n// atributos: el tipo va en la envoltura).'
+      : '// BrokerMessage es un mensaje leído del broker: su routing key, sus propiedades (las de AMQP: type, message_id,\n// headers…) y su cuerpo.';
   const typeDoc = usesGoKafka(model) ? ' (en Kafka, el header type si lo trae)' : '';
   return String.raw`${what}
 type BrokerMessage struct {
@@ -309,7 +328,10 @@ function plumbing(model) {
 		return err
 	}
 	return markChannels(ctx)`
-    : '	return awaitServerConnected(ctx)';
+    : usesGoSnsSqs(model)
+      ? // En SNS/SQS el servidor no tiene conexión que esperar (sondea su cola): la topología la resiembra startBroker.
+        '\treturn nil'
+      : '\treturn awaitServerConnected(ctx)';
   const channels = publishedChannels(model).map((entry) => goString(entry.channel));
   return String.raw`
 const (
@@ -887,6 +909,314 @@ func pendingGroups(ctx context.Context, groups []string) []string {
 	return pending
 }
 `;
+}
+
+// ─── SNS/SQS ─────────────────────────────────────────────────────────────────────────────────────
+//
+// El servicio publica en UN topic (messaging.publishing.destination) con el tipo como message attribute eventType; de un
+// topic no se lee, así que el aprovisionamiento cuelga de él una COLA DE ARNÉS por canal, llamada como el canal y
+// filtrada por sus eventos. Cada suscripción consume de su cola propia, suscrita al topic de la fuente, y su DLQ cuelga de
+// ella por RedrivePolicy. LocalStack sirve la topología de MEMORIA: levantar el broker exige resembrarla
+// (infra/init-messaging.sh) y confirmar que la suscripción entrega antes de seguir.
+
+function snsSqsBody(model) {
+  const subscriptions = model.subscriptions ?? [];
+  const consumption = snsSqsConsumption(model);
+  const channels = publishedChannels(model).map((entry) => entry.channel);
+  const outbox = usesGoOutbox(model);
+  const base = expr('queueURL');
+  const size = expr('strconv.Itoa(size)');
+  const read = readParts('snssqs', { destination: expr('queue'), count: size, base });
+  const sweep = readParts('snssqs', { destination: expr('queue'), count: size, base, hideSeconds: SQS_SWEEP_VISIBILITY });
+  const release = releaseParts('snssqs', { destination: expr('queue'), receiptHandle: expr('handle'), base });
+  const purgeCmd = purgeParts('snssqs', { destination: expr('queue'), base });
+  const remove = ['sqs', 'delete-message', '--queue-url', expr('queueURL + queue'), '--receipt-handle', expr('handle')];
+  const deliverCmd = deliverParts('snssqs', { destination: expr('topic'), bodyFile: expr('bodyFile'), attrsFile: expr('attrsFile'), base: expr('topicARN'), withAttributes: true });
+  const deliverPlain = deliverParts('snssqs', { destination: expr('topic'), bodyFile: expr('bodyFile'), base: expr('topicARN') });
+  const entries = (rows) => (rows.length === 0 ? '' : `\n${alignRows(rows.map(([key, value]) => ({ indent: '\t', cells: [`${key}:`, `${value},`] }))).join('\n')}\n`);
+  // La sonda de la resiembra: el primer evento publicado y la cola de arnés de SU canal (la que lo admite).
+  const probe = (model.events ?? [])[0];
+  const probeChannel = probe ? Object.entries(model.messaging?.eventTypesByChannel ?? {}).find(([, events]) => (events ?? []).includes(probe.name))?.[0] : null;
+  const wired = Boolean(probe && probeChannel);
+  const tag = (name) => `\`json:"${name}"\``;
+  return String.raw`
+// La fontanería de SNS/SQS: la CLI de AWS desde devtools, contra el LocalStack de infra/.
+const (
+	queueURL = ${goString(ENDPOINTS.snssqs.queueUrlPrefix)}
+	topicARN = ${goString(ENDPOINTS.snssqs.topicArnPrefix)}
+	// readBatchLimit es lo que SQS devuelve como mucho por llamada.
+	readBatchLimit = ${READ_BATCH_LIMIT.snssqs}
+)
+
+// awsPrefix es la cabeza de toda llamada a la CLI de AWS: el endpoint y la región de LocalStack.
+var awsPrefix = []string{${go(prefix('snssqs'))}}
+
+// harnessQueueOf es, por canal, la cola de ARNÉS de la que se lee lo publicado (init-messaging.sh: se llama como el canal).
+var harnessQueueOf = map[string]string{${entries(channels.map((channel) => [goString(channel), goString(harnessQueueName(channel))]))}}
+
+// queueOf es, por suscripción, su cola propia: la del perfil local, o su variable.
+var queueOf = map[string]string{${entries(consumption.map((entry, index) => [goString(entry.subscription), `envOr(${goString(queueEnv(subscriptions[index]))}, ${goString(entry.queue)})`]))}}
+
+// deadLetterOf es, por suscripción, su DLQ (las que declaran onFailure.deadLetter).
+var deadLetterOf = map[string]string{${entries(consumption.filter((entry) => entry.deadLetterQueue).map((entry) => [goString(entry.subscription), goString(entry.deadLetterQueue)]))}}
+
+// awsCLI ejecuta la CLI de AWS dentro de devtools.
+func awsCLI(ctx context.Context, args ...string) (string, error) {
+	return devtools(ctx, "", append(slices.Clone(awsPrefix), args...)...)
+}
+
+func published(ctx context.Context, channel string) ([]BrokerMessage, error) {
+	if err := requirePublished(channel); err != nil {
+		return nil, err
+	}${outbox ? `
+	if err := awaitOutboxDrained(ctx, channel); err != nil {
+		return nil, err
+	}` : ''}
+	return readQueue(ctx, harnessQueueOf[channel], readLimit)
+}
+
+func deadLetters(ctx context.Context, subscription string) ([]BrokerMessage, error) {
+	queue, err := requireDeadLetter(subscription)
+	if err != nil {
+		return nil, err
+	}
+	return readQueue(ctx, queue, readLimit)
+}
+
+func purge(ctx context.Context, channelOrSubscription string) error {
+	queue := channelOrSubscription
+	if harness, ok := harnessQueueOf[channelOrSubscription]; ok {
+		queue = harness
+	} else if own, ok := queueOf[channelOrSubscription]; ok {
+		queue = own
+	} else if dead, ok := deadLetterOf[channelOrSubscription]; ok {
+		queue = dead
+	}${outbox ? `
+	if err := awaitOutboxDrained(ctx, channelOrSubscription); err != nil {
+		return err
+	}` : ''}
+	// PurgeQueue está limitada a una vez cada 60 s por cola en AWS real; LocalStack no aplica esa cuota.
+	_, err := awsCLI(ctx, ${go(purgeCmd)})
+	return err
+}
+
+// sqsMessage es un mensaje tal como lo devuelve receive-message.
+type sqsMessage struct {
+	MessageID     string ${tag('MessageId')}
+	ReceiptHandle string ${tag('ReceiptHandle')}
+	Body          string ${tag('Body')}
+}
+
+// receivedMessages es la lista Messages de una respuesta de receive-message; una cola agotada puede no devolver ni un {}.
+func receivedMessages(raw string) ([]sqsMessage, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var answer struct {
+		Messages []sqsMessage ${tag('Messages')}
+	}
+	if err := json.Unmarshal([]byte(raw), &answer); err != nil {
+		return nil, fmt.Errorf("leer la respuesta de SQS: %w (respuesta: %s)", err, raw)
+	}
+	return answer.Messages, nil
+}
+
+// readQueue lee una cola sin consumirla (hasta count). SQS da como mucho diez por llamada y, con la lectura en peek, lo
+// devuelto vuelve a estar visible al instante: pedir más de diez es un BARRIDO que oculta lo leído para avanzar y lo
+// SUELTA al final, así que la cola queda como estaba. Se deduplica por MessageId, que es estable entre relecturas del
+// mismo mensaje — y NO por el cuerpo: la reentrega de un escenario de idempotencia comparte cuerpo con la primera.
+func readQueue(ctx context.Context, queue string, count int) ([]BrokerMessage, error) {
+	wanted := max(count, 1)
+	sweeping := wanted > readBatchLimit
+	seen := map[string]bool{}
+	var messages []BrokerMessage
+	var hidden []string
+	defer func() {
+		// Soltar es de mejor esfuerzo: el plazo de ocultación vence solo.
+		for _, handle := range hidden {
+			_, _ = awsCLI(context.WithoutCancel(ctx), ${go(release)})
+		}
+	}()
+	// Cota de llamadas: una cola que solo puede repescar lo ya visto no deja el bucle sondeando para siempre.
+	for attempt := 0; attempt < (wanted+readBatchLimit-1)/readBatchLimit+5 && len(messages) < wanted; attempt++ {
+		size := min(wanted-len(messages), readBatchLimit)
+		// En un literal de slice, gofmt sí deja espacios alrededor del +.
+		command := []string{${renderParts(read, goString)}}
+		if sweeping {
+			command = []string{${renderParts(sweep, goString)}}
+		}
+		raw, err := awsCLI(ctx, command...)
+		if err != nil {
+			if brokerStopped.Load() {
+				// Con el broker parado POR EL ESCENARIO, «no hay mensajes» es la lectura correcta.
+				return nil, nil
+			}
+			return nil, err
+		}
+		batch, err := receivedMessages(raw)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, message := range batch {
+			if sweeping && message.ReceiptHandle != "" {
+				hidden = append(hidden, message.ReceiptHandle)
+			}
+			id := message.MessageID
+			if id == "" {
+				id = message.ReceiptHandle
+			}
+			if !seen[id] {
+				seen[id] = true
+				messages = append(messages, BrokerMessage{Properties: map[string]any{}, Body: message.Body})
+			}
+		}
+		// Barriendo, un lote corto no prueba nada (lo devuelto quedó oculto); sin barrer, sí es el final.
+		if !sweeping && len(batch) < size {
+			break
+		}
+	}
+	return messages, nil
+}
+
+func deliver(ctx context.Context, topic, key, body string, headers map[string]string) error {
+	_ = key // SNS no tiene clave de mensaje.
+	_, err := withBodyFile(ctx, body, func(bodyFile string) (string, error) {
+		if len(headers) == 0 {
+			return awsCLI(ctx, ${go(deliverPlain)})
+		}
+		attributes := make(map[string]map[string]string, len(headers))
+		for name, value := range headers {
+			attributes[name] = map[string]string{"DataType": "String", "StringValue": value}
+		}
+		attributesJSON, err := json.Marshal(attributes)
+		if err != nil {
+			return "", fmt.Errorf("serializar los atributos: %w", err)
+		}
+		return withAttributesFile(ctx, string(attributesJSON), func(attrsFile string) (string, error) {
+			return awsCLI(ctx, ${go(deliverCmd)})
+		})
+	})
+	return err
+}
+
+// withAttributesFile es withBodyFile para los message attributes de una entrega, con su PROPIO nombre: viaja junto al
+// cuerpo, y con el mismo prefijo dos archivos de una misma llamada podrían pisarse.
+func withAttributesFile(ctx context.Context, content string, use func(attrsFile string) (string, error)) (string, error) {
+	attrsFile := bodyFilePrefix + "-attrs-" + rand.Text() + ".json"
+	if _, err := devtools(ctx, content, "sh", "-c", "cat > "+attrsFile); err != nil {
+		return "", err
+	}
+	defer func() { _, _ = devtools(context.WithoutCancel(ctx), "", "rm", "-f", attrsFile) }()
+	return use(attrsFile)
+}
+
+// awaitServerConnected es lo que hace startBroker tras levantar LocalStack, que sirve la topología de MEMORIA:
+// resembrarla (el mismo script del arranque, idempotente) y confirmar que entrega.${
+    outbox
+      ? ` Con el relay del outbox CONGELADO: si
+// publicara en el hueco entre el topic recreado y su suscripción, SNS aceptaría el mensaje y lo descartaría sin error. El
+// servidor es otro proceso, así que no se le pausa: se aparcan sus filas pendientes en la base (next_attempt_at en el
+// futuro, que el reclamo respeta) y se devuelven al terminar. Se aparcan dos veces, con una espera entre medias: una fila
+// que el relay ya tenía reclamada vuelve con su backoff cuando su intento falla (el topic aún no existe), y la segunda
+// pasada la recoge.`
+      : ''
+  }
+func awaitServerConnected(ctx context.Context) (err error) {${
+    outbox
+      ? `
+	// La devolución va con el defer ya puesto: si la segunda pasada falla, la primera ya dejó filas aparcadas.
+	defer func() {
+		if unpark := unparkOutbox(context.WithoutCancel(ctx)); err == nil {
+			err = unpark
+		}
+	}()
+	if err := parkOutbox(ctx); err != nil {
+		return err
+	}
+	time.Sleep(4 * time.Second)
+	if err := parkOutbox(ctx); err != nil {
+		return err
+	}`
+      : ''
+  }
+	if _, err := runCommand(ctx, bashExecutable(), []string{"infra/init-messaging.sh"}, "La topología no quedó sembrada tras levantar el broker, así que el escenario siguiente fallará por «destino inexistente» y no por lo que prueba.", ""); err != nil {
+		return err
+	}
+	return ${wired ? 'awaitTopologyWired(ctx)' : 'nil'}
+}
+${
+  outbox
+    ? `
+// parkedAt es la marca de las filas aparcadas: una fecha que ningún backoff alcanza. Sin zona: MySQL rechaza el sufijo
+// «+00» en un DATETIME, y PostgreSQL lee la misma marca en la zona de la sesión al aparcar y al devolver.
+const parkedAt = "2999-01-01 00:00:00"
+
+func parkOutbox(ctx context.Context) error {
+	_, err := db(ctx, fmt.Sprintf("UPDATE outbox_event SET next_attempt_at = '%s' WHERE published_at IS NULL AND attempts < %d", parkedAt, maxAttempts()))
+	return err
+}
+
+func unparkOutbox(ctx context.Context) error {
+	_, err := db(ctx, fmt.Sprintf("UPDATE outbox_event SET next_attempt_at = NULL WHERE next_attempt_at = '%s'", parkedAt))
+	return err
+}
+`
+    : ''
+}${
+  wired
+    ? `
+// topologyProbeQueue es la cola de arnés del canal del primer evento que publica el servicio: la que recibe la sonda.
+const topologyProbeQueue = ${goString(harnessQueueName(probeChannel))}
+
+// awaitTopologyWired confirma que la suscripción SNS→SQS resembrada ENTREGA, no solo que existe: SNS acepta un publish
+// contra un topic recién creado aunque su suscripción aún no esté lista, y sin suscriptor el mensaje se descarta sin
+// error. Publica una sonda y la espera en la cola de arnés de su canal (y la borra); una sonda perdida no es un fallo, es
+// la señal de reintentar.
+func awaitTopologyWired(ctx context.Context) error {
+	topic := envOr("MESSAGING_DESTINATION", ${goString(model.messaging?.destinationDefault ?? '')})
+	deadline := time.Now().Add(brokerTimeout)
+	for {
+		probeID := "keel-topology-probe-" + rand.Text()
+		body := ${'`{"metadata":{"eventId":`'} + jsonText(probeID) + ${'`,"eventType":`'} + jsonText(${goString(probe.name)}) + ${'`},"data":{}}`'}
+		if err := deliver(ctx, topic, probeID, body, map[string]string{"eventType": ${goString(probe.name)}}); err != nil {
+			return err
+		}
+		if found, err := takeProbe(ctx, probeID); err != nil || found {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("la suscripción SNS→SQS de %q → %q no entregó la sonda tras resembrar la topología", topic, topologyProbeQueue)
+		}
+	}
+}
+
+// takeProbe espera la sonda probeID en la cola de arnés durante cinco segundos y la borra; dice si llegó.
+func takeProbe(ctx context.Context, probeID string) (bool, error) {
+	queue := topologyProbeQueue
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+		raw, err := awsCLI(ctx, "sqs", "receive-message", "--queue-url", queueURL+queue, "--max-number-of-messages", "10", "--visibility-timeout", "0")
+		if err != nil {
+			return false, err
+		}
+		batch, err := receivedMessages(raw)
+		if err != nil {
+			return false, err
+		}
+		for _, message := range batch {
+			if handle := message.ReceiptHandle; handle != "" && strings.Contains(message.Body, probeID) {
+				_, err := awsCLI(ctx, ${go(remove)})
+				return true, err
+			}
+		}
+	}
+	return false, nil
+}
+`
+    : ''
+}`;
 }
 
 // ─── El outbox ───────────────────────────────────────────────────────────────────────────────────

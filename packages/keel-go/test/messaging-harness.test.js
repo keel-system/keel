@@ -9,9 +9,22 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
 import { deadLetterDestination, subscriptionDestination } from '@keel-system/keel-core/gen';
-import { ENDPOINTS, PROBE_BODY_FILE, RECORD_FORMAT, UNKNOWN_TOPIC, deliverShell, kafkaGroupMembersParts, rabbitProbeBody, shellQuote } from '@keel-system/keel-core/gen/broker-probes';
+import {
+  ENDPOINTS,
+  PROBE_BODY_FILE,
+  READ_BATCH_LIMIT,
+  RECORD_FORMAT,
+  SQS_SWEEP_VISIBILITY,
+  UNKNOWN_TOPIC,
+  deliverShell,
+  kafkaGroupMembersParts,
+  prefix,
+  rabbitProbeBody,
+  shellQuote
+} from '@keel-system/keel-core/gen/broker-probes';
 import { KAFKA_PRODUCER_TIMEOUTS } from '@keel-system/keel-core/gen/infra-catalog';
-import { kafkaConsumption } from '@keel-system/keel-core/gen/messaging-plan';
+import { kafkaConsumption, publishedChannels, snsSqsConsumption } from '@keel-system/keel-core/gen/messaging-plan';
+import { harnessQueueName } from '@keel-system/keel-core/gen/messaging-provisioning';
 import { planService as planDotnet } from '../../keel-dotnet/src/scaffold/index.js';
 import { planService } from '../src/scaffold/index.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
@@ -68,13 +81,10 @@ test('el flujo prepara el broker al abrir, y el humo lo comprueba (SMOKE-8)', ()
   assert.match(content(files, 'tests/integration/harness_test.go'), /func containerRuntime\(\) string/);
 });
 
-test('sin broker con conexión de keel-go no hay mensajería en el arnés', () => {
-  for (const stack of [{ broker: 'snssqs' }]) {
-    const { files } = plan('stock-reservation-events', stack);
-    assert.equal(content(files, HARNESS), undefined, stack.broker);
-    assert.doesNotMatch(content(files, 'tests/integration/flow_test.go'), /prepareBroker/);
-  }
-  assert.equal(content(plan('product-catalog').files, HARNESS), undefined);
+test('sin mensajería no hay mensajería en el arnés', () => {
+  const { files } = plan('product-catalog');
+  assert.equal(content(files, HARNESS), undefined);
+  assert.doesNotMatch(content(files, 'tests/integration/flow_test.go'), /prepareBroker/);
 });
 
 test('el outbox del arnés: rendición, abandono y espera a que el relay drene, con los defaults de keel-core', () => {
@@ -136,4 +146,73 @@ test('con Kafka, abrir el flujo marca cada canal y cada descarte, y el abandono 
   // La purga mueve la marca; el topic de una suscripción no se toca.
   assert.match(go, /\} else if _, ok := topicOf\[channelOrSubscription\]; ok \{\n\t\treturn nil\n\t\}/);
   assert.match(content(kafka('stock-reservation-events').files, 'tests/integration/flow_test.go'), /prepareBroker\(f\.t\.Context\(\)\)/);
+});
+
+// ─── SNS/SQS (tramo 9g) ──────────────────────────────────────────────────────────────────────────
+
+const snssqs = (name) => plan(name, { broker: 'snssqs' });
+
+test('con SNS/SQS, el escenario tiene los MISMOS ayudantes que con RabbitMQ (y que el arnés de keel-dotnet con SNS/SQS)', () => {
+  const methods = (go) => [...go.matchAll(/^func \(s \*Scenario\) ([A-Z]\w*)\(/gm)].map((match) => match[1]).sort();
+  const go = content(snssqs('stock-reservation-events').files, HARNESS);
+  assert.ok(go, 'messaging_test.go');
+  assert.deepEqual(methods(go), methods(content(plan('stock-reservation-events').files, HARNESS)));
+  const cs = content(plan('stock-reservation-events', { broker: 'snssqs' }, planDotnet).files, 'Support/Messaging.cs');
+  assert.deepEqual(methods(go), [...new Set([...cs.matchAll(/protected static [\w<>[\]?, ]+ ([A-Z]\w*)\(/g)].map((match) => match[1]))].sort());
+});
+
+test('con SNS/SQS, los comandos son los de keel-core/gen/broker-probes.js', () => {
+  const go = content(snssqs('stock-reservation-events').files, HARNESS);
+  assert.ok(go.includes(`queueURL = ${JSON.stringify(ENDPOINTS.snssqs.queueUrlPrefix)}`));
+  assert.ok(go.includes(`topicARN = ${JSON.stringify(ENDPOINTS.snssqs.topicArnPrefix)}`));
+  assert.ok(go.includes(`var awsPrefix = []string{${prefix('snssqs').map((part) => JSON.stringify(part)).join(', ')}}`));
+  // El peek, y el barrido que oculta para avanzar y suelta al final.
+  assert.ok(go.includes(`"--queue-url", queueURL + queue, "--max-number-of-messages", strconv.Itoa(size), "--visibility-timeout", "0"}`));
+  assert.ok(go.includes(`"--visibility-timeout", ${JSON.stringify(SQS_SWEEP_VISIBILITY)}, "--wait-time-seconds", "1"}`));
+  assert.match(go, /"sqs", "change-message-visibility", "--queue-url", queueURL\+queue, "--receipt-handle", handle, "--visibility-timeout", "0"/);
+  assert.match(go, /"sqs", "purge-queue", "--queue-url", queueURL\+queue/);
+  // La entrega va al TOPIC con los atributos: sin eventType, el filtro de la suscripción la deja fuera.
+  assert.match(go, /"sns", "publish", "--topic-arn", topicARN\+topic, "--message", "file:\/\/"\+bodyFile, "--message-attributes", "file:\/\/"\+attrsFile/);
+  assert.match(go, /"sns", "publish", "--topic-arn", topicARN\+topic, "--message", "file:\/\/"\+bodyFile\)/);
+  assert.ok(go.includes(`readBatchLimit = ${READ_BATCH_LIMIT.snssqs}`));
+  // Los atributos viajan en un archivo con su PROPIO nombre: con el del cuerpo, una entrega se pisaba a sí misma
+  // (broker-check, sabotaje shared-body: rompía todas las entregas en vez de solo la carrera).
+  assert.match(go, /attrsFile := bodyFilePrefix \+ "-attrs-" \+ rand\.Text\(\) \+ "\.json"/);
+  assert.match(go, /return withAttributesFile\(ctx, string\(attributesJSON\)/);
+});
+
+test('con SNS/SQS, las colas del arnés son las que siembra infra/init-messaging.sh', () => {
+  for (const name of ['stock-reservation-events', 'stock-reservation', 'notification-mailer', 'catalog-extended', 'payment-checkout']) {
+    const { files, model } = snssqs(name);
+    const go = content(files, HARNESS);
+    const script = content(files, 'infra/init-messaging.sh');
+    assert.ok(script, `${name}: init-messaging.sh`);
+    for (const entry of snsSqsConsumption(model)) {
+      assert.match(go, new RegExp(`"${entry.subscription}":\\s+envOr\\("[A-Z_]+", "${entry.queue}"\\),`), `${name}: cola de ${entry.subscription}`);
+      assert.ok(script.includes(`'${entry.queue}'`), `${name}: init-messaging.sh crea ${entry.queue}`);
+      if (entry.deadLetterQueue) {
+        assert.match(go, new RegExp(`"${entry.subscription}":\\s+"${entry.deadLetterQueue}",`), `${name}: DLQ de ${entry.subscription}`);
+        assert.ok(script.includes(`create_queue_with_dlq '${entry.queue}' ${entry.maxReceive} '${entry.deadLetterQueue}'`), `${name}: la DLQ con su maxReceiveCount`);
+      }
+    }
+    for (const { channel } of publishedChannels(model)) {
+      assert.match(go, new RegExp(`"${channel}":\\s+"${harnessQueueName(channel)}",`), `${name}: cola de arnés de ${channel}`);
+      assert.ok(script.includes(`'${harnessQueueName(channel)}'`), `${name}: init-messaging.sh crea la cola de arnés ${channel}`);
+    }
+  }
+});
+
+test('con SNS/SQS, levantar el broker resiembra la topología con el outbox aparcado y espera a que entregue', () => {
+  const go = content(snssqs('stock-reservation-events').files, HARNESS);
+  // Al abrir el flujo no hay conexión que esperar: el servidor sondea su cola.
+  assert.match(go, /brokerStopped\.Store\(false\)\n\treturn nil\n\}/);
+  assert.match(go, /runCommand\(ctx, bashExecutable\(\), \[\]string\{"infra\/init-messaging\.sh"\}/);
+  assert.match(go, /parkOutbox\(ctx\)[\s\S]*time\.Sleep\(4 \* time\.Second\)[\s\S]*parkOutbox\(ctx\)/);
+  assert.match(go, /UPDATE outbox_event SET next_attempt_at = NULL WHERE next_attempt_at = '%s'/);
+  assert.match(go, /return awaitTopologyWired\(ctx\)/);
+  // Sin outbox (best-effort) no se aparca nada, pero se resiembra igual.
+  const bestEffort = content(plan('metering-digest', { broker: 'snssqs' }).files, HARNESS);
+  assert.ok(bestEffort);
+  assert.doesNotMatch(bestEffort, /parkOutbox/);
+  assert.match(bestEffort, /infra\/init-messaging\.sh/);
 });

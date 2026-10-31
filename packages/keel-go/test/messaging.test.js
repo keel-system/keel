@@ -11,9 +11,10 @@ import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { loadService } from '@keel-system/keel-core';
 import { OUTBOX_EVENT, PROCESSED_EVENT, OUTBOX_RELAY } from '@keel-system/keel-core/gen/messaging-stores';
-import { kafkaConsumption, rabbitTopology } from '@keel-system/keel-core/gen/messaging-plan';
+import { kafkaConsumption, rabbitTopology, snsSqsConsumption } from '@keel-system/keel-core/gen/messaging-plan';
 import { kafkaListenerRetry, rabbitListenerRetry } from '@keel-system/keel-core/gen';
 import { retryLiteral } from '../src/scaffold/kafka.js';
+import { consumptionLiteral, retryVisibilitySeconds } from '../src/scaffold/snssqs.js';
 import { planService as planDotnet } from '../../keel-dotnet/src/scaffold/index.js';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { springSchema } from '../../keel-spring/test/helpers/schema-table.js';
@@ -375,4 +376,126 @@ test('con Kafka, el arranque cablea su conexión y lo del agente la recibe', () 
   assert.match(main, /Kafka: +kafkaConn,/);
   assert.match(content(files, 'cmd/server/broker.go'), /func brokerAdapters\(settings messaging\.Settings, kafkaConn \*kafka\.Connection, logger \*slog\.Logger\) \(outbound, error\)/);
   assert.match(content(files, 'cmd/server/messaging.go'), /\tKafka +\*kafka\.Connection\n/);
+});
+
+// ─── SNS/SQS (tramo 9g) ──────────────────────────────────────────────────────────────────────────
+
+const SNSSQS = 'internal/infrastructure/snssqs';
+
+/** El consumo que declara consumption.go, leído con el mismo literal que lo escribe. */
+function goSnsSqsConsumption(files) {
+  const go = content(files, `${SNSSQS}/consumption.go`);
+  return [...go.matchAll(/^\t(\{Subscription: [^\n]*\}),$/gm)].map((m) => m[1]);
+}
+
+/** El consumo que declara el SnsSqsConsumption.cs de keel-dotnet, como datos. */
+function dotnetSnsSqsConsumption(files) {
+  const cs = files.find((file) => file.path.endsWith('/SnsSqsConsumption.cs')).content;
+  return [...cs.matchAll(/new\("([^"]+)", "([^"]+)", (null|"[^"]+"), (true|false), (\d+), (\d+), ([\d.]+), (null|\d+)\)/g)].map((m) => ({
+    subscription: m[1],
+    queue: m[2],
+    retriesNotFound: m[4] === 'true',
+    deadLetterQueue: m[3] === 'null' ? null : m[3].slice(1, -1),
+    maxReceive: Number(m[5]),
+    initialMs: Number(m[6]),
+    multiplier: Number(m[7]),
+    maxDelayMs: m[8] === 'null' ? null : Number(m[8])
+  }));
+}
+
+test('stock-reservation-events: la conexión con SNS/SQS, su configuración y el SDK de AWS en go.mod', () => {
+  const files = plan('stock-reservation-events', { broker: 'snssqs' });
+  for (const name of ['doc', 'consumption', 'settings', 'connection', 'snssqs_test']) assert.ok(content(files, `${SNSSQS}/${name}.go`), name);
+  const mod = content(files, 'go.mod');
+  for (const [module, version] of [
+    ['github.com/aws/aws-sdk-go-v2', 'v1.47.3'],
+    ['github.com/aws/aws-sdk-go-v2/config', 'v1.33.9'],
+    ['github.com/aws/aws-sdk-go-v2/credentials', 'v1.20.9'],
+    ['github.com/aws/aws-sdk-go-v2/service/sns', 'v1.47.5'],
+    ['github.com/aws/aws-sdk-go-v2/service/sqs', 'v1.52.4']
+  ]) {
+    assert.ok(mod.includes(`\t${module} ${version}\n`), module);
+  }
+  assert.doesNotMatch(mod, /amqp091|franz-go/);
+  const connection = content(files, `${SNSSQS}/connection.go`);
+  // El ARN se resuelve LISTANDO y exige un suscriptor confirmado: nunca se crea el topic al publicar.
+  assert.match(connection, /sns\.NewListTopicsPaginator/);
+  assert.match(connection, /pendingConfirmation = "PendingConfirmation"/);
+  assert.doesNotMatch(connection, /CreateTopic/);
+  assert.match(connection, /attributes\["eventType"\] == ""/);
+  // Los plazos de SNS de keel-core, y el sondeo con el contador de recepciones.
+  assert.match(connection, /snsAttemptTimeout = 1500 \* time\.Millisecond/);
+  assert.match(connection, /snsMaxAttempts {4}= 2/);
+  assert.match(connection, /sqstypes\.MessageSystemAttributeNameApproximateReceiveCount/);
+  // Lo transitorio alarga la visibilidad con la curva; lo agotado se suelta para la RedrivePolicy; lo no reintentable
+  // va a la DLQ por la conexión.
+  assert.match(connection, /c\.changeVisibility\(work, client, queueURL, received, RetryVisibility\(consumption, message\.ReceiveCount\)\)/);
+  assert.match(connection, /c\.changeVisibility\(work, client, queueURL, received, 0\)/);
+  assert.match(connection, /client\.SendMessage\(work, &sqs\.SendMessageInput\{QueueUrl: aws\.String\(deadLetterURL\)/);
+  // Sin SNS/SQS, ni el paquete ni el SDK.
+  const rabbit = plan('stock-reservation-events');
+  assert.doesNotMatch(content(rabbit, 'go.mod'), /aws-sdk-go-v2/);
+  assert.equal(rabbit.find((file) => file.path.startsWith(`${SNSSQS}/`)), undefined);
+});
+
+for (const name of MESSAGING_FIXTURES) {
+  test(`${name}: snssqs.yaml es el de keel-dotnet, byte a byte, en los cuatro perfiles`, () => {
+    const ours = plan(name, { broker: 'snssqs' });
+    const dotnet = plan(name, { broker: 'snssqs' }, planDotnet);
+    for (const profile of PROFILES) {
+      const file = `config/parameters/${profile}/snssqs.yaml`;
+      assert.ok(content(ours, file), file);
+      assert.equal(content(ours, file), content(dotnet, file), file);
+    }
+  });
+
+  test(`${name}: toda clave que lee snssqs.SettingsFrom existe en su snssqs.yaml`, () => {
+    const files = plan(name, { broker: 'snssqs' });
+    const keys = [...content(files, `${SNSSQS}/settings.go`).matchAll(/"(aws\.[a-z0-9.-]+)"/g)].map((match) => match[1]);
+    assert.ok(keys.length >= 9, keys.join(', '));
+    // develop las tiene todas: production no fija endpoints (el SDK resuelve el de AWS).
+    const yaml = flatten(parseYaml(content(files, 'config/parameters/develop/snssqs.yaml')));
+    for (const key of keys) assert.ok(yaml.has(key), `${key} no está en snssqs.yaml`);
+  });
+
+  test(`${name}: el consumo de SNS/SQS es el de keel-core y el de keel-dotnet (colas, DLQ, recepciones y curva)`, () => {
+    const { model, files } = planService({ ...design(name), workspace: FIXTURES_DIR, stack: { broker: 'snssqs' } });
+    const expected = snsSqsConsumption(model);
+    assert.deepEqual(goSnsSqsConsumption(files), expected.map(consumptionLiteral));
+    assert.deepEqual(dotnetSnsSqsConsumption(plan(name, { broker: 'snssqs' }, planDotnet)), expected);
+    // Las colas y la DLQ con su maxReceiveCount son las que siembra init-messaging.sh.
+    const script = content(files, 'infra/init-messaging.sh');
+    for (const entry of expected) {
+      const line = entry.deadLetterQueue ? `create_queue_with_dlq '${entry.queue}' ${entry.maxReceive} '${entry.deadLetterQueue}'` : `create_queue '${entry.queue}'`;
+      assert.ok(script.includes(line), line);
+    }
+  });
+}
+
+test('con SNS/SQS, la visibilidad del reintento de la prueba emitida es la de keel-dotnet', () => {
+  const { model } = planService({ ...design('stock-reservation-events'), workspace: FIXTURES_DIR, stack: { broker: 'snssqs' } });
+  const entry = snsSqsConsumption(model)[0];
+  // La cuenta de RetryVisibilitySeconds de keel-dotnet: initial·multiplier^(n-1), con techo, al segundo hacia arriba.
+  for (const received of [1, 2, 3, 5, 12]) {
+    const delay = entry.initialMs * entry.multiplier ** Math.max(received - 1, 0);
+    const capped = entry.maxDelayMs != null ? Math.min(delay, entry.maxDelayMs) : delay;
+    assert.equal(retryVisibilitySeconds(entry, received), Math.min(Math.ceil(capped / 1000), 43200), String(received));
+  }
+  const emitted = content(plan('stock-reservation-events', { broker: 'snssqs' }), `${SNSSQS}/snssqs_test.go`);
+  assert.match(emitted, new RegExp(`\\t2: +${retryVisibilitySeconds(entry, 2)} \\* time\\.Second,`));
+});
+
+test('con SNS/SQS, el arranque cablea su conexión y lo del agente la recibe', () => {
+  const files = plan('stock-reservation-events', { broker: 'snssqs' });
+  const main = content(files, 'cmd/server/main.go');
+  assert.match(main, /snssqsConnSettings, err := snssqs\.SettingsFrom\(cfg\)/);
+  assert.match(main, /snssqsConn := snssqs\.New\(snssqsConnSettings, messagingSettings, logger\)/);
+  assert.match(main, /adapters, err := brokerAdapters\(messagingSettings, snssqsConn, logger\)/);
+  assert.match(main, /return snssqsConn\.Run\(groupCtx\)/);
+  assert.match(main, /SNSSQS: +snssqsConn,/);
+  assert.match(content(files, 'cmd/server/broker.go'), /func brokerAdapters\(settings messaging\.Settings, snssqsConn \*snssqs\.Connection, logger \*slog\.Logger\) \(outbound, error\)/);
+  assert.match(content(files, 'cmd/server/broker.go'), /Cada suscripción tiene su cola propia/);
+  assert.match(content(files, 'cmd/server/messaging.go'), /\tSNSSQS +\*snssqs\.Connection\n/);
+  // La topología la siembra el infra/init-messaging.sh neutral, con los textos de keel-go.
+  assert.match(content(files, 'infra/init-messaging.sh'), /la skill keel-go-snssqs/);
 });

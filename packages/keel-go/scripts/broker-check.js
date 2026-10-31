@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-// La MENSAJERÍA de keel-go contra un RabbitMQ y un Kafka reales (tramos 9c y 9f): lo único que dice que la conexión, la
+// La MENSAJERÍA de keel-go contra un RabbitMQ, un Kafka y un LocalStack (SNS/SQS) reales (tramos 9c, 9f y 9g): lo único que dice que la conexión, la
 // topología (o el consumo por grupo), la publicación con confirmación, el consumo con su reintento y su descarte, la
 // reconexión, el relay del outbox y los helpers del arnés funcionan juntos. Es el broker-check de keel-dotnet, keel-nest
 // y keel-spring para este generador.
 //
 // Por qué no está en `npm test`: necesita Go, red (proxy.golang.org la primera vez), podman o docker, y minutos.
 //
-//   node packages/keel-go/scripts/broker-check.js [--broker=rabbitmq,kafka] [--keep] [--only-sabotage=<id>]
+//   node packages/keel-go/scripts/broker-check.js [--broker=rabbitmq,kafka,snssqs] [--keep] [--only-sabotage=<id>]
 //   npm run broker-check --workspace packages/keel-go
 //
 // El sujeto es stock-reservation-events: outbox, y tres suscripciones Keel de la misma fuente (en RabbitMQ comparten
-// cola; en Kafka cada una tiene su consumer group), con reintento y descarte. Lo que en el proyecto escribiría el agente
+// cola; en Kafka cada una tiene su consumer group; en SNS/SQS, su cola propia), con reintento y descarte. Lo que en el proyecto escribiría el agente
 // se escribe aquí como SONDA, donde lo escribiría él (cmd/server/broker.go): un messaging.Dispatcher sobre
 // Connection.Publish y un listener sobre Connection.Consume (en Kafka, uno por suscripción) cuyo comportamiento lo decide
 // el eventId (7e000000-… falla de forma transitoria, b0000000-… es un rechazo de negocio, el
@@ -39,7 +39,7 @@ const DESIGN = 'stock-reservation-events';
 const keep = process.argv.includes('--keep');
 const onlySabotage = process.argv.find((arg) => arg.startsWith('--only-sabotage='))?.split('=')[1] ?? null;
 const brokerArg = process.argv.find((arg) => arg.startsWith('--broker='));
-const BROKERS = brokerArg ? brokerArg.slice('--broker='.length).split(',') : ['rabbitmq', 'kafka'];
+const BROKERS = brokerArg ? brokerArg.slice('--broker='.length).split(',') : ['rabbitmq', 'kafka', 'snssqs'];
 const isWindows = process.platform === 'win32';
 const results = [];
 
@@ -81,7 +81,8 @@ function go(projectDir, args) {
 
 async function checkBroker(broker) {
 const kafka = broker === 'kafka';
-const label = { rabbitmq: 'RabbitMQ', kafka: 'Kafka' }[broker];
+const snssqs = broker === 'snssqs';
+const label = { rabbitmq: 'RabbitMQ', kafka: 'Kafka', snssqs: 'SNS/SQS' }[broker];
 console.log(`\n── ${label} ──`);
 // ── El proyecto, generado por build como en una corrida ──────────────────────────────────────────
 const stack = { database: 'postgresql', broker };
@@ -101,12 +102,16 @@ const sub = model.subscriptions.find((candidate) => candidate.name === 'StockRes
 const event = model.events[0];
 const channel = model.messaging.publishChannels[0];
 const routingKey = event.routingKeyDefault;
-const attempts = kafka ? kafkaListenerRetry(model).attempts : rabbitListenerRetry(model).attempts;
+// En SNS/SQS los intentos los cuenta la cola: las recepciones antes de la RedrivePolicy (onFailure.retry.maxAttempts).
+const attempts = { rabbitmq: () => rabbitListenerRetry(model).attempts, kafka: () => kafkaListenerRetry(model).attempts, snssqs: () => sub.retry?.maxAttempts ?? 1 }[broker]();
 // Lo que cambia de la sonda entre brokers: la conexión, la publicación, el cuerpo del mensaje y cómo se consume. En
 // Kafka cada suscripción tiene su grupo y su listener: la sonda los registra TODOS (un proyecto completo los tiene, y el
 // arnés espera a sus grupos), y solo el de la suscripción medida actúa.
+// En SNS/SQS no hay clave de mensaje: el tipo viaja como message attribute, que es sobre lo que filtran las suscripciones.
 const conn = kafka
   ? { pkg: 'kafka', param: 'kafkaConn', field: 'Kafka', publish: 'd.conn.Publish(ctx, destination, routingKey, payload, nil)', body: 'Value' }
+  : snssqs
+  ? { pkg: 'snssqs', param: 'snssqsConn', field: 'SNSSQS', publish: 'd.conn.Publish(ctx, destination, payload, map[string]string{"eventType": eventType, "routingKey": routingKey})', body: 'Body' }
   : { pkg: 'rabbitmq', param: 'rabbit', field: 'Rabbit', publish: 'd.conn.Publish(ctx, destination, routingKey, eventType, payload, nil)', body: 'Body' };
 const listenersReturn = kafka
   ? `ignore := func(context.Context, kafka.Message) error { return nil }
@@ -115,6 +120,8 @@ ${model.subscriptions
   .map((candidate) => `		func(ctx context.Context) error { return deps.Kafka.Consume(ctx, ${JSON.stringify(candidate.name)}, ${candidate.name === sub.name ? 'handle' : 'ignore'}) },`)
   .join('\n')}
 	}, nil`
+  : snssqs
+  ? `return []listener{func(ctx context.Context) error { return deps.SNSSQS.Consume(ctx, ${JSON.stringify(sub.name)}, handle) }}, nil`
   : `return []listener{func(ctx context.Context) error { return deps.Rabbit.Consume(ctx, queue, handle) }}, nil`;
 
 // ── Lo del agente, como sonda: cmd/server/broker.go ────────────────────────────────────────────
@@ -171,17 +178,17 @@ func recordAttempt(eventID string) error {
 	return file.Close()
 }
 
-// messageListeners es la sonda del listener que escribiría el agente${kafka ? ', uno por suscripción' : ', uno para la cola compartida'}. Lo que hace lo
+// messageListeners es la sonda del listener que escribiría el agente${kafka ? ', uno por suscripción' : snssqs ? ', el de la suscripción medida' : ', uno para la cola compartida'}. Lo que hace lo
 // decide el eventId: 7e000000-… falla de forma transitoria (se reintenta y acaba en el descarte), b0000000-… es un
 // rechazo de negocio (descarte sin reintento); el resto se procesa con IdempotencyGuard.TryRecord.
 func messageListeners(deps inbound) ([]listener, error) {
-${kafka ? '' : `	queue := deps.Settings.Subscriptions[${JSON.stringify(sub.name)}].Queue
+${kafka || snssqs ? '' : `	queue := deps.Settings.Subscriptions[${JSON.stringify(sub.name)}].Queue
 `}	handle := func(ctx context.Context, message ${conn.pkg}.Message) error {
 		envelope, err := messaging.ParseEnvelope(message.${conn.body})
 		if err != nil {
 			return err
 		}
-		// ${kafka ? 'El grupo recibe el topic entero' : 'La cola la comparten varias suscripciones'}: lo que no es nuestro se confirma SIN efecto.
+		// ${kafka ? 'El grupo recibe el topic entero' : snssqs ? 'La cola filtra por eventType, pero el filtro no es la única defensa' : 'La cola la comparten varias suscripciones'}: lo que no es nuestro se confirma SIN efecto.
 		if envelope.Metadata.EventType != ${JSON.stringify(sub.name)} {
 			return nil
 		}
@@ -224,10 +231,15 @@ const foreign = JSON.stringify({
   data: {}
 });
 const q = JSON.stringify;
-// Con Kafka el arranque tras levantar el broker suma el reparto del grupo: más margen.
-const recovery = kafka ? 90 : 30;
+// Con Kafka el arranque tras levantar el broker suma el reparto del grupo, y con SNS/SQS la resiembra: más margen.
+const recovery = kafka || snssqs ? 90 : 30;
 // Lo publicado: en RabbitMQ, la routing key y el tipo nativo; en Kafka, la clave del registro.
-const publishedShape = kafka
+// En SNS/SQS no hay clave: el tipo de la envoltura (si no casara con el filtro, la cola de arnés no lo habría recibido).
+const publishedShape = snssqs
+  ? `if message.EventType() != ${q(event.name)} {
+				s.Errorf("tipo %q", message.EventType())
+			}`
+  : kafka
   ? `if message.RoutingKey != ${q(routingKey)} {
 				s.Errorf("clave %q", message.RoutingKey)
 			}`
@@ -237,6 +249,20 @@ const publishedShape = kafka
 // RabbitMQ: lo que no tiene cola (mandatory) no se da por publicado. Kafka crea el topic con el primer mensaje.
 const mandatoryCase = kafka
   ? ''
+  : snssqs
+  ? `
+	f.Scenario("FL-BRK-002-B: una fila cuyo topic no existe no se da por publicada (la conexión no lo crea)", func(s *Scenario) {
+		id := probeID("")
+		s.Db("INSERT INTO outbox_event (id, destination, routing_key, event_type, payload, created_at, attempts) VALUES ('" + id + "', 'keel-sin-topic', '${routingKey}', '${event.name}', '{}', now(), 0)")
+		// Hasta que el relay la intente o la dé por publicada: lo segundo es el fallo que se mide, y tiene que decirlo.
+		s.Eventually(func() bool {
+			return probeCount(s, "SELECT COUNT(*) FROM outbox_event WHERE id = '"+id+"' AND (attempts >= 1 OR published_at IS NOT NULL)") == 1
+		}, 20*time.Second, "el relay no lo intentó")
+		if got := probeCount(s, "SELECT COUNT(*) FROM outbox_event WHERE id = '"+id+"' AND published_at IS NULL"); got != 1 {
+			s.Error("se dio por publicada una fila sin topic")
+		}
+		s.Db("DELETE FROM outbox_event WHERE id = '" + id + "'")
+	})`
   : `
 	f.Scenario("FL-BRK-002-B: lo que no tiene cola (mandatory) no se da por publicado", func(s *Scenario) {
 		id := probeID("")
@@ -519,7 +545,7 @@ const CASES = { 'FL-BRK-001': kafka ? 'ABCDEFGHI' : 'ABCDEFGH', 'FL-BRK-002': ka
 const SABOTAGES = {
   // El rechazo de negocio tratado como reintentable: se reintenta y acaba en el descarte con más de un intento.
   'rejection-retried': {
-    file: kafka ? 'internal/infrastructure/kafka/consumption.go' : 'internal/infrastructure/rabbitmq/topology.go',
+    file: kafka ? 'internal/infrastructure/kafka/consumption.go' : snssqs ? 'internal/infrastructure/snssqs/consumption.go' : 'internal/infrastructure/rabbitmq/topology.go',
     from: 'return retriesNotFound && rejected.Kind() == domain.KindNotFound',
     to: 'return retriesNotFound || rejected.Kind() != domain.KindNotFound',
     expect: 'FL-BRK-001-D'
@@ -533,14 +559,14 @@ const SABOTAGES = {
     expect: 'FL-BRK-001-G'
   },
   // Sin mandatory, lo que no tiene cola se confirma igual y el relay lo da por publicado.
-  mandatory: kafka ? null : {
+  mandatory: kafka || snssqs ? null : {
     file: 'internal/infrastructure/rabbitmq/connection.go',
     from: 'ch.PublishWithDeferredConfirmWithContext(confirmCtx, exchange, routingKey, true, false, message)',
     to: 'ch.PublishWithDeferredConfirmWithContext(confirmCtx, exchange, routingKey, false, false, message)',
     expect: 'FL-BRK-002-B'
   },
   // El consumidor que no se rearma: al caer la conexión, Consume vuelve y nadie vuelve a consumir.
-  'consumer-not-rearmed': kafka ? null : {
+  'consumer-not-rearmed': kafka || snssqs ? null : {
     file: 'internal/infrastructure/rabbitmq/connection.go',
     from: '\t\tif ctx.Err() != nil {\n\t\t\treturn nil\n\t\t}\n\t\t// Si cayó la conexión',
     to: '\t\tif ctx.Err() == nil {\n\t\t\treturn nil\n\t\t}\n\t\t// Si cayó la conexión',
@@ -553,6 +579,16 @@ const SABOTAGES = {
         from: 'kgo.RecordHeader{Key: "kafka_dlt-original-topic", Value: []byte(record.Topic)}',
         to: 'kgo.RecordHeader{Key: "kafka_dlt-original-topic", Value: []byte(group)}',
         expect: 'FL-BRK-001-I'
+      }
+    : null,
+  // Lo no reintentable devuelto a la cola en vez de llevarlo a la DLQ: la RedrivePolicy acaba llevándolo, pero tras
+  // todas sus recepciones. Caen los dos casos «sin reintento»: el rechazo de negocio y el contrato incumplido.
+  'dlq-not-direct': snssqs
+    ? {
+        file: 'internal/infrastructure/snssqs/connection.go',
+        from: '_, err := client.SendMessage(work, &sqs.SendMessageInput{QueueUrl: aws.String(deadLetterURL), MessageBody: received.Body, MessageAttributes: received.MessageAttributes})',
+        to: 'err := errors.New("sabotaje: lo no reintentable vuelve a la cola")\n\t\tc.changeVisibility(work, client, queueURL, received, 0)',
+        expect: ['FL-BRK-001-D', 'FL-BRK-001-E']
       }
     : null
 };
@@ -567,6 +603,12 @@ step(`${label}: check-flows.sh: los flujos sonda respetan la caja negra`, flows.
 const up = bash(projectDir, 'infra/up.sh');
 if (!step(`${label}: bash infra/up.sh (PostgreSQL y el broker)`, up.status === 0, up.status === 0 ? '' : up.output.slice(-1200))) return;
 try {
+  // La topología de SNS/SQS no la crea la aplicación: la siembra init-messaging.sh, que en una corrida ejecuta el agente
+  // de infraestructura tras levantar la infra.
+  if (fs.existsSync(path.join(projectDir, 'infra', 'init-messaging.sh'))) {
+    const seed = bash(projectDir, 'infra/init-messaging.sh');
+    step(`${label}: bash infra/init-messaging.sh`, seed.status === 0, seed.status === 0 ? '' : seed.output.slice(-1500));
+  }
   const validate = bash(projectDir, 'infra/validate-infra.sh');
   step(`${label}: bash infra/validate-infra.sh (el broker incluido)`, validate.status === 0, validate.status === 0 ? '' : validate.output.slice(-1200));
 
@@ -600,8 +642,9 @@ try {
     try {
       const sabotaged = bash(projectDir, 'infra/score-scenarios.sh');
       const failed = [...sabotaged.output.matchAll(/FALLO\s+(FL-BRK-\d{3}-[A-Z])/g)].map((match) => match[1]);
-      const caught = sabotaged.status === 1 && failed.length === 1 && failed[0] === sabotage.expect;
-      step(`${label}: falsado ${id}: ${sabotage.expect} sale FALLO (y solo él) y el script con 1`, caught, caught ? '' : `código ${sabotaged.status}, FALLO: ${failed.join(', ') || '(ninguno)'}\n${sabotaged.output.slice(-1500)}`);
+      const expected = [sabotage.expect].flat();
+      const caught = sabotaged.status === 1 && failed.length === expected.length && expected.every((flow) => failed.includes(flow));
+      step(`${label}: falsado ${id}: ${expected.join(' y ')} sale${expected.length > 1 ? 'n' : ''} FALLO (y solo ${expected.length > 1 ? 'ellos' : 'él'}) y el script con 1`, caught, caught ? '' : `código ${sabotaged.status}, FALLO: ${failed.join(', ') || '(ninguno)'}\n${sabotaged.output.slice(-1500)}`);
     } finally {
       fs.writeFileSync(target, original);
     }

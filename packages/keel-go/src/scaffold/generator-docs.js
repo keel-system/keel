@@ -22,6 +22,7 @@ import { storeDir } from '../lib/relational-engine.js';
 import { usesTokenHarness } from './identity-harness.js';
 import { usesGoRabbitMq } from './rabbitmq.js';
 import { usesGoKafka } from './kafka.js';
+import { usesGoSnsSqs } from './snssqs.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'go');
 const agentsSourceDir = path.join(assetsDir, 'agents');
@@ -48,6 +49,7 @@ export function stackSkills(model) {
   if (usesTokenHarness(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-go-${model.stack.auth}`);
   if (usesGoRabbitMq(model)) skills.push('keel-go-rabbitmq');
   if (usesGoKafka(model)) skills.push('keel-go-kafka');
+  if (usesGoSnsSqs(model)) skills.push('keel-go-snssqs');
   return skills;
 }
 

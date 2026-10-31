@@ -165,17 +165,17 @@ for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(
   let relational = false;
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
   // Con capa messaging, con cada broker que keel-go conecta: sin broker en el stack no se emite su paquete, y su gofmt
-  // no lo miraba nadie (corrida 9e, 2026-10-30: topology.go y rabbitmq_test.go sin formatear). Kafka (9f), solo sobre el
-  // motor por defecto: lo que cambia con el motor no toca la conexión con el broker.
-  const brokers = layers.messaging ? ['rabbitmq', 'kafka'] : [null];
+  // no lo miraba nadie (corrida 9e, 2026-10-30: topology.go y rabbitmq_test.go sin formatear). Kafka (9f) y SNS/SQS (9g),
+  // solo sobre el motor por defecto: lo que cambia con el motor no toca la conexión con el broker.
+  const brokers = layers.messaging ? ['rabbitmq', 'kafka', 'snssqs'] : [null];
   for (const database of [null, 'mysql']) {
     if (database && !relational) continue;
     for (const broker of brokers) {
-      if (database && broker === 'kafka') continue;
+      if (database && (broker === 'kafka' || broker === 'snssqs')) continue;
       const stack = { ...(database ? { database } : {}), ...(broker ? { broker } : {}) };
       const plan = planService({ manifest, layers, workspace: fixturesRoot, ...(Object.keys(stack).length > 0 ? { stack } : {}) });
       relational ||= usesRelational(plan.model);
-      const variant = [database, broker === 'kafka' ? broker : null].filter(Boolean);
+      const variant = [database, broker === 'kafka' || broker === 'snssqs' ? broker : null].filter(Boolean);
       const label = variant.length > 0 ? `${name} (${variant.join(', ')})` : name;
       const dir = path.join(fixturesRoot, [name, ...variant].join('-'));
       for (const file of plan.files) {
@@ -431,6 +431,28 @@ if (step(`Kafka: go mod tidy de ${MESSAGING_DESIGN}, sin mover ningún requisito
   // Falsado: franz-go es BSD-3-Clause; sin ella en la lista, rojo nombrando el módulo.
   const narrowedKafka = go(kafkaDir, ['tool', 'go-licenses', 'check', '--ignore', MESSAGING_DESIGN, `--allowed_licenses=${ALLOWED_LICENSES.filter((id) => id !== 'BSD-3-Clause').join(',')}`, './...']);
   step('Kafka: sin BSD-3-Clause en la lista, el check sale en rojo con franz-go (falsado)', !narrowedKafka.ok && /franz-go/.test(narrowedKafka.output), narrowedKafka.ok ? 'salió verde' : '');
+}
+
+// SNS/SQS (9g): el SDK de AWS para Go, publicado por módulos que salen juntos en cada release, y lo que trae (smithy-go y
+// sus módulos internos). Los directos fijados son los de UNA release: tidy no puede mover ninguno.
+const snsDir = path.join(makeWorkspace('keel-go-licenses-snssqs-'), MESSAGING_DESIGN);
+{
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, MESSAGING_DESIGN));
+  for (const file of planService({ manifest, layers, workspace: snsDir, stack: { broker: 'snssqs', database: 'postgresql' } }).files) {
+    const out = path.join(snsDir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+}
+const snsDeclared = declared(fs.readFileSync(path.join(snsDir, 'go.mod'), 'utf8'));
+const snsTidy = go(snsDir, ['mod', 'tidy']);
+const snsMoved = snsTidy.ok ? JSON.stringify(declared(fs.readFileSync(path.join(snsDir, 'go.mod'), 'utf8'))) !== JSON.stringify(snsDeclared) : false;
+if (step(`SNS/SQS: go mod tidy de ${MESSAGING_DESIGN}, sin mover ningún requisito directo`, snsTidy.ok && !snsMoved, snsTidy.ok ? (snsMoved ? 'tidy movió un requisito directo' : '') : snsTidy.output.slice(0, 1000))) {
+  const snsLicenses = go(snsDir, ['tool', 'go-licenses', 'check', '--ignore', MESSAGING_DESIGN, allowed, './...']);
+  if (!step('SNS/SQS: licencias permisivas con el SDK de AWS y sus transitivos', snsLicenses.ok)) console.error(snsLicenses.output);
+  // Falsado: el SDK es Apache-2.0; sin ella en la lista, rojo nombrando el módulo.
+  const narrowedSns = go(snsDir, ['tool', 'go-licenses', 'check', '--ignore', MESSAGING_DESIGN, `--allowed_licenses=${ALLOWED_LICENSES.filter((id) => id !== 'Apache-2.0').join(',')}`, './...']);
+  step('SNS/SQS: sin Apache-2.0 en la lista, el check sale en rojo con aws-sdk-go-v2 (falsado)', !narrowedSns.ok && /aws-sdk-go-v2/.test(narrowedSns.output), narrowedSns.ok ? 'salió verde' : '');
 }
 
 if (race) {
