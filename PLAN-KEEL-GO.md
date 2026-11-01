@@ -913,7 +913,68 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       `keel-go-database` y `keel-go-mongodb`, con el ejemplo de la doc compilado contra lo emitido en los dos modelos. Y
       fuera de la huella, `logrus` fijado a v1.8.3 como `// indirect` (kind `pin` de `go-stack.js`; la vista del manifiesto
       lo conserva solo con esa versión): raymond lo arrastraba con GO-2025-4188. **Con esto el inc. 12 queda cerrado.**
-- **Para retomar:** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
+- **Inc. 13 — en curso (abierto el 2026-11-01).** El correo ya entró en el 12e-b. **El orden es el de keel-nest y
+  keel-dotnet, y por el mismo motivo**: `payment-checkout` cabe en la frontera salvo la capa y el parámetro `currency`
+  entregado a un handler (medido: son sus dos únicos rechazos), así que pagos es el único tramo que se cierra con corrida
+  sin abrir otros frentes; caché y storage los declaran `asset-vault` y `catalog-extended`, que arrastran además `needs`,
+  OAuth2 y la autoría. Tramos:
+  - 13a lo neutral (ya en keel-core desde keel-nest y keel-dotnet: matriz, claves, rechazos, monedas, doble, `paymentsYaml`,
+    `paymentTestCurrency`); 13b el parámetro de despliegue en el handler y la capa con sus dos adaptadores; 13c el arnés,
+    las skills, la matriz en build/check y la frontera, medido con `stub-check`; 13d la corrida `payment-checkout`
+    (Stripe y MercadoPago); 13e caché; 13f storage; 13g autoría; 13h `needs` y OAuth2; 13i las corridas `asset-vault` y
+    `catalog`. `go-check` entero, una vez, al final del incremento (antes de 13i); hasta entonces, las redes sin Go y
+    la red en vivo de cada tramo.
+  - **Cortes de contexto recomendados**: tras el 13c (la corrida se prepara y se lanza en un contexto nuevo, y el
+    pipeline corre en otra sesión); después, uno por tramo desde el 13e, porque cada capa trae su red en vivo
+    (`cache-check`, el storage en `stub-check`/MinIO, `db-check` para la autoría); el 13h (`needs` + OAuth2) es el más
+    ancho y va solo.
+  - **13b, el parámetro en el handler y la capa con sus dos adaptadores (hecho, 2026-11-01).**
+    - **Los parámetros de despliegue llegan a los handlers**: `Parameters` en las Dependencies y un parámetro
+      `parameters domain.<Servicio>Parameters` en TODOS los handlers, como los repositorios (qué regla lee un parámetro
+      lo dice la prosa; `payments.charge.currency: { parameter }` es la única referencia que lo dice), y el arranque se
+      los pasa. La frontera ya no rechaza un parámetro que no lee un rescate; solo sin persistencia (no hay
+      Dependencies). `test/service-parameters.test.js` gana el caso.
+    - **La capa** (`src/scaffold/payments.js`, lo neutro, y `src/scaffold/payment-gateways/{stripe,mercadopago}.js`,
+      traducidos de los de keel-nest caso por caso sobre `keel-core/gen/payment-gateways.js`):
+      `internal/domain/payment_gateway.go` (GatewayStatus, GatewayOutcome, PaymentSource, ChargeRequest, los errores
+      `*PaymentGatewayUnavailableError` y `*GatewayRejectedPaymentMethodError`, el puerto, PaymentNotice y el puerto
+      del verificador), `internal/application/payment_outcomes.go` (PaymentOutcomeApplier sobre los propios UseCases,
+      que devuelve la transacción a cada desenlace aunque llegue de un despacho sin ella; PaymentNotices;
+      PaymentReconciliation con StaleBefore, BatchSize y Consult), `internal/infrastructure/payment` (Settings de
+      `payments.yaml` con las duraciones de Spring, el cliente HTTP SIN keep-alive ni reintentos —net/http reenvía solo
+      una petición con Idempotency-Key sobre una conexión reutilizada que se corta—, la tabla de monedas de keel-core,
+      la lectura JSON de los otros tres, las claves de idempotencia, el formulario en orden de inserción y el adaptador
+      y el verificador de la pasarela elegida con `hmac.Equal`) e `internal/httpapi/payment_notice.go` (el cuerpo como
+      texto, 401 o 200 vacíos; la ruta la abre el plan de acceso neutral). Las acciones de la capa se despachan con
+      `application.WithoutTransaction` desde los endpoints y la suscripción (el barrido ya lo hacía con
+      `scheduleDispatch`). Cada handler de la capa recibe el puerto y el aplicador (guardar un medio, solo el puerto; el
+      barrido, la consulta), y `UseCases.PaymentNotices` lo usa la ruta del aviso.
+    - **Lo que Go obliga a decidir**: un componente del desenlace que la capa no nombra (`cancelReason`) es un TODO
+      dentro del aplicador en los otros tres, pero aquí el aplicador lleva la cabecera de generado. Sale un método del
+      agente por componente en `internal/application/payment_outcome_choices.go`, sin la cabecera, con el repositorio
+      del registro en el aplicador para leer el estado del que viene el cobro (lo que pide la decisión aceptada de la
+      fixture).
+    - **Medido**: `payment-checkout` con las dos pasarelas, generado y compilado a mano: tidy, `go vet`, `gofmt -l` y
+      staticcheck vacíos y `go test ./...` en verde. Las pruebas emitidas `<pasarela>_test.go` (httptest con las formas
+      del doble) destaparon un defecto al primer intento: el importe exacto se comparaba con `Decimal.Equal`, que mira
+      la escala, y 12.5 EUR no se cobraba; ahora `Cmp`. **Falsadas a mano con diez sabotajes**, cada uno en rojo en su
+      prueba (clave con sufijo, redondeo, firma ignorada, ventana, rechazo, reintento del 5xx; en MercadoPago el ts en
+      milisegundos, el manifiesto sin request-id, la clave de otra acción y la escala). Tres de la primera pasada salían
+      «verdes» porque no compilaban: un sabotaje se mide sobre lo que compila. Sin Go, `test/payments.test.js` (nuevo,
+      11 casos): `payments.yaml` idéntico al de keel-nest en los cuatro perfiles y las dos pasarelas, entre pasarelas
+      solo cambian su archivo y sus pruebas, la configuración lee solo claves declaradas, la tabla y los rechazos de
+      keel-core, el cliente sin reintentos, el despacho sin transacción, lo que recibe cada handler, la ruta del aviso
+      abierta, ningún TODO en un archivo generado, y `go-syntax`/`go-idioms` sobre la variante MercadoPago (la Stripe ya
+      la recorren, es la pasarela por defecto). `npm test` de keel-go **967/967**.
+    - **La frontera sigue rechazando `payments`**, como keel-nest y keel-dotnet tras su 13c: sin el arnés (el doble en
+      los flujos) ni las skills el agente no tendría con qué. Se quita en el 13c.
+- **Para retomar:** el **13c** en un contexto nuevo: el arnés de la pasarela (`tests/integration/payment_gateway_test.go`
+  con la API neutra de los otros tres sobre el WireMock de `http_stub_test.go` y `keel-core/gen/payment-probes.js`;
+  `SendGatewayNotice`/`SendForgedGatewayNotice`; `AgeForReconciliation`/`HoldFromReconciliation` con el barrido de
+  pagos), las skills `keel-go-payments`, `keel-go-stripe` y `keel-go-mercadopago` (con `generator-docs.test.js` atando
+  rutas y helpers), la matriz de la pasarela en `build`/`check` (`checkGatewaySupport`) y quitar `payments` de
+  `PENDING_LAYERS`; medido con `npm run stub-check -- …` ganando la pasarela de las dos. Después, el 13d (la corrida).
+- **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y
   `HoldFromReconciliation` contra la infra real, y `harness-check --database=mysql` con la réplica. Las redes pesadas de

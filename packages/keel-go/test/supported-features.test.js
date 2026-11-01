@@ -140,7 +140,7 @@ test('con persistencia relacional, la idempotencia sale entera (registro, purga 
   assert.ok(!warnings.some((w) => w.includes('idempotency')), warnings.join('\n'));
 });
 
-test('los parámetros de despliegue entran si los lee un rescate (stalledAfter); el que solo lee un handler o de otro tipo, no', () => {
+test('los parámetros de despliegue entran con persistencia (los reciben los handlers, incremento 13b); sin ella o de otro tipo, no', () => {
   for (const name of ['job-dispatch', 'job-dispatch-cycles']) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
     assert.deepEqual(checkSupportedFeatures(manifest, layers), { errors: [], warnings: [] }, name);
@@ -148,7 +148,13 @@ test('los parámetros de despliegue entran si los lee un rescate (stalledAfter);
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'job-dispatch'));
   const unlinked = structuredClone(manifest);
   unlinked.parameters.region = { type: 'string', description: 'Región.', testValue: 'eu' };
-  assert.match(checkSupportedFeatures(unlinked, layers).errors.join('\n'), /service\.parameters\.region: keel-go solo cablea un parámetro hasta el rescate/);
+  assert.deepEqual(checkSupportedFeatures(unlinked, layers).errors, []);
+  const { persistence, ...withoutPersistence } = layers;
+  assert.ok(persistence);
+  assert.match(
+    checkSupportedFeatures(unlinked, withoutPersistence).errors.join('\n'),
+    /service\.parameters\.region: keel-go entrega los parámetros a los handlers en las Dependencies de los casos de uso, que solo existen con persistencia/
+  );
   const decimal = structuredClone(manifest);
   decimal.parameters.abandonAfterMinutes.type = 'decimal';
   assert.match(checkSupportedFeatures(decimal, layers).errors.join('\n'), /service\.parameters\.abandonAfterMinutes: decimal — keel-go solo lee parámetros int, long o string/);

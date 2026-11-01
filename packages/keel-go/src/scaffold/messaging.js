@@ -24,6 +24,7 @@
 // Solo con persistencia RELACIONAL: el puente sale del adaptador de repositorio y el registro de procesados vive en la
 // base. La documental llega con el incremento 12.
 
+import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
 import { missingTargetRetryDestinations, subscriptionDestination, subscriptionGroupId, deadLetterDestination } from '@keel-system/keel-core/gen';
 import { OUTBOX_LAST_ERROR_LENGTH, OUTBOX_RELAY, outboxBackoffMs } from '@keel-system/keel-core/gen/messaging-stores';
 import { usesMessaging, usesBridge, usesProcessedEvents, usesPersistence } from '@keel-system/keel-core/gen/features';
@@ -1063,7 +1064,9 @@ function contractDoc(model, sub) {
     });
     // Sin envoltura Keel no hay metadata de la que heredar la correlación: una nueva (el CorrelationContext.Open de
     // keel-dotnet con la de origen vacía).
-    const dispatchCtx = sub.envelope === 'keel' ? 'messaging.Inbound(ctx, envelope.Metadata)' : 'correlation.WithID(ctx, correlation.Accept(""))';
+    const inbound = sub.envelope === 'keel' ? 'messaging.Inbound(ctx, envelope.Metadata)' : 'correlation.WithID(ctx, correlation.Accept(""))';
+    // Lo que llama a la pasarela de pago va sin transacción abarcadora (callsPaymentGateway, keel-core).
+    const dispatchCtx = callsPaymentGateway(model, sub.trigger) ? `application.WithoutTransaction(${inbound})` : inbound;
     lines.push(
       `Lo consume ${consumer}: lo escribe el agente en cmd/server/broker.go y despacha con useCases.${useCaseField(operation)}.Handle(${dispatchCtx}, application.${messageType(operation)}{${fields.join(', ')}}).`
     );

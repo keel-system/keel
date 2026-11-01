@@ -10,6 +10,7 @@
 // claves aquí rompería la igualdad del archivo. Lo que no se puede hacer es dejar los de net/http, que son
 // «sin límite»: un cliente lento retendría la conexión para siempre.
 
+import { paymentNoticeRoute } from './payments.js';
 import { usesApi, usesHttpSecurity } from '@keel-system/keel-core/gen/features';
 import { alignRows, goString } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
@@ -117,7 +118,7 @@ func NewHandler(${params}) http.Handler {
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Path, a.endpoint(route.handle))
 	}
-	mux.Handle("/", unrouted(mux))
+${paymentNoticeRoute(model)}	mux.Handle("/", unrouted(mux))
 	return a.edge(${secured ? 'a.secure(mux)' : 'mux'})
 }`;
 }

@@ -20,6 +20,7 @@
 // Lo que el borde necesita de rest-support.js (lectores de texto, `member`, `textLength`…) se emite solo si algún lector
 // lo usa: staticcheck (U1000) rechaza una función sin usar. Por eso este módulo apunta en `plan.uses` lo que pide.
 
+import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
 import { requestShape, returnsLocation, locationTarget } from '@keel-system/keel-core/gen/api-contract';
 import { pageableDefaults } from '@keel-system/keel-core/gen/pagination';
 import { usesApi } from '@keel-system/keel-core/gen/features';
@@ -121,7 +122,10 @@ function renderEndpoint(model, operation, plan) {
   const { method, path, status } = operation.route;
   const full = `${model.api.routeBase}${path}`;
   const variable = operation.messageKind === 'query' ? 'query' : 'cmd';
-  const call = `a.useCases.${useCaseField(operation)}.Handle(r.Context(), ${variable})`;
+  // Lo que llama a la pasarela de pago va SIN transacción abarcadora (callsPaymentGateway, keel-core): su garantía es un
+  // orden de commits —registrar el cobro y confirmar, llamar a la pasarela, aplicar el desenlace—, no una transacción.
+  const ctx = callsPaymentGateway(model, operation.name) ? 'application.WithoutTransaction(r.Context())' : 'r.Context()';
+  const call = `a.useCases.${useCaseField(operation)}.Handle(${ctx}, ${variable})`;
   // resolvedBy: el lector recibe la resolución de la credencial y la llama al final, tras leer y validar la entrada (una
   // petición malformada es 400 sin tocar la base, como en keel-nest y keel-dotnet).
   const resolver = resolvesCaller(model, operation) ? ', a.useCases.ResolveCaller' : '';

@@ -26,6 +26,8 @@ import { credentialFinders, portName, repositoryParam } from './repositories.js'
 import { activationClients, clientField, clientParam, clientPort, usesGoHttpClients } from './http-clients.js';
 import { orphanInternalOperations } from '@keel-system/keel-core/gen';
 import { MAIL_SENDER, TEMPLATE_RENDERER, mailDependencies, usesGoMail, usesTemplating } from './mail.js';
+import { parametersType, usesServiceParameters } from './service-parameters.js';
+import { paymentDependencies, paymentDependencyRows, paymentUseCaseFields, paymentWiring } from './payments.js';
 
 /** ¿Reciben los casos de uso adaptadores (Dependencies)? Con la persistencia relacional. */
 export function usesDependencies(model) {
@@ -86,6 +88,17 @@ export function handlerDependencies(model, operation) {
       arg: `deps.${port.field}`
     });
   }
+  // La pasarela de pago (capa payments): el puerto y el aplicador de desenlaces a las acciones sobre un cobro, y la consulta
+  // al barrido. Sin ellos delante, el camino de menor resistencia es escribir el cobro sin pasarela.
+  deps.push(...paymentDependencies(model, operation));
+  if (handlersReadParameters(model)) {
+    deps.push({
+      name: SERVICE_PARAMETERS.param,
+      type: `domain.${parametersType(model)}`,
+      doc: `${SERVICE_PARAMETERS.param} son los parámetros de despliegue del servicio (service.parameters), ya validados al arrancar.`,
+      arg: `deps.${SERVICE_PARAMETERS.field}`
+    });
+  }
   const orphans = orphanInternalOperations(model).filter((candidate) => candidate !== operation);
   if ((operation.dispatches ?? []).length > 0) {
     deps.push({ name: 'useCases', type: '*UseCases', doc: 'useCases despacha las operaciones que esta declara en use-cases.dispatches.', arg: 'uc' });
@@ -100,6 +113,18 @@ export function handlerDependencies(model, operation) {
     });
   }
   return deps;
+}
+
+/**
+ * Los parámetros de despliegue (service.parameters) en los handlers: el campo de Dependencies y el parámetro del
+ * handler. A TODOS, como los repositorios: qué regla lee un parámetro lo dice la prosa del diseño (la moneda de un cobro,
+ * payments.charge.currency, es la referencia que sí lo dice), y build no la ve.
+ */
+export const SERVICE_PARAMETERS = { field: 'Parameters', param: 'parameters' };
+
+/** ¿Reciben los handlers los parámetros de despliegue? Con parámetros y con los casos de uso cableados. */
+export function handlersReadParameters(model) {
+  return usesServiceParameters(model) && usesDependencies(model);
 }
 
 /** Los argumentos con que NewUseCases construye el handler de una operación. */
@@ -285,6 +310,7 @@ function useCasesBody(model, ops) {
   const roots = repositoryRoots(model);
   const persistent = usesDependencies(model);
   const resolution = persistent ? callerResolution(model) : null;
+  fieldRows.push(...paymentUseCaseFields(model));
   if (resolution) {
     fieldRows.push({ text: `	// callers resuelve la credencial del llamante al ${resolution.entity.name} al que pertenece (resolvedBy).` });
     fieldRows.push({ indent: '	', cells: ['callers', `domain.${portName(resolution.entity)}`] });
@@ -328,6 +354,13 @@ ${alignRows([
         ...(usesTemplating(model) ? [{ text: '\t// TemplateRenderer interpola las plantillas del correo.' }, { indent: '\t', cells: [TEMPLATE_RENDERER.field, TEMPLATE_RENDERER.port] }] : [])
       ]
     : []),
+  ...paymentDependencyRows(model),
+  ...(handlersReadParameters(model)
+    ? [
+        { text: '	// Parameters son los parámetros de despliegue del servicio (service.parameters), validados al arrancar.' },
+        { indent: '	', cells: [SERVICE_PARAMETERS.field, `domain.${parametersType(model)}`] }
+      ]
+    : []),
   ...(usesGoHttpClients(model)
     ? model.httpClients.flatMap((client) => [
         { text: `\t// ${clientField(client)} es el cliente saliente ${client.id} (http-clients): su adaptador HTTP, con su resiliencia.` },
@@ -359,7 +392,7 @@ ${alignRows(fieldRows).join('\n')}
 // recibe el propio UseCases, ya completo cuando se le llama.
 func NewUseCases(${persistent ? 'logger *slog.Logger, deps Dependencies' : 'logger *slog.Logger'}) *UseCases {
 ${prelude}	uc := &UseCases{${resolution ? `callers: deps.${goExported(repositoryParam(resolution.entity))}` : ''}}
-${wiring.join('\n')}
+${paymentWiring(model)}${wiring.join('\n')}
 	return uc
 }
 ${resolution ? resolveCallerMethod(resolution) : ''}`;

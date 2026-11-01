@@ -22,7 +22,7 @@ import { brokerConnection, brokerFiles, consumes, publishes } from './broker.js'
 import { RABBITMQ_IMPORT } from './rabbitmq.js';
 import { KAFKA_IMPORT } from './kafka.js';
 import { SNSSQS_IMPORT } from './snssqs.js';
-import { newUseCasesCall, usesDependencies } from './use-cases.js';
+import { SERVICE_PARAMETERS, handlersReadParameters, newUseCasesCall, usesDependencies } from './use-cases.js';
 import { IDEMPOTENCY_STORE, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_ROLES, SECURITY_IMPORT, settingsFromConfig, usesRoleCheck } from './security.js';
 import { securityCases } from '@keel-system/keel-core/gen/api-cases';
@@ -30,6 +30,7 @@ import { securityPlan } from '@keel-system/keel-core/gen/features';
 import { SCHEDULER_IMPORT, scheduledServices, tasksFunc, usesScheduling } from './scheduling.js';
 import { tablePurges } from './purge.js';
 import { PARAMETERS_IMPORT, PARAMETERS_VAR, usesServiceParameters } from './service-parameters.js';
+import { PAYMENT_IMPORT, PAYMENT_SERVER_WIRING, paymentServerRows, usesGoPayments } from './payments.js';
 import { claimDependencies, usesSweepClaims } from './claim.js';
 import { usesReconciliationClaims } from './reconciliation-claim.js';
 import { usesCorrelation } from './correlation.js';
@@ -89,7 +90,8 @@ function mainGo(model) {
       SCHEDULER_IMPORT,
       PARAMETERS_IMPORT,
       CLIENTS_IMPORT,
-      layout(model).mail.dir
+      layout(model).mail.dir,
+      PAYMENT_IMPORT
     ],
     body: `
 func main() {
@@ -144,11 +146,13 @@ ${usesServiceParameters(model) ? parametersWiring(model) : ''}${wiring(model)}
   });
 }
 
-// Los parámetros de despliegue, antes que nada: un valor mal puesto no deja arrancar (el dominio valida sus cotas). Si
-// ningún adaptador los recibe (hoy, solo el rescate que lee su plazo de uno), se validan igual, sin variable: en Go una
-// sin usar no compila.
+// Los parámetros de despliegue, antes que nada: un valor mal puesto no deja arrancar (el dominio valida sus cotas). Los
+// reciben los handlers (en Dependencies) y el rescate que lee su plazo de uno; si nadie los recibe (sin casos de uso
+// cableados), se validan igual, sin variable: en Go una sin usar no compila.
 function parametersWiring(model) {
-  const consumed = repositoryRoots(model).some((root) => claimDependencies(model, root).some((dep) => dep.field === 'parameters'));
+  const consumed =
+    (handlersReadParameters(model) && dispatchesUseCases(model)) ||
+    repositoryRoots(model).some((root) => claimDependencies(model, root).some((dep) => dep.field === 'parameters'));
   if (!consumed) {
     return `	if _, err := parameters.From(cfg); err != nil {
 		return fmt.Errorf("parámetros de despliegue: %w", err)
@@ -204,6 +208,12 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
     repositories.push({ indent: '\t\t', cells: [`${MAIL_SENDER.field}:`, 'smtp.NewSender(mailSettings, logger),'] });
     if (usesTemplating(model)) repositories.push({ indent: '\t\t', cells: [`${TEMPLATE_RENDERER.field}:`, 'smtp.NewRenderer(),'] });
   }
+  // La pasarela de pago (capa payments): su adaptador, su verificador de avisos y los números del barrido.
+  const paying = usesGoPayments(model) && dispatchesUseCases(model);
+  if (paying) repositories.push(...paymentServerRows(model));
+  if (handlersReadParameters(model) && dispatchesUseCases(model)) {
+    repositories.push({ indent: '		', cells: [`${SERVICE_PARAMETERS.field}:`, `${PARAMETERS_VAR},`] });
+  }
   const messaging = wiresMessaging(model);
   // La documental (incremento 12) abre un cliente de MongoDB y no tiene tope de transacción.
   const document = usesDocument(model);
@@ -228,7 +238,7 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
 		}
 	}
 	transactions := ${store.name}.NewTransactions(db, ${document ? '' : 'database.TransactionTimeout, '}logger)
-${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${messaging ? messagingWiring(model) : ''}
+${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${paying ? PAYMENT_SERVER_WIRING : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
 ${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
 }

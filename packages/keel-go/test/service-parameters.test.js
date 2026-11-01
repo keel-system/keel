@@ -67,3 +67,17 @@ test('el arranque lee los parámetros antes que nada, y sin ellos no se emite na
   assert.ok(!without.some((file) => /_parameters(_test)?\.go$|infrastructure\/parameters\//.test(file.path)));
   assert.doesNotMatch(content(without, 'cmd/server/main.go'), /parameters\.From/);
 });
+
+test('los handlers reciben los parámetros en las Dependencies, y el arranque se los pasa (incremento 13b)', () => {
+  const { model, files } = plan('job-dispatch');
+  const useCases = content(files, 'internal/application/use_cases.go');
+  assert.match(useCases, /\tParameters +domain\.JobDispatchParameters\n/);
+  const handlers = files.filter((file) => /internal\/application\/.*_handler\.go$/.test(file.path));
+  assert.ok(handlers.length > 0);
+  for (const handler of handlers) assert.match(handler.content, /\tparameters domain\.JobDispatchParameters\n/, handler.path);
+  // Cada constructor la recibe del cableado: deps.Parameters en tantos New<Handler> como operaciones.
+  const operations = model.services.flatMap((service) => service.operations).length;
+  assert.equal(useCases.match(/deps\.Parameters/g)?.length, operations);
+  const main = content(files, 'cmd/server/main.go');
+  assert.match(main, /\t\tParameters: +serviceParameters,\n/);
+});

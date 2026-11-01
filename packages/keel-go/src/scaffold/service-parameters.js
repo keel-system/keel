@@ -10,9 +10,9 @@
 // por perfil (keel-core/gen/service-parameters.js) y las mismas frases, con la forma que Go pide a un error (minúscula y
 // sin punto final).
 //
-// Lo que keel-go todavía no hace es dárselo a un HANDLER: los argumentos del constructor de cada handler los fija build,
-// y ningún diseño que keel-go genere lee un parámetro desde una regla. Hoy lo lee el rescate de un barrido
-// (`stalledAfter`, DSL 2.18), dentro del adaptador; el que solo lee un handler lo rechaza la frontera con su motivo.
+// Lo reciben el rescate de un barrido que lee su plazo de uno (`stalledAfter`, DSL 2.18), dentro del adaptador, y TODOS
+// los handlers, en las Dependencies de los casos de uso (incremento 13b, la moneda de payment-checkout): los argumentos
+// del constructor de cada handler los fija build, y qué regla lee un parámetro lo dice la prosa (use-cases.js).
 
 import { parameterProfileValue, parameterProperty } from '@keel-system/keel-core/gen/service-parameters';
 import { usesServiceParameters } from '@keel-system/keel-core/gen/features';

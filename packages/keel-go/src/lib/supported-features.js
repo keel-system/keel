@@ -184,10 +184,11 @@ function parameterErrors(manifest, layers) {
   for (const [name, spec] of declared) {
     if (!['int', 'long', 'string'].includes(spec?.type)) {
       errors.push(`service.parameters.${name}: ${spec?.type} — keel-go solo lee parámetros int, long o string (${why}). Genera este diseño con keel-spring, keel-nest o keel-dotnet.`);
-    } else if (!linked.has(name)) {
+    } else if (!linked.has(name) && !layers?.persistence) {
+      // Los handlers los reciben en las Dependencies de los casos de uso, que solo existen con persistencia.
       errors.push(
-        `service.parameters.${name}: keel-go solo cablea un parámetro hasta el rescate de un barrido que lee su plazo de él (stalledAfter); ` +
-          `todavía no se lo da a un handler (${why}; llega con catalog-extended y payment-checkout, incremento 13). Genera este diseño con keel-spring, keel-nest o keel-dotnet.`
+        `service.parameters.${name}: keel-go entrega los parámetros a los handlers en las Dependencies de los casos de uso, que solo existen con persistencia ` +
+          `(${why}). Genera este diseño con keel-spring, keel-nest o keel-dotnet.`
       );
     }
   }
