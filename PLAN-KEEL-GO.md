@@ -900,7 +900,9 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       cada uno en rojo con su mensaje. (2) Defecto de la FIXTURE, no de keel-go: la v2.1.0 (`173ca712`, careo de la
       pasada 1) añadió `templateId: <t1>` a cada variable del Then de FL-TPL-001 («una entidad hija lleva siempre el id
       de su raíz»), pero ningún generador lo emite (los cuatro `TemplateVariableDto` y el OpenAPI neutral no lo tienen) y
-      el dominio no lo declara; ninguna corrida había ejecutado aún la v2.1.0 del par. Para reanudar: `keel-go build --refresh --prune`, borrar
+      el dominio no lo declara; ninguna corrida había ejecutado aún la v2.1.0 del par. Corregido en la **v2.1.1**
+      (`5b0628a9`): el Then afirma solo los campos de TemplateVariable, con resello acotado (la 2.1 ya gastó sus tres
+      pasadas). Para reanudar: llevar la v2.1.1 a `specs/` del workspace de la corrida, `--ready` en verde, y: `keel-go build --refresh --prune`, borrar
       el `peers.go` del agente y relanzar `/keel-generate-go`.
 - **Para retomar:** la corrida 12e (`/keel-generate-go` en `services/notification-mailer-mongo-go`, sin argumentos) y su
   registro en `docs/corridas/`, contra la huella 17 de las gemelas. Sin medir del 11: `RestartServer` y
