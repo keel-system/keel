@@ -102,6 +102,10 @@ export const MODULES = {
   'github.com/aws/aws-sdk-go-v2/credentials': { version: 'v1.20.9', license: 'Apache-2.0', kind: 'require', use: 'SDK de AWS: credenciales estáticas' },
   'github.com/aws/aws-sdk-go-v2/service/sns': { version: 'v1.47.5', license: 'Apache-2.0', kind: 'require', use: 'cliente de SNS' },
   'github.com/aws/aws-sdk-go-v2/service/sqs': { version: 'v1.52.4', license: 'Apache-2.0', kind: 'require', use: 'cliente de SQS' },
+  // El almacenamiento de binarios (tramo 13f) sobre S3 o MinIO: el cliente de S3 de la MISMA release (v1.114.3, 2026-10-09)
+  // que sns y sqs, con el mismo núcleo, así que con los dos stacks a la vez tidy no mueve ninguno. Trae los módulos
+  // internos del SDK para S3 (v4a, checksum, presigned-url, s3shared, eventstream), Apache-2.0.
+  'github.com/aws/aws-sdk-go-v2/service/s3': { version: 'v1.114.3', license: 'Apache-2.0', kind: 'require', use: 'cliente de S3 (almacenamiento de binarios)' },
 
   // El cron de seis campos del reloj (tramo 10b): solo su PARSER (cron.NewParser con el campo de segundos) y el
   // Schedule.Next que da la siguiente ocurrencia. El bucle es propio (internal/infrastructure/scheduler): el Cron de la
@@ -180,6 +184,9 @@ export const BROKER_REQUIRES = {
   kafka: ['github.com/twmb/franz-go'],
   snssqs: ['github.com/aws/aws-sdk-go-v2', 'github.com/aws/aws-sdk-go-v2/config', 'github.com/aws/aws-sdk-go-v2/credentials', 'github.com/aws/aws-sdk-go-v2/service/sns', 'github.com/aws/aws-sdk-go-v2/service/sqs']
 };
+
+/** El almacenamiento de binarios (capa storage, tramo 13f): el SDK de AWS con el cliente de S3. */
+export const STORAGE_REQUIRES = ['github.com/aws/aws-sdk-go-v2', 'github.com/aws/aws-sdk-go-v2/config', 'github.com/aws/aws-sdk-go-v2/credentials', 'github.com/aws/aws-sdk-go-v2/service/s3'];
 
 /** El parser del cron del reloj (tramo 10b). */
 export const SCHEDULING_REQUIRES = ['github.com/robfig/cron/v3'];

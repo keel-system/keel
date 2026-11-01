@@ -37,6 +37,7 @@ import { usesCorrelation } from './correlation.js';
 import { CLIENTS_IMPORT, adapterType, clientField, clientParam, usesGoHttpClients } from './http-clients.js';
 import { MAIL_SENDER, TEMPLATE_RENDERER, usesGoMail, usesTemplating } from './mail.js';
 import { cacheServerRows, cacheServerWiring } from './cache.js';
+import { STORAGE_IMPORT, storageServerRows, storageServerWiring } from './storage.js';
 
 // La configuración del correo del perfil: un número que no se entiende no deja arrancar.
 const MAIL_WIRING = `	mailSettings, err := smtp.SettingsFrom(cfg)
@@ -93,6 +94,7 @@ function mainGo(model) {
       CLIENTS_IMPORT,
       layout(model).mail.dir,
       layout(model).cache.dir,
+      STORAGE_IMPORT,
       PAYMENT_IMPORT
     ],
     body: `
@@ -216,6 +218,9 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
   // La caché de lectura (use-cases.<op>.cache): el store, si el perfil la habilita.
   const caching = dispatchesUseCases(model) ? cacheServerWiring(model) : '';
   if (caching) repositories.push(...cacheServerRows(model));
+  // El almacenamiento de binarios (capa storage): la política de cada bucket y el adaptador S3 que escribe el agente.
+  const storing = dispatchesUseCases(model) ? storageServerWiring(model) : '';
+  if (storing) repositories.push(...storageServerRows(model));
   if (handlersReadParameters(model) && dispatchesUseCases(model)) {
     repositories.push({ indent: '		', cells: [`${SERVICE_PARAMETERS.field}:`, `${PARAMETERS_VAR},`] });
   }
@@ -243,7 +248,7 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
 		}
 	}
 	transactions := ${store.name}.NewTransactions(db, ${document ? '' : 'database.TransactionTimeout, '}logger)
-${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${caching}${paying ? PAYMENT_SERVER_WIRING : ''}${messaging ? messagingWiring(model) : ''}
+${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${caching}${storing}${paying ? PAYMENT_SERVER_WIRING : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
 ${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
 }

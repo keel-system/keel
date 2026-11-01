@@ -10,6 +10,9 @@
 // además un error (`ErrNotImplemented` con el campo nombrado) en vez de inventar un valor. Solo esas funciones
 // devuelven error: un mapeo que no puede fallar no lo declara. El archivo que lleva uno de esos huecos es del agente
 // (sin cabecera de código generado), que es quien lo completa.
+//
+// Un `file` de bucket PÚBLICO expone su URL, no la clave: la compone el puerto de almacenamiento (domain.FileStorage),
+// que entra por parámetro a esa función y a todas las que la llaman, hasta el handler (lo recibe en sus dependencias).
 
 import { isPublicBucket } from '@keel-system/keel-core/gen';
 import { mappersByEntity, reachableChildDtos } from '@keel-system/keel-core/gen/mapper-plan';
@@ -18,8 +21,13 @@ import { goString, keyedLiteral } from '../lib/go-source.js';
 import { dataImports } from './dtos.js';
 import { domainMembers } from './entities.js';
 import { appType, applicationPath, declType, goTypeName, layout, localName, packageFile } from './render.js';
+import { bucketConstant } from './storage.js';
 
-export function generate(model) {
+const plans = new WeakMap();
+
+/** Las funciones de mapeo del modelo, una vez: por entidad, y el plan de cada una (si falla, si recibe el almacenamiento). */
+function mapperPlan(model) {
+  if (plans.has(model)) return plans.get(model);
   // Cada DTO, en el archivo de la entidad de la que sale: el de una hija, en el de la hija, alcance desde la raíz
   // que lo alcance. Así una hija proyectada por dos raíces tiene una sola función.
   const byEntity = new Map();
@@ -33,8 +41,23 @@ export function generate(model) {
     for (const dto of dtos.values()) place(entityName, dto);
     for (const child of reachableChildDtos(model, [...dtos.values()])) place(child.entity, child);
   }
-  const plan = planFunctions(model, byEntity);
+  const result = { byEntity, plan: planFunctions(model, byEntity) };
+  plans.set(model, result);
+  return result;
+}
+
+export function generate(model) {
+  const { byEntity, plan } = mapperPlan(model);
   return [...byEntity.entries()].map(([entityName, dtos]) => renderFile(model, entityName, [...dtos.keys()], plan));
+}
+
+/**
+ * ¿Necesita el mapeo de la respuesta de la operación el puerto de almacenamiento? Sí si su DTO, o uno que proyecte,
+ * expone la URL de un `file` de bucket público: entonces el handler lo recibe.
+ */
+export function responseNeedsStorage(model, operation) {
+  const name = operation.responseDto?.name;
+  return Boolean(name && mapperPlan(model).plan.get(goTypeName(name))?.storage);
 }
 
 /** Las funciones de mapeo, por nombre de DTO: su entidad, su DTO y si devuelve error (también por una hija que lo haga). */
@@ -52,12 +75,31 @@ function planFunctions(model, byEntity) {
     return fn.dto.fields.some((field) => field.kind === 'childDto' && fails(goTypeName(field.elementGoType ?? field.goType.replace(/^\[\]/, '')), seen));
   };
   for (const fn of plan.values()) fn.fails = fails(fn.name);
+  // Lo mismo para el puerto de almacenamiento: lo recibe la función con una URL pública y toda la que la llame.
+  const storage = (name, seen = new Set()) => {
+    const fn = plan.get(name);
+    if (!fn || seen.has(name)) return false;
+    seen.add(name);
+    if (fn.ownStorage === undefined) fn.ownStorage = renderFunction(model, fn, () => false).storage;
+    if (fn.ownStorage) return true;
+    return fn.dto.fields.some(
+      (field) => (field.kind === 'childDto' || field.kind === 'refDto') && storage(goTypeName(field.elementGoType ?? field.goType.replace(/^\[\]/, '')), seen)
+    );
+  };
+  for (const fn of plan.values()) fn.storage = storage(fn.name);
   return plan;
 }
 
 function renderFile(model, entityName, names, plan) {
   const { application } = layout(model);
-  const rendered = names.map((name) => renderFunction(model, plan.get(name), (child) => Boolean(plan.get(child)?.fails)));
+  const rendered = names.map((name) =>
+    renderFunction(
+      model,
+      plan.get(name),
+      (child) => Boolean(plan.get(child)?.fails),
+      (child) => Boolean(plan.get(child)?.storage)
+    )
+  );
   const todo = rendered.some((fn) => fn.todo);
   const imports = ['fmt', ...rendered.flatMap((fn) => fn.imports)];
   return {
@@ -72,7 +114,7 @@ const baseOf = (type) => type.replace(/^\*/, '');
  * Una función `To<Dto>`. `childFails(nombre)` dice si el mapeo de una hija devuelve error, para propagarlo. Devuelve
  * el código, si la propia función tiene un hueco (`todo`), si devuelve error (`fails`) y sus imports.
  */
-function renderFunction(model, fn, childFails) {
+function renderFunction(model, fn, childFails, childStorage = () => false) {
   const { entity, dto, name } = fn;
   const entityType = `*domain.${entity.name}`;
   const members = new Map(domainMembers(model, entity).map((member) => [member.name, member]));
@@ -82,6 +124,13 @@ function renderFunction(model, fn, childFails) {
   const values = [];
   let todo = false;
   let fails = false;
+  let storage = false;
+  // El puerto de almacenamiento en la llamada a una hija que lo necesita.
+  const storageArg = (child) => {
+    if (!childStorage(child)) return '';
+    storage = true;
+    return ', fileStorage';
+  };
   const zero = `${name}{}`;
   const missing = (what) => {
     todo = true;
@@ -101,6 +150,14 @@ function renderFunction(model, fn, childFails) {
         continue;
       }
       const variant = goTypeName(field.elementGoType ?? field.goType);
+      if (childStorage(variant)) {
+        // Un recorte que expone una URL pública: lo mapea el agente, con el puerto (que ya recibe esta función).
+        storageArg(variant);
+        params.push(`${local} ${type.startsWith('*') ? '*' : ''}${source}`);
+        statements.push(missing(`${field.name}: recorta ${source} a ${variant} con To${variant}(…, fileStorage)`));
+        values.push(null);
+        continue;
+      }
       if (type.startsWith('*')) {
         params.push(`${local} *${source}`);
         const out = `${local}Dto`;
@@ -120,7 +177,7 @@ function renderFunction(model, fn, childFails) {
     if (field.kind === 'childDto' && field.inverse) {
       const child = goTypeName(field.elementGoType);
       params.push(`${local} []*domain.${field.childEntity}`);
-      statements.push(mapList(local, `${local}Dto`, child, '', childFails(child), zero));
+      statements.push(mapList(local, `${local}Dto`, child, storageArg(child), childFails(child), zero));
       values.push(`${local}Dto`);
       continue;
     }
@@ -131,10 +188,27 @@ function renderFunction(model, fn, childFails) {
       continue;
     }
     const getter = `entity.${goExported(member.name)}()`;
-    // Un `file` de bucket público expone la URL, no la clave: la resuelve el puerto de almacenamiento (incremento 13).
+    // Un `file` de bucket público expone la URL, no la clave: la compone el puerto de almacenamiento con el bucket del
+    // diseño (su constante, nunca un literal), como el mapper de los otros tres.
     if (field.base === 'file' && !field.list && isPublicBucket(model, field.bucket)) {
-      statements.push(missing(`${field.name}: resuelve la URL pública del bucket ${field.bucket} con el puerto de almacenamiento`));
-      values.push(null);
+      storage = true;
+      fails = true;
+      const bucket = `domain.${bucketConstant(field.bucket)}`;
+      const out = `${local}URL`;
+      const pointerWanted = declType(field).startsWith('*');
+      if (member.type.startsWith('*')) {
+        statements.push(
+          `\tvar ${out} *string\n\tif key := ${getter}; key != nil {\n\t\turl, err := fileStorage.PublicURL(${bucket}, *key)\n\t\tif err != nil {\n\t\t\treturn ${zero}, err\n\t\t}\n\t\t${out} = &url\n\t}`
+        );
+        if (pointerWanted) values.push(out);
+        else {
+          statements.push(`\tif ${out} == nil {\n${missing(`${field.name} es opcional en ${entity.name} y obligatorio en el DTO: decide qué sale si falta`).replace(/^\t/, '\t\t')}\n\t}`);
+          values.push(`*${out}`);
+        }
+      } else {
+        statements.push(`\t${out}, err := fileStorage.PublicURL(${bucket}, ${getter})\n\tif err != nil {\n\t\treturn ${zero}, err\n\t}`);
+        values.push(pointerWanted ? `&${out}` : out);
+      }
       continue;
     }
     if (field.kind === 'childDto') {
@@ -146,7 +220,7 @@ function renderFunction(model, fn, childFails) {
         values.push(null);
         continue;
       }
-      const extra = parentField && idField ? `, entity.${goExported(idField.name)}()` : '';
+      const extra = `${parentField && idField ? `, entity.${goExported(idField.name)}()` : ''}${storageArg(child)}`;
       const out = `${local}Dto`;
       if (field.list) {
         statements.push(mapList(getter, out, child, extra, childFails(child), zero));
@@ -204,6 +278,8 @@ function renderFunction(model, fn, childFails) {
   const pairs = dto.fields.map((field, index) => [goExported(field.name), values[index]]);
   const literal = `${name}{\n${keyedLiteral(pairs, '\t\t').join('\n')}\n\t}`;
   const tail = unconditional >= 0 ? '' : `\treturn ${literal}${fails ? ', nil' : ''}`;
+  // El puerto de almacenamiento, el último parámetro: lo pasa quien llama, hasta el handler.
+  if (storage) params.push('fileStorage domain.FileStorage');
   const returns = fails ? `(${name}, error)` : name;
   const body = [...lines, tail].filter(Boolean).join('\n');
   const code = `// To${name} traduce un ${entity.name} a ${name}.
@@ -211,7 +287,7 @@ func To${name}(${params.join(', ')}) ${returns} {
 ${body}
 }`;
   // Los parámetros de un hueco incondicional no se leen, y eso es legal en Go: el agente los usará al completarlo.
-  return { code, todo, fails, imports: dataImports(dto.fields) };
+  return { code, todo, fails, storage, imports: dataImports(dto.fields) };
 }
 
 /** El bucle que mapea una colección de hijas a sus DTO, propagando el error si su mapeo lo devuelve. */

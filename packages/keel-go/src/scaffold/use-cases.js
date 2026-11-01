@@ -29,6 +29,8 @@ import { MAIL_SENDER, TEMPLATE_RENDERER, mailDependencies, usesGoMail, usesTempl
 import { parametersType, usesServiceParameters } from './service-parameters.js';
 import { paymentDependencies, paymentDependencyRows, paymentUseCaseFields, paymentWiring } from './payments.js';
 import { cacheDependencies, cacheDependencyRows, cacheWiring } from './cache.js';
+import { storageDependencies, storageDependencyRows } from './storage.js';
+import { responseNeedsStorage } from './mappers.js';
 
 /** ¿Reciben los casos de uso adaptadores (Dependencies)? Con la persistencia relacional. */
 export function usesDependencies(model) {
@@ -95,6 +97,9 @@ export function handlerDependencies(model, operation) {
   // La caché de lectura de la operación (use-cases.<op>.cache): la consulta la pone el agente, después de lo que dependa
   // de quién llama; sin la caché delante, el camino de menor resistencia es no consultarla.
   deps.push(...cacheDependencies(model, operation));
+  // El almacenamiento de binarios (capa storage): la política y el puerto a la subida, y el puerto a la que devuelve la
+  // URL de un bucket público (la compone su mapeo). Sin ellos delante, el camino de menor resistencia es guardar sin subir.
+  if (usesDependencies(model)) deps.push(...storageDependencies(model, operation, { publicUrl: responseNeedsStorage(model, operation) }));
   if (handlersReadParameters(model)) {
     deps.push({
       name: SERVICE_PARAMETERS.param,
@@ -362,6 +367,7 @@ ${alignRows([
     : []),
   ...paymentDependencyRows(model),
   ...cacheDependencyRows(model),
+  ...storageDependencyRows(model),
   ...(handlersReadParameters(model)
     ? [
         { text: '	// Parameters son los parámetros de despliegue del servicio (service.parameters), validados al arrancar.' },

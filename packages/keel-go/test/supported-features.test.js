@@ -85,14 +85,15 @@ test('lo saliente que el 11b no genera se rechaza con su motivo: needs, oauth2, 
   assert.match(checkSupportedFeatures(sr.manifest, composite).errors.join('\n'), /refunded es un value object compuesto en el cuerpo o en la respuesta/);
 });
 
-// La capa mail entró con el 12e-b (adelantada del 13), y payments con el 13c.
-for (const layer of ['storage']) {
-  test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
-    const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
-    assert.equal(errors.length, 1);
-    assert.match(errors[0], new RegExp(`capa ${layer}: .*incremento \\d+`));
-  });
-}
+// La capa mail entró con el 12e-b (adelantada del 13), payments con el 13c y storage con el 13f: ya no queda ninguna capa
+// pendiente. storage, solo con persistencia (la política y el puerto van en las Dependencies, como la caché).
+test('capa storage: entra con persistencia (incremento 13f); sin ella, se rechaza con su motivo', () => {
+  const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'storage'), layersWith('domain', 'use-cases', 'storage'));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /capa storage sin persistencia/);
+  const catalog = loadService(path.join(FIXTURES_DIR, 'catalog-extended'));
+  assert.ok(!checkSupportedFeatures(catalog.manifest, catalog.layers).errors.some((error) => /storage/.test(error)));
+});
 
 test('capa payments: entra (incremento 13c), con su arnés y sus skills', () => {
   const pc = loadService(path.join(FIXTURES_DIR, 'payment-checkout'));

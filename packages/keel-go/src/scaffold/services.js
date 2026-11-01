@@ -33,6 +33,7 @@ import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity } from './securi
 import { callMethod, clientParam, usesGoHttpClients } from './http-clients.js';
 import { mailNote } from './mail.js';
 import { cacheHandlerNote } from './cache.js';
+import { uploadHandlerNotes } from './storage.js';
 
 export function generate(model) {
   const files = [];
@@ -442,6 +443,7 @@ function handlerNotes(model, operation) {
   if (mailing) notes.push(mailing);
   const caching = cacheHandlerNote(model, operation);
   if (caching) notes.push(caching);
+  notes.push(...uploadHandlerNotes(model, operation));
   notes.push(...reconciliationNotes(model, operation));
   const compensation = compensationNote(operation);
   if (compensation) notes.push(compensation);

@@ -28,6 +28,7 @@ import { usesGoRabbitMq } from './rabbitmq.js';
 import { usesGoKafka } from './kafka.js';
 import { usesGoSnsSqs } from './snssqs.js';
 import { usesGoHttpClients } from './http-clients.js';
+import { usesStorageAdapter } from './storage.js';
 
 const generatorDir = path.join(assetsDir, 'generators', 'go');
 const agentsSourceDir = path.join(assetsDir, 'agents');
@@ -61,6 +62,8 @@ export function stackSkills(model) {
   if (usesCache(model) && ['redis', 'valkey'].includes(model.stack?.cache)) skills.push('keel-go-redis');
   // Los cobros con pasarela: la guía neutra, y la de la pasarela elegida (la misma pareja que keel-nest y keel-dotnet).
   if (model.payments) skills.push('keel-go-payments', `keel-go-${model.payments.gateway.id}`);
+  // El almacenamiento de binarios: MinIO o S3, el mismo protocolo y el mismo adaptador.
+  if (usesStorageAdapter(model)) skills.push('keel-go-s3');
   return skills;
 }
 

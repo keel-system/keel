@@ -19,6 +19,7 @@ import { goExported, errorKindFor } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { docComment, domainPath, layout, packageFile } from './render.js';
 import { idempotencySentinels } from './request-idempotency.js';
+import { storageSentinels } from './storage.js';
 
 /** El centinela de un `code`: `SKU_ALREADY_EXISTS` → `ErrSKUAlreadyExists`. */
 export function sentinelOf(code) {
@@ -48,7 +49,7 @@ export function frameworkSentinels(model) {
       ...FRAMEWORK_ERRORS.invalidTransition
     }
   ];
-  return [...list.filter((entry) => entry.needed), ...persistenceSentinels(model)];
+  return [...list.filter((entry) => entry.needed), ...persistenceSentinels(model), ...storageSentinels(model)];
 }
 
 /**

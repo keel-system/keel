@@ -1058,8 +1058,54 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       **978/978**.
     - Los dos diseños con caché (`asset-vault`, `catalog-extended`) siguen fuera de la frontera por storage, `needs`, OAuth2,
       el alcance y la reconciliación documental: la corrida espera al 13i, como en keel-dotnet.
-- **Para retomar:** el **13f** (storage) en un contexto nuevo; después 13g (autoría) y 13h (`needs` + OAuth2), cada uno
-  con su red en vivo, y el 13i (corridas `asset-vault` y `catalog`) tras `go-check` entero.
+  - **13f, el almacenamiento de binarios (hecho, 2026-11-01). La capa `storage` sale de la frontera** (solo con persistencia:
+    la política y el puerto llegan a los handlers en las Dependencies, como la caché). Ya no queda ninguna capa entera fuera.
+    El reparto de los otros tres: build emite el contrato, la configuración y la entrada; el adaptador lo escribe el agente.
+    `src/scaffold/storage.js`.
+    - **Lo emitido**: en `internal/domain`, `file_storage.go` (`FileStorage` con `Download`/`SignedURL` solo con un bucket
+      privado y `PublicURL` solo con uno público, y `StoredObject`) y `bucket_policy.go` (una constante `Bucket<Nombre>` por
+      bucket, el puerto `StoragePolicies`, `BucketPolicy` con `AllowsContent` = tipo declarado Y firma, `AllowsSize`,
+      `SignedURLTTL()` que es un error sin caducidad declarada, y `MatchesSignature` con la tabla de
+      `keel-core/gen/content-signatures.js`); en `internal/infrastructure/storage`, `settings.go` (`storage.yaml`, el neutral
+      de `keel-core/gen/storage-config.js`, byte a byte el de keel-nest y keel-dotnet con MinIO y con S3; no arranca sin el
+      nombre físico de un bucket), `policies.go`, `client.go` y el adaptador del agente `storage.go`, SIN la cabecera, con un
+      error `TODO (agente)` por método y `EnsureBuckets`, que el arranque llama y registra sin tumbarse. **SDK de S3 v1.114.3**
+      (Apache-2.0), de la MISMA release (2026-10-09) que sns y sqs, así que con los dos stacks tidy no mueve ninguno.
+    - **Lo que Go obliga a decidir**: el cliente (`NewClient(ctx, settings)`: credenciales estáticas o la cadena por defecto,
+      endpoint de MinIO y path-style) lo emite build, no el agente: si solo lo importara el archivo del agente, el `go.mod` de
+      build llevaría un requisito directo que tidy movería. `PublicURL` devuelve también un error (el bucket que la
+      configuración no declara), así que la función `To<Dto>` que expone la URL de un bucket público la compone con
+      `fileStorage.PublicURL(domain.Bucket…, …)`, recibe el puerto como ÚLTIMO parámetro y lo pasa a sus hijas, y el handler
+      cuya respuesta lo necesita lo recibe en sus dependencias (`responseNeedsStorage` de `mappers.js`); el mapeo de las
+      imágenes de catalog-extended ya no es un hueco del agente. El 413 del caso de uso necesita centinela: sin el del diseño,
+      `ErrFileTooLarge` con el code canónico (`storageSentinels`). La nota de la subida es la neutral con los nombres de Go
+      (`bucketRef`, opción nueva de `uploadNotes` en keel-core; el texto de los otros tres no cambia: sus pruebas, 21/21).
+    - **La entrada multipart** (`internal/httpapi/multipart.go`): el lector de la subida lee el formulario LO PRIMERO (415 si
+      no es multipart, 413 con el code del diseño por la longitud declarada y, por trozos, por el tope que el borde pone a un
+      `multipart/form-data`: `bodyLimit`, el doble del mayor `maxSizeMb` en vez de `MaxBodyBytes`; `FILE_UNREADABLE` si está
+      roto), después la ruta, y las partes y los campos en su orden (`requirePart`/`optionalPart`, emitidos solo si se usan;
+      los campos pasan a la query de `r` con `withFields`, así que los lectores de la query sirven tal cual). Un
+      `*uploadError` lleva su respuesta decidida.
+    - **El arnés**: `tests/integration/storage_test.go` con `s.Upload(path, UploadPart, fields, headers)` (y `UploadOnReplica`
+      con escenarios de clúster) y, con MinIO, `s.StopStorage()`/`s.StartStorage()` con el sondeo de `validate-infra.sh`. La
+      skill es `keel-go-s3` (receta del adaptador en `references/implementation.md`, compilada contra lo emitido con las dos
+      visibilidades: build, vet y staticcheck limpios).
+    - **Lo que destapó**: el 413 por trozos salía como el 413 genérico del cuerpo, sin code: el `*uploadError` envuelve el
+      `*http.MaxBytesError`, y `errorResponse` reconocía antes el segundo. La subida va ahora antes que el tope.
+    - **Medido**: la prueba emitida `api_test.go` gana siete casos de la subida (lo primero que falta, el 415, el 413 por
+      longitud declarada y por trozos, el cuerpo cortado, la parte vacía y la subida completa que llega a su handler) y
+      `bucket_policy_test.go` EJECUTA la tabla de firmas y la política; tidy (sin mover un directo), gofmt, vet, staticcheck y
+      `go test` limpios en catalog-extended y asset-vault con MinIO y con S3. **Falsado** con cuatro sabotajes nuevos de
+      go-check (`test/helpers/storage-sabotages.js`, sobre catalog-extended), cada uno en rojo en exactamente su prueba:
+      `multipart-limit`, `multipart-empty`, `multipart-missing` y `signature`. **En vivo contra un MinIO real** (sonda a mano,
+      fuera del repo): el cliente de build y la receta de la skill suben, leen, firman (la URL caduca en la ventana declarada y
+      da 403), niegan la lectura anónima de un bucket privado y borran; un secreto equivocado no pasa. `test/storage.test.js`
+      (13 casos, sin Go). `go-check --fixtures` **48/48** (las siete variantes con storage, recompiladas). `npm test` de
+      keel-go **992/992**, keel-core **1313/1313**.
+    - `asset-vault` y `catalog-extended` siguen fuera por `needs`, OAuth2, el alcance y la reconciliación documental.
+- **Para retomar:** el **13g** (autoría) en un contexto nuevo; después 13h (`needs` + OAuth2), con su red en vivo, y el 13i
+  (corridas `asset-vault` y `catalog`) tras `go-check` entero. El commit del 13f, propuesto: `feat(keel-go): el
+  almacenamiento de binarios, capa storage (incremento 13f)`.
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y

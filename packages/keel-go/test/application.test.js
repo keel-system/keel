@@ -225,14 +225,15 @@ test('con una operación interna que nada dispara, todo handler salvo ella recib
   for (const operation of operations(catalog.model)) assert.ok(!ctorArgs(app(catalog.files, 'use_cases'), operation).includes('uc'));
 });
 
-test('un mapeo que no se puede derivar devuelve ErrNotImplemented con el campo nombrado, y su archivo es del agente', () => {
+test('la URL de un bucket público la compone el puerto de almacenamiento, que entra por parámetro hasta quien llama, y el error se propaga', () => {
   const mapper = app(plans.get('catalog-extended').files, 'product_image_mapper');
-  assert.ok(!mapper.includes(GENERATED_HEADER));
-  assert.match(mapper, /func ToProductImageDto\(entity \*domain\.ProductImage, productID uuid\.UUID\) \(ProductImageDto, error\)/);
-  assert.match(mapper, /TODO \(agente\): ProductImageDto\.storageKey/);
-  // Quien lo llama propaga el error en vez de tragárselo.
+  assert.ok(mapper.includes(GENERATED_HEADER), 'ya no queda hueco del agente: build lo escribe entero');
+  assert.match(mapper, /func ToProductImageDto\(entity \*domain\.ProductImage, productID uuid\.UUID, fileStorage domain\.FileStorage\) \(ProductImageDto, error\)/);
+  assert.match(mapper, /storageKeyURL, err := fileStorage\.PublicURL\(domain\.BucketProductImages, entity\.StorageKey\(\)\)/);
+  // Quien lo llama recibe el puerto y propaga el error en vez de tragárselo.
   const product = app(plans.get('catalog-extended').files, 'product_mapper');
-  assert.match(product, /mapped, err := ToProductImageDto\(item, entity\.ID\(\)\)\n\t\tif err != nil \{\n\t\t\treturn \w+\{\}, err/);
+  assert.match(product, /mapped, err := ToProductImageDto\(item, entity\.ID\(\), fileStorage\)\n\t\tif err != nil \{\n\t\t\treturn \w+\{\}, err/);
+  assert.match(product, /, fileStorage domain\.FileStorage\) \(\w+, error\)/);
   // Un mapeo completo no declara un error que nunca devuelve.
   assert.match(app(plans.get('product-catalog').files, 'product_mapper'), /func ToGetProductResponseDto\(entity \*domain\.Product\) GetProductResponseDto \{/);
 });

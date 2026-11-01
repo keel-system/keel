@@ -10,7 +10,8 @@
 
 import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
-import { FRAMEWORK_RESPONSES as FW, DOMAIN_ERROR_RESPONSES } from '@keel-system/keel-core/gen/api-errors';
+import { FRAMEWORK_RESPONSES as FW, DOMAIN_ERROR_RESPONSES, missingParameterMessage, missingPartMessage } from '@keel-system/keel-core/gen/api-errors';
+import { effectiveErrorCode } from '@keel-system/keel-core/gen/declared-errors';
 import { apiCases as neutralApiCases, concretePath } from '@keel-system/keel-core/gen/api-cases';
 import { requestShape } from '@keel-system/keel-core/gen/api-contract';
 import { usesApi } from '@keel-system/keel-core/gen/features';
@@ -18,7 +19,7 @@ import { errorBaseFor } from '@keel-system/keel-core/gen/error-bases';
 import { goString } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
 import { messageComponents } from './services.js';
-import { servedOperation } from './endpoints.js';
+import { servedOperation, shapeOf } from './endpoints.js';
 import { testHandler } from './httpapi.js';
 import { securityCases } from '@keel-system/keel-core/gen/api-cases';
 import { FRAMEWORK_ERRORS as FW_CODES } from '@keel-system/keel-core';
@@ -296,7 +297,7 @@ func TestLaTablaDeRutasNoRepiteOperacionNiRuta(t *testing.T) {
 		operations[route.Operation], patterns[pattern] = true, true
 	}
 }
-${[...tests, ...(jwt ? securityTests(model) : [])].map((test) => `\n${test}`).join('\n')}
+${[...tests, ...(cases.upload ? uploadTests(model, cases.upload, jwt) : []), ...(jwt ? securityTests(model) : [])].map((test) => `\n${test}`).join('\n')}
 `;
   return packageFile(model, httpapi, {
     test: true,
@@ -307,6 +308,7 @@ ${[...tests, ...(jwt ? securityTests(model) : [])].map((test) => `\n${test}`).jo
       'io',
       'log/slog',
       'maps',
+      'mime/multipart',
       'net/http',
       'net/http/httptest',
       'regexp',
@@ -332,7 +334,7 @@ ${[...tests, ...(jwt ? securityTests(model) : [])].map((test) => `\n${test}`).jo
 function nullCompositeCase(model) {
   for (const service of model.services ?? []) {
     for (const operation of (service.operations ?? []).filter(servedOperation)) {
-      const { asBody, bodyRequired } = requestShape(operation);
+      const { asBody, bodyRequired } = shapeOf(operation);
       const url = concretePath(model, operation);
       const field = (operation.bodyFields ?? []).find(
         (f) => f.kind === 'composite' && !f.list && !f.resolvedIdentity && (f.inputValidation ?? []).some((rule) => rule.rule === 'notNull')
@@ -573,4 +575,125 @@ function identityCase(model) {
     if (url) return { claim, url };
   }
   return null;
+}
+
+/**
+ * Los casos de la SUBIDA (capa storage), sobre la operación que elige keel-core/gen/api-cases.js: los de keel-dotnet (lo
+ * primero que falta, el 415, el 413 de la entrada con el code del diseño, un cuerpo cortado, una parte obligatoria vacía y
+ * una subida completa que llega a su handler).
+ */
+function uploadTests(model, upload, jwt) {
+  const { url, part, fields, firstMissing } = upload;
+  const validation = FRAMEWORK_ERRORS.validation.code;
+  const tooLarge = effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge);
+  const unreadable = FRAMEWORK_ERRORS.fileUnreadable.code;
+  const boundary = 'keel-boundary-0192f1d2';
+  const post = (body) => `send(t, server, "POST", ${goString(url)}, ${body}, multipartHeader(t))`;
+  const missing = firstMissing.parameter
+    ? `expectError(t, got, ${FW.missingParameter.status}, ${goString(FW.missingParameter.error)}, ${goString(validation)}, ${goString(missingParameterMessage(firstMissing.parameter))})`
+    : `expectError(t, got, ${FW.missingPart.status}, ${goString(FW.missingPart.error)}, "", ${goString(missingPartMessage(firstMissing.part))})`;
+  const sample = `map[string]string{${Object.entries(fields ?? {})
+    .map(([name, value]) => `${goString(name)}: ${goString(String(value))}`)
+    .join(', ')}}`;
+  const truncated = `--${boundary}\r\nContent-Disposition: form-data; name="${part}"; filename="muestra.pdf"\r\n\r\n%PDF-1.7 a medias`;
+  const tests = [
+    `// multipartHeader es la cabecera de un cuerpo multipart con el boundary de las pruebas${jwt ? ', con la credencial de acceso total' : ''}.
+func multipartHeader(t *testing.T) http.Header {
+	t.Helper()
+	header := ${jwt ? 'bearer(t, fullAccess)' : 'http.Header{}'}
+	header.Set("Content-Type", ${goString(`multipart/form-data; boundary=${boundary}`)})
+	return header
+}
+
+// form es un cuerpo multipart con los campos y, si content no es nil, la parte binaria.
+func form(t *testing.T, fields map[string]string, content []byte) string {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.SetBoundary(${goString(boundary)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range slices.Sorted(maps.Keys(fields)) {
+		if err := writer.WriteField(name, fields[name]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if content != nil {
+		part, err := writer.CreateFormFile(${goString(part)}, "muestra.pdf")
+		if err == nil {
+			_, err = part.Write(content)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return body.String()
+}`,
+    `func TestUnaSubidaVaciaEchaEnFaltaLoPrimeroQueElMensajePideComoKeelSpring(t *testing.T) {
+	server := newServer(t)
+	got := ${post('form(t, nil, nil)')}
+	${missing}
+}`,
+    `func TestUnCuerpoJSONEnUnaSubidaEs415(t *testing.T) {
+	server := newServer(t)
+	got := send(t, server, "POST", ${goString(url)}, \`{}\`, nil)
+	expectError(t, got, ${expected('notMultipart')})
+}`,
+    `func TestUnCuerpoQuePasaDelLimiteDeLaEntradaEs413ConElCodeDelDiseno(t *testing.T) {
+	server := newServer(t)
+	got := ${post('strings.Repeat("a", httpapi.MultipartLimitBytes+1)')}
+	expectError(t, got, ${expected('fileTooLarge', tooLarge)})
+}`,
+    // Sin longitud declarada no hay nada que rechazar sin leer: lo corta el tope que el borde pone a un multipart.
+    `func TestUnCuerpoPorTrozosQuePasaDelLimiteEs413ConElCodeDelDiseno(t *testing.T) {
+	server := newServer(t)
+	// Una parte binaria de verdad que pasa del límite: un cuerpo que no es multipart lo rechazaría el lector antes de
+	// llegar al tope. io.MultiReader esconde la longitud: la petición viaja por trozos.
+	head := ${goString(`--${boundary}\r\nContent-Disposition: form-data; name="${part}"; filename="muestra.pdf"\r\n\r\n`)}
+	body := io.MultiReader(strings.NewReader(head), strings.NewReader(strings.Repeat("a", httpapi.MultipartLimitBytes+1)))
+	request, err := http.NewRequestWithContext(t.Context(), "POST", server.URL+${goString(url)}, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header = multipartHeader(t)
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("POST por trozos: %v", err)
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.ContentLength != 0 && request.ContentLength != -1 {
+		t.Fatalf("la petición declara su longitud (%d): no prueba el corte por trozos", request.ContentLength)
+	}
+	expectError(t, reply{status: response.StatusCode, header: response.Header, body: data}, ${expected('fileTooLarge', tooLarge)})
+}`,
+    `func TestUnCuerpoMultipartCortadoEs400FileUnreadable(t *testing.T) {
+	server := newServer(t)
+	got := ${post(goString(truncated))}
+	expectError(t, got, ${expected('fileUnreadable', unreadable)})
+}`
+  ];
+  if (fields) {
+    tests.push(
+      `func TestUnaParteObligatoriaVaciaEs400FileUnreadable(t *testing.T) {
+	server := newServer(t)
+	got := ${post(`form(t, ${sample}, []byte{})`)}
+	expectError(t, got, ${expected('fileEmpty', unreadable)})
+}`,
+      `func TestUnaSubidaCompletaLlegaASuHandlerLeyendoLosCamposYElBinario(t *testing.T) {
+	server := newServer(t)
+	got := ${post(`form(t, ${sample}, []byte("%PDF-1.7 muestra"))`)}
+	if slices.Contains([]int{400, 404, 405, 413, 415}, got.status) {
+		t.Fatalf("la subida completa no llegó a su handler: %d %s", got.status, got.body)
+	}
+}`
+    );
+  }
+  return tests;
 }

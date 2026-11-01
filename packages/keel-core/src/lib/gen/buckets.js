@@ -40,7 +40,9 @@ export const UPLOAD_NOTE_NAMES = {
   forBucket: 'forBucket',
   constant: (name) => screamingSnake(name),
   allowsSize: 'allowsSize',
-  allowsContent: 'allowsContent'
+  allowsContent: 'allowsContent',
+  /** Cómo se nombra el bucket en la llamada: la constante de StoragePolicies (en Go, una constante del paquete domain). */
+  bucketRef: (constant) => `StoragePolicies.${constant}`
 };
 
 /**
@@ -68,7 +70,7 @@ export function uploadNotes(model, operation, { sizeCode, names = UPLOAD_NOTE_NA
     const size = bucket.maxSizeMb != null ? `${bucket.maxSizeMb} MB` : null;
     const types = (bucket.allowedContentTypes ?? []).join(', ');
     notes.push(
-      `Subida ${field.name} (bucket ${bucket.name}): la política es ${names.policies}.${names.forBucket}(StoragePolicies.${names.constant(bucket.name)}). ` +
+      `Subida ${field.name} (bucket ${bucket.name}): la política es ${names.policies}.${names.forBucket}(${(names.bucketRef ?? UPLOAD_NOTE_NAMES.bucketRef)(names.constant(bucket.name))}). ` +
         (size
           ? `El lector multipart solo corta al doble del mayor maxSizeMb del servicio: el límite de este bucket (${size}) ` +
             `lo compruebas TÚ, lo primero, con ${names.allowsSize}(tamaño) → ${sizeCode} (413) si no cabe. `

@@ -41,6 +41,7 @@ import * as httpClients from './http-clients.js';
 import * as mail from './mail.js';
 import * as payments from './payments.js';
 import * as cache from './cache.js';
+import * as storage from './storage.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as requestIdempotency from './request-idempotency.js';
@@ -96,6 +97,7 @@ const GENERATORS = [
   mail,
   payments,
   cache,
+  storage,
   claim,
   reconciliationClaim,
   requestIdempotency,

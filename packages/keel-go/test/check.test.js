@@ -39,12 +39,12 @@ test('un diseño no listo sale en rojo aunque sea generable, y dice por qué', a
   assert.match(output, /Generable, pero no listo/);
 });
 
-test('una capa fuera de la frontera sale en rojo sin construir nada', async () => {
+test('un diseño fuera de la frontera sale en rojo sin construir nada', async () => {
   const workspace = makeWorkspace();
   mountDesign(workspace, 'asset-vault');
   const before = treeDigest(workspace);
   const { exitCode, output } = await runCommand(workspace, check, 'specs/asset-vault', {});
   assert.equal(exitCode, 1);
-  assert.match(output, /capa \w+: keel-go todavía no la genera/);
+  assert.match(output, /keel-go todavía no lo genera/);
   assert.equal(treeDigest(workspace), before);
 });

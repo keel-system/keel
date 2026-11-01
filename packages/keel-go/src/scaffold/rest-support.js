@@ -27,6 +27,7 @@ import { formatString, layout, packageFile } from './render.js';
 import { apiPlan, enumValues } from './endpoints.js';
 import { usesIdempotencyHeader } from './request-idempotency.js';
 import { unidentifiedCase } from './security.js';
+import { usesMultipart } from './storage.js';
 
 export function generate(model) {
   if (!usesApi(model)) return [];
@@ -136,6 +137,7 @@ function errorsBody(model) {
       ['missing', '*missingParameterError'],
       ['unread', '*malformedError'],
       ['tooLarge', '*http.MaxBytesError'],
+      ...(usesMultipart(model) ? [['upload', '*uploadError']] : []),
       ['rejected', '*domain.Error']
     ].map((cells) => ({ indent: '\t\t', cells }))
   ).join('\n');
@@ -246,7 +248,11 @@ ${targets}
 		return newErrorResponse(r, ${fw('missingParameter')}, new(validationCode), fmt.Sprintf(${formatString(FW.missingParameter.message).replace("'{name}'", "'%s'")}, missing.name), nil)
 	case errors.As(err, &unread):
 		return newErrorResponse(r, ${fw('malformed')}, new(validationCode), ${goString(FW.malformed.message)}, nil)
-	case errors.As(err, &tooLarge):
+${usesMultipart(model) ? `	// La subida multipart: su respuesta ya viene decidida (multipart.go). Antes que el tope del cuerpo: su 413 lo envuelve y
+	// lleva el code del diseño.
+	case errors.As(err, &upload):
+		return newErrorResponse(r, upload.status, upload.phrase, upload.code, upload.message, nil)
+` : ''}	case errors.As(err, &tooLarge):
 		return newErrorResponse(r, ${fw('bodyTooLarge')}, nil, ${goString(FW.bodyTooLarge.message)}, nil)
 	// Errores del dominio: su status y su code.
 	case errors.As(err, &rejected):
@@ -297,10 +303,24 @@ ${kinds}
  * posterior sigue llevando su correlationId.
  */
 function middlewareBody(model) {
-  if (!usesIdempotencyHeader(model)) return MIDDLEWARE_BODY;
+  return idempotencyMiddleware(model, multipartMiddleware(model, MIDDLEWARE_BODY));
+}
+
+/** Con subidas, el tope del cuerpo de un multipart/form-data es el de la subida (bodyLimit, multipart.go). */
+function multipartMiddleware(model, body) {
+  if (!usesMultipart(model)) return body;
+  const anchor = '\t\tr.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)\n';
+  if (!body.includes(anchor)) throw new Error('middleware.go: el borde ya no pone el tope del cuerpo donde se esperaba');
+  return body
+    .replace(anchor, '\t\tr.Body = http.MaxBytesReader(w, r.Body, bodyLimit(r))\n')
+    .replace(', pone el tope del cuerpo', ', pone el tope del cuerpo (el de la subida a un multipart/form-data)');
+}
+
+function idempotencyMiddleware(model, body) {
+  if (!usesIdempotencyHeader(model)) return body;
   const anchor = '\t\tr = r.WithContext(correlation.WithID(r.Context(), id))\n';
-  if (!MIDDLEWARE_BODY.includes(anchor)) throw new Error('middleware.go: el borde ya no abre la correlación donde se esperaba');
-  return MIDDLEWARE_BODY.replace(
+  if (!body.includes(anchor)) throw new Error('middleware.go: el borde ya no abre la correlación donde se esperaba');
+  return body.replace(
     anchor,
     `${anchor}\t\tr = r.WithContext(application.WithIdempotencyKey(r.Context(), r.Header.Get(application.IdempotencyHeader)))\n`
   ).replace('vuelve en la cabecera y en el cuerpo de error), pone', 'vuelve en la cabecera y en el cuerpo de error), lleva la clave de idempotencia al contexto, pone');

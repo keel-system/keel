@@ -36,6 +36,7 @@ import { DOMAIN_SABOTAGES, applySabotage as applyDomainSabotage } from '../test/
 import { APPLICATION_SABOTAGES, applySabotage as applyApplicationSabotage } from '../test/helpers/application-sabotages.js';
 import { API_SABOTAGES, applySabotage as applyApiSabotage } from '../test/helpers/api-sabotages.js';
 import { CLIENTS_SABOTAGES, CLIENTS_SUBJECT, applySabotage as applyClientsSabotage } from '../test/helpers/clients-sabotages.js';
+import { STORAGE_SABOTAGES, STORAGE_SUBJECT, applySabotage as applyStorageSabotage } from '../test/helpers/storage-sabotages.js';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
@@ -421,6 +422,44 @@ for (const sabotage of API_SABOTAGES) {
       step(`clientes falsados: ${sabotage.id} (${sabotage.what}) → ${expected} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
     }
   }
+}
+
+// El almacenamiento (tramo 13f) se falsa sobre catalog-extended, la fixture con una subida de campos con muestra y un
+// bucket público: las pruebas emitidas de la subida (internal/httpapi) y de la política (internal/domain) en verde, y cada
+// sabotaje en rojo con sus pruebas, y solo ellas. Con licencias y vulnerabilidades del SDK de S3 que entra con la capa.
+{
+  const storageDir = path.join(makeWorkspace('keel-go-storage-'), STORAGE_SUBJECT);
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, STORAGE_SUBJECT));
+  for (const file of planService({ manifest, layers, workspace: storageDir }).files) {
+    const out = path.join(storageDir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+  const storageTests = (packages) => ['test', '-count=1', ...packages];
+  const tidied = go(storageDir, ['mod', 'tidy']);
+  const baseline = tidied.ok ? go(storageDir, storageTests(['./internal/httpapi/', './internal/domain/'])) : tidied;
+  if (step(`almacenamiento: las pruebas emitidas de ${STORAGE_SUBJECT} en verde`, baseline.ok, baseline.ok ? '' : baseline.output.slice(0, 600))) {
+    for (const sabotage of STORAGE_SABOTAGES) {
+      const file = path.join(storageDir, sabotage.file);
+      const original = fs.readFileSync(file, 'utf8');
+      const mutated = applyStorageSabotage(sabotage, original);
+      if (!mutated) {
+        step(`almacenamiento falsado: ${sabotage.id}`, false, `el sabotaje ya no se aplica a ${sabotage.file}`);
+        continue;
+      }
+      fs.writeFileSync(file, mutated);
+      const sabotaged = go(storageDir, storageTests([sabotage.packages]));
+      fs.writeFileSync(file, original);
+      const failed = [...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]);
+      const expected = [sabotage.fails, ...(sabotage.alsoFails ?? [])].sort().join(' ');
+      const exact = [...new Set(failed)].sort().join(' ') === expected;
+      step(`almacenamiento falsado: ${sabotage.id} (${sabotage.what}) → ${expected} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
+    }
+  }
+  const storageVuln = go(storageDir, ['tool', 'govulncheck', './...']);
+  if (!step(`almacenamiento: govulncheck sin vulnerabilidades en ${STORAGE_SUBJECT}`, storageVuln.ok)) console.error(storageVuln.output);
+  const storageLicenses = go(storageDir, ['tool', 'go-licenses', 'check', '--ignore', 'catalog', `--allowed_licenses=${ALLOWED_LICENSES.join(',')}`, './...']);
+  if (!step(`almacenamiento: licencias permisivas en ${STORAGE_SUBJECT} (SDK de S3 incluido)`, storageLicenses.ok)) console.error(storageLicenses.output);
 }
 
 // La frontera hexagonal se falsa: un import plantado del dominio a otro paquete de la plataforma (solo puede usar

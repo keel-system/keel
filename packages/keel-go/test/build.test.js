@@ -58,13 +58,14 @@ test('un diseño no listo NO se genera sin --accept-unready, y no se escribe nad
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
-test('una capa fuera de la frontera se rechaza nombrando keel-go, antes de escribir nada', async () => {
+test('un diseño fuera de la frontera se rechaza nombrando keel-go, antes de escribir nada', async () => {
   const workspace = makeWorkspace();
   mountDesign(workspace, 'asset-vault');
   const { exitCode, output } = await runCommand(workspace, build, 'specs/asset-vault', { defaults: true, acceptUnready: true });
   assert.equal(exitCode, 1);
   assert.match(output, /capacidades que keel-go no genera/);
-  assert.match(output, /capa storage: keel-go todavía no la genera/);
+  // Ya no queda ninguna capa entera fuera (storage entró con el 13f): asset-vault se rechaza por lo que trae dentro.
+  assert.match(output, /needs \(thumbnail\): .*keel-go todavía no lo genera/);
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 

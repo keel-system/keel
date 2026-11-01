@@ -20,9 +20,7 @@ import { messageComponents } from '../scaffold/services.js';
 import { entityFinders } from '../scaffold/finders.js';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
-const PENDING_LAYERS = {
-  storage: 'incremento 13'
-};
+const PENDING_LAYERS = {};
 
 /**
  * Los motores sobre los que keel-go genera la persistencia: PostgreSQL y MySQL (tramo 6d) y MongoDB (incremento 12);
@@ -80,6 +78,7 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...parameterErrors(manifest, layers));
   errors.push(...outboundErrors(layers));
   errors.push(...cacheErrors(layers));
+  if (declared.includes('storage')) errors.push(...storageErrors(layers));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     const names = operations
@@ -302,6 +301,19 @@ function cacheErrors(layers) {
     `use-cases: ${cached.join(', ')} declara${cached.length === 1 ? '' : 'n'} cache sin persistencia — keel-go entrega la caché a los handlers en las ` +
       'Dependencies de los casos de uso, que solo existen con persistencia (ninguna fixture que keel-go genere lo declara: sin red que mida lo ' +
       'emitido). Genera este diseño con keel-spring, keel-nest o keel-dotnet.'
+  ];
+}
+
+/**
+ * El almacenamiento sin persistencia (tramo 13f): la política y el puerto llegan a los handlers en las Dependencies de los
+ * casos de uso, que solo existen con persistencia, como la caché.
+ */
+function storageErrors(layers) {
+  if (layers?.persistence) return [];
+  return [
+    'capa storage sin persistencia — keel-go entrega la política de cada bucket y el puerto de almacenamiento a los handlers en ' +
+      'las Dependencies de los casos de uso, que solo existen con persistencia (ninguna fixture que keel-go genere lo declara: ' +
+      'sin red que mida lo emitido). Genera este diseño con keel-spring, keel-nest o keel-dotnet.'
   ];
 }
 

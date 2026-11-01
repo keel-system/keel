@@ -17,6 +17,11 @@
 // lee primero como objeto (qué miembros llegaron) y después cada miembro presente y no nulo sobre su campo, como el
 // JsonBodyReader de keel-dotnet.
 //
+// Una SUBIDA (capa storage, tramo 13f) es multipart/form-data: el lector lee primero el formulario (multipart.go: 415,
+// 413 y FILE_UNREADABLE antes de convertir nada, como el DispatcherServlet de Spring), después la ruta, y los campos y las
+// partes en su orden, que es el de los argumentos del controlador de keel-spring. Los campos simples llegan en el
+// formulario y se leen con los mismos lectores de la query (withFields).
+//
 // Lo que el borde necesita de rest-support.js (lectores de texto, `member`, `textLength`…) se emite solo si algún lector
 // lo usa: staticcheck (U1000) rechaza una función sin usar. Por eso este módulo apunta en `plan.uses` lo que pide.
 
@@ -59,14 +64,20 @@ const statusOf = (status) => STATUS_CONSTANTS[status] ?? String(status);
 
 const PRESENCE = new Set(['notNull', 'notBlank', 'notEmpty']);
 
-/** ¿Es un binario? Viaja en una subida multipart, que llega con la capa storage (incremento 13). */
+/** ¿Es un binario? Solo viaja en una subida multipart (capa storage). */
 function isFile(component) {
   return component.goType === 'FileUpload' || component.elementGoType === 'FileUpload' || component.base === 'file';
 }
 
-/** ¿Se sirve la operación? Con ruta, y sin binario: la subida multipart llega en el incremento 13. */
+/** ¿Se sirve la operación? Con ruta; un binario, solo en una subida (multipart). */
 export function servedOperation(operation) {
-  return Boolean(operation.route) && !messageComponents(operation).some(isFile);
+  if (!operation.route) return false;
+  return Boolean(operation.multipart) || !messageComponents(operation).some(isFile);
+}
+
+/** Cómo viaja la entrada: la de keel-core (api-contract), salvo que una subida no lleva cuerpo JSON. */
+export function shapeOf(operation) {
+  return operation.multipart ? { asBody: false, bodyRequired: false } : requestShape(operation);
 }
 
 /** Las operaciones servidas, con su grupo. */
@@ -312,7 +323,8 @@ function returnErr(expression) {
 }
 
 function renderReader(model, operation, plan) {
-  const { asBody, bodyRequired } = requestShape(operation);
+  const { asBody, bodyRequired } = shapeOf(operation);
+  const multipart = Boolean(operation.multipart);
   const components = messageComponents(operation, model);
   const message = messageType(operation);
   const pathLines = [];
@@ -336,7 +348,16 @@ function renderReader(model, operation, plan) {
   }
 
   for (const component of components) {
-    if (component.fromPath || isFile(component)) continue;
+    if (component.fromPath) continue;
+    // El binario se lee de su parte, en SU posición: Spring resuelve los argumentos en orden, así que una parte que falta
+    // se descubre antes que un parámetro posterior y antes de validar ninguna restricción.
+    if (isFile(component)) {
+      if (!multipart) continue;
+      const field = `msg.${goExported(component.name)}`;
+      if (isPointer(operation, component)) queryLines.push(`	${field} = form.optionalPart(${goString(component.name)})`);
+      else queryRequired.push(...returnErr(`${field}, err = form.requirePart(${goString(component.name)})`));
+      continue;
+    }
     const field = `msg.${goExported(component.name)}`;
     // La identidad del llamante no viaja en la petición: la estampa el lector desde la credencial, DESPUÉS de leer y
     // validar la petición (en keel-spring la estampa el controller sobre el comando ya validado).
@@ -428,7 +449,11 @@ function renderReader(model, operation, plan) {
     queryChecks.push(...componentChecks(component, { rules, each, present, value: pointer ? `*${field}` : field, sink: 'inParams', path: paramPath(component.name), plan }));
   }
 
-  const out = [...pathLines];
+  // Una subida lee el formulario lo primero: un cuerpo que no es multipart, demasiado grande o roto se rechaza antes de
+  // convertir la ruta. Sus campos pasan a ser la query de r.
+  const out = multipart
+    ? ['	form, err := readMultipart(r)', '	if err != nil {', '		return msg, err', '	}', '	r = form.withFields(r)', ...pathLines]
+    : [...pathLines];
   if (asBody) {
     plan.uses.add('readObject');
     out.push(`	fields, err := readObject(r, ${bodyRequired})`, '	if err != nil {', '		return msg, err', '	}', ...bodyLines);
@@ -462,7 +487,7 @@ ${out.join('\n')}${out.length > 0 ? '\n' : ''}\treturn msg, nil
 
 /** La fila del contrato HTTP de una operación: lo que registra `routes` y compara la paridad. */
 export function routeRow(model, operation) {
-  const { asBody, bodyRequired } = requestShape(operation);
+  const { asBody, bodyRequired } = shapeOf(operation);
   // El Pageable viaja como los tres parámetros de Spring Data.
   const names = (c) => (c.pageable ? ['page', 'size', 'sort'] : [c.name]);
   const query = asBody

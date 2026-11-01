@@ -11,7 +11,8 @@
 import { GO_MIN_VERSION, GO_TOOLCHAIN } from '../lib/assets.js';
 import { usesDocument, usesJwt, usesRelational } from '@keel-system/keel-core/gen/features';
 import { usesGoMail, usesTemplating } from './mail.js';
-import { CACHE_REQUIRES, MAIL_REQUIRES, TEMPLATING_PINS, TEMPLATING_REQUIRES } from '../lib/go-stack.js';
+import { CACHE_REQUIRES, MAIL_REQUIRES, STORAGE_REQUIRES, TEMPLATING_PINS, TEMPLATING_REQUIRES } from '../lib/go-stack.js';
+import { usesStorageAdapter } from './storage.js';
 import { usesCache } from './cache.js';
 import { BROKER_REQUIRES, DOCUMENT_REQUIRES, JWT_REQUIRES, MODULES, RELATIONAL_REQUIRES, SCHEDULING_REQUIRES, SKELETON_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
 import { relationalEngine } from '../lib/relational-engine.js';
@@ -22,7 +23,8 @@ import { layout, packageFile } from './render.js';
 
 /** Los módulos de ejecución que el proyecto importa, en el orden de go.mod. Crece con cada capa que se genera. */
 export function requiresFor(model = null) {
-  return [
+  // Un módulo que piden dos capas (el núcleo del SDK de AWS: SNS/SQS y storage) va una vez.
+  const all = [
     ...SKELETON_REQUIRES,
     ...(model && usesRelational(model) ? RELATIONAL_REQUIRES[relationalEngine(model)] : []),
     ...(model && usesDocument(model) ? DOCUMENT_REQUIRES : []),
@@ -32,8 +34,10 @@ export function requiresFor(model = null) {
     ...(model && foldKinds(model).has('accents') ? TEXT_FOLD_REQUIRES : []),
     ...(model && usesJwt(model) ? JWT_REQUIRES : []),
     ...(model && usesGoMessaging(model) ? (BROKER_REQUIRES[model.stack?.broker] ?? []) : []),
-    ...(model && usesScheduling(model) ? SCHEDULING_REQUIRES : [])
-  ].sort();
+    ...(model && usesScheduling(model) ? SCHEDULING_REQUIRES : []),
+    ...(model && usesStorageAdapter(model) ? STORAGE_REQUIRES : [])
+  ];
+  return [...new Set(all)].sort();
 }
 
 /** Los transitivos fijados que el proyecto arrastra (kind 'pin' en go-stack.js): van como `// indirect`. */
