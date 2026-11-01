@@ -30,6 +30,7 @@ import { appType, applicationPath, docComment, domainPath, goFileName, goTypeNam
 import { ownershipNotes } from '@keel-system/keel-core/gen/ownership';
 import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity } from './security.js';
 import { activationClients, callMethod, clientParam, clientPort, usesGoHttpClients } from './http-clients.js';
+import { MAIL_SENDER, mailDependencies, mailNote } from './mail.js';
 
 export function generate(model) {
   const files = [];
@@ -236,6 +237,11 @@ function renderHandler(model, operation) {
   for (const client of activationClients(model, operation)) {
     deps.push({ name: clientParam(client), type: `domain.${clientPort(client)}`, doc: `${clientParam(client)} es el cliente saliente ${client.id} (http-clients), con su resiliencia ya puesta.` });
   }
+  // La salida por correo (mail.sentBy es el único enlace del DSL entre un caso de uso y el correo): sin el puerto delante,
+  // el camino de menor resistencia es no mandarlo, y no lo detecta nada.
+  for (const port of mailDependencies(model, operation)) {
+    deps.push({ name: port.param, type: port.port, doc: `${port.param} es ${port === MAIL_SENDER ? 'la salida de correo (mail.sentBy): el adaptador SMTP ya escrito' : 'el renderizador de las plantillas del correo, ya escrito'}.` });
+  }
   if (dispatches) deps.push({ name: 'useCases', type: '*UseCases', doc: 'useCases despacha las operaciones que esta declara en use-cases.dispatches.' });
   const fields = deps.length > 0
     ? `\n${deps
@@ -312,6 +318,8 @@ function handlerNotes(model, operation) {
         'del agregado (que llama a transitionTo), nunca el handler asignando el estado.'
     );
   }
+  const mailing = mailNote(model, operation);
+  if (mailing) notes.push(mailing);
   notes.push(...reconciliationNotes(model, operation));
   const compensation = compensationNote(operation);
   if (compensation) notes.push(compensation);

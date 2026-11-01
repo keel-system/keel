@@ -32,10 +32,10 @@ test('hay fixtures con registro de idempotencia, y con las tres fuentes de clave
 });
 
 for (const name of fixtureNames) {
-  test(`${name}: el registro sale si y solo si el diseño lo usa sobre persistencia relacional, y cableado entero`, () => {
+  test(`${name}: el registro sale si y solo si el diseño lo usa sobre persistencia, y cableado entero`, () => {
     const { model, files } = plan(name);
     const all = byPath(files);
-    const store = Object.keys(all).find((file) => /^internal\/infrastructure\/(postgres|mysql)\/idempotency_store\.go$/.test(file));
+    const store = Object.keys(all).find((file) => /^internal\/infrastructure\/(postgres|mysql|mongo)\/idempotency_store\.go$/.test(file));
     if (!usesRequestIdempotency(model)) {
       assert.equal(store, undefined);
       assert.ok(!('internal/domain/idempotency.go' in all));
@@ -45,7 +45,7 @@ for (const name of fixtureNames) {
     assert.ok(store, 'el adaptador del motor');
     assert.match(all['internal/domain/idempotency.go'], /type IdempotencyStore interface/);
     assert.match(all['internal/application/use_cases.go'], /\tIdempotencyStore +domain\.IdempotencyStore\n/);
-    assert.match(all['cmd/server/main.go'], /IdempotencyStore: +(postgres|mysql)\.NewIdempotencyStore\(transactions\),/);
+    assert.match(all['cmd/server/main.go'], /IdempotencyStore: +(postgres|mysql|mongo)\.NewIdempotencyStore\(transactions\),/);
     for (const operation of registryOperations(model)) {
       const message = Object.entries(all).find(([file, content]) => file.startsWith('internal/application/') && new RegExp(`^type \\w+ struct`, 'm').test(content) && content.includes(`IdempotencyScope es el ámbito de la clave de idempotencia de ${operation.name}.`));
       assert.ok(message, `${operation.name}: su mensaje lleva el ámbito`);
@@ -86,6 +86,15 @@ for (const name of withRegistry) {
   });
 
   test(`${name}: el adaptador sobre MySQL no lleva el dialecto de PostgreSQL, y al revés`, () => {
+    // Sobre documentos (incremento 12), el registro va por su _id subdocumento en el orden de keel-core y la carrera la
+    // arbitra ese _id; no hay SQL ni otro motor que pedir.
+    const documental = byPath(plan(name).files)['internal/infrastructure/mongo/idempotency_store.go'];
+    if (documental) {
+      assert.match(documental, /\{Key: "_id", Value: bson\.D\{\{Key: "operation_scope", Value: scope\}, \{Key: "idempotency_key", Value: key\}\}\}/);
+      assert.match(documental, /if mongodriver\.IsDuplicateKeyError\(err\) \{\n\t\t\treturn domain\.IdempotencyConflict\(scope, key\)/);
+      assert.doesNotMatch(documental, /SELECT|INSERT INTO|pgconn/);
+      return;
+    }
     const pg = byPath(plan(name).files)['internal/infrastructure/postgres/idempotency_store.go'];
     const my = byPath(plan(name, { database: 'mysql' }).files)['internal/infrastructure/mysql/idempotency_store.go'];
     assert.match(pg, /engine\.Code == "23505" && engine\.ConstraintName == "idempotency_record_pkey"/);

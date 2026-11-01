@@ -35,7 +35,9 @@ const STORE = 'internal/infrastructure/mysql';
 const MECHANISM_TABLES = [];
 
 const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
+// Los diseños documentales no se miden sobre MySQL: el motor del stack no cambia el modelo del diseño (incremento 12).
 const relational = fixtures
+  .filter((name) => goView(name).layers?.persistence?.default?.model !== 'document')
   .map((name) => {
     const design = goView(name);
     return { name, design, plan: planService({ ...design, workspace: FIXTURES_DIR, stack: MYSQL }) };

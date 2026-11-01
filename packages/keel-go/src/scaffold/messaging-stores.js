@@ -14,6 +14,7 @@
 //     que sobrevivir al fallo del handler. La carrera entre dos entregas la arbitra la clave primaria.
 
 import { OUTBOX_EVENT, PROCESSED_EVENT, storeColumns } from '@keel-system/keel-core/gen/messaging-stores';
+import { usesRelational } from '@keel-system/keel-core/gen/features';
 import { goString } from '../lib/go-source.js';
 import { sqlDialect } from '../lib/relational-engine.js';
 import { MYSQL_DRIVER } from './persistence-runtime.js';
@@ -29,6 +30,8 @@ export function storeTables(model) {
 }
 
 export function generate(model) {
+  // Sobre documentos, los almacenes son los de document-stores.js: misma API, otro cuerpo.
+  if (!usesRelational(model)) return [];
   const files = [];
   const { store } = layout(model);
   const engineImport = sqlDialect(model).mysql ? MYSQL_DRIVER : 'github.com/jackc/pgx/v5/pgconn';

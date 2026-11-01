@@ -53,6 +53,8 @@ import { harnessQueueName } from '@keel-system/keel-core/gen/messaging-provision
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { usesGoOutbox } from './messaging.js';
+import { usesDocument } from '@keel-system/keel-core/gen/features';
+import { documentOutboxHelpers } from './document-harness.js';
 import { connectionName, usesGoRabbitMq } from './rabbitmq.js';
 import { usesGoKafka } from './kafka.js';
 import { usesGoSnsSqs } from './snssqs.js';
@@ -183,7 +185,7 @@ func (s *Scenario) AssertBrokerConnected() {
 		s.Fatal(err)
 	}
 }
-${outbox ? outboxMethods() : ''}`;
+${outbox ? outboxMethods(model) : ''}`;
 }
 
 function deliverMethod(sub) {
@@ -236,7 +238,8 @@ func (s *Scenario) Deliver${name}(${params}) {
 `;
 }
 
-function outboxMethods() {
+function outboxMethods(model) {
+  const clear = usesDocument(model) ? documentOutboxHelpers(ABANDONED).clear : `\ts.Db("DELETE FROM outbox_event WHERE published_at IS NULL AND attempts >= ${ABANDONED}")`;
   return String.raw`
 // DeadLetteredEvents es cuántos eventos se rindió el outbox: agotaron sus reintentos y no salieron nunca. El Then natural
 // de casi cualquier escenario del outbox es que esto siga en CERO: entregar tarde es correcto, rendirse es perder.
@@ -264,7 +267,7 @@ func (s *Scenario) AbandonOutboxEvent(eventType string) {
 // ensuciaría a los demás.
 func (s *Scenario) ClearAbandonedOutboxEvents() {
 	s.Helper()
-	s.Db("DELETE FROM outbox_event WHERE published_at IS NULL AND attempts >= ${ABANDONED}")
+${clear}
 }
 `;
 }
@@ -1148,7 +1151,9 @@ func awaitServerConnected(ctx context.Context) (err error) {${
 	return ${wired ? 'awaitTopologyWired(ctx)' : 'nil'}
 }
 ${
-  outbox
+  outbox && usesDocument(model)
+    ? documentOutboxHelpers(ABANDONED).park
+    : outbox
     ? `
 // parkedAt es la marca de las filas aparcadas: una fecha que ningún backoff alcanza. Sin zona: MySQL rechaza el sufijo
 // «+00» en un DATETIME, y PostgreSQL lee la misma marca en la zona de la sesión al aparcar y al devolver.
@@ -1234,36 +1239,8 @@ function outboxBody(model) {
 	return nil`
     : `
 	return err`;
-  return String.raw`
-// outboxDrainTimeout es lo que se espera a que el relay entregue lo pendiente antes de leer o purgar un canal.
-const outboxDrainTimeout = 15 * time.Second
-
-// outboxDestination es el destino de los eventos del servidor arrancado: el de su configuración local, o
-// MESSAGING_DESTINATION.
-func outboxDestination() string {
-	return envOr("MESSAGING_DESTINATION", ${goString(model.messaging?.destinationDefault ?? '')})
-}
-
-// maxAttempts son los intentos antes de rendirse del servidor arrancado (perfil local), o ${OUTBOX_RELAY.maxAttempts.env}.
-func maxAttempts() int {
-	if configured, err := strconv.Atoi(os.Getenv(${goString(OUTBOX_RELAY.maxAttempts.env)})); err == nil && configured > 0 {
-		return configured
-	}
-	return ${maxAttempts}
-}
-
-// countOf es el número de una consulta de una sola fila: la última línea. Vacío NO es cero.
-func countOf(output string) (int64, error) {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	last := strings.TrimSpace(lines[len(lines)-1])
-	count, err := strconv.ParseInt(last, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("la consulta de outbox_event no devolvió un número (salida: %q): %w", strings.TrimSpace(output), err)
-	}
-	return count, nil
-}
-
-func queryCount(ctx context.Context, sql string) (int64, error) {
+  // Sobre documentos, lo mismo con los scripts de mongosh de keel-core/gen/mongo-probes.js (document-harness.js).
+  const tail = usesDocument(model) ? `${documentOutboxHelpers(ABANDONED).body}${abandoned}` : String.raw`func queryCount(ctx context.Context, sql string) (int64, error) {
 	out, err := db(ctx, sql)
 	if err != nil {
 		return 0, err
@@ -1310,7 +1287,37 @@ func abandonOutboxEvent(ctx context.Context, eventType string) error {
 	if pending == 0 {
 		return errors.New("no hay ningún evento " + eventType + " pendiente en el outbox que abandonar")
 	}
-	_, err = db(ctx, "UPDATE outbox_event SET attempts = ${ABANDONED} WHERE event_type = "+quoted(eventType)+" AND published_at IS NULL")${abandoned}
+	_, err = db(ctx, "UPDATE outbox_event SET attempts = ${ABANDONED} WHERE event_type = "+quoted(eventType)+" AND published_at IS NULL")${abandoned}`;
+  return String.raw`
+// outboxDrainTimeout es lo que se espera a que el relay entregue lo pendiente antes de leer o purgar un canal.
+const outboxDrainTimeout = 15 * time.Second
+
+// outboxDestination es el destino de los eventos del servidor arrancado: el de su configuración local, o
+// MESSAGING_DESTINATION.
+func outboxDestination() string {
+	return envOr("MESSAGING_DESTINATION", ${goString(model.messaging?.destinationDefault ?? '')})
+}
+
+// maxAttempts son los intentos antes de rendirse del servidor arrancado (perfil local), o ${OUTBOX_RELAY.maxAttempts.env}.
+func maxAttempts() int {
+	if configured, err := strconv.Atoi(os.Getenv(${goString(OUTBOX_RELAY.maxAttempts.env)})); err == nil && configured > 0 {
+		return configured
+	}
+	return ${maxAttempts}
+}
+
+// countOf es el número de una consulta de una sola fila: la última línea. Vacío NO es cero.
+func countOf(output string) (int64, error) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	count, err := strconv.ParseInt(last, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("la consulta de outbox_event no devolvió un número (salida: %q): %w", strings.TrimSpace(output), err)
+	}
+	return count, nil
+}
+
+${tail}
 }
 `;
 }

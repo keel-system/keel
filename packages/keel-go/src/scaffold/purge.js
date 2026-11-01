@@ -14,7 +14,7 @@
 
 import { OUTBOX_EVENT, OUTBOX_PURGE, PROCESSED_EVENT, PROCESSED_EVENT_PURGE } from '@keel-system/keel-core/gen/messaging-stores';
 import { IDEMPOTENCY_RECORD, IDEMPOTENCY_RECORD_PURGE } from '@keel-system/keel-core/gen/request-idempotency';
-import { usesRelational } from '@keel-system/keel-core/gen/features';
+import { usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
 import { goString } from '../lib/go-source.js';
 import { sqlDialect } from '../lib/relational-engine.js';
 import { layout, packageFile } from './render.js';
@@ -28,7 +28,7 @@ import { reconciliationPurge } from './reconciliation-claim.js';
  * del outbox no se toca nunca), con qué retención y bajo qué prefijo de configuración. Las mismas que keel-nest.
  */
 export function tablePurges(model) {
-  if (!usesRelational(model)) return [];
+  if (!usesPersistence(model)) return [];
   const purges = [];
   if (usesGoOutbox(model)) {
     purges.push({
@@ -122,7 +122,8 @@ export const PURGE_CASES_CUTOFF = 1000;
 /** El SQL de las purgas, en el paquete del motor. */
 export function generate(model) {
   const purges = tablePurges(model);
-  if (purges.length === 0) return [];
+  // Sobre documentos, el bucle por lotes de document-stores.js.
+  if (purges.length === 0 || !usesRelational(model)) return [];
   const { store } = layout(model);
   return [{ path: `${store.dir}/purges.go`, content: packageFile(model, store, { imports: ['context', 'database/sql', 'time'], body: storeBody(model, purges) }) }];
 }

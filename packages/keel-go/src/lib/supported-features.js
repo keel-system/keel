@@ -17,35 +17,32 @@ import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/me
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { GO_PROJECTION } from './go-projection.js';
 import { messageComponents } from '../scaffold/services.js';
+import { entityFinders } from '../scaffold/finders.js';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
   storage: 'incremento 13',
-  mail: 'incremento 13',
   payments: 'incremento 13'
 };
 
 /**
- * Los motores sobre los que keel-go genera la persistencia: PostgreSQL y MySQL (tramo 6d). MongoDB llega en el incremento 12;
+ * Los motores sobre los que keel-go genera la persistencia: PostgreSQL y MySQL (tramo 6d) y MongoDB (incremento 12);
  * MariaDB, SQL Server y Oracle se quedan fuera hasta que una red los mida, como en keel-nest y keel-dotnet.
  */
-export const SUPPORTED_DATABASES = ['postgresql', 'mysql'];
+export const SUPPORTED_DATABASES = ['postgresql', 'mysql', 'mongodb'];
 
 /** Los brokers sobre los que keel-go genera la mensajería: RabbitMQ (tramo 9b-2), Kafka (9f) y SNS/SQS (9g). */
 export const SUPPORTED_BROKERS = ['rabbitmq', 'kafka', 'snssqs'];
 const PENDING_BROKERS = {};
 
-/** ¿Declara el diseño persistencia DOCUMENTAL? Llega en el incremento 12. */
+/** ¿Declara el diseño persistencia DOCUMENTAL? (incremento 12) */
 function documentPersistence(layers) {
   return layers?.persistence?.default?.model === 'document';
 }
 
-/**
- * Las capas que keel-go todavía rechaza en ESTE diseño: las pruebas de paridad lo comparan sin ellas. La persistencia
- * solo cuando es documental: la relacional se genera desde el incremento 6.
- */
+/** Las capas que keel-go todavía rechaza en ESTE diseño: las pruebas de paridad lo comparan sin ellas. */
 export function pendingLayers(layers = null) {
-  return [...Object.keys(PENDING_LAYERS), ...(documentPersistence(layers) ? ['persistence'] : [])];
+  return Object.keys(PENDING_LAYERS);
 }
 
 /**
@@ -77,10 +74,7 @@ export function checkSupportedFeatures(manifest, layers) {
   if (declared.includes('security')) errors.push(...securityErrors(layers));
   if (declared.includes('messaging')) errors.push(...messagingErrors(manifest, layers));
   if (declared.includes('persistence') && documentPersistence(layers)) {
-    errors.push(
-      'capa persistence: keel-go todavía no genera la persistencia documental (llega en el incremento 12 de PLAN-KEEL-GO.md). ' +
-        'Genera este diseño con keel-spring, keel-nest o keel-dotnet, o espera a que keel-go la cubra.'
-    );
+    errors.push(...documentErrors(manifest, layers));
   } else if (declared.includes('persistence')) {
     errors.push(...unmeasuredShapes(manifest, layers));
   }
@@ -95,13 +89,45 @@ export function checkSupportedFeatures(manifest, layers) {
     if (names.length === 0) continue;
     // La idempotencia de petición se adelantó al incremento 7 sobre la persistencia relacional (el registro, la firma y
     // la cabecera), su purga llegó con el reloj (10b) y el gate check-idempotency.sh con el 10d: ya no queda nada.
-    if (feature.key === 'idempotency' && declared.includes('persistence') && !documentPersistence(layers)) continue;
+    // Sobre documentos, desde el incremento 12.
+    if (feature.key === 'idempotency' && declared.includes('persistence')) continue;
     warnings.push(
       `use-cases: ${names.join(', ')} declara${names.length === 1 ? '' : 'n'} ${feature.what}; keel-go genera el mensaje y el handler, ` +
         `pero no el mecanismo (llega en el ${feature.increment} de PLAN-KEEL-GO.md).`
     );
   }
   return { errors, warnings };
+}
+
+/**
+ * Lo que keel-go todavía no genera sobre DOCUMENTOS (incremento 12), con su motivo: ninguna fixture documental en su
+ * alcance lo declara, así que ninguna red mediría lo emitido.
+ *   · los finders de búsqueda (DSL 2.22: `filter` en el input de una query): sobre documentos, keel-nest y keel-dotnet
+ *     traducen cada filtro a su consulta; aquí no hay fixture documental que los declare;
+ *   · el reclamo de reconciliación (`reconciledBy`): solo lo declara asset-vault, que llega con el incremento 13 (storage,
+ *     `needs`, alcance por recurso).
+ */
+function documentErrors(manifest, layers) {
+  let model;
+  try {
+    model = buildModel({ manifest, layers, stack: resolveStack(null, layers), projection: GO_PROJECTION });
+  } catch {
+    return [];
+  }
+  const why = 'ninguna fixture documental que keel-go genere lo declara: sin red que mida lo emitido';
+  const elsewhere = 'Genera este diseño con keel-spring, keel-nest o keel-dotnet.';
+  const errors = [];
+  for (const entity of model.entities.filter((candidate) => candidate.persisted && candidate.isAggregateRoot)) {
+    const finders = entityFinders(model, entity);
+    if (finders.length > 0) {
+      errors.push(`persistence: los finders de búsqueda de ${entity.name} (DSL 2.22: filter en el input de una query) — keel-go todavía no los genera sobre documentos (${why}). ${elsewhere}`);
+    }
+  }
+  // Una activación con reconciledBy, en cualquier dependencia: es la que lleva el reclamo y su tienda de marcas.
+  if (JSON.stringify(layers?.dependencies ?? {}).includes('"reconciledBy"')) {
+    errors.push(`dependencies: el barrido de reconciliación (reconciledBy) — keel-go todavía no lo genera sobre documentos (${why}; llega con asset-vault, incremento 13). ${elsewhere}`);
+  }
+  return errors;
 }
 
 /**
@@ -207,8 +233,8 @@ export function checkSupportedStack(stack) {
   // El motor solo importa con persistencia: sin ella, el cuestionario no lo pregunta y no se estampa.
   if (stack?.database && !SUPPORTED_DATABASES.includes(stack.database)) {
     errors.push(
-      `database: ${stack.database} — keel-go genera la persistencia sobre ${SUPPORTED_DATABASES.join(', ')} (MongoDB llega en el ` +
-        'incremento 12 de PLAN-KEEL-GO.md; MariaDB, SQL Server y Oracle, sin medir en ninguna red). Elige uno de ellos, o genera este diseño con keel-spring, keel-nest o keel-dotnet.'
+      `database: ${stack.database} — keel-go genera la persistencia sobre ${SUPPORTED_DATABASES.join(', ')} ` +
+        '(MariaDB, SQL Server y Oracle, sin medir en ninguna red). Elige uno de ellos, o genera este diseño con keel-spring, keel-nest o keel-dotnet.'
     );
   }
   if (stack?.broker && !SUPPORTED_BROKERS.includes(stack.broker)) {
@@ -232,8 +258,6 @@ export function checkSupportedStack(stack) {
  * fixture que keel-go aún rechaza por otras capas, así que ninguna red mediría lo emitido; entran con ella:
  *   · la clave de API (`protocol: api-key` o `serviceAuth.protocol: api-key`): ninguna fixture la declara;
  *   · el alcance por recurso (`scoping`): asset-vault, que trae mensajería, clientes salientes y storage;
- *   · la identidad resuelta contra las credenciales de un recurso (`callerIdentity.from.resolvedBy`):
- *     notification-mailer, que trae mensajería y correo.
  * Y un campo de identidad que no es texto: el valor sale de un claim, que es texto, y los otros tres servidores lo
  * pasan tal cual; en Go el mensaje es tipado y no compilaría.
  */
@@ -249,12 +273,6 @@ function securityErrors(layers) {
     errors.push(`security: el alcance por recurso (authentication.scoping) — keel-go todavía no lo genera (${why}; llega con asset-vault). ${elsewhere}`);
   }
   const identity = authentication.callerIdentity;
-  if (identity?.from?.resolvedBy) {
-    errors.push(
-      'security: la identidad del llamante resuelta contra las credenciales de un recurso (callerIdentity.from.resolvedBy) — ' +
-        `keel-go todavía no la genera (${why}; llega con el correo, incremento 13). ${elsewhere}`
-    );
-  }
   if (identity) {
     for (const [name, operation] of Object.entries(layers?.['use-cases']?.operations ?? {})) {
       const type = operation?.input?.fields?.[identity.field]?.type;

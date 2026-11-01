@@ -44,6 +44,8 @@ import { finderProbes } from './finder-probes.js';
 import { purgeProbes } from './purge-probes.js';
 import { claimProbes } from './claim-probes.js';
 import { PROBE_RECONCILIATION, reconciliationProbes } from './reconciliation-probes.js';
+import { credentialFinders } from '../../src/scaffold/repositories.js';
+import { guardClaimsOf, guardMethod } from '../../src/scaffold/mail.js';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen';
 import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
 import { usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
@@ -140,55 +142,8 @@ func engineCode(err error) string {
 }`;
 }
 
-const prelude = (d) => `// La sonda de db-check (scripts/lib/db-probes.js de keel-go): ejecuta los adaptadores emitidos contra un ${d.label}
-// real. No es parte del proyecto generado.
-
-var (
-	probeDB  *sql.DB
-	probeTx  *Transactions
-	probeSeq atomic.Int64
-)
-
-func TestMain(m *testing.M) {
-	os.Exit(runProbes(m))
-}
-
-// probeSettings es la conexión de las sondas, la que el servicio leería de su db.yaml.
-func probeSettings() Settings {
-	return Settings{
-		Enabled:            true,
-		URL:                os.Getenv("DB_CHECK_URL"),
-		Username:           os.Getenv("DB_CHECK_USER"),
-		Password:           os.Getenv("DB_CHECK_PASSWORD"),
-		PoolName:           "db-check",
-		MaxSize:            8,
-		ConnectionTimeout:  10 * time.Second,
-		MaxLifetime:        time.Minute,
-		TransactionTimeout: 5 * time.Second,
-	}
-}
-
-// runProbes abre la base como el servicio (Open + Migrate, con goose) y ejecuta las sondas.
-func runProbes(m *testing.M) int {
-	ctx := context.Background()
-	settings := probeSettings()
-	db, err := Open(ctx, settings)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "abrir la base:", err)
-		return 2
-	}
-	defer db.Close()
-	logger := slog.New(slog.DiscardHandler)
-	if err := Migrate(ctx, db, logger); err != nil {
-		fmt.Fprintln(os.Stderr, "migrar:", err)
-		return 2
-	}
-	probeDB = db
-	probeTx = NewTransactions(db, settings.TransactionTimeout, logger)
-	return m.Run()
-}
-
-func nextID() int64 { return 1_000_000 + probeSeq.Add(1) }
+/** Los ayudantes de las sondas que no tocan el motor: los comparten db-check y doc-check. */
+export const PROBE_HELPERS = String.raw`func nextID() int64 { return 1_000_000 + probeSeq.Add(1) }
 
 func ptr[T any](v T) *T { return &v }
 
@@ -273,7 +228,57 @@ func domainError(t *testing.T, err error) *domain.Error {
 		t.Fatalf("se esperaba un error del contrato, llegó %v", err)
 	}
 	return de
+}`;
+
+const prelude = (d) => `// La sonda de db-check (scripts/lib/db-probes.js de keel-go): ejecuta los adaptadores emitidos contra un ${d.label}
+// real. No es parte del proyecto generado.
+
+var (
+	probeDB  *sql.DB
+	probeTx  *Transactions
+	probeSeq atomic.Int64
+)
+
+func TestMain(m *testing.M) {
+	os.Exit(runProbes(m))
 }
+
+// probeSettings es la conexión de las sondas, la que el servicio leería de su db.yaml.
+func probeSettings() Settings {
+	return Settings{
+		Enabled:            true,
+		URL:                os.Getenv("DB_CHECK_URL"),
+		Username:           os.Getenv("DB_CHECK_USER"),
+		Password:           os.Getenv("DB_CHECK_PASSWORD"),
+		PoolName:           "db-check",
+		MaxSize:            8,
+		ConnectionTimeout:  10 * time.Second,
+		MaxLifetime:        time.Minute,
+		TransactionTimeout: 5 * time.Second,
+	}
+}
+
+// runProbes abre la base como el servicio (Open + Migrate, con goose) y ejecuta las sondas.
+func runProbes(m *testing.M) int {
+	ctx := context.Background()
+	settings := probeSettings()
+	db, err := Open(ctx, settings)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "abrir la base:", err)
+		return 2
+	}
+	defer db.Close()
+	logger := slog.New(slog.DiscardHandler)
+	if err := Migrate(ctx, db, logger); err != nil {
+		fmt.Fprintln(os.Stderr, "migrar:", err)
+		return 2
+	}
+	probeDB = db
+	probeTx = NewTransactions(db, settings.TransactionTimeout, logger)
+	return m.Run()
+}
+
+${PROBE_HELPERS}
 
 ${engineCodeFunction(d)}`;
 
@@ -308,7 +313,7 @@ function matches(pattern, sample) {
   }
 }
 
-function patternTables(ctx) {
+export function patternTables(ctx) {
   if (ctx.patterns.size === 0) return null;
   return [...ctx.patterns.values()]
     .map((table) => `var ${table.name} = []string{\n${table.values.map((value) => `\t${goString(value)},`).join('\n')}\n}`)
@@ -383,7 +388,7 @@ function isOptionalField(field) {
 }
 
 /** El valor de enum de las muestras: el segundo si hay más de uno (el primero suele ser el inicial). */
-function chosenEnumValue(model, field) {
+export function chosenEnumValue(model, field) {
   const enumDef = model.enums.find((candidate) => candidate.name === field.namedType);
   return enumDef.values[enumDef.values.length > 1 ? 1 : 0];
 }
@@ -396,7 +401,7 @@ function idExpr(field) {
 }
 
 /** `sample<E>(t, n)`: el estado de muestra n de una entidad, con sus hijas y apuntando a raíces guardadas. */
-function sampleFunction(model, entity, ctx) {
+export function sampleFunction(model, entity, ctx) {
   const lines = [];
   for (const member of domainMembers(model, entity)) {
     const method = goExported(member.name);
@@ -436,7 +441,7 @@ ${lines.join('\n')}
 }
 
 /** `dump<E>(e)`: el agregado como texto, campo a campo y con sus hijas: lo que se compara. */
-function dumpFunction(model, entity) {
+export function dumpFunction(model, entity) {
   const lines = [];
   for (const member of domainMembers(model, entity)) {
     const method = goExported(member.name);
@@ -466,7 +471,7 @@ ${lines.join('\n')}
 }
 
 /** Los value objects que aparecen en las entidades muestreadas (y dentro de ellos). */
-function usedValueObjects(model, entityNames) {
+export function usedValueObjects(model, entityNames) {
   const found = new Map();
   const visitField = (field) => {
     if (field.kind !== 'composite' || found.has(field.namedType)) return;
@@ -478,7 +483,7 @@ function usedValueObjects(model, entityNames) {
   return [...found.values()];
 }
 
-function dumpValueObject(model, vo) {
+export function dumpValueObject(model, vo) {
   const parts = vo.fields.map((sub) => {
     const method = goExported(sub.name);
     if (sub.kind === 'composite' && !sub.list) return `"${method}=" + dump${sub.namedType}(v.${method}())`;
@@ -499,7 +504,7 @@ function repository(model, root) {
   return `New${root.name}Repository(${repositoryArgs(model, root, 'probeTx', 'nil', { sweeps: 'probeSweeps', parameters: 'probeParameters', reconciliation: PROBE_RECONCILIATION })})`;
 }
 
-function ensureFunction(model, root) {
+export function ensureFunction(model, root) {
   const idMethod = goExported(root.idField?.name ?? 'id');
   return `// ensure${root.name} guarda un ${root.name} nuevo y devuelve su id: el destino de una FK.
 func ensure${root.name}(t *testing.T) ${root.idField?.goType ?? 'uuid.UUID'} {
@@ -514,11 +519,11 @@ func ensure${root.name}(t *testing.T) ${root.idField?.goType ?? 'uuid.UUID'} {
 
 // ─── Las sondas de una raíz ──────────────────────────────────────────────────────────────────────
 
-function concurrencyCode(model) {
+export function concurrencyCode(model) {
   return declaredConcurrencyError(model)?.code ?? FRAMEWORK_ERRORS.concurrency.code;
 }
 
-function rootProbes(model, root) {
+export function rootProbes(model, root, { document = false } = {}) {
   const name = root.name;
   const repo = repository(model, root);
   const id = goExported(root.idField?.name ?? 'id');
@@ -552,7 +557,8 @@ ${expect('state', 'read')}	if want, got := dump${name}(domain.Rehydrate${name}(s
 	}` : ''}
 }`);
 
-  const stored = storedEnum(model, root);
+  // Sobre documentos, la constante del enum la mide la forma del documento crudo (doc-probes.js).
+  const stored = document ? null : storedEnum(model, root);
   if (stored) {
     tests.push(`func Test${name}_StoresEnumByConstant(t *testing.T) {
 	ctx := t.Context()
@@ -599,7 +605,8 @@ ${expect('state', 'read')}	if want, got := dump${name}(domain.Rehydrate${name}(s
 
   tests.push(...clashProbes(model, root, { repo, members }));
 
-  const bounded = boundedText(root);
+  // MongoDB no acota el texto: la cota la hace cumplir el dominio.
+  const bounded = document ? null : boundedText(root);
   if (bounded) {
     const method = goExported(bounded.name);
     const over = `strings.Repeat("x", ${bounded.columns.length + 1})`;
@@ -679,6 +686,64 @@ ${expect('state', 'read')}	if want, got := dump${name}(domain.Rehydrate${name}(s
   tests.push(...inverseProbes(model, root, { repo }));
   tests.push(...rankProbes(model, root, { repo }));
   tests.push(...finderProbes(model, root, { repo, id }));
+  // La guarda contra el doble envío (mail.sentBy): se la lleva una sola ejecución, estampa su reloj y confirma aunque el
+  // caso de uso que la pidió se deshaga (va en su PROPIA transacción).
+  for (const claim of guardClaimsOf(model, root)) {
+    const method = guardMethod(claim);
+    const field = goExported(root.lifecycle.field);
+    const from = `domain.${enumConstant(root.lifecycle.enumType, claim.from[0])}`;
+    const to = `domain.${enumConstant(root.lifecycle.enumType, claim.to)}`;
+    tests.push(`func Test${name}_${method}TakesItOnceAndSurvivesTheRollback(t *testing.T) {
+	ctx := t.Context()
+	state := sample${name}(t, 151)
+	state.${field} = ${from}
+	if _, err := ${repo}.Save(ctx, domain.Rehydrate${name}(state)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	failure := errors.New("el caso de uso se deshace")
+	err := probeTx.Within(ctx, application.KindCommand, func(ctx context.Context) error {
+		claimed, ok, err := ${repo}.${method}(ctx, state.${id})
+		if err != nil || !ok || claimed.${field}() != ${to} {
+			return fmt.Errorf("la primera guarda: ok=%v err=%w", ok, err)
+		}${claim.stampField ? `
+		if claimed.${goExported(claim.stampField)}() == nil {
+			return errors.New("la guarda no estampa ${claim.stampField}")
+		}` : ''}
+		return failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Within: %v", err)
+	}
+	read, _, err := ${repo}.FindByID(ctx, state.${id})
+	if err != nil || read.${field}() != ${to} {
+		t.Errorf("la guarda no sobrevive al caso de uso que se deshace: %v", err)
+	}
+	if _, ok, err := ${repo}.${method}(ctx, state.${id}); err != nil || ok {
+		t.Errorf("la segunda guarda se la lleva otra vez: ok=%v err=%v", ok, err)
+	}
+}`);
+  }
+  // resolvedBy: una credencial que NO es la primera resuelve al mismo agregado; una que no es de nadie, a ninguno.
+  for (const credential of credentialFinders(model, root)) {
+    const list = goExported(credential.field.name);
+    tests.push(`func Test${name}_${credential.name}ResolvesAnyOfItsCredentials(t *testing.T) {
+	ctx := t.Context()
+	state := sample${name}(t, 150)
+	if _, err := ${repo}.Save(ctx, domain.Rehydrate${name}(state)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if len(state.${list}) < 2 {
+		t.Fatal("la muestra no tiene dos credenciales")
+	}
+	found, ok, err := ${repo}.${credential.name}(ctx, state.${list}[1])
+	if err != nil || !ok || found.${id}() != state.${id} {
+		t.Errorf("la segunda credencial no resuelve a su agregado: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := ${repo}.${credential.name}(ctx, state.${list}[1]+"-de-nadie"); err != nil || ok {
+		t.Errorf("una credencial de nadie resuelve: ok=%v err=%v", ok, err)
+	}
+}`);
+  }
   return tests;
 }
 
@@ -802,7 +867,7 @@ function mergeProbe(model, root, { repo, id, lock, members }) {
 	if _, err := ${repo}.Save(ctx, domain.Rehydrate${name}(state)); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	read, _, err := ${repo}.FindByID(ctx, state.${id})
+	${lock ? "read" : "_"}, _, err := ${repo}.FindByID(ctx, state.${id})
 	if err != nil {
 		t.Fatal(err)
 	}

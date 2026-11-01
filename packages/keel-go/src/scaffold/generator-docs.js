@@ -17,6 +17,8 @@ import { describeStack } from '@keel-system/keel-core/gen/stack';
 import { assetsDir, SKILL } from '../lib/assets.js';
 import { layout } from './render.js';
 import { usesRelational } from './persistence.js';
+import { usesDocument } from '@keel-system/keel-core/gen/features';
+import { usesGoMail } from './mail.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { usesIdempotencyCheck } from './idempotency-check.js';
 import { storeDir } from '../lib/relational-engine.js';
@@ -47,12 +49,13 @@ export const AGENTS = ['keel-go-code.md', 'keel-go-infra.md', 'keel-go-tests.md'
 
 /** Skills por tecnología aplicables al servicio: la de la base relacional, la del proveedor de identidad, la del broker y la de los clientes salientes. */
 export function stackSkills(model) {
-  const skills = usesRelational(model) ? ['keel-go-database'] : [];
+  const skills = usesRelational(model) ? ['keel-go-database'] : usesDocument(model) ? ['keel-go-mongodb'] : [];
   if (usesTokenHarness(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-go-${model.stack.auth}`);
   if (usesGoRabbitMq(model)) skills.push('keel-go-rabbitmq');
   if (usesGoKafka(model)) skills.push('keel-go-kafka');
   if (usesGoSnsSqs(model)) skills.push('keel-go-snssqs');
   if (usesGoHttpClients(model)) skills.push('keel-go-httpclient');
+  if (usesGoMail(model)) skills.push('keel-go-mail');
   return skills;
 }
 
@@ -136,7 +139,9 @@ esquema. Equivalente por fuera, Go por dentro.
   la transacción y escribe el log de frontera de cada uno.${
     persistence
       ? `\n- **Esquema**: la migración de goose embebida en el binario (\`${storeDir(model)}/migrations/\`), que el servidor aplica al arrancar en todos los perfiles.`
-      : ''
+      : usesDocument(model)
+        ? `\n- **Documentos**: el agregado es un documento de MongoDB (\`${storeDir(model)}\`); los índices los crea el servidor al arrancar (\`indexes.go\`) y se verifican con \`bash infra/export-indexes.sh\`.`
+        : ''
   }${
     usesRequestIdempotency(model)
       ? '\n- **Idempotencia de petición**: el registro, la firma y el ámbito de cada operación que la declara ya están generados; el handler los usa (`{{keel:docs}}/conventions/flow-fidelity.md` § La idempotencia de petición).'
@@ -244,12 +249,12 @@ Se invoca **sin argumentos, con el cwd en esta raíz**; todas las rutas son rela
 4. **Fase 3 — calidad.** Solo con **todos** los escenarios OK: lanza \`keel-go-quality\` y **espera sin tocar el
    proyecto**. Hace el pase no-conductual con las herramientas de la red del generador (\`go vet\`, staticcheck,
    gofmt, \`go mod tidy -diff\`, govulncheck), comprueba la no-regresión (la suite al 100%) y \`go test ./...\`${
-     persistence ? ', y que el esquema sigue siendo la migración de build (`schema: OK`)' : ''
+     persistence ? ', y que el esquema sigue siendo la migración de build (`schema: OK`)' : usesDocument(model) ? ', y que los índices vivos son los de build (`indexes: OK`, con `bash infra/export-indexes.sh`)' : ''
    }. \`status: KO\` o \`scenarios: KO\` → revierte o reporta; nunca hagas commit con algo en rojo. Al terminar, baja
    la infraestructura: \`bash infra/down.sh\`.
 5. **Guía de despliegue.** Con todo en verde y **antes** del commit, añade al \`README.md\` una sección
    \`## Despliegue en producción\` con los pasos y la tabla de parámetros obligatorios: todo \`\${VAR}\` sin default de
-   \`config/parameters/production/*.yaml\`${persistence ? ', y que el esquema lo aplica goose al arrancar' : ''}.
+   \`config/parameters/production/*.yaml\`${persistence ? ', y que el esquema lo aplica goose al arrancar' : usesDocument(model) ? ', y que los índices los crea el servidor al arrancar sobre un replica set' : ''}.
    No inventes parámetros.
 6. **Informe de generación.** Escribe \`INFORME-GENERACION.md\`, que **abre con la matriz final de
    \`infra/score-scenarios.sh\` y su código de salida, literales**, y sigue con lo que es del generador

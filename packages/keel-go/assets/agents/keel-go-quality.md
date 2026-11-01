@@ -89,6 +89,11 @@ al arrancar en todos los perfiles) y lo mide la red del generador contra el moto
 crear**. Lo tuyo es comprobar que nadie añadió una migración ni tocó la baseline (`git status` sobre ese
 directorio): una migración del agente es conductual, a `remaining`.
 
+Sobre **MongoDB** (`database: mongodb` en `keel-stack.json`) no hay migraciones: el esquema son los índices que el
+servidor crea al arrancar (`internal/infrastructure/mongo/indexes.go`). Lo tuyo es VERIFICARLOS contra los vivos con
+`bash infra/export-indexes.sh` (la skill `keel-go-mongodb`, `references/indexes.md`) y reportar `indexes` e
+`indexesTested`; `schema` es `N/A`.
+
 ## Cierre
 
 En este orden:
@@ -118,7 +123,9 @@ modules: OK | KO          # go mod tidy -diff vacío
 vulnerabilities: OK | KO  # go tool govulncheck ./...
 scenarios: OK | KO        # score-scenarios.sh al 100% tras el pase
 unitTests: OK | KO        # go test ./...
-schema: OK | KO | N/A     # las migraciones son las de build (N/A sin persistencia)
+schema: OK | KO | N/A     # las migraciones son las de build (N/A sin persistencia relacional)
+indexes: OK | KO | N/A    # los índices vivos son los de build (solo MongoDB)
+indexesTested: <n>        # cuántos índices contrastaste (solo MongoDB)
 domainGuards: OK | KO | N/A
 idempotency: OK | KO | N/A
 issuesFixed: [...]

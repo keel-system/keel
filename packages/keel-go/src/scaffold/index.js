@@ -32,8 +32,12 @@ import * as useCases from './use-cases.js';
 import * as persistence from './persistence.js';
 import * as persistenceRuntime from './persistence-runtime.js';
 import * as repositories from './repositories.js';
+import * as documentPersistence from './document-persistence.js';
+import * as documentRepositories from './document-repositories.js';
+import * as documentStores from './document-stores.js';
 import * as serviceParameters from './service-parameters.js';
 import * as httpClients from './http-clients.js';
+import * as mail from './mail.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as requestIdempotency from './request-idempotency.js';
@@ -81,8 +85,12 @@ const GENERATORS = [
   persistence,
   persistenceRuntime,
   repositories,
+  documentPersistence,
+  documentRepositories,
+  documentStores,
   serviceParameters,
   httpClients,
+  mail,
   claim,
   reconciliationClaim,
   requestIdempotency,

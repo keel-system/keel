@@ -12,7 +12,7 @@
 // las peticiones en vuelo como máximo `server.shutdown-timeout`. Lo que llegue con las capas siguientes
 // (consumidores, reloj, relay del outbox) se para entre esos pasos, cada uno en su goroutine del errgroup.
 
-import { repositoryRoots, usesApi } from '@keel-system/keel-core/gen/features';
+import { repositoryRoots, usesApi, usesDocument } from '@keel-system/keel-core/gen/features';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
@@ -34,6 +34,14 @@ import { claimDependencies, usesSweepClaims } from './claim.js';
 import { usesReconciliationClaims } from './reconciliation-claim.js';
 import { usesCorrelation } from './correlation.js';
 import { CLIENTS_IMPORT, adapterType, clientField, clientParam, usesGoHttpClients } from './http-clients.js';
+import { MAIL_SENDER, TEMPLATE_RENDERER, usesGoMail, usesTemplating } from './mail.js';
+
+// La configuración del correo del perfil: un número que no se entiende no deja arrancar.
+const MAIL_WIRING = `	mailSettings, err := smtp.SettingsFrom(cfg)
+	if err != nil {
+		return fmt.Errorf("configuración del correo: %w", err)
+	}
+`;
 
 export function generate(model) {
   const { server } = layout(model);
@@ -80,7 +88,8 @@ function mainGo(model) {
       SNSSQS_IMPORT,
       SCHEDULER_IMPORT,
       PARAMETERS_IMPORT,
-      CLIENTS_IMPORT
+      CLIENTS_IMPORT,
+      layout(model).mail.dir
     ],
     body: `
 func main() {
@@ -189,20 +198,28 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
   if (clients) {
     for (const client of model.httpClients) repositories.push({ indent: '\t\t', cells: [`${clientField(client)}:`, `${clientParam(client)},`] });
   }
+  // El correo saliente (capa mail): el adaptador SMTP y, con plantillas, el renderizador.
+  const mailing = usesGoMail(model) && dispatchesUseCases(model);
+  if (mailing) {
+    repositories.push({ indent: '\t\t', cells: [`${MAIL_SENDER.field}:`, 'smtp.NewSender(mailSettings, logger),'] });
+    if (usesTemplating(model)) repositories.push({ indent: '\t\t', cells: [`${TEMPLATE_RENDERER.field}:`, 'smtp.NewRenderer(),'] });
+  }
   const messaging = wiresMessaging(model);
+  // La documental (incremento 12) abre un cliente de MongoDB y no tiene tope de transacción.
+  const document = usesDocument(model);
   return `${logger}
 	database, err := ${store.name}.SettingsFrom(cfg)
 	if err != nil {
 		return fmt.Errorf("configuración de la base de datos: %w", err)
 	}
-	var db *sql.DB
+	var db ${document ? `*${store.name}.Database` : '*sql.DB'}
 	if database.Enabled {
 		if db, err = ${store.name}.Open(ctx, database); err != nil {
 			return err
 		}
 		// Lo último en cerrarse: después del apagado del servidor, que ya no la usa.
 		defer func() {
-			if err := db.Close(); err != nil {
+			if err := db.Close(${document ? 'ctx' : ''}); err != nil {
 				logger.ErrorContext(ctx, "cerrar la base de datos", "error", err)
 			}
 		}()
@@ -210,8 +227,8 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
 			return err
 		}
 	}
-	transactions := ${store.name}.NewTransactions(db, database.TransactionTimeout, logger)
-${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${messaging ? messagingWiring(model) : ''}
+	transactions := ${store.name}.NewTransactions(db, ${document ? '' : 'database.TransactionTimeout, '}logger)
+${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
 ${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
 }

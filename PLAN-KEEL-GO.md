@@ -829,11 +829,58 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
     del diseño los pide). **Con esto el incremento 11 queda cerrado.**
 - **Inc. 11 — cerrado (2026-10-31).** `needs` (réplica, `onMiss`, `lastKnown`), `oauth2-client-credentials` y los
   compuestos en una llamada siguen rechazados hasta el incremento 13, como en keel-nest y keel-dotnet.
-- **Para retomar (cada incremento empieza en un contexto nuevo):** el incremento 12 (persistencia documental, MongoDB).
-  Sin medir del 11: `RestartServer` y `HoldFromReconciliation` contra la infra real, y `harness-check --database=mysql`
-  con la réplica. Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
-  Code mata las tandas largas en segundo plano si se queda sin memoria. El hallazgo neutral de la collation de la
-  sombra en MySQL espera su propia tarea en keel-core.
+- **Inc. 12 — en curso (abierto el 2026-10-31).** Tramos como los de keel-dotnet: 12b la persistencia documental, 12c los
+  almacenes sobre documentos, 12d el arnés y la skill, 12e-a `resolvedBy`, 12e-b la capa `mail` (adelantada del 13) y 12e
+  la corrida sobre `notification-mailer-mongo` (decidido por el usuario el 2026-10-31: el par del MVP, con las tres
+  gemelas para comparar la huella). El `go-check` entero se deja para el FINAL del incremento, una sola pasada.
+  - **12b-12d (hechos, 2026-10-31).** Driver oficial `go.mongodb.org/mongo-driver/v2` v2.9.2 (Apache-2.0, 2026-10-06), sin
+    su mapeo por reflexión: `encode<E>` arma el `bson.D` en el orden de `documentShape` y `decode<E>` lee el `bson.Raw` con
+    los lectores de `bson_values.go` (uuid subtipo 4, Decimal128 con su escala, fecha BSON al ms, día a medianoche UTC,
+    enum por su constante). El paquete `internal/infrastructure/mongo` exporta los MISMOS nombres que el relacional
+    (Settings, SettingsFrom, Open, Migrate —que crea los índices—, NewTransactions, New<Raíz>Repository): el arranque
+    solo cambia el tipo de la conexión y el tope. La transacción va en el contexto (`mongo.NewSessionContext`) y
+    `outside(ctx)` la quita para lo que confirma aparte; el conflicto transitorio (112/TransientTransactionError) repite
+    la transacción entera hasta 3 veces CON una pausa creciente (sin ella el reintento llegaba antes del commit del
+    ganador y agotaba los intentos en microsegundos: un rojo intermitente de doc-check con dos sujetos a la vez). Los
+    almacenes (`document-stores.js`): outbox con `claimed_at` y FindOneAndUpdate, guarda y registro sobre su `_id`
+    subdocumento, purgas por lotes; los reclamos de barrido con FindOneAndUpdate en orden. Arnés (`document-harness.js`):
+    `MongoEval` por archivo con el print de `mongo-probes.js`, el rescate con sus scripts, el outbox del arnés y SMOKE-3;
+    skill `keel-go-mongodb`; el agente de calidad verifica los índices con `export-indexes.sh`. Frontera: MongoDB entra;
+    sobre documentos se rechazan, con motivo, los finders DSL 2.22 y la reconciliación (solo asset-vault, inc. 13).
+    - **Medido**: `npm run doc-check` (nuevo) **13/13, 107 sondas** sobre las cinco documentales —documento crudo contra
+      `documentShape` a todo nivel, índices vivos, ida y vuelta, versión, unicidades, página, fusión, carrera de dos
+      transacciones, conflicto agotado, almacenes, reclamos y credenciales—, **falsado con nueve sabotajes**
+      (`decimal-as-text`, `uuid-legacy`, `version`, `translator`, `transient`, `outbox-order`, `guard-in-session`,
+      `claim`, `idempotency-outside`), cada uno en sus sondas. `npm run doc-harness-check` (nuevo) **11/11** sobre
+      job-dispatch-mongo con su `infra/` real, falsado con `print`, `put`, `missing` e `index`.
+  - **12e-a `resolvedBy` (hecho).** `FindBy<Campo>Containing` en el puerto y en los dos adaptadores, y
+    `UseCases.ResolveCaller`, que el lector del endpoint llama tras validar la entrada. Sonda compartida en db-check
+    (notification-mailer, 52 sondas) y doc-check.
+  - **12e-b, la capa `mail` (hecho).** `internal/domain/mail.go` (MailMessage, que sanea asunto y cabeceras al
+    construirse con las reservadas de keel-core; MailDeliveryError con Accepted/Rejected/Partial; los puertos MailSender y
+    TemplateRenderer) e `internal/infrastructure/smtp`: el adaptador sobre **go-mail v0.8.1** (MIT), que compone el MIME
+    con su Msg y habla SMTP con su paquete smtp destinatario a destinatario —su Send aborta con el primer rechazado y el
+    parcial no se podría decir; y su smtp no pone los corchetes del protocolo: los pone el adaptador—; el renderizador
+    Handlebars sobre **mailgun/raymond v2.0.48** (MIT) con las variables como SafeString ya escapadas con la tabla
+    cerrada, los marcadores simples como `{{this.[x]}}` y el LRU de 500. La guarda `ClaimFor<Op>` en el puerto y en los
+    dos adaptadores (relacional en una transacción nueva; documental con FindOneAndUpdate fuera de la sesión), la nota del
+    handler, la familia `mailDelivery` del gate (la paridad con keel-nest ya no tiene familias pendientes), el arnés del
+    buzón (`tests/integration/mail_test.go`, sobre `mail-probes.js`) con SMOKE-7 y la skill `keel-go-mail`.
+    - **Medido**: `npm run mail-check` (nuevo) **5/5, 6 sondas** contra un Mailpit real, falsado con `subject`, `escape`,
+      `partial` y `fallback`; la guarda con su sonda compartida en db-check (PostgreSQL, 53) y doc-check (32), falsada con
+      `send-guard`; `npm test` de keel-go **950/950**.
+  - **12e, la corrida — preparada (2026-10-31).** Workspace `spring-live-test/corrida-notification-mailer-mongo-go`:
+    `keel init`, la fixture v2.1.0 (la de las corridas de control del 2026-10-18) y su `DESIGN.md`, `--ready` 13/13, y
+    `keel-go build` con `mongodb · rabbitmq · keycloak` (el stack de las gemelas): 261 archivos, skills
+    `keel-go-mongodb`, `keel-go-keycloak`, `keel-go-rabbitmq` y `keel-go-mail`. Antes del pipeline: tidy, gofmt, vet y
+    staticcheck (con y sin `integration`) vacíos, build sin cgo, `go test ./...` en verde, `check-idempotency.sh` ROJO en
+    las siete familias con trabajo del agente, y el humo del arnés **7/7** contra la `infra/` real (con el realm sembrado
+    por `init-keycloak.sh`, que es del agente de infraestructura). Falta lanzar `/keel-generate-go` en el proyecto.
+- **Para retomar:** la corrida 12e (`/keel-generate-go` en `services/notification-mailer-mongo-go`, sin argumentos) y su
+  registro en `docs/corridas/`, contra la huella 17 de las gemelas. Sin medir del 11: `RestartServer` y
+  `HoldFromReconciliation` contra la infra real, y `harness-check --database=mysql` con la réplica. Las redes pesadas de
+  una en una y con la máquina descargada. El hallazgo neutral de la collation de la sombra en MySQL espera su propia
+  tarea en keel-core.
 
 MariaDB, SQL Server y Oracle se quedan rechazados con su motivo hasta que una red los mida, como en keel-nest.
 

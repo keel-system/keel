@@ -71,6 +71,10 @@ export const MODULES = {
   // La descomposición de Unicode (NFD) para plegar los acentos de una sombra (`compare: ignore-case-accents`). Es la
   // misma versión que piden pgx y goose en el grafo, así que tidy no la mueve. La v0.43.0 es de 2026-10-09.
   'golang.org/x/text': { version: 'v0.43.0', license: 'BSD-3-Clause', kind: 'require', use: 'pliegue de acentos (NFD)' },
+  // El driver oficial de MongoDB (incremento 12), sin su mapeo por reflexión: los adaptadores escriben bson.D y leen
+  // bson.Raw campo a campo. Trae klauspost/compress (BSD-3-Clause), xdg-go/scram, xdg-go/stringprep y xdg-go/pbkdf2
+  // (Apache-2.0), youmark/pkcs8 (MIT) y golang.org/x/crypto (BSD-3-Clause). La v2.9.2 es de 2026-10-06.
+  'go.mongodb.org/mongo-driver/v2': { version: 'v2.9.2', license: 'Apache-2.0', kind: 'require', use: 'driver de MongoDB' },
 
   // La validación de los JWT de la entrada HTTP (incremento 8): firma, algoritmo, exp y nbf con su margen, e iss. El JWKS
   // lo lee el servicio con la biblioteca estándar (sin keyfunc, que refresca en una goroutine propia). La v5.3.1 es de
@@ -105,6 +109,14 @@ export const MODULES = {
   // dependencias. La v3.0.1 es de 2020-01-04 y sigue siendo la última: el formato del cron no ha cambiado.
   'github.com/robfig/cron/v3': { version: 'v3.0.1', license: 'MIT', kind: 'require', use: 'parser del cron de seis campos' },
 
+  // El correo saliente (capa mail, 12e-b): go-mail compone el MIME (su Msg) y habla SMTP (su paquete smtp, destinatario a
+  // destinatario, para poder decir el envío parcial). Trae golang.org/x/crypto y golang.org/x/text (BSD-3-Clause). La
+  // v0.8.1 es de 2026-07-09.
+  'github.com/wneessen/go-mail': { version: 'v0.8.1', license: 'MIT', kind: 'require', use: 'correo saliente (MIME y SMTP)' },
+  // Las plantillas del correo en Handlebars, la sintaxis de los otros tres servidores: la versión mantenida de raymond,
+  // estable desde 2022 (v2.0.48, 2022-11-03). Trae gopkg.in/yaml.v2 (Apache-2.0 y MIT) para su soporte de front matter.
+  'github.com/mailgun/raymond/v2': { version: 'v2.0.48', license: 'MIT', kind: 'require', use: 'plantillas Handlebars del correo' },
+
   // Herramientas, por la directiva `tool` de go.mod (`go tool <nombre>`): el proyecto no exige nada instalado
   // aparte de Go.
   // El JUnit de las pruebas, que lee keel-core/gen/junit-scoring.js (su XML real se capturó en el inc. 1).
@@ -132,6 +144,13 @@ export const RELATIONAL_REQUIRES = {
   postgresql: ['github.com/jackc/pgx/v5', 'github.com/pressly/goose/v3'],
   mysql: ['github.com/go-sql-driver/mysql', 'github.com/pressly/goose/v3']
 };
+
+/** El correo saliente (capa mail): el SMTP y, con plantillas, Handlebars. */
+export const MAIL_REQUIRES = ['github.com/wneessen/go-mail'];
+export const TEMPLATING_REQUIRES = ['github.com/mailgun/raymond/v2'];
+
+/** El driver de la persistencia documental (incremento 12). */
+export const DOCUMENT_REQUIRES = ['go.mongodb.org/mongo-driver/v2'];
 
 /** La validación de tokens de la capa security (incremento 8). */
 export const JWT_REQUIRES = ['github.com/golang-jwt/jwt/v5'];

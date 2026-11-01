@@ -26,7 +26,7 @@ import {
   constraintErrors,
   declaredConcurrencyError
 } from '@keel-system/keel-core/gen/constraint-errors';
-import { usesRelational } from '@keel-system/keel-core/gen/features';
+import { usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
 import { usesBestEffort, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { alignRows, goString } from '../lib/go-source.js';
@@ -40,8 +40,12 @@ const PROFILES = ['local', 'develop', 'production', 'test'];
 export const MYSQL_DRIVER = { path: 'github.com/go-sql-driver/mysql', name: 'mysqldriver' };
 
 export function generate(model) {
-  if (!usesRelational(model)) return [];
   const { store, textfold } = layout(model);
+  // La sombra plegada la escriben las dos ramas: el pliegue no depende del almacén.
+  const textFold = usesTextFold(model)
+    ? [{ path: `${textfold.dir}/textfold.go`, content: packageFile(model, textfold, { doc: TEXTFOLD_DOC, imports: ['strings', 'unicode', 'golang.org/x/text/unicode/norm'], body: textfoldBody(model) }) }]
+    : [];
+  if (!usesRelational(model)) return textFold;
   const d = sqlDialect(model);
   const dbName = model.service.name.replace(/-/g, '_');
   const files = PROFILES.map((profile) => ({ path: `config/parameters/${profile}/db.yaml`, content: dbYaml(model, profile, dbName) }));
@@ -51,10 +55,7 @@ export function generate(model) {
     { path: `${store.dir}/transactions.go`, content: packageFile(model, store, { imports: [...TRANSACTION_IMPORTS, engineError, 'github.com/google/uuid'], body: transactionsBody(d, transactionNeeds(model)) }) },
     { path: `${store.dir}/errors.go`, content: packageFile(model, store, { imports: ['errors', 'strings', engineError, 'internal/domain'], body: errorsBody(model, d) }) }
   );
-  if (usesTextFold(model)) {
-    files.push({ path: `${textfold.dir}/textfold.go`, content: packageFile(model, textfold, { doc: TEXTFOLD_DOC, imports: ['strings', 'unicode', 'golang.org/x/text/unicode/norm'], body: textfoldBody(model) }) });
-  }
-  return files;
+  return [...files, ...textFold];
 }
 
 /** ¿Guarda alguna entidad una sombra plegada? Entonces hace falta internal/platform/textfold. */
@@ -65,7 +66,7 @@ export function usesTextFold(model) {
 /** ¿Qué pliegues usa el diseño? `case` (sin mayúsculas) y `accents` (sin mayúsculas ni acentos). */
 export function foldKinds(model) {
   const kinds = new Set();
-  if (!usesRelational(model)) return kinds;
+  if (!usesPersistence(model)) return kinds;
   for (const entity of model.entities.filter((candidate) => candidate.persisted)) {
     for (const member of persistedMembers(model, entity)) if (member.kind === 'scalar' && member.folded) kinds.add(member.folded.accents ? 'accents' : 'case');
   }

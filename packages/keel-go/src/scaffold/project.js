@@ -9,8 +9,10 @@
 // herramienta»: si build declarase uno de más, de menos o en otra versión, tidy lo movería.
 
 import { GO_MIN_VERSION, GO_TOOLCHAIN } from '../lib/assets.js';
-import { usesJwt, usesRelational } from '@keel-system/keel-core/gen/features';
-import { BROKER_REQUIRES, JWT_REQUIRES, MODULES, RELATIONAL_REQUIRES, SCHEDULING_REQUIRES, SKELETON_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
+import { usesDocument, usesJwt, usesRelational } from '@keel-system/keel-core/gen/features';
+import { usesGoMail, usesTemplating } from './mail.js';
+import { MAIL_REQUIRES, TEMPLATING_REQUIRES } from '../lib/go-stack.js';
+import { BROKER_REQUIRES, DOCUMENT_REQUIRES, JWT_REQUIRES, MODULES, RELATIONAL_REQUIRES, SCHEDULING_REQUIRES, SKELETON_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
 import { relationalEngine } from '../lib/relational-engine.js';
 import { foldKinds } from './persistence-runtime.js';
 import { usesGoMessaging } from './messaging.js';
@@ -22,6 +24,9 @@ export function requiresFor(model = null) {
   return [
     ...SKELETON_REQUIRES,
     ...(model && usesRelational(model) ? RELATIONAL_REQUIRES[relationalEngine(model)] : []),
+    ...(model && usesDocument(model) ? DOCUMENT_REQUIRES : []),
+    ...(model && usesGoMail(model) ? MAIL_REQUIRES : []),
+    ...(model && usesTemplating(model) ? TEMPLATING_REQUIRES : []),
     ...(model && foldKinds(model).has('accents') ? TEXT_FOLD_REQUIRES : []),
     ...(model && usesJwt(model) ? JWT_REQUIRES : []),
     ...(model && usesGoMessaging(model) ? (BROKER_REQUIRES[model.stack?.broker] ?? []) : []),

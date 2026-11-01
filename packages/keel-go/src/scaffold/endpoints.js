@@ -27,10 +27,16 @@ import { goExported, goUnexported, enumConstant } from '../lib/go-projection.js'
 import { goString } from '../lib/go-source.js';
 import { goFileName, layout, packageFile } from './render.js';
 import { usesCallerIdentity } from './security.js';
+import { callerResolution } from './use-cases.js';
+
+/** ¿Resuelve esta operación la identidad del llamante contra las credenciales del recurso (resolvedBy)? */
+export function resolvesCaller(model, operation) {
+  return callerResolution(model) != null && messageComponents(operation, model).some((component) => component.resolvedIdentity);
+}
 import { componentType, isThreeState, messageComponents, messageType, operations, scaleRounding, useCaseField } from './services.js';
 
 // Los imports que puede usar un archivo de endpoints: goFile solo escribe los que el cuerpo usa.
-const ENDPOINT_IMPORTS = ['fmt', 'net/http', 'strings', 'internal/application', 'internal/domain', 'internal/platform/wire'];
+const ENDPOINT_IMPORTS = ['context', 'fmt', 'net/http', 'strings', 'internal/application', 'internal/domain', 'internal/platform/wire'];
 
 // El lector de TEXTO (ruta y query) de cada tipo base del diseño.
 const TEXT_READERS = {
@@ -116,7 +122,10 @@ function renderEndpoint(model, operation, plan) {
   const full = `${model.api.routeBase}${path}`;
   const variable = operation.messageKind === 'query' ? 'query' : 'cmd';
   const call = `a.useCases.${useCaseField(operation)}.Handle(r.Context(), ${variable})`;
-  const lines = [`\t${variable}, err := ${readerName(operation)}(r)`, '\tif err != nil {', '\t\treturn err', '\t}'];
+  // resolvedBy: el lector recibe la resolución de la credencial y la llama al final, tras leer y validar la entrada (una
+  // petición malformada es 400 sin tocar la base, como en keel-nest y keel-dotnet).
+  const resolver = resolvesCaller(model, operation) ? ', a.useCases.ResolveCaller' : '';
+  const lines = [`\t${variable}, err := ${readerName(operation)}(r${resolver})`, '\tif err != nil {', '\t\treturn err', '\t}'];
   if (operation.responseDto) {
     lines.push(`\tresponse, err := ${call}`, '\tif err != nil {', '\t\treturn err', '\t}');
     if (returnsLocation(model, operation)) {
@@ -326,7 +335,13 @@ function renderReader(model, operation, plan) {
     // La identidad del llamante no viaja en la petición: la estampa el lector desde la credencial, DESPUÉS de leer y
     // validar la petición (en keel-spring la estampa el controller sobre el comando ya validado).
     if (component.resolvedIdentity) {
-      if (usesCallerIdentity(model)) identity.push(...returnErr(`${field}, err = callerIdentity(r.Context())`));
+      if (resolvesCaller(model, operation)) {
+        // La credencial del token es UNA de las del recurso: se resuelve a su clave natural (vacía si no es de nadie).
+        identity.push('\tcredential, err := callerIdentity(r.Context())', '\tif err != nil {', '\t\treturn msg, err', '\t}');
+        if (isPointer(operation, component)) {
+          identity.push('\tresolved, err := resolve(r.Context(), credential)', '\tif err != nil {', '\t\treturn msg, err', '\t}', '\tif resolved != "" {', `\t\t${field} = &resolved`, '\t}');
+        } else identity.push(...returnErr(`${field}, err = resolve(r.Context(), credential)`));
+      } else if (usesCallerIdentity(model)) identity.push(...returnErr(`${field}, err = callerIdentity(r.Context())`));
       else (asBody ? bodyChecks : queryLines).push(`\t// ${field}: la identidad del llamante no se lee de la petición (el diseño no autentica).`);
       continue;
     }
@@ -432,7 +447,7 @@ function renderReader(model, operation, plan) {
   out.push(...identity);
   return `// ${readerName(operation)} lee ${operation.route.method} ${model.api.routeBase}${operation.route.path} (${operation.name}) al mensaje de su caso de
 // uso, en el orden del binding de keel-spring: la ruta, el cuerpo, la query y después sus reglas.
-func ${readerName(operation)}(r *http.Request) (msg application.${message}, err error) {
+func ${readerName(operation)}(r *http.Request${resolvesCaller(model, operation) ? ', resolve func(context.Context, string) (string, error)' : ''}) (msg application.${message}, err error) {
 ${out.join('\n')}${out.length > 0 ? '\n' : ''}\treturn msg, nil
 }`;
 }

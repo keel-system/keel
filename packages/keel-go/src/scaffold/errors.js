@@ -14,7 +14,7 @@
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { ERROR_BASES } from '@keel-system/keel-core/gen/error-bases';
 import { constraintErrors, declaredConcurrencyError } from '@keel-system/keel-core/gen/constraint-errors';
-import { usesRelational } from '@keel-system/keel-core/gen/features';
+import { usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
 import { goExported, errorKindFor } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { docComment, domainPath, layout, packageFile } from './render.js';
@@ -59,7 +59,7 @@ export function frameworkSentinels(model) {
  * keel-core/gen/constraint-errors.js, la misma de los otros tres.
  */
 export function persistenceSentinels(model) {
-  if (!usesRelational(model)) return [];
+  if (!usesPersistence(model)) return [];
   const list = [];
   if (!declaredConcurrencyError(model)) {
     list.push({
@@ -68,12 +68,15 @@ export function persistenceSentinels(model) {
       ...FRAMEWORK_ERRORS.concurrency
     });
   }
-  list.push(
-    {
+  // El tope de transacción solo lo pone el motor relacional: sobre documentos no hay tope ni 503, como en keel-spring.
+  if (usesRelational(model)) {
+    list.push({
       name: 'ErrTransactionTimeout',
       doc: 'el motor cortó la transacción por su tope (DB_TRANSACTION_TIMEOUT): revirtió entera y es transitorio, así que la API responde 503 con Retry-After.',
       ...FRAMEWORK_ERRORS.transactionTimeout
-    },
+    });
+  }
+  list.push(
     {
       name: 'ErrIntegrityViolation',
       doc: 'una violación de integridad que no casa con ninguna constraint conocida: 409 sin code.',

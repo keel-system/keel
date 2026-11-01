@@ -26,7 +26,7 @@
 
 import { missingTargetRetryDestinations, subscriptionDestination, subscriptionGroupId, deadLetterDestination } from '@keel-system/keel-core/gen';
 import { OUTBOX_LAST_ERROR_LENGTH, OUTBOX_RELAY, outboxBackoffMs } from '@keel-system/keel-core/gen/messaging-stores';
-import { usesMessaging, usesBridge, usesProcessedEvents, usesRelational } from '@keel-system/keel-core/gen/features';
+import { usesMessaging, usesBridge, usesProcessedEvents, usesPersistence } from '@keel-system/keel-core/gen/features';
 import { consumerUnits, consumesFromQueue, messagingYaml, routingKeyName, subscriptionKey } from '@keel-system/keel-core/gen/messaging-plan';
 import { acknowledgeNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { goExported } from '../lib/go-projection.js';
@@ -42,9 +42,9 @@ const PRESENCE = new Set(['notNull', 'notBlank', 'notEmpty']);
 
 // ─── Qué se genera ───────────────────────────────────────────────────────────────────────────────
 
-/** ¿Hay mensajería que generar? Sobre la persistencia relacional: la documental llega con el incremento 12. */
+/** ¿Hay mensajería que generar? Sobre la persistencia relacional o la documental (incremento 12). */
 export function usesGoMessaging(model) {
-  return usesMessaging(model) && usesRelational(model);
+  return usesMessaging(model) && usesPersistence(model);
 }
 
 /** ¿Salen los eventos por el outbox? Lo decide el diseño (`reliability: outbox`). */

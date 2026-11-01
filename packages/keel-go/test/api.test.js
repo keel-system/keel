@@ -64,7 +64,8 @@ for (const name of fixtures) {
     for (const { operation } of served) {
       const code = httpapiFiles(plan).map((file) => file.content).join('\n');
       assert.ok(code.includes(`func (a *api) ${endpointName(operation)}(w http.ResponseWriter, r *http.Request) error {`), `${operation.name}: endpoint`);
-      assert.ok(code.includes(`func ${readerName(operation)}(r *http.Request) (msg application.`), `${operation.name}: lector`);
+      // Con resolvedBy, el lector recibe además la resolución de la credencial (12e-a).
+      assert.ok(new RegExp(String.raw`func ${readerName(operation)}\(r \*http\.Request(, resolve func\(context\.Context, string\) \(string, error\))?\) \(msg application\.`).test(code), `${operation.name}: lector`);
       assert.ok(routes.includes(`{Operation: ${JSON.stringify(operation.name)}, `), `${operation.name}: fila`);
     }
   });

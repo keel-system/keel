@@ -28,6 +28,8 @@ import { DATABASES, selectedInfra } from '@keel-system/keel-core/gen/infra-catal
 import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from '@keel-system/keel-core/gen/junit-scoring';
 import { resetDbScript } from '@keel-system/keel-core/gen/infra-scripts';
 import { usesApi, usesRelational } from '@keel-system/keel-core/gen/features';
+import { documentFlowMembers, documentProbe, documentSmokeCase, mongoEvalSection } from './document-harness.js';
+import { MAIL_HARNESS_FILE, MAIL_HARNESS_IMPORTS, mailHarnessBody, mailSmokeCase } from './mail-harness.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { missingClockCountSql, rescueProbes, stallSql } from '@keel-system/keel-core/gen';
 import { GO_INFRA } from './infra.js';
@@ -61,6 +63,7 @@ export function generate(model) {
     ...(credentials ? [{ path: `${dir}/${CREDENTIALS_FILE}`, content: integrationFile(model, { imports: CREDENTIALS_IMPORTS, body: credentials }) }] : []),
     ...(messaging ? [{ path: `${dir}/${MESSAGING_HARNESS_FILE}`, content: integrationFile(model, { imports: messagingHarnessImports(model), body: messaging }) }] : []),
     ...(stub ? [{ path: `${dir}/${HTTP_STUB_HARNESS_FILE}`, content: integrationFile(model, { imports: HTTP_STUB_HARNESS_IMPORTS, body: stub }) }] : []),
+    ...(mailHarnessBody(model) ? [{ path: `${dir}/${MAIL_HARNESS_FILE}`, content: integrationFile(model, { imports: MAIL_HARNESS_IMPORTS, body: mailHarnessBody(model) }) }] : []),
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript(model) }
   ];
@@ -300,6 +303,8 @@ func (s *Scenario) Db(sql string) string {
 	return out
 }`);
   }
+  // Sobre documentos, MongoEval y el rescate con los scripts de mongosh (document-harness.js).
+  if (documentProbe(model)) helpers.push(...documentFlowMembers(model));
   const rescue = rescueMembers(model);
   const aging = reconciliationAgingMembers(model);
   helpers.push(...rescue, ...aging);
@@ -906,7 +911,8 @@ func db(ctx context.Context, sql string) (string, error) {
 	return runCommand(ctx, containerRuntime(), args, "¿Está la base arriba (bash infra/up.sh)?", "")
 }`);
   }
-  if (probe || usesMessagingHarness(model)) {
+  if (documentProbe(model)) sections.push(mongoEvalSection(model));
+  if (probe || documentProbe(model) || usesMessagingHarness(model)) {
     sections.push(String.raw`// containerRuntime es el runtime de contenedores: CONTAINER_RUNTIME, o docker si está, o podman.
 func containerRuntime() string {
 	if configured := os.Getenv("CONTAINER_RUNTIME"); configured != "" {
@@ -919,7 +925,7 @@ func containerRuntime() string {
 }`);
   }
   return integrationFile(model, {
-    imports: ['bytes', 'context', 'encoding/json', 'errors', 'fmt', 'io', 'net/http', 'os', 'os/exec', 'path/filepath', 'runtime', 'slices', 'strings', 'sync', 'time'],
+    imports: ['bytes', 'context', 'encoding/json', 'errors', 'fmt', 'io', 'net/http', 'os', 'os/exec', 'path/filepath', 'runtime', 'slices', 'regexp', 'strings', 'sync', 'time'],
     body: String.raw`
 // Response es un intercambio HTTP completo: lo que el escenario afirma.
 type Response struct {
@@ -1339,6 +1345,8 @@ function harnessSmokeTestGo(model) {
 		}
 	})`);
   }
+  if (documentProbe(model)) cases.push(documentSmokeCase());
+  if (mailSmokeCase(model)) cases.push(mailSmokeCase(model));
   if (api) {
     // Con seguridad, con la credencial que satisface la regla de cierre: sin ella, un camino que no existe es 401 (se
     // decide antes de enrutar) y el humo mediría la autorización, no la API.

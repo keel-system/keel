@@ -32,7 +32,7 @@ import {
   uniqueFields
 } from '@keel-system/keel-core/gen';
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
-import { isPaginated, repositoryRoots, usesRelational } from '@keel-system/keel-core/gen/features';
+import { isPaginated, repositoryRoots, resolvedByOf, usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
 import { enumConstant, goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { sqlDialect, storeDir } from '../lib/relational-engine.js';
@@ -44,6 +44,7 @@ import { emitsEvents, usesGoOutbox } from './messaging.js';
 import { adapterClaimMethods, claimDependencies, portClaimMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { PARAMETERS_VAR } from './service-parameters.js';
+import { portGuardMethods, relationalGuardMethods } from './mail.js';
 
 // Un identificador en el SQL del adaptador, citado como en el baseline si es una palabra reservada (`"primary"` en
 // PostgreSQL, `` `primary` `` en MySQL).
@@ -53,14 +54,16 @@ const sq = (model, name) => sqlDialect(model).quote(name);
 const ph = (model, n) => sqlDialect(model).param(n);
 
 export function generate(model) {
-  if (!usesRelational(model)) return [];
+  if (!usesPersistence(model)) return [];
   const roots = repositoryRoots(model);
   if (roots.length === 0) return [];
   const { domain, store } = layout(model);
-  const files = [];
+  // El puerto es el mismo con las dos persistencias; el adaptador documental lo escribe document-repositories.js.
+  const ports = roots.map((entity) => ({ path: domainPath(model, portName(entity)), content: packageFile(model, domain, { imports: PORT_IMPORTS, body: portBody(model, entity) }) }));
+  if (!usesRelational(model)) return ports;
+  const files = [...ports];
   const uses = new Set();
   for (const entity of roots) {
-    files.push({ path: domainPath(model, portName(entity)), content: packageFile(model, domain, { imports: PORT_IMPORTS, body: portBody(model, entity) }) });
     files.push({
       path: `${store.dir}/${goFileName(entity.name)}_repository.go`,
       content: packageFile(model, store, { imports: ADAPTER_IMPORTS, body: adapterBody(model, entity, uses) })
@@ -208,6 +211,31 @@ export function naturalKeyBatchFinder(model, entity) {
   return { name: `FindAllBy${goExported(param.name)}In`, param, column: param.where[0].column, cast: BATCHABLE[field.base], plural: `${localName(param.name)}s` };
 }
 
+// ─── La credencial que resuelve al agregado (resolvedBy) ─────────────────────────────────────────
+
+/**
+ * Los finders por ELEMENTO de una colección, cuando el diseño declara que un recurso tiene varias credenciales: por HTTP
+ * (`security.authentication.callerIdentity.from.resolvedBy`) o por el broker (`messaging.subscriptions.<E>.identity.resolvedBy`,
+ * DSL 2.17). La misma decisión que los otros tres: uno por `Entidad.campo` distinto que nombre el diseño para ESTA entidad, con
+ * el nombre de keel-spring en Go (`FindByCredentialKeysContaining`). Sin él, el finder de la clave natural resuelve solo la
+ * credencial que casualmente coincide con la clave, y las demás acaban en un 403 en el camino feliz.
+ */
+export function credentialFinders(model, entity) {
+  const declared = [model.security?.callerIdentity?.resolvedBy, ...(model.subscriptions ?? []).map((sub) => resolvedByOf(sub.identity?.resolvedBy))].filter(
+    (resolved) => resolved && resolved.entity === entity.name
+  );
+  const seen = new Set();
+  const finders = [];
+  for (const resolved of declared) {
+    if (seen.has(resolved.field)) continue;
+    seen.add(resolved.field);
+    const field = entity.fields.find((candidate) => candidate.name === resolved.field);
+    if (!field || !field.list) continue;
+    finders.push({ name: `FindBy${goExported(resolved.field)}Containing`, field, element: field.goType.slice(2), param: localName(resolved.field.replace(/s$/, '')) });
+  }
+  return finders;
+}
+
 // ─── El puerto ───────────────────────────────────────────────────────────────────────────────────
 
 function idOf(entity) {
@@ -233,6 +261,12 @@ function portBody(model, entity) {
   for (const finder of keyFinders(model, entity)) {
     method(`${finder.doc} found es false si no existe.`, `${finder.name}(ctx context.Context, ${finder.params.map((p) => `${localName(p.name)} ${p.type.replace(/^domain\./, '')}`).join(', ')}) (*${name}, bool, error)`);
   }
+  for (const credential of credentialFinders(model, entity)) {
+    method(
+      `resuelve el agregado a partir de UNA de sus credenciales: el diseño declara que un mismo ${name} tiene varias (resolvedBy: ${name}.${credential.field.name}), así que la del token o la del mensaje no tiene por qué ser su clave natural. found es false si no es de ninguno.`,
+      `${credential.name}(ctx context.Context, ${credential.param} ${credential.element}) (*${name}, bool, error)`
+    );
+  }
   const batch = naturalKeyBatchFinder(model, entity);
   if (batch) {
     method(
@@ -242,6 +276,7 @@ function portBody(model, entity) {
   }
   for (const [doc, signature] of portFinderMethods(model, entity)) method(doc, signature);
   for (const [doc, signature] of portClaimMethods(model, entity)) method(doc, signature);
+  for (const [doc, signature] of portGuardMethods(model, entity)) method(doc, signature);
   for (const [doc, signature] of portReconciliationMethods(model, entity)) method(doc, signature);
   if (isPaginated(model, entity)) {
     method('una página de agregados, en el orden pedido y con el id como desempate. Una propiedad de orden que no existe es un error.', `List(ctx context.Context, pageable Pageable) (Page[*${name}], error)`);
@@ -594,6 +629,17 @@ func (r *${type}) ${goExported(inverse.finder)}(ctx context.Context, ${param} ${
     }
     one(finder.name, `${finder.name}(ctx context.Context, ${finder.params.map((p) => `${localName(p.name)} ${p.type}`).join(', ')})`, `WHERE ${conditions.join(' AND ')}`, args.join(', '));
   }
+  for (const credential of credentialFinders(model, entity)) {
+    const list = root.lists.find((candidate) => candidate.method === goExported(credential.field.name));
+    if (!list) throw new Error(`${name}.${credential.field.name}: la lista de credenciales no tiene tabla de elementos`);
+    const value = writeValue({ ...credential.field, list: false, goType: credential.element }, credential.param, false);
+    one(
+      credential.name,
+      `${credential.name}(ctx context.Context, ${credential.param} ${credential.element})`,
+      `WHERE ${root.idColumn} IN (SELECT ${list.joinColumn} FROM ${list.table} WHERE ${list.valueColumn} = ${ph(model, 1)})`,
+      value
+    );
+  }
   const batch = naturalKeyBatchFinder(model, entity);
   if (batch) {
     parts.push(`// ${batch.name} implementa domain.${portName(entity)}.
@@ -609,6 +655,7 @@ ${batchLoad(model, batch.column, null, batch.plural, uses, batch.cast)}
   if (isPaginated(model, entity)) parts.push(listMethod(model, entity, root, type));
   parts.push(...adapterFinderMethods(model, entity, { type, root, sortable: `${lower(name)}Sortable`, writeValue }));
   parts.push(...adapterClaimMethods(model, entity, type));
+  parts.push(...relationalGuardMethods(model, entity, type));
   parts.push(...adapterReconciliationMethods(model, entity, type));
 
   // ─── Escrituras

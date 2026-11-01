@@ -44,8 +44,9 @@ import { SUPPORTED_DATABASES } from '../src/lib/supported-features.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length) ?? null;
 const engine = process.argv.find((arg) => arg.startsWith('--database='))?.slice('--database='.length) ?? 'postgresql';
-if (!SUPPORTED_DATABASES.includes(engine)) {
-  console.error(`--database=${engine}: keel-go genera sobre ${SUPPORTED_DATABASES.join(', ')}.`);
+// MongoDB tiene su propia red (doc-check.js): aquí solo los motores relacionales.
+if (!SUPPORTED_DATABASES.includes(engine) || !STORE_PACKAGES[engine]) {
+  console.error(`--database=${engine}: db-check mide ${SUPPORTED_DATABASES.filter((candidate) => STORE_PACKAGES[candidate]).join(', ')} (MongoDB: npm run doc-check).`);
   process.exit(2);
 }
 const label = ENGINE_LABELS[engine];

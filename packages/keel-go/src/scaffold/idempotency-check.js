@@ -13,13 +13,15 @@
 //     de primer nivel que nombra sus mensajes (`typesPerFile: 'many'`), y los métodos son funciones de primer nivel
 //     (`blockDepth: 0`);
 //   · la respuesta de la guarda es un `(bool, error)`: descartarla con `_` es no deduplicar;
-//   · la escritura de los registros es SQL literal: un INSERT sin `ON CONFLICT` ni `INSERT IGNORE`.
+//   · la escritura de los registros es SQL literal: un INSERT sin `ON CONFLICT` ni `INSERT IGNORE`; sobre documentos
+//     (incremento 12), un InsertOne sin reemplazo ni upsert, y sin el relevo de un índice condicionado (ni keel-spring
+//     ni keel-nest ni keel-dotnet lo emiten sobre documentos).
 // La compensación, la reconciliación y la idempotencia saliente llegaron con el incremento 11 (tramo 11c); el correo
 // llega con el 13 y su familia no tiene todavía mecanismo que vigilar (la frontera lo rechaza).
 
 import { renderIdempotencyGate } from '@keel-system/keel-core/gen/idempotency-gate';
 import { kebabCase, relievingOperations } from '@keel-system/keel-core/gen';
-import { usesRelational } from '@keel-system/keel-core/gen/features';
+import { usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
 import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
 import { subscriptionsBySource as bySource } from '@keel-system/keel-core/gen/messaging-plan';
 import { enumConstant, goExported } from '../lib/go-projection.js';
@@ -30,6 +32,7 @@ import { callMethod, clientParam, usesGoHttpClients } from './http-clients.js';
 import { messageStruct, usesGoMessaging, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
 import { naturalKeyFinder, occupantFinders } from './repositories.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
+import { guardMethod, usesGoMail } from './mail.js';
 
 /**
  * Las fuentes de Go viven en `cmd/` e `internal/`, así que se busca desde la raíz, solo en `.go` y fuera de lo que no es
@@ -60,8 +63,7 @@ export function generate(model) {
 
 /** La matriz: { group, subject, why } más lo que cada clase de comprobación necesita (ver keel-core). */
 export function checksOf(model) {
-  // La persistencia documental llega con el incremento 12.
-  if (!usesRelational(model)) return [];
+  if (!usesPersistence(model)) return [];
   return [
     ...dedupeChecks(model),
     ...payloadContractChecks(model),
@@ -74,7 +76,8 @@ export function checksOf(model) {
     ...reconciliationChecks(model),
     ...outboundIdempotencyChecks(model),
     ...outboxChecks(model),
-    ...conditionalUniquenessChecks(model)
+    ...mailDeliveryChecks(model),
+    ...(usesRelational(model) ? conditionalUniquenessChecks(model) : [])
   ];
 }
 
@@ -166,13 +169,16 @@ function payloadContractChecks(model) {
 // 1c. Que la escritura de los registros sea un INSERT de verdad. Vigila archivos de build, y hace falta: no son
 //     intocables (una corrida de keel-spring vio al agente editar un mapper generado).
 function insertChecks(model) {
+  // Sobre documentos la escritura es un InsertOne: un reemplazo o un upsert reescribiría el registro en vez de chocar con
+  // su _id.
+  const document = !usesRelational(model);
   const write = (group, file, table, why) => ({
     group,
-    subject: `${file}: la escritura es un INSERT`,
+    subject: `${file}: la escritura es ${document ? 'un InsertOne' : 'un INSERT'}`,
     class: file,
-    require: [`INSERT INTO ${table} `],
-    forbid: ['ON CONFLICT', 'ON DUPLICATE KEY', 'INSERT IGNORE', 'REPLACE INTO', 'UPDATE[[:space:]]'],
-    why
+    require: document ? ['[.]InsertOne[ ]*[(]'] : [`INSERT INTO ${table} `],
+    forbid: document ? ['ReplaceOne', 'SetUpsert', 'UpdateOne', 'FindOneAndUpdate', 'FindOneAndReplace'] : ['ON CONFLICT', 'ON DUPLICATE KEY', 'INSERT IGNORE', 'REPLACE INTO', 'UPDATE[[:space:]]'],
+    why: document ? why.replace('un INSERT y NO un upsert ni un UPDATE', 'un InsertOne y NO un reemplazo ni un upsert').replace('la clave primaria', 'el _id') : why
   });
   const checks = [];
   if (usesGoProcessedEvents(model)) {
@@ -497,6 +503,37 @@ function outboxChecks(model) {
       why: 'con reliability: outbox el diseño prometió que ningún evento se pierde; con solo el respaldo de build no sale ninguno'
     }
   ];
+}
+
+// El correo (capa mail): la operación de mail.sentBy tiene que mandarlo, y su guarda contra el doble envío tiene que estar
+// CONFIRMADA antes (los sujetos de keel-nest).
+function mailDeliveryChecks(model) {
+  if (!usesGoMail(model)) return [];
+  const checks = [];
+  for (const operation of allOperations(model).filter((candidate) => model.mail.sentBy.includes(candidate.name))) {
+    checks.push({
+      group: 'mailDelivery',
+      subject: operation.name,
+      class: handlerFile(operation),
+      require: ['mailSender[.]Send[ ]*[(]'],
+      forbid: ['ErrNotImplemented'],
+      why: 'el diseño le atribuye la salida por correo (mail.sentBy): tiene que componer el mensaje con domain.NewMailMessage y llamar a h.mailSender.Send(ctx, ...)'
+    });
+    const guard = operation.guardClaim;
+    if (!guard) continue;
+    checks.push({
+      group: 'mailDelivery',
+      subject: `${operation.name} · guarda confirmada antes del envío`,
+      class: handlerFile(operation),
+      require: ['[.]' + guardMethod(guard) + '[ ]*[(]'],
+      forbid: [],
+      why:
+        `la guarda contra el doble envío (${guard.from.join(' o ')} → ${guard.to}) tiene que estar CONFIRMADA antes de mandar el correo, y ` +
+        'hacerla en memoria no la confirma: el handler corre dentro de la transacción del caso de uso, así que la marca no existe para nadie hasta el ' +
+        `commit final —que llega después del envío—. Llama a ${guardMethod(guard)}(ctx, id), que build generó en ${guard.entity}Repository con transacción propia, y trata found=false como la carrera perdida`
+    });
+  }
+  return checks;
 }
 
 // 6. El RELEVO en un índice único condicionado (el mismo sujeto que los otros tres). La operación saca una fila del

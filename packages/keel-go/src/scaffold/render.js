@@ -61,6 +61,8 @@ export function layout(model) {
     // Los clientes HTTP salientes (incremento 11b): el adaptador de cada puerto de internal/domain, los tipos del cable del
     // tercero, el mapeo de anticorrupción y la resiliencia. No en httpapi, que es la plataforma de ENTRADA.
     clients: pkg(module, 'internal/infrastructure/clients'),
+    // La salida de correo (capa mail, 12e-b): el adaptador SMTP y el renderizador de plantillas.
+    mail: pkg(module, 'internal/infrastructure/smtp'),
     // La prueba de la frontera hexagonal: `internal/` solo protege frente a otros módulos, no entre capas.
     architecture: pkg(module, 'internal/architecture'),
     // Las pruebas de flujo (FL-*), de caja negra y tras la restricción `integration`: `go test ./...` no las ve.

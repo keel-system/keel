@@ -23,7 +23,7 @@
 
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { idempotencyOutcomeCodes, idempotencyOutcomeCode } from '@keel-system/keel-core/gen';
-import { usesApi, usesRelational } from '@keel-system/keel-core/gen/features';
+import { usesApi, usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
 import {
   DEFAULT_IDEMPOTENCY_TTL_SECONDS,
   IDEMPOTENCY_HEADER,
@@ -39,9 +39,9 @@ import { componentType, messageComponents } from './services.js';
 import { sentinelOf } from './errors.js';
 import { applicationPath, domainPath, goTypeName, layout, packageFile } from './render.js';
 
-/** ¿Se genera el registro? Con persistencia relacional (la documental llega en el incremento 12) y alguna operación que lo use. */
+/** ¿Se genera el registro? Con persistencia (relacional o documental, incremento 12) y alguna operación que lo use. */
 export function usesRequestIdempotency(model) {
-  return usesRelational(model) && usesRegistryInDesign(model);
+  return usesPersistence(model) && usesRegistryInDesign(model);
 }
 
 /** ¿Viaja la clave por la cabecera Idempotency-Key? Solo con `client-key`, y con API. */
@@ -87,7 +87,8 @@ export function generate(model) {
     { path: domainPath(model, 'idempotency'), content: domainFile(model) },
     { path: applicationPath(model, 'Signer'), content: packageFile(model, application, { imports: ['crypto/sha256', 'encoding/hex', 'errors', 'fmt', 'strconv', 'strings', 'time', 'internal/platform/wire'], body: signer }) },
     { path: `${application.dir}/idempotency_test.go`, content: emittedTest(model) },
-    { path: `${store.dir}/idempotency_store.go`, content: storeAdapter(model) }
+    // El adaptador documental va en document-stores.js: misma API, otro cuerpo.
+    ...(usesRelational(model) ? [{ path: `${store.dir}/idempotency_store.go`, content: storeAdapter(model) }] : [])
   ];
   if (usesIdempotencyHeader(model)) files.push({ path: applicationPath(model, 'IdempotencyKey'), content: headerContext(model) });
   return files;

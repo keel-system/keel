@@ -26,9 +26,9 @@ const design = (name) => loadService(path.join(FIXTURES_DIR, name));
 const gateOf = (files) => files.find((file) => file.path === CHECK_IDEMPOTENCY_SH)?.content;
 const rows = (script) => [...(script ?? '').matchAll(/^(unit|impl|claim) '([^']*)' '([^']*)'/gm)].map((match) => `${match[2]} | ${match[3]}`);
 // La escritura de los registros: en TypeORM, insert y no save; en Go, SQL literal. Sujetos con el nombre del archivo.
-const isInsertSubject = (row) => /: la escritura es un INSERT/.test(row);
-// Lo que keel-go todavía no genera no tiene familia aquí: el correo (incremento 13).
-const PENDING_FAMILIES = new Set(['mailDelivery']);
+const isInsertSubject = (row) => /: la escritura es un (INSERT|InsertOne)/.test(row);
+// Lo que keel-go todavía no genera no tiene familia aquí (el correo entró en el 12e-b: ya no queda ninguna).
+const PENDING_FAMILIES = new Set();
 
 for (const name of ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'metering-digest', 'stock-reservation-events', 'stock-reservation', 'notification-mailer']) {
   for (const broker of ['rabbitmq', 'kafka', 'snssqs']) {
@@ -49,10 +49,18 @@ test('MySQL: la misma matriz que PostgreSQL (el SQL de cada motor vive en archiv
   assert.deepEqual(of('mysql'), of('postgresql'));
 });
 
-test('sin persistencia relacional no hay gate', () => {
-  const { files } = planService({ ...design('job-dispatch-mongo'), workspace: FIXTURES_DIR, stack: { database: 'mongodb', broker: 'rabbitmq' } });
-  assert.equal(gateOf(files), undefined);
-});
+// Sobre documentos (incremento 12), las mismas familias y sujetos que keel-nest sobre documentos: sin el relevo del índice
+// condicionado, que ninguno de los otros tres emite sobre documentos.
+for (const name of ['job-dispatch-mongo', 'inspection-reports', 'notification-mailer-mongo']) {
+  test(`${name} [mongodb]: las familias y los sujetos del gate son los de keel-nest`, () => {
+    const stack = { database: 'mongodb', broker: 'kafka' };
+    const ours = rows(gateOf(planService({ ...design(name), workspace: FIXTURES_DIR, stack }).files));
+    const theirs = rows(gateOf(planNest({ ...design(name), workspace: FIXTURES_DIR, stack }).files)).filter((row) => !PENDING_FAMILIES.has(row.split(' | ')[0]));
+    assert.ok(ours.length > 0);
+    assert.deepEqual(ours.filter((row) => !isInsertSubject(row)).sort(), theirs.filter((row) => !isInsertSubject(row)).sort());
+    assert.deepEqual(ours.filter(isInsertSubject).map((row) => row.split(' | ')[0]).sort(), theirs.filter(isInsertSubject).map((row) => row.split(' | ')[0]).sort());
+  });
+}
 
 /** Escribe el árbol emitido (con cambios del «agente») y ejecuta el gate. null sin bash. */
 function runGate(name, edits = {}, { broker = 'rabbitmq', database = 'postgresql' } = {}) {

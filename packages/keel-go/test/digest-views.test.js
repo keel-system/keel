@@ -44,13 +44,15 @@ const tidiedSeparate = (goMod) => goMod.replace(/\ntool \(/, `\nrequire (\n${TID
 test('sobre lo que emite build es la identidad, en todas las fixtures y en los dos motores', () => {
   let measured = 0;
   for (const name of fixtures) {
-    for (const stack of [null, { database: 'mysql' }]) {
+    // MySQL solo sobre los diseños relacionales: el motor del stack no cambia el modelo de un documental.
+    const document = goView(name).layers?.persistence?.default?.model === 'document';
+    for (const stack of document ? [null] : [null, { database: 'mysql' }]) {
       const goMod = goModOf(planService({ ...goView(name), workspace: FIXTURES_DIR, ...(stack ? { stack } : {}) }));
       assert.equal(goModView(goMod), goMod, `${name}${stack ? ' (mysql)' : ''}`);
       measured += 1;
     }
   }
-  assert.ok(measured >= 30, `solo ${measured}`);
+  assert.ok(measured >= 29, `solo ${measured}`);
 });
 
 test('devuelve lo de build a partir de lo que deja go mod tidy, en sus dos formas', () => {

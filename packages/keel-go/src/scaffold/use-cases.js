@@ -18,16 +18,17 @@ import { alignRows, goString } from '../lib/go-source.js';
 import { frameworkSentinels, sentinelOf } from './errors.js';
 import { IDEMPOTENCY_STORE, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
 import { applicationPath, layout, packageFile } from './render.js';
-import { CALLER_ROLES, roleCheckedOperation, usesRoleCheck } from './security.js';
+import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity, usesRoleCheck } from './security.js';
 import { contractOf, handlerType, messageType, operations, useCaseField } from './services.js';
-import { repositoryOf, repositoryRoots, usesRelational } from '@keel-system/keel-core/gen/features';
+import { repositoryOf, repositoryRoots, usesPersistence } from '@keel-system/keel-core/gen/features';
 import { goExported } from '../lib/go-projection.js';
-import { portName, repositoryParam } from './repositories.js';
+import { credentialFinders, portName, repositoryParam } from './repositories.js';
 import { activationClients, clientField, clientPort, usesGoHttpClients } from './http-clients.js';
+import { MAIL_SENDER, TEMPLATE_RENDERER, mailDependencies, usesGoMail, usesTemplating } from './mail.js';
 
 /** ¿Reciben los casos de uso adaptadores (Dependencies)? Con la persistencia relacional. */
 export function usesDependencies(model) {
-  return usesRelational(model) && repositoryRoots(model).length > 0;
+  return usesPersistence(model) && repositoryRoots(model).length > 0;
 }
 
 /** Lo que recibe el constructor del handler de una operación: el repositorio de su agregado y, si despacha, UseCases. */
@@ -38,6 +39,7 @@ export function handlerArgs(model, operation, repository) {
   if (usesRegistry(model, operation)) args.push(`deps.${IDEMPOTENCY_STORE.field}`);
   if (usesDependencies(model) && roleCheckedOperation(model, operation)) args.push(`deps.${CALLER_ROLES.field}`);
   for (const client of activationClients(model, operation)) args.push(`deps.${clientField(client)}`);
+  for (const port of mailDependencies(model, operation)) args.push(`deps.${port.field}`);
   if ((operation.dispatches ?? []).length > 0) args.push('uc');
   return args;
 }
@@ -58,7 +60,7 @@ export function generate(model) {
   });
   return [
     file('usecase', USECASE_BODY, ['context', 'errors', 'fmt', 'log/slog', 'time', 'internal/domain']),
-    file('use_cases', useCasesBody(model, ops), ['log/slog', 'internal/domain']),
+    file('use_cases', useCasesBody(model, ops), ['context', 'fmt', 'log/slog', 'internal/domain']),
     file('use_cases', useCasesTest(model, ops), ['bytes', 'context', 'errors', 'log/slog', 'strings', 'testing', 'internal/domain'], { test: true })
   ];
 }
@@ -219,6 +221,11 @@ function useCasesBody(model, ops) {
   }
   const roots = repositoryRoots(model);
   const persistent = usesDependencies(model);
+  const resolution = persistent ? callerResolution(model) : null;
+  if (resolution) {
+    fieldRows.push({ text: `	// callers resuelve la credencial del llamante al ${resolution.entity.name} al que pertenece (resolvedBy).` });
+    fieldRows.push({ indent: '	', cells: ['callers', `domain.${portName(resolution.entity)}`] });
+  }
   const wiring = ops.map((operation) => {
     const contract = contractOf(operation);
     const handler = `New${handlerType(operation)}(${handlerArgs(model, operation, (root) => `deps.${goExported(repositoryParam(root))}`).join(', ')})`;
@@ -251,6 +258,13 @@ ${alignRows([
         { indent: '\t', cells: [CALLER_ROLES.field, CALLER_ROLES.port] }
       ]
     : []),
+  ...(usesGoMail(model)
+    ? [
+        { text: '\t// MailSender es la salida de correo (mail.sentBy).' },
+        { indent: '\t', cells: [MAIL_SENDER.field, MAIL_SENDER.port] },
+        ...(usesTemplating(model) ? [{ text: '\t// TemplateRenderer interpola las plantillas del correo.' }, { indent: '\t', cells: [TEMPLATE_RENDERER.field, TEMPLATE_RENDERER.port] }] : [])
+      ]
+    : []),
   ...(usesGoHttpClients(model)
     ? model.httpClients.flatMap((client) => [
         { text: `\t// ${clientField(client)} es el cliente saliente ${client.id} (http-clients): su adaptador HTTP, con su resiliencia.` },
@@ -281,9 +295,49 @@ ${alignRows(fieldRows).join('\n')}
 // build: lo que no está aquí no se despacha. Un handler que despacha otra operación (use-cases.dispatches)
 // recibe el propio UseCases, ya completo cuando se le llama.
 func NewUseCases(${persistent ? 'logger *slog.Logger, deps Dependencies' : 'logger *slog.Logger'}) *UseCases {
-${prelude}	uc := &UseCases{}
+${prelude}	uc := &UseCases{${resolution ? `callers: deps.${goExported(repositoryParam(resolution.entity))}` : ''}}
 ${wiring.join('\n')}
 	return uc
+}
+${resolution ? resolveCallerMethod(resolution) : ''}`;
+}
+
+/**
+ * Cuándo la identidad del llamante se RESUELVE al recurso y no se pasa en crudo: con `from.resolvedBy` el valor del token es
+ * UNA de las credenciales del recurso, no su clave natural. La misma decisión que los otros tres: el lector del endpoint pasa
+ * la clave natural (vacía si la credencial no es de nadie, y la operación responde con el error que el diseño declare), y lo
+ * mismo hace el listener por el canal de eventos. Solo con una clave natural de UN campo: una compuesta no cabe en el campo
+ * de identidad.
+ */
+export function callerResolution(model) {
+  const resolvedBy = model.security?.callerIdentity?.resolvedBy;
+  if (!resolvedBy || !usesCallerIdentity(model) || !usesDependencies(model)) return null;
+  const entity = model.entities.find((candidate) => candidate.name === resolvedBy.entity);
+  if (!entity || (entity.naturalKey ?? []).length !== 1) return null;
+  const finder = credentialFinders(model, entity).find((candidate) => candidate.field.name === resolvedBy.field);
+  if (!finder) return null;
+  return { entity, field: resolvedBy.field, keyField: entity.naturalKey[0], finder: finder.name };
+}
+
+function resolveCallerMethod(resolution) {
+  const key = goExported(resolution.keyField);
+  const keyField = resolution.entity.fields.find((field) => field.name === resolution.keyField);
+  const value = keyField?.goType === 'string' ? `found.${key}()` : `fmt.Sprint(found.${key}())`;
+  return `
+// ResolveCaller es la identidad del llamante resuelta al ${resolution.entity.name} al que pertenece su credencial: el diseño
+// declara que un mismo ${resolution.entity.name} tiene varias (resolvedBy: ${resolution.entity.name}.${resolution.field}), así que el valor
+// del token no es su clave natural. Se busca con ${resolution.finder} y se devuelve la clave natural (${resolution.keyField}), que es lo
+// que el campo de identidad significa en el diseño. Vacía si la credencial no es de ninguno: que el recurso no exista es una
+// precondición de la operación, y es ella la que responde con el error que el diseño declare, con su precedencia.
+func (uc *UseCases) ResolveCaller(ctx context.Context, credential string) (string, error) {
+	if credential == "" {
+		return "", nil
+	}
+	found, ok, err := uc.callers.${resolution.finder}(ctx, credential)
+	if err != nil || !ok {
+		return "", err
+	}
+	return ${value}, nil
 }
 `;
 }

@@ -25,7 +25,7 @@
 
 import { claimOrderField, claimsForEntity, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { envWithDefault } from '@keel-system/keel-core/gen/profile-values';
-import { usesRelational } from '@keel-system/keel-core/gen/features';
+import { usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { sqlDialect } from '../lib/relational-engine.js';
@@ -36,9 +36,9 @@ import { usesReconciliationClaims } from './reconciliation-claim.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
-/** ¿Genera build algún reclamo de barrido? Con la persistencia relacional y los casos de uso cableados. */
+/** ¿Genera build algún reclamo de barrido? Con persistencia (relacional o documental) y los casos de uso cableados. */
 export function usesSweepClaims(model) {
-  return usesRelational(model) && usesDependencies(model) && sweepClaims(model).length > 0;
+  return usesPersistence(model) && usesDependencies(model) && sweepClaims(model).length > 0;
 }
 
 /** El método Go de un reclamo: `ClaimForDispatchJobsRunning`. */
@@ -46,7 +46,8 @@ export const claimMethod = (claim) => goExported(claim.method);
 
 /** ¿Hacen falta los ayudantes de un reclamo (claims.go)? Los usan el de barrido y el de reconciliación. */
 export function usesClaimHelpers(model) {
-  return usesSweepClaims(model) || usesReconciliationClaims(model);
+  // Los documentales no los necesitan: FindOneAndUpdate elige y marca en una operación (document-repositories.js).
+  return usesRelational(model) && (usesSweepClaims(model) || usesReconciliationClaims(model));
 }
 
 export function generate(model) {

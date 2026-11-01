@@ -36,6 +36,8 @@ export const ENGINE_LABELS = { postgresql: 'PostgreSQL', mysql: 'MySQL' };
 
 /** El directorio del paquete del adaptador del motor del diseño. */
 export function storeDir(model) {
+  // La documental (incremento 12) tiene su paquete con los mismos nombres: internal/infrastructure/mongo.
+  if (model?.persistenceKind === 'document') return 'internal/infrastructure/mongo';
   return `internal/infrastructure/${STORE_PACKAGES[relationalEngine(model)]}`;
 }
 
