@@ -36,6 +36,7 @@ import { GO_INFRA } from './infra.js';
 import { layout, packageFile } from './render.js';
 import { CREDENTIALS_FILE, CREDENTIALS_IMPORTS, closingCredentialExpression, credentialsBody, smokeCredentialsCase } from './identity-harness.js';
 import { MESSAGING_HARNESS_FILE, messagingHarnessBody, messagingHarnessImports, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
+import { PAYMENT_HARNESS_FILE, PAYMENT_HARNESS_IMPORTS, paymentHarnessBody } from './payment-harness.js';
 import { HTTP_STUB_HARNESS_FILE, HTTP_STUB_HARNESS_IMPORTS, httpStubHarnessBody, httpStubSmokeCase, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
 import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenarios';
 
@@ -52,6 +53,7 @@ export function generate(model) {
   const credentials = credentialsBody(model);
   const messaging = messagingHarnessBody(model);
   const stub = httpStubHarnessBody(model);
+  const payments = paymentHarnessBody(model);
   return [
     { path: `${dir}/doc.go`, content: docGo(model) },
     { path: `${dir}/flow_test.go`, content: flowTestGo(model) },
@@ -63,6 +65,7 @@ export function generate(model) {
     ...(credentials ? [{ path: `${dir}/${CREDENTIALS_FILE}`, content: integrationFile(model, { imports: CREDENTIALS_IMPORTS, body: credentials }) }] : []),
     ...(messaging ? [{ path: `${dir}/${MESSAGING_HARNESS_FILE}`, content: integrationFile(model, { imports: messagingHarnessImports(model), body: messaging }) }] : []),
     ...(stub ? [{ path: `${dir}/${HTTP_STUB_HARNESS_FILE}`, content: integrationFile(model, { imports: HTTP_STUB_HARNESS_IMPORTS, body: stub }) }] : []),
+    ...(payments ? [{ path: `${dir}/${PAYMENT_HARNESS_FILE}`, content: integrationFile(model, { imports: PAYMENT_HARNESS_IMPORTS, body: payments }) }] : []),
     ...(mailHarnessBody(model) ? [{ path: `${dir}/${MAIL_HARNESS_FILE}`, content: integrationFile(model, { imports: MAIL_HARNESS_IMPORTS, body: mailHarnessBody(model) }) }] : []),
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript(model) }

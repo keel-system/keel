@@ -56,6 +56,8 @@ export function stackSkills(model) {
   if (usesGoSnsSqs(model)) skills.push('keel-go-snssqs');
   if (usesGoHttpClients(model)) skills.push('keel-go-httpclient');
   if (usesGoMail(model)) skills.push('keel-go-mail');
+  // Los cobros con pasarela: la guía neutra, y la de la pasarela elegida (la misma pareja que keel-nest y keel-dotnet).
+  if (model.payments) skills.push('keel-go-payments', `keel-go-${model.payments.gateway.id}`);
   return skills;
 }
 

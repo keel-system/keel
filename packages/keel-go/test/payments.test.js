@@ -45,6 +45,8 @@ test('entre pasarelas solo cambian su adaptador, sus pruebas y la configuración
     // El nombre de la pasarela en el comentario del paquete.
     /^internal\/infrastructure\/payment\/doc\.go$/,
     /^config\/parameters\/(develop|production)\/payments\.yaml$/,
+    // La pasarela de prueba del arnés: las formas del doble son las de la pasarela; su API, la misma (abajo).
+    /^tests\/integration\/payment_gateway_test\.go$/,
     // Lo que no es Go: las skills, el README y lo que cita la pasarela del stack.
     /\.(md|json|yaml|yml|sh|env)$/
   ];
@@ -54,6 +56,11 @@ test('entre pasarelas solo cambian su adaptador, sus pruebas y la configuración
     assert.ok(stripe.has(file), file);
     assert.equal(stripe.get(file), mercadopago.get(file), file);
   }
+  // Los escenarios no nombran la pasarela: el arnés ofrece los mismos métodos, tipos y constantes con las dos.
+  const api = (text) => text.split('\n').filter((line) => /^(func (\(s \*Scenario\) )?[A-Z]|type [A-Z]|\tCall\w+ +GatewayCall = )/.test(line));
+  const harness = 'tests/integration/payment_gateway_test.go';
+  assert.ok(api(stripe.get(harness)).length >= 20);
+  assert.deepEqual(api(stripe.get(harness)), api(mercadopago.get(harness)));
 });
 
 test('la configuración lee solo claves que payments.yaml declara, y lo obligatorio no tiene default', () => {

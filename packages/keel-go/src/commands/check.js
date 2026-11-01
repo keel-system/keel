@@ -3,6 +3,8 @@ import { gateDesign } from '@keel-system/keel-core/gen/design-gate';
 import { SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { planService } from '../scaffold/index.js';
+import { gatewayCoverage } from '@keel-system/keel-core/gen/payment-gateways';
+import { PAYMENT_GATEWAYS } from '@keel-system/keel-core/gen/infra-catalog';
 
 /**
  * La pasada en seco: el mismo tronco que `build` —la puerta del diseño y `planService`— sin escribir NADA,
@@ -30,11 +32,25 @@ export function check(inputPath, { strict = false } = {}) {
   }
 
   const features = checkSupportedFeatures(manifest, layers);
-  const notices = features.warnings.length + plan.model.warnings.length;
+  let notices = features.warnings.length + plan.model.warnings.length;
   console.log();
   console.log(pc.bold('Traducción a código'));
   if (plan.model.warnings.length === 0) console.log(pc.dim(`  Sin avisos del modelo. ${plan.files.length} archivos se generarían.`));
   for (const message of plan.model.warnings) console.log(`  ${pc.yellow('•')} ${message}`);
+
+  // Con capa payments, qué pasarelas del catálogo pueden servir este diseño: la portabilidad del diseño de un vistazo
+  // (la matriz neutral de keel-core, la misma que enseñan keel-spring, keel-nest y keel-dotnet check).
+  if (layers.payments) {
+    console.log();
+    console.log(pc.bold('Pasarelas de pago'));
+    for (const entry of gatewayCoverage(layers, Object.keys(PAYMENT_GATEWAYS))) {
+      const verdict = entry.errors.length === 0 ? pc.green('✔') : pc.red('✘');
+      console.log(`  ${verdict} ${entry.id}${entry.errors.length === 0 && entry.warnings.length > 0 ? pc.dim(` — ${entry.warnings.length} sin verificar`) : ''}`);
+      for (const message of entry.errors) console.log(`    ${pc.red('•')} ${message}`);
+      for (const message of entry.warnings) console.log(`    ${pc.yellow('•')} ${message}`);
+      notices += entry.warnings.length;
+    }
+  }
 
   console.log();
   console.log(pc.bold('Resumen'));

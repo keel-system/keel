@@ -968,12 +968,42 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       la recorren, es la pasarela por defecto). `npm test` de keel-go **967/967**.
     - **La frontera sigue rechazando `payments`**, como keel-nest y keel-dotnet tras su 13c: sin el arnés (el doble en
       los flujos) ni las skills el agente no tendría con qué. Se quita en el 13c.
-- **Para retomar:** el **13c** en un contexto nuevo: el arnés de la pasarela (`tests/integration/payment_gateway_test.go`
-  con la API neutra de los otros tres sobre el WireMock de `http_stub_test.go` y `keel-core/gen/payment-probes.js`;
-  `SendGatewayNotice`/`SendForgedGatewayNotice`; `AgeForReconciliation`/`HoldFromReconciliation` con el barrido de
-  pagos), las skills `keel-go-payments`, `keel-go-stripe` y `keel-go-mercadopago` (con `generator-docs.test.js` atando
-  rutas y helpers), la matriz de la pasarela en `build`/`check` (`checkGatewaySupport`) y quitar `payments` de
-  `PENDING_LAYERS`; medido con `npm run stub-check -- …` ganando la pasarela de las dos. Después, el 13d (la corrida).
+  - **13c, el arnés, las skills, la matriz y la frontera (hecho, 2026-11-01).**
+    - **El arnés de la pasarela** (`src/scaffold/payment-harness.js` → `tests/integration/payment_gateway_test.go`): la
+      API neutra de keel-spring, keel-nest y keel-dotnet como métodos del `*Scenario` (`GatewayIDFor`, `GatewayAuthorizes`,
+      `GatewayCharges`, `GatewayRequiresAction`, `GatewayDeclines`, `GatewayDoesNotAnswer`, `GatewayReports`,
+      `GatewayCaptures`, `GatewayCancels`, `GatewayExpiresAuthorization`, `GatewayRejects`, `GatewaySavesPaymentMethod`,
+      `GatewayRefunds`, `GatewayCallCount`, `GatewayRequests`, `SendGatewayNotice`, `SendForgedGatewayNotice`) y las
+      llamadas como constantes `Call<Llamada>` de `type GatewayCall`, sobre los helpers de `http_stub_test.go` con las
+      formas de `keel-core/gen/payment-probes.js` (el cobro casa por la referencia en el cuerpo, la búsqueda por la de la
+      query) y los avisos firmados con `crypto/hmac`. `AgeForReconciliation`/`HoldFromReconciliation` ya cubrían el
+      barrido de pagos (`relationalAgingTargets` de keel-core). `test/payments.test.js` exige que la API del arnés sea la
+      MISMA con las dos pasarelas (solo cambian las formas del doble).
+    - **Lo que Go obliga a decidir**: el reclamo del barrido de pagos (re-estampar `awaitingSince` antes de consultar) lo
+      escribe el agente en el puerto y el adaptador del registro en los otros tres; aquí llevan la cabecera, así que va
+      en los dos `<raíz>_queries.go` del registro, la ÚNICA escritura que cabe ahí (no cambia el estado: arrienda el
+      cobro), con `r.tx.write`, que sin transacción en el contexto confirma sola. Los dos archivos lo anuncian en su
+      comentario solo en la raíz del registro (`sweepClaimNote` de `repositories.js`), y el ejemplo de la skill se
+      compiló contra lo emitido (vet y staticcheck vacíos).
+    - **Las skills** `keel-go-payments` (con `references/{flows,outcomes,reconciliation,security,troubleshooting}.md`),
+      `keel-go-stripe` y `keel-go-mercadopago` (cada una con su `references/sandbox.md`), instaladas con la capa y la de
+      la pasarela elegida (`stackSkills`). `test/generator-docs.test.js` gana dos casos: la instalación por pasarela, y
+      que cada método del escenario, constante `Call*`, símbolo `domain.*`, miembro del aplicador, campo del handler y
+      ayudante del reclamo que enseñan existe en lo emitido; la ruta `mercadopago.go` cuenta con la variante emitida.
+    - **La matriz de la pasarela** (`checkGatewaySupport` de keel-core) en `build` (antes de escribir, con sus avisos),
+      en `planService` (lanza: ningún camino genera un adaptador a medias) y en `check` («Pasarelas de pago», con
+      `gatewayCoverage`), como los otros tres. **La frontera ya no rechaza `payments`**.
+    - **Medido**: `npm run stub-check` **12/12** contra un WireMock real (stock-reservation 10 sondas y payment-checkout
+      9 sondas con cada pasarela: `scripts/probes/payment_probe_test.go`, neutral, ejecuta el arnés emitido contra el
+      adaptador y el verificador emitidos). **Falsado** con `payment-body` (el cobro deja de casar por la referencia: caen
+      exactamente las dos sondas de dos cobros a la vez, con las dos pasarelas) y `payment-forged` (el falsificado se
+      firma con el secreto bueno: cae solo la del aviso); `initial-state` sigue cayendo en su sonda y deja verdes las de
+      pagos. A mano, sobre las dos variantes: gofmt, `go vet -tags integration` y staticcheck vacíos. `npm test` de
+      keel-go **969/969**.
+- **Para retomar:** el **13d** en un contexto nuevo: preparar la corrida `payment-checkout` con Stripe y con MercadoPago
+  en `spring-live-test/` (build sin `--accept-unready`: la fixture está lista), como las de keel-nest y keel-dotnet
+  (`docs/corridas/*payment-checkout*`), y lanzar el pipeline en otra sesión. Lo que vigilar: el reclamo del barrido en
+  `payment_queries.go` (es lo nuevo de Go) y `payment_outcome_choices.go` (cancelReason). Después, 13e (caché).
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y

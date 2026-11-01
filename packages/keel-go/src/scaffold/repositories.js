@@ -320,20 +320,24 @@ export function queriesName(entity) {
  */
 function queriesPortBody(model, entity) {
   const name = entity.name;
+  const claim = sweepClaimNote(model, entity);
   return `
 // ${queriesName(entity)} son las consultas de negocio del agregado ${name} que escribe el agente: las lecturas que una regla
 // del diseño necesita y ${portName(entity)} no trae (la última versión de una clave, un recuento). Declara aquí su firma;
 // la implementa el adaptador en ${storeDir(model)}/${goFileName(name)}_queries.go, y el puerto la incrusta, así que el
 // compilador exige las dos mitades. Solo lecturas: escribir es Save. Lo que el diseño ya declara (finders DSL 2.22, claves
-// naturales) está en el puerto generado: no lo repitas aquí.
+// naturales) está en el puerto generado: no lo repitas aquí.${claim ? `\n//\n${claim}` : ''}
 type ${queriesName(entity)} interface{}
 `;
 }
 
 /** `<motor>/<entidad>_queries.go`, del agente: la implementación de esas consultas sobre el adaptador generado. */
 function queriesAdapterBody(model, entity) {
+  const claim = sweepClaimNote(model, entity)
+    ? '\n//   - el reclamo del barrido de la capa payments, la única escritura de aquí: r.tx.write(ctx, func(q DBTX) error {…})\n//     con un UPDATE … WHERE id = … AND awaiting_since = …; despachado sin transacción, confirma solo.'
+    : '';
   const helpers = usesRelational(model)
-    ? '//   - el agregado entero: r.load(ctx, "WHERE … ORDER BY … LIMIT 1", …);\n//   - un valor suelto (un recuento, un máximo): q, err := r.tx.conn(ctx) y q.QueryRowContext(...).'
+    ? `//   - el agregado entero: r.load(ctx, "WHERE … ORDER BY … LIMIT 1", …);\n//   - un valor suelto (un recuento, un máximo): q, err := r.tx.conn(ctx) y q.QueryRowContext(...).${claim}`
     : '//   - el agregado entero: r.find(ctx, bson.D{…}, options.Find().SetSort(…).SetLimit(1)), con los nombres de campo\n//     del documento (los de su índice en indexes.go).';
   return `
 // Las consultas de negocio de domain.${queriesName(entity)}, como métodos de *${entity.name}Repository: las escribe el
@@ -341,6 +345,20 @@ function queriesAdapterBody(model, entity) {
 ${helpers}
 // No filtres en memoria lo que la base puede filtrar.
 `;
+}
+
+/**
+ * La excepción a «solo lecturas»: el RECLAMO del barrido de la capa payments (re-estampar la marca de espera del cobro
+ * con una escritura condicional antes de consultar a la pasarela). En los otros tres generadores el agente lo añade al
+ * puerto y al adaptador del registro; aquí los dos llevan la cabecera, y este es su sitio. null si la raíz no es el
+ * registro de un barrido de pagos.
+ */
+function sweepClaimNote(model, entity) {
+  const payments = model.payments;
+  if (!payments?.reconciliation?.sweep || payments.record?.entity !== entity.name || !payments.record?.awaitingSince) return null;
+  return `// La única escritura que cabe aquí es el reclamo del barrido ${payments.reconciliation.sweep} (capa payments): re-estampar
+// ${payments.record.awaitingSince} si sigue siendo el que se leyó, con una escritura condicional que confirma SOLA, antes de consultar a
+// la pasarela. No cambia el estado del agregado: lo arrienda. La enseña la skill keel-go-payments.`;
 }
 
 // ─── Los valores: dominio ↔ columna ──────────────────────────────────────────────────────────────

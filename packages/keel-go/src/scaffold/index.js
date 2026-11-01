@@ -9,6 +9,7 @@ import path from 'node:path';
 import { buildModel } from '@keel-system/keel-core/gen/model';
 import { materializeProject } from '@keel-system/keel-core/gen/materialize';
 import { resolveStack } from '@keel-system/keel-core/gen/stack';
+import { checkGatewaySupport } from '@keel-system/keel-core/gen/payment-gateways';
 import { listKeelDocs } from '@keel-system/keel-core/gen/keel-docs';
 import { derivedOpenapiFiles } from '@keel-system/keel-core/gen/openapi';
 import { packageVersion } from '../lib/assets.js';
@@ -123,6 +124,12 @@ const GENERATORS = [
  */
 export function planService({ manifest, layers, workspace, stack = null }) {
   const resolved = resolveStack(stack, layers);
+  // La pasarela elegida tiene que cubrir lo que el diseño exige (la matriz neutral de keel-core). Aquí y no solo en
+  // build, para que NINGÚN camino genere un adaptador a medias. La misma puerta que los otros tres.
+  if (resolved.paymentGateway) {
+    const { errors } = checkGatewaySupport(layers, resolved.paymentGateway);
+    if (errors.length > 0) throw new Error(errors.join('\n'));
+  }
   const model = buildModel({ manifest, layers, stack: resolved, projection: GO_PROJECTION });
   model.stack = resolved;
   // Contratos de /keel-docs presentes en el workspace: build los copia a docs/ del proyecto.

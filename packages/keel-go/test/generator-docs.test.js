@@ -35,6 +35,9 @@ const cognito = byPath(planWith('profile-directory', { stack: { auth: 'cognito' 
 const rabbit = byPath(planWith('stock-reservation-events', { stack: { broker: 'rabbitmq' } }).files);
 // SNS/SQS (tramo 9g): su conexión e infra/init-messaging.sh solo salen con ese broker.
 const sns = byPath(planWith('stock-reservation-events', { stack: { broker: 'snssqs' } }).files);
+// Los cobros (inc. 13c): el adaptador de cada pasarela solo sale con ella; Stripe es la del stack por defecto.
+const stripe = byPath(planWith('payment-checkout').files);
+const mercadopago = byPath(planWith('payment-checkout', { stack: { paymentGateway: 'mercadopago' } }).files);
 
 /** Todos los markdown de assets/ (agentes, guías, convenciones, skills), recursivo. */
 function assetSources(dir = assets) {
@@ -108,7 +111,7 @@ test('la skill de la base solo se instala con persistencia relacional, y la orqu
 // Las que llevan un marcador (`<entidad>_behavior.go`) son plantillas y no se miran.
 test('cada ruta internal/, cmd/, tests/ e infra/ que citan los assets existe en lo que emite build', () => {
   const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
-  const emitted = [...Object.keys(mysql), ...Object.keys(cognito), ...Object.keys(rabbit), ...Object.keys(sns), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path))];
+  const emitted = [...Object.keys(mysql), ...Object.keys(cognito), ...Object.keys(rabbit), ...Object.keys(sns), ...Object.keys(mercadopago), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path))];
   // Lo que escriben los agentes (las pruebas de flujo, con nombre de ejemplo).
   const agentWritten = /^tests\/integration\/\w+_test\.go$/;
   const missing = [];
@@ -469,4 +472,70 @@ test('lo que enseña la skill de SNS/SQS es lo emitido', () => {
   }
   // La topología que enseña es la que siembra el script.
   assert.match(find('infra/init-messaging.sh'), /create_queue_with_dlq 'stock-reservation-events-stock-reserved' 5 'stock-reservation-events-stock-reserved-dlq'/);
+});
+
+test('las skills de pagos se instalan con la capa, y la de la pasarela solo con ella', () => {
+  for (const harness of HARNESSES) {
+    for (const [emitted, own, other] of [[stripe, 'keel-go-stripe', 'keel-go-mercadopago'], [mercadopago, 'keel-go-mercadopago', 'keel-go-stripe']]) {
+      for (const skill of ['keel-go-payments', own]) {
+        assert.ok(harness.skillPath(skill, 'SKILL.md') in emitted, `${harness.id}: ${skill}`);
+        for (const reference of fs.readdirSync(path.join(assets, 'generators', 'go', 'skills', skill, 'references'))) {
+          assert.ok(harness.skillPath(skill, `references/${reference}`) in emitted, `${harness.id}: ${skill}/${reference}`);
+        }
+      }
+      assert.ok(!Object.keys(emitted).some((file) => file.includes(other)), `con ${own}, no ${other}`);
+    }
+  }
+  assert.ok(!Object.keys(files).some((file) => file.includes('keel-go-payments')), 'product-catalog no cobra');
+});
+
+test('lo que enseñan las skills de pagos es lo emitido: el arnés, los puertos, el aplicador y el reclamo', () => {
+  const dir = path.join(assets, 'generators', 'go', 'skills', 'keel-go-payments');
+  const skill = ['SKILL.md', ...fs.readdirSync(path.join(dir, 'references')).map((name) => `references/${name}`)]
+    .map((name) => fs.readFileSync(path.join(dir, name), 'utf8'))
+    .join('\n');
+  const joined = (prefix, suffix = '') =>
+    Object.entries(stripe)
+      .filter(([file]) => file.startsWith(prefix) && file.endsWith(suffix))
+      .map(([, text]) => text)
+      .join('\n');
+  const harness = joined('tests/integration/');
+  // Cada método del escenario que enseña existe, y también cada constante de llamada.
+  const taught = [...new Set([...skill.matchAll(/\bs\.([A-Z]\w*)\(/g)].map((match) => match[1]))];
+  assert.ok(taught.length >= 15, taught.join(', '));
+  for (const name of taught) assert.match(harness, new RegExp(`func \\(s \\*Scenario\\) ${name}\\(`), name);
+  const calls = [...new Set([...skill.matchAll(/\bCall[A-Z]\w*/g)].map((match) => match[0]))];
+  assert.ok(calls.length >= 8, calls.join(', '));
+  for (const call of calls) assert.match(harness, new RegExp(`^\\t${call} +GatewayCall = `, 'm'), call);
+  // Los símbolos de internal/domain que nombra.
+  const domain = joined('internal/domain/');
+  const symbols = [...new Set([...skill.matchAll(/\bdomain\.([A-Z]\w*)/g)].map((match) => match[1]))];
+  assert.ok(symbols.length >= 10, symbols.join(', '));
+  for (const symbol of symbols) assert.match(domain, new RegExp(`^(type|func|\\t)\\s*(\\([^)]*\\)\\s*)?${symbol}\\b`, 'm'), `domain.${symbol}`);
+  const outcomes = stripe['internal/application/payment_outcomes.go'];
+  for (const member of [
+    'func (a *PaymentOutcomeApplier) Apply(ctx context.Context, outcome domain.GatewayOutcome) error',
+    'func (r *PaymentReconciliation) StaleBefore(now time.Time) time.Time',
+    'func (r *PaymentReconciliation) BatchSize() int',
+    'func (r *PaymentReconciliation) Consult(ctx context.Context, reference, gatewayPaymentID string) (domain.GatewayStatus, error)'
+  ]) {
+    assert.ok(outcomes.includes(member), member);
+  }
+  // Los campos del handler que nombra son los que build le inyecta.
+  const handlers = joined('internal/application/', '_handler.go');
+  for (const field of ['paymentGateway domain.PaymentGateway', 'paymentOutcomes *PaymentOutcomeApplier', 'paymentReconciliation *PaymentReconciliation']) {
+    assert.ok(handlers.includes(field), field);
+  }
+  // El reclamo de ejemplo usa los ayudantes del adaptador emitido, y el sitio lo anuncian los dos archivos de consultas.
+  assert.match(stripe['internal/infrastructure/postgres/transactions.go'], /func \(t \*Transactions\) write\(ctx context\.Context, fn func\(DBTX\) error\) error/);
+  assert.match(stripe['internal/infrastructure/postgres/payment_repository.go'], /func \(r \*PaymentRepository\) load\(ctx context\.Context, where string, args \.\.\.any\)/);
+  assert.match(stripe['internal/infrastructure/postgres/values.go'], /func paymentStatusColumn\(value domain\.PaymentStatus\) string/);
+  assert.match(stripe['internal/domain/payment_queries.go'], /La única escritura que cabe aquí es el reclamo del barrido sweepPendingPayments/);
+  assert.match(stripe['internal/infrastructure/postgres/payment_queries.go'], /el reclamo del barrido de la capa payments, la única escritura de aquí/);
+  assert.doesNotMatch(stripe['internal/domain/saved_payment_method_queries.go'], /reclamo/, 'solo la raíz del registro');
+  // Las cabeceras de idempotencia que dicen las skills de cada pasarela.
+  assert.ok(stripe['internal/infrastructure/payment/stripe.go'].includes('"Idempotency-Key"'));
+  assert.ok(read('generators', 'go', 'skills', 'keel-go-stripe', 'SKILL.md').includes('request.Header("Idempotency-Key")'));
+  assert.ok(mercadopago['internal/infrastructure/payment/mercadopago.go'].includes('"X-Idempotency-Key"'));
+  assert.ok(read('generators', 'go', 'skills', 'keel-go-mercadopago', 'SKILL.md').includes('request.Header("X-Idempotency-Key")'));
 });

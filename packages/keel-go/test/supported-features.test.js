@@ -85,14 +85,19 @@ test('lo saliente que el 11b no genera se rechaza con su motivo: needs, oauth2, 
   assert.match(checkSupportedFeatures(sr.manifest, composite).errors.join('\n'), /refunded es un value object compuesto en el cuerpo o en la respuesta/);
 });
 
-// La capa mail entró con el 12e-b (adelantada del 13).
-for (const layer of ['storage', 'payments']) {
+// La capa mail entró con el 12e-b (adelantada del 13), y payments con el 13c.
+for (const layer of ['storage']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);
     assert.match(errors[0], new RegExp(`capa ${layer}: .*incremento \\d+`));
   });
 }
+
+test('capa payments: entra (incremento 13c), con su arnés y sus skills', () => {
+  const pc = loadService(path.join(FIXTURES_DIR, 'payment-checkout'));
+  assert.deepEqual(checkSupportedFeatures(pc.manifest, pc.layers).errors, []);
+});
 
 test('capa security: entra (incremento 8), resolvedBy también (12e-a); la clave de API, el alcance y una identidad que no es texto se rechazan con su motivo', () => {
   const manifest = manifestWith('domain', 'use-cases', 'api', 'security');
