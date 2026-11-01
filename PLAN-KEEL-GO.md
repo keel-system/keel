@@ -829,7 +829,7 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
     del diseño los pide). **Con esto el incremento 11 queda cerrado.**
 - **Inc. 11 — cerrado (2026-10-31).** `needs` (réplica, `onMiss`, `lastKnown`), `oauth2-client-credentials` y los
   compuestos en una llamada siguen rechazados hasta el incremento 13, como en keel-nest y keel-dotnet.
-- **Inc. 12 — en curso (abierto el 2026-10-31).** Tramos como los de keel-dotnet: 12b la persistencia documental, 12c los
+- **Inc. 12 — cerrado (2026-11-01; abierto el 2026-10-31).** Tramos como los de keel-dotnet: 12b la persistencia documental, 12c los
   almacenes sobre documentos, 12d el arnés y la skill, 12e-a `resolvedBy`, 12e-b la capa `mail` (adelantada del 13) y 12e
   la corrida sobre `notification-mailer-mongo` (decidido por el usuario el 2026-10-31: el par del MVP, con las tres
   gemelas para comparar la huella). El `go-check` entero se deja para el FINAL del incremento, una sola pasada.
@@ -902,10 +902,20 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       de su raíz»), pero ningún generador lo emite (los cuatro `TemplateVariableDto` y el OpenAPI neutral no lo tienen) y
       el dominio no lo declara; ninguna corrida había ejecutado aún la v2.1.0 del par. Corregido en la **v2.1.1**
       (`5b0628a9`): el Then afirma solo los campos de TemplateVariable, con resello acotado (la 2.1 ya gastó sus tres
-      pasadas). Para reanudar: llevar la v2.1.1 a `specs/` del workspace de la corrida, `--ready` en verde, y: `keel-go build --refresh --prune`, borrar
-      el `peers.go` del agente y relanzar `/keel-generate-go`.
-- **Para retomar:** la corrida 12e (`/keel-generate-go` en `services/notification-mailer-mongo-go`, sin argumentos) y su
-  registro en `docs/corridas/`, contra la huella 17 de las gemelas. Sin medir del 11: `RestartServer` y
+      pasadas).
+    - **La corrida, repetida en un espacio nuevo (2026-11-01)**: `spring-live-test/corrida-notification-mailer-mongo-go-1101`,
+      v2.1.1 y keel-go `a7d0d803`. **23/23** (una ronda de arbitraje, `culprit: test`), huella **15** (los 15 TODO
+      legítimos; las gemelas, 17 y 18 sobre la v2.0.2), sin parches de arnés. Registro:
+      `docs/corridas/2026-11-01-notification-mailer-mongo-go.md`. Dejó un hueco más del generador: una consulta de
+      negocio que el puerto no trae (la última versión de una plantilla) no tenía sitio, porque el puerto y el
+      adaptador llevan la cabecera; las gemelas la escriben ahí. **Arreglo**: `<raíz>_queries.go` del agente en
+      `internal/domain` (la interfaz `<Raíz>Queries`, que el puerto incrusta) y en el paquete del motor, enseñado por
+      `keel-go-database` y `keel-go-mongodb`, con el ejemplo de la doc compilado contra lo emitido en los dos modelos. Y
+      fuera de la huella, `logrus` fijado a v1.8.3 como `// indirect` (kind `pin` de `go-stack.js`; la vista del manifiesto
+      lo conserva solo con esa versión): raymond lo arrastraba con GO-2025-4188. **Con esto el inc. 12 queda cerrado.**
+- **Para retomar:** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
+  contexto nuevo y por tramos como los de keel-dotnet. Antes, `go-check` desde la terminal: los arreglos del 12e cambian
+  lo emitido de todas las fixtures con persistencia. Sin medir del 11: `RestartServer` y
   `HoldFromReconciliation` contra la infra real, y `harness-check --database=mysql` con la réplica. Las redes pesadas de
   una en una y con la máquina descargada. El hallazgo neutral de la collation de la sombra en MySQL espera su propia
   tarea en keel-core.
