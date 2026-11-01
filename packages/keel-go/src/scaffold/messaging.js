@@ -36,7 +36,7 @@ import { appType, declType, fieldImports, goFileName, layout, packageFile } from
 import { wireTag } from './dtos.js';
 import { componentChecks } from './endpoints.js';
 import { VALIDATION, patternsBlock } from './rest-support.js';
-import { messageType, operations, useCaseField } from './services.js';
+import { entryGateField, messageType, operations, useCaseField } from './services.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 const PRESENCE = new Set(['notNull', 'notBlank', 'notEmpty']);
@@ -1062,6 +1062,9 @@ function contractDoc(model, sub) {
                 : '<lo decide el agente: el mensaje no lo trae>';
       return `${goExported(a.component)}: ${value}`;
     });
+    // La puerta, si el mensaje la lleva (keel-core/gen/entry-gates.js): por aquí, la suscripción.
+    const gate = entryGateField(model, sub.trigger, 'SUBSCRIPTION');
+    if (gate) fields.push(gate);
     // Sin envoltura Keel no hay metadata de la que heredar la correlación: una nueva (el CorrelationContext.Open de
     // keel-dotnet con la de origen vacía).
     const inbound = sub.envelope === 'keel' ? 'messaging.Inbound(ctx, envelope.Metadata)' : 'correlation.WithID(ctx, correlation.Accept(""))';

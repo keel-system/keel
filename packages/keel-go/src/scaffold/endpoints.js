@@ -34,7 +34,7 @@ import { callerResolution } from './use-cases.js';
 export function resolvesCaller(model, operation) {
   return callerResolution(model) != null && messageComponents(operation, model).some((component) => component.resolvedIdentity);
 }
-import { componentType, isThreeState, messageComponents, messageType, operations, scaleRounding, useCaseField } from './services.js';
+import { componentType, entryGateConstant, entryGateField, isThreeState, messageComponents, messageType, operations, scaleRounding, useCaseField } from './services.js';
 
 // Los imports que puede usar un archivo de endpoints: goFile solo escribe los que el cuerpo usa.
 const ENDPOINT_IMPORTS = ['context', 'fmt', 'net/http', 'strings', 'internal/application', 'internal/domain', 'internal/platform/wire'];
@@ -130,6 +130,8 @@ function renderEndpoint(model, operation, plan) {
   // petición malformada es 400 sin tocar la base, como en keel-nest y keel-dotnet).
   const resolver = resolvesCaller(model, operation) ? ', a.useCases.ResolveCaller' : '';
   const lines = [`\t${variable}, err := ${readerName(operation)}(r${resolver})`, '\tif err != nil {', '\t\treturn err', '\t}'];
+  // La puerta, si el mensaje la lleva (keel-core/gen/entry-gates.js): por aquí entra siempre por HTTP, y no la elige el cliente.
+  if (entryGateField(model, operation.name, 'HTTP')) lines.push(`\t${variable}.EntryGate = application.${entryGateConstant('HTTP')}`);
   if (operation.responseDto) {
     lines.push(`\tresponse, err := ${call}`, '\tif err != nil {', '\t\treturn err', '\t}');
     if (returnsLocation(model, operation)) {

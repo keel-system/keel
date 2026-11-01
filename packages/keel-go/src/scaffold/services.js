@@ -13,7 +13,7 @@
 // que keel-go todavía no genera (el repositorio, la idempotencia, el correo, los clientes salientes) llega con su
 // incremento: el handler de hoy solo recibe lo que existe.
 
-import { dispatchNote, scheduleDispatch } from '@keel-system/keel-core/gen';
+import { ENTRY_GATES, carriesEntryGate, dispatchNote, entryGateNote, scheduleDispatch, usesEntryGate } from '@keel-system/keel-core/gen';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
@@ -39,7 +39,140 @@ export function generate(model) {
     files.push(renderMessage(model, operation));
     files.push(renderHandler(model, operation));
   }
+  if (usesEntryGate(model)) files.push(...entryGateFiles(model));
   return files;
+}
+
+/** La constante Go de una puerta de keel-core (`HTTP` → `EntryGateHTTP`, `SUBSCRIPTION` → `EntryGateSubscription`). */
+export function entryGateConstant(gate) {
+  return gate === 'HTTP' ? 'EntryGateHTTP' : `EntryGate${gate[0]}${gate.slice(1).toLowerCase()}`;
+}
+
+/**
+ * El campo de la puerta en el literal de un mensaje (`EntryGate: application.EntryGateSubscription`), o null si el mensaje
+ * de esa operación no la lleva. La usan el reloj y la nota de la suscripción.
+ */
+export function entryGateField(model, operationName, gate, prefix = 'application.') {
+  const operation = operations(model).find((candidate) => candidate.name === operationName);
+  return operation && carriesEntryGate(model, operation) ? `EntryGate: ${prefix}${entryGateConstant(gate)}` : null;
+}
+
+/**
+ * El handler de una operación que lleva su puerta, envuelto con `requireEntryGate`. En los otros tres el campo es
+ * obligatorio al construir el mensaje y quien no lo dice no compila; Go no exige un campo en un literal, así que es el
+ * despacho el que se niega a ejecutar un mensaje sin puerta, en voz alta.
+ */
+export function entryGateGuard(model, operation, handler) {
+  if (!carriesEntryGate(model, operation)) return handler;
+  const wrapper = contractOf(operation).kind === 'KindCommand' ? 'requireEntryGateCommand' : 'requireEntryGate';
+  return `${wrapper}(${goString(operation.name)}, func(m ${messageType(operation)}) EntryGate { return m.EntryGate }, ${handler})`;
+}
+
+const ENTRY_GATE_DOCS = {
+  HTTP: 'llegó por su endpoint, la única puerta que responde un error a quien llamó',
+  SUBSCRIPTION: 'llegó por una suscripción a un mensaje',
+  DISPATCH: 'la despachó otro caso de uso (use-cases.dispatches)',
+  SCHEDULE: 'la disparó el reloj'
+};
+
+function entryGateFiles(model) {
+  const { application } = layout(model);
+  const carrying = operations(model).filter((operation) => carriesEntryGate(model, operation));
+  const commands = carrying.some((operation) => contractOf(operation).kind === 'KindCommand');
+  const returning = carrying.some((operation) => contractOf(operation).kind !== 'KindCommand');
+  const constants = ENTRY_GATES.flatMap((gate) => [
+    { text: `\t// ${entryGateConstant(gate)}: ${ENTRY_GATE_DOCS[gate]}.` },
+    { indent: '\t', cells: [entryGateConstant(gate), 'EntryGate', `= ${goString(gate)}`] }
+  ]);
+  const wrappers = [];
+  const tests = [];
+  if (returning) {
+    wrappers.push(`// requireEntryGate envuelve el caso de uso de una operación que entra por HTTP y por otra puerta: un mensaje que no dice
+// por cuál llegó no se despacha. En los otros tres generadores el campo es obligatorio y quien construye el mensaje sin
+// él no compila; Go no exige un campo en un literal, así que falla aquí, en voz alta, en vez de decidir sin la puerta.
+func requireEntryGate[M, R any](operation string, gate func(M) EntryGate, next Handler[M, R]) Handler[M, R] {
+	return HandlerFunc[M, R](func(ctx context.Context, msg M) (R, error) {
+		if err := gate(msg).check(operation); err != nil {
+			var zero R
+			return zero, err
+		}
+		return next.Handle(ctx, msg)
+	})
+}`);
+    tests.push(`func TestRequireEntryGateRechazaUnMensajeSinPuerta(t *testing.T) {
+	reached := false
+	handler := requireEntryGate("probe", func(gate EntryGate) EntryGate { return gate }, HandlerFunc[EntryGate, string](func(context.Context, EntryGate) (string, error) {
+		reached = true
+		return "ok", nil
+	}))
+	if _, err := handler.Handle(t.Context(), ""); err == nil || !strings.Contains(err.Error(), "probe") {
+		t.Fatalf("un mensaje sin puerta se despachó: %v", err)
+	}
+	if reached {
+		t.Fatal("un mensaje sin puerta llegó al handler")
+	}
+	if got, err := handler.Handle(t.Context(), EntryGateHTTP); err != nil || got != "ok" {
+		t.Fatalf("con su puerta = %q, %v; quería ok", got, err)
+	}
+}`);
+  }
+  if (commands) {
+    wrappers.push(`// requireEntryGateCommand es requireEntryGate para un comando sin resultado.
+func requireEntryGateCommand[M any](operation string, gate func(M) EntryGate, next CommandHandler[M]) CommandHandler[M] {
+	return CommandHandlerFunc[M](func(ctx context.Context, cmd M) error {
+		if err := gate(cmd).check(operation); err != nil {
+			return err
+		}
+		return next.Handle(ctx, cmd)
+	})
+}`);
+    tests.push(`func TestRequireEntryGateCommandRechazaUnMensajeSinPuerta(t *testing.T) {
+	reached := false
+	handler := requireEntryGateCommand("probe", func(gate EntryGate) EntryGate { return gate }, CommandHandlerFunc[EntryGate](func(context.Context, EntryGate) error {
+		reached = true
+		return nil
+	}))
+	if err := handler.Handle(t.Context(), "SIDEWAYS"); err == nil || !strings.Contains(err.Error(), "probe") || reached {
+		t.Fatalf("un mensaje con una puerta que no existe se despachó: %v", err)
+	}
+	if err := handler.Handle(t.Context(), EntryGateSubscription); err != nil {
+		t.Fatalf("con su puerta: %v", err)
+	}
+}`);
+  }
+  const body = `
+// EntryGate es la puerta por la que llegó el mensaje de una operación que entra por HTTP y por alguna otra (una
+// suscripción, un despacho, el reloj). HTTP es la única que puede responder un error a quien llamó: por las demás nadie
+// espera la respuesta, y lo que por HTTP es un 422 tiene que quedar en el estado. Las reglas del diseño que distinguen
+// las puertas («por HTTP…», «por la suscripción…») se deciden con ella, nunca deduciéndola de otra cosa. La fija quien
+// construye el mensaje: el endpoint generado pone EntryGateHTTP; la suscripción, el despacho y el reloj, la suya.
+type EntryGate string
+
+const (
+${alignRows(constants).join('\n')}
+)
+
+// check devuelve un error si g no es una de las puertas: el mensaje se construyó sin decirla.
+func (g EntryGate) check(operation string) error {
+	switch g {
+	case ${ENTRY_GATES.map(entryGateConstant).join(', ')}:
+		return nil
+	}
+	return fmt.Errorf("%s: el mensaje no dice por qué puerta llegó (EntryGate %q)", operation, string(g))
+}
+
+${wrappers.join('\n\n')}
+`;
+  const test = `
+// Un mensaje sin su puerta no llega al handler: la envoltura lo rechaza nombrando la operación.
+
+${tests.join('\n\n')}
+`;
+  const path = applicationPath(model, 'EntryGate');
+  return [
+    { path, content: packageFile(model, application, { imports: ['context', 'fmt'], body }) },
+    { path: path.replace(/\.go$/, '_test.go'), content: packageFile(model, application, { imports: ['context', 'strings', 'testing'], body: test }) }
+  ];
 }
 
 /** Las operaciones del diseño, en orden. */
@@ -172,6 +305,12 @@ function renderMessage(model, operation) {
     const type = componentType(operation, component);
     rows.push({ indent: '\t', cells: [goExported(component.name), type, type.startsWith('wire.Optional[') ? tag.replace(/"`$/, ',omitzero"`') : tag] });
   }
+  // La puerta por la que llegó (keel-core/gen/entry-gates.js). No viaja en el cuerpo: un cliente elegiría por dónde entra.
+  if (carriesEntryGate(model, operation)) {
+    const doc = 'La puerta por la que llegó este mensaje: la fija quien lo construye (el endpoint generado pone\nEntryGateHTTP), nunca el cliente. Un mensaje sin ella no se despacha.';
+    rows.push(...commentLines(doc, '\t').map((text) => ({ text })));
+    rows.push({ indent: '\t', cells: ['EntryGate', 'EntryGate', '`json:"-"`'] });
+  }
   const struct = rows.length > 0 ? `struct {\n${alignRows(rows).join('\n')}\n}` : 'struct{}';
   const parts = [`${docComment(name, operation.description, `el mensaje de ${operation.name}`)}type ${name} ${struct}`];
   const rounding = components.map((component) => scaleRounding(operation, component)).filter(Boolean);
@@ -261,6 +400,8 @@ function handlerNotes(model, operation) {
     withoutTransaction: 'WithoutTransaction(ctx) como contexto del despacho'
   });
   if (dispatch) notes.push(dispatch);
+  const gate = entryGateNote(model, operation, { read: `${operation.messageKind === 'query' ? 'query' : 'cmd'}.EntryGate`, value: entryGateConstant });
+  if (gate) notes.push(gate);
   // La búsqueda con finder (DSL 2.22) ya aplica sus filtros, plegado incluido: su nota sustituye a las de los filtros de texto.
   const finder = operation.finder;
   const entity = finder && model.entities.find((candidate) => candidate.name === finder.entity);

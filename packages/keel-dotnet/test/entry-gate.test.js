@@ -1,7 +1,7 @@
-// La puerta por la que entra una operación (keel-core/gen/entry-gates.js), en los TRES generadores: el mensaje de una
+// La puerta por la que entra una operación (keel-core/gen/entry-gates.js), en los CUATRO generadores: el mensaje de una
 // operación que entra por HTTP y por alguna otra lleva `entryGate`, obligatorio, que el endpoint fija a HTTP y que la nota
 // de la suscripción dicta con su valor. Sin ella, cinco corridas de payment-checkout resolvieron `requestCharge` a mano de
-// cinco formas. Aquí vive la comparación de los tres porque keel-core no importa de los generadores.
+// cinco formas. Aquí vive la comparación de los cuatro porque keel-core no importa de los generadores.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,6 +10,7 @@ import { loadService } from '@keel-system/keel-core';
 import { planService as planDotnet } from '../src/scaffold/index.js';
 import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
+import { planService as planGo } from '../../keel-go/src/scaffold/index.js';
 import { FIXTURES_DIR, fixtureNames, variantStack } from './helpers/workspace.js';
 
 const plan = (generator, name) => {
@@ -18,7 +19,7 @@ const plan = (generator, name) => {
 };
 const content = (files, suffix) => files.find((file) => file.path.endsWith(suffix))?.content ?? '';
 
-test('requestCharge (payment-checkout) lleva su puerta en los tres, la fija el endpoint y la dicta la suscripción', () => {
+test('requestCharge (payment-checkout) lleva su puerta en los cuatro, la fija el endpoint y la dicta la suscripción', () => {
   const dotnet = plan(planDotnet, 'payment-checkout');
   assert.match(content(dotnet, 'Abstractions/EntryGate.cs'), /public enum EntryGate\s*\{\s*Http,\s*Subscription,\s*Dispatch,\s*Schedule,/);
   assert.match(content(dotnet, 'Commands/RequestChargeCommand.cs'), /public required EntryGate EntryGate \{ get; init; \}/);
@@ -40,18 +41,31 @@ test('requestCharge (payment-checkout) lleva su puerta en los tres, la fija el e
   assert.match(content(spring, 'PaymentV1Controller.java'), /new RequestChargeCommand\([\s\S]*?command\.paymentMethodRef\(\),\s*EntryGate\.HTTP\)\)/);
   assert.match(content(spring, 'ChargeRequestedMessage.java'), /paymentMethodRef = payload\.paymentMethodRef\(\), entryGate = EntryGate\.SUBSCRIPTION\)/);
   assert.match(content(spring, 'RequestChargeCommandHandler.java'), /entra por HTTP y por EntryGate\.SUBSCRIPTION \(ChargeRequested\): command\.entryGate\(\)/);
+
+  // En keel-go el mensaje ES el cuerpo, como en keel-spring: `json:"-"`. Y como Go no exige un campo en un literal, el
+  // despacho se niega a ejecutar un mensaje sin su puerta (requireEntryGate).
+  const go = plan(planGo, 'payment-checkout');
+  assert.match(content(go, 'application/entry_gate.go'), /EntryGateHTTP\s+EntryGate = "HTTP"[\s\S]*EntryGateSubscription\s+EntryGate = "SUBSCRIPTION"[\s\S]*EntryGateDispatch\s+EntryGate = "DISPATCH"[\s\S]*EntryGateSchedule\s+EntryGate = "SCHEDULE"/);
+  assert.match(content(go, 'application/request_charge_command.go'), /\tEntryGate EntryGate `json:"-"`\n\}/);
+  assert.match(content(go, 'application/use_cases.go'), /uc\.RequestCharge = observe\([^\n]*requireEntryGate\("requestCharge", func\(m RequestChargeCommand\) EntryGate \{ return m\.EntryGate \}, NewRequestChargeCommandHandler\(/);
+  const goApi = go.filter((file) => file.path.startsWith('internal/httpapi/')).map((file) => file.content).join('\n');
+  assert.match(goApi, /\tcmd\.EntryGate = application\.EntryGateHTTP\n/);
+  assert.match(go.map((file) => file.content).join('\n'), /PaymentMethodRef: \*message\.PaymentMethodRef, EntryGate:\n\/\/ application\.EntryGateSubscription\}\)/);
+  assert.match(content(go, 'application/request_charge_command_handler.go'), /entra por HTTP y por EntryGateSubscription \(ChargeRequested\): cmd\.EntryGate/);
 });
 
-test('las mismas operaciones llevan su puerta en los tres, y solo esas: hoy requestCharge, no quarantineAsset', () => {
+test('las mismas operaciones llevan su puerta en los cuatro, y solo esas: hoy requestCharge, no quarantineAsset', () => {
   for (const name of fixtureNames()) {
     const carrying = {
       dotnet: plan(planDotnet, name).filter((file) => /public required EntryGate EntryGate/.test(file.content)).map((file) => path.basename(file.path, '.cs')),
       nest: plan(planNest, name).filter((file) => /readonly entryGate: EntryGate;/.test(file.content) && file.path.includes('/commands/')).map((file) => path.basename(file.path, '.ts')),
-      spring: plan(planSpring, name).filter((file) => /@JsonIgnore EntryGate entryGate/.test(file.content)).map((file) => path.basename(file.path, '.java'))
+      spring: plan(planSpring, name).filter((file) => /@JsonIgnore EntryGate entryGate/.test(file.content)).map((file) => path.basename(file.path, '.java')),
+      go: plan(planGo, name).filter((file) => /\tEntryGate EntryGate `json:"-"`/.test(file.content)).map((file) => path.basename(file.path, '.go'))
     };
     const expected = name === 'payment-checkout' ? ['RequestChargeCommand'] : [];
     assert.deepEqual(carrying.dotnet, expected, `${name} (keel-dotnet)`);
     assert.deepEqual(carrying.spring, expected, `${name} (keel-spring)`);
     assert.deepEqual(carrying.nest, expected.map(() => 'request-charge-command'), `${name} (keel-nest)`);
+    assert.deepEqual(carrying.go, expected.map(() => 'request_charge_command'), `${name} (keel-go)`);
   }
 });

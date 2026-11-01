@@ -1000,10 +1000,28 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       firma con el secreto bueno: cae solo la del aviso); `initial-state` sigue cayendo en su sonda y deja verdes las de
       pagos. A mano, sobre las dos variantes: gofmt, `go vet -tags integration` y staticcheck vacíos. `npm test` de
       keel-go **969/969**.
-- **Para retomar:** el **13d** en un contexto nuevo: preparar la corrida `payment-checkout` con Stripe y con MercadoPago
-  en `spring-live-test/` (build sin `--accept-unready`: la fixture está lista), como las de keel-nest y keel-dotnet
-  (`docs/corridas/*payment-checkout*`), y lanzar el pipeline en otra sesión. Lo que vigilar: el reclamo del barrido en
-  `payment_queries.go` (es lo nuevo de Go) y `payment_outcome_choices.go` (cancelReason). Después, 13e (caché).
+  - **13d, las corridas `payment-checkout` (hechas, 2026-11-01).** Dos workspaces en `spring-live-test/`:
+    `corrida-payment-checkout-stripe-go` y `corrida-payment-checkout-mercadopago-go` (`keel init`, la fixture
+    `payment-checkout` v1.2.0 con su `DESIGN.md`, `keel validate --ready` en verde y `keel-go build` sin
+    `--accept-unready` sobre `keel-stack.json` sembrado: `postgresql · rabbitmq · keycloak · <pasarela>`, sin
+    telemetría). Generador `87457af1`: **274 archivos** en cada una, con el aviso esperado de `cancelReason`
+    (CHK-PAYMENTS-OUTCOME-INPUT-UNBACKED). Sobre copias, para no tocar la huella: `go mod tidy` sin mover ninguno de los 8
+    directos, gofmt, `go vet` y staticcheck vacíos (con y sin `-tags integration`), `go build` sin cgo, `go test ./...`
+    en verde, y `check-idempotency.sh` en ROJO con sus hallazgos del agente (eventos de dominio y `OutboxDispatcher`).
+    - **Hechas (2026-11-01): 25/25 a la primera con las dos pasarelas, huella 20 y 20**, los mismos archivos y la misma
+      clasificación (18 TODO · 2 consulta) que las gemelas; sin arbitraje, sin `harnessPatches` ni archivos del
+      generador (`docs/corridas/2026-11-01-payment-checkout-{stripe,mercadopago}-go.md`). El reclamo del barrido en los
+      dos `payment_queries.go` y el `cancelReason` en `payment_outcome_choices.go`, como enseña la skill.
+    - **Un hueco del generador, el mismo en las dos**: keel-go no emitía la puerta por la que entra una operación
+      (`keel-core/gen/entry-gates.js`, que los otros tres tienen desde `2b7c60e5`), y los dos agentes la reinventaron con
+      un marcador de contexto. Arreglado: `internal/application/entry_gate.go` (tipo, constantes y `requireEntryGate`, la
+      envoltura con la que `NewUseCases` se niega a despachar un mensaje sin puerta, porque Go no exige el campo en un
+      literal; prueba emitida `entry_gate_test.go`), el campo con `json:"-"`, el endpoint que lo fija a HTTP, el reloj y
+      las notas del handler y de la suscripción. Lo compara `keel-dotnet/test/entry-gate.test.js`, ahora a cuatro.
+    - **El `designGap` `payments-cancel-reason`** (la anulación rechazada por caducidad llega como `GatewayCanceled`), ya
+      en dos generadores: es de la capa `payments`, para su próxima minor.
+- **Para retomar:** el **13e** (caché) en un contexto nuevo, por tramos como los de keel-dotnet (13f caché, 13g storage,
+  13h autoría).
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y

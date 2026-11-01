@@ -19,7 +19,7 @@ import { frameworkSentinels, sentinelOf } from './errors.js';
 import { IDEMPOTENCY_STORE, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
 import { applicationPath, layout, packageFile } from './render.js';
 import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity, usesRoleCheck } from './security.js';
-import { contractOf, handlerType, messageType, operations, useCaseField } from './services.js';
+import { contractOf, entryGateGuard, handlerType, messageType, operations, useCaseField } from './services.js';
 import { repositoryOf, repositoryRoots, usesPersistence } from '@keel-system/keel-core/gen/features';
 import { goExported } from '../lib/go-projection.js';
 import { credentialFinders, portName, repositoryParam } from './repositories.js';
@@ -317,7 +317,7 @@ function useCasesBody(model, ops) {
   }
   const wiring = ops.map((operation) => {
     const contract = contractOf(operation);
-    const handler = `New${handlerType(operation)}(${handlerArgs(model, operation).join(', ')})`;
+    const handler = entryGateGuard(model, operation, `New${handlerType(operation)}(${handlerArgs(model, operation).join(', ')})`);
     const name = goString(messageType(operation));
     return contract.kind === 'KindCommand'
       ? `\tuc.${useCaseField(operation)} = observeCommand(logger, tx, ${name}, ${handler})`

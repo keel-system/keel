@@ -21,7 +21,7 @@ import { BATCHED_PURGE, batchedPurgeParameters, scheduleCron, scheduleDispatch, 
 import { IDEMPOTENCY_RECORD_PURGE } from '@keel-system/keel-core/gen/request-idempotency';
 import { alignRows, commentLines, goString } from '../lib/go-source.js';
 import { goFileName, layout, packageFile } from './render.js';
-import { contractOf, messageComponents, messageType, useCaseField } from './services.js';
+import { contractOf, entryGateField, messageComponents, messageType, useCaseField } from './services.js';
 import { usesCorrelation } from './correlation.js';
 import { usesDependencies } from './use-cases.js';
 import { PURGE_CASES, PURGE_CASES_CUTOFF, tablePurges, usesTablePurges } from './purge.js';
@@ -487,7 +487,8 @@ function tasksBody(model, service, operations) {
       wrapComment(`Cron del diseño: ${operation.schedule.cron} (build añade el segundo de arranque). ${note}`)
     ].join('\n');
     const ctx = mode.withoutTransaction ? 'application.WithoutTransaction(ctx)' : 'ctx';
-    const call = `uc.${useCaseField(operation)}.Handle(${ctx}, application.${messageType(operation)}{})`;
+    const gate = entryGateField(model, operation.name, 'SCHEDULE');
+    const call = `uc.${useCaseField(operation)}.Handle(${ctx}, application.${messageType(operation)}{${gate ?? ''}})`;
     const body = contractOf(operation).result ? `\t\t_, err := ${call}\n\t\treturn err` : `\t\treturn ${call}`;
     return `${doc}
 func ${dispatchFunc(operation)}(uc *application.UseCases) func(context.Context) error {
