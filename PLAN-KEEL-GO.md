@@ -876,6 +876,20 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
     staticcheck (con y sin `integration`) vacíos, build sin cgo, `go test ./...` en verde, `check-idempotency.sh` ROJO en
     las siete familias con trabajo del agente, y el humo del arnés **7/7** contra la `infra/` real (con el realm sembrado
     por `init-keycloak.sh`, que es del agente de infraestructura). Falta lanzar `/keel-generate-go` en el proyecto.
+    - **Primer intento, parado en la fase 1 (2026-11-01)** por dos defectos del generador, que no del diseño (las tres
+      gemelas cerraron 23/23 con él): `NewUseCases` es de build, así que lo que no le pase a un handler el agente no lo
+      alcanza, y le pasaba solo el repositorio de SU agregado (requestNotification no podía leer la aplicación ni la
+      plantilla) y `uc` solo a quien declara `dispatches` (el barrido no podía despachar `sendAcceptedNotification`,
+      interna y huérfana). En los otros tres la inyección de dependencias le da cualquier repositorio y el
+      `CommandDispatcher`. El agente lo rodeó con un `peers.go` sin cablear. **Arreglo**: `handlerDependencies` en
+      `src/scaffold/use-cases.js`, fuente única del handler y de su cableado: los repositorios de TODOS los agregados (el
+      suyo primero), el renderizador a toda operación si hay plantillas, y `uc` a todo handler salvo la huérfana si
+      `orphanInternalOperations` no está vacía. Medido en `test/application.test.js` (dos casos nuevos, falsados con
+      cuatro sabotajes, cada uno en rojo en exactamente su caso). De paso, `go-check` destapó un defecto latente de
+      `rabbitmq.js`: sin `onFailure.retry` emitía `retry = nil` en el bloque `var`, que no compila (inspection-reports con
+      RabbitMQ); ahora `retry *ListenerRetry`, y `test/messaging.test.js` dejó de fijar la forma rota. `npm test` de keel-go
+      952/952 y `go-check --no-race` **123/123**. Para reanudar: `keel-go build --refresh --prune`, borrar
+      el `peers.go` del agente y relanzar `/keel-generate-go`.
 - **Para retomar:** la corrida 12e (`/keel-generate-go` en `services/notification-mailer-mongo-go`, sin argumentos) y su
   registro en `docs/corridas/`, contra la huella 17 de las gemelas. Sin medir del 11: `RestartServer` y
   `HoldFromReconciliation` contra la infra real, y `harness-check --database=mysql` con la réplica. Las redes pesadas de

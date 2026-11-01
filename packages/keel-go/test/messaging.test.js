@@ -266,7 +266,9 @@ test('el reintento del listener es el de keel-core (rabbitListenerRetry), y sin 
     const go = content(files, `${RABBIT}/topology.go`);
     const retry = rabbitListenerRetry(model);
     if (!retry) {
-      assert.match(go, /\tretry = nil\n/, name);
+      // El valor cero tipado: `retry = nil` es nil sin tipo en una declaración y no compila (go-check, 2026-11-01).
+      assert.match(go, /\tretry \*ListenerRetry\n/, name);
+      assert.doesNotMatch(go, /\tretry = nil\n/, name);
       continue;
     }
     const multiplier = Number.isInteger(retry.multiplier) ? `${retry.multiplier}\\.0` : String(retry.multiplier).replace('.', '\\.');

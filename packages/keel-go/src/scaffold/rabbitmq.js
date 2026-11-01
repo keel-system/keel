@@ -82,9 +82,10 @@ function topologyBody(model) {
   });
   const channels = published.map((entry) => `\t{Channel: ${goString(entry.channel)}, Events: ${goStrings(entry.events)}},`);
   const multiplier = Number.isInteger(retry?.multiplier) ? `${retry.multiplier}.0` : retry?.multiplier;
-  const retryLiteral = retry
-    ? `&ListenerRetry{Attempts: ${retry.attempts}, Initial: ${retry.initialMs} * time.Millisecond, Multiplier: ${multiplier}${retry.maxDelayMs != null ? `, MaxDelay: ${retry.maxDelayMs} * time.Millisecond` : ''}}`
-    : 'nil';
+  // Sin reintento declarado, el valor cero tipado: `retry = nil` no compila (nil sin tipo en una declaración).
+  const retryDeclaration = retry
+    ? `retry = &ListenerRetry{Attempts: ${retry.attempts}, Initial: ${retry.initialMs} * time.Millisecond, Multiplier: ${multiplier}${retry.maxDelayMs != null ? `, MaxDelay: ${retry.maxDelayMs} * time.Millisecond` : ''}}`
+    : 'retry *ListenerRetry';
   // Dentro del bloque `var (…)`: las filas un nivel más adentro y la llave de cierre al de la declaración (gofmt).
   const list = (rows, type) => (rows.length === 0 ? `[]${type}{}` : `[]${type}{\n${rows.map((row) => `\t${row}`).join('\n')}\n\t}`);
   return `
@@ -137,7 +138,7 @@ var (
 
 	// El reintento ${retry ? `que declaran ${retry.subscriptions.join(', ')}` : 'de las suscripciones: ninguna lo declara, así que un fallo va al descarte al primer intento'}. Uno para todo el
 	// contenedor, como en keel-spring: con varias políticas gana la más paciente.
-	retry = ${retryLiteral}
+	${retryDeclaration}
 )
 
 // Queues es la topología de consumo, una entrada por cola.

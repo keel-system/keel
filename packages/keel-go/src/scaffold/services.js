@@ -18,19 +18,19 @@ import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
-import { isPartialUpdate, repositoryOf, repositoryRoots } from '@keel-system/keel-core/gen/features';
-import { portName, repositoryParam } from './repositories.js';
-import { usesDependencies } from './use-cases.js';
+import { isPartialUpdate, repositoryRoots } from '@keel-system/keel-core/gen/features';
+import { repositoryParam } from './repositories.js';
+import { handlerDependencies, usesDependencies } from './use-cases.js';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, commentLines, goString } from '../lib/go-source.js';
 import { dataImports, wireTag } from './dtos.js';
 import { sentinelOf } from './errors.js';
-import { IDEMPOTENCY_STORE, idempotencyMethods, idempotencyNotes, usesRegistry } from './request-idempotency.js';
+import { idempotencyMethods, idempotencyNotes } from './request-idempotency.js';
 import { appType, applicationPath, docComment, domainPath, goFileName, goTypeName, isOptional, layout, packageFile } from './render.js';
 import { ownershipNotes } from '@keel-system/keel-core/gen/ownership';
 import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity } from './security.js';
-import { activationClients, callMethod, clientParam, clientPort, usesGoHttpClients } from './http-clients.js';
-import { MAIL_SENDER, mailDependencies, mailNote } from './mail.js';
+import { callMethod, clientParam, usesGoHttpClients } from './http-clients.js';
+import { mailNote } from './mail.js';
 
 export function generate(model) {
   const files = [];
@@ -218,31 +218,8 @@ function renderHandler(model, operation) {
   const name = handlerType(operation);
   const contract = contractOf(operation);
   const message = messageType(operation);
-  const dispatches = (operation.dispatches ?? []).length > 0;
-  // El despacho de otro caso de uso (use-cases.dispatches, DSL 2.21): recibe los casos de uso del servicio, ya
-  // envueltos con su log de frontera, y despacha por ellos. Nunca a un handler directamente.
-  // El repositorio del agregado de la operación (el de su raíz si opera sobre una hija): sin él, el agente tendría que
-  // inventarse cómo llegar a la persistencia.
-  const root = usesDependencies(model) ? repositoryOf(model, operation) : null;
-  const deps = [];
-  if (root) deps.push({ name: repositoryParam(root), type: `domain.${portName(root)}`, doc: `${repositoryParam(root)} es el repositorio del agregado ${root.name}.` });
-  if (usesRegistry(model, operation)) {
-    deps.push({ name: IDEMPOTENCY_STORE.param, type: IDEMPOTENCY_STORE.port, doc: `${IDEMPOTENCY_STORE.param} es el registro de idempotencia de la operación (idempotency del diseño).` });
-  }
-  if (usesDependencies(model) && roleCheckedOperation(model, operation)) {
-    deps.push({ name: CALLER_ROLES.param, type: CALLER_ROLES.port, doc: `${CALLER_ROLES.param} dice los roles del llamante: los exentos de la regla de propiedad (security.ownership).` });
-  }
-  // El trabajo que el diseño le atribuye a esta operación en otro servidor (dependencies.activations, por triggeredBy):
-  // el puerto del cliente se inyecta, o el camino de menor resistencia es no llamarlo.
-  for (const client of activationClients(model, operation)) {
-    deps.push({ name: clientParam(client), type: `domain.${clientPort(client)}`, doc: `${clientParam(client)} es el cliente saliente ${client.id} (http-clients), con su resiliencia ya puesta.` });
-  }
-  // La salida por correo (mail.sentBy es el único enlace del DSL entre un caso de uso y el correo): sin el puerto delante,
-  // el camino de menor resistencia es no mandarlo, y no lo detecta nada.
-  for (const port of mailDependencies(model, operation)) {
-    deps.push({ name: port.param, type: port.port, doc: `${port.param} es ${port === MAIL_SENDER ? 'la salida de correo (mail.sentBy): el adaptador SMTP ya escrito' : 'el renderizador de las plantillas del correo, ya escrito'}.` });
-  }
-  if (dispatches) deps.push({ name: 'useCases', type: '*UseCases', doc: 'useCases despacha las operaciones que esta declara en use-cases.dispatches.' });
+  // Lo que recibe el handler y con qué lo cablea NewUseCases: una sola fuente (use-cases.js).
+  const deps = handlerDependencies(model, operation);
   const fields = deps.length > 0
     ? `\n${deps
         .map((dep) => `\t// ${dep.doc}\n\t//\n\t//lint:ignore U1000 lo usa la lógica que escribe el agente (el TODO de Handle).\n\t${dep.name} ${dep.type}\n`)

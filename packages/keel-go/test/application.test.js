@@ -158,6 +158,15 @@ test('las notas del diseño van en el handler: precondiciones, errores con su ce
   assert.match(mailer.files.find((file) => file.path.endsWith(`/${fileOf(handlerType(emitting))}.go`)).content, /Emite: \w+ — lo hace \w+ con raise\(New\w+Event\(/);
 });
 
+// Los argumentos de la llamada a New<Handler>(...) en un texto: los de NewUseCases o los parámetros del handler.
+const ctorArgs = (text, operation) => {
+  const head = `New${handlerType(operation)}(`;
+  const at = text.indexOf(head);
+  if (at < 0) return null;
+  const inner = text.slice(at + head.length, text.indexOf(')', at));
+  return inner === '' ? [] : inner.split(', ');
+};
+
 test('el despacho entre casos de uso: el handler que despacha recibe UseCases y la nota nombra el campo por el que va', () => {
   const { model, files } = plans.get('asset-vault');
   const dispatching = operations(model).filter((op) => (op.dispatches ?? []).length > 0);
@@ -165,7 +174,7 @@ test('el despacho entre casos de uso: el handler que despacha recibe UseCases y 
   for (const operation of dispatching) {
     const handler = files.find((file) => file.path.endsWith(`/${fileOf(handlerType(operation))}.go`)).content;
     assert.match(handler, /^\tuseCases \*UseCases$/m);
-    assert.match(handler, new RegExp(`func New${handlerType(operation)}\\(useCases \\*UseCases\\)`));
+    assert.equal(ctorArgs(handler, operation).at(-1), 'useCases *UseCases');
     for (const target of operation.dispatches) {
       const invoked = operations(model).find((op) => op.name === target);
       // La nota va partida en líneas de comentario: se compara con el texto seguido.
@@ -173,8 +182,46 @@ test('el despacho entre casos de uso: el handler que despacha recibe UseCases y 
       assert.ok(notes.includes(`h.useCases.${useCaseField(invoked)}.Handle(ctx, ${messageType(invoked)}{...})`), handler);
     }
     assert.doesNotMatch(handler, /CommandDispatcher|dispatchWithoutTransaction/, 'la nota nombra un puerto que keel-go no tiene');
-    assert.ok(app(files, 'use_cases').includes(`New${handlerType(operation)}(uc)`));
+    assert.equal(ctorArgs(app(files, 'use_cases'), operation).at(-1), 'uc');
   }
+});
+
+// Corrida 12e (2026-11-01): NewUseCases es de build, así que lo que no le pase a un handler el agente no lo alcanza. En
+// los otros tres la inyección de dependencias le da cualquier repositorio y el CommandDispatcher; aquí no había forma de
+// consultar otro agregado (requestNotification: la aplicación y la plantilla) ni de despachar una operación huérfana
+// (queueAcceptedNotifications → sendAcceptedNotification).
+test('cada handler recibe los repositorios de todos los agregados, el suyo primero, y el renderizador si hay plantillas', () => {
+  const { model, files } = plans.get('notification-mailer-mongo');
+  const wiring = app(files, 'use_cases');
+  for (const operation of operations(model)) {
+    const call = ctorArgs(wiring, operation);
+    for (const root of ['ApplicationRepository', 'TemplateRepository', 'NotificationRepository']) {
+      assert.ok(call.includes(`deps.${root}`), `${operation.name} sin ${root}: ${call}`);
+    }
+    assert.ok(call.includes('deps.TemplateRenderer'), `${operation.name} sin el renderizador`);
+    // El handler declara en el mismo orden lo que NewUseCases le pasa.
+    const handler = files.find((file) => file.path.endsWith(`/${fileOf(handlerType(operation))}.go`)).content;
+    const params = ctorArgs(handler, operation).map((param) => goExported(param.split(' ')[0]));
+    assert.deepEqual(params, call.map((arg) => (arg === 'uc' ? 'UseCases' : arg.replace('deps.', ''))));
+  }
+  const request = operations(model).find((op) => op.name === 'requestNotification');
+  assert.equal(ctorArgs(wiring, request)[0], 'deps.NotificationRepository', 'el suyo, primero');
+  // Solo la operación de mail.sentBy recibe la salida de correo.
+  assert.equal([...wiring.matchAll(/deps\.MailSender/g)].length, 1);
+});
+
+test('con una operación interna que nada dispara, todo handler salvo ella recibe UseCases para despacharla', () => {
+  const { model, files } = plans.get('notification-mailer-mongo');
+  const wiring = app(files, 'use_cases');
+  for (const operation of operations(model)) {
+    assert.equal(ctorArgs(wiring, operation).includes('uc'), operation.name !== 'sendAcceptedNotification', operation.name);
+  }
+  const sweep = operations(model).find((op) => op.name === 'queueAcceptedNotifications');
+  const handler = files.find((file) => file.path.endsWith(`/${fileOf(handlerType(sweep))}.go`)).content;
+  assert.match(handler, /\/\/ useCases despacha las operaciones internas que nada dispara \(sendAcceptedNotification\)/);
+  // Sin huérfanas ni dispatches, nadie recibe UseCases.
+  const catalog = plans.get('product-catalog');
+  for (const operation of operations(catalog.model)) assert.ok(!ctorArgs(app(catalog.files, 'use_cases'), operation).includes('uc'));
 });
 
 test('un mapeo que no se puede derivar devuelve ErrNotImplemented con el campo nombrado, y su archivo es del agente', () => {

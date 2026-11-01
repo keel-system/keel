@@ -23,7 +23,8 @@ import { contractOf, handlerType, messageType, operations, useCaseField } from '
 import { repositoryOf, repositoryRoots, usesPersistence } from '@keel-system/keel-core/gen/features';
 import { goExported } from '../lib/go-projection.js';
 import { credentialFinders, portName, repositoryParam } from './repositories.js';
-import { activationClients, clientField, clientPort, usesGoHttpClients } from './http-clients.js';
+import { activationClients, clientField, clientParam, clientPort, usesGoHttpClients } from './http-clients.js';
+import { orphanInternalOperations } from '@keel-system/keel-core/gen';
 import { MAIL_SENDER, TEMPLATE_RENDERER, mailDependencies, usesGoMail, usesTemplating } from './mail.js';
 
 /** ¿Reciben los casos de uso adaptadores (Dependencies)? Con la persistencia relacional. */
@@ -31,17 +32,79 @@ export function usesDependencies(model) {
   return usesPersistence(model) && repositoryRoots(model).length > 0;
 }
 
-/** Lo que recibe el constructor del handler de una operación: el repositorio de su agregado y, si despacha, UseCases. */
-export function handlerArgs(model, operation, repository) {
-  const args = [];
-  const root = usesDependencies(model) ? repositoryOf(model, operation) : null;
-  if (root) args.push(repository(root));
-  if (usesRegistry(model, operation)) args.push(`deps.${IDEMPOTENCY_STORE.field}`);
-  if (usesDependencies(model) && roleCheckedOperation(model, operation)) args.push(`deps.${CALLER_ROLES.field}`);
-  for (const client of activationClients(model, operation)) args.push(`deps.${clientField(client)}`);
-  for (const port of mailDependencies(model, operation)) args.push(`deps.${port.field}`);
-  if ((operation.dispatches ?? []).length > 0) args.push('uc');
-  return args;
+/**
+ * Lo que recibe el constructor del handler de una operación, en orden: `name` y `type` del parámetro y del campo del
+ * handler, `doc` para su comentario y `arg`, la expresión con que lo pasa `NewUseCases`. Es la fuente ÚNICA del handler
+ * (services.js) y de su cableado: si dijeran cosas distintas, el proyecto no compilaría.
+ *
+ * En keel-spring, keel-nest y keel-dotnet el handler lo escribe el agente y la inyección de dependencias le da lo que
+ * pida: añade un parámetro al constructor. En keel-go el cableado es de build (`NewUseCases` lleva la cabecera de
+ * código generado), así que lo que no llegue aquí el agente no lo puede alcanzar. Por eso recibe los repositorios de
+ * TODOS los agregados —una precondición sobre otro agregado («la aplicación está activa», «hay una plantilla
+ * activa») está en prosa y build no la ve— y, si hay plantillas, el renderizador. Y si el diseño tiene operaciones
+ * internas que nada dispara, los casos de uso para despacharlas: build sabe que alguien tiene que llamarlas, no
+ * quién (lo dicen las reglas), como el CommandDispatcher de los otros tres. Corrida 12e, 2026-11-01.
+ */
+export function handlerDependencies(model, operation) {
+  const deps = [];
+  if (usesDependencies(model)) {
+    const own = repositoryOf(model, operation);
+    const roots = repositoryRoots(model);
+    for (const root of own ? [own, ...roots.filter((candidate) => candidate !== own)] : roots) {
+      deps.push({
+        name: repositoryParam(root),
+        type: `domain.${portName(root)}`,
+        doc:
+          root === own
+            ? `${repositoryParam(root)} es el repositorio del agregado ${root.name}.`
+            : `${repositoryParam(root)} es el repositorio del agregado ${root.name}, para lo que esta operación consulte de él (una precondición sobre otro agregado).`,
+        arg: `deps.${goExported(repositoryParam(root))}`
+      });
+    }
+  }
+  if (usesRegistry(model, operation)) {
+    deps.push({ name: IDEMPOTENCY_STORE.param, type: IDEMPOTENCY_STORE.port, doc: `${IDEMPOTENCY_STORE.param} es el registro de idempotencia de la operación (idempotency del diseño).`, arg: `deps.${IDEMPOTENCY_STORE.field}` });
+  }
+  if (usesDependencies(model) && roleCheckedOperation(model, operation)) {
+    deps.push({ name: CALLER_ROLES.param, type: CALLER_ROLES.port, doc: `${CALLER_ROLES.param} dice los roles del llamante: los exentos de la regla de propiedad (security.ownership).`, arg: `deps.${CALLER_ROLES.field}` });
+  }
+  // El trabajo que el diseño le atribuye a esta operación en otro servidor (dependencies.activations, por triggeredBy):
+  // el puerto del cliente se inyecta, o el camino de menor resistencia es no llamarlo.
+  for (const client of activationClients(model, operation)) {
+    deps.push({ name: clientParam(client), type: `domain.${clientPort(client)}`, doc: `${clientParam(client)} es el cliente saliente ${client.id} (http-clients), con su resiliencia ya puesta.`, arg: `deps.${clientField(client)}` });
+  }
+  // La salida por correo (mail.sentBy es el único enlace del DSL entre un caso de uso y el correo): sin el puerto delante,
+  // el camino de menor resistencia es no mandarlo, y no lo detecta nada. El renderizador, a cualquier operación: el
+  // asunto interpolado que se congela al aceptar una petición también es una plantilla.
+  const mail = mailDependencies(model, operation);
+  if (usesTemplating(model) && !mail.includes(TEMPLATE_RENDERER)) mail.push(TEMPLATE_RENDERER);
+  for (const port of mail) {
+    deps.push({
+      name: port.param,
+      type: port.port,
+      doc: `${port.param} es ${port === MAIL_SENDER ? 'la salida de correo (mail.sentBy): el adaptador SMTP ya escrito' : 'el renderizador de las plantillas del correo, ya escrito'}.`,
+      arg: `deps.${port.field}`
+    });
+  }
+  const orphans = orphanInternalOperations(model).filter((candidate) => candidate !== operation);
+  if ((operation.dispatches ?? []).length > 0) {
+    deps.push({ name: 'useCases', type: '*UseCases', doc: 'useCases despacha las operaciones que esta declara en use-cases.dispatches.', arg: 'uc' });
+  } else if (orphans.length > 0) {
+    deps.push({
+      name: 'useCases',
+      type: '*UseCases',
+      doc:
+        `useCases despacha las operaciones internas que nada dispara (${orphans.map((candidate) => candidate.name).join(', ')}), ` +
+        'si las reglas de esta dicen que las invoca. Con WithoutTransaction(ctx) cuando la invocada hace E/S externa.',
+      arg: 'uc'
+    });
+  }
+  return deps;
+}
+
+/** Los argumentos con que NewUseCases construye el handler de una operación. */
+export function handlerArgs(model, operation) {
+  return handlerDependencies(model, operation).map((dep) => dep.arg);
 }
 
 /** La llamada a NewUseCases con un logger y, si hacen falta, unas Dependencies (`deps`, o vacías en las pruebas). */
@@ -228,7 +291,7 @@ function useCasesBody(model, ops) {
   }
   const wiring = ops.map((operation) => {
     const contract = contractOf(operation);
-    const handler = `New${handlerType(operation)}(${handlerArgs(model, operation, (root) => `deps.${goExported(repositoryParam(root))}`).join(', ')})`;
+    const handler = `New${handlerType(operation)}(${handlerArgs(model, operation).join(', ')})`;
     const name = goString(messageType(operation));
     return contract.kind === 'KindCommand'
       ? `\tuc.${useCaseField(operation)} = observeCommand(logger, tx, ${name}, ${handler})`
