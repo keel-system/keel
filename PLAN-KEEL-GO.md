@@ -802,13 +802,36 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       `transport-retry` (keep-alive de vuelta: net/http reenvía por debajo del retry y llegan 4 peticiones en vez de
       3); cada uno, en exactamente sus sondas. `harness-check` **28/28** con FL-PROBE-001-E: la réplica arranca en su
       puerto, responde sola y en `ExchangeAll`, se para sin llevarse el servidor del flujo y vuelve a arrancar.
-      `go-check --fixtures` **48/48** (16,5 min con 2 a la vez). El `go-check` entero lo cortó Claude Code por memoria en la
-      fase de fixtures (2 a la vez): por defecto ahora va una por cada 3 GiB libres.
+      `go-check --fixtures` **48/48** (16,5 min con 2 a la vez). El primer `go-check` entero lo cortó Claude Code por
+      memoria en la fase de fixtures (2 a la vez): por defecto ahora va una por cada 3 GiB libres. Lanzado por el usuario
+      en su terminal, **124/124** (47 variantes en serie, sabotajes, licencias, `-race` y arranque).
     - **Sin medir**: `RestartServer` y `AgeForReconciliation`/`HoldFromReconciliation` contra la infra real (los ejecuta
-      la corrida 11e); `harness-check --database=mysql` con la réplica; el `go-check` entero (sabotajes, -race, arranque)
-      sobre el 11d.
-- **Para retomar (cada incremento empieza en un contexto nuevo):** la corrida 11e sobre `stock-reservation` (gemelas:
-  keel-nest 24/24, keel-spring 21/21, keel-dotnet 27/27). Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
+      la corrida 11e); `harness-check --database=mysql` con la réplica.
+  - **11e, la corrida — preparada (2026-10-31).** Workspace `spring-live-test/corrida-stock-reservation-go`: `keel init`,
+    la fixture `stock-reservation` v1.1.0 (el MISMO diseño que las gemelas; solo cambia `keel: "2.23"`) y el `DESIGN.md`
+    de la gemela de keel-dotnet, `--ready` 13/13 sin `--accept-unready`, y `keel-go build` con `postgresql · rabbitmq`
+    (el stack de las gemelas, sembrado en `keel-stack.json`; 216 archivos, estampado `ready: true`, con las skills
+    `keel-go-database`, `keel-go-rabbitmq` y `keel-go-httpclient`). Antes del pipeline: tidy, gofmt, vet y staticcheck
+    (con `-tags integration`) vacíos, `go build` sin cgo y `go test ./...` en verde (13 paquetes);
+    `check-idempotency.sh` nace ROJO en las siete familias con trabajo del agente y `outboundIdempotency` en verde, como
+    en keel-dotnet. Mide lo que ninguna red mide: los flujos del barrido con `AgeForReconciliation`, la compensación, el
+    reintento con la MISMA clave contra el WireMock de `infra/` (FL-REC-002, «exactamente dos»), el circuito con
+    `RestartServer` y el clúster de dos réplicas (FL-CLU-*). Los contenedores se llaman `stock-reservation-*`, como los
+    de las gemelas: no puede correr a la vez que otra corrida del mismo diseño.
+  - **11e, hecha (2026-10-31): 21/21 y huella 10** (`docs/corridas/2026-10-31-stock-reservation-go.md`), la de keel-nest
+    y keel-spring, y la de keel-dotnet sin su `harnessPatch`: los siete handlers, `reservation_behavior.go`,
+    `cmd/server/broker.go` y el `README.md`, todos TODO legítimos. Sin `harnessPatches`, sin fixes de `infra/` ni de
+    `go.mod`, sin `design-gaps.yaml` y **sin ningún hueco del generador** (keel-dotnet tuvo dos: la réplica, que aquí
+    nació en el 11d, y `AssertJson`). Una ronda de arbitraje: FL-REC-002 contaba los DELETE antes del reintento
+    (`culprit: test`). Los FL-CLU-* corrieron con `StartReplica` y `OnReplica: true` en `ExchangeAll`, el barrido con
+    `AgeForReconciliation` sobre el cron real, y el reintento con la MISMA clave contra el WireMock; `check-idempotency.sh`
+    pasó de ROJO a VERDE en las ocho familias. Sin usar: `RestartServer` y `HoldFromReconciliation` (ningún escenario
+    del diseño los pide). **Con esto el incremento 11 queda cerrado.**
+- **Inc. 11 — cerrado (2026-10-31).** `needs` (réplica, `onMiss`, `lastKnown`), `oauth2-client-credentials` y los
+  compuestos en una llamada siguen rechazados hasta el incremento 13, como en keel-nest y keel-dotnet.
+- **Para retomar (cada incremento empieza en un contexto nuevo):** el incremento 12 (persistencia documental, MongoDB).
+  Sin medir del 11: `RestartServer` y `HoldFromReconciliation` contra la infra real, y `harness-check --database=mysql`
+  con la réplica. Una corrida de Kafka o de SNS/SQS (como la 9e) es opcional. Las redes pesadas de una en una y con la máquina descargada: Claude
   Code mata las tandas largas en segundo plano si se queda sin memoria. El hallazgo neutral de la collation de la
   sombra en MySQL espera su propia tarea en keel-core.
 
