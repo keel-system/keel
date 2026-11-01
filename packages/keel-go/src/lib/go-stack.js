@@ -116,6 +116,10 @@ export const MODULES = {
   // Las plantillas del correo en Handlebars, la sintaxis de los otros tres servidores: la versión mantenida de raymond,
   // estable desde 2022 (v2.0.48, 2022-11-03). Trae gopkg.in/yaml.v2 (Apache-2.0 y MIT) para su soporte de front matter.
   'github.com/mailgun/raymond/v2': { version: 'v2.0.48', license: 'MIT', kind: 'require', use: 'plantillas Handlebars del correo' },
+  // Un transitivo FIJADO (kind 'pin'): raymond pide logrus v1.8.1, con GO-2025-4188, y v1.8.3 lo corrige. El servicio no
+  // lo alcanza, pero sin fijarlo govulncheck avisa en todo proyecto con plantillas de correo (corrida 12e). Va como
+  // `// indirect`, que es lo que es: tidy lo conserva porque MVS elige la mayor de las dos.
+  'github.com/sirupsen/logrus': { version: 'v1.8.3', license: 'MIT', kind: 'pin', use: 'logrus sin GO-2025-4188 (lo trae raymond)' },
 
   // Herramientas, por la directiva `tool` de go.mod (`go tool <nombre>`): el proyecto no exige nada instalado
   // aparte de Go.
@@ -148,6 +152,12 @@ export const RELATIONAL_REQUIRES = {
 /** El correo saliente (capa mail): el SMTP y, con plantillas, Handlebars. */
 export const MAIL_REQUIRES = ['github.com/wneessen/go-mail'];
 export const TEMPLATING_REQUIRES = ['github.com/mailgun/raymond/v2'];
+export const TEMPLATING_PINS = ['github.com/sirupsen/logrus'];
+
+/** Los transitivos fijados (kind 'pin'), con su versión: build los escribe como `// indirect` y la vista los conserva. */
+export const PINS = Object.freeze(
+  Object.fromEntries(Object.entries(MODULES).filter(([, module]) => module.kind === 'pin').map(([path, module]) => [path, module.version]))
+);
 
 /** El driver de la persistencia documental (incremento 12). */
 export const DOCUMENT_REQUIRES = ['go.mongodb.org/mongo-driver/v2'];

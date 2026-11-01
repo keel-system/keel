@@ -22,6 +22,7 @@ import { portName, repositoryArgs, repositoryParam } from '../src/scaffold/repos
 import { handlerType, operations } from '../src/scaffold/services.js';
 import { sentinelOf } from '../src/scaffold/errors.js';
 import { FIXTURES_DIR, makeWorkspace, mountDesign } from './helpers/workspace.js';
+import { GENERATED_HEADER as GENERATED } from '../src/lib/go-source.js';
 
 const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
 
@@ -123,4 +124,24 @@ test('sin persistencia no hay repositorios, ni Dependencies, ni pgx', () => {
   assert.equal(bare.files.some((candidate) => candidate.path.startsWith('internal/infrastructure/')), false);
   assert.doesNotMatch(file(bare, 'internal/application/use_cases.go'), /Dependencies/);
   assert.doesNotMatch(file(bare, 'go.mod'), /pgx/);
+});
+
+// Corrida 12e (2026-11-01): el puerto y el adaptador llevan la cabecera de código generado, así que una consulta de negocio
+// que el puerto no trae (la última versión de una plantilla) no tenía sitio, y el agente la rodeó probando versiones una a
+// una. En los otros tres generadores el agente la añade al puerto y al adaptador.
+test('cada raíz tiene sus consultas de negocio del agente, en los dos modelos, y su puerto las incrusta', () => {
+  for (const [name, store] of [['notification-mailer', 'postgres'], ['notification-mailer-mongo', 'mongo']]) {
+    const { plan } = goPlan(name);
+    const byPath = new Map(plan.files.map((file) => [file.path, file.content]));
+    for (const root of repositoryRoots(plan.model)) {
+      const base = root.name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+      const port = byPath.get(`internal/domain/${base}_queries.go`);
+      const adapter = byPath.get(`internal/infrastructure/${store}/${base}_queries.go`);
+      assert.ok(port && adapter, `${name}: ${root.name} sin sus dos archivos de consultas`);
+      for (const file of [port, adapter]) assert.ok(!file.includes(GENERATED), `${name}: ${root.name}: lleva la cabecera`);
+      assert.match(port, new RegExp(`^type ${root.name}Queries interface\{\}$`, 'm'), name);
+      assert.match(byPath.get(`internal/domain/${base}_repository.go`), new RegExp(`interface \{\n\t// ${root.name}Queries [^\n]*\n\t${root.name}Queries\n`), name);
+      assert.match(adapter, store === 'mongo' ? /r\.find\(ctx/ : /r\.load\(ctx/, name);
+    }
+  }
 });

@@ -16,7 +16,8 @@ constraint). `<motor>` es `postgres` o `mysql`, según `keel-stack.json`; los do
 nombres, así que el resto del servicio no distingue.
 
 **El agente no escribe persistencia.** Lo suyo es llamar a los puertos (`domain.<Raíz>Repository`) desde los
-handlers, en el orden de las notas del diseño.
+handlers, en el orden de las notas del diseño. La única excepción son las **consultas de negocio** que una regla
+necesita y el puerto no trae, en los dos `<raíz>_queries.go` sin la cabecera (`references/repository-ports.md`).
 
 ## Antes de empezar
 

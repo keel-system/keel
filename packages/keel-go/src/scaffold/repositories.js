@@ -60,8 +60,14 @@ export function generate(model) {
   const { domain, store } = layout(model);
   // El puerto es el mismo con las dos persistencias; el adaptador documental lo escribe document-repositories.js.
   const ports = roots.map((entity) => ({ path: domainPath(model, portName(entity)), content: packageFile(model, domain, { imports: PORT_IMPORTS, body: portBody(model, entity) }) }));
-  if (!usesRelational(model)) return ports;
-  const files = [...ports];
+  // Las consultas de negocio del agente, en archivos SIN la cabecera: la interfaz que el puerto incrusta y sus métodos en
+  // el adaptador del motor, con los dos modelos.
+  const queries = roots.flatMap((entity) => [
+    { path: domainPath(model, queriesName(entity)), content: packageFile(model, domain, { body: queriesPortBody(model, entity), generated: false }) },
+    { path: `${store.dir}/${goFileName(entity.name)}_queries.go`, content: packageFile(model, store, { body: queriesAdapterBody(model, entity), generated: false }) }
+  ]);
+  if (!usesRelational(model)) return [...ports, ...queries];
+  const files = [...ports, ...queries];
   const uses = new Set();
   for (const entity of roots) {
     files.push({
@@ -291,8 +297,49 @@ function portBody(model, entity) {
 `).join('');
   return `
 ${filters}${docComment(portName(entity), `el puerto de persistencia del agregado ${name}. El dominio solo ve esto; el adaptador vive en ${storeDir(model)} y se une a la transacción que abrió el caso de uso.`)}type ${portName(entity)} interface {
+	// ${queriesName(entity)} son las consultas de negocio que escribe el agente (${goFileName(name)}_queries.go).
+	${queriesName(entity)}
+
 ${methods.join('\n\n')}
 }
+`;
+}
+
+// ─── Las consultas de negocio del agente ─────────────────────────────────────────────────────────
+
+/** La interfaz de las consultas de negocio de una raíz, que su puerto incrusta. */
+export function queriesName(entity) {
+  return `${entity.name}Queries`;
+}
+
+/**
+ * `internal/domain/<entidad>_queries.go`, del agente: las lecturas que una regla del diseño necesita y el puerto generado
+ * no trae (la última versión de una clave, un recuento). En keel-spring, keel-nest y keel-dotnet el agente las añade al
+ * puerto y a su adaptador; aquí los dos llevan la cabecera de código generado, así que sin este sitio el agente solo
+ * podía rodearlas (corrida 12e: la versión siguiente de una plantilla, probando versiones una a una).
+ */
+function queriesPortBody(model, entity) {
+  const name = entity.name;
+  return `
+// ${queriesName(entity)} son las consultas de negocio del agregado ${name} que escribe el agente: las lecturas que una regla
+// del diseño necesita y ${portName(entity)} no trae (la última versión de una clave, un recuento). Declara aquí su firma;
+// la implementa el adaptador en ${storeDir(model)}/${goFileName(name)}_queries.go, y el puerto la incrusta, así que el
+// compilador exige las dos mitades. Solo lecturas: escribir es Save. Lo que el diseño ya declara (finders DSL 2.22, claves
+// naturales) está en el puerto generado: no lo repitas aquí.
+type ${queriesName(entity)} interface{}
+`;
+}
+
+/** `<motor>/<entidad>_queries.go`, del agente: la implementación de esas consultas sobre el adaptador generado. */
+function queriesAdapterBody(model, entity) {
+  const helpers = usesRelational(model)
+    ? '//   - el agregado entero: r.load(ctx, "WHERE … ORDER BY … LIMIT 1", …);\n//   - un valor suelto (un recuento, un máximo): q, err := r.tx.conn(ctx) y q.QueryRowContext(...).'
+    : '//   - el agregado entero: r.find(ctx, bson.D{…}, options.Find().SetSort(…).SetLimit(1)), con los nombres de campo\n//     del documento (los de su índice en indexes.go).';
+  return `
+// Las consultas de negocio de domain.${queriesName(entity)}, como métodos de *${entity.name}Repository: las escribe el
+// agente. Se unen a la transacción del caso de uso como los métodos generados, y reutilizan sus ayudantes:
+${helpers}
+// No filtres en memoria lo que la base puede filtrar.
 `;
 }
 

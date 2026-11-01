@@ -42,4 +42,26 @@ if _, err := h.jobRepository.Save(ctx, job); err != nil {
 ## Lo que no se hace
 
 - Filtrar en memoria tras un `List`: si la condición no está en ningún finder, es un `designGap`.
-- Escribir sin `Save`, o un método nuevo en el puerto o el adaptador: llevan la cabecera de código generado.
+- Escribir sin `Save`, o un método nuevo en `<raíz>_repository.go` (el puerto o el adaptador): llevan la cabecera de
+  código generado.
+
+## Una consulta de negocio que el puerto no trae
+
+La lectura que una regla necesita y no es un finder declarado («la versión es la siguiente» pide la última) va en
+dos archivos **tuyos**, sin la cabecera: la firma en `internal/domain/<raíz>_queries.go` (la interfaz
+`<Raíz>Queries`, que el puerto incrusta) y el método en `internal/infrastructure/mongo/<raíz>_queries.go`, con el
+ayudante `r.find` del adaptador generado y los nombres de campo del documento:
+
+```go
+func (r *TemplateRepository) FindLatestVersion(ctx context.Context, applicationID uuid.UUID, key, locale string) (int32, bool, error) {
+	found, err := r.find(ctx,
+		bson.D{{Key: "application_id", Value: uuidValue(applicationID)}, {Key: "key", Value: key}, {Key: "locale", Value: locale}},
+		options.Find().SetSort(bson.D{{Key: "version", Value: -1}}).SetLimit(1))
+	if err != nil || len(found) == 0 {
+		return 0, false, err
+	}
+	return found[0].Version(), true, nil
+}
+```
+
+Solo lecturas; lo que el diseño ya declara está en el puerto generado.

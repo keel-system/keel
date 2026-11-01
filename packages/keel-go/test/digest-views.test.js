@@ -15,7 +15,7 @@ import { DIGEST_VIEWS, goModView } from '../src/lib/digest-views.js';
 import { FIXTURES_DIR, GO_READY_DESIGN, makeWorkspace, mountDesign, runCommand } from './helpers/workspace.js';
 import { goView } from './helpers/contract.js';
 import { build } from '../src/commands/build.js';
-import { digestOf } from '@keel-system/keel-core';
+import { digestOf, loadService } from '@keel-system/keel-core';
 
 const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
 const goModOf = (plan) => plan.files.find((file) => file.path === 'go.mod').content;
@@ -133,4 +133,17 @@ test('build: un go.mod de un keel-go anterior, completado por tidy, se refresca'
 
   await runCommand(workspace, build, spec, { defaults: true, acceptUnready: true, refresh: true });
   assert.equal(fs.readFileSync(goModPath, 'utf8'), current);
+});
+
+// Corrida 12e (2026-11-01): raymond arrastra logrus v1.8.1, con GO-2025-4188. build lo fija a v1.8.3 como `// indirect`, y
+// la vista lo conserva con ESA versión (si cambia el pin, el manifiesto lo ve) y no con otra (la v1.8.1 que tidy deja en un
+// proyecto anterior al pin sigue siendo lo de tidy, así que su manifiesto vale).
+test('un transitivo fijado se emite como indirecto y la vista lo conserva solo con la versión fijada', () => {
+  const goMod = planService({ ...loadService(path.join(FIXTURES_DIR, 'notification-mailer')), workspace: FIXTURES_DIR }).files.find((file) => file.path === 'go.mod').content;
+  assert.match(goMod, /\n\tgithub\.com\/sirupsen\/logrus v1\.8\.3 \/\/ indirect\n/);
+  assert.equal(goModView(goMod), goMod, 'la vista es la identidad sobre lo que emite build');
+  const before = goMod.replace('logrus v1.8.3 // indirect', 'logrus v1.8.1 // indirect');
+  assert.doesNotMatch(goModView(before), /logrus/, 'la versión de tidy de un proyecto anterior no es de build');
+  const product = planService({ ...loadService(path.join(FIXTURES_DIR, 'product-catalog')), workspace: FIXTURES_DIR }).files.find((file) => file.path === 'go.mod').content;
+  assert.doesNotMatch(product, /logrus/, 'sin plantillas de correo no hay nada que fijar');
 });

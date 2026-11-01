@@ -35,20 +35,23 @@ test('go.mod: módulo, versión mínima, toolchain, requisitos directos exactos 
 });
 
 test('todo .go que escribe build lleva la cabecera de código generado y empieza por ella; lo que completa el agente, no', () => {
-  // Del agente: el handler de cada operación, el comportamiento de cada entidad y el mapeo que build no supo derivar
-  // entero (devuelve ErrNotImplemented).
-  const agents = (path, content) => /_handler\.go$/.test(path) || /_behavior\.go$/.test(path) || (/_mapper\.go$/.test(path) && content.includes('ErrNotImplemented'));
-  const owned = { handler: 0, behavior: 0 };
+  // Del agente: el handler de cada operación, el comportamiento de cada entidad, las consultas de negocio de cada raíz
+  // (las dos mitades) y el mapeo que build no supo derivar entero (devuelve ErrNotImplemented).
+  const agents = (path, content) =>
+    /_handler\.go$/.test(path) || /_behavior\.go$/.test(path) || /_queries\.go$/.test(path) || (/_mapper\.go$/.test(path) && content.includes('ErrNotImplemented'));
+  const owned = { handler: 0, behavior: 0, queries: 0 };
   for (const [path, content] of byPath) {
     if (!path.endsWith('.go')) continue;
     if (agents(path, content)) {
       if (path.endsWith('_handler.go')) owned.handler++;
       if (path.endsWith('_behavior.go')) owned.behavior++;
+      if (path.endsWith('_queries.go')) owned.queries++;
       assert.ok(!content.includes(GENERATED_HEADER), `${path}: lo completa el agente y lleva la cabecera de código generado`);
     } else assert.ok(content.startsWith(`${GENERATED_HEADER}\n\n`), path);
   }
   assert.ok(owned.handler > 0, 'el diseño de referencia tiene operaciones: algún handler tenía que salir');
   assert.ok(owned.behavior > 0, 'el diseño de referencia tiene entidades: algún _behavior.go tenía que salir');
+  assert.equal(owned.queries, 2, 'el diseño de referencia tiene una raíz persistida: sus dos _queries.go tenían que salir');
 });
 
 // Lo que build deja al agente no puede vivir en un archivo con la cabecera de código generado: el agente no lo

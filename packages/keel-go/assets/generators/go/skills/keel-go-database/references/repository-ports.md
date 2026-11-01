@@ -50,5 +50,37 @@ if _, err := h.productRepository.Save(ctx, product); err != nil {
   tiene la lectura por lote, es un `designGap` o un defecto del generador, no un bucle.
 - **Escribir sin `Save`**: el bloqueo optimista, la auditoría y la traducción de constraints viven en el `Save`
   generado.
-- **Un método nuevo en el puerto o en el adaptador**: los dos llevan la cabecera de código generado. Lo que falte va
-  a `blockers` con la consulta que el diseño pide.
+- **Un método nuevo en `<raíz>_repository.go`** (el puerto o el adaptador): los dos llevan la cabecera de código
+  generado. Una consulta de negocio va en los archivos de abajo.
+
+## Una consulta de negocio que el puerto no trae
+
+Una regla del diseño a veces necesita una lectura que no es un finder declarado: «la versión es la siguiente de esa
+clave» pide la última, «como mucho N» pide un recuento. Va en dos archivos **tuyos**, sin la cabecera, que build
+deja vacíos por raíz:
+
+- `internal/domain/<raíz>_queries.go`: la firma, en la interfaz `<Raíz>Queries`. El puerto `<Raíz>Repository` la
+  incrusta, así que el handler la llama por el mismo campo (`h.templateRepository.FindLatestVersion(...)`).
+- `internal/infrastructure/<motor>/<raíz>_queries.go`: el método sobre `*<Raíz>Repository`, con los ayudantes del
+  adaptador generado. El compilador exige las dos mitades.
+
+```go
+// internal/domain/template_queries.go
+type TemplateQueries interface {
+	// FindLatestVersion es la versión más alta de esa aplicación, clave e idioma; found es false si no hay ninguna.
+	FindLatestVersion(ctx context.Context, applicationID uuid.UUID, key, locale string) (version int32, found bool, err error)
+}
+
+// internal/infrastructure/postgres/template_queries.go
+func (r *TemplateRepository) FindLatestVersion(ctx context.Context, applicationID uuid.UUID, key, locale string) (int32, bool, error) {
+	found, err := r.load(ctx, `WHERE application_id = $1 AND "key" = $2 AND locale = $3 ORDER BY version DESC LIMIT 1`, applicationID, key, locale)
+	if err != nil || len(found) == 0 {
+		return 0, false, err
+	}
+	return found[0].Version(), true, nil
+}
+```
+
+- **Solo lecturas**: escribir es `Save`. Y en el SQL del motor de `keel-stack.json` (`$n` en PostgreSQL, `?` en MySQL).
+- Lo que el diseño ya declara (un finder de búsqueda, una clave natural) está en el puerto generado: no lo repitas.
+- Si la consulta es lo que el diseño debería declarar (un filtro de una búsqueda), es un `designGap`, no esto.

@@ -11,7 +11,7 @@ import { requiresFor, toolsFor } from '../src/scaffold/project.js';
 test('todo módulo de la tabla tiene versión exacta y licencia permisiva', () => {
   for (const [path, { version, license, kind }] of Object.entries(MODULES)) {
     assert.match(version, /^v\d+\.\d+\.\d+$/, `${path}: versión no exacta (${version})`);
-    assert.ok(['require', 'tool'].includes(kind), `${path}: kind ${kind}`);
+    assert.ok(['require', 'tool', 'pin'].includes(kind), `${path}: kind ${kind}`);
     assert.deepEqual(licenseProblems({ path, version, license }), [], path);
   }
 });

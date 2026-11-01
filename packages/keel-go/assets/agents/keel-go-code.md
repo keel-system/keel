@@ -73,6 +73,9 @@ escenario que ya estaba en verde.
      transición con el método del agregado. No escribas otro reclamo, ni un finder por estado, ni un lock.
    - **Los mapeos**: un `<entidad>_mapper.go` sin la cabecera es uno que build no supo derivar entero; su TODO
      nombra el campo.
+   - **Una consulta de negocio** que una regla necesita y el puerto no trae (la última versión de una clave, un
+     recuento): en los dos `<raíz>_queries.go` sin la cabecera, el de `internal/domain` y el del paquete del motor
+     (la skill de la base de datos lo enseña). Nunca un bucle de lecturas que la rodee.
    - **El broker**, si el diseño tiene capa `messaging`: `cmd/server/broker.go` (sin la cabecera) es tuyo y es el
      ÚNICO sitio del arranque que lo es. `brokerAdapters` devuelve el envío (el `messaging.Dispatcher` del outbox o
      los publishers best-effort) y `messageListeners`, un listener por cola, con el despacho que escribe el

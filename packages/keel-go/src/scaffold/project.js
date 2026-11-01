@@ -11,7 +11,7 @@
 import { GO_MIN_VERSION, GO_TOOLCHAIN } from '../lib/assets.js';
 import { usesDocument, usesJwt, usesRelational } from '@keel-system/keel-core/gen/features';
 import { usesGoMail, usesTemplating } from './mail.js';
-import { MAIL_REQUIRES, TEMPLATING_REQUIRES } from '../lib/go-stack.js';
+import { MAIL_REQUIRES, TEMPLATING_PINS, TEMPLATING_REQUIRES } from '../lib/go-stack.js';
 import { BROKER_REQUIRES, DOCUMENT_REQUIRES, JWT_REQUIRES, MODULES, RELATIONAL_REQUIRES, SCHEDULING_REQUIRES, SKELETON_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
 import { relationalEngine } from '../lib/relational-engine.js';
 import { foldKinds } from './persistence-runtime.js';
@@ -32,6 +32,11 @@ export function requiresFor(model = null) {
     ...(model && usesGoMessaging(model) ? (BROKER_REQUIRES[model.stack?.broker] ?? []) : []),
     ...(model && usesScheduling(model) ? SCHEDULING_REQUIRES : [])
   ].sort();
+}
+
+/** Los transitivos fijados que el proyecto arrastra (kind 'pin' en go-stack.js): van como `// indirect`. */
+export function pinsFor(model = null) {
+  return [...(model && usesTemplating(model) ? TEMPLATING_PINS : [])].sort();
 }
 
 /** Las herramientas (`go tool <nombre>`): todas, siempre. */
@@ -55,10 +60,11 @@ function docFile(model, target, text) {
 }
 
 // El módulo de una herramienta va también en `require`, marcado `// indirect` como lo deja `go get -tool`: sin
-// él, `go mod tidy` lo resolvería a la ÚLTIMA versión publicada, no a la fijada en go-stack.js.
+// él, `go mod tidy` lo resolvería a la ÚLTIMA versión publicada, no a la fijada en go-stack.js. En el mismo bloque, un
+// transitivo fijado (pinsFor): su versión sube la que pide la dependencia, y tidy la conserva porque MVS elige la mayor.
 function goMod(model) {
   const requires = requiresFor(model).map((path) => `\t${path} ${MODULES[path].version}`);
-  const toolModules = TOOLS.slice()
+  const toolModules = [...TOOLS, ...pinsFor(model)]
     .sort()
     .map((path) => `\t${path} ${MODULES[path].version} // indirect`);
   const tools = toolsFor().map((tool) => `\t${tool}`);

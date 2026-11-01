@@ -8,7 +8,9 @@
 // y un `--refresh` lo veía TOCADO para siempre. La vista quita lo que añade tidy y nada de lo
 // que decide build:
 //   · un `// indirect` se queda si es el módulo de una herramienta del bloque `tool` (build fija
-//     ahí su versión: quitarlo haría invisible un cambio de versión de staticcheck) y se va si no;
+//     ahí su versión: quitarlo haría invisible un cambio de versión de staticcheck), o un transitivo
+//     FIJADO con la versión que fija go-stack.js (PINS; con otra, es la que puso tidy en un proyecto
+//     anterior al pin), y se va si no;
 //   · un bloque `require` que se queda vacío desaparece, y con él la línea en blanco que deja.
 // Sobre lo que emite build es la identidad (test/digest-views.test.js, en todas las fixtures):
 // los manifiestos ya escritos siguen valiendo.
@@ -16,7 +18,9 @@
 // Lo carga también la huella de una corrida (`corrida-metrics.js footprint`), por el nombre del
 // generador que firma el manifiesto: por eso el módulo exporta `DIGEST_VIEWS` y nada más.
 
-const INDIRECT = /^\s*(\S+)\s+\S+\s*\/\/ indirect\s*$/;
+import { PINS } from './go-stack.js';
+
+const INDIRECT = /^\s*(\S+)\s+(\S+)\s*\/\/ indirect\s*$/;
 
 /** Los paquetes del bloque `tool` (o de una directiva `tool` de una línea). */
 function toolPaths(lines) {
@@ -62,7 +66,8 @@ export function goModView(text) {
   for (const line of lines) {
     const text = line.trim();
     const indirect = INDIRECT.exec(text.startsWith('require ') ? text.slice(8) : line);
-    if (indirect && (inRequire || text.startsWith('require ')) && !toolModules.has(indirect[1])) continue;
+    const decided = indirect && (toolModules.has(indirect[1]) || PINS[indirect[1]] === indirect[2]);
+    if (indirect && (inRequire || text.startsWith('require ')) && !decided) continue;
     if (text === 'require (') inRequire = true;
     else if (inRequire && text === ')') inRequire = false;
     kept.push(line);
