@@ -124,18 +124,26 @@ test('dominio, casos de uso y API se aceptan sin avisos: la API se emite desde e
   assert.deepEqual(warnings, []);
 });
 
-test('una operación con idempotency o cache avisa nombrándola; el barrido con transiciones ya no (su reclamo es del 10c)', () => {
+test('una operación con idempotency avisa nombrándola; con cache y sin persistencia se rechaza (13e); el barrido con transiciones no avisa', () => {
   const layers = layersWith('domain', 'api');
   const sweep = { schedule: { cron: '* * * * *' }, transitions: [{ entity: 'Job', from: ['queued'], to: 'running' }] };
   layers['use-cases'] = { operations: { pay: { idempotency: {} }, sweep, tick: { schedule: { cron: '* * * * *' } }, find: { cache: {} }, plain: {} } };
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api'), layers);
-  assert.deepEqual(errors, []);
+  // La caché llega a los handlers por las Dependencies, que solo existen con persistencia.
+  assert.equal(errors.length, 1, errors.join('\n'));
+  assert.match(errors[0], /^use-cases: find declara cache sin persistencia .*Dependencies/);
   assert.match(warnings.find((w) => w.includes('idempotency')), /^use-cases: pay declara idempotency .*incremento 10/);
   // El reloj (10b) y el reclamo del barrido que mueve estados (10c) ya salen: ninguno avisa.
   assert.ok(!warnings.some((w) => w.includes('sweep') || w.includes('barrido')));
   assert.ok(!warnings.some((w) => w.includes('tick')));
-  assert.match(warnings.find((w) => w.includes('cache (')), /^use-cases: find declara cache .*incremento 13/);
+  assert.ok(!warnings.some((w) => w.includes('cache')), warnings.join('\n'));
   assert.ok(!warnings.some((w) => w.includes('plain')));
+  // Con persistencia, la caché sale entera (13e): ni error ni aviso.
+  const persisted = layersWith('domain', 'api', 'persistence');
+  persisted['use-cases'] = { operations: { find: { cache: {} } } };
+  const withPersistence = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api', 'persistence'), persisted);
+  assert.ok(!withPersistence.errors.some((e) => e.includes('cache')), withPersistence.errors.join('\n'));
+  assert.ok(!withPersistence.warnings.some((w) => w.includes('cache')), withPersistence.warnings.join('\n'));
 });
 
 test('con persistencia relacional, la idempotencia sale entera (registro, purga y el gate del tramo 10d): no avisa', () => {

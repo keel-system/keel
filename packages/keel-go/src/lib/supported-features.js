@@ -49,8 +49,7 @@ export function pendingLayers(layers = null) {
  * mecanismo. Se avisa por operación, nombrándolas, como keel-dotnet en su incremento 4.
  */
 const PENDING_OPERATION_FEATURES = [
-  { key: 'idempotency', what: 'idempotency (el almacén, la firma del comando y el gate check-idempotency.sh)', increment: 'incremento 10' },
-  { key: 'cache', what: 'cache (la caché de la consulta)', increment: 'incremento 13' }
+  { key: 'idempotency', what: 'idempotency (el almacén, la firma del comando y el gate check-idempotency.sh)', increment: 'incremento 10' }
 ];
 
 /**
@@ -80,6 +79,7 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...scheduledWithArguments(manifest, layers));
   errors.push(...parameterErrors(manifest, layers));
   errors.push(...outboundErrors(layers));
+  errors.push(...cacheErrors(layers));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     const names = operations
@@ -287,6 +287,23 @@ function securityErrors(layers) {
   return errors;
 }
 
+
+/**
+ * La caché de lectura (tramo 13e) sin persistencia: el handler recibe la caché en las Dependencies de los casos de uso,
+ * que solo existen con ella (y NewUseCases es quien cablea su invalidación). Ninguna fixture la declara sin persistencia:
+ * sin red que mida lo emitido.
+ */
+function cacheErrors(layers) {
+  const cached = Object.entries(layers?.['use-cases']?.operations ?? {})
+    .filter(([, operation]) => operation?.cache != null)
+    .map(([name]) => name);
+  if (cached.length === 0 || layers?.persistence) return [];
+  return [
+    `use-cases: ${cached.join(', ')} declara${cached.length === 1 ? '' : 'n'} cache sin persistencia — keel-go entrega la caché a los handlers en las ` +
+      'Dependencies de los casos de uso, que solo existen con persistencia (ninguna fixture que keel-go genere lo declara: sin red que mida lo ' +
+      'emitido). Genera este diseño con keel-spring, keel-nest o keel-dotnet.'
+  ];
+}
 
 /** ¿Es `field` un value object compuesto del dominio (o una lista de ellos)? */
 function isComposite(layers, field) {

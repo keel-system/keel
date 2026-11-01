@@ -63,6 +63,8 @@ export function layout(model) {
     clients: pkg(module, 'internal/infrastructure/clients'),
     // La salida de correo (capa mail, 12e-b): el adaptador SMTP y el renderizador de plantillas.
     mail: pkg(module, 'internal/infrastructure/smtp'),
+    // El store de la caché de lectura (tramo 13e): Redis o Valkey, detrás de application.CacheStore.
+    cache: pkg(module, 'internal/infrastructure/cache'),
     // La prueba de la frontera hexagonal: `internal/` solo protege frente a otros módulos, no entre capas.
     architecture: pkg(module, 'internal/architecture'),
     // Las pruebas de flujo (FL-*), de caja negra y tras la restricción `integration`: `go test ./...` no las ve.

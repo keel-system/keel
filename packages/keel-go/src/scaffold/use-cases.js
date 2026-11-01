@@ -28,6 +28,7 @@ import { orphanInternalOperations } from '@keel-system/keel-core/gen';
 import { MAIL_SENDER, TEMPLATE_RENDERER, mailDependencies, usesGoMail, usesTemplating } from './mail.js';
 import { parametersType, usesServiceParameters } from './service-parameters.js';
 import { paymentDependencies, paymentDependencyRows, paymentUseCaseFields, paymentWiring } from './payments.js';
+import { cacheDependencies, cacheDependencyRows, cacheWiring } from './cache.js';
 
 /** ¿Reciben los casos de uso adaptadores (Dependencies)? Con la persistencia relacional. */
 export function usesDependencies(model) {
@@ -91,6 +92,9 @@ export function handlerDependencies(model, operation) {
   // La pasarela de pago (capa payments): el puerto y el aplicador de desenlaces a las acciones sobre un cobro, y la consulta
   // al barrido. Sin ellos delante, el camino de menor resistencia es escribir el cobro sin pasarela.
   deps.push(...paymentDependencies(model, operation));
+  // La caché de lectura de la operación (use-cases.<op>.cache): la consulta la pone el agente, después de lo que dependa
+  // de quién llama; sin la caché delante, el camino de menor resistencia es no consultarla.
+  deps.push(...cacheDependencies(model, operation));
   if (handlersReadParameters(model)) {
     deps.push({
       name: SERVICE_PARAMETERS.param,
@@ -319,9 +323,11 @@ function useCasesBody(model, ops) {
     const contract = contractOf(operation);
     const handler = entryGateGuard(model, operation, `New${handlerType(operation)}(${handlerArgs(model, operation).join(', ')})`);
     const name = goString(messageType(operation));
+    // Con caché, cada operación va además dentro de su asentamiento (settle): lo que espera al commit, el vaciado de las
+    // cachés que invalida (keel-core/gen/cache-plan.js) incluido.
     return contract.kind === 'KindCommand'
-      ? `\tuc.${useCaseField(operation)} = observeCommand(logger, tx, ${name}, ${handler})`
-      : `\tuc.${useCaseField(operation)} = observe(logger, tx, ${name}, ${contract.kind}, ${handler})`;
+      ? `\tuc.${useCaseField(operation)} = ${cacheWiring(model, operation, `observeCommand(logger, tx, ${name}, ${handler})`, { command: true })}`
+      : `\tuc.${useCaseField(operation)} = ${cacheWiring(model, operation, `observe(logger, tx, ${name}, ${contract.kind}, ${handler})`, { command: false })}`;
   });
   const dependencies = persistent
     ? `
@@ -355,6 +361,7 @@ ${alignRows([
       ]
     : []),
   ...paymentDependencyRows(model),
+  ...cacheDependencyRows(model),
   ...(handlersReadParameters(model)
     ? [
         { text: '	// Parameters son los parámetros de despliegue del servicio (service.parameters), validados al arrancar.' },

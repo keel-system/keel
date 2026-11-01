@@ -116,6 +116,12 @@ export const MODULES = {
   // Las plantillas del correo en Handlebars, la sintaxis de los otros tres servidores: la versión mantenida de raymond,
   // estable desde 2022 (v2.0.48, 2022-11-03). Trae gopkg.in/yaml.v2 (Apache-2.0 y MIT) para su soporte de front matter.
   'github.com/mailgun/raymond/v2': { version: 'v2.0.48', license: 'MIT', kind: 'require', use: 'plantillas Handlebars del correo' },
+  // La caché de lectura (tramo 13e), sobre Redis o Valkey (el mismo protocolo): go-redis, el cliente que mantiene Redis.
+  // Abre las conexiones al usarlas (el servicio arranca sin el store) y deja quitar los reintentos y poner plazo a cada
+  // orden. Al binario llegan cespare/xxhash y go.uber.org/atomic (MIT) y golang.org/x/sys (BSD-3-Clause), según go-licenses
+  // sobre catalog-extended; su go.mod nombra además zeebo/xxh3 (BSD-2-Clause) y klauspost/cpuid (MIT). La v9.23.0 es de
+  // 2026-10-05.
+  'github.com/redis/go-redis/v9': { version: 'v9.23.0', license: 'BSD-2-Clause', kind: 'require', use: 'cliente de Redis y Valkey (caché de lectura)' },
   // Un transitivo FIJADO (kind 'pin'): raymond pide logrus v1.8.1, con GO-2025-4188, y v1.8.3 lo corrige. El servicio no
   // lo alcanza, pero sin fijarlo govulncheck avisa en todo proyecto con plantillas de correo (corrida 12e). Va como
   // `// indirect`, que es lo que es: tidy lo conserva porque MVS elige la mayor de las dos.
@@ -153,6 +159,9 @@ export const RELATIONAL_REQUIRES = {
 export const MAIL_REQUIRES = ['github.com/wneessen/go-mail'];
 export const TEMPLATING_REQUIRES = ['github.com/mailgun/raymond/v2'];
 export const TEMPLATING_PINS = ['github.com/sirupsen/logrus'];
+
+/** La caché de lectura (use-cases.<op>.cache): el cliente de Redis y Valkey. */
+export const CACHE_REQUIRES = ['github.com/redis/go-redis/v9'];
 
 /** Los transitivos fijados (kind 'pin'), con su versión: build los escribe como `// indirect` y la vista los conserva. */
 export const PINS = Object.freeze(

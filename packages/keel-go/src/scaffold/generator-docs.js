@@ -19,6 +19,7 @@ import { layout } from './render.js';
 import { usesRelational } from './persistence.js';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
 import { usesGoMail } from './mail.js';
+import { usesCache } from './cache.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { usesIdempotencyCheck } from './idempotency-check.js';
 import { storeDir } from '../lib/relational-engine.js';
@@ -56,6 +57,8 @@ export function stackSkills(model) {
   if (usesGoSnsSqs(model)) skills.push('keel-go-snssqs');
   if (usesGoHttpClients(model)) skills.push('keel-go-httpclient');
   if (usesGoMail(model)) skills.push('keel-go-mail');
+  // La caché de lectura: Redis o Valkey, el mismo protocolo y la misma guía.
+  if (usesCache(model) && ['redis', 'valkey'].includes(model.stack?.cache)) skills.push('keel-go-redis');
   // Los cobros con pasarela: la guía neutra, y la de la pasarela elegida (la misma pareja que keel-nest y keel-dotnet).
   if (model.payments) skills.push('keel-go-payments', `keel-go-${model.payments.gateway.id}`);
   return skills;

@@ -40,6 +40,7 @@ import * as serviceParameters from './service-parameters.js';
 import * as httpClients from './http-clients.js';
 import * as mail from './mail.js';
 import * as payments from './payments.js';
+import * as cache from './cache.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as requestIdempotency from './request-idempotency.js';
@@ -94,6 +95,7 @@ const GENERATORS = [
   httpClients,
   mail,
   payments,
+  cache,
   claim,
   reconciliationClaim,
   requestIdempotency,

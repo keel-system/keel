@@ -1020,8 +1020,46 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       las notas del handler y de la suscripción. Lo compara `keel-dotnet/test/entry-gate.test.js`, ahora a cuatro.
     - **El `designGap` `payments-cancel-reason`** (la anulación rechazada por caducidad llega como `GatewayCanceled`), ya
       en dos generadores: es de la capa `payments`, para su próxima minor.
-- **Para retomar:** el **13e** (caché) en un contexto nuevo, por tramos como los de keel-dotnet (13f caché, 13g storage,
-  13h autoría).
+  - **13e, la caché de lectura (hecho, 2026-11-01).** `keel-go` genera `cache` sobre Redis y Valkey con el reparto de los
+    otros tres: se cachea la RESPUESTA (con `wire.Marshal`/`wire.Unmarshal`, el contrato del cable), la consulta la pone el
+    agente en el handler después de lo que dependa de quién llama, y la invalidación, build. `src/scaffold/cache.js`.
+    - **Lo que Go obliga a decidir**: una interfaz no tiene métodos genéricos, así que la caché es un tipo concreto de
+      `internal/application/operation_cache.go` (`OperationCache`, con `GetOrLoad`/`GetOrLoadIf` genéricos, `Evict`,
+      `Clear`, `CachedOperation[M]`, `CacheKey` y `EntryKey`) y el PUERTO es el store (`CacheStore`); application no puede
+      importar `golang.org/x/sync`, así que la carga única es un mapa propio de cargas en vuelo. Las cachés del diseño, en
+      `cached_operations.go` (`<Op>Cache`, nombre y TTL de `keel-core/gen/cache-plan.js`). «Tras el commit» es un
+      asentamiento por caso de uso: con caché, `NewUseCases` envuelve TODA operación en `settle(observe(…))` (o
+      `settleCommand`) y a la que invalida le pasa `deps.OperationCache.clearing(<Op>Cache…)`; lo pendiente de un caso de
+      uso despachado dentro de la transacción de otro espera al de fuera, uno despachado con `WithoutTransaction` lo
+      ejecuta al terminar, y uno que falla no ejecuta nada. Sin caché, `NewUseCases` no cambia. El handler cacheado recibe
+      `operationCache *OperationCache` y la nota neutral de keel-core.
+    - **El store** (`internal/infrastructure/cache`: `Settings` de `cache.yaml` —el neutral de `keel-core/gen/cache-config.js`,
+      byte a byte el de keel-nest y keel-dotnet— y `Store` sobre **go-redis v9.23.0**, BSD-2-Clause): conexiones perezosas
+      (el servicio arranca sin el store), `MaxRetries: -1`, plazo en cada orden, `ContextTimeoutEnabled`, sin `CLIENT
+      SETINFO` ni `MAINT_NOTIFICATIONS` (el mismo saludo con Redis y Valkey), su logger interno llevado a `slog` en Debug, y
+      el vaciado por SCAN + DEL. La caída la escribe una vez la caché, no una por orden. El arranque abre el store solo si
+      el perfil la habilita y lo cierra al apagar. El arnés gana `s.ClearCache()` (`tests/integration/cache_test.go`) con
+      la orden de `reset-db.sh`, y la skill es `keel-go-redis`. La frontera deja de avisar de la caché y la rechaza solo sin
+      persistencia (sin Dependencies no hay dónde dársela al handler).
+    - **Medido**: la prueba emitida `operation_cache_test.go` EJECUTA la caché contra un store en memoria (acierto con su
+      clave, su TTL y el JSON, nulo y no cacheable, error de la carga, store caído, entrada ilegible, diez lecturas a la vez
+      en una burbuja de `testing/synctest`, el vaciado de una caché con la carga anterior a él, sin store, el vaciado que
+      espera al caso de uso de fuera y no ocurre si falla o va sin transacción) y la ida y vuelta POR EL STORE de cada
+      respuesta cacheada (una muestra construida por reflexión, con los tipos de lector propio en una tabla: uuid, instante,
+      los de `wire` y los enums del diseño); **falsada a mano con seis sabotajes**, cada uno en rojo en exactamente su caso
+      (generación, nulo, error, carga única, asentamiento, codec). `npm run cache-check` (nuevo) contra Redis y Valkey reales
+      con `scripts/probes/cache_probe_test.go`, compilada dentro de catalog-extended: **37/37**; falsado con `retries` (el
+      default de go-redis: con el store PAUSADO —acepta y no contesta— la lectura esperó 3,1 s) y `ttl` (TTL −1), cada uno
+      en su paso. `test/cache.test.js` (9 casos, sin red): `cache.yaml` idéntico al de keel-nest y keel-dotnet y leído por
+      claves que declara, nombres/TTL/clave de keel-core e iguales en los otros dos, el vaciado exactamente en las
+      operaciones de `cacheInvalidations`, el handler y su nota, el arranque, `ClearCache` con la orden de `reset-db.sh` en
+      redis y valkey, go-redis solo con caché y la skill. `go-check --fixtures` **48/48** (las siete variantes de las dos
+      fixtures con caché, recompiladas); go-licenses y govulncheck limpios sobre catalog-extended. `npm test` de keel-go
+      **978/978**.
+    - Los dos diseños con caché (`asset-vault`, `catalog-extended`) siguen fuera de la frontera por storage, `needs`, OAuth2,
+      el alcance y la reconciliación documental: la corrida espera al 13i, como en keel-dotnet.
+- **Para retomar:** el **13f** (storage) en un contexto nuevo; después 13g (autoría) y 13h (`needs` + OAuth2), cada uno
+  con su red en vivo, y el 13i (corridas `asset-vault` y `catalog`) tras `go-check` entero.
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y

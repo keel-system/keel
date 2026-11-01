@@ -16,7 +16,8 @@
     "stub-check": "node scripts/stub-check.js",
     "doc-check": "node scripts/doc-check.js",
     "doc-harness-check": "node scripts/doc-harness-check.js",
-    "mail-check": "node scripts/mail-check.js"
+    "mail-check": "node scripts/mail-check.js",
+    "cache-check": "node scripts/cache-check.js"
   },
   "files": [
     "src",

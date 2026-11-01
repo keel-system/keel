@@ -30,6 +30,7 @@ import { resetDbScript } from '@keel-system/keel-core/gen/infra-scripts';
 import { usesApi, usesRelational } from '@keel-system/keel-core/gen/features';
 import { documentFlowMembers, documentProbe, documentSmokeCase, mongoEvalSection } from './document-harness.js';
 import { MAIL_HARNESS_FILE, MAIL_HARNESS_IMPORTS, mailHarnessBody, mailSmokeCase } from './mail-harness.js';
+import { CACHE_HARNESS_FILE, cacheHarnessBody } from './cache.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { missingClockCountSql, rescueProbes, stallSql } from '@keel-system/keel-core/gen';
 import { GO_INFRA } from './infra.js';
@@ -67,6 +68,7 @@ export function generate(model) {
     ...(stub ? [{ path: `${dir}/${HTTP_STUB_HARNESS_FILE}`, content: integrationFile(model, { imports: HTTP_STUB_HARNESS_IMPORTS, body: stub }) }] : []),
     ...(payments ? [{ path: `${dir}/${PAYMENT_HARNESS_FILE}`, content: integrationFile(model, { imports: PAYMENT_HARNESS_IMPORTS, body: payments }) }] : []),
     ...(mailHarnessBody(model) ? [{ path: `${dir}/${MAIL_HARNESS_FILE}`, content: integrationFile(model, { imports: MAIL_HARNESS_IMPORTS, body: mailHarnessBody(model) }) }] : []),
+    ...(cacheHarnessBody(model) ? [{ path: `${dir}/${CACHE_HARNESS_FILE}`, content: integrationFile(model, { imports: [], body: cacheHarnessBody(model) }) }] : []),
     { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
     { path: CHECK_FLOWS_SH, content: checkFlowsScript(model) }
   ];

@@ -32,6 +32,7 @@ import { compensationNote } from '@keel-system/keel-core/gen/compensation';
 import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity } from './security.js';
 import { callMethod, clientParam, usesGoHttpClients } from './http-clients.js';
 import { mailNote } from './mail.js';
+import { cacheHandlerNote } from './cache.js';
 
 export function generate(model) {
   const files = [];
@@ -439,6 +440,8 @@ function handlerNotes(model, operation) {
   }
   const mailing = mailNote(model, operation);
   if (mailing) notes.push(mailing);
+  const caching = cacheHandlerNote(model, operation);
+  if (caching) notes.push(caching);
   notes.push(...reconciliationNotes(model, operation));
   const compensation = compensationNote(operation);
   if (compensation) notes.push(compensation);
