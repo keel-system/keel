@@ -53,6 +53,8 @@ export function generate(model) {
   files.push(
     { path: `${store.dir}/database.go`, content: packageFile(model, store, { imports: databaseImports(d), body: databaseBody(d) }) },
     { path: `${store.dir}/transactions.go`, content: packageFile(model, store, { imports: [...TRANSACTION_IMPORTS, engineError, 'github.com/google/uuid'], body: transactionsBody(d, transactionNeeds(model)) }) },
+    // INTERNA al paquete (no `<motor>_test`): mide openTx y la clave de la transacción, que no se exportan.
+    { path: `${store.dir}/transactions_test.go`, content: packageFile(model, store, { imports: ['context', 'database/sql', 'testing', 'internal/application'], body: TRANSACTIONS_TEST }) },
     { path: `${store.dir}/errors.go`, content: packageFile(model, store, { imports: ['errors', 'strings', engineError, 'internal/domain'], body: errorsBody(model, d) }) }
   );
   return [...files, ...textFold];
@@ -312,6 +314,28 @@ func Migrate(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 `;
 }
 
+const TRANSACTIONS_TEST = `
+// La marca de application.WithoutTransaction la aplica Within UNA vez, quitando del contexto la transacción del llamante;
+// la que el caso de uso abra después bajo la marca (la del Save de un repositorio) es suya, y tienen que verla su outbox y
+// sus ganchos de confirmación. Corrida 12e: openTx miraba también la marca, y el outbox del envío que despacha un barrido
+// no encontraba la transacción del Save.
+func TestSinTransaccionOcultaLaDelLlamanteYVeLaSuya(t *testing.T) {
+	caller := context.WithValue(t.Context(), txKey{}, &sql.Tx{})
+	err := (&Transactions{}).Within(application.WithoutTransaction(caller), application.KindCommand, func(ctx context.Context) error {
+		if openTx(ctx) != nil {
+			t.Error("el caso de uso despachado sin transacción ve la del llamante")
+		}
+		if openTx(context.WithValue(ctx, txKey{}, &sql.Tx{})) == nil {
+			t.Error("la transacción de una escritura abierta bajo la marca no se ve: el outbox de su Save no la encontraría")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+`;
+
 // ─── transactions.go ─────────────────────────────────────────────────────────────────────────────
 
 const TRANSACTION_IMPORTS = ['context', 'database/sql', 'errors', 'fmt', 'log/slog', 'time', 'internal/application'];
@@ -477,10 +501,11 @@ ${p.construct}
 
 // Within implementa application.Transactor: las consultas en una transacción de solo lectura y los comandos en una de
 // escritura. Un caso de uso despachado con application.WithoutTransaction no abre ninguna: cada escritura de sus
-// repositorios confirma la suya.
+// repositorios confirma la suya. La marca se aplica AQUÍ y una sola vez, quitando del contexto la transacción del
+// llamante: lo que se abra debajo (el Save de un repositorio) es suyo, y openTx lo ve.
 func (t *Transactions) Within(ctx context.Context, kind application.MessageKind, fn func(context.Context) error) error {
 	if application.TransactionDetached(ctx) {
-		return fn(ctx)
+		return fn(context.WithValue(ctx, txKey{}, (*sql.Tx)(nil)))
 	}
 	return t.within(ctx, kind == application.KindQuery, func(ctx context.Context, _ DBTX) error {
 		return fn(ctx)
@@ -505,11 +530,9 @@ func (t *Transactions) conn(ctx context.Context) (DBTX, error) {
 	return ${p.wrap('t.db')}, nil
 }
 
-// openTx es la transacción abierta en ctx, o nil (también si el caso de uso se despachó sin transacción).
+// openTx es la transacción abierta en ctx, o nil. No mira la marca de application.WithoutTransaction: Within ya quitó la
+// del llamante, y una que se abra después bajo la marca es la de una escritura, que sus ganchos tienen que ver.
 func openTx(ctx context.Context) *sql.Tx {
-	if application.TransactionDetached(ctx) {
-		return nil
-	}
 	tx, _ := ctx.Value(txKey{}).(*sql.Tx)
 	return tx
 }

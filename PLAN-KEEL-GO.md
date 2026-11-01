@@ -888,7 +888,19 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       cuatro sabotajes, cada uno en rojo en exactamente su caso). De paso, `go-check` destapó un defecto latente de
       `rabbitmq.js`: sin `onFailure.retry` emitía `retry = nil` en el bloque `var`, que no compila (inspection-reports con
       RabbitMQ); ahora `retry *ListenerRetry`, y `test/messaging.test.js` dejó de fijar la forma rota. `npm test` de keel-go
-      952/952 y `go-check --no-race` **123/123**. Para reanudar: `keel-go build --refresh --prune`, borrar
+      952/952 y `go-check --no-race` **123/123**.
+    - **Segundo intento, parado en la fase 2b (2026-11-01)**: 14 OK, 8 FALLO, 1 OMITIDO. Dos causas. (1) Defecto del
+      generador en los dos modelos: `openTx` miraba la marca de `WithoutTransaction`, así que la transacción que abría el
+      Save de un caso de uso despachado sin transacción (el envío que despacha el barrido) era invisible para su outbox
+      (Mongo: `appendOutbox` fallaba y el envío revertía después de salir el correo) y para `afterCommit` (los dos
+      modelos: el aviso best-effort saltaba antes del commit); y el `Within` relacional no quitaba la transacción del
+      llamante. **Arreglo**: la marca se aplica en `Within` una vez (Mongo con `outside`, relacional poniendo la
+      transacción a nil) y `openTx` ya no la mira. Prueba Go emitida `transactions_test.go` (interna al paquete del
+      motor, sin base), falsada con cuatro sabotajes (el `openTx` viejo y el `Within` sin limpiar, en los dos modelos),
+      cada uno en rojo con su mensaje. (2) Defecto de la FIXTURE, no de keel-go: la v2.1.0 (`173ca712`, careo de la
+      pasada 1) añadió `templateId: <t1>` a cada variable del Then de FL-TPL-001 («una entidad hija lleva siempre el id
+      de su raíz»), pero ningún generador lo emite (los cuatro `TemplateVariableDto` y el OpenAPI neutral no lo tienen) y
+      el dominio no lo declara; ninguna corrida había ejecutado aún la v2.1.0 del par. Para reanudar: `keel-go build --refresh --prune`, borrar
       el `peers.go` del agente y relanzar `/keel-generate-go`.
 - **Para retomar:** la corrida 12e (`/keel-generate-go` en `services/notification-mailer-mongo-go`, sin argumentos) y su
   registro en `docs/corridas/`, contra la huella 17 de las gemelas. Sin medir del 11: `RestartServer` y

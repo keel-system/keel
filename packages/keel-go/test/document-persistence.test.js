@@ -75,3 +75,15 @@ test('cada sabotaje de doc-check se sigue aplicando a lo que emite alguna fixtur
     assert.ok(changed > 0, `${id} ya no se aplica`);
   }
 });
+
+// Corrida 12e (2026-11-01): openTx miraba la marca de application.WithoutTransaction, así que la transacción que abría el
+// Save de un caso de uso despachado sin transacción (el envío que despacha el barrido) era invisible para su outbox, y
+// cada envío revertía. La marca se aplica en Within, una vez; la prueba emitida lo ejecuta en go-check, en los dos modelos.
+test('openTx no mira la marca de WithoutTransaction: la aplica Within, y una prueba emitida lo mide en los dos modelos', () => {
+  for (const [name, store] of [['notification-mailer-mongo', STORE], ['product-catalog', 'internal/infrastructure/postgres']]) {
+    const files = byPath(plan(name).files);
+    const openTx = files[`${store}/transactions.go`].match(/func openTx\(ctx context\.Context\)[^]*?\n}\n/)[0];
+    assert.doesNotMatch(openTx, /TransactionDetached/, name);
+    assert.match(files[`${store}/transactions_test.go`], /func TestSinTransaccionOcultaLaDelLlamanteYVeLaSuya\(t \*testing\.T\)/, name);
+  }
+});

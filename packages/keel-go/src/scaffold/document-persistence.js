@@ -51,6 +51,28 @@ const PLATFORM = { indexCreator: 'indexes.go (EnsureIndexes)', errorTranslator: 
 
 export { usesDocument };
 
+const TRANSACTIONS_TEST = `
+// La marca de application.WithoutTransaction la aplica Within UNA vez, quitando del contexto la transacción del llamante;
+// la que el caso de uso abra después bajo la marca (la del Save de un repositorio) es suya, y tienen que verla su outbox y
+// sus ganchos de confirmación. Corrida 12e: openTx miraba también la marca, y el outbox del envío que despacha un barrido
+// no encontraba la transacción del Save.
+func TestSinTransaccionOcultaLaDelLlamanteYVeLaSuya(t *testing.T) {
+	caller := context.WithValue(t.Context(), txKey{}, &txState{})
+	err := (&Transactions{}).Within(application.WithoutTransaction(caller), application.KindCommand, func(ctx context.Context) error {
+		if openTx(ctx) != nil {
+			t.Error("el caso de uso despachado sin transacción ve la del llamante")
+		}
+		if openTx(context.WithValue(ctx, txKey{}, &txState{})) == nil {
+			t.Error("la transacción de una escritura abierta bajo la marca no se ve: el outbox de su Save no la encontraría")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+`;
+
 export function generate(model) {
   if (!usesDocument(model)) return [];
   const { store } = layout(model);
@@ -70,6 +92,8 @@ export function generate(model) {
       path: `${store.dir}/transactions.go`,
       content: packageFile(model, store, { imports: ['context', 'errors', 'log/slog', 'time', MONGO_DRIVER, MONGO_OPTIONS, READPREF, 'internal/application'], body: transactionsBody(model) })
     },
+    // INTERNA al paquete (no `mongo_test`): mide openTx y la clave de la transacción, que no se exportan.
+    { path: `${store.dir}/transactions_test.go`, content: packageFile(model, store, { imports: ['context', 'testing', 'internal/application'], body: TRANSACTIONS_TEST }) },
     { path: `${store.dir}/errors.go`, content: packageFile(model, store, { imports: ['errors', 'strings', MONGO_DRIVER, 'internal/domain'], body: errorsBody(model) }) },
     {
       path: `${store.dir}/bson_values.go`,
@@ -321,11 +345,10 @@ func (t *Transactions) collection(name string) (*mongodriver.Collection, error) 
 	return t.db.Collection(name), nil
 }
 
-// openTx es la transacción abierta en ctx, o nil (también si el caso de uso se despachó sin transacción).
+// openTx es la transacción abierta en ctx, o nil. No mira la marca de application.WithoutTransaction: Within ya quitó la
+// del llamante (outside), y una que se abra después bajo la marca es la del Save de un repositorio, que su outbox tiene que
+// encontrar.
 func openTx(ctx context.Context) *txState {
-	if application.TransactionDetached(ctx) {
-		return nil
-	}
 	state, _ := ctx.Value(txKey{}).(*txState)
 	return state
 }
