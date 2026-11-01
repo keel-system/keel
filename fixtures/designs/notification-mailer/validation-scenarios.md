@@ -1,7 +1,7 @@
 # notification-mailer — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/notification-mailer v2.1.0. Contrato de validación para la fase de generación.
+> specs/notification-mailer v2.1.1. Contrato de validación para la fase de generación.
 
 > **El par del MVP, cerrado de punta a punta.** Es la fixture sobre la que el método se ejerce
 > entero —escenarios, careo, revisión, análisis de huecos y registro estructural— y la que fija
@@ -170,11 +170,10 @@ del cliente `orders-service-ci` y el cuerpo de la plantilla de prueba:
 2. El cuerpo es exactamente `{id: <t1>, key: "order-shipped", locale: "es", status: "draft",
    version: 1, subject: "Pedido {{orderNumber}} enviado", bodyHtml: <el enviado>,
    bodyText: <el enviado>, publishedAt: null, applicationId: <a1>, variables: [...]}`, con
-   `variables` de dos elementos, en cualquier orden: `{id: <uuid>, templateId: <t1>,
-   name: "orderNumber", required: true, description: "Número visible del pedido."}` y
-   `{id: <uuid>, templateId: <t1>, name: "customerName", required: true, description: null}` —una
-   entidad hija lleva siempre el id de su raíz—. El asunto y los cuerpos vuelven
-   **sin interpolar**.
+   `variables` de dos elementos, en cualquier orden: `{id: <uuid>, name: "orderNumber",
+   required: true, description: "Número visible del pedido."}` y `{id: <uuid>,
+   name: "customerName", required: true, description: null}` —los campos que declara
+   `TemplateVariable`, y ninguno más—. El asunto y los cuerpos vuelven **sin interpolar**.
 3. `getTemplate` — `GET /v1/templates/<t1>` con la misma credencial responde `200` con el
    mismo cuerpo.
 4. Un segundo `PUT /v1/templates/order-shipped/es` con el mismo cuerpo responde `201` con otro

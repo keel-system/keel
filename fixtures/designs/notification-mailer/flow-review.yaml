@@ -33,4 +33,18 @@ flows:
 # Pasada 2 (v2.1.0), completa: un hallazgo, la convención «Ausencia vs nulo» sobre sendingSince, corregida en
 # el escenario; la pasada 3 lo comprobó cerrado (FL-NTF-001 Then 3 y 5, FL-DSP-001 Then 1 y 3 casan con ella).
 # --- Pasada 3 (v2.1.0), completa ---
-findings: []
+# Resello acotado (v2.1.1, 2026-11-01), escrito por el diseñador: la corrida de keel-go (12e) destapó que la pasada 1
+# había resuelto en el escenario un hallazgo al revés. FL-TPL-001 afirmaba templateId en cada variable, que no declara
+# TemplateVariable ni emite ningún generador. El escenario vuelve a afirmar solo lo que declara la entidad, y nada más.
+findings:
+  - flow: FL-TPL-001
+    step: "Then 2"
+    kind: response-shape
+    artifact: domain.TemplateVariable
+    evidence: >-
+      El Then afirma `templateId: <t1>` en cada elemento de `variables` («una entidad hija lleva siempre el id de su
+      raíz»). TemplateVariable declara id, name, required y description, y ninguna capa proyecta a la respuesta el id
+      de la raíz de una hija: no se deduce del diseño, y los cuatro generadores (y el OpenAPI derivado) no lo emiten.
+    proposal: Quitar `templateId` de las variables del Then 2 y afirmar solo los campos que declara TemplateVariable.
+    resolution: scenario
+    sealAfter: 991d30e9db05dea4c7a3a3b806b940d6ea8979d7b7b05c597eadf7d3390388d8

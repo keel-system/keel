@@ -1,6 +1,6 @@
 # notification-mailer-mongo — Documento de diseño
 
-> specs/notification-mailer-mongo v2.1.0. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
+> specs/notification-mailer-mongo v2.1.1. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
 
 ## 1. Propósito y alcance
 
