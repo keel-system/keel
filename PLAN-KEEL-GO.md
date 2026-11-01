@@ -914,8 +914,8 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       fuera de la huella, `logrus` fijado a v1.8.3 como `// indirect` (kind `pin` de `go-stack.js`; la vista del manifiesto
       lo conserva solo con esa versión): raymond lo arrastraba con GO-2025-4188. **Con esto el inc. 12 queda cerrado.**
 - **Para retomar:** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
-  contexto nuevo y por tramos como los de keel-dotnet. Antes, `go-check` desde la terminal: los arreglos del 12e cambian
-  lo emitido de todas las fixtures con persistencia. Sin medir del 11: `RestartServer` y
+  contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
+  las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y
   `HoldFromReconciliation` contra la infra real, y `harness-check --database=mysql` con la réplica. Las redes pesadas de
   una en una y con la máquina descargada. El hallazgo neutral de la collation de la sombra en MySQL espera su propia
   tarea en keel-core.
