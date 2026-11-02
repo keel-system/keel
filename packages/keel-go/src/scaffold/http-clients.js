@@ -29,7 +29,7 @@ import { fallbackFailures, hasCallFallback, recordedFailures, resiliencePolicy, 
 import { httpClientsYaml } from '@keel-system/keel-core/gen/http-clients-config';
 import { LOCAL_STUB_BASE_URL } from '@keel-system/keel-core/gen/infra-catalog';
 import { LAST_KNOWN_MAX_ENTRIES, lastKnownNeeds, servesLastKnown } from '@keel-system/keel-core/gen/last-known';
-import { repositoryRoots, usesHttpClients, usesOAuth2, usesRelational } from '@keel-system/keel-core/gen/features';
+import { repositoryRoots, usesHttpClients, usesOAuth2 } from '@keel-system/keel-core/gen/features';
 import { goExported, goUnexported } from '../lib/go-projection.js';
 import { alignRows, commentLines, goString, keyedLiteral } from '../lib/go-source.js';
 import { sentinelOf } from './errors.js';
@@ -40,12 +40,12 @@ const PROFILES = ['local', 'develop', 'production', 'test'];
 export const CLIENTS_IMPORT = 'internal/infrastructure/clients';
 
 /**
- * ¿Genera keel-go los clientes salientes de este diseño? Con la persistencia relacional (el cableado de los casos de uso
- * vive en sus Dependencies) y sin nada de lo que la frontera todavía rechaza: go-check genera TODAS las fixtures
+ * ¿Genera keel-go los clientes salientes de este diseño? Con persistencia, relacional o documental (el cableado de los casos
+ * de uso vive en sus Dependencies), y sin nada de lo que la frontera todavía rechaza: go-check genera TODAS las fixtures
  * saltándose la frontera, y lo que se emitiera para un diseño rechazado tendría que compilar igual.
  */
 export function usesGoHttpClients(model) {
-  return usesHttpClients(model) && usesRelational(model) && repositoryRoots(model).length > 0 && unsupportedOutbound(model).length === 0;
+  return usesHttpClients(model) && repositoryRoots(model).length > 0 && unsupportedOutbound(model).length === 0;
 }
 
 /**

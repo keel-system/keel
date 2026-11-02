@@ -12,7 +12,8 @@
 
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
-import { CLOCK, OUTBOX, PRINT_WRAPPER, abandonOutboxScript, clearAbandonedScript, missingClockCountScript, setStateScript } from '@keel-system/keel-core/gen/mongo-probes';
+import { CLOCK, OUTBOX, PRINT_WRAPPER, abandonOutboxScript, ageClockScript, clearAbandonedScript, holdClockScript, missingClockCountScript, setStateScript } from '@keel-system/keel-core/gen/mongo-probes';
+import { documentAgingTargets } from '@keel-system/keel-core/gen/aging-targets';
 import { rescueProbes } from '@keel-system/keel-core/gen/scheduling';
 import { alignRows, goString } from '../lib/go-source.js';
 
@@ -95,6 +96,18 @@ func (s *Scenario) MongoEval(script string) string {
 }`
   ];
   members.push(...rescueMembers(model));
+  members.push(...agingMembers(model));
+  // Quien mete un id en un script: el rescate y la reconciliación. Sin ninguno, sería una función sin usar.
+  if (members.length > 1) {
+    members.push(String.raw`func (s *Scenario) documentID(id string) string {
+	s.Helper()
+	valid, err := documentID(id)
+	if err != nil {
+		s.Fatal(err)
+	}
+	return valid
+}`);
+  }
   return members;
 }
 
@@ -171,15 +184,59 @@ func (s *Scenario) rescueOf(operation string) rescue {
 		s.Fatalf("no hay rescate para el barrido %q. Los que lo tienen: ${known}", operation)
 	}
 	return scripts
+}`
+  ];
 }
 
-func (s *Scenario) documentID(id string) string {
+/**
+ * `AgeForReconciliation` y `HoldFromReconciliation` sobre documentos: mueven SOLO la marca de espera de ese documento, con
+ * los scripts de keel-core, los mismos que los otros tres.
+ */
+function agingMembers(model) {
+  const targets = documentAgingTargets(model);
+  if (targets.size === 0) return [];
+  const known = [...targets.keys()].join(', ');
+  const first = [...targets.keys()][0];
+  const table = (name, script) =>
+    `var ${name} = map[string][]scriptPair{\n${alignRows(
+      [...targets].map(([activation, list]) => ({ indent: '\t', cells: [`${goString(activation)}:`, `{${list.map((target) => pair(script(target))).join(', ')}},`] }))
+    ).join('\n')}\n}`;
+  return [
+    String.raw`// reconciliationAging son los scripts que envejecen la marca de espera de cada barrido, por activación: ${known}. El id va
+// en medio.
+${table('reconciliationAging', ageClockScript)}
+
+// AgeForReconciliation deja la marca de espera de activation infinitamente rancia para el documento id, de modo que el
+// barrido lo tome en SU PRÓXIMA PASADA. No dispara el barrido —lo dispara su cron, como en producción— y no toca el estado:
+// el documento ya está donde el barrido lo busca. Bajar el umbral por configuración sería global.
+//
+//	s.AgeForReconciliation(${goString(first)}, id)
+//	s.Eventually(func() bool { … }, 90*time.Second, "el barrido no tomó el documento")
+func (s *Scenario) AgeForReconciliation(activation, id string) {
 	s.Helper()
-	valid, err := documentID(id)
-	if err != nil {
-		s.Fatal(err)
+	s.reconciliationClock(reconciliationAging, activation, id)
+}
+
+// reconciliationHolding son los scripts que dejan la marca de espera de cada barrido en el FUTURO.
+${table('reconciliationHolding', holdClockScript)}
+
+// HoldFromReconciliation es el inverso de AgeForReconciliation: deja la marca de espera de activation en el FUTURO para el
+// documento id, de modo que el barrido NO lo tome aunque pasen sus ciclos. Es la palanca de un escenario que pide «lo que
+// acaba de encargarse no se toca».
+func (s *Scenario) HoldFromReconciliation(activation, id string) {
+	s.Helper()
+	s.reconciliationClock(reconciliationHolding, activation, id)
+}
+
+func (s *Scenario) reconciliationClock(scripts map[string][]scriptPair, activation, id string) {
+	s.Helper()
+	list, ok := scripts[activation]
+	if !ok {
+		s.Fatalf("no hay barrido para la activación %q. Las que lo tienen: ${known}", activation)
 	}
-	return valid
+	for _, script := range list {
+		s.MongoEval(script.prefix + s.documentID(id) + script.suffix)
+	}
 }`
   ];
 }

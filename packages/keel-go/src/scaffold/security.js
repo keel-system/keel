@@ -30,6 +30,7 @@ import { ownershipRulesOf, usesCallerRoles } from '@keel-system/keel-core/gen/ow
 import { securityConfigFiles } from '@keel-system/keel-core/gen/security-config';
 import { alignRows, goString, keyedLiteral } from '../lib/go-source.js';
 import { applicationPath, layout, packageFile } from './render.js';
+import { callerScopeFiles } from './caller-scope.js';
 
 export { securityPlan, usesHttpSecurity, usesJwt };
 
@@ -108,6 +109,7 @@ export function generate(model) {
   if (usesRoleCheck(model)) {
     files.push({ path: applicationPath(model, 'CallerRoles'), content: packageFile(model, layout(model).application, { imports: ['context'], body: CALLER_ROLES_PORT }) });
   }
+  files.push(...callerScopeFiles(model, platform));
   files.push({
     path: `${httpapi.dir}/security.go`,
     content: packageFile(model, httpapi, {

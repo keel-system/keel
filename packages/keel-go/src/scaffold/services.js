@@ -29,6 +29,7 @@ import { idempotencyMethods, idempotencyNotes } from './request-idempotency.js';
 import { appType, applicationPath, docComment, domainPath, goFileName, goTypeName, isOptional, layout, packageFile } from './render.js';
 import { ownershipNotes } from '@keel-system/keel-core/gen/ownership';
 import { compensationNote } from '@keel-system/keel-core/gen/compensation';
+import { callerScopeNote } from './caller-scope.js';
 import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity } from './security.js';
 import { callMethod, clientParam, usesGoHttpClients } from './http-clients.js';
 import { projectionNotes, replicaNote } from './projections.js';
@@ -420,6 +421,8 @@ function handlerNotes(model, operation) {
       hasRole: usesDependencies(model) && roleCheckedOperation(model, operation) ? (role) => `h.${CALLER_ROLES.param}.HasRole(ctx, ${goString(role)})` : null
     })
   );
+  const scope = usesDependencies(model) ? callerScopeNote(model, operation) : null;
+  if (scope) notes.push(scope);
   notes.push(...scheduleNotes(model, operation));
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);

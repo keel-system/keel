@@ -129,3 +129,46 @@ test('sin barridos de reconciliación no se emite nada de esto', () => {
   assert.ok(!files.some((file) => /reconciliation/.test(file.path)));
   assert.doesNotMatch(content(files, 'cmd/server/main.go'), /Reconciliation/);
 });
+
+// ─── Sobre documentos (tramo 13h-b): asset-vault ─────────────────────────────────────────────────
+
+test('asset-vault: el reclamo sobre documentos, con los documentos y los parámetros de los otros tres', () => {
+  const stack = { database: 'mongodb', broker: 'rabbitmq', auth: 'keycloak', cache: 'redis', storage: 'minio' };
+  const { model, files } = plan('asset-vault', planService, stack);
+  for (const profile of ['local', 'develop', 'production']) {
+    const file = `config/parameters/${profile}/reconciliation.yaml`;
+    assert.equal(content(files, file), content(plan('asset-vault', planNest, stack).files, file), `${profile}: el de keel-nest`);
+    assert.equal(content(files, file), content(plan('asset-vault', planDotnet, stack).files, file), `${profile}: el de keel-dotnet`);
+  }
+  const mark = content(files, 'internal/infrastructure/mongo/reconciliation.go');
+  // Un solo upsert sobre la marca caducada, con la clave aplanada de keel-core y las dos columnas como campos.
+  assert.match(mark, /Value: activation \+ "\|" \+ entityID\.String\(\)\}, \{Key: "claimed_at", Value: bson\.D\{\{Key: "\$lte", Value: instantValue\(expiredBefore\)\}\}\}/);
+  assert.match(mark, /"\$setOnInsert", Value: bson\.D\{\{Key: "activation", Value: activation\}, \{Key: "entity_id", Value: uuidValue\(entityID\)\}\}/);
+  assert.match(mark, /SetUpsert\(true\)/);
+  assert.match(mark, /mongodriver\.IsDuplicateKeyError\(err\)/);
+  assert.doesNotMatch(mark, /database\/sql|DBTX/);
+
+  const [claim] = reconciliationClaims(model);
+  const adapter = content(files, `internal/infrastructure/mongo/${claim.entity.toLowerCase()}_repository.go`);
+  const method = claim.method[0].toUpperCase() + claim.method.slice(1);
+  assert.ok(adapter.includes(`func (r *${claim.entity}Repository) ${method}(ctx context.Context)`));
+  // Fuera de toda transacción, y la lectura excluye la marca viva.
+  assert.match(adapter, /confirma por su cuenta y hay una transacción abierta/);
+  assert.match(adapter, /heldReconciliations\(ctx, r\.tx,/);
+  assert.match(adapter, /"\$nin", Value: held/);
+  assert.match(content(files, `internal/domain/${claim.entity.toLowerCase()}_repository.go`), new RegExp(`${method}\\(ctx context\\.Context\\)`));
+
+  // Las marcas se purgan e indexan por claimed_at; el arranque lee los barridos y se los da al adaptador.
+  assert.match(content(files, 'internal/infrastructure/mongo/purges.go'), /NewReconciliationClaimPurge/);
+  assert.match(content(files, 'internal/infrastructure/mongo/indexes.go'), /"reconciliation_claim": \{\n\t\t\{Keys: bson\.D\{\{Key: "claimed_at", Value: 1\}\}/);
+  const server = files.find((file) => file.path.startsWith('cmd/server/') && file.content.includes('ReconciliationSettingsFrom')).content;
+  assert.match(server, new RegExp(`New${claim.entity}Repository\\(transactions, [^)]*reconciliation\\)`));
+
+  // El barrido lo enseña, y el arnés mueve solo la marca del documento con los scripts de keel-core.
+  assert.match(content(files, 'internal/application/reconcile_scans_command_handler.go'), /EL RECLAMO YA ESTÁ GENERADO/);
+  const flow = content(files, 'tests/integration/flow_test.go');
+  assert.match(flow, /func \(s \*Scenario\) AgeForReconciliation\(activation, id string\)/);
+  assert.match(flow, /func \(s \*Scenario\) HoldFromReconciliation\(activation, id string\)/);
+  assert.match(flow, /"scanAsset":\s+\{scriptPair\{.*last_scanned_at/);
+  assert.doesNotMatch(content(files, 'tests/integration/http_stub_test.go'), /AgeForReconciliation/);
+});

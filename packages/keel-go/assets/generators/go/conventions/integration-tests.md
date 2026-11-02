@@ -84,6 +84,8 @@ el diseño la hace posible:
 | `s.SecondTokenFor(rol)` | con roles | el SEGUNDO usuario del rol: otro titular con los mismos permisos |
 | `s.ServiceCredential(cliente)` | con `serviceAuth` | el token de máquina de un cliente del diseño o de la matriz `test-m2m-*` |
 | `s.TokenAs(Persona{…})` | identidad del llamante en un claim, con Keycloak | una persona con el `sub` exacto y los claims del escenario |
+| `ScopedResource()` | con alcance por recurso | el recurso al que alcanzan los usuarios no exentos (sale de `infra/test-credentials.env`: no lo escribas a mano) |
+| `s.TokenWithScope(rol, valores…)` | con alcance por recurso y Keycloak | un usuario del rol cuyo claim del alcance enumera EXACTAMENTE esos valores (ninguno: sin el claim), porque `TokenFor` siempre trae `ScopedResource()` |
 
 Se llaman **en cada petición** y no se guarda lo que devuelven: el token dura cinco minutos y se renueva solo si se
 le pregunta. Si el proveedor no lo da, el escenario termina ahí con el motivo (no hace falta comprobar el error).
@@ -143,7 +145,7 @@ Con clientes salientes (capa `http-clients`), el arnés trae `tests/integration/
 | `s.StubSequence(método, ruta, RespondConnectionFault(), RespondOK(200, cuerpo))` | siempre | respuestas distintas para llamadas sucesivas (el reintento); la última se queda pegada, una por ruta y flujo |
 | `s.StubCallCount(método, ruta)` / `s.StubRequests(método, ruta)` | siempre | cuántas veces se llamó y qué se le mandó (`request.Header(n)`, `request.JSON()`) |
 | `s.ResetStubs()` | siempre | el stub vacío, a mano (el reset de cada flujo ya lo hace) |
-| `s.AgeForReconciliation(activación, id)` / `s.HoldFromReconciliation(activación, id)` | con `reconciledBy` y base relacional | la marca de espera de esa fila, rancia (el barrido la toma en su próxima pasada) o en el futuro (no la toca) |
+| `s.AgeForReconciliation(activación, id)` / `s.HoldFromReconciliation(activación, id)` | con `reconciledBy` | la marca de espera de esa fila o documento, rancia (el barrido lo toma en su próxima pasada) o en el futuro (no lo toca) |
 | `s.RestartServer()` | con un circuito | el servidor reiniciado: la ventana del circuito vacía, para un flujo que cuente sus fallos |
 
 Cómo se escriben los flujos de una llamada saliente, del circuito y del barrido: la skill `keel-go-httpclient`.

@@ -25,6 +25,7 @@ import { storeDir } from '../../src/lib/relational-engine.js';
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { isOptional } from '../../src/scaffold/render.js';
 import { claimMethod, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
+import { PROBE_RECONCILIATION, docReconciliationProbes } from './doc-reconciliation-probes.js';
 import { usesGoOutbox, usesGoProcessedEvents } from '../../src/scaffold/messaging.js';
 import { usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { tablePurges } from '../../src/scaffold/purge.js';
@@ -68,7 +69,7 @@ export function docProbePath(model) {
 
 /** El adaptador de una raíz en las sondas: sin puente (las muestras se rehidratan y no emiten). */
 function repository(model, root) {
-  return `New${root.name}Repository(${repositoryArgs(model, root, 'probeTx', 'nil', { sweeps: 'probeSweeps', parameters: 'probeParameters' })})`;
+  return `New${root.name}Repository(${repositoryArgs(model, root, 'probeTx', 'nil', { sweeps: 'probeSweeps', parameters: 'probeParameters', reconciliation: PROBE_RECONCILIATION })})`;
 }
 
 /** La sonda documental del sujeto: `{ path, content }`, o null sin raíces. */
@@ -102,6 +103,7 @@ export function docProbeFile(model) {
   if (usesGoProcessedEvents(model)) parts.push(PROCESSED_PROBES);
   if (tablePurges(model).length > 0) parts.push(purgeProbes(model));
   for (const root of roots) parts.push(...claimProbes(model, root));
+  parts.push(docReconciliationProbes(model, (root) => repository(model, root)));
   parts.push(patternTables(ctx));
   const content = goFile({ pkg: 'mongo', imports: IMPORTS, body: `\n${parts.filter(Boolean).join('\n\n')}\n`, module: model.service.goModule, generated: false });
   return { path: docProbePath(model), content, unsampled: ctx.unsampled };

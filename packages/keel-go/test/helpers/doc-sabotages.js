@@ -48,6 +48,14 @@ export const DOC_SABOTAGES = {
   'guard-in-session': { files: file('processed_events\\.go'), from: 'documents.InsertOne(outside(ctx),', to: 'documents.InsertOne(ctx,', expect: /ProcessedEvents_/ },
   // El reclamo de barrido no comprueba el estado de partida: la pasada siguiente vuelve a llevarse lo reclamado.
   claim: { files: REPOSITORY, from: 'Value: bson.D{{Key: "$in", Value: bson.A{', to: 'Value: bson.D{{Key: "$nin", Value: bson.A{', expect: /_ClaimFor/ },
+  // La lectura de candidatos no excluye los de marca viva: la cabeza de la cola, reclamada y sin resolver, ocupa el lote.
+  'reconciliation-held': { files: file('reconciliation\\.go'), from: 'held = append(held, uuidValue(id))', to: '_ = uuidValue(id)', expect: /_ClaimFor\w+_TheNextPass/ },
+  // El reclamo se lleva también lo recién encargado: el umbral del diseño deja de contar.
+  'reconciliation-threshold': { files: REPOSITORY, from: 'instantValue(unansweredBefore)', to: 'instantValue(unansweredBefore.Add(window.UnansweredAfter() + time.Hour))', expect: /_ClaimFor\w+_TakesOnlyWhatOutlived/ },
+  // La marca caduca con < y no con el <= de keel-core.
+  'reconciliation-expiry': { files: file('reconciliation\\.go'), from: '{Key: "$lte", Value: instantValue(expiredBefore)}', to: '{Key: "$lt", Value: instantValue(expiredBefore)}', expect: /TestReconciliationStore_RenewsTheExpiredMarkAtTheLimit/ },
+  // Una marca por entidad y no por activación: el encargo de otra activación se queda sin reclamar.
+  'reconciliation-key': { files: file('reconciliation\\.go'), from: 'Value: activation + "|" + entityID.String()}', to: 'Value: entityID.String()}', expect: /TestReconciliationStore_(InsertsTheContract|RenewsTheExpired|TheMarkIsPerActivation)/, also: /_ClaimFor\w+_TheNextPass/ },
   // La guarda del envío escribe en la sesión del caso de uso: abortado este, la marca desaparece y el correo se repetiría.
   'send-guard': { files: REPOSITORY, from: 'raw, err := documents.FindOneAndUpdate(outside(ctx), filter, update, options.FindOneAndUpdate().SetReturnDocument(options.After)).Raw()', to: 'raw, err := documents.FindOneAndUpdate(ctx, filter, update, options.FindOneAndUpdate().SetReturnDocument(options.After)).Raw()', expect: /TakesItOnceAndSurvivesTheRollback/ },
   // El registro de idempotencia no se une a la transacción del caso de uso: abortado el comando, la clave queda marcada.

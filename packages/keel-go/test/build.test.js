@@ -58,14 +58,23 @@ test('un diseño no listo NO se genera sin --accept-unready, y no se escribe nad
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
+/** profile-directory con la clave de API, que ninguna fixture declara: lo último que la frontera de la capa security rechaza. */
+function mountApiKeyDesign(workspace) {
+  mountDesign(workspace, 'profile-directory');
+  const file = path.join(workspace, 'specs', 'profile-directory', 'security.keel.yaml');
+  const text = fs.readFileSync(file, 'utf8');
+  assert.match(text, /protocol: (oidc|jwt)/);
+  fs.writeFileSync(file, text.replace(/protocol: (oidc|jwt)/, 'protocol: api-key'));
+}
+
 test('un diseño fuera de la frontera se rechaza nombrando keel-go, antes de escribir nada', async () => {
   const workspace = makeWorkspace();
-  mountDesign(workspace, 'asset-vault');
-  const { exitCode, output } = await runCommand(workspace, build, 'specs/asset-vault', { defaults: true, acceptUnready: true });
+  mountApiKeyDesign(workspace);
+  const { exitCode, output } = await runCommand(workspace, build, 'specs/profile-directory', { defaults: true, acceptUnready: true });
   assert.equal(exitCode, 1);
   assert.match(output, /capacidades que keel-go no genera/);
-  // Ya no queda ninguna capa entera fuera (storage entró con el 13f): asset-vault se rechaza por lo que trae dentro.
-  assert.match(output, /el alcance por recurso \(authentication\.scoping\) — keel-go todavía no lo genera/);
+  // Ya no queda ninguna capa ni fixture fuera (asset-vault entró con el 13h-b): lo que se rechaza es lo que ninguna declara.
+  assert.match(output, /la clave de API \(protocol: api-key\) — keel-go todavía no la genera/);
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 

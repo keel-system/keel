@@ -1,6 +1,6 @@
-// El reclamo del barrido de RECONCILIACIÓN (tramo 11c): llevarse los encargos que llevan demasiado tiempo sin desenlace,
-// de forma que dos réplicas no se lleven el mismo. El mismo mecanismo que keel-spring, keel-nest y keel-dotnet, sobre
-// database/sql y PostgreSQL o MySQL.
+// El reclamo del barrido de RECONCILIACIÓN (tramo 11c; sobre documentos, 13h-b): llevarse los encargos que llevan demasiado
+// tiempo sin desenlace, de forma que dos réplicas no se lleven el mismo. El mismo mecanismo que keel-spring, keel-nest y
+// keel-dotnet, sobre database/sql con PostgreSQL o MySQL y sobre el driver de MongoDB.
 //
 // Por qué NO es el reclamo de una cola (claim.js): allí la marca es el propio estado de destino; aquí el estado de espera
 // es justo lo que el barrido busca y no se puede cambiar antes de saber el desenlace, y entre reclamar y actuar hay una
@@ -16,22 +16,27 @@
 //     cada candidato va dentro de la de su tanda;
 //   · MySQL: el UPDATE condicional sobre la marca caducada y, si no casó, `INSERT IGNORE`, donde la clave primaria deja
 //     una sola réplica. go-sql-driver cuenta las filas CAMBIADAS (sin clientFoundRows), así que el UPDATE que renueva
-//     cuenta 1 y el que no casa, 0.
+//     cuenta 1 y el que no casa, 0;
+//   · MongoDB: un solo upsert con la clave aplanada en el `_id` y el filtro sobre la marca CADUCADA, atómico por documento y
+//     fuera de toda transacción: si la marca está viva no casa, intenta insertar y choca con el `_id`, y eso dice que el
+//     candidato es de otra réplica.
 // La lectura de candidatos excluye los de marca VIVA: sin eso, la cabeza de la cola —reclamada y aún sin resolver—
 // ocuparía el lote de cada pasada hasta caducar (el defecto que destapó keel-dotnet en su 11c, cerrado en los tres).
 
 import { RECONCILIATION_CLAIM, RECONCILIATION_PURGE, reconciledActivations, reconciliationClaims, reconciliationParameters, reconciliationYaml } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { screamingSnake, snakeCase } from '@keel-system/keel-core/gen';
-import { usesRelational } from '@keel-system/keel-core/gen/features';
+import { storeDocumentKey } from '@keel-system/keel-core/gen/document';
+import { usesDocument, usesRelational } from '@keel-system/keel-core/gen/features';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { sqlDialect } from '../lib/relational-engine.js';
 import { layout, packageFile } from './render.js';
 import { usesDependencies } from './use-cases.js';
+import { BSON, MONGO_DRIVER, MONGO_OPTIONS } from './document-persistence.js';
 
 /** ¿Hay barridos de reconciliación que leer? Los hay aunque build no pueda generar el reclamo (lo escribe el agente). */
 export function usesReconciliationSettings(model) {
-  return usesRelational(model) && usesDependencies(model) && reconciledActivations(model).length > 0;
+  return (usesRelational(model) || usesDocument(model)) && usesDependencies(model) && reconciledActivations(model).length > 0;
 }
 
 /** ¿Genera build algún reclamo de reconciliación? */
@@ -68,9 +73,10 @@ export function generate(model) {
   const { store } = layout(model);
   const claims = usesReconciliationClaims(model);
   const imports = ['fmt', 'strconv', 'strings', 'time', 'internal/platform/config'];
-  if (claims) imports.push('context', 'database/sql', 'github.com/google/uuid');
+  const document = usesDocument(model);
+  if (claims) imports.push('context', 'github.com/google/uuid', ...(document ? [MONGO_DRIVER, BSON, MONGO_OPTIONS] : ['database/sql']));
   return [
-    { path: `${store.dir}/reconciliation.go`, content: packageFile(model, store, { imports, body: `${settingsBody(model)}${claims ? claimBody(model) : ''}` }) },
+    { path: `${store.dir}/reconciliation.go`, content: packageFile(model, store, { imports, body: `${settingsBody(model)}${claims ? (document ? documentClaimBody() : claimBody(model)) : ''}` }) },
     { path: `${store.dir}/reconciliation_test.go`, content: packageFile(model, store, { test: true, imports: ['strings', 'testing', 'testing/fstest', 'time', store.dir, 'internal/platform/config'], body: settingsTest(model) }) },
     // Los mismos perfiles que los otros tres: en test valen los defaults del código.
     ...['local', 'develop', 'production'].map((profile) => ({ path: `config/parameters/${profile}/reconciliation.yaml`, content: reconciliationYaml(model, profile) }))
@@ -281,6 +287,120 @@ func affected(result sql.Result, err error) (int64, error) {
 `;
 }
 
+// ─── La marca sobre documentos ───────────────────────────────────────────────────────────────────
+
+function documentClaimBody() {
+  const key = storeDocumentKey(RECONCILIATION_CLAIM);
+  if (key.kind !== 'flattened') throw new Error(`${RECONCILIATION_CLAIM.table}: se esperaba la clave aplanada`);
+  const [activationField, entityField] = key.columns;
+  return `
+// reconciliationCollection es la colección de las marcas del reclamo.
+const reconciliationCollection = ${goString(RECONCILIATION_CLAIM.table)}
+
+// heldReconciliations son los candidatos de activation con una marca VIVA (posterior a expiredBefore): lo que la lectura de
+// candidatos excluye, para que la cabeza de la cola —reclamada y aún sin resolver— no ocupe el lote de cada pasada hasta
+// caducar. Nunca es nil: un \$nin sin lista es un error del servidor.
+func heldReconciliations(ctx context.Context, tx *Transactions, activation string, expiredBefore time.Time) (bson.A, error) {
+	documents, err := tx.collection(reconciliationCollection)
+	if err != nil {
+		return nil, err
+	}
+	cursor, err := documents.Find(ctx, bson.D{{Key: ${goString(activationField)}, Value: activation}, {Key: "claimed_at", Value: bson.D{{Key: "\$gt", Value: instantValue(expiredBefore)}}}}, options.Find().SetProjection(bson.D{{Key: ${goString(entityField)}, Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	held := bson.A{}
+	for cursor.Next(ctx) {
+		id, err := get(cursor.Current, ${goString(entityField)}, asUUID)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", reconciliationCollection, err)
+		}
+		held = append(held, uuidValue(id))
+	}
+	return held, cursor.Err()
+}
+
+// claimReconciliation dice si ESTA réplica se lleva el candidato entityID del barrido de activation: la regla de keel-core
+// (reconciliationClaimReference), la misma que en keel-spring, keel-nest y keel-dotnet. Sin marca, la inserción es el reclamo;
+// con marca, solo si CADUCÓ (claimed_at <= expiredBefore).
+//
+// Un solo upsert hace las dos mitades y es atómico por documento: el filtro pide la marca CADUCADA, así que si está viva no
+// casa con nada y MongoDB intenta insertar: choca con el _id, y la clave duplicada dice que el candidato es de otra réplica.
+// Ceder de más es benigno: la pasada siguiente lo recoge. El _id es la clave aplanada <activación>${key.separator}<entidad>, y las dos
+// columnas van además como campos. Fuera de toda transacción: la marca tiene que existir para las demás réplicas ANTES de
+// llamar al proveedor.
+func claimReconciliation(ctx context.Context, tx *Transactions, activation string, entityID uuid.UUID, now, expiredBefore time.Time) (bool, error) {
+	documents, err := tx.collection(reconciliationCollection)
+	if err != nil {
+		return false, err
+	}
+	filter := bson.D{{Key: "_id", Value: activation + ${goString(key.separator)} + entityID.String()}, {Key: "claimed_at", Value: bson.D{{Key: "\$lte", Value: instantValue(expiredBefore)}}}}
+	update := bson.D{
+		{Key: "\$set", Value: bson.D{{Key: "claimed_at", Value: instantValue(now)}}},
+		{Key: "\$setOnInsert", Value: bson.D{{Key: ${goString(activationField)}, Value: activation}, {Key: ${goString(entityField)}, Value: uuidValue(entityID)}}},
+	}
+	_, err = documents.UpdateOne(ctx, filter, update, options.UpdateOne().SetUpsert(true))
+	if mongodriver.IsDuplicateKeyError(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+`;
+}
+
+/**
+ * Los métodos de reclamo de reconciliación del adaptador documental: los candidatos, el que más lleva primero, y la marca de
+ * cada uno. Sin transacción y con el estado de la raíz intacto.
+ */
+export function documentReconciliationMethods(model, entity, type) {
+  const idMethod = goExported(entity.idField?.name ?? 'id');
+  return claimsFor(model, entity.name).map((claim) => {
+    const method = reconciliationMethod(claim);
+    const states = claim.states.map((state) => goString(storedStateOf(model, entity, state))).join(', ');
+    const awaiting = goString(snakeCase(claim.awaitingField));
+    return `// ${method} implementa domain.${entity.name}Repository (reconciliación).
+func (r *${type}) ${method}(ctx context.Context) ([]*domain.${entity.name}, error) {
+	if openTx(ctx) != nil {
+		return nil, fmt.Errorf("%s confirma por su cuenta y hay una transacción abierta: despacha la operación con application.WithoutTransaction (el reloj ya lo hace)", ${goString(method)})
+	}
+	ctx = outside(ctx)
+	window := r.reconciliation.Windows[${goString(claim.activation)}]
+	// Los dos cortes, sobre el MISMO instante: lleva demasiado sin desenlace, y el reclamo ajeno ya caducó.
+	now := time.Now().UTC()
+	unansweredBefore := now.Add(-window.UnansweredAfter())
+	claimExpiredBefore := now.Add(-window.ClaimTimeout())
+	// Los que ya tienen una marca VIVA no son candidatos: sin excluirlos, la cabeza de la cola ocuparía el lote de cada pasada
+	// hasta caducar, y los de detrás no se reconciliarían antes. El estado NO se toca.
+	held, err := heldReconciliations(ctx, r.tx, ${goString(claim.activation)}, claimExpiredBefore)
+	if err != nil {
+		return nil, translate(err)
+	}
+	filter := bson.D{
+		{Key: ${goString(snakeCase(entity.lifecycle.field))}, Value: bson.D{{Key: "\$in", Value: bson.A{${states}}}}},
+		{Key: ${awaiting}, Value: bson.D{{Key: "\$lt", Value: instantValue(unansweredBefore)}}},
+		{Key: "_id", Value: bson.D{{Key: "\$nin", Value: held}}},
+	}
+	candidates, err := r.find(ctx, filter, options.Find().SetSort(bson.D{{Key: ${awaiting}, Value: 1}, {Key: "_id", Value: 1}}).SetLimit(int64(window.BatchSize)))
+	if err != nil {
+		return nil, err
+	}
+	var claimed []*domain.${entity.name}
+	for _, candidate := range candidates {
+		// true = la marca es mía; false = otra réplica la tiene y aún no ha caducado.
+		won, err := claimReconciliation(ctx, r.tx, ${goString(claim.activation)}, candidate.${idMethod}(), now, claimExpiredBefore)
+		if err != nil {
+			return claimed, translate(err)
+		}
+		if won {
+			claimed = append(claimed, candidate)
+		}
+	}
+	return claimed, nil
+}`;
+  });
+}
+
 // ─── El puerto y el adaptador de la raíz que espera ──────────────────────────────────────────────
 
 const claimsFor = (model, entityName) => (usesReconciliationClaims(model) ? reconciliationClaims(model).filter((claim) => claim.entity === entityName) : []);
@@ -288,7 +408,7 @@ const claimsFor = (model, entityName) => (usesReconciliationClaims(model) ? reco
 function describe(claim) {
   return (
     `reclama los ${claim.entity} que encargaron trabajo a ${claim.dependency}.${claim.activation} y llevan demasiado tiempo sin desenlace (${claim.awaitingField} más viejo que el umbral que declara el diseño). ` +
-    'Reclama, no lee: corre en TODAS las réplicas a la vez, y la lista son SOLO los candidatos que ESTA se llevó. La marca es una fila de reconciliation_claim confirmada antes de volver, así que las demás réplicas dejan de verlos; y CADUCA (claim-timeout-ms), porque sobrevive también a la réplica que muera con el candidato en vuelo. ' +
+    'Reclama, no lee: corre en TODAS las réplicas a la vez, y la lista son SOLO los candidatos que ESTA se llevó. La marca va en reconciliation_claim, confirmada antes de volver, así que las demás réplicas dejan de verlos; y CADUCA (claim-timeout-ms), porque sobrevive también a la réplica que muera con el candidato en vuelo. ' +
     'No recibe el lote: los tres números —umbral, caducidad y cota— salen de config/parameters/<perfil>/reconciliation.yaml y los lee el adaptador. No cambia el estado. Actúa sobre lo que devuelve FUERA de esta llamada. ' +
     'Confirma en SU PROPIA transacción, así que no corre dentro de otra: la tarea del reloj despacha su operación con application.WithoutTransaction, y llamarlo con una transacción abierta devuelve un error en vez de unirse a ella.'
   );

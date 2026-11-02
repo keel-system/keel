@@ -24,6 +24,8 @@ import { KAFKA_IMPORT } from './kafka.js';
 import { SNSSQS_IMPORT } from './snssqs.js';
 import { SERVICE_PARAMETERS, handlersReadParameters, newUseCasesCall, usesDependencies } from './use-cases.js';
 import { IDEMPOTENCY_STORE, usesRequestIdempotency } from './request-idempotency.js';
+import { usesCallerScope } from '@keel-system/keel-core/gen/features';
+import { CALLER_SCOPE } from './caller-scope.js';
 import { CALLER_ROLES, SECURITY_IMPORT, settingsFromConfig, usesRoleCheck } from './security.js';
 import { securityCases } from '@keel-system/keel-core/gen/api-cases';
 import { securityPlan } from '@keel-system/keel-core/gen/features';
@@ -200,6 +202,7 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
     indent: '\t\t',
     cells: [`${goExported(repositoryParam(root))}:`, `${store.name}.New${root.name}Repository(${repositoryArgs(model, root, 'transactions', 'bridge')}),`]
   }));
+  if (usesCallerScope(model)) repositories.push({ indent: '\t\t', cells: [`${CALLER_SCOPE.field}:`, 'security.CallerScope{},'] });
   if (usesRoleCheck(model)) repositories.push({ indent: '\t\t', cells: [`${CALLER_ROLES.field}:`, 'security.CallerRoles{},'] });
   if (usesRequestIdempotency(model)) repositories.push({ indent: '\t\t', cells: [`${IDEMPOTENCY_STORE.field}:`, `${store.name}.NewIdempotencyStore(transactions),`] });
   const clients = usesGoHttpClients(model) && dispatchesUseCases(model);

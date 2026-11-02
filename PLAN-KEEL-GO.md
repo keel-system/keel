@@ -1148,15 +1148,55 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       que nombran, ejecutados con un guion suelto sobre lo generado; `lastknown-key` tumba además la del tope, y eso se añadió a su
       `expect` después, sin volver a ejecutarlo. El bloque equivalente de `go-check` está escrito y **todavía no se ha ejecutado**.
       `go-check --fixtures` **57/57**, `npm test` de keel-go **1042/1042**, keel-core **1313/1313**.
-    - **Sin medir**: la concesión contra un WireMock real (solo contra el emisor falso de la prueba emitida, como en keel-dotnet);
-      `stub-check`, aunque `exchange.go` cambió (una rama nueva, solo con concesión); `db-check` y `doc-check` enteros, pese a
-      tocar `db-probes.js` (la regla de «todos los sujetos»: el añadido solo emite con una réplica, pero falta pasarlos); los
-      sabotajes de la réplica en MySQL; y `go-check` entero.
-- **Para retomar:** el **13h-b**, lo que aún deja `asset-vault` fuera, medido: `authentication.scoping` (el `JwtCallerScope` de
-  los otros tres), los clientes HTTP sobre documentos (`usesGoHttpClients` exige relacional, y con ello los `needs` de ese diseño)
-  y el reclamo de reconciliación sobre documentos. Antes, en la terminal del usuario y de una en una: `db-check` y `doc-check`
-  enteros y `stub-check`. Después el 13i (corridas `asset-vault` y `catalog`) tras `go-check` entero. El commit del 13h-a, propuesto:
-  `feat(keel-go): los needs, el último valor conocido, OAuth2 y la réplica (incremento 13h-a)`.
+    - **Todos los sujetos**, porque el tramo tocó `db-probes.js` y `exchange.go` (lanzados por el usuario en su terminal,
+      2026-11-01): `db-check` **61/61** con PostgreSQL y **61/61** con MySQL, `doc-check` **15/15**, `stub-check` **12/12**.
+    - **Sin medir**: la concesión contra un WireMock real (solo contra el emisor falso de la prueba emitida, como en keel-dotnet;
+      `stub-check` no ejerce ningún cliente con OAuth2); los sabotajes de la réplica en MySQL; y `go-check` entero, con su
+      bloque nuevo de sabotajes.
+  - **13h-b, el alcance, los clientes y la reconciliación sobre documentos (hecho, 2026-11-01). `asset-vault` entra ENTERO en la
+    frontera, y con él todas las fixtures.** Lo único que la capa security sigue rechazando es la clave de API, que ninguna declara.
+    - **El alcance** (`src/scaffold/caller-scope.js`): el puerto `CallerScope` en `internal/application` y `security.CallerScope`, que
+      lo satisface leyendo el claim del principal como lista o como texto, con los exentos del diseño y el cliente reconocido por
+      `azp`, `client_id` o el nombre. Lo reciben solo los handlers que declaran el error del alcance, con la nota de los otros tres.
+      **Lo que Go obliga a decidir**: `Covers` recibe un `string` sin el nulo de los otros tres; el vacío es el valor ausente, así
+      que el claim no lo enumera nunca y un recurso sin valor solo lo cubre la exención. El arnés gana `ScopedResource` y
+      `TokenWithScope` (sin este con Cognito, cuyo emulador no da de alta usuarios).
+    - **Los clientes**: `usesGoHttpClients` ya no exige relacional, y no hizo falta cambiar nada más para que compilen y se cableen.
+    - **La reconciliación sobre documentos** (`reconciliation-claim.js`): `reconciliation.go` del paquete `mongo` con
+      `heldReconciliations` y `claimReconciliation`, un solo upsert sobre la marca caducada con la clave aplanada de keel-core y
+      fuera de toda transacción; el reclamo en el adaptador, y `AgeForReconciliation`/`HoldFromReconciliation` en `flow_test.go` con
+      los scripts de keel-core. El `documentID` del escenario ya no depende de que haya un rescate.
+    - **Medido**: sobre `asset-vault` generado, tidy, gofmt, vet y staticcheck vacíos (con y sin `-tags integration`) y `go test
+      ./internal/...` en verde. `doc-check` **15/15** (seis sujetos; asset-vault, 40 sondas), con `scripts/lib/doc-reconciliation-probes.js`,
+      **falsado** con `reconciliation-held`, `-threshold`, `-expiry` y `-key`, cada uno en rojo en sus sondas. `security-check` **56/56**,
+      con `asset-vault` de tercer sujeto: el claim llega al token firmado, el usuario es `scoped-vault-reader-252ee2` como en los
+      otros tres, y sin el atributo en el alta `TokenWithScope` muere nombrando al usuario. `doc-harness-check` **13/13**, con los
+      scripts de envejecer y retener que emite asset-vault, **falsado** con `aging` (2 pasos en rojo). Los cinco sabotajes
+      `scope-*` caen cada uno en su prueba de `caller_scope_test.go`. `npm test` de keel-go **1055/1055** (`test/caller-scope.test.js`,
+      nuevo).
+    - **`go-check` entero: 156/156** (lanzado por el usuario en su terminal, 2026-11-01, con `-race` en el contenedor): las 56 variantes
+      de las fixtures, que venían en verde de la caché tras la pasada de `--fixtures` de este tramo, y por primera vez en `go-check` los
+      bloques de sabotajes de needs y OAuth2 (13h-a) y de alcance, cada uno en rojo en sus pruebas. Apagado ordenado tras SIGTERM, sin
+      medir en Windows, como siempre.
+    - **Sin medir**: `stub-check` sobre un diseño documental (el
+      arnés del proveedor y `AgeForReconciliation` juntos, en un flujo con el barrido de verdad); el alcance a través del servidor
+      arrancado (`Covers` lo llama el handler, que es del agente); y `db-check`, no repetido porque lo relacional solo cambió un
+      comentario del puerto. Todo eso lo pisa la corrida `asset-vault`.
+  - **13i, las corridas `asset-vault` y `catalog` (PREPARADAS, 2026-11-01, sin lanzar).** Dos workspaces en `spring-live-test/`, con
+    `keel init`, `keel validate --ready` en verde y `keel-go build` sin `--accept-unready` sobre `keel-stack.json` sembrado, desde el
+    árbol de trabajo del 13h-b (`b953353c` más los cambios sin commit):
+    - `corrida-asset-vault-go`: `asset-vault` v1.1.2 de la fixture con su `DESIGN.md`, `mongodb · rabbitmq · keycloak · redis · minio`,
+      **304 archivos**, sin avisos (4 decisiones aceptadas).
+    - `corrida-catalog-go`: `catalog` v1.0.0, la copia de `corrida-catalog-dotnet` con su `DESIGN.md` (la fixture `catalog-extended` no
+      está lista: 8 de 13 criterios), con `keel` subido de 2.21 a 2.23 y nada más, `postgresql · kafka · keycloak · redis · minio`,
+      **344 archivos**, sin avisos (6 decisiones aceptadas).
+    - Sobre copias, para no tocar la huella: tidy sin mover ningún directo (12 y 14), gofmt, `go vet` y staticcheck vacíos (con y sin
+      `-tags integration`), `go build` sin cgo, `go test ./internal/...` en verde, y `check-idempotency.sh` en ROJO con sus hallazgos
+      del agente (16 y 19).
+- **Para retomar:** `go-check` en verde, sin tocar el generador: lanzar el **13i**, una corrida cada vez, en cada
+  `services/<servicio>-go`: `go mod tidy` y `/keel-generate-go`, en otra sesión. Después, contrastar cada informe con la huella
+  (`corrida-metrics.js footprint`) y registrarla en `docs/corridas/`. El 13h-a está en b953353c. El commit del 13h-b,
+  propuesto: `feat(keel-go): el alcance por recurso, y los clientes y la reconciliación sobre documentos (incremento 13h-b)`.
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y

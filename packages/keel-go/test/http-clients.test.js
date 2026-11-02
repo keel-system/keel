@@ -132,10 +132,22 @@ test('el adaptador es de build y no lleva un TODO; la política del fallback es 
   }
 });
 
-test('lo que la frontera rechaza no emite clientes: go-check genera todas las fixtures saltándosela', () => {
-  // Los clientes sobre documentos: el único caso que queda (asset-vault, con su motor).
-  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'asset-vault'));
-  const { files: rejected } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'mongodb' } });
+test('lo que la frontera rechaza no emite clientes: una llamada sin contrato tipado no sale a medias', () => {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'stock-reservation'));
+  const untyped = structuredClone(layers);
+  const call = untyped['http-clients'].clients.inventory.calls.cancelStock;
+  delete call.request;
+  delete call.response;
+  const { files: rejected } = planService({ manifest, layers: untyped, workspace: FIXTURES_DIR, stack: { database: 'postgresql', broker: 'rabbitmq' } });
   assert.ok(!rejected.some((file) => file.path.startsWith(clients)));
   assert.ok(!rejected.some((file) => file.path.endsWith('http-clients.yaml')));
+});
+
+test('los clientes sobre documentos se generan y se cablean como sobre la base relacional (asset-vault, 13h-b)', () => {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'asset-vault'));
+  const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'mongodb' } });
+  assert.ok(files.some((file) => file.path === `${clients}exchange.go`));
+  assert.match(files.find((file) => file.path === 'cmd/server/main.go' || file.path === 'cmd/server/server.go')?.content ?? '', /clients\.New\w+\(clientSettings, exchange, logger\)/);
+  assert.match(files.find((file) => file.path === 'internal/application/get_asset_query_handler.go').content, /renderingClient domain\.RenderingClient/);
+  assert.ok(files.some((file) => file.path === 'tests/integration/http_stub_test.go'));
 });

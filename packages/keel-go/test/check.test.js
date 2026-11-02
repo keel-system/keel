@@ -41,10 +41,13 @@ test('un diseño no listo sale en rojo aunque sea generable, y dice por qué', a
 
 test('un diseño fuera de la frontera sale en rojo sin construir nada', async () => {
   const workspace = makeWorkspace();
-  mountDesign(workspace, 'asset-vault');
+  mountDesign(workspace, 'profile-directory');
+  // La clave de API, que ninguna fixture declara: lo último que la frontera de la capa security rechaza.
+  const file = path.join(workspace, 'specs', 'profile-directory', 'security.keel.yaml');
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/protocol: (oidc|jwt)/, 'protocol: api-key'));
   const before = treeDigest(workspace);
-  const { exitCode, output } = await runCommand(workspace, check, 'specs/asset-vault', {});
+  const { exitCode, output } = await runCommand(workspace, check, 'specs/profile-directory', {});
   assert.equal(exitCode, 1);
-  assert.match(output, /keel-go todavía no lo genera/);
+  assert.match(output, /keel-go todavía no la genera/);
   assert.equal(treeDigest(workspace), before);
 });

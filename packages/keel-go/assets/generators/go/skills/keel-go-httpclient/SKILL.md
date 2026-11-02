@@ -22,7 +22,7 @@ reescribas lo demás.
 | Clave saliente | `internal/infrastructure/clients/idempotency.go` | `outboundKey`: el sha256 de lo que viaja, IGUAL en cada intento; ya cableada en el intento de cada llamada que la declara |
 | Configuración | `config/parameters/<perfil>/http-clients.yaml`, `internal/infrastructure/clients/settings.go` | La `base-url` (obligatoria fuera de `local`, que apunta al WireMock de `infra/`) y las cabeceras; `SettingsFrom` |
 | Cableado | `cmd/server/main.go` | El adaptador se construye al arrancar y los handlers reciben el puerto por su constructor |
-| Reconciliación | `reconciliation.go` y `claims.go` del paquete del motor (`internal/infrastructure/postgres` o `internal/infrastructure/mysql`) | La marca de `reconciliation_claim` y los tres números de cada barrido (`config/parameters/<perfil>/reconciliation.yaml`); el reclamo, en el repositorio de la raíz que espera |
+| Reconciliación | `reconciliation.go` del paquete del motor (`internal/infrastructure/postgres`, `mysql` o `mongo`), más `claims.go` en los relacionales | La marca de `reconciliation_claim` y los tres números de cada barrido (`config/parameters/<perfil>/reconciliation.yaml`); el reclamo, en el repositorio de la raíz que espera |
 
 ## Antes de empezar
 

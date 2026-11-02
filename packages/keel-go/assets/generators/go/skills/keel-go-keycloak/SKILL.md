@@ -14,9 +14,10 @@ reescribas ese código**.
 | Decisión de la entrada HTTP | `internal/httpapi/security.go` | Las reglas de `access.rules` como datos y un middleware que decide ANTES de enrutar: sin credencial, un camino que no existe es 401, no 404 |
 | Validación del JWT | `internal/platform/security/jwt.go` | golang-jwt contra el JWKS del `issuer-uri` (discovery, perezoso), `iss` exacto, 60 s de margen; `realm_access.roles` → `ROLE_<rol>`, `scope` → `SCOPE_<scope>`, `permissions` y los `roleGrants` del diseño |
 | El principal | `internal/platform/security/principal.go` | Quién llama, en el contexto de la petición; de ahí sale la identidad del llamante (`callerIdentity`), que los lectores de los endpoints estampan en el mensaje |
+| Alcance por recurso | `internal/application/caller_scope.go` + `internal/platform/security/caller_scope.go` | El puerto `CallerScope` que reciben los handlers que declaran el error del alcance, y quien lo satisface leyendo el claim del token |
 | Realm de prueba | `infra/init-keycloak.sh` | Realm, roles, dos usuarios por rol (`<rol>`, `<rol>-2`), `no-role`, clientes del diseño y la matriz `test-m2m-*` |
 | Credenciales | `infra/test-credentials.env` | Lo que el script crea y el arnés lee: un solo productor, un solo consumidor |
-| Credenciales en los flujos | `tests/integration/credentials_test.go` | `Bearer`, `TokenFor`, `SecondTokenFor`, `ServiceCredential`, `TokenAs` |
+| Credenciales en los flujos | `tests/integration/credentials_test.go` | `Bearer`, `TokenFor`, `SecondTokenFor`, `ServiceCredential`, `TokenAs`, `ScopedResource`, `TokenWithScope` |
 
 ## Antes de empezar
 
@@ -43,12 +44,30 @@ other := s.Get(RouteBase+"/me/card", Bearer(s.SecondTokenFor("card-holder"))) //
 denied := s.Get(RouteBase+"/me/card", Bearer(s.TokenFor("no-role")))       // autenticado sin roles: el 403
 machine := s.Get(RouteBase+"/me/card", Bearer(s.ServiceCredential("billing-service"))) // cliente máquina
 ana := s.Get(RouteBase+"/me/card", Bearer(s.TokenAs(Persona{Sub: "sub-ana-001", Claims: map[string]string{"email": "ana@x.test"}})))
+other := s.Get(RouteBase+"/assets/"+id, Bearer(s.TokenWithScope("vault-reader", "OTRO"))) // el claim del alcance con OTRO valor
 ```
 
 Llama a la función **en cada petición**: el token dura cinco minutos y la caché lo renueva solo si se le pregunta.
 Si el proveedor no da el token, el escenario termina ahí con el motivo. `TokenAs` existe cuando la identidad del
 llamante sale de un claim: da de alta a la persona por la API de administración del realm con ese `sub` exacto y
-los claims del escenario (`Persona.Without` quita uno: «el mismo token sin email»).
+los claims del escenario (`Persona.Without` quita uno: «el mismo token sin email»). `TokenWithScope` existe con
+alcance por recurso: da de alta un usuario del rol cuyo claim del alcance enumera esos valores (sin valores, sin el
+claim), porque `TokenFor` siempre trae `ScopedResource()`.
+
+En el handler, el alcance es un puerto ya inyectado en las operaciones que declaran su error: comprueba
+`h.callerScope.Covers(ctx, valor)` donde lo digan las reglas y devuelve el error del diseño si no lo cubre; en un listado,
+filtra en la consulta con `h.callerScope.ScopedValues(ctx)` (un finder acotado en `<raíz>_queries.go`), nunca cargando todo
+y filtrando. Una respuesta cacheada se comprueba igual, fuera de la carga.
+
+```go
+asset, err := h.assetRepository.FindByID(ctx, query.ID)
+if err != nil {
+	return AssetDto{}, err
+}
+if !h.callerScope.Covers(ctx, ownerCode) {
+	return AssetDto{}, domain.Errorf(domain.ErrAssetOutOfScope, "el archivo %s está fuera de tu alcance", query.ID)
+}
+```
 
 El humo del arnés (SMOKE-4 y SMOKE-5) ya pide el token con el que la regla de cierre deja pasar: si sale en rojo,
 el realm no está sembrado o el proveedor no responde, y ningún flujo autenticado puede salir en verde.

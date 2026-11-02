@@ -1,7 +1,7 @@
 // Las credenciales del arnés de integración: lo que en keel-spring da AbstractFlowIT (`tokenFor`, `serviceCredential`,
-// `tokenAs`), en keel-nest `flow.ts` y en keel-dotnet `Support/Credentials.cs`, aquí como
-// `tests/integration/credentials_test.go`: métodos de `*Scenario` (`TokenFor`, `SecondTokenFor`, `ServiceCredential`,
-// `TokenAs`) y `Bearer`, la cabecera con la que viajan.
+// `tokenAs`, `scopedResource`, `tokenWithScope`), en keel-nest `flow.ts` y en keel-dotnet `Support/Credentials.cs`, aquí
+// como `tests/integration/credentials_test.go`: métodos de `*Scenario` (`TokenFor`, `SecondTokenFor`, `ServiceCredential`,
+// `TokenAs`, `TokenWithScope`), `ScopedResource` y `Bearer`, la cabecera con la que viajan.
 //
 // Los valores salen de `infra/test-credentials.env`, que escribe build junto al script que siembra el proveedor
 // (keel-core/gen/identity-provisioning.js): un solo productor, un solo consumidor, ningún literal inventado a los dos
@@ -12,12 +12,12 @@
 // personas (además, staticcheck rechaza lo que no se usa). Qué credencial satisface la regla de cierre (la del humo)
 // lo decide keel-core (`closingCredentialOf`), la misma para los cuatro generadores.
 //
-// Lo que la frontera de keel-go aún rechaza (la clave de API y el alcance por recurso: `ApiKey`, `ScopedResource` y
-// `TokenWithScope` de los otros tres) no se emite: llegará con la primera fixture que lo mida.
+// Lo que la frontera de keel-go aún rechaza (la clave de API: `ApiKey` de los otros tres) no se emite: llegará con la
+// primera fixture que lo mida.
 
 import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
 import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
-import { keycloakAdminCredentials, secondUserOf, tokenUrl, TEST_USER_PASSWORD, userTestClient, usesPersonaTokens } from '@keel-system/keel-core/gen/identity-realm';
+import { keycloakAdminCredentials, secondUserOf, tokenUrl, TEST_USER_PASSWORD, userTestClient, usesPersonaTokens, usesScopedTokens } from '@keel-system/keel-core/gen/identity-realm';
 import { goString } from '../lib/go-source.js';
 
 export { usesIdentityHarness };
@@ -87,7 +87,8 @@ export const CREDENTIALS_IMPORTS = [
   'slices',
   'strings',
   'sync',
-  'time'
+  'time',
+  'unicode/utf16'
 ];
 
 /** El cuerpo de `credentials_test.go`, o null sin tokens. */
@@ -97,7 +98,10 @@ export function credentialsBody(model) {
   if (userTokens(model)) parts.push(passwordGrantGo(model));
   if (roles(model).length > 0) parts.push(tokenForGo());
   if (machineTokens(model)) parts.push(serviceCredentialGo());
-  if (usesPersonaTokens(model)) parts.push(personaGo(model), adminGo(model));
+  if (model.security.scoping) parts.push(scopedResourceGo(model));
+  if (usesPersonaTokens(model)) parts.push(personaGo(model));
+  if (usesScopedTokens(model)) parts.push(scopedTokenGo(model));
+  if (usesPersonaTokens(model) || usesScopedTokens(model)) parts.push(adminGo(model));
   return parts.join('\n\n');
 }
 
@@ -309,6 +313,115 @@ func clientSecretVariable(client string) string {
 		}
 		return '_'
 	}, strings.ToUpper(client))
+}`;
+}
+
+function scopedResourceGo(model) {
+  const { claim, exemptRoles, testResource } = model.security.scoping;
+  return String.raw`// ScopedResource es el recurso al que alcanzan los usuarios de prueba NO exentos del alcance por recurso (el claim ${claim} de
+// su token). No lo escribas a mano en un escenario: sale de infra/test-credentials.env. Los roles exentos
+// (${exemptRoles.join(', ') || 'ninguno'}) no llevan el claim: alcanzan cualquier recurso.
+func ScopedResource() string {
+	return credential("AUTH_SCOPED_RESOURCE", ${goString(testResource)})
+}`;
+}
+
+function scopedTokenGo(model) {
+  const { claim } = model.security.scoping;
+  return String.raw`// scopedUsers son los usuarios del alcance que esta suite ya dejó en el realm.
+var scopedUsers = struct {
+	sync.Mutex
+	done map[string]bool
+}{done: map[string]bool{}}
+
+// TokenWithScope es el token de un usuario del rol role cuyo claim ${claim} enumera EXACTAMENTE values; sin valores, el usuario
+// del rol SIN el claim. Es lo que necesita «un titular con otro alcance». Se llama en cada petición, como TokenFor.
+func (s *Scenario) TokenWithScope(role string, values ...string) string {
+	s.Helper()
+	wanted := slices.Compact(slices.Sorted(slices.Values(values)))
+	username := fmt.Sprintf("scoped-%s-%x", role, javaStringHash(strings.Join(wanted, "\n")))
+	token, err := cachedToken("scope:"+username, func() (string, error) {
+		if err := ensureScopedUser(s.Context(), username, role, wanted); err != nil {
+			return "", err
+		}
+		return passwordGrant(s.Context(), username)
+	})
+	if err != nil {
+		s.Fatalf("token del usuario del alcance %q: %v", username, err)
+	}
+	return token
+}
+
+// javaStringHash es el String.hashCode de Java sobre las unidades UTF-16: el nombre del usuario es el MISMO que en
+// keel-spring, keel-nest y keel-dotnet, así que la siguiente ejecución lo reutiliza.
+func javaStringHash(text string) uint32 {
+	var hash uint32
+	for _, unit := range utf16.Encode([]rune(text)) {
+		hash = 31*hash + uint32(unit)
+	}
+	return hash
+}
+
+// ensureScopedUser da de alta (una vez por rol y valores) al usuario con el rol y el atributo ${claim}, que el mapper
+// sembrado por infra/init-keycloak.sh proyecta al claim; si ya existe, no se toca. Se comprueba lo que falla en silencio: que
+// el atributo quedara guardado (el User Profile descarta lo que no conoce, y el token saldría sin claim).
+func ensureScopedUser(ctx context.Context, username, role string, values []string) error {
+	scopedUsers.Lock()
+	defer scopedUsers.Unlock()
+	if scopedUsers.done[username] {
+		return nil
+	}
+	admin, err := adminToken(ctx)
+	if err != nil {
+		return err
+	}
+	id, err := userID(ctx, admin, username)
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		user := map[string]any{
+			"username":        username,
+			"enabled":         true,
+			"email":           username + "@example.com",
+			"emailVerified":   true,
+			"firstName":       "Test",
+			"lastName":        "Scoped",
+			"requiredActions": []string{},
+			"credentials":     []map[string]any{{"type": "password", "value": credential("AUTH_TEST_PASSWORD", ${goString(TEST_USER_PASSWORD)}), "temporary": false}},
+		}
+		if len(values) > 0 {
+			user["attributes"] = map[string]any{${goString(claim)}: values}
+		}
+		if _, err := adminCall[any](ctx, admin, http.MethodPost, "/users", user); err != nil {
+			return err
+		}
+		if id, err = userID(ctx, admin, username); err != nil {
+			return err
+		}
+		if id == "" {
+			return fmt.Errorf("keycloak no dio de alta al usuario del alcance %s", username)
+		}
+		realmRole, err := adminCall[map[string]any](ctx, admin, http.MethodGet, "/roles/"+url.PathEscape(role), nil)
+		if err != nil {
+			return err
+		}
+		if _, err := adminCall[any](ctx, admin, http.MethodPost, "/users/"+url.PathEscape(id)+"/role-mappings/realm", []any{realmRole}); err != nil {
+			return err
+		}
+	}
+	stored, err := adminCall[struct {
+		Attributes map[string][]string ` + '`json:"attributes"`' + String.raw`
+	}](ctx, admin, http.MethodGet, "/users/"+url.PathEscape(id), nil)
+	if err != nil {
+		return err
+	}
+	got := slices.Compact(slices.Sorted(slices.Values(stored.Attributes[${goString(claim)}])))
+	if !slices.Equal(got, values) {
+		return fmt.Errorf("el usuario del alcance %s tiene ${claim}=%v y el escenario pidió %v: ¿se ejecutó infra/init-keycloak.sh (User Profile)?", username, got, values)
+	}
+	scopedUsers.done[username] = true
+	return nil
 }`;
 }
 

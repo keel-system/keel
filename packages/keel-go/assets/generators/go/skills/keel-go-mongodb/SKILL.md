@@ -52,3 +52,6 @@ handlers, en el orden de las notas del diseño: los mismos puertos que en relaci
   de concurrencia del contrato.
 - Un reclamo de barrido (`ClaimFor…`) ya es atómico por documento (FindOneAndUpdate) y confirma al volver: no corre
   dentro de una transacción abierta (el reloj ya despacha sin ella).
+- El reclamo de reconciliación (`ClaimForReconcile…`) también va generado: lee los candidatos sin marca viva y estampa la
+  marca en `reconciliation_claim` con un upsert fuera de toda transacción. No escribas otro: lo verifica la familia
+  `reconciliation` de `infra/check-idempotency.sh`.

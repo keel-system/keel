@@ -18,6 +18,8 @@ import { alignRows, goString } from '../lib/go-source.js';
 import { frameworkSentinels, sentinelOf } from './errors.js';
 import { IDEMPOTENCY_STORE, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
 import { applicationPath, layout, packageFile } from './render.js';
+import { usesCallerScope } from '@keel-system/keel-core/gen/features';
+import { CALLER_SCOPE, scopedOperation } from './caller-scope.js';
 import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity, usesRoleCheck } from './security.js';
 import { contractOf, entryGateGuard, handlerType, messageType, operations, useCaseField } from './services.js';
 import { repositoryOf, repositoryRoots, usesPersistence } from '@keel-system/keel-core/gen/features';
@@ -72,6 +74,9 @@ export function handlerDependencies(model, operation) {
   }
   if (usesRegistry(model, operation)) {
     deps.push({ name: IDEMPOTENCY_STORE.param, type: IDEMPOTENCY_STORE.port, doc: `${IDEMPOTENCY_STORE.param} es el registro de idempotencia de la operación (idempotency del diseño).`, arg: `deps.${IDEMPOTENCY_STORE.field}` });
+  }
+  if (usesDependencies(model) && scopedOperation(model, operation)) {
+    deps.push({ name: CALLER_SCOPE.param, type: CALLER_SCOPE.port, doc: `${CALLER_SCOPE.param} es el alcance por recurso del llamante (security.authentication.scoping).`, arg: `deps.${CALLER_SCOPE.field}` });
   }
   if (usesDependencies(model) && roleCheckedOperation(model, operation)) {
     deps.push({ name: CALLER_ROLES.param, type: CALLER_ROLES.port, doc: `${CALLER_ROLES.param} dice los roles del llamante: los exentos de la regla de propiedad (security.ownership).`, arg: `deps.${CALLER_ROLES.field}` });
@@ -356,6 +361,12 @@ ${alignRows([
     ? [
         { text: '\t// IdempotencyStore es el registro de idempotencia de las operaciones que lo declaran.' },
         { indent: '\t', cells: [IDEMPOTENCY_STORE.field, IDEMPOTENCY_STORE.port] }
+      ]
+    : []),
+  ...(usesCallerScope(model)
+    ? [
+        { text: `\t// ${CALLER_SCOPE.field} es el alcance por recurso del llamante de la petición en curso (security.authentication.scoping).` },
+        { indent: '\t', cells: [CALLER_SCOPE.field, CALLER_SCOPE.port] }
       ]
     : []),
   ...(usesRoleCheck(model)

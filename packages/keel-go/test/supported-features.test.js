@@ -23,10 +23,8 @@ test('las dos persistencias se aceptan sin avisos (la documental desde el increm
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
     return checkSupportedFeatures(manifest, layers).errors;
   };
-  // Las documentales del incremento 12 entran enteras.
-  for (const name of ['conduit', 'inspection-reports', 'job-dispatch-mongo']) assert.deepEqual(fixture(name), [], name);
-  // asset-vault sigue fuera, y sobre documentos la reconciliación lo dice con su motivo.
-  assert.ok(fixture('asset-vault').some((error) => /reconciledBy\) — keel-go todavía no lo genera sobre documentos .*incremento 13/.test(error)));
+  // Las documentales entran enteras; asset-vault, la última, con el tramo 13h-b.
+  for (const name of ['asset-vault', 'conduit', 'inspection-reports', 'job-dispatch-mongo']) assert.deepEqual(fixture(name), [], name);
 });
 
 test('PostgreSQL, MySQL y MongoDB: los demás motores se rechazan en el build con su motivo', () => {
@@ -63,9 +61,11 @@ test('http-clients, dependencies, la reconciliación y la compensación entran (
   assert.deepEqual(warnings, []);
 });
 
-test('lo saliente que keel-go no genera se rechaza con su motivo: compuestos, llamadas sin tipar y clientes sin persistencia relacional', () => {
+test('lo saliente que keel-go no genera se rechaza con su motivo: compuestos, llamadas sin tipar y clientes sin persistencia', () => {
   const vault = loadService(path.join(FIXTURES_DIR, 'asset-vault'));
-  assert.ok(checkSupportedFeatures(vault.manifest, vault.layers).errors.some((error) => /^http-clients: .*persistencia relacional/.test(error)));
+  const { persistence, ...withoutPersistence } = vault.layers;
+  assert.ok(persistence);
+  assert.ok(checkSupportedFeatures(vault.manifest, withoutPersistence).errors.some((error) => /^http-clients: .*solo existen con persistencia/.test(error)));
 
   const sr = loadService(path.join(FIXTURES_DIR, 'stock-reservation'));
   const withCall = (call) => {
@@ -96,7 +96,7 @@ test('capa payments: entra (incremento 13c), con su arnés y sus skills', () => 
   assert.deepEqual(checkSupportedFeatures(pc.manifest, pc.layers).errors, []);
 });
 
-test('capa security: entra (incremento 8), resolvedBy también (12e-a); la clave de API, el alcance y una identidad que no es texto se rechazan con su motivo', () => {
+test('capa security: entra (incremento 8), resolvedBy también (12e-a) y el alcance (13h-b); la clave de API y una identidad que no es texto se rechazan con su motivo', () => {
   const manifest = manifestWith('domain', 'use-cases', 'api', 'security');
   const withSecurity = (authentication, fields = {}) => ({
     ...layersWith('domain', 'api'),
@@ -109,7 +109,7 @@ test('capa security: entra (incremento 8), resolvedBy también (12e-a); la clave
   const rejected = (authentication, fields) => checkSupportedFeatures(manifest, withSecurity(authentication, fields)).errors;
   assert.match(rejected({ protocol: 'api-key' })[0], /clave de API .*sin red que mida/);
   assert.match(rejected({ protocol: 'oidc', serviceAuth: { protocol: 'api-key' } })[0], /clave de API/);
-  assert.match(rejected({ protocol: 'oidc', scoping: { claim: 'vaults' } })[0], /alcance por recurso .*asset-vault/);
+  assert.deepEqual(rejected({ protocol: 'oidc', scoping: { claim: 'vaults' } }), []);
   const resolved = { protocol: 'oidc', callerIdentity: { field: 'caller', from: { source: 'serviceClient', resolvedBy: 'Application.keys' } } };
   assert.deepEqual(rejected(resolved), []);
   assert.match(rejected(oidc, { caller: { type: 'uuid' } })[0], /use-cases.getMine.input.caller: uuid .*string/);

@@ -453,6 +453,119 @@ func TestProbeMachine(t *testing.T) {
   }
 }
 
+// ── Tercer sujeto: el claim del ALCANCE con otro valor (`TokenWithScope`) ──────────────────────────────
+//
+// `profile-directory` no declara alcance por recurso; `asset-vault` sí (claim `vaults` sobre `Owner.code`). Se levanta su
+// infraestructura y una prueba sonda en tests/integration (que no arranca el servidor) pide los tokens con el arnés emitido. Lo
+// que se mide es lo que ningún test sin red puede: que el usuario que da de alta lleve el claim al TOKEN firmado, y con el
+// mismo nombre de usuario que en los otros tres.
+{
+  const SCOPED = 'asset-vault';
+  const scopedWorkspace = makeWorkspace('keel-go-security-scoped-');
+  const scopedSpec = mountDesign(scopedWorkspace, SCOPED);
+  const scopedDir = path.join(scopedWorkspace, 'services', `${SCOPED}-go`);
+  const { manifest, layers } = loadService(scopedSpec);
+  const stack = { database: 'mongodb', broker: 'rabbitmq', auth: 'keycloak', cache: 'redis', storage: 'minio' };
+  const { files } = planService({ manifest, layers, workspace: scopedWorkspace, stack });
+  for (const file of files) {
+    const target = path.join(scopedDir, file.path);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, file.content);
+  }
+  writeStackConfig(scopedDir, resolveStack(stack, layers));
+  const scopedCredentials = path.join(scopedDir, 'tests', 'integration', 'credentials_test.go');
+  step(`${SCOPED}: el plan emite infra/ y el arnés del alcance`, fs.existsSync(path.join(scopedDir, 'infra', 'init-keycloak.sh')) && /func \(s \*Scenario\) TokenWithScope\(/.test(fs.readFileSync(scopedCredentials, 'utf8')));
+  fs.writeFileSync(
+    path.join(scopedDir, 'tests', 'integration', 'probe_scoped_test.go'),
+    `//go:build integration
+
+package integration
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"os"
+	"strings"
+	"testing"
+)
+
+${CLAIMS_GO}
+// TestProbeScoped pide los tokens con el arnés emitido y escribe sus claims en PROBE_OUT. PROBE_VALUE es el valor del alcance.
+func TestProbeScoped(t *testing.T) {
+	s := &Scenario{T: t}
+	value := os.Getenv("PROBE_VALUE")
+	out := map[string]any{
+		"other":    probeClaims(s, s.TokenWithScope("vault-reader", value)),
+		"many":     probeClaims(s, s.TokenWithScope("vault-reader", "B", "A")),
+		"none":     probeClaims(s, s.TokenWithScope("vault-reader")),
+		"again":    probeClaims(s, s.TokenWithScope("vault-reader", value)),
+		"seeded":   probeClaims(s, s.TokenFor("vault-reader")),
+		"resource": ScopedResource(),
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		s.Fatal(err)
+	}
+	if err := os.WriteFile(os.Getenv("PROBE_OUT"), data, 0o600); err != nil {
+		s.Fatal(err)
+	}
+}
+`
+  );
+  const scopedTidy = go(scopedDir, ['mod', 'tidy']);
+  const scopedVet = scopedTidy.ok ? go(scopedDir, ['vet', '-tags', 'integration', './tests/integration']) : scopedTidy;
+  if (step(`${SCOPED}: tidy y la sonda compila con el arnés emitido`, scopedVet.ok, scopedVet.ok ? '' : scopedVet.output.slice(-2000))) {
+    const probeOut = path.join(scopedWorkspace, 'scoped-claims.json');
+    const probe = (value) => {
+      fs.rmSync(probeOut, { force: true });
+      const run = go(scopedDir, ['test', '-tags', 'integration', '-count=1', '-run', '^TestProbeScoped$', './tests/integration'], { PROBE_VALUE: value, PROBE_OUT: probeOut });
+      let out = null;
+      try {
+        out = JSON.parse(fs.readFileSync(probeOut, 'utf8'));
+      } catch {
+        out = null;
+      }
+      return { run, out };
+    };
+    const scopedUp = bash(scopedDir, 'infra/up.sh');
+    if (step(`${SCOPED}: bash infra/up.sh`, scopedUp.status === 0, scopedUp.status === 0 ? '' : scopedUp.output.slice(-1200))) {
+      try {
+        const seeded = bash(scopedDir, 'infra/init-keycloak.sh');
+        if (step(`${SCOPED}: bash infra/init-keycloak.sh siembra el realm con el claim del alcance`, seeded.status === 0, seeded.status === 0 ? '' : seeded.output.slice(-1500))) {
+          const { run, out } = probe('OTRO');
+          if (step(`${SCOPED}: el arnés ejecuta TokenWithScope contra Keycloak`, run.ok && out != null, run.ok ? '' : run.output.slice(-1500))) {
+            const roles = (token) => token.realm_access?.roles ?? [];
+            step('TokenWithScope(rol, "OTRO"): el token lleva vaults = ["OTRO"] y el rol', JSON.stringify(out.other.vaults) === '["OTRO"]' && roles(out.other).includes('vault-reader'), JSON.stringify(out.other.vaults));
+            step('TokenWithScope(rol, "B", "A"): los dos valores', JSON.stringify([...(out.many.vaults ?? [])].sort()) === '["A","B"]', JSON.stringify(out.many.vaults));
+            step('TokenWithScope(rol): el usuario del rol SIN el claim', out.none.vaults === undefined && roles(out.none).includes('vault-reader'), JSON.stringify(out.none.vaults));
+            step(
+              'el mismo rol y valores dan el mismo usuario que en keel-spring, keel-nest y keel-dotnet (nombre determinista)',
+              out.again.preferred_username === out.other.preferred_username && out.other.preferred_username === 'scoped-vault-reader-252ee2',
+              out.other.preferred_username
+            );
+            step('TokenFor(rol) sigue trayendo ScopedResource()', JSON.stringify(out.seeded.vaults) === JSON.stringify([out.resource]), JSON.stringify(out.seeded.vaults));
+          }
+          // Falsado: sin el atributo en el alta, el token saldría sin claim y el arnés tiene que morir nombrando al usuario.
+          const emitted = fs.readFileSync(scopedCredentials, 'utf8');
+          const sabotaged = emitted.replace('if len(values) > 0 {\n\t\t\tuser["attributes"]', 'if len(values) > 1000 {\n\t\t\tuser["attributes"]');
+          if (step('falsado: el alta del usuario del alcance se puede quitar en lo emitido', sabotaged !== emitted)) {
+            fs.writeFileSync(scopedCredentials, sabotaged);
+            try {
+              const broken = probe('SABOTAJE');
+              step('falsado: sin el atributo, TokenWithScope muere nombrando al usuario', !broken.run.ok && /tiene vaults=\[\] y el escenario pidió \[SABOTAJE\]/.test(broken.run.output), broken.run.output.slice(-300));
+            } finally {
+              fs.writeFileSync(scopedCredentials, emitted);
+            }
+          }
+        }
+      } finally {
+        const down = bash(scopedDir, 'infra/down.sh', ['--volumes']);
+        step(`${SCOPED}: bash infra/down.sh --volumes`, down.status === 0, down.status === 0 ? '' : down.output.slice(-600));
+      }
+    }
+  }
+}
+
 const failed = results.filter((result) => !result.ok).length;
 if (keep) {
   const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-go-security-kept-'));

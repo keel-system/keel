@@ -29,6 +29,7 @@ import { docComment, goFileName, isOptional, layout, localName, packageFile } fr
 import { declaredAuthorship, usesDeclaredAuthorship } from './audit-actor.js';
 import { emitsEvents, usesGoOutbox } from './messaging.js';
 import { claimDependencies, claimMethod, storedState } from './claim.js';
+import { documentReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { credentialFinders, keyFinders, naturalKeyBatchFinder, portName, rankedEnums } from './repositories.js';
 import { BSON, MONGO_DRIVER, MONGO_OPTIONS } from './document-persistence.js';
 import { parameterAccessor } from './service-parameters.js';
@@ -345,8 +346,13 @@ function adapterBody(model, entity, uses) {
   const eventsDoc = events
     ? ` Al guardar, entrega al puente de la mensajería los eventos que drena del agregado: ${outbox ? 'sus documentos del outbox van en la MISMA transacción del cambio' : 'se publican DESPUÉS del commit'}.`
     : '';
-  const deps = [{ field: 'tx', type: '*Transactions' }, ...(events ? [{ field: 'events', type: '*messaging.Bridge' }] : []), ...claimDependencies(model, entity)];
-  const built = [events ? ' y el puente de la mensajería' : '', deps.some((dep) => dep.field === 'sweeps') ? ', con los barridos del perfil' : '', deps.some((dep) => dep.field === 'parameters') ? ' y los parámetros de despliegue que lee su rescate' : ''].join('');
+  const deps = [{ field: 'tx', type: '*Transactions' }, ...(events ? [{ field: 'events', type: '*messaging.Bridge' }] : []), ...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)];
+  const built = [
+    events ? ' y el puente de la mensajería' : '',
+    deps.some((dep) => dep.field === 'sweeps') ? ', con los barridos del perfil' : '',
+    deps.some((dep) => dep.field === 'parameters') ? ' y los parámetros de despliegue que lee su rescate' : '',
+    deps.some((dep) => dep.field === 'reconciliation') ? ', con los barridos de reconciliación del perfil' : ''
+  ].join('');
   parts.push(`// ${constant} es la colección de los documentos de ${name}.
 const ${constant} = ${goString(collection)}
 
@@ -421,6 +427,7 @@ func (r *${type}) ${batch.name}(ctx context.Context, ${batch.plural} []${batch.p
     parts.push(listMethod(entity, type, constant));
   }
   parts.push(...claimMethods(model, entity, type, constant, uses));
+  parts.push(...documentReconciliationMethods(model, entity, type));
   parts.push(...documentGuardMethods(model, entity, type, constant, idWrite));
 
   // ─── Escrituras

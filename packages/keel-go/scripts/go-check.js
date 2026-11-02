@@ -37,6 +37,7 @@ import { APPLICATION_SABOTAGES, applySabotage as applyApplicationSabotage } from
 import { API_SABOTAGES, applySabotage as applyApiSabotage } from '../test/helpers/api-sabotages.js';
 import { CLIENTS_SABOTAGES, CLIENTS_SUBJECT, applySabotage as applyClientsSabotage } from '../test/helpers/clients-sabotages.js';
 import { NEEDS_SABOTAGES, NEEDS_SUBJECT, applyNeedsSabotage } from '../test/helpers/needs-sabotages.js';
+import { SCOPE_SABOTAGES, SCOPE_SUBJECT, applyScopeSabotage } from '../test/helpers/scope-sabotages.js';
 import { STORAGE_SABOTAGES, STORAGE_SUBJECT, applySabotage as applyStorageSabotage } from '../test/helpers/storage-sabotages.js';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
@@ -455,6 +456,34 @@ for (const sabotage of API_SABOTAGES) {
       write(files.filter((file) => file.path === sabotage.file));
       const failed = [...new Set([...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]))];
       step(`needs y OAuth2 falsados: ${id} → ${failed.join(' ')}`, !sabotaged.ok && failed.length > 0 && failed.every((name) => sabotage.expect.test(name)), failed.join(' ').slice(0, 300));
+    }
+  }
+}
+
+// El alcance por recurso (tramo 13h-b) se falsa sobre asset-vault, la fixture que lo declara: la prueba emitida en verde, y cada
+// sabotaje en rojo con sus pruebas, y solo ellas.
+{
+  const scopeDir = path.join(makeWorkspace('keel-go-scope-'), SCOPE_SUBJECT);
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, SCOPE_SUBJECT));
+  const files = planService({ manifest, layers, workspace: scopeDir }).files;
+  const write = (list) => {
+    for (const file of list) {
+      const out = path.join(scopeDir, file.path);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, file.content);
+    }
+  };
+  write(files);
+  const scopeTests = ['test', '-count=1', './internal/platform/security/'];
+  const tidied = go(scopeDir, ['mod', 'tidy']);
+  const baseline = tidied.ok ? go(scopeDir, scopeTests) : tidied;
+  if (step(`alcance: la prueba emitida de ${SCOPE_SUBJECT} en verde`, baseline.ok, baseline.ok ? '' : baseline.output.slice(0, 600))) {
+    for (const [id, sabotage] of Object.entries(SCOPE_SABOTAGES)) {
+      write(applyScopeSabotage(sabotage, files).filter((file) => file.path === sabotage.file));
+      const sabotaged = go(scopeDir, scopeTests);
+      write(files.filter((file) => file.path === sabotage.file));
+      const failed = [...new Set([...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]))];
+      step(`alcance falsado: ${id} → ${failed.join(' ')}`, !sabotaged.ok && failed.length > 0 && failed.every((name) => sabotage.expect.test(name)), failed.join(' ').slice(0, 300));
     }
   }
 }

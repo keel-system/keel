@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { makeWorkspace, mountDesign, runCommand } from '../test/helpers/workspace.js';
+import { FIXTURES_DIR, makeWorkspace, mountDesign, runCommand } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { resolveRuntime } from '../../keel-nest/scripts/lib/database-container.js';
 import { loadService } from '@keel-system/keel-core';
@@ -35,7 +35,7 @@ const SABOTAGES = {
     from: '"print((function () { return ("',
     to: '"(function () { return ("',
     // Sin humo no se ejecuta la suite: caen también los pasos que esperan sus escenarios.
-    expect: ['score: el flujo sonda documental sale OK', 'score: el humo documental', 'PutInFlight', 'InFlightWithoutClock']
+    expect: ['score: el flujo sonda documental sale OK', 'score: el humo documental', 'PutInFlight', 'InFlightWithoutClock', 'AgeForReconciliation', 'HoldFromReconciliation']
   },
   // PutInFlight con el reloj rancio: la sonda que distingue «recién en vuelo» de «abandonado» lo ve.
   put: {
@@ -50,6 +50,13 @@ const SABOTAGES = {
     from: 'countDocuments({ status: \\"RUNNING\\", running_since: null })',
     to: 'countDocuments({ status: \\"RUNNING\\", keel_otro_campo: null })',
     expect: ['score: el flujo sonda documental sale OK', 'InFlightWithoutClock']
+  },
+  // El script de AgeForReconciliation mueve también el estado: el barrido dejaría de encontrarlo donde lo busca.
+  aging: {
+    aging: true,
+    from: '$set: { ',
+    to: '$set: { status: "OTRO", ',
+    expect: ['score: el flujo sonda documental sale OK', 'AgeForReconciliation']
   },
   // Un índice que no sale del contrato: la verificación de los vivos lo ve.
   index: {
@@ -107,7 +114,7 @@ const generated = await runCommand(workspace, build, `specs/${SUBJECT}`, { defau
 if (!step('build genera el proyecto documental', generated.exitCode === undefined && fs.existsSync(path.join(projectDir, 'internal/infrastructure/mongo/indexes.go')), generated.exitCode ? generated.output : '')) {
   process.exit(1);
 }
-if (sabotage) {
+if (sabotage?.file) {
   const target = path.join(projectDir, sabotage.file);
   const text = fs.readFileSync(target, 'utf8');
   if (!text.includes(sabotage.from)) {
@@ -123,6 +130,23 @@ const flows = bash(projectDir, 'infra/check-flows.sh');
 step('check-flows.sh en verde sobre el proyecto recién generado', flows.status === 0, flows.output.slice(-400));
 
 const flowsDir = path.join(projectDir, 'tests', 'integration');
+// Los scripts de AgeForReconciliation y HoldFromReconciliation que EMITE keel-go para asset-vault, leídos de su flow_test.go:
+// medir una copia escrita aquí comprobaría que mongosh sabe hacer un $set, no que el generador acierta.
+const emittedClock = (flow, table) => {
+  const body = flow.match(new RegExp(`var ${table} = map\\[string\\]\\[\\]scriptPair\\{\\n([\\s\\S]*?)\\n\\}`))?.[1];
+  const entry = body?.match(/"([^"]+)":\s+\{scriptPair\{("(?:[^"\\]|\\.)*"), ("(?:[^"\\]|\\.)*")\}\},/);
+  if (!entry) throw new Error(`asset-vault ya no emite ${table} como se esperaba`);
+  return { activation: entry[1], prefix: entry[2], suffix: entry[3] };
+};
+const { files: vaultFiles } = planService({ ...loadService(path.join(FIXTURES_DIR, 'asset-vault')), workspace, stack: { database: 'mongodb' } });
+const vaultFlow = vaultFiles.find((file) => file.path === 'tests/integration/flow_test.go').content;
+const aging = emittedClock(vaultFlow, 'reconciliationAging');
+const holding = emittedClock(vaultFlow, 'reconciliationHolding');
+if (sabotage?.aging) {
+  if (!aging.suffix.includes(sabotage.from)) throw new Error(`El sabotaje ${sabotageId} no se aplica al script emitido: ${aging.suffix}`);
+  aging.suffix = aging.suffix.replace(sabotage.from, sabotage.to.replaceAll('"', '\\"'));
+  console.log(`(sabotaje: ${sabotageId})`);
+}
 // Las rutas únicas de jobs, con el id: dos documentos sin la clave natural chocarían en su índice único (dos null).
 const { model: subjectModel } = planService({ ...loadService(path.join(projectDir, 'specs')), workspace });
 const uniquePaths = indexEntries(subjectModel)
@@ -190,6 +214,22 @@ func TestProbeDocument(t *testing.T) {
 			s.Errorf("InFlightWithoutClock pasó de %d a %d; quiero +1", before, after)
 		}
 	})
+	f.Scenario("FL-PROBE-001-F: el script de AgeForReconciliation (el que emite asset-vault) envejece solo su marca", func(s *Scenario) {
+		s.MongoEval(\`db.getCollection("assets").insertOne({ _id: UUID("0192f000-0000-7000-8000-000000000006"), status: "PUBLISHED", last_scanned_at: new Date() })\`)
+		s.MongoEval(${aging.prefix} + "0192f000-0000-7000-8000-000000000006" + ${aging.suffix})
+		got := strings.TrimSpace(s.MongoEval(\`(function () { const d = db.getCollection("assets").findOne({ _id: UUID("0192f000-0000-7000-8000-000000000006") }); return d.status + "|" + d.last_scanned_at.getTime(); })()\`))
+		if got != "PUBLISHED|0" {
+			s.Errorf("AgeForReconciliation dejó %q", got)
+		}
+	})
+	f.Scenario("FL-PROBE-001-G: el script de HoldFromReconciliation (el que emite asset-vault) deja la marca en el futuro", func(s *Scenario) {
+		s.MongoEval(\`db.getCollection("assets").insertOne({ _id: UUID("0192f000-0000-7000-8000-000000000007"), status: "PUBLISHED", last_scanned_at: new Date() })\`)
+		s.MongoEval(${holding.prefix} + "0192f000-0000-7000-8000-000000000007" + ${holding.suffix})
+		got := strings.TrimSpace(s.MongoEval(\`db.getCollection("assets").findOne({ _id: UUID("0192f000-0000-7000-8000-000000000007") }).last_scanned_at.getTime() > Date.now()\`))
+		if got != "true" {
+			s.Errorf("HoldFromReconciliation dejó %q", got)
+		}
+	})
 }
 `
 );
@@ -205,9 +245,11 @@ try {
   const score = bash(projectDir, 'infra/score-scenarios.sh');
   const has = (pattern) => pattern.test(score.output);
   step('score: el humo documental (SMOKE-3) pasa', !has(/FALLO\s+SMOKE-3/) && score.status !== 2, `código ${score.status}`);
-  step('score: el flujo sonda documental sale OK', score.status === 0 && ['A', 'B', 'C', 'D', 'E'].every((c) => has(new RegExp(`OK\\s+FL-PROBE-001-${c}`))), `código ${score.status}: ${score.output.slice(-1500)}`);
+  step('score: el flujo sonda documental sale OK', score.status === 0 && ['A', 'B', 'C', 'D', 'E', 'F', 'G'].every((c) => has(new RegExp(`OK\\s+FL-PROBE-001-${c}`))), `código ${score.status}: ${score.output.slice(-1500)}`);
   step('PutInFlight deja el reloj a ahora', has(/OK\s+FL-PROBE-001-D/));
   step('InFlightWithoutClock discrimina', has(/OK\s+FL-PROBE-001-E/));
+  step('AgeForReconciliation envejece solo su marca, con el script de asset-vault', has(/OK\s+FL-PROBE-001-F/));
+  step('HoldFromReconciliation deja la marca en el futuro, con el script de asset-vault', has(/OK\s+FL-PROBE-001-G/));
 
   // Los índices vivos (el servidor de la suite los creó al arrancar) contra los del contrato.
   const exported = bash(projectDir, 'infra/export-indexes.sh');

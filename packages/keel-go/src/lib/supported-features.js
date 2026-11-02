@@ -124,9 +124,7 @@ function authorshipErrors(layers) {
  * Lo que keel-go todavía no genera sobre DOCUMENTOS (incremento 12), con su motivo: ninguna fixture documental en su
  * alcance lo declara, así que ninguna red mediría lo emitido.
  *   · los finders de búsqueda (DSL 2.22: `filter` en el input de una query): sobre documentos, keel-nest y keel-dotnet
- *     traducen cada filtro a su consulta; aquí no hay fixture documental que los declare;
- *   · el reclamo de reconciliación (`reconciledBy`): solo lo declara asset-vault, que llega con el incremento 13 (storage,
- *     `needs`, alcance por recurso).
+ *     traducen cada filtro a su consulta; aquí no hay fixture documental que los declare.
  */
 function documentErrors(manifest, layers) {
   let model;
@@ -143,10 +141,6 @@ function documentErrors(manifest, layers) {
     if (finders.length > 0) {
       errors.push(`persistence: los finders de búsqueda de ${entity.name} (DSL 2.22: filter en el input de una query) — keel-go todavía no los genera sobre documentos (${why}). ${elsewhere}`);
     }
-  }
-  // Una activación con reconciledBy, en cualquier dependencia: es la que lleva el reclamo y su tienda de marcas.
-  if (JSON.stringify(layers?.dependencies ?? {}).includes('"reconciledBy"')) {
-    errors.push(`dependencies: el barrido de reconciliación (reconciledBy) — keel-go todavía no lo genera sobre documentos (${why}; llega con asset-vault, incremento 13). ${elsewhere}`);
   }
   return errors;
 }
@@ -276,10 +270,8 @@ export function checkSupportedStack(stack) {
 }
 
 /**
- * Lo que keel-go todavía no genera de la capa security (incremento 8). Las tres cosas las declara, como mucho, una
- * fixture que keel-go aún rechaza por otras capas, así que ninguna red mediría lo emitido; entran con ella:
- *   · la clave de API (`protocol: api-key` o `serviceAuth.protocol: api-key`): ninguna fixture la declara;
- *   · el alcance por recurso (`scoping`): asset-vault, que trae mensajería, clientes salientes y storage;
+ * Lo que keel-go todavía no genera de la capa security (incremento 8): la clave de API (`protocol: api-key` o
+ * `serviceAuth.protocol: api-key`), que ninguna fixture declara, así que ninguna red mediría lo emitido.
  * Y un campo de identidad que no es texto: el valor sale de un claim, que es texto, y los otros tres servidores lo
  * pasan tal cual; en Go el mensaje es tipado y no compilaría.
  */
@@ -290,9 +282,6 @@ function securityErrors(layers) {
   const elsewhere = 'Genera este diseño con keel-spring, keel-nest o keel-dotnet.';
   if (authentication.protocol === 'api-key' || authentication.serviceAuth?.protocol === 'api-key') {
     errors.push(`security: la clave de API (protocol: api-key) — keel-go todavía no la genera (${why}). ${elsewhere}`);
-  }
-  if (authentication.scoping) {
-    errors.push(`security: el alcance por recurso (authentication.scoping) — keel-go todavía no lo genera (${why}; llega con asset-vault). ${elsewhere}`);
   }
   const identity = authentication.callerIdentity;
   if (identity) {
@@ -356,8 +345,7 @@ function isComposite(layers, field) {
  *   · una llamada sin method/path o sin contrato tipado, o con una respuesta sin campos: el adaptador lleva la cabecera de
  *     código generado y no puede llevar el TODO que esa llamada necesitaría (keel-dotnet lo deja al agente); ninguna
  *     fixture en alcance lo declara;
- *   · los clientes sin persistencia relacional: se cablean en las Dependencies de los casos de uso, que hoy solo existen con
- *     ella (asset-vault, documental, llega con el incremento 12).
+ *   · los clientes sin persistencia: se cablean en las Dependencies de los casos de uso, que solo existen con ella.
  */
 function outboundErrors(layers) {
   const clients = Object.entries(layers?.['http-clients']?.clients ?? {});
@@ -389,9 +377,9 @@ function outboundErrors(layers) {
       }
     }
   }
-  if (clients.length > 0 && (!layers?.persistence || documentPersistence(layers))) {
+  if (clients.length > 0 && !layers?.persistence) {
     errors.push(
-      'http-clients: keel-go cablea los clientes en las Dependencies de los casos de uso, que hoy solo existen con persistencia relacional ' +
+      'http-clients: keel-go cablea los clientes en las Dependencies de los casos de uso, que solo existen con persistencia ' +
         `(${unmeasured}). Genera este diseño con keel-spring, keel-nest o keel-dotnet.`
     );
   }
