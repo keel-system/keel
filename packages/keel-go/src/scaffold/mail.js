@@ -14,6 +14,7 @@
 //   · la guarda contra el doble envío `ClaimFor<Op>` (el `guardClaim` de keel-core) en el puerto y en los dos adaptadores,
 //     con transacción PROPIA: un correo que sale no lo deshace ningún rollback.
 
+import { observedMailFile } from './telemetry.js';
 import { RESERVED_MAIL_HEADERS, MAIL_HEADER_NAME_CLASS, HTML_ESCAPES, COMPILED_TEMPLATES_LIMIT } from '@keel-system/keel-core/gen/mail-message';
 import { envFor } from '@keel-system/keel-core/gen/runtime-env';
 import { sendsMail, usesDocument, usesMail } from '@keel-system/keel-core/gen/features';
@@ -54,6 +55,7 @@ export function generate(model) {
   if (!usesGoMail(model)) return [];
   const { domain, mail } = layout(model);
   const files = [
+    ...observedMailFile(model),
     { path: domainPath(model, 'Mail'), content: packageFile(model, domain, { imports: ['context', 'regexp', 'slices', 'strings', 'maps'], body: domainBody(model) }) },
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/mail.yaml`, content: mailYaml(model, profile) })),
     {

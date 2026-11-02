@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HARNESSES, loadService } from '@keel-system/keel-core';
-import { AGENTS, CONVENTIONS, DOCS_DIR, GUIDES } from '../src/scaffold/generator-docs.js';
+import { AGENTS, CONVENTIONS, DOCS_DIR, GUIDES, CONDITIONAL_CONVENTIONS } from '../src/scaffold/generator-docs.js';
 import { planService } from '../src/scaffold/index.js';
 import { GENERATED_HEADER } from '../src/lib/go-source.js';
 import { SKILL } from '../src/lib/assets.js';
@@ -51,7 +51,7 @@ const read = (...parts) => fs.readFileSync(path.join(assets, ...parts), 'utf8');
 
 test('todo agente, guía y convención de assets/ se instala (las listas son el único punto de instalación)', () => {
   assert.deepEqual([...AGENTS].sort(), fs.readdirSync(path.join(assets, 'agents')).sort());
-  assert.deepEqual([...CONVENTIONS].sort(), fs.readdirSync(path.join(assets, 'generators', 'go', 'conventions')).sort());
+  assert.deepEqual([...CONVENTIONS, ...Object.keys(CONDITIONAL_CONVENTIONS)].sort(), fs.readdirSync(path.join(assets, 'generators', 'go', 'conventions')).sort());
   const guides = fs.readdirSync(path.join(assets, 'generators', 'go')).filter((name) => name.endsWith('.md'));
   assert.deepEqual([...GUIDES].sort(), guides.sort());
   for (const name of [...GUIDES, ...CONVENTIONS.map((c) => `conventions/${c}`), 'framework-errors.md', 'wire-contract.md']) {
@@ -111,7 +111,7 @@ test('la skill de la base solo se instala con persistencia relacional, y la orqu
 // Las que llevan un marcador (`<entidad>_behavior.go`) son plantillas y no se miran.
 test('cada ruta internal/, cmd/, tests/ e infra/ que citan los assets existe en lo que emite build', () => {
   const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
-  const emitted = [...Object.keys(mysql), ...Object.keys(cognito), ...Object.keys(rabbit), ...Object.keys(sns), ...Object.keys(mercadopago), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path))];
+  const emitted = [...Object.keys(mysql), ...Object.keys(cognito), ...Object.keys(rabbit), ...Object.keys(sns), ...Object.keys(mercadopago), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path)), ...planWith('catalog-extended', { stack: { telemetry: 'otel' } }).files.map((file) => file.path)];
   // Lo que escriben los agentes (las pruebas de flujo, con nombre de ejemplo).
   const agentWritten = /^tests\/integration\/\w+_test\.go$/;
   const missing = [];

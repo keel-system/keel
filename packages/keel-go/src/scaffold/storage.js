@@ -20,6 +20,7 @@
 //   · el 413 del caso de uso necesita un centinela: si el diseño no declara su error, el dominio lleva ErrFileTooLarge
 //     con el code canónico (errors.js).
 
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { CONTENT_SIGNATURES } from '@keel-system/keel-core/gen/content-signatures';
 import { declaredErrorFor, effectiveErrorCode } from '@keel-system/keel-core/gen/declared-errors';
 import { storageYaml, multipartFileLimitBytes } from '@keel-system/keel-core/gen/storage-config';
@@ -146,6 +147,7 @@ export function generate(model) {
       const { storage } = layout(model);
       files.push(
         { path: `${storage.dir}/settings.go`, content: packageFile(model, storage, { imports: ['fmt', 'strconv', 'strings', 'time', 'internal/platform/config'], body: settingsBody(model) }) },
+        ...(usesTelemetry(model) ? [{ path: `${storage.dir}/observed.go`, content: packageFile(model, storage, { imports: ['context', 'internal/domain', 'internal/platform/telemetry'], body: observedBody(model) }) }] : []),
         { path: `${storage.dir}/policies.go`, content: packageFile(model, storage, { imports: ['fmt', 'internal/domain'], body: policiesBody() }) },
         {
           path: `${storage.dir}/client.go`,
@@ -170,6 +172,86 @@ export function generate(model) {
     });
   }
   return files;
+}
+
+// El puerto observado (keel.storage, con la operación y el bucket LÓGICO del diseño: un nombre de un conjunto cerrado; la
+// key del objeto no sale nunca, es dato). Un decorador sobre el PUERTO y no dentro del adaptador, porque el adaptador lo
+// escribe el agente: así se instrumenta cualquier implementación. PublicURL no habla con el almacén y no se observa.
+function observedBody(model) {
+  const { hasPrivateBucket, hasPublicBucket } = model.storage ?? {};
+  const methods = [
+    `// Upload sube el binario dentro de su observación.
+func (s *observedStorage) Upload(ctx context.Context, bucket, key string, content []byte, contentType string) (domain.StoredObject, error) {
+	var stored domain.StoredObject
+	err := s.observe(ctx, "upload", bucket, func(ctx context.Context) error {
+		var err error
+		stored, err = s.inner.Upload(ctx, bucket, key, content, contentType)
+		return err
+	})
+	return stored, err
+}`
+  ];
+  if (hasPrivateBucket) {
+    methods.push(`// Download trae el binario dentro de su observación.
+func (s *observedStorage) Download(ctx context.Context, bucket, key string) ([]byte, error) {
+	var content []byte
+	err := s.observe(ctx, "download", bucket, func(ctx context.Context) error {
+		var err error
+		content, err = s.inner.Download(ctx, bucket, key)
+		return err
+	})
+	return content, err
+}`);
+  }
+  if (hasPublicBucket) {
+    methods.push(`// PublicURL no habla con el almacén: no se observa.
+func (s *observedStorage) PublicURL(bucket, key string) (string, error) {
+	return s.inner.PublicURL(bucket, key)
+}`);
+  }
+  methods.push(`// Delete borra el objeto dentro de su observación.
+func (s *observedStorage) Delete(ctx context.Context, bucket, key string) error {
+	return s.observe(ctx, "delete", bucket, func(ctx context.Context) error {
+		return s.inner.Delete(ctx, bucket, key)
+	})
+}`);
+  if (hasPrivateBucket) {
+    methods.push(`// SignedURL pide la URL firmada dentro de su observación.
+func (s *observedStorage) SignedURL(ctx context.Context, bucket, key string) (string, error) {
+	var url string
+	err := s.observe(ctx, "signedUrl", bucket, func(ctx context.Context) error {
+		var err error
+		url, err = s.inner.SignedURL(ctx, bucket, key)
+		return err
+	})
+	return url, err
+}`);
+  }
+  return `
+// Observed es el puerto de almacenamiento observado: cada operación sobre un bucket en un span de keel.storage con su timer,
+// la operación y el bucket lógico. La key del objeto no sale nunca: los nombres de archivo llevan datos de personas. Con
+// TELEMETRY_INSTRUMENT_STORAGE apagado, inner tal cual.
+func Observed(inner domain.FileStorage, observability *telemetry.Telemetry) domain.FileStorage {
+	if !observability.Instrumented("storage") {
+		return inner
+	}
+	return &observedStorage{inner: inner, telemetry: observability}
+}
+
+type observedStorage struct {
+	inner     domain.FileStorage
+	telemetry *telemetry.Telemetry
+}
+
+func (s *observedStorage) observe(ctx context.Context, operation, bucket string, action func(ctx context.Context) error) error {
+	return s.telemetry.Observe(ctx, telemetry.Storage, telemetry.Options{
+		Name:   telemetry.Storage + " " + operation,
+		Labels: map[string]string{telemetry.AttrStorageOperation: operation, telemetry.AttrStorageBucket: bucket},
+	}, action)
+}
+
+${methods.join('\n\n')}
+`;
 }
 
 // ─── internal/domain ─────────────────────────────────────────────────────────────────────────────
@@ -900,7 +982,7 @@ export function storageServerRows(model) {
   if (!usesStorageAdapter(model)) return [];
   return [
     { indent: '\t\t', cells: [`${STORAGE_POLICIES.field}:`, 'storagePolicies,'] },
-    { indent: '\t\t', cells: [`${FILE_STORAGE.field}:`, 'fileStorage,'] }
+    { indent: '\t\t', cells: [`${FILE_STORAGE.field}:`, usesTelemetry(model) ? 'storage.Observed(fileStorage, observability),' : 'fileStorage,'] }
   ];
 }
 

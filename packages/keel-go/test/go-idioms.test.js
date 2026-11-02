@@ -9,7 +9,7 @@ import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { IDIOM_RULES, checkGoIdioms } from './helpers/go-idioms.js';
-import { FIXTURES_DIR, GO_READY_DESIGN, makeWorkspace } from './helpers/workspace.js';
+import { FIXTURES_DIR, GO_READY_DESIGN, makeWorkspace, TELEMETRY_DESIGNS } from './helpers/workspace.js';
 
 const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
 const workspace = makeWorkspace();
@@ -22,6 +22,13 @@ function plan(name) {
 for (const fixture of fixtures) {
   test(`${fixture}: el Go emitido no tiene hallazgos de idioma`, () => {
     assert.deepEqual(checkGoIdioms(plan(fixture)), []);
+  });
+}
+
+for (const design of TELEMETRY_DESIGNS) {
+  test(`${design.name} (telemetría, derivado de ${design.from}): el Go emitido no tiene hallazgos de idioma`, () => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, design.from));
+    assert.deepEqual(checkGoIdioms(planService({ manifest, layers, workspace, stack: design.stack }).files), []);
   });
 }
 

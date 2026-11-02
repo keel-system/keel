@@ -102,7 +102,8 @@ En este orden:
 2. `bash infra/check-domain-guards.sh` (si existe): cada hallazgo es del agente de código → `remaining` y
    `domainGuards: KO`. Y `bash infra/check-idempotency.sh` (si existe): igual, con `idempotency: KO` —es el único gate
    de lo que ningún escenario ve: un listener sin guarda pasa el camino feliz; un barrido que lee en vez de reclamar,
-   también—.
+   también—. `bash infra/check-logging.sh` (si existe), con `logging: KO`, y `bash infra/check-telemetry.sh` (si existe), con
+   `cardinality: KO`: los dos nacen verdes, así que un hallazgo es del código del agente, y tampoco lo ve ningún escenario.
 3. `bash infra/score-scenarios.sh` con la infraestructura arriba: **la no-regresión es tuya**, los escenarios
    siguen al 100%. Si alguno falla, tu pase cambió comportamiento: revierte el ajuste responsable y repite; si no lo
    identificas, revierte el pase entero y repórtalo. No edites las pruebas.
@@ -128,6 +129,8 @@ indexes: OK | KO | N/A    # los índices vivos son los de build (solo MongoDB)
 indexesTested: <n>        # cuántos índices contrastaste (solo MongoDB)
 domainGuards: OK | KO | N/A
 idempotency: OK | KO | N/A
+logging: OK | KO | N/A
+cardinality: OK | KO | N/A
 issuesFixed: [...]
 remaining: [...]
 designGaps:

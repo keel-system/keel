@@ -98,6 +98,10 @@ escenario que ya estaba en verde.
      barrido reclama su lote, cada evento se emite desde su agregado y el dispatcher del outbox está en
      `brokerAdapters`. Nace ROJO a propósito, como el anterior, y cada hallazgo dice qué falta y por qué. Cada listener
      de `cmd/server/broker.go` en su propia función: el gate juzga la función que nombra sus mensajes.
+   - `bash infra/check-logging.sh` en verde (si existe): nace verde, así que un hallazgo es tuyo. Sin objetos de entrada en un log,
+     sin `fmt.Sprintf` en el mensaje, sin ERROR desde el dominio o los casos de uso, sin consola a pelo y siempre con Context.
+   - `bash infra/check-telemetry.sh` en verde (si existe, solo con telemetría): las etiquetas de métrica son una lista cerrada y el
+     listener trata el mensaje dentro de `messaging.Consume` (`{{keel:docs}}/conventions/observability.md`).
    No ejecutes `bash infra/up.sh`, `go run ./cmd/server` ni escenarios: de eso se encargan otros agentes. Esto vale
    íntegro en la **primera pasada** (fase 1), en paralelo con la infraestructura y con las pruebas.
 5. Con la compilación en verde, la **revisión mecánica final** de `flow-fidelity.md` (ningún `float64` en un
@@ -150,6 +154,8 @@ lint: OK | KO                # go tool staticcheck ./... vacío y gofmt -l . vac
 architecture: OK | KO        # go test ./internal/architecture/
 domainGuards: OK | KO | N/A  # bash infra/check-domain-guards.sh (N/A si no existe)
 idempotency: OK | KO | N/A   # bash infra/check-idempotency.sh (N/A si no existe)
+logging: OK | KO | N/A       # bash infra/check-logging.sh (N/A si no existe)
+cardinality: OK | KO | N/A   # bash infra/check-telemetry.sh (N/A si no existe)
 failures: [...]              # errores: archivo:línea y causa; relanzado, qué corregiste de cada fallo
 verifiedFlows:               # solo relanzado desde la fase 2. Verde aquí NO aprueba el escenario
   - { flow: TestProductCreation, result: OK | KO }

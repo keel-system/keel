@@ -23,6 +23,7 @@
 // Las claves en el store son las de RedisCacheManager de keel-spring (`<servicio>:<operación>::<clave>`): el mismo
 // `infra/reset-db.sh` y el mismo `ClearCache()` del arnés las borran en los cuatro servidores.
 
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { cachedOperations, cacheInvalidations, cacheNote, CACHE_ENTRY_SEPARATOR, CACHE_KEY_PART_SEPARATOR } from '@keel-system/keel-core/gen/cache-plan';
 import { cacheYaml } from '@keel-system/keel-core/gen/cache-config';
 import { CACHES, devtoolsContainer } from '@keel-system/keel-core/gen/infra-catalog';
@@ -215,6 +216,15 @@ type OperationCache struct {
 	generations map[string]uint64
 	// unavailable dice si la última orden al store falló: la caída se escribe una vez, no una por lectura.
 	unavailable atomic.Bool
+	// OnRead se entera de cada lectura de una entrada, acierto o fallo: la telemetría, si la hay. Se pone antes de usarla.
+	OnRead func(cache string, hit bool)
+}
+
+// counted avisa de una lectura.
+func (c *OperationCache) counted(name string, hit bool) {
+	if c.OnRead != nil {
+		c.OnRead(name, hit)
+	}
 }
 
 // cacheLoad es una carga en vuelo: las lecturas de la misma entrada esperan a done y se llevan su resultado.
@@ -250,8 +260,10 @@ func GetOrLoadIf[M, R any](ctx context.Context, cache *OperationCache, op Cached
 	entry := EntryKey(op, op.Key(msg))
 	var cached R
 	if cache.read(ctx, op.Name, entry, &cached) {
+		cache.counted(op.Name, true)
 		return cached, nil
 	}
+	cache.counted(op.Name, false)
 	cache.mu.Lock()
 	if pending, ok := cache.loading[entry]; ok {
 		cache.mu.Unlock()
@@ -1108,6 +1120,13 @@ func (s *Scenario) ClearCache() {
 }
 
 /** Lo que el arranque (cmd/server) añade con la caché: la configuración y el store, que se cierra al apagar. */
+// Con telemetría, cada lectura cuenta en cache_gets_total{cache,result}, la serie del ratio de acierto del panel.
+const CACHE_OBSERVED = `	operationCache := application.NewOperationCache(cacheStore, logger)
+	if observability.Instrumented("cache") {
+		operationCache.OnRead = observability.CacheGet
+	}
+`;
+
 export function cacheServerWiring(model) {
   if (!usesCache(model)) return '';
   const { cache } = layout(model);
@@ -1126,11 +1145,11 @@ export function cacheServerWiring(model) {
 		}()
 		cacheStore = store
 	}
-`;
+${usesTelemetry(model) ? CACHE_OBSERVED : ''}`;
 }
 
 /** La fila de Dependencies que pone el arranque. */
 export function cacheServerRows(model) {
   if (!usesCache(model)) return [];
-  return [{ indent: '\t\t', cells: [`${OPERATION_CACHE.field}:`, 'application.NewOperationCache(cacheStore, logger),'] }];
+  return [{ indent: '\t\t', cells: [`${OPERATION_CACHE.field}:`, usesTelemetry(model) ? 'operationCache,' : 'application.NewOperationCache(cacheStore, logger),'] }];
 }

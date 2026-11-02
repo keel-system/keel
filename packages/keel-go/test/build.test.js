@@ -78,11 +78,13 @@ test('un diseño fuera de la frontera se rechaza nombrando keel-go, antes de esc
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
-test('la telemetría pedida por flag se rechaza antes de escribir', async () => {
-  const { workspace, exitCode, output } = await generated({ telemetry: 'otel' });
-  assert.equal(exitCode, 1);
-  assert.match(output, /keel-go todavía no genera telemetría/);
-  assert.ok(!fs.existsSync(path.join(workspace, 'services')));
+test('la telemetría pedida por flag se genera y queda en keel-stack.json', async () => {
+  const { project, exitCode, output } = await generated({ telemetry: 'otel' });
+  assert.equal(exitCode, undefined, output);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(project, 'keel-stack.json'), 'utf8')).telemetry, 'otel');
+  assert.ok(fs.existsSync(path.join(project, 'internal', 'platform', 'telemetry', 'telemetry.go')));
+  assert.ok(fs.existsSync(path.join(project, 'deploy', 'observability', 'alerting', 'keel-alerts.yaml')));
+  assert.ok(fs.existsSync(path.join(project, 'infra', 'check-telemetry.sh')));
 });
 
 test('una segunda pasada no pisa lo que ya existe, y --check dice que está al día', async () => {

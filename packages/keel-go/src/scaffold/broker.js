@@ -12,6 +12,7 @@ import { consumerUnits } from '@keel-system/keel-core/gen/messaging-plan';
 import { alignRows } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
 import { MESSAGING_IMPORT, publisherPort, usesBestEffort, usesGoOutbox } from './messaging.js';
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { RABBITMQ_IMPORT, usesGoRabbitMq } from './rabbitmq.js';
 import { KAFKA_IMPORT, usesGoKafka } from './kafka.js';
 import { SNSSQS_IMPORT, usesGoSnsSqs } from './snssqs.js';
@@ -49,7 +50,7 @@ export function brokerFiles(model) {
   const connection = brokerConnection(model);
   const own = connection ? [connection.import] : [];
   return [
-    { path: `${server.dir}/messaging.go`, content: packageFile(model, server, { imports: ['context', 'log/slog', 'internal/application', MESSAGING_IMPORT, ...(consumes(model) ? own : [])], body: typesBody(model) }) },
+    { path: `${server.dir}/messaging.go`, content: packageFile(model, server, { imports: ['context', 'log/slog', 'internal/application', 'internal/platform/telemetry', MESSAGING_IMPORT, ...(consumes(model) ? own : [])], body: typesBody(model) }) },
     { path: `${server.dir}/broker.go`, content: packageFile(model, server, { imports: ['log/slog', MESSAGING_IMPORT, ...(publishes(model) ? own : [])], body: agentBody(model, broker), generated: false }) }
   ];
 }
@@ -73,7 +74,8 @@ ${alignRows(rows).join('\n')}
       ...(connection ? [{ indent: '\t', cells: [connection.field, connection.type] }] : []),
       { indent: '\t', cells: ['UseCases', '*application.UseCases'] },
       { indent: '\t', cells: ['Guard', '*messaging.IdempotencyGuard'] },
-      { indent: '\t', cells: ['Logger', '*slog.Logger'] }
+      { indent: '\t', cells: ['Logger', '*slog.Logger'] },
+      ...(usesTelemetry(model) ? [{ indent: '\t', cells: ['Telemetry', '*telemetry.Telemetry'] }] : [])
     ];
     parts.push(`// inbound es lo que reciben los listeners: la mensajería del perfil (el topic, la cola o el grupo de cada
 // suscripción)${connection ? `, la conexión con el broker (${connection.field}: se consume con ${connection.field}.${connection.consume})` : ''}, los casos de uso que

@@ -10,32 +10,13 @@ import { DOTNET_RUNTIME, telemetryNamespace, usesTelemetry } from './telemetry.j
 import { usesRelational } from './persistence.js';
 import { poolMeter } from './relational-engine.js';
 import { DOTNET_OBSERVABILITY } from './observability-assets.js';
-import { observabilityAssets } from '@keel-system/keel-core/gen/observability-assets';
-import { parse as parseYaml } from 'yaml';
+import { consultedSeries as neutralConsultedSeries, seriesOf } from '@keel-system/keel-core/gen/observability-assets';
 
-const PROMQL_WORDS = new Set(['sum', 'max', 'min', 'rate', 'by', 'le', 'histogram_quantile', 'clamp_min', 'max_over_time', 'irate', 'avg', 'count', 'without', 'on']);
+export { seriesOf };
 
-/** Los nombres de serie que nombra una expresión PromQL (sin funciones, etiquetas ni literales). */
-export function seriesOf(expr) {
-  const withoutLabels = expr.replace(/\{[^}]*\}/g, '').replace(/\[[^\]]*\]/g, '').replace(/by \([^)]*\)/g, '');
-  return [...withoutLabels.matchAll(/[a-z_][a-z0-9_]*/g)].map(([name]) => name).filter((name) => !PROMQL_WORDS.has(name) && name.includes('_'));
-}
-
-/**
- * Las series que consultan el panel y las alertas que build genera para ESTE diseño: la prueba emitida exige que el
- * scrape las publique todas. Una alerta sobre una serie que nadie publica no falla: no dispara nunca.
- */
+/** Las series que consultan el panel y las alertas de ESTE diseño: la prueba emitida exige que el scrape las publique todas. */
 export function consultedSeries(model) {
-  const byPath = Object.fromEntries(observabilityAssets(model, DOTNET_OBSERVABILITY).map((file) => [file.path, file.content]));
-  const dashboard = JSON.parse(Object.entries(byPath).find(([file]) => file.startsWith('deploy/observability/dashboards/') && file.endsWith('.json'))[1]);
-  const alerts = parseYaml(byPath['deploy/observability/alerting/keel-alerts.yaml']);
-  const rules = parseYaml(byPath['deploy/observability/prometheus-rules.example.yaml']);
-  const expressions = [
-    ...dashboard.panels.flatMap((panel) => (panel.targets ?? []).map((target) => target.expr)),
-    ...alerts.groups.flatMap((group) => group.rules.map((rule) => rule.data[0].model.expr)),
-    ...rules.groups.flatMap((group) => group.rules.map((rule) => rule.expr))
-  ];
-  return [...new Set(expressions.flatMap(seriesOf))].sort();
+  return neutralConsultedSeries(model, DOTNET_OBSERVABILITY);
 }
 
 export function generate(model) {

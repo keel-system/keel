@@ -22,6 +22,7 @@
 // Determinista a propósito: ningún timestamp, ningún id aleatorio. `build` se ejecuta muchas
 // veces sobre el mismo diseño y el árbol no puede cambiar entre dos pasadas.
 
+import YAML from 'yaml';
 import { ALERTING, OBSERVABILITY_DIR, GRAFANA_PROVISIONING, alertSinkEndpoint } from './infra-catalog.js';
 import {
   ATTRIBUTES,
@@ -47,6 +48,32 @@ import {
  */
 
 const DATASOURCE = { type: 'prometheus', uid: 'prometheus' };
+
+const PROMQL_WORDS = new Set(['sum', 'max', 'min', 'rate', 'by', 'le', 'histogram_quantile', 'clamp_min', 'max_over_time', 'irate', 'avg', 'count', 'without', 'on']);
+
+/** Los nombres de serie que nombra una expresión PromQL (sin funciones, etiquetas ni literales). */
+export function seriesOf(expr) {
+  const withoutLabels = expr.replace(/\{[^}]*\}/g, '').replace(/\[[^\]]*\]/g, '').replace(/by \([^)]*\)/g, '');
+  return [...withoutLabels.matchAll(/[a-z_][a-z0-9_]*/g)].map(([name]) => name).filter((name) => !PROMQL_WORDS.has(name) && name.includes('_'));
+}
+
+/**
+ * Las series que consultan el panel y las alertas que build genera para ESTE diseño con la plataforma de un generador: las
+ * pruebas emitidas exigen que el scrape las publique todas. Una alerta sobre una serie que nadie publica no falla: no dispara
+ * nunca. La compartían keel-dotnet y keel-go (PLAN-KEEL-GO.md, incremento 14).
+ */
+export function consultedSeries(model, platform) {
+  const byPath = Object.fromEntries(observabilityAssets(model, platform).map((file) => [file.path, file.content]));
+  const dashboardFile = Object.keys(byPath).find((file) => file.startsWith(`deploy/${OBSERVABILITY_DIR}/dashboards/`) && file.endsWith('.json'));
+  const alerts = YAML.parse(byPath[`deploy/${OBSERVABILITY_DIR}/alerting/keel-alerts.yaml`]);
+  const rules = YAML.parse(byPath[`deploy/${OBSERVABILITY_DIR}/prometheus-rules.example.yaml`]);
+  const expressions = [
+    ...JSON.parse(byPath[dashboardFile]).panels.flatMap((panel) => (panel.targets ?? []).map((target) => target.expr)),
+    ...alerts.groups.flatMap((group) => group.rules.map((rule) => rule.data[0].model.expr)),
+    ...rules.groups.flatMap((group) => group.rules.map((rule) => rule.expr))
+  ];
+  return [...new Set(expressions.flatMap(seriesOf))].sort();
+}
 
 /** Los archivos del panel y las alertas de `deploy/` para este diseño, con la plataforma de un generador. */
 export function observabilityAssets(model, platform) {

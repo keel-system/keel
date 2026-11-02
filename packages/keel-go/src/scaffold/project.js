@@ -14,7 +14,8 @@ import { usesGoMail, usesTemplating } from './mail.js';
 import { CACHE_REQUIRES, MAIL_REQUIRES, STORAGE_REQUIRES, TEMPLATING_PINS, TEMPLATING_REQUIRES } from '../lib/go-stack.js';
 import { usesStorageAdapter } from './storage.js';
 import { usesCache } from './cache.js';
-import { BROKER_REQUIRES, DOCUMENT_REQUIRES, JWT_REQUIRES, MODULES, RELATIONAL_REQUIRES, SCHEDULING_REQUIRES, SKELETON_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
+import { BROKER_REQUIRES, DOCUMENT_REQUIRES, JWT_REQUIRES, MODULES, RELATIONAL_REQUIRES, SCHEDULING_REQUIRES, SKELETON_REQUIRES, TELEMETRY_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { relationalEngine } from '../lib/relational-engine.js';
 import { foldKinds } from './persistence-runtime.js';
 import { usesGoMessaging } from './messaging.js';
@@ -35,7 +36,8 @@ export function requiresFor(model = null) {
     ...(model && usesJwt(model) ? JWT_REQUIRES : []),
     ...(model && usesGoMessaging(model) ? (BROKER_REQUIRES[model.stack?.broker] ?? []) : []),
     ...(model && usesScheduling(model) ? SCHEDULING_REQUIRES : []),
-    ...(model && usesStorageAdapter(model) ? STORAGE_REQUIRES : [])
+    ...(model && usesStorageAdapter(model) ? STORAGE_REQUIRES : []),
+    ...(model && usesTelemetry(model) ? TELEMETRY_REQUIRES : [])
   ];
   return [...new Set(all)].sort();
 }

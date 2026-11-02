@@ -47,7 +47,7 @@ test('requestCharge (payment-checkout) lleva su puerta en los cuatro, la fija el
   const go = plan(planGo, 'payment-checkout');
   assert.match(content(go, 'application/entry_gate.go'), /EntryGateHTTP\s+EntryGate = "HTTP"[\s\S]*EntryGateSubscription\s+EntryGate = "SUBSCRIPTION"[\s\S]*EntryGateDispatch\s+EntryGate = "DISPATCH"[\s\S]*EntryGateSchedule\s+EntryGate = "SCHEDULE"/);
   assert.match(content(go, 'application/request_charge_command.go'), /\tEntryGate EntryGate `json:"-"`\n\}/);
-  assert.match(content(go, 'application/use_cases.go'), /uc\.RequestCharge = observe\([^\n]*requireEntryGate\("requestCharge", func\(m RequestChargeCommand\) EntryGate \{ return m\.EntryGate \}, NewRequestChargeCommandHandler\(/);
+  assert.match(content(go, 'application/use_cases.go'), /uc\.RequestCharge = (?:settle\(logger, )?observe\([^\n]*requireEntryGate\("requestCharge", func\(m RequestChargeCommand\) EntryGate \{ return m\.EntryGate \}, NewRequestChargeCommandHandler\(/);
   const goApi = go.filter((file) => file.path.startsWith('internal/httpapi/')).map((file) => file.content).join('\n');
   assert.match(goApi, /\tcmd\.EntryGate = application\.EntryGateHTTP\n/);
   assert.match(go.map((file) => file.content).join('\n'), /PaymentMethodRef: \*message\.PaymentMethodRef, EntryGate:\n\/\/ application\.EntryGateSubscription\}\)/);

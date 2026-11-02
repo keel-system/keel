@@ -16,6 +16,7 @@ import { alignRows, goString } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
 import { newUseCasesCall } from './use-cases.js';
 import { SECURITY_IMPORT, securityPlan, usesJwt } from './security.js';
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 
 export function generate(model) {
   const { httpapi } = layout(model);
@@ -29,7 +30,7 @@ function serverGo(model) {
   const { httpapi } = layout(model);
   return packageFile(model, httpapi, {
     doc: 'Package httpapi es la entrada HTTP del servicio: el enrutador con sus rutas y el servidor con sus\nlímites.',
-    imports: ['cmp', 'log/slog', 'net', 'net/http', 'strconv', 'time', 'internal/application', 'internal/platform/config', 'internal/platform/health', SECURITY_IMPORT],
+    imports: ['cmp', 'log/slog', 'net', 'net/http', 'strconv', 'strings', 'time', 'internal/application', 'internal/platform/config', 'internal/platform/health', 'internal/platform/telemetry', SECURITY_IMPORT],
     body: `
 // Los límites del servidor. Sin ellos, net/http no corta nunca a un cliente lento.
 const (
@@ -45,8 +46,8 @@ const (
 	MaxHeaderBytes = 8 << 10
 )
 
-${usesApi(model) ? apiHandler(model) : PROBES_HANDLER}
-
+${usesApi(model) ? apiHandler(model) : probesHandler(model)}
+${usesTelemetry(model) ? ROUTE_TEMPLATE : ''}
 // NewServer devuelve el servidor HTTP del servicio, con sus límites, escuchando en la dirección de la
 // configuración.
 func NewServer(settings config.Server, handler http.Handler) *http.Server {
@@ -64,12 +65,42 @@ func NewServer(settings config.Server, handler http.Handler) *http.Server {
   });
 }
 
-const PROBES_HANDLER = `// NewHandler devuelve el enrutador del servicio.
+function probesHandler(model) {
+  if (usesTelemetry(model)) {
+    return `// NewHandler devuelve el enrutador del servicio, observado: el scrape y la métrica de cada petición (observability, nil:
+// sin telemetría).
+func NewHandler(probes *health.Probes, observability *telemetry.Telemetry) http.Handler {
+	mux := http.NewServeMux()
+	probes.Register(mux)
+	return observability.Instrument(mux, routeTemplate(mux))
+}`;
+  }
+  return `// NewHandler devuelve el enrutador del servicio.
 func NewHandler(probes *health.Probes) http.Handler {
 	mux := http.NewServeMux()
 	probes.Register(mux)
 	return mux
 }`;
+}
+
+// La plantilla de la ruta de una petición, para la métrica y el span: «GET /products/{id}» → «/products/{id}». Antes de
+// servirla, porque el borde y la seguridad trabajan con copias de la petición y la original no llega a saber su patrón. El
+// último patrón («/», el 404 y el 405) no es una ruta.
+const ROUTE_TEMPLATE = `
+// routeTemplate da la plantilla de la ruta que atenderá una petición, o "" si ninguna.
+func routeTemplate(mux *http.ServeMux) func(*http.Request) string {
+	return func(r *http.Request) string {
+		_, pattern := mux.Handler(r)
+		if pattern == "/" {
+			return ""
+		}
+		if _, path, ok := strings.Cut(pattern, " "); ok {
+			return path
+		}
+		return pattern
+	}
+}
+`;
 
 /**
  * La entrada HTTP de las operaciones. Con la capa security, el handler recibe además su configuración y pone la
@@ -98,7 +129,9 @@ function apiHandler(model) {
     ...(audience ? [`audience: cmp.Or(settings.Audience, ${goString(plan.audience)})`] : [])
   ];
   const struct = alignRows(rows).join('\n');
-  const params = secured ? 'probes *health.Probes, useCases *application.UseCases, logger *slog.Logger, settings security.Settings' : 'probes *health.Probes, useCases *application.UseCases, logger *slog.Logger';
+  const telemetry = usesTelemetry(model);
+  const params = `probes *health.Probes, useCases *application.UseCases, logger *slog.Logger${secured ? ', settings security.Settings' : ''}${telemetry ? ', observability *telemetry.Telemetry' : ''}`;
+  const edged = `a.edge(${secured ? 'a.secure(mux)' : 'mux'})`;
   const doc = secured
     ? `// NewHandler devuelve la entrada HTTP del servicio: las sondas y una ruta por operación del diseño, detrás del borde
 // (correlación, tope del cuerpo y recover) y de la seguridad, que decide antes de enrutar. Lo que ninguna ruta atiende
@@ -119,7 +152,7 @@ func NewHandler(${params}) http.Handler {
 		mux.Handle(route.Method+" "+route.Path, a.endpoint(route.handle))
 	}
 ${paymentNoticeRoute(model)}	mux.Handle("/", unrouted(mux))
-	return a.edge(${secured ? 'a.secure(mux)' : 'mux'})
+	return ${telemetry ? `observability.Instrument(${edged}, routeTemplate(mux))` : edged}
 }`;
 }
 
@@ -128,9 +161,10 @@ ${paymentNoticeRoute(model)}	mux.Handle("/", unrouted(mux))
  * pruebas de la API publica el JWKS con el que firman; sin ella, ningún token vale).
  */
 export function testHandler(model, settings = 'security.Settings{}') {
-  if (!usesApi(model)) return 'httpapi.NewHandler(&health.Probes{})';
+  const observed = usesTelemetry(model) ? ', nil' : '';
+  if (!usesApi(model)) return `httpapi.NewHandler(&health.Probes{}${observed})`;
   const security = usesHttpSecurity(model) ? `, ${settings}` : '';
-  return `httpapi.NewHandler(&health.Probes{}, ${newUseCasesCall(model, 'slog.New(slog.DiscardHandler)')}, slog.New(slog.DiscardHandler)${security})`;
+  return `httpapi.NewHandler(&health.Probes{}, ${newUseCasesCall(model, 'slog.New(slog.DiscardHandler)')}, slog.New(slog.DiscardHandler)${security}${observed})`;
 }
 
 function serverTestGo(model) {

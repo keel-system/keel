@@ -34,6 +34,11 @@ export function layout(model) {
     // El correlationId de la petición o del mensaje en curso: lo abre la entrada HTTP, viaja en el contexto y lo
     // escriben los logs y el cuerpo de error.
     correlation: pkg(module, 'internal/platform/correlation'),
+    // La consola del servicio (incremento 14b): texto en local y JSON ECS fuera de él, con los niveles del perfil.
+    logging: pkg(module, 'internal/platform/logging'),
+    // La telemetría (`telemetry: otel`, incremento 14c): trazas, métricas por scrape y las observaciones. En la plataforma
+    // y no en la infraestructura porque la usan la entrada HTTP y los adaptadores; la aplicación la ve por su puerto.
+    telemetry: pkg(module, 'internal/platform/telemetry'),
     // El contrato del cable y los tipos que la biblioteca estándar no tiene (Decimal, Date, Optional[T]). El
     // dominio los usa, así que es lo único de la plataforma que puede importar.
     wire: pkg(module, 'internal/platform/wire'),

@@ -18,7 +18,7 @@ listeners**, en un solo archivo. No reescribas lo demás.
 | Outbox | `internal/infrastructure/messaging/outbox.go` | El relay, el backoff y la rendición; el puerto `Dispatcher` con un respaldo que no deja arrancar fuera de `local`/`test` |
 | Mensajes | `internal/infrastructure/messaging/<evento>_message.go` | `Read<Evento>Message` y `RequireContract`; su comentario dice **el orden de la guarda y el despacho** de esa suscripción |
 | Deduplicación | `internal/infrastructure/messaging/guard.go` | `IdempotencyGuard`: `AlreadyProcessed`/`Record`/`TryRecord`, en su propia transacción |
-| Correlación | `internal/infrastructure/messaging/inbound.go` | `Inbound(ctx, metadata)`: el contexto con la correlación de origen, que heredan los eventos que provoque |
+| Correlación | `internal/infrastructure/messaging/inbound.go` | `Inbound(ctx, metadata)`: el contexto con la correlación de origen, que heredan los eventos que provoque. Con telemetría, el tratamiento va dentro de `messaging.Consume(ctx, deps.Telemetry, envelope.Metadata, ...)`, que además abre el span del consumo (`conventions/observability.md`) |
 | Configuración | `config/parameters/<perfil>/messaging.yaml` y `rabbitmq.yaml` | Destino, routing keys, colas, relay y conexión (`RABBITMQ_*`), en `messaging.Settings` |
 | Lo que se intercambia | `cmd/server/messaging.go` | Los tipos `outbound`, `inbound` y `listener` que usa tu archivo |
 

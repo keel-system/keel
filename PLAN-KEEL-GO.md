@@ -1215,8 +1215,26 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       diseño. Arreglado sin commit (`NewPage`, `page_shape_test.go`, sabotaje `empty-page`, `wire-contract.md`). `npm test` 1066/1066 y keel-core 1313/1313, `go-check --fixtures` 57/57.
     - **`go-check` entero: 162/162** (lanzado por el usuario, 2026-11-02, generador `009bfcf6`, con `-race` y los sabotajes `empty-page` y `use-case-logger`). **Incremento 13 CERRADO.** Tras los arreglos del 13i
       no se han vuelto a pasar `db-check`, `doc-check`, `security-check`, `cache-check` ni `stub-check`: los cubren las dos corridas, en lo que ejercitan.
-- **Para retomar:** el incremento 13 está cerrado; el siguiente es el 14, telemetría y despliegue, en contexto nuevo. Pendiente fuera de keel-go: keel-nest y keel-spring toman los totales reales en la página fuera de rango (keel-dotnet sin
-  mirar), y su agente los corrige a mano. Ningún escenario de `catalog` afirma que el binario desaparezca de MinIO.
+- **Inc. 14 — CERRADO (2026-11-02).** Sin commit. Tramos:
+  - **14b logs** (`src/scaffold/logging.js`, `internal/platform/logging`): un `slog.Handler` propio, texto en local y test, JSON ECS anidado en develop y production, con `logging.yaml` neutral. El nivel va por el paquete que
+    escribe, leído de `record.PC`, que es también su `log.logger`. Sin `process.thread.name`: en Go no hay hilo que nombrar. `run` gana el subcomando `healthcheck`.
+  - **14c telemetría** (`src/scaffold/telemetry.js`, `internal/platform/telemetry`): sin estado global, `run` construye un `*telemetry.Telemetry` con métodos nil-safe, y la aplicación se observa por el puerto
+    `application.Observer`. SDK de OpenTelemetry para trazas y logs por OTLP, client_golang para el scrape con OpenMetrics forzado, `GO_RUNTIME`, y el pool desde `sql.DBStats`: como solo da el acumulado, su saturación son las
+    esperas desde el scrape anterior. A diferencia de keel-dotnet, el interruptor de caché sí mueve algo (`OperationCache.OnRead`). Declarado como en keel-nest y keel-dotnet: sin spans de drivers, sin pool documental, sin retraso del consumidor.
+  - **14d panel y `deploy/`** (`observability-assets.js`, `deploy.js`): golang:1.27.3 → `distroless/static:nonroot`, `HEALTHCHECK` con el binario.
+  - **14e gates** (`logging-check.js`, `telemetry-gate.js`) sobre el motor `source-gate`; `CONSUME_RULE` veta un `messaging.Inbound` con telemetría.
+  - **14f redes**: `telemetry-check`, `deploy-check`, `TELEMETRY_DESIGNS` (11 siluetas) y `test/helpers/telemetry-sabotages.js`.
+  - **Neutral en keel-core**: `seriesOf`/`consultedSeries` en `gen/observability-assets.js`, y la sonda de `gen/deploy-probes.js` espera a Grafana: el binario de Go está listo en milisegundos y `up.sh` volvía antes que el backend.
+    También se arregló `keel-dotnet/test/entry-gate.test.js`, en rojo desde el 13e (su regex no admitía `settle(logger, `).
+  - **Desviaciones del plan**: capa `COPY go.mod go.sum` + `go mod download` en vez de `--mount=type=cache` (BuildKit; portabilidad entre docker y podman; exige `go mod tidy` antes). Sin `-ldflags -X` para versión y commit (§ 3.9):
+    nadie los consume, la versión es la del diseño. La telemetría va en `internal/platform/telemetry`, no en infrastructure.
+  - **Medido**: `telemetry-check` 20/20, falsado (`pool-name` → TEL-7, `management` → TEL-10, `server-parent` → TEL-3/8/9); `deploy-check` 8/8, sin sabotajes propios; `harness-check` 28/28. `npm test`: keel-go 1152/1152, keel-core 1313/1313,
+    keel-nest 861/861, keel-spring 1681/1681; keel-dotnet entero tras el arreglo de `entry-gate`.
+  - **`go-check` (lanzado por el usuario): 192/194, y los 2 rojos arreglados y medidos aparte.** Una primera pasada mató el sistema por falta de memoria, con 11 rojos en cascada que no eran defectos. En la segunda, con las 67 variantes de la caché, cayeron dos sabotajes de telemetría, no lo emitido: `telemetry-envelope` no compilaba (dejaba un import sin usar), y `log-levels` tumbaba cuatro pruebas más sin declararlas. Solo cambió `test/helpers/telemetry-sabotages.js`, y los dos caen ya en exactamente sus pruebas con la comparación de `go-check`, ejecutados sueltos. `-race`, govulncheck y licencias con OTel, y el arranque con la consola ECS, en verde. **No hay una pasada entera con 194/194.** Debilidad vista y sin arreglar: un falsado de licencias sale OK si el paso no pudo lanzarse.
+  - **Sin medir tras el cambio de logs**: `db-check`, `doc-check`, `security-check`, `broker-check`, `stub-check`, `cache-check`, `mail-check`. Sin corrida: la puerta de este incremento son `telemetry-check` y `deploy-check`. La matriz `engine-support` de Go es del inc. 16,
+    y SIGTERM no se puede medir en Windows. `gofmt -l` señala `scripts/probes/cache_probe_test.go`, que no se tocó.
+- **Para retomar:** el incremento 14 está cerrado; el siguiente es el 15, evolución (`gen/evolution.js` + `GO_EVOLUTION`), en contexto nuevo. Pendiente fuera de keel-go: keel-nest y keel-spring toman los totales reales en la página fuera de rango
+  (keel-dotnet sin mirar), y su agente los corrige a mano. Ningún escenario de `catalog` afirma que el binario desaparezca de MinIO.
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y

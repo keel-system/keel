@@ -243,7 +243,7 @@ function messagingErrors(manifest, layers) {
   return messagingWithoutPersistenceErrors(manifest, layers, 'keel-go');
 }
 
-/** Lo que el stack pide y keel-go no genera (un motor sin medir, la telemetría): se rechaza en el build en vez de estamparlo sin efecto. */
+/** Lo que el stack pide y keel-go no genera (un motor sin medir): se rechaza en el build en vez de estamparlo sin efecto. */
 export function checkSupportedStack(stack) {
   const errors = [];
   // El motor solo importa con persistencia: sin ella, el cuestionario no lo pregunta y no se estampa.
@@ -258,12 +258,6 @@ export function checkSupportedStack(stack) {
       `broker: ${stack.broker} — keel-go genera la mensajería sobre ${SUPPORTED_BROKERS.join(', ')}` +
         `${PENDING_BROKERS[stack.broker] ? ` (${stack.broker} llega en el ${PENDING_BROKERS[stack.broker]} de PLAN-KEEL-GO.md)` : ''}. ` +
         'Elige otro, o genera este diseño con keel-spring, keel-nest o keel-dotnet.'
-    );
-  }
-  if (stack?.telemetry && stack.telemetry !== 'none') {
-    errors.push(
-      `telemetry: ${stack.telemetry} — keel-go todavía no genera telemetría (llega en el incremento 14 de PLAN-KEEL-GO.md). ` +
-        'Genera sin ella (--telemetry none).'
     );
   }
   return { errors };

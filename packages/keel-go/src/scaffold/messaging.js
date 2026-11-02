@@ -24,6 +24,7 @@
 // Solo con persistencia RELACIONAL: el puente sale del adaptador de repositorio y el registro de procesados vive en la
 // base. La documental llega con el incremento 12.
 
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
 import { missingTargetRetryDestinations, subscriptionDestination, subscriptionGroupId, deadLetterDestination } from '@keel-system/keel-core/gen';
 import { OUTBOX_LAST_ERROR_LENGTH, OUTBOX_RELAY, outboxBackoffMs } from '@keel-system/keel-core/gen/messaging-stores';
@@ -90,15 +91,15 @@ export function generate(model) {
     })),
     file('doc', [], ''),
     file('settings', ['fmt', 'strconv', 'strings', 'time', 'internal/platform/config'], settingsBody(model)),
-    file('envelope', ['context', 'encoding/json/jsontext', 'fmt', 'time', 'internal/domain', 'internal/platform/correlation', 'internal/platform/wire'], envelopeBody()),
-    file('inbound', ['context', 'internal/domain', 'internal/platform/correlation'], inboundBody())
+    file('envelope', ['context', 'encoding/json/jsontext', 'fmt', 'time', 'internal/domain', 'internal/platform/correlation', 'internal/platform/telemetry', 'internal/platform/wire'], envelopeBody(model)),
+    file('inbound', ['context', 'internal/domain', 'internal/platform/correlation', 'internal/platform/telemetry'], inboundBody(model))
   ];
   for (const event of model.events ?? []) {
     files.push(file(goFileName(event.integrationClass), ['internal/domain', ...event.fields.flatMap(fieldImports)], integrationEventBody(model, event)));
   }
   if (usesBridge(model)) files.push(file('bridge', ['context', 'fmt', 'log/slog', 'internal/domain'], bridgeBody(model)));
   if (usesBestEffort(model)) files.push(file('publishers', ['context', 'log/slog'], publishersBody(model)));
-  if (usesGoOutbox(model)) files.push(file('outbox', ['context', 'fmt', 'log/slog', 'math', 'slices', 'strings', 'sync', 'sync/atomic', 'time', 'unicode/utf8', 'github.com/google/uuid'], outboxBody()));
+  if (usesGoOutbox(model)) files.push(file('outbox', ['context', 'fmt', 'log/slog', 'math', 'slices', 'strings', 'sync', 'sync/atomic', 'time', 'unicode/utf8', 'github.com/google/uuid', 'internal/platform/telemetry', 'internal/platform/wire'], outboxBody(model)));
   if (usesGoProcessedEvents(model)) files.push(file('guard', ['context', 'log/slog'], guardBody()));
   for (const sub of model.subscriptions ?? []) {
     files.push(file(goFileName(sub.messageRecord), messageImports(sub), messageBody(model, sub, plan)));
@@ -243,15 +244,17 @@ func (r *reader) millis(key string, fallback int) time.Duration {
 
 // ─── envelope.go ─────────────────────────────────────────────────────────────────────────────────
 
-function envelopeBody() {
+function envelopeBody(model) {
+  const telemetry = usesTelemetry(model);
   return `
 // Envelope es la envoltura estándar de los eventos: metadata + payload, en el orden del cable (keel-core,
 // WIRE_SHAPES.eventEnvelope). Es la misma que publican y consumen los servidores de keel-spring, keel-nest y
 // keel-dotnet del diseño.
 //
 // La metadata es la que el agregado estampó al emitir el evento de dominio: conserva el EventID, que es la clave de
-// idempotencia del consumidor. Aquí solo se le añade la correlación de la petición, que el dominio no conoce; este
-// servicio no tiene telemetría, así que el traceparent viaja a null.
+// idempotencia del consumidor. Aquí solo se le añade la correlación de la petición, que el dominio no conoce; ${
+    telemetry ? 'y el traceparent\n// del span en curso: con él el consumidor continúa la traza.' : 'este\n// servicio no tiene telemetría, así que el traceparent viaja a null.'
+  }
 type Envelope[T any] struct {
 	Metadata domain.EventMetadata \`json:"metadata"\`
 	Data     T                    \`json:"data"\`
@@ -264,7 +267,7 @@ func NewEnvelope[T any](ctx context.Context, metadata domain.EventMetadata, data
 	if id, ok := correlation.ID(ctx); ok {
 		correlationID = &id
 	}
-	return Envelope[T]{Metadata: metadata.WithContext(correlationID, nil), Data: data}
+	return Envelope[T]{Metadata: metadata.WithContext(correlationID, ${telemetry ? 'telemetry.Traceparent(ctx)' : 'nil'}), Data: data}
 }
 
 // Wire es la envoltura en JSON con el contrato del cable: lo que viaja y lo que guarda el outbox.
@@ -367,7 +370,7 @@ func (e *ContractError) Unwrap() error {
 `;
 }
 
-function inboundBody() {
+function inboundBody(model) {
   return `
 // Inbound es el contexto de un mensaje consumido: lleva la correlación de origen de su envoltura Keel, que heredan los
 // eventos que provoque. Sin correlación de origen (o con una que no cumple el formato), una nueva: correlation.Accept.
@@ -379,7 +382,18 @@ func Inbound(ctx context.Context, metadata domain.EventMetadata) context.Context
 	}
 	return correlation.WithID(ctx, correlation.Accept(received))
 }
-`;
+${
+    usesTelemetry(model)
+      ? `
+// Consume trata un mensaje consumido: action recibe el contexto de Inbound y corre dentro de un span CONSUMER que continúa la
+// traza del emisor (metadata.traceparent), con su timer. Con telemetría es la puerta del listener: abrir solo Inbound compila,
+// pasa todos los escenarios y corta la traza en cada consumo.
+func Consume(ctx context.Context, observability *telemetry.Telemetry, metadata domain.EventMetadata, action func(ctx context.Context) error) error {
+	return observability.Consuming(Inbound(ctx, metadata), metadata.EventType, metadata.Traceparent, action)
+}
+`
+      : ''
+  }`;
 }
 
 // ─── Eventos de integración ──────────────────────────────────────────────────────────────────────
@@ -564,7 +578,8 @@ func (p publisherFallback[E]) Publish(ctx context.Context, _ E) error {
 
 // ─── outbox.go ───────────────────────────────────────────────────────────────────────────────────
 
-function outboxBody() {
+function outboxBody(model) {
+  const telemetry = usesTelemetry(model);
   return `
 // LastErrorLength es la cota de outbox_event.last_error: el mensaje de un fallo se trunca a ella antes de guardarse.
 const LastErrorLength = ${OUTBOX_LAST_ERROR_LENGTH}
@@ -671,7 +686,7 @@ type Relay struct {
 	dispatcher Dispatcher
 	settings   OutboxRelaySettings
 	logger     *slog.Logger
-	// pass es una pasada a la vez; también guarda paused, así que pausar espera a la pasada en vuelo.
+${telemetry ? '	// Telemetry observa cada publicación; nil, ninguna. Se pone antes de arrancar el relay.\n	Telemetry *telemetry.Telemetry\n' : ''}	// pass es una pasada a la vez; también guarda paused, así que pausar espera a la pasada en vuelo.
 	pass   sync.Mutex
 	paused bool
 }
@@ -729,7 +744,15 @@ func (r *Relay) relay(ctx context.Context) (int, error) {
 		if ctx.Err() != nil {
 			break
 		}
-		if err := r.dispatcher.Dispatch(work, row.Destination, row.RoutingKey, row.EventType, row.Payload); err != nil {
+${
+    telemetry
+      ? `		// Dentro de la traza de la fila (la que quedó en su envoltura): el relay publica en otro instante.
+		err := r.Telemetry.Publishing(work, row.EventType, traceparentOf(row.Payload), func(ctx context.Context) error {
+			return r.dispatcher.Dispatch(ctx, row.Destination, row.RoutingKey, row.EventType, row.Payload)
+		})
+		if err != nil {`
+      : '		if err := r.dispatcher.Dispatch(work, row.Destination, row.RoutingKey, row.EventType, row.Payload); err != nil {'
+  }
 			reason := TruncateError(err)
 			outcome, markErr := r.store.MarkFailed(work, row.ID, reason, r.settings.MaxAttempts, r.settings.BackoffInitial, r.settings.BackoffMax)
 			switch {
@@ -751,7 +774,24 @@ func (r *Relay) relay(ctx context.Context) (int, error) {
 	return len(claimed), nil
 }
 
-// Pause suspende las pasadas, esperando a la que esté en vuelo. Es para el arnés de integración, que fabrica así la
+${
+    telemetry
+      ? `// traceparentOf es el traceparent de la envoltura guardada en una fila; nil si no lo trae o no se puede leer.
+func traceparentOf(payload string) *string {
+	var envelope struct {
+		Metadata struct {
+			Traceparent *string \`json:"traceparent"\`
+		} \`json:"metadata"\`
+	}
+	if err := wire.Unmarshal([]byte(payload), &envelope); err != nil {
+		return nil
+	}
+	return envelope.Metadata.Traceparent
+}
+
+`
+      : ''
+  }// Pause suspende las pasadas, esperando a la que esté en vuelo. Es para el arnés de integración, que fabrica así la
 // precondición de un escenario del outbox (una fila pendiente que nadie entrega todavía).
 func (r *Relay) Pause() {
 	r.pass.Lock()
@@ -1069,10 +1109,19 @@ function contractDoc(model, sub) {
     // keel-dotnet con la de origen vacía).
     const inbound = sub.envelope === 'keel' ? 'messaging.Inbound(ctx, envelope.Metadata)' : 'correlation.WithID(ctx, correlation.Accept(""))';
     // Lo que llama a la pasarela de pago va sin transacción abarcadora (callsPaymentGateway, keel-core).
-    const dispatchCtx = callsPaymentGateway(model, sub.trigger) ? `application.WithoutTransaction(${inbound})` : inbound;
+    // Con telemetría, el tratamiento entero va dentro de messaging.Consume, que ya da ese contexto.
+    const consumed = usesTelemetry(model) && sub.envelope === 'keel' ? 'ctx' : inbound;
+    const dispatchCtx = callsPaymentGateway(model, sub.trigger) ? `application.WithoutTransaction(${consumed})` : consumed;
     lines.push(
       `Lo consume ${consumer}: lo escribe el agente en cmd/server/broker.go y despacha con useCases.${useCaseField(operation)}.Handle(${dispatchCtx}, application.${messageType(operation)}{${fields.join(', ')}}).`
     );
+    if (usesTelemetry(model)) {
+      lines.push(
+        sub.envelope === 'keel'
+          ? 'El tratamiento del mensaje, guarda incluida, va dentro de messaging.Consume(ctx, deps.Telemetry, envelope.Metadata, func(ctx context.Context) error { … }): el span que continúa la traza del emisor.'
+          : `El tratamiento del mensaje, guarda incluida, va dentro de deps.Telemetry.Consuming(ctx, ${goString(sub.name)}, nil, func(ctx context.Context) error { … }): el span de su consumo; sin envoltura Keel no hay traza que continuar.`
+      );
+    }
   } else {
     lines.push(`Lo consume ${consumer}: lo escribe el agente en cmd/server/broker.go.`);
   }

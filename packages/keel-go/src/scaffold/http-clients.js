@@ -25,6 +25,7 @@
 //
 // El cuerpo y la respuesta los escribe y lee el contrato del cable (`internal/platform/wire`), el mismo que la API.
 
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { fallbackFailures, hasCallFallback, recordedFailures, resiliencePolicy, retryWaitMs, circuitScript, PROVIDER_FAILURES } from '@keel-system/keel-core/gen/outbound-resilience';
 import { httpClientsYaml } from '@keel-system/keel-core/gen/http-clients-config';
 import { LOCAL_STUB_BASE_URL } from '@keel-system/keel-core/gen/infra-catalog';
@@ -143,7 +144,7 @@ export function generate(model) {
     file('failures', failuresGo(), ['errors', 'fmt'], { doc: PACKAGE_DOC }),
     file('circuit', CIRCUIT_GO, ['sync', 'time']),
     file('resilience', RESILIENCE_GO, ['context', 'math', 'slices', 'time']),
-    file('exchange', EXCHANGE_GO, ['bytes', 'context', 'encoding/json/jsontext', 'errors', 'fmt', 'io', 'net', 'net/http', 'net/url', 'regexp', 'strings', 'time', 'internal/platform/wire']),
+    file('exchange', usesTelemetry(model) ? observedExchange(EXCHANGE_GO) : EXCHANGE_GO, ['bytes', 'context', 'encoding/json/jsontext', 'errors', 'fmt', 'io', 'net', 'net/http', 'net/url', 'regexp', 'strings', 'time', 'internal/platform/telemetry', 'internal/platform/wire']),
     file('reading', READING_GO, ['encoding/json/v2', 'encoding/json/jsontext', 'internal/platform/wire']),
     file('settings', settingsGo(model), ['context', 'encoding/base64', 'fmt', 'net/url', 'strings', 'time', 'internal/platform/config']),
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/http-clients.yaml`, content: httpClientsYaml(model, profile) })),
@@ -1640,6 +1641,28 @@ func escapeQuery(text string) string {
 	return strings.ReplaceAll(url.QueryEscape(text), "+", "%20")
 }
 `;
+
+/**
+ * El Exchange con telemetría: un span CLIENT por intento, con la plantilla de la ruta en la métrica y su traza en las
+ * cabeceras. El transporte de net/http no propaga nada por su cuenta. La medida cubre la lectura del cuerpo.
+ */
+function observedExchange(source) {
+  const replace = (text, from, to) => {
+    if (!text.includes(from)) throw new Error(`exchange.go ya no tiene: ${from}`);
+    return text.replace(from, () => to);
+  };
+  let text = replace(
+    source,
+    'type Exchange struct {\n\tclient *http.Client\n}',
+    'type Exchange struct {\n\tclient *http.Client\n\t// Telemetry observa cada intento; nil, ninguno. Se pone antes de usarlo.\n\tTelemetry *telemetry.Telemetry\n}'
+  );
+  text = replace(
+    text,
+    '\tresponse, err := e.client.Do(outgoing)\n',
+    '\tspanCtx, finish := e.Telemetry.Client(attemptCtx, client.ID, request.Method, request.Path, outgoing.Header)\n\tobserved := 0\n\tdefer func() { finish(observed) }()\n\tresponse, err := e.client.Do(outgoing.WithContext(spanCtx))\n'
+  );
+  return replace(text, '\tdefer response.Body.Close()\n\ttext, err := io.ReadAll(response.Body)\n', '\tobserved = response.StatusCode\n\tdefer response.Body.Close()\n\ttext, err := io.ReadAll(response.Body)\n');
+}
 
 const READING_GO = `
 // La lectura de una respuesta del proveedor con el contrato del cable (wire). Un campo que el contrato declara obligatorio

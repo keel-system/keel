@@ -35,11 +35,66 @@ import { PARAMETERS_IMPORT, PARAMETERS_VAR, usesServiceParameters } from './serv
 import { PAYMENT_IMPORT, PAYMENT_SERVER_WIRING, paymentServerRows, usesGoPayments } from './payments.js';
 import { claimDependencies, usesSweepClaims } from './claim.js';
 import { usesReconciliationClaims } from './reconciliation-claim.js';
-import { usesCorrelation } from './correlation.js';
 import { CLIENTS_IMPORT, adapterType, clientField, clientParam, clientRemembers, usesGoHttpClients, usesLastKnown } from './http-clients.js';
 import { MAIL_SENDER, TEMPLATE_RENDERER, usesGoMail, usesTemplating } from './mail.js';
 import { cacheServerRows, cacheServerWiring } from './cache.js';
 import { STORAGE_IMPORT, storageServerRows, storageServerWiring } from './storage.js';
+import { loggerWiring } from './logging.js';
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { MANAGEMENT_LISTEN, MANAGEMENT_SERVER, MANAGEMENT_SHUTDOWN, TELEMETRY_FLUSH, TELEMETRY_START } from './telemetry.js';
+import { usesRelational } from '@keel-system/keel-core/gen/features';
+
+// El gauge de las filas del outbox que se rindieron, leído en cada scrape (sin base, el perfil test, no hay relay que
+// mirar). NaN si no se puede leer: un cero diría que no hay ninguna.
+const DEAD_LETTERED_GAUGE = `
+	if database.Enabled {
+		observability.RegisterGauge(telemetry.OutboxDeadLettered, "Eventos del outbox que agotaron sus reintentos", func() float64 {
+			count, err := relay.CountDeadLettered(ctx)
+			if err != nil {
+				return math.NaN()
+			}
+			return float64(count)
+		})
+	}`;
+
+// La telemetría de cada perfil: el muestreo, el puerto del scrape y el colector.
+const TELEMETRY_PROFILE_TESTS = `
+func TestLaTelemetriaDeCadaPerfil(t *testing.T) {
+	files := only(t, "telemetry.yaml")
+	load := func(env map[string]string) telemetry.Settings {
+		t.Helper()
+		cfg, err := config.Load(files, func(name string) string { return env[name] })
+		if err != nil {
+			t.Fatal(err)
+		}
+		settings, err := telemetry.SettingsFrom(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return settings
+	}
+	production := load(map[string]string{"PROFILE": "production", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://colector:4318/"})
+	if production.SamplingProbability != 0.1 || production.ManagementPort != 8081 || !production.ExportEnabled || production.Endpoint != "http://colector:4318" {
+		t.Errorf("production = %+v", production)
+	}
+	test := load(map[string]string{"PROFILE": "test"})
+	if test.ExportEnabled || test.ManagementPort != 0 || !test.PrometheusEnabled {
+		t.Errorf("test = %+v", test)
+	}
+}
+
+func TestUnaProporcionFueraDeRangoNoDejaArrancar(t *testing.T) {
+	cfg, err := config.Load(only(t, "telemetry.yaml"), func(name string) string {
+		return map[string]string{"PROFILE": "develop", "TRACING_SAMPLING_PROBABILITY": "1.5"}[name]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := telemetry.SettingsFrom(cfg); err == nil {
+		t.Error("SettingsFrom aceptó una proporción de 1.5")
+	}
+}
+`;
 
 // La configuración del correo del perfil: un número que no se entiende no deja arrancar.
 const MAIL_WIRING = `	mailSettings, err := smtp.SettingsFrom(cfg)
@@ -53,6 +108,7 @@ export function generate(model) {
   return [
     { path: `${server.dir}/main.go`, content: mainGo(model) },
     { path: `${server.dir}/main_test.go`, content: mainTestGo(model) },
+    { path: `${server.dir}/profiles_test.go`, content: profilesTestGo(model) },
     ...(wiresMessaging(model) ? brokerFiles(model) : [])
   ];
 }
@@ -72,18 +128,21 @@ function mainGo(model) {
       'fmt',
       'io',
       'log/slog',
+      'math',
       'net',
       'net/http',
       'os',
       'os/signal',
       'syscall',
+      'time',
       'golang.org/x/sync/errgroup',
       { path: `${configFiles.importPath}`, name: 'configfiles' },
       'internal/application',
       'internal/httpapi',
       'internal/platform/config',
-      'internal/platform/correlation',
       'internal/platform/health',
+      'internal/platform/logging',
+      'internal/platform/telemetry',
       SECURITY_IMPORT,
       'database/sql',
       layout(model).store.dir,
@@ -110,6 +169,9 @@ func main() {
 // run arranca el servicio y lo mantiene hasta que ctx se cancela o llega SIGINT o SIGTERM; entonces lo apaga
 // en orden y devuelve. Todo lo del proceso le llega por parámetro, para poder arrancarlo en una prueba.
 func run(ctx context.Context, args []string, getenv func(string) string, stdout io.Writer) error {
+	if len(args) == 1 && args[0] == "healthcheck" {
+		return healthcheck(ctx, getenv)
+	}
 	if len(args) > 0 {
 		return fmt.Errorf("subcomando desconocido %q", args[0])
 	}
@@ -126,14 +188,14 @@ ${usesServiceParameters(model) ? parametersWiring(model) : ''}${wiring(model)}
 		return fmt.Errorf("escuchar en %s: %w", srv.Addr, err)
 	}
 	logger.InfoContext(ctx, "servidor HTTP escuchando", "address", listener.Addr().String(), "profiles", cfg.Profiles)
-
+${usesTelemetry(model) ? MANAGEMENT_LISTEN : ''}
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.Go(func() error {
 		if err := srv.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("servir HTTP: %w", err)
 		}
 		return nil
-	})${wiresMessaging(model) ? workers(model) : ''}${usesScheduling(model) ? CLOCK_WORKER : ''}
+	})${usesTelemetry(model) ? MANAGEMENT_SERVER : ''}${wiresMessaging(model) ? workers(model) : ''}${usesScheduling(model) ? CLOCK_WORKER : ''}
 	group.Go(func() error {
 		<-groupCtx.Done()
 		probes.StartDraining()
@@ -143,10 +205,34 @@ ${usesServiceParameters(model) ? parametersWiring(model) : ''}${wiring(model)}
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("apagar el servidor HTTP: %w", err)
-		}
+		}${usesTelemetry(model) ? MANAGEMENT_SHUTDOWN : ''}
 		return nil
 	})
 	return group.Wait()
+}
+
+// healthcheck es el subcomando del HEALTHCHECK de la imagen, que no trae curl ni shell: pregunta a /readyz del servidor
+// que corre en este contenedor y sale con 0 si está listo.
+func healthcheck(ctx context.Context, getenv func(string) string) error {
+	port := getenv("SERVER_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+"/readyz", nil)
+	if err != nil {
+		return fmt.Errorf("preparar la sonda: %w", err)
+	}
+	response, err := (&http.Client{}).Do(request)
+	if err != nil {
+		return fmt.Errorf("preguntar a /readyz: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("/readyz respondió %d", response.StatusCode)
+	}
+	return nil
 }
 `
   });
@@ -186,16 +272,16 @@ function dispatchesUseCases(model) {
 // aquí. No depende de la capa api: sin ella (metering-digest) la entrada son los listeners y el reloj, y el servidor HTTP
 // solo sirve las sondas.
 function wiring(model) {
-  const logger = usesCorrelation(model)
-    ? '\tlogger := slog.New(correlation.NewLogHandler(slog.NewJSONHandler(stdout, nil)))\n'
-    : '\tlogger := slog.New(slog.NewJSONHandler(stdout, nil))\n';
+  const telemetry = usesTelemetry(model);
+  const logger = `${telemetry ? TELEMETRY_START : ''}${loggerWiring(model)}${telemetry ? TELEMETRY_FLUSH : ''}`;
   const settings = settingsFromConfig(model);
-  const handler = usesApi(model) ? `httpapi.NewHandler(probes, useCases, logger${settings ? `, ${settings}` : ''})` : 'httpapi.NewHandler(probes)';
+  const observed = telemetry ? ', observability' : '';
+  const handler = usesApi(model) ? `httpapi.NewHandler(probes, useCases, logger${settings ? `, ${settings}` : ''}${observed})` : `httpapi.NewHandler(probes${observed})`;
   const serve = `\tsrv := httpapi.NewServer(cfg.Server, ${handler})`;
   if (!usesDependencies(model)) {
     return `${logger}
 	probes := &health.Probes{}
-${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${serve}`;
+${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', undefined, undefined, 'observability')}\n` : ''}${serve}`;
   }
   const { store } = layout(model);
   const repositories = repositoryRoots(model).map((root) => ({
@@ -212,7 +298,7 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
   // El correo saliente (capa mail): el adaptador SMTP y, con plantillas, el renderizador.
   const mailing = usesGoMail(model) && dispatchesUseCases(model);
   if (mailing) {
-    repositories.push({ indent: '\t\t', cells: [`${MAIL_SENDER.field}:`, 'smtp.NewSender(mailSettings, logger),'] });
+    repositories.push({ indent: '\t\t', cells: [`${MAIL_SENDER.field}:`, telemetry ? 'smtp.Observed(smtp.NewSender(mailSettings, logger), observability),' : 'smtp.NewSender(mailSettings, logger),'] });
     if (usesTemplating(model)) repositories.push({ indent: '\t\t', cells: [`${TEMPLATE_RENDERER.field}:`, 'smtp.NewRenderer(),'] });
   }
   // La pasarela de pago (capa payments): su adaptador, su verificador de avisos y los números del barrido.
@@ -248,12 +334,12 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger')}\n` : ''}${
 		}()
 		if err := ${store.name}.Migrate(ctx, db, logger); err != nil {
 			return err
-		}
+		}${telemetry && usesRelational(model) ? '\n\t\tobservability.RegisterPool(db.Stats)' : ''}
 	}
 	transactions := ${store.name}.NewTransactions(db, ${document ? '' : 'database.TransactionTimeout, '}logger)
 ${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${caching}${storing}${paying ? PAYMENT_SERVER_WIRING : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
-${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`)}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
+${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`, undefined, 'observability')}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
 }
 
 // Los clientes HTTP salientes (incremento 11b): la configuración del perfil (la URL de cada proveedor, obligatoria fuera de
@@ -270,7 +356,7 @@ function clientsWiring(model) {
 		return fmt.Errorf("configuración de los clientes HTTP: %w", err)
 	}
 	exchange := clients.NewExchange(nil)
-${usesLastKnown(model) ? '	lastKnown := clients.NewLastKnownValues(nil)\n' : ''}${adapters.join('\n')}
+${usesTelemetry(model) ? '\texchange.Telemetry = observability\n' : ''}${usesLastKnown(model) ? '	lastKnown := clients.NewLastKnownValues(nil)\n' : ''}${adapters.join('\n')}
 `;
 }
 
@@ -367,7 +453,7 @@ function listenersWiring(model, store) {
 			return err
 		}
 	}
-	relay := messaging.NewRelay(${store.name}.NewOutbox(transactions), dispatcher, *messagingSettings.OutboxRelay, logger)`);
+	relay := messaging.NewRelay(${store.name}.NewOutbox(transactions), dispatcher, *messagingSettings.OutboxRelay, logger)${usesTelemetry(model) ? DEAD_LETTERED_GAUGE : ''}`);
   }
   if (consumes(model)) {
     const connection = brokerConnection(model);
@@ -376,7 +462,8 @@ function listenersWiring(model, store) {
       ...(connection ? [{ indent: '\t\t', cells: [`${connection.field}:`, `${connection.name},`] }] : []),
       { indent: '\t\t', cells: ['UseCases:', 'useCases,'] },
       { indent: '\t\t', cells: ['Guard:', `messaging.NewIdempotencyGuard(${store.name}.NewProcessedEvents(transactions), logger),`] },
-      { indent: '\t\t', cells: ['Logger:', 'logger,'] }
+      { indent: '\t\t', cells: ['Logger:', 'logger,'] },
+      ...(usesTelemetry(model) ? [{ indent: '\t\t', cells: ['Telemetry:', 'observability,'] }] : [])
     ]);
     lines.push(`	listeners, err := messageListeners(inbound{
 ${fields.join('\n')}
@@ -421,7 +508,7 @@ function workers(model) {
 function mainTestGo(model) {
   const { server } = layout(model);
   return packageFile(model, server, {
-    imports: ['bufio', 'context', 'encoding/json', 'errors', 'io', 'net/http', 'strings', 'testing', 'time'],
+    imports: ['bufio', 'context', 'errors', 'io', 'net', 'net/http', 'strings', 'testing', 'time'],
     body: `
 // El arranque entero, sin señales: SIGTERM no llega en Windows, y cancelar el contexto recorre el mismo camino.
 
@@ -442,12 +529,9 @@ func started(t *testing.T, env map[string]string) (string, <-chan error, context
 	lines := bufio.NewScanner(reader)
 	address := ""
 	for address == "" && lines.Scan() {
-		var entry struct {
-			Msg     string
-			Address string
-		}
-		if err := json.Unmarshal(lines.Bytes(), &entry); err == nil && entry.Msg == "servidor HTTP escuchando" {
-			address = entry.Address
+		// El perfil de la prueba escribe texto: «… servidor HTTP escuchando address=127.0.0.1:1234 profiles=[…]».
+		if _, rest, ok := strings.Cut(lines.Text(), "servidor HTTP escuchando address="); ok {
+			address, _, _ = strings.Cut(rest, " ")
 		}
 	}
 	if address == "" {
@@ -514,6 +598,23 @@ func TestRunRefusesAnInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestHealthcheckPreguntaAReadyz(t *testing.T) {
+	address, done, cancel := started(t, map[string]string{${usesDependencies(model) ? '"PROFILE": "test"' : ''}})
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		t.Fatalf("dirección %q: %v", address, err)
+	}
+	env := func(name string) string { return map[string]string{"SERVER_PORT": port}[name] }
+	if err := run(t.Context(), []string{"healthcheck"}, env, io.Discard); err != nil {
+		t.Errorf("healthcheck con el servidor listo = %v", err)
+	}
+	cancel()
+	<-done
+	if err := run(t.Context(), []string{"healthcheck"}, env, io.Discard); err == nil {
+		t.Error("healthcheck con el servidor parado salió bien")
+	}
+}
+
 func TestRunRefusesAnUnknownSubcommand(t *testing.T) {
 	err := run(t.Context(), []string{"migrate"}, func(string) string { return "" }, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "migrate") {
@@ -521,6 +622,82 @@ func TestRunRefusesAnUnknownSubcommand(t *testing.T) {
 	}
 }
 `
+  });
+}
+
+/**
+ * La configuración EMITIDA de cada perfil, leída con el cargador del servicio. Solo application.yaml y los fragmentos que
+ * se miden: production exige las variables de las demás capas.
+ */
+function profilesTestGo(model) {
+  const { server, configFiles } = layout(model);
+  const telemetry = usesTelemetry(model);
+  return packageFile(model, server, {
+    imports: ['io/fs', 'log/slog', 'testing', 'testing/fstest', { path: `${configFiles.importPath}`, name: 'configfiles' }, 'internal/platform/config', 'internal/platform/logging', ...(telemetry ? ['internal/platform/telemetry'] : [])],
+    body: `
+// only es la configuración embebida con solo application.yaml y el fragmento name de cada perfil.
+func only(t *testing.T, name string) fstest.MapFS {
+	t.Helper()
+	files := fstest.MapFS{}
+	for _, file := range []string{"application.yaml", "parameters/local/" + name, "parameters/develop/" + name, "parameters/production/" + name, "parameters/test/" + name} {
+		data, err := fs.ReadFile(configfiles.Files, file)
+		if err != nil {
+			t.Fatalf("leer %s: %v", file, err)
+		}
+		files[file] = &fstest.MapFile{Data: data}
+	}
+	return files
+}
+
+func TestLosLogsDeCadaPerfil(t *testing.T) {
+	files := only(t, "logging.yaml")
+	for profile, want := range map[string]logging.Settings{
+		"local":      {Format: logging.FormatText, RootLevel: slog.LevelInfo, AppLevel: slog.LevelDebug},
+		"test":       {Format: logging.FormatText, RootLevel: slog.LevelInfo, AppLevel: slog.LevelDebug},
+		"develop":    {Format: logging.FormatECS, RootLevel: slog.LevelInfo, AppLevel: slog.LevelDebug},
+		"production": {Format: logging.FormatECS, RootLevel: slog.LevelWarn, AppLevel: slog.LevelInfo},
+	} {
+		cfg, err := config.Load(files, func(name string) string { return map[string]string{"PROFILE": profile}[name] })
+		if err != nil {
+			t.Fatalf("%s: %v", profile, err)
+		}
+		got, err := logging.SettingsFrom(cfg)
+		if err != nil {
+			t.Fatalf("%s: %v", profile, err)
+		}
+		if got.Format != want.Format || got.RootLevel != want.RootLevel || got.AppLevel != want.AppLevel {
+			t.Errorf("%s = %+v, quiero %+v", profile, got, want)
+		}
+		if want.Format == logging.FormatECS && (got.ServiceName == "" || got.Version == "" || got.Environment == "" || got.NodeName == "") {
+			t.Errorf("%s: faltan los campos service.* de la línea ECS: %+v", profile, got)
+		}
+	}
+}
+
+func TestLogFormatCambiaElFormato(t *testing.T) {
+	cfg, err := config.Load(only(t, "logging.yaml"), func(name string) string {
+		return map[string]string{"PROFILE": "develop", "LOG_FORMAT": "text"}[name]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := logging.SettingsFrom(cfg); err != nil || got.Format != logging.FormatText {
+		t.Errorf("LOG_FORMAT=text = %+v, %v", got, err)
+	}
+}
+
+func TestUnNivelQueNoExisteNoDejaArrancar(t *testing.T) {
+	cfg, err := config.Load(only(t, "logging.yaml"), func(name string) string {
+		return map[string]string{"PROFILE": "develop", "LOG_LEVEL_APP": "VERBOSE"}[name]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logging.SettingsFrom(cfg); err == nil {
+		t.Error("SettingsFrom aceptó un nivel que no existe")
+	}
+}
+${telemetry ? TELEMETRY_PROFILE_TESTS : ''}`
   });
 }
 

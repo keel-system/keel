@@ -126,6 +126,22 @@ export const MODULES = {
   // sobre catalog-extended; su go.mod nombra además zeebo/xxh3 (BSD-2-Clause) y klauspost/cpuid (MIT). La v9.23.0 es de
   // 2026-10-05.
   'github.com/redis/go-redis/v9': { version: 'v9.23.0', license: 'BSD-2-Clause', kind: 'require', use: 'cliente de Redis y Valkey (caché de lectura)' },
+  // La telemetría (incremento 14): las trazas y los logs por OTLP/HTTP con el SDK de OpenTelemetry, de la release del
+  // 2026-10-02 (la última con las dos semanas), y el scrape con el cliente de Prometheus. El SDK trae
+  // cenkalti/backoff (MIT), go-logr (Apache-2.0), grpc-gateway (BSD-3-Clause), genproto, grpc y protobuf (Apache-2.0 y
+  // BSD-3-Clause); client_golang, perks, xxhash y goautoneg (MIT y BSD-3-Clause), y client_model, common y procfs
+  // (Apache-2.0). go-licenses los comprueba sobre lo que Go resuelve.
+  'go.opentelemetry.io/otel': { version: 'v1.47.0', license: 'Apache-2.0', kind: 'require', use: 'OpenTelemetry: atributos, estados y propagación W3C' },
+  'go.opentelemetry.io/otel/trace': { version: 'v1.47.0', license: 'Apache-2.0', kind: 'require', use: 'OpenTelemetry: la API de trazas' },
+  'go.opentelemetry.io/otel/sdk': { version: 'v1.47.0', license: 'Apache-2.0', kind: 'require', use: 'OpenTelemetry: el proveedor de trazas y el muestreo' },
+  'go.opentelemetry.io/otel/sdk/log': { version: 'v1.47.0', license: 'Apache-2.0', kind: 'require', use: 'OpenTelemetry: el proveedor de logs (LOG_EXPORT_OTLP)' },
+  'go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp': { version: 'v1.47.0', license: 'Apache-2.0', kind: 'require', use: 'las trazas por OTLP/HTTP' },
+  'go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp': { version: 'v0.23.0', license: 'Apache-2.0', kind: 'require', use: 'los logs por OTLP/HTTP (LOG_EXPORT_OTLP)' },
+  // De contrib, los de la misma release: el puente de slog a los logs de OTel y la lectura de B3 a la entrada.
+  'go.opentelemetry.io/contrib/bridges/otelslog': { version: 'v0.21.0', license: 'Apache-2.0', kind: 'require', use: 'el puente de log/slog a OTLP (LOG_EXPORT_OTLP)' },
+  'go.opentelemetry.io/contrib/propagators/b3': { version: 'v1.47.0', license: 'Apache-2.0', kind: 'require', use: 'B3 a la entrada de una petición' },
+  // El scrape: OpenMetrics con exemplars y los nombres que pongamos (los de promMetric). La v1.25.0 es de 2026-10-08.
+  'github.com/prometheus/client_golang': { version: 'v1.25.0', license: 'Apache-2.0', kind: 'require', use: 'las métricas por scrape (OpenMetrics con exemplars)' },
   // Un transitivo FIJADO (kind 'pin'): raymond pide logrus v1.8.1, con GO-2025-4188, y v1.8.3 lo corrige. El servicio no
   // lo alcanza, pero sin fijarlo govulncheck avisa en todo proyecto con plantillas de correo (corrida 12e). Va como
   // `// indirect`, que es lo que es: tidy lo conserva porque MVS elige la mayor de las dos.
@@ -166,6 +182,19 @@ export const TEMPLATING_PINS = ['github.com/sirupsen/logrus'];
 
 /** La caché de lectura (use-cases.<op>.cache): el cliente de Redis y Valkey. */
 export const CACHE_REQUIRES = ['github.com/redis/go-redis/v9'];
+
+/** La telemetría (`telemetry: otel`, incremento 14): trazas y logs por OTLP, y métricas por scrape. */
+export const TELEMETRY_REQUIRES = [
+  'github.com/prometheus/client_golang',
+  'go.opentelemetry.io/contrib/bridges/otelslog',
+  'go.opentelemetry.io/contrib/propagators/b3',
+  'go.opentelemetry.io/otel',
+  'go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp',
+  'go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp',
+  'go.opentelemetry.io/otel/sdk',
+  'go.opentelemetry.io/otel/sdk/log',
+  'go.opentelemetry.io/otel/trace'
+];
 
 /** Los transitivos fijados (kind 'pin'), con su versión: build los escribe como `// indirect` y la vista los conserva. */
 export const PINS = Object.freeze(

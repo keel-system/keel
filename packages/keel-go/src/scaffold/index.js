@@ -56,6 +56,13 @@ import * as snssqs from './snssqs.js';
 import * as purge from './purge.js';
 import * as scheduling from './scheduling.js';
 import * as correlation from './correlation.js';
+import * as logging from './logging.js';
+import * as telemetry from './telemetry.js';
+import * as telemetryTests from './telemetry-tests.js';
+import * as loggingCheck from './logging-check.js';
+import * as telemetryGate from './telemetry-gate.js';
+import * as observabilityAssets from './observability-assets.js';
+import * as deploy from './deploy.js';
 import * as endpoints from './endpoints.js';
 import * as restSupport from './rest-support.js';
 import * as security from './security.js';
@@ -77,6 +84,9 @@ const GENERATORS = [
   config,
   health,
   correlation,
+  logging,
+  telemetry,
+  telemetryTests,
   wire,
   errors,
   enums,
@@ -122,6 +132,10 @@ const GENERATORS = [
   server,
   architecture,
   infra,
+  loggingCheck,
+  telemetryGate,
+  observabilityAssets,
+  deploy,
   integrationTests,
   readme,
   generatorDocs

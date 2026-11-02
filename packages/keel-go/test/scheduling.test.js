@@ -231,7 +231,7 @@ test('sin la capa api (metering-digest) el arranque cablea igual la base, el bro
   }
   for (const worker of ['rabbit.Run(groupCtx)', 'listen(groupCtx)', 'clock.Run(groupCtx)']) assert.ok(main.includes(`return ${worker}`), worker);
   // Los registros llevan la correlación del mensaje o de la pasada; la entrada HTTP no despacha nada.
-  assert.ok(main.includes('correlation.NewLogHandler'));
+  assert.ok(main.includes('logging.New(logSettings, stdout)'));
   assert.ok(main.includes('httpapi.NewServer(cfg.Server, httpapi.NewHandler(probes))'));
   assert.ok(content(files, 'cmd/server/broker.go'), 'el archivo del agente para el broker');
   assert.ok(content(files, `${SCHEDULER}/daily_digest_tasks.go`).includes('func DailyDigestTasks(uc *application.UseCases) []Task'));

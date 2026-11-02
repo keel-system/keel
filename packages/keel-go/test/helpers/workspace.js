@@ -96,3 +96,22 @@ export const AUTHORSHIP_DESIGNS = [
     }
   }))
 ];
+
+/**
+ * Las siluetas con telemetría (`telemetry: otel`), que ninguna fixture pide: cada punto de paso observado al menos una vez. El
+ * relacional con cada motor, el documental, sin API (solo reloj y mensajes), con broker, con clientes salientes, caché, storage,
+ * correo, pagos, y con seguridad. Las recorren go-syntax, go-idioms, los gates y go-check.
+ */
+export const TELEMETRY_DESIGNS = [
+  { name: 'product-catalog-otel', from: 'product-catalog', stack: { telemetry: 'otel' } },
+  { name: 'product-catalog-mysql-otel', from: 'product-catalog', stack: { telemetry: 'otel', database: 'mysql' } },
+  { name: 'job-dispatch-mongo-otel', from: 'job-dispatch-mongo', stack: { telemetry: 'otel' } },
+  { name: 'metering-digest-otel', from: 'metering-digest', stack: { telemetry: 'otel' } },
+  { name: 'stock-reservation-events-otel', from: 'stock-reservation-events', stack: { telemetry: 'otel', broker: 'rabbitmq' } },
+  { name: 'stock-reservation-otel', from: 'stock-reservation', stack: { telemetry: 'otel' } },
+  { name: 'catalog-extended-otel', from: 'catalog-extended', stack: { telemetry: 'otel' } },
+  { name: 'notification-mailer-otel', from: 'notification-mailer', stack: { telemetry: 'otel' } },
+  { name: 'payment-checkout-otel', from: 'payment-checkout', stack: { telemetry: 'otel' } },
+  { name: 'asset-vault-otel', from: 'asset-vault', stack: { telemetry: 'otel' } },
+  { name: 'profile-directory-otel', from: 'profile-directory', stack: { telemetry: 'otel' } }
+];

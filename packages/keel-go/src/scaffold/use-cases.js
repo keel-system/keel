@@ -34,6 +34,7 @@ import { paymentDependencies, paymentDependencyRows, paymentUseCaseFields, payme
 import { cacheDependencies, cacheDependencyRows, settlementWiring } from './cache.js';
 import { storageDependencies, storageDependencyRows } from './storage.js';
 import { responseNeedsStorage } from './mappers.js';
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 
 /** ¿Reciben los casos de uso adaptadores (Dependencies)? Con la persistencia relacional. */
 export function usesDependencies(model) {
@@ -159,10 +160,58 @@ export function handlerArgs(model, operation) {
   return handlerDependencies(model, operation).map((dep) => dep.arg);
 }
 
-/** La llamada a NewUseCases con un logger y, si hacen falta, unas Dependencies (`deps`, o vacías en las pruebas). */
-export function newUseCasesCall(model, logger, deps = 'application.Dependencies{}', prefix = 'application.') {
-  return `${prefix}NewUseCases(${logger}${usesDependencies(model) ? `, ${deps}` : ''})`;
+/**
+ * La llamada a NewUseCases con un logger, con telemetría el `observer` (nil en las pruebas) y, si hacen falta, unas
+ * Dependencies (`deps`, o vacías en las pruebas).
+ */
+export function newUseCasesCall(model, logger, deps = 'application.Dependencies{}', prefix = 'application.', observer = 'nil') {
+  return `${prefix}NewUseCases(${logger}${usesTelemetry(model) ? `, ${observer}` : ''}${usesDependencies(model) ? `, ${deps}` : ''})`;
 }
+
+// Con telemetría: el puerto por el que la aplicación se observa (la aplicación no ve la plataforma) y sus dos decoradores,
+// por FUERA del asentamiento: el span y la serie cuentan lo que vio quien llamó, lo que espera al commit incluido. El log
+// de frontera queda dentro, así que sus líneas llevan los ids de la traza.
+const OBSERVER_BODY = `
+// Observer observa cada caso de uso: un span y su histograma con la operación y el desenlace. rejected dice qué error es un
+// desenlace esperado (un rechazo del dominio, un 4xx) y no un fallo. Lo implementa la telemetría de la plataforma.
+type Observer interface {
+	ObserveUseCase(ctx context.Context, operation string, rejected func(error) bool, run func(ctx context.Context) error) error
+}
+
+// isRejection dice si un error es un rechazo del dominio.
+func isRejection(err error) bool {
+	var rejected *domain.Error
+	return errors.As(err, &rejected)
+}
+
+// traced observa un caso de uso con resultado; sin observer, lo deja tal cual.
+func traced[M, R any](observer Observer, operation string, next Handler[M, R]) Handler[M, R] {
+	if observer == nil {
+		return next
+	}
+	return HandlerFunc[M, R](func(ctx context.Context, msg M) (R, error) {
+		var result R
+		err := observer.ObserveUseCase(ctx, operation, isRejection, func(ctx context.Context) error {
+			var err error
+			result, err = next.Handle(ctx, msg)
+			return err
+		})
+		return result, err
+	})
+}
+
+// tracedCommand es traced para un comando sin resultado.
+func tracedCommand[M any](observer Observer, operation string, next CommandHandler[M]) CommandHandler[M] {
+	if observer == nil {
+		return next
+	}
+	return CommandHandlerFunc[M](func(ctx context.Context, cmd M) error {
+		return observer.ObserveUseCase(ctx, operation, isRejection, func(ctx context.Context) error {
+			return next.Handle(ctx, cmd)
+		})
+	})
+}
+`;
 
 export function generate(model) {
   const ops = operations(model);
@@ -174,7 +223,7 @@ export function generate(model) {
     content: packageFile(model, application, { imports, body })
   });
   return [
-    file('usecase', USECASE_BODY, ['context', 'errors', 'fmt', 'log/slog', 'time', 'internal/domain']),
+    file('usecase', usesTelemetry(model) ? USECASE_BODY + OBSERVER_BODY : USECASE_BODY, ['context', 'errors', 'fmt', 'log/slog', 'time', 'internal/domain']),
     file('use_cases', useCasesBody(model, ops), ['context', 'fmt', 'log/slog', 'internal/domain']),
     file('use_cases', useCasesTest(model, ops), ['bytes', 'context', 'errors', 'log/slog', 'strings', 'testing', 'internal/domain'], { test: true })
   ];
@@ -328,6 +377,11 @@ func typeName(err error) string {
 }
 `;
 
+/** Con telemetría, el caso de uso dentro de su decorador de observación. */
+function observedCall(model, decorator, name, call) {
+  return usesTelemetry(model) ? `${decorator}(observer, ${name}, ${call})` : call;
+}
+
 function useCasesBody(model, ops) {
   const fieldRows = [];
   for (const operation of ops) {
@@ -349,8 +403,8 @@ function useCasesBody(model, ops) {
     // Cada operación va además dentro de su asentamiento (settle): lo que espera al commit, los afterCommit de su handler y
     // el vaciado de las cachés que invalida (keel-core/gen/cache-plan.js) incluidos.
     return contract.kind === 'KindCommand'
-      ? `\tuc.${useCaseField(operation)} = ${settlementWiring(model, operation, `observeCommand(logger, tx, ${name}, ${handler})`, { command: true })}`
-      : `\tuc.${useCaseField(operation)} = ${settlementWiring(model, operation, `observe(logger, tx, ${name}, ${contract.kind}, ${handler})`, { command: false })}`;
+      ? `\tuc.${useCaseField(operation)} = ${observedCall(model, 'tracedCommand', name, settlementWiring(model, operation, `observeCommand(logger, tx, ${name}, ${handler})`, { command: true }))}`
+      : `\tuc.${useCaseField(operation)} = ${observedCall(model, 'traced', name, settlementWiring(model, operation, `observe(logger, tx, ${name}, ${contract.kind}, ${handler})`, { command: false }))}`;
   });
   const dependencies = persistent
     ? `
@@ -427,7 +481,7 @@ ${alignRows(fieldRows).join('\n')}
 // NewUseCases cablea cada operación con su handler. Es el registro explícito de los casos de uso y lo genera
 // build: lo que no está aquí no se despacha. Un handler que despacha otra operación (use-cases.dispatches)
 // recibe el propio UseCases, ya completo cuando se le llama.
-func NewUseCases(${persistent ? 'logger *slog.Logger, deps Dependencies' : 'logger *slog.Logger'}) *UseCases {
+func NewUseCases(logger *slog.Logger${usesTelemetry(model) ? ', observer Observer' : ''}${persistent ? ', deps Dependencies' : ''}) *UseCases {
 ${prelude}	uc := &UseCases{${resolution ? `callers: deps.${goExported(repositoryParam(resolution.entity))}` : ''}}
 ${paymentWiring(model)}${wiring.join('\n')}
 	return uc

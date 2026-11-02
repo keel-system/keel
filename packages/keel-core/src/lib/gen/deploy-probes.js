@@ -81,7 +81,13 @@ export async function probeDeployBackend({ grafanaUrl, sinkUrl, serviceName, rec
   const warnings = [];
 
   // Los datasources, por TIPO: sus uids son de la imagen del backend y pueden cambiar con ella.
-  const datasources = (await grafana('/api/datasources')).json ?? [];
+  // Con espera: up.sh vuelve cuando la APP está lista, y un binario de Go lo está en milisegundos, antes que el backend.
+  let datasources = [];
+  for (let attempt = 0; attempt < 24 && !datasources.some((item) => item.type === 'prometheus'); attempt++) {
+    const answer = (await grafana('/api/datasources')).json;
+    datasources = Array.isArray(answer) ? answer : [];
+    if (!datasources.some((item) => item.type === 'prometheus')) await sleep(5000);
+  }
   const uidOf = (type) => datasources.find((item) => item.type === type)?.uid ?? null;
   const prometheusUid = uidOf('prometheus');
   const tempoUid = uidOf('tempo');

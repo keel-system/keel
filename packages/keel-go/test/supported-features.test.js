@@ -180,7 +180,7 @@ test('una operación por reloj cuyo mensaje lleva campos se rechaza: la tarea no
 
 test('la telemetría se rechaza en vez de estamparse sin efecto', () => {
   assert.deepEqual(checkSupportedStack({ telemetry: 'none' }).errors, []);
-  assert.match(checkSupportedStack({ telemetry: 'otel' }).errors[0], /incremento 14/);
+  assert.deepEqual(checkSupportedStack({ telemetry: 'otel' }).errors, []);
 });
 
 test('la persistencia rechaza, con su motivo, el value object persistido con otro dentro o con un campo opcional', () => {

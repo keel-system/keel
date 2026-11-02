@@ -29,6 +29,7 @@ import { usesGoKafka } from './kafka.js';
 import { usesGoSnsSqs } from './snssqs.js';
 import { usesGoHttpClients } from './http-clients.js';
 import { usesStorageAdapter } from './storage.js';
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 
 const generatorDir = path.join(assetsDir, 'generators', 'go');
 const agentsSourceDir = path.join(assetsDir, 'agents');
@@ -45,6 +46,9 @@ export const GUIDES = ['architecture.md', 'constitution.md', 'orchestration.md']
  * los escenarios y la infraestructura).
  */
 export const CONVENTIONS = ['naming.md', 'errors.md', 'context.md', 'concurrency.md', 'http.md', 'testing.md', 'flow-fidelity.md', 'integration-tests.md', 'infra-validation.md'];
+
+/** Las convenciones que solo se instalan si el diseño las necesita. */
+export const CONDITIONAL_CONVENTIONS = { 'observability.md': (model) => usesTelemetry(model) };
 
 /** Los subagentes de la orquestación. Son HOJAS (`spawns: false`): el único orquestador es la skill. */
 export const AGENTS = ['keel-go-code.md', 'keel-go-infra.md', 'keel-go-tests.md', 'keel-go-validate.md', 'keel-go-quality.md'];
@@ -72,6 +76,9 @@ export function generate(model) {
   for (const name of GUIDES) files.push({ path: `${DOCS_DIR}/${name}`, content: docContent(path.join(generatorDir, name)) });
   for (const name of CONVENTIONS) {
     files.push({ path: `${DOCS_DIR}/conventions/${name}`, content: docContent(path.join(generatorDir, 'conventions', name)) });
+  }
+  for (const [name, applies] of Object.entries(CONDITIONAL_CONVENTIONS)) {
+    if (applies(model)) files.push({ path: `${DOCS_DIR}/conventions/${name}`, content: docContent(path.join(generatorDir, 'conventions', name)) });
   }
   // Los documentos de contrato del método, los mismos que instalan los otros tres (keel-core/gen/contract-docs.js).
   for (const doc of contractDocs()) files.push({ path: `${DOCS_DIR}/${doc.name}`, content: doc.content });
@@ -172,6 +179,7 @@ gofmt -l .                  # vacío
 go test ./...               # las pruebas de build (perfil test, sin infraestructura), la frontera incluida
 bash infra/up.sh && bash infra/validate-infra.sh   # la infraestructura de prueba
 bash infra/score-scenarios.sh                      # compila + humo del arnés + flujos FL-* + matriz
+bash infra/check-logging.sh                        # la higiene de los logs: nace verde y lo pone rojo lo que escribe el agente${usesTelemetry(model) ? '\nbash infra/check-telemetry.sh                      # la cardinalidad de las métricas y la traza de cada consumo' : ''}
 \`\`\`
 ${
     (model.formatTypes ?? []).length > 0

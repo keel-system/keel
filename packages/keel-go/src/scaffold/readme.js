@@ -70,6 +70,7 @@ go vet ./...                      # el análisis de la biblioteca estándar
 go tool staticcheck ./...         # el lint (vacío = sin hallazgos)
 gofmt -l .                        # vacío = todo con el formato de gofmt
 go tool govulncheck ./...         # vulnerabilidades conocidas en lo que el servicio llama
+bash infra/check-logging.sh       # la higiene de los logs
 \`\`\`
 
 Los escenarios \`FL-*\` van aparte, contra la infraestructura de prueba: \`go test ./...\` no los ve (llevan la
@@ -80,6 +81,20 @@ bash infra/up.sh && bash infra/validate-infra.sh   # levanta y sondea la infraes
 bash infra/score-scenarios.sh                      # compila, arranca el servidor, ejecuta los flujos y puntúa la matriz
 bash infra/down.sh                                 # la baja
 \`\`\`
+
+## Probarlo en contenedor
+
+\`deploy/\` levanta el servicio en su imagen (un binario estático sobre distroless, sin shell y sin root), con su
+infraestructura, las UIs para mirar por dentro y, con telemetría, el colector, el backend y el panel:
+
+\`\`\`bash
+go mod tidy                       # la imagen copia go.sum: tiene que existir
+bash deploy/up.sh                 # construye la imagen, levanta el stack e imprime sus URLs
+bash deploy/down.sh -v            # lo baja, con los volúmenes
+\`\`\`
+
+Las variables de cada perfil (\`LOG_LEVEL_ROOT\`, \`LOG_LEVEL_APP\`, \`LOG_FORMAT\`…) van en \`config/parameters/\`.
+En \`local\` la consola es texto; en \`develop\` y \`production\`, JSON ECS.
 
 ## El módulo
 

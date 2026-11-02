@@ -27,7 +27,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { AUTHORSHIP_DESIGNS, makeWorkspace, mountDesign, runCommand, GO_READY_DESIGN } from '../test/helpers/workspace.js';
+import { AUTHORSHIP_DESIGNS, TELEMETRY_DESIGNS, makeWorkspace, mountDesign, runCommand, GO_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { ALLOWED_LICENSES, LICENSE_EXCEPTIONS, MODULES, TOOLS } from '../src/lib/go-stack.js';
 import { GO_TOOLCHAIN } from '../src/lib/assets.js';
@@ -39,6 +39,7 @@ import { CLIENTS_SABOTAGES, CLIENTS_SUBJECT, applySabotage as applyClientsSabota
 import { NEEDS_SABOTAGES, NEEDS_SUBJECT, applyNeedsSabotage } from '../test/helpers/needs-sabotages.js';
 import { SCOPE_SABOTAGES, SCOPE_SUBJECT, applyScopeSabotage } from '../test/helpers/scope-sabotages.js';
 import { STORAGE_SABOTAGES, STORAGE_SUBJECT, applySabotage as applyStorageSabotage } from '../test/helpers/storage-sabotages.js';
+import { TELEMETRY_SABOTAGES, TELEMETRY_SUBJECT, applyTelemetrySabotage } from '../test/helpers/telemetry-sabotages.js';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
@@ -217,6 +218,21 @@ for (const { name, from, mutate } of checkedDesigns) {
       fixtureDirs.push({ name: label, dir, digest: hash.digest('hex') });
     }
   }
+}
+// Las siluetas con telemetría (incremento 14): ninguna fixture la pide, y cada punto de paso observado cambia lo que compila.
+for (const { name, from, stack } of TELEMETRY_DESIGNS) {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
+  const plan = planService({ manifest, layers, workspace: fixturesRoot, stack });
+  const dir = path.join(fixturesRoot, name);
+  for (const file of plan.files) {
+    const out = path.join(dir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+  const hash = crypto.createHash('sha256').update(version.output);
+  const checked = plan.files.filter((file) => !file.path.endsWith('.md') || file.path.startsWith('config/'));
+  for (const file of checked.sort((a, b) => (a.path < b.path ? -1 : 1))) hash.update(`\0${file.path}\0${file.content}`);
+  fixtureDirs.push({ name, dir, digest: hash.digest('hex') });
 }
 // Una fixture cuyo Go emitido es byte a byte el de su última pasada en verde, con el mismo `go version`, daría lo mismo:
 // se salta. go.mod fija las versiones de las dependencias y de las herramientas, así que ya entran en la huella.
@@ -526,6 +542,44 @@ for (const sabotage of API_SABOTAGES) {
   if (!step(`almacenamiento: licencias permisivas en ${STORAGE_SUBJECT} (SDK de S3 incluido)`, storageLicenses.ok)) console.error(storageLicenses.output);
 }
 
+// La telemetría y los logs (incremento 14) se falsan sobre una silueta con telemetría y mensajería: las pruebas emitidas en verde,
+// y cada sabotaje en rojo con sus pruebas, y solo ellas. Con licencias y vulnerabilidades de lo que entra con el stack.
+{
+  const telemetryDir = path.join(makeWorkspace('keel-go-telemetry-'), TELEMETRY_SUBJECT.from);
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, TELEMETRY_SUBJECT.from));
+  for (const file of planService({ manifest, layers, workspace: telemetryDir, stack: TELEMETRY_SUBJECT.stack }).files) {
+    const out = path.join(telemetryDir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+  const packages = ['./internal/platform/telemetry/', './internal/platform/logging/', './internal/infrastructure/messaging/'];
+  const tidied = go(telemetryDir, ['mod', 'tidy']);
+  const baseline = tidied.ok ? go(telemetryDir, ['test', '-count=1', ...packages]) : tidied;
+  if (step(`telemetría y logs: las pruebas emitidas de ${TELEMETRY_SUBJECT.from} en verde`, baseline.ok, baseline.ok ? '' : baseline.output.slice(0, 600))) {
+    for (const sabotage of TELEMETRY_SABOTAGES) {
+      const file = path.join(telemetryDir, sabotage.file);
+      const original = fs.readFileSync(file, 'utf8');
+      const mutated = applyTelemetrySabotage(sabotage, original);
+      if (!mutated) {
+        step(`telemetría falsada: ${sabotage.id}`, false, `el sabotaje ya no se aplica a ${sabotage.file}`);
+        continue;
+      }
+      fs.writeFileSync(file, mutated);
+      const sabotaged = go(telemetryDir, ['test', '-count=1', sabotage.packages]);
+      fs.writeFileSync(file, original);
+      const failed = [...new Set([...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]))].sort();
+      const optional = sabotage.optional ?? [];
+      const expected = [sabotage.fails, ...(sabotage.alsoFails ?? [])].filter((name) => !optional.includes(name)).sort();
+      const exact = sabotage.anyFailure ? failed.length > 0 : failed.filter((name) => !optional.includes(name)).join(' ') === expected.join(' ');
+      step(`telemetría falsada: ${sabotage.id} (${sabotage.what}) → ${sabotage.anyFailure ? 'en rojo' : `${expected.join(' ')} en rojo, y solo eso`}`, !sabotaged.ok && exact, failed.join(' ').slice(0, 300) || sabotaged.output.slice(0, 300));
+    }
+    const telemetryVuln = go(telemetryDir, ['tool', 'govulncheck', './...']);
+    if (!step('telemetría: govulncheck sin vulnerabilidades (OpenTelemetry y client_golang)', telemetryVuln.ok)) console.error(telemetryVuln.output);
+    const telemetryLicenses = go(telemetryDir, ['tool', 'go-licenses', 'check', '--ignore', TELEMETRY_SUBJECT.from, `--allowed_licenses=${ALLOWED_LICENSES.join(',')}`, './...']);
+    if (!step('telemetría: licencias permisivas (OpenTelemetry, client_golang y sus transitivos)', telemetryLicenses.ok)) console.error(telemetryLicenses.output);
+  }
+}
+
 // La frontera hexagonal se falsa: un import plantado del dominio a otro paquete de la plataforma (solo puede usar
 // wire) tiene que ponerla en rojo. No a httpapi: httpapi importa el dominio, y ese import cerraría un ciclo que Go
 // rechaza antes de que la prueba de arquitectura diga nada.
@@ -679,6 +733,20 @@ if (fs.existsSync(binary) && database) {
     operation?.status === 500 && /"code":null/.test(operation.body) && /"correlationId":"[0-9a-f-]{36}"/.test(operation.body),
     operation ? `${operation.status} ${operation.body}` : 'sin respuesta'
   );
+
+  // Fuera de local la consola es JSON ECS, línea a línea: también las del arranque.
+  const consoleLines = appOutput.split(/\r?\n/).filter(Boolean);
+  const notEcs = consoleLines.filter((line) => {
+    try {
+      const parsed = JSON.parse(line);
+      return !(parsed['@timestamp'] && parsed.log?.level && parsed.log?.logger && parsed.message && parsed.service?.name && parsed.ecs?.version);
+    } catch {
+      return true;
+    }
+  });
+  step(`la consola en develop es JSON ECS línea a línea (${consoleLines.length} líneas)`, consoleLines.length > 0 && notEcs.length === 0, notEcs.slice(0, 3).join(' | ').slice(0, 400));
+  const correlated = consoleLines.some((line) => /"correlationId":"[0-9a-f-]{36}"/.test(line));
+  step('una línea de una petición lleva su correlationId', correlated);
 
   app.kill('SIGTERM');
   const end = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 15_000))]);

@@ -17,7 +17,9 @@
     "doc-check": "node scripts/doc-check.js",
     "doc-harness-check": "node scripts/doc-harness-check.js",
     "mail-check": "node scripts/mail-check.js",
-    "cache-check": "node scripts/cache-check.js"
+    "cache-check": "node scripts/cache-check.js",
+    "telemetry-check": "node scripts/telemetry-check.js",
+    "deploy-check": "node scripts/deploy-check.js"
   },
   "files": [
     "src",
