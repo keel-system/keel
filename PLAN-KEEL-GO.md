@@ -1197,10 +1197,14 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       generador, arreglados: `afterCommit` y `settle` en toda operación con persistencia (`src/scaffold/after-commit.js`), con
       `fileStorage` en todo comando; y la sesión de Kafka a 6 s en local (`kafka-group.yaml`). **Esa corrida se generó sin los arreglos:
       no borra el binario en `removeProductImage`**, y el 56/56 no cubre esa regla.
-    - `asset-vault` refrescada con `build --refresh` tras los arreglos, sin lanzar.
+    - `asset-vault`, primer intento PARADO en la fase 1 (2026-11-02, generador `ea87c88a`): `listAssets` no recibía `CallerScope`, porque solo lo
+      recibía quien declara el error del alcance, y su regla acota el listado sin 403 (`FL-AST-004-B`). Arreglado sin commit: lo reciben todos los
+      handlers. `npm test` 1063/1063 y `go-check --fixtures` 57/57. La corrida se repite en `corrida-asset-vault-go-1102` (**306 archivos**, PREPARADA y sin lanzar):
+      `--refresh` dejaría sin compilar los constructores que ya escribió el agente. Sobre una copia: gofmt, vet, staticcheck, build y `go test ./internal/...`
+      en verde, y `check-idempotency.sh` en ROJO, como debe recién generado.
     - Medido: `npm test` 1063/1063, `go-check` entero **160/160** (lanzado por el usuario, con `-race` y los sabotajes `after-commit-*`),
       `broker-check --broker=kafka` 30/30. **Sin medir**: el borrado de punta a punta.
-- **Para retomar:** lanzar `asset-vault`, en `services/asset-vault-go`: `go mod tidy` y `/keel-generate-go`, en otra sesión. Después,
+- **Para retomar:** lanzar `asset-vault`, en `corrida-asset-vault-go-1102/services/asset-vault-go`: `go mod tidy` y `/keel-generate-go`, en otra sesión. Después,
   contrastar su informe con la huella y registrarla en `docs/corridas/`. Falta rehacer `removeProductImage` en catalog para medir el
   borrado. Sin arreglar: un handler no recibe logger y el servidor no fija `slog.SetDefault`, así que un
   `slog.WarnContext` del agente sale sin el JSON ni la correlación del servicio. El commit de este tramo, propuesto:

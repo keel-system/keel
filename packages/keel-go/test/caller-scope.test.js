@@ -38,16 +38,20 @@ test('el adaptador lleva el claim y los exentos del diseño, los mismos que el J
   assert.match(adapter, /"azp", "client_id"[\s\S]*principal\.Name/);
 });
 
-test('lo reciben solo los handlers que declaran el error del alcance, y el arranque lo cablea', () => {
+test('lo reciben todos los handlers, también el listado que filtra sin declarar el 403, y el arranque lo cablea', () => {
   const { error } = model.security.scoping;
-  const operations = model.services.flatMap((service) => service.operations);
-  const scoped = operations.filter((operation) => (operation.errors ?? []).includes(error));
-  assert.ok(scoped.length > 0);
+  const operations = model.services.flatMap((service) => service.operations).filter((operation) => operation.handlerClass);
+  // listAssets es el caso de la corrida: su regla acota el listado y FL-AST-004-B lo afirma, pero no declara el error.
+  const listing = operations.find((operation) => operation.name === 'listAssets');
+  assert.ok(listing && !(listing.errors ?? []).includes(error));
   const useCases = content(files, 'internal/application/use_cases.go');
-  assert.equal(useCases.split('\n').filter((line) => line.includes('deps.CallerScope')).length, scoped.length);
+  assert.match(useCases, /NewListAssetsQueryHandler\([^\n]*deps\.CallerScope/);
+  assert.equal(useCases.split('\n').filter((line) => line.includes('deps.CallerScope')).length, operations.length);
   const handlers = files.filter((file) => /internal\/application\/\w+_handler\.go$/.test(file.path));
   const withScope = handlers.filter((file) => file.content.includes('callerScope CallerScope'));
-  assert.equal(withScope.length, scoped.length);
+  assert.equal(withScope.length, operations.length);
+  const handler = content(files, 'internal/application/list_assets_query_handler.go');
+  assert.match(handler, /en un listado, IsExempt y ScopedValues con un finder acotado/);
   assert.ok(files.some((file) => /\/server\.go$|\/main\.go$/.test(file.path) && /CallerScope:\s+security\.CallerScope\{\},/.test(file.content)));
 });
 

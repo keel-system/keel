@@ -19,7 +19,7 @@ import { frameworkSentinels, sentinelOf } from './errors.js';
 import { IDEMPOTENCY_STORE, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
 import { applicationPath, layout, packageFile } from './render.js';
 import { usesCallerScope } from '@keel-system/keel-core/gen/features';
-import { CALLER_SCOPE, scopedOperation } from './caller-scope.js';
+import { CALLER_SCOPE } from './caller-scope.js';
 import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity, usesRoleCheck } from './security.js';
 import { contractOf, entryGateGuard, handlerType, messageType, operations, useCaseField } from './services.js';
 import { repositoryOf, repositoryRoots, usesPersistence } from '@keel-system/keel-core/gen/features';
@@ -75,8 +75,15 @@ export function handlerDependencies(model, operation) {
   if (usesRegistry(model, operation)) {
     deps.push({ name: IDEMPOTENCY_STORE.param, type: IDEMPOTENCY_STORE.port, doc: `${IDEMPOTENCY_STORE.param} es el registro de idempotencia de la operación (idempotency del diseño).`, arg: `deps.${IDEMPOTENCY_STORE.field}` });
   }
-  if (usesDependencies(model) && scopedOperation(model, operation)) {
-    deps.push({ name: CALLER_SCOPE.param, type: CALLER_SCOPE.port, doc: `${CALLER_SCOPE.param} es el alcance por recurso del llamante (security.authentication.scoping).`, arg: `deps.${CALLER_SCOPE.field}` });
+  // A todas: un listado se acota por su regla, en prosa, sin declarar el error del alcance (filtra, no responde 403), y
+  // NewUseCases es de build: sin el puerto delante, el agente no tiene cómo cumplirla (corrida asset-vault, 2026-11-02).
+  if (usesDependencies(model) && usesCallerScope(model)) {
+    deps.push({
+      name: CALLER_SCOPE.param,
+      type: CALLER_SCOPE.port,
+      doc: `${CALLER_SCOPE.param} es el alcance por recurso del llamante (security.authentication.scoping). Si una regla acota esta operación: Covers para un recurso; en un listado, IsExempt y ScopedValues con un finder acotado que escribes tú.`,
+      arg: `deps.${CALLER_SCOPE.field}`
+    });
   }
   if (usesDependencies(model) && roleCheckedOperation(model, operation)) {
     deps.push({ name: CALLER_ROLES.param, type: CALLER_ROLES.port, doc: `${CALLER_ROLES.param} dice los roles del llamante: los exentos de la regla de propiedad (security.ownership).`, arg: `deps.${CALLER_ROLES.field}` });

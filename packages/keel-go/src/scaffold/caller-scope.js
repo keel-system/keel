@@ -10,7 +10,7 @@ import { usesCallerScope } from '@keel-system/keel-core/gen/features';
 import { goString } from '../lib/go-source.js';
 import { applicationPath, layout, packageFile } from './render.js';
 
-/** ¿Recibe el handler de la operación CallerScope? Las que declaran el error del alcance. */
+/** ¿Lleva la nota del 403? Las que declaran el error del alcance. El puerto lo reciben todas (use-cases.js). */
 export function scopedOperation(model, operation) {
   const scoping = model.security?.scoping;
   return Boolean(usesCallerScope(model) && scoping && (operation.errors ?? []).includes(scoping.error));
