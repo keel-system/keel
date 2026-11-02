@@ -39,6 +39,7 @@ import * as documentStores from './document-stores.js';
 import * as auditActor from './audit-actor.js';
 import * as serviceParameters from './service-parameters.js';
 import * as httpClients from './http-clients.js';
+import * as projections from './projections.js';
 import * as mail from './mail.js';
 import * as payments from './payments.js';
 import * as cache from './cache.js';
@@ -96,6 +97,7 @@ const GENERATORS = [
   documentStores,
   serviceParameters,
   httpClients,
+  projections,
   mail,
   payments,
   cache,

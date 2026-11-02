@@ -18,6 +18,7 @@
 
 import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
+import { isReplica } from './projections.js';
 import {
   AUDIT_COLUMNS,
   LOCK_VERSION,
@@ -1108,7 +1109,9 @@ function saveMethods(model, entity, root, tables, type) {
 func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.${name}, error) {${events ? `
 	events := ${local}.PullEvents()` : ''}
 	var saved *domain.${name}
-	err := r.tx.write(ctx, func(q DBTX) error {
+	${isReplica(model, entity) ? `// La copia local de una dependencia replicada se guarda en su PROPIA transacción, aunque ctx traiga una abierta: el
+	// REQUIRES_NEW de keel-spring. Sobrevive a la de quien la escribe, y una consulta de solo lectura también puede guardarla.
+	err := r.tx.apart(ctx, sql.TxOptions{}, func(q DBTX) error {` : 'err := r.tx.write(ctx, func(q DBTX) error {'}
 		if err := write${name}(ctx, q, ${local}); err != nil {
 			return err
 		}${outbox ? `

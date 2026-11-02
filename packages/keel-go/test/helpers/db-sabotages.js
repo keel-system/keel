@@ -93,6 +93,27 @@ export const DB_SABOTAGES = {
   'rank-sort': { files: REPOSITORY, from: /"(\w+)Rank":(\s+)"(\w+)_rank",/g, to: '"$1Rank":$2"$3",', expect: /_SortsBy/ },
   // Los finders (DSL 2.22): el WHERE que no restringe nada, el extremo inclusivo que deja de serlo, el texto sin plegar y
   // el texto buscado como PATRÓN y no como literal.
+  // La réplica (tramo 13h). La copia se guarda en la transacción de quien la escribe: se revierte con ella.
+  'replica-tx': {
+    files: /supplier_price_repository\.go$/,
+    from: 'err := r.tx.apart(ctx, sql.TxOptions{}, func(q DBTX) error {',
+    to: 'err := r.tx.write(ctx, func(q DBTX) error {\n\t\t_ = sql.TxOptions{}',
+    expect: /_CopySurvivesTheTransactionOfWhoeverWritesIt$/
+  },
+  // El hecho igual o anterior pisa la copia: la reentrega tardía deja el valor viejo.
+  'replica-order': {
+    files: /supplier_price_projector\.go$/,
+    from: 'if !snapshot.OccurredAt.After(existing.OccurredAt()) {',
+    to: 'if snapshot.OccurredAt.After(existing.OccurredAt().Add(24 * time.Hour)) {',
+    expect: /_ProjectorCreatesDiscardsTheOldAndAppliesTheNew$/
+  },
+  // El lote no trae nada: cada elemento de un listado acabaría en onMiss.
+  'replica-batch': {
+    files: /supplier_price_reader\.go$/,
+    from: 'byKey[found.Sku()] = found',
+    to: 'byKey[found.Sku()+"-"] = found',
+    expect: /_ReaderByKeysBringsWhatIsReplicatedAndNothingElse$/
+  },
   'finder-where': { files: VALUES, from: 'return "WHERE " + strings.Join(f.conditions, " AND ")', to: 'return "WHERE true OR " + strings.Join(f.conditions, " AND ")', expect: /_Finder/ },
   'finder-range': { files: REPOSITORY, from: /f\.add\(("[^"]+"), ">=", /g, to: 'f.add($1, ">", ', expect: /_Finder/ },
   // Solo en PostgreSQL, por lo mismo que `fold`: en MySQL el LIKE sobre la sombra ya compara sin caja ni acentos.

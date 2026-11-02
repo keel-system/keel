@@ -46,6 +46,7 @@ import { messagingProbes } from './messaging-probes.js';
 import { finderProbes } from './finder-probes.js';
 import { purgeProbes } from './purge-probes.js';
 import { claimProbes } from './claim-probes.js';
+import { replicaProbes } from './replica-probes.js';
 import { PROBE_RECONCILIATION, reconciliationProbes } from './reconciliation-probes.js';
 import { credentialFinders } from '../../src/scaffold/repositories.js';
 import { guardClaimsOf, guardMethod } from '../../src/scaffold/mail.js';
@@ -118,6 +119,7 @@ export function probeFile(model, files = []) {
   if (usesGoOutbox(model) || usesGoProcessedEvents(model)) parts.push(messagingProbes(model));
   parts.push(purgeProbes(model));
   parts.push(claimProbes(model, files, (root) => repository(model, root)));
+  parts.push(replicaProbes(model, (root) => repository(model, root)));
   parts.push(reconciliationProbes(model, (root) => repository(model, root)));
   parts.push(patternTables(ctx));
   if (entities.length === 0) return null;

@@ -36,6 +36,7 @@ import { DOMAIN_SABOTAGES, applySabotage as applyDomainSabotage } from '../test/
 import { APPLICATION_SABOTAGES, applySabotage as applyApplicationSabotage } from '../test/helpers/application-sabotages.js';
 import { API_SABOTAGES, applySabotage as applyApiSabotage } from '../test/helpers/api-sabotages.js';
 import { CLIENTS_SABOTAGES, CLIENTS_SUBJECT, applySabotage as applyClientsSabotage } from '../test/helpers/clients-sabotages.js';
+import { NEEDS_SABOTAGES, NEEDS_SUBJECT, applyNeedsSabotage } from '../test/helpers/needs-sabotages.js';
 import { STORAGE_SABOTAGES, STORAGE_SUBJECT, applySabotage as applyStorageSabotage } from '../test/helpers/storage-sabotages.js';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
@@ -426,6 +427,34 @@ for (const sabotage of API_SABOTAGES) {
       const expected = [sabotage.fails, ...(sabotage.alsoFails ?? [])].sort().join(' ');
       const exact = [...new Set(failed)].sort().join(' ') === expected;
       step(`clientes falsados: ${sabotage.id} (${sabotage.what}) → ${expected} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
+    }
+  }
+}
+
+// Los needs y OAuth2 (tramo 13h) se falsan sobre catalog-extended, la fixture que los declara: la prueba emitida de los
+// clientes en verde, y cada sabotaje en rojo con sus pruebas, y solo ellas.
+{
+  const needsDir = path.join(makeWorkspace('keel-go-needs-'), NEEDS_SUBJECT);
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, NEEDS_SUBJECT));
+  const files = planService({ manifest, layers, workspace: needsDir }).files;
+  const write = (list) => {
+    for (const file of list) {
+      const out = path.join(needsDir, file.path);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, file.content);
+    }
+  };
+  write(files);
+  const clientsTests = ['test', '-count=1', './internal/infrastructure/clients/'];
+  const tidied = go(needsDir, ['mod', 'tidy']);
+  const baseline = tidied.ok ? go(needsDir, clientsTests) : tidied;
+  if (step(`needs y OAuth2: la prueba emitida de los clientes de ${NEEDS_SUBJECT} en verde`, baseline.ok, baseline.ok ? '' : baseline.output.slice(0, 600))) {
+    for (const [id, sabotage] of Object.entries(NEEDS_SABOTAGES)) {
+      write(applyNeedsSabotage(sabotage, files).filter((file) => file.path === sabotage.file));
+      const sabotaged = go(needsDir, clientsTests);
+      write(files.filter((file) => file.path === sabotage.file));
+      const failed = [...new Set([...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]))];
+      step(`needs y OAuth2 falsados: ${id} → ${failed.join(' ')}`, !sabotaged.ok && failed.length > 0 && failed.every((name) => sabotage.expect.test(name)), failed.join(' ').slice(0, 300));
     }
   }
 }

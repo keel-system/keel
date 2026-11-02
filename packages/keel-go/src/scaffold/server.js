@@ -34,7 +34,7 @@ import { PAYMENT_IMPORT, PAYMENT_SERVER_WIRING, paymentServerRows, usesGoPayment
 import { claimDependencies, usesSweepClaims } from './claim.js';
 import { usesReconciliationClaims } from './reconciliation-claim.js';
 import { usesCorrelation } from './correlation.js';
-import { CLIENTS_IMPORT, adapterType, clientField, clientParam, usesGoHttpClients } from './http-clients.js';
+import { CLIENTS_IMPORT, adapterType, clientField, clientParam, clientRemembers, usesGoHttpClients, usesLastKnown } from './http-clients.js';
 import { MAIL_SENDER, TEMPLATE_RENDERER, usesGoMail, usesTemplating } from './mail.js';
 import { cacheServerRows, cacheServerWiring } from './cache.js';
 import { STORAGE_IMPORT, storageServerRows, storageServerWiring } from './storage.js';
@@ -257,7 +257,7 @@ ${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', 
 // local, no deja arrancar sin ella), un solo Exchange para todos y un adaptador por puerto, con su circuito.
 function clientsWiring(model) {
   const adapters = model.httpClients.map(
-    (client) => `	${clientParam(client)}, err := clients.New${adapterType(client)}(clientSettings, exchange, logger)
+    (client) => `	${clientParam(client)}, err := clients.New${adapterType(client)}(clientSettings, exchange, logger${clientRemembers(model, client) ? ', lastKnown' : ''})
 	if err != nil {
 		return err
 	}`
@@ -267,7 +267,7 @@ function clientsWiring(model) {
 		return fmt.Errorf("configuración de los clientes HTTP: %w", err)
 	}
 	exchange := clients.NewExchange(nil)
-${adapters.join('\n')}
+${usesLastKnown(model) ? '	lastKnown := clients.NewLastKnownValues(nil)\n' : ''}${adapters.join('\n')}
 `;
 }
 

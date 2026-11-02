@@ -24,6 +24,7 @@
 //
 // Aquí NO se genera ninguna prueba de flujo: eso es derivado del diseño y lo escribe el agente.
 
+import { lastKnownNeeds } from '@keel-system/keel-core/gen/last-known';
 import { DATABASES, selectedInfra } from '@keel-system/keel-core/gen/infra-catalog';
 import { JUNIT_MATRIX_AWK, JUNIT_NON_SCENARIO_AWK, SCENARIO_DOCUMENT_SCORING, FOREIGN_ROWS_PRINT, specsSealCheck } from '@keel-system/keel-core/gen/junit-scoring';
 import { resetDbScript } from '@keel-system/keel-core/gen/infra-scripts';
@@ -197,13 +198,13 @@ func idLiteral(id string) string {
 // ─── El reinicio del servidor y la segunda réplica ───────────────────────────────────────────────
 
 /**
- * ¿Guarda el servidor estado en memoria que un flujo anterior le deja? La ventana de un circuito (y, cuando keel-go los
- * genere, el token de oauth2 y los últimos valores conocidos). Entonces el arnés ofrece `RestartServer`: «cerrar» el
+ * ¿Guarda el servidor estado en memoria que un flujo anterior le deja? La ventana de un circuito, el token de oauth2 y los
+ * últimos valores conocidos. Entonces el arnés ofrece `RestartServer`: «cerrar» el
  * circuito con llamadas buenas deja la ventana llena de éxitos y tarda más de lo que el diseño dice en abrir (corrida
  * catalog de keel-dotnet).
  */
 export function inMemoryState(model) {
-  return (model.httpClients ?? []).some((client) => client.auth?.type === 'oauth2-client-credentials' || client.calls.some((call) => call.circuitBreaker));
+  return (model.httpClients ?? []).some((client) => client.auth?.type === 'oauth2-client-credentials' || client.calls.some((call) => call.circuitBreaker)) || lastKnownNeeds(model).length > 0;
 }
 
 /**

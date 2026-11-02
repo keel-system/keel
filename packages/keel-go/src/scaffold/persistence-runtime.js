@@ -28,6 +28,7 @@ import {
 } from '@keel-system/keel-core/gen/constraint-errors';
 import { usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
 import { usesBestEffort, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
+import { usesReplicas } from './projections.js';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { alignRows, goString } from '../lib/go-source.js';
 import { relationalEngine, sqlDialect } from '../lib/relational-engine.js';
@@ -434,7 +435,7 @@ func bind(args []any) []any {
  * cuando confirma la transacción abierta (la publicación best-effort).
  */
 function transactionNeeds(model) {
-  return { apart: usesGoOutbox(model) || usesGoProcessedEvents(model), afterCommit: usesBestEffort(model) };
+  return { apart: usesGoOutbox(model) || usesGoProcessedEvents(model) || usesReplicas(model), afterCommit: usesBestEffort(model) };
 }
 
 function transactionsBody(d, { apart = false, afterCommit = false } = {}) {
@@ -464,7 +465,7 @@ func (t *Transactions) afterCommit(ctx context.Context, fn func(context.Context)
     ? `
 
 // apart ejecuta fn en una transacción PROPIA aunque ctx traiga una abierta, con sus opciones: lo que se confirma aparte
-// del caso de uso (el relay del outbox, el registro de un mensaje procesado).
+// del caso de uso (el relay del outbox, el registro de un mensaje procesado, la copia local de una réplica).
 func (t *Transactions) apart(ctx context.Context, options sql.TxOptions, fn func(DBTX) error) error {
 	return t.fresh(ctx, options, func(_ context.Context, q DBTX) error {
 		return fn(q)

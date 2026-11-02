@@ -63,11 +63,7 @@ test('http-clients, dependencies, la reconciliación y la compensación entran (
   assert.deepEqual(warnings, []);
 });
 
-test('lo saliente que el 11b no genera se rechaza con su motivo: needs, oauth2, compuestos, llamadas sin tipar y clientes sin persistencia relacional', () => {
-  const catalog = loadService(path.join(FIXTURES_DIR, 'catalog-extended'));
-  const catalogErrors = checkSupportedFeatures(catalog.manifest, catalog.layers).errors;
-  assert.ok(catalogErrors.some((error) => /\.needs \(.*incremento 13/.test(error)), catalogErrors.join('\n'));
-  assert.ok(catalogErrors.some((error) => /oauth2-client-credentials .*incremento 13/.test(error)), catalogErrors.join('\n'));
+test('lo saliente que keel-go no genera se rechaza con su motivo: compuestos, llamadas sin tipar y clientes sin persistencia relacional', () => {
   const vault = loadService(path.join(FIXTURES_DIR, 'asset-vault'));
   assert.ok(checkSupportedFeatures(vault.manifest, vault.layers).errors.some((error) => /^http-clients: .*persistencia relacional/.test(error)));
 

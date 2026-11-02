@@ -31,6 +31,7 @@ import { ownershipNotes } from '@keel-system/keel-core/gen/ownership';
 import { compensationNote } from '@keel-system/keel-core/gen/compensation';
 import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity } from './security.js';
 import { callMethod, clientParam, usesGoHttpClients } from './http-clients.js';
+import { projectionNotes, replicaNote } from './projections.js';
 import { mailNote } from './mail.js';
 import { cacheHandlerNote } from './cache.js';
 import { uploadHandlerNotes } from './storage.js';
@@ -447,6 +448,8 @@ function handlerNotes(model, operation) {
   notes.push(...reconciliationNotes(model, operation));
   const compensation = compensationNote(operation);
   if (compensation) notes.push(compensation);
+  for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(model, dependency, need, operation));
+  notes.push(...projectionNotes(model, operation));
   notes.push(...activationNotes(model, operation));
   for (const eventName of operation.emits ?? []) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
@@ -597,6 +600,33 @@ function activationNotes(model, operation) {
     );
   }
   return notes;
+}
+
+/**
+ * La nota de un dato que esta operación pide a otro servidor (`needs`): la de los otros tres generadores, con los nombres de
+ * Go. La réplica se lee por su lector.
+ */
+function needNote(model, depId, need, operation) {
+  const why = need.description ? ` — ${need.description}` : '';
+  if (need.strategy !== 'on-demand') return replicaNote(model, depId, need, operation, why);
+  if (!need.fetch) {
+    return `Dependencia ${depId}.${need.name} (on-demand)${why}: el diseño no resuelve la llamada (fetchedFrom no apunta a ninguna de http-clients). No inventes el canal: dilo en el reporte`;
+  }
+  const client = (model.httpClients ?? []).find((candidate) => candidate.clientClass === need.fetch.clientClass);
+  const call = client?.calls.find((candidate) => candidate.name === need.fetch.call);
+  const port = client && usesGoHttpClients(model) ? `h.${clientParam(client)}` : `el cliente ${need.fetch.clientClass}`;
+  const method = call ? callMethod(call) : need.fetch.call;
+  const policy = need.onUnavailable
+    ? ` Si ${depId} no responde, el fallback del adaptador ya aplica onUnavailable: ${need.onUnavailable.action}${need.onUnavailable.action === 'fail' || need.onUnavailable.error ? ' y su error se devuelve tal cual' : ''}; no lo conviertas en otra cosa.`
+    : '';
+  const exposed =
+    need.exposedAs && need.dtoName
+      ? ` El dato SALE en la respuesta: la función de mapeo pide un ${goTypeName(need.dtoName)} por parámetro y lo pone en el campo '${need.exposedAs}' — si no lo tienes, pásalo nil, que es lo que el contrato admite cuando el proveedor no responde.`
+      : '';
+  return (
+    `Dependencia ${depId}.${need.name} (on-demand)${why}: pide el dato con ${port}.${method}(ctx, ...), que ya devuelve el resultado de dominio ` +
+    `(domain.${goTypeName(need.fetch.resultType)}): el DTO del cable no cruza a la aplicación. El retry y el circuito ya están en el adaptador: no los repitas.${policy}${exposed}`
+  );
 }
 
 /** La nota de una activación: el trabajo que esta operación delega en otro servidor (la de los otros tres generadores). */

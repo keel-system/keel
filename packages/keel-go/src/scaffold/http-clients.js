@@ -28,7 +28,8 @@
 import { fallbackFailures, hasCallFallback, recordedFailures, resiliencePolicy, retryWaitMs, circuitScript, PROVIDER_FAILURES } from '@keel-system/keel-core/gen/outbound-resilience';
 import { httpClientsYaml } from '@keel-system/keel-core/gen/http-clients-config';
 import { LOCAL_STUB_BASE_URL } from '@keel-system/keel-core/gen/infra-catalog';
-import { repositoryRoots, usesHttpClients, usesRelational } from '@keel-system/keel-core/gen/features';
+import { LAST_KNOWN_MAX_ENTRIES, lastKnownNeeds, servesLastKnown } from '@keel-system/keel-core/gen/last-known';
+import { repositoryRoots, usesHttpClients, usesOAuth2, usesRelational } from '@keel-system/keel-core/gen/features';
 import { goExported, goUnexported } from '../lib/go-projection.js';
 import { alignRows, commentLines, goString, keyedLiteral } from '../lib/go-source.js';
 import { sentinelOf } from './errors.js';
@@ -54,18 +55,13 @@ export function usesGoHttpClients(model) {
 function unsupportedOutbound(model) {
   const out = [];
   for (const client of model.httpClients ?? []) {
-    if (client.auth?.type === 'oauth2-client-credentials') out.push(`${client.id}: oauth2`);
     for (const call of client.calls) {
       if (!call.method || !call.typed) out.push(`${client.id}.${call.name}: sin method/path o sin contrato tipado`);
       if (!call.bodiless && call.responseFields.length === 0) out.push(`${client.id}.${call.name}: respuesta sin campos`);
-      if ((call.needs ?? []).length > 0) out.push(`${client.id}.${call.name}: needs`);
       for (const field of callFields(call).concat(call.responseFields)) {
         if (field.kind === 'composite' || field.base === 'json') out.push(`${client.id}.${call.name}.${field.name}: ${field.kind === 'composite' ? 'compuesto' : 'json'}`);
       }
     }
-  }
-  for (const dependency of model.dependencies ?? []) {
-    if ((dependency.needs ?? []).length > 0) out.push(`${dependency.id}: needs`);
   }
   return out;
 }
@@ -109,6 +105,36 @@ export function activationClients(model, operation) {
   return clients;
 }
 
+/**
+ * Los clientes de los que esta operación PIDE un dato bajo demanda (`dependencies.needs`, por `usedBy`): su puerto se
+ * inyecta, o el camino de menor resistencia es no pedirlo. La réplica no: se lee por su lector, que es quien aplica `onMiss`.
+ */
+export function needClients(model, operation) {
+  if (!usesGoHttpClients(model)) return [];
+  const clients = [];
+  for (const { need } of operation.dependencyNeeds ?? []) {
+    if (need.strategy !== 'on-demand' || !need.fetch) continue;
+    const client = (model.httpClients ?? []).find((candidate) => candidate.clientClass === need.fetch.clientClass);
+    if (client && !clients.includes(client)) clients.push(client);
+  }
+  return clients;
+}
+
+/** ¿Hay algún need con `lastKnown`? Entonces se emite el almacén y se cablea. */
+export function usesLastKnown(model) {
+  return lastKnownNeeds(model).length > 0;
+}
+
+/** ¿Esta llamada recuerda su resultado? Resuelve un need con `lastKnown` y tiene qué recordar. */
+function remembersCall(model, client, call) {
+  return !call.bodiless && call.responseFields.length > 0 && servesLastKnown(model, client.id, call.name);
+}
+
+/** ¿Recuerda este cliente alguna llamada? Entonces su adaptador recibe el almacén. */
+export function clientRemembers(model, client) {
+  return client.calls.some((call) => remembersCall(model, client, call));
+}
+
 export function generate(model) {
   if (!usesGoHttpClients(model)) return [];
   const { clients } = layout(model);
@@ -119,10 +145,12 @@ export function generate(model) {
     file('resilience', RESILIENCE_GO, ['context', 'math', 'slices', 'time']),
     file('exchange', EXCHANGE_GO, ['bytes', 'context', 'encoding/json/jsontext', 'errors', 'fmt', 'io', 'net', 'net/http', 'net/url', 'regexp', 'strings', 'time', 'internal/platform/wire']),
     file('reading', READING_GO, ['encoding/json/v2', 'encoding/json/jsontext', 'internal/platform/wire']),
-    file('settings', settingsGo(model), ['encoding/base64', 'fmt', 'net/url', 'strings', 'time', 'internal/platform/config']),
+    file('settings', settingsGo(model), ['context', 'encoding/base64', 'fmt', 'net/url', 'strings', 'time', 'internal/platform/config']),
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/http-clients.yaml`, content: httpClientsYaml(model, profile) })),
     emittedTests(model)
   ];
+  if (usesLastKnown(model)) files.push(file('last_known', lastKnownGo(model), ['fmt', 'slices', 'strings', 'sync', 'time']));
+  if (usesOAuth2(model)) files.push(file('client_credentials', CLIENT_CREDENTIALS_GO, ['context', 'bytes', 'encoding/base64', 'encoding/json/v2', 'fmt', 'io', 'net/http', 'net/url', 'strings', 'time']));
   if (usesOutboundIdempotency(model)) files.push(file('idempotency', idempotencyGo(model), ['context', 'crypto/sha256', 'encoding/hex', 'internal/platform/correlation', 'internal/platform/wire']));
   for (const client of model.httpClients) {
     files.push(port(model, client));
@@ -258,7 +286,15 @@ function port(model, client) {
   const results = client.calls
     .filter((call) => !call.bodiless)
     .map((call) => {
-      const rows = alignRows(call.responseFields.map((field) => ({ indent: '\t', cells: [goExported(field.name), field.list ? field.goType : `*${field.goType}`] })));
+      // Con `lastKnown`, el valor rescatado se marca: se sirve, pero quien lo exponga no lo cachea (keel-core/gen/last-known.js).
+      const stale = remembersCall(model, client, call)
+        ? [
+            { text: '\t// Stale es true cuando el valor es el último conocido (onUnavailable: lastKnown) y no uno recién leído: se sirve, pero' },
+            { text: '\t// una respuesta que lo lleve no se cachea.' },
+            { indent: '\t', cells: ['Stale', 'bool'] }
+          ]
+        : [];
+      const rows = alignRows([...call.responseFields.map((field) => ({ indent: '\t', cells: [goExported(field.name), field.list ? field.goType : `*${field.goType}`] })), ...stale]);
       return `// ${resultType(call)} es el resultado de ${client.id}.${call.name} en términos del dominio. Cada campo admite su
 // ausencia: es lo que devuelve el fallback cuando el proveedor no dijo nada.
 type ${resultType(call)} struct {
@@ -311,11 +347,13 @@ const resilient = (call) => Boolean(call.retry || call.circuitBreaker);
 function adapterGo(model, client) {
   const type = adapterType(client);
   const circuits = client.calls.filter((call) => call.circuitBreaker);
+  const remembers = clientRemembers(model, client);
   const fields = alignRows([
     { indent: '\t', cells: ['client', 'ClientSettings'] },
     { indent: '\t', cells: ['exchange', '*Exchange'] },
     { indent: '\t', cells: ['logger', '*slog.Logger'] },
     { indent: '\t', cells: ['wait', 'Wait'] },
+    ...(remembers ? [{ indent: '\t', cells: ['lastKnown', '*LastKnownValues'] }] : []),
     ...circuits.map((call) => ({ indent: '\t', cells: [circuitField(call), '*Circuit'] }))
   ]);
   const init = keyedLiteral(
@@ -324,6 +362,7 @@ function adapterGo(model, client) {
       ['exchange', 'exchange'],
       ['logger', 'logger'],
       ['wait', 'Sleep'],
+      ...(remembers ? [['lastKnown', 'lastKnown']] : []),
       ...circuits.map((call) => [circuitField(call), `NewCircuit(*${policyVar(client, call)}.Circuit, nil)`])
     ],
     '\t\t'
@@ -340,7 +379,7 @@ ${fields.join('\n')}
 var _ domain.${clientPort(client)} = (*${type})(nil)
 
 // New${type} construye el adaptador de ${client.id} con su configuración del perfil. Sin ella no arranca.
-func New${type}(settings Settings, exchange *Exchange, logger *slog.Logger) (*${type}, error) {
+func New${type}(settings Settings, exchange *Exchange, logger *slog.Logger${remembers ? ', lastKnown *LastKnownValues' : ''}) (*${type}, error) {
 	client, ok := settings[${goString(client.id)}]
 	if !ok {
 		return nil, errors.New(${goString(`http-clients: no hay configuración para ${client.id}`)})
@@ -353,7 +392,7 @@ ${init.join('\n')}
   for (const call of client.calls) {
     if (resilient(call)) parts.push(policyLiteral(client, call));
     if (hasCallFallback(call)) {
-      const kinds = fallbackFailures({ circuitBreaker: Boolean(call.circuitBreaker) }).map((failure) => KIND(failure.kind));
+      const kinds = fallbackFailures({ circuitBreaker: Boolean(call.circuitBreaker), oauth2: client.auth?.type === 'oauth2-client-credentials' }).map((failure) => KIND(failure.kind));
       parts.push(`// ${fallbackVar(client, call)} es lo que atiende el fallback de ${client.id}.${call.name}: solo lo que ha hecho el PROVEEDOR.
 var ${fallbackVar(client, call)} = []FailureKind{${kinds.join(', ')}}`);
     }
@@ -496,7 +535,9 @@ function onceGo(model, client, call) {
       '\tif err != nil {',
       `\t\treturn ${zero}err`,
       '\t}',
-      `\treturn ${mapFunc(client, call)}(read), nil`
+      ...(remembersCall(model, client, call)
+        ? [`\tresult := ${mapFunc(client, call)}(read)`, `\ta.lastKnown.Remember(${goString(call.name)}, ${lastKnownKey(call)}, result)`, '\treturn result, nil']
+        : [`\treturn ${mapFunc(client, call)}(read), nil`])
     );
   }
   return `// ${onceMethod(call)} es UN intento de ${subject}: la petición, su clasificación y la lectura del cuerpo. Lo repite el
@@ -593,42 +634,69 @@ ${body}
 }`;
 }
 
-/** El cuerpo del fallback: la política que declara la activación que sale por esta llamada (como los otros tres). */
+/**
+ * LA política de una llamada, si es una: la de su need o su activación. Null sin ninguna o con varias DISTINTAS por la misma
+ * llamada, que el fallback enumera como conflicto del diseño con un TODO. La prueba emitida solo afirma lo que hace de verdad.
+ */
+export function fallbackPolicy(call) {
+  if (!hasCallFallback(call)) return null;
+  const needs = (call.needs ?? []).filter(({ need }) => need.onUnavailable);
+  if (policyKeys(call).size !== 1) return null;
+  return needs.length > 0 ? needs[0].need.onUnavailable : call.activations?.[0]?.activation.onFailure ?? null;
+}
+
+function policyKeys(call) {
+  return new Set([
+    ...(call.activations ?? []).map(({ activation }) => `activation:${JSON.stringify(activation.onFailure ?? null)}`),
+    ...(call.needs ?? []).filter(({ need }) => need.onUnavailable).map(({ need }) => `need:${JSON.stringify(need.onUnavailable)}`)
+  ]);
+}
+
+/** El error del diseño como expresión Go. */
+function designError(decl, message) {
+  const text = goString(message);
+  return decl.dynamicStatus ? `domain.StatusErrorf(domain.${sentinelOf(decl.error)}, ${decl.httpStatus}, ${text})` : `domain.Errorf(domain.${sentinelOf(decl.error)}, ${text})`;
+}
+
+/** El cuerpo del fallback: la política que declara el need o la activación que sale por esta llamada (como los otros tres). */
 function unavailableBody(model, client, call) {
   const subject = `${client.id}.${call.name}`;
   const activations = call.activations ?? [];
+  const needs = (call.needs ?? []).filter(({ need }) => need.onUnavailable);
   const zero = call.bodiless ? '' : `domain.${resultType(call)}{}, `;
   const trace = `\ta.logger.WarnContext(ctx, "fallback", "call", ${goString(subject)}, "reason", failure.Error())`;
   const prose = call.fallback ? `${commentLines(`Fallback declarado en el diseño: ${call.fallback}`, '\t').join('\n')}\n` : '';
   const todoReturn = `\treturn ${zero}fmt.Errorf(${goString(`fallback de ${subject} sin implementar: %w`)}, failure)`;
-  const distinct = new Set(activations.map(({ activation }) => JSON.stringify(activation.onFailure ?? null)));
+  const distinct = policyKeys(call);
   // Una política, y solo una: con dos distintas el conflicto es del diseño (un método no puede hacer dos cosas).
   if (distinct.size !== 1) {
     const doc = call.fallback ? `\t// TODO (agente): ${call.fallback}` : '\t// TODO (agente): la política del fallback del circuito abierto.';
+    const conflicting = [
+      ...activations.map(({ dependency, activation }) => `${dependency}.${activation.name} (activación, onFailure: ${activation.onFailure?.action ?? 'sin declarar'})`),
+      ...needs.map(({ dependency, need }) => `${dependency}.${need.name} (need, onUnavailable: ${need.onUnavailable.action})`)
+    ];
     const listed =
       distinct.size > 1
-        ? `\n${commentLines(
-            `Varias políticas DISTINTAS salen por esta llamada y el diseño no puede darles caminos distintos sobre un único método: ${activations
-              .map(({ dependency, activation }) => `${dependency}.${activation.name} (onFailure: ${activation.onFailure?.action ?? 'sin declarar'})`)
-              .join('; ')}`,
-            '\t'
-          ).join('\n')}`
+        ? `\n${commentLines(`Varias políticas DISTINTAS salen por esta llamada y el diseño no puede darles caminos distintos sobre un único método: ${conflicting.join('; ')}`, '\t').join('\n')}`
         : '';
     return `${trace}\n${doc}${listed}\n${todoReturn}`;
   }
-  const { dependency, activation } = activations[0];
-  const decl = activation.onFailure;
-  const origin = `\t// Política declarada por la activación ${dependency}.${activation.name} (onFailure: ${decl?.action ?? 'sin declarar'}).\n`;
-  if (decl?.action === 'ignore') {
+  const need = needs[0] ?? null;
+  const { dependency, activation } = activations[0] ?? {};
+  const decl = need ? need.need.onUnavailable : activation.onFailure;
+  const name = need ? need.need.name : activation.name;
+  const dep = need ? need.dependency : dependency;
+  const origin = need
+    ? `\t// Política declarada por el need ${dep}.${name} (onUnavailable: ${decl.action}).\n`
+    : `\t// Política declarada por la activación ${dep}.${name} (onFailure: ${decl?.action ?? 'sin declarar'}).\n`;
+  if (!need && decl?.action === 'ignore') {
     // Una sola línea: es el mismo evento que el trace, y esta dice más (que el llamante sigue adelante).
     return `${prose}${origin}\t// El llamante sigue adelante: no propagues el error ni inventes datos del proveedor.
 \ta.logger.WarnContext(ctx, "proveedor no disponible; se continúa sin él", "call", ${goString(subject)}, "reason", failure.Error())
 \treturn ${call.bodiless ? 'nil' : `domain.${resultType(call)}{}, nil`}`;
   }
   if (decl?.action === 'fail' && decl.exceptionClass && decl.error) {
-    const message = goString(`${dependency} no está disponible para ${activation.name}`);
-    const error = decl.dynamicStatus ? `domain.StatusErrorf(domain.${sentinelOf(decl.error)}, ${decl.httpStatus}, ${message})` : `domain.Errorf(domain.${sentinelOf(decl.error)}, ${message})`;
-    return `${trace}\n${prose}${origin}\treturn ${zero}${error}`;
+    return `${trace}\n${prose}${origin}\treturn ${zero}${designError(decl, `${dep} no está disponible para ${name}`)}`;
   }
   if (decl?.action === 'fail') {
     return `${trace}\n${prose}${origin}\t// TODO (agente): el diseño declara el error ${decl.error}, pero ninguna operación de use-cases lo declara todavía,
@@ -639,6 +707,24 @@ ${todoReturn}`;
     return `${trace}\n${prose}${origin}\t// TODO (agente): el resultado degradado es lógica de negocio y tiene que poder distinguirlo el cliente de una
 \t// respuesta normal — un dato plausible pero falso es peor que fallar:
 ${commentLines(decl.degradedTo ?? '', '\t//  ').join('\n')}
+${todoReturn}`;
+  }
+  if (decl?.action === 'lastKnown' && remembersCall(model, client, call)) {
+    // El único con mecanismo propio, y por eso build lo escribe entero. Las dos mitades son inseparables —servir el último
+    // valor y RENDIRSE cuando ya es demasiado viejo—: sin la segunda, es la caché sin expiración que el diseño acaba de prohibir.
+    const window = `\t// Dentro de la ventana declarada se sirve lo último que se leyó; fuera de ella no hay nada que servir: un valor más
+\t// viejo que ${decl.maxAgeSeconds} s ya no es ese dato.
+\tif remembered, ok := Recall[domain.${resultType(call)}](a.lastKnown, ${goString(call.name)}, ${lastKnownKey(call)}, ${decl.maxAgeSeconds}*time.Second); ok {
+\t\tremembered.Stale = true
+\t\treturn remembered, nil
+\t}`;
+    if (decl.exceptionClass) {
+      return `${trace}\n${prose}${origin}${window}
+\treturn ${zero}${designError(decl, `${dep} no está disponible y el último ${name} conocido supera los ${decl.maxAgeSeconds}s`)}`;
+    }
+    return `${trace}\n${prose}${origin}${window}
+\t// TODO (agente): el diseño declara onUnavailable.error = ${decl.error}, pero ninguna operación de use-cases lo declara
+\t// todavía, así que su centinela no existe: solo falta con qué rendirse.
 ${todoReturn}`;
   }
   return `${trace}\n${prose}${origin}\t// TODO (agente): la activación no declara onFailure.
@@ -669,6 +755,17 @@ function settingsGo(model) {
         `	${variable}.Headers["Authorization"] = "Basic " + base64.StdEncoding.EncodeToString([]byte(${variable}Username+":"+${variable}Password))`
       );
     }
+    if (client.auth?.type === 'oauth2-client-credentials') {
+      // La concesión, una por arranque: ningún token sobrevive entre arranques.
+      const scopes = (client.auth.scopes ?? []).map(goString).join(', ');
+      lines.push(
+        `	${variable}Grant, err := grantOf(value, ${goString(client.id)}, ${goString(client.auth.propertyPrefix)}, []string{${scopes}}, ${client.readTimeoutMs}*time.Millisecond)`,
+        '	if err != nil {',
+        '		return nil, err',
+        '	}',
+        `	${variable}.Authorization = ${variable}Grant.Authorization`
+      );
+    }
     lines.push(`	settings[${goString(client.id)}] = ${variable}`);
     return lines.join('\n');
   });
@@ -682,6 +779,9 @@ type ClientSettings struct {
 	// llamadas del cliente.
 	Timeout time.Duration
 	Headers map[string]string
+	// Authorization es la credencial que hay que ir a buscar antes de cada intento (oauth2-client-credentials): la cabecera
+	// ya armada. Si no se puede obtener, la petición no sale. Nil sin concesión.
+	Authorization func(context.Context) (string, error)
 }
 
 // Settings son las de todos los clientes del diseño, por su id.
@@ -702,16 +802,24 @@ ${reads.join('\n')}
 
 // clientOf son las de un cliente sin su autenticación: la URL, absoluta, y el plazo de cada intento.
 func clientOf(value func(string) (string, bool), id string, timeout time.Duration) (ClientSettings, error) {
-	key := "http-clients." + id + ".base-url"
-	raw, err := text(value, key)
+	base, err := absolute(value, "http-clients."+id+".base-url")
 	if err != nil {
 		return ClientSettings{}, err
 	}
-	base, err := url.Parse(raw)
-	if err != nil || !base.IsAbs() {
-		return ClientSettings{}, fmt.Errorf("configuración: %s no es una URL absoluta", key)
-	}
 	return ClientSettings{ID: id, BaseURL: base, Timeout: timeout, Headers: map[string]string{}}, nil
+}
+
+// absolute es la URL absoluta que hay en key.
+func absolute(value func(string) (string, bool), key string) (*url.URL, error) {
+	raw, err := text(value, key)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || !parsed.IsAbs() {
+		return nil, fmt.Errorf("configuración: %s no es una URL absoluta", key)
+	}
+	return parsed, nil
 }
 
 // text es el valor de key sin espacios a los lados, o un error si falta.
@@ -724,6 +832,291 @@ func text(value func(string) (string, bool), key string) (string, error) {
 }
 `;
 }
+
+// ─── El último valor conocido y la concesión del token ──────────────────────────────────────────
+
+/** La clave del último valor: los parámetros de la llamada, por su valor (un puntero se lee, no se imprime su dirección). */
+function lastKnownKey(call) {
+  const parts = callFields(call).map((field) => (optionalParam(field) ? `valueOf(${paramName(field)})` : paramName(field)));
+  return `LastKnownKey(${parts.join(', ')})`;
+}
+
+function lastKnownGo(model) {
+  const pointers = model.httpClients.some((client) => client.calls.some((call) => remembersCall(model, client, call) && callFields(call).some(optionalParam)));
+  const valueOf = pointers
+    ? `
+
+// valueOf es lo que apunta p, para la clave; nil si no hay nada.
+func valueOf[T any](p *T) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}`
+    : '';
+  return `
+// maxLastKnownEntries es el tope de entradas vivas: la clave la forman los parámetros de la llamada, así que sin tope es una
+// fuga lenta.
+const maxLastKnownEntries = ${LAST_KNOWN_MAX_ENTRIES}
+
+type lastKnownEntry struct {
+	value    any
+	storedAt time.Time
+}
+
+// LastKnownValues es el último valor conocido de cada llamada saliente, para la política onUnavailable: lastKnown del diseño:
+// el LastKnownValues de keel-spring, keel-nest y keel-dotnet.
+//
+// Acotado por edad y por tamaño, y las dos cotas importan. La edad la declara el diseño (maxAgeSeconds del need) y se aplica
+// al LEER: pasado ese tiempo el valor deja de existir para quien pregunta, y el fallback devuelve el error declarado en vez
+// de servir algo que ya no significa nada. El tamaño lo pone este almacén. En memoria y por proceso a propósito: lo que
+// promete es «lo último que ESTE proceso llegó a leer»; sobre la caché compartida prometería otra cosa y metería una
+// dependencia más en el camino que se recorre cuando algo ya está caído.
+type LastKnownValues struct {
+	now     func() time.Time
+	mu      sync.Mutex
+	entries map[string]lastKnownEntry
+}
+
+// NewLastKnownValues construye el almacén. now es el reloj; nil, el de verdad.
+func NewLastKnownValues(now func() time.Time) *LastKnownValues {
+	if now == nil {
+		now = time.Now
+	}
+	return &LastKnownValues{now: now, entries: map[string]lastKnownEntry{}}
+}
+
+// LastKnownKey es la clave de los parámetros de una llamada, en su orden: el separador no puede salir de un parámetro.
+func LastKnownKey(parts ...any) string {
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == nil {
+			texts = append(texts, "\\x00")
+			continue
+		}
+		texts = append(texts, fmt.Sprint(part))
+	}
+	return strings.Join(texts, "\\x1f")
+}
+
+// Remember recuerda lo que la llamada acaba de devolver. Se invoca en el camino FELIZ del adaptador.
+func (v *LastKnownValues) Remember(scope, key string, value any) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if len(v.entries) >= maxLastKnownEntries {
+		v.evictOldest()
+	}
+	v.entries[scope+"|"+key] = lastKnownEntry{value: value, storedAt: v.now()}
+}
+
+// Recall es el último valor de esa llamada si aún está dentro de maxAge. El caducado se borra al detectarlo, para que el tope
+// no expulse valores útiles. Es una función y no un método porque un método de Go no puede ser genérico.
+func Recall[T any](v *LastKnownValues, scope, key string, maxAge time.Duration) (T, bool) {
+	var zero T
+	id := scope + "|" + key
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	entry, ok := v.entries[id]
+	if !ok {
+		return zero, false
+	}
+	if v.now().Sub(entry.storedAt) > maxAge {
+		delete(v.entries, id)
+		return zero, false
+	}
+	value, ok := entry.value.(T)
+	return value, ok
+}
+
+// evictOldest deja sitio tirando las entradas más viejas, que son las que menos van a servir: hasta las tres cuartas partes
+// del tope, para no ordenar en cada escritura.
+func (v *LastKnownValues) evictOldest() {
+	type aged struct {
+		id       string
+		storedAt time.Time
+	}
+	ordered := make([]aged, 0, len(v.entries))
+	for id, entry := range v.entries {
+		ordered = append(ordered, aged{id, entry.storedAt})
+	}
+	slices.SortFunc(ordered, func(a, b aged) int {
+		return a.storedAt.Compare(b.storedAt)
+	})
+	for _, old := range ordered[:max(1, len(ordered)-maxLastKnownEntries*3/4)] {
+		delete(v.entries, old.id)
+	}
+}${valueOf}
+`;
+}
+
+const CLIENT_CREDENTIALS_GO = String.raw`
+// clockSkew es el de Spring Security: el token se renueva antes de caducar, para que no caduque en vuelo.
+const clockSkew = 60 * time.Second
+
+// ClientCredentialsSettings es lo que la concesión lee de http-clients.yaml (las variables de keel-spring:
+// <CLIENTE>_CLIENT_ID, <CLIENTE>_CLIENT_SECRET, <CLIENTE>_TOKEN_URL).
+type ClientCredentialsSettings struct {
+	ID           string
+	TokenURI     *url.URL
+	ClientID     string
+	ClientSecret string
+	Scopes       []string
+	Timeout      time.Duration
+}
+
+// ClientCredentials es la concesión client_credentials de un cliente, con la semántica del OAuth2AuthorizedClientManager de
+// keel-spring: el secreto por client_secret_basic (cabecera Basic con los dos valores codificados como formulario), los scope
+// en el cuerpo, el token REUTILIZADO hasta expires_in menos el margen —una petición al emisor por concesión, no por llamada—
+// y una sola petición en vuelo aunque lleguen varias llamadas a la vez.
+type ClientCredentials struct {
+	settings ClientCredentialsSettings
+	client   *http.Client
+	now      func() time.Time
+	// gate es la puerta, un canal y no un Mutex para poder dejar de esperar cuando quien llama cancela. Dentro, una sola
+	// petición al emisor; el token solo se toca con ella.
+	gate    chan struct{}
+	header  string
+	renewAt time.Time
+}
+
+// NewClientCredentials construye la concesión sobre transport y now; nil, los de verdad.
+func NewClientCredentials(settings ClientCredentialsSettings, transport http.RoundTripper, now func() time.Time) *ClientCredentials {
+	if transport == nil {
+		transport = DefaultTransport()
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return &ClientCredentials{
+		settings: settings,
+		client: &http.Client{
+			Transport: transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		now:  now,
+		gate: make(chan struct{}, 1),
+	}
+}
+
+// grantOf es la concesión de un cliente, leída de su configuración.
+func grantOf(value func(string) (string, bool), id, prefix string, scopes []string, timeout time.Duration) (*ClientCredentials, error) {
+	tokenURI, err := absolute(value, prefix+".token-uri")
+	if err != nil {
+		return nil, err
+	}
+	clientID, err := text(value, prefix+".client-id")
+	if err != nil {
+		return nil, err
+	}
+	secret, err := text(value, prefix+".client-secret")
+	if err != nil {
+		return nil, err
+	}
+	return NewClientCredentials(ClientCredentialsSettings{ID: id, TokenURI: tokenURI, ClientID: clientID, ClientSecret: secret, Scopes: scopes, Timeout: timeout}, nil, nil), nil
+}
+
+// Authorization es la cabecera Authorization (Bearer …): la vigente, o una nueva si ya toca renovarla. Si el emisor no
+// responde, nos rechaza o no devuelve un token Bearer, un *ProviderFailure de KindAuthGrant; la cancelación de quien llama se
+// devuelve tal cual.
+func (c *ClientCredentials) Authorization(ctx context.Context) (string, error) {
+	select {
+	case c.gate <- struct{}{}:
+		defer func() { <-c.gate }()
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	if c.header != "" && c.now().Before(c.renewAt) {
+		return c.header, nil
+	}
+	header, lifetime, err := c.request(ctx)
+	if err != nil {
+		return "", err
+	}
+	c.header = header
+	c.renewAt = c.now().Add(lifetime - clockSkew)
+	return header, nil
+}
+
+func (c *ClientCredentials) request(ctx context.Context) (string, time.Duration, error) {
+	form := url.Values{"grant_type": {"client_credentials"}}
+	if len(c.settings.Scopes) > 0 {
+		form.Set("scope", strings.Join(c.settings.Scopes, " "))
+	}
+	attemptCtx, cancel := context.WithTimeout(ctx, c.settings.Timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, c.settings.TokenURI.String(), strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", 0, c.failure(err, "la petición al emisor del token no se puede armar")
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	credentials := []byte(FormEncode(c.settings.ClientID) + ":" + FormEncode(c.settings.ClientSecret))
+	request.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString(credentials))
+	response, err := c.client.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", 0, ctx.Err()
+		}
+		return "", 0, c.failure(err, "el emisor del token no responde")
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", 0, ctx.Err()
+		}
+		return "", 0, c.failure(err, "el emisor del token no responde")
+	}
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		return "", 0, c.failure(nil, fmt.Sprintf("el emisor del token contestó %d", response.StatusCode))
+	}
+	return c.read(body)
+}
+
+// read saca el token de la respuesta del emisor. Spring Security exige token_type Bearer, y sin expires_in (o no positivo)
+// lo da por caducado en un segundo: se pide de nuevo en la siguiente llamada.
+func (c *ClientCredentials) read(body []byte) (string, time.Duration, error) {
+	var fields map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(body), &fields); err != nil {
+		return "", 0, c.failure(err, "la respuesta del emisor del token no es JSON")
+	}
+	token, ok := fields["access_token"].(string)
+	if !ok || token == "" {
+		return "", 0, c.failure(nil, "la respuesta del emisor no trae access_token")
+	}
+	if kind, ok := fields["token_type"].(string); !ok || !strings.EqualFold(kind, "bearer") {
+		return "", 0, c.failure(nil, "el emisor no devolvió un token Bearer")
+	}
+	lifetime := time.Second
+	if seconds, ok := fields["expires_in"].(float64); ok && seconds > 0 {
+		lifetime = time.Duration(seconds * float64(time.Second))
+	}
+	return "Bearer " + token, lifetime, nil
+}
+
+func (c *ClientCredentials) failure(cause error, message string) *ProviderFailure {
+	return &ProviderFailure{Kind: KindAuthGrant, message: c.settings.ID + ": " + message, cause: cause}
+}
+
+// FormEncode es la codificación de formulario de URLEncoder de Java (RFC 6749 § 2.3.1): se queda lo alfanumérico y .-*_; el
+// espacio, «+». No es url.QueryEscape, que deja la tilde de ASCII y codifica el asterisco.
+func FormEncode(value string) string {
+	var encoded strings.Builder
+	for _, b := range []byte(value) {
+		switch {
+		case b >= '0' && b <= '9', b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b == '.', b == '-', b == '*', b == '_':
+			encoded.WriteByte(b)
+		case b == ' ':
+			encoded.WriteByte('+')
+		default:
+			fmt.Fprintf(&encoded, "%%%02X", b)
+		}
+	}
+	return encoded.String()
+}
+`;
 
 // ─── La clave de idempotencia saliente ───────────────────────────────────────────────────────────
 
@@ -1169,6 +1562,14 @@ func (e *Exchange) Send(ctx context.Context, client ClientSettings, request Requ
 	for name, value := range request.Headers {
 		outgoing.Header.Set(name, value)
 	}
+	if client.Authorization != nil {
+		// Antes de cada intento, y con el plazo de quien llama: el emisor tiene el suyo. Sin token la petición no sale.
+		authorization, err := client.Authorization(ctx)
+		if err != nil {
+			return Response{}, err
+		}
+		outgoing.Header.Set("Authorization", authorization)
+	}
 	response, err := e.client.Do(outgoing)
 	if err != nil {
 		return Response{}, unanswered(ctx, client, where, err)
@@ -1370,8 +1771,8 @@ function emittedTests(model) {
     )
   ];
   const probed = probedCalls(model);
-  const builders = [...new Set(probed.map(({ client }) => client))].map((client) => adapterBuilder(client));
-  const probes = probed.map(({ client, call, args }) => adapterProbe(client, call, args));
+  const builders = [...new Set(probed.map(({ client }) => client))].map((client) => adapterBuilder(model, client));
+  const probes = probed.map(({ client, call, args }) => adapterProbe(model, client, call, args));
   const firstClient = model.httpClients[0];
   const circuitTest = circuits.length > 0
     ? `
@@ -1710,24 +2111,26 @@ func TestParaElCircuitoUn4xxEsUnExitoYUnContratoRotoNoCuenta(t *testing.T) {
 	}
 }`;
   const imports = [
-    'context', 'errors', 'io', 'log/slog', 'net/http', 'net/url', 'slices', 'strconv', 'strings', 'sync', 'testing', 'testing/fstest', 'time',
+    'context', 'encoding/base64', 'errors', 'fmt', 'io', 'log/slog', 'net/http', 'net/url', 'reflect', 'slices', 'strconv', 'strings', 'sync', 'testing', 'testing/fstest', 'time',
     'encoding/json/jsontext', 'github.com/google/uuid', 'internal/domain', 'internal/platform/config', 'internal/platform/wire'
   ];
+  const extra = `${manualClock(model)}${lastKnownStoreTests(model)}${clientCredentialsTests(model)}`;
   return {
     path: `${clients.dir}/clients_test.go`,
-    content: packageFile(model, clients, { imports, body: `${body}${settingsTest}${circuitTest}${retryTest}${builders.join('')}${probes.join('')}\n` })
+    content: packageFile(model, clients, { imports, body: `${body}${settingsTest}${circuitTest}${retryTest}${builders.join('')}${probes.join('')}${extra}\n` })
   };
 }
 
 /** El adaptador de un cliente sobre el proveedor falso, sin esperas entre reintentos. */
-function adapterBuilder(client) {
+function adapterBuilder(model, client) {
   const name = `${goUnexported(client.id)}Over`;
+  const remembers = clientRemembers(model, client);
   return `
 
 // ${name} construye el adaptador de ${client.id} sobre el proveedor falso, sin esperas entre reintentos.
-func ${name}(t *testing.T, provider *fakeProvider) *${adapterType(client)} {
+func ${name}(t *testing.T, provider *fakeProvider${remembers ? ', lastKnown *LastKnownValues' : ''}) *${adapterType(client)} {
 	t.Helper()
-	adapter, err := New${adapterType(client)}(Settings{${goString(client.id)}: testClient(${goString(client.id)})}, NewExchange(provider), slog.New(slog.DiscardHandler))
+	adapter, err := New${adapterType(client)}(Settings{${goString(client.id)}: testClient(${goString(client.id)})}, NewExchange(provider), slog.New(slog.DiscardHandler)${remembers ? ', lastKnown' : ''})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1742,11 +2145,12 @@ func ${name}(t *testing.T, provider *fakeProvider) *${adapterType(client)} {
  * que no es JSON, que el contrato roto se devuelve y no es una caída; y con el proveedor en 5xx, que el circuito se abre y
  * la llamada siguiente ni sale.
  */
-function adapterProbe(client, call, args) {
+function adapterProbe(model, client, call, args) {
+  const store = clientRemembers(model, client) ? ', NewLastKnownValues(nil)' : '';
   const policy = resiliencePolicy(call);
   const transportAttempts = policy.retry && policy.retry.retries.includes('transport') ? policy.retry.maxAttempts : 1;
   const name = `Test${adapterType(client)}${callMethod(call)}`;
-  const build = `${goUnexported(client.id)}Over(t, provider)`;
+  const build = `${goUnexported(client.id)}Over(t, provider${store})`;
   const invoke = `adapter.${callMethod(call)}(${['t.Context()', ...args].join(', ')})`;
   const swallow = call.bodiless ? `_ = ${invoke}` : `_, _ = ${invoke}`;
   const capture = call.bodiless ? `err := ${invoke}` : `_, err := ${invoke}`;
@@ -1798,5 +2202,377 @@ func ${name}NoDisfrazaUnContratoRotoDeCaida(t *testing.T) {
 	if !errors.As(err, &contract) || len(provider.sent()) != 1 {
 		t.Fatalf("%v con %d peticiones, quiero el *ContractError de un solo intento", err, len(provider.sent()))
 	}
-}${circuit}`;
+}${circuit}${designFailureProbe(client, call, name, invoke, build)}${lastKnownProbe(model, client, call, name, args)}`;
+}
+
+/**
+ * Con LA política `fail` de la llamada: con el proveedor inalcanzable, la llamada devuelve el error del diseño, sea de un
+ * need o de una activación.
+ */
+function designFailureProbe(client, call, name, invoke, build) {
+  const decl = fallbackPolicy(call);
+  if (decl?.action !== 'fail' || !decl.exceptionClass || !decl.error) return '';
+  const capture = call.bodiless ? `err := ${invoke}` : `_, err := ${invoke}`;
+  return `
+
+// ${client.id}.${call.name}: con el proveedor caído, la llamada devuelve el error que declara el diseño (${decl.error}).
+func ${name}ConElProveedorCaidoDevuelveElErrorDelDiseno(t *testing.T) {
+	provider := unreachable()
+	adapter := ${build}
+	${capture}
+	if !errors.Is(err, domain.${sentinelOf(decl.error)}) {
+		t.Fatalf("%v, quiero domain.${sentinelOf(decl.error)}", err)
+	}
+}`;
+}
+
+/** Un valor JSON de muestra para un campo de la respuesta, o null si su tipo no tiene uno sencillo. */
+function sampleJson(model, field) {
+  const element = (() => {
+    if (field.kind === 'enum') {
+      const name = field.list ? field.goType.slice(2) : field.goType;
+      return model.enums?.find((e) => goTypeName(e.name) === name || e.name === name)?.values?.[0]?.literal ?? null;
+    }
+    return (
+      {
+        string: 'x',
+        text: 'x',
+        file: 'x',
+        int: 1,
+        long: 1,
+        decimal: 1.5,
+        boolean: true,
+        uuid: '018f6f3c-7a2b-7c3d-8e4f-5a6b7c8d9e0f',
+        date: '2026-01-01',
+        timestamp: '2026-01-01T00:00:00Z'
+      }[field.base] ?? null
+    );
+  })();
+  if (element == null) return null;
+  return field.list ? [element] : element;
+}
+
+/**
+ * Con `onUnavailable: lastKnown` y su error: el proveedor contesta y el adaptador lo recuerda; el proveedor cae y, dentro de
+ * la ventana del diseño, sirve ESE valor marcado como último conocido; pasada la ventana, se rinde con el error declarado.
+ */
+function lastKnownProbe(model, client, call, name, args) {
+  const need = (call.needs ?? []).find(({ need: candidate }) => candidate.onUnavailable?.action === 'lastKnown')?.need;
+  // Solo si lastKnown es LA política de la llamada: con otra distinta por la misma llamada, el fallback es un TODO.
+  if (!need || fallbackPolicy(call)?.action !== 'lastKnown' || !remembersCall(model, client, call) || !need.onUnavailable.exceptionClass) return '';
+  const body = {};
+  for (const field of call.responseFields) {
+    const value = sampleJson(model, field);
+    if (value == null) return '';
+    body[field.wireName ?? field.name] = value;
+  }
+  const locals = args.map((arg, index) => `\targ${index} := ${arg}`).join('\n');
+  const invoke = (adapter) => `${adapter}.${callMethod(call)}(${['t.Context()', ...args.map((_, index) => `arg${index}`)].join(', ')})`;
+  const over = `${goUnexported(client.id)}Over`;
+  const sentinel = sentinelOf(need.onUnavailable.error);
+  return `
+
+// ${client.id}.${call.name} (need ${need.name}, onUnavailable: lastKnown): el último valor, dentro de su ventana; después, el error del diseño.
+func ${name}SirveElUltimoValorConocidoDentroDeSuVentanaYDespuesSeRinde(t *testing.T) {
+	clock := newManualClock()
+	store := NewLastKnownValues(clock.now)
+${locals ? `${locals}\n` : ''}	fresh, err := ${invoke(`${over}(t, answering(200, ${goString(JSON.stringify(body))}), store)`)}
+	if err != nil || fresh.Stale {
+		t.Fatalf("recién leído: %+v, %v; quiero el valor sin marcar", fresh, err)
+	}
+	down := ${over}(t, unreachable(), store)
+	clock.advance(${need.onUnavailable.maxAgeSeconds} * time.Second)
+	served, err := ${invoke('down')}
+	if err != nil || !served.Stale {
+		t.Fatalf("dentro de la ventana: %+v, %v; quiero el último valor marcado", served, err)
+	}
+	served.Stale = false
+	if !reflect.DeepEqual(served, fresh) {
+		t.Fatalf("dentro de la ventana sirvió %+v, quiero %+v", served, fresh)
+	}
+	clock.advance(time.Second)
+	if _, err := ${invoke('down')}; !errors.Is(err, domain.${sentinel}) {
+		t.Fatalf("fuera de la ventana: %v, quiero domain.${sentinel}", err)
+	}
+}`;
+}
+
+/** Un reloj que solo avanza cuando la prueba lo dice, con el almacén o con la concesión. */
+function manualClock(model) {
+  if (!usesLastKnown(model) && !usesOAuth2(model)) return '';
+  return `
+
+// manualClock es un reloj que solo avanza cuando la prueba lo dice.
+type manualClock struct {
+	at time.Time
+}
+
+func newManualClock() *manualClock {
+	return &manualClock{at: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+}
+
+func (c *manualClock) now() time.Time {
+	return c.at
+}
+
+func (c *manualClock) advance(by time.Duration) {
+	c.at = c.at.Add(by)
+}`;
+}
+
+/** Las pruebas del almacén del último valor conocido: ventana, clave y tope. */
+function lastKnownStoreTests(model) {
+  if (!usesLastKnown(model)) return '';
+  return `
+
+func TestElAlmacenRecuerdaDentroDeLaVentanaYOlvidaFueraDeElla(t *testing.T) {
+	clock := newManualClock()
+	store := NewLastKnownValues(clock.now)
+	store.Remember("llamada", LastKnownKey("sku-1"), "a")
+	clock.advance(time.Minute)
+	if got, ok := Recall[string](store, "llamada", LastKnownKey("sku-1"), time.Minute); !ok || got != "a" {
+		t.Fatalf("en el borde de la ventana: %q, %v", got, ok)
+	}
+	clock.advance(time.Millisecond)
+	if _, ok := Recall[string](store, "llamada", LastKnownKey("sku-1"), time.Minute); ok {
+		t.Fatal("fuera de la ventana sigue el valor")
+	}
+}
+
+func TestLaClaveDistingueLlamadaYParametros(t *testing.T) {
+	store := NewLastKnownValues(nil)
+	store.Remember("llamada", LastKnownKey("sku-1"), "a")
+	if _, ok := Recall[string](store, "llamada", LastKnownKey("sku-2"), time.Minute); ok {
+		t.Error("otro parámetro leyó el valor")
+	}
+	if _, ok := Recall[string](store, "otra", LastKnownKey("sku-1"), time.Minute); ok {
+		t.Error("otra llamada leyó el valor")
+	}
+	if LastKnownKey("a", "b") == LastKnownKey("a,b") {
+		t.Error("dos parámetros y uno con la coma dan la misma clave")
+	}
+	if LastKnownKey(nil) == LastKnownKey("") {
+		t.Error("sin valor y vacío dan la misma clave")
+	}
+}
+
+func TestElTopeTiraLoMasViejo(t *testing.T) {
+	clock := newManualClock()
+	store := NewLastKnownValues(clock.now)
+	for i := range maxLastKnownEntries + 1 {
+		clock.advance(time.Millisecond)
+		store.Remember("llamada", LastKnownKey(i), i)
+	}
+	if _, ok := Recall[int](store, "llamada", LastKnownKey(0), time.Hour); ok {
+		t.Error("lo más viejo sigue dentro")
+	}
+	if got, ok := Recall[int](store, "llamada", LastKnownKey(maxLastKnownEntries), time.Hour); !ok || got != maxLastKnownEntries {
+		t.Errorf("lo último no está: %d, %v", got, ok)
+	}
+}`;
+}
+
+/**
+ * Las pruebas de la concesión, contra un emisor falso: una petición por token aunque se pida tres veces y dos a la vez; la
+ * cabecera Basic y el formulario exactos; la renovación; el emisor caído y el token sin token_type, los dos como auth-grant; y
+ * la llamada de negocio que no sale sin token.
+ */
+function clientCredentialsTests(model) {
+  if (!usesOAuth2(model)) return '';
+  return String.raw`
+
+// fakeIssuer es un emisor de tokens falso: contesta lo que diga answer con el número de la petición y guarda cada una.
+type fakeIssuer struct {
+	mu       sync.Mutex
+	requests []*http.Request
+	bodies   []string
+	answer   func(n int) (int, string, error)
+	release  chan struct{}
+}
+
+func (f *fakeIssuer) RoundTrip(request *http.Request) (*http.Response, error) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	f.requests = append(f.requests, request)
+	f.bodies = append(f.bodies, string(body))
+	n := len(f.requests)
+	f.mu.Unlock()
+	if f.release != nil {
+		<-f.release
+	}
+	status, text, err := f.answer(n)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(text)), Header: http.Header{}, Request: request}, nil
+}
+
+func (f *fakeIssuer) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.requests)
+}
+
+func bearerIssuer(expiresIn int) *fakeIssuer {
+	return &fakeIssuer{answer: func(n int) (int, string, error) {
+		return 200, fmt.Sprintf("{\"access_token\":\"token-%d\",\"token_type\":\"Bearer\",\"expires_in\":%d}", n, expiresIn), nil
+	}}
+}
+
+// issuing es un emisor que siempre contesta lo mismo.
+func issuing(status int, body string) *fakeIssuer {
+	return &fakeIssuer{answer: func(int) (int, string, error) {
+		return status, body, nil
+	}}
+}
+
+func grantSettings() ClientCredentialsSettings {
+	return ClientCredentialsSettings{
+		ID:           "socio",
+		TokenURI:     &url.URL{Scheme: "http", Host: "emisor.test", Path: "/token"},
+		ClientID:     "cliente id",
+		ClientSecret: "secreto+&",
+		Scopes:       []string{"catalog.read", "catalog.write"},
+		Timeout:      2 * time.Second,
+	}
+}
+
+func TestLaConcesionPideUnTokenYLoReutilizaConLaCabeceraBasicYElFormularioDeSpring(t *testing.T) {
+	issuer := bearerIssuer(300)
+	grant := NewClientCredentials(grantSettings(), issuer, nil)
+	for range 3 {
+		if got, err := grant.Authorization(t.Context()); err != nil || got != "Bearer token-1" {
+			t.Fatalf("Authorization = %q, %v", got, err)
+		}
+	}
+	if issuer.count() != 1 {
+		t.Fatalf("%d peticiones al emisor, quiero una", issuer.count())
+	}
+	request := issuer.requests[0]
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("cliente+id:secreto%2B%26"))
+	if request.Method != http.MethodPost || request.Header.Get("Authorization") != want {
+		t.Errorf("%s con Authorization %q, quiero POST con %q", request.Method, request.Header.Get("Authorization"), want)
+	}
+	if issuer.bodies[0] != "grant_type=client_credentials&scope=catalog.read+catalog.write" {
+		t.Errorf("formulario %q", issuer.bodies[0])
+	}
+}
+
+func TestDosLlamadasALaVezSonUnaSolaPeticionAlEmisor(t *testing.T) {
+	issuer := bearerIssuer(300)
+	issuer.release = make(chan struct{})
+	grant := NewClientCredentials(grantSettings(), issuer, nil)
+	var group sync.WaitGroup
+	got := make([]string, 2)
+	for i := range got {
+		group.Go(func() {
+			got[i], _ = grant.Authorization(context.Background())
+		})
+	}
+	close(issuer.release)
+	group.Wait()
+	if issuer.count() != 1 || got[0] != "Bearer token-1" || got[1] != "Bearer token-1" {
+		t.Fatalf("%d peticiones y %v, quiero una y el mismo token", issuer.count(), got)
+	}
+}
+
+func TestQuienCancelaMientrasEsperaLaPuertaNoEsUnFalloDeLaConcesion(t *testing.T) {
+	grant := NewClientCredentials(grantSettings(), bearerIssuer(300), nil)
+	grant.gate <- struct{}{}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := grant.Authorization(ctx)
+	if _, ok := AsProviderFailure(err); ok || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Authorization = %v, quiero la cancelación de quien llama", err)
+	}
+}
+
+func TestElTokenSeRenuevaSesentaSegundosAntesDeCaducarYSinExpiresInDuraUnSegundo(t *testing.T) {
+	clock := newManualClock()
+	grant := NewClientCredentials(grantSettings(), bearerIssuer(300), clock.now)
+	authorize := func() string {
+		t.Helper()
+		got, err := grant.Authorization(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := authorize(); got != "Bearer token-1" {
+		t.Fatalf("primera: %q", got)
+	}
+	clock.advance(239 * time.Second)
+	if got := authorize(); got != "Bearer token-1" {
+		t.Fatalf("a 239 s: %q, quiero el mismo token", got)
+	}
+	clock.advance(time.Second)
+	if got := authorize(); got != "Bearer token-2" {
+		t.Fatalf("a 240 s: %q, quiero uno nuevo", got)
+	}
+	brief := &fakeIssuer{answer: func(n int) (int, string, error) {
+		return 200, fmt.Sprintf("{\"access_token\":\"t%d\",\"token_type\":\"bearer\"}", n), nil
+	}}
+	once := NewClientCredentials(grantSettings(), brief, clock.now)
+	for range 2 {
+		if _, err := once.Authorization(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if brief.count() != 2 {
+		t.Fatalf("sin expires_in, %d peticiones; quiero dos", brief.count())
+	}
+}
+
+func TestUnEmisorCaidoORechazandoOSinTokenBearerEsAuthGrant(t *testing.T) {
+	issuers := []*fakeIssuer{
+		{answer: func(int) (int, string, error) { return 0, "", errors.New("conexión rechazada") }},
+		issuing(401, "{}"),
+		issuing(200, "{\"access_token\":\"t\",\"expires_in\":300}"),
+		issuing(200, "{\"access_token\":\"t\",\"token_type\":\"mac\",\"expires_in\":300}"),
+		issuing(200, "{\"token_type\":\"Bearer\"}"),
+		issuing(200, "<html>"),
+		issuing(200, "[]"),
+	}
+	for i, issuer := range issuers {
+		_, err := NewClientCredentials(grantSettings(), issuer, nil).Authorization(t.Context())
+		if failure, ok := AsProviderFailure(err); !ok || failure.Kind != KindAuthGrant {
+			t.Errorf("emisor %d: %v, quiero un fallo de la concesión", i, err)
+		}
+	}
+}
+
+func TestConTokenLaPeticionLlevaElBearerYSinElNoSale(t *testing.T) {
+	provider := answering(200, "{\"ok\":true}")
+	granted := testClient("socio")
+	granted.Authorization = NewClientCredentials(grantSettings(), bearerIssuer(300), nil).Authorization
+	if _, err := NewExchange(provider).Send(t.Context(), granted, stockRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.sent()[0].Header.Get("Authorization"); got != "Bearer token-1" {
+		t.Errorf("Authorization = %q", got)
+	}
+	blocked := answering(200, "{}")
+	denied := testClient("socio")
+	denied.Authorization = NewClientCredentials(grantSettings(), issuing(401, "{}"), nil).Authorization
+	_, err := NewExchange(blocked).Send(t.Context(), denied, stockRequest())
+	if failure, ok := AsProviderFailure(err); !ok || failure.Kind != KindAuthGrant || len(blocked.sent()) != 0 {
+		t.Fatalf("%v con %d peticiones, quiero el fallo de la concesión sin salir", err, len(blocked.sent()))
+	}
+}
+
+func TestSinConcesionNoCuentaParaElCircuito(t *testing.T) {
+	failure := &ProviderFailure{Kind: KindAuthGrant, message: "x"}
+	if counts(failure) {
+		t.Fatal("quien no contesta es el emisor del token, no el proveedor de negocio")
+	}
+}
+
+func TestFormEncodeEsElDeURLEncoder(t *testing.T) {
+	if got := FormEncode("a b*c~d-e_f.g+ñ"); got != "a+b*c%7Ed-e_f.g%2B%C3%B1" {
+		t.Fatalf("FormEncode = %q", got)
+	}
+}`;
 }

@@ -23,7 +23,8 @@ import { contractOf, entryGateGuard, handlerType, messageType, operations, useCa
 import { repositoryOf, repositoryRoots, usesPersistence } from '@keel-system/keel-core/gen/features';
 import { goExported } from '../lib/go-projection.js';
 import { credentialFinders, portName, repositoryParam } from './repositories.js';
-import { activationClients, clientField, clientParam, clientPort, usesGoHttpClients } from './http-clients.js';
+import { isReplica, projectionDependencies } from './projections.js';
+import { activationClients, clientField, clientParam, clientPort, needClients, usesGoHttpClients } from './http-clients.js';
 import { orphanInternalOperations } from '@keel-system/keel-core/gen';
 import { MAIL_SENDER, TEMPLATE_RENDERER, mailDependencies, usesGoMail, usesTemplating } from './mail.js';
 import { parametersType, usesServiceParameters } from './service-parameters.js';
@@ -54,7 +55,9 @@ export function handlerDependencies(model, operation) {
   const deps = [];
   if (usesDependencies(model)) {
     const own = repositoryOf(model, operation);
-    const roots = repositoryRoots(model);
+    // Menos el de una réplica: la copia se lee por su lector y se escribe por su proyector, y sin el repositorio delante no
+    // hay un camino más corto.
+    const roots = repositoryRoots(model).filter((root) => root === own || !isReplica(model, root));
     for (const root of own ? [own, ...roots.filter((candidate) => candidate !== own)] : roots) {
       deps.push({
         name: repositoryParam(root),
@@ -75,9 +78,12 @@ export function handlerDependencies(model, operation) {
   }
   // El trabajo que el diseño le atribuye a esta operación en otro servidor (dependencies.activations, por triggeredBy):
   // el puerto del cliente se inyecta, o el camino de menor resistencia es no llamarlo.
-  for (const client of activationClients(model, operation)) {
+  // Y el dato que PIDE a otro servidor bajo demanda (dependencies.needs, por usedBy): sin el puerto delante, no lo pide.
+  for (const client of new Set([...activationClients(model, operation), ...needClients(model, operation)])) {
     deps.push({ name: clientParam(client), type: `domain.${clientPort(client)}`, doc: `${clientParam(client)} es el cliente saliente ${client.id} (http-clients), con su resiliencia ya puesta.`, arg: `deps.${clientField(client)}` });
   }
+  // La copia local de un dato de otro servidor: el lector a quien la lee y el proyector a quien la mantiene.
+  if (usesDependencies(model)) deps.push(...projectionDependencies(model, operation));
   // La salida por correo (mail.sentBy es el único enlace del DSL entre un caso de uso y el correo): sin el puerto delante,
   // el camino de menor resistencia es no mandarlo, y no lo detecta nada. El renderizador, a cualquier operación: el
   // asunto interpolado que se congela al aceptar una petición también es una plantilla.

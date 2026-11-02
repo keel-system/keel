@@ -1123,9 +1123,40 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
     - **Todos los sujetos**, porque el tramo tocó las muestras y los volcados comunes de las sondas: `db-check` **61/61** con
       PostgreSQL y **61/61** con MySQL, `doc-check` **15/15** (seis sujetos), `npm test` de keel-core **1313/1313**. La primera
       pasada conjunta la paró el sistema por falta de memoria: las redes pesadas, de una en una.
-- **Para retomar:** el **13h** (`needs` + OAuth2), en un contexto nuevo y con su red en vivo; después el 13i (corridas `asset-vault`
-  y `catalog`) tras `go-check` entero. El commit del 13g, propuesto: `feat(keel-go): la autoría de las escrituras, política y
-  declarada (incremento 13g)`.
+  - **13h-a, `needs`, el último valor conocido, OAuth2 y la réplica (hecho, 2026-11-01). `catalog-extended` entra ENTERO en la
+    frontera.** Los tramos 13i y 13j de keel-dotnet, en uno.
+    - **El dato bajo demanda**: el handler del `usedBy` recibe el puerto del cliente (`needClients`) y la nota de su política. El
+      fallback aplica `onUnavailable`: `fail` devuelve el error del diseño, `degrade` deja el TODO con el `degradedTo`.
+      `fallbackPolicy` es la regla que comparten el fallback y la prueba emitida: con dos políticas distintas por una llamada, el
+      TODO que las enumera.
+    - **`lastKnown`**: `clients/last_known.go` (`LastKnownValues`, en memoria y por proceso, con el reloj por parámetro; la edad se
+      mira al LEER y el tope es el de keel-core). `Recall[T]` es una función porque un método de Go no puede ser genérico. La clave
+      lee el valor de un puntero (`valueOf`), no su dirección. El resultado de la llamada gana `Stale`.
+    - **OAuth2**: `clients/client_credentials.go`, con la semántica de los otros tres. La puerta es un canal y no un Mutex, para
+      poder dejar de esperar cuando quien llama cancela, y esa cancelación no es un fallo de la concesión. `FormEncode` es el
+      URLEncoder de Java: `url.QueryEscape` trata distinto `~` y `*`. `Exchange.Send` pide el token antes de cada intento.
+    - **La réplica** (`src/scaffold/projections.js`, en `internal/application`): `<E>Projector` construye la copia con
+      `Rehydrate<E>`, como keel-dotnet, y descarta el hecho anterior o igual; `<E>Reader` aplica `onMiss` y lee por lote; la
+      `hydrate` del agente va en `<e>_hydrate.go`, sin la cabecera. El Save del adaptador de una réplica usa `r.tx.apart`, el
+      REQUIRES_NEW. **Diferencia a propósito**: en Go los handlers reciben todos los repositorios (corrida 12e), y aquí se les
+      quita el de la réplica salvo a la operación cuyo agregado es ella: la nota prohibía leerlo y la inyección lo ponía delante.
+      La frontera rechaza la réplica sobre documentos, que ninguna fixture declara.
+    - **Medido**: `test/needs.test.js` (12 casos, sin Go). Sobre `catalog-extended` generado: gofmt, vet y staticcheck vacíos y
+      `go test ./internal/...` en verde. `db-check --only=catalog-extended` 8/8 (61 sondas) en PostgreSQL y en MySQL, con las sondas
+      nuevas de `scripts/lib/replica-probes.js`, **falsadas en PostgreSQL** con `replica-tx`, `replica-order` y `replica-batch`, cada
+      una en rojo en su sonda. Los nueve sabotajes de `test/helpers/needs-sabotages.js` (`lastknown-*`, `oauth-*`) caen en las pruebas
+      que nombran, ejecutados con un guion suelto sobre lo generado; `lastknown-key` tumba además la del tope, y eso se añadió a su
+      `expect` después, sin volver a ejecutarlo. El bloque equivalente de `go-check` está escrito y **todavía no se ha ejecutado**.
+      `go-check --fixtures` **57/57**, `npm test` de keel-go **1042/1042**, keel-core **1313/1313**.
+    - **Sin medir**: la concesión contra un WireMock real (solo contra el emisor falso de la prueba emitida, como en keel-dotnet);
+      `stub-check`, aunque `exchange.go` cambió (una rama nueva, solo con concesión); `db-check` y `doc-check` enteros, pese a
+      tocar `db-probes.js` (la regla de «todos los sujetos»: el añadido solo emite con una réplica, pero falta pasarlos); los
+      sabotajes de la réplica en MySQL; y `go-check` entero.
+- **Para retomar:** el **13h-b**, lo que aún deja `asset-vault` fuera, medido: `authentication.scoping` (el `JwtCallerScope` de
+  los otros tres), los clientes HTTP sobre documentos (`usesGoHttpClients` exige relacional, y con ello los `needs` de ese diseño)
+  y el reclamo de reconciliación sobre documentos. Antes, en la terminal del usuario y de una en una: `db-check` y `doc-check`
+  enteros y `stub-check`. Después el 13i (corridas `asset-vault` y `catalog`) tras `go-check` entero. El commit del 13h-a, propuesto:
+  `feat(keel-go): los needs, el último valor conocido, OAuth2 y la réplica (incremento 13h-a)`.
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y

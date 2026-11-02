@@ -133,9 +133,9 @@ test('el adaptador es de build y no lleva un TODO; la política del fallback es 
 });
 
 test('lo que la frontera rechaza no emite clientes: go-check genera todas las fixtures saltándosela', () => {
-  for (const name of ['catalog-extended', 'asset-vault']) {
-    const { files: rejected } = plan(name);
-    assert.ok(!rejected.some((file) => file.path.startsWith(clients)), name);
-    assert.ok(!rejected.some((file) => file.path.endsWith('http-clients.yaml')), name);
-  }
+  // Los clientes sobre documentos: el único caso que queda (asset-vault, con su motor).
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'asset-vault'));
+  const { files: rejected } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'mongodb' } });
+  assert.ok(!rejected.some((file) => file.path.startsWith(clients)));
+  assert.ok(!rejected.some((file) => file.path.endsWith('http-clients.yaml')));
 });

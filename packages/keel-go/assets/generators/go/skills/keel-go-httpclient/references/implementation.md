@@ -118,5 +118,5 @@ ya no está en su `from` (`ErrInvalidStateTransition`). El estado vuelve con el 
 
 ## Lo que la frontera todavía rechaza
 
-`dependencies.needs`, `auth: oauth2-client-credentials` y un value object compuesto en una llamada: llegan en un
-incremento posterior de keel-go. Si llega aquí un diseño con ellos, se generó con otra versión: repórtalo.
+Un value object compuesto en el cuerpo o en la respuesta de una llamada, y una réplica sobre documentos: si llega aquí un
+diseño con ellos, se generó con otra versión: repórtalo.

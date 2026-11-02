@@ -349,9 +349,8 @@ function isComposite(layers, field) {
 
 /**
  * Lo que keel-go todavía no sabe hacer con los clientes salientes y las dependencias (incremento 11 de PLAN-KEEL-GO.md):
- * los clientes, su resiliencia y las activaciones se generan; esto, no, cada cosa con su motivo.
- *   · `needs` (el dato que se PIDE a otro servidor, bajo demanda o replicado) y `auth: oauth2-client-credentials`: llegan
- *     en el incremento 13, como en keel-nest y keel-dotnet;
+ * los clientes, su resiliencia, las activaciones, `needs` y OAuth2 (tramo 13h) se generan; esto, no, cada cosa con su motivo.
+ *   · la réplica sobre documentos: ninguna fixture documental la declara;
  *   · un value object compuesto en una llamada: en la URL no tiene forma (el rechazo neutral de los cuatro); en el cuerpo o
  *     en la respuesta sí, pero ninguna red de keel-go lo ha medido;
  *   · una llamada sin method/path o sin contrato tipado, o con una respuesta sin campos: el adaptador lleva la cabecera de
@@ -363,17 +362,14 @@ function isComposite(layers, field) {
 function outboundErrors(layers) {
   const clients = Object.entries(layers?.['http-clients']?.clients ?? {});
   const errors = [...compositeUrlParamErrors(layers, 'keel-go')];
-  const pending = (what, increment) =>
-    `${what} — keel-go todavía no lo genera (llega en el ${increment} de PLAN-KEEL-GO.md). Genera este diseño con keel-spring, keel-nest o keel-dotnet.`;
-  for (const [dependency, definition] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
-    const needs = Object.keys(definition?.needs ?? {});
-    if (needs.length > 0) errors.push(pending(`dependencies.${dependency}.needs (${needs.join(', ')}): los datos que se piden a otro servidor`, 'incremento 13'));
-  }
   const unmeasured = 'ninguna fixture que keel-go genere lo declara: sin red que mida lo emitido';
-  for (const [client, definition] of clients) {
-    if (definition?.auth?.type === 'oauth2-client-credentials') {
-      errors.push(pending(`http-clients.${client}.auth: oauth2-client-credentials (la concesión del token)`, 'incremento 13'));
+  for (const [dependency, definition] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
+    const replicated = Object.entries(definition?.needs ?? {}).filter(([, need]) => need?.strategy === 'replicated').map(([name]) => name);
+    if (replicated.length > 0 && documentPersistence(layers)) {
+      errors.push(`dependencies.${dependency}.needs (${replicated.join(', ')}): la réplica sobre documentos — keel-go todavía no la genera (${unmeasured}). Genera este diseño con keel-spring, keel-nest o keel-dotnet.`);
     }
+  }
+  for (const [client, definition] of clients) {
     for (const [call, spec] of Object.entries(definition?.calls ?? {})) {
       const composite = [...Object.entries(spec?.request?.body ?? {}), ...Object.entries(spec?.response?.fields ?? {})]
         .filter(([, field]) => isComposite(layers, field))

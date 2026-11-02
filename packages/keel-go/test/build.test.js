@@ -65,7 +65,7 @@ test('un diseño fuera de la frontera se rechaza nombrando keel-go, antes de esc
   assert.equal(exitCode, 1);
   assert.match(output, /capacidades que keel-go no genera/);
   // Ya no queda ninguna capa entera fuera (storage entró con el 13f): asset-vault se rechaza por lo que trae dentro.
-  assert.match(output, /needs \(thumbnail\): .*keel-go todavía no lo genera/);
+  assert.match(output, /el alcance por recurso \(authentication\.scoping\) — keel-go todavía no lo genera/);
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
