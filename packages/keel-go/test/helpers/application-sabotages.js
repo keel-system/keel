@@ -35,6 +35,15 @@ export const APPLICATION_SABOTAGES = [
     fails: 'TestAfterCommitSinTransaccionOcurreYa'
   },
   {
+    id: 'use-case-logger',
+    what: 'un handler registra con el slog global, sin el JSON ni la correlación del servicio',
+    file: AFTER_COMMIT,
+    find: '\t\treturn s.logger\n',
+    replace: '\t\t_ = s\n',
+    fails: 'TestUseCaseLoggerEsElDelCasoDeUso',
+    alsoFails: ['TestAfterCommitNoDependeDelClienteNiDeshaceNada']
+  },
+  {
     id: 'after-commit-cancel',
     what: 'el efecto hereda la cancelación de la petición',
     file: AFTER_COMMIT,

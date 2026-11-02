@@ -76,7 +76,8 @@ Guide* (decisiones y buenas prácticas) y *Go Proverbs*. Las reglas de Go de est
   cuando su `context.Context` se cancela.
 - Sin estado global mutable ni `init()` con efectos. El reloj, el generador de ids y la configuración se
   inyectan; el cableado está en `run`, a la vista, sin contenedores de inyección.
-
+- Un handler que tenga que registrar algo usa `useCaseLogger(ctx)` (`internal/application/after_commit.go`), nunca el `slog`
+  global: ese no lleva el JSON ni la correlación del servicio, porque el servidor no fija un logger por defecto.
 - **Cuando el diseño dice «después de confirmar»** (borrar un binario, avisar a un proveedor), el efecto va por
   `afterCommit(ctx, func(ctx context.Context) error { … })` (`internal/application/after_commit.go`, que build ya emite con
   la persistencia): lo ejecuta tras el commit y nunca si la transacción revierte; sin transacción, antes de volver. Su fallo

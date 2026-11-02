@@ -39,7 +39,7 @@ const AFTER_COMMIT_BODY = `
 // de que se devuelva la respuesta. Su fallo se registra y no deshace lo confirmado.
 func afterCommit(ctx context.Context, effect func(context.Context) error) {
 	// Se toma ahora: el efecto corre ya fuera del caso de uso, con el contexto de quien lo envolvió.
-	logger := settlementLogger(ctx)
+	logger := useCaseLogger(ctx)
 	afterUseCase(ctx, func(ctx context.Context) {
 		// Lo confirmado no depende de que el cliente siga esperando.
 		ctx = context.WithoutCancel(ctx)
@@ -59,8 +59,9 @@ type settlement struct {
 // settlementKey es la clave del asentamiento del caso de uso en curso.
 type settlementKey struct{}
 
-// settlementLogger es el logger del caso de uso en curso; sin ninguno, el del proceso.
-func settlementLogger(ctx context.Context) *slog.Logger {
+// useCaseLogger es el logger del servicio para el caso de uso en curso: el que un handler usa para registrar, con el JSON y la
+// correlación que no tiene el slog global. Sin caso de uso en curso, el del proceso.
+func useCaseLogger(ctx context.Context) *slog.Logger {
 	if s, _ := ctx.Value(settlementKey{}).(*settlement); s != nil {
 		return s.logger
 	}
@@ -198,6 +199,25 @@ func TestAfterCommitEsperaAlCasoDeUsoDeFuera(t *testing.T) {
 	}
 	if err := outer.Handle(t.Context(), "bien"); err != nil || runs != 1 {
 		t.Fatalf("el de fuera confirma: err %v, %d ejecuciones (quería 1)", err, runs)
+	}
+}
+
+func TestUseCaseLoggerEsElDelCasoDeUso(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	handler := settleCommand(logger, CommandHandlerFunc[string](func(ctx context.Context, msg string) error {
+		useCaseLogger(ctx).WarnContext(ctx, msg)
+		// Despachado sin transacción abarcadora sigue siendo el suyo: no hay asentamiento abierto, pero sí logger.
+		useCaseLogger(WithoutTransaction(ctx)).WarnContext(ctx, msg+"-sin-transaccion")
+		return nil
+	}))
+	if err := handler.Handle(t.Context(), "aviso"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"\\"aviso\\"", "\\"aviso-sin-transaccion\\""} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("falta %s en el log del caso de uso: %q", want, logs.String())
+		}
 	}
 }
 

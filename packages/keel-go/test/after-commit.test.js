@@ -48,3 +48,10 @@ test('la constitución y la skill de S3 enseñan afterCommit, y lo que enseñan 
   assert.match(constitution, /internal\/application\/after_commit\.go/);
   assert.ok(content(files, 'internal/application/after_commit.go'));
 });
+
+test('la constitución enseña useCaseLogger, y lo que enseña existe', () => {
+  const { files } = plan('catalog-extended');
+  const constitution = files.find((file) => file.path === 'docs/keel/constitution.md').content;
+  assert.match(constitution, /useCaseLogger\(ctx\)/);
+  assert.match(content(files, 'internal/application/after_commit.go'), /^func useCaseLogger\(ctx context\.Context\) \*slog\.Logger \{$/m);
+});

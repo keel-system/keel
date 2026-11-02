@@ -1204,11 +1204,14 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       en verde, y `check-idempotency.sh` en ROJO, como debe recién generado.
     - Medido: `npm test` 1063/1063, `go-check` entero **160/160** (lanzado por el usuario, con `-race` y los sabotajes `after-commit-*`),
       `broker-check --broker=kafka` 30/30. **Sin medir**: el borrado de punta a punta.
-- **Para retomar:** lanzar `asset-vault`, en `corrida-asset-vault-go-1102/services/asset-vault-go`: `go mod tidy` y `/keel-generate-go`, en otra sesión. Después,
-  contrastar su informe con la huella y registrarla en `docs/corridas/`. Falta rehacer `removeProductImage` en catalog para medir el
-  borrado. Sin arreglar: un handler no recibe logger y el servidor no fija `slog.SetDefault`, así que un
-  `slog.WarnContext` del agente sale sin el JSON ni la correlación del servicio. El commit de este tramo, propuesto:
-  `fix(keel-go): el borrado tras confirmar y la sesión de Kafka, de la corrida catalog (incremento 13i)`.
+    - **`asset-vault` hecha (2026-11-02, `3baae545`): 32/32, huella 16** (14 TODO, 2 consultas; `docs/corridas/2026-11-02-asset-vault-go.md`), sin huecos nuevos del
+      generador. `FL-AST-004-B` mide el alcance del listado, y `FL-QUA-001` el primer uso real de `afterCommit`.
+    - `useCaseLogger(ctx)` (antes `settlementLogger`, interno): el logger del servicio para un handler, enseñado en la constitución y falsado con `use-case-logger`. `conventions/context.md`
+      enseñaba `slog.InfoContext`, el global. `npm test` 1065/1065, `go-check --fixtures` 57/57.
+    - **`catalog` repetida, PREPARADA y sin lanzar**: `corrida-catalog-go-1102`, **347 archivos**, para medir el borrado de `removeProductImage`. Sobre una copia: gofmt, vet, staticcheck, build y
+      `go test ./internal/...` en verde, y `check-idempotency.sh` en ROJO, como debe recién generado.
+- **Para retomar:** lanzar `corrida-catalog-go-1102/services/catalog-go`: `go mod tidy` y `/keel-generate-go`, en otra sesión. Después, leer `remove_product_image_command_handler.go`: ningún escenario
+  afirma el borrado, así que la matriz no lo mide. Esperado: `fileStorage.Delete` dentro de `afterCommit`, y `useCaseLogger` en vez de `slog` global. Con eso se cierra el incremento 13.
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y

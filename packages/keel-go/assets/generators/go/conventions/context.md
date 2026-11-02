@@ -15,7 +15,7 @@ externo. Si se corta en algún punto, una petición cancelada sigue trabajando p
 - `context.Background()` solo en `main` y `context.TODO()` en ningún sitio. En las pruebas, `t.Context()`. Todo lo
   demás **hereda** el contexto que recibió.
 - Se usan las variantes que lo reciben: `QueryContext`, `ExecContext`, `NewRequestWithContext`,
-  `slog.InfoContext`.
+  `logger.InfoContext`.
 - Un plazo propio se deriva del recibido y se libera siempre:
 
   ```go
