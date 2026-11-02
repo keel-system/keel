@@ -79,7 +79,9 @@ Las claves van en este orden.
 }
 ```
 
-**Página** — `items`, `page`, `size`, `totalElements`, `totalPages`.
+**Página** — `items`, `page`, `size`, `totalElements`, `totalPages`. La página vacía es `items: []`,
+`totalElements: 0` y `totalPages: 0`, con el `page` y el `size` que se pidieron; vale igual para una página
+fuera de rango, aunque el listado tenga elementos en otras.
 
 **Envoltura de un evento** — `metadata` y `data`; la `metadata`, en este orden: `eventId`,
 `eventType`, `eventVersion`, `occurredAt`, `source`, `correlationId`, `traceparent` (ver

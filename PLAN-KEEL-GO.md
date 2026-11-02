@@ -1210,8 +1210,11 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       enseñaba `slog.InfoContext`, el global. `npm test` 1065/1065, `go-check --fixtures` 57/57.
     - **`catalog` repetida, PREPARADA y sin lanzar**: `corrida-catalog-go-1102`, **347 archivos**, para medir el borrado de `removeProductImage`. Sobre una copia: gofmt, vet, staticcheck, build y
       `go test ./internal/...` en verde, y `check-idempotency.sh` en ROJO, como debe recién generado.
-- **Para retomar:** lanzar `corrida-catalog-go-1102/services/catalog-go`: `go mod tidy` y `/keel-generate-go`, en otra sesión. Después, leer `remove_product_image_command_handler.go`: ningún escenario
-  afirma el borrado, así que la matriz no lo mide. Esperado: `fileStorage.Delete` dentro de `afterCommit`, y `useCaseLogger` en vez de `slog` global. Con eso se cierra el incremento 13.
+    - **`catalog` repetida hecha (`d0648c99`): 56/56, huella 23** (`docs/corridas/2026-11-02-catalog-go-v2.md`). `removeProductImage` borra con `afterCommit`, leído en el handler; que el binario
+      desaparezca de MinIO sigue sin medir, porque ningún escenario lo afirma. Destapó que `NewPage` no daba la forma de la página vacía y que el contrato no llegaba al proyecto: el árbitro culpó al
+      diseño. Arreglado sin commit (`NewPage`, `page_shape_test.go`, sabotaje `empty-page`, `wire-contract.md`). `npm test` 1066/1066 y keel-core 1313/1313, `go-check --fixtures` 57/57.
+- **Para retomar:** falta `go-check` entero con `empty-page` y `use-case-logger`, y con eso se cierra el incremento 13. Pendiente fuera de keel-go: keel-nest y keel-spring toman los totales reales en la
+  página fuera de rango (keel-dotnet sin mirar); su agente los corrige a mano. Siguiente: el incremento 14 de este plan.
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y

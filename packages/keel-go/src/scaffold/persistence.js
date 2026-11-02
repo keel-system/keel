@@ -47,7 +47,7 @@ import { discriminatorColumn } from '@keel-system/keel-core/gen/relational';
 import { repositoryRoots, usesRelational } from '@keel-system/keel-core/gen/features';
 import { GENERATED_HEADER, alignRows } from '../lib/go-source.js';
 import { relationalEngine, sqlDialect } from '../lib/relational-engine.js';
-import { domainPath, layout, packageFile } from './render.js';
+import { applicationPath, domainPath, layout, packageFile } from './render.js';
 import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
 import { storeTables } from './messaging-stores.js';
 import { reconciliationTables } from './reconciliation-claim.js';
@@ -60,7 +60,7 @@ export const BASELINE_FILE = '00001_baseline.sql';
 
 export function generate(model) {
   const files = [];
-  if (repositoryRoots(model).length > 0) files.push(pageableFile(model));
+  if (repositoryRoots(model).length > 0) files.push(pageableFile(model), pageShapeTest(model));
   if (!usesRelational(model)) return files;
   const { store } = layout(model);
   const { label } = sqlDialect(model);
@@ -79,6 +79,31 @@ export function generate(model) {
 }
 
 // ─── La página ───────────────────────────────────────────────────────────────────────────────────
+
+// La forma de la página, en una prueba emitida (corrida catalog, 2026-11-02: FL-PRD-003-D). En application porque internal/domain
+// no tiene pruebas propias, y go-check la falsa con el sabotaje empty-page.
+function pageShapeTest(model) {
+  return {
+    path: applicationPath(model, 'page_shape').replace(/\.go$/, '_test.go'),
+    content: packageFile(model, layout(model).application, { imports: ['testing', 'internal/domain'], body: PAGE_SHAPE_TEST })
+  };
+}
+
+const PAGE_SHAPE_TEST = `
+func TestLaPaginaVaciaEsCeroElementosYCeroPaginasTambienFueraDeRango(t *testing.T) {
+	page := domain.NewPage[string](nil, domain.Pageable{Page: 5, Size: 2}, 3)
+	if page.TotalElements != 0 || page.TotalPages != 0 || page.Number != 5 || page.Size != 2 {
+		t.Fatalf("fuera de rango: %+v (quería 0 elementos, 0 páginas, page 5 y size 2)", page)
+	}
+}
+
+func TestUnaPaginaConElementosLlevaSusTotales(t *testing.T) {
+	page := domain.NewPage([]string{"a"}, domain.Pageable{Page: 1, Size: 2}, 3)
+	if page.TotalElements != 3 || page.TotalPages != 2 {
+		t.Fatalf("con elementos: %+v (quería 3 elementos y 2 páginas)", page)
+	}
+}
+`;
 
 function pageableFile(model) {
   const { domain } = layout(model);
@@ -122,8 +147,12 @@ type Page[T any] struct {
 ${pageResultFields.join('\n')}
 }
 
-// NewPage construye la página de items dentro de pageable, de un total de filas.
+// NewPage construye la página de items dentro de pageable, de un total de filas. Sin elementos es la página vacía del
+// contrato: cero elementos y cero páginas, también fuera de rango, con el page y el size que se pidieron.
 func NewPage[T any](items []T, pageable Pageable, total int64) Page[T] {
+	if len(items) == 0 {
+		return Page[T]{Items: items, Number: pageable.Page, Size: pageable.Size}
+	}
 	pages := int32(1)
 	if pageable.Size > 0 {
 		pages = int32((total + int64(pageable.Size) - 1) / int64(pageable.Size))

@@ -9,6 +9,14 @@ const AFTER_COMMIT = `${APPLICATION}/after_commit.go`;
 
 export const APPLICATION_SABOTAGES = [
   {
+    id: 'empty-page',
+    what: 'una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato',
+    file: 'internal/domain/pageable.go',
+    find: '\tif len(items) == 0 {\n\t\treturn Page[T]{Items: items, Number: pageable.Page, Size: pageable.Size}\n\t}\n',
+    replace: '',
+    fails: 'TestLaPaginaVaciaEsCeroElementosYCeroPaginasTambienFueraDeRango'
+  },
+  {
     id: 'after-commit-now',
     what: 'afterCommit no espera: el efecto corre dentro de la transacción',
     file: AFTER_COMMIT,

@@ -263,7 +263,7 @@ Quien escribe estas pruebas no puede mirar el código, así que la forma exacta 
 | Campo sin valor | `null` o ausente según la convención del servicio: decide si la clave va en el JSON esperado |
 | `PATCH` | ausente ≠ `null` explícito cuando el diseño lo declara: dos escenarios |
 | `Location` | URL **absoluta** (esquema y host de la petición, como los otros tres servidores): se afirma su **final** con `strings.HasSuffix`, nunca la URL exacta, aunque el `Then` escriba solo la ruta |
-| `page`/`size` fuera de rango | no son error: `size` < 1 → `defaultSize`, `size` > `maxSize` → `maxSize`, `page` < 0 → 0. Un 400 solo si el escenario lo fija |
+| `page`/`size` fuera de rango | no son error: `size` < 1 → `defaultSize`, `size` > `maxSize` → `maxSize`, `page` < 0 → 0. Un 400 solo si el escenario lo fija. Una página sin elementos lleva `totalElements` y `totalPages` a 0, también fuera de rango: lo hace `domain.NewPage` |
 
 ## Aserciones: el cuerpo completo o nada
 
