@@ -913,7 +913,7 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       `keel-go-database` y `keel-go-mongodb`, con el ejemplo de la doc compilado contra lo emitido en los dos modelos. Y
       fuera de la huella, `logrus` fijado a v1.8.3 como `// indirect` (kind `pin` de `go-stack.js`; la vista del manifiesto
       lo conserva solo con esa versión): raymond lo arrastraba con GO-2025-4188. **Con esto el inc. 12 queda cerrado.**
-- **Inc. 13 — en curso (abierto el 2026-11-01).** El correo ya entró en el 12e-b. **El orden es el de keel-nest y
+- **Inc. 13 — CERRADO (2026-11-01 a 2026-11-02).** El correo ya entró en el 12e-b. **El orden es el de keel-nest y
   keel-dotnet, y por el mismo motivo**: `payment-checkout` cabe en la frontera salvo la capa y el parámetro `currency`
   entregado a un handler (medido: son sus dos únicos rechazos), así que pagos es el único tramo que se cierra con corrida
   sin abrir otros frentes; caché y storage los declaran `asset-vault` y `catalog-extended`, que arrastran además `needs`,
@@ -1213,8 +1213,10 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
     - **`catalog` repetida hecha (`d0648c99`): 56/56, huella 23** (`docs/corridas/2026-11-02-catalog-go-v2.md`). `removeProductImage` borra con `afterCommit`, leído en el handler; que el binario
       desaparezca de MinIO sigue sin medir, porque ningún escenario lo afirma. Destapó que `NewPage` no daba la forma de la página vacía y que el contrato no llegaba al proyecto: el árbitro culpó al
       diseño. Arreglado sin commit (`NewPage`, `page_shape_test.go`, sabotaje `empty-page`, `wire-contract.md`). `npm test` 1066/1066 y keel-core 1313/1313, `go-check --fixtures` 57/57.
-- **Para retomar:** falta `go-check` entero con `empty-page` y `use-case-logger`, y con eso se cierra el incremento 13. Pendiente fuera de keel-go: keel-nest y keel-spring toman los totales reales en la
-  página fuera de rango (keel-dotnet sin mirar); su agente los corrige a mano. Siguiente: el incremento 14 de este plan.
+    - **`go-check` entero: 162/162** (lanzado por el usuario, 2026-11-02, generador `009bfcf6`, con `-race` y los sabotajes `empty-page` y `use-case-logger`). **Incremento 13 CERRADO.** Tras los arreglos del 13i
+      no se han vuelto a pasar `db-check`, `doc-check`, `security-check`, `cache-check` ni `stub-check`: los cubren las dos corridas, en lo que ejercitan.
+- **Para retomar:** el incremento 13 está cerrado; el siguiente es el 14, telemetría y despliegue, en contexto nuevo. Pendiente fuera de keel-go: keel-nest y keel-spring toman los totales reales en la página fuera de rango (keel-dotnet sin
+  mirar), y su agente los corrige a mano. Ningún escenario de `catalog` afirma que el binario desaparezca de MinIO.
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y
