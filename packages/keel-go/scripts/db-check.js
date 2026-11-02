@@ -32,7 +32,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
-import { FIXTURES_DIR, makeWorkspace } from '../test/helpers/workspace.js';
+import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, makeWorkspace } from '../test/helpers/workspace.js';
 import { goView } from '../test/helpers/contract.js';
 import { baselineOf, goSchema } from '../test/helpers/schema.js';
 import { probeFile } from './lib/db-probes.js';
@@ -107,7 +107,9 @@ try {
   // los generadores, los que salen de una fixture relacional (los mismos que miden keel-dotnet y keel-nest).
   const probeSubjects = [
     ...relational.map((name) => ({ name, from: name, mutate: null })),
-    ...FINDER_DESIGNS.filter((design) => allRelational.includes(design.from) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: design.mutate }))
+    ...FINDER_DESIGNS.filter((design) => allRelational.includes(design.from) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: design.mutate })),
+    // La autoría (13g): los derivados relacionales, que otro nombre de servicio hace su propio módulo.
+    ...AUTHORSHIP_DESIGNS.filter((design) => allRelational.includes(design.from) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
   ];
 
   // ─── El esquema ─────────────────────────────────────────────────────────────────────────────────
@@ -139,7 +141,7 @@ try {
   for (const { name, from, mutate } of probeSubjects) {
     // Toda la fixture, como go-check --fixtures: planService no pasa por la frontera.
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
-    if (mutate) mutate(layers);
+    if (mutate) mutate(layers, manifest);
     const plan = planService({ manifest, layers, workspace: FIXTURES_DIR, stack });
     let files = plan.files;
     if (sabotage) {

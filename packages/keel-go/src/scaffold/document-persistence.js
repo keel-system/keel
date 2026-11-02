@@ -27,6 +27,7 @@
 // une a la transacción sin verla, como la propagación por defecto de Spring. Lo que tiene que confirmar APARTE (el relay
 // del outbox, la guarda de un mensaje, un reclamo) usa `outside(ctx)`, que la quita.
 
+import { usesDeclaredAuthorship } from './audit-actor.js';
 import { CONCURRENT_MODIFICATION_MESSAGE, UNKNOWN_INTEGRITY_MESSAGE, constraintErrors, declaredConcurrencyError } from '@keel-system/keel-core/gen/constraint-errors';
 import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
 import { documentIndexes, exportIndexesScript } from '@keel-system/keel-core/gen/document';
@@ -97,7 +98,7 @@ export function generate(model) {
     { path: `${store.dir}/errors.go`, content: packageFile(model, store, { imports: ['errors', 'strings', MONGO_DRIVER, 'internal/domain'], body: errorsBody(model) }) },
     {
       path: `${store.dir}/bson_values.go`,
-      content: packageFile(model, store, { imports: ['encoding/json/jsontext', 'errors', 'fmt', 'math', 'time', 'github.com/google/uuid', BSON, 'internal/platform/wire'], body: bsonValuesBody() })
+      content: packageFile(model, store, { imports: ['encoding/json/jsontext', 'errors', 'fmt', 'math', 'time', 'github.com/google/uuid', BSON, 'internal/platform/wire'], body: bsonValuesBody(usesDeclaredAuthorship(model)) })
     },
     { path: 'infra/export-indexes.sh', content: exportIndexesScript(model, PLATFORM) }
   ];
@@ -502,7 +503,7 @@ func indexIn(message string) error {
 
 // ─── bson_values.go ──────────────────────────────────────────────────────────────────────────────
 
-function bsonValuesBody() {
+function bsonValuesBody(declaredActor) {
   return `
 // Los valores entre el dominio y el documento, con la representación física del contrato (keel-core/gen/document.js), la
 // que escriben y leen también los servidores de keel-spring, keel-nest y keel-dotnet del mismo diseño:
@@ -756,7 +757,7 @@ func each[T any](items []T, write func(T) any) bson.A {
 // encoder escribe un documento y recoge el primer valor que no cabe en su representación: un decimal de más de 34
 // dígitos no tiene Decimal128.
 type encoder struct {
-	err error
+	err error${declaredActor ? '\n\t// actor es quien escribe: la autoría que declara el dominio la estampa el guardado.\n\tactor string' : ''}
 }
 
 // decimal escribe un decimal como Decimal128 con su escala.

@@ -23,7 +23,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
 import { planService } from '../src/scaffold/index.js';
-import { FIXTURES_DIR, makeWorkspace } from '../test/helpers/workspace.js';
+import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, makeWorkspace } from '../test/helpers/workspace.js';
 import { docProbeFile } from './lib/doc-probes.js';
 import { DOC_SABOTAGES as SABOTAGES, applyDocSabotage } from '../test/helpers/doc-sabotages.js';
 import { resolveRuntime, startMongo, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
@@ -61,9 +61,15 @@ const root = makeWorkspace('keel-go-doc-check-');
 try {
   const subjects = [];
   let applied = 0;
-  for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(path.join(FIXTURES_DIR, entry, 'service.keel.yaml')))) {
+  // Las fixtures y el diseño derivado de la autoría declarada (13g).
+  const designs = [
+    ...fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(path.join(FIXTURES_DIR, entry, 'service.keel.yaml'))).map((name) => ({ name, from: name, mutate: null })),
+    ...AUTHORSHIP_DESIGNS
+  ];
+  for (const { name, from, mutate } of designs) {
     if (only && name !== only) continue;
-    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
+    if (mutate) mutate(manifest, layers);
     // Los sujetos son los diseños DOCUMENTALES (lo dice su persistence.keel.yaml), con su stack por defecto.
     if (layers?.persistence?.default?.model !== 'document') continue;
     // Toda la fixture, como go-check --fixtures: planService no pasa por la frontera.

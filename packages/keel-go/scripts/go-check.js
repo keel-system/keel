@@ -27,7 +27,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { makeWorkspace, mountDesign, runCommand, GO_READY_DESIGN } from '../test/helpers/workspace.js';
+import { AUTHORSHIP_DESIGNS, makeWorkspace, mountDesign, runCommand, GO_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { ALLOWED_LICENSES, LICENSE_EXCEPTIONS, MODULES, TOOLS } from '../src/lib/go-stack.js';
 import { GO_TOOLCHAIN } from '../src/lib/assets.js';
@@ -177,11 +177,17 @@ if (!step('Go disponible', version.ok && (Number(major) > 1 || Number(minor) >= 
 // las cachés de Go, que admiten acceso concurrente), y se informan en orden. Es el paso largo: en serie eran ~11 min.
 const fixturesRoot = makeWorkspace('keel-go-fixtures-');
 const fixtureDirs = [];
-for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(path.join(FIXTURES_DIR, entry, 'service.keel.yaml')))) {
+const checkedDesigns = [
+  ...fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(path.join(FIXTURES_DIR, entry, 'service.keel.yaml'))).map((name) => ({ name, from: name, mutate: null })),
+  // Lo que ninguna fixture declara: la autoría de política sobre product-catalog y la declarada (13g).
+  ...AUTHORSHIP_DESIGNS
+];
+for (const { name, from, mutate } of checkedDesigns) {
   // Cada fixture con persistencia relacional, también sobre MySQL (tramo 6d): otro paquete, otro driver y otro SQL. Si es
   // relacional lo dice su stack por defecto: un MySQL pedido para un diseño documental no es un caso.
   let relational = false;
-  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
+  if (mutate) mutate(manifest, layers);
   // Con capa messaging, con cada broker que keel-go conecta: sin broker en el stack no se emite su paquete, y su gofmt
   // no lo miraba nadie (corrida 9e, 2026-10-30: topology.go y rabbitmq_test.go sin formatear). Kafka (9f) y SNS/SQS (9g),
   // solo sobre el motor por defecto: lo que cambia con el motor no toca la conexión con el broker.

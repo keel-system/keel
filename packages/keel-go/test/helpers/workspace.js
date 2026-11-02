@@ -63,3 +63,36 @@ export async function runCommand(workspace, command, ...args) {
     Object.assign(console, saved);
   }
 }
+
+/**
+ * Los diseños DERIVADOS de la autoría (tramo 13g): lo que ninguna fixture que keel-go genere declara. La política
+ * `authorship: all` solo la declaran asset-vault (documental, fuera de la frontera por otras capas) y shop-api
+ * (relacional); la autoría `declared`, ninguna. Son los MISMOS parches que mide keel-dotnet (`product-catalog-authorship`
+ * en su db-check, `mailer-author` y `mailer-mongo-author` en UNCOVERED_BRANCHES), con otro nombre de servicio: cada
+ * sujeto es su propio módulo. Los recorren go-syntax, go-check, db-check y doc-check.
+ */
+export const AUTHORSHIP_DESIGNS = [
+  {
+    name: 'product-catalog-authorship',
+    from: 'product-catalog',
+    mutate(manifest, layers) {
+      manifest.service.name = 'product-catalog-authorship';
+      layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship: 'all' };
+    }
+  },
+  ...[
+    { name: 'mailer-author', from: 'notification-mailer' },
+    { name: 'mailer-mongo-author', from: 'notification-mailer-mongo' }
+  ].map(({ name, from }) => ({
+    name,
+    from,
+    mutate(manifest, layers) {
+      manifest.service.name = name;
+      layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship: 'declared' };
+      for (const entity of ['Template', 'TemplateVariable']) {
+        layers.domain.entities[entity].fields.createdBy = { type: 'string', generated: true };
+        layers.domain.entities[entity].fields.updatedBy = { type: 'string', generated: true };
+      }
+    }
+  }))
+];

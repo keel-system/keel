@@ -1103,9 +1103,29 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
       (13 casos, sin Go). `go-check --fixtures` **48/48** (las siete variantes con storage, recompiladas). `npm test` de
       keel-go **992/992**, keel-core **1313/1313**.
     - `asset-vault` y `catalog-extended` siguen fuera por `needs`, OAuth2, el alcance y la reconciliación documental.
-- **Para retomar:** el **13g** (autoría) en un contexto nuevo; después 13h (`needs` + OAuth2), con su red en vivo, y el 13i
-  (corridas `asset-vault` y `catalog`) tras `go-check` entero. El commit del 13f, propuesto: `feat(keel-go): el
-  almacenamiento de binarios, capa storage (incremento 13f)`.
+  - **13g, la autoría (hecho, 2026-11-01).** `src/scaffold/audit-actor.js`: `audit_actor.go` en
+    el paquete del almacén con la regla del AuditorAware (`sub` del token, si no el nombre del principal, si no
+    `system[:<correlación>]`) y `createdAuthor` solo con un `createdBy` declarado (una función sin usar es un hallazgo de
+    staticcheck), con la prueba emitida `audit_actor_test.go`. Sustituye a las dos copias de `auditActor`, que escribían siempre
+    `system` aunque hubiera token.
+    - **La autoría DECLARADA** la estampa el adaptador: en el relacional, `createdAuthor(e.CreatedBy(), actor)` en el alta y
+      `updated_by = actor` siempre (`created_by` no entra en el UPDATE); en el documental viaja en el `$set`, así que el
+      `encoder` lleva el actor y `createdAuthor` es lo que la conserva. La frontera rechaza una declarada opcional o que no sea
+      texto. Los campos de auditoría de tiempo declarados siguen siendo del dominio, como hasta ahora.
+    - **Medido**: `test/audit-actor.test.js` (8 casos), `npm test` de keel-go **1014/1014**, `go-check --fixtures` **57/57** (con
+      los derivados `AUTHORSHIP_DESIGNS`: `product-catalog-authorship`, `mailer-author`, `mailer-mongo-author`, los parches de
+      keel-dotnet). La sonda `_AuthorshipIsWhoCreatesAndWhoWritesLast` de `db-probes.js`, en verde en mailer-author y shop-api con
+      PostgreSQL y MySQL, en product-catalog-authorship con PostgreSQL y en mailer-mongo-author y asset-vault con MongoDB.
+      **Falsada** en su sonda con `actor-subject`, `actor-correlation`, `created-by-empty` (también en MySQL) y
+      `created-by-rewritten`, y en doc-check con `created-by-rewritten` y `actor-subject`. `db-check` entero con PostgreSQL:
+      **61/61**. Un defecto de la propia sonda: la muestra 70 era la clave «que no se guardó» de los finders por clave
+      (`n + 20`); ahora es la 170.
+    - **Todos los sujetos**, porque el tramo tocó las muestras y los volcados comunes de las sondas: `db-check` **61/61** con
+      PostgreSQL y **61/61** con MySQL, `doc-check` **15/15** (seis sujetos), `npm test` de keel-core **1313/1313**. La primera
+      pasada conjunta la paró el sistema por falta de memoria: las redes pesadas, de una en una.
+- **Para retomar:** el **13h** (`needs` + OAuth2), en un contexto nuevo y con su red en vivo; después el 13i (corridas `asset-vault`
+  y `catalog`) tras `go-check` entero. El commit del 13g, propuesto: `feat(keel-go): la autoría de las escrituras, política y
+  declarada (incremento 13g)`.
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y

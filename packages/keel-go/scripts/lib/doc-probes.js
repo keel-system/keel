@@ -57,6 +57,8 @@ const IMPORTS = [
   'internal/application',
   'internal/infrastructure/messaging',
   'internal/domain',
+  'internal/platform/correlation',
+  'internal/platform/security',
   'internal/platform/wire'
 ];
 

@@ -165,3 +165,10 @@ Cuando el `Then` acota el tiempo («llega en menos de 10 s»), ese número es pa
 espera de la prueba no puede ser mayor que el plazo del `Then`**. Si el mecanismo necesita más, es un hallazgo
 (`culprit: design` si el plazo es irreal, `culprit: code` si el mecanismo no cumple), no un motivo para relajar la
 aserción. Esperar menos sí es legítimo.
+
+## La autoría que el diseño declara
+
+Con `persistence.audit.authorship: declared`, `createdBy` y `updatedBy` son campos de la entidad, pero el dominio no conoce
+al llamante: en el alta se dejan **vacíos** (`""`) y los estampa el adaptador al guardar. `createdBy` vacío cuenta como
+ausente y se conserva después de nacer; `updatedBy` es siempre quien escribe. Lo guardado se relee, así que la respuesta
+ya los lleva. No los rellenes desde el handler ni le pases la identidad a la entidad para esto.

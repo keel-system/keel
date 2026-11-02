@@ -12,7 +12,7 @@ import { planService } from '../src/scaffold/index.js';
 import { probeFile } from '../scripts/lib/db-probes.js';
 import { DB_SABOTAGES, applyDbSabotage, sabotageApplies } from './helpers/db-sabotages.js';
 import { checkGoTree } from './helpers/go-tree.js';
-import { FIXTURES_DIR } from './helpers/workspace.js';
+import { AUTHORSHIP_DESIGNS, FIXTURES_DIR } from './helpers/workspace.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 
 const relational = fs.readdirSync(FIXTURES_DIR).filter((name) => {
@@ -22,7 +22,8 @@ const relational = fs.readdirSync(FIXTURES_DIR).filter((name) => {
 // Las fixtures relacionales y los diseños derivados de los finders que salen de una de ellas: los sujetos de db-check.
 const designs = [
   ...relational.map((name) => ({ name, from: name, mutate: null })),
-  ...FINDER_DESIGNS.filter((design) => relational.includes(design.from))
+  ...FINDER_DESIGNS.filter((design) => relational.includes(design.from)),
+  ...AUTHORSHIP_DESIGNS.filter((design) => relational.includes(design.from)).map((design) => ({ ...design, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
 ];
 // Los dos motores: db-check corre sobre cada uno (`--database=`), y cada sabotaje tiene que seguir aplicándose en los
 // motores donde existe su mecanismo.
@@ -30,7 +31,7 @@ const ENGINES = ['postgresql', 'mysql'];
 const subjects = ENGINES.flatMap((engine) =>
   designs.map(({ name, from, mutate }) => {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
-    if (mutate) mutate(layers);
+    if (mutate) mutate(layers, manifest);
     const plan = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: engine } });
     const probe = probeFile(plan.model, plan.files);
     const probes = [...probe.content.matchAll(/^func (Test\w+)\(t \*testing\.T\)/gm)].map((m) => m[1]);

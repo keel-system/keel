@@ -26,6 +26,7 @@ import { alignRows, goString } from '../lib/go-source.js';
 import { isDeclaredLockVersion } from './entities.js';
 import { entityFinders } from './finders.js';
 import { docComment, goFileName, isOptional, layout, localName, packageFile } from './render.js';
+import { declaredAuthorship, usesDeclaredAuthorship } from './audit-actor.js';
 import { emitsEvents, usesGoOutbox } from './messaging.js';
 import { claimDependencies, claimMethod, storedState } from './claim.js';
 import { credentialFinders, keyFinders, naturalKeyBatchFinder, portName, rankedEnums } from './repositories.js';
@@ -64,7 +65,7 @@ export function generate(model) {
     }
     files.push({ path: `${store.dir}/${goFileName(entity.name)}_repository.go`, content: packageFile(model, store, { imports: ADAPTER_IMPORTS, body: adapterBody(model, entity, uses) }) });
   }
-  files.push({ path: `${store.dir}/documents.go`, content: packageFile(model, store, { imports: [...ADAPTER_IMPORTS, 'internal/platform/correlation', 'slices', 'strings'], body: documentsBody(model, uses) }) });
+  files.push({ path: `${store.dir}/documents.go`, content: packageFile(model, store, { imports: [...ADAPTER_IMPORTS, 'slices', 'strings'], body: documentsBody(model, uses) }) });
   return files;
 }
 
@@ -194,6 +195,15 @@ function documentModel(model, entity) {
   return { entity, fields, version, audit };
 }
 
+/**
+ * La autoría DECLARADA (13g): el campo es del dominio, pero lo estampa el guardado como la de la política. Viaja en el $set,
+ * así que `createdAuthor` es lo que lo conserva al reescribir: el agregado trae el que leyó, y vacío es ausente.
+ */
+function authoredValue(entity, f, x) {
+  if (isOptional(f.field) || !declaredAuthorship(entity).includes(f.field.name)) return null;
+  return f.field.name === 'createdBy' ? `createdAuthor(${x}.${f.method}(), e.actor)` : 'e.actor';
+}
+
 /** encode<E>: el documento de una entidad (sin el `_id` de la raíz, la versión ni la auditoría, que pone el guardado). */
 function encodeFunction(model, doc, uses, root) {
   const name = doc.entity.name;
@@ -214,7 +224,7 @@ function encodeFunction(model, doc, uses, root) {
         : `orNullChild(${x}.${f.method}(), e.encode${f.child})`;
       if (!f.many) uses.add('orNullChild');
     } else {
-      value = fieldWrite(f.field, `${x}.${f.method}()`, uses);
+      value = authoredValue(doc.entity, f, x) ?? fieldWrite(f.field, `${x}.${f.method}()`, uses);
     }
     elements.push(`\t\t{Key: ${goString(f.key)}, Value: ${value}},`);
   }
@@ -466,7 +476,6 @@ function saveMethod(model, entity, type, constant, id, idWrite, uses) {
   const created = doc.audit.filter((a) => a.role === 'createdDate' || a.role === 'createdBy');
   const updated = doc.audit.filter((a) => a.role === 'lastModifiedDate' || a.role === 'lastModifiedBy');
   const auditValue = (a) => (a.storage === 'date' ? 'instantValue(now)' : 'actor');
-  if (doc.audit.some((a) => a.storage !== 'date')) uses.add('auditActor');
   const prelude = [];
   if (doc.audit.some((a) => a.storage === 'date')) prelude.push('\t\tnow := time.Now().UTC()');
   if (doc.audit.some((a) => a.storage !== 'date')) prelude.push('\t\tactor := auditActor(ctx)');
@@ -514,7 +523,7 @@ func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.$
 		if err != nil {
 			return err
 		}
-		e := &encoder{}
+		e := &encoder{${usesDeclaredAuthorship(model) ? 'actor: auditActor(ctx)' : ''}}
 		fields := e.encode${name}(${local})
 		if e.err != nil {
 			return e.err
@@ -701,16 +710,6 @@ func optionalChild[T any](decode func(bson.Raw) (*T, error)) func(bson.RawValue)
 		}
 		return asSub(decode)(v)
 	}
-}`);
-  }
-  if (uses.has('auditActor')) {
-    blocks.push(`// auditActor es el autor de una escritura para la auditoría: el sistema, con la correlación de la petición o del
-// mensaje si la hay (SYSTEM_ACTOR de keel-core/gen/relational.js).
-func auditActor(ctx context.Context) string {
-	if id, ok := correlation.ID(ctx); ok {
-		return ${goString(`${SYSTEM_ACTOR}:`)} + id
-	}
-	return ${goString(SYSTEM_ACTOR)}
 }`);
   }
   const ranked = rankedEnums(model);

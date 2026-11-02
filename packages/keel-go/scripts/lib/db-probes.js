@@ -26,6 +26,9 @@
 // Las muestras respetan las cotas y los patrones del diseño (el texto de un patrón lo da `sampleFor`, el mismo de las
 // sondas de keel-nest y keel-dotnet), y cada número de muestra da valores distintos: dos muestras no comparten clave.
 
+import { declaredAuthorship } from '../../src/scaffold/audit-actor.js';
+import { usesCorrelation } from '../../src/scaffold/correlation.js';
+import { usesHttpSecurity } from '../../src/scaffold/security.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { constraintErrors, declaredConcurrencyError, indexName, keyShadow, partialUniqueIndexes } from '@keel-system/keel-core/gen';
 import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
@@ -84,6 +87,8 @@ const IMPORTS = [
   'internal/infrastructure/messaging',
   'internal/infrastructure/scheduler',
   'internal/domain',
+  'internal/platform/correlation',
+  'internal/platform/security',
   'internal/platform/wire'
 ];
 
@@ -421,6 +426,9 @@ export function sampleFunction(model, entity, ctx) {
       continue;
     } else if (member.declaredLock) {
       continue;
+    } else if (declaredAuthorship(entity).includes(member.name)) {
+      // La autoría declarada, como la deja el alta: vacía. La estampa el adaptador al guardar.
+      value = '""';
     } else if (member.field.list) {
       value = listExpr(model, member.field, ctx, 'n');
     } else if (member.field.isId) {
@@ -447,7 +455,8 @@ export function dumpFunction(model, entity) {
     const method = goExported(member.name);
     if (member.kind === 'relationMany') {
       lines.push(`\tfor i, child := range e.${method}() {\n\t\tout = append(out, fmt.Sprintf("${method}[%d]{%s}", i, dump${member.relation.entity}(child)))\n\t}`);
-    } else if (member.kind === 'relationOne') {
+    } else if (member.kind === 'relationOne' || declaredAuthorship(entity).includes(member.name)) {
+      // La autoría declarada no es lo que la muestra trajo sino quién escribió: la mide authorshipProbe.
       continue;
     } else if (member.kind === 'field' && member.field.kind === 'composite' && !member.field.list) {
       const vo = member.field.namedType;
@@ -523,6 +532,70 @@ export function concurrencyCode(model) {
   return declaredConcurrencyError(model)?.code ?? FRAMEWORK_ERRORS.concurrency.code;
 }
 
+/**
+ * La AUTORÍA (`persistence.audit.authorship`, tramo 13g) contra la base real: quien crea queda en created_by y no cambia al
+ * reescribir; quien escribe la última vez, en updated_by. Con `declared`, la muestra nace con la autoría vacía y las hijas
+ * también salen con el actor. El actor es el de auditActor: con seguridad, el `sub` del token (el nombre del principal es
+ * otro, para que la sonda los distinga); sin ella, el sistema con la correlación. Los mismos casos que keel-nest y keel-dotnet.
+ */
+function authorshipProbe(model, root, { repo, id, document }) {
+  if (root.auditAuthorship !== 'all' && root.auditAuthorship !== 'declared') return [];
+  const security = usesHttpSecurity(model);
+  const traced = usesCorrelation(model);
+  const writer = security
+    ? 'security.WithPrincipal(ctx, &security.Principal{Kind: security.TokenPrincipal, Name: "nombre-" + who, Claims: map[string]jsontext.Value{"sub": jsontext.Value(`"` + who + `"`)}})'
+    : traced
+      ? 'correlation.WithID(ctx, who)'
+      : 'ctx';
+  const expected = security ? 'who' : traced ? 'systemActor + ":" + who' : 'systemActor';
+  const uuidId = root.idField?.goType === 'uuid.UUID' || !root.idField;
+  const stored = document
+    ? `	raw := rawOf(t, ${goString(root.collectionName)}, ${uuidId ? `uuidValue(state.${id})` : `state.${id}`})
+	createdBy, updatedBy := raw.Lookup("created_by").StringValue(), raw.Lookup("updated_by").StringValue()`
+    : `	var createdBy, updatedBy string
+	if err := must(probeTx.conn(ctx)).QueryRowContext(ctx, ${goString(`SELECT created_by, updated_by FROM ${root.tableName} WHERE ${root.idField?.columns?.name ?? 'id'} = ${sqlDialect(model).param(1)}`)}, state.${id}).Scan(&createdBy, &updatedBy); err != nil {
+		t.Fatal(err)
+	}`;
+  const children = domainMembers(model, root)
+    .filter((member) => member.kind === 'relationMany')
+    .filter((member) => declaredAuthorship(model.entities.find((candidate) => candidate.name === member.relation.entity)).length === 2)
+    .map((member) => {
+      const method = goExported(member.name);
+      return `	if len(rewritten.${method}()) == 0 {
+		t.Errorf("${method}: la muestra no trajo hijas: la autoría de las hijas no se ha medido")
+	}
+	for _, child := range rewritten.${method}() {
+		if child.CreatedBy() != actorOf("autor-que-crea") || child.UpdatedBy() != actorOf("autor-que-modifica") {
+			t.Errorf("${method}: la hija lleva created_by=%q y updated_by=%q", child.CreatedBy(), child.UpdatedBy())
+		}
+	}`;
+    });
+  return [`func Test${root.name}_AuthorshipIsWhoCreatesAndWhoWritesLast(t *testing.T) {
+	ctx := t.Context()
+	writer := func(who string) context.Context { return ${writer} }
+	actorOf := func(who string) string { return ${expected} }
+	state := sample${root.name}(t, 170)
+	if _, err := ${repo}.Save(writer("autor-que-crea"), domain.Rehydrate${root.name}(state)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	read, found, err := ${repo}.FindByID(ctx, state.${id})
+	if err != nil || !found {
+		t.Fatalf("FindByID: found=%v err=%v", found, err)
+	}
+	${children.length ? 'rewritten' : '_'}, err ${children.length ? ':=' : '='} ${repo}.Save(writer("autor-que-modifica"), read)
+	if err != nil {
+		t.Fatalf("el segundo guardado: %v", err)
+	}
+${stored}
+	if createdBy != actorOf("autor-que-crea") {
+		t.Errorf("created_by = %q: es de quien crea y no cambia al reescribir", createdBy)
+	}
+	if updatedBy != actorOf("autor-que-modifica") {
+		t.Errorf("updated_by = %q: es del último que escribe", updatedBy)
+	}${children.length ? `\n${children.join('\n')}` : ''}
+}`];
+}
+
 export function rootProbes(model, root, { document = false } = {}) {
   const name = root.name;
   const repo = repository(model, root);
@@ -556,6 +629,8 @@ ${expect('state', 'read')}	if want, got := dump${name}(domain.Rehydrate${name}(s
 		t.Errorf("la versión de un agregado nuevo es %s, no 0", show(v))
 	}` : ''}
 }`);
+
+  tests.push(...authorshipProbe(model, root, { repo, id, document }));
 
   // Sobre documentos, la constante del enum la mide la forma del documento crudo (doc-probes.js).
   const stored = document ? null : storedEnum(model, root);

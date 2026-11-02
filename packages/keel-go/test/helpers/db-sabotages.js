@@ -10,6 +10,7 @@ const BASELINE = new RegExp(`${STORE}migrations\\/.*\\.sql$`);
 const VALUES = new RegExp(`${STORE}values\\.go$`);
 const ERRORS = new RegExp(`${STORE}errors\\.go$`);
 const TRANSACTIONS = new RegExp(`${STORE}transactions\\.go$`);
+const AUDIT_ACTOR = new RegExp(`${STORE}audit_actor\\.go$`);
 
 // Los sabotajes: en qué archivos, qué texto (o expresión) y por qué; qué sondas tienen que caer (`expect`) y cuáles
 // pueden caer con ellas (`also`). Donde el texto emitido es otro en MySQL, `mysql` lleva su `from`/`to`: el MISMO
@@ -179,7 +180,15 @@ export const DB_SABOTAGES = {
     from: 'return t.fresh(ctx, options, func(_ context.Context, q DBTX) error {',
     to: 'return t.within(ctx, options.ReadOnly, func(_ context.Context, q DBTX) error {',
     expect: /^TestProcessed_SurvivesTheCallerRollback$/
-  }
+  },
+  // La autoría (13g). El actor deja de leer el `sub`: queda el nombre del principal, que es para mostrar.
+  'actor-subject': { files: AUDIT_ACTOR, from: 'principal.Kind == security.TokenPrincipal && found', to: 'principal.Kind == 0 && found', expect: /_Authorship/, also: /TestAuditActor/ },
+  // El actor sin petición autenticada pierde la correlación: queda `system` a secas.
+  'actor-correlation': { files: AUDIT_ACTOR, from: 'return systemActor + ":" + id', to: 'return systemActor + id[:0]', expect: /_Authorship/, also: /TestAuditActor/ },
+  // El alta deja de estampar la autoría declarada que llega vacía: la fila guarda el vacío del dominio.
+  'created-by-empty': { files: AUDIT_ACTOR, from: 'if current == "" {', to: 'if current == "-" {', expect: /_Authorship/, also: /TestCreatedAuthor/ },
+  // created_by se reescribe en cada guardado. Solo en PostgreSQL: el `?` de MySQL es posicional y no admite repetirlo.
+  'created-by-rewritten': { engines: ['postgresql'], files: REPOSITORY, from: /\bupdated_by = (\$\d+|EXCLUDED\.updated_by)/g, to: 'created_by = $1, updated_by = $1', expect: /_Authorship/ }
 };
 
 /** ¿Existe el mecanismo del sabotaje en el motor? */

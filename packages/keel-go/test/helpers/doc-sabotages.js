@@ -51,7 +51,11 @@ export const DOC_SABOTAGES = {
   // La guarda del envío escribe en la sesión del caso de uso: abortado este, la marca desaparece y el correo se repetiría.
   'send-guard': { files: REPOSITORY, from: 'raw, err := documents.FindOneAndUpdate(outside(ctx), filter, update, options.FindOneAndUpdate().SetReturnDocument(options.After)).Raw()', to: 'raw, err := documents.FindOneAndUpdate(ctx, filter, update, options.FindOneAndUpdate().SetReturnDocument(options.After)).Raw()', expect: /TakesItOnceAndSurvivesTheRollback/ },
   // El registro de idempotencia no se une a la transacción del caso de uso: abortado el comando, la clave queda marcada.
-  'idempotency-outside': { files: file('idempotency_store\\.go'), from: '\t\t_, err = documents.InsertOne(ctx, bson.D{', to: '\t\t_, err = documents.InsertOne(outside(ctx), bson.D{', expect: /IdempotencyStore_/ }
+  'idempotency-outside': { files: file('idempotency_store\\.go'), from: '\t\t_, err = documents.InsertOne(ctx, bson.D{', to: '\t\t_, err = documents.InsertOne(outside(ctx), bson.D{', expect: /IdempotencyStore_/ },
+  // La autoría declarada viaja en el $set: si el guardado no conserva la que el agregado leyó, created_by cambia al reescribir.
+  'created-by-rewritten': { files: file('audit_actor\\.go'), from: 'if current == "" {', to: 'if current != "-" {', expect: /_Authorship/, also: /TestCreatedAuthor/ },
+  // El actor deja de leer el `sub`: queda el nombre del principal, que es para mostrar.
+  'actor-subject': { files: file('audit_actor\\.go'), from: 'principal.Kind == security.TokenPrincipal && found', to: 'principal.Kind == 0 && found', expect: /_Authorship/, also: /TestAuditActor/ }
 };
 
 /** Aplica un sabotaje a los archivos emitidos: `{ files, changed }` (cuántos archivos tocó). */

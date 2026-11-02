@@ -36,6 +36,7 @@ import * as repositories from './repositories.js';
 import * as documentPersistence from './document-persistence.js';
 import * as documentRepositories from './document-repositories.js';
 import * as documentStores from './document-stores.js';
+import * as auditActor from './audit-actor.js';
 import * as serviceParameters from './service-parameters.js';
 import * as httpClients from './http-clients.js';
 import * as mail from './mail.js';
@@ -91,6 +92,7 @@ const GENERATORS = [
   repositories,
   documentPersistence,
   documentRepositories,
+  auditActor,
   documentStores,
   serviceParameters,
   httpClients,

@@ -10,7 +10,7 @@ import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { checkGoTree } from './helpers/go-tree.js';
-import { FIXTURES_DIR, makeWorkspace } from './helpers/workspace.js';
+import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, makeWorkspace } from './helpers/workspace.js';
 
 const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
 const workspace = makeWorkspace();
@@ -20,6 +20,15 @@ for (const fixture of fixtures) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
     const { model, files } = planService({ manifest, layers, workspace });
     assert.ok(files.some((file) => file.path.endsWith('.go')), 'no se emitió ningún .go');
+    assert.deepEqual(await checkGoTree(files, model.service.goModule), []);
+  });
+}
+
+for (const design of AUTHORSHIP_DESIGNS) {
+  test(`${design.name} (autoría, derivado de ${design.from}): el Go emitido es sintaxis válida y sus imports se resuelven y se usan`, async () => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, design.from));
+    design.mutate(manifest, layers);
+    const { model, files } = planService({ manifest, layers, workspace });
     assert.deepEqual(await checkGoTree(files, model.service.goModule), []);
   });
 }

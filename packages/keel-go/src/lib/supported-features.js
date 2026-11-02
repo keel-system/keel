@@ -74,6 +74,7 @@ export function checkSupportedFeatures(manifest, layers) {
   } else if (declared.includes('persistence')) {
     errors.push(...unmeasuredShapes(manifest, layers));
   }
+  errors.push(...authorshipErrors(layers));
   errors.push(...scheduledWithArguments(manifest, layers));
   errors.push(...parameterErrors(manifest, layers));
   errors.push(...outboundErrors(layers));
@@ -95,6 +96,28 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
   return { errors, warnings };
+}
+
+/**
+ * La autoría declarada (tramo 13g) la estampa el adaptador sobre un campo de texto obligatorio o generado: el dominio de Go
+ * lo guarda como `string` y vacío es ausente. Declarada opcional o de otro tipo no tiene esa forma, y ninguna fixture la
+ * declara: sin red que mida lo emitido.
+ */
+function authorshipErrors(layers) {
+  if (layers?.persistence?.audit?.authorship !== 'declared') return [];
+  const errors = [];
+  for (const [name, entity] of Object.entries(layers?.domain?.entities ?? {})) {
+    for (const member of ['createdBy', 'updatedBy']) {
+      const field = entity?.fields?.[member];
+      if (field && (!['string', 'text'].includes(field.type) || !(field.required || field.generated))) {
+        errors.push(
+          `domain.entities.${name}.fields.${member}: keel-go estampa la autoría declarada sobre un texto obligatorio o generado (ninguna fixture que genere lo declara de otra forma: ` +
+            'sin red que mida lo emitido). Decláralo string con generated: true, o genera este diseño con keel-spring, keel-nest o keel-dotnet.'
+        );
+      }
+    }
+  }
+  return errors;
 }
 
 /**

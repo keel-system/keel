@@ -37,6 +37,7 @@ import { enumConstant, goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { sqlDialect, storeDir } from '../lib/relational-engine.js';
 import { isDeclaredLockVersion } from './entities.js';
+import { declaredAuthorship } from './audit-actor.js';
 import { physicalType } from './persistence.js';
 import { adapterFinderMethods, entityFinders, filtersBlocks, filtersUses, portFinderMethods, filterStructs } from './finders.js';
 import { docComment, domainPath, goFileName, layout, localName, packageFile } from './render.js';
@@ -79,7 +80,7 @@ export function generate(model) {
   for (const file of files) {
     for (const match of file.content.matchAll(/\bparse(\w+)Column\(|\b(\w+)Column\(/g)) uses.add(`enum:${goExported(match[1] ?? match[2])}`);
   }
-  files.push({ path: `${store.dir}/values.go`, content: packageFile(model, store, { imports: [...ADAPTER_IMPORTS, 'internal/platform/correlation', 'strconv'], body: valuesBody(model, uses, roots) }) });
+  files.push({ path: `${store.dir}/values.go`, content: packageFile(model, store, { imports: [...ADAPTER_IMPORTS, 'strconv'], body: valuesBody(model, uses, roots) }) });
   return files;
 }
 
@@ -484,7 +485,11 @@ function tableModel(model, entity, parent) {
         continue;
       }
       const read = readValue(field, `state.${method}`, optional, field.columns.name, counter);
-      columns.push({ column: sq(model, field.columns.name), read, write: writeValue(field, `e.${method}()`, optional), id: field.isId });
+      // La autoría DECLARADA (13g): el campo es del dominio, pero lo estampa el guardado como la de la política; el alta
+      // conserva la que trae (vacía es ausente) y updatedBy es siempre quien escribe.
+      const authored = !optional && declaredAuthorship(entity).includes(field.name);
+      const write = authored ? (field.name === 'createdBy' ? `createdAuthor(e.${method}(), actor)` : 'actor') : writeValue(field, `e.${method}()`, optional);
+      columns.push({ column: sq(model, field.columns.name), read, write, id: field.isId, actor: authored });
       if (member.folded) {
         const fold = member.folded.accents ? 'textfold.CaseAndAccents' : 'textfold.Case';
         columns.push({ column: sq(model, member.folded.column), write: optional ? `nullable(e.${method}(), func(v string) any { return ${fold}(v) })` : `${fold}(e.${method}())` });
@@ -973,14 +978,14 @@ function writeFunction(model, table, uses) {
     insertColumns.push(audit.column);
     args.push(audit.kind === 'time' ? 'now' : 'actor');
   }
-  if (table.audit.some((audit) => audit.kind === 'actor')) uses.add('auditActor');
+  const stampsActor = table.audit.some((audit) => audit.kind === 'actor') || table.columns.some((column) => column.actor);
   const versioned = Boolean(table.version) && !parentKey;
   const updatable = insertColumns.filter((column) => column !== table.idColumn && !['created_at', 'created_by'].includes(column));
   const placeholders = (count, from = 1) => Array.from({ length: count }, (_, i) => ph(model, i + from)).join(', ');
   const signature = `func write${name}(ctx context.Context, q DBTX, e *domain.${name}${parentKey ? `, parent ${table.parentIdType}` : ''}) error`;
   const prelude = [];
   if (table.audit.some((a) => a.kind === 'time')) prelude.push('\tnow := time.Now().UTC()');
-  if (table.audit.some((a) => a.kind === 'actor')) prelude.push('\tactor := auditActor(ctx)');
+  if (stampsActor) prelude.push('\tactor := auditActor(ctx)');
   const updateArgs = insertColumns.map((column, index) => ({ column, arg: args[index] })).filter(({ column }) => updatable.includes(column));
   const idArg = args[insertColumns.indexOf(table.idColumn)];
   let statement;
@@ -1250,16 +1255,6 @@ func uuidTexts(ids []uuid.UUID) []string {
 		texts[i] = id.String()
 	}
 	return texts
-}`);
-  }
-  if (uses.has('auditActor')) {
-    blocks.push(`// auditActor es el autor de una escritura para la auditoría. Sin la capa de seguridad (incremento 8 de PLAN-KEEL-GO.md)
-// es el sistema, con la correlación de la petición o del mensaje si la hay (SYSTEM_ACTOR de keel-core/gen/relational.js).
-func auditActor(ctx context.Context) string {
-	if id, ok := correlation.ID(ctx); ok {
-		return ${goString(`${SYSTEM_ACTOR}:`)} + id
-	}
-	return ${goString(SYSTEM_ACTOR)}
 }`);
   }
   for (const name of [...uses].filter((use) => use.startsWith('enum:')).map((use) => use.slice(5)).sort()) {
