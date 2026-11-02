@@ -31,7 +31,7 @@ import { orphanInternalOperations } from '@keel-system/keel-core/gen';
 import { MAIL_SENDER, TEMPLATE_RENDERER, mailDependencies, usesGoMail, usesTemplating } from './mail.js';
 import { parametersType, usesServiceParameters } from './service-parameters.js';
 import { paymentDependencies, paymentDependencyRows, paymentUseCaseFields, paymentWiring } from './payments.js';
-import { cacheDependencies, cacheDependencyRows, cacheWiring } from './cache.js';
+import { cacheDependencies, cacheDependencyRows, settlementWiring } from './cache.js';
 import { storageDependencies, storageDependencyRows } from './storage.js';
 import { responseNeedsStorage } from './mappers.js';
 
@@ -339,11 +339,11 @@ function useCasesBody(model, ops) {
     const contract = contractOf(operation);
     const handler = entryGateGuard(model, operation, `New${handlerType(operation)}(${handlerArgs(model, operation).join(', ')})`);
     const name = goString(messageType(operation));
-    // Con caché, cada operación va además dentro de su asentamiento (settle): lo que espera al commit, el vaciado de las
-    // cachés que invalida (keel-core/gen/cache-plan.js) incluido.
+    // Cada operación va además dentro de su asentamiento (settle): lo que espera al commit, los afterCommit de su handler y
+    // el vaciado de las cachés que invalida (keel-core/gen/cache-plan.js) incluidos.
     return contract.kind === 'KindCommand'
-      ? `\tuc.${useCaseField(operation)} = ${cacheWiring(model, operation, `observeCommand(logger, tx, ${name}, ${handler})`, { command: true })}`
-      : `\tuc.${useCaseField(operation)} = ${cacheWiring(model, operation, `observe(logger, tx, ${name}, ${contract.kind}, ${handler})`, { command: false })}`;
+      ? `\tuc.${useCaseField(operation)} = ${settlementWiring(model, operation, `observeCommand(logger, tx, ${name}, ${handler})`, { command: true })}`
+      : `\tuc.${useCaseField(operation)} = ${settlementWiring(model, operation, `observe(logger, tx, ${name}, ${contract.kind}, ${handler})`, { command: false })}`;
   });
   const dependencies = persistent
     ? `

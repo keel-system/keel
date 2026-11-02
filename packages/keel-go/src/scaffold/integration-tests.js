@@ -219,7 +219,8 @@ function restartMember() {
   return String.raw`// RestartServer reinicia el servidor del flujo: la ventana de cada circuito vuelve a estar VACÍA y cerrada, y se olvida lo
 // que el proceso guarda en memoria. Llámalo en el Given de StartFlow de un flujo que cuente fallos del circuito: los que
 // dejó un flujo anterior cuentan para el suyo, y «cerrarlo» con llamadas buenas deja la ventana llena de éxitos, que
-// retrasan su apertura. Cuesta un arranque; la base y el broker no se tocan.
+// retrasan su apertura. Cuesta un arranque; la base y el broker no se tocan. Con Kafka, el servidor nuevo vuelve a consumir
+// cuando vence la sesión del proceso muerto, unos segundos: espera su efecto con Eventually.
 func (s *Scenario) RestartServer() {
 	s.Helper()
 	if err := server.restart(s.Context()); err != nil {

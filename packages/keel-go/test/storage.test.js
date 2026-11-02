@@ -107,7 +107,7 @@ test('el puerto y el adaptador del agente declaran los métodos de lectura segú
   }
 });
 
-test('el handler de la subida recibe la política y el puerto con la nota en nombres de Go; el resto, solo si devuelve una URL pública', () => {
+test('el handler de la subida recibe la política y el puerto con la nota en nombres de Go; el puerto, todo comando y la consulta que devuelve una URL pública', () => {
   for (const [name, { files, model }] of plans) {
     assert.ok(uploads(model).length > 0, name);
     for (const operation of uploads(model)) {
@@ -118,22 +118,23 @@ test('el handler de la subida recibe la política y el puerto con la nota en nom
       assert.match(handler, /Después AllowsContent\(bytes, tipo declarado\)/, `${name}: ${operation.name}`);
     }
   }
-  // catalog-extended: lo que devuelve un Product proyecta sus imágenes, con su URL pública; lo demás no recibe el puerto.
+  // catalog-extended: lo que devuelve un Product proyecta sus imágenes, con su URL pública; una consulta sin ella no recibe el puerto.
   const { files, model } = plans.get('catalog-extended');
   const useCases = content(files, 'internal/application/use_cases.go');
   const mappers = files.filter((file) => file.path.endsWith('_mapper.go')).map((file) => file.content).join('\n');
   let exposing = 0;
   for (const operation of model.services.flatMap((service) => service.operations).filter((op) => op.handlerClass)) {
     const signature = operation.responseDto ? mappers.split('\n').find((line) => line.startsWith(`func To${operation.responseDto.name}(`)) ?? '' : '';
-    const exposes = operation.multipart || signature.includes('fileStorage domain.FileStorage');
+    const exposes = operation.multipart || operation.messageKind !== 'query' || signature.includes('fileStorage domain.FileStorage');
     if (signature.includes('fileStorage domain.FileStorage')) exposing++;
     const wiring = useCases.split('\n').find((line) => line.includes(`New${operation.handlerClass}(`)) ?? '';
     assert.equal(wiring.includes('deps.FileStorage'), exposes, `${operation.name}: ${wiring.trim()}`);
   }
   assert.ok(exposing >= 2, 'catalog-extended devuelve Product con sus imágenes en varias operaciones');
-  // Sin bucket público ni subida, nadie lo recibe: asset-vault solo en la subida.
+  // Sin bucket público, ninguna consulta lo recibe: asset-vault solo en sus comandos.
   const vault = content(plans.get('asset-vault').files, 'internal/application/use_cases.go');
-  assert.equal(vault.split('\n').filter((line) => line.includes('deps.FileStorage')).length, uploads(plans.get('asset-vault').model).length);
+  const commands = plans.get('asset-vault').model.services.flatMap((service) => service.operations).filter((op) => op.handlerClass && op.messageKind !== 'query');
+  assert.equal(vault.split('\n').filter((line) => line.includes('deps.FileStorage')).length, commands.length);
 });
 
 test('el 413 del caso de uso tiene centinela: el del diseño, o ErrFileTooLarge con el code canónico', () => {

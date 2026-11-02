@@ -77,6 +77,11 @@ Guide* (decisiones y buenas prácticas) y *Go Proverbs*. Las reglas de Go de est
 - Sin estado global mutable ni `init()` con efectos. El reloj, el generador de ids y la configuración se
   inyectan; el cableado está en `run`, a la vista, sin contenedores de inyección.
 
+- **Cuando el diseño dice «después de confirmar»** (borrar un binario, avisar a un proveedor), el efecto va por
+  `afterCommit(ctx, func(ctx context.Context) error { … })` (`internal/application/after_commit.go`, que build ya emite con
+  la persistencia): lo ejecuta tras el commit y nunca si la transacción revierte; sin transacción, antes de volver. Su fallo
+  se registra y no deshace lo confirmado. No escribas otro, ni lo hagas dentro de la transacción.
+
 ## Seguridad
 
 - SQL siempre parametrizado. Nunca `fmt.Sprintf` con datos en una consulta ni en la ruta de un comando.

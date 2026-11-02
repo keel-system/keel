@@ -92,7 +92,11 @@ export function storageSentinels(model) {
   ];
 }
 
-/** Lo que recibe el handler: la política y el puerto si sube un binario; el puerto si su respuesta expone una URL pública. */
+/**
+ * Lo que recibe el handler: la política y el puerto si sube un binario; el puerto a todo comando, y a la consulta cuya
+ * respuesta expone una URL pública. El diseño no enlaza una operación con el borrado de un binario, que es prosa de su
+ * regla, y NewUseCases es de build: sin el puerto delante, el agente no tiene cómo cumplirla (corrida catalog, 2026-11-02).
+ */
 export function storageDependencies(model, operation, { publicUrl = false } = {}) {
   if (!usesStorage(model)) return [];
   const deps = [];
@@ -104,11 +108,11 @@ export function storageDependencies(model, operation, { publicUrl = false } = {}
       arg: `deps.${STORAGE_POLICIES.field}`
     });
   }
-  if (uploadsFile(model, operation) || publicUrl) {
+  if (uploadsFile(model, operation) || publicUrl || operation.messageKind !== 'query') {
     deps.push({
       name: FILE_STORAGE.param,
       type: FILE_STORAGE.type,
-      doc: `${FILE_STORAGE.param} es el almacenamiento de binarios (capa storage)${publicUrl ? ': también resuelve la URL pública que devuelve el mapeo' : ''}.`,
+      doc: `${FILE_STORAGE.param} es el almacenamiento de binarios (capa storage)${publicUrl ? ': también resuelve la URL pública que devuelve el mapeo' : ''}. Un borrado «tras confirmar» va por afterCommit.`,
       arg: `deps.${FILE_STORAGE.field}`
     });
   }

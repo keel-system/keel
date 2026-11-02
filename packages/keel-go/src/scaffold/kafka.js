@@ -40,6 +40,20 @@ export function clientId(model) {
   return model.service.name;
 }
 
+/**
+ * El plazo de sesión del consumer group. RestartServer mata el proceso (en Windows no hay señal que parar con orden), sin
+ * LeaveGroup, y el miembro muerto retiene la partición hasta que vence su sesión: con los 45 s del cliente, el servidor
+ * nuevo tardaba eso en consumir (corrida catalog, 2026-11-02). 6 s es el mínimo que admite un broker por defecto
+ * (group.min.session.timeout.ms). Fragmento aparte y solo en local: kafka.yaml es el mismo en los generadores.
+ */
+const KAFKA_LOCAL_SESSION_TIMEOUT_MS = 6000;
+const KAFKA_DEFAULT_SESSION_TIMEOUT_MS = 45000;
+const KAFKA_GROUP_LOCAL_YAML = `kafka:
+  consumer:
+    # Cuánto retiene la partición un miembro que murió sin salir del grupo: el arnés reinicia matando el proceso.
+    session-timeout-ms: ${KAFKA_LOCAL_SESSION_TIMEOUT_MS}
+`;
+
 export function generate(model) {
   if (!usesGoKafka(model)) return [];
   const { kafka } = layout(model);
@@ -49,6 +63,7 @@ export function generate(model) {
   });
   return [
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/kafka.yaml`, content: kafkaYaml(profile) })),
+    { path: 'config/parameters/local/kafka-group.yaml', content: KAFKA_GROUP_LOCAL_YAML },
     file('doc', [], ''),
     file('consumption', ['errors', 'math', 'slices', 'time', 'internal/domain', MESSAGING_IMPORT], consumptionBody(model)),
     file('settings', ['fmt', 'strconv', 'strings', 'time', 'internal/platform/config'], settingsBody()),
@@ -185,14 +200,16 @@ function settingsBody() {
 // Settings es la conexión con Kafka del perfil activo, con las mismas variables que keel-spring: Enabled es false en el
 // perfil test (las pruebas de build arrancan sin broker); DeliveryTimeout, cuánto puede retener el productor un envío
 // sin confirmar (delivery.timeout.ms); MetadataRefreshInterval, cada cuánto refresca el consumidor los metadatos de sus
-// topics (un topic creado después de suscribirse no se ve hasta el siguiente refresco), y ReconnectInterval, la espera
-// entre intentos de publicar en el descarte mientras el broker no está.
+// topics (un topic creado después de suscribirse no se ve hasta el siguiente refresco); SessionTimeout, cuánto retiene sus
+// particiones un miembro del grupo que murió sin salir, y ReconnectInterval, la espera entre intentos de publicar en el
+// descarte mientras el broker no está.
 type Settings struct {
 	Enabled                 bool
 	BootstrapServers        []string
 	DeliveryTimeout         time.Duration
 	RequestTimeout          time.Duration
 	MetadataRefreshInterval time.Duration
+	SessionTimeout          time.Duration
 	ReconnectInterval       time.Duration
 }
 
@@ -217,6 +234,7 @@ func SettingsFrom(cfg *config.Config) (Settings, error) {
 		{"kafka.producer.delivery-timeout-ms", ${KAFKA_PRODUCER_TIMEOUTS.delivery.default}, &settings.DeliveryTimeout},
 		{"kafka.producer.request-timeout-ms", ${KAFKA_PRODUCER_TIMEOUTS.request.default}, &settings.RequestTimeout},
 		{"kafka.consumer.metadata-refresh-interval-ms", ${KAFKA_DEFAULT_METADATA_REFRESH_MS}, &settings.MetadataRefreshInterval},
+		{"kafka.consumer.session-timeout-ms", ${KAFKA_DEFAULT_SESSION_TIMEOUT_MS}, &settings.SessionTimeout},
 		{"kafka.reconnect-interval-ms", ${KAFKA_RECONNECT_INTERVAL_MS}, &settings.ReconnectInterval},
 	} {
 		millis, err := positive(cfg, field.key, field.fallback)
@@ -423,6 +441,7 @@ func (c *Connection) Consume(ctx context.Context, subscription string, handle Ha
 	}
 	consumer, err := kgo.NewClient(c.options(
 		kgo.ConsumerGroup(s.group),
+		kgo.SessionTimeout(c.settings.SessionTimeout),
 		kgo.ConsumeTopics(s.topic),
 		// Desde el principio: un grupo nuevo lee lo publicado antes de unirse. Con el final, lo que llega mientras el
 		// grupo se forma se pierde (y un escenario que entrega al abrir el flujo, también).
@@ -670,7 +689,7 @@ func TestSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !settings.Enabled || strings.Join(settings.BootstrapServers, ",") != "uno:9092,dos:9092" || settings.DeliveryTimeout != ${KAFKA_PRODUCER_TIMEOUTS.delivery.default}*time.Millisecond || settings.MetadataRefreshInterval != ${KAFKA_DEFAULT_METADATA_REFRESH_MS}*time.Millisecond {
+	if !settings.Enabled || strings.Join(settings.BootstrapServers, ",") != "uno:9092,dos:9092" || settings.DeliveryTimeout != ${KAFKA_PRODUCER_TIMEOUTS.delivery.default}*time.Millisecond || settings.MetadataRefreshInterval != ${KAFKA_DEFAULT_METADATA_REFRESH_MS}*time.Millisecond || settings.SessionTimeout != ${KAFKA_DEFAULT_SESSION_TIMEOUT_MS}*time.Millisecond {
 		t.Errorf("defaults: %+v", settings)
 	}
 	if settings, _ := load(t, "kafka:\\n  enabled: false\\n"); settings.Enabled {

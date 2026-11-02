@@ -80,6 +80,8 @@ Ningún escenario lo echa de menos: la subida responde exactamente lo mismo.
 - **El binario sale del proceso**: si el diseño declara qué pasa con el almacén caído (un 503), traduce el fallo del SDK
   en el adaptador a ese error; y piensa qué queda si la transacción del agregado revierte después de subir (un objeto
   huérfano no rompe nada; un agregado que apunta a un objeto que no existe, sí).
+- **Borrar un binario «tras confirmar»**: todo comando recibe `fileStorage`; el borrado va dentro de `afterCommit(ctx, …)`,
+  nunca directo en la transacción (ver `references/implementation.md`, § Borrar).
 
 ## Referencias
 

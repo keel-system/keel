@@ -379,7 +379,18 @@ func hasEvent(messages []BrokerMessage, eventID string) bool {
 
 func TestBrokerConsumption(t *testing.T) {
 	f := StartFlow(t, nil)
-	f.Scenario("FL-BRK-001-A: una entrega llega al listener y se procesa una vez", func(s *Scenario) {
+${kafka ? `	f.Scenario("FL-BRK-001-J: tras matar el servidor, el nuevo vuelve a consumir en cuanto vence la sesión del grupo", func(s *Scenario) {
+		before := probeID("")
+		s.DeliverStockReserved(before, probeOrder)
+		s.Eventually(func() bool { return probeProcessed(s, before) == 1 }, 20*time.Second, "el listener no procesó el mensaje")
+		if err := server.restart(s.Context()); err != nil {
+			s.Fatal(err)
+		}
+		after := probeID("")
+		s.DeliverStockReserved(after, probeOrder)
+		s.Eventually(func() bool { return probeProcessed(s, after) == 1 }, 25*time.Second, "el servidor nuevo no consumió dentro del plazo: el miembro muerto retiene la partición")
+	})
+` : ''}	f.Scenario("FL-BRK-001-A: una entrega llega al listener y se procesa una vez", func(s *Scenario) {
 		id := probeID("")
 		s.DeliverStockReserved(id, probeOrder)
 		s.Eventually(func() bool { return probeProcessed(s, id) == 1 }, 20*time.Second, "el listener no procesó el mensaje")
@@ -539,7 +550,7 @@ ${mandatoryCase}
 `
 );
 
-const CASES = { 'FL-BRK-001': kafka ? 'ABCDEFGHI' : 'ABCDEFGH', 'FL-BRK-002': kafka ? 'ACDE' : 'ABCDE' };
+const CASES = { 'FL-BRK-001': kafka ? 'ABCDEFGHIJ' : 'ABCDEFGH', 'FL-BRK-002': kafka ? 'ACDE' : 'ABCDE' };
 
 // Cada sabotaje rompe UNA pieza de lo emitido conservando su forma, y compila: un sabotaje que no compila no falsa nada.
 const SABOTAGES = {
@@ -572,6 +583,15 @@ const SABOTAGES = {
     to: '\t\tif ctx.Err() == nil {\n\t\t\treturn nil\n\t\t}\n\t\t// Si cayó la conexión',
     expect: 'FL-BRK-001-H'
   },
+  // Sin el plazo corto, el miembro muerto retiene la partición sus 45 s: la corrida catalog esperó ahí.
+  'session-timeout': kafka
+    ? {
+        file: 'config/parameters/local/kafka-group.yaml',
+        from: 'session-timeout-ms: 6000',
+        to: 'session-timeout-ms: 45000',
+        expect: 'FL-BRK-001-J'
+      }
+    : null,
   // El descarte con el header del topic de origen equivocado: quien vigila los descartes no sabría de dónde vienen.
   'dlt-headers': kafka
     ? {

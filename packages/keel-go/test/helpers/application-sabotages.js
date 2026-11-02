@@ -5,13 +5,49 @@
 
 const APPLICATION = 'internal/application';
 
+const AFTER_COMMIT = `${APPLICATION}/after_commit.go`;
+
 export const APPLICATION_SABOTAGES = [
+  {
+    id: 'after-commit-now',
+    what: 'afterCommit no espera: el efecto corre dentro de la transacción',
+    file: AFTER_COMMIT,
+    find: '\tif s := openSettlement(ctx); s != nil {\n',
+    replace: '\tif s := openSettlement(ctx); s != nil && false {\n',
+    fails: 'TestAfterCommitEsperaAQueElCasoDeUsoTermineBien',
+    alsoFails: ['TestAfterCommitEsperaAlCasoDeUsoDeFuera', 'TestAfterCommitNoOcurreSiElCasoDeUsoFalla']
+  },
+  {
+    id: 'after-commit-failed',
+    what: 'un comando que falla ejecuta igualmente lo que esperaba al commit',
+    file: AFTER_COMMIT,
+    find: '\t\tif err := next.Handle(context.WithValue(ctx, settlementKey{}, own), cmd); err != nil {\n\t\t\treturn err\n\t\t}\n',
+    replace: '\t\tif err := next.Handle(context.WithValue(ctx, settlementKey{}, own), cmd); err != nil {\n\t\t\tsettled(ctx, own, onCommit)\n\t\t\treturn err\n\t\t}\n',
+    fails: 'TestAfterCommitNoOcurreSiElCasoDeUsoFalla',
+    alsoFails: ['TestAfterCommitEsperaAlCasoDeUsoDeFuera']
+  },
+  {
+    id: 'after-commit-detached',
+    what: 'lo despachado con WithoutTransaction espera a un commit que no le toca',
+    file: AFTER_COMMIT,
+    find: '\tif TransactionDetached(ctx) {\n\t\treturn nil\n\t}\n\ts, _ := ctx.Value',
+    replace: '\ts, _ := ctx.Value',
+    fails: 'TestAfterCommitSinTransaccionOcurreYa'
+  },
+  {
+    id: 'after-commit-cancel',
+    what: 'el efecto hereda la cancelación de la petición',
+    file: AFTER_COMMIT,
+    find: '\t\tctx = context.WithoutCancel(ctx)\n',
+    replace: '',
+    fails: 'TestAfterCommitNoDependeDelClienteNiDeshaceNada'
+  },
   {
     id: 'unwired',
     what: 'NewUseCases deja una operación sin cablear',
     file: `${APPLICATION}/use_cases.go`,
-    find: '\tuc.CreateProduct = observe(',
-    replace: '\t_ = observe(',
+    find: '\tuc.CreateProduct = settle(',
+    replace: '\t_ = settle(',
     fails: 'TestNewUseCasesCableaCadaOperacion'
   },
   {

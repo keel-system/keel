@@ -33,8 +33,8 @@ const sorted = (map) => Object.fromEntries([...map].sort(([a], [b]) => a.localeC
 function goMessages(files) {
   const wiring = app(files, 'use_cases');
   const messages = new Map();
-  // Con caché, la operación va además dentro de su asentamiento: `settle(observe(…))` o `settleCommand(observeCommand(…))`.
-  for (const [, call, name, kind] of wiring.matchAll(/^\tuc\.\w+ = (?:settle(?:Command)?\()?(observe|observeCommand)\(logger, tx, "(\w+)"(?:, (Kind\w+))?,/gm)) {
+  // Con persistencia, la operación va además dentro de su asentamiento: `settle(logger, observe(…))` o `settleCommand(logger, observeCommand(…))`.
+  for (const [, call, name, kind] of wiring.matchAll(/^\tuc\.\w+ = (?:settle(?:Command)?\(logger, )?(observe|observeCommand)\(logger, tx, "(\w+)"(?:, (Kind\w+))?,/gm)) {
     messages.set(name, call === 'observeCommand' ? 'command' : kind === 'KindQuery' ? 'query' : 'returningCommand');
   }
   return messages;

@@ -1193,10 +1193,18 @@ Registro en `KNOWN_GENERATORS` (`keel-core/src/lib/assets.js`).
     - Sobre copias, para no tocar la huella: tidy sin mover ningún directo (12 y 14), gofmt, `go vet` y staticcheck vacíos (con y sin
       `-tags integration`), `go build` sin cgo, `go test ./internal/...` en verde, y `check-idempotency.sh` en ROJO con sus hallazgos
       del agente (16 y 19).
-- **Para retomar:** `go-check` en verde, sin tocar el generador: lanzar el **13i**, una corrida cada vez, en cada
-  `services/<servicio>-go`: `go mod tidy` y `/keel-generate-go`, en otra sesión. Después, contrastar cada informe con la huella
-  (`corrida-metrics.js footprint`) y registrarla en `docs/corridas/`. El 13h-a está en b953353c. El commit del 13h-b,
-  propuesto: `feat(keel-go): el alcance por recurso, y los clientes y la reconciliación sobre documentos (incremento 13h-b)`.
+    - **`catalog` hecha (2026-11-02): 56/56, huella 23** (21 TODO, 2 consultas; `docs/corridas/2026-11-02-catalog-go.md`). Dos huecos del
+      generador, arreglados: `afterCommit` y `settle` en toda operación con persistencia (`src/scaffold/after-commit.js`), con
+      `fileStorage` en todo comando; y la sesión de Kafka a 6 s en local (`kafka-group.yaml`). **Esa corrida se generó sin los arreglos:
+      no borra el binario en `removeProductImage`**, y el 56/56 no cubre esa regla.
+    - `asset-vault` refrescada con `build --refresh` tras los arreglos, sin lanzar.
+    - Medido: `npm test` 1063/1063, `go-check` entero **160/160** (lanzado por el usuario, con `-race` y los sabotajes `after-commit-*`),
+      `broker-check --broker=kafka` 30/30. **Sin medir**: el borrado de punta a punta.
+- **Para retomar:** lanzar `asset-vault`, en `services/asset-vault-go`: `go mod tidy` y `/keel-generate-go`, en otra sesión. Después,
+  contrastar su informe con la huella y registrarla en `docs/corridas/`. Falta rehacer `removeProductImage` en catalog para medir el
+  borrado. Sin arreglar: un handler no recibe logger y el servidor no fija `slog.SetDefault`, así que un
+  `slog.WarnContext` del agente sale sin el JSON ni la correlación del servicio. El commit de este tramo, propuesto:
+  `fix(keel-go): el borrado tras confirmar y la sesión de Kafka, de la corrida catalog (incremento 13i)`.
 - **Para retomar (antes del 13):** el incremento 13 (caché, storage, autoría, `needs` y pagos; el correo ya entró en el 12e-b), en un
   contexto nuevo y por tramos como los de keel-dotnet. `go-check --no-race` tras los arreglos del 12e: **123/123**, con
   las 47 variantes recomprobadas (2026-11-01). Sin medir del 11: `RestartServer` y

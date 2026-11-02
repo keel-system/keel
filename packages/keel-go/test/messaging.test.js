@@ -348,7 +348,10 @@ for (const name of MESSAGING_FIXTURES) {
     const yaml = flatten(parseYaml(content(files, 'config/parameters/local/kafka.yaml')));
     const keys = [...content(files, `${KAFKA}/settings.go`).matchAll(/"(kafka\.[a-z0-9.-]+)"/g)].map((match) => match[1]);
     assert.ok(keys.length >= 6, keys.join(', '));
-    for (const key of keys) assert.ok(yaml.has(key), `${key} no está en kafka.yaml`);
+    // La sesión del grupo es propia de keel-go: su fragmento local aparte, y su default en el código para los demás perfiles.
+    const group = flatten(parseYaml(content(files, 'config/parameters/local/kafka-group.yaml')));
+    assert.ok(group.has('kafka.consumer.session-timeout-ms'));
+    for (const key of keys) assert.ok(yaml.has(key) || group.has(key), `${key} no está en kafka.yaml`);
   });
 
   test(`${name}: el consumo de Kafka es el de keel-spring (grupos, descarte y «no existe» por topic, y la curva del reintento)`, () => {

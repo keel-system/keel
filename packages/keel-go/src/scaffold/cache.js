@@ -16,8 +16,8 @@
 // una carga anterior al vaciado, la degradación a miss— y funciones genéricas (`GetOrLoad`); el PUERTO es lo que
 // necesita de un store (`CacheStore`), y su adaptador sobre go-redis vive en internal/infrastructure/cache. Y application
 // no puede importar golang.org/x/sync (la frontera hexagonal), así que la carga única es un mapa de cargas en vuelo
-// propio. «Tras el commit» es un asentamiento por caso de uso (`settle`): el caso de uso MÁS EXTERNO, el que abrió la
-// transacción, ejecuta lo pendiente de los que despachó dentro de ella cuando termina bien; uno despachado con
+// propio. «Tras el commit» es el asentamiento por caso de uso de after-commit.js (`settle`): el caso de uso MÁS EXTERNO, el
+// que abrió la transacción, ejecuta lo pendiente de los que despachó dentro de ella cuando termina bien; uno despachado con
 // WithoutTransaction confirma lo suyo solo y lo ejecuta al terminar.
 //
 // Las claves en el store son las de RedisCacheManager de keel-spring (`<servicio>:<operación>::<clave>`): el mismo
@@ -30,6 +30,7 @@ import { cacheFlushCmd } from '@keel-system/keel-core/gen/infra-scripts';
 import { alignRows, goString } from '../lib/go-source.js';
 import { goExported } from '../lib/go-projection.js';
 import { applicationPath, layout, packageFile } from './render.js';
+import { usesAfterCommit } from './after-commit.js';
 import { messageComponents, messageType, operations, resultType } from './services.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -77,16 +78,16 @@ export function cacheDependencyRows(model) {
 }
 
 /**
- * Cómo cablea NewUseCases una operación cuando el diseño tiene caché: TODAS van dentro de `settle` (el asentamiento que
- * ejecuta tras el commit lo pendiente de su caso de uso y de los que despache), y la que invalida una caché le pasa su
- * vaciado. Sin caché, la línea es la de siempre.
+ * Cómo cablea NewUseCases una operación: TODAS van dentro de `settle` (el asentamiento que ejecuta tras el commit lo
+ * pendiente de su caso de uso y de los que despache), y la que invalida una caché le pasa su vaciado. Sin persistencia ni
+ * caché no hay nada que esperar, y la línea es la de siempre.
  */
-export function cacheWiring(model, operation, wired, { command }) {
-  if (!usesCache(model)) return wired;
+export function settlementWiring(model, operation, wired, { command }) {
+  if (!usesAfterCommit(model)) return wired;
   const row = cacheInvalidations(model).find((entry) => entry.operation === operation.name);
   const caches = (row?.caches ?? []).map((cache) => cacheVar(cachedOperations(model).find((candidate) => candidate.cacheName === cache.cacheName).operation));
   const clearing = caches.length > 0 ? `, deps.${OPERATION_CACHE.field}.clearing(${caches.join(', ')})` : '';
-  return `${command ? 'settleCommand' : 'settle'}(${wired}${clearing})`;
+  return `${command ? 'settleCommand' : 'settle'}(logger, ${wired}${clearing})`;
 }
 
 /** La nota del handler: la de keel-core, con la llamada en Go. */
@@ -426,74 +427,6 @@ func cacheKeyPart(part any) string {
 	}
 }
 
-// ─── Lo que espera al commit ──────────────────────────────────────────────────────────────────
-
-// settlement es lo que espera a que termine bien el caso de uso que abrió la transacción.
-type settlement struct {
-	mu      sync.Mutex
-	pending []func(context.Context)
-}
-
-// settlementKey es la clave del asentamiento del caso de uso en curso.
-type settlementKey struct{}
-
-// openSettlement es el asentamiento del caso de uso en curso, o nil. Uno despachado con WithoutTransaction no tiene: sus
-// escrituras confirman solas, y lo que espere a ellas puede ir ya.
-func openSettlement(ctx context.Context) *settlement {
-	if TransactionDetached(ctx) {
-		return nil
-	}
-	s, _ := ctx.Value(settlementKey{}).(*settlement)
-	return s
-}
-
-// afterUseCase ejecuta fn cuando termine bien el caso de uso en curso, o ya si no hay ninguno.
-func afterUseCase(ctx context.Context, fn func(context.Context)) {
-	if s := openSettlement(ctx); s != nil {
-		s.mu.Lock()
-		s.pending = append(s.pending, fn)
-		s.mu.Unlock()
-		return
-	}
-	fn(ctx)
-}
-
-// settle envuelve un caso de uso ya observado (con su transacción) para que lo que espera a su commit —el vaciado de las
-// cachés que invalida, onCommit, y los Evict y Clear de su handler— se ejecute cuando termine bien. Si lo despachó otro
-// caso de uso dentro de su transacción, pasa a esperar al de fuera, que es quien confirma; si falla, no se ejecuta nada.
-func settle[M, R any](next Handler[M, R], onCommit ...func(context.Context)) Handler[M, R] {
-	return HandlerFunc[M, R](func(ctx context.Context, msg M) (R, error) {
-		own := &settlement{}
-		result, err := next.Handle(context.WithValue(ctx, settlementKey{}, own), msg)
-		if err != nil {
-			return result, err
-		}
-		settled(ctx, own, onCommit)
-		return result, nil
-	})
-}
-
-// settleCommand es settle para un comando sin resultado.
-func settleCommand[M any](next CommandHandler[M], onCommit ...func(context.Context)) CommandHandler[M] {
-	return CommandHandlerFunc[M](func(ctx context.Context, cmd M) error {
-		own := &settlement{}
-		if err := next.Handle(context.WithValue(ctx, settlementKey{}, own), cmd); err != nil {
-			return err
-		}
-		settled(ctx, own, onCommit)
-		return nil
-	})
-}
-
-// settled entrega lo pendiente de un caso de uso que terminó bien: al de fuera, si lo hay, o lo ejecuta.
-func settled(ctx context.Context, own *settlement, onCommit []func(context.Context)) {
-	own.mu.Lock()
-	pending := append(own.pending, onCommit...)
-	own.mu.Unlock()
-	for _, fn := range pending {
-		afterUseCase(ctx, fn)
-	}
-}
 `;
 }
 
@@ -998,9 +931,9 @@ func TestElVaciadoEsperaAlCasoDeUsoDeFueraYNoOcurreSiFalla(t *testing.T) {
 		_, ok := store.entries["servicio:prueba::a"]
 		return ok
 	}
-	inner := settleCommand(CommandHandlerFunc[string](func(context.Context, string) error { return nil }), cache.clearing(probeCache))
+	inner := settleCommand(slog.New(slog.DiscardHandler), CommandHandlerFunc[string](func(context.Context, string) error { return nil }), cache.clearing(probeCache))
 	var duringOuter bool
-	outer := settleCommand(CommandHandlerFunc[string](func(ctx context.Context, cmd string) error {
+	outer := settleCommand(slog.New(slog.DiscardHandler), CommandHandlerFunc[string](func(ctx context.Context, cmd string) error {
 		if err := inner.Handle(ctx, cmd); err != nil {
 			return err
 		}
@@ -1026,7 +959,7 @@ func TestElVaciadoEsperaAlCasoDeUsoDeFueraYNoOcurreSiFalla(t *testing.T) {
 	}
 	// Despachado sin transacción abarcadora, confirma solo: su vaciado no espera al de fuera.
 	seed()
-	detached := settleCommand(CommandHandlerFunc[string](func(ctx context.Context, cmd string) error {
+	detached := settleCommand(slog.New(slog.DiscardHandler), CommandHandlerFunc[string](func(ctx context.Context, cmd string) error {
 		if err := inner.Handle(WithoutTransaction(ctx), cmd); err != nil {
 			return err
 		}

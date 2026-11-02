@@ -102,6 +102,19 @@ func (s *Storage) SignedURL(ctx context.Context, bucket, key string) (string, er
 
 ## Borrar
 
+Si la regla dice «después de confirmar», el handler lo programa con `afterCommit` (`internal/application/after_commit.go`),
+y solo después guarda: si la transacción revierte, el binario sigue en su sitio. Su fallo se registra y deja el objeto
+huérfano, que es lo que el diseño admite.
+
+```go
+key := image.StorageKey()
+afterCommit(ctx, func(ctx context.Context) error {
+	return h.fileStorage.Delete(ctx, domain.BucketProductImages, key)
+})
+_, err = h.productRepository.Save(ctx, product)
+return err
+```
+
 `DeleteObject` sobre un objeto que no existe no falla en S3 ni en MinIO: devuelve su error solo si el almacén lo da.
 
 ```go

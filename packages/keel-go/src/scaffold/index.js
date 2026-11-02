@@ -43,6 +43,7 @@ import * as projections from './projections.js';
 import * as mail from './mail.js';
 import * as payments from './payments.js';
 import * as cache from './cache.js';
+import * as afterCommit from './after-commit.js';
 import * as storage from './storage.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
@@ -101,6 +102,7 @@ const GENERATORS = [
   mail,
   payments,
   cache,
+  afterCommit,
   storage,
   claim,
   reconciliationClaim,

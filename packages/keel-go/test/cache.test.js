@@ -4,7 +4,7 @@
 //     solo lee claves que ese YAML declara;
 //   · cada caché se llama, dura y compone su clave como dice keel-core (cachedOperations), la misma que en los otros tres;
 //   · qué operación vacía qué caché es la tabla de keel-core (cacheInvalidations): NewUseCases le pasa el vaciado a
-//     esas y solo a esas, y todas van dentro de su asentamiento (settle); sin caché, NewUseCases no cambia;
+//     esas y solo a esas; sin caché, NewUseCases no vacía nada (el asentamiento, en test/after-commit.test.js);
 //   · el handler que cachea recibe la caché y la nota, el arranque abre el store solo si el perfil la habilita, y el arnés
 //     vacía la caché con la orden de infra/reset-db.sh;
 //   · go-redis entra en go.mod solo con caché, sin reintentos y con plazo en cada orden.
@@ -92,7 +92,7 @@ test('qué operación vacía qué caché es la tabla de keel-core: NewUseCases l
     assert.ok(rows.size > 0, name);
     for (const operation of operations(model)) {
       const line = wiring.split('\n').find((candidate) => candidate.startsWith(`\tuc.${useCaseField(operation)} = `));
-      assert.match(line, /= settle(Command)?\(observe(Command)?\(/, `${name}: ${operation.name} sin asentamiento`);
+      assert.match(line, /= settle(Command)?\(logger, observe(Command)?\(/, `${name}: ${operation.name} sin asentamiento`);
       const row = rows.get(operation.name);
       if (row) {
         const vars = row.caches.map((cache) => cacheVar(cachedOperations(model).find((candidate) => candidate.cacheName === cache.cacheName).operation));
@@ -103,9 +103,9 @@ test('qué operación vacía qué caché es la tabla de keel-core: NewUseCases l
     }
     assert.match(wiring, /^\tOperationCache +\*OperationCache$/m, `${name}: el campo de Dependencies`);
   }
-  // Sin caché, el cableado es el de siempre.
+  // Sin caché, ni vaciado ni caché en el cableado.
   const wiring = content(plain, 'internal/application/use_cases.go');
-  assert.doesNotMatch(wiring, /settle|OperationCache|clearing/);
+  assert.doesNotMatch(wiring, /OperationCache|clearing/);
   assert.ok(!plain.some((file) => file.path.endsWith('operation_cache.go') || file.path.includes('/infrastructure/cache/') || file.path.endsWith('cache.yaml')));
 });
 
