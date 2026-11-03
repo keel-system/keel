@@ -38,7 +38,7 @@ import { resolverClass } from './ref-resolvers.js';
 import { usesPersistence } from './persistence.js';
 import { naturalKeyBatchFinder } from './repositories.js';
 import { uploadNotes } from '@keel-system/keel-core/gen/buckets';
-import { effectiveErrorCode } from '@keel-system/keel-core/gen/declared-errors';
+import { effectiveErrorCode, operationError } from '@keel-system/keel-core/gen/declared-errors';
 import { FILE_STORAGE_PORT, UPLOAD_NOTE_NAMES_CS, storageNamespace } from './storage.js';
 import { isPartialUpdate } from '@keel-system/keel-core/gen/features';
 import { compensationNote } from '@keel-system/keel-core/gen/compensation';
@@ -416,7 +416,7 @@ function handlerNotes(model, operation) {
   const rejection = followUpRejectionNote(model.payments, operation.name);
   if (rejection) notes.push(rejection);
   for (const code of operation.errors ?? []) {
-    const error = model.errors.find((e) => e.code === code);
+    const error = operationError(model, operation.name, code);
     notes.push(
       `Error: lanzar ${error?.exceptionClass ?? code} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}` +
         (error ? ` — ${located(model, 'errors', error.exceptionClass).path}` : '')

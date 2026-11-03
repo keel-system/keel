@@ -12,7 +12,7 @@ import { finderCall } from './finders.js';
 import { listedIdsNote } from '@keel-system/keel-core/gen/ref-targets';
 import { inverseCollectionsNote } from '@keel-system/keel-core/gen/inverse-collections';
 import { uploadNotes } from '@keel-system/keel-core/gen/buckets';
-import { effectiveErrorCode } from '@keel-system/keel-core/gen/declared-errors';
+import { effectiveErrorCode, operationError } from '@keel-system/keel-core/gen/declared-errors';
 import {
   idempotencyOutcomeCode,
   declaredUniquenessErrorFor,
@@ -555,7 +555,7 @@ function renderHandler(model, service, operation) {
   const rejection = followUpRejectionNote(model.payments, operation.name);
   if (rejection) notes.push(rejection);
   for (const code of operation.errors) {
-    const error = model.errors.find((e) => e.code === code);
+    const error = operationError(model, operation.name, code);
     notes.push(`Error: lanzar ${error?.exceptionClass ?? code} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}`);
   }
   // El alcance por recurso: el puerto y su adaptador JWT ya los generó build. Lo que queda es

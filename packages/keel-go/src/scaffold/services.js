@@ -14,6 +14,7 @@
 // incremento: el handler de hoy solo recibe lo que existe.
 
 import { ENTRY_GATES, carriesEntryGate, dispatchNote, entryGateNote, scheduleDispatch, usesEntryGate } from '@keel-system/keel-core/gen';
+import { operationError } from '@keel-system/keel-core/gen/declared-errors';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
@@ -430,10 +431,11 @@ function handlerNotes(model, operation) {
   const rejection = followUpRejectionNote(model.payments, operation.name);
   if (rejection) notes.push(rejection);
   for (const code of operation.errors ?? []) {
-    const error = model.errors.find((e) => e.code === code);
-    const build = error?.dynamicStatus ? 'domain.StatusErrorf' : 'domain.Errorf';
+    const error = operationError(model, operation.name, code);
+    // StatusErrorf recibe el status: es el de ESTA operación.
+    const build = error?.dynamicStatus ? `domain.StatusErrorf(domain.${sentinelOf(code)}, ${error.http}, "…")` : `domain.Errorf(domain.${sentinelOf(code)}, "…")`;
     notes.push(
-      `Error: devolver ${build}(domain.${sentinelOf(code)}, "…") (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}` +
+      `Error: devolver ${build} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}` +
         ` — ${domainPath(model, 'errors')}`
     );
   }

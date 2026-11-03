@@ -592,7 +592,7 @@ El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera
   ellos pares que solo se diferencian en el modelo de persistencia— y redes en vivo por generador
   contra motores, brokers, proveedores de identidad y buzones en contenedores (ver
   `CLAUDE.md § Comandos`). 65 corridas registradas en [docs/corridas](docs/corridas/).
-- **keel-go**, cuarto generador, en sus 16 incrementos medidos ([PLAN-KEEL-GO](PLAN-KEEL-GO.md)), con la corrida de control del par: 2 × 23/23, huella 17, sobre el diseño v2.1.1; repetir la de los otros tres sobre esa versión está pendiente.
+- **keel-go**, cuarto generador, en sus 16 incrementos medidos ([PLAN-KEEL-GO](PLAN-KEEL-GO.md)), con la corrida de control del par: 2 × 23/23, huella 17, sobre el diseño v2.1.1 (la de los otros tres es de la v2.0.2).
 - **Pendiente**: MariaDB, SQL Server y Oracle medidos en vivo en keel-nest, keel-dotnet y keel-go; las
   pasarelas de pago contra su sandbox real; brokers distintos de RabbitMQ en keel-recover y las
   corridas de control de keel-recover sobre legacys relacionales.

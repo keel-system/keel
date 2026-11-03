@@ -158,6 +158,19 @@ export function errorByCode(model, code) {
   return (model.errors ?? []).find((error) => screamingSnake(error.code) === screamingSnake(code)) ?? null;
 }
 
+/**
+ * Lo que ESTA operación declara de un code: su `http` y su `when`. Un mismo code puede significar cosas distintas según quién lo
+ * declara (TEMPLATE_NOT_FOUND es un 404 por id en una operación y un 422 por clave en otra), y la entrada de `model.errors` lleva
+ * los de la primera que lo declaró: quien escriba para una operación concreta, como la nota de su handler, lo lee de aquí.
+ */
+export function operationError(model, operationName, code) {
+  const error = errorByCode(model, code);
+  if (!error) return null;
+  const http = [...(error.statuses?.entries() ?? [])].find(([, operations]) => operations.includes(operationName))?.[0] ?? error.http;
+  const when = error.whenByOperation?.has(operationName) ? error.whenByOperation.get(operationName) : error.when;
+  return { ...error, http, when };
+}
+
 /** ¿Es una entidad interna de un agregado? (su raíz es otra). */
 function isInternal(model, entity) {
   const found = (model.entities ?? []).find((candidate) => candidate.name === entity);
