@@ -456,7 +456,7 @@ export function renderDocumentAdapter(model, entity) {
   }`);
   }
   if (isPaginated(model, entity)) {
-    imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true });
+    imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true }, { symbol: 'pageOf', from: PAGE_TS });
     imports.push({ symbol: 'Sort', from: 'mongodb', type: true });
     methods.push(`  async list(pageable: Pageable): Promise<Page<${entity.name}>> {
     // Una tras otra y no en paralelo: dentro de una transacción el driver no admite operaciones
@@ -468,13 +468,7 @@ export function renderDocumentAdapter(model, entity) {
       .limit(pageable.size)
       .toArray();
     const total = await this.collection.countDocuments({}, { session: this.session });
-    return {
-      items: documents.map(toDomain${entity.name}),
-      page: pageable.page,
-      size: pageable.size,
-      totalElements: total,
-      totalPages: Math.ceil(total / pageable.size)
-    };
+    return pageOf(documents.map(toDomain${entity.name}), pageable, total);
   }`);
   }
 
@@ -588,6 +582,7 @@ function documentFinderMethods(model, entity, use, imports) {
       lines.push(criterion.required ? `    ${statement}` : `    if (filter.${criterion.name} != null) ${statement}`);
     }
     lines.push('    const query: Filter<StoredDocument> = conditions.length === 0 ? {} : { $and: conditions };');
+    if (finder.result === 'page') imports.push({ symbol: 'pageOf', from: PAGE_TS });
     const tail =
       finder.result === 'page'
         ? `    // Una tras otra y no en paralelo: dentro de una transacción el driver no admite operaciones
@@ -599,13 +594,7 @@ function documentFinderMethods(model, entity, use, imports) {
       .limit(pageable.size)
       .toArray();
     const total = await this.collection.countDocuments(query, { session: this.session });
-    return {
-      items: documents.map(toDomain${entity.name}),
-      page: pageable.page,
-      size: pageable.size,
-      totalElements: total,
-      totalPages: Math.ceil(total / pageable.size)
-    };`
+    return pageOf(documents.map(toDomain${entity.name}), pageable, total);`
         : `    const documents = await this.collection
       .find(query, { session: this.session })
       .sort(withStableOrder({ page: 0, size: 0, sort: ${sortConstant(finder)} }))

@@ -105,6 +105,22 @@ public sealed record Pageable(int Page, int Size, IReadOnlyList<SortOrder> Sort)
 /// <summary>Una página de resultados con sus totales.</summary>
 public sealed record Page<T>(IReadOnlyList<T> Items, int Number, int Size, long TotalElements, int TotalPages)
 {
+    /// <summary>
+    /// La página de los elementos dentro de lo pedido, de un total de filas. Sin elementos es la página vacía del contrato:
+    /// cero elementos y cero páginas, también fuera de rango, con la página y el tamaño que se pidieron.
+    /// </summary>
+    public static Page<T> Of(IReadOnlyList<T> items, Pageable pageable, long total)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(pageable);
+        if (items.Count == 0)
+        {
+            return new Page<T>(items, pageable.Page, pageable.Size, 0, 0);
+        }
+        var pages = pageable.Size == 0 ? 1 : (int)Math.Ceiling(total / (double)pageable.Size);
+        return new Page<T>(items, pageable.Page, pageable.Size, total, pages);
+    }
+
     /// <summary>La misma página con sus elementos transformados (la del dominio → la del contrato).</summary>
     public Page<TResult> Map<TResult>(Func<T, TResult> map) => new([.. Items.Select(map)], Number, Size, TotalElements, TotalPages);
 }`;
@@ -473,8 +489,7 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
         var total = await db.Set<${row}>().LongCountAsync(cancellationToken);
         var offset = (int)Math.Min((long)pageable.Page * pageable.Size, int.MaxValue);
         var rows = await Ordered(Graph().AsNoTracking(), pageable.Sort).Skip(offset).Take(pageable.Size).ToListAsync(cancellationToken);
-        var pages = pageable.Size == 0 ? 1 : (int)Math.Ceiling(total / (double)pageable.Size);
-        return new Page<${entity.name}>([.. rows.Select(ToDomain)], pageable.Page, pageable.Size, total, pages);
+        return Page<${entity.name}>.Of([.. rows.Select(ToDomain)], pageable, total);
     }`);
   }
   // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre la fila, y solo esos.

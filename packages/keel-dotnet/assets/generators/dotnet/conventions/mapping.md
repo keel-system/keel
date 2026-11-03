@@ -73,7 +73,8 @@ public async Task<CreateProductResponseDto> Handle(CreateProductCommand command,
   `blockers`.
 - Una consulta paginada: `var page = await repo.List(query.Pageable, cancellationToken);` y
   `new PagedResponse<…> { Items = [.. page.Items.Select(mapper.To…)], Page = page.Number, Size = page.Size,
-  TotalElements = page.TotalElements, TotalPages = page.TotalPages }`.
+  TotalElements = page.TotalElements, TotalPages = page.TotalPages }`. Una consulta paginada que escribas en el adaptador
+  construye su página con `Page<T>.Of`: es quien da la forma de la página vacía.
 - Un `Todo.Value<T>(...)` en un mapper es un campo que build no supo derivar del dominio: complétalo; no lo dejes
   devolviendo un valor inventado.
 - Un opcional de PATCH es `Optional<T>`: `IsPresent` dice si vino (y entonces `Value` puede ser `null`, que es vaciar); ausente no toca el campo.

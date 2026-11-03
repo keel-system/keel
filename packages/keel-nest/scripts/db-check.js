@@ -82,6 +82,8 @@ const args = process.argv.slice(2);
 // --sabotage=<id> rompe lo emitido EN MEMORIA, antes de escribirlo, conservando la forma (sigue compilando): la red
 // tiene que salir en rojo en las comprobaciones de esa regla. [sufijo del archivo, texto o expresión, sustituto].
 const SABOTAGES = {
+  // Una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato.
+  'empty-page': ['repository/page.ts', /^ {2}if \(items\.length === 0\) return .*\n/m, ''],
   // El orden por un enum (shop-api): la sombra de rango con la posición ALFABÉTICA, que es ordenar por el nombre.
   'rank-sort': ['-repository-impl.ts', /Object\.values\((\w+)\)\.indexOf\(/g, 'Object.values($1).sort().indexOf('],
   // La lectura por la FK inversa (shop-api) se deja una de las filas de su dueño.
@@ -416,7 +418,9 @@ ${idBatchReason(model, root) ? `  {
 ${conditionalBlock(model, root, index, ctx)}
 ${authorshipBlock(model, root, index, ctx)}
 ${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [] });
-  check('${name}: list devuelve la página con su total', page.totalElements >= 1 && page.items.length >= 1 && page.totalPages >= 1, JSON.stringify({ total: page.totalElements, n: page.items.length }));` : ''}
+  check('${name}: list devuelve la página con su total', page.totalElements >= 1 && page.items.length >= 1 && page.totalPages >= 1, JSON.stringify({ total: page.totalElements, n: page.items.length }));
+  const beyond = await repository.list({ page: 99999, size: 5, sort: [] });
+  check('${name}: una página fuera de rango es la página vacía del contrato', beyond.items.length === 0 && beyond.totalElements === 0 && beyond.totalPages === 0 && beyond.page === 99999 && beyond.size === 5, JSON.stringify(beyond));` : ''}
 ${guardClaimsFor(model, root.name).map((claim) => `  // La guarda del efecto irreversible (mail.sentBy): la primera ejecución se lleva la fila y la deja en
   // ${claim.to}; la SEGUNDA no se la lleva — esa es toda la promesa, y su fallo es un segundo correo real.
   {

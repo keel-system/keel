@@ -91,6 +91,8 @@ if (requested && !ENGINES.includes(requested)) {
 
 // Los sabotajes: [archivo (sufijo, en todos los sujetos), texto, sustituto], o uno por motor cuando lo emitido cambia.
 const SABOTAGES = {
+  // Una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato.
+  'empty-page': ['Repository/Page.cs', 'if (items.Count == 0)', 'if (items.Count < 0)'],
   version: ['Repositories/', 'Property(r => r.LockVersion).OriginalValue = expected;', 'Property(r => r.LockVersion).OriginalValue = row.LockVersion;'],
   enum: ['Persistence/EnumColumns.cs', 'new(value => ', 'new(value => value.ToString() ?? '],
   constraint: ['Persistence/PersistenceErrors.cs', 'ConstraintToError.TryGetValue(constraint, out var build)', 'ConstraintToError.TryGetValue(constraint + "-", out var build)'],

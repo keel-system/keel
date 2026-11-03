@@ -463,8 +463,7 @@ export function renderDocumentAdapter(model, entity) {
         var offset = (int)Math.Min((long)pageable.Page * pageable.Size, int.MaxValue);
         // Un límite 0 en MongoDB es «sin límite»: una página de tamaño 0 no lee nada.
         var documents = pageable.Size == 0 ? new List<BsonDocument>() : await Find(all).Sort(Ordered(pageable.Sort)).Skip(offset).Limit(pageable.Size).ToListAsync(cancellationToken);
-        var pages = pageable.Size == 0 ? 1 : (int)Math.Ceiling(total / (double)pageable.Size);
-        return new Page<${entity.name}>([.. documents.Select(ToDomain${entity.name})], pageable.Page, pageable.Size, total, pages);
+        return Page<${entity.name}>.Of([.. documents.Select(ToDomain${entity.name})], pageable, total);
     }`);
   }
 
@@ -590,8 +589,7 @@ function documentFinderMethods(model, entity) {
             '        var offset = (int)Math.Min((long)pageable.Page * pageable.Size, int.MaxValue);',
             '        // Un límite 0 en MongoDB es «sin límite»: una página de tamaño 0 no lee nada.',
             '        var documents = pageable.Size == 0 ? new List<BsonDocument>() : await Find(query).Sort(Ordered(pageable.Sort)).Skip(offset).Limit(pageable.Size).ToListAsync(cancellationToken);',
-            '        var pages = pageable.Size == 0 ? 1 : (int)Math.Ceiling(total / (double)pageable.Size);',
-            `        return new Page<${entity.name}>([.. documents.Select(ToDomain${entity.name})], pageable.Page, pageable.Size, total, pages);`
+            `        return Page<${entity.name}>.Of([.. documents.Select(ToDomain${entity.name})], pageable, total);`
           ]
         : [
             `        var documents = await Find(query).Sort(Ordered(${defaultSortConstant(finder)})).ToListAsync(cancellationToken);`,

@@ -17,6 +17,7 @@
 // --sabotage=<id> rompe lo emitido conservando la forma (sigue compilando) y la sonda tiene que salir en rojo:
 //   finder-where    la Specification / el Criteria pierde su filtro fijo
 //   finder-literal  el patrón LIKE (relacional) o la expresión regular (documental) deja de escapar el texto
+//   empty-page      una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -58,6 +59,11 @@ const SABOTAGES = {
   'finder-literal': {
     relational: ['RepositoryImpl.java', '.replace("%", "\\\\%").replace("_", "\\\\_")', ''],
     document: ['RepositoryImpl.java', 'Pattern.quote(', '(']
+  },
+  // Una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato.
+  'empty-page': {
+    relational: ['PagedResponse.java', 'if (page.getContent().isEmpty())', 'if (page.getContent() == null)'],
+    document: ['PagedResponse.java', 'if (page.getContent().isEmpty())', 'if (page.getContent() == null)']
   }
 };
 
@@ -163,6 +169,7 @@ const anyRoot = roots[0].name;
 const packages = {
   port: packageOf(projectDir, `${anyRoot}Repository`),
   adapters: packageOf(projectDir, `${anyRoot}RepositoryImpl`),
+  dtos: packageOf(projectDir, 'PagedResponse'),
   types: Object.fromEntries(namedTypes(model).map((name) => [name, packageOf(projectDir, name)]))
 };
 const testFile = path.join(projectDir, 'src/test/java', ...model.service.basePackage.split('.'), PACKAGE_LEAF, `${CLASS_NAME}.java`);

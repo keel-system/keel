@@ -245,6 +245,15 @@ export interface Page<T> {
   readonly totalPages: number;
 }
 
+/**
+ * La página de \`items\` dentro de \`pageable\`, de un total de filas. Sin elementos es la página vacía del contrato: cero
+ * elementos y cero páginas, también fuera de rango, con el \`page\` y el \`size\` que se pidieron.
+ */
+export function pageOf<T>(items: readonly T[], pageable: Pageable, total: number): Page<T> {
+  if (items.length === 0) return { items, page: pageable.page, size: pageable.size, totalElements: 0, totalPages: 0 };
+  return { items, page: pageable.page, size: pageable.size, totalElements: total, totalPages: Math.ceil(total / pageable.size) };
+}
+
 /** La misma página con sus elementos transformados (la del dominio → la del contrato). */
 export function mapPage<T, R>(page: Page<T>, map: (item: T) => R): Page<R> {
   return { ...page, items: page.items.map(map) };
@@ -482,7 +491,7 @@ function renderAdapter(model, entity) {
   }`);
   }
   if (isPaginated(model, entity)) {
-    imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true });
+    imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true }, { symbol: 'pageOf', from: PAGE_TS });
     imports.push({ symbol: 'FindOptionsOrder', from: 'typeorm', type: true });
     methods.push(`  async list(pageable: Pageable): Promise<Page<${entity.name}>> {
     const [rows, total] = await this.manager.findAndCount(${ormClass(entity.name)}, {
@@ -490,18 +499,12 @@ function renderAdapter(model, entity) {
       skip: pageable.page * pageable.size,
       take: pageable.size
     });
-    return {
-      items: rows.map(toDomain${entity.name}),
-      page: pageable.page,
-      size: pageable.size,
-      totalElements: total,
-      totalPages: Math.ceil(total / pageable.size)
-    };
+    return pageOf(rows.map(toDomain${entity.name}), pageable, total);
   }`);
   }
 
   // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre la entidad ORM, y solo esos.
-  const finders = relationalFinderMethods(model, entity, imports, { ormClass: ormClass(entity.name), hasRelations, textFold: TEXT_FOLD_TS, likePattern: LIKE_PATTERN_TS });
+  const finders = relationalFinderMethods(model, entity, imports, { ormClass: ormClass(entity.name), hasRelations, pageTs: PAGE_TS, textFold: TEXT_FOLD_TS, likePattern: LIKE_PATTERN_TS });
   if (finders.length > 0) {
     imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true }, { symbol: 'FindOptionsOrder', from: 'typeorm', type: true });
     for (const finder of entityFinders(model, entity)) imports.push(...(finder.criteria.length > 0 ? [{ symbol: finder.filterType, from: portPath(entity), type: true }] : []));

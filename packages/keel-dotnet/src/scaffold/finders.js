@@ -147,8 +147,7 @@ export function relationalFinderMethods(model, entity) {
             '        var total = await query.LongCountAsync(cancellationToken);',
             '        var offset = (int)Math.Min((long)pageable.Page * pageable.Size, int.MaxValue);',
             '        var rows = await Ordered(query, pageable.Sort).Skip(offset).Take(pageable.Size).ToListAsync(cancellationToken);',
-            '        var pages = pageable.Size == 0 ? 1 : (int)Math.Ceiling(total / (double)pageable.Size);',
-            `        return new Page<${entity.name}>([.. rows.Select(ToDomain)], pageable.Page, pageable.Size, total, pages);`
+            `        return Page<${entity.name}>.Of([.. rows.Select(ToDomain)], pageable, total);`
           ]
         : [
             `        var rows = await Ordered(query, ${defaultSortConstant(finder)}).ToListAsync(cancellationToken);`,

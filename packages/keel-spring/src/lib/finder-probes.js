@@ -232,6 +232,19 @@ export function finderTestClass(model, { packages, document, datasource }) {
         ${entity.name} s = ${port}.findById(inside.getId()).orElseThrow();
 ${locals.join('\n')}${locals.length > 0 ? '\n' : ''}${checks.join('\n')}
     }`);
+      if (finder.result === 'page') {
+        imports.add(`${packages.dtos}.PagedResponse`);
+        // Su propia fila: la de arriba puede seguir en la base, y dos filas con el mismo seed chocan en la clave natural.
+        const own = constructorArgs(model, entity, seed++, forced(FINDER_PROBE_TEXT, fixedLiteral), use);
+        tests.push(`
+    @Test
+    void ${entity.name[0].toLowerCase()}${entity.name.slice(1)}${capital(finder.method)}FueraDeRangoEsLaPaginaVaciaDelContrato() {
+        ${entity.name} inside = ${port}.save(new ${entity.name}(${own.join(', ')}));
+        ${entity.name} s = ${port}.findById(inside.getId()).orElseThrow();
+${locals.join('\n')}${locals.length > 0 ? '\n' : ''}        var beyond = PagedResponse.from(${port}.${finder.method}(${noFilter ? `${noFilter}, ` : ''}PageRequest.of(99999, 5)));
+        assertTrue(beyond.items().isEmpty() && beyond.totalElements() == 0 && beyond.totalPages() == 0 && beyond.page() == 99999 && beyond.size() == 5, String.valueOf(beyond));
+    }`);
+      }
     }
   }
 

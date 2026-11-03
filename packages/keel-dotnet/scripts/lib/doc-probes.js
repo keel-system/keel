@@ -435,6 +435,8 @@ function probesCs(model, namespace) {
             Assert.Equal(2, page.Items.Count);
             Assert.True(page.TotalElements >= 3, $"total {page.TotalElements}");
             Assert.Equal(0, page.Number);
+            var beyond = await ${repo}.List(new Pageable(99999, 2, []), Cancel);
+            Assert.Equal((0, 0L, 0, 99999, 2), (beyond.Items.Count, beyond.TotalElements, beyond.TotalPages, beyond.Number, beyond.Size));
             var unknown = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => InScope(other => other.GetRequiredService<${port}>().List(new Pageable(0, 2, [new SortOrder("doesNotExist", ${repositoriesNamespace(model)}.SortDirection.Asc)]), Cancel)));
             Assert.Contains("doesNotExist", unknown.Message, StringComparison.Ordinal);
             await InScope(other => other.GetRequiredService<${port}>().DeleteById(samples[0].${id}, Cancel));

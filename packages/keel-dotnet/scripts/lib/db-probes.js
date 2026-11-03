@@ -568,6 +568,8 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
             Assert.Equal(2, page.Items.Count);
             Assert.True(page.TotalElements >= 3, $"total {page.TotalElements}");
             Assert.Equal(0, page.Number);
+            var beyond = await ${repo}.List(new Pageable(99999, 2, []), Cancel);
+            Assert.Equal((0, 0L, 0, 99999, 2), (beyond.Items.Count, beyond.TotalElements, beyond.TotalPages, beyond.Number, beyond.Size));
             await InScope(other => other.GetRequiredService<${port}>().DeleteById(samples[0].${id}, Cancel));
             Assert.Null(await InScope(other => other.GetRequiredService<${port}>().FindById(samples[0].${id}, Cancel)));
         });`);

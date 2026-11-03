@@ -159,7 +159,7 @@ Quien escribe estas pruebas no puede mirar el código, así que la forma exacta 
 | Campo sin valor | `null` o ausente según la convención del servicio: decide si la clave va en el `toStrictEqual` |
 | `PATCH` | ausente ≠ `null` explícito cuando el diseño lo declara: dos escenarios |
 | `Location` | URL **absoluta** (esquema y host de la petición, como `fromCurrentContextPath` de keel-spring): se afirma su **final**, `toMatch(new RegExp(\`/products/${id}$\`))`, nunca `toBe(<ruta>)`, aunque el `Then` escriba solo la ruta |
-| `page`/`size` fuera de rango | no son error: `size` < 1 → `defaultSize`, `size` > `maxSize` → `maxSize`, `page` < 0 → 0 (Spring Data). Un 400 solo si el escenario lo fija |
+| `page`/`size` fuera de rango | no son error: `size` < 1 → `defaultSize`, `size` > `maxSize` → `maxSize`, `page` < 0 → 0 (Spring Data). Un 400 solo si el escenario lo fija. Una página sin elementos lleva `totalElements` y `totalPages` a 0, también fuera de rango: lo hace `pageOf` |
 
 ## Aserciones: el cuerpo completo o nada
 

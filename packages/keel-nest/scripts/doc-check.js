@@ -52,6 +52,8 @@ const onlySubject = process.argv.find((arg) => arg.startsWith('--subject='))?.sp
 // --sabotage=<id> rompe lo emitido EN MEMORIA, antes de escribirlo, conservando la forma: la red tiene que salir en rojo
 // en las comprobaciones de esa regla. [sufijo del archivo, texto o expresión, sustituto].
 const SABOTAGES = {
+  // Una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato.
+  'empty-page': ['repository/page.ts', /^ {2}if \(items\.length === 0\) return .*\n/m, ''],
   // Los finders (DSL 2.22): el texto buscado como patrón y no como literal, y el where que no filtra.
   'finder-literal': ['job-repository-impl.ts', String.raw`return value.replace(/[.*+?^${'$'}{}()|[\]\\]/g, '\\$&');`, 'return value;'],
   'finder-where': ['job-repository-impl.ts', /^ {4}conditions\.push\(\{ '[^']+': toEnumName\(.*\) \}\);\n/gm, ''],
@@ -373,6 +375,8 @@ ${partial && occupant && otherState ? `  // El índice condicionado (${partial.n
   }` : ''}
 ${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [{ property: '${idName}', direction: 'desc' }] });
   check('${name}: list devuelve la página con su total y en el orden pedido', page.totalElements >= 1 && page.items.length >= 1 && page.items.every((item, i, all) => i === 0 || (typeof item.${idName} === 'string' ? String(all[i - 1].${idName}) >= String(item.${idName}) : all[i - 1].${idName} >= item.${idName})), JSON.stringify({ total: page.totalElements, n: page.items.length }));
+  const beyond = await repository.list({ page: 99999, size: 5, sort: [] });
+  check('${name}: una página fuera de rango es la página vacía del contrato', beyond.items.length === 0 && beyond.totalElements === 0 && beyond.totalPages === 0 && beyond.page === 99999 && beyond.size === 5, JSON.stringify(beyond));
   try {
     await repository.list({ page: 0, size: 5, sort: [{ property: 'noExiste', direction: 'asc' }] });
     check('${name}: ordenar por una propiedad que no existe es un error', false, 'ordenó');

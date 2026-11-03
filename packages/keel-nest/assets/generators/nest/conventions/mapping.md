@@ -67,7 +67,8 @@ async handle(command: CreateProductCommand): Promise<CreateProductResponseDto> {
   dependencia más (otro puerto, otro mapper), añádela **a la lista `inject` y al constructor, en el
   mismo orden**: el contenedor construye el handler con esa lista.
 - Una consulta paginada: `this.repo.list(query.pageable)` y `mapPage` (de `domain/repository/page.ts`)
-  para pasar a DTO, devolviendo `new PagedResponse(items, page, size, totalElements, totalPages)`.
+  para pasar a DTO, devolviendo `new PagedResponse(items, page, size, totalElements, totalPages)`. Una consulta
+  paginada que escribas en el adaptador construye su página con `pageOf`: es quien da la forma de la página vacía.
 - Un `todo('…')` en un mapper es un campo que build no supo derivar del dominio: complétalo; no lo dejes
   devolviendo un valor inventado.
 

@@ -82,7 +82,7 @@ function prepared(criterion, value, imports, textFold) {
 }
 
 /** Los métodos del adaptador relacional. Usan RELATIONS, withStableOrder y toDomain<Raíz> del propio adaptador. */
-export function relationalFinderMethods(model, entity, imports, { ormClass, hasRelations, textFold, likePattern }) {
+export function relationalFinderMethods(model, entity, imports, { ormClass, hasRelations, pageTs, textFold, likePattern }) {
   const finders = entityFinders(model, entity);
   if (finders.length === 0) return [];
   imports.push({ symbol: 'And', from: 'typeorm' }, { symbol: 'FindOperator', from: 'typeorm', type: true }, { symbol: 'FindOptionsWhere', from: 'typeorm', type: true });
@@ -111,16 +111,11 @@ export function relationalFinderMethods(model, entity, imports, { ormClass, hasR
       where: where as FindOptionsWhere<${ormClass}>,
       ${hasRelations ? 'relations: RELATIONS,\n      ' : ''}order: ${order}${finder.result === 'page' ? ',\n      skip: pageable.page * pageable.size,\n      take: pageable.size' : ''}
     }`;
+    if (finder.result === 'page') imports.push({ symbol: 'pageOf', from: pageTs });
     const tail =
       finder.result === 'page'
         ? `    const [rows, total] = await this.manager.findAndCount(${ormClass}, ${options});
-    return {
-      items: rows.map(toDomain${entity.name}),
-      page: pageable.page,
-      size: pageable.size,
-      totalElements: total,
-      totalPages: Math.ceil(total / pageable.size)
-    };`
+    return pageOf(rows.map(toDomain${entity.name}), pageable, total);`
         : `    const rows = await this.manager.find(${ormClass}, ${options});
     return rows.map(toDomain${entity.name});`;
     return `  async ${finderSignature(finder, entity)} {

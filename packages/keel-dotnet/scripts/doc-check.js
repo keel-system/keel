@@ -107,6 +107,8 @@ const SUBJECTS = [
 // El fin de línea de lo emitido (la llamada sigue en la línea siguiente).
 const NL = String.fromCharCode(10);
 const SABOTAGES = {
+  // Una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato.
+  'empty-page': ['Repository/Page.cs', 'if (items.Count == 0)', 'if (items.Count < 0)'],
   // El orden por un enum (shop-api-mongo): la sombra de rango mapeada a la clave del nombre, que es ordenar alfabéticamente.
   'rank-sort': ['Repositories/', /\["(\w+)Rank"\] = "(\w+)_rank"/g, '["$1Rank"] = "$2"'],
   // La lectura por la FK inversa (shop-api-mongo) se deja una de las filas de su dueño.
