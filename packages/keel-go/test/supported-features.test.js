@@ -3,13 +3,30 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
 import { checkSupportedFeatures, checkSupportedStack } from '../src/lib/supported-features.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const manifestWith = (...layers) => ({ layers: Object.fromEntries(layers.map((layer) => [layer, `${layer}.keel.yaml`])) });
 const layersWith = (...layers) => Object.fromEntries(layers.map((layer) => [layer, {}]));
+
+// La tabla del README es la decisión escrita sobre lo que keel-go rechaza: una comprobación nueva sin su fila es un rechazo sin decidir.
+test('toda comprobación de la frontera tiene su fila en el README, y toda fila nombra una que existe', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const source = fs.readFileSync(path.join(here, '..', 'src', 'lib', 'supported-features.js'), 'utf8');
+  const readme = fs.readFileSync(path.join(here, '..', 'README.md'), 'utf8');
+  const body = source.slice(source.indexOf('export function checkSupportedFeatures'), source.indexOf('return { errors, warnings };'));
+  const checks = ['checkSupportedStack', ...[...body.matchAll(/errors\.push\(\.\.\.(\w+)\(/g)].map((match) => match[1])];
+  assert.ok(checks.length >= 10, `solo se leen ${checks.length} comprobaciones: ¿cambió la forma de checkSupportedFeatures?`);
+  const rows = readme.slice(readme.indexOf('## La frontera'), readme.indexOf('## Licencias')).split('\n').filter((line) => line.startsWith('|') && !line.startsWith('|---') && !line.startsWith('| Se rechaza'));
+  const named = new Set(rows.flatMap((row) => [...row.split('|')[2].matchAll(/`(\w+)`/g)].map((match) => match[1])));
+  assert.deepEqual(checks.filter((check) => !named.has(check)), [], 'comprobaciones sin fila');
+  assert.deepEqual([...named].filter((check) => !checks.includes(check)), [], 'filas de una comprobación que no existe');
+  for (const row of rows) assert.equal(row.split('|').length, 7, `fila sin sus cinco columnas: ${row}`);
+});
 
 test('las dos persistencias se aceptan sin avisos (la documental desde el incremento 12); sobre documentos, lo que no mide ninguna fixture se rechaza con su motivo', () => {
   const persisted = (model) => ({ ...layersWith('domain', 'use-cases'), persistence: { default: { model } } });

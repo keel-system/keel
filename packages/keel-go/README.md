@@ -32,12 +32,25 @@ estampado en `keel-generated.json`, y no escribe nada en el workspace de diseño
 
 ## La frontera
 
-Toda fixture del repositorio se genera entera: las once capas, PostgreSQL, MySQL y MongoDB, RabbitMQ, Kafka y SNS/SQS, Keycloak y Cognito, Stripe y MercadoPago, y la telemetría. Lo que se rechaza lleva su motivo en `src/lib/supported-features.js`:
+Toda fixture del repositorio se genera entera: las once capas, PostgreSQL, MySQL y MongoDB, RabbitMQ, Kafka y SNS/SQS, Keycloak y Cognito, Stripe y MercadoPago, y la telemetría.
 
-- los motores que ninguna red ha medido (MariaDB, SQL Server, Oracle);
-- la clave de API, y las formas que ninguna fixture declara y un archivo con cabecera de código generado no admite como TODO: una llamada saliente sin tipar, una relación interna a-uno sin vuelta, una many-to-many dentro del agregado, un value object persistido con otro dentro o con un campo opcional;
-- lo que los handlers reciben por las Dependencies de los casos de uso cuando el diseño no tiene persistencia: clientes, caché, storage y parámetros;
-- la mensajería sin persistencia, con el motivo neutral de los cuatro generadores.
+**Lo que se rechaza es una decisión, no un pendiente.** keel-go rechaza más que keel-dotnet, y en esos casos el mismo diseño no se genera en Go: es una excepción escrita a la regla de equivalencia. Ningún diseño del repositorio lo necesita, así que cada rechazo **se abre cuando un diseño real lo pida**; hasta entonces, el mensaje dice con qué otro generador sale. Cada fila nombra la comprobación de `src/lib/supported-features.js`, y `test/supported-features.test.js` exige que toda comprobación tenga la suya. El coste de abrir es una estimación, sin medir.
+
+| Se rechaza | Comprobación | Motivo | Para abrirlo | Red |
+|---|---|---|---|---|
+| MariaDB, SQL Server y Oracle | `checkSupportedStack` | Ninguna red del repositorio los ha medido, tampoco en keel-nest ni en keel-dotnet | Medio por motor: dialecto en `relational-engine.js` y celdas de la matriz | `db-check`, `harness-check` |
+| Clave de API (`protocol: api-key`) | `securityErrors` | Ninguna fixture la declara, y ninguna red mediría lo emitido | Medio: una rama del middleware de `internal/platform/security` | `security-check` |
+| Identidad del llamante en un campo que no es texto | `securityErrors` | Sale de un claim, que es texto; los otros tres lo pasan tal cual, y en Go el mensaje es tipado y no compilaría. Se cierra declarando el campo `string` | Bajo, si se decide convertirlo: conversión en el borde | `security-check` |
+| Mensajería sin persistencia | `messagingErrors` | Sin adaptador de repositorio nadie publica los eventos. Lo rechazan los cuatro generadores | No se abre: no es una diferencia con los otros tres | — |
+| Relación interna a-uno sin vuelta, many-to-many interna, y value object persistido con otro dentro o con un opcional | `unmeasuredShapes` | Un adaptador con la cabecera de código generado no admite el TODO que deja keel-dotnet, y ninguna fixture declara estas formas | Alto: el mapeo de cada forma, en el esquema y en los adaptadores | `db-check` |
+| Autoría declarada en un campo opcional o que no es texto | `authorshipErrors` | El dominio de Go la guarda como `string`, y vacío es ausente | Bajo: otro tipo en la estampa | `db-check` |
+| Operación por reloj cuyo mensaje lleva campos | `scheduledWithArguments` | El reloj la despacha sin argumentos, y la tarea es código generado, sin TODO posible | Medio: mover la tarea a un archivo del agente | `go-check` |
+| Parámetro `decimal` o `boolean`, y parámetro que no es de un barrido sin persistencia | `parameterErrors` | Ninguna fixture los declara. Los handlers los reciben por las Dependencies, que solo existen con persistencia | Bajo el tipo; alto sin persistencia (ver la última fila) | `go-check` |
+| Réplica sobre documentos | `outboundErrors` | Ninguna fixture documental la declara | Medio: los almacenes de la réplica en el paquete `mongo` | `doc-check` |
+| Value object compuesto en la URL o en una cabecera de una llamada | `outboundErrors` | No tiene forma en una URL. Lo rechazan los cuatro generadores | No se abre: no es una diferencia con los otros tres | — |
+| Campo json en una llamada | `outboundErrors` | Su conversor del cable lee también una cadena, y ninguna fixture lo declara | Bajo: el conversor en el adaptador | `go-check`, `stub-check` |
+| Llamada sin `method`/`path` o sin tipar, o con una respuesta sin campos | `outboundErrors` | El adaptador lleva la cabecera de código generado y no admite el TODO que esa llamada necesita | Medio: esa llamada en un archivo del agente | `go-check`, `stub-check` |
+| Clientes, caché y storage sin persistencia | `outboundErrors`, `cacheErrors`, `storageErrors` | Se entregan por las Dependencies de los casos de uso, que solo existen con persistencia | Alto, y común a las tres: que `NewUseCases` exista sin persistencia | `go-check` |
 
 La matriz de paridad, mecanismo a mecanismo: `npm run matrix --workspace packages/keel-go`.
 
