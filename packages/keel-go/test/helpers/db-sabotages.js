@@ -182,6 +182,14 @@ export const DB_SABOTAGES = {
   },
   // El arnés de flujos atasca todas las filas MENOS la pedida: la sonda lee sus sentencias de lo emitido, así que lo ve.
   'harness-stall': { files: /^tests\/integration\/flow_test\.go$/, from: /(UPDATE [^"\n]*) WHERE id = "/g, to: '$1 WHERE id <> "', expect: /^TestRescue_\w+_TheHarnessStatementsBuildItsPrecondition$/ },
+  // El reloj «rancio» del arnés es AHORA: la fila no parece abandonada y el rescate no la recoge.
+  'stale-literal': { files: /^tests\/integration\/flow_test\.go$/, from: /= (?:TIMESTAMP )?'1970[^']*'/g, to: '= CURRENT_TIMESTAMP', expect: /^TestRescue_\w+_TheHarnessStatementsBuildItsPrecondition$/ },
+  // El id del arnés sale mal escrito: en PostgreSQL no es un uuid, y en MySQL no casa con ninguna fila ni falla.
+  'uuid-literal': { files: /^tests\/integration\/flow_test\.go$/, from: /(func idLiteral\(id string\) string \{\n\treturn )[^\n]*\n/, to: `$1"'0" + id + "'"\n`, expect: /^TestRescue_\w+_TheHarness/ },
+  // La guarda del efecto externo no mira el estado: dos ejecuciones se la llevan, y el correo sale dos veces.
+  'guard-state': { files: REPOSITORY, from: /(ClaimForSend\w+\(ctx[^\n]*\n[^\n]*\n[^\n]*fresh[^\n]*\n[^\n]*\n[^\n]*"UPDATE [^"]*?) AND \w+ IN \([^)]*\)"/g, to: '$1"', expect: /TakesItOnceAndSurvivesTheRollback/ },
+  // MySQL: la columna única sin su collation sensible: pliega mayúsculas, y sus unicidades juzgarían otra cosa.
+  collation: { engines: ['mysql'], files: BASELINE, from: / COLLATE utf8mb4_bin/g, to: '', expect: /_UniqueTextComparesWithItsCollation$/ },
   lease: { files: new RegExp(`${STORE}outbox\\.go$`), from: 'now.Add(lease), event.ID)', to: 'now.Add(-lease), event.ID)', expect: /^TestOutbox_ClaimsInArrivalOrderWithLease$/ },
   // El reclamo sin SKIP LOCKED: espera a la fila retenida en vez de saltarla.
   'skip-locked': { files: new RegExp(`${STORE}outbox\\.go$`), from: ' FOR UPDATE SKIP LOCKED', to: ' FOR UPDATE', expect: /^TestOutbox_SkipLockedSkipsHeldRows$/ },

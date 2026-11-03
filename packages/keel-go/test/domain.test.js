@@ -205,7 +205,8 @@ test('un value object con escala la normaliza con Rescale, y su igualdad compara
   const money = domainFile(plans.get('product-catalog').files, 'money');
   assert.match(money, /\tamount = amount\.Rescale\(2, wire\.RoundHalfUp\)\n/);
   assert.match(money, /return v\.amount\.Equal\(other\.amount\) &&/);
-  assert.match(money, /value, err := NewMoney\(in\.Amount, in\.Currency\)/, 'lo que llega por el cable pasa por el constructor');
+  assert.match(money, /value, err := NewMoney\(\*in\.Amount, \*in\.Currency\)/, 'lo que llega por el cable pasa por el constructor');
+  assert.match(money, /if in\.Amount == nil \{\n\t\treturn Errorf\(ErrInvalidValue, "Money\.amount es obligatorio"\)/, 'un obligatorio que falta no es su valor cero');
 });
 
 test('la expresión del diseño se ancla al valor ENTERO: en RE2 `$` ya es el final del texto', () => {

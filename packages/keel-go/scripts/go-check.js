@@ -27,7 +27,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { AUTHORSHIP_DESIGNS, TELEMETRY_DESIGNS, makeWorkspace, mountDesign, runCommand, GO_READY_DESIGN } from '../test/helpers/workspace.js';
+import { AUTHORSHIP_DESIGNS, TELEMETRY_DESIGNS, UNCOVERED_BRANCHES, makeWorkspace, mountDesign, runCommand, GO_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { ALLOWED_LICENSES, LICENSE_EXCEPTIONS, MODULES, TOOLS } from '../src/lib/go-stack.js';
 import { GO_TOOLCHAIN } from '../src/lib/assets.js';
@@ -183,7 +183,9 @@ const fixtureDirs = [];
 const checkedDesigns = [
   ...fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(path.join(FIXTURES_DIR, entry, 'service.keel.yaml'))).map((name) => ({ name, from: name, mutate: null })),
   // Lo que ninguna fixture declara: la autoría de política sobre product-catalog y la declarada (13g).
-  ...AUTHORSHIP_DESIGNS
+  ...AUTHORSHIP_DESIGNS,
+  // Y las ramas que ninguna fixture declara (incremento 16): el parche que mide keel-dotnet, aquí compilado y con sus pruebas.
+  ...UNCOVERED_BRANCHES
 ];
 for (const { name, from, mutate } of checkedDesigns) {
   // Cada fixture con persistencia relacional, también sobre MySQL (tramo 6d): otro paquete, otro driver y otro SQL. Si es
@@ -473,6 +475,34 @@ for (const sabotage of API_SABOTAGES) {
       const failed = [...new Set([...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]))];
       step(`needs y OAuth2 falsados: ${id} → ${failed.join(' ')}`, !sabotaged.ok && failed.length > 0 && failed.every((name) => sabotage.expect.test(name)), failed.join(' ').slice(0, 300));
     }
+  }
+}
+
+// El compuesto de una llamada saliente (incremento 16) se falsa sobre su parche: el lector sin exigir un obligatorio le pasaría
+// al constructor su valor cero, y el contrato roto del proveedor llegaría al dominio como un importe de 0.
+{
+  const design = UNCOVERED_BRANCHES.find((candidate) => candidate.name === 'stock-reservation-compuesto-saliente');
+  const compositeDir = path.join(makeWorkspace('keel-go-composite-'), design.name);
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, design.from));
+  design.mutate(manifest, layers);
+  for (const file of planService({ manifest, layers, workspace: compositeDir }).files) {
+    const out = path.join(compositeDir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+  const clientsTests = ['test', '-count=1', './internal/infrastructure/clients/'];
+  const tidied = go(compositeDir, ['mod', 'tidy']);
+  const baseline = tidied.ok ? go(compositeDir, clientsTests) : tidied;
+  if (step(`compuesto saliente: la prueba emitida de ${design.name} en verde`, baseline.ok, baseline.ok ? '' : baseline.output.slice(0, 600))) {
+    const file = path.join(compositeDir, 'internal/domain/refund.go');
+    const original = fs.readFileSync(file, 'utf8');
+    const find = 'return Errorf(ErrInvalidValue, "Refund.amount es obligatorio")';
+    const mutated = original.replace(find, () => 'zero := wire.MustDecimal("0")\n\t\tin.Amount = &zero');
+    fs.writeFileSync(file, mutated);
+    const sabotaged = mutated === original ? null : go(compositeDir, clientsTests);
+    fs.writeFileSync(file, original);
+    const failed = [...new Set([...(sabotaged?.output ?? '').matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]))];
+    step(`compuesto saliente falsado: el obligatorio sin exigir → ${failed.join(' ')}`, sabotaged != null && !sabotaged.ok && failed.length > 0 && failed.every((name) => /QueNoSeConstruyeViolaElContrato$/.test(name)), failed.join(' ').slice(0, 300));
   }
 }
 

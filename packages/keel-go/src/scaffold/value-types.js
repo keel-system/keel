@@ -198,7 +198,20 @@ function valueObject(model, vo, helpers) {
     }))
   );
   const toShape = keyed(fields.map(({ field, member }) => [goExported(field.name), `${receiver}.${member}`]), '\t\t');
-  const fromShape = fields.map(({ field }) => `in.${goExported(field.name)}`).join(', ');
+  // Lo que el tipo declara obligatorio se lee con puntero: el valor cero de un decimal o un texto que falta en el JSON es
+  // indistinguible de uno que llegó, y el constructor no podría rechazarlo (un objeto vacío, o un null dentro de una lista).
+  const mandatory = fields.filter(({ field }) => !field.list && !isOptional(field));
+  const input = `${prefix}Input`;
+  const inputRows = alignRows(
+    fields.map(({ field }) => ({
+      indent: '\t',
+      cells: [goExported(field.name), !field.list && !isOptional(field) ? `*${declType(field)}` : declType(field), `\`json:"${field.wireName ?? field.name}"\``]
+    }))
+  );
+  const missing = mandatory.map(
+    ({ field }) => `\tif in.${goExported(field.name)} == nil {\n\t\treturn Errorf(ErrInvalidValue, ${formatString(`${vo.name}.${field.name} es obligatorio`)})\n\t}`
+  );
+  const fromInput = fields.map(({ field }) => `${!field.list && !isOptional(field) ? '*' : ''}in.${goExported(field.name)}`).join(', ');
 
   const body = `
 ${patterns.length > 0 ? `// Las expresiones del diseño para los campos con formato, ancladas al valor entero.\n${patterns.join('\n')}\n\n` : ''}${docComment(vo.name, vo.description, `value object ${vo.name} del diseño`)}type ${vo.name} struct {
@@ -232,13 +245,18 @@ ${toShape.join('\n')}
 	})
 }
 
-// UnmarshalJSONFrom lee ${vo.name} y lo construye con New${vo.name}: lo que llega cumple su tipo.
+// ${input} es lo que se lee de ${vo.name}: un obligatorio que falta se distingue de su valor cero.
+type ${input} struct {
+${inputRows.join('\n')}
+}
+
+// UnmarshalJSONFrom lee ${vo.name} y lo construye con New${vo.name}: lo que llega cumple su tipo, y sin un obligatorio no se construye.
 func (${receiver} *${vo.name}) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
-	var in ${shape}
+	var in ${input}
 	if err := json.UnmarshalDecode(dec, &in); err != nil {
 		return err
 	}
-	value, err := New${vo.name}(${fromShape})
+${missing.length > 0 ? `${missing.join('\n')}\n` : ''}	value, err := New${vo.name}(${fromInput})
 	if err != nil {
 		return err
 	}

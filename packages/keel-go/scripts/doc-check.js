@@ -23,7 +23,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
 import { planService } from '../src/scaffold/index.js';
-import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, makeWorkspace } from '../test/helpers/workspace.js';
+import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, UNCOVERED_BRANCHES, makeWorkspace } from '../test/helpers/workspace.js';
 import { docProbeFile } from './lib/doc-probes.js';
 import { DOC_SABOTAGES as SABOTAGES, applyDocSabotage } from '../test/helpers/doc-sabotages.js';
 import { resolveRuntime, startMongo, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
@@ -64,7 +64,9 @@ try {
   // Las fixtures y el diseño derivado de la autoría declarada (13g).
   const designs = [
     ...fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(path.join(FIXTURES_DIR, entry, 'service.keel.yaml'))).map((name) => ({ name, from: name, mutate: null })),
-    ...AUTHORSHIP_DESIGNS
+    ...AUTHORSHIP_DESIGNS,
+    // Los finders sobre documentos (DSL 2.22), el MISMO diseño que miden keel-nest y keel-dotnet, y la versión declarada.
+    ...UNCOVERED_BRANCHES.filter((design) => ['jobs-mongo-finder', 'mailer-mongo-lock'].includes(design.name))
   ];
   for (const { name, from, mutate } of designs) {
     if (only && name !== only) continue;

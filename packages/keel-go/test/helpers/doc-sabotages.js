@@ -62,6 +62,14 @@ export const DOC_SABOTAGES = {
   'idempotency-outside': { files: file('idempotency_store\\.go'), from: '\t\t_, err = documents.InsertOne(ctx, bson.D{', to: '\t\t_, err = documents.InsertOne(outside(ctx), bson.D{', expect: /IdempotencyStore_/ },
   // La autoría declarada viaja en el $set: si el guardado no conserva la que el agregado leyó, created_by cambia al reescribir.
   'created-by-rewritten': { files: file('audit_actor\\.go'), from: 'if current == "" {', to: 'if current != "-" {', expect: /_Authorship/, also: /TestCreatedAuthor/ },
+  // El rescate sin cota temporal (la cota, una hora en el FUTURO): se lleva también lo que acaba de entrar en vuelo.
+  'claim-stale': { files: REPOSITORY, from: 'staleBefore := time.Now().UTC().Add(-', to: 'staleBefore := time.Now().UTC().Add(time.Hour).Add(0 * -', expect: /_ClaimForStalled/ },
+  // Los finders sobre documentos (DSL 2.22): el filtro que no restringe nada; el extremo inclusivo que deja de serlo; el texto
+  // buscado como patrón y no como literal; y el texto sin plegar contra la sombra plegada.
+  'finder-where': { files: file('documents\\.go'), from: 'return bson.D{{Key: "$and", Value: conditions}}', to: 'return bson.D{}', expect: /_Finder/ },
+  'finder-range': { files: REPOSITORY, from: /Value: bson\.D\{\{Key: "\$gte", Value: instantValue\(createdFrom\)\}\}/g, to: 'Value: bson.D{{Key: "$gt", Value: instantValue(createdFrom)}}', expect: /_Finder/ },
+  'finder-literal': { files: REPOSITORY, from: /regexp\.QuoteMeta\(([^()]*(?:\([^()]*\))?)\)/g, to: 'regexp.MustCompile("$^").ReplaceAllString($1, "")', expect: /_Finder/ },
+  'finder-fold': { files: REPOSITORY, from: /regexp\.QuoteMeta\(textfold\.\w+\((\w+)\)\)/g, to: 'regexp.QuoteMeta($1)', expect: /_Finder/ },
   // El actor deja de leer el `sub`: queda el nombre del principal, que es para mostrar.
   'actor-subject': { files: file('audit_actor\\.go'), from: 'principal.Kind == security.TokenPrincipal && found', to: 'principal.Kind == 0 && found', expect: /_Authorship/, also: /TestAuditActor/ }
 };

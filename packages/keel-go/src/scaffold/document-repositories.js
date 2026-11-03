@@ -24,7 +24,7 @@ import { isPaginated, repositoryRoots, usesDocument } from '@keel-system/keel-co
 import { enumConstant, goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { isDeclaredLockVersion } from './entities.js';
-import { entityFinders } from './finders.js';
+import { entityFinders, finderMethod, finderParams, finderResult, fixedArg } from './finders.js';
 import { docComment, goFileName, isOptional, layout, localName, packageFile } from './render.js';
 import { declaredAuthorship, usesDeclaredAuthorship } from './audit-actor.js';
 import { emitsEvents, usesGoOutbox } from './messaging.js';
@@ -40,6 +40,7 @@ const ADAPTER_IMPORTS = [
   'encoding/json/jsontext',
   'errors',
   'fmt',
+  'regexp',
   'time',
   'github.com/google/uuid',
   MONGO_DRIVER,
@@ -61,9 +62,6 @@ export function generate(model) {
   const files = [];
   const uses = new Set();
   for (const entity of roots) {
-    if (entityFinders(model, entity).length > 0) {
-      throw new Error(`${entity.name}: keel-go no genera todavía los finders de búsqueda (DSL 2.22) sobre documentos (lo rechaza la frontera)`);
-    }
     files.push({ path: `${store.dir}/${goFileName(entity.name)}_repository.go`, content: packageFile(model, store, { imports: ADAPTER_IMPORTS, body: adapterBody(model, entity, uses) }) });
   }
   files.push({ path: `${store.dir}/documents.go`, content: packageFile(model, store, { imports: [...ADAPTER_IMPORTS, 'slices', 'strings'], body: documentsBody(model, uses) }) });
@@ -164,7 +162,8 @@ function documentModel(model, entity) {
       fields.push({ entry, key: DOCUMENT_ID, field: entry.field, method: goExported(entry.member), id: true });
     } else if (entry.kind === 'scalar') {
       if (isDeclaredLockVersion(entity, entry.field)) {
-        version = { key: entry.name, method: goExported(entry.member) };
+        // La versión declarada se guarda con el tipo de su campo: un `int` es Int32 en el contrato (documentShape).
+        version = { key: entry.name, method: goExported(entry.member), goType: entry.field.goType };
         continue;
       }
       fields.push({ entry, key: entry.name, field: entry.field, method: goExported(entry.member) });
@@ -188,7 +187,7 @@ function documentModel(model, entity) {
       const ref = { ...idField, name: entry.member, required: entry.relation.required, isId: false, generated: false, list: false };
       fields.push({ entry, key: entry.name, field: ref, method: goExported(entry.member) });
     } else if (entry.kind === 'version') {
-      version = { key: entry.name, method: goExported(entry.member) };
+      version = { key: entry.name, method: goExported(entry.member), goType: 'int64' };
     } else if (entry.kind === 'audit') {
       audit.push({ key: entry.name, role: entry.role, storage: entry.storage });
     }
@@ -251,7 +250,7 @@ function decodeFunction(model, doc, uses) {
     } else read = fieldRead(f.field, uses);
     lines.push(`\tif state.${f.method}, err = get(doc, ${goString(f.key)}, ${read}); err != nil {\n\t\treturn nil, err\n\t}`);
   }
-  if (doc.version) lines.push(`\tif state.${doc.version.method}, err = get(doc, ${goString(doc.version.key)}, optional(asInt64)); err != nil {\n\t\treturn nil, err\n\t}`);
+  if (doc.version) lines.push(`\tif state.${doc.version.method}, err = get(doc, ${goString(doc.version.key)}, optional(${doc.version.goType === 'int32' ? 'asInt32' : 'asInt64'})); err != nil {\n\t\treturn nil, err\n\t}`);
   return `// decode${name} lee el documento de ${name} y lo rehidrata.
 func decode${name}(doc bson.Raw) (*domain.${name}, error) {
 	var (
@@ -422,10 +421,9 @@ func (r *${type}) ${batch.name}(ctx context.Context, ${batch.plural} []${batch.p
 	return r.find(ctx, bson.D{{Key: ${goString(snakeCase(field.name))}, Value: bson.D{{Key: "$in", Value: each(${batch.plural}, ${writerFunc(field, uses)})}}}})
 }`);
   }
-  if (isPaginated(model, entity)) {
-    parts.push(sortableMap(model, entity));
-    parts.push(listMethod(entity, type, constant));
-  }
+  if (isPaginated(model, entity) || entityFinders(model, entity).length > 0) parts.push(sortableMap(model, entity));
+  if (isPaginated(model, entity)) parts.push(listMethod(entity, type, constant));
+  parts.push(...documentFinderMethods(model, entity, type, constant, uses));
   parts.push(...claimMethods(model, entity, type, constant, uses));
   parts.push(...documentReconciliationMethods(model, entity, type));
   parts.push(...documentGuardMethods(model, entity, type, constant, idWrite));
@@ -495,7 +493,7 @@ function saveMethod(model, entity, type, constant, id, idWrite, uses) {
 		version := ${local}.${doc.version.method}()
 		if version == nil {
 			inserted := append(bson.D{{Key: "_id", Value: ${filterId}}}, fields...)
-			inserted = append(inserted, bson.E{Key: ${goString(doc.version.key)}, Value: int64(0)})
+			inserted = append(inserted, bson.E{Key: ${goString(doc.version.key)}, Value: ${doc.version.goType}(0)})
 ${appendAll(created, 'inserted').map((line) => `\t${line}`).join('\n')}
 			if _, err := documents.InsertOne(ctx, inserted); err != nil {
 				return err
@@ -572,6 +570,92 @@ function sortableMap(model, entity) {
 var ${lower(entity.name)}Sortable = map[string]string{
 ${rows.join('\n')}
 }`;
+}
+
+// ─── Los finders de las búsquedas (DSL 2.22) ─────────────────────────────────────────────────────
+
+const RANGE_OPERATOR = { gt: '$gt', gte: '$gte', lt: '$lt', lte: '$lte' };
+
+/** La clave del documento que restringe un criterio, y su valor escrito como se guarda. */
+function criterionTarget(model, entity, criterion, value, uses) {
+  const { target, shadow } = criterion;
+  if (shadow) return { key: snakeCase(shadow.name), value: `${shadow.accents ? 'textfold.CaseAndAccents' : 'textfold.Case'}(${value})` };
+  if (target.kind === 'relation') {
+    const owner = model.entities.find((candidate) => candidate.name === target.relation.entity);
+    return { key: `${snakeCase(target.relation.name)}_id`, value: writer(owner?.idField ?? { goType: 'uuid.UUID', name: 'id' }, value, uses) };
+  }
+  const key = documentShape(model, entity).find((entry) => entry.member === target.field.name)?.name ?? snakeCase(target.field.name);
+  if (target.kind === 'vo') return { key: `${key}.${snakeCase(target.sub.name)}`, value: writer(target.sub, value, uses) };
+  return { key, value: writer(target.field, value, uses) };
+}
+
+/** La condición de un criterio. El texto buscado es LITERAL: se escapa antes de componer la expresión. */
+function criterionCondition(model, entity, criterion, value, uses) {
+  const { key, value: written } = criterionTarget(model, entity, criterion, value, uses);
+  const condition = (operand) => `bson.D{{Key: ${goString(key)}, Value: ${operand}}}`;
+  if (criterion.match === 'contains') return condition(`bson.Regex{Pattern: regexp.QuoteMeta(${written})}`);
+  if (criterion.match === 'prefix') return condition(`bson.Regex{Pattern: "^" + regexp.QuoteMeta(${written})}`);
+  if (RANGE_OPERATOR[criterion.op]) return condition(`bson.D{{Key: ${goString(RANGE_OPERATOR[criterion.op])}, Value: ${written}}}`);
+  return condition(written);
+}
+
+/** Los métodos del adaptador: los filtros del diseño sobre el documento, y solo esos. */
+function documentFinderMethods(model, entity, type, constant, uses) {
+  const name = entity.name;
+  const idName = entity.idField?.name ?? 'id';
+  return entityFinders(model, entity).map((finder) => {
+    uses.add('matching');
+    const page = finder.result === 'page';
+    const zero = page ? `domain.Page[*domain.${name}]{}` : 'nil';
+    const lines = ['\tvar conditions bson.A'];
+    for (const entry of finder.fixed) {
+      const key = documentShape(model, entity).find((candidate) => candidate.member === entry.field.name)?.name ?? snakeCase(entry.field.name);
+      lines.push(`\tconditions = append(conditions, bson.D{{Key: ${goString(key)}, Value: ${fixedArg(model, entry)}}})`);
+    }
+    for (const criterion of finder.criteria) {
+      const member = `filter.${goExported(criterion.name)}`;
+      if (criterion.required) {
+        lines.push(`\tconditions = append(conditions, ${criterionCondition(model, entity, criterion, member, uses)})`);
+      } else {
+        const local = localName(criterion.name);
+        lines.push(`\tif ${member} != nil {`, `\t\t${local} := *${member}`, `\t\tconditions = append(conditions, ${criterionCondition(model, entity, criterion, local, uses)})`, '\t}');
+      }
+    }
+    const encodes = lines.some((line) => line.includes('e.decimal('));
+    const prelude = encodes ? '\te := &encoder{}\n' : '';
+    const encoded = encodes ? `\n\tif e.err != nil {\n\t\treturn ${zero}, e.err\n\t}` : '';
+    const sort = finder.sort.map((criterion) => `{Property: ${goString(criterion.property)}, Direction: domain.${criterion.direction === 'desc' ? 'SortDesc' : 'SortAsc'}}`);
+    const signature = `func (r *${type}) ${finderMethod(finder)}(${['ctx context.Context', ...finderParams(finder, 'domain.')].join(', ')}) ${finderResult(finder, entity, 'domain.')}`;
+    const tail = page
+      ? `	order, err := sortOf(pageable.Sort, ${lower(name)}Sortable, ${goString(idName)})
+	if err != nil {
+		return ${zero}, fmt.Errorf("%s: %w", ${constant}, err)
+	}
+	documents, err := r.tx.collection(${constant})
+	if err != nil {
+		return ${zero}, err
+	}
+	query := matching(conditions)
+	total, err := documents.CountDocuments(ctx, query)
+	if err != nil {
+		return ${zero}, translate(err)
+	}
+	found, err := r.find(ctx, query, options.Find().SetSort(order).SetSkip(pageable.Offset()).SetLimit(int64(pageable.Size)))
+	if err != nil {
+		return ${zero}, err
+	}
+	return domain.NewPage(found, pageable, total), nil`
+      : `	order, err := sortOf([]domain.SortOrder{${sort.join(', ')}}, ${lower(name)}Sortable, ${goString(idName)})
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ${constant}, err)
+	}
+	return r.find(ctx, matching(conditions), options.Find().SetSort(order))`;
+    return `// ${finderMethod(finder)} implementa domain.${portName(entity)}.
+${signature} {
+${prelude}${lines.join('\n')}${encoded}
+${tail}
+}`;
+  });
 }
 
 function listMethod(entity, type, constant) {
@@ -699,6 +783,16 @@ func sortOf(sort []domain.SortOrder, paths map[string]string, idProperty string)
 	}
 	return order, nil
 }`);
+  if (uses.has('matching')) {
+    blocks.push(`// matching es el filtro de un finder: todas sus condiciones, o el documento vacío sin ninguna. Con $and, porque un rango
+// restringe dos veces la misma clave.
+func matching(conditions bson.A) bson.D {
+	if len(conditions) == 0 {
+		return bson.D{}
+	}
+	return bson.D{{Key: "$and", Value: conditions}}
+}`);
+  }
   if (uses.has('orNullChild')) {
     blocks.push(`// orNullChild escribe una entidad anidada uno-a-uno: null si no hay ninguna.
 func orNullChild[T any](child *T, write func(*T) bson.D) any {

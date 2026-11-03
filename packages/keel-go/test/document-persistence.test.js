@@ -11,7 +11,7 @@ import { constraintErrors } from '@keel-system/keel-core/gen/constraint-errors';
 import { localMongoUrl } from '@keel-system/keel-core/gen/infra-catalog';
 import { repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { planService } from '../src/scaffold/index.js';
-import { AUTHORSHIP_DESIGNS, FIXTURES_DIR } from './helpers/workspace.js';
+import { AUTHORSHIP_DESIGNS, UNCOVERED_BRANCHES, FIXTURES_DIR } from './helpers/workspace.js';
 import { DOC_SABOTAGES, applyDocSabotage } from './helpers/doc-sabotages.js';
 
 const DOCUMENTAL = ['asset-vault', 'conduit', 'inspection-reports', 'job-dispatch-mongo', 'notification-mailer-mongo'];
@@ -71,7 +71,7 @@ for (const name of DOCUMENTAL) {
 
 test('cada sabotaje de doc-check se sigue aplicando a lo que emite alguna fixture documental', () => {
   for (const [id, sabotage] of Object.entries(DOC_SABOTAGES)) {
-    const derived = AUTHORSHIP_DESIGNS.filter((design) => design.name === 'mailer-mongo-author').map((design) => {
+    const derived = [...AUTHORSHIP_DESIGNS, ...UNCOVERED_BRANCHES].filter((design) => ['mailer-mongo-author', 'jobs-mongo-finder'].includes(design.name)).map((design) => {
       const { manifest, layers } = loadService(path.join(FIXTURES_DIR, design.from));
       design.mutate(manifest, layers);
       return planService({ manifest, layers, workspace: FIXTURES_DIR }).files;

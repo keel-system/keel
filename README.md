@@ -40,7 +40,7 @@ flowchart LR
    servicio: un archivo YAML por capa (dominio, casos de uso, API, seguridad, mensajería,
    persistencia…), sin una sola palabra de tecnología. `keel validate --ready` dice con exit code si
    está listo para generar.
-2. **Generar.** `keel-spring build`, `keel-nest build` o `keel-dotnet build` pregunta el stack (base de
+2. **Generar.** `keel-spring build`, `keel-nest build`, `keel-dotnet build` o `keel-go build` pregunta el stack (base de
    datos, broker, proveedor de identidad…) y escribe de forma determinista todo lo que se deduce del
    diseño: el proyecto compila y arranca antes de que lo toque ningún agente.
 3. **Completar.** Dentro del proyecto, `/keel-generate-<tech>` orquesta a cinco subagentes que
@@ -57,6 +57,7 @@ npm i -g @keel-system/keel-core      # comando `keel`: diseñar y validar (siemp
 npm i -g @keel-system/keel-spring    # comando `keel-spring`, si generas en Spring Boot
 npm i -g @keel-system/keel-nest      # comando `keel-nest`, si generas en NestJS
 npm i -g @keel-system/keel-dotnet    # comando `keel-dotnet`, si generas en .NET
+npm i -g @keel-system/keel-go        # comando `keel-go`, si generas en Go
 npm i -g @keel-system/keel-recover   # comando `keel-recover`, si partes de un servicio existente
 ```
 
@@ -67,7 +68,7 @@ de los dos).
 | Para… | Hace falta |
 |---|---|
 | Diseñar (`keel init`, `/keel-design`, `keel validate`, `keel system`, `keel registry`) y **generar** (`keel-<tech> build`) | **Node.js >= 18** y nada más. Todo es offline y determinista; el registry es lo único que toca la red. |
-| **Completar y validar** el proyecto generado (`/keel-generate-<tech>`) | El toolchain de la tecnología —**JDK 21** para keel-spring, **Node.js >= 22.12** para keel-nest, **SDK de .NET 10** para keel-dotnet— y un **runtime de contenedores: Docker o Podman**. |
+| **Completar y validar** el proyecto generado (`/keel-generate-<tech>`) | El toolchain de la tecnología —**JDK 21** para keel-spring, **Node.js >= 22.12** para keel-nest, **SDK de .NET 10** para keel-dotnet, **Go 1.27** para keel-go— y un **runtime de contenedores: Docker o Podman**. |
 | **Recuperar** un legacy (`keel-recover`) | Node.js >= 18, Docker o Podman en marcha y el repo git del legacy. En Windows, Git Bash con `export MSYS_NO_PATHCONV=1`. |
 
 El runtime de contenedores **es el precio de que «terminado» signifique algo**: la validación no
@@ -178,7 +179,7 @@ keel-spring check specs/mi-servicio              # opcional: no escribe nada, di
 keel-spring build specs/mi-servicio              # pregunta el stack y genera services/mi-servicio-spring/
 ```
 
-(Igual con `keel-nest` o `keel-dotnet`.) `build` pregunta el stack —motor de base de datos, broker,
+(Igual con `keel-nest`, `keel-dotnet` o `keel-go`.) `build` pregunta el stack —motor de base de datos, broker,
 proveedor de identidad, caché, storage, pasarela de pago… según lo que pida el diseño— o toma los
 defaults con `-y`; `--telemetry otel` añade OpenTelemetry. Lo elegido queda en el proyecto
 (`keel-stack.json`), nunca en el diseño.
@@ -310,13 +311,14 @@ flowchart TB
     QUALITY --> CLOSE["⚙ cierre: INFORME-GENERACION.md<br/>compose down + commit"]
 ```
 
-**Criterio de terminado**: el proyecto compila en verde (`./gradlew build`, `npm run build` o
-`dotnet build`) y el **100 %** de los escenarios `FL-*` del diseño pasa contra la infraestructura real,
+**Criterio de terminado**: el proyecto compila en verde (`./gradlew build`, `npm run build`,
+`dotnet build` o `go build ./...`) y el **100 %** de los escenarios `FL-*` del diseño pasa contra la infraestructura real,
 puntuado por el script y no por un juicio. El pipeline completo de cada generador —gating, handoffs,
 ciclos de fix y su cupo— está en su `orchestration.md`:
 [spring](packages/keel-spring/assets/generators/spring/orchestration.md) ·
 [nest](packages/keel-nest/assets/generators/nest/orchestration.md) ·
-[dotnet](packages/keel-dotnet/assets/generators/dotnet/orchestration.md).
+[dotnet](packages/keel-dotnet/assets/generators/dotnet/orchestration.md) ·
+[go](packages/keel-go/assets/generators/go/orchestration.md).
 
 ## Qué ganas desarrollando con Keel
 
@@ -333,18 +335,18 @@ sola regla: **el mismo diseño genera servidores equivalentes**, y equivalentes 
 Lo que no depende del lenguaje vive una sola vez en el núcleo neutral `keel-core/gen`, y un test
 (`gen-neutral.test.js`) impide que ahí entre el nombre de un lenguaje.
 
-| | keel-spring | keel-nest | keel-dotnet |
-|---|---|---|---|
-| Plataforma | Spring Boot 4.1 · Java 21 · Gradle | NestJS 12 · Fastify · Node 22 · TypeScript strict | .NET 10 · un proyecto por capa · xUnit v3 |
-| Relacional | PostgreSQL, MySQL, MariaDB, SQL Server, Oracle | PostgreSQL, MySQL | PostgreSQL, MySQL (EF Core) |
-| Documental | MongoDB | MongoDB | MongoDB |
-| Brokers | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS |
-| Identidad | Keycloak · Cognito | Keycloak · Cognito | Keycloak · Cognito |
-| Caché · storage · correo | Redis/Valkey · S3/MinIO · SMTP | Redis/Valkey · S3/MinIO · SMTP | Redis/Valkey · S3/MinIO · SMTP |
-| Pagos | Stripe · MercadoPago | Stripe · MercadoPago | Stripe · MercadoPago |
+| | keel-spring | keel-nest | keel-dotnet | keel-go |
+|---|---|---|---|---|
+| Plataforma | Spring Boot 4.1 · Java 21 · Gradle | NestJS 12 · Fastify · Node 22 · TypeScript strict | .NET 10 · un proyecto por capa · xUnit v3 | Go 1.27 · net/http · sin cgo |
+| Relacional | PostgreSQL, MySQL, MariaDB, SQL Server, Oracle | PostgreSQL, MySQL | PostgreSQL, MySQL (EF Core) | PostgreSQL, MySQL (database/sql, goose) |
+| Documental | MongoDB | MongoDB | MongoDB | MongoDB |
+| Brokers | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS |
+| Identidad | Keycloak · Cognito | Keycloak · Cognito | Keycloak · Cognito | Keycloak · Cognito |
+| Caché · storage · correo | Redis/Valkey · S3/MinIO · SMTP | Redis/Valkey · S3/MinIO · SMTP | Redis/Valkey · S3/MinIO · SMTP | Redis/Valkey · S3/MinIO · SMTP |
+| Pagos | Stripe · MercadoPago | Stripe · MercadoPago | Stripe · MercadoPago | Stripe · MercadoPago |
 
 Lo que un generador aún no sostiene **lo rechaza en `build` diciendo por qué**
-(`src/lib/supported-features.js` de cada uno); los motores que faltan en NestJS y .NET faltan porque
+(`src/lib/supported-features.js` de cada uno); los motores que faltan en NestJS, .NET y Go faltan porque
 ninguna red los ha ejecutado todavía. En .NET, ningún paquete con licencia comercial: versión exacta y
 SPDX de cada uno en `keel-dotnet/src/lib/dotnet-stack.js`, comprobados contra nuget.org con los
 transitivos.
@@ -419,6 +421,7 @@ por mecanismo y motor:
 | keel-spring | 54 celdas · 36 verificadas contra un motor real, 33 de ellas falsadas · 12 sin ejecutar · 2 degradadas |
 | keel-nest | 38 celdas · 33 verificadas · 3 degradadas · 0 pendientes |
 | keel-dotnet | 38 celdas · 33 verificadas, ninguna sin falsar · 3 degradadas · 0 pendientes |
+| keel-go | 38 celdas · 33 verificadas, ninguna sin falsar · 3 degradadas · 0 pendientes |
 
 Lo que un motor no sostiene —la unicidad condicionada en MariaDB y en Oracle, por ejemplo— se declara
 `degradado`, con la garantía que se pierde, en vez de fingirse.
@@ -485,7 +488,7 @@ diseño y se regenera, nunca en el código generado.
 | `keel registry [list \| search \| show \| get]` | Explora y adopta diseños del registry. Fuente con `--source` o `KEEL_REGISTRY_URL`; caché en `~/.keel/registry/`. |
 | `keel list` | Los generadores conocidos y su paquete npm. |
 
-**`keel-spring` · `keel-nest` · `keel-dotnet`**: generar.
+**`keel-spring` · `keel-nest` · `keel-dotnet` · `keel-go`**: generar.
 
 | Comando | Qué hace |
 |---|---|
@@ -566,7 +569,7 @@ Monorepo npm workspaces; los cinco paquetes están publicados en npm con el scop
 | [`@keel-system/keel-spring`](packages/keel-spring/README.md) | `keel-spring` | 0.2.0 | Generador Spring Boot 4.1.2 / Java 21: `services/<servicio>-spring/`, con el wrapper de Gradle vendorizado. |
 | [`@keel-system/keel-nest`](packages/keel-nest/README.md) | `keel-nest` | 0.1.0 | Generador NestJS 12 sobre Fastify, ESM, TypeScript strict y Vitest: `services/<servicio>-nest/`. |
 | [`@keel-system/keel-dotnet`](packages/keel-dotnet/README.md) | `keel-dotnet` | 0.1.0 | Generador .NET 10, un proyecto por capa, sin librerías de licencia comercial: `services/<servicio>-dotnet/`. |
-| [`@keel-system/keel-go`](packages/keel-go/README.md) | `keel-go` | 0.1.0 | Generador Go, **en construcción por incrementos** (`PLAN-KEEL-GO.md`): hoy un módulo Go que compila sin cgo, pasa vet y staticcheck, arranca y responde a sus sondas; rechaza nombrando el incremento todo lo que todavía no genera. `services/<servicio>-go/`. |
+| [`@keel-system/keel-go`](packages/keel-go/README.md) | `keel-go` | 0.1.0 | Generador Go 1.27 sobre net/http, sin cgo y solo con licencias permisivas, salvo una excepción escrita: `services/<servicio>-go/`. |
 | [`@keel-system/keel-recover`](packages/keel-recover/README.md) | `keel-recover` | 0.0.1 | Ingeniería inversa de un servicio existente hacia un diseño Keel, con la fidelidad y la paridad medidas. |
 
 El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera— está en su README.
@@ -587,7 +590,8 @@ El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera
   ellos pares que solo se diferencian en el modelo de persistencia— y redes en vivo por generador
   contra motores, brokers, proveedores de identidad y buzones en contenedores (ver
   `CLAUDE.md § Comandos`). 65 corridas registradas en [docs/corridas](docs/corridas/).
-- **Pendiente**: MariaDB, SQL Server y Oracle medidos en vivo en keel-nest y keel-dotnet; las
+- **keel-go**, cuarto generador, en sus 16 incrementos medidos ([PLAN-KEEL-GO](PLAN-KEEL-GO.md)); falta su corrida de control junto a los otros tres.
+- **Pendiente**: MariaDB, SQL Server y Oracle medidos en vivo en keel-nest, keel-dotnet y keel-go; las
   pasarelas de pago contra su sandbox real; brokers distintos de RabbitMQ en keel-recover y las
   corridas de control de keel-recover sobre legacys relacionales.
 
@@ -621,6 +625,7 @@ keel/
 │   ├── keel-spring/              # generador Spring Boot
 │   ├── keel-nest/                # generador NestJS
 │   ├── keel-dotnet/              # generador .NET
+│   ├── keel-go/                  # generador Go
 │   │   ├── src/                  # cada uno: build, check y su scaffolding (src/scaffold, src/lib)
 │   │   └── assets/               # lo que build instala en el proyecto (skill, agentes, conventions…)
 │   └── keel-recover/             # ingeniería inversa de un legacy (legacys y sandboxes de prueba en su fixtures/)

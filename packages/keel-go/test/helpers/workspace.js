@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './tmp.js';
+import { FINDER_DESIGNS } from '../../../keel-core/test/helpers/finder-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -95,6 +96,108 @@ export const AUTHORSHIP_DESIGNS = [
       }
     }
   }))
+];
+
+const DEGRADED_REPLICA = 'Se cotiza sin precio del proveedor y la ficha lo dice.';
+const DEGRADED_ACTIVATION = 'El producto queda sin reindexar hasta el próximo cambio; la búsqueda lo encuentra con sus datos viejos.';
+const replicaOf = (layers) => Object.values(layers.dependencies.dependencies.pricing.needs).find((need) => need.replica).replica;
+
+/**
+ * Las ramas del DSL que ninguna fixture declara y keel-go genera (incremento 16): los MISMOS parches que mide keel-dotnet en
+ * sus UNCOVERED_BRANCHES, con cuidado de que cada uno sea su propio módulo. Las recorren `uncovered-branches.test.js` (la rama
+ * en lo emitido, sin red), go-syntax y go-check, que las compila y ejecuta sus pruebas emitidas.
+ */
+export const UNCOVERED_BRANCHES = [
+  {
+    name: 'catalog-extended-replica-fail',
+    from: 'catalog-extended',
+    mutate(manifest, layers) {
+      manifest.service.name = 'catalog-extended-replica-fail';
+      replicaOf(layers).onMiss = { action: 'fail', error: 'PRICE_UNAVAILABLE' };
+    }
+  },
+  {
+    name: 'catalog-extended-replica-degrade',
+    from: 'catalog-extended',
+    prose: DEGRADED_REPLICA,
+    mutate(manifest, layers) {
+      manifest.service.name = 'catalog-extended-replica-degrade';
+      replicaOf(layers).onMiss = { action: 'degrade', degradedTo: DEGRADED_REPLICA };
+    }
+  },
+  {
+    name: 'catalog-extended-activation-degrade',
+    from: 'catalog-extended',
+    prose: DEGRADED_ACTIVATION,
+    mutate(manifest, layers) {
+      manifest.service.name = 'catalog-extended-activation-degrade';
+      layers.dependencies.dependencies['search-index'].activations.indexProduct.onFailure = { action: 'degrade', degradedTo: DEGRADED_ACTIVATION };
+    }
+  },
+  {
+    // Un value object compuesto en el cuerpo y en la respuesta de una llamada saliente (el parche de keel-nest y keel-dotnet).
+    name: 'stock-reservation-compuesto-saliente',
+    from: 'stock-reservation',
+    mutate(manifest, layers) {
+      manifest.service.name = 'stock-reservation-compuesto-saliente';
+      layers.domain.types.Refund = {
+        description: 'Importe devuelto.',
+        fields: { amount: { type: 'decimal', required: true }, currency: { type: 'string', required: true } }
+      };
+      const calls = layers['http-clients'].clients.inventory.calls;
+      calls.cancelStock.response.fields.refund = { type: 'Refund' };
+      calls.reportRefund = {
+        contract: 'POST /stock/refunds informa de un reembolso y devuelve { accepted, refunds }.',
+        method: 'POST',
+        path: '/stock/refunds',
+        request: { body: { refund: { type: 'Refund', required: true }, history: { type: 'Refund', list: true } } },
+        response: { fields: { accepted: { type: 'boolean', required: true }, refunds: { type: 'Refund', list: true } } }
+      };
+    }
+  },
+  {
+    // Los finders sobre documentos (DSL 2.22): el diseño compartido, lista y página, plegado y sin plegar, y rangos.
+    name: 'jobs-mongo-finder',
+    from: 'job-dispatch-mongo',
+    mutate(manifest, layers) {
+      manifest.service.name = 'jobs-mongo-finder';
+      FINDER_DESIGNS.find((design) => design.name === 'jobs-mongo-finder').mutate(layers);
+    }
+  },
+  {
+    // `optimisticLocking: declared`: la raíz porta el bloqueo en el lockVersion que declara su dominio, en los dos modelos.
+    name: 'product-catalog-declared-lock',
+    from: 'product-catalog',
+    mutate(manifest, layers) {
+      manifest.service.name = 'product-catalog-declared-lock';
+      layers.persistence.consistency = { ...(layers.persistence.consistency ?? {}), optimisticLocking: 'declared' };
+      layers.domain.entities.Product.fields.lockVersion = { type: 'int', generated: true };
+    }
+  },
+  {
+    name: 'mailer-mongo-lock',
+    from: 'notification-mailer-mongo',
+    mutate(manifest, layers) {
+      manifest.service.name = 'mailer-mongo-lock';
+      layers.persistence.consistency = { ...(layers.persistence.consistency ?? {}), optimisticLocking: 'declared' };
+      layers.domain.entities.Template.fields.lockVersion = { type: 'int', generated: true };
+    }
+  },
+  {
+    // La captura PARCIAL: payment-checkout captura siempre entero porque MercadoPago no la cubre; sobre Stripe sí.
+    name: 'payment-checkout-partial-capture',
+    from: 'payment-checkout',
+    paymentGateway: 'stripe',
+    stack: { paymentGateway: 'stripe' },
+    mutate(manifest, layers) {
+      manifest.service.name = 'payment-checkout-partial-capture';
+      const operation = layers['use-cases'].operations.capturePayment;
+      operation.input.fields.amount = { ...layers['use-cases'].operations.refundPayment.input.fields.amount };
+      operation.rules = operation.rules.map((rule) => (rule === 'Se captura el importe entero autorizado.' ? 'Se captura el importe pedido, o el entero si no se pide.' : rule));
+      layers.payments.capture.amount = 'amount';
+      layers.payments.capabilities = [...layers.payments.capabilities, 'partial-capture'];
+    }
+  }
 ];
 
 /**

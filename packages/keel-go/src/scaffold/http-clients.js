@@ -53,14 +53,18 @@ export function usesGoHttpClients(model) {
  * Lo que keel-go todavía no genera de los clientes, leído del MODELO (la frontera lo dice con su motivo, leyendo las
  * capas). Sirve para que build no emita nada a medias.
  */
-function unsupportedOutbound(model) {
+export function unsupportedOutbound(model) {
   const out = [];
   for (const client of model.httpClients ?? []) {
     for (const call of client.calls) {
       if (!call.method || !call.typed) out.push(`${client.id}.${call.name}: sin method/path o sin contrato tipado`);
       if (!call.bodiless && call.responseFields.length === 0) out.push(`${client.id}.${call.name}: respuesta sin campos`);
+      // El compuesto va en el cuerpo y en la respuesta; en la URL o en una cabecera no tiene forma (el rechazo neutral).
+      for (const field of [...call.pathParams, ...call.queryParams, ...call.headerParams]) {
+        if (field.kind === 'composite') out.push(`${client.id}.${call.name}.${field.name}: compuesto en la URL o en una cabecera`);
+      }
       for (const field of callFields(call).concat(call.responseFields)) {
-        if (field.kind === 'composite' || field.base === 'json') out.push(`${client.id}.${call.name}.${field.name}: ${field.kind === 'composite' ? 'compuesto' : 'json'}`);
+        if (field.base === 'json') out.push(`${client.id}.${call.name}.${field.name}: json`);
       }
     }
   }
@@ -197,7 +201,7 @@ function optionalParam(field) {
 /** El tipo con el que se declara un campo; fuera del dominio, un enum por su paquete. */
 function fieldType(field, { qualify = false, pointer = optionalParam(field) } = {}) {
   let type = field.goType;
-  if (qualify && field.kind === 'enum') type = field.list ? `[]domain.${type.slice(2)}` : `domain.${type}`;
+  if (qualify && (field.kind === 'enum' || field.kind === 'composite')) type = field.list ? `[]domain.${type.slice(2)}` : `domain.${type}`;
   return pointer && !field.list ? `*${type}` : type;
 }
 
@@ -234,6 +238,9 @@ function textOf(field, expr) {
   }
 }
 
+/** El nombre del value object de un campo compuesto, también de una lista. */
+const compositeType = (field) => field.goType.replace(/^\[\]/, '');
+
 /** Lo que se esperaba, para el mensaje de un campo que viola el contrato (las frases de keel-dotnet). */
 function expected(model, field) {
   const element = (() => {
@@ -242,6 +249,7 @@ function expected(model, field) {
       const values = model.enums?.find((e) => goTypeName(e.name) === name || e.name === name)?.values ?? [];
       return values.length > 0 ? `un valor de ${values.map((v) => v.literal).join('|')}` : 'un valor del enum';
     }
+    if (field.kind === 'composite') return `un ${compositeType(field)}`;
     return (
       {
         string: 'un texto',
@@ -1754,6 +1762,7 @@ function sampleValue(model, field) {
     const first = enumeration?.values?.[0]?.literal;
     return first != null ? `domain.${field.goType}(${goString(first)})` : null;
   }
+  if (field.kind === 'composite') return compositeLiteral(model, field);
   return (
     {
       string: '"x"',
@@ -1770,15 +1779,172 @@ function sampleValue(model, field) {
   );
 }
 
-/** Las llamadas que la prueba emitida ejecuta contra un proveedor falso: con resiliencia y argumentos de muestra. */
-function probedCalls(model) {
+/** Las llamadas que la prueba emitida ejecuta contra un proveedor falso: las que casan con `which`, con argumentos de muestra. */
+function probedCalls(model, which = resilient) {
   return model.httpClients.flatMap((client) =>
     client.calls
-      .filter((call) => resilient(call))
+      .filter((call) => which(call))
       .map((call) => ({ client, call, args: callFields(call).map((field) => sampleValue(model, field)) }))
       .filter(({ args }) => args.every((arg) => arg != null))
   );
 }
+
+const COMPOSITE_SAMPLES = {
+  string: { json: 'x', go: '"x"' },
+  text: { json: 'x', go: '"x"' },
+  int: { json: 7, go: '7' },
+  long: { json: 7, go: '7' },
+  decimal: { json: 12.5, go: 'wire.MustDecimal("12.5")' },
+  boolean: { json: true, go: 'true' }
+};
+
+/**
+ * El value object de un campo compuesto, si se puede construir con valores de muestra sin tropezar con sus guardas: campos
+ * escalares obligatorios y sin cotas. Si no, null (la prueba que lo necesite no se emite). La regla de keel-dotnet.
+ */
+function sampleComposite(model, field) {
+  const vo = (model.valueObjects ?? []).find((candidate) => candidate.name === compositeType(field));
+  if (!vo || vo.fields.length === 0) return null;
+  const plain = vo.fields.every(
+    (member) =>
+      !member.list &&
+      member.required &&
+      member.kind === 'base' &&
+      COMPOSITE_SAMPLES[member.base] &&
+      member.text?.pattern == null &&
+      member.text?.minLength == null &&
+      member.text?.maxLength == null &&
+      member.numeric?.min == null &&
+      member.numeric?.max == null &&
+      member.numeric?.scale == null
+  );
+  return plain ? vo : null;
+}
+
+function compositeJson(model, field) {
+  const vo = sampleComposite(model, field);
+  return vo ? Object.fromEntries(vo.fields.map((member) => [member.wireName ?? member.name, COMPOSITE_SAMPLES[member.base].json])) : null;
+}
+
+/** El MISMO valor que compositeJson, construido en Go: lo que el adaptador tiene que devolver al leer ese JSON. */
+function compositeLiteral(model, field) {
+  const vo = sampleComposite(model, field);
+  return vo ? `must(domain.New${vo.name}(${vo.fields.map((member) => COMPOSITE_SAMPLES[member.base].go).join(', ')}))` : null;
+}
+
+const isComposite = (field) => field.kind === 'composite';
+
+/** ¿Trae la llamada un compuesto que la prueba emitida ejecute? */
+const carriesComposite = (call) => (!call.bodiless && call.responseFields.some(isComposite)) || call.bodyFields.some(isComposite);
+
+/** La respuesta de muestra de una llamada, o null si algún campo no tiene una sencilla. */
+function sampleResponse(model, call) {
+  const body = {};
+  for (const field of call.responseFields) {
+    const value = sampleJson(model, field);
+    if (value == null) return null;
+    body[field.wireName ?? field.name] = value;
+  }
+  return body;
+}
+
+/**
+ * Un compuesto en la respuesta: llega como su value object, igual al que se construye con los mismos valores; lo que no
+ * es un objeto, el objeto vacío, y el que pierde un solo obligatorio violan el contrato del PROVEEDOR.
+ */
+function compositeResponseProbe(model, client, call, name, build, invoke) {
+  const body = call.bodiless ? null : sampleResponse(model, call);
+  if (!body) return '';
+  return call.responseFields
+    .filter((field) => isComposite(field) && sampleComposite(model, field))
+    .map((field) => {
+      const key = field.wireName ?? field.name;
+      const member = goExported(field.name);
+      const sample = compositeJson(model, field);
+      const [first] = Object.keys(sample);
+      const wrap = (value) => (field.list ? `[${value}]` : value);
+      const broken = [
+        ...(field.list ? [] : ['"doce"']),
+        wrap('{}'),
+        ...(Object.keys(sample).length > 1 ? [wrap(JSON.stringify(Object.fromEntries(Object.entries(sample).filter(([k]) => k !== first))))] : []),
+        ...(field.list ? ['[null]'] : [])
+      ].map((value) => goString(JSON.stringify({ ...body, [key]: '@' }).replace('"@"', value)));
+      const want = compositeLiteral(model, field);
+      const check = field.list
+        ? `len(result.${member}) != 1 || !result.${member}[0].Equal(want)`
+        : `result.${member} == nil || !result.${member}.Equal(want)`;
+      return `
+
+// ${client.id}.${call.name}.${field.name}: el compuesto llega como su value object, con las guardas de su constructor.
+func ${name}Lee${member}ComoSuValueObject(t *testing.T) {
+	adapter := ${build(`answering(200, ${goString(JSON.stringify(body))})`)}
+	result, err := ${invoke}
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ${want}
+	if ${check} {
+		t.Fatalf("leyó %+v, quiero %+v", result.${member}, want)
+	}
+}
+
+// ${client.id}.${call.name}.${field.name}: lo que no se construye viola el contrato del PROVEEDOR.
+func ${name}Un${member}QueNoSeConstruyeViolaElContrato(t *testing.T) {
+	for _, body := range []string{${broken.join(', ')}} {
+		provider := answering(200, body)
+		adapter := ${build('provider')}
+		_, err := ${invoke}
+		var contract *ContractError
+		if !errors.As(err, &contract) || !strings.Contains(err.Error(), ${goString(`${client.id}.${call.name}.${field.name}`)}) || len(provider.sent()) != 1 {
+			t.Errorf("%s: %v con %d peticiones, quiero su *ContractError de un solo intento", body, err, len(provider.sent()))
+		}
+	}
+}`;
+    })
+    .join('');
+}
+
+/** Un compuesto en el CUERPO: viaja como objeto JSON, con los nombres del diseño y el contrato del cable. */
+function compositeBodyProbe(model, client, call, name, build, invoke) {
+  const composites = call.bodyFields.filter((field) => isComposite(field) && !field.list && sampleComposite(model, field));
+  const answer = call.bodiless ? {} : sampleResponse(model, call);
+  if (composites.length === 0 || !answer) return '';
+  const checks = composites.map((field) => {
+    const expectedBody = `"${field.wireName ?? field.name}":${JSON.stringify(compositeJson(model, field))}`;
+    return `	if !strings.Contains(body, ${goString(expectedBody)}) {
+		t.Errorf("cuerpo %s, quiero %s", body, ${goString(expectedBody)})
+	}`;
+  });
+  const swallow = call.bodiless ? `_ = ${invoke}` : `_, _ = ${invoke}`;
+  return `
+
+// ${client.id}.${call.name}: el compuesto del cuerpo viaja como objeto JSON, con los nombres del diseño.
+func ${name}EscribeElCompuestoDelCuerpoComoObjeto(t *testing.T) {
+	var body string
+	provider := &fakeProvider{answer: func(request *http.Request) (*http.Response, error) {
+		sent, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		body = string(sent)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(${goString(JSON.stringify(answer))})), Header: http.Header{}, Request: request}, nil
+	}}
+	adapter := ${build('provider')}
+	${swallow}
+${checks.join('\n')}
+}`;
+}
+
+/** Lo que construye el compuesto de muestra en la prueba emitida: solo si alguna prueba lo usa (U1000). */
+const MUST_GO = `
+
+// must es el valor de un constructor al que se le dan valores de muestra válidos.
+func must[T any](value T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return value
+}`;
 
 function emittedTests(model) {
   const { clients } = layout(model);
@@ -1794,8 +1960,18 @@ function emittedTests(model) {
     )
   ];
   const probed = probedCalls(model);
-  const builders = [...new Set(probed.map(({ client }) => client))].map((client) => adapterBuilder(model, client));
+  // El value object compuesto, en toda llamada que lo traiga, con resiliencia o sin ella.
+  const composite = probedCalls(model, carriesComposite);
+  const builders = [...new Set([...probed, ...composite].map(({ client }) => client))].map((client) => adapterBuilder(model, client));
   const probes = probed.map(({ client, call, args }) => adapterProbe(model, client, call, args));
+  for (const { client, call, args } of composite) {
+    const name = `Test${adapterType(client)}${callMethod(call)}`;
+    const store = clientRemembers(model, client) ? ', NewLastKnownValues(nil)' : '';
+    const build = (provider) => `${goUnexported(client.id)}Over(t, ${provider}${store})`;
+    const invoke = `adapter.${callMethod(call)}(${['t.Context()', ...args].join(', ')})`;
+    probes.push(compositeResponseProbe(model, client, call, name, build, invoke), compositeBodyProbe(model, client, call, name, build, invoke));
+  }
+  if (probes.some((probe) => probe.includes('must(domain.'))) probes.push(MUST_GO);
   const firstClient = model.httpClients[0];
   const circuitTest = circuits.length > 0
     ? `
@@ -2256,6 +2432,7 @@ function sampleJson(model, field) {
       const name = field.list ? field.goType.slice(2) : field.goType;
       return model.enums?.find((e) => goTypeName(e.name) === name || e.name === name)?.values?.[0]?.literal ?? null;
     }
+    if (field.kind === 'composite') return compositeJson(model, field);
     return (
       {
         string: 'x',

@@ -1,6 +1,5 @@
-// La frontera de keel-go avanza en código: cada capa que todavía no genera se rechaza nombrando el
-// incremento que la trae, y las que acepta sin emitir se avisan. Este test fija las dos listas; cuando un
-// incremento cubra una capa, su caso cambia de bando aquí.
+// La frontera de keel-go: lo que todavía rechaza, cada cosa con su motivo, y lo que ya entra. Este test fija las
+// dos listas; lo que deje de rechazarse cambia de bando aquí.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -61,7 +60,7 @@ test('http-clients, dependencies, la reconciliación y la compensación entran (
   assert.deepEqual(warnings, []);
 });
 
-test('lo saliente que keel-go no genera se rechaza con su motivo: compuestos, llamadas sin tipar y clientes sin persistencia', () => {
+test('lo saliente que keel-go no genera se rechaza con su motivo: json, llamadas sin tipar y clientes sin persistencia', () => {
   const vault = loadService(path.join(FIXTURES_DIR, 'asset-vault'));
   const { persistence, ...withoutPersistence } = vault.layers;
   assert.ok(persistence);
@@ -75,10 +74,14 @@ test('lo saliente que keel-go no genera se rechaza con su motivo: compuestos, ll
   };
   assert.match(withCall({ method: undefined, contract: 'anula el bloqueo' }).join('\n'), /sin method\/path o sin request\/response tipados/);
   assert.match(withCall({ response: { fields: {} } }).join('\n'), /la respuesta no declara campos/);
+  // El compuesto en la respuesta entra (incremento 16); un campo json no.
   const composite = structuredClone(sr.layers);
-  composite.domain.types = { ...composite.domain.types, Amount: { kind: 'composite', fields: { value: { type: 'decimal', required: true } } } };
+  composite.domain.types = { ...composite.domain.types, Amount: { fields: { value: { type: 'decimal', required: true } } } };
   composite['http-clients'].clients.inventory.calls.cancelStock.response.fields.refunded = { type: 'Amount' };
-  assert.match(checkSupportedFeatures(sr.manifest, composite).errors.join('\n'), /refunded es un value object compuesto en el cuerpo o en la respuesta/);
+  assert.deepEqual(checkSupportedFeatures(sr.manifest, composite).errors, []);
+  const json = structuredClone(sr.layers);
+  json['http-clients'].clients.inventory.calls.cancelStock.response.fields.extra = { type: 'json' };
+  assert.match(checkSupportedFeatures(sr.manifest, json).errors.join('\n'), /extra es un campo json/);
 });
 
 // La capa mail entró con el 12e-b (adelantada del 13), payments con el 13c y storage con el 13f: ya no queda ninguna capa
@@ -129,7 +132,7 @@ test('una operación con idempotency avisa nombrándola; con cache y sin persist
   // La caché llega a los handlers por las Dependencies, que solo existen con persistencia.
   assert.equal(errors.length, 1, errors.join('\n'));
   assert.match(errors[0], /^use-cases: find declara cache sin persistencia .*Dependencies/);
-  assert.match(warnings.find((w) => w.includes('idempotency')), /^use-cases: pay declara idempotency .*incremento 10/);
+  assert.match(warnings.find((w) => w.includes('idempotency')), /^use-cases: pay declara idempotency, pero el diseño no tiene persistencia/);
   // El reloj (10b) y el reclamo del barrido que mueve estados (10c) ya salen: ninguno avisa.
   assert.ok(!warnings.some((w) => w.includes('sweep') || w.includes('barrido')));
   assert.ok(!warnings.some((w) => w.includes('tick')));

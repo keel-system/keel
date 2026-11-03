@@ -58,14 +58,14 @@ ${fields.join('\n')}
 }
 
 /** Los parámetros de un finder después de ctx; `domain` es el prefijo de los tipos del dominio fuera de él. */
-function finderParams(finder, domain = '') {
+export function finderParams(finder, domain = '') {
   const params = [];
   if (hasFilter(finder)) params.push(`filter ${domain}${filterTypeName(finder)}`);
   if (finder.result === 'page') params.push(`pageable ${domain}Pageable`);
   return params;
 }
 
-function finderResult(finder, entity, domain = '') {
+export function finderResult(finder, entity, domain = '') {
   return finder.result === 'page' ? `(${domain}Page[*${domain}${entity.name}], error)` : `([]*${domain}${entity.name}, error)`;
 }
 
@@ -98,7 +98,7 @@ function columnOf(model, entity, criterion) {
 const COMPARISON = { eq: '=', gt: '>', gte: '>=', lt: '<', lte: '<=' };
 
 /** El valor guardado de un `where` fijo: un enum por su CONSTANTE, como lo guarda el adaptador. */
-function fixedArg(model, entry) {
+export function fixedArg(model, entry) {
   if (entry.field.kind === 'enum') {
     const enumDef = model.enums.find((candidate) => candidate.name === entry.field.namedType);
     const value = enumDef.values.find((candidate) => candidate.literal === entry.value || candidate.constant === entry.value);

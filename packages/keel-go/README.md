@@ -1,7 +1,7 @@
 # keel-go
 
-Generador Go para diseños Keel, **en construcción por incrementos medidos** (`PLAN-KEEL-GO.md` en la raíz del
-repo lleva su estado). Su objetivo es el de los otros tres generadores: **el mismo diseño genera con keel-spring,
+Generador Go para diseños Keel, construido por incrementos medidos (`PLAN-KEEL-GO.md` en la raíz del repo). Su
+objetivo es el de los otros tres generadores: **el mismo diseño genera con keel-spring,
 keel-nest, keel-dotnet o keel-go servidores equivalentes** — mismo contrato HTTP, mismo cable, mismos eventos,
 mismas tablas, misma operación. Y uno más, propio: el código emitido **se lee como Go idiomático**, no como Java
 traducido.
@@ -13,7 +13,7 @@ keel-go check specs/<servicio>   # opcional: no escribe nada, dice si el diseño
 keel-go build specs/<servicio>   # desde el workspace de diseño; el diseñador elige el stack a mano
 cd services/<servicio>-go
 go mod tidy                      # la primera vez: resuelve las dependencias indirectas y escribe go.sum
-/keel-generate-go                # dentro del proyecto, SIN argumentos (llega en el incremento 7)
+/keel-generate-go                # dentro del proyecto, SIN argumentos
 ```
 
 `build` se niega sobre un diseño no listo (`keel validate --ready` en rojo) salvo `--accept-unready`, que queda
@@ -30,12 +30,16 @@ estampado en `keel-generated.json`, y no escribe nada en el workspace de diseño
 4. **Regla de oro**: el generador nunca inventa ni corrige funcionalidad; lo que no sabe mapear lo rechaza o lo
    avisa en código (`src/lib/supported-features.js`), nunca lo ignora.
 
-## La frontera, hoy (incremento 5)
+## La frontera
 
-Se aceptan dominio, casos de uso y API, y se emiten enteros: los tipos del dominio, un mensaje y un handler por
-operación con su registro tipado (`UseCases`), y la API REST sobre net/http (una ruta por operación, su lector, el
-contrato de error y el OpenAPI derivado). Una operación con un binario (subida multipart) no se sirve todavía.
-Cualquier otra capa se rechaza nombrando el incremento que la trae. La telemetría, también (incremento 14).
+Toda fixture del repositorio se genera entera: las once capas, PostgreSQL, MySQL y MongoDB, RabbitMQ, Kafka y SNS/SQS, Keycloak y Cognito, Stripe y MercadoPago, y la telemetría. Lo que se rechaza lleva su motivo en `src/lib/supported-features.js`:
+
+- los motores que ninguna red ha medido (MariaDB, SQL Server, Oracle);
+- la clave de API, y las formas que ninguna fixture declara y un archivo con cabecera de código generado no admite como TODO: una llamada saliente sin tipar, una relación interna a-uno sin vuelta, una many-to-many dentro del agregado, un value object persistido con otro dentro o con un campo opcional;
+- lo que los handlers reciben por las Dependencies de los casos de uso cuando el diseño no tiene persistencia: clientes, caché, storage y parámetros;
+- la mensajería sin persistencia, con el motivo neutral de los cuatro generadores.
+
+La matriz de paridad, mecanismo a mecanismo: `npm run matrix --workspace packages/keel-go`.
 
 ## Licencias
 

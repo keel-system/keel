@@ -20,11 +20,11 @@ export function check(inputPath, { strict = false } = {}) {
     mode: 'check'
   });
   if (!gate) return;
-  const { manifest, layers, readiness } = gate;
+  const { manifest, layers, fixtures, readiness } = gate;
 
   let plan;
   try {
-    plan = planService({ manifest, layers, workspace });
+    plan = planService({ manifest, layers, fixtures, workspace });
   } catch (error) {
     console.error(pc.red(`✘ keel-go no puede construir el proyecto: ${error.message}`));
     process.exitCode = 1;

@@ -1,9 +1,9 @@
 // Frontera declarada del generador: qué del DSL sabe mapear keel-go.
 //
-// El DSL es más ancho que cualquier generador, y keel-go se construye por incrementos (PLAN-KEEL-GO.md):
-// su frontera AVANZA EN CÓDIGO. Cada capa que todavía no genera se rechaza aquí con el incremento que la
-// trae, y cada incremento borra su entrada. Lo que no vale es recibir una construcción que no se sabe
-// mapear y producir un proyecto como si nada: el diseñador creería que se generó y nadie se lo desmentiría.
+// El DSL es más ancho que cualquier generador, y keel-go se construyó por incrementos (PLAN-KEEL-GO.md): su
+// frontera avanzó en código, y cerrado el plan (incremento 16) solo rechaza lo que tiene MOTIVO escrito. Lo que
+// no vale es recibir una construcción que no se sabe mapear y producir un proyecto como si nada: el diseñador
+// creería que se generó y nadie se lo desmentiría.
 //
 // Dos niveles, como en los otros tres generadores:
 //   · `errors` impiden generar — la capa entera falta;
@@ -17,7 +17,6 @@ import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/me
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { GO_PROJECTION } from './go-projection.js';
 import { messageComponents } from '../scaffold/services.js';
-import { entityFinders } from '../scaffold/finders.js';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {};
@@ -43,14 +42,6 @@ export function pendingLayers(layers = null) {
 }
 
 /**
- * Lo que una operación puede declarar y keel-go todavía no genera: el mensaje y el handler salen, pero no el
- * mecanismo. Se avisa por operación, nombrándolas, como keel-dotnet en su incremento 4.
- */
-const PENDING_OPERATION_FEATURES = [
-  { key: 'idempotency', what: 'idempotency (el almacén, la firma del comando y el gate check-idempotency.sh)', increment: 'incremento 10' }
-];
-
-/**
  * Comprueba el diseño contra la frontera de keel-go. Devuelve { errors, warnings } de strings ya redactados
  * para consola.
  */
@@ -69,31 +60,23 @@ export function checkSupportedFeatures(manifest, layers) {
   }
   if (declared.includes('security')) errors.push(...securityErrors(layers));
   if (declared.includes('messaging')) errors.push(...messagingErrors(manifest, layers));
-  if (declared.includes('persistence') && documentPersistence(layers)) {
-    errors.push(...documentErrors(manifest, layers));
-  } else if (declared.includes('persistence')) {
-    errors.push(...unmeasuredShapes(manifest, layers));
-  }
+  if (declared.includes('persistence') && !documentPersistence(layers)) errors.push(...unmeasuredShapes(manifest, layers));
   errors.push(...authorshipErrors(layers));
   errors.push(...scheduledWithArguments(manifest, layers));
   errors.push(...parameterErrors(manifest, layers));
   errors.push(...outboundErrors(layers));
   errors.push(...cacheErrors(layers));
   if (declared.includes('storage')) errors.push(...storageErrors(layers));
-  const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
-  for (const feature of PENDING_OPERATION_FEATURES) {
-    const names = operations
-      .filter(([, operation]) => operation?.[feature.key] != null && (feature.applies?.(operation) ?? true))
-      .map(([name]) => name);
-    if (names.length === 0) continue;
-    // La idempotencia de petición se adelantó al incremento 7 sobre la persistencia relacional (el registro, la firma y
-    // la cabecera), su purga llegó con el reloj (10b) y el gate check-idempotency.sh con el 10d: ya no queda nada.
-    // Sobre documentos, desde el incremento 12.
-    if (feature.key === 'idempotency' && declared.includes('persistence')) continue;
-    warnings.push(
-      `use-cases: ${names.join(', ')} declara${names.length === 1 ? '' : 'n'} ${feature.what}; keel-go genera el mensaje y el handler, ` +
-        `pero no el mecanismo (llega en el ${feature.increment} de PLAN-KEEL-GO.md).`
-    );
+  // La idempotencia sin persistencia no es un pendiente: el registro de claves tiene que confirmarse en la misma transacción
+  // que el efecto, así que no hay mecanismo posible, y se dice (como los otros tres).
+  if (!declared.includes('persistence')) {
+    const idempotent = Object.entries(layers?.['use-cases']?.operations ?? {}).filter(([, operation]) => operation?.idempotency != null).map(([name]) => name);
+    if (idempotent.length > 0) {
+      warnings.push(
+        `use-cases: ${idempotent.join(', ')} declara${idempotent.length === 1 ? '' : 'n'} idempotency, pero el diseño no tiene persistencia: ` +
+          'el registro de claves tiene que confirmarse en la misma transacción que el efecto, así que no se genera ningún mecanismo.'
+      );
+    }
   }
   return { errors, warnings };
 }
@@ -115,31 +98,6 @@ function authorshipErrors(layers) {
             'sin red que mida lo emitido). Decláralo string con generated: true, o genera este diseño con keel-spring, keel-nest o keel-dotnet.'
         );
       }
-    }
-  }
-  return errors;
-}
-
-/**
- * Lo que keel-go todavía no genera sobre DOCUMENTOS (incremento 12), con su motivo: ninguna fixture documental en su
- * alcance lo declara, así que ninguna red mediría lo emitido.
- *   · los finders de búsqueda (DSL 2.22: `filter` en el input de una query): sobre documentos, keel-nest y keel-dotnet
- *     traducen cada filtro a su consulta; aquí no hay fixture documental que los declare.
- */
-function documentErrors(manifest, layers) {
-  let model;
-  try {
-    model = buildModel({ manifest, layers, stack: resolveStack(null, layers), projection: GO_PROJECTION });
-  } catch {
-    return [];
-  }
-  const why = 'ninguna fixture documental que keel-go genere lo declara: sin red que mida lo emitido';
-  const elsewhere = 'Genera este diseño con keel-spring, keel-nest o keel-dotnet.';
-  const errors = [];
-  for (const entity of model.entities.filter((candidate) => candidate.persisted && candidate.isAggregateRoot)) {
-    const finders = entityFinders(model, entity);
-    if (finders.length > 0) {
-      errors.push(`persistence: los finders de búsqueda de ${entity.name} (DSL 2.22: filter en el input de una query) — keel-go todavía no los genera sobre documentos (${why}). ${elsewhere}`);
     }
   }
   return errors;
@@ -323,19 +281,13 @@ function storageErrors(layers) {
   ];
 }
 
-/** ¿Es `field` un value object compuesto del dominio (o una lista de ellos)? */
-function isComposite(layers, field) {
-  const types = layers?.domain?.types ?? {};
-  const type = field?.type ?? field?.items?.type;
-  return Boolean(type && types[type] && (types[type].fields || types[type].kind === 'composite'));
-}
-
 /**
  * Lo que keel-go todavía no sabe hacer con los clientes salientes y las dependencias (incremento 11 de PLAN-KEEL-GO.md):
  * los clientes, su resiliencia, las activaciones, `needs` y OAuth2 (tramo 13h) se generan; esto, no, cada cosa con su motivo.
  *   · la réplica sobre documentos: ninguna fixture documental la declara;
- *   · un value object compuesto en una llamada: en la URL no tiene forma (el rechazo neutral de los cuatro); en el cuerpo o
- *     en la respuesta sí, pero ninguna red de keel-go lo ha medido;
+ *   · un value object compuesto en la URL o en una cabecera: no tiene forma (el rechazo neutral de los cuatro); en el cuerpo
+ *     y en la respuesta se genera desde el 16, con su lector de la entrada (la prueba emitida clients_test.go);
+ *   · un campo json en una llamada: su conversor del cable lee también una cadena, y ninguna fixture lo declara;
  *   · una llamada sin method/path o sin contrato tipado, o con una respuesta sin campos: el adaptador lleva la cabecera de
  *     código generado y no puede llevar el TODO que esa llamada necesitaría (keel-dotnet lo deja al agente); ninguna
  *     fixture en alcance lo declara;
@@ -353,11 +305,11 @@ function outboundErrors(layers) {
   }
   for (const [client, definition] of clients) {
     for (const [call, spec] of Object.entries(definition?.calls ?? {})) {
-      const composite = [...Object.entries(spec?.request?.body ?? {}), ...Object.entries(spec?.response?.fields ?? {})]
-        .filter(([, field]) => isComposite(layers, field))
+      const json = [...Object.entries(spec?.request?.body ?? {}), ...Object.entries(spec?.response?.fields ?? {})]
+        .filter(([, field]) => (field?.type ?? field?.items?.type) === 'json')
         .map(([name]) => name);
-      if (composite.length > 0) {
-        errors.push(`http-clients.${client}.calls.${call}: ${composite.join(', ')} es un value object compuesto en el cuerpo o en la respuesta — keel-go todavía no lo genera (${unmeasured}).`);
+      if (json.length > 0) {
+        errors.push(`http-clients.${client}.calls.${call}: ${json.join(', ')} es un campo json — keel-go todavía no lo genera en una llamada (${unmeasured}). Genera este diseño con keel-spring, keel-nest o keel-dotnet.`);
       }
       const typed = Boolean(spec?.request || spec?.response);
       const method = spec?.method ?? /^\s*([A-Z]+)\s+\S+/.exec(spec?.contract ?? '')?.[1];

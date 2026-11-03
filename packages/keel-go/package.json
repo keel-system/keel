@@ -19,7 +19,8 @@
     "mail-check": "node scripts/mail-check.js",
     "cache-check": "node scripts/cache-check.js",
     "telemetry-check": "node scripts/telemetry-check.js",
-    "deploy-check": "node scripts/deploy-check.js"
+    "deploy-check": "node scripts/deploy-check.js",
+    "matrix": "node scripts/support-matrix.js"
   },
   "files": [
     "src",

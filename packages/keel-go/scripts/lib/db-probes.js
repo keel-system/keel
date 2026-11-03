@@ -763,6 +763,23 @@ ${expect('state', 'read')}	if want, got := dump${name}(domain.Rehydrate${name}(s
   tests.push(...inverseProbes(model, root, { repo }));
   tests.push(...rankProbes(model, root, { repo }));
   tests.push(...finderProbes(model, root, { repo, id }));
+  // MySQL: una columna única de texto compara con la collation que el DISEÑO pide, leída del motor. La collation por defecto
+  // pliega mayúsculas, y la unicidad rechazaría acme-1 por ACME-1 sin que nada falle.
+  const collated = sqlDialect(model).mysql ? root.fields.filter((field) => field.columns?.collation) : [];
+  if (collated.length > 0) {
+    const rows = collated.map((field) => `{${goString(field.columns.name)}, ${goString(field.columns.collation)}}`);
+    tests.push(`func Test${name}_UniqueTextComparesWithItsCollation(t *testing.T) {
+	for _, column := range [][2]string{${rows.join(', ')}} {
+		var collation string
+		if err := must(probeTx.conn(t.Context())).QueryRowContext(t.Context(), "SELECT collation_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?", ${goString(root.tableName)}, column[0]).Scan(&collation); err != nil {
+			t.Fatal(err)
+		}
+		if collation != column[1] {
+			t.Errorf("%s: collation %s, quiero %s", column[0], collation, column[1])
+		}
+	}
+}`);
+  }
   // La guarda contra el doble envío (mail.sentBy): se la lleva una sola ejecución, estampa su reloj y confirma aunque el
   // caso de uso que la pidió se deshaga (va en su PROPIA transacción).
   for (const claim of guardClaimsOf(model, root)) {
