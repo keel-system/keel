@@ -227,10 +227,6 @@ Un proyecto completado no se regenera desde cero cuando cambia su diseño. El di
 `build/keel-refresh/EVOLUTION.md` lo que cambió desde la última vez que se completó. El documento y su lógica son los
 de los otros tres generadores (`keel-core/gen/evolution.js`): solo cambian las rutas de esta plataforma.
 
-> **Estado de keel-go:** esta versión todavía no escribe `EVOLUTION.md` (llega con su incremento de evolución).
-> `--refresh` ya pone al día lo que generó build sin pisar lo del agente, pero el delta del diseño hay que leerlo a
-> mano. Sin `build/keel-refresh/EVOLUTION.md`, el pipeline es el de una primera generación.
-
 | Sección | Qué es | Para quién |
 |---|---|---|
 | 1. Fusiones pendientes | Archivos que el agente completó y el generador volvió a cambiar; la versión nueva está en `build/keel-refresh/<ruta>` | `keel-go-code` |
@@ -246,6 +242,13 @@ funcionaba.
 
 La versión nueva de un conflicto cae en `build/keel-refresh/` y no junto al archivo: dentro de `internal/` la
 compilaría `go build` (un paquete son todos sus `.go`) y declararía dos veces lo mismo.
+
+**Si `EVOLUTION.md` avisa de que el esquema cambió** (sección Avisos): goose no reaplica una migración que su historial
+ya tiene, así que una baseline reescrita no llega a una base que aplicó la anterior. El aviso dice cuál de los dos casos
+es. Si pregunta, pregúntale al diseñador **antes de la fase 1** si hay una base desplegada con la baseline anterior:
+sin ella, basta la baseline nueva; con ella, pásale la respuesta a `keel-go-code`, que escribe la migración siguiendo
+`references/schema-evolution.md` de la skill `keel-go-database`. En los dos casos, lanza `bash infra/reset-db.sh --schema`
+antes de puntuar, para que el servidor aplique las migraciones sobre una base vacía.
 
 **Cierre, y es del orquestador**:
 1. Quitar de `pendingMerge` (en `keel-generated.json`) las rutas fusionadas: mientras quede una entrada,

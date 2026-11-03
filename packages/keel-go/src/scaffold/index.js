@@ -8,6 +8,7 @@
 import path from 'node:path';
 import { buildModel } from '@keel-system/keel-core/gen/model';
 import { materializeProject } from '@keel-system/keel-core/gen/materialize';
+import { baselineChange } from './evolution.js';
 import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { checkGatewaySupport } from '@keel-system/keel-core/gen/payment-gateways';
 import { listKeelDocs } from '@keel-system/keel-core/gen/keel-docs';
@@ -175,6 +176,8 @@ export function scaffoldService({
   const { model, files } = planService({ manifest, layers, workspace, stack });
   const outDir = path.join('services', model.service.projectName);
   const projectDir = path.join(workspace, outDir);
+  // Antes de escribir: después, el manifiesto ya registra la baseline nueva.
+  const schemaChange = baselineChange(files, projectDir);
   const written = materializeProject({
     files,
     projectDir,
@@ -193,6 +196,7 @@ export function scaffoldService({
     warnings: model.warnings,
     stack: model.stack,
     docs: model.docs,
+    schemaChange,
     ...written
   };
 }

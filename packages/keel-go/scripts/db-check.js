@@ -208,6 +208,7 @@ try {
     );
     if (expected.length > 0) results.at(-1).caught = true;
   });
+  if (!sabotage && (!only || only === 'product-catalog')) await schemaEvolution(env);
   if (sabotage) {
     if (step(`el sabotaje ${sabotage} se aplica a lo emitido`, applied > 0, applied === 0 ? '¿cambió el texto emitido?' : `${applied} archivo(s)`)) {
       step(`el sabotaje ${sabotage} lo ve al menos una sonda`, results.some((result) => result.caught));
@@ -222,6 +223,97 @@ try {
 const failedSteps = results.filter((result) => !result.ok).length;
 console.log(failedSteps === 0 ? `\ndb-check: ${results.length}/${results.length} en verde.` : `\ndb-check: ${failedSteps} paso(s) en rojo.`);
 process.exitCode = failedSteps === 0 ? 0 : 1;
+
+/**
+ * Una base desplegada ante un cambio de esquema (incremento 15, `references/schema-evolution.md` de la skill de la base):
+ * con el Migrate emitido, la baseline reescrita NO llega a una base que aplicó la anterior, un paso nuevo SÍ llega, y una
+ * base vacía acaba con baseline + paso en el mismo catálogo que la baseline nueva sola. El primer paso es la razón de todo
+ * lo demás: si un día saliera verde, el aviso de EVOLUTION.md sobraría.
+ */
+async function schemaEvolution(env) {
+  const FIELD = 'weight';
+  const planOf = (withField) => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'product-catalog'));
+    if (withField) layers.domain.entities.Product.fields[FIELD] = { type: 'int' };
+    return planService({ manifest, layers, workspace: FIXTURES_DIR, stack });
+  };
+  const before = planOf(false);
+  const after = planOf(true);
+  const oldBaseline = baselineOf(before.files);
+  const newBaseline = baselineOf(after.files);
+  const table = [...newBaseline.slice(0, newBaseline.indexOf(`${FIELD} `)).matchAll(/CREATE TABLE [`"]?(\w+)/g)].at(-1)?.[1];
+  const definition = new RegExp(`^\\s*([\`"]?${FIELD}[\`"]? [^,\\n]*),?$`, 'm').exec(newBaseline)?.[1];
+  if (!step('evolución del esquema: la baseline nueva trae la columna', Boolean(table && definition), `${table}: ${definition}`)) return;
+
+  const dir = path.join(root, 'schema-evolution');
+  const write = (file) => {
+    const target = path.join(dir, file.path);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, file.content);
+  };
+  for (const file of [...before.files, probeFile(before.model, before.files)]) write(file);
+  const tidied = await runAsync('go', ['mod', 'tidy'], { cwd: dir });
+  if (!step('evolución del esquema: go mod tidy', tidied.ok, tidied.ok ? '' : tidied.output.slice(0, 2000))) return;
+
+  const migrations = path.join(dir, storePath, 'migrations');
+  const baselineFile = path.join(migrations, '00001_baseline.sql');
+  const stepFile = path.join(migrations, `00002_add_product_${FIELD}.sql`);
+  const stepSql = `-- +goose Up\nALTER TABLE ${table} ADD COLUMN ${definition};\n\n-- +goose Down\nALTER TABLE ${table} DROP COLUMN ${FIELD};\n`;
+  // La sonda migra en su TestMain, como arranca el servidor; las migraciones van embebidas, así que se compila cada vez.
+  const boot = async (db) => {
+    const binary = path.join(dir, process.platform === 'win32' ? 'evolution-probe.test.exe' : 'evolution-probe.test');
+    const built = await runAsync('go', ['test', '-c', '-o', binary, `./${storePath}/`], { cwd: dir });
+    if (!built.ok) return built;
+    return runAsync(binary, ['-test.run=^$'], { cwd: path.join(dir, storePath), env: env(db) });
+  };
+  const catalogOf = (db) => (engine === 'mysql' ? mysqlCatalog(db) : catalog(db));
+  const hasColumn = (db) => catalogOf(db).get(table)?.columns.has(FIELD) ?? false;
+  // El catálogo sin depender del orden: una columna añadida va al final, y en la baseline, en su sitio.
+  const shape = (db) =>
+    JSON.stringify(
+      [...catalogOf(db).entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, { columns, names }]) => [name, [...columns.entries()].sort(([a], [b]) => a.localeCompare(b)), [...names].sort()])
+    );
+
+  const deployed = 'schema_evolution_deployed';
+  recreate(deployed);
+  const first = await boot(deployed);
+  if (!step('evolución del esquema: la base desplegada aplica la baseline anterior', first.ok && !hasColumn(deployed), first.ok ? '' : first.output.slice(-1500))) return;
+
+  // Lo que hace --refresh: reescribir la baseline. goose ve la versión 1 aplicada y no hace nada, y el arranque no se queja.
+  fs.writeFileSync(baselineFile, newBaseline);
+  const rewritten = await boot(deployed);
+  step('evolución del esquema: la baseline reescrita arranca y NO llega a la base desplegada', rewritten.ok && !hasColumn(deployed), rewritten.ok ? '' : rewritten.output.slice(-1500));
+
+  // Lo que dice la referencia: devolver la baseline y escribir el paso.
+  fs.writeFileSync(baselineFile, oldBaseline);
+  fs.writeFileSync(stepFile, stepSql);
+  const stepped = await boot(deployed);
+  step('evolución del esquema: el paso nuevo SÍ llega a la base desplegada', stepped.ok && hasColumn(deployed), stepped.ok ? '' : stepped.output.slice(-1500));
+
+  const viaSteps = 'schema_evolution_steps';
+  recreate(viaSteps);
+  const fresh = await boot(viaSteps);
+  fs.rmSync(stepFile);
+  fs.writeFileSync(baselineFile, newBaseline);
+  const viaBaseline = 'schema_evolution_baseline';
+  recreate(viaBaseline);
+  const whole = await boot(viaBaseline);
+  const same = fresh.ok && whole.ok && shape(viaSteps) === shape(viaBaseline);
+  const shapeDifference = () => {
+    const [a, b] = [JSON.parse(shape(viaSteps)), JSON.parse(shape(viaBaseline))];
+    const differing = a.filter((entry, index) => JSON.stringify(entry) !== JSON.stringify(b[index]));
+    return differing.map(([name]) => `${name}: pasos ${JSON.stringify(a.find(([n]) => n === name))} · baseline ${JSON.stringify(b.find(([n]) => n === name))}`).join(' | ');
+  };
+  step('evolución del esquema: baseline + paso sobre una base vacía es el catálogo de la baseline nueva', same, same ? '' : !(fresh.ok && whole.ok) ? `${fresh.output.slice(-500)} ${whole.output.slice(-500)}` : shapeDifference());
+  // Falsado: sin el paso, las dos formas tienen que diferir, o la comparación no compara nada.
+  const withoutStep = 'schema_evolution_without_step';
+  fs.writeFileSync(baselineFile, oldBaseline);
+  recreate(withoutStep);
+  await boot(withoutStep);
+  step('falsado: sin el paso, el catálogo difiere de la baseline nueva', shape(withoutStep) !== shape(viaBaseline));
+}
 
 /** Como run, sin bloquear: para ejecutar varios sujetos a la vez. */
 function runAsync(command, args, { cwd, env } = {}) {
@@ -350,10 +442,10 @@ function mysqlCatalog(db) {
     if (!tables.has(name)) tables.set(name, { columns: new Map(), names: new Set(), predicates: new Map(), generated: new Map(), indexColumns: new Map() });
     return tables.get(name);
   };
+  // Sin trim(): se comería los tabuladores de los últimos campos vacíos de la última fila.
   const rows = (sql) =>
     query(db, sql)
-      .stdout.trim()
-      .split('\n')
+      .stdout.split('\n')
       .filter(Boolean)
       .map((line) => line.split('\t'));
   // La cota solo de un varchar (binary y longtext también la declaran), y la escala solo de un decimal.

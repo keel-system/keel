@@ -89,6 +89,10 @@ al arrancar en todos los perfiles) y lo mide la red del generador contra el moto
 crear**. Lo tuyo es comprobar que nadie añadió una migración ni tocó la baseline (`git status` sobre ese
 directorio): una migración del agente es conductual, a `remaining`.
 
+En modo evolución, un cambio en ese directorio es legítimo solo si `build/keel-refresh/EVOLUTION.md` avisa de que el esquema
+cambió: la baseline nueva la escribió build, y la migración nueva de una base desplegada, `keel-go-code` por encargo del
+orquestador. Lo que no tiene ese aviso detrás sigue yendo a `remaining`.
+
 Sobre **MongoDB** (`database: mongodb` en `keel-stack.json`) no hay migraciones: el esquema son los índices que el
 servidor crea al arrancar (`internal/infrastructure/mongo/indexes.go`). Lo tuyo es VERIFICARLOS contra los vivos con
 `bash infra/export-indexes.sh` (la skill `keel-go-mongodb`, `references/indexes.md`) y reportar `indexes` e

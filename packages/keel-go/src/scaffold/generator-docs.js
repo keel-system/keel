@@ -228,7 +228,8 @@ Se invoca **sin argumentos, con el cwd en esta raíz**; todas las rutas son rela
    cambió desde entonces —el diseño, el stack o el generador—: léelo entero antes de lanzar nada. Es el mismo
    pipeline con el trabajo acotado: a \`keel-go-code\` le pasas la ruta de ese documento; a \`keel-go-tests\`, la ruta
    y **solo su sección 4** (los \`FL-*\` añadidos, cambiados y quitados); \`keel-go-infra\` hace lo de siempre. La
-   puntuación, el arbitraje y la calidad **no cambian**. Hasta cerrar, nadie borra \`build/\`.
+   puntuación, el arbitraje y la calidad **no cambian**. Hasta cerrar, nadie borra \`build/\`. Si el documento avisa de
+   que el esquema cambió, resuélvelo como dice \`{{keel:docs}}/orchestration.md\`: lo que pregunte, **antes** de la fase 1.
 1. **Fase 1 — en paralelo** (los tres lanzados a la vez, en un único mensaje):
    - \`keel-go-code\`: «Completa el proyecto en \`.\`. Tu proceso, tu alcance y tu criterio de terminado son los de tu
      archivo de agente; \`{{keel:context}}\` es el contexto del repo, no tu lista de tareas.» — hasta \`go build\`,

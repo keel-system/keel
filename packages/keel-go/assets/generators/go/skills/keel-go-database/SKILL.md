@@ -30,6 +30,7 @@ necesita y el puerto no trae, en los dos `<raíz>_queries.go` sin la cabecera (`
 | Agente | Trabajo | Referencia |
 |---|---|---|
 | código | llamar a los puertos desde los handlers; usar el finder que nombra la nota | `references/repository-ports.md` |
+| código, en evolución | la migración nueva de una base desplegada, si se lo encargan | `references/schema-evolution.md` |
 | calidad | comprobar que nadie añadió una migración ni tocó la baseline | `{{keel:agents}}` → `keel-go-quality` |
 | cualquiera | diagnosticar un fallo del motor | `references/troubleshooting.md` |
 
@@ -42,7 +43,8 @@ necesita y el puerto no trae, en los dos `<raíz>_queries.go` sin la cabecera (`
 - Los nombres de constraint, índice y FK son **contrato**: `errors.go` traduce por ellos al `code` del diseño, y los
   otros tres servidores usan los mismos.
 - El esquema es la migración de build y la aplica goose al arrancar, **en todos los perfiles**. No se añade otra
-  migración ni se edita la baseline: un cambio del esquema es un cambio del diseño.
+  migración ni se edita la baseline: un cambio del esquema es un cambio del diseño. La única excepción es una base
+  desplegada en modo evolución: `references/schema-evolution.md`.
 - Una búsqueda con todos sus inputs enlazados (DSL 2.22: por nombre o con `filter`, más su `where`) ya tiene su
   **finder de build** en el puerto y en el adaptador: el handler lo llama y la nota dice con qué. Si una `rule`
   restringe algo que el finder no aplica, es un `designGap`, no un filtro en memoria.

@@ -24,6 +24,9 @@ cambió desde entonces. Tu proceso es el mismo (el de abajo); tu alcance, el del
    `TODO`: build no reescribe lo completado. Repasa sus `rules`, `preconditions`, `errors` y `transitions` contra
    `specs/`.
 4. **Stubs nuevos y stack** (secciones 5 y 6): como en la primera generación.
+5. **Esquema**, si la sección Avisos dice que cambió y el orquestador te dice que hay una base desplegada (o el aviso
+   nombra pasos ya escritos): la migración nueva, con `references/schema-evolution.md` de la skill `keel-go-database`. Es
+   el único caso en el que escribes en `migrations/`. Sin base desplegada, no toques ese directorio.
 
 Lo que no aparece en el documento no se toca: reescribir código que funciona es el camino más corto a romper un
 escenario que ya estaba en verde.
