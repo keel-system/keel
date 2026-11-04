@@ -212,6 +212,8 @@ export const DB_SABOTAGES = {
   },
   // La autoría (13g). El actor deja de leer el `sub`: queda el nombre del principal, que es para mostrar.
   'actor-subject': { files: AUDIT_ACTOR, from: 'principal.Kind == security.TokenPrincipal && found', to: 'principal.Kind == 0 && found', expect: /_Authorship/, also: /TestAuditActor/ },
+  // Las hijas se leen en el orden de su id, no en el de su campo de orden: lo que renumera el agregado sale mal.
+  'child-order': { files: REPOSITORY, from: /ORDER BY (?:\\"|`)?position(?:\\"|`)?, id"/g, to: 'ORDER BY id"', expect: /FollowOrdering/ },
   // El actor sin petición autenticada pierde la correlación: queda `system` a secas.
   'actor-correlation': { files: AUDIT_ACTOR, from: 'return systemActor + ":" + id', to: 'return systemActor + id[:0]', expect: /_Authorship/, also: /TestAuditActor/ },
   // El alta deja de estampar la autoría declarada que llega vacía: la fila guarda el vacío del dominio.

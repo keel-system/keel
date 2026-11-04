@@ -18,7 +18,7 @@
 import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { DOCUMENT_ID, documentShape, sortablePaths } from '@keel-system/keel-core/gen/document';
-import { claimOrderField, claimsForEntity, persistedMembers, snakeCase } from '@keel-system/keel-core/gen';
+import { claimOrderField, claimsForEntity, orderingFieldOf, persistedMembers, snakeCase } from '@keel-system/keel-core/gen';
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
 import { isPaginated, repositoryRoots, usesDocument } from '@keel-system/keel-core/gen/features';
 import { enumConstant, goExported } from '../lib/go-projection.js';
@@ -36,11 +36,13 @@ import { parameterAccessor } from './service-parameters.js';
 import { documentGuardMethods } from './mail.js';
 
 const ADAPTER_IMPORTS = [
+  'cmp',
   'context',
   'encoding/json/jsontext',
   'errors',
   'fmt',
   'regexp',
+  'slices',
   'time',
   'github.com/google/uuid',
   MONGO_DRIVER,
@@ -237,6 +239,30 @@ ${elements.join('\n')}
 }`;
 }
 
+/**
+ * Las hijas de un agregado en su orden: el de su campo de orden, si el diseño lo declara (`orderingFieldOf` de keel-core),
+ * con el id de desempate y los vacíos al final, como la rama relacional. El array guarda el orden en que se escribió, que
+ * no es contrato. Sin campo de orden, se queda como está.
+ */
+function childSort(model, f, uses) {
+  const ordering = orderingFieldOf(model, f.child);
+  if (!ordering) return [];
+  const method = goExported(ordering.name);
+  const decimal = ordering.base === 'decimal';
+  const compareValues = decimal ? 'wire.Decimal.Cmp' : `cmp.Compare[${ordering.goType}]`;
+  let byOrder;
+  if (ordering.required) {
+    byOrder = decimal ? `a.${method}().Cmp(b.${method}())` : `cmp.Compare(a.${method}(), b.${method}())`;
+  } else {
+    uses.add('compareOptional');
+    byOrder = `compareOptional(a.${method}(), b.${method}(), ${compareValues})`;
+  }
+  const idField = model.entities.find((candidate) => candidate.name === f.child)?.idField;
+  const idMethod = goExported(idField?.name ?? 'id');
+  const idText = !idField || idField.goType === 'uuid.UUID' ? '.String()' : '';
+  return [`\tslices.SortFunc(state.${f.method}, func(a, b *domain.${f.child}) int {\n\t\treturn cmp.Or(${byOrder}, cmp.Compare(a.${idMethod}()${idText}, b.${idMethod}()${idText}))\n\t})`];
+}
+
 /** decode<E>: lee el documento de una entidad y la rehidrata. */
 function decodeFunction(model, doc, uses) {
   const name = doc.entity.name;
@@ -249,6 +275,7 @@ function decodeFunction(model, doc, uses) {
       if (!f.many) uses.add('optionalChild');
     } else read = fieldRead(f.field, uses);
     lines.push(`\tif state.${f.method}, err = get(doc, ${goString(f.key)}, ${read}); err != nil {\n\t\treturn nil, err\n\t}`);
+    if (f.child && f.many) lines.push(...childSort(model, f, uses));
   }
   if (doc.version) lines.push(`\tif state.${doc.version.method}, err = get(doc, ${goString(doc.version.key)}, optional(${doc.version.goType === 'int32' ? 'asInt32' : 'asInt64'})); err != nil {\n\t\treturn nil, err\n\t}`);
   return `// decode${name} lee el documento de ${name} y lo rehidrata.
@@ -791,6 +818,20 @@ func matching(conditions bson.A) bson.D {
 		return bson.D{}
 	}
 	return bson.D{{Key: "$and", Value: conditions}}
+}`);
+  }
+  if (uses.has('compareOptional')) {
+    blocks.push(`// compareOptional compara dos valores opcionales, con los vacíos al final.
+func compareOptional[T any](a, b *T, compare func(T, T) int) int {
+	switch {
+	case a == nil && b == nil:
+		return 0
+	case a == nil:
+		return 1
+	case b == nil:
+		return -1
+	}
+	return compare(*a, *b)
 }`);
   }
   if (uses.has('orNullChild')) {

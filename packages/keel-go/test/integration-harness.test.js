@@ -16,6 +16,7 @@ import { planService } from '../src/scaffold/index.js';
 import { GO_INFRA, MIGRATIONS_TABLE } from '../src/scaffold/infra.js';
 import { HARNESS_SMOKE_TEST, INTEGRATION_TAG } from '../src/scaffold/integration-tests.js';
 import { isStdlib } from '../src/lib/go-source.js';
+import { STATEMENT_COUNT_PATH as DOTNET_STATEMENT_PATH, STATEMENT_COUNT_VARIABLE as DOTNET_STATEMENT_VARIABLE } from '../../keel-dotnet/src/scaffold/statement-count.js';
 import { FIXTURES_DIR, GO_READY_DESIGN } from './helpers/workspace.js';
 import { tmpDir } from './helpers/tmp.js';
 
@@ -275,4 +276,42 @@ test('check-flows.sh: la caja negra filtra los paquetes del módulo salvo el de 
   const run = spawnSync('bash', ['-c', `deps="$(cat)"\n${line.trim()}\nprintf '%s' "$visible"`], { cwd: dir, encoding: 'utf8', input: deps });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stdout, `${module}/internal/domain`);
+});
+
+test('la cuenta de sentencias: solo con API y persistencia relacional, encendida solo por el arnés, y la misma ruta que keel-dotnet', () => {
+  const files = byPath(planFixture('catalog-extended').files);
+  const counter = files['internal/platform/statements/statements.go'];
+  assert.ok(counter, 'con API y persistencia relacional se emite el contador');
+  assert.ok(counter.includes(`const Path = "${DOTNET_STATEMENT_PATH}"`) && counter.includes(`const Variable = "${DOTNET_STATEMENT_VARIABLE}"`), 'la ruta y la variable son las de keel-dotnet');
+  assert.ok(files['tests/integration/server_test.go'].includes(`"${DOTNET_STATEMENT_VARIABLE}=on"`), 'el arnés la enciende');
+  assert.ok(files['tests/integration/flow_test.go'].includes('func (s *Scenario) QueryCount() int64'));
+  assert.ok(files['tests/integration/flow_test.go'].includes('func (s *Scenario) QueryExecutions() int64'));
+  assert.ok(files['tests/integration/harness_smoke_test.go'].includes('SMOKE-7'));
+  const main = files['cmd/server/main.go'];
+  assert.ok(main.includes('counter := statements.FromEnv(getenv)') && main.includes('transactions.CountStatements(counter)') && main.includes('counter.Wrap('), 'run la cablea');
+  for (const [path, content] of Object.entries(files)) {
+    if (path.startsWith('deploy/') || path.startsWith('config/')) assert.ok(!content.includes(DOTNET_STATEMENT_VARIABLE), `${path} no puede encender la cuenta`);
+  }
+  // Sin persistencia relacional no hay nada que contar, ni variable, ni QueryCount.
+  const document = byPath(planFixture('notification-mailer-mongo').files);
+  assert.equal(document['internal/platform/statements/statements.go'], undefined);
+  assert.ok(!document['tests/integration/flow_test.go'].includes('QueryCount()'));
+  assert.ok(!document['cmd/server/main.go'].includes('statements.'));
+});
+
+test('la evidencia de un fallo se fija en el primero: una aserción de Go no termina el escenario', () => {
+  const files = byPath(planFixture('catalog-extended').files);
+  const flow = files['tests/integration/flow_test.go'];
+  const harness = files['tests/integration/harness_test.go'];
+  const capture = files['tests/integration/failure_capture_test.go'];
+  for (const method of ['Error', 'Errorf', 'Fatal', 'Fatalf']) {
+    const body = flow.slice(flow.indexOf(`func (s *Scenario) ${method}(`));
+    assert.ok(body.slice(0, body.indexOf('\n}')).includes('capture.pin(nil)'), `${method} fija la evidencia`);
+  }
+  for (const assertion of ['ExpectStatus', 'AssertJSON']) {
+    const body = flow.slice(flow.indexOf(`func (s *Scenario) ${assertion}(`));
+    assert.ok(body.slice(0, body.indexOf('\n}')).includes('capture.pin(got.exchange)'), `${assertion} fija el intercambio de su respuesta`);
+  }
+  assert.ok(harness.includes('got.exchange = capture.recordExchange('));
+  assert.ok(capture.includes('evidence = *c.pinned'));
 });

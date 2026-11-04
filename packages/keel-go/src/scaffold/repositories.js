@@ -27,6 +27,7 @@ import {
   joinColumnOf,
   keyShadow,
   naturalKeyBatchReason,
+  orderingFieldOf,
   parentColumnOf,
   partialUniqueIndexes,
   persistedMembers,
@@ -870,9 +871,9 @@ func query${name}(ctx context.Context, q DBTX, where string, args ...any) ([]dom
 ${collectIds}	return states, nil
 }`);
   } else {
-    const order = sq(model, table.entity.idField?.columns?.name ?? 'id');
+    const { order, description } = childOrder(model, table.entity);
     const query = batchQuery(model, `SELECT ${selected.join(', ')} FROM ${table.table} WHERE ${parentKey.column} `, ` ORDER BY ${order}`, 'parents', table.parentArray, uses);
-    out.push(`// query${name}ByParent lee las ${name} de varios padres en UNA consulta, agrupadas por su padre y en el orden de su id.
+    out.push(`// query${name}ByParent lee las ${name} de varios padres en UNA consulta, agrupadas por su padre y ${description}.
 func query${name}ByParent(ctx context.Context, q DBTX, parents []${table.parentIdType}) (map[${table.parentIdType}][]*domain.${name}, error) {
 	if len(parents) == 0 {
 		return nil, nil
@@ -910,6 +911,22 @@ ${collectIds}	byParent := make(map[${table.parentIdType}][]*domain.${name}, len(
   // Escribir la fila.
   out.push(writeFunction(model, table, uses));
   return out;
+}
+
+/**
+ * El orden en que se leen las hijas de un agregado: el de su campo de orden, si el diseño lo declara (`orderingFieldOf` de
+ * keel-core: es contrato observable, y el agregado renumera sobre ese orden), con el id de desempate y los vacíos al
+ * final; sin él, el de su id.
+ */
+function childOrder(model, entity) {
+  const id = sq(model, entity.idField?.columns?.name ?? 'id');
+  const ordering = orderingFieldOf(model, entity.name);
+  if (!ordering) return { order: id, description: 'en el orden de su id' };
+  const column = sq(model, ordering.columns?.name ?? ordering.name);
+  return {
+    order: `${ordering.required ? '' : `${column} IS NULL, `}${column}, ${id}`,
+    description: `por ${ordering.name} y, a igualdad, por su id`
+  };
 }
 
 function listFunctions(model, table, list, uses) {

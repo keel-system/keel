@@ -95,6 +95,31 @@ Para que el salto signifique algo, el `Given` tiene que dejar más elementos que
 de RED —una llamada saliente por elemento— no lo cuenta `QueryCount()`: se mide con `StubCallCount`, con el
 mismo criterio.
 
+## CORS: los orígenes no son un hueco del diseño
+
+Con bloque `cors` en el diseño, un escenario que dice «desde un origen web permitido» **se ejercita**: no es un
+`uncovered` ni un `designGap`. El DSL no declara los orígenes a propósito (son dato de despliegue, y cambian por ambiente
+sin regenerar): en `local` valen `http://localhost:3000` y `http://localhost:5173`, en `config/parameters/local/security.yaml`, así que el `Origin` del escenario sale de ahí y el
+caso negativo usa cualquier otro.
+
+```csharp
+var preflight = await Exchange("OPTIONS", $"{RouteBase}/products", null, new()
+{
+    ["Origin"] = "http://localhost:3000",
+    ["Access-Control-Request-Method"] = "POST",
+    ["Access-Control-Request-Headers"] = "Authorization, Content-Type, Idempotency-Key"
+});
+Assert.Equal(200, preflight.Status);
+
+var cross = await Get($"{RouteBase}/products", new() { ["Origin"] = "http://localhost:3000" });
+Assert.Equal(200, cross.Status);
+```
+
+Las cabeceras de la respuesta se leen como cualquier otra (`response.Header(n)`): `Access-Control-Allow-Origin`,
+`Access-Control-Allow-Methods`, `Access-Control-Allow-Headers` y `Access-Control-Max-Age` en el preflight, y
+`Access-Control-Expose-Headers` en la petición normal, que es lo que el navegador deja **leer**. El preflight va **sin
+credencial**, como lo manda un navegador: un `2xx` ahí es lo único que prueba que no lo para la seguridad.
+
 ## Una prueba por flujo
 
 ```csharp

@@ -145,10 +145,11 @@ for (const { name, design, plan } of relational) {
     }
     // Los repositorios ven la conexión que escribe los uuid como sus 16 bytes, en la transacción y fuera de ella.
     const transactions = file(plan, `${STORE}/transactions.go`);
-    assert.match(transactions, /return bound\{tx\}, nil/);
-    assert.match(transactions, /return bound\{t\.db\}, nil/);
+    // Con API, pasando antes por la cuenta de sentencias (statement-count.js).
+    assert.match(transactions, /return (?:t\.observed\()?bound\{tx\}\)?, nil/);
+    assert.match(transactions, /return (?:t\.observed\()?bound\{t\.db\}\)?, nil/);
     // Con la mensajería best-effort, el contexto lleva además los hooks de afterCommit.
-    assert.match(transactions, /fn\((?:context\.WithValue\()?context\.WithValue\(ctx, txKey\{\}, tx\)(?:, hooksKey\{\}, hooks\))?, bound\{tx\}\)/);
+    assert.match(transactions, /fn\((?:context\.WithValue\()?context\.WithValue\(ctx, txKey\{\}, tx\)(?:, hooksKey\{\}, hooks\))?, (?:t\.observed\()?bound\{tx\}\)?\)/);
     assert.match(file(plan, `${STORE}/migrations/00001_baseline.sql`), /^-- \+goose Down\nSET FOREIGN_KEY_CHECKS = 0;/m);
   });
 

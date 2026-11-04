@@ -16,6 +16,7 @@ import { repositoryRoots, usesApi, usesDocument } from '@keel-system/keel-core/g
 import { goExported } from '../lib/go-projection.js';
 import { alignRows } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
+import { statementCountHandler, statementCountOnTransactions, statementCountWiring } from './statement-count.js';
 import { repositoryArgs, repositoryParam } from './repositories.js';
 import { MESSAGING_IMPORT, usesGoMessaging, usesGoOutbox } from './messaging.js';
 import { brokerConnection, brokerFiles, consumes, publishes } from './broker.js';
@@ -142,6 +143,7 @@ function mainGo(model) {
       'internal/platform/config',
       'internal/platform/health',
       'internal/platform/logging',
+      'internal/platform/statements',
       'internal/platform/telemetry',
       SECURITY_IMPORT,
       'database/sql',
@@ -277,7 +279,7 @@ function wiring(model) {
   const settings = settingsFromConfig(model);
   const observed = telemetry ? ', observability' : '';
   const handler = usesApi(model) ? `httpapi.NewHandler(probes, useCases, logger${settings ? `, ${settings}` : ''}${observed})` : `httpapi.NewHandler(probes${observed})`;
-  const serve = `\tsrv := httpapi.NewServer(cfg.Server, ${handler})`;
+  const serve = `\tsrv := httpapi.NewServer(cfg.Server, ${statementCountHandler(model, handler)})`;
   if (!usesDependencies(model)) {
     return `${logger}
 	probes := &health.Probes{}
@@ -336,8 +338,8 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', undefined, 
 			return err
 		}${telemetry && usesRelational(model) ? '\n\t\tobservability.RegisterPool(db.Stats)' : ''}
 	}
-	transactions := ${store.name}.NewTransactions(db, ${document ? '' : 'database.TransactionTimeout, '}logger)
-${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${caching}${storing}${paying ? PAYMENT_SERVER_WIRING : ''}${messaging ? messagingWiring(model) : ''}
+${statementCountWiring(model)}	transactions := ${store.name}.NewTransactions(db, ${document ? '' : 'database.TransactionTimeout, '}logger)
+${statementCountOnTransactions(model)}${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${caching}${storing}${paying ? PAYMENT_SERVER_WIRING : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
 ${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`, undefined, 'observability')}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
 }

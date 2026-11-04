@@ -16,6 +16,7 @@
 //     misma tabla de los otros tres: la misma violación sale con el mismo error y el mismo mensaje. PostgreSQL da el
 //     nombre aparte; MySQL solo en el texto del mensaje, y su clave primaria se llama siempre PRIMARY.
 
+import { usesStatementCount } from './statement-count.js';
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { envFor } from '@keel-system/keel-core/gen/runtime-env';
 import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
@@ -53,7 +54,7 @@ export function generate(model) {
   const engineError = d.mysql ? MYSQL_DRIVER : 'github.com/jackc/pgx/v5/pgconn';
   files.push(
     { path: `${store.dir}/database.go`, content: packageFile(model, store, { imports: databaseImports(d), body: databaseBody(d) }) },
-    { path: `${store.dir}/transactions.go`, content: packageFile(model, store, { imports: [...TRANSACTION_IMPORTS, engineError, 'github.com/google/uuid'], body: transactionsBody(d, transactionNeeds(model)) }) },
+    { path: `${store.dir}/transactions.go`, content: packageFile(model, store, { imports: [...TRANSACTION_IMPORTS, 'internal/platform/statements', engineError, 'github.com/google/uuid'], body: transactionsBody(d, transactionNeeds(model)) }) },
     // INTERNA al paquete (no `<motor>_test`): mide openTx y la clave de la transacción, que no se exportan.
     { path: `${store.dir}/transactions_test.go`, content: packageFile(model, store, { imports: ['context', 'database/sql', 'testing', 'internal/application'], body: TRANSACTIONS_TEST }) },
     { path: `${store.dir}/errors.go`, content: packageFile(model, store, { imports: ['errors', 'strings', engineError, 'internal/domain'], body: errorsBody(model, d) }) }
@@ -435,11 +436,54 @@ func bind(args []any) []any {
  * cuando confirma la transacción abierta (la publicación best-effort).
  */
 function transactionNeeds(model) {
-  return { apart: usesGoOutbox(model) || usesGoProcessedEvents(model) || usesReplicas(model), afterCommit: usesBestEffort(model) };
+  return { apart: usesGoOutbox(model) || usesGoProcessedEvents(model) || usesReplicas(model), afterCommit: usesBestEffort(model), counting: usesStatementCount(model) };
 }
 
-function transactionsBody(d, { apart = false, afterCommit = false } = {}) {
+function transactionsBody(d, { apart = false, afterCommit = false, counting = false } = {}) {
   const p = TRANSACTION_PLATFORM[d.engine];
+  // La conexión que ven los repositorios; con la cuenta de sentencias (statement-count.js), pasando por ella.
+  const connection = (expr) => (counting ? `t.observed(${p.wrap(expr)})` : p.wrap(expr));
+  const countingField = counting ? '\n\n\t// statements es la cuenta de sentencias de las peticiones; nil salvo en el arnés de flujos.\n\tstatements *statements.Counter' : '';
+  const countingMethods = counting
+    ? `
+
+// CountStatements hace que las sentencias de los repositorios pasen por counter. Con nil, no cuenta nada.
+func (t *Transactions) CountStatements(counter *statements.Counter) {
+	t.statements = counter
+}
+
+// observed es q con la cuenta de sentencias, si está encendida.
+func (t *Transactions) observed(q DBTX) DBTX {
+	if t.statements == nil {
+		return q
+	}
+	return counted{inner: q, counter: t.statements}
+}
+
+// counted cuenta cada sentencia antes de mandarla al motor.
+type counted struct {
+	inner   DBTX
+	counter *statements.Counter
+}
+
+// ExecContext implementa DBTX.
+func (c counted) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	c.counter.Count(ctx, query)
+	return c.inner.ExecContext(ctx, query, args...)
+}
+
+// QueryContext implementa DBTX.
+func (c counted) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	c.counter.Count(ctx, query)
+	return c.inner.QueryContext(ctx, query, args...)
+}
+
+// QueryRowContext implementa DBTX.
+func (c counted) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	c.counter.Count(ctx, query)
+	return c.inner.QueryRowContext(ctx, query, args...)
+}`
+    : '';
   const hooksType = afterCommit
     ? `
 
@@ -493,7 +537,7 @@ type txKey struct{}
 // Transactions abre la transacción de cada caso de uso y la deja en el contexto, donde la encuentran los repositorios.
 // Con la persistencia, es el application.Transactor del servicio.
 type Transactions struct {
-${p.field}
+${p.field}${countingField}
 }
 
 var _ application.Transactor = (*Transactions)(nil)
@@ -523,12 +567,12 @@ func (t *Transactions) write(ctx context.Context, fn func(DBTX) error) error {
 // conn es la conexión de una lectura: la transacción abierta o, sin ella, el pool.
 func (t *Transactions) conn(ctx context.Context) (DBTX, error) {
 	if tx := openTx(ctx); tx != nil {
-		return ${p.wrap('tx')}, nil
+		return ${connection('tx')}, nil
 	}
 	if t.db == nil {
 		return nil, errDisabled
 	}
-	return ${p.wrap('t.db')}, nil
+	return ${connection('t.db')}, nil
 }
 
 // openTx es la transacción abierta en ctx, o nil. No mira la marca de application.WithoutTransaction: Within ya quitó la
@@ -543,7 +587,7 @@ func openTx(ctx context.Context) *sql.Tx {
 // traducidos al contrato.
 func (t *Transactions) within(ctx context.Context, readOnly bool, fn func(context.Context, DBTX) error) error {
 	if tx := openTx(ctx); tx != nil {
-		return translate(fn(ctx, ${p.wrap('tx')}))
+		return translate(fn(ctx, ${connection('tx')}))
 	}
 	return t.fresh(ctx, sql.TxOptions{ReadOnly: readOnly}, fn)
 }
@@ -579,7 +623,7 @@ func (t *Transactions) once(ctx context.Context, options sql.TxOptions, fn func(
 		}
 	}()
 ${p.prologue}${afterCommit ? `	hooks := &commitHooks{}
-	if err = fn(context.WithValue(context.WithValue(ctx, txKey{}, tx), hooksKey{}, hooks), ${p.wrap('tx')}); err != nil {
+	if err = fn(context.WithValue(context.WithValue(ctx, txKey{}, tx), hooksKey{}, hooks), ${connection('tx')}); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -589,11 +633,11 @@ ${p.prologue}${afterCommit ? `	hooks := &commitHooks{}
 		hook(ctx)
 	}
 	return nil
-}` : `	if err = fn(context.WithValue(ctx, txKey{}, tx), ${p.wrap('tx')}); err != nil {
+}` : `	if err = fn(context.WithValue(ctx, txKey{}, tx), ${connection('tx')}); err != nil {
 		return err
 	}
 	return tx.Commit()
-}`}${apartMethod}${hooksType}
+}`}${apartMethod}${countingMethods}${hooksType}
 
 ${p.transient}${p.binding}
 `;

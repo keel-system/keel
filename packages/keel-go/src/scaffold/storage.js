@@ -1079,7 +1079,7 @@ func (s *Scenario) upload(baseURL, path string, file UploadPart, fields map[stri
 		s.Fatalf("POST %s: leer la respuesta: %v", path, err)
 	}
 	got := &Response{Status: response.StatusCode, Header: response.Header, Body: string(data)}
-	capture.recordExchange(sent, responseReport{Status: got.Status, Headers: flatten(response.Header, true), Body: got.Body})
+	got.exchange = capture.recordExchange(sent, responseReport{Status: got.Status, Headers: flatten(response.Header, true), Body: got.Body})
 	return got
 }
 

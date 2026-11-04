@@ -8,6 +8,8 @@ const file = (name) => new RegExp(`${STORE}${name}$`);
 const REPOSITORY = new RegExp(`${STORE}\\w+_repository\\.go$`);
 
 export const DOC_SABOTAGES = {
+  // Las hijas se quedan en el orden del id, no en el de su campo de orden: lo que renumera el agregado sale mal.
+  'child-order': { files: REPOSITORY, from: 'cmp.Or(cmp.Compare(a.Position(), b.Position()), ', to: 'cmp.Or(0, ', expect: /FollowOrdering/ },
   // El decimal se guarda como texto: hace ida y vuelta con el propio adaptador si también lo lee así, pero no es un
   // Decimal128. Solo lo ve el documento crudo (la lectura, que exige Decimal128, cae con él).
   'decimal-as-text': {

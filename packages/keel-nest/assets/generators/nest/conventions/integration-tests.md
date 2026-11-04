@@ -82,6 +82,30 @@ aquí no hay caché de planes ni carga perezosa, y la cuenta es exacta. Para que
 pequeño. El N+1 de RED —una llamada saliente por elemento— no lo cuenta `queryCount()`: se mide con
 `stubCallCount`, con el mismo criterio.
 
+## CORS: los orígenes no son un hueco del diseño
+
+Con bloque `cors` en el diseño, un escenario que dice «desde un origen web permitido» **se ejercita**: no es un
+`uncovered` ni un `designGap`. El DSL no declara los orígenes a propósito (son dato de despliegue, y cambian por ambiente
+sin regenerar): en `local` valen `http://localhost:3000` y `http://localhost:5173`, en `config/parameters/local/security.yaml`, así que el `Origin` del escenario sale de ahí y el
+caso negativo usa cualquier otro.
+
+```ts
+const preflight = await flow.exchange('OPTIONS', `${ROUTE_BASE}/products`, undefined, {
+  origin: 'http://localhost:3000',
+  'access-control-request-method': 'POST',
+  'access-control-request-headers': 'Authorization, Content-Type, Idempotency-Key'
+});
+expect(preflight.status, preflight.body).toBe(200);
+
+const cross = await flow.get(`${ROUTE_BASE}/products`, { origin: 'http://localhost:3000' });
+expect(cross.status, cross.body).toBe(200);
+```
+
+Las cabeceras de la respuesta se leen como cualquier otra (`response.header(n)`): `Access-Control-Allow-Origin`,
+`Access-Control-Allow-Methods`, `Access-Control-Allow-Headers` y `Access-Control-Max-Age` en el preflight, y
+`Access-Control-Expose-Headers` en la petición normal, que es lo que el navegador deja **leer**. El preflight va **sin
+credencial**, como lo manda un navegador: un `2xx` ahí es lo único que prueba que no lo para la seguridad.
+
 ## Una prueba por flujo
 
 ```ts

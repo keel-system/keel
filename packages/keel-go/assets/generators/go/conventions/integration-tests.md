@@ -46,6 +46,7 @@ Lo genera build en el mismo paquete (`flow_test.go`, `harness_test.go`, `server_
 | `s.AssertJSON(esperado, got)` | el cuerpo entero contra el JSON esperado, **estricto** (ni una clave de más ni de menos, números por su texto, listas en orden), con los comodines `"<uuid>"`, `"<instant>"` y `"<any>"` para lo que genera el servidor |
 | `RouteBase` | el prefijo de todas las rutas (basePath + versión) |
 | `s.Db(sql)` | una sentencia contra la base de prueba (solo con persistencia): para lo que no se ve por HTTP |
+| `s.QueryCount()` / `s.QueryExecutions()` | las sentencias SQL que han emitido las peticiones HTTP, contadas por el propio servidor (solo con API y persistencia relacional): para los `Then` de **coste**. `QueryCount` cuenta lecturas y escrituras; `QueryExecutions`, solo lecturas, y es la que va cuando el When **escribe**. Ver § Afirmar el coste |
 | `s.ResetState()` | el reset, a mano (`StartFlow` ya lo hace al empezar cada flujo) |
 | `s.Eventually(cond, plazo, mensaje)` | espera a que algo asíncrono se cumpla (plazo cero: 10 s) |
 | `s.BaseURL()` | la URL del servidor arrancado, por si un escenario necesita construir una a mano |
@@ -54,6 +55,11 @@ Lo genera build en el mismo paquete (`flow_test.go`, `harness_test.go`, `server_
 Las aserciones van siempre por el `*Scenario` (`s`), nunca por el `t` del flujo: `s.Errorf` apunta el motivo en
 `build/keel-failures/<id>.json`, que es lo que lee el árbitro; `t.Errorf` lo dejaría sin evidencia y en el flujo
 equivocado. Un pánico dentro de un escenario se recupera como el FALLO de ese escenario y la suite sigue.
+
+Una aserción **no termina el escenario**: tras un `s.Errorf` siguen las peticiones siguientes. La evidencia es la del
+**primer** fallo, con el intercambio de la respuesta sobre la que se afirma (`ExpectStatus`, `AssertJSON`) o, en un
+`s.Errorf` a mano, la última petición hasta ese momento; los motivos siguientes se acumulan en `assertion`, sin su
+intercambio.
 
 Una cabecera va en el último argumento de `Exchange`:
 
@@ -70,6 +76,57 @@ both := s.ExchangeAll(
 	Request{Method: http.MethodPost, Path: RouteBase + "/products", Body: body, Headers: http.Header{"Idempotency-Key": {key}}},
 )
 ```
+
+## Afirmar el coste
+
+Un `Then` que dice que el trabajo de una operación «no crece con el tamaño de la página» (o de la lista del lote) **no es
+un `uncovered`**, aunque no se vea en la respuesta: se escribe con `s.QueryCount()` —o `s.QueryExecutions()` si el When
+escribe— midiendo **dos tamaños muy distintos** y comparando el **salto**, nunca contra un número:
+
+```go
+f.Scenario("FL-SHP-001-K: el coste no crece con la página", func(s *Scenario) {
+	s.Get(RouteBase + "/products?size=2") // calienta: se mide la segunda ejecución
+	before := s.QueryCount()
+	s.Get(RouteBase + "/products?size=2")
+	small := s.QueryCount() - before
+	before = s.QueryCount()
+	s.Get(RouteBase + "/products?size=100")
+	if large := s.QueryCount() - before; large > small {
+		s.Errorf("el coste crece con la página: %d sentencias con size=2 y %d con size=100", small, large)
+	}
+})
+```
+
+Tres reglas, las mismas que en los otros tres generadores: **se compara la forma** —la grande no cuesta más que la
+pequeña—, nunca contra un número escrito; **la petición medida es la única del intervalo** (nada en paralelo; lo de segundo
+plano no cuenta, porque el servidor solo cuenta lo que viene de una petición); y **se mide la segunda ejecución**. Para que
+el salto signifique algo, el `Given` tiene que dejar más elementos que el tamaño pequeño. El N+1 de RED —una llamada saliente
+por elemento— no lo cuenta `QueryCount`: se mide con los `StubRequests` del proveedor de prueba, con el mismo criterio. Sobre
+documentos no hay cuenta: esos `Then` van a `uncovered` con ese motivo.
+
+## CORS: los orígenes no son un hueco del diseño
+
+Con bloque `cors` en el diseño, un escenario que dice «desde un origen web permitido» **se ejercita**: no es un
+`uncovered` ni un `designGap`. El DSL no declara los orígenes a propósito (son dato de despliegue, y cambian por ambiente
+sin regenerar): en `local` valen `http://localhost:3000` y `http://localhost:5173`, en `config/parameters/local/security.yaml`, así que el `Origin` del escenario sale de ahí y el
+caso negativo usa cualquier otro.
+
+```go
+preflight := s.Exchange(http.MethodOptions, RouteBase+"/products", nil, http.Header{
+	"Origin":                         {"http://localhost:3000"},
+	"Access-Control-Request-Method":  {"POST"},
+	"Access-Control-Request-Headers": {"Authorization, Content-Type, Idempotency-Key"},
+})
+s.ExpectStatus(preflight, 200)
+
+cross := s.Get(RouteBase+"/products", http.Header{"Origin": {"http://localhost:3000"}})
+s.ExpectStatus(cross, 200)
+```
+
+Las cabeceras de la respuesta se leen como cualquier otra (`got.Header.Get(n)`): `Access-Control-Allow-Origin`,
+`Access-Control-Allow-Methods`, `Access-Control-Allow-Headers` y `Access-Control-Max-Age` en el preflight, y
+`Access-Control-Expose-Headers` en la petición normal, que es lo que el navegador deja **leer**. El preflight va **sin
+credencial**, como lo manda un navegador: un `2xx` ahí es lo único que prueba que no lo para la seguridad.
 
 ## Las credenciales
 

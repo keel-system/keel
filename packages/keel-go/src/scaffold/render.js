@@ -39,6 +39,8 @@ export function layout(model) {
     // La telemetría (`telemetry: otel`, incremento 14c): trazas, métricas por scrape y las observaciones. En la plataforma
     // y no en la infraestructura porque la usan la entrada HTTP y los adaptadores; la aplicación la ve por su puerto.
     telemetry: pkg(module, 'internal/platform/telemetry'),
+    // La cuenta de sentencias de las peticiones, para los Then de coste: solo se enciende en el arnés de flujos.
+    statements: pkg(module, 'internal/platform/statements'),
     // El contrato del cable y los tipos que la biblioteca estándar no tiene (Decimal, Date, Optional[T]). El
     // dominio los usa, así que es lo único de la plataforma que puede importar.
     wire: pkg(module, 'internal/platform/wire'),

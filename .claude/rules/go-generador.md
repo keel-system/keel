@@ -20,4 +20,8 @@ Cuarto generador, construido por incrementos medidos (`PLAN-KEEL-GO.md`, con su 
 
 **La matriz** (`src/lib/engine-support.js`, `npm run matrix`) queda sin celdas sin ejecutar ni sin falsar. `test/engine-support.test.js` lleva en `FALSIFIED_BY` el sabotaje de cada celda de db-check y doc-check, y exige que exista.
 
+**La cuenta de sentencias** (`src/scaffold/statement-count.js`, el `QueryCount` de los otros tres): `internal/platform/statements`, sin estado global (`run` la construye), un decorador de `DBTX` en `Transactions` y `Counter.Wrap` delante del handler, que marca el contexto de la petición y sirve `/__keel/statements`; solo con `KEEL_FLOW_STATEMENTS=on`, que pone el arnés. Lo mide `FL-PROBE-001-F` de `harness-check` (`--sabotage=statements`), con un handler que lee de la base: recién generado ninguno llega a ella.
+
+**La evidencia de un fallo** es la del PRIMERO (`capture.pin`): una aserción de Go no termina el escenario, y lo último ya no es lo que falló; `ExpectStatus` y `AssertJSON` fijan además el intercambio de SU respuesta (`harness-check --sabotage=evidence`).
+
 **`fixtures.yaml`** llega a `build` y a `check` (`test/fixtures-schema.test.js`): hasta el 16 se descartaba en silencio, y `shop-api` salía sin su estado de partida.

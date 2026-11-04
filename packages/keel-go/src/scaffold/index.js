@@ -73,6 +73,7 @@ import * as server from './server.js';
 import * as architecture from './architecture.js';
 import * as infra from './infra.js';
 import * as integrationTests from './integration-tests.js';
+import * as statementCount from './statement-count.js';
 import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
@@ -137,6 +138,7 @@ const GENERATORS = [
   telemetryGate,
   observabilityAssets,
   deploy,
+  statementCount,
   integrationTests,
   readme,
   generatorDocs

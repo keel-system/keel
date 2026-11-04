@@ -42,6 +42,7 @@ import { MESSAGING_HARNESS_FILE, messagingHarnessBody, messagingHarnessImports, 
 import { PAYMENT_HARNESS_FILE, PAYMENT_HARNESS_IMPORTS, paymentHarnessBody } from './payment-harness.js';
 import { HTTP_STUB_HARNESS_FILE, HTTP_STUB_HARNESS_IMPORTS, httpStubHarnessBody, httpStubSmokeCase, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
 import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenarios';
+import { statementCountLaunch, statementCountMembers, statementCountSmokeCase } from './statement-count.js';
 
 export const INTEGRATION_RESULTS = 'build/test-results/integration';
 export const SCORE_SCENARIOS_SH = 'infra/score-scenarios.sh';
@@ -330,9 +331,10 @@ func (s *Scenario) Db(sql string) string {
   if (rescue.length > 0 || aging.length > 0) helpers.push(idLiteralMember(model));
   if (inMemoryState(model)) helpers.push(restartMember());
   if (usesReplica(model)) helpers.push(...replicaMembers(model));
+  helpers.push(...statementCountMembers(model));
   const replicaApi = usesReplica(model) && api;
   return integrationFile(model, {
-    imports: ['fmt', 'net/http', 'runtime/debug', 'strconv', 'strings', 'sync', 'testing', 'time'],
+    imports: ['encoding/json', 'fmt', 'net/http', 'runtime/debug', 'strconv', 'strings', 'sync', 'testing', 'time'],
     body: String.raw`
 ${api ? `// RouteBase es el prefijo de todas las rutas del servicio (basePath del diseño + versión).
 const RouteBase = ${goString(model.api.routeBase)}
@@ -443,6 +445,7 @@ func (s *Scenario) run(body func(s *Scenario)) {
 // Error marca el escenario en rojo y apunta el motivo para la evidencia.
 func (s *Scenario) Error(args ...any) {
 	s.Helper()
+	capture.pin(nil)
 	message := strings.TrimSuffix(fmt.Sprintln(args...), "\n")
 	s.messages = append(s.messages, message)
 	s.T.Error(message)
@@ -451,6 +454,7 @@ func (s *Scenario) Error(args ...any) {
 // Errorf marca el escenario en rojo y apunta el motivo para la evidencia.
 func (s *Scenario) Errorf(format string, args ...any) {
 	s.Helper()
+	capture.pin(nil)
 	message := fmt.Sprintf(format, args...)
 	s.messages = append(s.messages, message)
 	s.T.Error(message)
@@ -459,6 +463,7 @@ func (s *Scenario) Errorf(format string, args ...any) {
 // Fatal marca el escenario en rojo, apunta el motivo para la evidencia y lo termina.
 func (s *Scenario) Fatal(args ...any) {
 	s.Helper()
+	capture.pin(nil)
 	message := strings.TrimSuffix(fmt.Sprintln(args...), "\n")
 	s.messages = append(s.messages, message)
 	s.T.Fatal(message)
@@ -467,6 +472,7 @@ func (s *Scenario) Fatal(args ...any) {
 // Fatalf marca el escenario en rojo, apunta el motivo para la evidencia y lo termina.
 func (s *Scenario) Fatalf(format string, args ...any) {
 	s.Helper()
+	capture.pin(nil)
 	message := fmt.Sprintf(format, args...)
 	s.messages = append(s.messages, message)
 	s.T.Fatal(message)
@@ -583,6 +589,7 @@ func (s *Scenario) ExchangeAll(requests ...Request) []*Response {
 func (s *Scenario) ExpectStatus(got *Response, want int) {
 	s.Helper()
 	if got.Status != want {
+		capture.pin(got.exchange)
 		s.Errorf("status = %d, quiero %d; cuerpo: %s", got.Status, want, got.Body)
 	}
 }
@@ -593,6 +600,7 @@ func (s *Scenario) ExpectStatus(got *Response, want int) {
 func (s *Scenario) AssertJSON(expected string, got *Response) {
 	s.Helper()
 	if problems := jsonMismatches(expected, got.Body); len(problems) > 0 {
+		capture.pin(got.exchange)
 		s.Errorf("el JSON no casa con el esperado:\n  %s\nrecibido: %s", strings.Join(problems, "\n  "), got.Body)
 	}
 }
@@ -784,7 +792,7 @@ func (fs *flowServer) start(ctx context.Context) error {
 	}
 	cmd := exec.Command(binary)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "PROFILE="+profile, "SERVER_PORT="+strconv.Itoa(port), "SERVER_ADDRESS=127.0.0.1")
+	cmd.Env = append(os.Environ(), "PROFILE="+profile, "SERVER_PORT="+strconv.Itoa(port), "SERVER_ADDRESS=127.0.0.1"${statementCountLaunch(model)})
 	cmd.Stdout = log
 	cmd.Stderr = log
 	if err := cmd.Start(); err != nil {
@@ -951,6 +959,10 @@ type Response struct {
 	Status int
 	Header http.Header
 	Body   string
+
+	// exchange es el intercambio que la trajo, para que un fallo sobre ESTA respuesta deje su evidencia y no la de la última
+	// petición. Es nil en una Response escrita a mano.
+	exchange *capturedExchange
 }
 
 // String resume la respuesta para el motivo de una aserción.
@@ -1028,7 +1040,7 @@ func send(ctx context.Context, baseURL, method, path string, body any, headers h
 		return nil, fmt.Errorf("leer la respuesta: %w", err)
 	}
 	got := &Response{Status: response.StatusCode, Header: response.Header, Body: string(data)}
-	capture.recordExchange(sent, responseReport{Status: got.Status, Headers: flatten(response.Header, true), Body: got.Body})
+	got.exchange = capture.recordExchange(sent, responseReport{Status: got.Status, Headers: flatten(response.Header, true), Body: got.Body})
 	return got, nil
 }
 
@@ -1143,34 +1155,66 @@ type failureReport struct {
 	Probe       *probeReport    \`json:"probe,omitempty"\`
 }
 
-// failureCapture guarda el último intercambio y el último sondeo, y los vuelca a build/keel-failures/<escenario>.json
-// cuando un escenario falla: es lo que lee el árbitro junto al XML para decidir culprit: code | test | design. Los
-// flujos corren en serie, así que basta con lo último; el cerrojo es para las peticiones a la vez de ExchangeAll.
-type failureCapture struct {
-	mu       sync.Mutex
+// capturedExchange es un intercambio HTTP tal como lo apunta la evidencia.
+type capturedExchange struct {
+	request  requestReport
+	response responseReport
+}
+
+// failureEvidence es lo que acompaña a un fallo: su intercambio y el último sondeo.
+type failureEvidence struct {
 	request  *requestReport
 	response *responseReport
 	probe    *probeReport
 }
 
+// failureCapture guarda el último intercambio y el último sondeo, y los vuelca a build/keel-failures/<escenario>.json
+// cuando un escenario falla: es lo que lee el árbitro junto al XML para decidir culprit: code | test | design. Los
+// flujos corren en serie, así que basta con lo último; el cerrojo es para las peticiones a la vez de ExchangeAll.
+//
+// Una aserción de Go NO termina el escenario: tras un s.Errorf siguen las peticiones siguientes, y lo último ya no es lo
+// que falló. Por eso el primer fallo FIJA su evidencia (pin), y es esa la que se vuelca, la de la primera línea del motivo.
+type failureCapture struct {
+	mu     sync.Mutex
+	last   failureEvidence
+	pinned *failureEvidence
+}
+
 var capture failureCapture
 
-func (c *failureCapture) recordExchange(request requestReport, response responseReport) {
+func (c *failureCapture) recordExchange(request requestReport, response responseReport) *capturedExchange {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.request, c.response = &request, &response
+	exchange := &capturedExchange{request: request, response: response}
+	c.last.request, c.last.response = &exchange.request, &exchange.response
+	return exchange
+}
+
+// pin fija la evidencia del primer fallo del escenario: el intercambio de la respuesta sobre la que se afirma o, sin él,
+// el último. Los fallos siguientes no la mueven.
+func (c *failureCapture) pin(exchange *capturedExchange) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pinned != nil {
+		return
+	}
+	evidence := c.last
+	if exchange != nil {
+		evidence.request, evidence.response = &exchange.request, &exchange.response
+	}
+	c.pinned = &evidence
 }
 
 func (c *failureCapture) recordProbe(probe probeReport) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.probe = &probe
+	c.last.probe = &probe
 }
 
 func (c *failureCapture) clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.request, c.response, c.probe = nil, nil, nil
+	c.last, c.pinned = failureEvidence{}, nil
 }
 
 // dumpFailure vuelca el fallo de un escenario: su id es lo que va delante de los dos puntos de su título.
@@ -1186,7 +1230,11 @@ func (c *failureCapture) dumpInit(flow, failure string) {
 
 func (c *failureCapture) dump(report failureReport) {
 	c.mu.Lock()
-	report.Request, report.Response, report.Probe = c.request, c.response, c.probe
+	evidence := c.last
+	if c.pinned != nil {
+		evidence = *c.pinned
+	}
+	report.Request, report.Response, report.Probe = evidence.request, evidence.response, evidence.probe
 	c.mu.Unlock()
 	c.clear()
 	if err := writeReport(report); err != nil {
@@ -1392,6 +1440,8 @@ function harnessSmokeTestGo(model) {
   if (stub) cases.push(stub);
   const broker = messagingSmokeCase(model);
   if (broker) cases.push(broker);
+  const statements = statementCountSmokeCase(model);
+  if (statements) cases.push(statements);
   const plumbing = [reset ? 'reset' : null, probe ? 'base de prueba' : null, api ? 'API' : null, identity ? 'proveedor de identidad' : null, stub ? 'proveedor de prueba' : null, broker ? 'broker' : null].filter(Boolean);
   return integrationFile(model, {
     imports: ['encoding/json', 'net/http', 'strings', 'testing'],

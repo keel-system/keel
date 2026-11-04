@@ -63,6 +63,9 @@ entero. La independencia no cambia: sigues sin leer `src/`.
      o con `stubCallCount` (llamadas al proveedor de prueba), midiendo **dos tamaños muy distintos** y
      comparando el salto — nunca contra un número absoluto. Las reglas y el ejemplo:
      `{{keel:docs}}/conventions/integration-tests.md` § Afirmar el coste.
+   - **Un origen de CORS tampoco.** «Desde un origen web permitido» se ejercita con los del perfil local
+     (`config/parameters/local/security.yaml`): el DSL no los declara porque son dato de despliegue, y que el
+     diseño no los nombre no es un `designGap`. La forma: `{{keel:docs}}/conventions/integration-tests.md` § CORS.
 3. Escribe **una prueba por flujo** en `test/integration/<flujo-en-kebab>.test.ts`: un `describe` con
    el id del flujo, `useFlow()` dentro, y un `it` por escenario **en el orden del documento** con el id
    exacto delante de los dos puntos (`'FL-PRD-001-A: …'`). El reset es por flujo (lo hace `useFlow()`),

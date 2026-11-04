@@ -68,9 +68,23 @@ const SABOTAGES = {
   // La evidencia sin el intercambio: el árbitro tendría que reproducir el escenario a mano.
   capture: {
     file: 'tests/integration/harness_test.go',
-    from: '\tcapture.recordExchange(sent, responseReport{Status: got.Status, Headers: flatten(response.Header, true), Body: got.Body})\n',
+    from: '\tgot.exchange = capture.recordExchange(sent, responseReport{Status: got.Status, Headers: flatten(response.Header, true), Body: got.Body})\n',
     to: '\t_ = sent\n',
-    expect: ['la evidencia del fallo lleva escenario']
+    expect: ['la evidencia del fallo lleva escenario', 'la evidencia es la del PRIMER fallo']
+  },
+  // La evidencia vuelve a ser lo último: tras un fallo que no termina el escenario, la petición siguiente la pisa.
+  evidence: {
+    file: 'tests/integration/failure_capture_test.go',
+    from: '\tif c.pinned != nil {\n\t\tevidence = *c.pinned\n\t}\n',
+    to: '',
+    expect: ['la evidencia es la del PRIMER fallo']
+  },
+  // El servidor deja de contar: un Then de coste pasaría siempre.
+  statements: {
+    file: 'internal/platform/statements/statements.go',
+    from: '\tc.statements.Add(1)\n',
+    to: '',
+    expect: ['score: un escenario en verde sale OK', 'score: un id FL-* que el documento no declara', 'score: un flujo que no arranca y ningún FALLO', 'score: todo en verde sale con 0']
   }
 };
 const sabotageId = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
@@ -129,6 +143,16 @@ const generated = await runCommand(workspace, build, `specs/${GO_READY_DESIGN.na
 if (!step('build genera el proyecto', generated.exitCode === undefined && fs.existsSync(projectDir), generated.exitCode ? generated.output : '')) {
   process.exit(1);
 }
+// La lectura de un caso de uso, lo que escribiría el agente: recién generado no hay ningún handler que llegue a la base, y
+// la cuenta de sentencias (FL-PROBE-001-F) tiene que medir una petición de verdad, por el cableado de `run`.
+const readingHandler = path.join(projectDir, 'internal', 'application', 'activate_product_command_handler.go');
+fs.writeFileSync(
+  readingHandler,
+  fs.readFileSync(readingHandler, 'utf8').replace(
+    '\treturn fmt.Errorf("%w: %s", ErrNotImplemented, "activateProduct")',
+    '\tif _, found, err := h.productRepository.FindByID(ctx, cmd.ID); err != nil {\n\t\treturn err\n\t} else if !found {\n\t\treturn domain.Errorf(domain.ErrProductNotFound, "no existe")\n\t}\n\treturn fmt.Errorf("%w: %s", ErrNotImplemented, "activateProduct")'
+  )
+);
 const tidy = go(projectDir, ['mod', 'tidy']);
 if (!step('go mod tidy', tidy.ok, tidy.ok ? '' : tidy.output.slice(-1200))) process.exit(1);
 const module = /^module\s+(\S+)/m.exec(fs.readFileSync(path.join(projectDir, 'go.mod'), 'utf8'))[1];
@@ -259,6 +283,22 @@ func TestProbeOk(t *testing.T) {
 	})
 	// La segunda réplica (11d): arranca en su puerto, recibe sus peticiones —sola y en ExchangeAll— y se para sin llevarse
 	// el servidor del flujo; parada, deja de responder, y se puede volver a arrancar.
+	// La cuenta de sentencias: una lectura real cuenta; una ruta que no llega a la base y leer la cuenta, no.
+	f.Scenario("FL-PROBE-001-F: el servidor cuenta las sentencias de las peticiones", func(s *Scenario) {
+		before := s.QueryCount()
+		s.ExpectStatus(s.Get(RouteBase+"/keel-probe"), 404)
+		if after := s.QueryCount(); after != before {
+			s.Errorf("una ruta sin base contó %d sentencias", after-before)
+		}
+		reads := s.QueryExecutions()
+		s.ExpectStatus(s.Post(RouteBase+"/products/00000000-0000-7000-8000-000000000000/activate", nil), 404)
+		if s.QueryCount() <= before {
+			s.Error("una petición que lee de la base no contó ninguna sentencia")
+		}
+		if s.QueryExecutions() <= reads {
+			s.Error("una petición que lee de la base no contó ninguna lectura")
+		}
+	})
 	f.Scenario("FL-PROBE-001-E: la réplica arranca, responde y se para sin tocar el servidor del flujo", func(s *Scenario) {
 		replicaURL := s.StartReplica()
 		defer s.StopReplica()
@@ -297,6 +337,14 @@ func TestProbeFail(t *testing.T) {
 	f := StartFlow(t, nil)
 	f.Scenario("FL-PROBE-002-A: espera un 200 que no llega", func(s *Scenario) {
 		s.ExpectStatus(s.Get(RouteBase+"/keel-probe-rojo"), 200)
+	})
+	// Una aserción de Go no termina el escenario: lo que falló es lo primero, no la última petición. Y se afirma sobre
+	// una respuesta que no es la última.
+	f.Scenario("FL-PROBE-002-B: falla y sigue con otras peticiones", func(s *Scenario) {
+		failing := s.Get(RouteBase + "/keel-probe-primero")
+		s.Get(RouteBase + "/keel-probe-medio")
+		s.ExpectStatus(failing, 200)
+		s.ExpectStatus(s.Get(RouteBase+"/keel-probe-ultimo"), 200)
 	})
 }
 `
@@ -372,13 +420,13 @@ func TestProbeEarlyPanic(t *testing.T) {
   const run1 = bash(projectDir, 'infra/score-scenarios.sh');
   const lines = run1.output;
   const has = (pattern) => pattern.test(lines);
-  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/) && has(/OK\s+FL-PROBE-001-D/) && has(/OK\s+FL-PROBE-001-E/), has(/OK\s+FL-PROBE-001-E/) ? '' : lines.slice(-2500));
+  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/) && has(/OK\s+FL-PROBE-001-D/) && has(/OK\s+FL-PROBE-001-E/) && has(/OK\s+FL-PROBE-001-F/), has(/OK\s+FL-PROBE-001-E/) && has(/OK\s+FL-PROBE-001-F/) ? '' : lines.slice(-2500));
   step('score: los escenarios de un flujo corren en el orden escrito', has(/OK\s+FL-PROBE-005-B/), has(/FL-PROBE-005-B/) ? '' : 'sin fila FL-PROBE-005-B');
   step('score: el que falla sale FALLO con la ruta de su evidencia', has(/FALLO\s+FL-PROBE-002-A\s+\S+\s+build\/keel-failures\/FL-PROBE-002-A\.json/));
   step('score: un pánico es el FALLO de su escenario y la suite sigue', has(/FALLO\s+FL-PROBE-006-A/) && has(/OK\s+FL-PROBE-005-A/));
   step('score: el flujo que no arranca deja sus casos OMITIDOS', has(/OMITIDO\s+FL-PROBE-003-A/), has(/OMITIDO/) ? '' : 'sin fila OMITIDO');
   step('score: y lo nombra como arnés roto, con su causa', has(/ARNÉS/) && has(/TestProbeInit\s+\(arranque del flujo\)/) && has(/keel_tabla_que_no_existe/));
-  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && /RESULTADO: KO — 8 OK/.test(lines), lines.match(/RESULTADO:.*/)?.[0] ?? '');
+  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && /RESULTADO: KO — 9 OK/.test(lines), lines.match(/RESULTADO:.*/)?.[0] ?? '');
   step('score: un flujo del documento sin prueba sale NO_EJERC', has(/NO_EJERC\s+FL-PROBE-004/) && !has(/NO_EJERC\s+FL-PROBE-00[12356]/));
   step('score: con algo que arbitrar sale con 1', run1.status === 1, `código ${run1.status}`);
   const readJson = (name) => {
@@ -398,6 +446,12 @@ func TestProbeEarlyPanic(t *testing.T) {
       report.request?.path?.endsWith('/keel-probe-rojo') &&
       report.response?.status === 404,
     report ? JSON.stringify(report).slice(0, 300) : 'no existe'
+  );
+  const pinned = readJson('FL-PROBE-002-B.json');
+  step(
+    'la evidencia es la del PRIMER fallo, sobre la respuesta que se afirma, y no la de la última petición',
+    pinned?.request?.path?.endsWith('/keel-probe-primero') && pinned.response?.status === 404 && /keel-probe|404/.test(pinned.assertion ?? ''),
+    pinned ? JSON.stringify(pinned.request ?? null).slice(0, 200) : 'no existe'
   );
   const panicked = readJson('FL-PROBE-006-A.json');
   step('la evidencia del pánico lleva el pánico y su pila', /pánico: assignment to entry in nil map/.test(panicked?.assertion ?? ''), panicked ? JSON.stringify(panicked).slice(0, 300) : 'no existe');

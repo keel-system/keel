@@ -145,3 +145,20 @@ test('cada raíz tiene sus consultas de negocio del agente, en los dos modelos, 
     }
   }
 });
+
+test('las hijas se leen en el orden de su campo de orden, con el id de desempate; sin él, en el de su id', () => {
+  const plan = (database) => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'catalog-extended'));
+    return planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database } }).files;
+  };
+  const query = (files, dir) => files.find((file) => file.path === `internal/infrastructure/${dir}/product_repository.go`).content;
+  assert.match(query(plan('postgresql'), 'postgres'), /FROM product_images WHERE product_id = ANY\(\$1::uuid\[\]\) ORDER BY \\"position\\", id"/);
+  assert.match(query(plan('mysql'), 'mysql'), /ORDER BY [`\\"]*position[`\\"]*, id/);
+  // Sin campo de orden, las hijas siguen en el de su id (shop-api no declara ninguno).
+  const unordered = (() => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'shop-api'));
+    return planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'postgresql' } }).files;
+  })();
+  const orders = unordered.filter((file) => /_repository\.go$/.test(file.path)).flatMap((file) => [...file.content.matchAll(/ByParent lee .*agrupadas por su padre y (.*)\./g)].map((m) => m[1]));
+  for (const order of orders) assert.equal(order, 'en el orden de su id');
+});

@@ -30,7 +30,7 @@ import { declaredAuthorship } from '../../src/scaffold/audit-actor.js';
 import { usesCorrelation } from '../../src/scaffold/correlation.js';
 import { usesHttpSecurity } from '../../src/scaffold/security.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
-import { constraintErrors, declaredConcurrencyError, indexName, keyShadow, partialUniqueIndexes } from '@keel-system/keel-core/gen';
+import { constraintErrors, declaredConcurrencyError, indexName, keyShadow, orderingFieldOf, partialUniqueIndexes } from '@keel-system/keel-core/gen';
 import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { isPaginated, repositoryRoots } from '@keel-system/keel-core/gen/features';
@@ -681,6 +681,7 @@ ${expect('state', 'read')}	if want, got := dump${name}(domain.Rehydrate${name}(s
   }
 
   tests.push(...clashProbes(model, root, { repo, members }));
+  tests.push(...childOrderProbes(model, root, { repo, id, members }));
 
   // MongoDB no acota el texto: la cota la hace cumplir el dominio.
   const bounded = document ? null : boundedText(root);
@@ -1069,6 +1070,49 @@ function inverseProbes(model, root, { repo }) {
 }
 
 /** El orden por un enum va por su SOMBRA DE RANGO (la posición en la declaración), no por su nombre. */
+/**
+ * Las hijas de un agregado se leen en el orden de su campo de orden, con el id de desempate: es contrato observable y el
+ * agregado renumera sobre él. Se guardan con las posiciones al revés que los ids (nacen crecientes) y en un orden que no es
+ * ninguno de los dos, para que ni la inserción ni el orden del id den el resultado por casualidad.
+ */
+function childOrderProbes(model, root, { repo, id, members }) {
+  return members
+    .filter((member) => member.kind === 'relationMany')
+    .flatMap((member) => {
+      const child = member.relation.entity;
+      const ordering = orderingFieldOf(model, child);
+      if (!ordering?.required || ordering.base === 'decimal') return [];
+      const method = goExported(member.name);
+      const field = goExported(ordering.name);
+      const entity = model.entities.find((candidate) => candidate.name === child);
+      const childId = goExported(entity?.idField?.name ?? 'id');
+      return [`func Test${root.name}_${method}FollowOrdering(t *testing.T) {
+	ctx := t.Context()
+	state := sample${root.name}(t, 170)
+	first, second, third := sample${child}(t, 1701), sample${child}(t, 1702), sample${child}(t, 1703)
+	first.${field}, second.${field}, third.${field} = 1, 0, 1
+	state.${method} = []*domain.${child}{domain.Rehydrate${child}(third), domain.Rehydrate${child}(first), domain.Rehydrate${child}(second)}
+	if _, err := ${repo}.Save(ctx, domain.Rehydrate${root.name}(state)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	read, found, err := ${repo}.FindByID(ctx, state.${id})
+	if err != nil || !found {
+		t.Fatalf("FindByID: found=%v err=%v", found, err)
+	}
+	got := read.${method}()
+	want := []string{fmt.Sprint(second.${childId}), fmt.Sprint(first.${childId}), fmt.Sprint(third.${childId})}
+	if len(got) != len(want) {
+		t.Fatalf("se leen %d hijas, no %d", len(got), len(want))
+	}
+	for i, item := range got {
+		if fmt.Sprint(item.${childId}()) != want[i] {
+			t.Errorf("la hija %d es %v con ${ordering.name} %v, no %s: no siguen ${ordering.name} y, a igualdad, su id", i, item.${childId}(), item.${field}(), want[i])
+		}
+	}
+}`];
+    });
+}
+
 function rankProbes(model, root, { repo }) {
   if (!isPaginated(model, root)) return [];
   const name = root.name;
