@@ -135,6 +135,15 @@ export const UNCOVERED_BRANCHES = [
     }
   },
   {
+    // Una subida con `keySource: client-key` y campos de muestra (asset-vault la declara, pero sus campos no tienen muestra).
+    name: 'catalog-extended-upload-client-key',
+    from: 'catalog-extended',
+    mutate(manifest, layers) {
+      manifest.service.name = 'catalog-extended-upload-client-key';
+      layers['use-cases'].operations.addProductImage.idempotency = { keySource: 'client-key', ttlSeconds: 86400 };
+    }
+  },
+  {
     // Un value object compuesto en el cuerpo y en la respuesta de una llamada saliente (el parche de keel-nest y keel-dotnet).
     name: 'stock-reservation-compuesto-saliente',
     from: 'stock-reservation',

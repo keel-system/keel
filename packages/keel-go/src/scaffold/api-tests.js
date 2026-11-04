@@ -583,7 +583,7 @@ function identityCase(model) {
  * una subida completa que llega a su handler).
  */
 function uploadTests(model, upload, jwt) {
-  const { url, part, fields, firstMissing } = upload;
+  const { url, part, fields, firstMissing, idempotencyKey } = upload;
   const validation = FRAMEWORK_ERRORS.validation.code;
   const tooLarge = effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge);
   const unreadable = FRAMEWORK_ERRORS.fileUnreadable.code;
@@ -680,6 +680,12 @@ func form(t *testing.T, fields map[string]string, content []byte) string {
 }`
   ];
   if (fields) {
+    const complete = `form(t, ${sample}, []byte("%PDF-1.7 muestra"))`;
+    const sendComplete = idempotencyKey
+      ? `header := multipartHeader(t)
+	header.Set(${goString(idempotencyKey.name)}, ${goString(idempotencyKey.value)})
+	got := send(t, server, "POST", ${goString(url)}, ${complete}, header)`
+      : `got := ${post(complete)}`;
     tests.push(
       `func TestUnaParteObligatoriaVaciaEs400FileUnreadable(t *testing.T) {
 	server := newServer(t)
@@ -688,7 +694,7 @@ func form(t *testing.T, fields map[string]string, content []byte) string {
 }`,
       `func TestUnaSubidaCompletaLlegaASuHandlerLeyendoLosCamposYElBinario(t *testing.T) {
 	server := newServer(t)
-	got := ${post(`form(t, ${sample}, []byte("%PDF-1.7 muestra"))`)}
+	${sendComplete}
 	if slices.Contains([]int{400, 404, 405, 413, 415}, got.status) {
 		t.Fatalf("la subida completa no llegó a su handler: %d %s", got.status, got.body)
 	}

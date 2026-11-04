@@ -9,9 +9,13 @@
 // Pageable), y por eso entran por parámetro.
 
 import { requestShape } from './api-contract.js';
+import { IDEMPOTENCY_HEADER } from './request-idempotency.js';
 
 /** El uuid de muestra de un parámetro de ruta. */
 export const SAMPLE_UUID = '0192f1d2-0000-7000-8000-000000000001';
+
+/** La clave de muestra con la que la subida completa llega al handler de una operación con `keySource: client-key`. */
+export const SAMPLE_IDEMPOTENCY_KEY = 'keel-muestra-0192f1d2';
 
 const routed = (model) => (model.services ?? []).flatMap((service) => service.operations ?? []).filter((op) => op.route && !op.multipart);
 const fullPath = (model, path) => `${model.api.routeBase}${path}`;
@@ -109,7 +113,11 @@ export function apiCases(model, { components }) {
     }
     // El primer obligatorio, en el orden del mensaje: es el que el servidor echa en falta primero.
     const first = own.find((c) => c.required);
-    cases.upload = { url, part: file.name, fields: sampled ? fields : null, firstMissing: first.file ? { part: first.name } : { parameter: first.name } };
+    // Con `client-key` el handler rechaza una petición sin la cabecera si el diseño la exige (OBL-IDEM-KEY-REQUIRED). Solo
+    // lo usa keel-go, cuya prueba ejecuta el handler sin base: la de keel-nest y keel-dotnet no llega a él, porque su
+    // mediator abre antes la transacción, y sale 500 con o sin la cabecera (medido sobre catalog).
+    const idempotencyKey = operation.idempotency?.keySource === 'client-key' ? { name: IDEMPOTENCY_HEADER, value: SAMPLE_IDEMPOTENCY_KEY } : null;
+    cases.upload = { url, part: file.name, fields: sampled ? fields : null, firstMissing: first.file ? { part: first.name } : { parameter: first.name }, idempotencyKey };
     break;
   }
   return cases;

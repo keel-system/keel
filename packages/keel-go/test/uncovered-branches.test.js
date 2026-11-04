@@ -38,6 +38,17 @@ test('catalog-extended-activation-degrade: la prosa llega a lo emitido (activati
   assert.ok(allGo(emitted('catalog-extended-activation-degrade')).includes(prose.slice(0, 30)), 'la prosa de degradedTo no llega a lo emitido');
 });
 
+test('catalog-extended-upload-client-key: la subida completa de la prueba emitida lleva la clave, y las demás no la necesitan', () => {
+  const api = content(emitted('catalog-extended-upload-client-key'), 'internal/httpapi/api_test.go');
+  const complete = api.slice(api.indexOf('func TestUnaSubidaCompletaLlegaASuHandler'));
+  assert.match(complete.slice(0, complete.indexOf('\n}\n')), /header\.Set\("Idempotency-Key", "keel-muestra-0192f1d2"\)/);
+  assert.equal(api.match(/Idempotency-Key/g).length, 1);
+  // Sin idempotencia, la misma prueba no la manda.
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'catalog-extended'));
+  const plain = content(planService({ manifest, layers, workspace: FIXTURES_DIR, stack: null }).files, 'internal/httpapi/api_test.go');
+  assert.ok(plain.includes('func TestUnaSubidaCompletaLlegaASuHandler') && !plain.includes('Idempotency-Key'));
+});
+
 test('payment-checkout-partial-capture: el puerto y el adaptador llevan el importe (payments.capture.amount)', () => {
   const files = emitted('payment-checkout-partial-capture');
   assert.match(content(files, 'internal/domain/payment_gateway.go'), /Capture\(ctx context\.Context, [^)]*amount \*wire\.Decimal/);
