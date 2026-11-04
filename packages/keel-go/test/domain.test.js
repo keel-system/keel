@@ -86,6 +86,40 @@ for (const name of fixtures) {
   });
 }
 
+// ─── El diseño declara el code de la transición ──────────────────────────────────────────────────
+
+/** product-catalog con INVALID_STATE_TRANSITION declarado en sus operaciones, cada una con su `http`. */
+function declaringTransition(...statuses) {
+  const { manifest, layers } = structuredClone(loaded.get('product-catalog'));
+  const operations = Object.values(layers['use-cases'].operations);
+  statuses.forEach((http, index) => {
+    const operation = operations[index];
+    operation.errors = [...(operation.errors ?? []), { code: 'INVALID_STATE_TRANSITION', when: 'El estado no admite el cambio.', http }];
+  });
+  return domainFile(planService({ manifest, layers, workspace: FIXTURES_DIR }).files, 'errors');
+}
+
+const transitionSentinels = (content) => content.match(/^var ErrInvalidStateTransition = .*$/gm);
+
+test('un diseño que declara INVALID_STATE_TRANSITION no choca con el centinela: hay uno, con el status del diseño', () => {
+  const content = declaringTransition(422);
+  assert.deepEqual(transitionSentinels(content), ['var ErrInvalidStateTransition = &Error{kind: KindBusiness, code: "INVALID_STATE_TRANSITION", status: 422}']);
+  assert.match(content, /El estado no admite el cambio\./);
+});
+
+test('con un status por operación, la transición del dominio conserva el canónico y existe StatusErrorf', () => {
+  const content = declaringTransition(409, 422);
+  assert.deepEqual(transitionSentinels(content), ['var ErrInvalidStateTransition = &Error{kind: KindConflict, code: "INVALID_STATE_TRANSITION", status: 409}']);
+  assert.match(content, /func StatusErrorf\(/);
+});
+
+test('dos codes distintos que se escriben igual en Go siguen siendo un error', () => {
+  const { manifest, layers } = structuredClone(loaded.get('product-catalog'));
+  const [first] = Object.values(layers['use-cases'].operations);
+  first.errors = [...(first.errors ?? []), { code: 'INVALID_STATE__TRANSITION', when: 'Otro code.', http: 409 }];
+  assert.throws(() => planService({ manifest, layers, workspace: FIXTURES_DIR }), /renombra el código en el diseño/);
+});
+
 // ─── El gate del formato ─────────────────────────────────────────────────────────────────────────
 
 /** Los sujetos (`Entidad.campo`) de un check-domain-guards.sh. */

@@ -44,7 +44,10 @@ export function frameworkSentinels(model) {
     },
     {
       name: 'ErrInvalidStateTransition',
-      needed: (model.entities ?? []).some((entity) => entity.lifecycle),
+      // Si el diseño declara este mismo code, el centinela es el suyo, con su status. Con un status por operación no
+      // tiene uno fijo que dar a la transición del dominio: se queda el canónico y la nota del handler pone el de cada una.
+      needed: (model.entities ?? []).some((entity) => entity.lifecycle)
+        && !(model.errors ?? []).some((error) => error.code === FRAMEWORK_ERRORS.invalidTransition.code && !error.dynamicStatus),
       doc: 'una transición de lifecycle que el diseño no declara.',
       ...FRAMEWORK_ERRORS.invalidTransition
     }
@@ -101,15 +104,19 @@ export function persistenceSentinels(model) {
 export function generate(model) {
   const { domain } = layout(model);
   const framework = frameworkSentinels(model);
-  const declared = (model.errors ?? []).map((error) => ({ ...error, name: sentinelOf(error.code) }));
   const taken = new Map(framework.map((entry) => [entry.name, entry.code]));
-  for (const error of declared) {
-    if (taken.has(error.name)) {
-      throw new Error(`errors: el código ${error.code} se escribe en Go ${error.name}, que ya es ${taken.get(error.name)}; renombra el código en el diseño`);
+  const declared = [];
+  for (const error of model.errors ?? []) {
+    const name = sentinelOf(error.code);
+    if (taken.has(name)) {
+      // El mismo code no es un choque: es el centinela que ya existe.
+      if (taken.get(name) === error.code) continue;
+      throw new Error(`errors: el código ${error.code} se escribe en Go ${name}, que ya es ${taken.get(name)}; renombra el código en el diseño`);
     }
-    taken.set(error.name, error.code);
+    taken.set(name, error.code);
+    declared.push({ ...error, name });
   }
-  const dynamic = declared.some((error) => error.dynamicStatus);
+  const dynamic = (model.errors ?? []).some((error) => error.dynamicStatus);
 
   const kinds = alignRows([
     { text: '\t// KindDomain es un error sin categoría propia: su status lo da el propio error.' },
