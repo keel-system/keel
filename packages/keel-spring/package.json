@@ -1,6 +1,6 @@
 {
   "name": "@keel-system/keel-spring",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Generador Spring Boot para diseños Keel: valida el diseño agnóstico y genera services/<servicio>-spring/ con el scaffolding transversal al stack más el conocimiento del agente; los adaptadores de infraestructura y la lógica de negocio los completa el agente con /keel-generate-spring dentro del proyecto.",
   "type": "module",
   "bin": {
@@ -57,7 +57,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",
-    "@keel-system/keel-core": "^0.5.0",
+    "@keel-system/keel-core": "^0.5.1",
     "commander": "^14.0.0",
     "picocolors": "^1.1.1",
     "yaml": "^2.6.0"

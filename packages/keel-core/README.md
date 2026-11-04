@@ -1,8 +1,8 @@
 # keel-core
 
-**Diseña un servidor una vez. Genéralo en Spring Boot, NestJS o .NET.**
+**Diseña un servidor una vez. Genéralo en Spring Boot, NestJS, .NET o Go.**
 
-`keel-core` es el núcleo de [Keel](https://github.com/keel-system/keel): la CLI `keel` más el **DSL Keel** que define cómo se describe un servicio sin nombrar framework, ORM, broker ni lenguaje. Siembra el workspace de diseño, crea y valida servicios, y expone su validación como librería para que cada generador (`keel-spring`, `@keel-system/keel-nest` y `keel-dotnet`) la reutilice en vez de duplicarla, junto con `keel-core/gen`, el núcleo neutral que interpreta el diseño igual para los tres.
+`keel-core` es el núcleo de [Keel](https://github.com/keel-system/keel): la CLI `keel` más el **DSL Keel** que define cómo se describe un servicio sin nombrar framework, ORM, broker ni lenguaje. Siembra el workspace de diseño, crea y valida servicios, y expone su validación como librería para que cada generador (`keel-spring`, `keel-nest`, `keel-dotnet` y `keel-go`) la reutilice en vez de duplicarla, junto con `keel-core/gen`, el núcleo neutral que interpreta el diseño igual para los cuatro.
 
 El diseño de un servicio vive en `specs/<servicio>/`: un manifiesto más **un artefacto YAML por capa** — dominio, casos de uso, API, seguridad, mensajería, clientes HTTP, dependencias, persistencia, almacenamiento, correo, pagos. Cada capa se itera por separado, cabe en un diff y se relaciona con las demás por nombre. Ese diseño es la fuente de verdad: el código final no lo genera JavaScript, lo genera un agente leyendo el spec validado.
 

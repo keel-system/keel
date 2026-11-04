@@ -8,6 +8,7 @@ Guía para publicar los paquetes del monorepo en el registro público de npm:
 | `@keel-system/keel-spring` | `packages/keel-spring` | `keel-spring` | `@keel-system/keel-core` |
 | `@keel-system/keel-nest` | `packages/keel-nest` | `keel-nest` | `@keel-system/keel-core` |
 | `@keel-system/keel-dotnet` | `packages/keel-dotnet` | `keel-dotnet` | `@keel-system/keel-core` |
+| `@keel-system/keel-go` | `packages/keel-go` | `keel-go` | `@keel-system/keel-core` |
 | `@keel-system/keel-recover` | `packages/keel-recover` | `keel-recover` | `@keel-system/keel-core` |
 
 En el resto de esta guía se nombran por su carpeta (`keel-core`, `keel-spring`…); el nombre en npm siempre lleva el scope. Todos se instalan igual: `npm i -g @keel-system/keel-<x>`.
@@ -21,10 +22,10 @@ Todos llevan el scope `@keel-system/`. Un paquete con scope se publica **privado
 ## 1. Requisitos (una sola vez)
 
 ```bash
-npm login                              # cuenta con permisos de publicación sobre los cinco paquetes
+npm login                              # cuenta con permisos de publicación sobre los seis paquetes
 npm whoami                             # comprobarlo
 npm org ls keel-system                 # que tu usuario sea miembro del scope (basta para publicar uno nuevo)
-for p in keel-core keel-spring keel-nest keel-dotnet keel-recover; do npm owner ls @keel-system/$p; done   # 404 hasta su primera publicación
+for p in keel-core keel-spring keel-nest keel-dotnet keel-go keel-recover; do npm owner ls @keel-system/$p; done   # 404 hasta su primera publicación
 ```
 
 Si la cuenta tiene 2FA activado para publicar, cada `npm publish` pedirá el código (o se pasa con `--otp=<código>`).
@@ -38,12 +39,12 @@ npm install
 npm test                   # todos los workspaces en verde
 ```
 
-Las redes opt-in de cada generador (`compile-check` y compañía en keel-spring, `ts-check` en keel-nest, `cs-check` en keel-dotnet, y las redes en vivo de cada uno) no son obligatorias para publicar, pero si la versión toca el código o el bash que genera un generador, conviene pasar al menos la que cubre lo tocado (ver `CLAUDE.md § Comandos de desarrollo`).
+Las redes opt-in de cada generador (`compile-check` y compañía en keel-spring, `ts-check` en keel-nest, `cs-check` en keel-dotnet, `go-check` en keel-go, y las redes en vivo de cada uno) no son obligatorias para publicar, pero si la versión toca el código o el bash que genera un generador, conviene pasar al menos la que cubre lo tocado (ver `CLAUDE.md § Comandos de desarrollo`).
 
 Comprobar qué versión hay ya publicada — **una versión publicada no se puede volver a publicar**, ni siquiera tras despublicarla:
 
 ```bash
-for p in keel-core keel-spring keel-nest keel-dotnet keel-recover; do echo "$p $(npm view @keel-system/$p version)"; done
+for p in keel-core keel-spring keel-nest keel-dotnet keel-go keel-recover; do echo "$p $(npm view @keel-system/$p version)"; done
 ```
 
 ## 3. Subir las versiones
@@ -55,13 +56,14 @@ npm version patch --workspace packages/keel-core   --no-git-tag-version
 npm version patch --workspace packages/keel-spring --no-git-tag-version
 npm version patch --workspace packages/keel-nest   --no-git-tag-version
 npm version patch --workspace packages/keel-dotnet --no-git-tag-version
+npm version patch --workspace packages/keel-go     --no-git-tag-version
 npm version patch --workspace packages/keel-recover --no-git-tag-version
 # o minor / una versión explícita: npm version 0.4.0 --workspace ...
 ```
 
 `--no-git-tag-version` porque en un monorepo la etiqueta la ponemos a mano (paso 7). El comando actualiza también `package-lock.json`.
 
-Solo se sube la versión del paquete que ha cambiado: si solo cambió `keel-nest`, los demás se quedan donde están. Un cambio en `keel-core/gen` (el núcleo neutral) suele afectar a los tres generadores: publicar `keel-core` y comprobar cada generador con el punto siguiente.
+Solo se sube la versión del paquete que ha cambiado: si solo cambió `keel-nest`, los demás se quedan donde están. Un cambio en `keel-core/gen` (el núcleo neutral) suele afectar a los cuatro generadores: publicar `keel-core` y comprobar cada generador con el punto siguiente.
 
 ### La dependencia generador → `keel-core`: la trampa del workspace
 
@@ -76,7 +78,7 @@ Y ojo con el `^` en `0.x`: `^0.5.0` significa `>=0.5.0 <0.6.0`. Si `keel-core` p
 
 ### Si cambia la versión del DSL
 
-Si `keel-core` cambia el enum de `properties.keel` en `assets/core/schema/service.schema.json`, en la misma publicación hay que sincronizar en **los tres generadores**:
+Si `keel-core` cambia el enum de `properties.keel` en `assets/core/schema/service.schema.json`, en la misma publicación hay que sincronizar en **los cuatro generadores**:
 
 - `SUPPORTED_DSL` en `src/lib/assets.js` de cada uno,
 - el campo `keel.dsl` de su `package.json`,
@@ -92,17 +94,18 @@ npm pack --dry-run --workspace packages/keel-core
 npm pack --dry-run --workspace packages/keel-spring
 npm pack --dry-run --workspace packages/keel-nest
 npm pack --dry-run --workspace packages/keel-dotnet
+npm pack --dry-run --workspace packages/keel-go
 npm pack --dry-run --workspace packages/keel-recover
 ```
 
-Revisar la lista: no debe aparecer `test/`, ni temporales, ni nada fuera de `src/`, `assets/`, `vendor/`, `README.md`, `LICENSE` y `package.json`. Referencia actual: ~225 archivos / ~900 kB para `keel-core`, ~210 archivos / ~1,1 MB para `keel-spring`, ~145 archivos / ~560 kB para `keel-nest`, ~150 archivos / ~650 kB para `keel-dotnet` y ~90 archivos / ~190 kB para `keel-recover` (sus `fixtures/` de legacy se quedan fuera); un salto grande es señal de que se ha colado algo.
+Revisar la lista: no debe aparecer `test/`, ni temporales, ni nada fuera de `src/`, `assets/`, `vendor/`, `README.md`, `LICENSE` y `package.json`. Referencia actual: ~230 archivos / ~920 kB para `keel-core`, ~210 archivos / ~1,1 MB para `keel-spring`, ~145 archivos / ~560 kB para `keel-nest`, ~150 archivos / ~650 kB para `keel-dotnet`, ~150 archivos / ~680 kB para `keel-go` y ~90 archivos / ~190 kB para `keel-recover` (sus `fixtures/` de legacy se quedan fuera); un salto grande es señal de que se ha colado algo.
 
 ## 5. Prueba de humo con los tarballs (recomendado)
 
 Instalar exactamente lo que se va a publicar, fuera del repo, **todos los tarballs en el mismo comando** (si no, cada generador resolvería `@keel-system/keel-core` desde el registro y no se probaría la combinación nueva):
 
 ```bash
-for p in keel-core keel-spring keel-nest keel-dotnet keel-recover; do
+for p in keel-core keel-spring keel-nest keel-dotnet keel-go keel-recover; do
   npm pack --workspace packages/$p --pack-destination ../keel-pack
 done
 
@@ -113,6 +116,7 @@ npx keel --version
 npx keel-spring --version
 npx keel-nest --version
 npx keel-dotnet --version
+npx keel-go --version
 npx keel-recover --version
 npx keel init            # siembra un workspace
 npx keel list
@@ -133,6 +137,8 @@ npm publish --workspace packages/keel-nest   --dry-run
 npm publish --workspace packages/keel-nest
 npm publish --workspace packages/keel-dotnet --dry-run
 npm publish --workspace packages/keel-dotnet
+npm publish --workspace packages/keel-go     --dry-run
+npm publish --workspace packages/keel-go
 npm publish --workspace packages/keel-recover --dry-run
 npm publish --workspace packages/keel-recover
 ```
@@ -142,7 +148,7 @@ Con 2FA: añadir `--otp=<código>`.
 Verificar:
 
 ```bash
-for p in keel-core keel-spring keel-nest keel-dotnet keel-recover; do echo "$p $(npm view @keel-system/$p version)"; done
+for p in keel-core keel-spring keel-nest keel-dotnet keel-go keel-recover; do echo "$p $(npm view @keel-system/$p version)"; done
 npm view @keel-system/keel-spring dependencies   # el rango de @keel-system/keel-core es el esperado (ídem en los demás)
 npx -y -p @keel-system/keel-core@latest keel --version
 ```
@@ -156,6 +162,7 @@ git tag keel-core@X.Y.Z
 git tag keel-spring@A.B.C
 git tag keel-nest@A.B.C
 git tag keel-dotnet@A.B.C
+git tag keel-go@A.B.C
 git tag keel-recover@A.B.C
 git push && git push --tags
 ```

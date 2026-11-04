@@ -57,15 +57,13 @@ npm i -g @keel-system/keel-core      # comando `keel`: diseñar y validar (siemp
 npm i -g @keel-system/keel-spring    # comando `keel-spring`, si generas en Spring Boot
 npm i -g @keel-system/keel-nest      # comando `keel-nest`, si generas en NestJS
 npm i -g @keel-system/keel-dotnet    # comando `keel-dotnet`, si generas en .NET
+npm i -g @keel-system/keel-go        # comando `keel-go`, si generas en Go
 npm i -g @keel-system/keel-recover   # comando `keel-recover`, si partes de un servicio existente
 ```
 
 El core y cada generador son paquetes independientes: instala el core y los generadores que vayas a
 usar. Necesitas además un agente de código: **Claude Code** u **opencode** (Keel siembra los archivos
 de los dos).
-
-`keel-go` **todavía no está publicado en npm**: para generar en Go, clona este repo y ejecuta
-`npm install` y `npm link --workspace packages/keel-go`.
 
 | Para… | Hace falta |
 |---|---|
@@ -570,15 +568,14 @@ mi-proyecto/
 
 ## Paquetes
 
-Monorepo npm workspaces con seis paquetes bajo el scope `@keel-system`; todos están publicados en npm
-salvo `keel-go`.
+Monorepo npm workspaces con seis paquetes, publicados en npm con el scope `@keel-system`.
 
 | Paquete | CLI | Versión | Qué hace |
 |---|---|---|---|
-| [`@keel-system/keel-core`](packages/keel-core/README.md) | `keel` | 0.5.0 | Siembra workspaces, crea, valida y describe diseños, el mapa del sistema y el registry. Define el DSL (schemas, docs, plantillas) y expone `keel-core/gen`, el núcleo neutral que comparten los generadores. |
-| [`@keel-system/keel-spring`](packages/keel-spring/README.md) | `keel-spring` | 0.2.0 | Generador Spring Boot 4.1.2 / Java 21: `services/<servicio>-spring/`, con el wrapper de Gradle vendorizado. |
-| [`@keel-system/keel-nest`](packages/keel-nest/README.md) | `keel-nest` | 0.1.0 | Generador NestJS 12 sobre Fastify, ESM, TypeScript strict y Vitest: `services/<servicio>-nest/`. |
-| [`@keel-system/keel-dotnet`](packages/keel-dotnet/README.md) | `keel-dotnet` | 0.1.0 | Generador .NET 10, un proyecto por capa, sin librerías de licencia comercial: `services/<servicio>-dotnet/`. |
+| [`@keel-system/keel-core`](packages/keel-core/README.md) | `keel` | 0.5.1 | Siembra workspaces, crea, valida y describe diseños, el mapa del sistema y el registry. Define el DSL (schemas, docs, plantillas) y expone `keel-core/gen`, el núcleo neutral que comparten los generadores. |
+| [`@keel-system/keel-spring`](packages/keel-spring/README.md) | `keel-spring` | 0.2.1 | Generador Spring Boot 4.1.2 / Java 21: `services/<servicio>-spring/`, con el wrapper de Gradle vendorizado. |
+| [`@keel-system/keel-nest`](packages/keel-nest/README.md) | `keel-nest` | 0.1.1 | Generador NestJS 12 sobre Fastify, ESM, TypeScript strict y Vitest: `services/<servicio>-nest/`. |
+| [`@keel-system/keel-dotnet`](packages/keel-dotnet/README.md) | `keel-dotnet` | 0.1.1 | Generador .NET 10, un proyecto por capa, sin librerías de licencia comercial: `services/<servicio>-dotnet/`. |
 | [`@keel-system/keel-go`](packages/keel-go/README.md) | `keel-go` | 0.1.0 | Generador Go 1.27 sobre net/http, sin cgo y solo con licencias permisivas, salvo una excepción escrita: `services/<servicio>-go/`. |
 | [`@keel-system/keel-recover`](packages/keel-recover/README.md) | `keel-recover` | 0.0.1 | Ingeniería inversa de un servicio existente hacia un diseño Keel, con la fidelidad y la paridad medidas. |
 
@@ -603,7 +600,7 @@ El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera
   ellos pares que solo se diferencian en el modelo de persistencia— y redes en vivo por generador
   contra motores, brokers, proveedores de identidad y buzones en contenedores (ver
   `CLAUDE.md § Comandos`). 80 corridas registradas en [docs/corridas](docs/corridas/).
-- **Pendiente**: publicar keel-go en npm; MariaDB, SQL Server y Oracle medidos en vivo en keel-nest,
+- **Pendiente**: MariaDB, SQL Server y Oracle medidos en vivo en keel-nest,
   keel-dotnet y keel-go; las pasarelas de pago contra su sandbox real; brokers distintos de RabbitMQ y
   keel-go como destino en keel-recover, y las corridas de control de keel-recover sobre legacys
   relacionales.
