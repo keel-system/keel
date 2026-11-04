@@ -1,6 +1,6 @@
 # Keel
 
-**Diseña un servidor una vez. Genéralo en Spring Boot, NestJS o .NET.**
+**Diseña un servidor una vez. Genéralo en Spring Boot, NestJS, .NET o Go.**
 
 Keel es una metodología para construir servicios de backend con agentes: el diseño se escribe una
 sola vez, sin tecnología dentro, en un DSL tipado que se valida con exit code; y un generador por
@@ -9,9 +9,9 @@ diseño contra infraestructura real. Si el servicio ya existe, `keel-recover` sa
 legacy y demuestra que el servidor regenerado hace lo mismo que el viejo.
 
 La prueba de que la promesa se cumple está en este repo. El mismo diseño (`notification-mailer`, en
-su variante relacional y en la documental) se generó con los tres generadores —seis proyectos— y los
-seis cerraron **23 de 23 escenarios** con el agente tocando **17 archivos de ~300** que escribió el
-generador ([corridas de control](docs/corridas/), 2026-10-18).
+su variante relacional y en la documental) se generó con los cuatro generadores —ocho proyectos— y los
+ocho cerraron **23 de 23 escenarios** con el agente tocando **17 o 18 archivos de ~300** que escribió el
+generador ([corridas de control](docs/corridas/): 2026-10-18 y, las de Go, 2026-11-03).
 
 **Índice**: [Cómo funciona](#cómo-funciona-en-un-minuto) ·
 [Instalación](#requisitos-e-instalación) · [Guía: tu primer servicio](#guía-de-uso-tu-primer-servicio) ·
@@ -57,13 +57,15 @@ npm i -g @keel-system/keel-core      # comando `keel`: diseñar y validar (siemp
 npm i -g @keel-system/keel-spring    # comando `keel-spring`, si generas en Spring Boot
 npm i -g @keel-system/keel-nest      # comando `keel-nest`, si generas en NestJS
 npm i -g @keel-system/keel-dotnet    # comando `keel-dotnet`, si generas en .NET
-npm i -g @keel-system/keel-go        # comando `keel-go`, si generas en Go
 npm i -g @keel-system/keel-recover   # comando `keel-recover`, si partes de un servicio existente
 ```
 
 El core y cada generador son paquetes independientes: instala el core y los generadores que vayas a
 usar. Necesitas además un agente de código: **Claude Code** u **opencode** (Keel siembra los archivos
 de los dos).
+
+`keel-go` **todavía no está publicado en npm**: para generar en Go, clona este repo y ejecuta
+`npm install` y `npm link --workspace packages/keel-go`.
 
 | Para… | Hace falta |
 |---|---|
@@ -232,8 +234,9 @@ a ejecutar `build`, no rediseñar.
 ## Partir de un servicio existente: keel-recover
 
 `keel-recover` hace ingeniería inversa de un servicio que ya existe: saca un diseño Keel **fiel**, con
-la procedencia de cada decisión, lo regenera con cualquiera de los tres generadores y **mide la
-paridad** entre el legacy y el regenerado ejecutando los mismos flujos contra los dos. La única
+la procedencia de cada decisión, lo regenera con keel-spring, keel-nest o keel-dotnet (keel-go aún no
+es un destino del recorrido) y **mide la paridad** entre el legacy y el regenerado ejecutando los
+mismos flujos contra los dos. La única
 entrada es el repo del legacy con su historial de git, y **nunca lo modifica**: todo lo que escribe va
 al workspace de diseño (`legacy/<servicio>/` y `specs/<servicio>/`).
 
@@ -324,7 +327,7 @@ ciclos de fix y su cupo— está en su `orchestration.md`:
 
 ### 1. Eliges la tecnología al final, y puedes cambiarla
 
-El diseño no lleva lenguaje, framework, ORM, broker ni base de datos. Los tres generadores siguen una
+El diseño no lleva lenguaje, framework, ORM, broker ni base de datos. Los cuatro generadores siguen una
 sola regla: **el mismo diseño genera servidores equivalentes**, y equivalentes quiere decir medido:
 
 - el **mismo contrato HTTP**: el `docs/openapi.yaml` que deriva cada generador es el mismo byte a byte;
@@ -347,9 +350,13 @@ Lo que no depende del lenguaje vive una sola vez en el núcleo neutral `keel-cor
 
 Lo que un generador aún no sostiene **lo rechaza en `build` diciendo por qué**
 (`src/lib/supported-features.js` de cada uno); los motores que faltan en NestJS, .NET y Go faltan porque
-ninguna red los ha ejecutado todavía. En .NET, ningún paquete con licencia comercial: versión exacta y
-SPDX de cada uno en `keel-dotnet/src/lib/dotnet-stack.js`, comprobados contra nuget.org con los
-transitivos.
+ninguna red los ha ejecutado todavía. keel-go rechaza más formas que los otros tres, porque un adaptador
+con cabecera de código generado no admite un TODO: es una excepción escrita a la regla de equivalencia,
+y cada rechazo, con su motivo y lo que cuesta abrirlo, está en
+[su README](packages/keel-go/README.md#la-frontera). En .NET, ningún paquete con licencia comercial:
+versión exacta y SPDX de cada uno en `keel-dotnet/src/lib/dotnet-stack.js`, comprobados contra nuget.org
+con los transitivos. En Go, solo licencias permisivas, salvo una excepción escrita
+(`keel-go/src/lib/go-stack.js`).
 
 ### 2. Lo derivable no lo escribe un agente
 
@@ -373,8 +380,8 @@ mide la **huella del agente**:
 | notification-mailer · go (2026-11-03, diseño v2.1.1) | 286 | 17 | 23/23 |
 | notification-mailer-mongo · go (2026-11-03, diseño v2.1.1) | 288 | 17 | 23/23 |
 
-Las de Spring, NestJS y .NET son del diseño v2.0.2. La huella es la misma en los cuatro lenguajes porque es la huella **del diseño**, no del stack. Los
-árbitros tampoco son agentes: con la suite al 100 % el pipeline pasa a la fase de calidad sin invocar
+Las de Spring, NestJS y .NET son del diseño v2.0.2. La huella es casi la misma en los cuatro lenguajes
+porque es la huella **del diseño**, no del stack. Los árbitros tampoco son agentes: con la suite al 100 % el pipeline pasa a la fase de calidad sin invocar
 a ninguno.
 
 Por lo mismo, **la generación no necesita un modelo grande**. Con todo el pipeline sobre Claude Haiku,
@@ -394,7 +401,7 @@ legible, versionable y revisable en un diff.
 ### 4. Los patrones difíciles vienen puestos, y medidos
 
 Los mecanismos de fiabilidad distribuida comparten un rasgo: **cuando están mal, no falla nada
-visible**. Por eso en Keel se derivan del diseño y los genera `build` enteros en los tres generadores.
+visible**. Por eso en Keel se derivan del diseño y los genera `build` enteros en los cuatro generadores.
 
 | Mecanismo | Qué evita |
 |---|---|
@@ -563,7 +570,8 @@ mi-proyecto/
 
 ## Paquetes
 
-Monorepo npm workspaces; los cinco paquetes están publicados en npm con el scope `@keel-system`.
+Monorepo npm workspaces con seis paquetes bajo el scope `@keel-system`; todos están publicados en npm
+salvo `keel-go`.
 
 | Paquete | CLI | Versión | Qué hace |
 |---|---|---|---|
@@ -581,21 +589,24 @@ El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera
 - **DSL Keel 2.23**: once capas (dos obligatorias, nueve opcionales) con validación en tres niveles
   —JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente— y el
   veredicto `--ready`.
-- **Tres generadores** —Spring Boot 4.1.2, NestJS 12 y .NET 10— cerrados con la corrida de control del
-  par del MVP: 6 × 23/23, huella 17. keel-nest y keel-dotnet se construyeron por incrementos medidos
-  ([PLAN-KEEL-NEST](completed_plans/PLAN-KEEL-NEST.md),
-  [PLAN-KEEL-DOTNET](completed_plans/PLAN-KEEL-DOTNET.md)).
+- **Cuatro generadores** cerrados con la corrida de control del par del MVP: Spring Boot 4.1.2,
+  NestJS 12 y .NET 10 con 6 × 23/23 sobre el diseño v2.0.2 (huella 17, y 18 en una) y Go 1.27 con
+  2 × 23/23 sobre la v2.1.1 (huella 17). keel-nest, keel-dotnet y keel-go se construyeron por
+  incrementos medidos ([PLAN-KEEL-NEST](completed_plans/PLAN-KEEL-NEST.md),
+  [PLAN-KEEL-DOTNET](completed_plans/PLAN-KEEL-DOTNET.md), [PLAN-KEEL-GO](PLAN-KEEL-GO.md)). La última
+  corrida, `catalog` del registry en keel-go, cerró 32/32 con una huella de 35 archivos de 376
+  ([corrida](docs/corridas/2026-11-04-catalog-go.md)).
 - **keel-recover**: el recorrido completo (sandbox, observación, diseño con procedencia, fidelidad,
   paridad) orquestado por `/keel-recover-run`, con MongoDB, PostgreSQL y MySQL
   ([PLAN-KEEL-RECOVER](PLAN-KEEL-RECOVER.md), banco en [docs/recover-bench](docs/recover-bench/)).
-- **Verificación del propio Keel**: 318 suites de test (`npm test`), 17 diseños de fixture —entre
+- **Verificación del propio Keel**: 383 archivos de test (`npm test`), 17 diseños de fixture —entre
   ellos pares que solo se diferencian en el modelo de persistencia— y redes en vivo por generador
   contra motores, brokers, proveedores de identidad y buzones en contenedores (ver
-  `CLAUDE.md § Comandos`). 65 corridas registradas en [docs/corridas](docs/corridas/).
-- **keel-go**, cuarto generador, en sus 16 incrementos medidos ([PLAN-KEEL-GO](PLAN-KEEL-GO.md)), con la corrida de control del par: 2 × 23/23, huella 17, sobre el diseño v2.1.1 (la de los otros tres es de la v2.0.2).
-- **Pendiente**: MariaDB, SQL Server y Oracle medidos en vivo en keel-nest, keel-dotnet y keel-go; las
-  pasarelas de pago contra su sandbox real; brokers distintos de RabbitMQ en keel-recover y las
-  corridas de control de keel-recover sobre legacys relacionales.
+  `CLAUDE.md § Comandos`). 80 corridas registradas en [docs/corridas](docs/corridas/).
+- **Pendiente**: publicar keel-go en npm; MariaDB, SQL Server y Oracle medidos en vivo en keel-nest,
+  keel-dotnet y keel-go; las pasarelas de pago contra su sandbox real; brokers distintos de RabbitMQ y
+  keel-go como destino en keel-recover, y las corridas de control de keel-recover sobre legacys
+  relacionales.
 
 ## Documentación
 
