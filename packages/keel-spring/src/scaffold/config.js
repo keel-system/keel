@@ -162,8 +162,88 @@ export function generate(model) {
     files.push(...fragments.map(({ path, content }) => ({ path, content })));
   }
 
+  files.push({
+    path: `src/main/resources/application-${AOT_TRAINING_PROFILE}.yaml`,
+    content: aotTrainingYaml(model, requiredByDevelop(files))
+  });
   files.push(...testProfileFiles(model));
   return files;
+}
+
+/** El perfil con el que deploy/Dockerfile entrena la caché AOT, encima de `develop`. */
+export const AOT_TRAINING_PROFILE = 'aot-training';
+
+/**
+ * application-aot-training.yaml: lo que el ENTRENAMIENTO de la caché AOT cambia de `develop`.
+ *
+ * El entrenamiento refresca el contexto dentro de `docker build`, sin ninguna infraestructura, y
+ * `spring.context.exit=onRefresh` corta antes de arrancar los beans `Lifecycle`: listeners de los
+ * brokers, `@Scheduled` y `ApplicationRunner` (el de los índices de Mongo) no llegan a ejecutarse.
+ * Pero todo singleton se instancia antes del corte, y tres de ellos hablan con la red al hacerlo:
+ * Flyway migra, Hibernate valida el esquema y lee los metadatos JDBC para elegir el dialecto, y el
+ * `KafkaAdmin` crea los topics que declare el agente (`NewTopic`). Los dos primeros tumban el
+ * entrenamiento; el tercero no, pero lo deja ~45 s esperando a un broker que no hay (medido: 56 s
+ * frente a 12). Mongo, Redis, RabbitMQ, SNS/SQS, el cliente del correo y el decoder del JWT son
+ * perezosos: medido entrenando cada broker con sus plantillas construidas. Lo que no lleve este
+ * perfil, el entrenamiento lo ejecuta igual que en `develop`.
+ *
+ * Con telemetría queda un intento más, y es inocuo: el resolutor de nombres de datasource-micrometer
+ * pide una conexión al envolver el `DataSource` (también en ejecución, donde sí la obtiene). En el
+ * entrenamiento la rechaza el puerto, el resolutor se lo traga y el nombre sale del bean. Apagar ese
+ * proxy aquí dejaría sus clases fuera de la caché.
+ */
+function aotTrainingYaml(model, required) {
+  const lines = [
+    '# Perfil del entrenamiento de la caché AOT (deploy/Dockerfile), activo encima de develop.',
+    '# Corre en el build de la imagen, sin base ni broker: apaga lo que hablaría con ellos al',
+    '# instanciar los singletons. No es un perfil de ejecución.'
+  ];
+  const db = DATABASES[model.stack.database];
+  const relational = model.layersPresent.persistence && db && db.kind !== 'document';
+  const kafka = model.layersPresent.messaging && model.stack.broker === 'kafka';
+  if (relational || kafka) lines.push('spring:');
+  if (relational) {
+    lines.push(
+      '  flyway:',
+      '    enabled: false',
+      '  jpa:',
+      '    # Sin metadatos JDBC Hibernate no puede detectar el motor: el dialecto va escrito.',
+      `    database-platform: ${JAVA_DATABASES[db.id].dialect}`,
+      '    hibernate:',
+      '      ddl-auto: none',
+      '    properties:',
+      '      hibernate:',
+      '        boot.allow_jdbc_metadata_access: false'
+    );
+  }
+  if (kafka) {
+    lines.push('  kafka:', '    admin:', '      auto-create: false');
+  }
+  // Lo que `develop` declara SIN default (`${X}`) lo pone el compose de deploy/, que en el build no
+  // está: sin un valor aquí el contexto no refresca («Could not resolve placeholder») y la imagen
+  // saldría sin caché. Un placeholder se resuelve contra todo el Environment, así que basta con la
+  // clave de primer nivel. Ninguno se usa: los clientes no llaman a nadie hasta que hay tráfico.
+  if (required.length > 0) {
+    lines.push('# Lo que develop exige sin default y en el build no hay quien ponga.');
+    for (const name of required) lines.push(`${name}: ${AOT_TRAINING_PLACEHOLDER}`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+/** El valor de las variables obligatorias de `develop` durante el entrenamiento: un host que no existe. */
+export const AOT_TRAINING_PLACEHOLDER = 'http://aot-training.invalid';
+
+/** Las variables que los archivos de `develop` leen sin default (`${X}`), en orden y sin repetir. */
+export function requiredByDevelop(files) {
+  const required = new Set();
+  for (const file of files) {
+    const develop =
+      file.path.startsWith('src/main/resources/parameters/develop/') ||
+      file.path === 'src/main/resources/application-develop.yaml';
+    if (!develop) continue;
+    for (const [, name] of String(file.content).matchAll(/\$\{([A-Z][A-Z0-9_]*)\}/g)) required.add(name);
+  }
+  return [...required];
 }
 
 function fragment(profile, name, content) {

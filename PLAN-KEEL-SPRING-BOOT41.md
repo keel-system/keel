@@ -25,17 +25,21 @@ Pasan el filtro dos piezas de Boot 4.1 sobre Java 21 (fase A) y el salto a Java 
 | 1 | Conexión JDBC perezosa (`connection-fetch: lazy`) | A | hecho (2026-11-05) |
 | 2 | Filtro de direcciones salientes (`InetAddressFilter`) | A | hecho (2026-11-05) |
 | 3 | Java 25 + Gradle 9 (plataforma) | B | hecho (2026-11-05) |
-| 4 | Caché AOT en `deploy/Dockerfile` | B | pendiente |
+| 4 | Caché AOT en `deploy/Dockerfile` | B | hecho (2026-11-05) |
 | 5 | Cabeceras de objeto compactas | B | pendiente |
 | 6 | Hilos virtuales sin *pinning*: reescribir el porqué | B | pendiente |
 | 7 | Corrida de control del par del MVP | — | pendiente |
 
-**Para retomar:** empezar por el incremento 4 (caché AOT en `deploy/Dockerfile`), en un contexto nuevo. Las imágenes `eclipse-temurin:25-jdk-alpine` y `25-jre-alpine` ya están en podman (las trajo el `deploy-check` del inc. 3). Las redes que levantan la app (`telemetry-check`, `deploy-check`) se pasan con la máquina descargada: con poca memoria libre el sistema mata la ejecución. Los temporales del inc. 3 ya están borrados.
+**Para retomar:** empezar por el incremento 5 (cabeceras compactas), en un contexto nuevo.
+- El entrenamiento del Dockerfile ya corre con `java $JAVA_OPTS …`, así que la bandera entra con un `ENV JAVA_OPTS` en la etapa de runtime **antes** del `RUN` del entrenamiento, y llega a los dos sitios.
+- `DEP-AOT` de `deploy-check` caza la caché ignorada por banderas distintas (cualquier línea `[aot]` de la JVM).
+- Para comparar el heap sirve el arranque a mano del inc. 4 (`docs/corridas/2026-11-05-aot-cache.md`): la imagen de `job-dispatch` contra un PostgreSQL en una red de podman, con `SPRING_FLYWAY_ENABLED=false` y `SPRING_JPA_HIBERNATE_DDL_AUTO=update`. El plan pide además la medida en `telemetry-check`.
+- Las redes que levantan la app se pasan con la máquina descargada. Los temporales del inc. 4 ya están borrados.
 
 Entorno:
 - JDK 25 en `C:\java\jdk-25` (`JAVA_HOME`); el 21 sigue en `C:\java\jdk-21`.
 - Gradle sale del wrapper de cada proyecto.
-- Los temporales de las redes van en `D:\keel-tmp\boot41-inc3\`, con `TMP`/`TEMP` apuntando a su `tmp\`.
+- Los temporales de las redes van en `D:\keel-tmp\boot41-inc<N>\`, con `TMP`/`TEMP` apuntando a su `tmp\`.
 
 ## Lo que se descarta, y por qué
 
@@ -287,6 +291,36 @@ Rendimiento de arranque y de calentamiento, **condicionado a la medición**.
   - **Gate:** la imagen se construye sin infra y la app llega a `/readyz`.
   - Se registra el tiempo de arranque con caché y sin ella (`Started … in X s`) en `docs/corridas/<fecha>-aot-cache.md`.
   - **Sin mejora medible, se retira.**
+
+### Resultado (2026-11-05)
+
+**Entra.** Con la imagen de `job-dispatch` contra PostgreSQL, el arranque de Spring baja de **7,06 s a 3,09 s** de media en tres pasadas. Las cifras están en `docs/corridas/2026-11-05-aot-cache.md`.
+
+- **Emitido en el Dockerfile** (`deploy.js`):
+  - El entrenamiento va en la etapa de runtime, sobre el jar extraído y como el usuario `app`. El directorio pasa a ser suyo para que pueda escribir `app.aot`.
+  - Corre con `java $JAVA_OPTS -XX:AOTCacheOutput=app.aot -Xlog:aot=error -Dspring.context.exit=onRefresh -Dspring.profiles.active=develop,aot-training`. `-Xlog:aot=error` calla unas 270 líneas `[warning][aot]` esperables (proxies, CGLIB).
+  - Interruptor `ARG AOT_CACHE=true`.
+  - **Un entrenamiento que falla no rompe la imagen**: sale sin caché y con un `AVISO`.
+  - El `ENTRYPOINT` pasa `-XX:AOTCache=app.aot` **solo si el archivo existe**. Medido: sin él, la JVM 25 arranca igual pero escribe tres líneas `[error][aot]`.
+- **El perfil `aot-training`** (`aotTrainingYaml` en `config.js`, `application-aot-training.yaml`, emitido siempre):
+  - En relacional apaga Flyway, deja `ddl-auto: none` y fija `hibernate.boot.allow_jdbc_metadata_access: false` con el dialecto escrito. El dialecto es la nueva columna `dialect` de `JAVA_DATABASES`, cotejada contra hibernate-core 7.4.13.
+  - Con Kafka, `spring.kafka.admin.auto-create: false`.
+  - **Hallazgo:** da valor (`http://aot-training.invalid`) a todo lo que `develop` lee **sin default**. Son diez variables en las fixtures (CORS, `base-url` de clientes y storage público), y sin ellas el contexto no refresca porque su valor lo pone el compose, que en el build no existe. La lista se deriva de los fragmentos (`requiredByDevelop`), no se escribe a mano.
+- **Medido por stack**, construyendo las imágenes sin infraestructura. Entrenan `job-dispatch` (PostgreSQL y MySQL), `notification-mailer` con RabbitMQ, Kafka y SNS/SQS, y `notification-mailer-mongo`. Al par le falta el `OutboxDispatcher` del agente, así que se midió con un doble que construye la plantilla real del broker.
+- **Qué habla con la red y qué no:**
+  - **Con red:** Flyway y la validación del esquema tumban el entrenamiento. El `KafkaAdmin` no lo tumba, pero con un `NewTopic` declarado lo deja **56 s frente a 12** esperando al broker.
+  - **Perezosos:** Mongo (su monitor falla en segundo plano sin consecuencias), RabbitMQ, SNS/SQS, el correo y el JWT.
+  - **datasource-micrometer** pide una conexión al envolver el `DataSource`, también en ejecución. En el entrenamiento falla, se lo traga y es inocuo. No se apaga para no dejar sus clases fuera de la caché.
+- **Pruebas y red:**
+  - `test/aot-cache.test.js`: el perfil fixture a fixture en cuatro variantes de stack, los dialectos, y la forma y el orden del Dockerfile.
+  - `deploy-check` gana **`DEP-AOT`**, propio de keel-spring: el PID 1 lleva la bandera, `app.aot` existe y la JVM no escribió ninguna línea `[aot]`.
+  - **Falsado:** `--sabotage=aot-profile` borra el perfil, el entrenamiento muere en Flyway y cae **exactamente DEP-AOT**, con DEP-1 a DEP-8 en verde.
+- **Para el agente:** `conventions/project-layout.md` lo cuenta y fija la regla de que ningún bean habla con la red al construirse (eso va en un `ApplicationRunner` o tras `ApplicationReadyEvent`).
+- **Puerta, en verde:**
+  - `npm test --workspace packages/keel-spring`: 1762/1762;
+  - `deploy-check`: 9/9;
+  - `deploy-check --sabotage=aot-profile`: DEP-AOT en rojo, y solo ese;
+  - las seis imágenes por stack.
 
 ### Incremento 5: cabeceras de objeto compactas (`-XX:+UseCompactObjectHeaders`, JEP 519)
 

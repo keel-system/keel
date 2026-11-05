@@ -31,10 +31,17 @@
 // línea del agente. Con `asset-vault` no arrancaría: el adaptador de `FileStorage` lo escribe el
 // agente y un contenedor no admite dobles.
 //
+// **Y una pregunta que no es de telemetría ni del backend, pero que solo se puede hacer aquí**
+// (DEP-AOT, propia de keel-spring): que la app del contenedor arranque DESDE la caché AOT que la
+// imagen entrenó (inc. 4 de PLAN-KEEL-SPRING-BOOT41.md). El entrenamiento que falla no rompe la
+// imagen a propósito, así que una imagen sin caché llega a READY igual que una con ella: sin este
+// caso, perder la caché no lo vería nadie. `--sabotage=aot-profile` borra el perfil `aot-training`
+// antes de construir —el entrenamiento muere en Flyway— y tiene que tumbar DEP-AOT y solo ese.
+//
 // **Lo que NO mide**: las dos plantillas de colector de producción (`collector-agent`,
 // `collector-gateway`), que dependen de un clúster de Kubernetes.
 //
-//   node packages/keel-spring/scripts/deploy-check.js [fixture] [--keep]
+//   node packages/keel-spring/scripts/deploy-check.js [fixture] [--keep] [--sabotage=aot-profile]
 //   npm run deploy-check --workspace packages/keel-spring
 //
 // Códigos de salida: 0 todo OK · 1 hay casos rojos · 2 el arnés no pudo correr (sin veredicto).
@@ -57,6 +64,11 @@ const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');
 const args = process.argv.slice(2);
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'job-dispatch';
 const keep = args.includes('--keep');
+const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
+if (sabotage && sabotage !== 'aot-profile') {
+  console.error(`Sabotaje desconocido: ${sabotage} (el único es aot-profile)`);
+  process.exit(2);
+}
 
 
 // ─── Procesos ────────────────────────────────────────────────────────────────
@@ -187,7 +199,33 @@ function trafficPath(projectDir) {
 
 // ─── Los casos ───────────────────────────────────────────────────────────────
 
-const CASES = DEPLOY_CASES;
+// Los neutrales, más el de esta plataforma.
+const CASES = [
+  ...DEPLOY_CASES,
+  { id: 'DEP-AOT', title: 'la app del contenedor arranca desde la caché AOT que entrenó la imagen' }
+];
+
+/**
+ * DEP-AOT: el PID 1 del contenedor lleva `-XX:AOTCache`, el archivo existe y la JVM no se quejó de
+ * él. Lo tercero importa: con `AOTMode=auto` (el default) una caché que no casa con la JVM o con sus
+ * banderas se IGNORA con una línea `[aot]` en el log y la app arranca igual, solo que en frío.
+ */
+function probeAotCache(projectDir) {
+  const compose = fs.readFileSync(path.join(projectDir, 'deploy', 'docker-compose.yaml'), 'utf8');
+  const image = /^\s+image: (\S+-deploy:latest)\s*$/m.exec(compose)?.[1];
+  if (!image) return { ok: false, detail: 'el compose no nombra la imagen de la app' };
+  const ids = (name) => run(runtime, ['ps', '-q', '--filter', `ancestor=${name}`]).stdout.trim().split('\n').filter(Boolean);
+  const [container] = [...ids(image), ...ids(`localhost/${image}`)];
+  if (!container) return { ok: false, detail: `ningún contenedor en marcha de ${image}` };
+  const cmdline = run(runtime, ['exec', container, 'cat', '/proc/1/cmdline']).stdout.replace(/\0/g, ' ').trim();
+  const cache = run(runtime, ['exec', container, 'test', '-s', '/application/app.aot']).status === 0;
+  const logs = run(runtime, ['logs', container]);
+  const complaints = (logs.stdout + logs.stderr).split('\n').filter((line) => /\[(error|warning)\]\[aot\]/.test(line));
+  if (!cache) return { ok: false, detail: 'la imagen no trae app.aot: el entrenamiento falló (ver el AVISO de la salida del build)' };
+  if (!cmdline.includes('-XX:AOTCache=app.aot')) return { ok: false, detail: `la JVM arrancó sin la caché: ${cmdline}` };
+  if (complaints.length > 0) return { ok: false, detail: `la JVM ignoró la caché: ${complaints.slice(0, 3).join(' | ')}` };
+  return { ok: true, detail: '' };
+}
 
 const results = [];
 const record = (id, ok, detail = '') => {
@@ -237,6 +275,10 @@ try {
   GRAFANA = `http://localhost:${grafanaPort}`;
 
   giveSchemaToTheApp(projectDir);
+  if (sabotage === 'aot-profile') {
+    fs.rmSync(path.join(projectDir, 'src', 'main', 'resources', 'application-aot-training.yaml'));
+    console.log('SABOTAJE aot-profile: sin el perfil de entrenamiento (debe caer DEP-AOT y solo ese)');
+  }
   process.stdout.write('levantando deploy/ (construye la imagen: esto tarda)… ');
   const up = run('bash', ['deploy/up.sh'], { cwd: projectDir, timeout: 20 * 60 * 1000 });
   if (up.status !== 0) {
@@ -259,6 +301,9 @@ try {
     throw new Error('la aplicación no llegó a responder READY: sin app no hay telemetría que medir');
   }
   console.log('OK');
+
+  const aot = probeAotCache(projectDir);
+  record('DEP-AOT', aot.ok, aot.detail);
 
   // DEP-1. Lo que el colector viene a buscar tiene que estar expuesto en este perfil. Si no lo
   // está, Boot responde 404 haya la regla de seguridad que haya, y el backend se queda sin

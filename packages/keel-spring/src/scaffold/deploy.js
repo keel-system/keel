@@ -9,7 +9,7 @@
 import { deployFiles, publishedUrls as neutralPublishedUrls, postmanEnvironmentPath, builtinScopes } from '@keel-system/keel-core/gen/deploy';
 import { JAVA_VERSION } from '../lib/assets.js';
 import { JAVA_DATABASES } from '../lib/java-stack.js';
-import { LOCAL_API_KEY, LOCAL_CORS_ORIGINS, localClientApiKey } from './config.js';
+import { AOT_TRAINING_PROFILE, LOCAL_API_KEY, LOCAL_CORS_ORIGINS, localClientApiKey } from './config.js';
 
 export { postmanEnvironmentPath, builtinScopes };
 
@@ -84,8 +84,9 @@ FROM eclipse-temurin:${JAVA_VERSION}-jre-alpine
 WORKDIR /application
 
 # Usuario sin privilegios. La app no escribe en ningun volumen, asi que esto no
-# choca con el mapeo de UIDs de podman rootless.
-RUN addgroup -S app && adduser -S -G app app
+# choca con el mapeo de UIDs de podman rootless. El directorio es suyo solo para
+# que el entrenamiento de abajo pueda dejar ahi la cache AOT.
+RUN addgroup -S app && adduser -S -G app app && chown app:app /application
 USER app
 
 # El orden importa: de lo que menos cambia a lo que mas.
@@ -93,6 +94,29 @@ COPY --from=build --chown=app:app /workspace/extracted/dependencies/ ./
 COPY --from=build --chown=app:app /workspace/extracted/spring-boot-loader/ ./
 COPY --from=build --chown=app:app /workspace/extracted/snapshot-dependencies/ ./
 COPY --from=build --chown=app:app /workspace/extracted/application/ ./
+
+# ── Cache AOT (Java 25, JEP 483/514/515) ─────────────────────────────────────
+# Un arranque de entrenamiento deja en app.aot las clases ya cargadas y enlazadas
+# y los perfiles de los metodos calientes; la JVM de verdad arranca desde ahi.
+# spring.context.exit=onRefresh corta al terminar de refrescar el contexto, antes
+# de arrancar listeners, @Scheduled y runners. El build no tiene base ni broker,
+# asi que se entrena con develop (el perfil de este compose) mas aot-training,
+# que apaga lo unico que hablaria con ellos al instanciar los singletons
+# (src/main/resources/application-aot-training.yaml).
+#
+# -Xlog:aot=error calla los cientos de avisos de clases que la cache no admite
+# (proxies, CGLIB): son esperables y no cambian nada.
+#
+# Si el entrenamiento falla (un bean que conecta al construirse) la imagen sale
+# igual, sin cache: es una optimizacion, no una condicion para arrancar. Se apaga
+# con --build-arg AOT_CACHE=false. La cache solo vale con las mismas banderas de
+# la JVM: un JAVA_OPTS distinto en ejecucion no rompe nada, la ignora.
+ARG AOT_CACHE=true
+RUN if [ "$AOT_CACHE" = "true" ]; then \\
+      java $JAVA_OPTS -XX:AOTCacheOutput=app.aot -Xlog:aot=error -Dspring.context.exit=onRefresh \\
+        -Dspring.profiles.active=develop,${AOT_TRAINING_PROFILE} -jar application.jar \\
+      || { rm -f app.aot; echo 'AVISO: el entrenamiento de la cache AOT fallo; la imagen arranca sin ella.'; }; \\
+    fi
 
 EXPOSE 8080
 
@@ -106,6 +130,8 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=45s --retries=18 \\
 
 # Forma shell para que \$JAVA_OPTS se expanda; exec para que la JVM sea el PID 1 y
 # reciba el SIGTERM que dispara el apagado ordenado (server.shutdown: graceful).
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar application.jar"]
+# La cache solo se pasa si existe: sin el archivo la JVM arranca igual, pero
+# escribe tres lineas [error][aot] que mandan a buscar un fallo que no hay.
+ENTRYPOINT ["sh", "-c", "exec java $([ -f app.aot ] && echo -XX:AOTCache=app.aot) $JAVA_OPTS -jar application.jar"]
 `;
 }

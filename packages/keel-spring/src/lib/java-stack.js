@@ -19,32 +19,40 @@ const FLYWAY_CORE = "implementation 'org.springframework.boot:spring-boot-starte
 //                        que no tienen esquema que migrar.
 // url / internalUrl      cadena de conexión de Spring, vista desde el HOST y (si difiere en algo
 //                        más que el host) desde DENTRO de la red de compose de deploy/.
+// dialect                (solo BD relacional) dialecto de Hibernate. En ejecución lo detecta de la
+//                        conexión; solo se escribe en el perfil `aot-training`, el del entrenamiento
+//                        de la caché AOT de deploy/Dockerfile, que corre sin base a la que preguntar.
 export const JAVA_DATABASES = {
   postgresql: {
     gradleDependencies: ["runtimeOnly 'org.postgresql:postgresql'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-database-postgresql'"],
-    url: (db) => `jdbc:postgresql://localhost:5432/${db}`
+    url: (db) => `jdbc:postgresql://localhost:5432/${db}`,
+    dialect: 'org.hibernate.dialect.PostgreSQLDialect'
   },
   mysql: {
     gradleDependencies: ["runtimeOnly 'com.mysql:mysql-connector-j'"],
     // MySQL y MariaDB comparten módulo Flyway (flyway-mysql).
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-mysql'"],
-    url: (db) => `jdbc:mysql://localhost:3306/${db}`
+    url: (db) => `jdbc:mysql://localhost:3306/${db}`,
+    dialect: 'org.hibernate.dialect.MySQLDialect'
   },
   mariadb: {
     gradleDependencies: ["runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-mysql'"],
-    url: (db) => `jdbc:mariadb://localhost:3306/${db}`
+    url: (db) => `jdbc:mariadb://localhost:3306/${db}`,
+    dialect: 'org.hibernate.dialect.MariaDBDialect'
   },
   sqlserver: {
     gradleDependencies: ["runtimeOnly 'com.microsoft.sqlserver:mssql-jdbc'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-sqlserver'"],
-    url: (db) => `jdbc:sqlserver://localhost:1433;databaseName=${db};encrypt=false`
+    url: (db) => `jdbc:sqlserver://localhost:1433;databaseName=${db};encrypt=false`,
+    dialect: 'org.hibernate.dialect.SQLServerDialect'
   },
   oracle: {
     gradleDependencies: ["runtimeOnly 'com.oracle.database.jdbc:ojdbc11'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-database-oracle'"],
-    url: () => 'jdbc:oracle:thin:@//localhost:1521/FREEPDB1'
+    url: () => 'jdbc:oracle:thin:@//localhost:1521/FREEPDB1',
+    dialect: 'org.hibernate.dialect.OracleDialect'
   },
   mongodb: {
     gradleDependencies: ["implementation 'org.springframework.boot:spring-boot-starter-data-mongodb'"],
