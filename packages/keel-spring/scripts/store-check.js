@@ -36,8 +36,11 @@
 // decide el DISEÑO: con una fixture documental se ejercita la otra rama entera, que no comparte
 // una línea con la relacional.
 //
-//   node packages/keel-spring/scripts/store-check.js [fixture] [--database=<motor>] [--keep]
+//   node packages/keel-spring/scripts/store-check.js [fixture] [--database=<motor>] [--keep] [--sabotage=<id>]
 //   npm run store-check --workspace packages/keel-spring
+//
+// `--sabotage=eager-fetch` quita `spring.datasource.connection-fetch` del db.yaml EMITIDO, como si
+// build dejara de emitirla: verde es que caiga exactamente `unaTransaccionSinSqlNoSacaConexionDelPool`.
 //
 // Necesita podman o docker, y JDK (Gradle compila el proyecto entero, `main` incluido).
 
@@ -70,6 +73,12 @@ const args = process.argv.slice(2);
 const keep = args.includes('--keep');
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'notification-mailer';
 const database = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? 'postgresql';
+const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
+const SABOTAGES = ['eager-fetch'];
+if (sabotage && !SABOTAGES.includes(sabotage)) {
+  console.error(`store-check: sabotaje desconocido '${sabotage}' (conocidos: ${SABOTAGES.join(', ')})`);
+  process.exit(2);
+}
 
 // ─── Procesos y compose (misma resolución que los scripts generados) ─────────
 
@@ -154,7 +163,14 @@ function prepare() {
   // La conexión sale del fichero de parámetros que build EMITIÓ, no de constantes de aquí: es la
   // misma que usa el proyecto contra su propia infraestructura, y si build la cambia este runner
   // la sigue.
-  const db = YAML.parse(fs.readFileSync(path.join(projectDir, 'src/main/resources/parameters/local/db.yaml'), 'utf8'));
+  const dbFile = path.join(projectDir, 'src/main/resources/parameters/local/db.yaml');
+  if (sabotage === 'eager-fetch') {
+    const original = fs.readFileSync(dbFile, 'utf8');
+    const saboteado = original.replace(/^ *(?:# La conexión sale del pool[^\n]*\n *)?connection-fetch:[^\n]*\n/m, '');
+    if (saboteado === original) throw new Error('sabotaje eager-fetch: el db.yaml generado no trae connection-fetch');
+    fs.writeFileSync(dbFile, saboteado, 'utf8');
+  }
+  const db = YAML.parse(fs.readFileSync(dbFile, 'utf8'));
   const datasource = document ? { uri: mongoUriOf(db) } : (db?.spring?.datasource ?? {});
 
   // El paquete de cada clase se LEE del proyecto generado en vez de suponerse: si el scaffold
@@ -324,7 +340,7 @@ try {
 }
 const { projectDir, subjects, clases, probe, engine, container } = prepared;
 
-console.log(`store-check · ${fixture} (${engine}) · ${runtimeInfo.runtime}`);
+console.log(`store-check · ${fixture} (${engine}) · ${runtimeInfo.runtime}${sabotage ? ` · SABOTAJE ${sabotage}` : ''}`);
 console.log(
   `  mecanismos ejercitados: ${[
     ...(subjects.outbox ? ['relay del outbox'] : []),
@@ -365,7 +381,7 @@ try {
       exitCode = failed > 0 ? 1 : 0;
       fs.writeFileSync(
         path.join(here, '..', 'store-check.json'),
-        `${JSON.stringify({ ...verdictStamp(), fixture, database: engine, cases }, null, 2)}\n`,
+        `${JSON.stringify({ ...verdictStamp(), fixture, database: engine, sabotage, cases }, null, 2)}\n`,
         'utf8'
       );
     }

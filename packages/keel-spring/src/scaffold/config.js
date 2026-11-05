@@ -677,6 +677,14 @@ function dbYaml(model, profile, dbName) {
     `    url: ${envFor('DB_URL', profile, JAVA_DATABASES[db.id].url(dbName))}`,
     `    username: ${envFor('DB_USERNAME', profile, db.user(dbName))}`,
     `    password: ${envFor('DB_PASSWORD', profile, db.password)}`,
+    // La conexión sale del pool en la PRIMERA sentencia, no al abrir la transacción: con
+    // JpaTransactionManager el `begin` ya la tomaba (autocommit=false), así que una transacción que
+    // termina sin SQL —un rechazo antes de cargar, un acierto de caché, una llamada saliente antes
+    // de la primera consulta— ocupaba el pool para nada. Boot envuelve el pool en un
+    // LazyConnectionDataSourceProxy que aplaza autocommit, readOnly y aislamiento hasta entonces;
+    // las métricas del pool siguen llegando a Hikari. Lo mide store-check (`--sabotage=eager-fetch`).
+    '    # La conexión sale del pool en la primera sentencia SQL, no al abrir la transacción.',
+    `    connection-fetch: ${envWithDefault(profile, 'DB_CONNECTION_FETCH', 'lazy')}`,
     '    hikari:',
     '      # Tuning del pool expuesto por ambiente; ajustar en production.',
     // El nombre es la etiqueta `pool` de sus métricas: con el de por defecto (HikariPool-1) dos

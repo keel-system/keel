@@ -24,9 +24,12 @@ spring:
       leak-detection-threshold: 0
 ```
 
-- El pool lo comparten todos los handlers; con `UseCaseMediator` cada dispatch
-  usa una conexión durante la transacción completa: transacciones cortas > pool
-  grande.
+- El pool lo comparten todos los handlers. Build emite
+  `spring.datasource.connection-fetch: lazy` (`DB_CONNECTION_FETCH`): cada
+  dispatch del `UseCaseMediator` saca la conexión en su **primera sentencia
+  SQL** y la retiene hasta el commit. Un rechazo antes de cargar no la ocupa;
+  una llamada externa después de la primera consulta sí, toda su duración:
+  transacciones cortas > pool grande. No la pongas a `eager`.
 - No configures `validation-timeout`/`connection-test-query` con drivers JDBC4
   (todos los del catálogo): Hikari usa `isValid()` solo.
 

@@ -166,6 +166,14 @@ deriva · qué la verifica · qué pasa si falla**.
 | Consumo de un mensaje | `CorrelationContext.runWith(metadata, …)` → `continueFrom(metadata.traceparent, keel.message.consume, CONSUMER)` | **listener del agente** + `correlation.js:54` |
 | Storage / correo | aspectos `@Around` sobre el **puerto** | `telemetry.js:289`, `:326` |
 
+**El span `jdbc.connection` no mide la espera del pool.** Con `spring.datasource.connection-fetch: lazy`
+(lo emite `config.js` en el modelo relacional) Boot envuelve el pool en un `LazyConnectionDataSourceProxy`,
+y `datasource-micrometer` envuelve a su vez ese proxy: su `jdbc.connection` se abre en el
+`getConnection` perezoso, no al sacar la conexión de Hikari, y la espera del pool cae dentro de la primera
+consulta. Se acepta: la saturación del pool se lee en sus series (`hikaricp_connections_pending`,
+`hikaricp_connections_acquire_seconds`), que siguen llegando a Hikari con su `pool-name`, y ninguna alerta
+ni panel consulta ese span.
+
 **La propagación a través de los eventos** es la parte más delicada. El `traceparent` W3C viaja
 en `metadata.traceparent` **de la envoltura keel**, que es contrato público del evento: lo estampa
 `EventEnvelope.of(...)` al publicar (con `MessageTracing.currentTraceparent()`) y lo restaura el

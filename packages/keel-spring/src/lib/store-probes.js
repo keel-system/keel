@@ -38,7 +38,7 @@ import { reconciliationClaims } from '../scaffold/reconciliation-claim.js';
 // La MISMA derivación que usa claim-check para sembrar una fila: los NOT NULL de la entidad, no
 // una lista escrita a mano. Una segunda copia se separa, y el día que se separe el síntoma será
 // «el barrido no se llevó nada» — indistinguible del defecto que se persigue.
-import { requiredLiterals, accessor } from './claim-probes.js';
+import { requiredLiterals, accessor, conexionPerezosa } from './claim-probes.js';
 import { screamingSnake } from './naming.js';
 // La MISMA decisión que toma el generador para el barrido. No es una preferencia del check: sin
 // ella el reclamo de reconciliación NO FUNCIONA en MySQL — medido, ver el javadoc de `reclamar`.
@@ -187,6 +187,7 @@ function relationalOutboxClass(model, { datasource, packages }) {
     `"spring.datasource.url=${datasource.url}"`,
     `"spring.datasource.username=${datasource.username}"`,
     `"spring.datasource.password=${datasource.password ?? ''}"`,
+    ...conexionPerezosa(datasource),
     '"spring.jpa.hibernate.ddl-auto=create-drop"',
     '"spring.flyway.enabled=false"',
     // El tope de transacción CORTO, para que el caso de la espera de bloqueo no tarde: lo que se
@@ -529,6 +530,7 @@ function relationalMediatorClass(model, { datasource, packages }) {
     `"spring.datasource.url=${datasource.url}"`,
     `"spring.datasource.username=${datasource.username}"`,
     `"spring.datasource.password=${datasource.password ?? ''}"`,
+    ...conexionPerezosa(datasource),
     '"spring.jpa.hibernate.ddl-auto=create-drop"',
     '"spring.flyway.enabled=false"'
   ];
@@ -540,6 +542,9 @@ function relationalMediatorClass(model, { datasource, packages }) {
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class ${CLASS_MEDIATOR} {
+
+    @Autowired
+    private DataSource dataSource;
 
     @Autowired
     private ${repoClass} outbox;
@@ -613,6 +618,68 @@ class ${CLASS_MEDIATOR} {
                         + "interbloqueó y el caso no midió nada");
     }
 
+    /** Un comando y una consulta que el handler resuelve sin tocar la base. */
+    record SinSql() implements Command {
+    }
+
+    record ConsultaSinSql() implements Query<Integer> {
+    }
+
+    /** Lo mismo, pero con una sentencia: el control que demuestra que la sonda ve el pool. */
+    record ConSql() implements Command {
+    }
+
+    private UseCaseMediator mediatorCon(UseCaseContainer contenedor) {
+        return new UseCaseMediator(contenedor, gestor${telemetry ? ', ObservationRegistry.NOOP' : ''}${cache ? ', null' : ''});
+    }
+
+    private HikariPoolMXBean pool() {
+        HikariDataSource hikari = DataSourceUnwrapper.unwrap(dataSource, HikariConfigMXBean.class, HikariDataSource.class);
+        assertNotNull(hikari, "no se llega al pool de Hikari a través de los proxies del DataSource");
+        return hikari.getHikariPoolMXBean();
+    }
+
+    @Test
+    void unaTransaccionSinSqlNoSacaConexionDelPool() {
+        // Con JpaTransactionManager el begin ya pedía la conexión (autocommit=false): un rechazo antes
+        // de cargar, un acierto de caché o una llamada saliente antes de la primera consulta ocupaban
+        // el pool para nada. Con connection-fetch: lazy la conexión sale en la PRIMERA sentencia.
+        outbox.count();
+        HikariPoolMXBean pool = pool();
+        int antes = pool.getActiveConnections();
+        AtomicInteger enEscritura = new AtomicInteger(-1);
+        AtomicInteger enLectura = new AtomicInteger(-1);
+        UseCaseContainer contenedor = new UseCaseContainer();
+        contenedor.register(SinSql.class, (CommandHandler<SinSql>) comando -> enEscritura.set(pool.getActiveConnections()));
+        contenedor.register(ConsultaSinSql.class, (QueryHandler<ConsultaSinSql, Integer>) consulta -> {
+            enLectura.set(pool.getActiveConnections());
+            return 0;
+        });
+        UseCaseMediator mediator = mediatorCon(contenedor);
+        mediator.dispatch(new SinSql());
+        mediator.dispatch(new ConsultaSinSql());
+        assertEquals(antes, enEscritura.get(),
+                "la transacción de escritura sacó una conexión del pool sin ejecutar SQL: connection-fetch no es lazy");
+        assertEquals(antes, enLectura.get(),
+                "la transacción de solo lectura sacó una conexión del pool sin ejecutar SQL: connection-fetch no es lazy");
+    }
+
+    @Test
+    void laPrimeraSentenciaSiSacaLaConexion() {
+        // El control del caso anterior: si la sonda no viera el pool, aquél saldría verde sin medir nada.
+        outbox.count();
+        HikariPoolMXBean pool = pool();
+        int antes = pool.getActiveConnections();
+        AtomicInteger tras = new AtomicInteger(-1);
+        UseCaseContainer contenedor = new UseCaseContainer();
+        contenedor.register(ConSql.class, (CommandHandler<ConSql>) comando -> {
+            outbox.count();
+            tras.set(pool.getActiveConnections());
+        });
+        mediatorCon(contenedor).dispatch(new ConSql());
+        assertEquals(antes + 1, tras.get(), "tras la primera sentencia la transacción tiene que retener su conexión");
+    }
+
     @Test
     void elConflictoDeVersionYElTopeNoSeReintentan() throws Exception {
         // Reintentar a ciegas el conflicto de @Version reaplicaría la intención obsoleta del cliente y
@@ -643,6 +710,11 @@ class ${CLASS_MEDIATOR} {
       `${packages.outbox}.${repoClass}`,
       `${packages.interfaces}.Command`,
       `${packages.interfaces}.CommandHandler`,
+      `${packages.interfaces}.Query`,
+      `${packages.interfaces}.QueryHandler`,
+      'com.zaxxer.hikari.HikariConfigMXBean',
+      'com.zaxxer.hikari.HikariDataSource',
+      'com.zaxxer.hikari.HikariPoolMXBean',
       ...(telemetry ? ['io.micrometer.observation.ObservationRegistry'] : []),
       'java.lang.reflect.Method',
       'java.time.Instant',
@@ -656,6 +728,8 @@ class ${CLASS_MEDIATOR} {
       'org.junit.jupiter.api.BeforeEach',
       'org.junit.jupiter.api.Test',
       'org.springframework.beans.factory.annotation.Autowired',
+      'javax.sql.DataSource',
+      'org.springframework.boot.jdbc.DataSourceUnwrapper',
       'org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase',
       'org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest',
       'org.springframework.dao.QueryTimeoutException',
@@ -664,7 +738,8 @@ class ${CLASS_MEDIATOR} {
       'org.springframework.transaction.annotation.Propagation',
       'org.springframework.transaction.annotation.Transactional',
       'static org.junit.jupiter.api.Assertions.assertEquals',
-      'static org.junit.jupiter.api.Assertions.assertFalse'
+      'static org.junit.jupiter.api.Assertions.assertFalse',
+      'static org.junit.jupiter.api.Assertions.assertNotNull'
     ],
     body
   );
@@ -892,6 +967,7 @@ function relationalIdempotencyClass(model, subjects, { datasource, packages }) {
     `"spring.datasource.url=${datasource.url}"`,
     `"spring.datasource.username=${datasource.username}"`,
     `"spring.datasource.password=${datasource.password ?? ''}"`,
+    ...conexionPerezosa(datasource),
     '"spring.jpa.hibernate.ddl-auto=create-drop"',
     '"spring.flyway.enabled=false"'
   ];
@@ -1485,6 +1561,7 @@ function relationalReconciliationClass(model, subjects, { datasource, packages, 
     `"spring.datasource.url=${datasource.url}"`,
     `"spring.datasource.username=${datasource.username}"`,
     `"spring.datasource.password=${datasource.password ?? ''}"`,
+    ...conexionPerezosa(datasource),
     '"spring.jpa.hibernate.ddl-auto=create-drop"',
     '"spring.flyway.enabled=false"',
     ...parametrosDelBarrido(claim)

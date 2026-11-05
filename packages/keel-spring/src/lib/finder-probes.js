@@ -9,6 +9,7 @@ import { findersOf, FINDER_PROBE_TEXT, finderTextProbes } from '@keel-system/kee
 import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 import { LOCK_VERSION } from '@keel-system/keel-core/gen/relational';
 import { domainMembers } from '../scaffold/entities.js';
+import { conexionPerezosa } from './claim-probes.js';
 
 export const CLASS_NAME = 'FinderCheckTest';
 export const PACKAGE_LEAF = 'findercheck';
@@ -261,7 +262,7 @@ ${locals.join('\n')}${locals.length > 0 ? '\n' : ''}        var beyond = PagedRe
     : `@DataJpaTest(properties = {
         ${java(`spring.datasource.url=${datasource.url}`)},
         ${java(`spring.datasource.username=${datasource.username}`)},
-        ${java(`spring.datasource.password=${datasource.password ?? ''}`)},
+        ${java(`spring.datasource.password=${datasource.password ?? ''}`)},${conexionPerezosa(datasource).map((p) => `\n        ${p},`).join('')}
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.flyway.enabled=false"
 })

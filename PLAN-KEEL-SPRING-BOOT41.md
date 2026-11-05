@@ -22,7 +22,7 @@ Pasan el filtro dos piezas de Boot 4.1 sobre Java 21 (fase A) y el salto a Java 
 | Inc. | Qué | Fase | Estado |
 |---|---|---|---|
 | 0 | Verificar APIs y claves contra los jars de 4.1.2 | — | hecho (2026-11-05) |
-| 1 | Conexión JDBC perezosa (`connection-fetch: lazy`) | A | pendiente |
+| 1 | Conexión JDBC perezosa (`connection-fetch: lazy`) | A | hecho (2026-11-05) |
 | 2 | Filtro de direcciones salientes (`InetAddressFilter`) | A | pendiente |
 | 3 | Java 25 + Gradle 9 (plataforma) | B | pendiente |
 | 4 | Caché AOT en `deploy/Dockerfile` | B | pendiente |
@@ -30,7 +30,7 @@ Pasan el filtro dos piezas de Boot 4.1 sobre Java 21 (fase A) y el salto a Java 
 | 6 | Hilos virtuales sin *pinning*: reescribir el porqué | B | pendiente |
 | 7 | Corrida de control del par del MVP | — | pendiente |
 
-**Para retomar:** empezar por el incremento 1. El inc. 0 corrigió los incrementos 1, 2, 3 y 4 (ver «Resultado» del inc. 0): sobre todo el 2, que necesita una dependencia nueva y cambiar el cliente de pagos. Los temporales de la medición (`D:\keel-tmp\boot41-inc0\`) ya están borrados.
+**Para retomar:** empezar por el incremento 2, en un contexto nuevo. El inc. 0 lo corrigió (ver su «Resultado»): necesita la dependencia `spring-boot-http-client` y pasar el `RestClient` de pagos de `SimpleClientHttpRequestFactory` al cliente del JDK, y hay que decidir qué desenlace tiene `FilteredHostException`. `store-check` ya admite `--sabotage=<id>` (hoy solo `eager-fetch`); `payment-check` tiene el suyo. Los temporales del inc. 1 (`D:\keel-tmp\boot41-inc1\`) ya están borrados.
 
 ## Lo que se descarta, y por qué
 
@@ -147,6 +147,23 @@ Rendimiento, **condicionado a la medición**.
   - `store-check`, `claim-check`, `finder-check` y `telemetry-check` contra PostgreSQL y MySQL;
   - `compile-check`.
 - **Si la sonda no muestra ganancia** con las formas de handler que genera build, se retira. El motivo se escribe en `.claude/rules/spring-persistencia.md` y en la tabla de descartes.
+
+### Resultado (2026-11-05)
+
+**Hay ganancia y entra.** La sonda pasa por el `UseCaseMediator` generado (sus dos `TransactionTemplate`, escritura y solo lectura) con un handler que no ejecuta SQL: con `eager` la transacción retiene **1** conexión activa de Hikari; con `lazy`, **0**. En PostgreSQL y en MySQL.
+
+- **Emitido:** `spring.datasource.connection-fetch: ${DB_CONNECTION_FETCH:lazy}` en `dbYaml` (`config.js`), solo relacional y en los tres perfiles; `local`, literal. La variable es de Spring y no entra en `keel-core/gen/runtime-env.js`. El perfil `test` (H2) no la lleva.
+- **Sonda:** `unaTransaccionSinSqlNoSacaConexionDelPool` en la clase del mediator de `store-check`, con un control (`laPrimeraSentenciaSiSacaLaConexion`: tras la primera sentencia hay una conexión más) para que el caso no pueda salir verde por no ver el pool. Llega a Hikari con `DataSourceUnwrapper` a través del proxy.
+- **Falsada:** `store-check --sabotage=eager-fetch` quita la clave del `db.yaml` emitido; cae exactamente ese caso (23/24) en los dos motores.
+- **Las demás sondas relacionales** (`store-check`, `claim-check`, `finder-check`) pasan ahora la clave emitida (`conexionPerezosa()` en `src/lib/claim-probes.js`). Sin eso, `@DataJpaTest` arranca sin perfil y el `SKIP LOCKED` y el `READ_COMMITTED` del barrido se habrían medido con `eager`, que no es como corren en producción. El arnés y `telemetry-check` ya la veían: corren con el perfil `local`.
+- **El span `jdbc.connection`** queda documentado y aceptado en `guides/OBSERVABILIDAD-ARQUITECTURA.md` § 3.2. La skill `keel-spring-database` (`configuration.md`, `troubleshooting.md`) ya no dice que cada dispatch ocupa la conexión la transacción entera.
+- **Puerta, en verde:**
+  - `npm test --workspace packages/keel-spring`, con un caso nuevo en `test/transaction-limits.test.js` (la clave en los tres perfiles, nunca en documental) y otro en `test/store-probes.test.js` (toda clase relacional lleva la clave emitida, ninguna documental);
+  - `store-check` completo (24, 24, 18, 35, 35 y 30), con `stock-reservation` en MySQL incluido, que es donde el `READ_COMMITTED` del reclamo de reconciliación es portante;
+  - `claim-check` completo (siete pasadas, MariaDB incluida);
+  - `finder-check` completo (PostgreSQL, MySQL y Mongo);
+  - `telemetry-check` (TEL-11, las series del pool, en verde). No tiene eje de motor: mide PostgreSQL. MySQL lo cubren `store-check` y `claim-check`;
+  - `compile-check` en su pasada por defecto. El cambio no toca Java generado, solo `db.yaml`, y el Java nuevo de las sondas compiló dentro de `store-check`.
 
 ### Incremento 2: filtro de direcciones salientes (`InetAddressFilter`, anti-SSRF)
 

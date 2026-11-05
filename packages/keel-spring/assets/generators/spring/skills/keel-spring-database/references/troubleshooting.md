@@ -11,7 +11,9 @@ orden de probabilidad:
 
 1. **Transacciones largas**: un handler hace I/O externo (HTTP, broker) dentro
    de la transacción del `UseCaseMediator`. Saca ese I/O fuera (o a
-   `afterCommit`); la transacción debe durar lo que duran las queries. Caso
+   `afterCommit`); la transacción debe durar lo que duran las queries. Con
+   `connection-fetch: lazy` (lo emite build) el I/O que va ANTES de la primera
+   consulta ya no retiene conexión; el que va después, sí. Caso
    típico: un barrido que llama a un proveedor por cada candidato. Si ese barrido
    es el `reconciledBy` de una activación, `build` ya lo despacha sin transacción
    abarcadora; si aun así retiene conexiones, mira que el adaptador no esté

@@ -54,6 +54,14 @@ export { rescueShape, stallSql, missingClockCountSql };
 import { screamingSnake, snakeCase } from './naming.js';
 import { DATABASES } from './stack-catalog.js';
 
+// La conexión perezosa, tal como la EMITIÓ build en el db.yaml que lee el runner. Va en TODAS las
+// clases relacionales y no solo en la que la mide: el relay, los almacenes y el reclamo corren en
+// producción detrás del proxy perezoso, que aplaza el aislamiento y el autocommit hasta la primera
+// sentencia, y medirlos sin él sería medir otra cosa. Si build deja de emitirla, la sonda del
+// mediator corre con el default de Boot (eager) y cae en rojo (`--sabotage=eager-fetch`).
+export const conexionPerezosa = (datasource) =>
+  datasource['connection-fetch'] === undefined ? [] : [`"spring.datasource.connection-fetch=${datasource['connection-fetch']}"`];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // El SQL con el que el ARNÉS fabrica la precondición del rescate.
 //
@@ -725,6 +733,7 @@ function relationalClaimTestClass(model, scenarios, { datasource, packages, data
     `"spring.datasource.url=${datasource.url}"`,
     `"spring.datasource.username=${datasource.username}"`,
     `"spring.datasource.password=${datasource.password ?? ''}"`,
+    ...conexionPerezosa(datasource),
     '"spring.jpa.hibernate.ddl-auto=create-drop"',
     '"spring.flyway.enabled=false"',
     ...(queue ? [`"sweep.${queue.sweepKey}.batch-size=${BATCH_SIZE}"`] : []),

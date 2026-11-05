@@ -162,6 +162,21 @@ test('el pool falla rápido, tiene nombre y su vida máxima es configurable', ()
   assert.equal(production['spring.datasource.hikari.pool-name'], 'stock-reservation-pool');
 });
 
+test('la conexión sale del pool en la primera sentencia, redirigible por entorno, y solo en relacional', () => {
+  // Con JpaTransactionManager el `begin` ya tomaba la conexión: una transacción sin SQL ocupaba el
+  // pool para nada. Que el proxy perezoso no la saque lo mide store-check (`--sabotage=eager-fetch`).
+  const { read } = generate('stock-reservation');
+  for (const profile of ['local', 'develop', 'production']) {
+    const db = flatten(YAML.parse(read(`parameters/${profile}/db.yaml`)));
+    const expected = profile === 'local' ? 'lazy' : '${DB_CONNECTION_FETCH:lazy}';
+    assert.equal(db['spring.datasource.connection-fetch'], expected, profile);
+  }
+  const mongo = generate('notification-mailer-mongo');
+  for (const profile of ['local', 'develop', 'production']) {
+    assert.ok(!mongo.read(`parameters/${profile}/db.yaml`).includes('connection-fetch'), `${profile}: la clave es de JDBC`);
+  }
+});
+
 test('las dos redes de Hibernate llegan con el nombre que Hibernate lee, en todos los perfiles', () => {
   const { read } = generate('stock-reservation');
   for (const profile of ['local', 'develop', 'production']) {

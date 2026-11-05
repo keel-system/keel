@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
+import YAML from 'yaml';
 import { loadService } from '@keel-system/keel-core';
 import { buildModel } from '../src/lib/model.js';
 // Los nombres del espejo del registro de claves salen del generador, no de este test: es la
@@ -87,8 +88,25 @@ function prepara({ fixture, engine }) {
     : { url: 'jdbc:x', username: 'u', password: 'p' };
 
   const clases = storeTestClasses(model, subjects, { datasource, packages, database: engine });
-  return { model, subjects, clases, packages, fuenteDe, paqueteDe };
+  return { model, subjects, clases, packages, fuenteDe, paqueteDe, projectDir };
 }
+
+// La conexión perezosa viaja a TODAS las clases relacionales desde el db.yaml que build emitió: el
+// relay, los almacenes y el reclamo corren detrás del proxy en producción. Ninguna documental la lleva.
+test('las sondas relacionales arrancan con la connection-fetch EMITIDA; las documentales, sin ella', () => {
+  for (const caso of PAR) {
+    const { model, subjects, packages, projectDir } = prepara(caso);
+    const db = YAML.parse(fs.readFileSync(path.join(projectDir, 'src/main/resources/parameters/local/db.yaml'), 'utf8'));
+    const datasource = caso.document ? { uri: 'mongodb://x' } : db.spring.datasource;
+    if (!caso.document) assert.equal(datasource['connection-fetch'], 'lazy', 'build dejó de emitir la conexión perezosa');
+    const clases = storeTestClasses(model, subjects, { datasource, packages, database: caso.engine });
+    assert.ok(clases.length > 0);
+    for (const clase of clases) {
+      const lleva = clase.content.includes('"spring.datasource.connection-fetch=lazy"');
+      assert.equal(lleva, !caso.document, `${caso.fixture}: ${clase.className}`);
+    }
+  }
+});
 
 /** La clase de prueba de un mecanismo, por su nombre. */
 const claseDe = (clases, nombre) => clases.find((c) => c.className === nombre);
