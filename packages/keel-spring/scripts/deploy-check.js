@@ -37,11 +37,14 @@
 // imagen a propósito, así que una imagen sin caché llega a READY igual que una con ella: sin este
 // caso, perder la caché no lo vería nadie. `--sabotage=aot-profile` borra el perfil `aot-training`
 // antes de construir —el entrenamiento muere en Flyway— y tiene que tumbar DEP-AOT y solo ese.
+// `--sabotage=jvm-flags` entrena SIN las banderas de la imagen (`JVM_BASE_OPTS`, las cabeceras compactas
+// del inc. 5) y arranca con ellas: la caché existe y la bandera llega, pero la JVM la descarta por no
+// casar, y tiene que caer DEP-AOT y solo ese.
 //
 // **Lo que NO mide**: las dos plantillas de colector de producción (`collector-agent`,
 // `collector-gateway`), que dependen de un clúster de Kubernetes.
 //
-//   node packages/keel-spring/scripts/deploy-check.js [fixture] [--keep] [--sabotage=aot-profile]
+//   node packages/keel-spring/scripts/deploy-check.js [fixture] [--keep] [--sabotage=aot-profile|jvm-flags]
 //   npm run deploy-check --workspace packages/keel-spring
 //
 // Códigos de salida: 0 todo OK · 1 hay casos rojos · 2 el arnés no pudo correr (sin veredicto).
@@ -65,8 +68,9 @@ const args = process.argv.slice(2);
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'job-dispatch';
 const keep = args.includes('--keep');
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
-if (sabotage && sabotage !== 'aot-profile') {
-  console.error(`Sabotaje desconocido: ${sabotage} (el único es aot-profile)`);
+const SABOTAGES = ['aot-profile', 'jvm-flags'];
+if (sabotage && !SABOTAGES.includes(sabotage)) {
+  console.error(`Sabotaje desconocido: ${sabotage} (son ${SABOTAGES.join(', ')})`);
   process.exit(2);
 }
 
@@ -278,6 +282,14 @@ try {
   if (sabotage === 'aot-profile') {
     fs.rmSync(path.join(projectDir, 'src', 'main', 'resources', 'application-aot-training.yaml'));
     console.log('SABOTAJE aot-profile: sin el perfil de entrenamiento (debe caer DEP-AOT y solo ese)');
+  }
+  if (sabotage === 'jvm-flags') {
+    const dockerfilePath = path.join(projectDir, 'deploy', 'Dockerfile');
+    const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
+    const sabotaged = dockerfile.replace('java $JVM_BASE_OPTS $JAVA_OPTS -XX:AOTCacheOutput', 'java $JAVA_OPTS -XX:AOTCacheOutput');
+    if (sabotaged === dockerfile) throw new Error('el sabotaje jvm-flags ya no se aplica al Dockerfile emitido');
+    fs.writeFileSync(dockerfilePath, sabotaged);
+    console.log('SABOTAJE jvm-flags: entrena sin JVM_BASE_OPTS y arranca con ellas (debe caer DEP-AOT y solo ese)');
   }
   process.stdout.write('levantando deploy/ (construye la imagen: esto tarda)… ');
   const up = run('bash', ['deploy/up.sh'], { cwd: projectDir, timeout: 20 * 60 * 1000 });

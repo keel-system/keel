@@ -46,6 +46,14 @@ export function publishedUrls(model) {
 
 // ─── deploy/Dockerfile ───────────────────────────────────────────────────────
 
+/**
+ * Las banderas de la JVM que la imagen pone siempre, en el entrenamiento de la caché AOT y en el arranque: la
+ * caché solo vale con las mismas, así que viven en una sola variable de la imagen y no en `JAVA_OPTS`, que es de
+ * quien despliega. Cabeceras de objeto compactas (JEP 519, de producto en Java 25): medido en `job-dispatch`
+ * (inc. 5 de PLAN-KEEL-SPRING-BOOT41.md, `docs/corridas/2026-11-05-aot-cache.md`).
+ */
+export const JVM_BASE_OPTS = '-XX:+UseCompactObjectHeaders';
+
 function dockerfile(model) {
   const jar = `${model.service.projectName}-${model.service.version}.jar`;
   return `# Imagen del servicio, en tres etapas.
@@ -111,9 +119,15 @@ COPY --from=build --chown=app:app /workspace/extracted/application/ ./
 # igual, sin cache: es una optimizacion, no una condicion para arrancar. Se apaga
 # con --build-arg AOT_CACHE=false. La cache solo vale con las mismas banderas de
 # la JVM: un JAVA_OPTS distinto en ejecucion no rompe nada, la ignora.
+#
+# JVM_BASE_OPTS son las banderas de la imagen, y JAVA_OPTS las de quien la
+# despliega: separadas para que un JAVA_OPTS con -Xmx no se lleve por delante las
+# de aqui (ni, con ellas, la cache). Cabeceras de objeto compactas (JEP 519): 8
+# bytes por objeto en vez de 12; con job-dispatch el heap vivo baja un 10 %.
+ENV JVM_BASE_OPTS="${JVM_BASE_OPTS}"
 ARG AOT_CACHE=true
 RUN if [ "$AOT_CACHE" = "true" ]; then \\
-      java $JAVA_OPTS -XX:AOTCacheOutput=app.aot -Xlog:aot=error -Dspring.context.exit=onRefresh \\
+      java $JVM_BASE_OPTS $JAVA_OPTS -XX:AOTCacheOutput=app.aot -Xlog:aot=error -Dspring.context.exit=onRefresh \\
         -Dspring.profiles.active=develop,${AOT_TRAINING_PROFILE} -jar application.jar \\
       || { rm -f app.aot; echo 'AVISO: el entrenamiento de la cache AOT fallo; la imagen arranca sin ella.'; }; \\
     fi
@@ -132,6 +146,6 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=45s --retries=18 \\
 # reciba el SIGTERM que dispara el apagado ordenado (server.shutdown: graceful).
 # La cache solo se pasa si existe: sin el archivo la JVM arranca igual, pero
 # escribe tres lineas [error][aot] que mandan a buscar un fallo que no hay.
-ENTRYPOINT ["sh", "-c", "exec java $([ -f app.aot ] && echo -XX:AOTCache=app.aot) $JAVA_OPTS -jar application.jar"]
+ENTRYPOINT ["sh", "-c", "exec java $([ -f app.aot ] && echo -XX:AOTCache=app.aot) $JVM_BASE_OPTS $JAVA_OPTS -jar application.jar"]
 `;
 }

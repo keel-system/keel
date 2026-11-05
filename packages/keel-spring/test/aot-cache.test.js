@@ -18,6 +18,7 @@ import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { AOT_TRAINING_PLACEHOLDER, AOT_TRAINING_PROFILE, requiredByDevelop } from '../src/scaffold/config.js';
 import { DATABASES } from '../src/lib/stack-catalog.js';
+import { JVM_BASE_OPTS } from '../src/scaffold/deploy.js';
 import { JAVA_DATABASES } from '../src/lib/java-stack.js';
 import { tmpDir } from './helpers/tmp.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
@@ -106,7 +107,7 @@ test('caché AOT: el Dockerfile entrena con el perfil de deploy/ y arranca con l
   assert.ok(dockerfile.includes('-XX:AOTCacheOutput=app.aot'));
   assert.ok(dockerfile.includes('-Dspring.context.exit=onRefresh'));
   // Las banderas de la JVM tienen que ser las mismas en el entrenamiento y en el arranque.
-  assert.ok(dockerfile.includes('java $JAVA_OPTS -XX:AOTCacheOutput=app.aot'));
+  assert.ok(dockerfile.includes('java $JVM_BASE_OPTS $JAVA_OPTS -XX:AOTCacheOutput=app.aot'));
   assert.ok(dockerfile.includes('ARG AOT_CACHE=true'));
 
   // Va DESPUÉS de la última capa del jar (entrena sobre la forma extraída, la que arranca) y como el
@@ -120,9 +121,23 @@ test('caché AOT: el Dockerfile entrena con el perfil de deploy/ y arranca con l
   assert.ok(dockerfile.includes('|| { rm -f app.aot;'));
   // …y sin el archivo no se pasa la bandera: la JVM arrancaría igual, pero con tres líneas
   // [error][aot] (medido con temurin 25).
-  assert.ok(dockerfile.includes('exec java $([ -f app.aot ] && echo -XX:AOTCache=app.aot) $JAVA_OPTS -jar application.jar'));
+  assert.ok(dockerfile.includes('exec java $([ -f app.aot ] && echo -XX:AOTCache=app.aot) $JVM_BASE_OPTS $JAVA_OPTS -jar application.jar'));
 
   // Las continuaciones de línea sobreviven al template literal (un `\` a secas ante un salto de
   // línea lo borra JS y el RUN queda en una línea).
   assert.match(dockerfile, /RUN if \[ "\$AOT_CACHE" = "true" \]; then \\\n/);
+});
+
+test('cabeceras compactas: van en las banderas de la imagen, las mismas en el entrenamiento y en el arranque', () => {
+  const { files } = plan('job-dispatch', null);
+  const dockerfile = file(files, 'deploy/Dockerfile');
+  assert.equal(JVM_BASE_OPTS, '-XX:+UseCompactObjectHeaders');
+  // Una variable de la imagen, no un default de JAVA_OPTS: quien despliega con JAVA_OPTS=-Xmx… no las pierde, y
+  // con ellas la caché, que la JVM ignora si las banderas no casan.
+  assert.ok(dockerfile.includes(`ENV JVM_BASE_OPTS="${JVM_BASE_OPTS}"`));
+  assert.ok(!/ENV JAVA_OPTS/.test(dockerfile));
+  // Declarada ANTES del entrenamiento, o el RUN la vería vacía.
+  assert.ok(dockerfile.indexOf('ENV JVM_BASE_OPTS') < dockerfile.indexOf('-XX:AOTCacheOutput'));
+  const uses = dockerfile.match(/java \$JVM_BASE_OPTS \$JAVA_OPTS|\$JVM_BASE_OPTS \$JAVA_OPTS -jar/g) ?? [];
+  assert.equal(uses.length, 2);
 });

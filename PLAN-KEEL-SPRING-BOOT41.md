@@ -26,15 +26,14 @@ Pasan el filtro dos piezas de Boot 4.1 sobre Java 21 (fase A) y el salto a Java 
 | 2 | Filtro de direcciones salientes (`InetAddressFilter`) | A | hecho (2026-11-05) |
 | 3 | Java 25 + Gradle 9 (plataforma) | B | hecho (2026-11-05) |
 | 4 | Caché AOT en `deploy/Dockerfile` | B | hecho (2026-11-05) |
-| 5 | Cabeceras de objeto compactas | B | pendiente |
+| 5 | Cabeceras de objeto compactas | B | hecho (2026-11-05) |
 | 6 | Hilos virtuales sin *pinning*: reescribir el porqué | B | pendiente |
 | 7 | Corrida de control del par del MVP | — | pendiente |
 
-**Para retomar:** empezar por el incremento 5 (cabeceras compactas), en un contexto nuevo.
-- El entrenamiento del Dockerfile ya corre con `java $JAVA_OPTS …`, así que la bandera entra con un `ENV JAVA_OPTS` en la etapa de runtime **antes** del `RUN` del entrenamiento, y llega a los dos sitios.
-- `DEP-AOT` de `deploy-check` caza la caché ignorada por banderas distintas (cualquier línea `[aot]` de la JVM).
-- Para comparar el heap sirve el arranque a mano del inc. 4 (`docs/corridas/2026-11-05-aot-cache.md`): la imagen de `job-dispatch` contra un PostgreSQL en una red de podman, con `SPRING_FLYWAY_ENABLED=false` y `SPRING_JPA_HIBERNATE_DDL_AUTO=update`. El plan pide además la medida en `telemetry-check`.
-- Las redes que levantan la app se pasan con la máquina descargada. Los temporales del inc. 4 ya están borrados.
+**Para retomar:** empezar por el incremento 6 (hilos virtuales sin *pinning*), en un contexto nuevo.
+- Es solo texto: el comentario de cabecera de `packages/keel-spring/src/scaffold/scheduling.js` y `assets/generators/spring/conventions/virtual-threads.md` (~l. 122). Antes de escribir, verificar con `ctx7` qué *pinning* queda en Java 25 (JEP 491: marcos nativos, inicialización de clases).
+- La puerta es `npm test --workspace packages/keel-spring`, por los tests que leen ese texto (`grep -rn "pinning\|synchronized" packages/keel-spring/test`).
+- Los temporales del inc. 5 ya están borrados.
 
 Entorno:
 - JDK 25 en `C:\java\jdk-25` (`JAVA_HOME`); el 21 sigue en `C:\java\jdk-21`.
@@ -329,6 +328,20 @@ Memoria, **condicionado a la medición**.
 - En JDK 25 ya es de producto, no experimental. Reduce entre un 10 % y un 20 % el heap en cargas con muchos objetos pequeños.
 - Va como default en el `ENV JAVA_OPTS` del Dockerfile **y en el entrenamiento del inc. 4**, porque la caché exige las mismas banderas. Si no, se ignora en silencio.
 - **Medida:** en `telemetry-check`, comparar `jvm_memory_used_bytes{area="heap"}` tras la misma carga, con y sin la bandera. Los números van a la corrida del inc. 4. **Sin ganancia, no entra.**
+
+### Resultado (2026-11-05)
+
+**Entra.** El heap vivo de `job-dispatch` tras la misma carga baja de **36,47 MB a 32,90 MB (−9,8 %)**, con los mismos ~829 000 objetos y el mismo arranque. Las cifras están en `docs/corridas/2026-11-05-aot-cache.md` § Cabeceras de objeto compactas.
+
+- **Cómo se midió, y por qué no con `telemetry-check`:** el `jvm_memory_used_bytes` sin un GC completo delante mide cuándo pasó el último GC, no qué está vivo. Se arrancó el jar en el JDK 25 del host contra el PostgreSQL de su `infra/`, 3000 peticiones y `jcmd GC.class_histogram`, que fuerza el GC completo y suma los bytes de cada objeto. La imagen JRE no trae `jcmd`, y la bandera es de la JVM, no del contenedor. Tres pasadas con la bandera y tres sin ella.
+- **Emitido:** `JVM_BASE_OPTS` (constante exportada de `deploy.js`) como `ENV` de la etapa de runtime, **antes** del entrenamiento, y usada por el `RUN` del entrenamiento y por el `ENTRYPOINT` delante de `$JAVA_OPTS`. **No va en un default de `JAVA_OPTS`**, como decía el plan: `JAVA_OPTS` es de quien despliega, y un `JAVA_OPTS=-Xmx…` habría reemplazado el default, quitado la bandera y, con ella, la caché AOT.
+- **Medido:** con banderas distintas la JVM 25 descarta la caché con `[warning][aot] Unable to use AOT cache.` y arranca en frío. DEP-AOT ya lo veía.
+- **Falsado:** `deploy-check --sabotage=jvm-flags` entrena sin `$JVM_BASE_OPTS` y cae **exactamente DEP-AOT**, con DEP-1 a DEP-8 en verde.
+- **Para el agente:** `conventions/project-layout.md` lo cuenta; la regla `spring-proyecto-generado.md`, también.
+- **Puerta, en verde:**
+  - `npm test --workspace packages/keel-spring`: 1763/1763, con un caso nuevo en `test/aot-cache.test.js`;
+  - `deploy-check`: 9/9;
+  - `deploy-check --sabotage=jvm-flags`: DEP-AOT en rojo, y solo ese.
 
 ### Incremento 6: hilos virtuales sin *pinning* por `synchronized` (JEP 491)
 
