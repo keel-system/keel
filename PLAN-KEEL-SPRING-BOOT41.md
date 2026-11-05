@@ -27,13 +27,14 @@ Pasan el filtro dos piezas de Boot 4.1 sobre Java 21 (fase A) y el salto a Java 
 | 3 | Java 25 + Gradle 9 (plataforma) | B | hecho (2026-11-05) |
 | 4 | Caché AOT en `deploy/Dockerfile` | B | hecho (2026-11-05) |
 | 5 | Cabeceras de objeto compactas | B | hecho (2026-11-05) |
-| 6 | Hilos virtuales sin *pinning*: reescribir el porqué | B | pendiente |
+| 6 | Hilos virtuales sin *pinning*: reescribir el porqué | B | hecho (2026-11-05) |
 | 7 | Corrida de control del par del MVP | — | pendiente |
 
-**Para retomar:** empezar por el incremento 6 (hilos virtuales sin *pinning*), en un contexto nuevo.
-- Es solo texto: el comentario de cabecera de `packages/keel-spring/src/scaffold/scheduling.js` y `assets/generators/spring/conventions/virtual-threads.md` (~l. 122). Antes de escribir, verificar con `ctx7` qué *pinning* queda en Java 25 (JEP 491: marcos nativos, inicialización de clases).
-- La puerta es `npm test --workspace packages/keel-spring`, por los tests que leen ese texto (`grep -rn "pinning\|synchronized" packages/keel-spring/test`).
-- Los temporales del inc. 5 ya están borrados.
+**Para retomar:** empezar por el incremento 7 (corrida de control del par del MVP), en un contexto nuevo.
+- Es una corrida con el flujo normalizado sobre `notification-mailer` y `notification-mailer-mongo`: `keel-spring build` → `cd services/<x>-spring` → `/keel-generate-spring`. La lanza el usuario; no tocar el proyecto mientras corre.
+- Al terminar: registro en `docs/corridas/<fecha>-<servicio>.md` con la tabla de etiquetas fijas, la huella (`corrida-metrics.js footprint`) y los `designGaps` copiados antes de tirar el proyecto. Referencia: escenarios 23/23 y huella 17 de la corrida de control anterior.
+- Cierre del plan: mover este archivo a `completed_plans/`.
+- Los temporales del inc. 6 ya están borrados.
 
 Entorno:
 - JDK 25 en `C:\java\jdk-25` (`JAVA_HOME`); el 21 sigue en `C:\java\jdk-21`.
@@ -351,6 +352,19 @@ No cambia código. Con Java 25 desaparece la causa medida del retraso de cuatro 
 - Se reescribe su porqué en dos sitios: el comentario de cabecera de `scheduling.js` y `assets/generators/spring/conventions/virtual-threads.md` (~l. 122). La nueva explicación cubre el *pinning* que queda (marcos nativos, inicialización de clases) y por qué el pool propio sigue mereciendo la pena.
 - **Opcional:** repetir el escenario del retraso con varios barridos en una corrida y anotar si el retraso desaparece.
 - **Puerta:** `npm test` (los tests que leen ese texto).
+
+### Resultado (2026-11-05)
+
+`ctx7` no devolvió el texto de JEP 491, así que se midió en el JDK 25.0.5 con un programa de una clase, con un solo carrier (`-Djdk.virtualThreadScheduler.parallelism=1 -Djdk.virtualThreadScheduler.maxPoolSize=1`). Si algo clava, las tareas se serializan:
+
+| Caso | JDK 21 | JDK 25 |
+|---|---|---|
+| 4 hilos virtuales que duermen 0,5 s dentro de un `synchronized` | 2049 ms (clava) | 509 ms (no clava) |
+| un hilo virtual que duerme 0,5 s en un inicializador estático, y 4 tareas de 0,5 s detrás | 1020 ms | 1003 ms (clava en los dos) |
+
+- **Lo que sigue clavando en Java 25:** la inicialización de una clase (medido) y un marco nativo en la pila, JNI o una llamada de Foreign Function que vuelve a Java (lo dice JEP 491; sin medir).
+- **Texto reescrito:** la cabecera de `src/scaffold/scheduling.js`, la sección de `conventions/virtual-threads.md`, `conventions/dependencies.md` § El scheduler NO va sobre hilos virtuales, el comentario de `src/scaffold/index.js`, el de `test/corrida-fixes.test.js` y la mención de `.claude/rules/spring-telemetria.md`. Todos dicen lo mismo: la causa medida era de Java 21, Java 25 no clava en `synchronized`, y el pool de plataforma se conserva porque saca el reloj de unos carriers pocos y compartidos con la carga web, porque es inocuo y porque es quien espera a la tarea en vuelo al apagar.
+- **No cambia código emitido.** El retraso de cuatro minutos no se ha vuelto a medir en Java 25 (era el opcional); queda dicho en el texto.
 
 ---
 

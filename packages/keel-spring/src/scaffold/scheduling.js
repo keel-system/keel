@@ -3,12 +3,24 @@
 // Por qué existe. El scaffolding activa `spring.threads.virtual.enabled: true` (config.js),
 // y con eso Spring Boot sustituye el TaskScheduler por un `SimpleAsyncTaskScheduler` de
 // hilos virtuales. Eso es correcto para atender peticiones —donde el hilo se pasa la vida
-// bloqueado en I/O— y es un problema para lo que corre por reloj: el driver JDBC y el pool
-// de conexiones tienen secciones `synchronized`, y un hilo virtual que se bloquea dentro de
-// una de ellas queda CLAVADO a su carrier (pinning) en vez de soltarlo. Con varios barridos
-// reclamando lotes a la vez, los carriers se agotan y las tareas dejan de dispararse a su
-// hora: en una corrida en vivo, un `@Scheduled(cron = "30 * * * * *")` salió casi CUATRO
-// MINUTOS tarde. No falla nada; llega tarde, que en un barrido con cota temporal es peor.
+// bloqueado en I/O— y no lo es para lo que corre por reloj, que tiene que dispararse a su
+// hora aunque la carga web se haya comido los carriers.
+//
+// La causa que se MIDIÓ era de Java 21: el driver JDBC y el pool de conexiones se bloquean
+// dentro de secciones `synchronized`, y ahí un hilo virtual quedaba CLAVADO a su carrier
+// (pinning). Con varios barridos reclamando lotes a la vez, los carriers se agotaban: en una
+// corrida en vivo, un `@Scheduled(cron = "30 * * * * *")` salió casi CUATRO MINUTOS tarde.
+// No falla nada; llega tarde, que en un barrido con cota temporal es peor.
+//
+// Desde Java 24 (JEP 491) `synchronized` ya no clava, y el proyecto genera con Java 25:
+// medido con un solo carrier, cuatro hilos virtuales que duermen dentro de un `synchronized`
+// tardan 0,5 s en Java 25 y 2 s en Java 21. Lo que sigue clavando es un hilo bloqueado en un
+// marco nativo (JNI, Foreign Function) o dentro de la inicialización de una clase —medido
+// también: un inicializador estático que se bloquea serializa a los demás hilos virtuales—.
+// Y los carriers son tantos como núcleos y los comparte toda la carga web: una ráfaga de CPU
+// retrasa el reloj igual que lo retrasaba el pinning. El pool propio sigue mereciendo la pena
+// por eso, porque es inocuo y porque es quien espera a la tarea en vuelo al apagar. El retraso
+// de cuatro minutos no se ha vuelto a medir en Java 25.
 //
 // Y no se arregla por configuración: `spring.task.scheduling.pool.size` NO tiene efecto con
 // hilos virtuales activados (lo dice la propia documentación de Boot), así que emitirlo

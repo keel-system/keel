@@ -399,17 +399,20 @@ Es una mitigación, no una garantía: reparte el arranque. Dos barridos que dure
 solapan igual, y contra eso el segundo inicial no puede nada. Acotar la concurrencia del scheduler
 (`concurrency-limit`) sí los serializaría, pero es **global**: se lo aplicaría también al `OutboxRelay`,
 que corre cada segundo, y un barrido largo pasaría a retrasar la entrega de eventos. Por eso el
-`SchedulingConfig` que genera `build` dimensiona su pool a **un hilo por tarea programada**: quita el
-pinning sin serializar a nadie, que es lo que se quería conservar.
+`SchedulingConfig` que genera `build` dimensiona su pool a **un hilo por tarea programada**: saca el
+reloj de los carriers de los hilos virtuales sin serializar a nadie, que es lo que se quería conservar.
 
 ### El scheduler NO va sobre hilos virtuales
 
 Y esa es la otra mitad, que se descubrió en una corrida y no se ve en una máquina de desarrollo. Con
 `spring.threads.virtual.enabled: true` —que este scaffolding activa— Boot sustituye el `TaskScheduler`
-por uno de hilos virtuales. Un barrido empieza reclamando un lote contra la base, y el driver JDBC se
-bloquea dentro de secciones `synchronized`: ahí un hilo virtual **no suelta su carrier, se queda clavado
-en él**. Con varias tareas coincidiendo, los carriers se agotan y los `@Scheduled` dejan de dispararse a
-su hora — medido en vivo: un cron de cada minuto salió casi **cuatro minutos** tarde.
+por uno de hilos virtuales. Un barrido empieza reclamando un lote contra la base, y en Java 21 el driver
+JDBC se bloqueaba dentro de secciones `synchronized`: ahí un hilo virtual **no soltaba su carrier, se
+quedaba clavado en él**. Con varias tareas coincidiendo, los carriers se agotaban y los `@Scheduled`
+dejaban de dispararse a su hora — medido en vivo: un cron de cada minuto salió casi **cuatro minutos**
+tarde. Java 25 ya no clava en `synchronized` (JEP 491), pero sí en un marco nativo o en la
+inicialización de una clase, y los carriers siguen siendo pocos y compartidos con la carga web: el
+reloj sigue fuera de ellos (`conventions/virtual-threads.md`).
 
 Lo que hace de esto un fallo caro es que **no da error**: el barrido corre, hace su trabajo, y llega
 tarde. Si ese barrido tiene una cota temporal encima —un rescate, una reconciliación— la cota deja de

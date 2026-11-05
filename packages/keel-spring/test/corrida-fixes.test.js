@@ -97,10 +97,12 @@ test('y el resto de motores no arrastran ese paquete', () => {
 
 test('se genera un TaskScheduler de hilos de plataforma donde hay algo programado', () => {
   // Con `spring.threads.virtual.enabled: true` Boot sustituye el TaskScheduler por uno de
-  // hilos virtuales. Un barrido empieza reclamando contra la base, y el driver JDBC se
-  // bloquea dentro de secciones `synchronized`: ahí el hilo virtual no suelta su carrier,
-  // se queda clavado. Con varias tareas coincidiendo los carriers se agotan y los
-  // @Scheduled dejan de dispararse a su hora — medido en vivo: casi cuatro minutos tarde.
+  // hilos virtuales. Un barrido empieza reclamando contra la base, y en Java 21 el driver
+  // JDBC se bloqueaba dentro de secciones `synchronized`: ahí el hilo virtual no soltaba su
+  // carrier. Con varias tareas coincidiendo los carriers se agotaban y los @Scheduled
+  // dejaban de dispararse a su hora — medido en vivo: casi cuatro minutos tarde. Java 25 ya
+  // no clava en `synchronized` (JEP 491), pero los carriers siguen siendo pocos y compartidos
+  // con la carga web, y un marco nativo o una inicialización de clase todavía clavan.
   //
   // No da error: llega tarde. Y en un mecanismo con cota temporal encima, eso hace que la
   // cota deje de medir lo que decía.

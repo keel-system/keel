@@ -117,16 +117,30 @@ El servicio arranca con `spring.threads.virtual.enabled: true`, y para atender p
 lo correcto: un hilo que se pasa la vida bloqueado en I/O es exactamente el caso para el que
 existen. Pero hay una frontera, y está en los `@Scheduled`.
 
-Casi toda tarea programada de este generador —el relay del outbox, un barrido, una purga—
-empieza reclamando un lote contra la base de datos. El driver JDBC y el pool de conexiones se
-bloquean dentro de secciones `synchronized`, y ahí un hilo virtual **no suelta su carrier: se
-queda clavado en él** (*pinning*). Con varias tareas coincidiendo, los carriers disponibles se
-agotan y los `@Scheduled` dejan de dispararse a su hora. Medido en una corrida: un cron de cada
-minuto salió casi **cuatro minutos** tarde.
+Un `@Scheduled` tiene que dispararse a su hora, y los hilos virtuales corren sobre unos pocos
+carriers —tantos como núcleos— que comparte toda la carga web. Lo que retiene un carrier
+retrasa el reloj.
+
+En Java 21 eso se midió. Casi toda tarea programada de este generador —el relay del outbox, un
+barrido, una purga— empieza reclamando un lote contra la base de datos, y el driver JDBC y el
+pool de conexiones se bloquean dentro de secciones `synchronized`. Ahí un hilo virtual **no
+soltaba su carrier: se quedaba clavado en él** (*pinning*). Con varias tareas coincidiendo, los
+carriers se agotaban y los `@Scheduled` dejaban de dispararse a su hora: un cron de cada minuto
+salió casi **cuatro minutos** tarde.
+
+Desde Java 24 (JEP 491), y este proyecto usa Java 25, **`synchronized` ya no clava**: un hilo
+virtual que se bloquea dentro suelta el carrier. Lo que **sigue clavando** es:
+
+- un hilo bloqueado con un **marco nativo** en la pila (un método JNI, una llamada de Foreign
+  Function que vuelve a Java);
+- un hilo bloqueado **dentro de la inicialización de una clase** (un inicializador estático que
+  hace I/O o espera), o esperando a que otro hilo la termine.
 
 Y no da error. El barrido corre, hace su trabajo y llega tarde — que en un mecanismo con cota
 temporal encima (un rescate, una reconciliación) significa que la cota deja de medir lo que
 decía. Es un fallo que no aparece en una máquina de desarrollo con una instancia y sin carga.
+El retraso de cuatro minutos no se ha vuelto a medir en Java 25; el pool propio se conserva
+porque aísla el reloj de la carga web, que es lo que de verdad importa, y no cuesta nada.
 
 Por eso `build` genera `infrastructure/configurations/scheduling/SchedulingConfig`: un
 `ThreadPoolTaskScheduler` de **hilos de plataforma**, con un hilo por tarea programada.

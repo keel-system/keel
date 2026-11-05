@@ -142,8 +142,8 @@ const GENERATORS = [
   cache,
   // El TaskScheduler de hilos de plataforma. Va junto a los mecanismos de arriba porque
   // sirve a todos: los @Scheduled que emiten outbox, idempotency, reconciliationClaim y el
-  // <Servicio>Scheduler comparten scheduler, y con hilos virtuales el que pone Boot los
-  // deja clavados en el driver JDBC.
+  // <Servicio>Scheduler comparten scheduler, y el que pone Boot los dejaría en los carriers
+  // de los hilos virtuales, compartidos con la carga web (por qué, en scheduling.js).
   scheduling,
   jackson,
   controllers,
