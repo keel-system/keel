@@ -4,6 +4,7 @@
 // (local literal → develop ${VAR:default} → production ${VAR} obligatoria).
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
+import { DENIED_ADDRESSES_ENV, usesOutboundPolicy } from './outbound-address.js';
 import { AUTH, DATABASES, HTTP_STUB, TELEMETRY_INFRA, collectorHostEndpoint } from '../lib/stack-catalog.js';
 import { JAVA_DATABASES } from '../lib/java-stack.js';
 import { usesPartialIndexes } from './migrations.js';
@@ -130,6 +131,11 @@ export function generate(model) {
     }
     if (layersPresent.httpClients && model.httpClients) {
       fragments.push(fragment(profile, 'http-clients', httpClientsYaml(model, profile)));
+    }
+    // La lista de denegación extra del filtro anti-SSRF (OutboundAddressPolicy). Fragmento propio
+    // porque la comparten http-clients y la pasarela de pago, y ninguno de los dos es dueño.
+    if (usesOutboundPolicy(model)) {
+      fragments.push(fragment(profile, 'outbound', outboundYaml(profile)));
     }
     // Los números del barrido de reconciliación. Solo si hay barrido: sin `reconciledBy`
     // el fragmento sería un archivo con parámetros que nadie lee.
@@ -1542,6 +1548,22 @@ function tokenUri(client, profile) {
   } catch {
     return client.auth.tokenUrl;
   }
+}
+
+/**
+ * Lo que el filtro anti-SSRF deniega ADEMÁS de lo fijo (link-local, any-local, multicast y los
+ * metadatos de la nube, que no se pueden quitar): CIDR separados por comas. Vacío por defecto en
+ * todos los perfiles; en local va literal y vacío, como el resto de lo operativo.
+ */
+function outboundYaml(profile) {
+  const value = profile === 'local' ? '""' : `"\${${DENIED_ADDRESSES_ENV}:}"`;
+  return [
+    'outbound:',
+    '  # CIDR que ninguna llamada saliente puede alcanzar, además de los fijos (link-local, any-local,',
+    '  # multicast y metadatos de la nube). Separados por comas; uno mal escrito impide arrancar.',
+    `  denied-addresses: ${value}`,
+    ''
+  ].join('\n');
 }
 
 // Config de las integraciones salientes (capa http-clients): base-url por

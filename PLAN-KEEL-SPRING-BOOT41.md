@@ -23,14 +23,14 @@ Pasan el filtro dos piezas de Boot 4.1 sobre Java 21 (fase A) y el salto a Java 
 |---|---|---|---|
 | 0 | Verificar APIs y claves contra los jars de 4.1.2 | — | hecho (2026-11-05) |
 | 1 | Conexión JDBC perezosa (`connection-fetch: lazy`) | A | hecho (2026-11-05) |
-| 2 | Filtro de direcciones salientes (`InetAddressFilter`) | A | pendiente |
+| 2 | Filtro de direcciones salientes (`InetAddressFilter`) | A | hecho (2026-11-05) |
 | 3 | Java 25 + Gradle 9 (plataforma) | B | pendiente |
 | 4 | Caché AOT en `deploy/Dockerfile` | B | pendiente |
 | 5 | Cabeceras de objeto compactas | B | pendiente |
 | 6 | Hilos virtuales sin *pinning*: reescribir el porqué | B | pendiente |
 | 7 | Corrida de control del par del MVP | — | pendiente |
 
-**Para retomar:** empezar por el incremento 2, en un contexto nuevo. El inc. 0 lo corrigió (ver su «Resultado»): necesita la dependencia `spring-boot-http-client` y pasar el `RestClient` de pagos de `SimpleClientHttpRequestFactory` al cliente del JDK, y hay que decidir qué desenlace tiene `FilteredHostException`. `store-check` ya admite `--sabotage=<id>` (hoy solo `eager-fetch`); `payment-check` tiene el suyo. Los temporales del inc. 1 (`D:\keel-tmp\boot41-inc1\`) ya están borrados.
+**Para retomar:** empezar por el incremento 3 (Java 25 + Gradle 9), en un contexto nuevo. Antes hay que preparar el entorno de la fase B: instalar Temurin 25 conservando el 21, con cachés y descargas en `D:`. Los temporales del inc. 2 (`D:\keel-tmp\boot41-inc2\`) ya están borrados.
 
 ## Lo que se descarta, y por qué
 
@@ -189,6 +189,27 @@ Seguridad, como defensa en profundidad.
   - `payment-check`;
   - `compile-check` sobre `stock-reservation` y `payment-checkout`.
 - **Paridad:** no cambia el cable. Queda **pendiente fuera de este plan** para keel-nest, keel-dotnet y keel-go. Si se replica, la política sube como datos neutrales a `keel-core/src/lib/gen/outbound-resilience.js`.
+
+### Resultado (2026-11-05)
+
+**Entra.** Antes de escribir nada se midió con los jars de 4.1.2 qué le llega al llamante de un `RestClient` sobre `JdkHttpClientBuilder` con el filtro puesto: `169.254.169.254`, `[fd00:ec2::254]` y `0.0.0.0` lanzan **`FilteredHostException` cruda**, sin envolver en `ResourceAccessException`; `127.0.0.1` pasa el filtro.
+
+- **Desenlace de `FilteredHostException`: error de configuración, no `kind` del fallback.** No salió ninguna petición, así que no es un fallo del proveedor. `outbound-failures.js` no cambia: el fallback estrecho no la atiende, el circuito no la cuenta (su `record-exceptions` es una whitelist), el retry no la repite y la pasarela no deja la acción en duda, porque no es `RestClientException`. Se propaga con su traza hasta el 500.
+- **Emitido:** `OutboundAddressPolicy` en `infrastructure/http` (`src/scaffold/outbound-address.js`), única pieza que construye el `HttpClient` del JDK. La inyectan los `<Cliente>ClientConfig` de `http-clients.js` y `PaymentGatewayHttpConfig`, que pasa de `SimpleClientHttpRequestFactory` a `JdkClientHttpRequestFactory`.
+  - La política deniega siempre lo que decía el plan y añade `outbound.denied-addresses`.
+  - **La variable se llama `OUTBOUND_DENIED_ADDRESSES`**, no `HTTP_CLIENTS_DENIED_ADDRESSES`: la usa también la pasarela, que no es de la capa http-clients. Va en un fragmento propio (`parameters/<perfil>/outbound.yaml`), literal y vacío en `local` y `${OUTBOUND_DENIED_ADDRESSES:}` en `develop` y `production`. Es de keel-spring y no entra en `runtime-env.js`, como pide su cabecera. Un CIDR mal escrito impide arrancar.
+  - `implementation 'org.springframework.boot:spring-boot-http-client'` solo si hay cliente saliente o pasarela.
+- **Hallazgo del inc. 2: los defaults de `HttpClientSettings` siguen redirecciones** (`NORMAL`), mientras que el `HttpClient.newBuilder()` que se emitía no las sigue (`NEVER`). Cambiar de constructor sin decirlo habría cambiado el comportamiento de todos los clientes y abierto la vía que el filtro solo cierra a medias. La política fija `HttpRedirects.DONT_FOLLOW`. La pasarela también deja de seguirlas: el cliente `Simple` las seguía en GET, y Stripe y MercadoPago no redirigen su API.
+- **Trampa de plantilla:** la primera versión dejaba una coma tras el último CIDR. Era JS válido y Java inválido, y `java-syntax` no la vio. Saltó en `payment-check` (`compileJava`), y ahora la vigila `test/outbound-address.test.js`.
+- **Pruebas:** `test/outbound-address.test.js` (la política, las cuatro auth de `catalog-extended`, las dos pasarelas, el gradiente y un diseño sin clientes que no emite nada) y `test/scaffold.test.js` ajustado. En `payment-check`, dos casos nuevos:
+  - `elEndpointDeMetadatosDeLaNubeSeRechazaSinQuedarEnDuda`;
+  - `unaDireccionDenegadaPorConfiguracionSeRechazaSinAbrirConexion`, que deniega `127.0.0.0/8` y afirma que la pasarela falsa no recibió nada.
+- **Falsado:** `payment-check --sabotage=filter` quita el `withInetAddressFilter` y tumba exactamente esos dos casos en las dos pasarelas. Sin filtro, el endpoint de metadatos acaba en `PaymentGatewayUnavailableException`, es decir, el cobro EN DUDA.
+- **Puerta, en verde:**
+  - `npm test --workspace packages/keel-spring`;
+  - `payment-check` en las dos pasarelas. Pasaron también el corte de conexión, el 503 y la lectura previa de la devolución, ahora sobre el cliente del JDK: el cambio de excepciones de transporte que temía el plan no rompió la traducción, porque los adaptadores capturan `RestClientException`;
+  - `compile-check` sobre `stock-reservation` y `payment-checkout`, con las dos pasarelas en las cuatro combinaciones, y sobre `catalog-extended`, cuyo `main` queda fuera por la réplica, como siempre;
+  - `./gradlew test` de `stock-reservation` recién generado: `contextLoads` arranca con el bean y el `@Value` a `List` vacío.
 
 ---
 

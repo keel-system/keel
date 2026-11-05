@@ -20,7 +20,8 @@ for (const gateway of Object.keys(PAYMENT_GATEWAYS)) {
   test(`${gateway}: cada sabotaje de payment-check se aplica al Java que se genera hoy`, () => {
     const { model, files } = planService({ manifest, layers, workspace: '.', stack: { paymentGateway: gateway, broker: 'rabbitmq' } });
     const projectDir = tmpDir('keel-payment-sabotage-');
-    for (const file of files.filter((entry) => entry.path.startsWith('src/main/java/') && /payment/.test(entry.path))) {
+    // OutboundAddressPolicy vive en infrastructure/http y la sabotea `filter`.
+    for (const file of files.filter((entry) => entry.path.startsWith('src/main/java/') && /payment|OutboundAddressPolicy/.test(entry.path))) {
       fs.mkdirSync(path.dirname(path.join(projectDir, file.path)), { recursive: true });
       fs.writeFileSync(path.join(projectDir, file.path), file.content);
     }

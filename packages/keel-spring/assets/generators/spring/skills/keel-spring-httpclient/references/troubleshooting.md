@@ -12,6 +12,20 @@ Síntoma → causa probable → arreglo. Antes de tocar nada confirma el diseño
   Un timeout dispara `ResourceAccessException` → lo reintenta `@Retry` y, agotado,
   el fallback.
 
+## La llamada muere con `FilteredHostException` y el fallback no entra
+
+- **Causa**: la `base-url` resuelve a una dirección que el filtro anti-SSRF deniega
+  (`OutboundAddressPolicy`, la genera build): link-local (`169.254.0.0/16`, el
+  endpoint de metadatos de la nube), any-local, multicast, `fd00:ec2::254`, o un CIDR
+  de `outbound.denied-addresses` (`OUTBOUND_DENIED_ADDRESSES`). Loopback y las redes
+  privadas están permitidas.
+- **Es lo correcto que no entre el fallback**: no salió ninguna petición, así que no es
+  un fallo del proveedor sino de configuración. Ni el fallback, ni el circuito, ni el
+  retry la atienden, y se propaga hasta el 500 con su traza.
+- **Arreglo**: corrige la `base-url` o la lista de denegación. **No** captures
+  `FilteredHostException` ni construyas el `HttpClient` a mano para saltarte la
+  política: es la única pieza que lo filtra.
+
 ## El circuito queda abierto permanentemente
 
 - **Causa**: cada reintento cuenta como fallo y llena la ventana; o `base-url`

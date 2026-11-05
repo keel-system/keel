@@ -10,6 +10,7 @@ import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
 import { CURRENCY_MINOR_UNITS } from '@keel-system/keel-core/gen/payment-gateways';
 import { PAYMENT_TEST_SECRETS } from '../scaffold/config.js';
 import { isRawJsonField } from '../scaffold/jackson.js';
+import { OUTBOUND_POLICY_CLASS } from '../scaffold/outbound-address.js';
 
 const q = (value) => JSON.stringify(value);
 
@@ -140,6 +141,12 @@ const SABOTAGES = {
   expired: { file: (s) => `${s.adapter}.java`, from: (s) => s.expiredSabotage.from, to: (s) => s.expiredSabotage.to },
   // Una lectura previa a la devolución escapa del tratamiento de «sin respuesta».
   prefetch: { file: (s) => `${s.adapter}.java`, from: (s) => s.prefetchSabotage.from, to: (s) => s.prefetchSabotage.to },
+  // El cliente de la pasarela se construye sin el filtro anti-SSRF: sale a cualquier dirección.
+  filter: {
+    file: () => `${OUTBOUND_POLICY_CLASS}.java`,
+    from: '\n                        .withInetAddressFilter(allowed));',
+    to: ');'
+  },
   // La acción del cliente vuelve a salir como cadena con el JSON escapado dentro.
   'raw-json': { file: (s) => `${s.rawJson.eventClass}.java`, from: '@JsonRawValue ', to: '' }
 };
@@ -161,6 +168,7 @@ import ${base}.domain.payment.PaymentGatewayUnavailableException;
 import ${base}.domain.payment.PaymentSource;
 import ${base}.application.port.out.PaymentGateway;
 import ${base}.infrastructure.messaging.events.${shapes.rawJson.eventClass};
+import ${base}.infrastructure.http.${OUTBOUND_POLICY_CLASS};
 import ${base}.infrastructure.payment.InvalidPaymentNoticeException;
 import ${base}.infrastructure.payment.MoneyAmounts;
 import ${base}.infrastructure.payment.PaymentGatewayHttpConfig;
@@ -188,6 +196,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.http.client.FilteredHostException;
 import org.springframework.http.HttpHeaders;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -256,7 +265,11 @@ class PaymentCheckTest {
     }
 
     private static PaymentGateway gateway() {
-        return new ${shapes.adapter}(new PaymentGatewayHttpConfig().paymentGatewayRestClient(properties()), properties(),
+        return gateway(properties(), new ${OUTBOUND_POLICY_CLASS}(List.of()));
+    }
+
+    private static PaymentGateway gateway(PaymentGatewayProperties properties, ${OUTBOUND_POLICY_CLASS} policy) {
+        return new ${shapes.adapter}(new PaymentGatewayHttpConfig().paymentGatewayRestClient(properties, policy), properties,
                 JsonMapper.builder().configureForJackson2().build());
     }
 
@@ -303,6 +316,25 @@ class PaymentCheckTest {
     void unCorteDeConexionDejaLaAccionEnDuda() {
         ROUTES.add(new Route(${q(calls.CHARGE.method)}, ${q(calls.CHARGE.path)}, 0, "", true));
         assertThrows(PaymentGatewayUnavailableException.class, () -> gateway().authorize(charge("ch-4", "10.00")));
+    }
+
+    // El filtro anti-SSRF (OutboundAddressPolicy). Un host filtrado NO es un fallo de la pasarela:
+    // no salió nada, así que no puede quedar en duda (PaymentGatewayUnavailableException); llega
+    // FilteredHostException, cruda, y se propaga como error de configuración.
+    @Test
+    void elEndpointDeMetadatosDeLaNubeSeRechazaSinQuedarEnDuda() {
+        PaymentGatewayProperties metadata = new PaymentGatewayProperties("http://169.254.169.254", "test-key", SECRET,
+                Duration.ofSeconds(2), Duration.ofSeconds(2), 300);
+        assertThrows(FilteredHostException.class,
+                () -> gateway(metadata, new ${OUTBOUND_POLICY_CLASS}(List.of())).authorize(charge("ch-8", "10.00")));
+    }
+
+    @Test
+    void unaDireccionDenegadaPorConfiguracionSeRechazaSinAbrirConexion() {
+        ${OUTBOUND_POLICY_CLASS} denyLoopback = new ${OUTBOUND_POLICY_CLASS}(List.of(" 127.0.0.0/8 ", ""));
+        route(${q(calls.CHARGE.method)}, ${q(calls.CHARGE.path)}, 200, ${q(shapes.authorized)});
+        assertThrows(FilteredHostException.class, () -> gateway(properties(), denyLoopback).authorize(charge("ch-8", "10.00")));
+        assertEquals(0, RECORDED.size(), "la petición no puede llegar a la pasarela");
     }
 
     @Test

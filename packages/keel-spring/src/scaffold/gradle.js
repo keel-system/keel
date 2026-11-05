@@ -2,6 +2,7 @@
 // generado. Dependencias condicionales según las capas declaradas y el stack
 // elegido en el cuestionario (keel-stack.json).
 
+import { usesOutboundPolicy } from './outbound-address.js';
 import {
   SPRING_BOOT_VERSION,
   JAVA_VERSION,
@@ -114,6 +115,12 @@ export function generate(model) {
     if (model.httpClients?.some((client) => client.auth?.type === 'oauth2-client-credentials')) {
       dependencies.push("implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-client'");
     }
+  }
+  if (usesOutboundPolicy(model)) {
+    // InetAddressFilter y JdkHttpClientBuilder (OutboundAddressPolicy, el filtro anti-SSRF de los
+    // clientes salientes). Ni starter-webmvc ni ningún otro starter lo traen a `main`: el
+    // spring-boot-restclient de más abajo es solo de test. Versión del BOM de Boot.
+    dependencies.push("implementation 'org.springframework.boot:spring-boot-http-client'");
   }
   if (usesContextExecutors(model)) {
     // ContextPropagatingExecutors: el MDC y la observación activa viajan al hilo de una tarea

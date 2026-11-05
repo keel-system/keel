@@ -23,6 +23,7 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { pascalCase } from '../lib/naming.js';
 import { PAYMENT_NOTICE_PATH } from '@keel-system/keel-core/gen/payment-gateways';
 import { PAYMENT_SWEEP_PARAMETERS } from '@keel-system/keel-core/gen/payments-model';
+import { OUTBOUND_POLICY_CLASS, outboundPolicyImport } from './outbound-address.js';
 import * as stripe from './payment-gateways/stripe.js';
 import * as mercadopago from './payment-gateways/mercadopago.js';
 
@@ -500,15 +501,21 @@ function renderHttpConfig(model) {
  * El cliente HTTP de la pasarela. Sin reintentos a propósito: reintentar una escritura que la
  * pasarela pudo haber hecho es cobrar dos veces. Una respuesta que no llega deja la acción en duda,
  * y eso lo resuelve el barrido preguntando.
+ *
+ * <p>El HttpClient del JDK lo construye la política de direcciones salientes (filtro anti-SSRF,
+ * HTTP/1.1, sin seguir redirecciones). Un host filtrado lanza FilteredHostException, que NO es un
+ * RestClientException: no deja la acción en duda, porque no salió nada; se propaga como error de
+ * configuración.
  */
 @Configuration
 @EnableConfigurationProperties(PaymentGatewayProperties.class)
 public class PaymentGatewayHttpConfig {
 
     @Bean
-    public RestClient paymentGatewayRestClient(PaymentGatewayProperties properties) {
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(properties.connectTimeout());
+    public RestClient paymentGatewayRestClient(PaymentGatewayProperties properties,
+            ${OUTBOUND_POLICY_CLASS} outboundAddressPolicy) {
+        JdkClientHttpRequestFactory requestFactory =
+                new JdkClientHttpRequestFactory(outboundAddressPolicy.httpClient(properties.connectTimeout()));
         requestFactory.setReadTimeout(properties.readTimeout());
         return RestClient.builder()
                 .baseUrl(properties.baseUrl())
@@ -521,10 +528,11 @@ public class PaymentGatewayHttpConfig {
     INFRA_PKG,
     'PaymentGatewayHttpConfig',
     [
+      outboundPolicyImport(model),
       'org.springframework.boot.context.properties.EnableConfigurationProperties',
       'org.springframework.context.annotation.Bean',
       'org.springframework.context.annotation.Configuration',
-      'org.springframework.http.client.SimpleClientHttpRequestFactory',
+      'org.springframework.http.client.JdkClientHttpRequestFactory',
       'org.springframework.web.client.RestClient'
     ],
     body

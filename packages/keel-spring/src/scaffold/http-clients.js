@@ -22,6 +22,7 @@ import { providerFailures } from '../lib/outbound-failures.js';
 import { callPolicy, clientRemembers } from './last-known.js';
 import { usesTelemetry } from './telemetry.js';
 import { hasCallFallback } from '@keel-system/keel-core/gen/outbound-resilience';
+import { OUTBOUND_POLICY_CLASS } from './outbound-address.js';
 
 const PORT_PKG = 'domain.clients';
 const HTTP_PKG = 'infrastructure.http';
@@ -80,6 +81,7 @@ function callFields(call) {
 // ─── Configuración del RestClient (base-url, timeouts, auth saliente) ────────
 
 function renderConfig(model, client) {
+  // OutboundAddressPolicy vive en este mismo paquete (infrastructure.http): sin import.
   const imports = new Set([
     'java.net.http.HttpClient',
     'java.time.Duration',
@@ -90,7 +92,7 @@ function renderConfig(model, client) {
     'org.springframework.web.client.RestClient'
   ]);
 
-  const beanParams = [`@Value("\${${client.baseUrlProperty}}") String baseUrl`];
+  const beanParams = [`@Value("\${${client.baseUrlProperty}}") String baseUrl`, `${OUTBOUND_POLICY_CLASS} outboundAddressPolicy`];
   const builderSteps = [];
   const preamble = [];
   const auth = client.auth;
@@ -137,18 +139,11 @@ public class ${client.configClass} {
     @Bean
     public RestClient ${client.beanName}(
             ${beanParams.join(',\n            ')}) {
-        // HTTP/1.1 explícito, y no el request factory que \`detect()\` elija. Sin más
-        // clientes en el classpath, detect() cae en el del JDK, que negocia HTTP/2 y
-        // contra un servidor en claro lo intenta con \`Upgrade: h2c\`: si el otro
-        // extremo no completa el upgrade, el CUERPO SE PIERDE y la llamada muere con
-        // \`Received RST_STREAM: Stream cancelled\`, que el fallback traduce a "el
-        // proveedor no está disponible". El síntoma acusa al proveedor y la causa
-        // está aquí — le pasa al WireMock que levanta el propio generador, así que
-        // sin esto ninguna activación con cuerpo es ejercitable.
-        HttpClient httpClient = HttpClient.newBuilder()
-                .version(HttpClient.Version.HTTP_1_1)
-                .connectTimeout(Duration.ofSeconds(5))
-                .build();
+        // El HttpClient del JDK lo construye la política de direcciones salientes: HTTP/1.1
+        // explícito (el upgrade h2c pierde el cuerpo), sin seguir redirecciones y con el filtro
+        // anti-SSRF. Un host filtrado lanza FilteredHostException, que no es un fallo del
+        // proveedor: ni el fallback ni el circuito la atienden.
+        HttpClient httpClient = outboundAddressPolicy.httpClient(Duration.ofSeconds(5));
         JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
         requestFactory.setReadTimeout(Duration.ofMillis(${client.readTimeoutMs}));
 ${preamble.length > 0 ? preamble.join('\n') + '\n' : ''}        return RestClient.builder()

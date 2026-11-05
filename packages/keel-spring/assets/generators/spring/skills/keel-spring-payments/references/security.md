@@ -31,3 +31,12 @@ El cliente HTTP no tiene reintentos, y un 5xx o un timeout lanza
 `PaymentGatewayUnavailableException`. La acción queda en su estado en vuelo y la resuelve el barrido
 preguntando. Reintentar una escritura que la pasarela pudo haber hecho es cobrar, o devolver, dos
 veces.
+
+## A dónde puede salir el cliente
+
+El `HttpClient` de la pasarela lo construye `OutboundAddressPolicy` (la genera build): HTTP/1.1, sin
+seguir redirecciones y con un filtro anti-SSRF que deniega link-local (el endpoint de metadatos de la
+nube), any-local, multicast y lo que añada `OUTBOUND_DENIED_ADDRESSES`. Una URL de la pasarela que
+caiga ahí lanza `FilteredHostException`, que **no** es `RestClientException`: no deja la acción en
+duda, porque no salió ninguna petición, y se propaga como error de configuración. No la captures ni
+construyas otro cliente para esquivarla.

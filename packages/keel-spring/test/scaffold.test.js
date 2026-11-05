@@ -1995,7 +1995,11 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
   // HTTP/1.1 explícito: con el cliente del JDK negociando h2c contra un servidor
   // en claro, el CUERPO de la petición se pierde y la llamada muere con
   // `Received RST_STREAM`, que el fallback traduce a "el proveedor está caído".
-  assert.ok(config.includes('HttpClient.Version.HTTP_1_1'));
+  // Lo fija la política de direcciones salientes, que es quien construye el HttpClient
+  // (test/outbound-address.test.js).
+  assert.ok(config.includes('outboundAddressPolicy.httpClient('));
+  const policy = read(workspace, `${httpDir}/OutboundAddressPolicy.java`);
+  assert.ok(policy.includes('HttpClient.Version.HTTP_1_1'));
 
   // Puerto hexagonal en domain/clients con retorno en términos del dominio.
   const port = read(workspace, `${portDir}/PricingServiceClient.java`);

@@ -61,6 +61,7 @@ import * as controllers from './controllers.js';
 import * as web from './web.js';
 import * as security from './security.js';
 import * as httpClients from './http-clients.js';
+import * as outboundAddress from './outbound-address.js';
 import * as lastKnown from './last-known.js';
 import * as dependencies from './dependencies.js';
 import * as storage from './storage.js';
@@ -148,6 +149,8 @@ const GENERATORS = [
   controllers,
   web,
   security,
+  // La política de direcciones salientes: la inyectan los clientes de http-clients y la pasarela.
+  outboundAddress,
   httpClients,
   // Después de httpClients: su almacén lo inyectan los adaptadores que genera aquel.
   lastKnown,
