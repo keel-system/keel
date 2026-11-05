@@ -11,7 +11,7 @@ import { isEmptyRead } from '../src/lib/broker-probes.js';
 import { hasScheduledOperations } from '../src/scaffold/services.js';
 import { TELEMETRY_CONVENTIONS } from '../src/scaffold/generator-docs.js';
 import { generate as applicationFiles } from '../src/scaffold/application.js';
-import { assetsDir, wrapperDir, GRADLE_VERSION } from '../src/lib/assets.js';
+import { assetsDir, wrapperDir, GRADLE_VERSION, GRADLE_DISTRIBUTION_SHA256 } from '../src/lib/assets.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const fixtureDir = path.join(FIXTURES_DIR, 'product-catalog');
@@ -46,7 +46,7 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   const buildGradle = read(workspace, 'build.gradle');
   assert.ok(buildGradle.includes('spring-boot-starter-data-jpa'));
   assert.ok(buildGradle.includes("runtimeOnly 'org.postgresql:postgresql'"));
-  assert.ok(buildGradle.includes('JavaLanguageVersion.of(21)'));
+  assert.ok(buildGradle.includes('JavaLanguageVersion.of(25)'));
   assert.ok(buildGradle.includes('springdoc-openapi-starter-webmvc-ui'));
   assert.ok(buildGradle.includes('spring-boot-starter-actuator'));
   assert.ok(!buildGradle.includes('spring-kafka')); // sin capa messaging
@@ -289,6 +289,12 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   const copiedJar = fs.readFileSync(path.join(projectDir, 'gradle', 'wrapper', 'gradle-wrapper.jar'));
   assert.ok(vendorJar.equals(copiedJar)); // copia binaria intacta
   assert.ok(read(workspace, 'gradle/wrapper/gradle-wrapper.properties').includes(`gradle-${GRADLE_VERSION}-bin.zip`));
+  // El wrapper verifica la distribución que descarga: no ejecuta un zip que no case.
+  assert.ok(
+    read(workspace, 'gradle/wrapper/gradle-wrapper.properties').includes(
+      `distributionSha256Sum=${GRADLE_DISTRIBUTION_SHA256}`
+    )
+  );
   assert.ok(read(workspace, '.gitattributes').includes('/gradlew        text eol=lf'));
   const appTests = read(workspace, 'src/test/java/com/commerce/productcatalog/ProductCatalogApplicationTests.java');
   assert.ok(appTests.includes('@SpringBootTest'));

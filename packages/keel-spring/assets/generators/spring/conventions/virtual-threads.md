@@ -25,9 +25,9 @@ escrituras es inaceptable — las escrituras paralelas no participan de la trans
 del command y pueden dejar datos inconsistentes. Los command handlers se quedan
 secuenciales.
 
-## Patrón correcto (Java 21)
+## Patrón correcto (Java 25)
 
-`StructuredTaskScope` es API preview en Java 21: no la uses. El patrón es
+`StructuredTaskScope` sigue siendo API preview en Java 25: no la uses. El patrón es
 `ExecutorService` con `try-with-resources`:
 
 ```java

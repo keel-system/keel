@@ -4,7 +4,7 @@
 
 El stack lo elige el diseñador en el **cuestionario de `keel-spring build`** (solo pregunta por las categorías que el diseño necesita) y queda persistido en `services/<servicio>-spring/keel-stack.json`; las siguientes ejecuciones lo reutilizan sin repreguntar (bórralo para reelegir). Con `--defaults` o sin terminal interactiva se usan los defaults.
 
-- Java 21, Spring Boot 4.x (Spring Framework 7, Hibernate 7, JUnit 6), **Gradle** (Groovy DSL) **con wrapper incluido** (estilo Spring Initializr: `./gradlew` funciona de inmediato). Las versiones concretas las fijan las constantes del paquete.
+- Java 25, Spring Boot 4.x (Spring Framework 7, Hibernate 7, JUnit 6), **Gradle 9** (Groovy DSL) **con wrapper incluido** (estilo Spring Initializr: `./gradlew` funciona de inmediato). Las versiones concretas las fijan las constantes del paquete.
 - **Jackson 3**: `ObjectMapper`, `JsonNode` y compañía se importan de `tools.jackson.databind` (y `JacksonException`, que ya no es comprobada, de `tools.jackson.core`); solo las anotaciones siguen en `com.fasterxml.jackson.annotation`. El mapper de la aplicación conserva los defaults de Jackson 2 (`spring.jackson.use-jackson2-defaults`): no los cambies, son contrato del cable. Nada de `com.fasterxml.jackson.databind`: ese paquete es Jackson 2 y no está en el classpath.
 - Persistencia (solo con capa `persistence`): la elige el **diseño**, no el cuestionario — `persistence.default.model` decide el modelo y el cuestionario solo ofrece motores de ese modelo.
   - `relational`: Spring Data JPA + **PostgreSQL (default) / MySQL / MariaDB / SQL Server / Oracle / H2**; H2 para tests.

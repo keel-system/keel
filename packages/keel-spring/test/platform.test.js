@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { BOOT4_SINCE, platformMismatch, springBootLineOf } from '../src/lib/platform.js';
-import { SPRING_BOOT_VERSION, SPRING_BOOT_LINE } from '../src/lib/assets.js';
+import {
+  BOOT4_SINCE,
+  JAVA25_SINCE,
+  javaUpgradeNotice,
+  javaVersionOf,
+  platformMismatch,
+  springBootLineOf
+} from '../src/lib/platform.js';
+import { JAVA_VERSION, SPRING_BOOT_VERSION, SPRING_BOOT_LINE } from '../src/lib/assets.js';
 
 const own = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -28,5 +35,24 @@ test('las firmas anteriores a la frontera son de Boot 3 y se rechazan con el mot
 test('sin firma legible no se juzga: un proyecto nuevo o anterior al manifiesto no se bloquea', () => {
   for (const generator of [null, undefined, '', 'keel-nest@0.1.0', 'keel-spring@dev']) {
     assert.equal(platformMismatch(generator), null, String(generator));
+  }
+});
+
+test('esta versión de keel-spring genera sobre la versión de Java de la constante', () => {
+  assert.equal(javaVersionOf(`keel-spring@${own}`), JAVA_VERSION);
+  assert.equal(javaVersionOf(`keel-spring@${JAVA25_SINCE}`), JAVA_VERSION);
+  assert.equal(javaUpgradeNotice(`keel-spring@${own}`), null);
+});
+
+test('un proyecto de Java 21 recibe un aviso, no una negativa', () => {
+  for (const generator of ['keel-spring@0.2.0', 'keel-spring@0.2.1']) {
+    assert.equal(javaVersionOf(generator), 21);
+    assert.equal(platformMismatch(generator), null, generator);
+    const notice = javaUpgradeNotice(generator);
+    assert.match(notice, /Java 21/);
+    assert.match(notice, new RegExp(`JDK ${JAVA_VERSION}`));
+  }
+  for (const generator of [null, '', 'keel-nest@0.1.0', 'keel-spring@dev']) {
+    assert.equal(javaUpgradeNotice(generator), null, String(generator));
   }
 });

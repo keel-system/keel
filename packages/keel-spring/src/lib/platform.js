@@ -9,11 +9,18 @@
 //
 // La línea no se estampa aparte: el manifiesto ya guarda la firma del generador (`keel-spring@0.1.7`) y
 // la versión desde la que este generador emite Boot 4 es la frontera.
+//
+// El salto a Java 25 es otra cosa: el toolchain de build.gradle y el wrapper son archivos de build
+// —refrescables— y el código Java del agente no cambia de semántica entre 21 y 25. Por eso un
+// proyecto anterior a `JAVA25_SINCE` recibe un AVISO, no una negativa: build lo refresca y lo que
+// pide es tener el JDK 25 instalado.
 
-import { SPRING_BOOT_LINE, SPRING_BOOT_VERSION } from './assets.js';
+import { JAVA_VERSION, SPRING_BOOT_LINE, SPRING_BOOT_VERSION } from './assets.js';
 
 /** Primera versión de keel-spring que genera sobre Spring Boot 4. */
 export const BOOT4_SINCE = '0.2.0';
+/** Primera versión de keel-spring que genera sobre Java 25 (antes, Java 21). */
+export const JAVA25_SINCE = '0.3.0';
 
 function parseVersion(text) {
   const match = /^(\d+)\.(\d+)\.(\d+)/.exec(text ?? '');
@@ -33,6 +40,28 @@ export function springBootLineOf(generator) {
   const version = match ? parseVersion(match[1]) : null;
   if (!version) return null;
   return before(version, parseVersion(BOOT4_SINCE)) ? '3' : SPRING_BOOT_LINE;
+}
+
+/** La versión de Java de una firma del manifiesto (`keel-spring@x.y.z`), o null si no se puede saber. */
+export function javaVersionOf(generator) {
+  const match = /^keel-spring@(.+)$/.exec(generator ?? '');
+  const version = match ? parseVersion(match[1]) : null;
+  if (!version) return null;
+  return before(version, parseVersion(JAVA25_SINCE)) ? 21 : JAVA_VERSION;
+}
+
+/**
+ * El aviso para un proyecto generado con otra versión de Java, o null si no hace falta. No bloquea:
+ * el toolchain y el wrapper se refrescan con el resto de archivos de build.
+ */
+export function javaUpgradeNotice(previousGenerator) {
+  const java = javaVersionOf(previousGenerator);
+  if (java === null || java === JAVA_VERSION) return null;
+  return (
+    `El proyecto lo generó ${previousGenerator}, sobre Java ${java}; este keel-spring genera sobre Java ` +
+    `${JAVA_VERSION} y Gradle 9. El toolchain de build.gradle y el wrapper se refrescan con build; el ` +
+    `código del agente no cambia. Hace falta un JDK ${JAVA_VERSION} instalado para compilar y probar.`
+  );
 }
 
 /**

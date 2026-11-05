@@ -29,8 +29,13 @@ export const SUPPORTED_DSL = ['2.23'];
 // generado con otra línea no se refresca, se regenera (ver `platformMismatch`).
 export const SPRING_BOOT_VERSION = '4.1.2';
 export const SPRING_BOOT_LINE = '4';
-export const JAVA_VERSION = 21;
-export const GRADLE_VERSION = '8.14';
+// Java 25 LTS (desde keel-spring 0.3.0): ver `JAVA25_SINCE` en platform.js. Gradle 9.1 es la
+// primera que corre y compila con Java 25; la 9.8.2 se midió con el build.gradle emitido.
+export const JAVA_VERSION = 25;
+export const GRADLE_VERSION = '9.8.2';
+// sha256 de gradle-<GRADLE_VERSION>-bin.zip (publicado por Gradle): el wrapper no ejecuta una
+// distribución que no case.
+export const GRADLE_DISTRIBUTION_SHA256 = '21bd5da2de49b642904077f38c0efdc7778e92b3ed0889392dca61b97e389607';
 // springdoc 3.x es la línea de Boot 4; la 3.2.0 se publica contra Boot 4.1.2.
 export const SPRINGDOC_VERSION = '3.2.0';
 // El artefacto de resilience4j va por línea de Boot (`resilience4j-spring-boot4`).

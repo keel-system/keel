@@ -3,13 +3,16 @@
 // constante GRADLE_VERSION.
 
 import path from 'node:path';
-import { GRADLE_VERSION, wrapperDir } from '../lib/assets.js';
+import { GRADLE_DISTRIBUTION_SHA256, GRADLE_VERSION, wrapperDir } from '../lib/assets.js';
 
 export function generate() {
   const properties = `distributionBase=GRADLE_USER_HOME
 distributionPath=wrapper/dists
+distributionSha256Sum=${GRADLE_DISTRIBUTION_SHA256}
 distributionUrl=https\\://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip
 networkTimeout=10000
+retries=0
+retryBackOffMs=500
 validateDistributionUrl=true
 zipStoreBase=GRADLE_USER_HOME
 zipStorePath=wrapper/dists

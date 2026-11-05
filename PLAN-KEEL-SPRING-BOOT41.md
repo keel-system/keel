@@ -24,13 +24,18 @@ Pasan el filtro dos piezas de Boot 4.1 sobre Java 21 (fase A) y el salto a Java 
 | 0 | Verificar APIs y claves contra los jars de 4.1.2 | — | hecho (2026-11-05) |
 | 1 | Conexión JDBC perezosa (`connection-fetch: lazy`) | A | hecho (2026-11-05) |
 | 2 | Filtro de direcciones salientes (`InetAddressFilter`) | A | hecho (2026-11-05) |
-| 3 | Java 25 + Gradle 9 (plataforma) | B | pendiente |
+| 3 | Java 25 + Gradle 9 (plataforma) | B | hecho (2026-11-05) |
 | 4 | Caché AOT en `deploy/Dockerfile` | B | pendiente |
 | 5 | Cabeceras de objeto compactas | B | pendiente |
 | 6 | Hilos virtuales sin *pinning*: reescribir el porqué | B | pendiente |
 | 7 | Corrida de control del par del MVP | — | pendiente |
 
-**Para retomar:** empezar por el incremento 3 (Java 25 + Gradle 9), en un contexto nuevo. Antes hay que preparar el entorno de la fase B: instalar Temurin 25 conservando el 21, con cachés y descargas en `D:`. Los temporales del inc. 2 (`D:\keel-tmp\boot41-inc2\`) ya están borrados.
+**Para retomar:** empezar por el incremento 4 (caché AOT en `deploy/Dockerfile`), en un contexto nuevo. Las imágenes `eclipse-temurin:25-jdk-alpine` y `25-jre-alpine` ya están en podman (las trajo el `deploy-check` del inc. 3). Las redes que levantan la app (`telemetry-check`, `deploy-check`) se pasan con la máquina descargada: con poca memoria libre el sistema mata la ejecución. Los temporales del inc. 3 ya están borrados.
+
+Entorno:
+- JDK 25 en `C:\java\jdk-25` (`JAVA_HOME`); el 21 sigue en `C:\java\jdk-21`.
+- Gradle sale del wrapper de cada proyecto.
+- Los temporales de las redes van en `D:\keel-tmp\boot41-inc3\`, con `TMP`/`TEMP` apuntando a su `tmp\`.
 
 ## Lo que se descarta, y por qué
 
@@ -231,6 +236,30 @@ Seguridad, como defensa en profundidad.
   - `npm test`;
   - `compile-check` sobre **todas** las fixtures con JDK 25 y Gradle 9;
   - después, **todas** las redes en vivo de keel-spring, porque cambia la JVM bajo todo. Son `broker`, `mail`, `store`, `mongo`, `telemetry`, `mapping`, `index`, `deploy`, `payment`, `claim` y `finder`. Se pasan de una en una, con la máquina descargada.
+
+### Resultado (2026-11-05)
+
+- **Plataforma:**
+  - `JAVA_VERSION = 25`, `GRADLE_VERSION = '9.8.2'` y `GRADLE_DISTRIBUTION_SHA256` en `src/lib/assets.js`.
+  - El `gradle-wrapper.properties` emitido lleva ahora `distributionSha256Sum`, así que el wrapper no ejecuta un zip que no case. Lleva también los `retries`/`retryBackOffMs` que escribe Gradle 9.
+  - El jar y los scripts de `vendor/gradle-wrapper/` salen de `gradle wrapper --gradle-version 9.8.2`, sobre la distribución descargada y verificada. El `gradlew` nuevo arranca el wrapper con `-jar`, sin `CLASSPATH`.
+- **El `build.gradle` emitido no cambia.** Con Gradle 9.8.2 y toolchain 25 compila tal cual, incluidos el source set `integrationTest`, `configurations` y `tasks.named`. Gradle no aprovisionó ningún JDK: usó el de `JAVA_HOME`.
+- **`platform.js`:**
+  - `JAVA25_SINCE = '0.3.0'`, y keel-spring sube a 0.3.0.
+  - Un proyecto de una versión anterior recibe un **aviso** en `build` (`javaUpgradeNotice`), no una negativa. `platformMismatch` sigue igual.
+  - Dos casos nuevos en `test/platform.test.js`.
+- **Docs:**
+  - `conventions/project-layout.md`: Java 25 y Gradle 9.
+  - `virtual-threads.md`: `StructuredTaskScope` sigue en preview en Java 25. El resto de ese porqué es del inc. 6.
+  - La fila de plataforma de `CLAUDE.md`.
+  - El README del proyecto generado sale de la constante.
+  - `keel-recover target-db-check --generator=spring` no fija versión: hereda el toolchain del proyecto emitido.
+- **Puerta, en verde:**
+  - `npm test --workspace packages/keel-spring`: 1691/1691.
+  - `compile-check` sobre las **17 fixtures**, todo OK. Cada fixture pasó con los tres brokers, y con MySQL si es relacional. Pasaron también las combinaciones del script por defecto (Oracle, los dos diseños de finders, Cognito y otel) y las dos pasarelas. `catalog-extended` compila el arnés y deja fuera su `main` por la réplica, como siempre.
+  - Las once redes en vivo, de una en una: `payment-check`, `broker-check`, `mail-check`, `store-check`, `mongo-check`, `mapping-check`, `index-check`, `claim-check`, `finder-check`, `telemetry-check` (TEL-1 a TEL-15 en asset-vault y notification-mailer) y `deploy-check` (DEP-1 a DEP-8).
+  - `deploy-check` es el primero que construye la imagen sobre `eclipse-temurin:25-jdk-alpine` / `25-jre-alpine`, y la app llega a lista sin tocar el Dockerfile.
+  - La primera pasada de `telemetry-check` la mató el sistema por falta de memoria, no por fallo del check. Con la máquina descargada, verde.
 
 ### Incremento 4: caché AOT en `deploy/Dockerfile` (JEP 483/514/515)
 
