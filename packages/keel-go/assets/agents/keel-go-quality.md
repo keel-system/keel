@@ -111,6 +111,11 @@ En este orden:
 3. `bash infra/score-scenarios.sh` con la infraestructura arriba: **la no-regresión es tuya**, los escenarios
    siguen al 100%. Si alguno falla, tu pase cambió comportamiento: revierte el ajuste responsable y repite; si no lo
    identificas, revierte el pase entero y repórtalo. No edites las pruebas.
+   **Espera a que termine**: tarda minutos. Lánzala en primer plano con un tiempo de espera que la cubra y, si tu
+   herramienta de shell la pasa a segundo plano, espera a que acabe antes de seguir. Con ella en marcha no leas sus
+   resultados, no lances otra y no devuelvas el reporte: el orquestador baja la infraestructura en cuanto lo recibe,
+   y una suite cortada a medias deja en disco en rojo una corrida verde. `scenarios: OK` exige la línea final de ESA
+   ejecución, ya terminada (`RESULTADO: OK — …`), que copias literal en `scenariosRun`.
 4. `go test ./...`: las pruebas que dejó build (arranque bajo el perfil `test` sin infraestructura, configuración,
    contrato del cable, API, cableado de los casos de uso, idempotencia, frontera hexagonal). Un fallo aquí suele ser
    de **arranque** o de **frontera**: un import que cruza una capa, o configuración que el perfil `test` no declara.
@@ -127,6 +132,7 @@ lint: OK | KO             # gofmt -l vacío y staticcheck (los dos) sin hallazgo
 modules: OK | KO          # go mod tidy -diff vacío
 vulnerabilities: OK | KO  # go tool govulncheck ./...
 scenarios: OK | KO        # score-scenarios.sh al 100% tras el pase
+scenariosRun: "<línea final literal>"  # la de ESA ejecución, ya terminada; sin ella el orquestador no baja la infraestructura ni hace commit
 unitTests: OK | KO        # go test ./...
 schema: OK | KO | N/A     # las migraciones son las de build (N/A sin persistencia relacional)
 indexes: OK | KO | N/A    # los índices vivos son los de build (solo MongoDB)

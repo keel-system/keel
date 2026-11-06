@@ -471,6 +471,11 @@ Al terminar, en este orden:
    Los escenarios `FL-*` deben seguir al 100% en OK. Si alguno falla, tu pase cambió
    comportamiento: revierte el ajuste responsable y repite; si no identificas cuál,
    revierte el pase entero y repórtalo. No edites las pruebas para que pasen.
+   **Espera a que termine**: tarda minutos. Lánzala en primer plano con un tiempo de espera que la cubra y, si tu
+   herramienta de shell la pasa a segundo plano, espera a que acabe antes de seguir. Con ella en marcha no leas sus
+   resultados, no lances otra y no devuelvas el reporte: el orquestador baja la infraestructura en cuanto lo recibe,
+   y una suite cortada a medias deja en disco en rojo una corrida verde. `scenarios: OK` exige la línea final de ESA
+   ejecución, ya terminada (`BUILD SUCCESSFUL in …`), que copias literal en `scenariosRun`.
 3. `./gradlew test`: en este punto la suite unitaria es **solo**
    `<Nombre>ApplicationTests.contextLoads()`, y es la única comprobación de que
    **todos los beans arrancan bajo el perfil `test`** que `build` siembra (H2, sin
@@ -506,6 +511,7 @@ status: OK | KO           # OK solo con compilación verde, contexto que arranca
                           # escenarios al 100% y la cadena de idempotencia/compensación sin KO
 compiles: true | false
 scenarios: OK | KO        # ./gradlew integrationTest tras el pase: la no-regresión conductual
+scenariosRun: "<línea final literal>"  # la de ESA ejecución, ya terminada; sin ella el orquestador no baja la infraestructura ni hace commit
 contextTest: OK | KO      # ./gradlew test: contextLoads() bajo el perfil test (todos los beans arrancan sin infra)
 
 # Dos pares de campos, uno por modelo de persistencia. Rellena SOLO el de tu stack y

@@ -77,6 +77,12 @@ que quedó en disco es el de esa ejecución cortada (24 casos, 18 fallos), y qui
 verde. Es un defecto del pipeline, no del diseño ni del generador de código: el pase de calidad da por terminada una
 ejecución que no comprobó, y el orquestador baja la infra sin esperar a sus subagentes.
 
+**Arreglado después de la corrida, en los cuatro generadores.** El agente de calidad espera a que termine su
+no-regresión aunque la herramienta la pase a segundo plano, no lee sus resultados con ella en marcha y copia la línea
+final de esa ejecución en un campo nuevo del reporte, `scenariosRun`. La skill exige ese campo antes de bajar la
+infraestructura y antes del commit; en keel-spring, además, que ningún daemon de Gradle siga `BUSY`. Lo vigila
+`keel-go/test/quality-run-evidence.test.js`, falsado quitando cada mitad.
+
 ## designGaps
 
 Ninguno.

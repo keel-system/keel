@@ -107,6 +107,11 @@ En este orden:
 3. `bash infra/score-scenarios.sh` con la infraestructura arriba: **la no-regresión es tuya**, los escenarios
    siguen al 100%. Si alguno falla, tu pase cambió comportamiento: revierte el ajuste responsable y repite; si no lo
    identificas, revierte el pase entero y repórtalo. No edites las pruebas.
+   **Espera a que termine**: tarda minutos. Lánzala en primer plano con un tiempo de espera que la cubra y, si tu
+   herramienta de shell la pasa a segundo plano, espera a que acabe antes de seguir. Con ella en marcha no leas sus
+   resultados, no lances otra y no devuelvas el reporte: el orquestador baja la infraestructura en cuanto lo recibe,
+   y una suite cortada a medias deja en disco en rojo una corrida verde. `scenarios: OK` exige la línea final de ESA
+   ejecución, ya terminada (`RESULTADO: OK — …`), que copias literal en `scenariosRun`.
 4. `dotnet test`: las pruebas que dejó build (arranque bajo el perfil `test` sin infraestructura, configuración,
    contrato del cable, API, cableado de los casos de uso, modelo de EF). Un fallo aquí suele ser de **arranque**:
    una dependencia que no se resuelve, o configuración que el perfil `test` no declara. Si el arreglo cae fuera de
@@ -120,6 +125,7 @@ No preguntas al usuario. **No lanzas subagentes.**
 status: OK | KO           # OK solo con todo en verde y el baseline (o los índices, sobre MongoDB) verificado
 compiles: true | false    # dotnet build (sin warnings)
 scenarios: OK | KO        # score-scenarios.sh al 100% tras el pase
+scenariosRun: "<línea final literal>"  # la de ESA ejecución, ya terminada; sin ella el orquestador no baja la infraestructura ni hace commit
 unitTests: OK | KO        # dotnet test
 baseline: OK | KO | N/A   # la migración Baseline creada y revisada (N/A sin persistencia relacional)
 baselineTested: OK | KO | N/A   # bash infra/verify-baseline.sh

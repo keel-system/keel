@@ -106,6 +106,11 @@ En este orden:
 3. `bash infra/score-scenarios.sh` con la infraestructura arriba: **la no-regresión es tuya**, los
    escenarios siguen al 100%. Si alguno falla, tu pase cambió comportamiento: revierte el ajuste
    responsable y repite; si no lo identificas, revierte el pase entero y repórtalo. No edites las pruebas.
+   **Espera a que termine**: tarda minutos. Lánzala en primer plano con un tiempo de espera que la cubra y, si tu
+   herramienta de shell la pasa a segundo plano, espera a que acabe antes de seguir. Con ella en marcha no leas sus
+   resultados, no lances otra y no devuelvas el reporte: el orquestador baja la infraestructura en cuanto lo recibe,
+   y una suite cortada a medias deja en disco en rojo una corrida verde. `scenarios: OK` exige la línea final de ESA
+   ejecución, ya terminada (`RESULTADO: OK — …`), que copias literal en `scenariosRun`.
    (Va después del baseline: la base queda con el esquema de las migraciones y la suite lo ejercita. Con
    documentos, los índices se verifican DESPUÉS de esto: el servidor de la suite los creó al arrancar.)
 4. `npm test`: las pruebas que dejó build (arranque bajo el perfil `test` sin infraestructura,
@@ -122,6 +127,7 @@ status: OK | KO           # OK solo con todo en verde y el baseline (o los índi
 compiles: true | false    # npm run build
 architecture: OK | KO     # npm run check:architecture
 scenarios: OK | KO        # score-scenarios.sh al 100% tras el pase
+scenariosRun: "<línea final literal>"  # la de ESA ejecución, ya terminada; sin ella el orquestador no baja la infraestructura ni hace commit
 unitTests: OK | KO        # npm test
 baseline: OK | KO | N/A   # src/migrations/1000000000000-baseline-schema.ts revisado y copiado (N/A sin persistencia relacional)
 baselineTested: OK | KO | N/A   # bash infra/verify-baseline.sh

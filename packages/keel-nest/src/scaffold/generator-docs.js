@@ -255,8 +255,11 @@ completo, con sus porqués: \`{{keel:docs}}/orchestration.md\`.
        : usesDocument(model)
          ? `, y **verifica los índices vivos** contra los que crea el servidor (\`infra/export-indexes.sh\`, que solo lee). Exige \`indexes: OK\` e \`indexesTested: OK\`: un índice que falta deja una unicidad del diseño sin guardar y su violación sin traducir al \`code\` declarado. \`KO\` es un defecto de build: a \`blockers\`, nunca índices a mano`
          : ''
-   }. \`status: KO\` o \`scenarios: KO\` → revierte o reporta; nunca hagas commit con algo en rojo. Al
-   terminar, baja la infraestructura: \`bash infra/down.sh\`.
+   }. \`status: KO\` o \`scenarios: KO\` → revierte o reporta; nunca hagas commit con algo en rojo. Antes de
+   bajar la infraestructura y antes del commit, exige en su reporte \`scenariosRun\` con la línea final de su ejecución
+   de no-regresión: sin ella, esa suite no terminó o no se leyó, y bajar la infraestructura la cortaría a medias (una
+   corrida verde que deja en disco resultados en rojo); reclámasela y espera. Al terminar, baja la infraestructura:
+   \`bash infra/down.sh\`.
 5. **Guía de despliegue.** Con todo en verde y **antes** del commit, añade al \`README.md\` una sección
    \`## Despliegue en producción\` con los pasos y la tabla de parámetros obligatorios: todo \`\${VAR}\` sin
    default de \`config/parameters/production/*.yaml\`${persistence ? ', y que el esquema lo crean las migraciones de `src/migrations/` al arrancar' : ''}.
