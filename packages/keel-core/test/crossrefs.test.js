@@ -700,7 +700,7 @@ test('evento y suscripción cuyo canal existe en channels no produce errores ni 
       channels: { productEvents: {}, inventoryEvents: {} },
       publishing: { reliability: 'best-effort', events: { ProductRetired: { channel: 'productEvents', payload: {} } } },
       subscriptions: {
-        StockDepleted: { source: 'inventory-service', channel: 'inventoryEvents', payload: {}, triggers: 'retireProduct', onFailure: { retry: { maxAttempts: 3 } } },
+        StockDepleted: { source: 'inventory-service', channel: 'inventoryEvents', payload: {}, triggers: 'retireProduct', onFailure: { deadLetter: true } },
       },
     },
   };
@@ -1431,7 +1431,7 @@ test('messaging sin channels ni channel sigue validando limpio (retrocompatibili
     messaging: {
       publishing: { reliability: 'best-effort', events: { ProductRetired: { payload: {} } } },
       subscriptions: {
-        StockDepleted: { source: 'inventory-service', payload: {}, triggers: 'retireProduct', onFailure: { retry: { maxAttempts: 3 } } },
+        StockDepleted: { source: 'inventory-service', payload: {}, triggers: 'retireProduct', onFailure: { deadLetter: true } },
       },
     },
   };
@@ -1615,7 +1615,7 @@ const depsLayers = () => ({
         source: 'catalog',
         payload: { productId: { type: 'uuid', required: true }, price: { type: 'decimal', required: true } },
         triggers: 'applyProductSnapshot',
-        onFailure: { retry: { maxAttempts: 3 } },
+        onFailure: { deadLetter: true },
       },
     },
   },
@@ -7160,4 +7160,81 @@ test('CHK-SCEN-ROUTE-UNSERVED: la ruta del escenario tiene que llevar el prefijo
   assert.equal(run('/api/v2', '/api/v1/jobs/{id}').length, 1);
   // Lo que no es una ruta del diseño no se juzga.
   assert.deepEqual(run('/api', '/health'), []);
+});
+
+// --- CHK-MSG-RETRY-AFTER-CLAIM: reintentos muertos tras el reclamo (DSL 2.24, inc. 3) ---
+//
+// Sin guarda en el dominio, el listener reclama el mensaje ANTES de despachar (`tryRecord`) y el
+// reintento de un fallo posterior lo confirma como duplicado sin ejecutar nada. La pregunta «¿hay
+// guarda?» es `domainGuardKind`, la misma que decide el orden en el generador.
+
+const retryAfterClaim = (layers) =>
+  run(layers).findings.filter((f) => f.id === 'CHK-MSG-RETRY-AFTER-CLAIM');
+
+const claimLayers = ({ onFailure = { retry: { maxAttempts: 3 }, deadLetter: true }, op = {}, contract, persistence } = {}) => ({
+  domain: {
+    entities: {
+      Product: entity({ sku: { type: 'string', required: true }, dedupeKey: { type: 'string', required: true } })
+    }
+  },
+  'use-cases': {
+    operations: {
+      retireProduct: {
+        kind: 'command',
+        internal: true,
+        input: { fields: { eventId: { type: 'string', required: true } } },
+        output: { entity: 'Product' },
+        ...op
+      }
+    }
+  },
+  ...(persistence ? { persistence } : {}),
+  messaging: {
+    subscriptions: {
+      StockDepleted: {
+        source: 'inventory-service',
+        payload: { eventId: { type: 'string', required: true } },
+        ...(contract ? { contract } : {}),
+        triggers: 'retireProduct',
+        onFailure
+      }
+    }
+  }
+});
+
+test('CHK-MSG-RETRY-AFTER-CLAIM: reintentar sobre una operación sin guarda avisa, por suscripción', () => {
+  const found = retryAfterClaim(claimLayers());
+  assert.equal(found.length, 1);
+  assert.equal(found[0].scope, 'messaging.subscriptions.StockDepleted');
+  assert.match(found[0].message, /storedIn/);
+  assert.match(found[0].message, /decisions\.yaml/);
+});
+
+test('CHK-MSG-RETRY-AFTER-CLAIM: sin reintentos no hay nada que muera', () => {
+  assert.deepEqual(retryAfterClaim(claimLayers({ onFailure: { deadLetter: true } })), []);
+  assert.deepEqual(retryAfterClaim(claimLayers({ onFailure: { retry: { maxAttempts: 1 }, deadLetter: true } })), []);
+});
+
+test('CHK-MSG-RETRY-AFTER-CLAIM: una transición del lifecycle es guarda', () => {
+  const op = { transitions: [{ entity: 'Product', from: ['active'], to: 'retired' }] };
+  assert.deepEqual(retryAfterClaim(claimLayers({ op })), []);
+});
+
+test('CHK-MSG-RETRY-AFTER-CLAIM: la clave natural es guarda, con storedIn si la clave se guarda en otro campo', () => {
+  const persistence = { entities: { Product: { naturalKey: ['dedupeKey'] } } };
+  const sinStoredIn = { idempotency: { keySource: 'payload-field', keyField: 'eventId' } };
+  const conStoredIn = { idempotency: { keySource: 'payload-field', keyField: 'eventId', storedIn: 'dedupeKey' } };
+  assert.equal(retryAfterClaim(claimLayers({ op: sinStoredIn, persistence })).length, 1);
+  assert.deepEqual(retryAfterClaim(claimLayers({ op: conStoredIn, persistence })), []);
+});
+
+test('CHK-MSG-RETRY-AFTER-CLAIM: el cobro de payments es guarda', () => {
+  const layers = claimLayers();
+  layers.payments = { charge: { operation: 'retireProduct' } };
+  assert.deepEqual(retryAfterClaim(layers), []);
+});
+
+test('CHK-MSG-RETRY-AFTER-CLAIM: sin deduplicación en el listener no hay reclamo (lo dice otro error)', () => {
+  const found = retryAfterClaim(claimLayers({ contract: { envelope: 'none' } }));
+  assert.deepEqual(found, []);
 });

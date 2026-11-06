@@ -14,10 +14,12 @@ operations:
         consumptionKwh: { type: decimal, required: true, constraints: { min: 0, scale: 3, scalePolicy: reject } }
         source:         { type: ReadingSource, required: true }
     output: { entity: MeterReading }
-    # Sin `idempotency`: la clave de ese bloque llega por la cabecera Idempotency-Key y
-    # aquí no hay endpoint que la reciba. Lo que protege de verdad contra la reentrega es
-    # el `contract.messageId` de la suscripción, y contra el duplicado de negocio, la
-    # naturalKey [meterId, readAt] de persistence — que es lo que dicen las rules de abajo.
+    # La clave viaja en el cuerpo (payload-field, DSL 2.12) y participa en la naturalKey
+    # [meterId, readAt] de persistence: esa constraint es la guarda, común a cualquier puerta
+    # y sin caducidad. Con ella el listener procesa y LUEGO registra el messageId de la
+    # suscripción, así que un fallo pasajero dentro del handler se reintenta en vez de darse
+    # por procesado (CHK-MSG-RETRY-AFTER-CLAIM).
+    idempotency: { keySource: payload-field, keyField: meterId }
     preconditions:
       - La lectura no está ya registrada para ese contador y ese instante.
     rules:

@@ -1,5 +1,8 @@
 # Reafirmado a mano en v2.1.0 (2026-10-19), por decisión del diseñador: el delta de la minor —el patrón no-blanco
 # de TemplateVariableValue.value, el truncado del asunto y los escenarios FL-NTF-001 y FL-DSP-001— no toca ninguno de estos veredictos.
+# v2.1.2 (2026-11-06): REV-MSG-DEDUPE-WINDOW se retira porque deja de aplicar. Su veredicto decía en prosa que la
+# guarda de acceptNotificationRequest era la naturalKey [applicationKey, dedupeKey]; ahora lo declara su idempotency
+# (storedIn: dedupeKey, DSL 2.24) y la pregunta, que es para un handler sin guarda, ya no se hace.
 reviewedBy: keel-design-review
 reviewedAt: 2.1.0
 findings:
@@ -57,17 +60,6 @@ findings:
       está fuera del perímetro. Se acepta por la prosa del propio diseño. Ojo: el descarte de header
       se argumenta con la topología SNS → SQS (SenderId de cuenta), que es elección de stack y no de
       diseño; con otro broker esa razón habría que volver a comprobarla.
-  - id: REV-MSG-DEDUPE-WINDOW
-    scope: messaging.subscriptions.NotificationRequested
-    verdict: ok
-    note: >-
-      acceptNotificationRequest no declara transitions ni idempotency y su efecto sí es acumulable
-      (cada ejecución crea una Notification, es decir, un correo). Pero hay freno de dominio más
-      allá de la tabla de procesados: dedupeKey es metadata.eventId y la naturalKey de Notification
-      es [applicationKey, dedupeKey], así que una reentrega pasada la retención choca con la
-      unicidad y no produce un segundo correo. Lo único que queda sin decidir es el desenlace de ese
-      choque: sin code declarado, reintenta y acaba en la cola de descarte como falsa alarma. No
-      duplica.
   - id: REV-PERSIST-MISSING-INDEX
     scope: persistence.entities
     verdict: ok

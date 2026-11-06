@@ -211,6 +211,11 @@ operations:
           constraints: { maxLength: 64 }
           description: El metadata.eventId de la envoltura, del que sale el dedupeKey. No viaja en el payload.
     output: { entity: Notification }
+    # La guarda es la naturalKey [applicationKey, dedupeKey] de Notification: la clave del mensaje
+    # (eventId) acaba en dedupeKey por la rule de abajo, y storedIn lo dice (DSL 2.24). Con ella el
+    # listener despacha y LUEGO registra el eventId, así que un fallo pasajero dentro del handler se
+    # reintenta en vez de darse por procesado. No hay registro de claves aparte: es la constraint.
+    idempotency: { keySource: payload-field, keyField: eventId, storedIn: dedupeKey }
     preconditions:
       - La aplicación que publicó el mensaje está registrada y activa.
     rules:

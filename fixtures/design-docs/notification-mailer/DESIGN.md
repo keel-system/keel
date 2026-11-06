@@ -1,6 +1,6 @@
 # notification-mailer — Documento de diseño
 
-> specs/notification-mailer v2.1.1. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
+> specs/notification-mailer v2.1.2. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
 
 ## 1. Propósito y alcance
 
@@ -55,6 +55,10 @@ Campos generados: los `id` y `Notification.requestedAt`. `Notification.status` n
 - La `Idempotency-Key` se acota a la aplicación del llamante. Por evento, `dedupeKey` es
   `event:<eventId>`, que no comparte espacio con las claves HTTP. El `eventId` es el de la envoltura
   del mensaje y llega al comando declarado en el diseño, no por convención del listener.
+- Por evento, la guarda contra el duplicado es la clave natural `[applicationKey, dedupeKey]`, y el
+  diseño lo declara: la clave `eventId` acaba en `dedupeKey` (`storedIn`). Por eso el listener
+  despacha y después registra el mensaje: un fallo pasajero dentro del handler se reintenta en vez
+  de darse por procesado, y la reentrega la frena la constraint, que no caduca.
 - Repetir una petición con la misma clave devuelve la respuesta de la aceptación
   (`{notificationId, status: accepted}`), aunque el envío haya avanzado: el estado de ahora se lee
   con `getNotification`.
@@ -99,7 +103,8 @@ envío), `TEMPLATE_VERSION_ALREADY_EXISTS`
 ### Internas
 
 - `acceptNotificationRequest` — la dispara `NotificationRequested`. Hace lo mismo que
-  `requestNotification`, copias incluidas, deduplicando por `metadata.eventId`.
+  `requestNotification`, copias incluidas, deduplicando por `metadata.eventId` y guardada por la clave
+  natural (`idempotency` con `storedIn: dedupeKey`).
 - `queueAcceptedNotifications` — **cada minuto**: reclama un lote de envíos aceptados y encarga cada
   uno.
 - `sendAcceptedNotification` — la invoca el barrido por fila: reclama el envío (`queued → sending`),

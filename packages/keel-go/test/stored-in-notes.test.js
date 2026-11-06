@@ -1,7 +1,8 @@
 // Con `storedIn` (DSL 2.24) la clave del mensaje no es el campo de la clave natural, y las dos notas que lee el
 // agente —el contrato del listener y la del handler— tienen que nombrarlo, o busca por un campo que la entidad
 // no tiene. La frase es neutral (`storedInNote`, keel-core/gen/natural-key-guard.js) y los cuatro generadores
-// la escriben igual: aquí se compara la de cada uno contra esa fuente. Sujeto: el par del MVP en memoria.
+// la escriben igual: aquí se compara la de cada uno contra esa fuente. Sujeto: el par del MVP, que lo declara desde
+// su v2.1.2; el caso contrario se lo quita en memoria.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,11 +21,19 @@ const EXPECTED = storedInNote({ ...GUARD, naturalKey: ['applicationKey', 'dedupe
 
 const compact = (text = '') => text.replace(/\/\/\s?|\*\s?|\s+/g, ' ').replace(/\s+/g, ' ');
 
-function plan(generator, fixture, idempotency) {
+// Sin `withoutStoredIn` el diseño va tal cual; con él, la operación pierde su `storedIn` (y con él la guarda).
+function plan(generator, fixture, { withoutStoredIn = false } = {}) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
   const patched = structuredClone(layers);
-  if (idempotency) patched['use-cases'].operations.acceptNotificationRequest.idempotency = idempotency;
+  if (withoutStoredIn) delete patched['use-cases'].operations.acceptNotificationRequest.idempotency.storedIn;
   return GENERATORS[generator]({ manifest, layers: patched, workspace: FIXTURES_DIR }).files;
+}
+
+for (const fixture of ['notification-mailer', 'notification-mailer-mongo']) {
+  test(`${fixture} declara la guarda que estas notas describen`, () => {
+    const { layers } = loadService(path.join(FIXTURES_DIR, fixture));
+    assert.deepEqual(layers['use-cases'].operations.acceptNotificationRequest.idempotency, GUARD);
+  });
 }
 
 const isHandler = (file) => {
@@ -38,7 +47,7 @@ const isListenerContract = (file) =>
 for (const generator of Object.keys(GENERATORS)) {
   for (const fixture of ['notification-mailer', 'notification-mailer-mongo']) {
     test(`${generator}, ${fixture}: con storedIn, el listener y el handler nombran el campo guardado`, () => {
-      const files = plan(generator, fixture, GUARD);
+      const files = plan(generator, fixture);
       const contract = files.filter(isListenerContract);
       assert.equal(contract.length, 1, `contrato del listener: ${contract.map((file) => file.path).join(', ') || 'ninguno'}`);
       const listener = compact(contract[0].content);
@@ -53,7 +62,7 @@ for (const generator of Object.keys(GENERATORS)) {
   }
 
   test(`${generator}: sin storedIn la frase no aparece en ningún archivo`, () => {
-    for (const file of plan(generator, 'notification-mailer', null)) {
+    for (const file of plan(generator, 'notification-mailer', { withoutStoredIn: true })) {
       assert.ok(!compact(file.content).includes('(storedIn)'), file.path);
     }
   });

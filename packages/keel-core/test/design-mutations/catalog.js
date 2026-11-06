@@ -307,10 +307,8 @@ function withReplica(d) {
     payload: { email: { type: 'string', required: true }, displayName: { type: 'string', required: true } },
     contract: { envelope: 'keel' },
     triggers: 'syncRequester',
-    onFailure: {
-      retry: { maxAttempts: 3, backoff: 'exponential', initialDelayMs: 500, maxDelayMs: 5000 },
-      deadLetter: true
-    }
+    // Sin reintentos: syncRequester no tiene guarda en el dominio (CHK-MSG-RETRY-AFTER-CLAIM).
+    onFailure: { deadLetter: true }
   };
   d.layers.dependencies.dependencies.directory.needs.requesterCopy = {
     description: 'Perfil del solicitante, leído de la copia local.',
@@ -981,6 +979,19 @@ export const MUTATIONS = [
       delete d.layers.messaging.subscriptions.TicketEscalated.onFailure;
     },
     expect: ['CHK-MSG-SUB-NO-ONFAILURE']
+  },
+  {
+    id: 'M-MSG-RETRY-AFTER-CLAIM',
+    title: 'una suscripción que reintenta sobre una operación sin guarda en el dominio',
+    mutate: (d) => {
+      d.layers.messaging.subscriptions.TicketEscalated.onFailure.retry = {
+        maxAttempts: 3,
+        backoff: 'exponential',
+        initialDelayMs: 500,
+        maxDelayMs: 5000
+      };
+    },
+    expect: ['CHK-MSG-RETRY-AFTER-CLAIM']
   },
   {
     id: 'M-MSG-NO-SCHEMAREF',
@@ -2389,7 +2400,9 @@ export const MUTATIONS = [
     title: 'una compensación que no devuelve el estado que movió el encargo',
     extends: 'compensation',
     mutate: (d) => {
-      delete ops(d).abandonEscalation.transitions;
+      // Mueve OTRA entidad en vez de devolver el ticket: sigue teniendo una transición, que es la guarda
+      // que la deja reintentable (sin ninguna co-dispararía CHK-MSG-RETRY-AFTER-CLAIM).
+      ops(d).abandonEscalation.transitions = [{ entity: 'Queue', from: ['active'], to: 'archived' }];
     },
     expect: ['CHK-DEPS-COMPENSATION-NO-RESTORE']
   },

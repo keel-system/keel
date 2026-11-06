@@ -33,11 +33,11 @@ Se descartó que el generador libere la marca si el handler falla: tapa el fallo
 | 0 | Medir el alcance y fijar el nombre | hecho (2026-11-06) |
 | 1 | DSL 2.24: el enlace `storedIn` (schema, validación, modelo) | hecho (2026-11-06) |
 | 2 | Las notas de los cuatro generadores | hecho (2026-11-06) |
-| 3 | El aviso: reintentos muertos tras el reclamo | pendiente |
-| 4 | El par del MVP declara su guarda | pendiente |
+| 3 | El aviso: reintentos muertos tras el reclamo | hecho (2026-11-06) |
+| 4 | El par del MVP declara su guarda | hecho (2026-11-06, junto con el 3) |
 | 5 | Corrida de control | pendiente |
 
-**Para retomar:** empezar por el incremento 3, en un contexto nuevo. Las notas ya nombran `storedIn` en los cuatro generadores (`storedInNote`, `gen/natural-key-guard.js`). El predicado que el inc. 3 tiene que extraer es hoy la expresión de `triggerHasDomainGuard` en `model.js` (~l. 2902): transiciones, `guard === 'natural-key'` o el cobro de `payments`. El gate ya se ejecuta sobre el par con `storedIn` en `keel-spring/test/payload-field-idempotency.test.js`, y la falsación del inc. 4 puede partir de ese caso.
+**Para retomar:** queda el incremento 5, la corrida de control sobre el par v2.1.2 con keel-spring. La lanza el usuario. Los incrementos 3 y 4 se cerraron juntos por decisión del usuario, porque el aviso nacía rojo en el par y el inc. 3 no podía cerrar en verde sin el 4 (§ Lo hecho del inc. 3). Hay una deuda nueva de keel-core, fuera de este plan: `CHK-SCEN-IDEM-RACE` no distingue la guarda por clave natural de una operación interna, y el par lo declara falso positivo (§ Lo hecho del inc. 4).
 
 ## Lo que se descarta, y por qué
 
@@ -162,6 +162,18 @@ Con el modelo arreglado, el orden del listener ya sale bien en los cuatro. Lo qu
   - `npm test`;
   - `npm run design-matrix`.
 
+### Lo hecho (2026-11-06)
+
+- **Una sola fuente**: `keel-core/src/lib/gen/domain-guard.js` (`domainGuardKind(opName, op, naturalKey, layers)`, exportada en `gen/index.js`). El modelo saca de ahí `triggerHasDomainGuard` y `triggerGuardKind`, con la clave natural que `resolveIdempotency` dejó en la política. La validación la llama con `naturalKeyOfTarget`. Falsada: quitando de `domainGuardKind` las ramas de la clave natural y del cobro caen a la vez los casos de `crossrefs.test.js` y los de `natural-key-guard.test.js` (el modelo).
+- **La regla**: `CHK-MSG-RETRY-AFTER-CLAIM` (`crossrefs.js`, junto al error de la reentrega sin guarda). Es `warning`/`undecided`, aceptable, con `warnIn` en `messaging.subscriptions.<nombre>`. Dispara con `maxAttempts > 1`, con el listener deduplicando (`listenerDedupeKeyOf`: sin él no hay reclamo y manda el error de al lado) y sin guarda. El mensaje nombra las tres salidas. Seis casos en `crossrefs.test.js`, y un párrafo en `docs/dsl/messaging.md`, junto a `onFailure`.
+- **El corpus.** El base reintentaba sobre `noteEscalation` sin guarda, y la extensión `replica`, sobre `syncRequester`: a las dos se les quita el `retry`, con su comentario. La mutación `M-MSG-RETRY-AFTER-CLAIM` se lo devuelve al base. La de `CHK-DEPS-COMPENSATION-NO-RESTORE` borraba las transiciones de `abandonEscalation` y pasaba a co-disparar; ahora la compensación mueve otra entidad (`Queue`), así que conserva una transición y vuelve a quedar aislada. `design-matrix`: 181 falsados, 2 co-disparados (los de antes), 0 sin mutación.
+- **Los diseños sintéticos de `crossrefs.test.js`** que afirmaban silencio total y reintentaban sin guarda (dos en línea y `depsLayers`) pierden el `retry`.
+- **Las fixtures**, con lo medido en el inc. 0 (el barrido da exactamente sus seis suscripciones):
+  - `asset-vault`, `stock-reservation` y `stock-reservation-events` aceptan el aviso en `decisions.yaml`: son contadores de la rama `tryRecord` a propósito.
+  - `metering-digest.recordReading` declara `idempotency: { keySource: payload-field, keyField: meterId }`, y su comentario viejo se corrige.
+  - `metering-digest.decommissionMeter` lo acepta, con el motivo de la PK.
+- **El par nacía rojo.** El plan dejaba el par para el inc. 4, pero el inc. 3 tenía que cerrar en verde y `mvp-ready` no podía. **Decisión del usuario:** unir los dos incrementos en este contexto.
+
 ## Incremento 4: el par del MVP declara su guarda
 
 - `acceptNotificationRequest` gana `idempotency: { keySource: payload-field, keyField: eventId, storedIn: dedupeKey }` en **las dos** fixtures a la vez, con las capas idénticas salvo `persistence` y `service`.
@@ -180,6 +192,20 @@ Con el modelo arreglado, el orden del listener ya sale bien en los cuatro. Lo qu
   - `npm test`, con `mvp-ready`;
   - `store-check`, cuyo sujeto es este par;
   - `compile-check` sobre el par.
+
+### Lo hecho (2026-11-06)
+
+- `acceptNotificationRequest` declara `idempotency: { keySource: payload-field, keyField: eventId, storedIn: dedupeKey }` en las dos fixtures, con un comentario. Las capas siguen idénticas.
+- **Sin escenario de la carrera: falso positivo escrito.** El plan suponía que recarear un flujo nuevo era posible con un patch, y no lo es. El careo caduca solo con el minor (`versionShape`, `flow-review.js`), el par lleva gastadas las 3 pasadas de la v2.1, y un flujo nuevo lo deja en `exhausted` sin salida. Subir a minor caducaba el careo entero, toda la revisión y el `since` de cada decisión, por un escenario que no podría fallar. **Decisión del usuario:** `CHK-SCEN-IDEM-RACE` va a `falsePositives` en `decisions.yaml` (`match: operations.acceptNotificationRequest`), con su motivo. La carrera de dos entregas del mismo `eventId` la arbitra la misma constraint que la reentrega (FL-EVT-001-B), y con un consumidor por cola el arnés las serializa. **Deuda de keel-core, fuera de este plan:** el detector debería saltarse una operación interna guardada por clave natural, como ya hace `OBL-IDEM-RACE-CODE`.
+- **`review.yaml`**: `REV-MSG-DEDUPE-WINDOW` deja de aplicar (`appliesTo` es «handler sin `transitions` ni `idempotency`»), y su veredicto era justo la prosa que decía que la guarda era la clave natural. Se retira, con una línea de cabecera que lo explica. No hizo falta reescribirlo.
+- **Versión `v2.1.2`** en `service.keel.yaml` y en la cabecera de `validation-scenarios.md` (fuera de los flujos: el careo sigue al día). `DESIGN.md` de `fixtures/design-docs/` gana la versión y un párrafo de la guarda en los dos.
+- `--ready` sale 12/13 fuera de un workspace (falta solo `DESIGN.md`, como siempre) y `mvp-ready` 17/17.
+- **`keel-go/test/stored-in-notes.test.js`** pasa a leer el par tal cual (y afirma que declara la guarda). El caso contrario le quita `storedIn` en memoria.
+- **La falsación del gate** ya la ejecuta `keel-spring/test/payload-field-idempotency.test.js` sobre el proyecto emitido del par: con `storedIn`, el listener que reclama antes sale con sus dos hallazgos; sin él, al revés. El javadoc de los cuatro generadores lo compara `stored-in-notes.test.js` sobre el plan de build. No se regeneró aparte.
+- **Redes en vivo:**
+  - `compile-check`, en verde: el par en sus dos ramas (`notification-mailer` con snssqs, con PostgreSQL y MySQL; `-mongo` con kafka) y `metering-digest` con kafka, que también cambió.
+  - `store-check`, en verde: `notification-mailer` 24/24 en PostgreSQL y en MySQL, y `notification-mailer-mongo` 18/18.
+  - `npm test`, los cinco paquetes, en verde.
 
 ## Incremento 5: corrida de control
 

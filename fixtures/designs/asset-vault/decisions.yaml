@@ -2,6 +2,14 @@
 # storage, autoría, idempotencia de petición y de consumo, compensación con llamada de vuelta,
 # reconciliación y clúster sobre Mongo) y está CERRADA: `keel validate --ready` sale en verde.
 decisions:
+  - id: CHK-MSG-RETRY-AFTER-CLAIM
+    scope: messaging.subscriptions.ThumbnailDelivered
+    reason: >-
+      noteThumbnailDelivery es una corrección de contador sin guarda en el dominio, así que el listener reclama el
+      mensaje antes de despacharlo y un fallo pasajero dentro del handler pierde esa entrega aunque
+      queden reintentos. Se prefiere a sumarla dos veces: el contador no tiene con qué reconocer una
+      entrega ya aplicada, y esta fixture existe para ejercitar la rama tryRecord.
+    since: 1.1.2
   - id: OBL-IDEM-RACE-CODE
     scope: use-cases
     reason: >-

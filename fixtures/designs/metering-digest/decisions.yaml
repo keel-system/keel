@@ -1,6 +1,15 @@
 # Obligaciones de diseño que esta fixture deja abiertas a sabiendas.
 # Ver docs/design-obligations.md — el «aceptado» del análisis de huecos, por escrito.
 decisions:
+  - id: CHK-MSG-RETRY-AFTER-CLAIM
+    scope: messaging.subscriptions.MeterDecommissioned
+    reason: >-
+      La guarda real de decommissionMeter es la clave primaria (serialNumber es el id del contador),
+      que el modelo no reconoce como guarda de idempotencia: solo mira la naturalKey. Mientras no la
+      reconozca, el listener reclama antes y un fallo pasajero dentro del handler pierde esa baja. Se
+      acepta a sabiendas: es una fixture parcial, y reconocer la PK como guarda es otro cambio del
+      modelo, fuera del plan del DSL 2.24.
+    since: 1.0.0
   - id: OBL-CONCURRENCY-CODE
     scope: persistence
     reason: >

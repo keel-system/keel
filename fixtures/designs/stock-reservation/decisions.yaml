@@ -6,6 +6,14 @@
 # (info/INFORME-CORRIDA-OUTBOX.md): el comportamiento era correcto y lo que faltaba era escribir el
 # contrato. Aquí se escribe — aceptando el canónico, que es lo que el servidor ya devolvía.
 decisions:
+  - id: CHK-MSG-RETRY-AFTER-CLAIM
+    scope: messaging.subscriptions.StockCountAdjusted
+    reason: >-
+      noteStockCount es una corrección de contador sin guarda en el dominio, así que el listener reclama el
+      mensaje antes de despacharlo y un fallo pasajero dentro del handler pierde esa entrega aunque
+      queden reintentos. Se prefiere a sumarla dos veces: el contador no tiene con qué reconocer una
+      entrega ya aplicada, y esta fixture existe para ejercitar la rama tryRecord.
+    since: 1.1.0
   - id: OBL-IDEM-RACE-CODE
     scope: use-cases
     reason: >

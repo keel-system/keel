@@ -31,6 +31,7 @@ import {
 import { assertProjection } from './projection.js';
 import { attachQueryFinders } from './query-filters.js';
 import { guardedByNaturalKey } from './natural-key-guard.js';
+import { domainGuardKind } from './domain-guard.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
 
@@ -2864,6 +2865,7 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
       warnings.push(`Suscripción '${name}': triggers '${trigger}' no corresponde a ninguna operación de use-cases.`);
     }
     const triggerOp = trigger ? opByName.get(trigger) ?? null : null;
+    const triggerGuard = domainGuardKind(trigger, triggerOp, triggerOp?.idempotency?.naturalKey, layers);
     const contract = def.contract ?? {};
     const external = def.channel ? layers.messaging?.channels?.[def.channel]?.external === true : false;
     const fields = payloadFields(name, { fields: def.payload }, {
@@ -2899,20 +2901,13 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
       // (CHK-PAYMENTS-REFERENCE-UNGUARDED lo exige), así que repetirlo responde CHARGE_ALREADY_REQUESTED
       // y no cobra dos veces. Sin ella la corrida de MercadoPago marcaba el mensaje ANTES de cobrar, y
       // un fallo transitorio de la base perdía el cobro (designGap de la suscripción).
-      triggerHasDomainGuard:
-        (triggerOp?.transitions ?? []).length > 0 ||
-        triggerOp?.idempotency?.guard === 'natural-key' ||
-        (Boolean(trigger) && layers.payments?.charge?.operation === trigger),
-      // Cuál de las dos formas, que no es lo mismo a la hora de explicarla: el javadoc del
+      // La decisión es de `domainGuardKind` (domain-guard.js), la misma que lee el aviso de los
+      // reintentos muertos (CHK-MSG-RETRY-AFTER-CLAIM): la clave natural es la que `resolveIdempotency`
+      // dejó en la política, que solo la lleva cuando la guarda es la clave natural.
+      triggerHasDomainGuard: triggerGuard !== null,
+      // Cuál de las formas, que no es lo mismo a la hora de explicarla: el javadoc del
       // <Evento>Message tiene que nombrar la que de verdad frena la repetición.
-      triggerGuardKind:
-        (triggerOp?.transitions ?? []).length > 0
-          ? 'transitions'
-          : triggerOp?.idempotency?.guard === 'natural-key'
-            ? 'natural-key'
-            : Boolean(trigger) && layers.payments?.charge?.operation === trigger
-              ? 'payment-reference'
-              : null,
+      triggerGuardKind: triggerGuard,
       // La política resuelta cuando la guarda es la clave natural: el javadoc tiene que nombrar el
       // campo GUARDADO si no es el de la clave (`storedIn`, DSL 2.24), o el agente busca por uno que
       // la entidad no tiene. `storedInNote` (natural-key-guard.js) es la frase.

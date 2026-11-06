@@ -26,6 +26,7 @@ subscriptions:
     input:
       ticketId: ticketId
       level: level
+    # Sin reintentos: noteEscalation no tiene guarda en el dominio, así que el listener reclama el
+    # mensaje antes de despacharlo y reintentar no ejecutaría nada (CHK-MSG-RETRY-AFTER-CLAIM).
     onFailure:
-      retry: { maxAttempts: 3, backoff: exponential, initialDelayMs: 500, maxDelayMs: 5000 }
       deadLetter: true

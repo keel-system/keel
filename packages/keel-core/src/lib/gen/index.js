@@ -37,6 +37,7 @@ export {
   missingTargetRetryDestinations
 } from './dead-letter.js';
 export { idempotencyStoredField, guardedByNaturalKey, storedInNote } from './natural-key-guard.js';
+export { domainGuardKind } from './domain-guard.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher, dispatchNote } from './dispatch.js';
 export { RANGE_OPERATORS, FINDER_PROBE_TEXT, queryFinder, findersOf, criterionText, finderNote, finderTextProbes } from './query-filters.js';

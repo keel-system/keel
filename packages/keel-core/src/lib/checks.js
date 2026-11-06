@@ -584,6 +584,13 @@ export const CHECKS = {
     title: 'una suscripción no declara onFailure',
     closes: 'declarar reintentos y destino de descarte en vez de heredar el default del broker'
   },
+  'CHK-MSG-RETRY-AFTER-CLAIM': {
+    layer: 'messaging',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'una suscripción reintenta sobre una operación sin guarda en el dominio: el listener reclama antes y el reintento no ejecuta nada',
+    closes: 'declarar la guarda (transición o idempotency payload-field con storedIn), aceptar la pérdida en decisions.yaml o quitar el retry'
+  },
   'CHK-MSG-NO-SCHEMAREF': {
     layer: 'messaging',
     severity: 'warning',

@@ -6,6 +6,7 @@ import { implicitDefaults } from './structural-defaults.js';
 import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, parseCoverageMatrix, conventionsText } from './scenario-blocks.js';
 import { versionedRouteBase } from './gen/model.js';
 import { guardedByNaturalKey } from './gen/natural-key-guard.js';
+import { domainGuardKind } from './gen/domain-guard.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -2362,6 +2363,23 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           `la fuente no trae envoltura Keel, así que no hay metadata.eventId del que deduplicar: declara contract.messageId ` +
           `(el id que sí publique la fuente) o la transición de lifecycle que hace irrepetible la operación. La idempotency ` +
           `de la operación no vale aquí: su clave llega por cabecera HTTP y el broker no la manda`
+      );
+    }
+
+    // Y el caso contrario: el listener SÍ deduplica, pero la operación no tiene guarda en el dominio.
+    // Entonces la única forma de no repetir el efecto es reclamar el mensaje ANTES de despacharlo
+    // (`tryRecord`), en su propia transacción, y el reintento de un fallo pasajero posterior al
+    // reclamo lo ve como procesado y no hace nada: los reintentos declarados no sirven para lo que
+    // falla dentro del handler. La pregunta es la misma que decide el orden en el generador
+    // (`domainGuardKind`), así que el aviso no puede discrepar del código que se emite. Es una
+    // decisión y no un error: un contador prefiere perder una entrega a contarla dos veces.
+    if (maxAttempts > 1 && listenerDedupeKeyOf(sub) && domainGuardKind(sub.triggers, operations[sub.triggers], naturalKeyOfTarget(operations[sub.triggers], persistence), layers) === null) {
+      warnIn(scopeOf(where), 'CHK-MSG-RETRY-AFTER-CLAIM',
+        `${where}: reintenta (maxAttempts: ${maxAttempts}), pero '${sub.triggers}' no tiene guarda en el dominio, así que el listener reclama el mensaje ` +
+          `ANTES de despacharlo y el reintento de un fallo posterior al reclamo lo confirma como duplicado sin ejecutar nada. Declara la guarda ` +
+          `(una transición del lifecycle, o idempotency con keySource: payload-field sobre la clave natural de la entidad, con storedIn si la clave ` +
+          `se guarda en un campo de otro nombre), acéptalo en decisions.yaml si perder esa entrega es preferible a aplicarla dos veces, o quita el retry, ` +
+          `que manda el fallo al descarte en vez de confirmarlo en silencio`
       );
     }
 
