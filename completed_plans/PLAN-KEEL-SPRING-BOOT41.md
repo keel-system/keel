@@ -28,13 +28,9 @@ Pasan el filtro dos piezas de Boot 4.1 sobre Java 21 (fase A) y el salto a Java 
 | 4 | Caché AOT en `deploy/Dockerfile` | B | hecho (2026-11-05) |
 | 5 | Cabeceras de objeto compactas | B | hecho (2026-11-05) |
 | 6 | Hilos virtuales sin *pinning*: reescribir el porqué | B | hecho (2026-11-05) |
-| 7 | Corrida de control del par del MVP | — | pendiente |
+| 7 | Corrida de control del par del MVP | — | hecho (2026-11-05) |
 
-**Para retomar:** empezar por el incremento 7 (corrida de control del par del MVP), en un contexto nuevo.
-- Es una corrida con el flujo normalizado sobre `notification-mailer` y `notification-mailer-mongo`: `keel-spring build` → `cd services/<x>-spring` → `/keel-generate-spring`. La lanza el usuario; no tocar el proyecto mientras corre.
-- Al terminar: registro en `docs/corridas/<fecha>-<servicio>.md` con la tabla de etiquetas fijas, la huella (`corrida-metrics.js footprint`) y los `designGaps` copiados antes de tirar el proyecto. Referencia: escenarios 23/23 y huella 17 de la corrida de control anterior.
-- Cierre del plan: mover este archivo a `completed_plans/`.
-- Los temporales del inc. 6 ya están borrados.
+**Plan cerrado** (2026-11-05). Fuera de él queda un hueco del generador que destapó la corrida de control (inc. 7): el orden de la guarda del listener, en `docs/corridas/2026-11-05-notification-mailer-mongo-spring-control.md`.
 
 Entorno:
 - JDK 25 en `C:\java\jdk-25` (`JAVA_HOME`); el 21 sigue en `C:\java\jdk-21`.
@@ -374,6 +370,14 @@ No cambia código. Con Java 25 desaparece la causa medida del retraso de cuatro 
 - Se registra en `docs/corridas/<fecha>-<servicio>.md` con la tabla de etiquetas fijas y la huella (`corrida-metrics.js footprint`).
 - **Qué mide:** que los escenarios siguen al 100 % y que la huella del agente no crece, es decir, que el agente no tropieza con Java 25, Gradle 9 ni el proxy perezoso.
 - **Cierre del plan:** mover este archivo a `completed_plans/`.
+
+### Resultado (2026-11-05)
+
+**23/23 en las dos, a la primera, con huella 17 en las dos**: los mismos 17 archivos reescritos que en el control del 2026-10-18, archivo por archivo. Build registra uno más en cada proyecto (321 y 306), y es `application-aot-training.yaml`, que el agente no tocó. Ni el informe ni la huella muestran un tropiezo con Java 25, Gradle 9.8.2 o el proxy perezoso. Registro: `docs/corridas/2026-11-05-notification-mailer-spring-control.md` y `docs/corridas/2026-11-05-notification-mailer-mongo-spring-control.md`.
+
+- Reverificado desde fuera: 28 casos sin fallos en cada JUnit, `specs.sha256` intacto y `keel-spring build --check` al día.
+- Sin `design-gaps.yaml` en ninguna.
+- **Un hueco del generador, ajeno a este plan:** el listener de `NotificationRequested` reclama con `tryRecord` ANTES de despachar, así que un fallo transitorio pierde el mensaje y el `onFailure.retry` declarado no sirve. La operación sí tiene guarda de dominio (`naturalKey [applicationKey, dedupeKey]`, con `dedupeKey` derivado del `eventId` por una regla), pero `triggerHasDomainGuard` no la ve. Viene de antes: los cuatro listeners de keel-spring del par desde el 2026-10-18, y la misma frase en los otros tres generadores.
 
 ## Verificación común
 
