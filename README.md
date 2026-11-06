@@ -11,7 +11,8 @@ legacy y demuestra que el servidor regenerado hace lo mismo que el viejo.
 La prueba de que la promesa se cumple está en este repo. El mismo diseño (`notification-mailer`, en
 su variante relacional y en la documental) se generó con los cuatro generadores —ocho proyectos— y los
 ocho cerraron **23 de 23 escenarios** con el agente tocando **17 o 18 archivos de ~300** que escribió el
-generador ([corridas de control](docs/corridas/): 2026-10-18 y, las de Go, 2026-11-03).
+generador ([corridas de control](docs/corridas/): 2026-10-18; las de Go, 2026-11-03, y las de Spring sobre
+Java 25, 2026-11-06).
 
 **Índice**: [Cómo funciona](#cómo-funciona-en-un-minuto) ·
 [Instalación](#requisitos-e-instalación) · [Guía: tu primer servicio](#guía-de-uso-tu-primer-servicio) ·
@@ -68,7 +69,7 @@ de los dos).
 | Para… | Hace falta |
 |---|---|
 | Diseñar (`keel init`, `/keel-design`, `keel validate`, `keel system`, `keel registry`) y **generar** (`keel-<tech> build`) | **Node.js >= 18** y nada más. Todo es offline y determinista; el registry es lo único que toca la red. |
-| **Completar y validar** el proyecto generado (`/keel-generate-<tech>`) | El toolchain de la tecnología —**JDK 21** para keel-spring, **Node.js >= 22.12** para keel-nest, **SDK de .NET 10** para keel-dotnet, **Go 1.27** para keel-go— y un **runtime de contenedores: Docker o Podman**. |
+| **Completar y validar** el proyecto generado (`/keel-generate-<tech>`) | El toolchain de la tecnología —**JDK 25** para keel-spring, **Node.js >= 22.12** para keel-nest, **SDK de .NET 10** para keel-dotnet, **Go 1.27** para keel-go— y un **runtime de contenedores: Docker o Podman**. |
 | **Recuperar** un legacy (`keel-recover`) | Node.js >= 18, Docker o Podman en marcha y el repo git del legacy. En Windows, Git Bash con `export MSYS_NO_PATHCONV=1`. |
 
 El runtime de contenedores **es el precio de que «terminado» signifique algo**: la validación no
@@ -338,7 +339,7 @@ Lo que no depende del lenguaje vive una sola vez en el núcleo neutral `keel-cor
 
 | | keel-spring | keel-nest | keel-dotnet | keel-go |
 |---|---|---|---|---|
-| Plataforma | Spring Boot 4.1 · Java 21 · Gradle | NestJS 12 · Fastify · Node 22 · TypeScript strict | .NET 10 · un proyecto por capa · xUnit v3 | Go 1.27 · net/http · sin cgo |
+| Plataforma | Spring Boot 4.1 · Java 25 · Gradle 9 | NestJS 12 · Fastify · Node 22 · TypeScript strict | .NET 10 · un proyecto por capa · xUnit v3 | Go 1.27 · net/http · sin cgo |
 | Relacional | PostgreSQL, MySQL, MariaDB, SQL Server, Oracle | PostgreSQL, MySQL | PostgreSQL, MySQL (EF Core) | PostgreSQL, MySQL (database/sql, goose) |
 | Documental | MongoDB | MongoDB | MongoDB | MongoDB |
 | Brokers | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS | RabbitMQ · Kafka · SNS/SQS |
@@ -367,18 +368,19 @@ scaffolding en cada generador— y al agente le queda solo lo que el diseño no 
 `keel-generated.json` registra cada archivo que escribió `build`; comparándolo con el árbol final se
 mide la **huella del agente**:
 
-| Corrida de control (2026-10-18) | Archivos de `build` | Reescritos por el agente | Escenarios |
+| Corrida de control | Archivos de `build` | Reescritos por el agente | Escenarios |
 |---|---|---|---|
-| notification-mailer · spring | 320 | 17 | 23/23 |
+| notification-mailer · spring (2026-11-06, diseño v2.1.2) | 321 | 17 | 23/23 |
+| notification-mailer-mongo · spring (2026-11-06, diseño v2.1.2) | 306 | 17 | 23/23 |
 | notification-mailer · nest | 304 | 17 | 23/23 |
 | notification-mailer · dotnet | 329 | 17 | 23/23 |
-| notification-mailer-mongo · spring | 305 | 17 | 23/23 |
 | notification-mailer-mongo · nest | 294 | 17 | 23/23 |
 | notification-mailer-mongo · dotnet | 318 | 18 | 23/23 |
 | notification-mailer · go (2026-11-03, diseño v2.1.1) | 286 | 17 | 23/23 |
 | notification-mailer-mongo · go (2026-11-03, diseño v2.1.1) | 288 | 17 | 23/23 |
 
-Las de Spring, NestJS y .NET son del diseño v2.0.2. La huella es casi la misma en los cuatro lenguajes
+Las de NestJS y .NET son del 2026-10-18, sobre el diseño v2.0.2; las de Spring se repitieron tras pasar a
+Java 25 y DSL 2.24, con la misma huella que en octubre. La huella es casi la misma en los cuatro lenguajes
 porque es la huella **del diseño**, no del stack. Los árbitros tampoco son agentes: con la suite al 100 % el pipeline pasa a la fase de calidad sin invocar
 a ninguno.
 
@@ -572,12 +574,12 @@ Monorepo npm workspaces con seis paquetes, publicados en npm con el scope `@keel
 
 | Paquete | CLI | Versión | Qué hace |
 |---|---|---|---|
-| [`@keel-system/keel-core`](packages/keel-core/README.md) | `keel` | 0.5.1 | Siembra workspaces, crea, valida y describe diseños, el mapa del sistema y el registry. Define el DSL (schemas, docs, plantillas) y expone `keel-core/gen`, el núcleo neutral que comparten los generadores. |
-| [`@keel-system/keel-spring`](packages/keel-spring/README.md) | `keel-spring` | 0.2.1 | Generador Spring Boot 4.1.2 / Java 21: `services/<servicio>-spring/`, con el wrapper de Gradle vendorizado. |
-| [`@keel-system/keel-nest`](packages/keel-nest/README.md) | `keel-nest` | 0.1.1 | Generador NestJS 12 sobre Fastify, ESM, TypeScript strict y Vitest: `services/<servicio>-nest/`. |
-| [`@keel-system/keel-dotnet`](packages/keel-dotnet/README.md) | `keel-dotnet` | 0.1.1 | Generador .NET 10, un proyecto por capa, sin librerías de licencia comercial: `services/<servicio>-dotnet/`. |
-| [`@keel-system/keel-go`](packages/keel-go/README.md) | `keel-go` | 0.1.0 | Generador Go 1.27 sobre net/http, sin cgo y solo con licencias permisivas, salvo una excepción escrita: `services/<servicio>-go/`. |
-| [`@keel-system/keel-recover`](packages/keel-recover/README.md) | `keel-recover` | 0.0.1 | Ingeniería inversa de un servicio existente hacia un diseño Keel, con la fidelidad y la paridad medidas. |
+| [`@keel-system/keel-core`](packages/keel-core/README.md) | `keel` | 0.6.0 | Siembra workspaces, crea, valida y describe diseños, el mapa del sistema y el registry. Define el DSL (schemas, docs, plantillas) y expone `keel-core/gen`, el núcleo neutral que comparten los generadores. |
+| [`@keel-system/keel-spring`](packages/keel-spring/README.md) | `keel-spring` | 0.3.0 | Generador Spring Boot 4.1.2 / Java 25 / Gradle 9.8.2: `services/<servicio>-spring/`, con el wrapper de Gradle vendorizado. |
+| [`@keel-system/keel-nest`](packages/keel-nest/README.md) | `keel-nest` | 0.2.0 | Generador NestJS 12 sobre Fastify, ESM, TypeScript strict y Vitest: `services/<servicio>-nest/`. |
+| [`@keel-system/keel-dotnet`](packages/keel-dotnet/README.md) | `keel-dotnet` | 0.2.0 | Generador .NET 10, un proyecto por capa, sin librerías de licencia comercial: `services/<servicio>-dotnet/`. |
+| [`@keel-system/keel-go`](packages/keel-go/README.md) | `keel-go` | 0.2.0 | Generador Go 1.27 sobre net/http, sin cgo y solo con licencias permisivas, salvo una excepción escrita: `services/<servicio>-go/`. |
+| [`@keel-system/keel-recover`](packages/keel-recover/README.md) | `keel-recover` | 0.0.2 | Ingeniería inversa de un servicio existente hacia un diseño Keel, con la fidelidad y la paridad medidas. |
 
 El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera— está en su README.
 
@@ -586,20 +588,33 @@ El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera
 - **DSL Keel 2.24**: once capas (dos obligatorias, nueve opcionales) con validación en tres niveles
   —JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente— y el
   veredicto `--ready`.
-- **Cuatro generadores** cerrados con la corrida de control del par del MVP: Spring Boot 4.1.2,
-  NestJS 12 y .NET 10 con 6 × 23/23 sobre el diseño v2.0.2 (huella 17, y 18 en una) y Go 1.27 con
-  2 × 23/23 sobre la v2.1.1 (huella 17). keel-nest, keel-dotnet y keel-go se construyeron por
-  incrementos medidos ([PLAN-KEEL-NEST](completed_plans/PLAN-KEEL-NEST.md),
-  [PLAN-KEEL-DOTNET](completed_plans/PLAN-KEEL-DOTNET.md), [PLAN-KEEL-GO](PLAN-KEEL-GO.md)). La última
+- **Cuatro generadores** cerrados con la corrida de control del par del MVP: NestJS 12 y .NET 10
+  con 4 × 23/23 sobre el diseño v2.0.2 (huella 17, y 18 en una), Go 1.27 con 2 × 23/23 sobre la
+  v2.1.1 y Spring Boot 4.1.2 sobre Java 25 con 2 × 23/23 sobre la v2.1.2 (huella 17 en los dos).
+  keel-nest, keel-dotnet y keel-go se construyeron por incrementos medidos
+  ([PLAN-KEEL-NEST](completed_plans/PLAN-KEEL-NEST.md),
+  [PLAN-KEEL-DOTNET](completed_plans/PLAN-KEEL-DOTNET.md), [PLAN-KEEL-GO](completed_plans/PLAN-KEEL-GO.md)). La última
   corrida, `catalog` del registry en keel-go, cerró 32/32 con una huella de 35 archivos de 376
   ([corrida](docs/corridas/2026-11-04-catalog-go.md)).
+- **keel-spring 0.3.0 aprovecha Boot 4.1 y Java 25 LTS** ([PLAN-KEEL-SPRING-BOOT41](completed_plans/PLAN-KEEL-SPRING-BOOT41.md)):
+  el proyecto sale con Java 25 y Gradle 9.8.2; conexión JDBC perezosa (`connection-fetch: lazy`: la
+  transacción que no toca la base no ocupa una conexión del pool); filtro de direcciones salientes
+  anti-SSRF (el endpoint de metadatos de la nube y lo link-local) en los clientes HTTP y la pasarela de pago; caché AOT entrenada dentro del
+  `deploy/Dockerfile`, que baja el arranque de ~7,1 s a ~3,1 s ([medida](docs/corridas/2026-11-05-aot-cache.md)),
+  y cabeceras de objeto compactas en la imagen. Lo que se descartó de Boot 4.1 y Framework 7, y por
+  qué, está escrito en el plan.
+- **DSL 2.24, la guarda derivada** ([PLAN-DSL-224-GUARDA-DERIVADA](completed_plans/PLAN-DSL-224-GUARDA-DERIVADA.md)):
+  `idempotency.storedIn` declara en qué campo de la clave natural acaba la clave de idempotencia
+  cuando el input la trae con otro nombre. El modelo ve entonces la guarda y el listener sale en el
+  orden correcto en los cuatro generadores (comprobar, despachar y registrar después), y un aviso nuevo
+  marca la suscripción cuyos reintentos quedarían muertos tras reclamar el mensaje antes de procesarlo.
 - **keel-recover**: el recorrido completo (sandbox, observación, diseño con procedencia, fidelidad,
   paridad) orquestado por `/keel-recover-run`, con MongoDB, PostgreSQL y MySQL
   ([PLAN-KEEL-RECOVER](PLAN-KEEL-RECOVER.md), banco en [docs/recover-bench](docs/recover-bench/)).
-- **Verificación del propio Keel**: 383 archivos de test (`npm test`), 17 diseños de fixture —entre
+- **Verificación del propio Keel**: 388 archivos de test (`npm test`), 17 diseños de fixture —entre
   ellos pares que solo se diferencian en el modelo de persistencia— y redes en vivo por generador
   contra motores, brokers, proveedores de identidad y buzones en contenedores (ver
-  `CLAUDE.md § Comandos`). 80 corridas registradas en [docs/corridas](docs/corridas/).
+  `CLAUDE.md § Comandos`). 85 corridas registradas en [docs/corridas](docs/corridas/).
 - **Pendiente**: MariaDB, SQL Server y Oracle medidos en vivo en keel-nest,
   keel-dotnet y keel-go; las pasarelas de pago contra su sandbox real; brokers distintos de RabbitMQ y
   keel-go como destino en keel-recover, y las corridas de control de keel-recover sobre legacys

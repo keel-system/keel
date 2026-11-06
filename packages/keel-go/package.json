@@ -1,6 +1,6 @@
 {
   "name": "@keel-system/keel-go",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Generador Go para diseños Keel: valida el diseño agnóstico y genera services/<servicio>-go/ con el scaffolding transversal al stack. Equivalente a keel-spring, keel-nest y keel-dotnet: el mismo diseño produce servidores con el mismo contrato observable.",
   "type": "module",
   "bin": {
@@ -55,7 +55,7 @@
     "url": "https://github.com/keel-system/keel/issues"
   },
   "dependencies": {
-    "@keel-system/keel-core": "^0.5.1",
+    "@keel-system/keel-core": "^0.6.0",
     "commander": "^14.0.0",
     "picocolors": "^1.1.1"
   },

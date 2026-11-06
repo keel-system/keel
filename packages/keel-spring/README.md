@@ -51,11 +51,23 @@ cd services/<servicio>-spring
 
 `--refresh` pone al día lo que build generó y nadie tocó. Lo que el agente tocó y el generador cambió (un conflicto) no se pisa: su versión nueva queda en `build/keel-refresh/` y la ruta entra en `pendingMerge` de `keel-generated.json`. `--prune` borra lo que build ya no emite, solo si nadie lo tocó. Si el diseño empieza a pedir una categoría nueva del stack (p. ej. un broker), build la pregunta, y solo esa. El resultado es `build/keel-refresh/EVOLUTION.md`, con el delta del diseño, los escenarios afectados, las fusiones y los huérfanos que el agente tiene que retirar; con él la skill trabaja sobre lo que cambió y puntúa la suite completa como no-regresión. `--check` sale en rojo mientras quede una evolución o una fusión pendiente.
 
+## Plataforma del proyecto generado
+
+Spring Boot **4.1.2** (Framework 7, Security 7, Hibernate 7.4, Jackson 3, Flyway 12, Micrometer 1.17, JUnit 6) sobre **Java 25 LTS** y **Gradle 9.8.2**, con el wrapper vendorizado y su distribución verificada por sha256. Desde la 0.3.0 el proyecto aprovecha lo que Boot 4.1 y Java 25 aportan en rendimiento o seguridad, cada pieza medida contra un motor real y falsada:
+
+- **Conexión JDBC perezosa** (`spring.datasource.connection-fetch: lazy`, variable `DB_CONNECTION_FETCH`, solo con base relacional): la conexión sale del pool en la primera sentencia SQL, no al abrir la transacción, así que un rechazo del dominio no ocupa el pool.
+- **Filtro de direcciones salientes** (anti-SSRF): los clientes de `http-clients` y la pasarela de pago no salen nunca al endpoint de metadatos de la nube ni a direcciones link-local o any-local; la lista se amplía con `OUTBOUND_DENIED_ADDRESSES`. Es defensa en profundidad: no protege de un DNS rebinding.
+- **Caché AOT** entrenada dentro de `deploy/Dockerfile` (perfil `aot-training`, sin infraestructura): el arranque de Spring baja de ~7,1 s a ~3,1 s.
+- **Cabeceras de objeto compactas** (`-XX:+UseCompactObjectHeaders`) en la imagen, con las mismas banderas en el entrenamiento y en el arranque.
+
+Para completar y validar el proyecto hace falta un **JDK 25** y Docker o Podman. Un proyecto generado por una versión anterior (Java 21) no se rechaza: `build --refresh` pone al día el toolchain y el wrapper, avisa del salto, y el código del agente no cambia. Un proyecto anterior a la 0.2.0 (Spring Boot 3) sí se rechaza al refrescar.
+
 ## Compatibilidad
 
-| Paquete | DSL Keel |
-|---------|----------|
-| keel-spring 0.2.x | `keel: "2.24"` |
+| Paquete | DSL Keel | Proyecto generado |
+|---------|----------|-------------------|
+| keel-spring 0.3.x | `keel: "2.24"` | Spring Boot 4.1.2 · Java 25 · Gradle 9.8.2 |
+| keel-spring 0.2.x | `keel: "2.23"` | Spring Boot 4.1.2 · Java 21 |
 
 Una sola versión, en espejo de lo que acepta `keel validate`: los schemas del DSL no gatean primitivos por versión, así que aceptar las anteriores haría que el campo `keel` de un manifiesto declarase una intención que nada comprueba. El razonamiento completo, en `docs/dsl-reference.md § Historial de versiones`.
 
