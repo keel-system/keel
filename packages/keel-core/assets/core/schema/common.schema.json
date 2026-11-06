@@ -396,6 +396,11 @@
           "pattern": "^[a-z][A-Za-z0-9]*$",
           "description": "Con keySource: payload-field, el campo del input que lleva la clave. Se nombra en vez de adivinarse: cuál identifica la petición es del diseño, no una convención del generador."
         },
+        "storedIn": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Con keySource: payload-field, el campo de la entidad que la operación escribe en el que acaba guardada la clave, cuando no se llama como keyField (una rule lo deriva de él: el eventId que se guarda como dedupeKey). Tiene que participar en su naturalKey: entonces la guarda es la constraint, permanente y común a todas las puertas, y no un almacén de claves. Sin él se compara keyField por nombre. DSL 2.24."
+        },
         "ttlSeconds": {
           "type": "integer",
           "minimum": 1,
@@ -420,8 +425,8 @@
             "required": ["keySource"]
           },
           "then": {
-            "not": { "required": ["keyField"] },
-            "$comment": "keyField solo significa algo cuando la clave ES un campo del input: con la cabecera o con el hash del payload no hay campo que nombrar, y dejarlo pasar declararía una intención que nada implementa."
+            "not": { "anyOf": [{ "required": ["keyField"] }, { "required": ["storedIn"] }] },
+            "$comment": "keyField y storedIn solo significan algo cuando la clave ES un campo del input: con la cabecera o con el hash del payload no hay campo que nombrar, y dejarlo pasar declararía una intención que nada implementa."
           }
         }
       ]

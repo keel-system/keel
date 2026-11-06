@@ -30,6 +30,7 @@ import {
 } from './reconciliation-stores.js';
 import { assertProjection } from './projection.js';
 import { attachQueryFinders } from './query-filters.js';
+import { guardedByNaturalKey } from './natural-key-guard.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
 
@@ -3453,7 +3454,7 @@ function resolvePathParams(opName, route, inputFields, warnings) {
  * La política de idempotencia de una operación, con su guarda ya resuelta.
  *
  * `guard` es `natural-key` cuando la clave es un campo del input que participa en la clave natural
- * de la entidad que la operación escribe: ahí la constraint de la base es la guarda, cubre todas
+ * de la entidad que la operación escribe —o acaba en uno que participa, si declara `storedIn`—: ahí la constraint de la base es la guarda, cubre todas
  * las puertas por igual y no caduca. En cualquier otro caso es `store`, y el generador emite el
  * registro de claves.
  */
@@ -3463,7 +3464,9 @@ function resolveIdempotency(op, targetEntity, layers) {
   if (idempotency.keySource !== 'payload-field') return { ...idempotency, guard: 'store' };
 
   const naturalKey = layers?.persistence?.entities?.[targetEntity]?.naturalKey ?? [];
-  const guard = naturalKey.includes(idempotency.keyField) ? 'natural-key' : 'store';
+  // El campo que se compara con la clave natural es `storedIn` si el diseño lo declara (DSL 2.24):
+  // la clave del input acaba, derivada por una rule, en un campo que se llama de otra forma.
+  const guard = guardedByNaturalKey(idempotency, naturalKey) ? 'natural-key' : 'store';
   // La entidad viaja con la política: quien la consume (el gate) necesita resolver el finder de
   // la clave natural, y la operación no lleva su entidad objetivo por ningún otro sitio.
   return {

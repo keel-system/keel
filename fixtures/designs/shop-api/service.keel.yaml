@@ -1,5 +1,5 @@
 # Manifiesto del servicio — punto de entrada del diseño (recuperado de legacy/shop-api).
-keel: "2.23"
+keel: "2.24"
 
 service:
   name: shop-api

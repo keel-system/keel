@@ -201,7 +201,21 @@ export const CHECKS = {
     severity: 'warning',
     nature: 'undecided',
     title: 'la clave de idempotencia en el cuerpo no participa en la clave natural de la entidad que se escribe',
-    closes: 'nombrar en keyField el campo de la naturalKey (o quitar idempotency y dejar la guarda a la constraint), o aceptar el almacén de claves'
+    closes: 'nombrar en keyField el campo de la naturalKey, o en storedIn el campo de la naturalKey en el que acaba la clave (o quitar idempotency y dejar la guarda a la constraint), o aceptar el almacén de claves'
+  },
+  'CHK-USECASES-IDEM-STOREDIN-UNKNOWN': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'storedIn nombra un campo que la entidad escrita por la operación no tiene',
+    closes: 'nombrar en storedIn un campo de la entidad que la operación escribe'
+  },
+  'CHK-USECASES-IDEM-STOREDIN-NOT-NATURAL': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'storedIn nombra un campo que no participa en la clave natural, así que no lleva a ninguna guarda',
+    closes: 'nombrar en storedIn un campo de la naturalKey, o quitar storedIn y quedarse con el almacén de claves'
   },
   'CHK-USECASES-IDEM-SCOPE-UNDECIDED': {
     layer: 'use-cases',

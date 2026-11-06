@@ -583,7 +583,7 @@ El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera
 
 ## Estado y roadmap
 
-- **DSL Keel 2.23**: once capas (dos obligatorias, nueve opcionales) con validación en tres niveles
+- **DSL Keel 2.24**: once capas (dos obligatorias, nueve opcionales) con validación en tres niveles
   —JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente— y el
   veredicto `--ready`.
 - **Cuatro generadores** cerrados con la corrida de control del par del MVP: Spring Boot 4.1.2,

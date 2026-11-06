@@ -31,13 +31,13 @@ Se descartó que el generador libere la marca si el handler falla: tapa el fallo
 | Inc. | Qué | Estado |
 |---|---|---|
 | 0 | Medir el alcance y fijar el nombre | hecho (2026-11-06) |
-| 1 | DSL 2.24: el enlace `storedIn` (schema, validación, modelo) | pendiente |
+| 1 | DSL 2.24: el enlace `storedIn` (schema, validación, modelo) | hecho (2026-11-06) |
 | 2 | Las notas de los cuatro generadores | pendiente |
 | 3 | El aviso: reintentos muertos tras el reclamo | pendiente |
 | 4 | El par del MVP declara su guarda | pendiente |
 | 5 | Corrida de control | pendiente |
 
-**Para retomar:** empezar por el incremento 1, en un contexto nuevo. Lo medido en el inc. 0 (§ Lo medido) amplía el inc. 1 con dos piezas neutrales más: el predicado del «no existe» y las obligaciones de idempotencia con guarda por clave natural.
+**Para retomar:** empezar por el incremento 2, en un contexto nuevo. El modelo ya da `guard: 'natural-key'` con `storedIn` (lo afirma `gen-missing-target-retry.test.js` sobre el par en memoria), así que el inc. 2 solo tiene que hacer que las notas lo **digan**. La política resuelta lleva `storedIn` por el spread de `resolveIdempotency` solo cuando el diseño lo declara (no hay `storedIn: null`); el campo de búsqueda es `idempotencyStoredField()` de `gen/natural-key-guard.js`.
 
 ## Lo que se descarta, y por qué
 
@@ -112,6 +112,16 @@ Tres de las fixtures están en `READY_FIXTURES`, así que el aviso nace rojo en 
 - **Puerta:**
   - `npm test`, los cinco paquetes;
   - `npm run design-matrix --workspace packages/keel-core`, con los dos ids nuevos falsados.
+
+### Lo hecho (2026-11-06)
+
+- **Schema.** `storedIn` en `$defs/idempotency` de `common.schema.json`; el `allOf` que ya prohibía `keyField` con `client-key`/`payload-hash` prohíbe también `storedIn` (con `payload-field` es opcional). `service.schema.json` en `2.24`.
+- **Una sola fuente**: `keel-core/src/lib/gen/natural-key-guard.js` (`idempotencyStoredField`, `guardedByNaturalKey`), exportada en `gen/index.js`. La usan `resolveIdempotency` (`model.js`) y `crossrefs.js`, que deja de contar en `OBL-IDEM-RACE-CODE`/`-REUSE-CODE` las operaciones guardadas por clave natural. La entidad escrita, en `crossrefs.js`, sale de `idempotencyTarget()` (output, input o única transición), la misma que ya usaba el aviso del `keyField`.
+- **Validación.** `CHK-USECASES-IDEM-STOREDIN-UNKNOWN` (también cuando no se resuelve la entidad) y `-NOT-NATURAL`, los dos `error`/`incoherence`, con su mutación; con `storedIn` declarado, `CHK-USECASES-IDEM-KEYFIELD-NOT-NATURAL` calla, y su mensaje nombra `storedIn` como salida. `design-matrix`: 180 falsados, 0 sin mutación.
+- **El «no existe».** `retriesMissingTarget(sub, model)` (`dead-letter.js`): sin `model` no mira los `code` (compatibilidad). Medido con el par en memoria, en los tres brokers, y falsado: quitando la condición, los dos casos del par y el sintético salen rojos.
+- **Docs**: `docs/dsl/use-cases.md` (párrafo de `storedIn`) y la fila 2.24 de `dsl-reference.md`. `validation-scenarios.md` no habla de la guarda por clave natural: no se tocó.
+- **Versión**: fixtures, plantilla, base del corpus, `SUPPORTED_DSL`, `keel.dsl` y README de los cuatro generadores, y el README raíz.
+- `capability-coverage` no pide fixture: el enumerador trata el `$ref` a `common.schema.json` como hoja. La fixture que lo declara llega en el inc. 4.
 
 ## Incremento 2: las notas de los cuatro generadores
 

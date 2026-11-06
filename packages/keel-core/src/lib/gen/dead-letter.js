@@ -25,6 +25,7 @@
 // escenario saldría verde sin haber mirado nada.
 
 import { kebabCase } from './naming.js';
+import { errorByCode, operationError } from './declared-errors.js';
 
 /**
  * Nombre físico del destino de descarte.
@@ -235,10 +236,25 @@ export function kafkaListenerRetry(model) {
 // ya dejó el evento marcado como procesado, y el reintento lo confirmaría sin efecto —el «no existe» que
 // hoy llega a la DLQ desaparecería en silencio—. Por eso exige `triggerHasDomainGuard`, el mismo dato que
 // decide el orden del registro. Y exige un `retry` declarado: sin él no hay reintento que alargar.
+//
+// Y una tercera condición, que trajo el DSL 2.24 al dar guarda al listener del par del MVP: la operación
+// disparada no puede declarar con OTRO `http` un `code` que en `model.errors` es de la clase 404. La clase
+// de la excepción la fija la primera declaración (TEMPLATE_NOT_FOUND es un 404 por id en una operación),
+// pero si ESTA operación lo declara 422 —la plantilla que no existe por clave, que no va a aparecer—, su
+// contrato es un rechazo a la primera, y reintentarlo cinco veces contradiría al diseño (FL-EVT-002).
 
-/** ¿Reintenta esta suscripción el «no existe» del caso de uso que dispara? */
-export function retriesMissingTarget(sub) {
-  return Boolean(sub.triggerHasDomainGuard) && (sub.retry?.maxAttempts ?? 1) > 1;
+/** ¿Reintenta esta suscripción el «no existe» del caso de uso que dispara? Sin `model` no mira los `code`. */
+export function retriesMissingTarget(sub, model = null) {
+  return Boolean(sub.triggerHasDomainGuard) && (sub.retry?.maxAttempts ?? 1) > 1 && !redeclaresMissingTarget(model, sub.trigger);
+}
+
+/** ¿Declara la operación con un `http` distinto de 404 algún `code` que en `model.errors` es de la clase 404? */
+function redeclaresMissingTarget(model, operationName) {
+  if (!model || !operationName) return false;
+  const operation = (model.services ?? []).flatMap((service) => service.operations ?? []).find((candidate) => candidate.name === operationName);
+  return (operation?.errors ?? []).some(
+    (code) => errorByCode(model, code)?.http === 404 && operationError(model, operationName, code)?.http !== 404
+  );
 }
 
 /**
@@ -252,7 +268,7 @@ export function missingTargetRetryDestinations(model, broker) {
   const verdict = new Map();
   for (const sub of model.subscriptions ?? []) {
     const destination = subscriptionDestination(broker, model, sub);
-    verdict.set(destination, (verdict.get(destination) ?? true) && retriesMissingTarget(sub));
+    verdict.set(destination, (verdict.get(destination) ?? true) && retriesMissingTarget(sub, model));
   }
   return [...verdict].filter(([, retries]) => retries).map(([destination]) => destination).sort();
 }

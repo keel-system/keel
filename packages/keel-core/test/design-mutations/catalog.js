@@ -1576,6 +1576,30 @@ export const MUTATIONS = [
     },
     expect: ['CHK-USECASES-IDEM-KEYFIELD-NOT-NATURAL']
   },
+  // DSL 2.24: `storedIn` nombra el campo de la naturalKey en el que acaba la clave cuando no se llama
+  // como keyField. Con un campo de la clave natural (`subject`) la misma mutación queda en silencio: lo
+  // fija su caso en crossrefs.test.js. El andamiaje del almacén es el de la mutación anterior, porque
+  // un storedIn que no lleva a la guarda deja la operación en el almacén.
+  {
+    id: 'M-USECASES-IDEM-STOREDIN-UNKNOWN',
+    title: 'storedIn nombra un campo que la entidad escrita no tiene',
+    mutate: (d) => {
+      withClientKey(d, ['race', 'reuse']);
+      d.layers.persistence.entities.Ticket.naturalKey = ['subject'];
+      ops(d).createTicket.idempotency = { keySource: 'payload-field', keyField: 'requesterEmail', storedIn: 'requesterKey' };
+    },
+    expect: ['CHK-USECASES-IDEM-STOREDIN-UNKNOWN']
+  },
+  {
+    id: 'M-USECASES-IDEM-STOREDIN-NOT-NATURAL',
+    title: 'storedIn nombra un campo de la entidad que no participa en su naturalKey',
+    mutate: (d) => {
+      withClientKey(d, ['race', 'reuse']);
+      d.layers.persistence.entities.Ticket.naturalKey = ['subject'];
+      ops(d).createTicket.idempotency = { keySource: 'payload-field', keyField: 'requesterEmail', storedIn: 'requesterEmail' };
+    },
+    expect: ['CHK-USECASES-IDEM-STOREDIN-NOT-NATURAL']
+  },
   // ─── DSL 2.18: el plazo de un rescate, enlazado a un parámetro ────────────────
   // El base no tiene barridos: closeTicket no declara schedule, así que cada mutación dispara ese
   // motivo una vez, más el suyo propio si lo tiene (de ahí las repeticiones).

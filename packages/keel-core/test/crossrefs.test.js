@@ -6964,6 +6964,61 @@ test('la entidad que se escribe sale también de las transitions', () => {
   assert.equal(keyFieldFindings(layers).length, 1);
 });
 
+// DSL 2.24: `storedIn`, el enlace que faltaba cuando la clave del input acaba en un campo que se llama
+// de otra forma. Con él la guarda es la constraint aunque `keyField` no esté en la naturalKey.
+
+const storedInLayers = (storedIn) => {
+  const layers = provisionLayers('callerSubject');
+  layers['use-cases'].operations.provisionProfile.idempotency.storedIn = storedIn;
+  return layers;
+};
+const idemFindings = (layers) =>
+  [...run(layers).findings, ...run(layers).obligations]
+    .filter((f) => /^(CHK-USECASES-IDEM-|OBL-IDEM-)/.test(f.id))
+    .map((f) => f.id);
+
+test('storedIn dentro de la naturalKey: la constraint es la guarda, sin aviso ni obligaciones de almacén', () => {
+  // Ni el aviso del keyField (storedIn lo cierra) ni la carrera y la reutilización, que con la
+  // guarda por clave natural el generador no emite (idempotencyOutcomeCodes).
+  assert.deepEqual(idemFindings(storedInLayers('subject')), []);
+  assert.deepEqual(run(storedInLayers('subject')).errors, []);
+});
+
+test('sin storedIn, la misma operación abre el aviso y las dos obligaciones del almacén', () => {
+  assert.deepEqual(idemFindings(provisionLayers('callerSubject')).sort(), [
+    'CHK-USECASES-IDEM-KEYFIELD-NOT-NATURAL',
+    'OBL-IDEM-RACE-CODE',
+    'OBL-IDEM-REUSE-CODE'
+  ]);
+  assert.match(
+    keyFieldFindings(provisionLayers('callerSubject'))[0].message,
+    /storedIn: <campo de la naturalKey>/
+  );
+});
+
+test('storedIn que no es un campo de la entidad escrita es error, y no avisa además del keyField', () => {
+  const ids = run(storedInLayers('noExiste')).findings.map((f) => f.id);
+  assert.deepEqual(ids.filter((id) => id.startsWith('CHK-USECASES-IDEM-')), ['CHK-USECASES-IDEM-STOREDIN-UNKNOWN']);
+});
+
+test('storedIn sin entidad resoluble es error: no hay campo que pueda nombrar', () => {
+  const layers = storedInLayers('subject');
+  layers['use-cases'].operations.provisionProfile.output = 'void';
+  const ids = run(layers).findings.map((f) => f.id);
+  assert.ok(ids.includes('CHK-USECASES-IDEM-STOREDIN-UNKNOWN'), ids.join(', '));
+});
+
+test('storedIn fuera de la naturalKey es error: no lleva a ninguna guarda', () => {
+  const layers = storedInLayers('callerSubject');
+  layers.domain.entities.Profile.fields.callerSubject = { type: 'string' };
+  const ids = run(layers).findings.map((f) => f.id);
+  assert.deepEqual(ids.filter((id) => id.startsWith('CHK-USECASES-IDEM-')), ['CHK-USECASES-IDEM-STOREDIN-NOT-NATURAL']);
+  // Y con la entidad sin naturalKey, lo mismo: el mensaje lo dice.
+  delete layers.persistence.entities.Profile.naturalKey;
+  const finding = run(layers).findings.find((f) => f.id === 'CHK-USECASES-IDEM-STOREDIN-NOT-NATURAL');
+  assert.match(finding.message, /no declara ninguna/);
+});
+
 // ─── payments (DSL 2.19) ────────────────────────────────────────────────────
 //
 // El corpus de mutaciones falsa cada CHK-PAYMENTS-* aislado. Aquí van los casos que el corpus no

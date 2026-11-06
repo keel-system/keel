@@ -5,6 +5,7 @@ import { FAILURE_REASONS } from './payment-vocabulary.js';
 import { implicitDefaults } from './structural-defaults.js';
 import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, parseCoverageMatrix, conventionsText } from './scenario-blocks.js';
 import { versionedRouteBase } from './gen/model.js';
+import { guardedByNaturalKey } from './gen/natural-key-guard.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -3568,8 +3569,11 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // que sale también por las demás. Un aviso por operación prometería el canónico en la que
   // no lo declara mientras el generador emite el de al lado — un aviso que miente.
   {
+    // Las que se guardan con la clave natural no cuentan: ahí no hay almacén de claves, así que el
+    // generador no emite ni la carrera ni la reutilización (`idempotencyOutcomeCodes`), y pedir sus
+    // códigos sería pedir un contrato que nada produce. El predicado es el mismo que usa el modelo.
     const idempotentOps = Object.entries(useCases.operations ?? {})
-      .filter(([, op]) => op?.idempotency)
+      .filter(([, op]) => op?.idempotency && !guardedByNaturalKey(op.idempotency, naturalKeyOfTarget(op, persistence)))
       .map(([name]) => name);
     if (idempotentOps.length > 0) {
       const declared = Object.values(useCases.operations ?? {}).flatMap((op) =>
@@ -4368,17 +4372,37 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // caduca y compara la firma del contenido, de modo que un refresco legítimo con otro valor
       // sale como reutilización de la clave. Lo destapó la corrida user-profile (2026-10-01): el
       // diseño escribía «naturalKey es la guarda» en un comentario y el generador hacía lo otro.
-      const target =
-        payloadEntityName(op.output) ??
-        payloadEntityName(op.input) ??
-        singleTransitionEntity(op);
-      const naturalKey = target ? (persistence?.entities?.[target]?.naturalKey ?? []) : [];
-      if (naturalKey.length > 0 && Object.hasOwn(inputFields, keyField) && !naturalKey.includes(keyField)) {
+      const target = idempotencyTarget(op);
+      const naturalKey = naturalKeyOfTarget(op, persistence);
+      const storedIn = op.idempotency.storedIn;
+      // DSL 2.24: el enlace que faltaba. La clave del input puede acabar, derivada por una rule, en un
+      // campo de la entidad que se llama de otra forma (el `eventId` de un evento que se guarda como
+      // `dedupeKey`, que comparte con la puerta HTTP), y renombrar no es una salida. `storedIn` nombra
+      // ese campo; declararlo y que no lleve a ninguna guarda es una incoherencia, no una pregunta.
+      if (storedIn !== undefined) {
+        const entityFields = target ? (domain?.entities?.[target]?.fields ?? {}) : {};
+        if (!target || !Object.hasOwn(entityFields, storedIn)) {
+          error('CHK-USECASES-IDEM-STOREDIN-UNKNOWN',
+            `use-cases: ${opName}.idempotency.storedIn: '${storedIn}' no es un campo de ` +
+              `${target ? `la entidad ${target}, que es la que la operación escribe` : 'la entidad que la operación escribe (no se resuelve: ni output ni input nombran una entidad, ni hay una sola transición)'} — ` +
+              `storedIn nombra el campo en el que acaba guardada la clave`
+          );
+        } else if (!naturalKey.includes(storedIn)) {
+          error('CHK-USECASES-IDEM-STOREDIN-NOT-NATURAL',
+            `use-cases: ${opName}.idempotency.storedIn: '${storedIn}' no participa en la naturalKey de ${target} ` +
+              `(${naturalKey.length > 0 ? `[${naturalKey.join(', ')}]` : 'no declara ninguna'}), así que no lleva a ninguna guarda: ` +
+              `storedIn existe para decir que la constraint de la clave natural es la guarda. Nombra el campo de la naturalKey ` +
+              `que guarda la clave, o quita storedIn y deja que la guarda sea el almacén de claves`
+          );
+        }
+      } else if (naturalKey.length > 0 && Object.hasOwn(inputFields, keyField) && !naturalKey.includes(keyField)) {
         warnIn(`use-cases.${opName}.idempotency`, 'CHK-USECASES-IDEM-KEYFIELD-NOT-NATURAL',
           `use-cases: ${opName}.idempotency.keyField: '${keyField}' no participa en la naturalKey de ${target} ` +
             `([${naturalKey.join(', ')}]), así que la guarda no será la constraint sino un almacén de claves que caduca ` +
             `y compara la firma del contenido. Si la guarda que quieres es la clave natural, nombra en keyField el campo ` +
-            `del input que la lleva (o quita el bloque idempotency y deja que la constraint la dé); si quieres el almacén, acéptalo`
+            `del input que la lleva; si no puedes renombrarlo porque la clave acaba en un campo que se llama de otra forma ` +
+            `(una rule la deriva), dilo con storedIn: <campo de la naturalKey>. O quita el bloque idempotency y deja que la ` +
+            `constraint la dé; si quieres el almacén, acéptalo`
         );
       }
     }
@@ -5302,6 +5326,17 @@ function conventionsSection(text) {
 /** La entidad de un `input`/`output` de la forma `{ entity: X }`, o null. */
 function payloadEntityName(payload) {
   return payload && typeof payload === 'object' && typeof payload.entity === 'string' ? payload.entity : null;
+}
+
+/** La entidad que escribe una operación con `idempotency`: la de su output, la de su input o la de su única transición. */
+function idempotencyTarget(op) {
+  return payloadEntityName(op.output) ?? payloadEntityName(op.input) ?? singleTransitionEntity(op);
+}
+
+/** La `naturalKey` de esa entidad, o `[]`. */
+function naturalKeyOfTarget(op, persistence) {
+  const target = idempotencyTarget(op);
+  return target ? (persistence?.entities?.[target]?.naturalKey ?? []) : [];
 }
 
 /** La entidad que mueven las `transitions` de una operación, si es una sola; null si no. */
