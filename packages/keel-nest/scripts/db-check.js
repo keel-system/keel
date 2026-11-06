@@ -31,6 +31,8 @@
 // Necesita podman o docker, y red la primera vez (npm instala TypeORM y los drivers).
 
 import fs from 'node:fs';
+import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
+import { conditionalWriteBlock } from './lib/conditional-probes.js';
 import os from 'node:os';
 import path from 'node:path';
 import { randomInt, randomUUID } from 'node:crypto';
@@ -82,6 +84,10 @@ const args = process.argv.slice(2);
 // --sabotage=<id> rompe lo emitido EN MEMORIA, antes de escribirlo, conservando la forma (sigue compilando): la red
 // tiene que salir en rojo en las comprobaciones de esa regla. [sufijo del archivo, texto o expresión, sustituto].
 const SABOTAGES = {
+  // La escritura condicional (api.concurrency): con --subject=catalog-conditional, cada uno cae en su caso CW.
+  'cw-ignore-expected': ['product-repository-impl.ts', 'expectedVersions.includes(Number(version))', 'expectedVersions.length >= 0'],
+  'cw-stale-version': ['product-repository-impl.ts', '      return toDomainProduct(saved);', '      return expected == null ? toDomainProduct(saved) : entity;'],
+  'cw-collapse-409': ['persistence-errors.ts', "{ code: 'CONCURRENT_MODIFICATION', httpStatus: 409, details: [] }", "{ code: 'PRECONDITION_FAILED', httpStatus: 412, details: [] }"],
   // Una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato.
   'empty-page': ['repository/page.ts', /^ {2}if \(items\.length === 0\) return .*\n/m, ''],
   // El orden por un enum (shop-api): la sombra de rango con la posición ALFABÉTICA, que es ordenar por el nombre.
@@ -118,7 +124,7 @@ const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ??
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
 // object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
 // fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
@@ -131,7 +137,9 @@ const DERIVED = {
       layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship: 'all' };
     }
   },
-  'mailer-author': { from: 'notification-mailer', mutate: declaredAuthorship }
+  'mailer-author': { from: 'notification-mailer', mutate: declaredAuthorship },
+  // La escritura condicional (api.concurrency, CW-1 a CW-5): el MISMO diseño que mide keel-dotnet.
+  ...Object.fromEntries(CONDITIONAL_WRITE_DESIGNS.filter((design) => design.name === 'catalog-conditional').map((design) => [design.name, design]))
 };
 const results = [];
 
@@ -392,6 +400,7 @@ ${root.usesOptimisticLocking ? `  check('${name}: nace con la versión 0', loade
     const translated = translatePersistenceError(error);
     check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia', error instanceof OptimisticLockConflict && translated?.httpStatus === 409, translated?.code ?? error?.message);
   }` : ''}
+${conditionalWriteBlock(model, root, ctx, sampleEntity(model, root, ctx, `${index}cw`))}
 ${finder ? `  const found = await repository.${finder.name}(${finder.params.map((param) => `original.${param.name}`).join(', ')});
   check('${name}: el finder de la clave natural encuentra el agregado', found?.${idName} === original.${idName});
   const rival = ${second};

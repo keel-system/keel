@@ -19,6 +19,7 @@ import { pageableDefaults } from '@keel-system/keel-core/gen/pagination';
 import { DIRS, classPath, fieldImports, tsModule, tsdoc, tsString } from './render.js';
 import { ENTRY_GATE_TS, MEDIATOR_TS } from './mediator.js';
 import { entryGateAssignment, messageComponents, messagePath, returnTypeOf, isPartialUpdate } from './services.js';
+import { CONDITIONAL_REQUESTS_TS, carriesExpectedVersions, controllerLine, returnsVersioned } from './conditional-writes.js';
 import { PAGED_RESPONSE_TS, FILE_UPLOAD_TS } from './dtos.js';
 import { MULTIPART_READING_TS } from './storage.js';
 import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
@@ -216,38 +217,58 @@ function renderMethod(model, operation, imports, readers) {
   // Lo que llama a la pasarela de pago va SIN transacción abarcadora (callsPaymentGateway, keel-core): su garantía
   // es registrar y confirmar ANTES de llamarla, como en keel-spring.
   const dispatch = callsPaymentGateway(model, operation.name) ? 'dispatchWithoutTransaction' : 'dispatch';
-  let call = `this.mediator.${dispatch}(${readerName}(params, query, body))`;
+  // La escritura condicional (api.concurrency): If-Match se lee ANTES que el lector, porque el 428 va antes que todo 400
+  // (D3), y llega al lector, que lo estampa en el mensaje.
+  const conditional = carriesExpectedVersions(model, operation);
+  const extra = conditional ? ', expectedVersions' : '';
+  let call = `this.mediator.${dispatch}(${readerName}(params, query, body${extra}))`;
   let resolve = '';
+  if (conditional) {
+    imports.push({ symbol: 'Headers', from: '@nestjs/common' }, { symbol: 'readExpectedVersions', from: CONDITIONAL_REQUESTS_TS });
+    params.push("@Headers('if-match') ifMatch: string | undefined");
+    resolve = `${controllerLine(model)}\n`;
+  }
   // Una subida: el cuerpo es multipart/form-data. Los campos simples se leen como los de la query (el
   // @RequestParam de keel-spring lee los dos) y los binarios llegan por su nombre de parte.
   const needsRequest = Boolean(location) || operation.multipart;
   if (operation.multipart) {
     imports.push({ symbol: 'readMultipart', from: MULTIPART_READING_TS });
-    resolve = '    const form = await readMultipart(request);\n';
-    call = `this.mediator.${dispatch}(${readerName}(params, { ...query, ...form.fields }, form.files))`;
+    resolve += '    const form = await readMultipart(request);\n';
+    call = `this.mediator.${dispatch}(${readerName}(params, { ...query, ...form.fields }, form.files${extra}))`;
   }
   if (resolvesCaller(model, operation)) {
     // La credencial del token es UNA de las del recurso (resolvedBy): el mensaje lleva su clave natural, o null
     // si no es de nadie (la precondición la responde la operación con el error que declare el diseño).
     const field = messageComponents(model, operation).find((component) => component.resolvedIdentity).name;
     const readArgs = operation.multipart ? '{ ...query, ...form.fields }, form.files' : 'query, body';
-    resolve += `    const read = ${readerName}(params, ${readArgs});\n    const message = new ${operation.messageClass}({ ...read, ${field}: await this.callerIdentity.resolve(read.${field}) });\n`;
+    resolve += `    const read = ${readerName}(params, ${readArgs}${extra});\n    const message = new ${operation.messageClass}({ ...read, ${field}: await this.callerIdentity.resolve(read.${field}) });\n`;
     call = `this.mediator.${dispatch}(message)`;
   }
+  // Con escritura condicional el handler devuelve Versioned<T> (D6): la versión va al ETag y el valor al cuerpo.
+  const versioned = returnsVersioned(model, operation);
   let statements;
   if (needsRequest) {
     imports.push({ symbol: 'Req', from: '@nestjs/common' }, { symbol: 'FastifyRequest', from: 'fastify', type: true });
     params.push('@Req() request: FastifyRequest');
   }
-  if (location) {
-    imports.push({ symbol: 'Res', from: '@nestjs/common' }, { symbol: 'FastifyReply', from: 'fastify', type: true }, { symbol: 'locationOf', from: ROUTES_TS });
+  if (location || versioned) {
+    imports.push({ symbol: 'Res', from: '@nestjs/common' }, { symbol: 'FastifyReply', from: 'fastify', type: true });
     params.push('@Res({ passthrough: true }) reply: FastifyReply');
+  }
+  if (versioned) imports.push({ symbol: 'etagOf', from: CONDITIONAL_REQUESTS_TS });
+  const answer = versioned
+    ? `    const versioned = await ${call};\n    void reply.header('ETag', etagOf(versioned.version));\n    const response = versioned.value;`
+    : `    const response = await ${call};`;
+  if (location) {
+    imports.push({ symbol: 'locationOf', from: ROUTES_TS });
     const target = locationTarget(model, operation);
     const value = target.param ? `params[${tsString(target.param)}]` : 'response.id';
-    statements = `    const response = await ${call};
+    statements = `${answer}
     // 201 con la ruta que LEE el recurso creado (keel-core/gen/api-contract.js).
     void reply.header('Location', locationOf(request, ${tsString(target.path)}, ${value}));
     return response;`;
+  } else if (versioned) {
+    statements = `${answer}\n    return response;`;
   } else {
     statements = resultType ? `    return ${call};` : `    await ${call};`;
   }
@@ -431,9 +452,13 @@ function renderReader(model, operation, name, imports) {
     imports.push({ symbol: 'EntryGate', from: ENTRY_GATE_TS });
     assigns.push(`    ${gate}`);
   }
+  // La versión esperada (api.concurrency): la leyó el controlador de If-Match antes que nada.
+  const conditional = carriesExpectedVersions(model, operation);
+  if (conditional) assigns.push('    expectedVersions');
   const construct = assigns.length > 0 ? `new ${operation.messageClass}({\n${assigns.join(',\n')}\n  })` : `new ${operation.messageClass}()`;
+  const versions = conditional ? ', expectedVersions: readonly number[] | null' : '';
   return `/** Lee ${operation.route.method} ${operation.route.path} (${operation.name}) al mensaje de su caso de uso. */
-function ${name}(params: Record<string, string>, query: Record<string, unknown>, body: unknown): ${operation.messageClass} {
+function ${name}(params: Record<string, string>, query: Record<string, unknown>, body: unknown${versions}): ${operation.messageClass} {
 ${ordered.join('\n')}${ordered.length > 0 ? '\n' : ''}  return ${construct};
 }`;
 }

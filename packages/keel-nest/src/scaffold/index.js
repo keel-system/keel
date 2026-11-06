@@ -59,6 +59,7 @@ import * as purge from './purge.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as idempotencyCheck from './idempotency-check.js';
+import * as conditionalWrites from './conditional-writes.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as architecture from './architecture.js';
 import * as restSupport from './rest-support.js';
@@ -158,6 +159,8 @@ const GENERATORS = [
   reconciliationClaim,
   // El gate de idempotencia y compensación (incremento 10d): infra/check-idempotency.sh, con el motor de keel-core.
   idempotencyCheck,
+  // La escritura condicional (DSL 2.25): Versioned, las excepciones 412/428, el borde y el gate.
+  conditionalWrites,
   // El baseline de migraciones: cómo se exporta y cómo se demuestra (lo usa el pase de calidad).
   schemaBaseline,
   { generate: (model) => mediator.generate(model, { mappers: [...mappers.mapperClasses(model), ...refResolvers.resolverClasses(model)], payments: payments.paymentApplicationClasses(model), projections: projections.projectionClasses(model) }) },

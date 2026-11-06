@@ -28,6 +28,7 @@ import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { CACHES, devtoolsContainer } from '@keel-system/keel-core/gen/infra-catalog';
 import { cacheFlushCmd } from '@keel-system/keel-core/gen/infra-scripts';
 import { DIRS, classPath, fieldImports, isNullable, tsModule, tsString } from './render.js';
+import { VERSIONED_TS, returnsVersioned } from './conditional-writes.js';
 import { messageComponents, messagePath, returnTypeOf } from './services.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { usesPersistence } from './persistence-entities.js';
@@ -153,7 +154,7 @@ function cachedOperationsTs(model) {
   const constants = caches.map((cache) => {
     const operation = operations.get(cache.operation);
     imports.push({ symbol: operation.messageClass, from: messagePath(operation), type: true });
-    imports.push(...resultImports(operation));
+    imports.push(...resultImports(operation, model));
     const components = new Set(messageComponents(model, operation).map((component) => component.name));
     const missing = cache.keyFields.filter((field) => !components.has(field));
     if (missing.length > 0) {
@@ -172,7 +173,7 @@ function cachedOperationsTs(model) {
     return `/**
  * ${doc.join('\n * ')}
  */
-export const ${cache.constant}: CachedOperation<${returnTypeOf(operation)}, ${operation.messageClass}> = {
+export const ${cache.constant}: CachedOperation<${returnTypeOf(operation, model)}, ${operation.messageClass}> = {
   name: ${tsString(cache.cacheName)},
   ttlSeconds: ${cache.ttlSeconds},
   keyOf: (${cache.keyFields.length > 0 ? 'message' : '_message'}) => ${key}
@@ -186,8 +187,9 @@ ${constants.join('\n\n')}`;
   return tsModule(CACHED_OPERATIONS_TS, imports, body);
 }
 
-function resultImports(operation) {
+function resultImports(operation, model = null) {
   const imports = [{ symbol: operation.responseDto.name, from: classPath(DIRS.dtos, operation.responseDto.name), type: true }];
+  if (model && returnsVersioned(model, operation)) imports.push({ symbol: 'Versioned', from: VERSIONED_TS, type: true });
   if (operation.paginated) imports.push({ symbol: 'PagedResponse', from: PAGED_RESPONSE_TS, type: true });
   return imports;
 }
@@ -353,6 +355,13 @@ ${props.join(',\n')}
   }`;
     } else if (operation.returnsList) {
       decode = `(value) => list(value, ${item})`;
+    } else if (returnsVersioned(model, operation)) {
+      // Versioned<T> (api.concurrency): la entrada guarda la versión con el cuerpo, en el orden del cable, así que un
+      // acierto devuelve el MISMO ETag que la lectura que la llenó (CW-11).
+      decode = `(value) => {
+    const entry = object(value);
+    return { version: required(entry['version'], count), value: ${item}(entry['value']) };
+  }`;
     } else {
       decode = `(value) => ${item}(value)`;
     }

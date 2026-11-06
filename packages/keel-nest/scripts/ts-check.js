@@ -8,10 +8,16 @@
 // equivalente de `compile-check` de keel-spring, y como él se lanza antes de dar por buena
 // cualquier cambio en lo que se emite.
 //
-//   node packages/keel-nest/scripts/ts-check.js [--keep]
+//   node packages/keel-nest/scripts/ts-check.js [--keep] [--only=<silueta>[,<silueta>]] [--sabotage=<id>]
 //   npm run ts-check --workspace packages/keel-nest
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo.
+//
+// --only compila y prueba solo esas siluetas (por su nombre: la fixture, o el de la silueta derivada), para iterar.
+//
+// --sabotage=<id> rompe lo emitido de UNA silueta conservando la forma (sigue compilando), y sus pruebas emitidas tienen
+// que salir rojas en exactamente su caso. Los de la escritura condicional (PLAN-DSL-225-ESCRITURA-CONDICIONAL.md), con los
+// mismos ids que keel-dotnet: cw-no-428 (CW-6), cw-weak-match (CW-7), cw-error-map (CW-8) y cw-cors (CW-9).
 //
 // Además del diseño de referencia, compila con `strict` y ejecuta las pruebas emitidas del árbol que
 // emite build para TODAS las fixtures (planService, sin la frontera de build: el dominio y la aplicación de cualquier diseño
@@ -37,6 +43,19 @@ import { resolveRuntime, startDatabase, stopDatabase } from './lib/database-cont
 import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION, AWS_SDK_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION, FASTIFY_MULTIPART_VERSION } from '../src/lib/assets.js';
 
 const keep = process.argv.includes('--keep');
+const only = process.argv.find((arg) => arg.startsWith('--only='))?.split('=')[1]?.split(',') ?? null;
+const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
+// [silueta, sufijo del archivo, texto, sustituto]
+const SABOTAGES = {
+  'cw-no-428': ['catalog-conditional', 'rest/conditional-requests.ts', 'if (required) throw new PreconditionRequiredException();', 'if (required) return null;'],
+  'cw-weak-match': ['catalog-conditional', 'rest/conditional-requests.ts', 'const STRONG_VERSION = /^"(0|', 'const STRONG_VERSION = /^(?:W\\/)?"(0|'],
+  'cw-error-map': ['catalog-conditional', 'errors/precondition-failed-exception.ts', 'static readonly STATUS = 412;', 'static readonly STATUS = 409;'],
+  'cw-cors': ['shop-conditional', 'security/cors-policy.ts', ", 'ETag'];", '];']
+};
+if (sabotage && !SABOTAGES[sabotage]) {
+  console.error(`No hay ningún sabotaje '${sabotage}'. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);
+  process.exit(2);
+}
 const isWindows = process.platform === 'win32';
 const results = [];
 
@@ -160,7 +179,7 @@ for (const derived of DERIVED_SILHOUETTES) {
   const { layers } = derivedDesign(derived, loadService);
   silhouettes.push({ name: derived.name, derived, broker: layers.messaging ? 'rabbitmq' : null, paymentGateway: null });
 }
-for (const { name: fixture, derived, broker, paymentGateway, telemetry } of silhouettes) {
+for (const { name: fixture, derived, broker, paymentGateway, telemetry } of silhouettes.filter((entry) => !only || only.includes(entry.name))) {
   const name = [fixture, broker, paymentGateway, telemetry].filter(Boolean).join('-');
   const { manifest, layers } = derived ? derivedDesign(derived, loadService) : loadService(path.join(FIXTURES_DIR, fixture));
   const stack =
@@ -169,10 +188,20 @@ for (const { name: fixture, derived, broker, paymentGateway, telemetry } of silh
       : null;
   const { files } = planService({ manifest, layers, workspace: workspace, stack });
   const dir = path.join(workspace, 'fixtures-tsc', name);
+  const [target, suffix, from, to] = sabotage && SABOTAGES[sabotage][0] === fixture ? SABOTAGES[sabotage] : [];
   for (const file of files) {
     const out = path.join(dir, file.path);
     fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out, file.content);
+    let content = file.content;
+    if (target && file.path.endsWith(suffix)) {
+      if (!content.includes(from)) {
+        console.error(`El sabotaje '${sabotage}' no se aplica a lo emitido hoy (¿cambió el texto?).`);
+        process.exit(2);
+      }
+      content = content.replace(from, to);
+      console.log(`(sabotaje: ${sabotage}, en ${name}/${file.path})`);
+    }
+    fs.writeFileSync(out, content);
   }
   fs.symlinkSync(path.join(projectDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
   const run = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.json', '--noEmit'], { cwd: dir, encoding: 'utf8' });

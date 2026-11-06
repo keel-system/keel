@@ -61,3 +61,29 @@ for (const fixture of ['notification-mailer', 'notification-mailer-mongo']) {
     for (const file of files) assert.doesNotMatch(file.content, /created_?[bB]y \?\?= actor/, file.path);
   });
 }
+
+test('la escritura condicional entera, en las dos ramas (api.concurrency, concurrency.operations)', async () => {
+  const { CONDITIONAL_WRITE_DESIGNS } = await import('../../keel-core/test/helpers/conditional-write-designs.js');
+  const { checkSupportedFeatures } = await import('../src/lib/supported-features.js');
+  const { loadService } = await import('@keel-system/keel-core');
+  const { FIXTURES_DIR } = await import('./helpers/workspace.js');
+  const path = await import('node:path');
+  for (const name of ['catalog-conditional', 'catalog-conditional-mongo']) {
+    const design = CONDITIONAL_WRITE_DESIGNS.find((entry) => entry.name === name);
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, design.from));
+    design.mutate(layers);
+    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], `${name}: la frontera todavía lo rechaza`);
+    const { files } = planFixture(design.from, { mutate: design.mutate });
+    const find = (suffix) => files.find((file) => file.path.endsWith(suffix))?.content ?? '';
+    assert.match(find('update-product-command.ts'), /readonly expectedVersions: readonly number\[\] \| null;/);
+    const controller = files.find((file) => /controllers\/.*product.*controller\.ts$/.test(file.path))?.content ?? '';
+    assert.match(controller, /@Headers\('if-match'\) ifMatch: string \| undefined/);
+    assert.match(controller, /const expectedVersions = readExpectedVersions\(ifMatch, true\);/);
+    assert.equal((controller.match(/void reply\.header\('ETag', etagOf\(versioned\.version\)\);/g) ?? []).length, 3);
+    assert.match(find('get-product-by-slug-query-handler.ts'), /QueryHandler<GetProductBySlugQuery, Versioned<GetProductBySlugResponseDto>>/);
+    assert.match(find('product-repository.ts'), /abstract loadExpecting\(id: string, expectedVersions: readonly number\[\] \| null\)/);
+    assert.ok(files.some((file) => /product-repository-impl\.ts$/.test(file.path) && file.content.includes('throw new PreconditionFailedException();')), name);
+    assert.match(find('infra/check-conditional-writes.sh'), /check 'updateProduct' 'Product'/);
+    checkTree(files);
+  }
+});

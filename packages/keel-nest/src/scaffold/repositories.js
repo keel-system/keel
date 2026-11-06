@@ -19,6 +19,7 @@ import { pluralize } from '@keel-system/keel-core/gen/naming';
 import { idBatchReason, listedIdQueries } from '@keel-system/keel-core/gen/ref-targets';
 import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
+import { PRECONDITION_FAILED_TS, loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './conditional-writes.js';
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
 import { adapterClaimMethods, adapterGuardMethods, claimDependencies, portClaimMethods, portGuardMethods } from './claim.js';
@@ -267,6 +268,8 @@ function renderPort(model, entity) {
   const id = entity.idField;
   const idType = id?.tsType ?? 'string';
   const methods = [`  abstract findById(${id?.name ?? 'id'}: ${idType}): Promise<${entity.name} | null>;`];
+  // La carga que compara la versión (api.concurrency, D4): la de las raíces que escribe alguna escritura condicional.
+  if (loadsExpecting(model, entity)) methods.push(loadExpectingPort(entity, id?.name ?? 'id', idType));
   const idBatch = idBatchReason(model, entity);
   if (idBatch) {
     methods.push(
@@ -431,6 +434,10 @@ function renderAdapter(model, entity) {
     const found = await this.manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${idName} }`)});
     return found == null ? null : toDomain${entity.name}(found);
   }`);
+  if (loadsExpecting(model, entity)) {
+    imports.push({ symbol: 'PreconditionFailedException', from: PRECONDITION_FAILED_TS });
+    methods.push(loadExpectingAdapter(entity, idName, idType));
+  }
   if (idBatchReason(model, entity)) {
     // `In(...)`: TypeORM aplica el transformador de la columna a cada valor (el uuid binario de MySQL); lo mide db-check.
     imports.push({ symbol: 'In', from: 'typeorm' });

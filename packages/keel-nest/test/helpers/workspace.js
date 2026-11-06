@@ -6,6 +6,7 @@
 // sí puede generar, quitando esas capas (`withoutLayers`), en vez de inventarse uno.
 
 import fs from 'node:fs';
+import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/conditional-write-designs.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './tmp.js';
@@ -127,7 +128,10 @@ export const DERIVED_SILHOUETTES = [
     fixture,
     withoutLayers: [],
     mutate: declaredAuthorship
-  }))
+  })),
+  // La escritura condicional (DSL 2.25): los diseños de keel-core/test/helpers/conditional-write-designs.js, los MISMOS que
+  // mide keel-dotnet (relacional, documental y con seguridad y CORS).
+  ...CONDITIONAL_WRITE_DESIGNS.map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate }))
 ];
 
 /** La autoría declarada por el dominio de Template y de su hija TemplateVariable (la misma que keel-dotnet). */

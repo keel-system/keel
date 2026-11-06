@@ -16,6 +16,7 @@ import { apiCases as neutralApiCases, securityCases as neutralSecurityCases } fr
 import { usesApi } from './rest-support.js';
 import { messageComponents } from './services.js';
 import { tsString } from './render.js';
+import { conditionalApiTests } from './conditional-writes.js';
 import { securityPlan, usesJwt } from './security.js';
 
 export const API_TEST = 'test/api.test.ts';
@@ -110,6 +111,8 @@ function apiTest(model) {
   });`);
     }
   }
+  // La escritura condicional (api.concurrency): el 428 en el borde (CW-6).
+  tests.push(...conditionalApiTests(model, (entry) => request(entry, { secured })));
   const multipartHelper = cases.upload
     ? `
 

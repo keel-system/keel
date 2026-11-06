@@ -27,6 +27,8 @@
 // Necesita podman o docker, y red la primera vez (npm instala el driver).
 
 import fs from 'node:fs';
+import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
+import { conditionalWriteBlock } from './lib/conditional-probes.js';
 import os from 'node:os';
 import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
@@ -52,6 +54,10 @@ const onlySubject = process.argv.find((arg) => arg.startsWith('--subject='))?.sp
 // --sabotage=<id> rompe lo emitido EN MEMORIA, antes de escribirlo, conservando la forma: la red tiene que salir en rojo
 // en las comprobaciones de esa regla. [sufijo del archivo, texto o expresión, sustituto].
 const SABOTAGES = {
+  // La escritura condicional (api.concurrency): con --subject=catalog-conditional-mongo, cada uno cae en su caso CW.
+  'cw-ignore-expected': ['product-repository-impl.ts', 'expectedVersions.includes(Number(version))', 'expectedVersions.length >= 0'],
+  'cw-stale-version': ['product-repository-impl.ts', '      return toDomainProduct({ _id: id, ...fields });', '      return expected == null ? toDomainProduct({ _id: id, ...fields }) : entity;'],
+  'cw-collapse-409': ['persistence-errors.ts', "{ code: 'CONCURRENT_MODIFICATION', httpStatus: 409, details: [] }", "{ code: 'PRECONDITION_FAILED', httpStatus: 412, details: [] }"],
   // Una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato.
   'empty-page': ['repository/page.ts', /^ {2}if \(items\.length === 0\) return .*\n/m, ''],
   // Los finders (DSL 2.22): el texto buscado como patrón y no como literal, y el where que no filtra.
@@ -113,6 +119,8 @@ const SUBJECTS = [
   },
   // Los finders de las búsquedas sobre documentos (DSL 2.22): la lista y la página con enum, rango exclusivo y texto
   // por patrón, plegado y sin plegar. El MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js).
+  // La escritura condicional sobre documentos (api.concurrency, CW-1 a CW-5): el MISMO diseño que mide keel-dotnet.
+  ...CONDITIONAL_WRITE_DESIGNS.filter((design) => design.name === 'catalog-conditional-mongo').map((design) => ({ name: design.from, label: design.name, withoutLayers: [], mutate: design.mutate })),
   ...FINDER_DESIGNS.filter((design) => design.name === 'jobs-mongo-finder').map((design) => ({
     name: design.from,
     label: design.name,
@@ -340,6 +348,7 @@ ${root.usesOptimisticLocking ? `  check('${name}: nace con la versión 0', loade
     const translated = translatePersistenceError(error);
     check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia', error instanceof OptimisticLockConflict && translated?.httpStatus === 409, translated?.code ?? error?.message);
   }` : ''}
+${conditionalWriteBlock(model, root, ctx, sampleEntity(model, root, ctx, `${index}cw`))}
 ${finder ? `  const found = await repository.${finder.name}(${finder.params.map((param) => `original.${param.name}`).join(', ')});
   check('${name}: el finder de la clave natural encuentra el agregado', found?.${idName} === original.${idName});
   const rival = ${second};

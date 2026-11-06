@@ -244,7 +244,7 @@ nunca la emite a medias.
 |---|---|---|
 | 0. keel-core | hecho | suite de keel-core; `design-matrix`: los seis ids nuevos `falsado`, ninguno `co-disparado` |
 | 1. keel-dotnet | hecho | `db-check` (PostgreSQL y MySQL) y `doc-check` CW-1 a CW-5; pruebas emitidas CW-6 a CW-11 en las variantes; CW-12 ejecutado en Node; los nueve sabotajes |
-| 2. keel-nest | pendiente | — |
+| 2. keel-nest | hecho | `db-check` (PostgreSQL y MySQL) y `doc-check` CW-1 a CW-5; `ts-check --only` CW-6 a CW-10 en las siluetas; CW-11 y CW-12 ejecutados en Node; los nueve sabotajes |
 | 3. keel-go | pendiente | — |
 | 4. keel-spring | pendiente | — |
 | 5. derivados y docs | pendiente | — |
@@ -292,6 +292,20 @@ Decisiones que el plan no fijaba, o que cambian lo que decía. Los incrementos 2
   regla de `idParamNames` solo reconoce `{id}` y `{orderMainId}`. Es la misma regla que ya usa `Location`; ampliarla es
   otra decisión.
 
+## Lo que se decidió en keel-nest (incremento 2)
+
+- **If-Match lo lee el controlador**, con `@Headers('if-match')`, antes de llamar al lector puro `(params, query, body)`,
+  y se lo pasa como cuarto argumento: así el 428 sale antes que todo 400 del lector (D3). Un cuerpo que no es JSON lo
+  rechaza Fastify antes de la ruta, como Spring: ese 400 sí va antes que el 428.
+- **`Versioned<T>` es una interfaz** (`{ version, value }`, application/interfaces), y la entrada de la caché se escribe en
+  ese orden, el mismo que el record de keel-dotnet. El codec de la caché rechaza una entrada sin versión (miss, no un
+  ETag inventado).
+- **`expectedVersions` es opcional en las props del mensaje** (`?? null`): quien lo construye desde otra puerta no tiene
+  que nombrarla.
+- **Redes nuevas**: `ts-check` gana `--only=<silueta>` y `--sabotage=cw-*` (los del borde); las sondas CW-1 a CW-5 viven en
+  `scripts/lib/conditional-probes.js`, compartidas por `db-check` y `doc-check`; `sampleResponse` pasó de `cache.test.js`
+  a `test/helpers/response-samples.js`.
+
 ## Para retomar
 
 - Incremento 1 (keel-dotnet) hecho y medido: `db-check --only=catalog-conditional` en PostgreSQL y MySQL, `doc-check
@@ -302,5 +316,6 @@ Decisiones que el plan no fijaba, o que cambian lo que decía. Los incrementos 2
 - Las convenciones y la skill del agente (cargar con `LoadExpecting`, devolver `Versioned<T>`, ejecutar
   `infra/check-conditional-writes.sh`) son del incremento 5; hasta entonces, el agente lo sabe solo por la nota del
   handler y por el gate.
-- Siguiente: incremento 2, keel-nest. Copiar el reparto de keel-dotnet: `src/scaffold/conditional-writes.js`, sus
-  enganches (borde, mensaje, handler, puerto y adaptadores, CORS, caché) y las sondas compartidas en `db-check`/`doc-check`.
+- Incremento 2 (keel-nest) hecho y medido igual que el 1; su fila de la matriz ya no es `pending`.
+- Siguiente: incremento 3, keel-go. El mismo reparto; en Go, `loadExpecting` con el `SELECT … WHERE version` (§ 3 del
+  incremento) y el error de precondición como valor centinela comparable con `errors.Is`.

@@ -537,8 +537,30 @@ export const MECHANISMS = {
     }
   },
   'conditional-write': {
-    pending: 'incremento 2 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md: hasta entonces la frontera de keel-nest rechaza api.concurrency entera (conditionalWritesPendingErrors de keel-core), así que no hay código que razonar'
+    parity: {
+      skip: 'ningún par declara api.concurrency (keel-go y keel-spring la rechazan hasta su incremento de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md); el texto lo fijan test/uncovered-branches.test.js y test/conditional-writes.test.js, que lo compara con keel-dotnet, sobre las siluetas de keel-core/test/helpers/conditional-write-designs.js',
+      test: 'test/conditional-writes.test.js'
+    },
+    emitter: 'src/scaffold/conditional-writes.js (Versioned, las excepciones, conditional-requests.ts, loadExpecting, el gate y las pruebas emitidas) · controllers.js · services.js · repositories.js y document-repositories.js · cache.js · security.js (CORS)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'catalog-conditional: CW-1 a CW-5 contra el adaptador de TypeORM en PostgreSQL y MySQL (scripts/lib/conditional-probes.js). Falsado con --subject=catalog-conditional: cw-ignore-expected cae en CW-2, cw-stale-version en CW-4 y cw-collapse-409 en CW-5 (y en las sondas previas de la versión obsoleta, que miden el mismo 409). El borde, en ts-check sobre las siluetas: CW-6 a CW-10 en las pruebas emitidas, falsadas con --sabotage=cw-no-428 (CW-6), cw-weak-match (CW-7), cw-error-map (CW-8) y cw-cors (CW-9); CW-11 (el codec de la caché, ejecutado) y CW-12 (el gate, ejecutado con bash) en test/conditional-writes.test.js, falsados con cw-cache-etag y cw-gate'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          'catalog-conditional-mongo: CW-1 a CW-5 contra el adaptador del driver de MongoDB en un replica set real, con las MISMAS sondas que db-check. Falsado con --subject=catalog-conditional-mongo: cw-ignore-expected cae en CW-2, cw-stale-version en CW-4 y cw-collapse-409 en CW-5 (y en las sondas previas de la versión obsoleta)'
+      }
+    }
   }
+
 };
 
 /** Todas las celdas, aplanadas: { id, branch, cell } (sin las filas pendientes enteras). */

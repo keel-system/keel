@@ -13,7 +13,7 @@
 
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
-import { conditionalWritesPendingErrors } from '@keel-system/keel-core/gen/conditional-writes';
+import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. Hoy, ninguna: storage llegó en el 13g. */
 const PENDING_LAYERS = {};
@@ -80,8 +80,8 @@ export function checkSupportedFeatures(manifest, layers) {
   // 16); lo único que se rechaza es lo que tampoco genera keel-spring: un compuesto en la URL o en una cabecera.
   for (const message of compositeUrlParamErrors(layers, 'keel-nest')) errors.push(message);
   errors.push(...messagingWithoutPersistenceErrors(manifest, layers, 'keel-nest'));
-  // La escritura condicional (DSL 2.25) llega en el incremento 2 de su plan: hasta entonces, entera fuera.
-  errors.push(...conditionalWritesPendingErrors(layers, 'keel-nest', 2));
+  // La escritura condicional (DSL 2.25) se genera entera; lo que ningún generador genera todavía, con el motivo neutral (T3).
+  errors.push(...conditionalWritesFrontierErrors(layers, 'keel-nest'));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   // La idempotencia de petición se genera (el registro idempotency_record, como keel-spring) cuando hay
   // persistencia donde registrar la clave en la misma transacción que el efecto. Sin persistencia no hay

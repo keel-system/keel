@@ -23,6 +23,8 @@ import { usesCallerRoles, ownershipRulesOf } from '@keel-system/keel-core/gen/ow
 import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
 import { audienceOf, tokenClaims } from '@keel-system/keel-core/gen/access-plan';
 import { classPath, DIRS, tsModule, tsString } from './render.js';
+// ETag e If-Match con escritura condicional (CW-9): la lista es la neutral de los cuatro generadores.
+import { corsAllowedHeaders, corsExposedHeaders } from '@keel-system/keel-core/gen/conditional-writes';
 import { ERROR_RESPONSE_TS } from './rest-support.js';
 import { credentialFinderName, portClass, portPath } from './repositories.js';
 import { entityDir } from './render.js';
@@ -537,8 +539,8 @@ function corsPolicy(model) {
  * ninguno, el servicio no acepta peticiones cross-origin.
  */
 const ALLOWED_METHODS: readonly string[] = ${list(cors.methods)};
-const ALLOWED_HEADERS: readonly string[] = ${list(cors.allowedHeaders)};
-const EXPOSED_HEADERS: readonly string[] = ${list(cors.exposedHeaders)};
+const ALLOWED_HEADERS: readonly string[] = ${list(corsAllowedHeaders(model))};
+const EXPOSED_HEADERS: readonly string[] = ${list(corsExposedHeaders(model))};
 const ALLOW_CREDENTIALS = ${cors.allowCredentials};
 const MAX_AGE_SECONDS = ${cors.maxAgeSeconds};
 

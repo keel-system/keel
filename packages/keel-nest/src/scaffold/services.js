@@ -45,6 +45,7 @@ import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { portPath as clientPortPath } from './http-clients.js';
 import { projectorPath, readerPath, replicas } from './projections.js';
 import { repositoryOf, isPartialUpdate } from '@keel-system/keel-core/gen/features';
+import { VERSIONED_TS, carriesExpectedVersions, conditionalHandlerNote, returnsVersioned, versionedType } from './conditional-writes.js';
 import { compensationNote } from '@keel-system/keel-core/gen/compensation';
 export { isPartialUpdate };
 
@@ -111,16 +112,20 @@ export function messageComponents(model, operation) {
 }
 
 /** El tipo de retorno de la operación, o null si no devuelve nada. */
-export function returnTypeOf(operation) {
+export function returnTypeOf(operation, model = null) {
   if (!operation.responseDto) return null;
+  // La lectura que da el ETag y la escritura condicional que devuelve su raíz devuelven también la versión (D6 de
+  // PLAN-DSL-225-ESCRITURA-CONDICIONAL.md): el compilador obliga al agente a darla.
+  if (model && returnsVersioned(model, operation)) return versionedType(operation.responseDto.name);
   // PagedResponse<T> ya envuelve la lista: envolverla además daría PagedResponse<T[]>.
   if (operation.paginated) return `PagedResponse<${operation.responseDto.name}>`;
   if (operation.returnsList) return `${operation.responseDto.name}[]`;
   return operation.responseDto.name;
 }
 
-function returnImports(operation) {
+function returnImports(operation, model = null) {
   const imports = [];
+  if (model && returnsVersioned(model, operation)) imports.push({ symbol: 'Versioned', from: VERSIONED_TS, type: true });
   if (operation.responseDto) imports.push({ symbol: operation.responseDto.name, from: classPath(DIRS.dtos, operation.responseDto.name), type: true });
   if (operation.paginated) imports.push({ symbol: 'PagedResponse', from: PAGED_RESPONSE_TS, type: true });
   return imports;
@@ -139,9 +144,9 @@ function contracts(operation, returnType) {
 
 function renderMessage(model, operation) {
   const file = messagePath(operation);
-  const returnType = returnTypeOf(operation);
+  const returnType = returnTypeOf(operation, model);
   const contract = contracts(operation, returnType);
-  const imports = [{ symbol: contract.baseSymbol, from: MESSAGES_TS }, ...returnImports(operation)];
+  const imports = [{ symbol: contract.baseSymbol, from: MESSAGES_TS }, ...returnImports(operation, model)];
   const fromPath = new Set((operation.pathParams ?? []).map((param) => param.name));
   const partial = isPartialUpdate(operation);
   const components = messageComponents(model, operation);
@@ -177,6 +182,16 @@ function renderMessage(model, operation) {
   readonly entryGate: EntryGate;`);
     props.push('    readonly entryGate: EntryGate;');
     assigns.push('    this.entryGate = props.entryGate;');
+  }
+  // La versión que el cliente leyó (api.concurrency): la estampa el controlador desde If-Match; nula desde otra puerta.
+  if (carriesExpectedVersions(model, operation)) {
+    declarations.push(`  /**
+   * Las versiones que valen, del If-Match de la petición (api.concurrency). Las estampa el controlador generado; null
+   * —sin cabecera, '*' u otra puerta— no compara. Pásala tal cual a loadExpecting.
+   */
+  readonly expectedVersions: readonly number[] | null;`);
+    props.push('    readonly expectedVersions?: readonly number[] | null;');
+    assigns.push('    this.expectedVersions = props.expectedVersions ?? null;');
   }
   const scope = idempotencyScope(operation);
   const body = `${tsdoc(operation.description)}export class ${operation.messageClass} extends ${contract.base} {
@@ -257,14 +272,14 @@ function idempotencyScope(operation) {
 
 function renderHandler(model, operation) {
   const file = handlerPath(operation);
-  const returnType = returnTypeOf(operation);
+  const returnType = returnTypeOf(operation, model);
   const contract = contracts(operation, returnType);
   const imports = [
     { symbol: 'ApplicationComponent', from: ANNOTATIONS_TS },
     { symbol: 'Handles', from: ANNOTATIONS_TS },
     { symbol: contract.handlerSymbol, from: HANDLERS_TS, type: true },
     { symbol: operation.messageClass, from: messagePath(operation) },
-    ...returnImports(operation)
+    ...returnImports(operation, model)
   ];
 
   const dependencies = [];
@@ -425,6 +440,10 @@ function handlerNotes(model, operation) {
   for (const note of idempotencyNotes(model, operation)) notes.push(note);
   const dispatch = dispatchNote(model, operation, { call: 'await this.commandDispatcher.{variant}(new {message}(...))' });
   const gate = entryGateNote(model, operation, { read: 'command.entryGate', value: (entry) => `EntryGate.${entry}` });
+  // La escritura condicional (api.concurrency): cargar con loadExpecting y devolver la versión persistida.
+  const repository = repositoryOf(model, operation);
+  const conditional = conditionalHandlerNote(model, operation, operation.messageKind === 'query' ? 'query' : 'command', repository ? decap(portClass(repository)) : 'repository');
+  if (conditional) notes.push(conditional);
   if (dispatch) notes.push(dispatch);
   if (gate) notes.push(gate);
   const cacheParam = operation.messageKind === 'query' ? 'query' : 'command';

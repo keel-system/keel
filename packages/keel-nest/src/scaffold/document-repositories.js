@@ -21,6 +21,7 @@ import { documentShape, DOCUMENT_ID, storageOf } from '@keel-system/keel-core/ge
 import { screamingSnake, snakeCase } from '@keel-system/keel-core/gen/naming';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { DIRS, classPath, entityDir, tsModule, tsString } from './render.js';
+import { PRECONDITION_FAILED_TS, loadExpectingAdapter, loadsExpecting } from './conditional-writes.js';
 import { domainMembers } from './entities.js';
 import { TEXT_FOLD_TS } from './persistence-entities.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
@@ -404,6 +405,11 @@ export function renderDocumentAdapter(model, entity) {
     const found = await this.collection.findOne(${idFilter}, { session: this.session });
     return found == null ? null : toDomain${entity.name}(found);
   }`);
+  // La carga que compara la versión (api.concurrency, D4), la misma que la del adaptador relacional.
+  if (loadsExpecting(model, entity)) {
+    imports.push({ symbol: 'PreconditionFailedException', from: PRECONDITION_FAILED_TS });
+    methods.push(loadExpectingAdapter(entity, idName, idType));
+  }
   if (idBatchReason(model, entity)) {
     methods.push(`  async findAllById(ids: readonly ${idType}[]): Promise<${entity.name}[]> {
     if (ids.length === 0) return [];
