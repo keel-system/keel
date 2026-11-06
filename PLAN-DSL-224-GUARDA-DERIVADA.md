@@ -35,9 +35,11 @@ Se descartó que el generador libere la marca si el handler falla: tapa el fallo
 | 2 | Las notas de los cuatro generadores | hecho (2026-11-06) |
 | 3 | El aviso: reintentos muertos tras el reclamo | hecho (2026-11-06) |
 | 4 | El par del MVP declara su guarda | hecho (2026-11-06, junto con el 3) |
-| 5 | Corrida de control | pendiente |
+| 5 | El detector de la carrera respeta la guarda por clave natural | hecho (2026-11-06) |
+| 6 | La clave primaria como guarda de idempotencia | cerrado sin cambio (2026-11-06): medido, decisión del usuario |
+| 7 | Corrida de control | pendiente |
 
-**Para retomar:** queda el incremento 5, la corrida de control sobre el par v2.1.2 con keel-spring. La lanza el usuario. Los incrementos 3 y 4 se cerraron juntos por decisión del usuario, porque el aviso nacía rojo en el par y el inc. 3 no podía cerrar en verde sin el 4 (§ Lo hecho del inc. 3). Hay una deuda nueva de keel-core, fuera de este plan: `CHK-SCEN-IDEM-RACE` no distingue la guarda por clave natural de una operación interna, y el par lo declara falso positivo (§ Lo hecho del inc. 4).
+**Para retomar:** queda el incremento 7, la corrida de control sobre el par v2.1.2 con keel-spring, que lanza el usuario. Los incrementos 3 y 4 se cerraron juntos por decisión del usuario, porque el aviso nacía rojo en el par y el inc. 3 no podía cerrar en verde sin el 4 (§ Lo hecho del inc. 3). Los 5 y 6 son dos de las deudas que dejaron el 3 y el 4, incorporadas al plan el 2026-11-06 por decisión del usuario. El 6 se cerró sin cambio de código, solo con lo medido. La tercera deuda, subir el registry a la 2.24, la hace el usuario a mano, fuera del plan.
 
 ## Lo que se descarta, y por qué
 
@@ -71,7 +73,7 @@ Los números de línea del plan se confirmaron: `triggerHasDomainGuard` en `mode
 |---|---|---|---|
 | `notification-mailer`, `-mongo` (sí) | `NotificationRequested` → `acceptNotificationRequest` | Sí: `naturalKey [applicationKey, dedupeKey]`, con `dedupeKey` derivado de `eventId` en una `rule` | `storedIn: dedupeKey` (inc. 4) |
 | `metering-digest` (no, parcial) | `MeterReadingCaptured` → `recordReading` | Sí, y **ya expresable**: `naturalKey [meterId, readAt]` se llama igual que el input | `idempotency: { keySource: payload-field, keyField: <meterId o readAt> }` (inc. 3). Su comentario («la clave llega por la cabecera Idempotency-Key») es anterior a `payload-field` (DSL 2.12) y se corrige |
-| `metering-digest` (no) | `MeterDecommissioned` → `decommissionMeter` | La guarda real es la **PK** (`serialNumber` es `id: true`, sin `naturalKey`), y el modelo solo reconoce la `naturalKey` | **Decisión del usuario:** aceptarla en su `decisions.yaml`, con ese motivo. La PK como guarda de idempotencia queda como candidata, fuera de este plan |
+| `metering-digest` (no) | `MeterDecommissioned` → `decommissionMeter` | La guarda real es la **PK** (`serialNumber` es `id: true`, sin `naturalKey`), y el modelo solo reconoce la `naturalKey` | **Decisión del usuario:** aceptarla en su `decisions.yaml`, con ese motivo. La PK como guarda de idempotencia es el inc. 6 |
 | `asset-vault` (sí) | `ThumbnailDelivered` → `noteThumbnailDelivery` | No: es un contador, y la fixture existe para ejercitar la rama `tryRecord` (lo dice su comentario) | Aceptar en `decisions.yaml` (inc. 3) |
 | `stock-reservation`, `stock-reservation-events` (sí) | `StockCountAdjusted` → `noteStockCount` | No: contador, rama `tryRecord` a propósito | Aceptar en `decisions.yaml` (inc. 3) |
 
@@ -94,7 +96,7 @@ Tres de las fixtures están en `READY_FIXTURES`, así que el aviso nace rojo en 
 
 **4. El nombre: `storedIn`.** El vocabulario del DSL nombra campos con `<verbo>As`/`<verbo>By`/`<verbo>From` (`exposedAs`, `fedBy`, `keyFrom`, `resolvedBy`), y `keyField` ya es el campo del input. `storedIn` completa la frase: «la clave `eventId` se guarda en `dedupeKey`». Se descartó `storedAs`: sugiere un formato, y lo que se nombra es un campo.
 
-**Lo que no se puede medir desde el arnés** (pregunta del inc. 5): el fallo pasajero a mitad del handler. Ya lo dicen las notas de FL-EVT-002 («provocarlo exige tirar el almacén a mitad de un consumo»), y hoy su red, el gate estático, prescribe justo el orden equivocado. No hay escenario `FL-*` nuevo para esto.
+**Lo que no se puede medir desde el arnés** (pregunta del inc. 7, la corrida): el fallo pasajero a mitad del handler. Ya lo dicen las notas de FL-EVT-002 («provocarlo exige tirar el almacén a mitad de un consumo»), y hoy su red, el gate estático, prescribe justo el orden equivocado. No hay escenario `FL-*` nuevo para esto.
 
 ## Incremento 1: DSL 2.24, el enlace `storedIn`
 
@@ -108,7 +110,7 @@ Tres de las fixtures están en `READY_FIXTURES`, así que el aviso nace rojo en 
 - **El «no existe» que la operación declara con otro `http`** (lo medido, efecto colateral). `retriesMissingTarget` (`dead-letter.js`) exige además que la operación disparada no declare con un `http` distinto de 404 un `code` que en `model.errors` es de la clase 404. El `http` de esa operación sale de `operationError`. Se prueba en `keel-core` con el par, que hoy es el único caso: sin `storedIn` el resultado no cambia, con `storedIn` el destino no aparece en `missingTargetRetryDestinations`. Su contrario va sobre un diseño sintético que declara el 404.
 - **Docs.** `docs/dsl/use-cases.md`, la fila del historial en `dsl-reference.md` y `docs/validation-scenarios.md` si habla de la guarda.
 - **Versión.** `SUPPORTED_DSL`, el `keel.dsl` del `package.json` y el README de los cuatro generadores; la plantilla `templates/service/service.keel.yaml`; el `keel` de todas las fixtures; y el corpus de mutaciones (su base sigue en silencio).
-- **Fuera de este plan:** el registry, que ya está pendiente de subir a 2.22, sube a 2.24 cuando se publique.
+- **Fuera de este plan:** el registry sube a la 2.24, y lo hace el usuario a mano. Lo medido el 2026-11-06: va por la 2.23 (no por la 2.22), con cuatro diseños: `catalog`, `notifications`, `payment` y `user-profile`. Puede abrir `CHK-MSG-RETRY-AFTER-CLAIM` en los que reintenten sin guarda.
 - **Puerta:**
   - `npm test`, los cinco paquetes;
   - `npm run design-matrix --workspace packages/keel-core`, con los dos ids nuevos falsados.
@@ -196,7 +198,7 @@ Con el modelo arreglado, el orden del listener ya sale bien en los cuatro. Lo qu
 ### Lo hecho (2026-11-06)
 
 - `acceptNotificationRequest` declara `idempotency: { keySource: payload-field, keyField: eventId, storedIn: dedupeKey }` en las dos fixtures, con un comentario. Las capas siguen idénticas.
-- **Sin escenario de la carrera: falso positivo escrito.** El plan suponía que recarear un flujo nuevo era posible con un patch, y no lo es. El careo caduca solo con el minor (`versionShape`, `flow-review.js`), el par lleva gastadas las 3 pasadas de la v2.1, y un flujo nuevo lo deja en `exhausted` sin salida. Subir a minor caducaba el careo entero, toda la revisión y el `since` de cada decisión, por un escenario que no podría fallar. **Decisión del usuario:** `CHK-SCEN-IDEM-RACE` va a `falsePositives` en `decisions.yaml` (`match: operations.acceptNotificationRequest`), con su motivo. La carrera de dos entregas del mismo `eventId` la arbitra la misma constraint que la reentrega (FL-EVT-001-B), y con un consumidor por cola el arnés las serializa. **Deuda de keel-core, fuera de este plan:** el detector debería saltarse una operación interna guardada por clave natural, como ya hace `OBL-IDEM-RACE-CODE`.
+- **Sin escenario de la carrera: falso positivo escrito.** El plan suponía que recarear un flujo nuevo era posible con un patch, y no lo es. El careo caduca solo con el minor (`versionShape`, `flow-review.js`), el par lleva gastadas las 3 pasadas de la v2.1, y un flujo nuevo lo deja en `exhausted` sin salida. Subir a minor caducaba el careo entero, toda la revisión y el `since` de cada decisión, por un escenario que no podría fallar. **Decisión del usuario:** `CHK-SCEN-IDEM-RACE` va a `falsePositives` en `decisions.yaml` (`match: operations.acceptNotificationRequest`), con su motivo. La carrera de dos entregas del mismo `eventId` la arbitra la misma constraint que la reentrega (FL-EVT-001-B), y con un consumidor por cola el arnés las serializa. **Deuda de keel-core, que es el inc. 5:** el detector debería saltarse una operación interna guardada por clave natural, como ya hace `OBL-IDEM-RACE-CODE`.
 - **`review.yaml`**: `REV-MSG-DEDUPE-WINDOW` deja de aplicar (`appliesTo` es «handler sin `transitions` ni `idempotency`»), y su veredicto era justo la prosa que decía que la guarda era la clave natural. Se retira, con una línea de cabecera que lo explica. No hizo falta reescribirlo.
 - **Versión `v2.1.2`** en `service.keel.yaml` y en la cabecera de `validation-scenarios.md` (fuera de los flujos: el careo sigue al día). `DESIGN.md` de `fixtures/design-docs/` gana la versión y un párrafo de la guarda en los dos.
 - `--ready` sale 12/13 fuera de un workspace (falta solo `DESIGN.md`, como siempre) y `mvp-ready` 17/17.
@@ -207,7 +209,53 @@ Con el modelo arreglado, el orden del listener ya sale bien en los cuatro. Lo qu
   - `store-check`, en verde: `notification-mailer` 24/24 en PostgreSQL y en MySQL, y `notification-mailer-mongo` 18/18.
   - `npm test`, los cinco paquetes, en verde.
 
-## Incremento 5: corrida de control
+## Incremento 5: el detector de la carrera respeta la guarda por clave natural
+
+`CHK-SCEN-IDEM-RACE` (`crossrefs.js`, ~l. 2030) pide un escenario de carrera a toda operación con `idempotency`. Pero la carrera que describe es la de dos peticiones HTTP con la misma clave, que arbitra un registro de claves con su código de «en curso». Con la guarda por clave natural no hay registro ni código: la arbitra la constraint, la misma que frena la reentrega. Es el mismo salto que el inc. 1 hizo en `OBL-IDEM-RACE-CODE`/`-REUSE-CODE`.
+
+- **Abrir midiendo** qué operaciones de las fixtures y del corpus dejan de pedir el escenario, y si alguna con `natural-key` es **alcanzable por HTTP**. Ahí la carrera sí existe para el cliente: dos POST simultáneos, y uno acaba en el 409 de la unicidad. La pregunta es si la regla se salta toda operación guardada por clave natural o solo las internas, y se decide con lo medido. Propuesta: solo las que ninguna puerta HTTP alcanza.
+- **La regla** usa `guardedByNaturalKey` (`gen/natural-key-guard.js`) con `naturalKeyOfTarget`, igual que las obligaciones. No recalcula nada.
+- **Caso en `test/crossrefs.test.js`** en las dos direcciones y, si cambia lo que dispara alguna mutación, su ajuste en el corpus.
+- **El par** retira su `falsePositives` de `CHK-SCEN-IDEM-RACE`, que ya no casa con ningún aviso. Hay que comprobar si `keel validate` avisa de un falso positivo huérfano; si no, que el test lo afirme. Retirarlo no cambia el diseño, así que la versión se queda en la 2.1.2.
+- **Puerta:** `npm test` (con `mvp-ready`) y `design-matrix`.
+
+### Lo hecho (2026-11-06)
+
+- **Lo medido.** En las fixtures, las únicas operaciones guardadas por clave natural son internas: `acceptNotificationRequest` en el par y `metering-digest.recordReading`, que no tiene escenarios. Solo el par disparaba. Las otras dos que disparan (`catalog-extended`) son `client-key`/`payload-hash` por HTTP y siguen igual. Por HTTP, la carrera con la guarda por clave natural sí se ve: las dos peticiones fallan la búsqueda, una inserta y la otra se lleva el conflicto de la unicidad. Así que se salta **solo sin puerta HTTP**.
+- **La regla** (`crossrefs.js`): no se pide el escenario si la operación no tiene puerta HTTP y `guardedByNaturalKey` con `naturalKeyOfTarget`. Sin puerta significa `internal: true` o sin capa `api`. No se usa `autoCoversOp`, porque con `api.auto` el modelo da ruta por defecto a cualquier otra operación y, en la duda, el aviso tiene que seguir saliendo.
+- **Tres casos** en `crossrefs.test.js`: sin puerta y guardada (calla), sin puerta y sin guarda (avisa), con puerta y guardada (avisa). Falsados: sin el salto cae el primero, y saltando también con puerta cae el tercero, cada uno solo. La mutación `M-SCEN-IDEM-RACE` (`client-key` por HTTP) no cambia.
+- **El par** retira su `falsePositives`, que `keel validate` ya señalaba como huérfano («ya no sale … bórralo»). Su `decisions.yaml` vuelve a ser el de antes del inc. 4, sin cambio de versión.
+- **Doc**: `validation-scenarios.md`, la excepción en la regla de los dos escenarios de `idempotency`.
+
+## Incremento 6: la clave primaria como guarda de idempotencia
+
+`metering-digest.decommissionMeter` aceptó `CHK-MSG-RETRY-AFTER-CLAIM` porque su guarda real es la PK: `serialNumber` es `id: true`, y la entidad no tiene `naturalKey`. El modelo solo reconoce como guarda la `naturalKey`, así que el listener reclama antes y el reintento muere.
+
+- **Abrir midiendo** antes de decidir:
+  - qué operaciones de las fixtures escriben una entidad cuyo id viene del input, distinguiendo creación (un segundo INSERT viola la PK) de actualización (aplicar dos veces la misma baja puede ser inocuo o no);
+  - y qué haría el generador con cada una: si hay `findById` en el puerto, qué conflicto mapea la violación de PK y si el handler que escribe el agente puede buscar antes de insertar.
+- **Las dos salidas a decidir con el usuario**:
+  - **(a)** `domainGuardKind` reconoce la PK como una forma más de guarda, sin DSL nuevo, derivada de que el campo guardado es el `id: true` de la entidad escrita;
+  - **(b)** que lo declare el diseño, con `idempotency: payload-field` cuyo `keyField` (o `storedIn`) es el id, extendiendo `guardedByNaturalKey` a la PK.
+
+  La (b) encaja con la regla del plan («lo que falta es saber que la guarda **existe**») y no adivina nada. La (a) arregla diseños que no lo declaran, pero se acerca a inferir.
+- **Lo que arrastra cualquiera de las dos:**
+  - un `triggerGuardKind` nuevo (o el mismo `natural-key` con la PK) que las notas de los **cuatro** generadores tienen que explicar, comparado como en el inc. 2;
+  - el gate de `check-idempotency.sh`, que exige el finder de la clave natural y aquí sería `findById`, ejecutado sobre un proyecto emitido;
+  - y `metering-digest` retira su aceptación y declara la guarda.
+- **Puerta:**
+  - `npm test` y `design-matrix`, si entra un id;
+  - `compile-check` de `metering-digest`;
+  - y la red del motor que mida la violación de PK, si el generador la mapea (`store-check` o `claim-check`, a decidir en la medición).
+
+### Lo hecho (2026-11-06): cerrado sin cambio de código
+
+- **Lo medido.** En las fixtures, las operaciones que escriben una entidad cuyo id no es generado y llega en el input son cuatro. Solo una entra por suscripción: `metering-digest.decommissionMeter`, una creación con `MeterDecommission.serialNumber` como id y la rule «si ya existe, devuelve la existente». Las otras tres son de `shop-api` (`get`/`create`/`updateProduct` sobre `ProductInfo.productId`), por HTTP y sin `idempotency`.
+- **Lo que arrastra reconocer la PK.** La rama `natural-key` de los cuatro generadores cuelga de `entity.naturalKey`: el finder del puerto (`keyFinder`), la nota del handler y el patrón que exige el gate (`idempotency-check.js` de cada uno). Con la PK, el finder sería `findById`, y habría que tocar los cuatro con sus redes.
+- **Una tercera salida, sin código**, medida sobre una copia: declarar `naturalKey: [serialNumber]` más `idempotency: { keySource: payload-field, keyField: serialNumber }`. Valida limpia, calla el aviso y genera bien en los cuatro (listener en el orden correcto, `findBySerialNumber`). El precio es una constraint única redundante con la PK, y que en una carrera puede saltar antes la PK, que no tiene error mapeado.
+- **Decisión del usuario:** cerrar sin cambio. `metering-digest` es una fixture parcial y mantiene su aceptación (con el motivo reescrito). La PK como guarda se hará cuando un diseño real la pida, y entonces las tres salidas, (a) inferirla, (b) declararla sobre el id y (c) la `naturalKey` igual al id, ya están medidas aquí.
+
+## Incremento 7: corrida de control
 
 - Corrida sobre el par con keel-spring, por el flujo normalizado. La lanza el usuario; no tocar el proyecto mientras corre.
 - **Qué mide:**
