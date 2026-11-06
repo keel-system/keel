@@ -2026,9 +2026,20 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // un servicio puede tener carreras de otras cosas, y encontrarlas no dice nada de
   // esta. Misma asimetría que en la compensación — el reintento secuencial encuentra
   // el registro de la clave ya commiteado y lo resuelve una lectura.
+  //
+  // No se pide a una operación SIN puerta HTTP guardada por su clave natural (DSL 2.24, el mismo
+  // salto que OBL-IDEM-RACE-CODE): no hay registro de claves que arbitrar ni código de «en curso»,
+  // la carrera de dos entregas del mismo mensaje la arbitra la misma constraint que la reentrega, y
+  // con un consumidor por cola el arnés las serializa, así que el escenario no podría fallar. Por
+  // HTTP sí se pide: dos peticiones a la vez fallan las dos la búsqueda, una inserta y la otra se
+  // lleva el conflicto de la unicidad, y eso es contrato que el cliente ve. Sin puerta es
+  // `internal: true` o un servicio sin capa api: con `api.auto` el modelo da ruta por defecto a
+  // cualquier otra, así que en la duda el aviso sigue saliendo.
   if (scenarios !== null) {
     for (const [opName, op] of Object.entries(operations)) {
       if (!op?.idempotency) continue;
+      const withoutHttpDoor = op.internal === true || !api;
+      if (withoutHttpDoor && guardedByNaturalKey(op.idempotency, naturalKeyOfTarget(op, persistence))) continue;
       const mentions = scenariosMentioning(opName);
       if (mentions.length > 0 && !mentions.some((block) => CONCURRENT.test(block))) {
         warn('CHK-SCEN-IDEM-RACE',

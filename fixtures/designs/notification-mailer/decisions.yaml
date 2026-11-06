@@ -58,18 +58,6 @@ decisions:
       sale sin Location, que es lo honrado: antes apuntaba a /v1/applications/{id}, que no sirve
       nadie.
     since: 2.1.0
-falsePositives:
-  - id: CHK-SCEN-IDEM-RACE
-    match: operations.acceptNotificationRequest
-    reason: >-
-      La carrera que pide el detector es la de dos peticiones HTTP con la misma Idempotency-Key, que
-      arbitra un registro de claves con su código de «en curso». acceptNotificationRequest es interna
-      y su guarda es la naturalKey [applicationKey, dedupeKey] (storedIn), sin registro ni códigos de
-      carrera. Dos entregas del mismo eventId las arbitra esa misma constraint, igual que la reentrega
-      de FL-EVT-001-B, y con un consumidor por cola el arnés las serializa: un escenario de entregas
-      simultáneas sería FL-EVT-001-B otra vez y no podría fallar. Deuda del detector: no distingue la
-      guarda por clave natural de una operación interna.
-    since: 2.1.2
 structural:
   - section: '3.1'
     scope: messaging.publishing.reliability

@@ -7238,3 +7238,30 @@ test('CHK-MSG-RETRY-AFTER-CLAIM: sin deduplicación en el listener no hay reclam
   const found = retryAfterClaim(claimLayers({ contract: { envelope: 'none' } }));
   assert.deepEqual(found, []);
 });
+
+// --- CHK-SCEN-IDEM-RACE y la guarda por clave natural (DSL 2.24, inc. 5) ---
+//
+// Sin puerta HTTP y guardada por su clave natural, la carrera de dos entregas la arbitra la misma
+// constraint que la reentrega y el escenario no podría fallar: no se pide. Por HTTP sí, porque el
+// perdedor se lleva el conflicto de la unicidad y eso lo ve el cliente.
+
+const SIN_CARRERA = '### FL-RET-001: retirada por evento\n\n**When** llega StockDepleted y se ejecuta retireProduct.\n**Then** el producto queda retirado.\n';
+const raceFindings = (layers) =>
+  checkCrossRefs({ layers, scenarios: SIN_CARRERA }).findings.filter((f) => f.id === 'CHK-SCEN-IDEM-RACE');
+const naturalKeyGuarded = { idempotency: { keySource: 'payload-field', keyField: 'eventId', storedIn: 'dedupeKey' } };
+const naturalKeyPersistence = { entities: { Product: { naturalKey: ['dedupeKey'] } } };
+
+test('CHK-SCEN-IDEM-RACE: sin puerta HTTP y guardada por la clave natural no pide la carrera', () => {
+  assert.deepEqual(raceFindings(claimLayers({ op: naturalKeyGuarded, persistence: naturalKeyPersistence })), []);
+});
+
+test('CHK-SCEN-IDEM-RACE: sin puerta HTTP pero sin guarda por clave natural, la sigue pidiendo', () => {
+  const sinStoredIn = { idempotency: { keySource: 'payload-field', keyField: 'eventId' } };
+  assert.equal(raceFindings(claimLayers({ op: sinStoredIn, persistence: naturalKeyPersistence })).length, 1);
+});
+
+test('CHK-SCEN-IDEM-RACE: con puerta HTTP la pide aunque la guarda sea la clave natural', () => {
+  const layers = claimLayers({ op: { ...naturalKeyGuarded, internal: false }, persistence: naturalKeyPersistence });
+  layers.api = { endpoints: { retireProduct: { method: 'POST', path: '/products/retirements', successStatus: 201 } } };
+  assert.equal(raceFindings(layers).length, 1);
+});
