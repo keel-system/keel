@@ -37,9 +37,9 @@ Se descartó que el generador libere la marca si el handler falla: tapa el fallo
 | 4 | El par del MVP declara su guarda | hecho (2026-11-06, junto con el 3) |
 | 5 | El detector de la carrera respeta la guarda por clave natural | hecho (2026-11-06) |
 | 6 | La clave primaria como guarda de idempotencia | cerrado sin cambio (2026-11-06): medido, decisión del usuario |
-| 7 | Corrida de control | pendiente |
+| 7 | Corrida de control | hecho (2026-11-06) |
 
-**Para retomar:** queda el incremento 7, la corrida de control sobre el par v2.1.2 con keel-spring, que lanza el usuario. Los incrementos 3 y 4 se cerraron juntos por decisión del usuario, porque el aviso nacía rojo en el par y el inc. 3 no podía cerrar en verde sin el 4 (§ Lo hecho del inc. 3). Los 5 y 6 son dos de las deudas que dejaron el 3 y el 4, incorporadas al plan el 2026-11-06 por decisión del usuario. El 6 se cerró sin cambio de código, solo con lo medido. La tercera deuda, subir el registry a la 2.24, la hace el usuario a mano, fuera del plan.
+**Plan cerrado (2026-11-06).** Las dos corridas de control del par v2.1.2 salen 23/23, con la huella 17 idéntica archivo por archivo a la del control del 2026-11-05, y el listener de `NotificationRequested` ya comprueba y registra después de despachar. Queda fuera, a decisión del usuario, un defecto del pipeline de keel-spring que destapó la corrida relacional (§ Lo hecho del inc. 7). El registry a la 2.24 lo sube el usuario a mano.
 
 ## Lo que se descarta, y por qué
 
@@ -265,6 +265,13 @@ Con el modelo arreglado, el orden del listener ya sale bien en los cuatro. Lo qu
 - Registro en `docs/corridas/<fecha>-<servicio>.md`, con la tabla de etiquetas fijas.
 - Si la corrida sale limpia, keel-nest, keel-dotnet y keel-go no la repiten: su cambio es el javadoc, comparado en el inc. 2.
 - **Cierre del plan:** mover este archivo a `completed_plans/` y borrar la memoria `keel-guarda-listener-tryrecord`.
+
+### Lo hecho (2026-11-06)
+
+- **Las dos corridas**, generadas desde el workspace con `keel-spring build` y el `keel-stack.json` de cada control del 2026-11-05 copiado antes, para que el stack sea el mismo: `docs/corridas/2026-11-06-notification-mailer-spring-control.md` y `-mongo-spring-control.md`.
+- **Lo que medían, cerrado en las dos.** El listener que escribe el agente llama a `alreadyProcessed`, despacha y llama a `record` después; no hay `tryRecord`. El handler busca por la clave natural con el valor derivado (`"event:" + eventId`). `check-idempotency.sh` sale verde, y recién generado salía rojo pidiendo justo ese orden.
+- **Lo que no debía cambiar, igual.** 23/23 (28 casos), huella 17 con los mismos archivos que el control del 2026-11-05 (comparadas las salidas de `footprint`), sin `designGaps`, `specs.sha256` intacto y `build --check` al día. keel-nest, keel-dotnet y keel-go no la repiten: su cambio es el texto de las notas, comparado en el inc. 2.
+- **Un defecto del pipeline, fuera de este plan** (lo destapó el disco, no el informe; detalle en el registro de la relacional). El pase de calidad lanzó su `integrationTest`, leyó los resultados a medias y reportó «28 tests, 0 fallos». El orquestador ejecutó `infra/down.sh` con esa suite todavía corriendo, y el `build/test-results/` que quedó es el de la ejecución cortada (24 casos, 18 fallos). No afecta al 23/23: la última edición de código es anterior a la ejecución puntuada. Está en la prosa de los agentes (`keel-spring-quality.md` y la orquestación), no en el código de `build`, y queda a decisión del usuario.
 
 ## Verificación común
 
