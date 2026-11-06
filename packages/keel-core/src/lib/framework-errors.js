@@ -90,6 +90,29 @@ export const FRAMEWORK_ERRORS = {
     when: 'Dos escrituras concurrentes sobre la misma raíz: la segunda va contra una versión que ya cambió.'
   },
 
+  // La escritura condicional (DSL 2.25). Los dos son del cliente, no de una carrera: el 412 dice que el recurso cambió
+  // desde que lo leyó (otro guardó entre su lectura y su escritura), y el 428 que la operación exige demostrarlo. El 409
+  // de `concurrency` sigue siendo otra cosa —dos transacciones que se cruzan dentro del servidor— y no se confunden.
+  preconditionFailed: {
+    code: 'PRECONDITION_FAILED',
+    http: 412,
+    overridable: true,
+    family: /(^|_)(PRECONDITION_FAILED|VERSION_MISMATCH|STALE_VERSION|ETAG_MISMATCH)$/,
+    mechanism: 'api: concurrency.operations (la cabecera If-Match)',
+    when:
+      'La versión que manda el cliente en If-Match no es la vigente: otro escribió entre su lectura y su escritura. ' +
+      'No se escribe nada; el cliente vuelve a leer y decide.'
+  },
+
+  preconditionRequired: {
+    code: 'PRECONDITION_REQUIRED',
+    http: 428,
+    overridable: true,
+    family: /(^|_)(PRECONDITION_REQUIRED|IF_MATCH_REQUIRED|ETAG_REQUIRED|VERSION_REQUIRED)$/,
+    mechanism: 'api: concurrency.conditionalWrites: required',
+    when: 'Una escritura listada llega sin If-Match y la política lo exige. Se responde en el borde, sin cargar nada.'
+  },
+
   idempotencyRace: {
     code: 'IDEMPOTENCY_KEY_IN_PROGRESS',
     http: 409,

@@ -591,7 +591,28 @@ function withPayments(d) {
   );
 }
 
+/**
+ * Escritura condicional (DSL 2.25): `closeTicket` compara If-Match sobre `Ticket`, que con `optimisticLocking: all`
+ * tiene versión, y `getTicket` (GET /tickets/{id}) es la lectura derivada que da el ETag. El bloqueo abre
+ * OBL-CONCURRENCY-CODE, que se cierra nombrando el 409; y los dos códigos tienen su escenario.
+ */
+function withConcurrency(d) {
+  d.layers.persistence.consistency.optimisticLocking = 'all';
+  ops(d).closeTicket.errors.push({ code: 'CONCURRENT_MODIFICATION', when: 'Otro cierre se cruzó con este en el servidor.', http: 409 });
+  d.layers.api.concurrency = { conditionalWrites: 'required', operations: ['closeTicket'] };
+  insertScenarioBefore(
+    d,
+    '### FL-QUE-001',
+    `#### FL-TCK-004-B: cierre con un formulario viejo
+
+**Given** un ticket en \`open\` que dos agentes leen con \`getTicket\` y el mismo ETag.
+**When** el primero llama a \`closeTicket\` con ese ETag en If-Match, y después el segundo con el mismo.
+**Then** el primero responde 200 y el segundo 412 con \`PRECONDITION_FAILED\`; si los dos cierres se cruzan dentro del servidor, el perdedor responde 409 con \`CONCURRENT_MODIFICATION\`.`
+  );
+}
+
 export const EXTENSIONS = {
+  concurrency: withConcurrency,
   payments: withPayments,
   m2m: withM2m,
   scoping: withScoping,
@@ -1610,6 +1631,64 @@ export const MUTATIONS = [
       ops(d).createTicket.idempotency = { keySource: 'payload-field', keyField: 'requesterEmail', storedIn: 'requesterEmail' };
     },
     expect: ['CHK-USECASES-IDEM-STOREDIN-NOT-NATURAL']
+  },
+  // ─── DSL 2.25: la escritura condicional (api.concurrency) ─────────────────────
+  {
+    id: 'M-API-CONCURRENCY-OP-UNKNOWN',
+    title: 'concurrency.operations lista una query',
+    extends: 'concurrency',
+    mutate: (d) => {
+      d.layers.api.concurrency.operations.push('getTicket');
+    },
+    expect: ['CHK-API-CONCURRENCY-OP-UNKNOWN']
+  },
+  {
+    id: 'M-API-CONCURRENCY-UNVERSIONED',
+    title: 'una escritura condicional sobre una raíz sin versión',
+    extends: 'concurrency',
+    mutate: (d) => {
+      d.layers.persistence.consistency.optimisticLocking = 'none';
+    },
+    expect: ['CHK-API-CONCURRENCY-UNVERSIONED']
+  },
+  {
+    id: 'M-API-CONCURRENCY-CREATE',
+    title: 'un alta listada como escritura condicional',
+    extends: 'concurrency',
+    mutate: (d) => {
+      d.layers.api.concurrency.operations.push('createTicket');
+    },
+    expect: ['CHK-API-CONCURRENCY-CREATE']
+  },
+  {
+    id: 'M-API-CONCURRENCY-NO-READER',
+    title: 'ninguna lectura da el ETag de la raíz de una escritura condicional',
+    extends: 'concurrency',
+    mutate: (d) => {
+      ops(d).getTicket.output = { entity: 'Ticket', list: true, sort: ['subject'] };
+      // Sin lectura por id, el 201 del alta pierde su Location (CHK-API-CREATED-NO-READ): se aísla respondiendo 200.
+      d.layers.api.endpoints.createTicket.successStatus = 200;
+    },
+    expect: ['CHK-API-CONCURRENCY-NO-READER']
+  },
+  {
+    id: 'M-SCEN-PRECONDITION-UNCOVERED',
+    title: 'una escritura condicional sin escenario del 412',
+    extends: 'concurrency',
+    mutate: (d) => {
+      replaceIn(d, 'el segundo 412 con `PRECONDITION_FAILED`; si', 'el segundo vuelve a leer; si');
+    },
+    expect: ['CHK-SCEN-PRECONDITION-UNCOVERED']
+  },
+  {
+    id: 'M-API-CONCURRENCY-UNDECIDED',
+    title: 'un PATCH sobre una raíz con versión en un diseño que no dice nada de la escritura condicional',
+    extends: 'concurrency',
+    mutate: (d) => {
+      delete d.layers.api.concurrency;
+      d.layers.api.endpoints.closeTicket.method = 'PATCH';
+    },
+    expect: ['OBL-API-CONCURRENCY-UNDECIDED']
   },
   // ─── DSL 2.18: el plazo de un rescate, enlazado a un parámetro ────────────────
   // El base no tiene barridos: closeTicket no declara schedule, así que cada mutación dispara ese

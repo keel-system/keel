@@ -535,6 +535,30 @@ export const MECHANISMS = {
           'el documento CRUDO contra documentShape a todo nivel (cada clave con su tipo BSON y ninguna de más), ida y vuelta, versión, clave natural e índice condicionado, la auditoría, página con orden por la ruta del espejo. Falsado con diez sabotajes que compilan (decimal y uuid como texto —la ida y vuelta sigue en verde: solo lo ve el documento crudo—, la versión fuera del filtro, el traductor, created_at, el enum, el día en otra zona…) (12b)'
       }
     }
+  },
+  'conditional-write': {
+    parity: {
+      skip: 'ningún par declara api.concurrency (la frontera de keel-spring, keel-nest y keel-go la rechaza hasta su incremento de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md); el texto lo fijan test/uncovered-branches.test.js y test/conditional-writes.test.js sobre las variantes de keel-core/test/helpers/conditional-write-designs.js',
+      test: 'test/conditional-writes.test.js'
+    },
+    emitter: 'src/scaffold/conditional-writes.js (Versioned, las excepciones, ConditionalRequests, LoadExpecting, el gate y las pruebas emitidas) · endpoints.js · services.js · repositories.js y document-repositories.js · cache.js · security.js (CORS)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'catalog-conditional (catalog-extended con api.concurrency: required sobre updateProduct y retireProduct): CW-1 a CW-5 contra el adaptador de EF Core en PostgreSQL y MySQL —la carga con la vigente, la otra versión es 412 sin tocar la fila, la esperada nula no compara, Save devuelve la versión nueva que ve la lectura posterior, y otra escritura entre la carga y el guardado sigue siendo el 409 de concurrencia—. Falsado con --only=catalog-conditional: cw-ignore-expected cae en CW-2, cw-stale-version en CW-4 y cw-collapse-409 en CW-5 (y en las sondas previas de la versión obsoleta, que miden el mismo 409). El borde, en cs-check (las variantes catalog-conditional y shop-conditional): CW-6 a CW-11 en las pruebas emitidas, falsadas con cw-no-428 (CW-6), cw-weak-match (CW-7), cw-error-map (CW-8), cw-cors (CW-9) y cw-cache-etag (CW-11); CW-12, el gate EJECUTADO en test/conditional-writes.test.js, falsado con cw-gate. CW-11 no corre contra un Redis real: lo que cambia es el tipo que guarda la caché, y el codec y el adaptador son los que ya mide cache-check'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          'catalog-conditional-mongo: CW-1 a CW-5 contra el adaptador de MongoDB.Driver en un replica set real, con las MISMAS sondas que db-check. Falsado con --only=catalog-conditional-mongo: cw-ignore-expected cae en CW-2, cw-stale-version en CW-4 y cw-collapse-409 en CW-5 (y en las sondas previas de la versión obsoleta)'
+      }
+    }
   }
 };
 

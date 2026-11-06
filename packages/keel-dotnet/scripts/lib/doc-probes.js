@@ -27,7 +27,7 @@ import { repositoryRoots, portClass, repositoriesNamespace, isPaginated } from '
 import { isNullable } from '../../src/scaffold/render.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
-import { authorshipProbe, finderProbes, finderSampleCount, idCsType, inverseFinderProbes, inverseSampleCount, rankProbes, rankSampleCount, idBatchProbe, counter, credentialProbes, guardProbes, guardSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
+import { conditionalSampleCount, conditionalWriteProbes, authorshipProbe, finderProbes, finderSampleCount, idCsType, inverseFinderProbes, inverseSampleCount, rankProbes, rankSampleCount, idBatchProbe, counter, credentialProbes, guardProbes, guardSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
 import { documentProbeSupport, storeKeyBlock, documentOutboxBlock, documentBridgeBlock, documentReconciliationStoreBlock, documentClaimProbes, documentReconciliationProbes, documentPurgeBlock } from './doc-store-probes.js';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { bridgeClass, messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
@@ -250,7 +250,9 @@ function probesCs(model, namespace) {
     // Las del orden por rango y las de las inversas, detrás de todas: no mueven ninguna.
     const beforeRank = beforeFinders + finderSampleCount(model, root);
     const beforeInverse = beforeRank + rankSampleCount(model, root);
-    const total = beforeInverse + inverseSampleCount(model, root);
+    // Las de la escritura condicional (api.concurrency), detrás de todas: las mismas sondas que db-check.
+    const beforeConditional = beforeInverse + inverseSampleCount(model, root);
+    const total = beforeConditional + conditionalSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -449,6 +451,7 @@ function probesCs(model, namespace) {
     tests.push(...finderProbes(model, root, { state, first: beforeFinders + 1, port, members: allNames, id, usings: ctx.usings }));
     tests.push(...rankProbes(model, root, { state, first: beforeRank + 1, port, members: allNames, id, usings: ctx.usings }));
     tests.push(...inverseFinderProbes(model, root, { state, first: beforeInverse + 1, port, id, members: allNames, ctx }));
+    tests.push(...conditionalWriteProbes(model, root, { state, first: beforeConditional + 1, port, id, concurrency }));
     tests.push(...authorshipProbe(model, root, {
       state,
       sample: 19,

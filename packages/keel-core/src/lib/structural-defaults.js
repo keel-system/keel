@@ -116,6 +116,12 @@ export const COVERED_ELSEWHERE = [
     path: 'persistence.consistency.transactionalBoundary',
     by: 'CHK-PERSIST-BOUNDARY-DEFAULT',
     why: 'sin default en el schema, pero se asume per-operation; solo es pregunta habiendo agregados, que es cuando salta aquella'
+  },
+  {
+    section: '3.12',
+    path: 'api.concurrency.conditionalWrites',
+    by: 'OBL-API-CONCURRENCY-UNDECIDED',
+    why: 'el default (none) solo es pregunta donde alguien edita una raíz con versión, y esa pregunta es por operación: la abre aquella obligación'
   }
 ];
 

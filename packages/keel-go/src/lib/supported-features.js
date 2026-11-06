@@ -14,6 +14,7 @@ import { buildModel } from '@keel-system/keel-core/gen/model';
 import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
+import { conditionalWritesPendingErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { GO_PROJECTION } from './go-projection.js';
 import { messageComponents } from '../scaffold/services.js';
@@ -66,6 +67,8 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...parameterErrors(manifest, layers));
   errors.push(...outboundErrors(layers));
   errors.push(...cacheErrors(layers));
+  // La escritura condicional (DSL 2.25) llega en el incremento 3 de su plan: hasta entonces, entera fuera.
+  errors.push(...conditionalWritesPendingErrors(layers, 'keel-go', 3));
   if (declared.includes('storage')) errors.push(...storageErrors(layers));
   // La idempotencia sin persistencia no es un pendiente: el registro de claves tiene que confirmarse en la misma transacción
   // que el efecto, así que no hay mecanismo posible, y se dice (como los otros tres).

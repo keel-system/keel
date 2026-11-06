@@ -91,6 +91,15 @@ if (requested && !ENGINES.includes(requested)) {
 
 // Los sabotajes: [archivo (sufijo, en todos los sujetos), texto, sustituto], o uno por motor cuando lo emitido cambia.
 const SABOTAGES = {
+  // La escritura condicional (api.concurrency): con --only=catalog-conditional, cada uno cae en su caso CW.
+  'cw-ignore-expected': ['Repositories/ProductRepository.cs', 'expectedVersions.Contains(version)', 'expectedVersions.Count >= 0'],
+  // Una actualización devuelve el agregado que cargó (con la versión de antes); el alta, el guardado.
+  'cw-stale-version': ['Repositories/ProductRepository.cs', '                return ToDomain(row);', '                return expected is null ? ToDomain(row) : entity;'],
+  'cw-collapse-409': [
+    'Persistence/PersistenceErrors.cs',
+    '        if (error is OptimisticLockConflict or',
+    '        if (error is OptimisticLockConflict or DbUpdateConcurrencyException)\n        {\n            return new PreconditionFailedException();\n        }\n        if (error is OptimisticLockConflict or'
+  ],
   // Una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato.
   'empty-page': ['Repository/Page.cs', 'if (items.Count == 0)', 'if (items.Count < 0)'],
   version: ['Repositories/', 'Property(r => r.LockVersion).OriginalValue = expected;', 'Property(r => r.LockVersion).OriginalValue = row.LockVersion;'],
@@ -205,7 +214,9 @@ const DERIVED = {
   // `audit.authorship: declared`: el alta deja la autoría vacía y el adaptador la estampa (raíz e hija).
   ...uncoveredBranch('mailer-author'),
   // El finder de una LISTA con un subcampo de value object y el texto por prefijo (DSL 2.22).
-  ...uncoveredBranch('product-catalog-finder')
+  ...uncoveredBranch('product-catalog-finder'),
+  // La escritura condicional (api.concurrency): LoadExpecting y la versión que devuelve Save (CW-1 a CW-5).
+  ...uncoveredBranch('catalog-conditional')
 };
 
 function uncoveredBranch(name) {

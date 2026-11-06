@@ -45,7 +45,8 @@ console.log('\nMATRIZ DE PARIDAD — qué se genera en cada rama y quién lo EJE
 for (const [id, mechanism] of Object.entries(MECHANISMS)) {
   console.log(`  ${id}  (${mechanism.axis})`);
   console.log(`    ${mechanism.title}`);
-  for (const [key, cell] of Object.entries(mechanism.coverage)) {
+  if (mechanism.pending) console.log(`    ..  pendiente: ${mechanism.pending}`);
+  for (const [key, cell] of Object.entries(mechanism.coverage ?? {})) {
     const falsada = cell.state === 'verificado' ? (cell.falsified ? ' · falsada' : ' · SIN FALSAR') : '';
     console.log(`    ${MARCA[cell.state] ?? '?  '} ${key.padEnd(12)} ${cell.state.padEnd(10)} ${cell.net}${falsada}`);
   }

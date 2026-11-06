@@ -450,6 +450,9 @@ export const MECHANISMS = {
         why: 'el documento CRUDO contra documentShape a todo nivel, ida y vuelta, versión, unicidades y página. Falsado con decimal-as-text y uuid-legacy (la ida y vuelta sigue en verde: solo lo ve el documento crudo), version y translator'
       }
     }
+  },
+  'conditional-write': {
+    pending: 'incremento 3 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md: hasta entonces la frontera de keel-go rechaza api.concurrency entera (conditionalWritesPendingErrors de keel-core), así que no hay código que razonar'
   }
 };
 

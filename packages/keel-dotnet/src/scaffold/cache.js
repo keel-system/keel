@@ -21,6 +21,7 @@ import { cacheYaml } from '@keel-system/keel-core/gen/cache-config';
 import { CACHES, devtoolsContainer } from '@keel-system/keel-core/gen/infra-catalog';
 import { cacheFlushCmd } from '@keel-system/keel-core/gen/infra-scripts';
 import { csFile, csMember, csString, located, namespaceOf, solution } from './render.js';
+import { returnsVersioned } from './conditional-writes.js';
 import { configNamespace } from './config.js';
 import { messageComponents, messageNamespace, returnTypeOf } from './services.js';
 import { telemetryNamespace, usesTelemetry } from './telemetry.js';
@@ -162,7 +163,8 @@ function cachedOperationsFile(model) {
   const { namespace, path } = located(model, 'appSupport', 'CachedOperations');
   const caches = cachedOperations(model);
   const operations = new Map((model.services ?? []).flatMap((service) => service.operations ?? []).map((operation) => [operation.name, operation]));
-  const usings = [namespaceOf(model, 'ports'), namespaceOf(model, 'dtos')];
+  // Versioned<T> (api.concurrency): la entrada de una lectura que da el ETag guarda también la versión (CW-11).
+  const usings = [namespaceOf(model, 'ports'), namespaceOf(model, 'dtos'), ...versionedUsings(model)];
   const invalidators = new Map();
   for (const entry of cacheInvalidations(model)) {
     for (const cache of entry.caches) {
@@ -191,7 +193,7 @@ function cachedOperationsFile(model) {
     return `    /// <summary>
 ${doc.map((line) => `    /// ${line}`).join('\n')}
     /// </summary>
-    public static readonly CachedOperation<${returnTypeOf(operation)}, ${operation.messageClass}> ${cacheMember(cache.operation)} =
+    public static readonly CachedOperation<${returnTypeOf(operation, model)}, ${operation.messageClass}> ${cacheMember(cache.operation)} =
         new(${csString(cache.cacheName)}, ${cache.ttlSeconds}, ${cache.keyFields.length > 0 ? 'message' : '_'} => ${key});`;
   });
   const body = `/// <summary>
@@ -679,8 +681,31 @@ export function cacheTestsFile(model, sln) {
   const roundTrips = cachedOperations(model).map((cache) => {
     const operation = operations.get(cache.operation);
     return `    [Fact]
-    public void LaRespuestaDe${cacheMember(cache.operation)}VuelveIgualDeLaCache() => AssertRoundTrip<${returnTypeOf(operation)}>();`;
+    public void LaRespuestaDe${cacheMember(cache.operation)}VuelveIgualDeLaCache() => AssertRoundTrip<${returnTypeOf(operation, model)}>();`;
   });
+  // CW-11 (api.concurrency): la caché de una lectura que da el ETag guarda la versión con el cuerpo, así que un acierto
+  // devuelve el MISMO ETag que la lectura que la llenó. Una entrada con solo el cuerpo saldría sin versión, o con otra.
+  const versioned = cachedOperations(model).filter((cache) => returnsVersioned(model, operations.get(cache.operation)));
+  if (versioned.length > 0) {
+    roundTrips.push(`    [Fact]
+    public async Task CW11_UnAciertoDevuelveLaVersionDeLaLecturaQueLoLleno()
+    {
+        var store = new MemoryStore();
+        var cache = Cache(store);
+        var versioned = new CachedOperation<Versioned<Answer>, string>("servicio:versionada", 60, message => CacheKey.Of(message));
+        var loads = 0;
+        var first = await cache.GetOrLoad(versioned, "a", _ => { loads++; return Task.FromResult(new Versioned<Answer>(7, new Answer("uno"))); }, cancellationToken: Token);
+        var hit = await cache.GetOrLoad(versioned, "a", _ => { loads++; return Task.FromResult(new Versioned<Answer>(8, new Answer("dos"))); }, cancellationToken: Token);
+        Assert.Equal(1, loads);
+        Assert.Equal(first.Version, hit.Version);
+        Assert.Equal("uno", hit.Value.Value);
+    }`);
+    for (const cache of versioned) {
+      roundTrips.push(`    [Fact]
+    public void CW11_LaCacheDe${cacheMember(cache.operation)}GuardaLaVersion() =>
+        Assert.Equal(typeof(Versioned<>), CachedOperations.${cacheMember(cache.operation)}.GetType().GetGenericArguments()[0].GetGenericTypeDefinition());`);
+    }
+  }
   const usings = [
     'System.Collections',
     'System.Reflection',
@@ -692,6 +717,7 @@ export function cacheTestsFile(model, sln) {
     namespaceOf(model, 'ports'),
     namespaceOf(model, 'appSupport'),
     namespaceOf(model, 'dtos'),
+    ...versionedUsings(model),
     cacheNamespace(model)
   ];
   const body = String.raw`/// <summary>
@@ -921,4 +947,12 @@ export function cacheHarnessMembers(model) {
     protected static void ClearCache() =>
         Run(Harness.ContainerRuntime(), ["exec", ${csString(devtoolsContainer(model.service.name))}, "sh", "-c", ${csString(cacheFlushCmd(entry, model.service))}], "¿Está la infraestructura arriba (bash infra/up.sh)?");`
   ];
+}
+
+/** Versioned<T> (api.concurrency): la entrada de una lectura que da el ETag guarda también la versión (CW-11). */
+function versionedUsings(model) {
+  const versioned = cachedOperations(model).some((cache) =>
+    (model.services ?? []).some((service) => (service.operations ?? []).some((operation) => operation.name === cache.operation && returnsVersioned(model, operation)))
+  );
+  return versioned ? [namespaceOf(model, 'abstractions')] : [];
 }

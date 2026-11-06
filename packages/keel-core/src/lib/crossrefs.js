@@ -6,6 +6,7 @@ import { implicitDefaults } from './structural-defaults.js';
 import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, parseCoverageMatrix, conventionsText } from './scenario-blocks.js';
 import { versionedRouteBase } from './gen/model.js';
 import { guardedByNaturalKey } from './gen/natural-key-guard.js';
+import { conditionalWritesOfLayers, undecidedConditionalWrites } from './gen/conditional-writes.js';
 import { domainGuardKind } from './gen/domain-guard.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
@@ -3719,6 +3720,60 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           `${FRAMEWORK_ERRORS.concurrency.http} al cliente y ninguna operación nombra ese error. Se usará el código canónico ` +
           `'${FRAMEWORK_ERRORS.concurrency.code}'. Es contrato público: si este servicio usa otro, decláralo en los errors de ` +
           `la operación donde el conflicto se observe, con status ${FRAMEWORK_ERRORS.concurrency.http} — ver docs/framework-errors.md`
+      );
+    }
+  }
+  // Escritura condicional (DSL 2.25, api.concurrency): ETag en la lectura e If-Match en la escritura. La derivación —qué
+  // escrituras se pueden generar y qué lecturas dan el ETag— es la de los generadores (gen/conditional-writes.js), así que
+  // lo que aquí se rechaza es exactamente lo que ninguno sabría emitir. Un problema por operación, el primero que tenga.
+  const conditionalPlan = conditionalWritesOfLayers(layers);
+  for (const problem of conditionalPlan?.problems ?? []) {
+    const where = `api: concurrency.operations '${problem.operation}'`;
+    if (problem.kind === 'unknown') {
+      error('CHK-API-CONCURRENCY-OP-UNKNOWN',
+        `${where}: no es un command de use-cases expuesto por HTTP — If-Match llega en una petición, así que solo una escritura con endpoint puede compararlo`
+      );
+    } else if (problem.kind === 'unversioned') {
+      error('CHK-API-CONCURRENCY-UNVERSIONED',
+        `${where}: escribe sobre ${problem.root ? `'${problem.root}'` : 'una entidad que no se deduce'}, que no es una raíz con versión ` +
+          `(persistence.consistency.optimisticLocking: none, o declared sin 'lockVersion' en la raíz) — sin versión no hay ETag que comparar`
+      );
+    } else if (problem.kind === 'create') {
+      error('CHK-API-CONCURRENCY-CREATE',
+        `${where}: su ruta no lleva el id de '${problem.root}' ({id} o {${lowerFirst(problem.root)}Id}) — un alta no tiene versión previa que comparar, y una escritura que no nombra su recurso no sabe cuál cargar`
+      );
+    } else {
+      error('CHK-API-CONCURRENCY-NO-READER',
+        `${where}: ninguna query con endpoint devuelve '${problem.root}' (sin lista ni página), así que nadie da su ETag y el cliente no tiene qué mandar en If-Match. Expón esa lectura`
+      );
+    }
+  }
+  // La pregunta sin contestar: un PUT o PATCH que edita una raíz con versión en un diseño que no dice nada de la escritura
+  // condicional. Con optimisticLocking la carrera DENTRO del servidor ya está arbitrada; la de dos peticiones separadas en
+  // el tiempo no, y perderla no rompe ningún escenario. Por operación: «el cliente es una máquina que no edita
+  // formularios» se acepta de una en una.
+  for (const candidate of undecidedConditionalWrites(layers)) {
+    obligation(
+      'OBL-API-CONCURRENCY-UNDECIDED',
+      `api.concurrency.${candidate.operation}`,
+      `api: ${candidate.operation} (${candidate.method}) edita '${candidate.root}', que tiene versión, y el diseño no declara concurrency — ` +
+        'quien guarda un formulario cargado antes de que otro lo cambiara pisa ese cambio sin error: optimisticLocking solo arbitra ' +
+        'dos transacciones dentro del servidor. Lista la operación en api.concurrency (optional o required), declara ' +
+        "conditionalWrites: none para todo el servicio, o acéptalo en decisions.yaml con su motivo — ver docs/dsl/api.md § concurrency"
+    );
+  }
+  if (scenarios !== null) {
+    const preconditionCode = overrideFor(
+      Object.values(operations).flatMap((op) => (op?.errors ?? []).map((e) => ({ code: e.code, http: e.http }))),
+      FRAMEWORK_ERRORS.preconditionFailed
+    )?.code ?? FRAMEWORK_ERRORS.preconditionFailed.code;
+    const PRECONDITION = new RegExp(`(?<![0-9])412(?![0-9])|(?<![A-Z0-9_])${preconditionCode}(?![A-Z0-9_])`);
+    for (const write of conditionalPlan?.writes ?? []) {
+      if (scenariosMentioning(write.name).map(scenarioBody).some((body) => PRECONDITION.test(body))) continue;
+      warn('CHK-SCEN-PRECONDITION-UNCOVERED',
+        `validation-scenarios.md: no encuentro ningún escenario FL- que nombre '${write.name}' y la ejercite con un If-Match viejo ` +
+          `(412 / ${preconditionCode}) — la garantía de la escritura condicional es justo la que ningún escenario de una sola ` +
+          'escritura distingue. Escribe uno con dos lecturas y dos escrituras separadas: la segunda, con el ETag de antes, da 412 y no cambia nada'
       );
     }
   }

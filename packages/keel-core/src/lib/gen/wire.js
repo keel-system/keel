@@ -30,6 +30,8 @@ export const WIRE_RULES = {
   'nulls-include': 'Por defecto un campo sin valor viaja como null.',
   'nulls-omit': 'Con `conventions.nulls: omit` un campo sin valor no viaja en las respuestas ni en los payloads de evento; el cuerpo de error lo incluye siempre.',
   'unknown-ignored': 'Una propiedad desconocida en la entrada se ignora.',
+  'etag-strong': 'El `ETag` de un recurso con escritura condicional (`api.concurrency`) es su versión entre comillas dobles: fuerte, sin `W/` y opaco para el cliente, que solo lo devuelve tal cual en `If-Match`.',
+  'if-match-strong': '`If-Match` se compara en fuerte: `*` se cumple si el recurso existe y una lista si coincide cualquiera de sus elementos; un `W/"…"`, un valor sin comillas o ilegible no coincide (412). Una cabecera vacía cuenta como ausente.',
   'list-never-null': 'Una lista (`list: true`) nunca viaja como null: sin elementos sale `[]`, también con `conventions.nulls: omit`, y una lista que la entrada no informa se lee como `[]` (salvo la opcional de un PATCH, que ausente significa «no tocar»).'
 };
 
@@ -94,3 +96,33 @@ export const WIRE_SHAPES = {
   eventEnvelope: ['metadata', 'data'],
   eventMetadata: ['eventId', 'eventType', 'eventVersion', 'occurredAt', 'source', 'correlationId', 'traceparent']
 };
+
+/**
+ * La ESCRITURA CONDICIONAL (DSL 2.25, `api.concurrency`): el `ETag` que da una lectura a partir de la versión de la
+ * raíz, y cómo se lee el `If-Match` de una escritura. Son casos y no código porque los cuatro servidores tienen que
+ * llegar a lo mismo: lo que el borde de cada uno estampa en el mensaje (`expected`: la lista de versiones que valen,
+ * `null` si no se compara) y si la versión vigente (`current`) lo cumple.
+ *
+ * `expected: []` es una cabecera presente que no puede coincidir con nada (débil o ilegible): da 412 y no 400, para no
+ * abrir una rama más que medir (D2 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md).
+ */
+export const WIRE_ETAG_CASES = [
+  { id: 'etag-version', rule: 'etag-strong', version: 7, etag: '"7"' },
+  { id: 'etag-first-version', rule: 'etag-strong', version: 0, etag: '"0"' }
+];
+
+export const WIRE_IF_MATCH_CASES = [
+  { id: 'if-match-absent', rule: 'if-match-strong', header: null, current: 7, expected: null, outcome: 'absent' },
+  { id: 'if-match-blank', rule: 'if-match-strong', header: '  ', current: 7, expected: null, outcome: 'absent' },
+  { id: 'if-match-equal', rule: 'if-match-strong', header: '"7"', current: 7, expected: [7], outcome: 'match' },
+  { id: 'if-match-padded', rule: 'if-match-strong', header: '  "7" ', current: 7, expected: [7], outcome: 'match' },
+  { id: 'if-match-other', rule: 'if-match-strong', header: '"6"', current: 7, expected: [6], outcome: 'no-match' },
+  { id: 'if-match-star', rule: 'if-match-strong', header: '*', current: 7, expected: null, outcome: 'match' },
+  { id: 'if-match-list-hit', rule: 'if-match-strong', header: '"5", "7"', current: 7, expected: [5, 7], outcome: 'match' },
+  { id: 'if-match-list-miss', rule: 'if-match-strong', header: '"5","6"', current: 7, expected: [5, 6], outcome: 'no-match' },
+  { id: 'if-match-list-with-weak', rule: 'if-match-strong', header: 'W/"7", "5"', current: 7, expected: [5], outcome: 'no-match' },
+  { id: 'if-match-weak', rule: 'if-match-strong', header: 'W/"7"', current: 7, expected: [], outcome: 'no-match' },
+  { id: 'if-match-unquoted', rule: 'if-match-strong', header: '7', current: 7, expected: [], outcome: 'no-match' },
+  { id: 'if-match-leading-zero', rule: 'if-match-strong', header: '"07"', current: 7, expected: [], outcome: 'no-match' },
+  { id: 'if-match-unreadable', rule: 'if-match-strong', header: 'siete', current: 7, expected: [], outcome: 'no-match' }
+];

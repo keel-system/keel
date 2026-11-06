@@ -365,7 +365,7 @@ function registrationBody(model) {
   for (const projection of projectionClasses(model)) lines.push(`services.AddScoped<${projection}>();`);
   // La resolución por lote de las referencias embebidas (`embed`).
   for (const resolver of resolverClasses(model)) lines.push(`services.AddScoped<${resolver}>();`);
-  for (const operation of operations(model)) lines.push(`services.AddScoped<${contractOf(operation).handler}, ${operation.handlerClass}>();`);
+  for (const operation of operations(model)) lines.push(`services.AddScoped<${contractOf(operation, model).handler}, ${operation.handlerClass}>();`);
   return `/// <summary>
 /// El ÚNICO sitio que registra los casos de uso en el contenedor: el mediator, los mappers y un handler por
 /// operación del diseño, con el contrato que lo ata a SU mensaje. Lo genera build; si una operación no está
@@ -389,7 +389,7 @@ ${lines.map((line) => `        ${line}`).join('\n')}
  */
 function useCasesTest(model) {
   const sln = solution(model);
-  const rows = operations(model).map((operation) => `    [InlineData(typeof(${contractOf(operation).handler}), typeof(${operation.handlerClass}))]`);
+  const rows = operations(model).map((operation) => `    [InlineData(typeof(${contractOf(operation, model).handler}), typeof(${operation.handlerClass}))]`);
   const persistence = usesPersistence(model);
   const usings = [
     ...registrationUsings(model),

@@ -29,6 +29,11 @@ test('la matriz cubre algo', () => {
 // ─── Cada fila apunta a algo real ────────────────────────────────────────────
 
 for (const [id, mechanism] of Object.entries(MECHANISMS)) {
+  // Una fila `pending` no tiene emisor ni celdas: lo que dice es el incremento de otro plan que la trae.
+  if (mechanism.pending) {
+    test(`${id}: pendiente, con el incremento que la trae`, () => assert.match(mechanism.pending, /incremento [0-9]+/));
+    continue;
+  }
   test(`${id}: su emisor existe y su porqué está escrito`, () => {
     for (const file of mechanism.emitter.split(' · ')) {
       assert.ok(fs.existsSync(path.join(pkgRoot, file)), `${id}: ${file} no existe`);
@@ -45,6 +50,7 @@ for (const [id, mechanism] of Object.entries(MECHANISMS)) {
 const engineIds = Object.keys(DATABASES);
 
 for (const [id, mechanism] of Object.entries(MECHANISMS)) {
+  if (mechanism.pending) continue;
   if (mechanism.axis === 'model') {
     test(`${id}: cubre los DOS modelos`, () => {
       assert.deepEqual(Object.keys(mechanism.coverage).sort(), [...MODELS].sort());

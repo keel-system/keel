@@ -96,7 +96,7 @@ const SUBJECTS = [
     }
   },
   // `optimisticLocking: declared` sobre documentos: la versión que declara el dominio (el MISMO parche que compila cs-check).
-  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author'].includes(branch.name)).map((branch) => ({
+  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo'].includes(branch.name)).map((branch) => ({
     name: branch.name,
     from: branch.from,
     mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name)
@@ -107,6 +107,14 @@ const SUBJECTS = [
 // El fin de línea de lo emitido (la llamada sigue en la línea siguiente).
 const NL = String.fromCharCode(10);
 const SABOTAGES = {
+  // La escritura condicional (api.concurrency): con --only=catalog-conditional-mongo, cada uno cae en su caso CW.
+  'cw-ignore-expected': ['Repositories/ProductRepository.cs', 'expectedVersions.Contains(version)', 'expectedVersions.Count >= 0'],
+  'cw-stale-version': ['Repositories/ProductRepository.cs', 'return ToDomainProduct(new BsonDocument(', 'return expected is not null ? entity : ToDomainProduct(new BsonDocument('],
+  'cw-collapse-409': [
+    'Persistence/PersistenceErrors.cs',
+    '        if (error is OptimisticLockConflict or WriteConflictExhaustedException)',
+    '        if (error is OptimisticLockConflict)' + NL + '        {' + NL + '            return new PreconditionFailedException();' + NL + '        }' + NL + '        if (error is OptimisticLockConflict or WriteConflictExhaustedException)'
+  ],
   // Una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato.
   'empty-page': ['Repository/Page.cs', 'if (items.Count == 0)', 'if (items.Count < 0)'],
   // El orden por un enum (shop-api-mongo): la sombra de rango mapeada a la clave del nombre, que es ordenar alfabéticamente.

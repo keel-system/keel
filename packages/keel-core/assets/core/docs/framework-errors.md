@@ -33,6 +33,8 @@ La regla, entonces, es más precisa que «nunca inventes un code»:
 | `domain`: `entities.<E>.lifecycle` | `INVALID_STATE_TRANSITION` | 409 | sí |
 | `persistence`: `naturalKey` / campo `unique` | `<ENTITY>_<CAMPOS>_ALREADY_EXISTS` | 409 | sí |
 | `persistence`: `consistency.optimisticLocking` | `CONCURRENT_MODIFICATION` | 409 | sí |
+| `api`: `concurrency.operations` — If-Match no coincide | `PRECONDITION_FAILED` | 412 | sí |
+| `api`: `concurrency.conditionalWrites: required` — falta If-Match | `PRECONDITION_REQUIRED` | 428 | sí |
 | `use-cases`: `operations.<op>.idempotency` — la carrera | `IDEMPOTENCY_KEY_IN_PROGRESS` | 409 | sí |
 | `use-cases`: `operations.<op>.idempotency` — misma clave, otro cuerpo | `IDEMPOTENCY_KEY_REUSED` | 409 | sí |
 | `storage`: `buckets.<b>.maxSizeMb` | `FILE_TOO_LARGE` | 413 | sí |
@@ -95,6 +97,8 @@ El generador lo detecta y usa **ese** código en vez del canónico. Las familias
 | Canónico | Familia (sufijos admitidos) |
 |---|---|
 | `CONCURRENT_MODIFICATION` | `CONCURRENT_MODIFICATION`, `CONCURRENT_UPDATE`, `OPTIMISTIC_LOCK_CONFLICT`, `OPTIMISTIC_LOCKING_FAILURE`, `VERSION_CONFLICT` |
+| `PRECONDITION_FAILED` | `PRECONDITION_FAILED`, `VERSION_MISMATCH`, `STALE_VERSION`, `ETAG_MISMATCH` |
+| `PRECONDITION_REQUIRED` | `PRECONDITION_REQUIRED`, `IF_MATCH_REQUIRED`, `ETAG_REQUIRED`, `VERSION_REQUIRED` |
 | `IDEMPOTENCY_KEY_IN_PROGRESS` | `KEY_IN_PROGRESS`, `IDEMPOTENCY_IN_PROGRESS`, `REQUEST_IN_PROGRESS` |
 | `IDEMPOTENCY_KEY_REUSED` | `KEY_REUSED`, `KEY_MISMATCH`, `KEY_SIGNATURE_MISMATCH`, `KEY_CONFLICT` |
 | `INVALID_STATE_TRANSITION` | `INVALID_STATE_TRANSITION`, `INVALID_STATE`, `INVALID_TRANSITION`, `ILLEGAL_STATE_TRANSITION` |

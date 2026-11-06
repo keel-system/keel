@@ -150,7 +150,11 @@ function interpret({ manifest, layers, stack = null }) {
   // Base de rutas versionada (estilo del prototipo de referencia): el basePath
   // del diseño (o /api/<servicio>) + /v1, puesta en el @RequestMapping de cada
   // controller (no en server.servlet.context-path).
-  const api = { routeBase: versionedRouteBase(layers.api?.basePath, service.name) };
+  // `concurrency` (DSL 2.25) tal cual lo escribe el diseño; lo interpreta conditional-writes.js.
+  const api = {
+    routeBase: versionedRouteBase(layers.api?.basePath, service.name),
+    concurrency: layers.api?.concurrency ?? null
+  };
 
   // Política de auditoría del diseño. La consumen persistence-entities (qué lleva
   // AuditableEntity) y auditing (si hace falta el AuditorAware que puebla la autoría).
@@ -631,7 +635,7 @@ function collectValueObjects(types, domainTypes, inlineEnumName, hasPersistence)
 // Índice entidad interna → su agregado y su raíz, derivado de domain.aggregates.
 // Es lo que permite distinguir una entidad hija (parte del agregado, se mapea y
 // se proyecta anidada) de una referencia a otro agregado (solo su id).
-function aggregateIndex(domain) {
+export function aggregateIndex(domain) {
   const internalOf = new Map();
   for (const [aggName, agg] of Object.entries(domain.aggregates ?? {})) {
     for (const inner of agg.entities ?? []) internalOf.set(inner, { aggregate: aggName, root: agg.root });
@@ -672,7 +676,7 @@ function classifyRelation(entityName, rel, internalOf, hasPersistence) {
 // escritura en silencio es el fallo caro; 'none' es una decisión explícita del
 // diseño ("último escritor gana") y 'declared' delega en el campo reservado
 // lockVersion, entidad a entidad.
-function locksEntity(policy, isAggregateRoot, declaresLockVersion) {
+export function locksEntity(policy, isAggregateRoot, declaresLockVersion) {
   if (!isAggregateRoot) return false;
   if (policy === 'none') return false;
   if (policy === 'declared') return declaresLockVersion;
@@ -1052,8 +1056,7 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
   const groups = new Map();
 
   for (const [opName, op] of Object.entries(operations)) {
-    const targetEntity =
-      payloadEntity(op.output) ?? payloadEntity(op.input) ?? entityFromOperationName(opName, domainEntities);
+    const targetEntity = operationTargetEntity(opName, op, domainEntities);
     // El grupo, que NO es lo mismo que `targetEntity`: aquel decide la ruta y la
     // idempotencia, y este solo con qué otras operaciones comparte clase de servicio.
     //
@@ -1131,6 +1134,8 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       dispatches: [...(op.dispatches ?? [])],
       // Las igualdades fijas de una query (DSL 2.22): el finder las aplica siempre (query-filters.js).
       where: op.where ? { ...op.where } : null,
+      // La entidad sobre la que actúa (operationTargetEntity): la raíz que compara una escritura condicional.
+      targetEntity,
       route,
       pathParams,
       hasIdParam: pathParams.length > 0,
@@ -3041,6 +3046,15 @@ function payloadEntity(payload) {
   return typeof payload === 'object' && payload?.entity ? payload.entity : null;
 }
 
+/**
+ * La entidad sobre la que actúa una operación: la de su salida, la de su entrada o la que cierra su nombre. Decide la
+ * ruta por convención, la idempotencia y la raíz cuya versión compara una escritura condicional (conditional-writes.js);
+ * la exporta el modelo para que keel validate la derive igual.
+ */
+export function operationTargetEntity(opName, op, domainEntities) {
+  return payloadEntity(op.output) ?? payloadEntity(op.input) ?? entityFromOperationName(opName, domainEntities);
+}
+
 // Operaciones sin entidad en el payload (ej. retireProduct con input { id } y
 // output void): se agrupan por la entidad cuyo nombre cierra el de la operación.
 /**
@@ -3476,7 +3490,7 @@ function resolveIdempotency(op, targetEntity, layers) {
   };
 }
 
-function resolveRoute(opName, op, api, targetEntity, warnings) {
+export function resolveRoute(opName, op, api, targetEntity, warnings) {
   if (op.internal || !api) return null;
 
   // Público del endpoint (users | services | both): el propio, el default de la

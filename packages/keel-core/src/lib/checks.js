@@ -309,6 +309,34 @@ export const CHECKS = {
     title: 'un alta responde 201 y ninguna operación lee el recurso por id',
     closes: 'añadir la lectura por id (GET con {id}) si alguien va a seguir el Location, o aceptar en decisions.yaml que el alta no lo lleva'
   },
+  'CHK-API-CONCURRENCY-OP-UNKNOWN': {
+    layer: 'api',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'concurrency.operations nombra algo que no es un command con endpoint',
+    closes: 'listar en concurrency.operations solo commands de use-cases expuestos por HTTP (en endpoints o por auto)'
+  },
+  'CHK-API-CONCURRENCY-UNVERSIONED': {
+    layer: 'api',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una escritura condicional escribe sobre una raíz sin versión, así que no hay ETag que comparar',
+    closes: "dar versión a la raíz (optimisticLocking: all, o declared con lockVersion en la raíz) o quitar la operación de concurrency.operations"
+  },
+  'CHK-API-CONCURRENCY-CREATE': {
+    layer: 'api',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una escritura condicional no recibe el id de su raíz en la ruta, así que no hay versión previa que comparar',
+    closes: 'exponerla en una ruta con el id de la raíz ({id} o {<raíz>Id}), o quitarla de concurrency.operations si es un alta'
+  },
+  'CHK-API-CONCURRENCY-NO-READER': {
+    layer: 'api',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'ninguna lectura da el ETag de la raíz de una escritura condicional, así que el cliente no tiene de dónde sacarlo',
+    closes: 'exponer una query con endpoint cuya salida sea esa raíz, sin lista ni página'
+  },
   'CHK-API-NO-SECURITY': {
     layer: 'api',
     severity: 'warning',
@@ -1000,6 +1028,13 @@ export const CHECKS = {
     nature: 'incoherence',
     title: 'un `error` declarado no aparece en ningún escenario `FL-`',
     closes: 'un caso borde que lo provoque, con su code y su status'
+  },
+  'CHK-SCEN-PRECONDITION-UNCOVERED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'una escritura condicional no tiene escenario `FL-` del 412',
+    closes: 'un escenario que nombre la operación y la ejercite con un If-Match viejo: dos lecturas, dos escrituras separadas, la segunda con 412'
   },
   'CHK-SCEN-UNOBSERVABLE-RETRY': {
     layer: 'validation-scenarios',

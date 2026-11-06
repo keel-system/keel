@@ -38,9 +38,12 @@ function trae(arbol, marker) {
   return arbol.texto.includes(marker);
 }
 
-const porModelo = Object.entries(MECHANISMS).filter(([id]) => MECHANISM_CATALOG[id].axis === 'model');
+// Las filas `pending` (otro plan todavía no las trae) no emiten nada que comparar.
+const porModelo = Object.entries(MECHANISMS).filter(([id, row]) => MECHANISM_CATALOG[id].axis === 'model' && !row.pending);
 
 for (const [id, mechanism] of porModelo) {
+  // Una fila `pending` todavía no emite nada que comparar.
+  if (mechanism.pending) continue;
   test(`${id}: declara cómo se mira en las dos ramas, o por qué no`, () => {
     const { parity } = mechanism;
     assert.ok(parity, `${id}: mecanismo del eje de modelo sin bloque parity`);

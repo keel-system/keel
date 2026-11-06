@@ -160,6 +160,17 @@ export const OBLIGATIONS = {
     doc: 'framework-errors.md'
   },
 
+  'OBL-API-CONCURRENCY-UNDECIDED': {
+    gapClass: 4,
+    when: 'api: un PUT o PATCH sobre una raíz con versión que recibe su id, en un diseño sin `concurrency`',
+    kind: 'decision',
+    waivable: true,
+    title: 'no está decidido si quien guarda un formulario viejo puede pisar el cambio de otro',
+    closes:
+      '`api.concurrency` (`optional`/`required` con la operación listada, o `none` para todo el servicio), o exención razonada por operación',
+    doc: 'dsl/api.md'
+  },
+
   'OBL-PAYMENTS-FOLLOWUP-REJECTED': {
     gapClass: 18,
     when: 'payments: una acción de seguimiento (`capture`, `void`, `refund`) sin `onRejected`',

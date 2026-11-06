@@ -67,6 +67,7 @@ import { occurredAtField } from '@keel-system/keel-core/gen/replica';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { FINDER_PROBE_TEXT, findersOf, finderTextProbes } from '@keel-system/keel-core/gen/query-filters';
 import { driverNamespace, usesMySql, valueAlias } from '../../src/scaffold/relational-engine.js';
+import { loadsExpecting } from '../../src/scaffold/conditional-writes.js';
 
 /**
  * El SQL de las sondas que cambia de un motor a otro: el alias que lee SqlQuery<T> (dentro de un `$"…"` y en un literal
@@ -392,7 +393,9 @@ function probesCs(model, namespace, harness = null) {
     // Las del orden por rango y las de las inversas, detrás de todas: no mueven ninguna.
     const beforeRank = beforeUuid + (uuidProbe(model, root) ? 1 : 0);
     const beforeInverse = beforeRank + rankSampleCount(model, root);
-    const total = beforeInverse + inverseSampleCount(model, root);
+    // Las de la escritura condicional (api.concurrency), detrás de todas.
+    const beforeConditional = beforeInverse + inverseSampleCount(model, root);
+    const total = beforeConditional + conditionalSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -579,6 +582,7 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
     tests.push(...finderProbes(model, root, { state, first: beforeFinders + 1, port, members: allNames, id, usings: ctx.usings }));
     tests.push(...rankProbes(model, root, { state, first: beforeRank + 1, port, members: allNames, id, usings: ctx.usings }));
     tests.push(...inverseFinderProbes(model, root, { state, first: beforeInverse + 1, port, id, members: allNames, ctx }));
+    tests.push(...conditionalWriteProbes(model, root, { state, first: beforeConditional + 1, port, id, concurrency }));
     tests.push(...credentialProbes(model, root, { state, sample: 16, port }));
     tests.push(...authorshipProbe(model, root, {
       state,
@@ -2017,4 +2021,87 @@ ${sample(raced, 'raced')}
 
 export function guardSampleCount(model, root) {
   return guardClaimsFor(model, root.name).length * 3;
+}
+
+// ─── La escritura condicional (api.concurrency, CW-1 a CW-5) ─────────────────────────────────────────────────────
+
+/** Las muestras de las sondas de la escritura condicional: una por caso, las últimas de su raíz. */
+export function conditionalSampleCount(model, root) {
+  return loadsExpecting(model, root) ? 5 : 0;
+}
+
+/**
+ * CW-1 a CW-5 (keel-core/gen/conditional-writes.js) contra el adaptador emitido, el MISMO texto para las dos ramas
+ * (db-check y doc-check). `concurrency` es el code del 409, que tiene que seguir siendo otra garantía que la del 412.
+ */
+export function conditionalWriteProbes(model, root, { state, first, port, id, concurrency }) {
+  if (!loadsExpecting(model, root)) return [];
+  const repo = (scope) => `${scope}.GetRequiredService<${port}>()`;
+  const versionOf = (local) => `(${local}.LockVersion ?? throw new InvalidOperationException("${root.name} sin versión tras guardar"))`;
+  return [
+    `    [Fact]
+    public async Task ${root.name}_CW1_CargarConLaVersionVigenteDevuelveElAgregado() =>
+        await InScope(async services =>
+        {
+            var saved = await ${repo('services')}.Save(new ${root.name}(${state(first)}), Cancel);
+            long version = ${versionOf('saved')};
+            var loaded = await InScope(other => ${repo('other')}.LoadExpecting(saved.${id}, new long[] { version }, Cancel));
+            Assert.NotNull(loaded);
+            Assert.Equal(Normalize(saved), Normalize(loaded));
+        });`,
+    `    [Fact]
+    public async Task ${root.name}_CW2_CargarConOtraVersionEs412YNoTocaLaFila() =>
+        await InScope(async services =>
+        {
+            var saved = await ${repo('services')}.Save(new ${root.name}(${state(first + 1)}), Cancel);
+            long version = ${versionOf('saved')};
+            var failed = await Assert.ThrowsAsync<PreconditionFailedException>(() => InScope(other => ${repo('other')}.LoadExpecting(saved.${id}, new long[] { version + 1 }, Cancel)));
+            Assert.Equal(412, failed.HttpStatus);
+            var read = await InScope(other => ${repo('other')}.FindById(saved.${id}, Cancel));
+            Assert.NotNull(read);
+            Assert.Equal(version, (long)${versionOf('read')});
+            Assert.Equal(Normalize(saved), Normalize(read));
+        });`,
+    `    [Fact]
+    public async Task ${root.name}_CW3_CargarSinVersionEsperadaNoCompara() =>
+        await InScope(async services =>
+        {
+            var saved = await ${repo('services')}.Save(new ${root.name}(${state(first + 2)}), Cancel);
+            await InScope(other => ${repo('other')}.Save(saved, Cancel));
+            var loaded = await InScope(other => ${repo('other')}.LoadExpecting(saved.${id}, null, Cancel));
+            Assert.NotNull(loaded);
+            var read = await InScope(other => ${repo('other')}.FindById(saved.${id}, Cancel));
+            Assert.NotNull(read);
+            Assert.Equal((long)${versionOf('read')}, (long)${versionOf('loaded')});
+        });`,
+    `    [Fact]
+    public async Task ${root.name}_CW4_GuardarDevuelveLaVersionNuevaLaQueVeUnaLecturaPosterior() =>
+        await InScope(async services =>
+        {
+            var saved = await ${repo('services')}.Save(new ${root.name}(${state(first + 3)}), Cancel);
+            long version = ${versionOf('saved')};
+            var loaded = await InScope(other => ${repo('other')}.LoadExpecting(saved.${id}, new long[] { version }, Cancel));
+            Assert.NotNull(loaded);
+            var second = await InScope(other => ${repo('other')}.Save(loaded, Cancel));
+            Assert.Equal(version + 1, (long)${versionOf('second')});
+            var read = await InScope(other => ${repo('other')}.FindById(saved.${id}, Cancel));
+            Assert.NotNull(read);
+            Assert.Equal((long)${versionOf('second')}, (long)${versionOf('read')});
+        });`,
+    `    [Fact]
+    public async Task ${root.name}_CW5_OtraEscrituraEntreLaCargaYElGuardadoEs409NoEl412() =>
+        await InScope(async services =>
+        {
+            var saved = await ${repo('services')}.Save(new ${root.name}(${state(first + 4)}), Cancel);
+            long version = ${versionOf('saved')};
+            var mine = await InScope(other => ${repo('other')}.LoadExpecting(saved.${id}, new long[] { version }, Cancel));
+            Assert.NotNull(mine);
+            var theirs = await InScope(other => ${repo('other')}.FindById(saved.${id}, Cancel));
+            Assert.NotNull(theirs);
+            await InScope(other => ${repo('other')}.Save(theirs, Cancel));
+            var conflict = await Assert.ThrowsAnyAsync<DomainException>(() => InScope(other => ${repo('other')}.Save(mine, Cancel)));
+            Assert.Equal(${csString(concurrency)}, conflict.Code);
+            Assert.Equal(409, conflict.HttpStatus);
+        });`
+  ];
 }

@@ -10,6 +10,7 @@
 
 import { requestShape } from './api-contract.js';
 import { IDEMPOTENCY_HEADER } from './request-idempotency.js';
+import { ETAG_HEADER, IF_MATCH_CASES, conditionalWrite, conditionalWriteErrors, conditionalWritePolicy, conditionalWritesOf, usesConditionalWrites } from './conditional-writes.js';
 
 /** El uuid de muestra de un parámetro de ruta. */
 export const SAMPLE_UUID = '0192f1d2-0000-7000-8000-000000000001';
@@ -44,7 +45,12 @@ export function concretePath(model, operation) {
  * componentes del mensaje de la operación en el generador (ruta, cuerpo y paginación).
  */
 export function apiCases(model, { components }) {
-  const operations = routed(model);
+  // Las peticiones de estos casos no llevan If-Match: una escritura condicional con `required` respondería 428 antes que
+  // cualquier 400 (D3 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md), así que no sirve de sujeto. Sí cuenta para el 405, que
+  // mira qué métodos sirve un camino.
+  const exempt = (operation) => conditionalWritePolicy(model) === 'required' && Boolean(conditionalWrite(model, operation));
+  const all = routed(model);
+  const operations = all.filter((operation) => !exempt(operation));
   const cases = {};
   // Llega al handler: sin campos obligatorios fuera de la ruta y sin cuerpo.
   for (const operation of operations) {
@@ -89,7 +95,7 @@ export function apiCases(model, { components }) {
   for (const operation of operations) {
     const url = concretePath(model, operation);
     if (!url) continue;
-    const served = new Set(operations.filter((op) => op.route.path === operation.route.path).map((op) => op.route.method));
+    const served = new Set(all.filter((op) => op.route.path === operation.route.path).map((op) => op.route.method));
     const other = ['DELETE', 'PUT', 'PATCH', 'POST', 'GET'].find((method) => !served.has(method));
     if (other) {
       cases.wrongMethod = { method: other, url };
@@ -97,7 +103,7 @@ export function apiCases(model, { components }) {
     }
   }
   // La subida: la primera operación multipart con una ruta concreta y campos de los que hay muestra segura.
-  for (const operation of (model.services ?? []).flatMap((service) => service.operations ?? []).filter((op) => op.route && op.multipart)) {
+  for (const operation of (model.services ?? []).flatMap((service) => service.operations ?? []).filter((op) => op.route && op.multipart && !exempt(op))) {
     const url = concretePath(model, operation);
     if (!url) continue;
     const fromPath = new Set((operation.pathParams ?? []).map((p) => p.name));
@@ -148,4 +154,34 @@ export function securityCases(model, plan) {
     break;
   }
   return { protectedPath, forbidden, notFound: fullPath(model, '/keel-ruta-que-no-existe') };
+}
+
+/**
+ * Las peticiones con las que la prueba emitida ejercita la ESCRITURA CONDICIONAL (CW-6 a CW-10, conditional-writes.js),
+ * las mismas en los cuatro generadores, o null si el diseño no la declara:
+ *   · `write`: la primera escritura condicional con URL concreta, o null si ninguna la tiene. Sin If-Match y con `required` es un 428 que sale en el
+ *     borde (D3), así que no hace falta un cuerpo válido (CW-6); y es la que recibe los casos de la cabecera (CW-7);
+ *   · `reader`: la primera lectura que da el ETag con URL concreta (CW-10), o null;
+ *   · `required`: si la política exige la cabecera;
+ *   · `headerCases`: los casos del cable (`wire.js`); `errors`: el code, el status y los textos del 412 y del 428 (CW-8);
+ *   · `exposedHeader`: la cabecera que CORS tiene que exponer (CW-9).
+ */
+export function conditionalWriteCases(model) {
+  if (!usesConditionalWrites(model)) return null;
+  const operations = (model.services ?? []).flatMap((service) => service.operations ?? []).filter((op) => op.route);
+  const requestOf = (operation) => {
+    const url = operation ? concretePath(model, operation) : null;
+    return url ? { method: operation.route.method, url, operation: operation.name } : null;
+  };
+  // Solo CW-6 necesita la URL de una escritura; sin muestra segura de su ruta (un `pattern`), los demás casos siguen.
+  const write = conditionalWritesOf(model).writes.map((entry) => requestOf(operations.find((op) => op.name === entry.name))).find(Boolean) ?? null;
+  const reader = conditionalWritesOf(model).readers.map((entry) => requestOf(operations.find((op) => op.name === entry.name))).find(Boolean) ?? null;
+  return {
+    write,
+    reader,
+    required: conditionalWritePolicy(model) === 'required',
+    headerCases: IF_MATCH_CASES,
+    errors: conditionalWriteErrors(model),
+    exposedHeader: ETAG_HEADER
+  };
 }

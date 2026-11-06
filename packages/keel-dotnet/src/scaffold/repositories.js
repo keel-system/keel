@@ -28,6 +28,7 @@ import {
 } from '@keel-system/keel-core/gen';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, typeUsings, xmlDoc, entityPlace } from './render.js';
+import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './conditional-writes.js';
 import { filterRecordFiles, finderEnums, needsOrdering, portFinderMethods, relationalFinderMethods, sortConstants } from './finders.js';
 import { domainMembers } from './entities.js';
 import { adapterClaimMethods, adapterGuardMethods, claimDependencies, claimUsings, guardDependencies, portClaimMethods, portGuardMethods } from './claim.js';
@@ -259,6 +260,8 @@ function renderPort(model, entity) {
   const idType = entity.idField?.csType ?? 'Guid';
   const idName = csLocal(entity.idField?.name ?? 'id');
   const methods = [`    Task<${entity.name}?> FindById(${idType} ${idName}, CancellationToken cancellationToken = default);`];
+  // La carga que compara la versión (api.concurrency, D4): la de las raíces que escribe alguna escritura condicional.
+  if (loadsExpecting(model, entity)) methods.push(loadExpectingPort(entity, idType, idName));
   // La lectura POR LOTE por id (keel-core/gen/ref-targets.js): la raíz que embebe una página, o la que devuelve una query que
   // recibe la lista de sus ids. Sin ella, el camino de menor resistencia es un FindById por elemento.
   if (idBatchReason(model, entity)) {
@@ -408,6 +411,10 @@ function renderAdapter(model, entity) {
         var found = await Graph().AsNoTracking().SingleOrDefaultAsync(r => r.${idProp} == ${idName}, cancellationToken);
         return found is null ? null : ToDomain(found);
     }`);
+  if (loadsExpecting(model, entity)) {
+    usings.push(namespaceOf(model, 'errors'));
+    methods.push(loadExpectingAdapter(entity, idType, idName));
+  }
   if (idBatchReason(model, entity)) {
     methods.push(`    public async Task<IReadOnlyList<${entity.name}>> FindAllById(IReadOnlyCollection<${idType}> ids, CancellationToken cancellationToken = default)
     {

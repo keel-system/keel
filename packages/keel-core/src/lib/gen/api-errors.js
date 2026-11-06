@@ -55,6 +55,10 @@ export const FRAMEWORK_RESPONSES = {
    * de Fastify cae en el manejador de cada uno sin texto propio.
    */
   bodyTooLarge: { status: 413, error: 'Payload Too Large', message: 'El cuerpo de la petición supera el tamaño permitido' },
+  /** Escritura condicional (api.concurrency): If-Match no coincide con la versión vigente (code PRECONDITION_FAILED). */
+  preconditionFailed: { status: 412, error: 'Precondition Failed', message: 'El recurso cambió desde que se leyó: vuelve a leerlo antes de escribir' },
+  /** Escritura condicional con `required`: la petición no trae If-Match (code PRECONDITION_REQUIRED). */
+  preconditionRequired: { status: 428, error: 'Precondition Required', message: 'La operación exige la cabecera If-Match con el ETag de la última lectura' },
   /** Lo que nadie tradujo: el catch-all. */
   internal: { status: 500, error: 'Internal Server Error', message: 'Ocurrió un error inesperado' },
   /** La cadena de seguridad: la petición no trae credencial, o la que trae no vale (code UNAUTHENTICATED). */

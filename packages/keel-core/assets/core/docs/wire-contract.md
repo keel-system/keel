@@ -86,3 +86,19 @@ fuera de rango, aunque el listado tenga elementos en otras.
 **Envoltura de un evento** — `metadata` y `data`; la `metadata`, en este orden: `eventId`,
 `eventType`, `eventVersion`, `occurredAt`, `source`, `correlationId`, `traceparent` (ver
 `docs/dsl/messaging.md § La envoltura Keel`).
+
+## Escritura condicional
+
+Solo en las operaciones de `api.concurrency` (ver `docs/dsl/api.md § concurrency`).
+
+- **`ETag`** — la versión de la raíz entre comillas dobles: `"7"`. Es fuerte (nunca `W/`) y opaca: el cliente no la
+  interpreta, la devuelve tal cual en `If-Match`. La dan las lecturas de esa raíz y las escrituras listadas que la
+  devuelven, ya con la versión que dejó el guardado.
+- **`If-Match`** — se compara en fuerte. `*` se cumple si el recurso existe. Una lista (`"5", "7"`) se cumple si
+  coincide cualquiera. Un `W/"7"`, un `7` sin comillas, un `"07"` o algo ilegible no coincide con nada y da `412`, no
+  `400`. Una cabecera vacía cuenta como ausente: `428` con `conditionalWrites: required`, y sin comparación con
+  `optional`.
+- El orden de los fallos: `401` → `403` → `428` → `400` → `404` → `412` → `409`. Quien no puede ver el recurso recibe
+  su `404` o su `403` antes que el `412`. El `409` (`CONCURRENT_MODIFICATION`) sigue siendo otra cosa: dos escrituras que
+  se cruzan dentro del servidor con la versión correcta.
+- `ETag` va en las cabeceras expuestas de CORS, o un navegador no la puede leer.

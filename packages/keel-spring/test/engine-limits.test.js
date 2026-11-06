@@ -91,7 +91,7 @@ test('un diseño sin unicidad condicionada no recibe el aviso, ni sobre mysql', 
 
 test('toda celda degradada trae su texto, y todo appliesWhen tiene predicado', () => {
   for (const [id, mechanism] of Object.entries(MECHANISMS)) {
-    for (const [engine, cell] of Object.entries(mechanism.coverage)) {
+    for (const [engine, cell] of Object.entries(mechanism.coverage ?? {})) {
       if (cell.state !== 'degradado') continue;
       assert.ok(cell.degraded, `${id}/${engine}: degradado sin bloque 'degraded' — no habría qué avisar`);
       assert.ok(cell.degraded.guarantee, `${id}/${engine}: sin decir qué garantía se pierde`);

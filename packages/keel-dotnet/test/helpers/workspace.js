@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './tmp.js';
 import { FINDER_DESIGNS } from '../../../keel-core/test/helpers/finder-designs.js';
+import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/conditional-write-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -160,6 +161,16 @@ export const UNCOVERED_BRANCHES = [
   // Los finders de las búsquedas (DSL 2.22) en las formas que catalog-extended no declara: los diseños de
   // keel-core/test/helpers/finder-designs.js, los MISMOS que mide keel-nest. Los ejecutan db-check y doc-check.
   ...FINDER_DESIGNS.map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      design.mutate(layers);
+    }
+  })),
+  // La escritura condicional (DSL 2.25, PLAN-DSL-225-ESCRITURA-CONDICIONAL.md): los diseños de
+  // keel-core/test/helpers/conditional-write-designs.js, relacional y documental, los MISMOS que medirán los otros tres.
+  ...CONDITIONAL_WRITE_DESIGNS.map((design) => ({
     name: design.name,
     from: design.from,
     mutate(manifest, layers, name) {

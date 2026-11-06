@@ -70,6 +70,7 @@ aceptable que ese pedido nunca llegue a facturación?» sí lo es.
 | 3.9b | Rastro de auditoría | `persistence.audit` (+ campos reservados en `domain`) | 3.8 |
 | 3.11 | Compensación de un trabajo encargado | `dependencies.<dep>.compensations` + `use-cases.<op>.transitions` | 3.7 |
 | 3.10 | Visibilidad de un bucket | `storage.buckets.<b>.visibility` | 3.9 |
+| 3.12 | Escritura condicional entre peticiones | `api.concurrency` | 3.4 |
 
 ---
 
@@ -378,6 +379,26 @@ diseñador: la CLI comprueba que la arista existe, no que sea la correcta.
 
 **No confundir con `onFailure`** (§3.6): `onFailure` es qué hacemos si el encargo **no sale**; la
 compensación es qué hacemos con el encargo que **sí salió** y luego dejó de valer.
+
+---
+
+### 3.12 Escritura condicional entre peticiones — `api.concurrency`
+
+`optimisticLocking` (§3.9) arbitra dos escrituras que se cruzan **dentro** del servidor. La actualización perdida
+de un formulario ocurre **entre dos peticiones**: Ana carga la ficha, Luis cambia el precio, Ana guarda con lo que
+cargó y el precio de Luis desaparece sin error. Solo se evita si la versión viaja al cliente (`ETag`) y vuelve en la
+escritura (`If-Match`).
+
+| Eje | Pregunta al diseñador | Respuesta → decisión |
+|---|---|---|
+| **Quién edita** | ¿Alguna persona carga esta ficha, la edita un rato y la guarda? | Sí → la operación va en `concurrency.operations`. Solo máquinas que escriben lo que acaban de calcular → `none` o aceptarlo por operación. |
+| **Cliente** | ¿Todos los clientes pueden mandar `If-Match`, o hay alguno que no se puede cambiar? | Todos → `required` (sin cabecera, `428`). Alguno no → `optional`, sabiendo que ese cliente sigue pisando. |
+| **Lectura** | ¿Hay una lectura de esa raíz, sin lista ni página, que el cliente use antes de editar? | Es la que dará el `ETag`. Sin ella el cliente no tiene qué mandar (`CHK-API-CONCURRENCY-NO-READER`). |
+
+La raíz necesita versión: `optimisticLocking: all`, o `declared` con `lockVersion` en ella. Un PUT o PATCH sobre
+una raíz con versión en un diseño sin `concurrency` abre `OBL-API-CONCURRENCY-UNDECIDED`, que se cierra
+declarando la política o aceptándola por operación en `decisions.yaml`. El escenario del `412` (dos lecturas y dos
+escrituras separadas) lo pide `CHK-SCEN-PRECONDITION-UNCOVERED`.
 
 ---
 

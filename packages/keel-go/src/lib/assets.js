@@ -13,7 +13,7 @@ export const SKILL = 'keel-generate-go';
 
 // Versiones del DSL keel que este generador sabe mapear. La misma que los otros tres: el método soporta
 // una sola, y dos generadores que aceptaran versiones distintas no podrían recibir el mismo diseño.
-export const SUPPORTED_DSL = ['2.24'];
+export const SUPPORTED_DSL = ['2.25'];
 
 // La plataforma del proyecto generado. Verificada el 2026-10-29 contra el Go instalado (go1.27.3) y
 // contra go.dev/dl, que la da como la estable:

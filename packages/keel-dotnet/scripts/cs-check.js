@@ -125,6 +125,13 @@ const CLIENTS_DIR = 'stock-reservation/src/StockReservation.Infrastructure/Clien
 const TELEMETRY_DIR = 'stock-reservation-otel/src/StockReservationOtel.Infrastructure/Telemetry';
 const PAYMENT_DIR = 'payment-checkout/src/PaymentCheckout.Infrastructure/Payment';
 const FIXTURE_SABOTAGES = {
+  // La escritura condicional (api.concurrency, PLAN-DSL-225-ESCRITURA-CONDICIONAL.md): cada uno cae en exactamente su caso.
+  'cw-no-428': ['catalog-conditional/src/CatalogConditional.Api/Rest/ConditionalRequests.cs', 'return required ? throw new PreconditionRequiredException() : null;', 'return null;'],
+  'cw-weak-match': ['catalog-conditional/src/CatalogConditional.Api/Rest/ConditionalRequests.cs', '[GeneratedRegex("^\\"(0|', '[GeneratedRegex("^(?:W/)?\\"(0|'],
+  'cw-error-map': ['catalog-conditional/src/CatalogConditional.Domain/Errors/PreconditionFailedException.cs', 'public const int ErrorStatus = 412;', 'public const int ErrorStatus = 409;'],
+  // La caché de la lectura que da el ETag guarda solo el cuerpo: un acierto sale sin la versión de la lectura (CW-11).
+  'cw-cache-etag': ['catalog-conditional/src/CatalogConditional.Application/Support/CachedOperations.cs', 'CachedOperation<Versioned<GetProductBySlugResponseDto>, GetProductBySlugQuery>', 'CachedOperation<GetProductBySlugResponseDto, GetProductBySlugQuery>'],
+  'cw-cors': ['shop-conditional/src/ShopConditional.Infrastructure/Security/CorsPolicy.cs', ', "ETag"];', '];'],
   'telemetry-exemplar': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'span is { Recorded: true }', 'span is { Recorded: false }'],
   'telemetry-parent': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'return Source.StartActivity(name, kind, remote);', 'return Source.StartActivity(name, kind);'],
   'telemetry-host': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, '            Activity.Current = null;\n', ''],

@@ -35,6 +35,7 @@
 decisions:
   - { id: OBL-IDEM-KEY-REQUIRED, scope: use-cases, since: 0.1.0, reason: "La cabecera Idempotency-Key del checkout es opcional (structural-3-2): el legacy acepta un checkout sin ella y exigirla rompería a todo cliente actual. Sin cabecera el checkout se ejecuta sin deduplicar, igual que hoy." }
   - { id: OBL-IDEM-RACE-CODE, scope: use-cases, since: 0.1.0, reason: "Se acepta IDEMPOTENCY_KEY_IN_PROGRESS (409) como contrato público de dos checkouts simultáneos con la misma clave; el legacy no tenía idempotencia y no hay un code propio que conservar." }
+  - { id: OBL-API-CONCURRENCY-UNDECIDED, scope: api.concurrency.updateProduct, since: 0.1.0, reason: "Diseño recuperado: el legacy no responde ETag ni lee If-Match, y la paridad compara contra él; la edición del vendedor la arbitra el bloqueo optimista de la raíz (409). Pedir If-Match rompería a todo cliente actual." }
   - { id: OBL-IDEM-REUSE-CODE, scope: use-cases, since: 0.1.0, reason: "Se acepta IDEMPOTENCY_KEY_REUSED (409) como contrato público de la misma clave con un cuerpo distinto; el legacy no tenía idempotencia y no hay un code propio que conservar." }
 
 structural:

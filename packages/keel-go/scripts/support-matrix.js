@@ -20,6 +20,10 @@ console.log(`Matriz de paridad de keel-go (motores relacionales generados: ${REL
 for (const [id, row] of Object.entries(MECHANISMS)) {
   const { title, axis } = MECHANISM_CATALOG[id];
   console.log(`${id} — ${title} [${axis}]`);
+  if (row.pending) {
+    console.log(`    ..  pendiente: ${row.pending}`);
+    continue;
+  }
   for (const [branch, cell] of Object.entries(row.coverage)) {
     console.log(`    ${MARCA[cell.state]} ${branch.padEnd(11)} ${cell.state}${cell.net ? ` · ${cell.net}` : ''}${cell.state === 'verificado' && !cell.falsified ? ' · SIN FALSAR' : ''}`);
   }

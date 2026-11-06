@@ -33,6 +33,8 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
+  ['api.concurrency', { motivo: MOTIVOS.hueco, porque: 'la escritura condicional (DSL 2.25) la rechaza la frontera de keel-nest hasta el incremento 2 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md; entonces la declara catalog-extended y esta fila se borra.' }],
+  ['api.concurrency.operations', { motivo: MOTIVOS.hueco, porque: 'la escritura condicional (DSL 2.25) la rechaza la frontera de keel-nest hasta el incremento 2 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md; entonces la declara catalog-extended y esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en la línea «Formato: …» del comentario de la clase del mensaje (messaging.js): ningún lector depende de él.' }

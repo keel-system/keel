@@ -630,6 +630,9 @@ const SPRING_MECHANISMS = {
         why: "el NOMBRE con el que se guarda un campo esta medido desde el 2026-09-07 con mapping-check. El sujeto es otro que en la rama relacional y no por gusto: en Mongo la cota de un texto no la impone el almacen, asi que medirla seria medir Bean Validation. Lo que si es del mapeo es que el Update del reclamo —que nombra la PROPIEDAD JAVA— acabe escribiendo el @Field. Se ejecuta el reclamo GENERADO y se lee el documento CRUDO: leerlo por el mapeo no serviria, porque Spring Data usa la misma anotacion para escribir y leer y un @Field equivocado pero consistente daria la vuelta entera sin que se note. Falsado haciendo que el Update nombre un campo que el mapeo no conoce: el caso cae y ensena el campo PARALELO al lado del que falta. Es la sonda que la corrida notification-mailer-mongo tuvo que anadir a mano (FL-SND-001-B), hecha repetible. Sigue SIN medir el resto del espejo documental: el subdocumento anidado de un value object y la hija de una coleccion"
       }
     }
+  },
+  'conditional-write': {
+    pending: 'incremento 4 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md: hasta entonces la frontera de keel-spring rechaza api.concurrency entera (conditionalWritesPendingErrors de keel-core), así que no hay código que razonar'
   }
 };
 
@@ -681,7 +684,8 @@ export const mechanismIds = () => Object.keys(MECHANISMS);
 export function cells() {
   const out = [];
   for (const [id, mechanism] of Object.entries(MECHANISMS)) {
-    for (const [key, cell] of Object.entries(mechanism.coverage)) {
+    // Una fila `pending` (lo que otro plan todavía no ha traído a keel-spring) no tiene celdas.
+    for (const [key, cell] of Object.entries(mechanism.coverage ?? {})) {
       out.push({ id, mechanism, key, cell });
     }
   }

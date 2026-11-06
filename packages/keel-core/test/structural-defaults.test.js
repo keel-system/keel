@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STRUCTURAL_DEFAULTS, COVERED_ELSEWHERE, DISCARDED, implicitDefaults } from '../src/lib/structural-defaults.js';
 import { checkFor } from '../src/lib/checks.js';
+import { obligationFor } from '../src/lib/obligations.js';
 import { checkCrossRefs } from '../src/lib/crossrefs.js';
 
 // Ata la tabla de defaults tácitos a las dos piezas que describe: el catálogo de decisiones
@@ -67,9 +68,11 @@ test('toda entrada del catálogo está clasificada: vigilada aquí, en otra regl
   assert.deepEqual(missing, [], 'entrada nueva del catálogo sin decidir si su default tácito se vigila');
 });
 
-test('las reglas que cubren una entrada en otro sitio existen en el catálogo de checks', () => {
+test('las reglas que cubren una entrada en otro sitio existen: un check undecided o una obligación aceptable', () => {
   for (const entry of COVERED_ELSEWHERE) {
-    assert.equal(checkFor(entry.by)?.nature, 'undecided', `${entry.section}: ${entry.by}`);
+    // Una obligación también es una decisión no tomada que se acepta por unidad en decisions.yaml.
+    const covered = entry.by.startsWith('OBL-') ? obligationFor(entry.by)?.waivable === true : checkFor(entry.by)?.nature === 'undecided';
+    assert.ok(covered, `${entry.section}: ${entry.by}`);
   }
 });
 

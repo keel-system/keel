@@ -37,6 +37,14 @@ export {
   missingTargetRetryDestinations
 } from './dead-letter.js';
 export { idempotencyStoredField, guardedByNaturalKey, storedInNote } from './natural-key-guard.js';
+export {
+  CONDITIONAL_WRITE_POLICIES, ETAG_HEADER, IF_MATCH_HEADER, EXPECTED_VERSIONS_FIELD, LOAD_EXPECTING, VERSIONED_TYPE, VERSION_FIELD,
+  etagOf, expectedVersionsFrom, ifMatchAbsent, versionMatches, IF_MATCH_CASES, conditionalWritesOfLayers, conditionalWritesOf,
+  usesConditionalWrites, undecidedConditionalWrites, conditionalWritePolicy, conditionalWrite, etagReader, returnsVersioned, versionOf,
+  conditionalWriteErrors, PRECONDITION_ORDER, conditionalWriteNote, conditionalWriteGateRows, conditionalWritesFrontierErrors, conditionalWritesPendingErrors,
+  CHECK_CONDITIONAL_WRITES_SH, conditionalWritesGateScript, corsExposedHeaders, corsAllowedHeaders,
+  CW_CASES, CW_SABOTAGES
+} from './conditional-writes.js';
 export { domainGuardKind } from './domain-guard.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher, dispatchNote } from './dispatch.js';

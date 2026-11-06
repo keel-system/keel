@@ -24,6 +24,8 @@ import { usesCallerRoles, ownershipRulesOf } from '@keel-system/keel-core/gen/ow
 import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
 import { audienceOf, tokenClaims } from '@keel-system/keel-core/gen/access-plan';
 import { csFile, csMember, csString, located, namespaceOf } from './render.js';
+// ETag e If-Match con escritura condicional (CW-9): la lista es la neutral de los cuatro generadores.
+import { corsAllowedHeaders, corsExposedHeaders } from '@keel-system/keel-core/gen/conditional-writes';
 import { credentialFinderName, portClass, repositoriesNamespace } from './repositories.js';
 import { configNamespace } from './config.js';
 import { wireNamespace } from './wire.js';
@@ -683,8 +685,8 @@ public enum CorsOutcome
 public sealed partial class CorsPolicy
 {
     private static readonly string[] AllowedMethods = ${list(cors.methods)};
-    private static readonly string[] AllowedHeaders = ${list(cors.allowedHeaders)};
-    private static readonly string[] ExposedHeaders = ${list(cors.exposedHeaders)};
+    private static readonly string[] AllowedHeaders = ${list(corsAllowedHeaders(model))};
+    private static readonly string[] ExposedHeaders = ${list(corsExposedHeaders(model))};
     private static readonly bool AllowCredentials = ${cors.allowCredentials};
     private const int MaxAgeSeconds = ${cors.maxAgeSeconds};
 

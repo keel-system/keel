@@ -50,6 +50,8 @@ const MOTIVOS = {
  * muertas, para que la tabla no se convierta en la lista de lo que hubo alguna vez.
  */
 const EXCEPCIONES = new Map([
+  ['api.concurrency', { motivo: MOTIVOS.hueco, porque: 'la escritura condicional (DSL 2.25) la rechaza la frontera de keel-spring hasta el incremento 4 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md; entonces la declara catalog-extended y esta fila se borra.' }],
+  ['api.concurrency.operations', { motivo: MOTIVOS.hueco, porque: 'la escritura condicional (DSL 2.25) la rechaza la frontera de keel-spring hasta el incremento 4 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md; entonces la declara catalog-extended y esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     {

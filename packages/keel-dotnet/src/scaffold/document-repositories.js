@@ -18,6 +18,7 @@ import { persistedMembers, collectInternalEntities, LOCK_VERSION, RANGE_OPERATOR
 import { documentShape, DOCUMENT_ID } from '@keel-system/keel-core/gen/document';
 import { snakeCase } from '@keel-system/keel-core/gen/naming';
 import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, entityPlace, typeUsings } from './render.js';
+import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './conditional-writes.js';
 import { domainMembers } from './entities.js';
 import { persistenceNamespace } from './persistence.js';
 import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
@@ -385,6 +386,11 @@ export function renderDocumentAdapter(model, entity) {
         var found = await Find(${idFilter}).FirstOrDefaultAsync(cancellationToken);
         return found is null ? null : ToDomain${entity.name}(found);
     }`);
+  // La carga que compara la versión (api.concurrency, D4), la misma que la del adaptador relacional.
+  if (loadsExpecting(model, entity)) {
+    usings.push(namespaceOf(model, 'errors'));
+    methods.push(loadExpectingAdapter(entity, idType, idName));
+  }
   // La lectura POR LOTE por id (keel-core/gen/ref-targets.js): la de los embebidos de una página y la de una query que recibe
   // la lista de ids de la raíz que devuelve.
   if (idBatchReason(model, entity)) {

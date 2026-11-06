@@ -27,6 +27,7 @@ import { restNamespace, usesApi } from './rest-support.js';
 import { repositoriesNamespace } from './repositories.js';
 import { pageableDefaults } from '@keel-system/keel-core/gen/pagination';
 import { callerResolution, securityNamespace } from './security.js';
+import { EXPECTED_VERSIONS, carriesExpectedVersions, readerLine, returnsVersioned } from './conditional-writes.js';
 
 // Los tipos base que en C# son tipos de VALOR: un ausente se escribe `T?` (Nullable<T>), no una referencia nula.
 const VALUE_BASES = new Set(['int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json']);
@@ -221,7 +222,12 @@ function renderEndpoint(model, operation, usings) {
   const status = operation.route.status;
   let statements;
   if (operation.responseDto) {
-    const lines = [`        var message = ${read};`, `        var response = ${call};`];
+    // Con escritura condicional el handler devuelve Versioned<T> (D6): la versión va al ETag y el valor al cuerpo.
+    const versioned = returnsVersioned(model, operation);
+    const lines = [`        var message = ${read};`, `        var ${versioned ? 'versioned' : 'response'} = ${call};`];
+    if (versioned) {
+      lines.push('        ConditionalRequests.WriteETag(http, versioned.Version);', '        var response = versioned.Value;');
+    }
     if (returnsLocation(model, operation)) {
       const target = locationTarget(model, operation);
       const value = target.param ? `TextValues.Route(http.Request, ${csString(target.param)}).ToString()` : 'response.Id';
@@ -357,6 +363,9 @@ function renderReader(model, operation, usings) {
   // Una subida lee el formulario lo primero: un cuerpo que no es multipart, demasiado grande o roto se rechaza antes de
   // convertir la ruta, como en Spring (el multipart se resuelve antes de los argumentos).
   const lines = multipart ? ['        var form = await MultipartReading.Read(httpRequest);', ...pathLines] : [...pathLines];
+  // If-Match lo primero: sin él y con `required` es un 428 que no necesita leer nada (D3: 428 antes que todo 400).
+  const conditional = readerLine(model, operation);
+  if (conditional) lines.unshift(conditional);
   if (asBody) {
     lines.push(`        var requestFields = await HttpJsonBody.ReadObject(httpRequest, required: ${bodyRequired});`);
     lines.push(...bodyLines);
@@ -367,6 +376,7 @@ function renderReader(model, operation, usings) {
   lines.push(...queryLines);
   const paramChecks = [...pathChecks, ...queryChecks];
   if (paramChecks.length > 0) lines.push('        var paramChecks = new InputViolations(ViolationSource.Params);', ...paramChecks, '        paramChecks.ThrowIfAny();');
+  if (carriesExpectedVersions(model, operation)) assigns.push(`            ${EXPECTED_VERSIONS} = expectedVersions,`);
   // La puerta, si el mensaje la lleva (keel-core/gen/entry-gates.js): por aquí entra siempre por HTTP.
   const gate = entryGateAssignment(model, operation.name, 'HTTP');
   if (gate) assigns.push(`            ${gate},`);

@@ -122,3 +122,29 @@ for (const { name, from, mutate } of UNCOVERED_BRANCHES) {
     assert.deepEqual(checkCrossRefs({ layers, manifest }).errors, []);
   });
 }
+
+test('catalog-conditional y catalog-conditional-mongo: la escritura condicional entera (api.concurrency, concurrency.operations)', async () => {
+  const { checkSupportedFeatures } = await import('../src/lib/supported-features.js');
+  for (const name of ['catalog-conditional', 'catalog-conditional-mongo']) {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, branch(name).from));
+    branch(name).mutate(manifest, layers, name);
+    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], `${name}: la frontera todavía lo rechaza`);
+    const files = await emitted(name);
+    const find = (suffix) => files.find((file) => file.path.endsWith(suffix));
+    // El mensaje lleva la versión esperada; el lector del endpoint la lee lo primero (428 antes que todo 400).
+    assert.match(find('UpdateProductCommand.cs').content, /public IReadOnlyList<long>\? ExpectedVersions \{ get; init; \}/);
+    const endpoints = files.find((file) => /Endpoints\/ProductV1Endpoints\.cs$/.test(file.path)).content;
+    assert.match(endpoints, /var expectedVersions = ConditionalRequests\.ExpectedVersions\(httpRequest, required: true\);\n {8}var id = /);
+    assert.match(endpoints, /ExpectedVersions = expectedVersions,/);
+    // La lectura derivada y las escrituras que devuelven la raíz escriben el ETag desde Versioned<T>.
+    assert.equal((endpoints.match(/ConditionalRequests\.WriteETag\(http, versioned\.Version\);/g) ?? []).length, 3);
+    assert.match(find('GetProductBySlugQueryHandler.cs').content, /IQueryHandler<GetProductBySlugQuery, Versioned<GetProductBySlugResponseDto>>/);
+    assert.match(find('UpdateProductCommandHandler.cs').content, /productRepository\.LoadExpecting\(command\.Id, command\.ExpectedVersions, cancellationToken\)/);
+    // El puerto y el adaptador de la rama comparan; el gate nace con las dos escrituras.
+    assert.match(find('IProductRepository.cs').content, /Task<Product\?> LoadExpecting\(Guid id, IReadOnlyList<long>\? expectedVersions/);
+    assert.ok(files.some((file) => /Repository\.cs$/.test(file.path) && file.content.includes('throw new PreconditionFailedException()')));
+    const gate = find('infra/check-conditional-writes.sh').content;
+    assert.match(gate, /check 'updateProduct' 'Product'/);
+    assert.match(gate, /check 'retireProduct' 'Product'/);
+  }
+});

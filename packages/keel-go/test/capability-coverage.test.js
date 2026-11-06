@@ -24,10 +24,14 @@ const MOTIVOS = {
   // La rama hermana del mismo bloque sí la declara alguna fixture, y el emisor es el mismo código.
   ramaHermana: 'ramaHermana',
   // Un parche de UNCOVERED_BRANCHES la genera: uncovered-branches.test.js exige la rama y go-check la compila.
-  soloCadenas: 'soloCadenas'
+  soloCadenas: 'soloCadenas',
+  // La frontera la rechaza hasta el incremento de otro plan que la trae a keel-go (conditionalWritesPendingErrors).
+  pendiente: 'pendiente'
 };
 
 const EXCEPCIONES = new Map([
+  ['api.concurrency', { motivo: MOTIVOS.pendiente, porque: 'la escritura condicional (DSL 2.25) la rechaza la frontera de keel-go hasta el incremento 3 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md; entonces la declara catalog-extended y esta fila se borra.' }],
+  ['api.concurrency.operations', { motivo: MOTIVOS.pendiente, porque: 'la escritura condicional (DSL 2.25) la rechaza la frontera de keel-go hasta el incremento 3 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md; entonces la declara catalog-extended y esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en el comentario del mensaje de la suscripción (messaging.js): ningún lector depende de él.' }

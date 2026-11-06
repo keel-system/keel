@@ -52,6 +52,51 @@ pagination: { style: offset, defaultSize: 20, maxSize: 100 }
   (keel-spring lo avisa). Mientras no haya uno que lo sirva, declararlo es intención, no contrato.
 - Paths con `{param}` van entre comillas en YAML.
 
+## `concurrency` — la escritura condicional (DSL 2.25)
+
+```yaml
+concurrency:
+  conditionalWrites: required        # none | optional | required
+  operations: [updateProduct, retireProduct]
+```
+
+`persistence.consistency.optimisticLocking` arbitra dos escrituras que se cruzan **dentro** del servidor. La
+actualización perdida de un formulario ocurre **entre dos peticiones**: Ana carga la ficha a las 10:00, Luis cambia el
+precio a las 10:02 y a las 10:05 Ana guarda con lo que cargó. Su PUT carga la versión de Luis y confirma, y el precio
+de Luis desaparece sin que falle nada. `concurrency` lo cierra con el estándar HTTP:
+
+- **Las escrituras listadas** aceptan `If-Match`. Si no coincide con la versión vigente, responden `412`
+  (`PRECONDITION_FAILED`) y no escriben nada. Si la cabecera falta y la política es `required`, responden `428`
+  (`PRECONDITION_REQUIRED`) sin cargar nada. Con `optional`, una escritura sin cabecera se comporta como sin
+  `concurrency`. Los dos códigos son de la lista cerrada de `docs/framework-errors.md`, con su override por
+  `errors`.
+- **Las lecturas que dan el `ETag` no se declaran: se derivan.** Son las queries con endpoint cuya salida es la
+  representación única (ni `list` ni `paginated`) de una raíz que escribe alguna operación listada.
+- **Una escritura listada cuya salida es esa misma raíz** devuelve el `ETag` nuevo, para encadenar dos ediciones sin
+  releer.
+- El `ETag` es la versión de la raíz entre comillas (`"7"`), fuerte y opaco; `If-Match` se compara en fuerte, y
+  `*`, las listas, los débiles y lo ilegible tienen su caso en `docs/wire-contract.md § Escritura condicional`.
+- Orden de los fallos: `401` → `403` → `428` → `400` → `404` → `412` → `409`. Quien no ve el recurso
+  (`scoping`, `ownership`) recibe su `404` o su `403` antes que el `412`. El `409` de `optimisticLocking`
+  sigue existiendo: es la carrera dentro del servidor, con la versión correcta.
+
+Lo que `keel validate` exige de cada operación listada, en este orden: que sea un command con endpoint
+(`CHK-API-CONCURRENCY-OP-UNKNOWN`); que escriba sobre una raíz con versión —`optimisticLocking: all`, o
+`declared` con `lockVersion` en la raíz— (`CHK-API-CONCURRENCY-UNVERSIONED`); que reciba el id de esa raíz en la
+ruta, `{id}` o `{<raíz>Id}`, porque un alta no tiene versión previa (`CHK-API-CONCURRENCY-CREATE`); y que alguna
+lectura derivada dé su `ETag` (`CHK-API-CONCURRENCY-NO-READER`). Y que un escenario la ejercite con un `If-Match`
+viejo (`CHK-SCEN-PRECONDITION-UNCOVERED`, aviso).
+
+**Sin `concurrency`**, un `PUT` o un `PATCH` que edita una raíz con versión abre
+`OBL-API-CONCURRENCY-UNDECIDED`: no está decidido si quien guarda un formulario viejo pisa el cambio de otro. Se
+cierra listando la operación, con `conditionalWrites: none` para todo el servicio, o aceptándola por operación en
+`decisions.yaml` (scope `api.concurrency.<op>`), p. ej. «el cliente es una máquina que no edita formularios».
+
+Lo que **no** entra: `If-None-Match` y el `304` (optimización de lectura, no corrección), `If-Unmodified-Since` y
+`If-None-Match: *` en un alta. La puerta por eventos no tiene lectura previa del cliente: si una operación por evento
+necesita una versión esperada, es un campo de su input. Y un proxy que comprima la respuesta puede convertir el ETag en
+débil (`W/`), que no coincide nunca: no se despliega detrás de uno así sin desactivarlo para estas rutas.
+
 ## Qué NO va aquí
 
 - Qué endpoints son públicos o protegidos, roles y permisos → capa `security` (por operación, no por ruta).

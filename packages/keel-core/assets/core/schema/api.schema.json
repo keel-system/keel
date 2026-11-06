@@ -44,6 +44,29 @@
         }
       }
     },
+    "concurrency": {
+      "type": "object",
+      "description": "Escritura condicional (DSL 2.25): ETag en la lectura e If-Match en la escritura, para que quien guarda un formulario viejo no pise el cambio de otro. optimisticLocking arbitra dos transacciones dentro del servidor; esto arbitra dos peticiones separadas en el tiempo. Ver docs/dsl/api.md § concurrency.",
+      "required": ["conditionalWrites"],
+      "additionalProperties": false,
+      "properties": {
+        "conditionalWrites": {
+          "type": "string",
+          "enum": ["none", "optional", "required"],
+          "default": "none",
+          "description": "none: ninguna escritura compara versión (último escritor gana entre peticiones). optional: las escrituras listadas comparan If-Match si llega (412 si no coincide) y sin él se comportan como hoy. required: además, sin If-Match responden 428."
+        },
+        "operations": {
+          "type": "array",
+          "description": "Las escrituras que aceptan If-Match: commands con endpoint sobre una raíz con versión, que reciben su id. Las lecturas que dan el ETag no se declaran: se derivan (las queries con endpoint cuya salida es esa raíz, sin lista ni página).",
+          "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+          "uniqueItems": true
+        }
+      },
+      "if": { "properties": { "conditionalWrites": { "const": "none" } } },
+      "then": { "properties": { "operations": { "maxItems": 0 } } },
+      "else": { "required": ["operations"], "properties": { "operations": { "minItems": 1 } } }
+    },
     "pagination": {
       "type": "object",
       "additionalProperties": false,

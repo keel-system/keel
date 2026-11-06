@@ -22,7 +22,7 @@ estampado en `keel-generated.json`, y no escribe nada en el workspace de diseño
 ## El contrato
 
 1. **Entrada**: el diseño multi-artefacto de `specs/<servicio>/`, validado y listo.
-2. **Compatibilidad**: DSL `2.24`, la misma que los otros tres. Ante otra, se detiene.
+2. **Compatibilidad**: DSL `2.25`, la misma que los otros tres. Ante otra, se detiene.
 3. **Salida**: `services/<servicio>-go/`, un módulo Go (`go 1.27.0`, `toolchain go1.27.3`) sin cgo, con la
    configuración por perfiles en `config/` —el mismo formato y las mismas variables que los otros tres, embebida en
    el binario—, sus sondas `/livez` y `/readyz`, la prueba de su frontera hexagonal, el snapshot sellado del
@@ -42,6 +42,7 @@ Toda fixture del repositorio se genera entera: las once capas, PostgreSQL, MySQL
 | Clave de API (`protocol: api-key`) | `securityErrors` | Ninguna fixture la declara, y ninguna red mediría lo emitido | Medio: una rama del middleware de `internal/platform/security` | `security-check` |
 | Identidad del llamante en un campo que no es texto | `securityErrors` | Sale de un claim, que es texto; los otros tres lo pasan tal cual, y en Go el mensaje es tipado y no compilaría. Se cierra declarando el campo `string` | Bajo, si se decide convertirlo: conversión en el borde | `security-check` |
 | Mensajería sin persistencia | `messagingErrors` | Sin adaptador de repositorio nadie publica los eventos. Lo rechazan los cuatro generadores | No se abre: no es una diferencia con los otros tres | — |
+| Escritura condicional (`api.concurrency`, DSL 2.25) | `conditionalWritesPendingErrors` | Pendiente, no decisión: llega en el incremento 3 de `PLAN-DSL-225-ESCRITURA-CONDICIONAL.md`, y hasta entonces los cuatro generadores la rechazan con el mismo mensaje | Medio: borde, `loadExpecting` en los dos motores y el documental, caché y gate | `db-check`, `doc-check`, `go-check`, `cache-check`, `harness-check` |
 | Relación interna a-uno sin vuelta, many-to-many interna, y value object persistido con otro dentro o con un opcional | `unmeasuredShapes` | Un adaptador con la cabecera de código generado no admite el TODO que deja keel-dotnet, y ninguna fixture declara estas formas | Alto: el mapeo de cada forma, en el esquema y en los adaptadores | `db-check` |
 | Autoría declarada en un campo opcional o que no es texto | `authorshipErrors` | El dominio de Go la guarda como `string`, y vacío es ausente | Bajo: otro tipo en la estampa | `db-check` |
 | Operación por reloj cuyo mensaje lleva campos | `scheduledWithArguments` | El reloj la despacha sin argumentos, y la tarea es código generado, sin TODO posible | Medio: mover la tarea a un archivo del agente | `go-check` |

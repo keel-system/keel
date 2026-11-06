@@ -20,6 +20,7 @@ import { finderCall } from './finders.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
+import { carriesExpectedVersions, conditionalHandlerNote, expectedVersionsProperty, returnsVersioned, versionedType } from './conditional-writes.js';
 import { mapperOf } from './mappers.js';
 import { repositoryRoots, repositoryOf, portClass, repositoriesNamespace } from './repositories.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
@@ -93,8 +94,11 @@ export function messageNamespace(model, operation) {
 }
 
 /** El tipo de retorno de la operación, o null si no devuelve nada. */
-export function returnTypeOf(operation) {
+export function returnTypeOf(operation, model = null) {
   if (!operation.responseDto) return null;
+  // La lectura que da el ETag y la escritura condicional que devuelve su raíz devuelven también la versión (D6 de
+  // PLAN-DSL-225-ESCRITURA-CONDICIONAL.md): el compilador obliga al agente a darla.
+  if (model && returnsVersioned(model, operation)) return versionedType(operation.responseDto.name);
   // PagedResponse<T> ya envuelve la lista: envolverla además daría PagedResponse<IReadOnlyList<T>>.
   if (operation.paginated) return `PagedResponse<${operation.responseDto.name}>`;
   if (operation.returnsList) return `IReadOnlyList<${operation.responseDto.name}>`;
@@ -102,8 +106,8 @@ export function returnTypeOf(operation) {
 }
 
 /** El contrato del mensaje y el de su handler. */
-export function contractOf(operation) {
-  const result = returnTypeOf(operation);
+export function contractOf(operation, model = null) {
+  const result = returnTypeOf(operation, model);
   if (operation.messageKind === 'query') {
     if (!result) throw new Error(`La consulta ${operation.name} no devuelve nada: el modelo no la deja así`);
     return { message: `IQuery<${result}>`, handler: `IQueryHandler<${operation.messageClass}, ${result}>`, result };
@@ -190,7 +194,7 @@ export function messagesRoundScale(model) {
 function renderMessage(model, operation) {
   const place = operation.messageKind === 'query' ? 'queries' : 'commands';
   const { namespace, path } = located(model, place, operation.messageClass);
-  const contract = contractOf(operation);
+  const contract = contractOf(operation, model);
   const usings = [namespaceOf(model, 'abstractions'), ...resultUsings(model, operation)];
   const properties = messageComponents(operation, model).map((component) => {
     usings.push(...fieldUsings(model, component));
@@ -208,6 +212,8 @@ function renderMessage(model, operation) {
     properties.push(`    /// <summary>La puerta por la que llegó este mensaje. La fija quien lo construye: el endpoint generado pone Http.</summary>
     public required EntryGate EntryGate { get; init; }`);
   }
+  // La versión que el cliente leyó (api.concurrency): la estampa el endpoint desde If-Match; nula desde otra puerta.
+  if (carriesExpectedVersions(model, operation)) properties.push(expectedVersionsProperty());
   const scope = idempotencyScope(model, operation);
   if (scope && (operation.idempotency.partitionBy ?? []).length > 0) usings.push('System.Globalization');
   const members = scope ? [...properties, scope] : properties;
@@ -280,7 +286,7 @@ function componentNotes(model, operation, component) {
 
 function renderHandler(model, operation) {
   const { namespace, path } = located(model, 'useCases', operation.handlerClass);
-  const contract = contractOf(operation);
+  const contract = contractOf(operation, model);
   const usings = [namespaceOf(model, 'abstractions'), messageNamespace(model, operation), ...resultUsings(model, operation)];
   const dependencies = [];
   const mapper = mapperOf(model, operation);
@@ -404,6 +410,9 @@ function handlerNotes(model, operation) {
   if (dispatch) notes.push(dispatch);
   const gate = entryGateNote(model, operation, { read: 'command.EntryGate', value: entryGateMember });
   if (gate) notes.push(gate);
+  // La escritura condicional (api.concurrency): cargar con LoadExpecting y devolver la versión persistida.
+  const conditional = conditionalHandlerNote(model, operation, operation.messageKind === 'query' ? 'query' : 'command');
+  if (conditional) notes.push(conditional);
   // La búsqueda con finder (DSL 2.22) ya aplica sus filtros, plegado incluido: su nota sustituye a las de los filtros de texto.
   const finder = finderNote(operation, { call: operation.finder ? finderCall(model, operation.finder) : '' });
   if (finder) notes.push(finder);

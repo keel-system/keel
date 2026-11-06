@@ -535,6 +535,9 @@ export const MECHANISMS = {
           'doc-check contra un MongoDB en replica set sobre inspection-reports, job-dispatch-mongo y notification-mailer-mongo (6 raíces): el documento CRUDO contra documentShape a todo nivel —cada clave con su tipo BSON y ninguna de más—, ida y vuelta, versión obsoleta → 409, clave natural e índice condicionado → el error del diseño, created_at que no cambia, página con orden por la ruta del espejo y borrado; y la DB_URL de keel-spring tal cual. Falsado el 2026-10-08 con seis sabotajes que compilan (decimal como texto, la versión fuera del filtro, _class en el documento, created_at reescrito, uuid como texto en los dos sentidos —la ida y vuelta sigue en verde: solo lo caza el documento crudo—), cada uno cazado por su comprobación. Sin red: document-persistence.test.js lo ejecuta con un sustituto del driver'
       }
     }
+  },
+  'conditional-write': {
+    pending: 'incremento 2 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md: hasta entonces la frontera de keel-nest rechaza api.concurrency entera (conditionalWritesPendingErrors de keel-core), así que no hay código que razonar'
   }
 };
 

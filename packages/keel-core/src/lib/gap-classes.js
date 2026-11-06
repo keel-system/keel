@@ -15,6 +15,8 @@
 // El inventario NO se guarda en el YAML: se deriva de las capas, y guardado caducaría en cuanto el
 // diseño cambiara. Las unidades son cadenas estables que se escriben tal cual en `gaps.yaml`.
 
+import { undecidedConditionalWrites } from './gen/conditional-writes.js';
+
 const values = (collection) => Object.values(collection ?? {}).map((value) => value ?? {});
 const keys = (collection) => Object.keys(collection ?? {});
 
@@ -92,7 +94,10 @@ function structuralEntries(layers) {
     ['3.9', () => Boolean(layers.persistence) && commands(layers).length > 0],
     ['3.9b', () => Boolean(layers.persistence)],
     ['3.10', () => Boolean(layers.storage)],
-    ['3.11', () => values(layers.dependencies?.dependencies).some((dep) => (dep.compensations ?? []).length > 0)]
+    ['3.11', () => values(layers.dependencies?.dependencies).some((dep) => (dep.compensations ?? []).length > 0)],
+    // La escritura condicional: declarada, o sin declarar con alguien editando una raíz con versión (la misma pregunta que
+    // OBL-API-CONCURRENCY-UNDECIDED).
+    ['3.12', () => Boolean(layers.api?.concurrency) || undecidedConditionalWrites(layers).length > 0]
   ];
   return entries.filter(([, condition]) => has(condition)).map(([section]) => section);
 }

@@ -18,6 +18,7 @@ import { usesApi } from './rest-support.js';
 import { servedOperation } from './endpoints.js';
 import { securityPlan, usesJwt } from './security.js';
 import { usesTestCredential } from './test-credential.js';
+import { conditionalApiTests } from './conditional-writes.js';
 
 export function generate(model) {
   if (!usesApi(model)) return [];
@@ -102,6 +103,8 @@ function apiTestsCs(model) {
     }`);
   }
   if (cases.upload) tests.push(...uploadTests(model, cases.upload));
+  // La escritura condicional (api.concurrency): el 428 en el borde (CW-6).
+  tests.push(...conditionalApiTests(model));
   const notFound = `${model.api.routeBase}/keel-ruta-que-no-existe`;
   const body = `/// <summary>
 /// El contrato HTTP del servidor arrancado en memoria: lo que fija el diseño sin depender de la lógica del agente.

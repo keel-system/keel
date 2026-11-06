@@ -14,7 +14,7 @@ test('una fila por cada mecanismo del catálogo neutral, y ninguna inventada', (
 });
 
 test('cada fila nombra su emisor y sus celdas, indexadas por el eje del catálogo y con el vocabulario común', () => {
-  for (const [id, row] of Object.entries(MECHANISMS)) assert.ok(row.emitter && row.coverage, id);
+  for (const [id, row] of Object.entries(MECHANISMS)) assert.ok(row.pending ? /incremento [0-9]+/.test(row.pending) : row.emitter && row.coverage, id);
   for (const { id, branch, cell } of cells()) {
     if (MECHANISM_CATALOG[id].axis === 'model') assert.ok(MODELS.includes(branch), `${id}: ${branch} no es un modelo`);
     else assert.ok(RELATIONAL_ENGINES.includes(branch), `${id}: ${branch} está fuera de la frontera de motores`);
@@ -34,7 +34,8 @@ test('cada motor relacional que la frontera admite tiene su celda en los mecanis
 });
 
 test('la puerta del incremento 16: nada pendiente, nada sin ejecutar y nada sin falsar', () => {
-  assert.deepEqual(pending().map(({ id }) => id), []);
+  // Lo único pendiente es lo que trae otro plan, con su incremento: la escritura condicional (PLAN-DSL-225-ESCRITURA-CONDICIONAL.md).
+  assert.deepEqual(pending().map(({ id }) => id), ['conditional-write']);
   assert.deepEqual(unverified().map(({ id, branch }) => `${id}/${branch}`), []);
   assert.deepEqual(unfalsified().map(({ id, branch }) => `${id}/${branch}`), []);
 });

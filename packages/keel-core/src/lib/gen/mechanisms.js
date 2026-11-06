@@ -131,5 +131,9 @@ export const MECHANISM_CATALOG = {
   'persistence-adapter': {
     title: 'Espejo de persistencia y repositorios (mapeo, embebidos, colecciones, orden y desempate)',
     axis: 'model'
+  },
+  'conditional-write': {
+    title: 'Escritura condicional (DSL 2.25, api.concurrency): ETag, If-Match, 412 y 428, loadExpecting y la versión persistida',
+    axis: 'model'
   }
 };
