@@ -31,6 +31,7 @@ import { OUTBOX_LAST_ERROR_LENGTH, OUTBOX_RELAY, outboxBackoffMs } from '@keel-s
 import { usesMessaging, usesBridge, usesProcessedEvents, usesPersistence } from '@keel-system/keel-core/gen/features';
 import { consumerUnits, consumesFromQueue, messagingYaml, routingKeyName, subscriptionKey } from '@keel-system/keel-core/gen/messaging-plan';
 import { acknowledgeNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, goString, keyedLiteral } from '../lib/go-source.js';
 import { appType, declType, fieldImports, goFileName, layout, packageFile } from './render.js';
@@ -1042,6 +1043,10 @@ function contractDoc(model, sub) {
         ? `Orden: IdempotencyGuard.AlreadyProcessed antes de despachar y Record DESPUÉS de que el handler termine bien: ${guardReason}, y lo que no puede perderse es el mensaje —registrar ANTES haría que un fallo terminal se viera como «ya procesado» y su reintento no llegara nunca al descarte—.`
         : 'Orden: IdempotencyGuard.TryRecord antes de despachar —la operación no declara ninguna guarda de dominio que frene la repetición, así que la ventana se cierra reclamando antes—. Un fallo del handler deja el mensaje marcado y perdido; si eso no es tolerable, lo que falta es la guarda de dominio en el diseño.'
     );
+    // Con storedIn (DSL 2.24) la clave del mensaje no es el campo de la clave natural: se dice cuál
+    // es, o el agente busca por uno que la entidad no tiene. La frase es neutral y común a los cuatro.
+    const storedIn = storedInNote(sub.triggerNaturalKeyGuard);
+    if (storedIn) lines.push(storedIn);
     lines.push(
       'La deduplicación tiene VENTANA: el registro se purgará a los processed-event.purge.retention-days (default 14), así que una reentrega posterior se procesa como nueva.' +
         (sub.triggerHasDomainGuard ? ' Aquí es inocuo: la guarda de dominio sigue rechazándola, y esa no caduca.' : ' Aquí NO es inocuo: sin guarda de dominio, pasada la retención el efecto se vuelve a aplicar.')

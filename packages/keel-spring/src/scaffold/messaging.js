@@ -25,6 +25,7 @@ import { correlationImport } from './correlation.js';
 import { usesTelemetry, messageTracingImport } from './telemetry.js';
 import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination } from '@keel-system/keel-core/gen';
 import { acknowledgeNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { credentialFinderName } from './repositories.js';
 import { entryGateValue } from './services.js';
 
@@ -543,6 +544,10 @@ function contractJavadoc(sub, model) {
         ? `Orden: IdempotencyGuard.alreadyProcessed(...) antes de despachar y record(...) DESPUÉS de que el handler termine bien. ${guardReason} y lo que no puede perderse es el mensaje: registrar ANTES haría que un fallo terminal se viera como «ya procesado» y su reintento no llegara nunca al descarte.`
         : `Orden: IdempotencyGuard.tryRecord(...) antes de despachar — la operación no declara ninguna guarda de dominio (ni transiciones, ni una clave de idempotencia sobre la clave natural) que frene la repetición, así que la ventana se cierra reclamando antes. Ojo: un fallo del handler deja el mensaje marcado y perdido; si eso no es tolerable, lo que falta es la guarda de dominio en el diseño.`
     );
+    // Con storedIn (DSL 2.24) la clave del mensaje no es el campo de la clave natural: se dice cuál
+    // es, o el agente busca por uno que la entidad no tiene. La frase es neutral y común a los cuatro.
+    const storedIn = storedInNote(sub.triggerNaturalKeyGuard);
+    if (storedIn) lines.push(storedIn);
     // La ventana. Se dice AQUÍ —y no solo en la referencia del DSL— porque este javadoc
     // es lo que lee quien escribe el listener, y la garantía que va a implementar no es
     // la que su nombre sugiere: el registro se purga, así que «no se procesa dos veces»

@@ -30,6 +30,7 @@ import { usesMessaging, usesBridge, usesProcessedEvents, usesRabbitMq, usesKafka
 export { usesMessaging, usesBridge, usesProcessedEvents, usesRabbitMq, usesKafka, usesSnsSqs };
 import { consumerUnits, consumesFromQueue, messagingYaml, routingKeyName, subscriptionKey } from '@keel-system/keel-core/gen/messaging-plan';
 import { acknowledgeNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
 import { csFile, csLocal, csMember, csString, declType, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
@@ -645,6 +646,10 @@ function contractDoc(model, sub) {
         ? `Orden: IdempotencyGuard.AlreadyProcessed(...) antes de despachar y Record(...) DESPUÉS de que el handler termine bien: ${guardReason}, y lo que no puede perderse es el mensaje — registrar ANTES haría que un fallo terminal se viera como «ya procesado» y su reintento no llegara nunca al descarte.`
         : 'Orden: IdempotencyGuard.TryRecord(...) antes de despachar — la operación no declara ninguna guarda de dominio que frene la repetición, así que la ventana se cierra reclamando antes. Un fallo del handler deja el mensaje marcado y perdido; si eso no es tolerable, lo que falta es la guarda de dominio en el diseño.'
     );
+    // Con storedIn (DSL 2.24) la clave del mensaje no es el campo de la clave natural: se dice cuál
+    // es, o el agente busca por uno que la entidad no tiene. La frase es neutral y común a los cuatro.
+    const storedIn = storedInNote(sub.triggerNaturalKeyGuard);
+    if (storedIn) lines.push(storedIn);
     lines.push(
       'La deduplicación tiene VENTANA: el registro se purgará a los processed-event.purge.retention-days (default 14; la purga es de build, por lotes), así que una reentrega posterior se procesa como nueva.' +
         (sub.triggerHasDomainGuard ? ' Aquí es inocuo: la guarda de dominio sigue rechazándola, y esa no caduca.' : ' Aquí NO es inocuo: sin guarda de dominio, pasada la retención el efecto se vuelve a aplicar.')

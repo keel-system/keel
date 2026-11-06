@@ -32,12 +32,12 @@ Se descartó que el generador libere la marca si el handler falla: tapa el fallo
 |---|---|---|
 | 0 | Medir el alcance y fijar el nombre | hecho (2026-11-06) |
 | 1 | DSL 2.24: el enlace `storedIn` (schema, validación, modelo) | hecho (2026-11-06) |
-| 2 | Las notas de los cuatro generadores | pendiente |
+| 2 | Las notas de los cuatro generadores | hecho (2026-11-06) |
 | 3 | El aviso: reintentos muertos tras el reclamo | pendiente |
 | 4 | El par del MVP declara su guarda | pendiente |
 | 5 | Corrida de control | pendiente |
 
-**Para retomar:** empezar por el incremento 2, en un contexto nuevo. El modelo ya da `guard: 'natural-key'` con `storedIn` (lo afirma `gen-missing-target-retry.test.js` sobre el par en memoria), así que el inc. 2 solo tiene que hacer que las notas lo **digan**. La política resuelta lleva `storedIn` por el spread de `resolveIdempotency` solo cuando el diseño lo declara (no hay `storedIn: null`); el campo de búsqueda es `idempotencyStoredField()` de `gen/natural-key-guard.js`.
+**Para retomar:** empezar por el incremento 3, en un contexto nuevo. Las notas ya nombran `storedIn` en los cuatro generadores (`storedInNote`, `gen/natural-key-guard.js`). El predicado que el inc. 3 tiene que extraer es hoy la expresión de `triggerHasDomainGuard` en `model.js` (~l. 2902): transiciones, `guard === 'natural-key'` o el cobro de `payments`. El gate ya se ejecuta sobre el par con `storedIn` en `keel-spring/test/payload-field-idempotency.test.js`, y la falsación del inc. 4 puede partir de ese caso.
 
 ## Lo que se descarta, y por qué
 
@@ -137,6 +137,16 @@ Con el modelo arreglado, el orden del listener ya sale bien en los cuatro. Lo qu
   - `npm test`;
   - `compile-check` sobre el par;
   - `ts-syntax`, `cs-syntax` y `go-syntax`, que ya corren dentro de `npm test`.
+
+### Lo hecho (2026-11-06)
+
+- **La frase es neutral**: `storedInNote(idempotency)` en `gen/natural-key-guard.js` (exportada en `gen/index.js`). Devuelve '' sin `storedIn` o con `storedIn === keyField`, así que ningún diseño de hoy cambia de texto.
+- **El modelo** de la suscripción lleva `triggerNaturalKeyGuard` (la política resuelta, o `null`): el javadoc solo recibe `sub`.
+- **Los cuatro generadores** la escriben en los dos sitios: tras la línea del orden en el contrato del listener (`messaging.js` de cada uno) y al final de la nota del handler, que además dice `keyField=eventId, storedIn=dedupeKey` (`services.js` de keel-spring, keel-nest y keel-dotnet; `request-idempotency.js` de keel-go).
+- **El gate** no se tocó: lee `triggerHasDomainGuard`. Se EJECUTA sobre el proyecto emitido del par con `storedIn` en `keel-spring/test/payload-field-idempotency.test.js`: el listener que reclama antes sale con sus dos hallazgos (falta `record`, sobra `tryRecord`) y el que comprueba y registra después, sin ninguno. Sin `storedIn`, al revés.
+- **Pruebas**: `keel-core/test/natural-key-guard.test.js` (modelo con y sin `storedIn` sobre el par en memoria, que ya es el diseño sintético con `keyField` ≠ `storedIn`, y la frase) y `keel-go/test/stored-in-notes.test.js` (los cuatro generadores contra `storedInNote`, en las dos fixtures del par, y que sin `storedIn` no aparece en ningún archivo). Falsada: quitando la frase del javadoc de keel-go y de la nota del handler de keel-dotnet caen exactamente sus cuatro casos.
+- **`compile-check` se pasa al inc. 4**: hasta que el par declare `storedIn`, ninguna fixture emite la frase, así que compilar hoy no ejercita nada nuevo. Lo único que cambia en el Java es texto de comentario, sin `*/` (comprobado sobre el proyecto emitido en `D:\keel-tmp\dsl224-inc2\`).
+- **Fuera de este incremento:** la frase del orden («la clave de idempotencia participa en la clave natural») sigue igual con `storedIn`. La línea siguiente la precisa, y reescribirla tocaría la nota de todos los diseños de la rama `natural-key`.
 
 ## Incremento 3: el aviso de los reintentos muertos tras el reclamo
 

@@ -37,6 +37,7 @@ import { naturalKeyBatchFinder } from './repositories.js';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 import { callerResolution } from './security.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { rawJsonAnnotations } from './jackson.js';
 
 // Componentes del record mensaje: parámetros de ruta (en el orden del path) +
@@ -596,9 +597,9 @@ function renderHandler(model, service, operation) {
   // resistencia es insertar y dejar que el choque suba como error, que rompe el contrato: una
   // repetición devuelve la respuesta original, no un 409.
   if (operation.idempotency?.guard === 'natural-key') {
-    const { keyField, naturalKey } = operation.idempotency;
+    const { keyField, storedIn, naturalKey } = operation.idempotency;
     notes.push(
-      `Idempotencia: keySource=payload-field, keyField=${keyField}. La guarda es la CLAVE NATURAL ` +
+      `Idempotencia: keySource=payload-field, keyField=${keyField}${storedIn ? `, storedIn=${storedIn}` : ''}. La guarda es la CLAVE NATURAL ` +
         `(${naturalKey.join(', ')}) del agregado, no un almacén: build NO genera IdempotencyStore ni ` +
         `CommandSignature para esta operación, y no debes escribir otro registro. Es permanente (no caduca ` +
         `como un ttl) y cubre por igual todas las puertas por las que entra la operación, incluida la del ` +
@@ -608,7 +609,8 @@ function renderHandler(model, service, operation) {
         `arbitra la constraint: dos peticiones simultáneas fallan las dos la búsqueda y llegan las dos al ` +
         `insert, así que NO captures la DataIntegrityViolationException para "arreglarlo" — reléela y ` +
         `devuelve el recurso ganador, o déjala subir traducida a ${naturalKeyConflict(model, operation)}. ` +
-        `Qué NO cubre: nada que ya haya salido del proceso antes del choque`
+        `Qué NO cubre: nada que ya haya salido del proceso antes del choque` +
+        (storedInNote(operation.idempotency) ? `. ${storedInNote(operation.idempotency)}` : '')
     );
   }
   if (operation.idempotency && operation.idempotency.guard !== 'natural-key') {

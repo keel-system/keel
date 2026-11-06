@@ -2913,6 +2913,10 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
             : Boolean(trigger) && layers.payments?.charge?.operation === trigger
               ? 'payment-reference'
               : null,
+      // La política resuelta cuando la guarda es la clave natural: el javadoc tiene que nombrar el
+      // campo GUARDADO si no es el de la clave (`storedIn`, DSL 2.24), o el agente busca por uno que
+      // la entidad no tiene. `storedInNote` (natural-key-guard.js) es la frase.
+      triggerNaturalKeyGuard: triggerOp?.idempotency?.guard === 'natural-key' ? triggerOp.idempotency : null,
       // ¿Hay OTRO camino que saque a la entidad del mismo estado del que la saca este
       // listener? Si lo hay, los dos compiten y el guard del agregado arbitra: al perdedor
       // se le rechaza la transición, y eso es la carrera resuelta, no un fallo. Importa

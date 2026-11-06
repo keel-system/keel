@@ -41,6 +41,7 @@ import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempote
 import { CALLER_SCOPE_TS, scopedOperation, CALLER_ROLES_TS, roleCheckedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { portPath as clientPortPath } from './http-clients.js';
 import { projectorPath, readerPath, replicas } from './projections.js';
 import { repositoryOf, isPartialUpdate } from '@keel-system/keel-core/gen/features';
@@ -753,11 +754,12 @@ function idempotencyNotes(model, operation) {
   if (!idempotency) return [];
   if (idempotency.guard === 'natural-key') {
     return [
-      `Idempotencia: keySource=payload-field, keyField=${idempotency.keyField}. La guarda es la CLAVE NATURAL ` +
+      `Idempotencia: keySource=payload-field, keyField=${idempotency.keyField}${idempotency.storedIn ? `, storedIn=${idempotency.storedIn}` : ''}. La guarda es la CLAVE NATURAL ` +
         `(${(idempotency.naturalKey ?? []).join(', ')}) del agregado, no un registro: build NO genera IdempotencyStore para ` +
         'esta operación y no debes escribir otro. Busca por la clave natural ANTES de insertar; si ya existe, devuelve ese mismo ' +
         'recurso sin re-ejecutar nada — una repetición devuelve la respuesta original, NO un error. La carrera la arbitra la ' +
-        'constraint: no captures su violación para «arreglarla».'
+        'constraint: no captures su violación para «arreglarla».' +
+        (storedInNote(idempotency) ? ` ${storedInNote(idempotency)}` : '')
     ];
   }
   if (!usesRequestIdempotency(model)) return [];

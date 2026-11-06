@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from '@keel-system/keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
@@ -239,4 +240,67 @@ test('sin ella, la misma suscripción sigue siendo la rama de tryRecord', () => 
 
   assert.ok(message.includes('tryRecord(...) antes de despachar'), 'perdió la rama sin guarda');
   assert.ok(!message.includes('record(...) DESPUÉS'), 'da por guardada una operación que no lo está');
+});
+
+// DSL 2.24: la clave del mensaje acaba, derivada por una rule, en un campo de la clave natural que se llama de
+// otra forma (`storedIn`). Es el caso del par del MVP —`eventId` → `dedupeKey`—, y aquí se EJECUTA el gate sobre
+// el proyecto emitido con los dos listeners posibles: el que reclama antes tiene que salir rojo, y el que
+// comprueba y registra después, sin hallazgo de dedupe. Sin bash, se salta.
+function generateMailer({ storedIn }) {
+  const { manifest, layers } = loadService(path.join(fixturesDir, 'notification-mailer'));
+  const patched = structuredClone(layers);
+  patched['use-cases'].operations.acceptNotificationRequest.idempotency = {
+    keySource: 'payload-field',
+    keyField: 'eventId',
+    ...(storedIn ? { storedIn } : {})
+  };
+  const workspace = tmpDir('keel-storedin-');
+  const result = scaffoldService({ manifest, layers: patched, workspace, force: true, acceptUnready: true });
+  return path.join(workspace, result.outDir);
+}
+
+const MAILER_LISTENER = 'src/main/java/com/platform/notificationmailer/infrastructure/messaging/subscriptions/NotificationRequestedListener.java';
+const listenerBody = (guard) => `package com.platform.notificationmailer.infrastructure.messaging.subscriptions;
+
+class NotificationRequestedListener {
+  private final IdempotencyGuard idempotencyGuard = null;
+
+  void on(NotificationRequestedMessage message, String eventId) {
+${guard}
+  }
+}
+`;
+const CLAIM_FIRST = `    if (!idempotencyGuard.tryRecord(eventId, "accept")) return;
+    dispatch(message);`;
+const CHECK_THEN_RECORD = `    if (idempotencyGuard.alreadyProcessed(eventId, "accept")) return;
+    dispatch(message);
+    idempotencyGuard.record(eventId, "accept");`;
+
+function dedupeFindings(project, guard) {
+  fs.writeFileSync(path.join(project, MAILER_LISTENER), listenerBody(guard));
+  try {
+    execFileSync('bash', ['infra/check-idempotency.sh'], { cwd: project, encoding: 'utf8' });
+    return [];
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    return `${error.stdout ?? ''}`.split(/\r?\n/).filter((line) => /^\s*\[dedupe\] NotificationRequested/.test(line));
+  }
+}
+
+test('storedIn: el gate exige comprobar y registrar después, y rechaza reclamar antes', (t) => {
+  const project = generateMailer({ storedIn: 'dedupeKey' });
+  const claimFirst = dedupeFindings(project, CLAIM_FIRST);
+  if (claimFirst === null) return t.skip('sin bash en el PATH');
+  // Dos hallazgos: falta el record(...) posterior y sobra el tryRecord(...), que es el cruce caro.
+  assert.ok(claimFirst.some((line) => line.includes("NO debe aparecer '\\.tryRecord")), claimFirst.join('\n'));
+  assert.ok(claimFirst.some((line) => line.includes("falta '\\.record")), claimFirst.join('\n'));
+  assert.deepEqual(dedupeFindings(project, CHECK_THEN_RECORD), [], 'el listener correcto sale con hallazgo');
+});
+
+test('sin storedIn la misma suscripción sigue en la rama de tryRecord, y el gate lo dice al revés', (t) => {
+  const project = generateMailer({ storedIn: null });
+  const checkThenRecord = dedupeFindings(project, CHECK_THEN_RECORD);
+  if (checkThenRecord === null) return t.skip('sin bash en el PATH');
+  assert.ok(checkThenRecord.some((line) => line.includes("NO debe aparecer '\\.alreadyProcessed")), checkThenRecord.join('\n'));
+  assert.deepEqual(dedupeFindings(project, CLAIM_FIRST), []);
 });
