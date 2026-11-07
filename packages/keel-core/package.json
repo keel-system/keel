@@ -14,7 +14,8 @@
   },
   "scripts": {
     "test": "node --test",
-    "design-matrix": "node scripts/design-matrix.js"
+    "design-matrix": "node scripts/design-matrix.js",
+    "timer-sql-check": "node scripts/timer-sql-check.js"
   },
   "files": [
     "src",

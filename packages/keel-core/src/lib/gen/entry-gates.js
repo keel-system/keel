@@ -20,6 +20,13 @@ export const ENTRY_GATE_FIELD = 'entryGate';
 /** Los valores del enum `EntryGate`, como constantes del cable de los tres lenguajes. */
 export const ENTRY_GATES = ['HTTP', 'SUBSCRIPTION', 'DISPATCH', 'SCHEDULE'];
 
+/**
+ * La puerta del plazo de negocio (DSL 2.26): la operación `by` de un plazo la despacha el cronómetro. NO entra en
+ * `ENTRY_GATES`, y no es olvido: esa operación es `internal` (lo exige CHK-DOMAIN-DEADLINE-BY-INVALID), así que nunca
+ * tiene HTTP y su mensaje nunca lleva la puerta. Existe para que quien recorra las puertas de una operación la vea.
+ */
+export const DEADLINE_GATE = 'DEADLINE';
+
 /** Las puertas por las que entra una operación: `{ gate, by }`, con `by` el nombre de la suscripción o de quien despacha. */
 export function entryGates(model, operation) {
   const gates = [];
@@ -31,6 +38,11 @@ export function entryGates(model, operation) {
     if ((other.dispatches ?? []).includes(operation.name)) gates.push({ gate: 'DISPATCH', by: other.name });
   }
   if (operation.schedule) gates.push({ gate: 'SCHEDULE', by: null });
+  for (const entity of model.entities ?? []) {
+    for (const deadline of entity.lifecycle?.deadlines ?? []) {
+      if (deadline.by === operation.name) gates.push({ gate: DEADLINE_GATE, by: `${entity.name}.${deadline.stateName}` });
+    }
+  }
   return gates;
 }
 

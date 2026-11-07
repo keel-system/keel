@@ -795,6 +795,18 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
           transitions: Object.entries(def.lifecycle.transitions).map(([from, to]) => ({
             from: screamingSnake(from),
             to: to.map((state) => screamingSnake(state))
+          })),
+          // Los plazos de negocio (DSL 2.26), uno por estado de origen: los nombres del diseño y sus constantes. La duración
+          // y lo demás se resuelven en gen/deadlines.js, que es quien decide para los cuatro generadores.
+          deadlines: Object.entries(def.lifecycle.deadlines ?? {}).map(([state, deadline]) => ({
+            stateName: state,
+            state: screamingSnake(state),
+            toName: deadline.to,
+            to: screamingSnake(deadline.to),
+            since: deadline.since,
+            after: deadline.after,
+            by: deadline.by,
+            lateAction: deadline.lateAction ?? null
           }))
         }
       : null;
