@@ -248,7 +248,7 @@ nunca la emite a medias.
 | 3. keel-go | hecho | `db-check` (PostgreSQL y MySQL, `catalog-conditional` y `shop-conditional`) y `doc-check` CW-1 a CW-5; `go-check --fixtures` 107/107 con las siluetas en todas sus variantes; CW-6 a CW-11 en las pruebas emitidas; CW-12 ejecutado en Node; los nueve sabotajes |
 | 4. keel-spring | hecho | `precondition-check` (nuevo): CW-1 a CW-5 en PostgreSQL, MySQL y MongoDB y CW-6 a CW-11 en el borde, sobre los tres diseños (23/23 cada uno); CW-12 en Node; los nueve sabotajes |
 | 5. derivados y docs | hecho | `gen/openapi.js` (If-Match, ETag, 412/428) igual byte a byte en los cuatro y sin deriva (`keel-nest/test/openapi.test.js`), `redocly lint` sin errores; `CHK-DOCS-POSTMAN-DRIFT` ve la escritura `required` sin If-Match (`test/derived-coherence.test.js`); agentes de código y de calidad de los cuatro; `/keel-recover` |
-| 6. corrida de control | pendiente | — |
+| 6. corrida de control | hecho | `catalog-extended` en los cuatro, 55/55 con FL-PRD-006 entero (huellas 22, 24, 23 y 23); `docs/corridas/2026-11-07-catalog-cw-*-control.md` |
 
 ## Lo que se decidió al construir (incrementos 0 y 1)
 
@@ -400,6 +400,19 @@ Decisiones que el plan no fijaba, o que cambian lo que decía. Los incrementos 2
   en MySQL da a veces el motor por listo antes de que acepte conexiones (rojo «no se pudo crear la base»; verde al repetir).
   Los cuatro proyectos están ya generados (`build --accept-unready`, stack `postgresql · rabbitmq · redis · minio`, sin
   identidad) en `D:\keel-example\catalog-cw-<tech>-postgre-rabbit\services\catalog-<tech>`.
-- Siguiente: correr `/keel-generate-<tech>` en los cuatro y registrarlas en `docs/corridas/`. Ninguna fixture declara todavía `concurrency`: catalog-extended la
+- Incremento 6 hecho (2026-11-07): las cuatro corridas de control en 55/55, registradas en
+  `docs/corridas/2026-11-07-catalog-cw-<tech>-control.md`. Los cuatro agentes escribieron el mismo handler: carga con
+  `loadExpecting` y devuelve la versión de lo que dejó `save`; ninguno tocó `loadExpecting` ni `forceNewVersion`. Lo que
+  destaparon, ya arreglado: dos escenarios de la fixture contra el contrato y el `expectedVersion` redundante
+  (`16eb1dad`), `exchangeWithHeaders` solo con CORS en el arnés de keel-spring (`fd024528`) y el tipo de archivo rechazado
+  sin código de framework, que keel-spring y keel-nest respondían distinto (`UNSUPPORTED_CONTENT_TYPE` 415, `6324bfda`;
+  spring y nest se cerraron en modo evolución con él).
+- **Puerta de cierre: cumplida.** Suites en verde, `design-matrix` sin `sin-mutacion`, la fila `conditional-write`
+  verificada y falsada en las cuatro matrices, los nueve sabotajes en cada generador y la corrida de control en verde en
+  los cuatro.
+- Fuera del plan, para después: los `designGap` repetidos en la serie (`corrida-metrics.js series`), de los que tres son
+  mecanizables (`slug-single-of-many`, `withdrawal-reason-unsourced`, `update-ref-error-undeclared`), y los arreglos de la
+  fixture que los cierran. Y la espera de arranque de MySQL en el `db-check` de keel-go, que a veces da el motor por
+  listo antes de tiempo. Ninguna fixture declara todavía `concurrency`: catalog-extended la
   declara con la corrida de control (incremento 6), y entonces se borran las filas de capability-coverage que lo dicen y la
   decisión aceptada de `OBL-API-CONCURRENCY-UNDECIDED` en su `decisions.yaml`.
