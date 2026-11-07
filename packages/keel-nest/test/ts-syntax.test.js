@@ -17,6 +17,8 @@ import path from 'node:path';
 import { checkCrossRefs, loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { checkTree } from './helpers/ts-tree.js';
+import { GENERATOR_TABLES, STEP_ENGINES, schemaStepSql, stepHeader, stepSlug } from '@keel-system/keel-core/gen/schema-steps';
+import { createdTablesInMigration, renderSchemaStep, stepStatements } from '../src/scaffold/schema-baseline.js';
 import { DERIVED_SILHOUETTES, FIXTURES_DIR, derivedDesign } from './helpers/workspace.js';
 
 test('el comprobador detecta TypeScript roto (autocomprobación)', () => {
@@ -51,6 +53,18 @@ for (const name of fs.readdirSync(FIXTURES_DIR)) {
       assert.deepEqual(checkTree(files), []);
     });
   }
+}
+
+// El paso de esquema de build (inc. 2b del plan 2.26) solo se emite sobre un proyecto con baseline en disco, así que
+// ninguna fixture lo trae: se renderiza aquí con todas las tablas del generador, en los dos motores que tienen pasos.
+for (const engine of STEP_ENGINES) {
+  test(`paso de esquema (${engine}): la migración de TypeORM parsea y su SQL es el de keel-core troceado sin cambiarlo`, () => {
+    const sql = schemaStepSql(engine, GENERATOR_TABLES);
+    const step = renderSchemaStep({ version: 1000000000001, slug: stepSlug(GENERATOR_TABLES), sql, header: stepHeader(GENERATOR_TABLES) });
+    assert.deepEqual(checkTree([{ path: `src/migrations/${step.name}`, content: step.content }]), []);
+    assert.equal(`${stepStatements(sql).join('\n\n')}\n`, sql);
+    assert.deepEqual(createdTablesInMigration(step.content), GENERATOR_TABLES.map((table) => table.table));
+  });
 }
 
 // Las siluetas que ninguna fixture tiene (incremento 16): mensajería sin persistencia y el compuesto saliente.

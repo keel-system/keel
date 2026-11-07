@@ -23,6 +23,7 @@ import { DATA_SOURCE_OPTIONS_TS } from './persistence-runtime.js';
 import { usesRelational } from './persistence-entities.js';
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { crossAggregateForeignKeys } from '@keel-system/keel-core/gen/relational';
+import { GENERATOR_TABLES, STEP_PREFIX, createdTablesInSql, schemaStepFiles } from '@keel-system/keel-core/gen/schema-steps';
 
 export const SCHEMA_BASELINE_TS = 'src/infrastructure/persistence/schema-baseline.ts';
 export const MIGRATIONS_DIR = 'src/migrations';
@@ -43,6 +44,97 @@ export function generate(model) {
     { path: 'infra/verify-baseline.sh', content: script('verify') },
     { path: `${MIGRATIONS_DIR}/README.md`, content: migrationsReadme(model) }
   ];
+}
+
+// ─── Los pasos de esquema de build ───────────────────────────────────────────
+//
+// Una tabla del generador (outbox, guarda de mensajes, idempotencia, reconciliación, cronómetro) que aparece en un
+// proyecto con base desplegada llega como una migración de TypeORM que escribe build (keel-core/gen/schema-steps.js): el
+// baseline ya se aplicó, `migrationsRun` no ve nada pendiente y la primera petición que toque la tabla cae. Qué falta se
+// deduce de las migraciones de disco ANTES de escribir; sin ${BASELINE_FILE} no hay base desplegada y el baseline que
+// exporte el agente la traerá.
+//
+// La versión es la marca de tiempo del nombre, la que TypeORM lee de los 13 últimos dígitos del nombre de la clase para
+// ordenar: una más que la mayor de disco, nunca `Date.now()` (build tiene que ser determinista). Tras el baseline sale
+// 1000000000001; los pasos del agente llevan `Date.now()`, así que el suyo siguiente va después de este.
+
+const MIGRATION_FILE = /^(\d+)-.+\.ts$/;
+
+/** Las tablas del generador que este proyecto emite: las que tienen su entidad TypeORM entre los archivos de build. */
+export function generatorTables(files) {
+  const contents = files.map((file) => (typeof file.content === 'string' ? file.content : ''));
+  return GENERATOR_TABLES.filter((table) => contents.some((content) => content.includes(`@Entity({ name: '${table.table}' })`)));
+}
+
+/**
+ * Las tablas que crea una migración de TypeORM: su SQL va en literales de cadena, y el baseline exportado lo escribe con
+ * `JSON.stringify`, que escapa las comillas dobles de los identificadores de PostgreSQL (`\"outbox_event\"`). Se quitan
+ * esos escapes antes de leer el SQL.
+ */
+export function createdTablesInMigration(content) {
+  return createdTablesInSql(String(content).replace(/\\(["'`])/g, '$1'));
+}
+
+/**
+ * Los pasos de TypeORM que build emite en esta pasada (los suyos de antes, tal cual, y el nuevo si hace falta), con lo
+ * que EVOLUTION.md tiene que decir. Vacío en el modelo documental: allí los índices los asegura el arranque.
+ */
+export function schemaSteps(model, files, projectDir) {
+  if (!usesRelational(model)) return { files: [], added: [], work: [] };
+  return schemaStepFiles({
+    projectDir,
+    dir: MIGRATIONS_DIR,
+    tables: generatorTables(files),
+    engine: model.stack.database,
+    isMigration: (name) => MIGRATION_FILE.test(name),
+    isBaseline: (name) => name === BASELINE_FILE,
+    versionOf: (name) => MIGRATION_FILE.exec(name)?.[1] ?? null,
+    renderStep: renderSchemaStep,
+    createdTables: createdTablesInMigration
+  });
+}
+
+/**
+ * Las sentencias de un SQL de `schemaStepSql`, una por llamada: mysql2 sin `multipleStatements` rechaza varias en un solo
+ * `queryRunner.query`. Cada una conserva su texto, con su `;`: unidas como las une keel-core son ese SQL byte a byte, que
+ * es lo que deja el mismo esquema en los cuatro servidores.
+ */
+export function stepStatements(sql) {
+  const statements = sql.replace(/\n$/, '').split('\n\n');
+  if (`${statements.join('\n\n')}\n` !== sql || statements.some((statement) => !statement.endsWith(';'))) {
+    throw new Error('el SQL del paso de esquema no se trocea por sentencias sin cambiarlo');
+  }
+  return statements;
+}
+
+/** El paso como migración de TypeORM: `<versión>-keel-<tablas>.ts`, con la clase `Keel<Tablas><versión>`. */
+export function renderSchemaStep({ version, slug, sql, header }) {
+  const statements = stepStatements(sql);
+  // El SQL va tal cual en template literals: no puede traer nada que un template literal interprete.
+  if (statements.some((statement) => /[`\\]|\$\{/.test(statement))) throw new Error('el SQL del paso de esquema no cabe en un template literal');
+  const className = `${slug.split('_').map((part) => part[0].toUpperCase() + part.slice(1)).join('')}${version}`;
+  const content = `${header.map((line) => `// ${line}`).join('\n')}
+import type { MigrationInterface, QueryRunner } from 'typeorm';
+
+/** Una sentencia por llamada: mysql2 sin multipleStatements no admite varias en un queryRunner.query. */
+const STATEMENTS: readonly string[] = [
+${statements.map((statement) => `  \`${statement}\``).join(',\n')}
+];
+
+export class ${className} implements MigrationInterface {
+  name = '${className}';
+
+  async up(queryRunner: QueryRunner): Promise<void> {
+    for (const statement of STATEMENTS) await queryRunner.query(statement);
+  }
+
+  async down(): Promise<void> {
+    // No se deshace a propósito: borrar estas tablas perdería los eventos pendientes del outbox o reabriría duplicados
+    // que la guarda ya había visto. El SQL es idempotente: volver a aplicar el paso tras un revert no hace nada.
+  }
+}
+`;
+  return { name: `${version}-${slug.replaceAll('_', '-')}.ts`, content };
 }
 
 function schemaBaselineTs(model) {
@@ -300,5 +392,10 @@ Los nombres de tablas, columnas, constraints, índices y FK son los MISMOS que l
 keel-spring del diseño ${model.service.name}: los fija keel-core/gen y los traduce el filtro de errores.
 Un cambio posterior del esquema es una migración nueva, con una marca de tiempo mayor; el baseline no
 se reescribe una vez desplegado.
+
+Las migraciones \`<marca>-${STEP_PREFIX}-*.ts\` las escribe build: crean las tablas del generador (outbox,
+idempotencia, reconciliación, cronómetro) que una base ya desplegada no tenía. No las edites ni las
+renumeres, y no repitas sus tablas en una migración tuya: la tuya va después, con \`Date.now()\` como
+marca, que siempre es mayor.
 `;
 }

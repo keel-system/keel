@@ -60,3 +60,10 @@ re-ejecución de la suite funciona igual sobre ella.
 - No se activa `synchronize` fuera de `local` para «arreglar» un baseline que no verifica.
 - No se reescribe el baseline una vez desplegado: un cambio de esquema posterior es una migración nueva,
   con una marca de tiempo mayor.
+- **Las `src/migrations/<marca>-keel-*.ts` las escribe build, no tú.** Cuando una tabla del generador
+  (`outbox_event`, `processed_event`, `idempotency_record`, `reconciliation_claim`, `keel_timer`) aparece
+  en un proyecto que ya tiene el baseline, build escribe la migración que la crea, con
+  `CREATE TABLE IF NOT EXISTS`, una marca de tiempo una mayor que la última de `src/migrations/` y
+  `EVOLUTION.md` lo nombra. No la edites, no la renumeres y no repitas esas tablas en una migración tuya:
+  la tuya lleva `Date.now()` como marca y va después. Lo que build no hace es cambiar la forma de una
+  tabla suya que la base ya tiene; si eso pasa, lo dice `EVOLUTION.md` y la migración es tuya.
