@@ -19,6 +19,11 @@ import { planService } from '../src/scaffold/index.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { goView } from './helpers/contract.js';
 import { goSchema } from './helpers/schema.js';
+import { tmpDir } from './helpers/tmp.js';
+import { BASELINE_FILE, generatorTables, physicalType, schemaSteps, schemaTables } from '../src/scaffold/persistence.js';
+import { layout } from '../src/scaffold/render.js';
+import { GENERATOR_TABLES, schemaStepSql, stepSlug, storeColumnType } from '@keel-system/keel-core/gen/schema-steps';
+import { storeColumns } from '@keel-system/keel-core/gen/messaging-stores';
 
 /** Las tablas de mecanismos de keel-spring que keel-go todavía no genera, con el incremento que las trae. */
 const MECHANISM_TABLES = {};
@@ -78,3 +83,69 @@ test('product-catalog con el precio OPCIONAL: sus columnas aplanadas admiten nul
     assert.equal(go.get('products').columns.get(column).nullable, true, `keel-go: ${column}`);
   }
 });
+
+// ─── Los pasos de esquema de build (inc. 2b del plan 2.26) ───────────────────────────────────
+//
+// El paso que lleva una tabla del generador a una base desplegada (persistence.js `schemaSteps`) tiene que dejarla
+// IGUAL que la habría dejado la baseline: los mismos tipos físicos, la misma nulabilidad, la misma clave primaria, la
+// misma unicidad y los mismos índices. El SQL del paso es el neutral (`schemaStepSql`, con `storeColumnType`) y el de la
+// baseline es el de keel-go (`physicalType`): si divergen, una base nueva y una desplegada tendrían otro esquema.
+
+const ENGINES = ['postgresql', 'mysql'];
+
+test('pasos de esquema: storeColumnType de keel-core es el physicalType de la baseline en cada columna del generador', () => {
+  for (const table of GENERATOR_TABLES) {
+    for (const column of storeColumns(table, 'relational')) {
+      for (const engine of ENGINES) {
+        assert.equal(storeColumnType(column, engine), physicalType({ base: column.base, length: column.length }, engine), `${engine}: ${table.table}.${column.name}`);
+      }
+    }
+  }
+});
+
+for (const engine of ENGINES) {
+  test(`pasos de esquema (${engine}): cada tabla del generador de la baseline es la que crea el paso`, () => {
+    let seen = 0;
+    for (const name of relational) {
+      const design = goView(name);
+      const { model } = planService({ ...design, workspace: FIXTURES_DIR, stack: { database: engine } });
+      const { tables, indexes } = schemaTables(model);
+      for (const definition of generatorTables(model)) {
+        seen += 1;
+        const table = tables.find((candidate) => candidate.name === definition.table);
+        const columns = storeColumns(definition, 'relational');
+        const where = `${name}: ${definition.table}`;
+        assert.deepEqual(table.columns.map((column) => [column.name, physicalType(column, engine), column.nullable]), columns.map((column) => [column.name, storeColumnType(column, engine), column.nullable]), `${where}: columnas`);
+        assert.deepEqual(table.primaryKey.columns, columns.filter((column) => column.primary).map((column) => column.name), `${where}: clave primaria`);
+        assert.deepEqual(table.constraints, (definition.uniques ?? []).map((unique) => ({ name: unique.name, columns: unique.columns })), `${where}: unicidad`);
+        assert.deepEqual(indexes.filter((index) => index.table === definition.table).map((index) => [index.name, index.columns, index.unique]), (definition.indexes ?? []).map((index) => [index.name, index.columns, false]), `${where}: índices`);
+      }
+    }
+    assert.ok(seen >= 4, `hay tablas del generador en las fixtures (${seen})`);
+  });
+
+  test(`pasos de esquema (${engine}): el paso es el SQL neutral dentro de un paso de goose embebido`, () => {
+    // La fixture con más tablas del generador, sobre una «base desplegada» cuya baseline no crea ninguna.
+    const plans = relational.map((name) => planService({ ...goView(name), workspace: FIXTURES_DIR, stack: { database: engine } }));
+    const { model, files } = plans.sort((a, b) => generatorTables(b.model).length - generatorTables(a.model).length)[0];
+    const tables = generatorTables(model);
+    const projectDir = tmpDir('keel-go-schema-step-');
+    const dir = path.join(projectDir, layout(model).store.dir, 'migrations');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, BASELINE_FILE), '-- +goose Up\nCREATE TABLE product (id uuid);\n');
+
+    const schema = schemaSteps(model, projectDir);
+    assert.deepEqual(schema.tables, tables.map((table) => table.table));
+    assert.equal(schema.files.length, 1);
+    const [step] = schema.files;
+    assert.equal(step.path, `${layout(model).store.dir}/migrations/00002_${stepSlug(tables)}.sql`);
+    const up = step.content.slice(step.content.indexOf('-- +goose Up\n') + '-- +goose Up\n'.length, step.content.indexOf('\n-- +goose Down\n'));
+    assert.equal(up, schemaStepSql(engine, tables), 'el Up es schemaStepSql byte a byte');
+    assert.ok(step.content.indexOf('-- +goose Up') < step.content.indexOf('-- +goose Down'), 'Up antes que Down');
+    // goose parte por el `;` del final de línea: ninguna sentencia lleva otro dentro (sin StatementBegin).
+    for (const statement of up.split(/;\n/).filter((text) => text.trim())) assert.ok(!statement.includes(';'), statement);
+    // Lo embebe el `//go:embed migrations/*.sql` del paquete: entra sin registrarlo.
+    assert.match(files.find((file) => file.path === `${layout(model).store.dir}/migrations.go`).content, /\/\/go:embed migrations\/\*\.sql\n/);
+    assert.match(path.posix.basename(step.path), /^\d{5}_keel_[a-z_]+\.sql$/);
+  });
+}

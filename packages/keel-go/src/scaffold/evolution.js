@@ -6,11 +6,14 @@
 // equivalente en ellos, porque aquí el esquema lo escribe build entero: goose no reaplica una
 // migración que su historial ya tiene, así que una baseline reescrita no llega nunca a una base
 // que aplicó la anterior, y el servidor arranca sin decir nada y falla en la primera consulta.
+// Cuando lo único nuevo son tablas del generador, las lleva un paso de esquema que escribe build
+// (persistence.js, `schemaSteps`), y entonces no hay pregunta.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { digestOf } from '@keel-system/keel-core';
 import { REFRESH_DIR, readManifest } from '@keel-system/keel-core/gen/generated-manifest';
+import { isGeneratorStep } from '@keel-system/keel-core/gen/schema-steps';
 import { SKILL } from '../lib/assets.js';
 import { BASELINE_FILE } from './persistence.js';
 
@@ -31,18 +34,32 @@ const posixOf = (entry) => entry.path.split(/[\\/]/).join('/');
  * REGISTRÓ y no con el disco: en un proyecto con una base desplegada la baseline del disco es a propósito
  * la que aquella base aplicó, y compararla con la del diseño diría «cambió» en todos los builds.
  *
+ * `coveredBaseline` es la baseline nueva SIN las tablas que crea el paso de esquema que build escribe en esta
+ * pasada (persistence.js, `schemaSteps`). Si es la que build registró, lo único que cambió son esas tablas y el
+ * paso ya las lleva a la base desplegada: no hay nada que preguntar ni que escribir, y no es un cambio. Se mide
+ * contra lo registrado, no se supone: si cambió algo más (el dominio), la pregunta sigue.
+ *
+ * Los pasos del generador (`<NNNNN>_keel_*.sql`, con la marca de schema-steps.js) no cuentan como «ya migra por
+ * pasos»: los escribe build en cuanto hay baseline, sin que nadie haya restaurado la desplegada, así que no dicen
+ * si hay una base desplegada ni que el agente se haya hecho cargo de la baseline.
+ *
  * Tiene que llamarse antes de escribir: después, el manifiesto ya registra la nueva.
  */
-export function baselineChange(files, projectDir) {
+export function baselineChange(files, projectDir, { coveredBaseline = null } = {}) {
   const suffix = `/migrations/${BASELINE_FILE}`;
   const entry = files.find((file) => posixOf(file).endsWith(suffix));
   if (!entry) return null;
   const relative = posixOf(entry);
   const recorded = readManifest(projectDir)?.files?.[relative];
   if (!recorded || recorded === digestOf(entry)) return null;
+  if (coveredBaseline != null && recorded === digestOf({ content: coveredBaseline })) return null;
   const dir = path.join(projectDir, path.dirname(relative));
   const steps = fs.existsSync(dir)
-    ? fs.readdirSync(dir).filter((name) => name.endsWith('.sql') && name !== BASELINE_FILE).sort()
+    ? fs
+        .readdirSync(dir)
+        .filter((name) => name.endsWith('.sql') && name !== BASELINE_FILE)
+        .filter((name) => !isGeneratorStep(fs.readFileSync(path.join(dir, name), 'utf8')))
+        .sort()
     : [];
   return { relative, steps };
 }

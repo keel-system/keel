@@ -133,7 +133,7 @@ export async function build(
   // El traspaso al pipeline cuando el proyecto ya existía y algo cambió (el diseño, el stack o el generador). En la
   // primera generación no hay nada que evolucionar.
   const evolution = withSchemaNote(
-    planEvolution({ design, manifest, scaffold, stackChanges, mode, prune, projectDir }),
+    planEvolution({ design, manifest, scaffold, stackChanges, mode, prune, projectDir, schema: scaffold.schema }),
     scaffold.schemaChange,
     readPreviousEvolution(projectDir)
   );

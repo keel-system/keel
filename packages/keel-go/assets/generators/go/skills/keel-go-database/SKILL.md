@@ -44,7 +44,9 @@ necesita y el puerto no trae, en los dos `<raíz>_queries.go` sin la cabecera (`
   otros tres servidores usan los mismos.
 - El esquema es la migración de build y la aplica goose al arrancar, **en todos los perfiles**. No se añade otra
   migración ni se edita la baseline: un cambio del esquema es un cambio del diseño. La única excepción es una base
-  desplegada en modo evolución: `references/schema-evolution.md`.
+  desplegada en modo evolución: `references/schema-evolution.md`. Los `<NNNNN>_keel_<tablas>.sql` de `migrations/`
+  también son de build (las tablas del generador para una base que ya tenía la baseline): no se editan, no se
+  renumeran y sus tablas no se repiten en otro paso.
 - Una búsqueda con todos sus inputs enlazados (DSL 2.22: por nombre o con `filter`, más su `where`) ya tiene su
   **finder de build** en el puerto y en el adaptador: el handler lo llama y la nota dice con qué. Si una `rule`
   restringe algo que el finder no aplica, es un `designGap`, no un filtro en memoria.
