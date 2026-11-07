@@ -18,6 +18,7 @@
 //   ttl         la entrada se guarda sin caducidad
 //   reconnect   el cliente deja de reconectar tras la caída
 
+import { returnsVersioned } from '@keel-system/keel-core/gen/conditional-writes';
 import { CACHES } from '@keel-system/keel-core/gen/infra-catalog';
 import { cacheFlushCmd } from '@keel-system/keel-core/gen/infra-scripts';
 import { run, resolveRuntime, freePort } from './lib/database-container.js';
@@ -99,8 +100,15 @@ for (const id of only ? [only] : Object.keys(CACHES)) {
     store = new RedisCacheStore({ enabled: true, host: '127.0.0.1', port, connectTimeoutMs: 2000, commandTimeoutMs: 2000 });
     const cache = new RedisOperationCache(store, null);
     const key = `${GET_PRODUCT_BY_SLUG_CACHE.name}::${SLUG}`;
+    // Con escritura condicional (api.concurrency), la lectura da el ETag: su handler devuelve Versioned<T> y la entrada
+    // guarda la versión con el cuerpo, en el orden del cable.
+    const operation = model.services.flatMap((group) => group.operations).find((candidate) => candidate.name === 'getProductBySlug');
+    const versioned = returnsVersioned(model, operation);
+    const loaded = versioned ? { version: 7, value: card } : card;
+    const bodyOf = (entry) => (versioned ? entry.value : entry);
+    const expectedEntry = versioned ? `{"version":7,"value":${toWireJson(card)}}` : toWireJson(card);
     let loads = 0;
-    const load = async () => (loads++, card);
+    const load = async () => (loads++, loaded);
     const read = () => cache.getOrLoad(GET_PRODUCT_BY_SLUG_CACHE, { slug: SLUG }, load);
     for (let i = 0; i < 40; i++) {
       if (await store.get('sonda').then(() => true, () => false)) break;
@@ -110,14 +118,14 @@ for (const id of only ? [only] : Object.keys(CACHES)) {
     current = 'miss';
     await read();
     const stored = cli('GET', key).stdout.replace(/\r?\n$/, '');
-    step(`el miss guarda ${key} con el JSON del cable`, stored === toWireJson(card), stored.slice(0, 120));
+    step(`el miss guarda ${key} con el JSON del cable`, stored === expectedEntry, stored.slice(0, 120));
     const ttl = Number(cli('TTL', key).stdout.trim());
     step('con el TTL del diseño (300 s)', ttl > 290 && ttl <= 300, `TTL ${ttl}`);
 
     current = 'acierto';
     const hit = await read();
     step('el acierto no vuelve al origen', loads === 1, `${loads} cargas`);
-    step('y sale byte a byte igual en el cable', toWireJson(hit) === toWireJson(card));
+    step('y sale byte a byte igual en el cable', toWireJson(bodyOf(hit)) === toWireJson(card) && (!versioned || hit.version === 7));
 
     current = 'vaciado';
     cli('SET', `${model.service.artifactId}:otra-cache::x`, '1');
@@ -150,7 +158,7 @@ for (const id of only ? [only] : Object.keys(CACHES)) {
       answered = error;
     }
     const elapsed = Math.round(performance.now() - started);
-    step('con el store parado, la lectura va al origen y no falla', answered === card && loads === before + 1, answered instanceof Error ? answered.message : '');
+    step('con el store parado, la lectura va al origen y no falla', answered === loaded && loads === before + 1, answered instanceof Error ? answered.message : '');
     step('y en el acto, sin esperar al plazo de la orden', elapsed < 1000, `${elapsed} ms`);
 
     current = 'store de vuelta';

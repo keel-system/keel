@@ -392,6 +392,14 @@ Decisiones que el plan no fijaba, o que cambian lo que decía. Los incrementos 2
   (la caché conserva la versión) y `If-Match: *` en los flujos que no miden la concurrencia (FL-AUT-003/004). Sin el OBL
   aceptado en `decisions.yaml` y sin las filas de capability-coverage; `keel validate` da los mismos hallazgos que antes.
   Workspaces de la corrida: `D:\keel-example\catalog-cw-<tech>-postgre-rabbit` (keel init + `specs/catalog`).
-- Siguiente: lanzar las cuatro corridas y registrarlas en `docs/corridas/`. Ninguna fixture declara todavía `concurrency`: catalog-extended la
+  Redes en vivo con la fixture nueva, todas en verde: keel-spring `compile-check`; keel-nest `db-check` (PostgreSQL 16/16,
+  MySQL 9/9), `cache-check` 22/22 y `ts-check --only=catalog-extended`; keel-dotnet `db-check` (11/11 y 6/6), `cache-check`
+  25/25 y `cs-check --fixtures` (348 ensamblados, 8412 pruebas); keel-go `db-check` (8/8 y 8/8), `cache-check` 37/37 y
+  `go-check --fixtures` 107/107. Las sondas de caché de keel-nest y keel-dotnet aprendieron que la lectura de getProductBySlug
+  guarda `Versioned<T>`, y sus cinco sabotajes siguen cayendo cada uno en su caso. Pendiente aparte: el `db-check` de keel-go
+  en MySQL da a veces el motor por listo antes de que acepte conexiones (rojo «no se pudo crear la base»; verde al repetir).
+  Los cuatro proyectos están ya generados (`build --accept-unready`, stack `postgresql · rabbitmq · redis · minio`, sin
+  identidad) en `D:\keel-example\catalog-cw-<tech>-postgre-rabbit\services\catalog-<tech>`.
+- Siguiente: correr `/keel-generate-<tech>` en los cuatro y registrarlas en `docs/corridas/`. Ninguna fixture declara todavía `concurrency`: catalog-extended la
   declara con la corrida de control (incremento 6), y entonces se borran las filas de capability-coverage que lo dicen y la
   decisión aceptada de `OBL-API-CONCURRENCY-UNDECIDED` en su `decisions.yaml`.

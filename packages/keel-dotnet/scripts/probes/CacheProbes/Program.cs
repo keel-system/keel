@@ -8,6 +8,7 @@
 
 using System.Diagnostics;
 using System.Text.Json;
+using Catalog.Application.Abstractions;
 using Catalog.Application.Dtos;
 using Catalog.Application.Support;
 using Catalog.Domain.Enums;
@@ -62,14 +63,17 @@ var card = new GetProductBySlugResponseDto
     CurrentPrice = new CurrentPriceDto { Amount = 12.50m, Currency = "EUR" },
     ProductCost = null
 };
-var wire = JsonSerializer.Serialize(card, WireJson.Options);
+// getProductBySlug da el ETag (api.concurrency): su handler devuelve Versioned<T>, y la entrada guarda la versión con el
+// cuerpo para que un acierto devuelva el MISMO ETag que la lectura que la llenó.
+var entry = new Versioned<GetProductBySlugResponseDto>(7, card);
+var wire = JsonSerializer.Serialize(entry, WireJson.Options);
 
 await using var store = new RedisCacheStore(new CacheSettings(true, "127.0.0.1", port, 2000, 2000), NullLogger<RedisCacheStore>.Instance);
 var cache = new RedisOperationCache(new CacheState(), NullLogger<RedisOperationCache>.Instance, store);
 var operation = CachedOperations.GetProductBySlug;
 var key = $"{operation.Name}::{Slug}";
 var loads = 0;
-Task<GetProductBySlugResponseDto> Read() => cache.GetOrLoad(operation, new Catalog.Application.Queries.GetProductBySlugQuery { Slug = Slug }, _ => { loads++; return Task.FromResult(card); });
+Task<Versioned<GetProductBySlugResponseDto>> Read() => cache.GetOrLoad(operation, new Catalog.Application.Queries.GetProductBySlugQuery { Slug = Slug }, _ => { loads++; return Task.FromResult(entry); });
 
 for (var attempt = 0; attempt < 40; attempt++)
 {
@@ -107,7 +111,7 @@ Exec("stop", "-t", "0", container);
 await Task.Delay(500);
 var before = loads;
 var watch = Stopwatch.StartNew();
-GetProductBySlugResponseDto? answered = null;
+Versioned<GetProductBySlugResponseDto>? answered = null;
 string error = "";
 try
 {
@@ -118,7 +122,7 @@ catch (Exception failure)
     error = failure.Message;
 }
 watch.Stop();
-Step("con el store parado, la lectura va al origen y no falla", ReferenceEquals(answered, card) && loads == before + 1, error);
+Step("con el store parado, la lectura va al origen y no falla", ReferenceEquals(answered, entry) && loads == before + 1, error);
 Step("y en el acto, sin esperar al plazo de la orden", watch.ElapsedMilliseconds < 1000, $"{watch.ElapsedMilliseconds} ms");
 
 Exec("start", container);
