@@ -74,6 +74,11 @@ la solución compilando:
    Si sale `KO` por catálogos distintos con la migración recién creada, a `blockers` con la diferencia que imprime.
    Nunca edites la migración a mano para que pase ni uses `EnsureCreated` fuera de `local`.
 
+Si el proyecto ya tenía migraciones y build escribió una `<marca>_Keel*.cs` (lo dice `EVOLUTION.md`), esa es de
+build: no la edites, no la renumeres y no la retires con `migrations remove`. Lo tuyo es sincronizar el snapshot con
+`dotnet ef migrations add Sync<Tabla>Snapshot …` vaciando su `Up` y su `Down`, como dice la referencia, y que
+`verify-baseline.sh` salga `OK`.
+
 La prueba en vivo SÍ es tuya y se ejecuta: trabaja sobre bases aparte, así que no destruye la de tu no-regresión.
 `baselineTested` nunca sale `PENDING`.
 

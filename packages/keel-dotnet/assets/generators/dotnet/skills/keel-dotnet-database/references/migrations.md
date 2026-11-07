@@ -44,6 +44,37 @@ diferencia (código 1):
 Trabaja sobre dos bases aparte que crea y borra en el contenedor de la base de prueba: la de los flujos no se
 toca, y la no-regresión sigue funcionando después.
 
+## Las migraciones `<marca>_Keel*.cs` las escribe build
+
+Cuando una tabla del generador (`outbox_event`, `processed_event`, `idempotency_record`, `reconciliation_claim`,
+`keel_timer`) aparece en un proyecto que ya tiene migraciones —el diseño ganó un outbox o una idempotencia después
+del baseline—, `keel-dotnet build` escribe en `Persistence/Migrations/` la migración que la crea: una clase
+`Migration` con `migrationBuilder.Sql(...)` y `CREATE TABLE IF NOT EXISTS`, con la marca siguiente a la última que
+hay en disco, y `EVOLUTION.md` la nombra. Es el mismo SQL que dejan los otros tres generadores.
+
+- **No la edites, no la renumeres y no la borres**: una base que ya la aplicó no la vuelve a leer, y build la vuelve a
+  emitir tal cual en cada pasada. No lleva `.Designer.cs`, y es a propósito.
+- **No repitas sus tablas** en una migración tuya. Las tuyas van después, con `dotnet ef migrations add`, que ya
+  pone una marca posterior.
+- **Lo que build no puede hacer es el snapshot** (`<Contexto>ModelSnapshot.cs`), que solo escribe `dotnet ef`. Mientras
+  no nombre la tabla, `MigrateAsync` se niega a arrancar en `develop` y `production` (`PendingModelChangesWarning`),
+  `verify-baseline.sh` sale en `KO` (paso 2) y el siguiente `migrations add` volvería a crear la tabla, que en la base
+  desplegada ya existe. `EVOLUTION.md` lo pide hasta que esté hecho, y `keel-dotnet build --check` sale en rojo. Se
+  cierra con una migración que **solo** sincroniza el snapshot:
+
+  ```bash
+  dotnet ef migrations add Sync<Tabla>Snapshot --project src/<Raíz>.Infrastructure --output-dir Persistence/Migrations
+  ```
+
+  y en la migración que crea **vacías los cuerpos de `Up` y `Down`** (la tabla ya la crea el paso de build): el
+  `.Designer.cs` y el snapshot se quedan como los deja `dotnet ef`. Es la única migración generada que se edita, y
+  solo así. Después, `bash infra/verify-baseline.sh` tiene que dar `baseline: OK`: el paso 3 compara lo que crea el SQL
+  de build con el DDL del modelo, columna a columna.
+- **Nunca `dotnet ef migrations remove`** con una migración de build entre las dos últimas: reconstruye el snapshot
+  desde el modelo de destino de la anterior, y la de build no tiene.
+- Lo que build no hace es cambiar la forma de una tabla suya que la base ya tiene; si eso pasa, lo dice
+  `EVOLUTION.md` y la migración es tuya.
+
 ## Qué no se hace
 
 - No se edita la migración generada para «limpiarla». Si algo sobra o falta, el defecto está en el mapeo, y se
