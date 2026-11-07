@@ -48,7 +48,7 @@ import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN
 import { SECURITY_CONTEXT_TS, usesHttpSecurity } from '../src/scaffold/security.js';
 import { CORRELATION_TS, usesApi, usesCorrelation } from '../src/scaffold/rest-support.js';
 import { build } from '../src/commands/build.js';
-import { usesSchemaBaseline, BASELINE_FILE, MIGRATIONS_DIR } from '../src/scaffold/schema-baseline.js';
+import { usesSchemaBaseline, BASELINE_FILE, MIGRATIONS_DIR, generatorTables, schemaSteps } from '../src/scaffold/schema-baseline.js';
 import { AMQPLIB_VERSION, JOSE_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION, AWS_SDK_VERSION, FASTIFY_MULTIPART_VERSION } from '../src/lib/assets.js';
 import { domainMembers } from '../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
@@ -1354,6 +1354,84 @@ await dataSource.destroy();
   install(text);
 }
 
+// ─── El paso de esquema de build (inc. 2b del plan 2.26) ─────────────────────
+//
+// Una base desplegada cuyo baseline no tiene las tablas del generador: el baseline EXPORTADO por el exportador emitido,
+// sin sus sentencias. build escribe el paso leyendo ese baseline de disco (`schemaSteps`, keel-core/gen/schema-steps.js),
+// y se mide lo que solo el motor dice: que el paso lleva las tablas a la base desplegada al arrancar como en develop
+// (`migrationsRun`), que el redespliegue no lo reaplica y que el verify EMITIDO —baseline + paso sobre un esquema vacío,
+// comparado con las entidades— no ve diferencia. Falsado: sin el paso, el verify sale rojo.
+const STEP_SUBJECT = 'notification-mailer';
+
+function schemaStepBlock(model, files, engine, db, dir, subject) {
+  if (!usesSchemaBaseline({ ...model, stack: { ...model.stack, database: engine } })) return;
+  const tables = generatorTables(files).map((table) => table.table);
+  const label = `${engine} · ${subject}: paso de build`;
+  const settingsJs = `import 'reflect-metadata';
+import { DataSource } from 'typeorm';
+import { databaseSettings } from './dist/infrastructure/persistence/data-source-options.js';
+const values = { 'database.url': 'jdbc:${engine}://127.0.0.1:${db.port}/${DB_NAME}', 'database.username': '${DB_NAME}', 'database.password': '${db.password}', 'database.synchronize': false, 'database.transaction-timeout': '30s' };
+const settings = databaseSettings({ get: (key) => values[key], application: { name: 'db-check' } });
+`;
+  // El reset (vaciar el esquema) y el arranque de develop (aplicar las migraciones pendientes), y las tablas que quedan.
+  fs.writeFileSync(path.join(dir, 'step-reset.mjs'), `${settingsJs}const ds = await new DataSource({ ...settings.options, synchronize: false, migrationsRun: false }).initialize();\nawait ds.dropDatabase();\nawait ds.destroy();\n`);
+  fs.writeFileSync(
+    path.join(dir, 'step-migrate.mjs'),
+    `${settingsJs}const ds = await new DataSource({ ...settings.options, synchronize: false, migrationsRun: true }).initialize();
+const rows = await ds.query(${JSON.stringify(engine === 'mysql' ? 'SELECT table_name AS t FROM information_schema.tables WHERE table_schema = DATABASE()' : "SELECT table_name AS t FROM information_schema.tables WHERE table_schema = 'public'")});
+console.log('@@TABLES@@' + JSON.stringify(rows.map((row) => row.t ?? row.T ?? row.TABLE_NAME)));
+await ds.destroy();
+`
+  );
+  const node = (args) => run(process.execPath, args, { cwd: dir, timeout: 180_000 });
+  const compile = () => run(process.execPath, [path.join(dir, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', 'tsconfig.build.json'], { cwd: dir });
+  const migrate = () => {
+    const result = node(['step-migrate.mjs']);
+    const marker = result.stdout.split('@@TABLES@@')[1];
+    return { ok: result.status === 0 && Boolean(marker), tables: marker ? JSON.parse(marker.trim().split('\n')[0]) : [], output: (result.stderr || result.stdout).slice(-1200) };
+  };
+  const migrationsDir = path.join(dir, MIGRATIONS_DIR);
+
+  node(['step-reset.mjs']);
+  const exported = node(['dist/infrastructure/persistence/schema-baseline.js', 'export']);
+  const migration = path.join(dir, 'build', 'schema', BASELINE_FILE);
+  if (!step(`${label}: el exportador da el baseline`, exported.status === 0 && fs.existsSync(migration), (exported.stderr || exported.stdout).slice(-800))) return;
+  // Una sentencia por línea (el exportador las escribe con JSON.stringify): fuera las que nombran una tabla del generador.
+  const named = (line) => tables.some((table) => new RegExp(`[\\\\"\`]${table}[\\\\"\`]`).test(line));
+  const lines = fs.readFileSync(migration, 'utf8').split('\n');
+  const deployedBaseline = lines.filter((line) => !(line.includes('queryRunner.query(') && named(line))).join('\n');
+  if (!step(`${label}: el baseline desplegado no tiene ${tables.join(', ')}`, deployedBaseline.length < lines.join('\n').length)) return;
+  fs.rmSync(migrationsDir, { recursive: true, force: true });
+  fs.mkdirSync(migrationsDir, { recursive: true });
+  fs.writeFileSync(path.join(migrationsDir, BASELINE_FILE), deployedBaseline);
+  if (!step(`${label}: el baseline desplegado compila`, compile().status === 0)) return;
+  node(['step-reset.mjs']);
+  const deployed = migrate();
+  if (!step(`${label}: la base desplegada arranca sin las tablas del generador`, deployed.ok && tables.every((table) => !deployed.tables.includes(table)), deployed.output)) return;
+
+  // build --refresh: el paso se decide leyendo el baseline de disco.
+  const steps = schemaSteps(model, files, dir);
+  if (!step(`${label}: build escribe el paso`, steps.added.length === 1, steps.added[0] ?? 'ninguno')) return;
+  for (const file of steps.files) fs.writeFileSync(path.join(dir, file.path), file.content);
+  if (!step(`${label}: el paso compila`, compile().status === 0)) return;
+  const stepped = migrate();
+  step(`${label}: las tablas llegan a la base desplegada al arrancar`, stepped.ok && tables.every((table) => stepped.tables.includes(table)), stepped.output);
+  const again = migrate();
+  step(`${label}: el redespliegue no lo reaplica`, again.ok, again.output);
+  node(['step-reset.mjs']);
+  const verified = node(['dist/infrastructure/persistence/schema-baseline.js', 'verify']);
+  step(`${label}: verify en verde — baseline + paso crean el esquema de las entidades`, verified.status === 0 && /baseline: OK/.test(verified.stdout), (verified.stderr || verified.stdout).slice(-1500));
+
+  // Falsado: sin el paso, el verify ve las tablas que faltan.
+  fs.rmSync(path.join(dir, steps.added[0]));
+  fs.rmSync(path.join(dir, 'dist', 'migrations'), { recursive: true, force: true });
+  if (compile().status === 0) {
+    node(['step-reset.mjs']);
+    const sabotaged = node(['dist/infrastructure/persistence/schema-baseline.js', 'verify']);
+    step(`${label}: falsado — sin el paso, el verify sale rojo`, sabotaged.status !== 0, `código ${sabotaged.status}`);
+  }
+}
+
 // ─── Orquestación ────────────────────────────────────────────────────────────
 
 const runtime = resolveRuntime();
@@ -1419,6 +1497,7 @@ for (const engine of ENGINES) {
         `${checks.length - failed.length}/${checks.length}${probe.unsampled.length > 0 ? `; sin muestra: ${probe.unsampled.join(', ')}` : ''}`
       );
       baselineBlock(model, engine, db, dir, subject);
+      if (subject === STEP_SUBJECT) schemaStepBlock(model, files, engine, db, dir, subject);
     }
   } finally {
     if (!keep) run(runtime, ['rm', '-f', db.name]);
