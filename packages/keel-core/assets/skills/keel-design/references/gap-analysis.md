@@ -96,6 +96,7 @@ Por cada entidad con `lifecycle`:
 - Por cada transición declarada: ¿qué operación la ejecuta, y **lo declara con `transitions`**? Una transición que nadie ejecuta no es contrato, es intención — `keel validate` lo avisa, pero quién debería ejecutarla es respuesta de diseño.
 - ¿Hay estados **terminales**? ¿Es correcto que no tengan salida, o el negocio necesita revertirlos (cancelar, reactivar, devolver)? **Cruza esta pregunta con las `compensations`**: una compensación que tiene que devolver la entidad a un estado anterior necesita esa arista de vuelta declarada aquí, y el estado terminal es justo donde se olvida (clase 8).
 - ¿Qué operaciones están **prohibidas** en cada estado, y con qué error? Modificar un pedido entregado suele ser un error declarado que nadie declara.
+- ¿Algún estado **caduca** por el paso del tiempo (una reserva sin pagar, una invitación, un código)? Entonces es un **plazo de negocio** y se declara en `lifecycle.deadlines` (DSL 2.26), no en prosa: cuánto (`after`), desde qué marca (`since`), a qué estado (`to`), con qué operación (`by`) y qué pasa con una acción tardía (`lateAction`). Esta última no tiene default ni admite cierre `aceptado`. No confundir con el rescate de una fila en vuelo (`stalledAfter`, clase 13) ni con el silencio de un proveedor (`reconciledBy`, clase 8).
 
 ### 2. Guardas ↔ errores
 

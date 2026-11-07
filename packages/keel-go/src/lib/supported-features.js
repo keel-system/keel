@@ -15,6 +15,7 @@ import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
+import { deadlinesPendingErrors } from '@keel-system/keel-core/gen/deadlines';
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { GO_PROJECTION } from './go-projection.js';
 import { messageComponents } from '../scaffold/services.js';
@@ -71,6 +72,9 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...cacheErrors(layers));
   // La escritura condicional (DSL 2.25) se genera entera; lo que ningún generador genera todavía, con el motivo neutral (T3).
   errors.push(...conditionalWritesFrontierErrors(layers, 'keel-go'));
+  // Los plazos de negocio (DSL 2.26) llegan con el cronómetro, en el incremento 6 de PLAN-DSL-226-PLAZOS.md: hasta
+  // entonces se rechazan enteros, con el mismo mensaje en los cuatro.
+  errors.push(...deadlinesPendingErrors(layers, 'keel-go', 6));
   if (declared.includes('storage')) errors.push(...storageErrors(layers));
   // La idempotencia sin persistencia no es un pendiente: el registro de claves tiene que confirmarse en la misma transacción
   // que el efecto, así que no hay mecanismo posible, y se dice (como los otros tres).

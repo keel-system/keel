@@ -22,7 +22,7 @@ estampado en `keel-generated.json`, y no escribe nada en el workspace de diseño
 ## El contrato
 
 1. **Entrada**: el diseño multi-artefacto de `specs/<servicio>/`, validado y listo.
-2. **Compatibilidad**: DSL `2.25`, la misma que los otros tres. Ante otra, se detiene.
+2. **Compatibilidad**: DSL `2.26`, la misma que los otros tres. Ante otra, se detiene.
 3. **Salida**: `services/<servicio>-go/`, un módulo Go (`go 1.27.0`, `toolchain go1.27.3`) sin cgo, con la
    configuración por perfiles en `config/` —el mismo formato y las mismas variables que los otros tres, embebida en
    el binario—, sus sondas `/livez` y `/readyz`, la prueba de su frontera hexagonal, el snapshot sellado del
@@ -46,6 +46,7 @@ Toda fixture del repositorio se genera entera: las once capas, PostgreSQL, MySQL
 | Relación interna a-uno sin vuelta, many-to-many interna, y value object persistido con otro dentro o con un opcional | `unmeasuredShapes` | Un adaptador con la cabecera de código generado no admite el TODO que deja keel-dotnet, y ninguna fixture declara estas formas | Alto: el mapeo de cada forma, en el esquema y en los adaptadores | `db-check` |
 | Autoría declarada en un campo opcional o que no es texto | `authorshipErrors` | El dominio de Go la guarda como `string`, y vacío es ausente | Bajo: otro tipo en la estampa | `db-check` |
 | Operación por reloj cuyo mensaje lleva campos | `scheduledWithArguments` | El reloj la despacha sin argumentos, y la tarea es código generado, sin TODO posible | Medio: mover la tarea a un archivo del agente | `go-check` |
+| Plazo de negocio (`lifecycle.deadlines`, DSL 2.26) | `deadlinesPendingErrors` | Llega con el cronómetro del servicio, en el incremento 6 de PLAN-DSL-226-PLAZOS.md; hasta entonces lo rechazan los cuatro generadores, cada uno hasta su incremento | Es un pendiente del plan, no una decisión: se abre en su incremento | `go-check`, `db-check`, `harness-check` |
 | Operación por reloj sin persistencia | `scheduledWithoutPersistence` | El reloj se cablea con los casos de uso, que solo existen sobre las Dependencies. Hasta el 0b del plan 2.26 se descartaba en silencio | Alto, el mismo que la última fila: que `NewUseCases` exista sin persistencia | `go-check` |
 | Parámetro `decimal` o `boolean`, y parámetro que no es de un barrido sin persistencia | `parameterErrors` | Ninguna fixture los declara. Los handlers los reciben por las Dependencies, que solo existen con persistencia | Bajo el tipo; alto sin persistencia (ver la última fila) | `go-check` |
 | Réplica sobre documentos | `outboundErrors` | Ninguna fixture documental la declara | Medio: los almacenes de la réplica en el paquete `mongo` | `doc-check` |

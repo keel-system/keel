@@ -1,4 +1,4 @@
-keel: "2.25"
+keel: "2.26"
 service:
   name: notification-mailer
   version: 2.1.2

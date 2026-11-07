@@ -11,6 +11,7 @@
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
+import { deadlinesPendingErrors } from '@keel-system/keel-core/gen/deadlines';
 
 /**
  * Comprueba el diseño contra la frontera de keel-spring.
@@ -219,6 +220,9 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...messagingWithoutPersistenceErrors(manifest, layers, 'keel-spring'));
   // La escritura condicional (DSL 2.25) se genera entera; lo que ningún generador genera todavía, con el motivo neutral (T3).
   errors.push(...conditionalWritesFrontierErrors(layers, 'keel-spring'));
+  // Los plazos de negocio (DSL 2.26) llegan con el cronómetro, en el incremento 3 de PLAN-DSL-226-PLAZOS.md: hasta
+  // entonces se rechazan enteros, con el mismo mensaje en los cuatro.
+  errors.push(...deadlinesPendingErrors(layers, 'keel-spring', 3));
 
   if (orphanInternal.length > 0) {
     warnings.push(

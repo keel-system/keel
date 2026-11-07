@@ -401,6 +401,52 @@ export const CHECKS = {
     title: 'una referencia que un command protege con <ENTIDAD>_NOT_FOUND y otro, que la recibe igual, no',
     closes: 'declarar el mismo error en la operación, o dejar escrito por qué ahí una referencia inexistente no es un error'
   },
+  // ─── Los plazos de negocio sobre el estado (DSL 2.26, lifecycle.deadlines) ──────────────────
+  'CHK-DOMAIN-DEADLINE-TO-UNDECLARED': {
+    layer: 'domain',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el destino de un plazo no es una arista del lifecycle desde su estado',
+    closes: 'declarar la arista en transitions.<estado>, o corregir to'
+  },
+  'CHK-DOMAIN-DEADLINE-SINCE-INVALID': {
+    layer: 'domain',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el campo desde el que se cuenta un plazo no existe o no es un timestamp',
+    closes: 'nombrar en since un campo timestamp de la entidad'
+  },
+  'CHK-DOMAIN-DEADLINE-PARAM-UNKNOWN': {
+    layer: 'domain',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el parámetro que da la duración de un plazo no existe o no es int',
+    closes: 'declararlo en service.parameters como int, o escribir after: { seconds: N }'
+  },
+  'CHK-DOMAIN-DEADLINE-BY-INVALID': {
+    layer: 'domain',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'la operación que caduca un plazo no es un command internal, sin schedule, que recibe el id de la entidad y declara la transición',
+    closes: 'corregir by, o la operación: internal: true, sin schedule, el id de la entidad en la entrada y la transición <estado> → to'
+  },
+  'CHK-DOMAIN-DEADLINE-LATE-UNDECIDED': {
+    layer: 'domain',
+    severity: 'warning',
+    nature: 'undecided',
+    // Sin default seguro: rechazar rompe al cliente que llega en el último segundo, admitir vende lo que ya no se tiene,
+    // y lo que hiciera el generador dependería de cuándo pasa su cronómetro.
+    waivable: false,
+    title: 'un plazo que no dice qué pasa con una transición tardía (vencido el plazo y antes de la caducidad)',
+    closes: 'lateAction: { error: <CODE> } o lateAction: allow'
+  },
+  'CHK-DOMAIN-DEADLINE-ERROR-UNDECLARED': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una operación que saca a la entidad del estado con plazo no declara el error de la acción tardía',
+    closes: 'declarar en sus errors el code de lateAction.error, con su http'
+  },
   'CHK-FIELD-COMPARE-NOT-TEXT': {
     layer: 'domain',
     severity: 'error',

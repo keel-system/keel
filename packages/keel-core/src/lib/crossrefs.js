@@ -9,6 +9,7 @@ import { screamingSnake } from './gen/naming.js';
 import { guardedByNaturalKey } from './gen/natural-key-guard.js';
 import { conditionalWritesOfLayers, undecidedConditionalWrites } from './gen/conditional-writes.js';
 import { domainGuardKind } from './gen/domain-guard.js';
+import { declaredDeadlines } from './gen/deadlines.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -16,6 +17,96 @@ const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean
 // limita successStatus a 2xx, así que 304 no es alcanzable, pero se enumera igual:
 // la regla es del protocolo, no del rango que hoy admita el schema.
 const STATUSES_WITHOUT_BODY = new Set([204, 205, 304]);
+
+// ─── Los plazos de negocio sobre el estado (DSL 2.26, lifecycle.deadlines) ──────────────────────────────────────
+
+/** ¿Es `fieldName` un timestamp de la entidad, directo o por un tipo nominal cuya base lo es? */
+function isTimestampField(entity, fieldName, domainTypes) {
+  const type = entity?.fields?.[fieldName]?.type;
+  return type === 'timestamp' || domainTypes?.[type]?.base === 'timestamp';
+}
+
+/** Las transiciones que una operación declara sobre una entidad: `[{ from: [...], to }]`. */
+const transitionsOn = (op, entityName) => (op?.transitions ?? []).filter((transition) => transition?.entity === entityName);
+
+/**
+ * Cada plazo declarado contra el resto del diseño. Lo mecanizable es la forma: que el destino sea una arista, que se cuente
+ * desde un timestamp, que el parámetro exista, que la operación que caduca sea la que dice ser y que el error de una
+ * acción tardía lo declaren las operaciones que la sufrirían. Lo que no se ve en el YAML —que alguien ESTAMPE `since` al
+ * entrar en el estado, que es prosa de las rules— lo pregunta la revisión (REV-DOMAIN-DEADLINE-SINCE).
+ */
+function checkDeadlines(layers, manifest, error, warnIn) {
+  const domainEntities = layers.domain?.entities ?? {};
+  const operations = layers['use-cases']?.operations ?? {};
+  // Sin manifiesto (una llamada que solo pasa las capas) no se puede saber; con él, un parámetro citado que no está es
+  // desconocido aunque el servicio no declare ninguno.
+  const parameters = manifest ? (manifest.parameters ?? {}) : null;
+  for (const { entityName, entity, state, deadline } of declaredDeadlines(layers)) {
+    const where = `domain: ${entityName}.lifecycle.deadlines.${state}`;
+    const targets = entity.lifecycle.transitions?.[state];
+    if (!targets || !targets.includes(deadline.to)) {
+      error(
+        'CHK-DOMAIN-DEADLINE-TO-UNDECLARED',
+        targets
+          ? `${where}.to: '${deadline.to}' no es una arista de transitions.${state} (${targets.join(', ') || 'terminal'}) — la caducidad sería una transición que el guard del lifecycle rechaza siempre`
+          : `${where}: '${state}' no es un estado de origen de transitions — un plazo sobre un estado del que no se sale no puede vencer en nada`
+      );
+    }
+    if (!isTimestampField(entity, deadline.since, layers.domain?.types)) {
+      error(
+        'CHK-DOMAIN-DEADLINE-SINCE-INVALID',
+        entity.fields?.[deadline.since]
+          ? `${where}.since: '${deadline.since}' no es un timestamp de ${entityName} — el plazo se cuenta desde un instante`
+          : `${where}.since: ${entityName} no tiene el campo '${deadline.since}'`
+      );
+    }
+    const parameter = deadline.after?.parameter;
+    if (parameter && parameters && parameters[parameter]?.type !== 'int') {
+      error(
+        'CHK-DOMAIN-DEADLINE-PARAM-UNKNOWN',
+        parameters[parameter]
+          ? `${where}.after.parameter: '${parameter}' es ${parameters[parameter].type}, y un plazo es un número entero de su unidad`
+          : `${where}.after.parameter: '${parameter}' no está en service.parameters`
+      );
+    }
+    const by = operations[deadline.by];
+    const byProblems = [];
+    if (!by) byProblems.push(`la operación '${deadline.by}' no existe`);
+    else {
+      if ((by.kind ?? 'command') !== 'command') byProblems.push('no es un command');
+      if (by.internal !== true) byProblems.push('no es internal (la despacha el cronómetro, no un cliente)');
+      if (by.schedule) byProblems.push('declara schedule (no es un barrido: la despacha el cronómetro por cada entidad vencida)');
+      if (!inputNamesOf(by, domainEntities).some((name) => idNamesOf(entityName, entity).includes(name))) {
+        byProblems.push(`su entrada no lleva el id de ${entityName} (${idNamesOf(entityName, entity).slice(0, 2).join(' o ')})`);
+      }
+      if (!transitionsOn(by, entityName).some((transition) => (transition.from ?? []).includes(state) && transition.to === deadline.to)) {
+        byProblems.push(`no declara la transición ${state} → ${deadline.to} de ${entityName}`);
+      }
+    }
+    if (byProblems.length > 0) error('CHK-DOMAIN-DEADLINE-BY-INVALID', `${where}.by: ${byProblems.join('; ')}`);
+    if (deadline.lateAction === undefined) {
+      warnIn(
+        `domain.${entityName}.lifecycle.deadlines.${state}`,
+        'CHK-DOMAIN-DEADLINE-LATE-UNDECIDED',
+        `${where}: sin lateAction — vencido el plazo y antes de que la caducidad pase, ¿una transición que sale de '${state}' hacia otro destino se rechaza o se admite? ` +
+          `Rechazarla rompe al cliente que llega en el último segundo; admitirla vende lo que el negocio ya daba por caducado. Escribe lateAction: { error: <CODE> } o lateAction: allow`
+      );
+    }
+    const lateCode = deadline.lateAction?.error;
+    if (lateCode) {
+      for (const [opName, op] of Object.entries(operations)) {
+        if (opName === deadline.by) continue;
+        const leaves = transitionsOn(op, entityName).some((transition) => (transition.from ?? []).includes(state) && transition.to !== deadline.to);
+        if (leaves && !(op.errors ?? []).some((declared) => declared?.code === lateCode)) {
+          error(
+            'CHK-DOMAIN-DEADLINE-ERROR-UNDECLARED',
+            `${where}.lateAction.error: ${opName} saca a ${entityName} de '${state}' y no declara ${lateCode} — es el error que responde pasado el plazo, y sin declararlo no tiene status ni lo ve la matriz de escenarios`
+          );
+        }
+      }
+    }
+  }
+}
 
 /**
  * Validación mecánica de referencias cruzadas entre capas.
@@ -4801,6 +4892,9 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // qué devuelve una consulta de un solo resultado que no lo identifica, de dónde sale un campo de una llamada saliente y
   // si una referencia inexistente es un error en una operación cuando lo es en otra.
   checkUnstatedLookups(layers, warnIn);
+
+  // Los plazos de negocio (DSL 2.26): su forma contra el lifecycle, los parámetros y la operación que caduca.
+  checkDeadlines(layers, manifest, error, warnIn);
 
   // En el modelo documental una entidad interna del agregado NO es una colección propia:
   // va anidada dentro del documento de su raíz, y la auditoría automática puebla el objeto

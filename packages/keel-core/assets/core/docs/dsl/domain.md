@@ -153,6 +153,36 @@ lifecycle:
 
 **Quién ejecuta cada transición se declara en `use-cases`**, con `transitions` en la operación. Aquí vive qué cambios de estado son legales; allí, qué caso de uso los provoca. Los dos lados se contrastan: una operación que pide una arista que este mapa no tiene es error (el guard derivado la rechazaría siempre), y una arista que ninguna operación ejecuta es aviso. Es la diferencia entre una máquina de estados que el diseño sostiene y una lista de estados que nadie recorre.
 
+### `deadlines` — plazos de negocio (DSL 2.26)
+
+Un estado del que la entidad sale **sola** cuando pasa un tiempo, porque el paso del tiempo es, por sí mismo, la causa de la transición: una reserva sin pagar caduca a los 15 minutos, una invitación a los 7 días, un código de verificación a los 10 minutos. La clave es el estado de origen, y un estado tiene como mucho un plazo.
+
+```yaml
+lifecycle:
+  field: status
+  transitions:
+    pending:   [confirmed, expired]
+    confirmed: []
+    expired:   []
+  deadlines:
+    pending:
+      after: { parameter: holdMinutes, unit: minutes }   # o { seconds: 900 }
+      since: heldAt
+      to: expired
+      by: expireReservation
+      lateAction: { error: RESERVATION_EXPIRED }         # o: allow
+```
+
+- **`after`**: cuánto dura el plazo. Segundos literales, o un `service.parameters` de tipo `int` con su unidad (`seconds`, `minutes`, `hours`, `days`) si cada despliegue puede querer otro.
+- **`since`**: el campo `timestamp` desde el que se cuenta. Se elige a propósito: `createdAt` engaña si la entidad puede llegar al estado mucho después de nacer, y entonces hace falta una marca propia que estampe la operación que la lleva al estado.
+- **`to`**: el estado al que pasa cuando vence. Tiene que ser una arista declarada en `transitions`.
+- **`by`**: la operación que caduca **una** entidad. Es un `command` con `internal: true`, cuya entrada lleva el id de la entidad, que declara la transición `<estado> → to` y que **no** tiene `schedule`: no es un barrido, la despacha el cronómetro del servicio una vez por cada entidad vencida. Lo que haga además (emitir un evento, liberar algo) es diseño, y por eso se declara en vez de derivarse.
+- **`lateAction`**: qué pasa con una transición que sale del estado hacia **otro** destino cuando el plazo ya venció pero la caducidad todavía no se ha ejecutado (el cliente paga en el segundo 901 y el cronómetro aún no ha pasado). `{ error: CODE }` la rechaza con ese error en el instante exacto del vencimiento, tarde lo que tarde el cronómetro; `allow` la admite mientras la caducidad no haya pasado. **No tiene default**: rechazar rompe al cliente que llega en el último segundo, y admitir vende lo que el negocio ya daba por caducado. Sin él, `keel validate` lo pregunta (`CHK-DOMAIN-DEADLINE-LATE-UNDECIDED`, sin aceptación posible), y el `code` lo tienen que declarar en sus `errors` las operaciones que sacan a la entidad del estado.
+
+Hasta que pasa la caducidad, una lectura devuelve el estado **guardado** (`pending`): el estado efectivo calculado al leer no está en 2.26.
+
+No es lo mismo que los otros dos relojes del método. `stalledAfter` (en `use-cases`) rescata una fila que una réplica dejó **en vuelo**: recuperación, no negocio. `reconciledBy` (en `dependencies`) detecta un proveedor que **no contestó**. Un plazo es una regla del negocio sobre el estado, y se declara junto a la máquina de estados porque es ahí donde vive lo que es legal.
+
 Las **invariantes** quedan para las reglas que no se pueden expresar como transición (condiciones sobre otros campos, reglas cruzadas). Escritas en lenguaje natural declarativo y verificable: el generador las traduce a validaciones; el humano las revisa como frases.
 
 ## Qué NO va aquí

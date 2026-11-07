@@ -50,6 +50,8 @@ const MOTIVOS = {
  * muertas, para que la tabla no se convierta en la lista de lo que hubo alguna vez.
  */
 const EXCEPCIONES = new Map([
+  ['domain.entities.*.lifecycle.deadlines', { motivo: MOTIVOS.hueco, porque: 'los plazos de negocio (DSL 2.26) los rechaza la frontera de keel-spring (deadlinesPendingErrors) hasta el incremento 3 de PLAN-DSL-226-PLAZOS.md; entonces los declara una fixture y esta fila se borra.' }],
+  ['domain.entities.*.lifecycle.deadlines.*.lateAction', { motivo: MOTIVOS.hueco, porque: 'los plazos de negocio (DSL 2.26) los rechaza la frontera de keel-spring (deadlinesPendingErrors) hasta el incremento 3 de PLAN-DSL-226-PLAZOS.md; entonces los declara una fixture y esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     {

@@ -46,7 +46,7 @@ lifecycle:
       after: { parameter: holdMinutes, unit: minutes }   # o { seconds: 900 }: la forma de stalledAfter (2.18)
       since: createdAt                                   # campo timestamp de la entidad
       to: expired                                        # tiene que estar en transitions.pending
-      by: expireReservations                             # la operación del barrido, declarada
+      by: expireReservation                              # la operación que caduca UNA reserva, declarada
       lateAction: { error: RESERVATION_EXPIRED }         # o: allow
 ```
 
@@ -55,9 +55,13 @@ lifecycle:
 - **`since`** es el campo desde el que se cuenta. Tiene que ser un `timestamp` de la entidad, y una operación que
   lleve la entidad al estado (o la cree en él) tiene que estamparlo o ser `generated`.
 - **`to`** es el destino de la caducidad y tiene que ser una arista declarada.
-- **`by`** nombra la operación que ejecuta la caducidad, igual que `reconciledBy`. Es un `command` con `schedule` y la
-  transición `from → to`. Lo que hace además (emitir `ReservationExpired`, liberar algo) sigue siendo diseño, no
-  mecánica: por eso se declara y no se deriva entera.
+- **`by`** nombra la operación que ejecuta la caducidad de **una** entidad. Es un `command` `internal` cuya entrada
+  identifica la entidad (su id) y que declara la transición `from → to`, **sin `schedule`**: no es un barrido, la
+  despacha el cronómetro por cada temporizador vencido. Es una puerta de entrada más, «la disparó un plazo», junto a
+  HTTP, el reloj, el despacho y la suscripción (`keel-core/gen/entry-gates.js`). Lo que hace además (emitir
+  `ReservationExpired`, liberar algo) sigue siendo diseño, no mecánica: por eso se declara y no se deriva entera.
+  (Corregido el 2026-11-07 al empezar el inc. 1: el borrador la hacía un `command` con `schedule`, lo que con el
+  cronómetro no tiene sentido.)
 - **`lateAction`** es la decisión que hoy no toma nadie:
   - `{ error: CODE }`: pasado el plazo, toda transición que salga del estado hacia un destino distinto de `to` se
     rechaza con ese error, haya pasado el barrido o no. La ventana deja de depender de la cadencia del cron.
@@ -237,16 +241,25 @@ Todas con su mutación en `test/design-mutations/catalog.js`.
 |---|---|---|
 | `CHK-DOMAIN-DEADLINE-TO-UNDECLARED` | error | `to` no es una arista de `transitions.<estado>` |
 | `CHK-DOMAIN-DEADLINE-SINCE-INVALID` | error | `since` no existe o no es `timestamp` |
-| `CHK-DOMAIN-DEADLINE-SINCE-UNSTAMPED` | aviso, incoherencia | ninguna operación que lleva la entidad al estado estampa `since`, y no es `generated` |
-| `CHK-DOMAIN-DEADLINE-BY-INVALID` | error | `by` no existe, no es `command`, no tiene `schedule` o no declara la transición `from → to` |
+| `CHK-DOMAIN-DEADLINE-BY-INVALID` | error | `by` no existe, no es un `command` `internal`, declara `schedule`, su entrada no lleva el id de la entidad o no declara la transición `from → to` |
 | `CHK-DOMAIN-DEADLINE-PARAM-UNKNOWN` | error | `after.parameter` no está en `service.parameters` |
 | `CHK-DOMAIN-DEADLINE-LATE-UNDECIDED` | aviso, `undecided`, `waivable: false` | sin `lateAction`. No hay default seguro: rechazar rompe al cliente que paga en el segundo 901, y aceptar vende stock ya liberado. Se cierra con una línea del DSL, así que es CHK y no OBL |
 | `CHK-DOMAIN-DEADLINE-ERROR-UNDECLARED` | error | `lateAction.error` no está en `errors` de una operación que saca la entidad del estado hacia otro destino |
-| `CHK-USECASES-SCHEDULE-UNDECLARED-DEADLINE` | aviso, `undecided` | un `command` con `schedule` que mueve un estado a otro sin `deadlines` que lo nombre en `by`: el plazo sigue en prosa (el detector de los diseños de hoy) |
 
-Más: la clase del análisis de huecos que pregunta por los plazos, con una unidad por estado no terminal
-(`gap-classes.js` + `gap-analysis.md`), y una pregunta de revisión `REV-DOMAIN-DEADLINE-SINCE` («¿el reloj empieza
-cuando el negocio dice?»), que es la que no puede ver la máquina: `createdAt` frente a «cuando entró en `pending`».
+**Descartada al empezar el inc. 1**: `CHK-USECASES-SCHEDULE-UNDECLARED-DEADLINE` (un `command` con `schedule` que mueve
+un estado sin `deadlines`). El inventario del inc. 0 lo midió: los nueve `schedule` de las fixtures son de recuperación
+(`stalledAfter`, `reconciledBy`, reconciliación de pagos), ninguno es un plazo de negocio escrito en prosa, así que el
+detector solo daría falsos positivos. Si una corrida trae un plazo en prosa, entra entonces, como todo `designGap` que se
+repite.
+
+**También descartada al empezar el inc. 1**: `CHK-DOMAIN-DEADLINE-SINCE-UNSTAMPED`. Que una operación estampe `since`
+al llevar la entidad al estado no tiene dónde declararse en el DSL (es prosa de las `rules`), así que la máquina no lo
+puede ver: es la pregunta de `REV-DOMAIN-DEADLINE-SINCE`.
+
+Más: una pregunta nueva en la **clase 1** del análisis de huecos («¿algún estado caduca por el paso del tiempo?»), y no
+una clase propia con una unidad por estado: cambiar las unidades de una clase deja huérfano todo `gaps.yaml` escrito, y
+la pregunta es de la alcanzabilidad del ciclo de vida. Y la revisión `REV-DOMAIN-DEADLINE-SINCE` («¿el reloj empieza
+cuando el negocio dice?»), la que no puede ver la máquina: `createdAt` frente a «cuando entró en `pending`».
 
 ## Qué escribe build y qué escribe el agente
 

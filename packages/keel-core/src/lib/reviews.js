@@ -50,6 +50,16 @@ export const REVIEWS = {
     title: 'invariantes ambiguas o no verificables',
     asks: 'por cada invariante, ¿se puede decidir si se cumple mirando solo los campos declarados?'
   },
+  'REV-DOMAIN-DEADLINE-SINCE': {
+    scope: 'domain',
+    gapClass: 1,
+    severity: 'strong',
+    appliesTo: (layers) => hasAny(layers.domain?.entities, (entity) => Object.keys(entity.lifecycle?.deadlines ?? {}).length > 0),
+    title: 'el reloj de un plazo empieza cuando no lo dice el negocio',
+    asks:
+      '¿desde cuándo cuenta el negocio el plazo, y es eso lo que dice since? ¿Quién estampa ese campo, y lo hace la operación ' +
+      'que lleva la entidad al estado, justo al llevarla? createdAt engaña si la entidad llega al estado mucho después de nacer'
+  },
   'REV-DOMAIN-ENUM-NO-LIFECYCLE': {
     scope: 'domain',
     gapClass: 1,

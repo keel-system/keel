@@ -611,7 +611,42 @@ function withConcurrency(d) {
   );
 }
 
+/**
+ * Un plazo de negocio (DSL 2.26): un ticket abierto caduca a las 72 horas desde que se abrió, lo caduca `expireTicket`
+ * (internal, sin schedule: la despacha el cronómetro por cada ticket vencido) y cerrarlo tarde es TICKET_EXPIRED.
+ */
+function withDeadline(d) {
+  d.layers.domain.types.TicketStatus.values = ['open', 'closed', 'expired'];
+  const ticket = entity(d, 'Ticket');
+  ticket.fields.openedAt = { type: 'timestamp', generated: true, description: 'Cuándo se abrió el ticket: desde aquí se cuenta su plazo.' };
+  ticket.lifecycle.transitions = { open: ['closed', 'expired'], closed: [], expired: [] };
+  ticket.lifecycle.deadlines = {
+    open: { after: { seconds: 259200 }, since: 'openedAt', to: 'expired', by: 'expireTicket', lateAction: { error: 'TICKET_EXPIRED' } }
+  };
+  ops(d).expireTicket = {
+    description: 'Da por caducado un ticket que nadie cerró a tiempo.',
+    kind: 'command',
+    internal: true,
+    input: { fields: { id: { type: 'uuid', required: true } } },
+    output: 'void',
+    errors: [TICKET_NOT_FOUND],
+    transitions: [{ entity: 'Ticket', from: ['open'], to: 'expired' }]
+  };
+  ops(d).closeTicket.errors.push({ code: 'TICKET_EXPIRED', when: 'El ticket ya superó su plazo de 72 horas.', http: 409 });
+  addMatrixRow(d, '| expireTicket | FL-TCK-005 | plazo |');
+  insertScenarioBefore(
+    d,
+    '### FL-QUE-001',
+    `### FL-TCK-005: el ticket caduca
+
+**Given** un ticket en \`open\` abierto hace más de 72 horas.
+**When** vence su plazo y se llama a \`closeTicket\` antes de que \`expireTicket\` pase.
+**Then** \`closeTicket\` responde 409 con \`TICKET_EXPIRED\`, y \`expireTicket\` lo deja en \`expired\`.`
+  );
+}
+
 export const EXTENSIONS = {
+  deadline: withDeadline,
   concurrency: withConcurrency,
   payments: withPayments,
   m2m: withM2m,
@@ -1651,6 +1686,77 @@ export const MUTATIONS = [
     expect: ['CHK-USECASES-IDEM-STOREDIN-NOT-NATURAL']
   },
   // ─── DSL 2.25: la escritura condicional (api.concurrency) ─────────────────────
+  // ── Los plazos de negocio (DSL 2.26) ──
+  {
+    id: 'M-DOMAIN-DEADLINE-TO-UNDECLARED',
+    title: 'el plazo lleva a un estado al que no se llega desde el suyo',
+    extends: 'deadline',
+    mutate: (d) => {
+      const lifecycle = entity(d, 'Ticket').lifecycle;
+      lifecycle.transitions.open = ['closed'];
+      lifecycle.transitions.closed = ['expired'];
+      ops(d).expireTicket.transitions = [{ entity: 'Ticket', from: ['closed'], to: 'expired' }];
+    },
+    // Co-disparada por construcción, como CHK-DEPS-REPLICA-UNPERSISTED: si el destino no es una arista, o el `by` declara
+    // esa transición (y ya falla la regla de transitions de use-cases) o no la declara, y falla BY-INVALID.
+    expect: ['CHK-DOMAIN-DEADLINE-TO-UNDECLARED', 'CHK-DOMAIN-DEADLINE-BY-INVALID']
+  },
+  {
+    id: 'M-DOMAIN-DEADLINE-BY-NO-ID',
+    title: 'la operación que caduca no recibe el id de la entidad',
+    extends: 'deadline',
+    mutate: (d) => {
+      ops(d).expireTicket.input = { fields: { reference: { type: 'uuid', required: true } } };
+    },
+    expect: ['CHK-DOMAIN-DEADLINE-BY-INVALID']
+  },
+  {
+    id: 'M-DOMAIN-DEADLINE-SINCE-INVALID',
+    title: 'el plazo se cuenta desde un campo que no es un timestamp',
+    extends: 'deadline',
+    mutate: (d) => {
+      entity(d, 'Ticket').lifecycle.deadlines.open.since = 'escalationLevel';
+    },
+    expect: ['CHK-DOMAIN-DEADLINE-SINCE-INVALID']
+  },
+  {
+    id: 'M-DOMAIN-DEADLINE-PARAM-UNKNOWN',
+    title: 'la duración del plazo es un parámetro que no existe',
+    extends: 'deadline',
+    mutate: (d) => {
+      entity(d, 'Ticket').lifecycle.deadlines.open.after = { parameter: 'ticketTtlHours', unit: 'hours' };
+    },
+    expect: ['CHK-DOMAIN-DEADLINE-PARAM-UNKNOWN']
+  },
+  {
+    id: 'M-DOMAIN-DEADLINE-BY-SCHEDULED',
+    title: 'la operación que caduca es un barrido con schedule',
+    extends: 'deadline',
+    mutate: (d) => {
+      ops(d).expireTicket.schedule = { cron: '*/5 * * * *' };
+    },
+    // Un barrido nuevo pide además su escenario de dos réplicas: el diseño ha ganado uno, aunque sea por error.
+    expect: ['CHK-DOMAIN-DEADLINE-BY-INVALID', 'CHK-SCEN-CLUSTER-UNCOVERED']
+  },
+  {
+    id: 'M-DOMAIN-DEADLINE-LATE-UNDECIDED',
+    title: 'el plazo no dice qué pasa con un cierre tardío',
+    extends: 'deadline',
+    mutate: (d) => {
+      delete entity(d, 'Ticket').lifecycle.deadlines.open.lateAction;
+    },
+    expect: ['CHK-DOMAIN-DEADLINE-LATE-UNDECIDED']
+  },
+  {
+    id: 'M-DOMAIN-DEADLINE-ERROR-UNDECLARED',
+    title: 'la operación que saca al ticket de open no declara el error del cierre tardío',
+    extends: 'deadline',
+    mutate: (d) => {
+      ops(d).closeTicket.errors = ops(d).closeTicket.errors.filter((declared) => declared.code !== 'TICKET_EXPIRED');
+    },
+    // El escenario sigue nombrando TICKET_EXPIRED, que ya no declara nadie: lo dice también la matriz de errores.
+    expect: ['CHK-DOMAIN-DEADLINE-ERROR-UNDECLARED']
+  },
   {
     id: 'M-API-CONCURRENCY-OP-UNKNOWN',
     title: 'concurrency.operations lista una query',

@@ -14,6 +14,7 @@
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
+import { deadlinesPendingErrors } from '@keel-system/keel-core/gen/deadlines';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. Hoy, ninguna: storage llegó en el 13g. */
 const PENDING_LAYERS = {};
@@ -82,6 +83,9 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...messagingWithoutPersistenceErrors(manifest, layers, 'keel-nest'));
   // La escritura condicional (DSL 2.25) se genera entera; lo que ningún generador genera todavía, con el motivo neutral (T3).
   errors.push(...conditionalWritesFrontierErrors(layers, 'keel-nest'));
+  // Los plazos de negocio (DSL 2.26) llegan con el cronómetro, en el incremento 4 de PLAN-DSL-226-PLAZOS.md: hasta
+  // entonces se rechazan enteros, con el mismo mensaje en los cuatro.
+  errors.push(...deadlinesPendingErrors(layers, 'keel-nest', 4));
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   // La idempotencia de petición se genera (el registro idempotency_record, como keel-spring) cuando hay
   // persistencia donde registrar la clave en la misma transacción que el efecto. Sin persistencia no hay

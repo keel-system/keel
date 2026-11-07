@@ -33,6 +33,8 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
+  ['domain.entities.*.lifecycle.deadlines', { motivo: MOTIVOS.hueco, porque: 'los plazos de negocio (DSL 2.26) los rechaza la frontera de keel-nest (deadlinesPendingErrors) hasta el incremento 4 de PLAN-DSL-226-PLAZOS.md; entonces los declara una fixture y esta fila se borra.' }],
+  ['domain.entities.*.lifecycle.deadlines.*.lateAction', { motivo: MOTIVOS.hueco, porque: 'los plazos de negocio (DSL 2.26) los rechaza la frontera de keel-nest (deadlinesPendingErrors) hasta el incremento 4 de PLAN-DSL-226-PLAZOS.md; entonces los declara una fixture y esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en la línea «Formato: …» del comentario de la clase del mensaje (messaging.js): ningún lector depende de él.' }

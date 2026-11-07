@@ -127,6 +127,65 @@
                   "type": "array",
                   "items": { "type": "string" }
                 }
+              },
+              "deadlines": {
+                "type": "object",
+                "minProperties": 1,
+                "description": "Plazos de NEGOCIO (DSL 2.26): un estado del que la entidad sale sola cuando pasa un tiempo, porque el paso del tiempo es por sí mismo la causa de la transición (una reserva sin pagar caduca a los 15 minutos). La clave es el estado de origen; un estado tiene como mucho un plazo. No es el rescate de una fila en vuelo (eso es stalledAfter, en use-cases) ni el silencio de un proveedor (reconciledBy, en dependencies).",
+                "additionalProperties": {
+                  "type": "object",
+                  "required": ["after", "since", "to", "by"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "after": {
+                      "description": "Cuánto dura el plazo: segundos literales, o un service.parameters de tipo int con su unidad (la forma de stalledAfter), si cada despliegue puede querer otro.",
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "required": ["seconds"],
+                          "additionalProperties": false,
+                          "properties": { "seconds": { "type": "integer", "minimum": 1 } }
+                        },
+                        {
+                          "type": "object",
+                          "required": ["parameter", "unit"],
+                          "additionalProperties": false,
+                          "properties": {
+                            "parameter": { "type": "string", "description": "Nombre de un service.parameters de tipo int: el valor del plazo." },
+                            "unit": { "enum": ["seconds", "minutes", "hours", "days"] }
+                          }
+                        }
+                      ]
+                    },
+                    "since": {
+                      "type": "string",
+                      "pattern": "^[a-z][A-Za-z0-9]*$",
+                      "description": "Campo timestamp de la entidad desde el que se cuenta el plazo. Se elige a propósito: createdAt engaña si la entidad puede llegar al estado mucho después de nacer."
+                    },
+                    "to": {
+                      "type": "string",
+                      "description": "Estado al que pasa la entidad cuando vence el plazo. Tiene que ser una arista declarada en transitions.<estado>."
+                    },
+                    "by": {
+                      "type": "string",
+                      "pattern": "^[a-z][A-Za-z0-9]*$",
+                      "description": "La operación que caduca UNA entidad: un command internal cuya entrada lleva el id de la entidad y que declara la transición estado → to, sin schedule. La despacha el cronómetro del servicio, una vez por cada entidad vencida. Lo que haga además (emitir un evento, liberar algo) es suyo."
+                    },
+                    "lateAction": {
+                      "description": "Qué pasa con una transición que sale del estado hacia OTRO destino cuando el plazo ya venció pero la caducidad todavía no se ha ejecutado. { error: CODE }: se rechaza con ese error, en el instante exacto del vencimiento, pase lo que pase con el cronómetro. allow: se admite mientras la caducidad no haya pasado. Sin él no hay default seguro, y keel validate lo pregunta.",
+                      "oneOf": [
+                        { "const": "allow" },
+                        {
+                          "type": "object",
+                          "required": ["error"],
+                          "additionalProperties": false,
+                          "properties": { "error": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" } }
+                        }
+                      ]
+                    },
+                    "description": { "type": "string" }
+                  }
+                }
               }
             }
           },
