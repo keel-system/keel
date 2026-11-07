@@ -818,6 +818,24 @@ export const MUTATIONS = [
     expect: ['CHK-USECASES-CODE-MULTI-STATUS']
   },
   {
+    id: 'M-USECASES-SINGLE-NOT-IDENTIFIED',
+    title: 'una consulta de un solo ticket por un campo que no lo identifica',
+    mutate: (d) => {
+      // listTickets y no getTicket: sin la lectura por id, el alta se quedaría además sin Location.
+      ops(d).listTickets.input = { fields: { requesterEmail: { type: 'string', required: true } } };
+      ops(d).listTickets.output = { entity: 'Ticket' };
+    },
+    expect: ['CHK-USECASES-SINGLE-NOT-IDENTIFIED']
+  },
+  {
+    id: 'M-USECASES-REF-ERROR-ASYMMETRY',
+    title: 'un command recibe una referencia que otro protege con su NOT_FOUND, sin declararlo',
+    mutate: (d) => {
+      ops(d).archiveQueue.input.fields.ticketId = { type: 'uuid' };
+    },
+    expect: ['CHK-USECASES-REF-ERROR-ASYMMETRY']
+  },
+  {
     id: 'M-USECASES-COLLECTION-NO-SORT',
     title: 'una salida list sin sort',
     mutate: (d) => {
@@ -2435,6 +2453,15 @@ export const MUTATIONS = [
       Object.assign(messaging.subscriptions.PageRejected, { channel: 'pagerEvents', contract: { envelope: 'none' } });
     },
     expect: ['CHK-DEPS-COMPENSATION-EXTERNAL-NO-MESSAGEID']
+  },
+  {
+    id: 'M-DEPS-CALL-FIELD-UNSOURCED',
+    title: 'la llamada de una activación exige un campo que no sale de la operación que la dispara',
+    extends: 'escalation',
+    mutate: (d) => {
+      d.layers['http-clients'].clients.pager.calls.page.request.body.urgency = { type: 'string', required: true };
+    },
+    expect: ['CHK-DEPS-CALL-FIELD-UNSOURCED']
   },
   {
     id: 'M-DEPS-COMPENSATION-NO-RETRY',

@@ -378,6 +378,29 @@ export const CHECKS = {
     title: 'el mismo code se declara con status HTTP distintos según la operación',
     closes: 'un status por code, o dejar escrito que el mismo nombre cubre dos situaciones distintas a propósito'
   },
+  // Los tres de la corrida catalog-extended de 2026-11-07, repetidos en tres y cuatro de las cuatro corridas: cada agente
+  // eligió por su cuenta (esta vez, por suerte, lo mismo).
+  'CHK-USECASES-SINGLE-NOT-IDENTIFIED': {
+    layer: 'use-cases',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'una consulta de un solo resultado cuya entrada no lo identifica',
+    closes: 'buscar por el id, la clave natural o un campo único; devolver una lista; o declarar el criterio en una rule (y aceptarlo en decisions.yaml)'
+  },
+  'CHK-DEPS-CALL-FIELD-UNSOURCED': {
+    layer: 'dependencies',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'un campo obligatorio de la llamada de una activación que no sale de la operación que la dispara',
+    closes: 'añadirlo a la entrada de la operación, o nombrarlo como el campo del que sale; si sale de otra parte, decirlo y aceptarlo en decisions.yaml'
+  },
+  'CHK-USECASES-REF-ERROR-ASYMMETRY': {
+    layer: 'use-cases',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'una referencia que un command protege con <ENTIDAD>_NOT_FOUND y otro, que la recibe igual, no',
+    closes: 'declarar el mismo error en la operación, o dejar escrito por qué ahí una referencia inexistente no es un error'
+  },
   'CHK-FIELD-COMPARE-NOT-TEXT': {
     layer: 'domain',
     severity: 'error',

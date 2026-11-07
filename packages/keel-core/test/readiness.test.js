@@ -258,7 +258,12 @@ test('un diseño válido sin nada del cierre: generable, pero no listo', () => {
 // Sin `internal: true`, el command queda expuesto y sin errores declarados: qué contesta cuando
 // no se puede aplicar lo decidiría el generador (CHK-USECASES-COMMAND-NO-ERRORS, `undecided`).
 const EXPOSED_USE_CASES = USE_CASES.replace('    internal: true\n', '');
-const ORPHAN_QUERY = EXPOSED_USE_CASES.replace('    kind: command\n', '    kind: query\n');
+// Busca la factura por su id: por `total` sería además una consulta de un solo resultado que no lo identifica
+// (CHK-USECASES-SINGLE-NOT-IDENTIFIED, `undecided`), y la rotura apagaría dos criterios.
+const ORPHAN_QUERY = EXPOSED_USE_CASES.replace('    kind: command\n', '    kind: query\n').replace(
+  '        total: { type: decimal, required: true }\n    output',
+  '        id: { type: uuid, required: true }\n    output'
+);
 const SENSITIVE_DOMAIN = DOMAIN.replace(
   'total: { type: decimal, required: true }',
   'total: { type: decimal, required: true, sensitive: true }'

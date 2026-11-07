@@ -4,7 +4,8 @@ import { checkFor } from './checks.js';
 import { FAILURE_REASONS } from './payment-vocabulary.js';
 import { implicitDefaults } from './structural-defaults.js';
 import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, parseCoverageMatrix, conventionsText } from './scenario-blocks.js';
-import { versionedRouteBase } from './gen/model.js';
+import { versionedRouteBase, operationTargetEntity } from './gen/model.js';
+import { screamingSnake } from './gen/naming.js';
 import { guardedByNaturalKey } from './gen/natural-key-guard.js';
 import { conditionalWritesOfLayers, undecidedConditionalWrites } from './gen/conditional-writes.js';
 import { domainGuardKind } from './gen/domain-guard.js';
@@ -32,6 +33,134 @@ const STATUSES_WITHOUT_BODY = new Set([204, 205, 304]);
  *
  * La calidad semántica (invariantes ambiguas, mínimo privilegio...) es de la skill /keel-validate.
  */
+// ─── Lo que una operación no dice y su código tendría que adivinar ───────────────────────────────────────────────
+
+const capitalized = (name) => `${name[0].toUpperCase()}${name.slice(1)}`;
+const uncapitalized = (name) => `${name[0].toLowerCase()}${name.slice(1)}`;
+const singleOutputEntity = (output) =>
+  output && typeof output === 'object' && output.entity && !output.list && !output.paginated ? output.entity : null;
+const TO_ONE = new Set(['many-to-one', 'one-to-one']);
+
+/** Los nombres de la entrada de una operación: sus `fields`, o los de su entidad (con `<relación>Id`) menos los excluidos. */
+function inputNamesOf(op, domainEntities) {
+  if (op?.input?.fields) return Object.keys(op.input.fields);
+  const entity = domainEntities[op?.input?.entity];
+  if (!entity) return [];
+  const excluded = new Set(op.input.exclude ?? []);
+  const toOne = Object.entries(entity.relations ?? {}).filter(([, relation]) => TO_ONE.has(relation?.cardinality ?? 'many-to-one'));
+  return [...Object.keys(entity.fields ?? {}), ...toOne.map(([name]) => `${name}Id`)].filter(
+    (name) => !excluded.has(name) && !excluded.has(name.replace(/Id$/, ''))
+  );
+}
+
+/** Cómo se llama la referencia a una entidad desde fuera: su id con el nombre de la entidad delante (`productId`). */
+function idNamesOf(entityName, entity) {
+  const idField = Object.entries(entity?.fields ?? {}).find(([, field]) => field?.id)?.[0] ?? 'id';
+  return [idField, `${uncapitalized(entityName)}Id`, `${uncapitalized(entityName)}${capitalized(idField)}`];
+}
+
+function checkUnstatedLookups(layers, warnIn) {
+  const domainEntities = layers.domain?.entities ?? {};
+  const operations = layers['use-cases']?.operations ?? {};
+  const persisted = layers.persistence?.entities ?? {};
+  const security = layers.security ?? {};
+  const callerField = security.authentication?.callerIdentity?.field ?? security.callerIdentity?.field ?? null;
+
+  // Una consulta que promete UN resultado y cuya entrada no lo identifica: ni el id, ni la clave natural entera, ni un
+  // campo único, ni la identidad del llamante. Con varios candidatos, cuál devuelve lo decide quien la escribe.
+  for (const [opName, op] of Object.entries(operations)) {
+    if ((op?.kind ?? 'command') !== 'query') continue;
+    const entityName = singleOutputEntity(op.output);
+    const given = new Set(Object.keys(op.input?.fields ?? {}));
+    if (!entityName || !domainEntities[entityName] || given.size === 0) continue;
+    if (callerField && given.has(callerField)) continue;
+    const entity = domainEntities[entityName];
+    const unique = Object.entries(entity.fields ?? {}).filter(([, field]) => field?.unique).map(([name]) => name);
+    const naturalKey = persisted[entityName]?.naturalKey ?? [];
+    const byNaturalKey = naturalKey.length > 0 && naturalKey.every((key) => given.has(key) || given.has(`${key}Id`));
+    if (idNamesOf(entityName, entity).some((name) => given.has(name)) || unique.some((name) => given.has(name)) || byNaturalKey) continue;
+    warnIn(
+      `use-cases.operations.${opName}`,
+      'CHK-USECASES-SINGLE-NOT-IDENTIFIED',
+      `use-cases: operations.${opName} devuelve un solo ${entityName} y su entrada (${[...given].join(', ')}) no lo identifica: no es su id, ni su clave natural entera, ni un campo único. Si hay varios, cuál devuelve lo decide quien la escribe, y cada generador puede elegir otro. Busca por lo que lo identifica, devuelve una lista, o di el criterio en una rule`
+    );
+  }
+
+  // Un campo obligatorio de la llamada de una activación que no sale de la entrada de la operación que la dispara ni de
+  // la entidad sobre la que trabaja. La llamada y la operación se casan por nombre; sin casar, el valor lo inventa el
+  // código (en la corrida catalog-extended, un motivo literal).
+  const clients = layers['http-clients']?.clients ?? {};
+  for (const [dependencyName, dependency] of Object.entries(layers.dependencies?.dependencies ?? {})) {
+    for (const [activationName, activation] of Object.entries(dependency?.activations ?? {})) {
+      const call = activation?.via?.client ? clients[activation.via.client]?.calls?.[activation.via.call] : null;
+      if (!call) continue;
+      const request = call.request ?? {};
+      const required = [request.body, request.pathParams, request.queryParams, request.query, request.headers]
+        .flatMap((group) => Object.entries(group ?? {}))
+        .filter(([, field]) => field?.required)
+        .map(([name]) => name);
+      if (required.length === 0) continue;
+      const triggers = (activation.triggeredBy ?? []).filter((name) => operations[name]);
+      // Un barrido no tiene entrada ni entidad propia: trabaja sobre la de las operaciones que encargaron el trabajo.
+      const triggerEntities = triggers
+        .map((name) => operationTargetEntity(name, operations[name], domainEntities))
+        .filter((name) => domainEntities[name]);
+      const missing = new Map();
+      for (const opName of triggers) {
+        const own = operationTargetEntity(opName, operations[opName], domainEntities);
+        const pool = domainEntities[own] ? [own] : [...new Set(triggerEntities)];
+        const sources = new Set([
+          ...inputNamesOf(operations[opName], domainEntities),
+          ...pool.flatMap((name) => [
+            ...Object.keys(domainEntities[name].fields ?? {}),
+            ...Object.keys(domainEntities[name].relations ?? {}).map((relation) => `${relation}Id`),
+            ...idNamesOf(name, domainEntities[name])
+          ])
+        ]);
+        for (const field of required) {
+          const matched = sources.has(field) || [...sources].some((source) => source.endsWith(capitalized(field)) || field.endsWith(capitalized(source)));
+          if (!matched) missing.set(field, [...(missing.get(field) ?? []), opName]);
+        }
+      }
+      for (const [field, by] of missing) {
+        warnIn(
+          `dependencies.${dependencyName}.activations.${activationName}.${field}`,
+          'CHK-DEPS-CALL-FIELD-UNSOURCED',
+          `dependencies: ${dependencyName}.activations.${activationName} llama a ${activation.via.client}.${activation.via.call}, que exige '${field}', y ninguna entrada ni campo de ${by.join(', ')} lo da por su nombre: el valor lo inventaría el código. Añádelo a la entrada de la operación, nómbralo como el campo del que sale, o di de dónde sale`
+        );
+      }
+    }
+  }
+
+  // Una referencia a otra entidad que un command protege con <ENTIDAD>_NOT_FOUND y otro, que recibe la misma, no. Lo
+  // normal es que el segundo la herede sin decirlo; si no la comprueba, una referencia rota entra sin error.
+  const byReference = new Map();
+  for (const [opName, op] of Object.entries(operations)) {
+    if ((op?.kind ?? 'command') !== 'command') continue;
+    const target = operationTargetEntity(opName, op, domainEntities);
+    for (const field of inputNamesOf(op, domainEntities)) {
+      if (!/Id$/.test(field) || field === 'id') continue;
+      const referenced = capitalized(field.slice(0, -2));
+      // La referencia a OTRA entidad: el id de la propia raíz es la operación buscando su sujeto, otra pregunta.
+      if (!domainEntities[referenced] || referenced === target) continue;
+      const code = `${screamingSnake(referenced)}_NOT_FOUND`;
+      if (!byReference.has(field)) byReference.set(field, { code, users: [] });
+      byReference.get(field).users.push({ opName, declares: (op.errors ?? []).some((error) => error?.code === code) });
+    }
+  }
+  for (const [field, { code, users }] of byReference) {
+    const declaring = users.filter((user) => user.declares).map((user) => user.opName);
+    if (declaring.length === 0) continue;
+    for (const { opName } of users.filter((user) => !user.declares)) {
+      warnIn(
+        `use-cases.operations.${opName}.${field}`,
+        'CHK-USECASES-REF-ERROR-ASYMMETRY',
+        `use-cases: operations.${opName} recibe '${field}' y no declara ${code}, que sí declara ${declaring.join(', ')} para la misma referencia: si no existe, el diseño no dice qué pasa aquí. Declara el error, o di por qué aquí no aplica`
+      );
+    }
+  }
+}
+
 export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest = null }) {
   const errors = [];
   const warnings = [];
@@ -4663,6 +4792,11 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       `use-cases: el code '${code}' se declara con status distintos (${detalle}) — el mismo nombre significa dos cosas para quien integra. Es válido si es deliberado; dilo en la descripción del error, porque se escribe igual que una copia sin mirar`
     );
   }
+
+  // Lo que los cuatro agentes de la corrida catalog-extended (2026-11-07) tuvieron que adivinar, cada uno por su cuenta:
+  // qué devuelve una consulta de un solo resultado que no lo identifica, de dónde sale un campo de una llamada saliente y
+  // si una referencia inexistente es un error en una operación cuando lo es en otra.
+  checkUnstatedLookups(layers, warnIn);
 
   // En el modelo documental una entidad interna del agregado NO es una colección propia:
   // va anidada dentro del documento de su raíz, y la auditoría automática puebla el objeto
