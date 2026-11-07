@@ -1,8 +1,13 @@
-# DSL 2.26 — los plazos de negocio sobre el estado (`lifecycle.deadlines`)
+# DSL 2.26 — los plazos de negocio sobre el estado y un solo cronómetro por servicio
 
 Origen: R2 de `docs/evaluacion-dsl-2.24.md`. Este plan la lleva al DSL y a los cuatro generadores con la regla de
 siempre: **el mismo diseño genera servidores equivalentes**. Cada pieza nueva tiene una red que la ejecuta y un
 sabotaje que demuestra que esa red la ve.
+
+Tiene dos mitades. La primera es el plazo de negocio (`lifecycle.deadlines`), que es lo que cambia en el DSL. La
+segunda es el **cronómetro único**: una tabla de temporizadores con un sondeador por réplica, que dispara los plazos y
+al que **migran todos los relojes que hoy emiten los generadores** (§ La migración de los relojes). La segunda no
+cambia el DSL, pero sí el servidor generado de cualquier diseño con persistencia.
 
 **Estado: borrador para revisión.** Nada está implementado. Las decisiones marcadas «a confirmar» (§ Preguntas
 abiertas) son las que cambian el contrato y no quiero tomar sin ti.
@@ -96,13 +101,18 @@ lo mismo.
 ```
 keel_timer
   id            uuid            PK
-  kind          varchar         'deadline:<Entidad>.<estado>'
-  entity_id     uuid
+  kind          varchar         'deadline:<Entidad>.<estado>' | 'schedule:<operación>' | 'purge:<tabla>' | 'relay:outbox'
+  entity_id     uuid NULL       la entidad de un plazo; NULL en un temporizador recurrente
+  spec          varchar NULL    el cron o el periodo de un recurrente, para ver si cambió en un despliegue
   due_at        timestamp       índice (due_at)
   claimed_until timestamp NULL  arriendo
   attempts      int
   UNIQUE (kind, entity_id)
 ```
+
+Hay dos clases de temporizador en la misma tabla. Un **plazo** es de una sola vez y lleva su entidad: se arma al entrar
+en el estado y se borra al dispararse. Un **recurrente** es una fila por mecanismo, sin entidad, y al dispararse se
+rearma para el siguiente tick (§ La migración de los relojes). Los pasos de abajo son los del plazo.
 
 1. **Armar.** La operación que lleva la entidad al estado inserta el temporizador **en la misma transacción**, con
    `due_at = since + after`. Si la transacción revierte, no hay temporizador. Lo hace el adaptador generado al guardar
@@ -139,15 +149,85 @@ por tick sobre N tablas y no sabe cuándo vence el siguiente: o sondea cada poco
 dispara con minutos de retraso. El cronómetro hace una consulta por réplica, sobre un índice, y duerme hasta el
 vencimiento. Su coste es una fila por cada entrada al estado y una tabla más del generador, como `outbox_event`.
 
-### Alcance: ¿todo lo temporizado, o solo los plazos?
+## La migración de los relojes
 
-Hoy cronometran por su cuenta el `schedule` de las operaciones, el relay del outbox, las purgas, el rescate de
-`stalledAfter` y la reconciliación, en los cuatro generadores, y todo eso está medido. El cronómetro podría absorberlos.
-Un `schedule` sería un temporizador recurrente, y de paso cada tick lo ejecutaría **una** réplica y no todas. Pero
-cambiaría mecanismos que ya tienen redes y sabotajes.
+Todo lo que hoy corre por reloj pasa al cronómetro. Inventario medido en el código (keel-spring como referencia; los
+otros tres emiten los mismos mecanismos con las claves de `keel-core/gen`):
 
-**Propuesta:** en 2.26 el cronómetro nace **solo para los plazos**, con una interfaz que admita después otros `kind`.
-La migración del resto va en un plan aparte (pregunta 6), uno por uno y con su red.
+| Reloj de hoy | Dónde | Cadencia | Con varias réplicas, hoy |
+|---|---|---|---|
+| `schedule` de una operación (barridos, el rescate de `stalledAfter`, el `reconciledBy`, la reconciliación de pagos, el barrido de la guarda del correo) | `<Servicio>Scheduler`, `scheduleCron` de `gen/scheduling.js` | el cron del diseño, con el segundo repartido | corre en **todas**; cada una reclama su lote de filas |
+| Relay del outbox | `outbox.js`, `OUTBOX_RELAY.fixedDelayMs` | cada 1 s | corre en **todas**; cada una reclama sus eventos |
+| Purga de `outbox_event` | `OUTBOX_PURGE` | 03:00 | corre en **todas** a la vez |
+| Purga de `processed_event` | `PROCESSED_EVENT_PURGE` | 04:00 | corre en **todas** a la vez |
+| Purga de `idempotency_record` | `IDEMPOTENCY_RECORD_PURGE` | diaria | corre en **todas** a la vez |
+| Purga de `reconciliation_claim` | `RECONCILIATION_PURGE` | 04:45 | corre en **todas** a la vez |
+| Plazo de negocio (nuevo) | — | `since + after` | — |
+
+Quedan fuera los relojes que no son nuestros, como el refresco de metadatos de Kafka o el TTL de Redis, y lo que no
+dispara nada sino que compara una marca al leer: la caducidad de un reclamo, `lastKnown.maxAgeSeconds` o el arriendo
+de una guarda.
+
+### Dos modos
+
+No todos los relojes quieren lo mismo con varias réplicas, así que cada `kind` declara su modo:
+
+| Modo | Qué garantiza | Para |
+|---|---|---|
+| **clúster** | Cada tick lo ejecuta **una** réplica: la que gana el UPDATE condicional sobre la fila (compare-and-set sobre `due_at` y el arriendo) | `schedule` de operaciones, purgas, plazos |
+| **por réplica** | Cada réplica tiene su tick, en su propio proceso. La tabla no interviene en la decisión, solo en la cadencia | el relay del outbox |
+
+El relay va por réplica a propósito. Su trabajo ya se reparte fila a fila con su reclamo, y con varias réplicas
+relayando a la vez el outbox se vacía más deprisa. Lo que gana con el cronómetro es otra cosa: **despertar al
+confirmar**. La transacción que escribe en `outbox_event` despierta al sondeador de su propia réplica después del
+commit, así que el evento sale al momento en vez de esperar hasta 1 s. El sondeo a intervalos queda solo de red de
+seguridad, para lo que dejó una réplica caída, y puede pasar de cada segundo a cada 30 s.
+
+### Lo que cambia y lo que no
+
+- **No cambia lo que hace cada mecanismo.** El cronómetro decide **cuándo y en qué réplica** se ejecuta un tick. Qué
+  hace el tick (el reclamo por fila, el despacho con o sin la transacción del caso de uso de `scheduleDispatch`, las
+  purgas por lotes de `BATCHED_PURGE`) se queda como está. Por eso las redes de cada mecanismo siguen valiendo, y solo
+  hay que añadir las del disparo.
+- **Cambia el reparto de un barrido.** Hoy, con tres réplicas, un tick de un barrido reclama hasta tres lotes en
+  paralelo. En modo clúster lo ejecuta una sola, y por eso el tick **drena**: reclama lotes hasta que no queden
+  candidatos o hasta agotar su presupuesto de tiempo (el periodo del cron), y lo que quede pasa al siguiente tick. El
+  rendimiento por tick se mantiene sin depender del número de réplicas (pregunta 7).
+- **Cambia el solapamiento.** Hoy dos ticks del mismo barrido pueden solaparse en réplicas distintas si uno tarda más
+  que el periodo. Con el arriendo, el siguiente espera a que acabe el anterior.
+- **El segundo repartido se conserva.** `scheduleSeconds` sigue calculando el `due_at` de cada recurrente, así que dos
+  barridos con la misma cadencia siguen sin arrancar en el mismo segundo.
+
+### Las decisiones de los recurrentes
+
+| # | Decisión | Por qué |
+|---|---|---|
+| R1 | Cada réplica, al arrancar, **asegura** las filas de sus recurrentes: inserta la que falta y recalcula `due_at` si `spec` cambió (un cron nuevo por variable de entorno) | La tabla no se siembra en la migración del esquema: los recurrentes dependen de la configuración del despliegue, no del diseño |
+| R2 | El siguiente tick se calcula **desde `now()`**, no desde el `due_at` anterior | Tras una caída de una hora no se ejecutan doce ticks seguidos: se ejecuta uno y se recupera la cadencia |
+| R3 | Por defecto, **al menos una vez**: el arriendo se pone al reclamar, y `due_at` se adelanta al terminar. Si la réplica muere a mitad, otra repite el tick al vencer el arriendo | Los barridos y las purgas que generamos ya son idempotentes por construcción (reclamo por fila, purga por condición) |
+| R4 | Una réplica solo reclama los `kind` que conoce (`WHERE kind IN (…)`). Una fila de un `kind` que ya no existe la borra la purga de la propia tabla tras N días sin reclamar | En un despliegue escalonado conviven dos versiones. Si la nueva borrara al arrancar lo que no conoce, quitaría el reloj a las réplicas viejas que siguen en marcha |
+| R5 | Si dos versiones con distinto cron conviven en un despliegue escalonado, gana la última que asegura la fila | Dura lo que dura el despliegue. Coordinarlo exigiría saber qué versiones hay vivas, y no compensa |
+| R6 | Un servicio **sin persistencia** no tiene tabla en la que arbitrar: sus recurrentes corren por réplica, como hoy, en el mismo sondeador | No hay nada que compartir entre réplicas. Hoy el único caso sería un `schedule` sin persistencia |
+| R7 | La purga de `keel_timer` es, a su vez, un recurrente de la propia tabla | Así no hace falta otro reloj para limpiar el reloj |
+
+### Lo que la migración obliga a tocar fuera del reloj
+
+Lo saqué del código, y es lo que hace la migración más cara que el plazo:
+
+- **El arnés de flujos.** Los helpers que paran y reanudan el relay durante la resiembra del broker (keel-spring:
+  «Parar y reanudar el `@Scheduled` del relay»; lo mismo en los otros tres), `ageForReconciliation`, el rescate de
+  `stalledAfter` y el humo, que hoy esperan a un tick del cron. Tienen que hablar con el cronómetro, por ejemplo
+  adelantando el `due_at` del recurrente en vez de esperar a la cadencia.
+- **Los gates.** `check-idempotency.sh` y sus familias buscan `@Scheduled` y sus equivalentes como señal de un barrido
+  (`confirm: '@Scheduled'`). Tienen que buscar el registro en el cronómetro.
+- **La telemetría.** Los puntos de paso de los barridos y del relay, y las métricas nuevas: temporizadores vencidos
+  sin reclamar (el retraso del cronómetro), aparcados y duración del tick.
+- **La evolución de un proyecto ya generado.** `keel_timer` es una tabla nueva en una base ya desplegada. En keel-go
+  la baseline de goose reescrita no llega a una base desplegada (medido en el inc. 15), y en los demás pasa lo mismo
+  con su herramienta: la tabla tiene que llegar como un **paso de migración nuevo**, y `EVOLUTION.md` lo tiene que
+  decir. Es la primera vez que un cambio del generador, y no del diseño, añade una tabla a un proyecto desplegado.
+- **Las matrices de paridad.** Una fila nueva, `timer`, con sus celdas por modelo (relacional y documental) en los
+  cuatro generadores.
 
 ## Reglas mecánicas (keel-core)
 
@@ -198,6 +278,19 @@ otra marca), `dl-no-revalidate` (dispara sin mirar el estado), `dl-no-lease` (re
 `dl-app-clock` (compara con la hora de la instancia en vez de la de la base) y `dl-outside-tx` (arma fuera de la
 transacción). Cada uno tiene que caer en exactamente sus casos.
 
+Y los de los recurrentes, que entran con la migración:
+
+- **RC-1**: con dos réplicas sondeando a la vez, cada tick de un recurrente en modo clúster lo ejecuta exactamente
+  una. **RC-2**: un tick que dura más que el periodo no se solapa con el siguiente. **RC-3**: tras una parada más
+  larga que varios periodos, se ejecuta un solo tick. **RC-4**: un `spec` cambiado al arrancar recalcula `due_at`.
+  **RC-5**: una réplica ignora un `kind` que no conoce, y no lo borra. **RC-6**: una réplica que muere a mitad de un
+  tick deja que otra lo repita al vencer el arriendo. **RC-7**: el relay despierta al confirmar la transacción que
+  escribe en el outbox, sin esperar al sondeo.
+
+Sabotajes: `timer-every-replica` (el recurrente se ejecuta en todas: RC-1 en rojo), `timer-no-lease` (RC-2),
+`timer-catch-up` (el siguiente tick se calcula desde el `due_at` anterior: RC-3), `timer-forget-unknown` (la réplica
+borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
+
 ## Incrementos
 
 | # | Qué | Puerta |
@@ -205,12 +298,21 @@ transacción). Cada uno tiene que caer en exactamente sus casos.
 | 0 | Medir: el reloj inyectable en el dominio de los cuatro (si un generador no lo tiene, se añade aquí), y cómo escribe hoy `stock-reservation` su caducidad | Nota en este plan con lo medido |
 | 1 | keel-core: schema, `crossrefs.js`, `checks.js`, mutaciones, la clase de huecos, la revisión, `docs/dsl/domain.md` y el historial de `dsl-reference.md`. DSL 2.26 sustituye a 2.25 | `npm test` de keel-core y `design-matrix` sin ids sin mutación |
 | 2 | `keel-core/gen/deadlines.js` y `keel-core/gen/timer-store.js`: el guard como datos, la tabla `keel_timer` (como `messaging-stores.js`: columnas, índice, sentencias de armado, reclamo, revalidación y purga por motor, con la hora de la base), el algoritmo del sondeador como referencia ejecutable, las sentencias del arnés, la nota del handler, las filas del gate y los casos DL | Sus pruebas (la referencia del sondeador EJECUTADA con un reloj falso), y `buildModel` de todas las fixtures sin cambios |
-| 3 | keel-spring | `compile-check`, `claim-check` con los sabotajes `dl-*`, `harness`; matriz con la fila `deadline` |
-| 4 | keel-nest | `ts-check`, `db-check`, `doc-check`, `harness-check` |
-| 5 | keel-dotnet | `cs-check`, `db-check`, `doc-check`, `harness-check` |
-| 6 | keel-go | `go-check`, `db-check`, `doc-check`, `harness-check` |
-| 7 | Fixture `stock-reservation` con el plazo (versión nueva, escenarios con `ageForDeadline`) y su gemela documental si la hay | `--ready` en verde y las redes que la tienen de sujeto |
-| 8 | Corrida de control en los cuatro sobre `stock-reservation` | Mismo resultado en los cuatro y el guard tardío en el dominio, no en el handler |
+| 3 | El cronómetro con los plazos en keel-spring: la tabla, el sondeador (los dos modos), el armado, el guard tardío. Ningún reloj existente cambia todavía | `compile-check`, `claim-check` con los sabotajes `dl-*`, `harness`; matriz con las filas `deadline` y `timer` |
+| 4 | Lo mismo en keel-nest | `ts-check`, `db-check`, `doc-check`, `harness-check` |
+| 5 | Lo mismo en keel-dotnet | `cs-check`, `db-check`, `doc-check`, `harness-check` |
+| 6 | Lo mismo en keel-go | `go-check`, `db-check`, `doc-check`, `harness-check` |
+| 7 | **Migrar las purgas** (las cuatro tablas) al modo clúster, en los cuatro | `store-check` en keel-spring y `db-check`/`doc-check` en los otros tres, con un sabotaje nuevo `timer-every-replica` (la purga vuelve a correr en todas: la sonda de dos réplicas la ve dos veces) |
+| 8 | **Migrar el `schedule` de las operaciones** al modo clúster, con el drenaje, en los cuatro. Incluye el rescate, la reconciliación, los pagos y la guarda del correo, que van montados en él | `claim-check` en keel-spring, `db-check`/`doc-check`, `harness-check` (el rescate y `ageForReconciliation` sobre el cronómetro) y `stub-check` (reconciliación de pagos); el gate de idempotencia con el registro nuevo, falsado |
+| 9 | **Migrar el relay del outbox** al modo por réplica, con despertar al confirmar, en los cuatro | `broker-check` contra los tres brokers en los cuatro generadores (el relay es lo que más redes toca), con un sabotaje `relay-no-wake` (sin despertar, la latencia vuelve al sondeo y la sonda de latencia lo ve) |
+| 10 | **Evolución**: el paso de migración que lleva `keel_timer` a una base ya desplegada, y su línea en `EVOLUTION.md`, en los cuatro | `test/design-evolution.test.js` de los cuatro y, en keel-go, `db-check` con una base desplegada, como en el inc. 15 |
+| 11 | Telemetría del cronómetro (vencidos sin reclamar, aparcados, duración del tick) y su entrada en el panel y las alertas | `telemetry-check` en los cuatro |
+| 12 | Fixture `stock-reservation` con el plazo (versión nueva, escenarios con `ageForDeadline`) y su gemela documental si la hay | `--ready` en verde y las redes que la tienen de sujeto |
+| 13 | Corrida de control en los cuatro sobre `stock-reservation` **y** repetición de la serie de `catalog-extended` (outbox, purgas, barridos y reconciliación, todo sobre el cronómetro) | Mismo resultado en los cuatro, el guard tardío en el dominio, y la serie de `catalog-extended` igual que la de 2.25 (55/55) |
+
+El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
+lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
+migración es un incremento propio con su puerta, y entre una y otra el servidor generado sigue en verde.
 
 ## Preguntas abiertas (a confirmar)
 
@@ -233,7 +335,12 @@ transacción). Cada uno tiene que caer en exactamente sus casos.
    condicional de la transición lleve también `since + after > now()` de la base. Es exacto, pero mueve el guard del
    dominio al adaptador, y entonces ya no lo miden las pruebas del dominio sino `db-check`. **Propuesta: el reloj de
    la instancia**, documentado, y la alternativa si un diseño la pide.
-6. **El alcance del cronómetro.** ¿Nace solo para los plazos (propuesta) o se migran ya el `schedule`, el relay del
-   outbox, las purgas, el rescate y la reconciliación? Migrarlos ahorraría consultas y haría que cada tick de un
-   `schedule` lo ejecute una sola réplica. Pero rehace mecanismos medidos en los cuatro generadores, y propongo
-   hacerlo en un plan aparte.
+6. ~~**El alcance del cronómetro.**~~ **Decidido (2026-11-07)**: entran todos los relojes en 2.26 (§ La migración de
+   los relojes, incrementos 7-11).
+7. **El drenaje de un barrido en modo clúster.** Con una réplica por tick, ¿basta drenar en serie hasta vaciar o hasta
+   agotar el periodo, o hace falta repartir un tick grande entre réplicas (un temporizador hijo por lote)? **Propuesta:
+   drenar en serie en 2.26.** Los barridos de las fixtures caben de sobra en un periodo, y repartirlo se puede medir
+   después si un diseño real lo pide.
+8. **El relay por réplica.** Propongo dejarlo por réplica y ganar el despertar al confirmar. La alternativa (modo
+   clúster, una réplica relaya cada vez) ahorraría consultas en reposo, pero limitaría el ritmo de salida de eventos a
+   una réplica.
