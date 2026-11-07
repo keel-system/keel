@@ -113,7 +113,9 @@ export function stepSlug(tables) {
 
 // ─── Lo que la base ya tiene ─────────────────────────────────────────────────
 
-const CREATE_TABLE = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:[`"[]?\w+[`"\]]?\.)?[`"[]?(\w+)[`"\]]?/gi;
+// Las comillas pueden venir escapadas: una migración de TypeORM lleva su SQL dentro de un literal (`\"x\"`).
+const QUOTE = String.raw`(?:\\?[\x60"[\]])?`;
+const CREATE_TABLE = new RegExp(String.raw`create\s+table\s+(?:if\s+not\s+exists\s+)?(?:${QUOTE}\w+${QUOTE}\.)?${QUOTE}(\w+)`, 'gi');
 
 /** Las tablas que crea un texto SQL (un paso de Flyway o goose, o el SQL dentro de una migración de TypeORM). */
 export function createdTablesInSql(text) {

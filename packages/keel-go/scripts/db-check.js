@@ -41,6 +41,7 @@ import { DB_SABOTAGES as SABOTAGES, applyDbSabotage } from '../test/helpers/db-s
 import { resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { ENGINE_LABELS, STORE_PACKAGES } from '../src/lib/relational-engine.js';
 import { SUPPORTED_DATABASES } from '../src/lib/supported-features.js';
+import { schemaSteps } from '../src/scaffold/persistence.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length) ?? null;
 const engine = process.argv.find((arg) => arg.startsWith('--database='))?.slice('--database='.length) ?? 'postgresql';
@@ -212,6 +213,7 @@ try {
     if (expected.length > 0) results.at(-1).caught = true;
   });
   if (!sabotage && (!only || only === 'product-catalog')) await schemaEvolution(env);
+  if (!sabotage && (!only || only === 'product-catalog')) await generatorSchemaStep(env);
   if (sabotage) {
     if (step(`el sabotaje ${sabotage} se aplica a lo emitido`, applied > 0, applied === 0 ? '¿cambió el texto emitido?' : `${applied} archivo(s)`)) {
       step(`el sabotaje ${sabotage} lo ve al menos una sonda`, results.some((result) => result.caught));
@@ -316,6 +318,92 @@ async function schemaEvolution(env) {
   recreate(withoutStep);
   await boot(withoutStep);
   step('falsado: sin el paso, el catálogo difiere de la baseline nueva', shape(withoutStep) !== shape(viaBaseline));
+}
+
+/**
+ * El paso de esquema de BUILD (inc. 2b del plan 2.26, keel-core/gen/schema-steps.js): una tabla del generador que aparece
+ * en un proyecto con base desplegada. `product-catalog` sin idempotencia es la base desplegada (su baseline no tiene
+ * `idempotency_record`); el diseño la gana, build reescribe la baseline y escribe el paso leyendo la de disco. El paso
+ * tiene que llevar la tabla a la base desplegada, no hacer nada sobre una base nueva (la baseline nueva ya la trae: el
+ * mismo catálogo con y sin él) y, falsado, sin él la base desplegada se queda sin la tabla.
+ */
+async function generatorSchemaStep(env) {
+  const TABLE = 'idempotency_record';
+  const planOf = (withIdempotency) => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'product-catalog'));
+    if (!withIdempotency) for (const operation of Object.values(layers['use-cases'].operations)) delete operation.idempotency;
+    return planService({ manifest, layers, workspace: FIXTURES_DIR, stack });
+  };
+  const before = planOf(false);
+  const after = planOf(true);
+  if (!step('paso de build: la baseline anterior no trae la tabla y la nueva sí', !baselineOf(before.files).includes(TABLE) && baselineOf(after.files).includes(TABLE))) return;
+
+  const dir = path.join(root, 'generator-schema-step');
+  const write = (file) => {
+    const target = path.join(dir, file.path);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, file.content);
+  };
+  const tidy = async (label) => {
+    const tidied = await runAsync('go', ['mod', 'tidy'], { cwd: dir });
+    return step(`paso de build: go mod tidy (${label})`, tidied.ok, tidied.ok ? '' : tidied.output.slice(0, 2000));
+  };
+  for (const file of [...before.files, probeFile(before.model, before.files)]) write(file);
+  if (!(await tidy('baseline anterior'))) return;
+  const boot = async (db) => {
+    const binary = path.join(dir, process.platform === 'win32' ? 'step-probe.test.exe' : 'step-probe.test');
+    const built = await runAsync('go', ['test', '-c', '-o', binary, `./${storePath}/`], { cwd: dir });
+    if (!built.ok) return built;
+    return runAsync(binary, ['-test.run=^$'], { cwd: path.join(dir, storePath), env: env(db) });
+  };
+  const catalogOf = (db) => (engine === 'mysql' ? mysqlCatalog(db) : catalog(db));
+  const hasTable = (db) => catalogOf(db).has(TABLE);
+  const shape = (db) =>
+    JSON.stringify(
+      [...catalogOf(db).entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, { columns, names }]) => [name, [...columns.entries()].sort(([a], [b]) => a.localeCompare(b)), [...names].sort()])
+    );
+
+  const deployed = 'generator_step_deployed';
+  recreate(deployed);
+  const first = await boot(deployed);
+  if (!step('paso de build: la base desplegada aplica la baseline anterior', first.ok && !hasTable(deployed), first.ok ? '' : first.output.slice(-1500))) return;
+
+  // Lo que hace build --refresh: los pasos se deciden leyendo la baseline de DISCO (la que aplicó la base), y después se
+  // escribe la nueva.
+  const steps = schemaSteps(after.model, dir);
+  const added = steps.added[0];
+  if (!step('paso de build: build escribe el paso de la tabla', steps.added.length === 1 && steps.tables.includes(TABLE), added ?? 'ninguno')) return;
+  for (const file of [...after.files, probeFile(after.model, after.files), ...steps.files]) write(file);
+  if (!(await tidy('baseline nueva'))) return;
+  const stepped = await boot(deployed);
+  step('paso de build: la tabla llega a la base desplegada', stepped.ok && hasTable(deployed), stepped.ok ? '' : stepped.output.slice(-1500));
+  const again = await boot(deployed);
+  step('paso de build: el redespliegue no vuelve a aplicarlo', again.ok && hasTable(deployed), again.ok ? '' : again.output.slice(-1500));
+
+  // Una base nueva: baseline nueva + paso (que no hace nada) es el catálogo de la baseline nueva sola.
+  const withStep = 'generator_step_fresh';
+  recreate(withStep);
+  const fresh = await boot(withStep);
+  const stepFile = path.join(dir, added);
+  const stepContent = fs.readFileSync(stepFile, 'utf8');
+  fs.rmSync(stepFile);
+  const onlyBaseline = 'generator_step_only_baseline';
+  recreate(onlyBaseline);
+  const whole = await boot(onlyBaseline);
+  const same = fresh.ok && whole.ok && shape(withStep) === shape(onlyBaseline);
+  step('paso de build: sobre una base nueva no cambia nada', same, same ? '' : !(fresh.ok && whole.ok) ? `${fresh.output.slice(-500)} ${whole.output.slice(-500)}` : 'el catálogo con el paso difiere del de la baseline sola');
+
+  // Falsado: sin el paso, la base desplegada se queda sin la tabla aunque la baseline la traiga.
+  const withoutStep = 'generator_step_without';
+  for (const file of [...before.files, probeFile(before.model, before.files)]) write(file);
+  recreate(withoutStep);
+  await boot(withoutStep);
+  for (const file of [...after.files, probeFile(after.model, after.files)]) write(file);
+  await boot(withoutStep);
+  step('falsado: sin el paso de build, la base desplegada no tiene la tabla', !hasTable(withoutStep));
+  fs.writeFileSync(stepFile, stepContent);
 }
 
 /** Como run, sin bloquear: para ejecutar varios sujetos a la vez. */

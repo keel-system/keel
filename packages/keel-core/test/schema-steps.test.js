@@ -135,3 +135,8 @@ test('EVOLUTION.md: el paso nuevo es informativo; la tabla sin paso es trabajo d
   const merged = mergePrevious(evolutionState({ service, newWithTodo: ['y'] }), { schemaSteps: [`${DIR}/V3__keel_timer.sql`, `${DIR}/V9__gone.sql`] }, dir);
   assert.deepEqual(merged.schemaSteps, [`${DIR}/V3__keel_timer.sql`]);
 });
+
+test('las comillas escapadas de un SQL dentro de un literal (TypeORM) no esconden la tabla', () => {
+  assert.deepEqual(createdTablesInSql(String.raw`await queryRunner.query("CREATE TABLE \"outbox_event\" (\"id\" uuid)")`), ['outbox_event']);
+  assert.deepEqual(createdTablesInSql(String.raw`CREATE TABLE \"public\".\"keel_timer\" (x int)`), ['keel_timer']);
+});

@@ -84,7 +84,8 @@ export function evolutionState({
     // Los pasos de esquema que build acaba de añadir (schema-steps.js): los aplica la herramienta al arrancar, así que
     // no son trabajo del agente, pero sí lo que el diseñador tiene que saber antes de desplegar.
     schemaSteps: [...schemaSteps].sort(byName),
-    // Las tablas del generador que la base desplegada no tiene y para las que build no sabe escribir el paso.
+    // Lo que falta para que el esquema llegue a la base desplegada y build no puede hacer: un motor sin pasos, o lo
+    // que la herramienta de migraciones de la plataforma pide además del paso (el snapshot de EF en keel-dotnet).
     schemaWork,
     notes
   };
@@ -270,7 +271,7 @@ export function renderEvolutionMarkdown(state, platform) {
   }
 
   if (state.schemaWork.length > 0) {
-    out.push('## Esquema sin paso de build', '', ...state.schemaWork.map((note) => `- ${note}`), '');
+    out.push('## Esquema pendiente', '', ...state.schemaWork.map((note) => `- ${note}`), '');
   }
 
   if (state.notRecreated.length > 0) {
@@ -449,7 +450,7 @@ export function reportEvolution(evolution, outDir, mode) {
     ['cambio(s) de stack', evolution.stack.added.length + evolution.stack.removed.length],
     ['archivo(s) retirado(s) por --prune', evolution.pruned.length],
     ['paso(s) de esquema nuevo(s) de build', evolution.schemaSteps.length],
-    ['tabla(s) del generador sin paso de esquema', evolution.schemaWork.length]
+    ['trabajo de esquema pendiente', evolution.schemaWork.length]
   ];
   for (const [label, count] of lines) if (count > 0) console.log(`  ${pc.yellow('•')} ${count} ${label}`);
   for (const note of evolution.notes) console.log(pc.dim(`  ${note.replace(/`/g, '')}`));
