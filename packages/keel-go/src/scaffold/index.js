@@ -184,10 +184,14 @@ export function scaffoldService({
   const { model, files } = planService({ manifest, layers, fixtures, workspace, stack });
   const outDir = path.join('services', model.service.projectName);
   const projectDir = path.join(workspace, outDir);
-  // Antes de escribir: después, el manifiesto ya registra la baseline nueva.
-  const schemaChange = baselineChange(files, projectDir);
+  // Los pasos de esquema de build: se deciden leyendo las migraciones de disco, así que van ANTES de escribir (en
+  // keel-go build reescribe la baseline: la de disco es todavía la que aplicó la base desplegada).
+  const schema = persistence.schemaSteps(model, projectDir);
+  // Antes de escribir: después, el manifiesto ya registra la baseline nueva. Lo que ya crea el paso no es un cambio.
+  const coveredBaseline = schema.tables.length > 0 ? persistence.baselineSql(model, { without: schema.tables }) : null;
+  const schemaChange = baselineChange(files, projectDir, { coveredBaseline });
   const written = materializeProject({
-    files,
+    files: [...files, ...schema.files],
     projectDir,
     generator: `keel-go@${packageVersion()}`,
     force,
@@ -205,6 +209,7 @@ export function scaffoldService({
     stack: model.stack,
     docs: model.docs,
     schemaChange,
-    ...written
+    ...written,
+    schema: { added: schema.added, work: schema.work }
   };
 }

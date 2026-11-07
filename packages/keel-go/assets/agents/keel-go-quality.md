@@ -87,7 +87,9 @@ va a `designGaps`. Es hueco solo cuando puedes escribir la petición que lleva a
 El esquema lo genera build entero desde el diseño (`internal/infrastructure/<motor>/migrations/`, que goose aplica
 al arrancar en todos los perfiles) y lo mide la red del generador contra el motor real: aquí **no hay baseline que
 crear**. Lo tuyo es comprobar que nadie añadió una migración ni tocó la baseline (`git status` sobre ese
-directorio): una migración del agente es conductual, a `remaining`.
+directorio): una migración del agente es conductual, a `remaining`. Un `<NNNNN>_keel_<tablas>.sql` cuya primera línea es
+`-- keel:generator-step` no es del agente: lo escribió build (lo nombra `EVOLUTION.md` y está en `keel-generated.json`);
+sí es un hallazgo que alguien lo haya editado o renumerado.
 
 En modo evolución, un cambio en ese directorio es legítimo solo si `build/keel-refresh/EVOLUTION.md` avisa de que el esquema
 cambió: la baseline nueva la escribió build, y la migración nueva de una base desplegada, `keel-go-code` por encargo del

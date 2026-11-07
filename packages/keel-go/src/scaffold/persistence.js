@@ -52,6 +52,7 @@ import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempoten
 import { storeTables } from './messaging-stores.js';
 import { reconciliationTables } from './reconciliation-claim.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
+import { GENERATOR_TABLES, schemaStepFiles } from '@keel-system/keel-core/gen/schema-steps';
 
 export { usesRelational };
 
@@ -381,25 +382,17 @@ export function schemaTables(model) {
   for (const fk of crossAggregateForeignKeys(model)) foreignKeys.push({ ...fk, cascade: false });
   // El registro de idempotencia de petición (request-idempotency.js): la tabla neutral de keel-core, la misma de los
   // otros tres generadores, con su clave primaria compuesta y el índice de la purga.
-  if (usesRequestIdempotency(model)) {
-    const record = IDEMPOTENCY_RECORD;
-    tables.push({
-      name: record.table,
-      columns: record.columns.map((column) => ({ name: column.name, base: column.base, length: column.length, nullable: column.nullable })),
-      primaryKey: { name: `${record.table}_pkey`, columns: record.columns.filter((column) => column.primary).map((column) => column.name) },
-      constraints: [],
-      notes: []
-    });
-    for (const index of record.indexes) indexes.push({ name: index.name, table: record.table, columns: index.columns, unique: false });
-  }
-  // Los almacenes de la mensajería (messaging-stores.js): outbox_event y processed_event, las tablas neutrales de keel-core;
-  // y la marca del reclamo de reconciliación (reconciliation-claim.js, tramo 11c).
-  for (const store of [...storeTables(model), ...reconciliationTables(model)]) {
+  // El registro de idempotencia de petición (request-idempotency.js), los almacenes de la mensajería
+  // (messaging-stores.js: outbox_event y processed_event) y la marca del reclamo de reconciliación
+  // (reconciliation-claim.js, tramo 11c): las tablas neutrales de keel-core, las mismas de los otros tres generadores,
+  // con su clave primaria, su unicidad y los índices de la purga. Las mismas que crea un paso de esquema de build.
+  const stores = [...(usesRequestIdempotency(model) ? [IDEMPOTENCY_RECORD] : []), ...storeTables(model), ...reconciliationTables(model)];
+  for (const store of stores) {
     tables.push({
       name: store.table,
       columns: store.columns.map((column) => ({ name: column.name, base: column.base, length: column.length, nullable: column.nullable })),
       primaryKey: { name: `${store.table}_pkey`, columns: store.columns.filter((column) => column.primary).map((column) => column.name) },
-      constraints: [],
+      constraints: (store.uniques ?? []).map((unique) => ({ name: unique.name, columns: unique.columns })),
       notes: []
     });
     for (const index of store.indexes) indexes.push({ name: index.name, table: store.table, columns: index.columns, unique: false });
@@ -478,10 +471,17 @@ function downSql(tables, d) {
   return d.mysql ? ['SET FOREIGN_KEY_CHECKS = 0;', ...drops, 'SET FOREIGN_KEY_CHECKS = 1;'] : drops;
 }
 
-/** La migración baseline de goose: el esquema entero, y su vuelta atrás. */
-export function baselineSql(model) {
+/**
+ * La migración baseline de goose: el esquema entero, y su vuelta atrás. `without` quita unas tablas (con sus índices):
+ * es la baseline que build habría escrito sin ellas, con la que evolution.js mide si lo único que cambió en la baseline
+ * son las tablas del generador que ya crea un paso de esquema.
+ */
+export function baselineSql(model, { without = [] } = {}) {
   const d = sqlDialect(model);
-  const { tables, foreignKeys, indexes } = schemaTables(model);
+  const schema = schemaTables(model);
+  const tables = schema.tables.filter((table) => !without.includes(table.name));
+  const indexes = schema.indexes.filter((index) => !without.includes(index.table));
+  const { foreignKeys } = schema;
   const up = [
     ...tables.map((table) => createTable(table, d)),
     ...indexes.map((index) => createIndex(index, d)),
@@ -498,4 +498,70 @@ ${up.join('\n\n')}
 -- +goose Down
 ${downSql(tables, d).join('\n')}
 `;
+}
+
+// ─── Los pasos de esquema de build ──────────────────────────────────────────────────────────────
+//
+// Una tabla del generador (outbox, guarda de mensajes, idempotencia, reconciliación, cronómetro) que aparece en un
+// proyecto que ya tiene base desplegada no llega con la baseline: goose no reaplica una migración de su historial, así
+// que la baseline reescrita no se vuelve a ejecutar y el servidor caería en la primera consulta que toque la tabla.
+// Llega como un PASO de goose que escribe build (keel-core/gen/schema-steps.js, el mismo mecanismo de los otros tres):
+// `<NNNNN>_keel_<tablas>.sql`, con el número siguiente al último paso que hay en disco.
+//
+// Lo que la base ya tiene se lee de las migraciones de disco ANTES de escribir: en keel-go build reescribe la baseline
+// si nadie la tocó, así que la de disco es todavía la que aplicó la base desplegada. El SQL del paso es idempotente
+// (IF NOT EXISTS): una base NUEVA aplica la baseline nueva, que ya trae la tabla, y después el paso, que no hace nada;
+// una DESPLEGADA se salta la baseline (ya la tiene) y el paso le crea la tabla. Las dos acaban con el mismo esquema.
+
+/** Un paso de goose por su nombre: `00002_add_product_weight.sql`. La versión es la parte numérica. */
+const GOOSE_STEP = /^(\d+)_.+\.sql$/;
+
+/** El ancho de la versión, el de la baseline (`00001`): goose ordena por el número, pero el directorio se lee mejor así. */
+const VERSION_WIDTH = BASELINE_FILE.indexOf('_');
+
+/**
+ * Las tablas del generador que este proyecto emite: las que lleva su baseline. Es el mismo predicado que la escribe
+ * (`schemaTables`), así que no puede haber una tabla en la baseline sin paso posible ni al revés.
+ */
+export function generatorTables(model) {
+  if (!usesRelational(model)) return [];
+  const names = new Set(schemaTables(model).tables.map((table) => table.name));
+  return GENERATOR_TABLES.filter((table) => names.has(table.table));
+}
+
+/**
+ * El paso de goose que envuelve el SQL de `schemaStepSql`, sin tocarlo: el `Up` es ese SQL byte a byte (goose separa las
+ * sentencias por el `;` del final de línea, y ninguna lleva `;` dentro, así que no hace falta `StatementBegin`). Lleva la
+ * marca del generador y no la cabecera de código generado de Go: es SQL, y su regla es otra (no se edita nunca, tampoco
+ * por build). El `Down` borra las tablas del paso, en orden inverso, con IF EXISTS: es la vuelta exacta en una base
+ * desplegada; en una nueva, la tabla era también de la baseline, y volver a subir el paso la recrea.
+ */
+export function gooseStep({ sql, header, tables }) {
+  const drops = [...tables].reverse().map((table) => `DROP TABLE IF EXISTS ${table.table};`);
+  return `${header.map((line) => `-- ${line}`).join('\n')}\n\n-- +goose Up\n${sql}\n-- +goose Down\n${drops.join('\n')}\n`;
+}
+
+/**
+ * Los pasos de goose que build emite en esta pasada (los suyos de antes, tal cual, y el nuevo si hace falta), con lo
+ * que EVOLUTION.md tiene que decir y las tablas que crea el nuevo (`tables`, para evolution.js). Vacío en el modelo
+ * documental: allí los índices los asegura el arranque. Sin la baseline en disco (la primera generación) no hay base
+ * desplegada que proteger, y nada.
+ */
+export function schemaSteps(model, projectDir) {
+  if (!usesRelational(model)) return { files: [], added: [], work: [], tables: [] };
+  let created = [];
+  const result = schemaStepFiles({
+    projectDir,
+    dir: `${layout(model).store.dir}/migrations`,
+    tables: generatorTables(model),
+    engine: relationalEngine(model),
+    isMigration: (name) => GOOSE_STEP.test(name),
+    isBaseline: (name) => name === BASELINE_FILE,
+    versionOf: (name) => GOOSE_STEP.exec(name)?.[1] ?? null,
+    renderStep: (step) => {
+      created = step.tables.map((table) => table.table);
+      return { name: `${String(step.version).padStart(VERSION_WIDTH, '0')}_${step.slug}.sql`, content: gooseStep(step) };
+    }
+  });
+  return { ...result, tables: created };
 }
