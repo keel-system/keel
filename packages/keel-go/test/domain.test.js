@@ -7,6 +7,7 @@
 //   · la forma: cada enum declara el valor que viaja, cada estado lleva todos los miembros de su entidad, la
 //     metadata de un evento va en el orden del cable, y la entidad no expone un campo.
 
+import { conditionalWriteErrors, usesConditionalWrites } from '@keel-system/keel-core/gen/conditional-writes';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -75,7 +76,10 @@ for (const name of fixtures) {
     // Los de la persistencia (concurrencia, tope, integridad y la unicidad canónica) no son clases del dominio en los
     // otros: los pone su traductor de errores del motor. Su paridad la mide test/repositories.test.js.
     // Y el 413 de la subida cuando el diseño no declara el suyo: en los otros es la excepción de framework del almacenamiento.
-    const persistence = new Set([...persistenceSentinels(plans.get(name).model), ...storageSentinels(plans.get(name).model)].map((entry) => `${entry.code}:${entry.http}`));
+    // Y los dos de la escritura condicional (412 y 428): en los otros son excepciones del borde, y su paridad la mide
+    // test/conditional-writes.test.js.
+    const conditional = usesConditionalWrites(plans.get(name).model) ? Object.values(conditionalWriteErrors(plans.get(name).model)).map((entry) => ({ code: entry.code, http: entry.status })) : [];
+    const persistence = new Set([...persistenceSentinels(plans.get(name).model), ...storageSentinels(plans.get(name).model), ...conditional].map((entry) => `${entry.code}:${entry.http}`));
     const go = new Set([...goErrors(plans.get(name).files)].filter((entry) => !persistence.has(entry)));
     assert.ok(go.size > 0, 'keel-go emite errores para este diseño');
     assert.deepEqual(withoutValidation(go), withoutValidation(dotnetErrors(other(planDotnet, name))));

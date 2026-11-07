@@ -75,8 +75,9 @@ test('las dos entradas de la derivación dicen lo mismo, en todas las fixtures y
   for (const [name, { layers, model }] of designs) {
     assert.deepEqual(conditionalWritesOf(model), conditionalWritesOfLayers(layers), name);
   }
-  // Y ninguna fixture la declara todavía: la frontera de los cuatro generadores la rechaza hasta su incremento.
-  for (const fixture of FIXTURES) assert.equal(usesConditionalWrites(designOf(fixture).model), false, fixture);
+  // Y solo la declara catalog-extended (la corrida de control, incremento 6 del plan), sobre la edición de la ficha.
+  for (const fixture of FIXTURES) assert.equal(usesConditionalWrites(designOf(fixture).model), fixture === 'catalog-extended', fixture);
+  assert.deepEqual(conditionalWritesOf(designOf('catalog-extended').model).writes.map((write) => write.name), ['updateProduct']);
 });
 
 test('la versión de la raíz con declared es un campo del dominio, y sin versión no hay escritura condicional', () => {
@@ -101,7 +102,9 @@ test('none no deriva nada; sin concurrency, el PATCH sobre una raíz con versió
     layers.api.concurrency = { conditionalWrites: 'none' };
   });
   assert.equal(conditionalWritesOf(model), null);
-  const { layers } = designOf('catalog-extended');
+  const { layers } = designOf('catalog-extended', (l) => {
+    delete l.api.concurrency;
+  });
   // updateProduct (PATCH /products/{id}); retireProduct es un POST de transición y no abre la pregunta por defecto.
   assert.deepEqual(undecidedConditionalWrites(layers), [{ operation: 'updateProduct', root: 'Product', method: 'PATCH' }]);
   const decided = designOf('catalog-extended', (l) => {
@@ -153,7 +156,7 @@ test('las peticiones de la prueba emitida (CW-6 a CW-10)', () => {
   assert.equal(cases.required, true);
   assert.equal(cases.exposedHeader, 'ETag');
   assert.equal(cases.errors.failed.status, 412);
-  assert.equal(conditionalWriteCases(designOf('catalog-extended').model), null);
+  assert.equal(conditionalWriteCases(designOf('catalog-extended', (layers) => delete layers.api.concurrency).model), null);
 });
 
 test('la frontera neutral: escritura condicional con Idempotency-Key no se genera todavía (T3)', () => {

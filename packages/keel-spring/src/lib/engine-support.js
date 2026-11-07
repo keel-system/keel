@@ -636,7 +636,7 @@ const SPRING_MECHANISMS = {
       'src/scaffold/conditional-writes.js · src/scaffold/controllers.js · src/scaffold/services.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js · src/scaffold/cache.js · src/scaffold/security.js',
     why: 'Una comparación que acepta cualquier versión, un save que devuelve la versión de antes del flush o un conflicto de la ventana que sale como 412 compilan igual de bien, y ningún escenario de una sola escritura los ve: el precio es la actualización perdida entre dos peticiones, que es lo que la capacidad existe para impedir.',
     parity: {
-      skip: 'ningún par byte a byte declara api.concurrency: los sujetos son los diseños derivados de keel-core/test/helpers/conditional-write-designs.js (catalog-conditional y catalog-conditional-mongo, el mismo diseño salvo el modelo), que miden también keel-dotnet, keel-nest y keel-go; la forma la fija test/conditional-writes.test.js, que la compara con keel-nest',
+      skip: 'ningún par byte a byte declara api.concurrency (catalog-extended la declara sobre updateProduct, pero no tiene gemela documental): los sujetos son los diseños derivados de keel-core/test/helpers/conditional-write-designs.js (catalog-conditional y catalog-conditional-mongo, el mismo diseño salvo el modelo), que miden también keel-dotnet, keel-nest y keel-go; la forma la fija test/conditional-writes.test.js, que la compara con keel-nest',
       test: 'test/conditional-writes.test.js'
     },
     coverage: {

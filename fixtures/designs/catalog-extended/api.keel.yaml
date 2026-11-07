@@ -35,3 +35,10 @@ pagination:
   style: offset
   defaultSize: 20
   maxSize: 100
+# Escritura condicional (DSL 2.25): la ficha de un producto la editan personas desde un formulario,
+# así que guardar con una lectura vieja no puede pisar el cambio de otro. getProductBySlug da el
+# ETag; updateProduct lo exige en If-Match y devuelve el nuevo. retireProduct es una transición, no
+# una edición: no compara.
+concurrency:
+  conditionalWrites: required
+  operations: [updateProduct]

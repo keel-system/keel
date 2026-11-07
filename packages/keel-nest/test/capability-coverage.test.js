@@ -33,8 +33,6 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
-  ['api.concurrency', { motivo: MOTIVOS.soloCadenas, porque: 'la declaran las siluetas catalog-conditional, catalog-conditional-mongo y shop-conditional (keel-core/test/helpers/conditional-write-designs.js), que recorren ts-syntax y ts-check y miden db-check y doc-check; la fixture la declarará cuando los cuatro generadores la generen.' }],
-  ['api.concurrency.operations', { motivo: MOTIVOS.soloCadenas, porque: 'la declaran las siluetas catalog-conditional, catalog-conditional-mongo y shop-conditional (keel-core/test/helpers/conditional-write-designs.js), que recorren ts-syntax y ts-check y miden db-check y doc-check; la fixture la declarará cuando los cuatro generadores la generen.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en la línea «Formato: …» del comentario de la clase del mensaje (messaging.js): ningún lector depende de él.' }

@@ -8,6 +8,7 @@
 //   · lo que sale de la caché es, en el cable, byte a byte lo que se guardó;
 //   · y lo que keel-spring deja al agente y keel-nest no: el vaciado de `invalidatedBy`, tras el commit.
 
+import { returnsVersioned } from '@keel-system/keel-core/gen/conditional-writes';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -166,15 +167,19 @@ test('un miss carga y guarda con el TTL del diseño; el acierto no vuelve al ori
   const store = memoryStore();
   const cache = new RedisOperationCache(store, fakeTransactions());
   const card = await productCard();
+  // getProductBySlug da el ETag (api.concurrency): su handler devuelve Versioned<T> y la caché guarda la versión con el cuerpo.
+  const versioned = { version: 7, value: card };
   let loads = 0;
-  const load = async () => (loads++, card);
+  const load = async () => (loads++, versioned);
   const first = await cache.getOrLoad(GET_PRODUCT_BY_SLUG_CACHE, query('sillas'), load);
-  assert.equal(first, card);
+  assert.equal(first, versioned);
   const entry = store.entries.get('catalog:get-product-by-slug::sillas');
   assert.ok(entry, 'guardó la entrada');
   assert.equal(entry.ttlSeconds, 300);
-  const second = await cache.getOrLoad(GET_PRODUCT_BY_SLUG_CACHE, query('sillas'), load);
+  const hit = await cache.getOrLoad(GET_PRODUCT_BY_SLUG_CACHE, query('sillas'), load);
   assert.equal(loads, 1, 'el acierto no vuelve al origen');
+  assert.equal(hit.version, 7, 'el acierto conserva la versión: el mismo ETag que la lectura que lo llenó');
+  const second = hit.value;
   assert.equal(second.constructor.name, 'GetProductBySlugResponseDto', 'sale con su tipo, no como un objeto suelto');
   assert.equal(toWireJson(second), toWireJson(card), 'en el cable, byte a byte lo que se guardó');
   assert.match(toWireJson(second), /"amount":12\.50/, 'el decimal conserva su escala');
@@ -340,7 +345,9 @@ test('toda respuesta de toda fixture vuelve de la caché igual en el cable (lect
     const fixtureTree = transpileTree(withAll, { stubs: { '@nestjs/common': NEST_STUB } });
     const { RESPONSE_CODECS: codecs } = await fixtureTree.load(CACHED_RESPONSES_TS);
     for (const operation of operations) {
-      const text = sampleResponse(fixtureModel, operation);
+      // Lo que devuelve la versión (api.concurrency) se guarda como Versioned<T>: la versión con el cuerpo.
+      const body = sampleResponse(fixtureModel, operation);
+      const text = returnsVersioned(fixtureModel, operation) ? `{"version":7,"value":${body}}` : body;
       const cached = cachedOperations(fixtureModel).find((cache) => cache.operation === operation.name);
       const codec = codecs.get(cached?.cacheName ?? operation.name);
       assert.ok(codec, `${name}.${operation.name}: tiene lector`);

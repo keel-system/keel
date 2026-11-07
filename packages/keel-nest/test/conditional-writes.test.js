@@ -122,7 +122,7 @@ test('paridad con keel-dotnet: las mismas escrituras en el gate, la misma lectur
 });
 
 test('sin api.concurrency no se emite nada de la escritura condicional', () => {
-  const { files } = planFixture('catalog-extended');
+  const { files } = planFixture('catalog-extended', { mutate: (layers) => delete layers.api.concurrency });
   assert.ok(!files.some((file) => file.path === CHECK_CONDITIONAL_WRITES_SH));
   // El código emitido, no la documentación del agente, que nombra el mecanismo para cuando el diseño lo pida.
   assert.ok(!files.filter((file) => !file.path.endsWith('.md')).some((file) => /loadExpecting|expectedVersions|Versioned</.test(file.content ?? '')));

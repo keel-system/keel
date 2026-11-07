@@ -102,7 +102,7 @@ for (const name of fixtures) {
     const test = files.find((file) => file.path === 'internal/application/use_cases_test.go').content;
     for (const operation of operations(model)) {
       const field = useCaseField(operation);
-      assert.match(wiring, new RegExp(`^\\t${field} +${contractOf(operation).handler.replace(/[[\]]/g, '\\$&')}$`, 'm'), `${operation.name}: sin campo`);
+      assert.match(wiring, new RegExp(`^\\t${field} +${contractOf(operation, model).handler.replace(/[[\]]/g, '\\$&')}$`, 'm'), `${operation.name}: sin campo`);
       assert.ok(wiring.includes(`New${handlerType(operation)}(`), `${operation.name}: sin cablear`);
       assert.ok(test.includes(`{"${operation.name}", uc.${field} != nil},`), `${operation.name}: sin fila en la prueba del cableado`);
       const handler = files.find((file) => file.path.endsWith(`/${fileOf(handlerType(operation))}.go`)).content;

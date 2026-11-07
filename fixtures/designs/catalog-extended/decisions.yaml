@@ -7,14 +7,6 @@ decisions:
       petición se ejecuta sin deduplicar, y lo que frena el duplicado es la clave
       natural del SKU.
     since: 1.0.0
-  - id: OBL-API-CONCURRENCY-UNDECIDED
-    scope: api.concurrency.updateProduct
-    reason: >
-      Fixture compartida por los cuatro generadores: mientras alguno no genere la escritura
-      condicional (DSL 2.25), declararla aquí rompería su frontera. La miden sus derivados
-      (keel-core/test/helpers/conditional-write-designs.js), y la fixture la declarará cuando
-      los cuatro la generen (PLAN-DSL-225-ESCRITURA-CONDICIONAL.md).
-    since: 1.0.0
   - id: OBL-OUTCOME-NEGATIVE-UNDECIDED
     scope: dependencies
     reason: >

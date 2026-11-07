@@ -43,6 +43,11 @@
   lleva un `Idempotency-Key` **uuid nuevo**, salvo en el escenario que prueba la deduplicación.
 - **Concurrencia**: `updateProduct` acepta `expectedVersion`. Con un valor distinto del `version`
   actual el diseño no declara error propio: se anota como hueco y no se ejercita.
+- **Escritura condicional** (`api.concurrency: required` sobre `updateProduct`): `getProductBySlug`
+  devuelve la cabecera `ETag` y `updateProduct` la exige en `If-Match`. El `ETag` es **opaco**: se
+  verifica por forma (fuerte, entre comillas, sin `W/`) y por igualdad entre escenarios, nunca por
+  su valor; se guarda tal cual lo devolvió el servidor y se manda tal cual. Los flujos que no miden
+  la concurrencia mandan `If-Match: *`, que se cumple si el producto existe y no compara versión.
 - **Eventos**: se verifican por el canal de eventos del servicio, con el nombre del evento exacto
   del diseño y su payload declarado. Nunca inspeccionando tablas internas.
 
@@ -51,8 +56,8 @@
 | Operación | Flujos | Superficie |
 |-----------|--------|------------|
 | createProduct | FL-PRD-001, FL-PRD-002, FL-PRD-003, FL-PRD-004, FL-IMG-001, FL-OBX-001 | usuarios |
-| getProductBySlug | FL-PRD-002, FL-AUT-001, FL-CBR-001 | usuarios |
-| updateProduct | FL-PRD-002, FL-AUT-003, FL-AUT-004 | usuarios |
+| getProductBySlug | FL-PRD-002, FL-PRD-006, FL-AUT-001, FL-CBR-001 | usuarios |
+| updateProduct | FL-PRD-002, FL-PRD-006, FL-AUT-003, FL-AUT-004 | usuarios |
 | listProducts | FL-PRD-003 | usuarios |
 | getProductsByIds | FL-PRD-003 | usuarios |
 | listDraftProducts | FL-PRD-005 | usuarios |
@@ -148,6 +153,7 @@ flujo.
 2. Cuerpo completo del producto `<p1>`: `id` = `<p1>`, `sku` = `"TOOL-1"`, `name` = `"Sierra"`,
    `status` = `"draft"`, `version` (entero), `createdAt` (instante, por forma),
    `categoryId` = `<c1>`, `images` = `[]`.
+3. Cabecera `ETag` fuerte (entre comillas, sin `W/`): es `<etag-p1>`.
 
 #### FL-PRD-002-C: lectura repetida (respuesta cacheada)
 
@@ -156,10 +162,13 @@ flujo.
 1. Status `200`.
 2. El cuerpo es **idéntico** al de FL-PRD-002-B, incluido `createdAt`: una marca de tiempo que
    pasa por caché y vuelve serializada debe conservar formato y valor.
+3. La cabecera `ETag` es **igual** a `<etag-p1>`: la respuesta cacheada conserva la versión que
+   tenía la lectura que la llenó.
 
 #### FL-PRD-002-D: actualización parcial con categoría embebida
 
-**When**: `updateProduct` — `PATCH /api/v1/products/<p1>` con `{"name": "Sierra de mano"}`.
+**When**: `updateProduct` — `PATCH /api/v1/products/<p1>` con `{"name": "Sierra de mano"}` e
+`If-Match: <etag-p1>`.
 **Then**:
 1. Status `200`.
 2. Cuerpo completo con `name` = `"Sierra de mano"`, `sku` = `"TOOL-1"` **sin cambios** (campo
@@ -302,6 +311,90 @@ una con `Idempotency-Key` propio.
 **Then**:
 1. Status `200` las dos veces.
 2. La primera lleva `<d2>` (se dio de alta después de esa fecha); la segunda es la página vacía.
+
+### FL-PRD-006: escritura condicional — la edición con una lectura vieja no pisa la de otro
+
+Ana carga la ficha, Luis la edita y la guarda, y Ana guarda después con su formulario: sin la
+escritura condicional el cambio de Luis desaparece y nada falla. Ningún escenario de una sola
+escritura distingue esto, porque el `@Version` del servidor solo arbitra dos transacciones que se
+cruzan dentro de él; aquí las dos escrituras son peticiones separadas en el tiempo.
+
+**Given**: la categoría `c1` existe (slug `tools`); `pricing` y `legacy-erp` contestan `200` con un
+cuerpo válido (`stubFor("GET", "/prices/.*", 200, …)` y `stubFor("GET", "/costs/.*", 200, …)`),
+como en FL-PRD-002.
+
+#### FL-PRD-006-A: preparación
+
+**When**: `createProduct` — `POST /api/v1/products` con
+`{"sku": "COND-1", "name": "Taladro", "categoryId": "<c1>"}` e `Idempotency-Key` propio.
+**Then**:
+1. Status `201`; el `id` devuelto es `<q1>`.
+
+#### FL-PRD-006-B: la lectura da el ETag
+
+**When**: `getProductBySlug` — `GET /api/v1/public/products/tools`.
+**Then**:
+1. Status `200` con el producto `<q1>` y `name` = `"Taladro"`.
+2. Cabecera `ETag` fuerte (entre comillas, sin `W/`): es `<etag-a>`.
+
+#### FL-PRD-006-C: escribir sin If-Match
+
+**When**: `updateProduct` — `PATCH /api/v1/products/<q1>` con `{"name": "Sin cabecera"}` y **sin**
+`If-Match`.
+**Then**:
+1. Status `428` con `code` = `"PRECONDITION_REQUIRED"`.
+2. No se publica `ProductUpdated`, y `GET /api/v1/public/products/tools` sigue devolviendo
+   `name` = `"Taladro"` con `ETag` = `<etag-a>`: el `428` sale en el borde, sin escribir nada.
+
+#### FL-PRD-006-D: Luis guarda con la versión que leyó
+
+**When**: `updateProduct` — `PATCH /api/v1/products/<q1>` con `{"name": "Taladro percutor"}` e
+`If-Match: <etag-a>`.
+**Then**:
+1. Status `200` con `name` = `"Taladro percutor"`.
+2. Cabecera `ETag` fuerte y **distinta** de `<etag-a>`: es `<etag-b>`.
+3. Se publica `ProductUpdated` con payload `{productId: <q1>, status: "draft"}`.
+
+#### FL-PRD-006-E: edición encadenada sin releer
+
+**When**: `updateProduct` — `PATCH /api/v1/products/<q1>` con `{"name": "Taladro percutor 2"}` e
+`If-Match: <etag-b>` (el `ETag` que devolvió la escritura anterior, sin ninguna lectura en medio).
+**Then**:
+1. Status `200` con `name` = `"Taladro percutor 2"`.
+2. Cabecera `ETag` distinta de `<etag-a>` y de `<etag-b>`: es `<etag-c>`. Si la escritura
+   devolviera la versión de antes de guardar, este paso daría `412` sin que nadie más hubiera
+   escrito.
+
+#### FL-PRD-006-F: Ana guarda con la lectura vieja
+
+**When**: `updateProduct` — `PATCH /api/v1/products/<q1>` con `{"name": "Taladro de Ana"}` e
+`If-Match: <etag-a>`.
+**Then**:
+1. Status `412` con `code` = `"PRECONDITION_FAILED"`.
+2. No se publica `ProductUpdated`, y `GET /api/v1/public/products/tools` devuelve
+   `name` = `"Taladro percutor 2"` con `ETag` = `<etag-c>`: el cambio de Luis sigue ahí.
+
+#### FL-PRD-006-G: un ETag débil no vale
+
+**When**: `updateProduct` — `PATCH /api/v1/products/<q1>` con `{"name": "Débil"}` e `If-Match`
+igual a `<etag-c>` con el prefijo `W/` delante.
+**Then**:
+1. Status `412` con `code` = `"PRECONDITION_FAILED"`: la comparación es fuerte, y un `ETag` débil
+   no casa con ninguna versión aunque nombre la vigente.
+2. El producto sigue con `name` = `"Taladro percutor 2"`.
+
+#### FL-PRD-006-H: lo que no existe es 404, no 412
+
+**When**: `updateProduct` — `PATCH` sobre un uuid que no corresponde a ningún producto, con
+`{"name": "Nadie"}` e `If-Match: <etag-c>`.
+**Then**:
+1. Status `404` con `code` = `"PRODUCT_NOT_FOUND"`: el `NOT_FOUND` del diseño va antes que la
+   precondición.
+
+**Notas de determinación**: el flujo no limpia la caché entre pasos a propósito. Cada escritura
+que se acepta publica `ProductUpdated`, que invalida la caché de `getProductBySlug`, así que las
+lecturas de C y F tienen que ver la versión vigente; la de C, además, sigue sirviendo la entrada
+que llenó B, con su mismo `ETag`.
 
 ## Proyección del precio de proveedor
 
@@ -610,7 +703,7 @@ operación).
 (`stubFor("POST", "/oauth2/token", 200, …)`) y `POST /partner/catalog-changes` contesta `200` con
 un cuerpo válido.
 
-**When**: `updateProduct` sobre `<a3>` y, a continuación, sobre `<a4>`.
+**When**: `updateProduct` sobre `<a3>` y, a continuación, sobre `<a4>`, las dos con `If-Match: *`.
 
 **Then**:
 1. Las dos responden `200`.
@@ -634,7 +727,7 @@ la obtención del token sale cruda y `onFailure: ignore` se convierte en un 500.
 **Given**: la categoría `c1` existe y un producto `<a5>`; el endpoint de token contesta `500`
 (`stubFailure("POST", "/oauth2/token", 500)`).
 
-**When**: `updateProduct` sobre `<a5>`.
+**When**: `updateProduct` sobre `<a5>`, con `If-Match: *`.
 
 **Then**:
 1. Status `200` y el producto actualizado. `notifyPartner` declara `onFailure: ignore`: que el

@@ -90,7 +90,7 @@ for (const name of fixtures) {
     const registration = files.find((f) => f.path.endsWith('/UseCase/UseCaseRegistration.cs')).content;
     const wiring = files.find((f) => f.path.endsWith('/UseCasesTests.cs')).content;
     for (const operation of operationsOf(model)) {
-      const contract = contractOf(operation).handler;
+      const contract = contractOf(operation, model).handler;
       assert.ok(registration.includes(`services.AddScoped<${contract}, ${operation.handlerClass}>();`), `${operation.name}: sin registrar`);
       assert.ok(wiring.includes(`[InlineData(typeof(${contract}), typeof(${operation.handlerClass}))]`), `${operation.name}: sin fila en UseCasesTests`);
       const handler = files.find((f) => f.path.endsWith(`/UseCases/${operation.handlerClass}.cs`)).content;

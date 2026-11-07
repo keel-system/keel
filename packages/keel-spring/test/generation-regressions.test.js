@@ -53,8 +53,9 @@ test('binding HTTP: un @PathVariable por segmento de la ruta declarada', () => {
   const product = read(controllerPath('product'));
   const image = read(controllerPath('productimage'));
 
-  // {slug} es un path param aunque no se llame "id", y con el tipo del diseño.
-  assert.ok(product.includes('getProductBySlug(@PathVariable String slug)'));
+  // {slug} es un path param aunque no se llame "id", y con el tipo del diseño (la lectura da además el ETag:
+  // api.concurrency, así que recibe la respuesta para escribirlo).
+  assert.ok(product.includes('getProductBySlug(@PathVariable String slug, HttpServletResponse servletResponse)'));
   assert.ok(!product.includes('@RequestParam String slug'));
   // Dos segmentos en la misma ruta, ambos ligados, y sin body en un DELETE.
   assert.ok(image.includes('removeProductImage(@PathVariable UUID productId, @PathVariable UUID imageId)'));
@@ -728,7 +729,8 @@ test('R2: los parámetros de ruta no llevan Bean Validation en el Command', () =
   // 422 toda petición correcta, hiciera lo que hiciera el cliente.
   assert.ok(command.includes('UUID id,'));
   assert.ok(!command.includes('@NotNull UUID id'));
-  assert.ok(controller.includes('updateProduct(@PathVariable UUID id'));
+  // Con If-Match delante (api.concurrency): lo lee el controller y lo estampa en el mensaje.
+  assert.ok(controller.includes('updateProduct(@RequestHeader(value = "If-Match", required = false) String ifMatch, @PathVariable UUID id'));
 });
 
 test('C6: cuerpo enteramente opcional → @RequestBody(required = false) y fusión null-safe', () => {

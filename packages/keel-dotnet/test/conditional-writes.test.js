@@ -82,7 +82,7 @@ test('lo emitido dice lo que el núcleo neutral: las escrituras, las lecturas, e
 });
 
 test('sin api.concurrency no se emite nada de la escritura condicional', async () => {
-  const { files } = await planFixture('catalog-extended');
+  const { files } = await planFixture('catalog-extended', { mutate: (manifest, layers) => delete layers.api.concurrency });
   assert.ok(!files.some((file) => file.path === CHECK_CONDITIONAL_WRITES_SH));
   // El código emitido, no la documentación del agente, que nombra el mecanismo para cuando el diseño lo pida.
   assert.ok(!files.filter((file) => !file.path.endsWith('.md')).some((file) => /LoadExpecting|ExpectedVersions|Versioned</.test(file.content ?? '')));

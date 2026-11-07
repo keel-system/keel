@@ -385,6 +385,13 @@ Decisiones que el plan no fijaba, o que cambian lo que decía. Los incrementos 2
   `infra/check-conditional-writes.sh` (familia `conditionalWrites`), con la frase neutral `conditionalWritesAgentNote` en el
   contexto del proyecto; `/keel-recover` distingue un ETag de caché de una escritura condicional. `/keel-design` ya lo
   cubría desde el incremento 0 (§3.12). La fila de `CLAUDE.md` existía desde el 0; ahora cita `precondition-check`.
-- Siguiente: incremento 6 (corrida de control). Ninguna fixture declara todavía `concurrency`: catalog-extended la
+- Incremento 6 preparado (2026-11-07): `catalog-extended` declara `concurrency` (`required`, solo `updateProduct`: es la
+  edición de la ficha por la que pregunta `OBL-API-CONCURRENCY-UNDECIDED`; `retireProduct` es una transición por POST que
+  usan diez flujos y no añadiría ninguna rama), con el flujo nuevo FL-PRD-006 (428, edición con la versión leída,
+  edición encadenada sin releer, 412 con la lectura vieja, ETag débil y 404 antes que 412), el `ETag` de FL-PRD-002-B/C
+  (la caché conserva la versión) y `If-Match: *` en los flujos que no miden la concurrencia (FL-AUT-003/004). Sin el OBL
+  aceptado en `decisions.yaml` y sin las filas de capability-coverage; `keel validate` da los mismos hallazgos que antes.
+  Workspaces de la corrida: `D:\keel-example\catalog-cw-<tech>-postgre-rabbit` (keel init + `specs/catalog`).
+- Siguiente: lanzar las cuatro corridas y registrarlas en `docs/corridas/`. Ninguna fixture declara todavía `concurrency`: catalog-extended la
   declara con la corrida de control (incremento 6), y entonces se borran las filas de capability-coverage que lo dicen y la
   decisión aceptada de `OBL-API-CONCURRENCY-UNDECIDED` en su `decisions.yaml`.
