@@ -221,8 +221,10 @@ export function scaffoldService({
   const { model, files } = planService({ manifest, layers, fixtures, workspace, stack });
   const outDir = path.join('services', model.service.projectName);
   const projectDir = path.join(workspace, outDir);
+  // Los pasos de esquema de build: se deciden leyendo las migraciones de disco, así que van ANTES de escribir.
+  const schema = schemaBaseline.schemaSteps(model, files, projectDir);
   const written = materializeProject({
-    files,
+    files: [...files, ...schema.files],
     projectDir,
     generator: `keel-nest@${packageVersion()}`,
     force,
@@ -237,6 +239,7 @@ export function scaffoldService({
     warnings: model.warnings,
     stack: model.stack,
     docs: model.docs,
-    ...written
+    ...written,
+    schema: { added: schema.added, work: schema.work }
   };
 }
