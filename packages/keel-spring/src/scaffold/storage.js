@@ -4,6 +4,10 @@
 // agente siguiendo la skill keel-spring-s3, parametrizados
 // por storage.yaml por perfil.
 
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
+import { declaredErrorFor, effectiveErrorCode } from '@keel-system/keel-core/gen/declared-errors';
+import { restrictsContentTypes } from '@keel-system/keel-core/gen/buckets';
 import { screamingSnake } from '../lib/naming.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 
@@ -19,8 +23,46 @@ export function generate(model) {
     renderContentSignature(model),
     renderPolicyPort(model),
     renderProperties(model),
-    renderPolicyConfig(model)
+    renderPolicyConfig(model),
+    ...renderUnsupportedContentType(model)
   ];
+}
+
+/**
+ * El 415 del tipo rechazado (UNSUPPORTED_CONTENT_TYPE, o el que declare el diseño de su familia), ya hecho para el
+ * handler: sin él, cada agente lo inventaba (corrida catalog de 2026-11-07: keel-spring respondió 400
+ * UNSUPPORTED_CONTENT_TYPE y keel-nest 400 VALIDATION_ERROR para el mismo diseño). Solo si algún bucket de subida declara
+ * `allowedContentTypes` y el diseño no trae su propio error: entonces el handler lanza el suyo.
+ */
+export const UNSUPPORTED_CONTENT_TYPE = 'UnsupportedContentTypeException';
+
+export function unsupportedContentTypeRaise(model) {
+  if (!restrictsContentTypes(model)) return null;
+  const declared = declaredErrorFor(model, FRAMEWORK_ERRORS.unsupportedContentType);
+  return {
+    code: effectiveErrorCode(model, FRAMEWORK_ERRORS.unsupportedContentType),
+    raise: declared ? `new ${declared.exceptionClass}(...)` : `new ${UNSUPPORTED_CONTENT_TYPE}()`
+  };
+}
+
+function renderUnsupportedContentType(model) {
+  if (!restrictsContentTypes(model) || declaredErrorFor(model, FRAMEWORK_ERRORS.unsupportedContentType)) return [];
+  const error = FW.unsupportedContentType;
+  const body = `/**
+ * El archivo subido no es de ningún tipo que admita su bucket (storage.buckets.<b>.allowedContentTypes): ni el que
+ * declara la petición ni el que dice su firma. Lo lanza el handler tras {@code BucketPolicy.allowsContent(...)}.
+ */
+public class ${UNSUPPORTED_CONTENT_TYPE} extends DomainException {
+
+    public static final String CODE = ${JSON.stringify(FRAMEWORK_ERRORS.unsupportedContentType.code)};
+    public static final int STATUS = ${error.status};
+    public static final String DEFAULT_MESSAGE = ${JSON.stringify(error.message)};
+
+    public ${UNSUPPORTED_CONTENT_TYPE}() {
+        super(DEFAULT_MESSAGE, CODE, STATUS, null);
+    }
+}`;
+  return [{ path: javaPath(model, 'domain.errors', UNSUPPORTED_CONTENT_TYPE), content: javaFile(subPackage(model, 'domain.errors'), [], body) }];
 }
 
 // La política que el diseño declara por bucket (tamaño máximo, tipos admitidos,

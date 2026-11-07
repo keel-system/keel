@@ -73,6 +73,8 @@ export const FRAMEWORK_RESPONSES = {
   notMultipart: { status: 415, error: 'Unsupported Media Type', message: 'La operación espera multipart/form-data' },
   /** El cuerpo supera el límite de la ENTRADA (el doble del mayor `maxSizeMb`). */
   fileTooLarge: { status: 413, error: 'Payload Too Large', message: 'El archivo supera el tamaño máximo permitido' },
+  /** El archivo no es de ningún tipo que admita su bucket (code UNSUPPORTED_CONTENT_TYPE o el del diseño). */
+  unsupportedContentType: { status: 415, error: 'Unsupported Media Type', message: 'El tipo del archivo no está permitido' },
   /** El cuerpo multipart no se puede leer: cortado o mal formado. */
   fileUnreadable: { status: 400, error: 'Bad Request', message: 'No se pudo leer el archivo enviado' },
   /** Una parte obligatoria llegó con cero bytes: es una subida rota, no «sin archivo». */

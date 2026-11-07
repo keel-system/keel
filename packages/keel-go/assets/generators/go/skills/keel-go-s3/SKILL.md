@@ -61,7 +61,8 @@ if !policy.AllowsSize(cmd.Binary.Size) {
 }
 // AllowsContent, NO AllowsContentType: comprueba el tipo declarado Y la firma del binario.
 if !policy.AllowsContent(cmd.Binary.Content, cmd.Binary.ContentType) {
-	return UploadAssetResponseDto{}, domain.Errorf(domain.ErrUnsupportedContentType, "tipo no admitido: %s", cmd.Binary.ContentType)
+	// El 415: el centinela lo genera build (o es el del error que declare el diseño), con el texto del contrato.
+	return UploadAssetResponseDto{}, domain.Errorf(domain.ErrUnsupportedContentType, "El tipo del archivo no está permitido")
 }
 key := fmt.Sprintf("assets/%s/%s", assetID, uuid.NewString())
 stored, err := h.fileStorage.Upload(ctx, domain.BucketAssetBinaries, key, cmd.Binary.Content, cmd.Binary.ContentType)

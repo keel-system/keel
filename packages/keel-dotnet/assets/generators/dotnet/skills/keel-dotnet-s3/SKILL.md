@@ -54,7 +54,8 @@ var policy = storagePolicies.ForBucket(StoragePolicies.AssetBinaries);
 // El límite del bucket lo compruebas TÚ: el lector multipart solo corta al doble del mayor maxSizeMb.
 if (!policy.AllowsSize(command.Binary.Size)) throw new FileTooLargeError(/* … */);
 // AllowsContent, NO AllowsContentType: comprueba el tipo declarado Y la firma del binario.
-if (!policy.AllowsContent(command.Binary.Content.Span, command.Binary.ContentType)) throw new UnsupportedContentTypeError(/* … */);
+// El 415 lo genera build (UnsupportedContentTypeException), o es el error que declare el diseño.
+if (!policy.AllowsContent(command.Binary.Content.Span, command.Binary.ContentType)) throw new UnsupportedContentTypeException();
 var stored = await fileStorage.Upload(StoragePolicies.AssetBinaries, key, command.Binary.Content, command.Binary.ContentType, cancellationToken);
 ```
 

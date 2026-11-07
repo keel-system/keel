@@ -13,6 +13,7 @@
 // lo que cuelga de capas que keel-dotnet todavía no genera (el almacén de idempotencia, el correo, los clientes
 // salientes) llega con su incremento: el handler de hoy solo inyecta lo que existe.
 
+import { unsupportedContentTypeRaise } from './storage.js';
 import { carriesEntryGate, dispatchNote, entryGateNote, ownershipNotes, scheduleDispatch, usesEntryGate } from '@keel-system/keel-core/gen';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
@@ -419,7 +420,8 @@ function handlerNotes(model, operation) {
   if (!operation.finder) for (const note of textFilterNotes(model, operation, { names: (symbol) => symbol[0].toUpperCase() + symbol.slice(1) })) notes.push(note);
   for (const note of scheduleNotes(model, operation)) notes.push(note);
   for (const note of idempotencyNotes(model, operation)) notes.push(note);
-  for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), names: UPLOAD_NOTE_NAMES_CS })) notes.push(note);
+  const content = unsupportedContentTypeRaise(model);
+  for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), contentCode: content?.code, contentError: content?.raise, names: UPLOAD_NOTE_NAMES_CS })) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la de los tres generadores.

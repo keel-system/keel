@@ -12,6 +12,9 @@
 // La configuración (config/parameters/<perfil>/storage.yaml) es la neutral de keel-core (gen/storage-config.js), con las
 // MISMAS variables y el mismo gradiente que el storage.yaml de keel-spring: un mismo .env sirve para los tres servidores.
 
+import { effectiveErrorCode } from '@keel-system/keel-core/gen/declared-errors';
+import { restrictsContentTypes } from '@keel-system/keel-core/gen/buckets';
+import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
 import { CONTENT_SIGNATURES } from '@keel-system/keel-core/gen/content-signatures';
 import { declaredErrorFor } from '@keel-system/keel-core/gen/declared-errors';
 import { STORAGE, devtoolsContainer, storageContainer } from '@keel-system/keel-core/gen/infra-catalog';
@@ -60,7 +63,44 @@ export function generate(model) {
     );
   }
   if (usesMultipart(model)) files.push({ path: MULTIPART_READING_TS, content: multipartReadingTs(model) });
+  files.push(...unsupportedContentTypeFiles(model));
   return files;
+}
+
+/**
+ * El 415 del tipo rechazado (UNSUPPORTED_CONTENT_TYPE, o el que declare el diseño de su familia), ya hecho para el
+ * handler, como en keel-spring: sin él, cada agente lo inventaba (corrida catalog de 2026-11-07). Solo si algún bucket de
+ * subida declara `allowedContentTypes` y el diseño no trae su propio error.
+ */
+export const UNSUPPORTED_CONTENT_TYPE = 'UnsupportedContentTypeException';
+export const UNSUPPORTED_CONTENT_TYPE_TS = classPath(DIRS.errors, UNSUPPORTED_CONTENT_TYPE);
+
+export function unsupportedContentTypeRaise(model) {
+  if (!restrictsContentTypes(model)) return null;
+  const declared = declaredErrorFor(model, FRAMEWORK_ERRORS.unsupportedContentType);
+  return {
+    code: effectiveErrorCode(model, FRAMEWORK_ERRORS.unsupportedContentType),
+    raise: declared ? `new ${declared.exceptionClass}(...)` : `new ${UNSUPPORTED_CONTENT_TYPE}() (${UNSUPPORTED_CONTENT_TYPE_TS})`
+  };
+}
+
+function unsupportedContentTypeFiles(model) {
+  if (!restrictsContentTypes(model) || declaredErrorFor(model, FRAMEWORK_ERRORS.unsupportedContentType)) return [];
+  const error = FW.unsupportedContentType;
+  const body = `/**
+ * El archivo subido no es de ningún tipo que admita su bucket (storage.buckets.<b>.allowedContentTypes): ni el que
+ * declara la petición ni el que dice su firma. Lo lanza el handler tras \`BucketPolicy.allowsContent(...)\`.
+ */
+export class ${UNSUPPORTED_CONTENT_TYPE} extends DomainException {
+  static readonly CODE = ${tsString(FRAMEWORK_ERRORS.unsupportedContentType.code)};
+  static readonly STATUS = ${error.status};
+  static readonly DEFAULT_MESSAGE = ${tsString(error.message)};
+
+  constructor(message?: string) {
+    super(message ?? ${UNSUPPORTED_CONTENT_TYPE}.DEFAULT_MESSAGE, { code: ${UNSUPPORTED_CONTENT_TYPE}.CODE, httpStatus: ${UNSUPPORTED_CONTENT_TYPE}.STATUS });
+  }
+}`;
+  return [{ path: UNSUPPORTED_CONTENT_TYPE_TS, content: tsModule(UNSUPPORTED_CONTENT_TYPE_TS, [{ symbol: 'DomainException', from: DOMAIN_EXCEPTION_TS }], body) }];
 }
 
 // ─── domain/storage ──────────────────────────────────────────────────────────

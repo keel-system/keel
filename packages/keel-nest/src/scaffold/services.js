@@ -15,6 +15,7 @@
 // idempotencia, el correo, los clientes salientes) llega con su incremento: el handler de hoy solo
 // inyecta lo que existe.
 
+import { unsupportedContentTypeRaise } from './storage.js';
 import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } from './render.js';
 import { textFilterNotes, hasPatternFilter } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
@@ -471,7 +472,8 @@ function handlerNotes(model, operation) {
   if (listed) notes.push(listed);
   const inverse = inverseCollectionsNote(operation, { port: (name) => `await this.${decap(`${name}Repository`)}`, id: '<id del agregado>' });
   if (inverse) notes.push(inverse);
-  for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge) })) notes.push(note);
+  const content = unsupportedContentTypeRaise(model);
+  for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), contentCode: content?.code, contentError: content?.raise })) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la misma en los dos generadores.

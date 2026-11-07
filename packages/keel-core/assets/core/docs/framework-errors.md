@@ -38,6 +38,7 @@ La regla, entonces, es más precisa que «nunca inventes un code»:
 | `use-cases`: `operations.<op>.idempotency` — la carrera | `IDEMPOTENCY_KEY_IN_PROGRESS` | 409 | sí |
 | `use-cases`: `operations.<op>.idempotency` — misma clave, otro cuerpo | `IDEMPOTENCY_KEY_REUSED` | 409 | sí |
 | `storage`: `buckets.<b>.maxSizeMb` | `FILE_TOO_LARGE` | 413 | sí |
+| `storage`: `buckets.<b>.allowedContentTypes` | `UNSUPPORTED_CONTENT_TYPE` | 415 | sí |
 | Entrada multipart (input con campo `type: file`) | `FILE_UNREADABLE` | 400 | no |
 | `security`: la cadena de autenticación | `UNAUTHENTICATED` | 401 | no |
 | `security`: `access.rules` y la audiencia de `serviceAuth` | `ACCESS_DENIED` | 403 | no |
@@ -64,6 +65,9 @@ Qué significa cada uno:
   respuesta de la primera contestaría a una pregunta que el cliente no hizo, y ejecutar la
   segunda rompería la promesa de la clave. La única salida honesta es rechazarla.
 - **`FILE_TOO_LARGE`** — la subida supera el `maxSizeMb` del bucket.
+- **`UNSUPPORTED_CONTENT_TYPE`** — el archivo no es de ningún tipo de `allowedContentTypes`: ni el
+  que declara la petición ni el que dice su firma. Un tipo declarado que la firma desmiente
+  también es esto, no un 400: lo que se rechaza es el contenido.
 - **`FILE_UNREADABLE`** — la parte binaria llega vacía o el cuerpo multipart está roto.
 - **`UNAUTHENTICATED`** — la petición no trae credencial o la que trae no es válida. La emite la
   cadena de seguridad antes de que exista ninguna operación, así que no es sustituible: no hay
@@ -103,6 +107,7 @@ El generador lo detecta y usa **ese** código en vez del canónico. Las familias
 | `IDEMPOTENCY_KEY_REUSED` | `KEY_REUSED`, `KEY_MISMATCH`, `KEY_SIGNATURE_MISMATCH`, `KEY_CONFLICT` |
 | `INVALID_STATE_TRANSITION` | `INVALID_STATE_TRANSITION`, `INVALID_STATE`, `INVALID_TRANSITION`, `ILLEGAL_STATE_TRANSITION` |
 | `FILE_TOO_LARGE` | `FILE_TOO_LARGE`, `PAYLOAD_TOO_LARGE`, `UPLOAD_TOO_LARGE` |
+| `UNSUPPORTED_CONTENT_TYPE` | `UNSUPPORTED_CONTENT_TYPE`, `UNSUPPORTED_MEDIA_TYPE`, `CONTENT_TYPE_NOT_ALLOWED`, `FILE_TYPE_NOT_ALLOWED` |
 | `<ENTITY>_<CAMPOS>_ALREADY_EXISTS` | cualquier `code` que acabe en `<CAMPOS>_ALREADY_EXISTS` |
 
 Con el prefijo que quieras: lo que se compara es el sufijo, así que `ASSET_VERSION_CONFLICT`

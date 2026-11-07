@@ -25,7 +25,7 @@ import { CONTENT_SIGNATURES } from '@keel-system/keel-core/gen/content-signature
 import { declaredErrorFor, effectiveErrorCode } from '@keel-system/keel-core/gen/declared-errors';
 import { storageYaml, multipartFileLimitBytes } from '@keel-system/keel-core/gen/storage-config';
 import { STORAGE, devtoolsContainer, storageContainer } from '@keel-system/keel-core/gen/infra-catalog';
-import { uploadNotes } from '@keel-system/keel-core/gen/buckets';
+import { restrictsContentTypes, uploadNotes } from '@keel-system/keel-core/gen/buckets';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
 import { usesMultipart, usesStorage, usesStorageControl } from '@keel-system/keel-core/gen/features';
@@ -75,22 +75,54 @@ export function uploadsFile(model, operation) {
 /** Las notas de la subida del handler, con los nombres de Go y el code del 413 que sale por el cable. */
 export function uploadHandlerNotes(model, operation) {
   if (!usesStorage(model)) return [];
-  return uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), names: UPLOAD_NOTE_NAMES_GO });
+  const content = unsupportedContentTypeRaise(model);
+  return uploadNotes(model, operation, {
+    sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge),
+    contentCode: content?.code,
+    contentError: content?.raise,
+    names: UPLOAD_NOTE_NAMES_GO
+  });
 }
+
+/**
+ * El 415 del tipo rechazado (UNSUPPORTED_CONTENT_TYPE, o el que declare el diseño de su familia), como en los otros tres:
+ * sin él, cada agente lo inventaba (corrida catalog de 2026-11-07). El centinela es el del diseño si declara uno de su
+ * familia; si no, `ErrUnsupportedContentType`, que emite el catálogo del dominio (storageSentinels).
+ */
+export function unsupportedContentTypeRaise(model) {
+  if (!restrictsContentTypes(model)) return null;
+  const declared = declaredErrorFor(model, FRAMEWORK_ERRORS.unsupportedContentType);
+  return {
+    code: effectiveErrorCode(model, FRAMEWORK_ERRORS.unsupportedContentType),
+    // Con el texto de keel-core/gen/api-errors.js: un centinela suelto saldría con el mensaje de su categoría.
+    raise: `domain.Errorf(domain.${declared ? sentinelName(declared.code) : 'ErrUnsupportedContentType'}, ${goString(FW.unsupportedContentType.message)})`
+  };
+}
+
+const sentinelName = (code) => `Err${goExported(String(code).toLowerCase())}`;
 
 /**
  * El centinela del 413 del caso de uso cuando el diseño no declara el suyo: sin él, el handler no tendría con qué
  * responder el exceso del bucket (los otros tres lanzan su excepción de framework).
  */
 export function storageSentinels(model) {
-  if (!usesStorage(model) || declaredErrorFor(model, FRAMEWORK_ERRORS.fileTooLarge)) return [];
-  return [
-    {
+  if (!usesStorage(model)) return [];
+  const sentinels = [];
+  if (!declaredErrorFor(model, FRAMEWORK_ERRORS.fileTooLarge)) {
+    sentinels.push({
       name: 'ErrFileTooLarge',
       doc: 'la subida supera el tamaño máximo que el diseño declara para su bucket (BucketPolicy.AllowsSize). Lo usa el caso de uso: el diseño no nombra un code propio para este rechazo.',
       ...FRAMEWORK_ERRORS.fileTooLarge
-    }
-  ];
+    });
+  }
+  if (restrictsContentTypes(model) && !declaredErrorFor(model, FRAMEWORK_ERRORS.unsupportedContentType)) {
+    sentinels.push({
+      name: 'ErrUnsupportedContentType',
+      doc: 'el archivo subido no es de ningún tipo que admita su bucket, ni el declarado ni el de su firma (BucketPolicy.AllowsContent). Lo usa el caso de uso: el diseño no nombra un code propio para este rechazo.',
+      ...FRAMEWORK_ERRORS.unsupportedContentType
+    });
+  }
+  return sentinels;
 }
 
 /**

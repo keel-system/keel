@@ -84,7 +84,8 @@ inyecta `StoragePolicies` y pregunta.
 ```java
 BucketPolicy policy = policies.forBucket(StoragePolicies.PRODUCT_IMAGES);
 // allowsContent, NO allowsContentType: comprueba el tipo declarado Y la firma del binario.
-if (!policy.allowsContent(content, contentType)) throw new UnsupportedContentTypeError(...);
+// El 415 lo genera build (UnsupportedContentTypeException), o es el error que declare el diseño.
+if (!policy.allowsContent(content, contentType)) throw new UnsupportedContentTypeException();
 if (!policy.allowsSize(content.length)) throw new FileTooLargeError(...);
 ```
 

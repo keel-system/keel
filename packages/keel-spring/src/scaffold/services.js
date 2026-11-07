@@ -5,6 +5,7 @@
 // donde el agente implementa la lógica. Los handlers dependen del PUERTO de
 // dominio (domain/repository) y del mapper de aplicación, nunca del JPA.
 
+import { unsupportedContentTypeRaise } from './storage.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
@@ -584,7 +585,8 @@ function renderHandler(model, service, operation) {
   if (listed) notes.push(listed);
   const inverse = inverseCollectionsNote(operation, { port: (name) => `${name[0].toLowerCase()}${name.slice(1)}Repository`, id: '<id del agregado>' });
   if (inverse) notes.push(inverse);
-  for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge) })) notes.push(note);
+  const content = unsupportedContentTypeRaise(model);
+  for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), contentCode: content?.code, contentError: content?.raise })) notes.push(note);
   for (const text of operation.preconditions) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules) notes.push(`Regla (en orden): ${text}`);
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la misma en los dos generadores.

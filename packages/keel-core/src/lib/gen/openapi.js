@@ -200,6 +200,9 @@ function responses(context, operation, inputs) {
   // Lo que el servidor responde sin que el diseño lo declare (framework-errors.md), con el code de ESTA operación.
   if (operation.multipart) {
     add(FRAMEWORK_ERRORS.fileTooLarge.http, effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), 'el archivo supera el tamaño máximo de su bucket.');
+    const buckets = new Map((model.storage?.buckets ?? []).map((bucket) => [bucket.name, bucket]));
+    const typed = (operation.bodyFields ?? []).some((field) => field.kind === 'fileUpload' && (buckets.get(field.bucket)?.allowedContentTypes ?? []).length > 0);
+    if (typed) add(FRAMEWORK_ERRORS.unsupportedContentType.http, effectiveErrorCode(model, FRAMEWORK_ERRORS.unsupportedContentType), 'el archivo no es de ningún tipo que admita su bucket.');
   }
   if (operation.idempotency && operation.idempotency.guard !== 'natural-key') {
     for (const [entry, what] of [[FRAMEWORK_ERRORS.idempotencyRace, 'otra petición con la misma clave está en curso.'], [FRAMEWORK_ERRORS.idempotencyReuse, 'la misma clave con otro contenido.']]) {

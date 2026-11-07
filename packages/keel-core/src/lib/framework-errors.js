@@ -146,6 +146,18 @@ export const FRAMEWORK_ERRORS = {
     when: 'La subida supera el tamaño máximo declarado para el bucket.'
   },
 
+  // El tipo rechazado de una subida (la firma del binario o el tipo declarado fuera de `allowedContentTypes`). Sin él,
+  // cada agente inventaba el suyo: en la corrida catalog de 2026-11-07, el de keel-spring respondió 400
+  // UNSUPPORTED_CONTENT_TYPE y el de keel-nest 400 VALIDATION_ERROR para el mismo diseño.
+  unsupportedContentType: {
+    code: 'UNSUPPORTED_CONTENT_TYPE',
+    http: 415,
+    overridable: true,
+    family: /(^|_)(UNSUPPORTED_CONTENT_TYPE|UNSUPPORTED_MEDIA_TYPE|CONTENT_TYPE_NOT_ALLOWED|FILE_TYPE_NOT_ALLOWED)$/,
+    mechanism: 'storage: buckets.<b>.allowedContentTypes',
+    when: 'El archivo subido no es de ninguno de los tipos que admite su bucket: ni el declarado ni el que dice su firma.'
+  },
+
   fileUnreadable: {
     code: 'FILE_UNREADABLE',
     http: 400,

@@ -50,7 +50,8 @@ y al constructor) y valida ANTES de subir, en el orden que fije el diseño, con 
 ```ts
 const policy = this.storagePolicies.forBucket(StoragePolicies.ASSET_BINARIES);
 // allowsContent, NO allowsContentType: comprueba el tipo declarado Y la firma del binario.
-if (!policy.allowsContent(command.binary.content, command.binary.contentType)) throw new UnsupportedContentTypeError(/* … */);
+// El 415 lo genera build (UnsupportedContentTypeException), o es el error que declare el diseño.
+if (!policy.allowsContent(command.binary.content, command.binary.contentType)) throw new UnsupportedContentTypeException();
 if (!policy.allowsSize(command.binary.size)) throw new FileTooLargeError(/* … */);
 const stored = await this.fileStorage.upload(StoragePolicies.ASSET_BINARIES, key, command.binary.content, command.binary.contentType);
 ```

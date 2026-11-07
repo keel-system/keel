@@ -46,6 +46,20 @@ export const UPLOAD_NOTE_NAMES = {
 };
 
 /**
+ * ¿Rechaza el servicio algún tipo de archivo? Sí si alguna operación sube a un bucket que declara
+ * `allowedContentTypes`. Es lo que enciende el 415 de `UNSUPPORTED_CONTENT_TYPE` en los cuatro generadores: la
+ * excepción (o el centinela) que lanza el handler, su nota y el contrato formal.
+ */
+export function restrictsContentTypes(model) {
+  const buckets = new Map((model.storage?.buckets ?? []).map((bucket) => [bucket.name, bucket]));
+  return (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .some((operation) =>
+      (operation.bodyFields ?? []).some((field) => field.kind === 'fileUpload' && (buckets.get(field.bucket)?.allowedContentTypes ?? []).length > 0)
+    );
+}
+
+/**
  * La nota del handler de una operación con SUBIDA: qué comprueba el caso de uso antes de subir, y en qué orden.
  *
  * El lector multipart de los dos generadores corta al DOBLE del mayor `maxSizeMb` del servicio: protege al proceso,
@@ -56,12 +70,14 @@ export const UPLOAD_NOTE_NAMES = {
  *
  * @param {object} model modelo del servicio
  * @param {object} operation la operación
- * @param {{ sizeCode: string, names?: object }} codes el `code` del 413 que resuelve el generador (declarado o canónico)
+ * @param {{ sizeCode: string, contentCode?: string, contentError?: string, names?: object }} codes el `code` del 413 que
+ *   resuelve el generador (declarado o canónico), el del 415 del tipo rechazado (`contentCode`) y cómo se lanza en su
+ *   lenguaje (`contentError`, la excepción o el centinela que emite)
  *   y, si hace falta, cómo se llaman la política y sus métodos en su lenguaje (por defecto `UPLOAD_NOTE_NAMES`, los de
  *   keel-spring y keel-nest; keel-dotnet pasa los de C#)
  * @returns {string[]} una nota por campo de subida
  */
-export function uploadNotes(model, operation, { sizeCode, names = UPLOAD_NOTE_NAMES }) {
+export function uploadNotes(model, operation, { sizeCode, contentCode = '', contentError = '', names = UPLOAD_NOTE_NAMES }) {
   const notes = [];
   for (const field of operation.bodyFields ?? []) {
     if (field.kind !== 'fileUpload' || !field.bucket) continue;
@@ -76,7 +92,8 @@ export function uploadNotes(model, operation, { sizeCode, names = UPLOAD_NOTE_NA
             `lo compruebas TÚ, lo primero, con ${names.allowsSize}(tamaño) → ${sizeCode} (413) si no cabe. `
           : 'El bucket no declara tamaño máximo. ') +
         (types
-          ? `Después ${names.allowsContent}(bytes, tipo declarado) —el tipo (${types}) y la firma del contenido—; nunca solo el tipo declarado. `
+          ? `Después ${names.allowsContent}(bytes, tipo declarado) —el tipo (${types}) y la firma del contenido—; nunca solo el tipo declarado` +
+            (contentCode ? ` → ${contentCode} (415) si no lo admite${contentError ? `, con ${contentError}` : ''}. ` : '. ')
           : '') +
         'Y la subida al almacenamiento, al final: lo que se rechaza antes no deja un objeto huérfano.'
     );
