@@ -9,8 +9,8 @@ segunda es el **cronómetro único**: una tabla de temporizadores con un sondead
 al que **migran todos los relojes que hoy emiten los generadores** (§ La migración de los relojes). La segunda no
 cambia el DSL, pero sí el servidor generado de cualquier diseño con persistencia.
 
-**Estado: aprobado (2026-11-07).** El usuario aceptó las ocho propuestas de § Decisiones tomadas. En curso: fase B
-(incremento 0).
+**Estado: aprobado (2026-11-07).** El usuario aceptó las ocho propuestas de § Decisiones tomadas. Fase B (incremento 0)
+hecha el mismo día; siguiente, la fase C.
 
 ## Por qué
 
@@ -295,17 +295,19 @@ borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
 
 | # | Qué | Puerta |
 |---|---|---|
-| 0 | Medir: el reloj inyectable en el dominio de los cuatro (si un generador no lo tiene, se añade aquí), cómo escribe hoy `stock-reservation` su caducidad, el inventario de los relojes y de lo que depende de ellos en cada generador, y la **carga de partida**: consultas por minuto a la base, en reposo y con carga, con 1 y 3 réplicas, sobre `catalog-extended` | Nota en este plan con lo medido. La carga se vuelve a medir al cerrar cada migración (7, 8 y 9), y la puerta de cada una incluye que baje donde § La migración de los relojes dice que baja |
+| 0 | **Hecho (2026-11-07)**, § Incremento 0: lo medido. Medir: el reloj inyectable en el dominio de los cuatro (si un generador no lo tiene, se añade aquí), cómo escribe hoy `stock-reservation` su caducidad, el inventario de los relojes y de lo que depende de ellos en cada generador, y la **carga de partida**: consultas por minuto a la base, en reposo y con carga, con 1 y 3 réplicas, sobre `catalog-extended` | Nota en este plan con lo medido. La carga se vuelve a medir al cerrar cada migración (7, 8 y 9), y la puerta de cada una incluye que baje donde § La migración de los relojes dice que baja |
+| 0b | Los dos defectos anteriores al plan que destapó el 0, en keel-go: un `schedule` sin persistencia se rechaza con motivo en `supported-features.js` (hoy se descarta en silencio) y el relay drena al apagar como dicen `architecture.md` y `concurrency.md` (o la documentación dice lo que hace) | `test/supported-features.test.js` y la prueba emitida del apagado; `go-check` |
 | 1 | keel-core: schema, `crossrefs.js`, `checks.js`, mutaciones, la clase de huecos, la revisión, `docs/dsl/domain.md` y el historial de `dsl-reference.md`. DSL 2.26 sustituye a 2.25 | `npm test` de keel-core y `design-matrix` sin ids sin mutación |
-| 2 | `keel-core/gen/deadlines.js` y `keel-core/gen/timer-store.js`: el guard como datos, la tabla `keel_timer` (como `messaging-stores.js`: columnas, índice, sentencias de armado, reclamo, revalidación y purga por motor, con la hora de la base), el algoritmo del sondeador como referencia ejecutable, las sentencias del arnés, la nota del handler, las filas del gate y los casos DL | Sus pruebas (la referencia del sondeador EJECUTADA con un reloj falso), y `buildModel` de todas las fixtures sin cambios |
-| 3 | El cronómetro con los plazos en keel-spring: la tabla, el sondeador (los dos modos), el armado, el guard tardío. Ningún reloj existente cambia todavía | `compile-check`, `claim-check` con los sabotajes `dl-*`, `harness`; matriz con las filas `deadline` y `timer` |
+| 2 | `keel-core/gen/deadlines.js` y `keel-core/gen/timer-store.js`: el guard como datos, **el reloj inyectable** del dominio y la aplicación (qué recibe el dominio y cómo lo sustituyen las pruebas emitidas; solo lo usa lo nuevo), la regla de T1 acotado (la hora de la base solo en `keel_timer`, y ninguna comparación que cruce de una fuente a otra), el cron en UTC (T7), la tabla `keel_timer` (como `messaging-stores.js`: columnas, índice, sentencias de armado, reclamo, revalidación y purga por motor, con la hora de la base), el algoritmo del sondeador como referencia ejecutable, las sentencias del arnés, la nota del handler, las filas del gate y los casos DL | Sus pruebas (la referencia del sondeador EJECUTADA con un reloj falso), y `buildModel` de todas las fixtures sin cambios |
+| 2b | **El paso de migración del generador**: un mecanismo para que build emita su propio paso de esquema en una base ya desplegada (Flyway `V<n>` en keel-spring, migración de TypeORM en keel-nest, migración de EF en keel-dotnet, paso de goose en keel-go), con un número que no choque con los pasos del agente, y su línea en `EVOLUTION.md`. En MongoDB no hace falta: los índices se aseguran al arrancar. Antes estaba en el 10; sin él, nada de lo que añade `keel_timer` se puede publicar | `test/design-evolution.test.js` de los cuatro y, en las redes de base, un proyecto con base desplegada que recibe la tabla por el paso: `db-check` de keel-go (como en el inc. 15), y el arranque en `develop` de los otros tres |
+| 3 | El cronómetro con los plazos en keel-spring: la tabla, el sondeador (los dos modos), el armado, el guard tardío, el reloj inyectable y el interruptor `scheduling.enabled` (keel-spring no tenía ninguno: `contextLoads` con H2 arranca con el cronómetro apagado). Ningún reloj existente cambia todavía | `compile-check`, `claim-check` con los sabotajes `dl-*`, `harness`; matriz con las filas `deadline` y `timer` |
 | 4 | Lo mismo en keel-nest | `ts-check`, `db-check`, `doc-check`, `harness-check` |
 | 5 | Lo mismo en keel-dotnet | `cs-check`, `db-check`, `doc-check`, `harness-check` |
 | 6 | Lo mismo en keel-go | `go-check`, `db-check`, `doc-check`, `harness-check` |
 | 7 | **Migrar las purgas** (las cuatro tablas) al modo clúster, en los cuatro | `store-check` en keel-spring y `db-check`/`doc-check` en los otros tres, con un sabotaje nuevo `timer-every-replica` (la purga vuelve a correr en todas: la sonda de dos réplicas la ve dos veces) |
-| 8 | **Migrar el `schedule` de las operaciones** al modo clúster, con el drenaje, en los cuatro. Incluye el rescate, la reconciliación, los pagos y la guarda del correo, que van montados en él | `claim-check` en keel-spring, `db-check`/`doc-check`, `harness-check` (el rescate y `ageForReconciliation` sobre el cronómetro) y `stub-check` (reconciliación de pagos); el gate de idempotencia con el registro nuevo, falsado |
-| 9 | **Migrar el relay del outbox** al modo por réplica, con despertar al confirmar, en los cuatro | `broker-check` contra los tres brokers en los cuatro generadores (el relay es lo que más redes toca), con un sabotaje `relay-no-wake` (sin despertar, la latencia vuelve al sondeo y la sonda de latencia lo ve) |
-| 10 | **Evolución**: el paso de migración que lleva `keel_timer` a una base ya desplegada, y su línea en `EVOLUTION.md`, en los cuatro | `test/design-evolution.test.js` de los cuatro y, en keel-go, `db-check` con una base desplegada, como en el inc. 15 |
+| 8 | **Migrar el `schedule` de las operaciones** al modo clúster, con el drenaje, en los cuatro. Incluye `fireTimer(kind)` en el arnés de los cuatro (los flujos de rescate y reconciliación dejan de esperar un tick del cron), el rescate, la reconciliación, los pagos y la guarda del correo, que van montados en él | `claim-check` en keel-spring, `db-check`/`doc-check`, `harness-check` (el rescate y `ageForReconciliation` sobre el cronómetro) y `stub-check` (reconciliación de pagos); el gate de idempotencia con el registro nuevo, falsado |
+| 9 | **Migrar el relay del outbox** al modo por réplica, con despertar al confirmar, en los cuatro, conservando la pausa del arnés con la misma API (en keel-spring ya no puede depender de `ScheduledAnnotationBeanPostProcessor`, y la purga del outbox sale del bean del relay) | `broker-check` contra los tres brokers en los cuatro generadores (el relay es lo que más redes toca), con un sabotaje `relay-no-wake` (sin despertar, la latencia vuelve al sondeo y la sonda de latencia lo ve). Y `clock-load.js`: en reposo, menos de 10 transacciones/min por réplica (hoy 122), y la salida de un evento en milisegundos (hoy media 0,5 s, p95 0,94 s) |
+| 10 | ~~Evolución~~: pasa al **2b** (§ Incremento 0: lo medido, punto 4) | — |
 | 11 | Telemetría del cronómetro (vencidos sin reclamar, aparcados, duración del tick) y su entrada en el panel y las alertas | `telemetry-check` en los cuatro |
 | 12 | Fixture `stock-reservation` con el plazo (versión nueva, escenarios con `ageForDeadline`) y su gemela documental si la hay | `--ready` en verde y las redes que la tienen de sujeto |
 | 13 | Corrida de control en los cuatro sobre `stock-reservation` **y** repetición de la serie de `catalog-extended` (outbox, purgas, barridos y reconciliación, todo sobre el cronómetro) | Mismo resultado en los cuatro, el guard tardío en el dominio, y la serie de `catalog-extended` igual que la de 2.25 (55/55) |
@@ -331,7 +333,8 @@ más. Lo que se puede paralelizar lo deciden tres límites:
 |---|---|---|---|
 | A | Preguntas abiertas | Las contesta el usuario | — |
 | B | 0 | 4 agentes de **solo lectura** (Explore), uno por generador: relojes, helpers del arnés, gates y telemetría que dependen de ellos. Las medidas de partida (carga en la base con 1 y 3 réplicas) las pasa el orquestador después, de una en una | 4 |
-| C | 1 y 2 | El orquestador, en secuencia: es el contrato del que dependen todos. Se cierra con la referencia del sondeador EJECUTADA con un reloj falso y los casos DL/RC como datos | 1 |
+| C | 0b, 1 y 2 | El orquestador, en secuencia: los dos defectos de keel-go y el contrato del que dependen todos. Se cierra con la referencia del sondeador EJECUTADA con un reloj falso y los casos DL/RC como datos | 1 |
+| C2 | 2b | La parte neutral (`keel-core/gen/evolution.js`) y keel-spring el orquestador; después keel-nest, keel-dotnet y keel-go en paralelo, porque sus pruebas de evolución comparan con keel-spring | 3 |
 | D | 3 | keel-spring, un agente o el orquestador: es la referencia de paridad | 1 |
 | E | 4, 5 y 6 | Un agente por generador, en paralelo, cada uno en su worktree | 3 |
 | F | 7, 8 y 9 | Cada migración en secuencia (comparten `keel-core/gen` y van por riesgo). Dentro de cada una: la parte neutral y keel-spring el orquestador, y después los otros tres en paralelo | 3 por migración |
@@ -353,6 +356,116 @@ más. Lo que se puede paralelizar lo deciden tres límites:
 
 **Antes de la fase E:** cada worktree necesita su `npm install`, que cuesta minutos y disco. Hay que decidir si los
 worktrees van en `D:`, con los demás temporales.
+
+## Incremento 0: lo medido (2026-11-07)
+
+Cuatro agentes de solo lectura, uno por generador, hicieron el inventario. Esto es lo que cambia el plan; el detalle,
+con `archivo:línea`, está en sus informes (resumidos aquí, no guardados aparte).
+
+### Lo mismo en los cuatro
+
+- **Los mismos relojes**: un registro de tareas por cron (`@Scheduled` en keel-spring, `cron` 4 en keel-nest,
+  `BackgroundService` con Cronos en keel-dotnet, robfig/cron con temporizadores propios en keel-go) para los `schedule`
+  y las cuatro purgas, y un bucle aparte para el relay del outbox, con retardo fijo de 1 s. **Todo corre en todas las
+  réplicas**, y el doble trabajo lo evita solo el reclamo por fila. Las purgas no lo evitan: corren a la vez en todas,
+  y no rompen nada porque borrar es idempotente.
+- **No hay reloj inyectable en el dominio ni en los handlers de ninguno.** Usan `Instant.now()`, `new Date()`,
+  `DateTimeOffset.UtcNow` o `time.Now()` de la instancia. Solo los pagos (keel-spring, keel-dotnet) y algunas piezas
+  de los clientes HTTP (keel-dotnet, keel-go) reciben un reloj. **Ninguna consulta usa la hora de la base**: los
+  reclamos, el arriendo del relay y los cortes de las purgas reciben la hora de la instancia como parámetro.
+- **El cron de un `schedule` va literal en el código** generado, sin clave ni variable de entorno. Lo configurable son
+  el relay y las purgas.
+- **Ningún generador sabe llevar una tabla suya nueva a una base ya desplegada.** El baseline lo exporta el agente
+  (Flyway en keel-spring, TypeORM en keel-nest, `dotnet ef` en keel-dotnet) o lo escribe build (goose en keel-go), y la
+  evolución de `keel-core/gen/evolution.js` no tiene ningún paso de esquema. Con `build --refresh` la entidad nueva
+  llega, pero en `develop` y `production` el arranque cae: `validate` de Hibernate, `MigrateAsync` de EF con cambios
+  pendientes o la tabla ausente en keel-nest y keel-go. En MongoDB no hay problema: los índices se aseguran al arrancar
+  en los cuatro.
+- **Ningún helper del arnés adelanta un tick.** Los flujos de rescate y reconciliación fabrican el estado en la base y
+  esperan al cron real, con márgenes de 10 a 90 s. El relay se pausa de dos formas: en el proceso
+  (`ScheduledAnnotationBeanPostProcessor` en keel-spring, `OutboxRelay.pause()` en keel-nest) o aparcando las filas con
+  `next_attempt_at = 2999` (keel-dotnet y keel-go, cuyo servidor es otro proceso).
+- **Los gates y las notas al agente nombran el reloj**: `confirm: '@Scheduled'` en keel-spring, la clase
+  `<Grupo>Scheduler` o `<Owner>Tasks` en los otros tres, y «corre en TODAS las réplicas» en las notas del handler y en
+  las skills de pagos y reconciliación.
+- **No hay telemetría del disparo**: ni span ni métrica de la pasada de un barrido o de una purga, solo logs. El relay
+  sí tiene su span y su gauge de descartados.
+
+### Lo que difiere
+
+| Qué | keel-spring | keel-nest | keel-dotnet | keel-go |
+|---|---|---|---|---|
+| Interruptor de los relojes | **ninguno**: el perfil `test` arranca el relay contra H2 | `scheduling.enabled` (no apaga el relay) | `scheduling.enabled` (el relay lo apaga `database.Enabled`) | `scheduling.enabled` (el relay, `database.Enabled`) |
+| Un `schedule` sin persistencia | se emite y corre por réplica | ídem | ídem | **se descarta en silencio** (defecto anterior al plan) |
+| Zona horaria del cron | la de la JVM | la del proceso | `TimeZoneInfo.Local` | la del proceso |
+| Relay al apagar | espera 30 s a la tarea | espera la pasada en vuelo | deja el lote a medias con su arriendo | **no drena**, aunque `architecture.md` y `concurrency.md` dicen que sí (defecto de documentación anterior al plan) |
+| Purga del outbox | en el MISMO bean que el relay: pausar el relay pausa la purga | aparte | aparte | aparte |
+
+### Lo que cambia en el plan
+
+1. **El reloj inyectable no existe: hay que crearlo** en los cuatro, en el dominio y la aplicación, antes del guard
+   tardío (D2). Pasa a ser parte del incremento 2 (la forma neutral: qué recibe el dominio, cómo lo sustituyen las
+   pruebas emitidas) y de los 3-6. Solo lo usa lo nuevo: migrar todo `now()` existente a ese reloj queda fuera, porque
+   no lo pide ninguna decisión y tocaría todo el código emitido.
+2. **T1 se acota.** La hora de la base es la del cronómetro (`due_at`, reclamo y arriendo de `keel_timer`). Los reclamos
+   por fila de cada mecanismo siguen con la hora de la instancia, como hoy. Mezclar las dos fuentes solo es seguro si
+   ninguna comparación cruza de una a otra, y así se escribe en `deadlines.js` como regla, con su prueba.
+3. **Nueva decisión T7: el cron se evalúa en UTC.** Hoy cada generador usa la zona del proceso, y dos réplicas con
+   zonas distintas dispararían a horas distintas. Cambia la hora real de las purgas (las 03:00 pasan a ser UTC), y se
+   documenta en `EVOLUTION.md`.
+4. **La evolución deja de ser el incremento 10 y pasa a ser el primero de los generadores.** Ningún proyecto ya
+   desplegado puede recibir `keel_timer` hasta que exista un mecanismo para que el generador emita su propio paso de
+   migración, en los cuatro y con número que no choque con los pasos del agente. Es un mecanismo nuevo y no solo una
+   línea en `EVOLUTION.md`, y sin él los incrementos 3-6 no se pueden publicar. Nuevo incremento **2b**, entre lo
+   neutral y keel-spring.
+5. **Un solo interruptor**: el cronómetro se apaga con `scheduling.enabled` en los cuatro (keel-spring lo gana), y
+   apaga también el relay. En el perfil `test` sin base, apagado. En keel-spring, `contextLoads` con H2 tiene que poder
+   arrancar con el cronómetro apagado.
+6. **El arnés gana `fireTimer(kind)`**, que adelanta el `due_at` de un recurrente. Los flujos de rescate y
+   reconciliación dejan de esperar un tick del cron. La pausa del relay se conserva con la misma API en los cuatro
+   (keel-spring: la pausa ya no puede depender de `ScheduledAnnotationBeanPostProcessor`). Va con la migración 8 y 9.
+7. **Dos defectos anteriores al plan**, que se arreglan aparte y antes: keel-go descarta en silencio un `schedule` sin
+   persistencia (se rechaza con motivo en `supported-features.js`, como el resto de su frontera), y su relay no drena
+   al apagar aunque la documentación dice que sí.
+8. **Lo que hay que conservar al migrar**, sacado de las pruebas que ya lo afirman: que una pasada en vuelo no se solape
+   con la siguiente, que el apagado espere a la pasada, la correlación nueva por pasada, la divergencia documental de
+   keel-spring (purgas de Mongo sin `BatchedPurge`), los hilos de plataforma de `SchedulingConfig` y la regla de
+   `logging-check` que prohíbe los executors programados de `Executors`.
+9. **Las pruebas de paridad comparan con keel-spring y keel-nest** (`scheduling.test.js` de keel-dotnet y keel-go). Si
+   keel-spring cambia su reloj primero, se rompen: en cada migración, keel-spring y los otros tres se cierran juntos,
+   aunque se escriban por separado.
+
+### La carga de partida
+
+Medida con `scripts/clock-load.js` sobre el proyecto de keel-go de la corrida de control de la 2.25
+(`catalog-extended`, PostgreSQL y RabbitMQ). La ventana es de 5 minutos tras 1 de calentamiento, y los contadores son
+los de `pg_stat_database` y `pg_stat_user_tables`. Los JSON quedan en `D:\keel-tmp\clock-load\`.
+
+| Medida | Transacciones/min | Recorridos de `outbox_event`/min | Salida de un evento |
+|---|---|---|---|
+| 1 réplica, en reposo | **122** | 60 | — |
+| 3 réplicas, en reposo | **362** | 179 | — |
+| 1 réplica, 5 altas/s (1.490 × 201) | 888 | 651 | media 0,5 s · p95 0,94 s |
+| 3 réplicas, 5 altas/s (1.490 × 201) | 898 | 770 | — |
+
+Lo que dicen:
+
+- **En reposo, toda la carga es el relay del outbox.** Ninguna otra tabla tiene un solo recorrido: unas 120
+  transacciones y 60 recorridos por minuto y réplica. Escala lineal con las réplicas: tres réplicas, el triple. Es lo
+  que tiene que bajar con la migración 9. Con el despertar al confirmar y un sondeo de respaldo cada 30 s, el objetivo
+  es **menos de 10 transacciones por minuto y réplica** (−95 %).
+- **Con carga, los relojes son una parte pequeña.** Pasar de 1 a 3 réplicas añade 120 recorridos del outbox (dos
+  relays más en vacío), pero apenas cambia las transacciones. Lo que cuesta es atender las altas: idempotencia, alta
+  del producto, outbox y las lecturas de la categoría. Ahí la migración no gana casi nada.
+- **La salida de un evento tarda de media 0,5 s, y 0,94 s el p95**: es el sondeo de 1 s. El despertar al confirmar
+  tiene que dejarla en milisegundos. Es la segunda puerta de la migración 9, y el script ya la imprime.
+- **Lo que esta medida no ve**: el `schedule` de `catalog-extended` es horario y las purgas son diarias, así que no caen
+  en una ventana de 5 minutos. Su ganancia es no correr en las tres réplicas a la vez (migraciones 7 y 8), y se mide con
+  el sabotaje `timer-every-replica`, no con este script.
+
+Para repetirla tras cada migración: levantar la `infra/` del proyecto (`bash infra/up.sh && bash infra/validate-infra.sh`)
+y pasar `node scripts/clock-load.js <proyecto> --replicas=1|3 [--load=5] --label=<…>`. Hoy el script solo sabe
+arrancar keel-go (`LAUNCHERS`): un binario, así que tres réplicas caben en esta máquina.
 
 ## Decisiones tomadas (antes preguntas abiertas)
 
