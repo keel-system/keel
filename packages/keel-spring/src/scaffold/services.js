@@ -39,6 +39,14 @@ import { callerResolution } from './security.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { rawJsonAnnotations } from './jackson.js';
+import {
+  carriesExpectedVersions,
+  conditionalHandlerNote,
+  expectedVersionsComponent,
+  returnsVersioned,
+  versionedImport,
+  versionedType
+} from './conditional-writes.js';
 
 // Componentes del record mensaje: parámetros de ruta (en el orden del path) +
 // campos del body + paginación (queries). Compartidos con el controller para
@@ -66,6 +74,9 @@ export function messageComponents(model, operation) {
   if (carriesEntryGate(model, operation)) {
     components.push({ javaType: 'EntryGate', name: 'entryGate', imports: [`${subPackage(model, INTERFACES_PKG)}.EntryGate`], validation: [], kind: 'base', entryGate: true });
   }
+  // Las versiones que valen (api.concurrency, D5): como la puerta, no llegan del cuerpo; las estampa el controller
+  // desde If-Match y llegan nulas desde otra puerta.
+  if (carriesExpectedVersions(model, operation)) components.push(expectedVersionsComponent(model));
   return components;
 }
 
@@ -102,8 +113,18 @@ export function returnTypeOf(operation) {
   return operation.responseDto.name;
 }
 
+/**
+ * El tipo que devuelve el HANDLER (y el que lleva el mensaje): el de la operación o, en la lectura que da el ETag y en
+ * la escritura condicional que devuelve su raíz, `Versioned<T>` (D6 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md): el
+ * compilador obliga al agente a dar la versión. El controller desenvuelve el valor y pone el ETag.
+ */
+export function handlerReturnTypeOf(model, operation) {
+  return returnsVersioned(model, operation) ? versionedType(returnTypeOf(operation)) : returnTypeOf(operation);
+}
+
 // Imports que exige el tipo de retorno.
 export function returnTypeImports(model, operation, imports) {
+  if (returnsVersioned(model, operation)) imports.add(versionedImport(model));
   const dtoPkg = subPackage(model, 'application.dtos');
   if (operation.responseDto) imports.add(`${dtoPkg}.${operation.responseDto.name}`);
   if (operation.paginated) imports.add(`${dtoPkg}.PagedResponse`);
@@ -245,7 +266,7 @@ export function elementAnnotatedType(component, fromPath, imports) {
 function renderMessage(model, operation) {
   const imports = new Set();
   const components = messageComponents(model, operation);
-  const returnType = returnTypeOf(operation);
+  const returnType = handlerReturnTypeOf(model, operation);
   returnTypeImports(model, operation, imports);
   const contracts = mediatorContracts(operation, returnType);
   imports.add(`${subPackage(model, INTERFACES_PKG)}.${contracts.messageBase}`);
@@ -263,6 +284,12 @@ function renderMessage(model, operation) {
       return `        // La puerta por la que llegó este mensaje (keel-core/gen/entry-gates.js): la estampa quien lo construye,
         // el controller con HTTP. No se acepta del cuerpo.
         @JsonIgnore EntryGate entryGate`;
+    }
+    if (component.expectedVersions) {
+      imports.add('com.fasterxml.jackson.annotation.JsonIgnore');
+      return `        // Las versiones que valen, del If-Match de la petición (api.concurrency). Las estampa el controller
+        // generado; null —sin cabecera, '*' u otra puerta— no compara. Pásala tal cual a loadExpecting.
+        @JsonIgnore List<Long> expectedVersions`;
     }
     const typeImport = domainTypeImport(model, component);
     if (typeImport) imports.add(typeImport);
@@ -409,7 +436,7 @@ function renderHandler(model, service, operation) {
   // Sin imports de Spring: @ApplicationComponent es propia y la transacción la
   // abre el UseCaseMediator (Query→readOnly, Command→escritura).
   const imports = new Set([`${subPackage(model, ANNOTATIONS_PKG)}.ApplicationComponent`]);
-  const returnType = returnTypeOf(operation);
+  const returnType = handlerReturnTypeOf(model, operation);
   returnTypeImports(model, operation, imports);
   const contracts = mediatorContracts(operation, returnType);
   imports.add(`${subPackage(model, INTERFACES_PKG)}.${contracts.handlerBase}`);
@@ -535,6 +562,14 @@ function renderHandler(model, service, operation) {
   if (dispatch) notes.push(dispatch);
   const gate = entryGateNote(model, operation, { read: 'command.entryGate()', value: (entry) => `EntryGate.${entry}` });
   if (gate) notes.push(gate);
+  // La escritura condicional (api.concurrency): cargar con loadExpecting y devolver la versión persistida.
+  const conditional = conditionalHandlerNote(
+    model,
+    operation,
+    operation.messageKind === 'query' ? 'query' : 'command',
+    repositoryEntity ? decap(`${repositoryEntity.name}Repository`) : 'repository'
+  );
+  if (conditional) notes.push(conditional);
   const cacheParam = operation.messageKind === 'query' ? 'query' : 'command';
   const cached = cacheNote(model, operation, {
     call: `operationCache.getOrLoad(CachedOperations.{cache}, CachedOperations.${operation.name}Key(${cacheParam}), () -> ...)`

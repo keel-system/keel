@@ -4,6 +4,8 @@
 // ruta de UN harness, y —lo que más cuesta— una ruta o un símbolo que la doc enseña y build no emite: el agente
 // escribiría contra algo inventado. Los ejemplos de Go de las docs se juzgan con tree-sitter, como el Go emitido.
 
+// El gate de la escritura condicional lo emite todo diseño con api.concurrency: los agentes lo ejecutan «si existe».
+import { CHECK_CONDITIONAL_WRITES_SH } from '@keel-system/keel-core/gen/conditional-writes';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -111,7 +113,7 @@ test('la skill de la base solo se instala con persistencia relacional, y la orqu
 // Las que llevan un marcador (`<entidad>_behavior.go`) son plantillas y no se miran.
 test('cada ruta internal/, cmd/, tests/ e infra/ que citan los assets existe en lo que emite build', () => {
   const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
-  const emitted = [...Object.keys(mysql), ...Object.keys(cognito), ...Object.keys(rabbit), ...Object.keys(sns), ...Object.keys(mercadopago), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path)), ...planWith('catalog-extended', { stack: { telemetry: 'otel' } }).files.map((file) => file.path)];
+  const emitted = [...Object.keys(mysql), ...Object.keys(cognito), ...Object.keys(rabbit), ...Object.keys(sns), ...Object.keys(mercadopago), ...fixtures.flatMap((name) => planWith(name).files.map((file) => file.path)), ...planWith('catalog-extended', { stack: { telemetry: 'otel' } }).files.map((file) => file.path), CHECK_CONDITIONAL_WRITES_SH];
   // Lo que escriben los agentes (las pruebas de flujo, con nombre de ejemplo).
   const agentWritten = /^tests\/integration\/\w+_test\.go$/;
   const missing = [];

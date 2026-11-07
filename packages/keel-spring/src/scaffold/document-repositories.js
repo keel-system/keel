@@ -11,6 +11,7 @@
 // ninguna. Aquí el agregado ES el documento: se escribe entero de una vez, la
 // versión viaja dentro y no hay sesión, ni entidades gestionadas, ni orphanRemoval.
 
+import { loadExpectingAdapter, loadsExpecting } from './conditional-writes.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { persistedMembers, orderingFieldOf, usesAuditableEntity } from './persistence-members.js';
@@ -137,6 +138,8 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return ${repoField}.findById(${id.name}).map(this::toDomain);
     }`
   ];
+  // La carga que compara la versión (api.concurrency, D4), la misma que la del adaptador relacional.
+  if (loadsExpecting(model, entity)) methods.push(loadExpectingAdapter(model, entity, id, imports));
   if (batchLookup) {
     imports.add('java.util.Collection');
     imports.add('java.util.List');

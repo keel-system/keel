@@ -10,7 +10,7 @@
 
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
-import { conditionalWritesPendingErrors } from '@keel-system/keel-core/gen/conditional-writes';
+import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 
 /**
  * Comprueba el diseño contra la frontera de keel-spring.
@@ -217,8 +217,8 @@ export function checkSupportedFeatures(manifest, layers) {
   // La mensajería sin persistencia: el puente esperaba un AFTER_COMMIT que nadie dispara, y el servicio no publicaba
   // sin decirlo (medido en el incremento 16 de keel-dotnet). El rechazo neutral, el mismo en los tres.
   errors.push(...messagingWithoutPersistenceErrors(manifest, layers, 'keel-spring'));
-  // La escritura condicional (DSL 2.25) llega en el incremento 4 de su plan: hasta entonces, entera fuera.
-  errors.push(...conditionalWritesPendingErrors(layers, 'keel-spring', 4));
+  // La escritura condicional (DSL 2.25) se genera entera; lo que ningún generador genera todavía, con el motivo neutral (T3).
+  errors.push(...conditionalWritesFrontierErrors(layers, 'keel-spring'));
 
   if (orphanInternal.length > 0) {
     warnings.push(

@@ -16,7 +16,7 @@
 // llama (skill keel-spring-redis).
 
 import { cachedOperations, cacheInvalidations, CACHE_KEY_PART_SEPARATOR } from '@keel-system/keel-core/gen/cache-plan';
-import { returnTypeOf, returnTypeImports, messagePackage } from './services.js';
+import { handlerReturnTypeOf, returnTypeImports, messagePackage } from './services.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { timestampModuleImport } from './jackson.js';
 import { usesTelemetry } from '../lib/telemetry-probes.js';
@@ -192,7 +192,7 @@ function renderRedisOperationCache(model, caches) {
   const types = caches.map((cache) => {
     const operation = operations.get(cache.operation);
     returnTypeImports(model, operation, imports);
-    return `                Map.entry(CachedOperations.${cache.constant}, mapper.getTypeFactory().constructType(new TypeReference<${returnTypeOf(operation)}>() {}))`;
+    return `                Map.entry(CachedOperations.${cache.constant}, mapper.getTypeFactory().constructType(new TypeReference<${handlerReturnTypeOf(model, operation)}>() {}))`;
   });
   const body = `/**
  * El adaptador de {@link OperationCache} sobre el {@code CacheManager} de {@link CacheConfig}.

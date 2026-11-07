@@ -96,6 +96,9 @@ escenario que ya estaba en verde.
      funcionando, no algo que arreglar moviendo un tipo de paquete;
    - `bash infra/check-domain-guards.sh` en verde (si existe): todo campo con formato declarado tiene quien lo
      haga cumplir. Nace ROJO a propósito: es tu trabajo el que lo pone verde.
+   - `bash infra/check-conditional-writes.sh` en verde (si existe, con `api.concurrency`): cada escritura condicional
+     carga su raíz con `h.<repo>.LoadExpecting(ctx, command.ID, command.ExpectedVersions)` —nunca `FindByID`: la comparación con If-Match
+     la hace el adaptador— y devuelve `Versioned[T]` con la versión que deja `Save`, no la cargada. Nace ROJO a propósito;
    - `bash infra/check-idempotency.sh` en verde (si existe): cada listener usa la guarda en el orden que dicta el
      diseño (y mira su respuesta: un `_` en su `bool` no deduplica), cada handler idempotente usa el registro, cada
      barrido reclama su lote, cada evento se emite desde su agregado y el dispatcher del outbox está en

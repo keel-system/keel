@@ -73,6 +73,11 @@ corto a romper un escenario que ya estaba en verde.
    build genera (un evento o una operación interna no pasan por el DTO), y hay que llamarla
    en TODOS los campos de ese tipo — no solo donde un escenario lo exija.
    `infra/check-domain-guards.sh` lo comprueba.
+   Con `api.concurrency` (escritura condicional), cada escritura listada carga su raíz con
+   `loadExpecting(id, command.expectedVersions())` —nunca `findById`: la comparación con
+   If-Match la hace el adaptador— y, si devuelve su raíz, devuelve `Versioned<T>` con la versión
+   del agregado que deja `save(...)`, no la del cargado. La lectura que da el ETag devuelve
+   `Versioned<T>` con la del agregado leído. `infra/check-conditional-writes.sh` lo comprueba.
    Al crear un servicio de dominio sigue `{{keel:docs}}/conventions/domain-services.md`; antes de
    paralelizar I/O en un handler consulta `{{keel:docs}}/conventions/virtual-threads.md` (solo
    query handlers con 2+ operaciones independientes).

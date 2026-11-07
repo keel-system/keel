@@ -51,6 +51,7 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import * as httpIdempotency from './http-idempotency.js';
 import * as purge from './purge.js';
 import * as idempotencyCheck from './idempotency-check.js';
+import * as conditionalWrites from './conditional-writes.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as loggingCheck from './logging-check.js';
 import * as telemetryGate from './telemetry-gate.js';
@@ -164,6 +165,8 @@ const GENERATORS = [
   // Después de services: su matriz cita clases que los generadores de arriba nombran,
   // aunque el script solo las busque en tiempo de ejecución.
   idempotencyCheck,
+  // La escritura condicional (DSL 2.25): Versioned, las excepciones 412/428, el borde y el gate.
+  conditionalWrites,
   domainGuardsCheck,
   loggingCheck,
   telemetryGate,

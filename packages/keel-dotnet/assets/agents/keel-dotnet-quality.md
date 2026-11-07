@@ -99,7 +99,7 @@ En este orden:
 
 1. `dotnet build` en verde, sin warnings.
 2. `bash infra/check-domain-guards.sh` (si existe): cada hallazgo es del agente de código → `remaining` y
-   `domainGuards: KO`. Y `bash infra/check-idempotency.sh` (si existe): igual, con `idempotency: KO` —es el único gate
+   `domainGuards: KO`. Y `bash infra/check-conditional-writes.sh` (si existe): igual, con `conditionalWrites: KO` —una escritura condicional que carga sin `LoadExpecting` pisa el cambio de otro sin 412, y ningún escenario de una sola escritura lo ve—. Y `bash infra/check-idempotency.sh` (si existe): igual, con `idempotency: KO` —es el único gate
    de lo que ningún escenario ve: un listener sin guarda pasa el camino feliz; un barrido que lee en vez de reclamar,
    también—. Y los dos gates de prohibición, que nacen verdes y solo se ponen rojos con código del agente:
    `bash infra/check-logging.sh` (`logging: KO`) y, con telemetría, `bash infra/check-telemetry.sh` (`cardinality: KO`:
@@ -132,6 +132,7 @@ baselineTested: OK | KO | N/A   # bash infra/verify-baseline.sh
 indexes: OK | KO | N/A    # los índices vivos contrastados con DocumentIndexes.cs (N/A sin persistencia documental)
 indexesTested: OK | KO | N/A    # bash infra/export-indexes.sh
 domainGuards: OK | KO | N/A
+conditionalWrites: OK | KO | N/A
 idempotency: OK | KO | N/A
 logging: OK | KO              # bash infra/check-logging.sh (siempre existe)
 cardinality: OK | KO | N/A    # bash infra/check-telemetry.sh (N/A sin telemetría)

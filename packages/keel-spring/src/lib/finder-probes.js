@@ -105,7 +105,7 @@ function sampleFor(model, field, seed, use) {
 }
 
 /** Los argumentos del constructor completo del agregado, en el orden de sus miembros, con los valores forzados. */
-function constructorArgs(model, entity, seed, forced, use) {
+export function constructorArgs(model, entity, seed, forced, use) {
   const args = domainMembers(model, entity).map((member) => {
     if (forced[member.name] != null) return forced[member.name];
     if (member.kind === 'externalRef') return 'UUID.randomUUID()';

@@ -18,6 +18,14 @@ import { IDEMPOTENCY_HEADER } from './request-idempotency.js';
 import { WIRE_SHAPES } from './wire.js';
 import { FRAMEWORK_ERRORS } from '../framework-errors.js';
 import { effectiveErrorCode, idempotencyOutcomeCodes } from './declared-errors.js';
+import {
+  ETAG_HEADER,
+  IF_MATCH_HEADER,
+  conditionalWrite,
+  conditionalWriteErrors,
+  conditionalWritePolicy,
+  returnsVersioned
+} from './conditional-writes.js';
 
 const API_KEY_HEADER = 'X-API-Key';
 const OPENAPI_VERSION = '3.1.0';
@@ -105,6 +113,19 @@ function operationObject(context, operation) {
       { name: 'sort', in: 'query', required: false, schema: { type: 'array', items: { type: 'string' } }, description: '`campo,asc|desc`; sin él, el orden que declara el diseño.' }
     );
   }
+  // La escritura condicional (api.concurrency, DSL 2.25): el ETag de la última lectura, obligatorio con `required`.
+  if (conditionalWrite(model, operation)) {
+    const required = conditionalWritePolicy(model) === 'required';
+    parameters.push({
+      name: IF_MATCH_HEADER,
+      in: 'header',
+      required,
+      schema: { type: 'string' },
+      description:
+        'El ETag de la última lectura del recurso. Si ya no es el vigente, 412 y no se escribe nada' +
+        (required ? '; sin él, 428.' : '; sin él, la escritura no compara.')
+    });
+  }
   if (operation.idempotency?.keySource === 'client-key') {
     parameters.push({ name: IDEMPOTENCY_HEADER, in: 'header', required: false, schema: { type: 'string' }, description: 'Clave de idempotencia: repetir la petición con la misma clave no la ejecuta dos veces.' });
   }
@@ -155,6 +176,13 @@ function responses(context, operation, inputs) {
     const target = locationTarget(model, operation);
     success.headers = { Location: { description: `URL del recurso: ${target.path}`, schema: { type: 'string' } } };
   }
+  // La versión del recurso (api.concurrency): fuerte, opaca, la que el cliente devuelve en If-Match.
+  if (returnsVersioned(model, operation)) {
+    success.headers = {
+      ...(success.headers ?? {}),
+      [ETAG_HEADER]: { description: 'La versión del recurso, fuerte y opaca: se devuelve tal cual en If-Match al escribir.', schema: { type: 'string' } }
+    };
+  }
   result[status] = success;
 
   const errors = new Map();
@@ -178,6 +206,11 @@ function responses(context, operation, inputs) {
       const row = idempotencyOutcomeCodes(model, entry).find((candidate) => candidate.operation === operation.name);
       if (row) add(entry.http, row.code, what);
     }
+  }
+  if (conditionalWrite(model, operation)) {
+    const { failed, required } = conditionalWriteErrors(model);
+    if (conditionalWritePolicy(model) === 'required') add(required.status, required.code, 'la petición no trae If-Match.');
+    add(failed.status, failed.code, 'If-Match no es la versión vigente: otro escribió después de tu lectura.');
   }
   for (const code of operation.errors ?? []) {
     const error = (model.errors ?? []).find((candidate) => candidate.code === code);

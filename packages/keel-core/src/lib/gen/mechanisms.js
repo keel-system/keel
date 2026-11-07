@@ -37,6 +37,8 @@ export const NETS = {
     'npm run index-check — la unicidad CONDICIONADA, contra el motor y en sus dos ramas: en relacional el appendix .sql ejecutado dos veces; en documental el MongoIndexConfig generado, invocado dos veces desde un JUnit. Las mismas preguntas: que sea idempotente y que sostenga el invariante sin prohibir las versiones históricas',
   'telemetry-check':
     'npm run telemetry-check — la telemetría con la APLICACIÓN ARRANCADA: que la serie que el panel consulta exista de verdad en la exposición, con sus etiquetas',
+  'precondition-check':
+    'npm run precondition-check — la ESCRITURA CONDICIONAL (DSL 2.25) contra el motor y en el borde: loadExpecting, la versión persistida, el 409 de la ventana, el 428, la cabecera, el 412, CORS y la caché (CW-1 a CW-11)',
   corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
   ninguna: 'nadie lo ejecuta'
 };

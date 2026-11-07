@@ -632,7 +632,30 @@ const SPRING_MECHANISMS = {
     }
   },
   'conditional-write': {
-    pending: 'incremento 4 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md: hasta entonces la frontera de keel-spring rechaza api.concurrency entera (conditionalWritesPendingErrors de keel-core), así que no hay código que razonar'
+    emitter:
+      'src/scaffold/conditional-writes.js · src/scaffold/controllers.js · src/scaffold/services.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js · src/scaffold/cache.js · src/scaffold/security.js',
+    why: 'Una comparación que acepta cualquier versión, un save que devuelve la versión de antes del flush o un conflicto de la ventana que sale como 412 compilan igual de bien, y ningún escenario de una sola escritura los ve: el precio es la actualización perdida entre dos peticiones, que es lo que la capacidad existe para impedir.',
+    parity: {
+      skip: 'ningún par byte a byte declara api.concurrency: los sujetos son los diseños derivados de keel-core/test/helpers/conditional-write-designs.js (catalog-conditional y catalog-conditional-mongo, el mismo diseño salvo el modelo), que miden también keel-dotnet, keel-nest y keel-go; la forma la fija test/conditional-writes.test.js, que la compara con keel-nest',
+      test: 'test/conditional-writes.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'precondition-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'catalog-conditional y shop-conditional: CW-1 a CW-5 contra el adaptador JPA en PostgreSQL y MySQL, y CW-6 a CW-11 en el borde (MockMvc con el interceptor, el controller y el ApiExceptionHandler generados; CorsConfig; RedisOperationCache sobre un CacheManager en memoria). Medido aquí y no supuesto: Hibernate no sube @Version en un save sin cambios ni compara el lockVersion que el dominio trae sobre una entidad gestionada, así que el adaptador hace saveAndFlush y fuerza la versión nueva (forceNewVersion), y CW-5 se mide como en un handler, carga y guardado en una transacción. Falsado: cw-ignore-expected cae en CW-2, cw-stale-version en CW-4, cw-collapse-409 en CW-5 (en los dos motores), cw-no-428 en CW-6, cw-weak-match en CW-7, cw-error-map en CW-8, cw-cache-etag en CW-11 y cw-cors en CW-9 (shop-conditional); cw-gate en test/conditional-writes.test.js (CW-12, el gate ejecutado con bash)'
+      },
+      document: {
+        state: 'verificado',
+        net: 'precondition-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'catalog-conditional-mongo: CW-1 a CW-5 contra el adaptador de Spring Data MongoDB en un replica set real, con las MISMAS sondas que la rama relacional (aquí save ya devuelve la versión nueva y comprueba la que trae el documento). Falsado: cw-ignore-expected cae en CW-2, cw-stale-version en CW-4 y cw-collapse-409 en CW-5'
+      }
+    }
   }
 };
 

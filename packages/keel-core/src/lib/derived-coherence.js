@@ -19,6 +19,7 @@ import { checkFor } from './checks.js';
 import { FRAMEWORK_ERRORS } from './framework-errors.js';
 import { splitScenarioBlocks, scenarioFamilyOf } from './scenario-blocks.js';
 import { versionedRouteBase } from './gen/model.js';
+import { conditionalWritesOfLayers, IF_MATCH_HEADER } from './gen/conditional-writes.js';
 
 const METHODS = ['get', 'post', 'put', 'patch', 'delete'];
 
@@ -268,6 +269,10 @@ function checkPostman(file, layers, scenarios, warn, serviceName) {
   // Cada request contra el endpoint que dice llamar y los status que ese endpoint puede dar.
   const endpoints = designEndpoints(layers, serviceName).map((e) => ({ ...e, ...routeMatcher(e.path) }));
   if (endpoints.length === 0) return;
+  // La escritura condicional (api.concurrency) con `required`: sin If-Match la request da 428, así que solo la que afirma
+  // ese 428 puede ir sin él. Las demás llevan el ETag que capturó la lectura previa.
+  const conditional = conditionalWritesOfLayers(layers);
+  const requiresIfMatch = new Set(conditional?.policy === 'required' ? conditional.writes.map((write) => write.name) : []);
   for (const item of flatten(doc.item)) {
     const method = String(item.request?.method ?? '').toLowerCase();
     const route = requestPath(item.request).replace(/\{\{[^}]+\}\}/g, 'x').replace(/\/:[A-Za-z_]+/g, '/x');
@@ -282,6 +287,15 @@ function checkPostman(file, layers, scenarios, warn, serviceName) {
     }
     const endpoint = candidates[0];
     const status = assertedStatus(item);
+    const headers = Array.isArray(item.request?.header) ? item.request.header : [];
+    const sendsIfMatch = headers.some((header) => !header?.disabled && String(header?.key ?? '').toLowerCase() === IF_MATCH_HEADER.toLowerCase());
+    if (requiresIfMatch.has(endpoint.operation) && !sendsIfMatch && status !== FRAMEWORK_ERRORS.preconditionRequired.http) {
+      warn(
+        id,
+        `docs: ${rel} ${label} escribe con '${endpoint.operation}' sin cabecera ${IF_MATCH_HEADER}, y la escritura condicional es ` +
+          `required (api.concurrency): respondería 428 — captura el ETag de la lectura y mándalo en ${IF_MATCH_HEADER}`
+      );
+    }
     if (status !== null && !allowedStatuses(layers, endpoint).has(status)) {
       warn(
         id,

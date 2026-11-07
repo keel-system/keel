@@ -9,6 +9,7 @@
 //   · lo que solo es markdown que un agente lee por ruta —architecture, constitution, orchestration, conventions— va
 //     a `docs/keel/`, UNA sola copia, y no puede citar rutas de harness.
 
+import { conditionalWritesAgentNote } from '@keel-system/keel-core/gen/conditional-writes';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesIdempotencyCheck } from './idempotency-check.js';
 import { usesHttpClients } from './http-clients.js';
@@ -162,7 +163,9 @@ dotnet test                        # las pruebas de build (perfil test, sin infr
 bash infra/up.sh && bash infra/validate-infra.sh   # la infraestructura de prueba
 bash infra/score-scenarios.sh                      # compila + humo del arnés + flujos FL-* + matriz
 \`\`\`
-${
+${conditionalWritesAgentNote(model, { call: 'LoadExpecting', versioned: 'Versioned<T>' }) ? `
+${conditionalWritesAgentNote(model, { call: 'LoadExpecting', versioned: 'Versioned<T>' })}
+` : ''}${
     (model.formatTypes ?? []).length > 0
       ? '\n`infra/check-domain-guards.sh` sale en ROJO recién generado a propósito: el formato de los value types escalares lo hace cumplir `<Tipo>Format.Validate(...)`, y esa llamada es del agente.\n'
       : ''

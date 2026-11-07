@@ -87,7 +87,7 @@ const postman = () => ({
 
 const SCENARIOS = '### FL-PRD-001: alta\n**Then**:\n1. Status `201`.\n';
 
-function run(mutate = {}) {
+function run(mutate = {}, design = layers) {
   const docsDir = tmpDir('keel-derived-');
   const docs = { openapi: openapi(), asyncapi: asyncapi(), postman: postman() };
   for (const [key, fn] of Object.entries(mutate)) if (typeof fn === "function") fn(docs[key]);
@@ -96,7 +96,7 @@ function run(mutate = {}) {
   fs.mkdirSync(path.join(docsDir, 'postman'));
   fs.writeFileSync(path.join(docsDir, 'postman', 'catalog-collection.json'), JSON.stringify(docs.postman));
   const { findings } = checkDerivedCoherence({
-    layers: layers(),
+    layers: design(),
     manifest: { service: { name: 'catalog' } },
     docsDir,
     scenarios: mutate.scenarios ?? SCENARIOS
@@ -166,6 +166,38 @@ test('CHK-DOCS-POSTMAN-DRIFT: el status de otro paso copiado a una request, y ca
 
   const fueraDeApi = run({ postman: (doc) => { doc.item[0].item.push(request('FL-PRD-001 · C — ? (200)', 'DELETE', '/api/v1/products/{{id}}', 200)); } });
   assert.match(fueraDeApi[0].message, /no casa con ningún endpoint de api/);
+});
+
+// La escritura condicional (api.concurrency, DSL 2.25): con `required`, una request que escribe sin If-Match daría 428.
+const conditionalLayers = () => {
+  const base = layers();
+  base.domain.entities.Product.fields.name = { type: 'string' };
+  base.persistence = { entities: { Product: {} } };
+  base['use-cases'].operations.getProduct.output = { entity: 'Product' };
+  base['use-cases'].operations.updateProduct = { input: { fields: { id: { type: 'uuid', required: true }, name: { type: 'string' } } }, output: { entity: 'Product' } };
+  base.api.endpoints.updateProduct = { method: 'PUT', path: '/products/{id}' };
+  base.api.concurrency = { conditionalWrites: 'required', operations: ['updateProduct'] };
+  return base;
+};
+const withHeaders = (item, headers) => ({ ...item, request: { ...item.request, header: headers } });
+
+test('CHK-DOCS-POSTMAN-DRIFT: una escritura condicional required sin If-Match, salvo la que afirma el 428', () => {
+  const documented = (doc) => {
+    doc.paths['/api/v1/products/{id}'].put = { operationId: 'updateProduct', responses: { 200: {}, 412: {}, 428: {} } };
+  };
+  const update = (status, headers) => ({
+    openapi: documented,
+    postman: (doc) => {
+      doc.item[0].item.push(withHeaders(request(`FL-PRD-001 · C — Edición (${status})`, 'PUT', '/api/v1/products/{{productId}}', status), headers));
+    }
+  });
+  const sinCabecera = run(update(200, []), conditionalLayers);
+  assert.deepEqual(ids(sinCabecera), ['CHK-DOCS-POSTMAN-DRIFT']);
+  assert.match(sinCabecera[0].message, /'updateProduct' sin cabecera If-Match/);
+  // Con el ETag capturado, o afirmando justo el 428, no es un hallazgo; y una cabecera desactivada no cuenta.
+  assert.deepEqual(run(update(200, [{ key: 'If-Match', value: '{{etag_product}}' }]), conditionalLayers), []);
+  assert.deepEqual(run(update(428, []), conditionalLayers), []);
+  assert.deepEqual(ids(run(update(200, [{ key: 'If-Match', value: '{{etag_product}}', disabled: true }]), conditionalLayers)), ['CHK-DOCS-POSTMAN-DRIFT']);
 });
 
 test('sin docs/<servicio>/ no hay nada que contrastar', () => {

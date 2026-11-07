@@ -4,6 +4,8 @@
 // ruta de UN harness, y —lo que más cuesta— una ruta o una firma que la doc enseña y build no emite: el agente
 // escribiría contra algo inventado.
 
+// El gate de la escritura condicional lo emite todo diseño con api.concurrency: los agentes lo ejecutan «si existe».
+import { CHECK_CONDITIONAL_WRITES_SH } from '@keel-system/keel-core/gen/conditional-writes';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -99,7 +101,9 @@ test('cada ruta src/, tests/ e infra/ que citan los assets existe en lo que emit
   );
   // Y lo que solo emite la telemetría (el gate de cardinalidad, que los agentes ejecutan «si existe»).
   const telemetryInfra = planWith('product-catalog', { database: 'postgresql', telemetry: 'otel' }).files.map((file) => file.path).filter((route) => route.startsWith('infra/'));
-  const emitted = [...Object.keys(files), ...securityInfra, ...telemetryInfra];
+  // Y el gate de la escritura condicional, que emite todo diseño con api.concurrency (lo ejecuta test/conditional-writes.test.js)
+  // y los agentes ejecutan «si existe».
+  const emitted = [...Object.keys(files), ...securityInfra, ...telemetryInfra, CHECK_CONDITIONAL_WRITES_SH];
   // Lo que crea otro después: las migraciones (el pase de calidad), la salida de compilación y las pruebas de flujo
   // (el agente de pruebas; `<Flujo>Flow.cs` en los ejemplos).
   const createdLater = [`${sln.infrastructure.dir}/Persistence/Migrations`, `${sln.integrationTests.dir}/bin/`];

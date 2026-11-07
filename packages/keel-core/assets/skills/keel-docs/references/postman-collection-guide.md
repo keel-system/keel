@@ -154,6 +154,21 @@ del `http` del `errors[].code` correspondiente en `use-cases` (duplicado → 409
 inexistente → 404, permiso insuficiente → 403, validación → 400…): usa siempre el
 declarado en el diseño, nunca uno supuesto.
 
+### Escritura condicional (`api.concurrency`)
+
+Si el diseño declara `api.concurrency`, las escrituras listadas comparan la versión que el cliente leyó:
+
+- La **lectura** que da el `ETag` (la query con endpoint que devuelve la raíz entera) lo **captura** en una variable de
+  colección, en su script `test`:
+  `pm.collectionVariables.set('etag_<raíz>', pm.response.headers.get('ETag'));`
+- Cada **escritura listada** lo manda tal cual en `If-Match: {{etag_<raíz>}}`, y si su respuesta devuelve la raíz, vuelve
+  a capturar el `ETag` nuevo: así dos ediciones encadenadas no necesitan releer.
+- El `ETag` es **opaco**: no lo construyas a mano ni le quites las comillas.
+- Con `conditionalWrites: required`, una escritura sin `If-Match` responde **428**. Solo la request del escenario que afirma
+  ese 428 va sin la cabecera; `keel validate` avisa (`CHK-DOCS-POSTMAN-DRIFT`) de cualquier otra.
+- El escenario del **412** manda un `ETag` viejo a propósito: guárdalo en otra variable antes de la escritura que lo deja
+  obsoleto.
+
 ### Carpeta «Operaciones»
 
 Una request por endpoint de `api` (explícito o derivado de `auto`) que ningún
@@ -170,5 +185,6 @@ escenario cubre:
 - [ ] Cada rol usado por flujos u operaciones tiene su request de token y su global `token_<rol>`.
 - [ ] Una carpeta por `FL-*` con una request por escenario (felices y de error).
 - [ ] Carpeta «Operaciones» con los endpoints no cubiertos.
+- [ ] Con `api.concurrency`: la lectura captura `ETag` y cada escritura listada lo manda en `If-Match` (salvo la del 428).
 - [ ] `{{baseUrl}}` (y las variables de auth) declaradas en `variable[]`.
 - [ ] Ambos JSON válidos; reporta rutas y orden de importación (auth primero).

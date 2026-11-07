@@ -80,6 +80,10 @@ corto a romper un escenario que ya estaba en verde.
    - `npm run check:architecture` en verde (la frontera hexagonal: dominio y aplicación sin framework);
    - `bash infra/check-domain-guards.sh` en verde (si existe): todo campo con formato declarado tiene
      quien lo haga cumplir;
+   - `bash infra/check-conditional-writes.sh` en verde (si existe, con `api.concurrency`): cada escritura
+     condicional carga su raíz con `loadExpecting(id, command.expectedVersions)` —nunca `findById`: la
+     comparación con If-Match la hace el adaptador— y devuelve `Versioned<T>` con la versión que deja `save`,
+     no la cargada. Nace ROJO a propósito;
    - `bash infra/check-idempotency.sh` en verde (si existe): cada listener usa la guarda en el orden que
      dicta el diseño, cada handler idempotente usa el registro, cada barrido reclama su lote, cada evento
      se emite desde su agregado y el dispatcher del outbox está registrado. Nace ROJO a propósito: es tu

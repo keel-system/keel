@@ -7,6 +7,8 @@
 // del stack) a authorities de Spring. No hay stubs de negocio: la autorización
 // es enteramente derivable del diseño.
 
+// ETag e If-Match con escritura condicional (CW-9): la lista es la neutral de los cuatro generadores.
+import { corsAllowedHeaders, corsExposedHeaders } from '@keel-system/keel-core/gen/conditional-writes';
 import { PAYMENT_NOTICE_PATH } from './payments.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { usesCallerRoles } from '@keel-system/keel-core/gen/ownership';
@@ -566,8 +568,8 @@ function renderCorsConfig(model, cors) {
 public class CorsConfig {
 
     private static final List<String> ALLOWED_METHODS = List.of(${list(cors.methods)});
-    private static final List<String> ALLOWED_HEADERS = List.of(${list(cors.allowedHeaders)});
-    private static final List<String> EXPOSED_HEADERS = List.of(${list(cors.exposedHeaders)});
+    private static final List<String> ALLOWED_HEADERS = List.of(${list(corsAllowedHeaders(model))});
+    private static final List<String> EXPOSED_HEADERS = List.of(${list(corsExposedHeaders(model))});
     private static final Duration MAX_AGE = Duration.ofSeconds(${cors.maxAgeSeconds});
 
     @Value("\${security.cors.allowed-origins:}")

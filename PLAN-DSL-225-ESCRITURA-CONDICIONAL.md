@@ -246,8 +246,8 @@ nunca la emite a medias.
 | 1. keel-dotnet | hecho | `db-check` (PostgreSQL y MySQL) y `doc-check` CW-1 a CW-5; pruebas emitidas CW-6 a CW-11 en las variantes; CW-12 ejecutado en Node; los nueve sabotajes |
 | 2. keel-nest | hecho | `db-check` (PostgreSQL y MySQL) y `doc-check` CW-1 a CW-5; `ts-check --only` CW-6 a CW-10 en las siluetas; CW-11 y CW-12 ejecutados en Node; los nueve sabotajes |
 | 3. keel-go | hecho | `db-check` (PostgreSQL y MySQL, `catalog-conditional` y `shop-conditional`) y `doc-check` CW-1 a CW-5; `go-check --fixtures` 107/107 con las siluetas en todas sus variantes; CW-6 a CW-11 en las pruebas emitidas; CW-12 ejecutado en Node; los nueve sabotajes |
-| 4. keel-spring | pendiente | — |
-| 5. derivados y docs | pendiente | — |
+| 4. keel-spring | hecho | `precondition-check` (nuevo): CW-1 a CW-5 en PostgreSQL, MySQL y MongoDB y CW-6 a CW-11 en el borde, sobre los tres diseños (23/23 cada uno); CW-12 en Node; los nueve sabotajes |
+| 5. derivados y docs | hecho | `gen/openapi.js` (If-Match, ETag, 412/428) igual byte a byte en los cuatro y sin deriva (`keel-nest/test/openapi.test.js`), `redocly lint` sin errores; `CHK-DOCS-POSTMAN-DRIFT` ve la escritura `required` sin If-Match (`test/derived-coherence.test.js`); agentes de código y de calidad de los cuatro; `/keel-recover` |
 | 6. corrida de control | pendiente | — |
 
 ## Lo que se decidió al construir (incrementos 0 y 1)
@@ -335,6 +335,28 @@ Decisiones que el plan no fijaba, o que cambian lo que decía. Los incrementos 2
   y se corren con `--only=<silueta>` (`cw-collapse-409` nombra el centinela de la precondición, que solo existe ahí); los
   del borde, en `test/helpers/conditional-sabotages.js`, los ejecuta `go-check` sobre su silueta.
 
+## Lo que se decidió en keel-spring (incremento 4)
+
+- **El 428 lo da un interceptor** (`IfMatchInterceptor`, con `@RequiresIfMatch` en el método): el `preHandle` corre antes
+  de resolver los argumentos, así que va antes que todo 400 de la ruta o del cuerpo, también del JSON mal formado (D3).
+  Solo se emite con `required`.
+- **El ETag se escribe en la `HttpServletResponse`**, no con `ResponseEntity.eTag(...)`: en un GET,
+  `HttpEntityMethodProcessor` evaluaría `If-None-Match` y podría responder 304, que está fuera de 2.25 (D7).
+- **Cada escritura aceptada sube la versión**, también la que no cambia nada. Medido: Hibernate no vuelca una entidad sin
+  cambios, así que su `@Version` se quedaba quieta mientras los otros tres la suben siempre. El adaptador JPA de las raíces
+  con escritura condicional hace `saveAndFlush` (T1) y, si el flush no la subió, `forceNewVersion` la sube con
+  `PESSIMISTIC_FORCE_INCREMENT`, que compara la versión cargada (otra escritura en medio sigue siendo el 409).
+- **Hibernate ignora el `lockVersion` que trae el dominio** sobre una entidad gestionada de otra transacción (medido: el
+  guardado con la versión rancia pisó el cambio de otro). En un handler no importa —cargar y guardar ocurren en la
+  transacción del mediator, con la misma entidad gestionada—, y por eso CW-5 se mide así: carga y guardado en una
+  transacción, la otra escritura en `REQUIRES_NEW`. En Mongo, `save` ya compara la versión del documento.
+- **`Versioned<T>` lleva `@JsonProperty(required = true)` en la versión**: una entrada de la caché sin ella no se lee (miss).
+- **CW-6 a CW-11 los ejecuta `precondition-check`** (keel-spring no emite pruebas de la API y `compile-check` solo compila):
+  CW-6 con MockMvc sobre el controller, el interceptor y el `ApiExceptionHandler` generados y el mediator doblado; CW-11 con
+  `RedisOperationCache` sobre un `CacheManager` en memoria, como keel-dotnet y keel-go.
+- **Los diseños de catalog-extended piden el precio en el momento en `precondition-check`**: con la réplica el `main` no
+  compila recién generado (`main-compilable.js`). No toca la escritura condicional.
+
 ## Para retomar
 
 - Incremento 1 (keel-dotnet) hecho y medido: `db-check --only=catalog-conditional` en PostgreSQL y MySQL, `doc-check
@@ -353,6 +375,16 @@ Decisiones que el plan no fijaba, o que cambian lo que decía. Los incrementos 2
   lista vacía). No se ha corrido `go-check` entero (la carrera, la frontera falsada, govulncheck…): lo que cambió para el
   resto de las fixtures es nada (74 sin cambios en la caché), y el bloque nuevo se ejecutó aparte con el mismo código.
 - La matriz de keel-go ya no tiene filas `pending`.
-- Siguiente: incremento 4, keel-spring. El mismo reparto; la red nueva es `npm run precondition-check` (CW-1 a CW-5 en
-  PostgreSQL, MySQL y MongoDB, y CW-11 contra Redis), y hay que decidir al abrirlo dónde van CW-6 a CW-10 mirando qué
-  hace `compile-check`.
+- Incremento 4 (keel-spring) hecho y medido: `npm run precondition-check` (los cuatro diseños-motor, 23/23), los nueve
+  sabotajes cayendo cada uno en su caso (los tres del adaptador en los tres motores), `compile-check` de los tres diseños y
+  `test/conditional-writes.test.js`. La fila `conditional-write` de las cuatro matrices ya no es `pending`.
+- Incremento 5 hecho: el OpenAPI derivado documenta `If-Match` (requerido con `required`), el `ETag` de lo que devuelve la
+  versión y los 412/428, el mismo en los cuatro; la guía de Postman de `/keel-docs` captura el `ETag` y lo manda en
+  `If-Match`, y `CHK-DOCS-POSTMAN-DRIFT` avisa de la escritura `required` sin la cabecera (salvo la que afirma el 428); los
+  agentes de código de los cuatro nombran `loadExpecting`/`Versioned` y los de calidad ejecutan
+  `infra/check-conditional-writes.sh` (familia `conditionalWrites`), con la frase neutral `conditionalWritesAgentNote` en el
+  contexto del proyecto; `/keel-recover` distingue un ETag de caché de una escritura condicional. `/keel-design` ya lo
+  cubría desde el incremento 0 (§3.12). La fila de `CLAUDE.md` existía desde el 0; ahora cita `precondition-check`.
+- Siguiente: incremento 6 (corrida de control). Ninguna fixture declara todavía `concurrency`: catalog-extended la
+  declara con la corrida de control (incremento 6), y entonces se borran las filas de capability-coverage que lo dicen y la
+  decisión aceptada de `OBL-API-CONCURRENCY-UNDECIDED` en su `decisions.yaml`.

@@ -4,6 +4,7 @@
 // adaptador <E>RepositoryImpl con el mapeo domain↔JPA inline (toDomain/toJpa),
 // derivado campo a campo de los mismos miembros que usan dominio y Jpa.
 
+import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './conditional-writes.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, domainTypeImport, capitalize } from './entities.js';
 import { jpaMembers, backReferenceTo, JPA_PKG } from './persistence-entities.js';
@@ -318,6 +319,11 @@ export function renderPort(model, entity, paginated, batchLookup) {
   const id = rootId(entity);
   for (const name of id.imports) imports.add(name);
   const methods = [`    Optional<${entity.name}> findById(${id.javaType} ${id.name});`];
+  // La carga que compara la versión (api.concurrency, D4): la de las raíces que escribe alguna escritura condicional.
+  if (loadsExpecting(model, entity)) {
+    imports.add('java.util.List');
+    methods.push(loadExpectingPort(entity, id));
+  }
   if (batchLookup) {
     imports.add('java.util.Collection');
     imports.add('java.util.List');
@@ -549,6 +555,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return ${jpaField}.findById(${id.name}).map(this::toDomain);
     }`
   ];
+  if (loadsExpecting(model, entity)) methods.push(loadExpectingAdapter(model, entity, id, imports));
   if (batchLookup) {
     imports.add('java.util.Collection');
     imports.add('java.util.List');
@@ -655,14 +662,47 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   // toDomain() de vuelta devolvería los valores anteriores. Solo importa cuando el
   // diseño proyecta esos campos al dominio ('declared'), que es justo cuando pueden
   // acabar en la respuesta de la operación.
-  const save = entity.projectsManagedAudit ? 'saveAndFlush' : 'save';
+  //
+  // Lo mismo con la escritura condicional (api.concurrency): @Version sube en el FLUSH, así que sin él el agregado que
+  // devuelve save() lleva la versión de ANTES, el ETag de la respuesta va un número por detrás y la siguiente edición
+  // encadenada da 412 sin conflicto (T1, CW-4).
+  const versioned = loadsExpecting(model, entity);
+  const save = entity.projectsManagedAudit || versioned ? 'saveAndFlush' : 'save';
+  // Y cada escritura aceptada es una versión NUEVA, también la que no cambia nada: Hibernate no vuelca una entidad sin
+  // cambios y su @Version se quedaría quieta, mientras que los otros tres generadores la suben siempre (medido en
+  // precondition-check, CW-4). forceNewVersion la sube con la misma comprobación de versión.
+  const persisted = versioned ? `forceNewVersion(entity, ${jpaField}.${save}(jpa))` : `${jpaField}.${save}(jpa)`;
   const saveBody = emitsEvents
     ? `${loadManaged}
-        ${entity.name} saved = toDomain(${jpaField}.${save}(jpa));
+        ${entity.name} saved = toDomain(${persisted});
         entity.pullDomainEvents().forEach(eventPublisher::publishEvent);
         return saved;`
     : `${loadManaged}
-        return toDomain(${jpaField}.${save}(jpa));`;
+        return toDomain(${persisted});`;
+  if (versioned) {
+    imports.add('jakarta.persistence.EntityManager');
+    imports.add('jakarta.persistence.LockModeType');
+    imports.add('jakarta.persistence.OptimisticLockException');
+    imports.add('org.springframework.orm.ObjectOptimisticLockingFailureException');
+    methods.push(`    /**
+     * La escritura condicional (api.concurrency) promete que cada escritura aceptada da un ETag nuevo. Si el flush no
+     * subió la versión —el agregado no cambió—, se sube aquí comprobando la que se cargó: otra escritura confirmada en
+     * medio es el mismo conflicto de concurrencia (409) que el de un flush con cambios.
+     */
+    private ${entity.name}Jpa forceNewVersion(${entity.name} entity, ${entity.name}Jpa persisted) {
+        Number before = entity.getLockVersion();
+        Number after = persisted.getLockVersion();
+        if (before == null || after == null || before.longValue() != after.longValue()) {
+            return persisted;
+        }
+        try {
+            entityManager.lock(persisted, LockModeType.PESSIMISTIC_FORCE_INCREMENT);
+        } catch (OptimisticLockException conflict) {
+            throw new ObjectOptimisticLockingFailureException(${entity.name}Jpa.class, entity.${id.getter}(), conflict);
+        }
+        return persisted;
+    }`);
+  }
 
   // Las escrituras llevan @Transactional SIEMPRE, no solo cuando drenan eventos: la clase
   // es readOnly y sin la anotación de método una escritura sin transacción ambiente iría
@@ -747,6 +787,11 @@ ${saveBody}
     fields.push(`    private final ${claimStore.type} ${claimStore.field};`);
     ctorParams.push(`${claimStore.type} ${claimStore.field}`);
     ctorAssigns.push(`        this.${claimStore.field} = ${claimStore.field};`);
+  }
+  if (versioned) {
+    fields.push('    private final EntityManager entityManager;');
+    ctorParams.push('EntityManager entityManager');
+    ctorAssigns.push('        this.entityManager = entityManager;');
   }
   if (emitsEvents) {
     fields.push('    private final ApplicationEventPublisher eventPublisher;');

@@ -14,6 +14,10 @@ import YAML from 'yaml';
 import { loadService } from '@keel-system/keel-core';
 import { checkDerivedCoherence } from '../../keel-core/src/lib/derived-coherence.js';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
+import { planService as planDotnet } from '../../keel-dotnet/src/scaffold/index.js';
+import { planService as planGo } from '../../keel-go/src/scaffold/index.js';
+import { conditionalWritesOf } from '@keel-system/keel-core/gen/conditional-writes';
+import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { tmpDir } from './helpers/tmp.js';
@@ -137,3 +141,47 @@ test('notification-mailer: un code con varios status sale bajo el de cada operac
   assert.match(responsesOf('getTemplate')['404'].description, /`TEMPLATE_NOT_FOUND`/);
   assert.doesNotMatch(responsesOf('getTemplate')['422']?.description ?? '', /TEMPLATE_NOT_FOUND/);
 });
+
+// La escritura condicional (api.concurrency, DSL 2.25): ninguna fixture la declara todavía, así que sus sujetos son los
+// diseños derivados que miden los cuatro generadores. El mismo documento en los cuatro, con If-Match en las escrituras,
+// ETag en lo que devuelve la versión, el 412 y el 428, y sin deriva para CHK-DOCS-OPENAPI-DRIFT.
+for (const derived of CONDITIONAL_WRITE_DESIGNS) {
+  test(`${derived.name}: el openapi documenta la escritura condicional, el mismo en los cuatro generadores`, () => {
+    const load = () => {
+      const service = loadService(path.join(FIXTURES_DIR, derived.from));
+      derived.mutate(service.layers);
+      return service;
+    };
+    const { manifest, layers } = load();
+    const documents = [planSpring, planDotnet, planGo].map((plan) => {
+      const service = load();
+      return plan({ ...service, workspace: FIXTURES_DIR }).files.find((f) => f.path === DOC)?.content;
+    });
+    const fromNest = planFixture(derived.from, { mutate: derived.mutate }).files.find((f) => f.path === DOC)?.content;
+    for (const other of documents) assert.equal(other, fromNest, 'el mismo contrato en los cuatro generadores');
+
+    const document = YAML.parse(fromNest);
+    const plan = conditionalWritesOf(planFixture(derived.from, { mutate: derived.mutate }).model);
+    const required = plan.policy === 'required';
+    const find = (name) => Object.values(document.paths).flatMap((methods) => Object.values(methods)).find((op) => op.operationId === name);
+    for (const write of plan.writes) {
+      const op = find(write.name);
+      const ifMatch = op.parameters.find((param) => param.in === 'header' && param.name === 'If-Match');
+      assert.ok(ifMatch, `${write.name}: If-Match`);
+      assert.equal(ifMatch.required, required);
+      assert.ok(op.responses['412'], `${write.name}: 412`);
+      assert.equal(Boolean(op.responses['428']), required, `${write.name}: 428`);
+      const success = Object.entries(op.responses).find(([status]) => status.startsWith('2'))[1];
+      assert.equal(Boolean(success.headers?.ETag), write.echoes, `${write.name}: ETag de la respuesta`);
+    }
+    for (const reader of plan.readers) {
+      const success = Object.entries(find(reader.name).responses).find(([status]) => status.startsWith('2'))[1];
+      assert.ok(success.headers?.ETag, `${reader.name}: ETag de la lectura`);
+    }
+
+    const docsDir = tmpDir('keel-openapi-cw-');
+    fs.writeFileSync(path.join(docsDir, 'openapi.yaml'), fromNest);
+    const { findings } = checkDerivedCoherence({ layers: { api: layers.api, 'use-cases': layers['use-cases'], domain: layers.domain }, manifest, docsDir });
+    assert.deepEqual(findings.filter((finding) => finding.id === 'CHK-DOCS-OPENAPI-DRIFT').map((finding) => finding.message), []);
+  });
+}

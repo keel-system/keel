@@ -379,6 +379,12 @@ vivir la llamada: eso es del agente de código mientras respete la frontera hexa
 Vuelca cada hallazgo a `remaining` y pon `valueTypeFormat` en `KO`. Si el diseño no
 declara ningún value type escalar con `pattern` el script no existe y la familia es `N/A`.
 
+**Ejecuta `bash infra/check-conditional-writes.sh`** si existe (el diseño declara `api.concurrency`). Lo genera build
+con una fila por escritura condicional y comprueba que su handler **llame a `loadExpecting(…)`** fuera de un comentario
+—la nota del stub nombra la llamada—. Cargar con `findById` compila, pasa todo escenario de una sola escritura y deja que
+quien guarda un formulario viejo pise el cambio de otro sin 412. Vuelca cada hallazgo a `remaining` (es del agente de
+código: cambiar la carga cambia el comportamiento) y pon `conditionalWrites` en `KO`; sin el script, `N/A`.
+
 **Ejecuta `bash infra/check-logging.sh`.** Se genera siempre y tiene cuatro reglas:
 
 - `concat`: concatenar dentro de un `log.*(`.
@@ -555,6 +561,8 @@ valueTypeFormat: OK | KO | N/A     # Sale de `infra/check-domain-guards.sh`. N/A
                           # no declara ningún value type escalar con `pattern` (el script no
                           # se genera); OK = todo campo con formato declarado tiene quien lo
                           # haga cumplir tras normalizar
+conditionalWrites: OK | KO | N/A   # Sale de `infra/check-conditional-writes.sh`. N/A sin api.concurrency;
+                          # OK = cada escritura condicional carga su raíz con loadExpecting
 # --- la higiene de los logs ---
 logging: OK | KO                  # Sale de `infra/check-logging.sh` (siempre existe). KO = queda
                           # concatenación en un log, un objeto de entrada entero logueado, un

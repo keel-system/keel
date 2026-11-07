@@ -28,6 +28,15 @@ import { INTERFACES_PKG, MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 import { elementAnnotatedType } from './services.js';
 import { uniqueConstraints } from './persistence-entities.js';
+import { conditionalWritePolicy } from '@keel-system/keel-core/gen/conditional-writes';
+import {
+  REST_PKG,
+  STAMP_EXPECTED_VERSIONS,
+  carriesExpectedVersions,
+  ifMatchParam,
+  returnsVersioned,
+  versionedType
+} from './conditional-writes.js';
 import {
   constraintErrors,
   declaredConcurrencyError,
@@ -266,6 +275,17 @@ function renderMethod(model, operation, imports) {
     imports.add(`${subPackage(model, INTERFACES_PKG)}.EntryGate`);
     return 'EntryGate.HTTP';
   };
+  // La escritura condicional (api.concurrency, D5): las versiones de If-Match, que como la puerta y la identidad no se
+  // aceptan del cuerpo (@JsonIgnore) y se estampan en todas las ramas. El 428 de `required` no sale de aquí: lo da
+  // IfMatchInterceptor antes de resolver ningún argumento, y por eso va antes que todo 400 (D3).
+  const conditional = carriesExpectedVersions(model, operation);
+  const versionsArg = () => {
+    imports.add(`${subPackage(model, REST_PKG)}.ConditionalRequests`);
+    return STAMP_EXPECTED_VERSIONS;
+  };
+  // Lo que el mensaje no lee del cuerpo ni de la query: lo estampa el servidor.
+  const stamped = (component) => component.resolvedIdentity || component.entryGate || component.expectedVersions;
+  const stampArg = (component) => (component.resolvedIdentity ? identityArg() : component.entryGate ? gateArg() : versionsArg());
 
   if (operation.multipart) {
     // Subida binaria: el endpoint es multipart/form-data, no JSON.
@@ -273,6 +293,10 @@ function renderMethod(model, operation, imports) {
     annotations.push(`    @${mapping}(value = "${route.path}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)`);
   } else {
     annotations.push(`    @${mapping}("${route.path}")`);
+  }
+  if (conditional && conditionalWritePolicy(model) === 'required') {
+    imports.add(`${subPackage(model, REST_PKG)}.RequiresIfMatch`);
+    annotations.push('    @RequiresIfMatch');
   }
   if (location) {
     // El status lo pone ResponseEntity.created(...): con @ResponseStatus además,
@@ -299,6 +323,7 @@ function renderMethod(model, operation, imports) {
   // (`publishTemplate`, corrida notification-mailer v2.0.0).
   const { asBody, bodyRequired } = requestShape(operation);
   const params = [];
+  if (conditional) params.push(ifMatchParam(imports));
   let dispatchArg;
 
   // Un @PathVariable por cada {segmento} de la ruta, con el tipo del diseño.
@@ -314,8 +339,7 @@ function renderMethod(model, operation, imports) {
   if (operation.multipart) {
     // Partes del formulario: el binario como @RequestPart, el resto como campos.
     const args = components.map((component) => {
-      if (component.resolvedIdentity) return identityArg();
-      if (component.entryGate) return gateArg();
+      if (stamped(component)) return stampArg(component);
       if (fromPath.has(component.name)) return component.name;
       if (component.file) {
         imports.add('org.springframework.web.bind.annotation.RequestPart');
@@ -366,9 +390,7 @@ function renderMethod(model, operation, imports) {
         }
         return `(command == null ? ${absent} : command.${component.name}())`;
       };
-      const args = components.map((c) =>
-        c.resolvedIdentity ? identityArg() : c.entryGate ? gateArg() : fromPath.has(c.name) ? c.name : read(c)
-      );
+      const args = components.map((c) => (stamped(c) ? stampArg(c) : fromPath.has(c.name) ? c.name : read(c)));
       // Un argumento por línea cuando la fusión es larga (cuerpo opcional con
       // muchos campos): en una sola línea el método es ilegible.
       const inline = `new ${operation.messageClass}(${args.join(', ')})`;
@@ -376,14 +398,12 @@ function renderMethod(model, operation, imports) {
         inline.length > 110
           ? `new ${operation.messageClass}(\n                ${args.join(',\n                ')})`
           : inline;
-    } else if (components.some((component) => component.resolvedIdentity || component.entryGate)) {
+    } else if (components.some(stamped)) {
       // La identidad del llamante NO se acepta del cuerpo: se reconstruye el record poniendo el
       // valor que resuelve el servidor. Sin esto, el campo llegaría de quien hace la petición —que
       // es exactamente quien no debería elegirlo—, y la alternativa era un segundo campo sintético
       // que alguien tenía que reconciliar a mano.
-      const args = components.map((component) =>
-        component.resolvedIdentity ? identityArg() : component.entryGate ? gateArg() : `command.${component.name}()`
-      );
+      const args = components.map((component) => (stamped(component) ? stampArg(component) : `command.${component.name}()`));
       const inline = `new ${operation.messageClass}(${args.join(', ')})`;
       dispatchArg =
         inline.length > 110
@@ -400,7 +420,7 @@ function renderMethod(model, operation, imports) {
       // identidad elegida por quien hace la petición — en una lectura, leer los datos de otro
       // inquilino con solo poner su clave en la URL. Lo destapó la corrida de evolución de
       // notification-mailer: `listTemplateVersions` fue la primera query con `callerIdentity`.
-      if (component.resolvedIdentity || component.entryGate) continue;
+      if (stamped(component)) continue;
       if (fromPath.has(component.name)) continue;
       for (const name of component.imports) imports.add(name);
       const typeImport = domainTypeImport(model, component);
@@ -423,8 +443,7 @@ function renderMethod(model, operation, imports) {
     }
     const withOrder = translatableSort(operation).length > 0;
     const args = components.map((c) => {
-      if (c.resolvedIdentity) return identityArg();
-      if (c.entryGate) return gateArg();
+      if (stamped(c)) return stampArg(c);
       return c.name === 'pageable' && withOrder ? `withDefaultOrder(pageable, ${orderConstantName(operation)})` : c.name;
     });
     dispatchArg = `new ${operation.messageClass}(${args.join(', ')})`;
@@ -434,16 +453,32 @@ function renderMethod(model, operation, imports) {
   // callsPaymentGateway): su garantía es registrar y confirmar ANTES de llamar.
   const dispatch = `mediator.${callsPaymentGateway(model, operation.name) ? 'dispatchWithoutTransaction' : 'dispatch'}(${dispatchArg});`;
   let call;
+  // Con escritura condicional el handler devuelve Versioned<T> (D6): la versión va al ETag y el valor al cuerpo. El ETag
+  // se escribe en la HttpServletResponse y no con ResponseEntity.eTag(...), que en un GET evaluaría If-None-Match (D7).
+  const versioned = returnsVersioned(model, operation);
+  if (versioned) {
+    imports.add('jakarta.servlet.http.HttpServletResponse');
+    imports.add(`${subPackage(model, REST_PKG)}.ConditionalRequests`);
+    params.push('HttpServletResponse servletResponse');
+  }
+  const answer = versioned
+    ? `${versionedType(dtoType)} versioned = ${dispatch}
+        ConditionalRequests.writeEtag(servletResponse, versioned.version());
+        ${dtoType} response = versioned.value();`
+    : `${dtoType} response = ${dispatch}`;
   if (location) {
     // La ruta de la operación que lee el recurso devuelto; si la petición ya lo
     // identifica (añadir a la colección de un agregado devolviendo el agregado), se
     // expande con ese parámetro y no con el id de la respuesta.
     const target = locationTarget(model, operation);
-    call = `${dtoType} response = ${dispatch}
+    call = `${answer}
         return ResponseEntity.created(
                 ServletUriComponentsBuilder.fromCurrentContextPath()
                     .path("${target.path}").buildAndExpand(${target.param ?? 'response.id()'}).toUri())
             .body(response);`;
+  } else if (versioned) {
+    call = `${answer}
+        return response;`;
   } else {
     call = returnType === 'void' ? dispatch : `return ${dispatch}`;
   }

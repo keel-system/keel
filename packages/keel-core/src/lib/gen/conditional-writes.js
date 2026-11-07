@@ -368,6 +368,21 @@ exit "$missing"
 `;
 }
 
+/**
+ * Lo que el proyecto generado le dice al agente sobre el gate (su contexto y el pase de calidad), la misma frase en los
+ * cuatro generadores, o '' si el servicio no tiene escritura condicional. `call` es el método en el lenguaje
+ * (`loadExpecting`, `LoadExpecting`) y `versioned` el tipo de retorno (`Versioned<T>`, `Versioned[T]`).
+ */
+export function conditionalWritesAgentNote(model, { call, versioned }) {
+  if (!usesConditionalWrites(model)) return '';
+  return (
+    `\`${CHECK_CONDITIONAL_WRITES_SH}\` sale en ROJO recién generado a propósito: cada escritura condicional (api.concurrency) ` +
+    `carga su raíz con ${call}(…), que compara la versión que el borde estampó desde If-Match, y esa llamada es del agente. ` +
+    `Las lecturas que dan el ETag y las escrituras que devuelven su raíz devuelven ${versioned} con la versión PERSISTIDA ` +
+    '(la que deja save), nunca la cargada: con la de antes del guardado, la siguiente edición encadenada da 412 sin conflicto.'
+  );
+}
+
 // ─── La frontera neutral (T3) ─────────────────────────────────────────────────────────────────────────────────────
 
 /**

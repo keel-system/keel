@@ -128,5 +128,6 @@ test('sin api.concurrency no se emite nada de la escritura condicional', () => {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'catalog-extended'));
   const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: null });
   assert.ok(!files.some((file) => file.path === CHECK_CONDITIONAL_WRITES_SH));
-  assert.ok(!files.some((file) => /LoadExpecting|ExpectedVersions|Versioned\[|expectedVersions\(/.test(file.content ?? '')));
+  // El código emitido, no la documentación del agente, que nombra el mecanismo para cuando el diseño lo pida.
+  assert.ok(!files.filter((file) => !file.path.endsWith('.md')).some((file) => /LoadExpecting|ExpectedVersions|Versioned\[|expectedVersions\(/.test(file.content ?? '')));
 });
