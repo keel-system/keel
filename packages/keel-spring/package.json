@@ -22,7 +22,8 @@
     "index-check": "node scripts/index-check.js notification-mailer && node scripts/index-check.js notification-mailer --database=mysql && node scripts/index-check.js notification-mailer-mongo",
     "deploy-check": "node scripts/deploy-check.js job-dispatch",
     "finder-check": "node scripts/finder-check.js product-catalog-finder && node scripts/finder-check.js product-catalog-finder --database=mysql && node scripts/finder-check.js jobs-mongo-finder",
-    "precondition-check": "node scripts/precondition-check.js catalog-conditional && node scripts/precondition-check.js catalog-conditional --database=mysql && node scripts/precondition-check.js catalog-conditional-mongo && node scripts/precondition-check.js shop-conditional"
+    "precondition-check": "node scripts/precondition-check.js catalog-conditional && node scripts/precondition-check.js catalog-conditional --database=mysql && node scripts/precondition-check.js catalog-conditional-mongo && node scripts/precondition-check.js shop-conditional",
+    "schema-step-check": "node scripts/schema-step-check.js && node scripts/schema-step-check.js --database=mysql"
   },
   "files": [
     "src",

@@ -427,6 +427,13 @@ spring:
   jpa:
     hibernate:
       ddl-auto: validate
+    # Lo que \`local\` pone para su apéndice de índices condicionados no vale aquí: el apéndice
+    # viaja DENTRO del baseline, y diferir la inicialización con Flyway activo es una
+    # dependencia circular entre flyway y entityManagerFactory que no deja arrancar.
+    defer-datasource-initialization: false
+  sql:
+    init:
+      mode: never
   flyway:
     enabled: true
 `;
