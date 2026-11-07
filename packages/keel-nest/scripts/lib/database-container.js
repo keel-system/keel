@@ -49,10 +49,14 @@ export async function startDatabase(runtime, engine) {
       : ['-e', `MYSQL_DATABASE=${DB_NAME}`, '-e', `MYSQL_USER=${DB_NAME}`, '-e', `MYSQL_PASSWORD=${db.password}`, '-e', `MYSQL_ROOT_PASSWORD=${db.password}`];
   const started = run(runtime, ['run', '-d', '--rm', '--name', name, '-p', `${port}:${db.port}`, ...env, db.image]);
   if (started.status !== 0) throw new Error(`no arrancó ${db.image}: ${started.stderr}`);
+  // En MySQL, por TCP y como root: la imagen inicializa con un servidor TEMPORAL que solo escucha por socket
+  // (--skip-networking) y después lo reinicia. Por socket la sonda la contestaba ese temporal, y la primera orden del
+  // check caía en el reinicio («no se pudo crear la base», intermitente en db-check de keel-go). Por TCP solo contesta
+  // el definitivo, y root es quien ejecuta después las órdenes.
   const probe =
     engine === 'postgresql'
       ? ['exec', name, 'pg_isready', '-U', DB_NAME, '-d', DB_NAME]
-      : ['exec', name, 'mysql', '-u', DB_NAME, `-p${db.password}`, '-e', 'SELECT 1', DB_NAME];
+      : ['exec', name, 'mysql', '-h', '127.0.0.1', '-u', 'root', `-p${db.password}`, '-e', 'SELECT 1', DB_NAME];
   const until = Date.now() + 180_000;
   while (Date.now() < until) {
     if (run(runtime, probe).status === 0) {
