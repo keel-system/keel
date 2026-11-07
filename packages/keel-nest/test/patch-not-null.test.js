@@ -15,10 +15,11 @@ import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const STACK = { database: 'postgresql', broker: 'rabbitmq' };
 
-// catalog-extended: updateProduct es PATCH con name (Product.name required), categoryId (category many-to-one
-// required) y expectedVersion (no es campo de Product). Se le añade `sku` como control: required en el dominio.
+// catalog-extended: updateProduct es PATCH con name (Product.name required) y categoryId (category many-to-one
+// required). Se le añaden `sku` como control (required en el dominio) y `expectedVersion`, que no es campo de Product.
 const mutate = (layers) => {
   layers['use-cases'].operations.updateProduct.input.fields.sku = { type: 'string' };
+  layers['use-cases'].operations.updateProduct.input.fields.expectedVersion = { type: 'long' };
 };
 
 function plans() {

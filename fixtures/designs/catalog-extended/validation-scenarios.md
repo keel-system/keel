@@ -41,8 +41,6 @@
   solo el `code` y el status HTTP; el resto se verifica por presencia y tipo.
 - **Idempotencia**: `createProduct` declara `idempotency` con `ttlSeconds: 86400`. Cada request
   lleva un `Idempotency-Key` **uuid nuevo**, salvo en el escenario que prueba la deduplicación.
-- **Concurrencia**: `updateProduct` acepta `expectedVersion`. Con un valor distinto del `version`
-  actual el diseño no declara error propio: se anota como hueco y no se ejercita.
 - **Escritura condicional** (`api.concurrency: required` sobre `updateProduct`): `getProductBySlug`
   devuelve la cabecera `ETag` y `updateProduct` la exige en `If-Match`. El `ETag` es **opaco**: se
   verifica por forma (fuerte, entre comillas, sin `W/`) y por igualdad entre escenarios, nunca por
@@ -79,12 +77,13 @@ sku `ACME-1`.
 **When**: `createProduct` — `POST /api/v1/products` con
 `{"sku": "ACME-1", "name": "Martillo", "categoryId": "<c1>"}` e `Idempotency-Key: <uuid-1>`.
 **Then**:
-1. Status `201`.
-2. Cabecera `Location` con la ruta del producto creado.
-3. Cuerpo completo: `id` (uuid, por forma), `sku` = `"ACME-1"`, `name` = `"Martillo"`,
+1. Status `201`. Sin cabecera `Location`: el diseño no tiene ninguna operación que lea un producto
+   por id (`keel validate` lo avisa con `CHK-API-CREATED-NO-READ`), así que no hay ruta a la que
+   apuntar.
+2. Cuerpo completo: `id` (uuid, por forma), `sku` = `"ACME-1"`, `name` = `"Martillo"`,
    `status` = `"draft"`, `version` (entero), `createdAt` (instante, por forma),
    `categoryId` = `<c1>`, `images` = `[]`. Ningún campo adicional.
-4. Se publica el evento `ProductCreated` con payload `{productId: <id>, sku: "ACME-1",
+3. Se publica el evento `ProductCreated` con payload `{productId: <id>, sku: "ACME-1",
    occurredAt: <instante>}`.
 **Notas de determinación**: `<id>` se reutiliza simbólicamente en los escenarios siguientes del
 flujo.
@@ -226,7 +225,8 @@ una con `Idempotency-Key` propio.
 **When**: `GET /api/v1/products?page=5&size=2`.
 **Then**:
 1. Status `200`.
-2. Colección vacía, con los mismos metadatos de total (3 elementos).
+2. Colección vacía con la forma de la página vacía del contrato del cable: `totalElements` = `0` y
+   `totalPages` = `0` (también fuera de rango), con `page` y `size` los pedidos.
 
 #### FL-PRD-003-E: tope de tamaño de página
 

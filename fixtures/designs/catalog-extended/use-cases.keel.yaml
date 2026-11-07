@@ -74,8 +74,6 @@ operations:
           constraints: { maxLength: 200 }
         categoryId:
           type: uuid
-        expectedVersion:
-          type: long
     output:
       entity: Product
       embed: [category]
