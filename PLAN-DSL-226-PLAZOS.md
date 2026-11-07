@@ -314,6 +314,46 @@ El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo 
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
 migración es un incremento propio con su puerta, y entre una y otra el servidor generado sigue en verde.
 
+## Cómo se ejecuta: subagentes en paralelo
+
+Lo pidió el usuario (2026-11-07): ejecutar el plan con subagentes en paralelo donde se pueda. Paralelizar ahorra
+**tiempo de reloj, no tokens**: un subagente arranca de cero y relee reglas y código, así que en total el plan gasta
+más. Lo que se puede paralelizar lo deciden tres límites:
+
+1. **Lo neutral va primero y lo hace un solo agente.** La tabla, el algoritmo del sondeador y los casos DL/RC viven en
+   `keel-core/gen`. Escritos por cuatro agentes a la vez, cada uno los interpretaría a su manera.
+2. **keel-spring va antes que los otros tres.** Las pruebas de paridad de keel-nest, keel-dotnet y keel-go comparan
+   con lo que EMITE keel-spring. Sin keel-spring no tienen contra qué medirse.
+3. **La máquina.** Dos procesos pesados a la vez agotaron la memoria en la serie de la 2.25, y las redes en vivo
+   levantan contenedores. Los agentes **escriben código** en paralelo, y las **redes en vivo** van de una en una.
+
+| Fase | Incrementos | Cómo | Agentes a la vez |
+|---|---|---|---|
+| A | Preguntas abiertas | Las contesta el usuario | — |
+| B | 0 | 4 agentes de **solo lectura** (Explore), uno por generador: relojes, helpers del arnés, gates y telemetría que dependen de ellos. Las medidas de partida (carga en la base con 1 y 3 réplicas) las pasa el orquestador después, de una en una | 4 |
+| C | 1 y 2 | El orquestador, en secuencia: es el contrato del que dependen todos. Se cierra con la referencia del sondeador EJECUTADA con un reloj falso y los casos DL/RC como datos | 1 |
+| D | 3 | keel-spring, un agente o el orquestador: es la referencia de paridad | 1 |
+| E | 4, 5 y 6 | Un agente por generador, en paralelo, cada uno en su worktree | 3 |
+| F | 7, 8 y 9 | Cada migración en secuencia (comparten `keel-core/gen` y van por riesgo). Dentro de cada una: la parte neutral y keel-spring el orquestador, y después los otros tres en paralelo | 3 por migración |
+| G | 10 y 11 | Evolución y telemetría tocan archivos distintos: un agente por tema, en los cuatro generadores | 2 |
+| H | 12 | El orquestador: la fixture | 1 |
+| I | 13 | El usuario lanza las corridas, dos a la vez como mucho | — |
+
+**Reglas para los agentes que escriben:**
+
+- **Worktree propio** (`isolation: "worktree"`) y una rama cada uno. Se fusiona a `main` cuando su incremento pasa
+  las redes.
+- **Solo su paquete** (`packages/keel-<tech>/`). Nada en `keel-core`, `CLAUDE.md`, `.claude/rules/` ni las fixtures.
+  Lo que necesiten de lo neutral lo **piden** en su informe y lo hace el orquestador.
+- **Sin redes en vivo ni suites completas**: solo las pruebas de sus archivos. Las suites completas y las redes las
+  pasa el orquestador, en serie, y los arreglos vuelven a un agente nuevo con el informe de la red.
+- **Un agente nuevo por incremento**, nunca uno reutilizado entre incrementos. En keel-recover, reutilizar uno fue el
+  75 % del coste.
+- **Informe estructurado**: archivos tocados, pruebas pasadas, peticiones a `keel-core`, lo que no pudo medir.
+
+**Antes de la fase E:** cada worktree necesita su `npm install`, que cuesta minutos y disco. Hay que decidir si los
+worktrees van en `D:`, con los demás temporales.
+
 ## Preguntas abiertas (a confirmar)
 
 1. **La lectura antes del barrido.** Pasado el plazo y antes del barrido, `getReservation` devuelve `pending`. Hay
