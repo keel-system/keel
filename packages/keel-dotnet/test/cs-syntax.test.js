@@ -11,9 +11,12 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
+import { migrationsDir, schemaSteps } from '../src/scaffold/schema-baseline.js';
+import { tmpDir } from './helpers/tmp.js';
 import { checkCsTree } from './helpers/cs-tree.js';
 import { CS_VARIANTS, FIXTURES_DIR, fixtureNames, variantStack } from './helpers/workspace.js';
 
@@ -34,6 +37,24 @@ test('el comprobador detecta C# roto (autocomprobación)', async () => {
   assert.ok(!problems.some((p) => /System\.Text|A\.Domain\.B|A\.Domain\.A/.test(p)), problems.join('\n'));
   assert.ok(!problems.some((p) => p.startsWith('src/A/Application/D.cs')), 'un archivo correcto no da hallazgos');
 });
+
+// El paso de esquema de build (inc. 2b del plan 2.26) solo se emite sobre un proyecto con migraciones en disco, así que
+// ninguna fixture lo recorre: aquí, con un baseline «desplegado» que no crea ninguna tabla del generador, en los dos motores.
+for (const { name, database } of [
+  { name: 'catalog-extended', database: 'postgresql' },
+  { name: 'catalog-extended', database: 'mysql' }
+]) {
+  test(`${name} (${database}): el paso de esquema de build parsea con el resto del proyecto`, async () => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+    const { model, files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: variantStack(layers, { database }) });
+    const projectDir = tmpDir('keel-dotnet-step-syntax-');
+    fs.mkdirSync(path.join(projectDir, migrationsDir(model)), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, migrationsDir(model), '20261001120000_Baseline.cs'), 'migrationBuilder.CreateTable(name: "products");\n');
+    const steps = schemaSteps(model, files, projectDir);
+    assert.equal(steps.added.length, 1, 'emite el paso');
+    assert.deepEqual(await checkCsTree([...files, ...steps.files]), []);
+  });
+}
 
 const designs = [...fixtureNames().map((name) => ({ name, from: name })), ...CS_VARIANTS];
 for (const { name, from, mutate, broker, paymentGateway, telemetry, database } of designs) {
