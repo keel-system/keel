@@ -18,6 +18,7 @@ import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/cond
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { GO_PROJECTION } from './go-projection.js';
 import { messageComponents } from '../scaffold/services.js';
+import { usesDependencies } from '../scaffold/use-cases.js';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {};
@@ -64,6 +65,7 @@ export function checkSupportedFeatures(manifest, layers) {
   if (declared.includes('persistence') && !documentPersistence(layers)) errors.push(...unmeasuredShapes(manifest, layers));
   errors.push(...authorshipErrors(layers));
   errors.push(...scheduledWithArguments(manifest, layers));
+  errors.push(...scheduledWithoutPersistence(manifest, layers));
   errors.push(...parameterErrors(manifest, layers));
   errors.push(...outboundErrors(layers));
   errors.push(...cacheErrors(layers));
@@ -192,6 +194,29 @@ function scheduledWithArguments(manifest, layers) {
         `use-cases: ${operation.name} declara schedule y su mensaje lleva campos (${messageComponents(operation, model).map((c) => c.name).join(', ')}); ` +
         'el reloj la despacha sin argumentos y keel-go no tiene de dónde sacarlos (ninguna fixture lo declara: sin red que lo mida).'
     );
+}
+
+/**
+ * Una operación por reloj en un diseño sin persistencia relacional con raíces: el reloj de keel-go se cablea con los casos
+ * de uso, que solo existen sobre las Dependencies (persistencia). Hasta el incremento 0b de PLAN-DSL-226-PLAZOS.md el
+ * `schedule` se DESCARTABA en silencio: ni tarea ni nota en el handler, y el servicio salía sin su barrido. Los otros
+ * tres lo emiten y corre en cada réplica sin nada que arbitre.
+ */
+function scheduledWithoutPersistence(manifest, layers) {
+  const operations = Object.entries(layers?.['use-cases']?.operations ?? {}).filter(([, operation]) => operation?.schedule);
+  if (operations.length === 0) return [];
+  let model;
+  try {
+    model = buildModel({ manifest, layers, stack: resolveStack(null, layers), projection: GO_PROJECTION });
+  } catch {
+    return [];
+  }
+  if (usesDependencies(model)) return [];
+  return operations.map(
+    ([name]) =>
+      `use-cases: ${name} declara schedule, y keel-go cablea el reloj con los casos de uso, que solo existen con persistencia: ` +
+      'sin ella la operación se quedaría sin disparar. Genera este diseño con keel-spring, keel-nest o keel-dotnet, o declara la persistencia.'
+  );
 }
 
 /**

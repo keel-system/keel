@@ -146,11 +146,14 @@ test('una operación con idempotency avisa nombrándola; con cache y sin persist
   const sweep = { schedule: { cron: '* * * * *' }, transitions: [{ entity: 'Job', from: ['queued'], to: 'running' }] };
   layers['use-cases'] = { operations: { pay: { idempotency: {} }, sweep, tick: { schedule: { cron: '* * * * *' } }, find: { cache: {} }, plain: {} } };
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'api'), layers);
-  // La caché llega a los handlers por las Dependencies, que solo existen con persistencia.
-  assert.equal(errors.length, 1, errors.join('\n'));
-  assert.match(errors[0], /^use-cases: find declara cache sin persistencia .*Dependencies/);
+  // La caché llega a los handlers por las Dependencies, que solo existen con persistencia; el reloj también (0b del plan
+  // 2.26: hasta entonces el schedule sin persistencia se descartaba en silencio y esta prueba lo daba por bueno).
+  assert.equal(errors.length, 3, errors.join('\n'));
+  assert.match(errors.join('\n'), /^use-cases: find declara cache sin persistencia .*Dependencies/m);
+  assert.match(errors.join('\n'), /^use-cases: sweep declara schedule, y keel-go cablea el reloj con los casos de uso/m);
+  assert.match(errors.join('\n'), /^use-cases: tick declara schedule/m);
   assert.match(warnings.find((w) => w.includes('idempotency')), /^use-cases: pay declara idempotency, pero el diseño no tiene persistencia/);
-  // El reloj (10b) y el reclamo del barrido que mueve estados (10c) ya salen: ninguno avisa.
+  // Ninguno AVISA: el reloj sin persistencia es un error, no un aviso.
   assert.ok(!warnings.some((w) => w.includes('sweep') || w.includes('barrido')));
   assert.ok(!warnings.some((w) => w.includes('tick')));
   assert.ok(!warnings.some((w) => w.includes('cache')), warnings.join('\n'));
@@ -196,6 +199,15 @@ test('una operación por reloj cuyo mensaje lleva campos se rechaza: la tarea no
   const withInput = structuredClone(layers);
   withInput['use-cases'].operations.closePayoutRuns.input = { fields: { limit: { type: 'int', required: true } } };
   assert.match(checkSupportedFeatures(manifest, withInput).errors.join('\n'), /closePayoutRuns declara schedule y su mensaje lleva campos \(limit\)/);
+});
+
+test('una operación por reloj sin persistencia se rechaza: el reloj se cablea con los casos de uso, y antes se descartaba en silencio', () => {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'payout-runs'));
+  const { persistence, ...withoutPersistence } = layers;
+  assert.ok(persistence);
+  const unpersisted = structuredClone(manifest);
+  delete unpersisted.layers.persistence;
+  assert.match(checkSupportedFeatures(unpersisted, withoutPersistence).errors.join('\n'), /closePayoutRuns declara schedule, y keel-go cablea el reloj con los casos de uso, que solo existen con persistencia/);
 });
 
 test('la telemetría se rechaza en vez de estamparse sin efecto', () => {

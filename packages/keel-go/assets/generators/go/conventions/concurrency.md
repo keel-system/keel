@@ -24,7 +24,9 @@ El orden es fijo y lo cablea `run`:
    peticiones en vuelo;
 3. se paran los consumidores y el reloj, que no empieza otra pasada y **espera** a la que está en vuelo (corre sin
    la cancelación: cortarla a medias dejaría filas reclamadas sin trabajo hecho);
-4. se drena el relay del outbox;
+4. el relay del outbox termina de registrar la fila que está publicando y no empieza otra. **No vacía el
+   outbox**: lo pendiente conserva su lease y lo publica otra réplica, o esta al volver a arrancar (vaciarlo
+   alargaría el apagado sin cota);
 5. se cierran los clientes y el pool.
 
 En Windows SIGTERM no llega: la prueba emitida del arranque cancela el contexto, que recorre el mismo camino.

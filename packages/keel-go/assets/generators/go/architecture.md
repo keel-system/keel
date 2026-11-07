@@ -67,8 +67,8 @@ las variables de entorno y la salida, así que una prueba lo arranca entero en u
 2. se construyen las piezas y se cablean a mano;
 3. el servidor y cada trabajo de fondo corren en un `errgroup`;
 4. al cancelarse el contexto (SIGINT o SIGTERM), el apagado va en orden fijo: `/readyz` pasa a 503 → el
-   servidor deja de aceptar conexiones y espera a las peticiones en vuelo → se paran consumidores y reloj → se
-   drena el relay del outbox → se cierran clientes y pool.
+   servidor deja de aceptar conexiones y espera a las peticiones en vuelo → se paran consumidores y reloj → el
+   relay del outbox termina la fila que está publicando y no empieza otra → se cierran clientes y pool.
 
 ## Configuración
 
