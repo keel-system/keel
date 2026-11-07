@@ -224,3 +224,18 @@ export {
 export { observabilityAssets, dashboardUid } from './observability-assets.js';
 export { deployFiles, publishedUrls, postmanEnvironmentPath, builtinScopes, appImage } from './deploy.js';
 export { DEPLOY_CASES, probeDeployBackend, trafficPath, httpRead } from './deploy-probes.js';
+export {
+  GENERATOR_TABLES,
+  STEP_ENGINES,
+  STEP_MARK,
+  STEP_PREFIX,
+  storeColumnType,
+  schemaStepSql,
+  stepHeader,
+  stepSlug,
+  createdTablesInSql,
+  isGeneratorStep,
+  nextStepVersion,
+  planSchemaSteps,
+  schemaStepFiles
+} from './schema-steps.js';

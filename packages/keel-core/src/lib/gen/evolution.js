@@ -64,6 +64,8 @@ export function evolutionState({
   notRecreated = [],
   newWithTodo = [],
   stack = { added: [], removed: [] },
+  schemaSteps = [],
+  schemaWork = [],
   notes = []
 }) {
   const designChanged = Boolean(delta && !delta.empty);
@@ -79,16 +81,22 @@ export function evolutionState({
     notRecreated: [...notRecreated].sort(byName),
     newWithTodo: [...newWithTodo].sort(byName),
     stack,
+    // Los pasos de esquema que build acaba de añadir (schema-steps.js): los aplica la herramienta al arrancar, así que
+    // no son trabajo del agente, pero sí lo que el diseñador tiene que saber antes de desplegar.
+    schemaSteps: [...schemaSteps].sort(byName),
+    // Las tablas del generador que la base desplegada no tiene y para las que build no sabe escribir el paso.
+    schemaWork,
     notes
   };
-  // `pruned`, `notRecreated` y `notes` no son trabajo para nadie: son informativos.
+  // `pruned`, `notRecreated`, `schemaSteps` y `notes` no son trabajo para nadie: son informativos.
   state.pending =
     designChanged ||
     state.pendingMerge.length > 0 ||
     state.toRetire.length > 0 ||
     state.newWithTodo.length > 0 ||
     stack.added.length > 0 ||
-    stack.removed.length > 0;
+    stack.removed.length > 0 ||
+    state.schemaWork.length > 0;
   return state;
 }
 
@@ -131,6 +139,9 @@ export function mergePrevious(state, previous, projectDir) {
       added: mergeByCategory(addedBefore, state.stack.added),
       removed: mergeByCategory(removedBefore, state.stack.removed)
     },
+    // Un paso solo es nuevo en el build que lo crea; el siguiente lo ve ya en disco. Se arrastra mientras exista.
+    schemaSteps: union(state.schemaSteps, (previous.schemaSteps ?? []).filter(exists)),
+    schemaWork: state.schemaWork,
     notes: state.notes
   });
 }
@@ -245,6 +256,23 @@ export function renderEvolutionMarkdown(state, platform) {
     )
   );
 
+  if (state.schemaSteps.length > 0) {
+    out.push(
+      '## Pasos de esquema de build',
+      '',
+      'Tablas del generador que la base desplegada no tenía: build escribió el paso que las crea, y la herramienta de ' +
+        'migraciones lo aplica al arrancar. **No lo edites ni lo renumeres**: una base que ya lo aplicó no lo vuelve a leer. ' +
+        'Si escribes un paso tuyo, va después. Informativo.',
+      '',
+      ...state.schemaSteps.map((relative) => `- ${code(relative)}`),
+      ''
+    );
+  }
+
+  if (state.schemaWork.length > 0) {
+    out.push('## Esquema sin paso de build', '', ...state.schemaWork.map((note) => `- ${note}`), '');
+  }
+
   if (state.notRecreated.length > 0) {
     out.push(
       '## No recreado (lo borraste tú)',
@@ -348,7 +376,7 @@ export function evolutionNotes(mode, prune, buckets) {
  * El estado de la evolución de esta pasada, a partir de lo que devolvió `materializeProject`,
  * fusionado con el de una pasada anterior sin cerrar. `null` en la primera generación.
  */
-export function planEvolution({ design, manifest, scaffold, stackChanges, mode, prune, projectDir }) {
+export function planEvolution({ design, manifest, scaffold, stackChanges, mode, prune, projectDir, schema = null }) {
   if (!design.projectExisted) return null;
   return mergePrevious(
     evolutionState({
@@ -365,6 +393,9 @@ export function planEvolution({ design, manifest, scaffold, stackChanges, mode, 
       notRecreated: scaffold.buckets.retirados,
       newWithTodo: scaffold.nuevosConTodo,
       stack: stackChanges,
+      // `schema` es lo que devuelve `schemaStepFiles` (schema-steps.js): los pasos nuevos y lo que no tiene paso.
+      schemaSteps: schema?.added ?? [],
+      schemaWork: schema?.work ?? [],
       notes: evolutionNotes(mode, prune, scaffold.buckets)
     }),
     readPreviousEvolution(projectDir),
@@ -384,7 +415,15 @@ export function persistEvolution(evolution, design, projectDir, platform) {
 
 /** El resumen de consola de la evolución pendiente. */
 export function reportEvolution(evolution, outDir, mode) {
-  if (!evolution?.pending) return;
+  if (!evolution) return;
+  // Un paso de esquema nuevo no es trabajo del agente, pero el diseñador tiene que saberlo ANTES de desplegar, aunque no
+  // haya ninguna otra evolución pendiente que lo lleve a EVOLUTION.md.
+  if (!evolution.pending && evolution.schemaSteps.length > 0) {
+    console.log();
+    console.log(pc.bold(pc.yellow(`Paso(s) de esquema de build (${mode === 'check' ? 'se escribirían' : 'escritos'}): la base desplegada los aplica al arrancar.`)));
+    for (const relative of evolution.schemaSteps) console.log(`  ${pc.yellow('+')} ${relative}`);
+  }
+  if (!evolution.pending) return;
   console.log();
   const version =
     evolution.from && evolution.from !== evolution.to ? ` — diseño v${evolution.from} → v${evolution.to}` : '';
@@ -408,7 +447,9 @@ export function reportEvolution(evolution, outDir, mode) {
     ],
     ['archivo(s) nuevo(s) con TODO', evolution.newWithTodo.length],
     ['cambio(s) de stack', evolution.stack.added.length + evolution.stack.removed.length],
-    ['archivo(s) retirado(s) por --prune', evolution.pruned.length]
+    ['archivo(s) retirado(s) por --prune', evolution.pruned.length],
+    ['paso(s) de esquema nuevo(s) de build', evolution.schemaSteps.length],
+    ['tabla(s) del generador sin paso de esquema', evolution.schemaWork.length]
   ];
   for (const [label, count] of lines) if (count > 0) console.log(`  ${pc.yellow('•')} ${count} ${label}`);
   for (const note of evolution.notes) console.log(pc.dim(`  ${note.replace(/`/g, '')}`));

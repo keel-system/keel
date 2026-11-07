@@ -168,7 +168,7 @@ export async function build(
 
   // El traspaso al pipeline cuando el proyecto ya existía y algo cambió. En la primera
   // generación no hay nada que evolucionar: todo es nuevo y el pipeline lo sabe.
-  const evolution = planEvolution({ design, manifest, scaffold, stackChanges, mode, prune, projectDir });
+  const evolution = planEvolution({ design, manifest, scaffold, stackChanges, mode, prune, projectDir, schema: scaffold.schema });
   reportEvolution(evolution, scaffold.outDir, mode);
 
   if (mode === 'check') {

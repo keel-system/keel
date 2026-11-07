@@ -236,11 +236,13 @@ export function scaffoldService({
   const { model, files } = planService({ manifest, layers, fixtures, workspace, stack });
   const outDir = path.join('services', model.service.projectName);
   const projectDir = path.join(workspace, outDir);
+  // Los pasos de esquema de build: se deciden leyendo las migraciones de disco, así que van ANTES de escribir.
+  const schema = migrations.schemaSteps(model, files, projectDir);
 
   // Qué se escribe, qué se deja al lado como conflicto, qué se poda y cómo queda el registro: es
   // la misma decisión para cualquier generador y vive en keel-core/gen/materialize.js.
   const written = materializeProject({
-    files,
+    files: [...files, ...schema.files],
     projectDir,
     generator: `keel-spring@${packageVersion()}`,
     force,
@@ -261,6 +263,7 @@ export function scaffoldService({
     huerfanosVivos: written.huerfanosVivos,
     pruned: written.pruned,
     pendingMerge: written.pendingMerge,
-    nuevosConTodo: written.nuevosConTodo
+    nuevosConTodo: written.nuevosConTodo,
+    schema: { added: schema.added, work: schema.work }
   };
 }

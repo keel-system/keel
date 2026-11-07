@@ -18,6 +18,7 @@ import { uniqueConstraints } from './persistence-entities.js';
 import { crossAggregateForeignKeys } from './persistence-members.js';
 import { sqlContract } from './conditional-uniqueness.js';
 import { partialIndexSpecs, sqlLiteral, discriminatorColumn } from '@keel-system/keel-core/gen/relational';
+import { GENERATOR_TABLES, STEP_PREFIX, schemaStepFiles } from '@keel-system/keel-core/gen/schema-steps';
 
 const MIGRATIONS_DIR = 'src/main/resources/db/migration';
 const BASELINE_SQL = 'build/schema/baseline.sql';
@@ -41,6 +42,42 @@ export function generate(model) {
     { path: 'infra/export-schema.sh', content: exportSchemaScript(model) },
     { path: PARTIAL_INDEXES_SQL, content: partialIndexesSql(model) }
   ];
+}
+
+// ─── Los pasos de esquema de build ───────────────────────────────────────────
+//
+// Una tabla del generador (outbox, guarda de mensajes, idempotencia, reconciliación, cronómetro) que aparece en un
+// proyecto con base desplegada llega como un paso de Flyway que escribe build (keel-core/gen/schema-steps.js): el
+// baseline ya se aplicó y `validate` tumbaría el arranque. Qué falta se deduce de las migraciones de disco ANTES de
+// escribir; sin ${BASELINE_MIGRATION} no hay base desplegada y el baseline que exporte el agente la traerá.
+
+const FLYWAY_VERSIONED = /^V(\d+)(?:[._]\d+)*__.+\.sql$/;
+
+/** Las tablas del generador que este proyecto emite: las que tienen su entidad JPA entre los archivos de build. */
+export function generatorTables(files) {
+  const contents = files.map((file) => (typeof file.content === 'string' ? file.content : ''));
+  return GENERATOR_TABLES.filter((table) => contents.some((content) => content.includes(`@Table(name = "${table.table}"`)));
+}
+
+/**
+ * Los pasos de Flyway que build emite en esta pasada (los suyos de antes, tal cual, y el nuevo si hace falta), con lo
+ * que EVOLUTION.md tiene que decir. Vacío en el modelo documental: allí los índices los asegura el arranque.
+ */
+export function schemaSteps(model, files, projectDir) {
+  if (!model.layersPresent.persistence || model.persistenceKind === 'document') return { files: [], added: [], work: [] };
+  return schemaStepFiles({
+    projectDir,
+    dir: MIGRATIONS_DIR,
+    tables: generatorTables(files),
+    engine: model.stack.database,
+    isMigration: (name) => FLYWAY_VERSIONED.test(name),
+    isBaseline: (name) => name === BASELINE_MIGRATION,
+    versionOf: (name) => FLYWAY_VERSIONED.exec(name)?.[1] ?? null,
+    renderStep: ({ version, slug, sql, header }) => ({
+      name: `V${version}__${slug}.sql`,
+      content: `${header.map((line) => `-- ${line}`).join('\n')}\n\n${sql}`
+    })
+  });
 }
 
 // ─── Índices únicos condicionados ────────────────────────────────────────────
@@ -339,6 +376,10 @@ están en \`references/migrations.md\` de la skill \`keel-spring-database\`.
 
 - **Nunca edites una migración ya aplicada** en cualquier ambiente: Flyway guarda
   su checksum y el arranque fallará. Los cambios van en una \`V<n+1>\` nueva.
+- **Los \`V<n>__${STEP_PREFIX}_*.sql\` los escribe build**: crean las tablas del generador
+  (outbox, idempotencia, reconciliación, cronómetro) que una base ya desplegada no
+  tenía. No los edites ni los renumeres, y no repitas sus tablas en un paso tuyo:
+  el tuyo va después, con el número siguiente.
 - **Nunca \`flyway clean\`**: borra el esquema. Está deshabilitado en \`production\`.
 - El esquema que describan estas migraciones debe respetar el snapshot del diseño
   en \`specs/\` (claves naturales e índices de \`persistence.keel.yaml\`); el diseño manda.

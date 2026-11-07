@@ -4,8 +4,8 @@
 // reclamo SALTE lo bloqueado por otra sesión, que el upsert rearme, que la valla proteja, que el aparcado cuente bien con
 // el orden de asignación de MySQL y que todo compare con la hora del MOTOR. Nada de esto lo ve una prueba sin base.
 //
-// La tabla se crea con los tipos que usan los generadores: timestamptz y uuid en PostgreSQL, datetime(6) y binary(16) en
-// MySQL. Los valores van como literales (la CLI del contenedor no liga parámetros), con `bindNamed` a la vista.
+// La tabla se crea con el paso de esquema del generador (gen/schema-steps.js): timestamptz y uuid en PostgreSQL,
+// datetime(6) y binary(16) en MySQL. Los valores van como literales (la CLI del contenedor no liga parámetros), con `bindNamed` a la vista.
 //
 // Uso: node scripts/timer-sql-check.js [--database=postgresql|mysql] [--sabotage=no-skip-locked|no-fence|park-order]
 //   (podman o docker; ~1 min). Con sabotaje, verde = el sabotaje cae en exactamente sus casos.
@@ -15,6 +15,7 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import { DATABASES } from '../src/lib/gen/infra-catalog.js';
 import { timerStatements, expandList, NIL_ENTITY_ID, TIMER_ENGINES } from '../src/lib/gen/timer-store.js';
+import { GENERATOR_TABLES, schemaStepSql } from '../src/lib/gen/schema-steps.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--database='))?.slice('--database='.length);
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
@@ -42,15 +43,10 @@ if (!runtime) {
   process.exit(2);
 }
 
-const DDL = {
-  postgresql: `CREATE TABLE keel_timer (id uuid PRIMARY KEY, kind varchar(160) NOT NULL, entity_id uuid NOT NULL, spec varchar(120),
-    due_at timestamptz(6) NOT NULL, claimed_until timestamptz(6), claim_token uuid, attempts integer NOT NULL, parked_at timestamptz(6),
-    CONSTRAINT uq_keel_timer_kind_entity UNIQUE (kind, entity_id));
-    CREATE INDEX ix_keel_timer_due_at ON keel_timer (due_at);`,
-  mysql: `CREATE TABLE keel_timer (id binary(16) PRIMARY KEY, kind varchar(160) NOT NULL, entity_id binary(16) NOT NULL, spec varchar(120),
-    due_at datetime(6) NOT NULL, claimed_until datetime(6), claim_token binary(16), attempts int NOT NULL, parked_at datetime(6),
-    CONSTRAINT uq_keel_timer_kind_entity UNIQUE (kind, entity_id), INDEX ix_keel_timer_due_at (due_at)) ENGINE=InnoDB;`
-};
+// La tabla la crea el PASO DE ESQUEMA del generador (gen/schema-steps.js), con todas las tablas del generador y dos
+// veces: es el mismo SQL que llega a una base desplegada, y tiene que ser idempotente porque en keel-go una base nueva
+// aplica la baseline y el paso.
+const STEP_SQL = (engine) => schemaStepSql(engine, GENERATOR_TABLES);
 
 /** Un valor como literal del motor: uuid, instante, texto o número. */
 function literal(engine, value) {
@@ -171,7 +167,10 @@ async function check(engine) {
   };
 
   try {
-    sql(engine, name, DDL[engine]);
+    sql(engine, name, STEP_SQL(engine));
+    sql(engine, name, STEP_SQL(engine));
+    const tables = sql(engine, name, `SELECT table_name FROM information_schema.tables WHERE table_name IN (${GENERATOR_TABLES.map((table) => `'${table.table}'`).join(', ')}) AND table_schema = ${engine === 'mysql' ? 'DATABASE()' : 'current_schema()'};`).map(([table]) => table);
+    step(engine, 'paso de esquema (dos veces)', tables.length === GENERATOR_TABLES.length, tables.join(', '));
     // Siempre con la hora del motor de ESE momento: el script tarda, y una hora vieja descuadra los vencimientos.
     const ago = (s) => new Date(dbNow().getTime() - s * 1000);
     const ahead = (s) => new Date(dbNow().getTime() + s * 1000);

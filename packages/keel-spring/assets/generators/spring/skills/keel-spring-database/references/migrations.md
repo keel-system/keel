@@ -145,6 +145,14 @@ quedan escritos en el `README.md` del proyecto (§ Despliegue en producción) y 
 
 - `V<n>__<snake_case>.sql` para cada cambio: `V2__add_product_sku_index.sql`.
   Numera hacia arriba, en inglés como todo identificador.
+- **Los `V<n>__keel_*.sql` los escribe build, no tú.** Cuando una tabla del
+  generador (`outbox_event`, `processed_event`, `idempotency_record`,
+  `reconciliation_claim`, `keel_timer`) aparece en un proyecto que ya tiene el
+  baseline, build escribe el paso que la crea, con `CREATE TABLE IF NOT EXISTS`, y
+  `EVOLUTION.md` lo nombra. No lo edites, no lo renumeres y no repitas esas tablas
+  en un paso tuyo: el tuyo lleva el número siguiente. Lo que build no hace es
+  cambiar la forma de una tabla suya que la base ya tiene; si eso pasa, lo dice
+  `EVOLUTION.md` y el paso es tuyo.
 - **Nunca edites una migración ya aplicada** en algún ambiente: Flyway guarda su
   checksum y el arranque falla con «migration checksum mismatch». Lo que ya
   corrió solo se corrige con una migración nueva.
