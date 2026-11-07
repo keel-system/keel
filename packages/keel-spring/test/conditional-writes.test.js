@@ -138,3 +138,12 @@ test('sin api.concurrency no se emite nada de la escritura condicional', () => {
   // El código emitido, no la documentación del agente, que nombra el mecanismo para cuando el diseño lo pida.
   assert.ok(!files.filter((file) => !file.path.endsWith('.md')).some((file) => /loadExpecting|expectedVersions|Versioned<|forceNewVersion/.test(file.content ?? '')));
 });
+
+test('el arnés manda If-Match aunque el diseño no declare CORS (corrida catalog-spring, 2026-11-07)', () => {
+  // catalog-extended no tiene capa security: exchangeWithHeaders solo existía con CORS, y el agente de pruebas tuvo que
+  // escribirse su propio patchIfMatch para los escenarios del 412 y del 428.
+  const { files } = plan('catalog-conditional');
+  const harness = fileOf(files, '/AbstractFlowIT.java').content;
+  assert.match(harness, /protected Response exchangeWithHeaders\(HttpMethod method, String path, String jsonBody, String token,/);
+  assert.match(harness, /If-Match/);
+});

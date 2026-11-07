@@ -11,6 +11,7 @@
 // compileClasspath de este source set, así que nada de lo que se genera aquí
 // puede importar una clase del servicio.
 
+import { usesConditionalWrites } from '@keel-system/keel-core/gen/conditional-writes';
 import { paymentHarnessImports, paymentHarnessSection } from './payments-harness.js';
 import { javaFile, javaPath } from './render.js';
 import { mailSection, hasMail, MAIL_IMPORTS } from './mail-harness.js';
@@ -1464,11 +1465,13 @@ ${hasIdempotency(model) ? `
     protected Response exchangeWithoutIdempotencyKey(HttpMethod method, String path, String jsonBody, String token) {
         return exchange(method, path, jsonBody, token, null);
     }
-` : ''}${hasCors(model) ? `
+` : ''}${hasCors(model) || usesConditionalWrites(model) ? `
     /**
      * Variante con cabeceras de petición propias del escenario. Existe por la política
-     * CORS, que solo se observa si la petición dice de qué origen viene: sin \`Origin\`
-     * el servidor contesta lo mismo con política y sin ella.
+     * CORS, que solo se observa si la petición dice de qué origen viene (sin \`Origin\`
+     * el servidor contesta lo mismo con política y sin ella), y por la escritura
+     * condicional (api.concurrency): \`If-Match\` con el \`ETag\` de una lectura anterior,
+     * tal cual lo devolvió el servidor.
      *
      * <p><b>No es la vía para \`Authorization\` ni para \`Idempotency-Key\`.</b> Los dos
      * tienen su propio parámetro y su propia semántica (\`tokenFor(...)\` cachea por rol,
