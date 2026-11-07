@@ -34,6 +34,8 @@ operations:
 
   getProductBySlug:
     description: Recupera un producto público por el slug de su categoría.
+    rules:
+      - Si la categoría tiene varios productos, devuelve el más reciente (createdAt descendente y, ante empate, el id).
     kind: query
     input:
       fields:
@@ -80,11 +82,14 @@ operations:
       # Marcador operativo del barrido, no algo que el cliente necesite.
       exclude: [recordWithdrawalAwaitingSince]
     rules:
-      - Un campo ausente de la entrada conserva su valor; un campo presente con valor nulo vacía el campo.
+      - Un campo ausente de la entrada conserva su valor; un campo presente con valor nulo vacía el campo si el dominio lo admite vacío. name y categoryId son obligatorios en Product, así que un nulo en ellos es la validación de la entrada (400), no un vaciado.
     errors:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese id.
         http: 404
+      - code: CATEGORY_NOT_FOUND
+        when: La categoría indicada no existe.
+        http: 422
     emits: [ProductUpdated]
 
   listProducts:
@@ -137,6 +142,8 @@ operations:
 
   retireProduct:
     description: Retira un producto del catálogo de forma definitiva.
+    rules:
+      - El motivo que se inscribe en el registro regulatorio es fijo, «Retirada del catálogo»; la reinscripción del barrido manda el mismo.
     kind: command
     input:
       fields:
@@ -201,6 +208,9 @@ operations:
 
   removeProductImage:
     description: Elimina una imagen concreta de un producto del catálogo.
+    rules:
+      - Quitar una imagen que el producto no tiene no es un error; responde 204 sin cambiar nada.
+      - Borra también el binario del almacén, después de confirmar el cambio del producto.
     kind: command
     input:
       fields:
@@ -255,6 +265,8 @@ operations:
   # pasa solo lo detecta un barrido, y por eso esta operación la dispara el reloj.
   reconcileWithdrawals:
     description: Revisa las retiradas inscritas que siguen sin desenlace del registro regulatorio.
+    rules:
+      - Reinscribe en el registro cada retirada que sigue esperando su desenlace, y al reinscribirla con éxito limpia recordWithdrawalAwaitingSince.
     kind: command
     internal: true
     input: "void"

@@ -1,7 +1,7 @@
 # catalog — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/catalog v1.0.0. Contrato de validación para la fase de generación.
+> specs/catalog v1.1.0. Contrato de validación para la fase de generación.
 
 > **Fixture de test del repo Keel.** Este archivo no es un diseño real: existe para que los tests
 > de `keel-spring` ejerciten el andamiaje de pruebas de integración (`src/integrationTest/`) y el
@@ -190,8 +190,20 @@ flujo.
 1. Status `404`.
 2. Cuerpo de error con `code` = `"PRODUCT_NOT_FOUND"`.
 
+#### FL-PRD-002-G: la categoría nueva no existe
+
+**When**: `updateProduct` — `PATCH /api/v1/products/<p1>` con
+`{"categoryId": "00000000-0000-7000-8000-000000000000"}` e `If-Match: *`.
+**Then**:
+1. Status `422`.
+2. Cuerpo de error con `code` = `"CATEGORY_NOT_FOUND"`: el mismo desenlace que `createProduct` con
+   una categoría que no existe.
+3. `GET /api/v1/public/products/tools` sigue devolviendo `<p1>` con `categoryId` = `<c1>`.
+
 **Ramas condicionales**: en `updateProduct`, un campo ausente conserva su valor y un campo presente
-con valor nulo vacía el campo (regla declarada en `use-cases`). FL-PRD-002-D cubre la ausencia.
+con valor nulo vacía el campo si el dominio lo admite vacío; `name` y `categoryId` son obligatorios,
+así que un nulo en ellos es `400 VALIDATION_ERROR` (regla declarada en `use-cases`). FL-PRD-002-D
+cubre la ausencia.
 
 ### FL-PRD-003: listado paginado y recuperación en lote
 
@@ -625,6 +637,14 @@ válido (`stubFor("GET", "/prices/.*", 200, …)` y `stubFor("GET", "/costs/.*",
 **When**: `removeProductImage` — `DELETE /api/v1/products/<i1>/images/<img1>`.
 **Then**:
 1. Status `204`, sin cuerpo.
+2. `GET /api/v1/public/products/tools` devuelve el producto `<i1>` con `images` = `[]`.
+
+#### FL-IMG-001-E: borrar una imagen que ya no está
+
+**When**: se repite `removeProductImage` — `DELETE /api/v1/products/<i1>/images/<img1>`.
+**Then**:
+1. Status `204`, sin cuerpo: quitar una imagen que el producto no tiene no es un error (regla de
+   `removeProductImage`).
 2. `GET /api/v1/public/products/tools` devuelve el producto `<i1>` con `images` = `[]`.
 
 #### FL-IMG-001-D: producto inexistente

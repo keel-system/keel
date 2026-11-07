@@ -1,15 +1,27 @@
 # Obligaciones de diseño que este servicio deja abiertas a sabiendas.
 decisions:
+  - id: CHK-USECASES-SINGLE-NOT-IDENTIFIED
+    scope: use-cases.operations.getProductBySlug
+    reason: >
+      La ficha pública se pide por el slug de la categoría, y devuelve el producto más reciente de la categoría: el
+      criterio está en la rule de la operación. Lo eligieron igual los cuatro agentes de la serie de control.
+    since: 1.1.0
+  - id: CHK-DEPS-CALL-FIELD-UNSOURCED
+    scope: dependencies.compliance.activations.recordWithdrawal.reason
+    reason: >
+      El motivo de la inscripción es un literal fijo, «Retirada del catálogo», declarado en la rule de retireProduct:
+      ningún cliente lo elige, así que no es entrada de la operación ni campo del producto.
+    since: 1.1.0
   - id: OBL-IDEM-KEY-REQUIRED
     scope: use-cases
     reason: >
       El alta de producto admite clientes que no mandan la cabecera. Sin ella la
       petición se ejecuta sin deduplicar, y lo que frena el duplicado es la clave
       natural del SKU.
-    since: 1.0.0
+    since: 1.1.0
   - id: OBL-OUTCOME-NEGATIVE-UNDECIDED
     scope: dependencies
     reason: >
       Un `cancelled: false` de compliance se trata como el fallback: la retirada queda
       cancelada en el catálogo igualmente y el registro descuadrado lo concilia compliance.
-    since: 1.0.0
+    since: 1.1.0

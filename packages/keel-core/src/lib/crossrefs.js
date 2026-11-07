@@ -133,7 +133,11 @@ function checkUnstatedLookups(layers, warnIn) {
   }
 
   // Una referencia a otra entidad que un command protege con <ENTIDAD>_NOT_FOUND y otro, que recibe la misma, no. Lo
-  // normal es que el segundo la herede sin decirlo; si no la comprueba, una referencia rota entra sin error.
+  // normal es que el segundo la herede sin decirlo; si no la comprueba, una referencia rota entra sin error. Una operación
+  // `internal` que lo declara sigue probando que la referencia puede venir rota, pero no se avisa sobre ella: ningún
+  // cliente ve su error, y lo que pasa con el mensaje que la dispara cuando falla lo dice el onFailure de su suscripción
+  // (closePendingReports de inspection-reports: el inspector dado de baja que no existe aquí no es una referencia rota,
+  // es nada que cerrar).
   const byReference = new Map();
   for (const [opName, op] of Object.entries(operations)) {
     if ((op?.kind ?? 'command') !== 'command') continue;
@@ -145,13 +149,13 @@ function checkUnstatedLookups(layers, warnIn) {
       if (!domainEntities[referenced] || referenced === target) continue;
       const code = `${screamingSnake(referenced)}_NOT_FOUND`;
       if (!byReference.has(field)) byReference.set(field, { code, users: [] });
-      byReference.get(field).users.push({ opName, declares: (op.errors ?? []).some((error) => error?.code === code) });
+      byReference.get(field).users.push({ opName, internal: op.internal === true, declares: (op.errors ?? []).some((error) => error?.code === code) });
     }
   }
   for (const [field, { code, users }] of byReference) {
     const declaring = users.filter((user) => user.declares).map((user) => user.opName);
     if (declaring.length === 0) continue;
-    for (const { opName } of users.filter((user) => !user.declares)) {
+    for (const { opName } of users.filter((user) => !user.declares && !user.internal)) {
       warnIn(
         `use-cases.operations.${opName}.${field}`,
         'CHK-USECASES-REF-ERROR-ASYMMETRY',

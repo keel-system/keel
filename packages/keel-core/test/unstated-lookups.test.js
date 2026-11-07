@@ -62,15 +62,27 @@ test('CHK-DEPS-CALL-FIELD-UNSOURCED casa por sufijo: un barrido sobre la entidad
 });
 
 test('CHK-USECASES-REF-ERROR-ASYMMETRY: updateProduct recibe categoryId sin el CATEGORY_NOT_FOUND de createProduct', () => {
-  assert.deepEqual(scopesOf(findings('catalog-extended'), 'CHK-USECASES-REF-ERROR-ASYMMETRY'), ['use-cases.operations.updateProduct.categoryId']);
-  // createProduct la recibe por su entidad (input: { entity: Product }), y por eso cuenta como la que la declara.
-  const declared = findings('catalog-extended', (layers) => {
-    layers['use-cases'].operations.updateProduct.errors.push({ code: 'CATEGORY_NOT_FOUND', when: 'La categoría no existe.', http: 422 });
+  // La v1.1.0 de la fixture ya lo declara: sin él, como estaba en la v1.0.0 de la serie de control, avisa.
+  const undeclared = findings('catalog-extended', (layers) => {
+    const operation = layers['use-cases'].operations.updateProduct;
+    operation.errors = operation.errors.filter((error) => error.code !== 'CATEGORY_NOT_FOUND');
   });
-  assert.deepEqual(scopesOf(declared, 'CHK-USECASES-REF-ERROR-ASYMMETRY'), []);
+  assert.deepEqual(scopesOf(undeclared, 'CHK-USECASES-REF-ERROR-ASYMMETRY'), ['use-cases.operations.updateProduct.categoryId']);
+  // createProduct la recibe por su entidad (input: { entity: Product }), y por eso cuenta como la que la declara.
+  assert.deepEqual(scopesOf(findings('catalog-extended'), 'CHK-USECASES-REF-ERROR-ASYMMETRY'), []);
 });
 
-test('CHK-USECASES-REF-ERROR-ASYMMETRY solo mira commands: filtrar un listado por una categoría que no existe da vacío', () => {
+test('CHK-USECASES-REF-ERROR-ASYMMETRY no mira operaciones internal: su error no lo ve ningún cliente (inspection-reports)', () => {
+  // closePendingReports la dispara InspectorDeactivated; submitReport declara INSPECTOR_NOT_FOUND para el mismo inspectorId.
+  assert.deepEqual(scopesOf(findings('inspection-reports'), 'CHK-USECASES-REF-ERROR-ASYMMETRY'), []);
+  // La misma operación pública sí avisa: el corte es internal, no el nombre ni la fixture.
+  const exposed = findings('inspection-reports', (layers) => {
+    delete layers['use-cases'].operations.closePendingReports.internal;
+  });
+  assert.deepEqual(scopesOf(exposed, 'CHK-USECASES-REF-ERROR-ASYMMETRY'), ['use-cases.operations.closePendingReports.inspectorId']);
+});
+
+test('CHK-USECASES-REF-ERROR-ASYMMETRY solo mira commands:filtrar un listado por una categoría que no existe da vacío', () => {
   // listDraftProducts recibe categoryId como filtro y no declara CATEGORY_NOT_FOUND: no es una referencia que escribir.
   const list = findings('catalog-extended');
   assert.ok(!scopesOf(list, 'CHK-USECASES-REF-ERROR-ASYMMETRY').some((scope) => scope.includes('listDraftProducts')));
