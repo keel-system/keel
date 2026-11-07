@@ -8,6 +8,17 @@ const file = (name) => new RegExp(`${STORE}${name}$`);
 const REPOSITORY = new RegExp(`${STORE}\\w+_repository\\.go$`);
 
 export const DOC_SABOTAGES = {
+  // La escritura condicional (api.concurrency), con --only=catalog-conditional-mongo: los mismos tres que db-check.
+  'cw-ignore-expected': { files: /^internal\/domain\/versions\.go$/, from: 'if expected == nil {', to: 'if expected == nil || len(expected) >= 0 {', expect: /_CW2_|_CW3_/ },
+  // Al ACTUALIZAR, Save devuelve el agregado con la versión cargada (el primer guardado sigue releyendo).
+  'cw-stale-version': {
+    files: /\/product_repository\.go$/,
+    from: 'saved = found[0]',
+    to: 'saved = found[0]\n\t\tif version != nil {\n\t\t\tsaved = product\n\t\t}',
+    expect: /_CW4_/,
+    also: /_StaleVersion|_SaveMerges|_CW3_/
+  },
+  'cw-collapse-409': { files: file('errors\\.go'), from: 'domain.Errorf(domain.ErrConcurrentModification,', to: 'domain.Errorf(domain.ErrPreconditionFailed,', expect: /_CW5_/, also: /_Stale|_Exhausted|Conflict/ },
   // Las hijas se quedan en el orden del id, no en el de su campo de orden: lo que renumera el agregado sale mal.
   'child-order': { files: REPOSITORY, from: 'cmp.Or(cmp.Compare(a.Position(), b.Position()), ', to: 'cmp.Or(0, ', expect: /FollowOrdering/ },
   // El decimal se guarda como texto: hace ida y vuelta con el propio adaptador si también lo lee así, pero no es un

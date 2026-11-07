@@ -53,6 +53,7 @@ import { guardClaimsOf, guardMethod } from '../../src/scaffold/mail.js';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen';
 import { registryOperations } from '@keel-system/keel-core/gen/request-idempotency';
 import { usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
+import { conditionalWriteProbes } from './conditional-probes.js';
 
 /** La ruta de la sonda dentro del proyecto del sujeto. */
 export function probePath(model) {
@@ -680,6 +681,8 @@ ${expect('state', 'read')}	if want, got := dump${name}(domain.Rehydrate${name}(s
 }`);
   }
 
+  // La escritura condicional (api.concurrency): CW-1 a CW-5 sobre el adaptador, en las dos ramas.
+  tests.push(...conditionalWriteProbes(model, root, { repo, id }));
   tests.push(...clashProbes(model, root, { repo, members }));
   tests.push(...childOrderProbes(model, root, { repo, id, members }));
 

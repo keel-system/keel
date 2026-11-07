@@ -27,6 +27,7 @@ import * as entities from './entities.js';
 import * as events from './events.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as idempotencyCheck from './idempotency-check.js';
+import * as conditionalWrites from './conditional-writes.js';
 import * as dtos from './dtos.js';
 import * as services from './services.js';
 import * as mappers from './mappers.js';
@@ -97,6 +98,8 @@ const GENERATORS = [
   events,
   domainGuardsCheck,
   idempotencyCheck,
+  // La escritura condicional (DSL 2.25): Versioned, la comparación, el borde, sus pruebas y el gate.
+  conditionalWrites,
   dtos,
   services,
   mappers,

@@ -12,7 +12,7 @@ import { planService } from '../src/scaffold/index.js';
 import { probeFile } from '../scripts/lib/db-probes.js';
 import { DB_SABOTAGES, applyDbSabotage, sabotageApplies } from './helpers/db-sabotages.js';
 import { checkGoTree } from './helpers/go-tree.js';
-import { AUTHORSHIP_DESIGNS, FIXTURES_DIR } from './helpers/workspace.js';
+import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, UNCOVERED_BRANCHES } from './helpers/workspace.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 
 const relational = fs.readdirSync(FIXTURES_DIR).filter((name) => {
@@ -23,7 +23,9 @@ const relational = fs.readdirSync(FIXTURES_DIR).filter((name) => {
 const designs = [
   ...relational.map((name) => ({ name, from: name, mutate: null })),
   ...FINDER_DESIGNS.filter((design) => relational.includes(design.from)),
-  ...AUTHORSHIP_DESIGNS.filter((design) => relational.includes(design.from)).map((design) => ({ ...design, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
+  ...AUTHORSHIP_DESIGNS.filter((design) => relational.includes(design.from)).map((design) => ({ ...design, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
+  // La escritura condicional (DSL 2.25): las siluetas relacionales que mide db-check.
+  ...UNCOVERED_BRANCHES.filter((design) => ['catalog-conditional', 'shop-conditional'].includes(design.name)).map((design) => ({ ...design, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
 ];
 // Los dos motores: db-check corre sobre cada uno (`--database=`), y cada sabotaje tiene que seguir aplicándose en los
 // motores donde existe su mecanismo.

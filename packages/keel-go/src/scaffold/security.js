@@ -30,6 +30,8 @@ import { ownershipRulesOf, usesCallerRoles } from '@keel-system/keel-core/gen/ow
 import { securityConfigFiles } from '@keel-system/keel-core/gen/security-config';
 import { alignRows, goString, keyedLiteral } from '../lib/go-source.js';
 import { applicationPath, layout, packageFile } from './render.js';
+// ETag e If-Match con escritura condicional (CW-9): la lista es la neutral de los cuatro generadores.
+import { corsAllowedHeaders, corsExposedHeaders } from '@keel-system/keel-core/gen/conditional-writes';
 import { callerScopeFiles } from './caller-scope.js';
 
 export { securityPlan, usesHttpSecurity, usesJwt };
@@ -770,8 +772,8 @@ const (
 // La política CORS del diseño (security.cors).
 var (
 	corsMethods          = ${list(cors.methods)}
-	corsAllowedHeaders   = ${list(cors.allowedHeaders)}
-	corsExposedHeaders   = ${list(cors.exposedHeaders)}
+	corsAllowedHeaders   = ${list(corsAllowedHeaders(model))}
+	corsExposedHeaders   = ${list(corsExposedHeaders(model))}
 	corsAllowCredentials = ${cors.allowCredentials}
 	corsMaxAgeSeconds    = ${cors.maxAgeSeconds}
 )

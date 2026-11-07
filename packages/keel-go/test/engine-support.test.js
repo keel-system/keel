@@ -34,8 +34,7 @@ test('cada motor relacional que la frontera admite tiene su celda en los mecanis
 });
 
 test('la puerta del incremento 16: nada pendiente, nada sin ejecutar y nada sin falsar', () => {
-  // Lo único pendiente es lo que trae otro plan, con su incremento: la escritura condicional (PLAN-DSL-225-ESCRITURA-CONDICIONAL.md).
-  assert.deepEqual(pending().map(({ id }) => id), ['conditional-write']);
+  assert.deepEqual(pending().map(({ id }) => id), []);
   assert.deepEqual(unverified().map(({ id, branch }) => `${id}/${branch}`), []);
   assert.deepEqual(unfalsified().map(({ id, branch }) => `${id}/${branch}`), []);
 });
@@ -71,7 +70,9 @@ const FALSIFIED_BY = {
   'folded-text/relational': ['fold', 'finder-fold'],
   'folded-text/document': ['finder-fold'],
   'persistence-adapter/relational': ['version', 'enum', 'constraint', 'index', 'merge', 'list-order', 'timeout'],
-  'persistence-adapter/document': ['decimal-as-text', 'uuid-legacy', 'version', 'translator']
+  'persistence-adapter/document': ['decimal-as-text', 'uuid-legacy', 'version', 'translator'],
+  'conditional-write/relational': ['cw-ignore-expected', 'cw-stale-version', 'cw-collapse-409'],
+  'conditional-write/document': ['cw-ignore-expected', 'cw-stale-version', 'cw-collapse-409']
 };
 
 test('el sabotaje con que se falsa cada celda de db-check o doc-check existe de verdad', () => {

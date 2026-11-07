@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './tmp.js';
 import { FINDER_DESIGNS } from '../../../keel-core/test/helpers/finder-designs.js';
+import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/conditional-write-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -206,7 +207,24 @@ export const UNCOVERED_BRANCHES = [
       layers.payments.capture.amount = 'amount';
       layers.payments.capabilities = [...layers.payments.capabilities, 'partial-capture'];
     }
-  }
+  },
+  // La escritura condicional (DSL 2.25): los diseños de keel-core/test/helpers/conditional-write-designs.js, los MISMOS que
+  // miden keel-dotnet y keel-nest (relacional, documental y con seguridad y CORS), cada uno su propio módulo.
+  ...CONDITIONAL_WRITE_DESIGNS.map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers) {
+      manifest.service.name = design.name;
+      design.mutate(layers);
+      // La réplica sobre documentos es un rechazo escrito de keel-go (README § La frontera): en la silueta documental el
+      // precio del proveedor se pide en el momento. No toca nada de la escritura condicional (Product y sus operaciones).
+      if (layers.persistence.default?.model === 'document') {
+        const need = layers.dependencies.dependencies.pricing.needs.supplierPrice;
+        delete need.replica;
+        need.strategy = 'on-demand';
+      }
+    }
+  }))
 ];
 
 /**

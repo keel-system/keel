@@ -26,6 +26,7 @@ import { FRAMEWORK_ERRORS as FW_CODES } from '@keel-system/keel-core';
 import { tokenClaims } from '@keel-system/keel-core/gen/access-plan';
 import { SECURITY_IMPORT, fullAccessLiteral, securityPlan, usesCallerIdentity, usesHttpSecurity, usesJwt } from './security.js';
 import { frameworkSentinels, sentinelOf } from './errors.js';
+import { conditionalApiTests } from './conditional-writes.js';
 
 export function generate(model) {
   if (!usesApi(model)) return [];
@@ -297,7 +298,7 @@ func TestLaTablaDeRutasNoRepiteOperacionNiRuta(t *testing.T) {
 		operations[route.Operation], patterns[pattern] = true, true
 	}
 }
-${[...tests, ...(cases.upload ? uploadTests(model, cases.upload, jwt) : []), ...(jwt ? securityTests(model) : [])].map((test) => `\n${test}`).join('\n')}
+${[...tests, ...conditionalApiTests(model), ...(cases.upload ? uploadTests(model, cases.upload, jwt) : []), ...(jwt ? securityTests(model) : [])].map((test) => `\n${test}`).join('\n')}
 `;
   return packageFile(model, httpapi, {
     test: true,

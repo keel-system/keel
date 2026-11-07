@@ -238,14 +238,14 @@ Llevan el mismo id en los cuatro generadores. **Verde significa que el sabotaje 
 Un generador que no llegue a la puerta rechaza la capacidad en su frontera (`supported-features.js`) con su motivo,
 nunca la emite a medias.
 
-## Estado (2026-11-06)
+## Estado (2026-11-07)
 
 | Incremento | Estado | Medido con |
 |---|---|---|
 | 0. keel-core | hecho | suite de keel-core; `design-matrix`: los seis ids nuevos `falsado`, ninguno `co-disparado` |
 | 1. keel-dotnet | hecho | `db-check` (PostgreSQL y MySQL) y `doc-check` CW-1 a CW-5; pruebas emitidas CW-6 a CW-11 en las variantes; CW-12 ejecutado en Node; los nueve sabotajes |
 | 2. keel-nest | hecho | `db-check` (PostgreSQL y MySQL) y `doc-check` CW-1 a CW-5; `ts-check --only` CW-6 a CW-10 en las siluetas; CW-11 y CW-12 ejecutados en Node; los nueve sabotajes |
-| 3. keel-go | pendiente | — |
+| 3. keel-go | hecho | `db-check` (PostgreSQL y MySQL, `catalog-conditional` y `shop-conditional`) y `doc-check` CW-1 a CW-5; `go-check --fixtures` 107/107 con las siluetas en todas sus variantes; CW-6 a CW-11 en las pruebas emitidas; CW-12 ejecutado en Node; los nueve sabotajes |
 | 4. keel-spring | pendiente | — |
 | 5. derivados y docs | pendiente | — |
 | 6. corrida de control | pendiente | — |
@@ -306,6 +306,35 @@ Decisiones que el plan no fijaba, o que cambian lo que decía. Los incrementos 2
   `scripts/lib/conditional-probes.js`, compartidas por `db-check` y `doc-check`; `sampleResponse` pasó de `cache.test.js`
   a `test/helpers/response-samples.js`.
 
+## Lo que se decidió en keel-go (incremento 3)
+
+- **La lista de versiones es un `[]int64`**: nil no compara (sin cabecera, vacía, `*` u otra puerta) y una lista vacía no
+  casa con ninguna, la misma distinción que null frente a `[]` en los otros tres. El campo del mensaje es
+  `ExpectedVersions []int64` con `json:"-"`.
+- **La comparación es `domain.CheckVersion`**, genérica sobre la versión (`*int64` con `all`, `*int32` con `declared`, T5),
+  y la llaman los dos adaptadores desde `LoadExpecting`, que carga con su `FindByID`. El plan pedía en Go el
+  `SELECT … WHERE version`; no se hizo: con una lista de versiones obligaría a una segunda lectura para distinguir el 404
+  del 412 (D3), y CW-5 no distingue las dos formas, porque la carrera que mide está entre la carga y el guardado, que es
+  lo que arbitra el `UPDATE … WHERE lock_version` de `Save`. Es la misma comparación que hacen keel-dotnet y keel-nest.
+- **`LoadExpecting` devuelve `(*Raíz, bool, error)`** como `FindByID`: `found == false` es el 404 del diseño, y la
+  precondición es un error del dominio.
+- **Los dos errores son centinelas del dominio** (`ErrPreconditionFailed`, `ErrPreconditionRequired`), comparables con
+  `errors.Is` (§ 3.2 de `PLAN-KEEL-GO.md`), con status propio (412 y 428 no tienen categoría) y el texto de
+  `api-errors.js` en la ocurrencia. Si el diseño declara un code de su familia, el centinela es el suyo.
+- **`Versioned[T]` tiene su lector, que exige la versión**: una entrada de la caché que solo guarda el cuerpo es ilegible
+  (un miss), y la versión 0 es legítima. La caché genérica no se toca; su prueba emitida aprende a construir la muestra de
+  un `Versioned` campo a campo (`isVersioned`).
+- **CW-11 se mide en la prueba emitida `versioned_test.go`** (el lector ejecutado con el codec del cable), como keel-dotnet
+  la mide en `OperationCacheTests`: lo que cambia es el tipo que guarda la caché, y el store lo mide `cache-check`.
+- **La silueta documental pide el precio en el momento**: la réplica sobre documentos es un rechazo escrito de keel-go, así
+  que en `UNCOVERED_BRANCHES` `catalog-conditional-mongo` cambia `supplierPrice` a `on-demand`. No toca nada de la
+  escritura condicional: las escrituras y la lectura derivadas son las mismas que en keel-nest
+  (`test/conditional-writes.test.js` lo compara).
+- **Redes**: CW-1 a CW-5 en `scripts/lib/conditional-probes.js` (una función de prueba por caso, dentro de `rootProbes`,
+  así que las comparten `db-check` y `doc-check`); los sabotajes del adaptador van en `db-sabotages.js` y `doc-sabotages.js`
+  y se corren con `--only=<silueta>` (`cw-collapse-409` nombra el centinela de la precondición, que solo existe ahí); los
+  del borde, en `test/helpers/conditional-sabotages.js`, los ejecuta `go-check` sobre su silueta.
+
 ## Para retomar
 
 - Incremento 1 (keel-dotnet) hecho y medido: `db-check --only=catalog-conditional` en PostgreSQL y MySQL, `doc-check
@@ -317,5 +346,13 @@ Decisiones que el plan no fijaba, o que cambian lo que decía. Los incrementos 2
   `infra/check-conditional-writes.sh`) son del incremento 5; hasta entonces, el agente lo sabe solo por la nota del
   handler y por el gate.
 - Incremento 2 (keel-nest) hecho y medido igual que el 1; su fila de la matriz ya no es `pending`.
-- Siguiente: incremento 3, keel-go. El mismo reparto; en Go, `loadExpecting` con el `SELECT … WHERE version` (§ 3 del
-  incremento) y el error de precondición como valor centinela comparable con `errors.Is`.
+- Incremento 3 (keel-go) hecho y medido: `db-check --only=catalog-conditional` y `--only=shop-conditional` en PostgreSQL y
+  MySQL, `doc-check --only=catalog-conditional-mongo`, `go-check --fixtures` (107/107) y el bloque de la escritura
+  condicional de `go-check` (las pruebas emitidas del borde y de la caché, con vet y staticcheck, y sus cinco sabotajes).
+  Los tres del adaptador caen cada uno en su caso en los tres motores (`cw-ignore-expected` en CW-2 y CW-3, que mide la
+  lista vacía). No se ha corrido `go-check` entero (la carrera, la frontera falsada, govulncheck…): lo que cambió para el
+  resto de las fixtures es nada (74 sin cambios en la caché), y el bloque nuevo se ejecutó aparte con el mismo código.
+- La matriz de keel-go ya no tiene filas `pending`.
+- Siguiente: incremento 4, keel-spring. El mismo reparto; la red nueva es `npm run precondition-check` (CW-1 a CW-5 en
+  PostgreSQL, MySQL y MongoDB, y CW-11 contra Redis), y hay que decidir al abrirlo dónde van CW-6 a CW-10 mirando qué
+  hace `compile-check`.

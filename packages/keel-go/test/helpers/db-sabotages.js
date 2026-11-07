@@ -16,6 +16,20 @@ const AUDIT_ACTOR = new RegExp(`${STORE}audit_actor\\.go$`);
 // pueden caer con ellas (`also`). Donde el texto emitido es otro en MySQL, `mysql` lleva su `from`/`to`: el MISMO
 // mecanismo, roto en su dialecto. `engines` limita un sabotaje a los motores donde el mecanismo existe.
 export const DB_SABOTAGES = {
+  // La escritura condicional (api.concurrency), con --only=catalog-conditional (los otros sujetos no tienen la precondición):
+  // la comparación de LoadExpecting deja de comparar…
+  'cw-ignore-expected': { files: /^internal\/domain\/versions\.go$/, from: 'if expected == nil {', to: 'if expected == nil || len(expected) >= 0 {', expect: /_CW2_|_CW3_/ },
+  // …Save devuelve el agregado que recibió (con la versión cargada) y no lo releído…
+  // (al ACTUALIZAR: el primer guardado, sin versión que cargar, sigue releyendo).
+  'cw-stale-version': {
+    files: /\/product_repository\.go$/,
+    from: 'saved = domain.RehydrateProduct(states[0])',
+    to: 'saved = domain.RehydrateProduct(states[0])\n\t\tif product.LockVersion() != nil {\n\t\t\tsaved = product\n\t\t}',
+    expect: /_CW4_/,
+    also: /_StaleVersion|_SaveMerges|_CW3_/
+  },
+  // …y el conflicto de la ventana entre la carga y el guardado sale como la precondición, no como el 409.
+  'cw-collapse-409': { files: ERRORS, from: 'domain.Errorf(domain.ErrConcurrentModification,', to: 'domain.Errorf(domain.ErrPreconditionFailed,', expect: /_CW5_/, also: /_StaleVersion|_ExhaustedConflict|_DeadlockIsRetried/ },
   // El UPDATE con versión que no tocó ninguna fila deja de ser un conflicto: la lectura obsoleta pisa a la otra.
   version: { files: REPOSITORY, from: 'err != nil || changed == 0 {', to: 'err != nil || changed < 0 {', expect: /_StaleVersion/ },
   // El enum se guarda por su constante en minúsculas: la fila deja de llevar la constante (y no se vuelve a leer).

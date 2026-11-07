@@ -66,7 +66,7 @@ try {
     ...fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(path.join(FIXTURES_DIR, entry, 'service.keel.yaml'))).map((name) => ({ name, from: name, mutate: null })),
     ...AUTHORSHIP_DESIGNS,
     // Los finders sobre documentos (DSL 2.22), el MISMO diseño que miden keel-nest y keel-dotnet, y la versión declarada.
-    ...UNCOVERED_BRANCHES.filter((design) => ['jobs-mongo-finder', 'mailer-mongo-lock'].includes(design.name))
+    ...UNCOVERED_BRANCHES.filter((design) => ['jobs-mongo-finder', 'mailer-mongo-lock', 'catalog-conditional-mongo'].includes(design.name))
   ];
   for (const { name, from, mutate } of designs) {
     if (only && name !== only) continue;

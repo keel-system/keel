@@ -33,6 +33,7 @@ import { goExported } from '../lib/go-projection.js';
 import { applicationPath, layout, packageFile } from './render.js';
 import { usesAfterCommit } from './after-commit.js';
 import { messageComponents, messageType, operations, resultType } from './services.js';
+import { usesConditionalWrites } from './conditional-writes.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -96,7 +97,7 @@ export function cacheHandlerNote(model, operation) {
   if (!cachesOperation(model, operation)) return null;
   const variable = operation.messageKind === 'query' ? 'query' : 'cmd';
   return cacheNote(model, operation, {
-    call: `GetOrLoad(ctx, h.${OPERATION_CACHE.param}, ${cacheVar(operation.name)}, ${variable}, func(ctx context.Context) (${resultType(operation)}, error) { … }) (GetOrLoadIf para lo que no se guarda)`
+    call: `GetOrLoad(ctx, h.${OPERATION_CACHE.param}, ${cacheVar(operation.name)}, ${variable}, func(ctx context.Context) (${resultType(operation, model)}, error) { … }) (GetOrLoadIf para lo que no se guarda)`
   });
 }
 
@@ -665,11 +666,22 @@ func (l redisLogger) Printf(ctx context.Context, format string, v ...any) {
  */
 function operationCacheTest(model) {
   const caches = cachedOperations(model);
+  // Versioned (api.concurrency) tiene su lector, que exige la versión, pero su muestra sí se construye campo a campo.
+  const versionedGuard = usesConditionalWrites(model) ? ' && !isVersioned(typ)' : '';
+  const versionedHelper = usesConditionalWrites(model)
+    ? `// isVersioned dice si el tipo es un Versioned (api.concurrency): lee su versión y su valor, que sí tienen muestra.
+func isVersioned(typ reflect.Type) bool {
+	_, ok := reflect.Zero(typ).Interface().(interface{ versioned() })
+	return ok
+}
+
+`
+    : '';
   const byName = new Map(operations(model).map((operation) => [operation.name, operation]));
   const roundTrips = caches.map((cache) => {
     const operation = byName.get(cache.operation);
     return `func TestLaRespuestaDe${goExported(cache.operation)}VuelveIgualDeLaCache(t *testing.T) {
-	assertCacheRoundTrip[${messageType(operation)}, ${resultType(operation)}](t, ${cacheVar(cache.operation)})
+	assertCacheRoundTrip[${messageType(operation)}, ${resultType(operation, model)}](t, ${cacheVar(cache.operation)})
 }`;
   });
   const samples = alignRows([
@@ -1044,7 +1056,7 @@ func cacheSample(t *testing.T, typ reflect.Type, nulls bool, depth int) reflect.
 	if depth > 8 {
 		t.Fatalf("%v: demasiado anidado para una muestra", typ)
 	}
-	if readsItself(typ) && typ.Kind() != reflect.Pointer {
+	if readsItself(typ) && typ.Kind() != reflect.Pointer${versionedGuard} {
 		t.Fatalf("%v se lee con su propio lector y no tiene muestra en cacheSamples", typ)
 	}
 	switch typ.Kind() {
@@ -1080,7 +1092,7 @@ func cacheSample(t *testing.T, typ reflect.Type, nulls bool, depth int) reflect.
 	return value
 }
 
-// readsItself dice si el tipo tiene su propio lector JSON: entonces su muestra no se puede inventar campo a campo.
+${versionedHelper}// readsItself dice si el tipo tiene su propio lector JSON: entonces su muestra no se puede inventar campo a campo.
 func readsItself(typ reflect.Type) bool {
 	pointer := reflect.PointerTo(typ)
 	return pointer.Implements(reflect.TypeFor[json.UnmarshalerFrom]()) ||

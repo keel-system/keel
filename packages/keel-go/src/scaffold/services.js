@@ -37,6 +37,7 @@ import { projectionNotes, replicaNote } from './projections.js';
 import { mailNote } from './mail.js';
 import { cacheHandlerNote } from './cache.js';
 import { uploadHandlerNotes } from './storage.js';
+import { EXPECTED_VERSIONS, carriesExpectedVersions, conditionalHandlerNote, returnsVersioned, versionedType } from './conditional-writes.js';
 
 export function generate(model) {
   const files = [];
@@ -199,10 +200,15 @@ export function useCaseField(operation) {
   return goExported(operation.name);
 }
 
-/** El tipo del resultado de la operación, o null si no devuelve nada. */
-export function resultType(operation) {
+/**
+ * El tipo del resultado de la operación, o null si no devuelve nada. Con el modelo, la lectura que da el ETag y la
+ * escritura condicional que devuelve su raíz devuelven también la versión (D6 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md):
+ * el compilador obliga al agente a darla.
+ */
+export function resultType(operation, model = null) {
   if (!operation.responseDto) return null;
   const dto = goTypeName(operation.responseDto.name);
+  if (model && returnsVersioned(model, operation)) return versionedType(dto);
   // PagedResponse[T] ya envuelve la lista.
   if (operation.paginated) return `PagedResponse[${dto}]`;
   if (operation.returnsList) return `[]${dto}`;
@@ -213,8 +219,8 @@ export function resultType(operation) {
  * El contrato de la operación: la interfaz que implementa su handler y la clase de mensaje, que decide el log
  * (y, con la persistencia, la transacción: de lectura para una consulta).
  */
-export function contractOf(operation) {
-  const result = resultType(operation);
+export function contractOf(operation, model = null) {
+  const result = resultType(operation, model);
   const message = messageType(operation);
   if (operation.messageKind === 'query') {
     if (!result) throw new Error(`La consulta ${operation.name} no devuelve nada: el modelo no la deja así`);
@@ -316,7 +322,14 @@ function renderMessage(model, operation) {
     rows.push(...commentLines(doc, '\t').map((text) => ({ text })));
     rows.push({ indent: '\t', cells: ['EntryGate', 'EntryGate', '`json:"-"`'] });
   }
-  const struct = rows.length > 0 ? `struct {\n${alignRows(rows).join('\n')}\n}` : 'struct{}';
+  // La versión que el cliente leyó (api.concurrency): la estampa el endpoint desde If-Match; nil desde otra puerta.
+  if (carriesExpectedVersions(model, operation)) {
+    const doc =
+      "Las versiones que valen, del If-Match de la petición (api.concurrency). Las estampa el endpoint\ngenerado; nil —sin cabecera, '*' u otra puerta— no compara, y una lista vacía no casa con ninguna.\nPásala tal cual a LoadExpecting.";
+    rows.push(...commentLines(doc, '\t').map((text) => ({ text })));
+    rows.push({ indent: '\t', cells: [EXPECTED_VERSIONS, '[]int64', '`json:"-"`'] });
+  }
+  const struct =rows.length > 0 ? `struct {\n${alignRows(rows).join('\n')}\n}` : 'struct{}';
   const parts = [`${docComment(name, operation.description, `el mensaje de ${operation.name}`)}type ${name} ${struct}`];
   const rounding = components.map((component) => scaleRounding(operation, component)).filter(Boolean);
   if (rounding.length > 0) {
@@ -361,7 +374,7 @@ function componentNotes(model, component) {
 function renderHandler(model, operation) {
   const { application } = layout(model);
   const name = handlerType(operation);
-  const contract = contractOf(operation);
+  const contract = contractOf(operation, model);
   const message = messageType(operation);
   // Lo que recibe el handler y con qué lo cablea NewUseCases: una sola fuente (use-cases.js).
   const deps = handlerDependencies(model, operation);
@@ -407,6 +420,10 @@ function handlerNotes(model, operation) {
   if (dispatch) notes.push(dispatch);
   const gate = entryGateNote(model, operation, { read: `${operation.messageKind === 'query' ? 'query' : 'cmd'}.EntryGate`, value: entryGateConstant });
   if (gate) notes.push(gate);
+  // La escritura condicional (api.concurrency): cargar con LoadExpecting y devolver la versión persistida.
+  const root = operation.targetEntity ?? operation.responseDto?.entity ?? 'Raiz';
+  const conditional = conditionalHandlerNote(model, operation, operation.messageKind === 'query' ? 'query' : 'cmd', repositoryParam({ name: root }));
+  if (conditional) notes.push(conditional);
   // La búsqueda con finder (DSL 2.22) ya aplica sus filtros, plegado incluido: su nota sustituye a las de los filtros de texto.
   const finder = operation.finder;
   const entity = finder && model.entities.find((candidate) => candidate.name === finder.entity);

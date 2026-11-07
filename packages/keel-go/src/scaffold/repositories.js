@@ -47,6 +47,7 @@ import { emitsEvents, usesGoOutbox } from './messaging.js';
 import { adapterClaimMethods, claimDependencies, portClaimMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { PARAMETERS_VAR } from './service-parameters.js';
+import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './conditional-writes.js';
 import { portGuardMethods, relationalGuardMethods } from './mail.js';
 
 // Un identificador en el SQL del adaptador, citado como en el baseline si es una palabra reservada (`"primary"` en
@@ -257,6 +258,8 @@ function portBody(model, entity) {
   const methods = [];
   const method = (doc, signature) => methods.push(`${docComment(signature.split('(')[0], doc, null, '\t')}\t${signature}`);
   method(`el ${name} con ese id; found es false si no existe.`, `FindByID(ctx context.Context, ${id.name} ${id.type}) (*${name}, bool, error)`);
+  // La carga que compara la versión (api.concurrency, D4): la de las raíces que escribe alguna escritura condicional.
+  if (loadsExpecting(model, entity)) method(...loadExpectingPort(entity, id));
   if (idBatchReason(model, entity)) {
     method('los agregados de varios id en UNA consulta; los que no existen no están. El orden no está garantizado.', `FindAllByID(ctx context.Context, ids []${id.type}) ([]*${name}, error)`);
   }
@@ -671,6 +674,7 @@ func (r *${type}) ${signature} (*domain.${name}, bool, error) {
 	return found[0], true, nil
 }`);
   one('FindByID', `FindByID(ctx context.Context, ${id.name} ${id.type})`, `WHERE ${root.idColumn} = ${ph(model, 1)}`, id.name);
+  if (loadsExpecting(model, entity)) parts.push(loadExpectingAdapter(entity, type, portName(entity), id));
   if (idBatchReason(model, entity)) {
     parts.push(`// FindAllByID implementa domain.${portName(entity)}.
 func (r *${type}) FindAllByID(ctx context.Context, ids []${id.type}) ([]*domain.${name}, error) {

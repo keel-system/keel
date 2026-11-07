@@ -33,6 +33,7 @@ import { documentReconciliationMethods, reconciliationDependencies } from './rec
 import { credentialFinders, keyFinders, naturalKeyBatchFinder, portName, rankedEnums } from './repositories.js';
 import { BSON, MONGO_DRIVER, MONGO_OPTIONS } from './document-persistence.js';
 import { parameterAccessor } from './service-parameters.js';
+import { loadExpectingAdapter, loadsExpecting } from './conditional-writes.js';
 import { documentGuardMethods } from './mail.js';
 
 const ADAPTER_IMPORTS = [
@@ -404,6 +405,8 @@ ${prelude}	found, err := r.find(ctx, ${filter}, options.Find().SetLimit(1))
 	return found[0], true, nil
 }`);
   one('FindByID', `FindByID(ctx context.Context, ${id.name} ${id.type})`, `bson.D{{Key: "_id", Value: ${idWrite}}}`);
+  // La carga que compara la versión (api.concurrency, D4), la misma que la del adaptador relacional.
+  if (loadsExpecting(model, entity)) parts.push(loadExpectingAdapter(entity, type, portName(entity), id));
   if (idBatchReason(model, entity)) {
     parts.push(`// FindAllByID implementa domain.${portName(entity)}.
 func (r *${type}) FindAllByID(ctx context.Context, ids []${id.type}) ([]*domain.${name}, error) {

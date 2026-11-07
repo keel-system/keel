@@ -386,7 +386,7 @@ function useCasesBody(model, ops) {
   const fieldRows = [];
   for (const operation of ops) {
     fieldRows.push({ text: `\t// ${useCaseField(operation)} es ${operation.name}.` });
-    fieldRows.push({ indent: '\t', cells: [useCaseField(operation), contractOf(operation).handler] });
+    fieldRows.push({ indent: '\t', cells: [useCaseField(operation), contractOf(operation, model).handler] });
   }
   const roots = repositoryRoots(model);
   const persistent = usesDependencies(model);
@@ -397,7 +397,7 @@ function useCasesBody(model, ops) {
     fieldRows.push({ indent: '	', cells: ['callers', `domain.${portName(resolution.entity)}`] });
   }
   const wiring = ops.map((operation) => {
-    const contract = contractOf(operation);
+    const contract = contractOf(operation, model);
     const handler = entryGateGuard(model, operation, `New${handlerType(operation)}(${handlerArgs(model, operation).join(', ')})`);
     const name = goString(messageType(operation));
     // Cada operación va además dentro de su asentamiento (settle): lo que espera al commit, los afterCommit de su handler y

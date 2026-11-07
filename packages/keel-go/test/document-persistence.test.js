@@ -71,7 +71,7 @@ for (const name of DOCUMENTAL) {
 
 test('cada sabotaje de doc-check se sigue aplicando a lo que emite alguna fixture documental', () => {
   for (const [id, sabotage] of Object.entries(DOC_SABOTAGES)) {
-    const derived = [...AUTHORSHIP_DESIGNS, ...UNCOVERED_BRANCHES].filter((design) => ['mailer-mongo-author', 'jobs-mongo-finder'].includes(design.name)).map((design) => {
+    const derived = [...AUTHORSHIP_DESIGNS, ...UNCOVERED_BRANCHES].filter((design) => ['mailer-mongo-author', 'jobs-mongo-finder', 'catalog-conditional-mongo'].includes(design.name)).map((design) => {
       const { manifest, layers } = loadService(path.join(FIXTURES_DIR, design.from));
       design.mutate(manifest, layers);
       return planService({ manifest, layers, workspace: FIXTURES_DIR }).files;

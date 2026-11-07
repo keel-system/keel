@@ -452,7 +452,27 @@ export const MECHANISMS = {
     }
   },
   'conditional-write': {
-    pending: 'incremento 3 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md: hasta entonces la frontera de keel-go rechaza api.concurrency entera (conditionalWritesPendingErrors de keel-core), así que no hay código que razonar'
+    parity: {
+      skip: 'ninguna fixture declara api.concurrency (keel-spring la rechaza hasta su incremento de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md); lo emitido lo fijan test/conditional-writes.test.js, que lo compara con keel-nest y keel-dotnet, y test/uncovered-branches.test.js sobre las siluetas de keel-core/test/helpers/conditional-write-designs.js',
+      test: 'test/conditional-writes.test.js'
+    },
+    emitter: 'src/scaffold/conditional-writes.js (Versioned, CheckVersion, conditional.go, las pruebas emitidas y el gate) · services.js · endpoints.js · repositories.js y document-repositories.js · cache.js · security.js (CORS) · errors.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        falsified: true,
+        why:
+          'catalog-conditional y shop-conditional: CW-1 a CW-5 contra el adaptador de database/sql en PostgreSQL y MySQL (scripts/lib/conditional-probes.js). Falsado con --only=catalog-conditional: cw-ignore-expected cae en CW-2 y CW-3, cw-stale-version en CW-4 y cw-collapse-409 en CW-5, en los dos motores. El borde, en go-check sobre las siluetas: CW-6 a CW-11 en las pruebas emitidas, falsadas con cw-no-428, cw-weak-match, cw-error-map, cw-cors y cw-cache-etag (test/helpers/conditional-sabotages.js); CW-12 (el gate, ejecutado con bash) en test/conditional-writes.test.js, falsado con cw-gate'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          'catalog-conditional-mongo: CW-1 a CW-5 contra el adaptador del driver de MongoDB en un replica set real, con las MISMAS sondas que db-check. Falsado con --only=catalog-conditional-mongo: cw-ignore-expected cae en CW-2 y CW-3, cw-stale-version en CW-4 y cw-collapse-409 en CW-5'
+      }
+    }
   }
 };
 

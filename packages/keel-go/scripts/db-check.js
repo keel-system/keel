@@ -32,7 +32,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
-import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, makeWorkspace } from '../test/helpers/workspace.js';
+import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, UNCOVERED_BRANCHES, makeWorkspace } from '../test/helpers/workspace.js';
 import { goView } from '../test/helpers/contract.js';
 import { baselineOf, goSchema } from '../test/helpers/schema.js';
 import { probeFile } from './lib/db-probes.js';
@@ -109,7 +109,10 @@ try {
     ...relational.map((name) => ({ name, from: name, mutate: null })),
     ...FINDER_DESIGNS.filter((design) => allRelational.includes(design.from) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: design.mutate })),
     // La autoría (13g): los derivados relacionales, que otro nombre de servicio hace su propio módulo.
-    ...AUTHORSHIP_DESIGNS.filter((design) => allRelational.includes(design.from) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
+    ...AUTHORSHIP_DESIGNS.filter((design) => allRelational.includes(design.from) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
+    // La escritura condicional (DSL 2.25, CW-1 a CW-5): las siluetas relacionales, los MISMOS diseños que miden keel-dotnet y
+    // keel-nest (keel-core/test/helpers/conditional-write-designs.js).
+    ...UNCOVERED_BRANCHES.filter((design) => ['catalog-conditional', 'shop-conditional'].includes(design.name) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
   ];
 
   // ─── El esquema ─────────────────────────────────────────────────────────────────────────────────

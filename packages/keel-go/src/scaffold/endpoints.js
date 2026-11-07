@@ -34,6 +34,7 @@ import { goString } from '../lib/go-source.js';
 import { goFileName, layout, packageFile } from './render.js';
 import { usesCallerIdentity } from './security.js';
 import { callerResolution } from './use-cases.js';
+import { EXPECTED_VERSIONS, carriesExpectedVersions, endpointPrelude, returnsVersioned } from './conditional-writes.js';
 
 /** ¿Resuelve esta operación la identidad del llamante contra las credenciales del recurso (resolvedBy)? */
 export function resolvesCaller(model, operation) {
@@ -140,11 +141,24 @@ function renderEndpoint(model, operation, plan) {
   // resolvedBy: el lector recibe la resolución de la credencial y la llama al final, tras leer y validar la entrada (una
   // petición malformada es 400 sin tocar la base, como en keel-nest y keel-dotnet).
   const resolver = resolvesCaller(model, operation) ? ', a.useCases.ResolveCaller' : '';
-  const lines = [`\t${variable}, err := ${readerName(operation)}(r${resolver})`, '\tif err != nil {', '\t\treturn err', '\t}'];
+  // La escritura condicional (api.concurrency): If-Match se lee ANTES que el lector, porque el 428 va antes que todo 400
+  // (D3), y se estampa en el mensaje.
+  const conditional = carriesExpectedVersions(model, operation);
+  const lines = [
+    ...(conditional ? endpointPrelude(model) : []),
+    `\t${variable}, err := ${readerName(operation)}(r${resolver})`,
+    '\tif err != nil {',
+    '\t\treturn err',
+    '\t}'
+  ];
+  if (conditional) lines.push(`\t${variable}.${EXPECTED_VERSIONS} = expected`);
   // La puerta, si el mensaje la lleva (keel-core/gen/entry-gates.js): por aquí entra siempre por HTTP, y no la elige el cliente.
   if (entryGateField(model, operation.name, 'HTTP')) lines.push(`\t${variable}.EntryGate = application.${entryGateConstant('HTTP')}`);
+  // Con escritura condicional el handler devuelve Versioned[T] (D6): la versión va al ETag y el valor al cuerpo.
+  const versioned = returnsVersioned(model, operation);
   if (operation.responseDto) {
-    lines.push(`\tresponse, err := ${call}`, '\tif err != nil {', '\t\treturn err', '\t}');
+    lines.push(`\t${versioned ? 'versioned' : 'response'}, err := ${call}`, '\tif err != nil {', '\t\treturn err', '\t}');
+    if (versioned) lines.push('\tw.Header().Set("ETag", etagOf(versioned.Version))', '\tresponse := versioned.Value');
     if (returnsLocation(model, operation)) {
       plan.uses.add('location');
       const target = locationTarget(model, operation);

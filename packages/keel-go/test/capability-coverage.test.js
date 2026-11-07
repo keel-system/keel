@@ -30,8 +30,8 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
-  ['api.concurrency', { motivo: MOTIVOS.pendiente, porque: 'la escritura condicional (DSL 2.25) la rechaza la frontera de keel-go hasta el incremento 3 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md; entonces la declara catalog-extended y esta fila se borra.' }],
-  ['api.concurrency.operations', { motivo: MOTIVOS.pendiente, porque: 'la escritura condicional (DSL 2.25) la rechaza la frontera de keel-go hasta el incremento 3 de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md; entonces la declara catalog-extended y esta fila se borra.' }],
+  ['api.concurrency', { motivo: MOTIVOS.soloCadenas, porque: 'la declaran las siluetas catalog-conditional, catalog-conditional-mongo y shop-conditional (keel-core/test/helpers/conditional-write-designs.js, en UNCOVERED_BRANCHES), que recorren go-syntax y go-check y miden db-check y doc-check; la fixture la declarará cuando los cuatro generadores la generen.' }],
+  ['api.concurrency.operations', { motivo: MOTIVOS.soloCadenas, porque: 'la declaran las siluetas catalog-conditional, catalog-conditional-mongo y shop-conditional (keel-core/test/helpers/conditional-write-designs.js, en UNCOVERED_BRANCHES), que recorren go-syntax y go-check y miden db-check y doc-check; la fixture la declarará cuando los cuatro generadores la generen.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en el comentario del mensaje de la suscripción (messaging.js): ningún lector depende de él.' }

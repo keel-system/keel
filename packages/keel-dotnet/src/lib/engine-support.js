@@ -538,7 +538,7 @@ export const MECHANISMS = {
   },
   'conditional-write': {
     parity: {
-      skip: 'ningún par declara api.concurrency (la frontera de keel-spring y keel-go la rechaza hasta su incremento de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md); el texto lo fijan test/uncovered-branches.test.js y test/conditional-writes.test.js sobre las variantes de keel-core/test/helpers/conditional-write-designs.js',
+      skip: 'ningún par declara api.concurrency (la frontera de keel-spring la rechaza hasta su incremento de PLAN-DSL-225-ESCRITURA-CONDICIONAL.md); el texto lo fijan test/uncovered-branches.test.js y test/conditional-writes.test.js sobre las variantes de keel-core/test/helpers/conditional-write-designs.js',
       test: 'test/conditional-writes.test.js'
     },
     emitter: 'src/scaffold/conditional-writes.js (Versioned, las excepciones, ConditionalRequests, LoadExpecting, el gate y las pruebas emitidas) · endpoints.js · services.js · repositories.js y document-repositories.js · cache.js · security.js (CORS)',

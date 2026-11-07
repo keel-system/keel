@@ -104,6 +104,18 @@ test('mailer-mongo-lock: sobre documentos, la versión declarada int se lee y se
   assert.ok(!adapter.includes('asInt64'), 'queda una lectura Int64 en el adaptador');
 });
 
+// La escritura condicional (DSL 2.25): el borde, la lectura que da el ETag, el puerto y el adaptador de cada silueta. Lo
+// demás de lo emitido lo fija test/conditional-writes.test.js; go-check lo compila y ejecuta sus pruebas.
+for (const [name, store] of [['catalog-conditional', 'postgres'], ['catalog-conditional-mongo', 'mongo'], ['shop-conditional', 'postgres']]) {
+  test(`${name}: la escritura condicional entera (api.concurrency, concurrency.operations)`, () => {
+    const files = emitted(name);
+    assert.ok(content(files, 'internal/httpapi/conditional.go').includes('func expectedVersions(r *http.Request, required bool) ([]int64, error)'), name);
+    assert.match(allGo(files), /LoadExpecting\(ctx context\.Context, \w+ [\w.]+, expected \[\]int64\)/);
+    assert.ok(files.some((file) => file.path.startsWith(`internal/infrastructure/${store}/`) && file.content.includes('domain.CheckVersion(expected,')), name);
+    assert.match(content(files, 'infra/check-conditional-writes.sh'), /check 'updateProduct'/);
+  });
+}
+
 // Cada parche es un diseño VÁLIDO: uno que la validación rechaza no llegaría nunca a build.
 for (const { name, from, mutate } of UNCOVERED_BRANCHES) {
   test(`${name}: es un diseño válido, y entra en la frontera`, () => {

@@ -39,6 +39,7 @@ import { CLIENTS_SABOTAGES, CLIENTS_SUBJECT, applySabotage as applyClientsSabota
 import { NEEDS_SABOTAGES, NEEDS_SUBJECT, applyNeedsSabotage } from '../test/helpers/needs-sabotages.js';
 import { SCOPE_SABOTAGES, SCOPE_SUBJECT, applyScopeSabotage } from '../test/helpers/scope-sabotages.js';
 import { STORAGE_SABOTAGES, STORAGE_SUBJECT, applySabotage as applyStorageSabotage } from '../test/helpers/storage-sabotages.js';
+import { CONDITIONAL_SABOTAGES, applySabotage as applyConditionalSabotage } from '../test/helpers/conditional-sabotages.js';
 import { TELEMETRY_SABOTAGES, TELEMETRY_SUBJECT, applyTelemetrySabotage } from '../test/helpers/telemetry-sabotages.js';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
@@ -570,6 +571,42 @@ for (const sabotage of API_SABOTAGES) {
   if (!step(`almacenamiento: govulncheck sin vulnerabilidades en ${STORAGE_SUBJECT}`, storageVuln.ok)) console.error(storageVuln.output);
   const storageLicenses = go(storageDir, ['tool', 'go-licenses', 'check', '--ignore', 'catalog', `--allowed_licenses=${ALLOWED_LICENSES.join(',')}`, './...']);
   if (!step(`almacenamiento: licencias permisivas en ${STORAGE_SUBJECT} (SDK de S3 incluido)`, storageLicenses.ok)) console.error(storageLicenses.output);
+}
+
+// La escritura condicional (DSL 2.25) se falsa sobre sus siluetas (keel-core/test/helpers/conditional-write-designs.js): las
+// pruebas emitidas del borde y de la caché en verde (CW-6 a CW-11), y cada sabotaje en rojo con su prueba, y solo ella.
+{
+  const subjects = [...new Set(CONDITIONAL_SABOTAGES.map((sabotage) => sabotage.subject))];
+  for (const subject of subjects) {
+    const branch = UNCOVERED_BRANCHES.find((candidate) => candidate.name === subject);
+    const dir = path.join(makeWorkspace('keel-go-conditional-'), subject);
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, branch.from));
+    branch.mutate(manifest, layers);
+    for (const file of planService({ manifest, layers, workspace: dir }).files) {
+      const out = path.join(dir, file.path);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, file.content);
+    }
+    const conditionalTests = (packages) => ['test', '-count=1', ...packages];
+    const tidied = go(dir, ['mod', 'tidy']);
+    const baseline = tidied.ok ? go(dir, conditionalTests(['./internal/httpapi/', './internal/application/'])) : tidied;
+    if (!step(`escritura condicional: las pruebas emitidas de ${subject} en verde`, baseline.ok, baseline.ok ? '' : baseline.output.slice(0, 600))) continue;
+    for (const sabotage of CONDITIONAL_SABOTAGES.filter((candidate) => candidate.subject === subject)) {
+      const file = path.join(dir, sabotage.file);
+      const original = fs.readFileSync(file, 'utf8');
+      const mutated = applyConditionalSabotage(sabotage, original);
+      if (!mutated) {
+        step(`escritura condicional falsada: ${sabotage.id}`, false, `el sabotaje ya no se aplica a ${sabotage.file}`);
+        continue;
+      }
+      fs.writeFileSync(file, mutated);
+      const sabotaged = go(dir, conditionalTests([sabotage.packages]));
+      fs.writeFileSync(file, original);
+      const failed = [...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]);
+      const exact = [...new Set(failed)].sort().join(' ') === sabotage.fails;
+      step(`escritura condicional falsada: ${sabotage.id} (${sabotage.what}) → ${sabotage.fails} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
+    }
+  }
 }
 
 // La telemetría y los logs (incremento 14) se falsan sobre una silueta con telemetría y mensajería: las pruebas emitidas en verde,
