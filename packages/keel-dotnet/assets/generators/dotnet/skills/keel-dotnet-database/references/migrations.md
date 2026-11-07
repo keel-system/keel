@@ -57,9 +57,10 @@ hay en disco, y `EVOLUTION.md` la nombra. Es el mismo SQL que dejan los otros tr
 - **No repitas sus tablas** en una migración tuya. Las tuyas van después, con `dotnet ef migrations add`, que ya
   pone una marca posterior.
 - **Lo que build no puede hacer es el snapshot** (`<Contexto>ModelSnapshot.cs`), que solo escribe `dotnet ef`. Mientras
-  no nombre la tabla, `MigrateAsync` se niega a arrancar en `develop` y `production` (`PendingModelChangesWarning`),
-  `verify-baseline.sh` sale en `KO` (paso 2) y el siguiente `migrations add` volvería a crear la tabla, que en la base
-  desplegada ya existe. `EVOLUTION.md` lo pide hasta que esté hecho, y `keel-dotnet build --check` sale en rojo. Se
+  no nombre la tabla, EF ve el modelo por delante (`PendingModelChangesWarning`), `verify-baseline.sh` sale en `KO`
+  (paso 2) y el siguiente `migrations add` volvería a crear la tabla, que en la base desplegada ya existe. Que el
+  arranque se niegue a migrar depende del proveedor: medido con `dotnet ef database update`, en PostgreSQL sale en
+  rojo con ese aviso y en MySQL avisa y aplica igual. No cuentes con ninguna de las dos. `EVOLUTION.md` lo pide hasta que esté hecho, y `keel-dotnet build --check` sale en rojo. Se
   cierra con una migración que **solo** sincroniza el snapshot:
 
   ```bash

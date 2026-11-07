@@ -174,8 +174,8 @@ export function snapshotNote(model, { step, tables }) {
   const infrastructure = solution(model).infrastructure.dir;
   return (
     `**El ModelSnapshot de EF no recoge ${tables.map((table) => `\`${table}\``).join(', ')}**, que crea el paso de build ` +
-    `\`${step}\`: hasta que lo haga, \`MigrateAsync\` se niega a arrancar en \`develop\` y \`production\` ` +
-    '(`PendingModelChangesWarning`) y el siguiente `migrations add` volvería a crear la tabla. El snapshot solo lo escribe ' +
+    `\`${step}\`: hasta que lo haga, EF ve el modelo por delante (\`PendingModelChangesWarning\`; medido con ` +
+    '`dotnet ef database update`: en PostgreSQL sale en rojo, en MySQL avisa y aplica) y el siguiente `migrations add` volvería a crear la tabla. El snapshot solo lo escribe ' +
     `\`dotnet ef\`: \`dotnet ef migrations add ${syncMigrationName(tables)} --project ${infrastructure} --output-dir ${MIGRATIONS_DIR}\`, ` +
     'VACÍA los cuerpos de `Up` y `Down` de la migración que crea (la tabla ya la crea el paso; el `.Designer.cs` y el ' +
     'snapshot se quedan como los deja) y `bash infra/verify-baseline.sh` en `OK`. Detalle en `references/migrations.md` ' +

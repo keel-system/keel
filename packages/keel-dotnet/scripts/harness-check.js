@@ -30,6 +30,9 @@ import { makeWorkspace, mountDesign, runCommand, DOTNET_READY_DESIGN } from '../
 import { build } from '../src/commands/build.js';
 import { resolveRuntime } from '../../keel-nest/scripts/lib/database-container.js';
 import { MIGRATIONS_TABLE } from '../src/scaffold/persistence-runtime.js';
+import { schemaSteps, syncMigrationName } from '../src/scaffold/schema-baseline.js';
+import { planService } from '../src/scaffold/index.js';
+import { loadService } from '@keel-system/keel-core';
 
 const keep = process.argv.includes('--keep');
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
@@ -431,9 +434,103 @@ public sealed class ProbeOrderFlow : FlowTest
   fs.writeFileSync(path.join(projectDir, 'specs.sha256'), `${'0'.repeat(64)}  specs/service.keel.yaml\n`);
   const run5 = bash(projectDir, 'infra/score-scenarios.sh');
   step('score: un specs/ que no casa con su sello sale con 2 sin ejecutar nada', run5.status === 2 && /DISEÑO/.test(run5.output), `código ${run5.status}`);
+
+  // El paso de esquema de BUILD (inc. 2b del plan 2.26): una base desplegada cuyo baseline no tiene la tabla del
+  // generador (`idempotency_record`). EF compara el modelo con el ModelSnapshot, que es del agente: con el paso solo, el
+  // arranque cae (PendingModelChangesWarning), y build lo dice en `schema.work` hasta que el agente sincroniza el snapshot
+  // con una migración vacía. Se mide el recorrido entero: sin sincronizar cae, sincronizado la tabla llega a la base
+  // desplegada, y verify-baseline.sh (baseline + paso + sincronización sobre una base vacía) es el modelo; sin el paso, no.
+  generatorSchemaStep();
 } finally {
   const down = bash(projectDir, 'infra/down.sh', ['--volumes']);
   step('bash infra/down.sh --volumes', down.status === 0, down.status === 0 ? '' : down.output.slice(-600));
+}
+
+/** El caso del paso de build sobre la base desplegada (ver la llamada). */
+function generatorSchemaStep() {
+  const TABLE = 'idempotency_record';
+  const infrastructure = 'src/ProductCatalog.Infrastructure';
+  const migrationsDir = path.join(projectDir, infrastructure, 'Persistence', 'Migrations');
+  // Las piezas de la base, de la cabecera del verify-baseline.sh EMITIDO: contenedor, cliente y conexión.
+  const verify = fs.readFileSync(path.join(projectDir, 'infra', 'verify-baseline.sh'), 'utf8');
+  const header = verify.slice(0, verify.indexOf('if ! ls "$MIGRATIONS"'));
+  const connection = /^connection=".*"$/m.exec(verify)?.[0];
+  const execute = engine === 'mysql' ? '-e' : '-c';
+  const admin = engine === 'mysql' ? '""' : 'postgres';
+  const tablesSql = engine === 'mysql'
+    ? 'SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()'
+    : "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'";
+  fs.writeFileSync(
+    path.join(projectDir, 'infra', 'step-db.sh'),
+    `${header.replace(/^FROM_MIGRATIONS=.*$/m, 'FROM_MIGRATIONS="keel_step_deployed"')}
+${connection}
+case "$1" in
+  create) db_in ${admin} ${execute} "DROP DATABASE IF EXISTS $FROM_MIGRATIONS" >/dev/null 2>&1; db_in ${admin} ${execute} "CREATE DATABASE $FROM_MIGRATIONS" ;;
+  update) dotnet ef database update --project ${infrastructure} --connection "$connection" ;;
+  tables) db_in "$FROM_MIGRATIONS" ${execute} "${tablesSql}" ;;
+  drop) db_in ${admin} ${execute} "DROP DATABASE IF EXISTS $FROM_MIGRATIONS" >/dev/null 2>&1 ;;
+esac
+`
+  );
+  const db = (command) => bash(projectDir, 'infra/step-db.sh', [command]);
+  const hasTable = () => db('tables').output.split(/\r?\n/).map((line) => line.trim()).includes(TABLE);
+  const label = 'paso de build';
+  if (!step(`${label}: la cabecera de verify-baseline.sh da la conexión`, Boolean(connection))) return;
+
+  // La base desplegada: el baseline de dotnet ef sin la fila de idempotencia en el modelo (como antes de que el diseño la
+  // ganara), aplicado.
+  const persistence = path.join(projectDir, infrastructure, 'Persistence');
+  const dbContext = fs.readdirSync(persistence).map((name) => path.join(persistence, name)).find((file) => file.endsWith('DbContext.cs'));
+  const contextSource = fs.readFileSync(dbContext, 'utf8');
+  const registration = contextSource.split('\n').find((line) => line.includes('ApplyConfiguration(') && line.includes('IdempotencyRecordRow'));
+  if (!step(`${label}: el DbContext registra la fila de ${TABLE}`, Boolean(registration))) return;
+  fs.rmSync(migrationsDir, { recursive: true, force: true });
+  fs.writeFileSync(dbContext, contextSource.replace(`${registration}\n`, ''));
+  const baseline = dotnet(projectDir, ['ef', 'migrations', 'add', 'Baseline', '--project', infrastructure, '--output-dir', 'Persistence/Migrations']);
+  db('create');
+  const deployed = baseline.ok ? db('update') : { status: 1, output: baseline.output };
+  if (!step(`${label}: la base desplegada aplica un baseline sin ${TABLE}`, deployed.status === 0 && !hasTable(), deployed.output.slice(-1200))) return;
+
+  // build --refresh: la fila vuelve al modelo y el paso se decide leyendo las migraciones de disco.
+  fs.writeFileSync(dbContext, contextSource);
+  const { manifest, layers } = loadService(path.join(projectDir, 'specs'));
+  const plan = planService({ manifest, layers, workspace, stack: JSON.parse(fs.readFileSync(path.join(projectDir, 'keel-stack.json'), 'utf8')) });
+  const first = schemaSteps(plan.model, plan.files, projectDir);
+  if (!step(`${label}: build escribe el paso y pide sincronizar el snapshot`, first.added.length === 1 && first.work.length === 1, first.added[0] ?? 'ninguno')) return;
+  for (const file of first.files) fs.writeFileSync(path.join(projectDir, file.path), file.content);
+  // Sin sincronizar, EF ve el modelo por delante del snapshot: lo que mide es la orden del paso 2 de verify-baseline.sh.
+  // `database update` no es la puerta: en MySQL avisa y aplica igual (medido), en PostgreSQL sale en rojo.
+  const pendingCheck = () => dotnet(projectDir, ['ef', 'migrations', 'has-pending-model-changes', '--project', infrastructure]);
+  const unsynced = pendingCheck();
+  step(`${label}: sin sincronizar el snapshot, EF ve cambios pendientes`, !unsynced.ok, unsynced.ok ? 'no los ve' : '');
+
+  // Lo que hace el agente: la migración de sincronización, vacía.
+  const sync = syncMigrationName([TABLE]);
+  const added = dotnet(projectDir, ['ef', 'migrations', 'add', sync, '--project', infrastructure, '--output-dir', 'Persistence/Migrations']);
+  const syncFile = fs.readdirSync(migrationsDir).find((name) => name.endsWith(`_${sync}.cs`));
+  if (!step(`${label}: dotnet ef escribe la migración de sincronización`, added.ok && Boolean(syncFile), added.output.slice(-800))) return;
+  const syncPath = path.join(migrationsDir, syncFile);
+  const emptied = fs.readFileSync(syncPath, 'utf8').replace(/(protected override void (?:Up|Down)\(MigrationBuilder migrationBuilder\)\s*\{)[\s\S]*?(\r?\n {8}\})/g, '$1$2');
+  fs.writeFileSync(syncPath, emptied);
+  const second = schemaSteps(plan.model, plan.files, projectDir);
+  const syncedCheck = pendingCheck();
+  step(`${label}: sincronizado, EF ya no ve cambios pendientes`, syncedCheck.ok, syncedCheck.output.slice(-600));
+  step(`${label}: con el snapshot sincronizado, build ya no pide nada`, second.added.length === 0 && second.work.length === 0, second.work.join(' | '));
+  const synced = db('update');
+  step(`${label}: la tabla llega a la base desplegada`, synced.status === 0 && hasTable(), synced.output.slice(-1200));
+  const again = db('update');
+  step(`${label}: el redespliegue no lo reaplica`, again.status === 0, again.output.slice(-800));
+  const verified = bash(projectDir, 'infra/verify-baseline.sh');
+  step(`${label}: verify-baseline.sh — baseline + paso + sincronización crean el esquema del modelo`, verified.status === 0 && /baseline: OK/.test(verified.output), verified.output.slice(-1500));
+
+  // Falsado: sin el paso, la migración vacía no crea nada y el catálogo difiere del modelo.
+  const stepPath = path.join(projectDir, first.added[0]);
+  const stepContent = fs.readFileSync(stepPath, 'utf8');
+  fs.rmSync(stepPath);
+  const without = bash(projectDir, 'infra/verify-baseline.sh');
+  step(`${label}: falsado — sin el paso, verify-baseline.sh sale en rojo`, without.status === 1 && /baseline: KO/.test(without.output), `código ${without.status}`);
+  fs.writeFileSync(stepPath, stepContent);
+  db('drop');
 }
 
 const failed = results.filter((result) => !result.ok).length;
