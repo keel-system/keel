@@ -9,8 +9,8 @@ segunda es el **cronómetro único**: una tabla de temporizadores con un sondead
 al que **migran todos los relojes que hoy emiten los generadores** (§ La migración de los relojes). La segunda no
 cambia el DSL, pero sí el servidor generado de cualquier diseño con persistencia.
 
-**Estado: borrador para revisión.** Nada está implementado. Las decisiones marcadas «a confirmar» (§ Preguntas
-abiertas) son las que cambian el contrato y no quiero tomar sin ti.
+**Estado: aprobado (2026-11-07).** El usuario aceptó las ocho propuestas de § Decisiones tomadas. En curso: fase B
+(incremento 0).
 
 ## Por qué
 
@@ -295,7 +295,7 @@ borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
 
 | # | Qué | Puerta |
 |---|---|---|
-| 0 | Medir: el reloj inyectable en el dominio de los cuatro (si un generador no lo tiene, se añade aquí), y cómo escribe hoy `stock-reservation` su caducidad | Nota en este plan con lo medido |
+| 0 | Medir: el reloj inyectable en el dominio de los cuatro (si un generador no lo tiene, se añade aquí), cómo escribe hoy `stock-reservation` su caducidad, el inventario de los relojes y de lo que depende de ellos en cada generador, y la **carga de partida**: consultas por minuto a la base, en reposo y con carga, con 1 y 3 réplicas, sobre `catalog-extended` | Nota en este plan con lo medido. La carga se vuelve a medir al cerrar cada migración (7, 8 y 9), y la puerta de cada una incluye que baje donde § La migración de los relojes dice que baja |
 | 1 | keel-core: schema, `crossrefs.js`, `checks.js`, mutaciones, la clase de huecos, la revisión, `docs/dsl/domain.md` y el historial de `dsl-reference.md`. DSL 2.26 sustituye a 2.25 | `npm test` de keel-core y `design-matrix` sin ids sin mutación |
 | 2 | `keel-core/gen/deadlines.js` y `keel-core/gen/timer-store.js`: el guard como datos, la tabla `keel_timer` (como `messaging-stores.js`: columnas, índice, sentencias de armado, reclamo, revalidación y purga por motor, con la hora de la base), el algoritmo del sondeador como referencia ejecutable, las sentencias del arnés, la nota del handler, las filas del gate y los casos DL | Sus pruebas (la referencia del sondeador EJECUTADA con un reloj falso), y `buildModel` de todas las fixtures sin cambios |
 | 3 | El cronómetro con los plazos en keel-spring: la tabla, el sondeador (los dos modos), el armado, el guard tardío. Ningún reloj existente cambia todavía | `compile-check`, `claim-check` con los sabotajes `dl-*`, `harness`; matriz con las filas `deadline` y `timer` |
@@ -354,7 +354,9 @@ más. Lo que se puede paralelizar lo deciden tres límites:
 **Antes de la fase E:** cada worktree necesita su `npm install`, que cuesta minutos y disco. Hay que decidir si los
 worktrees van en `D:`, con los demás temporales.
 
-## Preguntas abiertas (a confirmar)
+## Decisiones tomadas (antes preguntas abiertas)
+
+Todas con la propuesta, aceptada por el usuario el 2026-11-07.
 
 1. **La lectura antes del barrido.** Pasado el plazo y antes del barrido, `getReservation` devuelve `pending`. Hay
    dos salidas: (a) se devuelve el estado guardado, y el contrato dice que `expired` llega con el barrido; (b) se
