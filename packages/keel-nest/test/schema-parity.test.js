@@ -70,8 +70,6 @@ for (const name of relational) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
     const spring = springSchema(planSpring({ manifest, layers, workspace: FIXTURES_DIR }).files);
     const nest = nestSchema(planFixture(name).files);
-    // keel_timer de las purgas sobre el cronómetro (DSL 2.26, inc. 7): hasta la parte de keel-nest, solo donde ya la emite.
-    if (!nest.has('keel_timer')) spring.delete('keel_timer');
     assert.deepEqual([...nest.keys()].sort(), [...spring.keys()].sort(), 'las mismas tablas');
     for (const [tableName, want] of spring) {
       const got = nest.get(tableName);

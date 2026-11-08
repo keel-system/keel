@@ -21,6 +21,7 @@ import { ENTRY_GATE_TS, MEDIATOR_TS, MODULE_TS as USE_CASE_MODULE_TS, usesMediat
 import { entryGateAssignment, messageComponents, messagePath } from './services.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
 import { TABLE_PURGES_TS, usesTablePurges } from './purge.js';
+import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 
 const SCHEDULING_DIR = 'infrastructure/scheduling';
 export const SCHEDULING_TS = `src/${SCHEDULING_DIR}/scheduling.ts`;
@@ -244,6 +245,9 @@ ${methods.join('\n\n')}
 function moduleFile(model) {
   const schedulers = scheduledServices(model).map(({ service }) => ({ symbol: schedulerClass(service), from: schedulerPath(service) }));
   const purges = usesTablePurges(model);
+  // Las purgas que dispara el cronómetro (inc. 7): su `<Tabla>PurgeTimer` vive en TimerPollerModule e inyecta TablePurges
+  // y su configuración, así que este módulo es global y las exporta.
+  const onTimer = purges && timerPurges(model).length > 0;
   const imports = [
     { symbol: 'Module', from: '@nestjs/common' },
     { symbol: 'DynamicModule', from: '@nestjs/common', type: true },
@@ -279,11 +283,11 @@ function moduleFile(model) {
 export class SchedulingModule {
   static register(configuration: Configuration): DynamicModule {
     return {
-      module: SchedulingModule,${schedulers.length > 0 ? '\n      imports: [UseCaseModule],' : ''}
+      module: SchedulingModule,${onTimer ? '\n      global: true,' : ''}${schedulers.length > 0 ? '\n      imports: [UseCaseModule],' : ''}
       providers: [
 ${providers.map((provider) => `        ${provider}`).join(',\n')}
       ],
-      exports: [Scheduling${purges ? ', TablePurges' : ''}]
+      exports: [Scheduling${purges ? ', TablePurges' : ''}${onTimer ? ', PURGE_SETTINGS' : ''}]
     };
   }
 }`

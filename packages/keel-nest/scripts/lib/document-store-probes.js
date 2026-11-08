@@ -32,6 +32,7 @@ import { RECONCILIATION_CLAIM_STORE_TS } from '../../src/scaffold/reconciliation
 import { TABLE_PURGES_TS, tablePurges } from '../../src/scaffold/purge.js';
 import { sampleEntity, sampleValue } from './samples.js';
 import { modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
+import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { TIMER_ADAPTER_ARGS } from './timer-probes.js';
 
 const distOf = (file) => `./${file.replace(/^src\//, 'dist/').replace(/\.ts$/, '.js')}`;
@@ -459,7 +460,7 @@ try {
   const { TablePurges, purgeSettings } = await import('${distOf(TABLE_PURGES_TS)}');
   // Lotes de 2 y tope de 2 lotes por pasada: 5 caducados son 4 en la primera pasada y 1 en la segunda.
   const purgeConfig = purgeSettings({ get: (key) => (key.endsWith('batch-size') || key.endsWith('max-batches') ? 2 : undefined) });
-  const purges = new TablePurges({ register() {} }, purgeConfig, client, tx);${cases.join('')}
+  const purges = new TablePurges(${timerPurges(model).length > 0 ? "" : "{ register() {} }, "}purgeConfig, client, tx);${cases.join('')}
 } catch (error) {
   check('purgas: el bloque corre sin un error inesperado', false, String(error?.stack ?? error).slice(0, 400));
 }`;

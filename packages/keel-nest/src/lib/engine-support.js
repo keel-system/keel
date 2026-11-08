@@ -41,7 +41,41 @@ export const NETS = {
 export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
-  'timer-purge': { pending: 'incremento 7 de PLAN-DSL-226-PLAZOS.md: las purgas de las tablas del generador, como recurrentes del cronómetro' },
+  'timer-purge': {
+    emitter: 'src/scaffold/timer.js (un <Tabla>PurgeTimer por purga, TimerPoller) · src/scaffold/purge.js (TablePurges ya no las registra en el reloj)',
+    why: 'Una purga que vuelve a correr en todas las réplicas no rompe nada visible —borrar es idempotente—: el precio es que cada réplica repite el mismo recorrido de la tabla a la vez, y nada lo dice. Y una purga que no arbitra con UNA fila (un kind por instancia) compila, arranca y purga igual.',
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: [
+          'file:src/infrastructure/timer/outbox-event-purge-timer.ts',
+          'src/infrastructure/timer/outbox-event-purge-timer.ts::implements RecurringTimerHandler',
+          'file:src/infrastructure/timer/sql-timer-store.ts'
+        ],
+        document: [
+          'file:src/infrastructure/timer/outbox-event-purge-timer.ts',
+          'src/infrastructure/timer/outbox-event-purge-timer.ts::implements RecurringTimerHandler',
+          'file:src/infrastructure/timer/mongo-timer-store.ts'
+        ]
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'notification-mailer: dos réplicas (dos TimerPoller con sus propias instancias de cada <Tabla>PurgeTimer, TablePurges doblado) sobre SqlTimerStore contra el motor: una fila por purga (R1), un solo tick ejecutado (RC-1) y el rearme para el siguiente cron (R2), los casos de la sonda de keel-spring. Falsado con timer-every-replica, que cae en R1 y RC-1'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'notification-mailer-mongo: los mismos tres casos sobre MongoTimerStore en el replica set. Falsado con timer-every-replica, que cae en R1 y RC-1'
+      }
+    }
+  },
   deadline: {
     emitter: 'src/scaffold/timer.js (lateGuardBlock, adapterArming) · src/scaffold/entities.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js',
     why: 'Un rechazo tardío con < en vez de <= o un armado fuera de la transacción compilan igual de bien, y ningún escenario de un solo instante los ve: el precio es confirmar lo que el negocio daba por caducado, o un temporizador huérfano de una alta que revirtió.',

@@ -206,9 +206,46 @@ ${driverOptions}
     migrationsRun: configuration.get('database.migrations-run') === true || configuration.get('database.migrations-run') === 'true',
     // El historial con nombre propio: infra/reset-db.sh lo respeta por nombre (ver infra.js).
     migrationsTableName: '${MIGRATIONS_TABLE}',
-    logging: configuration.get('database.show-sql') === true || configuration.get('database.show-sql') === 'true' ? ['query', 'error'] : ['error']
+    logging: configuration.get('database.show-sql') === true || configuration.get('database.show-sql') === 'true' ? ['query', 'error'] : ['error'],
+    logger: new NestTypeOrmLogger()
   };
   return { enabled: true, transactionTimeoutMs, options };
+}
+
+/**
+ * TypeORM escribe por el Logger de Nest, como todo el servicio (texto en local, JSON ECS fuera). Con su logger por
+ * defecto, cada consulta que falla salía en crudo por la consola —una violación de unicidad que el servicio traduce a
+ * 409, o el cronómetro sobre una base sin migrar— y rompía el JSON ECS de develop y production. Una consulta que falla
+ * es un aviso, como en keel-spring (SqlExceptionHelper): quien la lanzó decide si es un error.
+ */
+class NestTypeOrmLogger implements TypeOrmLogger {
+  private readonly logger = new Logger('TypeORM');
+
+  // El texto SQL, sin sus parámetros (los valores no llegan al log).
+  logQuery(sql: string): void {
+    this.logger.debug(sql);
+  }
+
+  logQueryError(error: string | Error, sql: string): void {
+    this.logger.warn(\`La consulta falló: \${error instanceof Error ? error.message : error} — \${sql}\`);
+  }
+
+  logQuerySlow(time: number, sql: string): void {
+    this.logger.warn(\`Consulta lenta (\${time} ms): \${sql}\`);
+  }
+
+  logSchemaBuild(message: string): void {
+    this.logger.debug(message);
+  }
+
+  logMigration(message: string): void {
+    this.logger.log(message);
+  }
+
+  log(level: 'log' | 'info' | 'warn', message: unknown): void {
+    if (level === 'warn') this.logger.warn(String(message));
+    else this.logger.log(String(message));
+  }
 }
 
 /** Las entidades del esquema: las tablas de las raíces, de sus hijas y de sus listas. */
@@ -237,7 +274,9 @@ export function parseDatabaseUrl(raw: string): DatabaseUrl {
   return tsModule(
     DATA_SOURCE_OPTIONS_TS,
     [
+      { symbol: 'Logger', from: '@nestjs/common' },
       { symbol: 'DataSourceOptions', from: 'typeorm', type: true },
+      { symbol: 'Logger as TypeOrmLogger', from: 'typeorm', type: true },
       { symbol: 'Configuration', from: 'src/infrastructure/config/configuration.ts', type: true },
       { symbol: 'toMillis', from: 'src/infrastructure/config/configuration.ts' },
       ...entities

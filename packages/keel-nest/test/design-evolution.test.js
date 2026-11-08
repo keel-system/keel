@@ -13,6 +13,7 @@ import { build as buildSpring } from '../../keel-spring/src/commands/build.js';
 import { makeWorkspace, mountDesign, runCommand } from './helpers/workspace.js';
 import { schemaStepSql } from '@keel-system/keel-core/gen/schema-steps';
 import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
+import { KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
 
 const SPEC = 'product-catalog';
 const rel = (...parts) => ['src', 'application', ...parts].join('/');
@@ -220,22 +221,22 @@ test('paridad con keel-spring: el mismo cambio del diseño, el mismo delta y las
 // ─── Los pasos de esquema de build (inc. 2b del plan 2.26) ───────────────────────────────────
 //
 // Una tabla del generador que una base ya desplegada no tiene llega como una migración de TypeORM que escribe build
-// (keel-core/gen/schema-steps.js). `product-catalog` emite `idempotency_record`; la baseline «desplegada» de la prueba
-// no la crea, como la de un proyecto completado antes de que el diseño ganara la idempotencia. La baseline imita la que
+// (keel-core/gen/schema-steps.js). `product-catalog` emite `idempotency_record` y, desde el inc. 7 del plan 2.26, `keel_timer`
+// (la purga del registro corre en el cronómetro); la baseline «desplegada» de la prueba no crea ninguna, como la de un proyecto completado antes de que el diseño ganara la idempotencia. La baseline imita la que
 // exporta schema-baseline.ts: el SQL en `JSON.stringify`, con las comillas de PostgreSQL escapadas.
 
 const MIGRATIONS = 'src/migrations';
 const BASELINE = `${MIGRATIONS}/1000000000000-baseline-schema.ts`;
 const AGENT_STEP = `${MIGRATIONS}/1790000000000-add-product-sku-index.ts`;
-const STEP = `${MIGRATIONS}/1790000000001-keel-idempotency-record.ts`;
+const STEP = `${MIGRATIONS}/1790000000001-keel-idempotency-record-timer.ts`;
 
 const migrationClass = (className, statements) =>
   `import type { MigrationInterface, QueryRunner } from 'typeorm';\n\nexport class ${className} implements MigrationInterface {\n` +
   `  name = '${className}';\n\n  async up(queryRunner: QueryRunner): Promise<void> {\n` +
   statements.map((statement) => `    await queryRunner.query(${JSON.stringify(statement)});\n`).join('') +
   '  }\n\n  async down(queryRunner: QueryRunner): Promise<void> {}\n}\n';
-const baselineCreating = (table) =>
-  migrationClass('BaselineSchema1000000000000', [`CREATE TABLE "${table}" ("id" uuid NOT NULL, CONSTRAINT "PK_x" PRIMARY KEY ("id"))`]);
+const baselineCreating = (...tables) =>
+  migrationClass('BaselineSchema1000000000000', tables.map((table) => `CREATE TABLE "${table}" ("id" uuid NOT NULL, CONSTRAINT "PK_x" PRIMARY KEY ("id"))`));
 const stepFiles = (workspace) => fs.readdirSync(project(workspace, MIGRATIONS)).filter((name) => /^\d+-keel-/.test(name));
 
 test('pasos de esquema: sin baseline no hay paso; con ella, build escribe el de la tabla que falta tras los del agente', async () => {
@@ -248,17 +249,18 @@ test('pasos de esquema: sin baseline no hay paso; con ella, build escribe el de 
   fs.writeFileSync(project(workspace, AGENT_STEP), migrationClass('AddProductSkuIndex1790000000000', ['CREATE INDEX "ix" ON "products" ("id")']));
   await runBuild(workspace, { refresh: true });
   const step = read(workspace, STEP);
-  assert.match(step, /^\/\/ keel:generator-step idempotency_record\n/);
-  assert.match(step, /export class KeelIdempotencyRecord1790000000001 implements MigrationInterface \{\n {2}name = 'KeelIdempotencyRecord1790000000001';/);
+  assert.match(step, /^\/\/ keel:generator-step idempotency_record keel_timer\n/);
+  assert.match(step, /export class KeelIdempotencyRecordTimer1790000000001 implements MigrationInterface \{\n {2}name = 'KeelIdempotencyRecordTimer1790000000001';/);
   assert.match(step, /CREATE TABLE IF NOT EXISTS idempotency_record \([\s\S]*PRIMARY KEY \(operation_scope, idempotency_key\)/);
   assert.match(step, /CREATE INDEX IF NOT EXISTS ix_idempotency_record_expires_at ON idempotency_record \(expires_at\)/);
+  assert.match(step, /CREATE TABLE IF NOT EXISTS keel_timer \(/);
   assert.ok(manifest(workspace).files[STEP], 'el paso es de build: va en el manifiesto');
 
   // Informativo: sin otra evolución pendiente no hay EVOLUTION.md, y el segundo build no escribe otro paso ni el mismo
   // con otra marca; lo vuelve a emitir tal cual, así que no queda huérfano.
   assert.equal(exists(workspace, EVOLUTION), false);
   await runBuild(workspace, { refresh: true });
-  assert.deepEqual(stepFiles(workspace), ['1790000000001-keel-idempotency-record.ts']);
+  assert.deepEqual(stepFiles(workspace), ['1790000000001-keel-idempotency-record-timer.ts']);
   assert.equal(read(workspace, STEP), step);
   assert.equal(await runBuild(workspace, { check: true }), undefined, '--check en verde: el paso está al día');
 });
@@ -267,19 +269,19 @@ test('pasos de esquema: una baseline que ya crea la tabla no recibe paso, y el p
   const workspace = withFixture();
   await runBuild(workspace);
   // El escape de JSON.stringify de la baseline exportada (`\"idempotency_record\"`) no la esconde.
-  fs.writeFileSync(project(workspace, BASELINE), baselineCreating('idempotency_record'));
+  fs.writeFileSync(project(workspace, BASELINE), baselineCreating('idempotency_record', 'keel_timer'));
   await runBuild(workspace, { refresh: true });
   assert.deepEqual(stepFiles(workspace), []);
 
   // Un paso que ya se aplicó no cambia nunca: TypeORM no lo vuelve a leer.
   fs.writeFileSync(project(workspace, BASELINE), baselineCreating('products'));
   await runBuild(workspace, { refresh: true });
-  const first = `${MIGRATIONS}/1000000000001-keel-idempotency-record.ts`;
+  const first = `${MIGRATIONS}/1000000000001-keel-idempotency-record-timer.ts`;
   const applied = `${read(workspace, first)}// aplicado con otro generador\n`;
   fs.writeFileSync(project(workspace, first), applied);
   await runBuild(workspace, { refresh: true });
   assert.equal(read(workspace, first), applied);
-  assert.deepEqual(stepFiles(workspace), ['1000000000001-keel-idempotency-record.ts']);
+  assert.deepEqual(stepFiles(workspace), ['1000000000001-keel-idempotency-record-timer.ts']);
 });
 
 test('pasos de esquema: con evolución pendiente, EVOLUTION.md dice qué paso escribió build', async () => {
@@ -290,17 +292,15 @@ test('pasos de esquema: con evolución pendiente, EVOLUTION.md dice qué paso es
   evolveDesign(workspace);
   await runBuild(workspace, { refresh: true, prune: true });
   const md = read(workspace, EVOLUTION);
-  assert.match(md, /## Pasos de esquema de build[\s\S]*1000000000001-keel-idempotency-record\.ts/);
+  assert.match(md, /## Pasos de esquema de build[\s\S]*1000000000001-keel-idempotency-record-timer\.ts/);
   // Un segundo build antes de entrar al proyecto ya no lo ve nuevo, pero lo arrastra.
   await runBuild(workspace, { refresh: true, prune: true });
-  assert.match(read(workspace, EVOLUTION), /1000000000001-keel-idempotency-record\.ts/);
+  assert.match(read(workspace, EVOLUTION), /1000000000001-keel-idempotency-record-timer\.ts/);
 });
 
 // La promesa del 2b: la misma base desplegada recibe las MISMAS tablas con el MISMO SQL de los dos generadores. El de
 // keel-nest va troceado en una llamada por sentencia; unidas como las une keel-core, tienen que ser el `.sql` de Flyway.
-// keel-spring da ya keel_timer a todo diseño con purgas (DSL 2.26, inc. 7) y su paso lleva las dos tablas; keel-nest lo
-// iguala con su parte del inc. 7, y entonces este todo se retira.
-test('pasos de esquema, paridad con keel-spring: las mismas tablas y el mismo SQL para la misma base desplegada', { todo: 'inc. 7 de PLAN-DSL-226-PLAZOS.md en keel-nest' }, async () => {
+test('pasos de esquema, paridad con keel-spring: las mismas tablas y el mismo SQL para la misma base desplegada', async () => {
   const workspace = withFixture();
   await runBuild(workspace);
   await runBuild(workspace, {}, buildSpring);
@@ -309,12 +309,12 @@ test('pasos de esquema, paridad con keel-spring: las mismas tablas y el mismo SQ
   await runBuild(workspace, { refresh: true });
   await runBuild(workspace, { refresh: true }, buildSpring);
 
-  const nest = read(workspace, `${MIGRATIONS}/1000000000001-keel-idempotency-record.ts`);
-  const spring = read(workspace, 'src/main/resources/db/migration/V2__keel_idempotency_record.sql', 'spring');
+  const nest = read(workspace, `${MIGRATIONS}/1000000000001-keel-idempotency-record-timer.ts`);
+  const spring = read(workspace, 'src/main/resources/db/migration/V2__keel_idempotency_record_timer.sql', 'spring');
   const mark = (content) => content.split('\n')[0].replace(/^(\/\/|--) /, '');
   assert.equal(mark(nest), mark(spring), 'la cabecera nombra las mismas tablas');
   const nestStatements = [...nest.split('const STATEMENTS')[1].split('\n];')[0].matchAll(/`([^`]*)`/g)].map((match) => match[1]);
   const springSql = spring.split('\n').filter((line) => !line.startsWith('-- ')).join('\n').replace(/^\n/, '');
   assert.equal(`${nestStatements.join('\n\n')}\n`, springSql);
-  assert.equal(springSql, schemaStepSql('postgresql', [IDEMPOTENCY_RECORD]));
+  assert.equal(springSql, schemaStepSql('postgresql', [IDEMPOTENCY_RECORD, KEEL_TIMER]));
 });

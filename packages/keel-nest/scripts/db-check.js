@@ -33,8 +33,9 @@
 import fs from 'node:fs';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
 import { conditionalWriteBlock } from './lib/conditional-probes.js';
-import { TIMER_ADAPTER_ARGS, TIMER_SABOTAGES, isTimerSabotage, timerBlock, timerPreamble, timerProbePatch, timerSabotage, timerSabotageVerdict } from './lib/timer-probes.js';
+import { PURGE_TIMER_SABOTAGES, TIMER_ADAPTER_ARGS, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBlock, purgeTimerSabotageVerdict, timerBlock, timerPreamble, timerProbePatch, timerSabotage, timerSabotageVerdict } from './lib/timer-probes.js';
 import { modelDeadlines, usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
+import { timerPurges, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
 import os from 'node:os';
 import path from 'node:path';
@@ -110,7 +111,9 @@ const SABOTAGES = {
     Object.keys(TIMER_SABOTAGES)
       .filter((id) => timerSabotage(id, 'relational'))
       .map((id) => [id, timerSabotage(id, 'relational')])
-  )
+  ),
+  // Las purgas en modo clúster (DSL 2.26, inc. 7): con --subject=notification-mailer, caen R1 y RC-1 del bloque de purgas.
+  ...Object.fromEntries(Object.entries(PURGE_TIMER_SABOTAGES).map(([id, { spec }]) => [id, spec]))
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -228,7 +231,7 @@ function expectedSchema(model, engine) {
   }
   // La marca del reclamo de la reconciliación (incremento 11c): la tabla de keel-core.
   // La tabla del cronómetro (DSL 2.26): la de keel-core, con su unicidad y su índice de vencimiento.
-  if (usesDeadlines(model)) {
+  if (usesTimer(model)) {
     const t = table(KEEL_TIMER.table);
     for (const spec of KEEL_TIMER.columns) {
       t.columns.set(spec.name, { nullable: spec.nullable, length: spec.base === 'string' ? spec.length : null, scale: null, collation: null });
@@ -358,6 +361,7 @@ ${claimCode}
 ${reconciliationCode}
 ${timerCode}
 ${purgeBlock(model)}
+${purgeTimerBlock(model)}
 
 await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -1088,6 +1092,8 @@ function reconciliationBlock(model, ctx) {
 function purgeBlock(model) {
   const purges = tablePurges(model);
   if (purges.length === 0) return '';
+  // Con las purgas en el cronómetro (DSL 2.26, inc. 7) TablePurges no se registra en el reloj y no lo recibe.
+  const onTimer = timerPurges(model).length > 0;
   const ORM = {
     outbox_event: ['OutboxEventOrm', OUTBOX_ORM_TS],
     processed_event: ['ProcessedEventOrm', PROCESSED_EVENT_ORM_TS],
@@ -1138,10 +1144,10 @@ function purgeBlock(model) {
     const kept = [${rows.recent}, ${rows.recent}].map(${rows.kept});
     ${rows.pending ? `const pending = [old(30), old(30)].map(${rows.pending});
     await repository.insert([...expired, ...kept, ...pending]);` : 'await repository.insert([...expired, ...kept]);'}
-    const capped = new TablePurges(scheduling, settings({ batchSize: 2, maxBatches: 1 }), dataSource, tx);
+    const capped = new TablePurges(${onTimer ? "" : "scheduling, "}settings({ batchSize: 2, maxBatches: 1 }), dataSource, tx);
     const first = await capped.${purge.method}(now);
     check('${purge.what}: con el tope alcanzado, la pasada borra un lote y deja el resto', first >= 2 && first < 5 && (await repository.count()) === ${rows.pending ? 9 : 7} - first, \`\${first} borradas\`);
-    const purger = new TablePurges(scheduling, settings({ batchSize: 2, maxBatches: 100 }), dataSource, tx);
+    const purger = new TablePurges(${onTimer ? "" : "scheduling, "}settings({ batchSize: 2, maxBatches: 100 }), dataSource, tx);
     const second = await purger.${purge.method}(now);
     check('${purge.what}: la pasada siguiente borra lo que quedaba, en lotes', first + second === 5, \`\${first} + \${second}\`);
     check('${purge.what}: lo vigente no se toca', (await repository.count()) === ${rows.pending ? 4 : 2}, await repository.count());${rows.pending ? `
@@ -1522,6 +1528,12 @@ for (const engine of ENGINES) {
         continue;
       }
       const checks = JSON.parse(marker);
+      // Lo mismo con el de las purgas: verde si caen EXACTAMENTE R1 y RC-1 de su bloque.
+      if (isPurgeTimerSabotage(sabotage) && timerPurges(model).length > 0) {
+        const verdict = purgeTimerSabotageVerdict(checks, sabotage);
+        step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
       // Un sabotaje del cronómetro se juzga al revés: verde si caen EXACTAMENTE sus casos DL (y ningún otro).
       if (isTimerSabotage(sabotage) && usesDeadlines(model)) {
         const verdict = timerSabotageVerdict(checks, sabotage, 'relational');

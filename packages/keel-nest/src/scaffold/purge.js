@@ -13,6 +13,7 @@
 // mismas claves, variables y defaults que keel-spring.
 
 import { BATCHED_PURGE, batchedPurgeParameters } from '@keel-system/keel-core/gen';
+import { purgedByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { OUTBOX_EVENT, OUTBOX_PURGE, PROCESSED_EVENT, PROCESSED_EVENT_PURGE } from '@keel-system/keel-core/gen/messaging-stores';
 import { IDEMPOTENCY_RECORD, IDEMPOTENCY_RECORD_PURGE } from '@keel-system/keel-core/gen/request-idempotency';
 import { tsModule, tsString } from './render.js';
@@ -103,7 +104,7 @@ export function generate(model) {
   if (purges.length === 0) return [];
   const files = [
     { path: BATCHED_PURGE_TS, content: batchedPurgeFile() },
-    { path: TABLE_PURGES_TS, content: tablePurgesFile(purges, usesDocument(model)) }
+    { path: TABLE_PURGES_TS, content: tablePurgesFile(purges, usesDocument(model), purges.filter((purge) => !purgedByTimer(model, purge.table))) }
   ];
   // La cadencia de la purga del registro de idempotencia, en su propio fragmento como en keel-spring (las del
   // outbox y de processed_event van en messaging.yaml). El perfil test no lo lleva: allí no corre el reloj.
@@ -181,7 +182,11 @@ export async function batchedPurge(run: BatchedPurgeRun): Promise<number> {
   );
 }
 
-function tablePurgesFile(purges, document = false) {
+/**
+ * `scheduled` son las purgas que TablePurges registra en el reloj del servicio: las que NO corren en el cronómetro
+ * (DSL 2.26, incremento 7). Las demás las dispara su `<Tabla>PurgeTimer` (timer.js), que llama al mismo método.
+ */
+function tablePurgesFile(purges, document = false, scheduled = purges) {
   const settingsType = (purge) =>
     `{ readonly cron: string;${purge.retentionDays ? ' readonly retentionDays: number;' : ''} readonly batchSize: number; readonly maxBatches: number }`;
   const settingsValue = (purge) => {
@@ -194,7 +199,7 @@ function tablePurgesFile(purges, document = false) {
       maxBatches: positive(configuration, ${tsString(batch.maxBatches.key)}, ${batch.maxBatches.default})
     }`;
   };
-  const registrations = purges
+  const registrations = scheduled
     .map((purge) => `    this.scheduling.register({ name: ${tsString(`purge:${purge.what}`)}, cron: this.settings.${purge.key}.cron, run: () => this.${purge.method}() });`)
     .join('\n');
   const methods = purges
@@ -218,14 +223,14 @@ function tablePurgesFile(purges, document = false) {
       { symbol: 'Inject', from: '@nestjs/common' },
       { symbol: 'Injectable', from: '@nestjs/common' },
       { symbol: 'Logger', from: '@nestjs/common' },
-      { symbol: 'OnModuleInit', from: '@nestjs/common', type: true },
+      ...(scheduled.length > 0 ? [{ symbol: 'OnModuleInit', from: '@nestjs/common', type: true }] : []),
       ...(document
         ? [{ symbol: 'Document', from: 'mongodb', type: true }, { symbol: 'MongoClient', from: 'mongodb', type: true }]
         : [{ symbol: 'DataSource', from: 'typeorm', type: true }]),
       { symbol: 'Configuration', from: CONFIG_TS, type: true },
       { symbol: 'DATA_SOURCE', from: TRANSACTION_CONTEXT_TS },
       { symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS },
-      { symbol: 'Scheduling', from: SCHEDULING_TS },
+      ...(scheduled.length > 0 ? [{ symbol: 'Scheduling', from: SCHEDULING_TS }] : []),
       { symbol: 'batchedPurge', from: BATCHED_PURGE_TS }
     ],
     `/** Token de la configuración de las purgas ya resuelta. */
@@ -247,26 +252,35 @@ ${purges.map(settingsValue).join(',\n')}
 }
 
 /**
- * Las purgas de las tablas del generador, cada una con su reloj. Por lotes y SIN transacción abarcadora:
- * cada lote confirma en la suya (batchedPurge). Una sola transacción alrededor de todo volvería a ser el
- * DELETE único que esto sustituye. Sin base de datos (el perfil test) no se registran.
+ * Las purgas de las tablas del generador. Por lotes y SIN transacción abarcadora: cada lote confirma en la
+ * suya (batchedPurge). Una sola transacción alrededor de todo volvería a ser el DELETE único que esto
+ * sustituye. ${
+    scheduled.length === purges.length
+      ? 'Cada una con su reloj; sin base de datos (el perfil test) no se registran.'
+      : scheduled.length === 0
+        ? 'Las dispara el cronómetro (`<Tabla>PurgeTimer`), en UNA réplica por tick: aquí no se registra ninguna en el reloj.'
+        : 'Las que no dispara el cronómetro, con su reloj; sin base de datos (el perfil test) no se registran.'
+  }
  */
 @Injectable()
-export class TablePurges implements OnModuleInit {
+export class TablePurges${scheduled.length > 0 ? ' implements OnModuleInit' : ''} {
   private readonly logger = new Logger('TablePurges');
 
-  constructor(
-    @Inject(Scheduling) private readonly scheduling: Scheduling,
+  constructor(${scheduled.length > 0 ? '\n    @Inject(Scheduling) private readonly scheduling: Scheduling,' : ''}
     @Inject(PURGE_SETTINGS) private readonly settings: PurgeSettings,
     @Inject(DATA_SOURCE) private readonly dataSource: ${document ? 'MongoClient' : 'DataSource'} | null,
     @Inject(TransactionContext) private readonly transactions: TransactionContext
   ) {}
-
+${
+  scheduled.length > 0
+    ? `
   onModuleInit(): void {
     if (this.dataSource == null) return;
 ${registrations}
   }
-
+`
+    : ''
+}
 ${methods}
 
 ${document ? documentPurgeMethod() : `  private purge(

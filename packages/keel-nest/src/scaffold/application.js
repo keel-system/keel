@@ -22,7 +22,7 @@ import { usesIdempotencyHeader } from './request-idempotency.js';
 import { usesHttpSecurity, usesCallerScope, usesSecurityModule } from './security.js';
 import { usesMessaging } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
-import { usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
+import { usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { usesServiceParameters } from './service-parameters.js';
 import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
@@ -35,7 +35,7 @@ import { mainTelemetry, usesTelemetry } from './telemetry.js';
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs(model) },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), [...controllerClasses(model), ...paymentControllers(model)], usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model), usesPayments(model), usesCache(model), usesStorage(model) && Boolean(model.stack?.storage), usesTelemetry(model), usesDeadlines(model) && usesPersistence(model)) },
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), [...controllerClasses(model), ...paymentControllers(model)], usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model), usesPayments(model), usesCache(model), usesStorage(model) && Boolean(model.stack?.storage), usesTelemetry(model), usesTimer(model)) },
     { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model), usesPayments(model), usesMultipart(model) ? multipartFileLimitBytes(model) : null, usesTelemetry(model)) }
   ];
 }

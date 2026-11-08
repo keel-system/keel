@@ -41,7 +41,8 @@ import { finderBlock } from './lib/finder-probes.js';
 import { rankBlock, inverseBlock } from './lib/rank-inverse-probes.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 import { adapterArgs, storeBlocks, storePreamble } from './lib/document-store-probes.js';
-import { TIMER_SABOTAGES, isTimerSabotage, timerBlock, timerPreamble, timerProbePatch, timerSabotage, timerSabotageVerdict } from './lib/timer-probes.js';
+import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBlock, purgeTimerSabotageVerdict, timerBlock, timerPreamble, timerProbePatch, timerSabotage, timerSabotageVerdict } from './lib/timer-probes.js';
+import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { modelDeadlines, usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { AMQPLIB_VERSION, AWS_SDK_VERSION, FASTIFY_MULTIPART_VERSION, JOSE_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION } from '../src/lib/assets.js';
@@ -74,7 +75,9 @@ const SABOTAGES = {
     Object.keys(TIMER_SABOTAGES)
       .filter((id) => timerSabotage(id, 'document'))
       .map((id) => [id, timerSabotage(id, 'document')])
-  )
+  ),
+  // Las purgas en modo clúster (DSL 2.26, inc. 7): con --subject=notification-mailer-mongo, caen R1 y RC-1 del bloque.
+  ...Object.fromEntries(Object.entries(PURGE_TIMER_SABOTAGES).map(([id, { spec }]) => [id, spec]))
 };
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -261,6 +264,7 @@ ${blocks.join('\n')}
 ${race}
 ${stores}
 ${timerCode}
+${purgeTimerBlock(model)}
 
 await client.close();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -554,6 +558,12 @@ try {
       continue;
     }
     const checks = JSON.parse(marker);
+    // Lo mismo con el de las purgas: verde si caen EXACTAMENTE R1 y RC-1 de su bloque.
+    if (isPurgeTimerSabotage(sabotage) && timerPurges(model).length > 0) {
+      const verdict = purgeTimerSabotageVerdict(checks, sabotage);
+      step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
     // Un sabotaje del cronómetro se juzga al revés: verde si caen EXACTAMENTE sus casos DL (y ningún otro).
     if (isTimerSabotage(sabotage) && usesDeadlines(model)) {
       const verdict = timerSabotageVerdict(checks, sabotage, 'document');

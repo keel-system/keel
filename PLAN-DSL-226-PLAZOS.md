@@ -501,6 +501,23 @@ commit de ese generador:
 - su fila `timer-purge` de la matriz queda pendiente (con su excepción en la prueba que prohíbe pendientes en dotnet y
   go).
 
+**Lo que dejó el incremento 7 en keel-nest.** Cada purga es un `<Tabla>PurgeTimer` que llama al método de siempre de
+`TablePurges`. `TablePurges` ya no recibe `Scheduling` cuando todo va por el cronómetro, y `SchedulingModule` pasa a ser
+global y exporta `PURGE_SETTINGS`. `RecurringTimerHandler` es `kind`, `spec` y `tick()`, con su propio token
+(`TIMER_RECURRINGS`), y el sondeador lo ejecuta fuera de la transacción.
+
+La red es el bloque de dos réplicas de `db-check` y `doc-check` (`purgeTimerBlock`): dos `TimerPoller` con sus propias
+instancias y `TablePurges` doblado, con los mismos casos que keel-spring. `db-check` da 116/116 en PostgreSQL y MySQL, y
+`doc-check` 21/21. El sabotaje `timer-every-replica` (un `kind` por instancia) cae en exactamente R1 y RC-1 en los tres
+motores. Sin red, `test/purge-timer.test.js` cubre los recurrentes emitidos, la paridad de nombres con keel-spring y que
+el sabotaje se sigue aplicando.
+
+Lo que destapó `ts-check`: el arranque en `develop` sobre una base sin migrar hace que el sondeador consulte `keel_timer`,
+y TypeORM, con su logger por defecto, escribía la consulta fallida en crudo, fuera del JSON ECS. No es del cronómetro: le
+pasaba a toda consulta que falla, también a la violación de unicidad que el servicio traduce a 409 en uso normal. Ahora
+TypeORM escribe por el `Logger` de Nest (`NestTypeOrmLogger`, en `data-source-options.ts`), y una consulta fallida es un
+aviso, como en keel-spring.
+
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
 migración es un incremento propio con su puerta, y entre una y otra el servidor generado sigue en verde.

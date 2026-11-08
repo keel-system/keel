@@ -18,10 +18,15 @@
 //     keel-nest: desde la 2.26 gobierna también al cronómetro;
 //   · el despacho de cada plazo (`<Entidad><Estado>Deadline`) y la purga de la propia tabla (R7), el primer recurrente.
 //
-// Ningún reloj que ya existía cambia: el relay, las purgas y los `schedule` siguen en scheduling.js/purge.js. Migran en
-// los incrementos 7, 8 y 9. El modo POR RÉPLICA no se emite (su único usuario es el relay, inc. 9).
+// Desde el incremento 7, las purgas de las tablas del generador también corren aquí, como recurrentes en modo clúster
+// (`<Tabla>PurgeTimer`, que llama a TablePurges): una réplica por tick en vez de todas a la vez. Por eso el cronómetro
+// existe con plazos O con purgas (`usesTimer`, keel-core/gen/timer-plan.js), y lo de los plazos solo con plazos. El relay
+// y los `schedule` siguen en scheduling.js: migran en los incrementos 8 y 9. El modo POR RÉPLICA no se emite (su único
+// usuario es el relay, inc. 9).
 
 import { modelDeadlines, usesDeadlines, lateGuards, deadlineOf, CLOCK_PORT } from '@keel-system/keel-core/gen/deadlines';
+import { TIMER_DATABASES, timerPurges, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { pascalCase } from '@keel-system/keel-core/gen';
 import {
   KEEL_TIMER,
   KEEL_TIMER_DOCUMENT,
@@ -41,8 +46,9 @@ import { MEDIATOR_TS } from './mediator.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
 import { messageComponents, messagePath } from './services.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
+import { TABLE_PURGES_TS, tablePurges } from './purge.js';
 
-export { usesDeadlines, deadlineOf };
+export { usesDeadlines, usesTimer, deadlineOf, TIMER_DATABASES };
 
 const TIMER_DIR = 'infrastructure/timer';
 export const CLOCK_TS = classPath(DIRS.portOut, CLOCK_PORT.name);
@@ -60,8 +66,17 @@ export const KEEL_TIMER_ORM_TS = 'src/infrastructure/persistence/timer/keel-time
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
-/** Los motores en los que hay cronómetro: los relacionales con sentencias medidas y MongoDB. */
-export const TIMER_DATABASES = Object.freeze([...TIMER_ENGINES, 'mongodb']);
+/** `OutboxEventPurgeTimer`: el recurrente que dispara la purga de una tabla del generador (el nombre de keel-spring). */
+export function purgeTimerClass(table) {
+  return `${pascalCase(table)}PurgeTimer`;
+}
+export function purgeTimerPath(table) {
+  return classPath(TIMER_DIR, purgeTimerClass(table));
+}
+/** La clave de `TimerKinds` de la purga de una tabla: `PURGE_OUTBOX_EVENT`. */
+export function purgeKindConstant(table) {
+  return `PURGE_${table.toUpperCase()}`;
+}
 
 /**
  * Lo que un diseño con plazos no puede generar con este stack, o []: el cronómetro solo existe donde sus sentencias se
@@ -132,7 +147,7 @@ const timerStoreImplClass = (model) => (usesDocument(model) ? 'MongoTimerStore' 
 
 /** Los archivos que emite este módulo, para quien los cablea (app.module, la prueba de los casos de uso). */
 export function timerModules(model) {
-  if (!usesDeadlines(model)) return null;
+  if (!usesTimer(model)) return null;
   return { timerModule: { symbol: 'TimerModule', from: TIMER_MODULE_TS }, pollerModule: { symbol: 'TimerPollerModule', from: TIMER_MODULE_TS } };
 }
 
@@ -243,18 +258,24 @@ export function adapterArming(model, entity, imports, previous) {
 // ─── Lo que emite build ──────────────────────────────────────────────────────
 
 export function generate(model) {
-  if (!usesDeadlines(model)) return [];
+  if (!usesTimer(model)) return [];
   const document = usesDocument(model);
+  const deadlines = usesDeadlines(model);
   const files = [
-    { path: CLOCK_TS, content: clockFile() },
-    { path: SYSTEM_CLOCK_TS, content: systemClockFile() },
-    { path: deadlinesPath(model), content: deadlinesFile(model) },
+    ...(deadlines
+      ? [
+          { path: CLOCK_TS, content: clockFile() },
+          { path: SYSTEM_CLOCK_TS, content: systemClockFile() },
+          { path: deadlinesPath(model), content: deadlinesFile(model) }
+        ]
+      : []),
     { path: TIMER_KINDS_TS, content: timerKindsFile(model) },
     { path: TIMER_STORE_TS, content: timerStoreFile() },
     document ? { path: MONGO_TIMER_STORE_TS, content: mongoTimerStoreFile() } : { path: SQL_TIMER_STORE_TS, content: sqlTimerStoreFile(model) },
     { path: TIMER_SETTINGS_TS, content: timerSettingsFile() },
     { path: TIMER_POLLER_TS, content: timerPollerFile() },
     { path: TIMER_PURGE_TS, content: timerPurgeFile() },
+    ...timerPurges(model).map((purge) => ({ path: purgeTimerPath(purge.table), content: purgeTimerFile(model, purge) })),
     ...modelDeadlines(model).map((entry) => ({ path: deadlineHandlerPath(entry.entity.name, entry.deadline.stateName), content: deadlineHandlerFile(model, entry) })),
     { path: TIMER_MODULE_TS, content: timerModuleFile(model) },
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/timer.yaml`, content: timerYaml(profile) }))
@@ -265,7 +286,7 @@ export function generate(model) {
 
 /** La entidad de la tabla, para el DataSource (relacional). */
 export function timerEntities(model) {
-  if (!usesDeadlines(model) || usesDocument(model)) return [];
+  if (!usesTimer(model) || usesDocument(model)) return [];
   return [{ symbol: 'KeelTimerOrm', from: KEEL_TIMER_ORM_TS }];
 }
 
@@ -333,10 +354,16 @@ ${guards.join('\n')}
 }
 
 function timerKindsFile(model) {
-  const constants = modelDeadlines(model).map(
-    ({ entity, deadline, kind }) => `  /** El plazo de ${entity.name} en '${deadline.stateName}'. */
+  const constants = [
+    ...modelDeadlines(model).map(
+      ({ entity, deadline, kind }) => `  /** El plazo de ${entity.name} en '${deadline.stateName}'. */
   ${kindConstant(entity.name, deadline.stateName)}: ${tsString(kind)},`
-  );
+    ),
+    ...timerPurges(model).map(
+      (purge) => `  /** La purga de \`${purge.table}\`: un recurrente en modo clúster. */
+  ${purgeKindConstant(purge.table)}: ${tsString(purge.kind)},`
+    )
+  ];
   return tsModule(
     TIMER_KINDS_TS,
     [],
@@ -399,20 +426,27 @@ export interface TimerHandler {
 
 /**
  * Un temporizador RECURRENTE en modo clúster: una fila sin entidad, que cada réplica asegura al arrancar (R1) y que en
- * cada tick ejecuta UNA sola réplica, la que la reclama. El siguiente tick se calcula desde la hora de la base de DESPUÉS
- * del tick (R2), con el cron en UTC (T7).
+ * cada tick ejecuta UNA sola réplica, la que la reclama. El siguiente tick lo calcula el sondeador desde la hora de la
+ * base de DESPUÉS del tick (R2), con el cron en UTC (T7).
+ *
+ * El tick corre FUERA de toda transacción, a diferencia de un plazo: un recurrente (una purga por lotes) gestiona las
+ * suyas, y envolverlo en una sola volvería a ser el DELETE único que la purga por lotes sustituye. Si lanza, cuenta como
+ * un fallo del temporizador, igual que un plazo.
  */
-export interface RecurringTimerHandler extends TimerHandler {
+export interface RecurringTimerHandler {
+  /** El nombre del temporizador en la tabla (TimerKinds). */
+  readonly kind: string;
   /** El cron de seis campos (el segundo primero), evaluado en UTC. */
   readonly spec: string;
+  /** Un tick: lo que hace el mecanismo cada vez que vence. */
+  tick(): Promise<void>;
 }
 
-export function isRecurring(handler: TimerHandler): handler is RecurringTimerHandler {
-  return typeof (handler as Partial<RecurringTimerHandler>).spec === 'string';
-}
-
-/** Token de la lista de handlers del cronómetro. */
+/** Token de la lista de handlers de los plazos. */
 export const TIMER_HANDLERS = Symbol('TIMER_HANDLERS');
+
+/** Token de la lista de recurrentes del cronómetro. */
+export const TIMER_RECURRINGS = Symbol('TIMER_RECURRINGS');
 
 /**
  * Un temporizador recién armado, avisado DESPUÉS del commit: el sondeador de esta réplica lo escucha y, si vence antes de
@@ -971,10 +1005,12 @@ function timerPollerFile() {
       { symbol: 'TIMER_SETTINGS', from: TIMER_SETTINGS_TS },
       { symbol: 'TimerSettings', from: TIMER_SETTINGS_TS, type: true },
       { symbol: 'TIMER_HANDLERS', from: TIMER_STORE_TS },
+      { symbol: 'TIMER_RECURRINGS', from: TIMER_STORE_TS },
       { symbol: 'TimerArmedSignal', from: TIMER_STORE_TS },
+      { symbol: 'ClaimedTimer', from: TIMER_STORE_TS, type: true },
+      { symbol: 'RecurringTimerHandler', from: TIMER_STORE_TS, type: true },
       { symbol: 'TimerHandler', from: TIMER_STORE_TS, type: true },
-      { symbol: 'TimerStore', from: TIMER_STORE_TS },
-      { symbol: 'isRecurring', from: TIMER_STORE_TS }
+      { symbol: 'TimerStore', from: TIMER_STORE_TS }
     ],
     `/**
  * El siguiente tick ESTRICTAMENTE posterior a \`from\`, con el cron en UTC (T7). La zona va en el CÁLCULO: en \`cron\` 4
@@ -1008,6 +1044,7 @@ export function sleepMs(nextDueMs: number | null, maxSleepMs: number): number {
 export class TimerPoller implements OnApplicationBootstrap, BeforeApplicationShutdown {
   private readonly logger = new Logger('TimerPoller');
   private readonly handlers: ReadonlyMap<string, TimerHandler>;
+  private readonly recurrings: ReadonlyMap<string, RecurringTimerHandler>;
   /** Solo los kinds que esta réplica conoce (R4): un temporizador de otra versión no lo toca, ni para borrarlo. */
   private readonly kinds: readonly string[];
   private running = false;
@@ -1019,19 +1056,21 @@ export class TimerPoller implements OnApplicationBootstrap, BeforeApplicationShu
   constructor(
     @Inject(TimerStore) private readonly store: TimerStore,
     @Inject(TIMER_HANDLERS) handlers: readonly TimerHandler[],
+    @Inject(TIMER_RECURRINGS) recurrings: readonly RecurringTimerHandler[],
     @Inject(TIMER_SETTINGS) private readonly settings: TimerSettings,
     @Inject(TransactionContext) private readonly transactions: TransactionContext,
     @Inject(TimerArmedSignal) private readonly signal: TimerArmedSignal
   ) {
     this.handlers = new Map(handlers.map((handler) => [handler.kind, handler]));
-    this.kinds = [...this.handlers.keys()];
+    this.recurrings = new Map(recurrings.map((recurring) => [recurring.kind, recurring]));
+    this.kinds = [...this.handlers.keys(), ...this.recurrings.keys()];
   }
 
   /** Las réplicas aseguran sus recurrentes al arrancar (R1), con el siguiente tick desde la hora de la base. */
   async ensureRecurring(): Promise<void> {
     const now = await this.store.dbNow();
-    for (const handler of this.handlers.values()) {
-      if (isRecurring(handler)) await this.store.ensureRecurring(handler.kind, handler.spec, nextTick(handler.spec, now));
+    for (const recurring of this.recurrings.values()) {
+      await this.store.ensureRecurring(recurring.kind, recurring.spec, nextTick(recurring.spec, now));
     }
   }
 
@@ -1040,8 +1079,17 @@ export class TimerPoller implements OnApplicationBootstrap, BeforeApplicationShu
     const token = randomUUID();
     const claimed = await this.store.claim(this.kinds, this.settings.batchSize, this.settings.leaseMs, token);
     for (const timer of claimed) {
+      const recurring = this.recurrings.get(timer.kind);
       const handler = this.handlers.get(timer.kind);
       try {
+        if (recurring != null) {
+          // Un recurrente en modo clúster: lo ejecuta esta réplica porque ganó la fila, FUERA de toda transacción (el
+          // mecanismo gestiona las suyas), y se rearma con el siguiente tick desde la hora de la base de DESPUÉS (R2). Si
+          // otra réplica le quitó la fila (el tick duró más que el arriendo), el rearme no casa con la valla.
+          await recurring.tick();
+          await this.store.reschedule(timer.id, token, nextTick(recurring.spec, await this.store.dbNow()));
+          continue;
+        }
         if (handler == null) throw new Error(\`Sin handler para el temporizador \${timer.kind}\`);
         await this.transactions.inTransaction(async () => {
           const outcome = await handler.handle(timer, await this.store.dbNow());
@@ -1049,15 +1097,20 @@ export class TimerPoller implements OnApplicationBootstrap, BeforeApplicationShu
           else await this.store.reschedule(timer.id, token, outcome.dueAt);
         });
       } catch (failure) {
-        const reason = failure instanceof Error ? failure.message : String(failure);
-        this.logger.warn(\`El temporizador \${timer.id} (\${timer.kind}) falló en su intento \${timer.attempts + 1}: \${reason}\`);
-        await this.store.fail(timer.id, token, this.settings.maxAttempts, this.settings.retryDelayMs);
-        if (timer.attempts + 1 >= this.settings.maxAttempts) {
-          this.logger.error(\`El temporizador \${timer.id} (\${timer.kind}) agotó sus \${this.settings.maxAttempts} intentos y queda APARCADO\`);
-        }
+        await this.failed(timer, token, failure);
       }
     }
     return sleepMs(await this.store.nextDueMs(this.kinds), this.settings.maxSleepMs);
+  }
+
+  /** Un fallo: cuenta el intento y, al agotarlos, el temporizador queda aparcado (T5). */
+  private async failed(timer: ClaimedTimer, token: string, failure: unknown): Promise<void> {
+    const reason = failure instanceof Error ? failure.message : String(failure);
+    this.logger.warn(\`El temporizador \${timer.id} (\${timer.kind}) falló en su intento \${timer.attempts + 1}: \${reason}\`);
+    await this.store.fail(timer.id, token, this.settings.maxAttempts, this.settings.retryDelayMs);
+    if (timer.attempts + 1 >= this.settings.maxAttempts) {
+      this.logger.error(\`El temporizador \${timer.id} (\${timer.kind}) agotó sus \${this.settings.maxAttempts} intentos y queda APARCADO\`);
+    }
   }
 
   /** Un temporizador armado en ESTA réplica (tras el commit): si vence antes de lo que iba a dormir, despierta. */
@@ -1147,11 +1200,9 @@ function timerPurgeFile() {
       { symbol: 'Inject', from: '@nestjs/common' },
       { symbol: 'Injectable', from: '@nestjs/common' },
       { symbol: 'TimerKinds', from: TIMER_KINDS_TS },
-      { symbol: 'nextTick', from: TIMER_POLLER_TS },
       { symbol: 'TIMER_SETTINGS', from: TIMER_SETTINGS_TS },
       { symbol: 'TimerSettings', from: TIMER_SETTINGS_TS, type: true },
       { symbol: 'RecurringTimerHandler', from: TIMER_STORE_TS, type: true },
-      { symbol: 'TimerOutcome', from: TIMER_STORE_TS },
       { symbol: 'TimerStore', from: TIMER_STORE_TS }
     ],
     `/**
@@ -1171,10 +1222,52 @@ export class KeelTimerPurge implements RecurringTimerHandler {
     this.spec = settings.purgeCron;
   }
 
-  async handle(): Promise<TimerOutcome> {
+  async tick(): Promise<void> {
     await this.store.purge(this.settings.retentionDays);
-    // El siguiente tick desde la hora de DESPUÉS de la pasada (R2): tras una parada larga, un tick y no todos.
-    return TimerOutcome.rescheduleAt(nextTick(this.spec, await this.store.dbNow()));
+  }
+}`
+  );
+}
+
+/**
+ * El recurrente que dispara la purga de una tabla del generador (incremento 7): antes la registraba TablePurges en el
+ * reloj, que corría en TODAS las réplicas a la vez; ahora la ejecuta UNA por tick, la que gana su fila en keel_timer. El
+ * cron es el de siempre (su clave, su variable y su default de keel-core, en PURGE_SETTINGS), evaluado en UTC (T7).
+ */
+function purgeTimerFile(model, purge) {
+  const entry = tablePurges(model).find((candidate) => candidate.table === purge.table);
+  if (!entry) throw new Error(`timer.js: ${purge.table} se purga con el cronómetro y TablePurges no la tiene`);
+  const className = purgeTimerClass(purge.table);
+  return tsModule(
+    purgeTimerPath(purge.table),
+    [
+      { symbol: 'Inject', from: '@nestjs/common' },
+      { symbol: 'Injectable', from: '@nestjs/common' },
+      { symbol: 'TimerKinds', from: TIMER_KINDS_TS },
+      { symbol: 'RecurringTimerHandler', from: TIMER_STORE_TS, type: true },
+      { symbol: 'PURGE_SETTINGS', from: TABLE_PURGES_TS },
+      { symbol: 'PurgeSettings', from: TABLE_PURGES_TS, type: true },
+      { symbol: 'TablePurges', from: TABLE_PURGES_TS }
+    ],
+    `/**
+ * La purga de \`${purge.table}\`, como recurrente del cronómetro en modo clúster: cada tick lo ejecuta UNA réplica, la que
+ * gana su fila en \`${KEEL_TIMER.table}\`. Lo que borra y cómo (la retención, los lotes, sus transacciones) es lo de
+ * TablePurges.${entry.method}, que no cambia: solo cambia quién la dispara.
+ */
+@Injectable()
+export class ${className} implements RecurringTimerHandler {
+  readonly kind = TimerKinds.${purgeKindConstant(purge.table)};
+  readonly spec: string;
+
+  constructor(
+    @Inject(TablePurges) private readonly purges: TablePurges,
+    @Inject(PURGE_SETTINGS) settings: PurgeSettings
+  ) {
+    this.spec = settings.${entry.key}.cron;
+  }
+
+  async tick(): Promise<void> {
+    await this.purges.${entry.method}();
   }
 }`
   );
@@ -1262,7 +1355,19 @@ function timerModuleFile(model) {
     symbol: deadlineHandlerClass(entity.name, deadline.stateName),
     from: deadlineHandlerPath(entity.name, deadline.stateName)
   }));
-  const handlerList = [...handlers.map((handler) => handler.symbol), 'KeelTimerPurge'];
+  const deadlines = usesDeadlines(model);
+  const handlerList = handlers.map((handler) => handler.symbol);
+  const purgeTimers = timerPurges(model).map((purge) => ({ symbol: purgeTimerClass(purge.table), from: purgeTimerPath(purge.table) }));
+  const recurringList = ['KeelTimerPurge', ...purgeTimers.map((purge) => purge.symbol)];
+  const deadlineProviders = deadlines
+    ? `
+        { provide: ${CLOCK_PORT.name}, useClass: SystemClock },
+        {
+          provide: ${deadlinesClass(model)},
+          useFactory: (${usesParameters ? `parameters: ${parametersClass(model)}` : ''}) => new ${deadlinesClass(model)}(${args.join(', ')}),
+          inject: [${usesParameters ? parametersClass(model) : ''}]
+        },`
+    : '';
   return tsModule(
     TIMER_MODULE_TS,
     [
@@ -1270,26 +1375,32 @@ function timerModuleFile(model) {
       { symbol: 'Global', from: '@nestjs/common' },
       { symbol: 'Module', from: '@nestjs/common' },
       { symbol: 'Configuration', from: CONFIG_TS, type: true },
-      { symbol: CLOCK_PORT.name, from: CLOCK_TS },
-      { symbol: deadlinesClass(model), from: deadlinesPath(model) },
+      ...(deadlines
+        ? [
+            { symbol: CLOCK_PORT.name, from: CLOCK_TS },
+            { symbol: deadlinesClass(model), from: deadlinesPath(model) },
+            { symbol: 'SystemClock', from: SYSTEM_CLOCK_TS },
+            { symbol: 'UseCaseModule', from: 'src/infrastructure/usecase/use-case-module.ts' },
+            { symbol: 'TimerHandler', from: TIMER_STORE_TS, type: true }
+          ]
+        : []),
       ...(usesParameters ? [{ symbol: parametersClass(model), from: parametersPath(model) }] : []),
-      { symbol: 'UseCaseModule', from: 'src/infrastructure/usecase/use-case-module.ts' },
       { symbol: 'KeelTimerPurge', from: TIMER_PURGE_TS },
-      { symbol: 'SystemClock', from: SYSTEM_CLOCK_TS },
       { symbol: 'TimerPoller', from: TIMER_POLLER_TS },
       { symbol: 'TIMER_SETTINGS', from: TIMER_SETTINGS_TS },
       { symbol: 'timerSettings', from: TIMER_SETTINGS_TS },
       { symbol: 'TIMER_HANDLERS', from: TIMER_STORE_TS },
+      { symbol: 'TIMER_RECURRINGS', from: TIMER_STORE_TS },
       { symbol: 'TimerArmedSignal', from: TIMER_STORE_TS },
-      { symbol: 'TimerHandler', from: TIMER_STORE_TS, type: true },
+      { symbol: 'RecurringTimerHandler', from: TIMER_STORE_TS, type: true },
       { symbol: 'TimerStore', from: TIMER_STORE_TS },
       { symbol: timerStoreImplClass(model), from: timerStoreImplPath(model) },
-      ...handlers
+      ...handlers,
+      ...purgeTimers
     ],
     `/**
- * El cronómetro del servicio (DSL 2.26), lo que necesitan los demás: el reloj inyectable, la duración vigente de cada
- * plazo y el almacén de temporizadores, con su aviso de armado. Global: los adaptadores de repositorio arman con él y los
- * handlers inyectan el reloj y los plazos sin importarlo. Va después de la persistencia (el almacén usa su transacción).
+ * El cronómetro del servicio (DSL 2.26), lo que necesitan los demás: ${deadlines ? 'el reloj inyectable, la duración vigente de cada plazo y ' : ''}el
+ * almacén de temporizadores, con su aviso de armado. Global: ${deadlines ? 'los adaptadores de repositorio arman con él y los handlers inyectan el reloj y los plazos sin importarlo' : 'el sondeador y sus recurrentes lo inyectan sin importarlo'}. Va después de la persistencia (el almacén usa su transacción).
  */
 @Global()
 @Module({})
@@ -1298,30 +1409,24 @@ export class TimerModule {
     return {
       module: TimerModule,
       providers: [
-        { provide: TIMER_SETTINGS, useValue: timerSettings(configuration) },
-        { provide: ${CLOCK_PORT.name}, useClass: SystemClock },
-        {
-          provide: ${deadlinesClass(model)},
-          useFactory: (${usesParameters ? `parameters: ${parametersClass(model)}` : ''}) => new ${deadlinesClass(model)}(${args.join(', ')}),
-          inject: [${usesParameters ? parametersClass(model) : ''}]
-        },
+        { provide: TIMER_SETTINGS, useValue: timerSettings(configuration) },${deadlineProviders}
         TimerArmedSignal,
         { provide: TimerStore, useClass: ${timerStoreImplClass(model)} }
       ],
-      exports: [TIMER_SETTINGS, ${CLOCK_PORT.name}, ${deadlinesClass(model)}, TimerArmedSignal, TimerStore]
+      exports: [TIMER_SETTINGS, ${deadlines ? `${CLOCK_PORT.name}, ${deadlinesClass(model)}, ` : ''}TimerArmedSignal, TimerStore]
     };
   }
 }
 
 /**
- * El sondeador y sus handlers: uno por plazo, que revalida y despacha su operación por el mediator, y la purga de la
- * tabla. Va el último, después de los casos de uso.
+ * El sondeador y sus handlers: ${deadlines ? 'uno por plazo, que revalida y despacha su operación por el mediator, y ' : ''}los recurrentes en modo
+ * clúster (la purga de la tabla${purgeTimers.length > 0 ? ' y las de las tablas del generador, que llaman a TablePurges' : ''}). Va el último, después de los casos de uso.
  */
-@Module({
-  imports: [UseCaseModule],
+@Module({${deadlines ? '\n  imports: [UseCaseModule],' : ''}
   providers: [
-${handlerList.map((symbol) => `    ${symbol},`).join('\n')}
-    { provide: TIMER_HANDLERS, useFactory: (...handlers: TimerHandler[]) => handlers, inject: [${handlerList.join(', ')}] },
+${[...handlerList, ...recurringList].map((symbol) => `    ${symbol},`).join('\n')}
+    { provide: TIMER_HANDLERS, useFactory: (${deadlines ? '...handlers: TimerHandler[]' : ''}) => ${deadlines ? 'handlers' : '[]'}, inject: [${handlerList.join(', ')}] },
+    { provide: TIMER_RECURRINGS, useFactory: (...recurrings: RecurringTimerHandler[]) => recurrings, inject: [${recurringList.join(', ')}] },
     TimerPoller
   ]
 })
