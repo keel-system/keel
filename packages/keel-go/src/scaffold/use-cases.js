@@ -35,6 +35,7 @@ import { cacheDependencies, cacheDependencyRows, settlementWiring } from './cach
 import { storageDependencies, storageDependencyRows } from './storage.js';
 import { responseNeedsStorage } from './mappers.js';
 import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { CLOCK, DEADLINES, deadlinesType, lateOperations, usesDeadlines } from './timer.js';
 
 /** ¿Reciben los casos de uso adaptadores (Dependencies)? Con la persistencia relacional. */
 export function usesDependencies(model) {
@@ -119,6 +120,15 @@ export function handlerDependencies(model, operation) {
   // El almacenamiento de binarios (capa storage): la política y el puerto a la subida, y el puerto a la que devuelve la
   // URL de un bucket público (la compone su mapeo). Sin ellos delante, el camino de menor resistencia es guardar sin subir.
   if (usesDependencies(model)) deps.push(...storageDependencies(model, operation, { publicUrl: responseNeedsStorage(model, operation) }));
+  // Los plazos de negocio (DSL 2.26): quien saca la entidad de un estado con plazo hacia otro destino le da al dominio la
+  // hora del reloj inyectable y la duración vigente de los plazos, con las que transitionAt hace el rechazo tardío. Sin
+  // ellos delante, el camino de menor resistencia es time.Now(), que no deja probar el segundo exacto.
+  if (usesDependencies(model) && lateOperations(model).includes(operation)) {
+    deps.push(
+      { name: CLOCK.param, type: CLOCK.type, doc: `${CLOCK.param} es el reloj inyectable: la hora que se le da al dominio en una transición que sale de un estado con plazo.`, arg: CLOCK.param },
+      { name: DEADLINES.param, type: `domain.${deadlinesType(model)}`, doc: `${DEADLINES.param} es la duración vigente de cada plazo de negocio (lifecycle.deadlines).`, arg: `deps.${DEADLINES.field}` }
+    );
+  }
   if (handlersReadParameters(model)) {
     deps.push({
       name: SERVICE_PARAMETERS.param,
@@ -224,7 +234,7 @@ export function generate(model) {
   });
   return [
     file('usecase', usesTelemetry(model) ? USECASE_BODY + OBSERVER_BODY : USECASE_BODY, ['context', 'errors', 'fmt', 'log/slog', 'time', 'internal/domain']),
-    file('use_cases', useCasesBody(model, ops), ['context', 'fmt', 'log/slog', 'internal/domain']),
+    file('use_cases', useCasesBody(model, ops), ['context', 'fmt', 'log/slog', 'time', 'internal/domain']),
     file('use_cases', useCasesTest(model, ops), ['bytes', 'context', 'errors', 'log/slog', 'strings', 'testing', 'internal/domain'], { test: true })
   ];
 }
@@ -452,6 +462,14 @@ ${alignRows([
         { indent: '	', cells: [SERVICE_PARAMETERS.field, `domain.${parametersType(model)}`] }
       ]
     : []),
+  ...(usesDeadlines(model)
+    ? [
+        { text: `	// ${CLOCK.field} es el reloj inyectable que reciben las transiciones que salen de un estado con plazo; nil, time.Now.` },
+        { indent: '	', cells: [CLOCK.field, CLOCK.type] },
+        { text: `	// ${DEADLINES.field} es la duración vigente de cada plazo de negocio (lifecycle.deadlines).` },
+        { indent: '	', cells: [DEADLINES.field, `domain.${deadlinesType(model)}`] }
+      ]
+    : []),
   ...(usesGoHttpClients(model)
     ? model.httpClients.flatMap((client) => [
         { text: `\t// ${clientField(client)} es el cliente saliente ${client.id} (http-clients): su adaptador HTTP, con su resiliencia.` },
@@ -462,12 +480,17 @@ ${alignRows([
 }
 `
     : '';
+  const clocked = persistent && lateOperations(model).length > 0;
   const prelude = persistent
     ? `	var tx Transactor = noTransaction{}
 	if deps.Transactor != nil {
 		tx = deps.Transactor
 	}
-`
+${clocked ? `	${CLOCK.param} := deps.${CLOCK.field}
+	if ${CLOCK.param} == nil {
+		${CLOCK.param} = time.Now
+	}
+` : ''}`
     : '	tx := noTransaction{}\n';
   return `${dependencies}
 // UseCases son los casos de uso del servicio, uno por operación del diseño, ya envueltos con su transacción y su log

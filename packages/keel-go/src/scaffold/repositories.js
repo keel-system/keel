@@ -47,6 +47,7 @@ import { emitsEvents, usesGoOutbox } from './messaging.js';
 import { adapterClaimMethods, claimDependencies, portClaimMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { PARAMETERS_VAR } from './service-parameters.js';
+import { DEADLINES_VAR, deadlineDependencies, relationalArming } from './timer.js';
 import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './conditional-writes.js';
 import { portGuardMethods, relationalGuardMethods } from './mail.js';
 
@@ -101,7 +102,8 @@ const ADAPTER_IMPORTS = [
   'internal/domain',
   'internal/platform/textfold',
   'internal/platform/wire',
-  'internal/infrastructure/messaging'
+  'internal/infrastructure/messaging',
+  'internal/infrastructure/timer'
 ];
 
 /**
@@ -110,11 +112,13 @@ const ADAPTER_IMPORTS = [
  * si se reclama por reconciliación, sus barridos (reconciliation-claim.js).
  * Lo usan el arranque y las sondas de db-check, que pasan `nil` como puente (rehidratan, no emiten).
  */
-export function repositoryArgs(model, entity, tx, bridge, { sweeps = 'sweeps', parameters = PARAMETERS_VAR, reconciliation = 'reconciliation' } = {}) {
+export function repositoryArgs(model, entity, tx, bridge, { sweeps = 'sweeps', parameters = PARAMETERS_VAR, reconciliation = 'reconciliation', deadlines = DEADLINES_VAR } = {}) {
   const args = [tx];
   if (emitsEvents(model, entity)) args.push(bridge);
   for (const dep of claimDependencies(model, entity)) args.push(dep.field === 'sweeps' ? sweeps : parameters);
   for (const dep of reconciliationDependencies(model, entity)) if (dep.field === 'reconciliation') args.push(reconciliation);
+  // Los plazos vigentes (DSL 2.26): el adaptador arma el temporizador al guardar una entidad que entra en su estado.
+  if (deadlineDependencies(model, entity).length > 0) args.push(deadlines);
   return args.join(', ');
 }
 
@@ -645,12 +649,19 @@ function adapterBody(model, entity, uses) {
   const eventsDoc = events
     ? ` Al guardar, entrega al puente de la mensajería los eventos que drena del agregado: ${usesGoOutbox(model) ? 'sus filas del outbox van en la MISMA transacción del cambio' : 'se publican DESPUÉS del commit'}.`
     : '';
-  const deps = [{ field: 'tx', type: '*Transactions' }, ...(events ? [{ field: 'events', type: '*messaging.Bridge' }] : []), ...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)];
+  const deps = [
+    { field: 'tx', type: '*Transactions' },
+    ...(events ? [{ field: 'events', type: '*messaging.Bridge' }] : []),
+    ...claimDependencies(model, entity),
+    ...reconciliationDependencies(model, entity),
+    ...deadlineDependencies(model, entity)
+  ];
   const built = [
     events ? ' y el puente de la mensajería' : '',
     deps.some((dep) => dep.field === 'sweeps') ? ', con los barridos del perfil' : '',
     deps.some((dep) => dep.field === 'parameters') ? ' y los parámetros de despliegue que lee su rescate' : '',
-    deps.some((dep) => dep.field === 'reconciliation') ? ', con los barridos de reconciliación del perfil' : ''
+    deps.some((dep) => dep.field === 'reconciliation') ? ', con los barridos de reconciliación del perfil' : '',
+    deps.some((dep) => dep.field === 'deadlines') ? ', con los plazos vigentes con los que arma sus temporizadores' : ''
   ].join('');
   parts.push(`${docComment(type, `el adaptador de domain.${portName(entity)} sobre ${sqlDialect(model).label}: el SQL lo escribe build y el mapeo fila ↔ dominio va campo a campo, sin reflexión. Se une a la transacción que abrió el caso de uso; sin ella, cada lectura va sola y cada escritura abre la suya.${eventsDoc}`)}type ${type} struct {
 ${alignRows(deps.map((dep) => ({ indent: '\t', cells: [dep.field, dep.type] }))).join('\n')}
@@ -1125,6 +1136,8 @@ function saveMethods(model, entity, root, tables, type) {
   const local = localName(lower(name));
   const events = emitsEvents(model, entity);
   const outbox = events && usesGoOutbox(model);
+  // El armado de los plazos (DSL 2.26), en esta misma transacción: el estado de antes y, tras releer, el temporizador.
+  const arming = entity.lifecycle ? relationalArming(model, entity, local, 'q', (n) => ph(model, n)) : null;
   return `// Save implementa domain.${portName(entity)}: escribe el agregado entero en una transacción (la abierta, o una
 // suya) y lo relee en ella.${outbox ? ' Las filas del outbox de sus eventos van en esa misma transacción.' : events ? ' Sus eventos se publican cuando esa transacción confirma.' : ''}
 func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.${name}, error) {${events ? `
@@ -1132,7 +1145,7 @@ func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.$
 	var saved *domain.${name}
 	${isReplica(model, entity) ? `// La copia local de una dependencia replicada se guarda en su PROPIA transacción, aunque ctx traiga una abierta: el
 	// REQUIRES_NEW de keel-spring. Sobrevive a la de quien la escribe, y una consulta de solo lectura también puede guardarla.
-	err := r.tx.apart(ctx, sql.TxOptions{}, func(q DBTX) error {` : 'err := r.tx.write(ctx, func(q DBTX) error {'}
+	err := r.tx.apart(ctx, sql.TxOptions{}, func(q DBTX) error {` : 'err := r.tx.write(ctx, func(q DBTX) error {'}${arming ? `\n${arming.before}` : ''}
 		if err := write${name}(ctx, q, ${local}); err != nil {
 			return err
 		}${outbox ? `
@@ -1150,7 +1163,7 @@ func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.$
 		if len(states) == 0 {
 			return fmt.Errorf("${root.table}: la fila guardada no se pudo releer")
 		}
-		saved = domain.Rehydrate${name}(states[0])
+		saved = domain.Rehydrate${name}(states[0])${arming ? `\n${arming.after}` : ''}
 		return nil
 	})
 	if err != nil {

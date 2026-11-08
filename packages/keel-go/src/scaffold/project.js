@@ -20,6 +20,7 @@ import { relationalEngine } from '../lib/relational-engine.js';
 import { foldKinds } from './persistence-runtime.js';
 import { usesGoMessaging } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
+import { usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { layout, packageFile } from './render.js';
 
 /** Los módulos de ejecución que el proyecto importa, en el orden de go.mod. Crece con cada capa que se genera. */
@@ -36,6 +37,8 @@ export function requiresFor(model = null) {
     ...(model && usesJwt(model) ? JWT_REQUIRES : []),
     ...(model && usesGoMessaging(model) ? (BROKER_REQUIRES[model.stack?.broker] ?? []) : []),
     ...(model && usesScheduling(model) ? SCHEDULING_REQUIRES : []),
+    // El cronómetro (DSL 2.26) lee el cron de la purga de su tabla con el mismo parser.
+    ...(model && usesDeadlines(model) && model.layersPresent?.persistence ? SCHEDULING_REQUIRES : []),
     ...(model && usesStorageAdapter(model) ? STORAGE_REQUIRES : []),
     ...(model && usesTelemetry(model) ? TELEMETRY_REQUIRES : [])
   ];

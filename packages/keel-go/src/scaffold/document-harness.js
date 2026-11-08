@@ -12,6 +12,7 @@
 
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
+import { documentDeadlineAgingMembers } from './timer.js';
 import { CLOCK, OUTBOX, PRINT_WRAPPER, abandonOutboxScript, ageClockScript, clearAbandonedScript, holdClockScript, missingClockCountScript, setStateScript } from '@keel-system/keel-core/gen/mongo-probes';
 import { documentAgingTargets } from '@keel-system/keel-core/gen/aging-targets';
 import { rescueProbes } from '@keel-system/keel-core/gen/scheduling';
@@ -97,6 +98,8 @@ func (s *Scenario) MongoEval(script string) string {
   ];
   members.push(...rescueMembers(model));
   members.push(...agingMembers(model));
+  // El plazo de negocio (DSL 2.26): AgeForDeadline envejece el since y el temporizador a la vez.
+  members.push(...documentDeadlineAgingMembers(model));
   // Quien mete un id en un script: el rescate y la reconciliación. Sin ninguno, sería una función sin usar.
   if (members.length > 1) {
     members.push(String.raw`func (s *Scenario) documentID(id string) string {

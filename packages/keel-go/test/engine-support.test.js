@@ -8,6 +8,7 @@ import { MODELS } from '@keel-system/keel-core/gen/mechanisms';
 import { MECHANISMS, MECHANISM_CATALOG, STATES, NETS, RELATIONAL_ENGINES, cells, pending, unfalsified, unverified } from '../src/lib/engine-support.js';
 import { DB_SABOTAGES } from './helpers/db-sabotages.js';
 import { DOC_SABOTAGES } from './helpers/doc-sabotages.js';
+import { TIMER_SABOTAGES } from '../scripts/lib/timer-probes.js';
 
 test('una fila por cada mecanismo del catálogo neutral, y ninguna inventada', () => {
   assert.deepEqual(Object.keys(MECHANISMS).sort(), Object.keys(MECHANISM_CATALOG).sort());
@@ -34,8 +35,7 @@ test('cada motor relacional que la frontera admite tiene su celda en los mecanis
 });
 
 test('la puerta del incremento 16: nada pendiente, nada sin ejecutar y nada sin falsar', () => {
-  // Salvo las dos filas del plan 2.26 (el plazo y el cronómetro), que llegan con su incremento 6.
-  assert.deepEqual(pending().map(({ id }) => id), ['deadline', 'timer']);
+  assert.deepEqual(pending().map(({ id }) => id), []);
   assert.deepEqual(unverified().map(({ id, branch }) => `${id}/${branch}`), []);
   assert.deepEqual(unfalsified().map(({ id, branch }) => `${id}/${branch}`), []);
 });
@@ -73,11 +73,15 @@ const FALSIFIED_BY = {
   'persistence-adapter/relational': ['version', 'enum', 'constraint', 'index', 'merge', 'list-order', 'timeout'],
   'persistence-adapter/document': ['decimal-as-text', 'uuid-legacy', 'version', 'translator'],
   'conditional-write/relational': ['cw-ignore-expected', 'cw-stale-version', 'cw-collapse-409'],
-  'conditional-write/document': ['cw-ignore-expected', 'cw-stale-version', 'cw-collapse-409']
+  'conditional-write/document': ['cw-ignore-expected', 'cw-stale-version', 'cw-collapse-409'],
+  'deadline/relational': ['dl-boundary', 'dl-no-guard', 'dl-outside-tx'],
+  'deadline/document': ['dl-boundary', 'dl-no-guard', 'dl-outside-tx'],
+  'timer/relational': ['dl-no-lease', 'dl-no-revalidate'],
+  'timer/document': ['dl-no-lease', 'dl-no-revalidate']
 };
 
 test('el sabotaje con que se falsa cada celda de db-check o doc-check existe de verdad', () => {
-  const known = { 'db-check': DB_SABOTAGES, 'doc-check': DOC_SABOTAGES };
+  const known = { 'db-check': { ...DB_SABOTAGES, ...TIMER_SABOTAGES }, 'doc-check': { ...DOC_SABOTAGES, ...TIMER_SABOTAGES } };
   for (const { id, branch, cell } of cells()) {
     if (!known[cell.net]) continue;
     const named = FALSIFIED_BY[`${id}/${branch}`];

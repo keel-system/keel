@@ -10,8 +10,8 @@ al que **migran todos los relojes que hoy emiten los generadores** (§ La migrac
 cambia el DSL, pero sí el servidor generado de cualquier diseño con persistencia.
 
 **Estado: aprobado (2026-11-07).** El usuario aceptó las ocho propuestas de § Decisiones tomadas. Fases B, C y C2
-hechas el mismo día, la D (incremento 3, keel-spring) el 2026-11-08 y, de la fase E, los incrementos 4 (keel-nest) y 5
-(keel-dotnet) ese mismo día; siguiente, el 6 (keel-go). **Lo
+hechas el mismo día, la D (incremento 3, keel-spring) el 2026-11-08 y, de la fase E, la fase E entera ese mismo día
+(incrementos 4, 5 y 6: keel-nest, keel-dotnet y keel-go); siguiente, la fase F (incrementos 7, 8 y 9). **Lo
 que queda se termina sin subagentes, todo desde `main` y en secuencia** (§ Cómo se ejecuta).
 
 ## Por qué
@@ -434,6 +434,36 @@ Lo que destapó: un namespace `…Infrastructure.Timer` habría tapado `System.T
 así que se llama `Timers`. Y los casos no pueden ir en una clase de pruebas propia: xUnit ejecuta las clases a la vez,
 y las dos compartirían la base y `keel_timer`.
 
+**Lo que dejó el incremento 6.** keel-go genera el cronómetro y los plazos en `src/scaffold/timer.js`:
+
+- En el dominio, `<Servicio>Deadlines` y el rechazo tardío en `transitionAt(target, now, deadlines)`. El reloj inyectable
+  es `application.Clock` (`time.Now` en el arranque).
+- El armado va en el `Save` de los dos adaptadores. El paquete `internal/infrastructure/timer` lleva `Store`, `Poller`,
+  la purga y un handler por plazo; `timers.go`, en el paquete del motor, lleva las sentencias de keel-core tal cual con
+  sus marcadores traducidos en tiempo de ejecución, o la forma documental. `main.go` lo cablea en el errgroup.
+- El gate es `infra/check-deadlines.sh`, y `AgeForDeadline` entra en el arnés.
+
+La frontera ya no rechaza el plazo: solo las formas que el handler generado del plazo no sabe despachar (una entidad que
+no es raíz con uuid, o un `by` cuyo mensaje lleva más que el id), con su fila en el README. La matriz queda sin filas
+pendientes. La exclusión temporal de `keel_timer` en las paridades de esquema se retira: la tabla es la de keel-spring.
+
+Las redes son las de siempre, con el sujeto nuevo y una sonda Go (`scripts/lib/timer-probes.js`, `timer_probe_test.go`
+en el paquete del motor, con pruebas `TestTimer_DL<n>_…`). `db-check` da 8/8 en PostgreSQL (20 sondas) y 7/7 en MySQL.
+`doc-check` da 5/5 (20 sondas). Los cinco sabotajes `dl-*` caen en todos sus casos y solo en ellos en las dos ramas (en
+documental, `dl-no-lease` también en DL-5). Sin Go, `test/deadlines.test.js` hace lo mismo que el de los otros dos, y
+además comprueba que los sabotajes se siguen aplicando.
+
+Lo que destapó:
+
+- keel-go lleva `scheduling.enabled` en su `scheduling.yaml`, porque su lector de configuración no admite una clave en
+  dos archivos. Su `timer.yaml` no es el de keel-spring byte a byte, así que la prueba compara la mecánica y el valor
+  efectivo de cada clave.
+- El falsado «sin un índice de FK» de `db-check` elegía `ix_keel_timer_due_at`, que no es de una FK. Se excluye como los
+  de las otras tablas del generador.
+- La prueba emitida del sondeador (`poller_test.go`) no compilaba: declaraba el paquete externo `timer_test` y usaba los
+  tipos de `timer` sin calificar. Las redes sin Go no lo ven; lo vio `go-check --fixtures` en las tres ramas del par. Ahora
+  es una prueba interna del paquete.
+
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
 migración es un incremento propio con su puerta, y entre una y otra el servidor generado sigue en verde.
@@ -466,7 +496,7 @@ Cómo se trabaja cada incremento:
 
 **El trabajo parcial de los agentes cortados** quedó como un commit WIP en las ramas `inc4-6-keel-{nest,dotnet,go}`. Cada
 incremento de la fase E empieza recuperando el suyo (`git checkout inc4-6-keel-<tech> -- packages/keel-<tech>`), lo
-revisa contra keel-spring y lo termina en `main`. Cerrado el 6, esas tres ramas se borran.
+revisa contra keel-spring y lo termina en `main`. Cerrado el 6 (2026-11-08), esas tres ramas se borraron.
 
 **Histórico:** las fases B y C2 sí usaron agentes (solo lectura en la B; en la C2, paralelos y en worktrees, tras
 keel-spring). Ese método queda retirado.

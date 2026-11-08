@@ -38,6 +38,8 @@ import { alignRows, goString } from '../lib/go-source.js';
 import { sentinelOf } from './errors.js';
 import { layout, packageFile } from './render.js';
 import { usesBestEffort } from './messaging.js';
+import { usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
+import { KEEL_TIMER_DOCUMENT } from '@keel-system/keel-core/gen/timer-store';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -232,7 +234,17 @@ function filterLiteral(value) {
 
 /** Los índices del servidor como datos: lo que emite indexes.go y lo que relee doc-check. */
 export function indexEntries(model) {
-  return documentIndexes(model, model.warnings);
+  const entries = documentIndexes(model, model.warnings);
+  // El índice de due_at del cronómetro (DSL 2.26, KEEL_TIMER_DOCUMENT de keel-core): lo que reclama el sondeador. keel-core
+  // todavía no lo cuenta entre los almacenes del generador (storeDocumentIndexes), así que se añade aquí.
+  if (!usesDeadlines(model) || entries.some((entry) => entry.collection === KEEL_TIMER_DOCUMENT.collection)) return entries;
+  return [
+    ...entries,
+    {
+      collection: KEEL_TIMER_DOCUMENT.collection,
+      specs: KEEL_TIMER_DOCUMENT.indexes.map((index) => ({ name: index.name, paths: Object.keys(index.keys), unique: false }))
+    }
+  ];
 }
 
 function indexesBody(model) {
@@ -274,7 +286,9 @@ func EnsureIndexes(ctx context.Context, db *Database, logger *slog.Logger) error
 // ─── transactions.go ─────────────────────────────────────────────────────────────────────────────
 
 function transactionsBody(model) {
-  const afterCommit = usesBestEffort(model);
+  // El despertar del cronómetro (DSL 2.26) también espera al commit.
+  const timers = usesDeadlines(model);
+  const afterCommit = usesBestEffort(model) || timers;
   const hooks = afterCommit
     ? `
 
@@ -312,7 +326,7 @@ type txKey struct{}
 // hace que el documento del agregado y lo que se escribe con él (el outbox, el registro de idempotencia) confirmen juntos.
 type Transactions struct {
 	db     *Database
-	logger *slog.Logger
+	logger *slog.Logger${timers ? '\n\n\t// timerArmed despierta al sondeador del cronómetro tras el commit que arma un temporizador (timers.go); nil, a nadie.\n\ttimerArmed func(time.Time)' : ''}
 }
 
 var _ application.Transactor = (*Transactions)(nil)

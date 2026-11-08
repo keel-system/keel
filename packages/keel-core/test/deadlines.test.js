@@ -1,11 +1,11 @@
 // Los plazos de negocio sobre el estado (DSL 2.26, lifecycle.deadlines). Las seis reglas mecánicas las falsa el corpus de
 // mutaciones (extensión `deadline` de test/design-mutations/catalog.js); aquí, lo que el corpus no ve: cuándo aplica la
-// revisión y el rechazo común de los generadores que todavía no los generan.
+// revisión.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applicableReviews } from '../src/lib/reviews.js';
-import { declaredDeadlines, deadlinesPendingErrors } from '../src/lib/gen/deadlines.js';
+import { declaredDeadlines } from '../src/lib/gen/deadlines.js';
 
 const withDeadline = () => ({
   domain: {
@@ -36,12 +36,4 @@ test('REV-DOMAIN-DEADLINE-SINCE solo aplica a un diseño con algún plazo', () =
   const without = withDeadline();
   delete without.domain.entities.Reservation.lifecycle.deadlines;
   assert.ok(!applicableReviews(without).includes('REV-DOMAIN-DEADLINE-SINCE'));
-});
-
-test('el rechazo de los generadores que todavía no los generan: uno por plazo, con su incremento, y nada sin plazos', () => {
-  const [message, ...rest] = deadlinesPendingErrors(withDeadline(), 'keel-nest', 4);
-  assert.deepEqual(rest, []);
-  assert.match(message, /^domain: Reservation\.lifecycle\.deadlines\.pending \(plazo de negocio, DSL 2\.26\): keel-nest todavía no lo genera/);
-  assert.match(message, /incremento 4 de PLAN-DSL-226-PLAZOS\.md/);
-  assert.deepEqual(deadlinesPendingErrors({ domain: {} }, 'keel-nest', 4), []);
 });

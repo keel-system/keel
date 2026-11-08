@@ -30,6 +30,7 @@ import {
 import { usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
 import { usesBestEffort, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
 import { usesReplicas } from './projections.js';
+import { usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { alignRows, goString } from '../lib/go-source.js';
 import { relationalEngine, sqlDialect } from '../lib/relational-engine.js';
@@ -436,13 +437,14 @@ func bind(args []any) []any {
  * cuando confirma la transacción abierta (la publicación best-effort).
  */
 function transactionNeeds(model) {
-  return { apart: usesGoOutbox(model) || usesGoProcessedEvents(model) || usesReplicas(model), afterCommit: usesBestEffort(model), counting: usesStatementCount(model) };
+  return { apart: usesGoOutbox(model) || usesGoProcessedEvents(model) || usesReplicas(model), afterCommit: usesBestEffort(model) || usesDeadlines(model), counting: usesStatementCount(model), timers: usesDeadlines(model) };
 }
 
-function transactionsBody(d, { apart = false, afterCommit = false, counting = false } = {}) {
+function transactionsBody(d, { apart = false, afterCommit = false, counting = false, timers = false } = {}) {
   const p = TRANSACTION_PLATFORM[d.engine];
   // La conexión que ven los repositorios; con la cuenta de sentencias (statement-count.js), pasando por ella.
   const connection = (expr) => (counting ? `t.observed(${p.wrap(expr)})` : p.wrap(expr));
+  const timersField = timers ? '\n\n\t// timerArmed despierta al sondeador del cronómetro tras el commit que arma un temporizador (timers.go); nil, a nadie.\n\ttimerArmed func(time.Time)' : '';
   const countingField = counting ? '\n\n\t// statements es la cuenta de sentencias de las peticiones; nil salvo en el arnés de flujos.\n\tstatements *statements.Counter' : '';
   const countingMethods = counting
     ? `
@@ -537,7 +539,7 @@ type txKey struct{}
 // Transactions abre la transacción de cada caso de uso y la deja en el contexto, donde la encuentran los repositorios.
 // Con la persistencia, es el application.Transactor del servicio.
 type Transactions struct {
-${p.field}${countingField}
+${p.field}${countingField}${timersField}
 }
 
 var _ application.Transactor = (*Transactions)(nil)

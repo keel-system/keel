@@ -15,7 +15,8 @@ import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
-import { deadlinesPendingErrors } from '@keel-system/keel-core/gen/deadlines';
+import { declaredDeadlines, modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
+import { repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { GO_PROJECTION } from './go-projection.js';
 import { messageComponents } from '../scaffold/services.js';
@@ -72,9 +73,10 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...cacheErrors(layers));
   // La escritura condicional (DSL 2.25) se genera entera; lo que ningún generador genera todavía, con el motivo neutral (T3).
   errors.push(...conditionalWritesFrontierErrors(layers, 'keel-go'));
-  // Los plazos de negocio (DSL 2.26) llegan con el cronómetro, en el incremento 6 de PLAN-DSL-226-PLAZOS.md: hasta
-  // entonces se rechazan enteros, con el mismo mensaje en los cuatro.
-  errors.push(...deadlinesPendingErrors(layers, 'keel-go', 6));
+  // Los plazos de negocio (DSL 2.26) los genera el cronómetro (scaffold/timer.js). Lo que depende del motor elegido —solo
+  // hay sentencias medidas para PostgreSQL, MySQL y MongoDB— y del status del rechazo tardío lo rechaza planService, que
+  // sí conoce el stack; aquí, las formas que el handler generado del plazo no sabe despachar.
+  errors.push(...deadlineErrors(manifest, layers));
   if (declared.includes('storage')) errors.push(...storageErrors(layers));
   // La idempotencia sin persistencia no es un pendiente: el registro de claves tiene que confirmarse en la misma transacción
   // que el efecto, así que no hay mecanismo posible, y se dice (como los otros tres).
@@ -181,6 +183,45 @@ function parameterErrors(manifest, layers) {
  * Una operación por reloj cuyo mensaje lleva campos: la tarea la despacha sin argumentos, y no hay de dónde sacarlos. En
  * keel-dotnet sale un TODO en el scheduler; en Go la tarea es código generado, sin TODO posible. Ninguna fixture la declara.
  */
+/**
+ * Los plazos de negocio (DSL 2.26) que el handler GENERADO del plazo (`<Entidad><Estado>Deadline`, con la cabecera de
+ * código generado) no sabe despachar: keel-spring deja ahí un TODO del agente, y aquí un adaptador con cabecera no lo
+ * admite. Son la entidad que no es una raíz con repositorio y uuid por id (el temporizador lleva el uuid de la entidad y
+ * el handler la carga por su repositorio) y la operación `by` cuyo mensaje lleva algo más que el id. Ninguna fixture los
+ * declara: sin red que mida lo emitido.
+ */
+function deadlineErrors(manifest, layers) {
+  if (declaredDeadlines(layers).length === 0) return [];
+  let model;
+  try {
+    model = buildModel({ manifest, layers, stack: resolveStack(null, layers), projection: GO_PROJECTION });
+  } catch {
+    return [];
+  }
+  const roots = new Set(repositoryRoots(model).map((root) => root.name));
+  const errors = [];
+  for (const { entity, deadline } of modelDeadlines(model)) {
+    const where = `domain: ${entity.name}.lifecycle.deadlines.${deadline.stateName}`;
+    if (!roots.has(entity.name) || entity.idField?.goType !== 'uuid.UUID') {
+      errors.push(
+        `${where} (plazo de negocio, DSL 2.26): keel-go lo arma y lo dispara sobre una raíz de agregado persistida con un uuid por id, y ${entity.name} no lo es ` +
+          '(ninguna fixture lo declara: sin red que lo mida). Genera este diseño con keel-spring, keel-nest o keel-dotnet.'
+      );
+      continue;
+    }
+    const by = model.services.flatMap((service) => service.operations).find((operation) => operation.name === deadline.by);
+    const components = by ? messageComponents(by, model).filter((component) => !component.entryGate) : [];
+    if (by && (components.length !== 1 || components[0].goType !== 'uuid.UUID')) {
+      errors.push(
+        `${where} (plazo de negocio, DSL 2.26): el mensaje de ${by.name} lleva ${components.map((component) => component.name).join(', ')}, y el cronómetro solo tiene el id ` +
+          'de la entidad para despacharla (keel-spring deja ahí un TODO del agente, y el handler del plazo es código generado). Deja en su entrada solo el id, ' +
+          'o genera este diseño con keel-spring, keel-nest o keel-dotnet.'
+      );
+    }
+  }
+  return errors;
+}
+
 function scheduledWithArguments(manifest, layers) {
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {}).filter(([, operation]) => operation?.schedule);
   if (operations.length === 0) return [];

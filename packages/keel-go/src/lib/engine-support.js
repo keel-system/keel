@@ -37,8 +37,65 @@ const PG = 'internal/infrastructure/postgres';
 const MONGO = 'internal/infrastructure/mongo';
 
 export const MECHANISMS = {
-  deadline: { pending: 'incremento 6 de PLAN-DSL-226-PLAZOS.md: el rechazo tardío y el armado, con el cronómetro' },
-  timer: { pending: 'incremento 6 de PLAN-DSL-226-PLAZOS.md: el cronómetro del servicio, sobre keel-core/gen/timer-store.js' },
+  deadline: {
+    parity: {
+      pair: 'verification-codes',
+      markers: {
+        relational: [
+          `${PG}/verification_code_repository.go::r.tx.armTimer(ctx, q, timer.KindVerificationCodePending`,
+          `${PG}/verification_code_repository.go::SELECT status FROM verification_codes WHERE id = $1`,
+          'internal/domain/verification_code.go::.Add(deadlines.VerificationCodePending()).After(now)'
+        ],
+        document: [
+          `${MONGO}/verification_code_repository.go::r.tx.armTimer(ctx, timer.KindVerificationCodePending`,
+          'internal/domain/verification_code.go::.Add(deadlines.VerificationCodePending()).After(now)'
+        ]
+      }
+    },
+    emitter: 'src/scaffold/timer.js (lateGuardParts, relationalArming, documentArming) · src/scaffold/entities.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'verification-codes (db-check --only=verification-codes, scripts/lib/timer-probes.js): DL-1 a DL-3 contra transitionAt del dominio emitido (la hora y los plazos por argumento) y DL-4 contra el adaptador en una transacción que confirma y otra que revierte. Falsado con dl-boundary y dl-no-guard (caen en DL-2) y dl-outside-tx (el armado por la base y no por la transacción: cae DL-4). dl-wrong-field no tiene sujeto en esta fixture (una sola marca de tiempo). Medido el 2026-11-08: db-check 8/8 en PostgreSQL (20 sondas) y 7/7 en MySQL, y cada sabotaje en exactamente sus casos'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'verification-codes-mongo (doc-check --only=verification-codes-mongo): los mismos casos, con el estado previo leído en la transacción del caso de uso y el armado en ella, sobre un replica set real. Falsado con dl-boundary, dl-no-guard y dl-outside-tx (el armado fuera de la sesión: DL-4 lo ve). Medido el 2026-11-08: doc-check 5/5 (20 sondas), y cada sabotaje en exactamente sus casos'
+      }
+    }
+  },
+  timer: {
+    parity: {
+      pair: 'verification-codes',
+      markers: {
+        relational: [`file:${PG}/timers.go`, `${PG}/timers.go::FOR UPDATE SKIP LOCKED`, 'file:internal/infrastructure/timer/poller.go'],
+        document: [`file:${MONGO}/timers.go`, `${MONGO}/timers.go::FindOneAndUpdate(outside(ctx)`, `${MONGO}/timers.go::$NOW`]
+      }
+    },
+    emitter: 'src/scaffold/timer.js (el paquete timer: Store, Poller, la purga y un handler por plazo; timers.go en el paquete del motor; el cableado en main.go)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'verification-codes: las sentencias de keel-core tal cual (test/deadlines.test.js comprueba que cada una está en timers.go), con los marcadores nombrados traducidos en tiempo de ejecución; DL-5 a DL-10 y el recurrente de la purga (R1) contra el motor, con el Poller emitido. Falsado con dl-no-lease (cae en DL-6 y DL-7) y dl-no-revalidate (DL-8 y DL-9). dl-app-clock no tiene sujeto: la instancia y la base comparten reloj en la máquina de la red. Medido el 2026-11-08: db-check 8/8 en PostgreSQL (20 sondas) y 7/7 en MySQL, y cada sabotaje en exactamente sus casos'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'verification-codes-mongo: FindOneAndUpdate de uno en uno con $NOW, fuera de toda transacción, el _id aplanado y entity_id/claim_token como texto. Falsado con dl-no-lease (cae en DL-5, DL-6 y DL-7, como en los otros tres) y dl-no-revalidate (DL-8 y DL-9). Medido el 2026-11-08: doc-check 5/5 (20 sondas), y cada sabotaje en exactamente sus casos'
+      }
+    }
+  },
   'runtime-panel': {
     parity: {
       skip: 'la telemetría es una elección de STACK (telemetry: otel) y el par se genera sin ella; el panel y sus series los comparan con los otros generadores test/observability-assets.test.js y la prueba emitida telemetry_test.go, generando con la opción',

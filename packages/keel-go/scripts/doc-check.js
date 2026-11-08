@@ -13,7 +13,9 @@
 //   npm run doc-check --workspace packages/keel-go
 //
 // --sabotage=<id> rompe lo emitido EN MEMORIA, conservando la forma (sigue compilando): el check tiene que salir rojo en
-// las sondas que miden ese mecanismo y solo en ellas.
+// las sondas que miden ese mecanismo y solo en ellas. Los del cronómetro y los plazos (DSL 2.26) —dl-boundary,
+// dl-no-guard, dl-no-revalidate, dl-no-lease, dl-outside-tx— solo tocan verification-codes-mongo, y tienen que caer en
+// TODOS sus casos DL y solo en ellos (scripts/lib/timer-probes.js).
 //
 // Necesita Go, podman o docker y la caché de módulos (o red la primera vez).
 
@@ -25,7 +27,11 @@ import { usesDocument } from '@keel-system/keel-core/gen/features';
 import { planService } from '../src/scaffold/index.js';
 import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, UNCOVERED_BRANCHES, makeWorkspace } from '../test/helpers/workspace.js';
 import { docProbeFile } from './lib/doc-probes.js';
-import { DOC_SABOTAGES as SABOTAGES, applyDocSabotage } from '../test/helpers/doc-sabotages.js';
+import { DOC_SABOTAGES, applyDocSabotage } from '../test/helpers/doc-sabotages.js';
+import { TIMER_SABOTAGES, isTimerSabotage, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
+
+// Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
+const SABOTAGES = { ...DOC_SABOTAGES, ...TIMER_SABOTAGES };
 import { resolveRuntime, startMongo, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length) ?? null;
@@ -77,7 +83,8 @@ try {
     // Toda la fixture, como go-check --fixtures: planService no pasa por la frontera.
     const plan = planService({ manifest, layers, workspace: FIXTURES_DIR });
     if (!usesDocument(plan.model)) continue;
-    let files = plan.files;
+    // Lo que escribiría el agente en la entidad con plazo: los métodos semánticos que llaman los casos DL.
+    let files = plan.files.map((file) => timerProbePatch(plan.model, file));
     if (sabotage) {
       const sabotaged = applyDocSabotage(SABOTAGES[sabotage], files);
       if (sabotaged.changed === 0) continue;
@@ -86,8 +93,9 @@ try {
     }
     const probe = docProbeFile(plan.model);
     if (!probe) continue;
+    const timerProbe = timerProbeFile(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe]) {
+    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -117,9 +125,12 @@ try {
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
       return;
     }
-    const { expect, also } = SABOTAGES[sabotage];
+    const { expect } = isTimerSabotage(sabotage) ? timerSabotageBreaks(sabotage, 'document') : SABOTAGES[sabotage];
+    const { also } = SABOTAGES[sabotage];
     const expected = failed.filter((test) => expect.test(test));
     const stray = failed.filter((test) => !expect.test(test) && !(also && also.test(test)));
+    // Los del cronómetro, además, en TODOS sus casos.
+    if (isTimerSabotage(sabotage)) stray.push(...timerBreaksCovered(failed, sabotage, 'document').map((caseId) => `${caseId} no cayó`));
     const compiled = ran > 0;
     step(
       `falsado: ${sabotage} en ${name} → ${expected.length > 0 ? `rojo en ${expected.join(', ')}` : 'ninguna sonda lo mide aquí'}`,

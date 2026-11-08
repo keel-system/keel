@@ -57,6 +57,8 @@ import * as kafka from './kafka.js';
 import * as snssqs from './snssqs.js';
 import * as purge from './purge.js';
 import * as scheduling from './scheduling.js';
+import * as timer from './timer.js';
+import * as deadlinesCheck from './deadlines-check.js';
 import * as correlation from './correlation.js';
 import * as logging from './logging.js';
 import * as telemetry from './telemetry.js';
@@ -129,6 +131,8 @@ const GENERATORS = [
   snssqs,
   purge,
   scheduling,
+  // El cronómetro del servicio y los plazos de negocio (DSL 2.26): se gatea a sí mismo por el diseño.
+  timer,
   endpoints,
   restSupport,
   security,
@@ -137,6 +141,8 @@ const GENERATORS = [
   server,
   architecture,
   infra,
+  // El gate de los plazos (DSL 2.26): lo que el agente escribe para que caduquen de verdad.
+  deadlinesCheck,
   loggingCheck,
   telemetryGate,
   observabilityAssets,
@@ -166,6 +172,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   model.fixtures = fixtures;
   // Contratos de /keel-docs presentes en el workspace: build los copia a docs/ del proyecto.
   model.docs = listKeelDocs(workspace, model.service.name);
+  // Los plazos (DSL 2.26) necesitan un motor con las sentencias del cronómetro medidas: lo que depende del stack.
+  const timerErrors = timer.timerStackErrors(model);
+  if (timerErrors.length > 0) throw new Error(timerErrors.join('\n'));
   return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };
 }
 

@@ -12,19 +12,6 @@ export function declaredDeadlines(layers) {
   );
 }
 
-/**
- * El rechazo de un generador que todavía no genera los plazos, con el mismo mensaje en los cuatro: llegan por incrementos
- * (PLAN-DSL-226-PLAZOS.md) y, hasta el suyo, se rechazan enteros, nunca a medias. Vacío si el diseño no declara ninguno.
- */
-export function deadlinesPendingErrors(layers, generator, increment) {
-  return declaredDeadlines(layers).map(
-    ({ entityName, state }) =>
-      `domain: ${entityName}.lifecycle.deadlines.${state} (plazo de negocio, DSL 2.26): ${generator} todavía no lo genera — ` +
-      `llega con el cronómetro del servicio, en el incremento ${increment} de PLAN-DSL-226-PLAZOS.md. Genera este diseño sin el ` +
-      'plazo, o espera a ese incremento.'
-  );
-}
-
 // ─── La duración ─────────────────────────────────────────────────────────────
 
 /** Segundos por unidad de `after.unit`. `days` existe solo aquí: un plazo de negocio se mide en días (una invitación). */

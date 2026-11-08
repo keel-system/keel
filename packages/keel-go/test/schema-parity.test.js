@@ -60,8 +60,6 @@ function springOf(design) {
   const files = planSpring({ ...design, workspace: FIXTURES_DIR }).files;
   const schema = springSchema(files);
   for (const [tableName, fks] of springCrossAggregateForeignKeys(files)) for (const fk of fks) schemaTable(schema, tableName).names.add(fk);
-  // La tabla del cronómetro (DSL 2.26) llega a keel-go con el incremento 6 de PLAN-DSL-226-PLAZOS.md: hasta entonces, fuera.
-  schema.delete('keel_timer');
   return schema;
 }
 

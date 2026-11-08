@@ -20,9 +20,10 @@ import { LOCK_VERSION } from '@keel-system/keel-core/gen';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, commentLines, goString, keyedLiteral } from '../lib/go-source.js';
 import { constantOf } from './enums.js';
+import { lateGuardParts, transitionNeedsClock } from './timer.js';
 import { declType, docComment, domainPath, fieldImports, goFileName, isOptional, layout, localName, packageFile } from './render.js';
 
-const IMPORTS = ['slices', 'bytes', 'time', 'encoding/json/jsontext', 'internal/platform/wire'];
+const IMPORTS = ['slices', 'bytes', 'time', 'errors','encoding/json/jsontext', 'internal/platform/wire'];
 
 export function generate(model) {
   return (model.entities ?? []).flatMap((entity) => [renderEntity(model, entity), renderBehavior(model, entity)]);
@@ -227,11 +228,15 @@ function renderLifecycle(model, entity, receiver) {
 		return Errorf(ErrInvalidStateTransition, ${message}, ${member}, target)
 	}
 	${member} = target`;
-  return [
-    `// ${variable} son las transiciones del lifecycle de ${entity.name}; un estado sin destinos es terminal.
+  const transitionsVar = `// ${variable} son las transiciones del lifecycle de ${entity.name}; un estado sin destinos es terminal.
 var ${variable} = map[${enumType}][]${enumType}{
 ${entries.join('\n')}
-}`,
+}`;
+  // Con plazos de negocio (DSL 2.26), la guarda con el rechazo tardío y la de siempre, sin la hora (timer.js).
+  const late = lateGuardParts(model, entity, receiver, guard);
+  if (late) return [transitionsVar, late.transitionTo, late.transitionAt, late.apply];
+  return [
+    transitionsVar,
     `// transitionTo es la guarda del lifecycle: la llaman los métodos semánticos, nunca un caso de uso.
 //
 //lint:ignore U1000 la llaman los métodos semánticos que escribe el agente (los TODO de ${goFileName(entity.name)}_behavior.go).
@@ -254,7 +259,9 @@ function lifecycleTodos(model, entity, receiver) {
       to.map((target) => {
         const ops = executedBy[`${from}|${target}`] ?? [];
         const origin = ops.length ? ` (lo ejecuta ${ops.join(', ')})` : '';
-        return `// TODO (agente): método semántico ${from} → ${target}${origin} que valide la regla del diseño y llame a ${receiver}.transitionTo(${constant(target)}).`;
+        // Si sale de un estado con plazo hacia otro destino (DSL 2.26), el método recibe la hora y los plazos vigentes.
+        const call = transitionNeedsClock(entity, from, target) ? `${receiver}.transitionAt(${constant(target)}, now, deadlines)` : `${receiver}.transitionTo(${constant(target)})`;
+        return `// TODO (agente): método semántico ${from} → ${target}${origin} que valide la regla del diseño y llame a ${call}.`;
       })
     )
     .join('\n');

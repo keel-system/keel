@@ -40,6 +40,7 @@ import { layout, packageFile } from './render.js';
 import { CREDENTIALS_FILE, CREDENTIALS_IMPORTS, closingCredentialExpression, credentialsBody, smokeCredentialsCase } from './identity-harness.js';
 import { MESSAGING_HARNESS_FILE, messagingHarnessBody, messagingHarnessImports, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
 import { PAYMENT_HARNESS_FILE, PAYMENT_HARNESS_IMPORTS, paymentHarnessBody } from './payment-harness.js';
+import { relationalDeadlineAgingMembers } from './timer.js';
 import { HTTP_STUB_HARNESS_FILE, HTTP_STUB_HARNESS_IMPORTS, httpStubHarnessBody, httpStubSmokeCase, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
 import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenarios';
 import { statementCountLaunch, statementCountMembers, statementCountSmokeCase } from './statement-count.js';
@@ -327,8 +328,10 @@ func (s *Scenario) Db(sql string) string {
   if (documentProbe(model)) helpers.push(...documentFlowMembers(model));
   const rescue = rescueMembers(model);
   const aging = reconciliationAgingMembers(model);
-  helpers.push(...rescue, ...aging);
-  if (rescue.length > 0 || aging.length > 0) helpers.push(idLiteralMember(model));
+  // El plazo de negocio (DSL 2.26): AgeForDeadline envejece el since y el temporizador a la vez.
+  const deadlineAging = relationalDeadlineAgingMembers(model);
+  helpers.push(...rescue, ...aging, ...deadlineAging);
+  if (rescue.length > 0 || aging.length > 0 || deadlineAging.length > 0) helpers.push(idLiteralMember(model));
   if (inMemoryState(model)) helpers.push(restartMember());
   if (usesReplica(model)) helpers.push(...replicaMembers(model));
   helpers.push(...statementCountMembers(model));

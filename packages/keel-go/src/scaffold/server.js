@@ -44,6 +44,7 @@ import { loggerWiring } from './logging.js';
 import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { MANAGEMENT_LISTEN, MANAGEMENT_SERVER, MANAGEMENT_SHUTDOWN, TELEMETRY_FLUSH, TELEMETRY_START } from './telemetry.js';
 import { usesRelational } from '@keel-system/keel-core/gen/features';
+import { CLOCK, DEADLINES, DEADLINES_VAR, TIMER_IMPORT, TIMER_WORKER, deadlinesReadParameters, deadlinesWiring, timerWiring, usesDeadlines } from './timer.js';
 
 // El gauge de las filas del outbox que se rindieron, leído en cada scrape (sin base, el perfil test, no hay relay que
 // mirar). NaN si no se puede leer: un cero diría que no hay ninguna.
@@ -153,6 +154,8 @@ function mainGo(model) {
       KAFKA_IMPORT,
       SNSSQS_IMPORT,
       SCHEDULER_IMPORT,
+      TIMER_IMPORT,
+      'internal/domain',
       PARAMETERS_IMPORT,
       CLIENTS_IMPORT,
       layout(model).mail.dir,
@@ -197,7 +200,7 @@ ${usesTelemetry(model) ? MANAGEMENT_LISTEN : ''}
 			return fmt.Errorf("servir HTTP: %w", err)
 		}
 		return nil
-	})${usesTelemetry(model) ? MANAGEMENT_SERVER : ''}${wiresMessaging(model) ? workers(model) : ''}${usesScheduling(model) ? CLOCK_WORKER : ''}
+	})${usesTelemetry(model) ? MANAGEMENT_SERVER : ''}${wiresMessaging(model) ? workers(model) : ''}${usesScheduling(model) ? CLOCK_WORKER : ''}${usesDeadlines(model) ? TIMER_WORKER : ''}
 	group.Go(func() error {
 		<-groupCtx.Done()
 		probes.StartDraining()
@@ -246,7 +249,8 @@ func healthcheck(ctx context.Context, getenv func(string) string) error {
 function parametersWiring(model) {
   const consumed =
     (handlersReadParameters(model) && dispatchesUseCases(model)) ||
-    repositoryRoots(model).some((root) => claimDependencies(model, root).some((dep) => dep.field === 'parameters'));
+    repositoryRoots(model).some((root) => claimDependencies(model, root).some((dep) => dep.field === 'parameters')) ||
+    (usesDeadlines(model) && deadlinesReadParameters(model));
   if (!consumed) {
     return `	if _, err := parameters.From(cfg); err != nil {
 		return fmt.Errorf("parámetros de despliegue: %w", err)
@@ -265,7 +269,7 @@ function parametersWiring(model) {
  * declarado sin uso, y en Go eso no compila.
  */
 function dispatchesUseCases(model) {
-  return usesApi(model) || (wiresMessaging(model) && consumes(model)) || usesScheduling(model);
+  return usesApi(model) || (wiresMessaging(model) && consumes(model)) || usesScheduling(model) || usesDeadlines(model);
 }
 
 // El cableado, de arriba abajo. Cada registro lleva el correlationId de la petición o del mensaje que lo escribe. Con la
@@ -312,6 +316,9 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', undefined, 
   // El almacenamiento de binarios (capa storage): la política de cada bucket y el adaptador S3 que escribe el agente.
   const storing = dispatchesUseCases(model) ? storageServerWiring(model) : '';
   if (storing) repositories.push(...storageServerRows(model));
+  if (usesDeadlines(model)) {
+    repositories.push({ indent: '		', cells: [`${CLOCK.field}:`, 'time.Now,'] }, { indent: '		', cells: [`${DEADLINES.field}:`, `${DEADLINES_VAR},`] });
+  }
   if (handlersReadParameters(model) && dispatchesUseCases(model)) {
     repositories.push({ indent: '		', cells: [`${SERVICE_PARAMETERS.field}:`, `${PARAMETERS_VAR},`] });
   }
@@ -339,9 +346,9 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', undefined, 
 		}${telemetry && usesRelational(model) ? '\n\t\tobservability.RegisterPool(db.Stats)' : ''}
 	}
 ${statementCountWiring(model)}	transactions := ${store.name}.NewTransactions(db, ${document ? '' : 'database.TransactionTimeout, '}logger)
-${statementCountOnTransactions(model)}${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${caching}${storing}${paying ? PAYMENT_SERVER_WIRING : ''}${messaging ? messagingWiring(model) : ''}
+${statementCountOnTransactions(model)}${usesDeadlines(model) ? deadlinesWiring(model, PARAMETERS_VAR) : ''}${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${caching}${storing}${paying ? PAYMENT_SERVER_WIRING : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
-${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`, undefined, 'observability')}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${serve}`;
+${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`, undefined, 'observability')}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${usesDeadlines(model) ? timerWiring(model, store, (entity) => `${store.name}.New${entity.name}Repository(${repositoryArgs(model, entity, 'transactions', 'bridge')})`) : ''}${serve}`;
 }
 
 // Los clientes HTTP salientes (incremento 11b): la configuración del perfil (la URL de cada proveedor, obligatoria fuera de

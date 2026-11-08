@@ -53,6 +53,8 @@ import { storeTables } from './messaging-stores.js';
 import { reconciliationTables } from './reconciliation-claim.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { GENERATOR_TABLES, schemaStepFiles } from '@keel-system/keel-core/gen/schema-steps';
+import { KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
+import { usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
 
 export { usesRelational };
 
@@ -386,7 +388,7 @@ export function schemaTables(model) {
   // (messaging-stores.js: outbox_event y processed_event) y la marca del reclamo de reconciliación
   // (reconciliation-claim.js, tramo 11c): las tablas neutrales de keel-core, las mismas de los otros tres generadores,
   // con su clave primaria, su unicidad y los índices de la purga. Las mismas que crea un paso de esquema de build.
-  const stores = [...(usesRequestIdempotency(model) ? [IDEMPOTENCY_RECORD] : []), ...storeTables(model), ...reconciliationTables(model)];
+  const stores = [...(usesRequestIdempotency(model) ? [IDEMPOTENCY_RECORD] : []), ...storeTables(model), ...reconciliationTables(model), ...(usesDeadlines(model) ? [KEEL_TIMER] : [])];
   for (const store of stores) {
     tables.push({
       name: store.table,

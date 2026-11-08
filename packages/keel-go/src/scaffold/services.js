@@ -35,6 +35,7 @@ import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity } from './securi
 import { callMethod, clientParam, usesGoHttpClients } from './http-clients.js';
 import { projectionNotes, replicaNote } from './projections.js';
 import { mailNote } from './mail.js';
+import { deadlineNotes } from './timer.js';
 import { cacheHandlerNote } from './cache.js';
 import { uploadHandlerNotes } from './storage.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, conditionalHandlerNote, returnsVersioned, versionedType } from './conditional-writes.js';
@@ -420,6 +421,8 @@ function handlerNotes(model, operation) {
   if (dispatch) notes.push(dispatch);
   const gate = entryGateNote(model, operation, { read: `${operation.messageKind === 'query' ? 'query' : 'cmd'}.EntryGate`, value: entryGateConstant });
   if (gate) notes.push(gate);
+  // Los plazos (DSL 2.26): la nota de la operación que caduca y la de las que salen del estado. Neutrales, las mismas en los cuatro.
+  notes.push(...deadlineNotes(model, operation));
   // La escritura condicional (api.concurrency): cargar con LoadExpecting y devolver la versión persistida.
   const root = operation.targetEntity ?? operation.responseDto?.entity ?? 'Raiz';
   const conditional = conditionalHandlerNote(model, operation, operation.messageKind === 'query' ? 'query' : 'cmd', repositoryParam({ name: root }));

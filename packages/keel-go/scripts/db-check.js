@@ -24,6 +24,8 @@
 // lección del 16e de keel-dotnet), conservando la forma: sigue compilando. El check tiene que salir rojo en las sondas
 // que miden ese mecanismo y solo en ellas (`expect`, y `also` para las que caen con él por una dependencia legítima).
 // Sin sabotaje, el esquema se falsa además aplicando una migración sin un índice de FK.
+// Los del cronómetro y los plazos (DSL 2.26) —dl-boundary, dl-no-guard, dl-no-revalidate, dl-no-lease, dl-outside-tx—
+// solo tocan verification-codes, y tienen que caer en TODOS sus casos DL y solo en ellos (scripts/lib/timer-probes.js).
 //
 // Necesita Go, podman o docker y la caché de módulos (o red la primera vez).
 
@@ -37,7 +39,8 @@ import { goView } from '../test/helpers/contract.js';
 import { baselineOf, goSchema } from '../test/helpers/schema.js';
 import { probeFile } from './lib/db-probes.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
-import { DB_SABOTAGES as SABOTAGES, applyDbSabotage } from '../test/helpers/db-sabotages.js';
+import { DB_SABOTAGES, applyDbSabotage } from '../test/helpers/db-sabotages.js';
+import { TIMER_SABOTAGES, isTimerSabotage, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { ENGINE_LABELS, STORE_PACKAGES } from '../src/lib/relational-engine.js';
 import { SUPPORTED_DATABASES } from '../src/lib/supported-features.js';
@@ -55,6 +58,8 @@ const stack = { database: engine };
 const storePath = `internal/infrastructure/${STORE_PACKAGES[engine]}`;
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
 const keep = process.argv.includes('--keep');
+// Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
+const SABOTAGES = { ...DB_SABOTAGES, ...TIMER_SABOTAGES };
 
 if (sabotage && !SABOTAGES[sabotage]) {
   console.error(`No hay ningún sabotaje '${sabotage}'. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);
@@ -126,12 +131,12 @@ try {
       step(`${name}: el catálogo del motor es el esquema emitido, y Down lo deja vacío`, differences.length === 0, differences.slice(0, 8).join(' | '));
     }
     // Falsado: sin un índice de FK, la comparación tiene que verlo. Si el sabotaje ya no se aplica, el paso sale rojo.
-    // El de la purga del registro de idempotencia (ix_idempotency_record_expires_at) no es de una FK, ni el de las marcas de reconciliación: se saltan.
-    const subject = relational.find((name) => /^CREATE INDEX ix_(?!idempotency_record_|outbox_event_|processed_event_|reconciliation_claim_)/m.test(baselineOf(planService({ ...goView(name), workspace: FIXTURES_DIR, stack }).files)));
+    // El de la purga del registro de idempotencia (ix_idempotency_record_expires_at) no es de una FK, ni el de las marcas de reconciliación, ni el del vencimiento del cronómetro: se saltan.
+    const subject = relational.find((name) => /^CREATE INDEX ix_(?!idempotency_record_|outbox_event_|processed_event_|reconciliation_claim_|keel_timer_)/m.test(baselineOf(planService({ ...goView(name), workspace: FIXTURES_DIR, stack }).files)));
     if (subject) {
       const files = planService({ ...goView(subject), workspace: FIXTURES_DIR, stack }).files;
       const sql = baselineOf(files);
-      const sabotaged = sql.replace(/^CREATE INDEX ix_(?!idempotency_record_|outbox_event_|processed_event_|reconciliation_claim_)\w+ ON .*;\n\n?/m, '');
+      const sabotaged = sql.replace(/^CREATE INDEX ix_(?!idempotency_record_|outbox_event_|processed_event_|reconciliation_claim_|keel_timer_)\w+ ON .*;\n\n?/m, '');
       const differences = sabotaged === sql ? [] : applyAndCompare(`${subject.replace(/-/g, '_')}_sabotaged`, sabotaged, goSchema(files));
       step(`falsado: ${subject} sin un índice de FK → la comparación lo ve`, differences.some((d) => /ix_/.test(d)), differences.slice(0, 3).join(' | ') || 'no vio nada');
     }
@@ -147,7 +152,8 @@ try {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     if (mutate) mutate(layers, manifest);
     const plan = planService({ manifest, layers, workspace: FIXTURES_DIR, stack });
-    let files = plan.files;
+    // Lo que escribiría el agente en la entidad con plazo: los métodos semánticos que llaman los casos DL.
+    let files = plan.files.map((file) => timerProbePatch(plan.model, file));
     if (sabotage) {
       const sabotaged = applyDbSabotage(SABOTAGES[sabotage], files, engine);
       // Un sabotaje que no toca a este sujeto no dice nada de él.
@@ -156,8 +162,9 @@ try {
       files = sabotaged.files;
     }
     const probe = probeFile(plan.model, files);
+    const timerProbe = timerProbeFile(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe]) {
+    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -199,10 +206,12 @@ try {
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
       return;
     }
-    const { expect } = SABOTAGES[sabotage];
+    const { expect } = isTimerSabotage(sabotage) ? timerSabotageBreaks(sabotage, 'relational') : SABOTAGES[sabotage];
     const also = SABOTAGES[sabotage][engine]?.also ?? SABOTAGES[sabotage].also;
     const expected = failed.filter((test) => expect.test(test));
     const stray = failed.filter((test) => !expect.test(test) && !(also && also.test(test)));
+    // Los del cronómetro, además, en TODOS sus casos.
+    if (isTimerSabotage(sabotage)) stray.push(...timerBreaksCovered(failed, sabotage, 'relational').map((caseId) => `${caseId} no cayó`));
     const compiled = ran > 0;
     // Un sujeto donde el sabotaje toca lo emitido pero ninguna sonda lo mide sale verde y lo dice: se juzga en conjunto.
     step(

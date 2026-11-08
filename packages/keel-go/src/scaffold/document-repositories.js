@@ -29,6 +29,7 @@ import { docComment, goFileName, isOptional, layout, localName, packageFile } fr
 import { declaredAuthorship, usesDeclaredAuthorship } from './audit-actor.js';
 import { emitsEvents, usesGoOutbox } from './messaging.js';
 import { claimDependencies, claimMethod, storedState } from './claim.js';
+import { deadlineDependencies, documentArming } from './timer.js';
 import { documentReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { credentialFinders, keyFinders, naturalKeyBatchFinder, portName, rankedEnums } from './repositories.js';
 import { BSON, MONGO_DRIVER, MONGO_OPTIONS } from './document-persistence.js';
@@ -52,7 +53,8 @@ const ADAPTER_IMPORTS = [
   'internal/domain',
   'internal/platform/textfold',
   'internal/platform/wire',
-  'internal/infrastructure/messaging'
+  'internal/infrastructure/messaging',
+  'internal/infrastructure/timer'
 ];
 
 const lower = (name) => `${name[0].toLowerCase()}${name.slice(1)}`;
@@ -373,12 +375,19 @@ function adapterBody(model, entity, uses) {
   const eventsDoc = events
     ? ` Al guardar, entrega al puente de la mensajería los eventos que drena del agregado: ${outbox ? 'sus documentos del outbox van en la MISMA transacción del cambio' : 'se publican DESPUÉS del commit'}.`
     : '';
-  const deps = [{ field: 'tx', type: '*Transactions' }, ...(events ? [{ field: 'events', type: '*messaging.Bridge' }] : []), ...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)];
+  const deps = [
+    { field: 'tx', type: '*Transactions' },
+    ...(events ? [{ field: 'events', type: '*messaging.Bridge' }] : []),
+    ...claimDependencies(model, entity),
+    ...reconciliationDependencies(model, entity),
+    ...deadlineDependencies(model, entity)
+  ];
   const built = [
     events ? ' y el puente de la mensajería' : '',
     deps.some((dep) => dep.field === 'sweeps') ? ', con los barridos del perfil' : '',
     deps.some((dep) => dep.field === 'parameters') ? ' y los parámetros de despliegue que lee su rescate' : '',
-    deps.some((dep) => dep.field === 'reconciliation') ? ', con los barridos de reconciliación del perfil' : ''
+    deps.some((dep) => dep.field === 'reconciliation') ? ', con los barridos de reconciliación del perfil' : '',
+    deps.some((dep) => dep.field === 'deadlines') ? ', con los plazos vigentes con los que arma sus temporizadores' : ''
   ].join('');
   parts.push(`// ${constant} es la colección de los documentos de ${name}.
 const ${constant} = ${goString(collection)}
@@ -517,6 +526,8 @@ function saveMethod(model, entity, type, constant, id, idWrite, uses) {
   const appendAll = (list, target) => list.map((a) => `\t\t${target} = append(${target}, bson.E{Key: ${goString(a.key)}, Value: ${auditValue(a)}})`);
   const idExpr = `${local}.${id.method}()`;
   const filterId = writer(entity.idField ?? { goType: 'uuid.UUID', name: 'id' }, idExpr, uses);
+  // El armado de los plazos (DSL 2.26), en la sesión de la transacción: el documento de antes y, tras releer, el temporizador.
+  const arming = entity.lifecycle ? documentArming(model, entity, local, filterId) : null;
   let statement;
   if (doc.version) {
     statement = `${appendAll(updated, 'fields').join('\n')}
@@ -563,7 +574,7 @@ func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.$
 		if e.err != nil {
 			return e.err
 		}
-${prelude.join('\n')}${prelude.length > 0 ? '\n' : ''}${statement}${outbox ? `
+${arming ? `${arming.before}\n` : ''}${prelude.join('\n')}${prelude.length > 0 ? '\n' : ''}${statement}${outbox ? `
 		records, err := r.events.Route(ctx, events)
 		if err != nil {
 			return err
@@ -578,7 +589,7 @@ ${prelude.join('\n')}${prelude.length > 0 ? '\n' : ''}${statement}${outbox ? `
 		if len(found) == 0 {
 			return fmt.Errorf("%s: el documento guardado no se pudo releer", ${constant})
 		}
-		saved = found[0]
+		saved = found[0]${arming ? `\n${arming.after}` : ''}
 		return nil
 	})
 	if err != nil {
