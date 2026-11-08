@@ -8,8 +8,8 @@
 // la skill keel-spring-<broker>.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
-import { PROCESSED_EVENT_PURGE, usesMessageDeduplication } from '@keel-system/keel-core/gen/messaging-stores';
+import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, purgeSchedule, purgeScheduleImports, PURGE_QUERY_IMPORTS } from './purge.js';
+import { PROCESSED_EVENT, PROCESSED_EVENT_PURGE, usesMessageDeduplication } from '@keel-system/keel-core/gen/messaging-stores';
 
 const IDEMPOTENCY_PKG = 'infrastructure.messaging.idempotency';
 
@@ -580,8 +580,7 @@ ${purgeSettings('processed-event.purge')}
         return record(handlerId, eventId);
     }
 
-    @Scheduled(cron = "\${${PROCESSED_EVENT_PURGE.cron.key}:${PROCESSED_EVENT_PURGE.cron.default}}")${relational ? '' : '\n    @Transactional'}
-    public void purge() {
+${purgeSchedule(model, PROCESSED_EVENT.table, PROCESSED_EVENT_PURGE.cron)}${relational ? '' : '    @Transactional\n'}    public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
         ${purgeStatement}
         if (deleted > 0) {
@@ -601,7 +600,7 @@ ${purgeSettings('processed-event.purge')}
         'org.slf4j.LoggerFactory',
         'org.springframework.beans.factory.annotation.Value',
         'org.springframework.dao.DataIntegrityViolationException',
-        'org.springframework.scheduling.annotation.Scheduled',
+        ...purgeScheduleImports(model, PROCESSED_EVENT.table),
         'org.springframework.stereotype.Component',
         ...(relational ? purgeCallImports(model) : ['org.springframework.transaction.annotation.Transactional'])
       ],

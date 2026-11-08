@@ -145,6 +145,10 @@ export const MECHANISM_CATALOG = {
     title: 'Cronómetro del servicio: keel_timer, reclamo con arriendo y valla, revalidación, sueño y aparcado',
     axis: 'model'
   },
+  'timer-purge': {
+    title: 'Purgas de las tablas del generador en modo clúster (DSL 2.26, inc. 7): un recurrente por tabla en keel_timer, una réplica por tick',
+    axis: 'model'
+  },
   'conditional-write': {
     title: 'Escritura condicional (DSL 2.25, api.concurrency): ETag, If-Match, 412 y 428, loadExpecting y la versión persistida',
     axis: 'model'

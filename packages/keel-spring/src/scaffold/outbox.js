@@ -12,8 +12,9 @@ import { OUTBOX_DEAD_LETTERED } from '@keel-system/keel-core/gen/telemetry-vocab
 import { javaFile, javaPath, subPackage } from './render.js';
 import { claimSelectionSnippet, claimTransaction, supportsSkipLocked } from '../lib/claim-sql.js';
 import { usesTelemetry, tracedDispatch, messageTracingImport, TRACED_DISPATCH_IMPORTS } from './telemetry.js';
-import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
+import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, purgeSchedule, purgeScheduleImports, PURGE_QUERY_IMPORTS } from './purge.js';
 import {
+  OUTBOX_EVENT,
   OUTBOX_LAST_ERROR_LENGTH,
   OUTBOX_PURGE,
   OUTBOX_RELAY,
@@ -693,8 +694,7 @@ public class OutboxRelay {
         return delay;
     }
 
-    @Scheduled(cron = "\${${OUTBOX_PURGE.cron.key}:${OUTBOX_PURGE.cron.default}}")
-    public void purge() {
+${purgeSchedule(model, OUTBOX_EVENT.table, OUTBOX_PURGE.cron)}    public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
         long deleted = outboxRepository.deletePublishedBefore(cutoff);
         if (deleted > 0) {
@@ -975,8 +975,7 @@ ${purgeSettings('outbox.purge')}
      * Por lotes y SIN transacción propia: cada lote confirma en la suya (ver BatchedPurge). Una
      * sola transacción alrededor de todo volvería a ser el DELETE único que esto sustituye.
      */
-    @Scheduled(cron = "\${${OUTBOX_PURGE.cron.key}:${OUTBOX_PURGE.cron.default}}")
-    public void purge() {
+${purgeSchedule(model, OUTBOX_EVENT.table, OUTBOX_PURGE.cron)}    public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
         long deleted = ${purgeCall({ what: 'Outbox', repository: 'outboxRepository', deleteMethod: 'deletePublishedBefore' })};
         if (deleted > 0) {

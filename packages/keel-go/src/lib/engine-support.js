@@ -37,6 +37,7 @@ const PG = 'internal/infrastructure/postgres';
 const MONGO = 'internal/infrastructure/mongo';
 
 export const MECHANISMS = {
+  'timer-purge': { pending: 'incremento 7 de PLAN-DSL-226-PLAZOS.md: las purgas de las tablas del generador, como recurrentes del cronómetro' },
   deadline: {
     parity: {
       pair: 'verification-codes',

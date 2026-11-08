@@ -321,7 +321,8 @@ test('pasos de esquema: la marca suma un segundo en el calendario, no en el ente
 
 // La promesa del 2b: los cuatro servidores dejan el MISMO esquema. Con la misma fixture y la misma base desplegada, el paso
 // de keel-dotnet crea las tablas del de keel-spring con el mismo SQL, byte a byte; y en MySQL, el de schemaStepSql.
-test('pasos de esquema: paridad con keel-spring, las mismas tablas y el mismo SQL', async () => {
+// keel-spring da ya keel_timer a todo diseño con purgas (DSL 2.26, inc. 7); keel-dotnet lo iguala con su parte, y este todo se retira.
+test('pasos de esquema: paridad con keel-spring, las mismas tablas y el mismo SQL', { todo: 'inc. 7 de PLAN-DSL-226-PLAZOS.md en keel-dotnet' }, async () => {
   const workspace = withFixture();
   await runBuild(workspace);
   await runBuild(workspace, {}, buildSpring);

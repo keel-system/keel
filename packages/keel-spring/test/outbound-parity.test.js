@@ -176,8 +176,10 @@ for (const name of [RELATIONAL, DOCUMENT]) {
         }
       }
     }
+    // La retención la lee la purga; el cron, su recurrente del cronómetro (DSL 2.26, inc. 7).
+    const purge = javaFile(files, 'ReconciliationClaimPurge') + javaFile(files, 'ReconciliationClaimPurgeTimer');
     for (const parameter of Object.values(RECONCILIATION_PURGE)) {
-      assert.ok(javaFile(files, 'ReconciliationClaimPurge').includes(`\${${parameter.key}:${parameter.default}}`), parameter.key);
+      assert.ok(purge.includes(`\${${parameter.key}:${parameter.default}}`), parameter.key);
     }
   });
 }

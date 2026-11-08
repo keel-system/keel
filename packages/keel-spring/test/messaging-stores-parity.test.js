@@ -130,7 +130,8 @@ for (const name of [RELATIONAL, DOCUMENT]) {
 
   test(`${name}: el respaldo de los @Value es el default de keel-core`, () => {
     const files = plan(name);
-    const java = javaFile(files, 'OutboxRelay') + javaFile(files, 'IdempotencyGuard');
+    // El cron de cada purga lo lee su recurrente del cronómetro (DSL 2.26, inc. 7), no el bean que purga.
+    const java = ['OutboxRelay', 'IdempotencyGuard', 'OutboxEventPurgeTimer', 'ProcessedEventPurgeTimer'].map((name) => javaFile(files, name)).join('');
     for (const parameter of PARAMETERS) {
       assert.ok(java.includes(`\${${parameter.key}:${parameter.default}}`), `${parameter.key}:${parameter.default}`);
     }

@@ -18,9 +18,9 @@
 // del handler, guiado por conventions/mapping.md.
 
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
-import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
+import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, purgeSchedule, purgeScheduleImports, PURGE_QUERY_IMPORTS } from './purge.js';
 import { idempotencyOutcomeCodes } from '@keel-system/keel-core/gen';
-import { IDEMPOTENCY_RECORD_PURGE } from '@keel-system/keel-core/gen/request-idempotency';
+import { IDEMPOTENCY_RECORD, IDEMPOTENCY_RECORD_PURGE } from '@keel-system/keel-core/gen/request-idempotency';
 import { javaFile, javaPath, subPackage } from './render.js';
 
 const PORT_PKG = 'domain.idempotency';
@@ -811,8 +811,7 @@ ${purgeSettings('idempotency-record.purge')}
     /**
      * Por lotes y SIN transacción propia: cada lote confirma en la suya (ver BatchedPurge).
      */
-    @Scheduled(cron = "\${${IDEMPOTENCY_RECORD_PURGE.cron.key}:${IDEMPOTENCY_RECORD_PURGE.cron.default}}")
-    public void purge() {
+${purgeSchedule(model, IDEMPOTENCY_RECORD.table, IDEMPOTENCY_RECORD_PURGE.cron)}    public void purge() {
         Instant cutoff = Instant.now();
         long deleted = ${purgeCall({ what: 'idempotency_record', repository: 'repository', deleteMethod: 'deleteExpiredBefore' })};
         if (deleted > 0) {
@@ -834,7 +833,7 @@ ${purgeSettings('idempotency-record.purge')}
         'org.slf4j.LoggerFactory',
         'org.springframework.dao.DataIntegrityViolationException',
         'org.springframework.dao.PessimisticLockingFailureException',
-        'org.springframework.scheduling.annotation.Scheduled',
+        ...purgeScheduleImports(model, IDEMPOTENCY_RECORD.table),
         'org.springframework.stereotype.Component',
         'org.springframework.beans.factory.annotation.Value',
         'org.springframework.transaction.TransactionSystemException',
@@ -1094,8 +1093,7 @@ public class MongoIdempotencyStore implements IdempotencyStore {
         return false;
     }
 
-    @Scheduled(cron = "\${${IDEMPOTENCY_RECORD_PURGE.cron.key}:${IDEMPOTENCY_RECORD_PURGE.cron.default}}")
-    public void purge() {
+${purgeSchedule(model, IDEMPOTENCY_RECORD.table, IDEMPOTENCY_RECORD_PURGE.cron)}    public void purge() {
         long deleted = repository.deleteByExpiresAtBefore(Instant.now());
         if (deleted > 0) {
             log.info("Idempotencia HTTP: purgadas {} claves caducadas", deleted);
@@ -1117,7 +1115,7 @@ public class MongoIdempotencyStore implements IdempotencyStore {
         'org.slf4j.LoggerFactory',
         'org.springframework.dao.DataIntegrityViolationException',
         'org.springframework.transaction.TransactionSystemException',
-        'org.springframework.scheduling.annotation.Scheduled',
+        ...purgeScheduleImports(model, IDEMPOTENCY_RECORD.table),
         'org.springframework.stereotype.Component',
         'org.springframework.transaction.annotation.Transactional'
       ],

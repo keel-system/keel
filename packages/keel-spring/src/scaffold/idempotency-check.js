@@ -932,9 +932,12 @@ function reconciliationChecks(model) {
       deny: generatedClaims.length > 0 ? generatedClaims.join('|') : null,
       bound: '[Cc]laim|[Rr]eclam',
       // Las clases del mecanismo que build YA genera con el patrón: encontrarlas
-      // probaría lo que build hizo, no lo que el agente tenía que escribir.
+      // probaría lo que build hizo, no lo que el agente tenía que escribir. Entre ellas,
+      // las del cronómetro (`*Timer*`): su reclamo lleva `LIMIT` y habla de «claim», y
+      // desde que las purgas corren en él (DSL 2.26, inc. 7) existe en todo diseño con
+      // reconciliación, así que satisfacía el check del lote sobre el árbol recién generado.
       exclude:
-        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxRelayStore|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*)\\.java',
+        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxRelayStore|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*|[A-Za-z]*Timer[A-Za-z]*)\\.java',
       why: 'ninguna consulta reclama candidatos con una MARCA PERSISTIDA (UPDATE ... SET <marca> vía @Modifying, o findAndModify en Mongo): el barrido corre en TODAS las réplicas, y un lock pesimista no sirve aquí porque solo aísla mientras dura su transacción y la llamada al proveedor va en medio — ver conventions/dependencies.md § El barrido corre en todas las réplicas'
     });
     // La cota del lote, APARTE del reclamo. Sin cota, el barrido se lleva la tabla entera
@@ -970,7 +973,7 @@ function reconciliationChecks(model) {
       // BLOQUE y no el archivo: el reclamo del agente cabe en el mismo adaptador.
       deny: generatedClaims.length > 0 ? generatedClaims.join('|') : null,
       exclude:
-        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxRelayStore|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*)\\.java',
+        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxRelayStore|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*|[A-Za-z]*Timer[A-Za-z]*)\\.java',
       why: 'el reclamo del barrido no acota su lote: ninguna consulta que limite el número de filas (Pageable/limit, o un contador de lote en Mongo) habla de los candidatos que se reconcilian. Puede ir en la misma consulta que reclama o en la que selecciona candidatos —en JPQL un @Modifying no acepta Pageable, así que ahí son dos por obligación—, pero tiene que existir: sin cota, una pasada con 50.000 atascados son 50.000 llamadas al proveedor'
     });
     // Y el umbral de «demasiado tiempo», UNO POR BARRIDO PENDIENTE.

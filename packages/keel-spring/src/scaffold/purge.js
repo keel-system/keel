@@ -17,6 +17,7 @@
 // transacción, va documento a documento y no retiene bloqueos que escalen.
 
 import { BATCHED_PURGE } from '@keel-system/keel-core/gen';
+import { purgedByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
@@ -84,6 +85,20 @@ export const PURGE_QUERY_IMPORTS = [
   'org.springframework.data.repository.query.Param',
   'org.springframework.transaction.annotation.Transactional'
 ];
+
+/**
+ * Quién dispara la purga de `table` (DSL 2.26, incremento 7). Con cronómetro, nadie aquí: la dispara su recurrente en
+ * modo clúster (`<Tabla>PurgeTimer`, timer.js), en UNA réplica por tick. Sin él (un motor sin sentencias del cronómetro),
+ * su `@Scheduled`, en todas las réplicas a la vez, como antes. Devuelve la línea con su sangría y su salto, o nada.
+ */
+export function purgeSchedule(model, table, cron) {
+  return purgedByTimer(model, table) ? '' : `    @Scheduled(cron = "\${${cron.key}:${cron.default}}")\n`;
+}
+
+/** El import que necesita `purgeSchedule`: ninguno si la purga va por el cronómetro. */
+export function purgeScheduleImports(model, table) {
+  return purgedByTimer(model, table) ? [] : ['org.springframework.scheduling.annotation.Scheduled'];
+}
 
 /** Los dos `@Value` del tamaño y del tope, bajo el prefijo de configuración de esa purga. */
 export function purgeSettings(prefix) {

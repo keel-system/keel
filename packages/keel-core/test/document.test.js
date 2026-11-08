@@ -212,7 +212,8 @@ test('los índices de los almacenes salen con el mecanismo que los usa, y ningun
     ]
   });
   const stores = storeDocumentIndexes(busy);
-  assert.deepEqual(stores.map((entry) => entry.collection), ['outbox_event', 'processed_event', 'idempotency_record', 'reconciliation_claim']);
+  // Y keel_timer: con purgas, el cronómetro las dispara (DSL 2.26, inc. 7), y su reclamo va por due_at.
+  assert.deepEqual(stores.map((entry) => entry.collection), ['outbox_event', 'processed_event', 'idempotency_record', 'reconciliation_claim', 'keel_timer']);
   assert.ok(stores.every((entry) => entry.specs.every((spec) => spec.unique === false)));
   assert.deepEqual(stores[0].specs[0].paths, ['published_at', 'created_at'], 'el orden del reclamo del relay');
   // Con la clave natural como guarda no hay registro de claves que indexar.

@@ -685,6 +685,33 @@ const SPRING_MECHANISMS = {
       }
     }
   },
+  'timer-purge': {
+    emitter: 'src/scaffold/timer.js · src/scaffold/purge.js',
+    why: 'Una purga que vuelve a correr en todas las réplicas no rompe nada visible —borrar es idempotente—: el precio es que cada réplica repite el mismo recorrido de la tabla a la vez, y nada lo dice. Y una purga que no arbitra con UNA fila (un kind por instancia, una fila por réplica) compila, arranca y purga igual.',
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: ['class OutboxEventPurgeTimer', 'implements RecurringTimerHandler', 'class JdbcTimerStore'],
+        document: ['class OutboxEventPurgeTimer', 'implements RecurringTimerHandler', 'class MongoTimerStore']
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'store-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'notification-mailer: dos réplicas (dos TimerPoller con sus propias instancias de cada <Tabla>PurgeTimer) sobre JdbcTimerStore contra el motor: una fila por purga (R1), un solo tick ejecutado (RC-1) y el rearme para el siguiente cron (R2). Falsado: timer-every-replica cae en R1 y RC-1. Los motores sin sentencias del cronómetro (MariaDB, SQL Server, Oracle) conservan el @Scheduled por réplica'
+      },
+      document: {
+        state: 'verificado',
+        net: 'store-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'notification-mailer-mongo: los mismos tres casos sobre MongoTimerStore en el replica set de infra/. Falsado: timer-every-replica cae en R1 y RC-1'
+      }
+    }
+  },
   'conditional-write': {
     emitter:
       'src/scaffold/conditional-writes.js · src/scaffold/controllers.js · src/scaffold/services.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js · src/scaffold/cache.js · src/scaffold/security.js',

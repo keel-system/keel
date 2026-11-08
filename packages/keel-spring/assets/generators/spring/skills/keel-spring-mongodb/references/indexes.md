@@ -98,7 +98,7 @@ el `_id`, que Mongo indexa siempre.
 ## TTL index: por qué no lo genera build
 
 Mongo puede caducar documentos solo, con `expireAfterSeconds` sobre `processed_at` o
-`expires_at`, y eso haría innecesarias las purgas `@Scheduled`. No se genera porque
+`expires_at`, y eso haría innecesarias las purgas (los `<Tabla>PurgeTimer` del cronómetro). No se genera porque
 el hilo TTL corre con granularidad de ~60 s y no se puede forzar desde un test: un
 purgado con reloj propio vuelve inestable cualquier escenario `FL-*` que dependa de
 él, y el gate del pipeline es justo la puntuación determinista de esos escenarios.

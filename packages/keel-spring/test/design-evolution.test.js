@@ -204,12 +204,14 @@ test('stack: lo que el diseño empieza a pedir se pregunta (solo eso) y lo que d
 // ─── Los pasos de esquema de build (inc. 2b del plan 2.26) ───────────────────────────────────
 //
 // Una tabla del generador que una base ya desplegada no tiene llega como un paso de Flyway que escribe build
-// (keel-core/gen/schema-steps.js). `product-catalog` emite `idempotency_record`; la baseline «desplegada» de la prueba
-// no la crea, como la de un proyecto completado antes de que el diseño ganara la idempotencia.
+// (keel-core/gen/schema-steps.js). `product-catalog` emite `idempotency_record` y, desde el inc. 7, `keel_timer` (la purga
+// del registro corre en el cronómetro); la baseline «desplegada» de la prueba no crea ninguna, como la de un proyecto
+// completado antes de que el diseño ganara la idempotencia.
 
 const MIGRATIONS = 'src/main/resources/db/migration';
 const BASELINE_V1 = `${MIGRATIONS}/V1__baseline_schema.sql`;
-const STEP = `${MIGRATIONS}/V3__keel_idempotency_record.sql`;
+const STEP_NAME = 'keel_idempotency_record_timer.sql';
+const STEP = `${MIGRATIONS}/V3__${STEP_NAME}`;
 
 test('pasos de esquema: sin baseline no hay paso; con ella, build escribe el de la tabla que falta tras los del agente', async () => {
   const workspace = withFixture();
@@ -221,16 +223,17 @@ test('pasos de esquema: sin baseline no hay paso; con ella, build escribe el de 
   fs.writeFileSync(project(workspace, `${MIGRATIONS}/V2__add_product_sku_index.sql`), 'create index ix on products (id);\n');
   await runBuild(workspace, { refresh: true });
   const step = read(workspace, STEP);
-  assert.match(step, /^-- keel:generator-step idempotency_record\n/);
+  assert.match(step, /^-- keel:generator-step idempotency_record keel_timer\n/);
   assert.match(step, /CREATE TABLE IF NOT EXISTS idempotency_record \([\s\S]*PRIMARY KEY \(operation_scope, idempotency_key\)/);
   assert.match(step, /CREATE INDEX IF NOT EXISTS ix_idempotency_record_expires_at ON idempotency_record \(expires_at\)/);
+  assert.match(step, /CREATE TABLE IF NOT EXISTS keel_timer \(/);
   assert.ok(manifest(workspace).files[STEP], 'el paso es de build: va en el manifiesto');
 
   // Informativo: sin otra evolución pendiente no hay EVOLUTION.md, y el segundo build no escribe otro paso ni el mismo
   // con otro número; lo vuelve a emitir tal cual, así que no queda huérfano.
   assert.equal(exists(workspace, EVOLUTION), false);
   await runBuild(workspace, { refresh: true });
-  assert.deepEqual(fs.readdirSync(project(workspace, MIGRATIONS)).filter((name) => name.includes('__keel_')), ['V3__keel_idempotency_record.sql']);
+  assert.deepEqual(fs.readdirSync(project(workspace, MIGRATIONS)).filter((name) => name.includes('__keel_')), [`V3__${STEP_NAME}`]);
   assert.equal(read(workspace, STEP), step);
   assert.equal(await runBuild(workspace, { check: true }), undefined, '--check en verde: el paso está al día');
 });
@@ -238,17 +241,17 @@ test('pasos de esquema: sin baseline no hay paso; con ella, build escribe el de 
 test('pasos de esquema: una baseline que ya crea la tabla no recibe paso, y el paso no se reescribe aunque cambie el SQL', async () => {
   const workspace = withFixture();
   await runBuild(workspace);
-  fs.writeFileSync(project(workspace, BASELINE_V1), 'create table idempotency_record (operation_scope varchar(128));\n');
+  fs.writeFileSync(project(workspace, BASELINE_V1), 'create table idempotency_record (operation_scope varchar(128));\ncreate table keel_timer (id uuid);\n');
   await runBuild(workspace, { refresh: true });
   assert.equal(fs.readdirSync(project(workspace, MIGRATIONS)).some((name) => name.includes('__keel_')), false);
 
   // Un paso que ya se aplicó no cambia nunca: Flyway guarda su suma.
   fs.writeFileSync(project(workspace, BASELINE_V1), 'create table products (id uuid);\n');
   await runBuild(workspace, { refresh: true });
-  const applied = `${read(workspace, `${MIGRATIONS}/V2__keel_idempotency_record.sql`)}-- aplicado con otro generador\n`;
-  fs.writeFileSync(project(workspace, `${MIGRATIONS}/V2__keel_idempotency_record.sql`), applied);
+  const applied = `${read(workspace, `${MIGRATIONS}/V2__${STEP_NAME}`)}-- aplicado con otro generador\n`;
+  fs.writeFileSync(project(workspace, `${MIGRATIONS}/V2__${STEP_NAME}`), applied);
   await runBuild(workspace, { refresh: true });
-  assert.equal(read(workspace, `${MIGRATIONS}/V2__keel_idempotency_record.sql`), applied);
+  assert.equal(read(workspace, `${MIGRATIONS}/V2__${STEP_NAME}`), applied);
 });
 
 test('pasos de esquema: con evolución pendiente, EVOLUTION.md dice qué paso escribió build', async () => {
@@ -259,8 +262,8 @@ test('pasos de esquema: con evolución pendiente, EVOLUTION.md dice qué paso es
   evolveDesign(workspace);
   await runBuild(workspace, { refresh: true, prune: true });
   const md = read(workspace, EVOLUTION);
-  assert.match(md, /## Pasos de esquema de build[\s\S]*V2__keel_idempotency_record\.sql/);
+  assert.match(md, /## Pasos de esquema de build[\s\S]*V2__keel_idempotency_record_timer\.sql/);
   // Un segundo build antes de entrar al proyecto ya no lo ve nuevo, pero lo arrastra.
   await runBuild(workspace, { refresh: true, prune: true });
-  assert.match(read(workspace, EVOLUTION), /V2__keel_idempotency_record\.sql/);
+  assert.match(read(workspace, EVOLUTION), /V2__keel_idempotency_record_timer\.sql/);
 });

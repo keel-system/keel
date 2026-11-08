@@ -23,7 +23,7 @@ import { IDEMPOTENCY_RECORD_PURGE } from '@keel-system/keel-core/gen/request-ide
 import { parameterProfileValue } from '@keel-system/keel-core/gen/service-parameters';
 import { KAFKA_PRODUCER_TIMEOUTS } from '@keel-system/keel-core/gen/infra-catalog';
 import { usesHttpIdempotency } from './http-idempotency.js';
-import { usesDeadlines, TIMER_CONFIG_PARAMETERS, TIMER_SWITCH } from './timer.js';
+import { usesTimer, TIMER_CONFIG_PARAMETERS, TIMER_SWITCH } from './timer.js';
 import { usesCorrelation } from './correlation.js';
 import { instrumentationFor, usesTelemetry } from './telemetry.js';
 import { METRICS_TRANSPORT, OBSERVATIONS } from '../lib/telemetry-probes.js';
@@ -149,8 +149,8 @@ export function generate(model) {
       fragments.push(fragment(profile, 'sweep', sweepYaml(model, profile)));
     }
 
-    // El cronómetro del servicio (DSL 2.26): sus parámetros de mecánica y el interruptor.
-    if (usesDeadlines(model)) {
+    // El cronómetro del servicio (DSL 2.26; con plazos o con purgas): sus parámetros de mecánica y el interruptor.
+    if (usesTimer(model)) {
       fragments.push(fragment(profile, 'timer', timerYaml(profile)));
     }
 
@@ -1849,7 +1849,7 @@ function testProfileFiles(model) {
   }
 
   // El cronómetro, APAGADO: el perfil test arranca contra H2 o un mongod embebido, sin la tabla medida.
-  if (usesDeadlines(model)) {
+  if (usesTimer(model)) {
     fragments.push(fragment('test', 'timer', timerYaml('test')));
   }
 

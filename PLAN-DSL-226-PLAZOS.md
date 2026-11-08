@@ -319,7 +319,7 @@ borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
 | 4 | Lo mismo en keel-nest | `ts-check`, `db-check`, `doc-check`, `harness-check` |
 | 5 | Lo mismo en keel-dotnet | `cs-check`, `db-check`, `doc-check`, `harness-check` |
 | 6 | Lo mismo en keel-go | `go-check`, `db-check`, `doc-check`, `harness-check` |
-| 7 | **Migrar las purgas** (las cuatro tablas) al modo clúster, en los cuatro | `store-check` en keel-spring y `db-check`/`doc-check` en los otros tres, con un sabotaje nuevo `timer-every-replica` (la purga vuelve a correr en todas: la sonda de dos réplicas la ve dos veces) |
+| 7 | **En curso (2026-11-08)**: lo neutral y keel-spring hechos, ver la nota de abajo; siguen keel-nest, keel-dotnet y keel-go. **Migrar las purgas** (las cuatro tablas) al modo clúster, en los cuatro | `store-check` en keel-spring y `db-check`/`doc-check` en los otros tres, con un sabotaje nuevo `timer-every-replica` (la purga vuelve a correr en todas: la sonda de dos réplicas la ve dos veces) |
 | 8 | **Migrar el `schedule` de las operaciones** al modo clúster, con el drenaje, en los cuatro. Incluye `fireTimer(kind)` en el arnés de los cuatro (los flujos de rescate y reconciliación dejan de esperar un tick del cron), el rescate, la reconciliación, los pagos y la guarda del correo, que van montados en él | `claim-check` en keel-spring, `db-check`/`doc-check`, `harness-check` (el rescate y `ageForReconciliation` sobre el cronómetro) y `stub-check` (reconciliación de pagos); el gate de idempotencia con el registro nuevo, falsado |
 | 9 | **Migrar el relay del outbox** al modo por réplica, con despertar al confirmar, en los cuatro, conservando la pausa del arnés con la misma API (en keel-spring ya no puede depender de `ScheduledAnnotationBeanPostProcessor`, y la purga del outbox sale del bean del relay) | `broker-check` contra los tres brokers en los cuatro generadores (el relay es lo que más redes toca), con un sabotaje `relay-no-wake` (sin despertar, la latencia vuelve al sondeo y la sonda de latencia lo ve). Y `clock-load.js`: en reposo, menos de 10 transacciones/min por réplica (hoy 122), y la salida de un evento en milisegundos (hoy media 0,5 s, p95 0,94 s) |
 | 10 | ~~Evolución~~: pasa al **2b** (§ Incremento 0: lo medido, punto 4) | — |
@@ -463,6 +463,43 @@ Lo que destapó:
 - La prueba emitida del sondeador (`poller_test.go`) no compilaba: declaraba el paquete externo `timer_test` y usaba los
   tipos de `timer` sin calificar. Las redes sin Go no lo ven; lo vio `go-check --fixtures` en las tres ramas del par. Ahora
   es una prueba interna del paquete.
+
+**Lo que dejó el incremento 7, en lo neutral y en keel-spring.** Lo neutral es `keel-core/gen/timer-plan.js`. Dice
+CUÁNDO existe el cronómetro: con plazos, o con alguna purga de una tabla del generador sobre un motor que lo tiene
+(`usesTimer`). Y dice QUÉ recurrentes monta: la purga de `keel_timer` y una por tabla, con el cron de siempre
+(`timerPurges`, `purgedByTimer`). Un motor sin sentencias del cronómetro (MariaDB, SQL Server, Oracle: solo los genera
+keel-spring) no tiene cronómetro, y sus purgas conservan su `@Scheduled` por réplica. El índice documental de
+`keelTimer` sigue a `usesTimer`.
+
+En keel-spring:
+
+- Cada purga pierde su `@Scheduled` (`purgeSchedule` de `purge.js`) y gana un `<Tabla>PurgeTimer`, un recurrente que
+  llama al `purge()` de siempre. La purga no cambia: sus lotes, su retención y sus transacciones son las mismas.
+- `RecurringTimerHandler` deja de ser un `TimerHandler`: es `kind`, `spec` y `tick()`. El sondeador lo ejecuta FUERA de su
+  transacción y lo rearma con el siguiente cron desde la hora de la base (R2). Dentro de una transacción, la purga por
+  lotes volvería a ser el DELETE único que sustituye.
+- El sondeador recibe sus handlers por `ObjectProvider`, porque sin plazos no hay ningún `TimerHandler`.
+- El cronómetro llega a todo diseño con purgas, y con él `KeelTimerJpa` y su paso de esquema del 2b. Un proyecto
+  desplegado de `product-catalog` recibe `idempotency_record` y `keel_timer` en el mismo paso.
+
+La red es la sonda nueva de `store-check` (`src/lib/purge-timer-probes.js`). Simula dos réplicas: dos `TimerPoller`, cada
+uno con sus propias instancias de cada recurrente, y el bean que purga doblado por Mockito, que cuenta las ejecuciones.
+Mide R1 (una fila por purga), RC-1 (un solo tick ejecutado) y R2 (el rearme). Da 27/27 en PostgreSQL y en MySQL sobre
+`notification-mailer`, y 21/21 en MongoDB sobre `notification-mailer-mongo`. El sabotaje `timer-every-replica` (un `kind`
+por instancia, así que cada réplica arbitra con su propia fila) cae en exactamente R1 y RC-1 en las dos ramas.
+`compile-check` está en verde sobre el par del MVP, `stock-reservation`, `asset-vault` y Oracle (sin cronómetro), y
+`timer-check` da 13/13.
+
+Lo que destapó: el gate de la reconciliación (`lote del barrido`) daba verde con el `LIMIT` del reclamo de
+`JdbcTimerStore`, que es código de build. No se había visto porque ninguna fixture con `reconciledBy` tenía cronómetro, y
+`catalog-extended` lo gana con sus purgas. Ahora las clases `*Timer*` quedan excluidas, como las demás del generador.
+Mientras keel-nest, keel-dotnet y keel-go no hacen su parte, hay tres concesiones temporales, y cada una se retira en el
+commit de ese generador:
+
+- sus paridades de esquema solo comparan `keel_timer` donde ellos ya lo emiten (los plazos);
+- su prueba de paridad del paso de esquema con keel-spring queda como `todo`;
+- su fila `timer-purge` de la matriz queda pendiente (con su excepción en la prueba que prohíbe pendientes en dotnet y
+  go).
 
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada

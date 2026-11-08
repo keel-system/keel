@@ -245,6 +245,9 @@ class ${CLASS_NAME} {
     private List<TimerHandler> handlers;
 
     @Autowired
+    private List<RecurringTimerHandler> recurrings;
+
+    @Autowired
     private PlatformTransactionManager transactionManager;
 
 ${support.fields}
@@ -285,7 +288,7 @@ ${support.fields}
     }
 
     private TimerPoller sondeador(int maxAttempts, long retryDelayMs) {
-        TimerPoller poller = new TimerPoller(store, handlers, transactionManager);
+        TimerPoller poller = new TimerPoller(store, handlers, recurrings, transactionManager);
         ReflectionTestUtils.setField(poller, "maxSleepMs", 30_000L);
         ReflectionTestUtils.setField(poller, "batchSize", 50);
         ReflectionTestUtils.setField(poller, "leaseMs", 60_000L);

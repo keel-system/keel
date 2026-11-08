@@ -13,11 +13,17 @@
 //     siguiente vencimiento. Se apaga con `scheduling.enabled` (TIMER_SWITCH), el único interruptor;
 //   · el despacho de cada plazo (`<Entidad><Estado>Deadline`) y la purga de la propia tabla (R7), el primer recurrente.
 //
-// Ningún reloj de los que ya existían cambia en este incremento: el relay, las purgas y los `schedule` siguen con su
-// `@Scheduled`. Migran en los incrementos 7, 8 y 9. El modo POR RÉPLICA no tiene todavía quien lo use (su único usuario
-// es el relay, inc. 9), así que no se emite: un modo sin sujeto sería código que ninguna red ejecuta.
+// Desde el incremento 7, las purgas de las tablas del generador también corren aquí, como recurrentes en modo clúster
+// (`<Tabla>PurgeTimer`): una réplica por tick en vez de todas a la vez. Por eso el cronómetro existe con plazos O con
+// purgas (`usesTimer`, keel-core/gen/timer-plan.js), y lo de los plazos solo con plazos. Un motor sin sentencias del
+// cronómetro (MariaDB, SQL Server, Oracle) no lo tiene, y sus purgas conservan su `@Scheduled` (purge.js).
+//
+// El relay y los `schedule` siguen con su `@Scheduled`: migran en los incrementos 8 y 9. El modo POR RÉPLICA no tiene
+// todavía quien lo use (su único usuario es el relay, inc. 9), así que no se emite: un modo sin sujeto sería código que
+// ninguna red ejecuta.
 
 import { javaFile, javaPath, subPackage } from './render.js';
+import { pascalCase } from '../lib/naming.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
 import { messageComponents, messagePackage } from './services.js';
 import { MEDIATOR_PKG } from './mediator.js';
@@ -26,22 +32,19 @@ import {
   KEEL_TIMER,
   KEEL_TIMER_DOCUMENT,
   NIL_ENTITY_ID,
-  TIMER_ENGINES,
   TIMER_PARAMETERS,
   TIMER_PURGE_KIND,
   TIMER_SWITCH,
   timerStatements
 } from '@keel-system/keel-core/gen/timer-store';
+import { TIMER_DATABASES, timerPurges, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 
-export { usesDeadlines };
+export { usesDeadlines, usesTimer, TIMER_DATABASES };
 
 const TIMER_PKG = 'infrastructure.timer';
 const TIMER_JPA_PKG = 'infrastructure.persistence.timer';
 const CONFIG_PKG = 'infrastructure.configurations.timer';
 const DEADLINE_PKG = 'domain.deadline';
-
-/** Los motores en los que hay cronómetro: los relacionales con sentencias medidas y MongoDB. */
-export const TIMER_DATABASES = Object.freeze([...TIMER_ENGINES, 'mongodb']);
 
 /**
  * Lo que un diseño con plazos no puede generar con este stack, o []: el cronómetro solo existe donde sus sentencias se
@@ -93,6 +96,14 @@ function deadlineHandlerClass(entityName, stateName) {
 }
 function kindConstant(entityName, stateName) {
   return `${entityName}_${stateName}`.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
+}
+/** `PURGE_OUTBOX_EVENT`: la constante del `kind` de la purga de una tabla del generador. */
+function purgeKindConstant(table) {
+  return `PURGE_${table.toUpperCase()}`;
+}
+/** `OutboxEventPurgeTimer`: el recurrente que dispara la purga de una tabla del generador. */
+export function purgeTimerClass(table) {
+  return `${pascalCase(table)}PurgeTimer`;
 }
 const timerImport = (model, name) => `${subPackage(model, TIMER_PKG)}.${name}`;
 const isDocument = (model) => model.persistenceKind === 'document';
@@ -205,11 +216,10 @@ export function adapterArming(model, entity, imports, previous) {
 // ─── Lo que emite build ──────────────────────────────────────────────────────
 
 export function generate(model) {
-  if (!usesDeadlines(model)) return [];
+  if (!usesTimer(model)) return [];
   const document = isDocument(model);
   const files = [
-    deadlinesRecord(model),
-    timerConfig(model),
+    ...(usesDeadlines(model) ? [deadlinesRecord(model), timerConfig(model)] : []),
     simple(model, 'TimerKinds', [], timerKinds(model)),
     simple(model, 'ClaimedTimer', ['java.time.Instant', 'java.util.UUID'], claimedTimer()),
     simple(model, 'TimerOutcome', ['java.time.Instant'], timerOutcome()),
@@ -220,6 +230,7 @@ export function generate(model) {
     document ? mongoTimerStore(model) : jdbcTimerStore(model),
     timerPoller(model),
     timerPurge(model),
+    ...timerPurges(model).map((purge) => purgeTimer(model, purge)),
     ...modelDeadlines(model).map((entry) => deadlineHandler(model, entry))
   ];
   if (!document) files.push(timerJpa(model));
@@ -307,10 +318,18 @@ public class TimerConfig {
 }
 
 function timerKinds(model) {
-  const constants = modelDeadlines(model).map(
-    ({ entity, deadline, kind }) => `    /** El plazo de ${entity.name} en '${deadline.stateName}'. */
+  const constants = [
+    ...modelDeadlines(model).map(
+      ({ entity, deadline, kind }) => `    /** El plazo de ${entity.name} en '${deadline.stateName}'. */
     public static final String ${kindConstant(entity.name, deadline.stateName)} = "${kind}";`
-  );
+    ),
+    `    /** La purga de la propia tabla: un recurrente en modo clúster (R7). */
+    public static final String TIMER_PURGE = "${TIMER_PURGE_KIND}";`,
+    ...timerPurges(model).map(
+      (purge) => `    /** La purga de {@code ${purge.table}}: un recurrente en modo clúster. */
+    public static final String ${purgeKindConstant(purge.table)} = "${purge.kind}";`
+    )
+  ];
   return `/**
  * El nombre de cada temporizador en {@code ${KEEL_TIMER.table}} (columna {@code kind}). Es contrato con los otros
  * generadores —comparten tabla—, así que sale de keel-core y no se cambia aquí.
@@ -318,9 +337,6 @@ function timerKinds(model) {
 public final class TimerKinds {
 
 ${constants.join('\n\n')}
-
-    /** La purga de la propia tabla: un recurrente en modo clúster (R7). */
-    public static final String TIMER_PURGE = "${TIMER_PURGE_KIND}";
 
     /** El \`entity_id\` de un recurrente: no tiene entidad, y la unicidad (kind, entity_id) necesita un valor. */
     public static final String NIL_ENTITY_ID = "${NIL_ENTITY_ID}";
@@ -379,13 +395,23 @@ public interface TimerHandler {
 function recurringTimerHandler() {
   return `/**
  * Un temporizador RECURRENTE en modo clúster: una fila sin entidad, que cada réplica asegura al arrancar (R1) y que en
- * cada tick ejecuta UNA sola réplica, la que la reclama. El siguiente tick se calcula desde la hora de la base de
- * DESPUÉS del tick (R2), con el cron en UTC (T7).
+ * cada tick ejecuta UNA sola réplica, la que la reclama. El siguiente tick lo calcula el sondeador desde la hora de la
+ * base de DESPUÉS del tick (R2), con el cron en UTC (T7).
+ *
+ * <p>El tick corre FUERA de la transacción del sondeador, a diferencia de un plazo: un recurrente (una purga por lotes)
+ * gestiona sus propias transacciones, y envolverlo en una sola volvería a ser el DELETE único que la purga por lotes
+ * sustituye. Si lanza, cuenta como un fallo del temporizador, igual que un plazo.
  */
-public interface RecurringTimerHandler extends TimerHandler {
+public interface RecurringTimerHandler {
+
+    /** El nombre del temporizador en la tabla ({@link TimerKinds}). */
+    String kind();
 
     /** El cron de seis campos (el segundo primero), evaluado en UTC. */
     String spec();
+
+    /** Un tick: lo que hace el mecanismo cada vez que vence. */
+    void tick();
 }`;
 }
 
@@ -897,6 +923,9 @@ function timerPoller(model) {
     'java.util.UUID',
     'java.util.function.Function',
     'java.util.stream.Collectors',
+    'java.util.stream.Stream',
+    'org.springframework.beans.factory.ObjectProvider',
+    'org.springframework.beans.factory.annotation.Autowired',
     'org.slf4j.Logger',
     'org.slf4j.LoggerFactory',
     'org.springframework.beans.factory.annotation.Value',
@@ -936,6 +965,7 @@ public class TimerPoller implements SmartLifecycle {
 
     private final TimerStore store;
     private final Map<String, TimerHandler> handlers;
+    private final Map<String, RecurringTimerHandler> recurrings;
     private final List<String> kinds;
     private final TransactionTemplate transaction;
     private final Object monitor = new Object();
@@ -959,21 +989,35 @@ public class TimerPoller implements SmartLifecycle {
     private volatile long wakeAtMs = Long.MAX_VALUE;
     private volatile CountDownLatch stopped;
 
-    public TimerPoller(TimerStore store, List<TimerHandler> handlers, PlatformTransactionManager transactionManager) {
+    /** Sin plazos no hay ningún {@link TimerHandler}: por eso los dos van por {@link ObjectProvider} y no por lista. */
+    @Autowired
+    public TimerPoller(
+            TimerStore store,
+            ObjectProvider<TimerHandler> handlers,
+            ObjectProvider<RecurringTimerHandler> recurrings,
+            PlatformTransactionManager transactionManager) {
+        this(store, handlers.orderedStream().toList(), recurrings.orderedStream().toList(), transactionManager);
+    }
+
+    /** El de las pruebas: los handlers a mano, como dos réplicas con los suyos. */
+    TimerPoller(
+            TimerStore store,
+            List<TimerHandler> handlers,
+            List<RecurringTimerHandler> recurrings,
+            PlatformTransactionManager transactionManager) {
         this.store = store;
         this.handlers = handlers.stream().collect(Collectors.toMap(TimerHandler::kind, Function.identity()));
+        this.recurrings = recurrings.stream().collect(Collectors.toMap(RecurringTimerHandler::kind, Function.identity()));
         // Solo los kinds que esta réplica conoce (R4): un temporizador de otra versión no lo toca, ni para borrarlo.
-        this.kinds = List.copyOf(this.handlers.keySet());
+        this.kinds = Stream.concat(this.handlers.keySet().stream(), this.recurrings.keySet().stream()).toList();
         this.transaction = new TransactionTemplate(transactionManager);
     }
 
     /** Las réplicas aseguran sus recurrentes al arrancar (R1), con el siguiente tick desde la hora de la base. */
     void ensureRecurring() {
         Instant now = store.dbNow();
-        for (TimerHandler handler : handlers.values()) {
-            if (handler instanceof RecurringTimerHandler recurring) {
-                store.ensureRecurring(recurring.kind(), recurring.spec(), nextTick(recurring.spec(), now));
-            }
+        for (RecurringTimerHandler recurring : recurrings.values()) {
+            store.ensureRecurring(recurring.kind(), recurring.spec(), nextTick(recurring.spec(), now));
         }
     }
 
@@ -998,6 +1042,11 @@ public class TimerPoller implements SmartLifecycle {
         UUID token = UUID.randomUUID();
         List<ClaimedTimer> claimed = store.claim(kinds, batchSize, leaseMs, token);
         for (ClaimedTimer timer : claimed) {
+            RecurringTimerHandler recurring = recurrings.get(timer.kind());
+            if (recurring != null) {
+                tick(recurring, timer, token);
+                continue;
+            }
             TimerHandler handler = handlers.get(timer.kind());
             try {
                 transaction.executeWithoutResult(status -> {
@@ -1017,6 +1066,24 @@ public class TimerPoller implements SmartLifecycle {
             }
         }
         return sleepMs(store.nextDueMs(kinds), maxSleepMs);
+    }
+
+    /**
+     * Un tick de un recurrente en modo clúster: lo ejecuta esta réplica porque ganó la fila, FUERA de toda transacción
+     * (el mecanismo gestiona las suyas), y lo rearma con el siguiente tick desde la hora de la base de DESPUÉS (R2). Si
+     * otra réplica le quitó la fila (el tick duró más que el arriendo), el rearme no casa con la valla y no pisa nada.
+     */
+    private void tick(RecurringTimerHandler recurring, ClaimedTimer timer, UUID token) {
+        try {
+            recurring.tick();
+            store.reschedule(timer.id(), token, nextTick(recurring.spec(), store.dbNow()));
+        } catch (RuntimeException failure) {
+            log.warn("El recurrente {} falló en su intento {}: {}", timer.kind(), timer.attempts() + 1, failure.toString());
+            store.fail(timer.id(), token, maxAttempts, retryDelayMs);
+            if (timer.attempts() + 1 >= maxAttempts) {
+                log.error("El recurrente {} agotó sus {} intentos y queda APARCADO", timer.kind(), maxAttempts);
+            }
+        }
     }
 
     /** Un temporizador armado en ESTA réplica: si vence antes de lo que iba a dormir, despierta (tras el commit). */
@@ -1147,15 +1214,84 @@ public class KeelTimerPurge implements RecurringTimerHandler {
     }
 
     @Override
-    public TimerOutcome handle(ClaimedTimer timer, Instant dbNow) {
+    public void tick() {
         store.purge(retentionDays);
-        // El siguiente tick desde la hora de DESPUÉS de la pasada (R2): tras una parada larga, un tick y no todos.
-        return TimerOutcome.rescheduleAt(TimerPoller.nextTick(cron, store.dbNow()));
     }
 }`;
   return {
     path: javaPath(model, TIMER_PKG, 'KeelTimerPurge'),
-    content: javaFile(subPackage(model, TIMER_PKG), ['java.time.Instant', 'org.springframework.beans.factory.annotation.Value', 'org.springframework.stereotype.Component'], body)
+    content: javaFile(subPackage(model, TIMER_PKG), ['org.springframework.beans.factory.annotation.Value', 'org.springframework.stereotype.Component'], body)
+  };
+}
+
+/**
+ * El bean que hace cada purga del generador, con su paquete: la purga no cambia (su retención, sus lotes, sus
+ * transacciones), solo quién la dispara.
+ */
+function purgeTarget(model, table) {
+  const document = isDocument(model);
+  switch (table) {
+    case 'outbox_event':
+      return { pkg: 'infrastructure.messaging.outbox', className: 'OutboxRelay' };
+    case 'processed_event':
+      return { pkg: 'infrastructure.messaging.idempotency', className: 'IdempotencyGuard' };
+    case 'idempotency_record':
+      return { pkg: 'infrastructure.persistence.idempotency', className: document ? 'MongoIdempotencyStore' : 'JpaIdempotencyStore' };
+    case 'reconciliation_claim':
+      return { pkg: 'infrastructure.persistence.reconciliation', className: 'ReconciliationClaimPurge' };
+    default:
+      throw new Error(`timer.js: no sé qué bean purga ${table}`);
+  }
+}
+
+/**
+ * El recurrente que dispara la purga de una tabla del generador (incremento 7): antes era un `@Scheduled` que corría en
+ * TODAS las réplicas a la vez; ahora lo ejecuta UNA por tick, la que gana su fila en keel_timer. El cron es el de
+ * siempre (su clave, su variable y su default de keel-core), evaluado ahora en UTC (T7).
+ */
+function purgeTimer(model, purge) {
+  const className = purgeTimerClass(purge.table);
+  const target = purgeTarget(model, purge.table);
+  const field = decap(target.className);
+  const body = `/**
+ * La purga de {@code ${purge.table}}, como recurrente del cronómetro en modo clúster: cada tick lo ejecuta UNA réplica,
+ * la que gana su fila en {@code ${KEEL_TIMER.table}}. Lo que borra y cómo (la retención, los lotes, sus transacciones) es
+ * lo de {@link ${target.className}#purge()}, que no cambia: solo cambia quién la dispara.
+ */
+@Component
+public class ${className} implements RecurringTimerHandler {
+
+    private final ${target.className} ${field};
+
+    ${value(purge.cron)}
+    private String cron;
+
+    public ${className}(${target.className} ${field}) {
+        this.${field} = ${field};
+    }
+
+    @Override
+    public String kind() {
+        return TimerKinds.${purgeKindConstant(purge.table)};
+    }
+
+    @Override
+    public String spec() {
+        return cron;
+    }
+
+    @Override
+    public void tick() {
+        ${field}.purge();
+    }
+}`;
+  return {
+    path: javaPath(model, TIMER_PKG, className),
+    content: javaFile(
+      subPackage(model, TIMER_PKG),
+      [`${subPackage(model, target.pkg)}.${target.className}`, 'org.springframework.beans.factory.annotation.Value', 'org.springframework.stereotype.Component'],
+      body
+    )
   };
 }
 

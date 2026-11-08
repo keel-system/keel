@@ -25,8 +25,8 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
 import { claimSelectionSnippet, claimTransaction } from '../lib/claim-sql.js';
-import { reconciliationClaims, RECONCILIATION_PURGE } from '@keel-system/keel-core/gen/reconciliation-stores';
-import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
+import { reconciliationClaims, RECONCILIATION_CLAIM, RECONCILIATION_PURGE } from '@keel-system/keel-core/gen/reconciliation-stores';
+import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, purgeSchedule, purgeScheduleImports, PURGE_QUERY_IMPORTS } from './purge.js';
 
 const CLAIM_PKG = 'infrastructure.persistence.reconciliation';
 
@@ -573,8 +573,7 @@ ${purgeSettings('reconciliation.purge')}
         this.repository = repository;
     }
 
-    @Scheduled(cron = "\${${RECONCILIATION_PURGE.cron.key}:${RECONCILIATION_PURGE.cron.default}}")
-    public void purge() {
+${purgeSchedule(model, RECONCILIATION_CLAIM.table, RECONCILIATION_PURGE.cron)}    public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
         long deleted = ${purgeCall({ what: 'reconciliation_claim', repository: 'repository', deleteMethod: 'deleteClaimedBefore' })};
         if (deleted > 0) {
@@ -593,7 +592,7 @@ ${purgeSettings('reconciliation.purge')}
         'org.slf4j.Logger',
         'org.slf4j.LoggerFactory',
         'org.springframework.beans.factory.annotation.Value',
-        'org.springframework.scheduling.annotation.Scheduled',
+        ...purgeScheduleImports(model, RECONCILIATION_CLAIM.table),
         'org.springframework.stereotype.Component',
         ...purgeCallImports(model)
       ],
@@ -786,8 +785,7 @@ public class ReconciliationClaimPurge {
         this.repository = repository;
     }
 
-    @Scheduled(cron = "\${${RECONCILIATION_PURGE.cron.key}:${RECONCILIATION_PURGE.cron.default}}")
-    public void purge() {
+${purgeSchedule(model, RECONCILIATION_CLAIM.table, RECONCILIATION_PURGE.cron)}    public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
         long deleted = repository.deleteByClaimedAtBefore(cutoff);
         if (deleted > 0) {
@@ -806,7 +804,7 @@ public class ReconciliationClaimPurge {
         'org.slf4j.Logger',
         'org.slf4j.LoggerFactory',
         'org.springframework.beans.factory.annotation.Value',
-        'org.springframework.scheduling.annotation.Scheduled',
+        ...purgeScheduleImports(model, RECONCILIATION_CLAIM.table),
         'org.springframework.stereotype.Component'
       ],
       body

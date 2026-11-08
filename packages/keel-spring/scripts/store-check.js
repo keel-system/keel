@@ -42,6 +42,10 @@
 // `--sabotage=eager-fetch` quita `spring.datasource.connection-fetch` del db.yaml EMITIDO, como si
 // build dejara de emitirla: verde es que caiga exactamente `unaTransaccionSinSqlNoSacaConexionDelPool`.
 //
+// `--sabotage=timer-every-replica` (DSL 2.26, incremento 7) da a cada `<Tabla>PurgeTimer` EMITIDO un kind distinto por
+// instancia: cada réplica arbitra con su propia fila en keel_timer, que es volver a correr la purga en todas. Verde es
+// que caigan exactamente los dos casos de `PurgeTimer` que lo dicen (EVERY_REPLICA_CASES).
+//
 // Necesita podman o docker, y JDK (Gradle compila el proyecto entero, `main` incluido).
 
 import fs from 'node:fs';
@@ -55,6 +59,7 @@ import { tmpDir } from '../test/helpers/tmp.js';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { storeSubjects, storeTestClasses, hasSubjects, TEST_GLOB } from '../src/lib/store-probes.js';
+import { CLASS_PURGE_TIMER, everyReplicaSabotage, purgeTargetFiles, purgeTimerTestClass, usesPurgeTimers } from '../src/lib/purge-timer-probes.js';
 import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
 
 // La URI del Mongo del perfil `local`, leída del db.yaml GENERADO. En Boot 4 la conexión del cliente
@@ -74,7 +79,7 @@ const keep = args.includes('--keep');
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'notification-mailer';
 const database = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? 'postgresql';
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
-const SABOTAGES = ['eager-fetch'];
+const SABOTAGES = ['eager-fetch', 'timer-every-replica'];
 if (sabotage && !SABOTAGES.includes(sabotage)) {
   console.error(`store-check: sabotaje desconocido '${sabotage}' (conocidos: ${SABOTAGES.join(', ')})`);
   process.exit(2);
@@ -143,6 +148,8 @@ function prepare() {
   const engine = document ? 'mongodb' : database;
 
   const model = buildModel({ manifest: service.manifest, layers: service.layers, stack: { database: engine } });
+  // Como build: el stack cuelga del modelo, y de él depende si hay cronómetro (keel-core/gen/timer-plan.js).
+  model.stack = { database: engine };
   const subjects = storeSubjects(model);
   if (!hasSubjects(subjects)) {
     throw new Error(
@@ -169,6 +176,17 @@ function prepare() {
     const saboteado = original.replace(/^ *(?:# La conexión sale del pool[^\n]*\n *)?connection-fetch:[^\n]*\n/m, '');
     if (saboteado === original) throw new Error('sabotaje eager-fetch: el db.yaml generado no trae connection-fetch');
     fs.writeFileSync(dbFile, saboteado, 'utf8');
+  }
+  if (sabotage === 'timer-every-replica') {
+    if (!usesPurgeTimers(model)) throw new Error(`sabotaje timer-every-replica: '${fixture}' no monta purgas en el cronómetro`);
+    for (const patch of everyReplicaSabotage(model)) {
+      const target = findGenerated(projectDir, patch.file);
+      const original = fs.readFileSync(target, 'utf8');
+      if (!original.includes(patch.find) || !original.includes(patch.field.find)) {
+        throw new Error(`sabotaje timer-every-replica: ${patch.file} ya no tiene la forma que el sabotaje rompe`);
+      }
+      fs.writeFileSync(target, original.replace(patch.find, patch.replace).replace(patch.field.find, patch.field.replace), 'utf8');
+    }
   }
   const db = YAML.parse(fs.readFileSync(dbFile, 'utf8'));
   const datasource = document ? { uri: mongoUriOf(db) } : (db?.spring?.datasource ?? {});
@@ -216,6 +234,16 @@ function prepare() {
   const packages = resolvePackages(projectDir, wanted);
 
   const clases = storeTestClasses(model, subjects, { datasource, packages, database: engine });
+  // Las purgas en modo clúster (incremento 7): en el paquete del cronómetro, con el de cada bean que purga.
+  if (usesPurgeTimers(model)) {
+    const timer = resolvePackages(projectDir, { timer: 'TimerPoller.java', ...(subjects.document ? { mongoTx: 'MongoTransactionConfig.java' } : {}) });
+    const targets = resolvePackages(projectDir, purgeTargetFiles(model));
+    clases.push({
+      className: CLASS_PURGE_TIMER,
+      package: timer.timer,
+      content: purgeTimerTestClass(model, { datasource, packages: { ...timer, targets } })
+    });
+  }
   for (const clase of clases) {
     const testFile = path.join(projectDir, 'src/test/java', ...clase.package.split('.'), `${clase.className}.java`);
     fs.mkdirSync(path.dirname(testFile), { recursive: true });
@@ -240,6 +268,18 @@ function modelEnumOf(model, claim) {
     throw new Error(`store-check: ${claim.entity} no declara lifecycle y el barrido lo necesita`);
   }
   return entity.lifecycle.enumType;
+}
+
+/** El archivo generado con ese nombre, o falla diciéndolo. */
+function findGenerated(projectDir, basename) {
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      return entry.isDirectory() ? walk(full) : [full];
+    });
+  const file = walk(path.join(projectDir, 'src/main/java')).find((candidate) => path.basename(candidate) === basename);
+  if (!file) throw new Error(`store-check: no encuentro ${basename} en el proyecto generado`);
+  return file;
 }
 
 /** Busca cada clase en el árbol generado y devuelve su paquete, leído de su propia cabecera. */
@@ -346,7 +386,8 @@ console.log(
     ...(subjects.outbox ? ['relay del outbox'] : []),
     ...(subjects.commandIdempotency ? ['almacén de claves de petición'] : []),
     ...(subjects.dedupe ? ['deduplicación de consumo'] : []),
-    ...(subjects.reconciliation ? [`reclamo de reconciliación (${subjects.reconciliation.activation})`] : [])
+    ...(subjects.reconciliation ? [`reclamo de reconciliación (${subjects.reconciliation.activation})`] : []),
+    ...(clases.some((clase) => clase.className === CLASS_PURGE_TIMER) ? ['purgas en modo clúster (cronómetro)'] : [])
   ].join(', ')}`
 );
 

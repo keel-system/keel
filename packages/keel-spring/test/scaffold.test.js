@@ -3354,7 +3354,11 @@ test('idempotencia de comando: store transaccional, contexto y filtro de la cabe
   const conflict = read(workspace, `${base}/domain/idempotency/IdempotencyConflictException.java`);
   assert.ok(conflict.includes('extends ConflictException'));
   assert.ok(conflict.includes('"IDEMPOTENCY_KEY_IN_PROGRESS"'));
-  assert.ok(store.includes('@Scheduled(cron = "${idempotency-record.purge.cron:'));
+  // La purga la dispara su recurrente del cronómetro en una sola réplica (DSL 2.26, inc. 7), no un @Scheduled del store.
+  assert.ok(!store.includes('@Scheduled'), store);
+  const purgeTimer = read(workspace, `${base}/infrastructure/timer/IdempotencyRecordPurgeTimer.java`);
+  assert.ok(purgeTimer.includes('@Value("${idempotency-record.purge.cron:'), purgeTimer);
+  assert.ok(purgeTimer.includes('jpaIdempotencyStore.purge();'), purgeTimer);
   assert.ok(read(workspace, `${dir}/IdempotencyRecordJpaRepository.java`).includes('deleteExpiredBefore'));
   assert.ok(read(workspace, `${base}/ProductCatalogApplication.java`).includes('@EnableScheduling'));
 

@@ -40,6 +40,8 @@ for (const name of relational) {
     const spring = springSchema(springFiles);
     for (const [tableName, fks] of springCrossAggregateForeignKeys(springFiles)) for (const fk of fks) schemaTable(spring, tableName).names.add(fk);
     const dotnet = dotnetSchema((await planFixture(name)).files);
+    // keel_timer de las purgas sobre el cronómetro (DSL 2.26, inc. 7): hasta la parte de keel-dotnet, solo donde ya la emite.
+    if (!dotnet.has('keel_timer')) spring.delete('keel_timer');
     assert.deepEqual([...dotnet.keys()].sort(), [...spring.keys()].sort(), 'las mismas tablas');
     for (const [tableName, want] of spring) {
       const got = dotnet.get(tableName);
@@ -120,6 +122,7 @@ for (const name of relational) {
     for (const [index, { table }] of springFlags) schemaTable(spring, table).names.add(index);
     const dotnetFiles = (await planFixture(name, { stack: { database: 'mysql' } })).files;
     const dotnet = dotnetSchema(dotnetFiles);
+    if (!dotnet.has('keel_timer')) spring.delete('keel_timer'); // DSL 2.26, inc. 7: ver arriba
     assert.deepEqual([...dotnet.keys()].sort(), [...spring.keys()].sort(), 'las mismas tablas');
     for (const [tableName, want] of spring) {
       const got = dotnet.get(tableName);
