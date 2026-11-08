@@ -217,8 +217,11 @@ test('el reloj va en el errgroup del arranque, después de los casos de uso, y t
   const main = content(files, 'cmd/server/main.go');
   assert.ok(main.indexOf('scheduler.New(') > main.indexOf('application.NewUseCases('));
   assert.match(main, /group\.Go\(func\(\) error \{\n\t\treturn clock\.Run\(groupCtx\)\n\t\}\)/);
-  // Las purgas solo con base.
-  assert.match(main, /if database\.Enabled \{\n\t\ttasks = append\(tasks,\n\t\t\tscheduler\.PurgeTask\("outbox_event", purges\.Outbox, postgres\.NewOutboxPurge\(transactions\), logger\),/);
+  // Las purgas ya no van al reloj de cada réplica: la misma tarea es un recurrente del cronómetro, en modo clúster (DSL
+  // 2.26, inc. 7), que solo sondea con base.
+  assert.doesNotMatch(main, /tasks = append\(tasks,\n\t\t\tscheduler\.PurgeTask\(/);
+  assert.ok(main.includes('timer.NewRecurring(timer.KindPurgeOutboxEvent, purges.Outbox.Cron, scheduler.PurgeTask("outbox_event", purges.Outbox, postgres.NewOutboxPurge(transactions), logger).Run)'));
+  assert.ok(main.indexOf('timer.NewRecurring(') > main.indexOf('scheduler.PurgeSettingsFrom(cfg)'), 'la configuración de las purgas se lee antes');
   assert.match(content(files, 'go.mod'), /\tgithub\.com\/robfig\/cron\/v3 v3\.0\.1\n/);
   assert.match(content(plan('payout-runs').files, 'cmd/server/main.go'), /tasks = append\(tasks, scheduler\.PayoutTasks\(useCases\)\.\.\.\)/);
 });

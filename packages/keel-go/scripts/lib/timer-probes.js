@@ -26,7 +26,8 @@ import { isOptional } from '../../src/scaffold/render.js';
 import { repositoryArgs } from '../../src/scaffold/repositories.js';
 import { messageComponents, messageType } from '../../src/scaffold/services.js';
 import { parametersType } from '../../src/scaffold/service-parameters.js';
-import { deadlineAccessor, deadlineHandlerType, deadlinesReadParameters, deadlinesType, kindConstant, usesDeadlines } from '../../src/scaffold/timer.js';
+import { deadlineAccessor, deadlineHandlerType, deadlinesReadParameters, deadlinesType, kindConstant, purgeKindConstant, usesDeadlines } from '../../src/scaffold/timer.js';
+import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 
 /** El sujeto: el primer plazo con rechazo tardío del diseño, con todo lo que la sonda nombra. */
 export function timerSubject(model) {
@@ -287,11 +288,9 @@ func timerPoller(t *testing.T, maxAttempts int) *timer.Poller {
 	t.Helper()
 	store := NewTimerStore(probeTx)
 	settings := timerSettings(maxAttempts)
-	handlers := []timer.Handler{
-		timer.New${deadlineHandlerType(entity, deadline)}(${repo}, timerExpire(), deadlines),
-		must(timer.NewTimerPurge(store, settings)),
-	}
-	return must(timer.NewPoller(store, handlers, settings, slog.New(slog.DiscardHandler)))
+	handlers := []timer.Handler{timer.New${deadlineHandlerType(entity, deadline)}(${repo}, timerExpire(), deadlines)}
+	recurrings := []timer.Recurring{must(timer.NewTimerPurge(store, settings))}
+	return must(timer.NewPoller(store, handlers, recurrings, settings, slog.New(slog.DiscardHandler)))
 }
 
 // timerEntity es una muestra de ${entity.name} en un estado y con su ${deadline.since}.
@@ -565,4 +564,220 @@ func TestTimer_R1_LosRecurrentesSeAseguranUnaSolaVez(t *testing.T) {
   ];
   const dir = storeDir(model);
   return { path: `${dir}/timer_probe_test.go`, content: goFile({ pkg: dir.split('/').pop(), imports, body, module: model.service.goModule, generated: false }) };
+}
+
+// ─── Las purgas en modo clúster (DSL 2.26, incremento 7) ─────────────────────────────────────────
+//
+// Antes, cada purga de una tabla del generador era una tarea del reloj, que corre en TODAS las réplicas a la vez. Ahora es
+// un recurrente del cronómetro (timer.NewRecurring sobre la tarea de siempre), y la promesa es una sola: cada tick lo
+// ejecuta UNA réplica, la que gana su fila en keel_timer. Dos réplicas son dos sondeadores sobre la misma base, cada uno
+// con sus propios recurrentes, que cuentan sus ticks: contarlos es contar cuántas réplicas ejecutaron cada uno. Los mismos
+// casos que keel-spring (src/lib/purge-timer-probes.js): R1, RC-1 y R2.
+//
+// El sabotaje es «cada réplica arbitra con su propia fila» en el almacén, como en keel-dotnet: el recurrente se asegura con
+// un entity_id nuevo en vez del uuid nulo, así que la unicidad (kind, entity_id) ya no lo deduplica.
+
+// R1 también en la sonda de los plazos (TestTimer_R1_): es el mismo caso, sobre la purga de keel_timer.
+const PURGE_EXPECT = /^Test(PurgeTimer_(R1|RC1)|Timer_R1)_/;
+
+export const PURGE_TIMER_SABOTAGES = Object.freeze({
+  'timer-every-replica': {
+    files: TIMERS,
+    from: /"entityId": uuid\.Nil, "spec": spec|Value: timerID\(kind, timer\.NilEntityID\)\}\}, bson\.A\{bson\.D\{\{Key: "\$set", Value: set\}\}\}/,
+    to: (match) => (match.startsWith('"entityId"') ? '"entityId": uuid.New(), "spec": spec' : match.replace('timerID(kind, timer.NilEntityID)', 'timerID(kind, uuid.NewString())')),
+    breaks: ['R-1', 'RC-1'],
+    expect: PURGE_EXPECT
+  }
+});
+
+export const isPurgeTimerSabotage = (id) => Boolean(id && PURGE_TIMER_SABOTAGES[id]);
+
+/** ¿Cayeron los dos casos del sabotaje? (las pruebas en rojo, por su nombre `TestPurgeTimer_<id>_…`). */
+export function purgeTimerBreaksCovered(failed) {
+  const seen = new Set(failed.map((test) => /^TestPurgeTimer_(RC|R)(\d+)_/.exec(test)).filter(Boolean).map((m) => `${m[1]}-${m[2]}`));
+  return ['R-1', 'RC-1'].filter((caseId) => !seen.has(caseId));
+}
+
+/** `purge_timer_probe_test.go` en el paquete del motor, o null si el diseño no monta purgas en el cronómetro. */
+export function purgeTimerProbeFile(model) {
+  const purges = timerPurges(model);
+  if (purges.length === 0) return null;
+  const document = usesDocument(model);
+  const store = document
+    ? {
+        clear: `	if _, err := must(probeTx.collection(${goString(KEEL_TIMER.table)})).DeleteMany(t.Context(), bson.D{}); err != nil {
+		t.Fatal(err)
+	}`,
+        count: `	n, err := must(probeTx.collection(${goString(KEEL_TIMER.table)})).CountDocuments(t.Context(), bson.D{{Key: "kind", Value: kind}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n`,
+        fire: `	now, err := NewTimerStore(probeTx).DBNow(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := must(probeTx.collection(${goString(KEEL_TIMER.table)})).UpdateMany(t.Context(), bson.D{{Key: "kind", Value: kind}}, bson.D{{Key: "$set", Value: bson.D{{Key: "due_at", Value: bson.NewDateTimeFromTime(now)}, {Key: "claimed_until", Value: nil}, {Key: "claim_token", Value: nil}}}}); err != nil {
+		t.Fatal(err)
+	}`
+      }
+    : {
+        clear: `	purgeTimerRun(t, ${goString(`DELETE FROM ${KEEL_TIMER.table}`)}, nil)`,
+        count: `	query, args, err := timerSQL(${goString(`SELECT count(*) FROM ${KEEL_TIMER.table} WHERE kind = :kind`)}, map[string]any{"kind": kind})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	if err := probeDB.QueryRowContext(t.Context(), query, args...).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n`,
+        fire: `	purgeTimerRun(t, ${goString(timerStatements(sqlDialect(model).engine).fire)}, map[string]any{"kind": kind})`
+      };
+  const runHelper = document
+    ? ''
+    : `
+// purgeTimerRun ejecuta una sentencia con marcadores nombrados, como el almacén (timerSQL).
+func purgeTimerRun(t *testing.T, statement string, values map[string]any) {
+	t.Helper()
+	query, args, err := timerSQL(statement, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := probeDB.ExecContext(t.Context(), query, args...); err != nil {
+		t.Fatal(err)
+	}
+}
+`;
+  const kinds = purges.map((purge) => `timer.${purgeKindConstant(purge.table)}`).join(', ');
+  const crons = purges.map((purge) => `	timer.${purgeKindConstant(purge.table)}: ${goString(purge.cron.default)},`).join('\n');
+  const body = `
+// La sonda de las purgas en el cronómetro (scripts/lib/timer-probes.js de keel-go): ${purges.map((purge) => purge.table).join(', ')}. No es
+// parte del proyecto generado.
+
+// purgeTimerKinds son los recurrentes de las purgas del diseño.
+var purgeTimerKinds = []string{${kinds}}
+
+// purgeTimerCrons es el cron de cada uno, el default de keel-core.
+var purgeTimerCrons = map[string]string{
+${crons}
+}
+
+// purgeTimerTicks cuenta los ticks de cada recurrente entre todas las réplicas de la sonda.
+var (
+	purgeTimerMu    sync.Mutex
+	purgeTimerTicks = map[string]int{}
+)
+${runHelper}
+// purgeTimerReplica es una réplica: un sondeador propio sobre la misma base, con SUS recurrentes, que cuentan sus ticks.
+func purgeTimerReplica(t *testing.T) *timer.Poller {
+	t.Helper()
+	store := NewTimerStore(probeTx)
+	var recurrings []timer.Recurring
+	for _, kind := range purgeTimerKinds {
+		recurrings = append(recurrings, must(timer.NewRecurring(kind, purgeTimerCrons[kind], func(context.Context) error {
+			purgeTimerMu.Lock()
+			defer purgeTimerMu.Unlock()
+			purgeTimerTicks[kind]++
+			return nil
+		})))
+	}
+	settings := timer.Settings{Enabled: true, MaxSleep: 30 * time.Second, BatchSize: 50, Lease: time.Minute, MaxAttempts: 10, RetentionDays: 7, PurgeCron: "0 30 5 * * *"}
+	return must(timer.NewPoller(store, nil, recurrings, settings, slog.New(slog.DiscardHandler)))
+}
+
+// purgeTimerStart deja la tabla vacía y los contadores a cero.
+func purgeTimerStart(t *testing.T) {
+	t.Helper()
+${store.clear}
+	purgeTimerMu.Lock()
+	defer purgeTimerMu.Unlock()
+	clear(purgeTimerTicks)
+}
+
+// purgeTimerRows son las filas de un kind.
+func purgeTimerRows(t *testing.T, kind string) int64 {
+	t.Helper()
+${store.count}
+}
+
+// purgeTimerFire adelanta un recurrente: vence ya, con la hora de la base.
+func purgeTimerFire(t *testing.T, kind string) {
+	t.Helper()
+${store.fire}
+}
+
+// purgeTimerTicked son los ticks de un recurrente.
+func purgeTimerTicked(kind string) int {
+	purgeTimerMu.Lock()
+	defer purgeTimerMu.Unlock()
+	return purgeTimerTicks[kind]
+}
+
+func TestPurgeTimer_R1_UnaFilaPorPurgaAunqueLaAsegurenDosReplicas(t *testing.T) {
+	purgeTimerStart(t)
+	for range 2 {
+		if err := purgeTimerReplica(t).EnsureRecurring(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, kind := range purgeTimerKinds {
+		if n := purgeTimerRows(t, kind); n != 1 {
+			t.Errorf("la purga %s tiene que ser UNA fila en keel_timer, la aseguren las réplicas que la aseguren: %d", kind, n)
+		}
+	}
+}
+
+func TestPurgeTimer_RC1_CadaTickLoEjecutaUnaSolaReplica(t *testing.T) {
+	purgeTimerStart(t)
+	a, b := purgeTimerReplica(t), purgeTimerReplica(t)
+	for _, poller := range []*timer.Poller{a, b} {
+		if err := poller.EnsureRecurring(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, kind := range purgeTimerKinds {
+		purgeTimerFire(t, kind)
+	}
+	for _, poller := range []*timer.Poller{a, b} {
+		if _, err := poller.PollOnce(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, kind := range purgeTimerKinds {
+		if n := purgeTimerTicked(kind); n != 1 {
+			t.Errorf("el tick de %s lo ejecutaron %d réplicas, no una", kind, n)
+		}
+	}
+}
+
+func TestPurgeTimer_R2_ElTickRearmaParaElSiguienteCron(t *testing.T) {
+	purgeTimerStart(t)
+	poller := purgeTimerReplica(t)
+	if err := poller.EnsureRecurring(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range purgeTimerKinds {
+		purgeTimerFire(t, kind)
+	}
+	for range 2 {
+		if _, err := poller.PollOnce(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, kind := range purgeTimerKinds {
+		if n := purgeTimerTicked(kind); n != 1 {
+			t.Errorf("tras su tick, %s se repitió antes del siguiente cron: %d ticks", kind, n)
+		}
+	}
+	next, pending, err := NewTimerStore(probeTx).NextDue(t.Context(), purgeTimerKinds)
+	if err != nil || !pending || next <= 0 {
+		t.Fatalf("tras el tick la purga no quedó armada para el futuro: %s %v %v", next, pending, err)
+	}
+	purgeTimerStart(t)
+}
+`;
+  const imports = ['context', 'log/slog', 'sync', 'testing', 'time', ...(document ? ['go.mongodb.org/mongo-driver/v2/bson'] : []), 'internal/infrastructure/timer'];
+  const dir = storeDir(model);
+  return { path: `${dir}/purge_timer_probe_test.go`, content: goFile({ pkg: dir.split('/').pop(), imports, body, module: model.service.goModule, generated: false }) };
 }

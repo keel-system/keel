@@ -77,8 +77,6 @@ for (const { name, design, plan } of relational) {
     for (const table of MECHANISM_TABLES) spring.delete(table);
 
     const go = goSchema(plan.files);
-    // keel_timer de las purgas sobre el cronómetro (DSL 2.26, inc. 7): hasta la parte de keel-go, solo donde ya la emite.
-    if (!go.has('keel_timer')) spring.delete('keel_timer');
     assert.deepEqual([...go.keys()].sort(), [...spring.keys()].sort(), 'las mismas tablas');
     const goFlags = new Map();
     for (const [tableName, want] of spring) {

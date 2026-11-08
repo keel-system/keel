@@ -11,7 +11,8 @@ cambia el DSL, pero sí el servidor generado de cualquier diseño con persistenc
 
 **Estado: aprobado (2026-11-07).** El usuario aceptó las ocho propuestas de § Decisiones tomadas. Fases B, C y C2
 hechas el mismo día, la D (incremento 3, keel-spring) el 2026-11-08 y, de la fase E, la fase E entera ese mismo día
-(incrementos 4, 5 y 6: keel-nest, keel-dotnet y keel-go); siguiente, la fase F (incrementos 7, 8 y 9). **Lo
+(incrementos 4, 5 y 6: keel-nest, keel-dotnet y keel-go). De la fase F, el incremento 7 (las purgas) está hecho ese
+mismo día en los cuatro; siguen el 8 y el 9. **Lo
 que queda se termina sin subagentes, todo desde `main` y en secuencia** (§ Cómo se ejecuta).
 
 ## Por qué
@@ -319,7 +320,7 @@ borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
 | 4 | Lo mismo en keel-nest | `ts-check`, `db-check`, `doc-check`, `harness-check` |
 | 5 | Lo mismo en keel-dotnet | `cs-check`, `db-check`, `doc-check`, `harness-check` |
 | 6 | Lo mismo en keel-go | `go-check`, `db-check`, `doc-check`, `harness-check` |
-| 7 | **En curso (2026-11-08)**: lo neutral y keel-spring hechos, ver la nota de abajo; siguen keel-nest, keel-dotnet y keel-go. **Migrar las purgas** (las cuatro tablas) al modo clúster, en los cuatro | `store-check` en keel-spring y `db-check`/`doc-check` en los otros tres, con un sabotaje nuevo `timer-every-replica` (la purga vuelve a correr en todas: la sonda de dos réplicas la ve dos veces) |
+| 7 | **Hecho (2026-11-08)** en los cuatro; ver las notas de abajo. **Migrar las purgas** (las cuatro tablas) al modo clúster, en los cuatro | `store-check` en keel-spring y `db-check`/`doc-check` en los otros tres, con un sabotaje nuevo `timer-every-replica` (la purga vuelve a correr en todas: la sonda de dos réplicas la ve dos veces) |
 | 8 | **Migrar el `schedule` de las operaciones** al modo clúster, con el drenaje, en los cuatro. Incluye `fireTimer(kind)` en el arnés de los cuatro (los flujos de rescate y reconciliación dejan de esperar un tick del cron), el rescate, la reconciliación, los pagos y la guarda del correo, que van montados en él | `claim-check` en keel-spring, `db-check`/`doc-check`, `harness-check` (el rescate y `ageForReconciliation` sobre el cronómetro) y `stub-check` (reconciliación de pagos); el gate de idempotencia con el registro nuevo, falsado |
 | 9 | **Migrar el relay del outbox** al modo por réplica, con despertar al confirmar, en los cuatro, conservando la pausa del arnés con la misma API (en keel-spring ya no puede depender de `ScheduledAnnotationBeanPostProcessor`, y la purga del outbox sale del bean del relay) | `broker-check` contra los tres brokers en los cuatro generadores (el relay es lo que más redes toca), con un sabotaje `relay-no-wake` (sin despertar, la latencia vuelve al sondeo y la sonda de latencia lo ve). Y `clock-load.js`: en reposo, menos de 10 transacciones/min por réplica (hoy 122), y la salida de un evento en milisegundos (hoy media 0,5 s, p95 0,94 s) |
 | 10 | ~~Evolución~~: pasa al **2b** (§ Incremento 0: lo medido, punto 4) | — |
@@ -530,6 +531,19 @@ compila sin warnings 360 ensamblados y pasa 9263 pruebas emitidas. El sondeador 
 contenedor en cada ámbito, así que un `kind` por instancia rompería también a una sola réplica. Por eso el sabotaje
 `timer-every-replica` actúa en el almacén: asegura el recurrente con un `entity_id` nuevo, y cada réplica arbitra con su
 propia fila. Cae en exactamente R1 y RC-1 en los tres motores.
+
+**Lo que dejó el incremento 7 en keel-go.** El paquete `timer` gana la interfaz `Recurring` (kind, spec y `Tick`) y
+`Store.Reschedule` en sus tres almacenes. El sondeador recibe los recurrentes aparte de los handlers y ejecuta cada tick
+fuera de la transacción. Después lo reprograma con el siguiente cron, calculado sobre la hora de la base. Cada purga es
+`timer.NewRecurring(timer.KindPurge<Tabla>, <cron>, scheduler.PurgeTask(...).Run)`, y el reloj del scheduler ya no recibe
+las purgas que van por el cronómetro (`purgedByTimer`). Persistencia, proyecto y `TIMER_WORKER` deciden con `usesTimer`,
+así que un servicio sin plazos y con purgas también tiene cronómetro.
+
+La red es el bloque de dos réplicas de `db-check` y `doc-check` (`purge_timer_probe_test.go`, con R1, RC1 y R2). `db-check`
+da 87/87 en PostgreSQL, `doc-check` 23/23 y `go-check` 244/244, y `--fixtures` da 110/110. Como en keel-dotnet, el
+sabotaje `timer-every-replica` actúa en el almacén: asegura el recurrente con un `entity_id` nuevo. Cae en R1 y RC1 de
+cada sujeto con purgas, y en `TestTimer_R1_` en el par `verification-codes`, que solo tiene el recurrente de la purga de
+`keel_timer`.
 
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada

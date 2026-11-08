@@ -28,10 +28,10 @@ import { planService } from '../src/scaffold/index.js';
 import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, UNCOVERED_BRANCHES, makeWorkspace } from '../test/helpers/workspace.js';
 import { docProbeFile } from './lib/doc-probes.js';
 import { DOC_SABOTAGES, applyDocSabotage } from '../test/helpers/doc-sabotages.js';
-import { TIMER_SABOTAGES, isTimerSabotage, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
+import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBreaksCovered, purgeTimerProbeFile, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
 
 // Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
-const SABOTAGES = { ...DOC_SABOTAGES, ...TIMER_SABOTAGES };
+const SABOTAGES = { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES };
 import { resolveRuntime, startMongo, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length) ?? null;
@@ -94,14 +94,16 @@ try {
     const probe = docProbeFile(plan.model);
     if (!probe) continue;
     const timerProbe = timerProbeFile(plan.model);
+    // Las purgas en modo clúster (DSL 2.26, inc. 7): dos réplicas sobre la misma base.
+    const purgeTimerProbe = purgeTimerProbeFile(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : [])]) {
+    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
     }
     if (probe.unsampled.length > 0) console.log(`  (${name}: sin muestra para ${probe.unsampled.join(', ')})`);
-    subjects.push({ name, dir, db: `${name.replace(/-/g, '_')}_doc_probes` });
+    subjects.push({ name, dir, db: `${name.replace(/-/g, '_')}_doc_probes`, purgeTimer: Boolean(purgeTimerProbe) });
   }
   const url = (db) => database.url.replace(/\/keel_db_check\?/, `/${db}?`);
   const outcomes = await pool(subjects, 2, async ({ dir, db }) => {
@@ -113,7 +115,7 @@ try {
     if (!built.ok) return { tidied, tested: built };
     return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v'], { cwd: path.join(dir, storePath), env: { DOC_CHECK_URL: url(db) } }) };
   });
-  subjects.forEach(({ name }, index) => {
+  subjects.forEach(({ name, purgeTimer }, index) => {
     const { tidied, tested } = outcomes[index];
     if (!step(`${name}: go mod tidy`, tidied.ok, tidied.ok ? '' : tidied.output.slice(0, 2000))) return;
     const failed = [...tested.output.matchAll(/^\s*--- FAIL: (\S+)/gm)].map((m) => m[1]).filter((test) => !test.includes('/'));
@@ -131,6 +133,8 @@ try {
     const stray = failed.filter((test) => !expect.test(test) && !(also && also.test(test)));
     // Los del cronómetro, además, en TODOS sus casos.
     if (isTimerSabotage(sabotage)) stray.push(...timerBreaksCovered(failed, sabotage, 'document').map((caseId) => `${caseId} no cayó`));
+    // El de las purgas, en sus dos casos donde el sujeto las tiene.
+    if (isPurgeTimerSabotage(sabotage) && purgeTimer) stray.push(...purgeTimerBreaksCovered(failed).map((caseId) => `${caseId} no cayó`));
     const compiled = ran > 0;
     step(
       `falsado: ${sabotage} en ${name} → ${expected.length > 0 ? `rojo en ${expected.join(', ')}` : 'ninguna sonda lo mide aquí'}`,

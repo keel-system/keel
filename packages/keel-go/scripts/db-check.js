@@ -40,7 +40,7 @@ import { baselineOf, goSchema } from '../test/helpers/schema.js';
 import { probeFile } from './lib/db-probes.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 import { DB_SABOTAGES, applyDbSabotage } from '../test/helpers/db-sabotages.js';
-import { TIMER_SABOTAGES, isTimerSabotage, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
+import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBreaksCovered, purgeTimerProbeFile, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { ENGINE_LABELS, STORE_PACKAGES } from '../src/lib/relational-engine.js';
 import { SUPPORTED_DATABASES } from '../src/lib/supported-features.js';
@@ -59,7 +59,7 @@ const storePath = `internal/infrastructure/${STORE_PACKAGES[engine]}`;
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
 const keep = process.argv.includes('--keep');
 // Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
-const SABOTAGES = { ...DB_SABOTAGES, ...TIMER_SABOTAGES };
+const SABOTAGES = { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES };
 
 if (sabotage && !SABOTAGES[sabotage]) {
   console.error(`No hay ningún sabotaje '${sabotage}'. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);
@@ -163,8 +163,10 @@ try {
     }
     const probe = probeFile(plan.model, files);
     const timerProbe = timerProbeFile(plan.model);
+    // Las purgas en modo clúster (DSL 2.26, inc. 7): dos réplicas sobre la misma base.
+    const purgeTimerProbe = purgeTimerProbeFile(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : [])]) {
+    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -174,7 +176,7 @@ try {
     // Una base que no se pudo crear daría un rojo de las sondas que no es del generador: se dice aquí.
     const created = recreate(db);
     if (!step(`${name}: base ${db} creada`, created.ok, created.ok ? '' : created.output.trim().slice(0, 300))) continue;
-    subjects.push({ name, dir, db });
+    subjects.push({ name, dir, db, purgeTimer: Boolean(purgeTimerProbe) });
   }
   const env = (db) =>
     engine === 'mysql'
@@ -192,7 +194,7 @@ try {
     if (!built.ok) return { tidied, tested: built };
     return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v'], { cwd: path.join(dir, storePath), env: env(db) }) };
   });
-  subjects.forEach(({ name }, index) => {
+  subjects.forEach(({ name, purgeTimer }, index) => {
     const { tidied, tested } = outcomes[index];
     if (!step(`${name}: go mod tidy`, tidied.ok, tidied.ok ? '' : tidied.output.slice(0, 2000))) return;
     const failed = [...tested.output.matchAll(/^\s*--- FAIL: (\S+)/gm)].map((m) => m[1]).filter((test) => !test.includes('/'));
@@ -212,6 +214,8 @@ try {
     const stray = failed.filter((test) => !expect.test(test) && !(also && also.test(test)));
     // Los del cronómetro, además, en TODOS sus casos.
     if (isTimerSabotage(sabotage)) stray.push(...timerBreaksCovered(failed, sabotage, 'relational').map((caseId) => `${caseId} no cayó`));
+    // El de las purgas, en sus dos casos donde el sujeto las tiene.
+    if (isPurgeTimerSabotage(sabotage) && purgeTimer) stray.push(...purgeTimerBreaksCovered(failed).map((caseId) => `${caseId} no cayó`));
     const compiled = ran > 0;
     // Un sujeto donde el sabotaje toca lo emitido pero ninguna sonda lo mide sale verde y lo dice: se juzga en conjunto.
     step(

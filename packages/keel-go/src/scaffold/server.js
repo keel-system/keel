@@ -44,7 +44,8 @@ import { loggerWiring } from './logging.js';
 import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { MANAGEMENT_LISTEN, MANAGEMENT_SERVER, MANAGEMENT_SHUTDOWN, TELEMETRY_FLUSH, TELEMETRY_START } from './telemetry.js';
 import { usesRelational } from '@keel-system/keel-core/gen/features';
-import { CLOCK, DEADLINES, DEADLINES_VAR, TIMER_IMPORT, TIMER_WORKER, deadlinesReadParameters, deadlinesWiring, timerWiring, usesDeadlines } from './timer.js';
+import { purgedByTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { CLOCK, DEADLINES, DEADLINES_VAR, TIMER_IMPORT, TIMER_WORKER, deadlinesReadParameters, deadlinesWiring, timerWiring, usesDeadlines, usesTimer } from './timer.js';
 
 // El gauge de las filas del outbox que se rindieron, leído en cada scrape (sin base, el perfil test, no hay relay que
 // mirar). NaN si no se puede leer: un cero diría que no hay ninguna.
@@ -200,7 +201,7 @@ ${usesTelemetry(model) ? MANAGEMENT_LISTEN : ''}
 			return fmt.Errorf("servir HTTP: %w", err)
 		}
 		return nil
-	})${usesTelemetry(model) ? MANAGEMENT_SERVER : ''}${wiresMessaging(model) ? workers(model) : ''}${usesScheduling(model) ? CLOCK_WORKER : ''}${usesDeadlines(model) ? TIMER_WORKER : ''}
+	})${usesTelemetry(model) ? MANAGEMENT_SERVER : ''}${wiresMessaging(model) ? workers(model) : ''}${usesScheduling(model) ? CLOCK_WORKER : ''}${usesTimer(model) ? TIMER_WORKER : ''}
 	group.Go(func() error {
 		<-groupCtx.Done()
 		probes.StartDraining()
@@ -269,7 +270,7 @@ function parametersWiring(model) {
  * declarado sin uso, y en Go eso no compila.
  */
 function dispatchesUseCases(model) {
-  return usesApi(model) || (wiresMessaging(model) && consumes(model)) || usesScheduling(model) || usesDeadlines(model);
+  return usesApi(model) || (wiresMessaging(model) && consumes(model)) || usesScheduling(model) || usesTimer(model);
 }
 
 // El cableado, de arriba abajo. Cada registro lleva el correlationId de la petición o del mensaje que lo escribe. Con la
@@ -348,7 +349,7 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', undefined, 
 ${statementCountWiring(model)}	transactions := ${store.name}.NewTransactions(db, ${document ? '' : 'database.TransactionTimeout, '}logger)
 ${statementCountOnTransactions(model)}${usesDeadlines(model) ? deadlinesWiring(model, PARAMETERS_VAR) : ''}${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${caching}${storing}${paying ? PAYMENT_SERVER_WIRING : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
-${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`, undefined, 'observability')}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${usesDeadlines(model) ? timerWiring(model, store, (entity) => `${store.name}.New${entity.name}Repository(${repositoryArgs(model, entity, 'transactions', 'bridge')})`) : ''}${serve}`;
+${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`, undefined, 'observability')}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${usesTimer(model) ? timerWiring(model, store, (entity) => `${store.name}.New${entity.name}Repository(${repositoryArgs(model, entity, 'transactions', 'bridge')})`) : ''}${serve}`;
 }
 
 // Los clientes HTTP salientes (incremento 11b): la configuración del perfil (la URL de cada proveedor, obligatoria fuera de
@@ -399,17 +400,23 @@ function schedulingWiring(model, store) {
   for (const { service } of scheduledServices(model)) lines.push(`	tasks = append(tasks, scheduler.${tasksFunc(service)}(useCases)...)`);
   const purges = tablePurges(model);
   if (purges.length > 0) {
-    const tasks = purges.map((purge) => `			scheduler.PurgeTask(${JSON.stringify(purge.what)}, purges.${purge.field}, ${store.name}.${purge.constructor}(transactions), logger),`);
+    // Las que corren en el cronómetro (DSL 2.26, inc. 7) no van al reloj: las monta timerWiring con la misma tarea.
+    const scheduled = purges.filter((purge) => !purgedByTimer(model, purge.table));
+    const tasks = scheduled.map((purge) => `			scheduler.PurgeTask(${JSON.stringify(purge.what)}, purges.${purge.field}, ${store.name}.${purge.constructor}(transactions), logger),`);
     lines.push(`	purges, err := scheduler.PurgeSettingsFrom(cfg)
 	if err != nil {
 		return fmt.Errorf("configuración de las purgas: %w", err)
-	}
+	}${
+      tasks.length > 0
+        ? `
 	// Las purgas solo con base: el perfil test no la tiene.
 	if database.Enabled {
 		tasks = append(tasks,
 ${tasks.join('\n')}
 		)
-	}`);
+	}`
+        : ''
+    }`);
   }
   lines.push(`	clock, err := scheduler.New(schedulingSettings, tasks, logger)
 	if err != nil {

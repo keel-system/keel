@@ -37,7 +37,32 @@ const PG = 'internal/infrastructure/postgres';
 const MONGO = 'internal/infrastructure/mongo';
 
 export const MECHANISMS = {
-  'timer-purge': { pending: 'incremento 7 de PLAN-DSL-226-PLAZOS.md: las purgas de las tablas del generador, como recurrentes del cronómetro' },
+  'timer-purge': {
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: ['file:internal/infrastructure/timer/purge.go', 'internal/infrastructure/timer/purge.go::func NewRecurring(', 'cmd/server/main.go::timer.NewRecurring(timer.KindPurgeOutboxEvent'],
+        document: ['file:internal/infrastructure/timer/purge.go', 'internal/infrastructure/timer/purge.go::func NewRecurring(', 'cmd/server/main.go::timer.NewRecurring(timer.KindPurgeOutboxEvent']
+      }
+    },
+    emitter: 'src/scaffold/timer.js (timer.NewRecurring y el cableado de cada purga sobre su scheduler.PurgeTask) · src/scaffold/server.js (las purgas ya no van al reloj)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'notification-mailer y todo sujeto con purgas: dos réplicas (dos Poller sobre la misma base, cada uno con sus recurrentes, que cuentan sus ticks): una fila por purga (R1), un solo tick ejecutado (RC-1) y el rearme para el siguiente cron (R2), los casos de la sonda de keel-spring. Falsado con timer-every-replica, que asegura el recurrente con un entity_id nuevo (cada réplica, su fila) y cae en R1 y RC-1'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'notification-mailer-mongo: los mismos tres casos sobre el almacén documental en el replica set. Falsado con timer-every-replica (un _id nuevo por aseguramiento), que cae en R1 y RC-1'
+      }
+    }
+  },
   deadline: {
     parity: {
       pair: 'verification-codes',

@@ -38,7 +38,7 @@ import { alignRows, goString } from '../lib/go-source.js';
 import { sentinelOf } from './errors.js';
 import { layout, packageFile } from './render.js';
 import { usesBestEffort } from './messaging.js';
-import { usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
+import { usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { KEEL_TIMER_DOCUMENT } from '@keel-system/keel-core/gen/timer-store';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -237,7 +237,7 @@ export function indexEntries(model) {
   const entries = documentIndexes(model, model.warnings);
   // El índice de due_at del cronómetro (DSL 2.26, KEEL_TIMER_DOCUMENT de keel-core): lo que reclama el sondeador. keel-core
   // todavía no lo cuenta entre los almacenes del generador (storeDocumentIndexes), así que se añade aquí.
-  if (!usesDeadlines(model) || entries.some((entry) => entry.collection === KEEL_TIMER_DOCUMENT.collection)) return entries;
+  if (!usesTimer(model) || entries.some((entry) => entry.collection === KEEL_TIMER_DOCUMENT.collection)) return entries;
   return [
     ...entries,
     {
@@ -287,7 +287,7 @@ func EnsureIndexes(ctx context.Context, db *Database, logger *slog.Logger) error
 
 function transactionsBody(model) {
   // El despertar del cronómetro (DSL 2.26) también espera al commit.
-  const timers = usesDeadlines(model);
+  const timers = usesTimer(model);
   const afterCommit = usesBestEffort(model) || timers;
   const hooks = afterCommit
     ? `

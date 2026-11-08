@@ -62,8 +62,16 @@ import { parametersType } from './service-parameters.js';
 import { contractOf, messageComponents, messageType, operations, useCaseField } from './services.js';
 import { usesCorrelation } from './correlation.js';
 import { schedulingYaml, usesScheduling } from './scheduling.js';
+import { tablePurges } from './purge.js';
+import { timerPurges, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { pascalCase } from '@keel-system/keel-core/gen';
 
-export { usesDeadlines, deadlineHandlerNote, lateTransitionNote, deadlineOf };
+export { usesDeadlines, usesTimer, deadlineHandlerNote, lateTransitionNote, deadlineOf };
+
+/** La constante del kind de la purga de una tabla del generador: `KindPurgeOutboxEvent`. */
+export function purgeKindConstant(table) {
+  return `KindPurge${pascalCase(table)}`;
+}
 
 /** El paquete del cronómetro. */
 export const TIMER_IMPORT = 'internal/infrastructure/timer';
@@ -316,7 +324,7 @@ export function documentArming(model, entity, local, filter) {
 // ─── Lo que emite build ──────────────────────────────────────────────────────────────────────────
 
 export function generate(model) {
-  if (!usesDeadlines(model) || !model.layersPresent?.persistence) return [];
+  if (!usesTimer(model)) return [];
   const { domain, application, store } = layout(model);
   const timerPkg = timerPackage(model);
   const file = (name, imports, body, { test = false, doc = null } = {}) => ({
@@ -325,13 +333,17 @@ export function generate(model) {
   });
   const document = model.persistenceKind === 'document' || !usesRelational(model);
   const files = [
-    { path: `${domain.dir}/${goFileName(deadlinesType(model))}.go`, content: packageFile(model, domain, { imports: ['errors', 'time'], body: deadlinesBody(model) }) },
-    { path: `${application.dir}/clock.go`, content: packageFile(model, application, { imports: ['time'], body: CLOCK_BODY }) },
+    ...(usesDeadlines(model)
+      ? [
+          { path: `${domain.dir}/${goFileName(deadlinesType(model))}.go`, content: packageFile(model, domain, { imports: ['errors', 'time'], body: deadlinesBody(model) }) },
+          { path: `${application.dir}/clock.go`, content: packageFile(model, application, { imports: ['time'], body: CLOCK_BODY }) }
+        ]
+      : []),
     file('doc', [], '', { doc: PACKAGE_DOC }),
     file('kinds', [], kindsBody(model)),
     file('timer', ['context', 'fmt', 'strconv', 'strings', 'time', 'github.com/google/uuid', 'internal/platform/config'], timerBody()),
     file('poller', ['context', 'errors', 'fmt', 'log/slog', 'sync', 'time', 'github.com/google/uuid', 'github.com/robfig/cron/v3', 'internal/platform/correlation'], pollerBody(model)),
-    file('purge', ['context', 'time', 'github.com/robfig/cron/v3'], PURGE_BODY),
+    file('purge', ['context', 'fmt'], PURGE_BODY),
     ...modelDeadlines(model).map((entry) =>
       file(goFileName(deadlineHandlerType(entry.entity, entry.deadline)), ['context', 'time', 'internal/application', 'internal/domain'], deadlineHandlerBody(model, entry))
     ),
@@ -435,6 +447,10 @@ function kindsBody(model) {
   }
   rows.push({ text: '\t// KindTimerPurge es la purga de la propia tabla: un recurrente en modo clúster (R7).' });
   rows.push({ indent: '\t', cells: ['KindTimerPurge', `= ${goString(TIMER_PURGE_KIND)}`] });
+  for (const purge of timerPurges(model)) {
+    rows.push({ text: `\t// ${purgeKindConstant(purge.table)} es la purga de ${purge.table}: un recurrente en modo clúster.` });
+    rows.push({ indent: '\t', cells: [purgeKindConstant(purge.table), `= ${goString(purge.kind)}`] });
+  }
   rows.push({ text: '\t// NilEntityID es el entity_id de un recurrente: no tiene entidad, y la unicidad (kind, entity_id) necesita un valor.' });
   rows.push({ indent: '\t', cells: ['NilEntityID', `= ${goString(NIL_ENTITY_ID)}`] });
   return `
@@ -520,11 +536,18 @@ type Handler interface {
 }
 
 // Recurring es un temporizador RECURRENTE en modo clúster: una fila sin entidad, que cada réplica asegura al arrancar (R1)
-// y que en cada tick ejecuta UNA sola réplica, la que la reclama.
+// y que en cada tick ejecuta UNA sola réplica, la que la reclama. El siguiente tick lo calcula el sondeador desde la hora
+// de la base de DESPUÉS del tick (R2), con el cron en UTC (T7).
+//
+// El tick corre FUERA de toda transacción, a diferencia de un plazo: un recurrente (una purga por lotes) gestiona las
+// suyas, y envolverlo en una sola volvería a ser el DELETE único que la purga por lotes sustituye. Si devuelve un error,
+// cuenta como un fallo del temporizador, igual que un plazo.
 type Recurring interface {
-	Handler
+	Kind() string
 	// Spec es el cron de seis campos (el segundo primero), evaluado en UTC.
 	Spec() string
+	// Tick es lo que hace el mecanismo cada vez que vence.
+	Tick(ctx context.Context) error
 }
 
 // Store es la tabla del cronómetro (${KEEL_TIMER.table}): las sentencias son las de keel-core, iguales en los cuatro
@@ -540,6 +563,9 @@ type Store interface {
 	// Resolve ejecuta fn en una transacción PROPIA y, en ella, borra o rearma el temporizador según su desenlace, solo si
 	// sigue siendo de quien lo reclamó. Si fn falla, la transacción revierte y el error vuelve.
 	Resolve(ctx context.Context, claimed Claimed, token uuid.UUID, fn func(ctx context.Context) (Outcome, error)) error
+	// Reschedule rearma un recurrente tras su tick, libre y con los intentos a cero, solo si sigue siendo de quien lo
+	// reclamó (sin transacción: el tick ya hizo lo suyo en las suyas).
+	Reschedule(ctx context.Context, id string, token uuid.UUID, dueAt time.Time) error
 	// Fail cuenta un fallo; tras el retraso se reintenta y, al agotar los intentos, se aparca.
 	Fail(ctx context.Context, id string, token uuid.UUID, maxAttempts int, retryDelay time.Duration) error
 	// NextDue es cuánto falta para lo próximo reclamable de esos kinds (puede ser negativo); false si no hay nada.
@@ -679,11 +705,12 @@ func SleepFor(next time.Duration, pending bool, maxSleep time.Duration) time.Dur
 // muere con un lote arrendado, otra lo retoma al vencer el arriendo, y el efecto es uno solo porque la transición del
 // plazo es condicional y la revalidación descarta lo que ya no aplica.
 type Poller struct {
-	store    Store
-	handlers map[string]Handler
-	kinds    []string
-	settings Settings
-	logger   *slog.Logger
+	store      Store
+	handlers   map[string]Handler
+	recurrings map[string]Recurring
+	kinds      []string
+	settings   Settings
+	logger     *slog.Logger
 
 	// wake avisa al bucle de que wakeAt cambió; con hueco para uno, nunca bloquea a quien arma.
 	wake chan struct{}
@@ -692,23 +719,41 @@ type Poller struct {
 	wakeAt time.Time
 }
 
-// NewPoller prepara el sondeador con sus handlers. Un kind repetido o un recurrente con un cron inválido no deja
-// arrancar: un plazo que no se dispara nunca no da ningún error que alguien vaya a ver.
-func NewPoller(store Store, handlers []Handler, settings Settings, logger *slog.Logger) (*Poller, error) {
-	p := &Poller{store: store, handlers: make(map[string]Handler, len(handlers)), settings: settings, logger: logger, wake: make(chan struct{}, 1)}
-	for _, handler := range handlers {
-		kind := handler.Kind()
-		if _, seen := p.handlers[kind]; seen {
-			return nil, fmt.Errorf("temporizador duplicado: %s", kind)
+// NewPoller prepara el sondeador con los handlers de los plazos y los recurrentes. Un kind repetido o un recurrente con un
+// cron inválido no deja arrancar: un plazo que no se dispara nunca no da ningún error que alguien vaya a ver.
+func NewPoller(store Store, handlers []Handler, recurrings []Recurring, settings Settings, logger *slog.Logger) (*Poller, error) {
+	p := &Poller{
+		store:      store,
+		handlers:   make(map[string]Handler, len(handlers)),
+		recurrings: make(map[string]Recurring, len(recurrings)),
+		settings:   settings,
+		logger:     logger,
+		wake:       make(chan struct{}, 1),
+	}
+	seen := make(map[string]bool, len(handlers)+len(recurrings))
+	add := func(kind string) error {
+		if seen[kind] {
+			return fmt.Errorf("temporizador duplicado: %s", kind)
 		}
-		if recurring, ok := handler.(Recurring); ok {
-			if _, err := parser.Parse(recurring.Spec()); err != nil {
-				return nil, fmt.Errorf("el recurrente %s tiene un cron inválido %q: %w", kind, recurring.Spec(), err)
-			}
-		}
-		p.handlers[kind] = handler
+		seen[kind] = true
 		// Solo los kinds que esta réplica conoce (R4): un temporizador de otra versión no lo toca, ni para borrarlo.
 		p.kinds = append(p.kinds, kind)
+		return nil
+	}
+	for _, handler := range handlers {
+		if err := add(handler.Kind()); err != nil {
+			return nil, err
+		}
+		p.handlers[handler.Kind()] = handler
+	}
+	for _, recurring := range recurrings {
+		if _, err := parser.Parse(recurring.Spec()); err != nil {
+			return nil, fmt.Errorf("el recurrente %s tiene un cron inválido %q: %w", recurring.Kind(), recurring.Spec(), err)
+		}
+		if err := add(recurring.Kind()); err != nil {
+			return nil, err
+		}
+		p.recurrings[recurring.Kind()] = recurring
 	}
 	return p, nil
 }
@@ -726,7 +771,7 @@ func (p *Poller) EnsureRecurring(ctx context.Context) error {
 		return err
 	}
 	for _, kind := range p.kinds {
-		recurring, ok := p.handlers[kind].(Recurring)
+		recurring, ok := p.recurrings[kind]
 		if !ok {
 			continue
 		}
@@ -753,9 +798,15 @@ func (p *Poller) PollOnce(ctx context.Context) (time.Duration, error) {
 		return 0, fmt.Errorf("reclamar temporizadores: %w", err)
 	}
 	for _, timer := range claimed {
-		if err := p.store.Resolve(ctx, timer, token, func(ctx context.Context) (Outcome, error) {
-			return p.handle(ctx, timer)
-		}); err != nil {
+		var err error
+		if recurring, ok := p.recurrings[timer.Kind]; ok {
+			err = p.tick(ctx, recurring, timer, token)
+		} else {
+			err = p.store.Resolve(ctx, timer, token, func(ctx context.Context) (Outcome, error) {
+				return p.handle(ctx, timer)
+			})
+		}
+		if err != nil {
 			p.logger.WarnContext(ctx, "temporizador: falló", "timer", timer.ID, "kind", timer.Kind, "attempt", timer.Attempts+1, "error", err)
 			if err := p.store.Fail(ctx, timer.ID, token, p.settings.MaxAttempts, p.settings.RetryDelay); err != nil {
 				p.logger.ErrorContext(ctx, "temporizador: no se pudo contar el fallo", "timer", timer.ID, "error", err)
@@ -790,6 +841,30 @@ ${correlated ? `	// Cada disparo es una TRAZA nueva: no la origina ninguna petic
 		return Outcome{}, err
 	}
 	return handler.Handle(ctx, timer, dbNow)
+}
+
+// tick ejecuta un recurrente en modo clúster: lo ejecuta esta réplica porque ganó la fila, FUERA de toda transacción (el
+// mecanismo gestiona las suyas), y lo rearma con el siguiente tick desde la hora de la base de DESPUÉS (R2). Si otra
+// réplica le quitó la fila (el tick duró más que el arriendo), el rearme no casa con la valla y no pisa nada. Un pánico es
+// un fallo más: no tumba la réplica.
+func (p *Poller) tick(ctx context.Context, recurring Recurring, timer Claimed, token uuid.UUID) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("pánico en el temporizador %s: %v", timer.Kind, recovered)
+		}
+	}()
+	if err = recurring.Tick(ctx); err != nil {
+		return err
+	}
+	after, err := p.store.DBNow(ctx)
+	if err != nil {
+		return err
+	}
+	next, err := NextTick(recurring.Spec(), after)
+	if err != nil {
+		return err
+	}
+	return p.store.Reschedule(ctx, timer.ID, token, next)
 }
 
 // Armed avisa de un temporizador armado en ESTA réplica (tras el commit): si vence antes de lo que el bucle iba a dormir,
@@ -882,20 +957,18 @@ const PURGE_BODY = `
 type TimerPurge struct {
 	store         Store
 	spec          string
-	schedule      cron.Schedule
 	retentionDays int
 }
 
 // NewTimerPurge prepara la purga con el cron y la retención del perfil. Un cron inválido no deja arrancar.
 func NewTimerPurge(store Store, settings Settings) (*TimerPurge, error) {
-	schedule, err := parser.Parse(settings.PurgeCron)
-	if err != nil {
+	if _, err := parser.Parse(settings.PurgeCron); err != nil {
 		return nil, err
 	}
-	return &TimerPurge{store: store, spec: settings.PurgeCron, schedule: schedule, retentionDays: settings.RetentionDays}, nil
+	return &TimerPurge{store: store, spec: settings.PurgeCron, retentionDays: settings.RetentionDays}, nil
 }
 
-// Kind implementa Handler.
+// Kind implementa Recurring.
 func (p *TimerPurge) Kind() string {
 	return KindTimerPurge
 }
@@ -905,17 +978,42 @@ func (p *TimerPurge) Spec() string {
 	return p.spec
 }
 
-// Handle implementa Handler: purga y rearma para el siguiente tick, calculado desde la hora de la base de DESPUÉS de la
-// pasada (R2): tras una parada larga, un tick y no todos los que se perdieron.
-func (p *TimerPurge) Handle(ctx context.Context, _ Claimed, _ time.Time) (Outcome, error) {
-	if _, err := p.store.Purge(ctx, p.retentionDays); err != nil {
-		return Outcome{}, err
+// Tick implementa Recurring: purga. El rearme lo hace el sondeador, desde la hora de la base de después del tick (R2).
+func (p *TimerPurge) Tick(ctx context.Context) error {
+	_, err := p.store.Purge(ctx, p.retentionDays)
+	return err
+}
+
+// recurring es un Recurring de un kind, un cron y lo que hace cada tick.
+type recurring struct {
+	kind string
+	spec string
+	tick func(ctx context.Context) error
+}
+
+// NewRecurring es un recurrente en modo clúster a partir de lo que hace cada tick. Así llegan al cronómetro las purgas de
+// las tablas del generador (DSL 2.26, inc. 7): con el Run de su tarea de siempre (scheduler.PurgeTask), que ahora ejecuta
+// UNA réplica por tick en vez de todas a la vez. Un cron inválido no deja arrancar.
+func NewRecurring(kind, spec string, tick func(ctx context.Context) error) (Recurring, error) {
+	if _, err := parser.Parse(spec); err != nil {
+		return nil, fmt.Errorf("el recurrente %s tiene un cron inválido %q: %w", kind, spec, err)
 	}
-	after, err := p.store.DBNow(ctx)
-	if err != nil {
-		return Outcome{}, err
-	}
-	return RescheduleAt(p.schedule.Next(after.UTC())), nil
+	return &recurring{kind: kind, spec: spec, tick: tick}, nil
+}
+
+// Kind implementa Recurring.
+func (r *recurring) Kind() string {
+	return r.kind
+}
+
+// Spec implementa Recurring.
+func (r *recurring) Spec() string {
+	return r.spec
+}
+
+// Tick implementa Recurring.
+func (r *recurring) Tick(ctx context.Context) error {
+	return r.tick(ctx)
 }
 `;
 
@@ -1075,6 +1173,15 @@ func (m *memoryStore) Resolve(ctx context.Context, claimed Claimed, token uuid.U
 	return nil
 }
 
+func (m *memoryStore) Reschedule(_ context.Context, id string, token uuid.UUID, dueAt time.Time) error {
+	row := m.fenced(id, token)
+	if row == nil {
+		return nil
+	}
+	row.claimed.DueAt, row.claimedUntil, row.token, row.claimed.Attempts = dueAt, time.Time{}, uuid.Nil, 0
+	return nil
+}
+
 func (m *memoryStore) Fail(_ context.Context, id string, token uuid.UUID, maxAttempts int, retryDelay time.Duration) error {
 	row := m.fenced(id, token)
 	if row == nil {
@@ -1152,7 +1259,7 @@ func TestDuermeHastaElSiguienteVencimientoYDespiertaAlArmar(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newMemoryStore()
 		store.arm("deadline:Probe.failing", uuid.New(), time.Now().Add(5*time.Second))
-		poller, err := NewPoller(store, []Handler{failing{}}, testSettings(), slog.New(slog.DiscardHandler))
+		poller, err := NewPoller(store, []Handler{failing{}}, nil, testSettings(), slog.New(slog.DiscardHandler))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1179,7 +1286,7 @@ func TestAparcaTrasAgotarSusIntentos(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newMemoryStore()
 		store.arm("deadline:Probe.failing", uuid.New(), time.Now())
-		poller, err := NewPoller(store, []Handler{failing{}}, testSettings(), slog.New(slog.DiscardHandler))
+		poller, err := NewPoller(store, []Handler{failing{}}, nil, testSettings(), slog.New(slog.DiscardHandler))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1202,7 +1309,7 @@ func TestLaPurgaEsUnRecurrenteQueSeAseguraUnaVez(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		poller, err := NewPoller(store, []Handler{purge}, testSettings(), slog.New(slog.DiscardHandler))
+		poller, err := NewPoller(store, nil, []Recurring{purge}, testSettings(), slog.New(slog.DiscardHandler))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1432,6 +1539,18 @@ func (s *TimerStore) Resolve(ctx context.Context, claimed timer.Claimed, token u
 			return err
 		}
 		_, err = timerExec(ctx, q, timerReschedule, map[string]any{"dueAt": outcome.DueAt.UTC(), "id": id, "token": token})
+		return err
+	})
+}
+
+// Reschedule implementa timer.Store: el rearme de un recurrente tras su tick, sin la transacción del tick.
+func (s *TimerStore) Reschedule(ctx context.Context, id string, token uuid.UUID, dueAt time.Time) error {
+	timerID, err := uuid.Parse(id)
+	if err != nil {
+		return err
+	}
+	return s.tx.write(ctx, func(q DBTX) error {
+		_, err := timerExec(ctx, q, timerReschedule, map[string]any{"dueAt": dueAt.UTC(), "id": timerID, "token": token})
 		return err
 	})
 }
@@ -1711,6 +1830,21 @@ func (s *TimerStore) Resolve(ctx context.Context, claimed timer.Claimed, token u
 	})
 }
 
+// Reschedule implementa timer.Store: el rearme de un recurrente tras su tick, fuera de toda sesión.
+func (s *TimerStore) Reschedule(ctx context.Context, id string, token uuid.UUID, dueAt time.Time) error {
+	timers, err := s.timers()
+	if err != nil {
+		return err
+	}
+	_, err = timers.UpdateOne(outside(ctx), fenced(id, token), bson.D{{Key: "$set", Value: bson.D{
+		{Key: "due_at", Value: bson.NewDateTimeFromTime(dueAt)},
+		{Key: "claimed_until", Value: nil},
+		{Key: "claim_token", Value: nil},
+		{Key: "attempts", Value: int32(0)},
+	}}})
+	return err
+}
+
 // Fail implementa timer.Store: parked_at se calcula con los intentos de ANTES, como la sentencia relacional.
 func (s *TimerStore) Fail(ctx context.Context, id string, token uuid.UUID, maxAttempts int, retryDelay time.Duration) error {
 	timers, err := s.timers()
@@ -1803,6 +1937,22 @@ export function timerWiring(model, store, repositoryCall) {
   const handlers = modelDeadlines(model).map(
     ({ entity, deadline }) => `		timer.New${deadlineHandlerType(entity, deadline)}(${repositoryCall(entity)}, useCases.${useCaseField(byOperation(model, deadline))}, ${DEADLINES_VAR}),`
   );
+  // Las purgas de las tablas del generador (inc. 7): la tarea de siempre (scheduler.PurgeTask, con su SQL y sus lotes), que
+  // ya no va al reloj de cada réplica sino al cronómetro, en modo clúster.
+  const purges = timerPurges(model).map((purge) => {
+    const entry = tablePurges(model).find((candidate) => candidate.table === purge.table);
+    if (!entry) throw new Error(`timer.js: ${purge.table} se purga con el cronómetro y la purga del reloj no la tiene`);
+    const variable = `purge${pascalCase(purge.table)}`;
+    return {
+      variable,
+      code: `	${variable}, err := timer.NewRecurring(timer.${purgeKindConstant(purge.table)}, purges.${entry.field}.Cron, scheduler.PurgeTask(${JSON.stringify(entry.what)}, purges.${entry.field}, ${store.name}.${entry.constructor}(transactions), logger).Run)
+	if err != nil {
+		return fmt.Errorf("la purga de ${purge.table}: %w", err)
+	}
+`
+    };
+  });
+  const recurrings = ['timerPurge', ...purges.map((purge) => purge.variable)];
   return `	timerSettings, err := timer.SettingsFrom(cfg)
 	if err != nil {
 		return fmt.Errorf("configuración del cronómetro: %w", err)
@@ -1814,10 +1964,7 @@ export function timerWiring(model, store, repositoryCall) {
 	if err != nil {
 		return fmt.Errorf("la purga del cronómetro: %w", err)
 	}
-	poller, err := timer.NewPoller(timerStore, []timer.Handler{
-		timerPurge,
-${handlers.join('\n')}
-	}, timerSettings, logger)
+${purges.map((purge) => purge.code).join('')}	poller, err := timer.NewPoller(timerStore, ${handlers.length > 0 ? `[]timer.Handler{\n${handlers.join('\n')}\n\t}` : 'nil'}, []timer.Recurring{${recurrings.join(', ')}}, timerSettings, logger)
 	if err != nil {
 		return err
 	}

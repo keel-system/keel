@@ -30,7 +30,7 @@ import {
 import { usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
 import { usesBestEffort, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
 import { usesReplicas } from './projections.js';
-import { usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
+import { usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { alignRows, goString } from '../lib/go-source.js';
 import { relationalEngine, sqlDialect } from '../lib/relational-engine.js';
@@ -437,7 +437,7 @@ func bind(args []any) []any {
  * cuando confirma la transacción abierta (la publicación best-effort).
  */
 function transactionNeeds(model) {
-  return { apart: usesGoOutbox(model) || usesGoProcessedEvents(model) || usesReplicas(model), afterCommit: usesBestEffort(model) || usesDeadlines(model), counting: usesStatementCount(model), timers: usesDeadlines(model) };
+  return { apart: usesGoOutbox(model) || usesGoProcessedEvents(model) || usesReplicas(model), afterCommit: usesBestEffort(model) || usesTimer(model), counting: usesStatementCount(model), timers: usesTimer(model) };
 }
 
 function transactionsBody(d, { apart = false, afterCommit = false, counting = false, timers = false } = {}) {
