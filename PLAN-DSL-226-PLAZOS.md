@@ -394,7 +394,18 @@ El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo 
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
 migración es un incremento propio con su puerta, y entre una y otra el servidor generado sigue en verde.
 
-## Cómo se ejecuta: subagentes en paralelo
+## Cómo se ejecuta
+
+**Cambio de método (2026-11-08): en secuencia, desde `main` y sin subagentes.** La fase E se lanzó con tres agentes en
+paralelo. Los tres agotaron el límite de sesión del usuario dos veces y ninguno terminó, así que el paralelismo costaba
+el presupuesto entero y no ahorraba ni reloj. Lo que dejaron quedó guardado como commit WIP en su rama
+(`inc4-6-keel-{nest,dotnet,go}`), y los worktrees se retiraron. Desde aquí, el orquestador hace cada incremento él mismo,
+en `main` y uno detrás de otro, en el orden nest (4), dotnet (5) y go (6). Al empezar cada uno recupera lo de su rama
+(`git checkout inc4-6-keel-<tech> -- packages/keel-<tech>`), lo revisa contra keel-spring y lo termina. Después vienen sus
+redes, su suite y su commit. Lo que sigue en esta sección es el razonamiento del método anterior, conservado como
+histórico.
+
+### Histórico: subagentes en paralelo
 
 Lo pidió el usuario (2026-11-07): ejecutar el plan con subagentes en paralelo donde se pueda. Paralelizar ahorra
 **tiempo de reloj, no tokens**: un subagente arranca de cero y relee reglas y código, así que en total el plan gasta
