@@ -23,7 +23,8 @@ const table = schemaTable;
 
 function nestSchema(files) {
   const tables = new Map();
-  const orm = files.filter((f) => f.path.startsWith('src/infrastructure/persistence/entities/'));
+  // Las entidades del diseño y la tabla del cronómetro (DSL 2.26), que vive en persistence/timer.
+  const orm = files.filter((f) => /^src\/infrastructure\/persistence\/(entities|timer)\//.test(f.path));
   const bases = new Map();
   for (const file of orm) {
     const abstract = /export abstract class (\w+)/.exec(file.content);

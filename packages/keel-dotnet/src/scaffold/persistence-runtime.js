@@ -30,6 +30,7 @@ import { configNamespace } from './config.js';
 import { usesRelational, dbContextClass, persistedEntities } from './persistence.js';
 import { repositoryRoots, portClass, adapterClass, repositoriesNamespace } from './repositories.js';
 import { AFTER_COMMIT_REGISTRATION } from './after-commit.js';
+import { persistenceTimerRegistration } from './timer.js';
 import { usesStatementCount } from './statement-count.js';
 import { driverNamespace, placeholderConnection, relationalEngine, useProvider, usesMySql, MYSQL_GUID_FORMAT } from './relational-engine.js';
 
@@ -65,7 +66,8 @@ export function generate(model) {
         repositoriesNamespace(model),
         namespaceOf(model, 'repositoryAdapters'),
         namespaceOf(model, 'ports'),
-        ...idempotencyRegistrationUsings(model)
+        ...idempotencyRegistrationUsings(model),
+        ...(persistenceTimerRegistration(model)?.usings ?? [])
       ],
       registrationBody(model)
     ),
@@ -756,6 +758,9 @@ function registrationBody(model) {
   // sobre el DbContext del ámbito.
   if (usesReconciliationSettings(model)) repositories.unshift('        services.TryAddSingleton(ReconciliationSettings.Defaults);');
   if (usesReconciliationClaims(model)) repositories.push('        services.AddScoped<ReconciliationClaimStore>();');
+  // El cronómetro (DSL 2.26): lo que el armado necesita, con los adaptadores que lo usan.
+  const timer = persistenceTimerRegistration(model);
+  if (timer) repositories.push(timer.line);
   return `/// <summary>
 /// La persistencia relacional en el contenedor: el DbContext del perfil (uno por ámbito), la transacción del caso de
 /// uso y un adaptador por puerto. El ÚNICO sitio que registra los repositorios.

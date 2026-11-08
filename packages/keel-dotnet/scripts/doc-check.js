@@ -49,6 +49,9 @@
 //   send-guard     la guarda del envío (mail.sentBy) escribe en la sesión del caso de uso, no confirma al volver
 //   fold-accents   TextFold.FoldCaseAndAccents solo baja la caja: la sombra conserva los acentos y la clave natural de
 //                  job-dispatch-mongo-compare con otra grafía pasa por otra
+// y los del cronómetro y los plazos (DSL 2.26), sobre verification-codes-mongo (sin --only, solo ese sujeto): verde = el
+// sabotaje cae en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js):
+//   dl-boundary  dl-no-guard  dl-no-revalidate  dl-no-lease  dl-outside-tx
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -58,6 +61,7 @@ import { spawnSync } from 'node:child_process';
 import { documentIndexes } from '@keel-system/keel-core/gen/document';
 import { planFixture, makeWorkspace, UNCOVERED_BRANCHES } from '../test/helpers/workspace.js';
 import { docProbeProject, documentDatabaseOf } from './lib/doc-probes.js';
+import { TIMER_SABOTAGES, isTimerSabotage, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
 import { resolveRuntime, startMongo, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -75,6 +79,8 @@ const SUBJECTS = [
   { name: 'job-dispatch-mongo' },
   { name: 'notification-mailer-mongo' },
   { name: 'asset-vault' },
+  // El cronómetro y los plazos (DSL 2.26): DL-1 a DL-10 y R1 contra el almacén documental.
+  { name: 'verification-codes-mongo' },
   // La sombra PLEGADA sobre documentos: ninguna fixture documental declara `compare`, así que se deriva de
   // job-dispatch-mongo con la clave natural plegada (la misma derivada que el doc-check de keel-nest).
   {
@@ -101,7 +107,7 @@ const SUBJECTS = [
     from: branch.from,
     mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name)
   }))
-].filter((subject) => !only || subject.name === only);
+].filter((subject) => (only ? subject.name === only : !isTimerSabotage(sabotage) || subject.name === 'verification-codes-mongo'));
 
 // Los sabotajes: [archivo (sufijo, en todos los sujetos), texto, sustituto].
 // El fin de línea de lo emitido (la llamada sigue en la línea siguiente).
@@ -171,7 +177,9 @@ const SABOTAGES = {
   // La guarda del envío (mail.sentBy, 12e) escribe en la sesión del caso de uso: su marca se deshace con ella.
   'send-guard': ['Repositories/', 'Sin sesión: confirma al volver.' + NL + '        var document = await Collection.FindOneAndUpdateAsync<BsonDocument>(' + NL, 'Sin sesión: confirma al volver.' + NL + '        var document = await Collection.FindOneAndUpdateAsync<BsonDocument>(transactions.Session!,' + NL],
   // El plegado (DSL 2.14), en la derivada job-dispatch-mongo-compare.
-  'fold-accents': ['Persistence/TextFold.cs', 'return kept.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant();', 'return value.ToLowerInvariant();']
+  'fold-accents': ['Persistence/TextFold.cs', 'return kept.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant();', 'return value.ToLowerInvariant();'],
+  // El cronómetro y los plazos (DSL 2.26): cada uno cae en exactamente sus casos DL (scripts/lib/timer-probes.js).
+  ...Object.fromEntries(Object.entries(TIMER_SABOTAGES).map(([id, spec]) => [id, spec.document]))
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación
@@ -223,7 +231,8 @@ try {
   for (const subject of SUBJECTS) {
     const { model, files } = await planFixture(subject.from ?? subject.name, { mutate: subject.mutate ?? null });
     const probes = docProbeProject(model);
-    for (const file of [...files, ...probes.files]) {
+    // Lo que escribiría el agente en la entidad con plazo: el método semántico que llaman los casos DL.
+    for (const file of [...files.map((emitted) => timerProbePatch(model, emitted)), ...probes.files]) {
       const target = path.join(root, subject.name, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -270,6 +279,11 @@ try {
   for (const subject of subjects) {
     const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
     const ran = tested.output.includes(`${subject.probes.name}.dll`);
+    if (isTimerSabotage(sabotage) && timerSubject(subject.model)) {
+      const verdict = timerSabotageVerdict(mine, sabotage, 'document');
+      step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
     step(`${subject.name}: los adaptadores guardan, leen y traducen contra MongoDB`, ran && mine.length === 0, ran ? mine.join('; ') : 'las sondas no se ejecutaron');
   }
   if (!tested.ok && failures.length === 0) console.error(tested.output.split('\n').slice(-40).join('\n'));

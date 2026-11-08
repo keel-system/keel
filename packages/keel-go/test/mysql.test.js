@@ -75,6 +75,8 @@ for (const { name, design, plan } of relational) {
     const springFlags = springDiscriminators(springFiles);
     for (const [index, { table }] of springFlags) schemaTable(spring, table).names.add(index);
     for (const table of MECHANISM_TABLES) spring.delete(table);
+    // La tabla del cronómetro (DSL 2.26) llega a keel-go con el incremento 6 de PLAN-DSL-226-PLAZOS.md: hasta entonces, fuera.
+    spring.delete('keel_timer');
 
     const go = goSchema(plan.files);
     assert.deepEqual([...go.keys()].sort(), [...spring.keys()].sort(), 'las mismas tablas');

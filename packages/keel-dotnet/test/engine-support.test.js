@@ -50,8 +50,7 @@ test('las dos persistencias que keel-dotnet genera las ejecuta su red en vivo', 
 });
 
 test('no queda ninguna fila pendiente de un incremento (desde el 14f)', () => {
-  // Salvo las dos filas del plan 2.26 (el plazo y el cronómetro), que llegan con su incremento 5.
-  assert.deepEqual(pending().map(({ id }) => id), ['deadline', 'timer']);
+  assert.deepEqual(pending().map(({ id }) => id), []);
 });
 
 test('cada motor relacional que la frontera admite tiene su celda en los mecanismos por motor', () => {

@@ -31,6 +31,7 @@ import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, 
 import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './conditional-writes.js';
 import { filterRecordFiles, finderEnums, needsOrdering, portFinderMethods, relationalFinderMethods, sortConstants } from './finders.js';
 import { domainMembers } from './entities.js';
+import { relationalArming, timerDependencies } from './timer.js';
 import { adapterClaimMethods, adapterGuardMethods, claimDependencies, claimUsings, guardDependencies, portClaimMethods, portGuardMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { renderDocumentAdapter } from './document-repositories.js';
@@ -605,7 +606,8 @@ ${entries.join('\n')}
 /** Lo que recibe el adaptador relacional además del contexto y la transacción. */
 function adapterExtras(model, entity) {
   const others = [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity), ...guardDependencies(model, entity)];
-  return [...others, ...replicaDependencies(entity, others)];
+  // Los plazos de negocio (DSL 2.26): el almacén del cronómetro y los plazos vigentes, para armar al guardar.
+  return [...others, ...replicaDependencies(entity, others), ...timerDependencies(model, entity)];
 }
 
 function saveMethod(model, entity, helpers) {
@@ -618,7 +620,10 @@ function saveMethodBody(model, entity, helpers) {
   const versioned = entity.usesOptimisticLocking;
   const versionProp = csMember(LOCK_VERSION.field);
   const stamps = auditStamps(model, entity, helpers);
+  // El armado del plazo (DSL 2.26): el estado que la fila tenía ANTES de volcar el agregado dice si la entidad ENTRA en él.
+  const arming = relationalArming(model, entity);
   const lines = [];
+  if (arming) lines.push(`                ${arming.declare}`);
   if (versioned) {
     lines.push(`                ${row} row;
                 var expected = entity.${versionProp};
@@ -635,7 +640,7 @@ function saveMethodBody(model, entity, helpers) {
                     // La versión que el agregado LEYÓ es el valor original del token: EF escribe
                     // UPDATE … WHERE lock_version = @leída, y cero filas es otra escritura que ganó (o la borró).
                     row = await Graph().SingleOrDefaultAsync(r => r.${idProp} == entity.${idProp}, cancellationToken)
-                        ?? throw new OptimisticLockConflict(${csString(entity.name)}, entity.${idProp}.ToString());
+                        ?? throw new OptimisticLockConflict(${csString(entity.name)}, entity.${idProp}.ToString());${arming ? `\n                    ${arming.capture}` : ''}
                     Apply(row, entity);
                     db.Entry(row).Property(r => r.${versionProp}).OriginalValue = expected;
                     row.${versionProp} = expected + 1;
@@ -646,7 +651,7 @@ function saveMethodBody(model, entity, helpers) {
                 {
                     row = new ${row} { ${idProp} = entity.${idProp} };
                     db.Add(row);
-                }
+                }${arming ? `\n                else\n                {\n                    ${arming.capture}\n                }` : ''}
                 Apply(row, entity);`);
   }
   if (helpers.now) lines.push('                var now = DateTimeOffset.UtcNow;');
@@ -663,7 +668,11 @@ function saveMethodBody(model, entity, helpers) {
     );
   }
   lines.push('                await db.SaveChangesAsync(cancellationToken);');
-  lines.push('                return ToDomain(row);');
+  if (arming) {
+    lines.push('                var saved = ToDomain(row);', ...arming.after.map((line) => `                ${line}`), '                return saved;');
+  } else {
+    lines.push('                return ToDomain(row);');
+  }
   return `    public async Task<${entity.name}> Save(${entity.name} entity, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entity);

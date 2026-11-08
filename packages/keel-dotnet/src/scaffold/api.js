@@ -19,6 +19,7 @@ import { usesIdempotencyHeader } from './request-idempotency.js';
 import { securityNamespace, usesHttpSecurity } from './security.js';
 import { messagingNamespace, usesMessaging } from './messaging.js';
 import { schedulingNamespace, usesScheduling } from './scheduling.js';
+import { programTimer } from './timer.js';
 import { usesServiceParameters } from './service-parameters.js';
 import { usesSweepClaims } from './claim.js';
 import { usesReconciliationSettings } from './reconciliation-claim.js';
@@ -76,6 +77,7 @@ function programCs(model) {
     ...(usesHttpSecurity(model) ? [securityNamespace(model)] : []),
     ...(usesMessaging(model) ? [messagingNamespace(model)] : []),
     ...(usesScheduling(model) ? [schedulingNamespace(model)] : []),
+    ...programTimer(model).usings,
     ...(usesHttpClients(model) ? [clientAdaptersNamespace(model)] : []),
     ...(usesMail(model) ? [mailInfraNamespace(model)] : []),
     ...payments.usings,
@@ -128,6 +130,8 @@ builder.Services.AddMail(MailSettings.From(configuration));`
 // El reloj: los barridos del diseño (schedule) y las purgas de las tablas del generador (SchedulingRegistration, generado).
 builder.Services.AddScheduling(configuration);`
     : '';
+  // El cronómetro de los plazos (DSL 2.26), con el reloj: despacha la operación que caduca por los casos de uso.
+  const timer = programTimer(model);
   // El esquema se pone al ARRANCAR: una base inalcanzable tumba el arranque, no la primera petición.
   const schema = persistence ? '\nawait app.Services.InitializeDatabase();' : '';
   const api = usesApi(model);
@@ -160,7 +164,7 @@ builder.Services.AddSingleton<GracefulShutdown>();
 // El margen del apagado ordenado: lo que el host espera a las peticiones en vuelo tras la señal.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = configuration.Server.ShutdownTimeout);
 // El contrato del cable: todo cuerpo JSON que la API lee o escribe pasa por estas opciones (WireJson).
-builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${clients}${mailing}${payments.registration}${caching.registration}${storing.registration}${database}${security}${messaging}${clock}
+builder.Services.ConfigureHttpJsonOptions(options => WireJson.Configure(options.SerializerOptions));${registration}${clients}${mailing}${payments.registration}${caching.registration}${storing.registration}${database}${security}${messaging}${clock}${timer.registration}
 
 var app = builder.Build();
 app.Services.GetRequiredService<GracefulShutdown>().Watch(app.Lifetime, app.Logger, configuration.Server.ShutdownTimeout);${schema}${pipeline}

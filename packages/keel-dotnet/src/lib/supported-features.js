@@ -13,7 +13,6 @@
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
-import { deadlinesPendingErrors } from '@keel-system/keel-core/gen/deadlines';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {};
@@ -65,9 +64,8 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...messagingWithoutPersistenceErrors(manifest, layers, 'keel-dotnet'));
   // La escritura condicional (DSL 2.25) se genera entera; lo que ningún generador genera todavía, con el motivo neutral (T3).
   errors.push(...conditionalWritesFrontierErrors(layers, 'keel-dotnet'));
-  // Los plazos de negocio (DSL 2.26) llegan con el cronómetro, en el incremento 5 de PLAN-DSL-226-PLAZOS.md: hasta
-  // entonces se rechazan enteros, con el mismo mensaje en los cuatro.
-  errors.push(...deadlinesPendingErrors(layers, 'keel-dotnet', 5));
+  // Los plazos de negocio (DSL 2.26) los genera el cronómetro (scaffold/timer.js, incremento 5 de PLAN-DSL-226-PLAZOS.md);
+  // lo que el stack no sostiene (un motor sin sentencias medidas, un id que no es uuid) lo rechaza planService.
   errors.push(...outboundErrors(layers));
   // Lo que una operación declara se genera entero: la idempotencia de petición desde el 7e, el reloj y los reclamos desde
   // el 10 y la caché desde el 13f. La idempotencia sin persistencia no es un pendiente: el registro de claves tiene que

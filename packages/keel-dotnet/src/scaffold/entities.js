@@ -13,6 +13,7 @@
 import { LOCK_VERSION } from '@keel-system/keel-core/gen';
 import { memberOf } from './enums.js';
 import { csFile, csLocal, csMember, declType, entityPlace, fieldUsings, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
+import { lateGuardBlock, transitionNeedsClock } from './timer.js';
 
 export function generate(model) {
   return (model.entities ?? []).map((entity) => renderEntity(model, entity));
@@ -136,7 +137,7 @@ ${assigns.join('\n')}
       .join('\n\n')
   );
 
-  if (entity.lifecycle) parts.push(renderTransitionTo(entity));
+  if (entity.lifecycle) parts.push(renderTransitionTo(model, entity, usings));
 
   const state = stateMembers.map((member) => `${xmlDoc(memberDoc(member), '    ')}    public required ${member.type} ${csMember(member.name)} { get; init; }`);
   const body = `${xmlDoc(`El estado completo de ${entity.name}, tal como lo rehidrata la persistencia.`)}public sealed class ${entity.name}State
@@ -211,7 +212,9 @@ function renderTransitions(model, entity) {
       to.map((state) => {
         const ops = executedBy[`${from}|${state}`] ?? [];
         const origin = ops.length ? ` (lo ejecuta ${ops.join(', ')})` : '';
-        return `    // TODO (agente): método semántico ${from} → ${state}${origin} que valide la regla del diseño y llame a TransitionTo(${member(state)}).`;
+        // Si la transición sale de un estado con plazo (DSL 2.26), el método recibe la hora y los plazos vigentes.
+        const args = transitionNeedsClock(entity, from, state) ? `${member(state)}, now, deadlines` : member(state);
+        return `    // TODO (agente): método semántico ${from} → ${state}${origin} que valide la regla del diseño y llame a TransitionTo(${args}).`;
       })
     )
     .join('\n');
@@ -224,7 +227,7 @@ ${entries}
 ${todos}`;
 }
 
-function renderTransitionTo(entity) {
+function renderTransitionTo(model, entity, usings) {
   const { field, enumType } = entity.lifecycle;
   const fieldDef = entity.fields.find((f) => f.name === field);
   const nullable = fieldDef && !(fieldDef.required || fieldDef.isId || fieldDef.generated);
@@ -238,6 +241,12 @@ function renderTransitionTo(entity) {
         {
             throw new InvalidStateTransitionException(current.ToString(), target.ToString());
         }`;
+  // Con plazos de negocio (DSL 2.26), el rechazo tardío: TransitionTo con la hora y los plazos vigentes, y el de un argumento
+  // que se niega a salir de un estado con plazo hacia otro destino (timer.js, la forma del lateGuardBlock de keel-spring).
+  const late = lateGuardBlock(model, entity, usings, `        var current = ${property};
+        ${guard}
+        ${property} = target;`);
+  if (late) return late;
   return `    // Guarda interna del lifecycle: la llaman los métodos semánticos, nunca un handler.
     private void TransitionTo(${enumType} target)
     {

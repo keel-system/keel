@@ -45,6 +45,11 @@ import { effectiveErrorCode, operationError } from '@keel-system/keel-core/gen/d
 import { FILE_STORAGE_PORT, UPLOAD_NOTE_NAMES_CS, storageNamespace } from './storage.js';
 import { isPartialUpdate } from '@keel-system/keel-core/gen/features';
 import { compensationNote } from '@keel-system/keel-core/gen/compensation';
+import { deadlineHandlerNote, lateTransitionNote } from '@keel-system/keel-core/gen/deadlines';
+import { deadlinesClass, deadlinesNamespace } from './timer.js';
+
+/** El campo con el que un handler recibe los plazos vigentes: `verificationCodesDeadlines`. */
+export const deadlinesLocal = (model) => `${deadlinesClass(model)[0].toLowerCase()}${deadlinesClass(model).slice(1)}`;
 export { isPartialUpdate };
 
 export function generate(model) {
@@ -383,6 +388,14 @@ function renderHandler(model, operation) {
     usings.push(storageNamespace(model));
     dependencies.push('StoragePolicies', FILE_STORAGE_PORT);
   }
+  // Los plazos de negocio (DSL 2.26): quien saca la entidad de un estado con plazo hacia otro destino le da al dominio la hora
+  // del reloj inyectable (TimeProvider) y la duración vigente de los plazos, con las que el método de transición hace el
+  // rechazo tardío. Sin inyectarlos, el camino de menor resistencia es DateTimeOffset.UtcNow, que no deja probar el segundo
+  // exacto. El mismo criterio que keel-spring (Clock y <Servicio>Deadlines).
+  if (lateTransitionNote(model, operation)) {
+    usings.push(deadlinesNamespace(model));
+    dependencies.push('TimeProvider', deadlinesClass(model));
+  }
   const local = (type) => {
     const name = type.replace(/^I(?=[A-Z])/, '');
     return name[0].toLowerCase() + name.slice(1);
@@ -411,6 +424,11 @@ function handlerNotes(model, operation) {
   if (dispatch) notes.push(dispatch);
   const gate = entryGateNote(model, operation, { read: 'command.EntryGate', value: entryGateMember });
   if (gate) notes.push(gate);
+  // Los plazos (DSL 2.26): la nota de la operación que caduca y la de las que salen del estado. Neutrales, las mismas en los cuatro.
+  const expiring = deadlineHandlerNote(model, operation);
+  if (expiring) notes.push(expiring);
+  const late = lateTransitionNote(model, operation);
+  if (late) notes.push(`${late} En C#: timeProvider.GetUtcNow() y ${deadlinesLocal(model)}.`);
   // La escritura condicional (api.concurrency): cargar con LoadExpecting y devolver la versión persistida.
   const conditional = conditionalHandlerNote(model, operation, operation.messageKind === 'query' ? 'query' : 'command');
   if (conditional) notes.push(conditional);

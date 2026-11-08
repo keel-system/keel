@@ -10,7 +10,8 @@
 //   · ejecutado por archivo, mongosh NO imprime el valor de la última expresión: sin el envoltorio `print(...)` un
 //     countDocuments devuelve cadena vacía, y la cadena vacía se parece a un cero.
 
-import { CLOCK, setStateScript, ageClockScript, holdClockScript, missingClockCountScript } from '@keel-system/keel-core/gen/mongo-probes';
+import { CLOCK, setStateScript, ageClockScript, holdClockScript, missingClockCountScript, ageDeadlineScript } from '@keel-system/keel-core/gen/mongo-probes';
+import { documentAgingMembers } from './timer.js';
 import { rescueProbes } from '@keel-system/keel-core/gen';
 import { documentShape } from '@keel-system/keel-core/gen/document';
 import { csString } from './render.js';
@@ -34,8 +35,10 @@ export function documentFlowMembers(model, probe) {
   ];
   const rescue = rescueMembers(model);
   const aging = agingMembers(model);
-  members.push(...rescue, ...aging);
-  if (rescue.length > 0 || aging.length > 0) {
+  // El plazo envejecido (DSL 2.26, D7): AgeForDeadline, con el script de keel-core.
+  const deadlines = documentAgingMembers(model, ageDeadlineScript);
+  members.push(...rescue, ...aging, ...deadlines);
+  if (rescue.length > 0 || aging.length > 0 || deadlines.length > 0) {
     members.push(`    /// <summary>Un id de documento para un script: valida la forma antes de meterlo dentro de <c>UUID("…")</c>.</summary>
     private static string DocumentId(string id) =>
         Guid.TryParseExact(id, "D", out _) ? id : throw new ArgumentException($"No es un id: '{id}'", nameof(id));`);

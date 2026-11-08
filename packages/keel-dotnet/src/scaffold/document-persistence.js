@@ -37,6 +37,7 @@ import { idempotencyRegistration, idempotencyRegistrationUsings } from './reques
 import { usesSweepClaims } from './claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from './reconciliation-claim.js';
 import { AFTER_COMMIT_REGISTRATION } from './after-commit.js';
+import { persistenceTimerRegistration } from './timer.js';
 import { localMongoUrl } from '@keel-system/keel-core/gen/infra-catalog';
 export { localMongoUrl };
 
@@ -69,7 +70,8 @@ export function generate(model) {
         repositoriesNamespace(model),
         namespaceOf(model, 'repositoryAdapters'),
         namespaceOf(model, 'ports'),
-        ...idempotencyRegistrationUsings(model)
+        ...idempotencyRegistrationUsings(model),
+        ...(persistenceTimerRegistration(model)?.usings ?? [])
       ],
       registrationBody(model)
     ),
@@ -841,6 +843,9 @@ function registrationBody(model) {
   if (usesSweepClaims(model)) repositories.unshift('        services.TryAddSingleton(SweepSettings.Defaults);');
   if (usesReconciliationSettings(model)) repositories.unshift('        services.TryAddSingleton(ReconciliationSettings.Defaults);');
   if (usesReconciliationClaims(model)) repositories.push('        services.AddSingleton<ReconciliationClaimStore>();');
+  // El cronómetro (DSL 2.26): lo que el armado necesita, con los adaptadores que lo usan.
+  const timer = persistenceTimerRegistration(model);
+  if (timer) repositories.push(timer.line);
   return `/// <summary>
 /// La persistencia documental en el contenedor: el cliente del perfil (uno por proceso), la transacción del caso de uso
 /// y un adaptador por puerto. El ÚNICO sitio que registra los repositorios.

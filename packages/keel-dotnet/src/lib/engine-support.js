@@ -49,8 +49,75 @@ export const NETS = {
 export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
-  deadline: { pending: 'incremento 5 de PLAN-DSL-226-PLAZOS.md: el rechazo tardío y el armado, con el cronómetro' },
-  timer: { pending: 'incremento 5 de PLAN-DSL-226-PLAZOS.md: el cronómetro del servicio, sobre keel-core/gen/timer-store.js' },
+  deadline: {
+    parity: {
+      pair: 'verification-codes',
+      markers: {
+        relational: [
+          'src/VerificationCodes.Infrastructure/Persistence/Repositories/VerificationCodeRepository.cs::await timers.Arm(TimerKinds.',
+          'src/VerificationCodes.Infrastructure/Persistence/Repositories/VerificationCodeRepository.cs::previousState = row.Status;',
+          'src/VerificationCodes.Domain/Aggregate/VerificationCode.cs::IssuedAt + deadlines.VerificationCodePending <= now'
+        ],
+        document: [
+          'src/VerificationCodesMongo.Infrastructure/Persistence/Repositories/VerificationCodeRepository.cs::await timers.Arm(TimerKinds.',
+          'src/VerificationCodesMongo.Infrastructure/Persistence/Repositories/VerificationCodeRepository.cs::Project(new BsonDocument("status", 1))',
+          'src/VerificationCodesMongo.Domain/Aggregate/VerificationCode.cs::IssuedAt + deadlines.VerificationCodePending <= now'
+        ]
+      }
+    },
+    emitter: 'src/scaffold/timer.js (lateGuardBlock, relationalArming, documentArming) · src/scaffold/entities.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'verification-codes (db-check --only=verification-codes): DL-1 a DL-3 contra el método de transición del dominio emitido (la hora y los plazos por argumento) y DL-4 contra el adaptador de EF Core en una transacción que confirma y otra que revierte. Falsado con dl-boundary y dl-no-guard (caen en DL-2) y dl-outside-tx (el armado con un contexto propio: cae DL-4). dl-wrong-field no tiene sujeto en esta fixture (una sola marca de tiempo). Medido el 2026-11-08: db-check 6/6 en PostgreSQL (19 sondas) y en MySQL (20), y cada sabotaje en exactamente sus casos'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'verification-codes-mongo (doc-check --only=verification-codes-mongo): los mismos casos, con el estado previo leído en la sesión de la transacción del caso de uso y el armado en ella, sobre un replica set real. Falsado con dl-boundary, dl-no-guard y dl-outside-tx (el armado sin la sesión escribe fuera de la transacción y DL-4 lo ve). Medido el 2026-11-08: doc-check 6/6 (17 sondas), y cada sabotaje en exactamente sus casos'
+      }
+    }
+  },
+  timer: {
+    parity: {
+      pair: 'verification-codes',
+      markers: {
+        relational: [
+          'file:src/VerificationCodes.Infrastructure/Timers/TimerStore.cs',
+          'src/VerificationCodes.Infrastructure/Timers/TimerStore.cs::FOR UPDATE SKIP LOCKED',
+          'file:src/VerificationCodes.Infrastructure/Persistence/Rows/KeelTimerRow.cs',
+          'src/VerificationCodes.Infrastructure/Persistence/Rows/KeelTimerRow.cs::row.ToTable("keel_timer")'
+        ],
+        document: [
+          'file:src/VerificationCodesMongo.Infrastructure/Timers/TimerStore.cs',
+          'src/VerificationCodesMongo.Infrastructure/Timers/TimerStore.cs::FindOneAndUpdateAsync(',
+          'src/VerificationCodesMongo.Infrastructure/Timers/TimerStore.cs::$NOW'
+        ]
+      }
+    },
+    emitter: 'src/scaffold/timer.js (TimerStore relacional y documental, TimerPoller, KeelTimerPurge, un handler por plazo, TimerRegistration, KeelTimerRow)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'verification-codes: las sentencias de keel-core tal cual (test/deadlines.test.js comprueba que cada una está en TimerStore.cs), ejecutadas sobre la conexión y la transacción del DbContext con los marcadores traducidos a los del driver; DL-5 a DL-10 y el recurrente de la purga (R1) contra el motor, con el sondeador emitido. Falsado con dl-no-lease (cae en DL-6 y DL-7) y dl-no-revalidate (DL-8 y DL-9). dl-app-clock no tiene sujeto: la instancia y la base comparten reloj en la máquina de la red. Medido el 2026-11-08: db-check 6/6 en PostgreSQL (19 sondas) y en MySQL (20), y cada sabotaje en exactamente sus casos'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'verification-codes-mongo: FindOneAndUpdate de uno en uno con $NOW, el _id aplanado y entity_id/claim_token como texto, la hora de la base de un $documents sin la sesión. Falsado con dl-no-lease (cae en DL-5, DL-6 y DL-7, como en keel-spring y keel-nest) y dl-no-revalidate (DL-8 y DL-9). El índice de due_at lo pide storeDocumentIndexes de keel-core. Medido el 2026-11-08: doc-check 6/6 (17 sondas), y cada sabotaje en exactamente sus casos'
+      }
+    }
+  },
   'runtime-panel': {
     parity: {
       skip: 'la telemetría es una elección de STACK (telemetry: otel) y el par se genera sin ella; el panel y sus series los comparan con keel-spring test/observability-assets.test.js y la prueba emitida TelemetryTests, generando con la opción',

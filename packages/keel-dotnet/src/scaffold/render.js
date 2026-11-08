@@ -105,6 +105,11 @@ export const PLACES = {
   purge: ['infrastructure', 'Persistence/Purge'],
   // Lo que corre por reloj: el registro de tareas y un scheduler por grupo de operaciones con `schedule` (incremento 10b).
   scheduling: ['infrastructure', 'Scheduling'],
+  // Los plazos de negocio (DSL 2.26): la duración vigente de cada plazo es dominio (la usa el rechazo tardío); el
+  // cronómetro del servicio —la tabla keel_timer, el sondeador y un handler por plazo—, infraestructura.
+  deadline: ['domain', 'Deadline'],
+  // `Timers` y no `Timer`: un namespace `…Infrastructure.Timer` taparía System.Threading.Timer en todo Infrastructure.
+  timer: ['infrastructure', 'Timers'],
   // El correo saliente (capa mail): el mensaje y sus excepciones son dominio; el adaptador SMTP, el renderizador y su
   // configuración, infraestructura. Los puertos van con los demás de la aplicación (Ports).
   mail: ['domain', 'Mail'],

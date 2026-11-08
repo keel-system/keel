@@ -10,8 +10,8 @@ al que **migran todos los relojes que hoy emiten los generadores** (§ La migrac
 cambia el DSL, pero sí el servidor generado de cualquier diseño con persistencia.
 
 **Estado: aprobado (2026-11-07).** El usuario aceptó las ocho propuestas de § Decisiones tomadas. Fases B, C y C2
-hechas el mismo día, la D (incremento 3, keel-spring) el 2026-11-08 y, de la fase E, el incremento 4 (keel-nest) ese
-mismo día; siguiente, el 5 (keel-dotnet) y el 6 (keel-go). **Lo
+hechas el mismo día, la D (incremento 3, keel-spring) el 2026-11-08 y, de la fase E, los incrementos 4 (keel-nest) y 5
+(keel-dotnet) ese mismo día; siguiente, el 6 (keel-go). **Lo
 que queda se termina sin subagentes, todo desde `main` y en secuencia** (§ Cómo se ejecuta).
 
 ## Por qué
@@ -410,6 +410,29 @@ Lo que destapó: a la colección `keelTimer` le faltaba su índice por `due_at` 
 los cuatro generadores. Ahora lo añade lo neutral (`storeDocumentIndexes` de `gen/document.js`), y `timer-check` de
 keel-spring sigue en 13/13 sobre `verification-codes-mongo`. Y en TypeScript strict, el marcador de MySQL necesita su
 parámetro aunque no lo use (TS2554).
+
+**Lo que dejó el incremento 5.** keel-dotnet genera el cronómetro y los plazos en `src/scaffold/timer.js`, con la forma de
+keel-spring en C#:
+
+- En el dominio, `<Servicio>Deadlines` y el rechazo tardío en `TransitionTo(target, now, deadlines)`. El reloj
+  inyectable es `TimeProvider`, del BCL.
+- El armado va en el `Save` de los dos adaptadores. El almacén `TimerStore` corre sobre la conexión y la transacción del
+  DbContext, con las sentencias de keel-core tal cual y los marcadores traducidos a los del driver, o sobre la forma
+  documental. `KeelTimerRow` existe solo para el esquema de EF.
+- `TimerPoller` es un `BackgroundService`, con un handler por plazo, la purga de la tabla y `TimerRegistration`.
+- El gate es `infra/check-deadlines.sh`, y `AgeForDeadline` entra en `FlowTest.cs` en las dos ramas.
+
+`deadlinesPendingErrors` sale de su frontera, y la matriz queda sin filas pendientes.
+
+Las redes son las de siempre, con el sujeto nuevo y una sonda C# por caso (`scripts/lib/timer-probes.js`, métodos
+`DL<n>_…` dentro de la clase de sondas del sujeto). `db-check` da 6/6 en PostgreSQL (19 sondas) y en MySQL (20).
+`doc-check` da 6/6 (17 sondas). Los cinco sabotajes `dl-*` caen en exactamente sus casos en las dos ramas (en documental,
+`dl-no-lease` también en DL-5). `cs-check --fixtures` compila sin warnings las 19 fixtures y 41 variantes y pasa 8598
+pruebas emitidas, `TimerTests` incluida. Sin SDK, `test/deadlines.test.js` hace lo mismo que el de keel-nest.
+
+Lo que destapó: un namespace `…Infrastructure.Timer` habría tapado `System.Threading.Timer` en toda la infraestructura,
+así que se llama `Timers`. Y los casos no pueden ir en una clase de pruebas propia: xUnit ejecuta las clases a la vez,
+y las dos compartirían la base y `keel_timer`.
 
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada

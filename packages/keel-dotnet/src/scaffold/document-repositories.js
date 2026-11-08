@@ -22,7 +22,8 @@ import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './condi
 import { domainMembers } from './entities.js';
 import { persistenceNamespace } from './persistence.js';
 import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
-import { claimDependencies, guardClaimsFor } from './claim.js';
+import { claimDependencies, guardClaimsFor, storedState } from './claim.js';
+import { documentArming, timerDependencies } from './timer.js';
 import { reconciliationDependencies } from './reconciliation-claim.js';
 import { documentGuardMethods, documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
@@ -294,6 +295,9 @@ function saveMethodBody(model, entity) {
   if (needs.actor) lines.push('var actor = BsonValues.Of(AuditActor.Current());');
   lines.push(...declared);
   lines.push(`var id = document[${csString(DOCUMENT_ID)}];`, `var fields = new BsonDocument(document.Where(element => element.Name != ${csString(DOCUMENT_ID)}));`);
+  // El armado del plazo (DSL 2.26): el estado que el documento tenía en la base, leído en la sesión antes de escribirlo.
+  const arming = documentArming(model, entity, storedState);
+  if (arming) lines.push(...arming.before);
   if (policyTimestamps) lines.push('// La auditoría de política: updated_at en cada escritura, created_at solo al nacer.', 'fields["updated_at"] = now;');
   if (policyAuthorship) lines.push('// La autoría de política: updated_by en cada escritura, created_by solo al nacer.', 'fields["updated_by"] = actor;');
   const onInsert = [policyTimestamps ? '{ "created_at", now }' : null, policyAuthorship ? '{ "created_by", actor }' : null].filter(Boolean);
@@ -342,7 +346,11 @@ function saveMethodBody(model, entity) {
   if (emitsEvents(model, entity)) {
     lines.push(usesBridge(model) ? 'await events.Publish(entity.PullDomainEvents(), cancellationToken);' : 'entity.PullDomainEvents();');
   }
-  lines.push(`return ToDomain${entity.name}(new BsonDocument(${csString(DOCUMENT_ID)}, id).AddRange(fields));`);
+  if (arming) {
+    lines.push(`var saved = ToDomain${entity.name}(new BsonDocument(${csString(DOCUMENT_ID)}, id).AddRange(fields));`, ...arming.after, 'return saved;');
+  } else {
+    lines.push(`return ToDomain${entity.name}(new BsonDocument(${csString(DOCUMENT_ID)}, id).AddRange(fields));`);
+  }
   return `    public async Task<${entity.name}> Save(${entity.name} entity, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entity);
@@ -505,7 +513,8 @@ export function renderDocumentAdapter(model, entity) {
     usings.push(messagingNamespace(model));
   }
   const others = [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)];
-  for (const dep of [...others, ...replicaDependencies(entity, others)]) {
+  // Los plazos de negocio (DSL 2.26): el almacén del cronómetro y los plazos vigentes, para armar al guardar.
+  for (const dep of [...others, ...replicaDependencies(entity, others), ...timerDependencies(model, entity)]) {
     ctor.push(`${dep.type} ${dep.name}`);
     usings.push(...dep.usings);
   }

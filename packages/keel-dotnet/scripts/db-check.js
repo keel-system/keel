@@ -64,6 +64,9 @@
 //   discriminator    el índice condicionado pierde su columna generada: la unicidad pasa a ser sobre todas las filas
 //   collation        la columna única pierde utf8mb4_bin: el motor pliega mayúsculas al comparar
 //   read-committed   los reclamos corren en el REPEATABLE READ por defecto: toman los huecos entre claves
+// Y los del cronómetro y los plazos (DSL 2.26), sobre verification-codes (sin --only, solo ese sujeto): verde = el
+// sabotaje cae en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js):
+//   dl-boundary  dl-no-guard  dl-no-revalidate  dl-no-lease  dl-outside-tx
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -76,6 +79,7 @@ import { partialIndexSpecs, discriminatorColumn, persistedMembers } from '@keel-
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { expectedSchemaNames } from '../src/scaffold/persistence.js';
 import { probeProject, databaseOf } from './lib/db-probes.js';
+import { TIMER_SABOTAGES, isTimerSabotage, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -167,7 +171,9 @@ const SABOTAGES = {
   'guid-format': { mysql: ['Persistence/PersistenceRegistration.cs', 'GuidFormat = MySqlGuidFormat.Binary16', 'GuidFormat = MySqlGuidFormat.LittleEndianBinary16'] },
   discriminator: { mysql: ['Persistence/Rows/', /, "(\w+)_flag"\], /g, '], '] },
   collation: { mysql: ['Persistence/Rows/', '.UseCollation("utf8mb4_bin")', ''] },
-  'read-committed': { mysql: ['Persistence/PersistenceTransactions.cs', 'ClaimIsolation = IsolationLevel.ReadCommitted;', 'ClaimIsolation = null;'] }
+  'read-committed': { mysql: ['Persistence/PersistenceTransactions.cs', 'ClaimIsolation = IsolationLevel.ReadCommitted;', 'ClaimIsolation = null;'] },
+  // El cronómetro y los plazos (DSL 2.26): cada uno cae en exactamente sus casos DL (scripts/lib/timer-probes.js).
+  ...Object.fromEntries(Object.entries(TIMER_SABOTAGES).map(([id, spec]) => [id, spec.relational]))
 };
 
 /** El sabotaje para un motor: [sufijo, texto, sustituto], o null si no aplica a ese motor. */
@@ -223,7 +229,8 @@ function uncoveredBranch(name) {
   const branch = UNCOVERED_BRANCHES.find((candidate) => candidate.name === name);
   return { [name]: { from: branch.from, mutate: (manifest, layers) => branch.mutate(manifest, layers, name) } };
 }
-const SUBJECTS = only ? [only] : [...relational, ...Object.keys(DERIVED)];
+// Un sabotaje del cronómetro solo tiene sujeto en el par de los plazos: sin --only, solo ese.
+const SUBJECTS = only ? [only] : isTimerSabotage(sabotage) ? ['verification-codes'] : [...relational, ...Object.keys(DERIVED)];
 
 if (sabotage && !SABOTAGES[sabotage]) {
   console.error(`No hay ningún sabotaje '${sabotage}'.`);
@@ -275,7 +282,9 @@ async function checkEngine(engine) {
     for (const name of SUBJECTS) {
       const derived = DERIVED[name];
       const stack = engine === 'postgresql' ? null : { database: engine };
-      const { model, files: planned } = await planFixture(derived?.from ?? name, { mutate: derived?.mutate ?? null, stack });
+      const { model, files: emitted } = await planFixture(derived?.from ?? name, { mutate: derived?.mutate ?? null, stack });
+      // Lo que escribiría el agente en la entidad con plazo: el método semántico que llaman los casos DL.
+      const planned = emitted.map((file) => timerProbePatch(model, file));
       const files = sabotage
         ? planned.map((file) => {
             // Lo de `src/` por sufijo; el arnés, solo si el sabotaje lo nombra (sus sufijos llevan `IntegrationTests/`).
@@ -320,6 +329,11 @@ async function checkEngine(engine) {
       // Con el espacio delante: `Catalog.DbProbes.` es subcadena de `ProductCatalog.DbProbes.`.
       const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
       const ran = tested.output.includes(`${subject.probes.name}.dll`);
+      if (isTimerSabotage(sabotage) && timerSubject(subject.model)) {
+        const verdict = timerSabotageVerdict(mine, sabotage, 'relational');
+        step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
       step(`${subject.name}: los adaptadores guardan, leen y traducen contra ${label}`, ran && mine.length === 0, ran ? mine.join('; ') : 'las sondas no se ejecutaron');
     }
     if (!tested.ok && failures.length === 0) console.error(tested.output.split('\n').slice(-40).join('\n'));

@@ -50,6 +50,7 @@ import { storeRows, storeSchemaNames } from './messaging-stores.js';
 import { RECONCILIATION_ROW, reconciliationSchemaNames, usesReconciliationClaims } from './reconciliation-claim.js';
 import { csFile, csMember, csString, located, namespaceOf, solution, typeUsings, xmlDoc } from './render.js';
 import { usesUnmapped } from './repositories.js';
+import { KEEL_TIMER_ROW, timerSchemaNames, usesDeadlines } from './timer.js';
 import { MYSQL_GUID_FORMAT, placeholderConnection, relationalEngine, useProvider, usesMySql } from './relational-engine.js';
 import { usesRelational, usesDocument, usesPersistence } from '@keel-system/keel-core/gen/features';
 export { usesRelational, usesDocument, usesPersistence };
@@ -686,6 +687,8 @@ export function rowClasses(model) {
   classes.push(...storeRows(model));
   // Y la marca del reclamo de reconciliación (incremento 11c).
   if (usesReconciliationClaims(model)) classes.push(RECONCILIATION_ROW);
+  // Y la tabla del cronómetro (DSL 2.26), solo para el esquema: la usa TimerStore con las sentencias de keel-core.
+  if (usesDeadlines(model)) classes.push(KEEL_TIMER_ROW);
   return classes;
 }
 
@@ -748,6 +751,7 @@ export function expectedSchemaNames(model) {
   }
   for (const name of storeSchemaNames(model)) names.add(name);
   for (const name of reconciliationSchemaNames(model)) names.add(name);
+  for (const name of timerSchemaNames(model)) names.add(name);
   return [...names].sort();
 }
 

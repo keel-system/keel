@@ -29,6 +29,7 @@ import { DOTNET_INFRA } from './infra.js';
 import { usesApi } from './rest-support.js';
 import { usesRelational, usesDocument } from './persistence.js';
 import { PRINT_WRAPPER } from '@keel-system/keel-core/gen/mongo-probes';
+import { relationalAgingMembers } from './timer.js';
 import { documentFlowMembers, documentSmokeCase } from './document-harness.js';
 import { csFile, csString, solution } from './render.js';
 import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
@@ -141,9 +142,11 @@ function flowTestCs(model) {
     protected static string Db(string sql) => Harness.Db(sql);`);
     const rescue = rescueMembers(model);
     const aging = reconciliationAgingMembers(model);
-    helpers.push(...rescue, ...aging);
-    // El id como literal del motor: lo comparten el rescate y la reconciliación.
-    if (rescue.length > 0 || aging.length > 0) helpers.push(idLiteralMember(model));
+    // El plazo envejecido (DSL 2.26, D7): AgeForDeadline, con la sentencia del cronómetro de keel-core.
+    const deadlines = relationalAgingMembers(model);
+    helpers.push(...rescue, ...aging, ...deadlines);
+    // El id como literal del motor: lo comparten el rescate, la reconciliación y los plazos.
+    if (rescue.length > 0 || aging.length > 0 || deadlines.length > 0) helpers.push(idLiteralMember(model));
   }
   // Sobre documentos (incremento 12d): MongoEval y los mismos ayudantes con los scripts de keel-core/gen/mongo-probes.js.
   const mongo = documentProbe(model);
