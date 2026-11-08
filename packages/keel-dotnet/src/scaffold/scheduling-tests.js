@@ -9,7 +9,8 @@ import { BATCHED_PURGE, batchedPurgeParameters, scheduleCron } from '@keel-syste
 import { csFile, csString, namespaceOf, solution } from './render.js';
 import { scheduledServices, schedulerClass, usesScheduling } from './scheduling.js';
 import { PURGE_CASES, PURGE_CASES_CUTOFF, purgeNamespace, tablePurges } from './purge.js';
-import { purgedByTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { purgedByTimer, scheduledByTimer, timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
+import { scheduleTimerClass, timerNamespace } from './timer.js';
 
 export function generate(model) {
   if (!usesScheduling(model)) return [];
@@ -18,6 +19,7 @@ export function generate(model) {
   const members = [];
   const services = scheduledServices(model);
   if (services.length > 0) members.push(schedulerTests(model, services));
+  if (timerSchedules(model).length > 0) usings.push(timerNamespace(model));
   const purges = tablePurges(model);
   if (purges.length > 0) {
     usings.push(purgeNamespace(model));
@@ -32,12 +34,34 @@ ${members.join('\n\n')}
 }
 
 function schedulerTests(model, services) {
+  // Las que dispara el cronómetro (inc. 8 del plan 2.26) no son tareas del reloj: su cron y su kind los lleva su
+  // <Operación>ScheduleTimer, y lo fija el caso de abajo.
   const rows = services.flatMap(({ service, operations }) =>
-    operations.map((operation) => {
-      const cron = scheduleCron(model, operation);
-      return `        [${csString(operation.name)}] = (${schedulerClass(service)}.Tasks(), ${csString(cron)}),`;
-    })
+    operations
+      .filter((operation) => !scheduledByTimer(model, operation.name))
+      .map((operation) => {
+        const cron = scheduleCron(model, operation);
+        return `        [${csString(operation.name)}] = (${schedulerClass(service)}.Tasks(), ${csString(cron)}),`;
+      })
   );
+  const timers = timerSchedules(model);
+  const timerTest = timers.length > 0
+    ? `
+
+    /// <summary>Cada schedule que dispara el cronómetro: su kind en keel_timer y el cron de seis campos de keel-core.</summary>
+    [Fact]
+    public void CadaScheduleDelCronometroLlevaSuKindYElCronDeKeelCore()
+    {
+${timers
+  .map(
+    (schedule) => `        var ${schedule.operation} = new ${scheduleTimerClass(schedule.operation)}(null!, TimerSettings.Defaults);
+        Assert.Equal(${csString(schedule.kind)}, ${schedule.operation}.Kind);
+        Assert.Equal(${csString(schedule.cron)}, ${schedule.operation}.Spec);`
+  )
+  .join('\n')}
+    }`
+    : '';
+  if (rows.length === 0) return `${schedulerInvalidCron()}${timerTest}`;
   return `    /// <summary>Cada operación por reloj: el cron de seis campos que decide keel-core (el segundo repartido + los cinco del diseño).</summary>
     private static readonly Dictionary<string, (IReadOnlyList<ScheduledTask> Tasks, string Cron)> Expected = new(StringComparer.Ordinal)
     {
@@ -60,7 +84,11 @@ ${rows.join('\n')}
         }
     }
 
-    [Fact]
+${schedulerInvalidCron()}${timerTest}`;
+}
+
+function schedulerInvalidCron() {
+  return `    [Fact]
     public void UnCronInvalidoNoDejaArrancar()
     {
         var error = Assert.Throws<InvalidOperationException>(() => new ScheduledTask("roto", "0 0 3 * *", (_, _) => Task.CompletedTask));

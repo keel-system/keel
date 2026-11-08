@@ -32,6 +32,7 @@ import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './condi
 import { filterRecordFiles, finderEnums, needsOrdering, portFinderMethods, relationalFinderMethods, sortConstants } from './finders.js';
 import { domainMembers } from './entities.js';
 import { relationalArming, timerDependencies } from './timer.js';
+import { sweepPassNamespace } from './timer.js';
 import { adapterClaimMethods, adapterGuardMethods, claimDependencies, claimUsings, guardDependencies, portClaimMethods, portGuardMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { renderDocumentAdapter } from './document-repositories.js';
@@ -554,6 +555,8 @@ ${mappers.join('\n\n')}
 }`;
   if (sortable) usings.push('System.Linq.Expressions');
   if (usesBridge(model) && emitsEvents(model, entity)) usings.push(messagingNamespace(model));
+  // La señal del drenaje del cronómetro (inc. 8 del plan 2.26), si algún reclamo la da.
+  if (body.includes('SweepPass.Claimed(')) usings.push(sweepPassNamespace(model));
   return { path, content: csFile({ namespace, usings, body }) };
 }
 

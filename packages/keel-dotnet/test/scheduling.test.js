@@ -22,6 +22,8 @@ import { tablePurges as nestTablePurges } from '../../keel-nest/src/scaffold/pur
 import { planService } from '../src/scaffold/index.js';
 import { PURGE_CASES, PURGE_CASES_CUTOFF, tablePurges } from '../src/scaffold/purge.js';
 import { scheduledServices, schedulerPath } from '../src/scaffold/scheduling.js';
+import { scheduleTimerClass } from '../src/scaffold/timer.js';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const STACK = { database: 'postgresql', broker: 'rabbitmq' };
@@ -31,10 +33,26 @@ const design = (name) => loadService(path.join(FIXTURES_DIR, name));
 const plan = (name, planner = planService) => planner({ ...design(name), workspace: FIXTURES_DIR, stack: STACK });
 const content = (files, suffix) => files.find((file) => file.path.endsWith(suffix))?.content;
 
-/** Del Scheduler de keel-spring: método → { cron, withoutTransaction }. */
+/**
+ * De keel-spring: método → { cron, withoutTransaction }. Desde el inc. 8 del plan 2.26 el cron vive en el
+ * <Operación>ScheduleTimer del cronómetro y el despacho en el método del Scheduler; sin cronómetro, en su @Scheduled.
+ */
 function springSchedule(files) {
   const out = new Map();
-  for (const file of files.filter((candidate) => /\/infrastructure\/scheduling\/\w+Scheduler\.java$/.test(candidate.path))) {
+  const schedulers = files.filter((candidate) => /\/infrastructure\/scheduling\/\w+Scheduler\.java$/.test(candidate.path));
+  const bodyOf = (name) => {
+    for (const file of schedulers) {
+      const match = new RegExp(`public void ${name}\\(\\) \\{([\\s\\S]*?)\\n    \\}`).exec(file.content);
+      if (match) return match[1];
+    }
+    return '';
+  };
+  for (const file of files.filter((candidate) => /\/infrastructure\/timer\/\w+ScheduleTimer\.java$/.test(candidate.path))) {
+    const cron = /public String spec\(\) \{\s+return "([^"]+)";/.exec(file.content)[1];
+    const name = /\w+Scheduler\.(\w+)\(\);/.exec(file.content)[1];
+    out.set(name, { cron, withoutTransaction: bodyOf(name).includes('dispatchWithoutTransaction(') });
+  }
+  for (const file of schedulers) {
     for (const [, cron, name, body] of file.content.matchAll(/@Scheduled\(cron = "([^"]+)"\)\s+public void (\w+)\(\) \{([\s\S]*?)\n    \}/g)) {
       out.set(name, { cron, withoutTransaction: body.includes('dispatchWithoutTransaction(') });
     }
@@ -42,14 +60,23 @@ function springSchedule(files) {
   return out;
 }
 
-/** De los schedulers de keel-dotnet: operación → { cron, withoutTransaction }, leyendo Tasks() y el método que despacha. */
+/**
+ * De keel-dotnet: operación → { cron, withoutTransaction }, leyendo Tasks() —o, con el cronómetro, su
+ * <Operación>ScheduleTimer— y el método que despacha.
+ */
 function dotnetSchedule(model, files) {
   const out = new Map();
-  for (const { service } of scheduledServices(model)) {
+  for (const { service, operations } of scheduledServices(model)) {
     const source = files.find((file) => file.path === schedulerPath(model, service)).content;
+    const bodyOf = (method) => source.slice(source.indexOf(`public async Task ${method}(`)).split('\n    }')[0];
     for (const [, name, cron, method] of source.matchAll(/new\("(\w+)", "([^"]+)", \(services, cancellationToken\) => services\.GetRequiredService<\w+>\(\)\.(\w+)\(cancellationToken\)\)/g)) {
-      const body = source.slice(source.indexOf(`public async Task ${method}(`)).split('\n    }')[0];
-      out.set(name, { cron, withoutTransaction: body.includes('DispatchWithoutTransaction(') });
+      out.set(name, { cron, withoutTransaction: bodyOf(method).includes('DispatchWithoutTransaction(') });
+    }
+    for (const operation of operations.filter((candidate) => scheduledByTimer(model, candidate.name))) {
+      const timer = files.find((file) => file.path.endsWith(`/${scheduleTimerClass(operation.name)}.cs`)).content;
+      const cron = /public string Spec => "([^"]+)";/.exec(timer)[1];
+      const method = /scheduler\.(\w+)\(cancellationToken\)/.exec(timer)[1];
+      out.set(operation.name, { cron, withoutTransaction: bodyOf(method).includes('DispatchWithoutTransaction(') });
     }
   }
   return out;
@@ -66,9 +93,12 @@ for (const name of SCHEDULED) {
       assert.deepEqual(schedule, theirs.get(operation), operation);
       assert.equal(schedule.cron.split(' ').length, 6, `${operation}: seis campos, el primero el segundo repartido`);
     }
-    // La prueba emitida espera el mismo cron de cada tarea.
+    // La prueba emitida espera el mismo cron de cada tarea (o de cada recurrente del cronómetro).
     const emitted = content(files, 'UnitTests/SchedulingTests.cs');
-    for (const [operation, { cron }] of ours) assert.match(emitted, new RegExp(`\\["${operation}"\\] = \\(\\w+\\.Tasks\\(\\), "${cron.replaceAll('*', '\\*')}"\\)`));
+    for (const [operation, { cron }] of ours) {
+      if (scheduledByTimer(model, operation)) assert.ok(emitted.includes(`Assert.Equal("${cron}", ${operation}.Spec);`), operation);
+      else assert.match(emitted, new RegExp(`\\["${operation}"\\] = \\(\\w+\\.Tasks\\(\\), "${cron.replaceAll('*', '\\*')}"\\)`));
+    }
   });
 }
 
@@ -84,7 +114,8 @@ test('un barrido con reclamo va sin transacción abarcadora; un cierre sin recla
   assert.equal(schedule.get('sendPayouts').withoutTransaction, true);
   assert.equal(schedule.get('closePayoutRuns').withoutTransaction, false);
   const handler = content(files, 'UseCases/SendPayoutsCommandHandler.cs');
-  assert.match(handler, /Scheduling\/PayoutScheduler\.cs\s+(\/\/\s+)?en TODAS las réplicas/);
+  // Con el cronómetro (inc. 8 del plan 2.26): lo dispara su ScheduleTimer en UNA réplica por tick, al menos una vez.
+  assert.match(handler, /SendPayoutsScheduleTimer, que llama a\s+(\/\/\s+)?\S*Scheduling\/PayoutScheduler\.cs\) en UNA réplica por tick/);
   assert.match(handler, /SIN TRANSACCIÓN ABARCADORA/);
   assert.match(content(files, 'UseCases/ClosePayoutRunsCommandHandler.cs'), /Corre en UNA transacción/);
 });

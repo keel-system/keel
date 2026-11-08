@@ -10,6 +10,7 @@
 import { HTTP_STUB_ADMIN, HTTP_STUB_ENDPOINTS, HTTP_STUB_FAULT, HTTP_STUB_INITIAL_STATE } from '@keel-system/keel-core/gen/http-stub-probes';
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { snakeCase } from '@keel-system/keel-core/gen';
+import { fireAgedCall } from './timer.js';
 import { csFile, csString, solution } from './render.js';
 import { usesRelational } from './persistence.js';
 import { usesHttpStub } from '@keel-system/keel-core/gen/features';
@@ -344,7 +345,7 @@ ${table(entry.staleTimestamp)}
         {
             Db(statement + IdLiteral(id));
         }
-    }`
+${fireAgedCall(model, 'activation')}    }`
   ];
   if (entry.heldTimestamp) {
     members.push(

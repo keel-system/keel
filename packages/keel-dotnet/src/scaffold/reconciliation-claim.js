@@ -28,6 +28,7 @@ import { dbContextClass, usesPersistence, usesDocument } from './persistence.js'
 import { documentReconciliationStoreBody } from './document-stores.js';
 import { rowFile } from './messaging-stores.js';
 import { usesMySql, valueAlias } from './relational-engine.js';
+import { sweepPassSignal } from './timer.js';
 
 export const RECONCILIATION_ROW = 'ReconciliationClaimRow';
 const STORE = 'ReconciliationClaimStore';
@@ -228,7 +229,8 @@ function describe(claim) {
   return `Reclama los ${claim.entity} que encargaron trabajo a ${claim.dependency}.${claim.activation} y llevan
 demasiado tiempo sin desenlace (${claim.awaitingField} más viejo que el umbral que declara el diseño).
 
-Reclama, no lee: corre en TODAS las réplicas a la vez, y la lista son SOLO los candidatos que ESTA se llevó. La marca
+Reclama, no lee: puede correr a la vez en varias réplicas (con el cronómetro, cuando un tick se repite al vencer su
+arriendo), y la lista son SOLO los candidatos que ESTA se llevó. La marca
 es una fila de reconciliation_claim confirmada antes de volver, así que las demás réplicas dejan de verlos; y CADUCA
 (claim-timeout-ms), porque sobrevive también a la réplica que muera con el candidato en vuelo.
 
@@ -304,7 +306,7 @@ export function adapterReconciliationMethods(model, entity, { ownTransactionHelp
                         claimed.Add(ToDomain(found));
                     }
                 }
-                return claimed;
+${sweepPassSignal(model, claim, 'candidates.Count', 'window.BatchSize', '                ')}                return claimed;
             },
             readOnly: false,
             cancellationToken,

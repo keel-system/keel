@@ -21,6 +21,7 @@ import { claimOrderField, claimsForEntity, screamingSnake } from '@keel-system/k
 import { OUTBOX_EVENT, PROCESSED_EVENT } from '@keel-system/keel-core/gen/messaging-stores';
 import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
 import { RECONCILIATION_CLAIM, reconciliationClaims } from '@keel-system/keel-core/gen/reconciliation-stores';
+import { sweepPassSignal } from './timer.js';
 import { documentShape, storeDocumentKey, storeDocumentFields } from '@keel-system/keel-core/gen/document';
 import { snakeCase } from '@keel-system/keel-core/gen/naming';
 import { csMember, csString } from './render.js';
@@ -456,7 +457,7 @@ ${setup.join('\n')}
             }
             claimed.Add(ToDomain${entity.name}(document));
         }
-        return claimed;
+${sweepPassSignal(model, claim, 'claimed.Count', 'batch')}        return claimed;
     }`;
   });
 }
@@ -505,7 +506,7 @@ export function documentReconciliationMethods(model, entity) {
                 claimed.Add(candidate);
             }
         }
-        return claimed;
+${sweepPassSignal(model, claim, 'candidates.Count', 'window.BatchSize')}        return claimed;
     }`;
     });
 }

@@ -61,6 +61,8 @@ import { spawnSync } from 'node:child_process';
 import { documentIndexes } from '@keel-system/keel-core/gen/document';
 import { planFixture, makeWorkspace, UNCOVERED_BRANCHES } from '../test/helpers/workspace.js';
 import { docProbeProject, documentDatabaseOf } from './lib/doc-probes.js';
+import { DRAIN_SABOTAGES, drainSabotageVerdict, isDrainSabotage } from './lib/timer-probes.js';
+import { timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerSabotageVerdict, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
 import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { resolveRuntime, startMongo, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
@@ -111,7 +113,9 @@ const SUBJECTS = [
 ].filter((subject) =>
   only
     ? subject.name === only
-    : isPurgeTimerSabotage(sabotage)
+    : isDrainSabotage(sabotage)
+      ? subject.name === 'job-dispatch-mongo'
+      : isPurgeTimerSabotage(sabotage)
       ? subject.name === 'notification-mailer-mongo'
       : !isTimerSabotage(sabotage) || subject.name === 'verification-codes-mongo'
 );
@@ -188,7 +192,9 @@ const SABOTAGES = {
   // El cronómetro y los plazos (DSL 2.26): cada uno cae en exactamente sus casos DL (scripts/lib/timer-probes.js).
   ...Object.fromEntries(Object.entries(TIMER_SABOTAGES).map(([id, spec]) => [id, spec.document])),
   // Las purgas en modo clúster (DSL 2.26, inc. 7): sobre notification-mailer-mongo, caen PT_R1 y PT_RC1.
-  ...Object.fromEntries(Object.entries(PURGE_TIMER_SABOTAGES).map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(PURGE_TIMER_SABOTAGES).map(([id, spec]) => [id, spec.document])),
+  // El drenaje del schedule (DSL 2.26, inc. 8): sobre job-dispatch-mongo, caen DR1 o DR3 del bloque del reclamo.
+  ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, spec]) => [id, spec.document]))
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación
@@ -288,7 +294,12 @@ try {
   for (const subject of subjects) {
     const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
     const ran = tested.output.includes(`${subject.probes.name}.dll`);
-    if (isPurgeTimerSabotage(sabotage) && timerPurges(subject.model).length > 0) {
+    if (isDrainSabotage(sabotage)) {
+      const verdict = drainSabotageVerdict(mine, sabotage);
+      step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
+    if (isPurgeTimerSabotage(sabotage) && (timerPurges(subject.model).length > 0 || timerSchedules(subject.model).length > 0)) {
       const verdict = purgeTimerSabotageVerdict(mine, sabotage);
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
       continue;

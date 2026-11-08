@@ -8,7 +8,7 @@
 // vacía los datos y RESPETA el historial de migraciones, que xUnit escribe el XML que `score-scenarios.sh` sabe
 // leer, y que cada desenlace sale con su código y su evidencia.
 //
-//   node packages/keel-dotnet/scripts/harness-check.js [--keep] [--sabotage=statement-count] [--database=mysql]
+//   node packages/keel-dotnet/scripts/harness-check.js [--keep] [--sabotage=statement-count|reset-timer] [--database=mysql]
 //   npm run harness-check --workspace packages/keel-dotnet
 //
 // --database=mysql genera el proyecto sobre MySQL: la misma cadena con su CLI, su reset y sus literales (UUID_TO_BIN).
@@ -16,6 +16,9 @@
 // --sabotage=statement-count quita el interceptor que cuenta las sentencias (statement-count.js) CONSERVANDO la ruta
 // que las sirve: la sonda del coste (FL-PROBE-001-E) tiene que salir en rojo, y solo ella. Medido el 2026-10-19: 3 pasos
 // rojos, la sonda y las dos pasadas siguientes del score (el 2 y el 0), que esperan la matriz en verde y la arrastran.
+//
+// --sabotage=reset-timer (DSL 2.26, inc. 8) devuelve al reset el vaciado entero de keel_timer: la sonda del cronómetro
+// (FL-PROBE-001-F) tiene que salir en rojo, y solo ella. Medido el 2026-11-08: los mismos 3 pasos rojos.
 //
 // Las pruebas de flujo son SONDAS escritas aquí (los handlers del proyecto recién generado son TODOs): una que pasa,
 // una que falla a propósito, una cuyo flujo no llega a arrancar, una que comprueba el orden de los escenarios y una
@@ -36,8 +39,8 @@ import { loadService } from '@keel-system/keel-core';
 
 const keep = process.argv.includes('--keep');
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
-if (sabotage && sabotage !== 'statement-count') {
-  console.error(`Sabotaje desconocido: ${sabotage}. El único es statement-count.`);
+if (sabotage && !['statement-count', 'reset-timer'].includes(sabotage)) {
+  console.error(`Sabotaje desconocido: ${sabotage}. Los hay: statement-count, reset-timer.`);
   process.exit(2);
 }
 const isWindows = process.platform === 'win32';
@@ -80,6 +83,9 @@ function dotnet(projectDir, args) {
 }
 
 const engine = process.argv.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? 'postgresql';
+// Un plazo de una entidad que no existe, para la sonda del cronómetro: el reset tiene que llevárselo.
+const uuidLiteral = (id) => (engine === 'mysql' ? `UUID_TO_BIN('${id}')` : `'${id}'`);
+const timerProbeInsert = `INSERT INTO keel_timer (id, kind, entity_id, due_at, attempts) VALUES (${uuidLiteral('11111111-1111-4111-8111-111111111111')}, 'deadline:Probe.pending', ${uuidLiteral('22222222-2222-4222-8222-222222222222')}, ${engine === 'mysql' ? 'UTC_TIMESTAMP(6)' : 'current_timestamp'}, 0)`;
 const workspace = makeWorkspace('keel-dotnet-harness-');
 mountDesign(workspace, DOTNET_READY_DESIGN.name, DOTNET_READY_DESIGN);
 const projectDir = path.join(workspace, 'services', `${DOTNET_READY_DESIGN.name}-dotnet`);
@@ -131,6 +137,19 @@ if (sabotage === 'statement-count') {
   }
   fs.writeFileSync(registration, text.replace(wired, '_ = options;'));
   console.log('(sabotaje: statement-count)');
+}
+// --sabotage=reset-timer (DSL 2.26, inc. 8): el reset vuelve a vaciar keel_timer entera, como antes. Verde es que caiga
+// la sonda del cronómetro (FL-PROBE-001-F): sin recurrentes, FireTimer no tiene qué adelantar.
+if (sabotage === 'reset-timer') {
+  const reset = path.join(projectDir, 'infra', 'reset-db.sh');
+  const original = fs.readFileSync(reset, 'utf8');
+  const sabotaged = original.replace(/, (?:'\\''|\\?")keel_timer(?:'\\''|\\?")\)/g, ')');
+  if (sabotaged === original) {
+    console.error('El sabotaje reset-timer no se aplica a lo emitido hoy (¿cambió el reset?).');
+    process.exit(2);
+  }
+  fs.writeFileSync(reset, sabotaged);
+  console.log('(sabotaje: reset-timer)');
 }
 const compiled = dotnet(projectDir, ['build', 'ProductCatalog.slnx', '-c', 'Debug']);
 if (!step('la solución compila (con el proyecto de flujos)', compiled.ok, compiled.ok ? '' : compiled.output.slice(-1500))) process.exit(1);
@@ -261,6 +280,25 @@ public sealed class ProbeOkFlow : FlowTest
         Assert.True(await QueryCount() - before <= small, "la página grande cuesta más que la pequeña");
     }
 
+    // El cronómetro (DSL 2.26, inc. 8): el reset conserva sus RECURRENTES —el reloj de la app, que solo los asegura al
+    // arrancar: sin ellos ningún barrido volvería a dispararse en la suite— y borra sus plazos; y FireTimer adelanta un
+    // recurrente que el sondeador de la app (otro proceso) recoge y rearma. product-catalog tiene cronómetro por sus purgas.
+    [Scenario("FL-PROBE-001-F: el reset conserva los recurrentes del cronómetro y FireTimer despierta al sondeador de la app")]
+    public async Task ElCronometroSobreviveAlReset()
+    {
+        const string DbNow = ${JSON.stringify(engine === 'mysql' ? 'UTC_TIMESTAMP(6)' : 'current_timestamp')};
+        string Count(string where) => Db("SELECT count(*) FROM keel_timer WHERE " + where).Trim();
+        await Eventually(() => Task.FromResult(Count("kind = 'purge:keel_timer'") == "1"), TimeSpan.FromSeconds(20), "la app no aseguró su recurrente al arrancar");
+        Db(${JSON.stringify(timerProbeInsert)});
+        ResetState();
+        Assert.Equal("1", Count("kind = 'purge:keel_timer'"));
+        Assert.Equal("0", Count("kind = 'deadline:Probe.pending'"));
+        FireTimer("purge:keel_timer");
+        // El sondeador duerme como mucho timer.max-sleep-ms (30 s en local): lo recoge, lo ejecuta y lo rearma para su cron, en
+        // el futuro. Se compara con la hora de la base, no con el valor de después de adelantarlo: no depende de quién llegue antes.
+        await Eventually(() => Task.FromResult(Count("kind = 'purge:keel_timer' AND due_at > " + DbNow) == "1"), TimeSpan.FromSeconds(45), "el sondeador de la app no recogió el recurrente adelantado");
+    }
+
     // Un id que el documento no declara: sale AJENO y no puntúa (keel-core/gen/junit-scoring).
     [Scenario("FL-PROBE-099-A: un caso fuera del documento")]
     public void FueraDelDocumento() => Assert.True(true);
@@ -342,11 +380,12 @@ public sealed class ProbeOrderFlow : FlowTest
   const has = (pattern) => pattern.test(lines);
   step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/) && has(/OK\s+FL-PROBE-001-D/), has(/OK\s+FL-PROBE-001-D/) ? '' : lines.slice(-2500));
   step('score: el coste de una petición se cuenta en el servidor (FL-PROBE-001-E)', has(/OK\s+FL-PROBE-001-E/), has(/FL-PROBE-001-E/) ? '' : 'sin fila FL-PROBE-001-E');
+  step('el reset conserva los recurrentes del cronómetro y FireTimer despierta al sondeador de la app (FL-PROBE-001-F)', has(/OK\s+FL-PROBE-001-F/), has(/FL-PROBE-001-F/) ? '' : 'sin fila FL-PROBE-001-F');
   step('score: los escenarios de un flujo corren en el orden escrito', has(/OK\s+FL-PROBE-005-B/), has(/FL-PROBE-005-B/) ? '' : 'sin fila FL-PROBE-005-B');
   step('score: el que falla sale FALLO con la ruta de su evidencia', has(/FALLO\s+FL-PROBE-002-A\s+ProbeFailFlow\s+build\/keel-failures\/FL-PROBE-002-A\.json/));
   step('score: el flujo que no arranca deja sus casos OMITIDOS', has(/OMITIDO\s+FL-PROBE-003-A/), has(/OMITIDO/) ? '' : 'sin fila OMITIDO');
   step('score: y lo nombra como arnés roto, con su causa', has(/ARNÉS/) && has(/ProbeInitFlow\s+\(arranque del flujo\)/) && has(/keel_tabla_que_no_existe/));
-  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && new RegExp(`RESULTADO: KO — ${sabotage ? 7 : 8} OK`).test(lines));
+  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && new RegExp(`RESULTADO: KO — ${sabotage ? 8 : 9} OK`).test(lines));
   step('score: un flujo del documento sin prueba sale NO_EJERC', has(/NO_EJERC\s+FL-PROBE-004/) && !has(/NO_EJERC\s+FL-PROBE-00[1235]/));
   step('score: con algo que arbitrar sale con 1', run1.status === 1, `código ${run1.status}`);
   let report = null;

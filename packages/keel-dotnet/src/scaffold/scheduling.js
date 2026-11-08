@@ -21,6 +21,7 @@ import { usesCorrelation } from './rest-support.js';
 import { configNamespace } from './config.js';
 import { persistenceNamespace } from './persistence.js';
 import { purgeNamespace, usesTablePurges } from './purge.js';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -314,10 +315,14 @@ function wrapLines(text, width = 110) {
 function schedulerBody(model, service, operations) {
   const className = schedulerClass(service);
   const correlated = usesCorrelation(model);
-  const tasks = operations.map(
-    (operation) =>
-      `        new(${csString(operation.name)}, ${csString(scheduleCron(model, operation))}, (services, cancellationToken) => services.GetRequiredService<${className}>().${csMethod(operation.name)}(cancellationToken))`
-  );
+  // Lo que dispara el cronómetro (inc. 8 del plan 2.26) no es una tarea del reloj: lo llama su <Operación>ScheduleTimer.
+  const tasks = operations
+    .filter((operation) => !scheduledByTimer(model, operation.name))
+    .map(
+      (operation) =>
+        `        new(${csString(operation.name)}, ${csString(scheduleCron(model, operation))}, (services, cancellationToken) => services.GetRequiredService<${className}>().${csMethod(operation.name)}(cancellationToken))`
+    );
+  const onTimer = operations.every((operation) => scheduledByTimer(model, operation.name));
   const methods = operations.map((operation) => {
     const mode = scheduleDispatch(model, operation);
     const why = {
@@ -333,7 +338,10 @@ function schedulerBody(model, service, operations) {
             'sin confirmar hasta el final del lote: ninguna réplica lo ve y todas actúan sobre los mismos candidatos.'
         : 'Despachado con la transacción del caso de uso: no llama a nadie en medio de su trabajo.'
     );
-    const doc = xmlDoc([operation.schedule.description, `Cron del diseño: ${operation.schedule.cron} (build añade el segundo de arranque).`, ...note], '    ');
+    const trigger = scheduledByTimer(model, operation.name)
+      ? [`Lo dispara ${csMethod(operation.name)}ScheduleTimer (el cronómetro): una réplica por tick, con drenaje.`]
+      : [];
+    const doc = xmlDoc([operation.schedule.description, `Cron del diseño: ${operation.schedule.cron} (build añade el segundo de arranque).`, ...trigger, ...note], '    ');
     const name = csMethod(operation.name);
     if (messageComponents(operation, model).length > 0) {
       return `${doc}    public Task ${name}(CancellationToken cancellationToken)
@@ -365,8 +373,16 @@ ${body}
 /// </summary>
 /// <remarks>
 /// <para>
-/// Cada método corre en TODAS las réplicas del servicio. No todos despachan igual, y no es un descuido: lo decide el
-/// diseño (keel-core/gen/scheduling.js), igual que en los servidores de keel-spring y keel-nest.
+${
+    onTimer
+      ? `/// Los dispara el cronómetro: cada operación tiene su &lt;Operación&gt;ScheduleTimer en Infrastructure/Timers, un recurrente de
+/// keel_timer que ejecuta UNA réplica por tick —la que gana su fila— y que repite la pasada mientras el lote salga lleno.
+/// Estos métodos solo despachan. El tick es al menos una vez (si la réplica muere a mitad, otra lo repite al vencer el
+/// arriendo), así que lo que actúa sobre lo que encuentra sigue reclamándolo. No todos despachan igual, y no es un
+/// descuido: lo decide el diseño (keel-core/gen/scheduling.js), igual que en los servidores de keel-spring y keel-nest.`
+      : `/// Cada método corre en TODAS las réplicas del servicio. No todos despachan igual, y no es un descuido: lo decide el
+/// diseño (keel-core/gen/scheduling.js), igual que en los servidores de keel-spring y keel-nest.`
+  }
 /// </para>
 /// <para>
 /// El primer campo del cron —el segundo— no es 0 por casualidad: el diseño declara cinco campos y build reparte el
@@ -376,11 +392,9 @@ ${body}
 /// </remarks>
 public sealed class ${className}(${ctor})
 {
-    /// <summary>Las tareas de este grupo, con su cron de seis campos.</summary>
+    /// <summary>Las tareas de este grupo, con su cron de seis campos${onTimer ? ': ninguna, las dispara el cronómetro' : ''}.</summary>
     public static IReadOnlyList<ScheduledTask> Tasks() =>
-    [
-${tasks.join(',\n')}
-    ];
+    [${tasks.length > 0 ? `\n${tasks.join(',\n')}\n    ` : ''}];
 
 ${methods.join('\n\n')}
 }`;

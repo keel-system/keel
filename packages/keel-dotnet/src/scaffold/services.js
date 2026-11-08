@@ -26,6 +26,7 @@ import { mapperOf } from './mappers.js';
 import { repositoryRoots, repositoryOf, portClass, repositoriesNamespace } from './repositories.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from '@keel-system/keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_PORT, idempotencyNamespace, usesRegistry, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_SCOPE_PORT, CALLER_ROLES_PORT, callerResolution, roleCheckedOperation, scopedOperation } from './security.js';
@@ -490,7 +491,7 @@ function handlerNotes(model, operation) {
   }
   const caching = cacheNote(model, operation, { call: cacheCall(operation) });
   if (caching) notes.push(caching);
-  for (const note of reconciliationNotes(operation)) notes.push(note);
+  for (const note of reconciliationNotes(model, operation)) notes.push(note);
   const compensation = compensationNote(operation);
   if (compensation) notes.push(compensation);
   for (const note of activationNotes(model, operation)) notes.push(note);
@@ -513,7 +514,7 @@ function handlerNotes(model, operation) {
  * un segundo mecanismo en paralelo—; sin él, sí. Lo que es suyo en las dos (el ORDEN de los commits, la carrera con el
  * camino feliz, qué hacer con cada candidato) va en las dos.
  */
-function reconciliationNotes(operation) {
+function reconciliationNotes(model, operation) {
   return (operation.reconciles ?? []).map(({ dependency, activation, waiting, claim }) => {
     const head =
       `Reconciliación de ${dependency}.${activation.name}: barre los encargos que nunca recibieron desenlace — el evento que los cerraría puede no llegar nunca. `;
@@ -528,7 +529,7 @@ function reconciliationNotes(operation) {
       const repository = `${claim.entity[0].toLowerCase()}${claim.entity.slice(1)}Repository`;
       return (
         head +
-        `EL RECLAMO YA ESTÁ GENERADO: toma el lote con await ${repository}.${csMember(claim.method)}(cancellationToken). Devuelve SOLO los candidatos que ESTA réplica se llevó —el barrido corre en todas a la vez— y ya trae dentro el umbral que declara el diseño, la cota del lote y la caducidad de la marca (config/parameters/<perfil>/reconciliation.yaml). NO escribas otro reclamo (ni un finder por estado, ni un lock, ni una marca propia en ${claim.entity}): un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor. ` +
+        `EL RECLAMO YA ESTÁ GENERADO: toma el lote con await ${repository}.${csMember(claim.method)}(cancellationToken). Devuelve SOLO los candidatos que ESTA réplica se llevó —${scheduledByTimer(model, operation.name) ? 'el tick del cronómetro es al menos una vez y puede repetirse en otra réplica' : 'el barrido corre en todas a la vez'}— y ya trae dentro el umbral que declara el diseño, la cota del lote y la caducidad de la marca (config/parameters/<perfil>/reconciliation.yaml). NO escribas otro reclamo (ni un finder por estado, ni un lock, ni una marca propia en ${claim.entity}): un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor. ` +
         decide +
         noTransaction +
         reconciliationOrder(operation, activation, true) +
@@ -718,9 +719,20 @@ function scheduleNotes(model, operation) {
   if (!operation.schedule) return [];
   const mode = scheduleDispatch(model, operation);
   const where = schedulerPath(model, model.services.find((service) => service.operations.includes(operation)));
+  // Con el cronómetro (inc. 8 del plan 2.26) la dispara su <Operación>ScheduleTimer en UNA réplica por tick, al menos una
+  // vez; y si el reclamo lo escribe el agente, es él quien avisa del lote lleno para que el tick drene.
+  const agentClaims = (operation.claim ?? []).length === 0 && !(operation.reconciles ?? []).some((reconcile) => reconcile.claim);
+  const timerClass = `${operation.name[0].toUpperCase()}${operation.name.slice(1)}ScheduleTimer`;
   return [
-    `Por reloj (cron ${operation.schedule.cron}): la dispara ${where} en TODAS las réplicas a la vez. Lo que ` +
-      'actúa sobre lo que encuentra tiene que RECLAMARLO (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo.',
+    scheduledByTimer(model, operation.name)
+      ? `Por reloj (cron ${operation.schedule.cron}): la dispara el cronómetro (${timerClass}, que llama a ${where}) en UNA réplica por tick, pero AL MENOS UNA VEZ: si la réplica muere a mitad de la pasada, otra la repite al vencer el arriendo. Lo que ` +
+        'actúa sobre lo que encuentra tiene que RECLAMARLO (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo. ' +
+        'El tick DRENA: repite la pasada mientras el lote salga lleno, así que no proceses más de un lote por pasada.' +
+        (agentClaims && operation.sweep
+          ? ' Si el lote lo reclamas tú, AVISA del lote lleno con SweepPass.Claimed(reclamadas, lote) (Application/Support) justo después de reclamar; sin el aviso el tick hace una sola pasada.'
+          : '')
+      : `Por reloj (cron ${operation.schedule.cron}): la dispara ${where} en TODAS las réplicas a la vez. Lo que ` +
+        'actúa sobre lo que encuentra tiene que RECLAMARLO (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo.',
     mode.withoutTransaction
       ? 'SIN TRANSACCIÓN ABARCADORA: el scheduler la despacha con DispatchWithoutTransaction, así que cada llamada al adaptador de ' +
         'repositorio confirma la SUYA. El orden es el de los commits: reclamar y confirmar, actuar fuera de toda transacción, ' +

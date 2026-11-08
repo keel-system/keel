@@ -66,7 +66,8 @@ test('el reset respeta la tabla de historial que declara el contexto de EF Core'
   assert.equal(DOTNET_INFRA.historyTable, MIGRATIONS_TABLE);
   // El comando va entre comillas simples de bash: la del literal SQL sale escapada.
   const quoted = String.raw`'\''` + MIGRATIONS_TABLE + String.raw`'\''`;
-  assert.ok(files['infra/reset-db.sh'].includes(`tablename <> ${quoted}`), 'el reset excluye la tabla de historial');
+  // Junto a keel_timer, cuyos recurrentes conserva (inc. 8 del plan 2.26): son el reloj de la app, no datos.
+  assert.ok(files['infra/reset-db.sh'].includes(`tablename NOT IN (${quoted}, `), 'el reset excluye la tabla de historial');
   assert.doesNotMatch(files['infra/reset-db.sh'], /flyway|typeorm|\{history\}/i);
 });
 

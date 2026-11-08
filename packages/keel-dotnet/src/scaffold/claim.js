@@ -20,6 +20,7 @@
 // del estado son del generador, y solo los instantes, el lote y el id viajan como parámetro. Ninguno de los tres
 // generadores sube la versión del bloqueo optimista en el reclamo.
 
+import { sweepPassSignal } from './timer.js';
 import { claimOrderField, claimsForEntity, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { envWithDefault } from '@keel-system/keel-core/gen/profile-values';
 import { csFile, csMember, csString, located, xmlDoc } from './render.js';
@@ -140,7 +141,8 @@ function describe(claim, entityName) {
     return `Rescata hasta el lote de ${entityName} ATASCADOS en ${claim.stalled.state}: los devuelve SIGUIENDO en ${claim.stalled.state}, con
 ${claim.stalled.stampField} renovado, para que el handler los pase a ${claim.to}.
 
-Reclama, no lee: corre en TODAS las réplicas, y solo devuelve lo que ESTA se llevó (un UPDATE condicional que
+Reclama, no lee: puede correr a la vez en varias réplicas (en todas con el reloj; con el cronómetro, cuando un tick
+se repite al vencer su arriendo), y solo devuelve lo que ESTA se llevó (un UPDATE condicional que
 solo casa si la fila sigue atascada, y que renueva el reloj).
 
 No cambia el estado, lo ARRIENDA: la transición a ${claim.to} es del dominio, que fija los campos que ese estado
@@ -153,7 +155,8 @@ alguien dejó a medias: si el ciclo que murió ya produjo un efecto irreversible
   const due = claim.due ? ` Solo los que ya vencieron (${claim.due.field} <= ahora).` : '';
   return `Reclama hasta el lote de ${entityName} en ${claim.from.join(' o ')} y los pasa a ${claim.to}.${due}
 
-Reclama, no lee: corre en TODAS las réplicas a la vez, y lo que devuelve son SOLO las filas que ESTA se llevó
+Reclama, no lee: puede correr a la vez en varias réplicas (en todas con el reloj; con el cronómetro, cuando un tick
+se repite al vencer su arriendo), y lo que devuelve son SOLO las filas que ESTA se llevó
 (el paso a ${claim.to} va en un UPDATE condicional). Leer el lote con un finder y marcarlo después se lo daría
 entero a todas. Actúa sobre lo que devuelve FUERA de su transacción.${stamp}${own}`;
 }
@@ -238,7 +241,7 @@ ${setup.join('\n')}
                         claimed.Add(ToDomain(found));
                     }
                 }
-                return claimed;
+${sweepPassSignal(model, claim, 'candidates.Count', 'batch', '                ')}                return claimed;
             },
             readOnly: false,
             cancellationToken,

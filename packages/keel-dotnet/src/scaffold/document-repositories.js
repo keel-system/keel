@@ -23,7 +23,7 @@ import { domainMembers } from './entities.js';
 import { persistenceNamespace } from './persistence.js';
 import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
 import { claimDependencies, guardClaimsFor, storedState } from './claim.js';
-import { documentArming, timerDependencies } from './timer.js';
+import { documentArming, sweepPassNamespace, timerDependencies } from './timer.js';
 import { reconciliationDependencies } from './reconciliation-claim.js';
 import { documentGuardMethods, documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
@@ -540,6 +540,8 @@ ${methods.join('\n\n')}
 
 ${[...entityFns, ...voFns].join('\n\n')}
 }`;
+  // La señal del drenaje del cronómetro (inc. 8 del plan 2.26), si algún reclamo la da.
+  if (body.includes('SweepPass.Claimed(')) usings.push(sweepPassNamespace(model));
   return { path, content: csFile({ namespace, usings, body }) };
 }
 

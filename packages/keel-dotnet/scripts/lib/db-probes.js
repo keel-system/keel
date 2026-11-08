@@ -47,7 +47,7 @@ import { registryOperations } from '@keel-system/keel-core/gen/request-idempoten
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
-import { purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsings, timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
+import { DRAIN_SAMPLES, drainProbes, drainSubject, purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsings, timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
 import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
@@ -1587,8 +1587,11 @@ ${tests.join('\n\n')}`;
 
 /** Cuántas muestras propias necesitan los reclamos de una raíz: cada sonda guarda las suyas, que no se reutilizan. */
 export function claimSampleCount(model, root) {
-  // En MySQL, una más por reclamo de cola: la de la sonda del aislamiento.
-  return claimsForEntity(model, root.name).reduce((total, claim) => total + (claim.stalled ? 5 : usesMySql(model) ? 10 : 9), 0);
+  // En MySQL, una más por reclamo de cola: la de la sonda del aislamiento. Y las del drenaje (DR-1 a DR-3, inc. 8).
+  return (
+    claimsForEntity(model, root.name).reduce((total, claim) => total + (claim.stalled ? 5 : usesMySql(model) ? 10 : 9), 0) +
+    (drainSubject(model, root) ? DRAIN_SAMPLES : 0)
+  );
 }
 
 /** Las SweepSettings de las sondas: lotes de DOS (con tres filas, dos pasadas) y los plazos de los defaults. */
@@ -1700,6 +1703,18 @@ ${stateOf}
         });`);
       }
       continue;
+    }
+    // El DRENAJE del tick (DSL 2.26, inc. 8), sobre el reclamo de la cola con el adaptador real: lote de 2.
+    const drain = drainSubject(model, root);
+    if (drain && drain.queue === claim) {
+      tests.push(
+        ...drainProbes(drain, {
+          seed: (count) => `            await InScope(other => other.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(${csString(parkSql(claim.from))}, Cancel));
+${seed(take(count), claim.from[0], null, () => 'DateTimeOffset.UtcNow')}`,
+          remaining: `await InScope(other => other.GetRequiredService<${context}>().Database.SqlQuery<long>($"SELECT COUNT(*) ${sqlDialect(model).alias} FROM ${table} WHERE ${stateColumn} = '${constant(claim.from[0])}'").SingleAsync(Cancel))`,
+          claim: claimVia(method)
+        })
+      );
     }
     const order = snakeCase(claimOrderField(root, claim));
     const [a, b, c] = take(3);

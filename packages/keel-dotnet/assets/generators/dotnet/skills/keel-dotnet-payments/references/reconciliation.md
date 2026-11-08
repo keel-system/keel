@@ -10,7 +10,9 @@ constante—, el que más lleva esperando primero.
 
 ## El reclamo
 
-El scheduler corre en todas las réplicas y despacha el barrido **sin transacción abarcadora**. Antes de consultar, cada
+El barrido lo dispara el cronómetro en una réplica por tick, pero al menos una vez (si la réplica muere a mitad, otra
+repite el tick), y el scheduler lo despacha **sin transacción abarcadora**. Si tu lote sale lleno, avísalo con
+`SweepPass.Claimed(reclamados, lote)` y el tick repetirá la pasada. Antes de consultar, cada
 candidato se reclama con una escritura CONDICIONAL que vuelve a estampar `AwaitingSince`, en su propio ámbito y su propia
 transacción; la réplica que pierde ve 0 filas y lo salta. Sin reclamo, las N réplicas consultan el mismo cobro, y si la
 consulta desencadena una escritura, la hacen N veces.

@@ -10,8 +10,8 @@
 //   · ejecutado por archivo, mongosh NO imprime el valor de la última expresión: sin el envoltorio `print(...)` un
 //     countDocuments devuelve cadena vacía, y la cadena vacía se parece a un cero.
 
-import { CLOCK, setStateScript, ageClockScript, holdClockScript, missingClockCountScript, ageDeadlineScript } from '@keel-system/keel-core/gen/mongo-probes';
-import { documentAgingMembers } from './timer.js';
+import { CLOCK, setStateScript, ageClockScript, holdClockScript, missingClockCountScript, ageDeadlineScript, fireTimerScript } from '@keel-system/keel-core/gen/mongo-probes';
+import { documentAgingMembers, fireAgedCall, fireScheduleCall, fireTimerMembers } from './timer.js';
 import { rescueProbes } from '@keel-system/keel-core/gen';
 import { documentShape } from '@keel-system/keel-core/gen/document';
 import { csString } from './render.js';
@@ -37,7 +37,8 @@ export function documentFlowMembers(model, probe) {
   const aging = agingMembers(model);
   // El plazo envejecido (DSL 2.26, D7): AgeForDeadline, con el script de keel-core.
   const deadlines = documentAgingMembers(model, ageDeadlineScript);
-  members.push(...rescue, ...aging, ...deadlines);
+  // El cronómetro (inc. 8 del plan 2.26): FireTimer, y los helpers que adelantan el barrido tras fabricar su precondición.
+  members.push(...rescue, ...aging, ...deadlines, ...fireTimerMembers(model, fireTimerScript));
   if (rescue.length > 0 || aging.length > 0 || deadlines.length > 0) {
     members.push(`    /// <summary>Un id de documento para un script: valida la forma antes de meterlo dentro de <c>UUID("…")</c>.</summary>
     private static string DocumentId(string id) =>
@@ -76,7 +77,7 @@ ${rows.join('\n')}
     {
         var (prefix, suffix) = RescueOf(operation).Stall;
         MongoEval(prefix + DocumentId(id) + suffix);
-    }`,
+${fireScheduleCall(model, 'operation')}    }`,
     `    /// <summary>
     /// Lo mismo con el reloj a AHORA: acaba de entrar en vuelo y hay alguien trabajando en él. Un rescate sin cota temporal
     /// pasa el escenario del rescate y falla aquí.
@@ -85,7 +86,7 @@ ${rows.join('\n')}
     {
         var (prefix, suffix) = RescueOf(operation).Put;
         MongoEval(prefix + DocumentId(id) + suffix);
-    }`,
+${fireScheduleCall(model, 'operation')}    }`,
     `    /// <summary>
     /// Cuántos documentos quedaron EN VUELO sin reloj. Tiene que valer cero siempre. Vacío NO es cero: es un fallo del
     /// transporte, y se dice.
@@ -140,7 +141,7 @@ ${table(ageClockScript)}
         {
             MongoEval(prefix + DocumentId(id) + suffix);
         }
-    }`,
+${fireAgedCall(model, 'activation')}    }`,
     `    /// <summary>Las marcas de espera que retiene HoldFromReconciliation, por activación.</summary>
     private static readonly Dictionary<string, (string Prefix, string Suffix)[]> ReconciliationHolding = new(StringComparer.Ordinal)
     {

@@ -29,7 +29,8 @@ import { DOTNET_INFRA } from './infra.js';
 import { usesApi } from './rest-support.js';
 import { usesRelational, usesDocument } from './persistence.js';
 import { PRINT_WRAPPER } from '@keel-system/keel-core/gen/mongo-probes';
-import { relationalAgingMembers } from './timer.js';
+import { fireScheduleCall, fireTimerMembers, firesTimer, relationalAgingMembers } from './timer.js';
+import { fireTimerScript } from '@keel-system/keel-core/gen/mongo-probes';
 import { documentFlowMembers, documentSmokeCase } from './document-harness.js';
 import { csFile, csString, solution } from './render.js';
 import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
@@ -144,7 +145,8 @@ function flowTestCs(model) {
     const aging = reconciliationAgingMembers(model);
     // El plazo envejecido (DSL 2.26, D7): AgeForDeadline, con la sentencia del cronómetro de keel-core.
     const deadlines = relationalAgingMembers(model);
-    helpers.push(...rescue, ...aging, ...deadlines);
+    // El cronómetro (inc. 8 del plan 2.26): FireTimer, y los helpers que adelantan el barrido tras fabricar su precondición.
+    helpers.push(...rescue, ...aging, ...deadlines, ...fireTimerMembers(model, fireTimerScript));
     // El id como literal del motor: lo comparten el rescate, la reconciliación y los plazos.
     if (rescue.length > 0 || aging.length > 0 || deadlines.length > 0) helpers.push(idLiteralMember(model));
   }
@@ -823,16 +825,22 @@ ${rows.join('\n')}
     };`,
     `    /// <summary>
     /// Deja la fila <paramref name="id"/> EN VUELO con el reloj infinitamente rancio: el estado exacto en el que queda una
-    /// réplica que murió con ella en la mano, que es lo que el rescate busca. No dispara el barrido —lo dispara su cron, como
-    /// en producción— y no siembra la fila: mueve una creada por la API.
+    /// réplica que murió con ella en la mano, que es lo que el rescate busca. ${firesTimer(model) ? 'Adelanta además el barrido en el cronómetro (FireTimer): vence ya y lo ejecuta UNA réplica en su próxima pasada' : 'No dispara el barrido —lo dispara su cron, como en producción—'}, y
+    /// no siembra la fila: mueve una creada por la API.
     /// </summary>
-    protected static void StallInFlight(string operation, string id) => Db(RescueOf(operation).Stall + IdLiteral(id));`,
+    protected static void StallInFlight(string operation, string id)
+    {
+        Db(RescueOf(operation).Stall + IdLiteral(id));
+${fireScheduleCall(model, 'operation')}    }`,
     `    /// <summary>
     /// Lo mismo con el reloj a AHORA: la fila acaba de entrar en vuelo y hay alguien trabajando en ella. Es la mitad que separa
     /// rescatar de robarle el trabajo a quien lo está haciendo: un rescate sin cota temporal pasa el escenario del rescate y
     /// falla aquí.
     /// </summary>
-    protected static void PutInFlight(string operation, string id) => Db(RescueOf(operation).Put + IdLiteral(id));`,
+    protected static void PutInFlight(string operation, string id)
+    {
+        Db(RescueOf(operation).Put + IdLiteral(id));
+${fireScheduleCall(model, 'operation')}    }`,
     `    /// <summary>
     /// Cuántas filas quedaron EN VUELO con el reloj sin estampar. Tiene que valer cero siempre: si el reclamo mueve el estado
     /// sin estampar la marca en el MISMO UPDATE, la fila que caiga en esa ventana queda irrescatable.

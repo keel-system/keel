@@ -20,12 +20,16 @@
 //     siguiente vencimiento, y se despierta al armar. Se apaga con `scheduling.enabled` (TIMER_SWITCH);
 //   · el despacho de cada plazo (`<Entidad><Estado>Deadline`) y la purga de la propia tabla (R7), el primer recurrente.
 //
-// Ningún reloj de los que ya existían cambia en este incremento (las purgas, los `schedule` y el relay siguen en
-// Scheduling/OutboxRelay; migran en los incrementos 7, 8 y 9). El modo POR RÉPLICA no se emite: su único usuario es el
-// relay (inc. 9), y un modo sin sujeto sería código que ninguna red ejecuta.
+// Desde el incremento 7, las purgas de las tablas del generador corren aquí como recurrentes en modo clúster
+// (`<Tabla>PurgeTimer`); desde el 8, el `schedule` de cada operación también (`<Operación>ScheduleTimer`, que llama al
+// método del `<Grupo>Scheduler`, ya fuera de las tareas de Scheduling), con DRENAJE: el tick lo ejecuta una réplica y
+// repite la pasada mientras su lote salga lleno (`SweepPass`, que avisan los reclamos generados). Un recurrente que falla
+// no se aparca: se rearma. El relay sigue en OutboxRelay: migra en el incremento 9. El modo POR RÉPLICA no se emite: su
+// único usuario es el relay, y un modo sin sujeto sería código que ninguna red ejecuta.
 
 import { modelDeadlines, usesDeadlines, lateGuards, CLOCK_PORT } from '@keel-system/keel-core/gen/deadlines';
-import { TIMER_DATABASES, timerPurges, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { TIMER_DATABASES, claimDrains, clusterRecurrings, scheduledByTimer, timerPurges, timerSchedules, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { agingSweeps } from '@keel-system/keel-core/gen/aging-targets';
 import { pascalCase } from '@keel-system/keel-core/gen';
 import {
   KEEL_TIMER,
@@ -35,6 +39,7 @@ import {
   TIMER_PURGE_KIND,
   TIMER_SWITCH,
   CRON_UTC_CASES,
+  scheduleKind,
   timerStatements
 } from '@keel-system/keel-core/gen/timer-store';
 import { envWithDefault, cronWithDefault } from '@keel-system/keel-core/gen/profile-values';
@@ -62,6 +67,36 @@ export function purgeTimerClass(table) {
 export function purgeKindConstant(table) {
   return `Purge${pascalCase(table)}`;
 }
+/** `DispatchJobsScheduleTimer`: el recurrente que dispara el `schedule` de una operación (el nombre de keel-spring). */
+export function scheduleTimerClass(operationName) {
+  return `${operationName[0].toUpperCase()}${operationName.slice(1)}ScheduleTimer`;
+}
+/** La constante de `TimerKinds` del `schedule` de una operación: `ScheduleDispatchJobs`. */
+export function scheduleKindConstant(operationName) {
+  return `Schedule${operationName[0].toUpperCase()}${operationName.slice(1)}`;
+}
+/** El `<Grupo>Scheduler` que despacha una operación con `schedule`: el de su servicio (scheduling.js). */
+export function schedulerClassOf(model, operationName) {
+  const service = (model.services ?? []).find((candidate) => (candidate.operations ?? []).some((operation) => operation.name === operationName));
+  return service.className.replace(/Service$/, 'Scheduler');
+}
+
+/** La señal de lote lleno del drenaje (inc. 8): en Application/Support, porque la llaman también los handlers del agente. */
+export function usesSweepPass(model) {
+  return timerSchedules(model).length > 0;
+}
+/**
+ * La línea con la que un reclamo GENERADO avisa al tick de que su lote salió lleno (o nada, si su operación no corre
+ * sobre el cronómetro). `size` y `batch` son expresiones C#; `indent`, la sangría.
+ */
+export function sweepPassSignal(model, claim, size, batch, indent = '        ') {
+  if (!claimDrains(model, claim)) return '';
+  return `${indent}// Lote lleno: puede que queden candidatos, y el tick del cronómetro repite la pasada (drenaje).
+${indent}SweepPass.Claimed(${size}, ${batch});
+`;
+}
+/** El namespace de SweepPass, para los usings de quien la llama. */
+export const sweepPassNamespace = (model) => namespaceOf(model, 'appSupport');
 
 /** Las sentencias del almacén relacional, en el orden en que se emiten: los nombres son los de `timerStatements`. */
 export const TIMER_STATEMENTS = Object.freeze(['dbNow', 'arm', 'ensureRecurring', 'claimLock', 'claimMark', 'claimed', 'complete', 'reschedule', 'fail', 'nextDueMs', 'parkedCount', 'purge']);
@@ -337,6 +372,10 @@ export function generate(model) {
     timer('TimerPoller', ['Cronos', 'Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.Hosting', 'Microsoft.Extensions.Logging', namespaceOf(model, 'persistence')], pollerBody()),
     timer('KeelTimerPurge', [], purgeBody()),
     ...timerPurges(model).map((purge) => timer(purgeTimerClass(purge.table), [namespaceOf(model, 'purge')], purgeTimerBody(model, purge))),
+    ...timerSchedules(model).map((schedule) =>
+      timer(scheduleTimerClass(schedule.operation), ['System.Diagnostics', namespaceOf(model, 'scheduling'), sweepPassNamespace(model)], scheduleTimerBody(model, schedule))
+    ),
+    ...(usesSweepPass(model) ? [sweepPassFile(model)] : []),
     timer('TimerRegistration', registrationUsings(model), registrationBody(model)),
     ...modelDeadlines(model).map((entry) => timer(deadlineHandlerClass(entry.entity.name, entry.deadline.stateName), handlerUsings(model, entry), deadlineHandlerBody(model, entry))),
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/timer.yaml`, content: timerYaml(profile) })),
@@ -395,6 +434,10 @@ function timerKindsBody(model) {
     ...timerPurges(model).map(
       (purge) => `    /// <summary>La purga de <c>${purge.table}</c>: un recurrente en modo clúster.</summary>
     public const string ${purgeKindConstant(purge.table)} = ${csString(purge.kind)};`
+    ),
+    ...timerSchedules(model).map(
+      (schedule) => `    /// <summary>El <c>schedule</c> de ${schedule.operation}: un recurrente en modo clúster, con drenaje.</summary>
+    public const string ${scheduleKindConstant(schedule.operation)} = ${csString(schedule.kind)};`
     )
   ];
   return `/// <summary>
@@ -456,8 +499,8 @@ public interface ITimerHandler
 /// </summary>
 /// <remarks>
 /// El tick corre FUERA de toda transacción, a diferencia de un plazo: un recurrente (una purga por lotes) gestiona las suyas,
-/// y envolverlo en una sola volvería a ser el DELETE único que la purga por lotes sustituye. Si lanza, cuenta como un fallo
-/// del temporizador, igual que un plazo.
+/// y envolverlo en una sola volvería a ser el DELETE único que la purga por lotes sustituye. Si lanza, el sondeador lo registra
+/// y lo rearma para su siguiente tick: un recurrente no se aparca nunca.
 /// </remarks>
 public interface IRecurringTimerHandler
 {
@@ -556,6 +599,7 @@ export const TIMER_CONFIG_PARAMETERS = Object.freeze([
   TIMER_PARAMETERS.leaseMs,
   TIMER_PARAMETERS.maxAttempts,
   TIMER_PARAMETERS.retryDelayMs,
+  TIMER_PARAMETERS.drainBudgetMs,
   TIMER_PARAMETERS.retentionDays,
   TIMER_PARAMETERS.purgeCron
 ]);
@@ -609,11 +653,12 @@ function timerSettingsBody() {
 /// <param name="RetryDelayMs">Tras un fallo, cuándo se vuelve a intentar.</param>
 /// <param name="RetentionDays">La purga de la tabla se lleva lo vencido hace más que esto y sin reclamar.</param>
 /// <param name="PurgeCron">Cuándo corre esa purga: seis campos, en UTC (T7).</param>
-public sealed record TimerSettings(bool Enabled, long MaxSleepMs, int BatchSize, long LeaseMs, int MaxAttempts, long RetryDelayMs, int RetentionDays, string PurgeCron)
+/// <param name="DrainBudgetMs">Lo que puede durar como mucho el tick de un <c>schedule</c> que drena: menor que el arriendo (T4).</param>
+public sealed record TimerSettings(bool Enabled, long MaxSleepMs, int BatchSize, long LeaseMs, int MaxAttempts, long RetryDelayMs, int RetentionDays, string PurgeCron, long DrainBudgetMs = ${P.drainBudgetMs.default})
 {
     /// <summary>Los defaults de keel-core, sin configuración (las pruebas que montan el contenedor).</summary>
     public static TimerSettings Defaults { get; } =
-        new(${TIMER_SWITCH.default ? 'true' : 'false'}, ${P.maxSleepMs.default}, ${P.batchSize.default}, ${P.leaseMs.default}, ${P.maxAttempts.default}, ${P.retryDelayMs.default}, ${P.retentionDays.default}, ${csString(P.purgeCron.default)});
+        new(${TIMER_SWITCH.default ? 'true' : 'false'}, ${P.maxSleepMs.default}, ${P.batchSize.default}, ${P.leaseMs.default}, ${P.maxAttempts.default}, ${P.retryDelayMs.default}, ${P.retentionDays.default}, ${csString(P.purgeCron.default)}, ${P.drainBudgetMs.default});
 
     /// <summary>Lee el perfil al ARRANCAR: un valor que no es un entero positivo, o un cron inválido, no deja arrancar.</summary>
     public static TimerSettings From(ServiceConfiguration configuration)
@@ -637,7 +682,8 @@ public sealed record TimerSettings(bool Enabled, long MaxSleepMs, int BatchSize,
             (int)${read(P.maxAttempts)},
             ${read(P.retryDelayMs)},
             (int)${read(P.retentionDays)},
-            cron);
+            cron,
+            ${read(P.drainBudgetMs)});
     }
 
     private static bool Switch(string? value)
@@ -1286,8 +1332,17 @@ public sealed partial class TimerPoller : BackgroundService
                 {
                     // Un recurrente en modo clúster: lo ejecuta esta réplica porque ganó la fila, FUERA de toda transacción (el
                     // mecanismo gestiona las suyas), y se rearma con el siguiente tick desde la hora de la base de DESPUÉS (R2). Si
-                    // otra réplica le quitó la fila (el tick duró más que el arriendo), el rearme no casa con la valla.
-                    await recurring.Tick(cancellationToken);
+                    // otra réplica le quitó la fila (el tick duró más que el arriendo), el rearme no casa con la valla. Un tick que
+                    // falla NO se aparca: aparcarlo tras MaxAttempts fallos (una base caída unos minutos) dejaría el barrido o la
+                    // purga sin reloj para siempre, y asegurar al arrancar no toca una fila con el mismo spec.
+                    try
+                    {
+                        await recurring.Tick(cancellationToken);
+                    }
+                    catch (Exception error) when (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                    {
+                        LogTickFailed(timer.Kind, error);
+                    }
                     await store.Reschedule(timer.Id, token, NextTick(recurring.Spec, await store.DbNow(cancellationToken)), cancellationToken);
                     continue;
                 }
@@ -1419,6 +1474,9 @@ public sealed partial class TimerPoller : BackgroundService
     [LoggerMessage(Level = LogLevel.Warning, Message = "El temporizador {Id} ({Kind}) falló en su intento {Attempt}")]
     private partial void LogFailed(string id, string kind, int attempt, Exception error);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "El tick del recurrente {Kind} falló; se rearma para el siguiente")]
+    private partial void LogTickFailed(string kind, Exception error);
+
     [LoggerMessage(Level = LogLevel.Error, Message = "El temporizador {Id} ({Kind}) agotó sus {MaxAttempts} intentos y queda APARCADO")]
     private partial void LogParked(string id, string kind, int maxAttempts);
 }`;
@@ -1461,6 +1519,116 @@ public sealed class ${purgeTimerClass(purge.table)}(TablePurges purges, PurgeSet
 
     public async Task Tick(CancellationToken cancellationToken) => await purges.${entry.method}(null, cancellationToken);
 }`;
+}
+
+/**
+ * El recurrente que dispara el `schedule` de una operación (incremento 8): antes era una tarea de Scheduling que corría en
+ * TODAS las réplicas; ahora el tick lo ejecuta UNA, la que gana su fila, y DRENA: repite la pasada mientras su lote salga
+ * lleno (SweepPass), hasta el siguiente tick o `timer.drain-budget-ms`. El despacho sigue en el scheduler (su transacción o
+ * su falta de ella, su correlación, el TODO de los argumentos). Es el de keel-spring.
+ */
+function scheduleTimerBody(model, schedule) {
+  const scheduler = schedulerClassOf(model, schedule.operation);
+  const method = `${schedule.operation[0].toUpperCase()}${schedule.operation.slice(1)}`;
+  return `/// <summary>
+/// El <c>schedule</c> de ${schedule.operation} (su cron, <see cref="Spec"/>, en UTC), como recurrente del cronómetro en modo
+/// clúster: cada tick lo ejecuta UNA réplica, la que gana su fila en <c>${KEEL_TIMER.table}</c>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Por eso el tick DRENA: con una sola réplica trabajando, repite la pasada mientras el lote salga lleno —lo avisa el reclamo
+/// con SweepPass.Claimed— y para cuando sale a medias, cuando llega su siguiente tick o cuando agota
+/// <c>${TIMER_PARAMETERS.drainBudgetMs.key}</c>, que es menor que el arriendo. Lo que quede pasa al siguiente tick. Sin aviso,
+/// una pasada por tick.
+/// </para>
+/// <para>
+/// El tick sigue siendo AL MENOS UNA VEZ: si la réplica muere a mitad, otra lo repite al vencer el arriendo. Por eso el barrido
+/// sigue reclamando sus filas.
+/// </para>
+/// </remarks>
+public sealed class ${scheduleTimerClass(schedule.operation)}(${scheduler} scheduler, TimerSettings settings) : IRecurringTimerHandler
+{
+    public string Kind => TimerKinds.${scheduleKindConstant(schedule.operation)};
+
+    /// <summary>El cron del diseño con el segundo repartido (scheduleCron de keel-core): no es configurable.</summary>
+    public string Spec => ${csString(schedule.cron)};
+
+    public async Task Tick(CancellationToken cancellationToken)
+    {
+        var start = DateTimeOffset.UtcNow;
+        var budget = Math.Min((long)(TimerPoller.NextTick(Spec, start) - start).TotalMilliseconds, settings.DrainBudgetMs);
+        var started = Stopwatch.GetTimestamp();
+        while (true)
+        {
+            var full = await SweepPass.Run(() => scheduler.${method}(cancellationToken));
+            if (!full || Stopwatch.GetElapsedTime(started).TotalMilliseconds >= budget)
+            {
+                return;
+            }
+        }
+    }
+}`;
+}
+
+/**
+ * `SweepPass`: la señal con la que una pasada de un barrido le dice al tick que su lote salió LLENO. En Application/Support
+ * porque también la llama el handler del agente cuando reclama él, y la aplicación no conoce la infraestructura. Va sobre
+ * AsyncLocal: la pasada es asíncrona y puede coincidir con otras en el mismo proceso.
+ */
+function sweepPassFile(model) {
+  const { namespace, path } = located(model, 'appSupport', 'SweepPass');
+  return {
+    path,
+    content: csFile({
+      namespace,
+      usings: [],
+      body: `/// <summary>
+/// La señal del DRENAJE de un barrido (DSL 2.26, incremento 8): una pasada que reclamó su lote lleno puede dejar candidatos, y
+/// el tick del cronómetro la repite.
+/// </summary>
+/// <remarks>
+/// Un tick en modo clúster lo ejecuta UNA réplica, así que, si cada tick hiciera una sola pasada, el barrido rendiría lo de una
+/// réplica y no lo de todas. Quien reclama sabe si el lote salió lleno: lo avisan los reclamos que genera build, y TÚ, si el
+/// handler reclama su lote a mano, con <c>SweepPass.Claimed(reclamadas, lote)</c>. Sin aviso, el tick hace una pasada, que es
+/// correcto pero más lento con atrasos grandes. Fuera de un tick (una prueba, un despacho por otra puerta) no hace nada.
+/// </remarks>
+public static class SweepPass
+{
+    private static readonly AsyncLocal<Pass?> Current = new();
+
+    /// <summary>Lo llama quien reclama: <paramref name="claimed"/> de una cota de <paramref name="batchSize"/>. Lleno = puede que queden.</summary>
+    public static void Claimed(int claimed, int batchSize)
+    {
+        if (Current.Value is { } pass && batchSize > 0 && claimed >= batchSize)
+        {
+            pass.Full = true;
+        }
+    }
+
+    /// <summary>El tick: ejecuta una pasada y dice si algún reclamo de ella salió lleno.</summary>
+    public static async Task<bool> Run(Func<Task> pass)
+    {
+        ArgumentNullException.ThrowIfNull(pass);
+        var state = new Pass();
+        Current.Value = state;
+        try
+        {
+            await pass();
+        }
+        finally
+        {
+            Current.Value = null;
+        }
+        return state.Full;
+    }
+
+    private sealed class Pass
+    {
+        public bool Full { get; set; }
+    }
+}`
+    })
+  };
 }
 
 // ─── El handler de cada plazo ────────────────────────────────────────────────────────────────────
@@ -1581,7 +1749,8 @@ function registrationBody(model) {
   const handlers = [
     ...modelDeadlines(model).map(({ entity, deadline }) => `        services.AddScoped<ITimerHandler, ${deadlineHandlerClass(entity.name, deadline.stateName)}>();`),
     '        services.AddScoped<IRecurringTimerHandler, KeelTimerPurge>();',
-    ...timerPurges(model).map((purge) => `        services.AddScoped<IRecurringTimerHandler, ${purgeTimerClass(purge.table)}>();`)
+    ...timerPurges(model).map((purge) => `        services.AddScoped<IRecurringTimerHandler, ${purgeTimerClass(purge.table)}>();`),
+    ...timerSchedules(model).map((schedule) => `        services.AddScoped<IRecurringTimerHandler, ${scheduleTimerClass(schedule.operation)}>();`)
   ];
   return `/// <summary>
 /// El cronómetro del servicio en el contenedor (DSL 2.26). El ÚNICO sitio que lo registra: lo que necesita el armado (desde
@@ -1672,6 +1841,85 @@ ${branches.join('\n')}
         throw new ArgumentException($"No hay plazo para la entidad '{entity}'. Las que lo tienen: ${known}", nameof(entity));
     }`,
     '    private static string Seconds(long value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);'
+  ];
+}
+
+// ─── El arnés de flujos: FireTimer (inc. 8) ──────────────────────────────────────────────────────
+
+/**
+ * ¿Emite el arnés `FireTimer`? Con cronómetro y con con qué alcanzarlo: `Db` sobre un relacional con sentencias del
+ * cronómetro, o `MongoEval` sobre documentos. Lo consultan los helpers del rescate y de la reconciliación, que lo llaman.
+ */
+export function firesTimer(model) {
+  if (!usesTimer(model)) return false;
+  return usesDocument(model) || TIMER_ENGINES.includes(usesMySql(model) ? 'mysql' : 'postgresql');
+}
+
+/** La llamada con la que un helper adelanta el barrido que recoge lo que acaba de fabricar (o nada). */
+export const fireScheduleCall = (model, operationExpression, indent = '        ') => (firesTimer(model) ? `${indent}FireSchedule(${operationExpression});\n` : '');
+export const fireAgedCall = (model, activationExpression, indent = '        ') => (firesTimer(model) ? `${indent}FireAgedSweeps(${activationExpression});\n` : '');
+
+/**
+ * `FireTimer(kind)` en FlowTest: adelanta un recurrente del cronómetro para que venza YA, con la hora de la base. Es la
+ * sentencia `fire` de keel-core (o `fireTimerScript` de mongo-probes.js), la misma que el AbstractFlowIT de keel-spring. Y
+ * `FireSchedule`/`FireAgedSweeps`, con los que `StallInFlight`, `PutInFlight` y `AgeForReconciliation` adelantan el barrido
+ * que recoge lo que fabrican: así un flujo no espera al cron.
+ */
+export function fireTimerMembers(model, fireTimerScript) {
+  if (!firesTimer(model)) return [];
+  const kinds = clusterRecurrings(model).map((recurring) => recurring.kind);
+  const statement = usesDocument(model)
+    ? (() => {
+        const [prefix, suffix] = fireTimerScript('{kind}').split('{kind}');
+        return `MongoEval(${csString(prefix)} + kind + ${csString(suffix)})`;
+      })()
+    : `Db(${csString(timerStatements(usesMySql(model) ? 'mysql' : 'postgresql').fire.split(':kind')[0])} + "'" + kind.Replace("'", "''", StringComparison.Ordinal) + "'")`;
+  const schedules = timerSchedules(model).map((schedule) => `        [${csString(schedule.operation)}] = ${csString(schedule.kind)},`);
+  const aged = [...agingSweeps(model)]
+    .map(([key, operations]) => [key, operations.filter((operation) => scheduledByTimer(model, operation))])
+    .filter(([, operations]) => operations.length > 0)
+    .map(([key, operations]) => `        [${csString(key)}] = [${operations.map((operation) => csString(scheduleKind(operation))).join(', ')}],`);
+  return [
+    `    /// <summary>
+    /// Adelanta el temporizador recurrente <paramref name="kind"/> del cronómetro: vence YA, con la hora de la base, y sin
+    /// arriendo.
+    /// </summary>
+    /// <remarks>
+    /// No dispara nada: el sondeador lo recoge en su próxima pasada (como mucho timer.max-sleep-ms), en UNA réplica, como en
+    /// producción. Es lo que hace que un escenario de barrido no espere al cron. Los helpers que fabrican la precondición de un
+    /// rescate o de una reconciliación ya lo llaman por ti. Recurrentes de este servicio: ${kinds.join(', ')}.
+    /// </remarks>
+    protected static void FireTimer(string kind)
+    {
+        ArgumentNullException.ThrowIfNull(kind);
+        ${statement};
+    }`,
+    `    /// <summary>El schedule de cada operación que dispara el cronómetro.</summary>
+    private static readonly Dictionary<string, string> ScheduleTimers = new(StringComparer.Ordinal)
+    {
+${schedules.join('\n')}
+    };`,
+    `    /// <summary>Adelanta el barrido de una operación, si lo dispara el cronómetro.</summary>
+    protected static void FireSchedule(string operation)
+    {
+        if (ScheduleTimers.TryGetValue(operation, out var kind))
+        {
+            FireTimer(kind);
+        }
+    }`,
+    `    /// <summary>Los barridos que recogen lo envejecido de cada activación (o del cobro).</summary>
+    private static readonly Dictionary<string, string[]> AgedSweeps = new(StringComparer.Ordinal)
+    {
+${aged.join('\n')}
+    };`,
+    `    /// <summary>Adelanta los barridos que recogen lo envejecido de una activación.</summary>
+    protected static void FireAgedSweeps(string activation)
+    {
+        foreach (var kind in AgedSweeps.TryGetValue(activation, out var kinds) ? kinds : Array.Empty<string>())
+        {
+            FireTimer(kind);
+        }
+    }`
   ];
 }
 

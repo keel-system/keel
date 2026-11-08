@@ -19,6 +19,7 @@ import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempoten
 import { csMember, csString } from '../../src/scaffold/render.js';
 import { usesReconciliationClaims } from '../../src/scaffold/reconciliation-claim.js';
 import { purgeSettings } from './db-probes.js';
+import { drainProbes, drainSubject } from './timer-probes.js';
 
 /** La clave del documento de un campo del dominio de la raíz. */
 const keyOf = (model, entity, member) => documentShape(model, entity).find((entry) => entry.member === member)?.name ?? snakeCase(member);
@@ -363,6 +364,18 @@ ${rawOf}
             Assert.Empty(await ${claimVia(method)});
         });`);
       continue;
+    }
+    // El DRENAJE del tick (DSL 2.26, inc. 8), sobre el reclamo de la cola con el adaptador real: lote de 2.
+    const drain = drainSubject(model, root);
+    if (drain && drain.queue === claim) {
+      tests.push(
+        ...drainProbes(drain, {
+          seed: (count) => `${parkAll(claim.from)}
+${seed(take(count), claim.from[0], null, () => 'TruncatedNow()')}`,
+          remaining: `await Raw(${csString(collection)}).CountDocumentsAsync(new BsonDocument(${csString(stateField)}, ${csString(constant(claim.from[0]))}), cancellationToken: Cancel)`,
+          claim: claimVia(method)
+        })
+      );
     }
     const order = keyOf(model, root, claimOrderField(root, claim));
     const [a, b, c] = take(3);

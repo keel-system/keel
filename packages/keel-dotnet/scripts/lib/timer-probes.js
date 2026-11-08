@@ -21,8 +21,10 @@ import { csMember, csString, entityPlace, namespaceOf, typeUsings } from '../../
 import { portClass } from '../../src/scaffold/repositories.js';
 import { memberOf } from '../../src/scaffold/enums.js';
 import { usesMySql } from '../../src/scaffold/relational-engine.js';
-import { deadlineHandlerClass, deadlineMember, deadlinesClass, deadlinesNamespace, purgeKindConstant, purgeTimerClass, timerNamespace, usesDeadlines } from '../../src/scaffold/timer.js';
-import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
+import { deadlineHandlerClass, deadlineMember, deadlinesClass, deadlinesNamespace, purgeKindConstant, purgeTimerClass, scheduleKindConstant, scheduleTimerClass, schedulerClassOf, timerNamespace, usesDeadlines } from '../../src/scaffold/timer.js';
+import { usesCorrelation } from '../../src/scaffold/rest-support.js';
+import { claimsForEntity, sweepClaims } from '@keel-system/keel-core/gen';
+import { claimDrains, timerPurges, timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
 import { sampleState } from './db-probes.js';
 
@@ -499,8 +501,127 @@ export const PURGE_TIMER_SABOTAGES = Object.freeze({
     relational: ['Timers/TimerStore.cs', '["entityId"] = TimerKinds.NilEntityId, ["spec"] = spec', '["entityId"] = Guid.NewGuid(), ["spec"] = spec'],
     document: ['Timers/TimerStore.cs', 'new BsonDocument("_id", DocumentId(kind, TimerKinds.NilEntityId)), Pipeline(set)', 'new BsonDocument("_id", DocumentId(kind, Guid.NewGuid())), Pipeline(set)'],
     breaks: ['R-1', 'RC-1']
+  },
+  // SOLO los `schedule` (inc. 8): su kind deja de ser el suyo en cada resolución, así que su fila no es la que el sondeador
+  // reclama ni la que cuenta la sonda. Demuestra que el bloque mide el schedule y no solo las purgas; cae también R-2, que
+  // cuenta los ticks por el mismo kind.
+  'timer-every-replica-schedule': {
+    relational: ['ScheduleTimer.cs', /public string Kind => (TimerKinds\.Schedule\w+);/g, 'public string Kind => $1 + "@" + Guid.NewGuid();'],
+    document: ['ScheduleTimer.cs', /public string Kind => (TimerKinds\.Schedule\w+);/g, 'public string Kind => $1 + "@" + Guid.NewGuid();'],
+    breaks: ['R-1', 'RC-1', 'R-2']
   }
 });
+
+/**
+ * Los sabotajes del DRENAJE (inc. 8): el reclamo que no avisa del lote lleno (cae DR-1) y el tick sin tope de tiempo (cae
+ * DR-3). Los casos (`DR1_…` a `DR3_…`) los escriben db-probes y doc-probes junto al reclamo de la cola.
+ */
+export const DRAIN_SABOTAGES = Object.freeze({
+  'drain-no-signal': {
+    relational: ['Persistence/Repositories/', /^\s*SweepPass\.Claimed\(.*\);\n/m, ''],
+    document: ['Persistence/Repositories/', /^\s*SweepPass\.Claimed\(.*\);\n/m, ''],
+    breaks: ['DR-1']
+  },
+  'drain-no-budget': {
+    relational: ['ScheduleTimer.cs', ' || Stopwatch.GetElapsedTime(started).TotalMilliseconds >= budget', ''],
+    document: ['ScheduleTimer.cs', ' || Stopwatch.GetElapsedTime(started).TotalMilliseconds >= budget', ''],
+    breaks: ['DR-3']
+  }
+});
+
+export const isDrainSabotage = (id) => Boolean(id && DRAIN_SABOTAGES[id]);
+
+/** El veredicto del drenaje: `.DR<n>_` es DR-n; lo demás cuenta por su nombre. */
+export function drainSabotageVerdict(failureLines, id) {
+  const failed = [...new Set(failureLines.map((line) => {
+    const match = /\.DR(\d+)_/.exec(line);
+    return match ? `DR-${match[1]}` : line;
+  }))].sort();
+  const want = [...DRAIN_SABOTAGES[id].breaks].sort();
+  return { exact: failed.length === want.length && failed.every((name, index) => name === want[index]), failed, want };
+}
+
+/**
+ * El sujeto del DRENAJE en una raíz: el reclamo de la cola sobre el cronómetro, la operación, su <Operación>ScheduleTimer y
+ * su scheduler, o null.
+ */
+export function drainSubject(model, root) {
+  const queue = claimsForEntity(model, root.name).find((claim) => !claim.stalled && claimDrains(model, claim));
+  if (!queue) return null;
+  const operation = sweepClaims(model).find((entry) => entry.claim === queue).operation.name;
+  return { queue, operation, timer: scheduleTimerClass(operation), scheduler: schedulerClassOf(model, operation), correlated: usesCorrelation(model) };
+}
+
+/** Las muestras que gastan los casos DR (lote de 2 en las sondas): 5 + 1 + 6. */
+export const DRAIN_SAMPLES = 12;
+
+/** La clase de la sonda del drenaje: un mediator que, en vez de despachar al handler (un stub del agente), ejecuta la pasada. */
+export const DRAIN_PROBE_CLASS = `/// <summary>El mediator de los casos DR: cada despacho del scheduler es una pasada que llama al reclamo real.</summary>
+public sealed class DrainProbeMediator(Func<Task> pass) : IUseCaseMediator
+{
+    public int Passes { get; private set; }
+
+    public async Task Dispatch(ICommand command, CancellationToken cancellationToken = default)
+    {
+        Passes++;
+        await pass();
+    }
+
+    public Task<TResult> Dispatch<TResult>(IReturningCommand<TResult> command, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+    public Task<TResult> Dispatch<TResult>(IQuery<TResult> query, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+    public Task DispatchWithoutTransaction(ICommand command, CancellationToken cancellationToken = default) => Dispatch(command, cancellationToken);
+
+    public Task<TResult> DispatchWithoutTransaction<TResult>(IReturningCommand<TResult> command, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+}`;
+
+/**
+ * Los casos DR-1 a DR-3 en C#. `seed(count)` siembra filas en el estado de partida de la cola y devuelve el código que lo
+ * hace; `remaining` es la expresión que cuenta las que siguen ahí; `claim` la que reclama por el adaptador real.
+ */
+export function drainProbes(subject, { seed, remaining, claim }) {
+  const scheduler = (mediator) => `new ${subject.scheduler}(${mediator}${subject.correlated ? `, NullLogger<${subject.scheduler}>.Instance` : ''})`;
+  const run = (budget) => `            var mediator = new DrainProbeMediator(async () => await ${claim});
+            await new ${subject.timer}(${scheduler('mediator')}, TimerSettings.Defaults with { DrainBudgetMs = ${budget} }).Tick(Cancel);`;
+  return [
+    `    /// <summary>DR-1: con más candidatos que el lote, UN tick los drena todos, en varias pasadas.</summary>
+    [Fact]
+    public async Task DR1_UnTickDrenaTodoEnVariasPasadas() =>
+        await InScope(async services =>
+        {
+${seed(5)}
+${run('60_000')}
+            Assert.Equal(0L, ${remaining});
+            Assert.Equal(3, mediator.Passes);
+        });`,
+    `    /// <summary>DR-2: con menos candidatos que el lote, el tick hace una sola pasada.</summary>
+    [Fact]
+    public async Task DR2_ConElLoteAMediasElTickHaceUnaPasada() =>
+        await InScope(async services =>
+        {
+${seed(1)}
+${run('60_000')}
+            Assert.Equal(0L, ${remaining});
+            Assert.Equal(1, mediator.Passes);
+        });`,
+    `    /// <summary>DR-3: agotado el presupuesto, el tick para aunque el lote siga saliendo lleno; lo demás, al siguiente.</summary>
+    [Fact]
+    public async Task DR3_AgotadoElPresupuestoElTickPara() =>
+        await InScope(async services =>
+        {
+${seed(6)}
+${run('0')}
+            Assert.Equal(1, mediator.Passes);
+            Assert.Equal(4L, ${remaining});
+        });`
+  ];
+}
+
+/** Los usings de los casos DR. */
+export function drainProbeUsings(model) {
+  return [timerNamespace(model), namespaceOf(model, 'scheduling'), namespaceOf(model, 'abstractions'), 'Microsoft.Extensions.Logging.Abstractions'];
+}
 
 export const isPurgeTimerSabotage = (id) => Boolean(id && PURGE_TIMER_SABOTAGES[id]);
 
@@ -517,23 +638,44 @@ export function purgeTimerSabotageVerdict(failureLines, id) {
 /** Lo que el contenedor de la sonda registra: cada recurrente de purga, envuelto en el que cuenta sus ticks. */
 export function purgeTimerFixtureRegistration(model) {
   const purges = timerPurges(model);
-  if (purges.length === 0) return '';
+  const schedules = timerSchedules(model);
+  if (purges.length === 0 && schedules.length === 0) return '';
   const lines = purges.map(
     (purge) => `        services.AddScoped<IRecurringTimerHandler>(provider => new PurgeTimerCount(new ${purgeTimerClass(purge.table)}(provider.GetRequiredService<TablePurges>(), provider.GetRequiredService<PurgeSettings>())));`
   );
+  // Los `schedule` (inc. 8): su scheduler, con un mediator que no despacha nada (el handler es un stub del agente), y
+  // cada <Operación>ScheduleTimer contado igual. Con plazos ya hay mediator de la sonda del cronómetro.
+  const schedulers = [...new Set(schedules.map((schedule) => schedulerClassOf(model, schedule.operation)))];
+  const scheduleLines = schedules.length === 0
+    ? []
+    : [
+        ...(timerSubject(model) ? [] : ['        services.AddSingleton(TimerSettings.Defaults);', '        services.AddScoped<IUseCaseMediator>(_ => new DrainProbeMediator(() => Task.CompletedTask));']),
+        ...schedulers.map((scheduler) => `        services.AddScoped<${scheduler}>();`),
+        ...schedules.map(
+          (schedule) =>
+            `        services.AddScoped<IRecurringTimerHandler>(provider => new PurgeTimerCount(new ${scheduleTimerClass(schedule.operation)}(provider.GetRequiredService<${schedulerClassOf(model, schedule.operation)}>(), provider.GetRequiredService<TimerSettings>())));`
+        )
+      ];
   return `
-        // Las purgas en modo clúster (DSL 2.26, inc. 7): cada recurrente, contado por PurgeTimerCount.
-${lines.join('\n')}`;
+        // Los recurrentes en modo clúster (DSL 2.26, incs. 7 y 8): cada uno, contado por PurgeTimerCount.
+${[...lines, ...scheduleLines].join('\n')}`;
 }
 
 export function purgeTimerProbeUsings(model) {
-  return timerPurges(model).length > 0 ? [timerNamespace(model), 'Microsoft.Extensions.Logging.Abstractions', 'System.Collections.Concurrent'] : [];
+  if (timerPurges(model).length === 0 && timerSchedules(model).length === 0) return [];
+  return [
+    timerNamespace(model),
+    'Microsoft.Extensions.Logging.Abstractions',
+    'System.Collections.Concurrent',
+    ...(timerSchedules(model).length > 0 ? [namespaceOf(model, 'scheduling'), namespaceOf(model, 'abstractions')] : [])
+  ];
 }
 
 /** Los métodos de R1, RC-1 y R2 (dentro de la clase de sondas, que declara `root`, `Cancel` e `InScope`) y la clase que cuenta. */
 export function purgeTimerProbeBlock(model) {
   const purges = timerPurges(model);
-  if (purges.length === 0) return null;
+  const schedules = timerSchedules(model);
+  if (purges.length === 0 && schedules.length === 0) return null;
   const document = usesDocument(model);
   const store = document
     ? {
@@ -556,8 +698,11 @@ export function purgeTimerProbeBlock(model) {
           fire: `        await InScope(async services => await services.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(${csString(fire)}, [kind], Cancel));`
         };
       })();
-  const kinds = purges.map((purge) => `TimerKinds.${purgeKindConstant(purge.table)}`).join(', ');
-  const methods = `    // ═══ Las purgas en modo clúster (DSL 2.26, inc. 7): ${purges.map((purge) => purge.table).join(', ')} ═══
+  const kinds = [
+    ...purges.map((purge) => `TimerKinds.${purgeKindConstant(purge.table)}`),
+    ...schedules.map((schedule) => `TimerKinds.${scheduleKindConstant(schedule.operation)}`)
+  ].join(', ');
+  const methods = `    // ═══ Los recurrentes en modo clúster (DSL 2.26, incs. 7 y 8): ${[...purges.map((purge) => purge.table), ...schedules.map((schedule) => schedule.operation)].join(', ')} ═══
 
     private static readonly string[] PurgeKinds = [${kinds}];
 
@@ -633,7 +778,7 @@ ${store.fire}
         var next = await InScope(services => services.GetRequiredService<ITimerStore>().NextDueMs(PurgeKinds, Cancel));
         Assert.True(next is > 0, $"tras el tick la purga no quedó armada para el futuro: {next}");
     }`;
-  const classes = `/// <summary>Un recurrente de la sonda que ejecuta el de verdad y cuenta sus ticks por kind (R1, RC-1 y R2).</summary>
+  const classes = `${schedules.length > 0 && !timerSubject(model) ? `${DRAIN_PROBE_CLASS}\n\n` : ''}/// <summary>Un recurrente de la sonda que ejecuta el de verdad y cuenta sus ticks por kind (R1, RC-1 y R2).</summary>
 public sealed class PurgeTimerCount(IRecurringTimerHandler inner) : IRecurringTimerHandler
 {
     public static ConcurrentDictionary<string, int> Ticks { get; } = new(StringComparer.Ordinal);
