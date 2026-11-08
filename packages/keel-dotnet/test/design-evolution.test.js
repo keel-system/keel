@@ -225,23 +225,25 @@ test('paridad con keel-spring y keel-nest: el mismo cambio del diseño, el mismo
 // ─── Los pasos de esquema de build (inc. 2b del plan 2.26) ───────────────────────────────────
 //
 // Una tabla del generador que una base ya desplegada no tiene llega como una migración de EF que escribe build
-// (keel-core/gen/schema-steps.js, src/scaffold/schema-baseline.js). `product-catalog` emite `idempotency_record`; el
-// baseline «desplegado» de la prueba no la crea, como el de un proyecto completado antes de que el diseño ganara la
+// (keel-core/gen/schema-steps.js, src/scaffold/schema-baseline.js). `product-catalog` emite `idempotency_record` y, desde el
+// inc. 7 del plan 2.26, `keel_timer` (la purga del registro corre en el cronómetro); el baseline «desplegado» de la prueba
+// no crea ninguna, como el de un proyecto completado antes de que el diseño ganara la
 // idempotencia. Lo propio de EF: el ModelSnapshot, que solo escribe `dotnet ef`, también tiene que nombrarla.
 
 const MIGRATIONS = 'src/ProductCatalog.Infrastructure/Persistence/Migrations';
 const BASELINE_MIGRATION = `${MIGRATIONS}/20261001120000_Baseline.cs`;
 const SNAPSHOT = `${MIGRATIONS}/ProductCatalogDbContextModelSnapshot.cs`;
-const STEP = `${MIGRATIONS}/20261002090001_KeelIdempotencyRecord.cs`;
+const STEP = `${MIGRATIONS}/20261002090001_KeelIdempotencyRecordTimer.cs`;
 const efCreate = (table) => `migrationBuilder.CreateTable(\n                name: "${table}",\n                columns: table => new { });\n`;
 const keelSteps = (workspace, tech = 'dotnet', dir = MIGRATIONS) =>
   fs.readdirSync(project(workspace, dir, tech)).filter((name) => /_Keel|__keel_/.test(name));
 
 /** Lo que dejó el pase de calidad: el baseline de `dotnet ef` y su snapshot, sin la tabla del generador. */
-function deployBaseline(workspace, created = 'products') {
+function deployBaseline(workspace, ...created) {
+  const tables = created.length > 0 ? created : ['products'];
   fs.mkdirSync(project(workspace, MIGRATIONS), { recursive: true });
-  fs.writeFileSync(project(workspace, BASELINE_MIGRATION), efCreate(created));
-  fs.writeFileSync(project(workspace, SNAPSHOT), `b.ToTable("${created}", (string)null);\n`);
+  fs.writeFileSync(project(workspace, BASELINE_MIGRATION), tables.map(efCreate).join(''));
+  fs.writeFileSync(project(workspace, SNAPSHOT), tables.map((table) => `b.ToTable("${table}", (string)null);\n`).join(''));
 }
 
 /** El SQL de un paso de EF: las sentencias de sus `migrationBuilder.Sql(@"…")`, unidas como las da `schemaStepSql`. */
@@ -259,23 +261,23 @@ test('pasos de esquema: sin baseline no hay paso; con él, build escribe el de l
   fs.writeFileSync(project(workspace, `${MIGRATIONS}/20261002090000_AddProductSkuIndex.Designer.cs`), '// modelo de destino\n');
   await runBuild(workspace, { refresh: true });
   const step = read(workspace, STEP);
-  assert.match(step, /^\/\/ keel:generator-step idempotency_record\n/);
+  assert.match(step, /^\/\/ keel:generator-step idempotency_record keel_timer\n/);
   assert.match(step, /namespace ProductCatalog\.Infrastructure\.Persistence\.Migrations;/);
-  assert.match(step, /\[DbContext\(typeof\(ProductCatalogDbContext\)\)\]\n\[Migration\("20261002090001_KeelIdempotencyRecord"\)\]\npublic partial class KeelIdempotencyRecord : Migration/);
+  assert.match(step, /\[DbContext\(typeof\(ProductCatalogDbContext\)\)\]\n\[Migration\("20261002090001_KeelIdempotencyRecordTimer"\)\]\npublic partial class KeelIdempotencyRecordTimer : Migration/);
   assert.match(step, /CREATE TABLE IF NOT EXISTS idempotency_record \([\s\S]*PRIMARY KEY \(operation_scope, idempotency_key\)/);
   assert.match(step, /migrationBuilder\.Sql\(@"CREATE INDEX IF NOT EXISTS ix_idempotency_record_expires_at ON idempotency_record \(expires_at\);"\);/);
   assert.ok(manifest(workspace).files[STEP], 'el paso es de build: va en el manifiesto');
 
   // El snapshot no la nombra: EVOLUTION.md lo pide al agente y --check sale en rojo.
-  assert.match(read(workspace, EVOLUTION), /ModelSnapshot de EF no recoge `idempotency_record`[\s\S]*dotnet ef migrations add SyncIdempotencyRecordSnapshot/);
+  assert.match(read(workspace, EVOLUTION), /ModelSnapshot de EF no recoge `idempotency_record`, `keel_timer`[\s\S]*dotnet ef migrations add SyncIdempotencyRecordTimerSnapshot/);
   assert.equal(await runBuild(workspace, { check: true }), 1, '--check en rojo mientras el snapshot no la recoja');
 
   // El agente sincronizó el snapshot. El segundo build no escribe otro paso ni el mismo con otra marca: lo vuelve a emitir
   // tal cual, así que no queda huérfano, y --check vuelve a verde.
-  fs.appendFileSync(project(workspace, SNAPSHOT), 'b.ToTable("idempotency_record", (string)null);\n');
-  fs.writeFileSync(project(workspace, `${MIGRATIONS}/20261103100000_SyncIdempotencyRecordSnapshot.cs`), '// Up y Down vacíos\n');
+  fs.appendFileSync(project(workspace, SNAPSHOT), 'b.ToTable("idempotency_record", (string)null);\nb.ToTable("keel_timer", (string)null);\n');
+  fs.writeFileSync(project(workspace, `${MIGRATIONS}/20261103100000_SyncIdempotencyRecordTimerSnapshot.cs`), '// Up y Down vacíos\n');
   await runBuild(workspace, { refresh: true });
-  assert.deepEqual(keelSteps(workspace), ['20261002090001_KeelIdempotencyRecord.cs']);
+  assert.deepEqual(keelSteps(workspace), ['20261002090001_KeelIdempotencyRecordTimer.cs']);
   assert.equal(read(workspace, STEP), step);
   assert.equal(await runBuild(workspace, { check: true }), undefined, '--check en verde: el paso y el snapshot están al día');
 });
@@ -283,14 +285,14 @@ test('pasos de esquema: sin baseline no hay paso; con él, build escribe el de l
 test('pasos de esquema: un baseline que ya crea la tabla no recibe paso, y el paso no se reescribe aunque cambie', async () => {
   const workspace = withFixture();
   await runBuild(workspace);
-  deployBaseline(workspace, 'idempotency_record');
+  deployBaseline(workspace, 'idempotency_record', 'keel_timer');
   await runBuild(workspace, { refresh: true });
   assert.deepEqual(keelSteps(workspace), []);
 
   // Una migración que ya se aplicó no cambia nunca: EF no la vuelve a leer en una base que la tiene en su historial.
   deployBaseline(workspace);
   await runBuild(workspace, { refresh: true });
-  const stepPath = `${MIGRATIONS}/20261001120001_KeelIdempotencyRecord.cs`;
+  const stepPath = `${MIGRATIONS}/20261001120001_KeelIdempotencyRecordTimer.cs`;
   const applied = `${read(workspace, stepPath)}// aplicado con otro generador\n`;
   fs.writeFileSync(project(workspace, stepPath), applied);
   await runBuild(workspace, { refresh: true });
@@ -305,10 +307,10 @@ test('pasos de esquema: con evolución pendiente, EVOLUTION.md dice qué paso es
   evolveDesign(workspace);
   await runBuild(workspace, { refresh: true, prune: true });
   const md = read(workspace, EVOLUTION);
-  assert.match(md, /## Pasos de esquema de build[\s\S]*20261001120001_KeelIdempotencyRecord\.cs/);
+  assert.match(md, /## Pasos de esquema de build[\s\S]*20261001120001_KeelIdempotencyRecordTimer\.cs/);
   // Un segundo build antes de entrar al proyecto ya no lo ve nuevo, pero lo arrastra.
   await runBuild(workspace, { refresh: true, prune: true });
-  assert.match(read(workspace, EVOLUTION), /20261001120001_KeelIdempotencyRecord\.cs/);
+  assert.match(read(workspace, EVOLUTION), /20261001120001_KeelIdempotencyRecordTimer\.cs/);
 });
 
 test('pasos de esquema: la marca suma un segundo en el calendario, no en el entero', () => {
@@ -321,8 +323,7 @@ test('pasos de esquema: la marca suma un segundo en el calendario, no en el ente
 
 // La promesa del 2b: los cuatro servidores dejan el MISMO esquema. Con la misma fixture y la misma base desplegada, el paso
 // de keel-dotnet crea las tablas del de keel-spring con el mismo SQL, byte a byte; y en MySQL, el de schemaStepSql.
-// keel-spring da ya keel_timer a todo diseño con purgas (DSL 2.26, inc. 7); keel-dotnet lo iguala con su parte, y este todo se retira.
-test('pasos de esquema: paridad con keel-spring, las mismas tablas y el mismo SQL', { todo: 'inc. 7 de PLAN-DSL-226-PLAZOS.md en keel-dotnet' }, async () => {
+test('pasos de esquema: paridad con keel-spring, las mismas tablas y el mismo SQL', async () => {
   const workspace = withFixture();
   await runBuild(workspace);
   await runBuild(workspace, {}, buildSpring);
@@ -333,7 +334,7 @@ test('pasos de esquema: paridad con keel-spring, las mismas tablas y el mismo SQ
   await runBuild(workspace, { refresh: true }, buildSpring);
   const [springStep] = keelSteps(workspace, 'spring', springMigrations);
   const spring = read(workspace, `${springMigrations}/${springStep}`, 'spring');
-  const dotnet = read(workspace, `${MIGRATIONS}/20261001120001_KeelIdempotencyRecord.cs`);
+  const dotnet = read(workspace, `${MIGRATIONS}/20261001120001_KeelIdempotencyRecordTimer.cs`);
   const mark = (content, comment) => content.split('\n')[0].slice(comment.length);
   assert.equal(mark(dotnet, '// '), mark(spring, '-- '), 'la misma marca, con las mismas tablas');
   assert.equal(stepSql(dotnet), spring.slice(spring.indexOf('\n\n') + 2), 'el mismo SQL que el paso de Flyway');
@@ -345,8 +346,8 @@ test('pasos de esquema: paridad con keel-spring, las mismas tablas y el mismo SQ
   fs.writeFileSync(path.join(dir, migrationsDir(model), '20261001120000_Baseline.cs'), efCreate('products'));
   const steps = schemaSteps(model, files, dir);
   const tables = generatorTables(files);
-  assert.deepEqual(tables.map((table) => table.table), ['outbox_event', 'processed_event', 'idempotency_record', 'reconciliation_claim']);
+  assert.deepEqual(tables.map((table) => table.table), ['outbox_event', 'processed_event', 'idempotency_record', 'reconciliation_claim', 'keel_timer']);
   assert.equal(steps.added.length, 1);
   assert.equal(stepSql(steps.files[0].content), schemaStepSql('mysql', tables));
-  assert.match(steps.files[0].path, /\/20261001120001_KeelOutboxEventProcessedEventIdempotencyRecordReconciliationClaim\.cs$/);
+  assert.match(steps.files[0].path, /\/20261001120001_KeelOutboxEventProcessedEventIdempotencyRecordReconciliationClaimTimer\.cs$/);
 });

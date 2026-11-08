@@ -9,6 +9,7 @@ import { BATCHED_PURGE, batchedPurgeParameters, scheduleCron } from '@keel-syste
 import { csFile, csString, namespaceOf, solution } from './render.js';
 import { scheduledServices, schedulerClass, usesScheduling } from './scheduling.js';
 import { PURGE_CASES, PURGE_CASES_CUTOFF, purgeNamespace, tablePurges } from './purge.js';
+import { purgedByTimer } from '@keel-system/keel-core/gen/timer-plan';
 
 export function generate(model) {
   if (!usesScheduling(model)) return [];
@@ -20,7 +21,8 @@ export function generate(model) {
   const purges = tablePurges(model);
   if (purges.length > 0) {
     usings.push(purgeNamespace(model));
-    members.push(purgeTaskTests(purges), batchedPurgeTests());
+    // Las que corren en el cronómetro (DSL 2.26, inc. 7) no son tareas del reloj: las dispara su recurrente (TimerTests).
+    members.push(purgeTaskTests(purges, purges.filter((purge) => !purgedByTimer(model, purge.table))), batchedPurgeTests());
   }
   const body = `public sealed class SchedulingTests
 {
@@ -66,18 +68,24 @@ ${rows.join('\n')}
     }`;
 }
 
-function purgeTaskTests(purges) {
+/** La configuración de las purgas con sus defaults, como expresión C# (la usa también TimerTests). */
+export function purgeSettingsExpression(purges) {
   const schedules = purges.map((purge) => {
     const batch = batchedPurgeParameters(purge.prefix);
     return `new PurgeSchedule(${csString(purge.cron.default)}, ${purge.retentionDays ? purge.retentionDays.default : 'null'}, ${batch.batchSize.default}, ${batch.maxBatches.default})`;
   });
+  return `new PurgeSettings(${schedules.join(', ')})`;
+}
+
+function purgeTaskTests(purges, scheduled) {
+  const expected = (values) => (values.length > 0 ? `new[] { ${values.join(', ')} }` : 'Array.Empty<string>()');
   return `    [Fact]
     public void CadaTablaDelGeneradorTieneSuPurgaConElCronDeKeelSpring()
     {
-        var settings = new PurgeSettings(${schedules.join(', ')});
+        var settings = ${purgeSettingsExpression(purges)};
         var tasks = TablePurges.Tasks(settings);
-        Assert.Equal(new[] { ${purges.map((purge) => csString(`purge:${purge.what}`)).join(', ')} }, tasks.Select(task => task.Name));
-        Assert.Equal(new[] { ${purges.map((purge) => csString(purge.cron.default)).join(', ')} }, tasks.Select(task => task.Cron));
+        Assert.Equal(${expected(scheduled.map((purge) => csString(`purge:${purge.what}`)))}, tasks.Select(task => task.Name));
+        Assert.Equal(${expected(scheduled.map((purge) => csString(purge.cron.default)))}, tasks.Select(task => task.Cron));
         Assert.Equal(${BATCHED_PURGE.batchSize}, BatchedPurge.DefaultBatchSize);
         Assert.Equal(${BATCHED_PURGE.maxBatches}, BatchedPurge.DefaultMaxBatches);
     }`;

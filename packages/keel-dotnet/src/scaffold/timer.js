@@ -25,6 +25,8 @@
 // relay (inc. 9), y un modo sin sujeto sería código que ninguna red ejecuta.
 
 import { modelDeadlines, usesDeadlines, lateGuards, CLOCK_PORT } from '@keel-system/keel-core/gen/deadlines';
+import { TIMER_DATABASES, timerPurges, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { pascalCase } from '@keel-system/keel-core/gen';
 import {
   KEEL_TIMER,
   NIL_ENTITY_ID,
@@ -44,14 +46,22 @@ import { csFile, csMember, csString, declType, entityPlace, located, namespaceOf
 import { configNamespace } from './config.js';
 import { usesCorrelation } from './rest-support.js';
 import { usesMySql } from './relational-engine.js';
+import { tablePurges } from './purge.js';
+import { purgeSettingsExpression } from './scheduling-tests.js';
 import { usesDocument, usesRelational } from '@keel-system/keel-core/gen/features';
 
-export { usesDeadlines };
+export { usesDeadlines, usesTimer, TIMER_DATABASES };
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
-/** Los motores en los que hay cronómetro: los relacionales con sentencias medidas (timer-sql-check) y MongoDB. */
-export const TIMER_DATABASES = Object.freeze([...TIMER_ENGINES, 'mongodb']);
+/** `OutboxEventPurgeTimer`: el recurrente que dispara la purga de una tabla del generador (el nombre de keel-spring). */
+export function purgeTimerClass(table) {
+  return `${pascalCase(table)}PurgeTimer`;
+}
+/** La constante de `TimerKinds` de la purga de una tabla: `PurgeOutboxEvent`. */
+export function purgeKindConstant(table) {
+  return `Purge${pascalCase(table)}`;
+}
 
 /** Las sentencias del almacén relacional, en el orden en que se emiten: los nombres son los de `timerStatements`. */
 export const TIMER_STATEMENTS = Object.freeze(['dbNow', 'arm', 'ensureRecurring', 'claimLock', 'claimMark', 'claimed', 'complete', 'reschedule', 'fail', 'nextDueMs', 'parkedCount', 'purge']);
@@ -279,7 +289,7 @@ export function documentArming(model, entity, storedState) {
 
 /** La línea de AddPersistence que registra lo que el armado necesita (el almacén, los plazos y el reloj). */
 export function persistenceTimerRegistration(model) {
-  if (!usesDeadlines(model)) return null;
+  if (!usesTimer(model)) return null;
   return {
     usings: [timerNamespace(model)],
     line: '        // El cronómetro (DSL 2.26): el adaptador arma los plazos con él, en la transacción del caso de uso.\n        services.AddTimerStore();'
@@ -288,7 +298,7 @@ export function persistenceTimerRegistration(model) {
 
 /** Lo que Program.cs registra: el sondeador, los handlers y la mecánica del perfil. */
 export function programTimer(model) {
-  if (!usesDeadlines(model)) return { usings: [], registration: '' };
+  if (!usesTimer(model)) return { usings: [], registration: '' };
   return {
     usings: [timerNamespace(model)],
     registration: `
@@ -301,7 +311,7 @@ builder.Services.AddTimer(TimerSettings.From(configuration));`
 // ─── Lo que emite build ──────────────────────────────────────────────────────────────────────────
 
 export function generate(model) {
-  if (!usesDeadlines(model)) return [];
+  if (!usesTimer(model)) return [];
   const timer = (name, usings, body) => {
     const { namespace, path } = located(model, 'timer', name);
     return { path, content: csFile({ namespace, usings, body }) };
@@ -309,7 +319,7 @@ export function generate(model) {
   const document = usesDocument(model);
   const deadline = located(model, 'deadline', deadlinesClass(model));
   const files = [
-    { path: deadline.path, content: csFile({ namespace: deadline.namespace, usings: [], body: deadlinesBody(model) }) },
+    ...(usesDeadlines(model) ? [{ path: deadline.path, content: csFile({ namespace: deadline.namespace, usings: [], body: deadlinesBody(model) }) }] : []),
     timer('TimerKinds', [], timerKindsBody(model)),
     timer('ClaimedTimer', [], claimedTimerBody()),
     timer('TimerOutcome', [], timerOutcomeBody()),
@@ -326,6 +336,7 @@ export function generate(model) {
         ),
     timer('TimerPoller', ['Cronos', 'Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.Hosting', 'Microsoft.Extensions.Logging', namespaceOf(model, 'persistence')], pollerBody()),
     timer('KeelTimerPurge', [], purgeBody()),
+    ...timerPurges(model).map((purge) => timer(purgeTimerClass(purge.table), [namespaceOf(model, 'purge')], purgeTimerBody(model, purge))),
     timer('TimerRegistration', registrationUsings(model), registrationBody(model)),
     ...modelDeadlines(model).map((entry) => timer(deadlineHandlerClass(entry.entity.name, entry.deadline.stateName), handlerUsings(model, entry), deadlineHandlerBody(model, entry))),
     ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/timer.yaml`, content: timerYaml(profile) })),
@@ -374,10 +385,18 @@ ${properties.join('\n\n')}
 // ─── Las piezas del cronómetro ───────────────────────────────────────────────────────────────────
 
 function timerKindsBody(model) {
-  const constants = modelDeadlines(model).map(
-    ({ entity, deadline, kind }) => `    /// <summary>El plazo de ${entity.name} en '${deadline.stateName}'.</summary>
+  const constants = [
+    ...modelDeadlines(model).map(
+      ({ entity, deadline, kind }) => `    /// <summary>El plazo de ${entity.name} en '${deadline.stateName}'.</summary>
     public const string ${kindConstant(entity.name, deadline.stateName)} = ${csString(kind)};`
-  );
+    ),
+    `    /// <summary>La purga de la propia tabla: un recurrente en modo clúster (R7).</summary>
+    public const string TimerPurge = ${csString(TIMER_PURGE_KIND)};`,
+    ...timerPurges(model).map(
+      (purge) => `    /// <summary>La purga de <c>${purge.table}</c>: un recurrente en modo clúster.</summary>
+    public const string ${purgeKindConstant(purge.table)} = ${csString(purge.kind)};`
+    )
+  ];
   return `/// <summary>
 /// El nombre de cada temporizador en <c>${KEEL_TIMER.table}</c> (columna <c>kind</c>). Es contrato con los otros generadores
 /// —comparten tabla—, así que sale de keel-core y no se cambia aquí.
@@ -385,9 +404,6 @@ function timerKindsBody(model) {
 public static class TimerKinds
 {
 ${constants.join('\n\n')}
-
-    /// <summary>La purga de la propia tabla: un recurrente en modo clúster (R7).</summary>
-    public const string TimerPurge = ${csString(TIMER_PURGE_KIND)};
 
     /// <summary>El <c>entity_id</c> de un recurrente: no tiene entidad, y la unicidad (kind, entity_id) necesita un valor.</summary>
     public static readonly Guid NilEntityId = Guid.Parse(${csString(NIL_ENTITY_ID)});
@@ -435,13 +451,24 @@ public interface ITimerHandler
 
 /// <summary>
 /// Un temporizador RECURRENTE en modo clúster: una fila sin entidad, que cada réplica asegura al arrancar (R1) y que en cada
-/// tick ejecuta UNA sola réplica, la que la reclama. El siguiente tick se calcula desde la hora de la base de DESPUÉS del
-/// tick (R2), con el cron en UTC (T7).
+/// tick ejecuta UNA sola réplica, la que la reclama. El siguiente tick lo calcula el sondeador desde la hora de la base de
+/// DESPUÉS del tick (R2), con el cron en UTC (T7).
 /// </summary>
-public interface IRecurringTimerHandler : ITimerHandler
+/// <remarks>
+/// El tick corre FUERA de toda transacción, a diferencia de un plazo: un recurrente (una purga por lotes) gestiona las suyas,
+/// y envolverlo en una sola volvería a ser el DELETE único que la purga por lotes sustituye. Si lanza, cuenta como un fallo
+/// del temporizador, igual que un plazo.
+/// </remarks>
+public interface IRecurringTimerHandler
 {
+    /// <summary>El nombre del temporizador en la tabla (TimerKinds).</summary>
+    string Kind { get; }
+
     /// <summary>El cron de seis campos (el segundo primero), evaluado en UTC.</summary>
     string Spec { get; }
+
+    /// <summary>Un tick: lo que hace el mecanismo cada vez que vence.</summary>
+    Task Tick(CancellationToken cancellationToken);
 }`;
 }
 
@@ -926,7 +953,7 @@ ${indexes.join('\n')}
 
 /** Los nombres que keel_timer pone en el esquema: los busca la prueba emitida del modelo. */
 export function timerSchemaNames(model) {
-  if (!usesDeadlines(model) || !usesRelational(model)) return [];
+  if (!usesTimer(model) || !usesRelational(model)) return [];
   return [KEEL_TIMER.table, `${KEEL_TIMER.table}_pkey`, ...KEEL_TIMER.uniques.map((unique) => unique.name), ...KEEL_TIMER.indexes.map((index) => index.name)];
 }
 
@@ -1192,7 +1219,12 @@ public sealed partial class TimerPoller : BackgroundService
             if (kinds is null)
             {
                 using var scope = scopes.CreateScope();
-                kinds = [.. scope.ServiceProvider.GetServices<ITimerHandler>().Select(handler => handler.Kind).Distinct(StringComparer.Ordinal)];
+                kinds =
+                [
+                    .. scope.ServiceProvider.GetServices<ITimerHandler>().Select(handler => handler.Kind)
+                        .Concat(scope.ServiceProvider.GetServices<IRecurringTimerHandler>().Select(recurring => recurring.Kind))
+                        .Distinct(StringComparer.Ordinal)
+                ];
             }
             return kinds;
         }
@@ -1224,7 +1256,7 @@ public sealed partial class TimerPoller : BackgroundService
         await using var scope = scopes.CreateAsyncScope();
         var store = scope.ServiceProvider.GetRequiredService<ITimerStore>();
         var now = await store.DbNow(cancellationToken);
-        foreach (var recurring in scope.ServiceProvider.GetServices<ITimerHandler>().OfType<IRecurringTimerHandler>())
+        foreach (var recurring in scope.ServiceProvider.GetServices<IRecurringTimerHandler>())
         {
             await store.EnsureRecurring(recurring.Kind, recurring.Spec, NextTick(recurring.Spec, now), cancellationToken);
         }
@@ -1248,8 +1280,18 @@ public sealed partial class TimerPoller : BackgroundService
             {
                 // Un ámbito por temporizador: su transacción, su contexto y su despacho son solo suyos.
                 await using var scope = scopes.CreateAsyncScope();
-                var handler = scope.ServiceProvider.GetServices<ITimerHandler>().First(candidate => candidate.Kind == timer.Kind);
                 var store = scope.ServiceProvider.GetRequiredService<ITimerStore>();
+                var recurring = scope.ServiceProvider.GetServices<IRecurringTimerHandler>().FirstOrDefault(candidate => candidate.Kind == timer.Kind);
+                if (recurring is not null)
+                {
+                    // Un recurrente en modo clúster: lo ejecuta esta réplica porque ganó la fila, FUERA de toda transacción (el
+                    // mecanismo gestiona las suyas), y se rearma con el siguiente tick desde la hora de la base de DESPUÉS (R2). Si
+                    // otra réplica le quitó la fila (el tick duró más que el arriendo), el rearme no casa con la valla.
+                    await recurring.Tick(cancellationToken);
+                    await store.Reschedule(timer.Id, token, NextTick(recurring.Spec, await store.DbNow(cancellationToken)), cancellationToken);
+                    continue;
+                }
+                var handler = scope.ServiceProvider.GetServices<ITimerHandler>().First(candidate => candidate.Kind == timer.Kind);
                 await scope.ServiceProvider.GetRequiredService<PersistenceTransactions>().InTransaction(
                     async () =>
                     {
@@ -1394,12 +1436,30 @@ public sealed class KeelTimerPurge(ITimerStore store, TimerSettings settings) : 
 
     public string Spec => settings.PurgeCron;
 
-    public async Task<TimerOutcome> Handle(ClaimedTimer timer, DateTimeOffset dbNow, CancellationToken cancellationToken)
-    {
-        await store.Purge(settings.RetentionDays, cancellationToken);
-        // El siguiente tick desde la hora de DESPUÉS de la pasada (R2): tras una parada larga, un tick y no todos.
-        return TimerOutcome.RescheduleAt(TimerPoller.NextTick(Spec, await store.DbNow(cancellationToken)));
-    }
+    public async Task Tick(CancellationToken cancellationToken) => await store.Purge(settings.RetentionDays, cancellationToken);
+}`;
+}
+
+/**
+ * El recurrente que dispara la purga de una tabla del generador (incremento 7): antes la registraba TablePurges en el
+ * reloj, que corría en TODAS las réplicas a la vez; ahora la ejecuta UNA por tick, la que gana su fila en keel_timer. El
+ * cron es el de siempre (su clave, su variable y su default de keel-core, en PurgeSettings), evaluado en UTC (T7).
+ */
+function purgeTimerBody(model, purge) {
+  const entry = tablePurges(model).find((candidate) => candidate.table === purge.table);
+  if (!entry) throw new Error(`timer.js: ${purge.table} se purga con el cronómetro y TablePurges no la tiene`);
+  return `/// <summary>
+/// La purga de <c>${purge.table}</c>, como recurrente del cronómetro en modo clúster: cada tick lo ejecuta UNA réplica, la que
+/// gana su fila en <c>${KEEL_TIMER.table}</c>. Lo que borra y cómo (la retención, los lotes, sus transacciones) es lo de
+/// TablePurges.${entry.method}, que no cambia: solo cambia quién la dispara.
+/// </summary>
+public sealed class ${purgeTimerClass(purge.table)}(TablePurges purges, PurgeSettings settings) : IRecurringTimerHandler
+{
+    public string Kind => TimerKinds.${purgeKindConstant(purge.table)};
+
+    public string Spec => settings.${entry.key}.Cron;
+
+    public async Task Tick(CancellationToken cancellationToken) => await purges.${entry.method}(null, cancellationToken);
 }`;
 }
 
@@ -1485,7 +1545,8 @@ public sealed class ${className}(${ctor.join(', ')}) : ITimerHandler
 // ─── El registro ─────────────────────────────────────────────────────────────────────────────────
 
 function registrationUsings(model) {
-  const usings = ['Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.DependencyInjection.Extensions', deadlinesNamespace(model)];
+  const usings = ['Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.DependencyInjection.Extensions'];
+  if (usesDeadlines(model)) usings.push(deadlinesNamespace(model));
   if (modelDeadlines(model).some(({ duration }) => duration.parameter)) usings.push(namespaceOf(model, 'parameters'));
   return usings;
 }
@@ -1517,7 +1578,11 @@ function registrationBody(model) {
         return ${deadlinesExpression(model)};
     }`
     : '';
-  const handlers = modelDeadlines(model).map(({ entity, deadline }) => `        services.AddScoped<ITimerHandler, ${deadlineHandlerClass(entity.name, deadline.stateName)}>();`);
+  const handlers = [
+    ...modelDeadlines(model).map(({ entity, deadline }) => `        services.AddScoped<ITimerHandler, ${deadlineHandlerClass(entity.name, deadline.stateName)}>();`),
+    '        services.AddScoped<IRecurringTimerHandler, KeelTimerPurge>();',
+    ...timerPurges(model).map((purge) => `        services.AddScoped<IRecurringTimerHandler, ${purgeTimerClass(purge.table)}>();`)
+  ];
   return `/// <summary>
 /// El cronómetro del servicio en el contenedor (DSL 2.26). El ÚNICO sitio que lo registra: lo que necesita el armado (desde
 /// AddPersistence) y el sondeador con sus handlers (desde Program.cs).
@@ -1531,20 +1596,20 @@ public static class TimerRegistration
     public static IServiceCollection AddTimerStore(this IServiceCollection services)
     {
         services.TryAddSingleton(TimeProvider.System);
-        services.TryAddSingleton<TimerWakeup>();
-        ${deadlines}
+        services.TryAddSingleton<TimerWakeup>();${usesDeadlines(model) ? `\n        ${deadlines}` : ''}
         services.TryAddScoped<ITimerStore, TimerStore>();
         return services;
     }
 
-    /// <summary>El sondeador de esta réplica y lo que dispara: un handler por plazo y la purga de la tabla (R7).</summary>
+    /// <summary>
+    /// El sondeador de esta réplica y lo que dispara: ${usesDeadlines(model) ? 'un handler por plazo, ' : ''}la purga de la tabla (R7)${timerPurges(model).length > 0 ? ' y las de las tablas del generador, en modo clúster (TablePurges y PurgeSettings los registra AddScheduling)' : ''}.
+    /// </summary>
     public static IServiceCollection AddTimer(this IServiceCollection services, TimerSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         services.AddSingleton(settings);
         services.AddTimerStore();
 ${handlers.join('\n')}
-        services.AddScoped<ITimerHandler, KeelTimerPurge>();
         services.TryAddSingleton<TimerPoller>();
         services.AddHostedService(provider => provider.GetRequiredService<TimerPoller>());
         return services;
@@ -1661,7 +1726,8 @@ function stateInitializer(model, entity, deadline, statusExpr, sinceExpr) {
 
 function timerTestsFile(model) {
   const sln = solution(model);
-  const usings = ['System.Reflection', 'Xunit', timerNamespace(model), deadlinesNamespace(model)];
+  const usings = ['System.Reflection', 'Xunit', timerNamespace(model)];
+  if (usesDeadlines(model)) usings.push(deadlinesNamespace(model));
   const cron = CRON_UTC_CASES.map(([spec, from, next]) => `    [InlineData(${csString(spec)}, ${csString(from)}, ${csString(next)})]`);
   const members = [
     `    /// <summary>El cron se evalúa en UTC (T7): los casos de keel-core (CRON_UTC_CASES), los mismos en los cuatro.</summary>
@@ -1677,6 +1743,21 @@ ${cron.join('\n')}
     [InlineData(60000L, 30000L, 30000L)]
     public void ElSuenoEsHastaLoProximoConTope(long? next, long max, long expected) => Assert.Equal(expected, TimerPoller.SleepMs(next, max));`
   ];
+  // Las purgas en modo clúster (inc. 7): cada recurrente con el kind de keel-core y el cron del perfil.
+  const purges = timerPurges(model);
+  if (purges.length > 0) {
+    usings.push(namespaceOf(model, 'purge'));
+    const all = tablePurges(model);
+    members.push(`    /// <summary>Cada purga del generador es un recurrente del cronómetro con el kind de keel-core y el cron de su configuración.</summary>
+    [Fact]
+    public void CadaPurgaEsUnRecurrenteConElKindDeKeelCore()
+    {
+        var settings = ${purgeSettingsExpression(all)};
+        IRecurringTimerHandler[] recurrentes = [${purges.map((purge) => `new ${purgeTimerClass(purge.table)}(null!, settings)`).join(', ')}];
+        Assert.Equal(new[] { ${purges.map((purge) => csString(purge.kind)).join(', ')} }, recurrentes.Select(recurrente => recurrente.Kind));
+        Assert.Equal(new[] { ${purges.map((purge) => csString(purge.cron.default)).join(', ')} }, recurrentes.Select(recurrente => recurrente.Spec));
+    }`);
+  }
   // DL-1 a DL-3 contra el dominio emitido, por reflexión (el método de transición es privado: los semánticos son del agente).
   const entry = modelDeadlines(model).find(({ entity }) => lateGuards(entity).length > 0);
   if (entry) {

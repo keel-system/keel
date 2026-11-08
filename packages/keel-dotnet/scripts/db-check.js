@@ -79,7 +79,8 @@ import { partialIndexSpecs, discriminatorColumn, persistedMembers } from '@keel-
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { expectedSchemaNames } from '../src/scaffold/persistence.js';
 import { probeProject, databaseOf } from './lib/db-probes.js';
-import { TIMER_SABOTAGES, isTimerSabotage, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
+import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerSabotageVerdict, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
+import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -173,7 +174,9 @@ const SABOTAGES = {
   collation: { mysql: ['Persistence/Rows/', '.UseCollation("utf8mb4_bin")', ''] },
   'read-committed': { mysql: ['Persistence/PersistenceTransactions.cs', 'ClaimIsolation = IsolationLevel.ReadCommitted;', 'ClaimIsolation = null;'] },
   // El cronómetro y los plazos (DSL 2.26): cada uno cae en exactamente sus casos DL (scripts/lib/timer-probes.js).
-  ...Object.fromEntries(Object.entries(TIMER_SABOTAGES).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(TIMER_SABOTAGES).map(([id, spec]) => [id, spec.relational])),
+  // Las purgas en modo clúster (DSL 2.26, inc. 7): sobre notification-mailer, caen PT_R1 y PT_RC1.
+  ...Object.fromEntries(Object.entries(PURGE_TIMER_SABOTAGES).map(([id, spec]) => [id, spec.relational]))
 };
 
 /** El sabotaje para un motor: [sufijo, texto, sustituto], o null si no aplica a ese motor. */
@@ -230,7 +233,7 @@ function uncoveredBranch(name) {
   return { [name]: { from: branch.from, mutate: (manifest, layers) => branch.mutate(manifest, layers, name) } };
 }
 // Un sabotaje del cronómetro solo tiene sujeto en el par de los plazos: sin --only, solo ese.
-const SUBJECTS = only ? [only] : isTimerSabotage(sabotage) ? ['verification-codes'] : [...relational, ...Object.keys(DERIVED)];
+const SUBJECTS = only ? [only] : isTimerSabotage(sabotage) ? ['verification-codes'] : isPurgeTimerSabotage(sabotage) ? ['notification-mailer'] : [...relational, ...Object.keys(DERIVED)];
 
 if (sabotage && !SABOTAGES[sabotage]) {
   console.error(`No hay ningún sabotaje '${sabotage}'.`);
@@ -329,6 +332,11 @@ async function checkEngine(engine) {
       // Con el espacio delante: `Catalog.DbProbes.` es subcadena de `ProductCatalog.DbProbes.`.
       const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
       const ran = tested.output.includes(`${subject.probes.name}.dll`);
+      if (isPurgeTimerSabotage(sabotage) && timerPurges(subject.model).length > 0) {
+        const verdict = purgeTimerSabotageVerdict(mine, sabotage);
+        step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
       if (isTimerSabotage(sabotage) && timerSubject(subject.model)) {
         const verdict = timerSabotageVerdict(mine, sabotage, 'relational');
         step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);

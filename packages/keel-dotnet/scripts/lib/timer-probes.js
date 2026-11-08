@@ -21,7 +21,8 @@ import { csMember, csString, entityPlace, namespaceOf, typeUsings } from '../../
 import { portClass } from '../../src/scaffold/repositories.js';
 import { memberOf } from '../../src/scaffold/enums.js';
 import { usesMySql } from '../../src/scaffold/relational-engine.js';
-import { deadlineHandlerClass, deadlineMember, deadlinesClass, deadlinesNamespace, timerNamespace, usesDeadlines } from '../../src/scaffold/timer.js';
+import { deadlineHandlerClass, deadlineMember, deadlinesClass, deadlinesNamespace, purgeKindConstant, purgeTimerClass, timerNamespace, usesDeadlines } from '../../src/scaffold/timer.js';
+import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
 import { sampleState } from './db-probes.js';
 
@@ -158,7 +159,7 @@ export function timerFixtureRegistration(model) {
         services.AddSingleton(${settingsExpr(10)});
         services.AddScoped<IUseCaseMediator, TimerProbeMediator>();
 ${handlers.join('\n')}
-        services.AddScoped<ITimerHandler, KeelTimerPurge>();`;
+        services.AddScoped<IRecurringTimerHandler, KeelTimerPurge>();`;
 }
 
 const settingsExpr = (maxAttempts) => `new TimerSettings(true, 30_000, 50, 60_000, ${maxAttempts}, 0, 7, "0 30 5 * * *")`;
@@ -476,6 +477,176 @@ public sealed class TimerProbeMediator(${port} repository) : IUseCaseMediator
     public Task DispatchWithoutTransaction(ICommand command, CancellationToken cancellationToken = default) => Dispatch(command, cancellationToken);
 
     public Task<TResult> DispatchWithoutTransaction<TResult>(IReturningCommand<TResult> command, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+}`;
+  return { methods, classes };
+}
+
+// ─── Las purgas en modo clúster (DSL 2.26, incremento 7) ─────────────────────────────────────────
+//
+// Antes, TablePurges registraba cada purga en el reloj, que corre en TODAS las réplicas a la vez. Ahora cada una es un
+// recurrente del cronómetro (`<Tabla>PurgeTimer`), y la promesa es una sola: cada tick lo ejecuta UNA réplica, la que gana
+// su fila en keel_timer. Dos réplicas son dos TimerPoller sobre la misma base; el contenedor de la sonda envuelve cada
+// recurrente en `PurgeTimerCount`, que ejecuta la purga de verdad (TablePurges) y cuenta sus ticks: contarlos es contar
+// cuántas réplicas ejecutaron cada uno. Los mismos casos que keel-spring (src/lib/purge-timer-probes.js): R1, RC-1 y R2.
+//
+// El sabotaje es «cada réplica arbitra con su propia fila» en el almacén: el recurrente se asegura con un entity_id nuevo
+// en vez del uuid nulo, así que la unicidad (kind, entity_id) ya no lo deduplica. En keel-spring y keel-nest es un kind
+// por instancia; aquí no vale, porque el sondeador resuelve los recurrentes del contenedor en cada ámbito y un kind por
+// instancia rompería también a UNA réplica.
+
+export const PURGE_TIMER_SABOTAGES = Object.freeze({
+  'timer-every-replica': {
+    relational: ['Timers/TimerStore.cs', '["entityId"] = TimerKinds.NilEntityId, ["spec"] = spec', '["entityId"] = Guid.NewGuid(), ["spec"] = spec'],
+    document: ['Timers/TimerStore.cs', 'new BsonDocument("_id", DocumentId(kind, TimerKinds.NilEntityId)), Pipeline(set)', 'new BsonDocument("_id", DocumentId(kind, Guid.NewGuid())), Pipeline(set)'],
+    breaks: ['R-1', 'RC-1']
+  }
+});
+
+export const isPurgeTimerSabotage = (id) => Boolean(id && PURGE_TIMER_SABOTAGES[id]);
+
+/** El veredicto sobre las líneas en rojo de UN sujeto: `PT_RC1_…` es RC-1; lo que no es del bloque cuenta por su nombre. */
+export function purgeTimerSabotageVerdict(failureLines, id) {
+  const failed = [...new Set(failureLines.map((line) => {
+    const match = /\.PT_(RC|R)(\d+)_/.exec(line);
+    return match ? `${match[1]}-${match[2]}` : line;
+  }))].sort();
+  const want = [...PURGE_TIMER_SABOTAGES[id].breaks].sort();
+  return { exact: failed.length === want.length && failed.every((name, index) => name === want[index]), failed, want };
+}
+
+/** Lo que el contenedor de la sonda registra: cada recurrente de purga, envuelto en el que cuenta sus ticks. */
+export function purgeTimerFixtureRegistration(model) {
+  const purges = timerPurges(model);
+  if (purges.length === 0) return '';
+  const lines = purges.map(
+    (purge) => `        services.AddScoped<IRecurringTimerHandler>(provider => new PurgeTimerCount(new ${purgeTimerClass(purge.table)}(provider.GetRequiredService<TablePurges>(), provider.GetRequiredService<PurgeSettings>())));`
+  );
+  return `
+        // Las purgas en modo clúster (DSL 2.26, inc. 7): cada recurrente, contado por PurgeTimerCount.
+${lines.join('\n')}`;
+}
+
+export function purgeTimerProbeUsings(model) {
+  return timerPurges(model).length > 0 ? [timerNamespace(model), 'Microsoft.Extensions.Logging.Abstractions', 'System.Collections.Concurrent'] : [];
+}
+
+/** Los métodos de R1, RC-1 y R2 (dentro de la clase de sondas, que declara `root`, `Cancel` e `InScope`) y la clase que cuenta. */
+export function purgeTimerProbeBlock(model) {
+  const purges = timerPurges(model);
+  if (purges.length === 0) return null;
+  const document = usesDocument(model);
+  const store = document
+    ? {
+        clear: '        await root.GetRequiredService<DocumentDatabase>().Collection("keel_timer").DeleteManyAsync(new BsonDocument(), Cancel);',
+        count: '        await root.GetRequiredService<DocumentDatabase>().Collection("keel_timer").CountDocumentsAsync(new BsonDocument("kind", kind), cancellationToken: Cancel);',
+        fire: `        var now = await InScope(services => services.GetRequiredService<ITimerStore>().DbNow(Cancel));
+        await root.GetRequiredService<DocumentDatabase>().Collection("keel_timer").UpdateManyAsync(
+            new BsonDocument("kind", kind),
+            new BsonDocument("$set", new BsonDocument { { "due_at", new BsonDateTime(now.UtcDateTime) }, { "claimed_until", BsonNull.Value }, { "claim_token", BsonNull.Value } }),
+            cancellationToken: Cancel);`
+      }
+    : (() => {
+        const context = `${model.service.rootNamespace}DbContext`;
+        const engine = usesMySql(model) ? 'mysql' : 'postgresql';
+        const fire = timerStatements(engine).fire.replace(':kind', '{0}');
+        const alias = usesMySql(model) ? 'AS `Value`' : 'AS \\"Value\\"';
+        return {
+          clear: `        await InScope(async services => await services.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync("DELETE FROM ${KEEL_TIMER.table}", Cancel));`,
+          count: `        await InScope(services => services.GetRequiredService<${context}>().Database.SqlQuery<long>($"SELECT count(*) ${alias} FROM ${KEEL_TIMER.table} WHERE kind = {kind}").SingleAsync(Cancel));`,
+          fire: `        await InScope(async services => await services.GetRequiredService<${context}>().Database.ExecuteSqlRawAsync(${csString(fire)}, [kind], Cancel));`
+        };
+      })();
+  const kinds = purges.map((purge) => `TimerKinds.${purgeKindConstant(purge.table)}`).join(', ');
+  const methods = `    // ═══ Las purgas en modo clúster (DSL 2.26, inc. 7): ${purges.map((purge) => purge.table).join(', ')} ═══
+
+    private static readonly string[] PurgeKinds = [${kinds}];
+
+    /// <summary>Una réplica: un sondeador propio sobre la misma base, como un proceso aparte.</summary>
+    private static TimerPoller PurgeReplica() =>
+        new(root.GetRequiredService<IServiceScopeFactory>(), new TimerSettings(true, 30_000, 50, 60_000, 10, 0, 7, "0 30 5 * * *"), root.GetRequiredService<TimerWakeup>(), TimeProvider.System, NullLogger<TimerPoller>.Instance);
+
+    private static async Task PurgeStart()
+    {
+        PurgeTimerCount.Ticks.Clear();
+${store.clear}
+    }
+
+    private static async Task<long> PurgeRows(string kind) =>
+${store.count}
+
+    private static async Task PurgeFire(string kind)
+    {
+${store.fire}
+    }
+
+    /// <summary>R1: cada réplica asegura sus recurrentes al arrancar, y dos réplicas no duplican la fila de una purga.</summary>
+    [Fact]
+    public async Task PT_R1_UnaFilaPorPurgaAunqueLaAsegurenDosReplicas()
+    {
+        await PurgeStart();
+        await PurgeReplica().EnsureRecurring(Cancel);
+        await PurgeReplica().EnsureRecurring(Cancel);
+        foreach (var kind in PurgeKinds)
+        {
+            Assert.Equal(1, await PurgeRows(kind));
+        }
+    }
+
+    /// <summary>RC-1: con dos réplicas sondeando, cada tick de una purga lo ejecuta exactamente una.</summary>
+    [Fact]
+    public async Task PT_RC1_CadaTickLoEjecutaUnaSolaReplica()
+    {
+        await PurgeStart();
+        var a = PurgeReplica();
+        var b = PurgeReplica();
+        await a.EnsureRecurring(Cancel);
+        await b.EnsureRecurring(Cancel);
+        foreach (var kind in PurgeKinds)
+        {
+            await PurgeFire(kind);
+        }
+        await a.PollOnce(Cancel);
+        await b.PollOnce(Cancel);
+        foreach (var kind in PurgeKinds)
+        {
+            Assert.Equal(1, PurgeTimerCount.Ticks.GetValueOrDefault(kind));
+        }
+    }
+
+    /// <summary>R2: el tick rearma la purga para su siguiente cron, desde la hora de la base: la misma réplica no la repite ya.</summary>
+    [Fact]
+    public async Task PT_R2_ElTickRearmaParaElSiguienteCron()
+    {
+        await PurgeStart();
+        var a = PurgeReplica();
+        await a.EnsureRecurring(Cancel);
+        foreach (var kind in PurgeKinds)
+        {
+            await PurgeFire(kind);
+        }
+        await a.PollOnce(Cancel);
+        await a.PollOnce(Cancel);
+        foreach (var kind in PurgeKinds)
+        {
+            Assert.Equal(1, PurgeTimerCount.Ticks.GetValueOrDefault(kind));
+        }
+        var next = await InScope(services => services.GetRequiredService<ITimerStore>().NextDueMs(PurgeKinds, Cancel));
+        Assert.True(next is > 0, $"tras el tick la purga no quedó armada para el futuro: {next}");
+    }`;
+  const classes = `/// <summary>Un recurrente de la sonda que ejecuta el de verdad y cuenta sus ticks por kind (R1, RC-1 y R2).</summary>
+public sealed class PurgeTimerCount(IRecurringTimerHandler inner) : IRecurringTimerHandler
+{
+    public static ConcurrentDictionary<string, int> Ticks { get; } = new(StringComparer.Ordinal);
+
+    public string Kind => inner.Kind;
+
+    public string Spec => inner.Spec;
+
+    public async Task Tick(CancellationToken cancellationToken)
+    {
+        await inner.Tick(cancellationToken);
+        Ticks.AddOrUpdate(inner.Kind, 1, (_, ticks) => ticks + 1);
+    }
 }`;
   return { methods, classes };
 }

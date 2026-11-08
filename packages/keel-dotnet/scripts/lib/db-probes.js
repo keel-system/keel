@@ -47,7 +47,7 @@ import { registryOperations } from '@keel-system/keel-core/gen/request-idempoten
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
-import { timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
+import { purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsings, timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
 import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
@@ -658,8 +658,12 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
   // El cronómetro y los plazos (DSL 2.26): sus casos van en ESTA clase, que comparte la base con ellos.
   const timer = timerProbeBlock(model, ctx);
   if (timer) blocks.push(timer.methods);
+  // Las purgas en modo clúster (DSL 2.26, inc. 7): dos réplicas sobre la misma base, en ESTA clase.
+  const purgeTimer = purgeTimerProbeBlock(model);
+  if (purgeTimer) blocks.push(purgeTimer.methods);
   const usings = [
     ...timerProbeUsings(model),
+    ...purgeTimerProbeUsings(model),
     'System.Text.Json',
     'System.Text.Json.Nodes',
     'Microsoft.EntityFrameworkCore',
@@ -691,7 +695,7 @@ public sealed class PersistenceFixture : IAsyncLifetime
         const string Database = ${csString(databaseOf(model))};
 ${usesMySql(model) ? MYSQL_SUBJECT_DATABASE : POSTGRESQL_SUBJECT_DATABASE}
         var services = new ServiceCollection();
-        services.AddLogging();${timerFixtureRegistration(model)}${usesSweepClaims(model) ? `
+        services.AddLogging();${timerFixtureRegistration(model)}${purgeTimerFixtureRegistration(model)}${usesSweepClaims(model) ? `
         // Los barridos con lotes de DOS: con tres filas, dos pasadas. AddPersistence no pisa estos (TryAdd).
         services.AddSingleton(${probeSweepSettings(model)});` : ''}${usesReconciliationSettings(model) ? `
         // Los barridos de reconciliación con lotes de DOS (con tres candidatos, dos pasadas); AddPersistence no los pisa.
@@ -763,7 +767,7 @@ ${ensures.join('\n\n')}
     };
 }`;
   if (ctx.unsampled.length > 0) console.warn(`  (db-check) sin muestra para ${[...new Set(ctx.unsampled)].join(', ')}`);
-  return csFileLike(namespace, usings, timer ? `${body}\n\n${timer.classes}` : body);
+  return csFileLike(namespace, usings, [body, timer?.classes, purgeTimer?.classes].filter(Boolean).join('\n\n'));
 }
 
 /** Los campos de la clave natural que declaran `compare` (su unicidad va sobre la sombra plegada), si son texto. */

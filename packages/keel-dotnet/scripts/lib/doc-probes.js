@@ -32,7 +32,7 @@ import { documentProbeSupport, storeKeyBlock, documentOutboxBlock, documentBridg
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { bridgeClass, messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
-import { timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
+import { purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsings, timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
@@ -534,8 +534,12 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
   // El cronómetro y los plazos (DSL 2.26): sus casos van en ESTA clase, que comparte la base con ellos.
   const timer = timerProbeBlock(model, ctx);
   if (timer) blocks.push(timer.methods);
+  // Las purgas en modo clúster (DSL 2.26, inc. 7): dos réplicas sobre la misma base, en ESTA clase.
+  const purgeTimer = purgeTimerProbeBlock(model);
+  if (purgeTimer) blocks.push(purgeTimer.methods);
   const usings = [
     ...timerProbeUsings(model),
+    ...purgeTimerProbeUsings(model),
     'System.Text.Json',
     'System.Text.Json.Nodes',
     'Microsoft.Extensions.DependencyInjection',
@@ -573,7 +577,7 @@ public sealed class DocumentFixture : IAsyncLifetime
         }
         var services = new ServiceCollection();
         services.AddLogging();
-${fixtureRegistrations(model)}${timerFixtureRegistration(model)}
+${fixtureRegistrations(model)}${timerFixtureRegistration(model)}${purgeTimerFixtureRegistration(model)}
         services.AddPersistence(new DatabaseSettings(true, MongoUrl.Create(target), Database, "doc-check"));${usesBridge(model) ? `
         // Los adaptadores de las raíces que emiten eventos los entregan al puente.
         services.AddDomainEvents(MessagingSettings.Defaults);` : ''}${usesDotnetOutbox(model) ? `
@@ -717,6 +721,6 @@ ${ensures.join('\n\n')}
     };
 }`;
   if (ctx.unsampled.length > 0) console.warn(`  (doc-check) sin muestra para ${[...new Set(ctx.unsampled)].join(', ')}`);
-  const full = timer ? `${body}\n\n${timer.classes}` : body;
+  const full = [body, timer?.classes, purgeTimer?.classes].filter(Boolean).join('\n\n');
   return `namespace ${namespace};\n\n${[...new Set(usings)].sort().map((u) => `using ${u};`).join('\n')}\n\n${full}\n`;
 }

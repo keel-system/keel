@@ -96,7 +96,10 @@ topología la siembra el `infra/init-messaging.sh` neutral). Nada de MassTransit
 
 Reloj y purgas (10b) con un `BackgroundService` propio sobre **Cronos** (`src/scaffold/scheduling.js`, `purge.js`): el
 segundo repartido y el despacho los decide `keel-core/gen/scheduling.js`, y `test/scheduling.test.js` los compara con el
-`Scheduler.java` que EMITE keel-spring; las purgas las mide `db-check`. Los reclamos de barrido y el rescate (10c,
+`Scheduler.java` que EMITE keel-spring; las purgas las mide `db-check`. Desde el inc. 7 del plan 2.26 las purgas no son
+tareas del reloj sino recurrentes del cronómetro (`<Tabla>PurgeTimer : IRecurringTimerHandler`, en `timer.js`;
+`TablePurges.Tasks` solo da las que no van por él); el sondeador los resuelve del contenedor en cada ámbito, así que el
+sabotaje `timer-every-replica` de `db-check`/`doc-check` es un `entity_id` nuevo al asegurar, no un kind por instancia. Los reclamos de barrido y el rescate (10c,
 `src/scaffold/claim.js`) y los parámetros de despliegue (`service-parameters.js`) son los de keel-nest sobre EF Core; el
 reclamo se niega a correr dentro de una transacción abierta (`RequireOwnTransaction`), y lo miden `test/claim.test.js` y
 `db-check`.

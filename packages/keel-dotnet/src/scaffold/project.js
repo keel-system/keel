@@ -24,7 +24,7 @@ import { usesStorageAdapter } from './storage.js';
 import { usesJwt } from './security.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
-import { usesDeadlines } from './timer.js';
+import { usesTimer } from './timer.js';
 import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { DOCKERIGNORE } from './deploy.js';
 import { PROVIDER_PACKAGES, relationalEngine } from './relational-engine.js';
@@ -54,7 +54,7 @@ export function infrastructurePackages(model) {
     ...(usesSnsSqs(model) ? ['AWSSDK.SimpleNotificationService', 'AWSSDK.SQS'] : []),
     // El reloj: el cron de seis campos de los barridos y de las purgas.
     // (y el del cronómetro de los plazos, DSL 2.26: la purga de keel_timer es un recurrente con cron en UTC)
-    ...(usesScheduling(model) || usesDeadlines(model) ? ['Cronos'] : []),
+    ...(usesScheduling(model) || usesTimer(model) ? ['Cronos'] : []),
     // El correo saliente: el SMTP y, con plantillas, su motor.
     // (con la transitiva de MimeKit fijada en su versión corregida: ver dotnet-stack.js)
     ...(usesMail(model) ? ['MailKit', 'System.Security.Cryptography.Pkcs', ...(model.mail.templating ? ['Handlebars.Net'] : [])] : []),

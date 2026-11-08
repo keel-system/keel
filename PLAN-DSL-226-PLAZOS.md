@@ -518,6 +518,19 @@ pasaba a toda consulta que falla, también a la violación de unicidad que el se
 TypeORM escribe por el `Logger` de Nest (`NestTypeOrmLogger`, en `data-source-options.ts`), y una consulta fallida es un
 aviso, como en keel-spring.
 
+**Lo que dejó el incremento 7 en keel-dotnet.** Cada purga es un `<Tabla>PurgeTimer : IRecurringTimerHandler` que llama al
+método de `TablePurges`, y `TablePurges.Tasks` solo da al reloj las que no van por el cronómetro (con el cronómetro, ninguna).
+`IRecurringTimerHandler` deja de ser un `ITimerHandler`: es `Kind`, `Spec` y `Tick`, y el sondeador lo ejecuta fuera de la
+transacción. La prueba emitida `TimerTests` fija el `kind` y el cron de cada recurrente, y `SchedulingTests` que ninguna
+purga queda entre las tareas del reloj.
+
+La red es el bloque de dos réplicas de `db-check` y `doc-check`: cada recurrente envuelto en `PurgeTimerCount`, que ejecuta
+la purga de verdad y cuenta sus ticks. `db-check` da 79/79 en PostgreSQL y MySQL, `doc-check` 26/26 y `cs-check --fixtures`
+compila sin warnings 360 ensamblados y pasa 9263 pruebas emitidas. El sondeador de keel-dotnet resuelve los recurrentes del
+contenedor en cada ámbito, así que un `kind` por instancia rompería también a una sola réplica. Por eso el sabotaje
+`timer-every-replica` actúa en el almacén: asegura el recurrente con un `entity_id` nuevo, y cada réplica arbitra con su
+propia fila. Cae en exactamente R1 y RC-1 en los tres motores.
+
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
 migración es un incremento propio con su puerta, y entre una y otra el servidor generado sigue en verde.

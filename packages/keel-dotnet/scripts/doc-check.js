@@ -61,7 +61,8 @@ import { spawnSync } from 'node:child_process';
 import { documentIndexes } from '@keel-system/keel-core/gen/document';
 import { planFixture, makeWorkspace, UNCOVERED_BRANCHES } from '../test/helpers/workspace.js';
 import { docProbeProject, documentDatabaseOf } from './lib/doc-probes.js';
-import { TIMER_SABOTAGES, isTimerSabotage, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
+import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerSabotageVerdict, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
+import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { resolveRuntime, startMongo, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -107,7 +108,13 @@ const SUBJECTS = [
     from: branch.from,
     mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name)
   }))
-].filter((subject) => (only ? subject.name === only : !isTimerSabotage(sabotage) || subject.name === 'verification-codes-mongo'));
+].filter((subject) =>
+  only
+    ? subject.name === only
+    : isPurgeTimerSabotage(sabotage)
+      ? subject.name === 'notification-mailer-mongo'
+      : !isTimerSabotage(sabotage) || subject.name === 'verification-codes-mongo'
+);
 
 // Los sabotajes: [archivo (sufijo, en todos los sujetos), texto, sustituto].
 // El fin de línea de lo emitido (la llamada sigue en la línea siguiente).
@@ -179,7 +186,9 @@ const SABOTAGES = {
   // El plegado (DSL 2.14), en la derivada job-dispatch-mongo-compare.
   'fold-accents': ['Persistence/TextFold.cs', 'return kept.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant();', 'return value.ToLowerInvariant();'],
   // El cronómetro y los plazos (DSL 2.26): cada uno cae en exactamente sus casos DL (scripts/lib/timer-probes.js).
-  ...Object.fromEntries(Object.entries(TIMER_SABOTAGES).map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(TIMER_SABOTAGES).map(([id, spec]) => [id, spec.document])),
+  // Las purgas en modo clúster (DSL 2.26, inc. 7): sobre notification-mailer-mongo, caen PT_R1 y PT_RC1.
+  ...Object.fromEntries(Object.entries(PURGE_TIMER_SABOTAGES).map(([id, spec]) => [id, spec.document]))
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación
@@ -279,6 +288,11 @@ try {
   for (const subject of subjects) {
     const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
     const ran = tested.output.includes(`${subject.probes.name}.dll`);
+    if (isPurgeTimerSabotage(sabotage) && timerPurges(subject.model).length > 0) {
+      const verdict = purgeTimerSabotageVerdict(mine, sabotage);
+      step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
     if (isTimerSabotage(sabotage) && timerSubject(subject.model)) {
       const verdict = timerSabotageVerdict(mine, sabotage, 'document');
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);

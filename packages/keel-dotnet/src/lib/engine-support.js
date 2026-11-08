@@ -49,7 +49,40 @@ export const NETS = {
 export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
-  'timer-purge': { pending: 'incremento 7 de PLAN-DSL-226-PLAZOS.md: las purgas de las tablas del generador, como recurrentes del cronómetro' },
+  'timer-purge': {
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: [
+          'file:src/NotificationMailer.Infrastructure/Timers/OutboxEventPurgeTimer.cs',
+          'src/NotificationMailer.Infrastructure/Timers/OutboxEventPurgeTimer.cs::IRecurringTimerHandler',
+          'file:src/NotificationMailer.Infrastructure/Timers/TimerStore.cs'
+        ],
+        document: [
+          'file:src/NotificationMailerMongo.Infrastructure/Timers/OutboxEventPurgeTimer.cs',
+          'src/NotificationMailerMongo.Infrastructure/Timers/OutboxEventPurgeTimer.cs::IRecurringTimerHandler',
+          'file:src/NotificationMailerMongo.Infrastructure/Timers/TimerStore.cs'
+        ]
+      }
+    },
+    emitter: 'src/scaffold/timer.js (un <Tabla>PurgeTimer por purga, TimerPoller, TimerRegistration) · src/scaffold/purge.js (TablePurges.Tasks ya no las da al reloj)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'notification-mailer: dos réplicas (dos TimerPoller sobre la misma base, cada recurrente envuelto en PurgeTimerCount, que ejecuta la purga de verdad y cuenta sus ticks): una fila por purga (R1), un solo tick ejecutado (RC-1) y el rearme para el siguiente cron (R2), los casos de la sonda de keel-spring. Falsado con timer-every-replica, que asegura el recurrente con un entity_id nuevo (cada réplica, su fila) y cae en R1 y RC-1'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'notification-mailer-mongo: los mismos tres casos sobre el TimerStore documental en el replica set. Falsado con timer-every-replica (un _id nuevo por aseguramiento), que cae en R1 y RC-1'
+      }
+    }
+  },
   deadline: {
     parity: {
       pair: 'verification-codes',
