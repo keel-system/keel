@@ -104,7 +104,10 @@ export const DATABASES = {
       '-v', 'ON_ERROR_STOP=1', '-q', '-t', '-A', '-c'
     ],
     cliResetCmd:
-      "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c \"DO \\$\\$ DECLARE stmt text; BEGIN SELECT 'TRUNCATE TABLE ' || string_agg(quote_ident(tablename), ', ') || ' RESTART IDENTITY CASCADE' INTO stmt FROM pg_tables WHERE schemaname = 'public' AND tablename <> '{history}'; IF stmt IS NOT NULL THEN EXECUTE stmt; END IF; END \\$\\$;\"",
+      // keel_timer no se vacía entera: sus RECURRENTES (entity_id nulo) son el reloj de la app, que los asegura al arrancar
+      // y no al vaciarse la base; sin ellos ningún barrido vuelve a dispararse hasta reiniciarla. Sus plazos sí se borran,
+      // porque son de las entidades que el reset vacía (PLAN-DSL-226-PLAZOS.md, inc. 8).
+      "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c \"DO \\$\\$ DECLARE stmt text; BEGIN SELECT 'TRUNCATE TABLE ' || string_agg(quote_ident(tablename), ', ') || ' RESTART IDENTITY CASCADE' INTO stmt FROM pg_tables WHERE schemaname = 'public' AND tablename NOT IN ('{history}', 'keel_timer'); IF stmt IS NOT NULL THEN EXECUTE stmt; END IF; IF to_regclass('public.keel_timer') IS NOT NULL THEN DELETE FROM keel_timer WHERE entity_id <> '00000000-0000-0000-0000-000000000000'; END IF; END \\$\\$;\"",
     cliDropSchemaCmd:
       "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'",
     // Un script SQL por la entrada estándar, en UNA transacción y parando al primer error: lo usa reset-db.sh para cargar
@@ -135,8 +138,10 @@ export const DATABASES = {
     // `-p` va PEGADO a la contraseña: separado, mysql lo lee como «pídemela por
     // terminal» y el proceso se queda esperando una entrada que nunca llega.
     cliQueryArgv: ({ user, pass, db }) => ['mysql', '-h', 'db', '-u', user, `-p${pass}`, '-N', '-B', db, '-e'],
+    // keel_timer: se conservan sus RECURRENTES (entity_id nulo, 16 bytes a cero en binary(16)) y se borran sus plazos,
+    // como en PostgreSQL. La sentencia sale del SELECT solo si la tabla existe.
     cliResetCmd:
-      "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name <> \"{history}\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
+      "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name NOT IN (\"{history}\", \"keel_timer\") UNION ALL SELECT \"DELETE FROM keel_timer WHERE entity_id <> 0x00000000000000000000000000000000;\" FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name = \"keel_timer\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     cliDropSchemaCmd:
       "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"DROP TABLE IF EXISTS \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     cliScriptCmd: "mysql -h db -u {user} -p'{pass}' {db}",
@@ -391,9 +396,10 @@ export const DATABASES = {
     // Vacía los documentos preservando colecciones e ÍNDICES: los índices son el
     // equivalente del esquema aquí, y recrearlos en cada flujo sería el error
     // simétrico a truncar el historial de migraciones en la rama relacional. No hay
-    // historial de migraciones que excluir porque no hay migraciones.
+    // historial de migraciones que excluir porque no hay migraciones. De keel_timer se conservan los RECURRENTES (su
+    // `_id` acaba en el uuid nulo: timerDocumentId de timer-store.js), que son el reloj de la app; los plazos se borran.
     cliResetCmd:
-      "mongosh 'mongodb://{user}:{pass}@localhost:27017/{db}?authSource=admin&directConnection=true' --quiet --eval 'db.getCollectionNames().forEach(function (c) { db.getCollection(c).deleteMany({}); })'",
+      "mongosh 'mongodb://{user}:{pass}@localhost:27017/{db}?authSource=admin&directConnection=true' --quiet --eval 'db.getCollectionNames().forEach(function (c) { if (c === \"keel_timer\") { db.getCollection(c).deleteMany({ _id: { $not: /\\|00000000-0000-0000-0000-000000000000$/ } }); } else { db.getCollection(c).deleteMany({}); } })'",
     // El equivalente de --schema: borra la base entera, índices incluidos.
     // MongoIndexConfig los recrea en el siguiente arranque.
     cliDropSchemaCmd:

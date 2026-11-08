@@ -21,6 +21,7 @@ import { claimOrderField, claimsForEntity, screamingSnake, sweepClaims, sweepCon
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { engineOf, ormClass, usesPersistence } from './persistence-entities.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
+import { sweepPassImport, sweepPassSignal } from './timer.js';
 import { envWithDefault } from '@keel-system/keel-core/gen/profile-values';
 import { needsReadCommitted } from '@keel-system/keel-core/gen/infra-catalog';
 import { guardClaimsFor } from '@keel-system/keel-core/gen/scheduling';
@@ -131,7 +132,8 @@ function describe(claim, entityName) {
     return `Rescata hasta el lote de ${entityName} ATASCADOS en ${claim.stalled.state}: los devuelve SIGUIENDO en ${claim.stalled.state}, con
 ${claim.stalled.stampField} renovado, para que el handler los pase a ${claim.to}.
 
-Reclama, no lee: corre en TODAS las réplicas, y solo devuelve lo que ESTA se llevó (un UPDATE condicional que
+Reclama, no lee: puede correr a la vez en varias réplicas (en todas con el reloj; con el cronómetro, cuando un tick se
+repite al vencer su arriendo), y solo devuelve lo que ESTA se llevó (un UPDATE condicional que
 solo casa si la fila sigue atascada, y que renueva el reloj). Confirma en su propia transacción antes de volver.
 
 No cambia el estado, lo ARRIENDA: la transición a ${claim.to} es del dominio, que fija los campos que ese estado
@@ -144,7 +146,8 @@ alguien dejó a medias: si el ciclo que murió ya produjo un efecto irreversible
   const due = claim.due ? ` Solo los que ya vencieron (${claim.due.field} <= ahora).` : '';
   return `Reclama hasta el lote de ${entityName} en ${claim.from.join(' o ')} y los pasa a ${claim.to}.${due}
 
-Reclama, no lee: corre en TODAS las réplicas a la vez, y lo que devuelve son SOLO las filas que ESTA se llevó
+Reclama, no lee: puede correr a la vez en varias réplicas (en todas con el reloj; con el cronómetro, cuando un tick se
+repite al vencer su arriendo), y lo que devuelve son SOLO las filas que ESTA se llevó
 (el paso a ${claim.to} va en un UPDATE condicional). Leer el lote con un finder y marcarlo después se lo daría
 entero a todas. Confirma en su propia transacción antes de volver: actúa sobre lo que devuelve FUERA de ella.${stamp}`;
 }
@@ -164,6 +167,12 @@ export function claimDependencies(model, entity) {
 
 /** Los métodos de reclamo del adaptador TypeORM. `findOptions(where)` es el de la carga del agregado entero. */
 export function adapterClaimMethods(model, entity, imports, findOptions) {
+  // La señal del drenaje (inc. 8 del plan 2.26), con su import si algún reclamo la lleva.
+  const signal = (claim, size, batch, indent) => {
+    const line = sweepPassSignal(model, claim, size, batch, indent);
+    if (line && !imports.some((entry) => entry.symbol === 'SweepPass')) imports.push(sweepPassImport());
+    return line;
+  };
   const claims = claimsForEntity(model, entity.name);
   if (claims.length === 0) return [];
   const { enumType, field } = entity.lifecycle;
@@ -229,7 +238,7 @@ ${setup.join('\n')}${setup.length > 0 ? '\n' : ''}    const states = [${states}]
         const found = await manager.findOne(${orm}, ${findOptions('{ id }')});
         if (found != null) claimed.push(toDomain${entity.name}(found));
       }
-      return claimed;
+${signal(claim, 'candidates.length', `this.sweeps.batchSize[${tsString(claim.sweepKey)}]!`, '      ')}      return claimed;
     }${isolation});
   }`;
   });

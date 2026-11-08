@@ -19,7 +19,9 @@
 //   purgas      lo caducado sale por lotes con tope, la pasada siguiente sigue, y lo vigente y lo PENDIENTE
 //               del outbox no se tocan.
 
-import { claimsForEntity, claimOrderField, screamingSnake } from '@keel-system/keel-core/gen';
+import { claimsForEntity, claimOrderField, screamingSnake, sweepClaims } from '@keel-system/keel-core/gen';
+import { claimDrains } from '@keel-system/keel-core/gen/timer-plan';
+import { scheduleTimerClass, scheduleTimerPath } from '../../src/scaffold/timer.js';
 import { storeDocumentKey, storeDocumentFields, documentShape } from '@keel-system/keel-core/gen/document';
 import { OUTBOX_EVENT, PROCESSED_EVENT } from '@keel-system/keel-core/gen/messaging-stores';
 import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
@@ -259,6 +261,44 @@ ${shapeCheck(IDEMPOTENCY_RECORD, 'recorded')}
 
 // ─── Barridos ────────────────────────────────────────────────────────────────
 
+/**
+ * El DRENAJE del tick (DSL 2.26, inc. 8), sobre documentos: DR-1 a DR-3 sobre el reclamo de la cola, con el
+ * <Operación>ScheduleTimer EMITIDO y un scheduler que llama al reclamo real (lote de 3). Los mismos casos que db-check.
+ */
+function drainCases(model, root, claims, { fieldKey, ctx }) {
+  const queue = claims.find((claim) => !claim.stalled && claimDrains(model, claim));
+  if (!queue) return '';
+  const operation = sweepClaims(model).find((entry) => entry.claim === queue).operation.name;
+  const timer = scheduleTimerClass(operation);
+  ctx.imports.add(`${timer}|${scheduleTimerPath(operation)}`);
+  const from = stored(model, root, queue.from[0]);
+  return `
+    {
+      const left = () => collection.countDocuments({ ${JSON.stringify(fieldKey)}: ${JSON.stringify(from)} });
+      let passes = 0;
+      // El scheduler de la operación, doblado: cada pasada del tick es una llamada al reclamo REAL, lote de 3.
+      const tickOf = (budget) => new ${timer}({ ${operation}: async () => { passes += 1; await adapter(3).${queue.method}(); } }, { drainBudgetMs: budget });
+
+      await park();
+      passes = 0;
+      await seed(7, ${JSON.stringify(from)}, () => ({}));
+      await tickOf(60_000).tick();
+      check('DR-1: con más candidatos que el lote, UN tick los drena todos, en varias pasadas', (await left()) === 0 && passes === 3, \`\${await left()} pendientes tras \${passes} pasadas\`);
+
+      await park();
+      passes = 0;
+      await seed(2, ${JSON.stringify(from)}, () => ({}));
+      await tickOf(60_000).tick();
+      check('DR-2: con menos candidatos que el lote, el tick hace una sola pasada', (await left()) === 0 && passes === 1, \`\${await left()} pendientes tras \${passes} pasadas\`);
+
+      await park();
+      passes = 0;
+      await seed(9, ${JSON.stringify(from)}, () => ({}));
+      await tickOf(0).tick();
+      check('DR-3: agotado el presupuesto, el tick para aunque el lote siga saliendo lleno', (await left()) === 6 && passes === 1, \`\${await left()} pendientes tras \${passes} pasadas\`);
+    }`;
+}
+
 function sweepBlock(model, ctx) {
   const blocks = [];
   for (const root of repositoryRoots(model)) {
@@ -271,7 +311,8 @@ function sweepBlock(model, ctx) {
     if (!parked) continue;
     ctx.imports.add(`${enumType}|${classPath(DIRS.enums, enumType)}`);
     const fieldKey = keyOf(model, root, field);
-    const samples = Array.from({ length: 24 }, (_, i) => `() => ${sampleEntity(model, root, ctx, `claim${i}`)}`);
+    // 48 y no 24: los casos del drenaje (DR-1 a DR-3, inc. 8 del plan 2.26) siembran 18 documentos más.
+    const samples = Array.from({ length: 48 }, (_, i) => `() => ${sampleEntity(model, root, ctx, `claim${i}`)}`);
     const cases = claims.map((claim) => {
       const label = `${root.name}.${claim.method}`;
       if (claim.stalled) {
@@ -318,6 +359,7 @@ function sweepBlock(model, ctx) {
       check('${label}: dos réplicas a la vez no se llevan la misma fila', new Set(both).size === both.length && same(both, raced), \`\${a.length} + \${b.length}\`);
     }`;
     });
+    cases.push(drainCases(model, root, claims, { fieldKey, ctx }));
     blocks.push(`
 // ═══ Reclamos de barrido: ${root.name} ═══
 try {

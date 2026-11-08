@@ -24,6 +24,7 @@ import { ORM_DIR, engineOf, ormClass, usesPersistence, usesDocument, usesRelatio
 import { documentReconciliationStore } from './document-stores.js';
 import { storeEntity } from './messaging-stores.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
+import { sweepPassImport, sweepPassSignal } from './timer.js';
 import { needsReadCommitted } from '@keel-system/keel-core/gen/infra-catalog';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
@@ -209,7 +210,8 @@ function describe(claim) {
   return `Reclama los ${claim.entity} que encargaron trabajo a ${claim.dependency}.${claim.activation} y llevan
 demasiado tiempo sin desenlace (${claim.awaitingField} más viejo que el umbral que declara el diseño).
 
-Reclama, no lee: corre en TODAS las réplicas a la vez, y la lista son SOLO los candidatos que ESTA se llevó.
+Reclama, no lee: puede correr a la vez en varias réplicas (en todas con el reloj; con el cronómetro, cuando un tick
+se repite al vencer su arriendo), y la lista son SOLO los candidatos que ESTA se llevó.
 La marca es una fila de reconciliation_claim confirmada antes de volver, así que las demás réplicas dejan de
 verlos; y CADUCA (claim-timeout-ms), porque sobrevive también a la réplica que muera con el candidato en vuelo.
 
@@ -249,6 +251,12 @@ export function reconciliationDependencies(model, entity) {
 
 /** Los métodos del adaptador TypeORM. `findOptions(where)` es el de la carga del agregado entero. */
 export function adapterReconciliationMethods(model, entity, imports, findOptions) {
+  // La señal del drenaje (inc. 8 del plan 2.26), con su import si algún reclamo la lleva.
+  const signal = (claim, size, batch) => {
+    const line = sweepPassSignal(model, claim, size, batch);
+    if (line && !imports.some((entry) => entry.symbol === 'SweepPass')) imports.push(sweepPassImport());
+    return line;
+  };
   const claims = claimsFor(model, entity.name);
   if (claims.length === 0) return [];
   const { enumType, field } = entity.lifecycle;
@@ -294,7 +302,7 @@ export function adapterReconciliationMethods(model, entity, imports, findOptions
       const found = await this.transactions.inNewTransaction((manager) => manager.findOne(${orm}, ${findOptions('{ id }')}));
       if (found != null) claimed.push(toDomain${entity.name}(found));
     }
-    return claimed;
+${signal(claim, 'candidates.length', 'window.batchSize')}    return claimed;
   }`;
   });
 }

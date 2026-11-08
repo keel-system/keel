@@ -14,7 +14,7 @@
 
 import { modelDeadlines, lateGuards, DEADLINE_CASES, DEADLINE_SABOTAGES } from '@keel-system/keel-core/gen/deadlines';
 import { timerStatements, bindNamed, KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
-import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
+import { timerPurges, timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { tablePurges } from '../../src/scaffold/purge.js';
 import { classPath, DIRS } from '../../src/scaffold/render.js';
 import { adapterClass, adapterPath } from '../../src/scaffold/repositories.js';
@@ -29,6 +29,9 @@ import {
   purgeKindConstant,
   purgeTimerClass,
   purgeTimerPath,
+  scheduleKindConstant,
+  scheduleTimerClass,
+  scheduleTimerPath,
   MONGO_TIMER_STORE_TS,
   SQL_TIMER_STORE_TS,
   TIMER_KINDS_TS,
@@ -404,8 +407,31 @@ export const PURGE_TIMER_SABOTAGES = Object.freeze({
   'timer-every-replica': {
     spec: ['-purge-timer.ts', /readonly kind = (TimerKinds\.PURGE_\w+);/g, "readonly kind = $1 + '@' + Math.random().toString(36).slice(2);"],
     breaks: ['R1', 'RC-1']
+  },
+  // El mismo, SOLO sobre los `schedule` (inc. 8): demuestra que el bloque mide el schedule y no solo la primera purga.
+  'timer-every-replica-schedule': {
+    spec: ['-schedule-timer.ts', /readonly kind = (TimerKinds\.SCHEDULE_\w+);/g, "readonly kind = $1 + '@' + Math.random().toString(36).slice(2);"],
+    breaks: ['R1', 'RC-1']
   }
 });
+
+/**
+ * Los sabotajes del DRENAJE (inc. 8): el reclamo que no avisa del lote lleno (cae DR-1) y el tick sin tope de tiempo (cae
+ * DR-3). Los casos los escribe db-check/doc-check junto al reclamo de la cola, con el adaptador real.
+ */
+export const DRAIN_SABOTAGES = Object.freeze({
+  'drain-no-signal': { spec: ['-repository-impl.ts', /^\s*SweepPass\.claimed\(.*\);\n/m, ''], breaks: ['DR-1'] },
+  'drain-no-budget': { spec: ['-schedule-timer.ts', ' || Date.now() - start >= budget', ''], breaks: ['DR-3'] }
+});
+
+export const isDrainSabotage = (id) => Boolean(id && DRAIN_SABOTAGES[id]);
+
+/** El veredicto: los casos DR que cayeron (`DR-<n>: …`) contra los esperados, y que no cayera nada más. */
+export function drainSabotageVerdict(checks, id) {
+  const failed = [...new Set(checks.filter((check) => !check.ok).map((check) => /^(DR-\d+):/.exec(check.name)?.[1] ?? check.name))].sort();
+  const want = [...DRAIN_SABOTAGES[id].breaks].sort();
+  return { exact: failed.length === want.length && failed.every((name, index) => name === want[index]), failed, want };
+}
 
 export const isPurgeTimerSabotage = (id) => Boolean(id && PURGE_TIMER_SABOTAGES[id]);
 
@@ -419,7 +445,8 @@ export function purgeTimerSabotageVerdict(checks, id) {
 /** El bloque de R1, RC-1 y R2 sobre las purgas de este diseño, o '' si no corre ninguna en el cronómetro. */
 export function purgeTimerBlock(model) {
   const purges = timerPurges(model);
-  if (purges.length === 0) return '';
+  const schedules = timerSchedules(model);
+  if (purges.length === 0 && schedules.length === 0) return '';
   const document = usesDocument(model);
   const storeClass = document ? 'MongoTimerStore' : 'SqlTimerStore';
   const entries = purges.map((purge) => {
@@ -445,12 +472,21 @@ export function purgeTimerBlock(model) {
           fire: `await dataSource.query(${JSON.stringify(fire)}, [kind]);`
         };
       })();
-  const imports = entries.map((entry) => `  const { ${entry.className} } = await import('${distOf(purgeTimerPath(entry.table))}');`).join('\n');
+  // Los `schedule` (inc. 8): el doble es el scheduler, que cuenta cuántas veces se despacha cada operación.
+  const scheduleEntries = schedules.map((schedule) => ({ ...schedule, className: scheduleTimerClass(schedule.operation) }));
+  const imports = [
+    ...entries.map((entry) => `  const { ${entry.className} } = await import('${distOf(purgeTimerPath(entry.table))}');`),
+    ...scheduleEntries.map((entry) => `  const { ${entry.className} } = await import('${distOf(scheduleTimerPath(entry.operation))}');`)
+  ].join('\n');
   const config = entries.map((entry) => `${entry.key}: { cron: ${JSON.stringify(entry.cron.default)} }`).join(', ');
   const fakes = entries.map((entry) => `${entry.method}: async () => { calls[${JSON.stringify(entry.table)}] += 1; return 0; }`).join(', ');
-  const instances = entries.map((entry) => `new ${entry.className}(fakePurges, purgeConfig)`).join(', ');
+  const schedulerFakes = scheduleEntries.map((entry) => `${entry.operation}: async () => { calls[${JSON.stringify(entry.operation)}] += 1; }`).join(', ');
+  const instances = [
+    ...entries.map((entry) => `new ${entry.className}(fakePurges, purgeConfig)`),
+    ...scheduleEntries.map((entry) => `new ${entry.className}(fakeScheduler, pollerSettings)`)
+  ].join(', ');
   return `
-// ═══ Las purgas en modo clúster (DSL 2.26, inc. 7): ${entries.map((entry) => entry.table).join(', ')} ═══
+// ═══ Los recurrentes en modo clúster (DSL 2.26, incs. 7 y 8): ${[...entries.map((entry) => entry.table), ...scheduleEntries.map((entry) => entry.operation)].join(', ')} ═══
 try {
   const { ${storeClass} } = await import('${distOf(document ? MONGO_TIMER_STORE_TS : SQL_TIMER_STORE_TS)}');
   const { TimerArmedSignal } = await import('${distOf(TIMER_STORE_TS)}');
@@ -458,11 +494,13 @@ try {
   const { TimerKinds } = await import('${distOf(TIMER_KINDS_TS)}');
 ${imports}
   const purgeTimerStore = new ${storeClass}(tx, new TimerArmedSignal());
-  const calls = { ${entries.map((entry) => `${JSON.stringify(entry.table)}: 0`).join(', ')} };
+  const calls = { ${[...entries.map((entry) => entry.table), ...scheduleEntries.map((entry) => entry.operation)].map((name) => `${JSON.stringify(name)}: 0`).join(', ')} };
   // TablePurges, doblado: el recurrente llama a SU método, y la llamada se cuenta.
   const fakePurges = { ${fakes} };
+  // Y el scheduler, doblado: el <Operación>ScheduleTimer llama al método de su operación.
+  const fakeScheduler = { ${schedulerFakes} };
   const purgeConfig = { ${config} };
-  const pollerSettings = { enabled: true, maxSleepMs: 30_000, batchSize: 50, leaseMs: 60_000, maxAttempts: 10, retryDelayMs: 0, retentionDays: 7, purgeCron: '0 30 5 * * *' };
+  const pollerSettings = { enabled: true, maxSleepMs: 30_000, batchSize: 50, leaseMs: 60_000, maxAttempts: 10, retryDelayMs: 0, drainBudgetMs: 0, retentionDays: 7, purgeCron: '0 30 5 * * *' };
   /** Una réplica: un sondeador con SUS PROPIAS instancias de cada recurrente, como un proceso aparte. */
   const replica = () => {
     const recurrings = [${instances}];
@@ -481,7 +519,7 @@ ${imports}
       ${support.fire}
     }
   };
-  const KINDS = [${entries.map((entry) => `TimerKinds.${purgeKindConstant(entry.table)}`).join(', ')}];
+  const KINDS = [${[...entries.map((entry) => `TimerKinds.${purgeKindConstant(entry.table)}`), ...scheduleEntries.map((entry) => `TimerKinds.${scheduleKindConstant(entry.operation)}`)].join(', ')}];
 
   await reset();
   await replica().poller.ensureRecurring();
@@ -500,7 +538,7 @@ ${imports}
   await a.poller.pollOnce();
   await b.poller.pollOnce();
   for (const [table, count] of Object.entries(calls)) {
-    check(\`purgas · RC-1: el tick de la purga de \${table} lo ejecuta UNA réplica\`, count === 1, \`\${count} ejecuciones\`);
+    check(\`purgas · RC-1: el tick de \${table} lo ejecuta UNA réplica\`, count === 1, \`\${count} ejecuciones\`);
   }
 
   await reset();
@@ -510,7 +548,7 @@ ${imports}
   await solo.poller.pollOnce();
   await solo.poller.pollOnce();
   for (const [table, count] of Object.entries(calls)) {
-    check(\`purgas · R2: tras su tick, la purga de \${table} no se repite antes del siguiente cron\`, count === 1, \`\${count} ejecuciones\`);
+    check(\`purgas · R2: tras su tick, \${table} no se repite antes del siguiente cron\`, count === 1, \`\${count} ejecuciones\`);
   }
   const next = await purgeTimerStore.nextDueMs(solo.recurrings.map(({ kind }) => kind));
   check('purgas · R2: la purga queda armada para el futuro', next != null && next > 0, next);

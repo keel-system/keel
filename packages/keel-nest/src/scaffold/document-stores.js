@@ -27,6 +27,7 @@ import { tsModule, tsString } from './render.js';
 import { guardClaimsFor } from './claim.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
+import { sweepPassSignal } from './timer.js';
 
 // Las rutas son las de la rama relacional: las importan el relay, los listeners y los handlers.
 const OUTBOX_RELAY_STORE_TS = 'src/infrastructure/messaging/outbox/outbox-relay-store.ts';
@@ -471,7 +472,7 @@ ${setup.join('\n')}${setup.length > 0 ? '\n' : ''}    const claimed: ${entity.na
       if (document == null) break;
       claimed.push(toDomain${entity.name}(document));
     }
-    return claimed;
+${sweepPassSignal(model, claim, 'claimed.length', `this.sweeps.batchSize[${tsString(claim.sweepKey)}]!`)}    return claimed;
   }`;
   });
 }
@@ -507,7 +508,7 @@ export function documentReconciliationMethods(model, entity) {
       // true = la marca es mía; false = otra réplica la tiene y aún no ha caducado.
       if (await this.reconciliationClaims.claim(${tsString(claim.activation)}, String(candidate.id), now, claimExpiredBefore)) claimed.push(candidate);
     }
-    return claimed;
+${sweepPassSignal(model, claim, 'candidates.length', 'window.batchSize')}    return claimed;
   }`;
   });
 }

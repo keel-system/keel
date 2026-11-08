@@ -35,8 +35,8 @@ import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenari
 import { cacheHarnessSection } from './cache.js';
 import { storageHarnessSection, usesMultipart } from './storage.js';
 import { usesStatementCount } from '@keel-system/keel-core/gen/features';
-import { ageDeadlineScript } from '@keel-system/keel-core/gen/mongo-probes';
-import { deadlineAgingSection } from './timer.js';
+import { ageDeadlineScript, fireTimerScript } from '@keel-system/keel-core/gen/mongo-probes';
+import { deadlineAgingSection, fireScheduleCall, firesTimer, timerFireSection } from './timer.js';
 export { usesStatementCount };
 
 /** Dónde escribe Vitest el XML JUnit de la suite de integración: lo lee score-scenarios.sh. */
@@ -518,7 +518,7 @@ const DB_QUERY_ARGV: readonly string[] = ${JSON.stringify(probe.argv)};
 export function db(sql: string): string {
   return run(containerRuntime(), ['exec', DB_CONTAINER, ...DB_QUERY_ARGV, sql], '¿Está la base arriba (bash infra/up.sh)?');
 }
-${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}${deadlineAgingSection(model, { relational: true, uuidLiteral: DATABASES[engineOf(model)]?.uuidLiteral })}` : ''}${statementCountSection(model)}${documentHarnessSection(model)}${documentProbe(model) ? deadlineAgingSection(model, { document: true, ageDeadlineScript }) : ''}${identitySection(model)}${messagingHarnessSection(model)}${cacheHarnessSection(model)}${storageHarnessSection(model)}
+${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}${deadlineAgingSection(model, { relational: true, uuidLiteral: DATABASES[engineOf(model)]?.uuidLiteral })}${timerFireSection(model, { relational: true })}` : ''}${statementCountSection(model)}${documentHarnessSection(model)}${documentProbe(model) ? deadlineAgingSection(model, { document: true, ageDeadlineScript }) + timerFireSection(model, { document: true, fireTimerScript }) : ''}${identitySection(model)}${messagingHarnessSection(model)}${cacheHarnessSection(model)}${storageHarnessSection(model)}
 
 /** Espera hasta que \`condition\` se cumpla o se agote \`timeoutMs\`; lanza con \`message\` si no llega. */
 export async function eventually(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, message = 'la condición no se cumplió a tiempo'): Promise<void> {
@@ -932,12 +932,11 @@ function idLiteral(id: string): string {
 
 /**
  * Deja la fila \`id\` EN VUELO con el reloj infinitamente rancio: el estado exacto en el que queda una réplica
- * que murió con ella en la mano, que es lo que el rescate busca. No dispara el barrido —lo dispara su cron,
- * como en producción— y no siembra la fila: mueve una creada por la API.
+ * que murió con ella en la mano, que es lo que el rescate busca. ${firesTimer(model, { relational: true }) ? 'Adelanta además el barrido en el cronómetro (fireTimer): vence ya y lo ejecuta UNA réplica en su próxima pasada, como en producción' : 'No dispara el barrido —lo dispara su cron, como en producción—'}, y no siembra la fila: mueve una creada por la API.
  */
 export function stallInFlight(operation: string, id: string): void {
   db(rescueOf(operation).stall + idLiteral(id));
-}
+${fireScheduleCall(model, 'operation', { relational: true })}}
 
 /**
  * Lo mismo con el reloj a AHORA: la fila acaba de entrar en vuelo y hay alguien trabajando en ella. Es la mitad
@@ -946,7 +945,7 @@ export function stallInFlight(operation: string, id: string): void {
  */
 export function putInFlight(operation: string, id: string): void {
   db(rescueOf(operation).put + idLiteral(id));
-}
+${fireScheduleCall(model, 'operation', { relational: true })}}
 
 /**
  * Cuántas filas quedaron EN VUELO con el reloj sin estampar. Tiene que valer cero siempre: si el reclamo mueve el

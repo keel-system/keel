@@ -28,6 +28,11 @@ import { resolveStack, writeStackConfig } from '@keel-system/keel-core/gen/stack
 const keep = process.argv.includes('--keep');
 // El motor relacional: postgresql por defecto; --database=mysql pasa la misma batería por el otro.
 const database = (process.argv.find((arg) => arg.startsWith('--database=')) ?? '--database=postgresql').split('=')[1];
+// Un uuid en una sentencia de la sonda del cronómetro, y la hora de la base: `uuid` nativo en PostgreSQL, binary(16) en MySQL.
+const uuidLiteral = (id) => (database === 'mysql' ? `UUID_TO_BIN('${id}')` : `'${id}'`);
+const dbNow = database === 'mysql' ? 'UTC_TIMESTAMP(6)' : 'current_timestamp';
+// Un plazo de una entidad que no existe: el reset tiene que llevárselo.
+const timerProbeInsert = `INSERT INTO keel_timer (id, kind, entity_id, due_at, attempts) VALUES (${uuidLiteral('11111111-1111-4111-8111-111111111111')}, 'deadline:Probe.pending', ${uuidLiteral('22222222-2222-4222-8222-222222222222')}, ${dbNow}, 0)`;
 const isWindows = process.platform === 'win32';
 const results = [];
 
@@ -77,6 +82,19 @@ const generated = await runCommand(workspace, build, `specs/${NEST_READY_DESIGN.
 const projectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
 if (!step('build genera el proyecto', generated.exitCode === undefined && fs.existsSync(projectDir), generated.exitCode ? generated.output : '')) {
   process.exit(1);
+}
+// --sabotage=reset-timer (DSL 2.26, inc. 8): el reset vuelve a vaciar keel_timer entera, como antes. Verde es que caiga
+// exactamente el paso del cronómetro (FL-PROBE-001-C): sin recurrentes, fireTimer no tiene qué adelantar.
+if (process.argv.includes('--sabotage=reset-timer')) {
+  const reset = path.join(projectDir, 'infra', 'reset-db.sh');
+  const original = fs.readFileSync(reset, 'utf8');
+  // La lista de lo que el TRUNCATE no toca, tal como queda escapada para `sh -c` (PostgreSQL y MySQL).
+  const sabotaged = original.replace(/, (?:'\\''|\\?")keel_timer(?:'\\''|\\?")\)/g, ')');
+  if (sabotaged === original) {
+    console.error('sabotaje reset-timer: reset-db.sh ya no tiene la forma que el sabotaje rompe');
+    process.exit(2);
+  }
+  fs.writeFileSync(reset, sabotaged);
 }
 const install = npm(projectDir, ['install', '--no-audit', '--no-fund']);
 if (!step('npm install', install.ok)) {
@@ -136,7 +154,7 @@ try {
   // historial de migraciones (el placeholder {history} del catálogo, sustituido por la plataforma).
   probe(
     'probe-ok',
-    `import { INSTANT_SHAPE, ROUTE_BASE, UUID_SHAPE, db, resetState, useFlow } from './support/flow.js';
+    `import { INSTANT_SHAPE, ROUTE_BASE, UUID_SHAPE, db, eventually, fireTimer, resetState, useFlow } from './support/flow.js';
 describe('FL-PROBE-001 · sonda en verde', () => {
   const flow = useFlow();
   it('FL-PROBE-001-A: una ruta inexistente responde 404 con ErrorResponse', async () => {
@@ -157,6 +175,21 @@ describe('FL-PROBE-001 · sonda en verde', () => {
     db('DROP TABLE typeorm_migrations');
     db('DROP TABLE keel_probe');
   });
+  // El cronómetro (DSL 2.26, inc. 8): el reset conserva sus RECURRENTES —el reloj de la app, que solo los asegura al
+  // arrancar: sin ellos ningún barrido volvería a dispararse en la suite— y borra sus plazos; y fireTimer adelanta un
+  // recurrente que el sondeador de la app recoge y rearma (product-catalog tiene cronómetro por sus purgas).
+  it('FL-PROBE-001-C: el reset conserva los recurrentes del cronómetro y fireTimer despierta al sondeador de la app', async () => {
+    const count = (where: string): string => db(\`SELECT count(*) FROM keel_timer WHERE \${where}\`).trim();
+    await eventually(() => count("kind = 'purge:keel_timer'") === '1', 20_000, 'la app no aseguró su recurrente al arrancar');
+    db(${JSON.stringify(timerProbeInsert)});
+    resetState();
+    expect(count("kind = 'purge:keel_timer'"), 'el reset se llevó el recurrente').toBe('1');
+    expect(count("kind = 'deadline:Probe.pending'"), 'el reset dejó un plazo de una entidad que ya no existe').toBe('0');
+    fireTimer('purge:keel_timer');
+    const fired = db("SELECT due_at FROM keel_timer WHERE kind = 'purge:keel_timer'").trim();
+    // El sondeador duerme como mucho timer.max-sleep-ms (30 s en local): lo recoge, lo ejecuta y lo rearma.
+    await eventually(() => db("SELECT due_at FROM keel_timer WHERE kind = 'purge:keel_timer'").trim() !== fired, 45_000, 'el sondeador de la app no recogió el recurrente adelantado');
+  }, 70_000);
   // Un id que el documento no declara: sale AJENO y no puntúa (keel-core/gen/junit-scoring).
   it('FL-PROBE-099-A: un caso fuera del documento', () => expect(true).toBe(true));
 });
@@ -214,10 +247,11 @@ describe('FL-PROBE-003 · sonda que no arranca', () => {
   const lines = run1.output;
   const has = (pattern) => pattern.test(lines);
   step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/), has(/OK\s+FL-PROBE-001-B/) ? '' : lines.slice(-2500));
+  step('el reset conserva los recurrentes del cronómetro y fireTimer despierta al sondeador de la app', has(/OK\s+FL-PROBE-001-C/), has(/OK\s+FL-PROBE-001-C/) ? '' : lines.slice(-2500));
   step('score: el que falla sale FALLO con la ruta de su evidencia', has(/FALLO\s+FL-PROBE-002-A\s+probe-fail\s+build\/keel-failures\/FL-PROBE-002-A\.json/));
   step('score: el flujo que no arranca deja sus casos OMITIDOS', has(/OMITIDO\s+FL-PROBE-003-A/), has(/OMITIDO/) ? '' : 'sin fila OMITIDO');
   step('score: y lo nombra como arnés roto, con su causa', has(/ARNÉS/) && has(/probe-init\s+\(arranque del flujo\)/) && has(/DB_URL|obligatori/i));
-  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && has(/RESULTADO: KO — 2 OK/));
+  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && has(/RESULTADO: KO — 3 OK/));
   step('score: un flujo del documento sin prueba sale NO_EJERC', has(/NO_EJERC\s+FL-PROBE-004/) && !has(/NO_EJERC\s+FL-PROBE-00[123]/));
   step('score: con algo que arbitrar sale con 1', run1.status === 1, `código ${run1.status}`);
   let report = null;

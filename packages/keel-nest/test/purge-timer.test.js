@@ -39,7 +39,8 @@ for (const name of ['notification-mailer', 'notification-mailer-mongo', 'stock-r
     // El módulo del reloj es global y exporta lo que el recurrente inyecta.
     const schedulingModule = files.find((file) => file.path.endsWith('scheduling-module.ts')).content;
     assert.match(schedulingModule, /global: true/);
-    assert.match(schedulingModule, /exports: \[Scheduling, TablePurges, PURGE_SETTINGS\]/);
+    // Y los schedulers cuyas operaciones dispara el cronómetro (inc. 8): sus <Operación>ScheduleTimer los inyectan.
+    assert.match(schedulingModule, /exports: \[Scheduling, TablePurges, PURGE_SETTINGS(, \w+Scheduler)*\]/);
   });
 }
 

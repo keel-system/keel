@@ -13,6 +13,7 @@
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { PRINT_WRAPPER, CLOCK, setStateScript, ageClockScript, holdClockScript, missingClockCountScript } from '@keel-system/keel-core/gen/mongo-probes';
 import { rescueProbes } from '@keel-system/keel-core/gen';
+import { fireAgedCall, fireScheduleCall } from './timer.js';
 import { documentShape } from '@keel-system/keel-core/gen/document';
 import { tsString } from './render.js';
 import { usesDocument } from './persistence-entities.js';
@@ -113,7 +114,7 @@ function rescueOf(operation: string): { readonly stall: readonly [string, string
 export function stallInFlight(operation: string, id: string): void {
   const [prefix, suffix] = rescueOf(operation).stall;
   mongoEval(prefix + documentId(id) + suffix);
-}
+${fireScheduleCall(model, 'operation')}}
 
 /**
  * Lo mismo con el reloj a AHORA: acaba de entrar en vuelo y hay alguien trabajando en él. Un rescate sin cota
@@ -122,7 +123,7 @@ export function stallInFlight(operation: string, id: string): void {
 export function putInFlight(operation: string, id: string): void {
   const [prefix, suffix] = rescueOf(operation).put;
   mongoEval(prefix + documentId(id) + suffix);
-}
+${fireScheduleCall(model, 'operation')}}
 
 /** Cuántos quedaron EN VUELO sin reloj. Tiene que valer cero siempre. Vacío NO es cero: es un fallo del transporte. */
 export function inFlightWithoutClock(operation: string): number {
@@ -175,7 +176,7 @@ export function ageForReconciliation(activation: string, id: string): void {
   const scripts = RECONCILIATION_AGING[activation];
   if (scripts == null) throw new Error(\`No hay barrido para la activación '\${activation}'. Las que lo tienen: ${known}\`);
   for (const [prefix, suffix] of scripts) mongoEval(prefix + documentId(id) + suffix);
-}
+${fireAgedCall(model, 'activation')}}
 
 /** Las marcas de espera que retiene \`holdFromReconciliation\`, por activación. */
 const RECONCILIATION_HOLDING: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {

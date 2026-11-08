@@ -76,6 +76,41 @@ export const MECHANISMS = {
       }
     }
   },
+  'timer-schedule': {
+    emitter: 'src/scaffold/timer.js (un <Operación>ScheduleTimer por schedule, SweepPass) · src/scaffold/scheduling.js (el scheduler ya no se registra en el reloj) · src/scaffold/claim.js · src/scaffold/reconciliation-claim.js · src/scaffold/document-stores.js',
+    why: 'Un barrido que vuelve a correr en todas las réplicas, o que en una sola réplica hace una pasada por tick, compila, arranca y barre: el precio es un atraso que crece con la carga sin que nada lo diga, o N réplicas compitiendo por el mismo lote. Y un reclamo que no avisa del lote lleno deja el tick sin drenar, igual de callado.',
+    parity: {
+      pair: 'job-dispatch',
+      markers: {
+        relational: [
+          'src/infrastructure/timer/dispatch-jobs-schedule-timer.ts::implements RecurringTimerHandler',
+          'src/infrastructure/persistence/repositories/job-repository-impl.ts::SweepPass.claimed(candidates.length',
+          'file:src/infrastructure/timer/sql-timer-store.ts'
+        ],
+        document: [
+          'src/infrastructure/timer/dispatch-jobs-schedule-timer.ts::implements RecurringTimerHandler',
+          'SweepPass.claimed(claimed.length',
+          'file:src/infrastructure/timer/mongo-timer-store.ts'
+        ]
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'job-dispatch: el <Operación>ScheduleTimer drena con el reclamo real contra el motor (DR-1 a DR-3), falsado con drain-no-signal (DR-1) y drain-no-budget (DR-3); notification-mailer: dos réplicas aseguran y sondean el schedule y cada tick lo ejecuta una (R1, RC-1, R2), falsado con timer-every-replica-schedule. Los casos de keel-spring'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'job-dispatch-mongo y notification-mailer-mongo: los mismos casos sobre MongoTimerStore y el findOneAndUpdate del reclamo, con los mismos sabotajes'
+      }
+    }
+  },
   deadline: {
     emitter: 'src/scaffold/timer.js (lateGuardBlock, adapterArming) · src/scaffold/entities.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js',
     why: 'Un rechazo tardío con < en vez de <= o un armado fuera de la transacción compilan igual de bien, y ningún escenario de un solo instante los ve: el precio es confirmar lo que el negocio daba por caducado, o un temporizador huérfano de una alta que revirtió.',

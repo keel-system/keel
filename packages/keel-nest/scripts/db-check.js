@@ -33,6 +33,9 @@
 import fs from 'node:fs';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
 import { conditionalWriteBlock } from './lib/conditional-probes.js';
+import { DRAIN_SABOTAGES, drainSabotageVerdict, isDrainSabotage } from './lib/timer-probes.js';
+import { scheduleTimerClass, scheduleTimerPath } from '../src/scaffold/timer.js';
+import { claimDrains, timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { PURGE_TIMER_SABOTAGES, TIMER_ADAPTER_ARGS, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBlock, purgeTimerSabotageVerdict, timerBlock, timerPreamble, timerProbePatch, timerSabotage, timerSabotageVerdict } from './lib/timer-probes.js';
 import { modelDeadlines, usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { timerPurges, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
@@ -58,7 +61,7 @@ import { domainMembers } from '../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
 import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, credentialFinders, emitsDomainEvents } from '../src/scaffold/repositories.js';
 import { guardClaimsFor } from '../src/scaffold/claim.js';
-import { claimsForEntity, claimOrderField, screamingSnake, rescueProbes, stallSql, missingClockCountSql } from '@keel-system/keel-core/gen';
+import { claimsForEntity, sweepClaims, claimOrderField, screamingSnake, rescueProbes, stallSql, missingClockCountSql } from '@keel-system/keel-core/gen';
 import { ormPath, ormClass, unidirectionalParents } from '../src/scaffold/persistence-entities.js';
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_IMPL_TS, IDEMPOTENCY_CONFLICT_TS } from '../src/scaffold/request-idempotency.js';
 import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
@@ -113,7 +116,9 @@ const SABOTAGES = {
       .map((id) => [id, timerSabotage(id, 'relational')])
   ),
   // Las purgas en modo clúster (DSL 2.26, inc. 7): con --subject=notification-mailer, caen R1 y RC-1 del bloque de purgas.
-  ...Object.fromEntries(Object.entries(PURGE_TIMER_SABOTAGES).map(([id, { spec }]) => [id, spec]))
+  ...Object.fromEntries(Object.entries(PURGE_TIMER_SABOTAGES).map(([id, { spec }]) => [id, spec])),
+  // El drenaje del schedule (DSL 2.26, inc. 8): con --subject=job-dispatch, caen DR-1 o DR-3 del bloque del reclamo.
+  ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, { spec }]) => [id, spec]))
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -798,6 +803,45 @@ function messagingBlock(model, engine, ctx) {
  *     así que la pasada siguiente ya no lo ve; lo recién entrado en vuelo no se toca.
  * Antes de cada caso se aparcan las filas de la tabla en un estado que ningún reclamo lee.
  */
+/**
+ * El DRENAJE del tick (DSL 2.26, inc. 8): DR-1 a DR-3 sobre el reclamo de la cola, con el <Operación>ScheduleTimer EMITIDO
+ * y un scheduler que, en vez de despachar al handler (un stub del agente), llama al reclamo real. Lote de 3. Los mismos
+ * casos que claim-check de keel-spring; los sabotajes `drain-no-signal` y `drain-no-budget` caen en DR-1 y DR-3.
+ */
+function drainCases(model, claims, { enumType, field, orm, ctx }) {
+  const queue = claims.find((claim) => !claim.stalled && claimDrains(model, claim));
+  if (!queue) return '';
+  const operation = sweepClaims(model).find((entry) => entry.claim === queue).operation.name;
+  const timer = scheduleTimerClass(operation);
+  ctx.imports.add(`${timer}|${scheduleTimerPath(operation)}`);
+  return `
+  {
+    const from = ${enumType}.${screamingSnake(queue.from[0])};
+    const left = async () => (await dataSource.getRepository(${orm}).findBy({ ${field}: from })).length;
+    let passes = 0;
+    // El scheduler de la operación, doblado: cada pasada del tick es una llamada al reclamo REAL, lote de 3.
+    const tickOf = (budget) => new ${timer}({ ${operation}: async () => { passes += 1; await adapter(3).${queue.method}(); } }, { drainBudgetMs: budget });
+
+    await park();
+    passes = 0;
+    await seed(7, from, () => ({}));
+    await tickOf(60_000).tick();
+    check('DR-1: con más candidatos que el lote, UN tick los drena todos, en varias pasadas', (await left()) === 0 && passes === 3, \`\${await left()} pendientes tras \${passes} pasadas\`);
+
+    await park();
+    passes = 0;
+    await seed(2, from, () => ({}));
+    await tickOf(60_000).tick();
+    check('DR-2: con menos candidatos que el lote, el tick hace una sola pasada', (await left()) === 0 && passes === 1, \`\${await left()} pendientes tras \${passes} pasadas\`);
+
+    await park();
+    passes = 0;
+    await seed(9, from, () => ({}));
+    await tickOf(0).tick();
+    check('DR-3: agotado el presupuesto, el tick para aunque el lote siga saliendo lleno', (await left()) === 6 && passes === 1, \`\${await left()} pendientes tras \${passes} pasadas\`);
+  }`;
+}
+
 function claimBlock(model, engine, ctx) {
   const blocks = [];
   for (const root of repositoryRoots(model)) {
@@ -811,7 +855,8 @@ function claimBlock(model, engine, ctx) {
     ctx.imports.add(`${enumType}|${classPath(DIRS.enums, enumType)}`);
     ctx.imports.add(`${ormClass(root.name)}|${ormPath(root.name)}`);
     const orm = ormClass(root.name);
-    const samples = Array.from({ length: 24 }, (_, i) => `() => ${sampleEntity(model, root, ctx, `claim${i}`)}`);
+    // 48 y no 24: los casos del drenaje (DR-1 a DR-3, inc. 8 del plan 2.26) siembran 18 filas más.
+    const samples = Array.from({ length: 48 }, (_, i) => `() => ${sampleEntity(model, root, ctx, `claim${i}`)}`);
     const stalledParameters = claims.filter((claim) => claim.stalled?.parameter).map((claim) => claim.stalled.parameter.name);
     // Los argumentos del constructor, en su orden: la transacción, el puente si la raíz emite, la
     // configuración de los barridos y los parámetros si un rescate lee de ellos su plazo. Plazo de un minuto.
@@ -909,6 +954,7 @@ function claimBlock(model, engine, ctx) {
     check('${label}: no espera a una fila bloqueada por otra réplica (SKIP LOCKED)', waited < 5_000 && Array.isArray(skipping) && same(skipping.map((e) => e.id), locked.slice(1)), skipping.error ? skipping.error.message : \`\${skipping.length} filas en \${waited} ms\`);
   }`;
     });
+    cases.push(drainCases(model, claims, { enumType, field, orm, ctx }));
     blocks.push(`
 // ═══ Reclamos de barrido: ${root.name} ═══
 {
@@ -1529,8 +1575,14 @@ for (const engine of ENGINES) {
       }
       const checks = JSON.parse(marker);
       // Lo mismo con el de las purgas: verde si caen EXACTAMENTE R1 y RC-1 de su bloque.
-      if (isPurgeTimerSabotage(sabotage) && timerPurges(model).length > 0) {
+      if (isPurgeTimerSabotage(sabotage) && (timerPurges(model).length > 0 || timerSchedules(model).length > 0)) {
         const verdict = purgeTimerSabotageVerdict(checks, sabotage);
+        step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
+      // El del drenaje (inc. 8), igual: verde si caen EXACTAMENTE sus casos DR, donde la cola corre sobre el cronómetro.
+      if (isDrainSabotage(sabotage) && checks.some((check) => /^DR-\d+:/.test(check.name))) {
+        const verdict = drainSabotageVerdict(checks, sabotage);
         step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
         continue;
       }

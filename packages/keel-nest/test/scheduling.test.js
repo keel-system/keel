@@ -21,6 +21,8 @@ import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { BATCHED_PURGE_TS, TABLE_PURGES_TS, tablePurges } from '../src/scaffold/purge.js';
 import { SCHEDULING_MODULE_TS, SCHEDULING_TS, scheduledServices, schedulerPath } from '../src/scaffold/scheduling.js';
+import { scheduleTimerPath } from '../src/scaffold/timer.js';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 
 const STACK = { database: 'postgresql', broker: 'rabbitmq' };
 const SCHEDULED = ['payout-runs', 'job-dispatch', 'job-dispatch-cycles', 'metering-digest'];
@@ -32,10 +34,26 @@ function spring(name) {
 
 const content = (files, suffix) => files.find((file) => file.path.endsWith(suffix))?.content;
 
-/** Del Scheduler de keel-spring: método → { cron, withoutTransaction }. */
+/**
+ * De keel-spring: método → { cron, withoutTransaction }. Desde el inc. 8 del plan 2.26 el cron vive en el
+ * <Operación>ScheduleTimer del cronómetro y el despacho en el método del Scheduler; sin cronómetro, en su @Scheduled.
+ */
 function springSchedule(files) {
   const out = new Map();
-  for (const file of files.filter((candidate) => /\/infrastructure\/scheduling\/\w+Scheduler\.java$/.test(candidate.path))) {
+  const schedulers = files.filter((candidate) => /\/infrastructure\/scheduling\/\w+Scheduler\.java$/.test(candidate.path));
+  const bodyOf = (name) => {
+    for (const file of schedulers) {
+      const match = new RegExp(`public void ${name}\\(\\) \\{([\\s\\S]*?)\\n    \\}`).exec(file.content);
+      if (match) return match[1];
+    }
+    return '';
+  };
+  for (const file of files.filter((candidate) => /\/infrastructure\/timer\/\w+ScheduleTimer\.java$/.test(candidate.path))) {
+    const cron = /public String spec\(\) \{\s+return "([^"]+)";/.exec(file.content)[1];
+    const name = /\w+Scheduler\.(\w+)\(\);/.exec(file.content)[1];
+    out.set(name, { cron, withoutTransaction: bodyOf(name).includes('dispatchWithoutTransaction(') });
+  }
+  for (const file of schedulers) {
     for (const [, cron, name, body] of file.content.matchAll(/@Scheduled\(cron = "([^"]+)"\)\s+public void (\w+)\(\) \{([\s\S]*?)\n    \}/g)) {
       out.set(name, { cron, withoutTransaction: body.includes('dispatchWithoutTransaction(') });
     }
@@ -43,14 +61,20 @@ function springSchedule(files) {
   return out;
 }
 
-/** De los schedulers de keel-nest: método → { cron, withoutTransaction }. */
+/** De keel-nest: método → { cron, withoutTransaction }. Con cronómetro, el cron sale de su <Operación>ScheduleTimer. */
 function nestSchedule(model, files) {
   const out = new Map();
+  const bodyOf = (source, name) => source.slice(source.indexOf(`  ${name}(): Promise<void> {`)).split('\n  }')[0];
   for (const { service } of scheduledServices(model)) {
     const source = content(files, schedulerPath(service));
     for (const [, name, cron] of source.matchAll(/register\(\{ name: '(\w+)', cron: '([^']+)'/g)) {
-      const body = source.slice(source.indexOf(`  ${name}(): Promise<void> {`)).split('\n  }')[0];
-      out.set(name, { cron, withoutTransaction: body.includes('dispatchWithoutTransaction(') });
+      out.set(name, { cron, withoutTransaction: bodyOf(source, name).includes('dispatchWithoutTransaction(') });
+    }
+    for (const operation of service.operations.filter((candidate) => candidate.schedule && scheduledByTimer(model, candidate.name))) {
+      const timer = content(files, scheduleTimerPath(operation.name));
+      const cron = /readonly spec = '([^']+)';/.exec(timer)[1];
+      assert.ok(timer.includes(`this.scheduler.${operation.name}()`), `${operation.name}: el temporizador no llama a su scheduler`);
+      out.set(operation.name, { cron, withoutTransaction: bodyOf(source, operation.name).includes('dispatchWithoutTransaction(') });
     }
   }
   return out;
@@ -192,7 +216,8 @@ test('el reloj se apaga en el perfil test, va el último en el módulo raíz y t
   assert.equal(parseYaml(content(files, 'config/parameters/test/scheduling.yaml')).scheduling.enabled, false);
   assert.match(content(files, 'config/parameters/production/scheduling.yaml'), /enabled: \$\{SCHEDULING_ENABLED:true\}/);
   const app = content(files, 'src/app.module.ts');
-  assert.match(app, /UseCaseModule, SchedulingModule\.register\(configuration\)\]/);
+  // Con el cronómetro (inc. 8 del plan 2.26), el sondeador va después: sus ScheduleTimer inyectan los schedulers.
+  assert.match(app, /UseCaseModule, SchedulingModule\.register\(configuration\), TimerPollerModule\]/);
   assert.ok(JSON.parse(content(files, 'package.json')).dependencies.cron);
   // Al apagar, se espera a la pasada en vuelo; un tick con la anterior en curso se salta.
   const scheduling = content(files, SCHEDULING_TS);

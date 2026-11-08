@@ -23,6 +23,8 @@ import { capitalize, fileName } from './render.js';
 import { usesPersistence, usesDocument } from './persistence-entities.js';
 import { naturalKeyFinder, occupantFinders, repositoryRoots } from './repositories.js';
 import { relievingOperations } from '@keel-system/keel-core/gen';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { scheduleTimerClass } from './timer.js';
 import { usesNestOutbox, usesProcessedEvents, usesMessaging } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { subscriptionsBySource as bySource } from '@keel-system/keel-core/gen/messaging-plan';
@@ -161,7 +163,7 @@ function reconciliationChecks(model) {
         // La lectura por estado es EXACTAMENTE el patrón que el reclamo evita.
         forbid: stateReadingFinder(model, [claim.entity]),
         why:
-          `el barrido corre en TODAS las réplicas: toma su lote con ${claim.method}(), que build generó en ${claim.entity}Repository ` +
+          `el barrido puede correr a la vez en varias réplicas: toma su lote con ${claim.method}(), que build generó en ${claim.entity}Repository ` +
           '—una marca persistida que caduca, y solo lo que esta réplica se llevó—, no con un finder ni con un reclamo aparte'
       });
     }
@@ -182,7 +184,9 @@ function reconciliationChecks(model) {
   }
   if (pending.length > 0) {
     // Los archivos que build genera con el patrón: encontrarlos probaría lo que build hizo.
-    const exclude = '/(reconciliation-claim-store|outbox-relay-store|outbox-relay|idempotency-guard|idempotency-store-impl|table-purges|batched-purge)[.]ts';
+    // Y lo del cronómetro (inc. 7 y 8 del plan 2.26): el reclamo de keel_timer lleva su LIMIT y su batchSize, y SweepPass
+    // nombra el lote; los dos son de build y satisfarían el check por su cuenta.
+    const exclude = '/(reconciliation-claim-store|outbox-relay-store|outbox-relay|idempotency-guard|idempotency-store-impl|table-purges|batched-purge|[a-z-]*timer[a-z-]*|sweep-pass)[.]ts';
     const deny = [...generated, 'async save[(]'].join('|');
     checks.push(
       {
@@ -196,7 +200,7 @@ function reconciliationChecks(model) {
         exclude,
         why:
           'ninguna escritura reclama candidatos con una MARCA PERSISTIDA (la tienda de reconciliation_claim, o un UPDATE condicional): ' +
-          'el barrido corre en TODAS las réplicas, y un lock solo aísla mientras dura su transacción, con la llamada al proveedor en medio'
+          'el barrido puede correr a la vez en varias réplicas, y un lock solo aísla mientras dura su transacción, con la llamada al proveedor en medio'
       },
       {
         group: 'reconciliation',
@@ -234,6 +238,22 @@ function reconciliationChecks(model) {
       require: [operations.map((operation) => operation.messageClass).join('|')],
       forbid: ['TODO: despachar'],
       why: `el disparador de ${operations.map((operation) => operation.name).join(', ')}: build lo deja rechazando cuando el mensaje lleva argumentos`
+    });
+  }
+  // Y el REGISTRO en el cronómetro (inc. 8 del plan 2.26): el <Operación>ScheduleTimer es el recurrente de keel_timer que
+  // llama al scheduler en cada tick. Lo escribe build; sin él, o sin la llamada, la reconciliación no se dispara nunca.
+  for (const operation of allOperations(model)) {
+    if (!(operation.reconciles ?? []).length || !scheduledByTimer(model, operation.name)) continue;
+    const timerClass = scheduleTimerClass(operation.name);
+    checks.push({
+      group: 'reconciliation',
+      subject: `${timerClass} · registro en el cronómetro`,
+      class: fileName(timerClass),
+      require: ['implements RecurringTimerHandler', `[.]${operation.name}[(]`, 'TimerKinds[.]SCHEDULE_'],
+      why:
+        `el barrido ${operation.name} lo dispara el cronómetro: ${timerClass} es su recurrente en keel_timer (kind ` +
+        `schedule:${operation.name}) y llama al scheduler en cada tick. Sin él, o con otro kind, el barrido no se ` +
+        `dispara nunca y nada lo dice`
     });
   }
   return checks;
@@ -439,7 +459,7 @@ function sweepClaimChecks(model) {
         // Leer el estado de partida con un finder es EXACTAMENTE el fallo: la misma página en todas las réplicas.
         forbid: stateReadingFinder(model, claims.map((claim) => claim.entity)),
         why:
-          `el barrido corre en TODAS las réplicas: RECLAMA su lote con ${claims.map((claim) => `${claim.method}()`).join(' / ')}, ` +
+          `el barrido puede correr a la vez en varias réplicas: RECLAMA su lote con ${claims.map((claim) => `${claim.method}()`).join(' / ')}, ` +
           'que build generó en el puerto, no lo lee con un finder'
       };
     }
@@ -454,7 +474,7 @@ function sweepClaimChecks(model) {
       deny: generated.length > 0 ? generated.join('|') : null,
       exclude: '(^$)',
       why:
-        `el barrido corre en TODAS las réplicas, así que su trabajo se RECLAMA con una escritura condicional sobre ` +
+        `el barrido puede correr a la vez en varias réplicas, así que su trabajo se RECLAMA con una escritura condicional sobre ` +
         `${entities.join(', ')} —no se lee con un finder—, y no aparece ninguna. build NO pudo generarla (su aviso dice por qué), ` +
         `así que la escribes tú CON SU COTA TEMPORAL, en el adaptador de ${entities.join(', ')}`
     };

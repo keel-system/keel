@@ -115,23 +115,29 @@ async handle(command: CreateProductCommand): Promise<CreateProductResponseDto> {
 
 ### Las operaciones por reloj: el disparo ya está, el trabajo es tuyo
 
-Una operación con `schedule` tiene **ya generado** su disparador: `<Grupo>Scheduler`
-(`src/infrastructure/scheduling/`) la registra en el reloj del servicio (`Scheduling`, sobre `cron`) con
-un cron de **seis** campos —build añade el segundo de arranque, repartido para que dos barridos con la
-misma cadencia no salgan a la vez— y la despacha por el mediator. Es el mismo segundo y el mismo despacho
-que el `@Scheduled` del servidor de keel-spring. **No escribas otro disparador, otro `setInterval` ni un
-`@Cron` de @nestjs/schedule, y no cambies el segundo a 0.**
+Una operación con `schedule` tiene **ya generado** su disparador: su `<Operación>ScheduleTimer`
+(`src/infrastructure/timer/`) es un recurrente del cronómetro del servicio (la tabla `keel_timer`) con un
+cron de **seis** campos —build añade el segundo de arranque, repartido para que dos barridos con la misma
+cadencia no salgan a la vez— que en cada tick llama al método del `<Grupo>Scheduler`
+(`src/infrastructure/scheduling/`), y éste la despacha por el mediator. Es el mismo segundo y el mismo
+despacho que el servidor de keel-spring. **No escribas otro disparador, otro `setInterval` ni un `@Cron`
+de @nestjs/schedule, y no cambies el segundo a 0.**
 
-- Corre en **todas las réplicas** a la vez. Lo que actúa sobre lo que encuentra tiene que **reclamarlo**
-  (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo.
+- Cada tick lo ejecuta **UNA réplica**, la que gana su fila, pero **al menos una vez**: si la réplica muere a
+  mitad de la pasada, otra la repite al vencer el arriendo. Lo que actúa sobre lo que encuentra tiene que
+  **reclamarlo** (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo.
+- El tick **drena**: repite la pasada mientras el lote salga lleno, hasta el siguiente tick o
+  `timer.drain-budget-ms`. Los reclamos que genera build lo avisan solos; si el lote lo reclamas tú, avísalo
+  con `SweepPass.claimed(reclamadas, lote)` (`src/application/support/sweep-pass.ts`). Sin aviso, una pasada
+  por tick.
 - Cómo se despacha lo dice el diseño, y la nota del handler lo repite: un barrido que reclama su lote (o
   llama a un proveedor en medio) va **sin transacción abarcadora** (`dispatchWithoutTransaction`): cada
   llamada al adaptador confirma la suya, y el orden es reclamar y confirmar, actuar fuera de toda
   transacción, confirmar el desenlace. Lo demás (un cierre diario) va en la transacción del caso de uso.
-- Un tick que llega con la pasada anterior en curso **se salta**: el barrido no se solapa consigo mismo.
-  Al apagar, el reloj espera a la pasada en vuelo antes de cerrar el pool.
-- El perfil `test` no tiene base de datos y el reloj no corre (`scheduling.enabled: false`); en los demás
-  lo conmuta `SCHEDULING_ENABLED`.
+- Un tick no se solapa con el siguiente: mientras dura, su fila está arrendada. Un tick que falla no se
+  aparca: se rearma para el siguiente. Al apagar, el sondeador espera a la pasada en vuelo antes de cerrar el pool.
+- El perfil `test` no tiene base de datos y el cronómetro no sondea (`scheduling.enabled: false`); en los
+  demás lo conmuta `SCHEDULING_ENABLED`.
 
 Las **purgas** de las tablas del generador (`outbox_event`, `processed_event`, `idempotency_record`) son
 también de build (`src/infrastructure/persistence/purge/`): por lotes, cada lote en su transacción, con

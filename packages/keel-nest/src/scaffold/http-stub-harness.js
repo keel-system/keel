@@ -17,6 +17,7 @@ import {
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { snakeCase } from '@keel-system/keel-core/gen';
 import { tsString } from './render.js';
+import { fireAgedCall, firesTimer } from './timer.js';
 import { engineOf, usesRelational } from './persistence-entities.js';
 import { usesHttpStub } from '@keel-system/keel-core/gen/features';
 import { relationalAgingTargets as agingTargets } from '@keel-system/keel-core/gen/aging-targets';
@@ -257,7 +258,7 @@ ${rows}
 ${idLiteral}
 /**
  * Deja la marca de espera de \`activation\` infinitamente rancia para la fila \`id\`, de modo que el barrido la
- * tome en SU PRÓXIMA PASADA. No dispara el barrido —lo dispara su cron, como en producción—: crea la condición
+ * tome en SU PRÓXIMA PASADA. ${firesTimer(model, { relational: true }) ? 'Adelanta además el barrido en el cronómetro (fireTimer), que lo ejecuta en UNA réplica' : 'No dispara el barrido —lo dispara su cron, como en producción—'}: crea la condición
  * que busca («lleva esperando más de lo tolerado») sin esperar el plazo real, y solo para esta fila. Bajar el
  * umbral por configuración sería global y se llevaría las filas de los demás escenarios.
  *
@@ -270,7 +271,7 @@ export function ageForReconciliation(activation: string, id: string): void {
   const statements = RECONCILIATION_AGING[activation];
   if (statements == null) throw new Error(\`No hay barrido para la activación '\${activation}'. Las que lo tienen: ${known}\`);
   for (const statement of statements) db(statement + idLiteral(id));
-}
+${fireAgedCall(model, 'activation', { relational: true })}}
 ${
     entry.heldTimestamp
       ? `

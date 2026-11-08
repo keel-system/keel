@@ -20,6 +20,7 @@ import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH } from '@keel-system/keel-cor
 import { paymentsYaml } from '@keel-system/keel-core/gen/payments-config';
 import { PAYMENT_SWEEP_PARAMETERS } from '@keel-system/keel-core/gen/payments-model';
 import { DIRS, classPath, declType, tsModule, tsString } from './render.js';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { COMMAND_DISPATCHER_TS } from './mediator.js';
 import { DECIMAL_TS, RAW_JSON_TS } from './wire.js';
 import { messageComponents, messagePath } from './services.js';
@@ -528,7 +529,15 @@ function reconciliationTs(model) {
  * Lo que no hace es elegir los candidatos ni reclamarlos: eso es del handler del barrido. Los candidatos son los
  * cobros en ${p.awaitingStates.join(', ')} cuyo ${p.record.awaitingSince} es anterior a \`staleBefore()\`; y el
  * handler reclama cada uno volviendo a estampar ${p.record.awaitingSince} ANTES de llamar aquí, para que otra
- * réplica no lo consulte en la misma pasada.
+ * réplica no lo consulte en la misma pasada.${
+   scheduledByTimer(model, p.reconciliation.sweep)
+     ? `
+ *
+ * El barrido lo dispara el cronómetro en una réplica por tick, y el tick DRENA: si el handler reclamó un lote lleno
+ * (\`batchSize()\` cobros), que lo avise con \`SweepPass.claimed(reclamados, batchSize())\` (application/support) y el
+ * tick repetirá la pasada.`
+     : ''
+ }
  */
 export class PaymentReconciliation {
   static readonly inject = [PaymentGateway, PaymentOutcomeApplier, PAYMENT_RECONCILIATION_SETTINGS] as const;

@@ -21,7 +21,7 @@ import { ENTRY_GATE_TS, MEDIATOR_TS, MODULE_TS as USE_CASE_MODULE_TS, usesMediat
 import { entryGateAssignment, messageComponents, messagePath } from './services.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
 import { TABLE_PURGES_TS, usesTablePurges } from './purge.js';
-import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
+import { scheduledByTimer, timerPurges, timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 
 const SCHEDULING_DIR = 'infrastructure/scheduling';
 export const SCHEDULING_TS = `src/${SCHEDULING_DIR}/scheduling.ts`;
@@ -171,15 +171,16 @@ function schedulerFile(model, service, operations) {
   const className = schedulerClass(service);
   const file = schedulerPath(service);
   const correlated = usesCorrelation(model);
+  // Lo que dispara el cronómetro (inc. 8 del plan 2.26) no se registra en el reloj: lo llama su <Operación>ScheduleTimer.
+  const onClock = operations.filter((operation) => !scheduledByTimer(model, operation.name));
   const imports = [
     { symbol: 'Inject', from: '@nestjs/common' },
     { symbol: 'Injectable', from: '@nestjs/common' },
-    { symbol: 'OnModuleInit', from: '@nestjs/common', type: true },
+    ...(onClock.length > 0 ? [{ symbol: 'OnModuleInit', from: '@nestjs/common', type: true }, { symbol: 'Scheduling', from: SCHEDULING_TS }] : []),
     { symbol: 'UseCaseMediator', from: MEDIATOR_TS },
-    { symbol: 'Scheduling', from: SCHEDULING_TS },
     ...(correlated ? [{ symbol: 'randomUUID', from: 'node:crypto' }, { symbol: 'CorrelationContext', from: CORRELATION_TS }] : [])
   ];
-  const registrations = operations
+  const registrations = onClock
     .map((operation) => `    this.scheduling.register({ name: '${operation.name}', cron: '${scheduleCron(model, operation)}', run: () => this.${operation.name}() });`)
     .join('\n');
   const methods = operations.map((operation) => {
@@ -195,7 +196,10 @@ garantía es un orden de commits —reclamar y confirmar, actuar fuera de toda t
 desenlace— y no una transacción única. Igualarlo a mediator.dispatch(...) «por coherencia» deja el reclamo
 sin confirmar hasta el final del lote: ninguna réplica lo ve y todas actúan sobre los mismos candidatos.`
       : 'Despachado con la transacción del caso de uso: no llama a nadie en medio de su trabajo.';
-    const doc = tsdoc([operation.schedule.description, `Cron del diseño: ${operation.schedule.cron} (build añade el segundo de arranque).`, note], '  ');
+    const trigger = scheduledByTimer(model, operation.name)
+      ? `Lo dispara ${operation.name[0].toUpperCase()}${operation.name.slice(1)}ScheduleTimer (el cronómetro): una réplica por tick, con drenaje.`
+      : null;
+    const doc = tsdoc([operation.schedule.description, `Cron del diseño: ${operation.schedule.cron} (build añade el segundo de arranque).`, trigger, note].filter(Boolean), '  ');
     if (messageComponents(model, operation).length > 0) {
       return `${doc}  ${operation.name}(): Promise<void> {
     // TODO (agente): el mensaje requiere argumentos; construirlos aquí.
@@ -216,17 +220,27 @@ sin confirmar hasta el final del lote: ninguna réplica lo ve y todas actúan so
 ${body}
   }`;
   });
+  const replicas =
+    onClock.length === 0
+      ? ` * Los dispara el cronómetro: cada operación tiene su <Operación>ScheduleTimer en infrastructure/timer, un recurrente de
+ * keel_timer que ejecuta UNA réplica por tick —la que gana su fila— y que repite la pasada mientras el lote salga lleno.
+ * Estos métodos solo despachan. El tick es al menos una vez (si la réplica muere a mitad, otra lo repite al vencer el
+ * arriendo), así que lo que actúa sobre lo que encuentra sigue reclamándolo. No todos despachan igual, y no es un
+ * descuido: lo decide el diseño (keel-core/gen/scheduling.js), igual que en el servidor de keel-spring.`
+      : ` * Cada método corre en TODAS las réplicas del servicio. No todos despachan igual, y no es un descuido: lo
+ * decide el diseño (keel-core/gen/scheduling.js), igual que en el servidor de keel-spring.`;
   const body = `/**
  * Disparadores por reloj de las operaciones de ${service.className.replace(/Service$/, '')} que declaran \`schedule\`.
  *
- * Cada método corre en TODAS las réplicas del servicio. No todos despachan igual, y no es un descuido: lo
- * decide el diseño (keel-core/gen/scheduling.js), igual que en el servidor de keel-spring.
+${replicas}
  *
  * El primer campo del cron —el segundo— no es 0 por casualidad: el diseño declara cinco campos y build
  * reparte el arranque dentro del minuto para que dos operaciones con la misma cadencia no salgan a la vez.
  * Igualarlos a 0 «por limpieza» deshace ese reparto.
  */
-@Injectable()
+${
+  onClock.length > 0
+    ? `@Injectable()
 export class ${className} implements OnModuleInit {
   constructor(
     @Inject(UseCaseMediator) private readonly mediator: UseCaseMediator,
@@ -235,7 +249,11 @@ export class ${className} implements OnModuleInit {
 
   onModuleInit(): void {
 ${registrations}
-  }
+  }`
+    : `@Injectable()
+export class ${className} {
+  constructor(@Inject(UseCaseMediator) private readonly mediator: UseCaseMediator) {}`
+}
 
 ${methods.join('\n\n')}
 }`;
@@ -247,7 +265,9 @@ function moduleFile(model) {
   const purges = usesTablePurges(model);
   // Las purgas que dispara el cronómetro (inc. 7): su `<Tabla>PurgeTimer` vive en TimerPollerModule e inyecta TablePurges
   // y su configuración, así que este módulo es global y las exporta.
-  const onTimer = purges && timerPurges(model).length > 0;
+  // Y los schedulers cuyas operaciones dispara el cronómetro (inc. 8): sus <Operación>ScheduleTimer también viven allí.
+  const schedulesOnTimer = timerSchedules(model).length > 0;
+  const onTimer = (purges && timerPurges(model).length > 0) || schedulesOnTimer;
   const imports = [
     { symbol: 'Module', from: '@nestjs/common' },
     { symbol: 'DynamicModule', from: '@nestjs/common', type: true },
@@ -287,7 +307,7 @@ export class SchedulingModule {
       providers: [
 ${providers.map((provider) => `        ${provider}`).join(',\n')}
       ],
-      exports: [Scheduling${purges ? ', TablePurges' : ''}${onTimer ? ', PURGE_SETTINGS' : ''}]
+      exports: [Scheduling${purges ? ', TablePurges' : ''}${purges && timerPurges(model).length > 0 ? ', PURGE_SETTINGS' : ''}${schedulesOnTimer ? `, ${schedulers.map((scheduler) => scheduler.symbol).join(', ')}` : ''}]
     };
   }
 }`
