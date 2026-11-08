@@ -1,0 +1,31 @@
+keel: "2.26"
+# La MITAD DOCUMENTAL del par `verification-codes` / `verification-codes-mongo`.
+#
+# La silueta del plazo de negocio (DSL 2.26, `lifecycle.deadlines`): un código de verificación
+# caduca a los N minutos de emitirse, y verificarlo tarde se rechaza en el instante exacto del
+# vencimiento, haya pasado el cronómetro o no. Es el sujeto de los incrementos 3-6 de
+# PLAN-DSL-226-PLAZOS.md (decisión 4): pequeña a propósito, para medir el mecanismo sin tocar
+# nada medido.
+#
+# La hermana documental es el mismo diseño con otro `persistence.default.model`, y `domain`,
+# `use-cases` y `api` van BYTE A BYTE iguales en las dos. Cualquier cambio al diseño va en las dos.
+service:
+  name: verification-codes-mongo
+  version: 1.0.0
+  description: Los mismos códigos de verificación que verification-codes, sobre un modelo documental.
+  domain: identity
+parameters:
+  # La duración del plazo de `pending` (lifecycle.deadlines.pending.after): configurable por
+  # despliegue, con la unidad que declara el plazo.
+  codeTtlMinutes:
+    type: int
+    description: "Minutos que un código emitido sigue siendo verificable."
+    constraints: { min: 1 }
+    default: 10
+    testValue: 10
+    requiredInProduction: false
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  api: api.keel.yaml
+  persistence: persistence.keel.yaml

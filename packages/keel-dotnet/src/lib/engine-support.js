@@ -49,6 +49,8 @@ export const NETS = {
 export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
+  deadline: { pending: 'incremento 5 de PLAN-DSL-226-PLAZOS.md: el rechazo tardío y el armado, con el cronómetro' },
+  timer: { pending: 'incremento 5 de PLAN-DSL-226-PLAZOS.md: el cronómetro del servicio, sobre keel-core/gen/timer-store.js' },
   'runtime-panel': {
     parity: {
       skip: 'la telemetría es una elección de STACK (telemetry: otel) y el par se genera sin ella; el panel y sus series los comparan con keel-spring test/observability-assets.test.js y la prueba emitida TelemetryTests, generando con la opción',

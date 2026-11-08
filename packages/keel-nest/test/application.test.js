@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { orphanInternalOperations } from '@keel-system/keel-core/gen';
 import { MODEL_PACKAGES } from '../src/scaffold/architecture.js';
 
 const FIXTURES = fs.readdirSync(FIXTURES_DIR);
@@ -137,8 +138,8 @@ test('la operación interna sin disparador, o una que despacha otra, recibe el p
   let checked = 0;
   for (const name of FIXTURES) {
     const { model, files } = planFixture(name);
-    const bySubscription = new Set((model.subscriptions ?? []).map((s) => s.trigger));
-    const orphans = operationsOf(model).filter((op) => op.internal && !op.schedule && !bySubscription.has(op.name));
+    // La regla neutral: tampoco es huérfana la operación `by` de un plazo (DSL 2.26), que la despacha el cronómetro.
+    const orphans = orphanInternalOperations(model);
     // Desde el DSL 2.21 también la que declara `dispatches` (asset-vault: reconcileScans → quarantineAsset).
     const dispatching = operationsOf(model).filter((op) => (op.dispatches ?? []).length > 0);
     const needed = orphans.length > 0 || dispatching.length > 0;

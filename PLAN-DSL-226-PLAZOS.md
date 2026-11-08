@@ -9,8 +9,8 @@ segunda es el **cronómetro único**: una tabla de temporizadores con un sondead
 al que **migran todos los relojes que hoy emiten los generadores** (§ La migración de los relojes). La segunda no
 cambia el DSL, pero sí el servidor generado de cualquier diseño con persistencia.
 
-**Estado: aprobado (2026-11-07).** El usuario aceptó las ocho propuestas de § Decisiones tomadas. Fase B (incremento 0)
-hecha el mismo día; siguiente, la fase C.
+**Estado: aprobado (2026-11-07).** El usuario aceptó las ocho propuestas de § Decisiones tomadas. Fases B, C y C2
+hechas el mismo día, y la D (incremento 3, keel-spring) el 2026-11-08; siguiente, la fase E (incrementos 4, 5 y 6).
 
 ## Por qué
 
@@ -313,7 +313,7 @@ borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
 | 1 | **Hecho (2026-11-07, `2924f0d0`).** keel-core: schema, `crossrefs.js`, `checks.js`, mutaciones, la clase de huecos, la revisión, `docs/dsl/domain.md` y el historial de `dsl-reference.md`. DSL 2.26 sustituye a 2.25 | `npm test` de keel-core y `design-matrix` sin ids sin mutación |
 | 2 | **Hecho (2026-11-07)**, ver la nota de abajo. `keel-core/gen/deadlines.js` y `keel-core/gen/timer-store.js`: el guard como datos, **el reloj inyectable** del dominio y la aplicación (qué recibe el dominio y cómo lo sustituyen las pruebas emitidas; solo lo usa lo nuevo), la regla de T1 acotado (la hora de la base solo en `keel_timer`, y ninguna comparación que cruce de una fuente a otra), el cron en UTC (T7), la tabla `keel_timer` (como `messaging-stores.js`: columnas, índice, sentencias de armado, reclamo, revalidación y purga por motor, con la hora de la base), el algoritmo del sondeador como referencia ejecutable, las sentencias del arnés, la nota del handler, las filas del gate y los casos DL | Sus pruebas (la referencia del sondeador EJECUTADA con un reloj falso), y `buildModel` de todas las fixtures sin cambios |
 | 2b | **Hecho y medido en los cuatro (2026-11-07)**, ver la nota de abajo. **El paso de migración del generador**: un mecanismo para que build emita su propio paso de esquema en una base ya desplegada (Flyway `V<n>` en keel-spring, migración de TypeORM en keel-nest, migración de EF en keel-dotnet, paso de goose en keel-go), con un número que no choque con los pasos del agente, y su línea en `EVOLUTION.md`. En MongoDB no hace falta: los índices se aseguran al arrancar. Antes estaba en el 10; sin él, nada de lo que añade `keel_timer` se puede publicar | `test/design-evolution.test.js` de los cuatro y, en las redes de base, un proyecto con base desplegada que recibe la tabla por el paso: `db-check` de keel-go (como en el inc. 15), y el arranque en `develop` de los otros tres |
-| 3 | El cronómetro con los plazos en keel-spring: la tabla, el sondeador (los dos modos), el armado, el guard tardío, el reloj inyectable y el interruptor `scheduling.enabled` (keel-spring no tenía ninguno: `contextLoads` con H2 arranca con el cronómetro apagado). Ningún reloj existente cambia todavía | `compile-check`, `claim-check` con los sabotajes `dl-*`, `harness`; matriz con las filas `deadline` y `timer` |
+| 3 | **Hecho (2026-11-08)**, ver la nota de abajo. El cronómetro con los plazos en keel-spring: la tabla, el sondeador (los dos modos), el armado, el guard tardío, el reloj inyectable y el interruptor `scheduling.enabled` (keel-spring no tenía ninguno: `contextLoads` con H2 arranca con el cronómetro apagado). Ningún reloj existente cambia todavía | `compile-check`, `claim-check` con los sabotajes `dl-*`, `harness`; matriz con las filas `deadline` y `timer` |
 | 4 | Lo mismo en keel-nest | `ts-check`, `db-check`, `doc-check`, `harness-check` |
 | 5 | Lo mismo en keel-dotnet | `cs-check`, `db-check`, `doc-check`, `harness-check` |
 | 6 | Lo mismo en keel-go | `go-check`, `db-check`, `doc-check`, `harness-check` |
@@ -341,6 +341,54 @@ Las redes:
 Lo mide el caso nuevo de `harness-check`: una base desplegada con una baseline de `dotnet ef` sin la tabla recibe el paso. Sin sincronizar, `has-pending-model-changes` ve cambios pendientes; sincronizado, la tabla llega y `verify-baseline.sh` da OK. Sin el paso, sale KO. 45/45 en PostgreSQL y en MySQL.
 
 Lo que destapó: `dotnet ef database update` con el snapshot atrasado sale en rojo en PostgreSQL, pero en MySQL avisa y aplica. La puerta, por tanto, es `has-pending-model-changes` y no el arranque. Así lo dicen ya la nota y la skill.
+
+**Lo que dejó el incremento 3.** El sujeto es la fixture nueva de la decisión 4, el par `verification-codes` /
+`verification-codes-mongo`: un código de verificación caduca a los `codeTtlMinutes` de `issuedAt`, `expireCode` lo caduca
+y verificarlo tarde es `CODE_EXPIRED` (410). keel-spring lo genera entero en `src/scaffold/timer.js`:
+
+- En el dominio, `<Servicio>Deadlines` (la duración vigente de cada plazo, poblada desde `<Servicio>Parameters`) y el
+  rechazo tardío en `transitionTo(target, now, deadlines)`. El `transitionTo` de un argumento se niega a salir de un
+  estado con plazo hacia otro destino.
+- El reloj inyectable es `java.time.Clock` (`TimerConfig`, `Clock.systemUTC()`), inyectado con los plazos en los
+  handlers que salen del estado.
+- El armado va en el `save` del adaptador, solo al ENTRAR en el estado. En relacional se ve por el estado de la fila
+  gestionada; en documental, leyendo el documento antes de reemplazarlo.
+- El almacén: `JdbcTimerStore` usa `JdbcClient` con las sentencias de keel-core tal cual, y `KeelTimerJpa` existe solo
+  para el esquema (así entra en el baseline y en el paso de build del 2b). `MongoTimerStore` usa la forma documental.
+- `TimerPoller`: un hilo de plataforma por réplica, apagable con `scheduling.enabled` (en `test` va apagado). Trae un
+  handler por plazo (`<Entidad><Estado>Deadline`, que revalida y despacha `by`) y la purga de la tabla como primer
+  recurrente (R7).
+- El gate `infra/check-deadlines.sh`, `ageForDeadline` en el arnés y las notas neutrales en los handlers.
+
+La operación `by` deja de contar como interna huérfana (`orphanInternalOperations`), y la matriz gana las filas
+`deadline` y `timer` (pendientes en los otros tres, con su incremento).
+
+La red es nueva: `npm run timer-check` (`src/lib/timer-probes.js`). Escribe un JUnit en el proyecto generado y ejecuta
+DL-1 a DL-10 y R1 contra el motor: 13/13 en PostgreSQL, MySQL y MongoDB. Está falsada con cinco sabotajes en PostgreSQL
+(`dl-boundary`, `dl-no-guard`, `dl-no-revalidate`, `dl-no-lease` y `dl-outside-tx`) y cuatro en MongoDB, cada uno en
+exactamente sus casos. `schema-step-check` sobre `verification-codes` da 4/4 en PostgreSQL y MySQL: el `keel_timer` que
+crea el paso de build del 2b es el que valida Hibernate contra `KeelTimerJpa`.
+
+Lo que destapó:
+
+- La hora de MySQL pasa a `UTC_TIMESTAMP(6)` en lo neutral. `datetime` no guarda zona, y `current_timestamp` es la de la
+  sesión.
+- En MongoDB, `hello` no se admite dentro de una transacción (error 263), así que la hora sale de un `$documents` sobre
+  la base sin la sesión. Y `List.of` no admite el null de BSON.
+- Sin arriendo, el reclamo documental vuelve a llevarse en el mismo lote lo que acaba de reclamar. Por eso
+  `dl-no-lease` cae allí también en DL-5. En lo neutral, `dl-no-lease` rompe DL-6 y DL-7, no solo DL-6.
+- Un defecto anterior al plan: el arnés no compilaba con ejecución en contenedor y sin broker (faltaban los imports de
+  `copyIntoContainer`).
+
+Lo que no entra, con su motivo:
+
+- El modo por réplica no se emite: su único usuario es el relay (inc. 9), y un modo sin sujeto no lo ejecuta ninguna
+  red.
+- `dl-wrong-field` y `dl-app-clock` no tienen sujeto en esta fixture: hay una sola marca de tiempo, y la red corre con la
+  instancia y la base en la misma máquina.
+- `ageForDeadline` está emitido y compilado en las tres ramas, pero no se ha ejecutado: lo ejecutarán los escenarios de
+  la fixture del inc. 12.
+- `claim-check` no cambia: el cronómetro tiene su propia red.
 
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada

@@ -41,6 +41,8 @@ export const NETS = {
 export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
+  deadline: { pending: 'incremento 4 de PLAN-DSL-226-PLAZOS.md: el rechazo tardío y el armado, con el cronómetro' },
+  timer: { pending: 'incremento 4 de PLAN-DSL-226-PLAZOS.md: el cronómetro del servicio, sobre keel-core/gen/timer-store.js' },
   'runtime-panel': {
     parity: {
       pair: 'notification-mailer',

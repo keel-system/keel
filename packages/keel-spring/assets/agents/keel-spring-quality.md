@@ -379,6 +379,11 @@ vivir la llamada: eso es del agente de código mientras respete la frontera hexa
 Vuelca cada hallazgo a `remaining` y pon `valueTypeFormat` en `KO`. Si el diseño no
 declara ningún value type escalar con `pattern` el script no existe y la familia es `N/A`.
 
+**Ejecuta `bash infra/check-deadlines.sh`** si existe (el diseño declara `lifecycle.deadlines`). Comprueba que
+el handler de la operación que caduca cada plazo ya no sea el stub y guarde la entidad, que la entidad aplique esa
+transición y que los handlers que la sacan del estado con plazo le den al dominio `clock.instant()`. Vuelca cada hallazgo
+a `remaining` y pon `deadlines` en `KO`; sin el script, `N/A`.
+
 **Ejecuta `bash infra/check-conditional-writes.sh`** si existe (el diseño declara `api.concurrency`). Lo genera build
 con una fila por escritura condicional y comprueba que su handler **llame a `loadExpecting(…)`** fuera de un comentario
 —la nota del stub nombra la llamada—. Cargar con `findById` compila, pasa todo escenario de una sola escritura y deja que
@@ -561,6 +566,8 @@ valueTypeFormat: OK | KO | N/A     # Sale de `infra/check-domain-guards.sh`. N/A
                           # no declara ningún value type escalar con `pattern` (el script no
                           # se genera); OK = todo campo con formato declarado tiene quien lo
                           # haga cumplir tras normalizar
+deadlines: OK | KO | N/A           # Sale de `infra/check-deadlines.sh`. N/A sin lifecycle.deadlines;
+                          # OK = cada plazo tiene su handler que caduca y la hora inyectada
 conditionalWrites: OK | KO | N/A   # Sale de `infra/check-conditional-writes.sh`. N/A sin api.concurrency;
                           # OK = cada escritura condicional carga su raíz con loadExpecting
 # --- la higiene de los logs ---

@@ -1,0 +1,55 @@
+# El plazo vive en el lifecycle, indexado por el estado de origen: `pending` caduca a los
+# `codeTtlMinutes` contados desde `issuedAt`, y lo caduca `expireCode`, que despacha el
+# cronómetro del servicio por cada código vencido. Verificar pasado el plazo es CODE_EXPIRED.
+
+types:
+  CodeStatus:
+    description: En qué punto de su vida está un código de verificación.
+    values: [pending, verified, expired]
+
+entities:
+  VerificationCode:
+    description: Código de un solo uso enviado a una dirección para comprobar que es suya.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      email:
+        type: string
+        required: true
+        constraints: { maxLength: 254 }
+        description: Dirección a la que se envió el código.
+      code:
+        type: string
+        required: true
+        constraints: { minLength: 6, maxLength: 6, pattern: "^[0-9]{6}$" }
+        description: Los seis dígitos que el titular tiene que devolver.
+      status:
+        type: CodeStatus
+        required: true
+        default: pending
+      issuedAt:
+        type: timestamp
+        required: true
+        description: >-
+          Cuándo se emitió el código. Lo estampa issueCode al crearlo en pending, y es el
+          instante desde el que cuenta su plazo.
+      verifiedAt:
+        type: timestamp
+        description: Cuándo lo verificó su titular. Solo en verified.
+    lifecycle:
+      field: status
+      transitions:
+        pending: [verified, expired]
+        verified: []
+        expired: []
+      deadlines:
+        pending:
+          after: { parameter: codeTtlMinutes, unit: minutes }
+          since: issuedAt
+          to: expired
+          by: expireCode
+          lateAction: { error: CODE_EXPIRED }
+    invariants:
+      - Un código en verified tiene siempre verifiedAt estampado.

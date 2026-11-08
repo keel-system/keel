@@ -49,7 +49,10 @@ const COMPILAN = [
   'profile-directory',
   'stock-reservation',
   // La variante de mensajería (incremento 9e de keel-nest): compile-check con rabbitmq, postgresql y mysql.
-  'stock-reservation-events'
+  'stock-reservation-events',
+  // El plazo de negocio (DSL 2.26): el cronómetro, el armado y el rechazo tardío, en las dos ramas.
+  'verification-codes',
+  'verification-codes-mongo'
 ];
 
 for (const fixture of COMPILAN) {

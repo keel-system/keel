@@ -138,6 +138,19 @@ export function ageClockScript({ collection, clockField }) {
   );
 }
 
+/**
+ * Envejece el PLAZO de una entidad (DSL 2.26, `ageForDeadline` del arnés, D7): retrasa su `since` y el vencimiento de su
+ * temporizador en `keel_timer` los mismos milisegundos, con un update con pipeline para que el corrimiento sea relativo
+ * (`since - ms`), no una marca absoluta. Lleva dos marcadores que sustituye el arnés: `{id}` (el uuid de la entidad; el
+ * `_id` del temporizador es `<kind>|<id>`, timer-store.js) y `{ms}`.
+ */
+export function ageDeadlineScript({ collection, sinceField, kind }) {
+  return (
+    `db.getCollection("${collection}").updateOne({ _id: UUID("{id}") }, [{ $set: { ${sinceField}: { $subtract: ["$${sinceField}", {ms}] } } }]); ` +
+    `db.getCollection("keel_timer").updateOne({ _id: "${kind}|{id}" }, [{ $set: { due_at: { $subtract: ["$due_at", {ms}] } } }])`
+  );
+}
+
 /** El inverso de `ageClockScript`: deja la marca de espera de ese documento en el futuro (holdFromReconciliation). */
 export function holdClockScript({ collection, clockField }) {
   return split(

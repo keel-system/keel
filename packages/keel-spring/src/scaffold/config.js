@@ -23,6 +23,7 @@ import { IDEMPOTENCY_RECORD_PURGE } from '@keel-system/keel-core/gen/request-ide
 import { parameterProfileValue } from '@keel-system/keel-core/gen/service-parameters';
 import { KAFKA_PRODUCER_TIMEOUTS } from '@keel-system/keel-core/gen/infra-catalog';
 import { usesHttpIdempotency } from './http-idempotency.js';
+import { usesDeadlines, TIMER_CONFIG_PARAMETERS, TIMER_SWITCH } from './timer.js';
 import { usesCorrelation } from './correlation.js';
 import { instrumentationFor, usesTelemetry } from './telemetry.js';
 import { METRICS_TRANSPORT, OBSERVATIONS } from '../lib/telemetry-probes.js';
@@ -148,6 +149,11 @@ export function generate(model) {
       fragments.push(fragment(profile, 'sweep', sweepYaml(model, profile)));
     }
 
+    // El cronómetro del servicio (DSL 2.26): sus parámetros de mecánica y el interruptor.
+    if (usesDeadlines(model)) {
+      fragments.push(fragment(profile, 'timer', timerYaml(profile)));
+    }
+
     // Parámetros de DESPLIEGUE del servicio (`service.keel.yaml § parameters`). El fragmento
     // lleva el nombre del servicio porque su prefijo de configuración es ese: no es
     // infraestructura, es el valor único con el que este servicio opera.
@@ -244,6 +250,30 @@ export function requiredByDevelop(files) {
     for (const [, name] of String(file.content).matchAll(/\$\{([A-Z][A-Z0-9_]*)\}/g)) required.add(name);
   }
   return [...required];
+}
+
+/**
+ * parameters/<perfil>/timer.yaml: la mecánica del cronómetro (keel-core/gen/timer-store.js, la misma clave y variable en
+ * los cuatro generadores) y su interruptor, `scheduling.enabled`, que en `test` va apagado.
+ */
+function timerYaml(profile) {
+  const lines = [
+    '# El cronómetro del servicio (DSL 2.26): un sondeador por réplica sobre la tabla keel_timer.',
+    '# Mecánica del generador, no contrato: el rechazo tardío lo hace el dominio en el instante exacto.',
+    'timer:'
+  ];
+  let parent = null;
+  for (const parameter of TIMER_CONFIG_PARAMETERS) {
+    const segments = parameter.key.split('.');
+    if (segments.length === 3 && parent !== segments[1]) {
+      parent = segments[1];
+      lines.push(`  ${parent}:`);
+    }
+    lines.push(parameterLine(profile, parameter));
+  }
+  const [root, leaf] = TIMER_SWITCH.key.split('.');
+  lines.push(`${root}:`, `  ${leaf}: ${profile === 'test' ? 'false' : envWithDefault(profile, TIMER_SWITCH.env, TIMER_SWITCH.default)}`);
+  return `${lines.join('\n')}\n`;
 }
 
 function fragment(profile, name, content) {
@@ -1816,6 +1846,11 @@ function testProfileFiles(model) {
 
   if (model.layersPresent.persistence) {
     fragments.push(fragment('test', 'db', testDbYaml(model)));
+  }
+
+  // El cronómetro, APAGADO: el perfil test arranca contra H2 o un mongod embebido, sin la tabla medida.
+  if (usesDeadlines(model)) {
+    fragments.push(fragment('test', 'timer', timerYaml('test')));
   }
 
   // El perfil test también: sin el fragmento, el binding del record de parámetros muere con

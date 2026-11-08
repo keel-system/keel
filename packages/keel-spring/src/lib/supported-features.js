@@ -11,7 +11,7 @@
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
-import { deadlinesPendingErrors } from '@keel-system/keel-core/gen/deadlines';
+import { declaredDeadlines } from '@keel-system/keel-core/gen/deadlines';
 
 /**
  * Comprueba el diseño contra la frontera de keel-spring.
@@ -176,6 +176,7 @@ export function checkSupportedFeatures(manifest, layers) {
   );
   const orphanInternal = [];
   const paymentOutcomes = new Set(Object.values(layers?.payments?.outcomes ?? {}));
+  const deadlineBy = new Set(declaredDeadlines(layers).map(({ deadline }) => deadline.by));
   for (const [opName, op] of Object.entries(layers?.['use-cases']?.operations ?? {})) {
     if (op?.internal !== true) continue;
     if (op.schedule !== undefined) continue;
@@ -183,6 +184,8 @@ export function checkSupportedFeatures(manifest, layers) {
     // Los desenlaces de la capa payments SÍ tienen disparador generado: los despacha el
     // PaymentOutcomeApplier que emite build (respuesta de la pasarela, aviso o barrido).
     if (paymentOutcomes.has(opName)) continue;
+    // La operación `by` de un plazo (DSL 2.26) la despacha el cronómetro que emite build.
+    if (deadlineBy.has(opName)) continue;
     orphanInternal.push(opName);
   }
   // La consecuencia cara solo existe si entre reclamar y actuar hay I/O externo: es lo
@@ -220,9 +223,8 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...messagingWithoutPersistenceErrors(manifest, layers, 'keel-spring'));
   // La escritura condicional (DSL 2.25) se genera entera; lo que ningún generador genera todavía, con el motivo neutral (T3).
   errors.push(...conditionalWritesFrontierErrors(layers, 'keel-spring'));
-  // Los plazos de negocio (DSL 2.26) llegan con el cronómetro, en el incremento 3 de PLAN-DSL-226-PLAZOS.md: hasta
-  // entonces se rechazan enteros, con el mismo mensaje en los cuatro.
-  errors.push(...deadlinesPendingErrors(layers, 'keel-spring', 3));
+  // Los plazos de negocio (DSL 2.26) los genera el cronómetro (scaffold/timer.js). Lo que depende del motor elegido
+  // —solo hay sentencias medidas para PostgreSQL, MySQL y MongoDB— lo rechaza planService, que sí conoce el stack.
 
   if (orphanInternal.length > 0) {
     warnings.push(

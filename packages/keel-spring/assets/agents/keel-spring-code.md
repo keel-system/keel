@@ -73,6 +73,12 @@ corto a romper un escenario que ya estaba en verde.
    build genera (un evento o una operación interna no pasan por el DTO), y hay que llamarla
    en TODOS los campos de ese tipo — no solo donde un escenario lo exija.
    `infra/check-domain-guards.sh` lo comprueba.
+   Con plazos de negocio (`lifecycle.deadlines`, DSL 2.26), el cronómetro, el armado del
+   temporizador y el rechazo tardío del dominio ya los generó build. Lo tuyo: el handler de la
+   operación que caduca (carga la entidad, llama a su método semántico, que hace
+   `transitionTo(<Estado>.<DESTINO>)`, y la guarda) y, en cada handler que saca la entidad del
+   estado con plazo, pasarle al método semántico `clock.instant()` y los plazos inyectados —
+   nunca `Instant.now()`. `infra/check-deadlines.sh` lo comprueba.
    Con `api.concurrency` (escritura condicional), cada escritura listada carga su raíz con
    `loadExpecting(id, command.expectedVersions())` —nunca `findById`: la comparación con
    If-Match la hace el adaptador— y, si devuelve su raíz, devuelve `Versioned<T>` con la versión

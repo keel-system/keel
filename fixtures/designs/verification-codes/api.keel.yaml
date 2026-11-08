@@ -1,0 +1,14 @@
+style: rest
+basePath: /api
+endpoints:
+  issueCode:
+    method: POST
+    path: /codes
+    successStatus: 201
+  verifyCode:
+    method: POST
+    path: /codes/{id}/verification
+    successStatus: 200
+  getCode:
+    method: GET
+    path: /codes/{id}

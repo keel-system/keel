@@ -8,6 +8,7 @@
 //   · que un `soloCadenas` tenga sus DOS redes: la rama en lo emitido (uncovered-branches.test.js) y su variante en
 //     go-check, que la compila y ejecuta sus pruebas emitidas (UNCOVERED_BRANCHES de test/helpers/workspace.js).
 
+import { deadlinesPendingErrors } from '@keel-system/keel-core/gen/deadlines';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -30,8 +31,6 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
-  ['domain.entities.*.lifecycle.deadlines', { motivo: MOTIVOS.pendiente, porque: 'los plazos de negocio (DSL 2.26) los rechaza la frontera de keel-go (deadlinesPendingErrors) hasta el incremento 6 de PLAN-DSL-226-PLAZOS.md; entonces los declara una fixture y esta fila se borra.' }],
-  ['domain.entities.*.lifecycle.deadlines.*.lateAction', { motivo: MOTIVOS.pendiente, porque: 'los plazos de negocio (DSL 2.26) los rechaza la frontera de keel-go (deadlinesPendingErrors) hasta el incremento 6 de PLAN-DSL-226-PLAZOS.md; entonces los declara una fixture y esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en el comentario del mensaje de la suscripción (messaging.js): ningún lector depende de él.' }
@@ -76,7 +75,9 @@ const fixtureNames = () => fs.readdirSync(FIXTURES_DIR).filter((name) => fs.exis
 test('toda fixture entra entera en la frontera de keel-go: declarada por una fixture es generada por keel-go', () => {
   for (const name of fixtureNames()) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
-    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], `${name} cae fuera de la frontera de keel-go`);
+    // Salvo el rechazo común de los plazos (DSL 2.26), que llegan con el incremento 6 de PLAN-DSL-226-PLAZOS.md:
+    // vacío en toda fixture sin plazo, y exactamente él en el par verification-codes.
+    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, deadlinesPendingErrors(layers, 'keel-go', 6), `${name} cae fuera de la frontera de keel-go`);
   }
 });
 

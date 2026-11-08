@@ -60,7 +60,7 @@ function bounded(field, preferred) {
   return preferred;
 }
 
-const TEXT_CANDIDATES = ['EUR', 'abc', 'es-ES', 'ABC-1234', 'A-1', 'user@example.com', 'sillas-de-roble', '+34600000000', 'ES9121000418450200051332'];
+const TEXT_CANDIDATES = ['EUR', 'abc', 'es-ES', 'ABC-1234', 'A-1', 'user@example.com', 'sillas-de-roble', '+34600000000', 'ES9121000418450200051332', '123456'];
 
 function sampleText(field) {
   const text = field.text ?? {};

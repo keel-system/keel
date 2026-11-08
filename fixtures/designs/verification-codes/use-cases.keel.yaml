@@ -1,0 +1,60 @@
+operations:
+
+  issueCode:
+    description: Emite un código nuevo para una dirección.
+    kind: command
+    input:
+      fields:
+        email: { type: string, required: true, constraints: { maxLength: 254 } }
+    output: { entity: VerificationCode }
+    rules:
+      - "El código nace en pending, con seis dígitos aleatorios y issuedAt estampado con la hora de emisión."
+
+  verifyCode:
+    description: Comprueba los dígitos que devuelve el titular y da el código por verificado.
+    kind: command
+    input:
+      fields:
+        id:   { type: uuid, required: true }
+        code: { type: string, required: true, constraints: { minLength: 6, maxLength: 6, pattern: "^[0-9]{6}$" } }
+    output: { entity: VerificationCode }
+    transitions:
+      - entity: VerificationCode
+        from: [pending]
+        to: verified
+    rules:
+      - "Los dígitos tienen que coincidir con los emitidos; si coinciden, el código pasa a verified y se estampa verifiedAt."
+    errors:
+      - { code: CODE_NOT_FOUND, when: No existe un código con ese identificador., http: 404 }
+      - { code: CODE_MISMATCH, when: Los dígitos no coinciden con los emitidos., http: 422 }
+      - { code: CODE_EXPIRED, when: El código superó su plazo sin verificarse., http: 410 }
+      - { code: INVALID_STATE_TRANSITION, when: El código ya no está en pending., http: 409 }
+
+  getCode:
+    description: Consulta un código por su identificador.
+    kind: query
+    input:
+      fields:
+        id: { type: uuid, required: true }
+    output: { entity: VerificationCode }
+    errors:
+      - { code: CODE_NOT_FOUND, when: No existe un código con ese identificador., http: 404 }
+
+  # La operación `by` del plazo: la despacha el cronómetro, una vez por cada código cuyo plazo
+  # en pending venció. No tiene schedule (no es un barrido) ni endpoint (es internal).
+  expireCode:
+    description: Da por caducado un código que nadie verificó a tiempo.
+    kind: command
+    internal: true
+    input:
+      fields:
+        id: { type: uuid, required: true }
+    output: "void"
+    transitions:
+      - entity: VerificationCode
+        from: [pending]
+        to: expired
+    rules:
+      - "Un código caducado ya no se puede verificar."
+    errors:
+      - { code: CODE_NOT_FOUND, when: No existe un código con ese identificador., http: 404 }

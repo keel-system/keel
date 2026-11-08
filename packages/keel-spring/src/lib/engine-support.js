@@ -631,6 +631,60 @@ const SPRING_MECHANISMS = {
       }
     }
   },
+  deadline: {
+    emitter: 'src/scaffold/timer.js · src/scaffold/entities.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js',
+    why: 'Un rechazo tardío con < en vez de <= o un armado fuera de la transacción compilan igual de bien, y ningún escenario de un solo instante los ve: el precio es confirmar lo que el negocio daba por caducado, o un temporizador huérfano de una alta que revirtió.',
+    parity: {
+      pair: 'verification-codes',
+      markers: {
+        relational: ['timers.arm(TimerKinds.', 'jpa.getStatus()'],
+        document: ['timers.arm(TimerKinds.', 'Document::getStatus']
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'timer-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'verification-codes: DL-1 a DL-3 contra el método de transición del dominio y DL-4 contra el adaptador JPA en una transacción que confirma y otra que revierte. Falsado: dl-boundary y dl-no-guard caen en DL-2, dl-outside-tx en DL-4. dl-wrong-field no tiene sujeto en esta fixture (una sola marca de tiempo)'
+      },
+      document: {
+        state: 'verificado',
+        net: 'timer-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'verification-codes-mongo: los mismos casos, con el armado en la sesión de MongoTransactionManager sobre un replica set real (sin el mongod embebido de flapdoodle: DL-4 lo hace fallable). Falsado: dl-boundary y dl-no-guard caen en DL-2. dl-outside-tx no tiene sabotaje aquí: el almacén documental no lleva una transacción propia con la que sacar el armado de la del caso de uso'
+      }
+    }
+  },
+  timer: {
+    emitter: 'src/scaffold/timer.js',
+    why: 'Las sentencias viajan dentro de literales Java y un reclamo que no casa con nada no falla: devuelve cero temporizadores y el plazo no vence nunca. Un arriendo de cero o un sondeador que no revalida tampoco rompen nada visible hasta que dos réplicas despachan lo mismo.',
+    parity: {
+      pair: 'verification-codes',
+      markers: {
+        relational: ['class JdbcTimerStore', 'SKIP LOCKED', '@Table(name = "keel_timer"'],
+        document: ['class MongoTimerStore', 'findOneAndUpdate(', '$$NOW']
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'timer-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'verification-codes: las sentencias de keel-core tal cual (JdbcClient sobre el DataSource de JPA), DL-5 a DL-10 y el recurrente de la purga (R1). Falsado: dl-no-lease cae en DL-6 y DL-7, dl-no-revalidate en DL-8 y DL-9. dl-app-clock no tiene sujeto: la instancia y la base comparten reloj en la máquina de la red'
+      },
+      document: {
+        state: 'verificado',
+        net: 'timer-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'verification-codes-mongo: findOneAndUpdate de uno en uno con $$NOW, el _id aplanado y entity_id/claim_token como texto. Medido: hello no se admite dentro de una transacción (error 263), así que la hora de la base sale de un $documents sobre la base sin la sesión; y List.of no admite el null de BSON. Falsado: dl-no-lease cae en DL-5, DL-6 y DL-7 (sin arriendo, el bucle de findOneAndUpdate vuelve a llevarse en el mismo lote el documento que acaba de reclamar), dl-no-revalidate en DL-8 y DL-9'
+      }
+    }
+  },
   'conditional-write': {
     emitter:
       'src/scaffold/conditional-writes.js · src/scaffold/controllers.js · src/scaffold/services.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js · src/scaffold/cache.js · src/scaffold/security.js',

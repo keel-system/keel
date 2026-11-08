@@ -10,6 +10,7 @@
 import { idHelperImports } from './ids.js';
 import { refIdJava } from './persistence-members.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
+import { lateGuardBlock, transitionNeedsClock } from './timer.js';
 
 // Subpaquete de una entidad de dominio según su rol en el agregado.
 export function domainSubPackage(entity) {
@@ -180,7 +181,7 @@ ${assignParts.join('\n')}
 
   if (entity.lifecycle) {
     imports.add(`${subPackage(model, 'domain.errors')}.InvalidStateTransitionException`);
-    bodyParts.push(renderLifecycle(entity, imports));
+    bodyParts.push(renderLifecycle(model, entity, imports));
   }
   const accessors = renderAccessors(members);
   // Getter de la versión (solo raíz): lo usa el toJpa del adaptador para
@@ -249,7 +250,7 @@ ${pending}
     }`;
 }
 
-function renderLifecycle(entity, imports) {
+function renderLifecycle(model, entity, imports) {
   imports.add('java.util.Map');
   imports.add('java.util.Set');
   const { field, enumType, transitions } = entity.lifecycle;
@@ -269,11 +270,21 @@ function renderLifecycle(entity, imports) {
       to.map((state) => {
         const ops = executedBy[`${from}|${state}`] ?? [];
         const origin = ops.length ? ` (lo ejecuta ${ops.join(', ')})` : '';
-        return `    // TODO (agente): método semántico ${from} → ${state}${origin} que valide la regla del diseño y llame a transitionTo(${enumType}.${state}).`;
+        // Si la transición sale de un estado con plazo (DSL 2.26), el método recibe la hora y los plazos vigentes.
+        const args = transitionNeedsClock(entity, from, state) ? `${enumType}.${state}, now, deadlines` : `${enumType}.${state}`;
+        return `    // TODO (agente): método semántico ${from} → ${state}${origin} que valide la regla del diseño y llame a transitionTo(${args}).`;
       })
     )
     .join('\n');
 
+  const guarded = lateGuardBlock(model, entity, imports);
+  const guard = guarded ?? `    // Guard interno del lifecycle: lo llaman los métodos semánticos, nunca un handler.
+    private void transitionTo(${enumType} target) {
+        if (!TRANSITIONS.getOrDefault(${field}, Set.of()).contains(target)) {
+            throw new InvalidStateTransitionException(${field}.name(), target.name());
+        }
+        this.${field} = target;
+    }`;
   return `    // Transiciones válidas del lifecycle del diseño; un estado con Set.of() es terminal.
     private static final Map<${enumType}, Set<${enumType}>> TRANSITIONS = Map.of(
 ${entries}
@@ -281,13 +292,7 @@ ${entries}
 
 ${semanticTodos}
 
-    // Guard interno del lifecycle: lo llaman los métodos semánticos, nunca un handler.
-    private void transitionTo(${enumType} target) {
-        if (!TRANSITIONS.getOrDefault(${field}, Set.of()).contains(target)) {
-            throw new InvalidStateTransitionException(${field}.name(), target.name());
-        }
-        this.${field} = target;
-    }`;
+${guard}`;
 }
 
 // Solo getters: el dominio no expone setters (conventions/domain-modeling.md).

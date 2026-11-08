@@ -39,6 +39,8 @@ export const NETS = {
     'npm run telemetry-check — la telemetría con la APLICACIÓN ARRANCADA: que la serie que el panel consulta exista de verdad en la exposición, con sus etiquetas',
   'precondition-check':
     'npm run precondition-check — la ESCRITURA CONDICIONAL (DSL 2.25) contra el motor y en el borde: loadExpecting, la versión persistida, el 409 de la ventana, el 428, la cabecera, el 412, CORS y la caché (CW-1 a CW-11)',
+  'timer-check':
+    'npm run timer-check — el CRONÓMETRO y los PLAZOS (DSL 2.26) contra el motor: el rechazo tardío del dominio, el armado en la transacción, el reclamo con arriendo y valla, la revalidación, el sueño y el aparcado (DL-1 a DL-10)',
   corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
   ninguna: 'nadie lo ejecuta'
 };
@@ -50,7 +52,8 @@ export const NETS = {
  */
 export const PAIRS = {
   'job-dispatch': { relational: 'job-dispatch', document: 'job-dispatch-mongo' },
-  'notification-mailer': { relational: 'notification-mailer', document: 'notification-mailer-mongo' }
+  'notification-mailer': { relational: 'notification-mailer', document: 'notification-mailer-mongo' },
+  'verification-codes': { relational: 'verification-codes', document: 'verification-codes-mongo' }
 };
 
 /**
@@ -132,6 +135,14 @@ export const MECHANISM_CATALOG = {
   },
   'persistence-adapter': {
     title: 'Espejo de persistencia y repositorios (mapeo, embebidos, colecciones, orden y desempate)',
+    axis: 'model'
+  },
+  deadline: {
+    title: 'Plazo de negocio (DSL 2.26): rechazo tardío en el dominio y armado del temporizador en la transacción',
+    axis: 'model'
+  },
+  timer: {
+    title: 'Cronómetro del servicio: keel_timer, reclamo con arriendo y valla, revalidación, sueño y aparcado',
     axis: 'model'
   },
   'conditional-write': {

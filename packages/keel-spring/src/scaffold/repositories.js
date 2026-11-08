@@ -13,6 +13,7 @@ import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections
 import { refIdJava } from './persistence-members.js';
 import { pluralize } from '../lib/naming.js';
 import * as claim from './claim.js';
+import { adapterArming } from './timer.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
@@ -653,10 +654,12 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   // eso falla con ObjectOptimisticLockingFailureException aunque no haya
   // concurrencia ninguna. Cargarla también es lo que permite reconciliar las
   // colecciones hijas por identidad en vez de recrearlas (ver applyToJpa).
+  // El armado del plazo (DSL 2.26): el estado que la fila tenía ANTES de volcar el agregado dice si ENTRA en el estado.
+  const arming = entity.lifecycle ? adapterArming(model, entity, imports, `jpa.get${capitalize(entity.lifecycle.field)}()`) : null;
   const loadManaged = `        ${entity.name}Jpa jpa = entity.${id.getter}() != null
                 ? ${jpaField}.findById(entity.${id.getter}()).orElseGet(${entity.name}Jpa::new)
                 : new ${entity.name}Jpa();
-        applyToJpa(entity, jpa);`;
+${arming ? `${arming.before}\n` : ''}        applyToJpa(entity, jpa);`;
   // El listener de auditoría escribe @LastModifiedDate/@LastModifiedBy en el FLUSH,
   // no en el save: sobre una instancia gestionada, save() no fuerza flush y el
   // toDomain() de vuelta devolvería los valores anteriores. Solo importa cuando el
@@ -672,11 +675,10 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   // cambios y su @Version se quedaría quieta, mientras que los otros tres generadores la suben siempre (medido en
   // precondition-check, CW-4). forceNewVersion la sube con la misma comprobación de versión.
   const persisted = versioned ? `forceNewVersion(entity, ${jpaField}.${save}(jpa))` : `${jpaField}.${save}(jpa)`;
-  const saveBody = emitsEvents
+  const saveBody = emitsEvents || arming
     ? `${loadManaged}
         ${entity.name} saved = toDomain(${persisted});
-        entity.pullDomainEvents().forEach(eventPublisher::publishEvent);
-        return saved;`
+${arming ? `${arming.after}\n` : ''}${emitsEvents ? '        entity.pullDomainEvents().forEach(eventPublisher::publishEvent);\n' : ''}        return saved;`
     : `${loadManaged}
         return toDomain(${persisted});`;
   if (versioned) {
@@ -787,6 +789,11 @@ ${saveBody}
     fields.push(`    private final ${claimStore.type} ${claimStore.field};`);
     ctorParams.push(`${claimStore.type} ${claimStore.field}`);
     ctorAssigns.push(`        this.${claimStore.field} = ${claimStore.field};`);
+  }
+  if (arming) {
+    fields.push(...arming.fields);
+    ctorParams.push(...arming.params);
+    ctorAssigns.push(...arming.assigns);
   }
   if (versioned) {
     fields.push('    private final EntityManager entityManager;');

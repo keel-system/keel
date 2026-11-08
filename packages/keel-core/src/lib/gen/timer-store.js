@@ -73,8 +73,17 @@ export const TIMER_PARAMETERS = Object.freeze({
   retryDelayMs: Object.freeze({ key: 'timer.retry-delay-ms', env: 'TIMER_RETRY_DELAY_MS', default: 30000 }),
   // La purga de la propia tabla (R7): un temporizador vencido hace más que esto y sin reclamar es de un `kind` que ya no
   // existe (R4), o uno aparcado que ya se vio.
-  retentionDays: Object.freeze({ key: 'timer.retention-days', env: 'TIMER_RETENTION_DAYS', default: 7 })
+  retentionDays: Object.freeze({ key: 'timer.retention-days', env: 'TIMER_RETENTION_DAYS', default: 7 }),
+  // Cuándo corre esa purga: un recurrente más de la propia tabla, en modo clúster y con el cron en UTC (T7).
+  purgeCron: Object.freeze({ key: 'timer.purge.cron', env: 'TIMER_PURGE_CRON', default: '0 30 5 * * *', cron: true })
 });
+
+/**
+ * El interruptor del cronómetro (§ Incremento 0, punto 5): uno solo en los cuatro. Apagado, la réplica no sondea —los
+ * temporizadores se siguen ARMANDO, porque eso es persistencia y no reloj—. El perfil `test` lo apaga: arranca sin base
+ * real o sin la tabla.
+ */
+export const TIMER_SWITCH = Object.freeze({ key: 'scheduling.enabled', env: 'SCHEDULING_ENABLED', default: true });
 
 // ─── El nombre de cada temporizador ──────────────────────────────────────────
 
@@ -118,14 +127,17 @@ const DIALECTS = Object.freeze({
     distinct: (a, b) => `${a} IS DISTINCT FROM ${b}`
   },
   mysql: {
-    now: 'current_timestamp(6)',
+    // UTC_TIMESTAMP y no current_timestamp: `datetime` no guarda zona, y los cuatro servidores escriben ahí la hora en
+    // UTC (Hibernate, TypeORM, EF y database/sql). current_timestamp sería la de la zona de la SESIÓN, que en un
+    // despliegue no tiene por qué ser UTC, y el cronómetro dispararía con horas de diferencia.
+    now: 'utc_timestamp(6)',
     plusMs: (expression, param) => `DATE_ADD(${expression}, INTERVAL CAST(:${param} AS SIGNED) * 1000 MICROSECOND)`,
     minusMs: (expression, param) => `DATE_SUB(${expression}, INTERVAL CAST(:${param} AS SIGNED) * 1000 MICROSECOND)`,
-    minusDays: (param) => `DATE_SUB(current_timestamp(6), INTERVAL CAST(:${param} AS SIGNED) DAY)`,
+    minusDays: (param) => `DATE_SUB(utc_timestamp(6), INTERVAL CAST(:${param} AS SIGNED) DAY)`,
     upsert: (assignments) => `ON DUPLICATE KEY UPDATE ${assignments.map(([column, value]) => `${column} = ${value}`).join(', ')}`,
     // La fila que se intentaba insertar, con nombre: VALUES() está obsoleto desde 8.0.20.
     rowAlias: ' AS new',
-    msUntil: (expression) => `TIMESTAMPDIFF(MICROSECOND, current_timestamp(6), ${expression}) DIV 1000`,
+    msUntil: (expression) => `TIMESTAMPDIFF(MICROSECOND, utc_timestamp(6), ${expression}) DIV 1000`,
     distinct: (a, b) => `NOT (${a} <=> ${b})`
   }
 });

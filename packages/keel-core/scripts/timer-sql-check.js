@@ -215,7 +215,7 @@ async function check(engine) {
     run(S.arm, { id: uuid(), kind: KIND, entityId: ids[0], spec: null, dueAt: ago(1) });
     const fail = () => {
       const t = uuid();
-      run(`UPDATE keel_timer SET due_at = ${engine === 'postgresql' ? 'current_timestamp' : 'current_timestamp(6)'} - interval '1' second;`.replace("interval '1' second", engine === 'postgresql' ? "interval '1 second'" : 'INTERVAL 1 SECOND'));
+      run(`UPDATE keel_timer SET due_at = ${engine === 'postgresql' ? 'current_timestamp' : 'utc_timestamp(6)'} - interval '1' second;`.replace("interval '1' second", engine === 'postgresql' ? "interval '1 second'" : 'INTERVAL 1 SECOND'));
       const [row] = claim(t);
       // Nada que reclamar: ya estaba aparcado (lo que hace el sabotaje park-order en MySQL, un intento antes).
       if (row) run(S.fail, { id: row[0], token: t, maxAttempts: 2, retryDelayMs: 0 });

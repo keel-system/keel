@@ -53,6 +53,7 @@ import * as purge from './purge.js';
 import * as idempotencyCheck from './idempotency-check.js';
 import * as conditionalWrites from './conditional-writes.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
+import * as deadlinesCheck from './deadlines-check.js';
 import * as loggingCheck from './logging-check.js';
 import * as telemetryGate from './telemetry-gate.js';
 import * as cache from './cache.js';
@@ -70,6 +71,7 @@ import * as serviceParameters from './service-parameters.js';
 import * as mail from './mail.js';
 import * as payments from './payments.js';
 import * as services from './services.js';
+import * as timer from './timer.js';
 import * as readme from './readme.js';
 import * as contextMd from './context-md.js';
 import * as generatorDocs from './generator-docs.js';
@@ -162,12 +164,16 @@ const GENERATORS = [
   // La pasarela de pago: el puerto, el adaptador de la elegida y el aviso con su firma.
   payments,
   services,
+  // El cronómetro del servicio y los plazos de negocio (DSL 2.26): se gatea a sí mismo por el diseño.
+  timer,
   // Después de services: su matriz cita clases que los generadores de arriba nombran,
   // aunque el script solo las busque en tiempo de ejecución.
   idempotencyCheck,
   // La escritura condicional (DSL 2.25): Versioned, las excepciones 412/428, el borde y el gate.
   conditionalWrites,
   domainGuardsCheck,
+  // El gate de los plazos (DSL 2.26): lo que el agente escribe para que caduquen de verdad.
+  deadlinesCheck,
   loggingCheck,
   telemetryGate,
   readme,
@@ -218,6 +224,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   // —el reclamo sigue siendo correcto— pero el diseñador tiene que saberlo antes de
   // desplegar replicado, que es lo único que hace un barrido.
   warnUnsupportedDialect(model);
+  // Los plazos (DSL 2.26) necesitan un motor con las sentencias del cronómetro medidas.
+  const timerErrors = timer.timerStackErrors(model);
+  if (timerErrors.length > 0) throw new Error(timerErrors.join('\n'));
   return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };
 }
 

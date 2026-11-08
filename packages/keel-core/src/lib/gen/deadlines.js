@@ -180,7 +180,7 @@ export const DEADLINE_SABOTAGES = Object.freeze({
   'dl-no-guard': { breaks: ['DL-2'], what: 'el dominio no hace el rechazo tardío' },
   'dl-wrong-field': { breaks: ['DL-2', 'DL-9'], what: 'cuenta el plazo desde otra marca' },
   'dl-no-revalidate': { breaks: ['DL-8', 'DL-9'], what: 'dispara sin mirar el estado ni el plazo vigente' },
-  'dl-no-lease': { breaks: ['DL-6'], what: 'reclama sin arriendo' },
+  'dl-no-lease': { breaks: ['DL-6', 'DL-7'], what: 'reclama sin arriendo: otra réplica se lleva lo arrendado' },
   'dl-app-clock': { breaks: ['DL-5'], what: 'el reclamo compara con la hora de la instancia en vez de la de la base' },
   'dl-outside-tx': { breaks: ['DL-4'], what: 'arma el temporizador fuera de la transacción de la entidad' }
 });

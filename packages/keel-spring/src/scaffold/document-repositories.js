@@ -29,6 +29,7 @@ import {
   REPO_PKG
 } from './repositories.js';
 import * as claim from './claim.js';
+import { adapterArming } from './timer.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import { DOC_PKG } from './document-entities.js';
 import { documentValueObjects } from './document-embeddables.js';
@@ -254,10 +255,22 @@ function renderAdapter(model, entity, paginated, batchLookup) {
     : '';
   const savedExpr = carriesAudit ? `${repoField}.save(document)` : `${repoField}.save(toDocument(entity))`;
 
-  const saveBody = emitsEvents
-    ? `        ${documentExpr}${entity.name} saved = toDomain(${savedExpr});
-        entity.pullDomainEvents().forEach(eventPublisher::publishEvent);
-        return saved;`
+  // El armado del plazo (DSL 2.26): el estado que el documento tenía en la base dice si la entidad ENTRA en el estado.
+  // Se lee antes de reemplazarlo, dentro de la transacción del caso de uso (MongoTransactionManager).
+  const lifecycleField = entity.lifecycle ? capitalize(entity.lifecycle.field) : null;
+  const arming = entity.lifecycle ? adapterArming(model, entity, imports, `previous${lifecycleField}`) : null;
+  if (arming) {
+    imports.add(`${subPackage(model, 'domain.enums')}.${entity.lifecycle.enumType}`);
+    imports.add('org.springframework.transaction.annotation.Transactional');
+  }
+  const previousRead = arming
+    ? `        ${entity.lifecycle.enumType} previous${lifecycleField} = entity.${id.getter}() == null ? null
+                : ${repoField}.findById(entity.${id.getter}()).map(${entity.name}Document::get${lifecycleField}).orElse(null);
+${arming.before}\n`
+    : '';
+  const saveBody = emitsEvents || arming
+    ? `${previousRead}        ${documentExpr}${entity.name} saved = toDomain(${savedExpr});
+${arming ? `${arming.after}\n` : ''}${emitsEvents ? '        entity.pullDomainEvents().forEach(eventPublisher::publishEvent);\n' : ''}        return saved;`
     : `        ${documentExpr}return toDomain(${savedExpr});`;
 
   // Los reclamos: el del barrido de una cola (findAndModify sobre el propio documento) y
@@ -272,7 +285,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   methods.push(...claimMethods);
 
   methods.push(
-    `    @Override${emitsEvents ? '\n    @Transactional' : ''}
+    `    @Override${emitsEvents || arming ? '\n    @Transactional' : ''}
     public ${entity.name} save(${entity.name} entity) {
 ${saveBody}
     }`,
@@ -306,6 +319,11 @@ ${saveBody}
   fields.push(`    private final ${entity.name}MongoRepository ${repoField};`);
   const ctorParams = [`${entity.name}MongoRepository ${repoField}`];
   const ctorAssigns = [`        this.${repoField} = ${repoField};`];
+  if (arming) {
+    fields.push(...arming.fields);
+    ctorParams.push(...arming.params);
+    ctorAssigns.push(...arming.assigns);
+  }
   // MongoTemplate solo donde hay reclamo o búsqueda: ni findAndModify, ni una consulta acotada por la marca de espera,
   // ni los filtros de un finder (DSL 2.22) se expresan con un repositorio derivado.
   if (claimMethods.length > 0 || searchFinders.length > 0) {

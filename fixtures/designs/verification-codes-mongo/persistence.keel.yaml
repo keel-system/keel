@@ -1,0 +1,16 @@
+default:
+  model: document
+
+entities:
+  VerificationCode:
+    persisted: true
+    indexes:
+      - [email]
+
+audit:
+  timestamps: none
+  authorship: none
+
+consistency:
+  optimisticLocking: all
+  transactionalBoundary: per-operation

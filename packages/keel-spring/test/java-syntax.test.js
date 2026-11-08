@@ -258,7 +258,12 @@ const MATRIX = [
   // de forma entera —`findAndModify` con su `Criteria` en vez del UPDATE condicional con su
   // JPQL— y hasta que existió esta fixture esa rama se generaba a ciegas: solo la miraban
   // asserts de cadenas sobre un modelo parcheado en memoria.
-  ['notification-mailer-mongo', { broker: 'kafka' }]
+  ['notification-mailer-mongo', { broker: 'kafka' }],
+  // El plazo de negocio (DSL 2.26): el cronómetro con las sentencias de keel-core dentro de literales Java (las de MySQL
+  // con su alias de fila), el rechazo tardío del dominio y el almacén documental con sus pipelines de $$NOW.
+  ['verification-codes', {}],
+  ['verification-codes', { database: 'mysql' }],
+  ['verification-codes-mongo', {}]
 ];
 
 // El comprobador se comprueba a sí mismo. Un linter que solo sale en verde no

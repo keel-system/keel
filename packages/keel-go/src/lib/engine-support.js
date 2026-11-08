@@ -37,6 +37,8 @@ const PG = 'internal/infrastructure/postgres';
 const MONGO = 'internal/infrastructure/mongo';
 
 export const MECHANISMS = {
+  deadline: { pending: 'incremento 6 de PLAN-DSL-226-PLAZOS.md: el rechazo tardío y el armado, con el cronómetro' },
+  timer: { pending: 'incremento 6 de PLAN-DSL-226-PLAZOS.md: el cronómetro del servicio, sobre keel-core/gen/timer-store.js' },
   'runtime-panel': {
     parity: {
       skip: 'la telemetría es una elección de STACK (telemetry: otel) y el par se genera sin ella; el panel y sus series los comparan con los otros generadores test/observability-assets.test.js y la prueba emitida telemetry_test.go, generando con la opción',

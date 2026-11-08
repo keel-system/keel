@@ -10,13 +10,22 @@
 
 import { scheduleDispatch } from './scheduling.js';
 import { ENTRY_GATE_FIELD, carriesEntryGate } from './entry-gates.js';
+import { deadlineOf } from './deadlines.js';
 
-/** Las operaciones internas a las que no llega ningún disparador generado ni nadie declara despachar. */
+/**
+ * Las operaciones internas a las que no llega ningún disparador generado ni nadie declara despachar. La operación `by`
+ * de un plazo (DSL 2.26) no es huérfana: la despacha el cronómetro.
+ */
 export function orphanInternalOperations(model) {
   const bySubscription = new Set((model.subscriptions ?? []).map((subscription) => subscription.trigger).filter(Boolean));
   const dispatched = new Set(allOperations(model).flatMap((operation) => operation.dispatches ?? []));
   return allOperations(model).filter(
-    (operation) => operation.internal && !operation.schedule && !bySubscription.has(operation.name) && !dispatched.has(operation.name)
+    (operation) =>
+      operation.internal &&
+      !operation.schedule &&
+      !bySubscription.has(operation.name) &&
+      !dispatched.has(operation.name) &&
+      !deadlineOf(model, operation)
   );
 }
 

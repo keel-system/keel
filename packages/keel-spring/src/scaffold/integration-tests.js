@@ -26,10 +26,13 @@ import {
   subscriptionDestination,
   usesDeadLetter, subscriptionGroupId } from '@keel-system/keel-core/gen';
 import { needsMessagingProvisioning } from './messaging-provisioning.js';
+import { modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
+import { TIMER_ENGINES, timerStatements } from '@keel-system/keel-core/gen/timer-store';
 import {
   setStateScript,
   ageClockScript,
   holdClockScript,
+  ageDeadlineScript,
   missingClockCountScript,
   outboxPendingScript,
   abandonOutboxScript,
@@ -1044,7 +1047,9 @@ function abstractImports(model) {
   }
   // Motor de ejecución en contenedor (runProcess) y las dos vías que lo usan:
   // `devtools(...)` y `db(...)` construyen su lista de argumentos igual.
-  if (containerExec) imports.push('java.nio.charset.StandardCharsets', 'java.util.ArrayList');
+  // copyIntoContainer (de containerExecSection) escribe un temporal: Files y Path son suyos, no solo del broker. Hasta
+  // verification-codes ninguna fixture tenía ejecución en contenedor sin broker, y el arnés no compilaba.
+  if (containerExec) imports.push('java.nio.charset.StandardCharsets', 'java.util.ArrayList', 'java.nio.file.Files', 'java.nio.file.Path');
   // Los cuerpos que van a una CLI del contenedor viajan por archivo, no por línea de
   // comandos: el sondeo de RabbitMQ, y con cualquier broker la entrega de mensajes
   // entrantes (deliverMessage), que es la que lleva JSON arbitrario del escenario.
@@ -1938,7 +1943,7 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${paymentHarnessSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${kafkaGroupsSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${paymentHarnessSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${kafkaGroupsSection(model)}${dbSection(model)}${deadlineAgingSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -4812,6 +4817,72 @@ ${branches(true)}
         }
     }
 ` : ''}`;
+}
+
+/**
+ * `ageForDeadline(entidad, id, segundos)` (DSL 2.26, D7 de PLAN-DSL-226-PLAZOS.md): un escenario de plazo no puede
+ * esperar 15 minutos. Retrasa el `since` de la entidad Y el vencimiento de su temporizador los mismos segundos, para que
+ * el rechazo tardío del dominio (que lee `since`) y el cronómetro (que lee `due_at`) vean el mismo plazo vencido. Las
+ * sentencias del temporizador son las de keel-core (`timerStatements(engine).age`); el script documental sale de
+ * mongo-probes.js, nunca escrito aquí.
+ */
+function deadlineAgingSection(model) {
+  const entry = dbEntry(model);
+  const deadlines = modelDeadlines(model);
+  if (!entry?.cliQueryArgv || deadlines.length === 0) return '';
+  const document = entry.kind === 'document';
+  const engine = model.stack?.database;
+  if (!document && (!TIMER_ENGINES.includes(engine) || !entry.uuidLiteral)) return '';
+  const dbName = model.service.name.replaceAll('-', '_');
+  const argv = entry
+    .cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName })
+    .map((part) => javaString(part))
+    .join(', ');
+  // El corrimiento relativo de una marca de tiempo, por motor: `since - N segundos`.
+  const shift = (column) =>
+    engine === 'mysql' ? `DATE_SUB(${column}, INTERVAL " + seconds + " SECOND)` : `${column} - make_interval(secs => " + seconds + ")`;
+  const ageSql = timerStatements(document ? 'postgresql' : engine).age;
+  const branches = deadlines
+    .map(({ entity, deadline, kind }) => {
+      const since = snakeCase(deadline.since);
+      if (document) {
+        const script = ageDeadlineScript({ collection: entity.collectionName, sinceField: since, kind });
+        return `        if (${javaString(entity.name)}.equals(entity)) {
+            mongoEval(${javaString(script)}.replace("{id}", id).replace("{ms}", String.valueOf(seconds * 1000L)));
+            return;
+        }`;
+      }
+      const timer = ageSql.replace(':ageMs', '" + (seconds * 1000L) + "').replace(':kind', `'${kind}'`).replace(':entityId', '" + uuidLiteral(id) + "');
+      return `        if (${javaString(entity.name)}.equals(entity)) {
+            ${statementCall(entry, argv, `"UPDATE ${entity.tableName} SET ${since} = ${shift(since)} WHERE id = " + uuidLiteral(id)`)};
+            ${statementCall(entry, argv, `"${timer}"`)};
+            return;
+        }`;
+    })
+    .join('\n');
+  const known = [...new Set(deadlines.map(({ entity }) => entity.name))].join(', ');
+  const example = deadlines[0];
+  return `
+    /**
+     * Envejece el plazo de la entidad {@code id}: retrasa su ${example.deadline.since} y el vencimiento de su temporizador
+     * {@code seconds} segundos, de modo que el plazo venza ya sin esperarlo.
+     *
+     * <p>No dispara la caducidad: la dispara el cronómetro en su próxima pasada (como mucho el sueño máximo,
+     * {@code timer.max-sleep-ms}), como en producción. Y el rechazo tardío del dominio lo ve en el acto, porque lee
+     * {@code ${example.deadline.since}}: un verbo tardío tras esta llamada ya debe salir con su error.
+     *
+     * <pre>{@code
+     * ageForDeadline("${example.entity.name}", id, 3600);
+     * await(Duration.ofSeconds(45), () -> "${example.deadline.toName}".equals(statusOf(id)));
+     * }</pre>
+     *
+     * <p>Entidades con plazo en este diseño: ${known}.
+     */
+    protected static void ageForDeadline(String entity, String id, long seconds) {
+${branches}
+        throw new IllegalArgumentException("No hay plazo para la entidad '" + entity + "'. Las que lo tienen: ${known}");
+    }
+`;
 }
 
 /**

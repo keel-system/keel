@@ -32,6 +32,8 @@ import { INTERFACES_PKG, ANNOTATIONS_PKG, MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 import { refTargetsOf } from './ref-resolvers.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
+import { deadlineHandlerNote, lateTransitionNote } from '@keel-system/keel-core/gen/deadlines';
+import { deadlinesClass } from './timer.js';
 import { claimMechanism } from './claim.js';
 import { cacheNote } from '@keel-system/keel-core/gen/cache-plan';
 import { naturalKeyBatchFinder } from './repositories.js';
@@ -514,6 +516,17 @@ function renderHandler(model, service, operation) {
   // El despacho de otro caso de uso (use-cases.dispatches, 2.21), por el mismo criterio: el diseño
   // dice que esta operación ejecuta otra, así que recibe el puerto delante y la nota de cómo.
   if ((operation.dispatches ?? []).length > 0) inject('CommandDispatcher', 'application.port.out');
+  // Los plazos de negocio (DSL 2.26): quien saca la entidad de un estado con plazo hacia otro destino le da al dominio la
+  // hora del reloj inyectable y la duración vigente de los plazos, con los que el método de transición hace el rechazo
+  // tardío. Sin inyectarlos, el camino de menor resistencia es Instant.now(), que no deja probar el segundo exacto.
+  if (lateTransitionNote(model, operation)) {
+    if (!injected.has('Clock')) {
+      injected.add('Clock');
+      imports.add('java.time.Clock');
+      dependencies.push({ type: 'Clock', name: 'clock' });
+    }
+    inject(deadlinesClass(model), 'domain.deadline');
+  }
   // La caché de lectura, por el mismo criterio: el diseño la atribuye a esta operación, así que recibe el
   // puerto delante. Sin él, el camino de menor resistencia era escribir otro con otro nombre (las dos
   // corridas de keel-spring: GetAssetCache y ResponseCache).
@@ -563,6 +576,11 @@ function renderHandler(model, service, operation) {
   if (dispatch) notes.push(dispatch);
   const gate = entryGateNote(model, operation, { read: 'command.entryGate()', value: (entry) => `EntryGate.${entry}` });
   if (gate) notes.push(gate);
+  // Los plazos (DSL 2.26): la nota de la operación que caduca y la de las que salen del estado. Neutrales, las mismas en los cuatro.
+  const expiring = deadlineHandlerNote(model, operation);
+  if (expiring) notes.push(expiring);
+  const late = lateTransitionNote(model, operation);
+  if (late) notes.push(`${late} En Java: clock.instant() y ${decap(deadlinesClass(model))}.`);
   // La escritura condicional (api.concurrency): cargar con loadExpecting y devolver la versión persistida.
   const conditional = conditionalHandlerNote(
     model,
