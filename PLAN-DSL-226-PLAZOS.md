@@ -540,11 +540,11 @@ las purgas que van por el cronómetro (`purgedByTimer`). Persistencia, proyecto 
 así que un servicio sin plazos y con purgas también tiene cronómetro.
 
 La red es el bloque de dos réplicas de `db-check` y `doc-check` (`purge_timer_probe_test.go`, con R1, RC1 y R2). `db-check`
-da 87/87 en PostgreSQL, `doc-check` 23/23 y `go-check` 244/244, y `--fixtures` da 110/110. Como en keel-dotnet, el
+da 87/87 en PostgreSQL y en MySQL, `doc-check` 23/23 y `go-check` 244/244, y `--fixtures` da 110/110. Como en keel-dotnet, el
 sabotaje `timer-every-replica` actúa en el almacén: asegura el recurrente con un `entity_id` nuevo. Cae en R1 y RC1 de
 cada sujeto con purgas, y en `TestTimer_R1_` en el par `verification-codes`, que solo tiene el recurrente de la purga de
-`keel_timer`. La pasada de `db-check --database=mysql` se cortó por memoria antes de las sondas: en keel-go, MySQL
-queda sin medir para este incremento.
+`keel_timer`. En MySQL, `db-check --database=mysql` da 87/87, y con el sabotaje cae en los mismos casos de los mismos
+14 sujetos (47/47).
 
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
