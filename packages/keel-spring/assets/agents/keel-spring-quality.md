@@ -237,7 +237,7 @@ el orquestador lo devuelva al agente de código. Todo esto es código que **no p
 tocar**.
 
 Lo que el script comprueba son **ausencias y cruces** (que el guard esté, que el orden
-sea el que toca, que el `@Scheduled` ya no lance): lo que no puede juzgar es si el
+sea el que toca, que el disparador del barrido ya no lance): lo que no puede juzgar es si el
 algoritmo es correcto. Las cinco secciones de abajo dicen **por qué** falla cada cosa —
 es lo que tienes que entender para arbitrar un hallazgo, y lo que el script no dice.
 
@@ -302,9 +302,10 @@ Por cada operación que el stub marca como compensación (nota
 La pata del **silencio**: el proveedor acepta el encargo y luego cae, así que no llega
 ningún evento y nada se dispara. Por cada operación con nota `Reconciliación de <dep>…`:
 
-1. El `@Scheduled` de `<Servicio>Scheduler` ya **no lanza**. Build lo deja con un
+1. El método de `<Servicio>Scheduler` ya **no lanza**. Build lo deja con un
    `UnsupportedOperationException` cuando el mensaje del barrido lleva argumentos: si
-   sigue ahí, el barrido no corre nunca.
+   sigue ahí, el barrido no corre nunca. Y su `<Operación>ScheduleTimer` (el registro en el
+   cronómetro, que escribe build) sigue en pie, con su kind: sin él, el barrido no se dispara.
 2. El handler saca el umbral de «demasiado tiempo» de `parameters/` con `@Value`, no de
    una constante — el diseño no lo declara, así que es configuración.
 3. Hace algo con cada candidato coherente con el `effect` de la activación (reintentar el
@@ -554,7 +555,7 @@ commandIdempotency: OK | KO | N/A  # N/A si ninguna operación declara idempoten
 compensation: OK | KO | N/A        # N/A sin compensations; OK = cada handler compensador
                           # ejecuta su transición de vuelta (sin TODO vivo) y, si el diseño
                           # declara la activación de vuelta, avisa al proveedor
-reconciliation: OK | KO | N/A      # N/A sin reconciledBy; OK = el @Scheduled ya no lanza y el
+reconciliation: OK | KO | N/A      # N/A sin reconciledBy; OK = el disparador ya no lanza y el
                           # barrido saca su umbral de parameters/ con @Value. Es la única
                           # familia SIN gate conductual: ningún FL-* ejercita un cron
 outboxDelivery: OK | KO | N/A      # N/A sin reliability: outbox; OK = hay un OutboxDispatcher

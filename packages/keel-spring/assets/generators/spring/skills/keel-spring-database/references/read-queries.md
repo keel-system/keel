@@ -111,9 +111,10 @@ deliberado: acota el acoplamiento a un archivo.
 
 ## Reclamar un lote: la consulta de un barrido
 
-Un barrido con `@Scheduled` corre en **todas** las réplicas a la vez, así que una consulta que solo
-*lee* devuelve las mismas filas en todas y el trabajo se hace N veces
-(`conventions/dependencies.md § El barrido corre en todas las réplicas`). La consulta tiene que
+Un barrido puede correr en varias réplicas a la vez (con `@Scheduled`, en todas; con el cronómetro, cuando un
+tick se repite al vencer su arriendo), así que una consulta que solo *lee* puede devolver las mismas filas a
+dos pasadas y el trabajo se hace dos veces (`conventions/dependencies.md § El barrido puede correr en varias
+réplicas a la vez`). Y con el cronómetro el tick DRENA: avisa del lote lleno con `SweepPass.claimed(...)`. La consulta tiene que
 **reclamar**: llevarse un lote acotado, no solo leerlo.
 
 **Cómo se reclama depende de una sola pregunta: ¿hay una llamada externa entre reclamar y

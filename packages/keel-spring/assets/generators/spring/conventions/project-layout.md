@@ -61,7 +61,7 @@ services/<servicio>-spring/
     │   │   └── storage/         # (solo con capa storage) PUERTO FileStorage (upload/delete + download/signedUrl si hay bucket privado, publicUrl si lo hay público) + VO StoredObject
     │   └── infrastructure/
     │       ├── configurations/usecase/  # UseCaseMediator (frontera transaccional) + Container + AutoRegister + UseCaseConfig
-    │       ├── scheduling/      # <X>Scheduler (@Scheduled, adaptador timer que despacha vía mediator)
+    │       ├── scheduling/      # <X>Scheduler (despacha vía mediator; lo dispara su <Operación>ScheduleTimer de timer/, o @Scheduled sin cronómetro)
     │       ├── timer/           # (con persistencia en PostgreSQL, MySQL o MongoDB y algo que cronometrar) el cronómetro: TimerPoller (un hilo por réplica sobre keel_timer), TimerStore, la purga de la tabla y un <Tabla>PurgeTimer por purga del generador (modo clúster: UNA réplica por tick); con plazos, un <Entidad><Estado>Deadline por plazo
     │       ├── configurations/logging/  # LogExceptionsAspect (implementa @LogExceptions)
     │       ├── configurations/cache/    # (si alguna operación declara cache) CacheConfig: CacheManager, TTL y constante por caché, JSON con JavaTimeModule, degradación a miss

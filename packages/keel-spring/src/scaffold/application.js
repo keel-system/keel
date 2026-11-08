@@ -3,10 +3,7 @@
 
 import { javaFile, javaPath } from './render.js';
 import { auditsAnything } from './auditing.js';
-import { usesOutbox } from './outbox.js';
-import { usesIdempotency } from './idempotency.js';
-import { usesHttpIdempotency } from './http-idempotency.js';
-import { hasScheduledOperations } from './services.js';
+import { usesScheduling } from './scheduling.js';
 
 export function generate(model) {
   const { service } = model;
@@ -35,7 +32,10 @@ export function generate(model) {
   // outbox ni suscripciones generaba el scheduler completo —el gate de
   // reconciliación lo daba por bueno, porque el @Scheduled está en el fuente— y el
   // barrido no se disparaba nunca.
-  if (usesOutbox(model) || usesIdempotency(model) || usesHttpIdempotency(model) || hasScheduledOperations(model)) {
+  //
+  // Desde el cronómetro (plan 2.26, incs. 7 y 8) las purgas y los `schedule` ya no son @Scheduled
+  // sobre los motores que lo tienen: la condición es la del pool, que cuenta solo lo que queda.
+  if (usesScheduling(model)) {
     imports.push('org.springframework.scheduling.annotation.EnableScheduling');
     annotations.push('@EnableScheduling');
   }

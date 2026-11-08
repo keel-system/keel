@@ -27,12 +27,15 @@ import {
   usesDeadLetter, subscriptionGroupId } from '@keel-system/keel-core/gen';
 import { needsMessagingProvisioning } from './messaging-provisioning.js';
 import { modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
-import { TIMER_ENGINES, timerStatements } from '@keel-system/keel-core/gen/timer-store';
+import { TIMER_ENGINES, scheduleKind, timerStatements } from '@keel-system/keel-core/gen/timer-store';
+import { agingSweeps } from '@keel-system/keel-core/gen/aging-targets';
+import { clusterRecurrings, scheduledByTimer, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import {
   setStateScript,
   ageClockScript,
   holdClockScript,
   ageDeadlineScript,
+  fireTimerScript,
   missingClockCountScript,
   outboxPendingScript,
   abandonOutboxScript,
@@ -1943,7 +1946,7 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${paymentHarnessSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${kafkaGroupsSection(model)}${dbSection(model)}${deadlineAgingSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${paymentHarnessSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${kafkaGroupsSection(model)}${dbSection(model)}${timerFireSection(model)}${deadlineAgingSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -4494,7 +4497,7 @@ function rescueSection(model) {
       : '            ' +
         statementCall(entry, argv, javaString(stallSql({ ...r, clockSql: clock.sql })) + ' + uuidLiteral(id)') +
         ';';
-    return '        if (' + javaString(r.operation) + '.equals(operation)) {' + NL + cuerpo + NL + '            return;' + NL + '        }';
+    return '        if (' + javaString(r.operation) + '.equals(operation)) {' + NL + cuerpo + NL + fireScheduleCall(model, r.operation, '            ') + '            return;' + NL + '        }';
   };
 
   const contar = (r) => {
@@ -4523,8 +4526,9 @@ function rescueSection(model) {
     '     * Deja la fila {@code id} EN VUELO con el reloj infinitamente rancio: el estado exacto en',
     '     * el que queda una réplica que murió con ella en la mano, que es lo que el rescate busca.',
     '     *',
-    '     * <p>No dispara el barrido —lo dispara su cron, como en producción— y no siembra la fila:',
-    '     * mueve una creada por la API, porque los valores de negocio son del diseño.',
+    firesTimer(model)
+      ? '     * <p>Adelanta además el barrido en el cronómetro ({@link #fireTimer}): vence ya, y lo ejecuta UNA réplica en su\n     * próxima pasada, como en producción. No siembra la fila: mueve una creada por la API, porque los valores de\n     * negocio son del diseño.'
+      : '     * <p>No dispara el barrido —lo dispara su cron, como en producción— y no siembra la fila:\n     * mueve una creada por la API, porque los valores de negocio son del diseño.',
     '     *',
     '     * <p>Barridos con rescate en este diseño: ' + conocidas + '.',
     '     */',
@@ -4765,7 +4769,7 @@ ${updates}
      * Deja la marca de espera de {@code activation} infinitamente rancia para la fila
      * {@code id}, de modo que el barrido la tome en <b>su próxima pasada</b>.
      *
-     * <p>No dispara el barrido: lo dispara su cron, como en producción. Lo que esto hace es
+     * <p>${firesTimer(model) ? 'No despacha el barrido: lo adelanta en el cronómetro ({@link #fireTimer}) y lo ejecuta UNA réplica en su próxima pasada, como en producción' : 'No dispara el barrido: lo dispara su cron, como en producción'}. Lo que esto hace es
      * crear la condición que el barrido busca —«lleva esperando más de lo tolerado»— sin
      * esperar el plazo real, y solo para esta fila. Bajar el umbral por configuración sería
      * global y se llevaría por delante las filas de los demás escenarios, que están
@@ -4791,7 +4795,7 @@ ${ramas}
         for (String statement : statements) {
             ${document ? 'mongoEval(statement)' : statementCall(entry, argv, 'statement')};
         }
-    }
+${fireAgedSweeps(model)}    }
 ${document || entry.heldTimestamp ? `
     /**
      * El inverso de {@code ageForReconciliation}: deja la marca de espera de {@code activation} en
@@ -4817,6 +4821,79 @@ ${branches(true)}
         }
     }
 ` : ''}`;
+}
+
+/**
+ * Tras envejecer la marca de espera de una activación (o del cobro), los barridos que la recogen vencen ya en el
+ * cronómetro (`agingSweeps` de keel-core). Sin cronómetro, nada: los dispara su cron.
+ */
+function fireAgedSweeps(model) {
+  if (!firesTimer(model)) return '';
+  return [...agingSweeps(model)]
+    .map(([key, operations]) => {
+      const calls = operations.map((operation) => fireScheduleCall(model, operation, '            ')).join('');
+      return calls ? `        if (${javaString(key)}.equals(activation)) {\n${calls}        }\n` : '';
+    })
+    .join('');
+}
+
+/**
+ * ¿Emite el arnés `fireTimer`? Con cronómetro y con una CLI del motor que lo alcance: la de un relacional con sentencias
+ * del cronómetro, o la de Mongo. Lo consultan también `rescueSection` y `reconciliationAgingSection`, que lo llaman.
+ */
+function firesTimer(model) {
+  const entry = dbEntry(model);
+  if (!usesTimer(model) || !entry?.cliQueryArgv) return false;
+  return entry.kind === 'document' || TIMER_ENGINES.includes(model.stack?.database);
+}
+
+/** La llamada que adelanta el `schedule` de una operación, si lo dispara el cronómetro y el arnés sabe hacerlo. */
+function fireScheduleCall(model, operationName, indent = '        ') {
+  if (!firesTimer(model) || !scheduledByTimer(model, operationName)) return '';
+  return `${indent}fireTimer(${javaString(scheduleKind(operationName))});\n`;
+}
+
+/**
+ * `fireTimer(kind)` (inc. 8 de PLAN-DSL-226-PLAZOS.md): adelanta un recurrente del cronómetro para que venza YA, con la
+ * hora de la base. Es la sentencia `fire` de keel-core (o su script documental, mongo-probes.js), la misma que ejecutan
+ * las sondas del cronómetro. Los flujos de rescate y reconciliación la usan a través de `stallInFlight` y
+ * `ageForReconciliation`, que ya no esperan a un tick del cron.
+ */
+function timerFireSection(model) {
+  if (!firesTimer(model)) return '';
+  const entry = dbEntry(model);
+  const document = entry.kind === 'document';
+  const dbName = model.service.name.replaceAll('-', '_');
+  const argv = entry
+    .cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName })
+    .map((part) => javaString(part))
+    .join(', ');
+  const kinds = clusterRecurrings(model).map((recurring) => recurring.kind);
+  const [prefix, suffix] = document
+    ? fireTimerScript('{kind}').split('{kind}')
+    : timerStatements(model.stack.database).fire.split(':kind');
+  const statement = document
+    ? `mongoEval(${javaString(prefix)} + kind + ${javaString(suffix)})`
+    : statementCall(entry, argv, `${javaString(prefix)} + "'" + kind.replace("'", "''") + "'" + ${javaString(suffix)}`);
+  return `
+    /**
+     * Adelanta el temporizador recurrente {@code kind} del cronómetro: vence YA, con la hora de la base, y sin arriendo.
+     *
+     * <p>No dispara nada: el sondeador lo recoge en su próxima pasada (como mucho {@code timer.max-sleep-ms}), en UNA
+     * réplica, como en producción. Es lo que hace que un escenario de barrido no espere al cron. Los helpers que fabrican
+     * la precondición de un rescate o de una reconciliación ya lo llaman por ti.
+     *
+     * <pre>{@code
+     * fireTimer("${kinds.find((kind) => kind.startsWith('schedule:')) ?? kinds[0]}");
+     * await(Duration.ofSeconds(45), () -> ...);
+     * }</pre>
+     *
+     * <p>Recurrentes de este servicio: ${kinds.join(', ')}.
+     */
+    protected static void fireTimer(String kind) {
+        ${statement};
+    }
+`;
 }
 
 /**

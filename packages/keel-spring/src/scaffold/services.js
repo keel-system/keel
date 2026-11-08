@@ -33,7 +33,8 @@ import { domainTypeImport } from './entities.js';
 import { refTargetsOf } from './ref-resolvers.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
 import { deadlineHandlerNote, lateTransitionNote } from '@keel-system/keel-core/gen/deadlines';
-import { deadlinesClass } from './timer.js';
+import { deadlinesClass, scheduleTimerClass } from './timer.js';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { claimMechanism } from './claim.js';
 import { cacheNote } from '@keel-system/keel-core/gen/cache-plan';
 import { naturalKeyBatchFinder } from './repositories.js';
@@ -722,7 +723,7 @@ function renderHandler(model, service, operation) {
   if (operation.sweep && (operation.reconciles ?? []).length === 0) {
     const claims = operation.claim ?? [];
     notes.push(
-      `MULTI-INSTANCIA (no es opcional): este barrido corre en TODAS las réplicas del servicio a la vez — @Scheduled es «una vez por instancia», no «una vez en el clúster». ` +
+      replicasNote(model, operation, claims.length === 0) +
         (claims.length > 0
           ? `Toma su lote con ${claims.map((claim) => `${claim.method}()`).join(' y ')}, que build ya generó en el puerto del repositorio: reclama con ${claimMechanism(model).conditional} y devuelve SOLO las filas que esta instancia se llevó. El tamaño del lote NO se pasa desde aquí — lo acota el adaptador con sweep.${claims[0].sweepKey}.batch-size, que es donde Spring está permitido. `
           : `El puerto del repositorio NO trae método de reclamo para este barrido, así que lo escribes tú: ${claimMechanism(model).conditional} que marque la fila y devuelva cuántas afectó (1 = es mía, 0 = otra llegó antes). `) +
@@ -747,7 +748,7 @@ function renderHandler(model, service, operation) {
     if (claim) {
       notes.push(
         `Reconciliación de ${dependency}.${activation.name}: barre los encargos que nunca recibieron desenlace — el evento que los cerraría puede no llegar nunca. ` +
-          `EL RECLAMO YA ESTÁ GENERADO: toma el lote con ${claim.method}() del puerto ${claim.entity}Repository. Devuelve SOLO los candidatos que ESTA réplica se llevó —el barrido corre en todas a la vez— y ya trae dentro las tres decisiones: el umbral de espera que declara el diseño, la cota del lote y la caducidad de la marca, leídos de parameters/<perfil>/reconciliation.yaml. NO escribas otro reclamo (ni un finder por estado, ni un lock, ni una marca propia en ${claim.entity}): un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor. ` +
+          `EL RECLAMO YA ESTÁ GENERADO: toma el lote con ${claim.method}() del puerto ${claim.entity}Repository. Devuelve SOLO los candidatos que ESTA réplica se llevó —${scheduledByTimer(model, operation.name) ? 'el tick del cronómetro es al menos una vez y puede repetirse en otra réplica' : 'el barrido corre en todas a la vez'}— y ya trae dentro las tres decisiones: el umbral de espera que declara el diseño, la cota del lote y la caducidad de la marca, leídos de parameters/<perfil>/reconciliation.yaml. NO escribas otro reclamo (ni un finder por estado, ni un lock, ni una marca propia en ${claim.entity}): un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor. ` +
           `Y decide qué hace con cada uno según el efecto declarado ("${activation.effect}"): reintentar el encargo o disparar la compensación. Si el diseño no lo dice, es designGap. ` +
           `SIN TRANSACCIÓN ABARCADORA: a diferencia de los demás casos de uso, este NO corre dentro de una transacción — el scheduler lo despacha con mediator.dispatchWithoutTransaction() justo para que puedas colocar los commits donde toca. Cada llamada al adaptador abre y confirma la suya, y la del reclamo ya está confirmada cuando ${claim.method}() te devuelve la lista. ` +
           reconciliationOrder(operation, activation, true) +
@@ -768,7 +769,9 @@ function renderHandler(model, service, operation) {
         `reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds (parameters/<perfil>/reconciliation.yaml), nunca de una constante. ` +
         `En el mismo bloque están claim-timeout-ms y batch-size, que NO son del diseño (mecánica y capacidad) pero se leen igual: de ahí, no del código. ` +
         `Y decide qué hace con cada uno según el efecto declarado ("${activation.effect}"): reintentar el encargo o disparar la compensación. Si el diseño no lo dice, es designGap. ` +
-        `CONCURRENCIA: este método corre en TODAS las réplicas del servicio a la vez, así que la consulta tiene que RECLAMAR los candidatos, no solo leerlos, y el lote va acotado (Pageable/limit) para que cada réplica se lleve un conjunto disjunto. ` +
+        (scheduledByTimer(model, operation.name)
+          ? `CONCURRENCIA: este método lo dispara el cronómetro en UNA réplica por tick, pero al menos una vez (si la réplica muere a mitad, otra repite el tick al vencer el arriendo), así que la consulta tiene que RECLAMAR los candidatos, no solo leerlos, y el lote va acotado (Pageable/limit). El tick DRENA: avisa del lote lleno con SweepPass.claimed(reclamados, lote) (application/support) y repetirá la pasada. `
+          : `CONCURRENCIA: este método corre en TODAS las réplicas del servicio a la vez, así que la consulta tiene que RECLAMAR los candidatos, no solo leerlos, y el lote va acotado (Pageable/limit) para que cada réplica se lleve un conjunto disjunto. `) +
         `CÓMO se reclama no es indiferente, porque la llamada al proveedor va EN MEDIO: reclama con una MARCA PERSISTIDA (UPDATE … SET ${activation.name}ClaimedAt = now, o findAndModify en Mongo) que confirmas ANTES de llamar, no con un lock pesimista. Un lock solo aísla mientras dura su transacción, así que sostenerlo durante la llamada retendría una conexión del pool por la latencia de un tercero. El ejemplo a copiar es la rama DOCUMENTAL de OutboxRelay (claimPending(), con claim-timeout-ms); la relacional usa lock pesimista y NO es el modelo aquí, porque lo que envuelve su transacción es la entrega al broker, corta y local. ` +
         `La marca CADUCA: como sobrevive al commit, sobrevive también a la réplica que muera con el candidato en vuelo, y sin plazo lo retendría para siempre. El timeout es reconciliation.${kebabCase(activation.name)}.claim-timeout-ms, y se dimensiona claim-timeout > lote × timeout de llamada; por debajo, dos réplicas actúan sobre el mismo candidato. ` +
         `NO vale reclamar con SKIP LOCKED y confirmar antes de llamar: al confirmar se suelta el lock y no queda nada en la fila que diga que alguien la tomó, así que las N vuelven a verla y todas actúan — el fallo exacto que el reclamo evita, con apariencia de resuelto. Es lo único de este barrido que check-idempotency.sh no puede distinguir: ve el patrón del reclamo, no dónde cae el commit. ` +
@@ -1014,14 +1017,33 @@ function activationNote(depId, activation, sweep = false) {
   return `Activación ${depId}.${activation.name}: ${activation.effect} — invoca ${decap(activation.http.clientClass)}.${activation.http.call}(...). ${awaits} ${failure ?? ''}`.trim();
 }
 
+/**
+ * El arranque de la nota MULTI-INSTANCIA de un barrido: quién lo dispara y por qué tiene que reclamar igualmente. Con el
+ * cronómetro (inc. 8 del plan 2.26) ya no corre en todas las réplicas, pero el tick es al menos una vez; y si el lote lo
+ * reclama el agente, es él quien avisa del lote lleno para que el tick drene.
+ */
+function replicasNote(model, operation, agentClaims) {
+  if (!scheduledByTimer(model, operation.name)) {
+    return `MULTI-INSTANCIA (no es opcional): este barrido corre en TODAS las réplicas del servicio a la vez — @Scheduled es «una vez por instancia», no «una vez en el clúster». `;
+  }
+  return (
+    `MULTI-INSTANCIA (no es opcional): este barrido lo dispara el cronómetro (${scheduleTimerClass(operation.name)}), que ejecuta cada tick en UNA réplica, pero AL MENOS UNA VEZ: si la réplica muere a mitad de la pasada, otra la repite al vencer el arriendo, y un despacho por otra puerta puede coincidir con ella. Por eso sigue haciendo falta reclamar. ` +
+    `El tick DRENA: repite la pasada mientras el lote salga lleno, así que no proceses más de un lote por pasada. ` +
+    (agentClaims
+      ? `Como el reclamo lo escribes tú, AVISA del lote lleno con SweepPass.claimed(reclamadas, lote) (application/support) justo después de reclamar; sin el aviso el tick hace una sola pasada y un atraso grande tarda en vaciarse. `
+      : '')
+  );
+}
+
 function renderScheduler(model, service, scheduled, seconds) {
   const className = service.className.replace(/Service$/, 'Scheduler');
   // La correlación existe si el servicio tiene por dónde propagarla (api o messaging), que
   // es la misma condición con la que se genera CorrelationContext.
   const correlated = usesCorrelation(model);
+  const onTimer = scheduled.every((operation) => scheduledByTimer(model, operation.name));
   const imports = new Set([
     `${subPackage(model, MEDIATOR_PKG)}.UseCaseMediator`,
-    'org.springframework.scheduling.annotation.Scheduled',
+    ...(onTimer ? [] : ['org.springframework.scheduling.annotation.Scheduled']),
     'org.springframework.stereotype.Component',
     ...(correlated ? [correlationImport(model), 'java.util.UUID'] : [])
   ]);
@@ -1080,22 +1102,34 @@ candidatos.`
     // El DSL usa cron de 5 campos; Spring añade el campo de segundos al inicio, y ese
     // segundo lo reparte scheduleSeconds() para que dos barridos con la misma cadencia
     // no arranquen a la vez. No es decorativo: si vuelve a 0 en todos, vuelven a salir
-    // todas las llamadas al mismo tiempo.
-    return `${description}    @Scheduled(cron = "${seconds.get(operation.name) ?? 0} ${operation.schedule.cron}")
-    public void ${operation.name}() {
+    // todas las llamadas al mismo tiempo. Con cronómetro (inc. 8 del plan 2.26) el cron va
+    // en su <Operación>ScheduleTimer, con el mismo segundo, y este método solo despacha.
+    const trigger = scheduledByTimer(model, operation.name)
+      ? `    // Lo dispara ${scheduleTimerClass(operation.name)} (el cronómetro): una réplica por tick, con drenaje.\n`
+      : `    @Scheduled(cron = "${seconds.get(operation.name) ?? 0} ${operation.schedule.cron}")\n`;
+    return `${description}${trigger}    public void ${operation.name}() {
         ${call}
     }`;
   });
 
-  const body = `/**
- * Disparadores por reloj de las operaciones que declaran \`schedule\`.
- *
- * <p><strong>Cada método corre en TODAS las réplicas del servicio</strong>: \`@Scheduled\` es
+  const replicas = onTimer
+    ? ` * <p><strong>Los dispara el cronómetro</strong>: cada operación tiene su {@code <Operación>ScheduleTimer}
+ * en infrastructure/timer, un recurrente de {@code keel_timer} que ejecuta UNA réplica por tick
+ * —la que gana su fila— y que repite la pasada mientras el lote salga lleno. Este método solo
+ * despacha. El tick es <em>al menos una vez</em> (si la réplica muere a mitad, otra lo repite al
+ * vencer el arriendo), así que el handler de una operación que ACTÚA sobre lo que encuentra
+ * sigue reclamando sus candidatos en vez de solo leerlos — el patrón está en
+ * docs/keel/conventions/dependencies.md.`
+    : ` * <p><strong>Cada método corre en TODAS las réplicas del servicio</strong>: \`@Scheduled\` es
  * "una vez por instancia", no "una vez en el clúster". El handler de una operación que
  * ACTÚA sobre lo que encuentra (un barrido de reconciliación) tiene que reclamar sus
  * candidatos en vez de solo leerlos — el patrón está en {@code OutboxRelay} y en
  * docs/keel/conventions/dependencies.md. Las purgas generadas no lo necesitan: borrar lo
- * caducado es idempotente por forma.
+ * caducado es idempotente por forma.`;
+  const body = `/**
+ * Disparadores por reloj de las operaciones que declaran \`schedule\`.
+ *
+${replicas}
  *
  * <p><strong>No todos los métodos despachan igual, y no es un descuido.</strong> Un barrido
  * que reconcilia una activación saliente va por {@code dispatchWithoutTransaction}: su

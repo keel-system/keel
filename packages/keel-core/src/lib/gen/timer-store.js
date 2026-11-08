@@ -71,6 +71,9 @@ export const TIMER_PARAMETERS = Object.freeze({
   maxAttempts: Object.freeze({ key: 'timer.max-attempts', env: 'TIMER_MAX_ATTEMPTS', default: 10 }),
   // Tras un fallo, cuándo se vuelve a intentar: no en el siguiente sueño, que con un handler roto sería en bucle.
   retryDelayMs: Object.freeze({ key: 'timer.retry-delay-ms', env: 'TIMER_RETRY_DELAY_MS', default: 30000 }),
+  // Cuánto puede durar como mucho el tick de un `schedule` que DRENA (repite la pasada mientras su lote sale lleno). Menor
+  // que el arriendo (T4): un tick más largo que su arriendo lo repetiría otra réplica en paralelo. timer-plan.js.
+  drainBudgetMs: Object.freeze({ key: 'timer.drain-budget-ms', env: 'TIMER_DRAIN_BUDGET_MS', default: 60000 }),
   // La purga de la propia tabla (R7): un temporizador vencido hace más que esto y sin reclamar es de un `kind` que ya no
   // existe (R4), o uno aparcado que ya se vio.
   retentionDays: Object.freeze({ key: 'timer.retention-days', env: 'TIMER_RETENTION_DAYS', default: 7 }),

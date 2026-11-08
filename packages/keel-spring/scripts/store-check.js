@@ -44,7 +44,9 @@
 //
 // `--sabotage=timer-every-replica` (DSL 2.26, incremento 7) da a cada `<Tabla>PurgeTimer` EMITIDO un kind distinto por
 // instancia: cada réplica arbitra con su propia fila en keel_timer, que es volver a correr la purga en todas. Verde es
-// que caigan exactamente los dos casos de `PurgeTimer` que lo dicen (EVERY_REPLICA_CASES).
+// que caigan exactamente los dos casos de `PurgeTimer` que lo dicen (EVERY_REPLICA_CASES). Desde el incremento 8 lo
+// mismo vale para cada `<Operación>ScheduleTimer`, y `--sabotage=timer-every-replica-schedule` sabotea SOLO esos: es
+// lo que demuestra que la sonda mide el `schedule` y no solo la primera purga, que es la que cae antes en las aserciones.
 //
 // Necesita podman o docker, y JDK (Gradle compila el proyecto entero, `main` incluido).
 
@@ -59,7 +61,7 @@ import { tmpDir } from '../test/helpers/tmp.js';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { storeSubjects, storeTestClasses, hasSubjects, TEST_GLOB } from '../src/lib/store-probes.js';
-import { CLASS_PURGE_TIMER, everyReplicaSabotage, purgeTargetFiles, purgeTimerTestClass, usesPurgeTimers } from '../src/lib/purge-timer-probes.js';
+import { CLASS_PURGE_TIMER, everyReplicaSabotage, purgeTargetFiles, purgeTimerTestClass, scheduleTargetFiles, usesPurgeTimers } from '../src/lib/purge-timer-probes.js';
 import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
 
 // La URI del Mongo del perfil `local`, leída del db.yaml GENERADO. En Boot 4 la conexión del cliente
@@ -79,7 +81,7 @@ const keep = args.includes('--keep');
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'notification-mailer';
 const database = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? 'postgresql';
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
-const SABOTAGES = ['eager-fetch', 'timer-every-replica'];
+const SABOTAGES = ['eager-fetch', 'timer-every-replica', 'timer-every-replica-schedule'];
 if (sabotage && !SABOTAGES.includes(sabotage)) {
   console.error(`store-check: sabotaje desconocido '${sabotage}' (conocidos: ${SABOTAGES.join(', ')})`);
   process.exit(2);
@@ -177,9 +179,9 @@ function prepare() {
     if (saboteado === original) throw new Error('sabotaje eager-fetch: el db.yaml generado no trae connection-fetch');
     fs.writeFileSync(dbFile, saboteado, 'utf8');
   }
-  if (sabotage === 'timer-every-replica') {
+  if (sabotage === 'timer-every-replica' || sabotage === 'timer-every-replica-schedule') {
     if (!usesPurgeTimers(model)) throw new Error(`sabotaje timer-every-replica: '${fixture}' no monta purgas en el cronómetro`);
-    for (const patch of everyReplicaSabotage(model)) {
+    for (const patch of everyReplicaSabotage(model, { onlySchedules: sabotage === 'timer-every-replica-schedule' })) {
       const target = findGenerated(projectDir, patch.file);
       const original = fs.readFileSync(target, 'utf8');
       if (!original.includes(patch.find) || !original.includes(patch.field.find)) {
@@ -238,10 +240,13 @@ function prepare() {
   if (usesPurgeTimers(model)) {
     const timer = resolvePackages(projectDir, { timer: 'TimerPoller.java', ...(subjects.document ? { mongoTx: 'MongoTransactionConfig.java' } : {}) });
     const targets = resolvePackages(projectDir, purgeTargetFiles(model));
+    // Los `schedule` (incremento 8): su doble es el <Servicio>Scheduler, en el paquete del reloj.
+    const schedulers = Object.values(scheduleTargetFiles(model));
+    const scheduling = schedulers.length > 0 ? resolvePackages(projectDir, { scheduling: schedulers[0] }) : {};
     clases.push({
       className: CLASS_PURGE_TIMER,
       package: timer.timer,
-      content: purgeTimerTestClass(model, { datasource, packages: { ...timer, targets } })
+      content: purgeTimerTestClass(model, { datasource, packages: { ...timer, ...scheduling, targets } })
     });
   }
   for (const clase of clases) {

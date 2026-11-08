@@ -79,9 +79,10 @@ sobre el array.
 
 ## Reclamar un lote: la consulta de un barrido
 
-Un barrido con `@Scheduled` corre en **todas** las réplicas a la vez, así que una consulta que solo
-*lee* devuelve los mismos documentos en todas y el trabajo se hace N veces
-(`conventions/dependencies.md § El barrido corre en todas las réplicas`).
+Un barrido puede correr en varias réplicas a la vez (con el cronómetro, cuando un tick se repite al vencer
+su arriendo), así que una consulta que solo *lee* puede devolver los mismos documentos a dos pasadas y el
+trabajo se hace dos veces (`conventions/dependencies.md § El barrido puede correr en varias réplicas a la
+vez`). Y el tick DRENA: avisa del lote lleno con `SweepPass.claimed(...)`.
 
 En MongoDB no hay `SELECT ... FOR UPDATE SKIP LOCKED`, y **no hace falta**: lo que sí hay es
 actualización atómica por documento. Se reclama con `findAndModify`, que filtra y marca en la misma

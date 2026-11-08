@@ -96,7 +96,7 @@ entre dos peticiones simultáneas.
 
 ### Cuando quien envía es un barrido
 
-Si la operación de `sentBy` es `internal: true` y la invoca un `@Scheduled` por cada
+Si la operación de `sentBy` es `internal: true` y la invoca un barrido (su `<Operación>ScheduleTimer`, o un `@Scheduled`) por cada
 elemento de su tanda —el caso normal de una cola de salida—, la guarda de la transición
 **tiene que confirmar antes del envío**. Y eso no ocurre solo: el handler corre dentro de la
 transacción que abre el mediator, así que una transición hecha en memoria no existe para

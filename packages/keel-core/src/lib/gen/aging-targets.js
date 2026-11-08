@@ -31,6 +31,26 @@ export function relationalAgingTargets(model) {
   return targets;
 }
 
+/**
+ * Las operaciones con `schedule` que recogen lo envejecido de cada clave (la de `relationalAgingTargets` y
+ * `documentAgingTargets`): las que reconcilian esa activación, o el propio barrido de pagos. Es lo que el arnés adelanta
+ * en el cronómetro tras envejecer (`fireTimer`, inc. 8 del plan 2.26), para no esperar al cron.
+ */
+export function agingSweeps(model) {
+  const sweeps = new Map();
+  const add = (key, operation) => {
+    if (!sweeps.has(key)) sweeps.set(key, []);
+    if (!sweeps.get(key).includes(operation)) sweeps.get(key).push(operation);
+  };
+  for (const operation of (model.services ?? []).flatMap((service) => service.operations ?? [])) {
+    if (!operation.schedule) continue;
+    for (const { activation } of operation.reconciles ?? []) add(activation.name, operation.name);
+  }
+  const sweep = model.payments?.reconciliation?.sweep;
+  if (sweep) add(sweep, sweep);
+  return sweeps;
+}
+
 /** Envejecibles con persistencia documental, por nombre del barrido: `[{ collection, clockField }]`. */
 export function documentAgingTargets(model) {
   const targets = new Map();

@@ -124,7 +124,8 @@ test('el pool da un hilo por tarea programada: acotarlo serializa los barridos',
   // primera. Ese acoplamiento es el que hace que un barrido lento acabe retrasando la
   // entrega de eventos del outbox, y es la razón por la que `conventions/dependencies.md`
   // descarta acotar la concurrencia global del scheduler.
-  const model = modelFor('stock-reservation', RELATIONAL);
+  // Sobre MariaDB no hay cronómetro: todo sigue siendo @Scheduled, y el pool tiene que dar para todo.
+  const model = modelFor('stock-reservation', { ...RELATIONAL, database: 'mariadb' });
   const scheduled = [...model.services.flatMap((s) => s.operations).filter((o) => o.schedule)];
 
   const count = scheduledTaskCount(model);
@@ -132,6 +133,14 @@ test('el pool da un hilo por tarea programada: acotarlo serializa los barridos',
   // registros de idempotencia y la de las marcas de reconciliación).
   assert.ok(count > scheduled.length, `${count} no cubre ni las ${scheduled.length} del diseño`);
   assert.match(generateScheduling(model)[0].content, new RegExp(`scheduling\\.pool-size:${count}`));
+});
+
+test('con el cronómetro, el pool solo cuenta lo que sigue siendo @Scheduled', () => {
+  // Las purgas (inc. 7) y los schedule (inc. 8) corren en el hilo del sondeador: contarlos daría
+  // hilos que nadie usa. Sobre PostgreSQL, en stock-reservation solo queda el relay del outbox.
+  const model = modelFor('stock-reservation', RELATIONAL);
+  assert.equal(scheduledTaskCount(model), 1);
+  assert.match(generateScheduling(model)[0].content, /scheduling\.pool-size:1/);
 });
 
 test('sin nada programado no se genera el bean', () => {
@@ -1053,8 +1062,20 @@ test('el disparador del barrido se afirma por lo que hace, no por dónde vive', 
   // Localizador por CONTENIDO: la operación que dispara, no el nombre del archivo.
   assert.ok(line.includes(String.raw`\breconcile`), line);
   // Y confirmador, porque el handler y el mediador también nombran la operación: solo vale
-  // el archivo que además es un disparador.
-  assert.match(line, /'@Scheduled'\s*$/);
+  // el archivo que además es un disparador. Con el cronómetro (inc. 8 del plan 2.26) el
+  // scheduler ya no lleva @Scheduled: se reconoce por despachar al mediator.
+  assert.match(line, /'mediator\\\.dispatch'\s*$/);
+});
+
+test('con el cronómetro, el registro del barrido en keel_timer tiene su check', () => {
+  // El <Operación>ScheduleTimer lo escribe build, pero sin él (o con otro kind) el barrido no
+  // se dispara nunca y nada lo dice: la precondición la fabrica el arnés, y quien la recoge es
+  // este tick. El check pide las tres cosas que lo hacen un disparador.
+  const script = project('stock-reservation', SQS_PG).file('check-idempotency.sh');
+  const line = script.split('\n').find((l) => l.startsWith("unit 'reconciliation'") && l.includes('ScheduleTimer'));
+  assert.ok(line, 'no se emite el check del registro en el cronómetro');
+  assert.match(line, /implements RecurringTimerHandler/);
+  assert.match(line, /TimerKinds/);
 });
 
 test('y sigue pudiendo fallar, que es lo que lo hace valer algo', () => {
@@ -1064,7 +1085,7 @@ test('y sigue pudiendo fallar, que es lo que lo hace valer algo', () => {
   const script = project('stock-reservation', SQS_PG).file('check-idempotency.sh');
   const line = script.split('\n').find((l) => l.startsWith("unit 'reconciliation'") && l.includes('Scheduler'));
 
-  assert.match(line, /'@Scheduled'/);
+  assert.match(line, /'mediator\\\.dispatch'/);
   assert.match(line, /'UnsupportedOperationException'/);
   // El confirmador es un parámetro del `unit`, no un literal incrustado: antes estaba
   // hardcodeado a IdempotencyGuard —servía al listener y a nadie más—, y un scheduler no lo

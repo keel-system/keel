@@ -151,6 +151,15 @@ export function ageDeadlineScript({ collection, sinceField, kind }) {
   );
 }
 
+/**
+ * Adelanta un temporizador recurrente (`fireTimer` del arnés, inc. 8 del plan 2.26): vence YA, con la hora del servidor
+ * (`$$NOW`, la del cronómetro: T1), y sin arriendo. Es la sentencia `fire` de timer-store.js en documental. No dispara
+ * nada: el sondeador lo recoge en su próxima pasada, como mucho el sueño máximo.
+ */
+export function fireTimerScript(kind) {
+  return `db.getCollection("keel_timer").updateMany({ kind: "${kind}" }, [{ $set: { due_at: "$$NOW", claimed_until: null, claim_token: null } }])`;
+}
+
 /** El inverso de `ageClockScript`: deja la marca de espera de ese documento en el futuro (holdFromReconciliation). */
 export function holdClockScript({ collection, clockField }) {
   return split(

@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
-import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
+import { timerPurges, timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { planService } from '../src/scaffold/index.js';
 import { purgeTimerClass } from '../src/scaffold/timer.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
@@ -64,7 +64,8 @@ for (const [name, database] of [['notification-mailer', 'postgresql'], ['notific
 test('el sabotaje timer-every-replica se aplica a cada recurrente emitido, y solo cambia su kind', () => {
   const { model, files } = plan('notification-mailer', 'postgresql');
   const patches = everyReplicaSabotage(model);
-  assert.equal(patches.length, timerPurges(model).length);
+  assert.equal(patches.length, timerPurges(model).length + timerSchedules(model).length);
+  assert.ok(timerSchedules(model).length > 0, "notification-mailer tiene que montar su schedule en el cronómetro");
   for (const patch of patches) {
     const content = javaNamed(files, patch.file).content;
     assert.ok(content.includes(patch.find), `${patch.file}: ya no tiene el kind que el sabotaje rompe`);

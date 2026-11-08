@@ -1,4 +1,6 @@
 import { claimOrderField, rescueShape, stallSql, missingClockCountSql } from '@keel-system/keel-core/gen';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { scheduleTimerClass, schedulerClassOf } from '../scaffold/timer.js';
 // Las sentencias del rescate son neutrales: las lanza también el arnés de keel-nest.
 export { rescueShape, stallSql, missingClockCountSql };
 // El Java con el que `claim-check` ejercita el reclamo, y de dónde salen sus nombres.
@@ -248,6 +250,104 @@ export function claimScenarios(model) {
   }
 
   return { claims: [] };
+}
+
+/**
+ * El DRENAJE del tick (DSL 2.26, inc. 8): si el barrido de la cola corre sobre el cronómetro, los casos DR-1 a DR-3
+ * ejecutan su `<Operación>ScheduleTimer` con un `<Servicio>Scheduler` cuyo método llama al reclamo REAL (lo que haría el
+ * handler), sobre el motor. Sin cronómetro, null.
+ */
+export function drainSubject(model, scenarios) {
+  if (!scenarios.queue || !scheduledByTimer(model, scenarios.operation)) return null;
+  return {
+    operation: scenarios.operation,
+    scheduler: schedulerClassOf(model, scenarios.operation),
+    timer: scheduleTimerClass(scenarios.operation)
+  };
+}
+
+/** Los casos que tumba cada sabotaje del drenaje, y solo ellos. */
+export const DRAIN_SABOTAGE_CASES = Object.freeze({
+  'drain-no-signal': ['dr1_unTickDrenaTodoEnVariasPasadas'],
+  'drain-no-budget': ['dr3_agotadoElPresupuestoElTickPara']
+});
+
+/**
+ * Los casos DR-* (los de `DRAIN_CASES` de keel-core), en Java. `seed` siembra una fila en el estado dado, `remaining`
+ * cuenta las que siguen en el de partida.
+ */
+function drainTests({ drain, queue, constant, seed, remaining }) {
+  const from = constant(queue.from[0]);
+  return `
+    /** Cuántas pasadas hizo el tick: el método del scheduler que el temporizador llama una vez por pasada. */
+    private final AtomicInteger pasadas = new AtomicInteger();
+
+    /**
+     * El temporizador del barrido tal cual lo emite build, con un scheduler que, en vez de despachar al handler (un stub
+     * del agente), llama al reclamo generado: lo único que el handler hace con el lote que importa al drenaje.
+     */
+    private ${drain.timer} temporizador(long presupuestoMs) {
+        ${drain.scheduler} scheduler = new ${drain.scheduler}(null) {
+            @Override
+            public void ${drain.operation}() {
+                pasadas.incrementAndGet();
+                adaptador.${queue.method}();
+            }
+        };
+        ${drain.timer} timer = new ${drain.timer}(scheduler);
+        ReflectionTestUtils.setField(timer, "drainBudgetMs", presupuestoMs);
+        return timer;
+    }
+
+    /** DR-1: con más candidatos que el lote, UN tick los drena todos, en varias pasadas. */
+    @Test
+    void dr1_unTickDrenaTodoEnVariasPasadas() {
+        for (int i = 0; i < ${BATCH_SIZE} * 2 + 1; i++) {
+            ${seed(from)};
+        }
+
+        temporizador(60_000L).tick();
+
+        assertEquals(0L, ${remaining(from)}, "el tick dejó candidatos: no repitió la pasada con el lote lleno (¿avisa el reclamo con SweepPass?)");
+        assertEquals(3, pasadas.get(), "dos lotes llenos y uno a medias son tres pasadas");
+    }
+
+    /** DR-2: con menos candidatos que el lote, el tick hace una sola pasada. */
+    @Test
+    void dr2_conElLoteAMediasElTickHaceUnaPasada() {
+        for (int i = 0; i < ${BATCH_SIZE} - 1; i++) {
+            ${seed(from)};
+        }
+
+        temporizador(60_000L).tick();
+
+        assertEquals(0L, ${remaining(from)});
+        assertEquals(1, pasadas.get(), "con el lote a medias no quedan candidatos: una segunda pasada es trabajo de más");
+    }
+
+    /** DR-3: agotado el presupuesto, el tick para aunque el lote siga saliendo lleno; lo demás, al siguiente tick. */
+    @Test
+    void dr3_agotadoElPresupuestoElTickPara() {
+        for (int i = 0; i < ${BATCH_SIZE} * 3; i++) {
+            ${seed(from)};
+        }
+
+        temporizador(0L).tick();
+
+        assertEquals(1, pasadas.get(), "sin presupuesto, el tick no puede repetir la pasada: se solaparía con su arriendo");
+        assertEquals(${BATCH_SIZE} * 2L, ${remaining(from)}, "lo que no cupo tiene que quedar para el siguiente tick");
+    }`;
+}
+
+/** Los imports de los casos DR-*, con los paquetes leídos del árbol generado. */
+function drainImports(drain, packages) {
+  if (!drain) return [];
+  return [
+    `${packages.scheduling}.${drain.scheduler}`,
+    `${packages.timer}.${drain.timer}`,
+    'java.util.concurrent.atomic.AtomicInteger',
+    'org.springframework.test.util.ReflectionTestUtils'
+  ];
 }
 
 /** El nombre del getter/setter de un campo, como los emite el scaffold de entidades. */
@@ -639,6 +739,18 @@ function documentClaimTestClass(model, scenarios, { datasource, packages }) {
     }`);
   }
 
+  const drain = drainSubject(model, scenarios);
+  if (drain) {
+    imports.push(...drainImports(drain, packages));
+    tests.push(drainTests({
+      drain,
+      queue,
+      constant,
+      seed: (state) => `documento(${state}, null, Instant.now())`,
+      remaining: (state) => `mongo.findAll(${documentClass}.class).stream().filter(row -> row.${statusGetter}() == ${state}).count()`
+    }));
+  }
+
   if (guard) {
     tests.push(guardTests({
       guard,
@@ -952,6 +1064,18 @@ function relationalClaimTestClass(model, scenarios, { datasource, packages, data
 
         assertEquals(1L, cuenta(${javaLiteral(harness.missingClock)}), "el contador del arnés no discrimina");
     }`);
+  }
+
+  const drain = drainSubject(model, scenarios);
+  if (drain) {
+    imports.push(...drainImports(drain, packages));
+    tests.push(drainTests({
+      drain,
+      queue,
+      constant,
+      seed: (state) => `fila(${state}, null, Instant.now())`,
+      remaining: (state) => `jpa.findAll().stream().filter(row -> row.${statusGetter}() == ${state}).count()`
+    }));
   }
 
   if (guard) {

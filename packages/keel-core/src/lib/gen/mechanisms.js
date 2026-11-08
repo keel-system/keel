@@ -149,6 +149,10 @@ export const MECHANISM_CATALOG = {
     title: 'Purgas de las tablas del generador en modo clúster (DSL 2.26, inc. 7): un recurrente por tabla en keel_timer, una réplica por tick',
     axis: 'model'
   },
+  'timer-schedule': {
+    title: 'El schedule de las operaciones en modo clúster con drenaje (DSL 2.26, inc. 8): un recurrente por operación en keel_timer, una réplica por tick, que repite la pasada mientras el lote salga lleno',
+    axis: 'model'
+  },
   'conditional-write': {
     title: 'Escritura condicional (DSL 2.25, api.concurrency): ETag, If-Match, 412 y 428, loadExpecting y la versión persistida',
     axis: 'model'

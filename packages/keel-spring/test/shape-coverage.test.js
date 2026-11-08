@@ -140,8 +140,12 @@ test('el trigger es el schedule declarado: cron de 6 campos y dispatch por el me
   const { read } = scaffoldMetering();
   const scheduler = read(`${JAVA}/infrastructure/scheduling/DailyDigestScheduler.java`);
 
-  // El diseño declara cron de 5 campos (agnóstico); Spring pide 6.
-  assert.ok(scheduler.includes('@Scheduled(cron = "0 0 2 * * *")'));
+  // El diseño declara cron de 5 campos (agnóstico); Spring pide 6. Desde el inc. 8 del plan 2.26 el cron va en el
+  // recurrente del cronómetro, y el scheduler solo despacha.
+  const timer = read(`${JAVA}/infrastructure/timer/CloseDailyDigestScheduleTimer.java`);
+  assert.ok(timer.includes('return "0 0 2 * * *";'), timer);
+  assert.ok(timer.includes('dailyDigestScheduler.closeDailyDigest();'), timer);
+  assert.ok(!/^\s*@Scheduled\(/m.test(scheduler), scheduler);
   assert.ok(scheduler.includes('public void closeDailyDigest()'));
   assert.ok(scheduler.includes('mediator.dispatch(new CloseDailyDigestCommand())'));
   // La descripción del schedule viaja como javadoc del método.

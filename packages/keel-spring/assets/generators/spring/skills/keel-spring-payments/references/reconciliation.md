@@ -9,7 +9,9 @@ cliente, y el `inFlight` de cada acción de seguimiento— cuyo `awaitingSince` 
 
 ## El reclamo
 
-`@Scheduled` corre en todas las réplicas. Antes de consultar, cada candidato se reclama con una
+El barrido puede correr en varias réplicas a la vez (el tick del cronómetro es al menos una vez; sin
+cronómetro, `@Scheduled` corre en todas). Si tu lote sale lleno (`batchSize()` cobros), avísalo con
+`SweepPass.claimed(reclamados, paymentReconciliation.batchSize())` y el tick repetirá la pasada. Antes de consultar, cada candidato se reclama con una
 actualización CONDICIONAL que vuelve a estampar `awaitingSince` (`... where id = ? and
 awaiting_since = ?`): la réplica que pierde ve 0 filas y lo salta. Sin reclamo, las N réplicas
 consultan el mismo cobro, y si la consulta desencadena una escritura, la hacen N veces.

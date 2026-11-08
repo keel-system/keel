@@ -14,10 +14,14 @@
 // Los casos llevan el id de su decisión del plan (R1, RC-1, R2). El sabotaje `timer-every-replica` de store-check hace
 // que el kind de cada purga sea distinto por instancia —cada réplica arbitra con su propia fila, que es «correr en todas»
 // con otra forma— y tiene que tumbar exactamente `r1_` y `rc1_`.
+//
+// Desde el incremento 8 la sonda mide también el `schedule` de las operaciones (`<Operación>ScheduleTimer`): el doble
+// es entonces el `<Servicio>Scheduler`, y contar sus llamadas es contar cuántas réplicas ejecutaron el barrido. El
+// drenaje, que necesita el reclamo real, lo mide claim-check.
 
-import { timerPurges, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { timerPurges, timerSchedules, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { timerStatements } from '@keel-system/keel-core/gen/timer-store';
-import { purgeTimerClass } from '../scaffold/timer.js';
+import { purgeTimerClass, scheduleTimerClass, schedulerClassOf } from '../scaffold/timer.js';
 import { conexionPerezosa } from './claim-probes.js';
 
 export const CLASS_PURGE_TIMER = 'PurgeTimerStoreCheckTest';
@@ -25,9 +29,14 @@ export const CLASS_PURGE_TIMER = 'PurgeTimerStoreCheckTest';
 /** Los casos que el sabotaje `timer-every-replica` tiene que tumbar, y solo ellos. */
 export const EVERY_REPLICA_CASES = Object.freeze(['r1_unaFilaPorPurgaAunqueLaAsegurenDosReplicas', 'rc1_cadaTickLoEjecutaUnaSolaReplica']);
 
-/** ¿Hay purgas sobre el cronómetro que medir en este diseño? */
+/** ¿Hay purgas o `schedule` sobre el cronómetro que medir en este diseño? */
 export function usesPurgeTimers(model) {
-  return usesTimer(model) && timerPurges(model).length > 0;
+  return usesTimer(model) && (timerPurges(model).length > 0 || timerSchedules(model).length > 0);
+}
+
+/** El scheduler que despacha cada `schedule` (su doble en la sonda), por operación. */
+export function scheduleTargetFiles(model) {
+  return Object.fromEntries(timerSchedules(model).map((schedule) => [schedule.operation, `${schedulerClassOf(model, schedule.operation)}.java`]));
 }
 
 /** El bean que hace la purga de cada tabla: el archivo que el runner busca para leer su paquete. */
@@ -53,12 +62,35 @@ export function purgeTimerTestClass(model, { datasource, packages }) {
   const document = model.persistenceKind === 'document';
   const purges = timerPurges(model);
   const targets = purgeTargetFiles(model);
-  const entries = purges.map((purge, index) => ({
-    ...purge,
-    timerClass: purgeTimerClass(purge.table),
-    target: targetClass(targets[purge.table]),
-    mock: `objetivo${index}`
-  }));
+  const entries = [
+    ...purges.map((purge, index) => ({
+      ...purge,
+      label: `la purga de ${purge.table}`,
+      timerClass: purgeTimerClass(purge.table),
+      target: targetClass(targets[purge.table]),
+      targetImport: `${packages.targets[purge.table]}.${targetClass(targets[purge.table])}`,
+      constant: `PURGE_${purge.table.toUpperCase()}`,
+      call: 'purge()',
+      cron: purge.cron.default,
+      mock: `objetivo${index}`
+    })),
+    // Los `schedule`: el doble es el scheduler de su servicio (uno por operación, aunque dos operaciones lo compartan:
+    // cada réplica cuenta por separado lo de cada una).
+    ...timerSchedules(model).map((schedule, index) => {
+      const scheduler = schedulerClassOf(model, schedule.operation);
+      return {
+        ...schedule,
+        label: `el schedule de ${schedule.operation}`,
+        timerClass: scheduleTimerClass(schedule.operation),
+        target: scheduler,
+        targetImport: `${packages.scheduling}.${scheduler}`,
+        constant: `SCHEDULE_${schedule.operation.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()}`,
+        call: `${schedule.operation}()`,
+        cron: null,
+        mock: `barrido${index}`
+      };
+    })
+  ];
 
   const support = document
     ? {
@@ -124,15 +156,14 @@ export function purgeTimerTestClass(model, { datasource, packages }) {
   const newMocks = entries.map((entry) => `        ${entry.mock} = mock(${entry.target}.class);`).join('\n');
   const replicaTimers = entries
     .map((entry) => `        ${entry.timerClass} ${entry.mock}Timer = new ${entry.timerClass}(${entry.mock});
-        ReflectionTestUtils.setField(${entry.mock}Timer, "cron", ${javaString(entry.cron.default)});
-        recurrentes.add(${entry.mock}Timer);`)
+${entry.cron ? `        ReflectionTestUtils.setField(${entry.mock}Timer, "cron", ${javaString(entry.cron)});\n` : ''}        recurrentes.add(${entry.mock}Timer);`)
     .join('\n');
-  const prefixes = entries.map((entry) => `TimerKinds.${`PURGE_${entry.table.toUpperCase()}`}`).join(', ');
+  const prefixes = entries.map((entry) => `TimerKinds.${entry.constant}`).join(', ');
   const verifyOnce = entries
-    .map((entry) => `        verify(${entry.mock}, times(1).description("la purga de ${entry.table} se ejecutó en más de una réplica, o en ninguna")).purge();`)
+    .map((entry) => `        verify(${entry.mock}, times(1).description("${entry.label} se ejecutó en más de una réplica, o en ninguna")).${entry.call};`)
     .join('\n');
   const verifyTwice = entries
-    .map((entry) => `        verify(${entry.mock}, times(1).description("la purga de ${entry.table} volvió a ejecutarse antes de su siguiente tick")).purge();`)
+    .map((entry) => `        verify(${entry.mock}, times(1).description("${entry.label} volvió a ejecutarse antes de su siguiente tick")).${entry.call};`)
     .join('\n');
 
   const body = `/**
@@ -196,7 +227,7 @@ ${replicaTimers}
         replica().poller().ensureRecurring();
         replica().poller().ensureRecurring();
         for (String prefijo : List.of(${prefixes})) {
-            assertEquals(1, filas(prefijo), "la purga " + prefijo + " tiene que ser UNA fila en keel_timer, la arbitren las réplicas que la arbitren");
+            assertEquals(1, filas(prefijo), "el recurrente " + prefijo + " tiene que ser UNA fila en keel_timer, la arbitren las réplicas que la arbitren");
         }
     }
 
@@ -233,7 +264,7 @@ ${verifyTwice}
 }`;
 
   const imports = [
-    ...entries.map((entry) => `${packages.targets[entry.table]}.${entry.target}`),
+    ...entries.map((entry) => entry.targetImport),
     ...support.imports,
     'java.util.ArrayList',
     'java.util.List',
@@ -259,11 +290,17 @@ ${verifyTwice}
  * instancia, así que cada réplica arbitra con su propia fila y todas ejecutan el tick. Compila y arranca: lo que rompe es
  * el arbitraje, que es lo que se mide. Devuelve los parches `{ file, find, replace }` (el archivo, por su nombre).
  */
-export function everyReplicaSabotage(model) {
-  return timerPurges(model).map((purge) => {
-    const constant = `PURGE_${purge.table.toUpperCase()}`;
+export function everyReplicaSabotage(model, { onlySchedules = false } = {}) {
+  const recurrings = [
+    ...(onlySchedules ? [] : timerPurges(model)).map((purge) => ({ timerClass: purgeTimerClass(purge.table), constant: `PURGE_${purge.table.toUpperCase()}` })),
+    ...timerSchedules(model).map((schedule) => ({
+      timerClass: scheduleTimerClass(schedule.operation),
+      constant: `SCHEDULE_${schedule.operation.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()}`
+    }))
+  ];
+  return recurrings.map(({ timerClass, constant }) => {
     return {
-      file: `${purgeTimerClass(purge.table)}.java`,
+      file: `${timerClass}.java`,
       find: `        return TimerKinds.${constant};`,
       replace: `        return TimerKinds.${constant} + "@" + replica;`,
       field: {

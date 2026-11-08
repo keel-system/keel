@@ -1095,3 +1095,30 @@ test('reconciliation: releer por id un candidato reclamado pasa; leer por estado
   const swallowing = mutating(project, handler, body(claimed, 'Exception'));
   assert.ok(header(swallowing.out, 'reconcileReservations ('), swallowing.out);
 });
+
+// El registro del barrido en el cronómetro (DSL 2.26, inc. 8): el <Operación>ScheduleTimer lo escribe build, así que
+// recién generado está en verde; pero sin él —o sin la llamada al scheduler— la reconciliación no se dispara nunca, y
+// ningún escenario lo ve: la precondición la fabrica el arnés, pero quien la recoge es este tick.
+test('el gate ve el barrido de reconciliación sin su registro en el cronómetro', (t) => {
+  const project = build('stock-reservation');
+  const first = run(project);
+  if (first === null) return t.skip('sin bash en el PATH');
+  assert.ok(!reports(first.out, 'registro en el cronómetro'), 'recién generado, el registro es de build y está');
+
+  const timers = fs
+    .readdirSync(path.join(project, 'src/main/java'), { recursive: true })
+    .filter((file) => String(file).endsWith('ScheduleTimer.java'))
+    .map((file) => path.join(project, 'src/main/java', String(file)));
+  assert.ok(timers.length > 0);
+  const original = timers.map((file) => fs.readFileSync(file, 'utf8'));
+
+  // Sin la llamada al scheduler, el tick no despacha nada.
+  for (const file of timers) fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/\n\s*\w+Scheduler\.\w+\(\);/, '\n'));
+  assert.ok(reports(run(project).out, 'registro en el cronómetro'));
+
+  // Y sin la clase, no hay recurrente en keel_timer.
+  timers.forEach((file, index) => fs.writeFileSync(file, original[index]));
+  assert.ok(!reports(run(project).out, 'registro en el cronómetro'));
+  for (const file of timers) fs.rmSync(file);
+  assert.ok(reports(run(project).out, 'registro en el cronómetro'));
+});

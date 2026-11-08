@@ -43,6 +43,7 @@
 // aquí dejaba `failed` sin `failureReason` ni `failedAt` (corrida notifications, 2026-09-30).
 
 import { SWEEP_BATCH_DEFAULT } from '@keel-system/keel-core/gen';
+import { sweepPassSignal } from './timer.js';
 import { subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
 import { claimSelectionSnippet, claimTransaction, supportsSkipLocked, unsupportedClaimWarning } from '../lib/claim-sql.js';
@@ -231,8 +232,8 @@ function describe(model, claim, entityName) {
     : '';
   return `Reclama hasta {@code batchSize} ${entityName} en estado ${claim.from.join(' o ')} y los pasa a ${claim.to}.${dueDoc}
      *
-     * <p><b>Reclama, no lee.</b> Corre en TODAS las réplicas del servicio a la vez
-     * ({@code @Scheduled} es «una vez por instancia», no «una vez en el clúster»). La lista
+     * <p><b>Reclama, no lee.</b> Puede correr a la vez en varias réplicas: con
+     * {@code @Scheduled}, en todas; con el cronómetro, cuando un tick se repite al vencer su arriendo. La lista
      * que devuelve son SOLO las filas que ESTA instancia se llevó: el paso a ${claim.to} va
      * en ${claimMechanism(model).conditional}, así que la fila que otra réplica reclamó antes no aparece
      * aquí. Leer el lote con un finder normal y marcarlo después se lo daría entero a todas.
@@ -251,8 +252,8 @@ function describe(model, claim, entityName) {
 function describeStalled(model, claim, entityName) {
   return `Rescata hasta {@code batchSize} ${entityName} ATASCADOS en ${claim.stalled.state}: los devuelve SIGUIENDO en ${claim.stalled.state}, con {@code ${claim.stalled.stampField}} renovado, para que el handler los pase a ${claim.to}.
      *
-     * <p><b>Reclama, no lee.</b> Corre en TODAS las réplicas del servicio a la vez
-     * ({@code @Scheduled} es «una vez por instancia», no «una vez en el clúster»). El reclamo es
+     * <p><b>Reclama, no lee.</b> Puede correr a la vez en varias réplicas: con
+     * {@code @Scheduled}, en todas; con el cronómetro, cuando un tick se repite al vencer su arriendo. El reclamo es
      * ${claimMechanism(model).conditional} que solo casa si la fila sigue atascada, y renueva el reloj en
      * la misma escritura: la fila que otra réplica rescató antes ya no parece atascada y no
      * aparece aquí. Se COMMITEA antes de volver (transacción propia).
@@ -449,7 +450,7 @@ ${staleBefore}${dueNow}${claimedAt}${leaseAt}        List<${enumType}> states = 
                 ${jpaField}.findById(id).map(this::toDomain).ifPresent(claimed::add);
             }
         }
-        return claimed;
+${sweepPassSignal(model, claim, imports, 'candidates.size()', batchField(claim))}        return claimed;
     }`;
   });
 }
@@ -548,7 +549,7 @@ ${staleBefore}${dueNow}${claimedAt}${leaseAt}        List<${entity.name}> claime
             }
             claimed.add(toDomain(document));
         }
-        return claimed;
+${sweepPassSignal(model, claim, imports, 'claimed.size()', batchField(claim))}        return claimed;
     }`;
   });
 }

@@ -1193,7 +1193,7 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       // borra lo caducado es idempotente por forma —borrar dos veces la misma fila da
       // el mismo resultado que borrarla una—, así que solaparse no produce ningún
       // efecto doble. El razonamiento largo está en conventions/dependencies.md
-      // § El barrido corre en todas las réplicas.
+      // § El barrido puede correr en varias réplicas a la vez.
       claim: null
     };
 

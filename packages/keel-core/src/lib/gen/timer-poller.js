@@ -132,8 +132,15 @@ export async function deadlineTick({ timer, loadEntity, state, afterSeconds, dbN
  * desde la hora de AHORA y no desde el `due_at` anterior (R2): tras una parada larga se ejecuta un tick, no todos los que
  * se perdieron. `nextTick(fromMs)` es el cron en UTC (T7).
  */
-export async function recurringTick({ run, dbNow, nextTick }) {
-  await run();
+export async function recurringTick({ run, dbNow, nextTick, onError = () => {} }) {
+  // Un tick que falla NO se aparca (inc. 8): se rearma igual, como hacía su cron. Aparcar tras `maxAttempts` fallos —una
+  // base caída unos minutos— dejaría el barrido o la purga sin reloj para siempre, y asegurar al arrancar no toca una fila
+  // con el mismo spec, así que nada lo volvería a armar.
+  try {
+    await run();
+  } catch (failure) {
+    onError(failure);
+  }
   // La hora de DESPUÉS del tick: con la de antes, un tick más largo que su periodo dejaría el siguiente ya vencido.
   return { dueAt: nextTick(dbNow()) };
 }

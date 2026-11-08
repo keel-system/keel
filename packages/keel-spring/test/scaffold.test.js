@@ -3270,8 +3270,10 @@ test('idempotencia de consumo: registro de procesados transversal al broker', ()
   }
 
   assert.ok(read(workspace, `${dir}/ProcessedEventJpaRepository.java`).includes('deleteProcessedBefore'));
-  // La purga es @Scheduled y su retención sale de parameters/, no del código.
-  assert.ok(read(workspace, 'src/main/java/com/commerce/productcatalog/ProductCatalogApplication.java').includes('@EnableScheduling'));
+  // La purga va por el cronómetro (inc. 7 del plan 2.26) y su retención sale de parameters/, no del código. Sin
+  // ningún @Scheduled que quede, @EnableScheduling sobra (inc. 8): el cronómetro corre en el hilo de su sondeador.
+  assert.ok(read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/timer/ProcessedEventPurgeTimer.java').includes('.purge();'));
+  assert.ok(!read(workspace, 'src/main/java/com/commerce/productcatalog/ProductCatalogApplication.java').includes('@EnableScheduling'));
   assert.ok(read(workspace, 'src/main/resources/parameters/local/messaging.yaml').includes('retention-days: 14'));
 });
 
@@ -3360,7 +3362,8 @@ test('idempotencia de comando: store transaccional, contexto y filtro de la cabe
   assert.ok(purgeTimer.includes('@Value("${idempotency-record.purge.cron:'), purgeTimer);
   assert.ok(purgeTimer.includes('jpaIdempotencyStore.purge();'), purgeTimer);
   assert.ok(read(workspace, `${dir}/IdempotencyRecordJpaRepository.java`).includes('deleteExpiredBefore'));
-  assert.ok(read(workspace, `${base}/ProductCatalogApplication.java`).includes('@EnableScheduling'));
+  // Sin ningún @Scheduled que quede (todo va por el cronómetro), @EnableScheduling sobra.
+  assert.ok(!read(workspace, `${base}/ProductCatalogApplication.java`).includes('@EnableScheduling'));
 
   // La cabecera es transporte: llega por contexto, no como componente del Command
   // (Jackson deserializa el Command entero desde el cuerpo).

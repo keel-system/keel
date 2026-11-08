@@ -32,8 +32,13 @@
 // (`findAndModify` con su `Criteria`), que no comparte una línea con la relacional y que hasta
 // ahora no ejecutaba nadie — `mongo-check` mira los scripts del ARNÉS, no el reclamo.
 //
-//   node packages/keel-spring/scripts/claim-check.js [fixture] [--database=<motor>] [--keep]
+//   node packages/keel-spring/scripts/claim-check.js [fixture] [--database=<motor>] [--keep] [--sabotage=<id>]
 //   npm run claim-check --workspace packages/keel-spring
+//
+// El DRENAJE del cronómetro (DSL 2.26, inc. 8) entra aquí porque su sujeto es el reclamo: DR-1 a DR-3 ejecutan el
+// `<Operación>ScheduleTimer` emitido con un scheduler que llama al reclamo real. Dos sabotajes lo falsan, y con
+// `--sabotage` el verde es que caigan EXACTAMENTE sus casos: `drain-no-signal` quita el aviso del lote lleno del
+// adaptador (DR-1) y `drain-no-budget` quita el tope de tiempo del tick (DR-3).
 //
 // Necesita podman o docker, y JDK (Gradle compila el proyecto entero, `main` incluido).
 
@@ -47,7 +52,7 @@ import { loadService } from '@keel-system/keel-core';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
-import { claimScenarios, claimTestClass, CLASS_NAME, PACKAGE_LEAF } from '../src/lib/claim-probes.js';
+import { claimScenarios, claimTestClass, drainSubject, CLASS_NAME, DRAIN_SABOTAGE_CASES, PACKAGE_LEAF } from '../src/lib/claim-probes.js';
 import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
 
 // La URI del Mongo del perfil `local`, leída del db.yaml GENERADO. En Boot 4 la conexión del cliente
@@ -66,6 +71,11 @@ const args = process.argv.slice(2);
 const keep = args.includes('--keep');
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'job-dispatch';
 const database = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? 'postgresql';
+const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
+if (sabotage && !DRAIN_SABOTAGE_CASES[sabotage]) {
+  console.error(`sabotaje desconocido: ${sabotage} (los hay: ${Object.keys(DRAIN_SABOTAGE_CASES).join(', ')})`);
+  process.exit(2);
+}
 
 // ─── Procesos y compose (misma resolución que los scripts generados) ─────────
 
@@ -130,6 +140,8 @@ function prepare() {
   const engine = document ? 'mongodb' : database;
 
   const model = buildModel({ manifest: service.manifest, layers: service.layers, stack: { database: engine } });
+  // El stack se cuelga del modelo como en planService: el cronómetro (y con él el drenaje) depende del motor.
+  model.stack = { database: engine };
   const scenarios = claimScenarios(model);
   // La guarda cuenta como sujeto por sí sola: un diseño puede no tener barridos y tener un
   // efecto externo irreversible que reclamar, y ahí también hay algo que ejercitar.
@@ -156,7 +168,11 @@ function prepare() {
 
   // El paquete de cada clase se LEE del proyecto generado en vez de suponerse: si el scaffold
   // reorganiza el layout, este runner lo sigue en vez de escribir un import que no existe.
+  const drain = drainSubject(model, scenarios);
+  if (sabotage && !drain) throw new Error(`sabotaje ${sabotage}: '${fixture}' no tiene un barrido de cola sobre el cronómetro`);
+  if (sabotage) applySabotage(projectDir, sabotage, scenarios, drain);
   const packages = resolvePackages(projectDir, {
+    ...(drain ? { scheduling: `${drain.scheduler}.java`, timer: `${drain.timer}.java` } : {}),
     enums: `${scenarios.enumType}.java`,
     port: `${scenarios.entity.name}Repository.java`,
     // El espejo y su repositorio cambian de nombre con el modelo: son dos ramas del
@@ -186,6 +202,41 @@ function prepare() {
   }
 
   return { projectDir, model, scenarios, probe, engine, container: `${service.manifest.service.name}-db` };
+}
+
+/** Los sabotajes del drenaje, sobre el árbol generado. Cada uno conserva la forma (compila) y rompe una mitad. */
+function applySabotage(projectDir, id, scenarios, drain) {
+  const patches = {
+    // El adaptador deja de avisar del lote lleno: el tick hace una pasada y deja candidatos.
+    'drain-no-signal': {
+      file: `${scenarios.entity.name}RepositoryImpl.java`,
+      find: /^\s*SweepPass\.claimed\(.*\);\n/m,
+      replace: ''
+    },
+    // El tick ignora su presupuesto: drena mientras el lote salga lleno, aunque se solape con su arriendo.
+    'drain-no-budget': {
+      file: `${drain.timer}.java`,
+      find: ' || Duration.between(start, Instant.now()).toMillis() >= budget',
+      replace: ''
+    }
+  };
+  const patch = patches[id];
+  const file = findFile(projectDir, patch.file);
+  const source = fs.readFileSync(file, 'utf8');
+  const next = source.replace(patch.find, patch.replace);
+  if (next === source) throw new Error(`sabotaje ${id}: ${patch.file} ya no tiene la forma que el sabotaje rompe`);
+  fs.writeFileSync(file, next, 'utf8');
+}
+
+function findFile(projectDir, basename) {
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      return entry.isDirectory() ? walk(full) : [full];
+    });
+  const file = walk(path.join(projectDir, 'src/main/java')).find((candidate) => path.basename(candidate) === basename);
+  if (!file) throw new Error(`claim-check: no encuentro ${basename} en el proyecto generado`);
+  return file;
 }
 
 /** Busca cada clase en el árbol generado y devuelve su paquete, leído de su propia cabecera. */
@@ -331,9 +382,17 @@ try {
       const failed = cases.filter((item) => !item.ok).length;
       console.log(`\n  ${cases.length - failed}/${cases.length} en verde`);
       exitCode = failed > 0 ? 1 : 0;
+      if (sabotage) {
+        // Con sabotaje, el verde es que caigan EXACTAMENTE sus casos: ni uno de más, ni uno de menos.
+        const expected = [...DRAIN_SABOTAGE_CASES[sabotage]].sort();
+        const red = cases.filter((item) => !item.ok).map((item) => item.name).sort();
+        const exact = JSON.stringify(expected) === JSON.stringify(red);
+        console.log(`  sabotaje ${sabotage}: ${exact ? 'cae exactamente en' : 'NO cae exactamente en'} ${expected.join(', ')}${exact ? '' : ` (cayeron: ${red.join(', ') || 'ninguno'})`}`);
+        exitCode = exact ? 0 : 1;
+      }
       fs.writeFileSync(
         path.join(here, '..', 'claim-check.json'),
-        `${JSON.stringify({ ...verdictStamp(), fixture, database: engine, cases }, null, 2)}\n`,
+        `${JSON.stringify({ ...verdictStamp(), fixture, database: engine, sabotage, cases }, null, 2)}\n`,
         'utf8'
       );
     }

@@ -23,6 +23,7 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { pascalCase } from '../lib/naming.js';
 import { PAYMENT_NOTICE_PATH } from '@keel-system/keel-core/gen/payment-gateways';
 import { PAYMENT_SWEEP_PARAMETERS } from '@keel-system/keel-core/gen/payments-model';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { OUTBOUND_POLICY_CLASS, outboundPolicyImport } from './outbound-address.js';
 import * as stripe from './payment-gateways/stripe.js';
 import * as mercadopago from './payment-gateways/mercadopago.js';
@@ -403,7 +404,15 @@ function renderReconciliation(model) {
  * candidatos son los cobros en ${payments.awaitingStates.join(', ')} cuyo ${payments.record.awaitingSince} es
  * anterior a {@link #staleBefore}, en lotes de {@link #batchSize}; y el handler reclama cada uno
  * volviendo a estampar ${payments.record.awaitingSince} ANTES de llamar aquí, para que otra réplica no lo
- * consulte en la misma pasada.
+ * consulte en la misma pasada.${
+   scheduledByTimer(model, payments.reconciliation.sweep)
+     ? `
+ *
+ * <p>El barrido lo dispara el cronómetro en una réplica por tick, y el tick DRENA: si el handler reclamó un lote
+ * lleno ({@link #batchSize} cobros), que lo avise con {@code SweepPass.claimed(reclamados, batchSize())}
+ * (application/support) y el tick repetirá la pasada.`
+     : ''
+ }
  */
 @Component
 public class PaymentReconciliation {

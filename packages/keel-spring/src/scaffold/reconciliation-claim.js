@@ -25,6 +25,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
 import { claimSelectionSnippet, claimTransaction } from '../lib/claim-sql.js';
+import { sweepPassSignal } from './timer.js';
 import { reconciliationClaims, RECONCILIATION_CLAIM, RECONCILIATION_PURGE } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, purgeSchedule, purgeScheduleImports, PURGE_QUERY_IMPORTS } from './purge.js';
 
@@ -77,8 +78,8 @@ function describe(claim) {
   return `Reclama los ${claim.entity} que encargaron trabajo a ${claim.dependency}.${claim.activation} y
      * llevan demasiado tiempo sin desenlace.
      *
-     * <p><b>Reclama, no lee.</b> Corre en TODAS las réplicas del servicio a la vez
-     * ({@code @Scheduled} es «una vez por instancia», no «una vez en el clúster»). La lista
+     * <p><b>Reclama, no lee.</b> Puede correr a la vez en varias réplicas: con
+     * {@code @Scheduled}, en todas; con el cronómetro, cuando un tick se repite al vencer su arriendo. La lista
      * que devuelve son SOLO los candidatos que ESTA instancia se llevó: el reclamo es una
      * marca persistida en {@code reconciliation_claim} que se confirma antes de volver, así
      * que las demás réplicas dejan de verlos. Leerlos con un finder y actuar después haría
@@ -187,7 +188,7 @@ ${claimTx.annotation}
                 ${jpaField}.findById(id).map(this::toDomain).ifPresent(claimed::add);
             }
         }
-        return claimed;
+${sweepPassSignal(model, claim, imports, 'candidates.size()', `${claim.activation}BatchSize`)}        return claimed;
     }`
   );
 }
@@ -236,15 +237,16 @@ export function documentAdapterMethods(model, entity, imports) {
                         Criteria.where("id").nin(held)))
                 .with(Sort.by(Sort.Direction.ASC, "${claim.awaitingField}"))
                 .limit(${claim.activation}BatchSize);
+        List<${entity.name}Document> candidates = mongoTemplate.find(query, ${entity.name}Document.class);
         List<${entity.name}> claimed = new ArrayList<>();
-        for (${entity.name}Document document : mongoTemplate.find(query, ${entity.name}Document.class)) {
+        for (${entity.name}Document document : candidates) {
             UUID id = document.getId();
             // true = la marca es mía; false = otra réplica la tiene y aún no ha caducado.
             if (reconciliationClaims.claim("${claim.activation}", id, now, claimExpiredBefore)) {
                 claimed.add(toDomain(document));
             }
         }
-        return claimed;
+${sweepPassSignal(model, claim, imports, 'candidates.size()', `${claim.activation}BatchSize`)}        return claimed;
     }`
   );
 }

@@ -30,7 +30,7 @@ src/main/java/<base>/
 │   └── mail/            # (solo con capa mail) MailMessage y sus excepciones
 └── infrastructure/      # adaptadores — habla con el mundo exterior
     ├── configurations/usecase/  # UseCaseMediator (frontera transaccional) + Container + AutoRegister
-    ├── scheduling/      # <X>Scheduler (@Scheduled), despacha vía mediator (el barrido, sin transacción)
+    ├── scheduling/      # <X>Scheduler, despacha vía mediator (el barrido, sin transacción); lo dispara el cronómetro (timer/)
     ├── configurations/logging/  # LogExceptionsAspect
     ├── telemetry/       # (solo con telemetry: otel) TelemetryConfig + MessageTracing — YA GENERADOS
     ├── messaging/       # EventEnvelope + <Servicio>DomainEventBridge (domain → integración)

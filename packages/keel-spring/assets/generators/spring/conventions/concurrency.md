@@ -10,7 +10,7 @@ Lo único que los coordina es el **almacén**. Ninguna guarda que viva en la JVM
 Si escribes una, el código pasa las pruebas en tu máquina y falla en cuanto haya dos pods.
 
 El barrido de reconciliación tiene su propia sección, más larga, en
-[`dependencies.md` § El barrido corre en todas las réplicas](dependencies.md) — reclamar en vez de leer,
+[`dependencies.md` § El barrido puede correr en varias réplicas a la vez](dependencies.md) — reclamar en vez de leer,
 el orden dentro del barrido y la carrera con el camino feliz. No se repite aquí.
 
 ## Quién arbitra cada mecanismo
@@ -62,10 +62,22 @@ congelada. Si el recurso cambió entre la primera petición y el reintento, la r
 el estado actual. Es deliberado —congelar el cuerpo obligaría a versionar una representación que el
 contrato dice que se lee por la API—, pero no lo descubras en producción.
 
-## Los `@Scheduled`
+## Lo que corre por reloj: el cronómetro y los `@Scheduled`
 
-Cada método `@Scheduled` corre **en todas las réplicas**, a la vez. Los que genera `build` están
-preparados para eso:
+Sobre PostgreSQL, MySQL y MongoDB, las purgas de las tablas del generador y el `schedule` de cada operación
+corren sobre el **cronómetro** del servicio (`infrastructure/timer`): una tabla `keel_timer` con una fila
+por recurrente (`<Tabla>PurgeTimer`, `<Operación>ScheduleTimer`) y un sondeador por réplica. Cada tick lo
+ejecuta **UNA** réplica, la que gana su fila, y el de un barrido **drena**: repite la pasada mientras el lote
+salga lleno (`SweepPass`), hasta el siguiente tick o `timer.drain-budget-ms`. El `<Servicio>Scheduler`
+ya no lleva `@Scheduled`: solo despacha. Ojo con dos cosas que no cambian:
+
+- El tick es **al menos una vez**: si la réplica muere a mitad, otra lo repite al vencer su arriendo, y una
+  pasada puede coincidir con un despacho por otra puerta. Por eso los barridos **siguen reclamando** sus filas.
+- Un tick que falla no se aparca: se rearma para el siguiente, como hacía su cron.
+
+Sobre MariaDB, SQL Server y Oracle no hay cronómetro (sus sentencias no se han medido), y todo lo de abajo
+sigue siendo `@Scheduled`, que corre **en todas las réplicas** a la vez. El relay del outbox es
+`@Scheduled` en todos los motores. Los que genera `build` están preparados para eso:
 
 - Las purgas (`processed_event`, `idempotency_record`, `outbox_event`) borran por rango de fecha: N
   réplicas ejecutando el mismo `DELETE` es ruido, no daño. Y cada tabla lleva su índice sobre la columna
@@ -78,7 +90,8 @@ preparados para eso:
 - El barrido de reconciliación reclama con `reconciliation_claim`, una marca que sobrevive al commit y
   caduca. `build` genera la tabla, su tienda y el método del puerto — ver más abajo.
 
-**Cualquier `@Scheduled` que escribas tú no hereda nada de eso.** Si actúa sobre lo que encuentra, tiene
+**Cualquier `@Scheduled` que escribas tú no hereda nada de eso** (ni el cronómetro: el tuyo corre en todas
+las réplicas). Si actúa sobre lo que encuentra, tiene
 que reclamar. Y no es una recomendación: correr replicado no es una decisión de despliegue que el diseño
 pueda declinar, así que **todo barrido se escribe multi-instancia o está mal**.
 

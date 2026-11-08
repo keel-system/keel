@@ -42,7 +42,7 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
 import { usesHttpIdempotency } from './http-idempotency.js';
-import { hasScheduledOperations } from './services.js';
+import { purgedByTimer, scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 
 const CONFIG_PKG = 'infrastructure.configurations.scheduling';
 
@@ -58,20 +58,23 @@ const CONFIG_PKG = 'infrastructure.configurations.scheduling';
  */
 export function scheduledTaskCount(model) {
   let total = 0;
-  // El <Servicio>Scheduler: un método por operación con `schedule` (services.js).
+  // El <Servicio>Scheduler: un método por operación con `schedule` (services.js), salvo los que
+  // dispara el cronómetro (inc. 8 del plan 2.26), que ya no llevan @Scheduled.
   for (const service of model.services ?? []) {
     for (const operation of service.operations ?? []) {
-      if (operation.schedule) total += 1;
+      if (operation.schedule && !scheduledByTimer(model, operation.name)) total += 1;
     }
   }
+  // Las purgas de las tablas del generador, salvo las que van por el cronómetro (inc. 7).
+  const purge = (table) => (purgedByTimer(model, table) ? 0 : 1);
   // El relay del outbox y la purga de su tabla (outbox.js).
-  if (usesOutbox(model)) total += 2;
+  if (usesOutbox(model)) total += 1 + purge('outbox_event');
   // La purga del registro de procesados (idempotency.js).
-  if (usesIdempotency(model)) total += 1;
+  if (usesIdempotency(model)) total += purge('processed_event');
   // La purga del registro de comandos (http-idempotency.js).
-  if (usesHttpIdempotency(model)) total += 1;
+  if (usesHttpIdempotency(model)) total += purge('idempotency_record');
   // La purga de las marcas de reclamo de reconciliación (reconciliation-claim.js).
-  if (hasReconciliationClaim(model)) total += 1;
+  if (hasReconciliationClaim(model)) total += purge('reconciliation_claim');
   return total;
 }
 
@@ -83,13 +86,12 @@ function hasReconciliationClaim(model) {
 }
 
 /**
- * La misma condición con la que `application.js` decide `@EnableScheduling`: donde hay algo
- * que programar hay que decidir en qué hilos corre, y donde no lo hay este bean sobra.
+ * La misma condición con la que `application.js` decide `@EnableScheduling`: donde queda algún
+ * `@Scheduled` hay que decidir en qué hilos corre, y donde no queda ninguno este bean sobra (lo que
+ * va por el cronómetro corre en el hilo de su sondeador).
  */
 export function usesScheduling(model) {
-  return (
-    usesOutbox(model) || usesIdempotency(model) || usesHttpIdempotency(model) || hasScheduledOperations(model)
-  );
+  return scheduledTaskCount(model) > 0;
 }
 
 export function generate(model) {

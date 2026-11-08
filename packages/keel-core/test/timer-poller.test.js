@@ -170,3 +170,19 @@ test('armar otra vez el mismo plazo lo rearma: borra el arriendo, los intentos y
   assert.equal(store.rows().length, 1);
   assert.deepEqual([row.claimToken, row.claimedUntil, row.attempts, row.parkedAt], [null, null, 0, null]);
 });
+
+test('RC-8: un recurrente cuyo tick falla no se aparca nunca: se rearma para el siguiente, como hacía su cron', async () => {
+  const { store, advance, now } = world();
+  const kind = scheduleKind('flakySweep');
+  store.ensureRecurring({ kind, spec: '*/5 * * * *', dueAt: now() });
+  const errors = [];
+  const handlers = () =>
+    recurringTick({ run: () => { throw new Error('la base no contesta'); }, dbNow: now, nextTick: (from) => from + 5 * MINUTE, onError: (e) => errors.push(e) });
+  // Más ticks fallidos que max-attempts: un plazo ya estaría aparcado.
+  for (let tick = 0; tick < settings.maxAttempts + 2; tick += 1) {
+    const { claimed } = await pollOnce({ store, kinds: [kind], settings, handlers, token: `t${tick}` });
+    assert.equal(claimed, 1, `el tick ${tick} no se reclamó: el recurrente quedó aparcado`);
+    advance(5 * MINUTE);
+  }
+  assert.equal(errors.length, settings.maxAttempts + 2);
+});

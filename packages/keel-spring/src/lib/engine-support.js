@@ -712,6 +712,33 @@ const SPRING_MECHANISMS = {
       }
     }
   },
+  'timer-schedule': {
+    emitter: 'src/scaffold/timer.js · src/scaffold/services.js · src/scaffold/claim.js · src/scaffold/reconciliation-claim.js',
+    why: 'Un barrido que vuelve a correr en todas las réplicas, o que en una sola réplica hace una pasada por tick, compila, arranca y barre: el precio es un atraso que crece con la carga sin que nada lo diga, o N réplicas compitiendo por el mismo lote. Y un reclamo que no avisa del lote lleno deja el tick sin drenar, igual de callado.',
+    parity: {
+      pair: 'job-dispatch',
+      markers: {
+        relational: ['implements RecurringTimerHandler', 'SweepPass.claimed(candidates.size()', 'class JdbcTimerStore'],
+        document: ['implements RecurringTimerHandler', 'SweepPass.claimed(claimed.size()', 'class MongoTimerStore']
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'claim-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'job-dispatch: el <Operación>ScheduleTimer drena con el reclamo real contra el motor (DR-1 a DR-3, claim-check), falsado con drain-no-signal (DR-1) y drain-no-budget (DR-3); notification-mailer: dos réplicas aseguran y sondean el schedule y cada tick lo ejecuta una (R1, RC-1, R2, store-check), falsado con timer-every-replica. Los motores sin sentencias del cronómetro conservan el @Scheduled por réplica'
+      },
+      document: {
+        state: 'verificado',
+        net: 'claim-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'job-dispatch-mongo y notification-mailer-mongo: los mismos casos sobre MongoTimerStore y el findAndModify del reclamo, con los mismos sabotajes'
+      }
+    }
+  },
   'conditional-write': {
     emitter:
       'src/scaffold/conditional-writes.js · src/scaffold/controllers.js · src/scaffold/services.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js · src/scaffold/cache.js · src/scaffold/security.js',

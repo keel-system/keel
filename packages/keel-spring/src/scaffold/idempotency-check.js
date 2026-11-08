@@ -31,6 +31,8 @@ import { capitalize } from './entities.js';
 import { usesOutbox } from './outbox.js';
 import { usesTelemetry, consumesKeelEnvelope } from './telemetry.js';
 import { screamingSnake, camelCase, kebabCase } from '../lib/naming.js';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { scheduleTimerClass } from './timer.js';
 
 /**
  * ¿Hay algo de esta familia que comprobar? Sin suscripciones, sin idempotencia HTTP, sin
@@ -187,7 +189,7 @@ function sweepClaimChecks(model) {
         // reclamo generado no tiene ningún uso legítimo que el reclamo no cubra mejor.
         forbid: stateReadingFinder(model, claims.map((claim) => claim.entity)),
         why:
-          `el barrido corre en TODAS las réplicas: tiene que RECLAMAR su lote llamando a ` +
+          `el barrido puede correr a la vez en varias réplicas: tiene que RECLAMAR su lote llamando a ` +
           `${claims.map((claim) => `${claim.method}()`).join(' / ')}, que build generó en el puerto, ` +
           `no leerlo con un finder — entre la lectura y la marca las N réplicas ya se llevaron las mismas filas`
       };
@@ -215,7 +217,7 @@ function sweepClaimChecks(model) {
       deny: generados.length > 0 ? generados.join('|') : null,
       exclude: '(^$)',
       why:
-        `el barrido corre en TODAS las réplicas, así que el trabajo que toma tiene que RECLAMARSE con una ` +
+        `el barrido puede correr a la vez en varias réplicas, así que el trabajo que toma tiene que RECLAMARSE con una ` +
         `escritura condicional sobre ${entities.join(', ')} —no leerse con un finder—, y no aparece ninguna en el ` +
         `proyecto. build NO pudo generarla y su aviso dice por qué (un rescate de un estado EN VUELO necesita el ` +
         `campo que dice CUÁNDO se entró en él, y sobre dos estados a la vez no hay un solo reloj que medir), así ` +
@@ -859,7 +861,7 @@ function reconciliationChecks(model) {
         // misma página en todas las réplicas, y aquí actuar es llamar a otro servidor.
         forbid: stateReadingFinder(model, [claim.entity]),
         why:
-          `el barrido corre en TODAS las réplicas: tiene que tomar su lote con ${claim.method}(), que build generó en ` +
+          `el barrido puede correr a la vez en varias réplicas: tiene que tomar su lote con ${claim.method}(), que build generó en ` +
           `${claim.entity}Repository —reclama con una marca persistida que caduca, y devuelve solo lo que esta ` +
           `instancia se llevó—, no leerlo con un finder ni con un reclamo escrito aparte`
       });
@@ -937,8 +939,8 @@ function reconciliationChecks(model) {
       // desde que las purgas corren en él (DSL 2.26, inc. 7) existe en todo diseño con
       // reconciliación, así que satisfacía el check del lote sobre el árbol recién generado.
       exclude:
-        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxRelayStore|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*|[A-Za-z]*Timer[A-Za-z]*)\\.java',
-      why: 'ninguna consulta reclama candidatos con una MARCA PERSISTIDA (UPDATE ... SET <marca> vía @Modifying, o findAndModify en Mongo): el barrido corre en TODAS las réplicas, y un lock pesimista no sirve aquí porque solo aísla mientras dura su transacción y la llamada al proveedor va en medio — ver conventions/dependencies.md § El barrido corre en todas las réplicas'
+        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxRelayStore|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*|[A-Za-z]*Timer[A-Za-z]*|SweepPass)\\.java',
+      why: 'ninguna consulta reclama candidatos con una MARCA PERSISTIDA (UPDATE ... SET <marca> vía @Modifying, o findAndModify en Mongo): el barrido puede correr a la vez en varias réplicas, y un lock pesimista no sirve aquí porque solo aísla mientras dura su transacción y la llamada al proveedor va en medio — ver conventions/dependencies.md § El barrido puede correr en varias réplicas a la vez'
     });
     // La cota del lote, APARTE del reclamo. Sin cota, el barrido se lleva la tabla entera
     // y deja de ser un lote: 50.000 atascados son 50.000 llamadas al proveedor en una
@@ -973,7 +975,7 @@ function reconciliationChecks(model) {
       // BLOQUE y no el archivo: el reclamo del agente cabe en el mismo adaptador.
       deny: generatedClaims.length > 0 ? generatedClaims.join('|') : null,
       exclude:
-        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxRelayStore|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*|[A-Za-z]*Timer[A-Za-z]*)\\.java',
+        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxRelayStore|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*|[A-Za-z]*Timer[A-Za-z]*|SweepPass)\\.java',
       why: 'el reclamo del barrido no acota su lote: ninguna consulta que limite el número de filas (Pageable/limit, o un contador de lote en Mongo) habla de los candidatos que se reconcilian. Puede ir en la misma consulta que reclama o en la que selecciona candidatos —en JPQL un @Modifying no acepta Pageable, así que ahí son dos por obligación—, pero tiene que existir: sin cota, una pasada con 50.000 atascados son 50.000 llamadas al proveedor'
     });
     // Y el umbral de «demasiado tiempo», UNO POR BARRIDO PENDIENTE.
@@ -1033,6 +1035,10 @@ function reconciliationChecks(model) {
   // DOS beans disparando el mismo barrido, o sea el doble de pasadas. Es la lección (a)
   // otra vez: no supongas dónde vive una pieza.
   for (const [scheduler, operations] of schedulers) {
+    // Con el cronómetro (inc. 8 del plan 2.26) el <Servicio>Scheduler ya no lleva @Scheduled: solo
+    // despacha, y lo que lo dispara es el <Operación>ScheduleTimer. El scheduler se reconoce entonces
+    // por despachar al mediator, que el handler no hace.
+    const onTimer = operations.every((name) => scheduledByTimer(model, name));
     checks.push({
       group: 'reconciliation',
       subject: scheduler,
@@ -1040,12 +1046,30 @@ function reconciliationChecks(model) {
       // Si el nombre canónico no está, se busca el archivo que dispara ESTAS operaciones...
       locate: operations.map((name) => `\\b${name}\\s*\\(`).join('|'),
       // ...y que además es un disparador: el handler y el mediador también las nombran.
-      confirm: '@Scheduled',
-      require: ['@Scheduled'],
+      confirm: onTimer ? String.raw`mediator\.dispatch` : '@Scheduled',
+      require: [onTimer ? String.raw`mediator\.dispatch` : '@Scheduled'],
       // build lo deja lanzando cuando el mensaje necesita argumentos. Si sigue ahí, el
       // barrido no corre nunca y nada más lo delata.
       forbid: ['UnsupportedOperationException'],
       why: `el disparador de ${operations.join(', ')}: build lo deja lanzando cuando el mensaje lleva argumentos`
+    });
+  }
+  // Y el REGISTRO en el cronómetro: el <Operación>ScheduleTimer es un recurrente de keel_timer, y sin él
+  // el barrido no se dispara nunca —sin error, sin log—. Lo escribe build; el check existe porque un
+  // agente que «limpia» la clase, o le cambia el kind, deja la reconciliación sin reloj y la suite sin
+  // escenario que lo vea (la precondición la fabrica el arnés, pero quien la recoge es este tick).
+  for (const operation of allOperations(model)) {
+    if (!(operation.reconciles ?? []).length || !scheduledByTimer(model, operation.name)) continue;
+    const timerClass = scheduleTimerClass(operation.name);
+    checks.push({
+      group: 'reconciliation',
+      subject: `${timerClass} · registro en el cronómetro`,
+      class: timerClass,
+      require: ['implements RecurringTimerHandler', `\\.${operation.name}\\s*\\(`, 'TimerKinds\\.SCHEDULE_'],
+      why:
+        `el barrido ${operation.name} lo dispara el cronómetro: ${timerClass} es su recurrente en keel_timer (kind ` +
+        `schedule:${operation.name}) y llama al scheduler en cada tick. Sin él, o con otro kind, el barrido no se ` +
+        `dispara nunca y nada lo dice`
     });
   }
   return checks;

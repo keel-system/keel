@@ -187,11 +187,14 @@ hueco: es la función. Un fallback que declaraba `Throwable` registraba cualquie
 como «el proveedor no está disponible», y con `onFailure: fail` lo convertía en el error de
 indisponibilidad del diseño — el síntoma acusaba al tercero y la causa estaba en casa.
 
-## El barrido corre en todas las réplicas
+## El barrido puede correr en varias réplicas a la vez
 
-`@Scheduled` no es «una vez en el clúster», es **«una vez por instancia»**. Con N réplicas, el barrido de
-una reconciliación consulta «los atascados», las N obtienen **las mismas filas** y cada una actúa sobre
-ellas. Lo mismo vale para cualquier operación con `schedule` que *haga* algo con lo que encuentra; las
+Sobre PostgreSQL, MySQL y MongoDB el barrido lo dispara el cronómetro (`<Operación>ScheduleTimer`), que
+ejecuta cada tick en UNA réplica: pero **al menos una vez**, porque si la réplica muere a mitad otra repite el
+tick al vencer el arriendo, y una pasada puede coincidir con un despacho por otra puerta. Sobre los demás
+motores sigue siendo `@Scheduled`, que no es «una vez en el clúster» sino **«una vez por instancia»**. En
+los dos casos, sin reclamo, dos pasadas a la vez consultan «los atascados», obtienen **las mismas filas** y
+cada una actúa sobre ellas. Lo mismo vale para cualquier operación con `schedule` que *haga* algo con lo que encuentra; las
 purgas que genera `build` quedan fuera porque borrar lo caducado es idempotente por forma.
 
 Lo que engaña es que parece que ya hay protección, y solo la hay a medias:

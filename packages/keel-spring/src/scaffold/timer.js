@@ -18,7 +18,11 @@
 // purgas (`usesTimer`, keel-core/gen/timer-plan.js), y lo de los plazos solo con plazos. Un motor sin sentencias del
 // cronómetro (MariaDB, SQL Server, Oracle) no lo tiene, y sus purgas conservan su `@Scheduled` (purge.js).
 //
-// El relay y los `schedule` siguen con su `@Scheduled`: migran en los incrementos 8 y 9. El modo POR RÉPLICA no tiene
+// Desde el incremento 8, el `schedule` de cada operación también (`<Operación>ScheduleTimer`), con DRENAJE: el tick lo
+// ejecuta una réplica y repite la pasada mientras su lote salga lleno (`SweepPass`, que avisan los reclamos generados).
+// El despacho sigue en el `<Servicio>Scheduler`, ya sin `@Scheduled`. Un recurrente que falla no se aparca: se rearma.
+//
+// El relay sigue con su `@Scheduled`: migra en el incremento 9. El modo POR RÉPLICA no tiene
 // todavía quien lo use (su único usuario es el relay, inc. 9), así que no se emite: un modo sin sujeto sería código que
 // ninguna red ejecuta.
 
@@ -37,7 +41,7 @@ import {
   TIMER_SWITCH,
   timerStatements
 } from '@keel-system/keel-core/gen/timer-store';
-import { TIMER_DATABASES, timerPurges, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { TIMER_DATABASES, claimDrains, timerPurges, timerSchedules, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 
 export { usesDeadlines, usesTimer, TIMER_DATABASES };
 
@@ -105,6 +109,40 @@ function purgeKindConstant(table) {
 export function purgeTimerClass(table) {
   return `${pascalCase(table)}PurgeTimer`;
 }
+/** `DISPATCH_JOBS`: la constante del `kind` del `schedule` de una operación. */
+function scheduleKindConstant(operationName) {
+  return `SCHEDULE_${operationName.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()}`;
+}
+/** `DispatchJobsScheduleTimer`: el recurrente que dispara el `schedule` de una operación (incremento 8). */
+export function scheduleTimerClass(operationName) {
+  return `${cap(operationName)}ScheduleTimer`;
+}
+/** El `<Servicio>Scheduler` que despacha una operación con `schedule`: el de su servicio (services.js). */
+export function schedulerClassOf(model, operationName) {
+  const service = (model.services ?? []).find((candidate) => (candidate.operations ?? []).some((operation) => operation.name === operationName));
+  return service.className.replace(/Service$/, 'Scheduler');
+}
+
+/** La señal de lote lleno del drenaje (incremento 8): `SweepPass`, en application/support porque la llaman los handlers. */
+export const SWEEP_PASS_PKG = 'application.support';
+export function usesSweepPass(model) {
+  return timerSchedules(model).length > 0;
+}
+export function sweepPassImport(model) {
+  return `${subPackage(model, SWEEP_PASS_PKG)}.SweepPass`;
+}
+/**
+ * La línea con la que un reclamo GENERADO avisa al tick de que su lote salió lleno (o nada, si su operación no corre
+ * sobre el cronómetro). `size` y `batch` son expresiones Java.
+ */
+export function sweepPassSignal(model, claim, imports, size, batch) {
+  if (!claimDrains(model, claim)) return '';
+  imports.add(sweepPassImport(model));
+  return `        // Lote lleno: puede que queden candidatos, y el tick del cronómetro repite la pasada (drenaje).
+        SweepPass.claimed(${size}, ${batch});
+`;
+}
+
 const timerImport = (model, name) => `${subPackage(model, TIMER_PKG)}.${name}`;
 const isDocument = (model) => model.persistenceKind === 'document';
 
@@ -231,8 +269,10 @@ export function generate(model) {
     timerPoller(model),
     timerPurge(model),
     ...timerPurges(model).map((purge) => purgeTimer(model, purge)),
+    ...timerSchedules(model).map((schedule) => scheduleTimer(model, schedule)),
     ...modelDeadlines(model).map((entry) => deadlineHandler(model, entry))
   ];
+  if (usesSweepPass(model)) files.push(sweepPass(model));
   if (!document) files.push(timerJpa(model));
   return files;
 }
@@ -328,6 +368,10 @@ function timerKinds(model) {
     ...timerPurges(model).map(
       (purge) => `    /** La purga de {@code ${purge.table}}: un recurrente en modo clúster. */
     public static final String ${purgeKindConstant(purge.table)} = "${purge.kind}";`
+    ),
+    ...timerSchedules(model).map(
+      (schedule) => `    /** El \`schedule\` de ${schedule.operation}: un recurrente en modo clúster, con drenaje. */
+    public static final String ${scheduleKindConstant(schedule.operation)} = "${schedule.kind}";`
     )
   ];
   return `/**
@@ -400,7 +444,7 @@ function recurringTimerHandler() {
  *
  * <p>El tick corre FUERA de la transacción del sondeador, a diferencia de un plazo: un recurrente (una purga por lotes)
  * gestiona sus propias transacciones, y envolverlo en una sola volvería a ser el DELETE único que la purga por lotes
- * sustituye. Si lanza, cuenta como un fallo del temporizador, igual que un plazo.
+ * sustituye. Si lanza, el sondeador lo registra y lo rearma para su siguiente tick: un recurrente no se aparca nunca.
  */
 public interface RecurringTimerHandler {
 
@@ -1072,18 +1116,18 @@ public class TimerPoller implements SmartLifecycle {
      * Un tick de un recurrente en modo clúster: lo ejecuta esta réplica porque ganó la fila, FUERA de toda transacción
      * (el mecanismo gestiona las suyas), y lo rearma con el siguiente tick desde la hora de la base de DESPUÉS (R2). Si
      * otra réplica le quitó la fila (el tick duró más que el arriendo), el rearme no casa con la valla y no pisa nada.
+     *
+     * <p>Un tick que falla NO se aparca, a diferencia de un plazo: se rearma igual para su siguiente tick, como hacía su
+     * {@code @Scheduled}. Aparcarlo tras {@code max-attempts} fallos —una base caída unos minutos— dejaría el barrido o
+     * la purga sin reloj para siempre, y nada lo volvería a armar: asegurar al arrancar no toca una fila con el mismo spec.
      */
     private void tick(RecurringTimerHandler recurring, ClaimedTimer timer, UUID token) {
         try {
             recurring.tick();
-            store.reschedule(timer.id(), token, nextTick(recurring.spec(), store.dbNow()));
         } catch (RuntimeException failure) {
-            log.warn("El recurrente {} falló en su intento {}: {}", timer.kind(), timer.attempts() + 1, failure.toString());
-            store.fail(timer.id(), token, maxAttempts, retryDelayMs);
-            if (timer.attempts() + 1 >= maxAttempts) {
-                log.error("El recurrente {} agotó sus {} intentos y queda APARCADO", timer.kind(), maxAttempts);
-            }
+            log.warn("El tick del recurrente {} falló; se rearma para el siguiente: {}", timer.kind(), failure.toString());
         }
+        store.reschedule(timer.id(), token, nextTick(recurring.spec(), store.dbNow()));
     }
 
     /** Un temporizador armado en ESTA réplica: si vence antes de lo que iba a dormir, despierta (tras el commit). */
@@ -1295,6 +1339,136 @@ public class ${className} implements RecurringTimerHandler {
   };
 }
 
+/**
+ * El recurrente que dispara el `schedule` de una operación (incremento 8): antes era un `@Scheduled` en el
+ * `<Servicio>Scheduler` que corría en TODAS las réplicas; ahora el tick lo ejecuta UNA, la que gana su fila, y DRENA:
+ * repite la pasada mientras su lote salga lleno (SweepPass), hasta el siguiente tick o `timer.drain-budget-ms`. El
+ * despacho sigue en el `<Servicio>Scheduler` (su transacción o su falta de ella, su correlación, el TODO de los
+ * argumentos): aquí solo se decide cuándo y cuántas veces.
+ */
+function scheduleTimer(model, schedule) {
+  const className = scheduleTimerClass(schedule.operation);
+  const scheduler = schedulerClassOf(model, schedule.operation);
+  const field = decap(scheduler);
+  const P = TIMER_PARAMETERS;
+  const body = `/**
+ * El \`schedule\` de ${schedule.operation} (su cron, {@link #spec()}, en UTC), como recurrente del cronómetro en modo clúster:
+ * cada tick lo ejecuta UNA réplica, la que gana su fila en {@code ${KEEL_TIMER.table}}.
+ *
+ * <p>Por eso el tick DRENA: con una sola réplica trabajando, repite la pasada mientras el lote salga lleno —lo avisa el
+ * reclamo con {@link SweepPass#claimed}— y para cuando sale a medias, cuando llega su siguiente tick o cuando agota
+ * {@code ${P.drainBudgetMs.key}}, que es menor que el arriendo: un tick más largo que su arriendo lo repetiría otra
+ * réplica a la vez. Lo que quede pasa al siguiente tick. Sin aviso (un reclamo que no lo da), una pasada por tick.
+ *
+ * <p>El tick sigue siendo AL MENOS UNA VEZ: si la réplica muere a mitad, otra lo repite al vencer el arriendo. Por eso el
+ * barrido sigue reclamando sus filas, aunque ya no corra en todas las réplicas a la vez.
+ */
+@Component
+public class ${className} implements RecurringTimerHandler {
+
+    private final ${scheduler} ${field};
+
+    ${value(P.drainBudgetMs)}
+    private long drainBudgetMs;
+
+    public ${className}(${scheduler} ${field}) {
+        this.${field} = ${field};
+    }
+
+    @Override
+    public String kind() {
+        return TimerKinds.${scheduleKindConstant(schedule.operation)};
+    }
+
+    /** El cron del diseño con el segundo repartido (scheduleCron de keel-core): no es configurable. */
+    @Override
+    public String spec() {
+        return "${schedule.cron}";
+    }
+
+    @Override
+    public void tick() {
+        Instant start = Instant.now();
+        long budget = Math.min(Duration.between(start, TimerPoller.nextTick(spec(), start)).toMillis(), drainBudgetMs);
+        for (;;) {
+            SweepPass.begin();
+            boolean full;
+            try {
+                ${field}.${schedule.operation}();
+            } finally {
+                full = SweepPass.end();
+            }
+            if (!full || Duration.between(start, Instant.now()).toMillis() >= budget) {
+                return;
+            }
+        }
+    }
+}`;
+  return {
+    path: javaPath(model, TIMER_PKG, className),
+    content: javaFile(
+      subPackage(model, TIMER_PKG),
+      [
+        `${subPackage(model, 'infrastructure.scheduling')}.${scheduler}`,
+        sweepPassImport(model),
+        'java.time.Duration',
+        'java.time.Instant',
+        'org.springframework.beans.factory.annotation.Value',
+        'org.springframework.stereotype.Component'
+      ],
+      body
+    )
+  };
+}
+
+/**
+ * `SweepPass`: la señal con la que una pasada de un barrido le dice al tick que su lote salió LLENO. Va en
+ * application/support porque también la llama el handler del agente cuando reclama él (el barrido de pagos, o uno sin
+ * reclamo generado), y la aplicación no importa infraestructura. Es un ThreadLocal: el despacho del tick es síncrono, en
+ * el hilo del sondeador.
+ */
+function sweepPass(model) {
+  const body = `/**
+ * La señal del DRENAJE de un barrido (DSL 2.26, incremento 8): una pasada que reclamó su lote lleno puede dejar
+ * candidatos, y el tick del cronómetro la repite.
+ *
+ * <p>Un tick en modo clúster lo ejecuta UNA réplica, así que, si cada tick hiciera una sola pasada, el barrido rendiría lo
+ * de una réplica y no lo de todas. Quien reclama sabe si el lote salió lleno: lo avisan los reclamos que genera build, y
+ * TÚ, si el handler reclama su lote a mano, con {@code SweepPass.claimed(reclamadas, lote)}. Sin aviso, el tick hace una
+ * pasada, que es correcto pero más lento con atrasos grandes.
+ *
+ * <p>Fuera de un tick (una prueba, un despacho por otra puerta) no hace nada.
+ */
+public final class SweepPass {
+
+    private static final ThreadLocal<boolean[]> PASS = new ThreadLocal<>();
+
+    private SweepPass() {
+    }
+
+    /** Lo llama quien reclama: {@code claimed} de una cota de {@code batchSize}. Lleno = puede que queden. */
+    public static void claimed(int claimed, int batchSize) {
+        boolean[] pass = PASS.get();
+        if (pass != null && batchSize > 0 && claimed >= batchSize) {
+            pass[0] = true;
+        }
+    }
+
+    /** El tick abre una pasada. */
+    public static void begin() {
+        PASS.set(new boolean[1]);
+    }
+
+    /** El tick la cierra: ¿algún reclamo de la pasada salió lleno? */
+    public static boolean end() {
+        boolean[] pass = PASS.get();
+        PASS.remove();
+        return pass != null && pass[0];
+    }
+}`;
+  return { path: javaPath(model, SWEEP_PASS_PKG, 'SweepPass'), content: javaFile(subPackage(model, SWEEP_PASS_PKG), [], body) };
+}
+
 function findOperation(model, name) {
   return (model.services ?? []).flatMap((service) => service.operations ?? []).find((operation) => operation.name === name);
 }
@@ -1382,6 +1556,7 @@ export const TIMER_CONFIG_PARAMETERS = Object.freeze([
   TIMER_PARAMETERS.leaseMs,
   TIMER_PARAMETERS.maxAttempts,
   TIMER_PARAMETERS.retryDelayMs,
+  TIMER_PARAMETERS.drainBudgetMs,
   TIMER_PARAMETERS.retentionDays,
   TIMER_PARAMETERS.purgeCron
 ]);
