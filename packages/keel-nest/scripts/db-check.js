@@ -33,6 +33,9 @@
 import fs from 'node:fs';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
 import { conditionalWriteBlock } from './lib/conditional-probes.js';
+import { TIMER_ADAPTER_ARGS, TIMER_SABOTAGES, isTimerSabotage, timerBlock, timerPreamble, timerProbePatch, timerSabotage, timerSabotageVerdict } from './lib/timer-probes.js';
+import { modelDeadlines, usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
+import { KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
 import os from 'node:os';
 import path from 'node:path';
 import { randomInt, randomUUID } from 'node:crypto';
@@ -101,7 +104,13 @@ const SABOTAGES = {
   // La autoría declarada: el '' del alta cuenta como valor (el `??=` de la corrida catalog-dotnet).
   'created-by-empty': ['-repository-impl.ts', 'createdBy ||= actor;', 'createdBy ??= actor;'],
   // El actor sin petición autenticada pierde la correlación: queda `system` a secas (sujeto product-catalog-authorship).
-  'actor-correlation': ['audit-actor.ts', 'correlationId != null ? `${SYSTEM_ACTOR}:${correlationId}` : SYSTEM_ACTOR', 'SYSTEM_ACTOR']
+  'actor-correlation': ['audit-actor.ts', 'correlationId != null ? `${SYSTEM_ACTOR}:${correlationId}` : SYSTEM_ACTOR', 'SYSTEM_ACTOR'],
+  // El cronómetro y los plazos (DSL 2.26): con --subject=verification-codes, cada uno cae en exactamente sus casos DL.
+  ...Object.fromEntries(
+    Object.keys(TIMER_SABOTAGES)
+      .filter((id) => timerSabotage(id, 'relational'))
+      .map((id) => [id, timerSabotage(id, 'relational')])
+  )
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -124,7 +133,7 @@ const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ??
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
 // object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
 // fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
@@ -218,6 +227,15 @@ function expectedSchema(model, engine) {
     for (const fkColumn of foreignKeyIndexColumns(model, entity, members)) t.indexes.add(foreignKeyIndexName(entity.tableName, fkColumn));
   }
   // La marca del reclamo de la reconciliación (incremento 11c): la tabla de keel-core.
+  // La tabla del cronómetro (DSL 2.26): la de keel-core, con su unicidad y su índice de vencimiento.
+  if (usesDeadlines(model)) {
+    const t = table(KEEL_TIMER.table);
+    for (const spec of KEEL_TIMER.columns) {
+      t.columns.set(spec.name, { nullable: spec.nullable, length: spec.base === 'string' ? spec.length : null, scale: null, collation: null });
+    }
+    for (const unique of KEEL_TIMER.uniques) t.uniques.add(unique.name);
+    for (const index of KEEL_TIMER.indexes) t.indexes.add(index.name);
+  }
   if (reconciliationClaims(model).length > 0) {
     const t = table(RECONCILIATION_CLAIM.table);
     for (const spec of RECONCILIATION_CLAIM.columns) {
@@ -240,6 +258,8 @@ function probeScript(model, engine, db, expected) {
   const messagingCode = messagingBlock(model, engine, ctx);
   const claimCode = claimBlock(model, engine, ctx);
   const reconciliationCode = reconciliationBlock(model, ctx);
+  // El cronómetro (DSL 2.26): antes de listar los imports, que el bloque también añade.
+  const timerCode = timerBlock(model, ctx, { adapterArgs: adapterCtorArgs(model, modelDeadlines(model)[0]?.entity), replicaTx: 'new TransactionContext(dataSource, settings)' });
   const imports = [...ctx.imports].map((entry) => {
     const [symbol, file] = entry.split('|');
     return `import { ${symbol} } from '${distOf(file)}';`;
@@ -286,6 +306,7 @@ const tx = new TransactionContext(dataSource, settings);
 // Los adaptadores de una raíz que emite eventos los entregan al puente: aquí se miden la persistencia y
 // sus tablas, así que reciben un sumidero; el puente de verdad lo mide el bloque de mensajería.
 const eventSink = { publish: async () => {} };
+${timerPreamble(model)}
 
 // ── Esquema: el catálogo del motor contra lo que promete el esquema neutral.
 const expected = ${JSON.stringify([...expected.entries()].map(([name, t]) => [name, { columns: [...t.columns.entries()], uniques: [...t.uniques], indexes: [...t.indexes], fks: [...t.fks] }]))};
@@ -335,6 +356,7 @@ ${idempotencyBlock(model, engine)}
 ${messagingCode}
 ${claimCode}
 ${reconciliationCode}
+${timerCode}
 ${purgeBlock(model)}
 
 await dataSource.destroy();
@@ -351,6 +373,16 @@ async function rawRow(table, id, column = 'id', uuid = true) {
 ${PROBE_HELPERS}
 `
   };
+}
+
+/**
+ * Los argumentos del constructor del adaptador de una raíz en la sonda: la transacción, el sumidero de eventos y, si la
+ * raíz tiene plazos (DSL 2.26), el almacén del cronómetro y los plazos en su lugar (repositories.js los pone los últimos;
+ * sin mensajería no hay puente, así que el sumidero no va).
+ */
+function adapterCtorArgs(model, root) {
+  if (!root || !modelDeadlines(model).some(({ entity }) => entity.name === root.name)) return 'tx, eventSink';
+  return ['tx', ...(emitsDomainEvents(model, root) && model.layersPresent?.messaging ? ['eventSink'] : []), ...TIMER_ADAPTER_ARGS].join(', ');
 }
 
 /** Lo que se comprueba de una raíz: ida y vuelta, la fila en crudo, versión, unicidad, página y borrado. */
@@ -380,7 +412,7 @@ function rootBlock(model, engine, root, index, ctx) {
   return `
 // ═══ ${name} ═══
 {
-  const repository = new ${adapterClass(root)}(tx, eventSink);
+  const repository = new ${adapterClass(root)}(${adapterCtorArgs(model, root)});
   const original = ${first};
   await repository.save(original);
   const loaded = await repository.findById(original.${idName});
@@ -416,7 +448,7 @@ ${foldedBlock(model, root, index, ctx, finder)}
 ${filterFoldBlock(model, root, index, ctx)}
 ${finderBlock(model, root, index, ctx, { sampleEntity })}
 ${rankBlock(model, root, index, ctx, { paginated, sampleEntity })}
-${inverseBlock(model, root, index, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(tx, eventSink)` })}
+${inverseBlock(model, root, index, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner)})` })}
 ${idBatchReason(model, root) ? `  {
     // findAllById: UNA consulta con In([...]) — en MySQL el id es binary(16) con transformador, y que TypeORM lo
     // aplique a cada valor del In es lo que aquí se mide (si no, la consulta no casaría nada sin dar error).
@@ -512,7 +544,7 @@ function concurrencyBlock(model, engine, root, ctx) {
   return `
 // ═══ Concurrencia: interbloqueo y tope de transacción ═══
 {
-  const repository = new ${adapterClass(root)}(tx, eventSink);
+  const repository = new ${adapterClass(root)}(${adapterCtorArgs(model, root)});
   const a = ${sampleEntity(model, root, ctx, 'xa')};
   const b = ${sampleEntity(model, root, ctx, 'xb')};
   await repository.save(a);
@@ -1473,7 +1505,8 @@ for (const engine of ENGINES) {
       for (const file of files) {
         const out = path.join(dir, file.path);
         fs.mkdirSync(path.dirname(out), { recursive: true });
-        fs.writeFileSync(out, sabotaged(file));
+        // Lo que escribiría el agente para el plazo (el método semántico de la sonda), y después el sabotaje.
+        fs.writeFileSync(out, sabotaged({ ...file, content: typeof file.content === 'string' ? timerProbePatch(model, file) : file.content }));
       }
       fs.symlinkSync(path.join(projectDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
       const compiled = run(process.execPath, [tsc, '-p', 'tsconfig.build.json'], { cwd: dir });
@@ -1489,6 +1522,12 @@ for (const engine of ENGINES) {
         continue;
       }
       const checks = JSON.parse(marker);
+      // Un sabotaje del cronómetro se juzga al revés: verde si caen EXACTAMENTE sus casos DL (y ningún otro).
+      if (isTimerSabotage(sabotage) && usesDeadlines(model)) {
+        const verdict = timerSabotageVerdict(checks, sabotage, 'relational');
+        step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
       const failed = checks.filter((check) => !check.ok);
       for (const check of failed) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
       step(

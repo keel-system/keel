@@ -41,6 +41,8 @@ import { finderBlock } from './lib/finder-probes.js';
 import { rankBlock, inverseBlock } from './lib/rank-inverse-probes.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 import { adapterArgs, storeBlocks, storePreamble } from './lib/document-store-probes.js';
+import { TIMER_SABOTAGES, isTimerSabotage, timerBlock, timerPreamble, timerProbePatch, timerSabotage, timerSabotageVerdict } from './lib/timer-probes.js';
+import { modelDeadlines, usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { AMQPLIB_VERSION, AWS_SDK_VERSION, FASTIFY_MULTIPART_VERSION, JOSE_VERSION, MONGODB_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION } from '../src/lib/assets.js';
 import { build } from '../src/commands/build.js';
@@ -66,7 +68,13 @@ const SABOTAGES = {
   // El orden por un enum (shop-api-mongo): la sombra de rango mapeada a la clave del nombre, que es ordenar alfabéticamente.
   'rank-sort': ['-repository-impl.ts', /\['(\w+)Rank', '(\w+)_rank'\]/g, "['$1Rank', '$2']"],
   // La lectura por la FK inversa (shop-api-mongo) se deja una de las filas de su dueño.
-  'inverse-finder': ['-repository-impl.ts', /(const found = await this\.collection\.find\(\{ \w+_id: \w+\(\w+Id\) \}, \{ session: this\.session \}\)\.toArray\(\);\n\s+return found)\.map/g, '$1.slice(1).map']
+  'inverse-finder': ['-repository-impl.ts', /(const found = await this\.collection\.find\(\{ \w+_id: \w+\(\w+Id\) \}, \{ session: this\.session \}\)\.toArray\(\);\n\s+return found)\.map/g, '$1.slice(1).map'],
+  // El cronómetro y los plazos (DSL 2.26): con --subject=verification-codes-mongo, cada uno cae en exactamente sus casos DL.
+  ...Object.fromEntries(
+    Object.keys(TIMER_SABOTAGES)
+      .filter((id) => timerSabotage(id, 'document'))
+      .map((id) => [id, timerSabotage(id, 'document')])
+  )
 };
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -90,6 +98,8 @@ function sabotaged(file) {
 const SUBJECTS = [
   { name: 'inspection-reports', withoutLayers: [] },
   { name: 'job-dispatch-mongo', withoutLayers: [] },
+  // El cronómetro y los plazos (DSL 2.26): DL-1 a DL-10 y R1 sobre documentos.
+  { name: 'verification-codes-mongo', withoutLayers: [] },
   // Con su capa mail (incremento 12e): la guarda del envío sobre el documento.
   { name: 'notification-mailer-mongo', withoutLayers: [] },
   // El reclamo de la reconciliación sobre documentos: la única fixture documental que lo declara.
@@ -175,6 +185,9 @@ function probeScript(model, db) {
   const race = raceBlock(model, raceRoot, ctx);
   // Los almacenes del generador (incremento 12c): antes de listar los imports, que sus muestras añaden.
   const stores = storeBlocks(model, ctx);
+  // El cronómetro (DSL 2.26), también antes de los imports.
+  const deadlineEntity = modelDeadlines(model)[0]?.entity;
+  const timerCode = deadlineEntity ? timerBlock(model, ctx, { adapterArgs: adapterArgs(model, deadlineEntity), replicaTx: 'new TransactionContext(client, settings)' }) : '';
   const shapes = expectedShapes(model);
   const enums = new Set([
     ...Object.values(shapes.entities).flat(),
@@ -219,6 +232,7 @@ await database.dropDatabase();
 await ensureDocumentIndexes(database);
 const tx = new TransactionContext(client, settings);
 ${storePreamble(model)}
+${timerPreamble(model)}
 
 // ── Índices: los vivos contra los del contrato.
 try {
@@ -246,6 +260,7 @@ for (const { collection, specs } of INDEXES) {
 ${blocks.join('\n')}
 ${race}
 ${stores}
+${timerCode}
 
 await client.close();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -525,7 +540,7 @@ try {
     for (const file of files) {
       const out = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(out), { recursive: true });
-      fs.writeFileSync(out, sabotaged(file));
+      fs.writeFileSync(out, sabotaged({ ...file, content: typeof file.content === 'string' ? timerProbePatch(model, file) : file.content }));
     }
     fs.symlinkSync(path.join(projectDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
     const compiled = run(process.execPath, [tsc, '-p', 'tsconfig.build.json'], { cwd: dir });
@@ -539,6 +554,12 @@ try {
       continue;
     }
     const checks = JSON.parse(marker);
+    // Un sabotaje del cronómetro se juzga al revés: verde si caen EXACTAMENTE sus casos DL (y ningún otro).
+    if (isTimerSabotage(sabotage) && usesDeadlines(model)) {
+      const verdict = timerSabotageVerdict(checks, sabotage, 'document');
+      step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
     const failed = checks.filter((check) => !check.ok);
     for (const check of failed) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
     step(

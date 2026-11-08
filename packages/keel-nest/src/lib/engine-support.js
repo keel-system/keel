@@ -65,14 +65,14 @@ export const MECHANISMS = {
         net: 'db-check',
         engines: ['postgresql', 'mysql'],
         falsified: true,
-        why: 'verification-codes (db-check --subject=verification-codes): DL-1 a DL-3 contra el método de transición del dominio emitido (la hora y los plazos por argumento) y DL-4 contra el adaptador TypeORM en una transacción que confirma y otra que revierte. Falsado con dl-boundary y dl-no-guard (caen en DL-2) y dl-outside-tx (el armado en una transacción NUEVA: cae DL-4). dl-wrong-field no tiene sujeto en esta fixture (una sola marca de tiempo). SIN EJECUTAR todavía en esta máquina: lo escribió el inc. 4 y lo pasa el orquestador'
+        why: 'verification-codes (db-check --subject=verification-codes): DL-1 a DL-3 contra el método de transición del dominio emitido (la hora y los plazos por argumento) y DL-4 contra el adaptador TypeORM en una transacción que confirma y otra que revierte. Falsado con dl-boundary y dl-no-guard (caen en DL-2) y dl-outside-tx (el armado en una transacción NUEVA: cae DL-4). dl-wrong-field no tiene sujeto en esta fixture (una sola marca de tiempo). Medido el 2026-11-08: 62/62 en PostgreSQL y en MySQL, y cada sabotaje en exactamente sus casos'
       },
       document: {
         state: 'verificado',
         net: 'doc-check',
         engines: ['mongodb'],
         falsified: true,
-        why: 'verification-codes-mongo (doc-check --subject=verification-codes-mongo): los mismos casos, con el estado previo leído con la sesión de la transacción del caso de uso y el armado en ella, sobre un replica set real. Falsado con dl-boundary, dl-no-guard y dl-outside-tx (aquí sí tiene sujeto, a diferencia de keel-spring: el armado sin la sesión escribe fuera de la transacción y DL-4 lo ve). SIN EJECUTAR todavía: lo escribió el inc. 4 y lo pasa el orquestador'
+        why: 'verification-codes-mongo (doc-check --subject=verification-codes-mongo): los mismos casos, con el estado previo leído con la sesión de la transacción del caso de uso y el armado en ella, sobre un replica set real. Falsado con dl-boundary, dl-no-guard y dl-outside-tx (aquí sí tiene sujeto, a diferencia de keel-spring: el armado sin la sesión escribe fuera de la transacción y DL-4 lo ve). Medido el 2026-11-08 (db-check 62/62 en PostgreSQL y MySQL, doc-check 40/40), con cada sabotaje en exactamente sus casos'
       }
     }
   },
@@ -101,14 +101,14 @@ export const MECHANISMS = {
         net: 'db-check',
         engines: ['postgresql', 'mysql'],
         falsified: true,
-        why: 'verification-codes: las sentencias de keel-core tal cual (test/deadlines.test.js comprueba que cada una está en sql-timer-store.ts), ejecutadas por el QueryRunner de la transacción de TypeORM; DL-5 a DL-10 y el recurrente de la purga (R1) contra el motor. Falsado con dl-no-lease (cae en DL-6 y DL-7) y dl-no-revalidate (DL-8 y DL-9). dl-app-clock no tiene sujeto: la instancia y la base comparten reloj en la máquina de la red. SIN EJECUTAR todavía: lo escribió el inc. 4 y lo pasa el orquestador'
+        why: 'verification-codes: las sentencias de keel-core tal cual (test/deadlines.test.js comprueba que cada una está en sql-timer-store.ts), ejecutadas por el QueryRunner de la transacción de TypeORM; DL-5 a DL-10 y el recurrente de la purga (R1) contra el motor. Falsado con dl-no-lease (cae en DL-6 y DL-7) y dl-no-revalidate (DL-8 y DL-9). dl-app-clock no tiene sujeto: la instancia y la base comparten reloj en la máquina de la red. Medido el 2026-11-08 (db-check 62/62 en PostgreSQL y MySQL, doc-check 40/40), con cada sabotaje en exactamente sus casos'
       },
       document: {
         state: 'verificado',
         net: 'doc-check',
         engines: ['mongodb'],
         falsified: true,
-        why: 'verification-codes-mongo: findOneAndUpdate de uno en uno con $$NOW, el _id aplanado y entity_id/claim_token como texto, la hora de la base de un $documents sin la sesión. Falsado con dl-no-lease (cae en DL-5, DL-6 y DL-7, como en keel-spring: sin arriendo el bucle vuelve a llevarse en el mismo lote lo que acaba de reclamar) y dl-no-revalidate (DL-8 y DL-9). Sin el índice de due_at: keel-core no lo pide en storeDocumentIndexes y keel-spring tampoco lo crea (petición abierta a keel-core). SIN EJECUTAR todavía: lo escribió el inc. 4 y lo pasa el orquestador'
+        why: 'verification-codes-mongo: findOneAndUpdate de uno en uno con $$NOW, el _id aplanado y entity_id/claim_token como texto, la hora de la base de un $documents sin la sesión. Falsado con dl-no-lease (cae en DL-5, DL-6 y DL-7, como en keel-spring: sin arriendo el bucle vuelve a llevarse en el mismo lote lo que acaba de reclamar) y dl-no-revalidate (DL-8 y DL-9). El índice de due_at lo pide ahora storeDocumentIndexes de keel-core (lo crean los cuatro generadores al arrancar). Medido el 2026-11-08 (db-check 62/62 en PostgreSQL y MySQL, doc-check 40/40), con cada sabotaje en exactamente sus casos'
       }
     }
   },

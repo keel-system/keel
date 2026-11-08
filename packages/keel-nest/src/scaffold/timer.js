@@ -493,7 +493,7 @@ function readUuid(value: unknown): string {
 }
 
 /** \`?\`: el estilo de mysql2. */
-const marker = (): string => '?';`
+const marker = (_position: number): string => '?';`
     : `// PostgreSQL: uuid nativo y timestamp with time zone; el driver convierte un Date en los dos sentidos.
 function uuid(value: string): string {
   return value;

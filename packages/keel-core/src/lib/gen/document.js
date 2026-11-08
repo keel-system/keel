@@ -18,6 +18,8 @@ import { persistedMembers, uniqueFields, indexName, storedWhenValue, partialUniq
 import { usesOutbox, usesMessageDeduplication, storeColumns } from './messaging-stores.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { reconciliationClaims, RECONCILIATION_CLAIM } from './reconciliation-stores.js';
+import { usesDeadlines } from './deadlines.js';
+import { KEEL_TIMER_DOCUMENT } from './timer-store.js';
 
 // ─── La representación física ────────────────────────────────────────────────
 
@@ -351,6 +353,15 @@ export function storeDocumentIndexes(model) {
   if (reconciliationClaims(model).length > 0) {
     // De la purga, no del reclamo: el reclamo va por `_id`.
     entries.push({ store: 'reconciliationClaim', collection: 'reconciliation_claim', specs: [{ name: 'ix_reconciliation_claim_claimed_at', unique: false, paths: ['claimed_at'] }] });
+  }
+  if (usesDeadlines(model)) {
+    // El cronómetro (DSL 2.26): el reclamo y el siguiente vencimiento van por due_at. Sin el índice, cada pasada del
+    // sondeador recorre la colección entera. Los nombres y las claves son los de KEEL_TIMER_DOCUMENT.
+    entries.push({
+      store: 'keelTimer',
+      collection: KEEL_TIMER_DOCUMENT.collection,
+      specs: KEEL_TIMER_DOCUMENT.indexes.map((index) => ({ name: index.name, unique: false, paths: Object.keys(index.keys) }))
+    });
   }
   return entries;
 }

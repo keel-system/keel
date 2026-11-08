@@ -32,7 +32,17 @@ for (const name of FIXTURES) {
       const Handler = (await tree.load(handlerFile(operation)))[operation.handlerClass];
       // Las dependencias se construyen desde lo que el handler DECLARA: si `inject` no casara con su
       // constructor, el módulo de Nest le pasaría otra cosa.
-      const deps = await Promise.all(Handler.inject.map(async (dep) => new dep()));
+      // Un valor de dominio que valida al construirse (los plazos vigentes, DSL 2.26) no se construye sin argumentos:
+      // aquí basta su prototipo, porque el handler solo llega a su TODO.
+      const deps = await Promise.all(
+        Handler.inject.map(async (dep) => {
+          try {
+            return new dep();
+          } catch {
+            return Object.create(dep.prototype);
+          }
+        })
+      );
       instances.push(new Handler(...deps));
       messages.push([operation, (await tree.load(messageFile(operation)))[operation.messageClass]]);
     }

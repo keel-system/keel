@@ -10,7 +10,8 @@ al que **migran todos los relojes que hoy emiten los generadores** (§ La migrac
 cambia el DSL, pero sí el servidor generado de cualquier diseño con persistencia.
 
 **Estado: aprobado (2026-11-07).** El usuario aceptó las ocho propuestas de § Decisiones tomadas. Fases B, C y C2
-hechas el mismo día, y la D (incremento 3, keel-spring) el 2026-11-08; siguiente, la fase E (incrementos 4, 5 y 6). **Lo
+hechas el mismo día, la D (incremento 3, keel-spring) el 2026-11-08 y, de la fase E, el incremento 4 (keel-nest) ese
+mismo día; siguiente, el 5 (keel-dotnet) y el 6 (keel-go). **Lo
 que queda se termina sin subagentes, todo desde `main` y en secuencia** (§ Cómo se ejecuta).
 
 ## Por qué
@@ -390,6 +391,25 @@ Lo que no entra, con su motivo:
 - `ageForDeadline` está emitido y compilado en las tres ramas, pero no se ha ejecutado: lo ejecutarán los escenarios de
   la fixture del inc. 12.
 - `claim-check` no cambia: el cronómetro tiene su propia red.
+
+**Lo que dejó el incremento 4.** keel-nest genera el cronómetro y los plazos en `src/scaffold/timer.js`, con la misma
+forma que keel-spring: plazos poblados desde los parámetros, el rechazo tardío en el dominio, el reloj inyectable, el
+armado en el `save` del adaptador (relacional y documental), el almacén con las sentencias de keel-core tal cual, el
+sondeador con su interruptor, un handler por plazo, la purga de `keel_timer`, el gate `infra/check-deadlines.sh` y
+`ageForDeadline` en el arnés. `deadlinesPendingErrors` sale de su frontera, y las filas `deadline` y `timer` de su
+matriz pasan a verificadas y falsadas.
+
+Las redes son las que ya tenía, con el sujeto nuevo: `db-check --subject=verification-codes` da 62/62 en PostgreSQL y en
+MySQL; `doc-check --subject=verification-codes-mongo`, 40/40. Los cinco sabotajes `dl-*` caen en exactamente sus casos en
+las dos (en documental, `dl-no-lease` también en DL-5, como en keel-spring). `ts-check` da 13/13, y la suite 969/969.
+Sin red, `test/deadlines.test.js` ejecuta el gate (nace rojo, el parche del agente lo pone verde y la hora de la
+instancia lo vuelve rojo), compara las sentencias y el `timer.yaml` de los cuatro perfiles con keel-spring y la nota del
+handler con la neutral.
+
+Lo que destapó: a la colección `keelTimer` le faltaba su índice por `due_at` en los índices documentales, que consumen
+los cuatro generadores. Ahora lo añade lo neutral (`storeDocumentIndexes` de `gen/document.js`), y `timer-check` de
+keel-spring sigue en 13/13 sobre `verification-codes-mongo`. Y en TypeScript strict, el marcador de MySQL necesita su
+parámetro aunque no lo use (TS2554).
 
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
