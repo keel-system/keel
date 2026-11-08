@@ -31,6 +31,8 @@ import { usesRequestIdempotency, IDEMPOTENCY_STORE_IMPL_TS, IDEMPOTENCY_CONFLICT
 import { RECONCILIATION_CLAIM_STORE_TS } from '../../src/scaffold/reconciliation-claim.js';
 import { TABLE_PURGES_TS, tablePurges } from '../../src/scaffold/purge.js';
 import { sampleEntity, sampleValue } from './samples.js';
+import { modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
+import { TIMER_ADAPTER_ARGS } from './timer-probes.js';
 
 const distOf = (file) => `./${file.replace(/^src\//, 'dist/').replace(/\.ts$/, '.js')}`;
 
@@ -60,6 +62,9 @@ export function adapterArgs(model, root, { batch = 10, transactions = 'tx', reco
     if (parameters.length > 0) args.push(`{ ${parameters.map((name) => `${name}: 1`).join(', ')} }`);
   }
   if (reconciliationClaims(model).some((claim) => claim.entity === root.name)) args.push('reconciliationStore', reconciliation);
+  // El cronómetro (DSL 2.26): el almacén y los plazos, los últimos (repositories.js, armingDependencies). Los declara
+  // el preámbulo de timer-probes.js.
+  if (modelDeadlines(model).some(({ entity }) => entity.name === root.name)) args.push(...TIMER_ADAPTER_ARGS);
   return args.join(', ');
 }
 

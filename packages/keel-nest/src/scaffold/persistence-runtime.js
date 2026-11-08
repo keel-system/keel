@@ -19,6 +19,7 @@
 import { afterCommitFiles, afterCommitBinding } from './after-commit.js';
 import { MIGRATIONS_TABLE } from './infra.js';
 import { storeEntities } from './messaging-stores.js';
+import { timerEntities } from './timer.js';
 import { reconciliationBindings, reconciliationEntities } from './reconciliation-claim.js';
 import { SWEEP_SETTINGS_TS, usesSweepClaims } from './claim.js';
 import {
@@ -138,6 +139,8 @@ function dataSourceOptionsFile(model) {
   entities.push(...storeEntities(model));
   // La marca del reclamo de la reconciliación: la misma tabla que en keel-spring.
   entities.push(...reconciliationEntities(model));
+  // La tabla del cronómetro (DSL 2.26): keel_timer, la misma que en keel-spring.
+  entities.push(...timerEntities(model));
   const driverOptions =
     engine === 'postgresql'
       ? `    type: 'postgres',

@@ -21,7 +21,7 @@ export { MECHANISM_CATALOG, STATES };
 /** Las redes de keel-nest que EJECUTAN algo. */
 export const NETS = {
   'db-check':
-    'npm run db-check — la persistencia contra PostgreSQL y MySQL reales: esquema contra el catálogo del motor, cotas, ida y vuelta por el adaptador generado, fila en crudo, versión, unicidad (también la condicionada), página y borrado; y los almacenes de la mensajería (el outbox con su reclamo, y el registro de procesados)',
+    'npm run db-check — la persistencia contra PostgreSQL y MySQL reales: esquema contra el catálogo del motor, cotas, ida y vuelta por el adaptador generado, fila en crudo, versión, unicidad (también la condicionada), página y borrado; y los almacenes de la mensajería (el outbox con su reclamo, y el registro de procesados); y el cronómetro y los plazos (DSL 2.26, DL-1 a DL-10 y R1 sobre verification-codes, con los sabotajes dl-*)',
   'ts-check': 'npm run ts-check — compila con strict las 13 fixtures, ejecuta sus pruebas y ARRANCA el servidor contra PostgreSQL',
   'harness-check':
     'npm run harness-check [-- --database=mysql] — levanta infra/ con sus propios scripts, puntúa flujos sonda con score-scenarios.sh (cada código de salida y su evidencia) y exporta, aplica y verifica el baseline de migraciones',
@@ -30,7 +30,7 @@ export const NETS = {
   'doc-harness-check':
     'npm run doc-harness-check — el arnés de integración documental contra la infra/ real: mongoEval, el reset, los ayudantes del rescate y de la reconciliación, el humo y la puntuación',
   'doc-check':
-    'npm run doc-check — la persistencia documental contra un MongoDB real en replica set: los índices vivos, el documento crudo contra la forma neutral, ida y vuelta, versión, unicidad (también la condicionada), la carrera de dos transacciones, la auditoría, página y borrado',
+    'npm run doc-check — la persistencia documental contra un MongoDB real en replica set: los índices vivos, el documento crudo contra la forma neutral, ida y vuelta, versión, unicidad (también la condicionada), la carrera de dos transacciones, la auditoría, página y borrado; y el cronómetro y los plazos (DL-1 a DL-10 y R1 sobre verification-codes-mongo, con los sabotajes dl-*)',
   'telemetry-check':
     'npm run telemetry-check — la telemetría con la APLICACIÓN ARRANCADA contra PostgreSQL y MySQL reales: la serie del caso de uso atravesado por HTTP con su desenlace y el exemplar de la traza de quien llamó, la plantilla de la ruta, el runtime de Node, el pool del driver real con su tamaño, la traza en un receptor OTLP, los logs con su trace.id, el puerto de gestión en production y el scrape sin token con seguridad',
   'deploy-check':
@@ -41,8 +41,77 @@ export const NETS = {
 export { SUPPORTED_DATABASES };
 
 export const MECHANISMS = {
-  deadline: { pending: 'incremento 4 de PLAN-DSL-226-PLAZOS.md: el rechazo tardío y el armado, con el cronómetro' },
-  timer: { pending: 'incremento 4 de PLAN-DSL-226-PLAZOS.md: el cronómetro del servicio, sobre keel-core/gen/timer-store.js' },
+  deadline: {
+    emitter: 'src/scaffold/timer.js (lateGuardBlock, adapterArming) · src/scaffold/entities.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js',
+    why: 'Un rechazo tardío con < en vez de <= o un armado fuera de la transacción compilan igual de bien, y ningún escenario de un solo instante los ve: el precio es confirmar lo que el negocio daba por caducado, o un temporizador huérfano de una alta que revirtió.',
+    parity: {
+      pair: 'verification-codes',
+      markers: {
+        relational: [
+          'src/infrastructure/persistence/repositories/verification-code-repository-impl.ts::await this.timers.arm(TimerKinds.',
+          'src/infrastructure/persistence/repositories/verification-code-repository-impl.ts::select: { id: true, status: true }',
+          'src/domain/aggregate/verification-code.ts::deadlines.verificationCodePendingMs <= now.getTime()'
+        ],
+        document: [
+          'src/infrastructure/persistence/repositories/verification-code-repository-impl.ts::await this.timers.arm(TimerKinds.',
+          'src/infrastructure/persistence/repositories/verification-code-repository-impl.ts::projection: { status: 1 }, session',
+          'src/domain/aggregate/verification-code.ts::deadlines.verificationCodePendingMs <= now.getTime()'
+        ]
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'verification-codes (db-check --subject=verification-codes): DL-1 a DL-3 contra el método de transición del dominio emitido (la hora y los plazos por argumento) y DL-4 contra el adaptador TypeORM en una transacción que confirma y otra que revierte. Falsado con dl-boundary y dl-no-guard (caen en DL-2) y dl-outside-tx (el armado en una transacción NUEVA: cae DL-4). dl-wrong-field no tiene sujeto en esta fixture (una sola marca de tiempo). SIN EJECUTAR todavía en esta máquina: lo escribió el inc. 4 y lo pasa el orquestador'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'verification-codes-mongo (doc-check --subject=verification-codes-mongo): los mismos casos, con el estado previo leído con la sesión de la transacción del caso de uso y el armado en ella, sobre un replica set real. Falsado con dl-boundary, dl-no-guard y dl-outside-tx (aquí sí tiene sujeto, a diferencia de keel-spring: el armado sin la sesión escribe fuera de la transacción y DL-4 lo ve). SIN EJECUTAR todavía: lo escribió el inc. 4 y lo pasa el orquestador'
+      }
+    }
+  },
+  timer: {
+    emitter: 'src/scaffold/timer.js (SqlTimerStore, MongoTimerStore, TimerPoller, KeelTimerPurge, un handler por plazo, TimerModule)',
+    why: 'Las sentencias viajan dentro de literales y un reclamo que no casa con nada no falla: devuelve cero temporizadores y el plazo no vence nunca. Un arriendo de cero o un sondeador que no revalida tampoco rompen nada visible hasta que dos réplicas despachan lo mismo.',
+    parity: {
+      pair: 'verification-codes',
+      markers: {
+        relational: [
+          'file:src/infrastructure/timer/sql-timer-store.ts',
+          'src/infrastructure/timer/sql-timer-store.ts::FOR UPDATE SKIP LOCKED',
+          "file:src/infrastructure/persistence/timer/keel-timer-orm.ts",
+          "src/infrastructure/persistence/timer/keel-timer-orm.ts::@Entity({ name: 'keel_timer' })"
+        ],
+        document: [
+          'file:src/infrastructure/timer/mongo-timer-store.ts',
+          'src/infrastructure/timer/mongo-timer-store.ts::findOneAndUpdate(',
+          'src/infrastructure/timer/mongo-timer-store.ts::$$NOW'
+        ]
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'verification-codes: las sentencias de keel-core tal cual (test/deadlines.test.js comprueba que cada una está en sql-timer-store.ts), ejecutadas por el QueryRunner de la transacción de TypeORM; DL-5 a DL-10 y el recurrente de la purga (R1) contra el motor. Falsado con dl-no-lease (cae en DL-6 y DL-7) y dl-no-revalidate (DL-8 y DL-9). dl-app-clock no tiene sujeto: la instancia y la base comparten reloj en la máquina de la red. SIN EJECUTAR todavía: lo escribió el inc. 4 y lo pasa el orquestador'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'verification-codes-mongo: findOneAndUpdate de uno en uno con $$NOW, el _id aplanado y entity_id/claim_token como texto, la hora de la base de un $documents sin la sesión. Falsado con dl-no-lease (cae en DL-5, DL-6 y DL-7, como en keel-spring: sin arriendo el bucle vuelve a llevarse en el mismo lote lo que acaba de reclamar) y dl-no-revalidate (DL-8 y DL-9). Sin el índice de due_at: keel-core no lo pide en storeDocumentIndexes y keel-spring tampoco lo crea (petición abierta a keel-core). SIN EJECUTAR todavía: lo escribió el inc. 4 y lo pasa el orquestador'
+      }
+    }
+  },
   'runtime-panel': {
     parity: {
       pair: 'notification-mailer',

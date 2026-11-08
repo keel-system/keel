@@ -47,6 +47,7 @@ import { usesCache } from './cache.js';
 import { usesStorage, usesMultipart } from './storage.js';
 import { usesKafka, usesRabbitMq, usesSnsSqs } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
+import { usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { usesTelemetry, TELEMETRY_DEPENDENCIES } from './telemetry.js';
 import { DOCKERIGNORE } from './deploy.js';
 
@@ -103,7 +104,8 @@ function packageJson(model) {
       ...(usesStorage(model) && model.stack?.storage && model.storage.hasPrivateBucket ? { '@aws-sdk/s3-request-presigner': AWS_SDK_VERSION } : {}),
       ...(usesMultipart(model) ? { '@fastify/multipart': FASTIFY_MULTIPART_VERSION } : {}),
       // El reloj: los barridos del diseño y las purgas de las tablas del generador (incremento 10b).
-      ...(usesScheduling(model) ? { cron: CRON_VERSION } : {}),
+      // Y el cronómetro (DSL 2.26): el siguiente tick de un recurrente, con el cron en UTC.
+      ...(usesScheduling(model) || usesDeadlines(model) ? { cron: CRON_VERSION } : {}),
       'decimal.js': DECIMAL_JS_VERSION,
       fastify: FASTIFY_VERSION,
       // La validación del JWT de la capa security contra el JWKS del proveedor.

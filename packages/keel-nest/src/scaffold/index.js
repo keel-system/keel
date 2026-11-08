@@ -55,6 +55,8 @@ import * as auditActor from './audit-actor.js';
 import * as projections from './projections.js';
 import * as refResolvers from './ref-resolvers.js';
 import * as scheduling from './scheduling.js';
+import * as timer from './timer.js';
+import * as deadlinesCheck from './deadlines-check.js';
 import * as purge from './purge.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
@@ -152,6 +154,10 @@ const GENERATORS = [
   // tablas del generador.
   scheduling,
   purge,
+  // El cronómetro del servicio y los plazos de negocio (DSL 2.26): se gatea a sí mismo por el diseño.
+  timer,
+  // El gate de los plazos: lo que el agente escribe para que caduquen de verdad.
+  deadlinesCheck,
   // Los reclamos de barrido (incremento 10c): la configuración de los lotes y los plazos; los métodos van en
   // el puerto y el adaptador de cada raíz (repositories.js).
   claim,
@@ -203,6 +209,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   model.docs = listKeelDocs(workspace, model.service.name);
   // El estado de partida de los escenarios (specs/<servicio>/fixtures.yaml): lo carga infra/reset-db.sh.
   model.fixtures = fixtures;
+  // Los plazos (DSL 2.26) necesitan un motor con las sentencias del cronómetro medidas: se rechaza aquí, que conoce el stack.
+  const timerErrors = timer.timerStackErrors(model);
+  if (timerErrors.length > 0) throw new Error(timerErrors.join('\n'));
   return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };
 }
 

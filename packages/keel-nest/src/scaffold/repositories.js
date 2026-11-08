@@ -23,6 +23,7 @@ import { PRECONDITION_FAILED_TS, loadExpectingAdapter, loadExpectingPort, loadsE
 import { bridgeClass, bridgePath, usesBridge } from './messaging.js';
 import { domainMembers } from './entities.js';
 import { adapterClaimMethods, adapterGuardMethods, claimDependencies, portClaimMethods, portGuardMethods } from './claim.js';
+import { adapterArming, armingDependencies } from './timer.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { renderDocumentAdapter } from './document-repositories.js';
 import { AUDIT_ACTOR_TS } from './audit-actor.js';
@@ -607,7 +608,8 @@ export function constructorOf(model, entity, imports) {
     imports.push({ symbol: bridgeClass(model), from: bridgePath(model) });
     deps.push({ token: bridgeClass(model), name: 'events', type: bridgeClass(model) });
   }
-  for (const dep of [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)]) {
+  // El almacén del cronómetro y los plazos vigentes (DSL 2.26) van los últimos: el adaptador arma al guardar.
+  for (const dep of [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity), ...armingDependencies(model, entity)]) {
     imports.push(...dep.imports);
     deps.push(dep);
   }
@@ -663,7 +665,15 @@ function saveMethod(model, entity, imports) {
   // Los eventos que la raíz acumuló: sin capa de mensajería no hay quién los escuche (llega con el
   // incremento 9), pero se vacían igual para que el buffer no crezca con cada escritura.
   const emitsEvents = (model.events ?? []).some((event) => event.aggregates.includes(entity.name));
+  // El armado del plazo (DSL 2.26): el estado que la fila tenía ANTES de este save dice si la entidad ENTRA en el estado.
+  // Se lee tras subir la versión (la fila ya está bloqueada) y dentro de la transacción del caso de uso.
+  const lifecycleField = entity.lifecycle?.field;
+  const arming = entity.lifecycle ? adapterArming(model, entity, imports, `previous?.${lifecycleField}`) : null;
+  if (arming) {
+    lines.push(`      const previous = await manager.findOne(${ormClass(entity.name)}, { where: { ${idName}: entity.${idName} }, select: { ${idName}: true, ${lifecycleField}: true } });`);
+  }
   lines.push(`      const saved = await manager.save(${ormClass(entity.name)}, orm);`);
+  if (arming) lines.push(arming);
   if (emitsEvents && usesBridge(model)) {
     // Los eventos que la raíz acumuló salen por el puente DENTRO de esta transacción: con outbox, la fila
     // y el cambio confirman o revierten juntos; con best-effort, se publican tras el commit.

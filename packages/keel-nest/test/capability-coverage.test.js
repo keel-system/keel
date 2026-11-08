@@ -10,7 +10,6 @@
 //     alguna la rechazara, las capacidades que solo ella declara estarían cubiertas para keel-spring y no para
 //     keel-nest, y este test seguiría en verde sin mirar.
 
-import { deadlinesPendingErrors } from '@keel-system/keel-core/gen/deadlines';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -83,9 +82,7 @@ const uncovered = () => uncoveredIn(FIXTURES_DIR);
 test('toda fixture entra entera en la frontera de keel-nest: declarada por una fixture es generada por keel-nest', () => {
   for (const name of fs.readdirSync(FIXTURES_DIR)) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
-    // Salvo el rechazo común de los plazos (DSL 2.26), que llegan con el incremento 4 de PLAN-DSL-226-PLAZOS.md:
-    // vacío en toda fixture sin plazo, y exactamente él en el par verification-codes.
-    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, deadlinesPendingErrors(layers, 'keel-nest', 4), `${name} cae fuera de la frontera de keel-nest`);
+    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], `${name} cae fuera de la frontera de keel-nest`);
   }
 });
 

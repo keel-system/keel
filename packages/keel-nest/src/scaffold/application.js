@@ -22,6 +22,7 @@ import { usesIdempotencyHeader } from './request-idempotency.js';
 import { usesHttpSecurity, usesCallerScope, usesSecurityModule } from './security.js';
 import { usesMessaging } from './messaging.js';
 import { usesScheduling } from './scheduling.js';
+import { usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { usesServiceParameters } from './service-parameters.js';
 import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
@@ -34,7 +35,7 @@ import { mainTelemetry, usesTelemetry } from './telemetry.js';
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs(model) },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), [...controllerClasses(model), ...paymentControllers(model)], usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model), usesPayments(model), usesCache(model), usesStorage(model) && Boolean(model.stack?.storage), usesTelemetry(model)) },
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), [...controllerClasses(model), ...paymentControllers(model)], usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model), usesPayments(model), usesCache(model), usesStorage(model) && Boolean(model.stack?.storage), usesTelemetry(model), usesDeadlines(model) && usesPersistence(model)) },
     { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model), usesPayments(model), usesMultipart(model) ? multipartFileLimitBytes(model) : null, usesTelemetry(model)) }
   ];
 }
@@ -64,7 +65,7 @@ await app.listen(configuration.server.port, configuration.server.address);${tele
 `;
 }
 
-function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false, withHttpClients = false, withMail = false, withPayments = false, withCache = false, withStorage = false, withTelemetry = false) {
+function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope = false, withMessaging = false, withScheduling = false, withParameters = false, withHttpClients = false, withMail = false, withPayments = false, withCache = false, withStorage = false, withTelemetry = false, withTimer = false) {
   // Los casos de uso del diseño entran por su módulo (infrastructure/usecase), que es el único que
   // cablea handlers y mappers; los controladores REST los despachan por el mediator que exporta. La
   // persistencia y el alcance por recurso (globales) van antes: son dependencias de los handlers.
@@ -82,11 +83,14 @@ function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope
     (withStorage ? "\nimport { StorageModule } from './infrastructure/storage/storage-module.js';" : '') +
     (withCallerScope ? "\nimport { SecurityModule } from './infrastructure/security/security-module.js';" : '') +
     (withUseCases ? "\nimport { UseCaseModule } from './infrastructure/usecase/use-case-module.js';" : '') +
-    (withScheduling ? "\nimport { SchedulingModule } from './infrastructure/scheduling/scheduling-module.js';" : '');
+    (withScheduling ? "\nimport { SchedulingModule } from './infrastructure/scheduling/scheduling-module.js';" : '') +
+    (withTimer ? "\nimport { TimerModule, TimerPollerModule } from './infrastructure/timer/timer-module.js';" : '');
   const modules = [
     // Los parámetros de despliegue (globales): los inyectan los handlers.
     withParameters ? 'ServiceParametersModule.register(configuration)' : null,
     withPersistence ? 'PersistenceModule.register(configuration)' : null,
+    // El cronómetro (DSL 2.26, global): los adaptadores arman con su almacén y los handlers reciben el reloj y los plazos.
+    withTimer ? 'TimerModule.register(configuration)' : null,
     // La mensajería (global, como la persistencia): el puente lo usan los adaptadores de repositorio.
     withMessaging ? 'MessagingModule.register(configuration)' : null,
     // Los clientes HTTP salientes (globales): los handlers inyectan sus puertos.
@@ -104,7 +108,9 @@ function appModuleTs(withUseCases, controllers, withPersistence, withCallerScope
     // Los listeners del agente despachan por el mediator: van después de los casos de uso.
     withMessaging ? 'MessageListenersModule' : null,
     // El reloj despacha por el mediator y purga con el DataSource: va el último.
-    withScheduling ? 'SchedulingModule.register(configuration)' : null
+    withScheduling ? 'SchedulingModule.register(configuration)' : null,
+    // El sondeador del cronómetro despacha por el mediator: va después de los casos de uso.
+    withTimer ? 'TimerPollerModule' : null
   ].filter(Boolean);
   const useCaseModule = modules.length > 0 ? `\n      imports: [${modules.join(', ')}],` : '';
   const controllerImports = controllers

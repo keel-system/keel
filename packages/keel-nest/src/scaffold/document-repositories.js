@@ -26,6 +26,7 @@ import { domainMembers } from './entities.js';
 import { TEXT_FOLD_TS } from './persistence-entities.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
 import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, naturalKeyBatchFinder, occupantFinders, uniqueFieldFinders, constructorOf, emitsDomainEvents, credentialFinders } from './repositories.js';
+import { adapterArming } from './timer.js';
 import { documentGuardMethods, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 import { entityFinders, finderSignature, RANGE_OPERATORS, sortConstant, sortConstants } from './finders.js';
 import { AUDIT_ACTOR_TS } from './audit-actor.js';
@@ -318,6 +319,19 @@ function saveMethod(model, entity, use) {
   }
   lines.push(...declared.map((line) => `      ${line}`));
   lines.push(`      const { ${DOCUMENT_ID}: id, ...fields } = document;`);
+  // El armado del plazo (DSL 2.26): el estado que el documento tenía en la base dice si la entidad ENTRA en el estado.
+  // Se lee antes de escribirlo, con la sesión de la transacción del caso de uso.
+  const lifecycle = entity.lifecycle;
+  const lifecycleKey = lifecycle ? entity.fields.find((candidate) => candidate.name === lifecycle.field)?.columns?.name ?? lifecycle.field : null;
+  const armingImports = [];
+  const arming = lifecycle ? adapterArming(model, entity, armingImports, 'previousState') : null;
+  if (arming) {
+    for (const imp of armingImports) use.import(imp);
+    lines.push(
+      `      const previous = await this.collection.findOne({ ${DOCUMENT_ID}: id }, { projection: { ${lifecycleKey}: 1 }, session });`,
+      `      const previousState = previous == null ? null : ${use.helper('fromEnumName', `${lifecycle.enumType}, previous.${lifecycleKey}`)};`
+    );
+  }
   if (policyTimestamps) lines.push('      // La auditoría de política: `updated_at` en cada escritura, `created_at` solo al nacer.', '      fields.updated_at = now;');
   if (policyAuthorship) lines.push('      // La autoría de política: `updated_by` en cada escritura, `created_by` solo al nacer.', '      fields.updated_by = actor;');
   const onInsert = [policyTimestamps ? 'created_at: now' : null, policyAuthorship ? 'created_by: actor' : null].filter(Boolean);
@@ -345,6 +359,7 @@ function saveMethod(model, entity, use) {
   } else {
     lines.push(`      await this.collection.updateOne({ ${DOCUMENT_ID}: id }, { $set: fields${creation} }, { upsert: true, session });`);
   }
+  if (arming) lines.push(arming);
   const emitsEvents = (model.events ?? []).some((event) => event.aggregates.includes(entity.name));
   if (emitsEvents && emitsDomainEvents(model, entity)) {
     // Los eventos que la raíz acumuló salen por el puente DENTRO de esta transacción: con outbox, el documento

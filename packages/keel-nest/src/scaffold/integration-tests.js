@@ -35,6 +35,8 @@ import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenari
 import { cacheHarnessSection } from './cache.js';
 import { storageHarnessSection, usesMultipart } from './storage.js';
 import { usesStatementCount } from '@keel-system/keel-core/gen/features';
+import { ageDeadlineScript } from '@keel-system/keel-core/gen/mongo-probes';
+import { deadlineAgingSection } from './timer.js';
 export { usesStatementCount };
 
 /** Dónde escribe Vitest el XML JUnit de la suite de integración: lo lee score-scenarios.sh. */
@@ -516,7 +518,7 @@ const DB_QUERY_ARGV: readonly string[] = ${JSON.stringify(probe.argv)};
 export function db(sql: string): string {
   return run(containerRuntime(), ['exec', DB_CONTAINER, ...DB_QUERY_ARGV, sql], '¿Está la base arriba (bash infra/up.sh)?');
 }
-${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}` : ''}${statementCountSection(model)}${documentHarnessSection(model)}${identitySection(model)}${messagingHarnessSection(model)}${cacheHarnessSection(model)}${storageHarnessSection(model)}
+${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}${deadlineAgingSection(model, { relational: true, uuidLiteral: DATABASES[engineOf(model)]?.uuidLiteral })}` : ''}${statementCountSection(model)}${documentHarnessSection(model)}${documentProbe(model) ? deadlineAgingSection(model, { document: true, ageDeadlineScript }) : ''}${identitySection(model)}${messagingHarnessSection(model)}${cacheHarnessSection(model)}${storageHarnessSection(model)}
 
 /** Espera hasta que \`condition\` se cumpla o se agote \`timeoutMs\`; lanza con \`message\` si no llega. */
 export async function eventually(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, message = 'la condición no se cumplió a tiempo'): Promise<void> {

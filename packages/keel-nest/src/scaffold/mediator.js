@@ -35,6 +35,7 @@ import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { CORRELATION_TS, usesCorrelation } from './rest-support.js';
 import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
 import { usesMediator } from '@keel-system/keel-core/gen/features';
+import { usesDeadlines } from '@keel-system/keel-core/gen/deadlines';
 export { usesMediator };
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
@@ -173,6 +174,9 @@ function useCasesTest(model) {
     ? "\nimport { StorageModule } from '../src/infrastructure/storage/storage-module.js';" +
       (persistence || parameters || clients || mail || payments || cache ? '' : "\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';")
     : '';
+  // El cronómetro (DSL 2.26, global): los adaptadores arman con su almacén y los handlers reciben el reloj y los plazos.
+  const timer = usesDeadlines(model) && persistence;
+  const timerImport = timer ? "\nimport { TimerModule } from '../src/infrastructure/timer/timer-module.js';" : '';
   const modules = [
     cache ? "CacheModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     storage ? "StorageModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
@@ -180,6 +184,7 @@ function useCasesTest(model) {
     payments ? "PaymentsModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     persistence ? "PersistenceModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     messaging ? "MessagingModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
+    timer ? "TimerModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     clients ? "HttpClientsModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     mail ? "MailModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' }))" : null,
     scope ? 'SecurityModule' : null,
@@ -194,7 +199,7 @@ import { UseCaseModule } from '../src/infrastructure/usecase/use-case-module.js'
 import { UseCaseMediator } from '../src/infrastructure/usecase/use-case-mediator.js';
 import { UseCaseContainer } from '../src/infrastructure/usecase/use-case-container.js';
 import { Handles } from '../src/application/annotations/application-component.js';
-import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}${clientsImport}${mailImport}${paymentsImport}${cacheImport}${storageImport}
+import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}${messagingImport}${scopeImport}${parametersImport}${clientsImport}${mailImport}${paymentsImport}${cacheImport}${storageImport}${timerImport}
 ${imports}
 
 const OPERATIONS = [

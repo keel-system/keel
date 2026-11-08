@@ -13,6 +13,7 @@
 import { DIRS, classPath, declType, entityDir, fieldImports, tsModule, tsdoc } from './render.js';
 import { INVALID_TRANSITION_TS } from './exceptions.js';
 import { DOMAIN_EVENT_TS } from './events.js';
+import { lateGuardBlock, transitionNeedsClock } from './timer.js';
 
 export function generate(model) {
   return (model.entities ?? []).map((entity) => renderEntity(model, entity));
@@ -122,7 +123,8 @@ function renderEntity(model, entity) {
 ${assigns.join('\n')}
   }`);
 
-  if (entity.lifecycle) parts.push(renderTransitionTo(entity));
+  // Con plazos de negocio (DSL 2.26) la guarda lleva además el rechazo tardío, con la hora y los plazos vigentes.
+  if (entity.lifecycle) parts.push(lateGuardBlock(model, entity, imports) ?? renderTransitionTo(entity));
 
   // Solo getters. Las colecciones salen como copia: el alta y la baja de hijas las gobiernan
   // métodos de negocio de la raíz.
@@ -198,7 +200,9 @@ function renderTransitions(entity) {
       to.map((state) => {
         const ops = executedBy[`${from}|${state}`] ?? [];
         const origin = ops.length ? ` (lo ejecuta ${ops.join(', ')})` : '';
-        return `  // TODO (agente): método semántico ${from} → ${state}${origin} que valide la regla del diseño y llame a this.transitionTo(${enumType}.${state}).`;
+        // Si la transición sale de un estado con plazo (DSL 2.26), el método recibe la hora y los plazos vigentes.
+        const args = transitionNeedsClock(entity, from, state) ? `${enumType}.${state}, now, deadlines` : `${enumType}.${state}`;
+        return `  // TODO (agente): método semántico ${from} → ${state}${origin} que valide la regla del diseño y llame a this.transitionTo(${args}).`;
       })
     )
     .join('\n');

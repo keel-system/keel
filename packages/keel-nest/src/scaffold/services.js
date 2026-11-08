@@ -32,6 +32,8 @@ import { mailPorts, sendsMail } from './mail.js';
 import { ANNOTATIONS_TS, ENTRY_GATE_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyBatchFinder, PAGE_TS } from './repositories.js';
+import { deadlineHandlerNote, lateTransitionNote } from '@keel-system/keel-core/gen/deadlines';
+import { clockDependencies, lateTransitionHint } from './timer.js';
 import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch, dispatchNote, carriesEntryGate, entryGateNote, usesEntryGate, ownershipNotes } from '@keel-system/keel-core/gen';
 import { COMMAND_DISPATCHER_TS } from './mediator.js';
 import { OPERATION_CACHE_TS } from './cache.js';
@@ -354,6 +356,16 @@ function renderHandler(model, operation) {
     imports.push({ symbol: 'CommandDispatcher', from: COMMAND_DISPATCHER_TS });
     dependencies.push({ type: 'CommandDispatcher', name: 'commandDispatcher' });
   }
+  // Los plazos de negocio (DSL 2.26): quien saca la entidad de un estado con plazo hacia otro destino le da al dominio la
+  // hora del reloj inyectable y la duración vigente de los plazos, con los que el método de transición hace el rechazo
+  // tardío. Sin inyectarlos, el camino de menor resistencia es new Date(), que no deja probar el segundo exacto.
+  if (lateTransitionNote(model, operation)) {
+    for (const dep of clockDependencies(model)) {
+      if (dependencies.some((candidate) => candidate.type === dep.type)) continue;
+      imports.push(dep.import);
+      dependencies.push({ type: dep.type, name: dep.name });
+    }
+  }
   // La caché de lectura, por el mismo criterio: el diseño la atribuye a esta operación, así que recibe el puerto
   // delante (keel-spring igual).
   if (operation.cache) {
@@ -447,6 +459,11 @@ function handlerNotes(model, operation) {
   if (conditional) notes.push(conditional);
   if (dispatch) notes.push(dispatch);
   if (gate) notes.push(gate);
+  // Los plazos (DSL 2.26): la nota de la operación que caduca y la de las que salen del estado. Neutrales, las mismas en los cuatro.
+  const expiring = deadlineHandlerNote(model, operation);
+  if (expiring) notes.push(expiring);
+  const late = lateTransitionNote(model, operation);
+  if (late) notes.push(`${late} ${lateTransitionHint(model)}`);
   const cacheParam = operation.messageKind === 'query' ? 'query' : 'command';
   const cached = cacheNote(model, operation, { call: `await this.operationCache.getOrLoad({cache}, ${cacheParam}, () => ...)` });
   if (cached) notes.push(cached);

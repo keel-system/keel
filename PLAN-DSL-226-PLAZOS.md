@@ -10,7 +10,8 @@ al que **migran todos los relojes que hoy emiten los generadores** (§ La migrac
 cambia el DSL, pero sí el servidor generado de cualquier diseño con persistencia.
 
 **Estado: aprobado (2026-11-07).** El usuario aceptó las ocho propuestas de § Decisiones tomadas. Fases B, C y C2
-hechas el mismo día, y la D (incremento 3, keel-spring) el 2026-11-08; siguiente, la fase E (incrementos 4, 5 y 6).
+hechas el mismo día, y la D (incremento 3, keel-spring) el 2026-11-08; siguiente, la fase E (incrementos 4, 5 y 6). **Lo
+que queda se termina sin subagentes, todo desde `main` y en secuencia** (§ Cómo se ejecuta).
 
 ## Por qué
 
@@ -396,55 +397,36 @@ migración es un incremento propio con su puerta, y entre una y otra el servidor
 
 ## Cómo se ejecuta
 
-**Cambio de método (2026-11-08): en secuencia, desde `main` y sin subagentes.** La fase E se lanzó con tres agentes en
-paralelo. Los tres agotaron el límite de sesión del usuario dos veces y ninguno terminó, así que el paralelismo costaba
-el presupuesto entero y no ahorraba ni reloj. Lo que dejaron quedó guardado como commit WIP en su rama
-(`inc4-6-keel-{nest,dotnet,go}`), y los worktrees se retiraron. Desde aquí, el orquestador hace cada incremento él mismo,
-en `main` y uno detrás de otro, en el orden nest (4), dotnet (5) y go (6). Al empezar cada uno recupera lo de su rama
-(`git checkout inc4-6-keel-<tech> -- packages/keel-<tech>`), lo revisa contra keel-spring y lo termina. Después vienen sus
-redes, su suite y su commit. Lo que sigue en esta sección es el razonamiento del método anterior, conservado como
-histórico.
+**Lo que queda del plan se hace entero desde `main`, sin lanzar subagentes.** Desde el incremento 4 hasta el 13, el
+orquestador hace cada incremento él mismo, en `main`, uno detrás de otro: sin agentes, sin worktrees y sin ramas por
+incremento. Lo decidió el usuario el 2026-11-08. La fase E se había lanzado con tres agentes en paralelo y los tres
+agotaron dos veces su límite de sesión sin terminar: el paralelismo gastaba el presupuesto entero y ni siquiera ahorraba
+tiempo de reloj.
 
-### Histórico: subagentes en paralelo
+Cómo se trabaja cada incremento:
 
-Lo pidió el usuario (2026-11-07): ejecutar el plan con subagentes en paralelo donde se pueda. Paralelizar ahorra
-**tiempo de reloj, no tokens**: un subagente arranca de cero y relee reglas y código, así que en total el plan gasta
-más. Lo que se puede paralelizar lo deciden tres límites:
+1. **En secuencia y en el orden de la tabla de abajo.** keel-spring va siempre primero, porque las pruebas de paridad de
+   los otros tres comparan con lo que EMITE keel-spring.
+2. **Primero lo neutral** de `keel-core/gen` que el incremento necesite, y después cada generador.
+3. **Cada generador se cierra antes de empezar el siguiente:** sus pruebas sin red, sus redes en vivo con sus
+   sabotajes, su suite y su commit en `main`.
+4. **Las redes en vivo van de una en una:** dos procesos pesados a la vez agotan la memoria de la máquina.
 
-1. **Lo neutral va primero y lo hace un solo agente.** La tabla, el algoritmo del sondeador y los casos DL/RC viven en
-   `keel-core/gen`. Escritos por cuatro agentes a la vez, cada uno los interpretaría a su manera.
-2. **keel-spring va antes que los otros tres.** Las pruebas de paridad de keel-nest, keel-dotnet y keel-go comparan
-   con lo que EMITE keel-spring. Sin keel-spring no tienen contra qué medirse.
-3. **La máquina.** Dos procesos pesados a la vez agotaron la memoria en la serie de la 2.25, y las redes en vivo
-   levantan contenedores. Los agentes **escriben código** en paralelo, y las **redes en vivo** van de una en una.
+| Fase | Incrementos | Cómo |
+|---|---|---|
+| A-D | Preguntas, 0, 0b, 1, 2, 2b y 3 | Hechas |
+| E | 4 (keel-nest), 5 (keel-dotnet) y 6 (keel-go) | En secuencia, desde `main` |
+| F | 7, 8 y 9 | Cada migración en secuencia. Dentro de cada una, lo neutral, keel-spring, keel-nest, keel-dotnet y keel-go, uno detrás de otro |
+| G | 10 y 11 | En secuencia, generador por generador |
+| H | 12 | La fixture |
+| I | 13 | Las corridas de control las lanza el usuario, dos a la vez como mucho |
 
-| Fase | Incrementos | Cómo | Agentes a la vez |
-|---|---|---|---|
-| A | Preguntas abiertas | Las contesta el usuario | — |
-| B | 0 | 4 agentes de **solo lectura** (Explore), uno por generador: relojes, helpers del arnés, gates y telemetría que dependen de ellos. Las medidas de partida (carga en la base con 1 y 3 réplicas) las pasa el orquestador después, de una en una | 4 |
-| C | 0b, 1 y 2 | El orquestador, en secuencia: los dos defectos de keel-go y el contrato del que dependen todos. Se cierra con la referencia del sondeador EJECUTADA con un reloj falso y los casos DL/RC como datos | 1 |
-| C2 | 2b | La parte neutral (`keel-core/gen/evolution.js`) y keel-spring el orquestador; después keel-nest, keel-dotnet y keel-go en paralelo, porque sus pruebas de evolución comparan con keel-spring | 3 |
-| D | 3 | keel-spring, un agente o el orquestador: es la referencia de paridad | 1 |
-| E | 4, 5 y 6 | Un agente por generador, en paralelo, cada uno en su worktree | 3 |
-| F | 7, 8 y 9 | Cada migración en secuencia (comparten `keel-core/gen` y van por riesgo). Dentro de cada una: la parte neutral y keel-spring el orquestador, y después los otros tres en paralelo | 3 por migración |
-| G | 10 y 11 | Evolución y telemetría tocan archivos distintos: un agente por tema, en los cuatro generadores | 2 |
-| H | 12 | El orquestador: la fixture | 1 |
-| I | 13 | El usuario lanza las corridas, dos a la vez como mucho | — |
+**El trabajo parcial de los agentes cortados** quedó como un commit WIP en las ramas `inc4-6-keel-{nest,dotnet,go}`. Cada
+incremento de la fase E empieza recuperando el suyo (`git checkout inc4-6-keel-<tech> -- packages/keel-<tech>`), lo
+revisa contra keel-spring y lo termina en `main`. Cerrado el 6, esas tres ramas se borran.
 
-**Reglas para los agentes que escriben:**
-
-- **Worktree propio** (`isolation: "worktree"`) y una rama cada uno. Se fusiona a `main` cuando su incremento pasa
-  las redes.
-- **Solo su paquete** (`packages/keel-<tech>/`). Nada en `keel-core`, `CLAUDE.md`, `.claude/rules/` ni las fixtures.
-  Lo que necesiten de lo neutral lo **piden** en su informe y lo hace el orquestador.
-- **Sin redes en vivo ni suites completas**: solo las pruebas de sus archivos. Las suites completas y las redes las
-  pasa el orquestador, en serie, y los arreglos vuelven a un agente nuevo con el informe de la red.
-- **Un agente nuevo por incremento**, nunca uno reutilizado entre incrementos. En keel-recover, reutilizar uno fue el
-  75 % del coste.
-- **Informe estructurado**: archivos tocados, pruebas pasadas, peticiones a `keel-core`, lo que no pudo medir.
-
-**Antes de la fase E:** cada worktree necesita su `npm install`, que cuesta minutos y disco. Hay que decidir si los
-worktrees van en `D:`, con los demás temporales.
+**Histórico:** las fases B y C2 sí usaron agentes (solo lectura en la B; en la C2, paralelos y en worktrees, tras
+keel-spring). Ese método queda retirado.
 
 ## Incremento 0: lo medido (2026-11-07)
 
