@@ -13,6 +13,7 @@ import { subPackage } from '../scaffold/render.js';
 import { modelDeadlines, lateGuards, DEADLINE_CASES } from '@keel-system/keel-core/gen/deadlines';
 import { timerStatements } from '@keel-system/keel-core/gen/timer-store';
 import { deadlinesClass, deadlineComponent } from '../scaffold/timer.js';
+import { snakeCase } from './naming.js';
 
 export const CLASS_NAME = 'TimerProbeTest';
 export const PACKAGE_LEAF = 'infrastructure.timer';
@@ -43,8 +44,13 @@ function rehydrationArgs(subject) {
     if (!field.required) return 'null';
     if (field.javaType === 'String') return `"${'1'.repeat(Math.min(field.constraints?.maxLength ?? 6, 6))}"`;
     if (field.javaType === 'Instant') return 'since';
-    if (field.javaType === 'Integer' || field.javaType === 'int') return '0';
-    if (field.javaType === 'Long' || field.javaType === 'long') return '0L';
+    // Uno por fila: un uuid obligatorio suele ser clave natural (el `orderId` de stock-reservation), y repetirlo haría
+    // fallar el segundo INSERT por unicidad en vez de por lo que se mide.
+    if (field.javaType === 'UUID') return 'UUID.randomUUID()';
+    // La cota del diseño, si la hay: una `quantity` con `min: 1` no se construye a 0.
+    if (field.javaType === 'Integer' || field.javaType === 'int') return String(Math.max(0, field.constraints?.min ?? 0));
+    if (field.javaType === 'Long' || field.javaType === 'long') return `${Math.max(0, field.constraints?.min ?? 0)}L`;
+    if (field.javaType === 'BigDecimal') return 'java.math.BigDecimal.ONE';
     if (field.javaType === 'Boolean' || field.javaType === 'boolean') return 'false';
     return `${field.javaType}.values()[0]`;
   });
@@ -94,10 +100,20 @@ ${withClock ? `
 
 // ─── Lo que cambia por modelo de persistencia ────────────────────────────────
 
-function relationalSupport(model) {
+function relationalSupport(model, subject) {
   const fire = timerStatements(model.stack.database).fire;
+  const mysql = model.stack.database === 'mysql';
+  const { entity, deadline } = subject;
+  // Los mismos enlaces que el almacén JDBC del cronómetro: en MySQL el uuid va en binary(16) y la hora como
+  // LocalDateTime en UTC; en PostgreSQL, uuid nativo y OffsetDateTime.
+  const idParam = mysql
+    ? 'java.nio.ByteBuffer.allocate(16).putLong(id.getMostSignificantBits()).putLong(id.getLeastSignificantBits()).array()'
+    : 'id';
+  const timeParam = mysql ? 'java.time.LocalDateTime.ofInstant(since, java.time.ZoneOffset.UTC)' : 'java.time.OffsetDateTime.ofInstant(since, java.time.ZoneOffset.UTC)';
   return {
     imports: ['javax.sql.DataSource', 'org.springframework.jdbc.core.simple.JdbcClient'],
+    placeSince: `jdbc().sql("UPDATE ${entity.tableName} SET ${snakeCase(deadline.since)} = :since WHERE ${snakeCase(entity.idField.name)} = :id")
+                .param("since", ${timeParam}).param("id", ${idParam}).update();`,
     fields: `    @Autowired
     private DataSource dataSource;
 
@@ -111,7 +127,7 @@ function relationalSupport(model) {
   };
 }
 
-function documentSupport() {
+function documentSupport(subject) {
   return {
     imports: [
       'org.springframework.data.mongodb.core.MongoTemplate',
@@ -124,7 +140,8 @@ function documentSupport() {
     private MongoTemplate mongo;`,
     clear: 'mongo.remove(new Query(), "keel_timer");',
     count: 'return mongo.count(Query.query(Criteria.where("kind").is(kind)), "keel_timer");',
-    fire: 'mongo.updateMulti(Query.query(Criteria.where("kind").is(kind)), new Update().set("due_at", Date.from(store.dbNow())), "keel_timer");'
+    fire: 'mongo.updateMulti(Query.query(Criteria.where("kind").is(kind)), new Update().set("due_at", Date.from(store.dbNow())), "keel_timer");',
+    placeSince: `mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), new Update().set("${snakeCase(subject.deadline.since)}", Date.from(since)), "${subject.entity.collectionName}");`
   };
 }
 
@@ -134,7 +151,7 @@ export function timerTestClass(model, { properties = [] } = {}) {
   const subject = timerSubject(model);
   const { entity, deadline, kind, guard, error, lateTarget, enumType, statusField } = subject;
   const document = model.persistenceKind === 'document';
-  const support = document ? documentSupport() : relationalSupport(model);
+  const support = document ? documentSupport(subject) : relationalSupport(model, subject);
   const component = deadlineComponent(entity.name, deadline.stateName);
   const { args } = rehydrationArgs(subject);
   const getStatus = `get${cap(statusField)}()`;
@@ -279,7 +296,20 @@ ${support.fields}
     private UUID guarda(${enumType} status, Instant since) {
         UUID id = UUID.randomUUID();
         new TransactionTemplate(transactionManager).executeWithoutResult(tx -> repository.save(entidad(id, status, since)));
+        colocaSince(id, status, since);
         return id;
+    }
+
+    /**
+     * Deja ${deadline.since} donde la sonda lo pidió, y el temporizador con él. Si el campo lo estampa la auditoría (un
+     * createdAt), el adaptador lo pisa al insertar y el plazo nacería de ahora: es lo que hace ageForDeadline en el
+     * arnés, la entidad y su temporizador movidos juntos. Con un campo que escribe el dominio no cambia nada.
+     */
+    private void colocaSince(UUID id, ${enumType} status, Instant since) {
+        ${support.placeSince}
+        if (status == ${enumType}.${deadline.state}) {
+            new TransactionTemplate(transactionManager).executeWithoutResult(tx -> store.arm(KIND, id, since.plus(deadlines.${component}())));
+        }
     }
 
     /** Un código cuyo plazo venció hace \`hace\` (con la hora de la base). */
